@@ -34,9 +34,12 @@
 #include <algorithm>
 #include <filesystem>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
 namespace tb::mdl
@@ -736,6 +739,8 @@ textures/fixture/cov_empty			{ }
 textures/fixture/cov_last_alpha		{ translucent { blend diffusemap map textures/fixture/a alphaTest 0.5 } }
 textures/fixture/cov_last_opaque	{ { blend diffusemap map textures/fixture/a alphaTest 0.5 } forceOpaque }
 textures/fixture/cov_mirror			{ translucent mirror }
+textures/fixture/cov_opaque_last	{ translucent forceOpaque }
+textures/fixture/cov_translucent_last	{ forceOpaque translucent }
 textures/fixture/cov_current		{ forceOpaque { blend filter map _currentRender } }
 textures/fixture/cov_portalsky		{ forceOpaque sort portalSky
 	{ blend filter map _currentRender } }
@@ -743,7 +748,7 @@ textures/fixture/cov_fragment		{ { program fixture.vfp fragmentMap 0 _currentRen
 )";
 
     const auto shaders = Doom3MaterialParser{data}.parse(status);
-    REQUIRE(shaders.size() == 15);
+    REQUIRE(shaders.size() == 17);
 
     const auto coverageOf = [&](const auto& shaderPath) {
       return findShader(shaders, shaderPath).coverage;
@@ -760,12 +765,16 @@ textures/fixture/cov_fragment		{ { program fixture.vfp fragmentMap 0 _currentRen
     CHECK(
       alphaFuncOf("textures/fixture/cov_alphatest")
       == gl::MaterialAlphaFunc{GreaterEqual, 0.5f});
+    CHECK(coverageOf("textures/fixture/cov_threshold") == Coverage::Perforated);
     CHECK(
       alphaFuncOf("textures/fixture/cov_threshold")
       == gl::MaterialAlphaFunc{GreaterEqual, 0.25f});
+    // a threshold that is not one number reads as 0.5
+    CHECK(coverageOf("textures/fixture/cov_parm") == Coverage::Perforated);
     CHECK(
       alphaFuncOf("textures/fixture/cov_parm")
       == gl::MaterialAlphaFunc{GreaterEqual, 0.5f});
+    CHECK(coverageOf("textures/fixture/cov_expression") == Coverage::Perforated);
     CHECK(
       alphaFuncOf("textures/fixture/cov_expression")
       == gl::MaterialAlphaFunc{GreaterEqual, 0.5f});
@@ -784,6 +793,8 @@ textures/fixture/cov_fragment		{ { program fixture.vfp fragmentMap 0 _currentRen
     CHECK(coverageOf("textures/fixture/cov_last_alpha") == Coverage::Perforated);
     CHECK(coverageOf("textures/fixture/cov_last_opaque") == Coverage::Opaque);
     CHECK(coverageOf("textures/fixture/cov_mirror") == Coverage::Opaque);
+    CHECK(coverageOf("textures/fixture/cov_opaque_last") == Coverage::Opaque);
+    CHECK(coverageOf("textures/fixture/cov_translucent_last") == Coverage::Translucent);
 
     // _currentRender makes a material translucent, unless it is sorted as a portal sky
     CHECK(coverageOf("textures/fixture/cov_current") == Coverage::Translucent);
@@ -806,17 +817,20 @@ textures/fixture/cull_back		{ backSided diffusemap textures/fixture/a }
 textures/fixture/cull_sprite	{ deform sprite diffusemap textures/fixture/a }
 textures/fixture/cull_flare		{ deform flare 1.5 diffusemap textures/fixture/a }
 textures/fixture/cull_last		{ twoSided backSided diffusemap textures/fixture/a }
+textures/fixture/cull_last_two	{ backSided twoSided diffusemap textures/fixture/a }
 )";
 
     const auto shaders = Doom3MaterialParser{data}.parse(status);
-    REQUIRE(shaders.size() == 6);
+    REQUIRE(shaders.size() == 7);
 
     CHECK(findShader(shaders, "textures/fixture/cull_default").culling == Culling::Front);
     CHECK(findShader(shaders, "textures/fixture/cull_two").culling == Culling::None);
     CHECK(findShader(shaders, "textures/fixture/cull_back").culling == Culling::Back);
     CHECK(findShader(shaders, "textures/fixture/cull_sprite").culling == Culling::None);
     CHECK(findShader(shaders, "textures/fixture/cull_flare").culling == Culling::None);
+    // the last one wins
     CHECK(findShader(shaders, "textures/fixture/cull_last").culling == Culling::Back);
+    CHECK(findShader(shaders, "textures/fixture/cull_last_two").culling == Culling::None);
 
     CHECK(
       findShader(shaders, "textures/fixture/cull_two").surfaceParms
@@ -856,14 +870,12 @@ textures/fixture/after
         findShader(shaders, "textures/fixture/unknown")
         == defaultedShader("textures/fixture/unknown"));
 
-      for (const auto& shaderPath : {"textures/fixture/before", "textures/fixture/after"})
-      {
-        CAPTURE(shaderPath);
-        const auto& shader = findShader(shaders, shaderPath);
-        CHECK_FALSE(shader.engineDefaulted);
-        CHECK(shader.stages.size() == 1);
-        CHECK(shader.previewImages.size() == 1);
-      }
+      const auto& before = findShader(shaders, "textures/fixture/before");
+      CHECK_FALSE(before.engineDefaulted);
+      CHECK(before.previewImages == paths({"textures/fixture/before_d.tga"}));
+      const auto& after = findShader(shaders, "textures/fixture/after");
+      CHECK_FALSE(after.engineDefaulted);
+      CHECK(after.previewImages == paths({"textures/fixture/after_d.tga"}));
 
       CHECK_THAT(
         status.messages(LogLevel::Warn),
@@ -894,7 +906,13 @@ textures/fixture/late
       CHECK(
         shaders.front()
         == defaultedShader("textures/fixture/late", "textures/fixture/late_ed.tga"));
-      CHECK(status.countStatus(LogLevel::Warn) == 1);
+      CHECK_THAT(
+        status.messages(LogLevel::Warn),
+        Catch::Matchers::Equals(std::vector<std::string>{
+          "At line 6, column 2: Unknown keyword 'nodrop' in material "
+          "'textures/fixture/late'; the engine replaces this material with its "
+          "default material",
+        }));
     }
 
     SECTION("Top-level flare")
@@ -965,7 +983,37 @@ textures/fixture/good_term		{ { blend add map textures/fixture/a rgb time / 2 } 
       // "time/2" is one name, and no table of that name exists
       CHECK(findShader(shaders, "textures/fixture/bad_term").engineDefaulted);
       CHECK_FALSE(findShader(shaders, "textures/fixture/good_term").engineDefaulted);
-      CHECK(status.countStatus(LogLevel::Warn) == 1);
+      CHECK_THAT(
+        status.messages(LogLevel::Warn),
+        Catch::Matchers::Equals(std::vector<std::string>{
+          "At line 2, column 69: Bad term 'time/2' in an expression in material "
+          "'textures/fixture/bad_term'; the engine replaces this material with its "
+          "default material",
+        }));
+    }
+
+    SECTION("surfaceparm is no keyword")
+    {
+      const auto data = R"(
+textures/fixture/quake3_style
+{
+	surfaceparm nonsolid
+	diffusemap	textures/fixture/d.tga
+}
+)";
+
+      const auto shaders = Doom3MaterialParser{data}.parse(status);
+      REQUIRE(shaders.size() == 1);
+
+      // surface flags are bare keywords in this engine
+      CHECK(shaders.front() == defaultedShader("textures/fixture/quake3_style"));
+      CHECK_THAT(
+        status.messages(LogLevel::Warn),
+        Catch::Matchers::Equals(std::vector<std::string>{
+          "At line 4, column 2: Unknown keyword 'surfaceparm' in material "
+          "'textures/fixture/quake3_style'; the engine replaces this material with "
+          "its default material",
+        }));
     }
   }
 
@@ -1023,6 +1071,7 @@ table)";
 
     const auto shaders = Doom3MaterialParser{data}.parse(status);
     CHECK(shaderPaths(shaders) == paths({"textures/fixture/next"}));
+    REQUIRE(!shaders.empty());
     CHECK_FALSE(shaders.front().engineDefaulted);
 
     CHECK_THAT(
@@ -1043,7 +1092,7 @@ Textures\Fixture\Mixed_Case.tga
 	diffusemap	textures/fixture/a
 }
 
-textures/fixture/guide
+textures/phook/guide
 {
 	qer_editorimage	textures/fixture/guide.tga
 }
@@ -1058,13 +1107,15 @@ guis/fixture/screen			{ { blend blend map guis/fixture/screen.tga } }
       shaderPaths(shaders)
       == paths(
         {"textures/fixture/mixed_case",
-         "textures/fixture/guide",
+         "textures/phook/guide",
          "models/fixture/crate",
          "lights/fixture/round",
          "guis/fixture/screen"}));
+    REQUIRE(!shaders.empty());
     CHECK(shaders.front().shaderPath.generic_string() == "textures/fixture/mixed_case");
+    // there is no guide decl in this engine
     CHECK(
-      findShader(shaders, "textures/fixture/guide").previewImages
+      findShader(shaders, "textures/phook/guide").previewImages
       == paths({"textures/fixture/guide.tga"}));
     CHECK(status.countStatus(LogLevel::Warn) == 0);
   }
@@ -1233,15 +1284,87 @@ textures/fixture/after			{ diffusemap textures/fixture/after_d.tga }
       }));
   }
 
-  SECTION("Lexer")
+  SECTION("Comments")
   {
     const auto data = R"(
-textures/fixture/lexer
+textures/fixture/comments
 {
-	/* a block comment */ qer_editorimage "textures/fixture/quoted ed.tga" // trailing
+	/* a block comment */ qer_editorimage textures/fixture/comments_ed.tga // a comment
+	/* a block comment
+	   over two lines */ diffusemap textures/fixture/comments_d.tga
+}
+)";
+
+    const auto shaders = Doom3MaterialParser{data}.parse(status);
+    REQUIRE(shaders.size() == 1);
+    CHECK_FALSE(shaders.front().engineDefaulted);
+    CHECK(
+      shaders.front().previewImages
+      == paths({"textures/fixture/comments_ed.tga", "textures/fixture/comments_d.tga"}));
+    CHECK(status.countStatus(LogLevel::Warn) == 0);
+  }
+
+  SECTION("Quoted strings")
+  {
+    const auto data = R"(
+textures/fixture/quoted { qer_editorimage "textures/fixture/quoted ed.tga"
+}
+)";
+
+    const auto shaders = Doom3MaterialParser{data}.parse(status);
+    REQUIRE(shaders.size() == 1);
+    CHECK(
+      shaders.front().editorImage
+      == std::filesystem::path{"textures/fixture/quoted ed.tga"});
+    CHECK(status.countStatus(LogLevel::Warn) == 0);
+  }
+
+  SECTION("Backslash string concatenation")
+  {
+    const auto data = R"(
+textures/fixture/concat
+{
+	qer_editorimage "textures/fixture/a" \ "_ed.tga"
 	description "a " \
 		"concatenated string"
-	sort 1.5e1f
+	diffusemap textures/fixture/d
+}
+)";
+
+    const auto shaders = Doom3MaterialParser{data}.parse(status);
+    REQUIRE(shaders.size() == 1);
+    CHECK(
+      shaders.front().editorImage == std::filesystem::path{"textures/fixture/a_ed.tga"});
+    // the keyword after a string continued on the next line is still read
+    CHECK(
+      shaders.front().previewImages
+      == paths({"textures/fixture/a_ed.tga", "textures/fixture/d"}));
+    CHECK(status.countStatus(LogLevel::Warn) == 0);
+  }
+
+  SECTION("No escapes in strings")
+  {
+    const auto data = R"(
+textures/fixture/escapes
+{
+	description "ends with a backslash \"
+	qer_editorimage "textures\fixture\back.tga"
+}
+)";
+
+    const auto shaders = Doom3MaterialParser{data}.parse(status);
+    REQUIRE(shaders.size() == 1);
+    CHECK_FALSE(shaders.front().engineDefaulted);
+    CHECK(
+      shaders.front().editorImage == std::filesystem::path{"textures/fixture/back.tga"});
+    CHECK(status.countStatus(LogLevel::Warn) == 0);
+  }
+
+  SECTION("Minus ends a name")
+  {
+    const auto data = R"(
+textures/fixture/minus
+{
 	{ blend add map textures/fixture/a-b }
 }
 )";
@@ -1249,18 +1372,318 @@ textures/fixture/lexer
     const auto shaders = Doom3MaterialParser{data}.parse(status);
     REQUIRE(shaders.size() == 1);
 
-    const auto& lexer = shaders.front();
-    CHECK(lexer.editorImage == std::filesystem::path{"textures/fixture/quoted ed.tga"});
-    // '-' ends a name: the stage gets the image textures/fixture/a, and the engine
-    // reads '-' and 'b' as unknown stage keywords
-    CHECK(lexer.engineDefaulted);
+    // the stage's image is textures/fixture/a, and '-' is an unknown stage keyword
+    CHECK(shaders.front() == defaultedShader("textures/fixture/minus"));
     CHECK_THAT(
       status.messages(LogLevel::Warn),
       Catch::Matchers::Equals(std::vector<std::string>{
-        "At line 8, column 36: Unknown stage keyword '-' in material "
-        "'textures/fixture/lexer'; the engine replaces this material with its default "
+        "At line 4, column 36: Unknown stage keyword '-' in material "
+        "'textures/fixture/minus'; the engine replaces this material with its default "
         "material",
       }));
+  }
+
+  SECTION("Numbers")
+  {
+    const auto data = R"(
+textures/fixture/num_dot_first	{ { blend diffusemap map textures/fixture/a alphaTest .5 } }
+textures/fixture/num_dot_last	{ { blend diffusemap map textures/fixture/a alphaTest 5. } }
+textures/fixture/num_negative	{ { blend diffusemap map textures/fixture/a alphaTest -1 } }
+textures/fixture/num_hex		{ { blend diffusemap map textures/fixture/a alphaTest 0x10 } }
+textures/fixture/num_octal		{ { blend diffusemap map textures/fixture/a alphaTest 010 } }
+textures/fixture/num_exponent	{ { blend diffusemap map textures/fixture/a alphaTest 1.5e-1f } }
+textures/fixture/num_signed		{ { blend add map textures/fixture/a scale -5, 5. } }
+)";
+
+    const auto shaders = Doom3MaterialParser{data}.parse(status);
+    REQUIRE(shaders.size() == 7);
+
+    const auto thresholdOf = [&](const auto& shaderPath) {
+      const auto& shader = findShader(shaders, shaderPath);
+      REQUIRE(shader.stages.size() == 1);
+      REQUIRE(shader.stages.front().alphaFunc);
+      return shader.stages.front().alphaFunc->threshold;
+    };
+
+    CHECK(thresholdOf("textures/fixture/num_dot_first") == 0.5f);
+    CHECK(thresholdOf("textures/fixture/num_dot_last") == 5.0f);
+    CHECK(thresholdOf("textures/fixture/num_negative") == -1.0f);
+    // idLexer reads hexadecimal and octal integers
+    CHECK(thresholdOf("textures/fixture/num_hex") == 16.0f);
+    CHECK(thresholdOf("textures/fixture/num_octal") == 8.0f);
+    CHECK(thresholdOf("textures/fixture/num_exponent") == 0.15f);
+    CHECK_FALSE(findShader(shaders, "textures/fixture/num_signed").engineDefaulted);
+    CHECK(status.countStatus(LogLevel::Warn) == 0);
+  }
+
+  SECTION("Blend without a comma")
+  {
+    const auto data = R"(
+textures/fixture/no_comma	{ { blend GL_ONE GL_ONE map textures/fixture/a } }
+)";
+
+    const auto shaders = Doom3MaterialParser{data}.parse(status);
+    REQUIRE(shaders.size() == 1);
+    CHECK(shaders.front() == defaultedShader("textures/fixture/no_comma"));
+    CHECK_THAT(
+      status.messages(LogLevel::Warn),
+      Catch::Matchers::Equals(std::vector<std::string>{
+        "At line 2, column 44: Expected ',' but found 'GL_ONE' in material "
+        "'textures/fixture/no_comma'; the engine replaces this material with its "
+        "default material",
+      }));
+  }
+
+  SECTION("Missing closing brace")
+  {
+    SECTION("A material without its closing brace swallows the rest of the file")
+    {
+      const auto data = R"(
+textures/fixture/a
+{
+	diffusemap	textures/fixture/a_d.tga
+}
+
+textures/fixture/b
+{
+	diffusemap	textures/fixture/b_d.tga
+
+textures/fixture/c
+{
+	diffusemap	textures/fixture/c_d.tga
+}
+
+textures/fixture/d
+{
+	diffusemap	textures/fixture/d_d.tga
+}
+)";
+
+      const auto shaders = Doom3MaterialParser{data}.parse(status);
+      CHECK(shaderPaths(shaders) == paths({"textures/fixture/a", "textures/fixture/b"}));
+      CHECK(
+        findShader(shaders, "textures/fixture/a").previewImages
+        == paths({"textures/fixture/a_d.tga"}));
+      CHECK(
+        findShader(shaders, "textures/fixture/b")
+        == defaultedShader("textures/fixture/b"));
+
+      CHECK_THAT(
+        status.messages(LogLevel::Warn),
+        Catch::Matchers::Equals(std::vector<std::string>{
+          "At line 7, column 1: Material 'textures/fixture/b' has no matching '}' and "
+          "runs to the end of the file",
+          "At line 11, column 1: Possible missing '}' before line 11: material "
+          "'textures/fixture/b' now contains 'textures/fixture/c'",
+          "At line 16, column 1: Possible missing '}' before line 16: material "
+          "'textures/fixture/b' now contains 'textures/fixture/d'",
+          "At line 11, column 1: Unknown keyword 'textures/fixture/c' in material "
+          "'textures/fixture/b'; the engine replaces this material with its default "
+          "material",
+        }));
+    }
+
+    SECTION("An image name on its own line is no missing brace")
+    {
+      const auto data = R"(
+textures/fixture/argument
+{
+	diffusemap
+		textures/fixture/d.tga
+	{ blend add map textures/fixture/g }
+}
+)";
+
+      const auto shaders = Doom3MaterialParser{data}.parse(status);
+      REQUIRE(shaders.size() == 1);
+      CHECK_FALSE(shaders.front().engineDefaulted);
+      CHECK(shaders.front().stages.size() == 2);
+      CHECK(status.countStatus(LogLevel::Warn) == 0);
+    }
+  }
+
+  SECTION("Truncated input never throws")
+  {
+    // every prefix of every fixture, cut at every byte
+    for (const auto& path : {
+           fixturePath / "broken.mtr",
+           fixturePath / "tool_materials.mtr",
+           fixturePath / "typed_decls.mtr",
+           getFixtureRoot() / "test" / "mdl" / "Game" / "Doom3BFG" / "base" / "materials"
+             / "tb_test.mtr",
+         })
+    {
+      CAPTURE(path);
+
+      // one assertion per file keeps this fast enough for a debug build
+      const auto text = readFile(path);
+      auto throwingLengths = std::vector<size_t>{};
+      for (size_t length = 0; length <= text.size(); ++length)
+      {
+        auto prefixStatus = TestParserStatus{};
+        try
+        {
+          Doom3MaterialParser{std::string_view{text}.substr(0, length)}.parse(
+            prefixStatus);
+        }
+        catch (...)
+        {
+          throwingLengths.push_back(length);
+        }
+      }
+      CHECK(throwingLengths.empty());
+    }
+  }
+
+  SECTION("Keyword arities")
+  {
+    using T = std::tuple<bool, std::string>;
+    constexpr auto Material = false;
+    constexpr auto Stage = true;
+
+    // clang-format off
+    const auto [inStage, row] = GENERATE(values<T>({
+      {Material, "qer_editorimage textures/fixture/ed.tga"},
+      {Material, "qer_editorimage textures/fixture/ed.tga the rest of the line"},
+      {Material, "description \"a fixture\""},
+      {Material, "solid"}, {Material, "water"}, {Material, "playerclip"},
+      {Material, "monsterclip"}, {Material, "moveableclip"}, {Material, "ikclip"},
+      {Material, "blood"}, {Material, "trigger"}, {Material, "aassolid"},
+      {Material, "aasobstacle"}, {Material, "flashlight_trigger"}, {Material, "nonsolid"},
+      {Material, "nullNormal"}, {Material, "areaportal"}, {Material, "qer_nocarve"},
+      {Material, "discrete"}, {Material, "noFragment"}, {Material, "occlusion"},
+      {Material, "slick"}, {Material, "collision"}, {Material, "noimpact"},
+      {Material, "nodamage"}, {Material, "ladder"}, {Material, "nosteps"},
+      {Material, "metal"}, {Material, "stone"}, {Material, "flesh"}, {Material, "wood"},
+      {Material, "cardboard"}, {Material, "liquid"}, {Material, "glass"},
+      {Material, "plastic"}, {Material, "ricochet"}, {Material, "surftype10"},
+      {Material, "surftype11"}, {Material, "surftype12"}, {Material, "surftype13"},
+      {Material, "surftype14"}, {Material, "surftype15"},
+      {Material, "polygonOffset"}, {Material, "polygonOffset 2"},
+      {Material, "noShadows"}, {Material, "suppressInSubview"}, {Material, "portalSky"},
+      {Material, "noSelfShadow"}, {Material, "noPortalFog"}, {Material, "forceShadows"},
+      {Material, "noOverlays"}, {Material, "forceOverlays"}, {Material, "translucent"},
+      {Material, "zeroclamp"}, {Material, "clamp"}, {Material, "alphazeroclamp"},
+      {Material, "forceOpaque"}, {Material, "twoSided"}, {Material, "backSided"},
+      {Material, "fogLight"}, {Material, "blendLight"}, {Material, "ambientLight"},
+      {Material, "mirror"}, {Material, "directPortal"}, {Material, "noFog"},
+      {Material, "unsmoothedTangents"}, {Material, "origin"}, {Material, "mikktspace"},
+      {Material, "unlit"}, {Material, "DECAL_MACRO"}, {Material, "lod1"},
+      {Material, "lod2"}, {Material, "lod3"}, {Material, "lod4"},
+      {Material, "persistentLOD"},
+      {Material, "lightFalloffImage makeIntensity( lights/fixture/falloff.tga )"},
+      {Material, "guisurf entity"}, {Material, "guisurf entity2"},
+      {Material, "guisurf entity3"}, {Material, "guisurf guis/fixture/screen.gui"},
+      {Material, "sort subview"}, {Material, "sort opaque"}, {Material, "sort decal"},
+      {Material, "sort far"}, {Material, "sort medium"}, {Material, "sort close"},
+      {Material, "sort almostNearest"}, {Material, "sort nearest"},
+      {Material, "sort postProcess"}, {Material, "sort portalSky"}, {Material, "sort 1.5"},
+      {Material, "stereoeye left"}, {Material, "stereoeye right"},
+      {Material, "spectrum 1"},
+      {Material, "deform sprite"}, {Material, "deform tube"},
+      {Material, "deform flare 1.5"}, {Material, "deform expand 0.5 * time"},
+      {Material, "deform move time"},
+      {Material, "deform turbulent fixture_table 0.0175 ( time * 0.15 ) 10"},
+      {Material, "deform eyeBall"}, {Material, "deform particle fixture_particle"},
+      {Material, "deform particle2 fixture_particle"},
+      {Material, "decalInfo 10 2 ( 1 1 1 1 ) ( 0 -1 0 0 )"},
+      {Material, "renderbump -size 256 256 -aa 2 models/fixture/hi.lwo"},
+      {Material, "diffusemap textures/fixture/x"}, {Material, "basecolormap textures/fixture/x"},
+      {Material, "specularmap textures/fixture/x"}, {Material, "rmaomap textures/fixture/x"},
+      {Material, "reflectionmap textures/fixture/x"}, {Material, "pbrmap textures/fixture/x"},
+      {Material, "bumpmap textures/fixture/x"}, {Material, "normalmap textures/fixture/x"},
+      {Material, "{ blend add map textures/fixture/x }"},
+      {Stage, "name a fixture stage"},
+      {Stage, "blend add"}, {Stage, "blend blend"}, {Stage, "blend filter"},
+      {Stage, "blend modulate"}, {Stage, "blend none"}, {Stage, "blend bumpmap"},
+      {Stage, "blend normalmap"}, {Stage, "blend diffusemap"}, {Stage, "blend basecolormap"},
+      {Stage, "blend specularmap"}, {Stage, "blend rmaomap"},
+      {Stage, "blend GL_ONE, GL_ZERO"}, {Stage, "blend gl_dst_alpha, gl_one_minus_dst_alpha"},
+      {Stage, "blend GL_SRC_ALPHA_SATURATE, GL_ONE"},
+      {Stage, "map textures/fixture/x"}, {Stage, "map _white"},
+      {Stage, "remoteRenderMap 256 256"}, {Stage, "mirrorRenderMap 256 256"},
+      {Stage, "xrayRenderMap 256 256"}, {Stage, "guiRenderMap 256 256"},
+      {Stage, "screen"}, {Stage, "screen2"}, {Stage, "glassWarp"},
+      {Stage, "videomap video/fixture.roq"}, {Stage, "videoMap loop video/fixture.roq"},
+      {Stage, "soundmap waveform"}, {Stage, "soundMap waveform"},
+      {Stage, "cubeMap env/fixture"}, {Stage, "cubeMapSingle env/fixture"},
+      {Stage, "panoramaMap env/fixture"}, {Stage, "hdriMap env/fixture"},
+      {Stage, "cameraCubeMap env/fixture"}, {Stage, "quakeCubeMap env/fixture"},
+      {Stage, "cubeMapSize 256"},
+      {Stage, "ignoreAlphaTest"}, {Stage, "nearest"}, {Stage, "linear"}, {Stage, "clamp"},
+      {Stage, "noclamp"}, {Stage, "zeroclamp"}, {Stage, "alphazeroclamp"},
+      {Stage, "forceHighQuality"}, {Stage, "highquality"}, {Stage, "uncompressedCubeMap"},
+      {Stage, "nopicmip"}, {Stage, "vertexColor"}, {Stage, "inverseVertexColor"},
+      {Stage, "maskRed"}, {Stage, "maskGreen"}, {Stage, "maskBlue"}, {Stage, "maskAlpha"},
+      {Stage, "maskColor"}, {Stage, "maskDepth"}, {Stage, "colored"},
+      {Stage, "privatePolygonOffset"}, {Stage, "privatePolygonOffset 2"},
+      {Stage, "privatePolygonOffset -1"},
+      {Stage, "texGen normal"}, {Stage, "texGen reflect"}, {Stage, "texGen reflect2"},
+      {Stage, "texGen skybox"}, {Stage, "texGen wobbleSky 0.1 0.2 time"},
+      {Stage, "scroll time * 0.1, 0"}, {Stage, "translate 0.5, -0.5"},
+      {Stage, "scale 2, 2"}, {Stage, "centerScale 2, 2"}, {Stage, "shear 0.1, -0.1"},
+      {Stage, "rotate time * 0.1"},
+      {Stage, "alphaTest 0.5"},
+      {Stage, "color 1, 0.5, 0.25, 1"},
+      {Stage, "red parm0"}, {Stage, "green parm1"}, {Stage, "blue parm2"},
+      {Stage, "alpha parm3"}, {Stage, "rgb fixture_table[ time ]"}, {Stage, "rgba 0.5"},
+      {Stage, "rgb sound * 2"}, {Stage, "rgb global0 + fragmentPrograms"},
+      {Stage, "if parm7 == 1"}, {Stage, "if ( time > 1 ) && ( parm7 != 0 )"},
+      {Stage, "program fixture.vfp"}, {Stage, "fragmentProgram fixture.vfp"},
+      {Stage, "vertexProgram fixture.vfp"},
+      {Stage, "vertexParm 0 1"}, {Stage, "vertexParm 1 time, 2"},
+      {Stage, "vertexParm 2 1, 2, 3"}, {Stage, "vertexParm 3 1, 2, 3, 4"},
+      {Stage, "vertexParm2 0 1, 2, 3, 4"},
+      {Stage, "fragmentMap 0 textures/fixture/x"},
+      {Stage, "fragmentMap 1 cubeMap nearest clamp env/fixture"},
+      {Stage, "fragmentMap 7 _currentRender"},
+      {Stage, "stencil { Ref 1 Comp Always Pass Replace Fail Keep ZFail Keep }"},
+    }));
+    // clang-format on
+
+    CAPTURE(inStage, row);
+
+    const auto data = inStage ? "textures/fixture/keyword\n{\n\t{\n\t\t" + row
+                                  + "\n\t}\n\tdiffusemap textures/fixture/d\n}\n"
+                              : "textures/fixture/keyword\n{\n\t" + row
+                                  + "\n\tdiffusemap textures/fixture/d\n}\n";
+
+    const auto shaders = Doom3MaterialParser{data}.parse(status);
+    REQUIRE(shaders.size() == 1);
+    CHECK_FALSE(shaders.front().engineDefaulted);
+    CHECK(status.countStatus(LogLevel::Warn) == 0);
+
+    // the keyword consumed exactly its arguments
+    CHECK(std::ranges::any_of(shaders.front().stages, [](const auto& stage) {
+      return stage.lighting == Lighting::Diffuse
+             && stage.map == std::filesystem::path{"textures/fixture/d"};
+    }));
+  }
+
+  SECTION("CRLF line endings")
+  {
+    // a warning in the middle of a line, then the broken fixture
+    auto lf =
+      "textures/fixture/early { { blend add map textures/fixture/a nomipmaps } }\n"
+      + readFile(fixturePath / "broken.mtr");
+    std::erase(lf, '\r');
+    auto crlf = std::string{};
+    for (const auto c : lf)
+    {
+      if (c == '\n')
+      {
+        crlf += '\r';
+      }
+      crlf += c;
+    }
+
+    auto lfStatus = TestParserStatus{};
+    const auto lfShaders = Doom3MaterialParser{lf}.parse(lfStatus);
+    const auto crlfShaders = Doom3MaterialParser{crlf}.parse(status);
+
+    CHECK(crlfShaders == lfShaders);
+    CHECK(status.messages(LogLevel::Warn) == lfStatus.messages(LogLevel::Warn));
+    CHECK(status.countStatus(LogLevel::Warn) == 4);
   }
 
   SECTION("Doom 3 BFG fixture tb_test.mtr")
@@ -1272,17 +1695,7 @@ textures/fixture/lexer
     const auto shaders = parser.parse(status);
     CHECK(parser.declaredTables() == std::vector<std::string>{"tb_test_pulse"});
 
-    CHECK(
-      shaderPaths(shaders)
-      == paths(
-        {"textures/tb_test/wall",
-         "textures/tb_test/wall_plain",
-         "textures/tb_test/grate",
-         "textures/tb_test/glass",
-         "textures/tb_test/bumped",
-         "textures/tb_test/dds",
-         "textures/tb_test/nonsolid"}));
-
+    // another package owns this fixture, so materials are looked up by name
     for (const auto& shader : shaders)
     {
       CAPTURE(shader.shaderPath);

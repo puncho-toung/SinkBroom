@@ -38,10 +38,21 @@ bool isAscii(const char c)
 
 std::filesystem::path idTech4Path(const std::string_view text)
 {
-  auto ascii = std::string{text};
-  std::ranges::replace_if(
-    ascii, [](const auto c) { return !isAscii(c); }, '_');
-  return kdl::parse_path(std::move(ascii));
+  // ASCII is the same in every native path encoding, so the native string is built
+  // directly, which skips the platform's narrow-to-native conversion and its cost
+  if (text.empty())
+  {
+    return {};
+  }
+
+  using Char = std::filesystem::path::value_type;
+  auto native = std::filesystem::path::string_type{};
+  native.reserve(text.size());
+  for (const auto c : text)
+  {
+    native.push_back(static_cast<Char>(isAscii(c) ? c : '_'));
+  }
+  return kdl::parse_path(std::move(native));
 }
 
 std::string canonicalIdTech4DeclName(const std::string_view name)

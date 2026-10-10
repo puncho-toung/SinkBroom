@@ -88,7 +88,10 @@ bool isText(const Token& token, const std::string_view text)
 
 bool isKeyword(const Token& token, const std::string_view keyword)
 {
-  return kdl::ci::str_is_equal(token.text, keyword);
+  // comparing the sizes first skips most comparisons, which matters because every token
+  // is compared with many keywords
+  return token.text.size() == keyword.size()
+         && kdl::ci::str_is_equal(token.text, keyword);
 }
 
 template <size_t N>
@@ -201,6 +204,8 @@ public:
   std::vector<Token> tokenize()
   {
     auto tokens = std::vector<Token>{};
+    // decl files average more than four bytes per token
+    tokens.reserve(m_str.size() / 4 + 1);
     while (true)
     {
       skipWhitespace(true);
@@ -530,6 +535,7 @@ private:
   Token readPunctuation()
   {
     const auto start = m_pos;
+
     const auto rest = m_str.substr(m_pos);
     for (const auto& punctuation : Punctuation)
     {
@@ -1271,6 +1277,54 @@ private:
     }
   }
 
+  // Whether the token at the given index looks like the start of a decl: a path-like name
+  // at the start of a line, followed by an opening brace.
+  bool looksLikeDeclStart(const size_t index) const
+  {
+    const auto& token = m_tokens[index];
+    return token.kind == TokenKind::Name && token.line > m_tokens[index - 1].endLine
+           && token.text.find('/') != std::string_view::npos
+           && index + 1 < m_tokens.size() && isPunct(m_tokens[index + 1], "{");
+  }
+
+  // A material that lacks a closing brace swallows the decls after it, in the engine
+  // too, and is defaulted at the first swallowed name, which the engine reads as an
+  // unknown keyword. If the unknown keyword just read looks like the start of a decl,
+  // point at it and at the further decls at the same brace depth.
+  void warnAboutSwallowedDecls()
+  {
+    const auto keyword = m_pos - 1;
+    if (!looksLikeDeclStart(keyword))
+    {
+      return;
+    }
+
+    auto depth = 0;
+    for (auto k = keyword; k < m_end; ++k)
+    {
+      const auto& token = m_tokens[k];
+      if (isPunct(token, "{"))
+      {
+        ++depth;
+      }
+      else if (isPunct(token, "}"))
+      {
+        if (--depth < 0)
+        {
+          return;
+        }
+      }
+      else if (depth == 0 && looksLikeDeclStart(k))
+      {
+        warn(
+          token,
+          "Possible missing '}' before line " + std::to_string(token.line)
+            + ": material '" + m_name + "' now contains '" + std::string{token.text}
+            + "'");
+      }
+    }
+  }
+
   void addReferencedTable(const std::string_view name)
   {
     auto canonicalName = canonicalIdTech4DeclName(name);
@@ -1409,6 +1463,7 @@ private:
     }
     else
     {
+      warnAboutSwallowedDecls();
       setDefaulted(token, "Unknown keyword " + describe(token));
     }
   }
@@ -1418,7 +1473,7 @@ private:
   {
     const auto begin = m_pos;
     auto stage = StageState{};
-    stage.imageName = parseImageProgram(kdl::str_to_lower(keyword.text));
+    stage.imageName = parseImageProgram(keyword.text);
     stage.stage.lighting = lighting;
 
     // The engine joins the program's tokens into text and parses that text again as a
@@ -1810,6 +1865,7 @@ private:
     }
     else
     {
+      warnAboutSwallowedDecls();
       setDefaulted(token, "Unknown stage keyword " + describe(token));
     }
   }
@@ -2157,7 +2213,6 @@ public:
           locationOf(nameToken),
           "Material '" + name + "' has no matching '}' and runs to the end of the file");
       }
-      warnAboutSwallowedMaterials(begin, section.end, name);
 
       result.push_back(MaterialBlockParser{
         m_tokens,
@@ -2199,39 +2254,6 @@ private:
     } while (depth != 0);
 
     return {i, true};
-  }
-
-  // A material that lacks its closing brace swallows the next decl, in the engine too.
-  // Point at the likely cause: a path-like name at the start of a line, at the material's
-  // top level, that is followed by an opening brace.
-  void warnAboutSwallowedMaterials(
-    const size_t begin, const size_t end, const std::string_view name) const
-  {
-    auto depth = 1;
-    for (auto k = begin; k < end; ++k)
-    {
-      const auto& token = m_tokens[k];
-      if (isPunct(token, "{"))
-      {
-        ++depth;
-      }
-      else if (isPunct(token, "}"))
-      {
-        --depth;
-      }
-      else if (
-        depth == 1 && token.kind == TokenKind::Name
-        && token.line > m_tokens[k - 1].endLine
-        && token.text.find('/') != std::string_view::npos
-        && isPunct(m_tokens[k + 1], "{"))
-      {
-        m_status.warn(
-          locationOf(token),
-          "Possible missing '}' before line " + std::to_string(token.line)
-            + ": material '" + std::string{name} + "' now contains '"
-            + std::string{token.text} + "'");
-      }
-    }
   }
 };
 
