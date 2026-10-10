@@ -1,0 +1,2 @@
+# The material parser tests count lines and columns; keep these files byte for byte.
+*.mtr -text

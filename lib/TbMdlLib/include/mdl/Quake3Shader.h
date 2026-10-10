@@ -77,6 +77,7 @@ public:
   std::filesystem::path map;
   BlendFunc blendFunc;
   std::optional<gl::MaterialAlphaFunc> alphaFunc;
+  // Doom 3 only: the light interaction the stage takes part in.
   Lighting lighting = Lighting::None;
 
   kdl_reflect_decl(Quake3ShaderStage, map, blendFunc, alphaFunc, lighting);
@@ -121,8 +122,9 @@ public:
   kdl::flat_set<std::string> surfaceParms;
   std::vector<Quake3ShaderStage> stages;
   std::optional<gl::MaterialAlphaFunc> qerAlphaFunc;
+  // The script language the record was parsed from.
   Format format = Format::Quake3;
-  // Doom 3 only.
+  // Doom 3 only: how idMaterial::Coverage classifies the material.
   Coverage coverage = Coverage::Opaque;
   // Doom 3 only: the images idMaterial::GetEditorImage would try, in that order.
   std::vector<std::filesystem::path> previewImages;

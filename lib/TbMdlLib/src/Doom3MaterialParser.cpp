@@ -50,7 +50,7 @@ namespace
 {
 
 // ---------------------------------------------------------------------------------------
-// Layer 1: a tokenizer with idLexer's rules for decl files (DECL_LEXER_FLAGS). Unlike
+// Lexer: a tokenizer with idLexer's rules for decl files (DECL_LEXER_FLAGS). Unlike
 // idLexer, it never fails: malformed input is reported and tokenized as well as possible.
 // ---------------------------------------------------------------------------------------
 
@@ -131,14 +131,15 @@ std::string describe(const Token& token)
                                       : "'" + asciiText(token.text) + "'";
 }
 
-// idLexer's default punctuation table, longest first
+// idLexer's default punctuation table, longest first (idlib/Lexer.cpp:35-108 at
+// rbdoom/neo commit b19c3f76)
 // clang-format off
-constexpr auto Punctuation = std::array<std::string_view, 52>{
+constexpr auto Punctuation = std::to_array<std::string_view>({
   ">>=", "<<=", "...", "##", "&&", "||", ">=", "<=", "==", "!=", "*=", "/=", "%=", "+=",
   "-=", "++", "--", "&=", "|=", "^=", ">>", "<<", "->", "::", ".*", "*", "/", "%", "+",
   "-", "=", "&", "|", "^", "~", "!", ">", "<", ".", ",", ";", ":", "?", "(", ")", "{",
   "}", "[", "]", "\\", "#", "$",
-};
+});
 // clang-format on
 
 bool isDigit(const char c)
@@ -219,7 +220,7 @@ public:
   }
 
 private:
-  char at(const size_t pos) const { return pos < m_str.size() ? m_str[pos] : '\0'; }
+  char charAt(const size_t pos) const { return pos < m_str.size() ? m_str[pos] : '\0'; }
 
   size_t column() const { return m_pos - m_lineStart + 1; }
 
@@ -251,7 +252,7 @@ private:
         }
         ++m_pos;
       }
-      else if (c == '/' && at(m_pos + 1) == '/')
+      else if (c == '/' && charAt(m_pos + 1) == '/')
       {
         m_pos += 2;
         while (m_pos < m_str.size() && m_str[m_pos] != '\n')
@@ -259,7 +260,7 @@ private:
           ++m_pos;
         }
       }
-      else if (c == '/' && at(m_pos + 1) == '*')
+      else if (c == '/' && charAt(m_pos + 1) == '*')
       {
         const auto startLine = m_line;
         const auto startColumn = column();
@@ -298,7 +299,7 @@ private:
   Token readToken()
   {
     const auto c = m_str[m_pos];
-    if (isDigit(c) || (c == '.' && isDigit(at(m_pos + 1))))
+    if (isDigit(c) || (c == '.' && isDigit(charAt(m_pos + 1))))
     {
       return readNumber();
     }
@@ -323,7 +324,7 @@ private:
   Token readName()
   {
     const auto start = m_pos++;
-    while (isNameChar(at(m_pos)))
+    while (isNameChar(charAt(m_pos)))
     {
       ++m_pos;
     }
@@ -335,7 +336,7 @@ private:
   {
     const auto start = m_pos;
     const auto c = m_str[m_pos];
-    const auto c2 = at(m_pos + 1);
+    const auto c2 = charAt(m_pos + 1);
     auto isFloat = false;
 
     if (c == '0' && c2 != '.')
@@ -343,7 +344,7 @@ private:
       if (c2 == 'x' || c2 == 'X')
       {
         m_pos += 2;
-        while (isHexDigit(at(m_pos)))
+        while (isHexDigit(charAt(m_pos)))
         {
           ++m_pos;
         }
@@ -351,7 +352,7 @@ private:
       else if (c2 == 'b' || c2 == 'B')
       {
         m_pos += 2;
-        while (at(m_pos) == '0' || at(m_pos) == '1')
+        while (charAt(m_pos) == '0' || charAt(m_pos) == '1')
         {
           ++m_pos;
         }
@@ -359,7 +360,7 @@ private:
       else
       {
         ++m_pos;
-        while (at(m_pos) >= '0' && at(m_pos) <= '7')
+        while (charAt(m_pos) >= '0' && charAt(m_pos) <= '7')
         {
           ++m_pos;
         }
@@ -368,16 +369,16 @@ private:
     else
     {
       auto dots = 0;
-      while (isDigit(at(m_pos)) || at(m_pos) == '.')
+      while (isDigit(charAt(m_pos)) || charAt(m_pos) == '.')
       {
-        if (at(m_pos) == '.')
+        if (charAt(m_pos) == '.')
         {
           ++dots;
         }
         ++m_pos;
       }
 
-      if (at(m_pos) == 'e' && dots == 0)
+      if (charAt(m_pos) == 'e' && dots == 0)
       {
         dots = 1;
       }
@@ -385,14 +386,14 @@ private:
       if (dots == 1)
       {
         isFloat = true;
-        if (at(m_pos) == 'e')
+        if (charAt(m_pos) == 'e')
         {
           ++m_pos;
-          if (at(m_pos) == '-' || at(m_pos) == '+')
+          if (charAt(m_pos) == '-' || charAt(m_pos) == '+')
           {
             ++m_pos;
           }
-          while (isDigit(at(m_pos)))
+          while (isDigit(charAt(m_pos)))
           {
             ++m_pos;
           }
@@ -409,7 +410,7 @@ private:
     // type suffixes are consumed but are not part of the token's text
     if (isFloat)
     {
-      const auto s = at(m_pos);
+      const auto s = charAt(m_pos);
       if (s == 'f' || s == 'F' || s == 'l' || s == 'L')
       {
         ++m_pos;
@@ -419,7 +420,7 @@ private:
     {
       for (auto i = 0; i < 2; ++i)
       {
-        const auto s = at(m_pos);
+        const auto s = charAt(m_pos);
         if (s != 'l' && s != 'L' && s != 'u' && s != 'U')
         {
           break;
@@ -493,7 +494,7 @@ private:
       };
 
       skipWhitespace(false);
-      if (at(m_pos) != '\\')
+      if (charAt(m_pos) != '\\')
       {
         restore();
         break;
@@ -503,7 +504,7 @@ private:
       const auto backslashColumn = column();
       ++m_pos;
       skipWhitespace(false);
-      if (at(m_pos) != '"')
+      if (charAt(m_pos) != '"')
       {
         warn(backslashLine, backslashColumn, "Expected a string after '\\'");
         restore();
@@ -557,85 +558,100 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------
-// Layer 3: the per-material block parser, with idMaterial::ParseMaterial's and
+// Block parser: one material, with idMaterial::ParseMaterial's and
 // idMaterial::ParseStage's keyword arities. It never evaluates expressions; it only
 // consumes exactly the tokens the engine consumes.
+//
+// The keyword tables cite renderer/Material.cpp at rbdoom/neo commit b19c3f76.
 // ---------------------------------------------------------------------------------------
 
 using Lighting = Quake3ShaderStage::Lighting;
 using Coverage = Quake3Shader::Coverage;
 
-// infoParms in Material.cpp, matched case-insensitively by CheckSurfaceParm
+// infoParms (Material.cpp:318-371), matched case-insensitively by CheckSurfaceParm
 // clang-format off
-constexpr auto InfoParms = std::array<std::string_view, 39>{
+constexpr auto InfoParms = std::to_array<std::string_view>({
   "solid", "water", "playerclip", "monsterclip", "moveableclip", "ikclip", "blood",
   "trigger", "aassolid", "aasobstacle", "flashlight_trigger", "nonsolid", "nullNormal",
   "areaportal", "qer_nocarve", "discrete", "noFragment", "occlusion", "slick",
   "collision", "noimpact", "nodamage", "ladder", "nosteps", "metal", "stone", "flesh",
   "wood", "cardboard", "liquid", "glass", "plastic", "ricochet", "surftype10",
   "surftype11", "surftype12", "surftype13", "surftype14", "surftype15",
-};
+});
 // clang-format on
 
-// argument-less material keywords that only set a flag
+// argument-less material keywords that only set a flag (ParseMaterial,
+// Material.cpp:2654-2967)
 // clang-format off
-constexpr auto MaterialFlags = std::array<std::string_view, 25>{
+constexpr auto MaterialFlags = std::to_array<std::string_view>({
   "noShadows", "suppressInSubview", "portalSky", "noSelfShadow", "noPortalFog",
   "forceShadows", "noOverlays", "forceOverlays", "zeroclamp", "clamp", "alphazeroclamp",
   "fogLight", "blendLight", "ambientLight", "noFog", "unsmoothedTangents", "origin",
   "mikktspace", "unlit", "DECAL_MACRO", "lod1", "lod2", "lod3", "lod4", "persistentLOD",
-};
+});
 // clang-format on
 
-// argument-less stage keywords
+// argument-less stage keywords (ParseStage, Material.cpp:1748-1762, 1861-1923, 2079-2127)
 // clang-format off
-constexpr auto StageFlags = std::array<std::string_view, 23>{
+constexpr auto StageFlags = std::to_array<std::string_view>({
   "screen", "screen2", "glassWarp", "ignoreAlphaTest", "nearest", "linear", "clamp",
   "noclamp", "zeroclamp", "alphazeroclamp", "forceHighQuality", "highquality",
   "uncompressedCubeMap", "nopicmip", "vertexColor", "inverseVertexColor", "maskRed",
   "maskGreen", "maskBlue", "maskAlpha", "maskColor", "maskDepth", "colored",
-};
+});
 // clang-format on
 
-constexpr auto RenderMapKeywords = std::array<std::string_view, 4>{
-  "remoteRenderMap", "mirrorRenderMap", "xrayRenderMap", "guiRenderMap"};
+// two integers (ParseStage, Material.cpp:1699-1733)
+constexpr auto RenderMapKeywords = std::to_array<std::string_view>(
+  {"remoteRenderMap", "mirrorRenderMap", "xrayRenderMap", "guiRenderMap"});
 
-constexpr auto CubeMapKeywords = std::array<std::string_view, 6>{
-  "cubeMap", "cubeMapSingle", "panoramaMap", "hdriMap", "cameraCubeMap", "quakeCubeMap"};
+// one image program (ParseStage, Material.cpp:1804-1859)
+constexpr auto CubeMapKeywords = std::to_array<std::string_view>(
+  {"cubeMap",
+   "cubeMapSingle",
+   "panoramaMap",
+   "hdriMap",
+   "cameraCubeMap",
+   "quakeCubeMap"});
 
-// keywords that take expression , expression
-constexpr auto TextureMatrixKeywords =
-  std::array<std::string_view, 5>{"scroll", "translate", "scale", "centerScale", "shear"};
+// expression , expression (ParseStage, Material.cpp:1972-2033)
+constexpr auto TextureMatrixKeywords = std::to_array<std::string_view>(
+  {"scroll", "translate", "scale", "centerScale", "shear"});
 
+// one expression (ParseStage, Material.cpp:2139-2170)
 constexpr auto ColorKeywords =
-  std::array<std::string_view, 6>{"red", "green", "blue", "alpha", "rgb", "rgba"};
+  std::to_array<std::string_view>({"red", "green", "blue", "alpha", "rgb", "rgba"});
 
+// one token on the line (ParseStage, Material.cpp:2182-2215)
 constexpr auto ProgramKeywords =
-  std::array<std::string_view, 3>{"program", "fragmentProgram", "vertexProgram"};
+  std::to_array<std::string_view>({"program", "fragmentProgram", "vertexProgram"});
 
-// options of fragmentMap before its image program (idMaterial::ParseFragmentMap)
+// options of fragmentMap before its image program (ParseFragmentMap,
+// Material.cpp:1263-1344)
 // clang-format off
-constexpr auto FragmentMapOptions = std::array<std::string_view, 17>{
+constexpr auto FragmentMapOptions = std::to_array<std::string_view>({
   "normalMap", "cubeMap", "cameraCubeMap", "quakeCubeMap", "cubeMapSingle", "panoramaMap",
   "hdriMap", "nearest", "linear", "clamp", "noclamp", "zeroclamp", "alphazeroclamp",
   "forceHighQuality", "highquality", "uncompressed", "nopicmip",
-};
+});
 // clang-format on
 
+// one token on the line each (ParseStencil, Material.cpp:1509-1554)
 constexpr auto StencilKeywords =
-  std::array<std::string_view, 5>{"Ref", "Comp", "Pass", "Fail", "ZFail"};
+  std::to_array<std::string_view>({"Ref", "Comp", "Pass", "Fail", "ZFail"});
 
-// the expression registers known to idMaterial::ParseTerm
+// the expression registers known to ParseTerm (Material.cpp:693-802); "sound" is apart
 // clang-format off
-constexpr auto ExpressionRegisters = std::array<std::string_view, 22>{
+constexpr auto ExpressionRegisters = std::to_array<std::string_view>({
   "time", "parm0", "parm1", "parm2", "parm3", "parm4", "parm5", "parm6", "parm7", "parm8",
   "parm9", "parm10", "parm11", "global0", "global1", "global2", "global3", "global4",
   "global5", "global6", "global7", "fragmentPrograms",
-};
+});
 // clang-format on
 
-constexpr auto BinaryOperators = std::array<std::string_view, 13>{
-  "*", "/", "%", "+", "-", ">", ">=", "<", "<=", "==", "!=", "&&", "||"};
+// ParseExpressionPriority (Material.cpp:878-929)
+constexpr auto BinaryOperators = std::to_array<std::string_view>(
+  {"*", "/", "%", "+", "-", ">", ">=", "<", "<=", "==", "!=", "&&", "||"});
 
 constexpr int MaxVertexParms = 4;    // MAX_VERTEX_PARMS in Material.h
 constexpr int MaxFragmentImages = 8; // MAX_FRAGMENT_IMAGES in Material.h
@@ -726,11 +742,6 @@ bool blendsWithDestination(const Quake3ShaderStage::BlendFunc& blendFunc)
          || blendFunc.srcFactor == BlendFunc::OneMinusDestColor
          || blendFunc.srcFactor == BlendFunc::DestAlpha
          || blendFunc.srcFactor == BlendFunc::OneMinusDestAlpha;
-}
-
-std::string toLower(const std::string_view str)
-{
-  return kdl::str_to_lower(str);
 }
 
 // Whether the text of a quoted string is still one token when it is read without quotes.
@@ -1338,7 +1349,7 @@ private:
 
   void addFlag(const std::string_view flag)
   {
-    m_shader.surfaceParms.insert(toLower(flag));
+    m_shader.surfaceParms.insert(kdl::str_to_lower(flag));
   }
 
   void parseMaterialKeyword(const Token& token)
@@ -1769,6 +1780,7 @@ private:
     }
     else if (isAnyKeyword(token, StageFlags))
     {
+      // no arguments, nothing to record
     }
     else if (isKeyword(token, "privatePolygonOffset"))
     {
@@ -2070,15 +2082,17 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------
-// Layer 2: the decl splitter, a copy of idDeclFile::LoadAndParse
+// Decl splitter: a copy of idDeclFile::LoadAndParse (framework/DeclManager.cpp)
 // ---------------------------------------------------------------------------------------
 
-// the decl types registered by the engine and the game, matched case-insensitively
+// the decl types registered by the engine (framework/DeclManager.cpp:919-933) and the
+// game (d3xp/Game_local.cpp:323-324) at rbdoom/neo commit b19c3f76, matched
+// case-insensitively
 // clang-format off
-constexpr auto DeclTypes = std::array<std::string_view, 15>{
+constexpr auto DeclTypes = std::to_array<std::string_view>({
   "table", "material", "skin", "entityDef", "sound", "mapDef", "fx", "particle",
   "articulatedFigure", "pda", "email", "video", "audio", "model", "export",
-};
+});
 // clang-format on
 
 class DeclSplitter
@@ -2108,7 +2122,7 @@ public:
     auto result = std::vector<Quake3Shader>{};
     auto firstDefinitions = std::unordered_map<std::string, size_t>{};
 
-    auto i = size_t(0);
+    size_t i = 0;
     while (m_tokens[i].kind != TokenKind::Eof)
     {
       // the decl type, or the name of a material

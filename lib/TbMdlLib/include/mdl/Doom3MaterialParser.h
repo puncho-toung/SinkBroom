@@ -68,6 +68,11 @@ private:
 public:
   explicit Doom3MaterialParser(std::string_view str);
 
+  /**
+   * Parses the whole text. Unlike Quake3ShaderParser::parse, this returns a plain vector
+   * because it cannot fail: every problem is a warning, and the rest of the file is still
+   * parsed. Package 02b's loadShaders wraps it where a Result is needed.
+   */
   std::vector<Quake3Shader> parse(ParserStatus& status);
 
   /**
