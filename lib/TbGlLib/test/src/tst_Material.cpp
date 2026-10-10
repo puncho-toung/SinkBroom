@@ -96,6 +96,26 @@ TEST_CASE("Material")
     CHECK(&assigned.textureResource() == resourcePtr);
   }
 
+  SECTION("previewImageMissing and setPreviewImageMissing")
+  {
+    auto material = Material{"some material", createTextureResource(Texture{4, 4})};
+    CHECK_FALSE(material.previewImageMissing());
+
+    material.setPreviewImageMissing(true);
+    CHECK(material.previewImageMissing());
+
+    // the hand-written move operations carry the flag over
+    auto moved = Material{std::move(material)};
+    CHECK(moved.previewImageMissing());
+
+    auto assigned = Material{"other material", createTextureResource(Texture{4, 4})};
+    assigned = std::move(moved);
+    CHECK(assigned.previewImageMissing());
+
+    assigned.setPreviewImageMissing(false);
+    CHECK_FALSE(assigned.previewImageMissing());
+  }
+
   SECTION("activate and deactivate")
   {
     auto gl = MockGl{};

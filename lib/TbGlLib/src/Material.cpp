@@ -116,6 +116,7 @@ Material::Material(Material&& other)
   , m_culling{std::move(other.m_culling)}
   , m_blendFunc{std::move(other.m_blendFunc)}
   , m_alphaFunc{std::move(other.m_alphaFunc)}
+  , m_previewImageMissing{other.m_previewImageMissing}
 {
 }
 
@@ -131,6 +132,7 @@ Material& Material::operator=(Material&& other)
   m_culling = std::move(other.m_culling);
   m_blendFunc = std::move(other.m_blendFunc);
   m_alphaFunc = std::move(other.m_alphaFunc);
+  m_previewImageMissing = other.m_previewImageMissing;
   return *this;
 }
 
@@ -254,6 +256,16 @@ MaterialBlendFunc Material::effectiveBlendFunc() const
   }
 
   return m_blendFunc;
+}
+
+bool Material::previewImageMissing() const
+{
+  return m_previewImageMissing;
+}
+
+void Material::setPreviewImageMissing(const bool previewImageMissing)
+{
+  m_previewImageMissing = previewImageMissing;
 }
 
 size_t Material::usageCount() const
