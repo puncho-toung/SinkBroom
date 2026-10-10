@@ -128,6 +128,9 @@ public:
   std::vector<std::filesystem::path> previewImages;
   // Doom 3 only: the engine would replace this material with its default material.
   bool engineDefaulted = false;
+  // Doom 3 only: the canonical names of the tables the material's expressions look up.
+  // The engine defaults the material if one of them is declared in no decl file.
+  std::vector<std::string> referencedTables;
 
 public:
   Quake3ShaderStage& addStage();
@@ -144,7 +147,8 @@ public:
     format,
     coverage,
     previewImages,
-    engineDefaulted);
+    engineDefaulted,
+    referencedTables);
 };
 
 std::ostream& operator<<(std::ostream& lhs, Quake3ShaderStage::Lighting rhs);

@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -50,17 +51,37 @@ class Quake3Shader;
  *
  * Problems are reported through the given status with their file location. The parser
  * never throws and never drops the rest of a file.
+ *
+ * Tables can be declared in any decl file, so one file can't tell whether a table that a
+ * material looks up exists. Each record lists the tables it looks up in
+ * referencedTables, and declaredTables() lists the tables a file declares. After all
+ * files are loaded, the caller (package 02b's loadShaders) passes every record whose
+ * referenced tables are not all declared to makeEngineDefaulted, as the engine defaults
+ * such a material.
  */
 class Doom3MaterialParser
 {
 private:
   std::string_view m_str;
+  std::vector<std::string> m_declaredTables;
 
 public:
   explicit Doom3MaterialParser(std::string_view str);
 
   std::vector<Quake3Shader> parse(ParserStatus& status);
+
+  /**
+   * The canonical names of the table decls in the file, in file order, after parse.
+   */
+  const std::vector<std::string>& declaredTables() const;
 };
+
+/**
+ * Turns a Doom 3 record into what the engine makes of a material it defaults: CommonInit
+ * resets everything except the editor image name, and the default definition
+ * "{ { blend blend map _default } }" is parsed into the material.
+ */
+void makeEngineDefaulted(Quake3Shader& shader);
 
 } // namespace mdl
 } // namespace tb

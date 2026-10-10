@@ -52,12 +52,17 @@ using Format = Quake3Shader::Format;
 
 const auto GreaterEqual = gl::MaterialAlphaFunc::Compare::GreaterEqual;
 
-std::vector<Quake3Shader> parseFile(
-  const std::filesystem::path& path, TestParserStatus& status)
+std::string readFile(const std::filesystem::path& path)
 {
   auto file = fs::Disk::openFile(path) | kdl::value();
   auto reader = file->reader().buffer();
-  return Doom3MaterialParser{reader.stringView()}.parse(status);
+  return std::string{reader.stringView()};
+}
+
+std::vector<Quake3Shader> parseFile(
+  const std::filesystem::path& path, TestParserStatus& status)
+{
+  return Doom3MaterialParser{readFile(path)}.parse(status);
 }
 
 const Quake3Shader& findShader(
@@ -107,6 +112,7 @@ Quake3Shader defaultedShader(
     .coverage = Coverage::Translucent,
     .previewImages = editorImage.empty() ? paths({}) : paths({editorImage}),
     .engineDefaulted = true,
+    .referencedTables = {},
   };
 }
 
@@ -148,6 +154,7 @@ TEST_CASE("Doom3MaterialParser")
           .coverage = Coverage::Opaque,
           .previewImages = {"textures/fixture/caulk_ed.tga"},
           .engineDefaulted = false,
+          .referencedTables = {},
         },
         {
           .shaderPath = "textures/fixture/nodraw",
@@ -161,6 +168,7 @@ TEST_CASE("Doom3MaterialParser")
           .coverage = Coverage::Translucent,
           .previewImages = {"textures/fixture/nodraw_ed.tga"},
           .engineDefaulted = false,
+          .referencedTables = {},
         },
         {
           .shaderPath = "textures/fixture/clip",
@@ -181,6 +189,7 @@ TEST_CASE("Doom3MaterialParser")
           .coverage = Coverage::Translucent,
           .previewImages = {"textures/fixture/clip_ed.tga"},
           .engineDefaulted = false,
+          .referencedTables = {},
         },
       });
     CHECK(status.countStatus(LogLevel::Warn) == 0);
@@ -237,6 +246,7 @@ textures/fixture/aliases
           .previewImages =
             {"textures/fixture/panel_ed.tga", "textures/fixture/panel_d.tga"},
           .engineDefaulted = false,
+          .referencedTables = {},
         },
         {
           .shaderPath = "textures/fixture/aliases",
@@ -272,6 +282,7 @@ textures/fixture/aliases
           .coverage = Coverage::Opaque,
           .previewImages = {"textures/fixture/aliases_c.tga"},
           .engineDefaulted = false,
+          .referencedTables = {},
         },
       });
     CHECK(status.countStatus(LogLevel::Warn) == 0);
@@ -578,9 +589,81 @@ textures/fixture/quoted_stage	{ { blend diffusemap map "textures/fixture/x-y.tga
       }));
   }
 
+  SECTION("Table references")
+  {
+    const auto data = R"(
+textures/fixture/tables
+{
+	{
+		blend	add
+		map		textures/fixture/a
+		rgb		Fixture_Table[ time ] * fixture_table[ parm0 ]
+		alpha	fixture.other[ fixture_nested[ time ] ]
+		rotate	time
+	}
+}
+
+textures/fixture/defaulted_tables
+{
+	{
+		blend	add
+		map		textures/fixture/a
+		rgb		fixture_table[ time ]
+		nomipmaps
+	}
+}
+)";
+
+    auto parser = Doom3MaterialParser{data};
+    const auto shaders = parser.parse(status);
+    REQUIRE(shaders.size() == 2);
+
+    // canonical decl names, each once, in the order of use
+    CHECK(
+      findShader(shaders, "textures/fixture/tables").referencedTables
+      == std::vector<std::string>{
+        "fixture_table", "fixture", "fixture_nested", "sintable", "costable"});
+    CHECK_FALSE(findShader(shaders, "textures/fixture/tables").engineDefaulted);
+
+    // the engine's default material looks up no tables
+    CHECK(
+      findShader(shaders, "textures/fixture/defaulted_tables").referencedTables.empty());
+
+    CHECK(parser.declaredTables().empty());
+  }
+
+  SECTION("makeEngineDefaulted")
+  {
+    auto shaders = Doom3MaterialParser{R"(
+textures/fixture/fine
+{
+	qer_editorimage	textures/fixture/fine_ed.tga
+	twoSided
+	{
+		blend	add
+		map		textures/fixture/a
+		rgb		fixture_missing[ time ]
+	}
+}
+)"}
+                     .parse(status);
+    REQUIRE(shaders.size() == 1);
+
+    // what package 02b does when no file declares fixture_missing
+    makeEngineDefaulted(shaders.front());
+    CHECK(
+      shaders.front()
+      == defaultedShader("textures/fixture/fine", "textures/fixture/fine_ed.tga"));
+  }
+
   SECTION("Tables and other typed decls")
   {
-    const auto shaders = parseFile(fixturePath / "typed_decls.mtr", status);
+    const auto text = readFile(fixturePath / "typed_decls.mtr");
+    auto parser = Doom3MaterialParser{text};
+    const auto shaders = parser.parse(status);
+    CHECK(
+      parser.declaredTables()
+      == std::vector<std::string>{"fixture_steps", "fixture_snap", "fixture_wave"});
     CHECK(
       shaderPaths(shaders)
       == paths(
@@ -1182,10 +1265,12 @@ textures/fixture/lexer
 
   SECTION("Doom 3 BFG fixture tb_test.mtr")
   {
-    const auto shaders = parseFile(
+    const auto text = readFile(
       getFixtureRoot() / "test" / "mdl" / "Game" / "Doom3BFG" / "base" / "materials"
-        / "tb_test.mtr",
-      status);
+      / "tb_test.mtr");
+    auto parser = Doom3MaterialParser{text};
+    const auto shaders = parser.parse(status);
+    CHECK(parser.declaredTables() == std::vector<std::string>{"tb_test_pulse"});
 
     CHECK(
       shaderPaths(shaders)
@@ -1239,6 +1324,7 @@ textures/fixture/lexer
 
     const auto& bumped = findShader(shaders, "textures/tb_test/bumped");
     CHECK(bumped.coverage == Coverage::Opaque);
+    CHECK(bumped.referencedTables == std::vector<std::string>{"tb_test_pulse"});
     CHECK(
       bumped.stages
       == std::vector<Quake3ShaderStage>{

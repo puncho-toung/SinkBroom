@@ -736,6 +736,8 @@ bool staysOneToken(const std::string_view text)
   return tokens.size() == 2;
 }
 
+} // namespace
+
 // idMaterial::Parse calls MakeDefault (DeclManager.cpp) for a material it failed to
 // parse. That parses the default definition "{ { blend blend map _default } }"
 // (idMaterial::DefaultDefinition) into the material after CommonInit has reset
@@ -773,8 +775,12 @@ void makeEngineDefaulted(Quake3Shader& shader)
     .coverage = Coverage::Translucent,
     .previewImages = std::move(previewImages),
     .engineDefaulted = true,
+    .referencedTables = {},
   };
 }
+
+namespace
+{
 
 class MaterialBlockParser
 {
@@ -1085,6 +1091,7 @@ private:
     // exists is not known here, because tables can be declared in any file
     if (token.kind != TokenKind::Eof && isText(peek(), "["))
     {
+      addReferencedTable(token.text);
       next();
       parseExpression();
       if (!m_defaulted)
@@ -1261,6 +1268,17 @@ private:
     else if (!isKeyword(token, "eyeBall"))
     {
       setDefaulted(token, "Bad deform type " + describe(token));
+    }
+  }
+
+  void addReferencedTable(const std::string_view name)
+  {
+    auto canonicalName = canonicalIdTech4DeclName(name);
+    if (
+      std::ranges::find(m_shader.referencedTables, canonicalName)
+      == m_shader.referencedTables.end())
+    {
+      m_shader.referencedTables.push_back(std::move(canonicalName));
     }
   }
 
@@ -1739,8 +1757,9 @@ private:
     }
     else if (isKeyword(token, "rotate"))
     {
-      // the engine also requires tables named sinTable and cosTable, which can be
-      // declared in any file
+      // the engine looks up the tables sinTable and cosTable
+      addReferencedTable("sinTable");
+      addReferencedTable("cosTable");
       parseExpression();
     }
     else if (isKeyword(token, "alphaTest"))
@@ -2017,6 +2036,7 @@ private:
 
   const std::vector<Token>& m_tokens;
   ParserStatus& m_status;
+  std::vector<std::string> m_declaredTables;
 
 public:
   DeclSplitter(const std::vector<Token>& tokens, ParserStatus& status)
@@ -2024,6 +2044,8 @@ public:
     , m_status{status}
   {
   }
+
+  std::vector<std::string>& declaredTables() { return m_declaredTables; }
 
   std::vector<Quake3Shader> split()
   {
@@ -2094,6 +2116,14 @@ public:
 
       // only quoted names can contain non-ASCII bytes; see asciiText
       const auto name = asciiText(nameToken.text);
+      if (type != DeclTypes.end() && *type == "table")
+      {
+        auto tableName = canonicalIdTech4DeclName(nameToken.text);
+        if (std::ranges::find(m_declaredTables, tableName) == m_declaredTables.end())
+        {
+          m_declaredTables.push_back(std::move(tableName));
+        }
+      }
       if (type != DeclTypes.end() && *type != "material")
       {
         m_status.debug(
@@ -2216,7 +2246,16 @@ std::vector<Quake3Shader> Doom3MaterialParser::parse(ParserStatus& status)
 {
   auto concatenatedStrings = std::deque<std::string>{};
   const auto tokens = Lexer{m_str, &status, concatenatedStrings}.tokenize();
-  return DeclSplitter{tokens, status}.split();
+
+  auto splitter = DeclSplitter{tokens, status};
+  auto shaders = splitter.split();
+  m_declaredTables = std::move(splitter.declaredTables());
+  return shaders;
+}
+
+const std::vector<std::string>& Doom3MaterialParser::declaredTables() const
+{
+  return m_declaredTables;
 }
 
 } // namespace tb::mdl
