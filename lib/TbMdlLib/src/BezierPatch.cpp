@@ -30,10 +30,14 @@
 #include "vm/mat_ext.h"
 #include "vm/vec_io.h" // IWYU pragma: keep
 
+#include <fmt/format.h>
+
 #include <ranges>
 
 namespace tb::mdl
 {
+
+kdl_reflect_impl(PatchSubdivisions);
 
 kdl_reflect_impl(BezierPatch);
 
@@ -53,16 +57,58 @@ BezierPatch::BezierPatch(
   const size_t pointRowCount,
   const size_t pointColumnCount,
   std::vector<Point> controlPoints,
-  std::string materialName)
+  std::string materialName,
+  std::optional<PatchSubdivisions> explicitSubdivisions)
   : m_pointRowCount{pointRowCount}
   , m_pointColumnCount{pointColumnCount}
   , m_controlPoints{std::move(controlPoints)}
   , m_bounds{computeBounds(m_controlPoints)}
   , m_materialName{std::move(materialName)}
+  , m_explicitSubdivisions{std::move(explicitSubdivisions)}
 {
   contract_pre(m_pointRowCount > 2 && m_pointColumnCount > 2);
   contract_pre(m_pointRowCount % 2 == 1 && m_pointColumnCount % 2 == 1);
   contract_pre(m_controlPoints.size() == m_pointRowCount * m_pointColumnCount);
+}
+
+Result<BezierPatch> BezierPatch::create(
+  const size_t pointRowCount,
+  const size_t pointColumnCount,
+  std::vector<Point> controlPoints,
+  std::string materialName,
+  std::optional<PatchSubdivisions> explicitSubdivisions)
+{
+  if (pointRowCount < 3 || pointColumnCount < 3)
+  {
+    return Error{fmt::format(
+      "Patch must have at least 3x3 control points, but has {}x{}",
+      pointRowCount,
+      pointColumnCount)};
+  }
+
+  if (pointRowCount % 2 == 0 || pointColumnCount % 2 == 0)
+  {
+    return Error{fmt::format(
+      "Patch must have an odd number of control point rows and columns, but has {}x{}",
+      pointRowCount,
+      pointColumnCount)};
+  }
+
+  if (controlPoints.size() != pointRowCount * pointColumnCount)
+  {
+    return Error{fmt::format(
+      "Patch with {}x{} control points has {} control points",
+      pointRowCount,
+      pointColumnCount,
+      controlPoints.size())};
+  }
+
+  return BezierPatch{
+    pointRowCount,
+    pointColumnCount,
+    std::move(controlPoints),
+    std::move(materialName),
+    std::move(explicitSubdivisions)};
 }
 
 BezierPatch::~BezierPatch() = default;
@@ -160,6 +206,11 @@ bool BezierPatch::setMaterial(gl::Material* material)
 
   m_materialReference = AssetReference{material};
   return true;
+}
+
+const std::optional<PatchSubdivisions>& BezierPatch::explicitSubdivisions() const
+{
+  return m_explicitSubdivisions;
 }
 
 void BezierPatch::transform(const vm::mat4x4d& transformation)

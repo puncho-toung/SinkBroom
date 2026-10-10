@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "base/Result.h"
 #include "mdl/AssetReference.h"
 
 #include "kd/flat_set.h"
@@ -27,6 +28,7 @@
 #include "vm/bbox.h"
 #include "vm/vec.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -39,6 +41,21 @@ class Material;
 
 namespace mdl
 {
+
+/**
+ * The explicit subdivisions of a Doom 3 patchDef3, in the order of the patch header.
+ * RBDOOM-3-BFG applies the horizontal subdivisions along its patch width, which is the
+ * first header number and our point row count, and the vertical subdivisions along its
+ * height, our point column count. TrenchBroom only keeps them so that they can be written
+ * back; it does not use them for rendering.
+ */
+struct PatchSubdivisions
+{
+  size_t horizontal;
+  size_t vertical;
+
+  kdl_reflect_decl(PatchSubdivisions, horizontal, vertical);
+};
 
 class BezierPatch
 {
@@ -54,20 +71,40 @@ private:
   std::string m_materialName;
   AssetReference<gl::Material> m_materialReference;
 
+  std::optional<PatchSubdivisions> m_explicitSubdivisions;
+
   kdl_reflect_decl(
     BezierPatch,
     m_pointRowCount,
     m_pointColumnCount,
     m_bounds,
     m_controlPoints,
-    m_materialName);
+    m_materialName,
+    m_explicitSubdivisions);
 
 public:
+  /**
+   * Creates a patch from trusted data. The point row and column counts must be odd and at
+   * least 3, and the number of control points must be their product.
+   */
   BezierPatch(
     size_t pointRowCount,
     size_t pointColumnCount,
     std::vector<Point> controlPoints,
-    std::string materialName);
+    std::string materialName,
+    std::optional<PatchSubdivisions> explicitSubdivisions = std::nullopt);
+
+  /**
+   * Creates a patch from untrusted data, such as a map file. Returns an error instead of
+   * violating the constructor's preconditions.
+   */
+  static Result<BezierPatch> create(
+    size_t pointRowCount,
+    size_t pointColumnCount,
+    std::vector<Point> controlPoints,
+    std::string materialName,
+    std::optional<PatchSubdivisions> explicitSubdivisions = std::nullopt);
+
   ~BezierPatch();
 
   BezierPatch(const BezierPatch& other);
@@ -98,6 +135,8 @@ public: // control points:
 
   const gl::Material* material() const;
   bool setMaterial(gl::Material* material);
+
+  const std::optional<PatchSubdivisions>& explicitSubdivisions() const;
 
   void transform(const vm::mat4x4d& transformation);
   void transformControlPoints(

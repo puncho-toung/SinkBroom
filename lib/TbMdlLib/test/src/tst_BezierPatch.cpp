@@ -27,6 +27,8 @@
 #include "vm/util.h"
 #include "vm/vec.h"
 
+#include <optional>
+#include <string>
 #include <tuple>
 #include <vector>
 
@@ -36,8 +38,124 @@
 namespace tb::mdl
 {
 
+namespace
+{
+
+std::vector<BezierPatch::Point> makeControlPoints(const size_t count)
+{
+  auto result = std::vector<BezierPatch::Point>{};
+  for (size_t i = 0; i < count; ++i)
+  {
+    result.push_back({double(i), double(i % 3), 0, 0, 0});
+  }
+  return result;
+}
+
+} // namespace
+
 TEST_CASE("BezierPatch")
 {
+  SECTION("create")
+  {
+    SECTION("accepts odd sizes of at least 3x3")
+    {
+      using T = std::tuple<size_t, size_t, std::optional<PatchSubdivisions>>;
+
+      // clang-format off
+      const auto [rowCount, columnCount, explicitSubdivisions] = GENERATE(values<T>({
+      {3, 3, std::nullopt},
+      {3, 5, std::nullopt},
+      {5, 3, PatchSubdivisions{4, 2}},
+      {7, 9, PatchSubdivisions{1, 1}},
+      }));
+      // clang-format on
+
+      CAPTURE(rowCount, columnCount, explicitSubdivisions);
+
+      const auto controlPoints = makeControlPoints(rowCount * columnCount);
+      CHECK(
+        BezierPatch::create(
+          rowCount, columnCount, controlPoints, "material", explicitSubdivisions)
+        == Result<BezierPatch>{BezierPatch{
+          rowCount, columnCount, controlPoints, "material", explicitSubdivisions}});
+    }
+
+    SECTION("rejects invalid sizes")
+    {
+      using T = std::tuple<size_t, size_t, size_t, std::string>;
+
+      // clang-format off
+      const auto [rowCount, columnCount, pointCount, expectedError] = GENERATE(values<T>({
+      {2, 3,  6, "Patch must have at least 3x3 control points, but has 2x3"},
+      {3, 2,  6, "Patch must have at least 3x3 control points, but has 3x2"},
+      {1, 1,  1, "Patch must have at least 3x3 control points, but has 1x1"},
+      {0, 0,  0, "Patch must have at least 3x3 control points, but has 0x0"},
+      {0, 3,  0, "Patch must have at least 3x3 control points, but has 0x3"},
+      {4, 3, 12, "Patch must have an odd number of control point rows and columns, but has 4x3"},
+      {3, 4, 12, "Patch must have an odd number of control point rows and columns, but has 3x4"},
+      {4, 4, 16, "Patch must have an odd number of control point rows and columns, but has 4x4"},
+      {3, 3,  8, "Patch with 3x3 control points has 8 control points"},
+      {3, 3,  0, "Patch with 3x3 control points has 0 control points"},
+      {3, 5,  9, "Patch with 3x5 control points has 9 control points"},
+      }));
+      // clang-format on
+
+      CAPTURE(rowCount, columnCount, pointCount);
+
+      CHECK(
+        BezierPatch::create(
+          rowCount, columnCount, makeControlPoints(pointCount), "material")
+        == Result<BezierPatch>{Error{expectedError}});
+    }
+  }
+
+  SECTION("explicitSubdivisions")
+  {
+    // clang-format off
+    auto patch = BezierPatch{3, 3, {
+      {-1,  1,  0}, {0,  1,  1}, {1,  1,  2},
+      {-1,  0, -1}, {0,  0,  0}, {1,  0,  1},
+      {-1, -1, -2}, {0, -1, -1}, {1, -1,  0},
+     }, "", PatchSubdivisions{4, 2}};
+    // clang-format on
+
+    CHECK(patch.explicitSubdivisions() == PatchSubdivisions{4, 2});
+
+    SECTION("defaults to none")
+    {
+      CHECK(
+        BezierPatch{3, 3, patch.controlPoints(), ""}.explicitSubdivisions()
+        == std::nullopt);
+    }
+
+    SECTION("is part of equality")
+    {
+      CHECK(patch != BezierPatch{3, 3, patch.controlPoints(), ""});
+      CHECK(
+        patch != BezierPatch{3, 3, patch.controlPoints(), "", PatchSubdivisions{2, 4}});
+      CHECK(
+        patch == BezierPatch{3, 3, patch.controlPoints(), "", PatchSubdivisions{4, 2}});
+    }
+
+    SECTION("is kept by copy and move")
+    {
+      const auto copy = patch;
+      CHECK(copy.explicitSubdivisions() == PatchSubdivisions{4, 2});
+
+      const auto moved = std::move(patch);
+      CHECK(moved.explicitSubdivisions() == PatchSubdivisions{4, 2});
+    }
+
+    SECTION("is kept by transform")
+    {
+      patch.transform(vm::translation_matrix(vm::vec3d{2.0, 0.0, 0.0}));
+      CHECK(patch.explicitSubdivisions() == PatchSubdivisions{4, 2});
+
+      patch.transform(vm::mirror_matrix<double>(vm::axis::x));
+      CHECK(patch.explicitSubdivisions() == PatchSubdivisions{4, 2});
+    }
+  }
+
   SECTION("evaluate")
   {
     using T = std::tuple<
