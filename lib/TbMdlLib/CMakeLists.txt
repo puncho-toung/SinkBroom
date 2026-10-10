@@ -66,6 +66,7 @@ target_sources(TbMdlLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HitAdapter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HitFilter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HitType.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/IdTech4MaterialName.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/InvalidUvScaleValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Issue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/IssueQuickFix.cpp

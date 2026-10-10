@@ -36,6 +36,7 @@ target_sources(TbMdlLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GroupNode.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Hit.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HitFilter.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_IdTech4MaterialName.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Issue.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Layer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LayerNode.cpp
