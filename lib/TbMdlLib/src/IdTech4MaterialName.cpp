@@ -21,12 +21,30 @@
 
 #include "kd/path_utils.h"
 
+#include <algorithm>
 #include <string>
 
 namespace tb::mdl
 {
+namespace
+{
 
-std::filesystem::path canonicalIdTech4MaterialName(const std::string_view name)
+bool isAscii(const char c)
+{
+  return static_cast<unsigned char>(c) < 0x80;
+}
+
+} // namespace
+
+std::filesystem::path idTech4Path(const std::string_view text)
+{
+  auto ascii = std::string{text};
+  std::ranges::replace_if(
+    ascii, [](const auto c) { return !isAscii(c); }, '_');
+  return kdl::parse_path(std::move(ascii));
+}
+
+std::string canonicalIdTech4DeclName(const std::string_view name)
 {
   // see idDeclManagerLocal::MakeNameCanonical in RBDOOM-3-BFG's
   // neo/framework/DeclManager.cpp: only ASCII letters are lowercased (idStr::ToLower)
@@ -51,7 +69,7 @@ std::filesystem::path canonicalIdTech4MaterialName(const std::string_view name)
     }
     else
     {
-      result.push_back(c);
+      result.push_back(isAscii(c) ? c : '_');
     }
   }
 
@@ -60,7 +78,12 @@ std::filesystem::path canonicalIdTech4MaterialName(const std::string_view name)
     result.resize(lastDot);
   }
 
-  return kdl::parse_path(std::move(result));
+  return result;
+}
+
+std::filesystem::path canonicalIdTech4MaterialName(const std::string_view name)
+{
+  return idTech4Path(canonicalIdTech4DeclName(name));
 }
 
 } // namespace tb::mdl

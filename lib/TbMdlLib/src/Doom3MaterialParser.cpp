@@ -25,13 +25,12 @@
 #include "mdl/IdTech4MaterialName.h"
 #include "mdl/Quake3Shader.h"
 
-#include "kd/path_utils.h"
 #include "kd/string_compare.h"
 #include "kd/string_format.h"
+#include "kd/string_utils.h"
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <deque>
 #include <filesystem>
 #include <optional>
@@ -104,10 +103,29 @@ bool isPunct(const Token& token, const std::string_view text)
   return token.kind == TokenKind::Punct && token.text == text;
 }
 
+bool isNonAscii(const char c)
+{
+  return static_cast<unsigned char>(c) >= 0x80;
+}
+
+bool hasNonAscii(const std::string_view text)
+{
+  return std::ranges::any_of(text, isNonAscii);
+}
+
+// id Tech 4 names are ASCII. Only quoted strings can carry other bytes, and those bytes
+// would make std::filesystem::path throw (see idTech4Path), so they become '_'.
+std::string asciiText(const std::string_view text)
+{
+  auto result = std::string{text};
+  std::ranges::replace_if(result, isNonAscii, '_');
+  return result;
+}
+
 std::string describe(const Token& token)
 {
   return token.kind == TokenKind::Eof ? std::string{"end of material"}
-                                      : "'" + std::string{token.text} + "'";
+                                      : "'" + asciiText(token.text) + "'";
 }
 
 // idLexer's default punctuation table, longest first
@@ -622,16 +640,36 @@ int engineLightingOrder(const Lighting lighting)
   return 0;
 }
 
-std::optional<float> parseFloat(const std::string_view text)
+// idToken::NumberValue: the value of a number token, including the hexadecimal, binary
+// and octal integers that idLexer::ReadNumber reads; 0 for anything else
+float numberValue(const std::string_view text)
 {
-  auto value = 0.0f;
-  const auto* end = text.data() + text.size();
-  const auto [ptr, ec] = std::from_chars(text.data(), end, value);
-  if (ec != std::errc{})
+  const auto integer = [](const std::string_view digits, const double base) {
+    auto value = 0.0;
+    for (const auto c : digits)
+    {
+      const auto digit = isDigit(c) ? c - '0' : (c | 0x20) - 'a' + 10;
+      value = value * base + digit;
+    }
+    return static_cast<float>(value);
+  };
+
+  if (text.size() > 1 && text[0] == '0')
   {
-    return std::nullopt;
+    if (text[1] == 'x' || text[1] == 'X')
+    {
+      return integer(text.substr(2), 16.0);
+    }
+    if (text[1] == 'b' || text[1] == 'B')
+    {
+      return integer(text.substr(2), 2.0);
+    }
+    if (text[1] != '.')
+    {
+      return integer(text.substr(1), 8.0);
+    }
   }
-  return value;
+  return kdl::str_to_float(text).value_or(0.0f);
 }
 
 // idStr::IsNumeric
@@ -684,6 +722,8 @@ private:
   struct StageState
   {
     Quake3ShaderStage stage;
+    // the first image of the last map (or cube map) keyword's image program
+    std::string imageName;
     bool texGenReflect = false;
     bool referencesCurrentRender = false;
   };
@@ -691,8 +731,29 @@ private:
   struct EngineStage
   {
     Lighting lighting = Lighting::None;
-    std::filesystem::path image;
+    std::string image;
   };
+
+  // Every recursion (parenthesised expressions, table lookups, image programs) counts
+  // against this limit, so that no input can overflow the stack.
+  class NestingGuard
+  {
+  private:
+    int& m_nesting;
+
+  public:
+    explicit NestingGuard(int& nesting)
+      : m_nesting{++nesting}
+    {
+    }
+
+    ~NestingGuard() { --m_nesting; }
+
+    NestingGuard(const NestingGuard&) = delete;
+    NestingGuard& operator=(const NestingGuard&) = delete;
+  };
+
+  static constexpr int MaxNesting = 64;
 
   const std::vector<Token>& m_tokens;
   size_t m_pos;
@@ -700,13 +761,19 @@ private:
   Token m_endToken;
   bool m_unterminated;
   ParserStatus& m_status;
-  std::string_view m_name;
+  // ASCII only, see asciiText
+  std::string m_name;
+  bool m_nonAsciiReported;
 
   Quake3Shader m_shader;
   bool m_defaulted = false;
+  int m_nesting = 0;
+  std::string m_editorImageName;
   std::optional<Coverage> m_explicitCoverage;
   bool m_sortPortalSky = false;
   bool m_referencesCurrentRender = false;
+  // parallel to m_shader.stages
+  std::vector<std::string> m_stageImageNames;
   std::vector<bool> m_stageTexGenReflect;
 
 public:
@@ -717,7 +784,8 @@ public:
     const size_t begin,
     const size_t end,
     const bool unterminated,
-    std::string_view name,
+    std::string name,
+    const bool nonAsciiReported,
     std::filesystem::path shaderPath,
     ParserStatus& status)
     : m_tokens{tokens}
@@ -726,7 +794,8 @@ public:
     , m_endToken{endToken(tokens, end, unterminated)}
     , m_unterminated{unterminated}
     , m_status{status}
-    , m_name{name}
+    , m_name{std::move(name)}
+    , m_nonAsciiReported{nonAsciiReported}
   {
     m_shader.shaderPath = std::move(shaderPath);
     m_shader.format = Quake3Shader::Format::Doom3;
@@ -808,9 +877,38 @@ private:
       m_defaulted = true;
       warn(
         token,
-        message + " in material '" + std::string{m_name}
+        message + " in material '" + m_name
           + "'; the engine replaces this material with its default material");
     }
+  }
+
+  // The text of a token that goes into the record, see asciiText. Reports the first
+  // non-ASCII field of a material.
+  std::string recordText(const Token& token, const std::string_view field)
+  {
+    if (hasNonAscii(token.text) && !m_nonAsciiReported)
+    {
+      m_nonAsciiReported = true;
+      warn(
+        token,
+        "Non-ASCII characters in the " + std::string{field} + " of material '" + m_name
+          + "' were replaced with '_'");
+    }
+    return asciiText(token.text);
+  }
+
+  // Returns false and defaults the material if the input nests deeper than MaxNesting.
+  bool checkNesting(const std::string_view what)
+  {
+    if (m_nesting > MaxNesting)
+    {
+      setDefaulted(
+        peek(),
+        std::string{what} + " nested too deeply (more than " + std::to_string(MaxNesting)
+          + " levels)");
+      return false;
+    }
+    return true;
   }
 
   // idMaterial::MatchToken
@@ -868,6 +966,12 @@ private:
   // idMaterial::ParseExpression; returns the value if the expression is one number
   std::optional<float> parseExpression()
   {
+    const auto guard = NestingGuard{m_nesting};
+    if (!checkNesting("Expression"))
+    {
+      return std::nullopt;
+    }
+
     auto constant = parseTerm();
     while (!m_defaulted && !atEnd() && isAnyKeyword(peek(), BinaryOperators))
     {
@@ -902,7 +1006,7 @@ private:
       const auto& number = next();
       if (number.kind == TokenKind::Number || isText(number, "."))
       {
-        return -parseFloat(number.text).value_or(0.0f);
+        return -numberValue(number.text);
       }
       setDefaulted(number, "Bad negative number " + describe(number));
       return std::nullopt;
@@ -910,7 +1014,7 @@ private:
 
     if (token.kind == TokenKind::Number || isText(token, "."))
     {
-      return parseFloat(token.text).value_or(0.0f);
+      return numberValue(token.text);
     }
 
     // anything else must be a table lookup: name [ expression ]; whether the table
@@ -932,33 +1036,50 @@ private:
 
   // R_ParsePastImageProgram; returns the first image name in the program, from left to
   // right, which is what the editor previews
-  std::filesystem::path parseImageProgram()
+  std::string parseImageProgram(const std::string_view field)
   {
-    auto leaf = std::optional<std::string_view>{};
-    parseImageProgram(leaf);
-    return leaf ? kdl::parse_path(std::string{*leaf}) : std::filesystem::path{};
+    auto leaf = std::optional<std::string>{};
+    parseImageProgram(field, leaf);
+    return leaf.value_or(std::string{});
   }
 
   // R_ParseImageProgram_r
-  void parseImageProgram(std::optional<std::string_view>& leaf)
+  void parseImageProgram(const std::string_view field, std::optional<std::string>& leaf)
   {
-    const auto& token = next();
+    const auto guard = NestingGuard{m_nesting};
+    if (!checkNesting("Image program"))
+    {
+      return;
+    }
 
+    // parses a nested image program; false if that defaulted the material
+    const auto argument = [&]() {
+      parseImageProgram(field, leaf);
+      return !m_defaulted;
+    };
+
+    const auto& token = next();
     if (isKeyword(token, "heightmap"))
     {
       expectToken("(");
-      parseImageProgram(leaf);
-      expectToken(",");
-      next();
-      expectToken(")");
+      if (argument())
+      {
+        expectToken(",");
+        next();
+        expectToken(")");
+      }
     }
     else if (isKeyword(token, "addnormals") || isKeyword(token, "add"))
     {
       expectToken("(");
-      parseImageProgram(leaf);
-      expectToken(",");
-      parseImageProgram(leaf);
-      expectToken(")");
+      if (argument())
+      {
+        expectToken(",");
+        if (argument())
+        {
+          expectToken(")");
+        }
+      }
     }
     else if (
       isKeyword(token, "smoothnormals") || isKeyword(token, "invertAlpha")
@@ -966,36 +1087,46 @@ private:
       || isKeyword(token, "makeIntensity") || isKeyword(token, "makeAlpha"))
     {
       expectToken("(");
-      parseImageProgram(leaf);
-      expectToken(")");
+      if (argument())
+      {
+        expectToken(")");
+      }
     }
     else if (isKeyword(token, "scale"))
     {
       expectToken("(");
-      parseImageProgram(leaf);
-      for (auto i = 0; i < 4; ++i)
+      if (argument())
       {
-        expectToken(",");
-        next();
+        for (auto i = 0; i < 4; ++i)
+        {
+          expectToken(",");
+          next();
+        }
+        expectToken(")");
       }
-      expectToken(")");
     }
     else if (isKeyword(token, "combineRgba"))
     {
       expectToken("(");
-      parseImageProgram(leaf);
-      expectToken(",");
-      parseImageProgram(leaf);
-      expectToken(",");
-      parseImageProgram(leaf);
-      expectToken(")");
+      if (argument())
+      {
+        expectToken(",");
+        if (argument())
+        {
+          expectToken(",");
+          if (argument())
+          {
+            expectToken(")");
+          }
+        }
+      }
     }
     else if (!leaf)
     {
       // a punctuation token is consumed as an image name too, but can't name a file
       if (token.kind == TokenKind::Punct || token.kind == TokenKind::Eof)
       {
-        leaf = std::string_view{};
+        leaf = std::string{};
       }
       // the image program maps these two intrinsic names to files
       else if (isText(token, "_black"))
@@ -1008,7 +1139,7 @@ private:
       }
       else
       {
-        leaf = token.text;
+        leaf = recordText(token, field);
       }
     }
   }
@@ -1073,8 +1204,7 @@ private:
     if (isKeyword(token, "qer_editorimage"))
     {
       const auto* image = nextOnLine();
-      m_shader.editorImage =
-        image ? kdl::parse_path(std::string{image->text}) : std::filesystem::path{};
+      m_editorImageName = image ? recordText(*image, "editor image") : std::string{};
       skipRestOfLine();
     }
     else if (isKeyword(token, "description"))
@@ -1127,7 +1257,7 @@ private:
     }
     else if (isKeyword(token, "lightFalloffImage"))
     {
-      parseImageProgram();
+      parseImageProgram("light falloff image");
     }
     else if (isKeyword(token, "guisurf"))
     {
@@ -1173,17 +1303,17 @@ private:
     }
     else if (isKeyword(token, "diffusemap") || isKeyword(token, "basecolormap"))
     {
-      parseShorthandStage(Lighting::Diffuse);
+      parseShorthandStage(token, Lighting::Diffuse);
     }
     else if (
       isKeyword(token, "specularmap") || isKeyword(token, "rmaomap")
       || isKeyword(token, "reflectionmap") || isKeyword(token, "pbrmap"))
     {
-      parseShorthandStage(Lighting::Specular);
+      parseShorthandStage(token, Lighting::Specular);
     }
     else if (isKeyword(token, "bumpmap") || isKeyword(token, "normalmap"))
     {
-      parseShorthandStage(Lighting::Bump);
+      parseShorthandStage(token, Lighting::Bump);
     }
     else if (isText(token, "{"))
     {
@@ -1196,10 +1326,10 @@ private:
   }
 
   // "diffusemap X" is parsed by the engine as the stage "{ blend diffusemap map X }"
-  void parseShorthandStage(const Lighting lighting)
+  void parseShorthandStage(const Token& keyword, const Lighting lighting)
   {
     auto stage = StageState{};
-    stage.stage.map = parseImageProgram();
+    stage.imageName = parseImageProgram(kdl::str_to_lower(keyword.text));
     stage.stage.lighting = lighting;
     commitStage(std::move(stage));
   }
@@ -1282,10 +1412,12 @@ private:
       return true;
     }
 
-    const auto value = index->kind == TokenKind::Number
-                         ? static_cast<int>(parseFloat(index->text).value_or(0.0f))
-                         : 0;
-    if (!isNumericText(index->text) || value < 0 || value >= max)
+    // The engine converts the number to an integer, which wraps around modulo 2^32 for
+    // huge values and may then land in range. The range is checked on the value as
+    // written instead, so a huge index defaults the material; converting an out-of-range
+    // float to int would be undefined behaviour.
+    const auto value = index->kind == TokenKind::Number ? numberValue(index->text) : 0.0f;
+    if (!isNumericText(index->text) || !(value >= 0.0f && value < float(max)))
     {
       setDefaulted(
         *index, "Bad " + std::string{keyword.text} + " number " + describe(*index));
@@ -1354,8 +1486,8 @@ private:
       return;
     }
 
-    const auto image = parseImageProgram();
-    if (kdl::ci::str_is_equal(image.generic_string(), "_currentRender"))
+    const auto image = parseImageProgram("fragment map");
+    if (kdl::ci::str_is_equal(image, "_currentRender"))
     {
       state.referencesCurrentRender = true;
     }
@@ -1438,7 +1570,7 @@ private:
     }
     else if (isKeyword(token, "map") || isAnyKeyword(token, CubeMapKeywords))
     {
-      stage.map = parseImageProgram();
+      state.imageName = parseImageProgram("stage image");
     }
     else if (isAnyKeyword(token, RenderMapKeywords))
     {
@@ -1565,11 +1697,13 @@ private:
   {
     if (
       state.referencesCurrentRender
-      || kdl::ci::str_is_equal(state.stage.map.generic_string(), "_currentRender"))
+      || kdl::ci::str_is_equal(state.imageName, "_currentRender"))
     {
       m_referencesCurrentRender = true;
     }
+    state.stage.map = idTech4Path(state.imageName);
     m_shader.stages.push_back(std::move(state.stage));
+    m_stageImageNames.push_back(std::move(state.imageName));
     m_stageTexGenReflect.push_back(state.texGenReflect);
   }
 
@@ -1578,9 +1712,9 @@ private:
   std::vector<EngineStage> engineStages() const
   {
     auto result = std::vector<EngineStage>{};
-    for (const auto& stage : m_shader.stages)
+    for (size_t i = 0; i < m_shader.stages.size(); ++i)
     {
-      result.push_back({stage.lighting, stage.map});
+      result.push_back({m_shader.stages[i].lighting, m_stageImageNames[i]});
     }
 
     const auto has = [&](const Lighting lighting) {
@@ -1602,8 +1736,7 @@ private:
       if (!hasDiffuse && !hasSpecular && !hasReflection)
       {
         // "map _white", which the image program turns into guis/assets/white
-        result.push_back(
-          {Lighting::Diffuse, kdl::parse_path(std::string{"guis/assets/white"})});
+        result.push_back({Lighting::Diffuse, "guis/assets/white"});
       }
     }
 
@@ -1643,24 +1776,27 @@ private:
 
   // Drops empty names and the engine's generated images (names starting with '_'),
   // which the editor can't load, and duplicates.
-  void setPreviewImages(const std::vector<std::filesystem::path>& candidates)
+  void setPreviewImages(const std::vector<std::string>& candidates)
   {
+    auto names = std::vector<std::string>{};
     for (const auto& candidate : candidates)
     {
-      const auto name = candidate.generic_string();
       if (
-        !name.empty() && !name.starts_with('_')
-        && std::ranges::none_of(m_shader.previewImages, [&](const auto& image) {
-             return kdl::ci::str_is_equal(image.generic_string(), name);
+        !candidate.empty() && !candidate.starts_with('_')
+        && std::ranges::none_of(names, [&](const auto& name) {
+             return kdl::ci::str_is_equal(name, candidate);
            }))
       {
-        m_shader.previewImages.push_back(candidate);
+        names.push_back(candidate);
+        m_shader.previewImages.push_back(idTech4Path(candidate));
       }
     }
   }
 
   void finish()
   {
+    m_shader.editorImage = idTech4Path(m_editorImageName);
+
     if (m_defaulted)
     {
       // idMaterial::Parse calls MakeDefault, which parses the default definition
@@ -1669,7 +1805,7 @@ private:
       // that was parsed is used.
       m_shader.engineDefaulted = true;
       m_shader.coverage = Coverage::Translucent;
-      setPreviewImages({m_shader.editorImage});
+      setPreviewImages({m_editorImageName});
       addFlag("coverage_translucent");
       addFlag("engine_defaulted");
       return;
@@ -1710,10 +1846,10 @@ private:
     // diffuse stage or else the first stage
     const auto firstDiffuse = std::ranges::find_if(
       stages, [](const auto& stage) { return stage.lighting == Lighting::Diffuse; });
-    auto candidates = std::vector<std::filesystem::path>{};
-    if (!m_shader.editorImage.empty())
+    auto candidates = std::vector<std::string>{};
+    if (!m_editorImageName.empty())
     {
-      candidates.push_back(m_shader.editorImage);
+      candidates.push_back(m_editorImageName);
       if (firstDiffuse != stages.end())
       {
         candidates.push_back(firstDiffuse->image);
@@ -1834,7 +1970,7 @@ public:
       {
         // like the engine, continue with the token after the unexpected one
         m_status.warn(
-          locationOf(open), "Expecting '{' but found '" + std::string{open.text} + "'");
+          locationOf(open), "Expecting '{' but found '" + asciiText(open.text) + "'");
         continue;
       }
 
@@ -1844,33 +1980,40 @@ public:
         open.kind == TokenKind::Punct ? skipBraced(i, 1) : BracedSection{i, true};
       i = section.end;
 
-      const auto name = nameToken.text;
+      // only quoted names can contain non-ASCII bytes; see asciiText
+      const auto name = asciiText(nameToken.text);
       if (type != DeclTypes.end() && *type != "material")
       {
         m_status.debug(
-          locationOf(nameToken),
-          "Skipped " + std::string{*type} + " '" + std::string{name} + "'");
+          locationOf(nameToken), "Skipped " + std::string{*type} + " '" + name + "'");
         continue;
       }
 
-      auto shaderPath = canonicalIdTech4MaterialName(name);
+      const auto canonicalName = canonicalIdTech4DeclName(nameToken.text);
       const auto [firstDefinition, inserted] =
-        firstDefinitions.emplace(shaderPath.generic_string(), nameToken.line);
+        firstDefinitions.emplace(canonicalName, nameToken.line);
       if (!inserted)
       {
         m_status.warn(
           locationOf(nameToken),
-          "Material '" + std::string{name} + "' was already defined at line "
+          "Material '" + name + "' was already defined at line "
             + std::to_string(firstDefinition->second) + "; ignoring this definition");
         continue;
       }
 
+      const auto nonAsciiName = hasNonAscii(nameToken.text);
+      if (nonAsciiName)
+      {
+        m_status.warn(
+          locationOf(nameToken),
+          "Non-ASCII characters in the name of material '" + name
+            + "' were replaced with '_'");
+      }
       if (!section.terminated)
       {
         m_status.warn(
           locationOf(nameToken),
-          "Material '" + std::string{name}
-            + "' has no matching '}' and runs to the end of the file");
+          "Material '" + name + "' has no matching '}' and runs to the end of the file");
       }
       warnAboutSwallowedMaterials(begin, section.end, name);
 
@@ -1880,7 +2023,8 @@ public:
         section.end,
         !section.terminated,
         name,
-        std::move(shaderPath),
+        nonAsciiName,
+        idTech4Path(canonicalName),
         m_status}
                          .parse());
     }

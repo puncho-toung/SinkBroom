@@ -945,6 +945,113 @@ textures/fixture/stencil
     CHECK(status.countStatus(LogLevel::Warn) == 0);
   }
 
+  SECTION("Non-ASCII text")
+  {
+    // id Tech 4 names are ASCII, and quoted strings are the only carrier of other bytes;
+    // a path built from them can throw (0x81 is unmapped in code page 1252)
+    const auto data = std::string{
+      "textures/fixture/before { diffusemap textures/fixture/before_d.tga }\n"
+      "textures/fixture/editor\n"
+      "{\n"
+      "\tqer_editorimage \"textures/fixture/e\x81.tga\"\n"
+      "\t{ blend diffusemap map \"textures/fixture/d\xC3\x89"
+      "cole.tga\" }\n"
+      "}\n"
+      "\"textures/fixture/\xC3\x89"
+      "cole\" { diffusemap textures/fixture/name_d.tga }\n"
+      "textures/fixture/after { diffusemap textures/fixture/after_d.tga }\n"};
+
+    const auto shaders = Doom3MaterialParser{data}.parse(status);
+    CHECK(
+      shaderPaths(shaders)
+      == paths(
+        {"textures/fixture/before",
+         "textures/fixture/editor",
+         "textures/fixture/__cole",
+         "textures/fixture/after"}));
+
+    const auto& editor = findShader(shaders, "textures/fixture/editor");
+    CHECK_FALSE(editor.engineDefaulted);
+    CHECK(editor.editorImage == std::filesystem::path{"textures/fixture/e_.tga"});
+    REQUIRE(editor.stages.size() == 1);
+    CHECK(editor.stages[0].map == std::filesystem::path{"textures/fixture/d__cole.tga"});
+    CHECK(
+      editor.previewImages
+      == paths({"textures/fixture/e_.tga", "textures/fixture/d__cole.tga"}));
+
+    CHECK_FALSE(findShader(shaders, "textures/fixture/__cole").engineDefaulted);
+
+    // one warning per material, naming the first field
+    CHECK_THAT(
+      status.messages(LogLevel::Warn),
+      Catch::Matchers::Equals(std::vector<std::string>{
+        "At line 4, column 18: Non-ASCII characters in the editor image of material "
+        "'textures/fixture/editor' were replaced with '_'",
+        "At line 7, column 1: Non-ASCII characters in the name of material "
+        "'textures/fixture/__cole' were replaced with '_'",
+      }));
+  }
+
+  SECTION("Deep nesting")
+  {
+    auto heightmaps = std::string{};
+    for (auto i = 0; i < 1000; ++i)
+    {
+      heightmaps += "heightmap( ";
+    }
+    const auto parentheses = std::string(2000, '(');
+
+    const auto data = "textures/fixture/deep_program { diffusemap " + heightmaps
+                      + "textures/fixture/d }\n"
+                        "textures/fixture/deep_expression { { blend add map "
+                        "textures/fixture/a rgb "
+                      + parentheses
+                      + " } }\n"
+                        "textures/fixture/after { diffusemap textures/fixture/after_d.tga }\n";
+
+    const auto shaders = Doom3MaterialParser{data}.parse(status);
+    CHECK(
+      shaderPaths(shaders)
+      == paths(
+        {"textures/fixture/deep_program",
+         "textures/fixture/deep_expression",
+         "textures/fixture/after"}));
+    CHECK(findShader(shaders, "textures/fixture/deep_program").engineDefaulted);
+    CHECK(findShader(shaders, "textures/fixture/deep_expression").engineDefaulted);
+    CHECK_FALSE(findShader(shaders, "textures/fixture/after").engineDefaulted);
+
+    CHECK_THAT(
+      status.messages(LogLevel::Warn),
+      Catch::Matchers::Equals(std::vector<std::string>{
+        "At line 1, column 748: Image program nested too deeply (more than 64 levels) "
+        "in material 'textures/fixture/deep_program'; the engine replaces this "
+        "material with its default material",
+        "At line 2, column 139: Expression nested too deeply (more than 64 levels) in "
+        "material 'textures/fixture/deep_expression'; the engine replaces this "
+        "material with its default material",
+      }));
+  }
+
+  SECTION("Out-of-range parm index")
+  {
+    const auto data = R"(
+textures/fixture/huge_parm		{ { program fixture.vfp vertexParm 99999999999999999999 1 } }
+textures/fixture/after			{ diffusemap textures/fixture/after_d.tga }
+)";
+
+    const auto shaders = Doom3MaterialParser{data}.parse(status);
+    REQUIRE(shaders.size() == 2);
+    CHECK(findShader(shaders, "textures/fixture/huge_parm").engineDefaulted);
+    CHECK_FALSE(findShader(shaders, "textures/fixture/after").engineDefaulted);
+    CHECK_THAT(
+      status.messages(LogLevel::Warn),
+      Catch::Matchers::Equals(std::vector<std::string>{
+        "At line 2, column 64: Bad vertexParm number '99999999999999999999' in "
+        "material 'textures/fixture/huge_parm'; the engine replaces this material "
+        "with its default material",
+      }));
+  }
+
   SECTION("Lexer")
   {
     const auto data = R"(

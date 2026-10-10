@@ -21,6 +21,7 @@
 
 #include <filesystem>
 #include <string>
+#include <tuple>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -30,7 +31,32 @@ namespace tb::mdl
 
 TEST_CASE("IdTech4MaterialName")
 {
-  SECTION("canonicalIdTech4MaterialName")
+  SECTION("idTech4Path")
+  {
+    using T = std::tuple<std::string, std::string>;
+
+    // clang-format off
+    const auto
+    [text,                                 expected] = GENERATE(values<T>({
+    {"",                                   ""},
+    {"textures/base_wall/foo.tga",         "textures/base_wall/foo.tga"},
+    // the case and the extension are kept
+    {"Textures/Base_Wall/Foo.TGA",         "Textures/Base_Wall/Foo.TGA"},
+    {"textures\\base_wall\\foo.tga",       "textures/base_wall/foo.tga"},
+    // bytes the narrow encoding may not convert become '_'
+    {"textures/e\x81.tga",                 "textures/e_.tga"},
+    {"textures/caf\xC3\xA9",               "textures/caf__"},
+    }));
+    // clang-format on
+
+    CAPTURE(text);
+
+    const auto path = idTech4Path(text);
+    CHECK(path == std::filesystem::path{expected});
+    CHECK(path.generic_string() == expected);
+  }
+
+  SECTION("canonicalIdTech4DeclName")
   {
     using T = std::tuple<std::string, std::string>;
 
@@ -43,13 +69,35 @@ TEST_CASE("IdTech4MaterialName")
     {"Textures\\Base_Wall\\Foo.tga",       "textures/base_wall/foo"},
     {"models/mapobjects/x/y",              "models/mapobjects/x/y"},
     {"models/mapobjects/x/y.lwo",          "models/mapobjects/x/y"},
+    {"fixture_Table",                      "fixture_table"},
     // the name is cut at its last dot, even when that dot is in a directory name
     {"textures/a.b/c",                     "textures/a"},
     {"textures/a.b/c.d",                   "textures/a.b/c"},
     {"textures/foo.",                      "textures/foo"},
     {".tga",                               ""},
-    // only ASCII letters are lowercased; other characters stay as they are
+    // only ASCII letters are lowercased; other ASCII characters stay as they are
     {"textures/X_1-2:3",                   "textures/x_1-2:3"},
+    // bytes from 0x80 up become '_'
+    {"textures/\xC3\x89" "cole.tga",       "textures/__cole"},
+    }));
+    // clang-format on
+
+    CAPTURE(name);
+
+    CHECK(canonicalIdTech4DeclName(name) == expected);
+  }
+
+  SECTION("canonicalIdTech4MaterialName")
+  {
+    using T = std::tuple<std::string, std::string>;
+
+    // clang-format off
+    const auto
+    [name,                                 expected] = GENERATE(values<T>({
+    {"",                                   ""},
+    {"Textures\\Base_Wall\\Foo.tga",       "textures/base_wall/foo"},
+    {"models/mapobjects/x/y.lwo",          "models/mapobjects/x/y"},
+    {"textures/\xC3\x89" "cole.tga",       "textures/__cole"},
     }));
     // clang-format on
 
