@@ -22,6 +22,7 @@
 #include "base/Color.h"
 #include "base/FileLocation.h"
 #include "base/ParserStatus.h"
+#include "mdl/BezierPatch.h"
 #include "mdl/BrushFace.h"
 #include "mdl/EntityProperties.h"
 
@@ -33,6 +34,7 @@
 #include "vm/vec.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>

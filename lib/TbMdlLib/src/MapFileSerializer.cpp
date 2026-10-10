@@ -283,22 +283,15 @@ private:
  * material or break the file. A name containing a quotation mark cannot be written so
  * that the engine can read it.
  */
-class Doom3ValveFileSerializer : public QuakeFileSerializer
+class Doom3ValveFileSerializer : public ValveFileSerializer
 {
 public:
   explicit Doom3ValveFileSerializer(std::ostream& stream)
-    : QuakeFileSerializer{stream}
+    : ValveFileSerializer{stream}
   {
   }
 
 private:
-  void doWriteBrushFace(std::ostream& stream, const BrushFace& face) const override
-  {
-    writeFacePoints(stream, face);
-    writeValveMaterialInfo(stream, face);
-    fmt::format_to(std::ostreambuf_iterator<char>{stream}, "\n");
-  }
-
   PrecomputedString doWritePatch(const BezierPatch& patch) const override
   {
     size_t lineCount = 0u;

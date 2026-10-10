@@ -19,7 +19,6 @@
 
 #pragma once
 
-#include "mdl/BezierPatch.h"
 #include "mdl/MapFormat.h"
 
 #include "vm/vec.h"
@@ -38,6 +37,7 @@ struct FileLocation;
 namespace mdl
 {
 class EntityProperty;
+struct PatchSubdivisions;
 struct SurfaceAttributes;
 struct UvAttributes;
 
