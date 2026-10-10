@@ -749,10 +749,17 @@ TEST_CASE("WorldReader")
 
   SECTION("Doom3 (Valve) brush with four trailing numbers")
   {
+    // only three trailing numbers are discarded, so the brush must end after them
     const auto data = doom3Worldspawn(doom3Cube(" 0 0 0 0"));
 
     auto reader = WorldReader{data, MapFormat::Doom3_Valve, {}};
-    CHECK(reader.read(worldBounds, status, taskManager).is_error());
+
+    auto worldResult = reader.read(worldBounds, status, taskManager);
+    REQUIRE(worldResult.is_error());
+    CHECK(
+      std::visit([](const auto& e) { return e.msg; }, worldResult.error())
+      == "At line 7, column 104: Expected '(', '}', or end of file, but got integer (raw "
+         "data: '0')");
   }
 
   SECTION("Doom3 (Valve) origin brush entity")
@@ -1063,7 +1070,9 @@ TEST_CASE("WorldReader")
     REQUIRE(worldResult.is_error());
     CHECK_THAT(
       std::visit([](const auto& e) { return e.msg; }, worldResult.error()),
-      ContainsSubstring("meshDef"));
+      ContainsSubstring(
+        "meshDef primitives are not supported in Doom3 (Valve) maps yet; skipping them "
+        "would delete them when the map is saved"));
   }
 
   SECTION("Quake 3 formats are unaffected by reading a Doom3 (Valve) map")

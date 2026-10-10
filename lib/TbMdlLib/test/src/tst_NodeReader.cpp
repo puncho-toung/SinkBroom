@@ -26,10 +26,12 @@
 #include "mdl/ParallelUvCoordSystem.h"
 #include "mdl/ParaxialUvCoordSystem.h"
 #include "mdl/PatchNode.h"
+#include "mdl/SurfaceAttributes.h"
 
 #include "kd/task_manager.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 namespace tb::mdl
 {
@@ -287,6 +289,54 @@ TEST_CASE("NodeReader")
     CHECK(patchNode->patch().explicitSubdivisions() == PatchSubdivisions{4, 2});
     CHECK(
       patchNode->patch().controlPoint(1, 2) == BezierPatch::Point{64, 128, 32, 0.5, 1});
+  }
+
+  SECTION("pasteDoom3ValveBrushIntoOtherFormats")
+  {
+    // compatibleFormats governs which source formats a paste tries, and Doom3 (Valve)
+    // shares no entry with any other format; this pins what happens to a brush copied
+    // from a map RBDOOM-3-BFG wrote when it is pasted into a map of another format
+    const auto data = R"(
+// brush 0
+{
+( -64 -64 -16 ) ( -64 -63 -16 ) ( -64 -64 -15 ) tb_test/wall [ 0 -1 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+( -64 -64 -16 ) ( -64 -64 -15 ) ( -63 -64 -16 ) tb_test/wall [ 1 0 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+( -64 -64 -16 ) ( -63 -64 -16 ) ( -64 -63 -16 ) tb_test/wall [ -1 0 0 0 ] [ 0 -1 0 0 ] 0 0.5 0.5 0 0 0
+( 64 64 16 ) ( 64 65 16 ) ( 65 64 16 ) tb_test/wall [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 0.5 0.5 0 0 0
+( 64 64 16 ) ( 65 64 16 ) ( 64 64 17 ) tb_test/wall [ -1 0 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+( 64 64 16 ) ( 64 64 17 ) ( 64 65 16 ) tb_test/wall [ 0 1 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+}
+)";
+
+    SECTION("Standard and Valve maps refuse it")
+    {
+      // neither the Valve nor the Standard face syntax allows the trailing numbers
+      const auto format = GENERATE(MapFormat::Standard, MapFormat::Valve);
+      CAPTURE(format);
+
+      CHECK(
+        NodeReader::read(data, format, worldBounds, {}, status, taskManager).is_error());
+    }
+
+    SECTION("Quake 2 and Quake 3 Valve maps read the numbers as surface attributes")
+    {
+      const auto format = GENERATE(MapFormat::Quake2_Valve, MapFormat::Quake3_Valve);
+      CAPTURE(format);
+
+      auto nodes = NodeReader::read(data, format, worldBounds, {}, status, taskManager);
+      REQUIRE(nodes);
+      REQUIRE(nodes.value().size() == 1u);
+
+      const auto* brushNode = dynamic_cast<BrushNode*>(nodes.value().at(0));
+      REQUIRE(brushNode != nullptr);
+      for (const auto& face : brushNode->brush().faces())
+      {
+        CHECK(face.uvCoordSystem().is<ParallelUvCoordSystem>());
+        CHECK(
+          face.surfaceAttributes()
+          == SurfaceAttributes{.contents = 0, .flags = 0, .value = 0.0f});
+      }
+    }
   }
 
   SECTION("pasteDoom3ValvePatchSmallerThan3x3")

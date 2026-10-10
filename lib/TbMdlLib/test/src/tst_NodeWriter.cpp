@@ -44,6 +44,7 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 namespace tb::mdl
 {
@@ -1204,6 +1205,71 @@ some_material
 }
 }
 )");
+  }
+
+  SECTION("writeQuake3Patches")
+  {
+    // the Quake 3 formats keep the default patch writer: patchDef2, unquoted material,
+    // no explicit subdivisions
+    const auto format =
+      GENERATE(MapFormat::Quake3, MapFormat::Quake3_Legacy, MapFormat::Quake3_Valve);
+    CAPTURE(format);
+
+    auto worldNode = WorldNode{{}, {}, format};
+
+    // clang-format off
+    auto* patchNode1 = new PatchNode{BezierPatch{3, 3, {
+      {0, 0, 0}, {1, 0, 1}, {2, 0, 0},
+      {0, 1, 1}, {1, 1, 2}, {2, 1, 1},
+      {0, 2, 0}, {1, 2, 1}, {2, 2, 0} }, "common/caulk"}};
+    auto* patchNode2 = new PatchNode{BezierPatch{3, 3, {
+      {0, 0, 0, 0, 0}, {1, 0, 1, 0, 0.5}, {2, 0, 0, 0, 1},
+      {0, 1, 1, 0.5, 0}, {1, 1, 2, 0.5, 0.5}, {2, 1, 1, 0.5, 1},
+      {0, 2, 0, 1, 0}, {1, 2, 1, 1, 0.5}, {2, 2, 0, 1, 1} }, "textures/common/caulk",
+      PatchSubdivisions{4, 2}}};
+    // clang-format on
+    worldNode.defaultLayer()->addChild(patchNode1);
+    worldNode.defaultLayer()->addChild(patchNode2);
+
+    auto str = std::stringstream{};
+    auto writer = NodeWriter{worldNode, str};
+    writer.writeMap(taskManager);
+
+    const auto actual = str.str();
+    const auto expected =
+      R"(// entity 0
+{
+"classname" "worldspawn"
+// brush 0
+{
+patchDef2
+{
+common/caulk
+( 3 3 0 0 0 )
+(
+( ( 0 0 0 0 0 ) ( 1 0 1 0 0 ) ( 2 0 0 0 0 ) )
+( ( 0 1 1 0 0 ) ( 1 1 2 0 0 ) ( 2 1 1 0 0 ) )
+( ( 0 2 0 0 0 ) ( 1 2 1 0 0 ) ( 2 2 0 0 0 ) )
+)
+}
+}
+// brush 1
+{
+patchDef2
+{
+textures/common/caulk
+( 3 3 0 0 0 )
+(
+( ( 0 0 0 0 0 ) ( 1 0 1 0 0.5 ) ( 2 0 0 0 1 ) )
+( ( 0 1 1 0.5 0 ) ( 1 1 2 0.5 0.5 ) ( 2 1 1 0.5 1 ) )
+( ( 0 2 0 1 0 ) ( 1 2 1 1 0.5 ) ( 2 2 0 1 1 ) )
+)
+}
+}
+}
+)";
+
+    CHECK(actual == expected);
   }
 
   SECTION("writeNodesPreservesChildOrderInEntity")
