@@ -70,6 +70,12 @@ enum class MapFormat
    * Quake 3 with brush primitives, also allows Quake 2 brushes
    */
   Quake3,
+  /**
+   * Doom 3 with Valve 220 format texturing and patchDef2 / patchDef3 patches, as read and
+   * written by RBDOOM-3-BFG's idMapFile for maps without a "Version" line, see
+   * https://github.com/RobertBeckebans/RBDOOM-3-BFG/blob/master/neo/idlib/MapFile.cpp
+   */
+  Doom3_Valve,
 };
 
 std::ostream& operator<<(std::ostream& lhs, MapFormat rhs);

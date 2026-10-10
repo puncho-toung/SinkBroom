@@ -60,11 +60,16 @@ TEST_CASE("MapFormat")
     {"Quake3 (legacy)", MapFormat::Quake3_Legacy},
     {"Quake3 (Valve)",  MapFormat::Quake3_Valve},
     {"Quake3",          MapFormat::Quake3},
+    {"Doom3 (Valve)",   MapFormat::Doom3_Valve},
     {"Unknown",         MapFormat::Unknown},
     {"",                MapFormat::Unknown},
     {"quake2",          MapFormat::Unknown},
     {"Quake 2",         MapFormat::Unknown},
     {"Quake4",          MapFormat::Unknown},
+    {"Doom3",           MapFormat::Unknown},
+    {"doom3 (valve)",   MapFormat::Unknown},
+    {"Doom3 (valve)",   MapFormat::Unknown},
+    {"Doom3_Valve",     MapFormat::Unknown},
     }));
     // clang-format on
 
@@ -89,6 +94,7 @@ TEST_CASE("MapFormat")
     {MapFormat::Quake3_Legacy, "Quake3 (legacy)"},
     {MapFormat::Quake3_Valve,  "Quake3 (Valve)"},
     {MapFormat::Quake3,        "Quake3"},
+    {MapFormat::Doom3_Valve,   "Doom3 (Valve)"},
     }));
     // clang-format on
 
@@ -120,6 +126,7 @@ TEST_CASE("MapFormat")
     {MapFormat::Quake3_Legacy, "Quake3_Legacy"},
     {MapFormat::Quake3_Valve,  "Quake3_Valve"},
     {MapFormat::Quake3,        "Quake3"},
+    {MapFormat::Doom3_Valve,   "Doom3_Valve"},
     }));
     // clang-format on
 
@@ -142,6 +149,7 @@ TEST_CASE("MapFormat")
     {MapFormat::Quake3_Legacy, {MapFormat::Quake3_Legacy, MapFormat::Quake3_Valve, MapFormat::Quake3}},
     {MapFormat::Quake3_Valve,  {MapFormat::Quake3_Valve, MapFormat::Quake3, MapFormat::Quake3_Legacy}},
     {MapFormat::Quake3,        {MapFormat::Quake3, MapFormat::Quake3_Valve, MapFormat::Quake3_Legacy}},
+    {MapFormat::Doom3_Valve,   {MapFormat::Doom3_Valve}},
     }));
     // clang-format on
 
@@ -182,6 +190,7 @@ TEST_CASE("MapFormat")
     {MapFormat::Quake3_Legacy, false},
     {MapFormat::Quake3_Valve,  true},
     {MapFormat::Quake3,        false},
+    {MapFormat::Doom3_Valve,   true},
     }));
     // clang-format on
 
@@ -206,6 +215,7 @@ TEST_CASE("MapFormat")
     {MapFormat::Quake3_Legacy, true},
     {MapFormat::Quake3_Valve,  true},
     {MapFormat::Quake3,        true},
+    {MapFormat::Doom3_Valve,   true},
     }));
     // clang-format on
 

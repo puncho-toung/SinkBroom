@@ -454,6 +454,7 @@ void StandardMapParser::parseFace(ParserStatus& status, const bool primitive)
     parseDaikatanaFace(status);
     break;
   case MapFormat::Valve:
+  case MapFormat::Doom3_Valve:
     parseValveFace(status);
     break;
   case MapFormat::Quake3:

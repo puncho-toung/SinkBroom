@@ -145,6 +145,33 @@ TEST_CASE("Map_Initialization")
         | kdl::transform_error([](const auto& e) { FAIL(e.msg); });
     }
 
+    SECTION("Sets Valve version property for Doom3 (Valve)")
+    {
+      // RBDOOM-3-BFG ignores the key, but it keeps new maps consistent with the other
+      // formats that use Valve 220 UVs
+      auto gameInfo = Doom3BFGGameInfo;
+      gameInfo.gameConfig.forceEmptyNewMap = false;
+
+      Map::createMap(
+        environmentConfig,
+        gameInfo,
+        gameInfo.gamePathPreference.defaultValue,
+        MapFormat::Doom3_Valve,
+        vm::bbox3d{8192.0},
+        *taskManager,
+        resourceManager,
+        logger)
+        | kdl::transform([](auto map) {
+            CHECK(map->worldNode().mapFormat() == MapFormat::Doom3_Valve);
+
+            const auto* valveVersionProperty =
+              map->worldNode().entity().property(EntityPropertyKeys::ValveVersion);
+            REQUIRE(valveVersionProperty);
+            CHECK(*valveVersionProperty == "220");
+          })
+        | kdl::transform_error([](const auto& e) { FAIL(e.msg); });
+    }
+
     SECTION("Sets material config property")
     {
       auto gameInfo = DefaultGameInfo;

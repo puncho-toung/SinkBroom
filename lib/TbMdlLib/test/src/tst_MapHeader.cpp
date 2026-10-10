@@ -60,6 +60,20 @@ TEST_CASE("MapHeader")
 ( -896 1056 -416 ) ( -896 1056 -448 ) ( -896 1344 -448 ) rtz/c_mf_v3c 16 96 0 1 1 0 0 0
 }
 })") == std::pair{"Quake"s, mdl::MapFormat::Quake2});
+
+    // the header RBDOOM-3-BFG's idMapFile::Write emits for Valve 220 maps
+    CHECK(detectGame(R"(// Game: Doom 3 BFG
+// Format: Doom3 (Valve)
+// entity 0
+{
+"classname" "worldspawn"
+}
+)") == std::pair{"Doom 3 BFG"s, mdl::MapFormat::Doom3_Valve});
+
+    // the same header with Windows line endings
+    CHECK(
+      detectGame("// Game: Doom 3 BFG\r\n// Format: Doom3 (Valve)\r\n// entity 0\r\n")
+      == std::pair{"Doom 3 BFG"s, mdl::MapFormat::Doom3_Valve});
   }
 
   SECTION("writeMapHeader")
@@ -69,6 +83,20 @@ TEST_CASE("MapHeader")
 
     CHECK(stream.str() == R"(// Game: Quake
 // Format: Quake2
+// Generator: TrenchBroom 2024.1
+)");
+  }
+
+  SECTION("writeMapHeader for Doom 3 BFG")
+  {
+    // the first two lines must match what RBDOOM-3-BFG writes so that maps saved by
+    // either program are detected without asking (009, 024, 072)
+    auto stream = std::ostringstream{};
+    writeMapHeader(
+      stream, "Doom 3 BFG", mdl::MapFormat::Doom3_Valve, "TrenchBroom 2024.1");
+
+    CHECK(stream.str() == R"(// Game: Doom 3 BFG
+// Format: Doom3 (Valve)
 // Generator: TrenchBroom 2024.1
 )");
   }

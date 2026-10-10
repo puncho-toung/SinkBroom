@@ -288,6 +288,7 @@ std::unique_ptr<NodeSerializer> MapFileSerializer::create(
   case MapFormat::Daikatana:
     return std::make_unique<DaikatanaFileSerializer>(stream);
   case MapFormat::Valve:
+  case MapFormat::Doom3_Valve:
     return std::make_unique<ValveFileSerializer>(stream);
   case MapFormat::Hexen2:
     return std::make_unique<Hexen2FileSerializer>(stream);
