@@ -34,6 +34,7 @@
 #include "mdl/WorldNode.h"
 #include "mdl/WorldReader.h"
 
+#include "kd/string_utils.h"
 #include "kd/task_manager.h"
 
 #include "vm/mat.h"
@@ -745,6 +746,44 @@ TEST_CASE("WorldReader")
     REQUIRE(faceIndex);
     CHECK(brush.face(*faceIndex).uAxis() == vm::vec3d{1, 0, 0});
     CHECK(brush.face(*faceIndex).vAxis() == vm::vec3d{0, -1, 0});
+  }
+
+  SECTION("Doom3 (Valve) map with CRLF line endings")
+  {
+    // a map saved or edited on Windows may have CRLF line endings
+    const auto data = kdl::str_replace_every(
+      doom3Worldspawn(
+        doom3Cube()
+        + doom3Patch("patchDef3", "3 3 4 2 0 0 0", {0, 64, 128}, {0, 64, 128})),
+      "\n",
+      "\r\n");
+    REQUIRE(data.find("\r\n") != std::string::npos);
+
+    auto reader = WorldReader{data, MapFormat::Doom3_Valve, {}};
+
+    auto worldResult = reader.read(worldBounds, status, taskManager);
+    REQUIRE(worldResult);
+    CHECK(status.countStatus(LogLevel::Warn) == 0u);
+    CHECK(status.countStatus(LogLevel::Error) == 0u);
+
+    const auto& world = worldResult.value();
+    REQUIRE(world->defaultLayer()->childCount() == 2u);
+
+    const auto* brushNode =
+      dynamic_cast<BrushNode*>(world->defaultLayer()->children().front());
+    REQUIRE(brushNode != nullptr);
+    for (const auto& face : brushNode->brush().faces())
+    {
+      CHECK(face.materialName() == "tb_test/wall");
+      CHECK(face.surfaceAttributes().empty());
+    }
+
+    const auto* patchNode =
+      dynamic_cast<PatchNode*>(world->defaultLayer()->children().back());
+    REQUIRE(patchNode != nullptr);
+    CHECK(patchNode->patch().materialName() == "tb_test/wall");
+    CHECK(patchNode->patch().explicitSubdivisions() == PatchSubdivisions{4, 2});
+    CHECK(patchNode->patch().controlPoints() == gridPoints({0, 64, 128}, {0, 64, 128}));
   }
 
   SECTION("Doom3 (Valve) brush with four trailing numbers")

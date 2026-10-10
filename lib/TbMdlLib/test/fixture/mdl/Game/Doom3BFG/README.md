@@ -26,4 +26,5 @@ it through the engine: `convertMapToValve220` reproduces it apart from converter
 effects, and rbdmap compiles it (7 world brushes, 2 patches, 10 entities, `.cm` CRC
 2119697171). The engine has no DDS loader, so `textures/tb_test/dds` is editor-only.
 
-Like the engine's exports, `.obj`, `.mtl` and `.fgd` files use CRLF line endings and `.map` files use LF; `.gitattributes` keeps git from normalising them.
+Like the engine's exports, `.obj`, `.mtl` and `.fgd` files use CRLF line endings, and `.map`
+and `.mtr` files use LF; `.gitattributes` keeps git from normalising them.

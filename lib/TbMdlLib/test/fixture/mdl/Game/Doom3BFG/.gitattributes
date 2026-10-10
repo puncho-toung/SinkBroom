@@ -1,4 +1,8 @@
-# These files mirror the engine's CRLF exports (idFile::Printf); never normalise their line endings.
+# These files mirror the engine's output byte for byte; never normalise their line endings.
+# The engine's exports (idFile::Printf) are CRLF:
 *.obj -text
 *.mtl -text
 *.fgd -text
+# Its map writer and the material files are LF:
+*.map -text
+*.mtr -text
