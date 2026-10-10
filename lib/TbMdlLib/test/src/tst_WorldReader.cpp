@@ -931,6 +931,7 @@ TEST_CASE("WorldReader")
     // RBDOOM-3-BFG renders the last two rows (or columns) of an adaptively subdivided
     // patch with an even size as a flat strip, which a midpoint row (or column)
     // reproduces. It ignores the last row (or column) of an explicitly subdivided patch.
+    // A patchDef3 whose subdivisions are dropped becomes an adaptive patch.
     // clang-format off
     const auto [keyword, header, xs, ys, expectedXs, expectedYs, expectedSubdivisions, expectedWarnings] = GENERATE(values<T>({
     {"patchDef2", "4 3 0 0 0",     {0, 64, 128, 192}, {0, 64, 128},      {0, 64, 128, 160, 192}, {0, 64, 128},           std::nullopt,
@@ -945,6 +946,8 @@ TEST_CASE("WorldReader")
       {"removed the last column"}},
     {"patchDef3", "6 4 4 2 0 0 0", {0, 64, 128, 192, 256, 320}, {0, 64, 128, 192}, {0, 64, 128, 192, 256}, {0, 64, 128}, PatchSubdivisions{4, 2},
       {"removed the last row", "removed the last column"}},
+    {"patchDef3", "4 3 0 0 0 0 0", {0, 64, 128, 192}, {0, 64, 128},      {0, 64, 128, 160, 192}, {0, 64, 128},           std::nullopt,
+      {"Ignoring invalid patch subdivisions 0x0", "inserted a row of midpoints"}},
     }));
     // clang-format on
 

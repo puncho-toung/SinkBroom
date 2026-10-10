@@ -928,7 +928,8 @@ void StandardMapParser::parseDoom3Patch(
   // RBDOOM-3-BFG accepts even sizes. It renders the last two rows (or columns) of an
   // adaptively subdivided patch as a flat strip, which a row (or column) of midpoints
   // reproduces, and it ignores the last row (or column) of an explicitly subdivided
-  // patch.
+  // patch. Go by the subdivisions that were kept, not by the keyword: a patchDef3 whose
+  // subdivisions were dropped is written back as an adaptive patchDef2.
   const auto midpoint = [](const Point& lhs, const Point& rhs) {
     return (lhs + rhs) / 2.0;
   };
@@ -936,7 +937,7 @@ void StandardMapParser::parseDoom3Patch(
   if (rowCount % 2 == 0)
   {
     const auto lastRowStart = (rowCount - 1) * columnCount;
-    if (explicitlySubdivided)
+    if (explicitSubdivisions)
     {
       controlPoints.erase(
         controlPoints.begin() + static_cast<std::ptrdiff_t>(lastRowStart),
@@ -982,7 +983,7 @@ void StandardMapParser::parseDoom3Patch(
       {
         newControlPoints.push_back(controlPoints[rowStart + column]);
       }
-      if (!explicitlySubdivided)
+      if (!explicitSubdivisions)
       {
         newControlPoints.push_back(midpoint(
           controlPoints[rowStart + columnCount - 2],
@@ -992,7 +993,7 @@ void StandardMapParser::parseDoom3Patch(
     }
     controlPoints = std::move(newControlPoints);
 
-    if (explicitlySubdivided)
+    if (explicitSubdivisions)
     {
       status.warn(
         columnCountLocation,
