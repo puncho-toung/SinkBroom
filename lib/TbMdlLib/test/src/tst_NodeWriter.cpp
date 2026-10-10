@@ -471,7 +471,7 @@ TEST_CASE("NodeWriter")
       {0, 1, 1}, {1, 1, 2}, {2, 1, 1},
       {0, 2, 0}, {1, 2, 1}, {2, 2, 0},
       {0, 3, 1}, {1, 3, 2}, {2, 3, 1},
-      {0, 4, 0}, {1, 4, 1}, {2, 4, 0} }, R"(tb_test/"wall" 2)", PatchSubdivisions{4, 2}}};
+      {0, 4, 0}, {1, 4, 1}, {2, 4, 0} }, "tb_test/wall_plain", PatchSubdivisions{4, 2}}};
     // clang-format on
     worldNode.defaultLayer()->addChild(patchNode1);
     worldNode.defaultLayer()->addChild(patchNode2);
@@ -503,7 +503,7 @@ patchDef2
 {
 patchDef3
 {
-"tb_test/\"wall\" 2"
+"tb_test/wall_plain"
 ( 5 3 4 2 0 0 0 )
 (
 ( ( 0 0 0 0 0 ) ( 1 0 1 0 0 ) ( 2 0 0 0 0 ) )
@@ -511,6 +511,48 @@ patchDef3
 ( ( 0 2 0 0 0 ) ( 1 2 1 0 0 ) ( 2 2 0 0 0 ) )
 ( ( 0 3 1 0 0 ) ( 1 3 2 0 0 ) ( 2 3 1 0 0 ) )
 ( ( 0 4 0 0 0 ) ( 1 4 1 0 0 ) ( 2 4 0 0 0 ) )
+)
+}
+}
+}
+)";
+
+    CHECK(actual == expected);
+  }
+
+  SECTION("writeDoom3ValvePatchWithQuotationMarkInMaterial")
+  {
+    // RBDOOM-3-BFG reads patch materials without escape sequences, so the name is written
+    // verbatim; the engine cannot read a name that contains a quotation mark
+    auto worldNode = WorldNode{{}, {}, MapFormat::Doom3_Valve};
+
+    // clang-format off
+    auto* patchNode = new PatchNode{BezierPatch{3, 3, {
+      {0, 0, 0}, {1, 0, 1}, {2, 0, 0},
+      {0, 1, 1}, {1, 1, 2}, {2, 1, 1},
+      {0, 2, 0}, {1, 2, 1}, {2, 2, 0} }, R"(tb_test/"wall")"}};
+    // clang-format on
+    worldNode.defaultLayer()->addChild(patchNode);
+
+    auto str = std::stringstream{};
+    auto writer = NodeWriter{worldNode, str};
+    writer.writeMap(taskManager);
+
+    const auto actual = str.str();
+    const auto expected =
+      R"(// entity 0
+{
+"classname" "worldspawn"
+// brush 0
+{
+patchDef2
+{
+"tb_test/"wall""
+( 3 3 0 0 0 )
+(
+( ( 0 0 0 0 0 ) ( 1 0 1 0 0 ) ( 2 0 0 0 0 ) )
+( ( 0 1 1 0 0 ) ( 1 1 2 0 0 ) ( 2 1 1 0 0 ) )
+( ( 0 2 0 0 0 ) ( 1 2 1 0 0 ) ( 2 2 0 0 0 ) )
 )
 }
 }

@@ -277,6 +277,11 @@ private:
  * Patches are written with quoted material names, as the engine writes them, but without
  * the textures/ prefix, which the engine adds when reading a patch. Patches with explicit
  * subdivisions are written as patchDef3, all others as patchDef2.
+ *
+ * Patch material names are written between quotes verbatim, without escaping, because the
+ * engine reads them without escape sequences: an escaped name would alias another
+ * material or break the file. A name containing a quotation mark cannot be written so
+ * that the engine can read it.
  */
 class Doom3ValveFileSerializer : public QuakeFileSerializer
 {
@@ -311,9 +316,7 @@ private:
     fmt::format_to(std::ostreambuf_iterator<char>{stream}, "{{\n");
     ++lineCount;
     fmt::format_to(
-      std::ostreambuf_iterator<char>{stream},
-      "{}\n",
-      quoteMaterialName(patch.materialName()));
+      std::ostreambuf_iterator<char>{stream}, "\"{}\"\n", patch.materialName());
     ++lineCount;
     if (explicitSubdivisions)
     {
