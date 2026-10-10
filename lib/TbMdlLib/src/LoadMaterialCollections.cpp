@@ -29,7 +29,6 @@
 #include "gl/Texture.h"
 #include "gl/TextureResource.h"
 #include "mdl/GameConfig.h"
-#include "mdl/LoadImageTexture.h"
 #include "mdl/LoadMipTexture.h"
 #include "mdl/LoadShaders.h"
 #include "mdl/LoadTexture.h"
@@ -55,8 +54,11 @@
 #include <fmt/std.h>
 
 #include <algorithm>
+#include <memory>
+#include <optional>
 #include <ranges>
 #include <string>
+#include <unordered_map>
 
 namespace tb::mdl
 {
@@ -109,17 +111,21 @@ Result<std::vector<std::filesystem::path>> findAllMaterialPaths(
 {
   return findTexturePaths(fs, materialConfig)
          | kdl::transform([&](const auto& texturePaths) {
+             // The keys ignore case like the file system and the material manager do, so
+             // that a shader replaces an image of the same name in another case instead
+             // of yielding a second material that the manager can't tell apart.
              auto pathStemToPath = std::unordered_map<
                std::filesystem::path,
                std::filesystem::path,
                kdl::path_hash>{};
              for (const auto& texturePath : texturePaths)
              {
-               pathStemToPath[kdl::path_remove_extension(texturePath)] = texturePath;
+               pathStemToPath[kdl::path_to_lower(
+                 kdl::path_remove_extension(texturePath))] = texturePath;
              }
              for (const auto& shader : shaders)
              {
-               pathStemToPath[shader.shaderPath] = shader.shaderPath;
+               pathStemToPath[kdl::path_to_lower(shader.shaderPath)] = shader.shaderPath;
              }
              return kdl::vec_sort(
                pathStemToPath | std::views::values | kdl::ranges::to<std::vector>());
@@ -176,7 +182,17 @@ Result<std::filesystem::path> findShaderTexture(
   return Error{"Could not find texture file"};
 }
 
-Result<std::filesystem::path> findShaderTexture(
+/**
+ * The image a shader material is previewed with, and whether it is the placeholder
+ * because none of the images that the shader names was found.
+ */
+struct PreviewImage
+{
+  std::filesystem::path path;
+  bool missing = false;
+};
+
+PreviewImage findShaderTexture(
   const Quake3Shader& shader,
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig)
@@ -188,74 +204,401 @@ Result<std::filesystem::path> findShaderTexture(
            [&](auto) { return findShaderTexture(shader.lightImage, fs, materialConfig); })
          | kdl::or_else(
            [&](auto) { return findShaderTexture(shader.stages, fs, materialConfig); })
-         | kdl::transform_error([&](auto) { return DefaultTexturePath; });
+         | kdl::transform([](auto path) { return PreviewImage{std::move(path), false}; })
+         | kdl::transform_error(
+           [](auto) { return PreviewImage{DefaultTexturePath, true}; })
+         | kdl::value();
+}
+
+/**
+ * Lists the image files of a directory once, on its first lookup, and answers every
+ * later lookup in that directory from the listing. One index serves one load of the
+ * material collections, so it never sees a stale file system.
+ */
+class DirectoryIndex
+{
+private:
+  // lowercase stem -> files with that stem, in file system order
+  using StemIndex = std::unordered_map<
+    std::filesystem::path,
+    std::vector<std::filesystem::path>,
+    kdl::path_hash>;
+
+  const fs::FileSystem& m_fs;
+  fs::PathMatcher m_extensionMatcher;
+  // lowercase directory path -> its files
+  std::unordered_map<std::filesystem::path, StemIndex, kdl::path_hash> m_directories;
+
+public:
+  DirectoryIndex(
+    const fs::FileSystem& fs, const std::vector<std::filesystem::path>& extensions)
+    : m_fs{fs}
+    , m_extensionMatcher{fs::makeExtensionPathMatcher(extensions)}
+  {
+  }
+
+  /**
+   * Returns the image files in the given directory whose stem equals the given stem,
+   * ignoring case.
+   */
+  const std::vector<std::filesystem::path>& find(
+    const std::filesystem::path& directory, const std::filesystem::path& stem)
+  {
+    static const auto noFiles = std::vector<std::filesystem::path>{};
+
+    const auto& stemIndex = index(kdl::path_to_lower(directory));
+    const auto iFiles = stemIndex.find(kdl::path_to_lower(stem));
+    return iFiles != stemIndex.end() ? iFiles->second : noFiles;
+  }
+
+private:
+  const StemIndex& index(const std::filesystem::path& directory)
+  {
+    if (const auto iStemIndex = m_directories.find(directory);
+        iStemIndex != m_directories.end())
+    {
+      return iStemIndex->second;
+    }
+
+    auto stemIndex = StemIndex{};
+    // a directory that doesn't exist has no files
+    m_fs.find(directory, fs::TraversalMode::Flat, m_extensionMatcher)
+      | kdl::transform([&](auto paths) {
+          for (auto& path : paths)
+          {
+            stemIndex[kdl::path_to_lower(path.stem())].push_back(std::move(path));
+          }
+        })
+      | kdl::transform_error([](auto) {});
+    return m_directories.emplace(directory, std::move(stemIndex)).first->second;
+  }
+};
+
+/**
+ * The state that the materials of one load share.
+ */
+struct MaterialLoadContext
+{
+  DirectoryIndex directoryIndex;
+  // lowercase image path -> the texture resource of every material that shows it
+  std::unordered_map<
+    std::filesystem::path,
+    std::shared_ptr<gl::TextureResource>,
+    kdl::path_hash>
+    textureResources = {};
+};
+
+/**
+ * Turns an image reference in a Doom 3 material into the path of the image file without
+ * a root, or nothing for an image that the engine generates.
+ */
+std::optional<std::filesystem::path> normalizeScriptImageReference(
+  const std::filesystem::path& reference)
+{
+  // The parser already turned backslashes into separators and removed quotes. The file
+  // system ignores case anyway, but the directory index wants one spelling.
+  auto path = kdl::path_to_lower(reference.relative_path());
+
+  // idImageManager maps these two generated images to files (ImageFromFile)
+  if (path == "_black")
+  {
+    return "textures/black";
+  }
+  if (path == "_white")
+  {
+    return "guis/assets/white";
+  }
+
+  // the other names starting with '_' name generated images, such as _flat or _default
+  if (const auto& native = path.native(); native.empty() || native.front() == '_')
+  {
+    return std::nullopt;
+  }
+
+  return path;
+}
+
+std::optional<std::filesystem::path> findScriptImageFile(
+  const std::filesystem::path& path,
+  const MaterialConfig& materialConfig,
+  DirectoryIndex& directoryIndex)
+{
+  const auto& candidates = directoryIndex.find(path.parent_path(), path.stem());
+  if (candidates.empty())
+  {
+    return std::nullopt;
+  }
+
+  const auto isConfigured = [&](const std::filesystem::path& extension) {
+    return std::ranges::any_of(materialConfig.extensions, [&](const auto& configured) {
+      return kdl::path_to_lower(configured) == extension;
+    });
+  };
+
+  const auto findCandidate =
+    [&](const std::filesystem::path& extension) -> std::optional<std::filesystem::path> {
+    const auto iCandidate = std::ranges::find_if(candidates, [&](const auto& candidate) {
+      return kdl::path_to_lower(candidate.extension()) == extension;
+    });
+    return iCandidate != candidates.end() ? std::optional{*iCandidate} : std::nullopt;
+  };
+
+  // A .dds copy keeps its compression and mips on the GPU, so it needs much less memory
+  // than the image it stands in for. The engine itself never reads .dds files.
+  if (isConfigured(".dds"))
+  {
+    if (auto candidate = findCandidate(".dds"))
+    {
+      return candidate;
+    }
+  }
+
+  // the file as named, then the same name with each configured extension in the order
+  // of the config, as the engine tries its image loaders in its own order
+  if (const auto extension = kdl::path_to_lower(path.extension());
+      isConfigured(extension))
+  {
+    if (auto candidate = findCandidate(extension))
+    {
+      return candidate;
+    }
+  }
+
+  for (const auto& extension : materialConfig.extensions)
+  {
+    if (auto candidate = findCandidate(kdl::path_to_lower(extension)))
+    {
+      return candidate;
+    }
+  }
+
+  return std::nullopt;
+}
+
+/**
+ * Finds the image file that an image reference in a Doom 3 material names, as written and
+ * then under each of materialConfig.shaderImageSearchPaths.
+ */
+std::optional<std::filesystem::path> resolveScriptImage(
+  const std::filesystem::path& reference,
+  const MaterialConfig& materialConfig,
+  DirectoryIndex& directoryIndex)
+{
+  const auto path = normalizeScriptImageReference(reference);
+  if (!path)
+  {
+    return std::nullopt;
+  }
+
+  if (auto file = findScriptImageFile(*path, materialConfig, directoryIndex))
+  {
+    return file;
+  }
+
+  for (const auto& searchPath : materialConfig.shaderImageSearchPaths)
+  {
+    if (
+      auto file = findScriptImageFile(searchPath / *path, materialConfig, directoryIndex))
+    {
+      return file;
+    }
+  }
+
+  return std::nullopt;
+}
+
+/**
+ * Finds the image that a Doom 3 material is previewed with. This follows
+ * idMaterial::GetEditorImage, whose choice the parser recorded in previewImages: dmap
+ * scales the UVs of a Valve 220 face by the size of that image, so a preview of another
+ * size would show the texture misaligned.
+ */
+PreviewImage findDoom3PreviewImage(
+  const Quake3Shader& shader,
+  const MaterialConfig& materialConfig,
+  DirectoryIndex& directoryIndex)
+{
+  for (const auto& reference : shader.previewImages)
+  {
+    if (auto path = resolveScriptImage(reference, materialConfig, directoryIndex))
+    {
+      return {std::move(*path), false};
+    }
+  }
+
+  // A material that names no image at all, such as a tool material without stages and
+  // editor image, is invisible in game and its UVs don't matter, so an image named like
+  // the material is a better preview than the placeholder. The engine shows its default
+  // image. A material that names images is never previewed by its own name, because the
+  // engine doesn't do that either.
+  if (shader.previewImages.empty())
+  {
+    if (auto path = resolveScriptImage(shader.shaderPath, materialConfig, directoryIndex))
+    {
+      return {std::move(*path), false};
+    }
+  }
+
+  return {DefaultTexturePath, true};
+}
+
+void setCulling(gl::Material& material, const Quake3Shader::Culling culling)
+{
+  // Note that Quake 3 has a different understanding of front and back, so we need to
+  // invert them. The Doom 3 parser uses the Quake 3 terms.
+  switch (culling)
+  {
+  case Quake3Shader::Culling::Front:
+    material.setCulling(gl::MaterialCulling::Back);
+    break;
+  case Quake3Shader::Culling::Back:
+    material.setCulling(gl::MaterialCulling::Front);
+    break;
+  case Quake3Shader::Culling::None:
+    material.setCulling(gl::MaterialCulling::None);
+    break;
+  }
+}
+
+void setQuake3RenderState(gl::Material& material, const Quake3Shader& shader)
+{
+  if (!shader.stages.empty())
+  {
+    const auto& stage = shader.stages.front();
+    if (stage.blendFunc.enable())
+    {
+      material.setBlendFunc(
+        gl::getEnum(stage.blendFunc.srcFactor), gl::getEnum(stage.blendFunc.destFactor));
+    }
+    else
+    {
+      material.disableBlend();
+    }
+  }
+
+  const auto& alphaFunc = !shader.stages.empty() && shader.stages.front().alphaFunc
+                            ? shader.stages.front().alphaFunc
+                            : shader.qerAlphaFunc;
+  if (alphaFunc)
+  {
+    material.setAlphaFunc(alphaFunc->compare, alphaFunc->threshold);
+  }
+}
+
+bool drawsWithBlendFunc(const Quake3ShaderStage::BlendFunc& blendFunc)
+{
+  using BlendFunc = Quake3ShaderStage::BlendFunc;
+
+  // "blend none" (GL_ZERO, GL_ONE) draws nothing; hiding the face would only make it
+  // impossible to edit
+  return blendFunc.enable() && blendFunc.validateSrcFactor()
+         && blendFunc.validateDestFactor()
+         && !(
+           blendFunc.srcFactor == BlendFunc::Zero
+           && blendFunc.destFactor == BlendFunc::One);
+}
+
+void setDoom3RenderState(gl::Material& material, const Quake3Shader& shader)
+{
+  using Lighting = Quake3ShaderStage::Lighting;
+
+  // the stage that the preview image most likely comes from
+  const auto* governingStage = [&]() -> const Quake3ShaderStage* {
+    if (const auto iDiffuse = std::ranges::find(
+          shader.stages, Lighting::Diffuse, &Quake3ShaderStage::lighting);
+        iDiffuse != shader.stages.end())
+    {
+      return &*iDiffuse;
+    }
+    return !shader.stages.empty() ? &shader.stages.front() : nullptr;
+  }();
+
+  switch (shader.coverage)
+  {
+  case Quake3Shader::Coverage::Opaque:
+    // the engine draws opaque materials without blending, whatever alpha the image has
+    material.disableBlend();
+    break;
+  case Quake3Shader::Coverage::Perforated: {
+    // an explicit alpha function also suppresses the default blending
+    const auto iAlphaTested = std::ranges::find_if(
+      shader.stages, [](const auto& stage) { return stage.alphaFunc.has_value(); });
+    const auto threshold =
+      governingStage && governingStage->alphaFunc ? governingStage->alphaFunc->threshold
+      : iAlphaTested != shader.stages.end()       ? iAlphaTested->alphaFunc->threshold
+                                                  : 0.5f;
+    material.setAlphaFunc(gl::MaterialAlphaFunc::Compare::GreaterEqual, threshold);
+    break;
+  }
+  case Quake3Shader::Coverage::Translucent:
+    // An unlit stage blends as its script says, such as glass with "blend filter".
+    // Otherwise, an image with graduated alpha blends by itself. Translucent materials
+    // that should be drawn see-through no matter what are left to a game config tag on
+    // coverage_translucent; blending an opaque image would only turn off depth writes.
+    if (
+      governingStage && governingStage->lighting == Lighting::None
+      && drawsWithBlendFunc(governingStage->blendFunc))
+    {
+      material.setBlendFunc(
+        gl::getEnum(governingStage->blendFunc.srcFactor),
+        gl::getEnum(governingStage->blendFunc.destFactor));
+    }
+    break;
+  }
+}
+
+gl::ResourceLoader<gl::Texture> makeShaderTextureLoader(
+  std::filesystem::path path,
+  std::string name,
+  const fs::FileSystem& fs,
+  std::optional<Palette> palette)
+{
+  // the file system outlives every material and its texture resource
+  return
+    [&fs, path = std::move(path), name = std::move(name), palette = std::move(palette)]()
+      -> Result<gl::Texture> { return loadTexture(path, name, fs, palette); };
 }
 
 Result<gl::Material> loadShaderMaterial(
   const Quake3Shader& shader,
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
-  const gl::CreateTextureResource& createResource)
+  const gl::CreateTextureResource& createResource,
+  const std::optional<Palette>& palette,
+  MaterialLoadContext& context)
 {
-  return findShaderTexture(shader, fs, materialConfig) | kdl::transform([&](auto path_) {
-           return [&, path = std::move(path_)]() {
-             return fs.openFile(path) | kdl::and_then([&](auto file) {
-                      auto reader = file->reader().buffer();
-                      return loadImageTexture(reader);
-                    });
-           };
-         })
-         | kdl::transform([&](auto textureLoader) {
-             const auto prefixLength = kdl::path_length(materialConfig.root);
-             auto shaderName =
-               getMaterialNameFromPathSuffix(shader.shaderPath, prefixLength);
+  const auto isDoom3 = shader.format == Quake3Shader::Format::Doom3;
+  auto previewImage =
+    isDoom3 ? findDoom3PreviewImage(shader, materialConfig, context.directoryIndex)
+            : findShaderTexture(shader, fs, materialConfig);
 
-             auto textureResource = createResource(std::move(textureLoader));
-             auto material =
-               gl::Material{std::move(shaderName), std::move(textureResource)};
-             material.setSurfaceParms(shader.surfaceParms);
+  const auto prefixLength = kdl::path_length(materialConfig.root);
+  auto shaderName = getMaterialNameFromPathSuffix(shader.shaderPath, prefixLength);
 
-             // Note that Quake 3 has a different understanding of front and back, so we
-             // need to invert them.
-             switch (shader.culling)
-             {
-             case Quake3Shader::Culling::Front:
-               material.setCulling(gl::MaterialCulling::Back);
-               break;
-             case Quake3Shader::Culling::Back:
-               material.setCulling(gl::MaterialCulling::Front);
-               break;
-             case Quake3Shader::Culling::None:
-               material.setCulling(gl::MaterialCulling::None);
-               break;
-             }
+  // Materials that show the same image share its texture resource, which is decoded and
+  // uploaded once. loadTexture picks the decoder by extension, so .dds images keep their
+  // compression and mips. Doom 3 images need no palette.
+  auto& textureResource = context.textureResources[kdl::path_to_lower(previewImage.path)];
+  if (!textureResource)
+  {
+    textureResource = createResource(makeShaderTextureLoader(
+      previewImage.path, shaderName, fs, isDoom3 ? std::nullopt : palette));
+  }
 
-             if (!shader.stages.empty())
-             {
-               const auto& stage = shader.stages.front();
-               if (stage.blendFunc.enable())
-               {
-                 material.setBlendFunc(
-                   gl::getEnum(stage.blendFunc.srcFactor),
-                   gl::getEnum(stage.blendFunc.destFactor));
-               }
-               else
-               {
-                 material.disableBlend();
-               }
-             }
+  auto material = gl::Material{std::move(shaderName), textureResource};
+  material.setSurfaceParms(shader.surfaceParms);
+  material.setPreviewImageMissing(previewImage.missing);
+  setCulling(material, shader.culling);
+  if (isDoom3)
+  {
+    setDoom3RenderState(material, shader);
+  }
+  else
+  {
+    setQuake3RenderState(material, shader);
+  }
 
-             const auto& alphaFunc =
-               !shader.stages.empty() && shader.stages.front().alphaFunc
-                 ? shader.stages.front().alphaFunc
-                 : shader.qerAlphaFunc;
-             if (alphaFunc)
-             {
-               material.setAlphaFunc(alphaFunc->compare, alphaFunc->threshold);
-             }
-
-             return material;
-           });
+  return material;
 }
 
 Result<gl::Texture> findAndLoadTexture(
@@ -380,25 +723,19 @@ std::vector<gl::MaterialCollection> groupMaterialsIntoCollections(
          | kdl::ranges::to<std::vector>();
 }
 
-} // namespace
-
-
 Result<gl::Material> loadMaterial(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
   const std::filesystem::path& materialPath,
   const gl::CreateTextureResource& createResource,
-  const std::vector<Quake3Shader>& shaders,
-  const std::optional<Palette>& palette)
+  const Quake3Shader* shader,
+  const std::optional<Palette>& palette,
+  MaterialLoadContext& context)
 {
-  const auto materialPathStem = kdl::path_remove_extension(materialPath);
-  const auto iShader = std::ranges::find_if(
-    shaders, [&](const auto& shader) { return shader.shaderPath == materialPathStem; });
-
-  return (iShader != shaders.end()
-            ? loadShaderMaterial(*iShader, fs, materialConfig, createResource)
-            : loadTextureMaterial(
-                materialPath, fs, materialConfig, createResource, palette))
+  return (shader ? loadShaderMaterial(
+                     *shader, fs, materialConfig, createResource, palette, context)
+                 : loadTextureMaterial(
+                     materialPath, fs, materialConfig, createResource, palette))
          | kdl::transform([&](auto material) {
              fs.makeAbsolute(materialPath)
                | kdl::transform([&](auto absPath) { material.setAbsolutePath(absPath); })
@@ -410,6 +747,111 @@ Result<gl::Material> loadMaterial(
            });
 }
 
+const Quake3Shader* findShader(
+  const std::vector<Quake3Shader>& shaders, const std::filesystem::path& shaderPath)
+{
+  // Doom 3 shader paths are lowercase canonical decl names, and an exact match is
+  // cheapest
+  if (const auto iShader =
+        std::ranges::find(shaders, shaderPath, &Quake3Shader::shaderPath);
+      iShader != shaders.end())
+  {
+    return &*iShader;
+  }
+
+  // like the file system and the material manager, ignore case
+  const auto lowerShaderPath = kdl::path_to_lower(shaderPath);
+  const auto iShader = std::ranges::find_if(shaders, [&](const auto& shader) {
+    return kdl::path_to_lower(shader.shaderPath) == lowerShaderPath;
+  });
+  return iShader != shaders.end() ? &*iShader : nullptr;
+}
+
+using ShaderIndex =
+  std::unordered_map<std::filesystem::path, const Quake3Shader*, kdl::path_hash>;
+
+ShaderIndex makeShaderIndex(const std::vector<Quake3Shader>& shaders)
+{
+  // keyed by lowercase shader path; of two shaders whose paths differ only in case, the
+  // first one wins, as in findShader
+  auto shaderIndex = ShaderIndex{};
+  for (const auto& shader : shaders)
+  {
+    shaderIndex.try_emplace(kdl::path_to_lower(shader.shaderPath), &shader);
+  }
+  return shaderIndex;
+}
+
+const Quake3Shader* findShader(
+  const ShaderIndex& shaderIndex, const std::filesystem::path& shaderPath)
+{
+  const auto iShader = shaderIndex.find(kdl::path_to_lower(shaderPath));
+  return iShader != shaderIndex.end() ? iShader->second : nullptr;
+}
+
+/**
+ * What the one line that a load logs reports about the material scripts.
+ */
+struct ShaderSummary
+{
+  size_t fileCount = 0;
+  size_t shaderCount = 0;
+  size_t defaultedCount = 0;
+  size_t unterminatedCount = 0;
+  size_t shadersUnderRootCount = 0;
+};
+
+void logLoadSummary(
+  const ShaderSummary& summary,
+  const std::vector<gl::Material>& materials,
+  const MaterialConfig& materialConfig,
+  Logger& logger)
+{
+  if (summary.fileCount == 0)
+  {
+    return;
+  }
+
+  // missing images are not logged one by one; the material browser can show them
+  const auto missingCount = std::ranges::count_if(
+    materials, [](const auto& material) { return material.previewImageMissing(); });
+
+  logger.info() << fmt::format(
+    "Loaded {} materials from {} files ({} defaulted, {} unterminated); {} under {}/, {} "
+    "without a preview image",
+    summary.shaderCount,
+    summary.fileCount,
+    summary.defaultedCount,
+    summary.unterminatedCount,
+    summary.shadersUnderRootCount,
+    materialConfig.root.generic_string(),
+    missingCount);
+}
+
+} // namespace
+
+
+Result<gl::Material> loadMaterial(
+  const fs::FileSystem& fs,
+  const MaterialConfig& materialConfig,
+  const std::filesystem::path& materialPath,
+  const gl::CreateTextureResource& createResource,
+  const std::vector<Quake3Shader>& shaders,
+  const std::optional<Palette>& palette)
+{
+  auto context = MaterialLoadContext{
+    .directoryIndex = DirectoryIndex{fs, materialConfig.extensions},
+  };
+  return loadMaterial(
+    fs,
+    materialConfig,
+    materialPath,
+    createResource,
+    findShader(shaders, kdl::path_remove_extension(materialPath)),
+    palette,
+    context);
+}
+
 Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
@@ -417,17 +859,34 @@ Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
   kdl::task_manager& taskManager,
   Logger& logger)
 {
-  return loadShaders(fs, materialConfig, taskManager, logger)
-         | kdl::transform([&](auto shaders) {
-             return shaders | std::views::filter([&](const auto& shader) {
-                      return kdl::path_has_prefix(shader.shaderPath, materialConfig.root);
-                    })
-                    | kdl::views::as_rvalue | kdl::ranges::to<std::vector>();
-           })
+  return loadShaderFiles(fs, materialConfig, taskManager, logger)
          | kdl::join(loadPalette(fs, materialConfig))
-         | kdl::and_then([&](auto shaders, auto palette) {
+         | kdl::and_then([&](auto loadedShaders, auto palette) {
+             auto summary = ShaderSummary{
+               .fileCount = loadedShaders.fileCount,
+               .shaderCount = loadedShaders.shaders.size(),
+               .defaultedCount = size_t(std::ranges::count_if(
+                 loadedShaders.shaders,
+                 [](const auto& shader) { return shader.engineDefaulted; })),
+               .unterminatedCount = loadedShaders.unterminatedCount,
+             };
+
+             // Shaders outside of the root can't be used on brush faces, but they stay
+             // available to entity models, which load their own.
+             const auto shaders =
+               loadedShaders.shaders | std::views::filter([&](const auto& shader) {
+                 return kdl::path_has_prefix(shader.shaderPath, materialConfig.root);
+               })
+               | kdl::views::as_rvalue | kdl::ranges::to<std::vector>();
+             summary.shadersUnderRootCount = shaders.size();
+
              return findAllMaterialPaths(fs, materialConfig, shaders)
                     | kdl::and_then([&](const auto& materialPaths) {
+                        const auto shaderIndex = makeShaderIndex(shaders);
+                        auto context = MaterialLoadContext{
+                          .directoryIndex = DirectoryIndex{fs, materialConfig.extensions},
+                        };
+
                         return materialPaths
                                | std::views::transform([&](const auto& materialPath) {
                                    return loadMaterial(
@@ -435,10 +894,17 @@ Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
                                      materialConfig,
                                      materialPath,
                                      createResource,
-                                     shaders,
-                                     palette);
+                                     findShader(
+                                       shaderIndex,
+                                       kdl::path_remove_extension(materialPath)),
+                                     palette,
+                                     context);
                                  })
                                | kdl::fold;
+                      })
+                    | kdl::transform([&](auto materials) {
+                        logLoadSummary(summary, materials, materialConfig, logger);
+                        return materials;
                       });
            })
          | kdl::transform([&](auto materials) {

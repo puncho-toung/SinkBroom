@@ -158,6 +158,21 @@ private:
   }
 };
 
+const gl::Material* findMaterial(
+  const std::vector<gl::MaterialCollection>& materialCollections, const std::string& name)
+{
+  for (const auto& materialCollection : materialCollections)
+  {
+    if (const auto iMaterial =
+          std::ranges::find(materialCollection.materials(), name, &gl::Material::name);
+        iMaterial != materialCollection.materials().end())
+    {
+      return &*iMaterial;
+    }
+  }
+  return nullptr;
+}
+
 const Quake3Shader* findShader(
   const std::vector<Quake3Shader>& shaders, const std::filesystem::path& shaderPath)
 {
@@ -294,6 +309,31 @@ TEST_CASE("LoadMaterialCollections")
       CHECK(
         material.effectiveAlphaFunc()
         == gl::MaterialAlphaFunc{gl::MaterialAlphaFunc::Compare::GreaterEqual, 0.25f});
+    }
+
+    SECTION("a Doom 3 material is found by its canonical name, whatever its root")
+    {
+      const auto doom3Dir = fixtureRoot / "test/mdl/LoadMaterialCollections/doom3";
+      fs.mount("", std::make_unique<fs::DiskFileSystem>(doom3Dir / "fallback"));
+      fs.mount("", std::make_unique<fs::DiskFileSystem>(doom3Dir));
+
+      const auto shaders =
+        loadShaders(fs, Doom3FixtureMaterialConfig, taskManager, logger) | kdl::value();
+
+      // entity models name their materials like this; the case is ignored
+      for (const auto* name : {"models/test/crate", "Models/Test/Crate"})
+      {
+        CAPTURE(name);
+
+        const auto material =
+          loadMaterial(
+            fs, Doom3FixtureMaterialConfig, name, createResource, shaders, std::nullopt)
+          | kdl::value();
+        REQUIRE(material.texture() != nullptr);
+        CHECK(material.texture()->width() == 8);
+        CHECK(material.texture()->height() == 24);
+        CHECK_FALSE(material.previewImageMissing());
+      }
     }
 
     SECTION("a stage's alphaFunc wins over the shader's qer_alphaFunc")
@@ -528,6 +568,19 @@ TEST_CASE("LoadMaterialCollections")
                 },
               },
             }));
+
+          const auto materialCollections =
+            loadMaterialCollections(
+              fs, materialConfig, createResource, taskManager, logger)
+              .value();
+          const auto* shaderMaterial =
+            findMaterial(materialCollections, "test/some_shader");
+          REQUIRE(shaderMaterial != nullptr);
+          CHECK(shaderMaterial->previewImageMissing());
+
+          const auto* imageMaterial = findMaterial(materialCollections, "__TB_empty");
+          REQUIRE(imageMaterial != nullptr);
+          CHECK_FALSE(imageMaterial->previewImageMissing());
         }
       }
 
@@ -607,6 +660,195 @@ TEST_CASE("LoadMaterialCollections")
             },
           }));
       }
+    }
+  }
+
+  SECTION("loadMaterialCollections with Doom 3 materials")
+  {
+    auto fs = fs::VirtualFileSystem{};
+    auto logger = CollectingLogger{};
+
+    const auto fixtureRoot = getFixtureRoot();
+
+    auto taskManager = kdl::task_manager{};
+
+    const auto testDir = fixtureRoot / "test/mdl/LoadMaterialCollections/doom3";
+
+    // "__TB_empty.png" is the placeholder for materials without a preview image
+    fs.mount("", std::make_unique<fs::DiskFileSystem>(testDir / "fallback"));
+    fs.mount("", std::make_unique<fs::DiskFileSystem>(testDir));
+
+    const auto result = loadMaterialCollections(
+      fs, Doom3FixtureMaterialConfig, createResource, taskManager, logger);
+
+    // Only materials under textures/ are shown, named without the root, in collections
+    // named after their directories. The loose images are excluded by pattern or
+    // replaced by the material of the same name.
+    CHECK_THAT(
+      result,
+      MatchesMaterialCollections({
+        {
+          "textures",
+          {
+            MaterialInfo{"__TB_empty", 32, 32}, // generated for the placeholder image
+          },
+        },
+        {
+          "textures/test",
+          {
+            MaterialInfo{"test/alphatest", 32, 16},
+            MaterialInfo{"test/dds_only", 20, 12},
+            MaterialInfo{"test/dds_preferred", 20, 12},
+            MaterialInfo{"test/duplicate", 32, 16},
+            MaterialInfo{"test/first_stage", 48, 8},
+            MaterialInfo{"test/invisible", 32, 32},
+            MaterialInfo{"test/loose", 24, 8},
+            MaterialInfo{"test/missing", 32, 32},
+            MaterialInfo{"test/missing_editor", 16, 32},
+            MaterialInfo{"test/named_like_image", 32, 32},
+            MaterialInfo{"test/nodraw", 8, 8},
+            MaterialInfo{"test/precedence", 32, 16},
+            MaterialInfo{"test/substituted", 8, 16},
+            MaterialInfo{"test/table_declared", 16, 32},
+            MaterialInfo{"test/table_undeclared", 32, 16},
+            MaterialInfo{"test/tb_diffuse", 40, 8},
+            MaterialInfo{"test/tb_editor", 24, 24},
+            MaterialInfo{"test/translucent_lit", 16, 32},
+            MaterialInfo{"test/two_sided", 16, 32},
+            MaterialInfo{"test/unterminated", 32, 32},
+          },
+        },
+      }));
+
+    REQUIRE(result.is_success());
+    const auto& materialCollections = result.value();
+    const auto material = [&](const std::string& name) -> const gl::Material& {
+      const auto* material = findMaterial(materialCollections, name);
+      REQUIRE(material != nullptr);
+      return *material;
+    };
+
+    SECTION("preview images")
+    {
+      // the editor image wins over the diffuse map, even when it exists only under _tb/
+      CHECK(material("test/precedence").texture()->width() == 32);
+      CHECK(material("test/tb_editor").texture()->width() == 24);
+
+      // a missing editor image falls back to the diffuse map, and without an editor
+      // image and a diffuse stage, the first stage's image is used
+      CHECK(material("test/missing_editor").texture()->width() == 16);
+      CHECK(material("test/first_stage").texture()->width() == 48);
+
+      // a .tga in the script finds the .png on disk, a diffuse map only under _tb/ is
+      // found, and a .dds copy goes through the DDS loader and wins over a .png
+      CHECK(material("test/substituted").texture()->width() == 8);
+      CHECK(material("test/tb_diffuse").texture()->width() == 40);
+      CHECK(
+        material("test/dds_only").texture()->format()
+        == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
+      CHECK(
+        material("test/dds_preferred").texture()->format()
+        == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
+
+      // the loose image textures/test/Loose.png and the material textures/test/loose
+      // are one material
+      CHECK(material("test/loose").texture()->width() == 24);
+      CHECK(findMaterial(materialCollections, "test/Loose") == nullptr);
+
+      // the engine defaults this material for looking up an undeclared table; it keeps
+      // its editor image
+      CHECK(material("test/table_undeclared").texture()->width() == 32);
+      CHECK(
+        material("test/table_undeclared").surfaceParms().contains("engine_defaulted"));
+
+      // a material without stages and editor image falls back to an image of its own
+      // name, but a material that names other images doesn't
+      CHECK(material("test/nodraw").texture()->width() == 8);
+      CHECK(material("test/named_like_image").texture()->width() == 32);
+    }
+
+    SECTION("previewImageMissing")
+    {
+      auto missing = std::vector<std::string>{};
+      for (const auto& materialCollection : materialCollections)
+      {
+        for (const auto& collectionMaterial : materialCollection.materials())
+        {
+          if (collectionMaterial.previewImageMissing())
+          {
+            missing.push_back(collectionMaterial.name());
+          }
+        }
+      }
+
+      CHECK(
+        missing
+        == std::vector<std::string>{
+          "test/invisible",
+          "test/missing",
+          "test/named_like_image",
+          "test/unterminated",
+        });
+    }
+
+    SECTION("shared texture resources")
+    {
+      // materials that show the same image share one texture resource
+      CHECK(
+        &material("test/precedence").textureResource()
+        == &material("test/alphatest").textureResource());
+      CHECK(
+        &material("test/precedence").textureResource()
+        == &material("test/duplicate").textureResource());
+      CHECK(
+        &material("test/missing").textureResource()
+        == &material("test/invisible").textureResource());
+      CHECK(
+        &material("test/precedence").textureResource()
+        != &material("test/missing_editor").textureResource());
+    }
+
+    SECTION("render state")
+    {
+      // alpha tested: an explicit alpha function with the stage's threshold
+      CHECK(
+        material("test/alphatest").effectiveAlphaFunc()
+        == gl::MaterialAlphaFunc{gl::MaterialAlphaFunc::Compare::GreaterEqual, 0.25f});
+
+      // translucent and unlit: the stage's blend function
+      CHECK(
+        material("test/first_stage").effectiveBlendFunc()
+        == gl::MaterialBlendFunc{
+          gl::MaterialBlendFunc::Enable::UseFactors, GL_DST_COLOR, GL_ZERO});
+
+      // translucent and lit: the image decides
+      CHECK(
+        material("test/translucent_lit").effectiveBlendFunc().enable
+        == gl::MaterialBlendFunc::Enable::UseDefault);
+
+      // opaque: never blended
+      CHECK(
+        material("test/precedence").effectiveBlendFunc().enable
+        == gl::MaterialBlendFunc::Enable::DisableBlend);
+      CHECK_FALSE(material("test/precedence").effectiveAlphaFunc());
+
+      // culling
+      CHECK(material("test/precedence").culling() == gl::MaterialCulling::Back);
+      CHECK(material("test/two_sided").culling() == gl::MaterialCulling::None);
+
+      // the tag vocabulary reaches the material
+      CHECK(
+        material("test/invisible").surfaceParms()
+        == kdl::flat_set<std::string>{"coverage_translucent", "nostages", "playerclip"});
+    }
+
+    SECTION("summary")
+    {
+      CHECK(
+        logger.countMessagesContaining(
+          "Loaded 21 materials from 3 files (2 defaulted, 1 unterminated); 20 under "
+          "textures/, 4 without a preview image")
+        == 1);
     }
   }
 

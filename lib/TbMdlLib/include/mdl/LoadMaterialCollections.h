@@ -52,6 +52,13 @@ namespace mdl
 {
 struct MaterialConfig;
 
+/**
+ * Loads the material at the given path. If one of the given shaders has the path without
+ * its extension as its shader path, ignoring case, the material is made from that
+ * shader, whatever its root; a Doom 3 material is found by its full canonical decl name,
+ * such as "models/mapobjects/crate". Otherwise, the material is made from the image file
+ * at the given path.
+ */
 Result<gl::Material> loadMaterial(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
