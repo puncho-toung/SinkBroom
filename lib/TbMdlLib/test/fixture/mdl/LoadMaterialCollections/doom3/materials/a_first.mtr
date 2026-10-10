@@ -1,0 +1,145 @@
+// Doom 3 materials for the material pipeline tests. Written by hand; the names are made
+// up. The comment above each material says what it tests.
+
+// the editor image wins over the diffuse map
+textures/test/precedence
+{
+	qer_editorimage	textures/test/editor_ed.tga
+	diffusemap		textures/test/diffuse_d.tga
+}
+
+// the editor image exists only under _tb/, and still wins
+textures/test/tb_editor
+{
+	qer_editorimage	textures/test/tbonly_ed.tga
+	diffusemap		textures/test/diffuse_d.tga
+}
+
+// the editor image does not exist, so the diffuse map is used
+textures/test/missing_editor
+{
+	qer_editorimage	textures/test/nothing_ed.tga
+	bumpmap			textures/test/nothing_local.tga
+	diffusemap		textures/test/diffuse_d.tga
+}
+
+// without an editor image or a diffuse stage, the first stage's image is used
+textures/test/first_stage
+{
+	{
+		blend	filter
+		map		textures/test/stage_add.tga
+	}
+	{
+		blend	add
+		map		textures/test/diffuse_d.tga
+	}
+}
+
+// the script names a .tga, but there is only a .png
+textures/test/substituted
+{
+	diffusemap	textures/test/substituted_d.tga
+}
+
+// the diffuse map exists only under _tb/
+textures/test/tb_diffuse
+{
+	diffusemap	textures/test/tbonly_d.tga
+}
+
+// the only copy of the image is a .dds
+textures/test/dds_only
+{
+	diffusemap	textures/test/ddsonly_d.tga
+}
+
+// a .dds next to a .png is preferred
+textures/test/dds_preferred
+{
+	diffusemap	textures/test/both_d.tga
+}
+
+// no image exists
+textures/test/missing
+{
+	qer_editorimage	textures/test/nothing_ed.tga
+	diffusemap		textures/test/nothing_d.tga
+}
+
+// an image named like the material is not used when the material names other images
+textures/test/named_like_image
+{
+	diffusemap	textures/test/nothing_d.tga
+}
+
+// without stages and an editor image, an image named like the material is used
+textures/test/nodraw
+{
+	noshadows
+	nonsolid
+}
+
+// without stages, an editor image or an image named like the material
+textures/test/invisible
+{
+	playerclip
+}
+
+// alpha tested
+textures/test/alphatest
+{
+	qer_editorimage	textures/test/editor_ed.tga
+	{
+		blend		diffusemap
+		map			textures/test/diffuse_d.tga
+		alphaTest	0.25
+	}
+}
+
+// drawn from both sides
+textures/test/two_sided
+{
+	twoSided
+	diffusemap	textures/test/diffuse_d.tga
+}
+
+// translucent, but lit, so the image decides how to blend
+textures/test/translucent_lit
+{
+	translucent
+	diffusemap	textures/test/diffuse_d.tga
+}
+
+// the loose image textures/test/Loose.png has the same name but a different case
+textures/test/loose
+{
+	qer_editorimage	textures/test/Loose.png
+}
+
+// also defined in b_second.mtr and C_THIRD.MTR, which sort after this file
+textures/test/duplicate
+{
+	qer_editorimage	textures/test/editor_ed.tga
+}
+
+// looks up a table that b_second.mtr declares
+textures/test/table_declared
+{
+	{
+		blend	add
+		map		textures/test/diffuse_d.tga
+		rgb		fixturetable[ time ]
+	}
+}
+
+// looks up a table that no file declares, so the engine defaults it
+textures/test/table_undeclared
+{
+	qer_editorimage	textures/test/editor_ed.tga
+	{
+		blend	add
+		map		textures/test/diffuse_d.tga
+		rgb		undeclared_table[ time ]
+	}
+}

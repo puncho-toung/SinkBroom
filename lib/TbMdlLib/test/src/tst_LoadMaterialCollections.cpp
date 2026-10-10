@@ -29,14 +29,21 @@
 #include "mdl/CatchConfig.h"
 #include "mdl/GameConfig.h"
 #include "mdl/LoadMaterialCollections.h"
+#include "mdl/LoadShaders.h"
+#include "mdl/Quake3Shader.h"
 #include "mdl/TestUtils.h"
 
 #include "kd/ranges/to.h"
 #include "kd/reflection_impl.h"
 #include "kd/task_manager.h"
 
+#include <algorithm>
 #include <memory>
+#include <mutex>
 #include <ranges>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
@@ -126,6 +133,48 @@ auto createResource(gl::ResourceLoader<gl::Texture> resourceLoader)
   resource->loadSync();
   return resource;
 }
+
+// Keeps every message; shader files are parsed and log on task threads.
+class CollectingLogger : public Logger
+{
+private:
+  mutable std::mutex m_mutex;
+  std::vector<std::string> m_messages;
+
+public:
+  size_t countMessagesContaining(const std::string_view text) const
+  {
+    const auto lock = std::lock_guard{m_mutex};
+    return size_t(std::ranges::count_if(m_messages, [&](const auto& message) {
+      return message.find(text) != std::string::npos;
+    }));
+  }
+
+private:
+  void doLog(const LogLevel, const std::string_view message) override
+  {
+    const auto lock = std::lock_guard{m_mutex};
+    m_messages.emplace_back(message);
+  }
+};
+
+const Quake3Shader* findShader(
+  const std::vector<Quake3Shader>& shaders, const std::filesystem::path& shaderPath)
+{
+  const auto iShader = std::ranges::find(shaders, shaderPath, &Quake3Shader::shaderPath);
+  return iShader != shaders.end() ? &*iShader : nullptr;
+}
+
+const auto Doom3FixtureMaterialConfig = MaterialConfig{
+  .root = "textures",
+  .extensions = {".tga", ".png", ".jpg", ".dds"},
+  .palette = "",
+  .property = std::nullopt,
+  .shaderSearchPath = "materials",
+  .excludes = {"*_d", "*_ed", "*_add"},
+  .shaderExtensions = {".mtr"},
+  .shaderImageSearchPaths = {"_tb"},
+};
 
 } // namespace
 
@@ -558,6 +607,98 @@ TEST_CASE("LoadMaterialCollections")
             },
           }));
       }
+    }
+  }
+
+  SECTION("loadShaderFiles")
+  {
+    auto fs = fs::VirtualFileSystem{};
+    auto logger = CollectingLogger{};
+
+    const auto fixtureRoot = getFixtureRoot();
+
+    auto taskManager = kdl::task_manager{};
+
+    SECTION("Quake 3 shaders defined in two files")
+    {
+      const auto testDir =
+        fixtureRoot / "test/mdl/LoadMaterialCollections/shaders/duplicate_shader";
+      fs.mount("", std::make_unique<fs::DiskFileSystem>(testDir));
+
+      // shaderExtensions keeps its default
+      const auto materialConfig = mdl::MaterialConfig{
+        .root = "textures",
+        .extensions = {".tga", ".png", ".jpg", ".jpeg"},
+        .palette = "",
+        .property = std::nullopt,
+        .shaderSearchPath = "scripts",
+        .excludes = {},
+      };
+
+      const auto loadedShaders =
+        loadShaderFiles(fs, materialConfig, taskManager, logger) | kdl::value();
+      CHECK(loadedShaders.fileCount == 2);
+
+      // the files are read in sorted order, ignoring case, and the first definition wins
+      REQUIRE(loadedShaders.shaders.size() == 1);
+      CHECK(loadedShaders.shaders.front().shaderPath == "textures/test/duplicate");
+      CHECK(loadedShaders.shaders.front().editorImage == "textures/test/from_a.tga");
+      CHECK(logger.countMessagesContaining("it is already defined in") == 1);
+    }
+
+    SECTION("Doom 3 materials")
+    {
+      const auto testDir = fixtureRoot / "test/mdl/LoadMaterialCollections/doom3";
+      fs.mount("", std::make_unique<fs::DiskFileSystem>(testDir));
+
+      const auto loadedShaders =
+        loadShaderFiles(fs, Doom3FixtureMaterialConfig, taskManager, logger)
+        | kdl::value();
+      const auto& shaders = loadedShaders.shaders;
+
+      // only files with a configured extension are read, whatever its case
+      CHECK(loadedShaders.fileCount == 3);
+      CHECK(findShader(shaders, "textures/test/ignored") == nullptr);
+
+      CHECK(shaders.size() == 21);
+      CHECK(std::ranges::is_sorted(shaders, std::less{}, &Quake3Shader::shaderPath));
+      CHECK(std::ranges::all_of(shaders, [](const auto& shader) {
+        return shader.format == Quake3Shader::Format::Doom3;
+      }));
+
+      // records outside of the material root are kept for entity models
+      CHECK(findShader(shaders, "models/test/crate") != nullptr);
+
+      // the files are read in sorted order, ignoring case, and the first definition wins
+      const auto* duplicate = findShader(shaders, "textures/test/duplicate");
+      REQUIRE(duplicate != nullptr);
+      CHECK(
+        duplicate->previewImages
+        == std::vector<std::filesystem::path>{"textures/test/editor_ed.tga"});
+      CHECK(logger.countMessagesContaining("it is already defined in") == 2);
+
+      // a decl without its closing brace is counted, and the engine defaults it
+      CHECK(loadedShaders.unterminatedCount == 1);
+      const auto* unterminated = findShader(shaders, "textures/test/unterminated");
+      REQUIRE(unterminated != nullptr);
+      CHECK(unterminated->engineDefaulted);
+
+      // a table declared in another file is found
+      const auto* tableDeclared = findShader(shaders, "textures/test/table_declared");
+      REQUIRE(tableDeclared != nullptr);
+      CHECK_FALSE(tableDeclared->engineDefaulted);
+      CHECK(tableDeclared->referencedTables == std::vector<std::string>{"fixturetable"});
+
+      // the engine defaults a material that looks up a table no file declares; the
+      // material keeps its editor image
+      const auto* tableUndeclared = findShader(shaders, "textures/test/table_undeclared");
+      REQUIRE(tableUndeclared != nullptr);
+      CHECK(tableUndeclared->engineDefaulted);
+      CHECK(tableUndeclared->surfaceParms.contains("engine_defaulted"));
+      CHECK(
+        tableUndeclared->previewImages
+        == std::vector<std::filesystem::path>{"textures/test/editor_ed.tga"});
+      CHECK(logger.countMessagesContaining("'undeclared_table'") == 1);
     }
   }
 }

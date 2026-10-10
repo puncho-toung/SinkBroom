@@ -1,0 +1,13 @@
+// Doom 3 materials for the material pipeline tests. Written by hand. Compared with case,
+// this file sorts before the others.
+
+// already defined in a_first.mtr
+textures/test/duplicate
+{
+	diffusemap	textures/test/substituted_d.tga
+}
+
+// lacks its closing brace
+textures/test/unterminated
+{
+	diffusemap	textures/test/diffuse_d.tga

@@ -20,7 +20,9 @@
 #pragma once
 
 #include "base/Result.h"
+#include "mdl/Quake3Shader.h"
 
+#include <cstddef>
 #include <vector>
 
 namespace kdl
@@ -40,8 +42,46 @@ class FileSystem;
 namespace mdl
 {
 struct MaterialConfig;
-class Quake3Shader;
 
+/**
+ * The records that loadShaderFiles found, and what a summary of the load needs to know
+ * about the files they came from.
+ */
+struct LoadedShaders
+{
+  std::vector<Quake3Shader> shaders;
+  // the number of material script files that were read
+  std::size_t fileCount = 0;
+  // the number of Doom 3 material decls that lack their closing brace and run to the end
+  // of their file
+  std::size_t unterminatedCount = 0;
+};
+
+/**
+ * Reads the material script files in materialConfig.shaderSearchPath (not in its
+ * subdirectories) whose extensions are listed in materialConfig.shaderExtensions.
+ *
+ * The extension selects the parser: .mtr files are read by Doom3MaterialParser, all
+ * others by Quake3ShaderParser. The files are read in the order of their paths compared
+ * without case, as the engine lists decl files, and the first definition of a shader
+ * name wins; later ones are dropped with a warning that names both files. Every record
+ * is kept whatever its root, so that entity models can use materials outside of
+ * materialConfig.root.
+ *
+ * A Doom 3 material that looks up a table which no file declares is replaced with the
+ * engine's default material (see makeEngineDefaulted), as the engine does.
+ *
+ * The records are sorted by shader path.
+ */
+Result<LoadedShaders> loadShaderFiles(
+  const fs::FileSystem& fs,
+  const MaterialConfig& materialConfig,
+  kdl::task_manager& taskManager,
+  Logger& logger);
+
+/**
+ * Returns the records that loadShaderFiles finds, and logs their number.
+ */
 Result<std::vector<Quake3Shader>> loadShaders(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
