@@ -1,0 +1,26 @@
+// Invisible tool materials: no stages, only an editor image and surface flags.
+// Written by hand for the TrenchBroom tests.
+
+textures/fixture/caulk
+{
+	qer_editorimage textures/fixture/caulk_ed.tga
+	noshadows
+	forceOpaque			// still seals the map
+}
+
+textures/fixture/nodraw
+{
+	qer_editorimage textures/fixture/nodraw_ed.tga
+	nonsolid
+	noshadows
+}
+
+textures/fixture/clip
+{
+	qer_editorimage textures/fixture/clip_ed.tga
+	noimpact
+	nonsolid
+	monsterclip
+	playerclip
+	noshadows
+}

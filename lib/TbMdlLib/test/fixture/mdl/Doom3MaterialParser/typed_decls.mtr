@@ -1,0 +1,39 @@
+// Typed decls share the file with the materials; only the materials become records.
+// Written by hand for the TrenchBroom tests.
+
+table fixture_steps { { 0, 0.25, 0.5, 1 } }
+table fixture_snap { snap { 1, 0, 1, 0 } }
+
+table fixture_wave { {
+0.000000, 0.250000, 0.500000, 0.750000,
+1.000000, 0.750000, 0.500000, 0.250000,
+0.000000, -0.250000, -0.500000, -0.750000,
+-1.000000, -0.750000, -0.500000, -0.250000 } }
+
+textures/fixture/first
+{
+	diffusemap	textures/fixture/first_d.tga
+}
+
+skin fixture_skin {
+	*	textures/fixture/first
+}
+
+particle fixture_particle {
+	depthHack	100
+	{
+		count			12
+		material		textures/fixture/first
+		distribution	rect 3.000 3.000 3.000
+	}
+}
+
+material textures/fixture/typed
+{
+	diffusemap	textures/fixture/typed_d.tga
+}
+
+textures/fixture/last
+{
+	diffusemap	textures/fixture/last_d.tga
+}

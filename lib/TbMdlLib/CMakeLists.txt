@@ -26,6 +26,7 @@ target_sources(TbMdlLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CurrentGroupCommand.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DecalDefinition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DefParser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Doom3MaterialParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EditorContext.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EmptyBrushEntityValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EmptyGroupValidator.cpp

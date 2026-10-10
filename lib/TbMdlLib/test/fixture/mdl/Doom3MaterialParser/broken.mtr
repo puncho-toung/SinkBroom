@@ -1,0 +1,26 @@
+// A deliberately broken file: one bad material must never cost the others.
+// Written by hand for the TrenchBroom tests.
+
+// a is fine
+textures/fixture/a
+{
+	diffusemap	textures/fixture/a_d.tga
+}
+
+// b lacks its closing brace, so it swallows c
+textures/fixture/b
+{
+	diffusemap	textures/fixture/b_d.tga
+
+// c is fine, but inside b
+textures/fixture/c
+{
+	diffusemap	textures/fixture/c_d.tga
+}
+}
+// in brace counting, the brace above closes b
+
+// d is unterminated at the end of the file
+textures/fixture/d
+{
+	diffusemap	textures/fixture/d_d.tga
