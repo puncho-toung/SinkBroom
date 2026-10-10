@@ -141,6 +141,26 @@ Quake3ShaderStage& Quake3Shader::addStage()
 
 kdl_reflect_impl(Quake3Shader);
 
+std::ostream& operator<<(std::ostream& lhs, const Quake3ShaderStage::Lighting rhs)
+{
+  switch (rhs)
+  {
+  case Quake3ShaderStage::Lighting::None:
+    lhs << "None";
+    break;
+  case Quake3ShaderStage::Lighting::Diffuse:
+    lhs << "Diffuse";
+    break;
+  case Quake3ShaderStage::Lighting::Bump:
+    lhs << "Bump";
+    break;
+  case Quake3ShaderStage::Lighting::Specular:
+    lhs << "Specular";
+    break;
+  }
+  return lhs;
+}
+
 std::ostream& operator<<(std::ostream& lhs, const Quake3Shader::Culling rhs)
 {
   switch (rhs)
@@ -153,6 +173,37 @@ std::ostream& operator<<(std::ostream& lhs, const Quake3Shader::Culling rhs)
     break;
   case Quake3Shader::Culling::None:
     lhs << "None";
+    break;
+  }
+  return lhs;
+}
+
+std::ostream& operator<<(std::ostream& lhs, const Quake3Shader::Format rhs)
+{
+  switch (rhs)
+  {
+  case Quake3Shader::Format::Quake3:
+    lhs << "Quake3";
+    break;
+  case Quake3Shader::Format::Doom3:
+    lhs << "Doom3";
+    break;
+  }
+  return lhs;
+}
+
+std::ostream& operator<<(std::ostream& lhs, const Quake3Shader::Coverage rhs)
+{
+  switch (rhs)
+  {
+  case Quake3Shader::Coverage::Opaque:
+    lhs << "Opaque";
+    break;
+  case Quake3Shader::Coverage::Perforated:
+    lhs << "Perforated";
+    break;
+  case Quake3Shader::Coverage::Translucent:
+    lhs << "Translucent";
     break;
   }
   return lhs;

@@ -60,12 +60,26 @@ public:
     kdl_reflect_decl(BlendFunc, srcFactor, destFactor);
   };
 
+  /**
+   * The light interaction a Doom 3 stage takes part in, set by "blend diffusemap",
+   * "blend bumpmap", "blend specularmap" and their aliases, or by the diffusemap,
+   * bumpmap and specularmap shorthands. Quake 3 stages are always None.
+   */
+  enum class Lighting
+  {
+    None,
+    Diffuse,
+    Bump,
+    Specular
+  };
+
 public:
   std::filesystem::path map;
   BlendFunc blendFunc;
   std::optional<gl::MaterialAlphaFunc> alphaFunc;
+  Lighting lighting = Lighting::None;
 
-  kdl_reflect_decl(Quake3ShaderStage, map, blendFunc, alphaFunc);
+  kdl_reflect_decl(Quake3ShaderStage, map, blendFunc, alphaFunc, lighting);
 };
 
 class Quake3Shader
@@ -78,6 +92,27 @@ public:
     None
   };
 
+  /**
+   * The script language a record was parsed from: a Quake 3 .shader file or a Doom 3
+   * .mtr file.
+   */
+  enum class Format
+  {
+    Quake3,
+    Doom3
+  };
+
+  /**
+   * How a Doom 3 material covers what is behind it, as idMaterial::Coverage computes it.
+   * Translucent surfaces do not seal a map, perforated (alpha tested) ones do.
+   */
+  enum class Coverage
+  {
+    Opaque,
+    Perforated,
+    Translucent
+  };
+
 public:
   std::filesystem::path shaderPath;
   std::filesystem::path editorImage;
@@ -86,6 +121,13 @@ public:
   kdl::flat_set<std::string> surfaceParms;
   std::vector<Quake3ShaderStage> stages;
   std::optional<gl::MaterialAlphaFunc> qerAlphaFunc;
+  Format format = Format::Quake3;
+  // Doom 3 only.
+  Coverage coverage = Coverage::Opaque;
+  // Doom 3 only: the images idMaterial::GetEditorImage would try, in that order.
+  std::vector<std::filesystem::path> previewImages;
+  // Doom 3 only: the engine would replace this material with its default material.
+  bool engineDefaulted = false;
 
 public:
   Quake3ShaderStage& addStage();
@@ -98,9 +140,16 @@ public:
     culling,
     surfaceParms,
     stages,
-    qerAlphaFunc);
+    qerAlphaFunc,
+    format,
+    coverage,
+    previewImages,
+    engineDefaulted);
 };
 
+std::ostream& operator<<(std::ostream& lhs, Quake3ShaderStage::Lighting rhs);
 std::ostream& operator<<(std::ostream& lhs, Quake3Shader::Culling rhs);
+std::ostream& operator<<(std::ostream& lhs, Quake3Shader::Format rhs);
+std::ostream& operator<<(std::ostream& lhs, Quake3Shader::Coverage rhs);
 
 } // namespace tb::mdl
