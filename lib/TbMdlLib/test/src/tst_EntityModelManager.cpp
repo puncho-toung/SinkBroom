@@ -43,7 +43,15 @@ GameInfo makeTestGameInfo()
     .icon = {},
     .fileFormats = {},
     .fileSystemConfig = {},
-    .materialConfig = MaterialConfig{"", {}, "palette.lmp", {}, "", {}},
+    .materialConfig =
+      MaterialConfig{
+        .root = "",
+        .extensions = {},
+        .palette = "palette.lmp",
+        .property = {},
+        .shaderSearchPath = "",
+        .excludes = {},
+      },
     .entityConfig = {},
     .faceAttribsConfig = {},
     .smartTags = {},

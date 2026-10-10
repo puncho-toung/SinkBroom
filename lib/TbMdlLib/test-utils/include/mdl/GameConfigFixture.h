@@ -48,7 +48,14 @@ inline const GameInfo DefaultGameInfo = detail::makeGameInfoFixture(
     .fileFormats = {},
     .fileSystemConfig = {},
     .materialConfig =
-      {"textures", {".D"}, "test/mdl/DefaultGameInfo/palette.lmp", {}, "", {}},
+      {
+        .root = "textures",
+        .extensions = {".D"},
+        .palette = "test/mdl/DefaultGameInfo/palette.lmp",
+        .property = {},
+        .shaderSearchPath = "",
+        .excludes = {},
+      },
     .entityConfig = {},
     .faceAttribsConfig = {},
     .smartTags = {},

@@ -76,24 +76,26 @@ TEST_CASE("GameFileSystem")
 
   auto environmentConfig = EnvironmentConfig{};
   const auto gameConfig = GameConfig{
-    "some game",
-    {},
-    {},
-    false,
-    {},
-    {
-      "id1",
+    .name = "some game",
+    .path = {},
+    .icon = {},
+    .experimental = false,
+    .fileFormats = {},
+    .fileSystemConfig =
       {
-        {".pak"},
-        "idpak",
+        .searchPath = "id1",
+        .packageFormat =
+          {
+            .extensions = {".pak"},
+            .format = "idpak",
+          },
       },
-    },
-    {},
-    {},
-    {},
-    {},
-    {},
-    {},
+    .materialConfig = {},
+    .entityConfig = {},
+    .faceAttribsConfig = {},
+    .smartTags = {},
+    .softMapBounds = {},
+    .compilationTools = {},
   };
 
   SECTION("Mounts packages in game path")
@@ -153,24 +155,26 @@ TEST_CASE("GameFileSystem")
   {
 
     const auto ucConfig = GameConfig{
-      "some game",
-      {},
-      {},
-      false,
-      {},
-      {
-        "ID1",
+      .name = "some game",
+      .path = {},
+      .icon = {},
+      .experimental = false,
+      .fileFormats = {},
+      .fileSystemConfig =
         {
-          {".pak"},
-          "idpak",
+          .searchPath = "ID1",
+          .packageFormat =
+            {
+              .extensions = {".pak"},
+              .format = "idpak",
+            },
         },
-      },
-      {},
-      {},
-      {},
-      {},
-      {},
-      {},
+      .materialConfig = {},
+      .entityConfig = {},
+      .faceAttribsConfig = {},
+      .smartTags = {},
+      .softMapBounds = {},
+      .compilationTools = {},
     };
 
     fs.initialize(environmentConfig, ucConfig, fixturePath, {}, logger);

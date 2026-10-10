@@ -49,12 +49,12 @@ TEST_CASE("loadMd3Model")
   auto fs = fs::VirtualFileSystem{};
 
   const auto materialConfig = mdl::MaterialConfig{
-    {},
-    {".tga", ".png", ".jpg", ".jpeg"},
-    {},
-    {},
-    "scripts",
-    {},
+    .root = {},
+    .extensions = {".tga", ".png", ".jpg", ".jpeg"},
+    .palette = {},
+    .property = {},
+    .shaderSearchPath = "scripts",
+    .excludes = {},
   };
 
   SECTION("Load valid MD3 model")

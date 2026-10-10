@@ -144,12 +144,12 @@ TEST_CASE("LoadMaterialCollections")
     fs.mount("", std::make_unique<fs::DiskFileSystem>(testDir));
 
     const auto materialConfig = mdl::MaterialConfig{
-      "textures",
-      {".png", ".jpg"},
-      "",
-      std::nullopt,
-      "scripts",
-      {},
+      .root = "textures",
+      .extensions = {".png", ".jpg"},
+      .palette = "",
+      .property = std::nullopt,
+      .shaderSearchPath = "scripts",
+      .excludes = {},
     };
 
     CHECK(
@@ -166,12 +166,12 @@ TEST_CASE("LoadMaterialCollections")
       "Material::effectiveAlphaFunc, without resolving the texture resource")
     {
       const auto mipMaterialConfig = mdl::MaterialConfig{
-        "textures",
-        {".D"},
-        "",
-        std::nullopt,
-        "scripts",
-        {},
+        .root = "textures",
+        .extensions = {".D"},
+        .palette = "",
+        .property = std::nullopt,
+        .shaderSearchPath = "scripts",
+        .excludes = {},
       };
 
       auto lazyCreateResource = [](gl::ResourceLoader<gl::Texture> resourceLoader) {
@@ -285,12 +285,12 @@ TEST_CASE("LoadMaterialCollections")
       fs.mount("textures", fs::openFS<fs::WadFileSystem>(wadPath));
 
       const auto materialConfig = mdl::MaterialConfig{
-        "textures",
-        {".D"},
-        "test/mdl/LoadMaterialCollections/palette.lmp",
-        "wad",
-        "",
-        {},
+        .root = "textures",
+        .extensions = {".D"},
+        .palette = "test/mdl/LoadMaterialCollections/palette.lmp",
+        .property = "wad",
+        .shaderSearchPath = "",
+        .excludes = {},
       };
 
       CHECK_THAT(
@@ -387,12 +387,12 @@ TEST_CASE("LoadMaterialCollections")
           fs.mount("", std::make_unique<fs::DiskFileSystem>(testDir));
 
           const auto materialConfig = mdl::MaterialConfig{
-            "textures",
-            {".tga", ".png", ".jpg", ".jpeg"},
-            "",
-            std::nullopt,
-            "scripts",
-            {},
+            .root = "textures",
+            .extensions = {".tga", ".png", ".jpg", ".jpeg"},
+            .palette = "",
+            .property = std::nullopt,
+            .shaderSearchPath = "scripts",
+            .excludes = {},
           };
 
           CHECK_THAT(
@@ -418,12 +418,12 @@ TEST_CASE("LoadMaterialCollections")
           fs.mount("", std::make_unique<fs::DiskFileSystem>(testDir));
 
           const auto materialConfig = mdl::MaterialConfig{
-            "textures",
-            {".tga", ".png", ".jpg", ".jpeg"},
-            "",
-            std::nullopt,
-            "scripts",
-            {},
+            .root = "textures",
+            .extensions = {".tga", ".png", ".jpg", ".jpeg"},
+            .palette = "",
+            .property = std::nullopt,
+            .shaderSearchPath = "scripts",
+            .excludes = {},
           };
 
           CHECK_THAT(
@@ -454,12 +454,12 @@ TEST_CASE("LoadMaterialCollections")
           fs.mount("", std::make_unique<fs::DiskFileSystem>(testDir));
 
           const auto materialConfig = mdl::MaterialConfig{
-            "textures",
-            {".tga", ".png", ".jpg", ".jpeg"},
-            "",
-            std::nullopt,
-            "scripts",
-            {},
+            .root = "textures",
+            .extensions = {".tga", ".png", ".jpg", ".jpeg"},
+            .palette = "",
+            .property = std::nullopt,
+            .shaderSearchPath = "scripts",
+            .excludes = {},
           };
 
           CHECK_THAT(
@@ -489,12 +489,12 @@ TEST_CASE("LoadMaterialCollections")
         fs.mount("", std::make_unique<fs::DiskFileSystem>(testDir));
 
         const auto materialConfig = mdl::MaterialConfig{
-          "textures",
-          {".tga", ".png", ".jpg", ".jpeg"},
-          "",
-          std::nullopt,
-          "scripts",
-          {},
+          .root = "textures",
+          .extensions = {".tga", ".png", ".jpg", ".jpeg"},
+          .palette = "",
+          .property = std::nullopt,
+          .shaderSearchPath = "scripts",
+          .excludes = {},
         };
 
         CHECK_THAT(
@@ -523,12 +523,12 @@ TEST_CASE("LoadMaterialCollections")
         fs.mount("", std::make_unique<fs::DiskFileSystem>(testDir));
 
         const auto materialConfig = mdl::MaterialConfig{
-          "textures",
-          {".tga", ".png", ".jpg", ".jpeg"},
-          "",
-          std::nullopt,
-          "scripts",
-          {},
+          .root = "textures",
+          .extensions = {".tga", ".png", ".jpg", ".jpeg"},
+          .palette = "",
+          .property = std::nullopt,
+          .shaderSearchPath = "scripts",
+          .excludes = {},
         };
 
         CHECK_THAT(

@@ -54,13 +54,13 @@ textures/liquids/lavahell2 //path and name of new texture
     CHECK_THAT(
       parser.parse(status).value(),
       UnorderedEquals(std::vector<mdl::Quake3Shader>{{
-        "textures/liquids/lavahell2",      // shaderPath
-        "",                                // editorImage
-        "",                                // lightImage
-        mdl::Quake3Shader::Culling::Front, // culling
-        {},                                // surfaceParms
-        {},                                // stages
-        {}                                 // qerAlphaFunc
+        .shaderPath = "textures/liquids/lavahell2",
+        .editorImage = "",
+        .lightImage = "",
+        .culling = mdl::Quake3Shader::Culling::Front,
+        .surfaceParms = {},
+        .stages = {},
+        .qerAlphaFunc = {},
       }}));
   }
 
@@ -102,17 +102,17 @@ textures/liquids/lavahell2 //path and name of new texture
     CHECK_THAT(
       parser.parse(status).value(),
       UnorderedEquals(std::vector<mdl::Quake3Shader>{{
-        "textures/liquids/lavahell2",       // shaderPath
-        "",                                 // editorImage
-        "",                                 // lightImage
-        mdl::Quake3Shader::Culling::None,   // culling
-        {"noimpact", "lava", "nolightmap"}, // surfaceParms
-        {{
-          "textures/eerie/lavahell.tga", // map
-          {"", ""},                      // blendFunc
-          {}                             // alphaFunc
-        }},                              // stages
-        {}                               // qerAlphaFunc
+        .shaderPath = "textures/liquids/lavahell2",
+        .editorImage = "",
+        .lightImage = "",
+        .culling = mdl::Quake3Shader::Culling::None,
+        .surfaceParms = {"noimpact", "lava", "nolightmap"},
+        .stages = {{
+          .map = "textures/eerie/lavahell.tga",
+          .blendFunc = {"", ""},
+          .alphaFunc = {},
+        }},
+        .qerAlphaFunc = {},
       }}));
   }
 
@@ -155,17 +155,17 @@ textures/liquids/lavahell2 //path and name of new texture
     CHECK_THAT(
       parser.parse(status).value(),
       UnorderedEquals(std::vector<mdl::Quake3Shader>{{
-        "textures/liquids/lavahell2",       // shaderPath
-        "textures/eerie/lavahell.tga",      // editorImage
-        "",                                 // lightImage
-        mdl::Quake3Shader::Culling::None,   // culling
-        {"noimpact", "lava", "nolightmap"}, // surfaceParms
-        {{
-          "textures/eerie/lavahell.tga", // map
-          {"", ""},                      // blendFunc
-          {}                             // alphaFunc
-        }},                              // stages
-        {}                               // qerAlphaFunc
+        .shaderPath = "textures/liquids/lavahell2",
+        .editorImage = "textures/eerie/lavahell.tga",
+        .lightImage = "",
+        .culling = mdl::Quake3Shader::Culling::None,
+        .surfaceParms = {"noimpact", "lava", "nolightmap"},
+        .stages = {{
+          .map = "textures/eerie/lavahell.tga",
+          .blendFunc = {"", ""},
+          .alphaFunc = {},
+        }},
+        .qerAlphaFunc = {},
       }}));
   }
 
@@ -208,27 +208,28 @@ textures/eerie/ironcrosslt2_10000
     CHECK_THAT(
       parser.parse(status).value(),
       UnorderedEquals(std::vector<mdl::Quake3Shader>{{
-        "textures/eerie/ironcrosslt2_10000",            // shaderPath
-        "textures/gothic_light/ironcrosslt2.tga",       // editorImage
-        "textures/gothic_light/ironcrosslt2.blend.tga", // lightImage
-        mdl::Quake3Shader::Culling::Front,              // culling
-        {},                                             // surfaceParms
-        {{
-           "$lightmap", // map
-           {"", ""},    // blendFunc
-           {}           // alphaFunc
-         },
-         {
-           "textures/gothic_light/ironcrosslt2.tga", // map
-           {"GL_DST_COLOR", "GL_ZERO"},              // blendFunc
-           {}                                        // alphaFunc
-         },
-         {
-           "textures/gothic_light/ironcrosslt2.blend.tga", // map
-           {"GL_ONE", "GL_ONE"},                           // blendFunc
-           {}                                              // alphaFunc
-         }},                                               // stages
-        {}                                                 // qerAlphaFunc
+        .shaderPath = "textures/eerie/ironcrosslt2_10000",
+        .editorImage = "textures/gothic_light/ironcrosslt2.tga",
+        .lightImage = "textures/gothic_light/ironcrosslt2.blend.tga",
+        .culling = mdl::Quake3Shader::Culling::Front,
+        .surfaceParms = {},
+        .stages =
+          {{
+             .map = "$lightmap",
+             .blendFunc = {"", ""},
+             .alphaFunc = {},
+           },
+           {
+             .map = "textures/gothic_light/ironcrosslt2.tga",
+             .blendFunc = {"GL_DST_COLOR", "GL_ZERO"},
+             .alphaFunc = {},
+           },
+           {
+             .map = "textures/gothic_light/ironcrosslt2.blend.tga",
+             .blendFunc = {"GL_ONE", "GL_ONE"},
+             .alphaFunc = {},
+           }},
+        .qerAlphaFunc = {},
       }}));
   }
 
@@ -271,27 +272,28 @@ textures/eerie/ironcrosslt2_10000
     CHECK_THAT(
       parser.parse(status).value(),
       UnorderedEquals(std::vector<mdl::Quake3Shader>{{
-        "textures/eerie/ironcrosslt2_10000",            // shaderPath
-        "textures/gothic_light/ironcrosslt2.tga",       // editorImage
-        "textures/gothic_light/ironcrosslt2.blend.tga", // lightImage
-        mdl::Quake3Shader::Culling::Front,              // culling
-        {},                                             // surfaceParms
-        {{
-           "$lightmap", // map
-           {"", ""},    // blendFunc
-           {}           // alphaFunc
-         },
-         {
-           "textures/gothic_light/ironcrosslt2.tga", // map
-           {"GL_DST_COLOR", "GL_ZERO"},              // blendFunc
-           {}                                        // alphaFunc
-         },
-         {
-           "textures/gothic_light/ironcrosslt2.blend.tga", // map
-           {"GL_ONE", "GL_ONE"},                           // blendFunc
-           {}                                              // alphaFunc
-         }},                                               // stages
-        {}                                                 // qerAlphaFunc
+        .shaderPath = "textures/eerie/ironcrosslt2_10000",
+        .editorImage = "textures/gothic_light/ironcrosslt2.tga",
+        .lightImage = "textures/gothic_light/ironcrosslt2.blend.tga",
+        .culling = mdl::Quake3Shader::Culling::Front,
+        .surfaceParms = {},
+        .stages =
+          {{
+             .map = "$lightmap",
+             .blendFunc = {"", ""},
+             .alphaFunc = {},
+           },
+           {
+             .map = "textures/gothic_light/ironcrosslt2.tga",
+             .blendFunc = {"GL_DST_COLOR", "GL_ZERO"},
+             .alphaFunc = {},
+           },
+           {
+             .map = "textures/gothic_light/ironcrosslt2.blend.tga",
+             .blendFunc = {"GL_ONE", "GL_ONE"},
+             .alphaFunc = {},
+           }},
+        .qerAlphaFunc = {},
       }}));
   }
 
@@ -311,19 +313,19 @@ textures\eerie\ironcrosslt2_10000
 
     CHECK_THAT(
       parser.parse(status).value(),
-      UnorderedEquals(std::vector<mdl::Quake3Shader>{{{
-        "textures/eerie/ironcrosslt2_10000",            // shaderPath
-        "textures/gothic_light/ironcrosslt2.tga",       // editorImage
-        "textures/gothic_light/ironcrosslt2.blend.tga", // lightImage
-        mdl::Quake3Shader::Culling::Front,              // culling
-        {},                                             // surfaceParms
-        {{
-          "textures/gothic_light/ironcrosslt2.blend.tga", // map
-          {"", ""},                                       // blendFunc
-          {}                                              // alphaFunc
-        }},                                               // stages
-        {}                                                // qerAlphaFunc
-      }}}));
+      UnorderedEquals(std::vector<mdl::Quake3Shader>{{
+        .shaderPath = "textures/eerie/ironcrosslt2_10000",
+        .editorImage = "textures/gothic_light/ironcrosslt2.tga",
+        .lightImage = "textures/gothic_light/ironcrosslt2.blend.tga",
+        .culling = mdl::Quake3Shader::Culling::Front,
+        .surfaceParms = {},
+        .stages = {{
+          .map = "textures/gothic_light/ironcrosslt2.blend.tga",
+          .blendFunc = {"", ""},
+          .alphaFunc = {},
+        }},
+        .qerAlphaFunc = {},
+      }}));
   }
 
   SECTION("Parse shader with a comment terminating a block entry")
@@ -422,40 +424,41 @@ textures/liquids/lavahell2 //path and name of new texture
       parser.parse(status).value(),
       UnorderedEquals(std::vector<mdl::Quake3Shader>{
         {
-          "textures/eerie/ironcrosslt2_10000",            // shaderPath
-          "textures/gothic_light/ironcrosslt2.tga",       // editorImage
-          "textures/gothic_light/ironcrosslt2.blend.tga", // lightImage
-          mdl::Quake3Shader::Culling::Front,              // culling
-          {},                                             // surfaceParms
-          {{
-             "$lightmap", // map
-             {"", ""},    // blendFunc
-             {}           // alphaFunc
-           },
-           {
-             "textures/gothic_light/ironcrosslt2.tga", // map
-             {"GL_DST_COLOR", "GL_ZERO"},              // blendFunc
-             {}                                        // alphaFunc
-           },
-           {
-             "textures/gothic_light/ironcrosslt2.blend.tga", // map
-             {"GL_ONE", "GL_ONE"},                           // blendFunc
-             {}                                              // alphaFunc
-           }},                                               // stages
-          {}                                                 // qerAlphaFunc
+          .shaderPath = "textures/eerie/ironcrosslt2_10000",
+          .editorImage = "textures/gothic_light/ironcrosslt2.tga",
+          .lightImage = "textures/gothic_light/ironcrosslt2.blend.tga",
+          .culling = mdl::Quake3Shader::Culling::Front,
+          .surfaceParms = {},
+          .stages =
+            {{
+               .map = "$lightmap",
+               .blendFunc = {"", ""},
+               .alphaFunc = {},
+             },
+             {
+               .map = "textures/gothic_light/ironcrosslt2.tga",
+               .blendFunc = {"GL_DST_COLOR", "GL_ZERO"},
+               .alphaFunc = {},
+             },
+             {
+               .map = "textures/gothic_light/ironcrosslt2.blend.tga",
+               .blendFunc = {"GL_ONE", "GL_ONE"},
+               .alphaFunc = {},
+             }},
+          .qerAlphaFunc = {},
         },
         {
-          "textures/liquids/lavahell2",       // shaderPath
-          "textures/eerie/lavahell.tga",      // editorImage
-          "",                                 // lightImage
-          mdl::Quake3Shader::Culling::None,   // culling
-          {"noimpact", "lava", "nolightmap"}, // surfaceParms
-          {{
-            "textures/eerie/lavahell.tga", // map
-            {"", ""},                      // blendFunc
-            {}                             // alphaFunc
-          }},                              // stages
-          {}                               // qerAlphaFunc
+          .shaderPath = "textures/liquids/lavahell2",
+          .editorImage = "textures/eerie/lavahell.tga",
+          .lightImage = "",
+          .culling = mdl::Quake3Shader::Culling::None,
+          .surfaceParms = {"noimpact", "lava", "nolightmap"},
+          .stages = {{
+            .map = "textures/eerie/lavahell.tga",
+            .blendFunc = {"", ""},
+            .alphaFunc = {},
+          }},
+          .qerAlphaFunc = {},
         }}));
   }
 
@@ -550,74 +553,75 @@ waterBubble
     CHECK_THAT(
       parser.parse(status).value(),
       UnorderedEquals(std::vector<mdl::Quake3Shader>{{
-        "waterBubble",                     // shaderPath
-        "",                                // editorImage
-        "",                                // lightImage
-        mdl::Quake3Shader::Culling::Front, // culling
-        {},                                // surfaceParms
-        {
+        .shaderPath = "waterBubble",
+        .editorImage = "",
+        .lightImage = "",
+        .culling = mdl::Quake3Shader::Culling::Front,
+        .surfaceParms = {},
+        .stages =
           {
-            "sprites/bubble.tga", // map
-            {BF::One, BF::One},   // blendFunc
-            {}                    // alphaFunc
+            {
+              .map = "sprites/bubble.tga",
+              .blendFunc = {BF::One, BF::One},
+              .alphaFunc = {},
+            },
+            {
+              .map = "sprites/bubble.tga",
+              .blendFunc = {BF::DestColor, BF::Zero},
+              .alphaFunc = {},
+            },
+            {
+              .map = "sprites/bubble.tga",
+              .blendFunc = {BF::SrcAlpha, BF::OneMinusSrcAlpha},
+              .alphaFunc = {},
+            },
+            {
+              .map = "sprites/bubble.tga",
+              .blendFunc = {BF::One, BF::One},
+              .alphaFunc = {},
+            },
+            {
+              .map = "sprites/bubble.tga",
+              .blendFunc = {BF::Zero, BF::Zero},
+              .alphaFunc = {},
+            },
+            {
+              .map = "sprites/bubble.tga",
+              .blendFunc = {BF::DestColor, BF::SrcAlpha},
+              .alphaFunc = {},
+            },
+            {
+              .map = "sprites/bubble.tga",
+              .blendFunc = {BF::OneMinusDestColor, BF::OneMinusSrcAlpha},
+              .alphaFunc = {},
+            },
+            {
+              .map = "sprites/bubble.tga",
+              .blendFunc = {BF::SrcAlpha, BF::DestAlpha},
+              .alphaFunc = {},
+            },
+            {
+              .map = "sprites/bubble.tga",
+              .blendFunc = {BF::OneMinusSrcAlpha, BF::OneMinusDestAlpha},
+              .alphaFunc = {},
+            },
+            {
+              .map = "sprites/bubble.tga",
+              .blendFunc = {BF::DestAlpha, BF::SrcColor},
+              .alphaFunc = {},
+            },
+            {
+              .map = "sprites/bubble.tga",
+              .blendFunc = {BF::OneMinusDestAlpha, BF::OneMinusSrcColor},
+              .alphaFunc = {},
+            },
+            {
+              .map = "sprites/bubble.tga",
+              .blendFunc = {BF::SrcAlphaSaturate, BF::OneMinusSrcColor},
+              .alphaFunc = {},
+            },
           },
-          {
-            "sprites/bubble.tga",      // map
-            {BF::DestColor, BF::Zero}, // blendFunc
-            {}                         // alphaFunc
-          },
-          {
-            "sprites/bubble.tga",                 // map
-            {BF::SrcAlpha, BF::OneMinusSrcAlpha}, // blendFunc
-            {}                                    // alphaFunc
-          },
-          {
-            "sprites/bubble.tga", // map
-            {BF::One, BF::One},   // blendFunc
-            {}                    // alphaFunc
-          },
-          {
-            "sprites/bubble.tga", // map
-            {BF::Zero, BF::Zero}, // blendFunc
-            {}                    // alphaFunc
-          },
-          {
-            "sprites/bubble.tga",          // map
-            {BF::DestColor, BF::SrcAlpha}, // blendFunc
-            {}                             // alphaFunc
-          },
-          {
-            "sprites/bubble.tga",                          // map
-            {BF::OneMinusDestColor, BF::OneMinusSrcAlpha}, // blendFunc
-            {}                                             // alphaFunc
-          },
-          {
-            "sprites/bubble.tga",          // map
-            {BF::SrcAlpha, BF::DestAlpha}, // blendFunc
-            {}                             // alphaFunc
-          },
-          {
-            "sprites/bubble.tga",                          // map
-            {BF::OneMinusSrcAlpha, BF::OneMinusDestAlpha}, // blendFunc
-            {}                                             // alphaFunc
-          },
-          {
-            "sprites/bubble.tga",          // map
-            {BF::DestAlpha, BF::SrcColor}, // blendFunc
-            {}                             // alphaFunc
-          },
-          {
-            "sprites/bubble.tga",                          // map
-            {BF::OneMinusDestAlpha, BF::OneMinusSrcColor}, // blendFunc
-            {}                                             // alphaFunc
-          },
-          {
-            "sprites/bubble.tga",                         // map
-            {BF::SrcAlphaSaturate, BF::OneMinusSrcColor}, // blendFunc
-            {}                                            // alphaFunc
-          },
-        }, // stages
-        {} // qerAlphaFunc
+        .qerAlphaFunc = {},
       }}));
   }
 
@@ -642,21 +646,22 @@ waterBubble
     CHECK_THAT(
       parser.parse(status).value(),
       UnorderedEquals(std::vector<mdl::Quake3Shader>{{
-        "treeSprite",                      // shaderPath
-        "",                                // editorImage
-        "",                                // lightImage
-        mdl::Quake3Shader::Culling::Front, // culling
-        {},                                // surfaceParms
-        {
+        .shaderPath = "treeSprite",
+        .editorImage = "",
+        .lightImage = "",
+        .culling = mdl::Quake3Shader::Culling::Front,
+        .surfaceParms = {},
+        .stages =
           {
-            "textures/trees/sprite_tree1.tga", // map
-            BF{},                              // blendFunc
-            gl::MaterialAlphaFunc{
-              gl::MaterialAlphaFunc::Compare::Greater, 0.0f}, // alphaFunc
+            {
+              .map = "textures/trees/sprite_tree1.tga",
+              .blendFunc = BF{},
+              .alphaFunc =
+                gl::MaterialAlphaFunc{gl::MaterialAlphaFunc::Compare::Greater, 0.0f},
+            },
           },
-        }, // stages
-        gl::MaterialAlphaFunc{
-          gl::MaterialAlphaFunc::Compare::GreaterEqual, 0.25f}, // qerAlphaFunc
+        .qerAlphaFunc =
+          gl::MaterialAlphaFunc{gl::MaterialAlphaFunc::Compare::GreaterEqual, 0.25f},
       }}));
   }
 
@@ -713,13 +718,13 @@ waterBubble
       CHECK_THAT(
         parser.parse(status).value(),
         UnorderedEquals(std::vector<mdl::Quake3Shader>{{
-          "textures/eerie/ironcrosslt2_10000",      // shaderPath
-          "textures/gothic_light/ironcrosslt2.tga", // editorImage
-          "",                                       // lightImage
-          mdl::Quake3Shader::Culling::Front,        // culling
-          {},                                       // surfaceParms
-          {},                                       // stages
-          {}                                        // qerAlphaFunc
+          .shaderPath = "textures/eerie/ironcrosslt2_10000",
+          .editorImage = "textures/gothic_light/ironcrosslt2.tga",
+          .lightImage = "",
+          .culling = mdl::Quake3Shader::Culling::Front,
+          .surfaceParms = {},
+          .stages = {},
+          .qerAlphaFunc = {},
         }}));
     }
 

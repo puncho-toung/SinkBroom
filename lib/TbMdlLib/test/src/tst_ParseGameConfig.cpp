@@ -143,50 +143,61 @@ TEST_CASE("GameConfigParser")
       CHECK(
         parseGameConfig(config)
         == mdl::GameConfig{
-          "Quake",
-          {},
-          {"Icon.png"},
-          false,
-          {// map formats
-           mdl::MapFormatConfig{"Standard", {}},
-           mdl::MapFormatConfig{"Valve", {}}},
-          mdl::FileSystemConfig{{"id1"}, mdl::PackageFormatConfig{{".pak"}, "idpak"}},
-          mdl::MaterialConfig{
-            {"textures"},
-            {".D"},
-            {"gfx/palette.lmp"},
-            "wad",
-            {},
-            {},
-          },
-          mdl::EntityConfig{
-            {{"Quake.fgd"}, {"Quoth2.fgd"}, {"Rubicon2.def"}, {"Teamfortress.fgd"}},
-            RgbaF{0.6f, 0.6f, 0.6f, 1.0f},
-            {},
-            false},
-          mdl::FaceAttribsConfig{},
-          {
-            mdl::SmartTag{
-              "Trigger",
-              {mdl::TagAttribute{1u, "transparent"}},
-              std::make_unique<mdl::EntityClassNameTagMatcher>("trigger*", "")},
-            mdl::SmartTag{
-              "Clip",
-              {mdl::TagAttribute{1u, "transparent"}},
-              std::make_unique<mdl::MaterialNameTagMatcher>("clip")},
-            mdl::SmartTag{
-              "Skip",
-              {mdl::TagAttribute{1u, "transparent"}},
-              std::make_unique<mdl::MaterialNameTagMatcher>("skip")},
-            mdl::SmartTag{
-              "Hint",
-              {mdl::TagAttribute{1u, "transparent"}},
-              std::make_unique<mdl::MaterialNameTagMatcher>("hint*")},
-            mdl::SmartTag{
-              "Liquid", {}, std::make_unique<mdl::MaterialNameTagMatcher>("\\**")},
-          },            // smart tags
-          std::nullopt, // soft map bounds
-          {}            // compilation tools
+          .name = "Quake",
+          .path = {},
+          .icon = {"Icon.png"},
+          .experimental = false,
+          .fileFormats =
+            {
+              {.format = "Standard", .initialMap = {}},
+              {.format = "Valve", .initialMap = {}},
+            },
+          .fileSystemConfig =
+            {
+              .searchPath = {"id1"},
+              .packageFormat = {.extensions = {".pak"}, .format = "idpak"},
+            },
+          .materialConfig =
+            {
+              .root = {"textures"},
+              .extensions = {".D"},
+              .palette = {"gfx/palette.lmp"},
+              .property = "wad",
+              .shaderSearchPath = {},
+              .excludes = {},
+            },
+          .entityConfig =
+            {
+              .defFilePaths =
+                {{"Quake.fgd"}, {"Quoth2.fgd"}, {"Rubicon2.def"}, {"Teamfortress.fgd"}},
+              .defaultColor = RgbaF{0.6f, 0.6f, 0.6f, 1.0f},
+              .scaleExpression = {},
+              .setDefaultProperties = false,
+            },
+          .faceAttribsConfig = {},
+          .smartTags =
+            {
+              mdl::SmartTag{
+                "Trigger",
+                {mdl::TagAttribute{1u, "transparent"}},
+                std::make_unique<mdl::EntityClassNameTagMatcher>("trigger*", "")},
+              mdl::SmartTag{
+                "Clip",
+                {mdl::TagAttribute{1u, "transparent"}},
+                std::make_unique<mdl::MaterialNameTagMatcher>("clip")},
+              mdl::SmartTag{
+                "Skip",
+                {mdl::TagAttribute{1u, "transparent"}},
+                std::make_unique<mdl::MaterialNameTagMatcher>("skip")},
+              mdl::SmartTag{
+                "Hint",
+                {mdl::TagAttribute{1u, "transparent"}},
+                std::make_unique<mdl::MaterialNameTagMatcher>("hint*")},
+              mdl::SmartTag{
+                "Liquid", {}, std::make_unique<mdl::MaterialNameTagMatcher>("\\**")},
+            },
+          .softMapBounds = std::nullopt,
+          .compilationTools = {},
         });
     }
 
@@ -404,109 +415,136 @@ TEST_CASE("GameConfigParser")
       CHECK(
         parseGameConfig(config)
         == mdl::GameConfig{
-          "Quake 2",
-          {},
-          {"Icon.png"},
-          false,
-          {mdl::MapFormatConfig{"Quake2", {}}},
-          mdl::FileSystemConfig{{"baseq2"}, mdl::PackageFormatConfig{{".pak"}, "idpak"}},
-          mdl::MaterialConfig{
-            {"textures"},
-            {".wal"},
-            {"pics/colormap.pcx"},
-            std::nullopt,
-            {},
-            {},
-          },
-          mdl::EntityConfig{{{"Quake2.fgd"}}, RgbaF{0.6f, 0.6f, 0.6f, 1.0f}, {}, false},
-          mdl::FaceAttribsConfig{
-            {{{"light",
-               "Emit light from the surface, brightness is specified in the 'value' "
-               "field",
-               1 << 0},
-              {"slick", "The surface is slippery", 1 << 1},
-              {"sky",
-               "The surface is sky, the texture will not be drawn, but the background "
-               "sky "
-               "box is used "
-               "instead",
-               1 << 2},
-              {"warp", "The surface warps (like water textures do)", 1 << 3},
-              {"trans33", "The surface is 33% transparent", 1 << 4},
-              {"trans66", "The surface is 66% transparent", 1 << 5},
-              {"flowing",
-               "The texture wraps in a downward 'flowing' pattern (warp must also be "
-               "set)",
-               1 << 6},
-              {"nodraw",
-               "Used for non-fixed-size brush triggers and clip brushes",
-               1 << 7},
-              {"hint", "Make a primary bsp splitter", 1 << 8},
-              {"skip", "Completely ignore, allowing non-closed brushes", 1 << 9}}},
-            {{{"solid", "Default for all brushes", 1 << 0},
-              {"window", "Brush is a window (not really used)", 1 << 1},
-              {"aux", "Unused by the engine", 1 << 2},
-              {"lava", "The brush is lava", 1 << 3},
-              {"slime", "The brush is slime", 1 << 4},
-              {"water", "The brush is water", 1 << 5},
-              {"mist", "The brush is non-solid", 1 << 6},
-              {"playerclip",
-               "Player cannot pass through the brush (other things can)",
-               1 << 16},
-              {"monsterclip",
-               "Monster cannot pass through the brush (player and other things can)",
-               1 << 17},
-              {"current_0", "Brush has a current in direction of 0 degrees", 1 << 18},
-              {"current_90", "Brush has a current in direction of 90 degrees", 1 << 19},
-              {"current_180", "Brush has a current in direction of 180 degrees", 1 << 20},
-              {"current_270", "Brush has a current in direction of 270 degrees", 1 << 21},
-              {"current_up", "Brush has a current in the up direction", 1 << 22},
-              {"current_dn", "Brush has a current in the down direction", 1 << 23},
-              {"origin",
-               "Special brush used for specifying origin of rotation for rotating "
-               "brushes",
-               1 << 24},
-              {"monster", "Purpose unknown", 1 << 25},
-              {"corpse", "Purpose unknown", 1 << 26},
-              {"detail", "Detail brush", 1 << 27},
-              {"translucent", "Use for opaque water that does not block vis", 1 << 28},
-              {"ladder",
-               "Brushes with this flag allow a player to move up and down a vertical "
-               "surface",
-               1 << 29}}},
-            mdl::UvAttributes{},
-            mdl::SurfaceAttributes{}},
-          {
-            mdl::SmartTag{
-              "Trigger",
-              {mdl::TagAttribute{1u, "transparent"}},
-              std::make_unique<mdl::EntityClassNameTagMatcher>("trigger*", "trigger")},
-            mdl::SmartTag{
-              "Clip",
-              {mdl::TagAttribute{1u, "transparent"}},
-              std::make_unique<mdl::MaterialNameTagMatcher>("clip")},
-            mdl::SmartTag{
-              "Skip",
-              {mdl::TagAttribute{1u, "transparent"}},
-              std::make_unique<mdl::MaterialNameTagMatcher>("skip")},
-            mdl::SmartTag{
-              "Hint",
-              {mdl::TagAttribute{1u, "transparent"}},
-              std::make_unique<mdl::MaterialNameTagMatcher>("hint*")},
-            mdl::SmartTag{
-              "Detail", {}, std::make_unique<mdl::ContentFlagsTagMatcher>(1 << 27)},
-            mdl::SmartTag{
-              "Liquid",
-              {},
-              std::make_unique<mdl::ContentFlagsTagMatcher>(
-                (1 << 3) | (1 << 4) | (1 << 5))},
-            mdl::SmartTag{
-              "trans",
-              {},
-              std::make_unique<mdl::SurfaceFlagsTagMatcher>((1 << 4) | (1 << 5))},
-          },            // smart tags
-          std::nullopt, // soft map bounds
-          {}            // compilation tools
+          .name = "Quake 2",
+          .path = {},
+          .icon = {"Icon.png"},
+          .experimental = false,
+          .fileFormats = {{.format = "Quake2", .initialMap = {}}},
+          .fileSystemConfig =
+            {
+              .searchPath = {"baseq2"},
+              .packageFormat = {.extensions = {".pak"}, .format = "idpak"},
+            },
+          .materialConfig =
+            {
+              .root = {"textures"},
+              .extensions = {".wal"},
+              .palette = {"pics/colormap.pcx"},
+              .property = std::nullopt,
+              .shaderSearchPath = {},
+              .excludes = {},
+            },
+          .entityConfig =
+            {
+              .defFilePaths = {{"Quake2.fgd"}},
+              .defaultColor = RgbaF{0.6f, 0.6f, 0.6f, 1.0f},
+              .scaleExpression = {},
+              .setDefaultProperties = false,
+            },
+          .faceAttribsConfig =
+            {
+              .surfaceFlags =
+                {.flags =
+                   {{"light",
+                     "Emit light from the surface, brightness is specified in the "
+                     "'value' field",
+                     1 << 0},
+                    {"slick", "The surface is slippery", 1 << 1},
+                    {"sky",
+                     "The surface is sky, the texture will not be drawn, but the "
+                     "background sky box is used instead",
+                     1 << 2},
+                    {"warp", "The surface warps (like water textures do)", 1 << 3},
+                    {"trans33", "The surface is 33% transparent", 1 << 4},
+                    {"trans66", "The surface is 66% transparent", 1 << 5},
+                    {"flowing",
+                     "The texture wraps in a downward 'flowing' pattern (warp must also "
+                     "be set)",
+                     1 << 6},
+                    {"nodraw",
+                     "Used for non-fixed-size brush triggers and clip brushes",
+                     1 << 7},
+                    {"hint", "Make a primary bsp splitter", 1 << 8},
+                    {"skip", "Completely ignore, allowing non-closed brushes", 1 << 9}}},
+              .contentFlags =
+                {.flags =
+                   {{"solid", "Default for all brushes", 1 << 0},
+                    {"window", "Brush is a window (not really used)", 1 << 1},
+                    {"aux", "Unused by the engine", 1 << 2},
+                    {"lava", "The brush is lava", 1 << 3},
+                    {"slime", "The brush is slime", 1 << 4},
+                    {"water", "The brush is water", 1 << 5},
+                    {"mist", "The brush is non-solid", 1 << 6},
+                    {"playerclip",
+                     "Player cannot pass through the brush (other things can)",
+                     1 << 16},
+                    {"monsterclip",
+                     "Monster cannot pass through the brush (player and other things "
+                     "can)",
+                     1 << 17},
+                    {"current_0",
+                     "Brush has a current in direction of 0 degrees",
+                     1 << 18},
+                    {"current_90",
+                     "Brush has a current in direction of 90 degrees",
+                     1 << 19},
+                    {"current_180",
+                     "Brush has a current in direction of 180 degrees",
+                     1 << 20},
+                    {"current_270",
+                     "Brush has a current in direction of 270 degrees",
+                     1 << 21},
+                    {"current_up", "Brush has a current in the up direction", 1 << 22},
+                    {"current_dn", "Brush has a current in the down direction", 1 << 23},
+                    {"origin",
+                     "Special brush used for specifying origin of rotation for rotating "
+                     "brushes",
+                     1 << 24},
+                    {"monster", "Purpose unknown", 1 << 25},
+                    {"corpse", "Purpose unknown", 1 << 26},
+                    {"detail", "Detail brush", 1 << 27},
+                    {"translucent",
+                     "Use for opaque water that does not block vis",
+                     1 << 28},
+                    {"ladder",
+                     "Brushes with this flag allow a player to move up and down a "
+                     "vertical surface",
+                     1 << 29}}},
+              .defaultUvAttributes = mdl::UvAttributes{},
+              .defaultSurfaceAttributes = mdl::SurfaceAttributes{},
+            },
+          .smartTags =
+            {
+              mdl::SmartTag{
+                "Trigger",
+                {mdl::TagAttribute{1u, "transparent"}},
+                std::make_unique<mdl::EntityClassNameTagMatcher>("trigger*", "trigger")},
+              mdl::SmartTag{
+                "Clip",
+                {mdl::TagAttribute{1u, "transparent"}},
+                std::make_unique<mdl::MaterialNameTagMatcher>("clip")},
+              mdl::SmartTag{
+                "Skip",
+                {mdl::TagAttribute{1u, "transparent"}},
+                std::make_unique<mdl::MaterialNameTagMatcher>("skip")},
+              mdl::SmartTag{
+                "Hint",
+                {mdl::TagAttribute{1u, "transparent"}},
+                std::make_unique<mdl::MaterialNameTagMatcher>("hint*")},
+              mdl::SmartTag{
+                "Detail", {}, std::make_unique<mdl::ContentFlagsTagMatcher>(1 << 27)},
+              mdl::SmartTag{
+                "Liquid",
+                {},
+                std::make_unique<mdl::ContentFlagsTagMatcher>(
+                  (1 << 3) | (1 << 4) | (1 << 5))},
+              mdl::SmartTag{
+                "trans",
+                {},
+                std::make_unique<mdl::SurfaceFlagsTagMatcher>((1 << 4) | (1 << 5))},
+            },
+          .softMapBounds = std::nullopt,
+          .compilationTools = {},
         });
     }
 
@@ -744,113 +782,136 @@ TEST_CASE("GameConfigParser")
       CHECK(
         parseGameConfig(config)
         == mdl::GameConfig{
-          "Extras",
-          {},
-          {},
-          false,
-          {mdl::MapFormatConfig{"Quake3", {}}},
-          mdl::FileSystemConfig{{"baseq3"}, mdl::PackageFormatConfig{{".pk3"}, "zip"}},
-          mdl::MaterialConfig{
-            {"textures"},
-            {""},
-            {},
-            std::nullopt,
-            {"scripts"},
-            {"*_norm", "*_gloss"},
-          },
-          mdl::EntityConfig{
-            {{"Extras.ent"}},
-            RgbaF{0.6f, 0.6f, 0.6f, 1.0f},
-            el::ExpressionNode{el::ArrayExpression{{
-              // the line numbers are not checked
-              el::ExpressionNode{el::VariableExpression{"modelscale"}},
-              el::ExpressionNode{el::VariableExpression{"modelscale_vec"}},
-            }}},
-            false},
-          mdl::FaceAttribsConfig{
-            {{{"light",
-               "Emit light from the surface, brightness is specified in the 'value' "
-               "field",
-               1 << 0},
-              {"slick", "The surface is slippery", 1 << 1},
-              {"sky",
-               "The surface is sky, the texture will not be drawn, but the background "
-               "sky "
-               "box is used "
-               "instead",
-               1 << 2},
-              {"warp", "The surface warps (like water textures do)", 1 << 3},
-              {"trans33", "The surface is 33% transparent", 1 << 4},
-              {"trans66", "The surface is 66% transparent", 1 << 5},
-              {"flowing",
-               "The texture wraps in a downward 'flowing' pattern (warp must also be "
-               "set)",
-               1 << 6},
-              {"nodraw",
-               "Used for non-fixed-size brush triggers and clip brushes",
-               1 << 7},
-              {"hint", "Make a primary bsp splitter", 1 << 8},
-              {"skip", "Completely ignore, allowing non-closed brushes", 1 << 9}}},
-            {{{"solid", "Default for all brushes", 1 << 0},
-              {"window", "Brush is a window (not really used)", 1 << 1},
-              {"aux", "Unused by the engine", 1 << 2},
-              {"lava", "The brush is lava", 1 << 3},
-              {"slime", "The brush is slime", 1 << 4},
-              {"water", "The brush is water", 1 << 5},
-              {"mist", "The brush is non-solid", 1 << 6},
-              {"playerclip",
-               "Player cannot pass through the brush (other things can)",
-               1 << 16},
-              {"monsterclip",
-               "Monster cannot pass through the brush (player and other things can)",
-               1 << 17},
-              {"current_0", "Brush has a current in direction of 0 degrees", 1 << 18},
-              {"current_90", "Brush has a current in direction of 90 degrees", 1 << 19},
-              {"current_180", "Brush has a current in direction of 180 degrees", 1 << 20},
-              {"current_270", "Brush has a current in direction of 270 degrees", 1 << 21},
-              {"current_up", "Brush has a current in the up direction", 1 << 22},
-              {"current_dn", "Brush has a current in the down direction", 1 << 23},
-              {"origin",
-               "Special brush used for specifying origin of rotation for rotating "
-               "brushes",
-               1 << 24},
-              {"monster", "Purpose unknown", 1 << 25},
-              {"corpse", "Purpose unknown", 1 << 26},
-              {"detail", "Detail brush", 1 << 27},
-              {"translucent", "Use for opaque water that does not block vis", 1 << 28},
-              {"ladder",
-               "Brushes with this flag allow a player to move up and down a vertical "
-               "surface",
-               1 << 29}}},
-            expectedUvAttributes,
-            expectedSurfaceAttributes},
-          {
-            mdl::SmartTag{
-              "Trigger",
-              {mdl::TagAttribute{1u, "transparent"}},
-              std::make_unique<mdl::EntityClassNameTagMatcher>("trigger*", "trigger")},
-            mdl::SmartTag{
-              "Clip",
-              {mdl::TagAttribute{1u, "transparent"}},
-              std::make_unique<mdl::MaterialNameTagMatcher>("clip")},
-            mdl::SmartTag{
-              "Skip",
-              {mdl::TagAttribute{1u, "transparent"}},
-              std::make_unique<mdl::MaterialNameTagMatcher>("skip")},
-            mdl::SmartTag{
-              "Hint",
-              {mdl::TagAttribute{1u, "transparent"}},
-              std::make_unique<mdl::MaterialNameTagMatcher>("hint*")},
-            mdl::SmartTag{
-              "Detail", {}, std::make_unique<mdl::ContentFlagsTagMatcher>(1 << 27)},
-            mdl::SmartTag{
-              "Liquid",
-              {},
-              std::make_unique<mdl::ContentFlagsTagMatcher>(
-                (1 << 3) | (1 << 4) | (1 << 5))},
-          },            // smart tags
-          std::nullopt, // soft map bounds
-          {}            // compilation tools
+          .name = "Extras",
+          .path = {},
+          .icon = {},
+          .experimental = false,
+          .fileFormats = {{.format = "Quake3", .initialMap = {}}},
+          .fileSystemConfig =
+            {
+              .searchPath = {"baseq3"},
+              .packageFormat = {.extensions = {".pk3"}, .format = "zip"},
+            },
+          .materialConfig =
+            {
+              .root = {"textures"},
+              .extensions = {""},
+              .palette = {},
+              .property = std::nullopt,
+              .shaderSearchPath = {"scripts"},
+              .excludes = {"*_norm", "*_gloss"},
+            },
+          .entityConfig =
+            {
+              .defFilePaths = {{"Extras.ent"}},
+              .defaultColor = RgbaF{0.6f, 0.6f, 0.6f, 1.0f},
+              .scaleExpression = el::ExpressionNode{el::ArrayExpression{{
+                // the line numbers are not checked
+                el::ExpressionNode{el::VariableExpression{"modelscale"}},
+                el::ExpressionNode{el::VariableExpression{"modelscale_vec"}},
+              }}},
+              .setDefaultProperties = false,
+            },
+          .faceAttribsConfig =
+            {
+              .surfaceFlags =
+                {.flags =
+                   {{"light",
+                     "Emit light from the surface, brightness is specified in the "
+                     "'value' field",
+                     1 << 0},
+                    {"slick", "The surface is slippery", 1 << 1},
+                    {"sky",
+                     "The surface is sky, the texture will not be drawn, but the "
+                     "background sky box is used instead",
+                     1 << 2},
+                    {"warp", "The surface warps (like water textures do)", 1 << 3},
+                    {"trans33", "The surface is 33% transparent", 1 << 4},
+                    {"trans66", "The surface is 66% transparent", 1 << 5},
+                    {"flowing",
+                     "The texture wraps in a downward 'flowing' pattern (warp must also "
+                     "be set)",
+                     1 << 6},
+                    {"nodraw",
+                     "Used for non-fixed-size brush triggers and clip brushes",
+                     1 << 7},
+                    {"hint", "Make a primary bsp splitter", 1 << 8},
+                    {"skip", "Completely ignore, allowing non-closed brushes", 1 << 9}}},
+              .contentFlags =
+                {.flags =
+                   {{"solid", "Default for all brushes", 1 << 0},
+                    {"window", "Brush is a window (not really used)", 1 << 1},
+                    {"aux", "Unused by the engine", 1 << 2},
+                    {"lava", "The brush is lava", 1 << 3},
+                    {"slime", "The brush is slime", 1 << 4},
+                    {"water", "The brush is water", 1 << 5},
+                    {"mist", "The brush is non-solid", 1 << 6},
+                    {"playerclip",
+                     "Player cannot pass through the brush (other things can)",
+                     1 << 16},
+                    {"monsterclip",
+                     "Monster cannot pass through the brush (player and other things "
+                     "can)",
+                     1 << 17},
+                    {"current_0",
+                     "Brush has a current in direction of 0 degrees",
+                     1 << 18},
+                    {"current_90",
+                     "Brush has a current in direction of 90 degrees",
+                     1 << 19},
+                    {"current_180",
+                     "Brush has a current in direction of 180 degrees",
+                     1 << 20},
+                    {"current_270",
+                     "Brush has a current in direction of 270 degrees",
+                     1 << 21},
+                    {"current_up", "Brush has a current in the up direction", 1 << 22},
+                    {"current_dn", "Brush has a current in the down direction", 1 << 23},
+                    {"origin",
+                     "Special brush used for specifying origin of rotation for rotating "
+                     "brushes",
+                     1 << 24},
+                    {"monster", "Purpose unknown", 1 << 25},
+                    {"corpse", "Purpose unknown", 1 << 26},
+                    {"detail", "Detail brush", 1 << 27},
+                    {"translucent",
+                     "Use for opaque water that does not block vis",
+                     1 << 28},
+                    {"ladder",
+                     "Brushes with this flag allow a player to move up and down a "
+                     "vertical surface",
+                     1 << 29}}},
+              .defaultUvAttributes = expectedUvAttributes,
+              .defaultSurfaceAttributes = expectedSurfaceAttributes,
+            },
+          .smartTags =
+            {
+              mdl::SmartTag{
+                "Trigger",
+                {mdl::TagAttribute{1u, "transparent"}},
+                std::make_unique<mdl::EntityClassNameTagMatcher>("trigger*", "trigger")},
+              mdl::SmartTag{
+                "Clip",
+                {mdl::TagAttribute{1u, "transparent"}},
+                std::make_unique<mdl::MaterialNameTagMatcher>("clip")},
+              mdl::SmartTag{
+                "Skip",
+                {mdl::TagAttribute{1u, "transparent"}},
+                std::make_unique<mdl::MaterialNameTagMatcher>("skip")},
+              mdl::SmartTag{
+                "Hint",
+                {mdl::TagAttribute{1u, "transparent"}},
+                std::make_unique<mdl::MaterialNameTagMatcher>("hint*")},
+              mdl::SmartTag{
+                "Detail", {}, std::make_unique<mdl::ContentFlagsTagMatcher>(1 << 27)},
+              mdl::SmartTag{
+                "Liquid",
+                {},
+                std::make_unique<mdl::ContentFlagsTagMatcher>(
+                  (1 << 3) | (1 << 4) | (1 << 5))},
+            },
+          .softMapBounds = std::nullopt,
+          .compilationTools = {},
         });
     }
   }
@@ -941,29 +1002,37 @@ TEST_CASE("GameConfigParser")
       CHECK(
         parseGameConfig(config)
         == mdl::GameConfig{
-          "Quake",
-          {},
-          {"Icon.png"},
-          false,
-          {mdl::MapFormatConfig{"Standard", {}}},
-          mdl::FileSystemConfig{{"id1"}, mdl::PackageFormatConfig{{".pak"}, "idpak"}},
-          mdl::MaterialConfig{
-            {"textures"},
-            {".D"},
-            {"gfx/palette.lmp"},
-            "wad",
-            {},
-            {},
-          },
-          mdl::EntityConfig{
-            {{"Quake.fgd"}, {"Quoth2.fgd"}, {"Rubicon2.def"}, {"Teamfortress.fgd"}},
-            RgbaF{0.6f, 0.6f, 0.6f, 1.0f},
-            {},
-            true}, // setDefaultProperties
-          mdl::FaceAttribsConfig{},
-          {},
-          std::nullopt, // soft map bounds
-          {}            // compilation tools
+          .name = "Quake",
+          .path = {},
+          .icon = {"Icon.png"},
+          .experimental = false,
+          .fileFormats = {{.format = "Standard", .initialMap = {}}},
+          .fileSystemConfig =
+            {
+              .searchPath = {"id1"},
+              .packageFormat = {.extensions = {".pak"}, .format = "idpak"},
+            },
+          .materialConfig =
+            {
+              .root = {"textures"},
+              .extensions = {".D"},
+              .palette = {"gfx/palette.lmp"},
+              .property = "wad",
+              .shaderSearchPath = {},
+              .excludes = {},
+            },
+          .entityConfig =
+            {
+              .defFilePaths =
+                {{"Quake.fgd"}, {"Quoth2.fgd"}, {"Rubicon2.def"}, {"Teamfortress.fgd"}},
+              .defaultColor = RgbaF{0.6f, 0.6f, 0.6f, 1.0f},
+              .scaleExpression = {},
+              .setDefaultProperties = true,
+            },
+          .faceAttribsConfig = {},
+          .smartTags = {},
+          .softMapBounds = std::nullopt,
+          .compilationTools = {},
         });
     }
   }
