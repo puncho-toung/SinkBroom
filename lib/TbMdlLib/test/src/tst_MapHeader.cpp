@@ -85,20 +85,20 @@ TEST_CASE("MapHeader")
 // Format: Quake2
 // Generator: TrenchBroom 2024.1
 )");
-  }
 
-  SECTION("writeMapHeader for Doom 3 BFG")
-  {
-    // the first two lines must match what RBDOOM-3-BFG writes so that maps saved by
-    // either program are detected without asking (009, 024, 072)
-    auto stream = std::ostringstream{};
-    writeMapHeader(
-      stream, "Doom 3 BFG", mdl::MapFormat::Doom3_Valve, "TrenchBroom 2024.1");
+    SECTION("Doom 3 BFG")
+    {
+      // the first two lines must match what RBDOOM-3-BFG writes so that maps saved by
+      // either program are detected without asking (009, 024, 072)
+      auto doom3Stream = std::ostringstream{};
+      writeMapHeader(
+        doom3Stream, "Doom 3 BFG", mdl::MapFormat::Doom3_Valve, "TrenchBroom 2024.1");
 
-    CHECK(stream.str() == R"(// Game: Doom 3 BFG
+      CHECK(doom3Stream.str() == R"(// Game: Doom 3 BFG
 // Format: Doom3 (Valve)
 // Generator: TrenchBroom 2024.1
 )");
+    }
   }
 }
 

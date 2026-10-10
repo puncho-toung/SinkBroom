@@ -191,7 +191,6 @@ bool containsMessage(
   });
 }
 
-
 } // namespace
 
 TEST_CASE("WorldReader")

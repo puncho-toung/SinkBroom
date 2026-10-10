@@ -168,7 +168,7 @@ inline const GameInfo Doom3BFGGameInfo = detail::makeGameInfoFixture(
         .extensions = {".tga", ".png", ".jpg", ".dds"},
         .palette = "",
         .property = std::nullopt,
-        // TODO(02): add the .mtr keys (shaderExtensions, shaderImageSearchPaths)
+        // .mtr keys are not part of MaterialConfig yet (package 02 adds them)
         .shaderSearchPath = "materials",
         .excludes = {},
       },
@@ -177,7 +177,6 @@ inline const GameInfo Doom3BFGGameInfo = detail::makeGameInfoFixture(
         .defFilePaths = {"DOOM-3-tbtest.fgd"},
         .defaultColor = RgbaF{0.6f, 0.6f, 0.6f, 1.0f},
         .scaleExpression = std::nullopt,
-        .setDefaultProperties = false,
       },
     .faceAttribsConfig = {},
     .smartTags = {},
