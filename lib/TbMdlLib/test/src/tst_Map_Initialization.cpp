@@ -94,7 +94,7 @@ TEST_CASE("Map_Initialization")
       gameInfo.gameConfig.forceEmptyNewMap = false;
       gameInfo.gameConfig.path = getFixtureRoot() / "test/mdl/Map/GameConfig.cfg";
       gameInfo.gameConfig.fileFormats = std::vector<MapFormatConfig>{
-        {"Valve", {"initialMap.map"}},
+        {.format = "Valve", .initialMap = "initialMap.map"},
       };
 
       Map::createMap(
@@ -130,7 +130,7 @@ TEST_CASE("Map_Initialization")
       auto gameInfo = DefaultGameInfo;
       gameInfo.gameConfig.forceEmptyNewMap = false;
       gameInfo.gameConfig.fileFormats = std::vector<MapFormatConfig>{
-        {"Valve", {"initialMap.map"}},
+        {.format = "Valve", .initialMap = "initialMap.map"},
       };
 
       Map::createMap(
@@ -184,7 +184,7 @@ TEST_CASE("Map_Initialization")
       gameInfo.gameConfig.forceEmptyNewMap = false;
       gameInfo.gameConfig.materialConfig.property = "wad";
       gameInfo.gameConfig.fileFormats = std::vector<MapFormatConfig>{
-        {"Valve", {"initialMap.map"}},
+        {.format = "Valve", .initialMap = "initialMap.map"},
       };
 
       Map::createMap(
@@ -209,7 +209,8 @@ TEST_CASE("Map_Initialization")
     {
       auto gameInfo = DefaultGameInfo;
       gameInfo.gameConfig.forceEmptyNewMap = false;
-      gameInfo.gameConfig.fileFormats = std::vector<MapFormatConfig>{{"Standard", {}}};
+      gameInfo.gameConfig.fileFormats =
+        std::vector<MapFormatConfig>{{.format = "Standard", .initialMap = {}}};
 
       Map::createMap(
         environmentConfig,
@@ -326,7 +327,7 @@ TEST_CASE("Map_Initialization")
 
       auto gameInfo = DefaultGameInfo;
       gameInfo.gameConfig.fileFormats = std::vector<MapFormatConfig>{
-        {"Valve", {}},
+        {.format = "Valve", .initialMap = {}},
       };
 
       Map::loadMap(
@@ -351,9 +352,9 @@ TEST_CASE("Map_Initialization")
     {
       auto gameInfo = DefaultGameInfo;
       gameInfo.gameConfig.fileFormats = std::vector<MapFormatConfig>{
-        {"Valve", {}},
-        {"Standard", {}},
-        {"Quake3", {}},
+        {.format = "Valve", .initialMap = {}},
+        {.format = "Standard", .initialMap = {}},
+        {.format = "Quake3", .initialMap = {}},
       };
 
       SECTION("Detect Valve Format Map")
@@ -468,7 +469,7 @@ TEST_CASE("Map_Initialization")
       auto gameInfo = DefaultGameInfo;
       gameInfo.gameConfig.path = env.dir() / "GameConfig.cfg";
       gameInfo.gameConfig.fileFormats = std::vector<MapFormatConfig>{
-        {"Valve", {}},
+        {.format = "Valve", .initialMap = {}},
       };
       gameInfo.gameConfig.entityConfig.defFilePaths.emplace_back("Quake.fgd");
 
@@ -496,7 +497,7 @@ TEST_CASE("Map_Initialization")
   {
     auto gameInfo = DefaultGameInfo;
     gameInfo.gameConfig.fileFormats = std::vector<MapFormatConfig>{
-      {"Valve", {}},
+      {.format = "Valve", .initialMap = {}},
     };
 
     const auto worldBounds = vm::bbox3d{8192.0};

@@ -130,7 +130,8 @@ TEST_CASE("Map_World")
 
         auto fixtureConfig = MapFixtureConfig{};
         fixtureConfig.environmentConfig.appFolderPath = "/some/path";
-        fixtureConfig.gameInfo.gameConfig.fileFormats = {{"Valve", ""}};
+        fixtureConfig.gameInfo.gameConfig.fileFormats = {
+          {.format = "Valve", .initialMap = ""}};
 
         auto& map = fixture.load(path, fixtureConfig);
         map.setGamePath(".");

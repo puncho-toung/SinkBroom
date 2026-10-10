@@ -193,7 +193,8 @@ TEST_CASE("Map_Persistence")
     const auto path = env.dir() / filename;
 
     auto fixtureConfig = MapFixtureConfig{};
-    fixtureConfig.gameInfo.gameConfig.fileFormats = {{"Valve", ""}};
+    fixtureConfig.gameInfo.gameConfig.fileFormats = {
+      {.format = "Valve", .initialMap = ""}};
 
     auto fixture = MapFixture{};
     auto& map = fixture.load(path, fixtureConfig);
