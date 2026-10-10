@@ -1,0 +1,4 @@
+# These files mirror the engine's CRLF exports (idFile::Printf); never normalise their line endings.
+*.obj -text
+*.mtl -text
+*.fgd -text
