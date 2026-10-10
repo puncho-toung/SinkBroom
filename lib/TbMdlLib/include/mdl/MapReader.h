@@ -96,6 +96,7 @@ public: // only public so that helper methods can see these declarations
     size_t columnCount;
     std::vector<BezierPatch::Point> controlPoints;
     std::string materialName;
+    std::optional<PatchSubdivisions> explicitSubdivisions;
     FileLocation startLocation;
     std::optional<FileLocation> endLocation;
     std::optional<size_t> parentIndex;
@@ -181,6 +182,7 @@ protected: // implement MapParser interface
     size_t columnCount,
     std::vector<vm::vec<double, 5>> controlPoints,
     std::string materialName,
+    std::optional<PatchSubdivisions> explicitSubdivisions,
     ParserStatus& status) override;
 
 private: // helper methods

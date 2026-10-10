@@ -204,6 +204,7 @@ void MapReader::onPatch(
   const size_t columnCount,
   std::vector<vm::vec<double, 5>> controlPoints,
   std::string materialName,
+  std::optional<PatchSubdivisions> explicitSubdivisions,
   ParserStatus&)
 {
   m_objectInfos.emplace_back(PatchInfo{
@@ -211,6 +212,7 @@ void MapReader::onPatch(
     columnCount,
     std::move(controlPoints),
     std::move(materialName),
+    std::move(explicitSubdivisions),
     startLocation,
     endLocation,
     m_currentEntityInfo});
@@ -626,24 +628,31 @@ CreateNodeResult createBrushNode(
 }
 
 /**
- * Creates a patch node from the given patch info.
+ * Creates a patch node from the given patch info. Returns an error if the patch could not
+ * be created.
  */
 CreateNodeResult createPatchNode(MapReader::PatchInfo patchInfo)
 {
-  auto patchNode = std::make_unique<PatchNode>(BezierPatch{
-    patchInfo.rowCount,
-    patchInfo.columnCount,
-    std::move(patchInfo.controlPoints),
-    std::move(patchInfo.materialName)});
-  const auto [startLine, lineCount] = getFilePosition(patchInfo);
-  patchNode->setFilePosition(startLine, lineCount);
+  return BezierPatch::create(
+           patchInfo.rowCount,
+           patchInfo.columnCount,
+           std::move(patchInfo.controlPoints),
+           std::move(patchInfo.materialName),
+           std::move(patchInfo.explicitSubdivisions))
+         | kdl::transform([&](auto patch) {
+             auto patchNode = std::make_unique<PatchNode>(std::move(patch));
+             const auto [startLine, lineCount] = getFilePosition(patchInfo);
+             patchNode->setFilePosition(startLine, lineCount);
 
-  auto parentInfo = patchInfo.parentIndex ? ParentInfo{*patchInfo.parentIndex}
-                                          : std::optional<ParentInfo>{};
-
-  return NodeInfo{
-    std::move(patchNode), std::move(parentInfo), {} // issues
-  };
+             auto parentInfo = patchInfo.parentIndex ? ParentInfo{*patchInfo.parentIndex}
+                                                     : std::optional<ParentInfo>{};
+             return NodeInfo{
+               std::move(patchNode), std::move(parentInfo), {} // issues
+             };
+           })
+         | kdl::or_else([&](auto e) {
+             return CreateNodeResult{NodeError{patchInfo.startLocation, e.msg}};
+           });
 }
 
 /**

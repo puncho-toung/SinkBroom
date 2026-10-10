@@ -741,6 +741,7 @@ void StandardMapParser::parsePatch(
     columnCount,
     std::move(controlPoints),
     std::move(materialName),
+    std::nullopt,
     status);
 }
 

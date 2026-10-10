@@ -19,11 +19,13 @@
 
 #pragma once
 
+#include "mdl/BezierPatch.h"
 #include "mdl/MapFormat.h"
 
 #include "vm/vec.h"
 
 #include <cassert>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -82,6 +84,7 @@ protected: // subclassing interface for users of the parser
     size_t columnCount,
     std::vector<vm::vec<double, 5>> controlPoints,
     std::string materialName,
+    std::optional<PatchSubdivisions> explicitSubdivisions,
     ParserStatus& status) = 0;
 };
 

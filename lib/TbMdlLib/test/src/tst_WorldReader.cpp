@@ -19,6 +19,7 @@
 
 #include "TestEnvironment.h"
 #include "TestParserStatus.h"
+#include "base/FileLocation.h"
 #include "fs/DiskIO.h"
 #include "mdl/BezierPatch.h"
 #include "mdl/BrushFace.h"
@@ -42,7 +43,9 @@
 #include <fmt/format.h>
 
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -51,6 +54,46 @@
 namespace tb::mdl
 {
 using namespace Catch::Matchers;
+
+namespace
+{
+
+/**
+ * Passes each patch on with one control point row less than the parser read, like a
+ * parser that does not validate patch sizes would.
+ */
+class TruncatingPatchWorldReader : public WorldReader
+{
+public:
+  using WorldReader::WorldReader;
+
+private:
+  void onPatch(
+    const FileLocation& startLocation,
+    const FileLocation& endLocation,
+    const MapFormat targetMapFormat,
+    const size_t rowCount,
+    const size_t columnCount,
+    std::vector<vm::vec<double, 5>> controlPoints,
+    std::string materialName,
+    std::optional<PatchSubdivisions> explicitSubdivisions,
+    ParserStatus& status) override
+  {
+    controlPoints.resize((rowCount - 1) * columnCount);
+    WorldReader::onPatch(
+      startLocation,
+      endLocation,
+      targetMapFormat,
+      rowCount - 1,
+      columnCount,
+      std::move(controlPoints),
+      std::move(materialName),
+      std::move(explicitSubdivisions),
+      status);
+  }
+};
+
+} // namespace
 
 TEST_CASE("WorldReader")
 {
@@ -1314,6 +1357,49 @@ common/caulk
         {192, 0, 4, 0.8, -0.25},
         {192, 64, 4, 0.8, -0.5},
       }));
+  }
+
+  SECTION("Invalid patch size is reported and skipped")
+  {
+    // node creation must not trust the parser to validate patch sizes (043)
+    const auto data = R"(
+{
+"classname" "worldspawn"
+{
+patchDef2
+{
+common/caulk
+( 3 3 0 0 0 )
+(
+( ( 0 0 0 0 0 ) ( 0 64 0 0 1 ) ( 0 128 0 0 2 ) )
+( ( 64 0 0 1 0 ) ( 64 64 0 1 1 ) ( 64 128 0 1 2 ) )
+( ( 128 0 0 2 0 ) ( 128 64 0 2 1 ) ( 128 128 0 2 2 ) )
+)
+}
+}
+{
+( 64 64 64 ) ( 64 -64 64 ) ( -64 64 64 ) common/caulk 0 0 0 1 1 134217728 0 0
+( 64 64 64 ) ( -64 64 64 ) ( 64 64 -64 ) common/caulk 0 0 0 1 1 134217728 0 0
+( 64 64 64 ) ( 64 64 -64 ) ( 64 -64 64 ) common/caulk 0 0 0 1 1 134217728 0 0
+( -64 -64 -64 ) ( 64 -64 -64 ) ( -64 64 -64 ) common/caulk 0 0 0 1 1 134217728 0 0
+( -64 -64 -64 ) ( -64 -64 64 ) ( 64 -64 -64 ) common/caulk 0 0 0 1 1 134217728 0 0
+( -64 -64 -64 ) ( -64 64 -64 ) ( -64 -64 64 ) common/caulk 0 0 0 1 1 134217728 0 0
+}
+})";
+
+    auto reader = TruncatingPatchWorldReader{data, mdl::MapFormat::Quake3_Legacy, {}};
+
+    auto worldResult = reader.read(worldBounds, status, taskManager);
+    REQUIRE(worldResult);
+
+    CHECK(
+      status.messages(LogLevel::Error)
+      == std::vector<std::string>{
+        "At line 4, column 1: Patch must have at least 3x3 control points, but has 2x3"});
+
+    const auto& world = worldResult.value();
+    REQUIRE(world->defaultLayer()->childCount() == 1u);
+    CHECK(dynamic_cast<BrushNode*>(world->defaultLayer()->children().front()) != nullptr);
   }
 
   SECTION("Multiple classnames")
