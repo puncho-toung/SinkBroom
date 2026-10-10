@@ -1,0 +1,6 @@
+newmtl textures/tb_test/wall
+	map_Kd //..\..\..\textures\tb_test\wall_d.tga
+
+newmtl textures/tb_test/grate
+	map_Kd //..\..\..\textures\tb_test\grate_d.tga
+

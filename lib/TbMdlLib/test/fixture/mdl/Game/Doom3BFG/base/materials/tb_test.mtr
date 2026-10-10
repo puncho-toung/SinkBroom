@@ -1,0 +1,71 @@
+// Synthetic Doom 3 BFG material file for the TrenchBroom test suite.
+// Written by hand for these tests; it is not derived from any id Software asset.
+// Every image referenced below lives in textures/tb_test/ next to this file,
+// except the bump map inputs of tb_test/bumped, which are missing on purpose.
+
+/*
+	A table decl shares the file with the materials.
+	Material parsers must skip it.
+*/
+table tb_test_pulse { { 0, 0.5, 1, 0.5 } }
+
+// editor image and diffuse map: the editor image is the preview
+textures/tb_test/wall
+{
+	qer_editorimage	textures/tb_test/wall_ed
+	diffusemap		textures/tb_test/wall_d
+}
+
+// diffuse map only: the preview falls back to the diffuse map
+textures/tb_test/wall_plain
+{
+	diffusemap		textures/tb_test/wall_d
+}
+
+// alpha tested stage, rendered from both sides
+textures/tb_test/grate
+{
+	twoSided
+	{
+		blend		diffusemap
+		map			textures/tb_test/grate_d
+		alphaTest	0.5
+	}
+}
+
+// translucent: blended, no lighting
+textures/tb_test/glass
+{
+	translucent
+	{
+		blend		blend
+		map			textures/tb_test/glass_d
+	}
+}
+
+// nested parentheses in an image program
+textures/tb_test/bumped
+{
+	qer_editorimage	textures/tb_test/wall_ed
+	diffusemap		textures/tb_test/wall_d
+	bumpmap			addnormals( textures/tb_test/bumped_local, heightmap( textures/tb_test/bumped_h, 4 ) )
+	{
+		blend		add
+		map			textures/tb_test/wall_d
+		rgb			tb_test_pulse[ time ]
+	}
+}
+
+// the only image is a DDS file
+textures/tb_test/dds
+{
+	diffusemap		textures/tb_test/dds_d
+}
+
+// surface parameter: not solid (Doom 3 writes surface parameters as bare keywords)
+textures/tb_test/nonsolid
+{
+	qer_editorimage	textures/tb_test/wall_ed
+	nonsolid
+	diffusemap		textures/tb_test/wall_d
+}
