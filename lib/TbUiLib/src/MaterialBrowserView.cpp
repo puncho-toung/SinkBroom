@@ -107,6 +107,15 @@ void MaterialBrowserView::setHideUnused(const bool hideUnused)
   }
 }
 
+void MaterialBrowserView::setHideMissing(const bool hideMissing)
+{
+  if (hideMissing != m_hideMissing)
+  {
+    m_hideMissing = hideMissing;
+    reloadMaterials();
+  }
+}
+
 void MaterialBrowserView::setFilterText(const std::string& filterText)
 {
   if (filterText != m_filterText)
@@ -261,6 +270,11 @@ std::vector<const gl::Material*> MaterialBrowserView::filterMaterials(
   {
     std::erase_if(
       materials, [](const auto* material) { return material->usageCount() == 0; });
+  }
+  if (m_hideMissing)
+  {
+    std::erase_if(
+      materials, [](const auto* material) { return material->previewImageMissing(); });
   }
   if (!m_filterText.empty())
   {
@@ -467,6 +481,17 @@ QString MaterialBrowserView::tooltip(const Cell& cell)
   else
   {
     ss << "Loading...";
+  }
+
+  if (material.previewImageMissing())
+  {
+    ss << "\n" << tr("no preview image found");
+  }
+
+  if (const auto& surfaceParms = material.surfaceParms(); !surfaceParms.empty())
+  {
+    // the set is sorted
+    ss << "\n" << QString::fromStdString(kdl::str_join(surfaceParms, ", "));
   }
   return tooltip;
 }

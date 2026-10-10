@@ -981,9 +981,9 @@ There are two aspects to working with materials in a level editor. [Material man
 
 ### The Material Browser {#material_browser}
 
-![The material browser](images/TextureBrowser.png) The material browser is part of the face inspector and is used for two purposes: Changing the material for the currently selected faces and selecting the _current material_. In the material browser, materials are displayed with a maximum width of 64 pixels - wider materials are proportionally scaled down. The name of every material is displayed below the image. materials that are currently in use have a yellow border, while the current material has a red border. If you hover over a material image with the mouse, you will see a tooltip with the name and the dimensions of the corresponding texture.
+![The material browser](images/TextureBrowser.png) The material browser is part of the face inspector and is used for two purposes: Changing the material for the currently selected faces and selecting the _current material_. In the material browser, materials are displayed with a maximum width of 64 pixels - wider materials are proportionally scaled down. The name of every material is displayed below the image. materials that are currently in use have a yellow border, while the current material has a red border. If you hover over a material image with the mouse, you will see a tooltip with the name and the dimensions of the corresponding texture. For materials defined in [material scripts](#game_configuration_files_materials), the tooltip also lists the material's surface parameters and says when no preview image was found for the material.
 
-Below the material browser, there are the same controls as in the [entity browser](#entity_browser): A dropdown for changing the sort order (name or usage count), a button to group by [material collection](#material_management), a button to filter by usage, and a text field to filter by name. Multiple words (space delimited) can be used to show only materials that contain all of the words. If the size of the images is too small or too large on your monitor, you can change it in the [preferences](#view_layout_and_rendering).
+Below the material browser, there are the same controls as in the [entity browser](#entity_browser): A dropdown for changing the sort order (name or usage count), a button to group by [material collection](#material_management), a button to filter by usage, and a text field to filter by name. Multiple words (space delimited) can be used to show only materials that contain all of the words. The "Missing" button hides the materials for which no preview image was found, which are otherwise shown with a placeholder image. If the size of the images is too small or too large on your monitor, you can change it in the [preferences](#view_layout_and_rendering).
 
 To select all faces having a certain material, right click that material in the material browser and click "Select Faces" from the popup menu.
 
@@ -2838,7 +2838,7 @@ idpak        Id pak file
 dkpak        Daikatana pak file
 zip          Zip file, often uses other extensions such as pk3
 
-#### Material Configurations
+#### Material Configurations {#game_configuration_files_materials}
 
 Every material configuration consists of a root search directory, and optionally a list of included file extensions, a palette path, an attribute for wad file lists and a list of exclusion patterns.
 
@@ -2884,6 +2884,8 @@ The optional `shaderImageSearchPaths` key lists further folders, relative to the
     },
 
 The `excludes` patterns in this example hide the loose component images of a Doom 3 material, such as its diffuse, specular and normal maps, which would otherwise each appear as a material of its own. They do not affect the materials defined in the scripts.
+
+For Doom 3 materials, TrenchBroom shows the image the engine uses in its editors: the `qer_editorimage` if that file exists, else the image of the first diffuse stage, else the image of the first stage. Since Doom 3 scales the texture coordinates of a face by the size of this image, the preview must have the same size as the engine's image. Materials for which no image is found are shown with a placeholder image; the "Missing" button in the [material browser](#material_browser) hides them.
 
 #### Entity Configuration {#game_configuration_files_entities}
 

@@ -53,6 +53,7 @@ private:
   QComboBox* m_sortOrderChoice = nullptr;
   QPushButton* m_groupButton = nullptr;
   QPushButton* m_usedButton = nullptr;
+  QPushButton* m_missingButton = nullptr;
   QLineEdit* m_filterBox = nullptr;
   QScrollBar* m_scrollBar = nullptr;
   MaterialBrowserView* m_view = nullptr;
@@ -70,6 +71,7 @@ public:
   void setSortOrder(MaterialSortOrder sortOrder);
   void setGroup(bool group);
   void setHideUnused(bool hideUnused);
+  void setHideMissing(bool hideMissing);
   void setFilterText(const std::string& filterText);
 signals:
   void materialSelected(const gl::Material* material);

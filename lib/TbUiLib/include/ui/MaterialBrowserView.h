@@ -57,6 +57,7 @@ private:
   MapDocument& m_document;
   bool m_group = false;
   bool m_hideUnused = false;
+  bool m_hideMissing = false;
   MaterialSortOrder m_sortOrder = MaterialSortOrder::Name;
   std::string m_filterText;
 
@@ -72,6 +73,7 @@ public:
   void setSortOrder(MaterialSortOrder sortOrder);
   void setGroup(bool group);
   void setHideUnused(bool hideUnused);
+  void setHideMissing(bool hideMissing);
   void setFilterText(const std::string& filterText);
 
   const gl::Material* selectedMaterial() const;
