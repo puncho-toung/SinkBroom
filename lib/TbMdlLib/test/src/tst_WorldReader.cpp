@@ -42,13 +42,17 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
 namespace tb::mdl
@@ -92,6 +96,101 @@ private:
       status);
   }
 };
+
+/**
+ * A patch control point whose UV coordinates are its X and Y coordinates divided by 64.
+ */
+BezierPatch::Point gridPoint(const double x, const double y)
+{
+  return {x, y, 0.0, x / 64.0, y / 64.0};
+}
+
+/**
+ * The control points of a patch with one row per element of xs and one column per element
+ * of ys, in row-major order.
+ */
+std::vector<BezierPatch::Point> gridPoints(
+  const std::vector<double>& xs, const std::vector<double>& ys)
+{
+  auto result = std::vector<BezierPatch::Point>{};
+  for (const auto x : xs)
+  {
+    for (const auto y : ys)
+    {
+      result.push_back(gridPoint(x, y));
+    }
+  }
+  return result;
+}
+
+/**
+ * Formats a patch primitive the way RBDOOM-3-BFG's idMapPatch::Write does: one line per
+ * element of xs, holding one control point per element of ys. The header contains the
+ * numbers between the parentheses, so it determines the declared size.
+ */
+std::string doom3Patch(
+  const std::string_view keyword,
+  const std::string_view header,
+  const std::vector<double>& xs,
+  const std::vector<double>& ys,
+  const std::string_view material = R"("textures/tb_test/wall")")
+{
+  auto result =
+    fmt::format("{{\n {}\n {{\n  {}\n  ( {} )\n  (\n", keyword, material, header);
+  for (const auto x : xs)
+  {
+    result += "   ( ";
+    for (const auto y : ys)
+    {
+      const auto p = gridPoint(x, y);
+      result += fmt::format(" ( {} {} {} {} {} )", p[0], p[1], p[2], p[3], p[4]);
+    }
+    result += " )\n";
+  }
+  result += "  )\n }\n}\n";
+  return result;
+}
+
+/**
+ * A 128 unit cube in the face format RBDOOM-3-BFG writes for Valve 220 maps, with the
+ * given text after each face.
+ */
+std::string doom3Cube(const std::string_view faceTail = " 0 0 0")
+{
+  return fmt::format(
+    R"({{
+( -64 -64 -16 ) ( -64 -63 -16 ) ( -64 -64 -15 ) tb_test/wall [ 0 -1 0 8 ] [ 0 0 -1 4 ] 0 0.5 0.5{0}
+( -64 -64 -16 ) ( -64 -64 -15 ) ( -63 -64 -16 ) tb_test/wall [ 1 0 0 8 ] [ 0 0 -1 4 ] 0 0.5 0.5{0}
+( -64 -64 -16 ) ( -63 -64 -16 ) ( -64 -63 -16 ) tb_test/wall [ -1 0 0 8 ] [ 0 -1 0 4 ] 0 0.5 0.5{0}
+( 64 64 16 ) ( 64 65 16 ) ( 65 64 16 ) tb_test/wall [ 1 0 0 8 ] [ 0 -1 0 4 ] 0 0.5 0.5{0}
+( 64 64 16 ) ( 65 64 16 ) ( 64 64 17 ) tb_test/wall [ -1 0 0 8 ] [ 0 0 -1 4 ] 0 0.5 0.5{0}
+( 64 64 16 ) ( 64 64 17 ) ( 64 65 16 ) tb_test/wall [ 0 1 0 8 ] [ 0 0 -1 4 ] 0 0.5 0.5{0}
+}}
+)",
+    faceTail);
+}
+
+std::string doom3Worldspawn(const std::string_view primitives)
+{
+  return fmt::format(
+    R"(// Game: Doom 3 BFG
+// Format: Doom3 (Valve)
+// entity 0
+{{
+"classname" "worldspawn"
+{}}}
+)",
+    primitives);
+}
+
+bool containsMessage(
+  const TestParserStatus& status, const LogLevel level, const std::string_view str)
+{
+  return std::ranges::any_of(status.messages(level), [&](const auto& message) {
+    return message.find(str) != std::string::npos;
+  });
+}
+
 
 } // namespace
 
@@ -607,6 +706,483 @@ TEST_CASE("WorldReader")
     CHECK(defaultLayer->childCount() == 1u);
     auto* brush = static_cast<mdl::BrushNode*>(defaultLayer->children().front());
     checkBrushUvCoordSystem(brush, true);
+  }
+
+  SECTION("Doom3 (Valve) brush format")
+  {
+    // RBDOOM-3-BFG writes "0 0 0" after every face and ignores up to three tokens there
+    const auto faceTail =
+      GENERATE(as<std::string>{}, " 0 0 0", "", " 0 0", " 0", " 1 2 3");
+    CAPTURE(faceTail);
+
+    const auto data = doom3Worldspawn(doom3Cube(faceTail));
+
+    auto reader = WorldReader{data, MapFormat::Doom3_Valve, {}};
+
+    auto worldResult = reader.read(worldBounds, status, taskManager);
+    REQUIRE(worldResult);
+    CHECK(status.countStatus(LogLevel::Warn) == 0u);
+    CHECK(status.countStatus(LogLevel::Error) == 0u);
+
+    const auto& world = worldResult.value();
+    REQUIRE(world->defaultLayer()->childCount() == 1u);
+
+    auto* brushNode = dynamic_cast<BrushNode*>(world->defaultLayer()->children().front());
+    REQUIRE(brushNode != nullptr);
+    checkBrushUvCoordSystem(brushNode, true);
+
+    const auto& brush = brushNode->brush();
+    CHECK(brush.bounds() == vm::bbox3d{{-64, -64, -16}, {64, 64, 16}});
+
+    for (const auto& face : brush.faces())
+    {
+      CHECK(face.materialName() == "tb_test/wall");
+      CHECK(face.uvAttributes().offset == vm::vec2f{8, 4});
+      CHECK(face.uvAttributes().scale == vm::vec2f{0.5f, 0.5f});
+      CHECK(face.surfaceAttributes().empty());
+    }
+
+    const auto faceIndex = brush.findFace(vm::vec3d{0, 0, 1});
+    REQUIRE(faceIndex);
+    CHECK(brush.face(*faceIndex).uAxis() == vm::vec3d{1, 0, 0});
+    CHECK(brush.face(*faceIndex).vAxis() == vm::vec3d{0, -1, 0});
+  }
+
+  SECTION("Doom3 (Valve) brush with four trailing numbers")
+  {
+    const auto data = doom3Worldspawn(doom3Cube(" 0 0 0 0"));
+
+    auto reader = WorldReader{data, MapFormat::Doom3_Valve, {}};
+    CHECK(reader.read(worldBounds, status, taskManager).is_error());
+  }
+
+  SECTION("Doom3 (Valve) origin brush entity")
+  {
+    // RBDOOM-3-BFG writes the plane points of brush entities in world space
+    const auto data = R"(// entity 0
+{
+"classname" "worldspawn"
+}
+// entity 1
+{
+"classname" "func_door"
+"name" "func_door_1"
+"model" "func_door_1"
+"origin" "512 512 0"
+// brush 0
+{
+( 448 448 -16 ) ( 448 449 -16 ) ( 448 448 -15 ) tb_test/wall [ 0 -1 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+( 448 448 -16 ) ( 448 448 -15 ) ( 449 448 -16 ) tb_test/wall [ 1 0 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+( 448 448 -16 ) ( 449 448 -16 ) ( 448 449 -16 ) tb_test/wall [ -1 0 0 0 ] [ 0 -1 0 0 ] 0 0.5 0.5 0 0 0
+( 576 576 16 ) ( 576 577 16 ) ( 577 576 16 ) tb_test/wall [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 0.5 0.5 0 0 0
+( 576 576 16 ) ( 577 576 16 ) ( 576 576 17 ) tb_test/wall [ -1 0 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+( 576 576 16 ) ( 576 576 17 ) ( 576 577 16 ) tb_test/wall [ 0 1 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+}
+}
+)";
+
+    auto reader = WorldReader{data, MapFormat::Doom3_Valve, {}};
+
+    auto worldResult = reader.read(worldBounds, status, taskManager);
+    REQUIRE(worldResult);
+
+    const auto& world = worldResult.value();
+    REQUIRE(world->defaultLayer()->childCount() == 1u);
+
+    const auto* entityNode =
+      dynamic_cast<EntityNode*>(world->defaultLayer()->children().front());
+    REQUIRE(entityNode != nullptr);
+    REQUIRE(entityNode->childCount() == 1u);
+
+    const auto* brushNode = dynamic_cast<BrushNode*>(entityNode->children().front());
+    REQUIRE(brushNode != nullptr);
+    CHECK(brushNode->brush().bounds() == vm::bbox3d{{448, 448, -16}, {576, 576, 16}});
+  }
+
+  SECTION("Doom3 (Valve) patchDef2")
+  {
+    const auto data = doom3Worldspawn(
+      doom3Patch("patchDef2", "3 5 0 0 0", {-64, 0, 64}, {-128, -64, 0, 64, 128}));
+
+    auto reader = WorldReader{data, MapFormat::Doom3_Valve, {}};
+
+    auto worldResult = reader.read(worldBounds, status, taskManager);
+    REQUIRE(worldResult);
+    CHECK(status.countStatus(LogLevel::Warn) == 0u);
+    CHECK(status.countStatus(LogLevel::Error) == 0u);
+
+    const auto& world = worldResult.value();
+    REQUIRE(world->defaultLayer()->childCount() == 1u);
+
+    const auto* patchNode =
+      dynamic_cast<PatchNode*>(world->defaultLayer()->children().front());
+    REQUIRE(patchNode != nullptr);
+
+    // the first header number is the number of lines, the second the points per line
+    const auto& patch = patchNode->patch();
+    CHECK(patch.materialName() == "tb_test/wall");
+    CHECK(patch.pointRowCount() == 3u);
+    CHECK(patch.pointColumnCount() == 5u);
+    CHECK(patch.explicitSubdivisions() == std::nullopt);
+    CHECK(patch.controlPoints() == gridPoints({-64, 0, 64}, {-128, -64, 0, 64, 128}));
+  }
+
+  SECTION("Doom3 (Valve) patchDef3")
+  {
+    const auto data = doom3Worldspawn(
+      doom3Patch("patchDef3", "3 5 4 2 0 0 0", {-64, 0, 64}, {-128, -64, 0, 64, 128}));
+
+    auto reader = WorldReader{data, MapFormat::Doom3_Valve, {}};
+
+    auto worldResult = reader.read(worldBounds, status, taskManager);
+    REQUIRE(worldResult);
+    CHECK(status.countStatus(LogLevel::Warn) == 0u);
+    CHECK(status.countStatus(LogLevel::Error) == 0u);
+
+    const auto& world = worldResult.value();
+    REQUIRE(world->defaultLayer()->childCount() == 1u);
+
+    const auto* patchNode =
+      dynamic_cast<PatchNode*>(world->defaultLayer()->children().front());
+    REQUIRE(patchNode != nullptr);
+
+    const auto& patch = patchNode->patch();
+    CHECK(patch.materialName() == "tb_test/wall");
+    CHECK(patch.pointRowCount() == 3u);
+    CHECK(patch.pointColumnCount() == 5u);
+    CHECK(patch.explicitSubdivisions() == PatchSubdivisions{4, 2});
+    CHECK(patch.controlPoints() == gridPoints({-64, 0, 64}, {-128, -64, 0, 64, 128}));
+  }
+
+  SECTION("Doom3 (Valve) patchDef3 with invalid subdivisions")
+  {
+    const auto header =
+      GENERATE(as<std::string>{}, "3 3 0 2 0 0 0", "3 3 4 0 0 0 0", "3 3 -1 2 0 0 0");
+    CAPTURE(header);
+
+    const auto data =
+      doom3Worldspawn(doom3Patch("patchDef3", header, {0, 64, 128}, {0, 64, 128}));
+
+    auto reader = WorldReader{data, MapFormat::Doom3_Valve, {}};
+
+    auto worldResult = reader.read(worldBounds, status, taskManager);
+    REQUIRE(worldResult);
+    CHECK(containsMessage(status, LogLevel::Warn, "Ignoring invalid patch subdivisions"));
+
+    const auto& world = worldResult.value();
+    REQUIRE(world->defaultLayer()->childCount() == 1u);
+
+    const auto* patchNode =
+      dynamic_cast<PatchNode*>(world->defaultLayer()->children().front());
+    REQUIRE(patchNode != nullptr);
+    CHECK(patchNode->patch().explicitSubdivisions() == std::nullopt);
+  }
+
+  SECTION("Doom3 (Valve) patch materials")
+  {
+    using T = std::tuple<std::string, std::string>;
+
+    // RBDOOM-3-BFG writes patch materials quoted and with their textures/ prefix, and
+    // adds the prefix back when reading a patch material without it
+    // clang-format off
+    const auto [material, expectedMaterialName] = GENERATE(values<T>({
+    {R"("textures/tb_test/wall")",   "tb_test/wall"},
+    {R"("TEXTURES/tb_test/Wall")",   "tb_test/Wall"},
+    {R"(textures/tb_test/wall)",     "tb_test/wall"},
+    {R"("tb_test/wall")",            "tb_test/wall"},
+    {R"("models/tb_test/arrow")",    "models/tb_test/arrow"},
+    {R"("textures_x/tb_test/wall")", "textures_x/tb_test/wall"},
+    {R"("tb_test/textures/wall")",   "tb_test/textures/wall"},
+    {R"("tb_test/\"wall\"")",        R"(tb_test/"wall")"},
+    }));
+    // clang-format on
+
+    CAPTURE(material);
+
+    const auto data = doom3Worldspawn(
+      doom3Patch("patchDef2", "3 3 0 0 0", {0, 64, 128}, {0, 64, 128}, material));
+
+    auto reader = WorldReader{data, MapFormat::Doom3_Valve, {}};
+
+    auto worldResult = reader.read(worldBounds, status, taskManager);
+    REQUIRE(worldResult);
+
+    const auto& world = worldResult.value();
+    REQUIRE(world->defaultLayer()->childCount() == 1u);
+
+    const auto* patchNode =
+      dynamic_cast<PatchNode*>(world->defaultLayer()->children().front());
+    REQUIRE(patchNode != nullptr);
+    CHECK(patchNode->patch().materialName() == expectedMaterialName);
+  }
+
+  SECTION("Doom3 (Valve) patches with an even size")
+  {
+    using T = std::tuple<
+      std::string,
+      std::string,
+      std::vector<double>,
+      std::vector<double>,
+      std::vector<double>,
+      std::vector<double>,
+      std::optional<PatchSubdivisions>,
+      std::vector<std::string>>;
+
+    // RBDOOM-3-BFG renders the last two rows (or columns) of an adaptively subdivided
+    // patch with an even size as a flat strip, which a midpoint row (or column)
+    // reproduces. It ignores the last row (or column) of an explicitly subdivided patch.
+    // clang-format off
+    const auto [keyword, header, xs, ys, expectedXs, expectedYs, expectedSubdivisions, expectedWarnings] = GENERATE(values<T>({
+    {"patchDef2", "4 3 0 0 0",     {0, 64, 128, 192}, {0, 64, 128},      {0, 64, 128, 160, 192}, {0, 64, 128},           std::nullopt,
+      {"inserted a row of midpoints"}},
+    {"patchDef2", "3 4 0 0 0",     {0, 64, 128},      {0, 64, 128, 192}, {0, 64, 128},           {0, 64, 128, 160, 192}, std::nullopt,
+      {"inserted a column of midpoints"}},
+    {"patchDef2", "4 4 0 0 0",     {0, 64, 128, 192}, {0, 64, 128, 192}, {0, 64, 128, 160, 192}, {0, 64, 128, 160, 192}, std::nullopt,
+      {"inserted a row of midpoints", "inserted a column of midpoints"}},
+    {"patchDef3", "4 3 4 2 0 0 0", {0, 64, 128, 192}, {0, 64, 128},      {0, 64, 128},           {0, 64, 128},           PatchSubdivisions{4, 2},
+      {"removed the last row"}},
+    {"patchDef3", "3 4 4 2 0 0 0", {0, 64, 128},      {0, 64, 128, 192}, {0, 64, 128},           {0, 64, 128},           PatchSubdivisions{4, 2},
+      {"removed the last column"}},
+    {"patchDef3", "6 4 4 2 0 0 0", {0, 64, 128, 192, 256, 320}, {0, 64, 128, 192}, {0, 64, 128, 192, 256}, {0, 64, 128}, PatchSubdivisions{4, 2},
+      {"removed the last row", "removed the last column"}},
+    }));
+    // clang-format on
+
+    CAPTURE(keyword, header);
+
+    const auto data = doom3Worldspawn(doom3Patch(keyword, header, xs, ys));
+
+    auto reader = WorldReader{data, MapFormat::Doom3_Valve, {}};
+
+    auto worldResult = reader.read(worldBounds, status, taskManager);
+    REQUIRE(worldResult);
+    CHECK(status.countStatus(LogLevel::Error) == 0u);
+    CHECK(status.countStatus(LogLevel::Warn) == expectedWarnings.size());
+    for (const auto& expectedWarning : expectedWarnings)
+    {
+      CAPTURE(expectedWarning);
+      CHECK(containsMessage(status, LogLevel::Warn, expectedWarning));
+    }
+
+    const auto& world = worldResult.value();
+    REQUIRE(world->defaultLayer()->childCount() == 1u);
+
+    const auto* patchNode =
+      dynamic_cast<PatchNode*>(world->defaultLayer()->children().front());
+    REQUIRE(patchNode != nullptr);
+
+    const auto& patch = patchNode->patch();
+    CHECK(patch.pointRowCount() == expectedXs.size());
+    CHECK(patch.pointColumnCount() == expectedYs.size());
+    CHECK(patch.controlPoints() == gridPoints(expectedXs, expectedYs));
+    CHECK(patch.explicitSubdivisions() == expectedSubdivisions);
+  }
+
+  SECTION("Doom3 (Valve) patches smaller than 3x3")
+  {
+    using T =
+      std::tuple<std::string, std::string, std::vector<double>, std::vector<double>>;
+
+    // regression test for (043): the RBDOOM-3-BFG fork's editor crashed on these, and
+    // reading the declared size keeps the parser in sync so the rest of the file loads
+    // clang-format off
+    const auto [keyword, header, xs, ys] = GENERATE(values<T>({
+    {"patchDef2", "2 3 0 0 0",     {0, 64},      {0, 64, 128}},
+    {"patchDef2", "3 2 0 0 0",     {0, 64, 128}, {0, 64}},
+    {"patchDef2", "1 1 0 0 0",     {0},          {0}},
+    {"patchDef2", "3 0 0 0 0",     {0, 64, 128}, {}},
+    {"patchDef2", "0 0 0 0 0",     {},           {}},
+    {"patchDef2", "-1 3 0 0 0",    {},           {0, 64, 128}},
+    {"patchDef3", "2 3 4 2 0 0 0", {0, 64},      {0, 64, 128}},
+    {"patchDef3", "3 1 4 2 0 0 0", {0, 64, 128}, {0}},
+    }));
+    // clang-format on
+
+    CAPTURE(keyword, header);
+
+    const auto data = doom3Worldspawn(doom3Patch(keyword, header, xs, ys) + doom3Cube());
+
+    auto reader = WorldReader{data, MapFormat::Doom3_Valve, {}};
+
+    auto worldResult = reader.read(worldBounds, status, taskManager);
+    REQUIRE(worldResult);
+    CHECK(status.countStatus(LogLevel::Error) == 1u);
+    CHECK(containsMessage(
+      status,
+      LogLevel::Error,
+      "Skipping patch: patch must have at least 3x3 control points"));
+
+    const auto& world = worldResult.value();
+    REQUIRE(world->defaultLayer()->childCount() == 1u);
+    CHECK(dynamic_cast<BrushNode*>(world->defaultLayer()->children().front()) != nullptr);
+  }
+
+  SECTION("Doom3 (Valve) Version line")
+  {
+    const auto data = R"(Version 2
+// entity 0
+{
+"classname" "worldspawn"
+}
+)";
+
+    auto reader = WorldReader{data, MapFormat::Doom3_Valve, {}};
+
+    auto worldResult = reader.read(worldBounds, status, taskManager);
+    REQUIRE(worldResult.is_error());
+    CHECK_THAT(
+      std::visit([](const auto& e) { return e.msg; }, worldResult.error()),
+      ContainsSubstring("'Version 2'") && ContainsSubstring("convertMapToValve220"));
+  }
+
+  SECTION("Doom3 (Valve) meshDef")
+  {
+    const auto data = doom3Worldspawn(doom3Cube() + R"(// primitive 1
+{
+ meshDef
+ {
+  "textures/tb_test/wall"
+  ( 3 3 0 0 0 )
+  (
+   ( 0 0 0 0 0 0 0 1 )
+   ( 64 0 0 1 0 0 0 1 )
+   ( 0 64 0 0 1 0 0 1 )
+  )
+  (
+   ( 0 1 2 )
+  )
+ }
+}
+)");
+
+    auto reader = WorldReader{data, MapFormat::Doom3_Valve, {}};
+
+    auto worldResult = reader.read(worldBounds, status, taskManager);
+    REQUIRE(worldResult.is_error());
+    CHECK_THAT(
+      std::visit([](const auto& e) { return e.msg; }, worldResult.error()),
+      ContainsSubstring("meshDef"));
+  }
+
+  SECTION("Quake 3 formats are unaffected by reading a Doom3 (Valve) map")
+  {
+    // The RBDOOM-3-BFG fork's Doom 3 parser changed the parser's keywords for the rest of
+    // the session, routed Quake 3 patches through its own code and stripped their
+    // material paths. Read a Doom 3 map first, then check Quake 3 parsing in the same
+    // process.
+    {
+      const auto doom3Data = doom3Worldspawn(
+        doom3Cube() + doom3Patch("patchDef2", "3 3 0 0 0", {0, 64, 128}, {0, 64, 128})
+        + doom3Patch("patchDef3", "3 3 4 2 0 0 0", {0, 64, 128}, {0, 64, 128}));
+
+      auto doom3Status = TestParserStatus{};
+      auto doom3Reader = WorldReader{doom3Data, MapFormat::Doom3_Valve, {}};
+      auto doom3World = doom3Reader.read(worldBounds, doom3Status, taskManager);
+      REQUIRE(doom3World);
+      REQUIRE(doom3World.value()->defaultLayer()->childCount() == 3u);
+    }
+
+    SECTION("Brush primitive and legacy brush")
+    {
+      const auto data = R"(
+{
+"classname" "worldspawn"
+{
+brushDef
+{
+( -64 64 64 ) ( 64 -64 64 ) ( -64 -64 64 ) ( ( 0.015625 0 -0 ) ( -0 0.015625 0 ) ) common/caulk 0 0 0
+( -64 64 64 ) ( 64 64 -64 ) ( 64 64 64 ) ( ( 0.015625 0 0 ) ( 0 0.015625 0 ) ) common/caulk 0 0 0
+( 64 64 64 ) ( 64 -64 -64 ) ( 64 -64 64 ) ( ( 0.015625 0 -0 ) ( -0 0.015625 0 ) ) common/caulk 0 0 0
+( 64 64 -64 ) ( -64 -64 -64 ) ( 64 -64 -64 ) ( ( 0.015625 0 -0 ) ( -0 0.015625 0 ) ) common/caulk 0 0 0
+( 64 -64 -64 ) ( -64 -64 64 ) ( 64 -64 64 ) ( ( 0.015625 0 -0 ) ( -0 0.015625 0 ) ) common/caulk 0 0 0
+( -64 -64 64 ) ( -64 64 -64 ) ( -64 64 64 ) ( ( 0.015625 0 -0 ) ( -0 0.015625 0 ) ) common/caulk 0 0 0
+}
+}
+{
+( 64 64 64 ) ( 64 -64 64 ) ( -64 64 64 ) common/caulk 0 0 0 1 1 134217728 0 0
+( 64 64 64 ) ( -64 64 64 ) ( 64 64 -64 ) common/caulk 0 0 0 1 1 134217728 0 0
+( 64 64 64 ) ( 64 64 -64 ) ( 64 -64 64 ) common/caulk 0 0 0 1 1 134217728 0 0
+( -64 -64 -64 ) ( 64 -64 -64 ) ( -64 64 -64 ) common/caulk 0 0 0 1 1 134217728 0 0
+( -64 -64 -64 ) ( -64 -64 64 ) ( 64 -64 -64 ) common/caulk 0 0 0 1 1 134217728 0 0
+( -64 -64 -64 ) ( -64 64 -64 ) ( -64 -64 64 ) common/caulk 0 0 0 1 1 134217728 0 0
+}
+})";
+
+      auto reader = WorldReader{data, MapFormat::Quake3, {}};
+
+      auto worldResult = reader.read(worldBounds, status, taskManager);
+      REQUIRE(worldResult);
+      CHECK(status.countStatus(LogLevel::Error) == 0u);
+      CHECK(containsMessage(status, LogLevel::Warn, "Skipping brush primitive"));
+
+      const auto& world = worldResult.value();
+      CHECK(world->defaultLayer()->childCount() == 1u);
+    }
+
+    SECTION("Quake 3 patch materials are not stripped")
+    {
+      const auto format =
+        GENERATE(MapFormat::Quake3, MapFormat::Quake3_Valve, MapFormat::Quake3_Legacy);
+      CAPTURE(format);
+
+      const auto data = R"(
+{
+"classname" "worldspawn"
+{
+patchDef2
+{
+textures/common/caulk
+( 3 3 0 0 0 )
+(
+( ( 0 0 0 0 0 ) ( 0 64 0 0 1 ) ( 0 128 0 0 2 ) )
+( ( 64 0 0 1 0 ) ( 64 64 0 1 1 ) ( 64 128 0 1 2 ) )
+( ( 128 0 0 2 0 ) ( 128 64 0 2 1 ) ( 128 128 0 2 2 ) )
+)
+}
+}
+})";
+
+      auto reader = WorldReader{data, format, {}};
+
+      auto worldResult = reader.read(worldBounds, status, taskManager);
+      REQUIRE(worldResult);
+
+      const auto& world = worldResult.value();
+      REQUIRE(world->defaultLayer()->childCount() == 1u);
+
+      const auto* patchNode =
+        dynamic_cast<PatchNode*>(world->defaultLayer()->children().front());
+      REQUIRE(patchNode != nullptr);
+      CHECK(patchNode->patch().materialName() == "textures/common/caulk");
+      CHECK(patchNode->patch().explicitSubdivisions() == std::nullopt);
+    }
+
+    SECTION("Quake 3 formats still reject patchDef3")
+    {
+      const auto format =
+        GENERATE(MapFormat::Quake3, MapFormat::Quake3_Valve, MapFormat::Quake3_Legacy);
+      CAPTURE(format);
+
+      const auto data = R"(
+{
+"classname" "worldspawn"
+{
+patchDef3
+{
+common/caulk
+( 3 3 4 2 0 0 0 )
+(
+( ( 0 0 0 0 0 ) ( 0 64 0 0 1 ) ( 0 128 0 0 2 ) )
+( ( 64 0 0 1 0 ) ( 64 64 0 1 1 ) ( 64 128 0 1 2 ) )
+( ( 128 0 0 2 0 ) ( 128 64 0 2 1 ) ( 128 128 0 2 2 ) )
+)
+}
+}
+})";
+
+      auto reader = WorldReader{data, format, {}};
+      CHECK(reader.read(worldBounds, status, taskManager).is_error());
+    }
   }
 
   SECTION("Daikatana brush format")

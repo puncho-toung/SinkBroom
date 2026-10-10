@@ -28,10 +28,14 @@
 #include "kd/contracts.h"
 #include "kd/flat_set.h"
 #include "kd/k.h"
+#include "kd/string_compare.h"
 
 #include "vm/vec.h"
 
+#include <algorithm>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace tb::mdl
@@ -175,6 +179,9 @@ QuakeMapTokenizer::Token QuakeMapTokenizer::emitToken()
 
 const std::string StandardMapParser::BrushPrimitiveId = "brushDef";
 const std::string StandardMapParser::PatchId = "patchDef2";
+const std::string StandardMapParser::Patch3Id = "patchDef3";
+const std::string StandardMapParser::MeshId = "meshDef";
+const std::string StandardMapParser::VersionId = "Version";
 
 StandardMapParser::StandardMapParser(
   const std::string_view str,
@@ -194,6 +201,26 @@ Result<void> StandardMapParser::parseEntities(ParserStatus& status)
 {
   try
   {
+    if (m_sourceMapFormat == MapFormat::Doom3_Valve)
+    {
+      // RBDOOM-3-BFG writes a version line only for maps with brushDef3 brushes, which
+      // this format does not support; explain that instead of failing on the first token
+      if (auto token = m_tokenizer.peekToken();
+          token.hasType(QuakeMapToken::String) && token.data() == VersionId)
+      {
+        m_tokenizer.nextToken();
+        const auto versionToken = m_tokenizer.peekToken();
+        throw ParserException{
+          token.location(),
+          fmt::format(
+            "Doom 3 maps with a '{} {}' line use brushDef3 brushes, which are not "
+            "supported; convert the map with the engine command convertMapToValve220 "
+            "and open the converted map instead",
+            VersionId,
+            versionToken.data())};
+      }
+    }
+
     while (m_tokenizer.peekToken(QuakeMapToken::OBrace | QuakeMapToken::Eof)
              .hasType(QuakeMapToken::OBrace))
     {
@@ -367,6 +394,30 @@ void StandardMapParser::parseObject(ParserStatus& status)
       parseBrush(status, startLocation, false);
     }
   }
+  else if (m_sourceMapFormat == MapFormat::Doom3_Valve)
+  {
+    // We expect either a patch or a regular brush.
+    token = m_tokenizer.peekToken(QuakeMapToken::String | QuakeMapToken::OParenthesis);
+    if (token.hasType(QuakeMapToken::String))
+    {
+      expect({PatchId, Patch3Id, MeshId}, token);
+      if (token.data() == MeshId)
+      {
+        throw ParserException{
+          token.location(),
+          fmt::format(
+            "{} primitives are not supported in {} maps yet; skipping them would delete "
+            "them when the map is saved",
+            MeshId,
+            formatName(m_sourceMapFormat))};
+      }
+      parseDoom3Patch(status, startLocation);
+    }
+    else
+    {
+      parseBrush(status, startLocation, false);
+    }
+  }
   else
   {
     token = m_tokenizer.peekToken(QuakeMapToken::OParenthesis);
@@ -454,8 +505,10 @@ void StandardMapParser::parseFace(ParserStatus& status, const bool primitive)
     parseDaikatanaFace(status);
     break;
   case MapFormat::Valve:
-  case MapFormat::Doom3_Valve:
     parseValveFace(status);
+    break;
+  case MapFormat::Doom3_Valve:
+    parseDoom3ValveFace(status);
     break;
   case MapFormat::Quake3:
     if (primitive)
@@ -669,6 +722,39 @@ void StandardMapParser::parsePrimitiveFace(ParserStatus& status)
   // status);
 }
 
+void StandardMapParser::parseDoom3ValveFace(ParserStatus& status)
+{
+  const auto location = m_tokenizer.location();
+
+  const auto [p1, p2, p3] = parseFacePoints(status);
+  auto materialName = parseMaterialName(status);
+
+  const auto [uAxis, uOffset, vAxis, vOffset] = parseValveUvAxes(status);
+
+  const auto uvAttributes = parseUvAttributes({uOffset, vOffset});
+  auto surfaceAttributes = SurfaceAttributes{};
+
+  // RBDOOM-3-BFG writes Quake 2 style surface attributes "0 0 0" after each face, and
+  // reads and ignores up to three tokens there; discard up to three numbers
+  for (size_t i = 0; i < 3 && m_tokenizer.peekToken().hasType(QuakeMapToken::Number); ++i)
+  {
+    m_tokenizer.nextToken();
+  }
+
+  onValveBrushFace(
+    location,
+    m_targetMapFormat,
+    p1,
+    p2,
+    p3,
+    std::move(materialName),
+    uvAttributes,
+    surfaceAttributes,
+    uAxis,
+    vAxis,
+    status);
+}
+
 void StandardMapParser::parsePatch(
   ParserStatus& status, const FileLocation& startLocation)
 {
@@ -742,6 +828,201 @@ void StandardMapParser::parsePatch(
     std::move(controlPoints),
     std::move(materialName),
     std::nullopt,
+    status);
+}
+
+void StandardMapParser::parseDoom3Patch(
+  ParserStatus& status, const FileLocation& startLocation)
+{
+  using Point = BezierPatch::Point;
+
+  auto token = m_tokenizer.nextToken(QuakeMapToken::String);
+  expect({PatchId, Patch3Id}, token);
+  const auto explicitlySubdivided = token.data() == Patch3Id;
+
+  m_tokenizer.nextToken(QuakeMapToken::OBrace);
+
+  // RBDOOM-3-BFG writes patch materials with their textures/ prefix, and adds the prefix
+  // when it reads a patch material without one
+  constexpr auto MaterialPrefix = std::string_view{"textures/"};
+  auto materialName = parseMaterialName(status);
+  if (kdl::ci::str_is_prefix(materialName, MaterialPrefix))
+  {
+    materialName = materialName.substr(MaterialPrefix.size());
+  }
+
+  m_tokenizer.nextToken(QuakeMapToken::OParenthesis);
+
+  // RBDOOM-3-BFG calls the first number the width and the second number the height, and
+  // writes one line of height points for each step of the width, so they are our row and
+  // column counts.
+  token = m_tokenizer.nextToken(QuakeMapToken::Integer);
+  const auto rowCountLocation = token.location();
+  const auto rowCountInt = token.toInteger<int>();
+
+  token = m_tokenizer.nextToken(QuakeMapToken::Integer);
+  const auto columnCountLocation = token.location();
+  const auto columnCountInt = token.toInteger<int>();
+
+  auto explicitSubdivisions = std::optional<PatchSubdivisions>{};
+  if (explicitlySubdivided)
+  {
+    token = m_tokenizer.nextToken(QuakeMapToken::Integer);
+    const auto subdivisionsLocation = token.location();
+    const auto horizontalInt = token.toInteger<int>();
+    const auto verticalInt = parseInteger();
+
+    if (horizontalInt < 1 || verticalInt < 1)
+    {
+      status.warn(
+        subdivisionsLocation,
+        fmt::format(
+          "Ignoring invalid patch subdivisions {}x{}", horizontalInt, verticalInt));
+    }
+    else
+    {
+      explicitSubdivisions = PatchSubdivisions{
+        static_cast<size_t>(horizontalInt), static_cast<size_t>(verticalInt)};
+    }
+  }
+
+  m_tokenizer.nextToken(QuakeMapToken::Integer);
+  m_tokenizer.nextToken(QuakeMapToken::Integer);
+  m_tokenizer.nextToken(QuakeMapToken::Integer);
+  m_tokenizer.nextToken(QuakeMapToken::CParenthesis);
+
+  // always read the declared number of points so that the parser stays in sync even if
+  // the patch is skipped
+  auto rowCount = static_cast<size_t>(std::max(rowCountInt, 0));
+  auto columnCount = static_cast<size_t>(std::max(columnCountInt, 0));
+
+  auto controlPoints = std::vector<Point>{};
+
+  m_tokenizer.nextToken(QuakeMapToken::OParenthesis);
+  for (size_t row = 0; row < rowCount; ++row)
+  {
+    m_tokenizer.nextToken(QuakeMapToken::OParenthesis);
+    for (size_t column = 0; column < columnCount; ++column)
+    {
+      controlPoints.push_back(
+        parseFloatVector<5>(QuakeMapToken::OParenthesis, QuakeMapToken::CParenthesis));
+    }
+    m_tokenizer.nextToken(QuakeMapToken::CParenthesis);
+  }
+  m_tokenizer.nextToken(QuakeMapToken::CParenthesis);
+
+  token = m_tokenizer.nextToken(QuakeMapToken::CBrace);
+  const auto endLocation = token.location();
+
+  if (rowCount < 3 || columnCount < 3)
+  {
+    status.error(
+      startLocation,
+      fmt::format(
+        "Skipping patch: patch must have at least 3x3 control points, but has {}x{}",
+        rowCountInt,
+        columnCountInt));
+    return;
+  }
+
+  // RBDOOM-3-BFG accepts even sizes. It renders the last two rows (or columns) of an
+  // adaptively subdivided patch as a flat strip, which a row (or column) of midpoints
+  // reproduces, and it ignores the last row (or column) of an explicitly subdivided
+  // patch.
+  const auto midpoint = [](const Point& lhs, const Point& rhs) {
+    return (lhs + rhs) / 2.0;
+  };
+
+  if (rowCount % 2 == 0)
+  {
+    const auto lastRowStart = (rowCount - 1) * columnCount;
+    if (explicitlySubdivided)
+    {
+      controlPoints.erase(
+        controlPoints.begin() + static_cast<std::ptrdiff_t>(lastRowStart),
+        controlPoints.end());
+      status.warn(
+        rowCountLocation,
+        fmt::format(
+          "Patch has an even number of control point rows ({}); removed the last row, "
+          "which the engine ignores for explicitly subdivided patches",
+          rowCount));
+      --rowCount;
+    }
+    else
+    {
+      auto midpointRow = std::vector<Point>{};
+      for (size_t column = 0; column < columnCount; ++column)
+      {
+        midpointRow.push_back(midpoint(
+          controlPoints[lastRowStart - columnCount + column],
+          controlPoints[lastRowStart + column]));
+      }
+      controlPoints.insert(
+        controlPoints.begin() + static_cast<std::ptrdiff_t>(lastRowStart),
+        midpointRow.begin(),
+        midpointRow.end());
+      status.warn(
+        rowCountLocation,
+        fmt::format(
+          "Patch has an even number of control point rows ({}); inserted a row of "
+          "midpoints before the last row",
+          rowCount));
+      ++rowCount;
+    }
+  }
+
+  if (columnCount % 2 == 0)
+  {
+    auto newControlPoints = std::vector<Point>{};
+    for (size_t row = 0; row < rowCount; ++row)
+    {
+      const auto rowStart = row * columnCount;
+      for (size_t column = 0; column < columnCount - 1; ++column)
+      {
+        newControlPoints.push_back(controlPoints[rowStart + column]);
+      }
+      if (!explicitlySubdivided)
+      {
+        newControlPoints.push_back(midpoint(
+          controlPoints[rowStart + columnCount - 2],
+          controlPoints[rowStart + columnCount - 1]));
+        newControlPoints.push_back(controlPoints[rowStart + columnCount - 1]);
+      }
+    }
+    controlPoints = std::move(newControlPoints);
+
+    if (explicitlySubdivided)
+    {
+      status.warn(
+        columnCountLocation,
+        fmt::format(
+          "Patch has an even number of control point columns ({}); removed the last "
+          "column, which the engine ignores for explicitly subdivided patches",
+          columnCount));
+      --columnCount;
+    }
+    else
+    {
+      status.warn(
+        columnCountLocation,
+        fmt::format(
+          "Patch has an even number of control point columns ({}); inserted a column of "
+          "midpoints before the last column",
+          columnCount));
+      ++columnCount;
+    }
+  }
+
+  onPatch(
+    startLocation,
+    endLocation,
+    m_targetMapFormat,
+    rowCount,
+    columnCount,
+    std::move(controlPoints),
+    std::move(materialName),
+    std::move(explicitSubdivisions),
     status);
 }
 

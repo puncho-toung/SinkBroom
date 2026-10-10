@@ -85,6 +85,9 @@ private:
 
   static const std::string BrushPrimitiveId;
   static const std::string PatchId;
+  static const std::string Patch3Id;
+  static const std::string MeshId;
+  static const std::string VersionId;
 
   QuakeMapTokenizer m_tokenizer;
 
@@ -138,8 +141,10 @@ private:
   void parseDaikatanaFace(ParserStatus& status);
   void parseValveFace(ParserStatus& status);
   void parsePrimitiveFace(ParserStatus& status);
+  void parseDoom3ValveFace(ParserStatus& status);
 
   void parsePatch(ParserStatus& status, const FileLocation& startLocation);
+  void parseDoom3Patch(ParserStatus& status, const FileLocation& startLocation);
 
   std::tuple<vm::vec3d, vm::vec3d, vm::vec3d> parseFacePoints(ParserStatus& status);
   std::string parseMaterialName(ParserStatus& status);

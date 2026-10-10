@@ -18,11 +18,14 @@
  */
 
 #include "TestParserStatus.h"
+#include "mdl/BezierPatch.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/GroupNode.h"
 #include "mdl/NodeReader.h"
+#include "mdl/ParallelUvCoordSystem.h"
 #include "mdl/ParaxialUvCoordSystem.h"
+#include "mdl/PatchNode.h"
 
 #include "kd/task_manager.h"
 
@@ -236,6 +239,91 @@ TEST_CASE("NodeReader")
       NodeReader::read(data, MapFormat::Valve, worldBounds, {}, status, taskManager);
     REQUIRE(nodes);
     CHECK(nodes.value().size() == 1);
+  }
+
+  SECTION("pasteDoom3ValveBrushAndPatch")
+  {
+    // a brush and an explicitly subdivided patch as RBDOOM-3-BFG writes them
+    const auto data = R"(
+// brush 0
+{
+( -64 -64 -16 ) ( -64 -63 -16 ) ( -64 -64 -15 ) tb_test/wall [ 0 -1 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+( -64 -64 -16 ) ( -64 -64 -15 ) ( -63 -64 -16 ) tb_test/wall [ 1 0 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+( -64 -64 -16 ) ( -63 -64 -16 ) ( -64 -63 -16 ) tb_test/wall [ -1 0 0 0 ] [ 0 -1 0 0 ] 0 0.5 0.5 0 0 0
+( 64 64 16 ) ( 64 65 16 ) ( 65 64 16 ) tb_test/wall [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 0.5 0.5 0 0 0
+( 64 64 16 ) ( 65 64 16 ) ( 64 64 17 ) tb_test/wall [ -1 0 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+( 64 64 16 ) ( 64 64 17 ) ( 64 65 16 ) tb_test/wall [ 0 1 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+}
+// primitive 1
+{
+ patchDef3
+ {
+  "textures/tb_test/wall"
+  ( 3 3 4 2 0 0 0 )
+  (
+   (  ( 0.000000 0.000000 0.000000 0.000000 0.000000 ) ( 0.000000 64.000000 0.000000 0.000000 0.500000 ) ( 0.000000 128.000000 0.000000 0.000000 1.000000 ) )
+   (  ( 64.000000 0.000000 32.000000 0.500000 0.000000 ) ( 64.000000 64.000000 32.000000 0.500000 0.500000 ) ( 64.000000 128.000000 32.000000 0.500000 1.000000 ) )
+   (  ( 128.000000 0.000000 0.000000 1.000000 0.000000 ) ( 128.000000 64.000000 0.000000 1.000000 0.500000 ) ( 128.000000 128.000000 0.000000 1.000000 1.000000 ) )
+  )
+ }
+}
+)";
+
+    auto nodes = NodeReader::read(
+      data, MapFormat::Doom3_Valve, worldBounds, {}, status, taskManager);
+    REQUIRE(nodes);
+    REQUIRE(nodes.value().size() == 2u);
+    CHECK(status.countStatus(LogLevel::Warn) == 0u);
+    CHECK(status.countStatus(LogLevel::Error) == 0u);
+
+    const auto* brushNode = dynamic_cast<BrushNode*>(nodes.value().at(0));
+    REQUIRE(brushNode != nullptr);
+    CHECK(brushNode->brush().face(0).uvCoordSystem().is<ParallelUvCoordSystem>());
+    CHECK(brushNode->brush().face(0).surfaceAttributes().empty());
+
+    const auto* patchNode = dynamic_cast<PatchNode*>(nodes.value().at(1));
+    REQUIRE(patchNode != nullptr);
+    CHECK(patchNode->patch().materialName() == "tb_test/wall");
+    CHECK(patchNode->patch().explicitSubdivisions() == PatchSubdivisions{4, 2});
+    CHECK(
+      patchNode->patch().controlPoint(1, 2) == BezierPatch::Point{64, 128, 32, 0.5, 1});
+  }
+
+  SECTION("pasteDoom3ValvePatchSmallerThan3x3")
+  {
+    const auto data = R"(
+{
+ patchDef2
+ {
+  "textures/tb_test/wall"
+  ( 2 3 0 0 0 )
+  (
+   (  ( 0 0 0 0 0 ) ( 0 64 0 0 0.5 ) ( 0 128 0 0 1 ) )
+   (  ( 64 0 0 1 0 ) ( 64 64 0 1 0.5 ) ( 64 128 0 1 1 ) )
+  )
+ }
+}
+{
+( -64 -64 -16 ) ( -64 -63 -16 ) ( -64 -64 -15 ) tb_test/wall [ 0 -1 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+( -64 -64 -16 ) ( -64 -64 -15 ) ( -63 -64 -16 ) tb_test/wall [ 1 0 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+( -64 -64 -16 ) ( -63 -64 -16 ) ( -64 -63 -16 ) tb_test/wall [ -1 0 0 0 ] [ 0 -1 0 0 ] 0 0.5 0.5 0 0 0
+( 64 64 16 ) ( 64 65 16 ) ( 65 64 16 ) tb_test/wall [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 0.5 0.5 0 0 0
+( 64 64 16 ) ( 65 64 16 ) ( 64 64 17 ) tb_test/wall [ -1 0 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+( 64 64 16 ) ( 64 64 17 ) ( 64 65 16 ) tb_test/wall [ 0 1 0 0 ] [ 0 0 -1 0 ] 0 0.5 0.5 0 0 0
+}
+)";
+
+    auto nodes = NodeReader::read(
+      data, MapFormat::Doom3_Valve, worldBounds, {}, status, taskManager);
+    REQUIRE(nodes);
+    REQUIRE(nodes.value().size() == 1u);
+    CHECK(dynamic_cast<BrushNode*>(nodes.value().at(0)) != nullptr);
+
+    CHECK(
+      status.messages(LogLevel::Error)
+      == std::vector<std::string>{
+        "At line 2, column 1: Skipping patch: patch must have at least 3x3 control "
+        "points, but has 2x3"});
   }
 }
 
