@@ -30,9 +30,11 @@
 #include "vm/bbox.h"
 #include "vm/vec.h"
 
+#include <optional>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 namespace tb::mdl
 {
@@ -531,6 +533,21 @@ TEST_CASE("PatchUtils")
             == patchWithManySubSurfaces.evaluateAt(u, v));
         }
       }
+    }
+
+    SECTION("drops explicit subdivisions")
+    {
+      // a resampled patch is a new adaptive patch; the original's explicit subdivisions
+      // were chosen for its own control point grid
+      const auto subdividedPatch = BezierPatch{
+        3, 3, patch.controlPoints(), patch.materialName(), PatchSubdivisions{4, 2}};
+
+      const auto pointCounts = GENERATE(size_t{3}, size_t{5});
+      CAPTURE(pointCounts);
+
+      CHECK(
+        resamplePatch(subdividedPatch, pointCounts, pointCounts).explicitSubdivisions()
+        == std::nullopt);
     }
   }
 }

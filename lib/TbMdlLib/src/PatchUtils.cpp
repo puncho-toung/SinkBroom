@@ -555,6 +555,8 @@ BezierPatch resamplePatch(
     }
   }
 
+  // The result is a new, adaptively subdivided patch: explicit subdivisions (a Doom 3
+  // patchDef3's) were chosen for the original control point grid, so they are not kept.
   return BezierPatch{
     pointRowCount, pointColumnCount, std::move(controlPoints), patch.materialName()};
 }
