@@ -155,8 +155,7 @@ inline const GameInfo Doom3BFGGameInfo = detail::makeGameInfoFixture(
     .experimental = false,
     .fileFormats =
       {
-        // TODO(01): "Doom3 (Valve)"
-        {.format = "Quake3 (Valve)", .initialMap = ""},
+        {.format = "Doom3 (Valve)", .initialMap = ""},
       },
     .fileSystemConfig =
       {

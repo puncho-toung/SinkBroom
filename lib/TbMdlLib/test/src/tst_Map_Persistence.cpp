@@ -18,25 +18,121 @@
  */
 
 #include "Observer.h"
+#include "TestEnvironment.h"
 #include "fs/TestEnvironment.h"
+#include "mdl/BezierPatch.h"
 #include "mdl/BrushBuilder.h"
+#include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
+#include "mdl/GroupNode.h"
+#include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
+#include "mdl/MapFormat.h"
 #include "mdl/Map_Nodes.h"
+#include "mdl/PatchNode.h"
 #include "mdl/TestFactory.h"
+#include "mdl/WorldNode.h"
 #include "version/Version.h"
 
 #include "kd/k.h"
+#include "kd/overload.h"
+#include "kd/string_utils.h"
 
 #include <fmt/format.h>
+
+#include <algorithm>
+#include <map>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <tuple>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
 namespace tb::mdl
 {
+namespace
+{
+
+struct PatchSummary
+{
+  size_t rowCount;
+  size_t columnCount;
+  std::string materialName;
+  std::optional<PatchSubdivisions> explicitSubdivisions;
+
+  bool operator==(const PatchSummary&) const = default;
+};
+
+/**
+ * The parts of a loaded map that a round trip through a file must preserve. Entities are
+ * keyed by their name and summarized by their sorted property keys.
+ */
+struct MapSummary
+{
+  std::vector<std::string> worldspawnKeys;
+  std::map<std::string, std::vector<std::string>> entityKeys;
+  std::vector<std::tuple<std::string, size_t>> groups;
+  size_t brushCount = 0;
+  std::vector<PatchSummary> patches;
+
+  bool operator==(const MapSummary&) const = default;
+};
+
+std::vector<std::string> sortedKeys(const Entity& entity)
+{
+  auto result = entity.propertyKeys();
+  std::ranges::sort(result);
+  return result;
+}
+
+MapSummary summarize(const WorldNode& worldNode)
+{
+  auto result = MapSummary{};
+  result.worldspawnKeys = sortedKeys(worldNode.entity());
+
+  worldNode.accept(kdl::overload(
+    [](auto&& thisLambda, const WorldNode& node) { node.visitChildren(thisLambda); },
+    [](auto&& thisLambda, const LayerNode& node) { node.visitChildren(thisLambda); },
+    [&](auto&& thisLambda, const GroupNode& node) {
+      result.groups.emplace_back(node.name(), node.childCount());
+      node.visitChildren(thisLambda);
+    },
+    [&](auto&& thisLambda, const EntityNode& node) {
+      const auto* name = node.entity().property("name");
+      result.entityKeys[name ? *name : ""] = sortedKeys(node.entity());
+      node.visitChildren(thisLambda);
+    },
+    [&](const BrushNode&) { ++result.brushCount; },
+    [&](const PatchNode& node) {
+      const auto& patch = node.patch();
+      result.patches.push_back(PatchSummary{
+        patch.pointRowCount(),
+        patch.pointColumnCount(),
+        patch.materialName(),
+        patch.explicitSubdivisions(),
+      });
+    }));
+
+  return result;
+}
+
+std::vector<std::string> splitLines(const std::string& str)
+{
+  auto result = std::vector<std::string>{};
+  auto stream = std::istringstream{str};
+  for (auto line = std::string{}; std::getline(stream, line);)
+  {
+    result.push_back(line);
+  }
+  return result;
+}
+
+} // namespace
 
 TEST_CASE("Map_Persistence")
 {
@@ -303,6 +399,86 @@ TEST_CASE("Map_Persistence")
 }
 )");
     }
+  }
+
+  SECTION("Doom3 (Valve) round trip")
+  {
+    // tb_test_valve220.map has the syntax RBDOOM-3-BFG's idMapFile::Write produces
+    const auto engineMapPath = getFixtureRoot() / "test" / "mdl" / "Game" / "Doom3BFG"
+                               / "base" / "maps" / "tb_test_valve220.map";
+
+    const auto expectedSummary = MapSummary{
+      .worldspawnKeys = {"_tb_def", "_tb_textures", "classname"},
+      .entityKeys =
+        {
+          {"func_door_1", {"angle", "classname", "model", "name"}},
+          {"func_static_1", {"classname", "model", "name"}},
+          {"info_player_start_1", {"angle", "classname", "name", "origin"}},
+          {"light_1",
+           {"_color", "angles", "classname", "light_radius", "name", "origin"}},
+          {"light_2", {"classname", "light_radius", "name", "origin"}},
+          {"misc_model_1",
+           {"angles", "classname", "model", "name", "origin", "proxymodel"}},
+          {"target_null_1", {"classname", "name", "origin"}},
+          {"trigger_once_1", {"classname", "model", "name", "target"}},
+        },
+      // the func_group with its brush and the light that refers to it
+      .groups = {{"group_1", 2}},
+      .brushCount = 10,
+      .patches =
+        {
+          {3, 5, "tb_test/wall", std::nullopt},
+          {5, 3, "tb_test/wall_plain", PatchSubdivisions{4, 2}},
+        },
+    };
+
+    auto env = fs::TestEnvironment{};
+
+    auto engineFixture = MapFixture{};
+    auto& engineMap = engineFixture.load(engineMapPath, Doom3BFGFixtureConfig);
+    REQUIRE(engineMap.worldNode().mapFormat() == MapFormat::Doom3_Valve);
+    CHECK(summarize(engineMap.worldNode()) == expectedSummary);
+
+    const auto firstSavePath = env.dir() / "first.map";
+    REQUIRE(engineMap.saveAs(firstSavePath));
+    const auto firstSave = env.loadFile(firstSavePath);
+
+    // RBDOOM-3-BFG's header, so the engine and TrenchBroom detect the saved map
+    CHECK(firstSave.starts_with(
+      "// Game: Doom 3 BFG\n// Format: Doom3 (Valve)\n// Generator: TrenchBroom "));
+
+    // 10 entities: worldspawn, 8 entities and the group
+    CHECK(
+      std::ranges::count_if(
+        splitLines(firstSave),
+        [](const auto& line) { return line.starts_with("// entity "); })
+      == 10);
+
+    // patches are written quoted without textures/, which the engine adds when reading
+    CHECK(
+      firstSave.find("patchDef2\n{\n\"tb_test/wall\"\n( 3 5 0 0 0 )\n")
+      != std::string::npos);
+    CHECK(
+      firstSave.find("patchDef3\n{\n\"tb_test/wall_plain\"\n( 5 3 4 2 0 0 0 )\n")
+      != std::string::npos);
+
+    // faces end with rotation and scale, without the engine's ignored "0 0 0"
+    for (const auto& line : splitLines(firstSave))
+    {
+      if (const auto lastBracket = line.rfind(" ] "); lastBracket != std::string::npos)
+      {
+        CAPTURE(line);
+        CHECK(kdl::str_split(line.substr(lastBracket + 3), " ").size() == 3u);
+      }
+    }
+
+    auto savedFixture = MapFixture{};
+    auto& savedMap = savedFixture.load(firstSavePath, Doom3BFGFixtureConfig);
+    CHECK(summarize(savedMap.worldNode()) == expectedSummary);
+
+    const auto secondSavePath = env.dir() / "second.map";
+    REQUIRE(savedMap.saveAs(secondSavePath));
+    CHECK(env.loadFile(secondSavePath) == firstSave);
   }
 }
 

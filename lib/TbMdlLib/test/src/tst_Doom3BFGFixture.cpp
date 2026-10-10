@@ -28,8 +28,11 @@
 #include "mdl/GameConfigFixture.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
+#include "mdl/MapFormat.h"
+#include "mdl/WorldNode.h"
 
 #include <filesystem>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -43,6 +46,9 @@ TEST_CASE("Doom3BFGFixture")
   SECTION("Doom3BFGGameInfo")
   {
     CHECK(Doom3BFGGameInfo.gameConfig.name == "Doom 3 BFG");
+    CHECK(
+      Doom3BFGGameInfo.gameConfig.fileFormats
+      == std::vector<MapFormatConfig>{{.format = "Doom3 (Valve)", .initialMap = ""}});
     CHECK(Doom3BFGGameInfo.gamePathPreference.defaultValue == gamePath);
     CHECK(std::filesystem::exists(gamePath / "base" / "materials" / "tb_test.mtr"));
   }
@@ -53,6 +59,7 @@ TEST_CASE("Doom3BFGFixture")
     auto& map = fixture.create(Doom3BFGFixtureConfig);
 
     CHECK(map.gameInfo().gameConfig.name == "Doom 3 BFG");
+    CHECK(map.worldNode().mapFormat() == MapFormat::Doom3_Valve);
 
     // the builtin FGD is found next to the fixture's virtual config file
     const auto* lightDefinition = map.entityDefinitionManager().definition("light");

@@ -69,8 +69,7 @@ inline const MapFixtureConfig Quake2FixtureConfig = MapFixtureConfig{
 };
 
 inline const MapFixtureConfig Doom3BFGFixtureConfig = MapFixtureConfig{
-  // TODO(01): MapFormat::Doom3_Valve
-  .mapFormat = MapFormat::Quake3_Valve,
+  .mapFormat = MapFormat::Doom3_Valve,
   .gameInfo = Doom3BFGGameInfo,
 };
 
