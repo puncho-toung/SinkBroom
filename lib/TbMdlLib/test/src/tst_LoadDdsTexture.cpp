@@ -28,6 +28,7 @@
 
 #include "kd/result.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 
@@ -99,6 +100,37 @@ TEST_CASE("loadDdsTexture")
     128,
     GL_COMPRESSED_RGBA_S3TC_DXT5_EXT,
     img::ImageAlphaDomain::Graduated);
+
+  SECTION("DXT1 with sizes that aren't multiples of 4")
+  {
+    // 20x12 with the full mip chain 20x12, 10x6, 5x3, 2x1, 1x1; every block of a level
+    // has that level's colour, so a level read with too few blocks shifts the levels
+    // after it
+    const auto texture = loadTexture("dds_bc1_npot.dds");
+    CHECK(texture.width() == 20);
+    CHECK(texture.height() == 12);
+    CHECK(texture.format() == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
+
+    const auto& buffers = texture.buffersIfLoaded();
+    REQUIRE(buffers.size() == 5);
+
+    // 8 bytes per 4x4 block, partial blocks included
+    CHECK(buffers[0].size() == 8 * 5 * 3);
+    CHECK(buffers[1].size() == 8 * 3 * 2);
+    CHECK(buffers[2].size() == 8 * 2 * 1);
+    CHECK(buffers[3].size() == 8 * 1 * 1);
+    CHECK(buffers[4].size() == 8 * 1 * 1);
+
+    const auto firstColor = [&](const size_t level) {
+      const auto* data = buffers[level].data();
+      return uint16_t(data[0] | (data[1] << 8));
+    };
+    CHECK(firstColor(0) == 0xF800);
+    CHECK(firstColor(1) == 0x07E0);
+    CHECK(firstColor(2) == 0x001F);
+    CHECK(firstColor(3) == 0xFFE0);
+    CHECK(firstColor(4) == 0x8410);
+  }
 }
 
 } // namespace tb::mdl

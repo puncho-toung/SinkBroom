@@ -109,6 +109,24 @@ TEST_CASE("TextureBuffer utilities")
       // block size 8, with a 8x8 mip covering 2x2 4x4-pixel blocks
       CHECK(buffers[0].size() == 8u * 2u * 2u);
     }
+
+    SECTION("compressed format with sizes that aren't multiples of 4")
+    {
+      auto buffers = TextureBufferList{};
+      setMipBufferSize(buffers, 5, 20, 12, GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
+
+      // partial blocks at the right and bottom edges count as whole blocks
+      REQUIRE(buffers.size() == 5u);
+      CHECK(buffers[0].size() == 8u * 5u * 3u); // 20x12
+      CHECK(buffers[1].size() == 8u * 3u * 2u); // 10x6
+      CHECK(buffers[2].size() == 8u * 2u * 1u); // 5x3
+      CHECK(buffers[3].size() == 8u * 1u * 1u); // 2x1
+      CHECK(buffers[4].size() == 8u * 1u * 1u); // 1x1
+
+      setMipBufferSize(buffers, 1, 6, 6, GL_COMPRESSED_RGBA_S3TC_DXT5_EXT);
+      REQUIRE(buffers.size() == 1u);
+      CHECK(buffers[0].size() == 16u * 2u * 2u);
+    }
   }
 }
 

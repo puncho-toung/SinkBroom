@@ -49,8 +49,7 @@ auto makeTextureLoadedState(
   {
     [[maybe_unused]] const auto mipSize = sizeAtMipLevel(width, height, level);
     [[maybe_unused]] const auto numBytes =
-      compressed ? (blockSize * std::max(size_t(1), mipSize.x() / 4)
-                    * std::max(size_t(1), mipSize.y() / 4))
+      compressed ? (blockSize * ((mipSize.x() + 3) / 4) * ((mipSize.y() + 3) / 4))
                  : (bytesPerPixel * mipSize.x() * mipSize.y());
     contract_assert(buffers[level].size() >= numBytes);
   }

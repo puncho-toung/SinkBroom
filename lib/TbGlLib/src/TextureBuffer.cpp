@@ -124,9 +124,11 @@ void setMipBufferSize(
   for (size_t level = 0u; level < buffers.size(); ++level)
   {
     const auto mipSize = sizeAtMipLevel(width, height, level);
-    const auto numBytes = compressed ? (blockSize * std::max(size_t(1), mipSize.x() / 4)
-                                        * std::max(size_t(1), mipSize.y() / 4))
-                                     : (bytesPerPixel * mipSize.x() * mipSize.y());
+    // a compressed mip covers every pixel with 4x4 blocks, including partial blocks at
+    // the right and bottom edges of sizes that aren't multiples of 4
+    const auto numBytes =
+      compressed ? (blockSize * ((mipSize.x() + 3) / 4) * ((mipSize.y() + 3) / 4))
+                 : (bytesPerPixel * mipSize.x() * mipSize.y());
     buffers[level] = TextureBuffer{numBytes};
   }
 }
