@@ -18,6 +18,7 @@
  */
 
 #include "base/Logger.h"
+#include "fs/DiskIO.h"
 #include "fs/TestEnvironment.h"
 #include "gl/ResourceManager.h"
 #include "mdl/Brush.h"
@@ -29,9 +30,14 @@
 #include "mdl/EnvironmentConfig.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/Map.h"
+#include "mdl/MapHeader.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/PropertyDefinition.h"
 #include "mdl/TestUtils.h"
+
+#include <optional>
+#include <string>
+#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -384,6 +390,35 @@ TEST_CASE("Map_Initialization")
           | kdl::transform([&](auto map) {
               CHECK(map->worldNode().mapFormat() == mdl::MapFormat::Standard);
               CHECK(map->worldNode().defaultLayer()->childCount() == 1);
+            })
+          | kdl::transform_error([](auto e) { FAIL(e.msg); });
+      }
+
+      SECTION("Detect Doom3 (Valve) Format Map")
+      {
+        // the fixture starts with the header RBDOOM-3-BFG writes
+        const auto path =
+          makeAbsolute("test/mdl/Game/Doom3BFG/base/maps/tb_test_valve220.map");
+
+        CHECK(
+          fs::Disk::withInputStream(
+            path, [](auto& stream) { return readMapHeader(stream); })
+          == Result<std::pair<std::optional<std::string>, MapFormat>>{
+            std::pair{std::optional<std::string>{"Doom 3 BFG"}, MapFormat::Doom3_Valve}});
+
+        // without a format, the game config's format is detected
+        Map::loadMap(
+          environmentConfig,
+          Doom3BFGGameInfo,
+          Doom3BFGGameInfo.gamePathPreference.defaultValue,
+          MapFormat::Unknown,
+          vm::bbox3d{8192.0},
+          path,
+          *taskManager,
+          resourceManager,
+          logger)
+          | kdl::transform([&](auto map) {
+              CHECK(map->worldNode().mapFormat() == mdl::MapFormat::Doom3_Valve);
             })
           | kdl::transform_error([](auto e) { FAIL(e.msg); });
       }

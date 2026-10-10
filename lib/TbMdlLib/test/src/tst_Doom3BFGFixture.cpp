@@ -21,15 +21,27 @@
 #include "TestParserStatus.h"
 #include "fs/DiskIO.h"
 #include "fs/Reader.h"
+#include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/EntityDefinition.h"
 #include "mdl/EntityDefinitionManager.h"
+#include "mdl/EntityNode.h"
 #include "mdl/FgdParser.h"
 #include "mdl/GameConfigFixture.h"
+#include "mdl/GroupNode.h"
+#include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/MapFormat.h"
+#include "mdl/PatchNode.h"
 #include "mdl/WorldNode.h"
+#include "mdl/WorldReader.h"
+
+#include "kd/overload.h"
+#include "kd/result.h"
+#include "kd/task_manager.h"
+
+#include "vm/bbox.h"
 
 #include <filesystem>
 #include <vector>
@@ -65,6 +77,40 @@ TEST_CASE("Doom3BFGFixture")
     const auto* lightDefinition = map.entityDefinitionManager().definition("light");
     REQUIRE(lightDefinition != nullptr);
     CHECK(getType(*lightDefinition) == EntityDefinitionType::Point);
+  }
+
+  SECTION("test_box_valve220.map")
+  {
+    // a map from RBDOOM-3-BFG's unit test maps; dmap reports 9 world brushes and 12
+    // entities, the worldspawn included
+    const auto path = gamePath / "base" / "maps" / "test_box_valve220.map";
+
+    auto file = fs::Disk::openFile(path) | kdl::value();
+    auto reader = file->reader().buffer();
+
+    auto status = TestParserStatus{};
+    auto taskManager = kdl::task_manager{};
+    auto worldReader = WorldReader{reader.stringView(), MapFormat::Doom3_Valve, {}};
+    REQUIRE(worldReader.read(vm::bbox3d{8192.0}, status, taskManager));
+    CHECK(status.countStatus(LogLevel::Error) == 0u);
+    CHECK(status.countStatus(LogLevel::Warn) == 0u);
+
+    auto fixture = MapFixture{};
+    auto& map = fixture.load(path, Doom3BFGFixtureConfig);
+    REQUIRE(map.worldNode().mapFormat() == MapFormat::Doom3_Valve);
+
+    auto worldBrushCount = size_t{0};
+    auto entityCount = size_t{1}; // the worldspawn
+    map.worldNode().accept(kdl::overload(
+      [](auto&& thisLambda, const WorldNode& node) { node.visitChildren(thisLambda); },
+      [](auto&& thisLambda, const LayerNode& node) { node.visitChildren(thisLambda); },
+      [](auto&& thisLambda, const GroupNode& node) { node.visitChildren(thisLambda); },
+      [&](const EntityNode&) { ++entityCount; },
+      [&](const BrushNode&) { ++worldBrushCount; },
+      [](const PatchNode&) {}));
+
+    CHECK(worldBrushCount == 9u);
+    CHECK(entityCount == 12u);
   }
 
   SECTION("DOOM-3-tbtest.fgd")

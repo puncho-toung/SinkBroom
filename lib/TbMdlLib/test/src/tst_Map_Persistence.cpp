@@ -41,6 +41,8 @@
 #include "kd/overload.h"
 #include "kd/string_utils.h"
 
+#include "vm/vec.h"
+
 #include <fmt/format.h>
 
 #include <algorithm>
@@ -118,6 +120,38 @@ MapSummary summarize(const WorldNode& worldNode)
       });
     }));
 
+  return result;
+}
+
+/**
+ * The vertex positions of every brush and the control points of every patch, each
+ * sorted, so that two maps with the same geometry compare equal regardless of order.
+ */
+std::vector<std::vector<vm::vec3d>> geometry(const WorldNode& worldNode)
+{
+  auto result = std::vector<std::vector<vm::vec3d>>{};
+
+  worldNode.accept(kdl::overload(
+    [](auto&& thisLambda, const WorldNode& node) { node.visitChildren(thisLambda); },
+    [](auto&& thisLambda, const LayerNode& node) { node.visitChildren(thisLambda); },
+    [](auto&& thisLambda, const GroupNode& node) { node.visitChildren(thisLambda); },
+    [](auto&& thisLambda, const EntityNode& node) { node.visitChildren(thisLambda); },
+    [&](const BrushNode& node) {
+      auto positions = node.brush().vertexPositions();
+      std::ranges::sort(positions);
+      result.push_back(std::move(positions));
+    },
+    [&](const PatchNode& node) {
+      auto positions = std::vector<vm::vec3d>{};
+      for (const auto& controlPoint : node.patch().controlPoints())
+      {
+        positions.push_back(controlPoint.xyz());
+      }
+      std::ranges::sort(positions);
+      result.push_back(std::move(positions));
+    }));
+
+  std::ranges::sort(result);
   return result;
 }
 
@@ -463,18 +497,27 @@ TEST_CASE("Map_Persistence")
       != std::string::npos);
 
     // faces end with rotation and scale, without the engine's ignored "0 0 0"
+    auto faceLineCount = size_t{0};
     for (const auto& line : splitLines(firstSave))
     {
       if (const auto lastBracket = line.rfind(" ] "); lastBracket != std::string::npos)
       {
         CAPTURE(line);
         CHECK(kdl::str_split(line.substr(lastBracket + 3), " ").size() == 3u);
+        ++faceLineCount;
       }
     }
+    // 10 brushes with 6 faces each
+    CHECK(faceLineCount == 60u);
 
     auto savedFixture = MapFixture{};
     auto& savedMap = savedFixture.load(firstSavePath, Doom3BFGFixtureConfig);
     CHECK(summarize(savedMap.worldNode()) == expectedSummary);
+
+    // the geometry survives the round trip, not only the number of objects
+    const auto engineGeometry = geometry(engineMap.worldNode());
+    CHECK(engineGeometry.size() == 12u);
+    CHECK(geometry(savedMap.worldNode()) == engineGeometry);
 
     const auto secondSavePath = env.dir() / "second.map";
     REQUIRE(savedMap.saveAs(secondSavePath));
