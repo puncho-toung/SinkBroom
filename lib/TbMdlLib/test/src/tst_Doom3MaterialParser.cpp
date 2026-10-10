@@ -84,6 +84,32 @@ std::vector<std::filesystem::path> paths(const std::vector<std::string>& strs)
   return {strs.begin(), strs.end()};
 }
 
+// A material the engine replaces with its default material "{ { blend blend map
+// _default } }", which keeps only the editor image name.
+Quake3Shader defaultedShader(
+  const std::string& shaderPath, const std::string& editorImage = "")
+{
+  return Quake3Shader{
+    .shaderPath = shaderPath,
+    .editorImage = editorImage,
+    .lightImage = "",
+    .culling = Culling::Front,
+    .surfaceParms = {"coverage_translucent", "engine_defaulted", "noshadows"},
+    .stages =
+      {
+        {.map = "_default",
+         .blendFunc = {"GL_SRC_ALPHA", "GL_ONE_MINUS_SRC_ALPHA"},
+         .alphaFunc = {},
+         .lighting = Lighting::None},
+      },
+    .qerAlphaFunc = {},
+    .format = Format::Doom3,
+    .coverage = Coverage::Translucent,
+    .previewImages = editorImage.empty() ? paths({}) : paths({editorImage}),
+    .engineDefaulted = true,
+  };
+}
+
 } // namespace
 
 TEST_CASE("Doom3MaterialParser")
@@ -462,6 +488,96 @@ textures/fixture/second_diffuse
     CHECK(status.countStatus(LogLevel::Warn) == 0);
   }
 
+  SECTION("First diffuse stage without an image")
+  {
+    const auto data = R"(
+textures/fixture/video
+{
+	{
+		blend		diffusemap
+		videomap	video/fixture.roq
+	}
+	{
+		blend		add
+		map			textures/fixture/video_glow.tga
+	}
+}
+
+textures/fixture/video_editor
+{
+	qer_editorimage	textures/fixture/video_ed.tga
+	{
+		blend		diffusemap
+		videomap	loop video/fixture.roq
+	}
+	{
+		blend		add
+		map			textures/fixture/video_glow.tga
+	}
+}
+
+textures/fixture/plain_diffuse
+{
+	{
+		blend		diffusemap
+	}
+	{
+		blend		add
+		map			textures/fixture/plain_glow.tga
+	}
+}
+)";
+
+    const auto shaders = Doom3MaterialParser{data}.parse(status);
+    REQUIRE(shaders.size() == 3);
+
+    // a video leaves the first diffuse stage without an image, so the engine takes
+    // the first stage after sorting: the ambient glow stage
+    CHECK(
+      findShader(shaders, "textures/fixture/video").previewImages
+      == paths({"textures/fixture/video_glow.tga"}));
+    CHECK(
+      findShader(shaders, "textures/fixture/video_editor").previewImages
+      == paths({"textures/fixture/video_ed.tga", "textures/fixture/video_glow.tga"}));
+
+    // a stage without map, video or program gets the default image, which is no preview
+    CHECK(findShader(shaders, "textures/fixture/plain_diffuse").previewImages.empty());
+
+    CHECK(status.countStatus(LogLevel::Warn) == 0);
+  }
+
+  SECTION("Quoted shorthand images")
+  {
+    const auto data = R"(
+textures/fixture/quoted_plain	{ diffusemap "textures/fixture/plain.tga" }
+textures/fixture/quoted_split	{ diffusemap "textures/fixture/x-y.tga" }
+textures/fixture/quoted_stage	{ { blend diffusemap map "textures/fixture/x-y.tga" } }
+)";
+
+    const auto shaders = Doom3MaterialParser{data}.parse(status);
+    REQUIRE(shaders.size() == 3);
+
+    // the engine reads a shorthand's image again without quotes, which splits x-y.tga
+    CHECK(
+      findShader(shaders, "textures/fixture/quoted_plain").previewImages
+      == paths({"textures/fixture/plain.tga"}));
+    CHECK(
+      findShader(shaders, "textures/fixture/quoted_split")
+      == defaultedShader("textures/fixture/quoted_split"));
+    CHECK(
+      findShader(shaders, "textures/fixture/quoted_stage").previewImages
+      == paths({"textures/fixture/x-y.tga"}));
+
+    CHECK_THAT(
+      status.messages(LogLevel::Warn),
+      Catch::Matchers::Equals(std::vector<std::string>{
+        "At line 3, column 44: Quoted image 'textures/fixture/x-y.tga' splits when the "
+        "engine reads the diffusemap shorthand again without quotes in material "
+        "'textures/fixture/quoted_split'; the engine replaces this material with its "
+        "default material",
+      }));
+  }
+
   SECTION("Tables and other typed decls")
   {
     const auto shaders = parseFile(fixturePath / "typed_decls.mtr", status);
@@ -512,8 +628,7 @@ textures/fixture/blend_after	{ { blend add		map textures/fixture/a } }
 
     // GL_SRC_COLOR is no source factor; the engine defaults the material
     const auto& bad = findShader(shaders, "textures/fixture/blend_bad");
-    CHECK(bad.engineDefaulted);
-    CHECK(bad.stages.empty());
+    CHECK(bad == defaultedShader("textures/fixture/blend_bad"));
     CHECK_THAT(
       status.messages(LogLevel::Warn),
       Catch::Matchers::Equals(std::vector<std::string>{
@@ -653,22 +768,10 @@ textures/fixture/after
       const auto shaders = Doom3MaterialParser{data}.parse(status);
       REQUIRE(shaders.size() == 3);
 
-      // parsing stopped at the unknown keyword
+      // parsing stopped at the unknown keyword, before the editor image
       CHECK(
         findShader(shaders, "textures/fixture/unknown")
-        == Quake3Shader{
-          .shaderPath = "textures/fixture/unknown",
-          .editorImage = "",
-          .lightImage = "",
-          .culling = Culling::Front,
-          .surfaceParms = {"noshadows", "coverage_translucent", "engine_defaulted"},
-          .stages = {},
-          .qerAlphaFunc = {},
-          .format = Format::Doom3,
-          .coverage = Coverage::Translucent,
-          .previewImages = {},
-          .engineDefaulted = true,
-        });
+        == defaultedShader("textures/fixture/unknown"));
 
       for (const auto& shaderPath : {"textures/fixture/before", "textures/fixture/after"})
       {
@@ -705,14 +808,9 @@ textures/fixture/late
 
       // the engine replaces a defaulted material with its default material and keeps
       // only the editor image name, so the parsed diffuse map is no preview image
-      const auto& late = shaders.front();
-      CHECK(late.engineDefaulted);
-      CHECK(late.editorImage == std::filesystem::path{"textures/fixture/late_ed.tga"});
-      CHECK(late.stages.size() == 1);
-      CHECK(late.previewImages == paths({"textures/fixture/late_ed.tga"}));
       CHECK(
-        late.surfaceParms
-        == kdl::flat_set<std::string>{"coverage_translucent", "engine_defaulted"});
+        shaders.front()
+        == defaultedShader("textures/fixture/late", "textures/fixture/late_ed.tga"));
       CHECK(status.countStatus(LogLevel::Warn) == 1);
     }
 
@@ -761,9 +859,7 @@ textures/fixture/stage_error
       const auto shaders = Doom3MaterialParser{data}.parse(status);
       REQUIRE(shaders.size() == 1);
 
-      // the stage the engine failed to parse is not counted
-      CHECK(shaders.front().engineDefaulted);
-      CHECK(shaders.front().stages.size() == 1);
+      CHECK(shaders.front() == defaultedShader("textures/fixture/stage_error"));
       CHECK_THAT(
         status.messages(LogLevel::Warn),
         Catch::Matchers::Equals(std::vector<std::string>{
@@ -804,10 +900,12 @@ textures/fixture/good_term		{ { blend add map textures/fixture/a rgb time / 2 } 
     CHECK(a.previewImages == paths({"textures/fixture/a_d.tga"}));
 
     // c's name is an unknown keyword inside b
-    CHECK(findShader(shaders, "textures/fixture/b").engineDefaulted);
+    CHECK(
+      findShader(shaders, "textures/fixture/b") == defaultedShader("textures/fixture/b"));
 
     // d hits the end of the file
-    CHECK(findShader(shaders, "textures/fixture/d").engineDefaulted);
+    CHECK(
+      findShader(shaders, "textures/fixture/d") == defaultedShader("textures/fixture/d"));
 
     CHECK_THAT(
       status.messages(LogLevel::Warn),

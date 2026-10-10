@@ -167,11 +167,19 @@ bool isNameChar(const char c)
          || c == '.';
 }
 
+// Two idLexer quirks are deliberately not copied:
+// - idLexer::ReadWhiteSpace steps over one more character after the "*/" that closes a
+//   block comment, so in the engine "/* c */{" loses its brace.
+// - idLexer fails on a character it doesn't know, such as '@'. ReadToken then returns
+//   false, which ends idDeclFile::LoadAndParse's loop, so the rest of the file is
+//   ignored, or defaults the material being parsed. Here, such a character is reported
+//   and kept as a one-character token.
 class Lexer
 {
 private:
   std::string_view m_str;
-  ParserStatus& m_status;
+  // null when re-reading text that has already been reported
+  ParserStatus* m_status;
   // storage for the text of strings concatenated with a backslash
   std::deque<std::string>& m_concatenatedStrings;
   size_t m_pos = 0;
@@ -181,7 +189,7 @@ private:
 public:
   Lexer(
     const std::string_view str,
-    ParserStatus& status,
+    ParserStatus* status,
     std::deque<std::string>& concatenatedStrings)
     : m_str{str}
     , m_status{status}
@@ -218,7 +226,10 @@ private:
 
   void warn(const size_t line, const size_t col, const std::string& message)
   {
-    m_status.warn(FileLocation{line, col}, message);
+    if (m_status)
+    {
+      m_status->warn(FileLocation{line, col}, message);
+    }
   }
 
   // idLexer::ReadWhiteSpace: whitespace, // comments and /* */ comments
@@ -716,6 +727,55 @@ std::string toLower(const std::string_view str)
   return kdl::str_to_lower(str);
 }
 
+// Whether the text of a quoted string is still one token when it is read without quotes.
+bool staysOneToken(const std::string_view text)
+{
+  auto concatenatedStrings = std::deque<std::string>{};
+  const auto tokens = Lexer{text, nullptr, concatenatedStrings}.tokenize();
+  // the last token is the end of the text
+  return tokens.size() == 2;
+}
+
+// idMaterial::Parse calls MakeDefault (DeclManager.cpp) for a material it failed to
+// parse. That parses the default definition "{ { blend blend map _default } }"
+// (idMaterial::DefaultDefinition) into the material after CommonInit has reset
+// everything except the editor image name, so GetEditorImage still prefers it.
+void makeEngineDefaulted(Quake3Shader& shader)
+{
+  using BlendFunc = Quake3ShaderStage::BlendFunc;
+
+  auto shaderPath = std::move(shader.shaderPath);
+  auto editorImage = std::move(shader.editorImage);
+
+  // generated images such as _default are no preview images
+  const auto& editorImageName = editorImage.native();
+  auto previewImages = std::vector<std::filesystem::path>{};
+  if (!editorImageName.empty() && editorImageName.front() != '_')
+  {
+    previewImages.push_back(editorImage);
+  }
+
+  shader = Quake3Shader{
+    .shaderPath = std::move(shaderPath),
+    .editorImage = std::move(editorImage),
+    .lightImage = {},
+    .culling = Quake3Shader::Culling::Front,
+    // translucent materials get noShadows
+    .surfaceParms = {"coverage_translucent", "engine_defaulted", "noshadows"},
+    .stages = {Quake3ShaderStage{
+      .map = "_default",
+      .blendFunc = {BlendFunc::SrcAlpha, BlendFunc::OneMinusSrcAlpha},
+      .alphaFunc = std::nullopt,
+      .lighting = Lighting::None,
+    }},
+    .qerAlphaFunc = std::nullopt,
+    .format = Quake3Shader::Format::Doom3,
+    .coverage = Coverage::Translucent,
+    .previewImages = std::move(previewImages),
+    .engineDefaulted = true,
+  };
+}
+
 class MaterialBlockParser
 {
 private:
@@ -723,7 +783,10 @@ private:
   {
     Quake3ShaderStage stage;
     // the first image of the last map (or cube map) keyword's image program
-    std::string imageName;
+    std::optional<std::string> imageName;
+    // a video, a sound, a render map or a shader program, which leave the stage without
+    // an image unless it also has a map
+    bool hasDynamicImage = false;
     bool texGenReflect = false;
     bool referencesCurrentRender = false;
   };
@@ -731,7 +794,8 @@ private:
   struct EngineStage
   {
     Lighting lighting = Lighting::None;
-    std::string image;
+    // nullopt if the engine leaves the stage's image null
+    std::optional<std::string> image;
   };
 
   // Every recursion (parenthesised expressions, table lookups, image programs) counts
@@ -773,7 +837,7 @@ private:
   bool m_sortPortalSky = false;
   bool m_referencesCurrentRender = false;
   // parallel to m_shader.stages
-  std::vector<std::string> m_stageImageNames;
+  std::vector<std::optional<std::string>> m_stageImages;
   std::vector<bool> m_stageTexGenReflect;
 
 public:
@@ -1036,8 +1100,14 @@ private:
 
   // R_ParsePastImageProgram; returns the first image name in the program, from left to
   // right, which is what the editor previews
-  std::string parseImageProgram(const std::string_view field)
+  std::optional<std::string> parseImageProgram(const std::string_view field)
   {
+    // at the end, the engine reads an empty image program, which names no image
+    if (atEnd())
+    {
+      return std::nullopt;
+    }
+
     auto leaf = std::optional<std::string>{};
     parseImageProgram(field, leaf);
     return leaf.value_or(std::string{});
@@ -1328,9 +1398,27 @@ private:
   // "diffusemap X" is parsed by the engine as the stage "{ blend diffusemap map X }"
   void parseShorthandStage(const Token& keyword, const Lighting lighting)
   {
+    const auto begin = m_pos;
     auto stage = StageState{};
     stage.imageName = parseImageProgram(kdl::str_to_lower(keyword.text));
     stage.stage.lighting = lighting;
+
+    // The engine joins the program's tokens into text and parses that text again as a
+    // stage (idMaterial::ParseMaterial), so quoted strings lose their quotes. A string
+    // that is no longer one token then breaks that stage, and the material defaults.
+    for (auto k = begin; k < m_pos; ++k)
+    {
+      const auto& token = m_tokens[k];
+      if (token.kind == TokenKind::String && !staysOneToken(token.text))
+      {
+        setDefaulted(
+          token,
+          "Quoted image " + describe(token) + " splits when the engine reads the "
+            + kdl::str_to_lower(keyword.text) + " shorthand again without quotes");
+        return;
+      }
+    }
+
     commitStage(std::move(stage));
   }
 
@@ -1487,7 +1575,7 @@ private:
     }
 
     const auto image = parseImageProgram("fragment map");
-    if (kdl::ci::str_is_equal(image, "_currentRender"))
+    if (image && kdl::ci::str_is_equal(*image, "_currentRender"))
     {
       state.referencesCurrentRender = true;
     }
@@ -1574,14 +1662,24 @@ private:
     }
     else if (isAnyKeyword(token, RenderMapKeywords))
     {
+      state.hasDynamicImage = true;
       parseNumber();
       parseNumber();
     }
     else if (isKeyword(token, "videomap"))
     {
-      if (!atEnd() && isKeyword(next(), "loop") && !atEnd())
+      // [loop] file
+      if (!atEnd())
       {
-        next();
+        if (isKeyword(next(), "loop"))
+        {
+          if (atEnd())
+          {
+            return;
+          }
+          next();
+        }
+        state.hasDynamicImage = true;
       }
     }
     else if (isKeyword(token, "soundmap"))
@@ -1589,6 +1687,7 @@ private:
       if (!atEnd())
       {
         next();
+        state.hasDynamicImage = true;
       }
     }
     else if (isKeyword(token, "cubeMapSize"))
@@ -1669,7 +1768,10 @@ private:
     }
     else if (isAnyKeyword(token, ProgramKeywords))
     {
-      nextOnLine();
+      if (nextOnLine())
+      {
+        state.hasDynamicImage = true;
+      }
     }
     else if (isKeyword(token, "vertexParm2"))
     {
@@ -1695,15 +1797,22 @@ private:
 
   void commitStage(StageState state)
   {
+    const auto imageName = state.imageName.value_or(std::string{});
     if (
-      state.referencesCurrentRender
-      || kdl::ci::str_is_equal(state.imageName, "_currentRender"))
+      state.referencesCurrentRender || kdl::ci::str_is_equal(imageName, "_currentRender"))
     {
       m_referencesCurrentRender = true;
     }
-    state.stage.map = idTech4Path(state.imageName);
+
+    // the stage's image in idMaterial::ParseStage: the map, else null for a dynamic
+    // image, else the default image
+    m_stageImages.push_back(
+      state.imageName         ? state.imageName
+      : state.hasDynamicImage ? std::nullopt
+                              : std::optional<std::string>{"_default"});
+
+    state.stage.map = idTech4Path(imageName);
     m_shader.stages.push_back(std::move(state.stage));
-    m_stageImageNames.push_back(std::move(state.imageName));
     m_stageTexGenReflect.push_back(state.texGenReflect);
   }
 
@@ -1714,7 +1823,7 @@ private:
     auto result = std::vector<EngineStage>{};
     for (size_t i = 0; i < m_shader.stages.size(); ++i)
     {
-      result.push_back({m_shader.stages[i].lighting, m_stageImageNames[i]});
+      result.push_back({m_shader.stages[i].lighting, m_stageImages[i]});
     }
 
     const auto has = [&](const Lighting lighting) {
@@ -1799,15 +1908,7 @@ private:
 
     if (m_defaulted)
     {
-      // idMaterial::Parse calls MakeDefault, which parses the default definition
-      // "{ { blend blend map _default } }" into the same material. The editor image
-      // name survives, so idMaterial::GetEditorImage still prefers it; nothing else
-      // that was parsed is used.
-      m_shader.engineDefaulted = true;
-      m_shader.coverage = Coverage::Translucent;
-      setPreviewImages({m_editorImageName});
-      addFlag("coverage_translucent");
-      addFlag("engine_defaulted");
+      makeEngineDefaulted(m_shader);
       return;
     }
 
@@ -1843,22 +1944,33 @@ private:
 
     // idMaterial::GetEditorImage: the editor image, falling back to the first diffuse
     // stage if the editor image can't be loaded; without an editor image, the first
-    // diffuse stage or else the first stage
+    // diffuse stage. In both cases, if the first diffuse stage has no image (a video,
+    // say), the first stage's image is used. Stages without an image add nothing.
     const auto firstDiffuse = std::ranges::find_if(
       stages, [](const auto& stage) { return stage.lighting == Lighting::Diffuse; });
+    const auto diffuseImage = [&]() {
+      return firstDiffuse != stages.end() && firstDiffuse->image ? firstDiffuse->image
+                                                                 : stages.front().image;
+    };
+
     auto candidates = std::vector<std::string>{};
     if (!m_editorImageName.empty())
     {
       candidates.push_back(m_editorImageName);
       if (firstDiffuse != stages.end())
       {
-        candidates.push_back(firstDiffuse->image);
+        if (const auto image = diffuseImage())
+        {
+          candidates.push_back(*image);
+        }
       }
     }
     else if (!stages.empty())
     {
-      candidates.push_back(
-        firstDiffuse != stages.end() ? firstDiffuse->image : stages.front().image);
+      if (const auto image = diffuseImage())
+      {
+        candidates.push_back(*image);
+      }
     }
     setPreviewImages(candidates);
 
@@ -2103,7 +2215,7 @@ Doom3MaterialParser::Doom3MaterialParser(const std::string_view str)
 std::vector<Quake3Shader> Doom3MaterialParser::parse(ParserStatus& status)
 {
   auto concatenatedStrings = std::deque<std::string>{};
-  const auto tokens = Lexer{m_str, status, concatenatedStrings}.tokenize();
+  const auto tokens = Lexer{m_str, &status, concatenatedStrings}.tokenize();
   return DeclSplitter{tokens, status}.split();
 }
 
