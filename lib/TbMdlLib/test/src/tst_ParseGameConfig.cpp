@@ -1036,6 +1036,94 @@ TEST_CASE("GameConfigParser")
         });
     }
   }
+
+  SECTION("material scripts")
+  {
+    const auto makeConfig = [](const std::string& materials) {
+      return R"%(
+{
+    "version": 9,
+    "name": "Doom 3 BFG",
+    "fileformats": [ { "format": "Quake3 (Valve)" } ],
+    "filesystem": {
+        "searchpath": "base",
+        "packageformat": { "extension": "pk4", "format": "zip" }
+    },
+    "materials": )%"
+             + materials + R"%(,
+    "entities": {
+        "definitions": [],
+        "defaultcolor": "0.6 0.6 0.6 1.0"
+    }
+}
+)%";
+    };
+
+    SECTION("shaderExtensions and shaderImageSearchPaths default")
+    {
+      const auto config = makeConfig(R"%(
+    {
+        "root": "textures",
+        "extensions": [ ".tga" ],
+        "shaderSearchPath": "scripts"
+    })%");
+
+      const auto materialConfig = (parseGameConfig(config) | kdl::value()).materialConfig;
+      CHECK(
+        materialConfig.shaderExtensions == std::vector<std::filesystem::path>{".shader"});
+      CHECK(materialConfig.shaderImageSearchPaths.empty());
+      CHECK(
+        materialConfig
+        == MaterialConfig{
+          .root = "textures",
+          .extensions = {".tga"},
+          .palette = {},
+          .property = std::nullopt,
+          .shaderSearchPath = "scripts",
+          .excludes = {},
+        });
+    }
+
+    SECTION("shaderExtensions and shaderImageSearchPaths are read")
+    {
+      const auto config = makeConfig(R"%(
+    {
+        "root": "textures",
+        "extensions": [ ".tga", ".png", ".jpg", ".dds" ],
+        "shaderSearchPath": "materials",
+        "shaderExtensions": [ ".mtr", "shader" ],
+        "shaderImageSearchPaths": [ "_tb", "extra/images" ]
+    })%");
+
+      const auto materialConfig = (parseGameConfig(config) | kdl::value()).materialConfig;
+      CHECK(
+        materialConfig
+        == MaterialConfig{
+          .root = "textures",
+          .extensions = {".tga", ".png", ".jpg", ".dds"},
+          .palette = {},
+          .property = std::nullopt,
+          .shaderSearchPath = "materials",
+          .excludes = {},
+          // like the material extensions, a missing leading dot is added
+          .shaderExtensions = {".mtr", ".shader"},
+          .shaderImageSearchPaths = {"_tb", "extra/images"},
+        });
+    }
+
+    SECTION("the new keys take part in comparisons")
+    {
+      const auto config = MaterialConfig{.root = "textures"};
+
+      auto otherExtensions = config;
+      otherExtensions.shaderExtensions = {".mtr"};
+      CHECK(otherExtensions != config);
+
+      auto otherImageSearchPaths = config;
+      otherImageSearchPaths.shaderImageSearchPaths = {"_tb"};
+      CHECK(otherImageSearchPaths != config);
+    }
+  }
 }
 
 } // namespace tb::mdl

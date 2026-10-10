@@ -71,9 +71,23 @@ struct MaterialConfig
   std::filesystem::path shaderSearchPath;
   // Glob patterns used to match material names for exclusion
   std::vector<std::string> excludes;
+  // File extensions of the material script files under shaderSearchPath; the parser is
+  // chosen by extension (".mtr" selects the Doom 3 parser, anything else Quake 3)
+  std::vector<std::filesystem::path> shaderExtensions = {".shader"};
+  // Extra roots under which images referenced by material scripts are also looked up,
+  // e.g. "_tb" for the images RBDOOM-3-BFG's exportImagesToTrenchBroom writes
+  std::vector<std::filesystem::path> shaderImageSearchPaths;
 
   kdl_reflect_decl(
-    MaterialConfig, root, extensions, palette, property, shaderSearchPath, excludes);
+    MaterialConfig,
+    root,
+    extensions,
+    palette,
+    property,
+    shaderSearchPath,
+    excludes,
+    shaderExtensions,
+    shaderImageSearchPaths);
 };
 
 struct EntityConfig

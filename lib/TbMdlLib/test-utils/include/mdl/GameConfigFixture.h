@@ -168,9 +168,11 @@ inline const GameInfo Doom3BFGGameInfo = detail::makeGameInfoFixture(
         .extensions = {".tga", ".png", ".jpg", ".dds"},
         .palette = "",
         .property = std::nullopt,
-        // .mtr keys are not part of MaterialConfig yet (package 02 adds them)
         .shaderSearchPath = "materials",
         .excludes = {},
+        .shaderExtensions = {".mtr"},
+        // where exportImagesToTrenchBroom writes the engine's images
+        .shaderImageSearchPaths = {"_tb"},
       },
     .entityConfig =
       {

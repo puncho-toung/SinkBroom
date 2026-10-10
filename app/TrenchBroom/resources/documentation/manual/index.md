@@ -2868,6 +2868,23 @@ The optional `excludes` key specifies a list of patterns matched against materia
       "excludes": [ "*_norm", "*_gloss" ]
     },
 
+Games whose materials are defined in script files, such as Quake 3 shaders or Doom 3 materials, also specify where those scripts are found. The optional `shaderSearchPath` key names a folder, relative to the game file system, that TrenchBroom scans for material scripts. Only the folder itself is scanned, not its subfolders. Scripts may define materials outside of the `root` folder, for example for entity models, but only the materials under `root` are shown in the material browser.
+
+The optional `shaderExtensions` key lists the file extensions of the material scripts in that folder. It defaults to `[ ".shader" ]`. The extension selects the parser: files ending in `.mtr` are read as Doom 3 material files, all others as Quake 3 shader files. The scripts are read in alphabetical order of their file names, ignoring case, and if two scripts define a material of the same name, the first definition wins.
+
+The optional `shaderImageSearchPaths` key lists further folders, relative to the game file system, under which TrenchBroom also looks for the images a script refers to. This is useful when a game ships its images in a format TrenchBroom cannot read and a tool exports copies of them to another folder. For example, RBDOOM-3-BFG's `exportImagesToTrenchBroom` command writes the image `textures/base_wall/foo_d.tga` as `_tb/textures/base_wall/foo_d.png`, so a Doom 3 configuration lists `"_tb"` here. An image reference is looked up as written first and then under each of these folders in turn. In every folder, a file with a different extension from the `extensions` list is accepted too, tried in the order of that list, and a `.dds` file is preferred if `.dds` is one of the listed extensions, because it uses less memory.
+
+    "materials": {
+      "root": "textures",
+      "extensions": [ ".tga", ".png", ".jpg", ".dds" ],
+      "shaderSearchPath": "materials",
+      "shaderExtensions": [ ".mtr" ],
+      "shaderImageSearchPaths": [ "_tb" ],
+      "excludes": [ "*_d", "*_s", "*_local", "*_h", "*_bmp", "*_rmao", "*_rmaod", "*_add", "*_n" ]
+    },
+
+The `excludes` patterns in this example hide the loose component images of a Doom 3 material, such as its diffuse, specular and normal maps, which would otherwise each appear as a material of its own. They do not affect the materials defined in the scripts.
+
 #### Entity Configuration {#game_configuration_files_entities}
 
 In the entity configuration section, you can specify which entity definition files come with your game configuration, a default color for entities and an expression that yields a default scale when evaluated against an entities' properties.

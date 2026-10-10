@@ -481,6 +481,17 @@ std::vector<std::filesystem::path> parseMaterialExtensions(
     .extensions;
 }
 
+std::vector<std::filesystem::path> parseShaderExtensions(
+  const el::EvaluationContext& context, const el::Value& value)
+{
+  if (const auto extensions = value.atOrDefault(context, "shaderExtensions");
+      extensions != el::Value::Null)
+  {
+    return extensionsToPaths(extensions.asStringList(context));
+  }
+  return {".shader"};
+}
+
 MaterialConfig parseMaterialConfig(
   const el::EvaluationContext& context, const el::Value& value)
 {
@@ -494,6 +505,10 @@ MaterialConfig parseMaterialConfig(
     std::filesystem::path{
       value.atOrDefault(context, "shaderSearchPath").stringValue(context)},
     value.atOrDefault(context, "excludes").asStringList(context),
+    parseShaderExtensions(context, value),
+    value.atOrDefault(context, "shaderImageSearchPaths").asStringList(context)
+      | std::views::transform([](const auto& str) { return std::filesystem::path{str}; })
+      | kdl::ranges::to<std::vector>(),
   };
 }
 
