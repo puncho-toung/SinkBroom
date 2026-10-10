@@ -143,4 +143,49 @@ inline const GameInfo Quake2GameInfo = detail::makeGameInfoFixture(
   },
   getFixtureRoot() / "test" / "mdl" / "Game" / "Quake2");
 
+inline const GameInfo Doom3BFGGameInfo = detail::makeGameInfoFixture(
+  {
+    .name = "Doom 3 BFG",
+    // There is no config file in the fixture. The path only makes builtin entity
+    // definition files (as in "_tb_def" "builtin:DOOM-3-tbtest.fgd") resolve to
+    // the FGD in base/_tb/fgd.
+    .path = getFixtureRoot() / "test" / "mdl" / "Game" / "Doom3BFG" / "base" / "_tb"
+            / "fgd" / "GameConfig.cfg",
+    .icon = {},
+    .experimental = false,
+    .fileFormats =
+      {
+        // TODO(01): "Doom3 (Valve)"
+        {.format = "Quake3 (Valve)", .initialMap = ""},
+      },
+    .fileSystemConfig =
+      {
+        .searchPath = "base",
+        .packageFormat = {.extensions = {".pk4"}, .format = "zip"},
+      },
+    .materialConfig =
+      {
+        .root = "textures",
+        .extensions = {".tga", ".png", ".jpg", ".dds"},
+        .palette = "",
+        .property = std::nullopt,
+        // TODO(02): add the .mtr keys (shaderExtensions, shaderImageSearchPaths)
+        .shaderSearchPath = "materials",
+        .excludes = {},
+      },
+    .entityConfig =
+      {
+        .defFilePaths = {"DOOM-3-tbtest.fgd"},
+        .defaultColor = RgbaF{0.6f, 0.6f, 0.6f, 1.0f},
+        .scaleExpression = std::nullopt,
+        .setDefaultProperties = false,
+      },
+    .faceAttribsConfig = {},
+    .smartTags = {},
+    .softMapBounds = {},
+    .compilationTools = {},
+    .forceEmptyNewMap = true,
+  },
+  getFixtureRoot() / "test" / "mdl" / "Game" / "Doom3BFG");
+
 } // namespace tb::mdl
