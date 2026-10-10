@@ -412,6 +412,114 @@ TEST_CASE("NodeWriter")
     CHECK(actual == expected);
   }
 
+  SECTION("writeDoom3ValveMap")
+  {
+    const auto worldBounds = vm::bbox3d{8192.0};
+
+    auto worldNode = WorldNode{{}, {}, MapFormat::Doom3_Valve};
+
+    auto builder = BrushBuilder{worldNode.mapFormat(), worldBounds};
+    auto brush1 = builder.createCube(64.0, "tb_test/wall") | kdl::value();
+
+    // RBDOOM-3-BFG ignores Quake 2 surface attributes, so they are never written
+    {
+      auto index = brush1.findFace(vm::vec3d{0, 0, 1});
+      REQUIRE(index);
+
+      auto& face = brush1.face(*index);
+      face.setSurfaceAttributes({.contents = 8, .flags = 9, .value = 700.0f});
+    }
+
+    auto* brushNode1 = new BrushNode{std::move(brush1)};
+    worldNode.defaultLayer()->addChild(brushNode1);
+
+    auto str = std::stringstream{};
+    auto writer = NodeWriter{worldNode, str};
+    writer.writeMap(taskManager);
+
+    const auto actual = str.str();
+    const auto expected =
+      R"(// entity 0
+{
+"classname" "worldspawn"
+// brush 0
+{
+( -32 -32 -32 ) ( -32 -31 -32 ) ( -32 -32 -31 ) tb_test/wall [ 0 -1 0 0 ] [ 0 0 -1 0 ] 0 1 1
+( -32 -32 -32 ) ( -32 -32 -31 ) ( -31 -32 -32 ) tb_test/wall [ 1 0 0 0 ] [ 0 0 -1 0 ] 0 1 1
+( -32 -32 -32 ) ( -31 -32 -32 ) ( -32 -31 -32 ) tb_test/wall [ -1 0 0 0 ] [ 0 -1 0 0 ] 0 1 1
+( 32 32 32 ) ( 32 33 32 ) ( 33 32 32 ) tb_test/wall [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 1 1
+( 32 32 32 ) ( 33 32 32 ) ( 32 32 33 ) tb_test/wall [ -1 0 0 0 ] [ 0 0 -1 0 ] 0 1 1
+( 32 32 32 ) ( 32 32 33 ) ( 32 33 32 ) tb_test/wall [ 0 1 0 0 ] [ 0 0 -1 0 ] 0 1 1
+}
+}
+)";
+
+    CHECK(actual == expected);
+  }
+
+  SECTION("writeDoom3ValvePatches")
+  {
+    auto worldNode = WorldNode{{}, {}, MapFormat::Doom3_Valve};
+
+    // clang-format off
+    auto* patchNode1 = new PatchNode{BezierPatch{3, 3, {
+      {0, 0, 0, 0, 0}, {1, 0, 1, 0, 0.5}, {2, 0, 0, 0, 1},
+      {0, 1, 1, 0.5, 0}, {1, 1, 2, 0.5, 0.5}, {2, 1, 1, 0.5, 1},
+      {0, 2, 0, 1, 0}, {1, 2, 1, 1, 0.5}, {2, 2, 0, 1, 1} }, "tb_test/wall"}};
+    auto* patchNode2 = new PatchNode{BezierPatch{5, 3, {
+      {0, 0, 0}, {1, 0, 1}, {2, 0, 0},
+      {0, 1, 1}, {1, 1, 2}, {2, 1, 1},
+      {0, 2, 0}, {1, 2, 1}, {2, 2, 0},
+      {0, 3, 1}, {1, 3, 2}, {2, 3, 1},
+      {0, 4, 0}, {1, 4, 1}, {2, 4, 0} }, R"(tb_test/"wall" 2)", PatchSubdivisions{4, 2}}};
+    // clang-format on
+    worldNode.defaultLayer()->addChild(patchNode1);
+    worldNode.defaultLayer()->addChild(patchNode2);
+
+    auto str = std::stringstream{};
+    auto writer = NodeWriter{worldNode, str};
+    writer.writeMap(taskManager);
+
+    // the material is quoted and has no textures/ prefix, which RBDOOM-3-BFG adds back
+    const auto actual = str.str();
+    const auto expected =
+      R"(// entity 0
+{
+"classname" "worldspawn"
+// brush 0
+{
+patchDef2
+{
+"tb_test/wall"
+( 3 3 0 0 0 )
+(
+( ( 0 0 0 0 0 ) ( 1 0 1 0 0.5 ) ( 2 0 0 0 1 ) )
+( ( 0 1 1 0.5 0 ) ( 1 1 2 0.5 0.5 ) ( 2 1 1 0.5 1 ) )
+( ( 0 2 0 1 0 ) ( 1 2 1 1 0.5 ) ( 2 2 0 1 1 ) )
+)
+}
+}
+// brush 1
+{
+patchDef3
+{
+"tb_test/\"wall\" 2"
+( 5 3 4 2 0 0 0 )
+(
+( ( 0 0 0 0 0 ) ( 1 0 1 0 0 ) ( 2 0 0 0 0 ) )
+( ( 0 1 1 0 0 ) ( 1 1 2 0 0 ) ( 2 1 1 0 0 ) )
+( ( 0 2 0 0 0 ) ( 1 2 1 0 0 ) ( 2 2 0 0 0 ) )
+( ( 0 3 1 0 0 ) ( 1 3 2 0 0 ) ( 2 3 1 0 0 ) )
+( ( 0 4 0 0 0 ) ( 1 4 1 0 0 ) ( 2 4 0 0 0 ) )
+)
+}
+}
+}
+)";
+
+    CHECK(actual == expected);
+  }
+
   SECTION("writeWorldspawnWithBrushInDefaultLayer")
   {
     const auto worldBounds = vm::bbox3d{8192.0};

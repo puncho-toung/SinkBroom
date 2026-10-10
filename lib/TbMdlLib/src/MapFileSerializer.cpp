@@ -270,6 +270,103 @@ private:
   }
 };
 
+/**
+ * Writes the Valve 220 format that RBDOOM-3-BFG reads for maps without a "Version" line.
+ *
+ * Faces are written without Quake 2 surface attributes because the engine ignores them.
+ * Patches are written with quoted material names, as the engine writes them, but without
+ * the textures/ prefix, which the engine adds when reading a patch. Patches with explicit
+ * subdivisions are written as patchDef3, all others as patchDef2.
+ */
+class Doom3ValveFileSerializer : public QuakeFileSerializer
+{
+public:
+  explicit Doom3ValveFileSerializer(std::ostream& stream)
+    : QuakeFileSerializer{stream}
+  {
+  }
+
+private:
+  void doWriteBrushFace(std::ostream& stream, const BrushFace& face) const override
+  {
+    writeFacePoints(stream, face);
+    writeValveMaterialInfo(stream, face);
+    fmt::format_to(std::ostreambuf_iterator<char>{stream}, "\n");
+  }
+
+  PrecomputedString doWritePatch(const BezierPatch& patch) const override
+  {
+    size_t lineCount = 0u;
+    auto stream = std::stringstream{};
+
+    const auto& explicitSubdivisions = patch.explicitSubdivisions();
+
+    fmt::format_to(std::ostreambuf_iterator<char>{stream}, "{{\n");
+    ++lineCount;
+    fmt::format_to(
+      std::ostreambuf_iterator<char>{stream},
+      "{}\n",
+      explicitSubdivisions ? "patchDef3" : "patchDef2");
+    ++lineCount;
+    fmt::format_to(std::ostreambuf_iterator<char>{stream}, "{{\n");
+    ++lineCount;
+    fmt::format_to(
+      std::ostreambuf_iterator<char>{stream},
+      "{}\n",
+      quoteMaterialName(patch.materialName()));
+    ++lineCount;
+    if (explicitSubdivisions)
+    {
+      fmt::format_to(
+        std::ostreambuf_iterator<char>{stream},
+        "( {} {} {} {} 0 0 0 )\n",
+        patch.pointRowCount(),
+        patch.pointColumnCount(),
+        explicitSubdivisions->horizontal,
+        explicitSubdivisions->vertical);
+    }
+    else
+    {
+      fmt::format_to(
+        std::ostreambuf_iterator<char>{stream},
+        "( {} {} 0 0 0 )\n",
+        patch.pointRowCount(),
+        patch.pointColumnCount());
+    }
+    ++lineCount;
+    fmt::format_to(std::ostreambuf_iterator<char>{stream}, "(\n");
+    ++lineCount;
+
+    for (size_t row = 0u; row < patch.pointRowCount(); ++row)
+    {
+      fmt::format_to(std::ostreambuf_iterator<char>{stream}, "( ");
+      for (size_t col = 0u; col < patch.pointColumnCount(); ++col)
+      {
+        const auto& p = patch.controlPoint(row, col);
+        fmt::format_to(
+          std::ostreambuf_iterator<char>{stream},
+          "( {} {} {} {} {} ) ",
+          p[0],
+          p[1],
+          p[2],
+          p[3],
+          p[4]);
+      }
+      fmt::format_to(std::ostreambuf_iterator<char>{stream}, ")\n");
+      ++lineCount;
+    }
+
+    fmt::format_to(std::ostreambuf_iterator<char>{stream}, ")\n");
+    ++lineCount;
+    fmt::format_to(std::ostreambuf_iterator<char>{stream}, "}}\n");
+    ++lineCount;
+    fmt::format_to(std::ostreambuf_iterator<char>{stream}, "}}\n");
+    ++lineCount;
+
+    return {stream.str(), lineCount};
+  }
+};
+
 std::unique_ptr<NodeSerializer> MapFileSerializer::create(
   const MapFormat format, std::ostream& stream)
 {
@@ -288,8 +385,9 @@ std::unique_ptr<NodeSerializer> MapFileSerializer::create(
   case MapFormat::Daikatana:
     return std::make_unique<DaikatanaFileSerializer>(stream);
   case MapFormat::Valve:
-  case MapFormat::Doom3_Valve:
     return std::make_unique<ValveFileSerializer>(stream);
+  case MapFormat::Doom3_Valve:
+    return std::make_unique<Doom3ValveFileSerializer>(stream);
   case MapFormat::Hexen2:
     return std::make_unique<Hexen2FileSerializer>(stream);
   case MapFormat::Unknown:
@@ -341,7 +439,7 @@ void MapFileSerializer::doBeginFile(
                          return Entry{brushNode, writeBrushFaces(brushNode->brush())};
                        },
                        [&](const PatchNode* patchNode) {
-                         return Entry{patchNode, writePatch(patchNode->patch())};
+                         return Entry{patchNode, doWritePatch(patchNode->patch())};
                        }),
                      node);
                  }};
@@ -457,7 +555,7 @@ MapFileSerializer::PrecomputedString MapFileSerializer::writeBrushFaces(
   return {stream.str(), brush.faces().size()};
 }
 
-MapFileSerializer::PrecomputedString MapFileSerializer::writePatch(
+MapFileSerializer::PrecomputedString MapFileSerializer::doWritePatch(
   const BezierPatch& patch) const
 {
   size_t lineCount = 0u;

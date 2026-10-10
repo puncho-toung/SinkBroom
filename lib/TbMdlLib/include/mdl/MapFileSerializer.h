@@ -48,11 +48,14 @@ private:
   size_t m_line;
   std::ostream& m_stream;
 
+protected:
   struct PrecomputedString
   {
     std::string string;
     size_t lineCount;
   };
+
+private:
   std::unordered_map<const Node*, PrecomputedString> m_nodeToPrecomputedString;
 
 public:
@@ -81,7 +84,7 @@ private:
 private: // threadsafe
   virtual void doWriteBrushFace(std::ostream& stream, const BrushFace& face) const = 0;
   PrecomputedString writeBrushFaces(const Brush& brush) const;
-  PrecomputedString writePatch(const BezierPatch& patch) const;
+  virtual PrecomputedString doWritePatch(const BezierPatch& patch) const;
 };
 
 } // namespace mdl
