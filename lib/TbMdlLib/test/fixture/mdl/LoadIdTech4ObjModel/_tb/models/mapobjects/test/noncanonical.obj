@@ -1,0 +1,12 @@
+# hand-written: a usemtl name as a tool might write it, with backslashes, capitals
+# and an image extension; the engine canonicalizes it to models/mapobjects/test/wedge
+o Geometry.0
+v 0.000000 0.000000 0.000000
+v 64.000000 0.000000 0.000000
+v 0.000000 32.000000 16.000000
+vt 0.000000 1.000000
+vt 1.000000 1.000000
+vt 0.000000 0.750000
+usemtl Models\MapObjects\Test\Wedge.TGA
+s 1
+f 3/3 2/2 1/1

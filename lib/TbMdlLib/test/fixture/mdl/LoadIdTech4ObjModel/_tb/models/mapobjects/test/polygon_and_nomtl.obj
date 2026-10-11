@@ -1,0 +1,18 @@
+# hand-written, not engine output: a counter-clockwise quad and a triangle with
+# relative indices, both before any usemtl
+v 0 0 0
+v 32 0 0
+v 32 16 0
+v 0 16 0
+vt 0 0
+vt 1 0
+vt 1 1
+vt 0 1
+f 1/1 2/2 3/3 4/4
+v 0 0 8
+v 16 0 8
+v 0 8 8
+vt 0.25 0.5
+vt 0.5 0.5
+vt 0.25 0.75
+f -3/-3 -2/-2 -1/-1

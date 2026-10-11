@@ -48,6 +48,7 @@ target_sources(TbMdlLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LoadDdsTexture.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LoadDkmModel.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LoadFmModel.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LoadIdTech4ObjModel.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LoadImageTexture.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LoadM8Texture.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LoadM32Texture.cpp
