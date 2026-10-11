@@ -38,8 +38,12 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
+#include <array>
+#include <charconv>
 #include <ostream>
 #include <ranges>
+#include <string_view>
 
 namespace tb::mdl
 {
@@ -68,6 +72,9 @@ std::ostream& operator<<(std::ostream& lhs, const EntityRotationType& rhs)
     break;
   case EntityRotationType::Matrix3x3:
     lhs << "Matrix3x3";
+    break;
+  case EntityRotationType::IdTech4Angles:
+    lhs << "IdTech4Angles";
     break;
     switchDefault();
   }
@@ -226,8 +233,12 @@ EntityRotationInfo quakeEntityRotationInfo(const Entity& entity)
 }
 
 /**
- * Whether the id Tech 4 policy treats the given entity as a light. dmap compares the
- * classname with "light" without regard to case (tools/compilers/dmap/map.cpp).
+ * Whether the id Tech 4 policy treats the given entity as a light: its classname starts
+ * with "light", without regard to case. The prefix is the editor's choice (package 05,
+ * section 4.6). The engine has no such rule: the game makes an idLight of every class
+ * whose spawnclass is idLight, while dmap, the map converter and the FGD exporter compare
+ * the whole classname with "light" using idStr::Icmp (tools/compilers/dmap/map.cpp,
+ * idlib/MapFile.cpp, framework/DeclManager.cpp).
  */
 bool isIdTech4Light(const Entity& entity)
 {
@@ -249,14 +260,14 @@ const std::vector<std::tuple<std::string, EntityRotationType>>& idTech4RotationP
     std::vector<std::tuple<std::string, EntityRotationType>>{
       {EntityPropertyKeys::LightRotation, EntityRotationType::Matrix3x3},
       {EntityPropertyKeys::Rotation, EntityRotationType::Matrix3x3},
-      {EntityPropertyKeys::LightAngles, EntityRotationType::Euler_PositivePitchDown},
-      {EntityPropertyKeys::Angles, EntityRotationType::Euler_PositivePitchDown},
+      {EntityPropertyKeys::LightAngles, EntityRotationType::IdTech4Angles},
+      {EntityPropertyKeys::Angles, EntityRotationType::IdTech4Angles},
       {EntityPropertyKeys::Angle, EntityRotationType::Angle},
     };
   static const auto otherProperties =
     std::vector<std::tuple<std::string, EntityRotationType>>{
       {EntityPropertyKeys::Rotation, EntityRotationType::Matrix3x3},
-      {EntityPropertyKeys::Angles, EntityRotationType::Euler_PositivePitchDown},
+      {EntityPropertyKeys::Angles, EntityRotationType::IdTech4Angles},
       {EntityPropertyKeys::Angle, EntityRotationType::Angle},
     };
 
@@ -322,9 +333,71 @@ EntityRotationInfo idTech4EntityRotationInfo(const Entity& entity)
       EntityRotationType::Angle, EntityPropertyKeys::Angle, EntityRotationUsage::Allowed};
   }
   return {
-    EntityRotationType::Euler_PositivePitchDown,
+    EntityRotationType::IdTech4Angles,
     EntityPropertyKeys::Angles,
     EntityRotationUsage::Allowed};
+}
+
+/**
+ * Reads up to N numbers from the start of the given text the way the engine's sscanf of
+ * "%f %f ..." reads them: white space before each number is skipped, and reading stops at
+ * the first text that is not a number. Returns the numbers read.
+ */
+template <std::size_t N>
+std::vector<double> parseLeadingNumbers(const std::string_view text)
+{
+  auto result = std::vector<double>{};
+  auto pos = std::size_t{0};
+  while (result.size() < N)
+  {
+    pos = text.find_first_not_of(" \t\n\v\f\r", pos);
+    if (pos == std::string_view::npos)
+    {
+      break;
+    }
+
+    // sscanf reads a plus sign, std::from_chars does not
+    if (text[pos] == '+')
+    {
+      ++pos;
+    }
+
+    auto number = 0.0;
+    const auto [end, error] =
+      std::from_chars(text.data() + pos, text.data() + text.size(), number);
+    if (error != std::errc{})
+    {
+      break;
+    }
+
+    result.push_back(number);
+    pos = static_cast<std::size_t>(end - text.data());
+  }
+  return result;
+}
+
+/**
+ * Reads up to N leading numbers of the given property over the given default values, as
+ * idDict::GetMatrix and idDict::GetAngles start from a default and let sscanf set the
+ * numbers it finds. A property that is missing, has no leading number or has a number
+ * that is not finite gives the default values.
+ */
+template <std::size_t N>
+std::array<double, N> parseIdTech4Numbers(
+  const std::vector<EntityProperty>& properties,
+  const std::string& propertyKey,
+  std::array<double, N> result)
+{
+  const auto it = findEntityProperty(properties, propertyKey);
+  if (it != std::end(properties))
+  {
+    const auto numbers = parseLeadingNumbers<N>(it->value());
+    if (std::ranges::all_of(numbers, [](const auto n) { return vm::is_finite(n); }))
+    {
+      std::ranges::copy(numbers, std::begin(result));
+    }
+  }
+  return result;
 }
 
 } // namespace
@@ -424,28 +497,30 @@ vm::mat4x4d entityRotation(
     return vm::rotation_matrix(roll, pitch, yaw);
   }
   case EntityRotationType::Matrix3x3: {
-    // idDict::GetMatrix reads the nine numbers as the rows of an idMat3, and row i is the
-    // world direction of the entity's local axis i (forward, left, up), i.e. column i of
-    // a rotation matrix here; "0 1 0 -1 0 0 0 0 1" turns the entity by 90 degrees
-    const auto it = findEntityProperty(properties, info.propertyKey);
-    const auto values =
-      it != std::end(properties) ? vm::parse<double, 9>(it->value()) : std::nullopt;
-    if (!values)
-    {
-      return vm::mat4x4d::identity();
-    }
+    // idDict::GetMatrix reads up to nine numbers over the identity as the rows of an
+    // idMat3, and row i is the world direction of the entity's local axis i (forward,
+    // left, up), i.e. column i of a rotation matrix here; "0 1 0 -1 0 0 0 0 1" and
+    // "0 1 0 -1 0 0" turn the entity by 90 degrees
+    const auto values = parseIdTech4Numbers<9>(
+      properties, info.propertyKey, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0});
 
     auto rotation = vm::mat4x4d::identity();
-    for (size_t column = 0; column < 3; ++column)
+    for (size_t i = 0; i < values.size(); ++i)
     {
-      rotation[column] = vm::vec4d{
-        (*values)[3 * column],
-        (*values)[3 * column + 1],
-        (*values)[3 * column + 2],
-        0.0,
-      };
+      rotation[i / 3][i % 3] = values[i];
     }
     return rotation;
+  }
+  case EntityRotationType::IdTech4Angles: {
+    // idDict::GetAngles reads up to three numbers over 0 0 0
+    const auto angles =
+      parseIdTech4Numbers<3>(properties, info.propertyKey, {0.0, 0.0, 0.0});
+
+    // pitch yaw roll, positive pitch points down, like Euler_PositivePitchDown
+    const auto roll = +vm::to_radians(angles[2]);
+    const auto pitch = +vm::to_radians(angles[0]);
+    const auto yaw = +vm::to_radians(angles[1]);
+    return vm::rotation_matrix(roll, pitch, yaw);
   }
   case EntityRotationType::None:
     return vm::mat4x4d::identity();
@@ -609,6 +684,8 @@ std::optional<EntityProperty> applyEntityRotation(
       vm::vec3d(yawPitchRoll.x(), -yawPitchRoll.y(), yawPitchRoll.z());
     return {{info.propertyKey, kdl::str_to_string(vm::round(yawNPitchRoll))}};
   }
+  case EntityRotationType::IdTech4Angles:
+    return idTech4AnglesProperty(info.propertyKey, transformation, rotation);
   case EntityRotationType::Matrix3x3:
     // the id Tech 4 policy replaces a rotation matrix by "angles"
   case EntityRotationType::None:
@@ -654,6 +731,15 @@ EntityRotationUpdate applyIdTech4EntityRotation(
   }
 
   const auto rotation = entityRotation(entity.properties(), info);
+
+  // a degenerate rotation, e.g. of a "rotation" with only three numbers, has no angles
+  const auto forward = vm::vec3d{rotation[0].xyz()};
+  const auto left = vm::vec3d{rotation[1].xyz()};
+  const auto up = vm::vec3d{rotation[2].xyz()};
+  if (vm::is_zero(vm::dot(forward, vm::cross(left, up)), vm::Cd::almost_zero()))
+  {
+    return {};
+  }
 
   if (idTech4KeepsAngle(entity))
   {

@@ -49,6 +49,12 @@ enum class EntityRotationType
    * the id Tech 4 properties "rotation" and "light_rotation". Never written.
    */
   Matrix3x3,
+  /**
+   * Pitch, yaw and roll like Euler_PositivePitchDown, read like the id Tech 4 properties
+   * "angles" and "light_angles": a value with fewer than three numbers sets the numbers
+   * it has, and the others are 0.
+   */
+  IdTech4Angles,
 };
 
 std::ostream& operator<<(std::ostream& lhs, const EntityRotationType& rhs);
