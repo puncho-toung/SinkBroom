@@ -43,7 +43,12 @@ enum class EntityRotationType
   AngleUpDown,
   Euler,
   Euler_PositivePitchDown,
-  Mangle
+  Mangle,
+  /**
+   * Nine numbers, the world directions of the entity's forward, left and up axes, as in
+   * the id Tech 4 properties "rotation" and "light_rotation". Never written.
+   */
+  Matrix3x3,
 };
 
 std::ostream& operator<<(std::ostream& lhs, const EntityRotationType& rhs);

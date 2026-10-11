@@ -62,6 +62,9 @@ std::ostream& operator<<(std::ostream& lhs, const EntityRotationType& rhs)
   case EntityRotationType::Mangle:
     lhs << "Mangle";
     break;
+  case EntityRotationType::Matrix3x3:
+    lhs << "Matrix3x3";
+    break;
     switchDefault();
   }
   return lhs;
@@ -218,6 +221,99 @@ EntityRotationInfo quakeEntityRotationInfo(const Entity& entity)
   return EntityRotationInfo{type, propertyKey, usage};
 }
 
+/**
+ * Whether the id Tech 4 policy treats the given entity as a light. dmap compares the
+ * classname with "light" without regard to case (tools/compilers/dmap/map.cpp).
+ */
+bool isIdTech4Light(const Entity& entity)
+{
+  return kdl::ci::str_is_prefix(entity.classname(), "light");
+}
+
+/**
+ * The properties that hold the rotation of a point entity under the id Tech 4 policy, in
+ * the order in which the engine reads them: idLight and dmap for lights (d3xp/Light.cpp,
+ * tools/compilers/dmap/map.cpp), idEntity::ParseSpawnArgsToRenderEntity for every other
+ * entity (d3xp/Entity.cpp). The engine normalizes the angles of "light_angles" and
+ * "angles" to 0..360 for lights, which does not change the rotation, and reads "angle" as
+ * a plain yaw, without -1 for up and -2 for down.
+ */
+const std::vector<std::tuple<std::string, EntityRotationType>>& idTech4RotationProperties(
+  const Entity& entity)
+{
+  static const auto lightProperties =
+    std::vector<std::tuple<std::string, EntityRotationType>>{
+      {EntityPropertyKeys::LightRotation, EntityRotationType::Matrix3x3},
+      {EntityPropertyKeys::Rotation, EntityRotationType::Matrix3x3},
+      {EntityPropertyKeys::LightAngles, EntityRotationType::Euler_PositivePitchDown},
+      {EntityPropertyKeys::Angles, EntityRotationType::Euler_PositivePitchDown},
+      {EntityPropertyKeys::Angle, EntityRotationType::Angle},
+    };
+  static const auto otherProperties =
+    std::vector<std::tuple<std::string, EntityRotationType>>{
+      {EntityPropertyKeys::Rotation, EntityRotationType::Matrix3x3},
+      {EntityPropertyKeys::Angles, EntityRotationType::Euler_PositivePitchDown},
+      {EntityPropertyKeys::Angle, EntityRotationType::Angle},
+    };
+
+  return isIdTech4Light(entity) ? lightProperties : otherProperties;
+}
+
+/**
+ * Whether the id Tech 4 policy writes only the yaw to "angle" for the given point entity:
+ * it is not a light, it has neither "rotation" nor "angles", and its definition declares
+ * "angle" but not "angles". For some of these classes the engine reads nothing but
+ * "angle", e.g. idTeleporter (d3xp/Fx.cpp) and idEntity::Event_RestorePosition
+ * (d3xp/Entity.cpp).
+ */
+bool idTech4KeepsAngle(const Entity& entity)
+{
+  const auto* definition = entity.definition();
+  return !isIdTech4Light(entity) && !entity.hasProperty(EntityPropertyKeys::Rotation)
+         && !entity.hasProperty(EntityPropertyKeys::Angles)
+         && getPropertyDefinition(definition, EntityPropertyKeys::Angle)
+         && !getPropertyDefinition(definition, EntityPropertyKeys::Angles);
+}
+
+/**
+ * Unlike the Quake rules, the id Tech 4 rules ignore the model's pitch type, a light's
+ * target and the definition's bounds.
+ */
+EntityRotationInfo idTech4EntityRotationInfo(const Entity& entity)
+{
+  if (entity.classname() == EntityPropertyValues::NoClassname)
+  {
+    return {EntityRotationType::None, "", EntityRotationUsage::Allowed};
+  }
+
+  if (!entity.pointEntity())
+  {
+    // the brushes are in world space, the entity's rotation properties don't rotate them
+    return {EntityRotationType::None, "", EntityRotationUsage::Allowed};
+  }
+
+  // the first present property wins even if its value is empty (idDict::GetMatrix and
+  // idDict::GetAngles)
+  for (const auto& [propertyKey, type] : idTech4RotationProperties(entity))
+  {
+    if (entity.hasProperty(propertyKey))
+    {
+      return {type, propertyKey, EntityRotationUsage::Allowed};
+    }
+  }
+
+  // an entity without a rotation property gets one when it is rotated
+  if (idTech4KeepsAngle(entity))
+  {
+    return {
+      EntityRotationType::Angle, EntityPropertyKeys::Angle, EntityRotationUsage::Allowed};
+  }
+  return {
+    EntityRotationType::Euler_PositivePitchDown,
+    EntityPropertyKeys::Angles,
+    EntityRotationUsage::Allowed};
+}
+
 } // namespace
 
 EntityRotationInfo entityRotationInfo(
@@ -226,8 +322,9 @@ EntityRotationInfo entityRotationInfo(
   switch (policy)
   {
   case EntityRotationPolicy::Quake:
-  case EntityRotationPolicy::IdTech4:
     return quakeEntityRotationInfo(entity);
+  case EntityRotationPolicy::IdTech4:
+    return idTech4EntityRotationInfo(entity);
     switchDefault();
   }
 }
@@ -312,6 +409,30 @@ vm::mat4x4d entityRotation(
     const auto pitch = -vm::to_radians(angles.y());
     const auto yaw = +vm::to_radians(angles.x());
     return vm::rotation_matrix(roll, pitch, yaw);
+  }
+  case EntityRotationType::Matrix3x3: {
+    // idDict::GetMatrix reads the nine numbers as the rows of an idMat3, and row i is the
+    // world direction of the entity's local axis i (forward, left, up), i.e. column i of
+    // a rotation matrix here; "0 1 0 -1 0 0 0 0 1" turns the entity by 90 degrees
+    const auto it = findEntityProperty(properties, info.propertyKey);
+    const auto values =
+      it != std::end(properties) ? vm::parse<double, 9>(it->value()) : std::nullopt;
+    if (!values)
+    {
+      return vm::mat4x4d::identity();
+    }
+
+    auto rotation = vm::mat4x4d::identity();
+    for (size_t column = 0; column < 3; ++column)
+    {
+      rotation[column] = vm::vec4d{
+        (*values)[3 * column],
+        (*values)[3 * column + 1],
+        (*values)[3 * column + 2],
+        0.0,
+      };
+    }
+    return rotation;
   }
   case EntityRotationType::None:
     return vm::mat4x4d::identity();
@@ -418,6 +539,8 @@ std::optional<EntityProperty> applyEntityRotation(
       vm::vec3d(yawPitchRoll.x(), -yawPitchRoll.y(), yawPitchRoll.z());
     return {{info.propertyKey, kdl::str_to_string(vm::round(yawNPitchRoll))}};
   }
+  case EntityRotationType::Matrix3x3:
+    // the id Tech 4 policy replaces a rotation matrix by "angles"
   case EntityRotationType::None:
     return std::nullopt;
     switchDefault();

@@ -28,9 +28,11 @@
 #include "mdl/EntityProperties.h"
 #include "mdl/PropertyDefinition.h"
 
+#include "vm/approx.h"
 #include "vm/bbox.h"
 #include "vm/mat.h"
 #include "vm/mat_ext.h"
+#include "vm/mat_io.h" // IWYU pragma: keep
 #include "vm/vec.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -666,6 +668,45 @@ TEST_CASE("EntityTest")
         entity.modelTransformation(defaultModelScaleExpression)
         == vm::translation_matrix(vm::vec3d{9, 8, 7})
              * vm::scaling_matrix(vm::vec3d{2, 2, 2}));
+    }
+  }
+
+  SECTION("rotation")
+  {
+    SECTION("Rotation and model transformation depend on the rotation policy")
+    {
+      const auto definition = EntityDefinition{
+        "some_class",
+        Color{},
+        "",
+        {},
+        PointEntityDefinition{vm::bbox3d{32.0}, {}, {}},
+      };
+
+      auto entity = Entity{{
+        {EntityPropertyKeys::Classname, "some_class"},
+        {EntityPropertyKeys::Rotation, "0 1 0 -1 0 0 0 0 1"},
+        {EntityPropertyKeys::Angle, "45"},
+      }};
+      entity.setDefinition(&definition);
+
+      // the Quake policy reads angle, the id Tech 4 policy reads rotation first
+      const auto quakeRotation = vm::rotation_matrix(0.0, 0.0, vm::to_radians(45.0));
+      const auto idTech4Rotation = vm::mat4x4d::rot_90_z_ccw();
+
+      // asking with another policy replaces the cached transformations
+      CHECK(entity.rotation() == vm::approx{quakeRotation});
+      CHECK(
+        entity.rotation(EntityRotationPolicy::IdTech4) == vm::approx{idTech4Rotation});
+      CHECK(entity.rotation(EntityRotationPolicy::Quake) == vm::approx{quakeRotation});
+
+      CHECK(entity.modelTransformation(std::nullopt) == vm::approx{quakeRotation});
+      CHECK(
+        entity.modelTransformation(std::nullopt, EntityRotationPolicy::IdTech4)
+        == vm::approx{idTech4Rotation});
+      CHECK(
+        entity.modelTransformation(std::nullopt, EntityRotationPolicy::Quake)
+        == vm::approx{quakeRotation});
     }
   }
 

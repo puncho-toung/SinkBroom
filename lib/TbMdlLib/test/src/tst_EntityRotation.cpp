@@ -195,6 +195,141 @@ TEST_CASE("EntityRotation")
     CHECK(entityRotationInfo(entity) == expectedRotationInfo);
   }
 
+  SECTION("entityRotationInfo with the idtech4 policy")
+  {
+    using ERT = EntityRotationType;
+    using ERU = EntityRotationUsage;
+
+    auto anglePropertyDef =
+      PropertyDefinition{"angle", PropertyValueTypes::String{}, "", ""};
+    auto anglesPropertyDef =
+      PropertyDefinition{"angles", PropertyValueTypes::String{}, "", ""};
+    auto targetPropertyDef =
+      PropertyDefinition{"target", PropertyValueTypes::LinkSource{}, "", ""};
+
+    auto invertedPitch = EntityModel{
+      "",
+      createEntityModelDataResource(
+        EntityModelData{PitchType::MdlInverted, Orientation::Oriented})};
+
+    using T = std::tuple<
+      std::vector<EntityProperty>,
+      bool,
+      std::optional<EntityDefinitionInfo>,
+      EntityModel*,
+      EntityRotationInfo>;
+
+    // clang-format off
+    const auto
+    [entityProperties,                         point, entityDefinitionInfo,                              entityModel,    expectedRotationInfo] = GENERATE_REF(values<T>({
+    // an entity without a classname is not rotated
+    {{},                                       true,  std::nullopt,                                      nullptr,        {ERT::None, "", ERU::Allowed}},
+
+    // a light reads light_rotation, rotation, light_angles, angles and angle in this order
+    {{{"classname", "light"},
+      {"light_rotation", "1 0 0 0 1 0 0 0 1"},
+      {"rotation", "1 0 0 0 1 0 0 0 1"},
+      {"light_angles", "0 0 0"},
+      {"angles", "0 0 0"},
+      {"angle", "0"}},                         true,  std::nullopt,                                      nullptr,        {ERT::Matrix3x3, "light_rotation", ERU::Allowed}},
+    {{{"classname", "light"},
+      {"rotation", "1 0 0 0 1 0 0 0 1"},
+      {"light_angles", "0 0 0"},
+      {"angles", "0 0 0"},
+      {"angle", "0"}},                         true,  std::nullopt,                                      nullptr,        {ERT::Matrix3x3, "rotation", ERU::Allowed}},
+    {{{"classname", "light"},
+      {"light_angles", "0 0 0"},
+      {"angles", "0 0 0"},
+      {"angle", "0"}},                         true,  std::nullopt,                                      nullptr,        {ERT::Euler_PositivePitchDown, "light_angles", ERU::Allowed}},
+    {{{"classname", "light"},
+      {"angles", "0 0 0"},
+      {"angle", "0"}},                         true,  std::nullopt,                                      nullptr,        {ERT::Euler_PositivePitchDown, "angles", ERU::Allowed}},
+    {{{"classname", "light"},
+      {"angle", "0"}},                         true,  std::nullopt,                                      nullptr,        {ERT::Angle, "angle", ERU::Allowed}},
+
+    // a present property wins even if its value is empty
+    {{{"classname", "light"},
+      {"light_rotation", ""},
+      {"angles", "0 90 0"}},                   true,  std::nullopt,                                      nullptr,        {ERT::Matrix3x3, "light_rotation", ERU::Allowed}},
+
+    // a light without a rotation property gets angles, even if its definition only declares angle
+    {{{"classname", "light"}},                 true,  std::nullopt,                                      nullptr,        {ERT::Euler_PositivePitchDown, "angles", ERU::Allowed}},
+    {{{"classname", "light"}},                 true,  {{{anglePropertyDef}}},                            nullptr,        {ERT::Euler_PositivePitchDown, "angles", ERU::Allowed}},
+
+    // mangle is not read, and a light's classname is compared without regard to case
+    {{{"classname", "Light_Flicker"},
+      {"mangle", "0 0 0"}},                    true,  std::nullopt,                                      nullptr,        {ERT::Euler_PositivePitchDown, "angles", ERU::Allowed}},
+
+    // a light with a target is rotated, and the model's pitch type does not matter
+    {{{"classname", "light"},
+      {"angles", "0 0 0"},
+      {"target", "xyz"}},                      true,  {{{targetPropertyDef}}},                           &invertedPitch, {ERT::Euler_PositivePitchDown, "angles", ERU::Allowed}},
+
+    // other point entities read rotation, angles and angle in this order
+    {{{"classname", "other"},
+      {"rotation", "1 0 0 0 1 0 0 0 1"},
+      {"angles", "0 0 0"},
+      {"angle", "0"}},                         true,  std::nullopt,                                      nullptr,        {ERT::Matrix3x3, "rotation", ERU::Allowed}},
+    {{{"classname", "other"},
+      {"angles", "0 0 0"},
+      {"angle", "0"}},                         true,  std::nullopt,                                      nullptr,        {ERT::Euler_PositivePitchDown, "angles", ERU::Allowed}},
+    {{{"classname", "other"},
+      {"angle", "0"}},                         true,  std::nullopt,                                      nullptr,        {ERT::Angle, "angle", ERU::Allowed}},
+
+    // a present property wins even if its value is empty
+    {{{"classname", "other"},
+      {"rotation", ""},
+      {"angles", "0 90 0"}},                   true,  std::nullopt,                                      nullptr,        {ERT::Matrix3x3, "rotation", ERU::Allowed}},
+    {{{"classname", "other"},
+      {"angles", ""},
+      {"angle", "90"}},                        true,  std::nullopt,                                      nullptr,        {ERT::Euler_PositivePitchDown, "angles", ERU::Allowed}},
+
+    // only lights read light_rotation and light_angles
+    {{{"classname", "other"},
+      {"light_rotation", "1 0 0 0 1 0 0 0 1"},
+      {"light_angles", "0 0 0"},
+      {"angle", "90"}},                        true,  std::nullopt,                                      nullptr,        {ERT::Angle, "angle", ERU::Allowed}},
+
+    // without a rotation property, an entity gets angles, or angle if its definition declares angle but not angles
+    {{{"classname", "other"}},                 true,  std::nullopt,                                      nullptr,        {ERT::Euler_PositivePitchDown, "angles", ERU::Allowed}},
+    {{{"classname", "other"}},                 true,  {{{anglePropertyDef}}},                            nullptr,        {ERT::Angle, "angle", ERU::Allowed}},
+    {{{"classname", "other"}},                 true,  {{{anglePropertyDef, anglesPropertyDef}}},         nullptr,        {ERT::Euler_PositivePitchDown, "angles", ERU::Allowed}},
+    {{{"classname", "other"},
+      {"angle", "90"}},                        true,  {{{anglePropertyDef}}},                            nullptr,        {ERT::Angle, "angle", ERU::Allowed}},
+    {{{"classname", "other"},
+      {"angles", "0 90 0"}},                   true,  {{{anglePropertyDef}}},                            nullptr,        {ERT::Euler_PositivePitchDown, "angles", ERU::Allowed}},
+
+    // off-center definition bounds don't block the rotation
+    {{{"classname", "other"},
+      {"angles", "0 0 0"}},                    true,  {{{},
+                                                         {{0, 0, -16}, {16, 16, 16}}}},             nullptr,        {ERT::Euler_PositivePitchDown, "angles", ERU::Allowed}},
+
+    // an entity with brushes shows no rotation, whatever its properties
+    {{{"classname", "other"},
+      {"rotation", "0 1 0 -1 0 0 0 0 1"},
+      {"angles", "0 90 0"},
+      {"angle", "90"}},                        false, std::nullopt,                                      nullptr,        {ERT::None, "", ERU::Allowed}},
+    {{{"classname", "light"},
+      {"angles", "0 90 0"}},                   false, std::nullopt,                                      nullptr,        {ERT::None, "", ERU::Allowed}},
+    }));
+    // clang-format on
+
+    CAPTURE(entityProperties, point, entityDefinitionInfo, entityModel);
+
+    const auto entityDefinition = createEntityDefinition(entityDefinitionInfo);
+
+    auto entity = Entity{entityProperties};
+    if (entityDefinition)
+    {
+      entity.setDefinition(&*entityDefinition);
+    }
+    entity.setModel(entityModel);
+    entity.setPointEntity(point);
+
+    CHECK(
+      entityRotationInfo(entity, EntityRotationPolicy::IdTech4) == expectedRotationInfo);
+  }
+
   SECTION("entityRotation")
   {
     using T = std::tuple<std::vector<EntityProperty>, EntityRotationInfo, vm::mat4x4d>;
@@ -225,6 +360,120 @@ TEST_CASE("EntityRotation")
     CAPTURE(properties, info);
 
     CHECK(entityRotation(properties, info) == vm::approx{expectedTransformation});
+  }
+
+  SECTION("entityRotation with a rotation matrix")
+  {
+    using T = std::tuple<std::vector<EntityProperty>, vm::mat4x4d>;
+
+    const auto info = EntityRotationInfo{
+      EntityRotationType::Matrix3x3, "rotation", EntityRotationUsage::Allowed};
+
+    // clang-format off
+    const auto
+    [properties,                                  expectedTransformation] = GENERATE(values<T>({
+    {{},                                          vm::mat4x4d::identity()},
+    {{{"rotation", ""}},                          vm::mat4x4d::identity()},
+    // the columns of the rotation are the forward, left and up axes: yaw 90
+    {{{"rotation", "0 1 0 -1 0 0 0 0 1"}},        vm::mat4x4d::rot_90_z_ccw()},
+    // pitch 90, positive pitch points down
+    {{{"rotation", "0 0 -1 0 1 0 1 0 0"}},        vm::rotation_matrix(0.0, vm::to_radians(90.0), 0.0)},
+    // like the engine, read the first nine numbers
+    {{{"rotation", "0 1 0 -1 0 0 0 0 1 5"}},      vm::mat4x4d::rot_90_z_ccw()},
+    // fewer than nine numbers
+    {{{"rotation", "0 1 0 -1 0 0 0 0"}},          vm::mat4x4d::identity()},
+    {{{"rotation", "0 1 0 -1 0 0 0 0 x"}},        vm::mat4x4d::identity()},
+    }));
+    // clang-format on
+
+    CAPTURE(properties);
+
+    CHECK(entityRotation(properties, info) == vm::approx{expectedTransformation});
+  }
+
+  SECTION("entityRotation with the idtech4 policy")
+  {
+    const auto rotation =
+      [](std::vector<EntityProperty> properties, const bool point = true) {
+        auto entity = Entity{std::move(properties)};
+        entity.setPointEntity(point);
+        return entityRotation(entity, EntityRotationPolicy::IdTech4);
+      };
+
+    SECTION("angles follow idAngles::ToMat3")
+    {
+      // idAngles::ToMat3 (idlib/math/Angles.cpp) for pitch 30, yaw 45 and roll 60:
+      //   sp = 1/2, cp = sqrt(3)/2, sy = cy = sqrt(2)/2, sr = sqrt(3)/2, cr = 1/2
+      //   forward = mat[0] = (cp*cy,               cp*sy,               -sp)
+      //                    = (0.612372,            0.612372,            -0.5)
+      //   left    = mat[1] = (sr*sp*cy - cr*sy,    sr*sp*sy + cr*cy,    sr*cp)
+      //                    = (0.306186 - 0.353553, 0.306186 + 0.353553, 0.75)
+      //   up      = mat[2] = (cr*sp*cy + sr*sy,    cr*sp*sy - sr*cy,    cr*cp)
+      //                    = (0.176777 + 0.612372, 0.176777 - 0.612372, 0.433013)
+      const auto forward = vm::vec3d{0.612372, 0.612372, -0.5};
+      const auto left = vm::vec3d{-0.047367, 0.659740, 0.75};
+      const auto up = vm::vec3d{0.789149, -0.435596, 0.433013};
+
+      const auto checkAxes = [&](const vm::mat4x4d& actual) {
+        CHECK(actual * vm::vec3d{1, 0, 0} == vm::approx{forward, 1e-6});
+        CHECK(actual * vm::vec3d{0, 1, 0} == vm::approx{left, 1e-6});
+        CHECK(actual * vm::vec3d{0, 0, 1} == vm::approx{up, 1e-6});
+      };
+
+      checkAxes(rotation({{"classname", "other"}, {"angles", "30 45 60"}}));
+      checkAxes(rotation({{"classname", "light"}, {"angles", "30 45 60"}}));
+
+      // a light normalizes light_angles to 0..360, which changes nothing
+      checkAxes(rotation({{"classname", "light"}, {"light_angles", "-330 405 420"}}));
+
+      // the same rotation as a matrix
+      checkAxes(rotation({
+        {"classname", "other"},
+        {"rotation",
+         "0.612372 0.612372 -0.5 -0.047367 0.659740 0.75 0.789149 -0.435596 0.433013"},
+      }));
+    }
+
+    SECTION("rotation, angles and angle agree on yaw 90")
+    {
+      const auto yaw90 = vm::mat4x4d::rot_90_z_ccw();
+      CHECK(
+        rotation({{"classname", "other"}, {"rotation", "0 1 0 -1 0 0 0 0 1"}})
+        == vm::approx{yaw90});
+      CHECK(
+        rotation({{"classname", "other"}, {"angles", "0 90 0"}}) == vm::approx{yaw90});
+      CHECK(rotation({{"classname", "other"}, {"angle", "90"}}) == vm::approx{yaw90});
+      CHECK(
+        rotation({{"classname", "light"}, {"light_rotation", "0 1 0 -1 0 0 0 0 1"}})
+        == vm::approx{yaw90});
+    }
+
+    SECTION("angle is a plain yaw")
+    {
+      CHECK(
+        rotation({{"classname", "light"}, {"angle", "-1"}})
+        == vm::approx{vm::rotation_matrix(0.0, 0.0, vm::to_radians(-1.0))});
+      CHECK(
+        rotation({{"classname", "other"}, {"angle", "-2"}})
+        == vm::approx{vm::rotation_matrix(0.0, 0.0, vm::to_radians(-2.0))});
+    }
+
+    SECTION("mangle is not read")
+    {
+      const auto properties =
+        std::vector<EntityProperty>{{"classname", "light"}, {"mangle", "90 0 0"}};
+      REQUIRE(
+        entityRotation(Entity{properties}, EntityRotationPolicy::Quake)
+        == vm::approx{vm::mat4x4d::rot_90_z_ccw()});
+      CHECK(rotation(properties) == vm::mat4x4d::identity());
+    }
+
+    SECTION("An entity with brushes shows no rotation")
+    {
+      CHECK(
+        rotation({{"classname", "other"}, {"angles", "0 90 0"}}, false)
+        == vm::mat4x4d::identity());
+    }
   }
 
   SECTION("entityYawPitchRoll")
