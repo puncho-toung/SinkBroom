@@ -702,12 +702,14 @@ TEST_CASE("LoadMaterialCollections")
             MaterialInfo{"test/dds_only", 20, 12},
             MaterialInfo{"test/duplicate", 32, 16},
             MaterialInfo{"test/first_stage", 48, 8},
+            MaterialInfo{"test/generated_only", 32, 32},
             MaterialInfo{"test/invisible", 32, 32},
             MaterialInfo{"test/loose", 24, 8},
             MaterialInfo{"test/missing", 32, 32},
             MaterialInfo{"test/missing_editor", 16, 32},
             MaterialInfo{"test/named_like_image", 32, 32},
             MaterialInfo{"test/nodraw", 8, 8},
+            MaterialInfo{"test/opaque_binary_alpha", 8, 4},
             MaterialInfo{"test/precedence", 32, 16},
             MaterialInfo{"test/substituted", 8, 16},
             MaterialInfo{"test/table_declared", 16, 32},
@@ -777,9 +779,12 @@ TEST_CASE("LoadMaterialCollections")
         material("test/table_undeclared").surfaceParms().contains("engine_defaulted"));
 
       // a material without stages and editor image falls back to an image of its own
-      // name, but a material that names other images doesn't
+      // name, but a material that names other images doesn't, and neither does one with
+      // stages that show only generated images
       CHECK(material("test/nodraw").texture()->width() == 8);
       CHECK(material("test/named_like_image").texture()->width() == 32);
+      CHECK(material("test/generated_only").texture()->width() == 32);
+      CHECK(material("test/generated_only").previewImageMissing());
     }
 
     SECTION("previewImageMissing")
@@ -799,6 +804,7 @@ TEST_CASE("LoadMaterialCollections")
       CHECK(
         missing
         == std::vector<std::string>{
+          "test/generated_only",
           "test/invisible",
           "test/missing",
           "test/named_like_image",
@@ -841,11 +847,23 @@ TEST_CASE("LoadMaterialCollections")
         material("test/translucent_lit").effectiveBlendFunc().enable
         == gl::MaterialBlendFunc::Enable::UseDefault);
 
-      // opaque: never blended
+      // opaque: never blended or alpha tested, even with an image with binary alpha
       CHECK(
         material("test/precedence").effectiveBlendFunc().enable
         == gl::MaterialBlendFunc::Enable::DisableBlend);
-      CHECK_FALSE(material("test/precedence").effectiveAlphaFunc());
+      CHECK(
+        material("test/precedence").effectiveAlphaFunc()
+        == gl::MaterialAlphaFunc{gl::MaterialAlphaFunc::Compare::GreaterEqual, 0.0f});
+      REQUIRE(material("test/opaque_binary_alpha").texture() != nullptr);
+      CHECK(
+        material("test/opaque_binary_alpha").texture()->alphaDomain()
+        == img::ImageAlphaDomain::Binary);
+      CHECK(
+        material("test/opaque_binary_alpha").effectiveAlphaFunc()
+        == gl::MaterialAlphaFunc{gl::MaterialAlphaFunc::Compare::GreaterEqual, 0.0f});
+      CHECK(
+        material("test/opaque_binary_alpha").effectiveBlendFunc().enable
+        == gl::MaterialBlendFunc::Enable::DisableBlend);
 
       // culling
       CHECK(material("test/precedence").culling() == gl::MaterialCulling::Back);
@@ -861,8 +879,8 @@ TEST_CASE("LoadMaterialCollections")
     {
       CHECK(
         logger.countMessagesContaining(
-          "Loaded 24 materials from 3 files (2 defaulted, 1 unterminated); 22 under "
-          "textures/, 4 without a preview image")
+          "Loaded 26 materials from 3 files (2 defaulted, 1 unterminated); 24 under "
+          "textures/, 5 without a preview image")
         == 1);
     }
   }
@@ -894,13 +912,22 @@ TEST_CASE("LoadMaterialCollections")
 
       const auto loadedShaders =
         loadShaderFiles(fs, materialConfig, taskManager, logger) | kdl::value();
-      CHECK(loadedShaders.fileCount == 2);
+      CHECK(loadedShaders.fileCount == 3);
 
       // the files are read in sorted order, ignoring case, and the first definition wins
-      REQUIRE(loadedShaders.shaders.size() == 1);
-      CHECK(loadedShaders.shaders.front().shaderPath == "textures/test/duplicate");
-      CHECK(loadedShaders.shaders.front().editorImage == "textures/test/from_a.tga");
-      CHECK(logger.countMessagesContaining("it is already defined in") == 1);
+      REQUIRE(loadedShaders.shaders.size() == 2);
+      const auto* duplicate =
+        findShader(loadedShaders.shaders, "textures/test/duplicate");
+      REQUIRE(duplicate != nullptr);
+      CHECK(duplicate->editorImage == "textures/test/from_a.tga");
+
+      // names that differ only in case are the same name
+      const auto* differentCase = findShader(loadedShaders.shaders, "textures/test/Case");
+      REQUIRE(differentCase != nullptr);
+      CHECK(differentCase->editorImage == "textures/test/case_upper.tga");
+      CHECK(findShader(loadedShaders.shaders, "textures/test/case") == nullptr);
+
+      CHECK(logger.countMessagesContaining("it is already defined in") == 2);
     }
 
     SECTION("Doom 3 materials")
@@ -917,7 +944,7 @@ TEST_CASE("LoadMaterialCollections")
       CHECK(loadedShaders.fileCount == 3);
       CHECK(findShader(shaders, "textures/test/ignored") == nullptr);
 
-      CHECK(shaders.size() == 24);
+      CHECK(shaders.size() == 26);
       CHECK(std::ranges::is_sorted(shaders, std::less{}, &Quake3Shader::shaderPath));
       CHECK(std::ranges::all_of(shaders, [](const auto& shader) {
         return shader.format == Quake3Shader::Format::Doom3;
@@ -955,7 +982,10 @@ TEST_CASE("LoadMaterialCollections")
       CHECK(
         tableUndeclared->previewImages
         == std::vector<std::filesystem::path>{"textures/test/editor_ed.tga"});
-      CHECK(logger.countMessagesContaining("'undeclared_table'") == 1);
+      CHECK(
+        logger.countMessagesContaining(
+          "No material file declares table 'undeclared_table'")
+        == 1);
     }
 
     SECTION("Doom 3 decls without their closing brace")

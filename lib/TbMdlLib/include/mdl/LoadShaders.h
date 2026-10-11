@@ -64,12 +64,14 @@ struct LoadedShaders
  * The extension selects the parser: .mtr files are read by Doom3MaterialParser, all
  * others by Quake3ShaderParser. The files are read in the order of their paths compared
  * without case, as the engine lists decl files, and the first definition of a shader
- * name wins; later ones are dropped with a warning that names both files. Every record
+ * name, compared without case, wins; later ones are dropped with a warning that names
+ * both files. Every record
  * is kept whatever its root, so that entity models can use materials outside of
  * materialConfig.root.
  *
- * A Doom 3 material that looks up a table which no file declares is replaced with the
- * engine's default material (see makeEngineDefaulted), as the engine does.
+ * A Doom 3 material that looks up a table which no material file declares is replaced
+ * with the engine's default material (see makeEngineDefaulted), as the engine does if no
+ * other decl file declares the table.
  *
  * The records are sorted by shader path.
  */

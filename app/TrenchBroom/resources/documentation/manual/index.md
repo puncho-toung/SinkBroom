@@ -2885,7 +2885,7 @@ The optional `shaderImageSearchPaths` key lists further folders, relative to the
 
 The `excludes` patterns in this example hide the loose component images of a Doom 3 material, such as its diffuse, specular and normal maps, which would otherwise each appear as a material of its own. They do not affect the materials defined in the scripts.
 
-For Doom 3 materials, TrenchBroom shows the image the engine uses in its editors: the `qer_editorimage` if that file exists, else the image of the first diffuse stage, else the image of the first stage. Since Doom 3 scales the texture coordinates of a face by the size of this image, the preview must have the same size as the engine's image. Materials for which no image is found are shown with a placeholder image; the "Missing" button in the [material browser](#material_browser) hides them.
+For Doom 3 materials, TrenchBroom shows the image the engine uses in its editors: the `qer_editorimage` if that file exists, else the image of the first diffuse stage, else the image of the first stage. Since Doom 3 scales the texture coordinates of a face by the size of this image, the preview must have the same size as the engine's image. Materials for which no image is found are shown with a placeholder image; the "Missing" button in the [material browser](#material_browser) hides them. A Doom 3 material that looks up a table which no material file declares is treated as broken, as the engine treats it, even if another kind of decl file declares the table, because TrenchBroom reads only the material files.
 
 #### Entity Configuration {#game_configuration_files_entities}
 

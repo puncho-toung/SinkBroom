@@ -101,6 +101,22 @@ textures/test/invisible
 	playerclip
 }
 
+// its only stage shows a generated image, so like the engine's _default it gets the
+// placeholder, not the image named like it
+textures/test/generated_only
+{
+	{
+		blend	add
+		map		_currentRender
+	}
+}
+
+// opaque, so the binary alpha of its image neither blends nor alpha tests
+textures/test/opaque_binary_alpha
+{
+	diffusemap	textures/test/binary_alpha_d.tga
+}
+
 // alpha tested
 textures/test/alphatest
 {

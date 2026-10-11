@@ -502,12 +502,13 @@ PreviewImage findDoom3PreviewImage(
     }
   }
 
-  // A material that names no image at all, such as a tool material without stages and
-  // editor image, is invisible in game and its UVs don't matter, so an image named like
-  // the material is a better preview than the placeholder. The engine shows its default
-  // image. A material that names images is never previewed by its own name, because the
-  // engine doesn't do that either.
-  if (shader.previewImages.empty())
+  // A material without stages, such as a tool material, is invisible in game and its UVs
+  // don't matter, so an image named like the material is a better preview than the
+  // placeholder; the engine shows its default image. A material with stages is never
+  // previewed by its own name, because the engine doesn't do that either: one whose
+  // stages only show generated images, such as _currentRender, gets the placeholder like
+  // the engine's _default.
+  if (shader.stages.empty())
   {
     if (
       auto image =
@@ -594,8 +595,11 @@ void setDoom3RenderState(gl::Material& material, const Quake3Shader& shader)
   switch (shader.coverage)
   {
   case Quake3Shader::Coverage::Opaque:
-    // the engine draws opaque materials without blending, whatever alpha the image has
+    // The engine draws opaque materials without blending or alpha testing, whatever
+    // alpha the image has. An explicit alpha function that passes every fragment keeps an
+    // image with binary alpha from getting the implicit alpha test.
     material.disableBlend();
+    material.setAlphaFunc(gl::MaterialAlphaFunc::Compare::GreaterEqual, 0.0f);
     break;
   case Quake3Shader::Coverage::Perforated: {
     // an explicit alpha function also suppresses the default blending
@@ -836,10 +840,11 @@ const Quake3Shader* findShader(
     return &*iShader;
   }
 
-  // like the file system and the material manager, ignore case
-  const auto lowerShaderPath = kdl::path_to_lower(shaderPath);
+  // like the file system and the material manager, ignore case; this runs on the model
+  // loaders' task threads, so it compares strings instead of building lowercase paths
+  const auto shaderPathString = shaderPath.generic_string();
   const auto iShader = std::ranges::find_if(shaders, [&](const auto& shader) {
-    return kdl::path_to_lower(shader.shaderPath) == lowerShaderPath;
+    return kdl::ci::str_is_equal(shader.shaderPath.generic_string(), shaderPathString);
   });
   return iShader != shaders.end() ? &*iShader : nullptr;
 }

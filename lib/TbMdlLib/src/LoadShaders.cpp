@@ -104,8 +104,9 @@ LoadedShaders mergeShaderFiles(std::vector<ShaderFile> files, Logger& logger)
 {
   auto result = LoadedShaders{.shaders = {}, .fileCount = files.size()};
 
-  // Like idDeclFile::LoadAndParse, keep the first definition of a name. The files are in
-  // sorted order, and each file's records are in file order.
+  // Like idDeclFile::LoadAndParse, keep the first definition of a name, ignoring case
+  // like the file system and the material manager. The files are in sorted order, and
+  // each file's records are in file order.
   auto definingFiles =
     std::unordered_map<std::filesystem::path, size_t, kdl::path_hash>{};
   auto declaredTables = std::unordered_set<std::string>{};
@@ -119,7 +120,7 @@ LoadedShaders mergeShaderFiles(std::vector<ShaderFile> files, Logger& logger)
     for (auto& shader : file.shaders)
     {
       if (const auto [definingFile, inserted] =
-            definingFiles.try_emplace(shader.shaderPath, i);
+            definingFiles.try_emplace(kdl::path_to_lower(shader.shaderPath), i);
           !inserted)
       {
         logger.warn() << fmt::format(
@@ -135,7 +136,11 @@ LoadedShaders mergeShaderFiles(std::vector<ShaderFile> files, Logger& logger)
 
   // Tables can be declared in any file, so only now is it known whether the tables a
   // Doom 3 material looks up exist. The engine defaults a material that looks up a table
-  // that no file declares.
+  // that no decl file declares. It accepts table decls in the files of every registered
+  // decl folder (idDeclFile::LoadAndParse at framework/DeclManager.cpp:744-752; folders
+  // at :936, :995-996 and d3xp/Game_local.cpp:327-331), but only the material files are
+  // read here, so a table declared in, say, a .def file is missed and the material is
+  // defaulted wrongly.
   for (auto& shader : result.shaders)
   {
     if (const auto undeclaredTable = std::ranges::find_if(
@@ -144,10 +149,11 @@ LoadedShaders mergeShaderFiles(std::vector<ShaderFile> files, Logger& logger)
         undeclaredTable != shader.referencedTables.end())
     {
       logger.warn() << fmt::format(
-        "Material '{:g}' looks up the table '{}', which no material file declares; the "
-        "engine replaces this material with its default material",
-        shader.shaderPath,
-        *undeclaredTable);
+        "No material file declares table '{}', which material '{:g}' looks up; unless "
+        "another decl file declares it, the engine replaces this material with its "
+        "default material",
+        *undeclaredTable,
+        shader.shaderPath);
       makeEngineDefaulted(shader);
     }
   }
