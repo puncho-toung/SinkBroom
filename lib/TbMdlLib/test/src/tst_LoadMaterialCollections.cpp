@@ -957,6 +957,30 @@ TEST_CASE("LoadMaterialCollections")
         == std::vector<std::filesystem::path>{"textures/test/editor_ed.tga"});
       CHECK(logger.countMessagesContaining("'undeclared_table'") == 1);
     }
+
+    SECTION("Doom 3 decls without their closing brace")
+    {
+      const auto testDir = fixtureRoot / "test/mdl/LoadShaders/unterminated";
+      fs.mount("", std::make_unique<fs::DiskFileSystem>(testDir));
+
+      const auto loadedShaders =
+        loadShaderFiles(fs, Doom3FixtureMaterialConfig, taskManager, logger)
+        | kdl::value();
+
+      // a comment left open after the last decl doesn't count, but a decl whose closing
+      // brace is inside a comment left open does
+      CHECK(loadedShaders.unterminatedCount == 1);
+
+      const auto* closed = findShader(loadedShaders.shaders, "textures/test/closed");
+      REQUIRE(closed != nullptr);
+      CHECK_FALSE(closed->unterminated);
+
+      const auto* swallowed =
+        findShader(loadedShaders.shaders, "textures/test/swallowed");
+      REQUIRE(swallowed != nullptr);
+      CHECK(swallowed->unterminated);
+      CHECK(swallowed->engineDefaulted);
+    }
   }
 }
 

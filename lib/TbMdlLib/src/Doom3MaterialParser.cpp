@@ -765,6 +765,8 @@ void makeEngineDefaulted(Quake3Shader& shader)
 
   auto shaderPath = std::move(shader.shaderPath);
   auto editorImage = std::move(shader.editorImage);
+  // a fact about the decl's text, not about its contents
+  const auto unterminated = shader.unterminated;
 
   // generated images such as _default are no preview images
   const auto& editorImageName = editorImage.native();
@@ -793,6 +795,7 @@ void makeEngineDefaulted(Quake3Shader& shader)
     .previewImages = std::move(previewImages),
     .engineDefaulted = true,
     .referencedTables = {},
+    .unterminated = unterminated,
   };
 }
 
@@ -2228,16 +2231,21 @@ public:
           "Material '" + name + "' has no matching '}' and runs to the end of the file");
       }
 
-      result.push_back(MaterialBlockParser{
-        m_tokens,
-        begin,
-        section.end,
-        !section.terminated,
-        name,
-        nonAsciiName,
-        idTech4Path(canonicalName),
-        m_status}
-                         .parse());
+      auto shader =
+        MaterialBlockParser{
+          m_tokens,
+          begin,
+          section.end,
+          !section.terminated,
+          name,
+          nonAsciiName,
+          idTech4Path(canonicalName),
+          m_status}
+          .parse();
+      // set here rather than in the block parser, because makeEngineDefaulted rebuilds
+      // the record of a defaulted material
+      shader.unterminated = !section.terminated;
+      result.push_back(std::move(shader));
     }
 
     return result;

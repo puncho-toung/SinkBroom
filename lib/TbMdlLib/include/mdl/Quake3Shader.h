@@ -133,6 +133,8 @@ public:
   // Doom 3 only: the canonical names of the tables the material's expressions look up.
   // The engine defaults the material if one of them is declared in no decl file.
   std::vector<std::string> referencedTables;
+  // Doom 3 only: the decl lacks its closing brace and runs to the end of its file.
+  bool unterminated = false;
 
 public:
   Quake3ShaderStage& addStage();
@@ -150,7 +152,8 @@ public:
     coverage,
     previewImages,
     engineDefaulted,
-    referencedTables);
+    referencedTables,
+    unterminated);
 };
 
 std::ostream& operator<<(std::ostream& lhs, Quake3ShaderStage::Lighting rhs);

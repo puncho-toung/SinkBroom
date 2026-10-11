@@ -1,0 +1,9 @@
+// Written by hand for the TrenchBroom tests.
+
+// closed, but followed by a comment that is never closed
+textures/test/closed
+{
+	diffusemap	textures/test/closed_d.tga
+}
+
+/* never closed

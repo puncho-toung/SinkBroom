@@ -1,0 +1,8 @@
+// Written by hand for the TrenchBroom tests.
+
+// the comment swallows the closing brace, so the material runs to the end of the file
+textures/test/swallowed
+{
+	diffusemap	textures/test/swallowed_d.tga
+	/* never closed
+}

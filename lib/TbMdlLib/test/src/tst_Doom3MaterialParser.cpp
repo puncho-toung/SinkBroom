@@ -1035,8 +1035,11 @@ textures/fixture/quake3_style
       findShader(shaders, "textures/fixture/b") == defaultedShader("textures/fixture/b"));
 
     // d hits the end of the file
-    CHECK(
-      findShader(shaders, "textures/fixture/d") == defaultedShader("textures/fixture/d"));
+    auto d = defaultedShader("textures/fixture/d");
+    d.unterminated = true;
+    CHECK(findShader(shaders, "textures/fixture/d") == d);
+    CHECK_FALSE(a.unterminated);
+    CHECK_FALSE(findShader(shaders, "textures/fixture/b").unterminated);
 
     CHECK_THAT(
       status.messages(LogLevel::Warn),
@@ -1464,9 +1467,11 @@ textures/fixture/d
       CHECK(
         findShader(shaders, "textures/fixture/a").previewImages
         == paths({"textures/fixture/a_d.tga"}));
-      CHECK(
-        findShader(shaders, "textures/fixture/b")
-        == defaultedShader("textures/fixture/b"));
+      CHECK_FALSE(findShader(shaders, "textures/fixture/a").unterminated);
+
+      auto b = defaultedShader("textures/fixture/b");
+      b.unterminated = true;
+      CHECK(findShader(shaders, "textures/fixture/b") == b);
 
       CHECK_THAT(
         status.messages(LogLevel::Warn),

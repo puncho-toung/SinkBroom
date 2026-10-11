@@ -21,7 +21,6 @@
 
 #include "base/Error.h" // IWYU pragma: keep
 #include "base/Logger.h"
-#include "base/ParserStatus.h"
 #include "base/SimpleParserStatus.h"
 #include "fs/FileSystem.h"
 #include "fs/PathInfo.h"
@@ -53,45 +52,11 @@ namespace tb::mdl
 namespace
 {
 
-/**
- * Logs like SimpleParserStatus, and counts the material decls that Doom3MaterialParser
- * reports as running to the end of their file.
- */
-class Doom3MaterialFileStatus : public ParserStatus
-{
-private:
-  Logger& m_logger;
-  size_t m_unterminatedCount = 0;
-
-public:
-  Doom3MaterialFileStatus(Logger& logger, std::string prefix)
-    : ParserStatus{logger, std::move(prefix)}
-    , m_logger{logger}
-  {
-  }
-
-  size_t unterminatedCount() const { return m_unterminatedCount; }
-
-private:
-  void doProgress(const double /* progress */) override {}
-
-  void doLog(const LogLevel level, const std::string& str) override
-  {
-    // the warning that Doom3MaterialParser issues for a decl without its closing brace
-    if (level == LogLevel::Warn && str.ends_with("runs to the end of the file"))
-    {
-      ++m_unterminatedCount;
-    }
-    m_logger.log(level, str);
-  }
-};
-
 struct ShaderFile
 {
   std::filesystem::path path;
   std::vector<Quake3Shader> shaders;
   std::vector<std::string> declaredTables;
-  size_t unterminatedCount = 0;
 };
 
 bool isDoom3MaterialFile(const std::filesystem::path& path)
@@ -104,29 +69,23 @@ Result<ShaderFile> loadShaderFile(
 {
   return fs.openFile(path) | kdl::and_then([&](auto file) -> Result<ShaderFile> {
            auto bufferedReader = file->reader().buffer();
+           auto status = SimpleParserStatus{logger, path.string()};
            if (isDoom3MaterialFile(path))
            {
              // the Doom 3 parser reports every problem as a warning and never fails
              auto parser = Doom3MaterialParser{bufferedReader.stringView()};
-             auto status = Doom3MaterialFileStatus{logger, path.string()};
              auto shaders = parser.parse(status);
-             return ShaderFile{
-               path,
-               std::move(shaders),
-               parser.declaredTables(),
-               status.unterminatedCount(),
-             };
+             return ShaderFile{path, std::move(shaders), parser.declaredTables()};
            }
 
            auto parser = Quake3ShaderParser{bufferedReader.stringView()};
-           auto status = SimpleParserStatus{logger, path.string()};
            return parser.parse(status) | kdl::transform([&](auto shaders) {
-                    return ShaderFile{path, std::move(shaders), {}, 0};
+                    return ShaderFile{path, std::move(shaders), {}};
                   });
          })
          | kdl::transform_error([&](const auto& e) {
              logger.warn() << "Skipping malformed shader file " << path << ": " << e.msg;
-             return ShaderFile{path, {}, {}, 0};
+             return ShaderFile{path, {}, {}};
            });
 }
 
@@ -153,7 +112,8 @@ LoadedShaders mergeShaderFiles(std::vector<ShaderFile> files, Logger& logger)
   for (size_t i = 0; i < files.size(); ++i)
   {
     auto& file = files[i];
-    result.unterminatedCount += file.unterminatedCount;
+    result.unterminatedCount += size_t(std::ranges::count_if(
+      file.shaders, [](const auto& shader) { return shader.unterminated; }));
     declaredTables.insert(file.declaredTables.begin(), file.declaredTables.end());
 
     for (auto& shader : file.shaders)
