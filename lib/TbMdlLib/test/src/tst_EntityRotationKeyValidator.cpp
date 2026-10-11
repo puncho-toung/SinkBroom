@@ -196,6 +196,44 @@ TEST_CASE("EntityRotationKeyValidator")
     }
   }
 
+  SECTION("A point entity with a degenerate rotation")
+  {
+    // forward and left are both +Y, so the rotation has no angles
+    auto* entityNode = new EntityNode{Entity{{
+      {"classname", "light"},
+      {"rotation", "0 1 0"},
+      {"light_angles", "0 90 0"},
+    }}};
+    addNodes(map, {{&parentForNodes(map), {entityNode}}});
+
+    const auto issues = collectIssues(map.worldNode(), type);
+    REQUIRE(issues.size() == 2u);
+    const auto descriptions = [&]() {
+      auto result = std::vector<std::string>{};
+      for (const auto* issue : issues)
+      {
+        result.push_back(issue->description());
+      }
+      std::ranges::sort(result);
+      return result;
+    }();
+    CHECK(
+      descriptions
+      == std::vector<std::string>{
+        "light has its rotation in 'light_angles', which cannot be converted to 'angles' "
+        "because the rotation in 'rotation' is degenerate; edit it by hand",
+        "light has its rotation in 'rotation', which is degenerate and cannot be "
+        "converted to 'angles'; edit it by hand",
+      });
+
+    // Convert to Angles leaves the entity alone
+    applyQuickFix(map, type, issues, "Convert to Angles");
+    CHECK(*entityNode->entity().property("rotation") == "0 1 0");
+    CHECK(*entityNode->entity().property("light_angles") == "0 90 0");
+    CHECK(!entityNode->entity().hasProperty("angles"));
+    CHECK(collectIssues(map.worldNode(), type).size() == 2u);
+  }
+
   SECTION("A light with light_rotation and light_angles")
   {
     auto* entityNode = new EntityNode{Entity{{
@@ -247,7 +285,7 @@ TEST_CASE("EntityRotationKeyValidator")
     CHECK(collectIssues(map.worldNode(), type).empty());
   }
 
-  SECTION("Issues are updated when an entity gets or loses its brushes")
+  SECTION("An entity that gains brushes is reported")
   {
     auto* entityNode = new EntityNode{Entity{{
       {"classname", "func_static"},

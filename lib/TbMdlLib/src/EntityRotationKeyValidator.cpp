@@ -71,6 +71,8 @@ std::vector<EntityNode*> collectEntityNodesToChange(
   return result;
 }
 
+// not makeRemoveEntityPropertiesQuickFix, which edits one issue at a time through the
+// selection and so cannot keep to one group per link set
 IssueQuickFix makeDeletePropertyQuickFix()
 {
   return {"Delete Property", [](Map& map, const std::vector<const Issue*>& issues) {
@@ -108,12 +110,15 @@ IssueQuickFix makeConvertToAnglesQuickFix()
               // an entity with brushes or patches never gets "angles"
               if (entity.pointEntity())
               {
-                // writing the rotation without changing it converts it to "angles"
-                applyEntityRotationUpdate(
-                  entity,
-                  applyEntityRotation(
-                    entity, vm::mat4x4d::identity(), EntityRotationPolicy::IdTech4));
-                nodesToSwap.emplace_back(entityNode, NodeContents{std::move(entity)});
+                // writing the rotation without changing it converts it to "angles",
+                // unless the rotation is degenerate and has no angles
+                const auto update = applyEntityRotation(
+                  entity, vm::mat4x4d::identity(), EntityRotationPolicy::IdTech4);
+                if (update.set)
+                {
+                  applyEntityRotationUpdate(entity, update);
+                  nodesToSwap.emplace_back(entityNode, NodeContents{std::move(entity)});
+                }
               }
             }
 
@@ -153,16 +158,29 @@ void EntityRotationKeyValidator::doValidate(
       }
     }
   }
-  else
+  else if (const auto keys = idTech4ConvertedRotationKeys(entity); !keys.empty())
   {
-    for (const auto& key : idTech4ConvertedRotationKeys(entity))
+    // a degenerate rotation has no angles, so neither a rotate nor Convert to Angles
+    // replaces it
+    const auto convertible =
+      applyEntityRotation(entity, vm::mat4x4d::identity(), EntityRotationPolicy::IdTech4)
+        .set.has_value();
+    const auto readKey =
+      entityRotationInfo(entity, EntityRotationPolicy::IdTech4).propertyKey;
+
+    for (const auto& key : keys)
     {
+      const auto description =
+        convertible ? "which TrenchBroom replaces by 'angles' when the entity is rotated"
+        : key == readKey
+          ? "which is degenerate and cannot be converted to 'angles'; edit it by hand"
+          : "which cannot be converted to 'angles' because the rotation in '" + readKey
+              + "' is degenerate; edit it by hand";
       issues.push_back(std::make_unique<EntityPropertyIssue>(
         Type,
         entityNode,
         key,
-        entityNode.name() + " has its rotation in '" + key
-          + "', which TrenchBroom replaces by 'angles' when the entity is rotated"));
+        entityNode.name() + " has its rotation in '" + key + "', " + description));
     }
   }
 }
