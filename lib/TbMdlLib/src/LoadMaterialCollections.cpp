@@ -935,6 +935,35 @@ Result<gl::Material> loadMaterial(
     context);
 }
 
+Result<std::optional<gl::Material>> findIdTech4Material(
+  const fs::FileSystem& fs,
+  const MaterialConfig& materialConfig,
+  const std::filesystem::path& materialName,
+  const gl::CreateTextureResource& createResource,
+  const std::vector<Quake3Shader>& shaders)
+{
+  const auto* shader = findShader(shaders, materialName);
+  if (!shader && findMaterialFile(fs, materialName, materialConfig.extensions).is_error())
+  {
+    return std::optional<gl::Material>{};
+  }
+
+  auto context = MaterialLoadContext{
+    .directoryIndex = DirectoryIndex{fs, materialConfig.extensions},
+    .diffuseImageShaders = &shaders,
+  };
+  return loadMaterialFromShader(
+           fs,
+           materialConfig,
+           materialName,
+           createResource,
+           shader,
+           std::nullopt,
+           context)
+         | kdl::transform(
+           [](auto material) { return std::optional{std::move(material)}; });
+}
+
 Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,

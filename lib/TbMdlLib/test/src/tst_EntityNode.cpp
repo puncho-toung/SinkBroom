@@ -176,7 +176,13 @@ TEST_CASE("EntityNode")
     };
 
     auto model = loadEntityModelSync(
-                   fs, gameInfo.gameConfig.materialConfig, path, loadMaterial, logger)
+                   fs,
+                   gameInfo.gameConfig.materialConfig,
+                   ModelConvention::Default,
+                   path,
+                   loadMaterial,
+                   {},
+                   logger)
                    .value();
 
     auto entityNode = EntityNode{Entity{}};

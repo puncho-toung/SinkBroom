@@ -21,11 +21,19 @@
 #include "base/Logger.h"
 #include "fs/DiskFileSystem.h"
 #include "gl/CreateResource.h"
+#include "gl/Material.h"
+#include "gl/Texture.h"
 #include "mdl/EntityModel.h"
 #include "mdl/EntityModelManager.h"
 #include "mdl/GameConfig.h"
+#include "mdl/GameConfigFixture.h"
 #include "mdl/GameInfo.h"
 #include "mdl/ModelSpecification.h"
+
+#include "kd/task_manager.h"
+
+#include "vm/approx.h"
+#include "vm/bbox_io.h" // IWYU pragma: keep
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
@@ -173,6 +181,76 @@ TEST_CASE("EntityModelManager")
     const auto* modelAfterClear = manager.model("armor.mdl");
     CHECK(modelAfterClear != nullptr);
     CHECK(modelAfterClear->data() != nullptr);
+  }
+
+  SECTION("id Tech 4 OBJ proxies")
+  {
+    auto doom3FileSystem =
+      fs::DiskFileSystem{getFixtureRoot() / "test/mdl/Game/Doom3BFG/base"};
+    auto taskManager = kdl::task_manager{};
+
+    const auto makeManager = [&](const GameInfo& doom3GameInfo) {
+      auto doom3Manager = std::make_unique<EntityModelManager>(
+        doom3GameInfo,
+        doom3FileSystem,
+        [](auto resourceLoader) {
+          return gl::createResourceSync(std::move(resourceLoader));
+        },
+        logger);
+      doom3Manager->reloadShaders(taskManager);
+      return doom3Manager;
+    };
+
+    const auto modelPath = std::filesystem::path{"_tb/models/tb_test/arrow.obj"};
+
+    SECTION("the id Tech 4 convention shows the proxy upright with its materials")
+    {
+      REQUIRE(
+        Doom3BFGGameInfo.gameConfig.entityConfig.modelConvention
+        == ModelConvention::IdTech4);
+      const auto doom3Manager = makeManager(Doom3BFGGameInfo);
+
+      const auto* model = doom3Manager->model(modelPath);
+      REQUIRE(model != nullptr);
+      REQUIRE(model->data() != nullptr);
+
+      // the engine's coordinates: the arrow points along +X, its fin up along +Z
+      CHECK(model->data()->bounds(0) == vm::bbox3f{{-32, -8, -8}, {32, 12, 20}});
+
+      const auto& surface = model->data()->surface(0);
+      REQUIRE(surface.skinCount() == 3u);
+
+      // usemtl textures/tb_test/wall: the decl in tb_test.mtr, previewed with its
+      // 8x8 editor image
+      const auto* wall = surface.skin(0);
+      CHECK(wall->relativePath() == "textures/tb_test/wall");
+      CHECK(wall->name() == "tb_test/wall");
+      CHECK_FALSE(wall->previewImageMissing());
+      REQUIRE(wall->texture() != nullptr);
+      CHECK(wall->texture()->width() == 8u);
+
+      // usemtl textures/tb_test/grate: a twoSided decl
+      const auto* grate = surface.skin(1);
+      CHECK(grate->relativePath() == "textures/tb_test/grate");
+      CHECK(grate->culling() == gl::MaterialCulling::None);
+
+      CHECK(surface.skin(2)->name() == "__TB_empty");
+    }
+
+    SECTION("without the convention, assimp lays the proxy on its side")
+    {
+      auto defaultGameInfo = Doom3BFGGameInfo;
+      defaultGameInfo.gameConfig.entityConfig.modelConvention = ModelConvention::Default;
+      const auto doom3Manager = makeManager(defaultGameInfo);
+
+      const auto* model = doom3Manager->model(modelPath);
+      REQUIRE(model != nullptr);
+      REQUIRE(model->data() != nullptr);
+
+      // (x, y, z) becomes (z, x, y)
+      CHECK(
+        vm::approx(model->data()->bounds(0)) == vm::bbox3f{{-8, -32, -8}, {20, 32, 12}});
+    }
   }
 
   SECTION("findEntityModelsByTextureResourceId")

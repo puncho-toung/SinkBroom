@@ -179,6 +179,8 @@ inline const GameInfo Doom3BFGGameInfo = detail::makeGameInfoFixture(
         .defFilePaths = {"DOOM-3-tbtest.fgd"},
         .defaultColor = RgbaF{0.6f, 0.6f, 0.6f, 1.0f},
         .scaleExpression = std::nullopt,
+        // like games/Doom3BFG/GameConfig.cfg
+        .modelConvention = ModelConvention::IdTech4,
       },
     .faceAttribsConfig = {},
     .smartTags = {},

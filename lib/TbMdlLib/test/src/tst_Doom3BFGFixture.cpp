@@ -62,6 +62,10 @@ TEST_CASE("Doom3BFGFixture")
       Doom3BFGGameInfo.gameConfig.fileFormats
       == std::vector<MapFormatConfig>{{.format = "Doom3 (Valve)", .initialMap = ""}});
     CHECK(Doom3BFGGameInfo.gamePathPreference.defaultValue == gamePath);
+    // like games/Doom3BFG/GameConfig.cfg, so that the _tb/models proxies load upright
+    CHECK(
+      Doom3BFGGameInfo.gameConfig.entityConfig.modelConvention
+      == ModelConvention::IdTech4);
     CHECK(std::filesystem::exists(gamePath / "base" / "materials" / "tb_test.mtr"));
   }
 

@@ -68,6 +68,21 @@ Result<gl::Material> loadMaterial(
   const std::optional<Palette>& palette);
 
 /**
+ * Finds the material that an id Tech 4 model names by its canonical decl name, such as
+ * the name after usemtl in an OBJ file. If one of the given shaders has that name,
+ * exactly or ignoring case, the material is made from it, whatever its root. Otherwise,
+ * if an image file of that name exists, which the engine would use as an implicit
+ * material, the material is made from that file. Otherwise, returns nothing, where
+ * loadMaterial would return a material whose texture fails to load.
+ */
+Result<std::optional<gl::Material>> findIdTech4Material(
+  const fs::FileSystem& fs,
+  const MaterialConfig& materialConfig,
+  const std::filesystem::path& materialName,
+  const gl::CreateTextureResource& createResource,
+  const std::vector<Quake3Shader>& shaders);
+
+/**
  * Loads the materials under materialConfig.root, grouped into collections by directory.
  *
  * The material scripts are read with loadShaderFiles. Every shader under the root becomes

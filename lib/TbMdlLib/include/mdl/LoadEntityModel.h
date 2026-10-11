@@ -24,6 +24,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <optional>
 
 namespace tb
 {
@@ -43,21 +44,38 @@ namespace mdl
 {
 class EntityModel;
 struct MaterialConfig;
+enum class ModelConvention;
 
 using LoadMaterialFunc = std::function<gl::Material(const std::filesystem::path&)>;
+using FindMaterialFunc =
+  std::function<std::optional<gl::Material>(const std::filesystem::path&)>;
 
+/**
+ * Loads the model at the given path with the loader that its format needs. Under
+ * ModelConvention::IdTech4, a .obj file is read by loadIdTech4ObjModel instead of assimp,
+ * and findMaterial resolves the material decl names of such models.
+ */
 Result<EntityModel> loadEntityModelSync(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
+  ModelConvention modelConvention,
   const std::filesystem::path& path,
   const LoadMaterialFunc& loadMaterial,
+  const FindMaterialFunc& findMaterial,
   Logger& logger);
 
+/**
+ * Like loadEntityModelSync, but the model is loaded by the resource that createResource
+ * makes, which may run on another thread. The loader keeps copies of the given material
+ * config, model convention, path and functions.
+ */
 EntityModel loadEntityModelAsync(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
+  ModelConvention modelConvention,
   const std::filesystem::path& path,
   const LoadMaterialFunc& loadMaterial,
+  const FindMaterialFunc& findMaterial,
   const CreateEntityModelDataResource& createResource,
   Logger& logger);
 

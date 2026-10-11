@@ -72,8 +72,9 @@ private:
   CreateEntityModelDataResource m_createResource;
   Logger& m_logger;
 
-  // Cache Quake 3 shaders to use when loading models
-  std::vector<Quake3Shader> m_shaders;
+  // Cache Quake 3 shaders to use when loading models. Models load on worker threads,
+  // which keep the list they started with when reloadShaders replaces it.
+  std::shared_ptr<const std::vector<Quake3Shader>> m_shaders;
 
   mutable std::unordered_map<std::filesystem::path, EntityModel, kdl::path_hash> m_models;
   mutable std::unordered_map<ModelSpecification, std::unique_ptr<gl::MaterialRenderer>>

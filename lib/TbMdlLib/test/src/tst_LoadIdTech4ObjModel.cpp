@@ -22,13 +22,17 @@
 #include "fs/DiskFileSystem.h"
 #include "fs/File.h"
 #include "fs/Reader.h"
+#include "gl/CreateResource.h"
 #include "gl/Material.h"
 #include "gl/Texture.h"
 #include "gl/TextureResource.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/EntityModel.h"
+#include "mdl/GameConfigFixture.h"
 #include "mdl/LoadIdTech4ObjModel.h"
+#include "mdl/LoadMaterialCollections.h"
 #include "mdl/MaterialUtils.h"
+#include "mdl/Quake3Shader.h"
 
 #include "kd/result.h"
 
@@ -404,6 +408,96 @@ TEST_CASE("LoadIdTech4ObjModel")
       CHECK(
         loadIdTech4ObjModel("bad.obj", "foo\n", findMaterial, loadDefaultMaterial, logger)
           .is_error());
+    }
+  }
+
+  SECTION("usemtl names resolved as EntityModelManager resolves them")
+  {
+    auto logger = CollectingLogger{};
+    const auto& materialConfig = Doom3BFGGameInfo.gameConfig.materialConfig;
+
+    const auto createResource = [](auto resourceLoader) {
+      return gl::createResourceSync(std::move(resourceLoader));
+    };
+
+    // a record as the .mtr parser makes it, outside of the material root
+    const auto wedgeShader = Quake3Shader{
+      .shaderPath = "models/mapobjects/test/wedge",
+      .editorImage = "models/mapobjects/test/wedge_ed.tga",
+      .format = Quake3Shader::Format::Doom3,
+      .previewImages = {"models/mapobjects/test/wedge_ed.tga"},
+    };
+
+    const auto load =
+      [&](const std::vector<Quake3Shader>& shaders, const std::filesystem::path& path) {
+        const auto findMaterial = [&](const std::filesystem::path& materialName) {
+          return findIdTech4Material(
+                   fs, materialConfig, materialName, createResource, shaders)
+                 | kdl::value();
+        };
+        const auto loadDefaultMaterial = [&](std::string name) {
+          return mdl::loadDefaultMaterial(fs, std::move(name), logger);
+        };
+
+        return loadIdTech4ObjModel(
+                 path.filename().string(),
+                 readFile(fs, path),
+                 findMaterial,
+                 loadDefaultMaterial,
+                 logger)
+               | kdl::value();
+      };
+
+    SECTION("a material decl, an implicit material and the default skin")
+    {
+      const auto modelData = load({wedgeShader}, modelsPath / "wedge.obj");
+
+      const auto& surface = modelData.surface(0);
+      REQUIRE(surface.skinCount() == 3u);
+
+      // the decl, previewed with its 4x2 editor image
+      CHECK(surface.skin(0)->relativePath() == "models/mapobjects/test/wedge");
+      REQUIRE(surface.skin(0)->texture());
+      CHECK(surface.skin(0)->texture()->width() == 4u);
+      CHECK(surface.skin(0)->texture()->height() == 2u);
+
+      // no decl, but the 2x2 image textures/base_wall/lfwall27d.tga
+      CHECK(surface.skin(1)->relativePath() == "textures/base_wall/lfwall27d");
+      REQUIRE(surface.skin(1)->texture());
+      CHECK(surface.skin(1)->texture()->width() == 2u);
+      CHECK(surface.skin(1)->texture()->height() == 2u);
+
+      CHECK(surface.skin(2)->name() == "__TB_empty");
+      CHECK(logger.warnings.empty());
+    }
+
+    SECTION("a name that resolves to nothing keeps its name on the default texture")
+    {
+      const auto modelData = load({}, modelsPath / "wedge.obj");
+
+      const auto& surface = modelData.surface(0);
+      REQUIRE(surface.skinCount() == 3u);
+      CHECK(surface.skin(0)->name() == "models/mapobjects/test/wedge");
+      REQUIRE(surface.skin(0)->texture());
+      CHECK(surface.skin(0)->texture()->width() == 32u);
+      CHECK(surface.skin(0)->texture()->height() == 32u);
+
+      REQUIRE(logger.warnings.size() == 1u);
+      CHECK_THAT(
+        logger.warnings.front(),
+        Catch::Matchers::ContainsSubstring("models/mapobjects/test/wedge")
+          && !Catch::Matchers::ContainsSubstring("lfwall27d"));
+    }
+
+    SECTION("a non-canonical usemtl name finds the material decl")
+    {
+      const auto modelData = load({wedgeShader}, modelsPath / "noncanonical.obj");
+
+      const auto& surface = modelData.surface(0);
+      REQUIRE(surface.skinCount() == 2u);
+      CHECK(surface.skin(0)->relativePath() == "models/mapobjects/test/wedge");
+      REQUIRE(surface.skin(0)->texture());
+      CHECK(surface.skin(0)->texture()->width() == 4u);
     }
   }
 }

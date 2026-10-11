@@ -398,6 +398,82 @@ TEST_CASE("LoadMaterialCollections")
     }
   }
 
+  SECTION("findIdTech4Material")
+  {
+    auto fs = fs::DiskFileSystem{getFixtureRoot() / "test/mdl/LoadIdTech4ObjModel"};
+    const auto& materialConfig = Doom3BFGGameInfo.gameConfig.materialConfig;
+
+    // a record as the .mtr parser makes it, outside of the material root
+    const auto wedgeShader = Quake3Shader{
+      .shaderPath = "models/mapobjects/test/wedge",
+      .editorImage = "models/mapobjects/test/wedge_ed.tga",
+      .format = Quake3Shader::Format::Doom3,
+      .previewImages = {"models/mapobjects/test/wedge_ed.tga"},
+    };
+
+    SECTION("a material decl of that name")
+    {
+      const auto material = findIdTech4Material(
+                              fs,
+                              materialConfig,
+                              "models/mapobjects/test/wedge",
+                              createResource,
+                              {wedgeShader})
+                            | kdl::value();
+      REQUIRE(material);
+      CHECK(material->relativePath() == "models/mapobjects/test/wedge");
+      // the editor image, 4x2
+      REQUIRE(material->texture());
+      CHECK(material->texture()->width() == 4u);
+      CHECK(material->texture()->height() == 2u);
+    }
+
+    SECTION("a material decl whose name differs in case")
+    {
+      auto mixedCaseShader = wedgeShader;
+      mixedCaseShader.shaderPath = "Models/MapObjects/Test/Wedge";
+
+      const auto material = findIdTech4Material(
+                              fs,
+                              materialConfig,
+                              "models/mapobjects/test/wedge",
+                              createResource,
+                              {mixedCaseShader})
+                            | kdl::value();
+      REQUIRE(material);
+      REQUIRE(material->texture());
+      CHECK(material->texture()->width() == 4u);
+    }
+
+    SECTION("an image of that name is an implicit material")
+    {
+      const auto material =
+        findIdTech4Material(
+          fs, materialConfig, "textures/base_wall/lfwall27d", createResource, {})
+        | kdl::value();
+      REQUIRE(material);
+      CHECK(material->name() == "base_wall/lfwall27d");
+      REQUIRE(material->texture());
+      CHECK(material->texture()->width() == 2u);
+      CHECK(material->texture()->height() == 2u);
+    }
+
+    SECTION("nothing of that name")
+    {
+      // wedge_ed.tga is not named like the decl
+      CHECK(
+        (findIdTech4Material(
+           fs, materialConfig, "models/mapobjects/test/wedge", createResource, {})
+         | kdl::value())
+        == std::nullopt);
+      CHECK(
+        (findIdTech4Material(
+           fs, materialConfig, "textures/does_not/exist", createResource, {wedgeShader})
+         | kdl::value())
+        == std::nullopt);
+    }
+  }
+
   SECTION("loadMaterialCollections")
   {
     auto fs = fs::VirtualFileSystem{};

@@ -46,6 +46,7 @@ EntityModelManager::EntityModelManager(
   , m_gameFileSystem{gameFileSystem}
   , m_createResource{std::move(createResource)}
   , m_logger{logger}
+  , m_shaders{std::make_shared<const std::vector<Quake3Shader>>()}
 {
 }
 
@@ -67,14 +68,12 @@ void EntityModelManager::clear()
 
 void EntityModelManager::reloadShaders(kdl::task_manager& taskManager)
 {
-  m_shaders.clear();
-
-  m_shaders =
+  m_shaders = std::make_shared<const std::vector<Quake3Shader>>(
     loadShaders(
       m_gameFileSystem, m_gameInfo.gameConfig.materialConfig, taskManager, m_logger)
     | kdl::if_error(
       [&](const auto& e) { m_logger.error() << "Failed to reload shaders: " << e.msg; })
-    | kdl::value_or(std::vector<Quake3Shader>{});
+    | kdl::value_or(std::vector<Quake3Shader>{}));
 }
 
 gl::MaterialRenderer* EntityModelManager::renderer(const ModelSpecification& spec) const
@@ -174,29 +173,47 @@ const std::vector<const EntityModel*> EntityModelManager::
 Result<EntityModel> EntityModelManager::loadModel(
   const std::filesystem::path& modelPath) const
 {
-  const auto& materialConfig = m_gameInfo.gameConfig.materialConfig;
-
+  // The model may load on a worker thread after this function returns, so the material
+  // functions own what they read. The file system and the logger outlive the loads.
+  const auto& fs = m_gameFileSystem;
+  auto& logger = m_logger;
   const auto createResource = [](auto resourceLoader) {
     return gl::createResourceSync(std::move(resourceLoader));
   };
 
-  const auto loadMaterial = [&](const auto& materialPath) {
+  const auto loadMaterial = [&fs,
+                             &logger,
+                             materialConfig = m_gameInfo.gameConfig.materialConfig,
+                             createResource,
+                             shaders = m_shaders](const auto& materialPath) {
     return mdl::loadMaterial(
-             m_gameFileSystem,
-             materialConfig,
-             materialPath,
-             createResource,
-             m_shaders,
-             std::nullopt)
-           | kdl::or_else(makeReadMaterialErrorHandler(m_gameFileSystem, m_logger))
+             fs, materialConfig, materialPath, createResource, *shaders, std::nullopt)
+           | kdl::or_else(makeReadMaterialErrorHandler(fs, logger)) | kdl::value();
+  };
+
+  // Resolves the material decl names of id Tech 4 models; a name that resolves to
+  // nothing is left to the loader, which keeps it on a default material
+  const auto findMaterial = [&fs,
+                             &logger,
+                             materialConfig = m_gameInfo.gameConfig.materialConfig,
+                             createResource,
+                             shaders = m_shaders](const auto& materialName) {
+    return findIdTech4Material(fs, materialConfig, materialName, createResource, *shaders)
+           | kdl::transform_error([&](const auto& e) {
+               logger.error() << "Could not load material '"
+                              << materialName.generic_string() << "': " << e.msg;
+               return std::optional<gl::Material>{};
+             })
            | kdl::value();
   };
 
   return mdl::loadEntityModelAsync(
     m_gameFileSystem,
-    materialConfig,
+    m_gameInfo.gameConfig.materialConfig,
+    m_gameInfo.gameConfig.entityConfig.modelConvention,
     modelPath,
     loadMaterial,
+    findMaterial,
     m_createResource,
     m_logger);
 }

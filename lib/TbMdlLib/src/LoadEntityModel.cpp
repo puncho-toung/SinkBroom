@@ -29,12 +29,14 @@
 #include "mdl/LoadBspModel.h"
 #include "mdl/LoadDkmModel.h"
 #include "mdl/LoadFmModel.h"
+#include "mdl/LoadIdTech4ObjModel.h"
 #include "mdl/LoadImageSpriteModel.h"
 #include "mdl/LoadMd2Model.h"
 #include "mdl/LoadMd3Model.h"
 #include "mdl/LoadMdlModel.h"
 #include "mdl/LoadMdxModel.h"
 #include "mdl/LoadSpriteModel.h"
+#include "mdl/MaterialUtils.h"
 #include "mdl/Palette.h"
 
 #include "kd/result.h"
@@ -58,8 +60,10 @@ auto loadPalette(const fs::FileSystem& fs, const MaterialConfig& materialConfig)
 Result<EntityModelData> loadEntityModelData(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
+  const ModelConvention modelConvention,
   const std::filesystem::path& path,
   const LoadMaterialFunc& loadMaterial,
+  const FindMaterialFunc& findMaterial,
   Logger& logger)
 {
   const auto modelName = path.filename().string();
@@ -110,6 +114,15 @@ Result<EntityModelData> loadEntityModelData(
            {
              return loadFmModel(modelName, reader, fs, logger);
            }
+           if (
+             modelConvention == ModelConvention::IdTech4 && canLoadIdTech4ObjModel(path))
+           {
+             const auto loadDefault = [&](std::string materialName) {
+               return loadDefaultMaterial(fs, std::move(materialName), logger);
+             };
+             return loadIdTech4ObjModel(
+               modelName, reader.stringView(), findMaterial, loadDefault, logger);
+           }
            if (canLoadAssimpModel(path))
            {
              return loadAssimpModel(path, fs, logger);
@@ -129,13 +142,17 @@ Result<EntityModelData> loadEntityModelData(
 gl::ResourceLoader<EntityModelData> makeEntityModelDataResourceLoader(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
+  const ModelConvention modelConvention,
   const std::filesystem::path& path,
   const LoadMaterialFunc& loadMaterial,
+  const FindMaterialFunc& findMaterial,
   Logger& logger)
 {
-  return [&fs, materialConfig, path, loadMaterial, &logger]() {
-    return loadEntityModelData(fs, materialConfig, path, loadMaterial, logger);
-  };
+  return
+    [&fs, materialConfig, modelConvention, path, loadMaterial, findMaterial, &logger]() {
+      return loadEntityModelData(
+        fs, materialConfig, modelConvention, path, loadMaterial, findMaterial, logger);
+    };
 }
 
 } // namespace
@@ -143,11 +160,14 @@ gl::ResourceLoader<EntityModelData> makeEntityModelDataResourceLoader(
 Result<EntityModel> loadEntityModelSync(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
+  const ModelConvention modelConvention,
   const std::filesystem::path& path,
   const LoadMaterialFunc& loadMaterial,
+  const FindMaterialFunc& findMaterial,
   Logger& logger)
 {
-  return loadEntityModelData(fs, materialConfig, path, loadMaterial, logger)
+  return loadEntityModelData(
+           fs, materialConfig, modelConvention, path, loadMaterial, findMaterial, logger)
          | kdl::transform([&](auto modelData) {
              auto modelName = path.filename().string();
              auto modelResource = createEntityModelDataResource(std::move(modelData));
@@ -158,14 +178,16 @@ Result<EntityModel> loadEntityModelSync(
 EntityModel loadEntityModelAsync(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
+  const ModelConvention modelConvention,
   const std::filesystem::path& path,
   const LoadMaterialFunc& loadMaterial,
+  const FindMaterialFunc& findMaterial,
   const CreateEntityModelDataResource& createResource,
   Logger& logger)
 {
   auto name = path.filename().string();
-  auto loader =
-    makeEntityModelDataResourceLoader(fs, materialConfig, path, loadMaterial, logger);
+  auto loader = makeEntityModelDataResourceLoader(
+    fs, materialConfig, modelConvention, path, loadMaterial, findMaterial, logger);
   auto resource = createResource(std::move(loader));
   return EntityModel{std::move(name), std::move(resource)};
 }

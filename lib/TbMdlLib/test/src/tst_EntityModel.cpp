@@ -87,7 +87,13 @@ TEST_CASE("EntityModel")
     };
 
     auto model = loadEntityModelSync(
-      fs, gameInfo.gameConfig.materialConfig, path, loadMaterial, logger);
+      fs,
+      gameInfo.gameConfig.materialConfig,
+      ModelConvention::Default,
+      path,
+      loadMaterial,
+      {},
+      logger);
 
     auto& frame = model.value().data()->frames().at(0);
 
