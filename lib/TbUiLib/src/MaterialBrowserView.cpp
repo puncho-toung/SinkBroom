@@ -64,6 +64,34 @@
 namespace tb::ui
 {
 
+std::vector<const gl::Material*> filterMaterials(
+  std::vector<const gl::Material*> materials,
+  const bool hideUnused,
+  const bool hideMissing,
+  const std::string& filterText)
+{
+  if (hideUnused)
+  {
+    std::erase_if(
+      materials, [](const auto* material) { return material->usageCount() == 0; });
+  }
+  if (hideMissing)
+  {
+    std::erase_if(
+      materials, [](const auto* material) { return material->previewImageMissing(); });
+  }
+  if (!filterText.empty())
+  {
+    std::erase_if(materials, [&](const auto* material) {
+      return std::ranges::none_of(
+        kdl::str_split(filterText, " "), [&](const auto& pattern) {
+          return kdl::ci::str_contains(material->name(), pattern);
+        });
+    });
+  }
+  return materials;
+}
+
 MaterialBrowserView::MaterialBrowserView(
   AppController& appController, QScrollBar* scrollBar, MapDocument& document)
   : CellView{appController, scrollBar}
@@ -266,26 +294,8 @@ std::vector<const gl::Material*> MaterialBrowserView::getMaterials() const
 std::vector<const gl::Material*> MaterialBrowserView::filterMaterials(
   std::vector<const gl::Material*> materials) const
 {
-  if (m_hideUnused)
-  {
-    std::erase_if(
-      materials, [](const auto* material) { return material->usageCount() == 0; });
-  }
-  if (m_hideMissing)
-  {
-    std::erase_if(
-      materials, [](const auto* material) { return material->previewImageMissing(); });
-  }
-  if (!m_filterText.empty())
-  {
-    std::erase_if(materials, [&](const auto* material) {
-      return std::ranges::none_of(
-        kdl::str_split(m_filterText, " "), [&](const auto& pattern) {
-          return kdl::ci::str_contains(material->name(), pattern);
-        });
-    });
-  }
-  return materials;
+  return ui::filterMaterials(
+    std::move(materials), m_hideUnused, m_hideMissing, m_filterText);
 }
 
 std::vector<const gl::Material*> MaterialBrowserView::sortMaterials(

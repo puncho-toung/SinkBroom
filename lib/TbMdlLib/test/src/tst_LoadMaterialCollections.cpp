@@ -28,6 +28,7 @@
 #include "gl/Texture.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/GameConfig.h"
+#include "mdl/GameConfigFixture.h"
 #include "mdl/LoadMaterialCollections.h"
 #include "mdl/LoadShaders.h"
 #include "mdl/Quake3Shader.h"
@@ -329,6 +330,54 @@ TEST_CASE("LoadMaterialCollections")
       }
     }
 
+    SECTION("Doom 3 references to generated images")
+    {
+      const auto fixtureDir = fixtureRoot / "test/mdl/LoadMaterialCollections";
+      fs.mount("", std::make_unique<fs::DiskFileSystem>(fixtureDir / "doom3/fallback"));
+      fs.mount("", std::make_unique<fs::DiskFileSystem>(fixtureDir / "doom3_generated"));
+
+      const auto previewOf = [&](const std::filesystem::path& reference) {
+        const auto shader = Quake3Shader{
+          .shaderPath = "textures/test/generated",
+          .stages = {Quake3ShaderStage{}},
+          .format = Quake3Shader::Format::Doom3,
+          .previewImages = {reference},
+        };
+        return loadMaterial(
+                 fs,
+                 Doom3FixtureMaterialConfig,
+                 "textures/test/generated",
+                 createResource,
+                 {shader},
+                 std::nullopt)
+               | kdl::value();
+      };
+
+      // the engine's image manager maps _black and _white to files
+      const auto black = previewOf("_black");
+      REQUIRE(black.texture() != nullptr);
+      CHECK(black.texture()->width() == 2);
+      CHECK(black.texture()->height() == 4);
+      CHECK_FALSE(black.previewImageMissing());
+
+      const auto white = previewOf("_white");
+      REQUIRE(white.texture() != nullptr);
+      CHECK(white.texture()->width() == 4);
+      CHECK(white.texture()->height() == 2);
+      CHECK_FALSE(white.previewImageMissing());
+
+      // the other generated images have no file
+      for (const auto* reference : {"_default", "_flat"})
+      {
+        CAPTURE(reference);
+
+        const auto generated = previewOf(reference);
+        REQUIRE(generated.texture() != nullptr);
+        CHECK(generated.texture()->width() == 32);
+        CHECK(generated.previewImageMissing());
+      }
+    }
+
     SECTION("a stage's alphaFunc wins over the shader's qer_alphaFunc")
     {
       auto shader = Quake3Shader{};
@@ -489,6 +538,15 @@ TEST_CASE("LoadMaterialCollections")
                 },
               },
             }));
+
+          const auto materialCollections =
+            loadMaterialCollections(
+              fs, materialConfig, createResource, taskManager, logger)
+              .value();
+          const auto* shaderMaterial =
+            findMaterial(materialCollections, "test/some_shader");
+          REQUIRE(shaderMaterial != nullptr);
+          CHECK_FALSE(shaderMaterial->previewImageMissing());
         }
 
         SECTION("Shader overrides image of same name")
@@ -518,6 +576,38 @@ TEST_CASE("LoadMaterialCollections")
                   MaterialInfo{"test/editor_image", 128, 128}, // generated for image file
                   MaterialInfo{"test/image_exists_with_editor_image", 128, 128},
                   MaterialInfo{"test/image_exists_without_editor_image", 64, 64},
+                },
+              },
+            }));
+        }
+
+        SECTION("Shader overrides image whose name differs in case")
+        {
+          const auto testDir =
+            fixtureRoot
+            / "test/mdl/LoadMaterialCollections/shaders/shader_with_image_other_case";
+          fs.mount("", std::make_unique<fs::DiskFileSystem>(testDir));
+
+          const auto materialConfig = mdl::MaterialConfig{
+            .root = "textures",
+            .extensions = {".tga", ".png", ".jpg", ".jpeg"},
+            .palette = "",
+            .property = std::nullopt,
+            .shaderSearchPath = "scripts",
+            .excludes = {},
+          };
+
+          // one material for the shader and the image upper_case.tga, not two that the
+          // material manager can't tell apart
+          CHECK_THAT(
+            loadMaterialCollections(
+              fs, materialConfig, createResource, taskManager, logger),
+            MatchesMaterialCollections({
+              {
+                "textures/test",
+                {
+                  MaterialInfo{"test/Upper_Case", 128, 128},   // loaded from shader file
+                  MaterialInfo{"test/editor_image", 128, 128}, // generated for image file
                 },
               },
             }));
@@ -652,8 +742,119 @@ TEST_CASE("LoadMaterialCollections")
               },
             },
           }));
+
+        auto collectingLogger = CollectingLogger{};
+        const auto materialCollections =
+          loadMaterialCollections(
+            fs, materialConfig, createResource, taskManager, collectingLogger)
+            .value();
+        const auto material = [&](const std::string& name) -> const gl::Material& {
+          const auto* material = findMaterial(materialCollections, name);
+          REQUIRE(material != nullptr);
+          return *material;
+        };
+
+        // shaders that show the same image share its texture resource, but the image's
+        // own material, which finds its file lazily, doesn't
+        CHECK(
+          &material("test/with_editor_image").textureResource()
+          == &material("test/missing_extension").textureResource());
+        CHECK(
+          &material("test/with_editor_image").textureResource()
+          == &material("test/different_extension").textureResource());
+        CHECK(
+          &material("test/with_editor_image").textureResource()
+          != &material("test/editor_image").textureResource());
+        CHECK(
+          &material("test/with_editor_image").textureResource()
+          != &material("test/with_stage_map").textureResource());
+
+        // one summary line for the load
+        CHECK(
+          collectingLogger.countMessagesContaining(
+            "Loaded 7 materials from 1 files (0 defaulted, 0 unterminated); 7 under "
+            "textures/, 1 without a preview image")
+          == 1);
       }
     }
+  }
+
+  SECTION("loadMaterialCollections with the Doom 3 BFG fixture")
+  {
+    auto fs = fs::VirtualFileSystem{};
+    auto logger = NullLogger{};
+    auto taskManager = kdl::task_manager{};
+
+    fs.mount(
+      "",
+      std::make_unique<fs::DiskFileSystem>(
+        getFixtureRoot() / "test/mdl/Game/Doom3BFG/base"));
+
+    const auto result = loadMaterialCollections(
+      fs,
+      Doom3BFGGameInfo.gameConfig.materialConfig,
+      createResource,
+      taskManager,
+      logger);
+
+    // the seven materials of tb_test.mtr, and the loose images, which this config
+    // doesn't exclude
+    CHECK_THAT(
+      result,
+      MatchesMaterialCollections({
+        {
+          "textures/tb_test",
+          {
+            MaterialInfo{"tb_test/bumped", 8, 8},
+            MaterialInfo{"tb_test/dds", 8, 8},
+            MaterialInfo{"tb_test/dds_d", 8, 8},
+            MaterialInfo{"tb_test/glass", 8, 8},
+            MaterialInfo{"tb_test/glass_d", 8, 8},
+            MaterialInfo{"tb_test/grate", 8, 8},
+            MaterialInfo{"tb_test/grate_d", 8, 8},
+            MaterialInfo{"tb_test/nonsolid", 8, 8},
+            MaterialInfo{"tb_test/wall", 8, 8},
+            MaterialInfo{"tb_test/wall_d", 8, 8},
+            MaterialInfo{"tb_test/wall_ed", 8, 8},
+            MaterialInfo{"tb_test/wall_plain", 8, 8},
+          },
+        },
+      }));
+
+    REQUIRE(result.is_success());
+    const auto& materialCollections = result.value();
+    const auto material = [&](const std::string& name) -> const gl::Material& {
+      const auto* material = findMaterial(materialCollections, name);
+      REQUIRE(material != nullptr);
+      return *material;
+    };
+
+    // every material finds its preview image
+    for (const auto* name :
+         {"tb_test/wall",
+          "tb_test/wall_plain",
+          "tb_test/grate",
+          "tb_test/glass",
+          "tb_test/bumped",
+          "tb_test/dds",
+          "tb_test/nonsolid"})
+    {
+      CAPTURE(name);
+      CHECK_FALSE(material(name).previewImageMissing());
+    }
+
+    REQUIRE(material("tb_test/dds").texture() != nullptr);
+    CHECK(
+      material("tb_test/dds").texture()->format() == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
+    CHECK(
+      material("tb_test/grate").effectiveAlphaFunc()
+      == gl::MaterialAlphaFunc{gl::MaterialAlphaFunc::Compare::GreaterEqual, 0.5f});
+    CHECK(material("tb_test/grate").culling() == gl::MaterialCulling::None);
+    CHECK(
+      material("tb_test/glass").effectiveBlendFunc()
+      == gl::MaterialBlendFunc{
+        gl::MaterialBlendFunc::Enable::UseFactors, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA});
+    CHECK(material("tb_test/nonsolid").surfaceParms().contains("nonsolid"));
   }
 
   SECTION("loadMaterialCollections with Doom 3 materials")
@@ -690,6 +891,9 @@ TEST_CASE("LoadMaterialCollections")
           "textures/test",
           {
             MaterialInfo{"test/alphatest", 32, 16},
+            MaterialInfo{"test/alphatest_parm", 16, 32},
+            MaterialInfo{"test/back_sided", 16, 32},
+            MaterialInfo{"test/case_dir", 12, 4},
             MaterialInfo{"test/config_order", 16, 16},
             MaterialInfo{"test/dds_named", 20, 12},
             MaterialInfo{"test/dds_only", 20, 12},
@@ -700,6 +904,7 @@ TEST_CASE("LoadMaterialCollections")
             MaterialInfo{"test/loose", 24, 8},
             MaterialInfo{"test/missing", 32, 32},
             MaterialInfo{"test/missing_editor", 16, 32},
+            MaterialInfo{"test/mixed_case", 16, 32},
             MaterialInfo{"test/named_like_image", 32, 32},
             MaterialInfo{"test/nodraw", 8, 8},
             MaterialInfo{"test/opaque_binary_alpha", 8, 4},
@@ -724,59 +929,63 @@ TEST_CASE("LoadMaterialCollections")
       REQUIRE(material != nullptr);
       return *material;
     };
+    const auto texture = [&](const std::string& name) -> const gl::Texture& {
+      const auto* texture = material(name).texture();
+      REQUIRE(texture != nullptr);
+      return *texture;
+    };
 
     SECTION("preview images")
     {
       // the editor image wins over the diffuse map
-      CHECK(material("test/precedence").texture()->width() == 32);
+      CHECK(texture("test/precedence").width() == 32);
 
       // an editor image found only under _tb/ counts only if some material, here one
       // outside of the material root, uses it in a diffuse stage; otherwise the engine
       // can't load it and uses the diffuse map
-      CHECK(material("test/tb_editor").texture()->width() == 16);
-      CHECK(material("test/tb_editor_shared").texture()->width() == 24);
+      CHECK(texture("test/tb_editor").width() == 16);
+      CHECK(texture("test/tb_editor_shared").width() == 24);
 
       // a missing editor image falls back to the diffuse map, and without an editor
       // image and a diffuse stage, the first stage's image is used
-      CHECK(material("test/missing_editor").texture()->width() == 16);
-      CHECK(material("test/first_stage").texture()->width() == 48);
+      CHECK(texture("test/missing_editor").width() == 16);
+      CHECK(texture("test/first_stage").width() == 48);
 
       // a .tga in the script finds the .png on disk, and a diffuse map only under _tb/
       // is found
-      CHECK(material("test/substituted").texture()->width() == 8);
-      CHECK(material("test/tb_diffuse").texture()->width() == 40);
+      CHECK(texture("test/substituted").width() == 8);
+      CHECK(texture("test/tb_diffuse").width() == 40);
 
       // a .dds goes through the DDS loader
-      CHECK(
-        material("test/dds_only").texture()->format()
-        == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
+      CHECK(texture("test/dds_only").format() == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
 
       // the file as named wins, then the order of the configured extensions decides
-      CHECK(
-        material("test/dds_named").texture()->format()
-        == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
-      CHECK(material("test/config_order").texture()->width() == 16);
-      CHECK(
-        material("test/config_order").texture()->format()
-        != GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
+      CHECK(texture("test/dds_named").format() == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
+      CHECK(texture("test/config_order").width() == 16);
+      CHECK(texture("test/config_order").format() != GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
+
+      // neither the case nor the separators of a reference matter, and neither does the
+      // case of a directory on disk
+      CHECK(texture("test/mixed_case").width() == 16);
+      CHECK(texture("test/case_dir").width() == 12);
 
       // the loose image textures/test/Loose.png and the material textures/test/loose
       // are one material
-      CHECK(material("test/loose").texture()->width() == 24);
+      CHECK(texture("test/loose").width() == 24);
       CHECK(findMaterial(materialCollections, "test/Loose") == nullptr);
 
       // the engine defaults this material for looking up an undeclared table; it keeps
       // its editor image
-      CHECK(material("test/table_undeclared").texture()->width() == 32);
+      CHECK(texture("test/table_undeclared").width() == 32);
       CHECK(
         material("test/table_undeclared").surfaceParms().contains("engine_defaulted"));
 
       // a material without stages and editor image falls back to an image of its own
       // name, but a material that names other images doesn't, and neither does one with
       // stages that show only generated images
-      CHECK(material("test/nodraw").texture()->width() == 8);
-      CHECK(material("test/named_like_image").texture()->width() == 32);
-      CHECK(material("test/generated_only").texture()->width() == 32);
+      CHECK(texture("test/nodraw").width() == 8);
+      CHECK(texture("test/named_like_image").width() == 32);
+      CHECK(texture("test/generated_only").width() == 32);
       CHECK(material("test/generated_only").previewImageMissing());
     }
 
@@ -849,7 +1058,7 @@ TEST_CASE("LoadMaterialCollections")
         == gl::MaterialAlphaFunc{gl::MaterialAlphaFunc::Compare::GreaterEqual, 0.0f});
       REQUIRE(material("test/opaque_binary_alpha").texture() != nullptr);
       CHECK(
-        material("test/opaque_binary_alpha").texture()->alphaDomain()
+        texture("test/opaque_binary_alpha").alphaDomain()
         == img::ImageAlphaDomain::Binary);
       CHECK(
         material("test/opaque_binary_alpha").effectiveAlphaFunc()
@@ -858,9 +1067,15 @@ TEST_CASE("LoadMaterialCollections")
         material("test/opaque_binary_alpha").effectiveBlendFunc().enable
         == gl::MaterialBlendFunc::Enable::DisableBlend);
 
+      // an alpha test threshold that isn't a constant tests at 0.5
+      CHECK(
+        material("test/alphatest_parm").effectiveAlphaFunc()
+        == gl::MaterialAlphaFunc{gl::MaterialAlphaFunc::Compare::GreaterEqual, 0.5f});
+
       // culling
       CHECK(material("test/precedence").culling() == gl::MaterialCulling::Back);
       CHECK(material("test/two_sided").culling() == gl::MaterialCulling::None);
+      CHECK(material("test/back_sided").culling() == gl::MaterialCulling::Front);
 
       // the tag vocabulary reaches the material
       CHECK(
@@ -872,7 +1087,7 @@ TEST_CASE("LoadMaterialCollections")
     {
       CHECK(
         logger.countMessagesContaining(
-          "Loaded 26 materials from 3 files (2 defaulted, 1 unterminated); 24 under "
+          "Loaded 30 materials from 3 files (2 defaulted, 1 unterminated); 28 under "
           "textures/, 5 without a preview image")
         == 1);
     }

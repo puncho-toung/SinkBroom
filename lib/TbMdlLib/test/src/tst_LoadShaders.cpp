@@ -150,7 +150,18 @@ TEST_CASE("LoadShaders")
       CHECK(differentCase->editorImage == "textures/test/case_upper.tga");
       CHECK(findShader(loadedShaders.shaders, "textures/test/case") == nullptr);
 
+      // the warnings name both files
       CHECK(logger.countMessagesContaining("it is already defined in") == 2);
+      CHECK(
+        logger.countMessagesContaining(
+          "Skipping shader 'textures/test/duplicate' in scripts/B.shader, it is already "
+          "defined in scripts/a.shader")
+        == 1);
+      CHECK(
+        logger.countMessagesContaining(
+          "Skipping shader 'textures/test/case' in scripts/c.shader, it is already "
+          "defined in scripts/c.shader")
+        == 1);
     }
 
     SECTION("Doom 3 materials")
@@ -167,7 +178,7 @@ TEST_CASE("LoadShaders")
       CHECK(loadedShaders.fileCount == 3);
       CHECK(findShader(shaders, "textures/test/ignored") == nullptr);
 
-      CHECK(shaders.size() == 26);
+      CHECK(shaders.size() == 30);
       CHECK(std::ranges::is_sorted(shaders, std::less{}, &Quake3Shader::shaderPath));
       CHECK(std::ranges::all_of(shaders, [](const auto& shader) {
         return shader.format == Quake3Shader::Format::Doom3;
@@ -183,6 +194,16 @@ TEST_CASE("LoadShaders")
         duplicate->previewImages
         == std::vector<std::filesystem::path>{"textures/test/editor_ed.tga"});
       CHECK(logger.countMessagesContaining("it is already defined in") == 2);
+      CHECK(
+        logger.countMessagesContaining(
+          "Skipping shader 'textures/test/duplicate' in materials/b_second.mtr, it is "
+          "already defined in materials/a_first.mtr")
+        == 1);
+      CHECK(
+        logger.countMessagesContaining(
+          "Skipping shader 'textures/test/duplicate' in materials/C_THIRD.MTR, it is "
+          "already defined in materials/a_first.mtr")
+        == 1);
 
       // a decl without its closing brace is counted, and the engine defaults it
       CHECK(loadedShaders.unterminatedCount == 1);

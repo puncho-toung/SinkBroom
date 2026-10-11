@@ -135,6 +135,35 @@ textures/test/two_sided
 	diffusemap	textures/test/diffuse_d.tga
 }
 
+// drawn from the back only
+textures/test/back_sided
+{
+	backSided
+	diffusemap	textures/test/diffuse_d.tga
+}
+
+// a threshold that isn't a constant tests at 0.5
+textures/test/alphatest_parm
+{
+	{
+		blend		diffusemap
+		map			textures/test/diffuse_d.tga
+		alphaTest	parm7
+	}
+}
+
+// neither the case nor the separators of a reference matter
+textures/test/mixed_case
+{
+	diffusemap	TEXTURES\TEST\DIFFUSE_D.TGA
+}
+
+// the directory on disk is textures/CaseDir
+textures/test/case_dir
+{
+	diffusemap	textures/casedir/casedir_d.tga
+}
+
 // translucent, but lit, so the image decides how to blend
 textures/test/translucent_lit
 {

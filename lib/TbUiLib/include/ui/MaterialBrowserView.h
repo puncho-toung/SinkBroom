@@ -50,6 +50,18 @@ enum class MaterialSortOrder
   Usage
 };
 
+/**
+ * Returns the given materials without the ones that the material browser's filters hide:
+ * unused materials if hideUnused is set, materials without a preview image if hideMissing
+ * is set, and, if filterText isn't empty, materials whose names contain none of its
+ * space-separated words.
+ */
+std::vector<const gl::Material*> filterMaterials(
+  std::vector<const gl::Material*> materials,
+  bool hideUnused,
+  bool hideMissing,
+  const std::string& filterText);
+
 class MaterialBrowserView : public CellView
 {
   Q_OBJECT
