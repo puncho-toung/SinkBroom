@@ -996,6 +996,12 @@ Result<EntityModelData> loadAssimpModel(
     // if we have no animations, always load 1 frame for the reference model
     const auto numSequences = std::max(scene->mNumAnimations, 1u);
 
+    // Under the id Tech 4 convention, the assimp materials that name no material decl,
+    // so that they are not looked up again for every mesh that uses them. One that does
+    // name a decl is looked up for each of its meshes, because every surface owns its
+    // skins and a gl::Material can't be copied.
+    auto withoutIdTech4Material = std::vector<bool>(scene->mNumMaterials, false);
+
     // create a surface for each mesh in the scene and assign the skins/materials to it
     const auto numMeshes = scene->mNumMeshes;
     for (size_t i = 0; i < numMeshes; ++i)
@@ -1011,15 +1017,19 @@ Result<EntityModelData> loadAssimpModel(
       // under the id Tech 4 convention, a material decl named like the material wins, as
       // in the engine; without one, the model still shows its own textures
       if (
-        auto idTech4Material =
-          isIdTech4 && options.findMaterial
-            ? findIdTech4AssimpMaterial(material, options.findMaterial)
-            : std::nullopt)
+        isIdTech4 && options.findMaterial
+        && !withoutIdTech4Material[mesh->mMaterialIndex])
       {
-        auto materials = std::vector<gl::Material>{};
-        materials.push_back(std::move(*idTech4Material));
-        surface.setSkins(std::move(materials));
-        continue;
+        if (
+          auto idTech4Material =
+            findIdTech4AssimpMaterial(material, options.findMaterial))
+        {
+          auto materials = std::vector<gl::Material>{};
+          materials.push_back(std::move(*idTech4Material));
+          surface.setSkins(std::move(materials));
+          continue;
+        }
+        withoutIdTech4Material[mesh->mMaterialIndex] = true;
       }
 
       // load skins for this surface, named after the material

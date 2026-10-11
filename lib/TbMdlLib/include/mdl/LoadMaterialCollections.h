@@ -24,8 +24,12 @@
 #include "mdl/Palette.h"
 #include "mdl/Quake3Shader.h"
 
+#include "kd/path_hash.h"
+
 #include <filesystem>
 #include <optional>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace kdl
@@ -53,6 +57,48 @@ namespace mdl
 struct MaterialConfig;
 
 /**
+ * Shaders with what finding materials among them needs from all of them: an index of
+ * their paths that ignores case, and the engine names of the images that they use in
+ * diffuse stages, which decide whether an editor image found only under a search path
+ * previews a Doom 3 material. Both take a pass over every shader, so they are built once
+ * per load of the shaders rather than once per material. Nothing changes after
+ * construction, so the model loaders on several threads can share one.
+ */
+class IndexedShaders
+{
+private:
+  std::vector<Quake3Shader> m_shaders;
+  // lowercase shader path -> its shader in m_shaders
+  std::unordered_map<std::filesystem::path, const Quake3Shader*, kdl::path_hash> m_index;
+  // lowercase image paths without extension, as the engine's image manager names them
+  std::unordered_set<std::filesystem::path, kdl::path_hash> m_diffuseImages;
+
+public:
+  IndexedShaders();
+  explicit IndexedShaders(std::vector<Quake3Shader> shaders);
+
+  // the index points into the shaders, which a copy would not own
+  IndexedShaders(const IndexedShaders&) = delete;
+  IndexedShaders& operator=(const IndexedShaders&) = delete;
+  IndexedShaders(IndexedShaders&&) = default;
+  IndexedShaders& operator=(IndexedShaders&&) = default;
+
+  const std::vector<Quake3Shader>& shaders() const;
+
+  /**
+   * Returns the shader with the given path, ignoring case. Of shaders whose paths differ
+   * only in case, the first one is found.
+   */
+  const Quake3Shader* findShader(const std::filesystem::path& shaderPath) const;
+
+  /**
+   * Returns the engine names of the images that the shaders use in diffuse stages:
+   * lowercase and without extension.
+   */
+  const std::unordered_set<std::filesystem::path, kdl::path_hash>& diffuseImages() const;
+};
+
+/**
  * Loads the material at the given path. If one of the given shaders has the path without
  * its extension as its shader path, the material is made from that shader, whatever its
  * root; a Doom 3 material is found by its full canonical decl name, such as
@@ -70,17 +116,22 @@ Result<gl::Material> loadMaterial(
 /**
  * Finds the material that an id Tech 4 model names by its canonical decl name, such as
  * the name after usemtl in an OBJ file. If one of the given shaders has that name,
- * exactly or ignoring case, the material is made from it, whatever its root. Otherwise,
- * if an image file of that name exists, which the engine would use as an implicit
- * material, the material is made from that file. Otherwise, returns nothing, where
- * loadMaterial would return a material whose texture fails to load.
+ * ignoring case, the material is made from it, whatever its root. Otherwise, the engine
+ * would make an implicit material that shows the image of that name, blended by its
+ * alpha; if that image is found, as a loose file or under one of
+ * materialConfig.shaderImageSearchPaths, the material is made like that. Otherwise,
+ * returns nothing, where loadMaterial would return a material whose texture fails to
+ * load.
+ *
+ * The shaders are passed indexed, because a model with many material names calls this
+ * once per name, and the model loaders call it on several threads.
  */
 Result<std::optional<gl::Material>> findIdTech4Material(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
   const std::filesystem::path& materialName,
   const gl::CreateTextureResource& createResource,
-  const std::vector<Quake3Shader>& shaders);
+  const IndexedShaders& shaders);
 
 /**
  * Loads the materials under materialConfig.root, grouped into collections by directory.

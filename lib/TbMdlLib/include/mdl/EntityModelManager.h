@@ -57,7 +57,7 @@ namespace mdl
 {
 class EntityModelFrame;
 class EntityNode;
-class Quake3Shader;
+class IndexedShaders;
 
 enum class Orientation;
 
@@ -72,9 +72,10 @@ private:
   CreateEntityModelDataResource m_createResource;
   Logger& m_logger;
 
-  // Cache Quake 3 shaders to use when loading models. Models load on worker threads,
-  // which keep the list they started with when reloadShaders replaces it.
-  std::shared_ptr<const std::vector<Quake3Shader>> m_shaders;
+  // The shaders that models are shaded with, indexed once per reloadShaders. Models load
+  // on worker threads, which keep the shaders they started with when reloadShaders
+  // replaces them.
+  std::shared_ptr<const IndexedShaders> m_shaders;
 
   mutable std::unordered_map<std::filesystem::path, EntityModel, kdl::path_hash> m_models;
   mutable std::unordered_map<ModelSpecification, std::unique_ptr<gl::MaterialRenderer>>

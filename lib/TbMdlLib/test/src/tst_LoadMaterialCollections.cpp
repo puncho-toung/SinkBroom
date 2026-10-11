@@ -18,15 +18,18 @@
  */
 
 #include "TestEnvironment.h"
+#include "TestParserStatus.h"
 #include "base/Logger.h"
 #include "fs/DiskFileSystem.h"
 #include "fs/TestUtils.h"
 #include "fs/VirtualFileSystem.h"
 #include "fs/WadFileSystem.h"
+#include "gl/Material.h"
 #include "gl/MaterialCollection.h"
 #include "gl/Resource.h"
 #include "gl/Texture.h"
 #include "mdl/CatchConfig.h"
+#include "mdl/Doom3MaterialParser.h"
 #include "mdl/GameConfig.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/LoadMaterialCollections.h"
@@ -34,16 +37,21 @@
 #include "mdl/Quake3Shader.h"
 #include "mdl/TestUtils.h"
 
+#include "kd/path_hash.h"
 #include "kd/ranges/to.h"
 #include "kd/reflection_impl.h"
 #include "kd/task_manager.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -398,10 +406,64 @@ TEST_CASE("LoadMaterialCollections")
     }
   }
 
+  SECTION("IndexedShaders")
+  {
+    const auto makeShader =
+      [](std::filesystem::path shaderPath, std::filesystem::path map) {
+        return Quake3Shader{
+          .shaderPath = std::move(shaderPath),
+          .stages = {Quake3ShaderStage{
+            .map = std::move(map),
+            .lighting = Quake3ShaderStage::Lighting::Diffuse,
+          }},
+          .format = Quake3Shader::Format::Doom3,
+        };
+      };
+
+    const auto shaders = IndexedShaders{{
+      makeShader("models/test/a", "Models/Test/A_d.tga"),
+      makeShader("Models/Test/A", "models/test/other_d"),
+      makeShader("textures/test/b", "_flat"),
+    }};
+
+    SECTION("findShader")
+    {
+      CHECK(shaders.findShader("models/test/a") == &shaders.shaders()[0]);
+      // the case is ignored, and of two paths that differ only in case the first wins
+      CHECK(shaders.findShader("MODELS/TEST/A") == &shaders.shaders()[0]);
+      CHECK(shaders.findShader("textures/test/b") == &shaders.shaders()[2]);
+      CHECK(shaders.findShader("textures/test/c") == nullptr);
+      CHECK(IndexedShaders{}.findShader("models/test/a") == nullptr);
+    }
+
+    SECTION("diffuseImages")
+    {
+      // the engine's names, lowercase and without extension; generated images have none
+      CHECK(
+        shaders.diffuseImages()
+        == std::unordered_set<std::filesystem::path, kdl::path_hash>{
+          "models/test/a_d", "models/test/other_d"});
+    }
+
+    SECTION("a moved index still points into its shaders")
+    {
+      auto source = IndexedShaders{{makeShader("models/test/a", "models/test/a_d")}};
+      const auto moved = std::move(source);
+      CHECK(moved.findShader("models/test/a") == &moved.shaders()[0]);
+    }
+  }
+
   SECTION("findIdTech4Material")
   {
     auto fs = fs::DiskFileSystem{getFixtureRoot() / "test/mdl/LoadIdTech4ObjModel"};
     const auto& materialConfig = Doom3BFGGameInfo.gameConfig.materialConfig;
+
+    const auto find =
+      [&](const std::filesystem::path& materialName, const IndexedShaders& shaders) {
+        return findIdTech4Material(
+                 fs, materialConfig, materialName, createResource, shaders)
+               | kdl::value();
+      };
 
     // a record as the .mtr parser makes it, outside of the material root
     const auto wedgeShader = Quake3Shader{
@@ -413,13 +475,8 @@ TEST_CASE("LoadMaterialCollections")
 
     SECTION("a material decl of that name")
     {
-      const auto material = findIdTech4Material(
-                              fs,
-                              materialConfig,
-                              "models/mapobjects/test/wedge",
-                              createResource,
-                              {wedgeShader})
-                            | kdl::value();
+      const auto material =
+        find("models/mapobjects/test/wedge", IndexedShaders{{wedgeShader}});
       REQUIRE(material);
       CHECK(material->relativePath() == "models/mapobjects/test/wedge");
       // the editor image, 4x2
@@ -433,13 +490,8 @@ TEST_CASE("LoadMaterialCollections")
       auto mixedCaseShader = wedgeShader;
       mixedCaseShader.shaderPath = "Models/MapObjects/Test/Wedge";
 
-      const auto material = findIdTech4Material(
-                              fs,
-                              materialConfig,
-                              "models/mapobjects/test/wedge",
-                              createResource,
-                              {mixedCaseShader})
-                            | kdl::value();
+      const auto material =
+        find("models/mapobjects/test/wedge", IndexedShaders{{mixedCaseShader}});
       REQUIRE(material);
       REQUIRE(material->texture());
       CHECK(material->texture()->width() == 4u);
@@ -447,30 +499,84 @@ TEST_CASE("LoadMaterialCollections")
 
     SECTION("an image of that name is an implicit material")
     {
-      const auto material =
-        findIdTech4Material(
-          fs, materialConfig, "textures/base_wall/lfwall27d", createResource, {})
-        | kdl::value();
+      const auto material = find("textures/base_wall/lfwall27d", {});
       REQUIRE(material);
       CHECK(material->name() == "base_wall/lfwall27d");
+      CHECK(material->relativePath() == "textures/base_wall/lfwall27d");
       REQUIRE(material->texture());
       CHECK(material->texture()->width() == 2u);
       CHECK(material->texture()->height() == 2u);
     }
 
+    SECTION("an image of that name under a search path is an implicit material too")
+    {
+      // _tb/models/mapobjects/test/bulb.tga, an image that only the engine's export has;
+      // no shader uses it in a diffuse stage, but the engine loads it by this very name
+      const auto checkBulb = [&](const IndexedShaders& shaders) {
+        const auto material = find("models/mapobjects/test/bulb", shaders);
+        REQUIRE(material);
+        CHECK(material->relativePath() == "models/mapobjects/test/bulb");
+        CHECK_FALSE(material->previewImageMissing());
+        REQUIRE(material->texture());
+        CHECK(material->texture()->width() == 2u);
+        CHECK(material->texture()->height() == 4u);
+      };
+
+      checkBulb({});
+      checkBulb(IndexedShaders{{wedgeShader}});
+    }
+
+    SECTION("an implicit material is the material that the engine generates")
+    {
+      // the text of idMaterial::SetDefaultText, read as a decl
+      const auto name = std::string{"models/mapobjects/test/bulb"};
+      auto status = TestParserStatus{};
+      auto generatedShaders =
+        Doom3MaterialParser{
+          "material " + name + " { { blend blend colored map \"" + name + "\" clamp } }"}
+          .parse(status);
+      REQUIRE(generatedShaders.size() == 1u);
+
+      const auto implicitMaterial = find(name, {});
+      const auto generatedMaterial =
+        find(name, IndexedShaders{std::move(generatedShaders)});
+      REQUIRE(implicitMaterial);
+      REQUIRE(generatedMaterial);
+
+      CHECK(implicitMaterial->name() == generatedMaterial->name());
+      CHECK(implicitMaterial->relativePath() == generatedMaterial->relativePath());
+      CHECK(implicitMaterial->surfaceParms() == generatedMaterial->surfaceParms());
+      CHECK(implicitMaterial->culling() == generatedMaterial->culling());
+      CHECK(
+        implicitMaterial->effectiveBlendFunc()
+        == generatedMaterial->effectiveBlendFunc());
+      CHECK(
+        implicitMaterial->effectiveAlphaFunc()
+        == generatedMaterial->effectiveAlphaFunc());
+      REQUIRE(implicitMaterial->texture());
+      REQUIRE(generatedMaterial->texture());
+      CHECK(
+        implicitMaterial->texture()->width() == generatedMaterial->texture()->width());
+      CHECK(
+        implicitMaterial->texture()->height() == generatedMaterial->texture()->height());
+
+      // blended by the image's alpha, as the engine draws it
+      CHECK(
+        implicitMaterial->effectiveBlendFunc()
+        == gl::MaterialBlendFunc{
+          gl::MaterialBlendFunc::Enable::UseFactors,
+          GL_SRC_ALPHA,
+          GL_ONE_MINUS_SRC_ALPHA});
+    }
+
     SECTION("nothing of that name")
     {
       // wedge_ed.tga is not named like the decl
+      CHECK(find("models/mapobjects/test/wedge", {}) == std::nullopt);
       CHECK(
-        (findIdTech4Material(
-           fs, materialConfig, "models/mapobjects/test/wedge", createResource, {})
-         | kdl::value())
-        == std::nullopt);
-      CHECK(
-        (findIdTech4Material(
-           fs, materialConfig, "textures/does_not/exist", createResource, {wedgeShader})
-         | kdl::value())
-        == std::nullopt);
+        find("textures/does_not/exist", IndexedShaders{{wedgeShader}}) == std::nullopt);
+      // neither a loose image nor one under the search path
+      CHECK(find("models/mapobjects/test/nothing", {}) == std::nullopt);
     }
   }
 

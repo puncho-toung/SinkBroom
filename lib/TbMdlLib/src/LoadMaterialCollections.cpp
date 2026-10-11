@@ -350,10 +350,11 @@ struct MaterialLoadContext
 {
   DirectoryIndex directoryIndex;
   // the engine names of the images that some material uses in a diffuse stage, from all
-  // shaders including those outside of the material root; set up front, or built from
-  // diffuseImageShaders on first use
-  std::optional<ImageSet> diffuseImages = std::nullopt;
+  // shaders including those outside of the material root; given up front, which the
+  // caller keeps alive, or built from diffuseImageShaders on first use
+  const ImageSet* diffuseImages = nullptr;
   const std::vector<Quake3Shader>* diffuseImageShaders = nullptr;
+  std::optional<ImageSet> builtDiffuseImages = std::nullopt;
   // lowercase image path -> the texture resource of every material that shows it
   std::unordered_map<
     std::filesystem::path,
@@ -363,14 +364,15 @@ struct MaterialLoadContext
 
   bool isDiffuseImage(const std::filesystem::path& reference)
   {
-    if (!diffuseImages)
+    if (!diffuseImages && !builtDiffuseImages)
     {
-      diffuseImages =
+      builtDiffuseImages =
         diffuseImageShaders ? findDiffuseImages(*diffuseImageShaders) : ImageSet{};
     }
 
+    const auto& images = diffuseImages ? *diffuseImages : *builtDiffuseImages;
     const auto name = engineImageName(reference);
-    return name && diffuseImages->contains(*name);
+    return name && images.contains(*name);
   }
 };
 
@@ -828,6 +830,34 @@ Result<gl::Material> loadMaterialFromShader(
            });
 }
 
+/**
+ * Returns the material that the engine makes of a name that no decl defines
+ * (idMaterial::SetDefaultText, renderer/Material.cpp):
+ *
+ *   material <name> { { blend blend colored map "<name>" clamp } }
+ *
+ * It shows the image of that name, blended by the image's alpha, and Doom3MaterialParser
+ * makes the same record of that text. Its only preview image is the image of that name,
+ * and there is no editor image, so the image counts wherever it is found, under a search
+ * path too: the engine loads it by that name for this material.
+ */
+Quake3Shader makeImplicitDoom3Shader(const std::filesystem::path& name)
+{
+  using BlendFunc = Quake3ShaderStage::BlendFunc;
+
+  return Quake3Shader{
+    .shaderPath = name,
+    .surfaceParms = {"coverage_translucent"},
+    .stages = {Quake3ShaderStage{
+      .map = name,
+      .blendFunc = {BlendFunc::SrcAlpha, BlendFunc::OneMinusSrcAlpha},
+    }},
+    .format = Quake3Shader::Format::Doom3,
+    .coverage = Quake3Shader::Coverage::Translucent,
+    .previewImages = {name},
+  };
+}
+
 const Quake3Shader* findShader(
   const std::vector<Quake3Shader>& shaders, const std::filesystem::path& shaderPath)
 {
@@ -912,6 +942,31 @@ void logLoadSummary(
 
 } // namespace
 
+IndexedShaders::IndexedShaders() = default;
+
+IndexedShaders::IndexedShaders(std::vector<Quake3Shader> shaders)
+  : m_shaders{std::move(shaders)}
+  , m_index{makeShaderIndex(m_shaders)}
+  , m_diffuseImages{findDiffuseImages(m_shaders)}
+{
+}
+
+const std::vector<Quake3Shader>& IndexedShaders::shaders() const
+{
+  return m_shaders;
+}
+
+const Quake3Shader* IndexedShaders::findShader(
+  const std::filesystem::path& shaderPath) const
+{
+  return mdl::findShader(m_index, shaderPath);
+}
+
+const std::unordered_set<std::filesystem::path, kdl::path_hash>& IndexedShaders::
+  diffuseImages() const
+{
+  return m_diffuseImages;
+}
 
 Result<gl::Material> loadMaterial(
   const fs::FileSystem& fs,
@@ -940,28 +995,39 @@ Result<std::optional<gl::Material>> findIdTech4Material(
   const MaterialConfig& materialConfig,
   const std::filesystem::path& materialName,
   const gl::CreateTextureResource& createResource,
-  const std::vector<Quake3Shader>& shaders)
+  const IndexedShaders& shaders)
 {
-  const auto* shader = findShader(shaders, materialName);
-  if (!shader && findMaterialFile(fs, materialName, materialConfig.extensions).is_error())
+  auto context = MaterialLoadContext{
+    .directoryIndex = DirectoryIndex{fs, materialConfig.extensions},
+    .diffuseImages = &shaders.diffuseImages(),
+  };
+
+  const auto load = [&](const Quake3Shader& shader) {
+    return loadMaterialFromShader(
+             fs,
+             materialConfig,
+             materialName,
+             createResource,
+             &shader,
+             std::nullopt,
+             context)
+           | kdl::transform(
+             [](auto material) { return std::optional{std::move(material)}; });
+  };
+
+  if (const auto* shader = shaders.findShader(materialName))
+  {
+    return load(*shader);
+  }
+
+  // Without a decl, the engine makes an implicit material of the image of that name. If
+  // there is no such image either, the caller decides what to show and reports the name.
+  const auto implicitShader = makeImplicitDoom3Shader(materialName);
+  if (findDoom3PreviewImage(implicitShader, materialConfig, context).missing)
   {
     return std::optional<gl::Material>{};
   }
-
-  auto context = MaterialLoadContext{
-    .directoryIndex = DirectoryIndex{fs, materialConfig.extensions},
-    .diffuseImageShaders = &shaders,
-  };
-  return loadMaterialFromShader(
-           fs,
-           materialConfig,
-           materialName,
-           createResource,
-           shader,
-           std::nullopt,
-           context)
-         | kdl::transform(
-           [](auto material) { return std::optional{std::move(material)}; });
+  return load(implicitShader);
 }
 
 Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
@@ -984,7 +1050,7 @@ Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
              };
 
              // from every shader, before those outside of the root are dropped
-             auto diffuseImages = findDiffuseImages(loadedShaders.shaders);
+             const auto diffuseImages = findDiffuseImages(loadedShaders.shaders);
 
              // Shaders outside of the root can't be used on brush faces, but they stay
              // available to entity models, which load their own.
@@ -1000,7 +1066,7 @@ Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
                         const auto shaderIndex = makeShaderIndex(shaders);
                         auto context = MaterialLoadContext{
                           .directoryIndex = DirectoryIndex{fs, materialConfig.extensions},
-                          .diffuseImages = std::move(diffuseImages),
+                          .diffuseImages = &diffuseImages,
                         };
 
                         return materialPaths

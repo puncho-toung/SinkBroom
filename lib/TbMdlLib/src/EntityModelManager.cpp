@@ -46,7 +46,7 @@ EntityModelManager::EntityModelManager(
   , m_gameFileSystem{gameFileSystem}
   , m_createResource{std::move(createResource)}
   , m_logger{logger}
-  , m_shaders{std::make_shared<const std::vector<Quake3Shader>>()}
+  , m_shaders{std::make_shared<const IndexedShaders>()}
 {
 }
 
@@ -68,7 +68,7 @@ void EntityModelManager::clear()
 
 void EntityModelManager::reloadShaders(kdl::task_manager& taskManager)
 {
-  m_shaders = std::make_shared<const std::vector<Quake3Shader>>(
+  m_shaders = std::make_shared<const IndexedShaders>(
     loadShaders(
       m_gameFileSystem, m_gameInfo.gameConfig.materialConfig, taskManager, m_logger)
     | kdl::if_error(
@@ -187,7 +187,12 @@ Result<EntityModel> EntityModelManager::loadModel(
                              createResource,
                              shaders = m_shaders](const auto& materialPath) {
     return mdl::loadMaterial(
-             fs, materialConfig, materialPath, createResource, *shaders, std::nullopt)
+             fs,
+             materialConfig,
+             materialPath,
+             createResource,
+             shaders->shaders(),
+             std::nullopt)
            | kdl::or_else(makeReadMaterialErrorHandler(fs, logger)) | kdl::value();
   };
 

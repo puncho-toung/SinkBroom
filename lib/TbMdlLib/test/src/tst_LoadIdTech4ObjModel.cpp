@@ -531,7 +531,9 @@ TEST_CASE("LoadIdTech4ObjModel")
     };
 
     const auto load =
-      [&](const std::vector<Quake3Shader>& shaders, const std::filesystem::path& path) {
+      [&](std::vector<Quake3Shader> shaderList, const std::filesystem::path& path) {
+        // as EntityModelManager::reloadShaders indexes them
+        const auto shaders = IndexedShaders{std::move(shaderList)};
         const auto findMaterial = [&](const std::filesystem::path& materialName) {
           return findIdTech4Material(
                    fs, materialConfig, materialName, createResource, shaders)
