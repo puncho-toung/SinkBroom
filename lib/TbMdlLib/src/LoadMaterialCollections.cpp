@@ -399,16 +399,6 @@ std::optional<std::filesystem::path> findScriptImageFile(
     return iCandidate != candidates.end() ? std::optional{*iCandidate} : std::nullopt;
   };
 
-  // A .dds copy keeps its compression and mips on the GPU, so it needs much less memory
-  // than the image it stands in for. The engine itself never reads .dds files.
-  if (isConfigured(".dds"))
-  {
-    if (auto candidate = findCandidate(".dds"))
-    {
-      return candidate;
-    }
-  }
-
   // the file as named, then the same name with each configured extension in the order
   // of the config, as the engine tries its image loaders in its own order
   if (const auto extension = kdl::path_to_lower(path.extension());

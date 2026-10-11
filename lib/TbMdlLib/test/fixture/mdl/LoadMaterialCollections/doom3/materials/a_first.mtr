@@ -63,10 +63,16 @@ textures/test/dds_only
 	diffusemap	textures/test/ddsonly_d.tga
 }
 
-// a .dds next to a .png is preferred
-textures/test/dds_preferred
+// without the .tga, the .png wins over the .dds next to it by the order of the config
+textures/test/config_order
 {
 	diffusemap	textures/test/both_d.tga
+}
+
+// the file as named wins over the order of the config
+textures/test/dds_named
+{
+	diffusemap	textures/test/both_d.dds
 }
 
 // no image exists

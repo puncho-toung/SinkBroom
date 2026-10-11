@@ -697,8 +697,9 @@ TEST_CASE("LoadMaterialCollections")
           "textures/test",
           {
             MaterialInfo{"test/alphatest", 32, 16},
+            MaterialInfo{"test/config_order", 16, 16},
+            MaterialInfo{"test/dds_named", 20, 12},
             MaterialInfo{"test/dds_only", 20, 12},
-            MaterialInfo{"test/dds_preferred", 20, 12},
             MaterialInfo{"test/duplicate", 32, 16},
             MaterialInfo{"test/first_stage", 48, 8},
             MaterialInfo{"test/invisible", 32, 32},
@@ -745,16 +746,24 @@ TEST_CASE("LoadMaterialCollections")
       CHECK(material("test/missing_editor").texture()->width() == 16);
       CHECK(material("test/first_stage").texture()->width() == 48);
 
-      // a .tga in the script finds the .png on disk, a diffuse map only under _tb/ is
-      // found, and a .dds copy goes through the DDS loader and wins over a .png
+      // a .tga in the script finds the .png on disk, and a diffuse map only under _tb/
+      // is found
       CHECK(material("test/substituted").texture()->width() == 8);
       CHECK(material("test/tb_diffuse").texture()->width() == 40);
+
+      // a .dds goes through the DDS loader
       CHECK(
         material("test/dds_only").texture()->format()
         == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
+
+      // the file as named wins, then the order of the configured extensions decides
       CHECK(
-        material("test/dds_preferred").texture()->format()
+        material("test/dds_named").texture()->format()
         == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
+      CHECK(material("test/config_order").texture()->width() == 16);
+      CHECK(
+        material("test/config_order").texture()->format()
+        != GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
 
       // the loose image textures/test/Loose.png and the material textures/test/loose
       // are one material
@@ -852,7 +861,7 @@ TEST_CASE("LoadMaterialCollections")
     {
       CHECK(
         logger.countMessagesContaining(
-          "Loaded 23 materials from 3 files (2 defaulted, 1 unterminated); 21 under "
+          "Loaded 24 materials from 3 files (2 defaulted, 1 unterminated); 22 under "
           "textures/, 4 without a preview image")
         == 1);
     }
@@ -908,7 +917,7 @@ TEST_CASE("LoadMaterialCollections")
       CHECK(loadedShaders.fileCount == 3);
       CHECK(findShader(shaders, "textures/test/ignored") == nullptr);
 
-      CHECK(shaders.size() == 23);
+      CHECK(shaders.size() == 24);
       CHECK(std::ranges::is_sorted(shaders, std::less{}, &Quake3Shader::shaderPath));
       CHECK(std::ranges::all_of(shaders, [](const auto& shader) {
         return shader.format == Quake3Shader::Format::Doom3;
