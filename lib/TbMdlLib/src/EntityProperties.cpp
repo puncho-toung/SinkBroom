@@ -23,11 +23,28 @@
 #include "kd/string_compare.h"
 
 #include <algorithm>
+#include <ostream>
 #include <string>
 #include <vector>
 
 namespace tb::mdl
 {
+
+kdl_reflect_impl(EntityNamingConfig);
+
+std::ostream& operator<<(std::ostream& lhs, const EntityRotationPolicy rhs)
+{
+  switch (rhs)
+  {
+  case EntityRotationPolicy::Quake:
+    lhs << "Quake";
+    break;
+  case EntityRotationPolicy::IdTech4:
+    lhs << "IdTech4";
+    break;
+  }
+  return lhs;
+}
 
 kdl_reflect_impl(EntityPropertyConfig);
 

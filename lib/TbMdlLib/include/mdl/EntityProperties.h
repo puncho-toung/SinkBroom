@@ -23,6 +23,7 @@
 
 #include "kd/reflection_decl.h"
 
+#include <iosfwd>
 #include <optional>
 #include <string>
 #include <vector>
@@ -81,17 +82,52 @@ inline const std::string LayerHiddenValue = "1";
 inline const std::string LayerOmitFromExportValue = "1";
 } // namespace EntityPropertyValues
 
+/**
+ * Per-game entity naming rules (game config key entities.naming). When a game sets them,
+ * the editor gives every entity it creates, pastes or duplicates a name that is unique in
+ * the map, and sets the brush entity model key of an entity with brushes or patches to
+ * its name.
+ */
+struct EntityNamingConfig
+{
+  // the property that holds an entity's unique name, e.g. "name" in id Tech 4
+  std::string nameKey;
+  // the property of an entity with brushes or patches that must equal its name, e.g.
+  // "model" in id Tech 4; no model rule if unset
+  std::optional<std::string> brushEntityModelKey;
+
+  kdl_reflect_decl(EntityNamingConfig, nameKey, brushEntityModelKey);
+};
+
+/**
+ * Which properties hold an entity's rotation and how they are written back (game config
+ * key entities.rotation.policy).
+ */
+enum class EntityRotationPolicy
+{
+  // angle, angles and mangle as the Quake family of engines read them
+  Quake,
+  // rotation, angles and angle as the id Tech 4 engines read them
+  IdTech4,
+};
+
+std::ostream& operator<<(std::ostream& lhs, EntityRotationPolicy rhs);
+
 struct EntityPropertyConfig
 {
   std::optional<el::ExpressionNode> defaultModelScaleExpression;
   bool setDefaultProperties = false;
   bool updateAnglePropertyAfterTransform = true;
+  std::optional<EntityNamingConfig> naming;
+  EntityRotationPolicy rotationPolicy = EntityRotationPolicy::Quake;
 
   kdl_reflect_decl(
     EntityPropertyConfig,
     defaultModelScaleExpression,
     setDefaultProperties,
-    updateAnglePropertyAfterTransform);
+    updateAnglePropertyAfterTransform,
+    naming,
+    rotationPolicy);
 };
 
 bool isNumberedProperty(std::string_view prefix, std::string_view key);

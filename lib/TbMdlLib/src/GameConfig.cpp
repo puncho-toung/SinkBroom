@@ -119,4 +119,14 @@ std::filesystem::path GameConfig::findConfigFile(
   return path.parent_path() / filePath;
 }
 
+EntityPropertyConfig makeEntityPropertyConfig(const GameConfig& config)
+{
+  return EntityPropertyConfig{
+    .defaultModelScaleExpression = config.entityConfig.scaleExpression,
+    .setDefaultProperties = config.entityConfig.setDefaultProperties,
+    .naming = config.entityConfig.naming,
+    .rotationPolicy = config.entityConfig.rotationPolicy,
+  };
+}
+
 } // namespace tb::mdl

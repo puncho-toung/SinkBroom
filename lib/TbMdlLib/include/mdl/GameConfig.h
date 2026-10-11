@@ -22,6 +22,7 @@
 #include "base/Color.h"
 #include "base/Preference.h"
 #include "el/Expression.h"
+#include "mdl/EntityProperties.h"
 #include "mdl/ModelConvention.h"
 #include "mdl/SurfaceAttributes.h"
 #include "mdl/Tag.h"
@@ -98,6 +99,9 @@ struct EntityConfig
   std::optional<el::ExpressionNode> scaleExpression;
   bool setDefaultProperties = false;
   ModelConvention modelConvention = ModelConvention::Default;
+  // unique entity names and model = name; absent unless the game turns them on
+  std::optional<EntityNamingConfig> naming;
+  EntityRotationPolicy rotationPolicy = EntityRotationPolicy::Quake;
 
   kdl_reflect_decl(
     EntityConfig,
@@ -105,7 +109,9 @@ struct EntityConfig
     defaultColor,
     scaleExpression,
     setDefaultProperties,
-    modelConvention);
+    modelConvention,
+    naming,
+    rotationPolicy);
 };
 
 struct FlagConfig
@@ -187,5 +193,11 @@ struct GameConfig
   std::filesystem::path findInitialMap(const std::string& formatName) const;
   std::filesystem::path findConfigFile(const std::filesystem::path& filePath) const;
 };
+
+/**
+ * Returns the entity property settings of the given game, which the world node of a map
+ * of that game hands down to every node.
+ */
+EntityPropertyConfig makeEntityPropertyConfig(const GameConfig& config);
 
 } // namespace tb::mdl

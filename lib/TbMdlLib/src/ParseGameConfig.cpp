@@ -37,6 +37,7 @@
 
 #include <fmt/format.h>
 
+#include <optional>
 #include <ranges>
 #include <string>
 #include <vector>
@@ -445,6 +446,63 @@ ModelConvention parseModelConvention(
     fmt::format("Unknown model convention '{}'; valid values are: idtech4", name)};
 }
 
+std::optional<EntityNamingConfig> parseEntityNamingConfig(
+  const el::EvaluationContext& context, const el::Value& value)
+{
+  if (
+    value == el::Value::Null
+    || !value.atOrDefault(context, "uniqueNames").booleanValue(context))
+  {
+    return std::nullopt;
+  }
+
+  auto nameKey = value.atOrDefault(context, "nameKey").stringValue(context);
+  if (nameKey.empty())
+  {
+    throw ParserException{
+      context.location(value), "Unique entity names require a non-empty nameKey"};
+  }
+
+  auto brushEntityModelKey =
+    value.atOrDefault(context, "brushEntityModelKey").stringValue(context);
+
+  return EntityNamingConfig{
+    std::move(nameKey),
+    brushEntityModelKey.empty() ? std::nullopt
+                                : std::optional{std::move(brushEntityModelKey)},
+  };
+}
+
+EntityRotationPolicy parseEntityRotationPolicy(
+  const el::EvaluationContext& context, const el::Value& value)
+{
+  if (value == el::Value::Null)
+  {
+    return EntityRotationPolicy::Quake;
+  }
+
+  const auto policyValue = value.atOrDefault(context, "policy");
+  if (policyValue == el::Value::Null)
+  {
+    return EntityRotationPolicy::Quake;
+  }
+
+  const auto& name = policyValue.stringValue(context);
+  if (name == "quake")
+  {
+    return EntityRotationPolicy::Quake;
+  }
+  if (name == "idtech4")
+  {
+    return EntityRotationPolicy::IdTech4;
+  }
+
+  throw ParserException{
+    context.location(policyValue),
+    fmt::format(
+      "Unknown entity rotation policy '{}'; valid values are: quake, idtech4", name)};
+}
+
 EntityConfig parseEntityConfig(
   const el::EvaluationContext& context, const el::Value& value)
 {
@@ -466,6 +524,8 @@ EntityConfig parseEntityConfig(
     context.expression(value.atOrDefault(context, "scale")),
     value.atOrDefault(context, "setDefaultProperties").booleanValue(context),
     parseModelConvention(context, value.atOrDefault(context, "modelConvention")),
+    parseEntityNamingConfig(context, value.atOrDefault(context, "naming")),
+    parseEntityRotationPolicy(context, value.atOrDefault(context, "rotation")),
   };
 }
 

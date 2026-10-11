@@ -77,6 +77,17 @@ TEST_CASE("Doom3BFGFixture")
     CHECK(map.gameInfo().gameConfig.name == "Doom 3 BFG");
     CHECK(map.worldNode().mapFormat() == MapFormat::Doom3_Valve);
 
+    // a new map hands the game's naming and rotation keys to its nodes
+    CHECK(
+      map.worldNode().entityPropertyConfig()
+      == makeEntityPropertyConfig(Doom3BFGGameInfo.gameConfig));
+    CHECK(
+      map.worldNode().entityPropertyConfig().naming
+      == EntityNamingConfig{.nameKey = "name", .brushEntityModelKey = "model"});
+    CHECK(
+      map.worldNode().entityPropertyConfig().rotationPolicy
+      == EntityRotationPolicy::IdTech4);
+
     // the builtin FGD is found next to the fixture's virtual config file
     const auto* lightDefinition = map.entityDefinitionManager().definition("light");
     REQUIRE(lightDefinition != nullptr);
@@ -102,6 +113,11 @@ TEST_CASE("Doom3BFGFixture")
     auto fixture = MapFixture{};
     auto& map = fixture.load(path, Doom3BFGFixtureConfig);
     REQUIRE(map.worldNode().mapFormat() == MapFormat::Doom3_Valve);
+
+    // a loaded map hands the game's naming and rotation keys to its nodes
+    CHECK(
+      map.worldNode().entityPropertyConfig()
+      == makeEntityPropertyConfig(Doom3BFGGameInfo.gameConfig));
 
     auto worldBrushCount = size_t{0};
     auto entityCount = size_t{1}; // the worldspawn

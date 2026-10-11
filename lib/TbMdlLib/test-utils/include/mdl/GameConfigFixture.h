@@ -181,6 +181,12 @@ inline const GameInfo Doom3BFGGameInfo = detail::makeGameInfoFixture(
         .scaleExpression = std::nullopt,
         // like games/Doom3BFG/GameConfig.cfg
         .modelConvention = ModelConvention::IdTech4,
+        .naming =
+          EntityNamingConfig{
+            .nameKey = "name",
+            .brushEntityModelKey = "model",
+          },
+        .rotationPolicy = EntityRotationPolicy::IdTech4,
       },
     .faceAttribsConfig = {},
     .smartTags = {},

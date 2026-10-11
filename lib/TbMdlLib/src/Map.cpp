@@ -171,8 +171,7 @@ Result<std::unique_ptr<WorldNode>> loadWorldNode(
   kdl::task_manager& taskManager,
   Logger& logger)
 {
-  const auto entityPropertyConfig = EntityPropertyConfig{
-    config.entityConfig.scaleExpression, config.entityConfig.setDefaultProperties};
+  const auto entityPropertyConfig = makeEntityPropertyConfig(config);
 
   auto parserStatus = SimpleParserStatus{logger};
   return fs::Disk::openFile(path) | kdl::and_then([&](auto file) {
@@ -237,10 +236,7 @@ Result<std::unique_ptr<WorldNode>> createWorldNode(
   }
 
   auto worldNode = std::make_unique<WorldNode>(
-    EntityPropertyConfig{
-      config.entityConfig.scaleExpression, config.entityConfig.setDefaultProperties},
-    std::move(worldEntity),
-    format);
+    makeEntityPropertyConfig(config), std::move(worldEntity), format);
 
   if (!config.forceEmptyNewMap)
   {

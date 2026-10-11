@@ -1095,6 +1095,15 @@ TEST_CASE("Node")
 
     auto nodePtr = root->children().front();
     CHECK(nodePtr->entityPropertyConfig() == config);
+
+    // the per-game naming and rotation keys take part in comparisons
+    auto namingConfig = EntityPropertyConfig{};
+    namingConfig.naming = EntityNamingConfig{.nameKey = "name"};
+    CHECK(namingConfig != EntityPropertyConfig{});
+
+    auto rotationConfig = EntityPropertyConfig{};
+    rotationConfig.rotationPolicy = EntityRotationPolicy::IdTech4;
+    CHECK(rotationConfig != EntityPropertyConfig{});
   }
 }
 

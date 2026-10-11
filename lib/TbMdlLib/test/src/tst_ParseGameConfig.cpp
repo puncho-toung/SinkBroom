@@ -24,6 +24,7 @@
 #include "fs/TraversalMode.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/GameConfig.h"
+#include "mdl/GameConfigFixture.h"
 #include "mdl/ParseGameConfig.h"
 #include "mdl/Tag.h"
 #include "mdl/TagMatcher.h"
@@ -136,6 +137,18 @@ TEST_CASE("GameConfigParser")
       CHECK_FALSE(config.entityConfig.setDefaultProperties);
       // the engine's _tb/models/**/*.obj proxies are Z-up and name material decls
       CHECK(config.entityConfig.modelConvention == ModelConvention::IdTech4);
+      // the engine refuses to spawn two entities with one name, and dmap names the
+      // model of an entity with brushes after its name
+      CHECK(
+        config.entityConfig.naming
+        == EntityNamingConfig{.nameKey = "name", .brushEntityModelKey = "model"});
+      CHECK(config.entityConfig.rotationPolicy == EntityRotationPolicy::IdTech4);
+      // the fixture games of the tests mirror the shipped config
+      CHECK(
+        config.entityConfig.naming == Doom3BFGGameInfo.gameConfig.entityConfig.naming);
+      CHECK(
+        config.entityConfig.rotationPolicy
+        == Doom3BFGGameInfo.gameConfig.entityConfig.rotationPolicy);
 
       CHECK(config.faceAttribsConfig.surfaceFlags.flags.empty());
       CHECK(config.faceAttribsConfig.contentFlags.flags.empty());
@@ -1260,6 +1273,129 @@ TEST_CASE("GameConfigParser")
       idTech4Config.modelConvention = ModelConvention::IdTech4;
       CHECK(idTech4Config != config);
       CHECK(kdl::str_to_string(idTech4Config.modelConvention) == "IdTech4");
+    }
+  }
+
+  SECTION("entity naming and rotation policy")
+  {
+    const auto makeConfig = [](const std::string& entityKeys) {
+      return R"%({
+    "version": 9,
+    "name": "Doom 3 BFG",
+    "fileformats": [ { "format": "Doom3 (Valve)" } ],
+    "filesystem": {
+        "searchpath": "base",
+        "packageformat": { "extension": "pk4", "format": "zip" }
+    },
+    "materials": { "root": "textures", "extensions": [ ".tga" ] },
+    "entities": {
+        "definitions": [],
+        "defaultcolor": "0.6 0.6 0.6 1.0")%"
+             + entityKeys + R"%(
+    }
+})%";
+    };
+
+    SECTION("missing keys keep upstream behaviour")
+    {
+      const auto result = parseGameConfig(makeConfig(""));
+      REQUIRE(result.is_success());
+      CHECK(result.value().entityConfig.naming == std::nullopt);
+      CHECK(result.value().entityConfig.rotationPolicy == EntityRotationPolicy::Quake);
+      CHECK(EntityConfig{}.naming == std::nullopt);
+      CHECK(EntityConfig{}.rotationPolicy == EntityRotationPolicy::Quake);
+    }
+
+    SECTION("a full block is read")
+    {
+      const auto result = parseGameConfig(makeConfig(R"%(,
+        "naming": { "uniqueNames": true, "nameKey": "name", "brushEntityModelKey": "model" },
+        "rotation": { "policy": "idtech4" })%"));
+      REQUIRE(result.is_success());
+      CHECK(
+        result.value().entityConfig.naming
+        == EntityNamingConfig{.nameKey = "name", .brushEntityModelKey = "model"});
+      CHECK(result.value().entityConfig.rotationPolicy == EntityRotationPolicy::IdTech4);
+    }
+
+    SECTION("the brush entity model key is optional")
+    {
+      const auto result = parseGameConfig(makeConfig(R"%(,
+        "naming": { "uniqueNames": true, "nameKey": "targetname" })%"));
+      REQUIRE(result.is_success());
+      CHECK(
+        result.value().entityConfig.naming
+        == EntityNamingConfig{
+          .nameKey = "targetname", .brushEntityModelKey = std::nullopt});
+    }
+
+    SECTION("uniqueNames false turns naming off")
+    {
+      const auto result = parseGameConfig(makeConfig(R"%(,
+        "naming": { "uniqueNames": false, "nameKey": "name" })%"));
+      REQUIRE(result.is_success());
+      CHECK(result.value().entityConfig.naming == std::nullopt);
+    }
+
+    SECTION("quake selects the Quake policy")
+    {
+      const auto result = parseGameConfig(makeConfig(R"%(,
+        "rotation": { "policy": "quake" })%"));
+      REQUIRE(result.is_success());
+      CHECK(result.value().entityConfig.rotationPolicy == EntityRotationPolicy::Quake);
+    }
+
+    SECTION("uniqueNames without nameKey is an error with its location")
+    {
+      CHECK(
+        parseGameConfig(makeConfig(R"%(,
+        "naming": { "uniqueNames": true })%"))
+        == Result<GameConfig>{Error{
+          "At line 13, column 19: Unique entity names require a non-empty nameKey"}});
+    }
+
+    SECTION("an unknown rotation policy is an error with its location")
+    {
+      CHECK(
+        parseGameConfig(makeConfig(R"%(,
+        "rotation": { "policy": "bogus" })%"))
+        == Result<GameConfig>{Error{
+          "At line 13, column 33: Unknown entity rotation policy 'bogus'; valid values "
+          "are: quake, idtech4"}});
+    }
+
+    SECTION("the new keys take part in comparisons")
+    {
+      const auto config = EntityConfig{};
+
+      auto namingConfig = config;
+      namingConfig.naming = EntityNamingConfig{.nameKey = "name"};
+      CHECK(namingConfig != config);
+
+      auto rotationConfig = config;
+      rotationConfig.rotationPolicy = EntityRotationPolicy::IdTech4;
+      CHECK(rotationConfig != config);
+      CHECK(kdl::str_to_string(rotationConfig.rotationPolicy) == "IdTech4");
+    }
+
+    SECTION("makeEntityPropertyConfig hands the keys to the world node")
+    {
+      const auto result = parseGameConfig(makeConfig(R"%(,
+        "setDefaultProperties": true,
+        "naming": { "uniqueNames": true, "nameKey": "name", "brushEntityModelKey": "model" },
+        "rotation": { "policy": "idtech4" })%"));
+      REQUIRE(result.is_success());
+
+      const auto entityPropertyConfig = makeEntityPropertyConfig(result.value());
+      CHECK(entityPropertyConfig.defaultModelScaleExpression == std::nullopt);
+      CHECK(entityPropertyConfig.setDefaultProperties);
+      CHECK(entityPropertyConfig.updateAnglePropertyAfterTransform);
+      CHECK(
+        entityPropertyConfig.naming
+        == EntityNamingConfig{.nameKey = "name", .brushEntityModelKey = "model"});
+      CHECK(entityPropertyConfig.rotationPolicy == EntityRotationPolicy::IdTech4);
+
+      CHECK(makeEntityPropertyConfig(GameConfig{}) == EntityPropertyConfig{});
     }
   }
 

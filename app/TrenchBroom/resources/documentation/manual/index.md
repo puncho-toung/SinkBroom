@@ -2929,6 +2929,29 @@ With `"idtech4"`, TrenchBroom reads models as the engine does:
 
 When a map of such a game is exported as an OBJ file, the file is written for the engine's OBJ importer: the coordinates are not turned, the texture coordinates are written as the engine reads them, every face is split into triangles, a new group starts where the material changes, and the material names are the full decl names, such as `textures/base_wall/lfwall27d`.
 
+The optional `naming` key is for engines that require every entity to have a unique name, such as RBDOOM-3-BFG and other Doom 3 engines, and whose map compiler names the model of an entity with brushes after the entity. The optional `rotation` key selects how entity rotations are read and written; its `policy` is `"quake"` (the default) or `"idtech4"`, and any other value is an error.
+
+    "entities": {
+        "definitions": [ "DOOM-3-slim.fgd" ],
+        "defaultcolor": "0.6 0.6 0.6 1.0",
+        "naming": { "uniqueNames": true, "nameKey": "name", "brushEntityModelKey": "model" },
+        "rotation": { "policy": "idtech4" }
+    },
+
+Key                   Description
+---                   -----------
+`uniqueNames`         Turns unique entity names on. If it is `false` or missing, TrenchBroom does not name entities.
+`nameKey`             The property that holds an entity's name. It is required if `uniqueNames` is `true`.
+`brushEntityModelKey` Optional. The property of an entity with brushes or patches that must be equal to the entity's name. If it is not set, TrenchBroom does not touch any model property.
+
+With unique names on, TrenchBroom names every entity it creates, pastes or duplicates `<classname>_<N>`, using the lowest number from 0 that no other entity in the map uses, compared without regard to case. This is how the engine names entities itself. A pasted or duplicated entity keeps its name if no other entity has it. When several entities are pasted or duplicated together, the link properties among them are changed to the new names, so that a copied trigger points at the copied light; links to entities outside the copied objects are kept. Every entity with brushes or patches that TrenchBroom names gets its `brushEntityModelKey` set to its name, except for `func_group` entities, which the map compiler merges into the world. Turning brushes that make up a whole entity into an entity of another class keeps the old entity's name. Renaming an entity in the entity inspector changes nothing else.
+
+In [linked groups](#linked_groups), the name and model properties of each entity are kept per group, as if they were protected; the entity inspector shows them as protected and the protection cannot be removed. An entity that is added to one linked group gets a new unique name in every other group of its link set.
+
+TrenchBroom does not change any names when it loads or saves a map. Instead, two validators in the [issue browser](#issue_browser) report entities that share a name, which the engine refuses to spawn, and entities with brushes or patches whose name or model property is missing or whose model property differs from the name. Their quick fixes give the second and later entities of each name a new unique name, and set the model property to the name. The validator for unused link targets ignores the `nameKey` property, because every entity has a name whether or not anything points at it.
+
+Links between entities come only from the entity definitions. A Doom 3 FGD must therefore declare `name(target_source)` and `target(target_destination)` on its entity classes, as the FGDs that RBDOOM-3-BFG exports do.
+
 #### Tags {#game_configuration_files_tags}
 
 TrenchBroom can recognize certain special brush or face types. An example would be clip faces or trigger brushes. But since the details can be game dependent, these special types are defined in the game configuration. For greater flexibility and future enhancements, a general "smart tags" system is used to realize this functionality.
