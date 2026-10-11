@@ -543,6 +543,131 @@ TEST_CASE("Map_Geometry")
       CHECK(*entityNode->entity().property("angles") == "0 90 0");
       CHECK(!entityNode->entity().hasProperty("angle"));
     }
+
+    SECTION("Rotating some brushes of an entity, but not all, leaves its angle alone")
+    {
+      auto* brushNode1 = createBrushNode(map);
+      auto* brushNode2 = createBrushNode(map);
+      auto* entityNode = new EntityNode{Entity{{
+        {"classname", "func_door"},
+        {"angle", "45"},
+      }}};
+
+      addNodes(map, {{&parentForNodes(map), {entityNode}}});
+      addNodes(map, {{entityNode, {brushNode1, brushNode2}}});
+      selectNodes(map, {brushNode1});
+
+      rotateSelection(
+        map, map.selectionBounds()->center(), vm::vec3d{0, 0, 1}, vm::to_radians(90.0));
+
+      CHECK(*entityNode->entity().property("angle") == "45");
+      CHECK(!entityNode->entity().hasProperty("angles"));
+    }
+
+    SECTION("Rotating a group turns the angle of an entity with brushes in it")
+    {
+      auto* brushNode = createBrushNode(map);
+      auto* entityNode = new EntityNode{Entity{{
+        {"classname", "func_door"},
+        {"angle", "45"},
+      }}};
+
+      addNodes(map, {{&parentForNodes(map), {entityNode}}});
+      addNodes(map, {{entityNode, {brushNode}}});
+      selectNodes(map, {entityNode});
+      auto* groupNode = groupSelectedNodes(map, "group");
+      REQUIRE(groupNode != nullptr);
+
+      deselectAll(map);
+      selectNodes(map, {groupNode});
+      rotateSelection(
+        map, map.selectionBounds()->center(), vm::vec3d{0, 0, 1}, vm::to_radians(90.0));
+
+      CHECK(*entityNode->entity().property("angle") == "135");
+      CHECK(!entityNode->entity().hasProperty("angles"));
+    }
+
+    SECTION("Rotating a group writes the angles of a light in it")
+    {
+      auto* entityNode = new EntityNode{Entity{{
+        {"classname", "light"},
+        {"rotation", "0 1 0 -1 0 0 0 0 1"},
+      }}};
+
+      addNodes(map, {{&parentForNodes(map), {entityNode}}});
+      selectNodes(map, {entityNode});
+      auto* groupNode = groupSelectedNodes(map, "group");
+      REQUIRE(groupNode != nullptr);
+
+      deselectAll(map);
+      selectNodes(map, {groupNode});
+      rotateSelection(map, vm::vec3d{0, 0, 0}, vm::vec3d{0, 0, 1}, vm::to_radians(-45.0));
+
+      CHECK(*entityNode->entity().property("angles") == "0 45 0");
+      CHECK(!entityNode->entity().hasProperty("rotation"));
+    }
+
+    SECTION("Redo after undo restores the rotated light exactly")
+    {
+      auto* entityNode = new EntityNode{Entity{{
+        {"classname", "light"},
+        {"light_rotation", "0 1 0 -1 0 0 0 0 1"},
+        {"rotation", "1 0 0 0 1 0 0 0 1"},
+        {"light_angles", "0 0 0"},
+        {"angles", "0 0 0"},
+        {"angle", "0"},
+      }}};
+      const auto original = entityNode->entity();
+
+      addNodes(map, {{&parentForNodes(map), {entityNode}}});
+      selectNodes(map, {entityNode});
+      rotateSelection(map, vm::vec3d{0, 0, 0}, vm::vec3d{0, 0, 1}, vm::to_radians(-45.0));
+
+      const auto rotated = entityNode->entity();
+      REQUIRE(
+        rotated.properties()
+        == std::vector<EntityProperty>{
+          {"classname", "light"},
+          {"angles", "0 45 0"},
+        });
+
+      map.undoCommand();
+      CHECK(entityNode->entity().properties() == original.properties());
+
+      map.redoCommand();
+      CHECK(entityNode->entity() == rotated);
+    }
+
+    SECTION("Flipping a point entity mirrors its angles")
+    {
+      auto* entityNode = new EntityNode{Entity{{
+        {"classname", "some_point_entity"},
+        {"angles", "0 30 0"},
+      }}};
+
+      addNodes(map, {{&parentForNodes(map), {entityNode}}});
+      selectNodes(map, {entityNode});
+
+      // mirroring X turns the forward axis (cos 30, sin 30, 0) into (-cos 30, sin 30, 0)
+      CHECK(flipSelection(map, vm::vec3d{0, 0, 0}, vm::axis::x));
+      CHECK(*entityNode->entity().property("angles") == "0 150 0");
+    }
+
+    SECTION("Scaling a point entity converts a legacy rotation to angles")
+    {
+      auto* entityNode = new EntityNode{Entity{{
+        {"classname", "some_point_entity"},
+        {"rotation", "0 1 0 -1 0 0 0 0 1"},
+      }}};
+
+      addNodes(map, {{&parentForNodes(map), {entityNode}}});
+      selectNodes(map, {entityNode});
+
+      // a scale has a linear part, so the rotation is written again, unchanged
+      CHECK(scaleSelection(map, vm::vec3d{0, 0, 0}, vm::vec3d{2, 2, 2}));
+      CHECK(*entityNode->entity().property("angles") == "0 90 0");
+      CHECK(!entityNode->entity().hasProperty("rotation"));
+    }
   }
 
   SECTION("scaleSelection")

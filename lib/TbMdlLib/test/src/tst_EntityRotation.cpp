@@ -25,6 +25,8 @@
 #include "mdl/EntityRotation.h"
 #include "mdl/PropertyDefinition.h"
 
+#include "kd/string_utils.h"
+
 #include "vm/approx.h"
 #include "vm/mat.h"
 #include "vm/mat_ext.h"
@@ -651,6 +653,7 @@ TEST_CASE("EntityRotation")
     {{{"classname", "other"},
       {"angle", "90"}},                        true,  std::nullopt,             turnZ45cw,      ERU{EntityProperty{"angles", "0 45 0"}, {"angle"}}},
     {{{"classname", "other"}},                 true,  std::nullopt,             turnZ90ccw,     ERU{EntityProperty{"angles", "0 90 0"}, {}}},
+    {{{"classname", "other"}},                 true,  std::nullopt,             turnZ45cw,      ERU{EntityProperty{"angles", "0 -45 0"}, {}}},
     {{{"classname", "other"}},                 true,  std::nullopt,             pitchDown30,    ERU{EntityProperty{"angles", "30 0 0"}, {}}},
 
     // a light also loses light_rotation and light_angles, even if it has a target
@@ -752,6 +755,51 @@ TEST_CASE("EntityRotation")
     CHECK(
       applyEntityRotation(entity, transformation, EntityRotationPolicy::IdTech4)
       == expectedUpdate);
+  }
+
+  SECTION("Round trips under the idtech4 policy")
+  {
+    const auto rotationOf = [](std::vector<EntityProperty> properties) {
+      return entityRotation(Entity{std::move(properties)}, EntityRotationPolicy::IdTech4);
+    };
+
+    SECTION("Negative angles survive a rotation matrix")
+    {
+      // write the rotation of the angles as a rotation matrix, then convert it back
+      const auto rotation =
+        rotationOf({{"classname", "other"}, {"angles", "-30 -45 -60"}});
+      auto numbers = std::vector<std::string>{};
+      for (size_t column = 0; column < 3; ++column)
+      {
+        for (size_t row = 0; row < 3; ++row)
+        {
+          numbers.push_back(kdl::str_to_string(rotation[column][row]));
+        }
+      }
+
+      const auto entity =
+        Entity{{{"classname", "other"}, {"rotation", kdl::str_join(numbers, " ")}}};
+      CHECK(
+        applyEntityRotation(
+          entity, vm::mat4x4d::identity(), EntityRotationPolicy::IdTech4)
+        == EntityRotationUpdate{EntityProperty{"angles", "-30 -45 -60"}, {"rotation"}});
+    }
+
+    SECTION("Rewriting angles at a pitch of 90 keeps the rotation")
+    {
+      // at a pitch of 90, yaw and roll turn about the same axis, so the angles may change
+      // while the rotation does not
+      auto entity = Entity{{{"classname", "other"}, {"angles", "90 30 0"}}};
+      const auto rotation = entityRotation(entity, EntityRotationPolicy::IdTech4);
+
+      applyEntityRotationUpdate(
+        entity,
+        applyEntityRotation(
+          entity, vm::mat4x4d::identity(), EntityRotationPolicy::IdTech4));
+      CHECK(
+        entityRotation(entity, EntityRotationPolicy::IdTech4)
+        == vm::approx{rotation, 0.001});
+    }
   }
 
   SECTION("idTech4ConvertedRotationKeys")

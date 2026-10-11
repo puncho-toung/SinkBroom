@@ -108,6 +108,15 @@ When triggered, toggles between visible and hidden (see hide).  Entity is non-so
 	target(target_destination) : "Entity to trigger; target1..targetN also link"
 ]
 
+@PointClass color(255 127 76) size(-16 -16 -16, 16 16 16) = func_teleporter : "Teleports player or enties to location and angle."
+[
+	spawnclass(string) readonly : "" : "idTeleporter"
+	angle(string) : "direction to face."
+	wipe(string) : "wipe to play when teleport happens."
+	name(target_source) : "Entity name; other entities target this"
+	target(target_destination) : "Entity to trigger; target1..targetN also link"
+]
+
 @SolidClass color(0 127 204) = func_door : "Door."
 [
 	spawnclass(string) readonly : "" : "idDoor"

@@ -40,6 +40,7 @@
 #include "mdl/MapFormat.h"
 #include "mdl/Map_CopyPaste.h"
 #include "mdl/Map_Entities.h"
+#include "mdl/Map_Geometry.h"
 #include "mdl/Map_Groups.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
@@ -57,6 +58,8 @@
 #include "kd/vector_utils.h"
 
 #include "vm/bbox.h"
+#include "vm/scalar.h"
+#include "vm/vec.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -161,7 +164,7 @@ TEST_CASE("Doom3BFGFixture")
     auto status = TestParserStatus{};
     const auto definitions = parser.parseDefinitions(status);
     REQUIRE(definitions.is_success());
-    CHECK(definitions.value().size() == 10u);
+    CHECK(definitions.value().size() == 11u);
     CHECK(status.countStatus(LogLevel::Error) == 0u);
     CHECK(status.countStatus(LogLevel::Warn) == 0u);
   }
@@ -298,6 +301,62 @@ TEST_CASE("Doom3BFGFixture")
     CHECK(names.size() == 17u);
     names = kdl::vec_sort(std::move(names));
     CHECK(std::ranges::adjacent_find(names) == names.end());
+  }
+
+  SECTION("Rotating entities writes what the engine reads")
+  {
+    auto fixture = MapFixture{};
+    auto& map = fixture.create(Doom3BFGFixtureConfig);
+
+    // the shipped and the fixture FGD declare angle but not angles for func_teleporter
+    const auto* teleporterDefinition =
+      map.entityDefinitionManager().definition("func_teleporter");
+    REQUIRE(teleporterDefinition != nullptr);
+    REQUIRE(getPropertyDefinition(teleporterDefinition, "angle") != nullptr);
+    REQUIRE(getPropertyDefinition(teleporterDefinition, "angles") == nullptr);
+
+    // a light from an older map, turned by 30.6 degrees with a rotation matrix
+    auto* lightNode = new EntityNode{Entity{{
+      {"classname", "light"},
+      {"origin", "0 0 0"},
+      {"rotation", "0.860742 0.509041 0 -0.509041 0.860742 0 0 0 1"},
+      {"angle", "45"},
+    }}};
+    auto* teleporterNode = new EntityNode{Entity{{
+      {"classname", "func_teleporter"},
+      {"origin", "64 0 0"},
+    }}};
+    auto* staticNode = new EntityNode{Entity{{
+      {"classname", "func_static"},
+      {"angles", "0 30 0"},
+    }}};
+
+    const auto builder = BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()};
+    auto* brushNode = new BrushNode{
+      builder.createCuboid(vm::bbox3d{{-128, -32, 0}, {-64, 32, 64}}, "wall")
+      | kdl::value()};
+
+    addNodes(map, {{&parentForNodes(map), {lightNode, teleporterNode, staticNode}}});
+    addNodes(map, {{staticNode, {brushNode}}});
+    REQUIRE(lightNode->entity().definition() != nullptr);
+    REQUIRE(teleporterNode->entity().definition() == teleporterDefinition);
+
+    selectNodes(map, {lightNode, teleporterNode, brushNode});
+    REQUIRE(
+      rotateSelection(map, vm::vec3d{0, 0, 0}, vm::vec3d{0, 0, 1}, vm::to_radians(90.0)));
+
+    // the light gets angles in the engine's format and loses what the engine reads first
+    CHECK(*lightNode->entity().property("angles") == "0 120.6 0");
+    CHECK(!lightNode->entity().hasProperty("rotation"));
+    CHECK(!lightNode->entity().hasProperty("angle"));
+
+    // the teleporter keeps its yaw in angle, the only key idTeleporter reads
+    CHECK(*teleporterNode->entity().property("angle") == "90");
+    CHECK(!teleporterNode->entity().hasProperty("angles"));
+
+    // the brush entity's brushes are turned, its angles are left alone
+    CHECK(*staticNode->entity().property("angles") == "0 30 0");
+    CHECK(!staticNode->entity().hasProperty("angle"));
   }
 }
 

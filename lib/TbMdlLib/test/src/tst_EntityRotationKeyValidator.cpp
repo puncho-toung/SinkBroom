@@ -336,6 +336,74 @@ TEST_CASE("EntityRotationKeyValidator")
     }
     CHECK(collectIssues(map.worldNode(), type).empty());
   }
+
+  SECTION("Converting an entity in a group nested in linked groups")
+  {
+    auto* entityNode = new EntityNode{Entity{{
+      {"classname", "some_class"},
+      {"rotation", Yaw90},
+    }}};
+    addNodes(map, {{&parentForNodes(map), {entityNode}}});
+
+    selectNodes(map, {entityNode});
+    auto* innerGroupNode = groupSelectedNodes(map, "inner");
+    REQUIRE(innerGroupNode != nullptr);
+    deselectAll(map);
+    selectNodes(map, {innerGroupNode});
+    auto* outerGroupNode = groupSelectedNodes(map, "outer");
+    REQUIRE(outerGroupNode != nullptr);
+
+    deselectAll(map);
+    selectNodes(map, {outerGroupNode});
+    auto* linkedOuterGroupNode = createLinkedDuplicate(map);
+    REQUIRE(linkedOuterGroupNode != nullptr);
+    deselectAll(map);
+
+    // the fix keeps one entity per link set of the entity's own group, which is the inner
+    // group, and the linked group update copies the change into the other inner group
+    const auto linkedInnerGroupNode = [&]() {
+      return static_cast<const GroupNode*>(linkedOuterGroupNode->children().front());
+    };
+    REQUIRE(linkedInnerGroupNode()->linkId() == innerGroupNode->linkId());
+
+    const auto issues = collectIssues(map.worldNode(), type);
+    REQUIRE(issues.size() == 2u);
+
+    applyQuickFix(map, type, issues, "Convert to Angles");
+
+    // the update replaced the children of the other inner group
+    const auto* linkedEntityNode =
+      static_cast<const EntityNode*>(linkedInnerGroupNode()->children().front());
+    CHECK(*entityNode->entity().property("angles") == "0 90 0");
+    CHECK(*linkedEntityNode->entity().property("angles") == "0 90 0");
+    CHECK(!linkedEntityNode->entity().hasProperty("rotation"));
+    CHECK(collectIssues(map.worldNode(), type).empty());
+  }
+
+  SECTION("A light with only rotation or only light_angles")
+  {
+    auto* rotationLightNode = new EntityNode{Entity{{
+      {"classname", "light"},
+      {"rotation", Yaw90},
+    }}};
+    auto* lightAnglesLightNode = new EntityNode{Entity{{
+      {"classname", "light"},
+      {"light_angles", "0 90 0"},
+    }}};
+    addNodes(map, {{&parentForNodes(map), {rotationLightNode, lightAnglesLightNode}}});
+
+    const auto issues = collectIssues(map.worldNode(), type);
+    REQUIRE(propertyKeys(issues) == std::vector<std::string>{"light_angles", "rotation"});
+
+    applyQuickFix(map, type, issues, "Convert to Angles");
+    CHECK(
+      rotationLightNode->entity().properties()
+      == std::vector<EntityProperty>{{"classname", "light"}, {"angles", "0 90 0"}});
+    CHECK(
+      lightAnglesLightNode->entity().properties()
+      == std::vector<EntityProperty>{{"classname", "light"}, {"angles", "0 90 0"}});
+    CHECK(collectIssues(map.worldNode(), type).empty());
+  }
 }
 
 } // namespace tb::mdl
