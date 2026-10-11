@@ -31,14 +31,19 @@
 #include "mdl/PatchNode.h"
 #include "mdl/WorldNode.h"
 
+#include "kd/ranges/to.h"
 #include "kd/result.h"
 #include "kd/task_manager.h"
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <sstream>
+#include <string>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -391,6 +396,208 @@ f  71/1/71  80/1/80  81/1/81  72/1/72
     CHECK(mtlStream.str() == R"(newmtl some_material
 
 )");
+  }
+
+  SECTION("id Tech 4 convention")
+  {
+    const auto worldBounds = vm::bbox3d{8192.0};
+
+    auto taskManager = kdl::task_manager{};
+    auto map = mdl::WorldNode{{}, {}, mdl::MapFormat::Quake3};
+    auto builder = mdl::BrushBuilder{map.mapFormat(), worldBounds};
+
+    auto objStream = std::ostringstream{};
+    auto mtlStream = std::ostringstream{};
+    const auto mtlFilename = "some_file_name.mtl";
+    const auto objOptions =
+      ObjExportOptions{"/some/export/path.obj", ObjMtlPathMode::RelativeToGamePath};
+
+    const auto writeMap = [&]() {
+      auto writer = NodeWriter{
+        map,
+        std::make_unique<ObjSerializer>(
+          objStream,
+          mtlStream,
+          mtlFilename,
+          objOptions,
+          ModelConvention::IdTech4,
+          "textures")};
+      writer.writeMap(taskManager);
+    };
+
+    // the lines of each group that RBDOOM-3-BFG's importer makes into one surface
+    const auto readGroups = [](const std::string& obj) {
+      auto groups = std::vector<std::vector<std::string>>{};
+      auto lines = std::istringstream{obj};
+      for (auto line = std::string{}; std::getline(lines, line);)
+      {
+        if (line.starts_with("o ") || line.starts_with("g "))
+        {
+          groups.emplace_back();
+        }
+        else if (
+          !groups.empty() && (line.starts_with("usemtl ") || line.starts_with("f ")))
+        {
+          groups.back().push_back(line);
+        }
+      }
+      return groups;
+    };
+
+    SECTION("a brush is written in the engine's coordinates, as triangles")
+    {
+      // the cube of writeBrush; the material has no path, so the root completes its
+      // name, and the name is lowercased like a decl name
+      map.defaultLayer()->addChild(
+        new mdl::BrushNode{builder.createCube(64.0, "Some_Material") | kdl::value()});
+
+      writeMap();
+
+      CHECK(objStream.str() == R"(mtllib some_file_name.mtl
+# vertices
+v -32 32 -32
+v -32 -32 -32
+v -32 -32 32
+v -32 32 32
+v 32 -32 32
+v 32 -32 -32
+v 32 32 -32
+v 32 32 32
+
+# texture coordinates
+vt 32 -31
+vt -32 -31
+vt -32 33
+vt 32 33
+
+# normals
+vn -1 0 0
+vn 0 -1 0
+vn 0 0 -1
+vn 0 0 1
+vn 0 1 0
+vn 1 0 0
+
+o entity0_brush0
+usemtl textures/some_material
+f 1/1/1 2/2/1 3/3/1
+f 1/1/1 3/3/1 4/4/1
+usemtl textures/some_material
+f 5/4/2 3/3/2 2/2/2
+f 5/4/2 2/2/2 6/1/2
+usemtl textures/some_material
+f 6/1/3 2/2/3 1/3/3
+f 6/1/3 1/3/3 7/4/3
+usemtl textures/some_material
+f 8/4/4 4/3/4 3/2/4
+f 8/4/4 3/2/4 5/1/4
+usemtl textures/some_material
+f 7/1/5 1/2/5 4/3/5
+f 7/1/5 4/3/5 8/4/5
+usemtl textures/some_material
+f 8/4/6 5/3/6 6/2/6
+f 8/4/6 6/2/6 7/1/6
+
+)");
+
+      CHECK(mtlStream.str() == R"(newmtl textures/some_material
+
+)");
+    }
+
+    SECTION("a new group starts where the material changes")
+    {
+      map.defaultLayer()->addChild(new mdl::BrushNode{
+        builder.createCube(64.0, "a", "a", "b", "b", "a", "a") | kdl::value()});
+
+      writeMap();
+
+      const auto groups = readGroups(objStream.str());
+      CHECK(groups.size() > 1u);
+
+      auto triangleCount = size_t(0);
+      for (const auto& group : groups)
+      {
+        CAPTURE(group);
+        REQUIRE(!group.empty());
+        REQUIRE(group.front().starts_with("usemtl "));
+        for (const auto& line : group)
+        {
+          if (line.starts_with("usemtl "))
+          {
+            // the importer would give the whole group the last material
+            CHECK(line == group.front());
+          }
+          else
+          {
+            ++triangleCount;
+          }
+        }
+      }
+      CHECK(triangleCount == 12u);
+    }
+
+    SECTION("a material with a path is named after its decl")
+    {
+      // must outlive map
+      auto decl =
+        gl::Material{"base_wall/foo", createTextureResource(gl::Texture{16, 16})};
+      decl.setRelativePath("models/MapObjects/Foo");
+      auto image =
+        gl::Material{"base_wall/bar", createTextureResource(gl::Texture{16, 16})};
+      image.setRelativePath("textures/Base_Wall/Bar.tga");
+
+      auto* brushNode =
+        new mdl::BrushNode{builder.createCube(64.0, "unused") | kdl::value()};
+      map.defaultLayer()->addChild(brushNode);
+      for (size_t i = 0; i < brushNode->brush().faceCount(); ++i)
+      {
+        brushNode->setFaceMaterial(i, i == 0 ? &decl : &image);
+      }
+
+      writeMap();
+
+      const auto groups = readGroups(objStream.str());
+      REQUIRE(groups.size() == 2u);
+      CHECK(groups[0].front() == "usemtl models/mapobjects/foo");
+      CHECK(groups[1].front() == "usemtl textures/base_wall/bar");
+    }
+
+    SECTION("a patch is written as triangles")
+    {
+      map.defaultLayer()->addChild(new mdl::PatchNode{mdl::BezierPatch{
+        3,
+        3,
+        {{0, 0, 0},
+         {1, 0, 1},
+         {2, 0, 0},
+         {0, 1, 1},
+         {1, 1, 2},
+         {2, 1, 1},
+         {0, 2, 0},
+         {1, 2, 1},
+         {2, 2, 0}},
+        "some_material"}});
+
+      writeMap();
+
+      const auto groups = readGroups(objStream.str());
+      REQUIRE(groups.size() == 1u);
+      CHECK(groups[0].front() == "usemtl textures/some_material");
+
+      // the 64 quads of writePatch, two triangles each
+      const auto faces = groups[0] | std::views::drop(1) | kdl::ranges::to<std::vector>();
+      CHECK(faces.size() == 128u);
+      for (const auto& face : faces)
+      {
+        CAPTURE(face);
+        CHECK(std::ranges::count(face, ' ') == 3);
+      }
+
+      // the first quad, 1 2 3 4, as in writePatch
+      CHECK(faces[0] == "f 1/1/1 2/1/2 3/1/3");
+      CHECK(faces[1] == "f 1/1/1 3/1/3 4/1/4");
+    }
   }
 
   SECTION("writeRelativeMaterialPath")

@@ -20,6 +20,7 @@
 #pragma once
 
 #include "mdl/ExportOptions.h"
+#include "mdl/GameConfig.h"
 #include "mdl/NodeSerializer.h"
 
 #include "vm/vec.h"
@@ -126,6 +127,8 @@ private:
   std::ostream& m_mtlStream;
   std::string m_mtlFilename;
   ObjExportOptions m_options;
+  ModelConvention m_modelConvention;
+  std::filesystem::path m_materialRoot;
 
   IndexMap<vm::vec3d> m_vertices;
   IndexMap<vm::vec2f> m_uvCoords;
@@ -135,13 +138,25 @@ private:
   std::vector<Object> m_objects;
 
 public:
+  /**
+   * Under ModelConvention::IdTech4, the file is written for RBDOOM-3-BFG's OBJ importer:
+   * positions and normals are not turned, texture coordinates are written as (u, 1 - v),
+   * faces are split into triangles, a new group starts where the material changes, and
+   * the material names are the full decl names, which the given material root completes
+   * for materials that have no path.
+   */
   ObjSerializer(
     std::ostream& objStream,
     std::ostream& mtlStream,
     std::string mtlFilename,
-    ObjExportOptions options);
+    ObjExportOptions options,
+    ModelConvention modelConvention = ModelConvention::Default,
+    std::filesystem::path materialRoot = {});
 
 private:
+  std::string exportMaterialName(
+    const std::string& materialName, const gl::Material* material) const;
+
   void doBeginFile(
     const std::vector<const Node*>& rootNodes, kdl::task_manager& taskManager) override;
   void doEndFile() override;

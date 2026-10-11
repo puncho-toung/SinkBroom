@@ -39,6 +39,7 @@
 
 #include "kd/k.h"
 #include "kd/overload.h"
+#include "kd/ranges/to.h"
 #include "kd/string_utils.h"
 
 #include "vm/vec.h"
@@ -48,8 +49,10 @@
 #include <algorithm>
 #include <map>
 #include <optional>
+#include <ranges>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -299,6 +302,49 @@ TEST_CASE("Map_Persistence")
       CHECK(env.fileExists(mtlFilename));
       CHECK(!map.persistent());
       CHECK(map.path() == "unnamed.map");
+    }
+
+    SECTION("Export as obj for a game with the id Tech 4 model convention")
+    {
+      auto& map = fixture.create(Doom3BFGFixtureConfig);
+      REQUIRE(
+        map.gameInfo().gameConfig.entityConfig.modelConvention
+        == ModelConvention::IdTech4);
+
+      const auto builder = BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()};
+
+      auto* brushNode = new BrushNode{
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {64, 64, 64}}, "tb_test/Wall")
+        | kdl::value()};
+      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+
+      REQUIRE(map.exportAs(ObjExportOptions{
+        env.dir() / "test.obj",
+        ObjMtlPathMode::RelativeToExportPath,
+      }));
+
+      const auto obj = env.loadFile("test.obj");
+      const auto lines = kdl::str_split(obj, "\n");
+      const auto linesStartingWith = [&](const std::string_view prefix) {
+        return lines | std::views::filter([&](const auto& line) {
+                 return line.starts_with(prefix);
+               })
+               | kdl::ranges::to<std::vector>();
+      };
+
+      // the engine reads OBJ files Z-up, so nothing is turned; Y-up would negate Y
+      const auto vertexLines = linesStartingWith("v ");
+      CHECK(vertexLines.size() == 8u);
+      CHECK(std::ranges::find(vertexLines, "v 64 64 0") != vertexLines.end());
+      CHECK(std::ranges::none_of(vertexLines, [](const auto& line) {
+        return line.find('-') != std::string::npos;
+      }));
+      // the full decl name, under the material root
+      CHECK(
+        linesStartingWith("usemtl ")
+        == std::vector<std::string>(6, "usemtl textures/tb_test/wall"));
+      // six quads, written as two triangles each
+      CHECK(linesStartingWith("f ").size() == 12u);
     }
 
     SECTION("Export as map")

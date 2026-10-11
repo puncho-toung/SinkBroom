@@ -895,10 +895,16 @@ Result<void> Map::exportAs(const ExportOptions& options) const
         return fs::Disk::withOutputStream(objOptions.exportPath, [&](auto& objStream) {
           const auto mtlPath = kdl::path_replace_extension(objOptions.exportPath, ".mtl");
           return fs::Disk::withOutputStream(mtlPath, [&](auto& mtlStream) {
+            // engines with their own OBJ convention get files they can read back
             auto writer = NodeWriter{
               *m_worldNode,
               std::make_unique<ObjSerializer>(
-                objStream, mtlStream, mtlPath.filename().string(), objOptions)};
+                objStream,
+                mtlStream,
+                mtlPath.filename().string(),
+                objOptions,
+                m_gameInfo.gameConfig.entityConfig.modelConvention,
+                m_gameInfo.gameConfig.materialConfig.root)};
             writer.setExporting(true);
             writer.writeMap(m_taskManager);
           });

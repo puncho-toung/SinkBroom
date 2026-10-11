@@ -24,6 +24,7 @@
 #include "mdl/BrushGeometry.h"
 #include "mdl/BrushNode.h"
 #include "mdl/ExportOptions.h"
+#include "mdl/IdTech4MaterialName.h"
 #include "mdl/PatchNode.h"
 
 #include "kd/contracts.h"
@@ -33,6 +34,7 @@
 #include <fmt/format.h>
 
 #include <iostream>
+#include <span>
 #include <utility>
 
 namespace tb::mdl
@@ -87,15 +89,74 @@ std::ostream& operator<<(std::ostream& str, const ObjSerializer::Object& object)
   return str;
 }
 
+namespace
+{
+
+/**
+ * Writes the given counter-clockwise polygon as a fan of triangles, which keeps its
+ * order. RBDOOM-3-BFG's OBJ importer reads exactly three v/vt/vn corners per face and
+ * drops the others.
+ */
+void writeIdTech4Triangles(
+  std::ostream& str, const std::span<const ObjSerializer::IndexedVertex> polygon)
+{
+  for (size_t i = 1; i + 1 < polygon.size(); ++i)
+  {
+    str << "f" << polygon[0] << polygon[i] << polygon[i + 1] << "\n";
+  }
+}
+
+void writeIdTech4Object(std::ostream& str, const ObjSerializer::Object& object)
+{
+  std::visit(
+    kdl::overload(
+      [&](const ObjSerializer::BrushObject& brushObject) {
+        const auto objectName =
+          fmt::format("entity{}_brush{}", brushObject.entityNo, brushObject.brushNo);
+        str << "o " << objectName << "\n";
+
+        const std::string* previousMaterialName = nullptr;
+        for (const auto& face : brushObject.faces)
+        {
+          // the importer gives every face of a group the material that is current when
+          // the group ends, so a new group starts where the material changes
+          if (previousMaterialName && *previousMaterialName != face.materialName)
+          {
+            str << "g " << objectName << "\n";
+          }
+          previousMaterialName = &face.materialName;
+
+          str << "usemtl " << face.materialName << "\n";
+          writeIdTech4Triangles(str, face.verts);
+        }
+      },
+      [&](const ObjSerializer::PatchObject& patchObject) {
+        str << "o entity" << patchObject.entityNo << "_patch" << patchObject.patchNo
+            << "\n";
+        str << "usemtl " << patchObject.materialName << "\n";
+        for (const auto& quad : patchObject.quads)
+        {
+          writeIdTech4Triangles(str, quad.verts);
+        }
+      }),
+    object);
+}
+
+} // namespace
+
 ObjSerializer::ObjSerializer(
   std::ostream& objStream,
   std::ostream& mtlStream,
   std::string mtlFilename,
-  ObjExportOptions options)
+  ObjExportOptions options,
+  const ModelConvention modelConvention,
+  std::filesystem::path materialRoot)
   : m_objStream{objStream}
   , m_mtlStream{mtlStream}
   , m_mtlFilename{std::move(mtlFilename)}
   , m_options{std::move(options)}
+  , m_modelConvention{modelConvention}
+  , m_materialRoot{std::move(materialRoot)}
 {
   contract_pre(m_objStream.good());
   contract_pre(m_mtlStream.good());
@@ -154,41 +215,84 @@ static void writeMtlFile(
   }
 }
 
-static void writeVertices(std::ostream& str, const std::vector<vm::vec3d>& vertices)
+// RBDOOM-3-BFG reads OBJ files in its own Z-up coordinates and with t = 1 - v
+// (renderer/Model_obj.cpp), so under the id Tech 4 convention nothing is turned
+
+static void writeVertices(
+  std::ostream& str, const std::vector<vm::vec3d>& vertices, const bool idTech4)
 {
   str << "# vertices\n";
   for (const auto& elem : vertices)
   {
-    // no idea why I have to switch Y and Z
-    fmt::format_to(
-      std::ostreambuf_iterator<char>(str), "v {} {} {}\n", elem.x(), elem.z(), -elem.y());
+    if (idTech4)
+    {
+      fmt::format_to(
+        std::ostreambuf_iterator<char>(str),
+        "v {} {} {}\n",
+        elem.x(),
+        elem.y(),
+        elem.z());
+    }
+    else
+    {
+      // no idea why I have to switch Y and Z
+      fmt::format_to(
+        std::ostreambuf_iterator<char>(str),
+        "v {} {} {}\n",
+        elem.x(),
+        elem.z(),
+        -elem.y());
+    }
   }
 }
 
-static void writeUvCoords(std::ostream& str, const std::vector<vm::vec2f>& uvCoords)
+static void writeUvCoords(
+  std::ostream& str, const std::vector<vm::vec2f>& uvCoords, const bool idTech4)
 {
   str << "# texture coordinates\n";
   for (const auto& elem : uvCoords)
   {
-    // multiplying Y by -1 needed to get the UV's to appear correct in Blender and UE4
-    // (see: https://github.com/TrenchBroom/TrenchBroom/issues/2851 )
-    fmt::format_to(
-      std::ostreambuf_iterator<char>(str), "vt {} {}\n", elem.x(), -elem.y());
+    if (idTech4)
+    {
+      // the engine reads back t = 1 - (1 - v) = v exactly
+      fmt::format_to(
+        std::ostreambuf_iterator<char>(str), "vt {} {}\n", elem.x(), 1.0f - elem.y());
+    }
+    else
+    {
+      // multiplying Y by -1 needed to get the UV's to appear correct in Blender and UE4
+      // (see: https://github.com/TrenchBroom/TrenchBroom/issues/2851 )
+      fmt::format_to(
+        std::ostreambuf_iterator<char>(str), "vt {} {}\n", elem.x(), -elem.y());
+    }
   }
 }
 
-static void writeNormals(std::ostream& str, const std::vector<vm::vec3d>& normals)
+static void writeNormals(
+  std::ostream& str, const std::vector<vm::vec3d>& normals, const bool idTech4)
 {
   str << "# normals\n";
   for (const auto& elem : normals)
   {
-    // no idea why I have to switch Y and Z
-    fmt::format_to(
-      std::ostreambuf_iterator<char>(str),
-      "vn {} {} {}\n",
-      elem.x(),
-      elem.z(),
-      -elem.y());
+    if (idTech4)
+    {
+      fmt::format_to(
+        std::ostreambuf_iterator<char>(str),
+        "vn {} {} {}\n",
+        elem.x(),
+        elem.y(),
+        elem.z());
+    }
+    else
+    {
+      // no idea why I have to switch Y and Z
+      fmt::format_to(
+        std::ostreambuf_iterator<char>(str),
+        "vn {} {} {}\n",
+        elem.x(),
+        elem.z(),
+        -elem.y());
+    }
   }
 }
 
@@ -198,20 +302,28 @@ static void writeObjFile(
   const std::vector<vm::vec3d>& vertices,
   const std::vector<vm::vec2f>& uvCoords,
   const std::vector<vm::vec3d>& normals,
-  const std::vector<ObjSerializer::Object>& objects)
+  const std::vector<ObjSerializer::Object>& objects,
+  const bool idTech4)
 {
 
   str << "mtllib " << mtlFilename << "\n";
-  writeVertices(str, vertices);
+  writeVertices(str, vertices, idTech4);
   str << "\n";
-  writeUvCoords(str, uvCoords);
+  writeUvCoords(str, uvCoords, idTech4);
   str << "\n";
-  writeNormals(str, normals);
+  writeNormals(str, normals, idTech4);
   str << "\n";
 
   for (const auto& object : objects)
   {
-    str << object;
+    if (idTech4)
+    {
+      writeIdTech4Object(str, object);
+    }
+    else
+    {
+      str << object;
+    }
     str << "\n";
   }
 }
@@ -225,7 +337,25 @@ void ObjSerializer::doEndFile()
     m_vertices.list(),
     m_uvCoords.list(),
     m_normals.list(),
-    m_objects);
+    m_objects,
+    m_modelConvention == ModelConvention::IdTech4);
+}
+
+std::string ObjSerializer::exportMaterialName(
+  const std::string& materialName, const gl::Material* material) const
+{
+  if (m_modelConvention != ModelConvention::IdTech4)
+  {
+    return materialName;
+  }
+
+  // The engine takes the rest of a usemtl line as a material decl name. A material's
+  // path is its decl, or the image that makes an implicit material of the same name;
+  // a material that wasn't found has only its name, which leaves out the root.
+  const auto path = material && !material->relativePath().empty()
+                      ? material->relativePath()
+                      : m_materialRoot / materialName;
+  return canonicalIdTech4DeclName(path.generic_string());
 }
 
 void ObjSerializer::doBeginEntity(const Node&) {}
@@ -270,7 +400,7 @@ void ObjSerializer::doBrushFace(const BrushFace& face)
 
   m_currentBrush->faces.push_back(BrushFaceInfo{
     std::move(indexedVertices),
-    face.materialName(),
+    exportMaterialName(face.materialName(), face.material()),
     face.material(),
   });
 }
@@ -278,8 +408,12 @@ void ObjSerializer::doBrushFace(const BrushFace& face)
 void ObjSerializer::doPatch(const PatchNode& patchNode)
 {
   const auto& patch = patchNode.patch();
-  auto patchObject =
-    PatchObject{entityNo(), brushNo(), {}, patch.materialName(), patch.material()};
+  auto patchObject = PatchObject{
+    entityNo(),
+    brushNo(),
+    {},
+    exportMaterialName(patch.materialName(), patch.material()),
+    patch.material()};
 
   const auto& patchGrid = patchNode.grid();
   patchObject.quads.reserve(patchGrid.quadRowCount() * patchGrid.quadColumnCount());
