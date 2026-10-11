@@ -25,6 +25,7 @@
 #include "mdl/BrushNode.h"
 #include "mdl/EditorContext.h"
 #include "mdl/EntityModelManager.h"
+#include "mdl/EntityNaming.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GroupNode.h"
 #include "mdl/LayerNode.h"
@@ -341,6 +342,8 @@ void duplicateSelectedNodes(Map& map)
   auto nodesToAdd = kdl::flat_map<Node*, std::vector<Node*>>{};
   auto nodesToSelect = std::vector<Node*>{};
   auto newParentMap = std::map<Node*, Node*>{};
+  // nodesToAdd is ordered by pointer, so this keeps the order in which they were cloned
+  auto clonedRoots = std::vector<Node*>{};
 
   for (auto* original : map.selection().nodes)
   {
@@ -364,6 +367,7 @@ void duplicateSelectedNodes(Map& map)
         newParent = originalParent->clone(map.worldBounds());
         newParentMap.emplace(originalParent, newParent);
         nodesToAdd[&suggestedParent].push_back(newParent);
+        clonedRoots.push_back(newParent);
       }
 
       // hierarchy will look like (parent -> child): suggestedParent -> newParent -> clone
@@ -372,6 +376,7 @@ void duplicateSelectedNodes(Map& map)
     else
     {
       nodesToAdd[&suggestedParent].push_back(clone);
+      clonedRoots.push_back(clone);
     }
 
     nodesToSelect.push_back(clone);
@@ -379,6 +384,7 @@ void duplicateSelectedNodes(Map& map)
 
   resetLinkIdsOfNonGroupedNodes(nodesToAdd);
   copyAndSetLinkIds(nodesToAdd, map.worldNode(), map.logger());
+  assignUniqueEntityNamesBeforeAdding(map, clonedRoots, true);
 
   {
     auto transaction = Transaction{map, "Duplicate Objects"};

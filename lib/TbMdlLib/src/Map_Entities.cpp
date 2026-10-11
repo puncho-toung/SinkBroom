@@ -23,6 +23,7 @@
 #include "mdl/Entity.h"
 #include "mdl/EntityColorPropertyValue.h"
 #include "mdl/EntityDefinition.h"
+#include "mdl/EntityNaming.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GameInfo.h"
 #include "mdl/LinkedGroupUtils.h"
@@ -107,6 +108,15 @@ EntityNode* createPointEntity(
     mdl::setDefaultProperties(definition, entity, SetDefaultPropertyMode::SetAll);
   }
 
+  // after the defaults, so that a default name cannot replace the unique one
+  if (const auto& naming = map.worldNode().entityPropertyConfig().naming)
+  {
+    auto allocator = EntityNameAllocator{map, *naming};
+    auto namingResult = EntityNamingResult{};
+    assignUniqueEntityName(
+      entity, false, allocator, EntityNamingMode::Create, namingResult);
+  }
+
   auto* entityNode = new EntityNode{std::move(entity)};
 
   auto transaction = Transaction{map, "Create " + definition.name};
@@ -142,20 +152,41 @@ EntityNode* createBrushEntity(Map& map, const EntityDefinition& definition)
   // if all nodes belong to the same entity, and that entity is not worldspawn, copy
   // its properties
   const auto* containingEntity = findContainingEntity(nodes.front());
-  auto entity =
-    (containingEntity && containingEntity != &map.worldNode()
-     && std::all_of(
-       std::next(nodes.begin()),
-       nodes.end(),
-       [&](const auto* node) { return findContainingEntity(node) == containingEntity; }))
-      ? containingEntity->entity()
-      : Entity{};
+  const auto copyProperties =
+    containingEntity && containingEntity != &map.worldNode()
+    && std::all_of(std::next(nodes.begin()), nodes.end(), [&](const auto* node) {
+         return findContainingEntity(node) == containingEntity;
+       });
+  auto entity = copyProperties ? containingEntity->entity() : Entity{};
 
   entity.addOrUpdateProperty(EntityPropertyKeys::Classname, definition.name);
 
   if (map.worldNode().entityPropertyConfig().setDefaultProperties)
   {
     mdl::setDefaultProperties(definition, entity, SetDefaultPropertyMode::SetAll);
+  }
+
+  // after the defaults, so that a default name cannot replace the unique one
+  if (const auto& naming = map.worldNode().entityPropertyConfig().naming)
+  {
+    // if all brushes of the containing entity are moved, it is removed once it is
+    // empty, so the new entity replaces it and may keep its name
+    const auto replacesContainingEntity =
+      copyProperties
+      && std::ranges::all_of(containingEntity->children(), [&](const auto* child) {
+           return kdl::ranges::contains(nodes, child);
+         });
+
+    auto allocator = replacesContainingEntity
+                       ? EntityNameAllocator{map, *naming, {containingEntity}}
+                       : EntityNameAllocator{map, *naming};
+    auto namingResult = EntityNamingResult{};
+    assignUniqueEntityName(
+      entity,
+      true,
+      allocator,
+      replacesContainingEntity ? EntityNamingMode::KeepIfFree : EntityNamingMode::Create,
+      namingResult);
   }
 
   auto* entityNode = new EntityNode{std::move(entity)};

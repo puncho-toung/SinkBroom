@@ -47,6 +47,31 @@ namespace tb::mdl
 {
 using namespace Catch::Matchers;
 
+namespace
+{
+
+MapFixtureConfig makeNamingFixtureConfig()
+{
+  auto fixtureConfig = MapFixtureConfig{};
+  fixtureConfig.gameInfo.gameConfig.entityConfig.naming = EntityNamingConfig{
+    .nameKey = "name",
+    .brushEntityModelKey = "model",
+  };
+  return fixtureConfig;
+}
+
+const std::string* nameOf(const EntityNodeBase& entityNode)
+{
+  return entityNode.entity().property("name");
+}
+
+const std::string* modelOf(const EntityNodeBase& entityNode)
+{
+  return entityNode.entity().property("model");
+}
+
+} // namespace
+
 TEST_CASE("Map_Entities")
 {
   auto fixture = MapFixture{};
@@ -211,6 +236,68 @@ TEST_CASE("Map_Entities")
       // at the origin is propagated into the linked group, where it ends up out of
       // world bounds
       CHECK(createPointEntity(map, *pointEntityDefinition, {0, 0, -32}) != nullptr);
+    }
+
+    SECTION("Unique names")
+    {
+      SECTION("A game without naming rules gets no names")
+      {
+        auto* entityNode =
+          createPointEntity(map, *pointEntityDefinition, vm::vec3d{0, 0, 0});
+        REQUIRE(entityNode != nullptr);
+        CHECK(nameOf(*entityNode) == nullptr);
+      }
+
+      SECTION("A game with naming rules gets unique names")
+      {
+        auto fixtureConfig = makeNamingFixtureConfig();
+        fixtureConfig.gameInfo.gameConfig.entityConfig.setDefaultProperties = true;
+
+        auto& namingMap = fixture.create(fixtureConfig);
+        namingMap.entityDefinitionManager().setDefinitions({
+          EntityDefinition{
+            "info_player_start",
+            Color{},
+            "",
+            {
+              {"name", PropertyValueTypes::String{"world"}, "", ""},
+            },
+            PointEntityDefinition{vm::bbox3d{16.0}, {}, {}},
+          },
+        });
+        const auto& definition =
+          namingMap.entityDefinitionManager().definitions().front();
+
+        auto* entityNode1 = createPointEntity(namingMap, definition, {0, 0, 0});
+        auto* entityNode2 = createPointEntity(namingMap, definition, {64, 0, 0});
+        REQUIRE(entityNode1 != nullptr);
+        REQUIRE(entityNode2 != nullptr);
+
+        // the default name of the definition is replaced
+        CHECK(*nameOf(*entityNode1) == "info_player_start_0");
+        CHECK(*nameOf(*entityNode2) == "info_player_start_1");
+        CHECK(modelOf(*entityNode1) == nullptr);
+
+        SECTION("Undo and redo")
+        {
+          namingMap.undoCommand();
+          CHECK(
+            namingMap.worldNode().defaultLayer()->children()
+            == std::vector<Node*>{entityNode1});
+
+          namingMap.undoCommand();
+          CHECK(namingMap.worldNode().defaultLayer()->children().empty());
+          CHECK_FALSE(namingMap.canUndoCommand());
+
+          namingMap.redoCommand();
+          namingMap.redoCommand();
+          CHECK(
+            namingMap.worldNode().defaultLayer()->children()
+            == std::vector<Node*>{entityNode1, entityNode2});
+          CHECK(*nameOf(*entityNode1) == "info_player_start_0");
+          CHECK(*nameOf(*entityNode2) == "info_player_start_1");
+        }
+      }
     }
   }
 
@@ -392,6 +479,100 @@ TEST_CASE("Map_Entities")
       // and propagated into the linked group, where it ends up out of world bounds and
       // thus failing
       CHECK(createBrushEntity(map, *brushEntityDefinition) != nullptr);
+    }
+
+    SECTION("Unique names")
+    {
+      SECTION("A game without naming rules gets no names")
+      {
+        auto* brushNode = createBrushNode(map, "some_material");
+        addNodes(map, {{&parentForNodes(map), {brushNode}}});
+        selectNodes(map, {brushNode});
+
+        auto* entityNode = createBrushEntity(map, *brushEntityDefinition);
+        REQUIRE(entityNode != nullptr);
+        CHECK(nameOf(*entityNode) == nullptr);
+        CHECK(modelOf(*entityNode) == nullptr);
+      }
+
+      SECTION("A game with naming rules gets unique names and models")
+      {
+        auto& namingMap = fixture.create(makeNamingFixtureConfig());
+        namingMap.entityDefinitionManager().setDefinitions({
+          {"func_static", Color{}, "", {}},
+          {"func_mover", Color{}, "", {}},
+        });
+        const auto* staticDefinition =
+          namingMap.entityDefinitionManager().definition("func_static");
+        const auto* moverDefinition =
+          namingMap.entityDefinitionManager().definition("func_mover");
+
+        auto* brushNode1 = createBrushNode(namingMap, "some_material");
+        auto* brushNode2 = createBrushNode(namingMap, "some_material");
+        auto* patchNode = createPatchNode();
+        addNodes(
+          namingMap, {{&parentForNodes(namingMap), {brushNode1, brushNode2, patchNode}}});
+
+        selectNodes(namingMap, {brushNode1, brushNode2});
+        auto* staticNode = createBrushEntity(namingMap, *staticDefinition);
+        REQUIRE(staticNode != nullptr);
+        CHECK(*nameOf(*staticNode) == "func_static_0");
+        CHECK(*modelOf(*staticNode) == "func_static_0");
+
+        SECTION("Another entity gets the next name")
+        {
+          deselectAll(namingMap);
+          selectNodes(namingMap, {patchNode});
+
+          auto* patchEntityNode = createBrushEntity(namingMap, *staticDefinition);
+          REQUIRE(patchEntityNode != nullptr);
+          CHECK(*nameOf(*patchEntityNode) == "func_static_1");
+          CHECK(*modelOf(*patchEntityNode) == "func_static_1");
+
+          SECTION("Undo and redo")
+          {
+            namingMap.undoCommand();
+            CHECK(patchNode->parent() == namingMap.worldNode().defaultLayer());
+
+            namingMap.redoCommand();
+            CHECK(patchNode->parent() == patchEntityNode);
+            CHECK(*nameOf(*patchEntityNode) == "func_static_1");
+            CHECK(*modelOf(*patchEntityNode) == "func_static_1");
+          }
+        }
+
+        SECTION("Converting some brushes of an entity gives the new entity a new name")
+        {
+          deselectAll(namingMap);
+          selectNodes(namingMap, {brushNode1});
+
+          auto* moverNode = createBrushEntity(namingMap, *moverDefinition);
+          REQUIRE(moverNode != nullptr);
+          CHECK(*nameOf(*moverNode) == "func_mover_0");
+          CHECK(*modelOf(*moverNode) == "func_mover_0");
+
+          CHECK(staticNode->children() == std::vector<Node*>{brushNode2});
+          CHECK(*nameOf(*staticNode) == "func_static_0");
+          CHECK(*modelOf(*staticNode) == "func_static_0");
+        }
+
+        SECTION("Converting all brushes of an entity keeps its name")
+        {
+          deselectAll(namingMap);
+          selectNodes(namingMap, {brushNode1, brushNode2});
+
+          auto* moverNode = createBrushEntity(namingMap, *moverDefinition);
+          REQUIRE(moverNode != nullptr);
+          CHECK(moverNode->entity().classname() == "func_mover");
+          CHECK(*nameOf(*moverNode) == "func_static_0");
+          CHECK(*modelOf(*moverNode) == "func_static_0");
+
+          // the old entity was removed
+          CHECK(
+            namingMap.worldNode().defaultLayer()->children()
+            == std::vector<Node*>{patchNode, moverNode});
+        }
+      }
     }
   }
 

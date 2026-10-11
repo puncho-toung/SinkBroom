@@ -26,6 +26,7 @@
 #include "mdl/BrushFaceHandle.h"
 #include "mdl/BrushFaceReader.h"
 #include "mdl/BrushNode.h"
+#include "mdl/EntityNaming.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GroupNode.h"
 #include "mdl/LayerNode.h"
@@ -227,6 +228,12 @@ bool pasteNodes(Map& map, const std::vector<Node*>& nodes)
   fixRedundantPersistentIds(nodesToAdd, allPersistentGroupIds(map.worldNode()));
   fixRecursiveLinkedGroups(nodesToAdd, map.logger());
   copyAndSetLinkIds(nodesToAdd, map.worldNode(), map.logger());
+
+  // all pasted nodes have the same parent and are in clipboard order
+  assignUniqueEntityNamesBeforeAdding(
+    map,
+    nodesToAdd | std::views::values | std::views::join | kdl::ranges::to<std::vector>(),
+    true);
 
   auto transaction = Transaction{map, "Paste Nodes"};
 

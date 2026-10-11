@@ -730,6 +730,36 @@ TEST_CASE("Map_TagManagement")
       CHECK(*newEntityNode->entity().property("some_attr") == "some_value");
     }
 
+    SECTION("enable names the new entity if the game requires unique names")
+    {
+      // like the Trigger tag of the Doom 3 BFG game config
+      auto namingFixtureConfig = MapFixtureConfig{};
+      namingFixtureConfig.gameInfo.gameConfig.entityConfig.naming = EntityNamingConfig{
+        .nameKey = "name",
+        .brushEntityModelKey = "model",
+      };
+
+      auto namingFixture = MapFixture{};
+      auto& namingMap = namingFixture.create(namingFixtureConfig);
+      namingMap.entityDefinitionManager().setDefinitions({
+        {"trigger_multiple", Color{}, "", {}},
+      });
+
+      auto* brushNode = createBrushNode(namingMap, "asdf");
+      addNodes(namingMap, {{&parentForNodes(namingMap), {brushNode}}});
+      selectNodes(namingMap, {brushNode});
+
+      const auto matcher = EntityClassNameTagMatcher{"trigger_*", "common/trigmulti"};
+      auto callback = TestCallback{0};
+      matcher.enable(callback, namingMap);
+
+      auto* entityNode = brushNode->entity();
+      REQUIRE(entityNode != nullptr);
+      CHECK(entityNode->entity().classname() == "trigger_multiple");
+      CHECK(*entityNode->entity().property("name") == "trigger_multiple_0");
+      CHECK(*entityNode->entity().property("model") == "trigger_multiple_0");
+    }
+
     SECTION("disable")
     {
       auto* brushNode = createBrushNode(map, "asdf");

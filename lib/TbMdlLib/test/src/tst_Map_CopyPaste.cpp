@@ -20,6 +20,8 @@
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
+#include "mdl/EntityDefinition.h"
+#include "mdl/EntityDefinitionManager.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GameInfo.h"
 #include "mdl/GroupNode.h"
@@ -38,9 +40,89 @@
 #include "mdl/WorldNode.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 
 namespace tb::mdl
 {
+namespace
+{
+
+MapFixtureConfig makeNamingFixtureConfig()
+{
+  auto fixtureConfig = MapFixtureConfig{};
+  fixtureConfig.gameInfo.gameConfig.entityConfig.naming = EntityNamingConfig{
+    .nameKey = "name",
+    .brushEntityModelKey = "model",
+  };
+  return fixtureConfig;
+}
+
+void setLinkDefinitions(Map& map)
+{
+  map.entityDefinitionManager().setDefinitions({
+    {"light",
+     Color{},
+     "",
+     {
+       PropertyDefinition{"name", PropertyValueTypes::LinkTarget{}, "", ""},
+       PropertyDefinition{"target", PropertyValueTypes::LinkSource{}, "", ""},
+     },
+     PointEntityDefinition{vm::bbox3d{16.0}, {}, {}}},
+    {"trigger_once",
+     Color{},
+     "",
+     {
+       PropertyDefinition{"name", PropertyValueTypes::LinkTarget{}, "", ""},
+       PropertyDefinition{"target", PropertyValueTypes::LinkSource{}, "", ""},
+     }},
+  });
+}
+
+std::vector<std::pair<std::string, std::string>> entityNamesAndTargets(const Map& map)
+{
+  auto result = std::vector<std::pair<std::string, std::string>>{};
+  for (const auto* node : map.worldNode().defaultLayer()->children())
+  {
+    if (const auto* entityNode = dynamic_cast<const EntityNode*>(node))
+    {
+      const auto* name = entityNode->entity().property("name");
+      const auto* target = entityNode->entity().property("target");
+      result.emplace_back(name ? *name : "", target ? *target : "");
+    }
+  }
+  return result;
+}
+
+const auto LightAndTrigger = std::string{R"(
+{
+"classname" "light"
+"name" "light_0"
+"origin" "0 0 0"
+}
+{
+"classname" "trigger_once"
+"name" "trigger_once_0"
+"target" "light_0"
+{
+( -0 -0 -16 ) ( -0 -0  -0 ) ( 64 -0 -16 ) tex1 0 0 0 1 1
+( -0 -0 -16 ) ( -0 64 -16 ) ( -0 -0  -0 ) tex2 0 0 0 1 1
+( -0 -0 -16 ) ( 64 -0 -16 ) ( -0 64 -16 ) tex3 0 0 0 1 1
+( 64 64  -0 ) ( -0 64  -0 ) ( 64 64 -16 ) tex4 0 0 0 1 1
+( 64 64  -0 ) ( 64 64 -16 ) ( 64 -0  -0 ) tex5 0 0 0 1 1
+( 64 64  -0 ) ( 64 -0  -0 ) ( -0 64  -0 ) tex6 0 0 0 1 1
+}
+}
+)"};
+
+const auto TriggerAlone = std::string{R"(
+{
+"classname" "trigger_once"
+"name" "trigger_once_0"
+"target" "light_0"
+}
+)"};
+
+} // namespace
 
 TEST_CASE("Map_CopyPaste")
 {
@@ -729,6 +811,155 @@ common/caulk
 
           CHECK(pastedBrushNode2->linkId() == originalBrushLinkId);
         }
+      }
+    }
+
+    SECTION("Unique names")
+    {
+      SECTION("A game without naming rules keeps the pasted names")
+      {
+        auto& map = fixture.create();
+        setLinkDefinitions(map);
+
+        REQUIRE(paste(map, LightAndTrigger) == PasteType::Node);
+        REQUIRE(paste(map, LightAndTrigger) == PasteType::Node);
+        CHECK(
+          entityNamesAndTargets(map)
+          == std::vector<std::pair<std::string, std::string>>{
+            {"light_0", ""},
+            {"trigger_once_0", "light_0"},
+            {"light_0", ""},
+            {"trigger_once_0", "light_0"},
+          });
+
+        const auto* triggerNode =
+          dynamic_cast<EntityNode*>(map.worldNode().defaultLayer()->children()[1]);
+        REQUIRE(triggerNode);
+        CHECK(triggerNode->entity().property("model") == nullptr);
+      }
+
+      auto& map = fixture.create(makeNamingFixtureConfig());
+      setLinkDefinitions(map);
+
+      SECTION("Pasting into a map without clashes keeps the names")
+      {
+        REQUIRE(paste(map, LightAndTrigger) == PasteType::Node);
+        CHECK(
+          entityNamesAndTargets(map)
+          == std::vector<std::pair<std::string, std::string>>{
+            {"light_0", ""},
+            {"trigger_once_0", "light_0"},
+          });
+
+        // a brush entity gets its name as its model
+        const auto* triggerNode =
+          dynamic_cast<EntityNode*>(map.worldNode().defaultLayer()->children()[1]);
+        REQUIRE(triggerNode);
+        CHECK(*triggerNode->entity().property("model") == "trigger_once_0");
+      }
+
+      SECTION("Pasting twice renames the second copy and retargets it")
+      {
+        REQUIRE(paste(map, LightAndTrigger) == PasteType::Node);
+        REQUIRE(paste(map, LightAndTrigger) == PasteType::Node);
+        CHECK(
+          entityNamesAndTargets(map)
+          == std::vector<std::pair<std::string, std::string>>{
+            {"light_0", ""},
+            {"trigger_once_0", "light_0"},
+            {"light_1", ""},
+            {"trigger_once_1", "light_1"},
+          });
+
+        const auto* triggerNode =
+          dynamic_cast<EntityNode*>(map.worldNode().defaultLayer()->children()[3]);
+        REQUIRE(triggerNode);
+        CHECK(*triggerNode->entity().property("model") == "trigger_once_1");
+
+        SECTION("Each paste is one undo step and redo restores the names")
+        {
+          map.undoCommand();
+          CHECK(map.worldNode().defaultLayer()->childCount() == 2u);
+
+          map.redoCommand();
+          CHECK(
+            entityNamesAndTargets(map)
+            == std::vector<std::pair<std::string, std::string>>{
+              {"light_0", ""},
+              {"trigger_once_0", "light_0"},
+              {"light_1", ""},
+              {"trigger_once_1", "light_1"},
+            });
+        }
+      }
+
+      SECTION("A trigger pasted without its light keeps its target")
+      {
+        REQUIRE(paste(map, LightAndTrigger) == PasteType::Node);
+        REQUIRE(paste(map, TriggerAlone) == PasteType::Node);
+        CHECK(
+          entityNamesAndTargets(map)
+          == std::vector<std::pair<std::string, std::string>>{
+            {"light_0", ""},
+            {"trigger_once_0", "light_0"},
+            {"trigger_once_1", "light_0"},
+          });
+      }
+
+      SECTION("Cut and paste keeps the names")
+      {
+        REQUIRE(paste(map, LightAndTrigger) == PasteType::Node);
+        REQUIRE(paste(map, LightAndTrigger) == PasteType::Node);
+
+        // cut the second copy
+        deselectAll(map);
+        selectNodes(
+          map,
+          {map.worldNode().defaultLayer()->children()[2],
+           map.worldNode().defaultLayer()->children()[3]});
+        const auto str = serializeSelectedNodes(map);
+        removeSelectedNodes(map);
+
+        REQUIRE(paste(map, str) == PasteType::Node);
+
+        // the node writer decides the order of the entities in the clipboard
+        CHECK_THAT(
+          entityNamesAndTargets(map),
+          Catch::Matchers::UnorderedEquals(
+            std::vector<std::pair<std::string, std::string>>{
+              {"light_0", ""},
+              {"trigger_once_0", "light_0"},
+              {"light_1", ""},
+              {"trigger_once_1", "light_1"},
+            }));
+      }
+
+      SECTION("The names do not depend on the run")
+      {
+        for (size_t i = 0; i < 3; ++i)
+        {
+          REQUIRE(paste(map, LightAndTrigger) == PasteType::Node);
+        }
+
+        auto otherFixture = MapFixture{};
+        auto& otherMap = otherFixture.create(makeNamingFixtureConfig());
+        setLinkDefinitions(otherMap);
+        for (size_t i = 0; i < 3; ++i)
+        {
+          REQUIRE(paste(otherMap, LightAndTrigger) == PasteType::Node);
+        }
+
+        CHECK(entityNamesAndTargets(otherMap) == entityNamesAndTargets(map));
+        CHECK(
+          entityNamesAndTargets(map)
+          == std::vector<std::pair<std::string, std::string>>{
+            {"light_0", ""},
+            {"trigger_once_0", "light_0"},
+            {"light_1", ""},
+            {"trigger_once_1", "light_1"},
+            {"light_2", ""},
+            {"trigger_once_2", "light_2"},
+          });
       }
     }
   }

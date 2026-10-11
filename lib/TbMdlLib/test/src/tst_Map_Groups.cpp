@@ -668,6 +668,85 @@ TEST_CASE("Map_Groups")
     CHECK_THAT(*linkedGroupNode, MatchesNode(*groupNode));
   }
 
+  SECTION("linked groups with unique entity names")
+  {
+    auto namingFixtureConfig = MapFixtureConfig{};
+    namingFixtureConfig.gameInfo.gameConfig.entityConfig.naming = EntityNamingConfig{
+      .nameKey = "name",
+      .brushEntityModelKey = "model",
+    };
+
+    auto namingFixture = MapFixture{};
+    auto& namingMap = namingFixture.create(namingFixtureConfig);
+
+    const auto nameOf = [](const Node* node) {
+      const auto* entityNode = dynamic_cast<const EntityNode*>(node);
+      REQUIRE(entityNode != nullptr);
+      const auto* name = entityNode->entity().property("name");
+      return name ? *name : std::string{};
+    };
+    const auto modelOf = [](const Node* node) {
+      const auto* entityNode = dynamic_cast<const EntityNode*>(node);
+      REQUIRE(entityNode != nullptr);
+      const auto* model = entityNode->entity().property("model");
+      return model ? *model : std::string{};
+    };
+
+    auto* lightNode = new EntityNode{Entity{{
+      {"classname", "light"},
+      {"name", "light_0"},
+      {"target", "func_static_0"},
+    }}};
+    auto* staticNode = new EntityNode{Entity{{
+      {"classname", "func_static"},
+      {"name", "func_static_0"},
+      {"model", "func_static_0"},
+    }}};
+    addNodes(namingMap, {{&parentForNodes(namingMap), {lightNode, staticNode}}});
+    addNodes(namingMap, {{staticNode, {createBrushNode(namingMap)}}});
+
+    selectNodes(namingMap, {lightNode, staticNode});
+    auto* groupNode = groupSelectedNodes(namingMap, "test");
+    REQUIRE(groupNode != nullptr);
+
+    deselectAll(namingMap);
+    selectNodes(namingMap, {groupNode});
+
+    SECTION("createLinkedDuplicate gives the entities of the duplicate new names")
+    {
+      auto* linkedGroupNode = createLinkedDuplicate(namingMap);
+      REQUIRE(linkedGroupNode != nullptr);
+      REQUIRE(linkedGroupNode->childCount() == 2u);
+
+      CHECK(nameOf(linkedGroupNode->children()[0]) == "light_1");
+      CHECK(nameOf(linkedGroupNode->children()[1]) == "func_static_1");
+      CHECK(modelOf(linkedGroupNode->children()[1]) == "func_static_1");
+
+      // references are not changed, as they are not when a linked group is updated
+      const auto* lightClone =
+        dynamic_cast<const EntityNode*>(linkedGroupNode->children()[0]);
+      CHECK(*lightClone->entity().property("target") == "func_static_0");
+
+      CHECK(nameOf(groupNode->children()[0]) == "light_0");
+      CHECK(nameOf(groupNode->children()[1]) == "func_static_0");
+
+      SECTION("Undo and redo")
+      {
+        namingMap.undoCommand();
+        CHECK(
+          namingMap.worldNode().defaultLayer()->children()
+          == std::vector<Node*>{groupNode});
+
+        namingMap.redoCommand();
+        CHECK(
+          namingMap.worldNode().defaultLayer()->children()
+          == std::vector<Node*>{groupNode, linkedGroupNode});
+        CHECK(nameOf(linkedGroupNode->children()[0]) == "light_1");
+        CHECK(nameOf(linkedGroupNode->children()[1]) == "func_static_1");
+      }
+    }
+  }
+
   SECTION("separateSelectedLinkedGroups")
   {
     auto* brushNode = createBrushNode(map);

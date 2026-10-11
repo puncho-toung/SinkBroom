@@ -410,6 +410,123 @@ TEST_CASE("Map_Nodes")
       CHECK(brushNode2->visibilityState() == VisibilityState::Shown);
       CHECK(brushNode2->visible());
     }
+
+    SECTION("Duplicated entities get unique names if the game requires them")
+    {
+      auto namingFixtureConfig = MapFixtureConfig{};
+      namingFixtureConfig.gameInfo.gameConfig.entityConfig.naming = EntityNamingConfig{
+        .nameKey = "name",
+        .brushEntityModelKey = "model",
+      };
+
+      auto namingFixture = MapFixture{};
+      auto& namingMap = namingFixture.create(namingFixtureConfig);
+      namingMap.entityDefinitionManager().setDefinitions({
+        {"trigger_once",
+         Color{},
+         "",
+         {
+           PropertyDefinition{"name", PropertyValueTypes::LinkTarget{}, "", ""},
+           PropertyDefinition{"target", PropertyValueTypes::LinkSource{}, "", ""},
+         },
+         PointEntityDefinition{vm::bbox3d{16.0}, {}, {}}},
+      });
+
+      auto* lightNode = new EntityNode{Entity{{
+        {"classname", "light"},
+        {"name", "light_0"},
+      }}};
+      auto* triggerNode = new EntityNode{Entity{{
+        {"classname", "trigger_once"},
+        {"name", "trigger_once_0"},
+        {"target", "light_0"},
+      }}};
+      auto* staticNode = new EntityNode{Entity{{
+        {"classname", "func_static"},
+        {"name", "func_static_0"},
+        {"model", "func_static_0"},
+      }}};
+      auto* brushNode1 = createBrushNode(namingMap);
+      auto* brushNode2 = createBrushNode(namingMap);
+      addNodes(
+        namingMap, {{&parentForNodes(namingMap), {lightNode, triggerNode, staticNode}}});
+      addNodes(namingMap, {{staticNode, {brushNode1, brushNode2}}});
+
+      const auto nameOf = [](const EntityNodeBase& entityNode) {
+        return entityNode.entity().property("name");
+      };
+
+      SECTION("A duplicated entity is renamed")
+      {
+        selectNodes(namingMap, {lightNode});
+        duplicateSelectedNodes(namingMap);
+        REQUIRE(namingMap.selection().entities.size() == 1u);
+
+        auto* lightClone = namingMap.selection().entities.front();
+        CHECK(*nameOf(*lightClone) == "light_1");
+        CHECK(*nameOf(*lightNode) == "light_0");
+
+        SECTION("Duplicating again hands out the next name")
+        {
+          duplicateSelectedNodes(namingMap);
+          REQUIRE(namingMap.selection().entities.size() == 1u);
+          CHECK(*nameOf(*namingMap.selection().entities.front()) == "light_2");
+        }
+
+        SECTION("Undo removes the duplicate in one step")
+        {
+          namingMap.undoCommand();
+          CHECK(
+            namingMap.worldNode().defaultLayer()->children()
+            == std::vector<Node*>{lightNode, triggerNode, staticNode});
+
+          namingMap.redoCommand();
+          CHECK(*nameOf(*lightClone) == "light_1");
+        }
+      }
+
+      SECTION("A duplicated trigger and light are retargeted")
+      {
+        selectNodes(namingMap, {triggerNode, lightNode});
+        duplicateSelectedNodes(namingMap);
+        REQUIRE(namingMap.selection().entities.size() == 2u);
+
+        const auto& clones = namingMap.selection().entities;
+        const auto* triggerClone =
+          clones[0]->entity().classname() == "trigger_once" ? clones[0] : clones[1];
+        const auto* lightClone = clones[0] == triggerClone ? clones[1] : clones[0];
+        CHECK(*nameOf(*triggerClone) == "trigger_once_1");
+        CHECK(*triggerClone->entity().property("target") == "light_1");
+        CHECK(*nameOf(*lightClone) == "light_1");
+      }
+
+      SECTION("A duplicated trigger keeps its target")
+      {
+        selectNodes(namingMap, {triggerNode});
+        duplicateSelectedNodes(namingMap);
+        REQUIRE(namingMap.selection().entities.size() == 1u);
+
+        const auto* triggerClone = namingMap.selection().entities.front();
+        CHECK(*nameOf(*triggerClone) == "trigger_once_1");
+        CHECK(*triggerClone->entity().property("target") == "light_0");
+      }
+
+      SECTION("Duplicating a brush of a brush entity renames the cloned entity")
+      {
+        selectNodes(namingMap, {brushNode1});
+        duplicateSelectedNodes(namingMap);
+        REQUIRE(namingMap.selection().brushes.size() == 1u);
+
+        const auto* entityClone = namingMap.selection().brushes.front()->entity();
+        REQUIRE(entityClone != nullptr);
+        REQUIRE(entityClone != staticNode);
+        CHECK(*nameOf(*entityClone) == "func_static_1");
+        CHECK(*entityClone->entity().property("model") == "func_static_1");
+
+        CHECK(*nameOf(*staticNode) == "func_static_0");
+        CHECK(*staticNode->entity().property("model") == "func_static_0");
+      }
+    }
   }
 
   SECTION("reparentNodes")
