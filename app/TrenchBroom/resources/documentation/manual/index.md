@@ -2913,6 +2913,22 @@ Of course, you could use the switch and case operators for more complicated case
 
 The optional `setDefaultProperties` key controls whether [default entity properties](#entity_properties_defaults) are instantiated automatically when TrenchBroom creates a new entity. Defaults to `false` if not set.
 
+The optional `modelConvention` key tells TrenchBroom that the game's entity models follow an engine's own conventions. If it is not set, every model format is read the way TrenchBroom reads it for any game. The only value is `"idtech4"`, for RBDOOM-3-BFG and other Doom 3 engines; any other value is an error.
+
+    "entities": {
+        "definitions": [ "DOOM-3-slim.fgd" ],
+        "defaultcolor": "0.6 0.6 0.6 1.0",
+        "modelConvention": "idtech4"
+    },
+
+With `"idtech4"`, TrenchBroom reads models as the engine does:
+
+- A `.obj` file is read the way the engine's own OBJ importer reads it, which is also how RBDOOM-3-BFG's `exportModelsToTrenchBroom` command writes the `_tb/models` proxies of the game's models. The coordinates are used as they are, in the engine's Z-up units, the texture coordinates are flipped back, and the name after `usemtl` is a material decl name such as `models/mapobjects/signs/ceilingsign`. TrenchBroom lowercases that name and cuts it at its last dot, as the engine does. It shows the material of that name from the game's material files, whatever its folder; without one, an image of that name, which Doom 3 uses as an implicit material; and without either, a placeholder that keeps the name. The names that resolve to nothing are logged once per model. Faces may have more than three corners and use negative indices; an unknown statement or an index out of range is an error that names its line.
+- A `.gltf` or `.glb` model is turned from Y up to Z up the way the engine turns it. A mesh whose glTF material is named like a material decl shows that material, as in the engine; otherwise, it shows the model's own texture.
+- Every other model format is read as for any other game.
+
+When a map of such a game is exported as an OBJ file, the file is written for the engine's OBJ importer: the coordinates are not turned, the texture coordinates are written as the engine reads them, every face is split into triangles, a new group starts where the material changes, and the material names are the full decl names, such as `textures/base_wall/lfwall27d`.
+
 #### Tags {#game_configuration_files_tags}
 
 TrenchBroom can recognize certain special brush or face types. An example would be clip faces or trigger brushes. But since the details can be game dependent, these special types are defined in the game configuration. For greater flexibility and future enhancements, a general "smart tags" system is used to realize this functionality.
