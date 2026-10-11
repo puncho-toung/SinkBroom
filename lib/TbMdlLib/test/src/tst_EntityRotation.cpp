@@ -285,6 +285,64 @@ TEST_CASE("EntityRotation")
 
     CHECK(applyEntityRotation(properties, info, transform) == expectedProperty);
   }
+
+  SECTION("applyEntityRotation with an entity")
+  {
+    // the Quake policy updates the one property its rotation info names and removes none
+    const auto entity = Entity{{
+      {"classname", "other"},
+      {"angle", "45"},
+      {"rotation", "0 1 0 -1 0 0 0 0 1"},
+    }};
+
+    const auto expectedUpdate = EntityRotationUpdate{EntityProperty{"angle", "135"}, {}};
+    CHECK(applyEntityRotation(entity, vm::mat4x4d::rot_90_z_ccw()) == expectedUpdate);
+    CHECK(
+      applyEntityRotation(
+        entity, vm::mat4x4d::rot_90_z_ccw(), EntityRotationPolicy::Quake)
+      == expectedUpdate);
+  }
+
+  SECTION("applyEntityRotationUpdate")
+  {
+    auto entity = Entity{{
+      {"classname", "some_class"},
+      {"angle", "45"},
+      {"rotation", "1 0 0 0 1 0 0 0 1"},
+    }};
+
+    SECTION("Sets a property and removes others")
+    {
+      applyEntityRotationUpdate(
+        entity,
+        EntityRotationUpdate{EntityProperty{"angles", "0 90 0"}, {"rotation", "angle"}});
+      CHECK(
+        entity.properties()
+        == std::vector<EntityProperty>{
+          {"classname", "some_class"},
+          {"angles", "0 90 0"},
+        });
+    }
+
+    SECTION("Updates an existing property in place")
+    {
+      applyEntityRotationUpdate(
+        entity, EntityRotationUpdate{EntityProperty{"angle", "90"}, {}});
+      CHECK(
+        entity.properties()
+        == std::vector<EntityProperty>{
+          {"classname", "some_class"},
+          {"angle", "90"},
+          {"rotation", "1 0 0 0 1 0 0 0 1"},
+        });
+    }
+
+    SECTION("Removing a missing property does nothing")
+    {
+      applyEntityRotationUpdate(entity, EntityRotationUpdate{std::nullopt, {"angles"}});
+      CHECK(entity.properties().size() == 3u);
+    }
+  }
 }
 
 } // namespace tb::mdl

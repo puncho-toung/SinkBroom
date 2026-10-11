@@ -292,10 +292,12 @@ Result<std::vector<std::unique_ptr<Node>>> cloneAndTransformChildren(
             return std::make_pair(nodeToTransform, NodeContents{std::move(group)});
           },
           [&](const EntityNode& entityNode) -> TransformResult {
-            const auto updateAngleProperty =
-              entityNode.entityPropertyConfig().updateAnglePropertyAfterTransform;
+            const auto& entityPropertyConfig = entityNode.entityPropertyConfig();
             auto entity = entityNode.entity();
-            entity.transform(transformation, updateAngleProperty);
+            entity.transform(
+              transformation,
+              entityPropertyConfig.updateAnglePropertyAfterTransform,
+              entityPropertyConfig.rotationPolicy);
             return std::make_pair(nodeToTransform, NodeContents{std::move(entity)});
           },
           [&](const BrushNode& brushNode) -> TransformResult {

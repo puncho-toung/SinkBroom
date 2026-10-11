@@ -47,14 +47,15 @@ namespace
 
 vm::mat4x4d entityModelTransformation(
   const Entity& entity,
-  const std::optional<el::ExpressionNode>& defaultModelScaleExpression)
+  const std::optional<el::ExpressionNode>& defaultModelScaleExpression,
+  const EntityRotationPolicy rotationPolicy)
 {
   if (const auto* pointDefinition = getPointEntityDefinition(entity.definition()))
   {
     const auto variableStore = EntityPropertiesVariableStore{entity};
     const auto scale = safeGetModelScale(
       pointDefinition->modelDefinition, variableStore, defaultModelScaleExpression);
-    return vm::translation_matrix(entity.origin()) * entity.rotation()
+    return vm::translation_matrix(entity.origin()) * entity.rotation(rotationPolicy)
            * vm::scaling_matrix(scale);
   }
 
@@ -218,16 +219,19 @@ Result<ModelSpecification> Entity::modelSpecification() const
 }
 
 const vm::mat4x4d& Entity::modelTransformation(
-  const std::optional<el::ExpressionNode>& defaultModelScaleExpression) const
+  const std::optional<el::ExpressionNode>& defaultModelScaleExpression,
+  const EntityRotationPolicy rotationPolicy) const
 {
   const auto modelIsLoaded = isModelLoaded(m_model);
   if (
     !m_cachedModelTransformation
-    || m_cachedModelTransformation->modelIsLoaded != modelIsLoaded)
+    || m_cachedModelTransformation->modelIsLoaded != modelIsLoaded
+    || m_cachedModelTransformation->rotationPolicy != rotationPolicy)
   {
     m_cachedModelTransformation = {
-      entityModelTransformation(*this, defaultModelScaleExpression),
+      entityModelTransformation(*this, defaultModelScaleExpression, rotationPolicy),
       modelIsLoaded,
+      rotationPolicy,
     };
   }
   return m_cachedModelTransformation->transform;
@@ -433,14 +437,17 @@ void Entity::setOrigin(const vm::vec3d& origin)
     EntityPropertyKeys::Origin, kdl::str_to_string(vm::correct(origin)));
 }
 
-const vm::mat4x4d& Entity::rotation() const
+const vm::mat4x4d& Entity::rotation(const EntityRotationPolicy rotationPolicy) const
 {
   const auto modelIsLoaded = isModelLoaded(m_model);
-  if (!m_cachedRotation || m_cachedRotation->modelIsLoaded != modelIsLoaded)
+  if (
+    !m_cachedRotation || m_cachedRotation->modelIsLoaded != modelIsLoaded
+    || m_cachedRotation->rotationPolicy != rotationPolicy)
   {
     m_cachedRotation = {
-      entityRotation(*this),
+      entityRotation(*this, rotationPolicy),
       modelIsLoaded,
+      rotationPolicy,
     };
   }
   return m_cachedRotation->transform;
@@ -469,7 +476,10 @@ std::vector<EntityProperty> Entity::numberedProperties(const std::string& prefix
          | kdl::ranges::to<std::vector>();
 }
 
-void Entity::transform(const vm::mat4x4d& transformation, const bool updateAngleProperty)
+void Entity::transform(
+  const vm::mat4x4d& transformation,
+  const bool updateAngleProperty,
+  const EntityRotationPolicy rotationPolicy)
 {
   if (m_pointEntity)
   {
@@ -491,7 +501,8 @@ void Entity::transform(const vm::mat4x4d& transformation, const bool updateAngle
     // applyRotation does not read the origin, so it's ok that it's already updated now
     if (updateAngleProperty)
     {
-      applyEntityRotation(*this, rotation);
+      applyEntityRotationUpdate(
+        *this, applyEntityRotation(*this, rotation, rotationPolicy));
     }
   }
 }

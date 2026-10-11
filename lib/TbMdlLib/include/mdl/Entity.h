@@ -110,6 +110,7 @@ private:
   {
     vm::mat4x4d transform;
     bool modelIsLoaded;
+    EntityRotationPolicy rotationPolicy;
   };
 
   mutable std::optional<ModelDependentTransformation> m_cachedRotation;
@@ -154,7 +155,8 @@ public: // property management
   const EntityModelFrame* modelFrame() const;
   Result<ModelSpecification> modelSpecification() const;
   const vm::mat4x4d& modelTransformation(
-    const std::optional<el::ExpressionNode>& defaultModelScaleExpression) const;
+    const std::optional<el::ExpressionNode>& defaultModelScaleExpression,
+    EntityRotationPolicy rotationPolicy = EntityRotationPolicy::Quake) const;
 
   Result<DecalSpecification> decalSpecification() const;
 
@@ -181,13 +183,17 @@ public: // property management
   const vm::vec3d& origin() const;
   void setOrigin(const vm::vec3d& origin);
 
-  const vm::mat4x4d& rotation() const;
+  const vm::mat4x4d& rotation(
+    EntityRotationPolicy rotationPolicy = EntityRotationPolicy::Quake) const;
 
   std::vector<EntityProperty> propertiesWithKey(const std::string& property) const;
   std::vector<EntityProperty> propertiesWithPrefix(const std::string& property) const;
   std::vector<EntityProperty> numberedProperties(const std::string& property) const;
 
-  void transform(const vm::mat4x4d& transformation, bool updateAngleProperty);
+  void transform(
+    const vm::mat4x4d& transformation,
+    bool updateAngleProperty,
+    EntityRotationPolicy rotationPolicy = EntityRotationPolicy::Quake);
 };
 
 } // namespace tb::mdl

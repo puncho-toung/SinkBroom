@@ -123,8 +123,9 @@ bool transformSelection(
   using TransformResult = Result<std::pair<Node*, NodeContents>>;
 
   const auto alignmentLock = map.editorContext().alignmentLock();
-  const auto updateAngleProperty =
-    map.worldNode().entityPropertyConfig().updateAnglePropertyAfterTransform;
+  const auto& entityPropertyConfig = map.worldNode().entityPropertyConfig();
+  const auto updateAngleProperty = entityPropertyConfig.updateAnglePropertyAfterTransform;
+  const auto rotationPolicy = entityPropertyConfig.rotationPolicy;
 
   auto tasks =
     nodesToTransform | std::views::transform([&](auto& node) {
@@ -139,7 +140,7 @@ bool transformSelection(
           },
           [&](EntityNode& entityNode) -> TransformResult {
             auto entity = entityNode.entity();
-            entity.transform(transformation, updateAngleProperty);
+            entity.transform(transformation, updateAngleProperty, rotationPolicy);
             return std::make_pair(&entityNode, NodeContents{std::move(entity)});
           },
           [&](BrushNode& brushNode) -> TransformResult {

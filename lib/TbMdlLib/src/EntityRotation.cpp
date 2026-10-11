@@ -84,6 +84,8 @@ std::ostream& operator<<(std::ostream& lhs, const EntityRotationUsage& rhs)
 
 kdl_reflect_impl(EntityRotationInfo);
 
+kdl_reflect_impl(EntityRotationUpdate);
+
 namespace
 {
 std::optional<std::tuple<std::string, EntityRotationType>> selectEntityRotationType(
@@ -112,9 +114,8 @@ std::optional<std::tuple<std::string, EntityRotationType>> selectEntityRotationT
 
   return std::nullopt;
 }
-} // namespace
 
-EntityRotationInfo entityRotationInfo(const Entity& entity)
+EntityRotationInfo quakeEntityRotationInfo(const Entity& entity)
 {
   auto type = EntityRotationType::None;
   std::string propertyKey;
@@ -217,6 +218,20 @@ EntityRotationInfo entityRotationInfo(const Entity& entity)
   return EntityRotationInfo{type, propertyKey, usage};
 }
 
+} // namespace
+
+EntityRotationInfo entityRotationInfo(
+  const Entity& entity, const EntityRotationPolicy policy)
+{
+  switch (policy)
+  {
+  case EntityRotationPolicy::Quake:
+  case EntityRotationPolicy::IdTech4:
+    return quakeEntityRotationInfo(entity);
+    switchDefault();
+  }
+}
+
 vm::mat4x4d entityRotation(
   const std::vector<EntityProperty>& properties, const EntityRotationInfo& info)
 {
@@ -304,9 +319,9 @@ vm::mat4x4d entityRotation(
   }
 }
 
-vm::mat4x4d entityRotation(const Entity& entity)
+vm::mat4x4d entityRotation(const Entity& entity, const EntityRotationPolicy policy)
 {
-  return entityRotation(entity.properties(), entityRotationInfo(entity));
+  return entityRotation(entity.properties(), entityRotationInfo(entity, policy));
 }
 
 vm::vec3d entityYawPitchRoll(
@@ -409,15 +424,34 @@ std::optional<EntityProperty> applyEntityRotation(
   }
 }
 
-void applyEntityRotation(Entity& entity, const vm::mat4x4d& transformation)
+EntityRotationUpdate applyEntityRotation(
+  const Entity& entity,
+  const vm::mat4x4d& transformation,
+  const EntityRotationPolicy policy)
 {
-  const auto info = entityRotationInfo(entity);
-
-  if (
-    const auto entityProperty =
-      applyEntityRotation(entity.properties(), info, transformation))
+  switch (policy)
   {
-    entity.addOrUpdateProperty(entityProperty->key(), entityProperty->value());
+  case EntityRotationPolicy::Quake:
+  case EntityRotationPolicy::IdTech4:
+    return {
+      applyEntityRotation(
+        entity.properties(), entityRotationInfo(entity), transformation),
+      {},
+    };
+    switchDefault();
+  }
+}
+
+void applyEntityRotationUpdate(Entity& entity, const EntityRotationUpdate& update)
+{
+  if (update.set)
+  {
+    entity.addOrUpdateProperty(update.set->key(), update.set->value());
+  }
+
+  for (const auto& key : update.remove)
+  {
+    entity.removeProperty(key);
   }
 }
 
