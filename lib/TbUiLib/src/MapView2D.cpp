@@ -75,10 +75,11 @@ MapView2D::MapView2D(
   MapViewToolBox& toolBox,
   ViewPlane viewPlane)
   : MapViewBase{appController, document, toolBox}
+  , m_viewPlane{viewPlane}
   , m_camera{std::make_unique<gl::OrthographicCamera>()}
 {
   connectObservers();
-  initializeCamera(viewPlane);
+  initializeCamera();
   initializeToolChain(toolBox);
 
   switch (viewPlane)
@@ -98,30 +99,38 @@ MapView2D::MapView2D(
   mapViewBaseVirtualInit();
 }
 
-void MapView2D::initializeCamera(const ViewPlane viewPlane)
+void MapView2D::initializeCamera()
 {
   const auto& map = m_document.map();
-  const auto worldBounds = vm::bbox3f{map.worldBounds()};
+  m_cameraWorldBounds = map.worldBounds();
 
-  switch (viewPlane)
+  const auto worldBounds = vm::bbox3f{m_cameraWorldBounds};
+  const auto size = worldBounds.size();
+  auto depth = 0.0f;
+
+  switch (m_viewPlane)
   {
   case MapView2D::ViewPlane::XY:
     m_camera->setDirection(vm::vec3f{0, 0, -1}, vm::vec3f{0, 1, 0});
     m_camera->moveTo(vm::vec3f{0.0f, 0.0f, worldBounds.max.z()});
+    depth = size.z();
     break;
   case MapView2D::ViewPlane::XZ:
     m_camera->setDirection(vm::vec3f{0, 1, 0}, vm::vec3f{0, 0, 1});
     m_camera->moveTo(vm::vec3f{0.0f, worldBounds.min.y(), 0.0f});
+    depth = size.y();
     break;
   case MapView2D::ViewPlane::YZ:
     m_camera->setDirection(vm::vec3f{-1, 0, 0}, vm::vec3f{0, 0, 1});
     m_camera->moveTo(vm::vec3f{worldBounds.max.x(), 0.0f, 0.0f});
+    depth = size.x();
     break;
   }
   m_camera->setNearPlane(1.0f);
   // NOTE: GridRenderer draws at the far side of the map bounds, so add some extra
-  // margin so it's not fighting the far plane.
-  m_camera->setFarPlane(worldBounds.size().x() + 16.0f);
+  // margin so it's not fighting the far plane. The camera sits at the near side of the
+  // bounds, so the far side is the bounds' extent along the view axis away.
+  m_camera->setFarPlane(depth + 16.0f);
 }
 
 void MapView2D::initializeToolChain(MapViewToolBox& toolBox)
@@ -151,11 +160,25 @@ void MapView2D::connectObservers()
 {
   m_notifierConnection +=
     m_camera->cameraDidChangeNotifier.connect(this, &MapView2D::cameraDidChange);
+  m_notifierConnection += m_document.documentWasLoadedNotifier.connect(
+    this, &MapView2D::updateCameraForWorldBounds);
 }
 
 void MapView2D::cameraDidChange(const gl::Camera&)
 {
   update();
+}
+
+// The views outlive the map they show: opening or creating a document in a window that
+// is reused (SDI) swaps the map, and with it the world bounds, which depend on the game.
+// Only then does the camera need to move to the new bounds; a reload keeps the bounds and
+// the user's view.
+void MapView2D::updateCameraForWorldBounds()
+{
+  if (m_document.map().worldBounds() != m_cameraWorldBounds)
+  {
+    initializeCamera();
+  }
 }
 
 PickRequest MapView2D::pickRequest(const float x, const float y) const

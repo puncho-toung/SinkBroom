@@ -22,6 +22,7 @@
 #include "base/NotifierConnection.h"
 #include "ui/MapViewBase.h"
 
+#include "vm/bbox.h"
 #include "vm/vec.h"
 
 namespace tb
@@ -60,7 +61,11 @@ public:
   };
 
 private:
+  ViewPlane m_viewPlane;
   std::unique_ptr<gl::OrthographicCamera> m_camera;
+
+  // the world bounds that m_camera was last initialized for
+  vm::bbox3d m_cameraWorldBounds;
 
   NotifierConnection m_notifierConnection;
 
@@ -72,12 +77,13 @@ public:
     ViewPlane viewPlane);
 
 private:
-  void initializeCamera(ViewPlane viewPlane);
+  void initializeCamera();
   void initializeToolChain(MapViewToolBox& toolBox);
 
 private: // notification
   void connectObservers();
   void cameraDidChange(const gl::Camera& camera);
+  void updateCameraForWorldBounds();
 
 private: // implement ToolBoxConnector interface
   PickRequest pickRequest(float x, float y) const override;

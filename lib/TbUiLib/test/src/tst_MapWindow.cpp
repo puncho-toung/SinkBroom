@@ -22,6 +22,7 @@
 
 #include "TestEnvironment.h"
 #include "base/Result.h"
+#include "gl/Camera.h"
 #include "gl/GlManager.h"
 #include "gl/Resource.h"
 #include "gl/ResourceManager.h"
@@ -35,7 +36,12 @@
 #include "ui/CatchConfig.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
+#include "ui/MapView2D.h"
 #include "ui/MapWindow.h"
+
+#include "vm/vec.h"
+
+#include <cmath>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -95,6 +101,63 @@ TEST_CASE("MapWindow")
     CHECK(loadedGridSize != changedGridSize);
     CHECK(gridChoice->currentIndex() == loadedGridIndex);
     CHECK(gridChoice->currentData().toInt() == loadedGridSize);
+  }
+
+  SECTION("load moves the 2D cameras to the new world bounds")
+  {
+    const auto path = getFixtureRoot() / "test/ui/MapDocument/emptyValveMap.map";
+
+    const auto views = window.findChildren<MapView2D*>();
+    REQUIRE(!views.empty());
+
+    const auto loadMap = [&](const double extent) {
+      REQUIRE(window.document().load(
+        appController.environmentConfig(),
+        mdl::QuakeGameInfo,
+        mdl::MapFormat::Unknown,
+        vm::bbox3d{extent},
+        path));
+
+      QApplication::processEvents();
+    };
+
+    // a 2D camera sits at the near side of the world bounds, and its far plane reaches
+    // the far side of them
+    const auto checkCameras = [&](const double extent) {
+      for (auto* view : views)
+      {
+        const auto& camera = view->camera();
+        const auto axis = vm::find_abs_max_component(camera.direction());
+        CHECK(std::abs(camera.position()[axis]) == float(extent));
+        CHECK(camera.farPlane() == float(2.0 * extent) + 16.0f);
+      }
+    };
+
+    checkCameras(8192.0);
+
+    SECTION("larger bounds")
+    {
+      loadMap(131072.0);
+      checkCameras(131072.0);
+    }
+
+    SECTION("smaller bounds")
+    {
+      loadMap(4096.0);
+      checkCameras(4096.0);
+    }
+
+    SECTION("unchanged bounds keep the cameras where they are")
+    {
+      auto& camera = views.front()->camera();
+      camera.moveBy(camera.right() * 100.0f);
+      const auto position = camera.position();
+
+      loadMap(8192.0);
+
+      CHECK(camera.position() == position);
+      checkCameras(8192.0);
+    }
   }
 
   SECTION("canReloadMaterialCollections returns false when resources need processing")
