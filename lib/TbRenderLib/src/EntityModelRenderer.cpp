@@ -246,6 +246,7 @@ void EntityModelRenderer::renderPass(RenderContext& renderContext, const bool tr
 
   const auto& propertyConfig = m_entities.begin()->first->entityPropertyConfig();
   const auto& defaultModelScaleExpression = propertyConfig.defaultModelScaleExpression;
+  const auto rotationPolicy = propertyConfig.rotationPolicy;
 
   const auto renderEntity =
     [&](const mdl::EntityNode& entityNode, gl::MaterialRenderer& renderer) {
@@ -263,8 +264,8 @@ void EntityModelRenderer::renderPass(RenderContext& renderContext, const bool tr
 
       shader.set("Orientation", static_cast<int>(modelData->orientation()));
 
-      const auto transformation =
-        vm::mat4x4f{entityNode.entity().modelTransformation(defaultModelScaleExpression)};
+      const auto transformation = vm::mat4x4f{entityNode.entity().modelTransformation(
+        defaultModelScaleExpression, rotationPolicy)};
       const auto multMatrix =
         MultiplyModelMatrix{renderContext.transformation(), transformation};
 

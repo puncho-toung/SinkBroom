@@ -174,9 +174,9 @@ void EntityNode::doPick(
     if (const auto* modelFrame = m_entity.modelFrame())
     {
       // we transform the ray into the model's space
-      const auto defaultModelScaleExpression =
-        entityPropertyConfig().defaultModelScaleExpression;
-      const auto transform = m_entity.modelTransformation(defaultModelScaleExpression);
+      const auto& propertyConfig = entityPropertyConfig();
+      const auto transform = m_entity.modelTransformation(
+        propertyConfig.defaultModelScaleExpression, propertyConfig.rotationPolicy);
       if (const auto inverse = vm::invert(transform))
       {
         const auto transformedRay = vm::ray3f{ray.transform(*inverse)};
@@ -279,18 +279,17 @@ void EntityNode::validateBounds() const
   m_cachedBounds = CachedBounds{};
 
   const auto hasModel = m_entity.modelFrame() != nullptr;
-  const auto& defaultModelScaleExpression =
-    entityPropertyConfig().defaultModelScaleExpression;
+  const auto& propertyConfig = entityPropertyConfig();
+  const auto& modelTransformation = m_entity.modelTransformation(
+    propertyConfig.defaultModelScaleExpression, propertyConfig.rotationPolicy);
   if (hasModel)
   {
     m_cachedBounds->modelBounds =
-      vm::bbox3d(m_entity.modelFrame()->bounds())
-        .transform(m_entity.modelTransformation(defaultModelScaleExpression));
+      vm::bbox3d(m_entity.modelFrame()->bounds()).transform(modelTransformation);
   }
   else
   {
-    m_cachedBounds->modelBounds =
-      DefaultBounds.transform(m_entity.modelTransformation(defaultModelScaleExpression));
+    m_cachedBounds->modelBounds = DefaultBounds.transform(modelTransformation);
   }
 
   if (hasChildren())

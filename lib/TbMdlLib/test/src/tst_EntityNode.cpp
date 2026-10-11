@@ -52,6 +52,7 @@
 #include "vm/util.h"
 #include "vm/vec.h"
 
+#include <cmath>
 #include <filesystem>
 #include <string>
 
@@ -212,6 +213,40 @@ TEST_CASE("EntityNode")
 
       CHECK(pickResult.size() == 0u);
     }
+  }
+
+  SECTION("modelBounds follow the rotation policy of the world")
+  {
+    const auto definition = EntityDefinition{
+      "some_class",
+      Color{},
+      "",
+      {},
+      PointEntityDefinition{vm::bbox3d{16.0}, {}, {}},
+    };
+
+    // turned by 45 degrees about the Z axis, which only the id Tech 4 policy reads
+    const auto entity = Entity{{
+      {EntityPropertyKeys::Classname, "some_class"},
+      {EntityPropertyKeys::Rotation, "0.707107 0.707107 0 -0.707107 0.707107 0 0 0 1"},
+    }};
+
+    const auto modelBounds = [&](const EntityRotationPolicy rotationPolicy) {
+      auto worldNode = WorldNode{
+        EntityPropertyConfig{.rotationPolicy = rotationPolicy}, {}, MapFormat::Standard};
+
+      // the world takes ownership of the entity node
+      auto* entityNode = new EntityNode{entity};
+      worldNode.defaultLayer()->addChild(entityNode);
+      entityNode->setDefinition(&definition);
+      return entityNode->modelBounds();
+    };
+
+    const auto h = 8.0 * std::sqrt(2.0);
+    CHECK(modelBounds(EntityRotationPolicy::Quake) == EntityNode::DefaultBounds);
+    CHECK(
+      vm::approx{vm::bbox3d{{-h, -h, -8}, {h, h, 8}}, 0.001}
+      == modelBounds(EntityRotationPolicy::IdTech4));
   }
 
   SECTION("setEntity updates the origin and the logical bounds")

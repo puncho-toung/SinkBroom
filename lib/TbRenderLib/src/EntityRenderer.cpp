@@ -359,7 +359,8 @@ void EntityRenderer::renderAngles(RenderContext& renderContext, RenderBatch& ren
         continue;
       }
 
-      const auto rotation = vm::mat4x4f{entityNode->entity().rotation()};
+      const auto rotation = vm::mat4x4f{
+        entityNode->entity().rotation(entityNode->entityPropertyConfig().rotationPolicy)};
       const auto direction = rotation * vm::vec3f{1, 0, 0};
       const auto center = vm::vec3f{entityNode->logicalBounds().center()};
 
