@@ -48,6 +48,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 
 namespace tb::mdl
 {
@@ -743,6 +744,85 @@ TEST_CASE("Map_Groups")
           == std::vector<Node*>{groupNode, linkedGroupNode});
         CHECK(nameOf(linkedGroupNode->children()[0]) == "light_1");
         CHECK(nameOf(linkedGroupNode->children()[1]) == "func_static_1");
+      }
+    }
+
+    SECTION("Updating a linked group keeps the names of the other instances")
+    {
+      auto* linkedGroupNode = createLinkedDuplicate(namingMap);
+      REQUIRE(linkedGroupNode != nullptr);
+
+      openGroup(namingMap, *groupNode);
+      deselectAll(namingMap);
+      selectNodes(namingMap, {lightNode});
+      REQUIRE(setEntityProperty(namingMap, "light_radius", "128"));
+      REQUIRE(translateSelection(namingMap, {16, 0, 0}));
+
+      REQUIRE(linkedGroupNode->childCount() == 2u);
+      const auto* lightClone =
+        dynamic_cast<const EntityNode*>(linkedGroupNode->children()[0]);
+      REQUIRE(lightClone != nullptr);
+      CHECK(*lightClone->entity().property("light_radius") == "128");
+      CHECK(nameOf(lightClone) == "light_1");
+      CHECK(nameOf(linkedGroupNode->children()[1]) == "func_static_1");
+      CHECK(modelOf(linkedGroupNode->children()[1]) == "func_static_1");
+
+      // the implicit protection does not show up in the protected properties
+      CHECK(lightClone->entity().protectedProperties().empty());
+
+      CHECK(nameOf(lightNode) == "light_0");
+      CHECK(nameOf(staticNode) == "func_static_0");
+      CHECK(modelOf(staticNode) == "func_static_0");
+    }
+
+    SECTION("An entity added to a linked group gets unique names in the other instances")
+    {
+      auto* linkedGroupNode1 = createLinkedDuplicate(namingMap);
+      REQUIRE(linkedGroupNode1 != nullptr);
+      deselectAll(namingMap);
+      selectNodes(namingMap, {groupNode});
+      auto* linkedGroupNode2 = createLinkedDuplicate(namingMap);
+      REQUIRE(linkedGroupNode2 != nullptr);
+      REQUIRE(nameOf(linkedGroupNode2->children()[0]) == "light_2");
+
+      auto* nullNode = new EntityNode{Entity{{
+        {"classname", "info_null"},
+        {"name", "info_null_0"},
+      }}};
+      addNodes(namingMap, {{groupNode, {nullNode}}});
+
+      REQUIRE(linkedGroupNode1->childCount() == 3u);
+      REQUIRE(linkedGroupNode2->childCount() == 3u);
+      CHECK(nameOf(nullNode) == "info_null_0");
+
+      // the instances are named in the order in which they are updated
+      const auto nullName1 = nameOf(linkedGroupNode1->children()[2]);
+      const auto nullName2 = nameOf(linkedGroupNode2->children()[2]);
+      CHECK_THAT(
+        (std::vector{nullName1, nullName2}),
+        Catch::Matchers::UnorderedEquals(
+          std::vector<std::string>{"info_null_1", "info_null_2"}));
+
+      // the other names stay as they were
+      CHECK(nameOf(linkedGroupNode1->children()[0]) == "light_1");
+      CHECK(nameOf(linkedGroupNode1->children()[1]) == "func_static_1");
+      CHECK(nameOf(linkedGroupNode2->children()[0]) == "light_2");
+      CHECK(nameOf(linkedGroupNode2->children()[1]) == "func_static_2");
+      CHECK(modelOf(linkedGroupNode2->children()[1]) == "func_static_2");
+
+      SECTION("Undo and redo")
+      {
+        namingMap.undoCommand();
+        CHECK(groupNode->childCount() == 2u);
+        REQUIRE(linkedGroupNode1->childCount() == 2u);
+        CHECK(nameOf(linkedGroupNode1->children()[0]) == "light_1");
+        CHECK(nameOf(linkedGroupNode1->children()[1]) == "func_static_1");
+
+        namingMap.redoCommand();
+        REQUIRE(linkedGroupNode1->childCount() == 3u);
+        REQUIRE(linkedGroupNode2->childCount() == 3u);
+        CHECK(nameOf(linkedGroupNode1->children()[2]) == nullName1);
+        CHECK(nameOf(linkedGroupNode2->children()[2]) == nullName2);
       }
     }
   }

@@ -125,6 +125,11 @@ using UpdateLinkedGroupsResult =
  * "target" is protected, then changes to the property "target2" are not propagated or
  * overwritten during propagation.
  *
+ * If the game of the map that contains the target group nodes requires unique entity
+ * names (EntityPropertyConfig::naming), then the name key and the brush entity model key
+ * are protected in every entity without being added to its protected properties, so
+ * that every instance keeps its own names.
+ *
  * If this operation fails for any child and target group, then an error is returned. The
  * operation can fail if any of the following conditions arises:
  *

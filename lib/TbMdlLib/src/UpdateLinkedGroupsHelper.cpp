@@ -19,10 +19,12 @@
 
 #include "mdl/UpdateLinkedGroupsHelper.h"
 
+#include "mdl/EntityNaming.h"
 #include "mdl/GroupNode.h"
 #include "mdl/LinkedGroupUtils.h"
 #include "mdl/Map.h"
 #include "mdl/ModelUtils.h"
+#include "mdl/WorldNode.h"
 
 #include "kd/overload.h"
 #include "kd/ranges/as_rvalue_view.h"
@@ -90,6 +92,37 @@ auto doReplaceChildren(
   map.nodesWereAddedNotifier(allNewChildren);
 
   return result;
+}
+
+/**
+ * Gives the entities that a linked group update adds to the target groups unique names if
+ * the game requires them. The names and models of the entities that the target groups
+ * already had are protected and kept; an entity that is new in the source group arrives
+ * with the name of its original and is renamed. References are not changed, since they
+ * point into the source group by design.
+ */
+void assignUniqueEntityNamesInUpdates(
+  const UpdateLinkedGroupsResult& linkedGroupUpdates, const Map& map)
+{
+  if (const auto& naming = map.worldNode().entityPropertyConfig().naming)
+  {
+    // the children of the target groups are replaced, so their names are free
+    auto allocator = EntityNameAllocator{
+      map,
+      *naming,
+      linkedGroupUpdates | std::views::keys | std::views::transform([](const auto* node) {
+        return static_cast<const Node*>(node);
+      }) | kdl::ranges::to<std::vector>()};
+
+    for (const auto& [targetGroupNode, newChildren] : linkedGroupUpdates)
+    {
+      assignUniqueEntityNames(
+        newChildren | std::views::transform([](const auto& child) { return child.get(); })
+          | kdl::ranges::to<std::vector>(),
+        allocator,
+        EntityNamingMode::KeepIfFree);
+    }
+  }
 }
 
 } // namespace
@@ -185,8 +218,11 @@ Result<UpdateLinkedGroupsHelper::LinkedGroupUpdates> UpdateLinkedGroupsHelper::
          })
          | kdl::fold
          | kdl::and_then([&](auto nestedUpdateLists) -> Result<LinkedGroupUpdates> {
-             return nestedUpdateLists | std::views::join | kdl::views::as_rvalue
-                    | kdl::ranges::to<std::vector>();
+             auto linkedGroupUpdates = nestedUpdateLists | std::views::join
+                                       | kdl::views::as_rvalue
+                                       | kdl::ranges::to<std::vector>();
+             assignUniqueEntityNamesInUpdates(linkedGroupUpdates, map);
+             return linkedGroupUpdates;
            });
 }
 
