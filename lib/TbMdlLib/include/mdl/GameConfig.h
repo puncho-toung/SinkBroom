@@ -90,15 +90,40 @@ struct MaterialConfig
     shaderImageSearchPaths);
 };
 
+/**
+ * How the entity models of a game are read, as set by the optional game config key
+ * entities.modelConvention.
+ */
+enum class ModelConvention
+{
+  /** Every model format is read the way TrenchBroom reads it for any game. */
+  Default,
+  /**
+   * The id Tech 4 engines (Doom 3, RBDOOM-3-BFG): a .obj file is read the way the engine
+   * reads it, with raw Z-up coordinates and a material decl name after usemtl; a glTF
+   * model takes its axes and, where they resolve, its materials from the engine's glTF
+   * importer.
+   */
+  IdTech4,
+};
+
+std::ostream& operator<<(std::ostream& lhs, ModelConvention rhs);
+
 struct EntityConfig
 {
   std::vector<std::filesystem::path> defFilePaths;
   Color defaultColor;
   std::optional<el::ExpressionNode> scaleExpression;
   bool setDefaultProperties = false;
+  ModelConvention modelConvention = ModelConvention::Default;
 
   kdl_reflect_decl(
-    EntityConfig, defFilePaths, defaultColor, scaleExpression, setDefaultProperties);
+    EntityConfig,
+    defFilePaths,
+    defaultColor,
+    scaleExpression,
+    setDefaultProperties,
+    modelConvention);
 };
 
 struct FlagConfig

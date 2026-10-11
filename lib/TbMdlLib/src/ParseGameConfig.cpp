@@ -426,6 +426,25 @@ FaceAttribsConfig parseFaceAttribsConfig(
   };
 }
 
+ModelConvention parseModelConvention(
+  const el::EvaluationContext& context, const el::Value& value)
+{
+  if (value == el::Value::Null)
+  {
+    return ModelConvention::Default;
+  }
+
+  const auto& name = value.stringValue(context);
+  if (name == "idtech4")
+  {
+    return ModelConvention::IdTech4;
+  }
+
+  throw ParserException{
+    context.location(value),
+    fmt::format("Unknown model convention '{}'; valid values are: idtech4", name)};
+}
+
 EntityConfig parseEntityConfig(
   const el::EvaluationContext& context, const el::Value& value)
 {
@@ -446,6 +465,7 @@ EntityConfig parseEntityConfig(
     color,
     context.expression(value.atOrDefault(context, "scale")),
     value.atOrDefault(context, "setDefaultProperties").booleanValue(context),
+    parseModelConvention(context, value.atOrDefault(context, "modelConvention")),
   };
 }
 

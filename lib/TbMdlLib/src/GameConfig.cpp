@@ -40,6 +40,20 @@ kdl_reflect_impl(FileSystemConfig);
 
 kdl_reflect_impl(MaterialConfig);
 
+std::ostream& operator<<(std::ostream& lhs, const ModelConvention rhs)
+{
+  switch (rhs)
+  {
+  case ModelConvention::Default:
+    lhs << "Default";
+    break;
+  case ModelConvention::IdTech4:
+    lhs << "IdTech4";
+    break;
+  }
+  return lhs;
+}
+
 kdl_reflect_impl(EntityConfig);
 
 kdl_reflect_impl(FlagConfig);

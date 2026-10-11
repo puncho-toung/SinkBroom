@@ -40,6 +40,7 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 namespace tb::mdl
 {
@@ -134,6 +135,8 @@ TEST_CASE("GameConfigParser")
       CHECK(config.entityConfig.scaleExpression == std::nullopt);
       // the FGD defaults are entityDef spawnargs and must not be copied into maps
       CHECK_FALSE(config.entityConfig.setDefaultProperties);
+      // the engine's _tb/models/**/*.obj proxies are Z-up and name material decls
+      CHECK(config.entityConfig.modelConvention == ModelConvention::IdTech4);
 
       CHECK(config.faceAttribsConfig.surfaceFlags.flags.empty());
       CHECK(config.faceAttribsConfig.contentFlags.flags.empty());
@@ -1201,6 +1204,64 @@ TEST_CASE("GameConfigParser")
           .softMapBounds = std::nullopt,
           .compilationTools = {},
         });
+    }
+  }
+
+  SECTION("model convention")
+  {
+    const auto makeConfig = [](const std::string& entityKeys) {
+      return R"%({
+    "version": 9,
+    "name": "Doom 3 BFG",
+    "fileformats": [ { "format": "Doom3 (Valve)" } ],
+    "filesystem": {
+        "searchpath": "base",
+        "packageformat": { "extension": "pk4", "format": "zip" }
+    },
+    "materials": { "root": "textures", "extensions": [ ".tga" ] },
+    "entities": {
+        "definitions": [],
+        "defaultcolor": "0.6 0.6 0.6 1.0")%"
+             + entityKeys + R"%(
+    }
+})%";
+    };
+
+    SECTION("a missing key selects the default convention")
+    {
+      const auto result = parseGameConfig(makeConfig(""));
+      REQUIRE(result.is_success());
+      CHECK(result.value().entityConfig.modelConvention == ModelConvention::Default);
+      CHECK(EntityConfig{}.modelConvention == ModelConvention::Default);
+    }
+
+    SECTION("idtech4 selects the id Tech 4 convention")
+    {
+      const auto result = parseGameConfig(makeConfig(R"%(,
+        "modelConvention": "idtech4")%"));
+      REQUIRE(result.is_success());
+      CHECK(result.value().entityConfig.modelConvention == ModelConvention::IdTech4);
+    }
+
+    SECTION("an unknown value is an error with its location")
+    {
+      const auto result = parseGameConfig(makeConfig(R"%(,
+        "modelConvention": "quake")%"));
+      REQUIRE(result.is_error());
+      CHECK_THAT(
+        std::get<Error>(result.error()).msg,
+        Catch::Matchers::StartsWith("At line 13, column")
+          && Catch::Matchers::ContainsSubstring("Unknown model convention 'quake'"));
+    }
+
+    SECTION("the convention takes part in comparisons")
+    {
+      const auto config = EntityConfig{};
+
+      auto idTech4Config = config;
+      idTech4Config.modelConvention = ModelConvention::IdTech4;
+      CHECK(idTech4Config != config);
+      CHECK(kdl::str_to_string(idTech4Config.modelConvention) == "IdTech4");
     }
   }
 
