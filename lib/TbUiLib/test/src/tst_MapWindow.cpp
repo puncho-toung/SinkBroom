@@ -41,8 +41,6 @@
 
 #include "vm/vec.h"
 
-#include <cmath>
-
 #include <catch2/catch_test_macros.hpp>
 
 namespace tb::ui
@@ -110,12 +108,12 @@ TEST_CASE("MapWindow")
     const auto views = window.findChildren<MapView2D*>();
     REQUIRE(!views.empty());
 
-    const auto loadMap = [&](const double extent) {
+    const auto loadMap = [&](const vm::bbox3d& worldBounds) {
       REQUIRE(window.document().load(
         appController.environmentConfig(),
         mdl::QuakeGameInfo,
         mdl::MapFormat::Unknown,
-        vm::bbox3d{extent},
+        worldBounds,
         path));
 
       QApplication::processEvents();
@@ -123,28 +121,66 @@ TEST_CASE("MapWindow")
 
     // a 2D camera sits at the near side of the world bounds, and its far plane reaches
     // the far side of them
-    const auto checkCameras = [&](const double extent) {
+    const auto checkCameras = [&](const vm::bbox3d& worldBounds) {
       for (auto* view : views)
       {
         const auto& camera = view->camera();
         const auto axis = vm::find_abs_max_component(camera.direction());
-        CHECK(std::abs(camera.position()[axis]) == float(extent));
-        CHECK(camera.farPlane() == float(2.0 * extent) + 16.0f);
+        const auto& nearSide =
+          camera.direction()[axis] < 0.0f ? worldBounds.max : worldBounds.min;
+        CHECK(camera.position()[axis] == float(nearSide[axis]));
+        CHECK(camera.farPlane() == float(worldBounds.size()[axis]) + 16.0f);
       }
     };
 
-    checkCameras(8192.0);
+    checkCameras(vm::bbox3d{8192.0});
 
     SECTION("larger bounds")
     {
-      loadMap(131072.0);
-      checkCameras(131072.0);
+      loadMap(vm::bbox3d{131072.0});
+      checkCameras(vm::bbox3d{131072.0});
     }
 
     SECTION("smaller bounds")
     {
-      loadMap(4096.0);
-      checkCameras(4096.0);
+      loadMap(vm::bbox3d{4096.0});
+      checkCameras(vm::bbox3d{4096.0});
+    }
+
+    SECTION("bounds that are not a cube")
+    {
+      const auto worldBounds =
+        vm::bbox3d{{-8192.0, -4096.0, -2048.0}, {8192.0, 4096.0, 2048.0}};
+
+      loadMap(worldBounds);
+      checkCameras(worldBounds);
+
+      // each camera sits on the near side of the axis it looks along, and its far plane
+      // is the extent of the bounds along that axis, not along x
+      auto checkedViews = size_t{0};
+      for (auto* view : views)
+      {
+        const auto& camera = view->camera();
+        if (view->objectName() == "XY View")
+        {
+          CHECK(camera.position().z() == 2048.0f);
+          CHECK(camera.farPlane() == 4096.0f + 16.0f);
+          ++checkedViews;
+        }
+        else if (view->objectName() == "XZ View")
+        {
+          CHECK(camera.position().y() == -4096.0f);
+          CHECK(camera.farPlane() == 8192.0f + 16.0f);
+          ++checkedViews;
+        }
+        else if (view->objectName() == "YZ View")
+        {
+          CHECK(camera.position().x() == 8192.0f);
+          CHECK(camera.farPlane() == 16384.0f + 16.0f);
+          ++checkedViews;
+        }
+      }
+      CHECK(checkedViews == size_t(views.size()));
     }
 
     SECTION("unchanged bounds keep the cameras where they are")
@@ -153,10 +189,10 @@ TEST_CASE("MapWindow")
       camera.moveBy(camera.right() * 100.0f);
       const auto position = camera.position();
 
-      loadMap(8192.0);
+      loadMap(vm::bbox3d{8192.0});
 
       CHECK(camera.position() == position);
-      checkCameras(8192.0);
+      checkCameras(vm::bbox3d{8192.0});
     }
   }
 

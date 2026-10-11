@@ -171,7 +171,7 @@ Game engines often impose a limit on the usable/playable volume of space. Trench
 
 ![Map Properties (Ubuntu Linux)](images/SoftBounds.png) If bounds are configured for a game, they will usually represent the limits observed by the last official release or patch of a particular game engine. Those bounds may not be correct for your situation, so you can disable or modify the displayed bounds using the Map Properties portion of the Map Inspector, as shown here. (More about the Map Inspector in the next section below.)
 
-In Quake-engine games, these bounds represent a limit on the volume that can contain players, items, or other entities. Static geometry (plain brushes) can extend further, which is why these limits are often called "soft bounds". As far as TrenchBroom is concerned however, it is just drawing orange lines at whatever coordinates are indicated in the [game configuration file](#game_configuration_files)... if this is a non-Quake-engine game then the bounds could represent something else.
+In Quake-engine games, these bounds represent a limit on the volume that can contain players, items, or other entities. Static geometry (plain brushes) can extend further, which is why these limits are often called "soft bounds". As far as TrenchBroom is concerned however, it is just drawing orange lines at whatever coordinates are indicated in the [game configuration file](#game_configuration_files)... if this is a non-Quake-engine game then the bounds could represent something else. For a game whose soft bounds reach farther than -32768 to 32768, the soft bounds also set the editing bound, that is, the limit for the coordinates of brushes.
 
 In any case, keep in mind that the displayed bounds are just a guide that you should use to help yourself stay within the limits of your target game engine. Changing the bounds in TrenchBroom will not change the behavior in the game!
 
@@ -3086,7 +3086,7 @@ The optional `softMapBounds` key defines the default [map bounds](#map_bounds) t
 
     "softMapBounds":"-4096 -4096 -4096 4096 4096 4096",
 
-The hard world bound, which limits the coordinates of every brush, is -32768 to 32768 on each axis, but it grows to the soft map bounds of the game on any axis along which they reach farther.
+The hard world bound, which limits the coordinates of every brush, is -32768 to 32768 on each axis, but it grows to the soft map bounds of the game on each side where they reach farther.
 
 #### Compilation Tools
 

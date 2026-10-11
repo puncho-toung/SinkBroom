@@ -33,6 +33,8 @@
 #include "mdl/WorldNode.h"
 #include "ui/MapDocument.h"
 
+#include <limits>
+
 #include <catch2/catch_test_macros.hpp>
 
 namespace tb::ui
@@ -80,6 +82,40 @@ TEST_CASE("MapDocument")
       CHECK(
         MapDocument::worldBoundsForGame(gameInfo.gameConfig)
         == vm::bbox3d{{-65536.0, -32768.0, -32768.0}, {32768.0, 131072.0, 32768.0}});
+    }
+
+    SECTION("returns the default bounds if the soft map bounds are not finite")
+    {
+      auto gameInfo = mdl::Doom3BFGGameInfo;
+
+      auto bounds = vm::bbox3d{131072.0};
+      bounds.max[2] = std::numeric_limits<double>::infinity();
+      gameInfo.gameConfig.softMapBounds = bounds;
+      CHECK(
+        MapDocument::worldBoundsForGame(gameInfo.gameConfig)
+        == MapDocument::DefaultWorldBounds);
+
+      bounds = vm::bbox3d{131072.0};
+      bounds.min[0] = std::numeric_limits<double>::quiet_NaN();
+      gameInfo.gameConfig.softMapBounds = bounds;
+      CHECK(
+        MapDocument::worldBoundsForGame(gameInfo.gameConfig)
+        == MapDocument::DefaultWorldBounds);
+    }
+
+    SECTION("returns the default bounds if the soft map bounds are not a valid box")
+    {
+      auto gameInfo = mdl::Doom3BFGGameInfo;
+
+      // the bbox constructors assert on this, so set the members
+      auto bounds = vm::bbox3d{131072.0};
+      bounds.min[1] = 131073.0;
+      REQUIRE(!bounds.is_valid());
+
+      gameInfo.gameConfig.softMapBounds = bounds;
+      CHECK(
+        MapDocument::worldBoundsForGame(gameInfo.gameConfig)
+        == MapDocument::DefaultWorldBounds);
     }
   }
 

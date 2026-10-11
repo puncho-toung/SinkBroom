@@ -49,6 +49,7 @@
 #include "kd/task_manager.h"
 
 #include "vm/polygon.h"
+#include "vm/scalar.h"
 
 #include <fmt/format.h>
 #include <fmt/std.h>
@@ -62,12 +63,33 @@
 
 namespace tb::ui
 {
+namespace
+{
+
+// Soft map bounds come from a game config. Until now they were only drawn, so a malformed
+// one did no harm, but one with a non-finite coordinate or a min above its max must not
+// become the hard world bound.
+bool isUsableAsWorldBounds(const vm::bbox3d& bounds)
+{
+  for (size_t i = 0; i < 3; ++i)
+  {
+    if (
+      !vm::is_finite(bounds.min[i]) || !vm::is_finite(bounds.max[i])
+      || bounds.min[i] > bounds.max[i])
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+} // namespace
 
 const vm::bbox3d MapDocument::DefaultWorldBounds(-32768.0, 32768.0);
 
 vm::bbox3d MapDocument::worldBoundsForGame(const mdl::GameConfig& gameConfig)
 {
-  return gameConfig.softMapBounds
+  return gameConfig.softMapBounds && isUsableAsWorldBounds(*gameConfig.softMapBounds)
            ? vm::merge(DefaultWorldBounds, *gameConfig.softMapBounds)
            : DefaultWorldBounds;
 }
