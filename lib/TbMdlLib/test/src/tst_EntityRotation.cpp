@@ -304,11 +304,14 @@ TEST_CASE("EntityRotation")
       {"angles", "0 0 0"}},                    true,  {{{},
                                                          {{0, 0, -16}, {16, 16, 16}}}},             nullptr,        {ERT::Euler_PositivePitchDown, "angles", ERU::Allowed}},
 
-    // an entity with brushes shows no rotation, whatever its properties
+    // an entity with brushes shows only the direction of its angle, whatever its other properties
     {{{"classname", "other"},
       {"rotation", "0 1 0 -1 0 0 0 0 1"},
       {"angles", "0 90 0"},
-      {"angle", "90"}},                        false, std::nullopt,                                      nullptr,        {ERT::None, "", ERU::Allowed}},
+      {"angle", "90"}},                        false, std::nullopt,                                      nullptr,        {ERT::AngleUpDown, "angle", ERU::Allowed}},
+    {{{"classname", "other"},
+      {"rotation", "0 1 0 -1 0 0 0 0 1"},
+      {"angles", "0 90 0"}},                   false, std::nullopt,                                      nullptr,        {ERT::None, "", ERU::Allowed}},
     {{{"classname", "light"},
       {"angles", "0 90 0"}},                   false, std::nullopt,                                      nullptr,        {ERT::None, "", ERU::Allowed}},
     }));
@@ -468,11 +471,27 @@ TEST_CASE("EntityRotation")
       CHECK(rotation(properties) == vm::mat4x4d::identity());
     }
 
-    SECTION("An entity with brushes shows no rotation")
+    SECTION("An entity with brushes shows only the direction of its angle")
     {
       CHECK(
         rotation({{"classname", "other"}, {"angles", "0 90 0"}}, false)
         == vm::mat4x4d::identity());
+      CHECK(
+        rotation({{"classname", "other"}, {"rotation", "0 1 0 -1 0 0 0 0 1"}}, false)
+        == vm::mat4x4d::identity());
+
+      // like idMover_Binary::GetMovedir, -1 is up and -2 is down
+      CHECK(
+        rotation({{"classname", "func_door"}, {"angle", "90"}}, false)
+        == vm::approx{vm::mat4x4d::rot_90_z_ccw()});
+      CHECK(
+        rotation({{"classname", "func_door"}, {"angle", "-1"}}, false)
+          * vm::vec3d{1, 0, 0}
+        == vm::approx{vm::vec3d{0, 0, 1}});
+      CHECK(
+        rotation({{"classname", "func_door"}, {"angle", "-2"}}, false)
+          * vm::vec3d{1, 0, 0}
+        == vm::approx{vm::vec3d{0, 0, -1}});
     }
   }
 
@@ -620,14 +639,34 @@ TEST_CASE("EntityRotation")
     // a direction straight up has no yaw, so the old one is kept
     {{{"classname", "other"},
       {"angle", "0"}},                         true,  {{{anglePropertyDef}}},   pitchUp90,      ERU{}},
+    // the yaw is written like the engine writes angles
+    {{{"classname", "other"},
+      {"angle", "30.6"}},                      true,  {{{anglePropertyDef}}},   vm::mat4x4d::identity(), ERU{EntityProperty{"angle", "30.6"}, {}}},
+    {{{"classname", "other"},
+      {"angle", "10.25"}},                     true,  {{{anglePropertyDef}}},   turnZ90ccw,     ERU{EntityProperty{"angle", "100.25"}, {}}},
 
-    // a rotation matrix is converted to angles in whole degrees: the angles of the rotation 30 45 60, and yaw 30.4
+    // angles are written like the engine's idDict::SetAngles writes them: two decimals, without trailing zeros, and
+    // -0 as 0: the angles of the rotation 30 45 60, yaw 30.6, yaw -30.6 and pitch 30.6
     {{{"classname", "other"},
       {"rotation", "0.612372 0.612372 -0.5 -0.047367 0.659740 0.75 0.789149 -0.435596 0.433013"}},
                                                true,  std::nullopt,             vm::mat4x4d::identity(), ERU{EntityProperty{"angles", "30 45 60"}, {"rotation"}}},
     {{{"classname", "other"},
-      {"rotation", "0.862514 0.506034 0 -0.506034 0.862514 0 0 0 1"}},
-                                               true,  std::nullopt,             vm::mat4x4d::identity(), ERU{EntityProperty{"angles", "0 30 0"}, {"rotation"}}},
+      {"rotation", "0.860742 0.509041 0 -0.509041 0.860742 0 0 0 1"}},
+                                               true,  std::nullopt,             vm::mat4x4d::identity(), ERU{EntityProperty{"angles", "0 30.6 0"}, {"rotation"}}},
+    {{{"classname", "other"},
+      {"rotation", "0.860742 -0.509041 0 0.509041 0.860742 0 0 0 1"}},
+                                               true,  std::nullopt,             vm::mat4x4d::identity(), ERU{EntityProperty{"angles", "0 -30.6 0"}, {"rotation"}}},
+    {{{"classname", "other"},
+      {"rotation", "0.860742 0 -0.509041 0 1 0 0.509041 0 0.860742"}},
+                                               true,  std::nullopt,             vm::mat4x4d::identity(), ERU{EntityProperty{"angles", "30.6 0 0"}, {"rotation"}}},
+    {{{"classname", "other"},
+      {"angles", "-0 33.33 0"}},               true,  std::nullopt,             turnZ90ccw,     ERU{EntityProperty{"angles", "0 123.33 0"}, {}}},
+    {{{"classname", "other"},
+      {"angles", "0 0.05 0"}},                 true,  std::nullopt,             vm::mat4x4d::identity(), ERU{EntityProperty{"angles", "0 0.05 0"}, {}}},
+    {{{"classname", "other"},
+      {"angles", "0 -0.004 0"}},               true,  std::nullopt,             vm::mat4x4d::identity(), ERU{EntityProperty{"angles", "0 0 0"}, {}}},
+    {{{"classname", "other"},
+      {"angles", "0 89.999 0"}},               true,  std::nullopt,             vm::mat4x4d::identity(), ERU{EntityProperty{"angles", "0 90 0"}, {}}},
     // a degenerate rotation matrix has no angles
     {{{"classname", "other"},
       {"rotation", "0 0 0 0 0 0 0 0 0"}},      true,  std::nullopt,             turnZ90ccw,     ERU{}},

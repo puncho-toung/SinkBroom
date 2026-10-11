@@ -36,6 +36,8 @@
 #include "vm/vec.h"
 #include "vm/vec_io.h"
 
+#include <fmt/format.h>
+
 #include <ostream>
 #include <ranges>
 
@@ -290,7 +292,16 @@ EntityRotationInfo idTech4EntityRotationInfo(const Entity& entity)
 
   if (!entity.pointEntity())
   {
-    // the brushes are in world space, the entity's rotation properties don't rotate them
+    // The brushes are in world space, so nothing rotates them. "angle" is the direction
+    // of a mover, with -1 for up and -2 for down (idMover_Binary::GetMovedir), which the
+    // entity's arrow shows.
+    if (entity.hasProperty(EntityPropertyKeys::Angle))
+    {
+      return {
+        EntityRotationType::AngleUpDown,
+        EntityPropertyKeys::Angle,
+        EntityRotationUsage::Allowed};
+    }
     return {EntityRotationType::None, "", EntityRotationUsage::Allowed};
   }
 
@@ -492,6 +503,63 @@ EntityProperty setEntityRotationAngle(
   const auto angle = getEntityRotationAngle(direction);
   return {propertyKey, kdl::str_to_string(vm::round(angle))};
 }
+
+/**
+ * Formats an angle the way the engine's idDict::SetAngles writes each angle
+ * (idStr::FloatArrayToString with two decimals): with two decimals, then without trailing
+ * zeros and a trailing dot, e.g. 90, 33.3 or 0.05. An angle that comes out as -0 is
+ * written as 0.
+ */
+std::string formatIdTech4Angle(const double angle)
+{
+  auto result = fmt::format("{:.2f}", angle);
+  result.erase(result.find_last_not_of('0') + 1);
+  if (result.ends_with('.'))
+  {
+    result.pop_back();
+  }
+  return result == "-0" ? "0" : result;
+}
+
+/**
+ * Returns the given rotation, transformed, as pitch, yaw and roll, with a positive pitch
+ * pointing down, written the way the engine writes angles. Returns nothing for a
+ * degenerate rotation, which has no angles.
+ */
+std::optional<EntityProperty> idTech4AnglesProperty(
+  const std::string& propertyKey,
+  const vm::mat4x4d& transformation,
+  const vm::mat4x4d& rotation)
+{
+  const auto yawPitchRoll = entityYawPitchRoll(transformation, rotation);
+  if (vm::is_nan(yawPitchRoll))
+  {
+    return std::nullopt;
+  }
+
+  return EntityProperty{
+    propertyKey,
+    formatIdTech4Angle(yawPitchRoll.y()) + " " + formatIdTech4Angle(yawPitchRoll.x())
+      + " " + formatIdTech4Angle(yawPitchRoll.z())};
+}
+
+/**
+ * Returns the yaw of the given direction as "angle", from 0 to 360 degrees and written
+ * the way the engine writes angles. Returns nothing for a direction straight up or down,
+ * which has no yaw.
+ */
+std::optional<EntityProperty> idTech4AngleProperty(const vm::vec3d& direction)
+{
+  if (vm::is_zero(direction.xy(), vm::Cd::almost_zero()))
+  {
+    return std::nullopt;
+  }
+
+  const auto yaw =
+    vm::normalize_degrees(vm::to_degrees(std::atan2(direction.y(), direction.x())));
+  return EntityProperty{EntityPropertyKeys::Angle, formatIdTech4Angle(yaw)};
+}
+
 } // namespace
 
 std::optional<EntityProperty> applyEntityRotation(
@@ -568,35 +636,6 @@ std::vector<std::string> idTech4ConvertedRotationKeys(const Entity& entity)
 namespace
 {
 
-/**
- * Returns the given rotation, transformed, as "angles": pitch, yaw and roll in whole
- * degrees, with a positive pitch pointing down. Returns nothing for a degenerate
- * rotation, which has no angles.
- */
-std::optional<EntityProperty> idTech4AnglesProperty(
-  const vm::mat4x4d& transformation, const vm::mat4x4d& rotation)
-{
-  const auto yawPitchRoll = entityYawPitchRoll(transformation, rotation);
-  auto pitchYawRoll =
-    vm::round(vm::vec3d{yawPitchRoll.y(), yawPitchRoll.x(), yawPitchRoll.z()});
-  if (vm::is_nan(pitchYawRoll))
-  {
-    return std::nullopt;
-  }
-
-  for (size_t i = 0; i < 3; ++i)
-  {
-    // the pitch of a turn about the Z axis comes out as -0, which would be written as
-    // such
-    if (pitchYawRoll[i] == 0.0)
-    {
-      pitchYawRoll[i] = 0.0;
-    }
-  }
-
-  return EntityProperty{EntityPropertyKeys::Angles, kdl::str_to_string(pitchYawRoll)};
-}
-
 EntityRotationUpdate applyIdTech4EntityRotation(
   const Entity& entity, const vm::mat4x4d& transformation)
 {
@@ -605,37 +644,29 @@ EntityRotationUpdate applyIdTech4EntityRotation(
     return {};
   }
 
+  const auto info = idTech4EntityRotationInfo(entity);
   if (!entity.pointEntity())
   {
     // The brushes are transformed themselves, so the entity never gets "angles" or
-    // "rotation", which would turn them a second time in the game. Its "angle" is the
-    // direction of a mover, with -1 for up and -2 for down (idMover_Binary::GetMovedir).
-    if (entity.hasProperty(EntityPropertyKeys::Angle))
-    {
-      const auto info = EntityRotationInfo{
-        EntityRotationType::AngleUpDown,
-        EntityPropertyKeys::Angle,
-        EntityRotationUsage::Allowed};
-      return {applyEntityRotation(entity.properties(), info, transformation), {}};
-    }
-    return {};
+    // "rotation", which would turn them a second time in the game. Only "angle", the
+    // direction of a mover, is turned, in whole degrees as upstream.
+    return {applyEntityRotation(entity.properties(), info, transformation), {}};
   }
 
-  const auto rotation =
-    entityRotation(entity.properties(), idTech4EntityRotationInfo(entity));
+  const auto rotation = entityRotation(entity.properties(), info);
 
   if (idTech4KeepsAngle(entity))
   {
     // a direction straight up or down has no yaw, so keep the old one
-    const auto direction = transformation * rotation * vm::vec3d{1, 0, 0};
-    if (vm::is_zero(direction.xy(), vm::Cd::almost_zero()))
+    if (auto angle = idTech4AngleProperty(transformation * rotation * vm::vec3d{1, 0, 0}))
     {
-      return {};
+      return {std::move(angle), {}};
     }
-    return {setEntityRotationAngle(EntityPropertyKeys::Angle, direction), {}};
+    return {};
   }
 
-  auto angles = idTech4AnglesProperty(transformation, rotation);
+  auto angles =
+    idTech4AnglesProperty(EntityPropertyKeys::Angles, transformation, rotation);
   if (!angles)
   {
     return {};
