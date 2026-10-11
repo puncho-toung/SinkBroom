@@ -41,7 +41,9 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <cmath>
 #include <system_error>
+#include <type_traits>
 
 namespace tb::mdl
 {
@@ -97,8 +99,21 @@ std::string_view nextToken(std::string_view& str)
 }
 
 /**
+ * Whether the rest of a line has a token that the engine would read as the next
+ * statement: its lexer reads tokens, not lines, and skips a comment as it skips a comment
+ * line.
+ */
+bool hasMoreTokens(std::string_view str)
+{
+  const auto token = nextToken(str);
+  return !token.empty() && token.front() != '#';
+}
+
+/**
  * Parses the whole token as a number. A leading '+' is accepted, as the engine's sscanf
- * accepts it, though std::from_chars does not.
+ * accepts it, though std::from_chars does not. std::from_chars also accepts "nan" and
+ * "inf", which are rejected: the engine's lexer reads no such numbers, and a position
+ * that is not finite would have no bounds.
  */
 template <typename T>
 std::optional<T> parseNumber(std::string_view token)
@@ -113,8 +128,18 @@ std::optional<T> parseNumber(std::string_view token)
   auto value = T{};
   const auto* last = token.data() + token.size();
   const auto [ptr, ec] = vm::from_chars(token.data(), last, value);
-  return ec == std::errc{} && ptr == last && !token.empty() ? std::optional{value}
-                                                            : std::nullopt;
+  if (ec != std::errc{} || ptr != last || token.empty())
+  {
+    return std::nullopt;
+  }
+  if constexpr (std::is_floating_point_v<T>)
+  {
+    if (!std::isfinite(value))
+    {
+      return std::nullopt;
+    }
+  }
+  return value;
 }
 
 /**
@@ -226,6 +251,18 @@ private:
     return Error{prependLocation(FileLocation{m_line}, msg)};
   }
 
+  /**
+   * Notes that the engine's importer would reject the current line or read less of it,
+   * unless an earlier line was noted already.
+   */
+  void noteEngineIncompatibility(const std::string_view reason)
+  {
+    if (!m_data.engineIncompatibility)
+    {
+      m_data.engineIncompatibility = prependLocation(FileLocation{m_line}, reason);
+    }
+  }
+
   std::optional<Error> parseLine(std::string_view line)
   {
     const auto keyword = nextToken(line);
@@ -271,7 +308,9 @@ private:
 
   std::optional<Error> parsePosition(std::string_view line)
   {
-    // v x y z [w]: whatever follows the position is ignored, as the engine ignores it
+    // v x y z [w]: the engine reads three numbers and fails on a fourth, which it takes
+    // for an unknown statement (renderer/Model_obj.cpp); here a fourth number, such as
+    // the weight w of the OBJ format, is ignored and noted
     auto position = vm::vec3f{};
     for (size_t i = 0; i < 3; ++i)
     {
@@ -285,18 +324,26 @@ private:
       position[i] = *value;
     }
 
+    if (hasMoreTokens(line))
+    {
+      noteEngineIncompatibility(
+        "a vertex has more than three numbers, and the engine fails on the fourth");
+    }
+
     m_positions.push_back(position);
     return std::nullopt;
   }
 
   std::optional<Error> parseUv(std::string_view line)
   {
-    // vt u [v [w]]: the engine wrote v = 1 - t
+    // vt u [v [w]]: the engine wrote v = 1 - t; it reads exactly two numbers and fails
+    // on any other count
     auto uv = vm::vec2f{};
-    for (size_t i = 0; i < 2; ++i)
+    auto count = size_t(0);
+    for (; count < 2; ++count)
     {
       const auto token = nextToken(line);
-      if (token.empty() && i > 0)
+      if (token.empty() && count > 0)
       {
         break;
       }
@@ -307,7 +354,13 @@ private:
         return makeError(
           fmt::format("Expected a texture coordinate, but got '{}'", token));
       }
-      uv[i] = *value;
+      uv[count] = *value;
+    }
+
+    if (count != 2 || hasMoreTokens(line))
+    {
+      noteEngineIncompatibility(
+        "a texture coordinate doesn't have two numbers, and the engine fails on it");
     }
 
     m_uvs.emplace_back(uv.x(), 1.0f - uv.y());
@@ -317,6 +370,10 @@ private:
   std::optional<Error> parseFace(std::string_view line)
   {
     m_corners.clear();
+
+    // the engine reads a face with sscanf as exactly three p/t/n corners, fails if one
+    // has fewer parts, and indexes its lists with whatever numbers it gets
+    auto engineReadsCorners = true;
 
     for (auto token = nextToken(line); !token.empty(); token = nextToken(line))
     {
@@ -370,6 +427,8 @@ private:
           m_normalCount));
       }
 
+      engineReadsCorners =
+        engineReadsCorners && *positionIndex > 0 && *uvIndex > 0 && *normalIndex > 0;
       m_corners.push_back({m_positions[*position], uv});
     }
 
@@ -377,6 +436,18 @@ private:
     {
       return makeError(fmt::format(
         "A face needs at least three corners, but this one has {}", m_corners.size()));
+    }
+
+    if (!engineReadsCorners)
+    {
+      noteEngineIncompatibility(
+        "a face corner is not p/t/n with positive indices, and the engine can't read it");
+    }
+    else if (m_corners.size() > 3)
+    {
+      noteEngineIncompatibility(fmt::format(
+        "a face has {} corners, and the engine reads only the first three",
+        m_corners.size()));
     }
 
     // a fan around the first corner; reversing each triangle turns the file's
@@ -444,6 +515,14 @@ EntityModelData buildModelData(
       "Found no material or image for {} of model '{}'",
       kdl::str_join(unresolvedNames, ", "),
       name);
+  }
+
+  if (objData.engineIncompatibility)
+  {
+    logger.warn() << fmt::format(
+      "Model '{}' may not load in RBDOOM-3-BFG as it is shown here. {}",
+      name,
+      *objData.engineIncompatibility);
   }
 
   auto data = EntityModelData{PitchType::Normal, Orientation::Oriented};

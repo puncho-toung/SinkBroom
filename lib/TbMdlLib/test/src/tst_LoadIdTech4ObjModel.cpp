@@ -42,7 +42,9 @@
 #include "vm/vec_io.h" // IWYU pragma: keep
 
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -74,12 +76,6 @@ std::string readFile(const fs::FileSystem& fs, const std::filesystem::path& path
   const auto file = fs.openFile(path) | kdl::value();
   auto reader = file->reader().buffer();
   return std::string{reader.stringView()};
-}
-
-std::string errorMessage(const Result<IdTech4ObjData>& result)
-{
-  REQUIRE(result.is_error());
-  return std::get<Error>(result.error()).msg;
 }
 
 IdTech4ObjTriangle makeTriangle(
@@ -143,6 +139,8 @@ TEST_CASE("LoadIdTech4ObjModel")
             {1, 0.5f},
             {0, 32, -8},
             {0.5f, 1})});
+
+      CHECK(result.value().engineIncompatibility == std::nullopt);
     }
 
     SECTION("the shared Doom 3 BFG fixture proxy, with CRLF line endings")
@@ -182,6 +180,8 @@ TEST_CASE("LoadIdTech4ObjModel")
         std::ranges::count(
           objData.triangles, std::optional<size_t>{1}, &IdTech4ObjTriangle::materialIndex)
         == 4);
+
+      CHECK(objData.engineIncompatibility == std::nullopt);
     }
 
     SECTION("usemtl names are canonicalized like the engine's decl names")
@@ -221,6 +221,12 @@ TEST_CASE("LoadIdTech4ObjModel")
 
       // a counter-clockwise polygon seen from +Z faces +Z
       CHECK(clockwiseNormal(result.value().triangles[0]) == vm::vec3f{0, 0, 1});
+
+      // the quad is the first face that the engine can't read
+      CHECK(
+        result.value().engineIncompatibility
+        == "At line 11: a face corner is not p/t/n with positive indices, and the engine "
+           "can't read it");
     }
 
     SECTION("the rest of the grammar")
@@ -262,61 +268,135 @@ TEST_CASE("LoadIdTech4ObjModel")
           makeTriangle(
             0, {0, 16, 0}, {0.5f, 1}, {16, 0, 0}, {0.5f, 1}, {0, 0, 0}, {0.5f, 1}),
         });
+
+      // all of it is accepted, though the engine would fail on the weight of the vertex
+      CHECK(
+        result.value().engineIncompatibility
+        == "At line 6: a vertex has more than three numbers, and the engine fails on the "
+           "fourth");
     }
 
     SECTION("errors")
     {
-      using namespace Catch::Matchers;
+      const auto error = [](const std::string& msg) {
+        return Result<IdTech4ObjData>{Error{msg}};
+      };
 
       const auto triangle = std::string{"v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvn 0 0 1\n"};
 
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj("")),
-        Equals("Model has no vertices. (So no valid bounding box.)"));
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj("# nothing\n\n")),
-        Equals("Model has no vertices. (So no valid bounding box.)"));
-      CHECK_THAT(errorMessage(parseIdTech4Obj(triangle)), Equals("Model has no faces"));
+      CHECK(
+        parseIdTech4Obj("")
+        == error("Model has no vertices. (So no valid bounding box.)"));
+      CHECK(
+        parseIdTech4Obj("# nothing\n\n")
+        == error("Model has no vertices. (So no valid bounding box.)"));
+      CHECK(parseIdTech4Obj(triangle) == error("Model has no faces"));
 
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj(triangle + "foo bar\n")),
-        Equals("At line 6: Unknown statement 'foo'"));
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj(triangle + "f 1 2 4\n")),
-        StartsWith("At line 6: Vertex index 4 is out of range"));
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj(triangle + "f 1 2 -4\n")),
-        StartsWith("At line 6: Vertex index -4 is out of range"));
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj(triangle + "f 1 2 0\n")),
-        StartsWith("At line 6: Vertex index 0 is out of range"));
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj(triangle + "f 1/1 2/1 3/2\n")),
-        StartsWith("At line 6: Texture coordinate index 2 is out of range"));
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj(triangle + "f 1//1 2//1 3//2\n")),
-        StartsWith("At line 6: Normal index 2 is out of range"));
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj(triangle + "f 1 2\n")),
-        Equals("At line 6: A face needs at least three corners, but this one has 2"));
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj(triangle + "f 1/ 2/ 3/\n")),
-        Equals("At line 6: Malformed face corner '1/'"));
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj(triangle + "f 1/1/ 2/1/ 3/1/\n")),
-        Equals("At line 6: Malformed face corner '1/1/'"));
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj(triangle + "f 1 2 x\n")),
-        Equals("At line 6: Malformed face corner 'x'"));
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj("v 0 0\n")),
-        Equals("At line 1: Expected a vertex coordinate, but got ''"));
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj("v 0 0 1x\n")),
-        Equals("At line 1: Expected a vertex coordinate, but got '1x'"));
-      CHECK_THAT(
-        errorMessage(parseIdTech4Obj("vt\n")),
-        Equals("At line 1: Expected a texture coordinate, but got ''"));
+      CHECK(
+        parseIdTech4Obj(triangle + "foo bar\n")
+        == error("At line 6: Unknown statement 'foo'"));
+      CHECK(
+        parseIdTech4Obj(triangle + "f 1 2 4\n")
+        == error(
+          "At line 6: Vertex index 4 is out of range, the file has 3 vertices so far"));
+      CHECK(
+        parseIdTech4Obj(triangle + "f 1 2 -4\n")
+        == error(
+          "At line 6: Vertex index -4 is out of range, the file has 3 vertices so far"));
+      CHECK(
+        parseIdTech4Obj(triangle + "f 1 2 0\n")
+        == error(
+          "At line 6: Vertex index 0 is out of range, the file has 3 vertices so far"));
+      CHECK(
+        parseIdTech4Obj(triangle + "f 1/1 2/1 3/2\n")
+        == error("At line 6: Texture coordinate index 2 is out of range, the file has 1 "
+                 "texture coordinates so far"));
+      CHECK(
+        parseIdTech4Obj(triangle + "f 1//1 2//1 3//2\n")
+        == error(
+          "At line 6: Normal index 2 is out of range, the file has 1 normals so far"));
+      CHECK(
+        parseIdTech4Obj(triangle + "f 1 2\n")
+        == error("At line 6: A face needs at least three corners, but this one has 2"));
+      CHECK(
+        parseIdTech4Obj(triangle + "f 1/ 2/ 3/\n")
+        == error("At line 6: Malformed face corner '1/'"));
+      CHECK(
+        parseIdTech4Obj(triangle + "f 1/1/ 2/1/ 3/1/\n")
+        == error("At line 6: Malformed face corner '1/1/'"));
+      CHECK(
+        parseIdTech4Obj(triangle + "f 1 2 x\n")
+        == error("At line 6: Malformed face corner 'x'"));
+      CHECK(
+        parseIdTech4Obj("v 0 0\n")
+        == error("At line 1: Expected a vertex coordinate, but got ''"));
+      CHECK(
+        parseIdTech4Obj("v 0 0 1x\n")
+        == error("At line 1: Expected a vertex coordinate, but got '1x'"));
+      CHECK(
+        parseIdTech4Obj("vt\n")
+        == error("At line 1: Expected a texture coordinate, but got ''"));
+
+      // std::from_chars reads these, but they are no numbers to the engine, and a
+      // position that is not finite has no bounds
+      CHECK(
+        parseIdTech4Obj("v 0 nan 0\n")
+        == error("At line 1: Expected a vertex coordinate, but got 'nan'"));
+      CHECK(
+        parseIdTech4Obj("v 0 0 -inf\n")
+        == error("At line 1: Expected a vertex coordinate, but got '-inf'"));
+      CHECK(
+        parseIdTech4Obj("vt inf 0\n")
+        == error("At line 1: Expected a texture coordinate, but got 'inf'"));
+      CHECK(
+        parseIdTech4Obj("vt 0 NaN\n")
+        == error("At line 1: Expected a texture coordinate, but got 'NaN'"));
+    }
+
+    SECTION("lines that the engine's importer reads differently are noted")
+    {
+      const auto triangle = std::string{"v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvn 0 0 1\n"};
+      const auto face = std::string{"f 1/1/1 2/1/1 3/1/1\n"};
+
+      using T = std::tuple<std::string, std::optional<std::string>>;
+
+      // clang-format off
+      const auto
+      [lines,                                       expected] = GENERATE_COPY(values<T>({
+      {face,                                        std::nullopt},
+      {"v 0 0 0 # a comment\n" + face,              std::nullopt},
+      {"v 0 0 0 1\n" + face,
+       "At line 6: a vertex has more than three numbers, and the engine fails on the "
+       "fourth"},
+      {"vt 0.5\n" + face,
+       "At line 6: a texture coordinate doesn't have two numbers, and the engine fails "
+       "on it"},
+      {"vt 0 0 0\n" + face,
+       "At line 6: a texture coordinate doesn't have two numbers, and the engine fails "
+       "on it"},
+      {"f 1/1 2/1 3/1\n",
+       "At line 6: a face corner is not p/t/n with positive indices, and the engine "
+       "can't read it"},
+      {"f 1//1 2//1 3//1\n",
+       "At line 6: a face corner is not p/t/n with positive indices, and the engine "
+       "can't read it"},
+      {"f -3/-1/-1 -2/-1/-1 -1/-1/-1\n",
+       "At line 6: a face corner is not p/t/n with positive indices, and the engine "
+       "can't read it"},
+      {"f 1/1/1 2/1/1 3/1/1 1/1/1\n",
+       "At line 6: a face has 4 corners, and the engine reads only the first three"},
+      // only the first such line
+      {face + "f 1 2 3 1\n" + "v 0 0 0 1\n",
+       "At line 7: a face corner is not p/t/n with positive indices, and the engine "
+       "can't read it"},
+      }));
+      // clang-format on
+
+      CAPTURE(lines);
+
+      const auto result = parseIdTech4Obj(triangle + lines);
+      REQUIRE(result.is_success());
+      CHECK(result.value().engineIncompatibility == expected);
     }
   }
 
@@ -401,6 +481,25 @@ TEST_CASE("LoadIdTech4ObjModel")
 
       CHECK(arrowResult.value().bounds(0) == vm::bbox3f{{-32, -8, -8}, {32, 12, 20}});
       CHECK(arrowResult.value().surface(0).skinCount() == 3u);
+    }
+
+    SECTION("a line that the engine reads differently is reported")
+    {
+      logger.warnings.clear();
+
+      // the engine would show one triangle of the quad
+      const auto quad = std::string{
+        "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvt 0 0\nvn 0 0 1\n"
+        "f 1/1/1 2/1/1 3/1/1 4/1/1\n"};
+      REQUIRE(
+        loadIdTech4ObjModel("quad.obj", quad, findMaterial, loadDefaultMaterial, logger)
+          .is_success());
+
+      CHECK(
+        logger.warnings
+        == std::vector<std::string>{
+          "Model 'quad.obj' may not load in RBDOOM-3-BFG as it is shown here. At line 7: "
+          "a face has 4 corners, and the engine reads only the first three"});
     }
 
     SECTION("a parse error is returned")

@@ -351,10 +351,12 @@ std::string ObjSerializer::exportMaterialName(
 
   // The engine takes the rest of a usemtl line as a material decl name. A material's
   // path is its decl, or the image that makes an implicit material of the same name;
-  // a material that wasn't found has only its name, which leaves out the root.
+  // a material that wasn't found has only its name, which leaves out the root. That name
+  // is map text, which std::filesystem::path may fail to convert, so idTech4Path builds
+  // its path.
   const auto path = material && !material->relativePath().empty()
                       ? material->relativePath()
-                      : m_materialRoot / materialName;
+                      : m_materialRoot / idTech4Path(materialName);
   return canonicalIdTech4DeclName(path.generic_string());
 }
 

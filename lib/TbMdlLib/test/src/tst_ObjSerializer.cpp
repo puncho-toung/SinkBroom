@@ -563,6 +563,24 @@ f 8/4/6 6/2/6 7/1/6
       CHECK(groups[1].front() == "usemtl textures/base_wall/bar");
     }
 
+    SECTION("a material name that is no valid path is written all the same")
+    {
+      // map text may have any bytes, and in code page 1252, where 0x81 is unmapped, a
+      // std::filesystem::path made from this name would throw
+      map.defaultLayer()->addChild(new mdl::BrushNode{
+        builder.createCube(
+          64.0,
+          "base_wall/\x81"
+          "foo")
+        | kdl::value()});
+
+      writeMap();
+
+      const auto groups = readGroups(objStream.str());
+      REQUIRE(groups.size() == 1u);
+      CHECK(groups[0].front() == "usemtl textures/base_wall/_foo");
+    }
+
     SECTION("a patch is written as triangles")
     {
       map.defaultLayer()->addChild(new mdl::PatchNode{mdl::BezierPatch{

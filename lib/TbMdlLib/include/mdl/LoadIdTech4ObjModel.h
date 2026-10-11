@@ -83,8 +83,11 @@ struct IdTech4ObjData
   // canonical decl names, in the order of their first usemtl
   std::vector<std::filesystem::path> materialNames;
   std::vector<IdTech4ObjTriangle> triangles;
+  // the first line that the engine's importer would fail on or read only in part, as
+  // "At line L: reason", or nothing if it reads the file as it is read here
+  std::optional<std::string> engineIncompatibility;
 
-  kdl_reflect_decl(IdTech4ObjData, materialNames, triangles);
+  kdl_reflect_decl(IdTech4ObjData, materialNames, triangles, engineIncompatibility);
 };
 
 /**
@@ -98,8 +101,14 @@ struct IdTech4ObjData
  * fan, and the corners of each triangle are reversed. Normals, smoothing groups,
  * objects, groups, lines, mtllib and comments are skipped.
  *
- * Returns an error that names the line for an unknown statement, a malformed number or
- * an index out of range, and an error if the file has no vertices or no faces.
+ * This accepts more than the engine, which fails on a vertex with a fourth number, a
+ * texture coordinate without exactly two numbers and a face corner that is not p/t/n
+ * with positive indices, and which reads only the first three corners of a face. The
+ * first such line is noted in engineIncompatibility.
+ *
+ * Returns an error that names the line for an unknown statement, a malformed or
+ * non-finite number or an index out of range, and an error if the file has no vertices
+ * or no faces.
  */
 Result<IdTech4ObjData> parseIdTech4Obj(std::string_view str);
 
@@ -115,7 +124,8 @@ bool canLoadIdTech4ObjModel(const std::filesystem::path& path);
  * The skins of the surface are the materials that the usemtl names resolve to with
  * findMaterial, in the order of their first use, followed by a default skin for the faces
  * before the first usemtl. A name that doesn't resolve gets loadDefaultMaterial(name),
- * which keeps the name, and one warning lists all such names.
+ * which keeps the name, and one warning lists all such names. Another warning names the
+ * first line that the engine would fail on or read only in part, if there is one.
  */
 Result<EntityModelData> loadIdTech4ObjModel(
   std::string name,
