@@ -44,6 +44,7 @@
 #include "mdl/EntityModelManager.h"
 #include "mdl/EntityNaming.h"
 #include "mdl/EntityNode.h"
+#include "mdl/EntityRotationKeyValidator.h"
 #include "mdl/EnvironmentConfig.h"
 #include "mdl/GameFileSystem.h"
 #include "mdl/GameInfo.h"
@@ -1149,6 +1150,11 @@ void Map::registerValidators()
       m_worldNode->registerValidator(
         std::make_unique<BrushEntityModelValidator>(*naming));
     }
+  }
+
+  if (m_worldNode->entityPropertyConfig().rotationPolicy == EntityRotationPolicy::IdTech4)
+  {
+    m_worldNode->registerValidator(std::make_unique<EntityRotationKeyValidator>());
   }
 }
 
