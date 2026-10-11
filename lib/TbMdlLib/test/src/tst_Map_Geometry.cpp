@@ -467,6 +467,84 @@ TEST_CASE("Map_Geometry")
     }
   }
 
+  SECTION("rotateSelection with the id Tech 4 rotation policy")
+  {
+    auto fixtureConfig = MapFixtureConfig{};
+    fixtureConfig.gameInfo.gameConfig.entityConfig.rotationPolicy =
+      EntityRotationPolicy::IdTech4;
+    auto& map = fixture.create(fixtureConfig);
+    REQUIRE(
+      map.worldNode().entityPropertyConfig().rotationPolicy
+      == EntityRotationPolicy::IdTech4);
+
+    SECTION("A point entity's rotation is written to angles")
+    {
+      auto* entityNode = new EntityNode{Entity{{
+        {"classname", "some_point_entity"},
+        {"rotation", "0 1 0 -1 0 0 0 0 1"},
+        {"angle", "45"},
+      }}};
+
+      addNodes(map, {{&parentForNodes(map), {entityNode}}});
+      selectNodes(map, {entityNode});
+
+      // 45 degrees clockwise about the Z axis through the entity's origin
+      rotateSelection(map, vm::vec3d{0, 0, 0}, vm::vec3d{0, 0, 1}, vm::to_radians(-45.0));
+      CHECK(*entityNode->entity().property("angles") == "0 45 0");
+      CHECK(!entityNode->entity().hasProperty("rotation"));
+      CHECK(!entityNode->entity().hasProperty("angle"));
+
+      map.undoCommand();
+      CHECK(*entityNode->entity().property("rotation") == "0 1 0 -1 0 0 0 0 1");
+      CHECK(*entityNode->entity().property("angle") == "45");
+      CHECK(!entityNode->entity().hasProperty("angles"));
+    }
+
+    SECTION("An entity with brushes never gets angles")
+    {
+      const auto builder = BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()};
+      auto* brushNode = new BrushNode{
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {32, 32, 32}}, "material")
+        | kdl::value()};
+
+      auto* entityNode = new EntityNode{Entity{{
+        {"classname", "func_door"},
+        {"angle", "45"},
+      }}};
+
+      addNodes(map, {{&parentForNodes(map), {entityNode}}});
+      addNodes(map, {{entityNode, {brushNode}}});
+      selectNodes(map, {brushNode});
+
+      rotateSelection(
+        map, map.selectionBounds()->center(), vm::vec3d{0, 0, 1}, vm::to_radians(90.0));
+
+      // the angle of a door is the direction in which it opens
+      CHECK(*entityNode->entity().property("angle") == "135");
+      CHECK(!entityNode->entity().hasProperty("angles"));
+      CHECK(!entityNode->entity().hasProperty("rotation"));
+    }
+
+    SECTION("The angles of an entity with brushes are not touched")
+    {
+      auto* brushNode = createBrushNode(map);
+      auto* entityNode = new EntityNode{Entity{{
+        {"classname", "func_static"},
+        {"angles", "0 90 0"},
+      }}};
+
+      addNodes(map, {{&parentForNodes(map), {entityNode}}});
+      addNodes(map, {{entityNode, {brushNode}}});
+      selectNodes(map, {brushNode});
+
+      rotateSelection(
+        map, map.selectionBounds()->center(), vm::vec3d{0, 0, 1}, vm::to_radians(90.0));
+
+      CHECK(*entityNode->entity().property("angles") == "0 90 0");
+      CHECK(!entityNode->entity().hasProperty("angle"));
+    }
+  }
+
   SECTION("scaleSelection")
   {
     auto& map = fixture.create();

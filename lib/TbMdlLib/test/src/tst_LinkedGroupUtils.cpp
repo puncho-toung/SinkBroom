@@ -806,6 +806,66 @@ TEST_CASE("LinkedGroupUtils")
         CHECK(entity.protectedProperties().empty());
       }
     }
+
+    SECTION("Entity rotations are updated by the rotation policy of the game")
+    {
+      const auto worldBounds = vm::bbox3d{8192.0};
+
+      // updates a target group turned by 45 degrees clockwise from a source entity that
+      // is turned by 90 degrees counter-clockwise
+      const auto updateTargetEntity = [&](const EntityRotationPolicy rotationPolicy) {
+        auto worldNode = WorldNode{
+          EntityPropertyConfig{.rotationPolicy = rotationPolicy},
+          Entity{},
+          MapFormat::Quake3};
+
+        auto* sourceGroupNode = new GroupNode{Group{"group"}};
+        auto* sourceEntityNode = new EntityNode{Entity{{
+          {"classname", "some_class"},
+          {"rotation", "0 1 0 -1 0 0 0 0 1"},
+        }}};
+        sourceGroupNode->addChild(sourceEntityNode);
+
+        auto* targetGroupNode =
+          static_cast<GroupNode*>(sourceGroupNode->cloneRecursively(worldBounds));
+        transformNode(
+          *targetGroupNode,
+          vm::rotation_matrix(0.0, 0.0, vm::to_radians(-45.0)),
+          worldBounds);
+
+        worldNode.defaultLayer()->addChildren({sourceGroupNode, targetGroupNode});
+
+        auto updatedEntity = Entity{};
+        updateLinkedGroups(*sourceGroupNode, {targetGroupNode}, worldBounds, taskManager)
+          | kdl::transform([&](const UpdateLinkedGroupsResult& r) {
+              REQUIRE(r.size() == 1u);
+              REQUIRE(r.front().second.size() == 1u);
+              const auto* newEntityNode =
+                dynamic_cast<EntityNode*>(r.front().second.front().get());
+              REQUIRE(newEntityNode != nullptr);
+              updatedEntity = newEntityNode->entity();
+            })
+          | kdl::transform_error([](const auto&) { FAIL(); });
+        return updatedEntity;
+      };
+
+      SECTION("Quake")
+      {
+        // the Quake rules don't read rotation and write the turn to angle
+        const auto entity = updateTargetEntity(EntityRotationPolicy::Quake);
+        CHECK(*entity.property("rotation") == "0 1 0 -1 0 0 0 0 1");
+        CHECK(*entity.property("angle") == "315");
+        CHECK(!entity.hasProperty("angles"));
+      }
+
+      SECTION("IdTech4")
+      {
+        const auto entity = updateTargetEntity(EntityRotationPolicy::IdTech4);
+        CHECK(*entity.property("angles") == "0 45 0");
+        CHECK(!entity.hasProperty("rotation"));
+        CHECK(!entity.hasProperty("angle"));
+      }
+    }
   }
 
   SECTION("initializeLinkIds")

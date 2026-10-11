@@ -26,6 +26,7 @@
 #include "mdl/EntityModel.h"
 #include "mdl/EntityNode.h"
 
+#include "kd/ranges/to.h"
 #include "kd/reflection_impl.h"
 #include "kd/string_compare.h"
 #include "kd/string_utils.h"
@@ -36,6 +37,7 @@
 #include "vm/vec_io.h"
 
 #include <ostream>
+#include <ranges>
 
 namespace tb::mdl
 {
@@ -547,6 +549,111 @@ std::optional<EntityProperty> applyEntityRotation(
   }
 }
 
+std::vector<std::string> idTech4ConvertedRotationKeys(const Entity& entity)
+{
+  static const auto lightKeys = std::vector<std::string>{
+    EntityPropertyKeys::LightRotation,
+    EntityPropertyKeys::Rotation,
+    EntityPropertyKeys::LightAngles,
+  };
+  static const auto otherKeys = std::vector<std::string>{
+    EntityPropertyKeys::Rotation,
+  };
+
+  return (isIdTech4Light(entity) ? lightKeys : otherKeys)
+         | std::views::filter([&](const auto& key) { return entity.hasProperty(key); })
+         | kdl::ranges::to<std::vector>();
+}
+
+namespace
+{
+
+/**
+ * Returns the given rotation, transformed, as "angles": pitch, yaw and roll in whole
+ * degrees, with a positive pitch pointing down. Returns nothing for a degenerate
+ * rotation, which has no angles.
+ */
+std::optional<EntityProperty> idTech4AnglesProperty(
+  const vm::mat4x4d& transformation, const vm::mat4x4d& rotation)
+{
+  const auto yawPitchRoll = entityYawPitchRoll(transformation, rotation);
+  auto pitchYawRoll =
+    vm::round(vm::vec3d{yawPitchRoll.y(), yawPitchRoll.x(), yawPitchRoll.z()});
+  if (vm::is_nan(pitchYawRoll))
+  {
+    return std::nullopt;
+  }
+
+  for (size_t i = 0; i < 3; ++i)
+  {
+    // the pitch of a turn about the Z axis comes out as -0, which would be written as
+    // such
+    if (pitchYawRoll[i] == 0.0)
+    {
+      pitchYawRoll[i] = 0.0;
+    }
+  }
+
+  return EntityProperty{EntityPropertyKeys::Angles, kdl::str_to_string(pitchYawRoll)};
+}
+
+EntityRotationUpdate applyIdTech4EntityRotation(
+  const Entity& entity, const vm::mat4x4d& transformation)
+{
+  if (entity.classname() == EntityPropertyValues::NoClassname)
+  {
+    return {};
+  }
+
+  if (!entity.pointEntity())
+  {
+    // The brushes are transformed themselves, so the entity never gets "angles" or
+    // "rotation", which would turn them a second time in the game. Its "angle" is the
+    // direction of a mover, with -1 for up and -2 for down (idMover_Binary::GetMovedir).
+    if (entity.hasProperty(EntityPropertyKeys::Angle))
+    {
+      const auto info = EntityRotationInfo{
+        EntityRotationType::AngleUpDown,
+        EntityPropertyKeys::Angle,
+        EntityRotationUsage::Allowed};
+      return {applyEntityRotation(entity.properties(), info, transformation), {}};
+    }
+    return {};
+  }
+
+  const auto rotation =
+    entityRotation(entity.properties(), idTech4EntityRotationInfo(entity));
+
+  if (idTech4KeepsAngle(entity))
+  {
+    // a direction straight up or down has no yaw, so keep the old one
+    const auto direction = transformation * rotation * vm::vec3d{1, 0, 0};
+    if (vm::is_zero(direction.xy(), vm::Cd::almost_zero()))
+    {
+      return {};
+    }
+    return {setEntityRotationAngle(EntityPropertyKeys::Angle, direction), {}};
+  }
+
+  auto angles = idTech4AnglesProperty(transformation, rotation);
+  if (!angles)
+  {
+    return {};
+  }
+
+  // the engine reads "angles" only if none of these is present, and "angle" only if
+  // "angles" is not present
+  auto remove = idTech4ConvertedRotationKeys(entity);
+  if (entity.hasProperty(EntityPropertyKeys::Angle))
+  {
+    remove.push_back(EntityPropertyKeys::Angle);
+  }
+
+  return {std::move(angles), std::move(remove)};
+}
+
+} // namespace
+
 EntityRotationUpdate applyEntityRotation(
   const Entity& entity,
   const vm::mat4x4d& transformation,
@@ -555,12 +662,13 @@ EntityRotationUpdate applyEntityRotation(
   switch (policy)
   {
   case EntityRotationPolicy::Quake:
-  case EntityRotationPolicy::IdTech4:
     return {
       applyEntityRotation(
         entity.properties(), entityRotationInfo(entity), transformation),
       {},
     };
+  case EntityRotationPolicy::IdTech4:
+    return applyIdTech4EntityRotation(entity, transformation);
     switchDefault();
   }
 }

@@ -552,6 +552,142 @@ TEST_CASE("EntityRotation")
       == expectedUpdate);
   }
 
+  SECTION("applyEntityRotation with an entity and the idtech4 policy")
+  {
+    using ERU = EntityRotationUpdate;
+
+    auto anglePropertyDef =
+      PropertyDefinition{"angle", PropertyValueTypes::String{}, "", ""};
+    auto targetPropertyDef =
+      PropertyDefinition{"target", PropertyValueTypes::LinkSource{}, "", ""};
+
+    const auto yaw90 = std::string{"0 1 0 -1 0 0 0 0 1"};
+    const auto turnZ45cw = vm::rotation_matrix(0.0, 0.0, vm::to_radians(-45.0));
+    const auto turnZ90ccw = vm::mat4x4d::rot_90_z_ccw();
+    const auto pitchDown30 = vm::rotation_matrix(0.0, vm::to_radians(30.0), 0.0);
+    const auto pitchUp90 = vm::rotation_matrix(0.0, vm::to_radians(-90.0), 0.0);
+
+    using T = std::tuple<
+      std::vector<EntityProperty>,
+      bool,
+      std::optional<EntityDefinitionInfo>,
+      vm::mat4x4d,
+      EntityRotationUpdate>;
+
+    // clang-format off
+    const auto
+    [entityProperties,                         point, entityDefinitionInfo,     transformation, expectedUpdate] = GENERATE_COPY(values<T>({
+    // a point entity's rotation is written to angles, and the properties the engine would read instead are removed
+    {{{"classname", "other"},
+      {"rotation", yaw90},
+      {"angle", "45"}},                        true,  std::nullopt,             turnZ45cw,      ERU{EntityProperty{"angles", "0 45 0"}, {"rotation", "angle"}}},
+    {{{"classname", "other"},
+      {"angles", "0 90 0"},
+      {"angle", "45"}},                        true,  std::nullopt,             turnZ45cw,      ERU{EntityProperty{"angles", "0 45 0"}, {"angle"}}},
+    {{{"classname", "other"},
+      {"angle", "90"}},                        true,  std::nullopt,             turnZ45cw,      ERU{EntityProperty{"angles", "0 45 0"}, {"angle"}}},
+    {{{"classname", "other"}},                 true,  std::nullopt,             turnZ90ccw,     ERU{EntityProperty{"angles", "0 90 0"}, {}}},
+    {{{"classname", "other"}},                 true,  std::nullopt,             pitchDown30,    ERU{EntityProperty{"angles", "30 0 0"}, {}}},
+
+    // a light also loses light_rotation and light_angles, even if it has a target
+    {{{"classname", "light"},
+      {"light_rotation", yaw90},
+      {"rotation", "1 0 0 0 1 0 0 0 1"},
+      {"light_angles", "0 0 0"},
+      {"angles", "0 0 0"},
+      {"angle", "0"}},                         true,  std::nullopt,             turnZ45cw,      ERU{EntityProperty{"angles", "0 45 0"}, {"light_rotation", "rotation", "light_angles", "angle"}}},
+    {{{"classname", "light"},
+      {"light_angles", "0 90 0"}},             true,  std::nullopt,             turnZ45cw,      ERU{EntityProperty{"angles", "0 45 0"}, {"light_angles"}}},
+    {{{"classname", "light"},
+      {"angle", "90"},
+      {"target", "xyz"}},                      true,  {{{targetPropertyDef}}},  turnZ45cw,      ERU{EntityProperty{"angles", "0 45 0"}, {"angle"}}},
+
+    // other entities keep light_rotation and light_angles, which the engine does not read
+    {{{"classname", "other"},
+      {"light_rotation", yaw90},
+      {"light_angles", "0 0 0"}},              true,  std::nullopt,             turnZ90ccw,     ERU{EntityProperty{"angles", "0 90 0"}, {}}},
+
+    // a class whose definition declares angle but not angles keeps its yaw in angle
+    {{{"classname", "other"}},                 true,  {{{anglePropertyDef}}},   turnZ90ccw,     ERU{EntityProperty{"angle", "90"}, {}}},
+    {{{"classname", "other"},
+      {"angle", "90"}},                        true,  {{{anglePropertyDef}}},   turnZ45cw,      ERU{EntityProperty{"angle", "45"}, {}}},
+    // unless the entity has angles or rotation
+    {{{"classname", "other"},
+      {"angles", "0 90 0"},
+      {"angle", "90"}},                        true,  {{{anglePropertyDef}}},   turnZ45cw,      ERU{EntityProperty{"angles", "0 45 0"}, {"angle"}}},
+    {{{"classname", "other"},
+      {"rotation", yaw90}},                    true,  {{{anglePropertyDef}}},   turnZ45cw,      ERU{EntityProperty{"angles", "0 45 0"}, {"rotation"}}},
+    // a direction straight up has no yaw, so the old one is kept
+    {{{"classname", "other"},
+      {"angle", "0"}},                         true,  {{{anglePropertyDef}}},   pitchUp90,      ERU{}},
+
+    // a rotation matrix is converted to angles in whole degrees: the angles of the rotation 30 45 60, and yaw 30.4
+    {{{"classname", "other"},
+      {"rotation", "0.612372 0.612372 -0.5 -0.047367 0.659740 0.75 0.789149 -0.435596 0.433013"}},
+                                               true,  std::nullopt,             vm::mat4x4d::identity(), ERU{EntityProperty{"angles", "30 45 60"}, {"rotation"}}},
+    {{{"classname", "other"},
+      {"rotation", "0.862514 0.506034 0 -0.506034 0.862514 0 0 0 1"}},
+                                               true,  std::nullopt,             vm::mat4x4d::identity(), ERU{EntityProperty{"angles", "0 30 0"}, {"rotation"}}},
+    // a degenerate rotation matrix has no angles
+    {{{"classname", "other"},
+      {"rotation", "0 0 0 0 0 0 0 0 0"}},      true,  std::nullopt,             turnZ90ccw,     ERU{}},
+
+    // an entity with brushes never gets angles or rotation, its angle is a mover's direction
+    {{{"classname", "other"},
+      {"angle", "90"}},                        false, std::nullopt,             turnZ90ccw,     ERU{EntityProperty{"angle", "180"}, {}}},
+    {{{"classname", "other"},
+      {"angle", "0"}},                         false, std::nullopt,             pitchUp90,      ERU{EntityProperty{"angle", "-1"}, {}}},
+    {{{"classname", "other"},
+      {"rotation", yaw90},
+      {"angles", "0 90 0"}},                   false, std::nullopt,             turnZ90ccw,     ERU{}},
+    {{{"classname", "other"}},                 false, std::nullopt,             turnZ90ccw,     ERU{}},
+
+    // an entity without a classname is not rotated
+    {{},                                       true,  std::nullopt,             turnZ90ccw,     ERU{}},
+    }));
+    // clang-format on
+
+    CAPTURE(entityProperties, point, entityDefinitionInfo, transformation);
+
+    const auto entityDefinition = createEntityDefinition(entityDefinitionInfo);
+
+    auto entity = Entity{entityProperties};
+    if (entityDefinition)
+    {
+      entity.setDefinition(&*entityDefinition);
+    }
+    entity.setPointEntity(point);
+
+    CHECK(
+      applyEntityRotation(entity, transformation, EntityRotationPolicy::IdTech4)
+      == expectedUpdate);
+  }
+
+  SECTION("idTech4ConvertedRotationKeys")
+  {
+    const auto allKeys = std::vector<EntityProperty>{
+      {"light_rotation", "1 0 0 0 1 0 0 0 1"},
+      {"rotation", "1 0 0 0 1 0 0 0 1"},
+      {"light_angles", "0 0 0"},
+      {"angles", "0 0 0"},
+      {"angle", "0"},
+    };
+
+    auto light = Entity{allKeys};
+    light.setClassname("light");
+    CHECK(
+      idTech4ConvertedRotationKeys(light)
+      == std::vector<std::string>{"light_rotation", "rotation", "light_angles"});
+
+    auto other = Entity{allKeys};
+    other.setClassname("other");
+    CHECK(idTech4ConvertedRotationKeys(other) == std::vector<std::string>{"rotation"});
+
+    CHECK(
+      idTech4ConvertedRotationKeys(Entity{{{"classname", "light"}, {"angles", "0 0 0"}}})
+        .empty());
+  }
+
   SECTION("applyEntityRotationUpdate")
   {
     auto entity = Entity{{

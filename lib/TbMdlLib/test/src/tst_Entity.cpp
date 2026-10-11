@@ -874,6 +874,37 @@ TEST_CASE("EntityTest")
         CHECK(*entity.property(EntityPropertyKeys::Angle) == "0");
       }
     }
+
+    SECTION("Replaces rotation properties by angles under the id Tech 4 policy")
+    {
+      entity.setClassname("some_class");
+      entity.addOrUpdateProperty(EntityPropertyKeys::Rotation, "0 1 0 -1 0 0 0 0 1");
+      entity.addOrUpdateProperty(EntityPropertyKeys::Angle, "45");
+
+      const auto rotation = vm::rotation_matrix(0.0, 0.0, vm::to_radians(-45.0));
+
+      SECTION("If property update after transform is enabled")
+      {
+        entity.transform(rotation, true, EntityRotationPolicy::IdTech4);
+        CHECK(
+          entity.properties()
+          == std::vector<EntityProperty>{
+            {EntityPropertyKeys::Classname, "some_class"},
+            {EntityPropertyKeys::Angles, "0 45 0"},
+          });
+        CHECK(
+          entity.rotation(EntityRotationPolicy::IdTech4)
+          == vm::approx{vm::rotation_matrix(0.0, 0.0, vm::to_radians(45.0))});
+      }
+
+      SECTION("If property update after transform is disabled")
+      {
+        entity.transform(rotation, false, EntityRotationPolicy::IdTech4);
+        CHECK(entity.hasProperty(EntityPropertyKeys::Rotation));
+        CHECK(*entity.property(EntityPropertyKeys::Angle) == "45");
+        CHECK(!entity.hasProperty(EntityPropertyKeys::Angles));
+      }
+    }
   }
 
   SECTION("modelScaleExpressionThrows")

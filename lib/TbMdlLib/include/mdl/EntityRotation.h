@@ -101,8 +101,21 @@ std::optional<EntityProperty> applyEntityRotation(
   const vm::mat4x4d& transformation);
 
 /**
+ * Returns the properties that the id Tech 4 rotation policy reads the rotation of the
+ * given point entity from and replaces by "angles" when it rotates the entity:
+ * "rotation", and for a light also "light_rotation" and "light_angles". Returns only the
+ * present properties, in the order in which the engine reads them.
+ */
+std::vector<std::string> idTech4ConvertedRotationKeys(const Entity& entity);
+
+/**
  * Returns the property changes that make the given entity's rotation properties
  * reflect the given transformation, which must not contain a translation.
+ *
+ * The id Tech 4 policy writes the rotation of a point entity to "angles" and removes the
+ * properties that the engine would read instead, except for a class whose definition
+ * declares "angle" but not "angles", which keeps its yaw in "angle". Of an entity with
+ * brushes, it only turns "angle", the direction of a mover.
  */
 EntityRotationUpdate applyEntityRotation(
   const Entity& entity,
