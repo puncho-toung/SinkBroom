@@ -2489,7 +2489,9 @@ TEST_CASE("Brush")
   {
     auto taskManager = kdl::task_manager{};
 
-    const auto worldBounds = vm::bbox3d{8192.0};
+    // run every regression test at the bounds it was written for and at the hard world
+    // bounds of Doom 3 BFG, whose coordinates are 16 times as large
+    const auto worldBounds = GENERATE(vm::bbox3d{8192.0}, vm::bbox3d{131072.0});
 
     SECTION("constructWithFailingFaces")
     {
@@ -3860,19 +3862,21 @@ TEST_CASE("Brush")
         ( -0 -9172.577439594781 9170.337780338887 ) ( -0.70719313621521 -9172.577439594781 9170.337780338887 ) ( -0 -9171.870419133222 9171.044973475102 ) piper2a [ 1 -0 0 0 ] [ 0 -0.7070204385905267 -0.7071931132408313 0 ] 0 1 1
       })";
 
-      // the brush only fails to build at these world bounds
-      const auto largeWorldBounds = vm::bbox3d{32768.0};
+      // the brush fails to build at these world bounds, the default hard world bounds
+      // and those of Doom 3 BFG
+      for (const auto& largeWorldBounds : {vm::bbox3d{32768.0}, vm::bbox3d{131072.0}})
+      {
+        auto status = TestParserStatus{};
 
-      auto status = TestParserStatus{};
-
-      // the brush is not closed, so it is skipped
-      CHECK(
-        NodeReader::read(
-          brushString, MapFormat::Valve, largeWorldBounds, {}, status, taskManager)
-        == Result<std::vector<Node*>>{std::vector<Node*>{}});
-      CHECK(
-        status.messages(LogLevel::Error)
-        == std::vector<std::string>{"At line 1, column 1: Brush is incomplete"});
+        // the brush is not closed, so it is skipped
+        CHECK(
+          NodeReader::read(
+            brushString, MapFormat::Valve, largeWorldBounds, {}, status, taskManager)
+          == Result<std::vector<Node*>>{std::vector<Node*>{}});
+        CHECK(
+          status.messages(LogLevel::Error)
+          == std::vector<std::string>{"At line 1, column 1: Brush is incomplete"});
+      }
     }
 
     SECTION("findInitialEdgeFail")

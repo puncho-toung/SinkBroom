@@ -61,6 +61,7 @@ enum class MapFormat;
 enum class VisualEffect;
 
 struct EnvironmentConfig;
+struct GameConfig;
 struct GameInfo;
 struct SelectionChange;
 } // namespace mdl
@@ -91,6 +92,15 @@ class MapDocument
 {
 public:
   static const vm::bbox3d DefaultWorldBounds;
+
+  /**
+   * Returns the hard world bounds for new and opened documents of the given game: the
+   * smallest box that contains both DefaultWorldBounds and the game's soft map bounds,
+   * or DefaultWorldBounds if the game declares no soft map bounds. A game whose world is
+   * larger than the default bounds (and says so by way of its soft map bounds) thereby
+   * gets a hard bound that does not clip its brushes.
+   */
+  static vm::bbox3d worldBoundsForGame(const mdl::GameConfig& gameConfig);
 
   Notifier<> documentWasLoadedNotifier;
   Notifier<> documentWasSavedNotifier;

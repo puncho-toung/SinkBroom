@@ -28,6 +28,7 @@
 #include "mdl/CommandProcessor.h"
 #include "mdl/EditorContext.h"
 #include "mdl/EntityModelManager.h"
+#include "mdl/GameConfig.h"
 #include "mdl/GameInfo.h"
 #include "mdl/Grid.h"
 #include "mdl/LinkedGroupUtils.h"
@@ -63,6 +64,13 @@ namespace tb::ui
 {
 
 const vm::bbox3d MapDocument::DefaultWorldBounds(-32768.0, 32768.0);
+
+vm::bbox3d MapDocument::worldBoundsForGame(const mdl::GameConfig& gameConfig)
+{
+  return gameConfig.softMapBounds
+           ? vm::merge(DefaultWorldBounds, *gameConfig.softMapBounds)
+           : DefaultWorldBounds;
+}
 
 MapDocument::MapDocument(
   kdl::task_manager& taskManager, gl::ResourceManager& resourceManager)

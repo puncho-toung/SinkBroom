@@ -142,6 +142,46 @@ TEST_CASE("NodeReader")
       == std::vector<std::string>{"At line 4, column 1: Brush is incomplete"});
   }
 
+  SECTION("worldBoundsLimitBrushExtent")
+  {
+    // a brush that reaches x = 50000, beyond the default hard world bounds of +-32768
+    // but within the +-131072 that Doom 3 BFG declares
+    const auto data = R"({
+( -64 -64 -16 ) ( -64 -63 -16 ) ( -64 -64 -15 ) __TB_empty 0 0 0 1 1
+( -64 -64 -16 ) ( -64 -64 -15 ) ( -63 -64 -16 ) __TB_empty 0 0 0 1 1
+( -64 -64 -16 ) ( -63 -64 -16 ) ( -64 -63 -16 ) __TB_empty 0 0 0 1 1
+( 50000 64 16 ) ( 50000 65 16 ) ( 50001 64 16 ) __TB_empty 0 0 0 1 1
+( 50000 64 16 ) ( 50001 64 16 ) ( 50000 64 17 ) __TB_empty 0 0 0 1 1
+( 50000 64 16 ) ( 50000 64 17 ) ( 50000 65 16 ) __TB_empty 0 0 0 1 1
+})";
+
+    SECTION("loads the brush if the world bounds contain it")
+    {
+      auto nodes = NodeReader::read(
+        data, MapFormat::Standard, vm::bbox3d{131072.0}, {}, status, taskManager);
+      REQUIRE(nodes);
+      REQUIRE(nodes.value().size() == 1);
+
+      auto* brushNode = dynamic_cast<BrushNode*>(nodes.value().front());
+      REQUIRE(brushNode != nullptr);
+      CHECK(
+        brushNode->logicalBounds()
+        == vm::bbox3d{{-64.0, -64.0, -16.0}, {50000.0, 64.0, 16.0}});
+      CHECK(status.messages(LogLevel::Error).empty());
+    }
+
+    SECTION("skips the brush if the world bounds cut it off")
+    {
+      CHECK(
+        NodeReader::read(
+          data, MapFormat::Standard, vm::bbox3d{32768.0}, {}, status, taskManager)
+        == Result<std::vector<Node*>>{std::vector<Node*>{}});
+      CHECK(
+        status.messages(LogLevel::Error)
+        == std::vector<std::string>{"At line 1, column 1: Brush is incomplete"});
+    }
+  }
+
   SECTION("skipsAndLogsFaceWithInvalidUvAttributes")
   {
     // brush 0's last face has a scale so large that its UV coordinate system matrix

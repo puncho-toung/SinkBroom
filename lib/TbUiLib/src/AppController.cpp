@@ -38,6 +38,7 @@
 #include "gl/ResourceManager.h"
 #include "gl/VboManager.h"
 #include "mdl/EnvironmentConfig.h"
+#include "mdl/GameInfo.h"
 #include "mdl/GameManager.h"
 #include "mdl/MapHeader.h"
 #include "prefs/Preferences.h"
@@ -306,7 +307,7 @@ bool AppController::newDocument()
   contract_assert(gameInfo != nullptr);
 
   return m_mapWindowManager->createDocument(
-           *gameInfo, mapFormat, MapDocument::DefaultWorldBounds)
+           *gameInfo, mapFormat, MapDocument::worldBoundsForGame(gameInfo->gameConfig))
          | kdl::transform([&]() {
              m_welcomeWindow->close();
              return true;
@@ -365,7 +366,7 @@ bool AppController::openDocument(const std::filesystem::path& path)
              return m_mapWindowManager->loadDocument(
                       *gameInfo,
                       mapFormat,
-                      MapDocument::DefaultWorldBounds,
+                      MapDocument::worldBoundsForGame(gameInfo->gameConfig),
                       std::move(absPath))
                     | kdl::transform([&]() {
                         m_welcomeWindow->close();

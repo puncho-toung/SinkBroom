@@ -45,6 +45,44 @@ TEST_CASE("MapDocument")
   auto taskManager = createTestTaskManager();
   auto resourceManager = gl::ResourceManager{};
 
+  SECTION("worldBoundsForGame")
+  {
+    SECTION("returns the default bounds if the game has no soft map bounds")
+    {
+      CHECK(!mdl::Doom3BFGGameInfo.gameConfig.softMapBounds);
+      CHECK(
+        MapDocument::worldBoundsForGame(mdl::Doom3BFGGameInfo.gameConfig)
+        == MapDocument::DefaultWorldBounds);
+    }
+
+    SECTION("returns the default bounds if the soft map bounds are smaller")
+    {
+      CHECK(mdl::QuakeGameInfo.gameConfig.softMapBounds == vm::bbox3d{4096.0});
+      CHECK(
+        MapDocument::worldBoundsForGame(mdl::QuakeGameInfo.gameConfig)
+        == MapDocument::DefaultWorldBounds);
+    }
+
+    SECTION("returns the soft map bounds if they are larger")
+    {
+      auto gameInfo = mdl::Doom3BFGGameInfo;
+      gameInfo.gameConfig.softMapBounds = vm::bbox3d{131072.0};
+
+      CHECK(MapDocument::worldBoundsForGame(gameInfo.gameConfig) == vm::bbox3d{131072.0});
+    }
+
+    SECTION("returns the hull of the default and the soft map bounds")
+    {
+      auto gameInfo = mdl::Doom3BFGGameInfo;
+      gameInfo.gameConfig.softMapBounds =
+        vm::bbox3d{{-65536.0, -4096.0, -4096.0}, {4096.0, 131072.0, 8192.0}};
+
+      CHECK(
+        MapDocument::worldBoundsForGame(gameInfo.gameConfig)
+        == vm::bbox3d{{-65536.0, -32768.0, -32768.0}, {32768.0, 131072.0, 32768.0}});
+    }
+  }
+
   SECTION("createDocument")
   {
     MapDocument::createDocument(

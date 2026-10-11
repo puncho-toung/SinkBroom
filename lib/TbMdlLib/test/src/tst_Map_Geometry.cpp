@@ -1236,7 +1236,9 @@ TEST_CASE("Map_Geometry")
 
   SECTION("snapVertices")
   {
-    auto& map = fixture.create();
+    // also run these at the hard world bounds of Doom 3 BFG
+    const auto worldBounds = GENERATE(vm::bbox3d{8129.0}, vm::bbox3d{131072.0});
+    auto& map = fixture.create({.worldBounds = worldBounds});
 
     SECTION("Don't crash when snapping vertices")
     {
