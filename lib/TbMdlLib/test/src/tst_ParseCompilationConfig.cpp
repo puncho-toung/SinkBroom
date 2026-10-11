@@ -29,10 +29,8 @@
 #include "mdl/ParseGameEngineConfig.h"
 
 #include "kd/k.h"
-#include "kd/ranges/to.h"
 
 #include <filesystem>
-#include <ranges>
 #include <string>
 #include <variant>
 #include <vector>
@@ -696,40 +694,48 @@ TEST_CASE("CompilationConfigParser")
     REQUIRE(gameEngineConfig.is_success());
     REQUIRE(gameEngineConfig.value().profiles.size() == 1u);
 
-    const auto& profiles = compilationConfig.value().profiles;
+    // dmap reads the map from the game file system, so it is exported into base/maps,
+    // and the engine's Valve 220 loader uses _tb_group, so TrenchBroom's properties
+    // stay; without -nogui, rbdmap keeps its text UI open and the task never ends
+    const auto exportMap = mdl::CompilationExportMap{
+      K(enabled),
+      !K(stripTbProperties),
+      std::nullopt,
+      std::nullopt,
+      "${GAME_DIR_PATH}/${MODS[0]}/maps/${MAP_BASE_NAME}.map"};
+    const auto runRbdmap = mdl::CompilationRunTool{
+      K(enabled),
+      "${rbdmap}",
+      R"(-nogui +set fs_basepath "${GAME_DIR_PATH}" ${MAP_BASE_NAME})",
+      K(treatNonZeroResultCodeAsError)};
+
     CHECK(
-      (profiles | std::views::transform(&CompilationProfile::name)
-       | kdl::ranges::to<std::vector>())
-      == std::vector<std::string>{
-        "dmap (rbdmap)", "dmap (in engine)", "dmap (rbdmap) and run"});
+      compilationConfig.value()
+      == mdl::CompilationConfig{{
+        {"dmap (rbdmap)", "${GAME_DIR_PATH}", {exportMap, runRbdmap}},
+        {"dmap (in engine)",
+         "${GAME_DIR_PATH}",
+         {
+           exportMap,
+           mdl::CompilationRunTool{
+             K(enabled),
+             "${rbdoom3bfg}",
+             R"(+set fs_basepath "${GAME_DIR_PATH}" +dmap ${MAP_BASE_NAME} +quit)",
+             K(treatNonZeroResultCodeAsError)},
+         }},
+        {"dmap (rbdmap) and run",
+         "${GAME_DIR_PATH}",
+         {
+           exportMap,
+           runRbdmap,
+           mdl::CompilationLaunchEngine{
+             K(enabled), "doom3bfg-rbdoom3bfg", K(treatLaunchFailureAsError)},
+         }},
+      }});
+
+    // the launch task refers to the shipped engine profile by its id
+    const auto& profiles = compilationConfig.value().profiles;
     REQUIRE(profiles.size() == 3u);
-
-    for (const auto& profile : profiles)
-    {
-      CAPTURE(profile.name);
-
-      // dmap reads the map from the game file system, so it is exported into base/maps;
-      // the engine's Valve 220 loader uses _tb_group, so TrenchBroom's properties stay
-      REQUIRE_FALSE(profile.tasks.empty());
-      const auto* exportTask = std::get_if<CompilationExportMap>(&profile.tasks.front());
-      REQUIRE(exportTask != nullptr);
-      CHECK_FALSE(exportTask->stripTbProperties);
-      CHECK(
-        exportTask->targetSpec
-        == "${GAME_DIR_PATH}/${MODS[0]}/maps/${MAP_BASE_NAME}.map");
-
-      for (const auto& task : profile.tasks)
-      {
-        if (const auto* toolTask = std::get_if<CompilationRunTool>(&task);
-            toolTask && toolTask->toolSpec == "${rbdmap}")
-        {
-          // without -nogui, rbdmap keeps its text UI open and the task never ends
-          CHECK(toolTask->parameterSpec.starts_with("-nogui "));
-          CHECK(toolTask->treatNonZeroResultCodeAsError);
-        }
-      }
-    }
-
     const auto* launchTask =
       std::get_if<CompilationLaunchEngine>(&profiles.back().tasks.back());
     REQUIRE(launchTask != nullptr);

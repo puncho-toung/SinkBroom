@@ -28,9 +28,12 @@
 #include "mdl/Tag.h"
 #include "mdl/TagMatcher.h"
 
+#include "kd/flat_set.h"
 #include "kd/ranges/to.h"
+#include "kd/string_utils.h"
 
 #include <filesystem>
+#include <memory>
 #include <ranges>
 #include <set>
 #include <string>
@@ -114,24 +117,23 @@ TEST_CASE("GameConfigParser")
           .shaderExtensions = {".mtr"},
           .shaderImageSearchPaths = {"_tb"},
         });
-      // Doom 3 has no WAD key; this would turn on the WAD editor and drag and drop
-      CHECK(config.materialConfig.property == std::nullopt);
 
+      // compared per field so that packages adding entity config keys need not edit this
+      // the first file is the default for new maps
       CHECK(
-        config.entityConfig
-        == EntityConfig{
-          // the first file is the default for new maps
-          .defFilePaths =
-            {"DOOM-3-slim.fgd",
-             "DOOM-3-all.fgd",
-             "DOOM-3-slim-and-models.fgd",
-             "DOOM-3-all-and-models.fgd",
-             "DOOM-3-models.fgd",
-             "DOOM-3-multiplayer.fgd"},
-          .defaultColor = RgbaF{0.6f, 0.6f, 0.6f, 1.0f},
-          .scaleExpression = std::nullopt,
-          .setDefaultProperties = false,
+        config.entityConfig.defFilePaths
+        == std::vector<std::filesystem::path>{
+          "DOOM-3-slim.fgd",
+          "DOOM-3-all.fgd",
+          "DOOM-3-slim-and-models.fgd",
+          "DOOM-3-all-and-models.fgd",
+          "DOOM-3-models.fgd",
+          "DOOM-3-multiplayer.fgd",
         });
+      CHECK(config.entityConfig.defaultColor == Color{RgbaF{0.6f, 0.6f, 0.6f, 1.0f}});
+      CHECK(config.entityConfig.scaleExpression == std::nullopt);
+      // the FGD defaults are entityDef spawnargs and must not be copied into maps
+      CHECK_FALSE(config.entityConfig.setDefaultProperties);
 
       CHECK(config.faceAttribsConfig.surfaceFlags.flags.empty());
       CHECK(config.faceAttribsConfig.contentFlags.flags.empty());
@@ -146,18 +148,79 @@ TEST_CASE("GameConfigParser")
          | kdl::ranges::to<std::vector>())
         == std::vector<std::string>{"rbdmap", "rbdoom3bfg"});
 
+      struct ExpectedTag
+      {
+        std::string name;
+        std::string match;
+        std::vector<std::string> patterns;
+        bool transparent;
+        std::string material = {};
+      };
+
+      // surface parameters are the lowercase names the .mtr parser derives
+      const auto expectedTags = std::vector<ExpectedTag>{
+        {"Trigger", "classname", {"trigger_*"}, true, "common/trigmulti"},
+        {"Caulk", "material", {"common/caulk"}, true},
+        {"Nodraw", "material", {"common/nodraw*"}, true},
+        {"Clip", "material", {"common/*clip*"}, true},
+        {"Collision", "material", {"common/collision"}, true},
+        {"Shadow", "material", {"common/shadow*"}, true},
+        {"Origin", "material", {"common/origin"}, true},
+        {"Visportal", "material", {"editor/visportal"}, true},
+        {"AAS", "material", {"editor/aas*"}, true},
+        {"Decal", "material", {"decals/*"}, true},
+        {"ClipSurface",
+         "surfaceparm",
+         {"playerclip", "monsterclip", "moveableclip", "ikclip"},
+         true},
+        {"TriggerSurface", "surfaceparm", {"trigger", "flashlight_trigger"}, true},
+        {"Areaportal", "surfaceparm", {"areaportal"}, true},
+        {"Invisible", "surfaceparm", {"nostages"}, true},
+        {"Liquid", "surfaceparm", {"water"}, false},
+        {"Translucent", "surfaceparm", {"coverage_translucent"}, true},
+        {"AASSurface", "surfaceparm", {"aassolid", "aasobstacle"}, true},
+        {"CollisionSurface", "surfaceparm", {"collision"}, true},
+        {"Broken", "surfaceparm", {"engine_defaulted"}, false},
+      };
+
+      const auto makeMatcher = [](const ExpectedTag& tag) -> std::unique_ptr<TagMatcher> {
+        if (tag.match == "classname")
+        {
+          return std::make_unique<EntityClassNameTagMatcher>(
+            tag.patterns.front(), tag.material);
+        }
+        if (tag.match == "material")
+        {
+          return std::make_unique<MaterialNameTagMatcher>(tag.patterns.front());
+        }
+        return std::make_unique<SurfaceParmTagMatcher>(
+          kdl::flat_set<std::string>{tag.patterns});
+      };
+
+      REQUIRE(config.smartTags.size() == expectedTags.size());
+      for (size_t i = 0; i < expectedTags.size(); ++i)
+      {
+        const auto& expected = expectedTags[i];
+        CAPTURE(expected.name);
+
+        const auto expectedTag = SmartTag{
+          expected.name,
+          expected.transparent ? std::vector{TagAttributes::Transparency}
+                               : std::vector<TagAttribute>{},
+          makeMatcher(expected)};
+
+        // SmartTag compares by name only; its stream output also shows the attributes
+        // and the matcher with its kind, pattern(s) and brush tag material
+        CHECK(config.smartTags[i].name() == expected.name);
+        CHECK(config.smartTags[i].attributes() == expectedTag.attributes());
+        CHECK(kdl::str_to_string(config.smartTags[i]) == kdl::str_to_string(expectedTag));
+      }
+
+      // a duplicate tag name would fail parsing
       const auto tagNames =
         config.smartTags
         | std::views::transform([](const auto& tag) { return std::string{tag.name()}; })
         | kdl::ranges::to<std::vector>();
-      CHECK(
-        tagNames
-        == std::vector<std::string>{
-          "Trigger",     "Caulk",          "Nodraw",           "Clip",      "Collision",
-          "Shadow",      "Origin",         "Visportal",        "AAS",       "Decal",
-          "ClipSurface", "TriggerSurface", "Areaportal",       "Invisible", "Liquid",
-          "Translucent", "AASSurface",     "CollisionSurface", "Broken",
-        });
       CHECK(
         std::set<std::string>{tagNames.begin(), tagNames.end()}.size()
         == tagNames.size());
