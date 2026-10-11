@@ -21,8 +21,12 @@
 #include "TestEnvironment.h"
 #include "base/Logger.h"
 #include "fs/DiskFileSystem.h"
+#include "gl/Material.h"
+#include "gl/Texture.h"
+#include "gl/TextureResource.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/EntityModel.h"
+#include "mdl/GameConfig.h"
 #include "mdl/LoadAssimpModel.h"
 
 #include "kd/ranges/contains.h"
@@ -193,6 +197,143 @@ TEST_CASE("loadAssimpModel")
     CHECK(modelData.value().surfaceCount() == 1);
     CHECK(modelData.value().surface(0).skinCount() == 1);
     CHECK(vm::approx(modelData.value().bounds(0)) == vm::bbox3f{{0, 0, 0}, {0, 1, 1}});
+  }
+
+  SECTION("id Tech 4 convention")
+  {
+    const auto basePath = getFixtureRoot() / "test/mdl/LoadAssimpModel";
+    auto fs = fs::DiskFileSystem{basePath};
+
+    auto requestedNames = std::vector<std::filesystem::path>{};
+    const auto findDecl =
+      [&](const std::filesystem::path& materialName) -> std::optional<gl::Material> {
+      requestedNames.push_back(materialName);
+      return gl::Material{"resolved decl", gl::createTextureResource(gl::Texture{16, 8})};
+    };
+    const auto findNothing =
+      [&](const std::filesystem::path& materialName) -> std::optional<gl::Material> {
+      requestedNames.push_back(materialName);
+      return std::nullopt;
+    };
+
+    // named.glb is a box from (0, 0, 0) to (4, 2, 1) in glTF coordinates, whose one
+    // material, "models/test/wedge", has an embedded 2x2 base colour texture
+
+    SECTION("a material decl named like the glTF material replaces its texture")
+    {
+      const auto modelData =
+        loadAssimpModel(
+          "idtech4/named.glb",
+          fs,
+          logger,
+          {.convention = ModelConvention::IdTech4, .findMaterial = findDecl})
+        | kdl::value();
+
+      REQUIRE(modelData.surfaceCount() == 1u);
+      REQUIRE(modelData.surface(0).skinCount() == 1u);
+
+      const auto* skin = modelData.surface(0).skin(0);
+      CHECK(skin->name() == "resolved decl");
+      REQUIRE(skin->texture() != nullptr);
+      CHECK(skin->texture()->width() == 16u);
+      CHECK(requestedNames == std::vector<std::filesystem::path>{"models/test/wedge"});
+    }
+
+    SECTION("without such a decl, the embedded texture is shown")
+    {
+      const auto modelData =
+        loadAssimpModel(
+          "idtech4/named.glb",
+          fs,
+          logger,
+          {.convention = ModelConvention::IdTech4, .findMaterial = findNothing})
+        | kdl::value();
+
+      REQUIRE(modelData.surface(0).skinCount() == 1u);
+
+      // the material is named after the glTF material
+      const auto* skin = modelData.surface(0).skin(0);
+      CHECK(skin->name() == "models/test/wedge");
+      REQUIRE(skin->texture() != nullptr);
+      CHECK(skin->texture()->width() == 2u);
+      CHECK(skin->texture()->height() == 2u);
+      CHECK(requestedNames == std::vector<std::filesystem::path>{"models/test/wedge"});
+    }
+
+    SECTION("the default convention shows the embedded texture with assimp's axes")
+    {
+      const auto modelData =
+        loadAssimpModel(
+          "idtech4/named.glb",
+          fs,
+          logger,
+          {.convention = ModelConvention::Default, .findMaterial = findDecl})
+        | kdl::value();
+
+      REQUIRE(modelData.surface(0).skinCount() == 1u);
+
+      const auto* skin = modelData.surface(0).skin(0);
+      CHECK(skin->name() == "models/test/wedge");
+      REQUIRE(skin->texture() != nullptr);
+      CHECK(skin->texture()->width() == 2u);
+      CHECK(requestedNames.empty());
+
+      // (x, y, z) becomes (z, x, y)
+      CHECK(vm::approx(modelData.bounds(0)) == vm::bbox3f{{0, 0, 0}, {1, 4, 2}});
+    }
+
+    SECTION("glTF models are turned the way the engine turns them")
+    {
+      // (x, y, z) becomes (x, -z, y), from the accessors' bounds and the node offsets
+      const auto [modelPath, expectedBounds] =
+        GENERATE(table<std::filesystem::path, vm::bbox3f>({
+          {"idtech4/named.glb", vm::bbox3f{{0, -1, 0}, {4, 0, 2}}},
+          {"alignment/glb/cuboid.glb", vm::bbox3f{{0, -2, 0}, {1, 0, 3}}},
+          {"alignment/gltf/cuboid.gltf", vm::bbox3f{{0, -2, 0}, {1, 0, 3}}},
+        }));
+
+      CAPTURE(modelPath);
+
+      const auto modelData =
+        loadAssimpModel(modelPath, fs, logger, {.convention = ModelConvention::IdTech4})
+        | kdl::value();
+
+      CHECK(modelData.pitchType() == PitchType::Normal);
+      CHECK(vm::approx(modelData.bounds(0)) == expectedBounds);
+    }
+
+    SECTION("other formats keep their axes")
+    {
+      const auto modelPath = GENERATE(values<std::filesystem::path>({
+        "alignment/obj/cuboid.obj",
+        "alignment/fbx/cuboid.fbx",
+        "alignment/ase/cuboid.ase",
+      }));
+
+      CAPTURE(modelPath);
+
+      const auto modelData =
+        loadAssimpModel(modelPath, fs, logger, {.convention = ModelConvention::IdTech4})
+        | kdl::value();
+
+      CHECK(vm::approx(modelData.bounds(0)) == vm::bbox3f{{0, 0, 0}, {2, 1, 3}});
+    }
+
+    SECTION("assimp's default material is not taken for a decl name")
+    {
+      // cuboid.obj has no usemtl, so its faces get assimp's DefaultMaterial
+      const auto modelData =
+        loadAssimpModel(
+          "alignment/obj/cuboid.obj",
+          fs,
+          logger,
+          {.convention = ModelConvention::IdTech4, .findMaterial = findDecl})
+        | kdl::value();
+
+      CHECK(requestedNames.empty());
+      REQUIRE(modelData.surface(0).skinCount() == 1u);
+      CHECK(modelData.surface(0).skin(0)->name() == "DefaultMaterial");
+    }
   }
 
   SECTION("diffuse texture with wrong extension")

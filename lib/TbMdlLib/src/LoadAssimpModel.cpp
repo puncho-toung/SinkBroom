@@ -31,6 +31,7 @@
 #include "gl/IndexRangeMapBuilder.h"
 #include "gl/Texture.h"
 #include "mdl/BrushFace.h"
+#include "mdl/IdTech4MaterialName.h"
 #include "mdl/LoadImageTexture.h"
 #include "mdl/MaterialUtils.h"
 
@@ -51,7 +52,10 @@
 #include <fmt/std.h>
 
 #include <algorithm>
+#include <optional>
 #include <ranges>
+#include <string>
+#include <string_view>
 
 namespace tb::mdl
 {
@@ -404,6 +408,25 @@ std::vector<gl::Texture> loadTexturesForMaterial(
   }
 
   return textures;
+}
+
+/**
+ * Finds the material decl that RBDOOM-3-BFG shades the given assimp material with: the
+ * one its name names (renderer/Model_gltf.cpp). Assimp gives the material it adds for
+ * meshes without one the name AI_DEFAULT_MATERIAL_NAME, which is not a decl.
+ */
+std::optional<gl::Material> findIdTech4Material(
+  const aiMaterial& material, const FindMaterialFunc& findMaterial)
+{
+  const auto name = material.GetName();
+  const auto nameView = std::string_view{name.C_Str(), size_t(name.length)};
+  if (nameView.empty() || nameView == AI_DEFAULT_MATERIAL_NAME)
+  {
+    return std::nullopt;
+  }
+
+  const auto materialName = canonicalIdTech4MaterialName(nameView);
+  return !materialName.empty() ? findMaterial(materialName) : std::nullopt;
 }
 
 struct AssimpComputedMeshData
@@ -769,7 +792,7 @@ bool useQuakeCoordinateSystem(const aiScene& scene)
   return isHl1;
 }
 
-aiMatrix4x4 getAxisTransform(const aiScene& scene)
+aiMatrix4x4 getAxisTransform(const aiScene& scene, const bool useIdTech4GltfAxes)
 {
   // These MUST be in32_t, or the metadata 'Get' function will get confused.
   int32_t xAxis = 0, yAxis = 0, zAxis = 0, xAxisSign = 0, yAxisSign = 0, zAxisSign = 0;
@@ -779,21 +802,26 @@ aiMatrix4x4 getAxisTransform(const aiScene& scene)
   // +X out of the screen (forward)
   // +Y points right
   // +Z points up
-  if (!(scene.mMetaData && scene.mMetaData->Get("UpAxis", zAxis)
-        && scene.mMetaData->Get("UpAxisSign", zAxisSign)
-        && scene.mMetaData->Get("FrontAxis", xAxis)
-        && scene.mMetaData->Get("FrontAxisSign", xAxisSign)
-        && scene.mMetaData->Get("CoordAxis", yAxis)
-        && scene.mMetaData->Get("CoordAxisSign", yAxisSign)
-        && scene.mMetaData->Get("UnitScaleFactor", unitScale)))
+  if (
+    useIdTech4GltfAxes
+    || !(
+      scene.mMetaData && scene.mMetaData->Get("UpAxis", zAxis)
+      && scene.mMetaData->Get("UpAxisSign", zAxisSign)
+      && scene.mMetaData->Get("FrontAxis", xAxis)
+      && scene.mMetaData->Get("FrontAxisSign", xAxisSign)
+      && scene.mMetaData->Get("CoordAxis", yAxis)
+      && scene.mMetaData->Get("CoordAxisSign", yAxisSign)
+      && scene.mMetaData->Get("UnitScaleFactor", unitScale)))
   {
     // By default, all 3D data from is provided in a right-handed coordinate system.
-    if (useQuakeCoordinateSystem(scene))
+    if (useIdTech4GltfAxes || useQuakeCoordinateSystem(scene))
     {
       // Quake models loaded by assimp use the following coordinate system:
       // +X out of the screen (mapped to +X)
       // +Y upwards (mapped to +Z)
       // +Z to the left (mapped to -Y)
+      // RBDOOM-3-BFG turns glTF models the same way with its blenderToDoomTransform
+      // (renderer/Model_gltf.cpp), and it ignores the file's metadata
       xAxis = 0;
       xAxisSign = 1;
       yAxis = 2;
@@ -839,7 +867,8 @@ Result<void> loadSceneFrame(
   const aiScene& scene,
   const size_t frameIndex,
   EntityModelData& model,
-  const std::string& name)
+  const std::string& name,
+  const bool useIdTech4GltfAxes)
 {
   // load the animation information for the current "frame" (animation)
   const auto boneTransforms =
@@ -855,7 +884,7 @@ Result<void> loadSceneFrame(
     *scene.mRootNode,
     scene,
     scene.mRootNode->mTransformation,
-    getAxisTransform(scene));
+    getAxisTransform(scene, useIdTech4GltfAxes));
 
   auto points = std::vector<vm::vec3f>{};
 
@@ -924,11 +953,19 @@ bool canLoadAssimpModel(const std::filesystem::path& path)
 }
 
 Result<EntityModelData> loadAssimpModel(
-  const std::filesystem::path& path, const fs::FileSystem& fs, Logger& logger)
+  const std::filesystem::path& path,
+  const fs::FileSystem& fs,
+  Logger& logger,
+  const AssimpModelOptions& options)
 {
-  const auto createMaterial = [](auto texture) {
+  const auto isIdTech4 = options.convention == ModelConvention::IdTech4;
+  const auto extension = kdl::path_to_lower(path.extension());
+  const auto useIdTech4GltfAxes =
+    isIdTech4 && (extension == ".gltf" || extension == ".glb");
+
+  const auto createMaterial = [](std::string name, auto texture) {
     auto textureResource = createTextureResource(std::move(texture));
-    return gl::Material{"", std::move(textureResource)};
+    return gl::Material{std::move(name), std::move(textureResource)};
   };
 
   try
@@ -969,17 +1006,34 @@ Result<EntityModelData> loadAssimpModel(
 
       // an assimp mesh will only ever have one material, but a material can have
       // multiple alternatives (this is how assimp handles skins)
+      const auto& material = *scene->mMaterials[mesh->mMaterialIndex];
 
-      // load skins for this surface
+      // under the id Tech 4 convention, a material decl named like the material wins, as
+      // in the engine; without one, the model still shows its own textures
+      if (
+        auto idTech4Material = isIdTech4 && options.findMaterial
+                                 ? findIdTech4Material(material, options.findMaterial)
+                                 : std::nullopt)
+      {
+        auto materials = std::vector<gl::Material>{};
+        materials.push_back(std::move(*idTech4Material));
+        surface.setSkins(std::move(materials));
+        continue;
+      }
+
+      // load skins for this surface, named after the material
+      const auto materialName = std::string{material.GetName().C_Str()};
       auto materials =
         loadTexturesForMaterial(*scene, mesh->mMaterialIndex, path, fs, logger)
-        | kdl::views::as_rvalue | std::views::transform(createMaterial)
+        | kdl::views::as_rvalue | std::views::transform([&](auto texture) {
+            return createMaterial(materialName, std::move(texture));
+          })
         | kdl::ranges::to<std::vector>();
       surface.setSkins(std::move(materials));
     }
 
     return std::views::iota(0u, numSequences) | std::views::transform([&](const auto i) {
-             return loadSceneFrame(*scene, i, data, modelPath);
+             return loadSceneFrame(*scene, i, data, modelPath, useIdTech4GltfAxes);
            })
            | kdl::fold | kdl::transform([&]() { return std::move(data); });
   }

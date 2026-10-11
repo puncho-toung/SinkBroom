@@ -125,7 +125,11 @@ Result<EntityModelData> loadEntityModelData(
            }
            if (canLoadAssimpModel(path))
            {
-             return loadAssimpModel(path, fs, logger);
+             return loadAssimpModel(
+               path,
+               fs,
+               logger,
+               {.convention = modelConvention, .findMaterial = findMaterial});
            }
            if (canLoadImageSpriteModel(path))
            {

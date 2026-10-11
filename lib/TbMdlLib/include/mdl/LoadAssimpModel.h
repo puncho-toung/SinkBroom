@@ -23,8 +23,11 @@
 
 #include "base/Result.h"
 #include "mdl/EntityModel.h"
+#include "mdl/GameConfig.h"
 
 #include <filesystem>
+#include <functional>
+#include <optional>
 
 namespace tb
 {
@@ -35,13 +38,36 @@ namespace fs
 class FileSystem;
 }
 
+namespace gl
+{
+class Material;
+}
+
 namespace mdl
 {
+
+using FindMaterialFunc =
+  std::function<std::optional<gl::Material>(const std::filesystem::path&)>;
+
+struct AssimpModelOptions
+{
+  /**
+   * Under ModelConvention::IdTech4, a mesh whose material name resolves with findMaterial
+   * as a canonical id Tech 4 decl name shows that material instead of the textures of its
+   * assimp material, and a glTF model is turned from Y up to Z up the way RBDOOM-3-BFG
+   * turns it, (x, y, z) to (x, -z, y).
+   */
+  ModelConvention convention = ModelConvention::Default;
+  FindMaterialFunc findMaterial = {};
+};
 
 bool canLoadAssimpModel(const std::filesystem::path& path);
 
 Result<EntityModelData> loadAssimpModel(
-  const std::filesystem::path& path, const fs::FileSystem& fs, Logger& logger);
+  const std::filesystem::path& path,
+  const fs::FileSystem& fs,
+  Logger& logger,
+  const AssimpModelOptions& options = {});
 
 } // namespace mdl
 } // namespace tb
