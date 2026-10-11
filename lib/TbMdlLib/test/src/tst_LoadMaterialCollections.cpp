@@ -712,7 +712,8 @@ TEST_CASE("LoadMaterialCollections")
             MaterialInfo{"test/table_declared", 16, 32},
             MaterialInfo{"test/table_undeclared", 32, 16},
             MaterialInfo{"test/tb_diffuse", 40, 8},
-            MaterialInfo{"test/tb_editor", 24, 24},
+            MaterialInfo{"test/tb_editor", 16, 32},
+            MaterialInfo{"test/tb_editor_shared", 24, 40},
             MaterialInfo{"test/translucent_lit", 16, 32},
             MaterialInfo{"test/two_sided", 16, 32},
             MaterialInfo{"test/unterminated", 32, 32},
@@ -730,9 +731,14 @@ TEST_CASE("LoadMaterialCollections")
 
     SECTION("preview images")
     {
-      // the editor image wins over the diffuse map, even when it exists only under _tb/
+      // the editor image wins over the diffuse map
       CHECK(material("test/precedence").texture()->width() == 32);
-      CHECK(material("test/tb_editor").texture()->width() == 24);
+
+      // an editor image found only under _tb/ counts only if some material, here one
+      // outside of the material root, uses it in a diffuse stage; otherwise the engine
+      // can't load it and uses the diffuse map
+      CHECK(material("test/tb_editor").texture()->width() == 16);
+      CHECK(material("test/tb_editor_shared").texture()->width() == 24);
 
       // a missing editor image falls back to the diffuse map, and without an editor
       // image and a diffuse stage, the first stage's image is used
@@ -846,7 +852,7 @@ TEST_CASE("LoadMaterialCollections")
     {
       CHECK(
         logger.countMessagesContaining(
-          "Loaded 21 materials from 3 files (2 defaulted, 1 unterminated); 20 under "
+          "Loaded 23 materials from 3 files (2 defaulted, 1 unterminated); 21 under "
           "textures/, 4 without a preview image")
         == 1);
     }
@@ -902,7 +908,7 @@ TEST_CASE("LoadMaterialCollections")
       CHECK(loadedShaders.fileCount == 3);
       CHECK(findShader(shaders, "textures/test/ignored") == nullptr);
 
-      CHECK(shaders.size() == 21);
+      CHECK(shaders.size() == 23);
       CHECK(std::ranges::is_sorted(shaders, std::less{}, &Quake3Shader::shaderPath));
       CHECK(std::ranges::all_of(shaders, [](const auto& shader) {
         return shader.format == Quake3Shader::Format::Doom3;

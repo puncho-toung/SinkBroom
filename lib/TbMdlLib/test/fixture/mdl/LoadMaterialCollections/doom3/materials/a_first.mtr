@@ -8,10 +8,19 @@ textures/test/precedence
 	diffusemap		textures/test/diffuse_d.tga
 }
 
-// the editor image exists only under _tb/, and still wins
+// the editor image exists only under _tb/, and no material uses it in a diffuse stage,
+// so the engine can't load it as a diffuse map and the diffuse map is used
 textures/test/tb_editor
 {
 	qer_editorimage	textures/test/tbonly_ed.tga
+	diffusemap		textures/test/diffuse_d.tga
+}
+
+// the editor image exists only under _tb/, and models/test/uses_tbshared in
+// b_second.mtr uses it in a diffuse stage, so it wins
+textures/test/tb_editor_shared
+{
+	qer_editorimage	textures/test/tbshared_ed.tga
 	diffusemap		textures/test/diffuse_d.tga
 }
 

@@ -13,3 +13,9 @@ models/test/crate
 {
 	diffusemap	models/test/crate_d.tga
 }
+
+// uses textures/test/tb_editor_shared's editor image in a diffuse stage
+models/test/uses_tbshared
+{
+	diffusemap	textures/test/tbshared_ed.tga
+}

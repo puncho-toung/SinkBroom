@@ -59,6 +59,7 @@
 #include <ranges>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace tb::mdl
 {
@@ -275,20 +276,6 @@ private:
 };
 
 /**
- * The state that the materials of one load share.
- */
-struct MaterialLoadContext
-{
-  DirectoryIndex directoryIndex;
-  // lowercase image path -> the texture resource of every material that shows it
-  std::unordered_map<
-    std::filesystem::path,
-    std::shared_ptr<gl::TextureResource>,
-    kdl::path_hash>
-    textureResources = {};
-};
-
-/**
  * Turns an image reference in a Doom 3 material into the path of the image file without
  * a root, or nothing for an image that the engine generates.
  */
@@ -317,6 +304,75 @@ std::optional<std::filesystem::path> normalizeScriptImageReference(
 
   return path;
 }
+
+using ImageSet = std::unordered_set<std::filesystem::path, kdl::path_hash>;
+
+/**
+ * Returns the name under which the engine's image manager knows the image that a
+ * reference names: lowercase and without extension (idImageManager::ImageFromFile).
+ */
+std::optional<std::filesystem::path> engineImageName(
+  const std::filesystem::path& reference)
+{
+  if (const auto path = normalizeScriptImageReference(reference))
+  {
+    return kdl::path_remove_extension(*path);
+  }
+  return std::nullopt;
+}
+
+/**
+ * Returns the engine names of the images that the given shaders use in diffuse stages.
+ */
+ImageSet findDiffuseImages(const std::vector<Quake3Shader>& shaders)
+{
+  auto diffuseImages = ImageSet{};
+  for (const auto& shader : shaders)
+  {
+    for (const auto& stage : shader.stages)
+    {
+      if (stage.lighting == Quake3ShaderStage::Lighting::Diffuse)
+      {
+        if (auto name = engineImageName(stage.map))
+        {
+          diffuseImages.insert(std::move(*name));
+        }
+      }
+    }
+  }
+  return diffuseImages;
+}
+
+/**
+ * The state that the materials of one load share.
+ */
+struct MaterialLoadContext
+{
+  DirectoryIndex directoryIndex;
+  // the engine names of the images that some material uses in a diffuse stage, from all
+  // shaders including those outside of the material root; set up front, or built from
+  // diffuseImageShaders on first use
+  std::optional<ImageSet> diffuseImages = std::nullopt;
+  const std::vector<Quake3Shader>* diffuseImageShaders = nullptr;
+  // lowercase image path -> the texture resource of every material that shows it
+  std::unordered_map<
+    std::filesystem::path,
+    std::shared_ptr<gl::TextureResource>,
+    kdl::path_hash>
+    textureResources = {};
+
+  bool isDiffuseImage(const std::filesystem::path& reference)
+  {
+    if (!diffuseImages)
+    {
+      diffuseImages =
+        diffuseImageShaders ? findDiffuseImages(*diffuseImageShaders) : ImageSet{};
+    }
+
+    const auto name = engineImageName(reference);
+    return name && diffuseImages->contains(*name);
+  }
+};
 
 std::optional<std::filesystem::path> findScriptImageFile(
   const std::filesystem::path& path,
@@ -375,11 +431,18 @@ std::optional<std::filesystem::path> findScriptImageFile(
   return std::nullopt;
 }
 
+struct ResolvedScriptImage
+{
+  std::filesystem::path path;
+  // found only under one of materialConfig.shaderImageSearchPaths, not as a loose file
+  bool underSearchPath = false;
+};
+
 /**
  * Finds the image file that an image reference in a Doom 3 material names, as written and
  * then under each of materialConfig.shaderImageSearchPaths.
  */
-std::optional<std::filesystem::path> resolveScriptImage(
+std::optional<ResolvedScriptImage> resolveScriptImage(
   const std::filesystem::path& reference,
   const MaterialConfig& materialConfig,
   DirectoryIndex& directoryIndex)
@@ -392,7 +455,7 @@ std::optional<std::filesystem::path> resolveScriptImage(
 
   if (auto file = findScriptImageFile(*path, materialConfig, directoryIndex))
   {
-    return file;
+    return ResolvedScriptImage{std::move(*file), false};
   }
 
   for (const auto& searchPath : materialConfig.shaderImageSearchPaths)
@@ -400,11 +463,17 @@ std::optional<std::filesystem::path> resolveScriptImage(
     if (
       auto file = findScriptImageFile(searchPath / *path, materialConfig, directoryIndex))
     {
-      return file;
+      return ResolvedScriptImage{std::move(*file), true};
     }
   }
 
   return std::nullopt;
+}
+
+bool isEditorImage(const Quake3Shader& shader, const std::filesystem::path& reference)
+{
+  return !shader.editorImage.empty()
+         && kdl::path_to_lower(shader.editorImage) == kdl::path_to_lower(reference);
 }
 
 /**
@@ -416,13 +485,30 @@ std::optional<std::filesystem::path> resolveScriptImage(
 PreviewImage findDoom3PreviewImage(
   const Quake3Shader& shader,
   const MaterialConfig& materialConfig,
-  DirectoryIndex& directoryIndex)
+  MaterialLoadContext& context)
 {
   for (const auto& reference : shader.previewImages)
   {
-    if (auto path = resolveScriptImage(reference, materialConfig, directoryIndex))
+    if (
+      auto image = resolveScriptImage(reference, materialConfig, context.directoryIndex))
     {
-      return {std::move(*path), false};
+      // GetEditorImage loads the editor image as a diffuse map (renderer/Material.cpp:258
+      // at rbdoom/neo b19c3f76). The image manager keeps one image per usage
+      // (idImageManager::ImageFromFile, ImageManager.cpp:453), and retail Doom 3 BFG has
+      // no source images, only bimages generated per usage (idImage::GetGeneratedName,
+      // Image_load.cpp:525-532). An editor image that exists only as an export of, say,
+      // a bump map can't be loaded as a diffuse map, so the engine falls back to the
+      // first diffuse stage, whose image may have another size. An image found only
+      // under a search path, which is where such exports live, therefore counts as the
+      // editor image only if some material uses it in a diffuse stage, so that a diffuse
+      // bimage of it exists. A loose source image loads for any usage.
+      if (
+        image->underSearchPath && isEditorImage(shader, reference)
+        && !context.isDiffuseImage(reference))
+      {
+        continue;
+      }
+      return {std::move(image->path), false};
     }
   }
 
@@ -433,9 +519,11 @@ PreviewImage findDoom3PreviewImage(
   // engine doesn't do that either.
   if (shader.previewImages.empty())
   {
-    if (auto path = resolveScriptImage(shader.shaderPath, materialConfig, directoryIndex))
+    if (
+      auto image =
+        resolveScriptImage(shader.shaderPath, materialConfig, context.directoryIndex))
     {
-      return {std::move(*path), false};
+      return {std::move(image->path), false};
     }
   }
 
@@ -568,9 +656,8 @@ Result<gl::Material> loadShaderMaterial(
   MaterialLoadContext& context)
 {
   const auto isDoom3 = shader.format == Quake3Shader::Format::Doom3;
-  auto previewImage =
-    isDoom3 ? findDoom3PreviewImage(shader, materialConfig, context.directoryIndex)
-            : findShaderTexture(shader, fs, materialConfig);
+  auto previewImage = isDoom3 ? findDoom3PreviewImage(shader, materialConfig, context)
+                              : findShaderTexture(shader, fs, materialConfig);
 
   const auto prefixLength = kdl::path_length(materialConfig.root);
   auto shaderName = getMaterialNameFromPathSuffix(shader.shaderPath, prefixLength);
@@ -841,6 +928,7 @@ Result<gl::Material> loadMaterial(
 {
   auto context = MaterialLoadContext{
     .directoryIndex = DirectoryIndex{fs, materialConfig.extensions},
+    .diffuseImageShaders = &shaders,
   };
   return loadMaterial(
     fs,
@@ -871,6 +959,9 @@ Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
                .unterminatedCount = loadedShaders.unterminatedCount,
              };
 
+             // from every shader, before those outside of the root are dropped
+             auto diffuseImages = findDiffuseImages(loadedShaders.shaders);
+
              // Shaders outside of the root can't be used on brush faces, but they stay
              // available to entity models, which load their own.
              const auto shaders =
@@ -885,6 +976,7 @@ Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
                         const auto shaderIndex = makeShaderIndex(shaders);
                         auto context = MaterialLoadContext{
                           .directoryIndex = DirectoryIndex{fs, materialConfig.extensions},
+                          .diffuseImages = std::move(diffuseImages),
                         };
 
                         return materialPaths
