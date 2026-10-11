@@ -17,7 +17,10 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "TestEnvironment.h"
 #include "base/Uuid.h"
+#include "fs/DiskIO.h"
+#include "fs/Reader.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/GameEngineConfig.h"
 #include "mdl/ParseGameEngineConfig.h"
@@ -159,6 +162,27 @@ TEST_CASE("parseGameEngineConfig")
     REQUIRE(result);
     REQUIRE(result.value().profiles.size() == 1u);
     CHECK(result.value().profiles[0].id != "");
+  }
+
+  SECTION("shipped Doom 3 BFG profile")
+  {
+    const auto path = getFixtureRoot() / "games/Doom3BFG/GameEngineProfiles.cfg";
+    auto file = fs::Disk::openFile(path) | kdl::value();
+    auto reader = file->reader().buffer();
+
+    const auto result = parseGameEngineConfig(reader.stringView());
+    REQUIRE(result.is_success());
+    REQUIRE(result.value().profiles.size() == 1u);
+
+    const auto& profile = result.value().profiles.front();
+    // the compilation profile "dmap (rbdmap) and run" launches the engine by this id
+    CHECK(profile.id == "doom3bfg-rbdoom3bfg");
+    CHECK(profile.name == "RBDoom3BFG");
+    // the path is machine specific; users set it in the game engine dialog
+    CHECK(profile.path.empty());
+    CHECK(
+      profile.parameterSpec
+      == R"(+set fs_basepath "${GAME_DIR_PATH}" +devmap ${MAP_BASE_NAME})");
   }
 }
 

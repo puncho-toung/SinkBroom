@@ -17,12 +17,25 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "TestEnvironment.h"
+#include "fs/DiskIO.h"
+#include "fs/Reader.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/CompilationConfig.h"
+#include "mdl/CompilationProfile.h"
 #include "mdl/CompilationTask.h"
+#include "mdl/GameEngineConfig.h"
 #include "mdl/ParseCompilationConfig.h"
+#include "mdl/ParseGameEngineConfig.h"
 
 #include "kd/k.h"
+#include "kd/ranges/to.h"
+
+#include <filesystem>
+#include <ranges>
+#include <string>
+#include <variant>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -664,6 +677,63 @@ TEST_CASE("CompilationConfigParser")
              R"(C:\quake2\chaos\maps\)"},
          }},
       }});
+  }
+
+  SECTION("parseDoom3BfgProfiles")
+  {
+    const auto readFile = [](const std::filesystem::path& path) {
+      auto file = fs::Disk::openFile(path) | kdl::value();
+      auto reader = file->reader().buffer();
+      return std::string{reader.stringView()};
+    };
+
+    const auto gamePath = getFixtureRoot() / "games/Doom3BFG";
+    const auto compilationConfig =
+      parseCompilationConfig(readFile(gamePath / "CompilationProfiles.cfg"));
+    REQUIRE(compilationConfig.is_success());
+    const auto gameEngineConfig =
+      parseGameEngineConfig(readFile(gamePath / "GameEngineProfiles.cfg"));
+    REQUIRE(gameEngineConfig.is_success());
+    REQUIRE(gameEngineConfig.value().profiles.size() == 1u);
+
+    const auto& profiles = compilationConfig.value().profiles;
+    CHECK(
+      (profiles | std::views::transform(&CompilationProfile::name)
+       | kdl::ranges::to<std::vector>())
+      == std::vector<std::string>{
+        "dmap (rbdmap)", "dmap (in engine)", "dmap (rbdmap) and run"});
+    REQUIRE(profiles.size() == 3u);
+
+    for (const auto& profile : profiles)
+    {
+      CAPTURE(profile.name);
+
+      // dmap reads the map from the game file system, so it is exported into base/maps;
+      // the engine's Valve 220 loader uses _tb_group, so TrenchBroom's properties stay
+      REQUIRE_FALSE(profile.tasks.empty());
+      const auto* exportTask = std::get_if<CompilationExportMap>(&profile.tasks.front());
+      REQUIRE(exportTask != nullptr);
+      CHECK_FALSE(exportTask->stripTbProperties);
+      CHECK(
+        exportTask->targetSpec
+        == "${GAME_DIR_PATH}/${MODS[0]}/maps/${MAP_BASE_NAME}.map");
+
+      for (const auto& task : profile.tasks)
+      {
+        if (const auto* toolTask = std::get_if<CompilationRunTool>(&task);
+            toolTask && toolTask->toolSpec == "${rbdmap}")
+        {
+          // without -nogui, rbdmap keeps its text UI open and the task never ends
+          CHECK(toolTask->parameterSpec.starts_with("-nogui "));
+          CHECK(toolTask->treatNonZeroResultCodeAsError);
+        }
+      }
+    }
+
+    const auto* launchTask =
+      std::get_if<CompilationLaunchEngine>(&profiles.back().tasks.back());
+    REQUIRE(launchTask != nullptr);
+    CHECK(launchTask->engineProfileId == gameEngineConfig.value().profiles.front().id);
   }
 }
 

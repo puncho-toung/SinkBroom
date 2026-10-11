@@ -28,8 +28,13 @@
 #include "mdl/Tag.h"
 #include "mdl/TagMatcher.h"
 
+#include "kd/ranges/to.h"
+
 #include <filesystem>
+#include <ranges>
+#include <set>
 #include <string>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -42,11 +47,15 @@ TEST_CASE("GameConfigParser")
   {
     SECTION("parseIncludedGameConfigs")
     {
+      // only GameConfig.cfg files are game configs; the folders also hold compilation
+      // and game engine profiles
       const auto basePath = getFixtureRoot() / "games/";
-      const auto cfgFiles =
-        fs::Disk::find(
-          basePath, fs::TraversalMode::Recursive, fs::makeExtensionPathMatcher({".cfg"}))
-        | kdl::value();
+      const auto cfgFiles = fs::Disk::find(
+                              basePath,
+                              fs::TraversalMode::Recursive,
+                              fs::makeFilenamePathMatcher("GameConfig.cfg"))
+                            | kdl::value();
+      CHECK_FALSE(cfgFiles.empty());
 
       for (const auto& path : cfgFiles)
       {
@@ -55,8 +64,103 @@ TEST_CASE("GameConfigParser")
         auto file = fs::Disk::openFile(path) | kdl::value();
         auto reader = file->reader().buffer();
 
-        CHECK_NOTHROW(parseGameConfig(reader.stringView(), path));
+        CHECK(parseGameConfig(reader.stringView(), path).is_success());
       }
+    }
+
+    SECTION("parseDoom3BfgConfig")
+    {
+      const auto path = getFixtureRoot() / "games/Doom3BFG/GameConfig.cfg";
+      auto file = fs::Disk::openFile(path) | kdl::value();
+      auto reader = file->reader().buffer();
+
+      const auto result = parseGameConfig(reader.stringView(), path);
+      REQUIRE(result.is_success());
+
+      const auto& config = result.value();
+
+      // RBDOOM-3-BFG writes "// Game: Doom 3 BFG" and "// Format: Doom3 (Valve)"
+      CHECK(config.name == "Doom 3 BFG");
+      CHECK(config.icon == "Icon.png");
+      CHECK_FALSE(config.experimental);
+      CHECK(
+        config.fileFormats
+        == std::vector<MapFormatConfig>{{.format = "Doom3 (Valve)", .initialMap = {}}});
+      CHECK(
+        config.fileSystemConfig
+        == FileSystemConfig{
+          .searchPath = "base",
+          .packageFormat = {.extensions = {".pk4"}, .format = "zip"},
+        });
+
+      CHECK(
+        config.materialConfig
+        == MaterialConfig{
+          .root = "textures",
+          .extensions = {".tga", ".png", ".jpg", ".jpeg", ".dds"},
+          .palette = {},
+          .property = std::nullopt,
+          .shaderSearchPath = "materials",
+          .excludes =
+            {"*_d",
+             "*_s",
+             "*_local",
+             "*_h",
+             "*_bmp",
+             "*_rmao",
+             "*_rmaod",
+             "*_add",
+             "*_n"},
+          .shaderExtensions = {".mtr"},
+          .shaderImageSearchPaths = {"_tb"},
+        });
+      // Doom 3 has no WAD key; this would turn on the WAD editor and drag and drop
+      CHECK(config.materialConfig.property == std::nullopt);
+
+      CHECK(
+        config.entityConfig
+        == EntityConfig{
+          // the first file is the default for new maps
+          .defFilePaths =
+            {"DOOM-3-slim.fgd",
+             "DOOM-3-all.fgd",
+             "DOOM-3-slim-and-models.fgd",
+             "DOOM-3-all-and-models.fgd",
+             "DOOM-3-models.fgd",
+             "DOOM-3-multiplayer.fgd"},
+          .defaultColor = RgbaF{0.6f, 0.6f, 0.6f, 1.0f},
+          .scaleExpression = std::nullopt,
+          .setDefaultProperties = false,
+        });
+
+      CHECK(config.faceAttribsConfig.surfaceFlags.flags.empty());
+      CHECK(config.faceAttribsConfig.contentFlags.flags.empty());
+      CHECK(config.faceAttribsConfig.defaultUvAttributes.scale == vm::vec2f{0.5f, 0.5f});
+
+      CHECK(
+        config.softMapBounds
+        == vm::bbox3d{{-131072.0, -131072.0, -131072.0}, {131072.0, 131072.0, 131072.0}});
+
+      CHECK(
+        (config.compilationTools | std::views::transform(&CompilationTool::name)
+         | kdl::ranges::to<std::vector>())
+        == std::vector<std::string>{"rbdmap", "rbdoom3bfg"});
+
+      const auto tagNames =
+        config.smartTags
+        | std::views::transform([](const auto& tag) { return std::string{tag.name()}; })
+        | kdl::ranges::to<std::vector>();
+      CHECK(
+        tagNames
+        == std::vector<std::string>{
+          "Trigger",     "Caulk",          "Nodraw",           "Clip",      "Collision",
+          "Shadow",      "Origin",         "Visportal",        "AAS",       "Decal",
+          "ClipSurface", "TriggerSurface", "Areaportal",       "Invisible", "Liquid",
+          "Translucent", "AASSurface",     "CollisionSurface", "Broken",
+        });
+      CHECK(
+        std::set<std::string>{tagNames.begin(), tagNames.end()}.size()
+        == tagNames.size());
     }
   }
 
