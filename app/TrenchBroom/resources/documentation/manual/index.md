@@ -3086,6 +3086,8 @@ The optional `softMapBounds` key defines the default [map bounds](#map_bounds) t
 
     "softMapBounds":"-4096 -4096 -4096 4096 4096 4096",
 
+The hard world bound, which limits the coordinates of every brush, is -32768 to 32768 on each axis, but it grows to the soft map bounds of the game on any axis along which they reach farther.
+
 #### Compilation Tools
 
 The optional `compilationTools` list identifies tool names that will appear in the [game configuration dialog](#game_configuration), allowing the user to associate these names with paths to tool executables. Such a name can be used as a variable in this game's [compilation profiles](#compiling_maps) to represent the associated path.
