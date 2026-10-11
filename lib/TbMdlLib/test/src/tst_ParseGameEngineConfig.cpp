@@ -182,7 +182,7 @@ TEST_CASE("parseGameEngineConfig")
     CHECK(profile.path.empty());
     CHECK(
       profile.parameterSpec
-      == R"(+set fs_basepath "${GAME_DIR_PATH}" +devmap ${MAP_BASE_NAME})");
+      == R"(+set fs_basepath "${GAME_DIR_PATH}" +set fs_game ${MODS[-1]} +devmap ${MAP_BASE_NAME})");
   }
 }
 
