@@ -238,6 +238,23 @@ TEST_CASE("Map_Entities")
         CHECK(nameOf(*entityNode) == nullptr);
       }
 
+      SECTION("A game with naming rules that sets no defaults gets unique names")
+      {
+        // like the shipped Doom 3 BFG config
+        auto& namingMap = fixture.create(NamingFixtureConfig);
+        REQUIRE_FALSE(namingMap.worldNode().entityPropertyConfig().setDefaultProperties);
+        namingMap.entityDefinitionManager().setDefinitions({
+          {"light", Color{}, "", {}, PointEntityDefinition{vm::bbox3d{16.0}, {}, {}}},
+        });
+
+        auto* entityNode = createPointEntity(
+          namingMap,
+          namingMap.entityDefinitionManager().definitions().front(),
+          {0, 0, 0});
+        REQUIRE(entityNode != nullptr);
+        CHECK(*nameOf(*entityNode) == "light_0");
+      }
+
       SECTION("A game with naming rules gets unique names")
       {
         auto fixtureConfig = NamingFixtureConfig;
@@ -491,6 +508,7 @@ TEST_CASE("Map_Entities")
         namingMap.entityDefinitionManager().setDefinitions({
           {"func_static", Color{}, "", {}},
           {"func_mover", Color{}, "", {}},
+          {"func_group", Color{}, "", {}},
         });
         const auto* staticDefinition =
           namingMap.entityDefinitionManager().definition("func_static");
@@ -561,6 +579,36 @@ TEST_CASE("Map_Entities")
           CHECK(
             namingMap.worldNode().defaultLayer()->children()
             == std::vector<Node*>{patchNode, moverNode});
+        }
+
+        SECTION("A func_group gets a name but no model")
+        {
+          deselectAll(namingMap);
+          selectNodes(namingMap, {patchNode});
+
+          auto* funcGroupNode = createBrushEntity(
+            namingMap, *namingMap.entityDefinitionManager().definition("func_group"));
+          REQUIRE(funcGroupNode != nullptr);
+          CHECK(*nameOf(*funcGroupNode) == "func_group_0");
+          CHECK(modelOf(*funcGroupNode) == nullptr);
+        }
+
+        SECTION("Brushes of two entities make an entity with a new name")
+        {
+          deselectAll(namingMap);
+          selectNodes(namingMap, {patchNode});
+          auto* patchEntityNode = createBrushEntity(namingMap, *staticDefinition);
+          REQUIRE(patchEntityNode != nullptr);
+          REQUIRE(*nameOf(*patchEntityNode) == "func_static_1");
+
+          // no properties are copied from either entity
+          deselectAll(namingMap);
+          selectNodes(namingMap, {brushNode1, patchNode});
+          auto* moverNode = createBrushEntity(namingMap, *moverDefinition);
+          REQUIRE(moverNode != nullptr);
+          CHECK(*nameOf(*moverNode) == "func_mover_0");
+          CHECK(*modelOf(*moverNode) == "func_mover_0");
+          CHECK(*nameOf(*staticNode) == "func_static_0");
         }
       }
     }

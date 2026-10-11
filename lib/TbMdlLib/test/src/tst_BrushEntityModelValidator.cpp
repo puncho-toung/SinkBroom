@@ -17,6 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "fs/TestEnvironment.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/Entity.h"
@@ -28,8 +29,10 @@
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/Map_Entities.h"
+#include "mdl/Map_Groups.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
+#include "mdl/NodeContents.h"
 #include "mdl/PatchNode.h"
 #include "mdl/TestFactory.h"
 #include "mdl/TestUtils.h"
@@ -38,7 +41,10 @@
 #include "mdl/WorldNode.h"
 
 #include "kd/overload.h"
+#include "kd/ranges/to.h"
+#include "kd/string_utils.h"
 
+#include <ranges>
 #include <string>
 #include <vector>
 
@@ -154,6 +160,129 @@ TEST_CASE("BrushEntityModelValidator")
     CHECK(propertyOf(*entityNode, "name") == "func_static_0");
     CHECK(propertyOf(*entityNode, "model") == "func_static_0");
     CHECK(collectIssues(map.worldNode(), type).empty());
+  }
+
+  SECTION("Two entities without names get distinct names in one fix")
+  {
+    auto* entityNode1 = new EntityNode{Entity{{{"classname", "func_static"}}}};
+    auto* entityNode2 = new EntityNode{Entity{{{"classname", "func_static"}}}};
+    addNodes(map, {{&parentForNodes(map), {entityNode1, entityNode2}}});
+    addNodes(map, {{entityNode1, {createBrushNode(map)}}});
+    addNodes(map, {{entityNode2, {createBrushNode(map)}}});
+
+    const auto issues = collectIssues(map.worldNode(), type);
+    REQUIRE(issues.size() == 2u);
+
+    applyQuickFix(issues);
+    CHECK(propertyOf(*entityNode1, "name") == "func_static_0");
+    CHECK(propertyOf(*entityNode1, "model") == "func_static_0");
+    CHECK(propertyOf(*entityNode2, "name") == "func_static_1");
+    CHECK(propertyOf(*entityNode2, "model") == "func_static_1");
+    CHECK(collectIssues(map.worldNode(), type).empty());
+  }
+
+  SECTION("The fix works across the instances of a linked group")
+  {
+    deselectAll(map);
+    selectNodes(map, {entityNode});
+    auto* groupNode = groupSelectedNodes(map, "group");
+    REQUIRE(groupNode != nullptr);
+
+    auto linkedGroupNodes = std::vector<GroupNode*>{groupNode};
+    for (auto i = 0; i < 2; ++i)
+    {
+      deselectAll(map);
+      selectNodes(map, {groupNode});
+      linkedGroupNodes.push_back(createLinkedDuplicate(map));
+      REQUIRE(linkedGroupNodes.back() != nullptr);
+    }
+    deselectAll(map);
+
+    // let the models drift without updating the linked groups
+    auto nodesToSwap = std::vector<std::pair<Node*, NodeContents>>{};
+    for (auto* linkedGroupNode : linkedGroupNodes)
+    {
+      auto* linkedEntityNode = linkedGroupNode->children().front();
+      auto entity = static_cast<EntityNode*>(linkedEntityNode)->entity();
+      entity.addOrUpdateProperty("model", "drift");
+      nodesToSwap.emplace_back(linkedEntityNode, NodeContents{std::move(entity)});
+    }
+    REQUIRE(updateNodeContents(map, "Drift", std::move(nodesToSwap), {}));
+
+    const auto issues = collectIssues(map.worldNode(), type);
+    REQUIRE(issues.size() == 3u);
+
+    applyQuickFix(issues);
+
+    auto names = std::vector<std::string>{};
+    for (const auto* linkedGroupNode : linkedGroupNodes)
+    {
+      const auto* linkedEntityNode =
+        static_cast<const EntityNode*>(linkedGroupNode->children().front());
+      CHECK(
+        propertyOf(*linkedEntityNode, "model") == propertyOf(*linkedEntityNode, "name"));
+      names.push_back(propertyOf(*linkedEntityNode, "name"));
+    }
+    CHECK(names == std::vector<std::string>{"door", "func_static_0", "func_static_1"});
+    CHECK(collectIssues(map.worldNode(), type).empty());
+  }
+
+  SECTION("Loading and saving a map changes no names and no models")
+  {
+    // an unnamed point entity and a brush entity without a model
+    const auto mapText = std::string{R"(// Game: Test
+// Format: Valve
+// entity 0
+{
+"classname" "worldspawn"
+}
+// entity 1
+{
+"classname" "info_null"
+"origin" "0 0 0"
+}
+// entity 2
+{
+"classname" "func_static"
+"name" "door"
+// brush 0
+{
+( -16 -16 -16 ) ( -16 -15 -16 ) ( -16 -16 -15 ) material [ 0 -1 0 0 ] [ 0 0 -1 0 ] 0 1 1
+( -16 -16 -16 ) ( -16 -16 -15 ) ( -15 -16 -16 ) material [ 1 0 0 0 ] [ 0 0 -1 0 ] 0 1 1
+( -16 -16 -16 ) ( -15 -16 -16 ) ( -16 -15 -16 ) material [ -1 0 0 0 ] [ 0 -1 0 0 ] 0 1 1
+( 16 16 16 ) ( 16 17 16 ) ( 17 16 16 ) material [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 1 1
+( 16 16 16 ) ( 17 16 16 ) ( 16 16 17 ) material [ -1 0 0 0 ] [ 0 0 -1 0 ] 0 1 1
+( 16 16 16 ) ( 16 16 17 ) ( 16 17 16 ) material [ 0 1 0 0 ] [ 0 0 -1 0 ] 0 1 1
+}
+}
+)"};
+
+    auto env = fs::TestEnvironment{};
+    env.createFile("unnamed.map", mapText);
+
+    auto fixtureConfig = NamingFixtureConfig;
+    fixtureConfig.gameInfo.gameConfig.fileFormats = {
+      {.format = "Valve", .initialMap = ""}};
+
+    auto loadFixture = MapFixture{};
+    auto& loadedMap = loadFixture.load(env.dir() / "unnamed.map", fixtureConfig);
+    CHECK_FALSE(loadedMap.modified());
+    CHECK_FALSE(loadedMap.canUndoCommand());
+
+    const auto* loadedValidator =
+      findValidator(loadedMap.worldNode(), "Brush entity model differs from its name");
+    REQUIRE(loadedValidator != nullptr);
+    CHECK(collectIssues(loadedMap.worldNode(), loadedValidator->type()).size() == 1u);
+    CHECK_FALSE(loadedMap.canUndoCommand());
+
+    REQUIRE(loadedMap.saveAs(env.dir() / "saved.map"));
+
+    const auto propertyLines = [](const std::string& text) {
+      return kdl::str_split(text, "\n")
+             | std::views::filter([](const auto& line) { return line.starts_with("\""); })
+             | kdl::ranges::to<std::vector>();
+    };
+    CHECK(propertyLines(env.loadFile("saved.map")) == propertyLines(mapText));
   }
 
   SECTION("Point entities, func_group and the world are not checked")

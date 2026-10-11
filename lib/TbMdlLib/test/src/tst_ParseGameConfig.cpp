@@ -1337,6 +1337,31 @@ TEST_CASE("GameConfigParser")
       CHECK(result.value().entityConfig.naming == std::nullopt);
     }
 
+    SECTION("nameKey without uniqueNames turns naming off")
+    {
+      const auto result = parseGameConfig(makeConfig(R"%(,
+        "naming": { "nameKey": "name", "brushEntityModelKey": "model" })%"));
+      REQUIRE(result.is_success());
+      CHECK(result.value().entityConfig.naming == std::nullopt);
+    }
+
+    SECTION("uniqueNames with an empty nameKey is an error")
+    {
+      CHECK(
+        parseGameConfig(makeConfig(R"%(,
+        "naming": { "uniqueNames": true, "nameKey": "" })%"))
+        == Result<GameConfig>{Error{
+          "At line 13, column 19: Unique entity names require a non-empty nameKey"}});
+    }
+
+    SECTION("an empty rotation block selects the Quake policy")
+    {
+      const auto result = parseGameConfig(makeConfig(R"%(,
+        "rotation": {})%"));
+      REQUIRE(result.is_success());
+      CHECK(result.value().entityConfig.rotationPolicy == EntityRotationPolicy::Quake);
+    }
+
     SECTION("quake selects the Quake policy")
     {
       const auto result = parseGameConfig(makeConfig(R"%(,

@@ -106,15 +106,23 @@ void assignUniqueEntityNamesInUpdates(
 {
   if (map.worldNode().entityPropertyConfig().naming)
   {
+    const auto targetGroupNodes =
+      linkedGroupUpdates | std::views::keys | kdl::ranges::to<std::vector>();
+
     // the children of the target groups are replaced, so their names are free
     auto allocator = EntityNameAllocator{
-      map,
-      linkedGroupUpdates | std::views::keys | std::views::transform([](const auto* node) {
-        return static_cast<const Node*>(node);
-      }) | kdl::ranges::to<std::vector>()};
+      map, targetGroupNodes | std::views::transform([](const auto* node) {
+             return static_cast<const Node*>(node);
+           }) | kdl::ranges::to<std::vector>()};
 
-    for (const auto& [targetGroupNode, newChildren] : linkedGroupUpdates)
+    // the target groups are collected in the order of their addresses, so they are
+    // named in tree order for the names not to depend on the memory layout
+    for (const auto* targetGroupNode : sortInTreeOrder(map, targetGroupNodes))
     {
+      const auto& newChildren =
+        std::ranges::find(linkedGroupUpdates, targetGroupNode, [](const auto& update) {
+          return update.first;
+        })->second;
       assignUniqueEntityNames(
         newChildren | std::views::transform([](const auto& child) { return child.get(); })
           | kdl::ranges::to<std::vector>(),

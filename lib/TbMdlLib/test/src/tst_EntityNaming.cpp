@@ -26,6 +26,7 @@
 #include "mdl/EntityNaming.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GroupNode.h"
+#include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/Map_Entities.h"
@@ -193,10 +194,92 @@ TEST_CASE("EntityNaming")
       allocator.reserve("small_door");
       CHECK(allocator.isTaken("Small_Door"));
 
-      // the engine refuses to spawn entities with these names
+      // the engine refuses to spawn entities with these names, compared exactly
       CHECK(allocator.isTaken("NULL"));
       CHECK(allocator.isTaken("null_entity"));
+      CHECK_FALSE(allocator.isTaken("Null"));
     }
+  }
+
+  SECTION("isReservedEntityName")
+  {
+    CHECK(isReservedEntityName("NULL"));
+    CHECK(isReservedEntityName("null_entity"));
+    CHECK_FALSE(isReservedEntityName("null"));
+    CHECK_FALSE(isReservedEntityName("NULL_ENTITY"));
+    CHECK_FALSE(isReservedEntityName("light_0"));
+  }
+
+  SECTION("allocateEntityName")
+  {
+    addEntity(map, {{"classname", "light"}, {"name", "light_0"}});
+    auto allocator = EntityNameAllocator{map};
+    auto result = EntityNamingResult{};
+
+    SECTION("Create mode gives a new name")
+    {
+      auto entity = Entity{{{"classname", "light"}, {"name", "free"}}};
+      CHECK(
+        allocateEntityName(entity, false, allocator, EntityNamingMode::Create, result));
+      CHECK(*entity.property("name") == "light_1");
+      CHECK(entity.property("model") == nullptr);
+      CHECK(
+        result.renamed
+        == std::vector<std::pair<std::string, std::string>>{{"free", "light_1"}});
+    }
+
+    SECTION("KeepIfFree mode keeps a free name and reserves it")
+    {
+      auto entity = Entity{{{"classname", "light"}, {"name", "light_1"}}};
+      CHECK_FALSE(allocateEntityName(
+        entity, false, allocator, EntityNamingMode::KeepIfFree, result));
+      CHECK(*entity.property("name") == "light_1");
+      CHECK(result.kept == std::vector<std::string>{"light_1"});
+      CHECK(allocator.allocate("light") == "light_2");
+    }
+
+    SECTION("An entity with brushes or patches gets its name as its model")
+    {
+      auto entity = Entity{{{"classname", "func_static"}, {"name", "door"}}};
+      CHECK(allocateEntityName(
+        entity, true, allocator, EntityNamingMode::KeepIfFree, result));
+      CHECK(*entity.property("name") == "door");
+      CHECK(*entity.property("model") == "door");
+    }
+
+    SECTION("The worldspawn is never named")
+    {
+      auto entity = Entity{{{"classname", "worldspawn"}}};
+      CHECK_FALSE(
+        allocateEntityName(entity, true, allocator, EntityNamingMode::Create, result));
+      CHECK(entity.property("name") == nullptr);
+    }
+  }
+
+  SECTION("sortInTreeOrder")
+  {
+    auto* layerNode = new LayerNode{Layer{"layer"}};
+    addNodes(map, {{&map.worldNode(), {layerNode}}});
+
+    auto* entityNode1 = addEntity(map, {{"classname", "info_null"}});
+    auto* groupedEntityNode = makeEntityNode({{"classname", "info_null"}});
+    auto* groupNode = new GroupNode{Group{"group"}};
+    groupNode->addChild(groupedEntityNode);
+    addNodes(map, {{&parentForNodes(map), {groupNode}}});
+    auto* layeredEntityNode = makeEntityNode({{"classname", "info_null"}});
+    addNodes(map, {{layerNode, {layeredEntityNode}}});
+
+    CHECK(
+      sortInTreeOrder(
+        map,
+        std::vector<EntityNodeBase*>{
+          layeredEntityNode, groupedEntityNode, &map.worldNode(), entityNode1})
+      == std::vector<EntityNodeBase*>{
+        &map.worldNode(), entityNode1, groupedEntityNode, layeredEntityNode});
+
+    CHECK(
+      sortInTreeOrder(map, std::vector<Node*>{layeredEntityNode, layerNode, groupNode})
+      == std::vector<Node*>{groupNode, layerNode, layeredEntityNode});
   }
 
   SECTION("isBrushEntityModelClass")

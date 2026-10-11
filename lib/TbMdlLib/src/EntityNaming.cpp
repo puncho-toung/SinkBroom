@@ -60,6 +60,52 @@ constexpr auto ReservedEngineNames =
 // The map compiler merges the brushes of func_group entities into the world.
 constexpr auto FuncGroupClassname = std::string_view{"func_group"};
 
+/**
+ * Returns the position of the world, every layer, group and entity of the map in a depth
+ * first traversal.
+ */
+std::unordered_map<const Node*, size_t> getTreePositions(const Map& map)
+{
+  auto treePositions = std::unordered_map<const Node*, size_t>{};
+  const auto add = [&](const Node& node) {
+    treePositions.emplace(&node, treePositions.size());
+  };
+
+  map.worldNode().accept(kdl::overload(
+    [&](auto&& thisLambda, const WorldNode& worldNode) {
+      add(worldNode);
+      worldNode.visitChildren(thisLambda);
+    },
+    [&](auto&& thisLambda, const LayerNode& layerNode) {
+      add(layerNode);
+      layerNode.visitChildren(thisLambda);
+    },
+    [&](auto&& thisLambda, const GroupNode& groupNode) {
+      add(groupNode);
+      groupNode.visitChildren(thisLambda);
+    },
+    [&](const EntityNode& entityNode) { add(entityNode); },
+    [](const BrushNode&) {},
+    [](const PatchNode&) {}));
+
+  return treePositions;
+}
+
+template <typename N>
+std::vector<N*> sortByTreePosition(const Map& map, std::vector<N*> nodes)
+{
+  const auto treePositions = getTreePositions(map);
+  const auto treePosition = [&](const Node* node) {
+    const auto it = treePositions.find(node);
+    return it != treePositions.end() ? it->second : treePositions.size();
+  };
+
+  std::ranges::stable_sort(nodes, [&](const auto* lhs, const auto* rhs) {
+    return treePosition(lhs) < treePosition(rhs);
+  });
+  return nodes;
+}
+
 } // namespace
 
 EntityNameIndex::EntityNameIndex(std::string nameKey)
@@ -355,33 +401,12 @@ void assignUniqueEntityNamesBeforeAdding(
 std::vector<EntityNodeBase*> sortInTreeOrder(
   const Map& map, std::vector<EntityNodeBase*> entityNodes)
 {
-  auto treePositions = std::unordered_map<const Node*, size_t>{};
-  map.worldNode().accept(kdl::overload(
-    [&](auto&& thisLambda, const WorldNode& worldNode) {
-      treePositions.emplace(&worldNode, treePositions.size());
-      worldNode.visitChildren(thisLambda);
-    },
-    [](auto&& thisLambda, const LayerNode& layerNode) {
-      layerNode.visitChildren(thisLambda);
-    },
-    [](auto&& thisLambda, const GroupNode& groupNode) {
-      groupNode.visitChildren(thisLambda);
-    },
-    [&](const EntityNode& entityNode) {
-      treePositions.emplace(&entityNode, treePositions.size());
-    },
-    [](const BrushNode&) {},
-    [](const PatchNode&) {}));
+  return sortByTreePosition(map, std::move(entityNodes));
+}
 
-  const auto treePosition = [&](const Node* node) {
-    const auto it = treePositions.find(node);
-    return it != treePositions.end() ? it->second : treePositions.size();
-  };
-
-  std::ranges::stable_sort(entityNodes, [&](const auto* lhs, const auto* rhs) {
-    return treePosition(lhs) < treePosition(rhs);
-  });
-  return entityNodes;
+std::vector<Node*> sortInTreeOrder(const Map& map, std::vector<Node*> nodes)
+{
+  return sortByTreePosition(map, std::move(nodes));
 }
 
 std::vector<EntityNodeBase*> collectEntityNodes(

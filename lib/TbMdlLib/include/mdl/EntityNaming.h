@@ -196,11 +196,14 @@ void assignUniqueEntityNamesBeforeAdding(
   const Map& map, const std::vector<Node*>& rootsInSourceOrder, bool remapLinkSources);
 
 /**
- * Sorts the given entity nodes of the map in the order of a depth first traversal of the
- * map, so that operations on them do not depend on the order of a selection.
+ * Sorts the given nodes of the map in the order of a depth first traversal of the map, so
+ * that operations on them depend neither on the order of a selection nor on the memory
+ * addresses by which many node collections are ordered. Only the world, layers, groups
+ * and entities have a position; other nodes go last.
  */
 std::vector<EntityNodeBase*> sortInTreeOrder(
   const Map& map, std::vector<EntityNodeBase*> entityNodes);
+std::vector<Node*> sortInTreeOrder(const Map& map, std::vector<Node*> nodes);
 
 /**
  * Returns the entity nodes of the given issues of the given type, without duplicates and

@@ -247,6 +247,31 @@ TEST_CASE("DuplicateEntityNameValidator")
     CHECK(collectIssues(map.worldNode(), type).empty());
   }
 
+  SECTION("The entities inside an added, removed or restored group are checked")
+  {
+    auto* groupedEntityNode = new EntityNode{Entity{{
+      {"classname", "info_null"},
+      {"name", "a"},
+    }}};
+    auto* groupNode = new GroupNode{Group{"group"}};
+    groupNode->addChild(groupedEntityNode);
+
+    addNodes(map, {{&parentForNodes(map), {groupNode}}});
+    CHECK_THAT(
+      issueNodes(collectIssues(map.worldNode(), type)),
+      UnorderedEquals(std::vector<const Node*>{entityNode1, groupedEntityNode}));
+
+    deselectAll(map);
+    selectNodes(map, {groupNode});
+    removeSelectedNodes(map);
+    CHECK(collectIssues(map.worldNode(), type).empty());
+
+    map.undoCommand();
+    CHECK_THAT(
+      issueNodes(collectIssues(map.worldNode(), type)),
+      UnorderedEquals(std::vector<const Node*>{entityNode1, groupedEntityNode}));
+  }
+
   SECTION("Adding an entity with a taken name reports both entities")
   {
     auto* entityNode3 = new EntityNode{Entity{{
@@ -391,7 +416,7 @@ TEST_CASE("DuplicateEntityNameValidator")
 
   SECTION("No naming validators for a game without naming rules")
   {
-    auto& defaultMap = fixture.create();
+    auto& defaultMap = fixture.create(QuakeFixtureConfig);
     CHECK(
       findValidator(defaultMap.worldNode(), "Duplicate or invalid entity name")
       == nullptr);

@@ -21,6 +21,7 @@
 #include "TestParserStatus.h"
 #include "fs/DiskIO.h"
 #include "fs/Reader.h"
+#include "mdl/BrushBuilder.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/EntityDefinition.h"
@@ -37,6 +38,12 @@
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/MapFormat.h"
+#include "mdl/Map_CopyPaste.h"
+#include "mdl/Map_Entities.h"
+#include "mdl/Map_Groups.h"
+#include "mdl/Map_Nodes.h"
+#include "mdl/Map_Selection.h"
+#include "mdl/PasteType.h"
 #include "mdl/PatchNode.h"
 #include "mdl/TestUtils.h"
 #include "mdl/Validator.h"
@@ -45,7 +52,9 @@
 
 #include "kd/overload.h"
 #include "kd/result.h"
+#include "kd/string_format.h"
 #include "kd/task_manager.h"
+#include "kd/vector_utils.h"
 
 #include "vm/bbox.h"
 
@@ -194,6 +203,101 @@ TEST_CASE("Doom3BFGFixture")
       findValidator(map.worldNode(), "Missing entity link source");
     REQUIRE(linkSourceValidator != nullptr);
     CHECK(collectIssues(map.worldNode(), linkSourceValidator->type()).empty());
+  }
+
+  SECTION("Editing keeps every name unique and every model equal to its name")
+  {
+    auto fixture = MapFixture{};
+    auto& map = fixture.create(Doom3BFGFixtureConfig);
+
+    const auto* lightDefinition = map.entityDefinitionManager().definition("light");
+    const auto* staticDefinition =
+      map.entityDefinitionManager().definition("func_static");
+    const auto* triggerDefinition =
+      map.entityDefinitionManager().definition("trigger_once");
+    REQUIRE(lightDefinition != nullptr);
+    REQUIRE(staticDefinition != nullptr);
+    REQUIRE(triggerDefinition != nullptr);
+
+    const auto builder = BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()};
+    const auto selectNewBrush = [&](const vm::vec3d& position) {
+      auto* brushNode = new BrushNode{
+        builder.createCuboid(
+          vm::bbox3d{position, position + vm::vec3d{32, 32, 32}}, "wall")
+        | kdl::value()};
+      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      deselectAll(map);
+      selectNodes(map, {brushNode});
+      return brushNode;
+    };
+
+    // create
+    auto* lightNode = createPointEntity(map, *lightDefinition, {0, 0, 64});
+    REQUIRE(lightNode != nullptr);
+    selectNewBrush({0, 0, 0});
+    auto* staticNode = createBrushEntity(map, *staticDefinition);
+    REQUIRE(staticNode != nullptr);
+    selectNewBrush({64, 0, 0});
+    auto* triggerNode = createBrushEntity(map, *triggerDefinition);
+    REQUIRE(triggerNode != nullptr);
+    REQUIRE(setEntityProperty(map, "target", *lightNode->entity().property("name")));
+
+    // paste twice
+    deselectAll(map);
+    selectNodes(map, {lightNode, staticNode, triggerNode});
+    const auto str = serializeSelectedNodes(map);
+    deselectAll(map);
+    REQUIRE(paste(map, str) == PasteType::Node);
+    REQUIRE(paste(map, str) == PasteType::Node);
+
+    // duplicate
+    deselectAll(map);
+    selectNodes(map, {lightNode, staticNode, triggerNode});
+    duplicateSelectedNodes(map);
+
+    // linked duplicate, then an update of the link set that adds an entity
+    deselectAll(map);
+    selectNodes(map, {lightNode, staticNode, triggerNode});
+    auto* groupNode = groupSelectedNodes(map, "group");
+    REQUIRE(groupNode != nullptr);
+    deselectAll(map);
+    selectNodes(map, {groupNode});
+    REQUIRE(createLinkedDuplicate(map) != nullptr);
+
+    openGroup(map, *groupNode);
+    deselectAll(map);
+    REQUIRE(createPointEntity(map, *lightDefinition, {0, 32, 64}) != nullptr);
+    selectNodes(map, {lightNode});
+    REQUIRE(setEntityProperty(map, "light_radius", "64"));
+    closeGroup(map);
+
+    for (const auto& description :
+         {"Duplicate or invalid entity name", "Brush entity model differs from its name"})
+    {
+      CAPTURE(description);
+      const auto* validator = findValidator(map.worldNode(), description);
+      REQUIRE(validator != nullptr);
+      CHECK(collectIssues(map.worldNode(), validator->type()).empty());
+    }
+
+    auto names = std::vector<std::string>{};
+    map.worldNode().accept(kdl::overload(
+      [](auto&& thisLambda, const WorldNode& node) { node.visitChildren(thisLambda); },
+      [](auto&& thisLambda, const LayerNode& node) { node.visitChildren(thisLambda); },
+      [](auto&& thisLambda, const GroupNode& node) { node.visitChildren(thisLambda); },
+      [&](const EntityNode& node) {
+        if (const auto* name = node.entity().property("name"))
+        {
+          names.push_back(kdl::str_to_lower(*name));
+        }
+      },
+      [](const BrushNode&) {},
+      [](const PatchNode&) {}));
+
+    // 3 created, 6 pasted, 3 duplicated, 3 in the linked duplicate, 2 lights added
+    CHECK(names.size() == 17u);
+    names = kdl::vec_sort(std::move(names));
+    CHECK(std::ranges::adjacent_find(names) == names.end());
   }
 }
 

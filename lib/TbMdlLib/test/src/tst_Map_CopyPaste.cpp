@@ -113,6 +113,54 @@ const auto TriggerAlone = std::string{R"(
 }
 )"};
 
+// three lights with one name, told apart by "id"
+const auto ThreeLights = std::string{R"(
+{
+"classname" "light"
+"name" "light_0"
+"id" "a"
+}
+{
+"classname" "light"
+"name" "light_0"
+"id" "b"
+}
+{
+"classname" "light"
+"name" "light_0"
+"id" "c"
+}
+)"};
+
+const auto GroupedLight = std::string{R"(
+{
+"classname" "func_group"
+"_tb_type" "_tb_group"
+"_tb_name" "group"
+"_tb_id" "7"
+}
+{
+"classname" "light"
+"name" "light_0"
+"_tb_group" "7"
+}
+)"};
+
+std::vector<std::pair<std::string, std::string>> entityIdsAndNames(const Map& map)
+{
+  auto result = std::vector<std::pair<std::string, std::string>>{};
+  for (const auto* node : map.worldNode().defaultLayer()->children())
+  {
+    if (const auto* entityNode = dynamic_cast<const EntityNode*>(node))
+    {
+      const auto* id = entityNode->entity().property("id");
+      const auto* name = entityNode->entity().property("name");
+      result.emplace_back(id ? *id : "", name ? *name : "");
+    }
+  }
+  return result;
+}
+
 } // namespace
 
 TEST_CASE("Map_CopyPaste")
@@ -1009,6 +1057,79 @@ common/caulk
             {"light_2", ""},
             {"trigger_once_2", "light_2"},
           });
+      }
+
+      SECTION("Clashing names are replaced in clipboard order in every map")
+      {
+        // the map already has light_0, so every pasted light is renamed
+        auto* lightNode = new EntityNode{Entity{{
+          {"classname", "light"},
+          {"name", "light_0"},
+        }}};
+        addNodes(map, {{&parentForNodes(map), {lightNode}}});
+
+        const auto expected = std::vector<std::pair<std::string, std::string>>{
+          {"", "light_0"},
+          {"a", "light_1"},
+          {"b", "light_2"},
+          {"c", "light_3"},
+        };
+
+        REQUIRE(paste(map, ThreeLights) == PasteType::Node);
+        CHECK(entityIdsAndNames(map) == expected);
+
+        auto otherFixture = MapFixture{};
+        auto& otherMap = otherFixture.create(NamingFixtureConfig);
+        addNodes(
+          otherMap,
+          {{&parentForNodes(otherMap),
+            {new EntityNode{Entity{{
+              {"classname", "light"},
+              {"name", "light_0"},
+            }}}}}});
+        REQUIRE(paste(otherMap, ThreeLights) == PasteType::Node);
+        CHECK(entityIdsAndNames(otherMap) == expected);
+      }
+
+      SECTION("Undoing a paste frees its names")
+      {
+        REQUIRE(paste(map, LightAndTrigger) == PasteType::Node);
+        REQUIRE(paste(map, LightAndTrigger) == PasteType::Node);
+        REQUIRE(entityNamesAndTargets(map).at(2).first == "light_1");
+
+        map.undoCommand();
+        REQUIRE(map.worldNode().defaultLayer()->childCount() == 2u);
+
+        // the allocator holds no state, and the undo removed the names from the index
+        REQUIRE(paste(map, LightAndTrigger) == PasteType::Node);
+        CHECK(
+          entityNamesAndTargets(map)
+          == std::vector<std::pair<std::string, std::string>>{
+            {"light_0", ""},
+            {"trigger_once_0", "light_0"},
+            {"light_1", ""},
+            {"trigger_once_1", "light_1"},
+          });
+      }
+
+      SECTION("Entities in a pasted group are named")
+      {
+        REQUIRE(paste(map, GroupedLight) == PasteType::Node);
+        REQUIRE(paste(map, GroupedLight) == PasteType::Node);
+
+        const auto& children = map.worldNode().defaultLayer()->children();
+        REQUIRE(children.size() == 2u);
+
+        const auto groupedName = [](const Node* node) {
+          const auto* groupNode = dynamic_cast<const GroupNode*>(node);
+          REQUIRE(groupNode != nullptr);
+          REQUIRE(groupNode->childCount() == 1u);
+          return *static_cast<const EntityNode*>(groupNode->children().front())
+                    ->entity()
+                    .property("name");
+        };
+        CHECK(groupedName(children[0]) == "light_0");
+        CHECK(groupedName(children[1]) == "light_1");
       }
     }
   }

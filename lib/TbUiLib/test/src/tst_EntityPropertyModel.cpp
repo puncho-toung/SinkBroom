@@ -264,6 +264,33 @@ TEST_CASE("EntityPropertyModel")
       CHECK(namedEntityNode->entity().protectedProperties().empty());
     }
 
+    SECTION("the name of grouped and ungrouped entities cannot be protected")
+    {
+      mdl::selectNodes(namingMap, {namedEntityNode, ungroupedEntityNode});
+      namingModel.updateFromMap();
+
+      CHECK(protectionOf("name") == PropertyProtection::NotProtectable);
+    }
+
+    SECTION("the name of a grouped entity of a game without naming rules is unprotected")
+    {
+      auto* namedGroupedEntityNode = new mdl::EntityNode{mdl::Entity{{
+        {"classname", "func_static"},
+        {"name", "door"},
+      }}};
+      auto* otherGroupNode = new mdl::GroupNode{mdl::Group{"other"}};
+      otherGroupNode->addChild(namedGroupedEntityNode);
+      mdl::addNodes(map, {{&mdl::parentForNodes(map), {otherGroupNode}}});
+
+      mdl::selectNodes(map, {namedGroupedEntityNode});
+      model.updateFromMap();
+
+      const auto rowIndex = model.rowIndexForPropertyKey("name");
+      REQUIRE(rowIndex >= 0);
+      CHECK(
+        model.rows().at(size_t(rowIndex)).protection == PropertyProtection::NotProtected);
+    }
+
     SECTION("the name of an ungrouped entity cannot be protected")
     {
       mdl::selectNodes(namingMap, {ungroupedEntityNode});

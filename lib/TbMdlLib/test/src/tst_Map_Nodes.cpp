@@ -520,6 +520,102 @@ TEST_CASE("Map_Nodes")
         CHECK(*nameOf(*staticNode) == "func_static_0");
         CHECK(*staticNode->entity().property("model") == "func_static_0");
       }
+
+      SECTION("Undoing a duplicate frees its names")
+      {
+        selectNodes(namingMap, {lightNode});
+        duplicateSelectedNodes(namingMap);
+        REQUIRE(*nameOf(*namingMap.selection().entities.front()) == "light_1");
+
+        namingMap.undoCommand();
+        deselectAll(namingMap);
+        selectNodes(namingMap, {lightNode});
+        duplicateSelectedNodes(namingMap);
+        CHECK(*nameOf(*namingMap.selection().entities.front()) == "light_1");
+      }
+
+      SECTION("Entities in a duplicated group are renamed")
+      {
+        auto* groupedLightNode = new EntityNode{Entity{{
+          {"classname", "light"},
+          {"name", "lamp"},
+        }}};
+        auto* groupNode = new GroupNode{Group{"group"}};
+        groupNode->addChild(groupedLightNode);
+        addNodes(namingMap, {{&parentForNodes(namingMap), {groupNode}}});
+
+        selectNodes(namingMap, {groupNode});
+        duplicateSelectedNodes(namingMap);
+        REQUIRE(namingMap.selection().groups.size() == 1u);
+
+        const auto* groupClone = namingMap.selection().groups.front();
+        REQUIRE(groupClone != groupNode);
+        REQUIRE(groupClone->childCount() == 1u);
+        CHECK(
+          *nameOf(*static_cast<const EntityNode*>(groupClone->children().front()))
+          == "light_1");
+        CHECK(*nameOf(*groupedLightNode) == "lamp");
+      }
+    }
+
+    SECTION("Duplicated entities are named in selection order in every map")
+    {
+      // three lights with one name, told apart by "id", created in reverse tree order
+      // and spread over two layers, whose nodes are added in the order of their addresses
+      const auto duplicateLights = [](MapFixture& mapFixture) {
+        auto& lightMap = mapFixture.create(NamingFixtureConfig);
+
+        auto* lightNodeC = new EntityNode{Entity{{
+          {"classname", "light"},
+          {"name", "lamp"},
+          {"id", "c"},
+        }}};
+        auto* lightNodeB = new EntityNode{Entity{{
+          {"classname", "light"},
+          {"name", "lamp"},
+          {"id", "b"},
+        }}};
+        auto* lightNodeA = new EntityNode{Entity{{
+          {"classname", "light"},
+          {"name", "lamp"},
+          {"id", "a"},
+        }}};
+        auto* layerNode = new LayerNode{Layer{"layer"}};
+
+        addNodes(lightMap, {{&lightMap.worldNode(), {layerNode}}});
+        addNodes(
+          lightMap, {{lightMap.worldNode().defaultLayer(), {lightNodeA, lightNodeC}}});
+        addNodes(lightMap, {{layerNode, {lightNodeB}}});
+
+        selectNodes(lightMap, {lightNodeA, lightNodeB, lightNodeC});
+        const auto sourceOrder = lightMap.selection().entities;
+        duplicateSelectedNodes(lightMap);
+
+        // id of each original in source order -> name of its clone
+        auto namesByIds = std::vector<std::pair<std::string, std::string>>{};
+        for (const auto* original : sourceOrder)
+        {
+          const auto& id = *original->entity().property("id");
+          for (const auto* clone : lightMap.selection().entities)
+          {
+            if (*clone->entity().property("id") == id)
+            {
+              namesByIds.emplace_back(id, *clone->entity().property("name"));
+            }
+          }
+        }
+        return namesByIds;
+      };
+
+      auto fixture1 = MapFixture{};
+      const auto namesByIds = duplicateLights(fixture1);
+      REQUIRE(namesByIds.size() == 3u);
+      CHECK(namesByIds[0].second == "light_0");
+      CHECK(namesByIds[1].second == "light_1");
+      CHECK(namesByIds[2].second == "light_2");
+
+      auto fixture2 = MapFixture{};
+      CHECK(duplicateLights(fixture2) == namesByIds);
     }
   }
 

@@ -42,6 +42,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <optional>
 #include <ranges>
 #include <vector>
 
@@ -738,6 +739,72 @@ TEST_CASE("LinkedGroupUtils")
               UnorderedEquals(std::vector<std::string>{"light"}));
           })
         | kdl::transform_error([](const auto&) { FAIL(); });
+    }
+
+    SECTION("Entity names and models are kept per instance if the game has naming rules")
+    {
+      const auto worldBounds = vm::bbox3d{8192.0};
+
+      // updates a target entity named b from a source entity named a
+      const auto updateTargetEntity = [&](std::optional<EntityNamingConfig> naming) {
+        auto worldNode = WorldNode{
+          EntityPropertyConfig{.naming = std::move(naming)}, Entity{}, MapFormat::Quake3};
+
+        auto* sourceGroupNode = new GroupNode{Group{"group"}};
+        auto* sourceEntityNode = new EntityNode{Entity{{
+          {"classname", "func_static"},
+          {"name", "a"},
+          {"model", "a"},
+          {"key", "new"},
+        }}};
+        sourceGroupNode->addChild(sourceEntityNode);
+
+        auto* targetGroupNode =
+          static_cast<GroupNode*>(sourceGroupNode->cloneRecursively(worldBounds));
+        auto* targetEntityNode =
+          static_cast<EntityNode*>(targetGroupNode->children().front());
+        {
+          auto entity = targetEntityNode->entity();
+          entity.addOrUpdateProperty("name", "b");
+          entity.addOrUpdateProperty("model", "b");
+          entity.addOrUpdateProperty("key", "old");
+          targetEntityNode->setEntity(std::move(entity));
+        }
+
+        worldNode.defaultLayer()->addChildren({sourceGroupNode, targetGroupNode});
+
+        auto updatedEntity = Entity{};
+        updateLinkedGroups(*sourceGroupNode, {targetGroupNode}, worldBounds, taskManager)
+          | kdl::transform([&](const UpdateLinkedGroupsResult& r) {
+              REQUIRE(r.size() == 1u);
+              REQUIRE(r.front().second.size() == 1u);
+              const auto* newEntityNode =
+                dynamic_cast<EntityNode*>(r.front().second.front().get());
+              REQUIRE(newEntityNode != nullptr);
+              updatedEntity = newEntityNode->entity();
+            })
+          | kdl::transform_error([](const auto&) { FAIL(); });
+        return updatedEntity;
+      };
+
+      SECTION("With naming rules")
+      {
+        const auto entity = updateTargetEntity(
+          EntityNamingConfig{.nameKey = "name", .brushEntityModelKey = "model"});
+        CHECK(*entity.property("name") == "b");
+        CHECK(*entity.property("model") == "b");
+        CHECK(*entity.property("key") == "new");
+        CHECK(entity.protectedProperties().empty());
+      }
+
+      SECTION("Without naming rules")
+      {
+        const auto entity = updateTargetEntity(std::nullopt);
+        CHECK(*entity.property("name") == "a");
+        CHECK(*entity.property("model") == "a");
+        CHECK(*entity.property("key") == "new");
+        CHECK(entity.protectedProperties().empty());
+      }
     }
   }
 

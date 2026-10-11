@@ -789,13 +789,9 @@ TEST_CASE("Map_Groups")
       REQUIRE(linkedGroupNode2->childCount() == 3u);
       CHECK(nameOf(nullNode) == "info_null_0");
 
-      // the instances are named in the order in which they are updated
-      const auto nullName1 = nameOf(linkedGroupNode1->children()[2]);
-      const auto nullName2 = nameOf(linkedGroupNode2->children()[2]);
-      CHECK_THAT(
-        (std::vector{nullName1, nullName2}),
-        Catch::Matchers::UnorderedEquals(
-          std::vector<std::string>{"info_null_1", "info_null_2"}));
+      // the instances are named in tree order, not in the order of their addresses
+      CHECK(nameOf(linkedGroupNode1->children()[2]) == "info_null_1");
+      CHECK(nameOf(linkedGroupNode2->children()[2]) == "info_null_2");
 
       // the other names stay as they were
       CHECK(nameOf(linkedGroupNode1->children()[0]) == "light_1");
@@ -815,8 +811,8 @@ TEST_CASE("Map_Groups")
         namingMap.redoCommand();
         REQUIRE(linkedGroupNode1->childCount() == 3u);
         REQUIRE(linkedGroupNode2->childCount() == 3u);
-        CHECK(nameOf(linkedGroupNode1->children()[2]) == nullName1);
-        CHECK(nameOf(linkedGroupNode2->children()[2]) == nullName2);
+        CHECK(nameOf(linkedGroupNode1->children()[2]) == "info_null_1");
+        CHECK(nameOf(linkedGroupNode2->children()[2]) == "info_null_2");
       }
     }
   }
