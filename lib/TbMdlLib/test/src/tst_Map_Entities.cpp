@@ -50,16 +50,6 @@ using namespace Catch::Matchers;
 namespace
 {
 
-MapFixtureConfig makeNamingFixtureConfig()
-{
-  auto fixtureConfig = MapFixtureConfig{};
-  fixtureConfig.gameInfo.gameConfig.entityConfig.naming = EntityNamingConfig{
-    .nameKey = "name",
-    .brushEntityModelKey = "model",
-  };
-  return fixtureConfig;
-}
-
 const std::string* nameOf(const EntityNodeBase& entityNode)
 {
   return entityNode.entity().property("name");
@@ -250,7 +240,7 @@ TEST_CASE("Map_Entities")
 
       SECTION("A game with naming rules gets unique names")
       {
-        auto fixtureConfig = makeNamingFixtureConfig();
+        auto fixtureConfig = NamingFixtureConfig;
         fixtureConfig.gameInfo.gameConfig.entityConfig.setDefaultProperties = true;
 
         auto& namingMap = fixture.create(fixtureConfig);
@@ -497,7 +487,7 @@ TEST_CASE("Map_Entities")
 
       SECTION("A game with naming rules gets unique names and models")
       {
-        auto& namingMap = fixture.create(makeNamingFixtureConfig());
+        auto& namingMap = fixture.create(NamingFixtureConfig);
         namingMap.entityDefinitionManager().setDefinitions({
           {"func_static", Color{}, "", {}},
           {"func_mover", Color{}, "", {}},

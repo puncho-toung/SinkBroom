@@ -58,31 +58,6 @@ public:
   bool operator()(const Issue*) const { return true; }
 };
 
-auto collectIssues(WorldNode& worldNode, const std::vector<const Validator*>& validators)
-{
-  auto issues = std::vector<const Issue*>{};
-  worldNode.accept(kdl::overload(
-    [&](auto&& thisLambda, WorldNode& w) {
-      kdl::vec_append(issues, w.issues(validators));
-      w.visitChildren(thisLambda);
-    },
-    [&](auto&& thisLambda, LayerNode& l) {
-      kdl::vec_append(issues, l.issues(validators));
-      l.visitChildren(thisLambda);
-    },
-    [&](auto&& thisLambda, GroupNode& g) {
-      kdl::vec_append(issues, g.issues(validators));
-      g.visitChildren(thisLambda);
-    },
-    [&](auto&& thisLambda, EntityNode& e) {
-      kdl::vec_append(issues, e.issues(validators));
-      e.visitChildren(thisLambda);
-    },
-    [&](BrushNode& b) { kdl::vec_append(issues, b.issues(validators)); },
-    [&](PatchNode& p) { kdl::vec_append(issues, p.issues(validators)); }));
-  return issues;
-}
-
 } // namespace
 
 TEST_CASE("Validation")

@@ -48,16 +48,6 @@ namespace tb::mdl
 namespace
 {
 
-MapFixtureConfig makeNamingFixtureConfig()
-{
-  auto fixtureConfig = MapFixtureConfig{};
-  fixtureConfig.gameInfo.gameConfig.entityConfig.naming = EntityNamingConfig{
-    .nameKey = "name",
-    .brushEntityModelKey = "model",
-  };
-  return fixtureConfig;
-}
-
 void setLinkDefinitions(Map& map)
 {
   map.entityDefinitionManager().setDefinitions({
@@ -839,7 +829,7 @@ common/caulk
         CHECK(triggerNode->entity().property("model") == nullptr);
       }
 
-      auto& map = fixture.create(makeNamingFixtureConfig());
+      auto& map = fixture.create(NamingFixtureConfig);
       setLinkDefinitions(map);
 
       SECTION("Pasting into a map without clashes keeps the names")
@@ -1001,7 +991,7 @@ common/caulk
         }
 
         auto otherFixture = MapFixture{};
-        auto& otherMap = otherFixture.create(makeNamingFixtureConfig());
+        auto& otherMap = otherFixture.create(NamingFixtureConfig);
         setLinkDefinitions(otherMap);
         for (size_t i = 0; i < 3; ++i)
         {

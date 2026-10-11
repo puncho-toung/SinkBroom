@@ -26,6 +26,7 @@
 #include "mdl/EntityNode.h"
 #include "mdl/EntityNodeBase.h"
 #include "mdl/GroupNode.h"
+#include "mdl/Issue.h"
 #include "mdl/LayerNode.h"
 #include "mdl/LinkedGroupUtils.h"
 #include "mdl/Map.h"
@@ -164,7 +165,7 @@ bool isBrushEntityModelClass(const std::string_view classname)
   return !isWorldspawn(std::string{classname}) && classname != FuncGroupClassname;
 }
 
-bool assignUniqueEntityName(
+bool allocateEntityName(
   Entity& entity,
   const bool hasBrushesOrPatches,
   EntityNameAllocator& allocator,
@@ -232,8 +233,7 @@ EntityNamingResult assignUniqueEntityNames(
         auto&& thisLambda, GroupNode& groupNode) { groupNode.visitChildren(thisLambda); },
       [&](EntityNode& entityNode) {
         auto entity = entityNode.entity();
-        if (assignUniqueEntityName(
-              entity, entityNode.hasChildren(), allocator, mode, result))
+        if (allocateEntityName(entity, entityNode.hasChildren(), allocator, mode, result))
         {
           entityNode.setEntity(std::move(entity));
         }
@@ -328,29 +328,27 @@ void assignUniqueEntityNamesBeforeAdding(
   const bool remapLinkSources)
 {
   // the nodes are not part of the map yet, so they see the default config
-  if (map.worldNode().entityPropertyConfig().naming)
+  contract_pre(map.worldNode().entityPropertyConfig().naming != std::nullopt);
+
+  auto allocator = EntityNameAllocator{map};
+  const auto namingResult =
+    assignUniqueEntityNames(rootsInSourceOrder, allocator, EntityNamingMode::KeepIfFree);
+
+  if (remapLinkSources)
   {
-    auto allocator = EntityNameAllocator{map};
-    const auto namingResult = assignUniqueEntityNames(
-      rootsInSourceOrder, allocator, EntityNamingMode::KeepIfFree);
+    // a group that joined a link set in the map is overwritten by the next update of
+    // that set, link source values included, so its references are left alone
+    const auto linkIdsInMap = kdl::vec_sort(collectLinkedGroupIds(map.worldNode()));
+    const auto linkedGroups =
+      collectGroups(rootsInSourceOrder) | std::views::filter([&](const auto* groupNode) {
+        return std::ranges::binary_search(linkIdsInMap, groupNode->linkId());
+      })
+      | std::views::transform(
+        [](const auto* groupNode) { return static_cast<const GroupNode*>(groupNode); })
+      | kdl::ranges::to<std::vector>();
 
-    if (remapLinkSources)
-    {
-      // a group that joined a link set in the map is overwritten by the next update of
-      // that set, link source values included, so its references are left alone
-      const auto linkIdsInMap = kdl::vec_sort(collectLinkedGroupIds(map.worldNode()));
-      const auto linkedGroups =
-        collectGroups(rootsInSourceOrder)
-        | std::views::filter([&](const auto* groupNode) {
-            return std::ranges::binary_search(linkIdsInMap, groupNode->linkId());
-          })
-        | std::views::transform(
-          [](const auto* groupNode) { return static_cast<const GroupNode*>(groupNode); })
-        | kdl::ranges::to<std::vector>();
-
-      remapLinkSourceValues(
-        map.entityDefinitionManager(), rootsInSourceOrder, namingResult, linkedGroups);
-    }
+    remapLinkSourceValues(
+      map.entityDefinitionManager(), rootsInSourceOrder, namingResult, linkedGroups);
   }
 }
 
@@ -384,6 +382,24 @@ std::vector<EntityNodeBase*> sortInTreeOrder(
     return treePosition(lhs) < treePosition(rhs);
   });
   return entityNodes;
+}
+
+std::vector<EntityNodeBase*> collectEntityNodes(
+  const Map& map, const std::vector<const Issue*>& issues, const IssueType type)
+{
+  auto entityNodes = std::vector<EntityNodeBase*>{};
+  for (const auto* issue : issues)
+  {
+    if (issue->type() == type)
+    {
+      if (auto* entityNode = dynamic_cast<EntityNodeBase*>(&issue->node()))
+      {
+        entityNodes.push_back(entityNode);
+      }
+    }
+  }
+  return sortInTreeOrder(
+    map, kdl::vec_sort_and_remove_duplicates(std::move(entityNodes)));
 }
 
 std::vector<EntityNodeBase*> findEntitiesWithName(

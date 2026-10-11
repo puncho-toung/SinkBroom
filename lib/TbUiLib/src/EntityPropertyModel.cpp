@@ -150,8 +150,7 @@ bool isPropertyImplicitlyProtected(
 {
   // every instance of a linked group keeps its own entity names and models
   const auto& naming = entityNode.entityPropertyConfig().naming;
-  return naming
-         && (key == naming->nameKey || (naming->brushEntityModelKey && key == *naming->brushEntityModelKey));
+  return naming && (key == naming->nameKey || key == naming->brushEntityModelKey);
 }
 
 PropertyProtection getPropertyProtection(
@@ -919,6 +918,12 @@ bool EntityPropertyModel::setData(
   }
   else if (index.column() == ColumnProtected && role == Qt::CheckStateRole)
   {
+    if (propertyRow.protection == PropertyProtection::ImplicitlyProtected)
+    {
+      // the protection cannot be changed
+      return false;
+    }
+
     if (value == Qt::CheckState::Checked)
     {
       MODEL_LOG(

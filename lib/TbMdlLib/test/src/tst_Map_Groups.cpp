@@ -671,14 +671,8 @@ TEST_CASE("Map_Groups")
 
   SECTION("linked groups with unique entity names")
   {
-    auto namingFixtureConfig = MapFixtureConfig{};
-    namingFixtureConfig.gameInfo.gameConfig.entityConfig.naming = EntityNamingConfig{
-      .nameKey = "name",
-      .brushEntityModelKey = "model",
-    };
-
     auto namingFixture = MapFixture{};
-    auto& namingMap = namingFixture.create(namingFixtureConfig);
+    auto& namingMap = namingFixture.create(NamingFixtureConfig);
 
     const auto nameOf = [](const Node* node) {
       const auto* entityNode = dynamic_cast<const EntityNode*>(node);

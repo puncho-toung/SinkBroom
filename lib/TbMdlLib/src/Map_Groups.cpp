@@ -416,9 +416,12 @@ GroupNode* createLinkedDuplicate(Map& map)
     static_cast<GroupNode*>(groupNode->cloneRecursively(map.worldBounds()));
   auto& suggestedParent = parentForNodes(map, {groupNode});
 
-  // the references stay as they are, as they do when a linked group is updated, since
-  // the link source keys are not protected and the next update would undo the change
-  assignUniqueEntityNamesBeforeAdding(map, {groupNodeClone}, false);
+  if (map.worldNode().entityPropertyConfig().naming)
+  {
+    // the references stay as they are, as they do when a linked group is updated, since
+    // the link source keys are not protected and the next update would undo the change
+    assignUniqueEntityNamesBeforeAdding(map, {groupNodeClone}, false);
+  }
 
   auto transaction = Transaction{map, "Create Linked Duplicate"};
   if (addNodes(map, {{&suggestedParent, {groupNodeClone}}}).empty())

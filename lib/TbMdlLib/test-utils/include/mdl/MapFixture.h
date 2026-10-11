@@ -30,6 +30,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace kdl
 {
@@ -73,13 +74,23 @@ inline const MapFixtureConfig Doom3BFGFixtureConfig = MapFixtureConfig{
   .gameInfo = Doom3BFGGameInfo,
 };
 
-// the default test game with the entity naming rules of the Doom 3 BFG game
-inline const MapFixtureConfig NamingFixtureConfig = [] {
+/**
+ * The default test game with entity naming rules like those of the Doom 3 BFG game:
+ * unique names in "name", and, unless brushEntityModelKey is nullopt, the model of an
+ * entity with brushes or patches in the given key.
+ */
+inline MapFixtureConfig makeNamingFixtureConfig(
+  std::optional<std::string> brushEntityModelKey = "model")
+{
   auto config = MapFixtureConfig{};
-  config.gameInfo.gameConfig.entityConfig.naming =
-    Doom3BFGGameInfo.gameConfig.entityConfig.naming;
+  config.gameInfo.gameConfig.entityConfig.naming = EntityNamingConfig{
+    .nameKey = "name",
+    .brushEntityModelKey = std::move(brushEntityModelKey),
+  };
   return config;
-}();
+}
+
+inline const MapFixtureConfig NamingFixtureConfig = makeNamingFixtureConfig();
 
 
 class MapFixture

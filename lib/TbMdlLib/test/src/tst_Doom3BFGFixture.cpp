@@ -38,6 +38,7 @@
 #include "mdl/MapFixture.h"
 #include "mdl/MapFormat.h"
 #include "mdl/PatchNode.h"
+#include "mdl/TestUtils.h"
 #include "mdl/Validator.h"
 #include "mdl/WorldNode.h"
 #include "mdl/WorldReader.h"
@@ -189,29 +190,10 @@ TEST_CASE("Doom3BFGFixture")
     CHECK(map.entityLinkManager().hasLink(*triggerNode, *targetNode, "target"));
 
     // every entity has a name, so an unused name is no issue
-    const auto validators = map.worldNode().registeredValidators();
-    auto unusedNameIssueCount = size_t{0};
-    const auto countUnusedNameIssues = [&](Node& node) {
-      for (const auto* issue : node.issues(validators))
-      {
-        if (
-          issue->description().find("unused link target key 'name'") != std::string::npos)
-        {
-          ++unusedNameIssueCount;
-        }
-      }
-    };
-    map.worldNode().accept(kdl::overload(
-      [&](auto&& thisLambda, WorldNode& node) {
-        countUnusedNameIssues(node);
-        node.visitChildren(thisLambda);
-      },
-      [](auto&& thisLambda, LayerNode& node) { node.visitChildren(thisLambda); },
-      [](auto&& thisLambda, GroupNode& node) { node.visitChildren(thisLambda); },
-      [&](EntityNode& node) { countUnusedNameIssues(node); },
-      [](BrushNode&) {},
-      [](PatchNode&) {}));
-    CHECK(unusedNameIssueCount == 0u);
+    const auto* linkSourceValidator =
+      findValidator(map.worldNode(), "Missing entity link source");
+    REQUIRE(linkSourceValidator != nullptr);
+    CHECK(collectIssues(map.worldNode(), linkSourceValidator->type()).empty());
   }
 }
 

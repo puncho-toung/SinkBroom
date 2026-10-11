@@ -41,6 +41,8 @@
 #include "kd/ranges/contains.h"
 #include "kd/string_utils.h"
 
+#include <algorithm>
+
 namespace tb::mdl
 {
 namespace
@@ -113,8 +115,7 @@ EntityNode* createPointEntity(
   {
     auto allocator = EntityNameAllocator{map};
     auto namingResult = EntityNamingResult{};
-    assignUniqueEntityName(
-      entity, false, allocator, EntityNamingMode::Create, namingResult);
+    allocateEntityName(entity, false, allocator, EntityNamingMode::Create, namingResult);
   }
 
   auto* entityNode = new EntityNode{std::move(entity)};
@@ -181,7 +182,7 @@ EntityNode* createBrushEntity(Map& map, const EntityDefinition& definition)
                        ? EntityNameAllocator{map, {containingEntity}}
                        : EntityNameAllocator{map};
     auto namingResult = EntityNamingResult{};
-    assignUniqueEntityName(
+    allocateEntityName(
       entity,
       true,
       allocator,

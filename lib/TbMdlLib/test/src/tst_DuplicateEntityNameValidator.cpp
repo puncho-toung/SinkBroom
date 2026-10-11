@@ -38,6 +38,7 @@
 #include "mdl/PatchNode.h"
 #include "mdl/PropertyDefinition.h"
 #include "mdl/TestFactory.h"
+#include "mdl/TestUtils.h"
 #include "mdl/Transaction.h"
 #include "mdl/Validator.h"
 #include "mdl/WorldNode.h"
@@ -58,56 +59,6 @@ namespace tb::mdl
 {
 namespace
 {
-
-MapFixtureConfig makeNamingFixtureConfig()
-{
-  auto fixtureConfig = MapFixtureConfig{};
-  fixtureConfig.gameInfo.gameConfig.entityConfig.naming = EntityNamingConfig{
-    .nameKey = "name",
-    .brushEntityModelKey = "model",
-  };
-  return fixtureConfig;
-}
-
-const Validator* findValidator(const WorldNode& worldNode, const std::string& description)
-{
-  for (const auto* validator : worldNode.registeredValidators())
-  {
-    if (validator->description() == description)
-    {
-      return validator;
-    }
-  }
-  return nullptr;
-}
-
-std::vector<const Issue*> collectIssues(WorldNode& worldNode, const IssueType type)
-{
-  const auto validators = worldNode.registeredValidators();
-
-  auto issues = std::vector<const Issue*>{};
-  const auto collect = [&](Node& node) {
-    for (const auto* issue : node.issues(validators))
-    {
-      if (issue->type() == type)
-      {
-        issues.push_back(issue);
-      }
-    }
-  };
-
-  worldNode.accept(kdl::overload(
-    [&](auto&& thisLambda, WorldNode& w) {
-      collect(w);
-      w.visitChildren(thisLambda);
-    },
-    [&](auto&& thisLambda, LayerNode& l) { l.visitChildren(thisLambda); },
-    [&](auto&& thisLambda, GroupNode& g) { g.visitChildren(thisLambda); },
-    [&](EntityNode& e) { collect(e); },
-    [](BrushNode&) {},
-    [](PatchNode&) {}));
-  return issues;
-}
 
 std::vector<const Node*> issueNodes(const std::vector<const Issue*>& issues)
 {
@@ -149,7 +100,7 @@ TEST_CASE("DuplicateEntityNameValidator")
   using namespace Catch::Matchers;
 
   auto fixture = MapFixture{};
-  auto& map = fixture.create(makeNamingFixtureConfig());
+  auto& map = fixture.create(NamingFixtureConfig);
 
   const auto* validator =
     findValidator(map.worldNode(), "Duplicate or invalid entity name");
@@ -409,7 +360,7 @@ TEST_CASE("DuplicateEntityNameValidator")
 }
 )");
 
-    auto fixtureConfig = makeNamingFixtureConfig();
+    auto fixtureConfig = NamingFixtureConfig;
     fixtureConfig.gameInfo.gameConfig.fileFormats = {
       {.format = "Valve", .initialMap = ""}};
 

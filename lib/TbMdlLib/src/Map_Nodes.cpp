@@ -384,7 +384,10 @@ void duplicateSelectedNodes(Map& map)
 
   resetLinkIdsOfNonGroupedNodes(nodesToAdd);
   copyAndSetLinkIds(nodesToAdd, map.worldNode(), map.logger());
-  assignUniqueEntityNamesBeforeAdding(map, clonedRoots, true);
+  if (map.worldNode().entityPropertyConfig().naming)
+  {
+    assignUniqueEntityNamesBeforeAdding(map, clonedRoots, true);
+  }
 
   {
     auto transaction = Transaction{map, "Duplicate Objects"};

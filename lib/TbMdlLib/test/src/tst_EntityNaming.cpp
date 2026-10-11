@@ -320,12 +320,8 @@ TEST_CASE("EntityNaming")
 
     SECTION("without a brush entity model key, no model is set")
     {
-      auto fixtureConfig = NamingFixtureConfig;
-      fixtureConfig.gameInfo.gameConfig.entityConfig.naming->brushEntityModelKey =
-        std::nullopt;
-
       auto otherFixture = MapFixture{};
-      auto& mapWithoutModels = otherFixture.create(fixtureConfig);
+      auto& mapWithoutModels = otherFixture.create(makeNamingFixtureConfig(std::nullopt));
 
       auto allocator = EntityNameAllocator{mapWithoutModels};
       assignUniqueEntityNames(roots, allocator, EntityNamingMode::Create);
@@ -497,20 +493,6 @@ TEST_CASE("EntityNaming")
 
   SECTION("assignUniqueEntityNamesBeforeAdding")
   {
-    SECTION("does nothing for a game without naming rules")
-    {
-      auto otherFixture = MapFixture{};
-      auto& defaultMap = otherFixture.create();
-      REQUIRE(defaultMap.worldNode().entityPropertyConfig().naming == std::nullopt);
-      addEntity(defaultMap, {{"classname", "light"}, {"name", "light_0"}});
-
-      auto entityNode = std::unique_ptr<EntityNode>{
-        makeEntityNode({{"classname", "light"}, {"name", "light_0"}})};
-      assignUniqueEntityNamesBeforeAdding(defaultMap, {entityNode.get()}, true);
-
-      CHECK(*nameOf(*entityNode) == "light_0");
-    }
-
     SECTION("names and remaps for a game with naming rules")
     {
       auto& namingMap = map;

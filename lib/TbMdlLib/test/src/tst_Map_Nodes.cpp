@@ -413,14 +413,8 @@ TEST_CASE("Map_Nodes")
 
     SECTION("Duplicated entities get unique names if the game requires them")
     {
-      auto namingFixtureConfig = MapFixtureConfig{};
-      namingFixtureConfig.gameInfo.gameConfig.entityConfig.naming = EntityNamingConfig{
-        .nameKey = "name",
-        .brushEntityModelKey = "model",
-      };
-
       auto namingFixture = MapFixture{};
-      auto& namingMap = namingFixture.create(namingFixtureConfig);
+      auto& namingMap = namingFixture.create(NamingFixtureConfig);
       namingMap.entityDefinitionManager().setDefinitions({
         {"trigger_once",
          Color{},

@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "mdl/IssueType.h"
 #include "mdl/Node.h"
 #include "mdl/Selection.h"
 
@@ -52,7 +53,10 @@ class BrushFace;
 class BrushNode;
 struct GameConfig;
 class GroupNode;
+class Issue;
 class Node;
+class Validator;
+class WorldNode;
 
 BrushFace createParaxial(
   const vm::vec3d& point0,
@@ -158,6 +162,25 @@ Child* getChildAs(const Node& node)
 
 Selection makeSelection(Map& map, const std::vector<Node*>& nodes);
 Selection makeSelection(Map& map, const std::vector<BrushFaceHandle>& brushFaces);
+
+/**
+ * Returns the validator registered with the given world node that has the given
+ * description, or null.
+ */
+const Validator* findValidator(
+  const WorldNode& worldNode, const std::string& description);
+
+/**
+ * Returns the issues that the given validators report for the nodes of the given world.
+ */
+std::vector<const Issue*> collectIssues(
+  WorldNode& worldNode, const std::vector<const Validator*>& validators);
+
+/**
+ * Returns the issues of the given type that the validators registered with the given
+ * world node report for its nodes.
+ */
+std::vector<const Issue*> collectIssues(WorldNode& worldNode, IssueType type);
 
 } // namespace mdl
 

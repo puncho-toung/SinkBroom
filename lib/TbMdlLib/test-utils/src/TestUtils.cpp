@@ -27,19 +27,25 @@
 #include "mdl/CatchConfig.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GroupNode.h"
+#include "mdl/Issue.h"
+#include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/ParallelUvCoordSystem.h"
 #include "mdl/ParaxialUvCoordSystem.h"
 #include "mdl/PatchNode.h"
+#include "mdl/Validator.h"
 #include "mdl/WorldNode.h"
 
 #include "kd/contracts.h"
+#include "kd/overload.h"
 #include "kd/result.h"
+#include "kd/vector_utils.h"
 
 #include "vm/polygon.h"
 #include "vm/scalar.h"
 #include "vm/segment.h"
 
+#include <algorithm>
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
@@ -387,6 +393,48 @@ Selection makeSelection(Map& map, const std::vector<Node*>& nodes)
       }));
 
   return selection;
+}
+
+const Validator* findValidator(const WorldNode& worldNode, const std::string& description)
+{
+  const auto validators = worldNode.registeredValidators();
+  const auto it = std::ranges::find_if(validators, [&](const auto* validator) {
+    return validator->description() == description;
+  });
+  return it != validators.end() ? *it : nullptr;
+}
+
+std::vector<const Issue*> collectIssues(
+  WorldNode& worldNode, const std::vector<const Validator*>& validators)
+{
+  auto issues = std::vector<const Issue*>{};
+  worldNode.accept(kdl::overload(
+    [&](auto&& thisLambda, WorldNode& w) {
+      kdl::vec_append(issues, w.issues(validators));
+      w.visitChildren(thisLambda);
+    },
+    [&](auto&& thisLambda, LayerNode& l) {
+      kdl::vec_append(issues, l.issues(validators));
+      l.visitChildren(thisLambda);
+    },
+    [&](auto&& thisLambda, GroupNode& g) {
+      kdl::vec_append(issues, g.issues(validators));
+      g.visitChildren(thisLambda);
+    },
+    [&](auto&& thisLambda, EntityNode& e) {
+      kdl::vec_append(issues, e.issues(validators));
+      e.visitChildren(thisLambda);
+    },
+    [&](BrushNode& b) { kdl::vec_append(issues, b.issues(validators)); },
+    [&](PatchNode& p) { kdl::vec_append(issues, p.issues(validators)); }));
+  return issues;
+}
+
+std::vector<const Issue*> collectIssues(WorldNode& worldNode, const IssueType type)
+{
+  auto issues = collectIssues(worldNode, worldNode.registeredValidators());
+  std::erase_if(issues, [&](const auto* issue) { return issue->type() != type; });
+  return issues;
 }
 
 Selection makeSelection(Map& map, const std::vector<BrushFaceHandle>& brushFaces)

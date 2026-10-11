@@ -50,20 +50,7 @@ IssueQuickFix makeSetModelToNameQuickFix(EntityNamingConfig config)
   return {
     "Set Model to Name",
     [config = std::move(config)](Map& map, const std::vector<const Issue*>& issues) {
-      // changing an entity destroys its issues, so the nodes are copied out first
-      auto entityNodes = std::vector<EntityNodeBase*>{};
-      for (const auto* issue : issues)
-      {
-        if (issue->type() == Type)
-        {
-          if (auto* entityNode = dynamic_cast<EntityNodeBase*>(&issue->node()))
-          {
-            entityNodes.push_back(entityNode);
-          }
-        }
-      }
-      entityNodes =
-        sortInTreeOrder(map, kdl::vec_sort_and_remove_duplicates(std::move(entityNodes)));
+      const auto entityNodes = collectEntityNodes(map, issues, Type);
 
       auto allocator = EntityNameAllocator{map};
       auto nodesToSwap = std::vector<std::pair<Node*, NodeContents>>{};

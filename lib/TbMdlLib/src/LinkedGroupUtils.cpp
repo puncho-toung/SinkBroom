@@ -472,6 +472,7 @@ void preserveEntityProperties(
       [](const BrushNode&) {},
       [](const PatchNode&) {}));
 }
+
 /**
  * Returns the properties that every entity in a linked group keeps for itself: with
  * unique entity names, the name and the brush entity model key, which differ between the

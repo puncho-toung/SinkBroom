@@ -1160,6 +1160,54 @@ void Map::setIssueHidden(const Issue& issue, const bool hidden)
   }
 }
 
+void Map::invalidateEntityNameCollisions(
+  const std::vector<Node*>& nodes, const bool recurse)
+{
+  const auto& naming = m_worldNode->entityPropertyConfig().naming;
+  if (!naming)
+  {
+    return;
+  }
+
+  // the issues of an entity depend on the other entities with its name
+  const auto invalidateNameHolders = [&](const EntityNodeBase& entityNode) {
+    if (const auto* name = entityNode.entity().property(naming->nameKey);
+        name && !name->empty())
+    {
+      for (const auto* nameHolder : findEntitiesWithName(*this, *name))
+      {
+        nameHolder->invalidateIssues();
+      }
+    }
+  };
+
+  Node::visitAll(
+    nodes,
+    kdl::overload(
+      [&](auto&& thisLambda, WorldNode& worldNode) {
+        invalidateNameHolders(worldNode);
+        if (recurse)
+        {
+          worldNode.visitChildren(thisLambda);
+        }
+      },
+      [&](auto&& thisLambda, LayerNode& layerNode) {
+        if (recurse)
+        {
+          layerNode.visitChildren(thisLambda);
+        }
+      },
+      [&](auto&& thisLambda, GroupNode& groupNode) {
+        if (recurse)
+        {
+          groupNode.visitChildren(thisLambda);
+        }
+      },
+      [&](EntityNode& entityNode) { invalidateNameHolders(entityNode); },
+      [](BrushNode&) {},
+      [](PatchNode&) {}));
+}
+
 
 void Map::loadAssets()
 {
@@ -1416,54 +1464,6 @@ void Map::removeFromNodeIndex(const std::vector<Node*>& nodes, const bool recurs
       removeFromNodeIndex(node->children(), true);
     }
   }
-}
-
-void Map::invalidateEntityNameCollisions(
-  const std::vector<Node*>& nodes, const bool recurse)
-{
-  const auto& naming = m_worldNode->entityPropertyConfig().naming;
-  if (!naming)
-  {
-    return;
-  }
-
-  // the issues of an entity depend on the other entities with its name
-  const auto invalidateNameHolders = [&](const EntityNodeBase& entityNode) {
-    if (const auto* name = entityNode.entity().property(naming->nameKey);
-        name && !name->empty())
-    {
-      for (const auto* nameHolder : findEntitiesWithName(*this, *name))
-      {
-        nameHolder->invalidateIssues();
-      }
-    }
-  };
-
-  Node::visitAll(
-    nodes,
-    kdl::overload(
-      [&](auto&& thisLambda, WorldNode& worldNode) {
-        invalidateNameHolders(worldNode);
-        if (recurse)
-        {
-          worldNode.visitChildren(thisLambda);
-        }
-      },
-      [&](auto&& thisLambda, LayerNode& layerNode) {
-        if (recurse)
-        {
-          layerNode.visitChildren(thisLambda);
-        }
-      },
-      [&](auto&& thisLambda, GroupNode& groupNode) {
-        if (recurse)
-        {
-          groupNode.visitChildren(thisLambda);
-        }
-      },
-      [&](EntityNode& entityNode) { invalidateNameHolders(entityNode); },
-      [](BrushNode&) {},
-      [](PatchNode&) {}));
 }
 
 void Map::initializeEntityLinks()

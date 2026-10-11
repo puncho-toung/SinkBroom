@@ -214,14 +214,8 @@ TEST_CASE("EntityPropertyModel")
 
   SECTION("implicitly protected properties")
   {
-    auto namingConfig = mdl::MapFixtureConfig{};
-    namingConfig.gameInfo.gameConfig.entityConfig.naming = mdl::EntityNamingConfig{
-      .nameKey = "name",
-      .brushEntityModelKey = "model",
-    };
-
     auto namingFixture = MapDocumentFixture{};
-    auto& namingDocument = namingFixture.create(namingConfig);
+    auto& namingDocument = namingFixture.create(mdl::NamingFixtureConfig);
     auto& namingMap = namingDocument.map();
 
     auto* namedEntityNode = new mdl::EntityNode{mdl::Entity{{
@@ -264,6 +258,10 @@ TEST_CASE("EntityPropertyModel")
       CHECK_FALSE(namingModel.flags(index).testFlag(Qt::ItemIsEnabled));
       CHECK(
         namingModel.data(index, Qt::CheckStateRole) == QVariant{Qt::CheckState::Checked});
+
+      // the protection cannot be changed, not even programmatically
+      namingModel.setData(index, QVariant{Qt::CheckState::Checked}, Qt::CheckStateRole);
+      CHECK(namedEntityNode->entity().protectedProperties().empty());
     }
 
     SECTION("the name of an ungrouped entity cannot be protected")

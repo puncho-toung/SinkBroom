@@ -32,6 +32,7 @@
 #include "mdl/Map_Selection.h"
 #include "mdl/PatchNode.h"
 #include "mdl/TestFactory.h"
+#include "mdl/TestUtils.h"
 #include "mdl/Transaction.h"
 #include "mdl/Validator.h"
 #include "mdl/WorldNode.h"
@@ -48,56 +49,6 @@ namespace tb::mdl
 namespace
 {
 
-MapFixtureConfig makeNamingFixtureConfig(std::optional<std::string> brushEntityModelKey)
-{
-  auto fixtureConfig = MapFixtureConfig{};
-  fixtureConfig.gameInfo.gameConfig.entityConfig.naming = EntityNamingConfig{
-    .nameKey = "name",
-    .brushEntityModelKey = std::move(brushEntityModelKey),
-  };
-  return fixtureConfig;
-}
-
-const Validator* findValidator(const WorldNode& worldNode, const std::string& description)
-{
-  for (const auto* validator : worldNode.registeredValidators())
-  {
-    if (validator->description() == description)
-    {
-      return validator;
-    }
-  }
-  return nullptr;
-}
-
-std::vector<const Issue*> collectIssues(WorldNode& worldNode, const IssueType type)
-{
-  const auto validators = worldNode.registeredValidators();
-
-  auto issues = std::vector<const Issue*>{};
-  const auto collect = [&](Node& node) {
-    for (const auto* issue : node.issues(validators))
-    {
-      if (issue->type() == type)
-      {
-        issues.push_back(issue);
-      }
-    }
-  };
-
-  worldNode.accept(kdl::overload(
-    [&](auto&& thisLambda, WorldNode& w) {
-      collect(w);
-      w.visitChildren(thisLambda);
-    },
-    [&](auto&& thisLambda, LayerNode& l) { l.visitChildren(thisLambda); },
-    [&](auto&& thisLambda, GroupNode& g) { g.visitChildren(thisLambda); },
-    [&](EntityNode& e) { collect(e); },
-    [](BrushNode&) {},
-    [](PatchNode&) {}));
-  return issues;
-}
-
 std::string propertyOf(const EntityNode& entityNode, const std::string& key)
 {
   const auto* value = entityNode.entity().property(key);
@@ -109,7 +60,7 @@ std::string propertyOf(const EntityNode& entityNode, const std::string& key)
 TEST_CASE("BrushEntityModelValidator")
 {
   auto fixture = MapFixture{};
-  auto& map = fixture.create(makeNamingFixtureConfig("model"));
+  auto& map = fixture.create(NamingFixtureConfig);
 
   const auto* validator =
     findValidator(map.worldNode(), "Brush entity model differs from its name");

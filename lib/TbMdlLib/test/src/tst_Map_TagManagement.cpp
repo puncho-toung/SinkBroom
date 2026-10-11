@@ -733,14 +733,8 @@ TEST_CASE("Map_TagManagement")
     SECTION("enable names the new entity if the game requires unique names")
     {
       // like the Trigger tag of the Doom 3 BFG game config
-      auto namingFixtureConfig = MapFixtureConfig{};
-      namingFixtureConfig.gameInfo.gameConfig.entityConfig.naming = EntityNamingConfig{
-        .nameKey = "name",
-        .brushEntityModelKey = "model",
-      };
-
       auto namingFixture = MapFixture{};
-      auto& namingMap = namingFixture.create(namingFixtureConfig);
+      auto& namingMap = namingFixture.create(NamingFixtureConfig);
       namingMap.entityDefinitionManager().setDefinitions({
         {"trigger_multiple", Color{}, "", {}},
       });

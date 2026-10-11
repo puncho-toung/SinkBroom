@@ -20,6 +20,7 @@
 #pragma once
 
 #include "mdl/EntityProperties.h"
+#include "mdl/IssueType.h"
 
 #include <string>
 #include <string_view>
@@ -34,6 +35,7 @@ class Entity;
 class EntityDefinitionManager;
 class EntityNodeBase;
 class GroupNode;
+class Issue;
 class Map;
 class Node;
 
@@ -139,13 +141,13 @@ struct EntityNamingResult
 bool isBrushEntityModelClass(std::string_view classname);
 
 /**
- * Gives the given entity a unique name according to the given mode, and sets its brush
- * entity model key to that name if it has brushes or patches. The worldspawn entity is
- * never named.
+ * Gives the given entity, a single entity that is not in the map or about to change, a
+ * unique name according to the given mode, and sets its brush entity model key to that
+ * name if it has brushes or patches. The worldspawn entity is never named.
  *
  * Returns true if the entity was changed.
  */
-bool assignUniqueEntityName(
+bool allocateEntityName(
   Entity& entity,
   bool hasBrushesOrPatches,
   EntityNameAllocator& allocator,
@@ -183,12 +185,12 @@ void remapLinkSourceValues(
   const std::vector<const GroupNode*>& skippedGroups = {});
 
 /**
- * If the map's game requires unique entity names, names the entities in the given
- * subtrees, which are about to be added to the map, in KeepIfFree mode, and if
- * remapLinkSources is true, changes the references among them to their new names,
- * except inside groups that stay linked to groups in the map.
+ * Names the entities in the given subtrees, which are about to be added to the map, in
+ * KeepIfFree mode, and if remapLinkSources is true, changes the references among them to
+ * their new names, except inside groups that stay linked to groups in the map.
  *
- * Does nothing for a game without naming rules.
+ * The map's game must have naming rules; callers check that before they collect the
+ * nodes, so that games without them do no work.
  */
 void assignUniqueEntityNamesBeforeAdding(
   const Map& map, const std::vector<Node*>& rootsInSourceOrder, bool remapLinkSources);
@@ -199,6 +201,14 @@ void assignUniqueEntityNamesBeforeAdding(
  */
 std::vector<EntityNodeBase*> sortInTreeOrder(
   const Map& map, std::vector<EntityNodeBase*> entityNodes);
+
+/**
+ * Returns the entity nodes of the given issues of the given type, without duplicates and
+ * in tree order. A quick fix calls this before it changes anything, because a change
+ * destroys the issues of the changed entity and of every entity with the same name.
+ */
+std::vector<EntityNodeBase*> collectEntityNodes(
+  const Map& map, const std::vector<const Issue*>& issues, IssueType type);
 
 /**
  * Returns the entities in the map whose name equals the given name without regard to

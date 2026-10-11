@@ -229,11 +229,14 @@ bool pasteNodes(Map& map, const std::vector<Node*>& nodes)
   fixRecursiveLinkedGroups(nodesToAdd, map.logger());
   copyAndSetLinkIds(nodesToAdd, map.worldNode(), map.logger());
 
-  // all pasted nodes have the same parent and are in clipboard order
-  assignUniqueEntityNamesBeforeAdding(
-    map,
-    nodesToAdd | std::views::values | std::views::join | kdl::ranges::to<std::vector>(),
-    true);
+  if (map.worldNode().entityPropertyConfig().naming)
+  {
+    // all pasted nodes have the same parent and are in clipboard order
+    assignUniqueEntityNamesBeforeAdding(
+      map,
+      nodesToAdd | std::views::values | std::views::join | kdl::ranges::to<std::vector>(),
+      true);
+  }
 
   auto transaction = Transaction{map, "Paste Nodes"};
 
