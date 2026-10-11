@@ -27,10 +27,12 @@
 #include "gl/ResourceManager.h"
 #include "mdl/AssetUtils.h"
 #include "mdl/BrushBuilder.h"
+#include "mdl/BrushEntityModelValidator.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
 #include "mdl/Command.h"
 #include "mdl/CommandProcessor.h"
+#include "mdl/DuplicateEntityNameValidator.h"
 #include "mdl/EditorContext.h"
 #include "mdl/EmptyBrushEntityValidator.h"
 #include "mdl/EmptyGroupValidator.h"
@@ -40,6 +42,7 @@
 #include "mdl/EntityDefinitionUtils.h"
 #include "mdl/EntityLinkManager.h"
 #include "mdl/EntityModelManager.h"
+#include "mdl/EntityNaming.h"
 #include "mdl/EntityNode.h"
 #include "mdl/EnvironmentConfig.h"
 #include "mdl/GameFileSystem.h"
@@ -1100,8 +1103,12 @@ void Map::registerValidators()
   m_worldNode->registerValidator(std::make_unique<EmptyGroupValidator>());
   m_worldNode->registerValidator(std::make_unique<EmptyBrushEntityValidator>());
   m_worldNode->registerValidator(std::make_unique<PointEntityWithBrushesValidator>());
-  m_worldNode->registerValidator(
-    std::make_unique<LinkSourceValidator>(*m_entityLinkManager));
+
+  // with unique entity names, every entity is a link target, referenced or not
+  const auto& naming = m_worldNode->entityPropertyConfig().naming;
+  m_worldNode->registerValidator(std::make_unique<LinkSourceValidator>(
+    *m_entityLinkManager,
+    naming ? std::vector<std::string>{naming->nameKey} : std::vector<std::string>{}));
   m_worldNode->registerValidator(
     std::make_unique<LinkTargetValidator>(*m_entityLinkManager));
   m_worldNode->registerValidator(std::make_unique<NonIntegerVerticesValidator>());
@@ -1120,6 +1127,17 @@ void Map::registerValidators()
     std::make_unique<PropertyValueWithDoubleQuotationMarksValidator>());
   m_worldNode->registerValidator(std::make_unique<WorldNodePathSeparatorValidator>());
   m_worldNode->registerValidator(std::make_unique<InvalidUvScaleValidator>());
+
+  if (naming)
+  {
+    m_worldNode->registerValidator(
+      std::make_unique<DuplicateEntityNameValidator>(*this, *naming));
+    if (naming->brushEntityModelKey)
+    {
+      m_worldNode->registerValidator(
+        std::make_unique<BrushEntityModelValidator>(*naming));
+    }
+  }
 }
 
 void Map::setIssueHidden(const Issue& issue, const bool hidden)
@@ -1376,6 +1394,54 @@ void Map::removeFromNodeIndex(const std::vector<Node*>& nodes, const bool recurs
       removeFromNodeIndex(node->children(), true);
     }
   }
+}
+
+void Map::invalidateEntityNameCollisions(
+  const std::vector<Node*>& nodes, const bool recurse)
+{
+  const auto& naming = m_worldNode->entityPropertyConfig().naming;
+  if (!naming)
+  {
+    return;
+  }
+
+  // the issues of an entity depend on the other entities with its name
+  const auto invalidateNameHolders = [&](const EntityNodeBase& entityNode) {
+    if (const auto* name = entityNode.entity().property(naming->nameKey);
+        name && !name->empty())
+    {
+      for (const auto* nameHolder : findEntitiesWithName(*this, naming->nameKey, *name))
+      {
+        nameHolder->invalidateIssues();
+      }
+    }
+  };
+
+  Node::visitAll(
+    nodes,
+    kdl::overload(
+      [&](auto&& thisLambda, WorldNode& worldNode) {
+        invalidateNameHolders(worldNode);
+        if (recurse)
+        {
+          worldNode.visitChildren(thisLambda);
+        }
+      },
+      [&](auto&& thisLambda, LayerNode& layerNode) {
+        if (recurse)
+        {
+          layerNode.visitChildren(thisLambda);
+        }
+      },
+      [&](auto&& thisLambda, GroupNode& groupNode) {
+        if (recurse)
+        {
+          groupNode.visitChildren(thisLambda);
+        }
+      },
+      [&](EntityNode& entityNode) { invalidateNameHolders(entityNode); },
+      [](BrushNode&) {},
+      [](PatchNode&) {}));
 }
 
 void Map::initializeEntityLinks()
@@ -1653,6 +1719,7 @@ void Map::nodesWereAdded(const std::vector<Node*>& nodes)
   setMaterials(nodes);
   initializeNodeTags(nodes);
   addToNodeIndex(nodes, true);
+  invalidateEntityNameCollisions(nodes, true);
   addEntityLinks(nodes, true);
 
   m_selection.update(computeSelectionChangeForAddedNodes(nodes));
@@ -1662,6 +1729,7 @@ void Map::nodesWereAdded(const std::vector<Node*>& nodes)
 void Map::nodesWillBeRemoved(const std::vector<Node*>& nodes)
 {
   removeEntityLinks(nodes, true);
+  invalidateEntityNameCollisions(nodes, true);
   removeFromNodeIndex(nodes, true);
   clearNodeTags(nodes);
 }
@@ -1679,6 +1747,7 @@ void Map::nodesWereRemoved(const std::vector<Node*>& nodes)
 void Map::nodesWillChange(const std::vector<Node*>& nodes)
 {
   removeEntityLinks(nodes, false);
+  invalidateEntityNameCollisions(nodes, false);
   removeFromNodeIndex(nodes, false);
 }
 
@@ -1689,6 +1758,7 @@ void Map::nodesDidChange(const std::vector<Node*>& nodes)
   setMaterials(nodes);
   updateNodeTags(collectNodesAndDescendants(nodes));
   addToNodeIndex(nodes, false);
+  invalidateEntityNameCollisions(nodes, false);
   addEntityLinks(nodes, false);
 
   m_selection.invalidate();

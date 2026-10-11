@@ -24,6 +24,8 @@
 #include "mdl/Issue.h"
 #include "mdl/IssueQuickFix.h"
 
+#include "kd/ranges/contains.h"
+
 #include <string>
 
 namespace tb::mdl
@@ -33,9 +35,11 @@ namespace
 const auto Type = freeIssueType();
 } // namespace
 
-LinkSourceValidator::LinkSourceValidator(const EntityLinkManager& entityLinkManager)
+LinkSourceValidator::LinkSourceValidator(
+  const EntityLinkManager& entityLinkManager, std::vector<std::string> ignoredTargetKeys)
   : Validator{Type, "Missing entity link source"}
   , m_entityLinkManager{entityLinkManager}
+  , m_ignoredTargetKeys{std::move(ignoredTargetKeys)}
 {
   addQuickFix(makeRemoveEntityPropertiesQuickFix(Type));
 }
@@ -49,6 +53,11 @@ void LinkSourceValidator::doValidate(
   {
     for (const auto& key : missingLinkKeys)
     {
+      if (kdl::ranges::contains(m_ignoredTargetKeys, key))
+      {
+        continue;
+      }
+
       issues.push_back(std::make_unique<EntityPropertyIssue>(
         Type,
         entityNode,

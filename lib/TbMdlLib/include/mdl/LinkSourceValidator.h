@@ -21,6 +21,7 @@
 
 #include "mdl/Validator.h"
 
+#include <string>
 #include <vector>
 
 namespace tb::mdl
@@ -31,9 +32,16 @@ class LinkSourceValidator : public Validator
 {
 private:
   const EntityLinkManager& m_entityLinkManager;
+  std::vector<std::string> m_ignoredTargetKeys;
 
 public:
-  explicit LinkSourceValidator(const EntityLinkManager& entityLinkManager);
+  /**
+   * Link target keys in ignoredTargetKeys are not reported, e.g. the name key of a game
+   * that names every entity, whether or not another entity refers to it.
+   */
+  explicit LinkSourceValidator(
+    const EntityLinkManager& entityLinkManager,
+    std::vector<std::string> ignoredTargetKeys = {});
 
 private:
   void doValidate(EntityNodeBase& entityNode, std::vector<std::unique_ptr<Issue>>& issues)

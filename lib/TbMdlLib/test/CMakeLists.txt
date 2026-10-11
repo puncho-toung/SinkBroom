@@ -7,6 +7,7 @@ target_sources(TbMdlLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BezierPatch.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Brush.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BrushBuilder.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BrushEntityModelValidator.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BrushFace.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BrushNode.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CommandProcessor.cpp
@@ -16,6 +17,7 @@ target_sources(TbMdlLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DefParser.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Doom3BFGFixture.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Doom3MaterialParser.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DuplicateEntityNameValidator.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EditorContext.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Entity.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityColorPropertyValue.cpp

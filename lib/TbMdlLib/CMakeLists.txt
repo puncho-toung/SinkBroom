@@ -9,6 +9,7 @@ target_sources(TbMdlLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BezierPatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Brush.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BrushBuilder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/BrushEntityModelValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BrushFace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BrushFaceHandle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BrushFaceReader.cpp
@@ -27,6 +28,7 @@ target_sources(TbMdlLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DecalDefinition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DefParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Doom3MaterialParser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/DuplicateEntityNameValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EditorContext.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EmptyBrushEntityValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EmptyGroupValidator.cpp

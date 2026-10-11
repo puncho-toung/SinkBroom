@@ -163,6 +163,13 @@ void assignUniqueEntityNamesBeforeAdding(
   const Map& map, const std::vector<Node*>& rootsInSourceOrder, bool remapLinkSources);
 
 /**
+ * Sorts the given entity nodes of the map in the order of a depth first traversal of the
+ * map, so that operations on them do not depend on the order of a selection.
+ */
+std::vector<EntityNodeBase*> sortInTreeOrder(
+  const Map& map, std::vector<EntityNodeBase*> entityNodes);
+
+/**
  * Returns the entities in the map whose naming key has exactly the given value.
  */
 std::vector<EntityNodeBase*> findEntitiesWithName(

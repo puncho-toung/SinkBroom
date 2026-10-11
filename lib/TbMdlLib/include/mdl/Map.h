@@ -334,6 +334,7 @@ private:
 
 private: // validation
   void registerValidators();
+  void invalidateEntityNameCollisions(const std::vector<Node*>& nodes, bool recurse);
 
 public:
   void setIssueHidden(const Issue& issue, bool hidden);

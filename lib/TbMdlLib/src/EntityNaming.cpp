@@ -386,6 +386,38 @@ void assignUniqueEntityNamesBeforeAdding(
   }
 }
 
+std::vector<EntityNodeBase*> sortInTreeOrder(
+  const Map& map, std::vector<EntityNodeBase*> entityNodes)
+{
+  auto treePositions = std::unordered_map<const Node*, size_t>{};
+  map.worldNode().accept(kdl::overload(
+    [&](auto&& thisLambda, const WorldNode& worldNode) {
+      treePositions.emplace(&worldNode, treePositions.size());
+      worldNode.visitChildren(thisLambda);
+    },
+    [](auto&& thisLambda, const LayerNode& layerNode) {
+      layerNode.visitChildren(thisLambda);
+    },
+    [](auto&& thisLambda, const GroupNode& groupNode) {
+      groupNode.visitChildren(thisLambda);
+    },
+    [&](const EntityNode& entityNode) {
+      treePositions.emplace(&entityNode, treePositions.size());
+    },
+    [](const BrushNode&) {},
+    [](const PatchNode&) {}));
+
+  const auto treePosition = [&](const Node* node) {
+    const auto it = treePositions.find(node);
+    return it != treePositions.end() ? it->second : treePositions.size();
+  };
+
+  std::ranges::stable_sort(entityNodes, [&](const auto* lhs, const auto* rhs) {
+    return treePosition(lhs) < treePosition(rhs);
+  });
+  return entityNodes;
+}
+
 std::vector<EntityNodeBase*> findEntitiesWithName(
   const Map& map, const std::string& nameKey, const std::string& name)
 {

@@ -25,15 +25,20 @@
 #include "mdl/CatchConfig.h"
 #include "mdl/EntityDefinition.h"
 #include "mdl/EntityDefinitionManager.h"
+#include "mdl/EntityDefinitionUtils.h"
+#include "mdl/EntityLinkManager.h"
+#include "mdl/EntityNaming.h"
 #include "mdl/EntityNode.h"
 #include "mdl/FgdParser.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/GroupNode.h"
+#include "mdl/Issue.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/MapFormat.h"
 #include "mdl/PatchNode.h"
+#include "mdl/Validator.h"
 #include "mdl/WorldNode.h"
 #include "mdl/WorldReader.h"
 
@@ -43,7 +48,9 @@
 
 #include "vm/bbox.h"
 
+#include <algorithm>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -147,6 +154,64 @@ TEST_CASE("Doom3BFGFixture")
     CHECK(definitions.value().size() == 10u);
     CHECK(status.countStatus(LogLevel::Error) == 0u);
     CHECK(status.countStatus(LogLevel::Warn) == 0u);
+  }
+
+  SECTION("Links come from the entity definitions")
+  {
+    // the FGD declares name(target_source) and target(target_destination), as the FGDs
+    // that RBDOOM-3-BFG exports do, so no link keys are hard-coded for Doom 3
+    const auto path = gamePath / "base" / "maps" / "tb_test_valve220.map";
+
+    auto fixture = MapFixture{};
+    auto& map = fixture.load(path, Doom3BFGFixtureConfig);
+
+    const auto* triggerDefinition =
+      map.entityDefinitionManager().definition("trigger_once");
+    REQUIRE(triggerDefinition != nullptr);
+    CHECK(isLinkTargetProperty(triggerDefinition, "name"));
+    CHECK(isLinkSourceProperty(triggerDefinition, "target"));
+
+    // the targetname fallback for definition files without link types was not applied
+    CHECK(std::ranges::none_of(
+      map.entityDefinitionManager().definitions(), [](const auto& definition) {
+        return getPropertyDefinition(definition, EntityPropertyKeys::Targetname)
+               != nullptr;
+      }));
+
+    const auto findEntity = [&](const std::string& name) {
+      auto entityNodes = findEntitiesWithName(map, "name", name);
+      REQUIRE(entityNodes.size() == 1u);
+      return entityNodes.front();
+    };
+
+    const auto* triggerNode = findEntity("trigger_once_1");
+    const auto* targetNode = findEntity("target_null_1");
+    CHECK(map.entityLinkManager().hasLink(*triggerNode, *targetNode, "target"));
+
+    // every entity has a name, so an unused name is no issue
+    const auto validators = map.worldNode().registeredValidators();
+    auto unusedNameIssueCount = size_t{0};
+    const auto countUnusedNameIssues = [&](Node& node) {
+      for (const auto* issue : node.issues(validators))
+      {
+        if (
+          issue->description().find("unused link target key 'name'") != std::string::npos)
+        {
+          ++unusedNameIssueCount;
+        }
+      }
+    };
+    map.worldNode().accept(kdl::overload(
+      [&](auto&& thisLambda, WorldNode& node) {
+        countUnusedNameIssues(node);
+        node.visitChildren(thisLambda);
+      },
+      [](auto&& thisLambda, LayerNode& node) { node.visitChildren(thisLambda); },
+      [](auto&& thisLambda, GroupNode& node) { node.visitChildren(thisLambda); },
+      [&](EntityNode& node) { countUnusedNameIssues(node); },
+      [](BrushNode&) {},
+      [](PatchNode&) {}));
+    CHECK(unusedNameIssueCount == 0u);
   }
 }
 
