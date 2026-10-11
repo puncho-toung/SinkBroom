@@ -78,7 +78,9 @@ enum class PropertyProtection
   NotProtectable,
   Protected,
   NotProtected,
-  Mixed
+  Mixed,
+  // protected in linked groups by the game's naming rules, so it cannot be unprotected
+  ImplicitlyProtected,
 };
 
 std::ostream& operator<<(std::ostream& lhs, const PropertyProtection& rhs);

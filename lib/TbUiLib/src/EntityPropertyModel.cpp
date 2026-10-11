@@ -145,11 +145,25 @@ bool isPropertyProtectable(const mdl::EntityNodeBase& entityNode, const std::str
   return mdl::findContainingGroup(&entityNode) && key != mdl::EntityPropertyKeys::Origin;
 }
 
+bool isPropertyImplicitlyProtected(
+  const mdl::EntityNodeBase& entityNode, const std::string& key)
+{
+  // every instance of a linked group keeps its own entity names and models
+  const auto& naming = entityNode.entityPropertyConfig().naming;
+  return naming
+         && (key == naming->nameKey || (naming->brushEntityModelKey && key == *naming->brushEntityModelKey));
+}
+
 PropertyProtection getPropertyProtection(
   const mdl::EntityNodeBase& entityNode, const std::string& key)
 {
   if (isPropertyProtectable(entityNode, key))
   {
+    if (isPropertyImplicitlyProtected(entityNode, key))
+    {
+      return PropertyProtection::ImplicitlyProtected;
+    }
+
     for (const auto& protectedKey : entityNode.entity().protectedProperties())
     {
       if (mdl::isNumberedProperty(protectedKey, key))
@@ -551,6 +565,8 @@ std::ostream& operator<<(std::ostream& lhs, const PropertyProtection& rhs)
     return lhs << "NotProtected";
   case PropertyProtection::Mixed:
     return lhs << "Mixed";
+  case PropertyProtection::ImplicitlyProtected:
+    return lhs << "ImplicitlyProtected";
     switchDefault();
   }
 }
@@ -698,7 +714,12 @@ Qt::ItemFlags EntityPropertyModel::flags(const QModelIndex& index) const
 
   if (index.column() == ColumnProtected)
   {
-    if (row.protection != PropertyProtection::NotProtectable)
+    if (row.protection == PropertyProtection::ImplicitlyProtected)
+    {
+      // shown checked and greyed out
+      flags.setFlag(Qt::ItemIsEnabled, false);
+    }
+    else if (row.protection != PropertyProtection::NotProtectable)
     {
       flags |= Qt::ItemIsUserCheckable;
     }
@@ -809,7 +830,9 @@ QVariant EntityPropertyModel::data(const QModelIndex& index, const int role) con
   {
     if (index.column() == ColumnProtected)
     {
-      if (row.protection == PropertyProtection::Protected)
+      if (
+        row.protection == PropertyProtection::Protected
+        || row.protection == PropertyProtection::ImplicitlyProtected)
       {
         return QVariant{Qt::CheckState::Checked};
       }
@@ -828,6 +851,12 @@ QVariant EntityPropertyModel::data(const QModelIndex& index, const int role) con
   {
     if (index.column() == ColumnProtected)
     {
+      if (row.protection == PropertyProtection::ImplicitlyProtected)
+      {
+        return QVariant{
+          "Property is always protected from changes in linked groups, since every "
+          "linked group keeps its own entity names and models"};
+      }
       return QVariant{"Property is protected from changes in linked groups if checked"};
     }
     else

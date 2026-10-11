@@ -17,10 +17,13 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <QVariant>
+
 #include "mdl/EntityDefinitionManager.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GroupNode.h"
 #include "mdl/Map.h"
+#include "mdl/MapFixture.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/NodeIndex.h"
@@ -28,6 +31,8 @@
 #include "ui/EntityPropertyModel.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
+
+#include <string>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -204,6 +209,69 @@ TEST_CASE("EntityPropertyModel")
       mdl::selectNodes(map, {groupedEntityNode});
       model.updateFromMap();
       CHECK(model.shouldShowProtectedProperties());
+    }
+  }
+
+  SECTION("implicitly protected properties")
+  {
+    auto namingConfig = mdl::MapFixtureConfig{};
+    namingConfig.gameInfo.gameConfig.entityConfig.naming = mdl::EntityNamingConfig{
+      .nameKey = "name",
+      .brushEntityModelKey = "model",
+    };
+
+    auto namingFixture = MapDocumentFixture{};
+    auto& namingDocument = namingFixture.create(namingConfig);
+    auto& namingMap = namingDocument.map();
+
+    auto* namedEntityNode = new mdl::EntityNode{mdl::Entity{{
+      {"classname", "func_static"},
+      {"name", "door"},
+      {"model", "door"},
+      {"some_key", "some_value"},
+    }}};
+    auto* namingGroupNode = new mdl::GroupNode{mdl::Group{"group"}};
+    namingGroupNode->addChild(namedEntityNode);
+
+    auto* ungroupedEntityNode = new mdl::EntityNode{mdl::Entity{{
+      {"classname", "info_null"},
+      {"name", "info_null_0"},
+    }}};
+
+    mdl::addNodes(
+      namingMap,
+      {{&mdl::parentForNodes(namingMap), {namingGroupNode, ungroupedEntityNode}}});
+
+    auto namingModel = EntityPropertyModel{namingDocument};
+    const auto protectionOf = [&](const std::string& key) {
+      const auto rowIndex = namingModel.rowIndexForPropertyKey(key);
+      REQUIRE(rowIndex >= 0);
+      return namingModel.rows().at(size_t(rowIndex)).protection;
+    };
+
+    SECTION("the name and model of a grouped entity are protected and greyed out")
+    {
+      mdl::selectNodes(namingMap, {namedEntityNode});
+      namingModel.updateFromMap();
+
+      CHECK(protectionOf("name") == PropertyProtection::ImplicitlyProtected);
+      CHECK(protectionOf("model") == PropertyProtection::ImplicitlyProtected);
+      CHECK(protectionOf("some_key") == PropertyProtection::NotProtected);
+
+      const auto index = namingModel.index(
+        namingModel.rowIndexForPropertyKey("name"), EntityPropertyModel::ColumnProtected);
+      CHECK_FALSE(namingModel.flags(index).testFlag(Qt::ItemIsUserCheckable));
+      CHECK_FALSE(namingModel.flags(index).testFlag(Qt::ItemIsEnabled));
+      CHECK(
+        namingModel.data(index, Qt::CheckStateRole) == QVariant{Qt::CheckState::Checked});
+    }
+
+    SECTION("the name of an ungrouped entity cannot be protected")
+    {
+      mdl::selectNodes(namingMap, {ungroupedEntityNode});
+      namingModel.updateFromMap();
+
+      CHECK(protectionOf("name") == PropertyProtection::NotProtectable);
     }
   }
 
