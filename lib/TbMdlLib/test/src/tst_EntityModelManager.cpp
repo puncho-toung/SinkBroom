@@ -253,6 +253,70 @@ TEST_CASE("EntityModelManager")
     }
   }
 
+  SECTION("id Tech 4 glTF models")
+  {
+    // named.glb is a box from (0, 0, 0) to (4, 2, 1) in glTF coordinates, whose material
+    // is named "models/test/wedge" and has an embedded 2x2 texture; no decl has that
+    // name, but _tb/models/test/wedge.tga, 4x2, is the engine's export of the image of
+    // the implicit material
+    auto assimpFileSystem =
+      fs::DiskFileSystem{getFixtureRoot() / "test/mdl/LoadAssimpModel"};
+    auto taskManager = kdl::task_manager{};
+
+    const auto makeManager = [&](const GameInfo& gameInfo) {
+      auto glbManager = std::make_unique<EntityModelManager>(
+        gameInfo,
+        assimpFileSystem,
+        [](auto resourceLoader) {
+          return gl::createResourceSync(std::move(resourceLoader));
+        },
+        logger);
+      glbManager->reloadShaders(taskManager);
+      return glbManager;
+    };
+
+    const auto modelPath = std::filesystem::path{"idtech4/named.glb"};
+
+    SECTION("the id Tech 4 convention turns the model and resolves its material name")
+    {
+      const auto glbManager = makeManager(Doom3BFGGameInfo);
+
+      const auto* model = glbManager->model(modelPath);
+      REQUIRE(model != nullptr);
+      REQUIRE(model->data() != nullptr);
+
+      // (x, y, z) becomes (x, -z, y)
+      CHECK(vm::approx(model->data()->bounds(0)) == vm::bbox3f{{0, -1, 0}, {4, 0, 2}});
+
+      REQUIRE(model->data()->surface(0).skinCount() == 1u);
+      const auto* skin = model->data()->surface(0).skin(0);
+      CHECK(skin->relativePath() == "models/test/wedge");
+      REQUIRE(skin->texture() != nullptr);
+      CHECK(skin->texture()->width() == 4u);
+      CHECK(skin->texture()->height() == 2u);
+    }
+
+    SECTION("without the convention, the model shows its own texture")
+    {
+      auto defaultGameInfo = Doom3BFGGameInfo;
+      defaultGameInfo.gameConfig.entityConfig.modelConvention = ModelConvention::Default;
+      const auto glbManager = makeManager(defaultGameInfo);
+
+      const auto* model = glbManager->model(modelPath);
+      REQUIRE(model != nullptr);
+      REQUIRE(model->data() != nullptr);
+
+      // (x, y, z) becomes (z, x, y)
+      CHECK(vm::approx(model->data()->bounds(0)) == vm::bbox3f{{0, 0, 0}, {1, 4, 2}});
+
+      REQUIRE(model->data()->surface(0).skinCount() == 1u);
+      const auto* skin = model->data()->surface(0).skin(0);
+      CHECK(skin->name() == "models/test/wedge");
+      REQUIRE(skin->texture() != nullptr);
+      CHECK(skin->texture()->width() == 2u);
+    }
+  }
+
   SECTION("findEntityModelsByTextureResourceId")
   {
     const auto* model = manager.model("armor.mdl");

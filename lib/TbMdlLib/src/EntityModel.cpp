@@ -263,6 +263,20 @@ public:
     return doBuildRenderer(skin, vertexArray);
   }
 
+  /**
+   * Calls the given function for each primitive of this mesh.
+   */
+  void forEachPrimitive(const EntityModelSurface::PrimitiveFunction& function) const
+  {
+    doForEachPrimitive([&](
+                         const gl::Material* skin,
+                         const gl::PrimType primType,
+                         const size_t index,
+                         const size_t count) {
+      function(skin, primType, std::span{m_vertices}.subspan(index, count));
+    });
+  }
+
 private:
   /**
    * Creates and returns the actual mesh renderer
@@ -273,6 +287,10 @@ private:
    */
   virtual std::unique_ptr<gl::MaterialIndexRangeRenderer> doBuildRenderer(
     const gl::Material* skin, const gl::VertexArray& vertices) const = 0;
+
+  virtual void doForEachPrimitive(
+    const std::function<void(const gl::Material*, gl::PrimType, size_t, size_t)>&
+      function) const = 0;
 };
 
 // EntityModelData::IndexedMesh
@@ -318,6 +336,17 @@ private:
     const gl::MaterialIndexRangeMap indices(skin, m_indices);
     return std::make_unique<gl::MaterialIndexRangeRenderer>(vertices, indices);
   }
+
+  void doForEachPrimitive(
+    const std::function<void(const gl::Material*, gl::PrimType, size_t, size_t)>&
+      function) const override
+  {
+    // drawn with whichever skin is selected
+    m_indices.forEachPrimitive(
+      [&](const gl::PrimType primType, const size_t index, const size_t count) {
+        function(nullptr, primType, index, count);
+      });
+  }
 };
 
 // EntityModelMaterialMesh
@@ -362,6 +391,13 @@ private:
     const gl::Material* /* skin */, const gl::VertexArray& vertices) const override
   {
     return std::make_unique<gl::MaterialIndexRangeRenderer>(vertices, m_indices);
+  }
+
+  void doForEachPrimitive(
+    const std::function<void(const gl::Material*, gl::PrimType, size_t, size_t)>&
+      function) const override
+  {
+    m_indices.forEachPrimitive(function);
   }
 };
 
@@ -452,6 +488,15 @@ const gl::Material* EntityModelSurface::skin(const std::string& name) const
 const gl::Material* EntityModelSurface::skin(const size_t index) const
 {
   return m_skins->materialByIndex(index);
+}
+
+void EntityModelSurface::forEachPrimitive(
+  const size_t frameIndex, const PrimitiveFunction& function) const
+{
+  if (const auto* mesh = frameIndex < frameCount() ? m_meshes[frameIndex].get() : nullptr)
+  {
+    mesh->forEachPrimitive(function);
+  }
 }
 
 std::unique_ptr<gl::MaterialIndexRangeRenderer> EntityModelSurface::buildRenderer(

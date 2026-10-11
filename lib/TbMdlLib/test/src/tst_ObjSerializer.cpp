@@ -22,10 +22,12 @@
 #include "mdl/BezierPatch.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushBuilder.h"
+#include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/ExportOptions.h"
 #include "mdl/LayerNode.h"
+#include "mdl/LoadIdTech4ObjModel.h"
 #include "mdl/NodeWriter.h"
 #include "mdl/ObjSerializer.h"
 #include "mdl/PatchNode.h"
@@ -35,14 +37,22 @@
 #include "kd/result.h"
 #include "kd/task_manager.h"
 
+#include "vm/approx.h"
+#include "vm/bbox.h"
+#include "vm/bbox_io.h" // IWYU pragma: keep
+#include "vm/vec.h"
+#include "vm/vec_io.h" // IWYU pragma: keep
+
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <ranges>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -50,6 +60,20 @@
 
 namespace tb::mdl
 {
+namespace
+{
+
+/**
+ * The normal of a triangle by TrenchBroom's convention that front faces are clockwise
+ * (see vm::from_points).
+ */
+vm::vec3f clockwiseNormal(const IdTech4ObjTriangle& triangle)
+{
+  const auto& [c0, c1, c2] = triangle.corners;
+  return vm::normalize(vm::cross(c2.position - c0.position, c1.position - c0.position));
+}
+
+} // namespace
 
 TEST_CASE("ObjSerializer")
 {
@@ -444,6 +468,19 @@ f  71/1/71  80/1/80  81/1/81  72/1/72
       return groups;
     };
 
+    const auto linesStartingWith = [](const std::string& obj, const std::string& prefix) {
+      auto result = std::vector<std::string>{};
+      auto lines = std::istringstream{obj};
+      for (auto line = std::string{}; std::getline(lines, line);)
+      {
+        if (line.starts_with(prefix))
+        {
+          result.push_back(line);
+        }
+      }
+      return result;
+    };
+
     SECTION("a brush is written in the engine's coordinates, as triangles")
     {
       // the cube of writeBrush; the material has no path, so the root completes its
@@ -507,34 +544,98 @@ f 8/4/6 6/2/6 7/1/6
 
     SECTION("a new group starts where the material changes")
     {
-      map.defaultLayer()->addChild(new mdl::BrushNode{
-        builder.createCube(64.0, "a", "a", "b", "b", "a", "a") | kdl::value()});
+      // the faces of the cube in the order in which they are written
+      auto brush = builder.createCube(64.0, "a") | kdl::value();
+      const auto materialNames = std::vector<std::string>{"a", "b", "a", "a", "b", "a"};
+      REQUIRE(brush.faceCount() == materialNames.size());
+      for (size_t i = 0; i < materialNames.size(); ++i)
+      {
+        brush.face(i).setMaterialName(materialNames[i]);
+      }
+      map.defaultLayer()->addChild(new mdl::BrushNode{std::move(brush)});
 
       writeMap();
 
-      const auto groups = readGroups(objStream.str());
-      CHECK(groups.size() > 1u);
+      // one object, and a group at each of the four material changes
+      CHECK(
+        linesStartingWith(objStream.str(), "o ")
+        == std::vector<std::string>{"o entity0_brush0"});
+      CHECK(
+        linesStartingWith(objStream.str(), "g ")
+        == std::vector<std::string>(4, "g entity0_brush0"));
 
-      auto triangleCount = size_t(0);
-      for (const auto& group : groups)
+      // the importer gives a whole group the material that is current when the group
+      // ends, so each group has one material: its usemtl line and its triangle count
+      using GroupInfo = std::tuple<std::string, size_t>;
+      auto groupInfos = std::vector<GroupInfo>{};
+      for (const auto& group : readGroups(objStream.str()))
       {
         CAPTURE(group);
         REQUIRE(!group.empty());
         REQUIRE(group.front().starts_with("usemtl "));
-        for (const auto& line : group)
+        CHECK(std::ranges::all_of(group, [&](const auto& line) {
+          return !line.starts_with("usemtl ") || line == group.front();
+        }));
+        groupInfos.emplace_back(
+          group.front(), size_t(std::ranges::count_if(group, [](const auto& line) {
+            return line.starts_with("f ");
+          })));
+      }
+      CHECK(
+        groupInfos
+        == std::vector<GroupInfo>{
+          {"usemtl textures/a", 2},
+          {"usemtl textures/b", 2},
+          {"usemtl textures/a", 4},
+          {"usemtl textures/b", 2},
+          {"usemtl textures/a", 2},
+        });
+    }
+
+    SECTION("what is written reads back as it was")
+    {
+      auto* brushNode =
+        new mdl::BrushNode{builder.createCube(64.0, "some_material") | kdl::value()};
+      map.defaultLayer()->addChild(brushNode);
+
+      writeMap();
+
+      const auto objData = parseIdTech4Obj(objStream.str()) | kdl::value();
+      CHECK(objData.engineIncompatibility == std::nullopt);
+      CHECK(
+        objData.materialNames
+        == std::vector<std::filesystem::path>{"textures/some_material"});
+      REQUIRE(objData.triangles.size() == 12u);
+
+      auto bounds = vm::bbox3f{objData.triangles.front().corners.front().position};
+      for (const auto& triangle : objData.triangles)
+      {
+        for (const auto& corner : triangle.corners)
         {
-          if (line.starts_with("usemtl "))
-          {
-            // the importer would give the whole group the last material
-            CHECK(line == group.front());
-          }
-          else
-          {
-            ++triangleCount;
-          }
+          bounds = vm::merge(bounds, corner.position);
         }
       }
-      CHECK(triangleCount == 12u);
+      CHECK(bounds == vm::bbox3f{brushNode->brush().bounds()});
+
+      for (const auto& triangle : objData.triangles)
+      {
+        CAPTURE(triangle);
+
+        // read back in TrenchBroom's clockwise order, each triangle faces out of the
+        // brush like the face it was cut from
+        const auto& faces = brushNode->brush().faces();
+        const auto normal = clockwiseNormal(triangle);
+        const auto iFace = std::ranges::find_if(faces, [&](const auto& face) {
+          return vm::is_equal(vm::vec3f{face.boundary().normal}, normal, 0.0001f);
+        });
+        REQUIRE(iFace != faces.end());
+
+        // with the face's texture coordinates at each corner
+        for (const auto& corner : triangle.corners)
+        {
+          CHECK(corner.uv == vm::approx{iFace->uvCoords(vm::vec3d{corner.position})});
+        }
+      }
     }
 
     SECTION("a material with a path is named after its decl")
@@ -615,6 +716,23 @@ f 8/4/6 6/2/6 7/1/6
       // the first quad, 1 2 3 4, as in writePatch
       CHECK(faces[0] == "f 1/1/1 2/1/2 3/1/3");
       CHECK(faces[1] == "f 1/1/1 3/1/3 4/1/4");
+
+      // the positions and normals of writePatch as they are, which writes the first ones
+      // turned as "v 0 0 -0", "v 0 0.21875 -0.25", "v 0.25 0.4375 -0.25" and
+      // "vn 0.5499719409228703 -0.6285393610547089 -0.5499719409228703"
+      const auto vertices = linesStartingWith(objStream.str(), "v ");
+      REQUIRE(vertices.size() == 81u);
+      CHECK(
+        std::vector<std::string>{vertices.begin(), vertices.begin() + 3}
+        == std::vector<std::string>{"v 0 0 0", "v 0 0.25 0.21875", "v 0.25 0.25 0.4375"});
+      CHECK(
+        linesStartingWith(objStream.str(), "vn ").front()
+        == "vn 0.5499719409228703 0.5499719409228703 -0.6285393610547089");
+
+      // writePatch writes the one texture coordinate (0, 0) as "vt 0 -0"; the engine
+      // reads back t = 1 - 1 = 0
+      CHECK(
+        linesStartingWith(objStream.str(), "vt ") == std::vector<std::string>{"vt 0 1"});
     }
   }
 

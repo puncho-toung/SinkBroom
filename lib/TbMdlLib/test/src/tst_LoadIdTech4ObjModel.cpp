@@ -24,8 +24,10 @@
 #include "fs/Reader.h"
 #include "gl/CreateResource.h"
 #include "gl/Material.h"
+#include "gl/PrimType.h"
 #include "gl/Texture.h"
 #include "gl/TextureResource.h"
+#include "gl/Vertex.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/EntityModel.h"
 #include "mdl/GameConfigFixture.h"
@@ -34,6 +36,7 @@
 #include "mdl/MaterialUtils.h"
 #include "mdl/Quake3Shader.h"
 
+#include "kd/ranges/to.h"
 #include "kd/result.h"
 
 #include "vm/approx.h"
@@ -44,6 +47,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -101,6 +105,38 @@ vm::vec3f clockwiseNormal(const IdTech4ObjTriangle& triangle)
 {
   const auto& [c0, c1, c2] = triangle.corners;
   return vm::normalize(vm::cross(c2.position - c0.position, c1.position - c0.position));
+}
+
+using SkinCorners = std::tuple<size_t, std::vector<IdTech4ObjCorner>>;
+
+/**
+ * The corners of the triangles of the first frame of a loaded surface, in the order in
+ * which they are drawn, grouped by the index of the skin they are drawn with.
+ */
+std::vector<SkinCorners> meshCorners(const EntityModelSurface& surface)
+{
+  auto result = std::vector<SkinCorners>{};
+  surface.forEachPrimitive(
+    0, [&](const auto* skin, const auto primType, const auto vertices) {
+      CHECK(primType == gl::PrimType::Triangles);
+
+      auto skinIndex = size_t(0);
+      while (skinIndex < surface.skinCount() && surface.skin(skinIndex) != skin)
+      {
+        ++skinIndex;
+      }
+
+      result.emplace_back(
+        skinIndex, vertices | std::views::transform([](const auto& vertex) {
+                     return IdTech4ObjCorner{
+                       gl::getVertexComponent<0>(vertex),
+                       gl::getVertexComponent<1>(vertex)};
+                   }) | kdl::ranges::to<std::vector>());
+    });
+
+  std::ranges::sort(
+    result, {}, [](const auto& skinCorners) { return std::get<0>(skinCorners); });
+  return result;
 }
 
 } // namespace
@@ -462,6 +498,18 @@ TEST_CASE("LoadIdTech4ObjModel")
       Catch::Matchers::ContainsSubstring("textures/base_wall/lfwall27d")
         && Catch::Matchers::ContainsSubstring("wedge.obj"));
 
+    // the mesh as it is drawn: each triangle with the engine's positions and (s, t), in
+    // TrenchBroom's clockwise order, and with the skin of its usemtl
+    CHECK(
+      meshCorners(surface)
+      == std::vector<SkinCorners>{
+        {0, {{{0, 0, 0}, {0, 0}}, {{64, 0, 0}, {1, 0}}, {{0, 32, 16}, {0, 0.25f}}}},
+        {1,
+         {{{0, 0, -8}, {0.5f, 0.5f}},
+          {{64, 0, -8}, {1, 0.5f}},
+          {{0, 32, -8}, {0.5f, 1}}}},
+      });
+
     // the mesh is there for picking: straight down at (8, 4) the slope of the first
     // triangle is at z = 2 and the second triangle at z = -8
     const auto* frame = modelData.frame(0);
@@ -469,6 +517,40 @@ TEST_CASE("LoadIdTech4ObjModel")
     const auto hit = frame->intersect(vm::ray3f{{8, 4, 100}, {0, 0, -1}});
     REQUIRE(hit);
     CHECK(*hit == vm::approx{98.0f});
+
+    SECTION("faces before any usemtl get the default skin")
+    {
+      logger.warnings.clear();
+
+      auto polygonResult = loadIdTech4ObjModel(
+        "polygon_and_nomtl.obj",
+        readFile(fs, modelsPath / "polygon_and_nomtl.obj"),
+        findMaterial,
+        loadDefaultMaterial,
+        logger);
+      REQUIRE(polygonResult.is_success());
+
+      const auto& polygonData = polygonResult.value();
+      CHECK(polygonData.bounds(0) == vm::bbox3f{{0, 0, 0}, {32, 16, 8}});
+
+      const auto& polygonSurface = polygonData.surface(0);
+      REQUIRE(polygonSurface.skinCount() == 1u);
+      CHECK(polygonSurface.skin(0)->name() == "__TB_empty");
+
+      // the quad as two triangles and the triangle with relative indices
+      const auto corners = meshCorners(polygonSurface);
+      REQUIRE(corners.size() == 1u);
+      CHECK(std::get<0>(corners.front()) == 0u);
+      CHECK(std::get<1>(corners.front()).size() == 9u);
+
+      // written by hand with p/t corners, which the engine can't read
+      CHECK(
+        logger.warnings
+        == std::vector<std::string>{
+          "Model 'polygon_and_nomtl.obj' may not load in RBDOOM-3-BFG as it is shown "
+          "here. At line 11: a face corner is not p/t/n with positive indices, and the "
+          "engine can't read it"});
+    }
 
     SECTION("the shared Doom 3 BFG fixture proxy")
     {

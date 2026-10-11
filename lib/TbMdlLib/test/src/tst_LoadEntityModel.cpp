@@ -21,6 +21,8 @@
 #include "base/Logger.h"
 #include "fs/DiskFileSystem.h"
 #include "gl/Material.h"
+#include "gl/Texture.h"
+#include "gl/TextureResource.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/EntityModel.h"
 #include "mdl/GameConfig.h"
@@ -104,6 +106,68 @@ TEST_CASE("LoadEntityModel")
       REQUIRE(model.data() != nullptr);
       CHECK(vm::approx(model.data()->bounds(0)) == vm::bbox3f{{-8, 0, 0}, {16, 64, 32}});
       CHECK(requestedNames.empty());
+    }
+
+    SECTION("a glTF model with and without the id Tech 4 convention")
+    {
+      // a box from (0, 0, 0) to (4, 2, 1) in glTF coordinates, whose material is named
+      // "models/test/wedge" and has an embedded 2x2 texture
+      auto assimpFs = fs::DiskFileSystem{getFixtureRoot() / "test/mdl/LoadAssimpModel"};
+      const auto glbPath = std::filesystem::path{"idtech4/named.glb"};
+
+      const auto findDecl =
+        [&](const std::filesystem::path& materialName) -> std::optional<gl::Material> {
+        requestedNames.push_back(materialName);
+        return gl::Material{
+          "resolved decl", gl::createTextureResource(gl::Texture{16, 8})};
+      };
+
+      SECTION("the id Tech 4 convention")
+      {
+        const auto model = loadEntityModelSync(
+                             assimpFs,
+                             materialConfig,
+                             ModelConvention::IdTech4,
+                             glbPath,
+                             loadMaterial,
+                             findDecl,
+                             logger)
+                           | kdl::value();
+
+        // turned as the engine turns glTF models, (x, y, z) to (x, -z, y)
+        REQUIRE(model.data() != nullptr);
+        CHECK(vm::approx(model.data()->bounds(0)) == vm::bbox3f{{0, -1, 0}, {4, 0, 2}});
+
+        // the material decl of the material's name
+        CHECK(requestedNames == std::vector<std::filesystem::path>{"models/test/wedge"});
+        REQUIRE(model.data()->surface(0).skinCount() == 1u);
+        CHECK(model.data()->surface(0).skin(0)->name() == "resolved decl");
+      }
+
+      SECTION("the default convention")
+      {
+        const auto model = loadEntityModelSync(
+                             assimpFs,
+                             materialConfig,
+                             ModelConvention::Default,
+                             glbPath,
+                             loadMaterial,
+                             findDecl,
+                             logger)
+                           | kdl::value();
+
+        // assimp's axes, (x, y, z) to (z, x, y), and the embedded texture
+        REQUIRE(model.data() != nullptr);
+        CHECK(vm::approx(model.data()->bounds(0)) == vm::bbox3f{{0, 0, 0}, {1, 4, 2}});
+
+        CHECK(requestedNames.empty());
+        REQUIRE(model.data()->surface(0).skinCount() == 1u);
+
+        const auto* skin = model.data()->surface(0).skin(0);
+        CHECK(skin->name() == "models/test/wedge");
+        REQUIRE(skin->texture() != nullptr);
+        CHECK(skin->texture()->width() == 2u);
+      }
     }
   }
 

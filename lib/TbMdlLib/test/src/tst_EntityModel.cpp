@@ -19,11 +19,16 @@
 
 #include "TestLogger.h"
 #include "base/PreferenceManager.h"
+#include "gl/IndexRangeMap.h"
 #include "gl/IndexRangeMapBuilder.h"
 #include "gl/Material.h"
+#include "gl/MaterialIndexRangeMap.h"
+#include "gl/MaterialIndexRangeMapBuilder.h"
 #include "gl/MaterialIndexRangeRenderer.h"
+#include "gl/PrimType.h"
 #include "gl/Texture.h"
 #include "gl/TextureResource.h"
+#include "gl/Vertex.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/EntityModel.h"
 #include "mdl/EnvironmentConfig.h"
@@ -33,13 +38,20 @@
 #include "mdl/LoadEntityModel.h"
 #include "mdl/TestUtils.h"
 
+#include "kd/ranges/to.h"
+
 #include "vm/approx.h"
 #include "vm/bbox.h"
 #include "vm/intersection.h"
+#include "vm/vec_io.h" // IWYU pragma: keep
 
 #include <filesystem>
+#include <ranges>
+#include <tuple>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 
 namespace tb::mdl
 {
@@ -194,6 +206,81 @@ TEST_CASE("EntityModel")
 
       REQUIRE(modelData.buildRenderer(0, 0) != nullptr);
       CHECK(modelData.buildRenderer(0, 1) == nullptr);
+    }
+  }
+
+  SECTION("forEachPrimitive")
+  {
+    auto modelData = EntityModelData{PitchType::Normal, Orientation::Oriented};
+    auto& frame = modelData.addFrame("test", vm::bbox3f{0, 8});
+    auto& surface = modelData.addSurface("surface", 1);
+
+    auto materials = std::vector<gl::Material>{};
+    materials.push_back(makeDummyMaterial("skin1"));
+    materials.push_back(makeDummyMaterial("skin2"));
+    surface.setSkins(std::move(materials));
+
+    using Primitive =
+      std::tuple<const gl::Material*, gl::PrimType, std::vector<vm::vec3f>>;
+    const auto primitives = [&](const size_t frameIndex) {
+      auto result = std::vector<Primitive>{};
+      surface.forEachPrimitive(
+        frameIndex, [&](const auto* skin, const auto primType, const auto vertices) {
+          result.emplace_back(
+            skin, primType, vertices | std::views::transform([](const auto& vertex) {
+                              return gl::getVertexComponent<0>(vertex);
+                            }) | kdl::ranges::to<std::vector>());
+        });
+      return result;
+    };
+
+    const auto v0 = EntityModelVertex{{1, 0, 0}, {0, 0}};
+    const auto v1 = EntityModelVertex{{0, 1, 0}, {0, 0}};
+    const auto v2 = EntityModelVertex{{0, 0, 1}, {0, 0}};
+
+    SECTION("a surface without a mesh has no primitives")
+    {
+      CHECK(primitives(0).empty());
+      CHECK(primitives(1).empty());
+    }
+
+    SECTION("a mesh that is drawn with the selected skin")
+    {
+      auto size = gl::IndexRangeMap::Size{};
+      size.inc(gl::PrimType::Triangles, 1);
+
+      auto builder = gl::IndexRangeMapBuilder<EntityModelVertex::Type>{3, size};
+      builder.addTriangle(v0, v1, v2);
+      surface.addMesh(frame, builder.vertices(), builder.indices());
+
+      CHECK(
+        primitives(0)
+        == std::vector<Primitive>{
+          {nullptr, gl::PrimType::Triangles, {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}},
+        });
+      CHECK(primitives(1).empty());
+    }
+
+    SECTION("a mesh with a skin for each primitive")
+    {
+      const auto* skin1 = surface.skin(0);
+      const auto* skin2 = surface.skin(1);
+
+      auto size = gl::MaterialIndexRangeMap::Size{};
+      size.inc(skin1, gl::PrimType::Triangles, 3);
+      size.inc(skin2, gl::PrimType::Triangles, 3);
+
+      auto builder = gl::MaterialIndexRangeMapBuilder<EntityModelVertex::Type>{6, size};
+      builder.addTriangle(skin2, v2, v1, v0);
+      builder.addTriangle(skin1, v0, v1, v2);
+      surface.addMesh(frame, builder.vertices(), builder.indices());
+
+      CHECK_THAT(
+        primitives(0),
+        Catch::Matchers::UnorderedEquals(std::vector<Primitive>{
+          {skin1, gl::PrimType::Triangles, {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}},
+          {skin2, gl::PrimType::Triangles, {{0, 0, 1}, {0, 1, 0}, {1, 0, 0}}},
+        }));
     }
   }
 }

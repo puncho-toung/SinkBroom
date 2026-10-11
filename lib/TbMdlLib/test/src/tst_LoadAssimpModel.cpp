@@ -24,16 +24,25 @@
 #include "gl/Material.h"
 #include "gl/Texture.h"
 #include "gl/TextureResource.h"
+#include "gl/Vertex.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/EntityModel.h"
-#include "mdl/GameConfig.h"
 #include "mdl/LoadAssimpModel.h"
+#include "mdl/ModelConvention.h"
 
 #include "kd/ranges/contains.h"
 #include "kd/ranges/stride_view.h"
+#include "kd/vector_utils.h"
 
 #include "vm/approx.h"
 #include "vm/bbox_io.h" // IWYU pragma: keep
+#include "vm/vec.h"
+#include "vm/vec_io.h" // IWYU pragma: keep
+
+#include <filesystem>
+#include <optional>
+#include <utility>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -333,6 +342,104 @@ TEST_CASE("loadAssimpModel")
       CHECK(requestedNames.empty());
       REQUIRE(modelData.surface(0).skinCount() == 1u);
       CHECK(modelData.surface(0).skin(0)->name() == "DefaultMaterial");
+    }
+
+    SECTION("glTF texture coordinates are the file's, as the engine reads them")
+    {
+      const auto modelData =
+        loadAssimpModel(
+          "idtech4/named.glb", fs, logger, {.convention = ModelConvention::IdTech4})
+        | kdl::value();
+
+      // The box corner (0, 2, 0) in glTF coordinates, here (0, 0, 2), has the texture
+      // coordinates (0, 1) on the -X face, (0, 0) on the +Y face and (1, 0) on the -Z
+      // face of the file. Assimp's glTF importer flips V and FlipUVs flips it back; one
+      // flip too many would give (0, 0), (0, 1) and (1, 1).
+      auto uvs = std::vector<vm::vec2f>{};
+      modelData.surface(0).forEachPrimitive(
+        0, [&](const auto*, const auto, const auto vertices) {
+          for (const auto& vertex : vertices)
+          {
+            if (vm::is_equal(
+                  gl::getVertexComponent<0>(vertex), vm::vec3f{0, 0, 2}, 0.0001f))
+            {
+              uvs.push_back(gl::getVertexComponent<1>(vertex));
+            }
+          }
+        });
+
+      CHECK(
+        kdl::vec_sort_and_remove_duplicates(std::move(uvs))
+        == std::vector<vm::vec2f>{{0, 0}, {0, 1}, {1, 0}});
+    }
+
+    SECTION("a glTF material name is canonicalized like a decl name")
+    {
+      // noncanonical.glb has one material, "Models\MapObjects\Test\Wedge.TGA", on two
+      // meshes; each surface owns its skin, so the name is looked up for each mesh
+      const auto modelData =
+        loadAssimpModel(
+          "idtech4/noncanonical.glb",
+          fs,
+          logger,
+          {.convention = ModelConvention::IdTech4, .findMaterial = findDecl})
+        | kdl::value();
+
+      CHECK(
+        requestedNames
+        == std::vector<std::filesystem::path>{
+          "models/mapobjects/test/wedge", "models/mapobjects/test/wedge"});
+      REQUIRE(modelData.surfaceCount() == 2u);
+      for (const auto& surface : modelData.surfaces())
+      {
+        REQUIRE(surface.skinCount() == 1u);
+        CHECK(surface.skin(0)->name() == "resolved decl");
+      }
+    }
+
+    SECTION("a glTF material that names no decl is looked up once")
+    {
+      const auto modelData =
+        loadAssimpModel(
+          "idtech4/noncanonical.glb",
+          fs,
+          logger,
+          {.convention = ModelConvention::IdTech4, .findMaterial = findNothing})
+        | kdl::value();
+
+      CHECK(
+        requestedNames
+        == std::vector<std::filesystem::path>{"models/mapobjects/test/wedge"});
+      REQUIRE(modelData.surfaceCount() == 2u);
+      for (const auto& surface : modelData.surfaces())
+      {
+        REQUIRE(surface.skinCount() == 1u);
+        CHECK(surface.skin(0)->name() == "Models\\MapObjects\\Test\\Wedge.TGA");
+        REQUIRE(surface.skin(0)->texture() != nullptr);
+        CHECK(surface.skin(0)->texture()->width() == 2u);
+      }
+    }
+
+    SECTION("an unnamed glTF material shows its own texture")
+    {
+      // assimp gives a glTF material without a name no name, so there is nothing to
+      // look up
+      const auto modelData =
+        loadAssimpModel(
+          "idtech4/unnamed.glb",
+          fs,
+          logger,
+          {.convention = ModelConvention::IdTech4, .findMaterial = findDecl})
+        | kdl::value();
+
+      CHECK(requestedNames.empty());
+      REQUIRE(modelData.surface(0).skinCount() == 1u);
+
+      const auto* skin = modelData.surface(0).skin(0);
+      CHECK(skin->name().empty());
+      REQUIRE(skin->texture() != nullptr);
+      CHECK(skin->texture()->width() == 2u);
+      CHECK(skin->texture()->height() == 2u);
     }
   }
 

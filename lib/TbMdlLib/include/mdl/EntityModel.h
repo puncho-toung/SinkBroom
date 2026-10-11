@@ -28,8 +28,10 @@ along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
 
 #include "vm/bbox.h"
 
+#include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -276,6 +278,20 @@ public:
    * @return the skin with the given index, or null if the index is out of bounds
    */
   const gl::Material* skin(size_t index) const;
+
+  using PrimitiveFunction = std::function<void(
+    const gl::Material*, gl::PrimType, std::span<const EntityModelVertex>)>;
+
+  /**
+   * Calls the given function for each primitive of the mesh of the given frame, with the
+   * skin that the loader gave the primitive, or null if the primitive is drawn with
+   * whichever skin is selected, and with the vertices of the primitive. Does nothing if
+   * the surface has no mesh for that frame.
+   *
+   * This shows what a loader made of a file, such as its texture coordinates, its
+   * winding and which faces it gave which skin.
+   */
+  void forEachPrimitive(size_t frameIndex, const PrimitiveFunction& function) const;
 
   std::unique_ptr<gl::MaterialIndexRangeRenderer> buildRenderer(
     size_t skinIndex, size_t frameIndex) const;
