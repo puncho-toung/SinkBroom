@@ -103,9 +103,9 @@ TEST_CASE("loadDdsTexture")
 
   SECTION("DXT1 with sizes that aren't multiples of 4")
   {
-    // 20x12 with the full mip chain 20x12, 10x6, 5x3, 2x1, 1x1; every block of a level
-    // has that level's colour, so a level read with too few blocks shifts the levels
-    // after it
+    // 20x12 with the full mip chain 20x12, 10x6, 5x3, 2x1, 1x1, written for this test by
+    // a small script; every block of a level has that level's colour, so a level read
+    // with too few blocks shifts the levels after it
     const auto texture = loadTexture("dds_bc1_npot.dds");
     CHECK(texture.width() == 20);
     CHECK(texture.height() == 12);
@@ -123,7 +123,7 @@ TEST_CASE("loadDdsTexture")
 
     const auto firstColor = [&](const size_t level) {
       const auto* data = buffers[level].data();
-      return uint16_t(data[0] | (data[1] << 8));
+      return std::uint16_t(data[0] | (data[1] << 8));
     };
     CHECK(firstColor(0) == 0xF800);
     CHECK(firstColor(1) == 0x07E0);

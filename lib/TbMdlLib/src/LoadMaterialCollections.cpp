@@ -193,7 +193,7 @@ struct PreviewImage
   bool missing = false;
 };
 
-PreviewImage findShaderTexture(
+PreviewImage findQuake3PreviewImage(
   const Quake3Shader& shader,
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig)
@@ -270,7 +270,7 @@ private:
             stemIndex[kdl::path_to_lower(path.stem())].push_back(std::move(path));
           }
         })
-      | kdl::transform_error([](auto) {});
+      | kdl::or_else([](auto) { return kdl::void_success; });
     return m_directories.emplace(directory, std::move(stemIndex)).first->second;
   }
 };
@@ -651,7 +651,7 @@ Result<gl::Material> loadShaderMaterial(
 {
   const auto isDoom3 = shader.format == Quake3Shader::Format::Doom3;
   auto previewImage = isDoom3 ? findDoom3PreviewImage(shader, materialConfig, context)
-                              : findShaderTexture(shader, fs, materialConfig);
+                              : findQuake3PreviewImage(shader, fs, materialConfig);
 
   const auto prefixLength = kdl::path_length(materialConfig.root);
   auto shaderName = getMaterialNameFromPathSuffix(shader.shaderPath, prefixLength);
@@ -804,7 +804,7 @@ std::vector<gl::MaterialCollection> groupMaterialsIntoCollections(
          | kdl::ranges::to<std::vector>();
 }
 
-Result<gl::Material> loadMaterial(
+Result<gl::Material> loadMaterialFromShader(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
   const std::filesystem::path& materialPath,
@@ -925,7 +925,7 @@ Result<gl::Material> loadMaterial(
     .directoryIndex = DirectoryIndex{fs, materialConfig.extensions},
     .diffuseImageShaders = &shaders,
   };
-  return loadMaterial(
+  return loadMaterialFromShader(
     fs,
     materialConfig,
     materialPath,
@@ -976,7 +976,7 @@ Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
 
                         return materialPaths
                                | std::views::transform([&](const auto& materialPath) {
-                                   return loadMaterial(
+                                   return loadMaterialFromShader(
                                      fs,
                                      materialConfig,
                                      materialPath,

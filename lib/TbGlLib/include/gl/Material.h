@@ -124,8 +124,7 @@ private:
   // may happen after this material is constructed.
   std::optional<MaterialAlphaFunc> m_alphaFunc;
 
-  // Set when none of the images a material script names was found, so that the texture
-  // is a placeholder.
+  // Set when no image was found for the material, so that its texture is a placeholder.
   bool m_previewImageMissing = false;
 
   kdl_reflect_decl(
@@ -190,8 +189,7 @@ public:
   MaterialBlendFunc effectiveBlendFunc() const;
 
   /**
-   * Whether the texture is a placeholder because none of the images that the material's
-   * script names was found.
+   * Whether the texture is a placeholder because no image was found for the material.
    */
   bool previewImageMissing() const;
   void setPreviewImageMissing(bool previewImageMissing);

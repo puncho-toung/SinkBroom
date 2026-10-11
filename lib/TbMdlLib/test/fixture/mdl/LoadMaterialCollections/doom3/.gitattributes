@@ -1,0 +1,3 @@
+# Keep the material files byte for byte.
+*.mtr -text
+*.MTR -text

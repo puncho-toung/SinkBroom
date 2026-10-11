@@ -53,6 +53,13 @@ vm::vec2s sizeAtMipLevel(size_t width, size_t height, size_t level);
 bool isCompressedFormat(GLenum format);
 size_t blockSizeForFormat(GLenum format);
 size_t bytesPerPixelForFormat(GLenum format);
+
+/**
+ * The number of bytes of a compressed mip of the given size: it covers every pixel with
+ * 4x4 blocks, including partial blocks at the right and bottom edges.
+ */
+size_t compressedMipByteCount(size_t blockSize, size_t width, size_t height);
+
 void setMipBufferSize(
   TextureBufferList& buffers,
   size_t mipLevels,

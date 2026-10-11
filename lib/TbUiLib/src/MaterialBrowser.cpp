@@ -97,12 +97,6 @@ void MaterialBrowser::setHideUnused(const bool hideUnused)
   m_usedButton->setChecked(hideUnused);
 }
 
-void MaterialBrowser::setHideMissing(const bool hideMissing)
-{
-  m_view->setHideMissing(hideMissing);
-  m_missingButton->setChecked(hideMissing);
-}
-
 void MaterialBrowser::setFilterText(const std::string& filterText)
 {
   m_view->setFilterText(filterText);
@@ -153,7 +147,7 @@ void MaterialBrowser::createGui(AppController& appController)
   });
 
   // like "Used", this lasts for the session only
-  m_missingButton = new QPushButton{tr("Missing")};
+  m_missingButton = new QPushButton{tr("Hide missing")};
   m_missingButton->setToolTip(tr("Hide materials whose preview image was not found"));
   m_missingButton->setCheckable(true);
   connect(m_missingButton, &QAbstractButton::clicked, this, [&]() {

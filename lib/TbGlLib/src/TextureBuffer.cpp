@@ -109,6 +109,12 @@ size_t bytesPerPixelForFormat(const GLenum format)
   return 0U;
 }
 
+size_t compressedMipByteCount(
+  const size_t blockSize, const size_t width, const size_t height)
+{
+  return blockSize * ((width + 3) / 4) * ((height + 3) / 4);
+}
+
 void setMipBufferSize(
   TextureBufferList& buffers,
   const size_t mipLevels,
@@ -124,11 +130,9 @@ void setMipBufferSize(
   for (size_t level = 0u; level < buffers.size(); ++level)
   {
     const auto mipSize = sizeAtMipLevel(width, height, level);
-    // a compressed mip covers every pixel with 4x4 blocks, including partial blocks at
-    // the right and bottom edges of sizes that aren't multiples of 4
-    const auto numBytes =
-      compressed ? (blockSize * ((mipSize.x() + 3) / 4) * ((mipSize.y() + 3) / 4))
-                 : (bytesPerPixel * mipSize.x() * mipSize.y());
+    const auto numBytes = compressed
+                            ? compressedMipByteCount(blockSize, mipSize.x(), mipSize.y())
+                            : (bytesPerPixel * mipSize.x() * mipSize.y());
     buffers[level] = TextureBuffer{numBytes};
   }
 }

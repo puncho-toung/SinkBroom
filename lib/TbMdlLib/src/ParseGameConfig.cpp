@@ -489,7 +489,7 @@ std::vector<std::filesystem::path> parseShaderExtensions(
   {
     return extensionsToPaths(extensions.asStringList(context));
   }
-  return {".shader"};
+  return MaterialConfig{}.shaderExtensions;
 }
 
 MaterialConfig parseMaterialConfig(

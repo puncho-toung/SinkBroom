@@ -41,6 +41,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <ranges>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -64,7 +65,7 @@ bool isDoom3MaterialFile(const std::filesystem::path& path)
   return kdl::path_to_lower(path.extension()) == ".mtr";
 }
 
-Result<ShaderFile> loadShaderFile(
+Result<ShaderFile> parseShaderFile(
   const fs::FileSystem& fs, const std::filesystem::path& path, Logger& logger)
 {
   return fs.openFile(path) | kdl::and_then([&](auto file) -> Result<ShaderFile> {
@@ -181,10 +182,10 @@ Result<LoadedShaders> loadShaderFiles(
            fs::makeExtensionPathMatcher(materialConfig.shaderExtensions))
          | kdl::and_then([&](auto paths) {
              const auto sortedPaths = sortShaderFilePaths(std::move(paths));
-             auto tasks =
-               sortedPaths | std::views::transform([&](const auto& path) {
-                 return std::function{[&]() { return loadShaderFile(fs, path, logger); }};
-               });
+             auto tasks = sortedPaths | std::views::transform([&](const auto& path) {
+                            return std::function{
+                              [&]() { return parseShaderFile(fs, path, logger); }};
+                          });
              return taskManager.run_tasks_and_wait(tasks) | kdl::fold;
            })
          | kdl::transform(

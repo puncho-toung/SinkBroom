@@ -71,7 +71,6 @@ public:
   void setSortOrder(MaterialSortOrder sortOrder);
   void setGroup(bool group);
   void setHideUnused(bool hideUnused);
-  void setHideMissing(bool hideMissing);
   void setFilterText(const std::string& filterText);
 signals:
   void materialSelected(const gl::Material* material);

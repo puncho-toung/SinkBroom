@@ -49,7 +49,7 @@ auto makeTextureLoadedState(
   {
     [[maybe_unused]] const auto mipSize = sizeAtMipLevel(width, height, level);
     [[maybe_unused]] const auto numBytes =
-      compressed ? (blockSize * ((mipSize.x() + 3) / 4) * ((mipSize.y() + 3) / 4))
+      compressed ? compressedMipByteCount(blockSize, mipSize.x(), mipSize.y())
                  : (bytesPerPixel * mipSize.x() * mipSize.y());
     contract_assert(buffers[level].size() >= numBytes);
   }

@@ -87,6 +87,14 @@ TEST_CASE("TextureBuffer utilities")
     CHECK(bytesPerPixelForFormat(GL_BGRA) == 4u);
   }
 
+  SECTION("compressedMipByteCount")
+  {
+    CHECK(compressedMipByteCount(8, 8, 8) == 8u * 2u * 2u);
+    // partial blocks count as whole blocks
+    CHECK(compressedMipByteCount(8, 5, 3) == 8u * 2u * 1u);
+    CHECK(compressedMipByteCount(16, 1, 1) == 16u);
+  }
+
   SECTION("setMipBufferSize")
   {
     SECTION("uncompressed format")

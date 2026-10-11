@@ -22,7 +22,6 @@
 #include "base/Result.h"
 #include "mdl/Quake3Shader.h"
 
-#include <cstddef>
 #include <vector>
 
 namespace kdl
@@ -51,10 +50,10 @@ struct LoadedShaders
 {
   std::vector<Quake3Shader> shaders;
   // the number of material script files that were read
-  std::size_t fileCount = 0;
+  size_t fileCount = 0;
   // the number of Doom 3 material decls that lack their closing brace and run to the end
   // of their file
-  std::size_t unterminatedCount = 0;
+  size_t unterminatedCount = 0;
 };
 
 /**

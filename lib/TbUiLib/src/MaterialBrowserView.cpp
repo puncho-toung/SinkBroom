@@ -485,7 +485,7 @@ QString MaterialBrowserView::tooltip(const Cell& cell)
 
   if (material.previewImageMissing())
   {
-    ss << "\n" << tr("no preview image found");
+    ss << "\n" << tr("No preview image found");
   }
 
   if (const auto& surfaceParms = material.surfaceParms(); !surfaceParms.empty())
