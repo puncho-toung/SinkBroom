@@ -29,6 +29,7 @@
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/Map_CopyPaste.h"
+#include "mdl/Map_Entities.h"
 #include "mdl/Map_Geometry.h"
 #include "mdl/Map_Groups.h"
 #include "mdl/Map_Nodes.h"
@@ -932,6 +933,64 @@ common/caulk
               {"light_1", ""},
               {"trigger_once_1", "light_1"},
             }));
+      }
+
+      SECTION("References in a pasted group that joins a link set are kept")
+      {
+        auto* lightNode = new EntityNode{Entity{{
+          {"classname", "light"},
+          {"name", "light_0"},
+        }}};
+        auto* triggerNode = new EntityNode{Entity{{
+          {"classname", "trigger_once"},
+          {"name", "trigger_once_0"},
+          {"target", "light_0"},
+        }}};
+        addNodes(map, {{&parentForNodes(map), {lightNode, triggerNode}}});
+
+        selectNodes(map, {lightNode, triggerNode});
+        auto* groupNode = groupSelectedNodes(map, "group");
+        REQUIRE(groupNode != nullptr);
+        deselectAll(map);
+        selectNodes(map, {groupNode});
+        REQUIRE(createLinkedDuplicate(map) != nullptr);
+
+        deselectAll(map);
+        selectNodes(map, {groupNode});
+        const auto str = serializeSelectedNodes(map);
+        deselectAll(map);
+
+        // the pasted group joins the link set, whose next update would overwrite a
+        // remapped target with the original's, so the target stays as it is
+        REQUIRE(paste(map, str) == PasteType::Node);
+        auto* pastedGroupNode =
+          dynamic_cast<GroupNode*>(map.worldNode().defaultLayer()->children().back());
+        REQUIRE(pastedGroupNode != nullptr);
+        REQUIRE(pastedGroupNode->linkId() == groupNode->linkId());
+
+        const auto pastedNamesAndTargets = [&]() {
+          auto result = std::vector<std::pair<std::string, std::string>>{};
+          for (const auto* child : pastedGroupNode->children())
+          {
+            const auto& entity = static_cast<const EntityNode*>(child)->entity();
+            const auto* target = entity.property("target");
+            result.emplace_back(*entity.property("name"), target ? *target : "");
+          }
+          return result;
+        };
+
+        const auto expected = std::vector<std::pair<std::string, std::string>>{
+          {"light_2", ""},
+          {"trigger_once_2", "light_0"},
+        };
+        CHECK(pastedNamesAndTargets() == expected);
+
+        // an update from the original group keeps the names and the target
+        openGroup(map, *groupNode);
+        deselectAll(map);
+        selectNodes(map, {lightNode});
+        REQUIRE(setEntityProperty(map, "light_radius", "64"));
+        CHECK(pastedNamesAndTargets() == expected);
       }
 
       SECTION("The names do not depend on the run")

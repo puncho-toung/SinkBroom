@@ -29,6 +29,7 @@
 #include "mdl/NodeContents.h"
 
 #include "kd/contracts.h"
+#include "kd/string_compare.h"
 #include "kd/vector_utils.h"
 
 #include <string>
@@ -64,7 +65,7 @@ IssueQuickFix makeSetModelToNameQuickFix(EntityNamingConfig config)
       entityNodes =
         sortInTreeOrder(map, kdl::vec_sort_and_remove_duplicates(std::move(entityNodes)));
 
-      auto allocator = EntityNameAllocator{map, config};
+      auto allocator = EntityNameAllocator{map};
       auto nodesToSwap = std::vector<std::pair<Node*, NodeContents>>{};
       for (auto* entityNode : entityNodes)
       {
@@ -128,7 +129,8 @@ void BrushEntityModelValidator::doValidate(
       entityNode.name() + " '" + *name + "' has brushes or patches but no '" + modelKey
         + "' property"));
   }
-  else if (*model != *name)
+  // the engine compares models and names without regard to case
+  else if (!kdl::ci::str_is_equal(*model, *name))
   {
     issues.push_back(std::make_unique<EntityPropertyIssue>(
       Type,

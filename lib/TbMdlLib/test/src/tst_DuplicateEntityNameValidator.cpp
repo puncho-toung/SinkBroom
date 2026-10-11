@@ -21,6 +21,8 @@
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/Entity.h"
+#include "mdl/EntityDefinition.h"
+#include "mdl/EntityDefinitionManager.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GroupNode.h"
 #include "mdl/Issue.h"
@@ -34,6 +36,7 @@
 #include "mdl/Map_Selection.h"
 #include "mdl/NodeContents.h"
 #include "mdl/PatchNode.h"
+#include "mdl/PropertyDefinition.h"
 #include "mdl/TestFactory.h"
 #include "mdl/Transaction.h"
 #include "mdl/Validator.h"
@@ -123,14 +126,19 @@ std::string nameOf(const Node* node)
 }
 
 void applyQuickFix(
-  Map& map, const IssueType type, const std::vector<const Issue*>& issues)
+  Map& map,
+  const IssueType type,
+  const std::vector<const Issue*>& issues,
+  const std::string& description = "Make Names Unique")
 {
   const auto quickFixes = map.worldNode().quickFixes(type);
-  REQUIRE(quickFixes.size() == 1);
+  const auto quickFix = std::ranges::find_if(
+    quickFixes, [&](const auto* q) { return q->description() == description; });
+  REQUIRE(quickFix != quickFixes.end());
 
   // like the issue browser
   auto transaction = Transaction{map, "Apply Quick Fix"};
-  quickFixes.front()->apply(map, issues);
+  (*quickFix)->apply(map, issues);
   CHECK(transaction.commit());
 }
 
@@ -143,7 +151,8 @@ TEST_CASE("DuplicateEntityNameValidator")
   auto fixture = MapFixture{};
   auto& map = fixture.create(makeNamingFixtureConfig());
 
-  const auto* validator = findValidator(map.worldNode(), "Duplicate entity name");
+  const auto* validator =
+    findValidator(map.worldNode(), "Duplicate or invalid entity name");
   REQUIRE(validator != nullptr);
   const auto type = validator->type();
 
@@ -194,9 +203,86 @@ TEST_CASE("DuplicateEntityNameValidator")
     }
   }
 
-  SECTION("Names are compared exactly, like the engine compares them")
+  SECTION("Names that differ only in case clash, as the engine may find either")
   {
-    renameEntity2("A");
+    auto* lightNode1 = new EntityNode{Entity{{
+      {"classname", "light"},
+      {"name", "Light_x"},
+    }}};
+    auto* lightNode2 = new EntityNode{Entity{{
+      {"classname", "light"},
+      {"name", "light_x"},
+    }}};
+    addNodes(map, {{&parentForNodes(map), {lightNode1, lightNode2}}});
+
+    const auto issues = collectIssues(map.worldNode(), type);
+    CHECK_THAT(
+      issueNodes(issues),
+      UnorderedEquals(std::vector<const Node*>{lightNode1, lightNode2}));
+    CHECK(issues.front()->description().ends_with(
+      " with 1 other entity if case is ignored, as the engine ignores it"));
+
+    applyQuickFix(map, type, issues);
+
+    // the first entity in the map keeps its name
+    CHECK(nameOf(lightNode1) == "Light_x");
+    CHECK(nameOf(lightNode2) == "light_0");
+    CHECK(collectIssues(map.worldNode(), type).empty());
+  }
+
+  SECTION("A name that the engine reserves is reported and replaced")
+  {
+    renameEntity2("null_entity");
+
+    const auto issues = collectIssues(map.worldNode(), type);
+    REQUIRE(issueNodes(issues) == std::vector<const Node*>{entityNode2});
+    CHECK(
+      issues.front()->description()
+      == "info_null has the name 'null_entity', which the engine reserves");
+
+    applyQuickFix(map, type, issues);
+    CHECK(nameOf(entityNode2) == "info_null_0");
+    CHECK(collectIssues(map.worldNode(), type).empty());
+  }
+
+  SECTION("A reference to the entity itself is reported and removed")
+  {
+    map.entityDefinitionManager().setDefinitions({
+      {"trigger_once",
+       Color{},
+       "",
+       {
+         PropertyDefinition{"name", PropertyValueTypes::LinkTarget{}, "", ""},
+         PropertyDefinition{"target", PropertyValueTypes::LinkSource{}, "", ""},
+       },
+       PointEntityDefinition{vm::bbox3d{16.0}, {}, {}}},
+    });
+
+    auto* triggerNode = new EntityNode{Entity{{
+      {"classname", "trigger_once"},
+      {"name", "trigger_once_0"},
+      {"target", "a"},
+      {"target2", "Trigger_Once_0"},
+    }}};
+    addNodes(map, {{&parentForNodes(map), {triggerNode}}});
+
+    const auto issues = collectIssues(map.worldNode(), type);
+    REQUIRE(issueNodes(issues) == std::vector<const Node*>{triggerNode});
+    CHECK(
+      static_cast<const EntityPropertyIssue*>(issues.front())->propertyKey()
+      == "target2");
+    CHECK(
+      issues.front()->description()
+      == "trigger_once 'trigger_once_0' refers to itself with 'target2'");
+
+    // the names stay as they are
+    applyQuickFix(map, type, issues);
+    CHECK(collectIssues(map.worldNode(), type).size() == 1u);
+
+    applyQuickFix(map, type, issues, "Remove References to Itself");
+    CHECK(triggerNode->entity().property("target2") == nullptr);
+    CHECK(*triggerNode->entity().property("target") == "a");
+    CHECK(nameOf(triggerNode) == "trigger_once_0");
     CHECK(collectIssues(map.worldNode(), type).empty());
   }
 
@@ -339,7 +425,7 @@ TEST_CASE("DuplicateEntityNameValidator")
     CHECK(nameOf(entityNodes[1]) == "twin");
 
     const auto* loadedValidator =
-      findValidator(loadedMap.worldNode(), "Duplicate entity name");
+      findValidator(loadedMap.worldNode(), "Duplicate or invalid entity name");
     REQUIRE(loadedValidator != nullptr);
     CHECK(collectIssues(loadedMap.worldNode(), loadedValidator->type()).size() == 2u);
 
@@ -355,7 +441,9 @@ TEST_CASE("DuplicateEntityNameValidator")
   SECTION("No naming validators for a game without naming rules")
   {
     auto& defaultMap = fixture.create();
-    CHECK(findValidator(defaultMap.worldNode(), "Duplicate entity name") == nullptr);
+    CHECK(
+      findValidator(defaultMap.worldNode(), "Duplicate or invalid entity name")
+      == nullptr);
     CHECK(
       findValidator(defaultMap.worldNode(), "Brush entity model differs from its name")
       == nullptr);

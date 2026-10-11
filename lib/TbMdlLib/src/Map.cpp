@@ -166,6 +166,12 @@ auto makeCreateResource(gl::ResourceManager& resourceManager)
   };
 }
 
+std::unique_ptr<EntityNameIndex> makeEntityNameIndex(const WorldNode& worldNode)
+{
+  const auto& naming = worldNode.entityPropertyConfig().naming;
+  return naming ? std::make_unique<EntityNameIndex>(naming->nameKey) : nullptr;
+}
+
 Result<std::unique_ptr<WorldNode>> loadWorldNode(
   const MapFormat mapFormat,
   const GameConfig& config,
@@ -569,6 +575,7 @@ Map::Map(
   , m_worldBounds{worldBounds}
   , m_nodeIndex{std::make_unique<NodeIndex>()}
   , m_entityLinkManager{std::make_unique<EntityLinkManager>(*m_nodeIndex)}
+  , m_entityNameIndex{makeEntityNameIndex(*m_worldNode)}
   , m_currentMaterialName{BrushFace::NoMaterialName}
   , m_repeatStack{std::make_unique<RepeatStack>()}
   , m_commandProcessor{std::make_unique<CommandProcessor>(*this)}
@@ -804,6 +811,11 @@ const CommandProcessor& Map::commandProcessor() const
 const EntityLinkManager& Map::entityLinkManager() const
 {
   return *m_entityLinkManager;
+}
+
+const EntityNameIndex* Map::entityNameIndex() const
+{
+  return m_entityNameIndex.get();
 }
 
 const std::filesystem::path& Map::gamePath() const
@@ -1375,6 +1387,11 @@ void Map::addToNodeIndex(const std::vector<Node*>& nodes, const bool recurse)
   for (auto* node : nodes)
   {
     m_nodeIndex->addNode(*node);
+    if (auto* entityNode = dynamic_cast<EntityNodeBase*>(node);
+        entityNode && m_entityNameIndex)
+    {
+      m_entityNameIndex->addEntityNode(*entityNode);
+    }
 
     if (recurse)
     {
@@ -1388,6 +1405,11 @@ void Map::removeFromNodeIndex(const std::vector<Node*>& nodes, const bool recurs
   for (auto* node : nodes)
   {
     m_nodeIndex->removeNode(*node);
+    if (auto* entityNode = dynamic_cast<EntityNodeBase*>(node);
+        entityNode && m_entityNameIndex)
+    {
+      m_entityNameIndex->removeEntityNode(*entityNode);
+    }
 
     if (recurse)
     {
@@ -1410,7 +1432,7 @@ void Map::invalidateEntityNameCollisions(
     if (const auto* name = entityNode.entity().property(naming->nameKey);
         name && !name->empty())
     {
-      for (const auto* nameHolder : findEntitiesWithName(*this, naming->nameKey, *name))
+      for (const auto* nameHolder : findEntitiesWithName(*this, *name))
       {
         nameHolder->invalidateIssues();
       }

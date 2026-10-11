@@ -21,10 +21,9 @@
 
 #include "mdl/EntityProperties.h"
 
-#include <map>
-#include <set>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -34,8 +33,31 @@ namespace tb::mdl
 class Entity;
 class EntityDefinitionManager;
 class EntityNodeBase;
+class GroupNode;
 class Map;
 class Node;
+
+/**
+ * The entities of a map by their name, compared without regard to case, which is how the
+ * id Tech 4 engines find entities by name (idMapFile::FindEntity, and in practice the
+ * game's entity hash, which compares with Icmp). A map whose game has naming rules keeps
+ * one up to date along with its node index.
+ */
+class EntityNameIndex
+{
+private:
+  std::string m_nameKey;
+  // lowercase name -> the entities with that name
+  std::unordered_map<std::string, std::vector<EntityNodeBase*>> m_entityNodes;
+
+public:
+  explicit EntityNameIndex(std::string nameKey);
+
+  void addEntityNode(EntityNodeBase& entityNode);
+  void removeEntityNode(EntityNodeBase& entityNode);
+
+  std::vector<EntityNodeBase*> findEntityNodes(std::string_view name) const;
+};
 
 /**
  * Hands out unique entity names for one editing operation, in the scheme the id Tech 4
@@ -43,9 +65,8 @@ class Node;
  *
  * A name is taken if an entity in the map holds it in the naming key, compared without
  * regard to case, unless that entity is in one of the excluded subtrees, or if it was
- * reserved during this operation. The map's node index is used to find the holders, so
- * matches in other keys, in values of other keys, in group names and in material names
- * do not take a name.
+ * reserved during this operation. The holders are found through the map's entity name
+ * index, so the map's game must have naming rules.
  *
  * An allocator keeps no state beyond the operation it is made for, so a cancelled
  * transaction leaves nothing behind.
@@ -54,16 +75,15 @@ class EntityNameAllocator
 {
 private:
   const Map& m_map;
-  EntityNamingConfig m_config;
+  const EntityNamingConfig& m_config;
   std::vector<const Node*> m_excluded;
   // lowercase names reserved during this operation
   std::unordered_set<std::string> m_reserved;
-  // lowercase classname -> the N of the names <classname>_<N> held in the map
-  std::map<std::string, std::set<size_t>, std::less<>> m_usedIndices;
+  // lowercase classname -> the lowest N that may still be free
+  std::unordered_map<std::string, size_t> m_nextIndices;
 
 public:
-  EntityNameAllocator(
-    const Map& map, EntityNamingConfig config, std::vector<const Node*> excluded = {});
+  explicit EntityNameAllocator(const Map& map, std::vector<const Node*> excluded = {});
 
   const EntityNamingConfig& config() const;
 
@@ -86,8 +106,13 @@ public:
 
 private:
   bool isExcluded(const Node& node) const;
-  const std::set<size_t>& usedIndices(std::string_view classname);
 };
+
+/**
+ * Whether the engine refuses to spawn an entity with the given name, which it reserves
+ * for itself (NULL and null_entity, compared exactly as the engine compares them).
+ */
+bool isReservedEntityName(std::string_view name);
 
 enum class EntityNamingMode
 {
@@ -139,10 +164,14 @@ EntityNamingResult assignUniqueEntityNames(
 
 /**
  * Changes the values of the link source properties of the entities in the given subtrees
- * that refer to a renamed entity to its new name. Only references among the given
- * entities are changed, so a copied trigger points at the copied light, but one that was
- * copied alone still points at the original light. A name that one of the entities kept
- * is not changed, since the reference is ambiguous.
+ * that refer to a renamed entity to its new name, compared without regard to case like
+ * the engine compares them. Only references among the given entities are changed, so a
+ * copied trigger points at the copied light, but one that was copied alone still points
+ * at the original light. A name that one of the entities kept is not changed, since the
+ * reference is ambiguous.
+ *
+ * The entities in the given skipped groups are not changed. These are groups that stay
+ * linked to groups in the map, whose next update would overwrite the link source values.
  *
  * The entity definitions are looked up by classname, because nodes that are not part of
  * the map yet may carry none.
@@ -150,12 +179,14 @@ EntityNamingResult assignUniqueEntityNames(
 void remapLinkSourceValues(
   const EntityDefinitionManager& entityDefinitionManager,
   const std::vector<Node*>& rootsInSourceOrder,
-  const EntityNamingResult& namingResult);
+  const EntityNamingResult& namingResult,
+  const std::vector<const GroupNode*>& skippedGroups = {});
 
 /**
  * If the map's game requires unique entity names, names the entities in the given
  * subtrees, which are about to be added to the map, in KeepIfFree mode, and if
- * remapLinkSources is true, changes the references among them to their new names.
+ * remapLinkSources is true, changes the references among them to their new names,
+ * except inside groups that stay linked to groups in the map.
  *
  * Does nothing for a game without naming rules.
  */
@@ -170,9 +201,9 @@ std::vector<EntityNodeBase*> sortInTreeOrder(
   const Map& map, std::vector<EntityNodeBase*> entityNodes);
 
 /**
- * Returns the entities in the map whose naming key has exactly the given value.
+ * Returns the entities in the map whose name equals the given name without regard to
+ * case. Returns nothing if the map's game has no naming rules.
  */
-std::vector<EntityNodeBase*> findEntitiesWithName(
-  const Map& map, const std::string& nameKey, const std::string& name);
+std::vector<EntityNodeBase*> findEntitiesWithName(const Map& map, std::string_view name);
 
 } // namespace tb::mdl

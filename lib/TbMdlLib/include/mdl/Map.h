@@ -69,6 +69,7 @@ class EditorContext;
 class EntityDefinitionManager;
 class EntityLinkManager;
 class EntityModelManager;
+class EntityNameIndex;
 class GameFileSystem;
 class Grid;
 class GroupNode;
@@ -119,6 +120,8 @@ private:
 
   std::unique_ptr<NodeIndex> m_nodeIndex;
   std::unique_ptr<EntityLinkManager> m_entityLinkManager;
+  // only for games with entity naming rules
+  std::unique_ptr<EntityNameIndex> m_entityNameIndex;
 
   NodeHandleManager m_nodeHandles;
 
@@ -281,6 +284,12 @@ public: // misc
   }
 
   const EntityLinkManager& entityLinkManager() const;
+
+  /**
+   * Returns the entities of this map by name, or null if the game has no entity naming
+   * rules.
+   */
+  const EntityNameIndex* entityNameIndex() const;
 
 public: // game path
   // This is updated whenever the game path is changed via the preferences

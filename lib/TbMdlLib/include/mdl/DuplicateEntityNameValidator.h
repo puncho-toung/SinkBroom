@@ -32,9 +32,14 @@ class Issue;
 class Map;
 
 /**
- * Reports entities that share their name with another entity, which the id Tech 4
- * engines refuse to spawn. Names are compared exactly, as the engine does when it spawns
- * the entities.
+ * Reports the entity names that the id Tech 4 engines refuse to spawn: a name that
+ * another entity has, a name the engine reserves (NULL, null_entity), and a link source
+ * property that refers to the entity itself.
+ *
+ * Names are compared without regard to case. The game's entity hash compares names with
+ * Icmp within a bucket chosen by a case-sensitive hash, so two names that differ only in
+ * case are fatal or not depending on their hash; the only rule a mapper can follow is to
+ * treat them as equal, as idMapFile::FindEntity does.
  *
  * The issues of an entity depend on the names of other entities, so the map invalidates
  * them whenever an entity with the same name is added, removed or changed.

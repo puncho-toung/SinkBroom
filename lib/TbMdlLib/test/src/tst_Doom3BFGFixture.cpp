@@ -179,7 +179,7 @@ TEST_CASE("Doom3BFGFixture")
       }));
 
     const auto findEntity = [&](const std::string& name) {
-      auto entityNodes = findEntitiesWithName(map, "name", name);
+      auto entityNodes = findEntitiesWithName(map, name);
       REQUIRE(entityNodes.size() == 1u);
       return entityNodes.front();
     };

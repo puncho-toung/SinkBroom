@@ -73,6 +73,14 @@ inline const MapFixtureConfig Doom3BFGFixtureConfig = MapFixtureConfig{
   .gameInfo = Doom3BFGGameInfo,
 };
 
+// the default test game with the entity naming rules of the Doom 3 BFG game
+inline const MapFixtureConfig NamingFixtureConfig = [] {
+  auto config = MapFixtureConfig{};
+  config.gameInfo.gameConfig.entityConfig.naming =
+    Doom3BFGGameInfo.gameConfig.entityConfig.naming;
+  return config;
+}();
+
 
 class MapFixture
 {

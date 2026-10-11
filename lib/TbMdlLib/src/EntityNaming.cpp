@@ -27,8 +27,9 @@
 #include "mdl/EntityNodeBase.h"
 #include "mdl/GroupNode.h"
 #include "mdl/LayerNode.h"
+#include "mdl/LinkedGroupUtils.h"
 #include "mdl/Map.h"
-#include "mdl/NodeIndex.h"
+#include "mdl/ModelUtils.h"
 #include "mdl/PatchNode.h"
 #include "mdl/PropertyDefinition.h"
 #include "mdl/WorldNode.h"
@@ -36,12 +37,14 @@
 #include "kd/contracts.h"
 #include "kd/overload.h"
 #include "kd/ranges/contains.h"
+#include "kd/ranges/to.h"
 #include "kd/string_compare.h"
 #include "kd/string_format.h"
+#include "kd/vector_utils.h"
 
 #include <algorithm>
 #include <array>
-#include <optional>
+#include <ranges>
 #include <unordered_map>
 
 namespace tb::mdl
@@ -56,85 +59,51 @@ constexpr auto ReservedEngineNames =
 // The map compiler merges the brushes of func_group entities into the world.
 constexpr auto FuncGroupClassname = std::string_view{"func_group"};
 
-// Numbers above this are not handed out, so names with more digits cannot block one.
-constexpr auto MaxIndexDigits = size_t{9};
-
-bool isReservedEngineName(const std::string_view name)
-{
-  return std::ranges::any_of(ReservedEngineNames, [&](const auto reservedName) {
-    return kdl::ci::str_is_equal(name, reservedName);
-  });
-}
-
-bool isAsciiLetter(const char c)
-{
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-}
-
-/**
- * Returns a node index pattern that matches the given string whatever the case of its
- * letters. The index is case sensitive, so every letter matches any character and the
- * callers compare the hits again.
- */
-std::string makeCaseInsensitivePattern(const std::string_view str)
-{
-  auto result = std::string{};
-  result.reserve(str.size());
-
-  for (const auto c : str)
-  {
-    if (isAsciiLetter(c))
-    {
-      result += '?';
-    }
-    else
-    {
-      result += NodeIndex::escapePattern(std::string_view{&c, 1});
-    }
-  }
-
-  return result;
-}
-
-/**
- * If the given name is <classname>_<N> without regard to case, where N is written
- * without leading zeros, returns N.
- */
-std::optional<size_t> parseIndex(
-  const std::string_view name, const std::string_view classname)
-{
-  if (
-    name.size() <= classname.size() + 1
-    || !kdl::ci::str_is_equal(name.substr(0, classname.size()), classname)
-    || name[classname.size()] != '_')
-  {
-    return std::nullopt;
-  }
-
-  const auto digits = name.substr(classname.size() + 1);
-  if (
-    digits.size() > MaxIndexDigits || (digits.size() > 1 && digits.front() == '0')
-    || !std::ranges::all_of(digits, [](const auto c) { return c >= '0' && c <= '9'; }))
-  {
-    return std::nullopt;
-  }
-
-  auto index = size_t{0};
-  for (const auto c : digits)
-  {
-    index = index * 10 + size_t(c - '0');
-  }
-  return index;
-}
-
 } // namespace
 
+EntityNameIndex::EntityNameIndex(std::string nameKey)
+  : m_nameKey{std::move(nameKey)}
+{
+}
+
+void EntityNameIndex::addEntityNode(EntityNodeBase& entityNode)
+{
+  if (const auto* name = entityNode.entity().property(m_nameKey); name && !name->empty())
+  {
+    m_entityNodes[kdl::str_to_lower(*name)].push_back(&entityNode);
+  }
+}
+
+void EntityNameIndex::removeEntityNode(EntityNodeBase& entityNode)
+{
+  if (const auto* name = entityNode.entity().property(m_nameKey); name && !name->empty())
+  {
+    if (const auto it = m_entityNodes.find(kdl::str_to_lower(*name));
+        it != m_entityNodes.end())
+    {
+      std::erase(it->second, &entityNode);
+      if (it->second.empty())
+      {
+        m_entityNodes.erase(it);
+      }
+    }
+  }
+}
+
+std::vector<EntityNodeBase*> EntityNameIndex::findEntityNodes(
+  const std::string_view name) const
+{
+  const auto it = m_entityNodes.find(kdl::str_to_lower(name));
+  return it != m_entityNodes.end() ? it->second : std::vector<EntityNodeBase*>{};
+}
+
 EntityNameAllocator::EntityNameAllocator(
-  const Map& map, EntityNamingConfig config, std::vector<const Node*> excluded)
+  const Map& map, std::vector<const Node*> excluded)
   : m_map{map}
-  , m_config{std::move(config)}
+  , m_config{*map.worldNode().entityPropertyConfig().naming}
   , m_excluded{std::move(excluded)}
 {
+  contract_pre(map.entityNameIndex() != nullptr);
 }
 
 const EntityNamingConfig& EntityNameAllocator::config() const
@@ -144,34 +113,30 @@ const EntityNamingConfig& EntityNameAllocator::config() const
 
 bool EntityNameAllocator::isTaken(const std::string_view name) const
 {
-  if (isReservedEngineName(name) || m_reserved.contains(kdl::str_to_lower(name)))
+  if (isReservedEntityName(name) || m_reserved.contains(kdl::str_to_lower(name)))
   {
     return true;
   }
 
   return std::ranges::any_of(
-    m_map.findNodes<EntityNodeBase>(makeCaseInsensitivePattern(name)),
-    [&](const auto* entityNode) {
-      const auto* value = entityNode->entity().property(m_config.nameKey);
-      return value && kdl::ci::str_is_equal(*value, name) && !isExcluded(*entityNode);
-    });
+    findEntitiesWithName(m_map, name),
+    [&](const auto* entityNode) { return !isExcluded(*entityNode); });
 }
 
 std::string EntityNameAllocator::allocate(const std::string_view classname)
 {
-  const auto& indices = usedIndices(classname);
-  for (auto index = size_t{0};; ++index)
+  // the names below the next index were taken when they were tried, and no name becomes
+  // free during an operation
+  auto& nextIndex = m_nextIndices[kdl::str_to_lower(classname)];
+  while (true)
   {
-    if (!indices.contains(index))
+    auto name = std::string{classname} + "_" + std::to_string(nextIndex++);
+    if (!isTaken(name))
     {
-      auto name = std::string{classname} + "_" + std::to_string(index);
-      if (!m_reserved.contains(kdl::str_to_lower(name)))
-      {
-        contract_assert(!isReservedEngineName(name));
+      contract_assert(!isReservedEntityName(name));
 
-        reserve(name);
-        return name;
-      }
+      reserve(name);
+      return name;
     }
   }
 }
@@ -188,30 +153,10 @@ bool EntityNameAllocator::isExcluded(const Node& node) const
   });
 }
 
-const std::set<size_t>& EntityNameAllocator::usedIndices(const std::string_view classname)
+bool isReservedEntityName(const std::string_view name)
 {
-  auto key = kdl::str_to_lower(classname);
-  if (const auto it = m_usedIndices.find(key); it != m_usedIndices.end())
-  {
-    return it->second;
-  }
-
-  // one index query per classname and operation
-  auto indices = std::set<size_t>{};
-  for (const auto* entityNode :
-       m_map.findNodes<EntityNodeBase>(makeCaseInsensitivePattern(classname) + "_%*"))
-  {
-    if (const auto* value = entityNode->entity().property(m_config.nameKey))
-    {
-      if (const auto index = parseIndex(*value, classname);
-          index && !isExcluded(*entityNode))
-      {
-        indices.insert(*index);
-      }
-    }
-  }
-
-  return m_usedIndices.emplace(std::move(key), std::move(indices)).first->second;
+  // idEntity::SetName compares with idStr::operator==, which respects case
+  return kdl::ranges::contains(ReservedEngineNames, name);
 }
 
 bool isBrushEntityModelClass(const std::string_view classname)
@@ -302,15 +247,21 @@ EntityNamingResult assignUniqueEntityNames(
 void remapLinkSourceValues(
   const EntityDefinitionManager& entityDefinitionManager,
   const std::vector<Node*>& rootsInSourceOrder,
-  const EntityNamingResult& namingResult)
+  const EntityNamingResult& namingResult,
+  const std::vector<const GroupNode*>& skippedGroups)
 {
+  // lowercase old name -> new name
   auto newNames = std::unordered_map<std::string, std::string>{};
   for (const auto& [oldName, newName] : namingResult.renamed)
   {
-    if (!oldName.empty() && !kdl::ranges::contains(namingResult.kept, oldName))
+    if (
+      !oldName.empty()
+      && std::ranges::none_of(namingResult.kept, [&](const auto& keptName) {
+           return kdl::ci::str_is_equal(keptName, oldName);
+         }))
     {
       // the first entity that was renamed from a name wins
-      newNames.emplace(oldName, newName);
+      newNames.emplace(kdl::str_to_lower(oldName), newName);
     }
   }
 
@@ -336,7 +287,8 @@ void remapLinkSourceValues(
             return isNumberedProperty(propertyDefinition->key, property.key());
           }))
       {
-        if (const auto it = newNames.find(property.value()); it != newNames.end())
+        if (const auto it = newNames.find(kdl::str_to_lower(property.value()));
+            it != newNames.end())
         {
           property.setValue(it->second);
           changed = true;
@@ -359,8 +311,12 @@ void remapLinkSourceValues(
         auto&& thisLambda, WorldNode& worldNode) { worldNode.visitChildren(thisLambda); },
       [](
         auto&& thisLambda, LayerNode& layerNode) { layerNode.visitChildren(thisLambda); },
-      [](
-        auto&& thisLambda, GroupNode& groupNode) { groupNode.visitChildren(thisLambda); },
+      [&](auto&& thisLambda, GroupNode& groupNode) {
+        if (!kdl::ranges::contains(skippedGroups, &groupNode))
+        {
+          groupNode.visitChildren(thisLambda);
+        }
+      },
       [&](EntityNode& entityNode) { remap(entityNode); },
       [](BrushNode&) {},
       [](PatchNode&) {}));
@@ -372,16 +328,28 @@ void assignUniqueEntityNamesBeforeAdding(
   const bool remapLinkSources)
 {
   // the nodes are not part of the map yet, so they see the default config
-  if (const auto& naming = map.worldNode().entityPropertyConfig().naming)
+  if (map.worldNode().entityPropertyConfig().naming)
   {
-    auto allocator = EntityNameAllocator{map, *naming};
+    auto allocator = EntityNameAllocator{map};
     const auto namingResult = assignUniqueEntityNames(
       rootsInSourceOrder, allocator, EntityNamingMode::KeepIfFree);
 
     if (remapLinkSources)
     {
+      // a group that joined a link set in the map is overwritten by the next update of
+      // that set, link source values included, so its references are left alone
+      const auto linkIdsInMap = kdl::vec_sort(collectLinkedGroupIds(map.worldNode()));
+      const auto linkedGroups =
+        collectGroups(rootsInSourceOrder)
+        | std::views::filter([&](const auto* groupNode) {
+            return std::ranges::binary_search(linkIdsInMap, groupNode->linkId());
+          })
+        | std::views::transform(
+          [](const auto* groupNode) { return static_cast<const GroupNode*>(groupNode); })
+        | kdl::ranges::to<std::vector>();
+
       remapLinkSourceValues(
-        map.entityDefinitionManager(), rootsInSourceOrder, namingResult);
+        map.entityDefinitionManager(), rootsInSourceOrder, namingResult, linkedGroups);
     }
   }
 }
@@ -419,19 +387,11 @@ std::vector<EntityNodeBase*> sortInTreeOrder(
 }
 
 std::vector<EntityNodeBase*> findEntitiesWithName(
-  const Map& map, const std::string& nameKey, const std::string& name)
+  const Map& map, const std::string_view name)
 {
-  if (name.empty())
-  {
-    return {};
-  }
-
-  auto result = map.findNodes<EntityNodeBase>(NodeIndex::escapePattern(name));
-  std::erase_if(result, [&](const auto* entityNode) {
-    const auto* value = entityNode->entity().property(nameKey);
-    return !value || *value != name;
-  });
-  return result;
+  const auto* entityNameIndex = map.entityNameIndex();
+  return entityNameIndex && !name.empty() ? entityNameIndex->findEntityNodes(name)
+                                          : std::vector<EntityNodeBase*>{};
 }
 
 } // namespace tb::mdl

@@ -183,6 +183,12 @@ TEST_CASE("BrushEntityModelValidator")
     }
   }
 
+  SECTION("A model that differs from the name only in case is no issue")
+  {
+    editEntity([&]() { REQUIRE(setEntityProperty(map, "model", "DOOR")); });
+    CHECK(collectIssues(map.worldNode(), type).empty());
+  }
+
   SECTION("A missing name is reported and replaced by a unique one")
   {
     editEntity([&]() { REQUIRE(removeEntityProperty(map, "name")); });
@@ -223,7 +229,8 @@ TEST_CASE("BrushEntityModelValidator")
         mapWithoutModels.worldNode(), "Brush entity model differs from its name")
       == nullptr);
     CHECK(
-      findValidator(mapWithoutModels.worldNode(), "Duplicate entity name") != nullptr);
+      findValidator(mapWithoutModels.worldNode(), "Duplicate or invalid entity name")
+      != nullptr);
   }
 }
 

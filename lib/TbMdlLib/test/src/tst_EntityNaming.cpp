@@ -48,11 +48,6 @@ namespace tb::mdl
 namespace
 {
 
-const auto NamingConfig = EntityNamingConfig{
-  .nameKey = "name",
-  .brushEntityModelKey = "model",
-};
-
 EntityNode* makeEntityNode(std::vector<EntityProperty> properties)
 {
   return new EntityNode{Entity{std::move(properties)}};
@@ -75,7 +70,7 @@ const std::string* nameOf(const EntityNode& entityNode)
 TEST_CASE("EntityNaming")
 {
   auto fixture = MapFixture{};
-  auto& map = fixture.create();
+  auto& map = fixture.create(NamingFixtureConfig);
 
   SECTION("EntityNameAllocator")
   {
@@ -83,7 +78,7 @@ TEST_CASE("EntityNaming")
     {
       SECTION("an empty map hands out N = 0")
       {
-        auto allocator = EntityNameAllocator{map, NamingConfig};
+        auto allocator = EntityNameAllocator{map};
         CHECK(allocator.allocate("light") == "light_0");
       }
 
@@ -92,7 +87,7 @@ TEST_CASE("EntityNaming")
         addEntity(map, {{"classname", "light"}, {"name", "light_0"}});
         addEntity(map, {{"classname", "light"}, {"name", "light_2"}});
 
-        auto allocator = EntityNameAllocator{map, NamingConfig};
+        auto allocator = EntityNameAllocator{map};
         CHECK(allocator.allocate("light") == "light_1");
         CHECK(allocator.allocate("light") == "light_3");
       }
@@ -102,7 +97,7 @@ TEST_CASE("EntityNaming")
         addEntity(map, {{"classname", "light"}, {"name", "Light_0"}});
         addEntity(map, {{"classname", "light"}, {"name", "LIGHT_1"}});
 
-        auto allocator = EntityNameAllocator{map, NamingConfig};
+        auto allocator = EntityNameAllocator{map};
         CHECK(allocator.allocate("light") == "light_2");
         CHECK(allocator.allocate("Light") == "Light_3");
       }
@@ -115,7 +110,7 @@ TEST_CASE("EntityNaming")
         addEntity(map, {{"classname", "info_null"}, {"light_0", "value"}});
         addNodes(map, {{&parentForNodes(map), {new GroupNode{Group{"light_0"}}}}});
 
-        auto allocator = EntityNameAllocator{map, NamingConfig};
+        auto allocator = EntityNameAllocator{map};
         CHECK(allocator.allocate("light") == "light_0");
       }
 
@@ -126,16 +121,16 @@ TEST_CASE("EntityNaming")
         addEntity(map, {{"classname", "light"}, {"name", "light_"}});
         addEntity(map, {{"classname", "light"}, {"name", "lights_0"}});
 
-        auto allocator = EntityNameAllocator{map, NamingConfig};
+        auto allocator = EntityNameAllocator{map};
         CHECK(allocator.allocate("light") == "light_0");
       }
 
-      SECTION("special characters in the classname are escaped")
+      SECTION("special characters in the classname are not patterns")
       {
         addEntity(map, {{"classname", "a*b"}, {"name", "a*b_0"}});
         addEntity(map, {{"classname", "axb"}, {"name", "axb_1"}});
 
-        auto allocator = EntityNameAllocator{map, NamingConfig};
+        auto allocator = EntityNameAllocator{map};
         CHECK(allocator.allocate("a*b") == "a*b_1");
         CHECK(allocator.allocate("a?b") == "a?b_0");
       }
@@ -144,7 +139,7 @@ TEST_CASE("EntityNaming")
       {
         addEntity(map, {{"classname", "light"}, {"name", "light_1"}});
 
-        auto allocator = EntityNameAllocator{map, NamingConfig};
+        auto allocator = EntityNameAllocator{map};
         CHECK(allocator.allocate("light") == "light_0");
         CHECK(allocator.allocate("light") == "light_2");
         CHECK(allocator.allocate("light") == "light_3");
@@ -153,7 +148,7 @@ TEST_CASE("EntityNaming")
 
       SECTION("reserved names are skipped")
       {
-        auto allocator = EntityNameAllocator{map, NamingConfig};
+        auto allocator = EntityNameAllocator{map};
         allocator.reserve("LIGHT_0");
         CHECK(allocator.allocate("light") == "light_1");
       }
@@ -163,7 +158,7 @@ TEST_CASE("EntityNaming")
         REQUIRE(setEntityProperty(map, "name", "light_0"));
         REQUIRE(map.worldNode().entity().property("name"));
 
-        auto allocator = EntityNameAllocator{map, NamingConfig};
+        auto allocator = EntityNameAllocator{map};
         CHECK(allocator.isTaken("light_0"));
         CHECK(allocator.allocate("light") == "light_1");
       }
@@ -176,7 +171,7 @@ TEST_CASE("EntityNaming")
         addNodes(map, {{&parentForNodes(map), {groupNode}}});
         auto* entityNode = addEntity(map, {{"classname", "light"}, {"name", "light_1"}});
 
-        auto allocator = EntityNameAllocator{map, NamingConfig, {groupNode, entityNode}};
+        auto allocator = EntityNameAllocator{map, {groupNode, entityNode}};
         CHECK_FALSE(allocator.isTaken("light_0"));
         CHECK_FALSE(allocator.isTaken("light_1"));
         CHECK(allocator.allocate("light") == "light_0");
@@ -188,7 +183,7 @@ TEST_CASE("EntityNaming")
       addEntity(map, {{"classname", "func_door"}, {"name", "Big_Door"}});
       addEntity(map, {{"classname", "info_null"}, {"target", "small_door"}});
 
-      auto allocator = EntityNameAllocator{map, NamingConfig};
+      auto allocator = EntityNameAllocator{map};
       CHECK(allocator.isTaken("Big_Door"));
       CHECK(allocator.isTaken("big_door"));
       CHECK(allocator.isTaken("BIG_DOOR"));
@@ -245,7 +240,7 @@ TEST_CASE("EntityNaming")
 
     SECTION("Create mode names every entity")
     {
-      auto allocator = EntityNameAllocator{map, NamingConfig};
+      auto allocator = EntityNameAllocator{map};
       const auto result =
         assignUniqueEntityNames(roots, allocator, EntityNamingMode::Create);
 
@@ -273,7 +268,7 @@ TEST_CASE("EntityNaming")
 
     SECTION("KeepIfFree mode keeps names that no other entity holds")
     {
-      auto allocator = EntityNameAllocator{map, NamingConfig};
+      auto allocator = EntityNameAllocator{map};
       const auto result =
         assignUniqueEntityNames(roots, allocator, EntityNamingMode::KeepIfFree);
 
@@ -301,7 +296,7 @@ TEST_CASE("EntityNaming")
       nodes.emplace_back(firstNode);
       nodes.emplace_back(secondNode);
 
-      auto allocator = EntityNameAllocator{map, NamingConfig};
+      auto allocator = EntityNameAllocator{map};
       assignUniqueEntityNames(
         {firstNode, secondNode}, allocator, EntityNamingMode::KeepIfFree);
 
@@ -316,7 +311,7 @@ TEST_CASE("EntityNaming")
       entityNode->addChild(makeBrushNode());
       nodes.emplace_back(entityNode);
 
-      auto allocator = EntityNameAllocator{map, NamingConfig};
+      auto allocator = EntityNameAllocator{map};
       assignUniqueEntityNames({entityNode}, allocator, EntityNamingMode::KeepIfFree);
 
       CHECK(*nameOf(*entityNode) == "free");
@@ -325,8 +320,14 @@ TEST_CASE("EntityNaming")
 
     SECTION("without a brush entity model key, no model is set")
     {
-      auto allocator = EntityNameAllocator{
-        map, EntityNamingConfig{.nameKey = "name", .brushEntityModelKey = std::nullopt}};
+      auto fixtureConfig = NamingFixtureConfig;
+      fixtureConfig.gameInfo.gameConfig.entityConfig.naming->brushEntityModelKey =
+        std::nullopt;
+
+      auto otherFixture = MapFixture{};
+      auto& mapWithoutModels = otherFixture.create(fixtureConfig);
+
+      auto allocator = EntityNameAllocator{mapWithoutModels};
       assignUniqueEntityNames(roots, allocator, EntityNamingMode::Create);
 
       CHECK(*nameOf(*brushEntityNode) == "func_static_0");
@@ -335,7 +336,7 @@ TEST_CASE("EntityNaming")
 
     SECTION("names are handed out in the given order")
     {
-      auto allocator = EntityNameAllocator{map, NamingConfig};
+      auto allocator = EntityNameAllocator{map};
       assignUniqueEntityNames(
         {groupNode, namedNode, lightNode}, allocator, EntityNamingMode::Create);
 
@@ -382,7 +383,7 @@ TEST_CASE("EntityNaming")
     SECTION("references to renamed entities of the batch are changed")
     {
       const auto roots = std::vector<Node*>{lightNode, triggerNode};
-      auto allocator = EntityNameAllocator{map, NamingConfig};
+      auto allocator = EntityNameAllocator{map};
       const auto result =
         assignUniqueEntityNames(roots, allocator, EntityNamingMode::KeepIfFree);
       remapLinkSourceValues(map.entityDefinitionManager(), roots, result);
@@ -398,7 +399,7 @@ TEST_CASE("EntityNaming")
     SECTION("references to entities outside the batch are kept")
     {
       const auto roots = std::vector<Node*>{triggerNode};
-      auto allocator = EntityNameAllocator{map, NamingConfig};
+      auto allocator = EntityNameAllocator{map};
       const auto result =
         assignUniqueEntityNames(roots, allocator, EntityNamingMode::KeepIfFree);
       remapLinkSourceValues(map.entityDefinitionManager(), roots, result);
@@ -418,7 +419,7 @@ TEST_CASE("EntityNaming")
 
       const auto roots =
         std::vector<Node*>{otherLightNode, secondLightNode, otherTriggerNode};
-      auto allocator = EntityNameAllocator{map, NamingConfig};
+      auto allocator = EntityNameAllocator{map};
       const auto result =
         assignUniqueEntityNames(roots, allocator, EntityNamingMode::KeepIfFree);
       remapLinkSourceValues(map.entityDefinitionManager(), roots, result);
@@ -427,27 +428,92 @@ TEST_CASE("EntityNaming")
       CHECK(*nameOf(*secondLightNode) == "light_1");
       CHECK(*otherTriggerNode->entity().property("target") == "lamp");
     }
+
+    SECTION("references are matched without regard to case, as the engine does")
+    {
+      auto* upperCaseTriggerNode =
+        makeEntityNode({{"classname", "trigger_once"}, {"target", "LIGHT_0"}});
+      nodes.emplace_back(upperCaseTriggerNode);
+
+      const auto roots = std::vector<Node*>{lightNode, upperCaseTriggerNode};
+      auto allocator = EntityNameAllocator{map};
+      const auto result =
+        assignUniqueEntityNames(roots, allocator, EntityNamingMode::KeepIfFree);
+      remapLinkSourceValues(map.entityDefinitionManager(), roots, result);
+
+      CHECK(*nameOf(*lightNode) == "light_1");
+      CHECK(*upperCaseTriggerNode->entity().property("target") == "light_1");
+    }
+
+    SECTION("renames that form a chain follow each entity")
+    {
+      // the map has light_0, so the batch's light_0 becomes light_1, which moves the
+      // batch's light_1 on to light_2; each trigger must follow its own light
+      auto* light0Node = makeEntityNode({{"classname", "light"}, {"name", "light_0"}});
+      auto* trigger0Node =
+        makeEntityNode({{"classname", "trigger_once"}, {"target", "light_0"}});
+      auto* light1Node = makeEntityNode({{"classname", "light"}, {"name", "light_1"}});
+      auto* trigger1Node =
+        makeEntityNode({{"classname", "trigger_once"}, {"target", "light_1"}});
+      nodes.emplace_back(light0Node);
+      nodes.emplace_back(trigger0Node);
+      nodes.emplace_back(light1Node);
+      nodes.emplace_back(trigger1Node);
+
+      const auto roots =
+        std::vector<Node*>{light0Node, trigger0Node, light1Node, trigger1Node};
+      auto allocator = EntityNameAllocator{map};
+      const auto result =
+        assignUniqueEntityNames(roots, allocator, EntityNamingMode::KeepIfFree);
+      remapLinkSourceValues(map.entityDefinitionManager(), roots, result);
+
+      const auto light0Name = *nameOf(*light0Node);
+      const auto light1Name = *nameOf(*light1Node);
+      CHECK(light0Name != "light_0");
+      CHECK(light0Name != light1Name);
+      CHECK(*trigger0Node->entity().property("target") == light0Name);
+      CHECK(*trigger1Node->entity().property("target") == light1Name);
+    }
+
+    SECTION("groups that stay linked are skipped")
+    {
+      auto* groupNode = new GroupNode{Group{"group"}};
+      auto* groupedTriggerNode =
+        makeEntityNode({{"classname", "trigger_once"}, {"target", "light_0"}});
+      groupNode->addChild(groupedTriggerNode);
+      nodes.emplace_back(groupNode);
+
+      const auto roots = std::vector<Node*>{lightNode, triggerNode, groupNode};
+      auto allocator = EntityNameAllocator{map};
+      const auto result =
+        assignUniqueEntityNames(roots, allocator, EntityNamingMode::KeepIfFree);
+      remapLinkSourceValues(map.entityDefinitionManager(), roots, result, {groupNode});
+
+      CHECK(*nameOf(*lightNode) == "light_1");
+      CHECK(*triggerNode->entity().property("target") == "light_1");
+      CHECK(*groupedTriggerNode->entity().property("target") == "light_0");
+    }
   }
 
   SECTION("assignUniqueEntityNamesBeforeAdding")
   {
     SECTION("does nothing for a game without naming rules")
     {
-      REQUIRE(map.worldNode().entityPropertyConfig().naming == std::nullopt);
-      addEntity(map, {{"classname", "light"}, {"name", "light_0"}});
+      auto otherFixture = MapFixture{};
+      auto& defaultMap = otherFixture.create();
+      REQUIRE(defaultMap.worldNode().entityPropertyConfig().naming == std::nullopt);
+      addEntity(defaultMap, {{"classname", "light"}, {"name", "light_0"}});
 
       auto entityNode = std::unique_ptr<EntityNode>{
         makeEntityNode({{"classname", "light"}, {"name", "light_0"}})};
-      assignUniqueEntityNamesBeforeAdding(map, {entityNode.get()}, true);
+      assignUniqueEntityNamesBeforeAdding(defaultMap, {entityNode.get()}, true);
 
       CHECK(*nameOf(*entityNode) == "light_0");
     }
 
     SECTION("names and remaps for a game with naming rules")
     {
-      auto fixtureConfig = MapFixtureConfig{};
-      fixtureConfig.gameInfo.gameConfig.entityConfig.naming = NamingConfig;
-      auto& namingMap = fixture.create(fixtureConfig);
+      auto& namingMap = map;
       namingMap.entityDefinitionManager().setDefinitions({
         {"trigger_once",
          Color{},
@@ -488,14 +554,40 @@ TEST_CASE("EntityNaming")
   {
     auto* entityNode1 = addEntity(map, {{"classname", "light"}, {"name", "lamp"}});
     auto* entityNode2 = addEntity(map, {{"classname", "light"}, {"name", "lamp"}});
-    addEntity(map, {{"classname", "light"}, {"name", "Lamp"}});
+    auto* entityNode3 = addEntity(map, {{"classname", "light"}, {"name", "Lamp"}});
     addEntity(map, {{"classname", "light"}, {"target", "lamp"}});
 
     CHECK_THAT(
-      findEntitiesWithName(map, "name", "lamp"),
+      findEntitiesWithName(map, "LAMP"),
       Catch::Matchers::UnorderedEquals(
-        std::vector<EntityNodeBase*>{entityNode1, entityNode2}));
-    CHECK(findEntitiesWithName(map, "name", "").empty());
+        std::vector<EntityNodeBase*>{entityNode1, entityNode2, entityNode3}));
+    CHECK(findEntitiesWithName(map, "").empty());
+
+    SECTION("the index follows renames and removals")
+    {
+      deselectAll(map);
+      selectNodes(map, {entityNode1});
+      REQUIRE(setEntityProperty(map, "name", "lantern"));
+      CHECK(
+        findEntitiesWithName(map, "lantern")
+        == std::vector<EntityNodeBase*>{entityNode1});
+
+      deselectAll(map);
+      selectNodes(map, {entityNode2});
+      removeSelectedNodes(map);
+      CHECK(
+        findEntitiesWithName(map, "lamp") == std::vector<EntityNodeBase*>{entityNode3});
+    }
+
+    SECTION("a game without naming rules has no index")
+    {
+      auto otherFixture = MapFixture{};
+      auto& defaultMap = otherFixture.create();
+      addEntity(defaultMap, {{"classname", "light"}, {"name", "lamp"}});
+
+      CHECK(defaultMap.entityNameIndex() == nullptr);
+      CHECK(findEntitiesWithName(defaultMap, "lamp").empty());
+    }
   }
 }
 

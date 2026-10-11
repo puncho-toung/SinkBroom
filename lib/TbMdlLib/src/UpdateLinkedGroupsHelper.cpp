@@ -104,12 +104,11 @@ auto doReplaceChildren(
 void assignUniqueEntityNamesInUpdates(
   const UpdateLinkedGroupsResult& linkedGroupUpdates, const Map& map)
 {
-  if (const auto& naming = map.worldNode().entityPropertyConfig().naming)
+  if (map.worldNode().entityPropertyConfig().naming)
   {
     // the children of the target groups are replaced, so their names are free
     auto allocator = EntityNameAllocator{
       map,
-      *naming,
       linkedGroupUpdates | std::views::keys | std::views::transform([](const auto* node) {
         return static_cast<const Node*>(node);
       }) | kdl::ranges::to<std::vector>()};

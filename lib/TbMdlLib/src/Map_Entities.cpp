@@ -109,9 +109,9 @@ EntityNode* createPointEntity(
   }
 
   // after the defaults, so that a default name cannot replace the unique one
-  if (const auto& naming = map.worldNode().entityPropertyConfig().naming)
+  if (map.worldNode().entityPropertyConfig().naming)
   {
-    auto allocator = EntityNameAllocator{map, *naming};
+    auto allocator = EntityNameAllocator{map};
     auto namingResult = EntityNamingResult{};
     assignUniqueEntityName(
       entity, false, allocator, EntityNamingMode::Create, namingResult);
@@ -167,7 +167,7 @@ EntityNode* createBrushEntity(Map& map, const EntityDefinition& definition)
   }
 
   // after the defaults, so that a default name cannot replace the unique one
-  if (const auto& naming = map.worldNode().entityPropertyConfig().naming)
+  if (map.worldNode().entityPropertyConfig().naming)
   {
     // if all brushes of the containing entity are moved, it is removed once it is
     // empty, so the new entity replaces it and may keep its name
@@ -178,8 +178,8 @@ EntityNode* createBrushEntity(Map& map, const EntityDefinition& definition)
          });
 
     auto allocator = replacesContainingEntity
-                       ? EntityNameAllocator{map, *naming, {containingEntity}}
-                       : EntityNameAllocator{map, *naming};
+                       ? EntityNameAllocator{map, {containingEntity}}
+                       : EntityNameAllocator{map};
     auto namingResult = EntityNamingResult{};
     assignUniqueEntityName(
       entity,
