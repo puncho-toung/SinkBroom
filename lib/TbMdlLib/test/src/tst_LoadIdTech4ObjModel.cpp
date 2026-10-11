@@ -41,10 +41,13 @@
 #include "vm/ray.h"
 #include "vm/vec_io.h" // IWYU pragma: keep
 
+#include <algorithm>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>

@@ -130,6 +130,7 @@ target_sources(TbMdlLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MissingDefinitionValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MissingModValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MixedBrushContentsValidator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ModelConvention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ModelDefinition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ModelSpecification.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ModelUtils.cpp

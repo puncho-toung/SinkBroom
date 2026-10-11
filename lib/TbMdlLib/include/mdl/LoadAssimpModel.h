@@ -23,11 +23,10 @@
 
 #include "base/Result.h"
 #include "mdl/EntityModel.h"
-#include "mdl/GameConfig.h"
+#include "mdl/FindMaterialFunc.h"
+#include "mdl/ModelConvention.h"
 
 #include <filesystem>
-#include <functional>
-#include <optional>
 
 namespace tb
 {
@@ -38,16 +37,8 @@ namespace fs
 class FileSystem;
 }
 
-namespace gl
-{
-class Material;
-}
-
 namespace mdl
 {
-
-using FindMaterialFunc =
-  std::function<std::optional<gl::Material>(const std::filesystem::path&)>;
 
 struct AssimpModelOptions
 {

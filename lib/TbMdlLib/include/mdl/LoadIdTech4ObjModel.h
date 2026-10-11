@@ -21,6 +21,7 @@
 
 #include "base/Result.h"
 #include "mdl/EntityModel.h"
+#include "mdl/FindMaterialFunc.h"
 
 #include "kd/reflection_decl.h"
 
@@ -45,14 +46,6 @@ class Material;
 
 namespace mdl
 {
-
-/**
- * Finds the material that a model names by its canonical id Tech 4 decl name. Returns
- * nothing if the name resolves to neither a material decl nor an image, so that the
- * caller can fall back to a default material that keeps the name.
- */
-using FindMaterialFunc =
-  std::function<std::optional<gl::Material>(const std::filesystem::path&)>;
 
 /**
  * A corner of a triangle read from an id Tech 4 OBJ file.

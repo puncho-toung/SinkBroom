@@ -415,7 +415,7 @@ std::vector<gl::Texture> loadTexturesForMaterial(
  * one its name names (renderer/Model_gltf.cpp). Assimp gives the material it adds for
  * meshes without one the name AI_DEFAULT_MATERIAL_NAME, which is not a decl.
  */
-std::optional<gl::Material> findIdTech4Material(
+std::optional<gl::Material> findIdTech4AssimpMaterial(
   const aiMaterial& material, const FindMaterialFunc& findMaterial)
 {
   const auto name = material.GetName();
@@ -1011,9 +1011,10 @@ Result<EntityModelData> loadAssimpModel(
       // under the id Tech 4 convention, a material decl named like the material wins, as
       // in the engine; without one, the model still shows its own textures
       if (
-        auto idTech4Material = isIdTech4 && options.findMaterial
-                                 ? findIdTech4Material(material, options.findMaterial)
-                                 : std::nullopt)
+        auto idTech4Material =
+          isIdTech4 && options.findMaterial
+            ? findIdTech4AssimpMaterial(material, options.findMaterial)
+            : std::nullopt)
       {
         auto materials = std::vector<gl::Material>{};
         materials.push_back(std::move(*idTech4Material));

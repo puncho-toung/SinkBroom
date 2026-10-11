@@ -40,7 +40,6 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 
 namespace tb::mdl
 {
@@ -1245,13 +1244,12 @@ TEST_CASE("GameConfigParser")
 
     SECTION("an unknown value is an error with its location")
     {
-      const auto result = parseGameConfig(makeConfig(R"%(,
-        "modelConvention": "quake")%"));
-      REQUIRE(result.is_error());
-      CHECK_THAT(
-        std::get<Error>(result.error()).msg,
-        Catch::Matchers::StartsWith("At line 13, column")
-          && Catch::Matchers::ContainsSubstring("Unknown model convention 'quake'"));
+      CHECK(
+        parseGameConfig(makeConfig(R"%(,
+        "modelConvention": "quake")%"))
+        == Result<GameConfig>{Error{
+          "At line 13, column 28: Unknown model convention 'quake'; valid values are: "
+          "idtech4"}});
     }
 
     SECTION("the convention takes part in comparisons")

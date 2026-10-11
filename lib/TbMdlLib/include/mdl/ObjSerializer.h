@@ -20,12 +20,13 @@
 #pragma once
 
 #include "mdl/ExportOptions.h"
-#include "mdl/GameConfig.h"
+#include "mdl/ModelConvention.h"
 #include "mdl/NodeSerializer.h"
 
 #include "vm/vec.h"
 
 #include <array>
+#include <filesystem>
 #include <iosfwd>
 #include <map>
 #include <optional>

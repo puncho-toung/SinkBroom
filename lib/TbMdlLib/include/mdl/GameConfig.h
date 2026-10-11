@@ -22,6 +22,7 @@
 #include "base/Color.h"
 #include "base/Preference.h"
 #include "el/Expression.h"
+#include "mdl/ModelConvention.h"
 #include "mdl/SurfaceAttributes.h"
 #include "mdl/Tag.h"
 #include "mdl/UvAttributes.h"
@@ -89,25 +90,6 @@ struct MaterialConfig
     shaderExtensions,
     shaderImageSearchPaths);
 };
-
-/**
- * How the entity models of a game are read, as set by the optional game config key
- * entities.modelConvention.
- */
-enum class ModelConvention
-{
-  /** Every model format is read the way TrenchBroom reads it for any game. */
-  Default,
-  /**
-   * The id Tech 4 engines (Doom 3, RBDOOM-3-BFG): a .obj file is read the way the engine
-   * reads it, with raw Z-up coordinates and a material decl name after usemtl; a glTF
-   * model takes its axes and, where they resolve, its materials from the engine's glTF
-   * importer.
-   */
-  IdTech4,
-};
-
-std::ostream& operator<<(std::ostream& lhs, ModelConvention rhs);
 
 struct EntityConfig
 {

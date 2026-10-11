@@ -1,0 +1,3 @@
+# The OBJ fixtures are kept byte for byte as they were written, like the engine's own
+# exports in Game/Doom3BFG; never normalise their line endings.
+*.obj -text

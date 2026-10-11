@@ -21,10 +21,10 @@
 
 #include "base/Result.h"
 #include "mdl/EntityModelDataResource.h"
+#include "mdl/FindMaterialFunc.h"
 
 #include <filesystem>
 #include <functional>
-#include <optional>
 
 namespace tb
 {
@@ -47,8 +47,6 @@ struct MaterialConfig;
 enum class ModelConvention;
 
 using LoadMaterialFunc = std::function<gl::Material(const std::filesystem::path&)>;
-using FindMaterialFunc =
-  std::function<std::optional<gl::Material>(const std::filesystem::path&)>;
 
 /**
  * Loads the model at the given path with the loader that its format needs. Under
