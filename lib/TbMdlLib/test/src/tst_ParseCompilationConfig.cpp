@@ -694,19 +694,21 @@ TEST_CASE("CompilationConfigParser")
     REQUIRE(gameEngineConfig.is_success());
     REQUIRE(gameEngineConfig.value().profiles.size() == 1u);
 
-    // dmap reads the map from the game file system, so it is exported into base/maps,
-    // and the engine's Valve 220 loader uses _tb_group, so TrenchBroom's properties
-    // stay; without -nogui, rbdmap keeps its text UI open and the task never ends
+    // dmap reads the map from the game file system, so it is exported into the maps
+    // folder of the last enabled mod and that mod is passed as fs_game (the engine
+    // ignores "base" there, so a map without a mod still compiles into base); the
+    // engine's Valve 220 loader uses _tb_group, so TrenchBroom's properties stay;
+    // without -nogui, rbdmap keeps its text UI open and the task never ends
     const auto exportMap = mdl::CompilationExportMap{
       K(enabled),
       !K(stripTbProperties),
       std::nullopt,
       std::nullopt,
-      "${GAME_DIR_PATH}/${MODS[0]}/maps/${MAP_BASE_NAME}.map"};
+      "${GAME_DIR_PATH}/${MODS[-1]}/maps/${MAP_BASE_NAME}.map"};
     const auto runRbdmap = mdl::CompilationRunTool{
       K(enabled),
       "${rbdmap}",
-      R"(-nogui +set fs_basepath "${GAME_DIR_PATH}" ${MAP_BASE_NAME})",
+      R"(-nogui +set fs_basepath "${GAME_DIR_PATH}" +set fs_game ${MODS[-1]} ${MAP_BASE_NAME})",
       K(treatNonZeroResultCodeAsError)};
 
     CHECK(
@@ -720,7 +722,7 @@ TEST_CASE("CompilationConfigParser")
            mdl::CompilationRunTool{
              K(enabled),
              "${rbdoom3bfg}",
-             R"(+set fs_basepath "${GAME_DIR_PATH}" +dmap ${MAP_BASE_NAME} +quit)",
+             R"(+set fs_basepath "${GAME_DIR_PATH}" +set fs_game ${MODS[-1]} +dmap ${MAP_BASE_NAME} +quit)",
              K(treatNonZeroResultCodeAsError)},
          }},
         {"dmap (rbdmap) and run",
