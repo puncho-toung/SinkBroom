@@ -2952,6 +2952,15 @@ TrenchBroom does not change any names when it loads or saves a map. Instead, two
 
 Links between entities come only from the entity definitions. A Doom 3 FGD must therefore declare `name(target_source)` and `target(target_destination)` on its entity classes, as the FGDs that RBDOOM-3-BFG exports do.
 
+With the rotation policy `"quake"`, TrenchBroom shows and turns entities by their `angle`, `angles` or `mangle` property, as the Quake engines read them. With `"idtech4"`, it follows RBDOOM-3-BFG and the other Doom 3 engines:
+
+- A point entity's rotation is read from the first of `rotation`, `angles` and `angle` that it has, even if the value is empty. A light, whose classname starts with `light`, reads `light_rotation`, `rotation`, `light_angles`, `angles` and `angle`, in this order. `rotation` and `light_rotation` hold nine numbers, the directions of the entity's forward, left and up axes; `angles` and `light_angles` hold the pitch, yaw and roll in degrees, where a positive pitch points down; `angle` is the yaw alone. `mangle` is not read, and lights with a target are turned like any other entity.
+- When a point entity is rotated, TrenchBroom writes its new rotation to `angles` and removes `rotation` and `angle`, and for a light also `light_rotation` and `light_angles`, because the engine would read them instead. An entity that has a `rotation` from an older map is shown turned and keeps that property until it is rotated for the first time; loading and saving never change it. The angles are written in whole degrees, so converting a `rotation` whose angles are not whole degrees turns the entity by up to half a degree.
+- A class whose entity definition declares `angle` but not `angles`, such as `func_teleporter`, keeps its yaw in `angle` as long as the entity has neither `rotation` nor `angles`, because the engine reads only `angle` for some of these classes.
+- An entity with brushes or patches never gets `angles` or `rotation`. TrenchBroom turns its brushes, and the engine would turn them a second time. Its `angle`, the direction in which a door or another mover moves, is turned with the brushes, with `-1` for up and `-2` for down.
+
+With `"idtech4"`, a validator in the [issue browser](#issue_browser) reports the rotation properties that TrenchBroom does not write: `angles` or `rotation` on an entity with brushes or patches, and `rotation` on a point entity or `light_rotation` and `light_angles` on a light. Its quick fixes delete the reported property, or convert the rotation of the reported point entities to `angles` without turning them.
+
 #### Tags {#game_configuration_files_tags}
 
 TrenchBroom can recognize certain special brush or face types. An example would be clip faces or trigger brushes. But since the details can be game dependent, these special types are defined in the game configuration. For greater flexibility and future enhancements, a general "smart tags" system is used to realize this functionality.
