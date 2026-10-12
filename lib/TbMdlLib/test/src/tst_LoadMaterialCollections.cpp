@@ -979,10 +979,32 @@ TEST_CASE("LoadMaterialCollections")
       taskManager,
       logger);
 
-    // the seven materials of tb_test.mtr, and the loose images, which this config
-    // doesn't exclude
+    // only the seven materials of tb_test.mtr; the loose images beside them, which the
+    // engine would make translucent materials that don't seal, are only their previews
     CHECK_THAT(
       result,
+      MatchesMaterialCollections({
+        {
+          "textures/tb_test",
+          {
+            MaterialInfo{"tb_test/bumped", 8, 8},
+            MaterialInfo{"tb_test/dds", 8, 8},
+            MaterialInfo{"tb_test/glass", 8, 8},
+            MaterialInfo{"tb_test/grate", 8, 8},
+            MaterialInfo{"tb_test/nonsolid", 8, 8},
+            MaterialInfo{"tb_test/wall", 8, 8},
+            MaterialInfo{"tb_test/wall_plain", 8, 8},
+          },
+        },
+      }));
+
+    // with implicit materials from images, the loose images are listed as well, since
+    // this config doesn't exclude them
+    auto implicitMaterialConfig = Doom3BFGGameInfo.gameConfig.materialConfig;
+    implicitMaterialConfig.implicitMaterialsFromImages = true;
+    CHECK_THAT(
+      loadMaterialCollections(
+        fs, implicitMaterialConfig, createResource, taskManager, logger),
       MatchesMaterialCollections({
         {
           "textures/tb_test",
@@ -1269,6 +1291,56 @@ TEST_CASE("LoadMaterialCollections")
     {
       CHECK(
         logger.countMessagesContaining(
+          "Loaded 30 materials from 3 files (2 defaulted, 1 unterminated); 28 under "
+          "textures/, 5 without a preview image")
+        == 1);
+    }
+
+    SECTION("without implicit materials from images")
+    {
+      // without the patterns, the loose component images are listed
+      auto materialConfig = Doom3FixtureMaterialConfig;
+      materialConfig.excludes = {};
+      auto nullLogger = NullLogger{};
+      const auto unexcluded =
+        loadMaterialCollections(
+          fs, materialConfig, createResource, taskManager, nullLogger)
+        | kdl::value();
+      REQUIRE(findMaterial(unexcluded, "test/stage_add") != nullptr);
+
+      // with implicit materials switched off, no image is listed, whatever the patterns
+      materialConfig.implicitMaterialsFromImages = false;
+      auto declLogger = CollectingLogger{};
+      const auto declResult = loadMaterialCollections(
+        fs, materialConfig, createResource, taskManager, declLogger);
+
+      // exactly the materials that the scripts declare under textures/, which is what
+      // the patterns left above, without the root collection that only holds the
+      // placeholder image __TB_empty
+      CHECK_THAT(
+        declResult,
+        MatchesMaterialCollections(
+          materialCollections | std::views::filter([](const auto& materialCollection) {
+            return materialCollection.path() != "textures";
+          })
+          | std::views::transform(makeMaterialCollectionInfo)
+          | kdl::ranges::to<std::vector>()));
+
+      REQUIRE(declResult.is_success());
+      const auto& declCollections = declResult.value();
+      CHECK(findMaterial(declCollections, "__TB_empty") == nullptr);
+      CHECK(findMaterial(declCollections, "test/stage_add") == nullptr);
+      CHECK(findMaterial(declCollections, "test/Loose") == nullptr);
+
+      // the images are still found as the previews of the declared materials
+      const auto* loose = findMaterial(declCollections, "test/loose");
+      REQUIRE(loose != nullptr);
+      REQUIRE(loose->texture() != nullptr);
+      CHECK(loose->texture()->width() == 24);
+
+      // the summary counts shaders, so it doesn't change
+      CHECK(
+        declLogger.countMessagesContaining(
           "Loaded 30 materials from 3 files (2 defaulted, 1 unterminated); 28 under "
           "textures/, 5 without a preview image")
         == 1);

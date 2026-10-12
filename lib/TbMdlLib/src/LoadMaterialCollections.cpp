@@ -92,6 +92,13 @@ bool shouldExclude(
 Result<std::vector<std::filesystem::path>> findTexturePaths(
   const fs::FileSystem& fs, const MaterialConfig& materialConfig)
 {
+  if (!materialConfig.implicitMaterialsFromImages)
+  {
+    // Image files are only the previews of the shaders. Doom 3 makes an undeclared name
+    // an implicit translucent material that doesn't seal the map, so none is offered.
+    return std::vector<std::filesystem::path>{};
+  }
+
   return fs.find(
            materialConfig.root,
            fs::TraversalMode::Recursive,
