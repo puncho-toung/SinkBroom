@@ -1507,7 +1507,7 @@ TEST_CASE("GameConfigParser")
               .materialConfig.implicitMaterialsFromImages);
     }
 
-    SECTION("the new keys take part in comparisons")
+    SECTION("the optional material script keys take part in comparisons")
     {
       const auto config = MaterialConfig{.root = "textures"};
 
