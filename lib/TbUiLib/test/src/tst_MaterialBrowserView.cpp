@@ -64,6 +64,40 @@ TEST_CASE("MaterialBrowserView")
       filterMaterials(all, false, true, "base plain")
       == std::vector<const gl::Material*>{&used, &plain});
   }
+
+  SECTION("materialBorder")
+  {
+    const auto plain =
+      gl::Material{"base/plain", gl::createTextureResource(gl::Texture{4, 4})};
+
+    auto used = gl::Material{"base/used", gl::createTextureResource(gl::Texture{4, 4})};
+    used.incUsageCount();
+
+    auto translucent =
+      gl::Material{"base/glass", gl::createTextureResource(gl::Texture{4, 4})};
+    translucent.setSurfaceParms({"coverage_translucent"});
+
+    auto usedTranslucent =
+      gl::Material{"base/decal", gl::createTextureResource(gl::Texture{4, 4})};
+    usedTranslucent.setSurfaceParms({"coverage_translucent", "nonsolid"});
+    usedTranslucent.incUsageCount();
+
+    // other surface parms don't matter, including the coverage of an alpha tested one
+    auto grate = gl::Material{"base/grate", gl::createTextureResource(gl::Texture{4, 4})};
+    grate.setSurfaceParms({"coverage_perforated", "metal"});
+
+    CHECK(materialBorder(plain, false) == MaterialBorder::Default);
+    CHECK(materialBorder(grate, false) == MaterialBorder::Default);
+    CHECK(materialBorder(used, false) == MaterialBorder::Used);
+    CHECK(materialBorder(translucent, false) == MaterialBorder::Translucent);
+
+    // the leak warning wins over the usage
+    CHECK(materialBorder(usedTranslucent, false) == MaterialBorder::Translucent);
+
+    // the selection wins over everything
+    CHECK(materialBorder(plain, true) == MaterialBorder::Selected);
+    CHECK(materialBorder(usedTranslucent, true) == MaterialBorder::Selected);
+  }
 }
 
 } // namespace tb::ui

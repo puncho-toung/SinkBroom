@@ -62,6 +62,23 @@ std::vector<const gl::Material*> filterMaterials(
   bool hideMissing,
   const std::string& filterText);
 
+enum class MaterialBorder
+{
+  Default,
+  Selected,
+  Translucent,
+  Used
+};
+
+/**
+ * Returns the border that the material browser draws around the given material: the
+ * selected one's, else the translucent one's if the material has the surface parm
+ * coverage_translucent, else the used one's if the material is in use. A brush with a
+ * translucent face, such as glass or a decal, doesn't seal a Doom 3 map, so the border
+ * warns of leaks even for a material in use.
+ */
+MaterialBorder materialBorder(const gl::Material& material, bool selected);
+
 class MaterialBrowserView : public CellView
 {
   Q_OBJECT

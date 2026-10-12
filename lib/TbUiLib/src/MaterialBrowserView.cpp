@@ -24,6 +24,7 @@
 #include <QMenu>
 #include <QTextStream>
 
+#include "base/Macros.h"
 #include "base/PreferenceManager.h"
 #include "gl/ActiveShader.h"
 #include "gl/FontManager.h"
@@ -90,6 +91,24 @@ std::vector<const gl::Material*> filterMaterials(
     });
   }
   return materials;
+}
+
+MaterialBorder materialBorder(const gl::Material& material, const bool selected)
+{
+  if (selected)
+  {
+    return MaterialBorder::Selected;
+  }
+  // the coverage that the material script implies, not the alpha test of the preview
+  if (material.surfaceParms().contains("coverage_translucent"))
+  {
+    return MaterialBorder::Translucent;
+  }
+  if (material.usageCount() > 0)
+  {
+    return MaterialBorder::Used;
+  }
+  return MaterialBorder::Default;
 }
 
 MaterialBrowserView::MaterialBrowserView(
@@ -401,15 +420,18 @@ void MaterialBrowserView::renderBounds(
 
 const Color& MaterialBrowserView::materialColor(const gl::Material& material) const
 {
-  if (&material == m_selectedMaterial)
+  switch (materialBorder(material, &material == m_selectedMaterial))
   {
+  case MaterialBorder::Selected:
     return pref(Preferences::MaterialBrowserSelectedColor);
-  }
-  if (material.usageCount() > 0)
-  {
+  case MaterialBorder::Translucent:
+    return pref(Preferences::MaterialBrowserTranslucentColor);
+  case MaterialBorder::Used:
     return pref(Preferences::MaterialBrowserUsedColor);
+  case MaterialBorder::Default:
+    return pref(Preferences::MaterialBrowserDefaultColor);
+    switchDefault();
   }
-  return pref(Preferences::MaterialBrowserDefaultColor);
 }
 
 void MaterialBrowserView::renderMaterials(
