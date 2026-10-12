@@ -78,8 +78,12 @@ void MaterialCollectionEditor::addSelectedMaterialCollections()
 
   for (auto* selectedItem : m_availableCollectionsList->selectedItems())
   {
-    const auto index = size_t(m_availableCollectionsList->row(selectedItem));
-    enabledCollections.push_back(availableCollections[index]);
+    // like removeMaterialCollectionsAtRows, skip rows that the collections outlived
+    const auto row = m_availableCollectionsList->row(selectedItem);
+    if (row >= 0 && size_t(row) < availableCollections.size())
+    {
+      enabledCollections.push_back(availableCollections[size_t(row)]);
+    }
   }
 
   enabledCollections = kdl::vec_sort_and_remove_duplicates(std::move(enabledCollections));
