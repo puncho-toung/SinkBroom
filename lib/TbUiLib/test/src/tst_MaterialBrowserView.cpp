@@ -82,17 +82,33 @@ TEST_CASE("MaterialBrowserView")
     usedTranslucent.setSurfaceParms({"coverage_translucent", "nonsolid"});
     usedTranslucent.incUsageCount();
 
-    // other surface parms don't matter, including the coverage of an alpha tested one
+    // an alpha tested material is perforated, which doesn't seal either
     auto grate = gl::Material{"base/grate", gl::createTextureResource(gl::Texture{4, 4})};
     grate.setSurfaceParms({"coverage_perforated", "metal"});
 
+    // other surface parms don't matter
+    auto opaque =
+      gl::Material{"base/opaque", gl::createTextureResource(gl::Texture{4, 4})};
+    opaque.setSurfaceParms({"coverage_opaque", "metal"});
+
+    // only the coverage counts, not the alpha or blend function of the preview
+    auto blended =
+      gl::Material{"base/blended", gl::createTextureResource(gl::Texture{4, 4})};
+    blended.setAlphaFunc(gl::MaterialAlphaFunc::Compare::GreaterEqual, 0.5f);
+    blended.setBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
     CHECK(materialBorder(plain, false) == MaterialBorder::Default);
-    CHECK(materialBorder(grate, false) == MaterialBorder::Default);
+    CHECK(materialBorder(opaque, false) == MaterialBorder::Default);
+    CHECK(materialBorder(blended, false) == MaterialBorder::Default);
     CHECK(materialBorder(used, false) == MaterialBorder::Used);
-    CHECK(materialBorder(translucent, false) == MaterialBorder::Translucent);
+    CHECK(materialBorder(translucent, false) == MaterialBorder::NonSealing);
+    CHECK(materialBorder(grate, false) == MaterialBorder::NonSealing);
+
+    blended.incUsageCount();
+    CHECK(materialBorder(blended, false) == MaterialBorder::Used);
 
     // the leak warning wins over the usage
-    CHECK(materialBorder(usedTranslucent, false) == MaterialBorder::Translucent);
+    CHECK(materialBorder(usedTranslucent, false) == MaterialBorder::NonSealing);
 
     // the selection wins over everything
     CHECK(materialBorder(plain, true) == MaterialBorder::Selected);

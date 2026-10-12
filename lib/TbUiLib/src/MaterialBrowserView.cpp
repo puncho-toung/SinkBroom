@@ -99,10 +99,12 @@ MaterialBorder materialBorder(const gl::Material& material, const bool selected)
   {
     return MaterialBorder::Selected;
   }
-  // the coverage that the material script implies, not the alpha test of the preview
-  if (material.surfaceParms().contains("coverage_translucent"))
+  // the coverage that the material script implies, not the preview's alpha or blending
+  if (
+    material.surfaceParms().contains("coverage_translucent")
+    || material.surfaceParms().contains("coverage_perforated"))
   {
-    return MaterialBorder::Translucent;
+    return MaterialBorder::NonSealing;
   }
   if (material.usageCount() > 0)
   {
@@ -424,8 +426,8 @@ const Color& MaterialBrowserView::materialColor(const gl::Material& material) co
   {
   case MaterialBorder::Selected:
     return pref(Preferences::MaterialBrowserSelectedColor);
-  case MaterialBorder::Translucent:
-    return pref(Preferences::MaterialBrowserTranslucentColor);
+  case MaterialBorder::NonSealing:
+    return pref(Preferences::MaterialBrowserNonSealingColor);
   case MaterialBorder::Used:
     return pref(Preferences::MaterialBrowserUsedColor);
   case MaterialBorder::Default:

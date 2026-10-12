@@ -66,16 +66,17 @@ enum class MaterialBorder
 {
   Default,
   Selected,
-  Translucent,
+  NonSealing,
   Used
 };
 
 /**
  * Returns the border that the material browser draws around the given material: the
- * selected one's, else the translucent one's if the material has the surface parm
- * coverage_translucent, else the used one's if the material is in use. A brush with a
- * translucent face, such as glass or a decal, doesn't seal a Doom 3 map, so the border
- * warns of leaks even for a material in use.
+ * selected one's, else the non-sealing one's if the material has translucent or
+ * alpha-tested (perforated) coverage, such as glass, decals and grates: a brush with such
+ * a face does not seal a Doom 3 map. Else the used one's if the material is in use. The
+ * coverage is read from the surface parms coverage_translucent and coverage_perforated,
+ * never from the alpha or blend function, which describe the preview image.
  */
 MaterialBorder materialBorder(const gl::Material& material, bool selected);
 

@@ -99,7 +99,7 @@ std::vector<Preference<Color>*> colorPreferences()
     &MaterialBrowserDefaultColor,
     &MaterialBrowserSelectedColor,
     &MaterialBrowserUsedColor,
-    &MaterialBrowserTranslucentColor,
+    &MaterialBrowserNonSealingColor,
   };
 }
 

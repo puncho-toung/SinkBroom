@@ -229,8 +229,8 @@ inline auto MaterialBrowserSelectedColor =
   Preference<Color>{"Texture Browser/Selected color", RgbF{1.0f, 0.0f, 0.0f}};
 inline auto MaterialBrowserUsedColor =
   Preference<Color>{"Texture Browser/Used color", RgbF{1.0f, 0.7f, 0.0f}};
-inline auto MaterialBrowserTranslucentColor =
-  Preference<Color>{"Texture Browser/Translucent color", RgbF{0.6f, 0.0f, 0.6f}};
+inline auto MaterialBrowserNonSealingColor =
+  Preference<Color>{"Texture Browser/Non-sealing color", RgbF{0.6f, 0.0f, 0.6f}};
 
 inline auto CameraLookSpeed = Preference<float>{"Controls/Camera/Look speed", 0.5f};
 inline auto CameraLookInvertH =
