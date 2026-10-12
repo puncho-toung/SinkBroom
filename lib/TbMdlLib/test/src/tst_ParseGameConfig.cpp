@@ -105,19 +105,15 @@ TEST_CASE("GameConfigParser")
           .palette = {},
           .property = std::nullopt,
           .shaderSearchPath = "materials",
-          .excludes =
-            {"*_d",
-             "*_s",
-             "*_local",
-             "*_h",
-             "*_bmp",
-             "*_rmao",
-             "*_rmaod",
-             "*_add",
-             "*_n"},
+          .excludes = {},
           .shaderExtensions = {".mtr"},
           .shaderImageSearchPaths = {"_tb"},
+          // a loose image would be an implicit translucent material that leaks
+          .implicitMaterialsFromImages = false,
         });
+      CHECK(
+        config.materialConfig.implicitMaterialsFromImages
+        == Doom3BFGGameInfo.gameConfig.materialConfig.implicitMaterialsFromImages);
 
       // compared per field so that packages adding entity config keys need not edit this
       // the first file is the default for new maps

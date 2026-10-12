@@ -314,6 +314,8 @@ If you want to provide your own custom textures, you need to put them in a subdi
 
 You need to place your textures in a subdirectory exactly one level deep in the `textures` folder. Any loose images in `textures` will not be detected, nor will any nested in subdirectories of your collection.
 
+For Doom 3, image files are not materials of their own, wherever they are placed: the material browser lists only the materials named `textures/...` that the `.mtr` files in the `materials` folder declare, and the images serve as their previews. To use a new texture, declare a material for it in a `.mtr` file (see [Material Configurations](#game_configuration_files_materials)).
+
 ## Interacting with the Editor
 
 Before we delve into specific editing operations such as creating new objects, you should learn some basics about how to interact with the editor itself. In particular, it is important to understand the concept of tools in TrenchBroom and how mouse input is mapped to 3D coordinates.
@@ -2882,10 +2884,10 @@ The optional `implicitMaterialsFromImages` key decides whether every image file 
       "shaderSearchPath": "materials",
       "shaderExtensions": [ ".mtr" ],
       "shaderImageSearchPaths": [ "_tb" ],
-      "excludes": [ "*_d", "*_s", "*_local", "*_h", "*_bmp", "*_rmao", "*_rmaod", "*_add", "*_n" ]
+      "implicitMaterialsFromImages": false
     },
 
-The `excludes` patterns in this example hide the loose component images of a Doom 3 material, such as its diffuse, specular and normal maps, which would otherwise each appear as a material of its own. They do not affect the materials defined in the scripts.
+In Doom 3, only the materials that the `.mtr` files declare are fit for brush faces. The engine makes any other name, such as that of a loose image, an implicit material that blends the image translucently and is not lit, and a brush with a translucent face does not seal the map, so dmap reports a leak. That is why this example sets `implicitMaterialsFromImages` to `false`: the loose images that make up a material, such as its diffuse, specular, normal and PBR maps, are not listed, and no `excludes` patterns are needed. A face that names a loose image, for example in an older map, is shown with the placeholder image. The material `textures/__TB_empty`, which TrenchBroom gives new brushes, stays listed because RBDOOM-3-BFG declares it in `materials/_tb_helpers.mtr`.
 
 For Doom 3 materials, TrenchBroom shows the image the engine uses in its editors: the `qer_editorimage` if that file exists, else the image of the first diffuse stage, else the image of the first stage. Since Doom 3 scales the texture coordinates of a face by the size of this image, the preview must have the same size as the engine's image. An editor image that is found only in one of the `shaderImageSearchPaths` folders is used only if some material uses the same image in a diffuse stage: the engine loads the editor image as a diffuse map, and the retail game only has the exported image in the forms its materials use, so otherwise the engine falls back to the diffuse map, and so does TrenchBroom. Materials for which no image is found are shown with a placeholder image; the "Hide missing" button in the [material browser](#material_browser) hides them. A Doom 3 material that looks up a table which no material file declares is treated as broken, as the engine treats it, even if another kind of decl file declares the table, because TrenchBroom reads only the material files.
 
