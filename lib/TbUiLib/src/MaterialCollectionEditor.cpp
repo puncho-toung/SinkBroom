@@ -39,9 +39,27 @@
 #include "kd/vector_utils.h"
 
 #include <cassert>
+#include <ranges>
 
 namespace tb::ui
 {
+
+std::vector<std::filesystem::path> removeMaterialCollectionsAtRows(
+  std::vector<std::filesystem::path> collections, std::vector<int> rows)
+{
+  // QListWidget::selectedItems returns the items in the order they were selected
+  kdl::vec_sort_and_remove_duplicates(rows);
+
+  // erase back to front, so that the rows still to erase keep their indices
+  for (const auto row : rows | std::views::reverse)
+  {
+    if (row >= 0 && size_t(row) < collections.size())
+    {
+      collections = kdl::vec_erase_at(std::move(collections), size_t(row));
+    }
+  }
+  return collections;
+}
 
 MaterialCollectionEditor::MaterialCollectionEditor(MapDocument& document, QWidget* parent)
   : QWidget{parent}
@@ -71,23 +89,15 @@ void MaterialCollectionEditor::addSelectedMaterialCollections()
 
 void MaterialCollectionEditor::removeSelectedMaterialCollections()
 {
-  auto enabledCollections = enabledMaterialCollections();
-
   auto selections = std::vector<int>{};
   for (auto* selectedItem : m_enabledCollectionsList->selectedItems())
   {
     selections.push_back(m_enabledCollectionsList->row(selectedItem));
   }
 
-  // erase back to front
-  for (auto sIt = std::rbegin(selections), sEnd = std::rend(selections); sIt != sEnd;
-       ++sIt)
-  {
-    const auto index = size_t(*sIt);
-    enabledCollections = kdl::vec_erase_at(std::move(enabledCollections), index);
-  }
-
-  setEnabledMaterialCollections(m_document.map(), enabledCollections);
+  setEnabledMaterialCollections(
+    m_document.map(),
+    removeMaterialCollectionsAtRows(enabledMaterialCollections(), std::move(selections)));
 }
 
 void MaterialCollectionEditor::reloadMaterialCollections()
@@ -229,6 +239,10 @@ void MaterialCollectionEditor::connectObservers()
     m_document.documentWasLoadedNotifier.connect([&] { updateUi(); });
   m_notifierConnection +=
     m_document.documentDidChangeNotifier.connect([&] { updateUi(); });
+  // the collections also change outside of transactions, for example when they are
+  // reloaded, and rows that outlive them would index past their end
+  m_notifierConnection +=
+    m_document.materialCollectionsDidChangeNotifier.connect([&] { updateUi(); });
 
   auto& prefs = PreferenceManager::instance();
   m_notifierConnection +=

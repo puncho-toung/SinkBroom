@@ -33,6 +33,14 @@ namespace tb::ui
 {
 class MapDocument;
 
+/**
+ * Returns the given material collections without the ones at the given rows of the list
+ * that shows them. The rows may come in any order and may repeat; rows that are negative
+ * or past the end of the given collections are ignored.
+ */
+std::vector<std::filesystem::path> removeMaterialCollectionsAtRows(
+  std::vector<std::filesystem::path> collections, std::vector<int> rows);
+
 class MaterialCollectionEditor : public QWidget
 {
   Q_OBJECT
