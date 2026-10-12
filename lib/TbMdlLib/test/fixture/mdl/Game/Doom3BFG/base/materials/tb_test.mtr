@@ -69,3 +69,10 @@ textures/tb_test/nonsolid
 	nonsolid
 	diffusemap		textures/tb_test/wall_d
 }
+
+// directly under textures/, like the engine's textures/__TB_empty
+textures/tb_root
+{
+	qer_editorimage	textures/tb_test/wall_ed
+	diffusemap		textures/tb_test/wall_d
+}

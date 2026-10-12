@@ -979,11 +979,18 @@ TEST_CASE("LoadMaterialCollections")
       taskManager,
       logger);
 
-    // only the seven materials of tb_test.mtr; the loose images beside them, which the
-    // engine would make translucent materials that don't seal, are only their previews
+    // only the eight materials of tb_test.mtr, the one directly under textures/ in the
+    // root collection; the loose images beside them, which the engine would make
+    // translucent materials that don't seal, are only their previews
     CHECK_THAT(
       result,
       MatchesMaterialCollections({
+        {
+          "textures",
+          {
+            MaterialInfo{"tb_root", 8, 8},
+          },
+        },
         {
           "textures/tb_test",
           {
@@ -1006,6 +1013,12 @@ TEST_CASE("LoadMaterialCollections")
       loadMaterialCollections(
         fs, implicitMaterialConfig, createResource, taskManager, logger),
       MatchesMaterialCollections({
+        {
+          "textures",
+          {
+            MaterialInfo{"tb_root", 8, 8},
+          },
+        },
         {
           "textures/tb_test",
           {
@@ -1041,7 +1054,8 @@ TEST_CASE("LoadMaterialCollections")
           "tb_test/glass",
           "tb_test/bumped",
           "tb_test/dds",
-          "tb_test/nonsolid"})
+          "tb_test/nonsolid",
+          "tb_root"})
     {
       CAPTURE(name);
       CHECK_FALSE(material(name).previewImageMissing());
