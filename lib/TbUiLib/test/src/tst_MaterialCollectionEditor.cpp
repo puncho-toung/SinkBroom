@@ -17,9 +17,20 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <QAbstractButton>
+#include <QListWidget>
+
+#include "TestEnvironment.h"
+#include "mdl/Map.h"
+#include "mdl/MapFixture.h"
+#include "mdl/Map_Assets.h"
+#include "ui/AppControllerFixture.h"
 #include "ui/CatchConfig.h"
+#include "ui/MapDocument.h"
+#include "ui/MapDocumentFixture.h"
 #include "ui/MaterialCollectionEditor.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <vector>
 
@@ -65,6 +76,59 @@ TEST_CASE("MaterialCollectionEditor")
 
     // every row
     CHECK(removeMaterialCollectionsAtRows(collections, {3, 2, 1, 0}) == Paths{});
+  }
+
+  SECTION("enabled collections list")
+  {
+    auto appControllerFixture = AppControllerFixture{};
+    auto documentFixture = MapDocumentFixture{};
+    auto& document = documentFixture.create(mdl::Quake2FixtureConfig);
+    auto& map = document.map();
+
+    auto editor = MaterialCollectionEditor{document};
+    const auto lists = editor.findChildren<QListWidget*>();
+    REQUIRE(lists.size() == 2);
+    auto* enabledList = lists[1];
+
+    // textures, textures/e1m1 and textures/e1m1/f1, all enabled
+    const auto collections = mdl::enabledMaterialCollections(map);
+    REQUIRE(collections.size() == 3);
+    REQUIRE(enabledList->count() == 3);
+
+    SECTION("removes the rows selected out of order")
+    {
+      enabledList->item(2)->setSelected(true);
+      enabledList->item(0)->setSelected(true);
+
+      auto selectedRows = std::vector<int>{};
+      for (const auto* item : enabledList->selectedItems())
+      {
+        selectedRows.push_back(enabledList->row(item));
+      }
+      REQUIRE(selectedRows == std::vector<int>{2, 0});
+
+      const auto buttons = editor.findChildren<QAbstractButton*>();
+      const auto iRemoveButton = std::ranges::find_if(buttons, [](const auto* button) {
+        return button->toolTip() == "Disable the selected material collections";
+      });
+      REQUIRE(iRemoveButton != buttons.end());
+      (*iRemoveButton)->click();
+
+      CHECK(mdl::enabledMaterialCollections(map) == std::vector{collections[1]});
+      CHECK(enabledList->count() == 1);
+    }
+
+    SECTION("follows the collections when they change outside of a transaction")
+    {
+      // Map::setGamePath replaces the collections without a notification, so the rows
+      // outlive them until the collections are reloaded
+      map.setGamePath(getFixtureRoot() / "test/ui");
+      REQUIRE(mdl::enabledMaterialCollections(map).empty());
+      CHECK(enabledList->count() == 3);
+
+      mdl::reloadMaterialCollections(map);
+      CHECK(enabledList->count() == 0);
+    }
   }
 }
 
