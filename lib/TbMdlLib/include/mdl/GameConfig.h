@@ -79,6 +79,10 @@ struct MaterialConfig
   // Extra roots under which images referenced by material scripts are also looked up,
   // e.g. "_tb" for the images RBDOOM-3-BFG's exportImagesToTrenchBroom writes
   std::vector<std::filesystem::path> shaderImageSearchPaths;
+  // Whether every image file under root is also listed as a material of its own; games
+  // whose engine doesn't treat loose images as materials, like Doom 3, list only the
+  // materials their scripts declare
+  bool implicitMaterialsFromImages = true;
 
   kdl_reflect_decl(
     MaterialConfig,
@@ -89,7 +93,8 @@ struct MaterialConfig
     shaderSearchPath,
     excludes,
     shaderExtensions,
-    shaderImageSearchPaths);
+    shaderImageSearchPaths,
+    implicitMaterialsFromImages);
 };
 
 struct EntityConfig

@@ -2840,7 +2840,7 @@ zip          Zip file, often uses other extensions such as pk3
 
 #### Material Configurations {#game_configuration_files_materials}
 
-Every material configuration consists of a root search directory, and optionally a list of included file extensions, a palette path, an attribute for wad file lists, a list of exclusion patterns and, for games with material scripts, a script folder, a list of script file extensions and a list of further image folders.
+Every material configuration consists of a root search directory, and optionally a list of included file extensions, a palette path, an attribute for wad file lists, a list of exclusion patterns and, for games with material scripts, a script folder, a list of script file extensions, a list of further image folders and a switch that stops image files from being listed as materials.
 
     "materials": {
       "root": "textures",
@@ -2860,7 +2860,7 @@ Optionally, you can specify a palette. The value of the `palette` key specifies 
 
 The `attribute` key specifies the name of a worldspawn property where TrenchBroom will store the wad files in the map file.
 
-The optional `excludes` key specifies a list of patterns matched against material names which will be ignored and not displayed in the [material browser](#material_browser). Wildcards `*` and `?` are allowed. Use backslashes to escape literal `*` and `?` chars.
+The optional `excludes` key specifies a list of patterns matched against material names which will be ignored and not displayed in the [material browser](#material_browser). Wildcards `*` and `?` are allowed. Use backslashes to escape literal `*` and `?` chars. The patterns are not matched against the materials defined in material scripts, so they have no effect if `implicitMaterialsFromImages` is `false`.
 
     "materials": {
       "root": "textures",
@@ -2873,6 +2873,8 @@ Games whose materials are defined in script files, such as Quake 3 shaders or Do
 The optional `shaderExtensions` key lists the file extensions of the material scripts in that folder. It defaults to `[ ".shader" ]`. The extension selects the parser: files ending in `.mtr` are read as Doom 3 material files, all others as Quake 3 shader files. The scripts are read in alphabetical order of their file names, ignoring case, and if two scripts define a material of the same name, the first definition wins.
 
 The optional `shaderImageSearchPaths` key lists further folders, relative to the game file system, under which TrenchBroom also looks for the images a script refers to. This is useful when a game ships its images in a format TrenchBroom cannot read and a tool exports copies of them to another folder. For example, RBDOOM-3-BFG's `exportImagesToTrenchBroom` command writes the image `textures/base_wall/foo_d.tga` as `_tb/textures/base_wall/foo_d.png`, so a Doom 3 configuration lists `"_tb"` here. An image reference is looked up as written first and then under each of these folders in turn. In every folder, the file as named is used if its extension is in the `extensions` list; otherwise a file of the same name with any extension from the `extensions` list is accepted, tried in the order of the list. `exportImagesToTrenchBroom` writes images of 16 pixels or less as `.tga` rather than `.png`, so a Doom 3 configuration lists both extensions.
+
+The optional `implicitMaterialsFromImages` key decides whether every image file under `root` is also listed as a material of its own, next to the materials the scripts define. It defaults to `true`, and a material defined in a script replaces an image of the same name. Set it to `false` for a game in which a loose image is not a usable material of its own, so that the material browser lists only the materials the scripts define under `root`. The images are still found as the previews of these materials and of the materials of entity models.
 
     "materials": {
       "root": "textures",

@@ -572,6 +572,18 @@ std::vector<std::filesystem::path> parseShaderExtensions(
   return MaterialConfig{}.shaderExtensions;
 }
 
+bool parseImplicitMaterialsFromImages(
+  const el::EvaluationContext& context, const el::Value& value)
+{
+  if (const auto implicitMaterialsFromImages =
+        value.atOrDefault(context, "implicitMaterialsFromImages");
+      implicitMaterialsFromImages != el::Value::Null)
+  {
+    return implicitMaterialsFromImages.booleanValue(context);
+  }
+  return MaterialConfig{}.implicitMaterialsFromImages;
+}
+
 MaterialConfig parseMaterialConfig(
   const el::EvaluationContext& context, const el::Value& value)
 {
@@ -589,6 +601,7 @@ MaterialConfig parseMaterialConfig(
     value.atOrDefault(context, "shaderImageSearchPaths").asStringList(context)
       | std::views::transform([](const auto& str) { return std::filesystem::path{str}; })
       | kdl::ranges::to<std::vector>(),
+    parseImplicitMaterialsFromImages(context, value),
   };
 }
 

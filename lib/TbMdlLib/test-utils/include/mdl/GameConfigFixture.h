@@ -173,6 +173,8 @@ inline const GameInfo Doom3BFGGameInfo = detail::makeGameInfoFixture(
         .shaderExtensions = {".mtr"},
         // where exportImagesToTrenchBroom writes the engine's images
         .shaderImageSearchPaths = {"_tb"},
+        // only the .mtr materials are listed, not the loose images beside them
+        .implicitMaterialsFromImages = false,
       },
     .entityConfig =
       {

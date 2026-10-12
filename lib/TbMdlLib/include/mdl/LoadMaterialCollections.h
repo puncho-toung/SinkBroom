@@ -137,12 +137,13 @@ Result<std::optional<gl::Material>> findIdTech4Material(
  * Loads the materials under materialConfig.root, grouped into collections by directory.
  *
  * The material scripts are read with loadShaderFiles. Every shader under the root becomes
- * a material, and so does every image file under the root that no shader of the same
- * name (ignoring case) replaces and that materialConfig.excludes doesn't hide. Shader
- * previews are resolved here, on the calling thread, so that previewImageMissing is
- * known at once; the images are decoded by the texture resources that createResource
- * makes, and materials that show the same image share one resource. One summary line is
- * logged per load.
+ * a material. If materialConfig.implicitMaterialsFromImages is set, so does every image
+ * file under the root that no shader of the same name (ignoring case) replaces and that
+ * materialConfig.excludes doesn't hide; otherwise, image files are only used as the
+ * shaders' previews and materialConfig.excludes has no effect. Shader previews are
+ * resolved here, on the calling thread, so that previewImageMissing is known at once; the
+ * images are decoded by the texture resources that createResource makes, and materials
+ * that show the same image share one resource. One summary line is logged per load.
  */
 Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
   const fs::FileSystem& fs,

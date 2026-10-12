@@ -1446,7 +1446,7 @@ TEST_CASE("GameConfigParser")
 )%";
     };
 
-    SECTION("shaderExtensions and shaderImageSearchPaths default")
+    SECTION("the optional material script keys default")
     {
       const auto config = makeConfig(R"%(
     {
@@ -1459,6 +1459,8 @@ TEST_CASE("GameConfigParser")
       CHECK(
         materialConfig.shaderExtensions == std::vector<std::filesystem::path>{".shader"});
       CHECK(materialConfig.shaderImageSearchPaths.empty());
+      // a missing key must not read as false, or every Quake game would lose its images
+      CHECK(materialConfig.implicitMaterialsFromImages);
       CHECK(
         materialConfig
         == MaterialConfig{
@@ -1471,7 +1473,7 @@ TEST_CASE("GameConfigParser")
         });
     }
 
-    SECTION("shaderExtensions and shaderImageSearchPaths are read")
+    SECTION("the optional material script keys are read")
     {
       const auto config = makeConfig(R"%(
     {
@@ -1479,7 +1481,8 @@ TEST_CASE("GameConfigParser")
         "extensions": [ ".tga", ".png", ".jpg", ".dds" ],
         "shaderSearchPath": "materials",
         "shaderExtensions": [ ".mtr", "shader" ],
-        "shaderImageSearchPaths": [ "_tb", "extra/images" ]
+        "shaderImageSearchPaths": [ "_tb", "extra/images" ],
+        "implicitMaterialsFromImages": false
     })%");
 
       const auto materialConfig = (parseGameConfig(config) | kdl::value()).materialConfig;
@@ -1495,7 +1498,17 @@ TEST_CASE("GameConfigParser")
           // like the material extensions, a missing leading dot is added
           .shaderExtensions = {".mtr", ".shader"},
           .shaderImageSearchPaths = {"_tb", "extra/images"},
+          .implicitMaterialsFromImages = false,
         });
+
+      const auto explicitlyTrue = makeConfig(R"%(
+    {
+        "root": "textures",
+        "extensions": [ ".tga" ],
+        "implicitMaterialsFromImages": true
+    })%");
+      CHECK((parseGameConfig(explicitlyTrue) | kdl::value())
+              .materialConfig.implicitMaterialsFromImages);
     }
 
     SECTION("the new keys take part in comparisons")
@@ -1509,6 +1522,10 @@ TEST_CASE("GameConfigParser")
       auto otherImageSearchPaths = config;
       otherImageSearchPaths.shaderImageSearchPaths = {"_tb"};
       CHECK(otherImageSearchPaths != config);
+
+      auto noImplicitMaterials = config;
+      noImplicitMaterials.implicitMaterialsFromImages = false;
+      CHECK(noImplicitMaterials != config);
     }
   }
 }
