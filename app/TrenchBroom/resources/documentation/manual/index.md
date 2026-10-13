@@ -814,6 +814,8 @@ The generated brushes are shown as a preview in the viewports while you place th
 
 Hit #action(Controls/Map view/Perform sweep) to fill the gap with brushes and select them. Hitting #action(Controls/Map view/Cancel) moves the destination cap back onto the selected faces, and hitting it again deactivates the tool.
 
+A run ends before its cap becomes smaller than one unit across or collapses to a point or a line, so tapering a sweep all the way down stops one or more segments short of the tip, and performing such a sweep logs a warning. Map compilers weld vertices on a fixed grid, and where many steep faces meet at one vertex, such as the tip of a tapered spike, the welded faces no longer close and leave cracks that you can see through. Move the destination cap or widen it to keep the full run.
+
 ### Vertex Editing {#vertex_editing}
 
 TrenchBroom includes three separate tools to edit a brush's vertices: the [vertex tool](#vertex_tool) for editing individual vertices, the [edge tool](#edge_tool) for editing individual edges, and the [face tool](#face_tool) for editing individual faces. The vertex tool is the most powerful of the three because in addition to moving vertices around, you can also add and remove vertices from the brush(es). Conversely, the edge and face tools only allow you to move faces around.

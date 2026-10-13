@@ -101,6 +101,17 @@ struct SweepParameters
   kdl_reflect_decl(SweepParameters, segments, iterations, pathMode, alignment);
 };
 
+struct SweepResult
+{
+  kdl::flat_map<mdl::Node*, std::vector<std::unique_ptr<mdl::BrushNode>>> brushes;
+
+  /**
+   * The number of source faces whose run stopped before its last station because a
+   * station became too small to build (see `generateSweepBrushes`).
+   */
+  size_t stoppedRuns = 0;
+};
+
 /**
  * Computes the transform for a single station (cross-section) along one iteration of the
  * sweep, at fractional position `t` (0 at the source face, 1 at the destination).
@@ -136,9 +147,16 @@ vm::mat4x4d stationTransform(
  * very first station of the first iteration, which is kept exact since it corresponds to
  * the original source face. Segments that degenerate into invalid brushes are skipped and
  * logged rather than causing the whole sweep to fail.
+ *
+ * A run never ends in a cap that the engine's compilers cannot build: a station is
+ * unusable when its polygon has fewer than three distinct vertices, has no area, or has
+ * no edge at least one unit long. The run of a source face stops at the last usable
+ * station before the first unusable one, across iterations, and such runs are counted in
+ * `SweepResult::stoppedRuns`. Compilers weld vertices on a fixed grid (id Tech 4's dmap
+ * uses 1/32 unit) and leave cracks where many steep faces meet at one vertex, which is
+ * what a cap tapered to a point produces.
  */
-kdl::flat_map<mdl::Node*, std::vector<std::unique_ptr<mdl::BrushNode>>>
-generateSweepBrushes(
+SweepResult generateSweepBrushes(
   mdl::Map& map,
   const SweepSource& source,
   const SweepTransform& transform,

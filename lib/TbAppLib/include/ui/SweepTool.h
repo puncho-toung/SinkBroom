@@ -31,8 +31,6 @@
 #include "vm/ray.h"
 #include "vm/vec.h"
 
-#include <kd/flat_map.h>
-
 #include <memory>
 #include <vector>
 
@@ -45,7 +43,6 @@ class Camera;
 
 namespace mdl
 {
-class BrushNode;
 class Grid;
 class Node;
 } // namespace mdl
@@ -81,8 +78,7 @@ private:
   SweepTransform m_transform;
   SweepParameters m_parameters;
 
-  kdl::flat_map<mdl::Node*, std::vector<std::unique_ptr<mdl::BrushNode>>>
-    m_previewBrushes;
+  SweepResult m_preview;
   std::unique_ptr<render::BrushRenderer> m_brushRenderer;
 
   NotifierConnection m_notifierConnection;

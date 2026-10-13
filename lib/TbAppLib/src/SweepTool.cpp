@@ -20,6 +20,7 @@
 
 #include "ui/SweepTool.h"
 
+#include "base/Logger.h"
 #include "base/PreferenceManager.h"
 #include "gl/Camera.h"
 #include "mdl/BrushFace.h" // IWYU pragma: keep
@@ -224,7 +225,7 @@ bool SweepTool::doDeactivate()
   m_notifierConnection.disconnect();
   m_source = SweepSource{};
 
-  m_previewBrushes.clear();
+  m_preview = SweepResult{};
   m_brushRenderer->clear();
 
   refreshViews();
@@ -304,15 +305,15 @@ void SweepTool::updateBrushes()
 {
   if (active())
   {
-    m_previewBrushes.clear();
+    m_preview = SweepResult{};
     m_brushRenderer->clear();
 
     if (!m_source.faces.empty() && m_parameters.segments > 0 && !m_transform.isNoOp())
     {
-      m_previewBrushes =
+      m_preview =
         generateSweepBrushes(m_document.map(), m_source, m_transform, m_parameters);
 
-      for (const auto& [parent, brushNodes] : m_previewBrushes)
+      for (const auto& [parent, brushNodes] : m_preview.brushes)
       {
         for (auto& brushNode : brushNodes)
         {
@@ -327,10 +328,19 @@ void SweepTool::updateBrushes()
 
 void SweepTool::commitSweep()
 {
-  if (!m_previewBrushes.empty())
+  auto& map = m_document.map();
+  if (m_preview.stoppedRuns > 0)
+  {
+    map.logger().warn() << "Sweep: " << m_preview.stoppedRuns << " of "
+                        << m_source.faces.size()
+                        << " runs stopped early because the cap became too small for "
+                           "the engine to build; move the cap or widen it";
+  }
+
+  if (!m_preview.brushes.empty())
   {
     auto nodesToAdd = kdl::flat_map<mdl::Node*, std::vector<mdl::Node*>>{};
-    for (auto&& [parent, childrenPtrs] : m_previewBrushes)
+    for (auto&& [parent, childrenPtrs] : m_preview.brushes)
     {
       auto childrenRaw = childrenPtrs | std::views::transform([](auto& childPtr) {
                            return static_cast<mdl::Node*>(childPtr.release());
@@ -339,10 +349,9 @@ void SweepTool::commitSweep()
       nodesToAdd.insert({parent, std::move(childrenRaw)});
     }
 
-    m_previewBrushes.clear();
+    m_preview = SweepResult{};
     m_brushRenderer->clear();
 
-    auto& map = m_document.map();
     auto transaction = mdl::Transaction{map, "Sweep"};
     const auto addedNodes = mdl::addNodes(map, nodesToAdd);
     mdl::deselectAll(map);

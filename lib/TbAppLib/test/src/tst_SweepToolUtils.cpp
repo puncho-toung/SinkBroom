@@ -236,6 +236,21 @@ TEST_CASE("SweepToolUtils functions")
       };
     };
 
+    // an octagon with integer vertices like the end of a small cylinder; its longest
+    // edges are 4 units long
+    const auto octagonAt = [](const double x) {
+      return vm::polygon3d{
+        {x, 4, 2},
+        {x, 2, 4},
+        {x, -2, 4},
+        {x, -4, 2},
+        {x, -4, -2},
+        {x, -2, -4},
+        {x, 2, -4},
+        {x, 4, -2},
+      };
+    };
+
     auto source = SweepSource{
       {SweepFace{squareAt(0.0), &defaultParent}},
       vm::vec3d{0, 0, 0},
@@ -252,9 +267,9 @@ TEST_CASE("SweepToolUtils functions")
       parameters.segments = 4;
 
       const auto result = generateSweepBrushes(map, source, transform, parameters);
-      REQUIRE(result.size() == 1);
+      REQUIRE(result.brushes.size() == 1);
 
-      const auto& brushes = result.at(&defaultParent);
+      const auto& brushes = result.brushes.at(&defaultParent);
       REQUIRE(brushes.size() == 4);
       CHECK(brushes[0]->logicalBounds() == vm::bbox3d{{0, -16, -16}, {16, 16, 16}});
       CHECK(brushes[3]->logicalBounds() == vm::bbox3d{{48, -16, -16}, {64, 16, 16}});
@@ -268,7 +283,7 @@ TEST_CASE("SweepToolUtils functions")
 
       const auto result = generateSweepBrushes(map, source, transform, parameters);
 
-      const auto& brushes = result.at(&defaultParent);
+      const auto& brushes = result.brushes.at(&defaultParent);
       REQUIRE(brushes.size() == 4);
       CHECK(brushes[3]->logicalBounds() == vm::bbox3d{{96, -16, -16}, {128, 16, 16}});
     }
@@ -286,10 +301,10 @@ TEST_CASE("SweepToolUtils functions")
       parameters.segments = 2;
 
       const auto result = generateSweepBrushes(map, source, transform, parameters);
-      REQUIRE(result.size() == 2);
-      CHECK(result.at(entityNode).size() == 2);
+      REQUIRE(result.brushes.size() == 2);
+      CHECK(result.brushes.at(entityNode).size() == 2);
       // a face without a parent falls back to the map's default insertion parent
-      CHECK(result.at(&defaultParent).size() == 2);
+      CHECK(result.brushes.at(&defaultParent).size() == 2);
     }
 
     SECTION("integer alignment keeps the source station exact and rounds the rest")
@@ -303,7 +318,7 @@ TEST_CASE("SweepToolUtils functions")
       // the stations sit at x = 0.25 (exact), round(8.25) = 8 and round(16.25) = 16
       const auto result = generateSweepBrushes(map, source, transform, parameters);
 
-      const auto& brushes = result.at(&defaultParent);
+      const auto& brushes = result.brushes.at(&defaultParent);
       REQUIRE(brushes.size() == 2);
       CHECK(brushes[0]->logicalBounds() == vm::bbox3d{{0.25, -16, -16}, {8, 16, 16}});
       CHECK(brushes[1]->logicalBounds() == vm::bbox3d{{8, -16, -16}, {16, 16, 16}});
@@ -321,7 +336,7 @@ TEST_CASE("SweepToolUtils functions")
 
       const auto result = generateSweepBrushes(map, source, transform, parameters);
 
-      const auto& brushes = result.at(&defaultParent);
+      const auto& brushes = result.brushes.at(&defaultParent);
       REQUIRE(brushes.size() == 2);
       CHECK(brushes[0]->logicalBounds() == vm::bbox3d{{0, -16, -16}, {16, 16, 16}});
       CHECK(brushes[1]->logicalBounds() == vm::bbox3d{{16, -16, -16}, {31, 16, 16}});
@@ -336,7 +351,7 @@ TEST_CASE("SweepToolUtils functions")
       // rounding collapses the second segment: the stations sit at x = 0, 1 and 1
       const auto result = generateSweepBrushes(map, source, transform, parameters);
 
-      const auto& brushes = result.at(&defaultParent);
+      const auto& brushes = result.brushes.at(&defaultParent);
       REQUIRE(brushes.size() == 1);
       CHECK(brushes[0]->logicalBounds() == vm::bbox3d{{0, -16, -16}, {1, 16, 16}});
     }
@@ -346,7 +361,114 @@ TEST_CASE("SweepToolUtils functions")
       // an identity transform collapses every station onto the source face
       parameters.segments = 2;
 
-      CHECK(generateSweepBrushes(map, source, transform, parameters).empty());
+      CHECK(generateSweepBrushes(map, source, transform, parameters).brushes.empty());
+    }
+
+    SECTION("integer alignment stops the run before the cap collapses to a point")
+    {
+      source.faces = {SweepFace{octagonAt(0.0), &defaultParent}};
+      transform.translation = vm::vec3d{64, 0, 0};
+      transform.scale = vm::vec3d::fill(0.01);
+      parameters.segments = 8;
+      parameters.iterations = 2;
+      parameters.alignment = SweepAlignment::Integer;
+
+      // station 6 rounds to a square 2 units wide, station 7 to a diamond with edges of
+      // 1.41 units and station 8 to a point, where the second iteration would continue
+      const auto result = generateSweepBrushes(map, source, transform, parameters);
+      CHECK(result.stoppedRuns == 1);
+
+      const auto& brushes = result.brushes.at(&defaultParent);
+      REQUIRE(brushes.size() == 7);
+      CHECK(brushes[6]->logicalBounds() == vm::bbox3d{{48, -1, -1}, {56, 1, 1}});
+    }
+
+    SECTION("free alignment stops the run before the cap gets narrower than one unit")
+    {
+      source.faces = {SweepFace{octagonAt(0.0), &defaultParent}};
+      transform.translation = vm::vec3d{64, 0, 0};
+      transform.scale = vm::vec3d::fill(0.01);
+      parameters.segments = 8;
+      parameters.iterations = 2;
+
+      // the longest edge shrinks to 1.03 units at station 6 and to 0.535 at station 7;
+      // the second iteration would shrink it further
+      const auto result = generateSweepBrushes(map, source, transform, parameters);
+      CHECK(result.stoppedRuns == 1);
+
+      const auto& brushes = result.brushes.at(&defaultParent);
+      REQUIRE(brushes.size() == 6);
+      CHECK(brushes[5]->logicalBounds().max.x() == vm::approx{48.0});
+    }
+
+    SECTION("stops a square tapered to a point before the apex")
+    {
+      transform.translation = vm::vec3d{64, 0, 0};
+      transform.scale = vm::vec3d::fill(0.01);
+      parameters.segments = 2;
+      parameters.alignment = SweepAlignment::Integer;
+
+      // station 1 rounds to a square 16 units wide and station 2 to a point, so the
+      // pyramid between them is not built
+      const auto result = generateSweepBrushes(map, source, transform, parameters);
+      CHECK(result.stoppedRuns == 1);
+
+      const auto& brushes = result.brushes.at(&defaultParent);
+      REQUIRE(brushes.size() == 1);
+      CHECK(brushes[0]->logicalBounds() == vm::bbox3d{{0, -16, -16}, {32, 16, 16}});
+    }
+
+    SECTION("stops the run before a cap flattened to a line")
+    {
+      source.faces = {SweepFace{octagonAt(0.0), &defaultParent}};
+      transform.translation = vm::vec3d{64, 0, 0};
+      transform.scale = vm::vec3d{1, 1, 0.01};
+      parameters.segments = 2;
+      parameters.alignment = SweepAlignment::Integer;
+
+      // station 2 rounds every vertex onto z = 0, leaving four distinct vertices on a
+      // line
+      const auto result = generateSweepBrushes(map, source, transform, parameters);
+      CHECK(result.stoppedRuns == 1);
+
+      const auto& brushes = result.brushes.at(&defaultParent);
+      REQUIRE(brushes.size() == 1);
+      CHECK(brushes[0]->logicalBounds() == vm::bbox3d{{0, -4, -4}, {32, 4, 4}});
+    }
+
+    SECTION("keeps a cap exactly one unit wide")
+    {
+      transform.translation = vm::vec3d{64, 0, 0};
+      transform.scale = vm::vec3d::fill(1.0 / 32.0);
+
+      const auto result = generateSweepBrushes(map, source, transform, parameters);
+      CHECK(result.stoppedRuns == 0);
+      CHECK(result.brushes.at(&defaultParent).size() == 1);
+    }
+
+    SECTION("a face whose first segment ends in an unusable cap produces nothing")
+    {
+      const auto bigSquare = vm::polygon3d{
+        {0, -128, -128},
+        {0, -128, 128},
+        {0, 128, 128},
+        {0, 128, -128},
+      };
+      source.faces = {
+        SweepFace{bigSquare, &defaultParent},
+        SweepFace{squareAt(0.0), &defaultParent},
+      };
+      transform.translation = vm::vec3d{64, 0, 0};
+      transform.scale = vm::vec3d::fill(0.01);
+      parameters.alignment = SweepAlignment::Integer;
+
+      // the big square's cap rounds to a square 2 units wide, the small one's to a point
+      const auto result = generateSweepBrushes(map, source, transform, parameters);
+      CHECK(result.stoppedRuns == 1);
+
+      const auto& brushes = result.brushes.at(&defaultParent);
+      REQUIRE(brushes.size() == 1);
+      CHECK(brushes[0]->logicalBounds() == vm::bbox3d{{0, -128, -128}, {64, 128, 128}});
     }
   }
 }

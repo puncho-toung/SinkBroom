@@ -49,12 +49,15 @@
 #include "vm/vec.h"
 #include "vm/vec_io.h" // IWYU pragma: keep
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <map>
 #include <numeric>
 #include <optional>
 #include <ranges>
+#include <utility>
+#include <vector>
 
 namespace tb::ui
 {
@@ -239,6 +242,41 @@ void setMaterial(mdl::Brush& brush, gl::Material* material)
   }
 }
 
+bool isUsableStation(const std::vector<vm::vec3d>& vertices)
+{
+  constexpr auto MinEdgeLength = 1.0;
+  const auto epsilon = vm::Cd::almost_zero();
+
+  auto distinctVertices = std::vector<vm::vec3d>{};
+  for (const auto& vertex : vertices)
+  {
+    if (std::ranges::none_of(distinctVertices, [&](const auto& distinctVertex) {
+          return vm::squared_distance(vertex, distinctVertex) <= epsilon * epsilon;
+        }))
+    {
+      distinctVertices.push_back(vertex);
+    }
+  }
+  if (distinctVertices.size() < 3)
+  {
+    return false;
+  }
+
+  auto longestEdgeLength = 0.0;
+  auto doubleArea = vm::vec3d{0, 0, 0};
+  for (size_t i = 0; i < vertices.size(); ++i)
+  {
+    const auto& current = vertices[i];
+    const auto& next = vertices[(i + 1) % vertices.size()];
+    longestEdgeLength = std::max(longestEdgeLength, vm::distance(current, next));
+    doubleArea = doubleArea + vm::cross(current - vertices[0], next - vertices[0]);
+  }
+
+  // a cap exactly one unit wide stays usable despite rounding errors
+  return longestEdgeLength >= MinEdgeLength - epsilon
+         && vm::length(doubleArea) * 0.5 > epsilon;
+}
+
 } // namespace
 
 std::ostream& operator<<(std::ostream& lhs, const SweepAlignment rhs)
@@ -324,8 +362,7 @@ vm::mat4x4d stationTransform(
     stationArcPivot(source, transform, parameters, rotationFull));
 }
 
-kdl::flat_map<mdl::Node*, std::vector<std::unique_ptr<mdl::BrushNode>>>
-generateSweepBrushes(
+SweepResult generateSweepBrushes(
   mdl::Map& map,
   const SweepSource& source,
   const SweepTransform& transform,
@@ -354,18 +391,51 @@ generateSweepBrushes(
     return snapToInteger && (s > 0 || r > 0) ? vm::round(p) : p;
   };
 
+  // the first station (r, s) in run order whose polygon the engine cannot build
+  const auto findFirstUnusableStation = [&](const std::vector<vm::vec3d>& vertices)
+    -> std::optional<std::pair<size_t, size_t>> {
+    for (size_t r = 0; r < parameters.iterations; ++r)
+    {
+      for (size_t s = 0; s <= N; ++s)
+      {
+        const auto stationVertices =
+          vertices
+          | std::views::transform([&](const auto& v) { return station(v, r, s); })
+          | kdl::ranges::to<std::vector>();
+        if (!isUsableStation(stationVertices))
+        {
+          return std::pair{r, s};
+        }
+      }
+    }
+    return std::nullopt;
+  };
+
   // each source face produces its own run of brushes, grouped under its original parent
-  auto result = kdl::flat_map<mdl::Node*, std::vector<std::unique_ptr<mdl::BrushNode>>>{};
+  auto result = SweepResult{};
   for (const auto& sourceFace : source.faces)
   {
     // fall back to the default insertion parent if the captured parent has been deleted
     auto& parent = sourceFace.parent ? *sourceFace.parent : parentForNodes(map);
 
     const auto& sourceVertices = sourceFace.polygon.vertices();
+
+    // the run stops at the last usable station, so it never ends in a point or a sliver
+    const auto firstUnusableStation = findFirstUnusableStation(sourceVertices);
+    if (firstUnusableStation)
+    {
+      ++result.stoppedRuns;
+    }
+
     for (size_t r = 0; r < parameters.iterations; ++r)
     {
       for (size_t i = 0; i < N; ++i)
       {
+        if (firstUnusableStation && std::pair{r, i + 1} >= *firstUnusableStation)
+        {
+          break;
+        }
+
         const auto points = sourceVertices | std::views::transform([&](const auto& v) {
                               return std::array{station(v, r, i), station(v, r, i + 1)};
                             })
@@ -373,7 +443,8 @@ generateSweepBrushes(
 
         builder.createBrush(points, materialName) | kdl::transform([&](auto brush) {
           setMaterial(brush, material);
-          result[&parent].push_back(std::make_unique<mdl::BrushNode>(std::move(brush)));
+          result.brushes[&parent].push_back(
+            std::make_unique<mdl::BrushNode>(std::move(brush)));
         }) | kdl::transform_error([&](auto e) {
           // a degenerate segment cannot form a brush; skip it
           map.logger().debug() << "Sweep: could not create segment brush: " << e.msg;

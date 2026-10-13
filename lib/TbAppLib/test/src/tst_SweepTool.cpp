@@ -17,6 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "TestLogger.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
@@ -47,8 +48,12 @@ namespace tb::ui
 
 TEST_CASE("SweepTool")
 {
+  // outlives the document, which logs to it
+  auto logger = TestLogger{};
+
   auto fixture = MapDocumentFixture{};
   auto& document = fixture.create();
+  document.setTargetLogger(&logger);
   auto& map = document.map();
 
   auto tool = SweepTool{document};
@@ -256,6 +261,22 @@ TEST_CASE("SweepTool")
 
         map.undoCommand();
         CHECK(parent->childCount() == childCountBefore);
+      }
+
+      SECTION("warns once if a run stopped before the cap became too small")
+      {
+        const auto warningsBefore = logger.countMessages(LogLevel::Warn);
+
+        // the cap at station 2 is a square 0.32 units wide
+        auto transform = SweepTransform{vm::vec3d{64, 0, 0}};
+        transform.scale = vm::vec3d::fill(SweepTool::MinScaleFactor);
+        tool.setTransform(transform);
+        tool.setTransform(transform);
+        CHECK(logger.countMessages(LogLevel::Warn) == warningsBefore);
+
+        tool.commitSweep();
+        CHECK(logger.countMessages(LogLevel::Warn) == warningsBefore + 1);
+        CHECK(parent->childCount() == childCountBefore + 1);
       }
 
       SECTION("does nothing without a preview")
