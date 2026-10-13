@@ -19,6 +19,7 @@
 
 #include "TestLogger.h"
 #include "mdl/Brush.h"
+#include "mdl/BrushBuilder.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/Entity.h"
@@ -29,12 +30,15 @@
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/TestFactory.h"
+#include "mdl/WorldNode.h"
 #include "ui/HandleDragTracker.h"
 #include "ui/InputState.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
 #include "ui/MoveHandleDragTracker.h"
 #include "ui/SweepTool.h"
+
+#include "kd/result.h"
 
 #include "vm/approx.h"
 #include "vm/bbox.h"
@@ -279,6 +283,18 @@ TEST_CASE("SweepTool")
         CHECK(parent->childCount() == childCountBefore + 1);
       }
 
+      SECTION("integer alignment does not warn about an integral source face")
+      {
+        tool.setParameters(
+          SweepParameters{2, 1, SweepPathMode::Straight, SweepAlignment::Integer});
+        tool.setDestinationCenter(vm::vec3d{80, 0, 0});
+
+        const auto warningsBefore = logger.countMessages(LogLevel::Warn);
+        tool.commitSweep();
+        CHECK(logger.countMessages(LogLevel::Warn) == warningsBefore);
+        CHECK(parent->childCount() == childCountBefore + 2);
+      }
+
       SECTION("does nothing without a preview")
       {
         tool.commitSweep();
@@ -297,6 +313,42 @@ TEST_CASE("SweepTool")
 
         CHECK(parent->childCount() == childCountBefore);
       }
+    }
+  }
+
+  SECTION("with a selected face that has non-integer vertices")
+  {
+    const auto builder =
+      mdl::BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()};
+    auto* brushNode = new mdl::BrushNode{
+      builder.createCuboid(vm::bbox3d{{-16, -16, -16}, {16.5, 16, 16}}, "material")
+      | kdl::value()};
+    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+
+    const auto faceIndex = *brushNode->brush().findFace(vm::vec3d{1, 0, 0});
+    selectBrushFaces(map, {{brushNode, faceIndex}});
+
+    REQUIRE(tool.activate());
+
+    SECTION("integer alignment warns once that the source face stays off the grid")
+    {
+      tool.setParameters(
+        SweepParameters{2, 1, SweepPathMode::Straight, SweepAlignment::Integer});
+      tool.setDestinationCenter(tool.destinationCenter() + vm::vec3d{64, 0, 0});
+
+      const auto warningsBefore = logger.countMessages(LogLevel::Warn);
+      tool.commitSweep();
+      CHECK(logger.countMessages(LogLevel::Warn) == warningsBefore + 1);
+    }
+
+    SECTION("free alignment does not warn")
+    {
+      tool.setParameters(parameters);
+      tool.setDestinationCenter(tool.destinationCenter() + vm::vec3d{64, 0, 0});
+
+      const auto warningsBefore = logger.countMessages(LogLevel::Warn);
+      tool.commitSweep();
+      CHECK(logger.countMessages(LogLevel::Warn) == warningsBefore);
     }
   }
 

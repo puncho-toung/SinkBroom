@@ -55,6 +55,7 @@
 #include "vm/vec.h"
 #include "vm/vec_io.h" // IWYU pragma: keep
 
+#include <algorithm>
 #include <array>
 #include <map>
 #include <numeric>
@@ -148,6 +149,15 @@ auto initializeSweepSource(const auto& faces)
     normal,
     scaleBaseVector,
   };
+}
+
+bool hasNonIntegerVertices(const SweepSource& source)
+{
+  return std::ranges::any_of(source.faces, [](const auto& sourceFace) {
+    return !std::ranges::all_of(sourceFace.polygon.vertices(), [](const auto& vertex) {
+      return vm::is_integral(vertex);
+    });
+  });
 }
 
 vm::vec3d scaleArmAtCap(const vm::vec3d& scaleBase, const SweepTransform& transform)
@@ -339,6 +349,16 @@ void SweepTool::commitSweep()
 
   if (!m_preview.brushes.empty())
   {
+    // integer alignment rounds every station but the source face itself
+    if (
+      m_parameters.alignment == SweepAlignment::Integer
+      && hasNonIntegerVertices(m_source))
+    {
+      map.logger().warn()
+        << "Sweep: the source face keeps its non-integer vertices at the first station; "
+           "run Snap Vertices on the result if the engine needs integer vertices";
+    }
+
     auto nodesToAdd = kdl::flat_map<mdl::Node*, std::vector<mdl::Node*>>{};
     for (auto&& [parent, childrenPtrs] : m_preview.brushes)
     {

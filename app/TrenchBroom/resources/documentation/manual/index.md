@@ -809,7 +809,7 @@ The generated brushes are shown as a preview in the viewports while you place th
 - **Segments** is the number of brushes created between the selected faces and the destination cap.
 - **Path** selects how the brushes are laid out: Arc revolves the faces around an axis derived from the rotation, Straight lofts them along a line, and S-bend routes them through an S-curve. The destination cap ends up in the same place in each mode.
 - **Iterations** repeats the sweep, continuing from the previous destination cap. For example, an arc that rises while turning becomes a spiral staircase when swept for multiple iterations.
-- **Snap to integer grid** rounds the vertices of the generated brushes to integer coordinates.
+- **Snap to integer grid** rounds the vertices of the generated brushes to integer coordinates, except where they touch the selected faces. If the selected faces have non-integer vertices, performing the sweep logs a warning; use #menu(Menu/Edit/Snap Vertices to Integer) on the result if your engine needs integer vertices.
 - **Reset** moves the destination cap back onto the selected faces.
 
 Hit #action(Controls/Map view/Perform sweep) to fill the gap with brushes and select them. Hitting #action(Controls/Map view/Cancel) moves the destination cap back onto the selected faces, and hitting it again deactivates the tool.
