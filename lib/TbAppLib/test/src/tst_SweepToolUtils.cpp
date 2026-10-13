@@ -361,7 +361,10 @@ TEST_CASE("SweepToolUtils functions")
       // an identity transform collapses every station onto the source face
       parameters.segments = 2;
 
-      CHECK(generateSweepBrushes(map, source, transform, parameters).brushes.empty());
+      // every station is the usable source face, so no run stops early
+      const auto result = generateSweepBrushes(map, source, transform, parameters);
+      CHECK(result.brushes.empty());
+      CHECK(result.stoppedRuns == 0);
     }
 
     SECTION("integer alignment stops the run before the cap collapses to a point")
@@ -383,7 +386,9 @@ TEST_CASE("SweepToolUtils functions")
       CHECK(brushes[6]->logicalBounds() == vm::bbox3d{{48, -1, -1}, {56, 1, 1}});
     }
 
-    SECTION("free alignment stops the run before the cap gets narrower than one unit")
+    SECTION(
+      "free alignment stops the run before every edge of the cap is shorter than one "
+      "unit")
     {
       source.faces = {SweepFace{octagonAt(0.0), &defaultParent}};
       transform.translation = vm::vec3d{64, 0, 0};
@@ -469,6 +474,24 @@ TEST_CASE("SweepToolUtils functions")
       const auto& brushes = result.brushes.at(&defaultParent);
       REQUIRE(brushes.size() == 1);
       CHECK(brushes[0]->logicalBounds() == vm::bbox3d{{0, -128, -128}, {64, 128, 128}});
+    }
+
+    SECTION("a source face with no edge of one unit produces nothing")
+    {
+      // the source station itself is unusable
+      source.faces = {SweepFace{
+        vm::polygon3d{
+          {0, -0.25, -0.25},
+          {0, -0.25, 0.25},
+          {0, 0.25, 0.25},
+          {0, 0.25, -0.25},
+        },
+        &defaultParent}};
+      transform.translation = vm::vec3d{64, 0, 0};
+
+      const auto result = generateSweepBrushes(map, source, transform, parameters);
+      CHECK(result.brushes.empty());
+      CHECK(result.stoppedRuns == 1);
     }
   }
 }

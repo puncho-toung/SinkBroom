@@ -283,6 +283,22 @@ TEST_CASE("SweepTool")
         CHECK(parent->childCount() == childCountBefore + 1);
       }
 
+      SECTION("adds nothing and warns once if the first cap is too small")
+      {
+        tool.setParameters(
+          SweepParameters{1, 1, SweepPathMode::Straight, SweepAlignment::Free});
+
+        // the only segment would end in a square 0.32 units wide
+        auto transform = SweepTransform{vm::vec3d{64, 0, 0}};
+        transform.scale = vm::vec3d::fill(SweepTool::MinScaleFactor);
+        tool.setTransform(transform);
+
+        const auto warningsBefore = logger.countMessages(LogLevel::Warn);
+        tool.commitSweep();
+        CHECK(logger.countMessages(LogLevel::Warn) == warningsBefore + 1);
+        CHECK(parent->childCount() == childCountBefore);
+      }
+
       SECTION("integer alignment does not warn about an integral source face")
       {
         tool.setParameters(
@@ -350,6 +366,33 @@ TEST_CASE("SweepTool")
       tool.commitSweep();
       CHECK(logger.countMessages(LogLevel::Warn) == warningsBefore);
     }
+  }
+
+  SECTION("integer alignment warns once per sweep about several off-grid source faces")
+  {
+    const auto builder =
+      mdl::BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()};
+    auto* brushNodeA = new mdl::BrushNode{
+      builder.createCuboid(vm::bbox3d{{-16, -16, -16}, {16.5, 16, 16}}, "material")
+      | kdl::value()};
+    auto* brushNodeB = new mdl::BrushNode{
+      builder.createCuboid(vm::bbox3d{{-16, 32, -16}, {16.5, 64, 16}}, "material")
+      | kdl::value()};
+    addNodes(map, {{&parentForNodes(map), {brushNodeA, brushNodeB}}});
+
+    const auto faceIndexA = *brushNodeA->brush().findFace(vm::vec3d{1, 0, 0});
+    const auto faceIndexB = *brushNodeB->brush().findFace(vm::vec3d{1, 0, 0});
+    selectBrushFaces(map, {{brushNodeA, faceIndexA}, {brushNodeB, faceIndexB}});
+
+    REQUIRE(tool.activate());
+    tool.setParameters(
+      SweepParameters{2, 1, SweepPathMode::Straight, SweepAlignment::Integer});
+    tool.setDestinationCenter(tool.destinationCenter() + vm::vec3d{64, 0, 0});
+
+    const auto warningsBefore = logger.countMessages(LogLevel::Warn);
+    tool.commitSweep();
+    CHECK(logger.countMessages(LogLevel::Warn) == warningsBefore + 1);
+    CHECK(map.selection().nodes.size() == 4);
   }
 
   SECTION("removing the source face's parent while the tool is active")

@@ -134,61 +134,87 @@ TEST_CASE("NearlyCoplanarFacesValidator")
     }));
   }
 
-  auto& map = fixture.create(makeIdTech4FixtureConfig());
-
-  const auto* validator = findValidator(map.worldNode(), Description);
-  REQUIRE(validator != nullptr);
-  CHECK(validator->quickFixes().empty());
-
-  const auto type = validator->type();
-
-  SECTION("A cube is no issue")
+  SECTION("Under the id Tech 4 rotation policy")
   {
-    addNodes(
-      map,
-      {{&parentForNodes(map),
-        {new BrushNode{
-          makeBrushBuilder(map).createCube(64.0, "material") | kdl::value()}}}});
-    CHECK(collectIssues(map.worldNode(), type).empty());
-  }
+    auto& map = fixture.create(makeIdTech4FixtureConfig());
 
-  SECTION("A cylinder with 16 sides is no issue")
-  {
-    // its sides are 22.5 degrees apart
-    addNodes(
-      map,
-      {{&parentForNodes(map),
-        {new BrushNode{
-          makeBrushBuilder(map).createCylinder(
-            vm::bbox3d{{-64, -64, 0}, {64, 64, 64}},
-            EdgeAlignedCircle{16},
-            vm::axis::z,
-            "material")
-          | kdl::value()}}}});
-    CHECK(collectIssues(map.worldNode(), type).empty());
-  }
+    const auto* validator = findValidator(map.worldNode(), Description);
+    REQUIRE(validator != nullptr);
+    CHECK(validator->quickFixes().empty());
 
-  SECTION("A prism with a non-planar top is reported")
-  {
-    auto* brushNode = createNonPlanarPrismBrushNode(map);
-    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+    const auto type = validator->type();
 
-    const auto issues = collectIssues(map.worldNode(), type);
-    REQUIRE(issues.size() == 1u);
-    CHECK(&issues.front()->node() == brushNode);
-    CHECK(issues.front()->description() == IssueDescription);
-  }
+    const auto addCylinder = [&](const size_t numSides) {
+      addNodes(
+        map,
+        {{&parentForNodes(map),
+          {new BrushNode{
+            makeBrushBuilder(map).createCylinder(
+              vm::bbox3d{{-64, -64, 0}, {64, 64, 64}},
+              EdgeAlignedCircle{numSides},
+              vm::axis::z,
+              "material")
+            | kdl::value()}}}});
+    };
 
-  SECTION("A ridge of 7.5 degrees is no issue")
-  {
-    addNodes(map, {{&parentForNodes(map), {createRidgeBrushNode(map, 7.5)}}});
-    CHECK(collectIssues(map.worldNode(), type).empty());
-  }
+    SECTION("A cube is no issue")
+    {
+      addNodes(
+        map,
+        {{&parentForNodes(map),
+          {new BrushNode{
+            makeBrushBuilder(map).createCube(64.0, "material") | kdl::value()}}}});
+      CHECK(collectIssues(map.worldNode(), type).empty());
+    }
 
-  SECTION("A ridge of 4.5 degrees is reported")
-  {
-    addNodes(map, {{&parentForNodes(map), {createRidgeBrushNode(map, 4.5)}}});
-    CHECK(collectIssues(map.worldNode(), type).size() == 1u);
+    SECTION("A cylinder with 16 sides is no issue")
+    {
+      // its sides are 22.5 degrees apart
+      addCylinder(16);
+      CHECK(collectIssues(map.worldNode(), type).empty());
+    }
+
+    SECTION("A cylinder with 64 sides is reported")
+    {
+      // its sides are 5.625 degrees apart
+      addCylinder(64);
+      CHECK(collectIssues(map.worldNode(), type).size() == 1u);
+    }
+
+    SECTION("A prism with a non-planar top is reported")
+    {
+      auto* brushNode = createNonPlanarPrismBrushNode(map);
+      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+
+      const auto issues = collectIssues(map.worldNode(), type);
+      REQUIRE(issues.size() == 1u);
+      CHECK(&issues.front()->node() == brushNode);
+      CHECK(issues.front()->description() == IssueDescription);
+    }
+
+    SECTION("A ridge of 7.5 degrees is no issue")
+    {
+      addNodes(map, {{&parentForNodes(map), {createRidgeBrushNode(map, 7.5)}}});
+      CHECK(collectIssues(map.worldNode(), type).empty());
+    }
+
+    SECTION("A ridge of 6.5 degrees is no issue")
+    {
+      addNodes(map, {{&parentForNodes(map), {createRidgeBrushNode(map, 6.5)}}});
+      CHECK(collectIssues(map.worldNode(), type).empty());
+    }
+
+    SECTION("A ridge of 5.5 degrees is reported")
+    {
+      addNodes(map, {{&parentForNodes(map), {createRidgeBrushNode(map, 5.5)}}});
+      CHECK(collectIssues(map.worldNode(), type).size() == 1u);
+    }
+
+    SECTION("A ridge of 4.5 degrees is reported")
+    {
+      addNodes(map, {{&parentForNodes(map), {createRidgeBrushNode(map, 4.5)}}});
+      CHECK(collectIssues(map.worldNode(), type).size() == 1u);
+    }
   }
 }
 
