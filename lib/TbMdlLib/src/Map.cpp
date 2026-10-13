@@ -75,6 +75,7 @@
 #include "mdl/MissingModValidator.h"
 #include "mdl/MixedBrushContentsValidator.h"
 #include "mdl/ModelUtils.h"
+#include "mdl/NearlyCoplanarFacesValidator.h"
 #include "mdl/Node.h"
 #include "mdl/NodeHandleManager.h"
 #include "mdl/NodeHandles.h"
@@ -1164,6 +1165,7 @@ void Map::registerValidators()
   if (m_worldNode->entityPropertyConfig().rotationPolicy == EntityRotationPolicy::IdTech4)
   {
     m_worldNode->registerValidator(std::make_unique<EntityRotationKeyValidator>());
+    m_worldNode->registerValidator(std::make_unique<NearlyCoplanarFacesValidator>());
   }
 }
 

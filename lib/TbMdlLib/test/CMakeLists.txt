@@ -93,6 +93,7 @@ target_sources(TbMdlLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialUtils.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ModelDefinition.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ModelUtils.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_NearlyCoplanarFacesValidator.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Node.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_NodeHandleManager.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_NodeHandles.cpp

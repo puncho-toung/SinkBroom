@@ -138,6 +138,7 @@ target_sources(TbMdlLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ModelDefinition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ModelSpecification.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ModelUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/NearlyCoplanarFacesValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Node.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NodeContents.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NodeHandleManager.cpp
