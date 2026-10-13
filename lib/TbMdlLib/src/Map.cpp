@@ -1124,7 +1124,16 @@ void Map::registerValidators()
     naming ? std::vector<std::string>{naming->nameKey} : std::vector<std::string>{}));
   m_worldNode->registerValidator(
     std::make_unique<LinkTargetValidator>(*m_entityLinkManager));
-  m_worldNode->registerValidator(std::make_unique<NonIntegerVerticesValidator>());
+  if (m_worldNode->entityPropertyConfig().rotationPolicy == EntityRotationPolicy::IdTech4)
+  {
+    m_worldNode->registerValidator(std::make_unique<NonIntegerVerticesValidator>(
+      "id Tech 4's dmap welds vertices on a 1/32 grid and leaves cracks where many faces "
+      "meet at an off-grid vertex"));
+  }
+  else
+  {
+    m_worldNode->registerValidator(std::make_unique<NonIntegerVerticesValidator>());
+  }
   m_worldNode->registerValidator(std::make_unique<MixedBrushContentsValidator>());
   m_worldNode->registerValidator(std::make_unique<WorldBoundsValidator>(worldBounds()));
   m_worldNode->registerValidator(std::make_unique<SoftMapBoundsValidator>(*this));

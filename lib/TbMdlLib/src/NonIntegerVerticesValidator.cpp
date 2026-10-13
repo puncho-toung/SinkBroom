@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <string>
+#include <utility>
 
 namespace tb::mdl
 {
@@ -43,8 +44,9 @@ IssueQuickFix makeSnapVerticesQuickFix()
 
 } // namespace
 
-NonIntegerVerticesValidator::NonIntegerVerticesValidator()
+NonIntegerVerticesValidator::NonIntegerVerticesValidator(std::string engineNote)
   : Validator{Type, "Non-integer vertices"}
+  , m_engineNote{std::move(engineNote)}
 {
   addQuickFix(makeSnapVerticesQuickFix());
 }
@@ -56,8 +58,12 @@ void NonIntegerVerticesValidator::doValidate(
   if (!std::ranges::all_of(
         vertices, [](const auto* vertex) { return vm::is_integral(vertex->position()); }))
   {
-    issues.push_back(
-      std::make_unique<Issue>(Type, brushNode, "Brush has non-integer vertices"));
+    auto description = std::string{"Brush has non-integer vertices"};
+    if (!m_engineNote.empty())
+    {
+      description += "; " + m_engineNote;
+    }
+    issues.push_back(std::make_unique<Issue>(Type, brushNode, std::move(description)));
   }
 }
 

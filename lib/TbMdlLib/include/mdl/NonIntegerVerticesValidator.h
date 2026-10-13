@@ -21,6 +21,7 @@
 
 #include "mdl/Validator.h"
 
+#include <string>
 #include <vector>
 
 namespace tb::mdl
@@ -28,8 +29,15 @@ namespace tb::mdl
 
 class NonIntegerVerticesValidator : public Validator
 {
+private:
+  std::string m_engineNote;
+
 public:
-  NonIntegerVerticesValidator();
+  /**
+   * If `engineNote` is not empty, it is appended to the description of every issue to say
+   * why the game's engine needs integer vertices.
+   */
+  explicit NonIntegerVerticesValidator(std::string engineNote = {});
 
 private:
   void doValidate(
