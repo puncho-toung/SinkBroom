@@ -38,7 +38,10 @@ namespace
 
 const auto Type = freeIssueType();
 
-constexpr auto MaxCreaseAngle = 2.0; // degrees
+// rounding by up to half a unit over segment edges of about 6 to 30 units creases the
+// sides by 1 to 5 degrees; swept segments with creases of up to 5.2 degrees leaked in
+// dmap, and hand-built brushwork rarely puts adjacent faces within 6 degrees
+constexpr auto MaxCreaseAngle = 6.0; // degrees
 
 } // namespace
 
@@ -68,7 +71,7 @@ void NearlyCoplanarFacesValidator::doValidate(
     issues.push_back(std::make_unique<Issue>(
       Type,
       brushNode,
-      "Brush has adjacent faces within 2 degrees of each other; id Tech 4's dmap moves "
+      "Brush has adjacent faces within 6 degrees of each other; id Tech 4's dmap moves "
       "the vertices on such a crease and leaves cracks, so rebuild it with planar sides "
       "or split it"));
   }

@@ -27,14 +27,15 @@ namespace tb::mdl
 {
 
 /**
- * Reports brushes with two faces that share an edge and whose normals are within 2
+ * Reports brushes with two faces that share an edge and whose normals are within 6
  * degrees of each other. Such a crease appears when a non-planar side, for example one
  * whose vertices were rounded to integers, is built as two nearly coplanar faces. id Tech
  * 4's dmap computes the vertices on the crease from the face planes and moves them far
  * enough to leave cracks.
  *
- * A rounding error of half a unit over edges about 30 units long makes creases of about
- * 1 degree, while hand-built brushwork rarely puts adjacent faces within 2 degrees.
+ * Rounding by up to half a unit over segment edges of about 6 to 30 units creases the
+ * sides by 1 to 5 degrees, and such creases leaked in dmap, while hand-built brushwork
+ * rarely puts adjacent faces within 6 degrees.
  */
 class NearlyCoplanarFacesValidator : public Validator
 {

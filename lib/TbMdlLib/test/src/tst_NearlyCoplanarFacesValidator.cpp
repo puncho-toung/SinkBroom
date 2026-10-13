@@ -51,7 +51,7 @@ namespace
 
 const auto Description = std::string{"Nearly coplanar faces"};
 const auto IssueDescription = std::string{
-  "Brush has adjacent faces within 2 degrees of each other; id Tech 4's dmap moves the "
+  "Brush has adjacent faces within 6 degrees of each other; id Tech 4's dmap moves the "
   "vertices on such a crease and leaves cracks, so rebuild it with planar sides or split "
   "it"};
 
@@ -179,15 +179,15 @@ TEST_CASE("NearlyCoplanarFacesValidator")
     CHECK(issues.front()->description() == IssueDescription);
   }
 
-  SECTION("A ridge of 2.5 degrees is no issue")
+  SECTION("A ridge of 7.5 degrees is no issue")
   {
-    addNodes(map, {{&parentForNodes(map), {createRidgeBrushNode(map, 2.5)}}});
+    addNodes(map, {{&parentForNodes(map), {createRidgeBrushNode(map, 7.5)}}});
     CHECK(collectIssues(map.worldNode(), type).empty());
   }
 
-  SECTION("A ridge of 1.5 degrees is reported")
+  SECTION("A ridge of 4.5 degrees is reported")
   {
-    addNodes(map, {{&parentForNodes(map), {createRidgeBrushNode(map, 1.5)}}});
+    addNodes(map, {{&parentForNodes(map), {createRidgeBrushNode(map, 4.5)}}});
     CHECK(collectIssues(map.worldNode(), type).size() == 1u);
   }
 }
