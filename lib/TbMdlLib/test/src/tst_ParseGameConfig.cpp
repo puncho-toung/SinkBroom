@@ -171,6 +171,9 @@ TEST_CASE("GameConfigParser")
       // surface parameters are the lowercase names the .mtr parser derives
       const auto expectedTags = std::vector<ExpectedTag>{
         {"Trigger", "classname", {"trigger_*"}, true, "common/trigmulti"},
+        // the brushes of the AAS entities, which must not be area portals
+        {"AASPortal", "classname", {"func_aas_portal"}, true, "editor/aasportal"},
+        {"AASObstacle", "classname", {"func_aas_obstacle"}, true, "editor/aasobstacle"},
         {"Caulk", "material", {"common/caulk"}, true},
         {"Nodraw", "material", {"common/nodraw*"}, true},
         {"Clip", "material", {"common/*clip*"}, true},
