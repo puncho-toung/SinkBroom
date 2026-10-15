@@ -100,6 +100,7 @@ std::vector<Preference<Color>*> colorPreferences()
     &MaterialBrowserSelectedColor,
     &MaterialBrowserUsedColor,
     &MaterialBrowserNonSealingColor,
+    &LightVolumeHandleColor,
   };
 }
 

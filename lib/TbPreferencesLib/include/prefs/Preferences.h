@@ -308,6 +308,18 @@ inline constexpr auto EntityLinkModeNone = "none";
 inline auto EntityLinkMode =
   Preference<std::string>{"Map view/Entity link mode", EntityLinkModeDirect};
 
+// Light volumes of the light editor (games whose config sets entities.lightEditor); not
+// under "Map view/", whose paths make the map renderer invalidate all of its caches
+inline constexpr auto ShowLightVolumesOff = "off";
+inline constexpr auto ShowLightVolumesSelected = "selected";
+inline constexpr auto ShowLightVolumesAll = "all";
+inline auto ShowLightVolumes =
+  Preference<std::string>{"render/Show light volumes", ShowLightVolumesSelected};
+inline auto LightVolumeAlpha = Preference<float>{"render/Light volume alpha", 0.45f};
+inline auto LightVolumeShells = Preference<int>{"render/Light volume shells", 4};
+inline auto LightVolumeHandleColor =
+  Preference<Color>{"render/Colors/Light volume handle", RgbF{1.0f, 0.85f, 0.2f}};
+
 std::vector<Preference<Color>*> colorPreferences();
 
 std::vector<Preference<std::vector<KeySequence>>*> keyPreferences();

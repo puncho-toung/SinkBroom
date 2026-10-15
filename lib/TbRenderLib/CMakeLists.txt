@@ -20,6 +20,7 @@ target_sources(TbRenderLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GroupLinkRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GroupRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightVolumeMesh.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LightVolumeRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LinkRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ObjectRenderer.cpp
