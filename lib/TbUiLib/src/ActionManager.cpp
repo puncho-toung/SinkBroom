@@ -24,6 +24,8 @@
 #include "base/PreferenceManager.h"
 #include "mdl/EntityDefinition.h"
 #include "mdl/EntityProperties.h"
+#include "mdl/GameConfig.h"
+#include "mdl/GameInfo.h"
 #include "mdl/Grid.h" // IWYU pragma: keep
 #include "mdl/Map.h"
 #include "mdl/Map_Entities.h"
@@ -50,6 +52,20 @@
 
 namespace tb::ui
 {
+namespace
+{
+
+/**
+ * Whether the document's game has the light editor (entities.lightEditor), which also
+ * gates the light volumes.
+ */
+bool hasLightEditor(const ActionExecutionContext& context)
+{
+  return context.hasDocument()
+         && context.map().gameInfo().gameConfig.entityConfig.lightEditor.has_value();
+}
+
+} // namespace
 
 ActionManager::ActionManager()
 {
@@ -1808,6 +1824,53 @@ void ActionManager::createViewMenu()
     KeySequence{},
     [](auto& context) { context.mapWindow().moveCameraToPosition(); },
     [](const auto& context) { return context.hasDocument(); },
+  }));
+
+  // the actions are not exclusive: MapWindow refreshes their check marks when the
+  // preference changes
+  auto& lightVolumesMenu = viewMenu.addMenu("Light Volumes");
+  lightVolumesMenu.addItem(addAction(Action{
+    "Menu/View/Light Volumes/Off",
+    "Off",
+    ActionContext::Any,
+    KeySequence{},
+    [](auto& context) {
+      context.mapView().setShowLightVolumes(Preferences::ShowLightVolumesOff);
+    },
+    [](const auto& context) { return hasLightEditor(context); },
+    [](const auto& context) {
+      return context.hasDocument()
+             && pref(Preferences::ShowLightVolumes) == Preferences::ShowLightVolumesOff;
+    },
+  }));
+  lightVolumesMenu.addItem(addAction(Action{
+    "Menu/View/Light Volumes/Selected",
+    "Selected",
+    ActionContext::Any,
+    KeySequence{},
+    [](auto& context) {
+      context.mapView().setShowLightVolumes(Preferences::ShowLightVolumesSelected);
+    },
+    [](const auto& context) { return hasLightEditor(context); },
+    [](const auto& context) {
+      return context.hasDocument()
+             && pref(Preferences::ShowLightVolumes)
+                  == Preferences::ShowLightVolumesSelected;
+    },
+  }));
+  lightVolumesMenu.addItem(addAction(Action{
+    "Menu/View/Light Volumes/All",
+    "All",
+    ActionContext::Any,
+    KeySequence{},
+    [](auto& context) {
+      context.mapView().setShowLightVolumes(Preferences::ShowLightVolumesAll);
+    },
+    [](const auto& context) { return hasLightEditor(context); },
+    [](const auto& context) {
+      return context.hasDocument()
+             && pref(Preferences::ShowLightVolumes) == Preferences::ShowLightVolumesAll;
+    },
   }));
 
   viewMenu.addSeparator();

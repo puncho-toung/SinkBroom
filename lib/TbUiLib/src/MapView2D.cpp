@@ -411,7 +411,10 @@ void MapView2D::renderMap(
   render::RenderContext& renderContext,
   render::RenderBatch& renderBatch)
 {
+  // the fills before the map (after the grid) so that the brush edges draw over them
+  renderLightVolumeFills(renderContext, renderBatch);
   renderer.render(renderContext, renderBatch);
+  renderLightVolumeLines(renderContext, renderBatch);
 
   const auto& map = m_document.map();
   if (const auto& bounds = map.selectionBounds();

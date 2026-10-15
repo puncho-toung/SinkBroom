@@ -18,14 +18,19 @@
  */
 
 #include <QApplication>
+#include <QButtonGroup>
 #include <QCheckBox>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QtTest/QTest>
 
+#include "base/PreferenceManager.h"
 #include "mdl/EditorContext.h"
 #include "mdl/EntityDefinition.h"
 #include "mdl/EntityDefinitionManager.h"
 #include "mdl/Map.h"
+#include "mdl/MapFixture.h"
+#include "prefs/Preferences.h"
 #include "ui/CatchConfig.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
@@ -65,6 +70,27 @@ QCheckBox* findCheckBox(auto checkBoxes, const QString& text)
     return *iGroupCheckBox;
   }
 
+  return nullptr;
+}
+
+/**
+ * The light volume radio named by the given value of Preferences::ShowLightVolumes. The
+ * radios are found through their group because "all" also names an entity link radio.
+ */
+QRadioButton* findLightVolumesRadio(ViewEditor& editor, const std::string& value)
+{
+  const auto* selectedRadio = editor.findChild<QRadioButton*>(
+    QString::fromStdString(Preferences::ShowLightVolumesSelected));
+  if (selectedRadio && selectedRadio->group())
+  {
+    for (auto* button : selectedRadio->group()->buttons())
+    {
+      if (button->objectName() == QString::fromStdString(value))
+      {
+        return qobject_cast<QRadioButton*>(button);
+      }
+    }
+  }
   return nullptr;
 }
 
@@ -191,6 +217,82 @@ TEST_CASE("EntityDefinitionCheckBoxList")
     CHECK(!map.editorContext().entityDefinitionHidden(*funcAlphaDefinition));
     CHECK(!map.editorContext().entityDefinitionHidden(*triggerOnceDefinition));
   }
+}
+
+TEST_CASE("ViewEditor")
+{
+  auto& prefs = PreferenceManager::instance();
+  prefs.resetToDefault(Preferences::ShowLightVolumes);
+
+  auto fixture = MapDocumentFixture{};
+
+  SECTION("lightVolumesChanged")
+  {
+    SECTION("the light volume radios read and write the preference")
+    {
+      auto& document = fixture.create(mdl::Doom3BFGFixtureConfig);
+
+      auto editor = ViewEditor{document};
+      editor.show();
+      QApplication::processEvents();
+
+      auto* offRadio = findLightVolumesRadio(editor, Preferences::ShowLightVolumesOff);
+      auto* selectedRadio =
+        findLightVolumesRadio(editor, Preferences::ShowLightVolumesSelected);
+      auto* allRadio = findLightVolumesRadio(editor, Preferences::ShowLightVolumesAll);
+      REQUIRE(offRadio != nullptr);
+      REQUIRE(selectedRadio != nullptr);
+      REQUIRE(allRadio != nullptr);
+
+      CHECK(offRadio->text() == "Light volumes: Off");
+      CHECK(selectedRadio->text() == "Light volumes: Selected");
+      CHECK(allRadio->text() == "Light volumes: All");
+
+      // the default
+      CHECK(selectedRadio->isChecked());
+
+      QTest::mouseClick(allRadio, Qt::LeftButton);
+      QApplication::processEvents();
+      CHECK(pref(Preferences::ShowLightVolumes) == Preferences::ShowLightVolumesAll);
+      CHECK(allRadio->isChecked());
+
+      QTest::mouseClick(offRadio, Qt::LeftButton);
+      QApplication::processEvents();
+      CHECK(pref(Preferences::ShowLightVolumes) == Preferences::ShowLightVolumesOff);
+
+      setPref(Preferences::ShowLightVolumes, Preferences::ShowLightVolumesAll);
+      QApplication::processEvents();
+      CHECK(allRadio->isChecked());
+      CHECK(!offRadio->isChecked());
+
+      auto buttons = editor.findChildren<QPushButton*>();
+      const auto iRestoreDefaults = std::ranges::find_if(
+        buttons, [](const auto* button) { return button->text() == "Restore Defaults"; });
+      REQUIRE(iRestoreDefaults != buttons.end());
+
+      QTest::mouseClick(*iRestoreDefaults, Qt::LeftButton);
+      QApplication::processEvents();
+      CHECK(pref(Preferences::ShowLightVolumes) == Preferences::ShowLightVolumesSelected);
+      CHECK(selectedRadio->isChecked());
+    }
+
+    SECTION("a game without a light editor has no light volume radios")
+    {
+      auto& document = fixture.create();
+
+      auto editor = ViewEditor{document};
+      CHECK(
+        editor.findChild<QRadioButton*>(
+          QString::fromStdString(Preferences::ShowLightVolumesSelected))
+        == nullptr);
+      CHECK(
+        editor.findChild<QRadioButton*>(
+          QString::fromStdString(Preferences::ShowLightVolumesOff))
+        == nullptr);
+    }
+  }
+
+  prefs.resetToDefault(Preferences::ShowLightVolumes);
 }
 
 } // namespace tb::ui

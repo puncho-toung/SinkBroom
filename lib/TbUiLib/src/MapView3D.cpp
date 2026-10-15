@@ -562,6 +562,8 @@ void MapView3D::renderMap(
   render::RenderBatch& renderBatch)
 {
   renderer.render(renderContext, renderBatch);
+  renderLightVolumeFills(renderContext, renderBatch);
+  renderLightVolumeLines(renderContext, renderBatch);
 
   const auto& map = m_document.map();
   if (const auto& bounds = map.selectionBounds();

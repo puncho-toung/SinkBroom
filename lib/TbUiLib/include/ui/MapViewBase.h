@@ -28,6 +28,7 @@
 #include "ui/ToolBoxConnector.h"
 
 #include <filesystem>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -60,6 +61,7 @@ struct SelectionChange;
 namespace render
 {
 class Compass;
+class LightVolumeRenderer;
 class MapRenderer;
 class PrimitiveRenderer;
 class RenderBatch;
@@ -97,6 +99,7 @@ protected:
 private:
   std::unique_ptr<render::Compass> m_compass;
   std::unique_ptr<render::PrimitiveRenderer> m_portalFileRenderer;
+  std::unique_ptr<render::LightVolumeRenderer> m_lightVolumeRenderer;
 
   /**
    * Tracks whether this map view has most recently gotten the focus. This is tracked and
@@ -148,6 +151,9 @@ private:
   void documentWasLoaded();
   void documentDidChange();
   void selectionDidChange(const mdl::SelectionChange&);
+  void nodesWereAdded(const std::vector<mdl::Node*>& nodes);
+  void nodesWereRemoved(const std::vector<mdl::Node*>& nodes);
+  void nodesDidChange(const std::vector<mdl::Node*>& nodes);
 
   void toolChanged(Tool& tool);
   void materialCollectionsDidChange();
@@ -300,6 +306,12 @@ public: // view filters
   void showDirectlySelectedEntityLinks();
   void hideAllEntityLinks();
 
+  /**
+   * Shows the light volumes of no light, of the selected lights or of all lights: one
+   * of Preferences::ShowLightVolumesOff, ShowLightVolumesSelected or ShowLightVolumesAll.
+   */
+  void setShowLightVolumes(const std::string& visibility);
+
   bool event(QEvent* event) override;
   void focusInEvent(QFocusEvent* event) override;
   void focusOutEvent(QFocusEvent* event) override;
@@ -352,6 +364,19 @@ private: // implement RenderView interface
 
   void renderCompass(render::RenderBatch& renderBatch);
   void renderFPS(render::RenderContext& renderContext, render::RenderBatch& renderBatch);
+
+protected:
+  /**
+   * Enqueue the fills and the lines of the light volumes; each view calls them at its
+   * own point in the frame.
+   */
+  void renderLightVolumeFills(
+    render::RenderContext& renderContext, render::RenderBatch& renderBatch);
+  void renderLightVolumeLines(
+    render::RenderContext& renderContext, render::RenderBatch& renderBatch);
+
+private:
+  void collectLightVolumes(render::RenderContext& renderContext);
 
 public: // implement InputEventProcessor interface
   void processEvent(const KeyEvent& event) override;

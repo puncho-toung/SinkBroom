@@ -905,6 +905,13 @@ void MapWindow::preferenceDidChange(const std::filesystem::path& path)
       static_cast<MapViewLayout>(pref(Preferences::MapViewLayout)));
   }
 
+  if (path == Preferences::ShowLightVolumes.path)
+  {
+    // the View > Light Volumes actions are not exclusive; only this corrects their
+    // check marks
+    updateActionStateDelayed();
+  }
+
   updateShortcuts();
 }
 

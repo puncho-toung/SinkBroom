@@ -105,6 +105,9 @@ private:
 
   QButtonGroup* m_entityLinkRadioGroup = nullptr;
 
+  // only for games whose config sets entities.lightEditor
+  QButtonGroup* m_lightVolumesRadioGroup = nullptr;
+
   QCheckBox* m_showSoftBoundsCheckBox = nullptr;
 
   NotifierConnection m_notifierConnection;
@@ -153,6 +156,7 @@ private:
   void showFogChanged(bool checked);
   void showEdgesChanged(bool checked);
   void entityLinkModeChanged(int id);
+  void lightVolumesChanged(int id);
   void showSoftMapBoundsChanged(bool checked);
   void restoreDefaultsClicked();
 };

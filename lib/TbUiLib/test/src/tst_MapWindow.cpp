@@ -25,6 +25,7 @@
 #include <QMenuBar>
 
 #include "TestEnvironment.h"
+#include "base/PreferenceManager.h"
 #include "base/Result.h"
 #include "gl/Camera.h"
 #include "gl/GlManager.h"
@@ -36,6 +37,7 @@
 #include "mdl/Grid.h"
 #include "mdl/Map.h"
 #include "mdl/MapFormat.h"
+#include "prefs/Preferences.h"
 #include "ui/AppControllerFixture.h"
 #include "ui/CatchConfig.h"
 #include "ui/LightEditorPanel.h"
@@ -233,6 +235,42 @@ TEST_CASE("MapWindow")
     REQUIRE(sidebarMenu != nullptr);
     CHECK(sidebarMenu->title() == "Sidebar");
     CHECK(sidebarMenu->actions() == QList<QAction*>{dock->toggleViewAction()});
+  }
+
+  SECTION("the View > Light Volumes check marks follow the preference")
+  {
+    QMenu* lightVolumesMenu = nullptr;
+    for (auto* menuAction : window.menuBar()->actions())
+    {
+      if (menuAction->text() == "View")
+      {
+        for (auto* action : QMenu::menuInAction(menuAction)->actions())
+        {
+          if (action->text() == "Light Volumes")
+          {
+            lightVolumesMenu = QMenu::menuInAction(action);
+          }
+        }
+      }
+    }
+    REQUIRE(lightVolumesMenu != nullptr);
+
+    const auto actions = lightVolumesMenu->actions();
+    REQUIRE(actions.size() == 3);
+
+    setPref(Preferences::ShowLightVolumes, Preferences::ShowLightVolumesAll);
+    QApplication::processEvents();
+    CHECK(!actions[0]->isChecked());
+    CHECK(!actions[1]->isChecked());
+    CHECK(actions[2]->isChecked());
+
+    // the Quake game has no light editor
+    CHECK(!actions[2]->isEnabled());
+
+    PreferenceManager::instance().resetToDefault(Preferences::ShowLightVolumes);
+    QApplication::processEvents();
+    CHECK(actions[1]->isChecked());
+    CHECK(!actions[2]->isChecked());
   }
 
   SECTION("canReloadMaterialCollections returns false when resources need processing")
