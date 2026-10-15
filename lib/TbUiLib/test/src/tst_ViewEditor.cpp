@@ -36,6 +36,9 @@
 #include "ui/MapDocumentFixture.h"
 #include "ui/ViewEditor.h"
 
+#include "kd/invoke.h"
+
+#include <algorithm>
 #include <ranges>
 #include <vector>
 
@@ -224,6 +227,10 @@ TEST_CASE("ViewEditor")
   auto& prefs = PreferenceManager::instance();
   prefs.resetToDefault(Preferences::ShowLightVolumes);
 
+  // also when a REQUIRE fails, so that no later test case sees a changed preference
+  const auto resetShowLightVolumes =
+    kdl::invoke_later{[&] { prefs.resetToDefault(Preferences::ShowLightVolumes); }};
+
   auto fixture = MapDocumentFixture{};
 
   SECTION("lightVolumesChanged")
@@ -260,6 +267,10 @@ TEST_CASE("ViewEditor")
       QApplication::processEvents();
       CHECK(pref(Preferences::ShowLightVolumes) == Preferences::ShowLightVolumesOff);
 
+      QTest::mouseClick(selectedRadio, Qt::LeftButton);
+      QApplication::processEvents();
+      CHECK(pref(Preferences::ShowLightVolumes) == Preferences::ShowLightVolumesSelected);
+
       setPref(Preferences::ShowLightVolumes, Preferences::ShowLightVolumesAll);
       QApplication::processEvents();
       CHECK(allRadio->isChecked());
@@ -278,7 +289,7 @@ TEST_CASE("ViewEditor")
 
     SECTION("a game without a light editor has no light volume radios")
     {
-      auto& document = fixture.create();
+      auto& document = fixture.create(mdl::QuakeFixtureConfig);
 
       auto editor = ViewEditor{document};
       CHECK(
@@ -292,7 +303,20 @@ TEST_CASE("ViewEditor")
     }
   }
 
-  prefs.resetToDefault(Preferences::ShowLightVolumes);
+  SECTION("the light volume preferences")
+  {
+    // not under "Map view/", whose changes invalidate every map renderer cache
+    CHECK(!Preferences::ShowLightVolumes.path.generic_string().starts_with("Map view"));
+    CHECK(
+      Preferences::ShowLightVolumes.defaultValue
+      == Preferences::ShowLightVolumesSelected);
+    CHECK(Preferences::LightVolumeAlpha.defaultValue == 0.45f);
+    CHECK(Preferences::LightVolumeShells.defaultValue == 4);
+
+    const auto colors = Preferences::colorPreferences();
+    CHECK(
+      std::ranges::find(colors, &Preferences::LightVolumeHandleColor) != colors.end());
+  }
 }
 
 } // namespace tb::ui

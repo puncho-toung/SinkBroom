@@ -46,10 +46,14 @@
 #include "ui/MapView2D.h"
 #include "ui/MapWindow.h"
 
+#include "kd/invoke.h"
+
 #include "vm/vec.h"
 
 #include <algorithm>
 #include <iterator>
+#include <string>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -237,40 +241,91 @@ TEST_CASE("MapWindow")
     CHECK(sidebarMenu->actions() == QList<QAction*>{dock->toggleViewAction()});
   }
 
-  SECTION("the View > Light Volumes check marks follow the preference")
+  SECTION("View > Light Volumes")
   {
-    QMenu* lightVolumesMenu = nullptr;
-    for (auto* menuAction : window.menuBar()->actions())
-    {
-      if (menuAction->text() == "View")
+    auto& prefs = PreferenceManager::instance();
+    prefs.resetToDefault(Preferences::ShowLightVolumes);
+
+    // also when a REQUIRE fails, so that no later test case sees a changed preference
+    const auto resetShowLightVolumes =
+      kdl::invoke_later{[&] { prefs.resetToDefault(Preferences::ShowLightVolumes); }};
+
+    const auto findLightVolumeActions = [&]() {
+      QMenu* lightVolumesMenu = nullptr;
+      for (auto* menuAction : window.menuBar()->actions())
       {
-        for (auto* action : QMenu::menuInAction(menuAction)->actions())
+        if (menuAction->text() == "View")
         {
-          if (action->text() == "Light Volumes")
+          for (auto* action : QMenu::menuInAction(menuAction)->actions())
           {
-            lightVolumesMenu = QMenu::menuInAction(action);
+            if (action->text() == "Light Volumes")
+            {
+              lightVolumesMenu = QMenu::menuInAction(action);
+            }
           }
         }
       }
+      REQUIRE(lightVolumesMenu != nullptr);
+      return lightVolumesMenu->actions();
+    };
+
+    SECTION("the check marks follow the preference")
+    {
+      const auto actions = findLightVolumeActions();
+      REQUIRE(actions.size() == 3);
+
+      setPref(Preferences::ShowLightVolumes, Preferences::ShowLightVolumesAll);
+      QApplication::processEvents();
+      CHECK(!actions[0]->isChecked());
+      CHECK(!actions[1]->isChecked());
+      CHECK(actions[2]->isChecked());
+
+      // the Quake game has no light editor
+      CHECK(!actions[0]->isEnabled());
+      CHECK(!actions[1]->isEnabled());
+      CHECK(!actions[2]->isEnabled());
+
+      prefs.resetToDefault(Preferences::ShowLightVolumes);
+      QApplication::processEvents();
+      CHECK(actions[1]->isChecked());
+      CHECK(!actions[2]->isChecked());
     }
-    REQUIRE(lightVolumesMenu != nullptr);
 
-    const auto actions = lightVolumesMenu->actions();
-    REQUIRE(actions.size() == 3);
+    SECTION("the actions write ShowLightVolumes in a game with the light editor")
+    {
+      REQUIRE(window.document().create(
+        appController.environmentConfig(),
+        mdl::Doom3BFGGameInfo,
+        mdl::MapFormat::Doom3_Valve,
+        vm::bbox3d{8192.0}));
+      QApplication::processEvents();
 
-    setPref(Preferences::ShowLightVolumes, Preferences::ShowLightVolumesAll);
-    QApplication::processEvents();
-    CHECK(!actions[0]->isChecked());
-    CHECK(!actions[1]->isChecked());
-    CHECK(actions[2]->isChecked());
+      const auto actions = findLightVolumeActions();
+      REQUIRE(actions.size() == 3);
+      CHECK(actions[0]->isEnabled());
+      CHECK(actions[1]->isEnabled());
+      CHECK(actions[2]->isEnabled());
 
-    // the Quake game has no light editor
-    CHECK(!actions[2]->isEnabled());
+      const auto faceRenderMode = pref(Preferences::FaceRenderMode);
+      const auto values = std::vector<std::string>{
+        Preferences::ShowLightVolumesOff,
+        Preferences::ShowLightVolumesSelected,
+        Preferences::ShowLightVolumesAll,
+      };
 
-    PreferenceManager::instance().resetToDefault(Preferences::ShowLightVolumes);
-    QApplication::processEvents();
-    CHECK(actions[1]->isChecked());
-    CHECK(!actions[2]->isChecked());
+      for (const auto i : {0, 2, 1})
+      {
+        actions[i]->trigger();
+        QApplication::processEvents();
+
+        CHECK(pref(Preferences::ShowLightVolumes) == values[size_t(i)]);
+        CHECK(pref(Preferences::FaceRenderMode) == faceRenderMode);
+        for (auto j = 0; j < 3; ++j)
+        {
+          CHECK(actions[j]->isChecked() == (j == i));
+        }
+      }
+    }
   }
 
   SECTION("canReloadMaterialCollections returns false when resources need processing")

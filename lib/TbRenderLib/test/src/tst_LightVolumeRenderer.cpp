@@ -44,9 +44,12 @@
 
 #include "vm/vec.h"
 
+#include <algorithm>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -106,9 +109,23 @@ std::string modeName(const GLenum mode)
  */
 struct GlRecorder
 {
+  /**
+   * A multi-draw call: the buffer bound when it was issued and the first index of each
+   * range, in draw order.
+   */
+  struct MultiDraw
+  {
+    GLenum mode;
+    GLuint buffer;
+    std::vector<GLint> firsts;
+  };
+
   std::vector<std::string> events;
+  std::vector<MultiDraw> multiDraws;
   std::size_t generatedBuffers = 0;
   std::size_t bufferUploads = 0;
+  GLuint boundBuffer = 0;
+  std::unordered_map<GLuint, GLsizeiptr> bufferSizes;
 
   void install(gl::MockGl& gl)
   {
@@ -119,7 +136,16 @@ struct GlRecorder
       generatedBuffers += std::size_t(n);
       generate(n, buffers);
     };
-    gl.onBufferData = [&](GLenum, GLsizeiptr, const GLvoid*, GLenum) { ++bufferUploads; };
+    gl.onBindBuffer = [&](const GLenum target, const GLuint buffer) {
+      if (target == GL_ARRAY_BUFFER)
+      {
+        boundBuffer = buffer;
+      }
+    };
+    gl.onBufferData = [&](GLenum, const GLsizeiptr size, const GLvoid*, GLenum) {
+      ++bufferUploads;
+      bufferSizes[boundBuffer] = size;
+    };
 
     gl.onUseProgram = [](GLuint) {};
     gl.onGetIntegerv = [](const GLenum pname, GLint* params) {
@@ -154,10 +180,12 @@ struct GlRecorder
     gl.onCullFace = [&](const GLenum mode) {
       events.push_back("cullFace " + modeName(mode));
     };
-    gl.onMultiDrawArrays = [&](
-                             const GLenum mode, const GLint*, const GLsizei*, GLsizei n) {
-      events.push_back("multiDrawArrays " + modeName(mode) + " " + std::to_string(n));
-    };
+    gl.onMultiDrawArrays =
+      [&](const GLenum mode, const GLint* firsts, const GLsizei*, GLsizei n) {
+        events.push_back("multiDrawArrays " + modeName(mode) + " " + std::to_string(n));
+        multiDraws.push_back(
+          MultiDraw{mode, boundBuffer, std::vector<GLint>(firsts, firsts + n)});
+      };
     gl.onDrawArrays = [&](const GLenum mode, GLint, GLsizei) {
       events.push_back("drawArrays " + modeName(mode));
     };
@@ -252,9 +280,11 @@ TEST_CASE("LightVolumeRenderer")
                              const gl::Camera& camera,
                              const LightVolumeVisibility visibility,
                              const RenderMode renderMode = RenderMode::Render3D,
-                             const bool hideSelection = false) {
+                             const bool hideSelection = false,
+                             const int shells = 4) {
     auto frameStyle = style;
     frameStyle.twoD = renderMode == RenderMode::Render2D;
+    frameStyle.shells = shells;
 
     renderer->collect(map, visibility, frameStyle);
 
@@ -266,6 +296,7 @@ TEST_CASE("LightVolumeRenderer")
     }
 
     recorder.events.clear();
+    recorder.multiDraws.clear();
     auto renderBatch = RenderBatch{vboManager};
     renderer->addFills(renderBatch);
     renderer->addLines(renderBatch);
@@ -299,6 +330,18 @@ TEST_CASE("LightVolumeRenderer")
       CHECK(renderer->unselectedRanges().front().node == selectedLight);
     }
 
+    SECTION("a new style rebuilds the arrays")
+    {
+      renderFrame(outside, LightVolumeVisibility::Selected);
+      recorder.generatedBuffers = 0;
+
+      renderFrame(
+        outside, LightVolumeVisibility::Selected, RenderMode::Render3D, false, 6);
+      CHECK(recorder.generatedBuffers > 0);
+      REQUIRE(renderer->selectedRanges().size() == 1);
+      CHECK(renderer->selectedRanges().front().fillCount == 6 * 224 * 3);
+    }
+
     SECTION("Off mode collects nothing")
     {
       renderer->collect(map, LightVolumeVisibility::All, style);
@@ -310,7 +353,7 @@ TEST_CASE("LightVolumeRenderer")
     SECTION("a game without a light editor collects nothing")
     {
       auto quakeFixture = mdl::MapFixture{};
-      auto& quakeMap = quakeFixture.create();
+      auto& quakeMap = quakeFixture.create(mdl::QuakeFixtureConfig);
 
       auto* quakeLight = makeLight("0 0 0");
       mdl::addNodes(quakeMap, {{&mdl::parentForNodes(quakeMap), {quakeLight}}});
@@ -420,13 +463,86 @@ TEST_CASE("LightVolumeRenderer")
 
     SECTION("draw back to front in runs of equal array and cull face")
     {
-      // from far away, the other light is farther than the selected one
+      // a third light, so that the selected one at the origin sits between two
+      // unselected ones on the x axis
+      auto* nearLight = makeLight("-500 0 0");
+      mdl::addNodes(map, {{&mdl::parentForNodes(map), {nearLight}}});
+      renderer->invalidate();
+
+      using Draw = std::pair<bool, std::vector<GLint>>;
+      // the triangle draws of the last frame: whether each drew from the selected
+      // array, which the buffer's size tells apart, and its ranges' first indices
+      const auto triangleDraws = [&]() {
+        const auto vertexSize = sizeof(gl::VertexTypes::P3C4::Vertex);
+        const auto selectedBytes =
+          GLsizeiptr(renderer->selectedRanges().front().fillCount * vertexSize);
+
+        auto draws = std::vector<Draw>{};
+        for (const auto& draw : recorder.multiDraws)
+        {
+          if (draw.mode == GL_TRIANGLES)
+          {
+            draws.emplace_back(
+              recorder.bufferSizes.at(draw.buffer) == selectedBytes, draw.firsts);
+          }
+        }
+        return draws;
+      };
+      const auto firstOf = [&](const mdl::EntityNode* node) {
+        const auto iRange = std::ranges::find_if(
+          renderer->unselectedRanges(),
+          [&](const auto& range) { return range.node == node; });
+        REQUIRE(iRange != renderer->unselectedRanges().end());
+        return GLint(iRange->fillFirst);
+      };
+
+      // the shells of the selected light and of the unselected pair differ in size
       renderFrame(outside, LightVolumeVisibility::All);
-      CHECK(
-        std::ranges::count_if(
-          recorder.events,
-          [](const auto& event) { return event.starts_with("multiDrawArrays GL_TRI"); })
-        == 2);
+      REQUIRE(renderer->unselectedRanges().size() == 3);
+      REQUIRE(renderer->selectedRanges().size() == 1);
+      const auto selectedFirst = GLint(renderer->selectedRanges().front().fillFirst);
+
+      SECTION("from -x: the far other light, the selected one, the near light")
+      {
+        CHECK(
+          triangleDraws()
+          == std::vector<Draw>{
+            {false, {firstOf(otherLight)}},
+            {true, {selectedFirst}},
+            {false, {firstOf(nearLight)}},
+          });
+      }
+
+      SECTION("from +x: the mirrored order")
+      {
+        auto fromPlusX = gl::PerspectiveCamera{};
+        fromPlusX.moveTo(vm::vec3f{3000, 0, 0});
+        renderFrame(fromPlusX, LightVolumeVisibility::All);
+        CHECK(
+          triangleDraws()
+          == std::vector<Draw>{
+            {false, {firstOf(nearLight)}},
+            {true, {selectedFirst}},
+            {false, {firstOf(otherLight)}},
+          });
+      }
+
+      SECTION("adjacent unselected lights share one run")
+      {
+        // from +y the selected light is the nearest, the other light the farthest
+        auto fromPlusY = gl::PerspectiveCamera{};
+        fromPlusY.moveTo(vm::vec3f{0, 3000, 0});
+        renderFrame(fromPlusY, LightVolumeVisibility::All);
+        CHECK(
+          triangleDraws()
+          == std::vector<Draw>{
+            {false, {firstOf(otherLight), firstOf(nearLight)}},
+            {true, {selectedFirst}},
+          });
+        CHECK(
+          std::ranges::find(recorder.events, "multiDrawArrays GL_TRIANGLES 2")
+          != recorder.events.end());
+      }
     }
 
     SECTION("disable the depth test for the fills in 2D")

@@ -18,6 +18,7 @@
  */
 
 #include "gl/Vertex.h"
+#include "mdl/Entity.h"
 #include "mdl/Light.h"
 #include "mdl/LightVolume.h"
 #include "render/LightVolumeMesh.h"
@@ -237,6 +238,15 @@ TEST_CASE("LightVolumeMesh")
       CHECK(lightVolumeFalloff(1.0, math) == 1.0);
     }
 
+    SECTION("an inner radius of 0.99 is not sharp yet")
+    {
+      math.enabled = true;
+      math.falloff = mdl::LightFalloff::Linear;
+      math.innerRadius = 0.99;
+      CHECK(lightVolumeFalloff(0.0, math) == 1.0);
+      CHECK(lightVolumeFalloff(1.0, math) == 0.0);
+    }
+
     SECTION("a light without math is the smooth stand-in")
     {
       CHECK(lightVolumeFalloff(0.25, math) == Catch::Approx(mdl::legacyFalloff(0.25)));
@@ -248,6 +258,11 @@ TEST_CASE("LightVolumeMesh")
   {
     auto light = mdl::LightProperties{};
     CHECK(lightVolumeAlphaCap(light, 0.45) == 0.45);
+
+    // the energy clamp of a legacy light means nothing
+    light.math.energyClamp = false;
+    CHECK(lightVolumeAlphaCap(light, 0.45) == 0.45);
+    light.math.energyClamp = true;
 
     light.math.enabled = true;
     CHECK(lightVolumeAlphaCap(light, 0.45) == 0.45);
@@ -263,10 +278,15 @@ TEST_CASE("LightVolumeMesh")
     CHECK(lightVolumeAlphaCap(light, 0.45) == 0.45);
   }
 
-  SECTION("lightVolumeHue and lightVolumeBrightness")
+  SECTION("lightVolumeHue")
   {
     CHECK(lightVolumeHue(vm::vec3d{2, 1, 0}) == vm::vec3d{1, 0.5, 0});
     CHECK(lightVolumeHue(vm::vec3d{0.5, 0.25, 0}) == vm::vec3d{1, 0.5, 0});
+    CHECK(lightVolumeHue(vm::vec3d{0, 0, 0}) == vm::vec3d{0, 0, 0});
+  }
+
+  SECTION("lightVolumeBrightness")
+  {
     CHECK(lightVolumeBrightness(vm::vec3d{2, 1, 0}) == 1.0);
     CHECK(lightVolumeBrightness(vm::vec3d{0.5, 0.25, 0}) == 0.5);
     CHECK(lightVolumeBrightness(vm::vec3d{0.1, 0, 0}) == 0.25);
@@ -419,6 +439,54 @@ TEST_CASE("LightVolumeMesh")
         mesh.lines, [](const auto& vertex) { return alphaOf(vertex) == 0.9f; }));
     }
 
+    SECTION("a point light without light_center draws its clip box only")
+    {
+      const auto mesh = buildLightVolumeMesh(linearPointLight(), atOrigin, style);
+      CHECK(mesh.lines.size() == 12 * 2);
+    }
+
+    SECTION("the frame places and turns the shells, scaled per axis")
+    {
+      const auto frame = mdl::lightFrame(
+        mdl::Entity{{
+          {"classname", "light"},
+          {"origin", "10 20 30"},
+          {"angles", "0 90 0"},
+        }},
+        mdl::EntityRotationPolicy::IdTech4);
+      REQUIRE(frame.origin == vm::vec3d{10, 20, 30});
+      REQUIRE(vm::length(frame.R * vm::vec3d{1, 0, 0} - vm::vec3d{1, 0, 0}) > 0.5);
+
+      auto light = linearPointLight();
+      light.radius = vm::vec3d{200, 100, 50};
+
+      const auto mesh = buildLightVolumeMesh(light, frame, style);
+      REQUIRE(mesh.triangles.size() == 4 * 224 * 3);
+      CHECK(std::ranges::all_of(mesh.triangles, [&](const auto& vertex) {
+        const auto local = vm::transpose(frame.R) * (positionOf(vertex) - frame.origin);
+        const auto t = vm::length(vm::vec3d{
+          local.x() / light.radius.x(),
+          local.y() / light.radius.y(),
+          local.z() / light.radius.z()});
+        return std::ranges::any_of(std::array{0.25, 0.5, 0.75, 1.0}, [&](const auto tj) {
+          return std::abs(t - tj) < 1e-3;
+        });
+      }));
+      CHECK(allTrianglesFaceOutwards(mesh, frame.origin));
+
+      const auto spot = linearSpotLight();
+      const auto spotMesh = buildLightVolumeMesh(spot, frame, style);
+      for (const auto x : {-132.0, 132.0})
+      {
+        for (const auto y : {-132.0, 132.0})
+        {
+          CHECK(hasLineVertex(spotMesh, frame.R * vm::vec3d{x, y, -264} + frame.origin));
+        }
+      }
+      CHECK(allTrianglesFaceOutwards(
+        spotMesh, frame.R * mdl::spotPoint(spot, 0, 0, 136) + frame.origin));
+    }
+
     SECTION("twoD scales the fill alphas by 0.6 and keeps the lines")
     {
       auto twoD = style;
@@ -463,6 +531,24 @@ TEST_CASE("LightVolumeMesh")
       light.center = vm::vec3d{2, 0, 0};
       const auto turned = buildLightVolumeMesh(light, frame, style);
       CHECK(hasLine(turned, vm::vec3d{10, 20, 30}, vm::vec3d{-38, 20, 30}));
+    }
+
+    SECTION("the hue colours the triangles and the lines")
+    {
+      auto light = mdl::LightProperties{};
+      light.type = mdl::LightType::Sun;
+      light.color = vm::vec3d{2, 1, 0};
+
+      const auto mesh = buildLightVolumeMesh(light, atOrigin, style);
+      REQUIRE(!mesh.triangles.empty());
+      REQUIRE(!mesh.lines.empty());
+
+      const auto hasHue = [](const auto& vertex) {
+        const auto color = gl::getVertexComponent<1>(vertex);
+        return color.x() == 1.0f && color.y() == 0.5f && color.z() == 0.0f;
+      };
+      CHECK(std::ranges::all_of(mesh.triangles, hasHue));
+      CHECK(std::ranges::all_of(mesh.lines, hasHue));
     }
 
     SECTION("an unclamped math sun at b = 1 stays at the alpha cap")
@@ -584,6 +670,53 @@ TEST_CASE("LightVolumeMesh")
       }
 
       CHECK(allTrianglesFaceOutwards(mesh, mdl::spotPoint(light, 0, 0, 136)));
+    }
+
+    SECTION("a spot light draws its frustum and its three outlines")
+    {
+      const auto mesh = buildLightVolumeMesh(linearSpotLight(), atOrigin, style);
+
+      // 4 frustum edges, the near and far rectangles, and the near, far and penumbra
+      // outlines of 32 segments each, the penumbra outline at the far cap only
+      CHECK(mesh.lines.size() == (4 + 4 + 4 + 3 * 32) * 2);
+      CHECK(std::ranges::all_of(
+        mesh.lines, [](const auto& vertex) { return alphaOf(vertex) == 0.9f; }));
+
+      const auto penumbraVertices =
+        std::ranges::count_if(mesh.lines, [&](const auto& vertex) {
+          const auto [u, v, d] = defaultSpotCoordinates(positionOf(vertex));
+          return std::abs(superellipseRadius(u, v, 2.0) - 0.85) < 1e-4;
+        });
+      CHECK(penumbraVertices == 32 * 2);
+      CHECK(std::ranges::all_of(mesh.lines, [&](const auto& vertex) {
+        const auto [u, v, d] = defaultSpotCoordinates(positionOf(vertex));
+        return std::abs(superellipseRadius(u, v, 2.0) - 0.85) >= 1e-4
+               || std::abs(d - 264.0) < 1e-3;
+      }));
+    }
+
+    SECTION("a penumbra of 0 or 1 draws no inner surface")
+    {
+      for (const auto penumbra : {0.0, 1.0})
+      {
+        auto light = linearSpotLight();
+        light.math.penumbra = penumbra;
+
+        const auto mesh = buildLightVolumeMesh(light, atOrigin, style);
+
+        // the outer cone and the near cap; no penumbra outline
+        CHECK(mesh.triangles.size() == (32 * 4 * 2 + 32) * 3);
+        CHECK(mesh.lines.size() == (4 + 4 + 4 + 2 * 32) * 2);
+
+        const auto isFinite = [](const auto& vertex) {
+          const auto p = gl::getVertexComponent<0>(vertex);
+          const auto c = gl::getVertexComponent<1>(vertex);
+          return std::isfinite(p.x()) && std::isfinite(p.y()) && std::isfinite(p.z())
+                 && std::isfinite(c.w());
+        };
+        CHECK(std::ranges::all_of(mesh.triangles, isFinite));
+        CHECK(std::ranges::all_of(mesh.lines, isFinite));
+      }
     }
 
     SECTION("a sharp spot light draws its far cap at half the cap")
@@ -716,11 +849,22 @@ TEST_CASE("LightVolumeMesh")
     unselected.outerShellOnly = true;
     unselected.shells = 1;
 
-    const auto selectedMillis = timeBuild(style);
-    const auto unselectedMillis = timeBuild(unselected);
+    // the fastest of five runs, so that a scheduling hiccup does not fail the gate
+    const auto fastestBuild = [&](const LightVolumeStyle& buildStyle) {
+      auto fastest = timeBuild(buildStyle);
+      for (auto run = 1; run < 5; ++run)
+      {
+        fastest = std::min(fastest, timeBuild(buildStyle));
+      }
+      return fastest;
+    };
+
+    const auto selectedMillis = fastestBuild(style);
+    const auto unselectedMillis = fastestBuild(unselected);
     WARN(
-      "500 point lights: " << selectedMillis << " ms at K = 4, " << unselectedMillis
-                           << " ms at K = 1 (outer shell only)");
+      "500 point lights, fastest of 5 runs: " << selectedMillis << " ms at K = 4, "
+                                              << unselectedMillis
+                                              << " ms at K = 1 (outer shell only)");
 
 #ifdef NDEBUG
     CHECK(unselectedMillis <= 2.0);
