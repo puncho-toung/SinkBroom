@@ -827,6 +827,85 @@ TEST_CASE("EntityRotation")
         .empty());
   }
 
+  SECTION("formatIdTech4Float")
+  {
+    // two decimals, as idDict::SetAngles and idDict::SetVector write each number; the
+    // angles written when an entity is rotated are formatted like this
+    CHECK(formatIdTech4Float(33.3, 2) == "33.3");
+    CHECK(formatIdTech4Float(0.05, 2) == "0.05");
+    CHECK(formatIdTech4Float(-0.004, 2) == "0");
+    CHECK(formatIdTech4Float(89.999, 2) == "90");
+    CHECK(formatIdTech4Float(300.0, 2) == "300");
+    CHECK(formatIdTech4Float(-0.0, 2) == "0");
+    CHECK(formatIdTech4Float(-12.5, 2) == "-12.5");
+    CHECK(formatIdTech4Float(-256.0, 2) == "-256");
+
+    // four decimals, as the light editor writes _color
+    CHECK(formatIdTech4Float(0.25, 4) == "0.25");
+    CHECK(formatIdTech4Float(0.123456, 4) == "0.1235");
+    CHECK(formatIdTech4Float(2.0, 4) == "2");
+    CHECK(formatIdTech4Float(-0.00004, 4) == "0");
+
+    // the trailing zeros of an integer are never stripped
+    CHECK(formatIdTech4Float(100.0, 1) == "100");
+  }
+
+  SECTION("idTech4AnglesUpdate")
+  {
+    SECTION("Writes angles and removes the properties the engine would read instead")
+    {
+      const auto light = Entity{{
+        {"classname", "light"},
+        {"light_rotation", "1 0 0 0 1 0 0 0 1"},
+        {"rotation", "1 0 0 0 1 0 0 0 1"},
+        {"light_angles", "0 0 0"},
+        {"angles", "0 0 0"},
+        {"angle", "45"},
+      }};
+      CHECK(
+        idTech4AnglesUpdate(light, vm::vec3d{30.0, 45.678, -0.001})
+        == EntityRotationUpdate{
+          EntityProperty{"angles", "30 45.68 0"},
+          {"light_rotation", "rotation", "light_angles", "angle"}});
+    }
+
+    SECTION("An entity without rotation properties only gets angles")
+    {
+      CHECK(
+        idTech4AnglesUpdate(Entity{{{"classname", "light"}}}, vm::vec3d{0.0, 90.0, 0.0})
+        == EntityRotationUpdate{EntityProperty{"angles", "0 90 0"}, {}});
+    }
+
+    SECTION("Another entity keeps light_rotation and light_angles")
+    {
+      const auto other = Entity{{
+        {"classname", "other"},
+        {"light_rotation", "1 0 0 0 1 0 0 0 1"},
+        {"rotation", "1 0 0 0 1 0 0 0 1"},
+        {"light_angles", "0 0 0"},
+        {"angle", "45"},
+      }};
+      CHECK(
+        idTech4AnglesUpdate(other, vm::vec3d{0.0, 0.0, 0.0})
+        == EntityRotationUpdate{
+          EntityProperty{"angles", "0 0 0"}, {"rotation", "angle"}});
+    }
+
+    SECTION("The rotation is read back from the written angles")
+    {
+      auto light = Entity{{{"classname", "light"}, {"angle", "45"}}};
+      applyEntityRotationUpdate(
+        light, idTech4AnglesUpdate(light, vm::vec3d{0.0, 90.0, 0.0}));
+
+      CHECK(
+        light.properties()
+        == std::vector<EntityProperty>{{"classname", "light"}, {"angles", "0 90 0"}});
+      CHECK(
+        entityRotation(light, EntityRotationPolicy::IdTech4) * vm::vec3d{1, 0, 0}
+        == vm::approx{vm::vec3d{0, 1, 0}, 1e-9});
+    }
+  }
+
   SECTION("applyEntityRotationUpdate")
   {
     auto entity = Entity{{
