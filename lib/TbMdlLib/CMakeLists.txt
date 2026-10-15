@@ -80,6 +80,7 @@ target_sources(TbMdlLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LayerNode.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LegacyModelDefinitionParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Light.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LightVolume.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LinkedGroupUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LinkSourceValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LinkTargetValidator.cpp
