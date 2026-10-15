@@ -4,6 +4,8 @@ EMBED_UTF8_MANIFEST(TbUiLibTest)
 target_sources(TbUiLibTest
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RunAllTests.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/SidebarTestUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/SidebarTestUtils.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ActionContext.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ActionInfo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Actions.cpp
@@ -16,6 +18,7 @@ target_sources(TbUiLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityPropertyModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_InputEvent.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LaunchGameEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightEditorPanel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialBrowserView.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialCollectionEditor.cpp
@@ -26,6 +29,8 @@ target_sources(TbUiLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_QVecUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_RecentDocuments.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SidebarManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SidebarPanel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SidebarPanels.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_KeyboardShortcutUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LayerListBox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SystemPaths.cpp
