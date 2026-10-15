@@ -254,6 +254,13 @@ TEST_CASE("LightVolumeMesh")
 
     light.math.energyClamp = false;
     CHECK(lightVolumeAlphaCap(light, 0.45) == 1.0);
+
+    light.type = mdl::LightType::Spot;
+    CHECK(lightVolumeAlphaCap(light, 0.45) == 1.0);
+
+    // a sun's energy clamp bounds only its colour
+    light.type = mdl::LightType::Sun;
+    CHECK(lightVolumeAlphaCap(light, 0.45) == 0.45);
   }
 
   SECTION("lightVolumeHue and lightVolumeBrightness")
@@ -458,6 +465,20 @@ TEST_CASE("LightVolumeMesh")
       CHECK(hasLine(turned, vm::vec3d{10, 20, 30}, vm::vec3d{-38, 20, 30}));
     }
 
+    SECTION("an unclamped math sun at b = 1 stays at the alpha cap")
+    {
+      auto light = mdl::LightProperties{};
+      light.type = mdl::LightType::Sun;
+      light.math.enabled = true;
+      light.math.energyClamp = false;
+
+      const auto mesh = buildLightVolumeMesh(light, atOrigin, style);
+      REQUIRE(mesh.triangles.size() == 12 * 3);
+      CHECK(std::ranges::all_of(mesh.triangles, [](const auto& vertex) {
+        return std::abs(alphaOf(vertex) - 0.45) < Tolerance;
+      }));
+    }
+
     SECTION("a spot light draws its cone, penumbra surface, caps and frustum")
     {
       const auto light = linearSpotLight();
@@ -538,8 +559,11 @@ TEST_CASE("LightVolumeMesh")
 
       CHECK(outerPoints.size() == 32 * (4 + 1));
       CHECK(innerPoints.size() == 32 * (4 + 1));
+
+      // the far cap's alpha is 0 (F(1) = 0), so it is not drawn
       CHECK(nearCapTriangles == 32);
-      CHECK(farCapTriangles == 32);
+      CHECK(farCapTriangles == 0);
+      CHECK(mesh.triangles.size() == (2 * 32 * 4 * 2 + 32) * 3);
 
       // the last ring is on the far cap at zNear + zFar
       CHECK(maxDepth == Catch::Approx(frustum->zNear + frustum->zFar));
@@ -560,6 +584,32 @@ TEST_CASE("LightVolumeMesh")
       }
 
       CHECK(allTrianglesFaceOutwards(mesh, mdl::spotPoint(light, 0, 0, 136)));
+    }
+
+    SECTION("a sharp spot light draws its far cap at half the cap")
+    {
+      auto light = linearSpotLight();
+      light.math.innerRadius = 0.999;
+
+      const auto mesh = buildLightVolumeMesh(light, atOrigin, style);
+      REQUIRE(mesh.triangles.size() == (2 * 32 * 4 * 2 + 2 * 32) * 3);
+
+      auto farCapVertices = std::size_t{0};
+      for (const auto& vertex : mesh.triangles)
+      {
+        if (std::abs(positionOf(vertex).z() + 264.0) < 1e-3)
+        {
+          ++farCapVertices;
+        }
+      }
+      // the far cap's 32 triangles plus the far ring's vertices of both cone surfaces
+      CHECK(farCapVertices == 32 * 3 + 2 * 32 * 3);
+
+      const auto farCapAlpha = std::ranges::count_if(mesh.triangles, [](const auto& v) {
+        return std::abs(positionOf(v).z() + 264.0) < 1e-3
+               && std::abs(alphaOf(v) - 0.5 * 0.45) < Tolerance;
+      });
+      CHECK(farCapAlpha == 32 * 3);
     }
 
     SECTION("an unselected spot light draws its outer cone only")

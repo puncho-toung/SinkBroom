@@ -467,11 +467,18 @@ void appendSpotLight(
       return color;
     };
 
-    // the near cap faces the apex, the far cap away from it
-    const auto nearCentre = toWorld(frame, mdl::spotPoint(light, 0, 0, depths.front()));
-    const auto farCentre = toWorld(frame, mdl::spotPoint(light, 0, 0, depths.back()));
-    addCap(mesh, nearCentre, outer, 0, capColor(0), !flip);
-    addCap(mesh, farCentre, outer, lastRing, capColor(lastRing), flip);
+    // the near cap faces the apex, the far cap away from it; a cap that adds nothing to
+    // any ray is not drawn, like the far cap of every light but a sharp one (F(1) = 0)
+    if (const auto nearColor = capColor(0); nearColor[3] > 0.0f)
+    {
+      const auto nearCentre = toWorld(frame, mdl::spotPoint(light, 0, 0, depths.front()));
+      addCap(mesh, nearCentre, outer, 0, nearColor, !flip);
+    }
+    if (const auto farColor = capColor(lastRing); farColor[3] > 0.0f)
+    {
+      const auto farCentre = toWorld(frame, mdl::spotPoint(light, 0, 0, depths.back()));
+      addCap(mesh, farCentre, outer, lastRing, farColor, flip);
+    }
   }
 
   const auto lineColor = vertexColor(hue, LineAlpha);
@@ -552,7 +559,11 @@ double lightVolumeFalloff(const double t, const mdl::MathLightProperties& math)
 
 double lightVolumeAlphaCap(const mdl::LightProperties& light, const double alphaCap)
 {
-  return light.math.enabled && !light.math.energyClamp ? 1.0 : alphaCap;
+  // a sun's energy clamp bounds only its HDR colour, not an unbounded core (I2.12)
+  return light.type != mdl::LightType::Sun && light.math.enabled
+             && !light.math.energyClamp
+           ? 1.0
+           : alphaCap;
 }
 
 vm::vec3d lightVolumeHue(const vm::vec3d& color)

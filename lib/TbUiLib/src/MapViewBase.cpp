@@ -1203,21 +1203,22 @@ void MapViewBase::invalidatePortalFileRenderer()
 void MapViewBase::renderLightVolumeFills(
   render::RenderContext& renderContext, render::RenderBatch& renderBatch)
 {
+  // both views enqueue the fills first, so the volumes are collected here once per frame
   collectLightVolumes(renderContext);
   m_lightVolumeRenderer->addFills(renderBatch);
 }
 
 void MapViewBase::renderLightVolumeLines(
-  render::RenderContext& renderContext, render::RenderBatch& renderBatch)
+  render::RenderContext&, render::RenderBatch& renderBatch)
 {
-  collectLightVolumes(renderContext);
+  // the lines share the arrays that renderLightVolumeFills collected for this frame
   m_lightVolumeRenderer->addLines(renderBatch);
 }
 
 void MapViewBase::collectLightVolumes(render::RenderContext& renderContext)
 {
-  // read once per frame, never per light; the renderer rebuilds only what is dirty and
-  // draws nothing unless the game config sets entities.lightEditor
+  // the preferences are read once per frame, never per light; the renderer rebuilds only
+  // what is dirty and draws nothing unless the game config sets entities.lightEditor
   const auto style = render::LightVolumeStyle{
     std::clamp(double(pref(Preferences::LightVolumeAlpha)), 0.0, 1.0),
     std::clamp(pref(Preferences::LightVolumeShells), 2, 8),

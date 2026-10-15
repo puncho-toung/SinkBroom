@@ -209,4 +209,11 @@ struct GameConfig
  */
 EntityPropertyConfig makeEntityPropertyConfig(const GameConfig& config);
 
+/**
+ * Whether the given game has the light editor (entities.lightEditor). The light editor
+ * panel, the light volumes, their View actions and their view editor radios exist only
+ * for such a game.
+ */
+bool hasLightEditor(const GameConfig& config);
+
 } // namespace tb::mdl

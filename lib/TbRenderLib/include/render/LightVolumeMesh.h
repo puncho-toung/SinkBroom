@@ -75,8 +75,8 @@ struct LightVolumeMesh
 double lightVolumeFalloff(double t, const mdl::MathLightProperties& math);
 
 /**
- * The alpha cap of a light: the given cap for a clamped or legacy light, 1 for an
- * unclamped math light.
+ * The alpha cap of a light: the given cap for a clamped or legacy light and for every
+ * sun, 1 for an unclamped math point or spot light.
  */
 double lightVolumeAlphaCap(const mdl::LightProperties& light, double alphaCap);
 

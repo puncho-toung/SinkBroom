@@ -550,7 +550,7 @@ QWidget* ViewEditor::createRendererPanel(QWidget* parent)
     m_entityLinkRadioGroup->addButton(radio, int(i));
   }
 
-  if (m_document.map().gameInfo().gameConfig.entityConfig.lightEditor)
+  if (mdl::hasLightEditor(m_document.map().gameInfo().gameConfig))
   {
     const auto LightVolumeModes = std::vector<std::tuple<QString, QString>>{
       {"Light volumes: Off", QString::fromStdString(Preferences::ShowLightVolumesOff)},

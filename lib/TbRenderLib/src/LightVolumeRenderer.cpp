@@ -93,11 +93,6 @@ LightRange appendLight(
   return range;
 }
 
-bool hasLightEditor(const mdl::Map& map)
-{
-  return map.gameInfo().gameConfig.entityConfig.lightEditor.has_value();
-}
-
 } // namespace
 
 LightVolumeRenderer::FillRenderable::FillRenderable(LightVolumeRenderer& renderer)
@@ -191,7 +186,7 @@ void LightVolumeRenderer::nodesDidChange(const std::vector<mdl::Node*>& nodes)
 void LightVolumeRenderer::collect(
   const mdl::Map& map, LightVolumeVisibility visibility, const LightVolumeStyle& style)
 {
-  if (!hasLightEditor(map))
+  if (!mdl::hasLightEditor(map.gameInfo().gameConfig))
   {
     visibility = LightVolumeVisibility::Off;
   }

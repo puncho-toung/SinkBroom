@@ -49,7 +49,7 @@ enum class PanelState
 
 PanelState panelState(const mdl::Map& map)
 {
-  if (!map.gameInfo().gameConfig.entityConfig.lightEditor)
+  if (!mdl::hasLightEditor(map.gameInfo().gameConfig))
   {
     return PanelState::NoLightEditor;
   }

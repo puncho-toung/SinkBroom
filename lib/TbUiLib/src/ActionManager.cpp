@@ -62,7 +62,7 @@ namespace
 bool hasLightEditor(const ActionExecutionContext& context)
 {
   return context.hasDocument()
-         && context.map().gameInfo().gameConfig.entityConfig.lightEditor.has_value();
+         && mdl::hasLightEditor(context.map().gameInfo().gameConfig);
 }
 
 } // namespace

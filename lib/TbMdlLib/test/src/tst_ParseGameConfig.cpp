@@ -1483,6 +1483,18 @@ TEST_CASE("GameConfigParser")
       CHECK(lightEditorConfig != config);
       CHECK(kdl::str_to_string(lightEditorConfig).find("idtech4") != std::string::npos);
     }
+
+    SECTION("hasLightEditor")
+    {
+      const auto withoutKey = parseGameConfig(makeConfig(""));
+      REQUIRE(withoutKey.is_success());
+      CHECK(!hasLightEditor(withoutKey.value()));
+
+      const auto withKey = parseGameConfig(makeConfig(R"%(,
+        "lightEditor": "idtech4")%"));
+      REQUIRE(withKey.is_success());
+      CHECK(hasLightEditor(withKey.value()));
+    }
   }
 
   SECTION("material scripts")

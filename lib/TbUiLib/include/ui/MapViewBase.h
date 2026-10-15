@@ -368,7 +368,8 @@ private: // implement RenderView interface
 protected:
   /**
    * Enqueue the fills and the lines of the light volumes; each view calls them at its
-   * own point in the frame.
+   * own point in the frame, the fills first: they collect the volumes for the frame,
+   * which the lines then share.
    */
   void renderLightVolumeFills(
     render::RenderContext& renderContext, render::RenderBatch& renderBatch);
