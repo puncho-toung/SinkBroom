@@ -80,6 +80,7 @@ class MapDocument;
 class MapViewBase;
 class MapViewToolBox;
 class ObjExportDialog;
+class SidebarManager;
 class SignalDelayer;
 class SwitchableMapViewContainer;
 class Tool;
@@ -108,6 +109,7 @@ private:
   InfoPanel* m_infoPanel = nullptr;
   Console* m_console = nullptr;
   Inspector* m_inspector = nullptr;
+  SidebarManager* m_sidebarManager = nullptr;
 
   QComboBox* m_gridChoice = nullptr;
   QLabel* m_statusBarLabel = nullptr;

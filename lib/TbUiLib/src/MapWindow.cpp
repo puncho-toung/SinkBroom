@@ -23,9 +23,11 @@
 #include <QChildEvent>
 #include <QClipboard>
 #include <QComboBox>
+#include <QDockWidget>
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QLabel>
+#include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPushButton>
@@ -104,6 +106,9 @@
 #include "ui/RecentDocuments.h"
 #include "ui/RenderView.h"
 #include "ui/ReplaceMaterialDialog.h"
+#include "ui/SidebarManager.h"
+#include "ui/SidebarPanel.h"
+#include "ui/SidebarPanels.h"
 #include "ui/SignalDelayer.h"
 #include "ui/Splitter.h"
 #include "ui/SwitchableMapViewContainer.h"
@@ -203,6 +208,7 @@ MapWindow::MapWindow(AppController& appController, std::unique_ptr<MapDocument> 
 
   restoreWidgetGeometry(this);
   restoreWidgetState(this);
+  m_sidebarManager->redockOffScreenDocks();
 
   setAcceptDrops(true);
 
@@ -232,6 +238,14 @@ MapWindow::~MapWindow()
 
   m_mapView->toolBox().deactivateCurrentTool();
 
+  // Delete the sidebar docks, and with them their panels, while the document and the tool
+  // box that the panels observe still exist, and before the snapshot of the children
+  // below, which deletes a child twice if one of its siblings destroys it first.
+  for (auto* dock : m_sidebarManager->docks())
+  {
+    delete dock;
+  }
+
   m_notifierConnection.disconnect();
   removeRecentDocumentsMenu();
 
@@ -255,6 +269,7 @@ void MapWindow::positionOnScreen(QWidget* reference)
 {
   restoreWidgetGeometry(this);
   restoreWidgetState(this);
+  m_sidebarManager->redockOffScreenDocks();
   if (reference)
   {
     const auto offset = QApplication::style()->pixelMetric(QStyle::PM_TitleBarHeight);
@@ -328,6 +343,14 @@ void MapWindow::createMenus()
   m_undoAction = createMenuResult.undoAction;
   m_redoAction = createMenuResult.redoAction;
   m_rerunAction = createMenuResult.rerunAction;
+
+  // The toggle actions belong to the docks and are not in m_actionMap, so
+  // updateActionState leaves them alone; each dock keeps its own action checked.
+  contract_assert(createMenuResult.sidebarMenu != nullptr);
+  for (auto* dock : m_sidebarManager->docks())
+  {
+    createMenuResult.sidebarMenu->addAction(dock->toggleViewAction());
+  }
 
   addRecentDocumentsMenu();
 }
@@ -483,6 +506,16 @@ void MapWindow::createGui()
   restoreWidgetState(m_vSplitter);
   restoreWidgetState(m_inspector);
   restoreWidgetState(m_infoPanel);
+
+  // The docks must exist before createMenus lists them in View > Sidebar and before the
+  // window state that places them is restored.
+  m_sidebarManager = new SidebarManager{*this};
+  const auto sidebarContext =
+    SidebarContext{m_appController, document(), m_mapView->toolBox()};
+  for (auto& panel : createSidebarPanels(sidebarContext))
+  {
+    m_sidebarManager->registerPanel(std::move(panel));
+  }
 }
 
 void MapWindow::createToolBar()

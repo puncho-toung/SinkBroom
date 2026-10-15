@@ -38,6 +38,7 @@ void updateActionKeySequence(QAction& qAction, const Action& tAction);
 struct PopulateMenuResult
 {
   QMenu* recentDocumentsMenu = nullptr;
+  QMenu* sidebarMenu = nullptr;
   QAction* undoAction = nullptr;
   QAction* redoAction = nullptr;
   QAction* pasteAction = nullptr;

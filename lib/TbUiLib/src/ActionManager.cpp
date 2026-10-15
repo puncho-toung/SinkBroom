@@ -1916,6 +1916,8 @@ void ActionManager::createViewMenu()
       return context.hasDocument() && context.mapWindow().currentViewMaximized();
     },
   }));
+  // filled by MapWindow with the toggle actions of its sidebar docks
+  viewMenu.addMenu("Sidebar", MenuEntryType::Sidebar);
   viewMenu.addSeparator();
   viewMenu.addItem(addAction(Action{
     "Menu/File/Preferences...",

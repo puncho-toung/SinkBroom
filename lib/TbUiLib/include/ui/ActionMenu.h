@@ -40,6 +40,7 @@ enum class MenuEntryType
   Paste,
   PasteAtOriginalPosition,
   Rerun,
+  Sidebar,
   None
 };
 
