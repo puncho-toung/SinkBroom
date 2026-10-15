@@ -25,6 +25,7 @@ target_sources(TbUiLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_QStringUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_QVecUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_RecentDocuments.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SidebarManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_KeyboardShortcutUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LayerListBox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SystemPaths.cpp
@@ -75,6 +76,7 @@ set(TEST_FIXTURE_DEST_DIR $<TARGET_FILE_DIR:TbUiLibTest>/fixture)
 add_custom_command(TARGET TbUiLibTest POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E rm -rf "${TEST_FIXTURE_DEST_DIR}"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TEST_FIXTURE_SOURCE_DIR}" "${TEST_FIXTURE_DEST_DIR}/test"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/../../TbMdlLib/test/fixture/mdl/Game/Doom3BFG" "${TEST_FIXTURE_DEST_DIR}/test/mdl/Game/Doom3BFG"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TB_RESOURCE_DIR}/games" "${TEST_FIXTURE_DEST_DIR}/games"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TB_RESOURCE_DIR}/games-testing" "${TEST_FIXTURE_DEST_DIR}/games"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TB_RESOURCE_DIR}/graphics/images" "$<TARGET_FILE_DIR:TbUiLibTest>/images"

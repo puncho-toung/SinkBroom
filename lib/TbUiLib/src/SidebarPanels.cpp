@@ -19,15 +19,17 @@
 
 #include "ui/SidebarPanels.h"
 
+#include "ui/LightEditorPanel.h"
 #include "ui/SidebarPanel.h"
 
 namespace tb::ui
 {
 
 std::vector<std::unique_ptr<SidebarPanel>> createSidebarPanels(
-  [[maybe_unused]] const SidebarContext& context)
+  const SidebarContext& context)
 {
   auto panels = std::vector<std::unique_ptr<SidebarPanel>>{};
+  panels.push_back(std::make_unique<LightEditorPanel>(context));
   // add future panels here, one line each
   return panels;
 }

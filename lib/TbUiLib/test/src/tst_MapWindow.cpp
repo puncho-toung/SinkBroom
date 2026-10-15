@@ -17,8 +17,12 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QDockWidget>
+#include <QMenu>
+#include <QMenuBar>
 
 #include "TestEnvironment.h"
 #include "base/Result.h"
@@ -34,12 +38,16 @@
 #include "mdl/MapFormat.h"
 #include "ui/AppControllerFixture.h"
 #include "ui/CatchConfig.h"
+#include "ui/LightEditorPanel.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
 #include "ui/MapView2D.h"
 #include "ui/MapWindow.h"
 
 #include "vm/vec.h"
+
+#include <algorithm>
+#include <iterator>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -194,6 +202,37 @@ TEST_CASE("MapWindow")
       CHECK(camera.position() == position);
       checkCameras(vm::bbox3d{8192.0});
     }
+  }
+
+  SECTION("sidebar docks are listed in View > Sidebar")
+  {
+    auto* dock = window.findChild<QDockWidget*>("MapWindow_Sidebar_LightEditor");
+    REQUIRE(dock != nullptr);
+    CHECK(dock->windowTitle() == "Light Editor");
+    CHECK(qobject_cast<LightEditorPanel*>(dock->widget()) != nullptr);
+
+    QMenu* viewMenu = nullptr;
+    for (auto* action : window.menuBar()->actions())
+    {
+      if (action->text() == "View")
+      {
+        viewMenu = QMenu::menuInAction(action);
+      }
+    }
+    REQUIRE(viewMenu != nullptr);
+
+    // the submenu follows Maximize Current View
+    const auto viewActions = viewMenu->actions();
+    const auto iMaximize = std::ranges::find_if(viewActions, [](const auto* action) {
+      return action->text() == "Maximize Current View";
+    });
+    REQUIRE(iMaximize != viewActions.end());
+    REQUIRE(std::next(iMaximize) != viewActions.end());
+
+    auto* sidebarMenu = QMenu::menuInAction(*std::next(iMaximize));
+    REQUIRE(sidebarMenu != nullptr);
+    CHECK(sidebarMenu->title() == "Sidebar");
+    CHECK(sidebarMenu->actions() == QList<QAction*>{dock->toggleViewAction()});
   }
 
   SECTION("canReloadMaterialCollections returns false when resources need processing")
