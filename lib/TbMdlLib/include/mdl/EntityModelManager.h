@@ -95,6 +95,13 @@ public:
   void clear();
   void reloadShaders(kdl::task_manager& taskManager);
 
+  /**
+   * The shaders that the last reloadShaders loaded, empty before the first. Every
+   * reloadShaders replaces the pointer, so a caller copies what it needs at once and
+   * keeps neither the pointer nor a reference into the shaders.
+   */
+  std::shared_ptr<const IndexedShaders> shaders() const;
+
   gl::MaterialRenderer* renderer(const ModelSpecification& spec) const;
 
   const EntityModelFrame* frame(const ModelSpecification& spec) const;

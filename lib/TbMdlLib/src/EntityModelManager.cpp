@@ -76,6 +76,11 @@ void EntityModelManager::reloadShaders(kdl::task_manager& taskManager)
     | kdl::value_or(std::vector<Quake3Shader>{}));
 }
 
+std::shared_ptr<const IndexedShaders> EntityModelManager::shaders() const
+{
+  return m_shaders;
+}
+
 gl::MaterialRenderer* EntityModelManager::renderer(const ModelSpecification& spec) const
 {
   if (auto* entityModel = model(spec.path))

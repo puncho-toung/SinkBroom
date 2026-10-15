@@ -27,7 +27,10 @@
 #include "kd/path_hash.h"
 
 #include <filesystem>
+#include <initializer_list>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -97,6 +100,15 @@ public:
    */
   const std::unordered_set<std::filesystem::path, kdl::path_hash>& diffuseImages() const;
 };
+
+/**
+ * Returns the paths of the given shaders that start with one of the given prefixes,
+ * ignoring case, as copied strings, e.g. the materials under "lights/" and "fogs/" that
+ * a Doom 3 light can project. The paths are sorted ignoring case; of paths that differ
+ * only in case, the first one is kept, the one that findShader finds.
+ */
+std::vector<std::string> shaderNamesWithPrefix(
+  const IndexedShaders& shaders, std::initializer_list<std::string_view> prefixes);
 
 /**
  * Loads the material at the given path. If one of the given shaders has the path without

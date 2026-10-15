@@ -975,6 +975,28 @@ const std::unordered_set<std::filesystem::path, kdl::path_hash>& IndexedShaders:
   return m_diffuseImages;
 }
 
+std::vector<std::string> shaderNamesWithPrefix(
+  const IndexedShaders& shaders, const std::initializer_list<std::string_view> prefixes)
+{
+  auto names = std::vector<std::string>{};
+  for (const auto& shader : shaders.shaders())
+  {
+    auto name = shader.shaderPath.generic_string();
+    if (std::ranges::any_of(prefixes, [&](const auto prefix) {
+          return kdl::ci::str_is_prefix(name, prefix);
+        }))
+    {
+      names.push_back(std::move(name));
+    }
+  }
+
+  // stable, so that of the paths that differ only in case the first one stays first
+  std::stable_sort(names.begin(), names.end(), kdl::ci::string_less{});
+  names.erase(
+    std::unique(names.begin(), names.end(), kdl::ci::string_equal{}), names.end());
+  return names;
+}
+
 Result<gl::Material> loadMaterial(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
