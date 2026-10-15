@@ -189,6 +189,7 @@ inline const GameInfo Doom3BFGGameInfo = detail::makeGameInfoFixture(
             .brushEntityModelKey = "model",
           },
         .rotationPolicy = EntityRotationPolicy::IdTech4,
+        .lightEditor = "idtech4",
       },
     .faceAttribsConfig = {},
     .smartTags = {},

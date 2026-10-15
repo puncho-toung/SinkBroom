@@ -107,6 +107,9 @@ struct EntityConfig
   // unique entity names and model = name; absent unless the game turns them on
   std::optional<EntityNamingConfig> naming;
   EntityRotationPolicy rotationPolicy = EntityRotationPolicy::Quake;
+  // the light key schema the light editor panel edits; absent unless the game turns the
+  // panel on ("idtech4" is the only schema)
+  std::optional<std::string> lightEditor;
 
   kdl_reflect_decl(
     EntityConfig,
@@ -116,7 +119,8 @@ struct EntityConfig
     setDefaultProperties,
     modelConvention,
     naming,
-    rotationPolicy);
+    rotationPolicy,
+    lightEditor);
 };
 
 struct FlagConfig

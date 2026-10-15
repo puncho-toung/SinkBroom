@@ -503,6 +503,25 @@ EntityRotationPolicy parseEntityRotationPolicy(
       "Unknown entity rotation policy '{}'; valid values are: quake, idtech4", name)};
 }
 
+std::optional<std::string> parseLightEditor(
+  const el::EvaluationContext& context, const el::Value& value)
+{
+  if (const auto lightEditor = value.atOrDefault(context, "lightEditor");
+      lightEditor != el::Value::Null)
+  {
+    const auto& name = lightEditor.stringValue(context);
+    if (name == "idtech4")
+    {
+      return name;
+    }
+
+    throw ParserException{
+      context.location(lightEditor),
+      fmt::format("Unknown lightEditor '{}'; valid values are: idtech4", name)};
+  }
+  return EntityConfig{}.lightEditor;
+}
+
 EntityConfig parseEntityConfig(
   const el::EvaluationContext& context, const el::Value& value)
 {
@@ -526,6 +545,7 @@ EntityConfig parseEntityConfig(
     parseModelConvention(context, value.atOrDefault(context, "modelConvention")),
     parseEntityNamingConfig(context, value.atOrDefault(context, "naming")),
     parseEntityRotationPolicy(context, value.atOrDefault(context, "rotation")),
+    parseLightEditor(context, value),
   };
 }
 
