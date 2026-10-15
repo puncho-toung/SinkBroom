@@ -60,6 +60,16 @@ const auto sunProperties = std::vector<EntityProperty>{
   {"light_radius", "2048 2048 1024"},
 };
 
+// parallel wins over the target keys, which the engine then reads but never uses
+const auto sunWithUnreadTargetProperties = std::vector<EntityProperty>{
+  {"classname", "light"},
+  {"origin", "0 0 0"},
+  {"parallel", "1"},
+  {"light_target", "0 0 -256"},
+  {"light_up", "0 -128 0"},
+  {"light_right", "-100 0 0"},
+};
+
 const auto mathLightProperties = std::vector<EntityProperty>{
   {"classname", "light"},
   {"origin", "0 0 0"},
@@ -157,34 +167,56 @@ TEST_CASE("Light")
       });
   }
 
-  SECTION("name tables")
+  // the names ML_WriteToDict writes; ML_ParseFromDict compares them without regard to
+  // case
+
+  SECTION("mathTypeName")
   {
-    // the names ML_WriteToDict writes
     CHECK(mathTypeName(LightType::Point) == "point");
     CHECK(mathTypeName(LightType::Spot) == "spot");
     CHECK(mathTypeName(LightType::Sun) == "sun");
+  }
+
+  SECTION("parseMathTypeName")
+  {
+    CHECK(parseMathTypeName("SPOT") == LightType::Spot);
+    CHECK(parseMathTypeName("point") == LightType::Point);
+    CHECK(parseMathTypeName("Sun") == LightType::Sun);
+    CHECK(parseMathTypeName("parallel") == LightType::Sun);
+    CHECK(parseMathTypeName("bogus") == std::nullopt);
+  }
+
+  SECTION("lightFalloffName")
+  {
     CHECK(lightFalloffName(LightFalloff::InvSquare) == "invsquare");
     CHECK(lightFalloffName(LightFalloff::Linear) == "linear");
     CHECK(lightFalloffName(LightFalloff::Smooth) == "smooth");
     CHECK(lightFalloffName(LightFalloff::Exponential) == "exponential");
     CHECK(lightFalloffName(LightFalloff::InvSquareClamped) == "invsquare_clamped");
+  }
+
+  SECTION("parseLightFalloffName")
+  {
+    CHECK(parseLightFalloffName("Invsquare_Clamped") == LightFalloff::InvSquareClamped);
+    CHECK(parseLightFalloffName("EXPONENTIAL") == LightFalloff::Exponential);
+    CHECK(parseLightFalloffName("linear") == LightFalloff::Linear);
+    CHECK(parseLightFalloffName("") == std::nullopt);
+  }
+
+  SECTION("lightPatternName")
+  {
     CHECK(lightPatternName(LightPattern::None) == "none");
     CHECK(lightPatternName(LightPattern::Subsurface) == "subsurface");
     CHECK(lightPatternName(LightPattern::Ice) == "ice");
     CHECK(lightPatternName(LightPattern::Caustic) == "caustic");
     CHECK(lightPatternName(LightPattern::Banded) == "banded");
     CHECK(lightPatternName(LightPattern::Granular) == "granular");
+  }
 
-    // ML_ParseFromDict compares without regard to case
-    CHECK(parseMathTypeName("SPOT") == LightType::Spot);
-    CHECK(parseMathTypeName("point") == LightType::Point);
-    CHECK(parseMathTypeName("Sun") == LightType::Sun);
-    CHECK(parseMathTypeName("parallel") == LightType::Sun);
-    CHECK(parseMathTypeName("bogus") == std::nullopt);
-    CHECK(parseLightFalloffName("Invsquare_Clamped") == LightFalloff::InvSquareClamped);
-    CHECK(parseLightFalloffName("EXPONENTIAL") == LightFalloff::Exponential);
-    CHECK(parseLightFalloffName("") == std::nullopt);
+  SECTION("parseLightPatternName")
+  {
     CHECK(parseLightPatternName("Granular") == LightPattern::Granular);
+    CHECK(parseLightPatternName("none") == LightPattern::None);
     CHECK(parseLightPatternName("noise") == std::nullopt);
   }
 
@@ -323,10 +355,35 @@ TEST_CASE("Light")
       CHECK_FALSE(parse(defaultSpotProperties).badTargetInfo);
     }
 
-    SECTION("A spot wins over parallel")
+    SECTION("parallel makes a sun even with all three target keys")
+    {
+      // R_DeriveLightData prefers the parallel projection to the spot projection
+      const auto light = parse(with(defaultSpotProperties, {{"parallel", "1"}}));
+      CHECK(light.type == LightType::Sun);
+      CHECK_FALSE(light.badTargetInfo);
+      // the target keys stay unread, like a spot's radius
+      CHECK(light.target == vm::vec3d{0, 0, 0});
+      CHECK(light.right == vm::vec3d{0, 0, 0});
+      CHECK(light.up == vm::vec3d{0, 0, 0});
+      CHECK(light.radius == vm::vec3d{300, 300, 300});
+    }
+
+    SECTION("Partial target keys leave parallel unread")
+    {
+      // the engine returns on bad target info before it reads parallel
+      const auto light = parse(
+        with(defaultPointProperties, {{"light_target", "0 0 -256"}, {"parallel", "1"}}));
+      CHECK(light.type == LightType::Point);
+      CHECK(light.badTargetInfo);
+    }
+
+    SECTION("parallel 0 is no sun")
     {
       CHECK(
-        parse(with(defaultSpotProperties, {{"parallel", "1"}})).type == LightType::Spot);
+        parse(with(defaultPointProperties, {{"parallel", "0"}})).type
+        == LightType::Point);
+      CHECK(
+        parse(with(defaultSpotProperties, {{"parallel", "0"}})).type == LightType::Spot);
     }
 
     SECTION("light_origin wins over origin")
@@ -378,6 +435,14 @@ TEST_CASE("Light")
         parse(with(defaultPointProperties, {{"light_radius", "200"}}));
       CHECK(oneNumber.radius == vm::vec3d{200, 0, 0});
       CHECK_FALSE(oneNumber.equalRadius);
+    }
+
+    SECTION("An equal light_radius")
+    {
+      const auto light =
+        parse(with(defaultPointProperties, {{"light_radius", "200 200 200"}}));
+      CHECK(light.radius == vm::vec3d{200, 200, 200});
+      CHECK(light.equalRadius);
     }
 
     SECTION("light_center")
@@ -781,6 +846,7 @@ TEST_CASE("Light")
              with(defaultPointProperties, {{"origin", "100.000 0 0"}}),
              with(mathLightProperties, {{"math_type", "sun"}, {"style", "-1"}}),
              with(defaultPointProperties, {{"math_enabled", "0"}, {"math_type", "spot"}}),
+             sunWithUnreadTargetProperties,
            })
       {
         CAPTURE(properties);
@@ -817,18 +883,70 @@ TEST_CASE("Light")
       CHECK(lightDiff.remove.empty());
     }
 
+    SECTION("A switch from point to spot reads back as the edited light")
+    {
+      for (const auto& properties : std::vector<std::vector<EntityProperty>>{
+             defaultPointProperties,
+             with(defaultPointProperties, {{"light_radius", "300 300 300"}}),
+           })
+      {
+        CAPTURE(properties);
+        const auto entity = Entity{properties};
+
+        const auto spot = defaultLight(LightType::Spot, parseLightProperties(entity));
+        CHECK(
+          parseLightProperties(
+            applyLightPropertyUpdate(entity, lightKeyDiff(entity, spot)))
+          == spot);
+
+        auto explicitSpot = spot;
+        explicitSpot.explicitStartEnd = true;
+        explicitSpot.start = vm::vec3d{0, 0, -32};
+        CHECK(
+          parseLightProperties(
+            applyLightPropertyUpdate(entity, lightKeyDiff(entity, explicitSpot)))
+          == explicitSpot);
+      }
+    }
+
+    SECTION("A colour edit of a sun with unread target keys writes only _color")
+    {
+      const auto entity = Entity{sunWithUnreadTargetProperties};
+      auto edited = parseLightProperties(entity);
+      REQUIRE(edited.type == LightType::Sun);
+      edited.color = vm::vec3d{2, 2, 2};
+
+      const auto diff = lightKeyDiff(entity, edited);
+      CHECK(
+        diff
+        == LightPropertyUpdate{
+          std::vector<EntityProperty>{{"_color", "2 2 2"}}, std::vector<std::string>{}});
+      CHECK(parseLightProperties(applyLightPropertyUpdate(entity, diff)) == edited);
+    }
+
+    SECTION("A sun with unread target keys switched to a spot")
+    {
+      const auto entity = Entity{sunWithUnreadTargetProperties};
+      const auto spot = defaultLight(LightType::Spot, parseLightProperties(entity));
+
+      // light_target and light_up are already the default spot's
+      const auto diff = lightKeyDiff(entity, spot);
+      CHECK(diff.set == std::vector<EntityProperty>{{"light_right", "-128 0 0"}});
+      CHECK(diff.remove == std::vector<std::string>{"parallel"});
+      CHECK(parseLightProperties(applyLightPropertyUpdate(entity, diff)) == spot);
+    }
+
     SECTION("A switch from spot to point removes what would be read again")
     {
-      const auto entity = Entity{
-        with(defaultSpotProperties, {{"parallel", "1"}, {"light_center", "0 0 10"}})};
+      const auto entity =
+        Entity{with(defaultSpotProperties, {{"light_center", "0 0 10"}})};
 
       const auto diff = lightKeyDiff(
         entity, defaultLight(LightType::Point, parseLightProperties(entity)));
       CHECK(diff.set == std::vector<EntityProperty>{{"light_radius", "300 300 300"}});
       CHECK(
         sorted(diff.remove)
-        == sorted(
-          {"light_target", "light_up", "light_right", "parallel", "light_center"}));
+        == sorted({"light_target", "light_up", "light_right", "light_center"}));
 
       const auto changed = applyLightPropertyUpdate(entity, diff);
       CHECK(

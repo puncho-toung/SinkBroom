@@ -195,6 +195,25 @@ TEST_CASE("LightVolume")
       CHECK(frustum->farCorners[0].z() == Catch::Approx(-120.0));
     }
 
+    SECTION("The engine's minima apply to explicit start and end points")
+    {
+      // SPOT_LIGHT_MIN_Z_NEAR 8 and SPOT_LIGHT_MIN_Z_FAR 16 of
+      // R_ComputeSpotLightProjectionMatrix
+      auto light = explicitSpot;
+      light.start = vm::vec3d{0, 0, 50};
+      light.end = vm::vec3d{0, 0, -10};
+
+      const auto frustum = spotLightFrustum(light);
+      REQUIRE(frustum);
+      CHECK(frustum->zNear == 8.0);
+      CHECK(frustum->zFar == 16.0);
+      for (const auto& corner : frustum->farCorners)
+      {
+        CHECK(vm::dot(corner, frustum->n) == Catch::Approx(24.0));
+      }
+      CHECK(frustum->farCorners[2] == vm::approx{vm::vec3d{-12, -12, -24}, Tolerance});
+    }
+
     SECTION("Degenerate spot lights have no frustum")
     {
       auto noTarget = defaultSpot;
@@ -354,6 +373,16 @@ TEST_CASE("LightVolume")
         frustum->farCorners[2]
         != vm::approx{P * (d / vm::dot(P, frustum->n)), Tolerance});
     }
+
+    SECTION("A degenerate spot light gives the apex")
+    {
+      auto noTarget = defaultSpot;
+      noTarget.target = vm::vec3d{0, 0, 0};
+      CHECK(spotPoint(noTarget, 1.0, 1.0, 100.0) == vm::vec3d{0, 0, 0});
+      CHECK(
+        spotPoint(withRight(defaultSpot, defaultSpot.up), 1.0, -1.0, 100.0)
+        == vm::vec3d{0, 0, 0});
+    }
   }
 
   SECTION("lightEditBox")
@@ -400,6 +429,33 @@ TEST_CASE("LightVolume")
         lightFromEditBox(rotatedPoint, R, *lightEditBox(rotatedPoint));
       CHECK(rotatedResult.origin == vm::approx{rotatedPoint.origin, Exact});
       CHECK(rotatedResult.radius == vm::approx{rotatedPoint.radius, Exact});
+    }
+
+    SECTION("An off-centre box moves a rotated point light in its own frame")
+    {
+      auto rotatedPoint = defaultPoint;
+      rotatedPoint.origin = vm::vec3d{64, 32, 16};
+      rotatedPoint.radius = vm::vec3d{300, 200, 100};
+      rotatedPoint.equalRadius = false;
+
+      // angles 0 90 0 turn local +X to world +Y and local +Y to world -X
+      const auto R = rotationOf({{"classname", "light"}, {"angles", "0 90 0"}});
+      const auto offset = vm::vec3d{10, 20, 30};
+      const auto box = lightEditBox(rotatedPoint)->translate(offset);
+
+      const auto moved = lightFromEditBox(rotatedPoint, R, box);
+      CHECK(moved.origin == vm::approx{vm::vec3d{64 - 20, 32 + 10, 16 + 30}, Exact});
+      CHECK(moved.radius == vm::approx{rotatedPoint.radius, Exact});
+
+      // and back
+      const auto back =
+        lightFromEditBox(moved, R, lightEditBox(moved)->translate(-offset));
+      CHECK(back.origin == vm::approx{rotatedPoint.origin, Exact});
+      CHECK(back.radius == vm::approx{rotatedPoint.radius, Exact});
+    }
+
+    SECTION("Round trips of spot lights")
+    {
 
       // the default spot light
       const auto defaultBox = *lightEditBox(defaultSpot);
@@ -559,6 +615,32 @@ TEST_CASE("LightVolume")
       vm::vec3d{1000, 0, 0}, rotationOf({{"classname", "light"}, {"angles", "0 90 0"}})};
     CHECK(containsPoint(longPoint, turned, vm::vec3d{1000, 250, 0}));
     CHECK_FALSE(containsPoint(longPoint, turned, vm::vec3d{1250, 0, 0}));
+
+    SECTION("An off-centre spot light")
+    {
+      const auto skewed = withRight(
+        defaultSpot,
+        128.0
+          * vm::vec3d{
+            -std::cos(vm::to_radians(30.0)), 0, -std::sin(vm::to_radians(30.0))});
+      REQUIRE_FALSE(isCentredSpot(skewed));
+
+      CHECK(containsPoint(skewed, atOrigin, spotPoint(skewed, 0.99, 0.99, 200.0)));
+      CHECK_FALSE(containsPoint(skewed, atOrigin, spotPoint(skewed, 1.05, 0.0, 200.0)));
+    }
+
+    SECTION("A turned spot light")
+    {
+      // a pitch of 90 turns the beam, local -Z, to world -X
+      const auto R = rotationOf({{"classname", "light"}, {"angles", "90 0 0"}});
+      REQUIRE(R * vm::vec3d{0, 0, -1} == vm::approx{vm::vec3d{-1, 0, 0}, Exact});
+      const auto frame = LightFrame{vm::vec3d{1000, 0, 0}, R};
+
+      CHECK(containsPoint(defaultSpot, frame, vm::vec3d{900, 0, 0}));
+      // inside if the rotation were ignored
+      CHECK_FALSE(containsPoint(defaultSpot, frame, vm::vec3d{1000, 0, -100}));
+      CHECK_FALSE(containsPoint(defaultSpot, frame, vm::vec3d{1100, 0, 0}));
+    }
   }
 
   SECTION("lightFalloff")

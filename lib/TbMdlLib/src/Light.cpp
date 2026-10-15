@@ -407,9 +407,28 @@ LightProperties parseLightProperties(const Entity& entity)
   const auto up = reader.vector(LightUp);
   const auto right = reader.vector(LightRight);
 
-  if (target && up && right)
+  const auto hasAllTargetInfo = target && up && right;
+  const auto hasSomeTargetInfo = target || up || right;
+
+  // The order of the engine: with some, but not all, of the target keys it prints "bad
+  // target info" and returns before it reads "parallel"; R_DeriveLightData then prefers
+  // the parallel projection to the spot projection, so "parallel" makes a sun even with
+  // all three target keys, which then stay unread here like a spot's radius.
+  if (hasSomeTargetInfo && !hasAllTargetInfo)
   {
-    light.type = LightType::Spot;
+    light.badTargetInfo = true;
+    light.type = LightType::Point;
+  }
+  else
+  {
+    const auto parallel = reader.boolean(Parallel, false);
+    light.type = parallel           ? LightType::Sun
+                 : hasAllTargetInfo ? LightType::Spot
+                                    : LightType::Point;
+  }
+
+  if (light.type == LightType::Spot)
+  {
     light.target = *target;
     light.up = *up;
     light.right = *right;
@@ -429,10 +448,6 @@ LightProperties parseLightProperties(const Entity& entity)
   }
   else
   {
-    // the engine prints "bad target info" if some, but not all, are present
-    light.badTargetInfo = target || up || right;
-    light.type = reader.boolean(Parallel, false) ? LightType::Sun : LightType::Point;
-
     if (const auto radius = reader.vector(LightRadius))
     {
       light.radius = *radius;
@@ -610,11 +625,15 @@ LightPropertyUpdate lightKeyDiff(const Entity& entity, const LightProperties& ed
 
   auto diff = LightPropertyUpdate{};
 
-  // only the values that are written differently
+  // only the values that are written differently and that the entity does not already
+  // have verbatim (an unread light_target of a sun that becomes a spot)
   for (const auto& property : after.set)
   {
     const auto* beforeProperty = findProperty(before.set, property.key());
-    if (!beforeProperty || beforeProperty->value() != property.value())
+    const auto* entityValue = entity.property(property.key());
+    if (
+      (!beforeProperty || beforeProperty->value() != property.value())
+      && !(entityValue && *entityValue == property.value()))
     {
       diff.set.push_back(property);
     }

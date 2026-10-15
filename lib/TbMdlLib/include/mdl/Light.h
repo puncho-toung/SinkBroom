@@ -248,8 +248,10 @@ bool isLightEntity(const Entity& entity);
 /**
  * Reads the given entity's light properties the way the engine reads them, where the
  * engine and the in-game editor disagree (a spot needs all of light_target, light_right
- * and light_up; light "0" is a radius of 0). Vectors are read like the engine's sscanf
- * reads them, so a value with one number reads (v, 0, 0). "math_type" is ignored.
+ * and light_up, and some but not all of them is bad target info, read as a point light;
+ * "parallel" makes a sun even with all three; light "0" is a radius of 0). Vectors are
+ * read like the engine's sscanf reads them, so a value with one number reads (v, 0, 0).
+ * "math_type" is ignored.
  */
 LightProperties parseLightProperties(const Entity& entity);
 
@@ -275,10 +277,11 @@ LightPropertyUpdate lightPropertyUpdate(const LightProperties& light);
 
 /**
  * Returns only the changes that turn the given entity into the given edited light: the
- * properties whose written value differs from the value written for the entity as it is,
- * and the properties to remove that the entity has and that the edit does not leave
- * unread. The changes are checked by reading the changed entity again, so that a property
- * the entity lacks but whose engine default differs from the edited value is written too.
+ * properties whose written value differs from the value written for the entity as it is
+ * and from the entity's own value, and the properties to remove that the entity has and
+ * that the edit does not leave unread. The changes are checked by reading the changed
+ * entity again, so that a property the entity lacks but whose engine default differs from
+ * the edited value is written too.
  */
 LightPropertyUpdate lightKeyDiff(const Entity& entity, const LightProperties& edited);
 
