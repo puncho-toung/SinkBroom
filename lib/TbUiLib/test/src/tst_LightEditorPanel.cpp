@@ -1791,7 +1791,9 @@ TEST_CASE("LightEditorPanel")
     auto& map = fixture.document().map();
     auto& tool = fixture.context().toolBox.lightVolumeTool();
 
-    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+    auto* lightNode = addLight(
+      map,
+      {{"classname", "light"}, {"origin", "0 0 0"}, {"light_radius", "300 200 100"}});
 
     auto panel = LightEditorPanel{fixture.context()};
     selectOnly(map, {lightNode});
@@ -1799,22 +1801,24 @@ TEST_CASE("LightEditorPanel")
     // the handles work without the tool (D56)
     REQUIRE_FALSE(tool.active());
 
-    auto& originX = findControl<SpinControl>(panel, "OriginX");
-    REQUIRE(originX.value() == 0.0);
+    auto& radiusX = findControl<SpinControl>(panel, "RadiusX");
+    REQUIRE(radiusX.value() == 300.0);
 
+    // the side scales the box about the light's origin, which stays (D64)
     REQUIRE(tool.beginDrag(mdl::Hit{
       LightVolumeTool::SideHitType,
       0.0,
       vm::vec3d{0, 0, 0},
       BBoxSide{vm::vec3d{1, 0, 0}}}));
     REQUIRE(tool.update(vm::vec3d{32, 0, 0}));
-    REQUIRE(valueOf(*lightNode, "origin") == "16 0 0");
+    REQUIRE(valueOf(*lightNode, "light_radius") == "339.79 200 100");
+    REQUIRE(valueOf(*lightNode, "origin") == "0 0 0");
     QApplication::processEvents();
-    CHECK(originX.value() == 0.0);
+    CHECK(radiusX.value() == 300.0);
 
     tool.endDrag();
     QApplication::processEvents();
-    CHECK(originX.value() == 16.0);
+    CHECK(radiusX.value() == Catch::Approx(339.79).margin(0.005));
   }
   SECTION("a write after the selection became something else writes nothing")
   {

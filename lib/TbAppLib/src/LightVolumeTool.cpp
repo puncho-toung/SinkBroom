@@ -61,6 +61,7 @@
 #include "render/RenderService.h"
 #include "render/Renderable.h"
 #include "ui/MapDocument.h"
+#include "ui/ScaleTool.h"
 
 #include "kd/contracts.h"
 #include "kd/overload.h"
@@ -102,6 +103,9 @@ constexpr auto SurfaceHighlightAlpha = 0.25f;
 
 // the guards of the light geometry (mdl/LightVolume.cpp)
 constexpr auto DegenerateEpsilon = 1e-6;
+
+// an element of a box this close to the box frame's origin lies on it (D64)
+constexpr auto OriginEpsilon = 1e-6;
 
 const auto FarCapSide = BBoxSide{vm::vec3d{0, 0, 1}};
 
@@ -163,6 +167,15 @@ std::vector<BBoxSide> faceCenterSides(const LightVolumeBox& volume)
 }
 
 /**
+ * Whether the given side of the given volume is a spot light's apex face, which lies on
+ * the light's position: it is not a handle (D64, D67).
+ */
+bool isApexSide(const LightVolumeBox& volume, const BBoxSide& side)
+{
+  return volume.light.type == mdl::LightType::Spot && side.normal == vm::vec3d{0, 0, -1};
+}
+
+/**
  * The side that a 2D view picks for the given edge of the box (D59): of the two sides
  * that meet at the edge, the one whose normal lies closest to the view plane, so that
  * dragging the box's outline moves one axis, like a brush's edge in a 2D view.
@@ -196,9 +209,9 @@ BBoxSide outlineSide(
  * Picks the handles of the given volume with the given world pick ray: the corners and,
  * in 3D, the centres of the sides as spheres of twice the handle radius, the far cap's
  * centre of a spot light, and the edges, in 2D as the sides of the box's outline (D58,
- * D59). The sides themselves are not picked: a click inside a side reaches what is
- * behind it. Everything is tested in world space. If the camera is inside the box, only
- * the handles in front of it are picked.
+ * D59) but for a spot light's apex line (D67). The sides themselves are not picked: a
+ * click inside a side reaches what is behind it. Everything is tested in world space. If
+ * the camera is inside the box, only the handles in front of it are picked.
  */
 mdl::PickResult pickVolume(
   const LightVolumeBox& volume,
@@ -277,9 +290,13 @@ mdl::PickResult pickVolume(
         const auto hitPoint = vm::point_at_distance(pickRay, *distance);
         if (twoD)
         {
-          const auto side = outlineSide(volume, edge, pickRay.direction);
-          result.addHit(
-            mdl::Hit{LightVolumeTool::SideHitType, *distance, hitPoint, side});
+          // a spot light's apex line is its position, where the light is moved
+          if (const auto side = outlineSide(volume, edge, pickRay.direction);
+              !isApexSide(volume, side))
+          {
+            result.addHit(
+              mdl::Hit{LightVolumeTool::SideHitType, *distance, hitPoint, side});
+          }
         }
         else
         {
@@ -293,32 +310,62 @@ mdl::PickResult pickVolume(
   return result;
 }
 
-vm::bbox3d moveBox(
-  const vm::bbox3d& box,
-  const mdl::Hit& hit,
-  const vm::vec3d& delta,
-  const ProportionalAxes& proportionalAxes,
-  const AnchorPos anchorPos)
+/**
+ * The axis of the given side of the box and the side's coordinate on it.
+ */
+std::pair<std::size_t, double> sideCoordinate(const vm::bbox3d& box, const BBoxSide& side)
 {
+  const auto axis = vm::find_abs_max_component(side.normal);
+  return {axis, side.normal[axis] > 0.0 ? box.max[axis] : box.min[axis]};
+}
+
+/**
+ * The box of the given handle moved by the given delta in the box frame, scaled about
+ * the box frame's origin (D64, D65): a side, a face centre or the far cap's centre on its
+ * one axis, an edge on the two axes where its end points agree, a corner on all three;
+ * Shift and Alt change nothing. Nothing if the step is denied: a drag to or through the
+ * origin, or of a side through it (a spot light's apex face).
+ */
+std::optional<vm::bbox3d> moveBox(
+  const vm::bbox3d& box, const mdl::Hit& hit, const vm::vec3d& delta)
+{
+  auto coordinates = std::vector<std::pair<std::size_t, double>>{};
   if (
     hit.type() == LightVolumeTool::SideHitType
-    || hit.type() == LightVolumeTool::FaceCenterHitType)
+    || hit.type() == LightVolumeTool::FaceCenterHitType
+    || hit.type() == LightVolumeTool::FarCapCenterHitType)
   {
-    return moveBBoxSide(box, hit.target<BBoxSide>(), delta, proportionalAxes, anchorPos);
+    const auto coordinate = sideCoordinate(box, hit.target<BBoxSide>());
+    if (std::abs(coordinate.second) < OriginEpsilon)
+    {
+      return std::nullopt;
+    }
+    coordinates.push_back(coordinate);
   }
-  if (hit.type() == LightVolumeTool::EdgeHitType)
+  else if (hit.type() == LightVolumeTool::EdgeHitType)
   {
-    return moveBBoxEdge(box, hit.target<BBoxEdge>(), delta, proportionalAxes, anchorPos);
+    const auto& edge = hit.target<BBoxEdge>();
+    for (std::size_t axis = 0; axis < 3; ++axis)
+    {
+      if (edge.point0[axis] == edge.point1[axis])
+      {
+        coordinates.emplace_back(
+          axis, edge.point0[axis] > 0.0 ? box.max[axis] : box.min[axis]);
+      }
+    }
   }
-  if (hit.type() == LightVolumeTool::CornerHitType)
+  else
   {
-    return moveBBoxCorner(box, hit.target<BBoxCorner>(), delta, anchorPos);
+    contract_assert(hit.type() == LightVolumeTool::CornerHitType);
+
+    const auto corner = pointForBBoxCorner(box, hit.target<BBoxCorner>());
+    for (std::size_t axis = 0; axis < 3; ++axis)
+    {
+      coordinates.emplace_back(axis, corner[axis]);
+    }
   }
 
-  // the far cap's centre moves only the far cap along the beam
-  contract_assert(hit.type() == LightVolumeTool::FarCapCenterHitType);
-  return moveBBoxSide(
-    box, FarCapSide, delta, ProportionalAxes::None(), AnchorPos::Opposite);
+  return scaleLightBoxAboutOrigin(box, coordinates, delta);
 }
 
 /**
@@ -346,8 +393,26 @@ vm::vec3d surfacePointInBox(const LightVolumeBox& volume, const LightSurfaceHit&
 }
 
 /**
- * Whether a Shift drag edits the given element of the given light (D60): a point light's
- * outer shell and, if it is drawn, its inner shell; a spot light's funnel and base.
+ * The lateral axis of a spot light's box that a Shift drag of its funnel scales (D67):
+ * the one along which the hit point lies farther out in proportion to the box's half
+ * extent (the cone's lateral extent at any depth is in proportion to both), with the hit
+ * point's coordinate on it.
+ */
+std::pair<std::size_t, double> funnelAxis(
+  const LightVolumeBox& volume, const LightSurfaceHit& surface)
+{
+  const auto point = surfacePointInBox(volume, surface);
+  const auto halfExtents = volume.box.size() / 2.0;
+  const auto axis = std::size_t(
+    std::abs(point.x()) / halfExtents.x() >= std::abs(point.y()) / halfExtents.y() ? 0
+                                                                                   : 1);
+  return {axis, point[axis]};
+}
+
+/**
+ * Whether a Shift drag edits the given element of the given light (D60, D69): a point
+ * light's outer shell and, if it is drawn, its inner shell; a spot light's funnel and
+ * base and, if it is drawn, its inner cap.
  */
 bool isEditableElement(const mdl::LightElement element, const mdl::LightProperties& light)
 {
@@ -360,6 +425,8 @@ bool isEditableElement(const mdl::LightElement element, const mdl::LightProperti
   case mdl::LightElement::Funnel:
   case mdl::LightElement::Base:
     return light.type == mdl::LightType::Spot;
+  case mdl::LightElement::InnerCap:
+    return render::lightVolumeHasInnerCap(light);
   case mdl::LightElement::Penumbra:
   case mdl::LightElement::SunBox:
   case mdl::LightElement::Band:
@@ -371,34 +438,32 @@ bool isEditableElement(const mdl::LightElement element, const mdl::LightProperti
 
 /**
  * The light that a Shift drag of the given surface by the given world delta makes of the
- * light at the start of the drag (D60), or nothing if the step is denied:
+ * light at the start of the drag (D60), or nothing if the step is denied. Every box is
+ * scaled about the origin of its frame, which does not move (D64):
  * - the outer shell moves the side of the full box (t = 1) along the axis of its normal
- *   at the hit point, so the shell follows the mouse and the opposite side (or with Alt
- *   the centre) stays;
+ *   at the hit point, so the shell follows the mouse and the opposite side mirrors it;
  * - the inner shell's radius becomes the falloff parameter of the moved hit point;
- * - the funnel widens or narrows the far cap by the factor of the hit point's distance
- *   from the beam, the depth unchanged;
- * - the base moves the far cap along the beam like the far cap's centre.
+ * - the funnel scales the lateral axis of the box that the hit point lies along by the
+ *   factor of the hit point's moved coordinate, the depth unchanged (D67);
+ * - the base moves the far cap along the beam like the far cap's centre;
+ * - the inner cap's inner radius becomes the falloff parameter of the moved hit point's
+ *   depth (D69).
  */
 std::optional<mdl::LightProperties> editSurface(
-  const LightVolumeBox& start,
-  const LightSurfaceHit& surface,
-  const vm::vec3d& delta,
-  const AnchorPos anchorPos)
+  const LightVolumeBox& start, const LightSurfaceHit& surface, const vm::vec3d& delta)
 {
   const auto toLocal = vm::transpose(start.frame.R);
   const auto toBox = vm::transpose(start.rotation);
 
-  const auto checked = [&](
-                         const vm::bbox3d& from,
-                         const vm::bbox3d& to) -> std::optional<mdl::LightProperties> {
-    if (to.is_empty())
+  const auto checked = [&](const vm::bbox3d& from, const std::optional<vm::bbox3d>& to)
+    -> std::optional<mdl::LightProperties> {
+    if (!to || to->is_empty())
     {
       return std::nullopt;
     }
     // the rotation is the light's, never the box frame's (I0.2)
-    const auto light = mdl::lightFromEditBox(start.light, start.frame.R, to);
-    return light == start.light && to != from ? std::nullopt : std::optional{light};
+    const auto light = mdl::lightFromEditBox(start.light, start.frame.R, *to);
+    return light == start.light && *to != from ? std::nullopt : std::optional{light};
   };
 
   switch (surface.element)
@@ -407,8 +472,8 @@ std::optional<mdl::LightProperties> editSurface(
     const auto box = mdl::pointLightLocalBox(start.light);
     return checked(
       box,
-      moveBBoxSide(
-        box, shellSide(surface), toLocal * delta, ProportionalAxes::None(), anchorPos));
+      scaleLightBoxAboutOrigin(
+        box, {sideCoordinate(box, shellSide(surface))}, toLocal * delta));
   }
   case mdl::LightElement::InnerShell: {
     const auto point = surface.localPoint + toLocal * delta;
@@ -418,33 +483,32 @@ std::optional<mdl::LightProperties> editSurface(
     return light;
   }
   case mdl::LightElement::Funnel: {
-    const auto point = surfacePointInBox(start, surface);
-    const auto lateral = vm::vec3d{point.x(), point.y(), 0.0};
-    const auto distance = vm::length(lateral);
-    if (distance < DegenerateEpsilon)
+    const auto coordinate = funnelAxis(start, surface);
+    if (std::abs(coordinate.second) < OriginEpsilon)
     {
       return std::nullopt;
     }
-
-    const auto factor =
-      (distance + vm::dot(lateral / distance, toBox * delta)) / distance;
-    if (factor <= 0.0)
-    {
-      return std::nullopt;
-    }
-
-    const auto scale = vm::vec3d{factor, factor, 1.0};
-    return checked(start.box, vm::bbox3d{start.box.min * scale, start.box.max * scale});
+    return checked(
+      start.box, scaleLightBoxAboutOrigin(start.box, {coordinate}, toBox * delta));
   }
   case mdl::LightElement::Base:
     return checked(
       start.box,
-      moveBBoxSide(
-        start.box,
-        FarCapSide,
-        toBox * delta,
-        ProportionalAxes::None(),
-        AnchorPos::Opposite));
+      scaleLightBoxAboutOrigin(
+        start.box, {sideCoordinate(start.box, FarCapSide)}, toBox * delta));
+  case mdl::LightElement::InnerCap: {
+    const auto frustum = mdl::spotLightFrustum(start.light);
+    if (!frustum)
+    {
+      return std::nullopt;
+    }
+
+    const auto depth = vm::dot(surface.localPoint + toLocal * delta, frustum->n);
+    auto light = start.light;
+    light.math.innerRadius = std::clamp(
+      mdl::spotFalloffT(depth, frustum->zNear, frustum->zFar), 0.0, MaxInnerRadius);
+    return light;
+  }
   case mdl::LightElement::Penumbra:
   case mdl::LightElement::SunBox:
   case mdl::LightElement::Band:
@@ -507,6 +571,33 @@ std::vector<vm::vec3d> pickedTriangles(
     return {};
     switchDefault();
   }
+}
+
+/**
+ * Whether the given world point of a cap of the given spot light lies inside the ring of
+ * its cone, the superellipse |u|^k + |v|^k = 1 of its shape exponent, where the cap is
+ * drawn; intersectRaySpotCap tests the parallelogram around it.
+ */
+bool insideSpotRing(
+  const mdl::LightProperties& light, const mdl::LightFrame& frame, const vm::vec3d& world)
+{
+  const auto targetLength = vm::length(light.target);
+  const auto local = vm::transpose(frame.R) * (world - frame.origin);
+  const auto depth = vm::dot(local, light.target) / targetLength;
+  if (depth < DegenerateEpsilon)
+  {
+    return false;
+  }
+
+  // the inverse of mdl::spotPoint, as mdl::containsPoint takes it
+  const auto u = (targetLength * vm::dot(light.right, local) / depth
+                  - vm::dot(light.right, light.target))
+                 / vm::squared_length(light.right);
+  const auto v =
+    (targetLength * vm::dot(light.up, local) / depth - vm::dot(light.up, light.target))
+    / vm::squared_length(light.up);
+  const auto k = std::max(light.math.shapeExp, 1e-3);
+  return std::pow(std::abs(u), k) + std::pow(std::abs(v), k) <= 1.0 + OriginEpsilon;
 }
 
 /**
@@ -767,8 +858,8 @@ void renderHighlight(
 }
 
 /**
- * The outline of a surface where it has one (D60): the far rectangle of a spot light's
- * base, the edges of a sun's box.
+ * The outline of a surface where it has one (D60, D69): the far rectangle of a spot
+ * light's base, the ring of its inner cap, the edges of a sun's box.
  */
 std::vector<vm::vec3f> surfaceOutline(const LightSurfaceHit& surface)
 {
@@ -786,6 +877,18 @@ std::vector<vm::vec3f> surfaceOutline(const LightSurfaceHit& surface)
         result.push_back(toWorld(frustum->farCorners[i]));
         result.push_back(toWorld(frustum->farCorners[(i + 1) % 4]));
       }
+    }
+  }
+  else if (surface.element == mdl::LightElement::InnerCap)
+  {
+    // the cap is a fan around its centre: the outer side of each triangle is a segment
+    // of its ring
+    const auto triangles =
+      lightElementTriangles(surface.light, surface.frame, surface.element);
+    for (std::size_t i = 0; i + 2 < triangles.size(); i += 3)
+    {
+      result.emplace_back(triangles[i + 1]);
+      result.emplace_back(triangles[i + 2]);
     }
   }
   else if (surface.element == mdl::LightElement::SunBox)
@@ -961,6 +1064,37 @@ std::optional<LightVolumeBox> lightVolumeBox(
   return volumeOf(entity, policy, light, mdl::lightEditBox(light, threshold));
 }
 
+std::optional<vm::bbox3d> scaleLightBoxAboutOrigin(
+  const vm::bbox3d& box,
+  const std::vector<std::pair<std::size_t, double>>& coordinates,
+  const vm::vec3d& delta)
+{
+  auto min = box.min;
+  auto max = box.max;
+  for (const auto& [axis, coordinate] : coordinates)
+  {
+    contract_pre(axis < 3);
+
+    // an element on the origin's plane does not scale its axis, a spot light's apex face
+    // for one
+    if (std::abs(coordinate) < OriginEpsilon)
+    {
+      continue;
+    }
+
+    // a factor of 0 or less is a drag to or through the origin
+    const auto factor = (coordinate + delta[axis]) / coordinate;
+    if (factor <= 0.0)
+    {
+      return std::nullopt;
+    }
+
+    min[axis] *= factor;
+    max[axis] *= factor;
+  }
+  return vm::bbox3d{min, max};
+}
+
 vm::line3d lightVolumeHandleLine(const LightVolumeBox& volume, const mdl::Hit& hit)
 {
   contract_pre(hit.hasType(LightVolumeTool::AnyHitType));
@@ -978,10 +1112,11 @@ vm::line3d lightVolumeHandleLine(const LightVolumeBox& volume, const mdl::Hit& h
       case mdl::LightElement::InnerShell:
         return vm::normalize(volume.frame.R * surface.localPoint);
       case mdl::LightElement::Funnel: {
-        const auto point = surfacePointInBox(volume, surface);
-        return volume.rotation * vm::normalize(vm::vec3d{point.x(), point.y(), 0.0});
+        const auto [axis, coordinate] = funnelAxis(volume, surface);
+        return volume.rotation * vm::vec3d::axis(axis) * (coordinate < 0.0 ? -1.0 : 1.0);
       }
       case mdl::LightElement::Base:
+      case mdl::LightElement::InnerCap:
       case mdl::LightElement::Penumbra:
       case mdl::LightElement::SunBox:
       case mdl::LightElement::Band:
@@ -993,8 +1128,7 @@ vm::line3d lightVolumeHandleLine(const LightVolumeBox& volume, const mdl::Hit& h
     return vm::line3d{hit.hitPoint(), direction};
   }
 
-  // the lines of the scale tool's handleLineForHit in the box frame; they all run
-  // through the box's centre, so the anchor does not change them
+  // a side moves along its normal through its centre, like the scale tool's
   if (
     hit.type() == LightVolumeTool::SideHitType
     || hit.type() == LightVolumeTool::FaceCenterHitType
@@ -1005,24 +1139,28 @@ vm::line3d lightVolumeHandleLine(const LightVolumeBox& volume, const mdl::Hit& h
       volume.toWorld(centerForBBoxSide(box, side)), volume.rotation * side.normal};
   }
 
-  auto start = vm::vec3d{};
-  auto end = vm::vec3d{};
+  // an edge or a corner lies on the line from the box frame's origin, which stays (D66)
   if (hit.type() == LightVolumeTool::EdgeHitType)
   {
-    const auto edge = hit.target<BBoxEdge>();
-    start = pointsForBBoxEdge(box, oppositeEdge(edge)).center();
-    end = pointsForBBoxEdge(box, edge).center();
-  }
-  else
-  {
-    contract_assert(hit.type() == LightVolumeTool::CornerHitType);
+    const auto& edge = hit.target<BBoxEdge>();
+    const auto centre = pointsForBBoxEdge(box, edge).center();
 
-    const auto corner = hit.target<BBoxCorner>();
-    start = pointForBBoxCorner(box, oppositeCorner(corner));
-    end = pointForBBoxCorner(box, corner);
+    // the edge's two axes, where its end points agree
+    auto direction = vm::vec3d{0, 0, 0};
+    for (std::size_t axis = 0; axis < 3; ++axis)
+    {
+      if (edge.point0[axis] == edge.point1[axis])
+      {
+        direction[axis] = centre[axis];
+      }
+    }
+    return vm::line3d{volume.toWorld(centre), volume.rotation * vm::normalize(direction)};
   }
 
-  return vm::line3d{volume.toWorld(start), volume.rotation * vm::normalize(end - start)};
+  contract_assert(hit.type() == LightVolumeTool::CornerHitType);
+
+  const auto corner = pointForBBoxCorner(box, hit.target<BBoxCorner>());
+  return vm::line3d{volume.toWorld(corner), volume.rotation * vm::normalize(corner)};
 }
 
 LightVolumeHandles::LightVolumeHandles(LightVolumeTool& tool)
@@ -1292,6 +1430,21 @@ void LightVolumeTool::pickSurfaces(
         withElement(
           intersectFrontTriangles(pickable.triangles, pickRay),
           mdl::LightElement::Funnel));
+
+      // the inner cap, drawn for selected math lights only, wins wherever the ray crosses
+      // it, from either side, unless a node lies in front of it: then the funnel or the
+      // base keeps the light's place before the node (D69)
+      if (beam && pickable.selected && render::lightVolumeHasInnerCap(light))
+      {
+        const auto depth = beam->zNear + light.math.innerRadius * beam->zFar;
+        if (const auto distance = mdl::intersectRaySpotCap(light, frame, depth, pickRay);
+            distance
+            && insideSpotRing(light, frame, vm::point_at_distance(pickRay, *distance))
+            && (!nodeHit.isMatch() || *distance < nodeHit.distance()))
+        {
+          hit = std::pair{*distance, mdl::LightElement::InnerCap};
+        }
+      }
       break;
     }
     case mdl::LightType::Sun:
@@ -1319,26 +1472,6 @@ void LightVolumeTool::pickSurfaces(
         }});
     }
   }
-}
-
-void LightVolumeTool::setAnchorPos(const AnchorPos anchorPos)
-{
-  m_anchorPos = anchorPos;
-}
-
-AnchorPos LightVolumeTool::anchorPos() const
-{
-  return m_anchorPos;
-}
-
-void LightVolumeTool::setProportionalAxes(const ProportionalAxes& proportionalAxes)
-{
-  m_proportionalAxes = proportionalAxes;
-}
-
-const ProportionalAxes& LightVolumeTool::proportionalAxes() const
-{
-  return m_proportionalAxes;
 }
 
 const mdl::Hit& LightVolumeTool::highlightedHit() const
@@ -1468,7 +1601,7 @@ bool LightVolumeTool::update(const vm::vec3d& delta)
   if (m_dragHit.type() == SurfaceHitType)
   {
     const auto edited =
-      editSurface(start, m_dragHit.target<LightSurfaceHit>(), dragDelta, m_anchorPos);
+      editSurface(start, m_dragHit.target<LightSurfaceHit>(), dragDelta);
     if (!edited)
     {
       return false;
@@ -1477,18 +1610,15 @@ bool LightVolumeTool::update(const vm::vec3d& delta)
   }
   else
   {
-    // the box frame's handle functions, never moveBBoxForHit, which accepts only the
-    // scale tool's hits
-    movedBox = moveBox(
-      start.box,
-      m_dragHit,
-      vm::transpose(start.rotation) * dragDelta,
-      m_proportionalAxes,
-      m_anchorPos);
-    if (movedBox.is_empty())
+    // the box scaled about its frame's origin, never the scale tool's moveBBoxForHit,
+    // which accepts only the scale tool's hits and anchors the opposite side
+    const auto moved =
+      moveBox(start.box, m_dragHit, vm::transpose(start.rotation) * dragDelta);
+    if (!moved)
     {
       return false;
     }
+    movedBox = *moved;
 
     // the rotation is the light's, never the box frame's: the light composes the beam
     // frame

@@ -59,10 +59,10 @@ const mdl::Hit& findLightVolumeHit(const mdl::PickResult& pickResult);
  * controller, so that it sees drags of the handles that lie behind the selected light's
  * own box.
  *
- * A handle drag resizes the box; on a surface (D60), a click selects the light (Ctrl
- * toggles it), a drag on a selected light moves it as the move tool moves the selection,
- * and a Shift drag edits the element. While the tool is active, a drag draws a new
- * volume instead.
+ * A handle drag scales the box about the light's origin, with or without Shift and Alt
+ * (D64, D65); on a surface (D60), a click selects the light (Ctrl toggles it), a drag on
+ * a selected light moves it as the move tool moves the selection, and a Shift drag edits
+ * the element. While the tool is active, a drag draws a new volume instead.
  */
 class LightVolumeToolController : public ToolController
 {

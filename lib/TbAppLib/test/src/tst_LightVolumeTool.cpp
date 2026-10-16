@@ -90,6 +90,16 @@ const auto DefaultSpot = Properties{
   {"light_up", "0 -128 0"},
 };
 
+// the default spot light with a math core to 0.3 of its length: its inner cap at depth
+// 8 + 0.3 * 256 = 84.8 (D69)
+const auto InnerCapSpot = Properties{
+  {"light_target", "0 0 -256"},
+  {"light_right", "-128 0 0"},
+  {"light_up", "0 -128 0"},
+  {"math_enabled", "1"},
+  {"math_inner_radius", "0.3"},
+};
+
 // every rotation property of a light: a drawn volume removes them all (D11)
 const auto RotationProperties = Properties{
   {"angle", "45"},
@@ -119,6 +129,17 @@ double lengthOf(const mdl::EntityNode& entityNode, const std::string& key)
 {
   return vm::length(vectorOf(entityNode, key));
 }
+
+/**
+ * Whether a type still has the scale tool's anchor and proportional settings, which the
+ * light volume tool no longer has (D65, AC-25).
+ */
+template <typename T>
+constexpr auto hasScaleModifierSettings =
+  requires(T& tool) { tool.anchorPos(); }
+  || requires(T& tool) { tool.setAnchorPos(AnchorPos::Center); }
+  || requires(T& tool) { tool.proportionalAxes(); }
+  || requires(T& tool) { tool.setProportionalAxes(ProportionalAxes::All()); };
 
 mdl::Hit sideHit(const vm::vec3d& normal)
 {
@@ -438,17 +459,29 @@ TEST_CASE("LightVolumeTool")
 
   SECTION("update")
   {
-    // the box of a point light is +-radius * t, so a side moved by d moves the half
-    // extent by d / 2 and the radius by d / (2 t) (D61); the light's legacy t at 10 %
+    // the box of a point light is +-radius * t and scales about the light's origin, so a
+    // side moved by d moves the opposite side by -d, the half extent by d and the radius
+    // by d / t (D61, D64); the light's legacy t at 10 %
     const auto t = legacyVisibleT();
 
-    SECTION("a point light's side moves the side and the centre follows")
+    SECTION("a point light's side moves both sides, the origin stays (AC-23)")
     {
       auto* lightNode = createLight(map, "0 0 0", {});
       CHECK(drag(tool, sideHit({1, 0, 0}), {{32, 0, 0}}) == std::vector{true});
 
-      CHECK(valueOf(*lightNode, "origin") == "16 0 0");
-      checkRadius(*lightNode, {300.0 + 16.0 / t, 300, 300});
+      // (300 t + 32) / t
+      CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+      checkRadius(*lightNode, {300.0 + 32.0 / t, 300, 300});
+      CHECK(valueOf(*lightNode, "light_radius") == "339.79 300 300");
+    }
+
+    SECTION("a point light's -x side dragged by -32 gives the same light (AC-23)")
+    {
+      auto* lightNode = createLight(map, "0 0 0", {});
+      CHECK(drag(tool, sideHit({-1, 0, 0}), {{-32, 0, 0}}) == std::vector{true});
+
+      CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+      CHECK(valueOf(*lightNode, "light_radius") == "339.79 300 300");
     }
 
     SECTION("a turned point light's side moves along its turned axis")
@@ -458,8 +491,9 @@ TEST_CASE("LightVolumeTool")
       auto* lightNode = createLight(map, "0 0 0", {{"angles", "0 90 0"}});
       CHECK(drag(tool, sideHit({1, 0, 0}), {{0, 32, 0}}) == std::vector{true});
 
-      CHECK(valueOf(*lightNode, "origin") == "0 16 0");
-      checkRadius(*lightNode, {300.0 + 16.0 / t, 300, 300});
+      CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+      checkRadius(*lightNode, {300.0 + 32.0 / t, 300, 300});
+      CHECK(valueOf(*lightNode, "light_radius") == "339.79 300 300");
       CHECK(valueOf(*lightNode, "angles") == "0 90 0");
     }
 
@@ -468,22 +502,22 @@ TEST_CASE("LightVolumeTool")
       // the face centre handles drag like the sides (D58)
       auto* lightNode = createLight(map, "0 0 0", SeededMath);
 
-      SECTION("the opposite side stays")
+      SECTION("the opposite side mirrors it, the origin stays (D64, AC-23)")
       {
         CHECK(drag(tool, faceCenterHit({1, 0, 0}), {{32, 0, 0}}) == std::vector{true});
 
-        CHECK(valueOf(*lightNode, "origin") == "16 0 0");
-        checkRadius(*lightNode, {300.0 + 16.0 / SeededVisibleT, 300, 300});
-        CHECK(valueOf(*lightNode, "light_radius") == "317.58 300 300");
+        // (273 + 32) / 0.91
+        CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+        checkRadius(
+          *lightNode, {(300.0 * SeededVisibleT + 32.0) / SeededVisibleT, 300, 300});
+        CHECK(valueOf(*lightNode, "light_radius") == "335.16 300 300");
       }
 
-      SECTION("with the centre anchor, both sides move")
+      SECTION("the opposite face dragged the other way gives the same light")
       {
-        tool.setAnchorPos(AnchorPos::Center);
-        CHECK(drag(tool, faceCenterHit({1, 0, 0}), {{32, 0, 0}}) == std::vector{true});
+        CHECK(drag(tool, faceCenterHit({-1, 0, 0}), {{-32, 0, 0}}) == std::vector{true});
 
         CHECK(valueOf(*lightNode, "origin") == "0 0 0");
-        checkRadius(*lightNode, {300.0 + 32.0 / SeededVisibleT, 300, 300});
         CHECK(valueOf(*lightNode, "light_radius") == "335.16 300 300");
       }
 
@@ -502,11 +536,10 @@ TEST_CASE("LightVolumeTool")
           {
             CHECK(
               radius[i]
-              == Catch::Approx(i == axis ? 300.0 + 16.0 / SeededVisibleT : 300.0)
+              == Catch::Approx(i == axis ? 300.0 + 32.0 / SeededVisibleT : 300.0)
                    .margin(ComponentTolerance));
           }
-          CHECK(vm::is_equal(
-            vectorOf(*lightNode, "origin"), normal * 16.0, ComponentTolerance));
+          CHECK(valueOf(*lightNode, "origin") == "0 0 0");
           map.undoCommand();
         }
       }
@@ -525,29 +558,31 @@ TEST_CASE("LightVolumeTool")
       REQUIRE(tool.update({32, 0, 0}));
       tool.endDrag();
 
-      checkRadius(*lightNode, {300.0 + 16.0 / SeededVisibleT, 300, 300});
+      checkRadius(*lightNode, {300.0 + 32.0 / SeededVisibleT, 300, 300});
     }
 
-    SECTION("a point light's edge moves two sides (AC-10)")
+    SECTION("a point light's edge follows the drag on its two axes (AC-10, AC-23)")
     {
       auto* lightNode = createLight(map, "0 0 0", {});
-      // the edge at +x +y along z, with the opposite edge as the anchor
+      // the edge at +x +y along z; each of its axes about the origin
       CHECK(
-        drag(tool, edgeHit({1, 1, -1}, {1, 1, 1}), {{32, 32, 0}}) == std::vector{true});
+        drag(tool, edgeHit({1, 1, -1}, {1, 1, 1}), {{32, 16, 0}}) == std::vector{true});
 
-      CHECK(valueOf(*lightNode, "origin") == "16 16 0");
-      checkRadius(*lightNode, {300.0 + 16.0 / t, 300.0 + 16.0 / t, 300});
+      // (300 t + 16) / t = 319.9
+      CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+      checkRadius(*lightNode, {300.0 + 32.0 / t, 300.0 + 16.0 / t, 300});
+      CHECK(valueOf(*lightNode, "light_radius") == "339.79 319.9 300");
     }
 
-    SECTION("a corner with the centre anchor changes the radius only")
+    SECTION("a corner scales every axis about the origin (AC-23)")
     {
       auto* lightNode = createLight(map, "0 0 0", {});
-      tool.setAnchorPos(AnchorPos::Center);
-      CHECK(drag(tool, cornerHit({1, 1, 1}), {{16, 16, 16}}) == std::vector{true});
+      CHECK(drag(tool, cornerHit({1, 1, 1}), {{32, 32, 32}}) == std::vector{true});
 
       CHECK(valueOf(*lightNode, "origin") == "0 0 0");
-      const auto radius = 300.0 + 16.0 / t;
+      const auto radius = 300.0 + 32.0 / t;
       checkRadius(*lightNode, {radius, radius, radius});
+      CHECK(valueOf(*lightNode, "light_radius") == "339.79 339.79 339.79");
     }
 
     SECTION("a corner along its diagonal scales every axis by one factor (AC-19)")
@@ -562,39 +597,39 @@ TEST_CASE("LightVolumeTool")
       CHECK(radius.z() / radius.x() == Catch::Approx(3.0).margin(1e-3));
     }
 
-    SECTION("a side with proportional axes scales the other axes")
+    SECTION("a side scales its own axis only, Shift or not (D65)")
     {
       auto* lightNode = createLight(map, "0 0 0", {});
-      tool.setProportionalAxes(ProportionalAxes::All());
       CHECK(drag(tool, sideHit({1, 0, 0}), {{60, 0, 0}}) == std::vector{true});
 
-      // the box grows from 2 * 300 t to 2 * 300 t + 60 on every axis
-      CHECK(valueOf(*lightNode, "origin") == "30 0 0");
-      const auto radius = 300.0 * (2.0 * 300.0 * t + 60.0) / (2.0 * 300.0 * t);
-      checkRadius(*lightNode, {radius, radius, radius});
+      CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+      checkRadius(*lightNode, {300.0 + 60.0 / t, 300, 300});
+
+      // the tool has no anchor or proportional axes any more (AC-25)
+      STATIC_REQUIRE_FALSE(hasScaleModifierSettings<LightVolumeTool>);
     }
 
-    SECTION("a spot light's far cap edge widens the far rectangle")
+    // the default spot light's box is [-132, 132]^2 x [0, 264] along the beam, its +x
+    // world -X, its +y world +Y and its +z world -Z; the light's right and up are its
+    // half extents times |target| / (zNear + zFar), 256 / 264 here, and every drag keeps
+    // its origin and the direction of its target (D64, D67, AC-24)
+    SECTION("a spot light's far cap edge widens the far rectangle, no tilt")
     {
       auto* lightNode = createLight(map, "0 0 0", DefaultSpot);
 
       SECTION("the box frame's +x edge, world -X")
       {
-        // in the box frame, the edge at x = +hx, z = zNear + zFar
+        // in the box frame, the edge at x = +hx, z = zNear + zFar; hx 164
         CHECK(
           drag(tool, edgeHit({1, -1, 1}, {1, 1, 1}), {{-32, 0, 0}}) == std::vector{true});
 
         checkVector(*lightNode, "origin", {0, 0, 0});
-        checkVector(*lightNode, "light_target", {-15.516, 0, -256.015});
+        CHECK(valueOf(*lightNode, "light_target") == "0 0 -256");
         CHECK(
           lengthOf(*lightNode, "light_right")
-          == Catch::Approx(143.5234).margin(LengthTolerance));
-        CHECK(
-          lengthOf(*lightNode, "light_up")
-          == Catch::Approx(128.0073).margin(LengthTolerance));
-        CHECK(valueOf(*lightNode, "light_target") == "-15.52 0 -256.01");
-        CHECK(valueOf(*lightNode, "light_right") == "-143.26 0 8.68");
-        CHECK(valueOf(*lightNode, "light_up") == "0 -128.01 0");
+          == Catch::Approx(164.0 * 256.0 / 264.0).margin(LengthTolerance));
+        CHECK(valueOf(*lightNode, "light_right") == "-159.03 0 0");
+        CHECK(valueOf(*lightNode, "light_up") == "0 -128 0");
       }
 
       SECTION("the world +X edge")
@@ -604,11 +639,27 @@ TEST_CASE("LightVolumeTool")
           == std::vector{true});
 
         checkVector(*lightNode, "origin", {0, 0, 0});
-        checkVector(*lightNode, "light_target", {15.516, 0, -256.015});
+        CHECK(valueOf(*lightNode, "light_target") == "0 0 -256");
+        CHECK(valueOf(*lightNode, "light_right") == "-159.03 0 0");
+      }
+
+      SECTION("both of its axes, the far cap's width and the length (AC-24)")
+      {
+        // by (32, 0, 64) in the box frame: hx 164, the length 328, |target| 320
+        CHECK(
+          drag(tool, edgeHit({1, -1, 1}, {1, 1, 1}), {{-32, 0, -64}})
+          == std::vector{true});
+
+        checkVector(*lightNode, "origin", {0, 0, 0});
+        CHECK(valueOf(*lightNode, "light_target") == "0 0 -320");
         CHECK(
           lengthOf(*lightNode, "light_right")
-          == Catch::Approx(143.5234).margin(LengthTolerance));
-        CHECK(valueOf(*lightNode, "light_target") == "15.52 0 -256.01");
+          == Catch::Approx(164.0 * 320.0 / 328.0).margin(LengthTolerance));
+        CHECK(valueOf(*lightNode, "light_right") == "-160 0 0");
+        CHECK(
+          lengthOf(*lightNode, "light_up")
+          == Catch::Approx(132.0 * 320.0 / 328.0).margin(LengthTolerance));
+        CHECK(valueOf(*lightNode, "light_up") == "0 -128.78 0");
       }
     }
 
@@ -623,10 +674,86 @@ TEST_CASE("LightVolumeTool")
         == std::vector{true, true, true, true});
 
       // the strings of the single drag by -32
-      CHECK(valueOf(*lightNode, "light_target") == "-15.52 0 -256.01");
-      CHECK(valueOf(*lightNode, "light_right") == "-143.26 0 8.68");
-      CHECK(valueOf(*lightNode, "light_up") == "0 -128.01 0");
+      CHECK(valueOf(*lightNode, "light_target") == "0 0 -256");
+      CHECK(valueOf(*lightNode, "light_right") == "-159.03 0 0");
+      CHECK(valueOf(*lightNode, "light_up") == "0 -128 0");
       checkVector(*lightNode, "origin", {0, 0, 0});
+    }
+
+    SECTION("a spot light's beam-parallel edge scales its two lateral axes (AC-24)")
+    {
+      // the edge at +x +y along the beam by (32, 16, 0) in the box frame: hx 164, hy 148
+      auto* lightNode = createLight(map, "0 0 0", DefaultSpot);
+      CHECK(
+        drag(tool, edgeHit({1, 1, -1}, {1, 1, 1}), {{-32, 16, 0}}) == std::vector{true});
+
+      checkVector(*lightNode, "origin", {0, 0, 0});
+      CHECK(valueOf(*lightNode, "light_target") == "0 0 -256");
+      CHECK(
+        lengthOf(*lightNode, "light_right")
+        == Catch::Approx(164.0 * 256.0 / 264.0).margin(LengthTolerance));
+      CHECK(
+        lengthOf(*lightNode, "light_up")
+        == Catch::Approx(148.0 * 256.0 / 264.0).margin(LengthTolerance));
+      CHECK(valueOf(*lightNode, "light_up") == "0 -143.52 0");
+    }
+
+    SECTION("a spot light's apex face edge scales its lateral axis only (AC-24)")
+    {
+      // the edge at +x on the apex face by (32, 0, 16) in the box frame: its coordinate
+      // along the beam is 0, so the beam's part of the drag is ignored
+      auto* lightNode = createLight(map, "0 0 0", DefaultSpot);
+      CHECK(
+        drag(tool, edgeHit({1, -1, -1}, {1, 1, -1}), {{-32, 0, -16}})
+        == std::vector{true});
+
+      checkVector(*lightNode, "origin", {0, 0, 0});
+      CHECK(valueOf(*lightNode, "light_target") == "0 0 -256");
+      CHECK(valueOf(*lightNode, "light_right") == "-159.03 0 0");
+      CHECK(valueOf(*lightNode, "light_up") == "0 -128 0");
+    }
+
+    SECTION("a spot light's corners scale about the apex (AC-24)")
+    {
+      auto* lightNode = createLight(map, "0 0 0", DefaultSpot);
+
+      SECTION("a far corner scales the far cap and the length by one factor")
+      {
+        // the corner (132, 132, 264) moved along its line from the apex by a tenth of
+        // its distance: hx = hy = 145.2, the length 290.4, |target| 282.4
+        const auto corner = vm::vec3d{132, 132, 264};
+        REQUIRE(vm::length(corner) == Catch::Approx(323.33).margin(0.005));
+        const auto boxDelta = corner / 10.0;
+        CHECK(
+          drag(tool, cornerHit({1, 1, 1}), {{-boxDelta.x(), boxDelta.y(), -boxDelta.z()}})
+          == std::vector{true});
+
+        checkVector(*lightNode, "origin", {0, 0, 0});
+        CHECK(valueOf(*lightNode, "light_target") == "0 0 -282.4");
+        CHECK(
+          lengthOf(*lightNode, "light_right")
+          == Catch::Approx(145.2 * 282.4 / 290.4).margin(LengthTolerance));
+        CHECK(valueOf(*lightNode, "light_right") == "-141.2 0 0");
+        CHECK(valueOf(*lightNode, "light_up") == "0 -141.2 0");
+      }
+
+      SECTION("an apex corner scales the far cap, the length unchanged (Q20)")
+      {
+        // the corner (132, 132, 0) by a tenth of its distance from the apex: hx = hy =
+        // 145.2, the length 264
+        const auto boxDelta = vm::vec3d{132, 132, 0} / 10.0;
+        CHECK(
+          drag(tool, cornerHit({1, 1, -1}), {{-boxDelta.x(), boxDelta.y(), 0}})
+          == std::vector{true});
+
+        checkVector(*lightNode, "origin", {0, 0, 0});
+        CHECK(valueOf(*lightNode, "light_target") == "0 0 -256");
+        CHECK(
+          lengthOf(*lightNode, "light_right")
+          == Catch::Approx(145.2 * 256.0 / 264.0).margin(LengthTolerance));
+        CHECK(valueOf(*lightNode, "light_right") == "-140.8 0 0");
+        CHECK(valueOf(*lightNode, "light_up") == "0 -140.8 0");
+      }
     }
 
     SECTION("a spot light's lateral face centre widens its far rectangle (D58)")
@@ -634,43 +761,42 @@ TEST_CASE("LightVolumeTool")
       auto* lightNode = createLight(map, "0 0 0", DefaultSpot);
 
       // the box frame's +x is world -X for the default spot light
-      SECTION("the +x face, the opposite face staying, tilts the beam (D10)")
+      SECTION("the +x face scales hx about the beam, no tilt (D67, AC-24)")
       {
-        // the box [-132, 164] x [-132, 132] x [0, 264]: the numbers of D27 (a)
+        // the box [-164, 164] x [-132, 132] x [0, 264]: right = 164 * 256 / 264
         CHECK(drag(tool, faceCenterHit({1, 0, 0}), {{-32, 0, 0}}) == std::vector{true});
-        CHECK(valueOf(*lightNode, "light_target") == "-15.52 0 -256.01");
+        CHECK(valueOf(*lightNode, "light_target") == "0 0 -256");
         CHECK(
           lengthOf(*lightNode, "light_right")
-          == Catch::Approx(143.5234).margin(LengthTolerance));
-        CHECK(
-          lengthOf(*lightNode, "light_up")
-          == Catch::Approx(128.0073).margin(LengthTolerance));
+          == Catch::Approx(164.0 * 256.0 / 264.0).margin(LengthTolerance));
+        CHECK(valueOf(*lightNode, "light_right") == "-159.03 0 0");
+        CHECK(valueOf(*lightNode, "light_up") == "0 -128 0");
         checkVector(*lightNode, "origin", {0, 0, 0});
       }
 
-      SECTION("the -x face, the opposite face staying, tilts the beam the other way")
+      SECTION("the -x face by -32 gives the same light")
       {
         CHECK(drag(tool, faceCenterHit({-1, 0, 0}), {{32, 0, 0}}) == std::vector{true});
-        CHECK(valueOf(*lightNode, "light_target") == "15.52 0 -256.01");
-        CHECK(
-          lengthOf(*lightNode, "light_right")
-          == Catch::Approx(143.5234).margin(LengthTolerance));
+        CHECK(valueOf(*lightNode, "light_target") == "0 0 -256");
+        CHECK(valueOf(*lightNode, "light_right") == "-159.03 0 0");
+        CHECK(valueOf(*lightNode, "light_up") == "0 -128 0");
+        checkVector(*lightNode, "origin", {0, 0, 0});
       }
 
-      SECTION("with the centre anchor, the target stays and only right changes")
+      SECTION("the +y and -y faces scale hy, the target and right unchanged")
       {
-        // the box [-164, 164] x [-132, 132] x [0, 264]: right = 164 * 256 / 264
-        tool.setAnchorPos(AnchorPos::Center);
         for (const auto& [normal, delta] : std::vector<std::pair<vm::vec3d, vm::vec3d>>{
-               {{1, 0, 0}, {-32, 0, 0}}, {{-1, 0, 0}, {32, 0, 0}}})
+               {{0, 1, 0}, {0, 32, 0}}, {{0, -1, 0}, {0, -32, 0}}})
         {
           CAPTURE(normal);
           REQUIRE(drag(tool, faceCenterHit(normal), {delta}) == std::vector{true});
           CHECK(valueOf(*lightNode, "light_target") == "0 0 -256");
           CHECK(
-            lengthOf(*lightNode, "light_right")
+            lengthOf(*lightNode, "light_up")
             == Catch::Approx(164.0 * 256.0 / 264.0).margin(LengthTolerance));
-          CHECK(valueOf(*lightNode, "light_up") == "0 -128 0");
+          CHECK(valueOf(*lightNode, "light_up") == "0 -159.03 0");
+          CHECK(valueOf(*lightNode, "light_right") == "-128 0 0");
+          checkVector(*lightNode, "origin", {0, 0, 0});
           map.undoCommand();
         }
       }
@@ -721,19 +847,18 @@ TEST_CASE("LightVolumeTool")
       }
     }
 
-    SECTION("a spot light's apex face moves the apex along the beam")
+    SECTION("a spot light's apex face is not a handle (D64)")
     {
+      // it lies on the light's position, which the move tool and the keys move
       auto* lightNode = createLight(map, "0 0 0", DefaultSpot);
-      CHECK(drag(tool, sideHit({0, 0, -1}), {{0, 0, -16}}) == std::vector{true});
+      const auto properties = lightNode->entity().properties();
+      const auto undoName = *map.undoCommandName();
 
-      checkVector(*lightNode, "origin", {0, 0, -16});
-      checkVector(*lightNode, "light_target", {0, 0, -240});
-      CHECK(
-        lengthOf(*lightNode, "light_right")
-        == Catch::Approx(127.7419).margin(LengthTolerance));
-      CHECK(
-        lengthOf(*lightNode, "light_up")
-        == Catch::Approx(127.7419).margin(LengthTolerance));
+      CHECK(drag(tool, sideHit({0, 0, -1}), {{0, 0, -16}}) == std::vector{false});
+      CHECK(drag(tool, faceCenterHit({0, 0, -1}), {{0, 0, 16}}) == std::vector{false});
+
+      CHECK(lightNode->entity().properties() == properties);
+      CHECK(*map.undoCommandName() == undoName);
     }
 
     SECTION("a denied box leaves the light and the undo stack as they are")
@@ -757,10 +882,24 @@ TEST_CASE("LightVolumeTool")
         const auto properties = lightNode->entity().properties();
         const auto undoName = *map.undoCommandName();
 
-        // the box is 1 wide
+        // the box is 1 wide, half a unit on each side of the origin
         CHECK(
-          drag(tool, sideHit({1, 0, 0}), {{-(2.0 * 300.0 * t - 1.0), 0, 0}})
+          drag(tool, sideHit({1, 0, 0}), {{-(300.0 * t - 0.5), 0, 0}})
           == std::vector{false});
+
+        CHECK(lightNode->entity().properties() == properties);
+        CHECK(*map.undoCommandName() == undoName);
+      }
+
+      SECTION("a side dragged to or through the origin (AC-23)")
+      {
+        auto* lightNode = createLight(map, "0 0 0", {});
+        const auto properties = lightNode->entity().properties();
+        const auto undoName = *map.undoCommandName();
+
+        CHECK(drag(tool, sideHit({1, 0, 0}), {{-300.0 * t, 0, 0}}) == std::vector{false});
+        CHECK(drag(tool, sideHit({1, 0, 0}), {{-400, 0, 0}}) == std::vector{false});
+        CHECK(drag(tool, cornerHit({1, 1, 1}), {{-400, 0, 0}}) == std::vector{false});
 
         CHECK(lightNode->entity().properties() == properties);
         CHECK(*map.undoCommandName() == undoName);
@@ -774,9 +913,9 @@ TEST_CASE("LightVolumeTool")
           drag(tool, sideHit({1, 0, 0}), {{32, 0, 0}, {-1000, 0, 0}, {32, 0, 0}})
           == std::vector{true, false, true});
 
-        // the denied step is not accumulated
-        CHECK(valueOf(*lightNode, "origin") == "32 0 0");
-        checkRadius(*lightNode, {300.0 + 32.0 / t, 300, 300});
+        // the denied step is not accumulated: the side by 64 in all
+        CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+        checkRadius(*lightNode, {300.0 + 64.0 / t, 300, 300});
       }
     }
 
@@ -845,19 +984,21 @@ TEST_CASE("LightVolumeTool")
         REQUIRE(hit.isMatch());
         REQUIRE(hit.target<LightSurfaceHit>().element == mdl::LightElement::OuterShell);
 
-        SECTION("the opposite side stays")
+        SECTION("the opposite side mirrors it, the origin stays (D64, AC-23)")
         {
           // the shell is at the full radius: it follows the mouse, the radius grows by
-          // half the drag and the centre by the other half
+          // the drag
           CHECK(drag(tool, hit, {{32, 0, 0}}) == std::vector{true});
-          CHECK(valueOf(*lightNode, "origin") == "16 0 0");
-          CHECK(valueOf(*lightNode, "light_radius") == "316 300 300");
+          CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+          CHECK(valueOf(*lightNode, "light_radius") == "332 300 300");
         }
 
-        SECTION("with the centre anchor, the radius grows by the drag")
+        SECTION("the -x side dragged by -32 gives the same light")
         {
-          tool.setAnchorPos(AnchorPos::Center);
-          CHECK(drag(tool, hit, {{32, 0, 0}}) == std::vector{true});
+          const auto otherHit = pickSurface(tool, vm::ray3d{{-1000, 0, 100}, {1, 0, 0}});
+          REQUIRE(
+            otherHit.target<LightSurfaceHit>().element == mdl::LightElement::OuterShell);
+          CHECK(drag(tool, otherHit, {{-32, 0, 0}}) == std::vector{true});
           CHECK(valueOf(*lightNode, "origin") == "0 0 0");
           CHECK(valueOf(*lightNode, "light_radius") == "332 300 300");
         }
@@ -908,19 +1049,92 @@ TEST_CASE("LightVolumeTool")
           == Catch::Approx(132.0 * 320.0 / 328.0).margin(LengthTolerance));
       }
 
-      SECTION("the funnel scales the base uniformly, the length unchanged")
+      SECTION("the funnel scales the lateral axis it is grabbed on (D67, AC-24)")
       {
         auto* lightNode = createLight(map, "0 0 0", DefaultSpot);
-        const auto hit = pickSurface(tool, vm::ray3d{{1000, 0, -136}, {-1, 0, 0}});
-        REQUIRE(hit.isMatch());
-        REQUIRE(hit.target<LightSurfaceHit>().element == mdl::LightElement::Funnel);
 
-        // at depth 136 the funnel is 68 from the beam; 34 more is a factor of 1.5
-        CHECK(drag(tool, hit, {{34, 0, 0}}) == std::vector{true});
-        checkVector(*lightNode, "light_target", {0, 0, -256});
-        checkVector(*lightNode, "light_right", {-192, 0, 0});
-        checkVector(*lightNode, "light_up", {0, -192, 0});
-        checkVector(*lightNode, "origin", {0, 0, 0});
+        SECTION("on world +X, the box frame's -x side: right")
+        {
+          const auto hit = pickSurface(tool, vm::ray3d{{1000, 0, -136}, {-1, 0, 0}});
+          REQUIRE(hit.isMatch());
+          REQUIRE(hit.target<LightSurfaceHit>().element == mdl::LightElement::Funnel);
+
+          // at depth 136 the funnel is 68 from the beam; 34 more is a factor of 1.5 on
+          // the box's x: hx 198, right 198 * 256 / 264 = 192
+          CHECK(drag(tool, hit, {{34, 0, 0}}) == std::vector{true});
+          checkVector(*lightNode, "light_target", {0, 0, -256});
+          checkVector(*lightNode, "light_right", {-192, 0, 0});
+          CHECK(valueOf(*lightNode, "light_up") == "0 -128 0");
+          checkVector(*lightNode, "origin", {0, 0, 0});
+
+          // the line of the drag runs along that axis through the hit point
+          map.undoCommand();
+          REQUIRE(tool.beginDrag(hit));
+          const auto line = lightVolumeHandleLine(*tool.dragStartVolume(), hit);
+          CHECK(vm::is_equal(line.direction, vm::vec3d{1, 0, 0}, 1e-9));
+          CHECK(vm::is_equal(line.point, hit.hitPoint(), 1e-9));
+          tool.cancelDrag();
+        }
+
+        SECTION("on world +Y, the box frame's +y side: up")
+        {
+          const auto hit = pickSurface(tool, vm::ray3d{{0, 1000, -136}, {0, -1, 0}});
+          REQUIRE(hit.isMatch());
+          REQUIRE(hit.target<LightSurfaceHit>().element == mdl::LightElement::Funnel);
+
+          CHECK(drag(tool, hit, {{0, 34, 0}}) == std::vector{true});
+          checkVector(*lightNode, "light_target", {0, 0, -256});
+          CHECK(valueOf(*lightNode, "light_right") == "-128 0 0");
+          checkVector(*lightNode, "light_up", {0, -192, 0});
+          checkVector(*lightNode, "origin", {0, 0, 0});
+        }
+
+        SECTION("off the axes, the axis it lies farther out on")
+        {
+          // at depth 136 on the circle of radius 68, 30 degrees off world +X: x 58.9,
+          // y 34, so the box's x; the hit point's x moved by 34 along it
+          const auto direction = vm::vec3d{std::cos(vm::to_radians(30.0)), 0.5, 0.0};
+          const auto hit = pickSurface(
+            tool, vm::ray3d{direction * 1000.0 + vm::vec3d{0, 0, -136}, -direction});
+          REQUIRE(hit.isMatch());
+          REQUIRE(hit.target<LightSurfaceHit>().element == mdl::LightElement::Funnel);
+          const auto x = hit.hitPoint().x();
+
+          CHECK(drag(tool, hit, {{34, 0, 0}}) == std::vector{true});
+          CHECK(
+            lengthOf(*lightNode, "light_right")
+            == Catch::Approx(128.0 * (x + 34.0) / x).margin(LengthTolerance));
+          CHECK(valueOf(*lightNode, "light_up") == "0 -128 0");
+          checkVector(*lightNode, "light_target", {0, 0, -256});
+        }
+      }
+
+      SECTION("the inner cap sets math_inner_radius from its depth (D69, AC-22)")
+      {
+        auto* lightNode = createLight(map, "0 0 0", InnerCapSpot);
+        const auto hit = pickSurface(tool, vm::ray3d{{0, 0, -1000}, {0, 0, 1}});
+        REQUIRE(hit.isMatch());
+        REQUIRE(hit.target<LightSurfaceHit>().element == mdl::LightElement::InnerCap);
+        REQUIRE(hit.distance() == Catch::Approx(1000.0 - 84.8).margin(1e-6));
+
+        // from depth 84.8 by 32 along the beam: (116.8 - 8) / 256
+        CHECK(drag(tool, hit, {{0, 0, -32}}) == std::vector{true});
+        CHECK(valueOf(*lightNode, "math_inner_radius") == "0.425");
+        CHECK(valueOf(*lightNode, "light_target") == "0 0 -256");
+        CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+
+        // along the beam, between 0 and 0.98
+        map.undoCommand();
+        REQUIRE(tool.beginDrag(hit));
+        const auto line = lightVolumeHandleLine(*tool.dragStartVolume(), hit);
+        CHECK(vm::is_equal(line.direction, vm::vec3d{0, 0, -1}, 1e-9));
+        tool.cancelDrag();
+
+        CHECK(drag(tool, hit, {{0, 0, -1000}}) == std::vector{true});
+        CHECK(valueOf(*lightNode, "math_inner_radius") == "0.98");
+        map.undoCommand();
+        CHECK(drag(tool, hit, {{0, 0, 500}}) == std::vector{true});
+        CHECK(valueOf(*lightNode, "math_inner_radius") == "0");
       }
 
       SECTION("a sun's box and another light's surface are not edited")
@@ -951,6 +1165,115 @@ TEST_CASE("LightVolumeTool")
         CHECK(lightNode->entity().properties() == properties);
         CHECK(*map.undoCommandName() == undoName);
       }
+    }
+  }
+
+  SECTION("scaleLightBoxAboutOrigin")
+  {
+    using Coordinates = std::vector<std::pair<std::size_t, double>>;
+
+    SECTION("a point box scales symmetrically about its centre")
+    {
+      const auto box = vm::bbox3d{{-100, -200, -300}, {100, 200, 300}};
+      CHECK(
+        scaleLightBoxAboutOrigin(box, Coordinates{{0, 100}}, {32, 0, 0})
+        == vm::bbox3d{{-132, -200, -300}, {132, 200, 300}});
+      CHECK(
+        scaleLightBoxAboutOrigin(box, Coordinates{{0, -100}}, {-32, 0, 0})
+        == vm::bbox3d{{-132, -200, -300}, {132, 200, 300}});
+      CHECK(
+        scaleLightBoxAboutOrigin(box, Coordinates{{0, 100}, {1, 200}}, {32, 16, 64})
+        == vm::bbox3d{{-132, -216, -300}, {132, 216, 300}});
+      CHECK(
+        scaleLightBoxAboutOrigin(box, Coordinates{}, {32, 16, 64}) == std::optional{box});
+    }
+
+    SECTION("a spot box keeps its apex face at z = 0")
+    {
+      const auto box = vm::bbox3d{{-132, -132, 0}, {132, 132, 264}};
+      CHECK(
+        scaleLightBoxAboutOrigin(box, Coordinates{{2, 264}}, {0, 0, 64})
+        == vm::bbox3d{{-132, -132, 0}, {132, 132, 328}});
+
+      const auto corner = scaleLightBoxAboutOrigin(
+        box, Coordinates{{0, 132}, {1, 132}, {2, 264}}, vm::vec3d{132, 132, 264} / 10.0);
+      REQUIRE(corner);
+      CHECK(vm::is_equal(
+        *corner, vm::bbox3d{{-145.2, -145.2, 0}, {145.2, 145.2, 290.4}}, 1e-9));
+    }
+
+    SECTION("an axis whose coordinate is 0 is left as it is")
+    {
+      const auto box = vm::bbox3d{{-132, -132, 0}, {132, 132, 264}};
+      CHECK(
+        scaleLightBoxAboutOrigin(box, Coordinates{{2, 0.0}}, {0, 0, 16})
+        == std::optional{box});
+      CHECK(
+        scaleLightBoxAboutOrigin(box, Coordinates{{0, 132}, {2, 0.0}}, {32, 0, 16})
+        == vm::bbox3d{{-164, -132, 0}, {164, 132, 264}});
+    }
+
+    SECTION("a drag to or through the origin is denied")
+    {
+      const auto box = vm::bbox3d{{-100, -100, -100}, {100, 100, 100}};
+      CHECK(
+        scaleLightBoxAboutOrigin(box, Coordinates{{0, 100}}, {-100, 0, 0})
+        == std::nullopt);
+      CHECK(
+        scaleLightBoxAboutOrigin(box, Coordinates{{0, 100}}, {-150, 0, 0})
+        == std::nullopt);
+      CHECK(
+        scaleLightBoxAboutOrigin(box, Coordinates{{0, 100}, {1, 100}}, {32, -150, 0})
+        == std::nullopt);
+      CHECK(
+        scaleLightBoxAboutOrigin(box, Coordinates{{0, 100}}, {-99, 0, 0})
+        == vm::bbox3d{{-1, -100, -100}, {1, 100, 100}});
+    }
+  }
+
+  SECTION("lightVolumeHandleLine")
+  {
+    SECTION("a corner lies on the line from the box frame's origin (D66)")
+    {
+      createLight(map, "16 32 48", {});
+      const auto volume = tool.volumeBox();
+      REQUIRE(volume);
+      const auto halfExtent = volume->box.max.x();
+
+      const auto line = lightVolumeHandleLine(*volume, cornerHit({1, 1, 1}));
+      CHECK(vm::is_equal(
+        line.point, vm::vec3d{16, 32, 48} + vm::vec3d{1, 1, 1} * halfExtent, 1e-9));
+      CHECK(vm::is_equal(line.direction, vm::normalize(vm::vec3d{1, 1, 1}), 1e-9));
+    }
+
+    SECTION("a spot light's corners lie on lines from its apex")
+    {
+      createLight(map, "16 32 48", DefaultSpot);
+      const auto volume = tool.volumeBox();
+      REQUIRE(volume);
+
+      // the far corner (132, 132, 264) of the box is world (-132, 132, -264) from the
+      // apex, the apex corner (132, 132, 0) world (-132, 132, 0)
+      auto line = lightVolumeHandleLine(*volume, cornerHit({1, 1, 1}));
+      CHECK(vm::is_equal(line.point, vm::vec3d{16 - 132, 32 + 132, 48 - 264}, 1e-9));
+      CHECK(
+        vm::is_equal(line.direction, vm::normalize(vm::vec3d{-132, 132, -264}), 1e-9));
+
+      line = lightVolumeHandleLine(*volume, cornerHit({1, 1, -1}));
+      CHECK(vm::is_equal(line.point, vm::vec3d{16 - 132, 32 + 132, 48}, 1e-9));
+      CHECK(vm::is_equal(line.direction, vm::normalize(vm::vec3d{-1, 1, 0}), 1e-9));
+    }
+
+    SECTION("an edge through its centre, outwards on its two axes")
+    {
+      createLight(map, "0 0 0", DefaultSpot);
+      const auto volume = tool.volumeBox();
+      REQUIRE(volume);
+
+      // the far cap's +x edge, its centre (132, 0, 264) in the box frame
+      const auto line = lightVolumeHandleLine(*volume, edgeHit({1, -1, 1}, {1, 1, 1}));
+      CHECK(vm::is_equal(line.point, vm::vec3d{-132, 0, -264}, 1e-9));
+      CHECK(vm::is_equal(line.direction, vm::normalize(vm::vec3d{-132, 0, -264}), 1e-9));
     }
   }
 
@@ -1143,6 +1466,46 @@ TEST_CASE("LightVolumeTool")
       CHECK_FALSE(pick2D(tool, vm::ray3d{{600, 0, 1000}, {0, 0, -1}}).isMatch());
       CHECK_FALSE(pick2D(tool, vm::ray3d{{0, 0, 1000}, {0, 0, -1}}).isMatch());
     }
+
+    SECTION("a spot light's apex line is not picked, its far and side lines are (D67)")
+    {
+      // the front view, looking along +Y: the box spans world x in [-132, 132] and z in
+      // [-264, 0]; its apex line is at z = 0
+      selectOnly(map, {});
+      auto* spotNode = createLight(map, "0 0 0", DefaultSpot);
+      const auto ahead = vm::vec3d{0, 1, 0};
+      const auto up = vm::vec3f{0, 0, 1};
+
+      CHECK_FALSE(pick2D(tool, vm::ray3d{{50, -1000, 0}, ahead}, up).isMatch());
+
+      // the far line moves the far cap like its centre (AC-24)
+      const auto farHit = pick2D(tool, vm::ray3d{{50, -1000, -264}, ahead}, up);
+      REQUIRE(farHit.type() == LightVolumeTool::SideHitType);
+      CHECK(farHit.target<BBoxSide>() == BBoxSide{{0, 0, 1}});
+      CHECK(drag(tool, farHit, {{0, 0, -64}}) == std::vector{true});
+      CHECK(valueOf(*spotNode, "light_target") == "0 0 -320");
+      CHECK(
+        lengthOf(*spotNode, "light_right")
+        == Catch::Approx(132.0 * 320.0 / 328.0).margin(LengthTolerance));
+      map.undoCommand();
+
+      // a side line, world x = -132, is the box frame's +x side: one lateral axis
+      const auto sideLineHit = pick2D(tool, vm::ray3d{{-132, -1000, -100}, ahead}, up);
+      REQUIRE(sideLineHit.type() == LightVolumeTool::SideHitType);
+      CHECK(sideLineHit.target<BBoxSide>() == BBoxSide{{1, 0, 0}});
+      CHECK(drag(tool, sideLineHit, {{-32, 0, 0}}) == std::vector{true});
+      CHECK(valueOf(*spotNode, "light_target") == "0 0 -256");
+      CHECK(valueOf(*spotNode, "light_right") == "-159.03 0 0");
+      CHECK(valueOf(*spotNode, "light_up") == "0 -128 0");
+      CHECK(valueOf(*spotNode, "origin") == "0 0 0");
+      map.undoCommand();
+
+      // the top view sees the apex face's edges as the lateral sides
+      const auto down = vm::vec3d{0, 0, -1};
+      const auto topHit = pick2D(tool, vm::ray3d{{-132, 50, 1000}, down});
+      REQUIRE(topHit.type() == LightVolumeTool::SideHitType);
+      CHECK(topHit.target<BBoxSide>() == BBoxSide{{1, 0, 0}});
+    }
   }
 
   SECTION("pickSurfaces")
@@ -1296,6 +1659,80 @@ TEST_CASE("LightVolumeTool")
 
       // from inside the cone, neither
       CHECK_FALSE(pickSurface(tool, vm::ray3d{{0, 0, -100}, {0, 0, -1}}).isMatch());
+    }
+
+    SECTION("a selected math spot light's inner cap, from either side (D69, AC-22)")
+    {
+      createLight(map, "0 0 0", InnerCapSpot);
+      const auto depth = 8.0 + 0.3 * 256.0;
+
+      // from the base's side, behind the base at 736
+      auto hit = pickSurface(tool, vm::ray3d{{0, 0, -1000}, {0, 0, 1}});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::InnerCap);
+      CHECK(hit.distance() == Catch::Approx(1000.0 - depth).margin(1e-6));
+      CHECK(vm::is_equal(hit.target<LightSurfaceHit>().localPoint, {0, 0, -depth}, 1e-6));
+
+      // from the apex's side
+      hit = pickSurface(tool, vm::ray3d{{0, 0, 1000}, {0, 0, -1}});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::InnerCap);
+      CHECK(hit.distance() == Catch::Approx(1000.0 + depth).margin(1e-6));
+
+      // through the funnel, which the ray enters at depth 119
+      const auto toCentre = vm::vec3d{0, 0, -depth} - vm::vec3d{200, 0, -200};
+      hit = pickSurface(tool, vm::ray3d{{200, 0, -200}, vm::normalize(toCentre)});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::InnerCap);
+      CHECK(hit.distance() == Catch::Approx(vm::length(toCentre)).margin(1e-6));
+
+      // the cap is the ring's inside, not the square around it: at (40, 40) the ray
+      // crosses the cap's plane outside the ring, and the base keeps it
+      hit = pickSurface(tool, vm::ray3d{{40, 40, -1000}, {0, 0, 1}});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::Base);
+      CHECK(hit.distance() == Catch::Approx(736.0).margin(1e-6));
+
+      // without a core, no cap
+      REQUIRE(mdl::setEntityProperty(map, "math_inner_radius", "0.01"));
+      hit = pickSurface(tool, vm::ray3d{{0, 0, -1000}, {0, 0, 1}});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::Base);
+    }
+
+    SECTION("a node in front of the inner cap leaves the base or the funnel (D69)")
+    {
+      createLight(map, "0 0 0", InnerCapSpot);
+      auto* brushNode = createBrush(map);
+      const auto ray = vm::ray3d{{0, 0, -1000}, {0, 0, 1}};
+
+      // the brush between the base at 736 and the cap at 915.2
+      auto hit = pickSurface(tool, ray, {brushHit(brushNode, 800)});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::Base);
+      CHECK(hit.distance() == Catch::Approx(736.0).margin(1e-6));
+
+      // the brush behind the cap
+      hit = pickSurface(tool, ray, {brushHit(brushNode, 950)});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::InnerCap);
+    }
+
+    SECTION("an unselected spot light's inner cap is not picked (it is not drawn)")
+    {
+      setPref(
+        Preferences::ShowLightVolumes, std::string{Preferences::ShowLightVolumesAll});
+      const auto resetVolumes = kdl::invoke_later{[] {
+        PreferenceManager::instance().resetToDefault(Preferences::ShowLightVolumes);
+      }};
+
+      createLight(map, "0 0 0", InnerCapSpot);
+      mdl::deselectAll(map);
+
+      const auto hit = pickSurface(tool, vm::ray3d{{0, 0, -1000}, {0, 0, 1}});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::Base);
+      CHECK(hit.distance() == Catch::Approx(736.0).margin(1e-6));
     }
 
     SECTION("a pick follows an edit of the light")

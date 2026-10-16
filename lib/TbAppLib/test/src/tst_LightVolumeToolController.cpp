@@ -63,7 +63,6 @@
 
 #include <cmath>
 #include <string>
-#include <tuple>
 #include <vector>
 
 #include <catch2/catch_approx.hpp>
@@ -331,25 +330,80 @@ TEST_CASE("LightVolumeToolController")
         CHECK(controller.acceptMouseDrag(inputState) == nullptr);
       }
 
-      SECTION("Alt anchors the box at its centre, Shift scales proportionally")
+      SECTION("Shift and Alt change nothing on a handle (D65, D71, AC-25)")
       {
-        using T = std::tuple<ModifierKeyState, AnchorPos, ProportionalAxes>;
-        const auto [modifiers, anchorPos, proportionalAxes] = GENERATE(values<T>({
-          {ModifierKeys::None, AnchorPos::Opposite, ProportionalAxes::None()},
-          {ModifierKeys::Alt, AnchorPos::Center, ProportionalAxes::None()},
-          {ModifierKeys::Shift, AnchorPos::Opposite, ProportionalAxes::All()},
-          {ModifierKeys::Alt | ModifierKeys::Shift,
-           AnchorPos::Center,
-           ProportionalAxes::All()},
+        map.grid().toggleSnap(); // for a delta that is not snapped
+
+        const auto modifiers = GENERATE(values<ModifierKeyState>({
+          ModifierKeys::None,
+          ModifierKeys::Alt,
+          ModifierKeys::Shift,
+          ModifierKeys::Alt | ModifierKeys::Shift,
         }));
         CAPTURE(modifiers);
 
-        auto inputState = inputStateFor(pickRay, camera, {cornerHit(20)}, modifiers);
-        auto tracker = controller.acceptMouseDrag(inputState);
+        // the +x face centre, dragged across its handle line by 32, with the modifiers
+        // held from the start and pressed again during the drag
+        const auto startRay = vm::ray3d{{halfExtent, -100, 0}, vm::vec3d{0, 1, 0}};
+        const auto startCamera = perspectiveCameraFor(startRay);
+        auto tracker = controller.acceptMouseDrag(inputStateFor(
+          startRay,
+          startCamera,
+          {mdl::Hit{
+            LightVolumeTool::FaceCenterHitType,
+            100.0,
+            vm::vec3d{halfExtent, 0, 0},
+            BBoxSide{vm::vec3d{1, 0, 0}}}},
+          modifiers));
         REQUIRE(tracker != nullptr);
-        CHECK(tool.anchorPos() == anchorPos);
-        CHECK(tool.proportionalAxes() == proportionalAxes);
-        tracker->cancel();
+        CHECK(tool.isDragging());
+
+        const auto dragRay = vm::ray3d{{halfExtent + 32, -100, 0}, vm::vec3d{0, 1, 0}};
+        const auto dragInputState = inputStateFor(dragRay, startCamera, {}, modifiers);
+        tracker->modifierKeyChange(dragInputState);
+        CHECK(tracker->update(dragInputState));
+        tracker->modifierKeyChange(inputStateFor(dragRay, startCamera, {}));
+        tracker->end(dragInputState);
+
+        // the numbers of a plain drag: (300 t + 32) / t, the origin unchanged
+        CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+        CHECK(valueOf(*lightNode, "light_radius") == "339.79 300 300");
+      }
+
+      SECTION("a 3D edge follows the mouse on its two axes (D66, AC-23)")
+      {
+        map.grid().toggleSnap();
+
+        const auto modifiers =
+          GENERATE(values<ModifierKeyState>({ModifierKeys::None, ModifierKeys::Shift}));
+        CAPTURE(modifiers);
+
+        // the +x +y edge along z, seen from above: it is dragged in the horizontal plane
+        // through the hit point, perpendicular to it, by (32, 16)
+        const auto startRay =
+          vm::ray3d{{halfExtent, halfExtent, 1000}, vm::vec3d{0, 0, -1}};
+        const auto startCamera = perspectiveCameraFor(startRay);
+        auto tracker = controller.acceptMouseDrag(inputStateFor(
+          startRay,
+          startCamera,
+          {mdl::Hit{
+            LightVolumeTool::EdgeHitType,
+            1000.0,
+            vm::vec3d{halfExtent, halfExtent, 0},
+            BBoxEdge{vm::vec3d{1, 1, -1}, vm::vec3d{1, 1, 1}}}},
+          modifiers));
+        REQUIRE(tracker != nullptr);
+
+        const auto dragRay =
+          vm::ray3d{{halfExtent + 32, halfExtent + 16, 1000}, vm::vec3d{0, 0, -1}};
+        const auto dragInputState = inputStateFor(dragRay, startCamera, {}, modifiers);
+        CHECK(tracker->update(dragInputState));
+        tracker->end(dragInputState);
+
+        CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+        checkVector(
+          *lightNode, "light_radius", {300.0 + 32.0 / t, 300.0 + 16.0 / t, 300});
+        CHECK(valueOf(*lightNode, "light_radius") == "339.79 319.9 300");
       }
 
       SECTION("a drag moves the light's side")
@@ -375,11 +429,12 @@ TEST_CASE("LightVolumeToolController")
         CHECK(tracker->update(dragInputState));
         tracker->end(dragInputState);
 
-        // the box is +-300 t: the radius grows by 16 / t (D61)
+        // the box is +-300 t and scales about the origin: the radius grows by 32 / t
+        // (D61, D64)
         CHECK_FALSE(tool.isDragging());
         CHECK(lightNode->entity().property("origin") != nullptr);
-        CHECK(*lightNode->entity().property("origin") == "16 0 0");
-        checkVector(*lightNode, "light_radius", {300.0 + 16.0 / t, 300, 300});
+        CHECK(*lightNode->entity().property("origin") == "0 0 0");
+        checkVector(*lightNode, "light_radius", {300.0 + 32.0 / t, 300, 300});
       }
 
       SECTION("a drag moves a turned light's side along its turned axis")
@@ -409,8 +464,8 @@ TEST_CASE("LightVolumeToolController")
         CHECK(tracker->update(dragInputState));
         tracker->end(dragInputState);
 
-        CHECK(valueOf(*turnedNode, "origin") == "0 16 0");
-        checkVector(*turnedNode, "light_radius", {300.0 + 16.0 / t, 300, 300});
+        CHECK(valueOf(*turnedNode, "origin") == "0 0 0");
+        checkVector(*turnedNode, "light_radius", {300.0 + 32.0 / t, 300, 300});
       }
 
       SECTION("a drag that the tool's deactivation cancelled ends quietly")
@@ -447,11 +502,11 @@ TEST_CASE("LightVolumeToolController")
         const auto laterRay = vm::ray3d{{364, -100, 0}, vm::vec3d{0, 1, 0}};
         CHECK_FALSE(tracker->update(inputStateFor(laterRay, startCamera, {})));
 
-        // and after a modifier change it proposes no handle position at all
+        // a modifier change changes nothing (D71): the update after it ends it again
         tracker->modifierKeyChange(
           inputStateFor(laterRay, startCamera, {}, ModifierKeys::Shift));
         const auto lastRay = vm::ray3d{{396, -100, 0}, vm::vec3d{0, 1, 0}};
-        CHECK(tracker->update(inputStateFor(lastRay, startCamera, {})));
+        CHECK_FALSE(tracker->update(inputStateFor(lastRay, startCamera, {})));
         tracker->end(dragInputState);
 
         CHECK(lightNode->entity().properties() == properties);
@@ -551,7 +606,7 @@ TEST_CASE("LightVolumeToolController")
       {
         map.grid().toggleSnap(); // for a delta that is not snapped
 
-        SECTION("the outer shell moves its side, the opposite side stays")
+        SECTION("the outer shell moves its side, the opposite side mirrors it")
         {
           const auto hit = pickSurface(tool, vm::ray3d{{1000, 0, 100}, {-1, 0, 0}});
           REQUIRE(hit.target<LightSurfaceHit>().element == mdl::LightElement::OuterShell);
@@ -572,8 +627,9 @@ TEST_CASE("LightVolumeToolController")
           CHECK(tracker->update(dragInputState));
           tracker->end(dragInputState);
 
-          CHECK(valueOf(*lightNode, "origin") == "16 0 0");
-          CHECK(valueOf(*lightNode, "light_radius") == "316 300 300");
+          // the shell at the full radius follows the mouse about the origin (D64)
+          CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+          CHECK(valueOf(*lightNode, "light_radius") == "332 300 300");
           REQUIRE(map.undoCommandName() != nullptr);
           CHECK(*map.undoCommandName() == "Edit Light Volume");
         }
@@ -631,7 +687,7 @@ TEST_CASE("LightVolumeToolController")
           checkVector(*spotNode, "origin", {0, 0, 0});
         }
 
-        SECTION("the funnel scales the base uniformly with the length unchanged")
+        SECTION("the funnel scales the base on one axis, the length unchanged (D67)")
         {
           auto* spotNode = createLight(
             map,
@@ -650,7 +706,7 @@ TEST_CASE("LightVolumeToolController")
             inputStateFor(startRay, startCamera, {hit}, ModifierKeys::Shift));
           REQUIRE(tracker != nullptr);
 
-          // 34 on is a factor of 1.5
+          // 34 on is a factor of 1.5 on the axis the hit point lies along, world X
           const auto dragInputState = inputStateFor(
             vm::ray3d{{102, -100, -136}, {0, 1, 0}},
             startCamera,
@@ -661,7 +717,8 @@ TEST_CASE("LightVolumeToolController")
 
           checkVector(*spotNode, "light_target", {0, 0, -256});
           checkVector(*spotNode, "light_right", {-192, 0, 0});
-          checkVector(*spotNode, "light_up", {0, -192, 0});
+          checkVector(*spotNode, "light_up", {0, -128, 0});
+          checkVector(*spotNode, "origin", {0, 0, 0});
         }
       }
 
@@ -1021,28 +1078,30 @@ TEST_CASE("LightVolumeToolController")
           tracker->end(dragInputState);
         };
 
+      // the opposite outline mirrors the dragged one, the origin stays (D64, AC-23)
       SECTION("the top view, the +x outline")
       {
         dragOutline(
           vm::ray3d{{halfExtents.x(), 50, 1000}, {0, 0, -1}}, {32, 0, 0}, {0, 1, 0});
-        checkVector(*lightNode, "light_radius", {300.0 + 16.0 / t, 200, 100});
-        checkVector(*lightNode, "origin", {16, 0, 0});
+        checkVector(*lightNode, "light_radius", {300.0 + 32.0 / t, 200, 100});
+        CHECK(valueOf(*lightNode, "light_radius") == "339.79 200 100");
+        checkVector(*lightNode, "origin", {0, 0, 0});
       }
 
       SECTION("the front view, the +z outline")
       {
         dragOutline(
           vm::ray3d{{50, -1000, halfExtents.z()}, {0, 1, 0}}, {0, 0, 32}, {0, 0, 1});
-        checkVector(*lightNode, "light_radius", {300, 200, 100.0 + 16.0 / t});
-        checkVector(*lightNode, "origin", {0, 0, 16});
+        checkVector(*lightNode, "light_radius", {300, 200, 100.0 + 32.0 / t});
+        checkVector(*lightNode, "origin", {0, 0, 0});
       }
 
       SECTION("the side view, the -y outline")
       {
         dragOutline(
           vm::ray3d{{-1000, -halfExtents.y(), 20}, {1, 0, 0}}, {0, -32, 0}, {0, 0, 1});
-        checkVector(*lightNode, "light_radius", {300, 200.0 + 16.0 / t, 100});
-        checkVector(*lightNode, "origin", {0, -16, 0});
+        checkVector(*lightNode, "light_radius", {300, 200.0 + 32.0 / t, 100});
+        checkVector(*lightNode, "origin", {0, 0, 0});
       }
     }
 
@@ -1077,27 +1136,55 @@ TEST_CASE("LightVolumeToolController")
       CHECK(radius.x() > 100.0);
       CHECK(radius.y() / radius.x() == Catch::Approx(2.0).margin(1e-3));
       CHECK(radius.z() == Catch::Approx(300.0).margin(0.005));
+      CHECK(valueOf(*lightNode, "origin") == "0 0 0");
     }
 
-    SECTION("Shift is proportional except along the view axis")
+    SECTION("Shift changes nothing in 2D either (D65, AC-25)")
     {
-      auto inputState =
-        inputStateFor(topRay, topCamera, {cornerHit(20)}, ModifierKeys::Shift);
-      auto tracker = controller.acceptMouseDrag(inputState);
+      map.grid().toggleSnap();
+
+      const auto modifiers =
+        GENERATE(values<ModifierKeyState>({ModifierKeys::None, ModifierKeys::Shift}));
+      CAPTURE(modifiers);
+
+      // the top view's +x outline by 32: one axis, not the view plane's two
+      auto pickResult = mdl::PickResult{};
+      controller.pick(inputStateFor(topRay, topCamera, {}), pickResult);
+      const auto& hit =
+        pickResult.first(mdl::HitFilters::type(LightVolumeTool::SideHitType));
+      REQUIRE(hit.isMatch());
+
+      auto tracker =
+        controller.acceptMouseDrag(inputStateFor(topRay, topCamera, {hit}, modifiers));
       REQUIRE(tracker != nullptr);
-      CHECK(tool.proportionalAxes() == ProportionalAxes{true, true, false});
-      tracker->cancel();
+      const auto dragInputState = inputStateFor(
+        vm::ray3d{topRay.origin + vm::vec3d{32, 0, 0}, topRay.direction},
+        topCamera,
+        {},
+        modifiers);
+      CHECK(tracker->update(dragInputState));
+      tracker->end(dragInputState);
+
+      CHECK(valueOf(*lightNode, "light_radius") == "339.79 300 300");
+      CHECK(valueOf(*lightNode, "origin") == "0 0 0");
     }
 
-    SECTION("Shift on a turned light keeps the box axis nearest the view direction")
+    SECTION("Shift on a turned light's corner changes nothing (D65, AC-25)")
     {
+      map.grid().toggleSnap();
+
+      const auto modifiers =
+        GENERATE(values<ModifierKeyState>({ModifierKeys::None, ModifierKeys::Shift}));
+      CAPTURE(modifiers);
+
       auto* turnedNode = createLight(map, "0 0 0");
       REQUIRE(mdl::setEntityProperty(map, "angles", "0 90 0"));
       REQUIRE(tool.selectedLight() == turnedNode);
 
-      // the XZ view looks along world +Y, which is the turned box frame's +x: the
-      // proportional axes leave out x, not y
-      const auto frontRay = vm::ray3d{{0, -1000, 0}, {0, 1, 0}};
+      // the XZ view looks along world +Y, which is the turned box frame's +x: the corner
+      // (1, 1, 1) at world (-300 t, 300 t, 300 t) moves along world (-1, 0, 1), its
+      // line from the origin without the view axis, which scales the box's y and z
+      const auto frontRay = vm::ray3d{{-halfExtent, -1000, halfExtent}, {0, 1, 0}};
       const auto frontCamera = gl::OrthographicCamera{
         1.0f,
         8000.0f,
@@ -1106,12 +1193,26 @@ TEST_CASE("LightVolumeToolController")
         vm::vec3f{frontRay.direction},
         vm::vec3f{0, 0, 1}};
 
-      auto inputState =
-        inputStateFor(frontRay, frontCamera, {cornerHit(20)}, ModifierKeys::Shift);
-      auto tracker = controller.acceptMouseDrag(inputState);
+      auto tracker = controller.acceptMouseDrag(inputStateFor(
+        frontRay,
+        frontCamera,
+        {mdl::Hit{
+          LightVolumeTool::CornerHitType,
+          1000.0,
+          vm::vec3d{-halfExtent, 0, halfExtent},
+          BBoxCorner{vm::vec3d{1, 1, 1}}}},
+        modifiers));
       REQUIRE(tracker != nullptr);
-      CHECK(tool.proportionalAxes() == ProportionalAxes{false, true, true});
-      tracker->cancel();
+      const auto dragInputState = inputStateFor(
+        vm::ray3d{frontRay.origin + vm::vec3d{-16, 0, 16}, frontRay.direction},
+        frontCamera,
+        {},
+        modifiers);
+      CHECK(tracker->update(dragInputState));
+      tracker->end(dragInputState);
+
+      checkVector(*turnedNode, "light_radius", {300, 300.0 + 16.0 / t, 300.0 + 16.0 / t});
+      CHECK(valueOf(*turnedNode, "origin") == "0 0 0");
     }
 
     SECTION("draw mode takes the view axis extent of the selected light's handle box")

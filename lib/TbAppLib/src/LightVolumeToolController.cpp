@@ -42,6 +42,7 @@
 #include "ui/MapDocument.h"
 #include "ui/MoveHandleDragTracker.h"
 #include "ui/MoveObjectsTool.h"
+#include "ui/ScaleTool.h"
 
 #include "vm/bbox.h"
 #include "vm/intersection.h"
@@ -71,50 +72,9 @@ bool startsOnSelectedNode(const InputState& inputState)
 }
 
 /**
- * The scale tool's modifier settings: Alt anchors the box at its centre, Shift scales the
- * other axes proportionally, except in 2D the axis of the box frame that is closest to
- * the view direction.
- */
-std::pair<AnchorPos, ProportionalAxes> modifierSettingsForInputState(
-  const InputState& inputState, const vm::mat3x3d& rotation)
-{
-  const auto anchorPos = inputState.modifierKeysDown(ModifierKeys::Alt)
-                           ? AnchorPos::Center
-                           : AnchorPos::Opposite;
-
-  auto proportionalAxes = ProportionalAxes::None();
-  if (inputState.modifierKeysDown(ModifierKeys::Shift))
-  {
-    proportionalAxes = ProportionalAxes::All();
-
-    const auto& camera = inputState.camera();
-    if (camera.orthographicProjection())
-    {
-      const auto boxDirection = vm::transpose(rotation) * vm::vec3d{camera.direction()};
-      proportionalAxes.setAxisProportional(
-        vm::find_abs_max_component(boxDirection), false);
-    }
-  }
-
-  return {anchorPos, proportionalAxes};
-}
-
-void updateModifierSettings(LightVolumeTool& tool, const InputState& inputState)
-{
-  const auto volume = tool.isDragging() ? tool.dragStartVolume() : tool.volumeBox();
-  if (volume)
-  {
-    const auto [anchorPos, proportionalAxes] =
-      modifierSettingsForInputState(inputState, volume->rotation);
-    tool.setAnchorPos(anchorPos);
-    tool.setProportionalAxes(proportionalAxes);
-  }
-}
-
-/**
- * The line along which a corner is dragged in a 2D view (D59): its diagonal without the
- * part along the box axis closest to the view direction, so that the two visible axes
- * scale by one factor and the hidden one keeps its extent.
+ * The line along which a corner is dragged in a 2D view (D59, D66): its line from the box
+ * frame's origin without the part along the box axis closest to the view direction, so
+ * that the two visible axes scale by one factor and the hidden one keeps its extent.
  */
 vm::line3d cornerLine2D(
   const LightVolumeBox& volume, const mdl::Hit& hit, const vm::vec3d& viewDirection)
@@ -128,10 +88,13 @@ vm::line3d cornerLine2D(
 }
 
 /**
- * The handle proposer of a drag: every handle along its handle line with absolute
- * snapping, like the scale tool's sides; a corner in 2D along its diagonal in the view
- * plane; a surface along its edit line with relative snapping, since its hit point is
- * not on the grid.
+ * The handle proposer of a drag (D66), the same with and without Shift or Alt (D65): a
+ * side, a face centre, the far cap's centre and a corner along its handle line with
+ * absolute snapping, like the scale tool's sides; a corner in 2D along its line in the
+ * view plane; an edge, which is picked in 3D only, in the plane through the hit point
+ * perpendicular to it with relative snapping, like the scale tool's edges in 2D, so that
+ * it follows the mouse on its two axes; a surface along its edit line with relative
+ * snapping, since its hit point is not on the grid.
  */
 HandlePositionProposer makeHandleProposer(
   const InputState& inputState,
@@ -141,6 +104,18 @@ HandlePositionProposer makeHandleProposer(
   const vm::vec3d& handleOffset)
 {
   const auto& camera = inputState.camera();
+
+  if (hit.type() == LightVolumeTool::EdgeHitType)
+  {
+    // the picker moves the plane by the handle offset, so that it runs through the hit
+    // point (ScaleToolController.cpp)
+    const auto& edge = hit.target<BBoxEdge>();
+    const auto direction = volume.rotation * vm::normalize(edge.point1 - edge.point0);
+    return makeHandlePositionProposer(
+      makePlaneHandlePicker(
+        vm::plane3d{hit.hitPoint() + handleOffset, direction}, handleOffset),
+      makeRelativeHandleSnapper(grid));
+  }
 
   if (hit.type() == LightVolumeTool::SurfaceHitType)
   {
@@ -179,15 +154,14 @@ public:
     const vm::vec3d& /* initialHandlePosition */,
     const vm::vec3d& handleOffset) override
   {
-    updateModifierSettings(m_tool, inputState);
     return makeProposer(inputState, handleOffset);
   }
 
   std::optional<UpdateDragConfig> modifierKeyChange(
-    const InputState& inputState, const DragState& dragState) override
+    const InputState&, const DragState&) override
   {
-    return UpdateDragConfig{
-      makeProposer(inputState, dragState.handleOffset), ResetInitialHandlePosition::Keep};
+    // Shift and Alt change nothing on a handle or a surface being dragged (D65, D71)
+    return std::nullopt;
   }
 
   DragStatus update(
@@ -681,11 +655,10 @@ void LightVolumeToolController::pick(
   }
 }
 
-void LightVolumeToolController::modifierKeyChange(const InputState& inputState)
+void LightVolumeToolController::modifierKeyChange(const InputState&)
 {
-  updateModifierSettings(m_tool, inputState);
-
-  // the mouse may be over a different handle now
+  // Shift and Alt change nothing on a handle (D65, D71); the mouse may be over a
+  // different handle now
   m_tool.refreshViews();
 }
 

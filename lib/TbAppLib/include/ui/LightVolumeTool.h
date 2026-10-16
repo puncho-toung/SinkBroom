@@ -25,7 +25,6 @@
 #include "mdl/HitType.h"
 #include "mdl/Light.h"
 #include "mdl/LightVolume.h"
-#include "ui/ScaleTool.h"
 #include "ui/Tool.h"
 
 #include "vm/bbox.h"
@@ -34,7 +33,9 @@
 #include "vm/ray.h"
 #include "vm/vec.h"
 
+#include <cstddef>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace tb
@@ -125,14 +126,30 @@ struct LightSurfaceHit
 };
 
 /**
+ * Returns the given box of a light volume, in its box frame, with each of the given axes
+ * scaled about the box frame's origin (light editor plan, D64): an element of the box
+ * whose coordinate on axis i is c_i moves by delta_i, so that axis is scaled by
+ * f_i = (c_i + delta_i) / c_i, its minimum and its maximum alike. The origin is a point
+ * light's centre and a spot light's apex, so it never moves: a point box's opposite side
+ * mirrors the moved one, and a spot box keeps its apex face at z = 0. An axis whose
+ * coordinate is 0 (below 1e-6) is left as it is; a factor of 0 or less, a drag to or
+ * through the origin, returns nothing. The coordinates are pairs of an axis and the
+ * element's coordinate on it, the delta is in the box frame.
+ */
+std::optional<vm::bbox3d> scaleLightBoxAboutOrigin(
+  const vm::bbox3d& box,
+  const std::vector<std::pair<std::size_t, double>>& coordinates,
+  const vm::vec3d& delta);
+
+/**
  * The world line along which the handle of the given hit of the light volume tool is
- * dragged: the side's normal through its centre, the line from the opposite edge's centre
- * to the edge's centre, the diagonal from the opposite corner to the corner, the beam
- * through the far cap's centre. A copy of the scale tool's handleLineForHit in the box
- * frame. For a surface, the line through the hit point along which a Shift drag edits
- * the element (D60): the axis of the outer shell's normal there, the ray from the
- * light's origin for the inner shell, the base's widening for the funnel, the beam for
- * the base.
+ * dragged (D66): the side's normal through its centre (also the far cap's centre); the
+ * line from the box frame's origin through the corner; for an edge, the line through its
+ * centre along its two axes, outwards from the origin (in 3D an edge is dragged in the
+ * plane perpendicular to it instead). For a surface, the line through the hit point along
+ * which a Shift drag edits the element (D60, D67, D69): the axis of the outer shell's
+ * normal there, the ray from the light's origin for the inner shell, the grabbed lateral
+ * axis of the box for the funnel, the beam for the base and the inner cap.
  */
 vm::line3d lightVolumeHandleLine(const LightVolumeBox& volume, const mdl::Hit& hit);
 
@@ -232,8 +249,6 @@ private:
   LightVolumeHandles m_handles;
   Mode m_mode = Mode::Handles;
 
-  AnchorPos m_anchorPos = AnchorPos::Opposite;
-  ProportionalAxes m_proportionalAxes = ProportionalAxes::None();
   mdl::Hit m_highlightedHit = mdl::Hit::NoHit;
   // the surface that was last clicked, kept with a bold outline while it is under the
   // mouse; never dereferenced
@@ -336,7 +351,8 @@ public:
   /**
    * Picks the handles of the selected light's box in a 2D view: its corners, the far
    * cap's centre, and its outline, whose edges are picked as the sides perpendicular to
-   * them in the view plane (D59).
+   * them in the view plane (D59), except a spot light's apex line, which is its position
+   * (D67).
    */
   void pick2D(
     const vm::ray3d& pickRay,
@@ -347,9 +363,11 @@ public:
    * Picks the surfaces of the shown light volumes (D57, D60), at most one per light: the
    * outer shell of a point light, or of a selected one the inner shell where the ray
    * enters it before any node hit of the pick result; the funnel or the base of a spot
-   * light; the box of a sun. Surfaces are picked from outside only, like brush faces. The
-   * surfaces of unselected lights are not picked if the pick result already holds a node
-   * hit, because they would yield to it.
+   * light, or of a selected math spot light the inner cap of its core where the ray
+   * crosses it, from either side, before any node hit (D69); the box of a sun. The other
+   * surfaces are picked from outside only, like brush faces. The surfaces of unselected
+   * lights are not picked if the pick result already holds a node hit, because they would
+   * yield to it.
    */
   void pickSurfaces(const vm::ray3d& pickRay, mdl::PickResult& pickResult) const;
 
@@ -358,12 +376,6 @@ public:
    * selection change reads none, a changed light only itself (I7.10).
    */
   std::size_t pickableLightBuildCount() const;
-
-  void setAnchorPos(AnchorPos anchorPos);
-  AnchorPos anchorPos() const;
-
-  void setProportionalAxes(const ProportionalAxes& proportionalAxes);
-  const ProportionalAxes& proportionalAxes() const;
 
   const mdl::Hit& highlightedHit() const;
   /**
