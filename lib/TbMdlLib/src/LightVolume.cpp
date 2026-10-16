@@ -323,6 +323,9 @@ std::ostream& operator<<(std::ostream& lhs, const LightElement rhs)
   case LightElement::Base:
     lhs << "Base";
     break;
+  case LightElement::InnerCap:
+    lhs << "InnerCap";
+    break;
   case LightElement::Penumbra:
     lhs << "Penumbra";
     break;
@@ -752,20 +755,31 @@ std::optional<double> intersectRayEllipsoid(
   return std::nullopt;
 }
 
-std::optional<double> intersectRaySpotBase(
-  const LightProperties& light, const LightFrame& frame, const vm::ray3d& ray)
+std::optional<double> intersectRaySpotCap(
+  const LightProperties& light,
+  const LightFrame& frame,
+  const double depth,
+  const vm::ray3d& ray)
 {
-  const auto frustum = spotLightFrustum(light);
-  if (!frustum)
+  // a cap at the apex is a point, and there is none behind it
+  const auto s = spot(light);
+  if (!s || depth < DegenerateEpsilon || !spotLightFrustum(light))
   {
     return std::nullopt;
   }
 
   auto corners = std::array<vm::vec3d, 4>{};
-  std::ranges::transform(frustum->farCorners, corners.begin(), [&](const auto& corner) {
-    return frame.origin + frame.R * corner;
+  std::ranges::transform(CornerUVs, corners.begin(), [&](const auto& uv) {
+    return frame.origin + frame.R * spotPoint(light, *s, uv[0], uv[1], depth);
   });
   return vm::intersect_ray_polygon(ray, corners.begin(), corners.end());
+}
+
+std::optional<double> intersectRaySpotBase(
+  const LightProperties& light, const LightFrame& frame, const vm::ray3d& ray)
+{
+  const auto s = spot(light);
+  return s ? intersectRaySpotCap(light, frame, s->zNear + s->zFar, ray) : std::nullopt;
 }
 
 } // namespace tb::mdl

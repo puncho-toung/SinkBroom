@@ -835,8 +835,18 @@ TEST_CASE("LightVolumeMesh")
 
       SECTION("the ranges tile the triangles in order")
       {
+        auto innerCapSpot = linearSpotLight();
+        innerCapSpot.math.innerRadius = 0.3;
+        auto textureSpot = linearSpotLight();
+        textureSpot.math.enabled = false;
+
         for (const auto& light :
-             {linearPointLight(), seededPoint, linearSpotLight(), sun})
+             {linearPointLight(),
+              seededPoint,
+              linearSpotLight(),
+              innerCapSpot,
+              textureSpot,
+              sun})
         {
           for (const auto& rangeStyle : {style, outerOnly})
           {
@@ -990,6 +1000,11 @@ TEST_CASE("LightVolumeMesh")
               CHECK(d == Catch::Approx(264.0).margin(1e-6));
               CHECK(r <= 1.0 + 1e-6);
               break;
+            case mdl::LightElement::InnerCap:
+              CHECK(
+                d == Catch::Approx(8.0 + light.math.innerRadius * 256.0).margin(1e-6));
+              CHECK(r <= 1.0 + 1e-6);
+              break;
             case mdl::LightElement::OuterShell:
             case mdl::LightElement::InnerShell:
             case mdl::LightElement::SunBox:
@@ -1017,37 +1032,166 @@ TEST_CASE("LightVolumeMesh")
         CHECK(outer.ranges.front().element == mdl::LightElement::Funnel);
       }
 
-      SECTION("a spot light without math is the plain frustum (D63)")
+      SECTION("a spot light without math draws the stand-in cone and penumbra (D69)")
       {
-        // a texture light whose math keys were kept when it left the math page (D51)
+        // a texture light whose math keys were kept when it left the math page (D51):
+        // they are not read (D63), the stand-in's ellipse and penumbra 0.15 are
         auto light = linearSpotLight();
         light.math.enabled = false;
-        light.math.shapeExp = 2.0;
-        light.math.penumbra = 0.15;
+        light.math.shapeExp = 16.0;
+        light.math.penumbra = 0.4;
+        light.math.innerRadius = 0.3;
 
         const auto mesh = buildLightVolumeMesh(light, atOrigin, style);
-        CHECK(std::ranges::none_of(mesh.ranges, [](const auto& range) {
-          return range.element == mdl::LightElement::Penumbra;
+        auto elements = std::vector<mdl::LightElement>{};
+        for (const auto& range : mesh.ranges)
+        {
+          elements.push_back(range.element);
+        }
+        CHECK(
+          elements
+          == std::vector{
+            mdl::LightElement::Funnel,
+            mdl::LightElement::Penumbra,
+            mdl::LightElement::NearCap,
+            mdl::LightElement::Base,
+          });
+
+        // the funnel's rings are the unit ellipse, the penumbra's at 0.85
+        const auto radiiOf = [&](const LightElementRange& range) {
+          auto radii = std::vector<double>{};
+          for (std::size_t k = 0; k < range.count; ++k)
+          {
+            const auto [u, v, d] = defaultSpotCoordinates(
+              positionOf(mesh.triangles[range.firstTriangleVertex + k]));
+            radii.push_back(superellipseRadius(u, v, 2.0));
+          }
+          return radii;
+        };
+        CHECK(std::ranges::all_of(radiiOf(mesh.ranges[0]), [](const auto r) {
+          return std::abs(r - 1.0) <= 1e-6;
+        }));
+        CHECK(std::ranges::all_of(radiiOf(mesh.ranges[1]), [](const auto r) {
+          return std::abs(r - 0.85) <= 1e-6;
         }));
 
-        // the funnel's rings are squares, on the four lateral planes through the apex
-        const auto& funnel = mesh.ranges.front();
-        REQUIRE(funnel.element == mdl::LightElement::Funnel);
-        auto cornerVertices = 0;
-        for (std::size_t k = 0; k < funnel.count; ++k)
-        {
-          const auto [u, v, d] = defaultSpotCoordinates(
-            positionOf(mesh.triangles[funnel.firstTriangleVertex + k]));
-          CHECK(std::max(std::abs(u), std::abs(v)) == Catch::Approx(1.0).margin(1e-6));
-          if (std::abs(std::abs(u) - 1.0) < 1e-6 && std::abs(std::abs(v) - 1.0) < 1e-6)
-          {
-            ++cornerVertices;
-          }
-        }
-        CHECK(cornerVertices > 0);
+        // the frustum edges, the two rectangles, the near, far and penumbra outlines, the
+        // penumbra's at the far cap
+        CHECK(mesh.lines.size() == (4 + 4 + 4 + 3 * 32) * 2);
+        const auto penumbraVertices =
+          std::ranges::count_if(mesh.lines, [&](const auto& vertex) {
+            const auto [u, v, d] = defaultSpotCoordinates(positionOf(vertex));
+            return std::abs(superellipseRadius(u, v, 2.0) - 0.85) < 1e-4
+                   && std::abs(d - 264.0) < 1e-3;
+          });
+        CHECK(penumbraVertices == 32 * 2);
 
-        // no penumbra outline: the frustum edges, the two rectangles, two outlines
-        CHECK(mesh.lines.size() == (4 + 4 + 4 + 2 * 32) * 2);
+        // an unselected one draws its outer cone only, no band
+        const auto outer = buildLightVolumeMesh(light, atOrigin, outerOnly);
+        REQUIRE(outer.ranges.size() == 1);
+        CHECK(outer.ranges.front().element == mdl::LightElement::Funnel);
+        CHECK(outer.triangles.size() == 32 * 2 * 3);
+      }
+
+      SECTION("a math spot light's inner cap at the end of its core (D69)")
+      {
+        auto light = linearSpotLight();
+        light.math.innerRadius = 0.3;
+        REQUIRE(lightVolumeHasInnerCap(light));
+
+        const auto mesh = buildLightVolumeMesh(light, atOrigin, style);
+        auto elements = std::vector<mdl::LightElement>{};
+        for (const auto& range : mesh.ranges)
+        {
+          elements.push_back(range.element);
+        }
+        CHECK(
+          elements
+          == std::vector{
+            mdl::LightElement::Funnel,
+            mdl::LightElement::Penumbra,
+            mdl::LightElement::NearCap,
+            mdl::LightElement::Base,
+            mdl::LightElement::InnerCap,
+          });
+
+        // 32 triangles at depth zNear + 0.3 zFar, at the cap alpha of t = 0.3: half the
+        // alpha cap times the brightness, the falloff being 1 at the inner radius
+        const auto depth = 8.0 + 0.3 * 256.0;
+        const auto alpha = 0.5 * 0.45 * 1.0;
+        REQUIRE(depth == Catch::Approx(84.8));
+        REQUIRE(alpha == Catch::Approx(0.225));
+        const auto& cap = mesh.ranges.back();
+        CHECK(cap.count == 32 * 3);
+        for (std::size_t k = 0; k < cap.count; ++k)
+        {
+          const auto& vertex = mesh.triangles[cap.firstTriangleVertex + k];
+          const auto [u, v, d] = defaultSpotCoordinates(positionOf(vertex));
+          CHECK(d == Catch::Approx(depth).margin(1e-4));
+          CHECK(superellipseRadius(u, v, 2.0) <= 1.0 + 1e-6);
+          CHECK(alphaOf(vertex) == Catch::Approx(alpha).margin(1e-6));
+        }
+
+        // wound like the far cap, facing the base along the beam, world -Z
+        for (auto i = cap.firstTriangleVertex; i < cap.firstTriangleVertex + cap.count;
+             i += 3)
+        {
+          const auto p1 = positionOf(mesh.triangles[i]);
+          const auto p2 = positionOf(mesh.triangles[i + 1]);
+          const auto p3 = positionOf(mesh.triangles[i + 2]);
+          CHECK(vm::dot(vm::cross(p3 - p1, p2 - p1), vm::vec3d{0, 0, -1}) > 0.0);
+        }
+
+        // its ring outline of 32 segments on the cone at that depth
+        CHECK(mesh.lines.size() == (4 + 4 + 4 + 4 * 32) * 2);
+        const auto ringVertices =
+          std::ranges::count_if(mesh.lines, [&](const auto& vertex) {
+            const auto [u, v, d] = defaultSpotCoordinates(positionOf(vertex));
+            return std::abs(d - depth) < 1e-3
+                   && std::abs(superellipseRadius(u, v, 2.0) - 1.0) < 1e-4;
+          });
+        CHECK(ringVertices == 32 * 2);
+
+        // drawn even at alpha 0, only with the bands
+        auto invisible = style;
+        invisible.alphaCap = 0.0;
+        const auto invisibleMesh = buildLightVolumeMesh(light, atOrigin, invisible);
+        REQUIRE(!invisibleMesh.ranges.empty());
+        CHECK(invisibleMesh.ranges.back().element == mdl::LightElement::InnerCap);
+        CHECK(
+          alphaOf(
+            invisibleMesh.triangles[invisibleMesh.ranges.back().firstTriangleVertex])
+          == 0.0);
+        CHECK(std::ranges::none_of(
+          buildLightVolumeMesh(light, atOrigin, outerOnly).ranges, [](const auto& range) {
+            return range.element == mdl::LightElement::InnerCap;
+          }));
+
+        // from an inner radius of 0.02 to below 0.999, with math, of a spot light
+        for (const auto innerRadius : {0.0, 0.01, 0.0199, 0.999})
+        {
+          CAPTURE(innerRadius);
+          auto other = light;
+          other.math.innerRadius = innerRadius;
+          CHECK_FALSE(lightVolumeHasInnerCap(other));
+          CHECK(std::ranges::none_of(
+            buildLightVolumeMesh(other, atOrigin, style).ranges, [](const auto& range) {
+              return range.element == mdl::LightElement::InnerCap;
+            }));
+        }
+        for (const auto innerRadius : {0.02, 0.98})
+        {
+          CAPTURE(innerRadius);
+          auto other = light;
+          other.math.innerRadius = innerRadius;
+          CHECK(lightVolumeHasInnerCap(other));
+        }
+        auto disabled = light;
+        disabled.math.enabled = false;
+        CHECK_FALSE(lightVolumeHasInnerCap(disabled));
+        auto point = light;
+        point.type = mdl::LightType::Point;
+        CHECK_FALSE(lightVolumeHasInnerCap(point));
       }
 
       SECTION("a sun's box")
@@ -1121,7 +1265,18 @@ TEST_CASE("LightVolumeMesh")
     // a texture spot light that kept its math keys (D63)
     auto textureSpot = linearSpotLight();
     textureSpot.math.enabled = false;
+    textureSpot.math.innerRadius = 0.3;
     lights.push_back(textureSpot);
+
+    // the inner cap of a math spot light's core (D69), also at alpha 0
+    auto innerCapSpot = linearSpotLight();
+    innerCapSpot.math.innerRadius = 0.3;
+    lights.push_back(innerCapSpot);
+
+    auto edgeInnerCapSpot = linearSpotLight();
+    edgeInnerCapSpot.math.innerRadius = 0.02;
+    edgeInnerCapSpot.color = vm::vec3d{0, 0, 0};
+    lights.push_back(edgeInnerCapSpot);
 
     for (const auto& light : lights)
     {

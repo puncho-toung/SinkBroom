@@ -131,6 +131,13 @@ std::vector<double> lightVolumeShellAlphas(
 bool lightVolumeHasInnerShell(const mdl::LightProperties& light);
 
 /**
+ * Whether a spot light drawn with its translucency bands (not outer shell only) has the
+ * cap of its core at depth zNear + math_inner_radius zFar: a math spot light with an
+ * inner radius in [0.02, 0.999) (D69).
+ */
+bool lightVolumeHasInnerCap(const mdl::LightProperties& light);
+
+/**
  * The numbers of triangle and line vertices and of element ranges that
  * appendLightVolumeMesh appends.
  */
@@ -154,16 +161,17 @@ LightVolumeMeshSize lightVolumeMeshSize(
 /**
  * Appends the volume of the given light in the given frame to the given mesh: the
  * nested ellipsoid shells, the inner shell of a math light's core, the clip box and the
- * centre cross of a point light; the cone, penumbra surface, caps, frustum edges and
- * outlines of a spot light; the box and the direction arrow of a sun. If the light has
- * light_origin and the entity's origin is given, a line links the entity's origin to the
- * volume's origin.
+ * centre cross of a point light; the cone, penumbra surface, caps, the inner cap of a
+ * math light's core, frustum edges and outlines of a spot light; the box and the
+ * direction arrow of a sun. If the light has light_origin and the entity's origin is
+ * given, a line links the entity's origin to the volume's origin.
  *
- * A spot light without math is the plain frustum, the cone whose rings are the
- * rectangles of its four lateral planes, without a penumbra surface or outline (D63).
- * The far cap of a spot light and the inner shell of a math point light are appended
- * even when their alpha is 0, so that their ranges can be picked and highlighted; an
- * outer-shell-only volume has neither.
+ * A spot light without math draws the stand-in cone (D69): the ellipse (shape exponent
+ * 2) with its penumbra surface and outline at 0.15, the values that the light editor
+ * seeds; the math keys that such a light keeps are not read (D63). The far cap and the
+ * inner cap of a spot light and the inner shell of a math point light are appended even
+ * when their alpha is 0, so that their ranges can be picked and highlighted; an
+ * outer-shell-only volume has none of them.
  */
 void appendLightVolumeMesh(
   LightVolumeMesh& mesh,

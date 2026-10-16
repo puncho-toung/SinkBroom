@@ -188,6 +188,7 @@ TEST_CASE("LightVolume")
     CHECK(name(LightElement::InnerShell) == "InnerShell");
     CHECK(name(LightElement::Funnel) == "Funnel");
     CHECK(name(LightElement::Base) == "Base");
+    CHECK(name(LightElement::InnerCap) == "InnerCap");
     CHECK(name(LightElement::Penumbra) == "Penumbra");
     CHECK(name(LightElement::SunBox) == "SunBox");
     CHECK(name(LightElement::Band) == "Band");
@@ -1136,6 +1137,71 @@ TEST_CASE("LightVolume")
     CHECK(
       intersectRayEllipsoid(
         atOrigin, vm::vec3d{300, 300, 0}, 1.0, vm::ray3d{{1000, 0, 0}, {-1, 0, 0}})
+      == std::nullopt);
+  }
+
+  SECTION("intersectRaySpotCap")
+  {
+    const auto atOrigin = LightFrame{vm::vec3d{0, 0, 0}, identity};
+
+    // the cap of a math spot light's core with inner radius 0.3 (D69): at depth
+    // zNear + 0.3 zFar = 8 + 0.3 * 256, where the default spot light's cap is the square
+    // of half extent d / 2
+    const auto depth = 8.0 + 0.3 * 256.0;
+    REQUIRE(depth == Catch::Approx(84.8));
+    const auto halfExtent = depth / 2.0;
+
+    // from the base's side and from the apex's side
+    CHECK(
+      distanceOf(intersectRaySpotCap(
+        defaultSpot, atOrigin, depth, vm::ray3d{{0, 0, -1000}, {0, 0, 1}}))
+      == Catch::Approx(1000.0 - depth).margin(Exact));
+    CHECK(
+      distanceOf(intersectRaySpotCap(
+        defaultSpot, atOrigin, depth, vm::ray3d{{0, 0, 1000}, {0, 0, -1}}))
+      == Catch::Approx(1000.0 + depth).margin(Exact));
+    CHECK(
+      distanceOf(intersectRaySpotCap(
+        defaultSpot,
+        atOrigin,
+        depth,
+        vm::ray3d{{halfExtent - 0.5, -(halfExtent - 0.5), 0}, {0, 0, -1}}))
+      == Catch::Approx(depth).margin(Exact));
+
+    // past its edge, which the far cap would still have
+    const auto pastEdge = vm::ray3d{{halfExtent + 0.5, 0, 1000}, {0, 0, -1}};
+    CHECK(intersectRaySpotCap(defaultSpot, atOrigin, depth, pastEdge) == std::nullopt);
+    CHECK(intersectRaySpotBase(defaultSpot, atOrigin, pastEdge) != std::nullopt);
+
+    // in the light's frame, turned: angles 0 90 0 turns the beam -Z, which stays -Z
+    const auto turned = LightFrame{
+      vm::vec3d{0, 0, 100}, rotationOf({{"classname", "light"}, {"angles", "0 90 0"}})};
+    CHECK(
+      distanceOf(intersectRaySpotCap(
+        defaultSpot, turned, depth, vm::ray3d{{0, 0, -1000}, {0, 0, 1}}))
+      == Catch::Approx(1100.0 - depth).margin(Exact));
+
+    // at the far cap's depth, the far cap
+    const auto ray = vm::ray3d{{50, -60, -1000}, {0, 0, 1}};
+    CHECK(
+      distanceOf(intersectRaySpotCap(defaultSpot, atOrigin, 264.0, ray))
+      == Catch::Approx(distanceOf(intersectRaySpotBase(defaultSpot, atOrigin, ray)))
+           .margin(Exact));
+
+    // no cap at the apex or behind it, nor of a degenerate light
+    CHECK(
+      intersectRaySpotCap(defaultSpot, atOrigin, 0.0, vm::ray3d{{0, 0, 1000}, {0, 0, -1}})
+      == std::nullopt);
+    CHECK(
+      intersectRaySpotCap(
+        defaultSpot, atOrigin, -10.0, vm::ray3d{{0, 0, 1000}, {0, 0, -1}})
+      == std::nullopt);
+    CHECK(
+      intersectRaySpotCap(
+        withRight(defaultSpot, {0, 0, 0}),
+        atOrigin,
+        depth,
+        vm::ray3d{{0, 0, -1000}, {0, 0, 1}})
       == std::nullopt);
   }
 

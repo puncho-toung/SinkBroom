@@ -36,8 +36,8 @@ namespace tb::mdl
 class Entity;
 
 /**
- * The parts of a drawn light volume (light editor plan, D55). The first six are the
- * elements that the editor names; the last two are the translucency layers that are
+ * The parts of a drawn light volume (light editor plan, D55, D69). The first seven are
+ * the elements that the editor names; the last two are the translucency layers that are
  * drawn but neither picked nor highlighted, so that the parts tile the volume.
  */
 enum class LightElement
@@ -50,7 +50,10 @@ enum class LightElement
   Funnel,
   // a spot light's far cap
   Base,
-  // a math spot light's inner cone at 1 - math_penumbra, never picked
+  // a math spot light's cap at t = math_inner_radius, the end of its core
+  InnerCap,
+  // a spot light's inner cone at 1 - math_penumbra (a light without math at the
+  // stand-in's 0.15), never picked
   Penumbra,
   // a sun's box
   SunBox,
@@ -290,9 +293,22 @@ std::optional<double> intersectRayEllipsoid(
   const LightFrame& frame, const vm::vec3d& radius, double t, const vm::ray3d& ray);
 
 /**
+ * The distance along the given world ray to the cap of the given spot light in the given
+ * frame at the given depth along the beam: the parallelogram of the points spotPoint(+-1,
+ * +-1, depth), from either side. Nothing if the ray misses it, the depth is not in front
+ * of the apex or the light is degenerate.
+ */
+std::optional<double> intersectRaySpotCap(
+  const LightProperties& light,
+  const LightFrame& frame,
+  double depth,
+  const vm::ray3d& ray);
+
+/**
  * The distance along the given world ray to the far cap of the given spot light in the
  * given frame, the parallelogram of its far corners at depth zNear + zFar, from either
- * side. Nothing if the ray misses it or the light is degenerate.
+ * side: intersectRaySpotCap at that depth. Nothing if the ray misses it or the light is
+ * degenerate.
  */
 std::optional<double> intersectRaySpotBase(
   const LightProperties& light, const LightFrame& frame, const vm::ray3d& ray);

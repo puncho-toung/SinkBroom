@@ -1334,7 +1334,7 @@ TEST_CASE("LightVolumeTool")
       CHECK(hit.distance() == Catch::Approx(932.0).margin(1e-3));
     }
 
-    SECTION("a math spot light's funnel is its superellipse, without math the frustum")
+    SECTION("a math spot light's funnel is its superellipse, without math the ellipse")
     {
       auto* lightNode = createLight(map, "0 0 0", DefaultSpot);
       REQUIRE(mdl::setEntityProperty(map, "math_enabled", "1"));
@@ -1360,14 +1360,17 @@ TEST_CASE("LightVolumeTool")
       CHECK_FALSE(
         pickSurface(tool, vm::ray3d{{inside, inside, -136}, diagonal}).isMatch());
 
-      // without math, the frustum's corner line
+      // without math, the stand-in's ellipse, u = v = 2^-1/2, not the kept shape
+      // exponent 4 (D63, D69), and no longer the frustum's corner line at 1318.0
       REQUIRE(mdl::setEntityProperty(map, "math_enabled", "0"));
       REQUIRE(lightNode->entity().property("math_shape_exp") != nullptr);
       hit = pickSurface(tool, ray);
       REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::Funnel);
       CHECK(
-        hit.distance() == Catch::Approx((1000.0 - 68.0) * std::sqrt(2.0)).margin(1e-2));
-      CHECK(hit.distance() == Catch::Approx(1318.0).margin(0.1));
+        hit.distance()
+        == Catch::Approx((1000.0 - 68.0 * std::sqrt(0.5)) * std::sqrt(2.0)).margin(1e-2));
+      CHECK(hit.distance() == Catch::Approx(1346.2).margin(0.1));
     }
 
     SECTION("a sun's box")
@@ -1550,7 +1553,8 @@ TEST_CASE("LightVolumeTool")
     // a point light has no funnel or base
     CHECK(lightElementTriangles(point, frame, mdl::LightElement::Funnel).empty());
 
-    // the default spot light's base at depth 264, its funnel, no penumbra without math
+    // the default spot light's base at depth 264, its funnel, and without math the
+    // stand-in's penumbra at 0.85 (D69), which is drawn and highlighted, never picked
     auto spot = mdl::LightProperties{};
     spot.type = mdl::LightType::Spot;
     spot.target = vm::vec3d{0, 0, -256};
@@ -1562,7 +1566,14 @@ TEST_CASE("LightVolumeTool")
       triangles, [&](const auto& p) { return std::abs(local(p).z() + 264.0) < 1e-3; }));
     CHECK(
       lightElementTriangles(spot, frame, mdl::LightElement::Funnel).size() == 32 * 2 * 3);
-    CHECK(lightElementTriangles(spot, frame, mdl::LightElement::Penumbra).empty());
+    triangles = lightElementTriangles(spot, frame, mdl::LightElement::Penumbra);
+    CHECK(triangles.size() == 32 * 2 * 3);
+    CHECK(std::ranges::all_of(triangles, [&](const auto& p) {
+      // at depth d, the default spot light's cone is the circle of radius d / 2
+      const auto q = local(p);
+      return std::abs(vm::length(vm::vec3d{q.x(), q.y(), 0}) / (-q.z() / 2.0) - 0.85)
+             < 1e-5;
+    }));
 
     // a sun's box
     auto sun = point;
