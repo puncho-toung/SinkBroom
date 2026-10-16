@@ -20,9 +20,13 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QColor>
+#include <QComboBox>
+#include <QLabel>
+#include <QLineEdit>
 #include <QRadioButton>
 #include <QSlider>
 #include <QStackedWidget>
+#include <QToolButton>
 
 #include "SidebarTestUtils.h"
 #include "mdl/BrushBuilder.h"
@@ -511,6 +515,7 @@ TEST_CASE("LightEditorPanel")
     auto panel = LightEditorPanel{fixture.context()};
     selectOnly(map, {lightNode1, lightNode2});
     REQUIRE(showsEditor(panel));
+    CHECK(currentText(panel) == "2 lights selected: edits apply to all");
 
     const auto modificationCount = map.modificationCount();
     findControl<SpinControl>(panel, "Radius").setValue(500.0);
@@ -602,6 +607,367 @@ TEST_CASE("LightEditorPanel")
 
     QApplication::processEvents();
     CHECK(currentText(panel) == "Select a light");
+  }
+
+  SECTION("shows multi where the selected lights differ")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode1 = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+        {"light_radius", "300 300 300"},
+        {"noshadows", "1"},
+      });
+    auto* lightNode2 = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "64 0 0"},
+        {"light_radius", "200 200 200"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode1, lightNode2});
+
+    const auto isMulti = [](const SpinControl& spin) {
+      return spin.specialValueText() == "multi" && spin.value() == spin.minimum();
+    };
+
+    auto& radius = findControl<SpinControl>(panel, "Radius");
+    CHECK(isMulti(radius));
+    CHECK(isMulti(findControl<SpinControl>(panel, "OriginX")));
+    CHECK_FALSE(isMulti(findControl<SpinControl>(panel, "OriginY")));
+    CHECK_FALSE(isMulti(findControl<SpinControl>(panel, "Intensity")));
+    CHECK(
+      findControl<QCheckBox>(panel, "CastShadows").checkState() == Qt::PartiallyChecked);
+    CHECK(findControl<QRadioButton>(panel, "Point").isChecked());
+
+    // a multi field is written only when it is edited, then to every light
+    radius.setValue(400.0);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode1, "light_radius") == "400 400 400");
+    CHECK(valueOf(*lightNode2, "light_radius") == "400 400 400");
+    CHECK(valueOf(*lightNode1, "noshadows") == "1");
+    CHECK(property(*lightNode2, "noshadows") == nullptr);
+    CHECK_FALSE(isMulti(radius));
+    CHECK(radius.value() == 400.0);
+
+    findControl<QCheckBox>(panel, "CastShadows").click();
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode1, "noshadows") == "0");
+    CHECK(findControl<QCheckBox>(panel, "CastShadows").checkState() == Qt::Checked);
+  }
+
+  SECTION("lights of different types hide the volume")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* pointNode = addLight(
+      map,
+      {{"classname", "light"}, {"origin", "0 0 0"}, {"light_radius", "300 300 300"}});
+    auto* spotNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "64 0 0"},
+        {"light_target", "0 0 -256"},
+        {"light_up", "0 -128 0"},
+        {"light_right", "-128 0 0"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {pointNode, spotNode});
+
+    CHECK(findControl<QLabel>(panel, "MixedTypesNotice").isVisibleTo(&panel));
+    CHECK_FALSE(findControl<SpinControl>(panel, "Radius").isVisibleTo(&panel));
+    CHECK_FALSE(findControl<SpinControl>(panel, "TargetX").isVisibleTo(&panel));
+    for (const auto* name : {"Point", "Spot", "Sun"})
+    {
+      CAPTURE(name);
+      CHECK_FALSE(findControl<QRadioButton>(panel, name).isChecked());
+    }
+    CHECK(findControl<QLabel>(panel, "MathType").text() == "multi");
+
+    selectOnly(map, {spotNode});
+    CHECK_FALSE(findControl<QLabel>(panel, "MixedTypesNotice").isVisibleTo(&panel));
+    CHECK(findControl<SpinControl>(panel, "TargetX").isVisibleTo(&panel));
+  }
+
+  SECTION("the bad target notice stays after an edit until its fix")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+        {"light_radius", "300 300 300"},
+        {"light_target", "0 0 -100"},
+        {"light_up", "0 -64 0"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    auto& notice = findControl<QLabel>(panel, "BadTargetNotice");
+    CHECK(notice.isVisibleTo(&panel));
+    CHECK(findControl<QRadioButton>(panel, "Point").isChecked());
+
+    // an ordinary edit keeps the partial keys, so the notice stays
+    findControl<SpinControl>(panel, "Radius").setValue(500.0);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode, "light_radius") == "500 500 500");
+    CHECK(valueOf(*lightNode, "light_target") == "0 0 -100");
+    CHECK(notice.isVisibleTo(&panel));
+
+    findControl<QToolButton>(panel, "FixBadTarget").click();
+    QApplication::processEvents();
+    CHECK(property(*lightNode, "light_target") == nullptr);
+    CHECK(property(*lightNode, "light_up") == nullptr);
+    CHECK(valueOf(*lightNode, "light_radius") == "500 500 500");
+    CHECK_FALSE(notice.isVisibleTo(&panel));
+  }
+
+  SECTION("the stale spot keys of a parallel light are removed by their fix")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+        {"parallel", "1"},
+        {"light_radius", "2048 2048 1024"},
+        {"light_target", "0 0 -256"},
+        {"light_up", "0 -128 0"},
+        {"light_right", "-128 0 0"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    auto& notice = findControl<QLabel>(panel, "StaleSpotKeysNotice");
+    CHECK(findControl<QRadioButton>(panel, "Sun").isChecked());
+    CHECK(notice.isVisibleTo(&panel));
+
+    // a radius edit leaves the keys, which the engine reads instead of the radius
+    findControl<SpinControl>(panel, "RadiusX").setValue(1024.0);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode, "light_radius") == "1024 2048 1024");
+    CHECK(notice.isVisibleTo(&panel));
+
+    findControl<QToolButton>(panel, "FixStaleSpotKeys").click();
+    QApplication::processEvents();
+    for (const auto* key : {"light_target", "light_up", "light_right"})
+    {
+      CAPTURE(key);
+      CHECK(property(*lightNode, key) == nullptr);
+    }
+    CHECK(valueOf(*lightNode, "parallel") == "1");
+    CHECK(valueOf(*lightNode, "light_radius") == "1024 2048 1024");
+    CHECK(findControl<QRadioButton>(panel, "Sun").isChecked());
+    CHECK_FALSE(notice.isVisibleTo(&panel));
+  }
+
+  SECTION("an off-centre spot light says how far its first box edit moves it")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    // the default spot with right turned 30 degrees towards the beam: its far corners
+    // are at x = +-152.42, the recentred ones at +-132
+    auto* skewedNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+        {"light_target", "0 0 -256"},
+        {"light_up", "0 -128 0"},
+        {"light_right", "-110.85 0 -64"},
+      });
+    auto* centredNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+        {"light_target", "0 0 -256"},
+        {"light_up", "0 -128 0"},
+        {"light_right", "-128 0 0"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+
+    auto& notice = findControl<QLabel>(panel, "OffCentreNotice");
+    selectOnly(map, {skewedNode});
+    CHECK(notice.isVisibleTo(&panel));
+    CHECK(
+      notice.text()
+      == "Off-centre projection: the first box edit recentres it (the far rectangle "
+         "moves by up to 21 units)");
+
+    selectOnly(map, {centredNode});
+    CHECK_FALSE(notice.isVisibleTo(&panel));
+  }
+
+  SECTION("a light with light_origin is read-only until it is converted")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+        {"light_origin", "10 20 30"},
+        {"light_angles", "0 90 0"},
+        {"light_radius", "300 300 300"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    auto& notice = findControl<QLabel>(panel, "LightOriginNotice");
+    auto& radius = findControl<SpinControl>(panel, "Radius");
+    CHECK(notice.isVisibleTo(&panel));
+    CHECK_FALSE(radius.isEnabled());
+    CHECK(findControl<SpinControl>(panel, "OriginX").value() == 10.0);
+
+    // a write that reaches the slot anyway changes nothing
+    const auto before = lightNode->entity().properties();
+    radius.setValue(500.0);
+    QApplication::processEvents();
+    CHECK(lightNode->entity().properties() == before);
+
+    findControl<QToolButton>(panel, "ConvertLightOrigin").click();
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode, "origin") == "10 20 30");
+    CHECK(property(*lightNode, "light_origin") == nullptr);
+    CHECK(valueOf(*lightNode, "angles") == "0 90 0");
+    CHECK(property(*lightNode, "light_angles") == nullptr);
+    CHECK(valueOf(*lightNode, "light_radius") == "300 300 300");
+    CHECK_FALSE(notice.isVisibleTo(&panel));
+    CHECK(radius.isEnabled());
+  }
+
+  SECTION("a styled light is drawn at full radius")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* styledNode =
+      addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}, {"style", "1"}});
+    auto* plainNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+
+    auto& notice = findControl<QLabel>(panel, "StyledNotice");
+    selectOnly(map, {styledNode});
+    CHECK(notice.isVisibleTo(&panel));
+    selectOnly(map, {plainNode});
+    CHECK_FALSE(notice.isVisibleTo(&panel));
+  }
+
+  SECTION("the style list holds the choices of the entity definition")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode =
+      addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}, {"style", "1"}});
+    // no definition: the style is a number
+    auto* customNode =
+      addLight(map, {{"classname", "light_custom"}, {"origin", "0 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    auto& styleChoice = findControl<QComboBox>(panel, "StyleChoice");
+    CHECK(styleChoice.isVisibleTo(&panel));
+    CHECK_FALSE(findControl<SpinControl>(panel, "Style").isVisibleTo(&panel));
+    CHECK(styleChoice.count() == 13);
+    CHECK(styleChoice.itemText(0) == "-1: None (engine default)");
+    CHECK(styleChoice.currentText() == "1: Flicker A");
+
+    const auto index = styleChoice.findData("10");
+    REQUIRE(index != -1);
+    styleChoice.setCurrentIndex(index);
+    styleChoice.activated(index);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode, "style") == "10");
+
+    selectOnly(map, {customNode});
+    REQUIRE(showsEditor(panel));
+    CHECK_FALSE(styleChoice.isVisibleTo(&panel));
+    CHECK(findControl<SpinControl>(panel, "Style").isVisibleTo(&panel));
+  }
+
+  SECTION("the texture list starts with the engine default")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    // the fixture's materials have no lights/ or fogs/ decls
+    auto& texture = findControl<QComboBox>(panel, "Texture");
+    REQUIRE(texture.count() == 1);
+    CHECK(texture.itemText(0) == "(engine default)");
+    CHECK(texture.currentIndex() == 0);
+
+    // a name that is typed in
+    texture.setEditText("lights/biground1");
+    texture.lineEdit()->returnPressed();
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode, "texture") == "lights/biground1");
+    CHECK(texture.currentText() == "lights/biground1");
+
+    texture.setCurrentIndex(0);
+    texture.activated(0);
+    QApplication::processEvents();
+    CHECK(property(*lightNode, "texture") == nullptr);
+  }
+
+  SECTION("the volume tool buttons")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(
+      map, {{"classname", "light"}, {"origin", "0 0 0"}, {"light_radius", "64 32 16"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    // tool buttons take no focus when they are clicked
+    for (const auto* name : {"EditVolumeHandles", "DrawVolume"})
+    {
+      CAPTURE(name);
+      const auto& button = findControl<QToolButton>(panel, name);
+      CHECK(button.isCheckable());
+      CHECK_FALSE(button.isEnabled());
+      CHECK(button.toolTip() == "comes with LW4");
+    }
+
+    auto& reset = findControl<QToolButton>(panel, "ResetVolume");
+    CHECK(reset.isEnabled());
+    reset.click();
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode, "light_radius") == "300 300 300");
+    REQUIRE(map.undoCommandName() != nullptr);
+    CHECK(*map.undoCommandName() == "Reset Light Volume");
   }
 }
 

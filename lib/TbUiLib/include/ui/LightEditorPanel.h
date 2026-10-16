@@ -32,8 +32,9 @@ class QStackedWidget;
 
 namespace tb::mdl
 {
+class Entity;
 struct LightProperties;
-}
+} // namespace tb::mdl
 
 namespace tb::ui
 {
@@ -46,8 +47,11 @@ class SignalDelayer;
  *
  * Page 0 tells the user what to select; page 1 is the editor. Every control writes when
  * the user changes it, as one undoable command for all selected lights, and only the
- * properties that its change alters on each light. The controls are set from the map
- * once the event loop has processed the notifications of a change.
+ * properties that its change alters on each light; a field in which the selected lights
+ * differ shows "multi". The controls are set from the map once the event loop has
+ * processed the notifications of a change. The header names the light and shows what
+ * the engine reads differently from what the editor shows, with a fix where there is
+ * one; a light with the legacy light_origin is read-only until it is converted.
  */
 class LightEditorPanel : public SidebarPanel
 {
@@ -88,6 +92,10 @@ private:
     const std::string& commandName,
     const std::function<void(mdl::LightProperties&)>& edit);
   void editAngles(std::size_t component, double value);
+  void removeTargetProperties(
+    const std::string& commandName,
+    const std::function<bool(const mdl::Entity&, const mdl::LightProperties&)>& applies);
+  void convertLightOrigins();
 };
 
 } // namespace tb::ui

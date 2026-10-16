@@ -31,23 +31,31 @@
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStackedWidget>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include "base/PreferenceManager.h"
 #include "mdl/Entity.h"
+#include "mdl/EntityDefinition.h"
+#include "mdl/EntityModelManager.h"
 #include "mdl/EntityNode.h"
 #include "mdl/EntityProperties.h"
 #include "mdl/EntityRotation.h"
 #include "mdl/GameConfig.h"
 #include "mdl/GameInfo.h"
 #include "mdl/Light.h"
+#include "mdl/LightVolume.h"
+#include "mdl/LoadMaterialCollections.h"
 #include "mdl/Map.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/NodeContents.h"
+#include "mdl/PropertyDefinition.h"
 #include "mdl/Selection.h"
+#include "ui/BitmapButton.h"
 #include "ui/ColorButton.h"
 #include "ui/FormWithSectionsLayout.h"
 #include "ui/MapDocument.h"
+#include "ui/QStyleUtils.h"
 #include "ui/SignalDelayer.h"
 #include "ui/SpinControl.h"
 #include "ui/ViewConstants.h"
@@ -61,8 +69,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
+#include <optional>
 #include <ranges>
+#include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace tb::ui
@@ -112,6 +124,22 @@ std::vector<mdl::EntityNode*> selectedLightNodes(const mdl::Map& map)
 {
   return panelState(map) == PanelState::OnlyLightsSelected
            ? map.selection().entities
+           : std::vector<mdl::EntityNode*>{};
+}
+
+/**
+ * The lights that an edit changes: the selected lights, or none if one of them has the
+ * legacy light_origin, which makes the panel read-only until it is converted (D8).
+ */
+std::vector<mdl::EntityNode*> editableLightNodes(const mdl::Map& map)
+{
+  auto lightNodes = selectedLightNodes(map);
+  return std::ranges::none_of(
+           lightNodes,
+           [](const auto* entityNode) {
+             return entityNode->entity().hasProperty(mdl::LightPropertyKeys::LightOrigin);
+           })
+           ? lightNodes
            : std::vector<mdl::EntityNode*>{};
 }
 
@@ -237,6 +265,56 @@ QComboBox* createComboBox(const QString& name, const QStringList& items)
   return comboBox;
 }
 
+QToolButton* createTextButton(const QString& name, const QString& text)
+{
+  // a tool button, unlike a push button, takes no focus when it is clicked, so the map
+  // view keeps it and the next click in the view is not swallowed
+  auto* button = new QToolButton{};
+  button->setObjectName(controlName(name));
+  button->setText(text);
+  button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+  return button;
+}
+
+QToolButton* createVolumeToolButton(
+  const QString& name, const std::filesystem::path& imagePath, const QString& text)
+{
+  auto* button = createBitmapButton(imagePath, text);
+  button->setObjectName(controlName(name));
+  button->setText(text);
+  button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  return button;
+}
+
+/**
+ * A notice in the editor's header: a text and, if given, the button that fixes what it
+ * says.
+ */
+QWidget* createNotice(QLabel* label, QToolButton* button = nullptr)
+{
+  label->setWordWrap(true);
+
+  auto* layout = new QVBoxLayout{};
+  layout->setContentsMargins(0, 0, 0, 0);
+  layout->setSpacing(LayoutConstants::NarrowVMargin);
+  layout->addWidget(label);
+  if (button)
+  {
+    layout->addWidget(button, 0, Qt::AlignLeft);
+  }
+
+  auto* notice = new QWidget{};
+  notice->setLayout(layout);
+  return notice;
+}
+
+QLabel* createNoticeLabel(const QString& name, const QString& text)
+{
+  auto* label = new QLabel{text};
+  label->setObjectName(controlName(name));
+  return label;
+}
+
 int addRow(FormWithSectionsLayout& form, const QString& label, QWidget* field)
 {
   const auto row = form.rowCount();
@@ -315,6 +393,73 @@ mdl::MathLightProperties seededMathLightProperties()
 }
 
 /**
+ * Resets the light's volume to the engine's default for its type and keeps everything
+ * else.
+ */
+void resetLightVolume(mdl::LightProperties& light)
+{
+  const auto defaults = mdl::defaultLight(light.type, light);
+  light.radius = defaults.radius;
+  light.equalRadius = defaults.equalRadius;
+  light.hasCenter = defaults.hasCenter;
+  light.center = defaults.center;
+  light.target = defaults.target;
+  light.right = defaults.right;
+  light.up = defaults.up;
+  light.explicitStartEnd = defaults.explicitStartEnd;
+  light.start = defaults.start;
+  light.end = defaults.end;
+}
+
+/**
+ * Whether the given sun still has all three spot vectors. With them, the engine reads
+ * neither light_radius nor light_center (d3xp/Light.cpp), so the sun has a radius of 0
+ * in the game until they are removed.
+ */
+bool hasStaleSpotKeys(const mdl::Entity& entity, const mdl::LightProperties& light)
+{
+  return light.type == mdl::LightType::Sun
+         && entity.hasProperty(mdl::LightPropertyKeys::LightTarget)
+         && entity.hasProperty(mdl::LightPropertyKeys::LightRight)
+         && entity.hasProperty(mdl::LightPropertyKeys::LightUp);
+}
+
+/**
+ * How far the far rectangle of an off-centre spot light moves when the first box edit
+ * recentres it: the largest distance between one of its far corners and the same corner
+ * of the light that its own edit box gives. Nothing for a centred or degenerate spot.
+ */
+std::optional<double> recentreDistance(const mdl::LightProperties& light)
+{
+  if (light.type != mdl::LightType::Spot || mdl::isCentredSpot(light))
+  {
+    return std::nullopt;
+  }
+
+  const auto frustum = mdl::spotLightFrustum(light);
+  const auto box = mdl::lightEditBox(light);
+  if (!frustum || !box)
+  {
+    return std::nullopt;
+  }
+
+  const auto recentred =
+    mdl::spotLightFrustum(mdl::lightFromEditBox(light, vm::mat3x3d::identity(), *box));
+  if (!recentred)
+  {
+    return std::nullopt;
+  }
+
+  auto distance = 0.0;
+  for (size_t i = 0; i < frustum->farCorners.size(); ++i)
+  {
+    distance =
+      std::max(distance, vm::length(frustum->farCorners[i] - recentred->farCorners[i]));
+  }
+  return distance;
+}
+
+/**
  * The entity's rotation as pitch, yaw and roll in degrees with a positive pitch pointing
  * down, the way the id Tech 4 policy writes "angles".
  */
@@ -342,24 +487,117 @@ QString lightName(const mdl::Entity& entity)
 
 const auto EngineDefaultTexture = QString{"(engine default)"};
 
-void setSpinValue(SpinControl* spin, const double value)
+const auto Multi = QString{"multi"};
+
+/**
+ * The value of the first of the given values, and whether another one differs from it.
+ */
+template <typename T, typename Get>
+auto firstValue(const std::vector<T>& values, const Get& get)
 {
-  spin->setSpecialValueText("");
-  spin->setValue(value);
+  const auto value = get(values.front());
+  const auto multi =
+    std::ranges::any_of(values, [&](const auto& other) { return get(other) != value; });
+  return std::pair{value, multi};
 }
 
-void setVec3Value(const std::array<SpinControl*, 3>& spins, const vm::vec3d& value)
+// like the face attribute editor: "multi" is the special value text of the minimum
+void setSpinValue(SpinControl* spin, const double value, const bool multi)
 {
-  for (size_t i = 0; i < 3; ++i)
+  if (multi)
   {
-    setSpinValue(spins[i], value[i]);
+    spin->setSpecialValueText(Multi);
+    spin->setValue(spin->minimum());
+  }
+  else
+  {
+    spin->setSpecialValueText("");
+    spin->setValue(value);
   }
 }
 
-void setSliderValue(QSlider* slider, SpinControl* spin, const double value)
+template <typename T, typename Get>
+void setSpin(SpinControl* spin, const std::vector<T>& values, const Get& get)
 {
-  setSpinValue(spin, value);
+  const auto [value, multi] = firstValue(values, get);
+  setSpinValue(spin, double(value), multi);
+}
+
+template <typename T, typename Get>
+void setVec3(
+  const std::array<SpinControl*, 3>& spins, const std::vector<T>& values, const Get& get)
+{
+  for (size_t i = 0; i < 3; ++i)
+  {
+    setSpin(spins[i], values, [&](const auto& value) { return get(value)[i]; });
+  }
+}
+
+template <typename Get>
+void setSlider(
+  QSlider* slider,
+  SpinControl* spin,
+  const std::vector<mdl::LightProperties>& lights,
+  const Get& get)
+{
+  const auto [value, multi] = firstValue(lights, get);
+  setSpinValue(spin, value, multi);
   slider->setValue(sliderPosition(*spin, value));
+}
+
+template <typename Get>
+void setCheckBox(
+  QCheckBox* checkBox, const std::vector<mdl::LightProperties>& lights, const Get& get)
+{
+  const auto [checked, multi] = firstValue(lights, get);
+  if (multi)
+  {
+    // a click checks it
+    checkBox->setCheckState(Qt::PartiallyChecked);
+  }
+  else
+  {
+    checkBox->setTristate(false);
+    checkBox->setChecked(checked);
+  }
+}
+
+template <typename Get>
+void setComboBox(
+  QComboBox* comboBox, const std::vector<mdl::LightProperties>& lights, const Get& get)
+{
+  const auto [index, multi] = firstValue(lights, get);
+  comboBox->setPlaceholderText(Multi);
+  comboBox->setCurrentIndex(multi ? -1 : int(index));
+}
+
+void updateTextureItems(QComboBox& comboBox, const mdl::Map& map)
+{
+  // the pointer is replaced by every reload of the shaders, so the names are copied
+  const auto shaders = map.entityModelManager().shaders();
+  const auto names = shaders ? mdl::shaderNamesWithPrefix(*shaders, {"lights/", "fogs/"})
+                             : std::vector<std::string>{};
+
+  comboBox.clear();
+  comboBox.addItem(EngineDefaultTexture);
+  comboBox.setItemData(0, "lights/squarelight1", Qt::ToolTipRole);
+  for (const auto& name : names)
+  {
+    comboBox.addItem(QString::fromStdString(name));
+  }
+}
+
+int findStyleIndex(const QComboBox& comboBox, const int style)
+{
+  for (int i = 0; i < comboBox.count(); ++i)
+  {
+    auto ok = false;
+    if (comboBox.itemData(i).toString().toInt(&ok) == style && ok)
+    {
+      return i;
+    }
+  }
+  return -1;
 }
 
 } // namespace
@@ -367,6 +605,16 @@ void setSliderValue(QSlider* slider, SpinControl* spin, const double value)
 struct LightEditorPanel::Controls
 {
   QLabel* header = nullptr;
+  QWidget* badTargetNotice = nullptr;
+  QToolButton* fixBadTarget = nullptr;
+  QWidget* staleSpotKeysNotice = nullptr;
+  QToolButton* fixStaleSpotKeys = nullptr;
+  QWidget* offCentreNotice = nullptr;
+  QLabel* offCentreText = nullptr;
+  QWidget* lightOriginNotice = nullptr;
+  QToolButton* convertLightOrigin = nullptr;
+  QWidget* styledNotice = nullptr;
+
   QWidget* editor = nullptr;
   FormWithSectionsLayout* form = nullptr;
 
@@ -395,6 +643,11 @@ struct LightEditorPanel::Controls
   ColorButton* color = nullptr;
   SpinControl* intensity = nullptr;
   QComboBox* texture = nullptr;
+  // the names of the light materials are copied again on the next update
+  bool texturesStale = true;
+  QComboBox* styleChoice = nullptr;
+  // the values and descriptions of the definition's style choices, copied
+  std::vector<std::pair<std::string, std::string>> styleOptions;
   SpinControl* style = nullptr;
 
   QCheckBox* mathEnabled = nullptr;
@@ -420,7 +673,12 @@ struct LightEditorPanel::Controls
   QCheckBox* castShadows = nullptr;
   QCheckBox* skipSpecular = nullptr;
 
+  QToolButton* editVolumeHandlesButton = nullptr;
+  QToolButton* drawVolumeButton = nullptr;
+  QToolButton* resetVolumeButton = nullptr;
+
   // the rows that depend on the light's type and options
+  int mixedTypesRow = -1;
   int equalRadiusRow = -1;
   int radiusRow = -1;
   int radiusXyzRow = -1;
@@ -432,6 +690,8 @@ struct LightEditorPanel::Controls
   int explicitStartEndRow = -1;
   int startRow = -1;
   int endRow = -1;
+  int styleChoiceRow = -1;
+  int styleRow = -1;
   int mathTypeRow = -1;
   int falloffRow = -1;
   int falloffExpRow = -1;
@@ -497,6 +757,41 @@ QWidget* LightEditorPanel::createEditorPage()
   c.header = new QLabel{};
   c.header->setObjectName(controlName("Header"));
   c.header->setWordWrap(true);
+  setEmphasizedStyle(c.header);
+
+  auto* badTargetText = createNoticeLabel(
+    "BadTargetNotice",
+    tr("Bad target info: some, but not all, of light_target, light_right and "
+       "light_up are set, so the engine lights a point light."));
+  setErrorStyle(badTargetText);
+  c.fixBadTarget = createTextButton("FixBadTarget", tr("Fix: remove the partial keys"));
+  c.badTargetNotice = createNotice(badTargetText, c.fixBadTarget);
+
+  auto* staleSpotKeysText = createNoticeLabel(
+    "StaleSpotKeysNotice",
+    tr("Stale spot keys on a parallel light: while light_target, light_right and "
+       "light_up are set, the engine reads neither light_radius nor light_center."));
+  setErrorStyle(staleSpotKeysText);
+  c.fixStaleSpotKeys =
+    createTextButton("FixStaleSpotKeys", tr("Fix: remove the spot keys"));
+  c.staleSpotKeysNotice = createNotice(staleSpotKeysText, c.fixStaleSpotKeys);
+
+  c.offCentreText = createNoticeLabel("OffCentreNotice", {});
+  setInfoStyle(c.offCentreText);
+  c.offCentreNotice = createNotice(c.offCentreText);
+
+  auto* lightOriginText = createNoticeLabel(
+    "LightOriginNotice",
+    tr("Legacy light_origin: the light is read-only until light_origin is moved "
+       "into origin."));
+  c.convertLightOrigin =
+    createTextButton("ConvertLightOrigin", tr("Convert: move light_origin into origin"));
+  c.lightOriginNotice = createNotice(lightOriginText, c.convertLightOrigin);
+
+  auto* styledText =
+    createNoticeLabel("StyledNotice", tr("Styled: drawn at full radius"));
+  setInfoStyle(styledText);
+  c.styledNotice = createNotice(styledText);
 
   auto* form = new FormWithSectionsLayout{};
   form->setContentsMargins(0, LayoutConstants::WideVMargin, 0, 0);
@@ -522,6 +817,13 @@ QWidget* LightEditorPanel::createEditorPage()
 
   // volume
   form->addSection(tr("Volume"));
+  auto* mixedTypesText = createNoticeLabel(
+    "MixedTypesNotice",
+    tr("The selected lights are of different types: select lights of one type to "
+       "edit their volumes."));
+  mixedTypesText->setWordWrap(true);
+  setInfoStyle(mixedTypesText);
+  c.mixedTypesRow = addRow(*form, mixedTypesText);
   c.equalRadius = createCheckBox("EqualRadius", tr("Equilateral"));
   c.equalRadiusRow = addRow(*form, c.equalRadius);
   c.radius = createSpin("Radius", RadiusRange);
@@ -565,8 +867,11 @@ QWidget* LightEditorPanel::createEditorPage()
   c.texture->setInsertPolicy(QComboBox::NoInsert);
   c.texture->setItemData(0, tr("lights/squarelight1"), Qt::ToolTipRole);
   form->addRow(tr("Texture"), c.texture);
+  // the choices of the entity definition, else a number
+  c.styleChoice = createComboBox("StyleChoice", {});
+  c.styleChoiceRow = addRow(*form, tr("Style"), c.styleChoice);
   c.style = createSpin("Style", StyleRange);
-  form->addRow(tr("Style"), c.style);
+  c.styleRow = addRow(*form, tr("Style"), c.style);
 
   // math falloff
   form->addSection(tr("Math Falloff"));
@@ -642,6 +947,35 @@ QWidget* LightEditorPanel::createEditorPage()
   c.skipSpecular = createCheckBox("SkipSpecular", tr("Skip specular"));
   form->addRow(c.skipSpecular);
 
+  // volume tools: the only entry points to the light volume tool (D20); the two tool
+  // buttons stay disabled until the tool exists
+  form->addSection(tr("Volume Tools"));
+  c.editVolumeHandlesButton = createVolumeToolButton(
+    "EditVolumeHandles", "ScaleTool.svg", tr("Edit volume handles"));
+  c.drawVolumeButton =
+    createVolumeToolButton("DrawVolume", "BrushTool.svg", tr("Draw volume"));
+  for (auto* button : {c.editVolumeHandlesButton, c.drawVolumeButton})
+  {
+    button->setCheckable(true);
+    button->setEnabled(false);
+    button->setToolTip(tr("comes with LW4"));
+  }
+  c.resetVolumeButton =
+    createVolumeToolButton("ResetVolume", "ResetUV.svg", tr("Reset volume to default"));
+  c.resetVolumeButton->setToolTip(
+    tr("Reset the volume to the engine's default for the light's type"));
+
+  auto* toolLayout = createRowLayout();
+  toolLayout->addWidget(c.editVolumeHandlesButton);
+  toolLayout->addWidget(c.drawVolumeButton);
+  toolLayout->addStretch(1);
+  form->addRow(toolLayout);
+
+  auto* resetLayout = createRowLayout();
+  resetLayout->addWidget(c.resetVolumeButton);
+  resetLayout->addStretch(1);
+  form->addRow(resetLayout);
+
   c.inputs = {
     c.equalRadius,
     c.radius,
@@ -650,6 +984,7 @@ QWidget* LightEditorPanel::createEditorPage()
     c.color,
     c.intensity,
     c.texture,
+    c.styleChoice,
     c.style,
     c.mathEnabled,
     c.falloff,
@@ -698,6 +1033,11 @@ QWidget* LightEditorPanel::createEditorPage()
     LayoutConstants::WideVMargin);
   contentLayout->setSpacing(LayoutConstants::MediumVMargin);
   contentLayout->addWidget(c.header);
+  contentLayout->addWidget(c.lightOriginNotice);
+  contentLayout->addWidget(c.badTargetNotice);
+  contentLayout->addWidget(c.staleSpotKeysNotice);
+  contentLayout->addWidget(c.offCentreNotice);
+  contentLayout->addWidget(c.styledNotice);
   contentLayout->addWidget(c.editor);
   contentLayout->addStretch(1);
 
@@ -871,6 +1211,15 @@ void LightEditorPanel::connectEditor()
       });
     }
   });
+  connect(c.styleChoice, &QComboBox::activated, this, [this](const int index) {
+    auto ok = false;
+    const auto style = m_controls->styleChoice->itemData(index).toString().toInt(&ok);
+    if (ok)
+    {
+      editLights(
+        "Set Light Style", [&](mdl::LightProperties& light) { light.style = style; });
+    }
+  });
   connectSpin(
     c.style, "Set Light Style", [](mdl::LightProperties& light, const double value) {
       light.style = int(std::lround(value));
@@ -958,6 +1307,26 @@ void LightEditorPanel::connectEditor()
     "Set Light Specular",
     [](
       mdl::LightProperties& light, const bool checked) { light.skipSpecular = checked; });
+
+  connect(c.resetVolumeButton, &QAbstractButton::clicked, this, [this]() {
+    editLights("Reset Light Volume", resetLightVolume);
+  });
+
+  connect(c.fixBadTarget, &QAbstractButton::clicked, this, [this]() {
+    removeTargetProperties(
+      "Remove Partial Spot Properties",
+      [](const mdl::Entity&, const mdl::LightProperties& light) {
+        return light.badTargetInfo;
+      });
+  });
+  connect(c.fixStaleSpotKeys, &QAbstractButton::clicked, this, [this]() {
+    removeTargetProperties("Remove Stale Spot Properties", hasStaleSpotKeys);
+  });
+  connect(
+    c.convertLightOrigin,
+    &QAbstractButton::clicked,
+    this,
+    &LightEditorPanel::convertLightOrigins);
 }
 
 void LightEditorPanel::connectObservers()
@@ -972,18 +1341,27 @@ void LightEditorPanel::connectObservers()
   // notifications run, so they hold nothing of it and every update reads the map anew;
   // nodesDidChange is not observed, because it is sent inside a command, and the
   // controls are set only from the delayed update
-  m_notifierConnection +=
-    m_document.documentWasLoadedNotifier.connect([&] { refresh(); });
+  m_notifierConnection += m_document.documentWasLoadedNotifier.connect([&] {
+    m_controls->texturesStale = true;
+    refresh();
+  });
   m_notifierConnection +=
     m_document.documentDidChangeNotifier.connect([&] { refresh(); });
   m_notifierConnection +=
     m_document.selectionDidChangeNotifier.connect([&](const auto&) { refresh(); });
   m_notifierConnection +=
     m_document.entityDefinitionsDidChangeNotifier.connect([&] { refresh(); });
-  m_notifierConnection += m_document.modsDidChangeNotifier.connect([&] { refresh(); });
+
+  // the shaders are loaded again when the mods or the game path change
+  m_notifierConnection += m_document.modsDidChangeNotifier.connect([&] {
+    m_controls->texturesStale = true;
+    refresh();
+  });
   m_notifierConnection +=
-    PreferenceManager::instance().preferenceDidChangeNotifier.connect(
-      [&](const auto&) { refresh(); });
+    PreferenceManager::instance().preferenceDidChangeNotifier.connect([&](const auto&) {
+      m_controls->texturesStale = true;
+      refresh();
+    });
 }
 
 void LightEditorPanel::refresh()
@@ -1021,9 +1399,22 @@ void LightEditorPanel::updateEditor()
   const auto& entityNodes = map.selection().entities;
   contract_pre(!entityNodes.empty());
 
-  const auto& entity = entityNodes.front()->entity();
-  const auto light = mdl::parseLightProperties(entity);
   const auto policy = map.gameInfo().gameConfig.entityConfig.rotationPolicy;
+  const auto& firstEntity = entityNodes.front()->entity();
+  const auto lights = entityNodes | std::views::transform([](const auto* entityNode) {
+                        return mdl::parseLightProperties(entityNode->entity());
+                      })
+                      | kdl::ranges::to<std::vector>();
+  const auto angles = entityNodes | std::views::transform([&](const auto* entityNode) {
+                        return pitchYawRoll(entityNode->entity(), policy);
+                      })
+                      | kdl::ranges::to<std::vector>();
+  const auto anyLight = [&](const auto& predicate) {
+    return std::ranges::any_of(lights, predicate);
+  };
+  const auto allLights = [&](const auto& predicate) {
+    return std::ranges::all_of(lights, predicate);
+  };
 
   // setting a control must not write it
   auto blockers = std::vector<QSignalBlocker>{};
@@ -1033,91 +1424,231 @@ void LightEditorPanel::updateEditor()
     blockers.emplace_back(input);
   }
 
-  c.header->setText(tr("Light: %1").arg(lightName(entity)));
+  // header and notices
+  c.header->setText(
+    lights.size() == 1 ? tr("Light: %1").arg(lightName(firstEntity))
+                       : tr("%1 lights selected: edits apply to all").arg(lights.size()));
 
-  c.typeRadios[size_t(light.type)]->setChecked(true);
+  const auto readOnly = anyLight([](const auto& light) { return light.hasLightOrigin; });
+  c.lightOriginNotice->setVisible(readOnly);
+  c.editor->setEnabled(!readOnly);
 
-  const auto isSpot = light.type == mdl::LightType::Spot;
-  c.form->setRowVisible(c.equalRadiusRow, !isSpot);
-  c.form->setRowVisible(c.radiusRow, !isSpot && light.equalRadius);
-  c.form->setRowVisible(c.radiusXyzRow, !isSpot && !light.equalRadius);
-  c.form->setRowVisible(c.centerRow, !isSpot);
-  c.form->setRowVisible(c.centerXyzRow, !isSpot && light.hasCenter);
+  // shown after every edit until the keys are removed, because the light is read again
+  c.badTargetNotice->setVisible(
+    anyLight([](const auto& light) { return light.badTargetInfo; }));
+  c.fixBadTarget->setEnabled(!readOnly);
+
+  auto staleSpotKeys = false;
+  for (size_t i = 0; i < lights.size(); ++i)
+  {
+    staleSpotKeys =
+      staleSpotKeys || hasStaleSpotKeys(entityNodes[i]->entity(), lights[i]);
+  }
+  c.staleSpotKeysNotice->setVisible(staleSpotKeys);
+  c.fixStaleSpotKeys->setEnabled(!readOnly);
+
+  auto recentre = std::optional<double>{};
+  for (const auto& light : lights)
+  {
+    if (const auto distance = recentreDistance(light))
+    {
+      recentre = std::max(recentre.value_or(0.0), *distance);
+    }
+  }
+  c.offCentreNotice->setVisible(recentre.has_value());
+  if (recentre)
+  {
+    c.offCentreText->setText(
+      tr("Off-centre projection: the first box edit recentres it (the far rectangle "
+         "moves by up to %1 units)")
+        .arg(std::ceil(*recentre)));
+  }
+
+  c.styledNotice->setVisible(
+    anyLight([](const auto& light) { return light.style != -1; }));
+
+  // type
+  const auto [type, mixedTypes] =
+    firstValue(lights, [](const auto& light) { return light.type; });
+  c.type->setExclusive(false);
+  for (auto* radio : c.typeRadios)
+  {
+    radio->setChecked(false);
+  }
+  c.type->setExclusive(true);
+  if (!mixedTypes)
+  {
+    c.typeRadios[size_t(type)]->setChecked(true);
+  }
+
+  // volume, only for lights of one type
+  const auto isPointOrSun = !mixedTypes && type != mdl::LightType::Spot;
+  const auto isSpot = !mixedTypes && type == mdl::LightType::Spot;
+  const auto equalRadius = allLights([](const auto& light) { return light.equalRadius; });
+  const auto hasCenter = allLights([](const auto& light) { return light.hasCenter; });
+  const auto explicitStartEnd =
+    allLights([](const auto& light) { return light.explicitStartEnd; });
+
+  c.form->setRowVisible(c.mixedTypesRow, mixedTypes);
+  c.form->setRowVisible(c.equalRadiusRow, isPointOrSun);
+  c.form->setRowVisible(c.radiusRow, isPointOrSun && equalRadius);
+  c.form->setRowVisible(c.radiusXyzRow, isPointOrSun && !equalRadius);
+  c.form->setRowVisible(c.centerRow, isPointOrSun);
+  c.form->setRowVisible(c.centerXyzRow, isPointOrSun && hasCenter);
   c.form->setRowVisible(c.targetRow, isSpot);
   c.form->setRowVisible(c.rightRow, isSpot);
   c.form->setRowVisible(c.upRow, isSpot);
   c.form->setRowVisible(c.explicitStartEndRow, isSpot);
-  c.form->setRowVisible(c.startRow, isSpot && light.explicitStartEnd);
-  c.form->setRowVisible(c.endRow, isSpot && light.explicitStartEnd);
+  c.form->setRowVisible(c.startRow, isSpot && explicitStartEnd);
+  c.form->setRowVisible(c.endRow, isSpot && explicitStartEnd);
 
-  c.equalRadius->setChecked(light.equalRadius);
-  setSpinValue(c.radius, light.radius.x());
-  setVec3Value(c.radiusXyz, light.radius);
-  c.center->setChecked(light.hasCenter);
-  setVec3Value(c.centerXyz, light.center);
-  setVec3Value(c.target, light.target);
-  setVec3Value(c.right, light.right);
-  setVec3Value(c.up, light.up);
-  c.explicitStartEnd->setChecked(light.explicitStartEnd);
-  setVec3Value(c.start, light.start);
-  setVec3Value(c.end, light.end);
+  setCheckBox(c.equalRadius, lights, [](const auto& light) { return light.equalRadius; });
+  setSpin(c.radius, lights, [](const auto& light) { return light.radius.x(); });
+  setVec3(c.radiusXyz, lights, [](const auto& light) { return light.radius; });
+  setCheckBox(c.center, lights, [](const auto& light) { return light.hasCenter; });
+  setVec3(c.centerXyz, lights, [](const auto& light) { return light.center; });
+  setVec3(c.target, lights, [](const auto& light) { return light.target; });
+  setVec3(c.right, lights, [](const auto& light) { return light.right; });
+  setVec3(c.up, lights, [](const auto& light) { return light.up; });
+  setCheckBox(
+    c.explicitStartEnd, lights, [](const auto& light) { return light.explicitStartEnd; });
+  setVec3(c.start, lights, [](const auto& light) { return light.start; });
+  setVec3(c.end, lights, [](const auto& light) { return light.end; });
 
-  setVec3Value(c.origin, light.origin);
-  setVec3Value(c.angles, pitchYawRoll(entity, policy));
+  // transform
+  setVec3(c.origin, lights, [](const auto& light) { return light.origin; });
+  setVec3(c.angles, angles, [](const auto& pitchYawRoll) { return pitchYawRoll; });
 
-  c.color->setColor(toQColor(hueOf(light.color)));
-  setSpinValue(c.intensity, intensityOf(light.color));
-  if (light.texture.empty())
+  // colour and texture; the colour button shows the first light's hue
+  c.color->setColor(toQColor(hueOf(lights.front().color)));
+  setSpin(
+    c.intensity, lights, [](const auto& light) { return intensityOf(light.color); });
+
+  if (c.texturesStale)
+  {
+    updateTextureItems(*c.texture, map);
+    c.texturesStale = false;
+  }
+  const auto [texture, textureMulti] =
+    firstValue(lights, [](const auto& light) { return light.texture; });
+  c.texture->lineEdit()->setPlaceholderText(textureMulti ? Multi : QString{});
+  if (textureMulti)
+  {
+    c.texture->setCurrentIndex(-1);
+    c.texture->setEditText({});
+  }
+  else if (texture.empty())
   {
     c.texture->setCurrentIndex(0);
   }
   else
   {
-    const auto texture = QString::fromStdString(light.texture);
-    c.texture->setCurrentIndex(c.texture->findText(texture));
-    c.texture->setEditText(texture);
+    const auto text = QString::fromStdString(texture);
+    c.texture->setCurrentIndex(c.texture->findText(text));
+    c.texture->setEditText(text);
   }
-  setSpinValue(c.style, double(light.style));
 
-  const auto& math = light.math;
-  c.mathEnabled->setChecked(math.enabled);
-  c.form->setRowVisible(c.mathTypeRow, math.enabled);
-  c.form->setRowVisible(c.falloffRow, math.enabled);
-  c.form->setRowVisible(c.falloffExpRow, math.enabled);
-  c.form->setRowVisible(c.innerRadiusRow, math.enabled);
-  c.form->setRowVisible(c.shapeExpRow, math.enabled && isSpot);
-  c.form->setRowVisible(c.penumbraRow, math.enabled && isSpot);
-  c.form->setRowVisible(c.patternRow, math.enabled);
-  c.form->setRowVisible(
-    c.patternStrengthRow, math.enabled && math.pattern != mdl::LightPattern::None);
-  c.form->setRowVisible(
-    c.patternScaleRow, math.enabled && math.pattern != mdl::LightPattern::None);
-  c.form->setRowVisible(
-    c.patternPhaseRow, math.enabled && math.pattern != mdl::LightPattern::None);
-  c.form->setRowVisible(c.energyClampRow, math.enabled);
+  // the style choices of the first light's definition, copied: the definitions are
+  // freed when they are reloaded
+  auto styleOptions = std::vector<std::pair<std::string, std::string>>{};
+  if (
+    const auto* propertyDefinition =
+      mdl::getPropertyDefinition(firstEntity.definition(), mdl::LightPropertyKeys::Style))
+  {
+    if (
+      const auto* choice =
+        std::get_if<mdl::PropertyValueTypes::Choice>(&propertyDefinition->valueType))
+    {
+      for (const auto& option : choice->options)
+      {
+        styleOptions.emplace_back(option.value, option.description);
+      }
+    }
+  }
+  if (styleOptions != c.styleOptions)
+  {
+    c.styleOptions = std::move(styleOptions);
+    c.styleChoice->clear();
+    for (const auto& [value, description] : c.styleOptions)
+    {
+      c.styleChoice->addItem(
+        QString::fromStdString(value + ": " + description),
+        QString::fromStdString(value));
+    }
+  }
+  c.form->setRowVisible(c.styleChoiceRow, !c.styleOptions.empty());
+  c.form->setRowVisible(c.styleRow, c.styleOptions.empty());
+
+  const auto [style, styleMulti] =
+    firstValue(lights, [](const auto& light) { return light.style; });
+  setSpinValue(c.style, double(style), styleMulti);
+  c.styleChoice->setPlaceholderText(styleMulti ? Multi : QString::number(style));
+  c.styleChoice->setCurrentIndex(styleMulti ? -1 : findStyleIndex(*c.styleChoice, style));
+
+  // math falloff, its fields only when every light has it
+  const auto mathEnabled =
+    allLights([](const auto& light) { return light.math.enabled; });
+  const auto patterned = anyLight(
+    [](const auto& light) { return light.math.pattern != mdl::LightPattern::None; });
+
+  setCheckBox(
+    c.mathEnabled, lights, [](const auto& light) { return light.math.enabled; });
+  c.form->setRowVisible(c.mathTypeRow, mathEnabled);
+  c.form->setRowVisible(c.falloffRow, mathEnabled);
+  c.form->setRowVisible(c.falloffExpRow, mathEnabled);
+  c.form->setRowVisible(c.innerRadiusRow, mathEnabled);
+  c.form->setRowVisible(c.shapeExpRow, mathEnabled && isSpot);
+  c.form->setRowVisible(c.penumbraRow, mathEnabled && isSpot);
+  c.form->setRowVisible(c.patternRow, mathEnabled);
+  c.form->setRowVisible(c.patternStrengthRow, mathEnabled && patterned);
+  c.form->setRowVisible(c.patternScaleRow, mathEnabled && patterned);
+  c.form->setRowVisible(c.patternPhaseRow, mathEnabled && patterned);
+  c.form->setRowVisible(c.energyClampRow, mathEnabled);
 
   // the engine derives the math type from the light's geometry (D40)
   c.mathType->setText(
-    tr("%1 (follows the light type)")
-      .arg(QString::fromStdString(std::string{mdl::mathTypeName(light.type)})));
-  c.falloff->setCurrentIndex(int(math.falloff));
-  const auto falloffExpUsed = math.falloff != mdl::LightFalloff::Linear
-                              && math.falloff != mdl::LightFalloff::Smooth;
+    mixedTypes ? Multi
+               : tr("%1 (follows the light type)")
+                   .arg(QString::fromStdString(std::string{mdl::mathTypeName(type)})));
+  setComboBox(
+    c.falloff, lights, [](const auto& light) { return int(light.math.falloff); });
+  const auto falloffExpUsed = anyLight([](const auto& light) {
+    return light.math.falloff != mdl::LightFalloff::Linear
+           && light.math.falloff != mdl::LightFalloff::Smooth;
+  });
   c.falloffExp->setEnabled(falloffExpUsed);
   c.falloffExpSlider->setEnabled(falloffExpUsed);
   c.falloffExp->setToolTip(falloffExpUsed ? QString{} : tr("Unused by this curve"));
-  setSliderValue(c.falloffExpSlider, c.falloffExp, math.falloffExp);
-  setSliderValue(c.innerRadiusSlider, c.innerRadius, math.innerRadius);
-  setSliderValue(c.shapeExpSlider, c.shapeExp, math.shapeExp);
-  setSliderValue(c.penumbraSlider, c.penumbra, math.penumbra);
-  c.pattern->setCurrentIndex(int(math.pattern));
-  setSliderValue(c.patternStrengthSlider, c.patternStrength, math.patternStrength);
-  setSliderValue(c.patternScaleSlider, c.patternScale, math.patternScale);
-  setSliderValue(c.patternPhaseSlider, c.patternPhase, math.patternPhase);
-  c.energyClamp->setChecked(math.energyClamp);
+  setSlider(c.falloffExpSlider, c.falloffExp, lights, [](const auto& light) {
+    return light.math.falloffExp;
+  });
+  setSlider(c.innerRadiusSlider, c.innerRadius, lights, [](const auto& light) {
+    return light.math.innerRadius;
+  });
+  setSlider(c.shapeExpSlider, c.shapeExp, lights, [](const auto& light) {
+    return light.math.shapeExp;
+  });
+  setSlider(c.penumbraSlider, c.penumbra, lights, [](const auto& light) {
+    return light.math.penumbra;
+  });
+  setComboBox(
+    c.pattern, lights, [](const auto& light) { return int(light.math.pattern); });
+  setSlider(c.patternStrengthSlider, c.patternStrength, lights, [](const auto& light) {
+    return light.math.patternStrength;
+  });
+  setSlider(c.patternScaleSlider, c.patternScale, lights, [](const auto& light) {
+    return light.math.patternScale;
+  });
+  setSlider(c.patternPhaseSlider, c.patternPhase, lights, [](const auto& light) {
+    return light.math.patternPhase;
+  });
+  setCheckBox(
+    c.energyClamp, lights, [](const auto& light) { return light.math.energyClamp; });
 
-  c.castShadows->setChecked(light.castShadows);
-  c.skipSpecular->setChecked(light.skipSpecular);
+  // misc
+  setCheckBox(c.castShadows, lights, [](const auto& light) { return light.castShadows; });
+  setCheckBox(
+    c.skipSpecular, lights, [](const auto& light) { return light.skipSpecular; });
 }
 
 void LightEditorPanel::editLights(
@@ -1128,7 +1659,7 @@ void LightEditorPanel::editLights(
   // per light, only the properties that the edit changes, so that the lights keep their
   // other values and a value that is written unchanged is not rounded (D42)
   auto nodesToSwap = NodesToSwap{};
-  for (auto* entityNode : selectedLightNodes(map))
+  for (auto* entityNode : editableLightNodes(map))
   {
     const auto& entity = entityNode->entity();
     auto light = mdl::parseLightProperties(entity);
@@ -1157,7 +1688,7 @@ void LightEditorPanel::editAngles(const std::size_t component, const double valu
   // the rotation belongs to the id Tech 4 rotation policy, which writes "angles" and
   // removes the properties that the engine would read instead (D7)
   auto nodesToSwap = NodesToSwap{};
-  for (auto* entityNode : selectedLightNodes(map))
+  for (auto* entityNode : editableLightNodes(map))
   {
     auto entity = entityNode->entity();
     const auto oldAngles = pitchYawRoll(entity, policy);
@@ -1173,6 +1704,74 @@ void LightEditorPanel::editAngles(const std::size_t component, const double valu
   }
 
   if (!swapNodeContents(map, "Set Light Angles", std::move(nodesToSwap)))
+  {
+    refresh();
+  }
+}
+
+void LightEditorPanel::removeTargetProperties(
+  const std::string& commandName,
+  const std::function<bool(const mdl::Entity&, const mdl::LightProperties&)>& applies)
+{
+  auto& map = m_document.map();
+
+  // not a light edit: the light that the engine reads does not change until the keys
+  // are gone, so a light diff would keep them
+  auto nodesToSwap = NodesToSwap{};
+  for (auto* entityNode : editableLightNodes(map))
+  {
+    auto entity = entityNode->entity();
+    if (applies(entity, mdl::parseLightProperties(entity)))
+    {
+      for (const auto* key :
+           {&mdl::LightPropertyKeys::LightTarget,
+            &mdl::LightPropertyKeys::LightRight,
+            &mdl::LightPropertyKeys::LightUp})
+      {
+        if (entity.hasProperty(*key))
+        {
+          entity.removeProperty(*key);
+        }
+      }
+      nodesToSwap.emplace_back(entityNode, mdl::NodeContents{std::move(entity)});
+    }
+  }
+
+  if (!swapNodeContents(map, commandName, std::move(nodesToSwap)))
+  {
+    refresh();
+  }
+}
+
+void LightEditorPanel::convertLightOrigins()
+{
+  auto& map = m_document.map();
+
+  auto nodesToSwap = NodesToSwap{};
+  for (auto* entityNode : selectedLightNodes(map))
+  {
+    auto entity = entityNode->entity();
+    if (const auto* lightOrigin = entity.property(mdl::LightPropertyKeys::LightOrigin))
+    {
+      const auto origin = *lightOrigin;
+
+      // EntityRotationKeyValidator's "Convert to Angles": the rotation written unchanged
+      // replaces light_rotation, rotation and light_angles by "angles"
+      if (!mdl::idTech4ConvertedRotationKeys(entity).empty())
+      {
+        mdl::applyEntityRotationUpdate(
+          entity,
+          mdl::applyEntityRotation(
+            entity, vm::mat4x4d::identity(), mdl::EntityRotationPolicy::IdTech4));
+      }
+
+      entity.addOrUpdateProperty(mdl::EntityPropertyKeys::Origin, origin);
+      entity.removeProperty(mdl::LightPropertyKeys::LightOrigin);
+      nodesToSwap.emplace_back(entityNode, mdl::NodeContents{std::move(entity)});
+    }
+  }
+
+  if (!swapNodeContents(map, "Convert Light Origin", std::move(nodesToSwap)))
   {
     refresh();
   }
