@@ -58,6 +58,9 @@
 #include "kd/result.h"
 
 #include "vm/bbox.h"
+#include "vm/intersection.h"
+#include "vm/plane.h"
+#include "vm/ray.h"
 #include "vm/vec.h"
 #include "vm/vec_io.h" // IWYU pragma: keep
 
@@ -378,8 +381,8 @@ TEST_CASE("LightVolumeToolController")
           GENERATE(values<ModifierKeyState>({ModifierKeys::None, ModifierKeys::Shift}));
         CAPTURE(modifiers);
 
-        // the +x +y edge along z, seen from above: it is dragged in the horizontal plane
-        // through the hit point, perpendicular to it, by (32, 16)
+        // the +x +y edge along z, seen end-on from above: it is dragged in the plane
+        // through the hit point that faces the camera, the horizontal one, by (32, 16)
         const auto startRay =
           vm::ray3d{{halfExtent, halfExtent, 1000}, vm::vec3d{0, 0, -1}};
         const auto startCamera = perspectiveCameraFor(startRay);
@@ -404,6 +407,152 @@ TEST_CASE("LightVolumeToolController")
         checkVector(
           *lightNode, "light_radius", {300.0 + 32.0 / t, 300.0 + 16.0 / t, 300});
         CHECK(valueOf(*lightNode, "light_radius") == "339.79 319.9 300");
+      }
+
+      SECTION("a 3D edge seen broadside stays under the mouse (D66, review round 4)")
+      {
+        map.grid().toggleSnap();
+
+        // the -y +z edge along x, grabbed at its centre and seen from the front above:
+        // the plane perpendicular to the edge would hold the view ray and put the edge at
+        // the eye; the plane that faces the camera takes the mouse's move towards the
+        // hit point + (4, 0, 4)
+        const auto volume = tool.volumeBox();
+        REQUIRE(volume);
+        const auto hitPoint = volume->toWorld(
+          {0, volume->box.min.y(), volume->box.max.z()}); // (0, -241.26, 241.26)
+        const auto eye = vm::vec3d{0, -1000, 400};
+        const auto startRay = vm::ray3d{eye, vm::normalize(hitPoint - eye)};
+        const auto startCamera = perspectiveCameraFor(startRay);
+        auto tracker = controller.acceptMouseDrag(inputStateFor(
+          startRay,
+          startCamera,
+          {mdl::Hit{
+            LightVolumeTool::EdgeHitType,
+            vm::length(hitPoint - eye),
+            hitPoint,
+            BBoxEdge{vm::vec3d{-1, -1, 1}, vm::vec3d{1, -1, 1}}}}));
+        REQUIRE(tracker != nullptr);
+
+        const auto dragRay =
+          vm::ray3d{eye, vm::normalize(hitPoint + vm::vec3d{4, 0, 4} - eye)};
+        const auto dragInputState = inputStateFor(dragRay, startCamera, {});
+        CHECK(tracker->update(dragInputState));
+        tracker->end(dragInputState);
+
+        // the move in that plane: (4.00, 0.80, 3.84); the edge's two axes take its y and
+        // z, the -y side by -0.80 and the +z side by 3.84, so y 300 - 0.80 / t = 299 and
+        // z 300 + 3.84 / t = 304.77
+        const auto plane =
+          vm::plane3d{hitPoint, vm::vec3d{startCamera.direction()} * -1.0};
+        const auto distance = vm::intersect_ray_plane(dragRay, plane);
+        REQUIRE(distance);
+        const auto delta = vm::point_at_distance(dragRay, *distance) - hitPoint;
+        CHECK(delta.y() == Catch::Approx(0.8026).margin(1e-3));
+        CHECK(delta.z() == Catch::Approx(3.8363).margin(1e-3));
+
+        CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+        checkVector(
+          *lightNode,
+          "light_radius",
+          {300, 300.0 - delta.y() / t, 300.0 + delta.z() / t});
+        CHECK(valueOf(*lightNode, "light_radius") == "300 299 304.77");
+      }
+
+      SECTION("a 3D edge snaps its move relative to the grab (D66, review round 4)")
+      {
+        // the grid of 16 snaps the move (30, 10) of the +x +y edge seen from above to
+        // (32, 16); without snapping it would stay (30, 10), and absolute snapping would
+        // put the edge's centre (241.26 + 30, 241.26 + 10) on (272, 256), a move of
+        // (30.74, 14.74)
+        REQUIRE(map.grid().snap());
+        REQUIRE(map.grid().actualSize() == 16.0);
+
+        const auto startRay =
+          vm::ray3d{{halfExtent, halfExtent, 1000}, vm::vec3d{0, 0, -1}};
+        const auto startCamera = perspectiveCameraFor(startRay);
+        auto tracker = controller.acceptMouseDrag(inputStateFor(
+          startRay,
+          startCamera,
+          {mdl::Hit{
+            LightVolumeTool::EdgeHitType,
+            1000.0,
+            vm::vec3d{halfExtent, halfExtent, 0},
+            BBoxEdge{vm::vec3d{1, 1, -1}, vm::vec3d{1, 1, 1}}}}));
+        REQUIRE(tracker != nullptr);
+
+        const auto dragRay =
+          vm::ray3d{{halfExtent + 30, halfExtent + 10, 1000}, vm::vec3d{0, 0, -1}};
+        const auto dragInputState = inputStateFor(dragRay, startCamera, {});
+        CHECK(tracker->update(dragInputState));
+        tracker->end(dragInputState);
+
+        CHECK(valueOf(*lightNode, "light_radius") == "339.79 319.9 300");
+        CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+      }
+
+      SECTION("a 3D edge grabbed off its centre moves by the mouse's move")
+      {
+        // the +x +y edge seen from above, grabbed at z = 100: the plane runs through the
+        // hit point, and the edge moves by the mouse's (32, 16)
+        const auto hitPoint = vm::vec3d{halfExtent, halfExtent, 100};
+        const auto startRay = vm::ray3d{hitPoint + vm::vec3d{0, 0, 900}, {0, 0, -1}};
+        const auto startCamera = perspectiveCameraFor(startRay);
+        auto tracker = controller.acceptMouseDrag(inputStateFor(
+          startRay,
+          startCamera,
+          {mdl::Hit{
+            LightVolumeTool::EdgeHitType,
+            900.0,
+            hitPoint,
+            BBoxEdge{vm::vec3d{1, 1, -1}, vm::vec3d{1, 1, 1}}}}));
+        REQUIRE(tracker != nullptr);
+
+        const auto dragRay =
+          vm::ray3d{startRay.origin + vm::vec3d{32, 16, 0}, startRay.direction};
+        const auto dragInputState = inputStateFor(dragRay, startCamera, {});
+        CHECK(tracker->update(dragInputState));
+        tracker->end(dragInputState);
+
+        CHECK(valueOf(*lightNode, "light_radius") == "339.79 319.9 300");
+        CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+      }
+
+      SECTION("a spot light's far cap edge seen end-on (D66, AC-24)")
+      {
+        // the box frame's +x far cap edge, along world Y at world (-132, y, -264), seen
+        // along +Y and moved by (-32, 0, -64): hx 164, the length 328
+        auto* spotNode = createLight(
+          map,
+          "0 0 0",
+          {{"light_target", "0 0 -256"},
+           {"light_right", "-128 0 0"},
+           {"light_up", "0 -128 0"}});
+        REQUIRE(tool.selectedLight() == spotNode);
+
+        const auto hitPoint = vm::vec3d{-132, 0, -264};
+        const auto startRay = vm::ray3d{{-132, -1000, -264}, {0, 1, 0}};
+        const auto startCamera = perspectiveCameraFor(startRay);
+        auto tracker = controller.acceptMouseDrag(inputStateFor(
+          startRay,
+          startCamera,
+          {mdl::Hit{
+            LightVolumeTool::EdgeHitType,
+            1000.0,
+            hitPoint,
+            BBoxEdge{vm::vec3d{1, -1, 1}, vm::vec3d{1, 1, 1}}}}));
+        REQUIRE(tracker != nullptr);
+
+        const auto dragRay =
+          vm::ray3d{startRay.origin + vm::vec3d{-32, 0, -64}, startRay.direction};
+        const auto dragInputState = inputStateFor(dragRay, startCamera, {});
+        CHECK(tracker->update(dragInputState));
+        tracker->end(dragInputState);
+
+        CHECK(valueOf(*spotNode, "light_target") == "0 0 -320");
+        CHECK(valueOf(*spotNode, "light_right") == "-160 0 0");
+        CHECK(valueOf(*spotNode, "light_up") == "0 -128.78 0");
+        CHECK(valueOf(*spotNode, "origin") == "0 0 0");
       }
 
       SECTION("a drag moves the light's side")

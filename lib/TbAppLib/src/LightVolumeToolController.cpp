@@ -42,7 +42,6 @@
 #include "ui/MapDocument.h"
 #include "ui/MoveHandleDragTracker.h"
 #include "ui/MoveObjectsTool.h"
-#include "ui/ScaleTool.h"
 
 #include "vm/bbox.h"
 #include "vm/intersection.h"
@@ -92,9 +91,10 @@ vm::line3d cornerLine2D(
  * side, a face centre, the far cap's centre and a corner along its handle line with
  * absolute snapping, like the scale tool's sides; a corner in 2D along its line in the
  * view plane; an edge, which is picked in 3D only, in the plane through the hit point
- * perpendicular to it with relative snapping, like the scale tool's edges in 2D, so that
- * it follows the mouse on its two axes; a surface along its edit line with relative
- * snapping, since its hit point is not on the grid.
+ * that faces the camera with relative snapping, like the scale tool's edges in 2D, so
+ * that it follows the mouse on its two axes (the box ignores the part along the edge); a
+ * surface along its edit line with relative snapping, since its hit point is not on the
+ * grid.
  */
 HandlePositionProposer makeHandleProposer(
   const InputState& inputState,
@@ -108,13 +108,12 @@ HandlePositionProposer makeHandleProposer(
   if (hit.type() == LightVolumeTool::EdgeHitType)
   {
     // the picker moves the plane by the handle offset, so that it runs through the hit
-    // point (ScaleToolController.cpp)
-    const auto& edge = hit.target<BBoxEdge>();
-    const auto direction = volume.rotation * vm::normalize(edge.point1 - edge.point0);
+    // point (ScaleToolController.cpp); a plane along the view ray, such as the one
+    // perpendicular to an edge seen broadside, would put the edge at the eye (D66)
+    const auto plane =
+      vm::plane3d{hit.hitPoint() + handleOffset, vm::vec3d{camera.direction()} * -1.0};
     return makeHandlePositionProposer(
-      makePlaneHandlePicker(
-        vm::plane3d{hit.hitPoint() + handleOffset, direction}, handleOffset),
-      makeRelativeHandleSnapper(grid));
+      makePlaneHandlePicker(plane, handleOffset), makeRelativeHandleSnapper(grid));
   }
 
   if (hit.type() == LightVolumeTool::SurfaceHitType)
