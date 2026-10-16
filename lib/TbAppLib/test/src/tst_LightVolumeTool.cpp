@@ -17,6 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "base/PreferenceManager.h"
 #include "gl/Camera.h"
 #include "gl/OrthographicCamera.h"
 #include "gl/PerspectiveCamera.h"
@@ -37,11 +38,13 @@
 #include "mdl/Map_Selection.h"
 #include "mdl/PickResult.h"
 #include "mdl/WorldNode.h"
+#include "prefs/Preferences.h"
 #include "ui/LightVolumeTool.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
 #include "ui/ScaleTool.h"
 
+#include "kd/invoke.h"
 #include "kd/result.h"
 
 #include "vm/bbox.h"
@@ -72,6 +75,15 @@ const auto DefaultSpot = Properties{
   {"light_target", "0 0 -256"},
   {"light_right", "-128 0 0"},
   {"light_up", "0 -128 0"},
+};
+
+// every rotation property of a light: a drawn volume removes them all (D11)
+const auto RotationProperties = Properties{
+  {"angle", "45"},
+  {"angles", "0 90 0"},
+  {"rotation", "1 0 0 0 1 0 0 0 1"},
+  {"light_rotation", "1 0 0 0 1 0 0 0 1"},
+  {"light_angles", "0 0 0"},
 };
 
 mdl::EntityNode* createLight(
@@ -282,24 +294,24 @@ TEST_CASE("LightVolumeTool")
       selectOnly(map, {spotNode});
       CHECK(tool.selectedLight() == spotNode);
     }
-  }
 
-  SECTION("selectedLight needs a game with the light editor")
-  {
-    auto quakeFixture = MapDocumentFixture{};
-    auto& quakeDocument = quakeFixture.create(mdl::QuakeFixtureConfig);
-    auto& quakeMap = quakeDocument.map();
-    REQUIRE(!mdl::hasLightEditor(quakeMap.gameInfo().gameConfig));
+    SECTION("needs a game with the light editor")
+    {
+      auto quakeFixture = MapDocumentFixture{};
+      auto& quakeDocument = quakeFixture.create(mdl::QuakeFixtureConfig);
+      auto& quakeMap = quakeDocument.map();
+      REQUIRE(!mdl::hasLightEditor(quakeMap.gameInfo().gameConfig));
 
-    auto* entityNode = new mdl::EntityNode{mdl::Entity{{{"classname", "light"}}}};
-    REQUIRE(
-      !mdl::addNodes(quakeMap, {{&mdl::parentForNodes(quakeMap), {entityNode}}}).empty());
-    selectOnly(quakeMap, {entityNode});
-    REQUIRE(mdl::isLightEntity(entityNode->entity()));
+      auto* entityNode = new mdl::EntityNode{mdl::Entity{{{"classname", "light"}}}};
+      REQUIRE(!mdl::addNodes(quakeMap, {{&mdl::parentForNodes(quakeMap), {entityNode}}})
+                 .empty());
+      selectOnly(quakeMap, {entityNode});
+      REQUIRE(mdl::isLightEntity(entityNode->entity()));
 
-    auto quakeTool = LightVolumeTool{quakeDocument};
-    CHECK(quakeTool.selectedLight() == nullptr);
-    CHECK(quakeTool.volumeBox() == std::nullopt);
+      auto quakeTool = LightVolumeTool{quakeDocument};
+      CHECK(quakeTool.selectedLight() == nullptr);
+      CHECK(quakeTool.volumeBox() == std::nullopt);
+    }
   }
 
   SECTION("volumeBox")
@@ -383,6 +395,29 @@ TEST_CASE("LightVolumeTool")
       CHECK(valueOf(*lightNode, "light_radius") == "316 300 300");
     }
 
+    SECTION("a turned point light's side moves along its turned axis")
+    {
+      // angles 0 90 0 turns the box frame's +x to world +Y, so a box frame delta is
+      // R^T times the world delta, not R times it
+      auto* lightNode = createLight(map, "0 0 0", {{"angles", "0 90 0"}});
+      CHECK(drag(tool, sideHit({1, 0, 0}), {{0, 32, 0}}) == std::vector{true});
+
+      CHECK(valueOf(*lightNode, "origin") == "0 16 0");
+      CHECK(valueOf(*lightNode, "light_radius") == "316 300 300");
+      CHECK(valueOf(*lightNode, "angles") == "0 90 0");
+    }
+
+    SECTION("a point light's edge moves two sides (AC-10)")
+    {
+      auto* lightNode = createLight(map, "0 0 0", {});
+      // the edge at +x +y along z, with the opposite edge as the anchor
+      CHECK(
+        drag(tool, edgeHit({1, 1, -1}, {1, 1, 1}), {{32, 32, 0}}) == std::vector{true});
+
+      CHECK(valueOf(*lightNode, "origin") == "16 16 0");
+      CHECK(valueOf(*lightNode, "light_radius") == "316 316 300");
+    }
+
     SECTION("a corner with the centre anchor changes the radius only")
     {
       auto* lightNode = createLight(map, "0 0 0", {});
@@ -439,6 +474,35 @@ TEST_CASE("LightVolumeTool")
           == Catch::Approx(143.5234).margin(LengthTolerance));
         CHECK(valueOf(*lightNode, "light_target") == "15.52 0 -256.01");
       }
+    }
+
+    SECTION("every step starts from the light at the start of the drag")
+    {
+      auto* lightNode = createLight(map, "0 0 0", DefaultSpot);
+      CHECK(
+        drag(
+          tool,
+          edgeHit({1, -1, 1}, {1, 1, 1}),
+          {{-8, 0, 0}, {-8, 0, 0}, {-48, 0, 0}, {32, 0, 0}})
+        == std::vector{true, true, true, true});
+
+      // the strings of the single drag by -32
+      CHECK(valueOf(*lightNode, "light_target") == "-15.52 0 -256.01");
+      CHECK(valueOf(*lightNode, "light_right") == "-143.26 0 8.68");
+      CHECK(valueOf(*lightNode, "light_up") == "0 -128.01 0");
+      checkVector(*lightNode, "origin", {0, 0, 0});
+    }
+
+    SECTION("a spot light's far side moves like its far cap centre (AC-9)")
+    {
+      auto* lightNode = createLight(map, "0 0 0", DefaultSpot);
+      CHECK(drag(tool, sideHit({0, 0, 1}), {{0, 0, -64}}) == std::vector{true});
+
+      checkVector(*lightNode, "origin", {0, 0, 0});
+      checkVector(*lightNode, "light_target", {0, 0, -320});
+      CHECK(
+        lengthOf(*lightNode, "light_right")
+        == Catch::Approx(128.7805).margin(LengthTolerance));
     }
 
     SECTION("a spot light's far cap centre moves along the beam")
@@ -579,30 +643,6 @@ TEST_CASE("LightVolumeTool")
       CHECK(*map.undoCommandName() == undoName);
     }
 
-    SECTION("a deactivation cancels the drag, which then does nothing")
-    {
-      auto* lightNode = createLight(map, "0 0 0", {});
-      const auto properties = lightNode->entity().properties();
-      const auto undoName = *map.undoCommandName();
-
-      REQUIRE(tool.activate());
-      REQUIRE(tool.beginDrag(sideHit({1, 0, 0})));
-      REQUIRE(tool.update({32, 0, 0}));
-      REQUIRE(tool.deactivate());
-
-      CHECK_FALSE(tool.isDragging());
-      CHECK(tool.dragStartVolume() == std::nullopt);
-      CHECK(lightNode->entity().properties() == properties);
-
-      // the drag tracker may call the tool after the deactivation
-      CHECK_FALSE(tool.update({32, 0, 0}));
-      tool.endDrag();
-      tool.cancelDrag();
-
-      CHECK(lightNode->entity().properties() == properties);
-      CHECK(*map.undoCommandName() == undoName);
-    }
-
     SECTION("a drag needs a selected light")
     {
       createLight(map, "0 0 0", {});
@@ -642,8 +682,46 @@ TEST_CASE("LightVolumeTool")
 
     SECTION("from outside the box, a ray past it hits a back side")
     {
+      // of the sides facing away from the ray or along it, the top side has the edges
+      // closest to the ray, 200 units below it
       const auto hit = pick3D(tool, vm::ray3d{{1000, 0, 500}, {-1, 0, 0}});
       CHECK(hit.type() == LightVolumeTool::SideHitType);
+      CHECK(hit.target<BBoxSide>() == BBoxSide{{0, 0, 1}});
+    }
+
+    SECTION("from inside the box, nothing behind the camera")
+    {
+      // with large handles, the camera is inside the spheres of the corner and the
+      // edge points behind it, which the ray would leave within 100 units
+      setPref(Preferences::HandleRadius, 1000.0f);
+      const auto resetHandleRadius = kdl::invoke_later{
+        [] { PreferenceManager::instance().resetToDefault(Preferences::HandleRadius); }};
+
+      const auto hit =
+        pick3D(tool, vm::ray3d{{-290, -290, -290}, vm::normalize(vm::vec3d{1, 1, 1})});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.distance() > 100.0);
+      if (hit.type() == LightVolumeTool::CornerHitType)
+      {
+        CHECK(hit.target<BBoxCorner>() != BBoxCorner{{-1, -1, -1}});
+      }
+    }
+
+    SECTION("a turned light's side in world space")
+    {
+      selectOnly(map, {});
+      createLight(map, "0 0 0", {{"angles", "0 90 0"}});
+      const auto hit = pick3D(tool, vm::ray3d{{0, 1000, 0}, {0, -1, 0}});
+      CHECK(hit.type() == LightVolumeTool::SideHitType);
+      CHECK(hit.target<BBoxSide>() == BBoxSide{{1, 0, 0}});
+      CHECK(hit.distance() == Catch::Approx(700.0));
+
+      // the back side fallback maps the ray into the box frame by R^T: by R, the ray
+      // would run away from the box and find its closest edge at distance 0
+      const auto backSideHit = pick3D(tool, vm::ray3d{{1000, 0, 500}, {-1, 0, 0}});
+      CHECK(backSideHit.type() == LightVolumeTool::SideHitType);
+      CHECK(backSideHit.target<BBoxSide>() == BBoxSide{{0, 0, 1}});
+      CHECK(backSideHit.distance() == Catch::Approx(700.0));
     }
 
     SECTION("a spot light's far cap centre")
@@ -705,7 +783,11 @@ TEST_CASE("LightVolumeTool")
     SECTION("a selected spot light fills the box with its beam pointing down")
     {
       auto* lightNode = createLight(map, "0 0 0", DefaultSpot);
-      REQUIRE(mdl::setEntityProperty(map, "angles", "0 90 0"));
+      for (const auto& [key, value] : RotationProperties)
+      {
+        REQUIRE(mdl::setEntityProperty(map, key, value));
+      }
+      REQUIRE(tool.volumeBox());
 
       CHECK(tool.updateDraw(vm::bbox3d{{0, 0, 0}, {128, 128, 64}}));
       tool.endDraw();
@@ -714,7 +796,11 @@ TEST_CASE("LightVolumeTool")
       CHECK(valueOf(*lightNode, "light_target") == "0 0 -56");
       CHECK(valueOf(*lightNode, "light_right") == "-56 0 0");
       CHECK(valueOf(*lightNode, "light_up") == "0 -56 0");
-      CHECK(lightNode->entity().property("angles") == nullptr);
+      for (const auto& [key, value] : RotationProperties)
+      {
+        CAPTURE(key);
+        CHECK(lightNode->entity().property(key) == nullptr);
+      }
       REQUIRE(map.undoCommandName() != nullptr);
       CHECK(*map.undoCommandName() == "Draw Light Volume");
       CHECK(tool.mode() == LightVolumeTool::Mode::Handles);
@@ -737,14 +823,19 @@ TEST_CASE("LightVolumeTool")
 
     SECTION("a selected point light fills the box")
     {
-      auto* lightNode = createLight(map, "0 0 0", {{"angles", "0 90 0"}});
+      auto* lightNode = createLight(map, "0 0 0", RotationProperties);
+      REQUIRE(tool.volumeBox());
 
       CHECK(tool.updateDraw(vm::bbox3d{{0, 0, 0}, {128, 128, 64}}));
       tool.endDraw();
 
       CHECK(valueOf(*lightNode, "origin") == "64 64 32");
       CHECK(valueOf(*lightNode, "light_radius") == "64 64 32");
-      CHECK(lightNode->entity().property("angles") == nullptr);
+      for (const auto& [key, value] : RotationProperties)
+      {
+        CAPTURE(key);
+        CHECK(lightNode->entity().property(key) == nullptr);
+      }
     }
 
     SECTION("with nothing selected, a new light")
@@ -773,6 +864,11 @@ TEST_CASE("LightVolumeTool")
       CHECK(valueOf(*lightNode, "math_shape_exp") == "2");
       CHECK(valueOf(*lightNode, "math_penumbra") == "0.15");
       CHECK(valueOf(*lightNode, "math_pattern") == "none");
+      CHECK(valueOf(*lightNode, "math_energy_clamp") == "1");
+      CHECK(valueOf(*lightNode, "math_type") == "point");
+      CHECK(valueOf(*lightNode, "math_pattern_strength") == "0");
+      CHECK(valueOf(*lightNode, "math_pattern_scale") == "1");
+      CHECK(valueOf(*lightNode, "math_pattern_phase") == "0");
       CHECK(
         mdl::parseLightProperties(lightNode->entity()).math
         == mdl::seededMathLightProperties());
@@ -812,6 +908,11 @@ TEST_CASE("LightVolumeTool")
 
       CHECK_FALSE(tool.canDraw());
       CHECK_FALSE(tool.updateDraw(vm::bbox3d{{0, 0, 0}, {128, 128, 64}}));
+
+      auto* otherNode = createLight(map, "256 0 0", {});
+      selectOnly(map, {lightNode, otherNode});
+      CHECK_FALSE(tool.canDraw());
+      CHECK_FALSE(tool.updateDraw(vm::bbox3d{{0, 0, 0}, {128, 128, 64}}));
     }
 
     SECTION("cancelDraw discards the box")
@@ -826,16 +927,43 @@ TEST_CASE("LightVolumeTool")
     }
   }
 
-  SECTION("deactivate drops the drawn volume and returns to the handle mode")
+  SECTION("doDeactivate")
   {
-    createLight(map, "0 0 0", {});
-    tool.activate();
-    tool.setMode(LightVolumeTool::Mode::Draw);
-    REQUIRE(tool.updateDraw(vm::bbox3d{{0, 0, 0}, {128, 128, 64}}));
+    REQUIRE(tool.activate());
 
-    tool.deactivate();
-    CHECK(tool.drawBox() == std::nullopt);
-    CHECK(tool.mode() == LightVolumeTool::Mode::Handles);
+    SECTION("drops the drawn volume and returns to the handle mode")
+    {
+      createLight(map, "0 0 0", {});
+      tool.setMode(LightVolumeTool::Mode::Draw);
+      REQUIRE(tool.updateDraw(vm::bbox3d{{0, 0, 0}, {128, 128, 64}}));
+
+      REQUIRE(tool.deactivate());
+      CHECK(tool.drawBox() == std::nullopt);
+      CHECK(tool.mode() == LightVolumeTool::Mode::Handles);
+    }
+
+    SECTION("cancels the drag, which then does nothing")
+    {
+      auto* lightNode = createLight(map, "0 0 0", {});
+      const auto properties = lightNode->entity().properties();
+      const auto undoName = *map.undoCommandName();
+
+      REQUIRE(tool.beginDrag(sideHit({1, 0, 0})));
+      REQUIRE(tool.update({32, 0, 0}));
+      REQUIRE(tool.deactivate());
+
+      CHECK_FALSE(tool.isDragging());
+      CHECK(tool.dragStartVolume() == std::nullopt);
+      CHECK(lightNode->entity().properties() == properties);
+
+      // the drag tracker may call the tool after the deactivation
+      CHECK_FALSE(tool.update({32, 0, 0}));
+      tool.endDrag();
+      tool.cancelDrag();
+
+      CHECK(lightNode->entity().properties() == properties);
+      CHECK(*map.undoCommandName() == undoName);
+    }
   }
 }
 

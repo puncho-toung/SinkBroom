@@ -33,10 +33,14 @@
 #include "gl/ResourceManager.h"
 #include "gl/TestGl.h"
 #include "gl/TestUtils.h"
+#include "mdl/Entity.h"
+#include "mdl/EntityNode.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/Grid.h"
 #include "mdl/Map.h"
 #include "mdl/MapFormat.h"
+#include "mdl/Map_Nodes.h"
+#include "mdl/Map_Selection.h"
 #include "prefs/Preferences.h"
 #include "ui/ActionContext.h"
 #include "ui/AppControllerFixture.h"
@@ -363,6 +367,54 @@ TEST_CASE("MapWindow")
 
     toolBox.toggleTool(toolBox.lightVolumeTool());
     CHECK_FALSE(toolBox.lightVolumeToolActive());
+  }
+
+  SECTION("the light volume tool leaves the action context at no tool with a light")
+  {
+    REQUIRE(window.document().create(
+      appController.environmentConfig(),
+      mdl::Doom3BFGGameInfo,
+      mdl::MapFormat::Doom3_Valve,
+      vm::bbox3d{8192.0}));
+    QApplication::processEvents();
+
+    auto& map = window.document().map();
+    auto* lightNode = new mdl::EntityNode{mdl::Entity{{
+      {"classname", "light"},
+      {"origin", "0 0 0"},
+    }}};
+    REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), {lightNode}}}).empty());
+    mdl::selectNodes(map, {lightNode});
+    QApplication::processEvents();
+
+    const auto views = window.findChildren<MapViewBase*>();
+    REQUIRE(!views.empty());
+
+    auto& toolBox = window.toolBox();
+    REQUIRE(toolBox.lightVolumeTool().selectedLight() == lightNode);
+
+    const auto contexts = [&]() {
+      auto result = std::vector<ActionContext::Type>{};
+      for (const auto* view : views)
+      {
+        result.push_back(view->actionContext());
+      }
+      return result;
+    };
+
+    const auto contextsWithoutTool = contexts();
+    for (const auto context : contextsWithoutTool)
+    {
+      CHECK((context & ActionContext::NoTool) != 0);
+      CHECK((context & ActionContext::NodeSelection) != 0);
+    }
+
+    toolBox.toggleTool(toolBox.lightVolumeTool());
+    REQUIRE(toolBox.lightVolumeToolActive());
+    CHECK(contexts() == contextsWithoutTool);
+
+    toolBox.toggleTool(toolBox.lightVolumeTool());
+    CHECK(contexts() == contextsWithoutTool);
   }
 
   SECTION("Deactivate Current Tool is unchecked while the light volume tool is active")

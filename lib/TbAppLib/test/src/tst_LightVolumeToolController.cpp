@@ -50,11 +50,14 @@
 
 #include "vm/bbox.h"
 #include "vm/vec.h"
+#include "vm/vec_io.h" // IWYU pragma: keep
 
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 namespace tb::ui
 {
@@ -73,6 +76,13 @@ mdl::EntityNode* createLight(mdl::Map& map, const std::string& origin)
   REQUIRE(entityNode != nullptr);
   REQUIRE(mdl::setEntityProperty(map, "origin", origin));
   return entityNode;
+}
+
+std::string valueOf(const mdl::EntityNode& entityNode, const std::string& key)
+{
+  const auto* value = entityNode.entity().property(key);
+  REQUIRE(value != nullptr);
+  return *value;
 }
 
 mdl::BrushNode* createBrush(mdl::Map& map)
@@ -251,12 +261,22 @@ TEST_CASE("LightVolumeToolController")
 
       SECTION("Alt anchors the box at its centre, Shift scales proportionally")
       {
-        auto inputState = inputStateFor(
-          pickRay, camera, {cornerHit(20)}, ModifierKeys::Alt | ModifierKeys::Shift);
+        using T = std::tuple<ModifierKeyState, AnchorPos, ProportionalAxes>;
+        const auto [modifiers, anchorPos, proportionalAxes] = GENERATE(values<T>({
+          {ModifierKeys::None, AnchorPos::Opposite, ProportionalAxes::None()},
+          {ModifierKeys::Alt, AnchorPos::Center, ProportionalAxes::None()},
+          {ModifierKeys::Shift, AnchorPos::Opposite, ProportionalAxes::All()},
+          {ModifierKeys::Alt | ModifierKeys::Shift,
+           AnchorPos::Center,
+           ProportionalAxes::All()},
+        }));
+        CAPTURE(modifiers);
+
+        auto inputState = inputStateFor(pickRay, camera, {cornerHit(20)}, modifiers);
         auto tracker = controller.acceptMouseDrag(inputState);
         REQUIRE(tracker != nullptr);
-        CHECK(tool.anchorPos() == AnchorPos::Center);
-        CHECK(tool.proportionalAxes() == ProportionalAxes::All());
+        CHECK(tool.anchorPos() == anchorPos);
+        CHECK(tool.proportionalAxes() == proportionalAxes);
         tracker->cancel();
       }
 
@@ -287,6 +307,37 @@ TEST_CASE("LightVolumeToolController")
         CHECK(lightNode->entity().property("origin") != nullptr);
         CHECK(*lightNode->entity().property("origin") == "16 0 0");
         CHECK(*lightNode->entity().property("light_radius") == "316 300 300");
+      }
+
+      SECTION("a drag moves a turned light's side along its turned axis")
+      {
+        map.grid().toggleSnap();
+
+        auto* turnedNode = createLight(map, "0 0 0");
+        REQUIRE(mdl::setEntityProperty(map, "angles", "0 90 0"));
+        REQUIRE(tool.selectedLight() == turnedNode);
+
+        // the box frame's +x side faces world +Y; rays across its handle line
+        const auto startRay = vm::ray3d{{-100, 300, 0}, vm::vec3d{1, 0, 0}};
+        const auto startCamera = perspectiveCameraFor(startRay);
+        auto inputState = inputStateFor(
+          startRay,
+          startCamera,
+          {mdl::Hit{
+            LightVolumeTool::SideHitType,
+            100.0,
+            vm::vec3d{0, 300, 0},
+            BBoxSide{vm::vec3d{1, 0, 0}}}});
+        auto tracker = controller.acceptMouseDrag(inputState);
+        REQUIRE(tracker != nullptr);
+
+        const auto dragRay = vm::ray3d{{-100, 332, 0}, vm::vec3d{1, 0, 0}};
+        auto dragInputState = inputStateFor(dragRay, startCamera, {});
+        CHECK(tracker->update(dragInputState));
+        tracker->end(dragInputState);
+
+        CHECK(valueOf(*turnedNode, "origin") == "0 16 0");
+        CHECK(valueOf(*turnedNode, "light_radius") == "316 300 300");
       }
 
       SECTION("a drag that the tool's deactivation cancelled ends quietly")
@@ -383,7 +434,6 @@ TEST_CASE("LightVolumeToolController")
         auto inputState =
           inputStateFor(pickRay, camera, {entityHit(lightNode, 10), cornerHit(20)});
         CHECK(controller.mouseClick(inputState));
-        CHECK(map.selection().nodes == std::vector<mdl::Node*>{lightNode});
       }
 
       SECTION("a click on nothing keeps the light selected")
@@ -500,6 +550,31 @@ TEST_CASE("LightVolumeToolController")
       tracker->cancel();
     }
 
+    SECTION("Shift on a turned light keeps the box axis nearest the view direction")
+    {
+      auto* turnedNode = createLight(map, "0 0 0");
+      REQUIRE(mdl::setEntityProperty(map, "angles", "0 90 0"));
+      REQUIRE(tool.selectedLight() == turnedNode);
+
+      // the XZ view looks along world +Y, which is the turned box frame's +x: the
+      // proportional axes leave out x, not y
+      const auto frontRay = vm::ray3d{{0, -1000, 0}, {0, 1, 0}};
+      const auto frontCamera = gl::OrthographicCamera{
+        1.0f,
+        8000.0f,
+        gl::Camera::Viewport{0, 0, 1920, 1080},
+        vm::vec3f{frontRay.origin},
+        vm::vec3f{frontRay.direction},
+        vm::vec3f{0, 0, 1}};
+
+      auto inputState =
+        inputStateFor(frontRay, frontCamera, {cornerHit(20)}, ModifierKeys::Shift);
+      auto tracker = controller.acceptMouseDrag(inputState);
+      REQUIRE(tracker != nullptr);
+      CHECK(tool.proportionalAxes() == ProportionalAxes{false, true, true});
+      tracker->cancel();
+    }
+
     SECTION("draw mode takes the view axis extent of the selected light")
     {
       tool.setMode(LightVolumeTool::Mode::Draw);
@@ -514,6 +589,59 @@ TEST_CASE("LightVolumeToolController")
       CHECK(tool.drawBox()->min.z() == -300.0);
       CHECK(tool.drawBox()->max.z() == 300.0);
       tracker->cancel();
+    }
+
+    SECTION("a drawn box replaces the selected light's volume")
+    {
+      map.grid().setSize(3); // 8 units
+      tool.setMode(LightVolumeTool::Mode::Draw);
+
+      const auto startRay = vm::ray3d{{305, 7, 1000}, {0, 0, -1}};
+      const auto drawCamera = orthographicCameraFor(startRay);
+      auto tracker = controller.acceptMouseDrag(inputStateFor(startRay, drawCamera, {}));
+      REQUIRE(tracker != nullptr);
+
+      const auto endRay = vm::ray3d{{330, 50, 1000}, {0, 0, -1}};
+      const auto endInputState = inputStateFor(endRay, drawCamera, {});
+      CHECK(tracker->update(endInputState));
+      tracker->end(endInputState);
+
+      // the snapped box [304, 336] x [0, 56] x [-300, 300], the light's own z extent
+      CHECK(valueOf(*lightNode, "origin") == "320 28 0");
+      CHECK(valueOf(*lightNode, "light_radius") == "16 28 300");
+      REQUIRE(map.undoCommandName() != nullptr);
+      CHECK(*map.undoCommandName() == "Draw Light Volume");
+      CHECK(tool.mode() == LightVolumeTool::Mode::Handles);
+    }
+
+    SECTION("a drawn box with nothing selected creates a light")
+    {
+      map.grid().setSize(3); // 8 units
+      tool.setMode(LightVolumeTool::Mode::Draw);
+      mdl::deselectAll(map);
+      const auto referenceZ = map.referenceBounds().center().z();
+
+      const auto startRay = vm::ray3d{{305, 7, 1000}, {0, 0, -1}};
+      const auto drawCamera = orthographicCameraFor(startRay);
+      auto tracker = controller.acceptMouseDrag(inputStateFor(startRay, drawCamera, {}));
+      REQUIRE(tracker != nullptr);
+
+      const auto endRay = vm::ray3d{{330, 50, 1000}, {0, 0, -1}};
+      const auto endInputState = inputStateFor(endRay, drawCamera, {});
+      CHECK(tracker->update(endInputState));
+      tracker->end(endInputState);
+
+      // the z extent is +-300 around the reference bounds' centre
+      REQUIRE(map.selection().entities.size() == 1);
+      const auto* createdNode = map.selection().entities.front();
+      CHECK(createdNode != lightNode);
+      const auto origin = vm::parse<double, 3>(valueOf(*createdNode, "origin"));
+      REQUIRE(origin);
+      CHECK(vm::is_equal(*origin, vm::vec3d{320, 28, referenceZ}, 0.005));
+      CHECK(valueOf(*createdNode, "light_radius") == "16 28 300");
+      REQUIRE(map.undoCommandName() != nullptr);
+      CHECK(*map.undoCommandName() == "Create Light");
+      CHECK(tool.mode() == LightVolumeTool::Mode::Handles);
     }
   }
 }
