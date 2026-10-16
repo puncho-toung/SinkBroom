@@ -61,6 +61,7 @@
 #include "ui/QStyleUtils.h"
 #include "ui/SignalDelayer.h"
 #include "ui/SpinControl.h"
+#include "ui/TabBar.h"
 #include "ui/TabBook.h"
 #include "ui/ViewConstants.h"
 
@@ -195,7 +196,6 @@ constexpr auto RadiusRange = SpinRange{0.0, 131072.0, 2, 1.0, 8.0, 64.0};
 constexpr auto AngleRange = SpinRange{-360.0, 360.0, 2, 1.0, 15.0, 45.0};
 // the in-game editor's le_maxIntensity; written with four decimals
 constexpr auto IntensityRange = SpinRange{0.0, 8.0, 4, 0.1, 0.5, 1.0};
-constexpr auto StyleRange = SpinRange{-1.0, 11.0, 0, 1.0, 1.0, 1.0};
 // the slider ranges of the in-game editor (LightEditor.cpp); written with four decimals
 constexpr auto FalloffExpRange = SpinRange{0.1, 16.0, 4, 0.1, 1.0, 2.0};
 constexpr auto InnerRadiusRange = SpinRange{0.0, 1.0, 4, 0.01, 0.1, 0.25};
@@ -614,6 +614,35 @@ void updateTextureItems(QComboBox& comboBox, const mdl::Map& map)
   }
 }
 
+using StyleOptions = std::vector<std::pair<std::string, std::string>>;
+
+/**
+ * The value and the name of no style and of each of the engine's predefined light styles,
+ * like the style choices of an entity definition.
+ */
+StyleOptions predefinedStyleOptions()
+{
+  auto options = StyleOptions{};
+  for (int style = -1; style < mdl::LightStyleCount; ++style)
+  {
+    options.emplace_back(std::to_string(style), std::string{mdl::lightStyleName(style)});
+  }
+  return options;
+}
+
+/**
+ * Fills a style combo box with items "value: name" whose data is the value.
+ */
+void setStyleItems(QComboBox& comboBox, const StyleOptions& options)
+{
+  comboBox.clear();
+  for (const auto& [value, name] : options)
+  {
+    comboBox.addItem(
+      QString::fromStdString(value + ": " + name), QString::fromStdString(value));
+  }
+}
+
 int findStyleIndex(const QComboBox& comboBox, const int style)
 {
   for (int i = 0; i < comboBox.count(); ++i)
@@ -671,7 +700,6 @@ struct LightEditorPanel::Controls
   TabBookPage* mathPage = nullptr;
   TabBookPage* texturePage = nullptr;
   FormWithSectionsLayout* mathForm = nullptr;
-  FormWithSectionsLayout* textureForm = nullptr;
 
   // every control that the user changes, blocked while the controls are set
   std::vector<QObject*> inputs;
@@ -680,6 +708,9 @@ struct LightEditorPanel::Controls
   std::array<QRadioButton*, 3> typeRadios = {};
 
   QCheckBox* equalRadius = nullptr;
+  // the session's choice of one radius for lights whose three radii are equal, off at
+  // first, so that a light shows its three radii (D52)
+  bool equilateral = false;
   SpinControl* radius = nullptr;
   std::array<SpinControl*, 3> radiusXyz = {};
   QCheckBox* center = nullptr;
@@ -701,12 +732,12 @@ struct LightEditorPanel::Controls
   // the names of the light materials are copied again on the next update
   bool texturesStale = true;
   QComboBox* styleChoice = nullptr;
-  // the values and descriptions of the definition's style choices, copied
-  std::vector<std::pair<std::string, std::string>> styleOptions;
-  SpinControl* style = nullptr;
+  // the values and descriptions of the definition's style choices, else of the engine's
+  // predefined styles, copied
+  StyleOptions styleOptions;
 
-  QCheckBox* mathEnabled = nullptr;
   QLabel* mathType = nullptr;
+  QComboBox* mathStyle = nullptr;
   QComboBox* falloff = nullptr;
   QSlider* falloffExpSlider = nullptr;
   SpinControl* falloffExp = nullptr;
@@ -746,12 +777,10 @@ struct LightEditorPanel::Controls
   int explicitStartEndRow = -1;
   int startRow = -1;
   int endRow = -1;
-  // the rows of textureForm
-  int styleChoiceRow = -1;
-  int styleRow = -1;
   // the rows of mathForm
   int mixedMathRow = -1;
   int mathTypeRow = -1;
+  int mathStyleRow = -1;
   int falloffRow = -1;
   int falloffExpRow = -1;
   int innerRadiusRow = -1;
@@ -983,11 +1012,14 @@ QWidget* LightEditorPanel::createEditorPage()
   mixedMathText->setWordWrap(true);
   setInfoStyle(mixedMathText);
   c.mixedMathRow = addRow(*mathForm, mixedMathText);
-  c.mathEnabled = createCheckBox("MathEnabled", tr("Enable math-driven falloff"));
-  mathForm->addRow(c.mathEnabled);
   c.mathType = new QLabel{};
   c.mathType->setObjectName(controlName("MathType"));
   c.mathTypeRow = addRow(*mathForm, tr("Type"), c.mathType);
+  // the engine's predefined styles, which change the light's colour (D54)
+  c.mathStyle = createComboBox("MathStyle", {});
+  setStyleItems(*c.mathStyle, predefinedStyleOptions());
+  c.mathStyle->setToolTip(tr("Varies the light's brightness over time like a style"));
+  c.mathStyleRow = addRow(*mathForm, tr("Style"), c.mathStyle);
   c.falloff = createComboBox(
     "Falloff",
     {
@@ -1050,17 +1082,14 @@ QWidget* LightEditorPanel::createEditorPage()
 
   // the texture light page: the light material and the engine's style
   auto* textureForm = createForm();
-  c.textureForm = textureForm;
   c.texture = createComboBox("Texture", {EngineDefaultTexture});
   c.texture->setEditable(true);
   c.texture->setInsertPolicy(QComboBox::NoInsert);
   c.texture->setItemData(0, "lights/squarelight1", Qt::ToolTipRole);
   textureForm->addRow(tr("Texture"), c.texture);
-  // the choices of the entity definition, else a number
+  // the choices of the entity definition, else the engine's predefined styles
   c.styleChoice = createComboBox("StyleChoice", {});
-  c.styleChoiceRow = addRow(*textureForm, tr("Style"), c.styleChoice);
-  c.style = createSpin("Style", StyleRange);
-  c.styleRow = addRow(*textureForm, tr("Style"), c.style);
+  textureForm->addRow(tr("Style"), c.styleChoice);
 
   c.mathPage = createTabPage("MathPage", mathForm);
   c.texturePage = createTabPage("TexturePage", textureForm);
@@ -1088,8 +1117,7 @@ QWidget* LightEditorPanel::createEditorPage()
     c.intensity,
     c.texture,
     c.styleChoice,
-    c.style,
-    c.mathEnabled,
+    c.mathStyle,
     c.falloff,
     c.falloffExpSlider,
     c.falloffExp,
@@ -1238,18 +1266,19 @@ void LightEditorPanel::connectEditor()
   }
 
   connect(c.equalRadius, &QAbstractButton::clicked, this, [this](const bool checked) {
+    auto& controls = *m_controls;
+    controls.equilateral = checked;
+    controls.form->setRowVisible(controls.radiusRow, checked);
+    controls.form->setRowVisible(controls.radiusXyzRow, !checked);
+
+    // unchecking writes nothing: the three components are equal until one of them is
+    // edited
     if (checked)
     {
       editLights("Set Light Radius", [](mdl::LightProperties& light) {
         light.radius = vm::vec3d{light.radius.x(), light.radius.x(), light.radius.x()};
         light.equalRadius = true;
       });
-    }
-    else
-    {
-      // writes nothing: the three components are equal until one of them is edited
-      m_controls->form->setRowVisible(m_controls->radiusRow, false);
-      m_controls->form->setRowVisible(m_controls->radiusXyzRow, true);
     }
   });
   connectSpin(
@@ -1334,23 +1363,40 @@ void LightEditorPanel::connectEditor()
         "Set Light Style", [&](mdl::LightProperties& light) { light.style = style; });
     }
   });
-  connectSpin(
-    c.style, "Set Light Style", [](mdl::LightProperties& light, const double value) {
-      light.style = int(std::lround(value));
-    });
 
-  connectCheckBox(
-    c.mathEnabled, "Set Light Math", [](mdl::LightProperties& light, const bool checked) {
-      if (!checked)
-      {
-        light.math.enabled = false;
-      }
-      else if (!light.math.enabled)
-      {
-        // the in-game editor's auto-seed (D29)
-        light.math = mdl::seededMathLightProperties();
-      }
-    });
+  // the tab is the switch between the two kinds of light (D51): a click on it writes, the
+  // page change of a refresh does not
+  connect(c.tabs->tabBar(), &TabBar::tabClicked, this, [this](const int index) {
+    editLightEntities(
+      "Set Light Math", [&](const mdl::Entity& entity, mdl::LightProperties& light) {
+        if (index == TexturePageIndex)
+        {
+          // the other math keys stay
+          light.math.enabled = false;
+        }
+        else if (!entity.hasProperty(mdl::LightPropertyKeys::MathEnabled))
+        {
+          // a light that never had a math block gets the in-game editor's auto-seed
+          // (D29)
+          light.math = mdl::seededMathLightProperties();
+        }
+        else
+        {
+          // a disabled block gets its kept values back
+          light.math.enabled = true;
+        }
+      });
+  });
+  connect(c.mathStyle, &QComboBox::activated, this, [this](const int index) {
+    auto ok = false;
+    const auto style = m_controls->mathStyle->itemData(index).toString().toInt(&ok);
+    if (ok)
+    {
+      editLights("Set Light Math Style", [&](mdl::LightProperties& light) {
+        light.math.style = style;
+      });
+    }
+  });
   connect(c.falloff, &QComboBox::activated, this, [this](const int index) {
     editLights("Set Light Falloff", [&](mdl::LightProperties& light) {
       light.math.falloff = mdl::LightFalloff(index);
@@ -1639,15 +1685,17 @@ void LightEditorPanel::updateEditor()
   // volume, only for lights of one type
   const auto isPointOrSun = !mixedTypes && type != mdl::LightType::Spot;
   const auto isSpot = !mixedTypes && type == mdl::LightType::Spot;
-  const auto equalRadius = allLights([](const auto& light) { return light.equalRadius; });
+  // one radius only when the user chose it and every light has one (D52)
+  const auto equilateral =
+    c.equilateral && allLights([](const auto& light) { return light.equalRadius; });
   const auto hasCenter = allLights([](const auto& light) { return light.hasCenter; });
   const auto explicitStartEnd =
     allLights([](const auto& light) { return light.explicitStartEnd; });
 
   c.form->setRowVisible(c.mixedTypesRow, mixedTypes);
   c.form->setRowVisible(c.equalRadiusRow, isPointOrSun);
-  c.form->setRowVisible(c.radiusRow, isPointOrSun && equalRadius);
-  c.form->setRowVisible(c.radiusXyzRow, isPointOrSun && !equalRadius);
+  c.form->setRowVisible(c.radiusRow, isPointOrSun && equilateral);
+  c.form->setRowVisible(c.radiusXyzRow, isPointOrSun && !equilateral);
   c.form->setRowVisible(c.centerRow, isPointOrSun);
   c.form->setRowVisible(c.centerXyzRow, isPointOrSun && hasCenter);
   c.form->setRowVisible(c.targetRow, isSpot);
@@ -1657,7 +1705,7 @@ void LightEditorPanel::updateEditor()
   c.form->setRowVisible(c.startRow, isSpot && explicitStartEnd);
   c.form->setRowVisible(c.endRow, isSpot && explicitStartEnd);
 
-  setCheckBox(c.equalRadius, lights, [](const auto& light) { return light.equalRadius; });
+  c.equalRadius->setChecked(equilateral);
   setSpin(c.radius, lights, [](const auto& light) { return light.radius.x(); });
   setVec3(c.radiusXyz, lights, [](const auto& light) { return light.radius; });
   setCheckBox(c.center, lights, [](const auto& light) { return light.hasCenter; });
@@ -1703,9 +1751,9 @@ void LightEditorPanel::updateEditor()
     c.texture->setEditText(text);
   }
 
-  // the style choices of the first light's definition, copied: the definitions are
-  // freed when they are reloaded
-  auto styleOptions = std::vector<std::pair<std::string, std::string>>{};
+  // the style choices of the first light's definition, else the engine's predefined
+  // styles, copied: the definitions are freed when they are reloaded
+  auto styleOptions = StyleOptions{};
   if (
     const auto* propertyDefinition =
       mdl::getPropertyDefinition(firstEntity.definition(), mdl::LightPropertyKeys::Style))
@@ -1720,23 +1768,18 @@ void LightEditorPanel::updateEditor()
       }
     }
   }
+  if (styleOptions.empty())
+  {
+    styleOptions = predefinedStyleOptions();
+  }
   if (styleOptions != c.styleOptions)
   {
     c.styleOptions = std::move(styleOptions);
-    c.styleChoice->clear();
-    for (const auto& [value, description] : c.styleOptions)
-    {
-      c.styleChoice->addItem(
-        QString::fromStdString(value + ": " + description),
-        QString::fromStdString(value));
-    }
+    setStyleItems(*c.styleChoice, c.styleOptions);
   }
-  c.textureForm->setRowVisible(c.styleChoiceRow, !c.styleOptions.empty());
-  c.textureForm->setRowVisible(c.styleRow, c.styleOptions.empty());
 
   const auto [style, styleMulti] =
     firstValue(lights, [](const auto& light) { return light.style; });
-  setSpinValue(c.style, double(style), styleMulti);
   c.styleChoice->setPlaceholderText(styleMulti ? Multi : QString::number(style));
   c.styleChoice->setCurrentIndex(styleMulti ? -1 : findStyleIndex(*c.styleChoice, style));
 
@@ -1752,29 +1795,34 @@ void LightEditorPanel::updateEditor()
   c.mathForm->setRowVisible(c.mixedMathRow, mixedMath);
   c.texturePage->setEnabled(!mixedMath);
 
-  // math falloff, its fields only when every light has it
+  // the math fields, only for lights of one kind: lights of both kinds have the notice
+  const auto oneKind = !mixedMath;
   const auto patterned = anyLight(
     [](const auto& light) { return light.math.pattern != mdl::LightPattern::None; });
 
-  setCheckBox(
-    c.mathEnabled, lights, [](const auto& light) { return light.math.enabled; });
-  c.mathForm->setRowVisible(c.mathTypeRow, mathEnabled);
-  c.mathForm->setRowVisible(c.falloffRow, mathEnabled);
-  c.mathForm->setRowVisible(c.falloffExpRow, mathEnabled);
-  c.mathForm->setRowVisible(c.innerRadiusRow, mathEnabled);
-  c.mathForm->setRowVisible(c.shapeExpRow, mathEnabled && isSpot);
-  c.mathForm->setRowVisible(c.penumbraRow, mathEnabled && isSpot);
-  c.mathForm->setRowVisible(c.patternRow, mathEnabled);
-  c.mathForm->setRowVisible(c.patternStrengthRow, mathEnabled && patterned);
-  c.mathForm->setRowVisible(c.patternScaleRow, mathEnabled && patterned);
-  c.mathForm->setRowVisible(c.patternPhaseRow, mathEnabled && patterned);
-  c.mathForm->setRowVisible(c.energyClampRow, mathEnabled);
+  c.mathForm->setRowVisible(c.mathTypeRow, oneKind);
+  c.mathForm->setRowVisible(c.mathStyleRow, oneKind);
+  c.mathForm->setRowVisible(c.falloffRow, oneKind);
+  c.mathForm->setRowVisible(c.falloffExpRow, oneKind);
+  c.mathForm->setRowVisible(c.innerRadiusRow, oneKind);
+  c.mathForm->setRowVisible(c.shapeExpRow, oneKind && isSpot);
+  c.mathForm->setRowVisible(c.penumbraRow, oneKind && isSpot);
+  c.mathForm->setRowVisible(c.patternRow, oneKind);
+  c.mathForm->setRowVisible(c.patternStrengthRow, oneKind && patterned);
+  c.mathForm->setRowVisible(c.patternScaleRow, oneKind && patterned);
+  c.mathForm->setRowVisible(c.patternPhaseRow, oneKind && patterned);
+  c.mathForm->setRowVisible(c.energyClampRow, oneKind);
 
   // the engine derives the math type from the light's geometry (D40)
   c.mathType->setText(
     mixedTypes ? Multi
                : tr("%1 (follows the light type)")
                    .arg(QString::fromStdString(std::string{mdl::mathTypeName(type)})));
+  const auto [mathStyle, mathStyleMulti] =
+    firstValue(lights, [](const auto& light) { return light.math.style; });
+  c.mathStyle->setPlaceholderText(Multi);
+  c.mathStyle->setCurrentIndex(
+    mathStyleMulti ? -1 : findStyleIndex(*c.mathStyle, mathStyle));
   setComboBox(
     c.falloff, lights, [](const auto& light) { return int(light.math.falloff); });
   const auto falloffExpUsed = anyLight([](const auto& light) {
@@ -1850,6 +1898,14 @@ void LightEditorPanel::toggleVolumeDrawing()
 void LightEditorPanel::editLights(
   const std::string& commandName, const std::function<void(mdl::LightProperties&)>& edit)
 {
+  editLightEntities(
+    commandName, [&](const mdl::Entity&, mdl::LightProperties& light) { edit(light); });
+}
+
+void LightEditorPanel::editLightEntities(
+  const std::string& commandName,
+  const std::function<void(const mdl::Entity&, mdl::LightProperties&)>& edit)
+{
   auto& map = m_document.map();
 
   // per light, only the properties that the edit changes, so that the lights keep their
@@ -1859,7 +1915,7 @@ void LightEditorPanel::editLights(
   {
     const auto& entity = entityNode->entity();
     auto light = mdl::parseLightProperties(entity);
-    edit(light);
+    edit(entity, light);
 
     const auto update = mdl::lightKeyDiff(entity, light);
     if (!update.set.empty() || !update.remove.empty())

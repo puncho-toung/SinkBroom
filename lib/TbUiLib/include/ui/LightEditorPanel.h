@@ -53,6 +53,11 @@ class SignalDelayer;
  * the engine reads differently from what the editor shows, with a fix where there is
  * one; a light with the legacy light_origin is read-only until it is converted.
  *
+ * The editor shows the volume tools first, then the light's type, volume, transform and
+ * colour, then a Math and a Texture page with the options of each kind of light, then
+ * the flags. The page follows the selected lights; a click on a page's tab makes them
+ * lights of its kind: math_enabled is set, and the other math properties are kept.
+ *
  * Its two volume tool buttons are the only way to the light volume tool: they activate
  * it in handle or draw mode, follow it when it is deactivated or changes its mode, and
  * closing the panel deactivates it.
@@ -101,6 +106,9 @@ private:
   void editLights(
     const std::string& commandName,
     const std::function<void(mdl::LightProperties&)>& edit);
+  void editLightEntities(
+    const std::string& commandName,
+    const std::function<void(const mdl::Entity&, mdl::LightProperties&)>& edit);
   void editAngles(std::size_t component, double value);
   void removeTargetProperties(
     const std::string& commandName,

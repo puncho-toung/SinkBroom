@@ -139,6 +139,7 @@ void TabBar::buttonClicked()
   contract_assert(index < m_buttons.size());
 
   m_tabBook->switchToPage(int(index));
+  emit tabClicked(int(index));
 }
 
 void TabBar::tabBookPageChanged(const int newIndex)

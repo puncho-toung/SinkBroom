@@ -21,6 +21,7 @@
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
+#include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -28,8 +29,10 @@
 #include <QSlider>
 #include <QStackedWidget>
 #include <QToolButton>
+#include <QVBoxLayout>
 
 #include "SidebarTestUtils.h"
+#include "base/PreferenceManager.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
@@ -46,6 +49,7 @@
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/WorldNode.h"
+#include "prefs/Preferences.h"
 #include "ui/CatchConfig.h"
 #include "ui/ColorButton.h"
 #include "ui/LightEditorPanel.h"
@@ -55,7 +59,10 @@
 #include "ui/RotateTool.h" // IWYU pragma: keep
 #include "ui/ScaleTool.h"
 #include "ui/SpinControl.h"
+#include "ui/TabBar.h"
+#include "ui/TabBook.h"
 
+#include "kd/invoke.h"
 #include "kd/result.h"
 #include "kd/task_manager.h"
 
@@ -128,6 +135,62 @@ std::string valueOf(const mdl::EntityNode& entityNode, const std::string& key)
   const auto* value = property(entityNode, key);
   REQUIRE(value != nullptr);
   return *value;
+}
+
+// the pages of the editor's tab book
+constexpr auto MathPage = 0;
+constexpr auto TexturePage = 1;
+
+bool showsMathPage(const LightEditorPanel& panel)
+{
+  return findControl<TabBookPage>(panel, "MathPage").isVisibleTo(&panel);
+}
+
+bool showsTexturePage(const LightEditorPanel& panel)
+{
+  return findControl<TabBookPage>(panel, "TexturePage").isVisibleTo(&panel);
+}
+
+std::vector<TabBarButton*> tabButtons(const LightEditorPanel& panel)
+{
+  const auto buttons =
+    findControl<TabBook>(panel, "Tabs").tabBar()->findChildren<TabBarButton*>();
+  REQUIRE(buttons.size() == 2);
+  return {buttons.begin(), buttons.end()};
+}
+
+/**
+ * Clicks the tab of a page of the editor's tab book, as the user does.
+ */
+void clickTab(const LightEditorPanel& panel, const int page)
+{
+  tabButtons(panel)[size_t(page)]->clicked();
+  QApplication::processEvents();
+}
+
+/**
+ * The titles of the sections of the given widget's form, in their order.
+ */
+QStringList sectionTitles(const QWidget& formWidget)
+{
+  const auto* form = qobject_cast<const QFormLayout*>(formWidget.layout());
+  REQUIRE(form != nullptr);
+
+  auto result = QStringList{};
+  for (int row = 0; row < form->rowCount(); ++row)
+  {
+    auto* item = form->itemAt(row, QFormLayout::SpanningRole);
+    auto* titleLayout = item ? qobject_cast<QVBoxLayout*>(item->layout()) : nullptr;
+    if (titleLayout && titleLayout->count() > 0)
+    {
+      if (
+        const auto* title = qobject_cast<const QLabel*>(titleLayout->itemAt(0)->widget()))
+      {
+        result.push_back(title->text());
+      }
+    }
+  }
+  return result;
 }
 
 } // namespace
@@ -284,10 +347,10 @@ TEST_CASE("LightEditorPanel")
 
     // _color is the hue times the intensity
     CHECK(findControl<SpinControl>(panel, "Intensity").value() == 2.0);
-    CHECK(findControl<SpinControl>(panel, "Style").value() == 3.0);
+    CHECK(findControl<QComboBox>(panel, "StyleChoice").currentText() == "3: Candle A");
 
-    // without math, the math rows are hidden
-    CHECK_FALSE(findControl<QCheckBox>(panel, "MathEnabled").isChecked());
+    // without math, the texture page is shown and the math rows are not
+    CHECK(showsTexturePage(panel));
     CHECK_FALSE(findControl<SpinControl>(panel, "InnerRadius").isVisibleTo(&panel));
   }
 
@@ -319,38 +382,80 @@ TEST_CASE("LightEditorPanel")
     CHECK(*map.undoCommandName() == "Set Light Radius");
   }
 
-  SECTION("the equilateral box shows the three components")
+  SECTION("the equilateral box is off at first and shows the three components")
   {
     auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
     auto& map = fixture.document().map();
 
-    auto* lightNode = addLight(
+    auto* equalNode = addLight(
       map,
       {{"classname", "light"}, {"origin", "0 0 0"}, {"light_radius", "300 300 300"}});
+    auto* unequalNode = addLight(
+      map,
+      {{"classname", "light"}, {"origin", "64 0 0"}, {"light_radius", "316 300 300"}});
 
     auto panel = LightEditorPanel{fixture.context()};
-    selectOnly(map, {lightNode});
+    selectOnly(map, {equalNode});
 
     auto& equalRadius = findControl<QCheckBox>(panel, "EqualRadius");
-    REQUIRE(equalRadius.isChecked());
+    auto& radius = findControl<SpinControl>(panel, "Radius");
+    auto& radiusY = findControl<SpinControl>(panel, "RadiusY");
 
-    // unchecking writes nothing
-    const auto modificationCount = map.modificationCount();
+    // three radii by default, also for equal ones (D52)
+    CHECK_FALSE(equalRadius.isChecked());
+    CHECK_FALSE(radius.isVisibleTo(&panel));
+    CHECK(radiusY.isVisibleTo(&panel));
+
+    // checking writes nothing new for equal radii and shows one radius
+    auto modificationCount = map.modificationCount();
     equalRadius.click();
     QApplication::processEvents();
     CHECK(map.modificationCount() == modificationCount);
-    CHECK(findControl<SpinControl>(panel, "RadiusY").isVisibleTo(&panel));
+    CHECK(valueOf(*equalNode, "light_radius") == "300 300 300");
+    CHECK(equalRadius.isChecked());
+    CHECK(radius.isVisibleTo(&panel));
+    CHECK_FALSE(radiusY.isVisibleTo(&panel));
 
-    findControl<SpinControl>(panel, "RadiusY").setValue(400.0);
-    QApplication::processEvents();
-    CHECK(valueOf(*lightNode, "light_radius") == "300 400 300");
+    // a light with unequal radii shows three
+    selectOnly(map, {unequalNode});
     CHECK_FALSE(equalRadius.isChecked());
+    CHECK_FALSE(radius.isVisibleTo(&panel));
+    CHECK(radiusY.isVisibleTo(&panel));
+    CHECK(findControl<SpinControl>(panel, "RadiusX").value() == 316.0);
+
+    // the choice lasts while the radii are equal
+    selectOnly(map, {equalNode});
+    CHECK(equalRadius.isChecked());
+    CHECK(radius.isVisibleTo(&panel));
 
     // checking makes the components equal to the first one
+    selectOnly(map, {unequalNode});
     equalRadius.click();
     QApplication::processEvents();
-    CHECK(valueOf(*lightNode, "light_radius") == "300 300 300");
-    CHECK(findControl<SpinControl>(panel, "Radius").isVisibleTo(&panel));
+    CHECK(valueOf(*unequalNode, "light_radius") == "316 316 316");
+    CHECK(equalRadius.isChecked());
+    CHECK(radius.isVisibleTo(&panel));
+
+    radius.setValue(400.0);
+    QApplication::processEvents();
+    CHECK(valueOf(*unequalNode, "light_radius") == "400 400 400");
+
+    // unchecking writes nothing and shows the three components
+    modificationCount = map.modificationCount();
+    equalRadius.click();
+    QApplication::processEvents();
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK_FALSE(equalRadius.isChecked());
+    CHECK(radiusY.isVisibleTo(&panel));
+
+    radiusY.setValue(350.0);
+    QApplication::processEvents();
+    CHECK(valueOf(*unequalNode, "light_radius") == "400 350 400");
+
+    // and stays off
+    selectOnly(map, {equalNode});
+    CHECK_FALSE(equalRadius.isChecked());
+    CHECK(radiusY.isVisibleTo(&panel));
   }
 
   SECTION("switching the type rewrites the properties like the engine")
@@ -433,7 +538,7 @@ TEST_CASE("LightEditorPanel")
     CHECK(findControl<SpinControl>(panel, "Intensity").value() == 2.0);
   }
 
-  SECTION("enabling the math falloff writes the twelve math properties")
+  SECTION("the Math tab makes a light without math a math light with the seed")
   {
     auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
     auto& map = fixture.document().map();
@@ -444,12 +549,18 @@ TEST_CASE("LightEditorPanel")
 
     auto panel = LightEditorPanel{fixture.context()};
     selectOnly(map, {lightNode});
+    REQUIRE(showsTexturePage(panel));
 
-    auto& mathEnabled = findControl<QCheckBox>(panel, "MathEnabled");
-    mathEnabled.click();
-    QApplication::processEvents();
+    const auto before = lightNode->entity().properties();
+    clickTab(panel, MathPage);
+    CHECK(showsMathPage(panel));
+    REQUIRE(map.undoCommandName() != nullptr);
+    CHECK(*map.undoCommandName() == "Set Light Math");
 
-    // the in-game editor's auto-seed, with math_type from the light's type
+    // the in-game editor's auto-seed, with math_type from the light's type: twelve
+    // properties and nothing else
+    CHECK(lightNode->entity().properties().size() == before.size() + 12);
+    CHECK(property(*lightNode, "math_style") == nullptr);
     CHECK(valueOf(*lightNode, "math_enabled") == "1");
     CHECK(valueOf(*lightNode, "math_type") == "point");
     CHECK(valueOf(*lightNode, "math_falloff") == "linear");
@@ -480,13 +591,375 @@ TEST_CASE("LightEditorPanel")
     CHECK(valueOf(*lightNode, "math_inner_radius") == "0.5");
     CHECK(findControl<SpinControl>(panel, "InnerRadius").value() == 0.5);
 
-    // disabling keeps the other math properties (D51)
-    mathEnabled.click();
+    // the Texture tab writes math_enabled 0 alone and keeps the other properties (D51)
+    auto mathProperties = lightNode->entity().properties();
+    clickTab(panel, TexturePage);
+    CHECK(showsTexturePage(panel));
+    CHECK(
+      lightNode->entity().properties() == withValue(mathProperties, "math_enabled", "0"));
+
+    // the Math tab gives the light its kept values back and writes nothing else
+    clickTab(panel, MathPage);
+    CHECK(showsMathPage(panel));
+    CHECK(lightNode->entity().properties() == mathProperties);
+    CHECK(findControl<SpinControl>(panel, "InnerRadius").value() == 0.5);
+
+    // a click on the tab of the page that is shown writes nothing
+    const auto modificationCount = map.modificationCount();
+    clickTab(panel, MathPage);
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(showsMathPage(panel));
+  }
+
+  SECTION("the volume tools come first and each kind of light has its own page")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    // top to bottom: the volume tools, the light's geometry and colour, the pages of
+    // the two kinds of light, the flags (D50)
+    auto& editor = findControl<QWidget>(panel, "Editor");
+    auto& volumeTools = findControl<QWidget>(panel, "VolumeTools");
+    auto& tabs = findControl<TabBook>(panel, "Tabs");
+    auto* editorLayout = editor.layout();
+    REQUIRE(editorLayout != nullptr);
+    REQUIRE(editorLayout->count() == 4);
+    CHECK(editorLayout->itemAt(0)->widget() == &volumeTools);
+    auto* geometry = editorLayout->itemAt(1)->widget();
+    CHECK(editorLayout->itemAt(2)->widget() == &tabs);
+    auto* flags = editorLayout->itemAt(3)->widget();
+    REQUIRE(geometry != nullptr);
+    REQUIRE(flags != nullptr);
+
+    // the volume tools: the tool buttons, then Reset and the handle threshold
+    auto* toolRows = qobject_cast<QVBoxLayout*>(volumeTools.layout());
+    REQUIRE(toolRows != nullptr);
+    REQUIRE(toolRows->count() == 2);
+    auto* toolRow = toolRows->itemAt(0)->layout();
+    auto* resetRow = toolRows->itemAt(1)->layout();
+    REQUIRE(toolRow != nullptr);
+    REQUIRE(resetRow != nullptr);
+    CHECK(toolRow->indexOf(&findControl<QToolButton>(panel, "EditVolumeHandles")) == 0);
+    CHECK(toolRow->indexOf(&findControl<QToolButton>(panel, "DrawVolume")) == 1);
+    CHECK(resetRow->indexOf(&findControl<QToolButton>(panel, "ResetVolume")) == 0);
+    CHECK(resetRow->indexOf(&findControl<SpinControl>(panel, "HandleThreshold")) == 3);
+
+    CHECK(
+      sectionTitles(*geometry) == QStringList{"Type", "Volume", "Transform", "Color"});
+    CHECK(sectionTitles(*flags) == QStringList{"Misc"});
+    for (const auto* name : {"Point", "Spot", "Sun"})
+    {
+      CAPTURE(name);
+      CHECK(geometry->isAncestorOf(&findControl<QRadioButton>(panel, name)));
+    }
+    for (const auto* name : {"RadiusX", "TargetX", "OriginX", "AnglesX", "Intensity"})
+    {
+      CAPTURE(name);
+      CHECK(geometry->isAncestorOf(&findControl<SpinControl>(panel, name)));
+    }
+    CHECK(geometry->isAncestorOf(&findControl<ColorButton>(panel, "Color")));
+    for (const auto* name : {"CastShadows", "SkipSpecular"})
+    {
+      CAPTURE(name);
+      CHECK(flags->isAncestorOf(&findControl<QCheckBox>(panel, name)));
+    }
+
+    // the Math page, then the Texture page, each with only its own controls
+    const auto buttons = tabButtons(panel);
+    const auto title = [](const TabBarButton* button) {
+      const auto* label = button->findChild<QLabel*>();
+      REQUIRE(label != nullptr);
+      return label->text();
+    };
+    CHECK(title(buttons[MathPage]) == "Math");
+    CHECK(title(buttons[TexturePage]) == "Texture");
+
+    auto& mathPage = findControl<TabBookPage>(panel, "MathPage");
+    auto& texturePage = findControl<TabBookPage>(panel, "TexturePage");
+    CHECK(tabs.isAncestorOf(&mathPage));
+    CHECK(tabs.isAncestorOf(&texturePage));
+
+    auto mathControls = std::vector<QWidget*>{
+      &findControl<QLabel>(panel, "MathType"),
+      &findControl<QComboBox>(panel, "MathStyle"),
+      &findControl<QComboBox>(panel, "Falloff"),
+      &findControl<QComboBox>(panel, "Pattern"),
+      &findControl<QCheckBox>(panel, "EnergyClamp"),
+    };
+    for (const auto* name :
+         {"FalloffExp",
+          "InnerRadius",
+          "ShapeExp",
+          "Penumbra",
+          "PatternStrength",
+          "PatternScale",
+          "PatternPhase"})
+    {
+      mathControls.push_back(&findControl<SpinControl>(panel, name));
+    }
+    for (auto* control : mathControls)
+    {
+      CAPTURE(control->objectName().toStdString());
+      CHECK(mathPage.isAncestorOf(control));
+      CHECK_FALSE(texturePage.isAncestorOf(control));
+    }
+    for (const auto* name : {"Texture", "StyleChoice"})
+    {
+      CAPTURE(name);
+      auto& control = findControl<QComboBox>(panel, name);
+      CHECK(texturePage.isAncestorOf(&control));
+      CHECK_FALSE(mathPage.isAncestorOf(&control));
+    }
+
+    // the tab is the switch, and the style a list
+    CHECK(panel.findChild<QCheckBox*>("LightEditorPanel_MathEnabled") == nullptr);
+    CHECK(panel.findChild<SpinControl*>("LightEditorPanel_Style") == nullptr);
+  }
+
+  SECTION("the page follows the selected lights and switching it writes nothing")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* mathNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+        {"math_enabled", "1"},
+        {"math_falloff", "smooth"},
+      });
+    auto* textureNode = addLight(map, {{"classname", "light"}, {"origin", "64 0 0"}});
+    auto* disabledNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "128 0 0"},
+        {"math_enabled", "0"},
+        {"math_falloff", "smooth"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+    auto& mixedNotice = findControl<QLabel>(panel, "MixedMathNotice");
+    auto& texturePage = findControl<TabBookPage>(panel, "TexturePage");
+    const auto modificationCount = map.modificationCount();
+
+    selectOnly(map, {mathNode});
+    CHECK(showsMathPage(panel));
+    CHECK_FALSE(showsTexturePage(panel));
+    CHECK_FALSE(mixedNotice.isVisibleTo(&panel));
+    CHECK(findControl<QComboBox>(panel, "Falloff").isVisibleTo(&panel));
+
+    selectOnly(map, {textureNode});
+    CHECK(showsTexturePage(panel));
+    CHECK_FALSE(showsMathPage(panel));
+    CHECK(findControl<QComboBox>(panel, "Texture").isVisibleTo(&panel));
+
+    // kept math properties do not make a math light
+    selectOnly(map, {disabledNode});
+    CHECK(showsTexturePage(panel));
+
+    // lights of both kinds: the Math page with the notice, the texture options off
+    selectOnly(map, {mathNode, textureNode});
+    CHECK(showsMathPage(panel));
+    CHECK(mixedNotice.isVisibleTo(&panel));
+    CHECK_FALSE(findControl<QComboBox>(panel, "Falloff").isVisibleTo(&panel));
+    CHECK_FALSE(texturePage.isEnabled());
+    CHECK_FALSE(findControl<QComboBox>(panel, "Texture").isEnabled());
+
+    selectOnly(map, {mathNode});
+    CHECK_FALSE(mixedNotice.isVisibleTo(&panel));
+    CHECK(texturePage.isEnabled());
+
+    CHECK(map.modificationCount() == modificationCount);
+  }
+
+  SECTION("the tabs switch every selected light")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* mathNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+        {"math_enabled", "1"},
+        {"math_type", "point"},
+        {"math_falloff", "smooth"},
+        {"math_style", "4"},
+      });
+    auto* legacyNode = addLight(map, {{"classname", "light"}, {"origin", "64 0 0"}});
+    // as the Texture tab leaves a math light
+    auto* disabledNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "128 0 0"},
+        {"math_enabled", "0"},
+        {"math_type", "point"},
+        {"math_falloff", "exponential"},
+        {"math_pattern", "ice"},
+        {"math_falloff_exp", "3"},
+        {"math_inner_radius", "0.3"},
+        {"math_shape_exp", "2"},
+        {"math_penumbra", "0.15"},
+        {"math_pattern_strength", "0.5"},
+        {"math_pattern_scale", "2"},
+        {"math_pattern_phase", "0"},
+        {"math_energy_clamp", "0"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {mathNode, legacyNode, disabledNode});
+    REQUIRE(showsMathPage(panel));
+
+    const auto mathBefore = mathNode->entity().properties();
+    const auto disabledBefore = disabledNode->entity().properties();
+
+    // in one command: the legacy light gets the seed, the disabled one its kept values
+    const auto modificationCount = map.modificationCount();
+    clickTab(panel, MathPage);
+    CHECK(map.modificationCount() == modificationCount + 1);
+    CHECK(mathNode->entity().properties() == mathBefore);
+    CHECK(
+      mdl::parseLightProperties(legacyNode->entity()).math
+      == mdl::seededMathLightProperties());
+    CHECK(
+      disabledNode->entity().properties()
+      == withValue(disabledBefore, "math_enabled", "1"));
+    CHECK_FALSE(findControl<QLabel>(panel, "MixedMathNotice").isVisibleTo(&panel));
+
+    // the texture tab keeps every math property but math_enabled, math_style too
+    clickTab(panel, TexturePage);
+    CHECK(showsTexturePage(panel));
+    CHECK(mathNode->entity().properties() == withValue(mathBefore, "math_enabled", "0"));
+    CHECK(disabledNode->entity().properties() == disabledBefore);
+    CHECK(valueOf(*legacyNode, "math_enabled") == "0");
+    CHECK(valueOf(*legacyNode, "math_falloff") == "linear");
+  }
+
+  SECTION("a tab click after the selection became something else writes nothing")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+    auto* playerStartNode = new mdl::EntityNode{
+      mdl::Entity{{{"classname", "info_player_start"}, {"origin", "64 0 0"}}}};
+    mdl::addNodes(map, {{&mdl::parentForNodes(map), {playerStartNode}}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+    REQUIRE(showsTexturePage(panel));
+
+    const auto lightProperties = lightNode->entity().properties();
+    const auto playerStartProperties = playerStartNode->entity().properties();
+
+    // the panel has not updated yet (D22)
+    mdl::deselectAll(map);
+    mdl::selectNodes(map, {playerStartNode});
+    tabButtons(panel)[MathPage]->clicked();
+    CHECK(lightNode->entity().properties() == lightProperties);
+    CHECK(playerStartNode->entity().properties() == playerStartProperties);
+
     QApplication::processEvents();
-    CHECK(valueOf(*lightNode, "math_enabled") == "0");
-    CHECK(valueOf(*lightNode, "math_falloff") == "linear");
-    CHECK(valueOf(*lightNode, "math_inner_radius") == "0.5");
+    CHECK(currentText(panel) == "Select a light");
+  }
+
+  SECTION("the math style writes math_style and the texture style style")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+        {"math_enabled", "1"},
+        {"math_type", "point"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+    REQUIRE(showsMathPage(panel));
+
+    // no style and the engine's twelve predefined styles (D54)
+    auto& mathStyle = findControl<QComboBox>(panel, "MathStyle");
+    REQUIRE(mathStyle.count() == 13);
+    CHECK(mathStyle.itemText(0) == "-1: None");
+    CHECK(mathStyle.itemText(1) == "0: Normal");
+    CHECK(mathStyle.itemText(5) == "4: Fast Strobe");
+    CHECK(mathStyle.itemText(12) == "11: Slow Pulse (no black)");
+    CHECK(mathStyle.currentIndex() == 0);
+
+    const auto before = lightNode->entity().properties();
+    mathStyle.setCurrentIndex(5);
+    mathStyle.activated(5);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode, "math_style") == "4");
+    CHECK(property(*lightNode, "style") == nullptr);
+    REQUIRE(map.undoCommandName() != nullptr);
+    CHECK(*map.undoCommandName() == "Set Light Math Style");
+    CHECK(mathStyle.currentIndex() == 5);
+
+    mathStyle.setCurrentIndex(0);
+    mathStyle.activated(0);
+    QApplication::processEvents();
+    CHECK(lightNode->entity().properties() == before);
+    CHECK(mathStyle.currentIndex() == 0);
+
+    // the texture page's style still writes style
+    clickTab(panel, TexturePage);
+    auto& styleChoice = findControl<QComboBox>(panel, "StyleChoice");
+    const auto index = styleChoice.findData("4");
+    REQUIRE(index != -1);
+    styleChoice.setCurrentIndex(index);
+    styleChoice.activated(index);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode, "style") == "4");
     CHECK(property(*lightNode, "math_style") == nullptr);
+  }
+
+  SECTION("the handle threshold spin writes the preference")
+  {
+    auto& prefs = PreferenceManager::instance();
+    prefs.resetToDefault(Preferences::LightVolumeHandleThreshold);
+    // also when a REQUIRE fails, so that no later test case sees a changed preference
+    const auto resetThreshold = kdl::invoke_later{
+      [&] { prefs.resetToDefault(Preferences::LightVolumeHandleThreshold); }};
+
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    // in percent (D53)
+    auto& threshold = findControl<SpinControl>(panel, "HandleThreshold");
+    CHECK(threshold.value() == 10.0);
+    CHECK(threshold.minimum() == 1.0);
+    CHECK(threshold.maximum() == 50.0);
+
+    // not a light property
+    const auto modificationCount = map.modificationCount();
+    threshold.setValue(25.0);
+    QApplication::processEvents();
+    CHECK(pref(Preferences::LightVolumeHandleThreshold) == 0.25f);
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(threshold.value() == 25.0);
+
+    setPref(Preferences::LightVolumeHandleThreshold, 0.4f);
+    QApplication::processEvents();
+    CHECK(threshold.value() == 40.0);
   }
 
   SECTION("the angles are written by the rotation policy")
@@ -903,7 +1376,7 @@ TEST_CASE("LightEditorPanel")
 
     auto* lightNode =
       addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}, {"style", "1"}});
-    // no definition: the style is a number
+    // no definition: the engine's predefined styles
     auto* customNode =
       addLight(map, {{"classname", "light_custom"}, {"origin", "0 0 0"}});
 
@@ -912,7 +1385,6 @@ TEST_CASE("LightEditorPanel")
 
     auto& styleChoice = findControl<QComboBox>(panel, "StyleChoice");
     CHECK(styleChoice.isVisibleTo(&panel));
-    CHECK_FALSE(findControl<SpinControl>(panel, "Style").isVisibleTo(&panel));
     CHECK(styleChoice.count() == 13);
     CHECK(styleChoice.itemText(0) == "-1: None (engine default)");
     CHECK(styleChoice.currentText() == "1: Flicker A");
@@ -926,8 +1398,17 @@ TEST_CASE("LightEditorPanel")
 
     selectOnly(map, {customNode});
     REQUIRE(showsEditor(panel));
-    CHECK_FALSE(styleChoice.isVisibleTo(&panel));
-    CHECK(findControl<SpinControl>(panel, "Style").isVisibleTo(&panel));
+    CHECK(styleChoice.isVisibleTo(&panel));
+    CHECK(styleChoice.count() == 13);
+    CHECK(styleChoice.itemText(0) == "-1: None");
+    CHECK(styleChoice.itemText(11) == "10: Fluorescent Flicker");
+    CHECK(styleChoice.currentText() == "-1: None");
+
+    styleChoice.setCurrentIndex(11);
+    styleChoice.activated(11);
+    QApplication::processEvents();
+    CHECK(valueOf(*customNode, "style") == "10");
+    CHECK(styleChoice.currentText() == "10: Fluorescent Flicker");
   }
 
   SECTION("the texture list holds the engine default and the light materials")
@@ -1329,8 +1810,7 @@ TEST_CASE("LightEditorPanel")
     auto panel = LightEditorPanel{fixture.context()};
     selectOnly(map, {lightNode});
 
-    findControl<QCheckBox>(panel, "MathEnabled").click();
-    QApplication::processEvents();
+    clickTab(panel, MathPage);
     REQUIRE(valueOf(*lightNode, "math_falloff") == "linear");
 
     const auto items = [](const QComboBox& comboBox) {
@@ -1435,12 +1915,10 @@ TEST_CASE("LightEditorPanel")
       });
 
     auto panel = LightEditorPanel{fixture.context()};
-    auto& mathEnabled = findControl<QCheckBox>(panel, "MathEnabled");
     auto& mathType = findControl<QLabel>(panel, "MathType");
 
     selectOnly(map, {pointNode});
-    mathEnabled.click();
-    QApplication::processEvents();
+    clickTab(panel, MathPage);
     CHECK(valueOf(*pointNode, "math_type") == "point");
     CHECK(mathType.text() == "point (follows the light type)");
 
@@ -1464,16 +1942,14 @@ TEST_CASE("LightEditorPanel")
     CHECK(mathType.text() == "spot (follows the light type)");
 
     selectOnly(map, {spotNode});
-    mathEnabled.click();
-    QApplication::processEvents();
+    clickTab(panel, MathPage);
     CHECK(valueOf(*spotNode, "math_type") == "spot");
     // shape and penumbra belong to spot lights
     CHECK(findControl<SpinControl>(panel, "ShapeExp").isVisibleTo(&panel));
     CHECK(findControl<SpinControl>(panel, "Penumbra").isVisibleTo(&panel));
 
     selectOnly(map, {sunNode});
-    mathEnabled.click();
-    QApplication::processEvents();
+    clickTab(panel, MathPage);
     CHECK(valueOf(*sunNode, "math_type") == "sun");
     CHECK(mathType.text() == "sun (follows the light type)");
   }
@@ -1625,7 +2101,7 @@ TEST_CASE("LightEditorPanel")
 
     // the sliders map the in-game ranges to 0..1000
     selectOnly(map, {mathNode});
-    CHECK(findControl<QCheckBox>(panel, "MathEnabled").isChecked());
+    CHECK(showsMathPage(panel));
     CHECK(findControl<QComboBox>(panel, "Falloff").currentIndex() == 3);
     CHECK(findControl<QComboBox>(panel, "Pattern").currentIndex() == 4);
     CHECK(findControl<SpinControl>(panel, "FalloffExp").value() == 4.0);
