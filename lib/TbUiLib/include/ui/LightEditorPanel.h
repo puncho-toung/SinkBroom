@@ -52,6 +52,10 @@ class SignalDelayer;
  * processed the notifications of a change. The header names the light and shows what
  * the engine reads differently from what the editor shows, with a fix where there is
  * one; a light with the legacy light_origin is read-only until it is converted.
+ *
+ * Its two volume tool buttons are the only way to the light volume tool: they activate
+ * it in handle or draw mode, follow it when it is deactivated or changes its mode, and
+ * closing the panel deactivates it.
  */
 class LightEditorPanel : public SidebarPanel
 {
@@ -60,6 +64,7 @@ private:
   struct Controls;
 
   MapDocument& m_document;
+  MapViewToolBox& m_toolBox;
 
   QStackedWidget* m_stack = nullptr;
   QLabel* m_messageLabel = nullptr;
@@ -77,6 +82,7 @@ public:
   QString title() const override;
 
   void panelShown() override;
+  void panelHidden() override;
 
 private:
   void createGui();
@@ -87,6 +93,10 @@ private:
   void refresh();
   void updateControls();
   void updateEditor();
+  void updateVolumeToolButtons();
+
+  void toggleVolumeHandles();
+  void toggleVolumeDrawing();
 
   void editLights(
     const std::string& commandName,

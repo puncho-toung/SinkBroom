@@ -53,6 +53,7 @@ class VertexTool;
 class EdgeTool;
 class FaceTool;
 class ControlPointTool;
+class LightVolumeTool;
 
 class MapViewToolBox : public ToolBox
 {
@@ -74,6 +75,7 @@ private:
   std::unique_ptr<EdgeTool> m_edgeTool;
   std::unique_ptr<FaceTool> m_faceTool;
   std::unique_ptr<ControlPointTool> m_controlPointTool;
+  std::unique_ptr<LightVolumeTool> m_lightVolumeTool;
 
   QWidget* m_emptyToolPage = nullptr;
   QWidget* m_rotateToolPage = nullptr;
@@ -131,6 +133,9 @@ public: // tools
   const ControlPointTool& controlPointTool() const;
   ControlPointTool& controlPointTool();
 
+  const LightVolumeTool& lightVolumeTool() const;
+  LightVolumeTool& lightVolumeTool();
+
   bool canToggleAssembleBrushTool() const;
   void toggleAssembleBrushTool();
   bool assembleBrushToolActive() const;
@@ -183,6 +188,15 @@ public: // tools
   void toggleControlPointTool();
   bool controlPointToolActive() const;
 
+  /**
+   * The light volume tool has no toggle of its own: the light editor panel activates it.
+   */
+  bool lightVolumeToolActive() const;
+
+  /**
+   * Whether a tool is active that blocks the actions which edit the selection as a
+   * whole. The light volume tool is not one of them.
+   */
   bool anyModalToolActive() const;
 
   void moveNodeHandles(const vm::vec3d& delta);

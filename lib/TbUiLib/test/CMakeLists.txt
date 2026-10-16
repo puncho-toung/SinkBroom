@@ -19,6 +19,7 @@ target_sources(TbUiLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_InputEvent.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LaunchGameEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightEditorPanel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapViewToolBox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialBrowserView.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialCollectionEditor.cpp

@@ -35,6 +35,7 @@
 #include "mdl/EntityDefinitionManager.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GroupNode.h"
+#include "mdl/Hit.h"
 #include "mdl/Light.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
@@ -46,7 +47,11 @@
 #include "ui/CatchConfig.h"
 #include "ui/ColorButton.h"
 #include "ui/LightEditorPanel.h"
+#include "ui/LightVolumeTool.h"
 #include "ui/MapDocument.h"
+#include "ui/MapViewToolBox.h"
+#include "ui/RotateTool.h" // IWYU pragma: keep
+#include "ui/ScaleTool.h"
 #include "ui/SpinControl.h"
 
 #include "kd/result.h"
@@ -957,8 +962,8 @@ TEST_CASE("LightEditorPanel")
       CAPTURE(name);
       const auto& button = findControl<QToolButton>(panel, name);
       CHECK(button.isCheckable());
-      CHECK_FALSE(button.isEnabled());
-      CHECK(button.toolTip() == "comes with LW4");
+      CHECK(button.isEnabled());
+      CHECK_FALSE(button.isChecked());
     }
 
     auto& reset = findControl<QToolButton>(panel, "ResetVolume");
@@ -968,6 +973,160 @@ TEST_CASE("LightEditorPanel")
     CHECK(valueOf(*lightNode, "light_radius") == "300 300 300");
     REQUIRE(map.undoCommandName() != nullptr);
     CHECK(*map.undoCommandName() == "Reset Light Volume");
+  }
+
+  SECTION("the volume tool buttons turn the light volume tool on and off")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+    auto& toolBox = fixture.context().toolBox;
+    auto& tool = toolBox.lightVolumeTool();
+
+    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    auto& handles = findControl<QToolButton>(panel, "EditVolumeHandles");
+    auto& draw = findControl<QToolButton>(panel, "DrawVolume");
+
+    handles.click();
+    CHECK(tool.active());
+    CHECK(tool.mode() == LightVolumeTool::Mode::Handles);
+    CHECK(handles.isChecked());
+    CHECK_FALSE(draw.isChecked());
+    // the tool is not modal: Delete, Cut, Group and the nudges keep working (D31)
+    CHECK_FALSE(toolBox.anyModalToolActive());
+
+    draw.click();
+    CHECK(tool.active());
+    CHECK(tool.mode() == LightVolumeTool::Mode::Draw);
+    CHECK_FALSE(handles.isChecked());
+    CHECK(draw.isChecked());
+
+    // Esc or the end of a drawn volume
+    tool.setMode(LightVolumeTool::Mode::Handles);
+    CHECK(handles.isChecked());
+    CHECK_FALSE(draw.isChecked());
+
+    handles.click();
+    CHECK_FALSE(tool.active());
+    CHECK_FALSE(handles.isChecked());
+    CHECK_FALSE(draw.isChecked());
+
+    draw.click();
+    CHECK(tool.active());
+    CHECK(tool.mode() == LightVolumeTool::Mode::Draw);
+    draw.click();
+    CHECK_FALSE(tool.active());
+    CHECK_FALSE(draw.isChecked());
+  }
+
+  SECTION("the volume tool buttons follow the tool when another tool replaces it")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+    auto& toolBox = fixture.context().toolBox;
+
+    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    auto& handles = findControl<QToolButton>(panel, "EditVolumeHandles");
+    handles.click();
+    REQUIRE(toolBox.lightVolumeTool().active());
+
+    toolBox.toggleTool(toolBox.rotateTool());
+    CHECK_FALSE(toolBox.lightVolumeTool().active());
+    CHECK_FALSE(handles.isChecked());
+  }
+
+  SECTION("closing the panel turns the light volume tool off")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+    auto& toolBox = fixture.context().toolBox;
+
+    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    auto& draw = findControl<QToolButton>(panel, "DrawVolume");
+    draw.click();
+    REQUIRE(toolBox.lightVolumeTool().active());
+
+    // a panel that is merely hidden behind a tab keeps it (D18)
+    panel.panelShown();
+    QApplication::processEvents();
+    CHECK(toolBox.lightVolumeTool().active());
+
+    panel.panelHidden();
+    CHECK_FALSE(toolBox.lightVolumeTool().active());
+    CHECK_FALSE(draw.isChecked());
+  }
+
+  SECTION("the volume tool buttons need one light without light_origin")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+    auto* otherNode = addLight(map, {{"classname", "light"}, {"origin", "64 0 0"}});
+    auto* legacyNode = addLight(
+      map, {{"classname", "light"}, {"origin", "0 0 0"}, {"light_origin", "10 20 30"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    auto& handles = findControl<QToolButton>(panel, "EditVolumeHandles");
+    auto& draw = findControl<QToolButton>(panel, "DrawVolume");
+
+    selectOnly(map, {lightNode});
+    CHECK(handles.isEnabled());
+    CHECK(draw.isEnabled());
+
+    selectOnly(map, {lightNode, otherNode});
+    REQUIRE(showsEditor(panel));
+    CHECK_FALSE(handles.isEnabled());
+    CHECK_FALSE(draw.isEnabled());
+
+    // the editor page is read-only (D8)
+    selectOnly(map, {legacyNode});
+    REQUIRE(showsEditor(panel));
+    CHECK_FALSE(handles.isEnabled());
+    CHECK_FALSE(draw.isEnabled());
+  }
+
+  SECTION("the panel is not refreshed while the volume tool drags")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+    auto& tool = fixture.context().toolBox.lightVolumeTool();
+
+    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    findControl<QToolButton>(panel, "EditVolumeHandles").click();
+    REQUIRE(tool.active());
+
+    auto& originX = findControl<SpinControl>(panel, "OriginX");
+    REQUIRE(originX.value() == 0.0);
+
+    REQUIRE(tool.beginDrag(mdl::Hit{
+      LightVolumeTool::SideHitType,
+      0.0,
+      vm::vec3d{0, 0, 0},
+      BBoxSide{vm::vec3d{1, 0, 0}}}));
+    REQUIRE(tool.update(vm::vec3d{32, 0, 0}));
+    REQUIRE(valueOf(*lightNode, "origin") == "16 0 0");
+    QApplication::processEvents();
+    CHECK(originX.value() == 0.0);
+
+    tool.endDrag();
+    QApplication::processEvents();
+    CHECK(originX.value() == 16.0);
   }
 }
 

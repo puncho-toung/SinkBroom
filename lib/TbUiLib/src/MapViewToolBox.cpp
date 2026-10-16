@@ -35,6 +35,7 @@
 #include "ui/EdgeTool.h"
 #include "ui/ExtrudeTool.h"
 #include "ui/FaceTool.h"
+#include "ui/LightVolumeTool.h"
 #include "ui/MapDocument.h"
 #include "ui/MoveObjectsTool.h"
 #include "ui/RotateTool.h"
@@ -195,6 +196,16 @@ const ControlPointTool& MapViewToolBox::controlPointTool() const
 ControlPointTool& MapViewToolBox::controlPointTool()
 {
   return KDL_CONST_OVERLOAD(controlPointTool());
+}
+
+const LightVolumeTool& MapViewToolBox::lightVolumeTool() const
+{
+  return *m_lightVolumeTool;
+}
+
+LightVolumeTool& MapViewToolBox::lightVolumeTool()
+{
+  return KDL_CONST_OVERLOAD(lightVolumeTool());
 }
 
 bool MapViewToolBox::canToggleAssembleBrushTool() const
@@ -466,6 +477,11 @@ bool MapViewToolBox::controlPointToolActive() const
   return m_controlPointTool->active();
 }
 
+bool MapViewToolBox::lightVolumeToolActive() const
+{
+  return m_lightVolumeTool->active();
+}
+
 bool MapViewToolBox::anyModalToolActive() const
 {
   return rotateToolActive() || sweepToolActive() || scaleToolActive() || shearToolActive()
@@ -512,7 +528,9 @@ void MapViewToolBox::createTools(QStackedLayout* bookCtrl)
   m_edgeTool = std::make_unique<EdgeTool>(m_document);
   m_faceTool = std::make_unique<FaceTool>(m_document);
   m_controlPointTool = std::make_unique<ControlPointTool>(m_document);
+  m_lightVolumeTool = std::make_unique<LightVolumeTool>(m_document);
 
+  // the light volume tool is in both groups: the first lacks the vertex tool
   addExclusiveToolGroup(
     assembleBrushTool(),
     rotateTool(),
@@ -522,7 +540,8 @@ void MapViewToolBox::createTools(QStackedLayout* bookCtrl)
     controlPointTool(),
     edgeTool(),
     faceTool(),
-    clipTool());
+    clipTool(),
+    lightVolumeTool());
 
   addExclusiveToolGroup(
     assembleBrushTool(),
@@ -530,7 +549,8 @@ void MapViewToolBox::createTools(QStackedLayout* bookCtrl)
     edgeTool(),
     faceTool(),
     controlPointTool(),
-    clipTool());
+    clipTool(),
+    lightVolumeTool());
 
   suppressWhileActive(
     assembleBrushTool(), moveObjectsTool(), extrudeTool(), drawShapeTool());
@@ -544,6 +564,8 @@ void MapViewToolBox::createTools(QStackedLayout* bookCtrl)
   suppressWhileActive(
     controlPointTool(), moveObjectsTool(), extrudeTool(), drawShapeTool());
   suppressWhileActive(clipTool(), moveObjectsTool(), extrudeTool(), drawShapeTool());
+  // the move tool stays: a drag that starts on the light's own box moves the light
+  suppressWhileActive(lightVolumeTool(), extrudeTool(), drawShapeTool());
 
   addTool(moveObjectsTool());
   addTool(rotateTool());
@@ -559,6 +581,7 @@ void MapViewToolBox::createTools(QStackedLayout* bookCtrl)
   addTool(controlPointTool());
   addTool(createEntityTool());
   addTool(drawShapeTool());
+  addTool(lightVolumeTool());
 
   auto* parent = bookCtrl->parentWidget();
 
@@ -649,7 +672,7 @@ void MapViewToolBox::updateToolPage()
   }
   else if (
     shearToolActive() || vertexToolActive() || edgeToolActive() || faceToolActive()
-    || clipToolActive())
+    || clipToolActive() || lightVolumeToolActive())
   {
     m_bookCtrl->setCurrentWidget(m_emptyToolPage);
   }

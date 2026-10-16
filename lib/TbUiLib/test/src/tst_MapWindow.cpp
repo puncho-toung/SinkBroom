@@ -38,12 +38,16 @@
 #include "mdl/Map.h"
 #include "mdl/MapFormat.h"
 #include "prefs/Preferences.h"
+#include "ui/ActionContext.h"
 #include "ui/AppControllerFixture.h"
 #include "ui/CatchConfig.h"
 #include "ui/LightEditorPanel.h"
+#include "ui/LightVolumeTool.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
 #include "ui/MapView2D.h"
+#include "ui/MapViewBase.h"
+#include "ui/MapViewToolBox.h"
 #include "ui/MapWindow.h"
 
 #include "kd/invoke.h"
@@ -326,6 +330,39 @@ TEST_CASE("MapWindow")
         }
       }
     }
+  }
+
+  SECTION("the light volume tool leaves the action context at no tool")
+  {
+    // the actions of Delete, Cut, Group, Flip, Edit > Move and the keyboard nudges
+    // require NoTool, so they keep working while the tool is active (D31)
+    const auto views = window.findChildren<MapViewBase*>();
+    REQUIRE(!views.empty());
+
+    auto& toolBox = window.toolBox();
+    const auto contexts = [&]() {
+      auto result = std::vector<ActionContext::Type>{};
+      for (const auto* view : views)
+      {
+        result.push_back(view->actionContext());
+      }
+      return result;
+    };
+
+    const auto contextsWithoutTool = contexts();
+    for (const auto context : contextsWithoutTool)
+    {
+      CHECK((context & ActionContext::NoTool) != 0);
+    }
+
+    toolBox.toggleTool(toolBox.lightVolumeTool());
+    REQUIRE(toolBox.lightVolumeToolActive());
+
+    CHECK(contexts() == contextsWithoutTool);
+    CHECK_FALSE(toolBox.anyModalToolActive());
+
+    toolBox.toggleTool(toolBox.lightVolumeTool());
+    CHECK_FALSE(toolBox.lightVolumeToolActive());
   }
 
   SECTION("canReloadMaterialCollections returns false when resources need processing")

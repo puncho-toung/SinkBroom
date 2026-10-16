@@ -54,7 +54,9 @@
 #include "ui/BitmapButton.h"
 #include "ui/ColorButton.h"
 #include "ui/FormWithSectionsLayout.h"
+#include "ui/LightVolumeTool.h"
 #include "ui/MapDocument.h"
+#include "ui/MapViewToolBox.h"
 #include "ui/QStyleUtils.h"
 #include "ui/SignalDelayer.h"
 #include "ui/SpinControl.h"
@@ -600,6 +602,27 @@ int findStyleIndex(const QComboBox& comboBox, const int style)
   return -1;
 }
 
+/**
+ * A volume tool button's click: turns the light volume tool off if it is on in the
+ * button's mode, else switches it to that mode and turns it on (D20).
+ */
+void toggleLightVolumeTool(MapViewToolBox& toolBox, const LightVolumeTool::Mode mode)
+{
+  auto& tool = toolBox.lightVolumeTool();
+  if (tool.active() && tool.mode() == mode)
+  {
+    toolBox.toggleTool(tool);
+  }
+  else
+  {
+    tool.setMode(mode);
+    if (!tool.active())
+    {
+      toolBox.toggleTool(tool);
+    }
+  }
+}
+
 } // namespace
 
 struct LightEditorPanel::Controls
@@ -708,6 +731,7 @@ struct LightEditorPanel::Controls
 LightEditorPanel::LightEditorPanel(const SidebarContext& context, QWidget* parent)
   : SidebarPanel{parent}
   , m_document{context.document}
+  , m_toolBox{context.toolBox}
   , m_controls{std::make_unique<Controls>()}
   , m_updateSignalDelayer{new SignalDelayer{this}}
 {
@@ -732,6 +756,15 @@ QString LightEditorPanel::title() const
 void LightEditorPanel::panelShown()
 {
   refresh();
+}
+
+void LightEditorPanel::panelHidden()
+{
+  // closing the panel closes its tool (D18); hiding it behind a tab does not
+  if (auto& tool = m_toolBox.lightVolumeTool(); tool.active())
+  {
+    m_toolBox.toggleTool(tool);
+  }
 }
 
 void LightEditorPanel::createGui()
@@ -947,18 +980,19 @@ QWidget* LightEditorPanel::createEditorPage()
   c.skipSpecular = createCheckBox("SkipSpecular", tr("Skip specular"));
   form->addRow(c.skipSpecular);
 
-  // volume tools: the only entry points to the light volume tool (D20); the two tool
-  // buttons stay disabled until the tool exists
+  // volume tools: the only entry points to the light volume tool (D20)
   form->addSection(tr("Volume Tools"));
   c.editVolumeHandlesButton = createVolumeToolButton(
     "EditVolumeHandles", "ScaleTool.svg", tr("Edit volume handles"));
+  c.editVolumeHandlesButton->setToolTip(
+    tr("Resize the light's volume with the handles of its box in the map views"));
   c.drawVolumeButton =
     createVolumeToolButton("DrawVolume", "BrushTool.svg", tr("Draw volume"));
+  c.drawVolumeButton->setToolTip(
+    tr("Draw a new volume for the light, aligned with the world, in the map views"));
   for (auto* button : {c.editVolumeHandlesButton, c.drawVolumeButton})
   {
     button->setCheckable(true);
-    button->setEnabled(false);
-    button->setToolTip(tr("comes with LW4"));
   }
   c.resetVolumeButton =
     createVolumeToolButton("ResetVolume", "ResetUV.svg", tr("Reset volume to default"));
@@ -1311,6 +1345,16 @@ void LightEditorPanel::connectEditor()
   connect(c.resetVolumeButton, &QAbstractButton::clicked, this, [this]() {
     editLights("Reset Light Volume", resetLightVolume);
   });
+  connect(
+    c.editVolumeHandlesButton,
+    &QAbstractButton::clicked,
+    this,
+    &LightEditorPanel::toggleVolumeHandles);
+  connect(
+    c.drawVolumeButton,
+    &QAbstractButton::clicked,
+    this,
+    &LightEditorPanel::toggleVolumeDrawing);
 
   connect(c.fixBadTarget, &QAbstractButton::clicked, this, [this]() {
     removeTargetProperties(
@@ -1362,6 +1406,18 @@ void LightEditorPanel::connectObservers()
       m_controls->texturesStale = true;
       refresh();
     });
+
+  // the buttons follow the tool, which Esc, another tool or a new map also deactivate
+  const auto toolChanged = [&](Tool& tool) {
+    if (&tool == &m_toolBox.lightVolumeTool())
+    {
+      updateVolumeToolButtons();
+    }
+  };
+  m_notifierConnection += m_toolBox.toolActivatedNotifier.connect(toolChanged);
+  m_notifierConnection += m_toolBox.toolDeactivatedNotifier.connect(toolChanged);
+  m_notifierConnection += m_toolBox.lightVolumeTool().modeDidChangeNotifier.connect(
+    [&]() { updateVolumeToolButtons(); });
 }
 
 void LightEditorPanel::refresh()
@@ -1371,6 +1427,13 @@ void LightEditorPanel::refresh()
 
 void LightEditorPanel::updateControls()
 {
+  // a drag of the volume tool changes the light at every mouse move; the commit at its
+  // end refreshes the panel
+  if (m_toolBox.lightVolumeTool().isDragging())
+  {
+    return;
+  }
+
   switch (panelState(m_document.map()))
   {
   case PanelState::NoLightEditor:
@@ -1649,6 +1712,37 @@ void LightEditorPanel::updateEditor()
   setCheckBox(c.castShadows, lights, [](const auto& light) { return light.castShadows; });
   setCheckBox(
     c.skipSpecular, lights, [](const auto& light) { return light.skipSpecular; });
+
+  updateVolumeToolButtons();
+}
+
+void LightEditorPanel::updateVolumeToolButtons()
+{
+  auto& c = *m_controls;
+  const auto& tool = m_toolBox.lightVolumeTool();
+  const auto active = tool.active();
+
+  // the tool edits exactly one light without light_origin; while it is active, the
+  // buttons can always turn it off
+  const auto enabled = active || tool.volumeBox().has_value();
+  c.editVolumeHandlesButton->setEnabled(enabled);
+  c.drawVolumeButton->setEnabled(enabled);
+
+  c.editVolumeHandlesButton->setChecked(
+    active && tool.mode() == LightVolumeTool::Mode::Handles);
+  c.drawVolumeButton->setChecked(active && tool.mode() == LightVolumeTool::Mode::Draw);
+}
+
+void LightEditorPanel::toggleVolumeHandles()
+{
+  toggleLightVolumeTool(m_toolBox, LightVolumeTool::Mode::Handles);
+  updateVolumeToolButtons();
+}
+
+void LightEditorPanel::toggleVolumeDrawing()
+{
+  toggleLightVolumeTool(m_toolBox, LightVolumeTool::Mode::Draw);
+  updateVolumeToolButtons();
 }
 
 void LightEditorPanel::editLights(
