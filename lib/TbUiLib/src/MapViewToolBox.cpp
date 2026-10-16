@@ -552,19 +552,38 @@ void MapViewToolBox::createTools(QStackedLayout* bookCtrl)
     clipTool(),
     lightVolumeTool());
 
+  // the light volume handles work whenever the move tool does (D56)
+  auto& lightVolumeHandles = lightVolumeTool().handles();
   suppressWhileActive(
-    assembleBrushTool(), moveObjectsTool(), extrudeTool(), drawShapeTool());
-  suppressWhileActive(rotateTool(), moveObjectsTool(), extrudeTool(), drawShapeTool());
-  suppressWhileActive(sweepTool(), moveObjectsTool(), extrudeTool(), drawShapeTool());
-  suppressWhileActive(scaleTool(), moveObjectsTool(), extrudeTool(), drawShapeTool());
-  suppressWhileActive(shearTool(), moveObjectsTool(), extrudeTool(), drawShapeTool());
-  suppressWhileActive(vertexTool(), moveObjectsTool(), extrudeTool(), drawShapeTool());
-  suppressWhileActive(edgeTool(), moveObjectsTool(), extrudeTool(), drawShapeTool());
-  suppressWhileActive(faceTool(), moveObjectsTool(), extrudeTool(), drawShapeTool());
+    assembleBrushTool(),
+    moveObjectsTool(),
+    extrudeTool(),
+    drawShapeTool(),
+    lightVolumeHandles);
   suppressWhileActive(
-    controlPointTool(), moveObjectsTool(), extrudeTool(), drawShapeTool());
-  suppressWhileActive(clipTool(), moveObjectsTool(), extrudeTool(), drawShapeTool());
-  // the move tool stays: a drag that starts on the light's own box moves the light
+    rotateTool(), moveObjectsTool(), extrudeTool(), drawShapeTool(), lightVolumeHandles);
+  suppressWhileActive(
+    sweepTool(), moveObjectsTool(), extrudeTool(), drawShapeTool(), lightVolumeHandles);
+  suppressWhileActive(
+    scaleTool(), moveObjectsTool(), extrudeTool(), drawShapeTool(), lightVolumeHandles);
+  suppressWhileActive(
+    shearTool(), moveObjectsTool(), extrudeTool(), drawShapeTool(), lightVolumeHandles);
+  suppressWhileActive(
+    vertexTool(), moveObjectsTool(), extrudeTool(), drawShapeTool(), lightVolumeHandles);
+  suppressWhileActive(
+    edgeTool(), moveObjectsTool(), extrudeTool(), drawShapeTool(), lightVolumeHandles);
+  suppressWhileActive(
+    faceTool(), moveObjectsTool(), extrudeTool(), drawShapeTool(), lightVolumeHandles);
+  suppressWhileActive(
+    controlPointTool(),
+    moveObjectsTool(),
+    extrudeTool(),
+    drawShapeTool(),
+    lightVolumeHandles);
+  suppressWhileActive(
+    clipTool(), moveObjectsTool(), extrudeTool(), drawShapeTool(), lightVolumeHandles);
+  // the move tool and the handles stay: a drag that starts on the light's own box moves
+  // the light
   suppressWhileActive(lightVolumeTool(), extrudeTool(), drawShapeTool());
 
   addTool(moveObjectsTool());
@@ -622,6 +641,9 @@ void MapViewToolBox::connectObservers()
 
   m_notifierConnection += m_document.selectionDidChangeNotifier.connect(
     this, &MapViewToolBox::selectionDidChange);
+
+  m_notifierConnection += lightVolumeTool().modeDidChangeNotifier.connect(
+    this, &MapViewToolBox::lightVolumeToolModeDidChange);
 }
 
 void MapViewToolBox::toolActivated(Tool&)
@@ -650,6 +672,27 @@ void MapViewToolBox::documentWasLoaded()
 void MapViewToolBox::selectionDidChange(const mdl::SelectionChange&)
 {
   updateToolPage();
+}
+
+void MapViewToolBox::lightVolumeToolModeDidChange()
+{
+  // the light volume tool is active only to draw (D56): when a drawn volume ends or Esc
+  // leaves draw mode, it turns off, once the drag that ended has gone
+  if (
+    lightVolumeTool().active()
+    && lightVolumeTool().mode() == LightVolumeTool::Mode::Handles)
+  {
+    QMetaObject::invokeMethod(
+      this,
+      [this]() {
+        auto& tool = lightVolumeTool();
+        if (tool.active() && tool.mode() == LightVolumeTool::Mode::Handles && !dragging())
+        {
+          toggleTool(tool);
+        }
+      },
+      Qt::QueuedConnection);
+  }
 }
 
 void MapViewToolBox::updateToolPage()

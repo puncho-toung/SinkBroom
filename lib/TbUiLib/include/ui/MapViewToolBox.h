@@ -189,7 +189,8 @@ public: // tools
   bool controlPointToolActive() const;
 
   /**
-   * The light volume tool has no toggle of its own: the light editor panel activates it.
+   * The light volume tool has no toggle of its own: the light editor panel activates it
+   * for its draw mode. Its handles and surfaces work without it (D56).
    */
   bool lightVolumeToolActive() const;
 
@@ -211,6 +212,7 @@ private: // notification
   void updateEditorContext();
   void documentWasLoaded();
   void selectionDidChange(const mdl::SelectionChange& selectionChange);
+  void lightVolumeToolModeDidChange();
 
   void updateToolPage();
 };

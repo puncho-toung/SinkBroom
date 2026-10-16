@@ -19,20 +19,28 @@
 
 #include "ui/LightVolumeToolController.h"
 
+#include "base/Macros.h"
 #include "gl/Camera.h"
 #include "mdl/BrushNode.h"
 #include "mdl/EditorContext.h"
+#include "mdl/EntityNode.h"
 #include "mdl/Grid.h"
 #include "mdl/Hit.h"
 #include "mdl/HitAdapter.h"
 #include "mdl/HitFilter.h"
 #include "mdl/Map.h"
+#include "mdl/Map_Selection.h"
 #include "mdl/ModelUtils.h"
 #include "mdl/PickResult.h"
+#include "mdl/Selection.h"
+#include "mdl/Transaction.h"
+#include "render/RenderContext.h"
 #include "ui/HandleDragTracker.h"
 #include "ui/InputState.h"
 #include "ui/LightVolumeTool.h"
 #include "ui/MapDocument.h"
+#include "ui/MoveHandleDragTracker.h"
+#include "ui/MoveObjectsTool.h"
 
 #include "vm/bbox.h"
 #include "vm/intersection.h"
@@ -103,9 +111,26 @@ void updateModifierSettings(LightVolumeTool& tool, const InputState& inputState)
 }
 
 /**
- * The scale tool's handle proposer: in 2D, a corner, and an edge without Shift, are
- * dragged in the view plane with relative snapping; every other handle along its handle
- * line with absolute snapping.
+ * The line along which a corner is dragged in a 2D view (D59): its diagonal without the
+ * part along the box axis closest to the view direction, so that the two visible axes
+ * scale by one factor and the hidden one keeps its extent.
+ */
+vm::line3d cornerLine2D(
+  const LightVolumeBox& volume, const mdl::Hit& hit, const vm::vec3d& viewDirection)
+{
+  const auto line = lightVolumeHandleLine(volume, hit);
+  const auto toBox = vm::transpose(volume.rotation);
+
+  auto diagonal = toBox * line.direction;
+  diagonal[vm::find_abs_max_component(toBox * viewDirection)] = 0.0;
+  return vm::line3d{line.point, volume.rotation * vm::normalize(diagonal)};
+}
+
+/**
+ * The handle proposer of a drag: every handle along its handle line with absolute
+ * snapping, like the scale tool's sides; a corner in 2D along its diagonal in the view
+ * plane; a surface along its edit line with relative snapping, since its hit point is
+ * not on the grid.
  */
 HandlePositionProposer makeHandleProposer(
   const InputState& inputState,
@@ -115,24 +140,21 @@ HandlePositionProposer makeHandleProposer(
   const vm::vec3d& handleOffset)
 {
   const auto& camera = inputState.camera();
-  const auto viewPlaneDrag =
-    camera.orthographicProjection()
-    && (hit.type() == LightVolumeTool::CornerHitType
-        || (hit.type() == LightVolumeTool::EdgeHitType
-            && !inputState.modifierKeysDown(ModifierKeys::Shift)));
 
-  if (viewPlaneDrag)
+  if (hit.type() == LightVolumeTool::SurfaceHitType)
   {
-    const auto plane =
-      vm::plane3d{hit.hitPoint() + handleOffset, vm::vec3d{camera.direction()} * -1.0};
+    const auto line = lightVolumeHandleLine(volume, hit);
     return makeHandlePositionProposer(
-      makePlaneHandlePicker(plane, handleOffset), makeRelativeHandleSnapper(grid));
+      makeLineHandlePicker(line, handleOffset),
+      makeRelativeLineHandleSnapper(grid, line));
   }
 
-  const auto handleLine = lightVolumeHandleLine(volume, hit);
+  const auto line =
+    camera.orthographicProjection() && hit.type() == LightVolumeTool::CornerHitType
+      ? cornerLine2D(volume, hit, vm::vec3d{camera.direction()})
+      : lightVolumeHandleLine(volume, hit);
   return makeHandlePositionProposer(
-    makeLineHandlePicker(handleLine, handleOffset),
-    makeAbsoluteLineHandleSnapper(grid, handleLine));
+    makeLineHandlePicker(line, handleOffset), makeAbsoluteLineHandleSnapper(grid, line));
 }
 
 /**
@@ -208,6 +230,60 @@ private:
     return [](const InputState&, const DragState&) -> std::optional<vm::vec3d> {
       return std::nullopt;
     };
+  }
+};
+
+/**
+ * The move tool's delegate (MoveObjectsToolController.cpp), which moves the selection
+ * when a drag starts on a surface of a selected light (D60): the move tool's translate
+ * path, its grid snapping and its one undo step.
+ */
+class LightVolumeMoveDragDelegate : public MoveHandleDragTrackerDelegate
+{
+private:
+  MoveObjectsTool& m_tool;
+
+public:
+  explicit LightVolumeMoveDragDelegate(MoveObjectsTool& tool)
+    : m_tool{tool}
+  {
+  }
+
+  DragStatus move(
+    const InputState& inputState,
+    const DragState& dragState,
+    const vm::vec3d& proposedHandlePosition) override
+  {
+    switch (
+      m_tool.move(inputState, proposedHandlePosition - dragState.currentHandlePosition))
+    {
+    case MoveObjectsTool::MoveResult::Continue:
+      return DragStatus::Continue;
+    case MoveObjectsTool::MoveResult::Deny:
+      return DragStatus::Deny;
+    case MoveObjectsTool::MoveResult::Cancel:
+      return DragStatus::End;
+      switchDefault();
+    }
+  }
+
+  void end(const InputState& inputState, const DragState&) override
+  {
+    m_tool.endMove(inputState);
+  }
+
+  void cancel(const DragState&) override { m_tool.cancelMove(); }
+
+  void setRenderOptions(
+    const InputState&, render::RenderContext& renderContext) const override
+  {
+    renderContext.setForceShowSelectionGuide();
+  }
+
+  DragHandleSnapper makeDragHandleSnapper(
+    const InputState&, const SnapMode) const override
+  {
+    return makeRelativeHandleSnapper(m_tool.grid());
   }
 };
 
@@ -519,7 +595,7 @@ private:
 
 /**
  * The bounds whose extent along the view axis a 2D drag in draw mode takes: the world
- * bounds of the selected light's edit box, or +-300 around the map's reference bounds
+ * bounds of the selected light's handle box, or +-300 around the map's reference bounds
  * (the draw shape tool's reference bounds would give the selected light's own small box,
  * a flat light).
  */
@@ -544,26 +620,37 @@ const mdl::Hit& findLightVolumeHit(const mdl::PickResult& pickResult)
 {
   using namespace mdl::HitFilters;
 
-  // 1. a corner, an edge or the far cap's centre, even behind the selected light's box
+  // 1. a handle of the selected light's box, even behind a node or a surface
   if (const auto& hit = pickResult.first(type(LightVolumeTool::HandleHitType));
       hit.isMatch())
   {
     return hit;
   }
 
-  // 2. a selected node: the move tool moves it
-  if (pickResult.first(type(mdl::nodeHitType()) && transitivelySelected()).isMatch())
+  // 2. the nearest of the surfaces and the nodes: a selected light's surface beats the
+  // nodes behind it, an unselected light's surface yields to any node along the ray
+  const auto hasNodeHit = pickResult.first(type(mdl::nodeHitType())).isMatch();
+  for (const auto& hit : pickResult.all())
   {
-    return mdl::Hit::NoHit;
+    if (hit.hasType(mdl::nodeHitType()))
+    {
+      return mdl::Hit::NoHit;
+    }
+    if (
+      hit.hasType(LightVolumeTool::SurfaceHitType)
+      && (hit.target<LightSurfaceHit>().selected || !hasNodeHit))
+    {
+      return hit;
+    }
   }
 
-  // 3. a side, or the back side closest to the mouse
-  return pickResult.first(type(LightVolumeTool::SideHitType));
+  return mdl::Hit::NoHit;
 }
 
 LightVolumeToolController::LightVolumeToolController(
-  LightVolumeTool& tool, MapDocument& document)
+  LightVolumeTool& tool, MoveObjectsTool& moveTool, MapDocument& document)
   : m_tool{tool}
+  , m_moveTool{moveTool}
   , m_document{document}
 {
 }
@@ -572,20 +659,21 @@ LightVolumeToolController::~LightVolumeToolController() = default;
 
 Tool& LightVolumeToolController::tool()
 {
-  return m_tool;
+  // the controller works whenever the always-on handles do (D56)
+  return m_tool.handles();
 }
 
 const Tool& LightVolumeToolController::tool() const
 {
-  return m_tool;
+  return m_tool.handles();
 }
 
 void LightVolumeToolController::pick(
   const InputState& inputState, mdl::PickResult& pickResult)
 {
-  if (m_tool.mode() == LightVolumeTool::Mode::Handles)
+  if (!m_tool.drawing())
   {
-    doPick(inputState.pickRay(), inputState.camera(), pickResult);
+    doPick(inputState, pickResult);
   }
 }
 
@@ -599,7 +687,7 @@ void LightVolumeToolController::modifierKeyChange(const InputState& inputState)
 
 void LightVolumeToolController::mouseMove(const InputState& inputState)
 {
-  if (m_tool.mode() == LightVolumeTool::Mode::Handles && !inputState.anyToolDragging())
+  if (!m_tool.drawing() && !inputState.anyToolDragging())
   {
     m_tool.setHighlightedHit(findLightVolumeHit(inputState.pickResult()));
   }
@@ -609,28 +697,92 @@ bool LightVolumeToolController::mouseClick(const InputState& inputState)
 {
   using namespace mdl::HitFilters;
 
-  if (
-    !inputState.mouseButtonsPressed(MouseButtons::Left)
-    || inputState.modifierKeysDown(ModifierKeys::CtrlCmd) || !m_tool.volumeBox())
+  if (!inputState.mouseButtonsPressed(MouseButtons::Left))
   {
     return false;
   }
 
   const auto& pickResult = inputState.pickResult();
 
-  // a click on a handle, or a drag shorter than 100 ms, keeps the light selected
-  if (pickResult.first(type(LightVolumeTool::HandleHitType)).isMatch())
+  if (m_tool.drawing())
   {
-    return true;
+    // a click on nothing, or a drag shorter than 100 ms, keeps the light that a volume
+    // is drawn for selected
+    if (inputState.modifierKeysDown(ModifierKeys::CtrlCmd) || !m_tool.volumeBox())
+    {
+      return false;
+    }
+
+    const auto& editorContext = m_document.map().editorContext();
+    const auto isSelectable = [&](const mdl::Hit& hit) {
+      auto* node = mdl::hitToNode(hit);
+      return node && editorContext.selectable(*mdl::findOutermostClosedGroupOrNode(node));
+    };
+    return !pickResult.first(type(mdl::nodeHitType()) && isSelectable).isMatch();
   }
 
-  // a click on another object selects it; a click on nothing would deselect the light
-  const auto& editorContext = m_document.map().editorContext();
-  const auto isSelectable = [&](const mdl::Hit& hit) {
-    auto* node = mdl::hitToNode(hit);
-    return node && editorContext.selectable(*mdl::findOutermostClosedGroupOrNode(node));
-  };
-  return !pickResult.first(type(mdl::nodeHitType()) && isSelectable).isMatch();
+  const auto& hit = findLightVolumeHit(pickResult);
+
+  // a click on a handle, or a drag shorter than 100 ms, keeps the light selected; Ctrl
+  // and the left button is the selection tool's toggle
+  if (hit.hasType(LightVolumeTool::HandleHitType))
+  {
+    return !inputState.modifierKeysDown(ModifierKeys::CtrlCmd);
+  }
+
+  return hit.type() == LightVolumeTool::SurfaceHitType && selectSurface(inputState, hit);
+}
+
+bool LightVolumeToolController::selectSurface(
+  const InputState& inputState, const mdl::Hit& hit)
+{
+  auto& map = m_document.map();
+  const auto& editorContext = map.editorContext();
+
+  // the selection tool's rule for a click on a node (SelectionTool::mouseClick): Alt is
+  // not a click, Shift selects brush faces, Ctrl toggles
+  if (
+    !editorContext.canChangeSelection()
+    || !inputState.checkModifierKeys(
+      ModifierKeyPressed::DontCare, ModifierKeyPressed::No, ModifierKeyPressed::No))
+  {
+    return false;
+  }
+
+  auto* node = mdl::findOutermostClosedGroupOrNode(hit.target<LightSurfaceHit>().node);
+  if (!editorContext.selectable(*node))
+  {
+    return false;
+  }
+
+  if (inputState.modifierKeysDown(ModifierKeys::CtrlCmd))
+  {
+    if (node->selected())
+    {
+      mdl::deselectNodes(map, {node});
+    }
+    else
+    {
+      auto transaction = mdl::Transaction{map, "Select Object"};
+      if (map.selection().hasBrushFaces())
+      {
+        mdl::deselectAll(map);
+      }
+      mdl::selectNodes(map, {node});
+      transaction.commit();
+    }
+  }
+  else
+  {
+    auto transaction = mdl::Transaction{map, "Select Object"};
+    mdl::deselectAll(map);
+    mdl::selectNodes(map, {node});
+    transaction.commit();
+  }
+
+  // the clicked element keeps a bold outline (D60)
+  m_tool.setClickedSurface(hit);
+  return true;
 }
 
 std::unique_ptr<GestureTracker> LightVolumeToolController::acceptMouseDrag(
@@ -644,7 +796,7 @@ std::unique_ptr<GestureTracker> LightVolumeToolController::acceptMouseDrag(
     return nullptr;
   }
 
-  if (m_tool.mode() == LightVolumeTool::Mode::Draw)
+  if (m_tool.drawing())
   {
     // a drag that starts on a selected node moves it
     return m_tool.canDraw() && !startsOnSelectedNode(inputState)
@@ -653,6 +805,35 @@ std::unique_ptr<GestureTracker> LightVolumeToolController::acceptMouseDrag(
   }
 
   const auto& hit = findLightVolumeHit(inputState.pickResult());
+  if (hit.type() == LightVolumeTool::SurfaceHitType)
+  {
+    // the surfaces of a light that is not selected are not dragged, as brushes are not
+    if (!hit.target<LightSurfaceHit>().selected)
+    {
+      return nullptr;
+    }
+
+    // a plain drag moves the selection like the move tool, Alt vertically (D60)
+    if (
+      inputState.modifierKeysPressed(ModifierKeys::None)
+      || inputState.modifierKeysPressed(ModifierKeys::Alt))
+    {
+      return m_moveTool.active() && m_moveTool.startMove(inputState)
+               ? createMoveHandleDragTracker(
+                   LightVolumeMoveDragDelegate{m_moveTool},
+                   inputState,
+                   hit.hitPoint(),
+                   hit.hitPoint())
+               : nullptr;
+    }
+
+    // Shift edits the element
+    if (!inputState.modifierKeysDown(ModifierKeys::Shift))
+    {
+      return nullptr;
+    }
+  }
+
   if (!hit.isMatch() || !m_tool.beginDrag(hit))
   {
     return nullptr;
@@ -679,7 +860,7 @@ bool LightVolumeToolController::cancel()
 {
   // the chain also asks inactive tools; Esc leaves draw mode first, then the tool box
   // deactivates the tool
-  if (m_tool.active() && m_tool.mode() == LightVolumeTool::Mode::Draw)
+  if (m_tool.drawing())
   {
     m_tool.setMode(LightVolumeTool::Mode::Handles);
     return true;
@@ -690,15 +871,16 @@ bool LightVolumeToolController::cancel()
 // LightVolumeToolController2D
 
 LightVolumeToolController2D::LightVolumeToolController2D(
-  LightVolumeTool& tool, MapDocument& document)
-  : LightVolumeToolController{tool, document}
+  LightVolumeTool& tool, MoveObjectsTool& moveTool, MapDocument& document)
+  : LightVolumeToolController{tool, moveTool, document}
 {
 }
 
 void LightVolumeToolController2D::doPick(
-  const vm::ray3d& pickRay, const gl::Camera& camera, mdl::PickResult& pickResult) const
+  const InputState& inputState, mdl::PickResult& pickResult) const
 {
-  m_tool.pick2D(pickRay, camera, pickResult);
+  // the 2D views draw no fills, so they pick no surfaces (D57)
+  m_tool.pick2D(inputState.pickRay(), inputState.camera(), pickResult);
 }
 
 std::unique_ptr<GestureTracker> LightVolumeToolController2D::acceptDrawDrag(
@@ -735,15 +917,21 @@ std::unique_ptr<GestureTracker> LightVolumeToolController2D::acceptDrawDrag(
 // LightVolumeToolController3D
 
 LightVolumeToolController3D::LightVolumeToolController3D(
-  LightVolumeTool& tool, MapDocument& document)
-  : LightVolumeToolController{tool, document}
+  LightVolumeTool& tool, MoveObjectsTool& moveTool, MapDocument& document)
+  : LightVolumeToolController{tool, moveTool, document}
 {
 }
 
 void LightVolumeToolController3D::doPick(
-  const vm::ray3d& pickRay, const gl::Camera& camera, mdl::PickResult& pickResult) const
+  const InputState& inputState, mdl::PickResult& pickResult) const
 {
-  m_tool.pick3D(pickRay, camera, pickResult);
+  m_tool.pick3D(inputState.pickRay(), inputState.camera(), pickResult);
+
+  // a drag changes the lights at every step: their surfaces are picked again after it
+  if (!inputState.anyToolDragging())
+  {
+    m_tool.pickSurfaces(inputState.pickRay(), pickResult);
+  }
 }
 
 std::unique_ptr<GestureTracker> LightVolumeToolController3D::acceptDrawDrag(

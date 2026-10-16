@@ -111,8 +111,8 @@ void MapView3D::initializeToolChain(MapViewToolBox& toolBox)
 {
   addToolController(std::make_unique<CameraTool3D>(*m_camera));
   // before the move controller, which takes any drag that starts on a selected node
-  addToolController(
-    std::make_unique<LightVolumeToolController3D>(toolBox.lightVolumeTool(), m_document));
+  addToolController(std::make_unique<LightVolumeToolController3D>(
+    toolBox.lightVolumeTool(), toolBox.moveObjectsTool(), m_document));
   addToolController(
     std::make_unique<MoveObjectsToolController>(toolBox.moveObjectsTool()));
   addToolController(std::make_unique<RotateToolController3D>(toolBox.rotateTool()));

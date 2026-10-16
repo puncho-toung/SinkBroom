@@ -21,17 +21,10 @@
 
 #include "ui/ToolController.h"
 
-#include "vm/ray.h"
-
 #include <memory>
 
 namespace tb
 {
-namespace gl
-{
-class Camera;
-}
-
 namespace mdl
 {
 class Hit;
@@ -48,28 +41,39 @@ namespace ui
 {
 class LightVolumeTool;
 class MapDocument;
+class MoveObjectsTool;
 
 /**
  * Returns the hit of the light volume tool that a click or a drag with the given pick
- * result takes: a corner, an edge or the far cap's centre, even behind a selected node;
- * else nothing if a selected node is hit, so that the move tool moves it; else a side.
+ * result takes (D57): a handle of the selected light's box, even behind anything else;
+ * else the nearest of the surfaces and the nodes, where a surface of a selected light
+ * beats the nodes behind it and a surface of an unselected light is passed over if any
+ * node is hit at all, so that the brushes seen through a volume stay clickable; nothing
+ * if a node is nearest.
  */
 const mdl::Hit& findLightVolumeHit(const mdl::PickResult& pickResult);
 
 /**
- * The light volume tool's controller. It sits right after the camera controller and
- * before the move controller, so that it sees drags of the handles that lie behind the
- * selected light's own box, and it declines drags that start on a selected node unless a
- * corner, an edge or the far cap's centre is hit.
+ * The light volume tool's controller. It is active whenever the tool's always-on handles
+ * are (D56), and it sits right after the camera controller and before the move
+ * controller, so that it sees drags of the handles that lie behind the selected light's
+ * own box.
+ *
+ * A handle drag resizes the box; on a surface (D60), a click selects the light (Ctrl
+ * toggles it), a drag on a selected light moves it as the move tool moves the selection,
+ * and a Shift drag edits the element. While the tool is active, a drag draws a new
+ * volume instead.
  */
 class LightVolumeToolController : public ToolController
 {
 protected:
   LightVolumeTool& m_tool;
+  MoveObjectsTool& m_moveTool;
   MapDocument& m_document;
 
 public:
-  LightVolumeToolController(LightVolumeTool& tool, MapDocument& document);
+  LightVolumeToolController(
+    LightVolumeTool& tool, MoveObjectsTool& moveTool, MapDocument& document);
   ~LightVolumeToolController() override;
 
 private:
@@ -92,10 +96,10 @@ private:
 
   bool cancel() override;
 
+  bool selectSurface(const InputState& inputState, const mdl::Hit& hit);
+
   virtual void doPick(
-    const vm::ray3d& pickRay,
-    const gl::Camera& camera,
-    mdl::PickResult& pickResult) const = 0;
+    const InputState& inputState, mdl::PickResult& pickResult) const = 0;
   virtual std::unique_ptr<GestureTracker> acceptDrawDrag(
     const InputState& inputState) = 0;
 };
@@ -103,26 +107,22 @@ private:
 class LightVolumeToolController2D : public LightVolumeToolController
 {
 public:
-  LightVolumeToolController2D(LightVolumeTool& tool, MapDocument& document);
+  LightVolumeToolController2D(
+    LightVolumeTool& tool, MoveObjectsTool& moveTool, MapDocument& document);
 
 private:
-  void doPick(
-    const vm::ray3d& pickRay,
-    const gl::Camera& camera,
-    mdl::PickResult& pickResult) const override;
+  void doPick(const InputState& inputState, mdl::PickResult& pickResult) const override;
   std::unique_ptr<GestureTracker> acceptDrawDrag(const InputState& inputState) override;
 };
 
 class LightVolumeToolController3D : public LightVolumeToolController
 {
 public:
-  LightVolumeToolController3D(LightVolumeTool& tool, MapDocument& document);
+  LightVolumeToolController3D(
+    LightVolumeTool& tool, MoveObjectsTool& moveTool, MapDocument& document);
 
 private:
-  void doPick(
-    const vm::ray3d& pickRay,
-    const gl::Camera& camera,
-    mdl::PickResult& pickResult) const override;
+  void doPick(const InputState& inputState, mdl::PickResult& pickResult) const override;
   std::unique_ptr<GestureTracker> acceptDrawDrag(const InputState& inputState) override;
 };
 

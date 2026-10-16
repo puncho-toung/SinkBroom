@@ -437,9 +437,7 @@ bool hasPenumbraSurface(const mdl::LightProperties& light)
  */
 bool hasInnerShell(const mdl::LightProperties& light, const LightVolumeStyle& style)
 {
-  return !style.outerShellOnly && light.math.enabled
-         && light.math.innerRadius >= MinInnerShellRadius
-         && light.math.innerRadius < InnerRadiusSharp;
+  return !style.outerShellOnly && lightVolumeHasInnerShell(light);
 }
 
 /**
@@ -667,6 +665,12 @@ void appendSun(
 }
 
 } // namespace
+
+bool lightVolumeHasInnerShell(const mdl::LightProperties& light)
+{
+  return light.math.enabled && light.math.innerRadius >= MinInnerShellRadius
+         && light.math.innerRadius < InnerRadiusSharp;
+}
 
 double lightVolumeFalloff(const double t, const mdl::MathLightProperties& math)
 {

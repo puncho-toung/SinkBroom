@@ -20,6 +20,7 @@
 #pragma once
 
 #include "base/Notifier.h"
+#include "base/NotifierConnection.h"
 #include "mdl/Hit.h"
 #include "mdl/HitType.h"
 #include "mdl/Light.h"
@@ -34,6 +35,7 @@
 #include "vm/vec.h"
 
 #include <optional>
+#include <vector>
 
 namespace tb
 {
@@ -89,28 +91,81 @@ struct LightVolumeBox
 
 /**
  * Returns the volume of the given light entity in the given policy's frame, or nothing if
- * the light is degenerate.
+ * the light is degenerate. The box is the light's edit box, a point light's at its full
+ * radius.
  */
 std::optional<LightVolumeBox> lightVolumeBox(
   const mdl::Entity& entity, mdl::EntityRotationPolicy policy);
+
+/**
+ * Returns the volume of the given light entity whose box is the handle box of the given
+ * threshold (mdl::lightEditBox with a threshold, D61): a point light's box lies where the
+ * light fades below the threshold.
+ */
+std::optional<LightVolumeBox> lightVolumeBox(
+  const mdl::Entity& entity, mdl::EntityRotationPolicy policy, double threshold);
+
+/**
+ * A hit on the surface of a light volume (light editor plan, D60): the light, the element
+ * that was hit, and where. It carries the light's properties and frame, so that the
+ * highlight of the element needs no node.
+ */
+struct LightSurfaceHit
+{
+  mdl::EntityNode* node = nullptr;
+  mdl::LightElement element = mdl::LightElement::OuterShell;
+  // the light is selected, or is in a selected group
+  bool selected = false;
+  mdl::LightProperties light;
+  mdl::LightFrame frame;
+  // the hit point in the light's local space
+  vm::vec3d localPoint;
+};
 
 /**
  * The world line along which the handle of the given hit of the light volume tool is
  * dragged: the side's normal through its centre, the line from the opposite edge's centre
  * to the edge's centre, the diagonal from the opposite corner to the corner, the beam
  * through the far cap's centre. A copy of the scale tool's handleLineForHit in the box
- * frame.
+ * frame. For a surface, the line through the hit point along which a Shift drag edits
+ * the element (D60): the axis of the outer shell's normal there, the ray from the
+ * light's origin for the inner shell, the base's widening for the funnel, the beam for
+ * the base.
  */
 vm::line3d lightVolumeHandleLine(const LightVolumeBox& volume, const mdl::Hit& hit);
 
+class LightVolumeTool;
+
 /**
- * Edits the volume of the one selected light with the handles of its edit box, like the
- * scale tool edits a brush, or draws a new volume for it, or for a new light, like the
- * draw shape tool draws a brush. It is reached only through the light editor panel.
+ * The always-on part of the light volume tool (light editor plan, D56): the handles of
+ * the selected light's box and the surfaces of the shown light volumes work without the
+ * tool being activated. It is a tool of its own so that the tool box suppresses it while
+ * a modal tool (rotate, scale, the vertex tools, ...) is active, like the move tool; the
+ * light volume tool's controllers are active while it is.
+ */
+class LightVolumeHandles : public Tool
+{
+private:
+  LightVolumeTool& m_tool;
+
+public:
+  explicit LightVolumeHandles(LightVolumeTool& tool);
+
+private:
+  bool doDeactivate() override;
+};
+
+/**
+ * Edits the volume of the selected light with the handles of its box, like the scale
+ * tool edits a brush, and with the surfaces of the shown light volumes (D60), always,
+ * without being activated (D56); and, while it is active, draws a new volume for the
+ * selected light, or for a new light, like the draw shape tool draws a brush. The draw
+ * mode is reached only through the light editor panel.
  *
- * The tool holds no node: every call reads the light from the selection again. A drag
- * rolls back and applies the changed light from the light at the start of the drag in one
- * long running transaction, so that it is one undo step.
+ * The tool holds no node across a notification: every call reads the light from the
+ * selection again, and the cache of the lights whose surfaces are picked is dropped when
+ * the document changes. A drag rolls back and applies the changed light from the light
+ * at the start of the drag in one long running transaction, so that it is one undo step.
  */
 class LightVolumeTool : public Tool
 {
@@ -125,34 +180,80 @@ public:
   static const mdl::HitType::Type EdgeHitType;
   static const mdl::HitType::Type CornerHitType;
   static const mdl::HitType::Type FarCapCenterHitType;
-  // the hits that take precedence over a selected node under the mouse
+  static const mdl::HitType::Type FaceCenterHitType;
+  static const mdl::HitType::Type SurfaceHitType;
+  // the handles of the box, which take precedence over everything under the mouse
   static const mdl::HitType::Type HandleHitType;
   static const mdl::HitType::Type AnyHitType;
 
   Notifier<> modeDidChangeNotifier;
 
 private:
+  /**
+   * A light whose surfaces can be picked, with its bounding sphere for the pre-test.
+   */
+  struct PickableLight
+  {
+    mdl::EntityNode* node = nullptr;
+    mdl::LightProperties light;
+    mdl::LightFrame frame;
+    bool selected = false;
+    vm::vec3d centre;
+    double radius = 0.0;
+    // the world triangles of a spot light's funnel or a sun's box, CW seen from outside
+    std::vector<vm::vec3d> triangles;
+  };
+
   MapDocument& m_document;
+  LightVolumeHandles m_handles;
   Mode m_mode = Mode::Handles;
 
   AnchorPos m_anchorPos = AnchorPos::Opposite;
   ProportionalAxes m_proportionalAxes = ProportionalAxes::None();
   mdl::Hit m_highlightedHit = mdl::Hit::NoHit;
+  // the surface that was last clicked, kept with a bold outline while it is under the
+  // mouse; never dereferenced
+  const mdl::EntityNode* m_clickedNode = nullptr;
+  std::optional<mdl::LightElement> m_clickedElement;
 
   bool m_dragging = false;
   mdl::Hit m_dragHit = mdl::Hit::NoHit;
   std::optional<LightVolumeBox> m_dragStart;
+  double m_dragThreshold = 0.0;
   vm::bbox3d m_dragBox;
+  mdl::LightProperties m_dragLight;
   vm::vec3d m_dragDelta;
 
   std::optional<vm::bbox3d> m_drawBox;
   std::optional<mdl::LightProperties> m_drawLight;
+
+  mutable std::vector<PickableLight> m_pickableLights;
+  mutable bool m_pickableLightsValid = false;
+
+  NotifierConnection m_notifierConnection;
 
 public:
   explicit LightVolumeTool(MapDocument& document);
   ~LightVolumeTool() override;
 
   const mdl::Grid& grid() const;
+
+  /**
+   * The always-on part of the tool, see LightVolumeHandles.
+   */
+  LightVolumeHandles& handles();
+  const LightVolumeHandles& handles() const;
+
+  /**
+   * Whether the light volumes, their handles and surfaces are shown: the game has the
+   * light editor and the light volumes are not turned off (D45, D56).
+   */
+  bool showsVolumes() const;
+
+  /**
+   * The handle threshold of the preferences (D53), clamped to [0.01, 0.5].
+   */
+  double handleThreshold() const;
 
   Mode mode() const;
   /**
@@ -161,7 +262,12 @@ public:
   void setMode(Mode mode);
 
   /**
-   * Whether a handle drag is in progress.
+   * Whether the tool is active in draw mode.
+   */
+  bool drawing() const;
+
+  /**
+   * Whether a handle or surface drag is in progress.
    */
   bool isDragging() const;
 
@@ -172,13 +278,14 @@ public:
   mdl::EntityNode* selectedLight() const;
 
   /**
-   * The selected light's volume, or nothing if there is no selected light, if it has
-   * light_origin (read only, D8) or if it is degenerate.
+   * The selected light's volume with its handle box at the handle threshold, or nothing
+   * if there is no selected light, if it has light_origin (read only, D8) or if it is
+   * degenerate.
    */
   std::optional<LightVolumeBox> volumeBox() const;
 
   /**
-   * The selected light's edit box in its box frame, see volumeBox.
+   * The selected light's handle box in its box frame, see volumeBox.
    */
   std::optional<vm::bbox3d> editBox() const;
 
@@ -187,14 +294,34 @@ public:
    */
   std::optional<mdl::LightFrame> frame() const;
 
+  /**
+   * Picks the handles of the selected light's box: its corners, the centres of its faces
+   * (D58; a spot light's far face has the far cap's centre, its apex face none) and its
+   * edges, nearest first; nothing while the light volumes are not shown.
+   */
   void pick3D(
     const vm::ray3d& pickRay,
     const gl::Camera& camera,
     mdl::PickResult& pickResult) const;
+
+  /**
+   * Picks the handles of the selected light's box in a 2D view: its corners, the far
+   * cap's centre, and its outline, whose edges are picked as the sides perpendicular to
+   * them in the view plane (D59).
+   */
   void pick2D(
     const vm::ray3d& pickRay,
     const gl::Camera& camera,
     mdl::PickResult& pickResult) const;
+
+  /**
+   * Picks the surfaces of the shown light volumes (D57, D60), at most one per light: the
+   * inner shell if the ray enters it, else the outer shell of a point light; the funnel
+   * or the base of a spot light; the box of a sun. Surfaces are picked from outside only,
+   * like brush faces. The surfaces of unselected lights are not picked if the pick result
+   * already holds a node hit, because they would yield to it.
+   */
+  void pickSurfaces(const vm::ray3d& pickRay, mdl::PickResult& pickResult) const;
 
   void setAnchorPos(AnchorPos anchorPos);
   AnchorPos anchorPos() const;
@@ -204,13 +331,27 @@ public:
 
   const mdl::Hit& highlightedHit() const;
   /**
-   * Sets the handle under the mouse and refreshes the views if it changed.
+   * Sets the handle or surface under the mouse and refreshes the views if it changed. A
+   * clicked surface loses its bold outline when another one is highlighted.
    */
   void setHighlightedHit(const mdl::Hit& hit);
 
   /**
-   * Starts dragging the handle of the given hit in a long running transaction. Returns
-   * false if no light is selected.
+   * Marks the given surface hit as clicked: its element keeps a bold outline while it is
+   * under the mouse, until the selection changes (D60).
+   */
+  void setClickedSurface(const mdl::Hit& hit);
+
+  /**
+   * Whether the given surface hit is the one that was clicked last.
+   */
+  bool isClickedSurface(const mdl::Hit& hit) const;
+
+  /**
+   * Starts dragging the handle of the given hit in a long running transaction, or, for a
+   * surface of the selected light, editing its element (D60). Returns false if no light
+   * is selected, if the surface is not the selected light's or if its element cannot be
+   * edited (a sun's box). The handle threshold is fixed for the drag (D61).
    */
   bool beginDrag(const mdl::Hit& hit);
 
@@ -222,18 +363,18 @@ public:
   const std::optional<LightVolumeBox>& dragStartVolume() const;
 
   /**
-   * Moves the dragged handle by the given world delta, the step since the last accepted
-   * update; the tool adds the steps up to the delta since the start of the drag. Returns
-   * false if the step is denied: the moved box is denied, and the light keeps the last
-   * accepted box and the step is not added. Also returns false if no drag is in progress,
-   * and if the light cannot be changed, in which case the drag is cancelled.
+   * Moves the dragged handle or surface by the given world delta, the step since the last
+   * accepted update; the tool adds the steps up to the delta since the start of the drag.
+   * Returns false if the step is denied: the moved box is denied, and the light keeps the
+   * last accepted box and the step is not added. Also returns false if no drag is in
+   * progress, and if the light cannot be changed, in which case the drag is cancelled.
    */
   bool update(const vm::vec3d& delta);
 
   /**
-   * Commits the drag, or cancels it if the light is back at its starting box. Does
-   * nothing if no drag is in progress (it was cancelled by a deactivation or a failed
-   * update while the drag tracker lived on).
+   * Commits the drag, or cancels it if the light is back at its starting box or, for a
+   * surface, its starting properties. Does nothing if no drag is in progress (it was
+   * cancelled by a deactivation or a failed update while the drag tracker lived on).
    */
   void endDrag();
 
@@ -267,9 +408,9 @@ public:
   const std::optional<mdl::LightProperties>& drawLight() const;
 
   /**
-   * Renders the handle box, the handles, the dragged handle, the highlighted handle if
-   * requested (not while another tool drags) and a spot light's frustum edges in handle
-   * mode, the drawn volume in draw mode.
+   * Renders the handle box, the handles, the dragged handle, the highlighted handle or
+   * surface if requested (not while another tool drags) and a spot light's frustum edges,
+   * or the drawn volume in draw mode.
    */
   void render(
     render::RenderContext& renderContext,
@@ -279,6 +420,12 @@ public:
 private:
   bool doActivate() override;
   bool doDeactivate() override;
+
+  std::optional<LightVolumeBox> volumeBox(double threshold) const;
+
+  void invalidatePickableLights();
+  void lightsDidChange();
+  const std::vector<PickableLight>& pickableLights() const;
 
   void resetDraw();
   bool applyDrawnLight();

@@ -124,6 +124,13 @@ std::vector<double> lightVolumeShellAlphas(
   const mdl::LightProperties& light, const LightVolumeStyle& style);
 
 /**
+ * Whether a point light drawn with its translucency bands (not outer shell only) has the
+ * shell of its core at t = math_inner_radius: a math light with an inner radius in
+ * [0.02, 0.999).
+ */
+bool lightVolumeHasInnerShell(const mdl::LightProperties& light);
+
+/**
  * The numbers of triangle and line vertices and of element ranges that
  * appendLightVolumeMesh appends.
  */

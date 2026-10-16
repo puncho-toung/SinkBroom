@@ -138,8 +138,8 @@ void MapView2D::initializeToolChain(MapViewToolBox& toolBox)
 {
   addToolController(std::make_unique<CameraTool2D>(*m_camera));
   // before the move controller, which takes any drag that starts on a selected node
-  addToolController(
-    std::make_unique<LightVolumeToolController2D>(toolBox.lightVolumeTool(), m_document));
+  addToolController(std::make_unique<LightVolumeToolController2D>(
+    toolBox.lightVolumeTool(), toolBox.moveObjectsTool(), m_document));
   addToolController(
     std::make_unique<MoveObjectsToolController>(toolBox.moveObjectsTool()));
   addToolController(std::make_unique<RotateToolController2D>(toolBox.rotateTool()));
