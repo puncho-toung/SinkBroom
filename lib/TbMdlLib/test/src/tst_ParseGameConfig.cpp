@@ -145,6 +145,11 @@ TEST_CASE("GameConfigParser")
       CHECK(
         config.entityConfig.rotationPolicy
         == Doom3BFGGameInfo.gameConfig.entityConfig.rotationPolicy);
+      // the light editor panel edits the engine's render light keys
+      CHECK(config.entityConfig.lightEditor == "idtech4");
+      CHECK(
+        config.entityConfig.lightEditor
+        == Doom3BFGGameInfo.gameConfig.entityConfig.lightEditor);
 
       CHECK(config.faceAttribsConfig.surfaceFlags.flags.empty());
       CHECK(config.faceAttribsConfig.contentFlags.flags.empty());
@@ -1420,6 +1425,75 @@ TEST_CASE("GameConfigParser")
       CHECK(entityPropertyConfig.rotationPolicy == EntityRotationPolicy::IdTech4);
 
       CHECK(makeEntityPropertyConfig(GameConfig{}) == EntityPropertyConfig{});
+    }
+  }
+
+  SECTION("light editor")
+  {
+    const auto makeConfig = [](const std::string& entityKeys) {
+      return R"%({
+    "version": 9,
+    "name": "Doom 3 BFG",
+    "fileformats": [ { "format": "Doom3 (Valve)" } ],
+    "filesystem": {
+        "searchpath": "base",
+        "packageformat": { "extension": "pk4", "format": "zip" }
+    },
+    "materials": { "root": "textures", "extensions": [ ".tga" ] },
+    "entities": {
+        "definitions": [],
+        "defaultcolor": "0.6 0.6 0.6 1.0")%"
+             + entityKeys + R"%(
+    }
+})%";
+    };
+
+    SECTION("a missing key leaves the light editor off")
+    {
+      const auto result = parseGameConfig(makeConfig(""));
+      REQUIRE(result.is_success());
+      CHECK(result.value().entityConfig.lightEditor == std::nullopt);
+      CHECK(EntityConfig{}.lightEditor == std::nullopt);
+    }
+
+    SECTION("idtech4 is read")
+    {
+      const auto result = parseGameConfig(makeConfig(R"%(,
+        "lightEditor": "idtech4")%"));
+      REQUIRE(result.is_success());
+      CHECK(result.value().entityConfig.lightEditor == "idtech4");
+    }
+
+    SECTION("an unknown value is an error naming the key, with its location")
+    {
+      CHECK(
+        parseGameConfig(makeConfig(R"%(,
+        "lightEditor": "quake")%"))
+        == Result<GameConfig>{
+          Error{"At line 13, column 24: Unknown lightEditor 'quake'; valid values are: "
+                "idtech4"}});
+    }
+
+    SECTION("the key takes part in comparisons")
+    {
+      const auto config = EntityConfig{};
+
+      auto lightEditorConfig = config;
+      lightEditorConfig.lightEditor = "idtech4";
+      CHECK(lightEditorConfig != config);
+      CHECK(kdl::str_to_string(lightEditorConfig).find("idtech4") != std::string::npos);
+    }
+
+    SECTION("hasLightEditor")
+    {
+      const auto withoutKey = parseGameConfig(makeConfig(""));
+      REQUIRE(withoutKey.is_success());
+      CHECK(!hasLightEditor(withoutKey.value()));
+
+      const auto withKey = parseGameConfig(makeConfig(R"%(,
+        "lightEditor": "idtech4")%"));
+      REQUIRE(withKey.is_success());
+      CHECK(hasLightEditor(withKey.value()));
     }
   }
 

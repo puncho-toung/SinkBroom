@@ -2,6 +2,7 @@ add_library(TbAppTestUtilsLib STATIC)
 
 target_sources(TbAppTestUtilsLib
   PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LightTestUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapDocumentFixture.cpp
 
   PUBLIC FILE_SET headers TYPE HEADERS

@@ -27,6 +27,8 @@
 #include "kd/ranges/concat_view.h"
 #include "kd/ranges/to.h"
 
+#include <algorithm>
+#include <filesystem>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -122,6 +124,42 @@ TEST_CASE("Actions")
     const auto conflicts =
       getActionConflicts(allActionInfos, findConflicts(allActionInfos));
     CHECK(conflicts == std::vector<ActionInfo>{});
+  }
+
+  SECTION("The View > Light Volumes actions are checkable and conflict-free")
+  {
+    auto lightVolumeActions = std::vector<const Action*>{};
+    actionManager.visitMainMenu(kdl::overload(
+      [](const MenuSeparator&) {},
+      [&](const MenuAction& actionItem) {
+        if (
+          actionItem.action.preference().path.parent_path()
+          == std::filesystem::path{"Menu/View/Light Volumes"})
+        {
+          lightVolumeActions.push_back(&actionItem.action);
+        }
+      },
+      [](const auto& thisLambda, const Menu& menu) { menu.visitEntries(thisLambda); }));
+
+    REQUIRE(lightVolumeActions.size() == 3);
+    CHECK(lightVolumeActions[0]->label() == "Off");
+    CHECK(lightVolumeActions[1]->label() == "Selected");
+    CHECK(lightVolumeActions[2]->label() == "All");
+
+    const auto allActionInfos = collectAllActionInfos(actionManager);
+    const auto conflicts = findConflicts(allActionInfos);
+    for (const auto* action : lightVolumeActions)
+    {
+      CHECK(action->checkable());
+      CHECK(action->actionContext() == ActionContext::Any);
+      CHECK(action->preference().defaultValue == std::vector<KeySequence>{KeySequence{}});
+
+      const auto iInfo = std::ranges::find_if(allActionInfos, [&](const auto& info) {
+        return info.displayPath() == action->preference().path;
+      });
+      REQUIRE(iInfo != allActionInfos.end());
+      CHECK(!conflicts.contains(size_t(std::distance(allActionInfos.begin(), iInfo))));
+    }
   }
 }
 

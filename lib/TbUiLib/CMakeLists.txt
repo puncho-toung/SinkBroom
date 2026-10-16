@@ -98,6 +98,7 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LaunchGameEngineDialog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LayerEditor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LayerListBox.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LightEditorPanel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LimitedKeySequenceEdit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapDocumentActionCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapInspector.cpp
@@ -144,6 +145,9 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ScaleToolPage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SearchBox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/KeyboardShortcutUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/SidebarManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/SidebarPanel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/SidebarPanels.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SignalDelayer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SliderWithLabel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SmartChoiceEditor.cpp
@@ -282,6 +286,7 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LaunchGameEngineDialog.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LayerEditor.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LayerListBox.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LightEditorPanel.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LimitedKeySequenceEdit.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapDocumentActionCache.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapInspector.h
@@ -330,6 +335,9 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/ScaleToolPage.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/SearchBox.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/KeyboardShortcutUtils.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/SidebarManager.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/SidebarPanel.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/SidebarPanels.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/SignalDelayer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/SliderWithLabel.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/SmartChoiceEditor.h

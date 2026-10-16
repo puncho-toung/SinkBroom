@@ -26,6 +26,7 @@
 #include "mdl/EntityModel.h"
 #include "mdl/EntityNode.h"
 
+#include "kd/contracts.h"
 #include "kd/ranges/to.h"
 #include "kd/reflection_impl.h"
 #include "kd/string_compare.h"
@@ -556,6 +557,20 @@ vm::vec3d entityYawPitchRoll(
     vm::to_degrees(rollPitchYaw[0]));
 }
 
+std::string formatIdTech4Float(const double value, const int decimals)
+{
+  // with no decimals, stripping the trailing zeros would turn 300 into 3
+  contract_pre(decimals >= 1);
+
+  auto result = fmt::format("{:.{}f}", value, decimals);
+  result.erase(result.find_last_not_of('0') + 1);
+  if (result.ends_with('.'))
+  {
+    result.pop_back();
+  }
+  return result == "-0" ? "0" : result;
+}
+
 namespace
 {
 double getEntityRotationAngle(vm::vec3d direction)
@@ -587,13 +602,7 @@ EntityProperty setEntityRotationAngle(
  */
 std::string formatIdTech4Angle(const double angle)
 {
-  auto result = fmt::format("{:.2f}", angle);
-  result.erase(result.find_last_not_of('0') + 1);
-  if (result.ends_with('.'))
-  {
-    result.pop_back();
-  }
-  return result == "-0" ? "0" : result;
+  return formatIdTech4Float(angle, 2);
 }
 
 /**
@@ -708,6 +717,26 @@ std::vector<std::string> idTech4ConvertedRotationKeys(const Entity& entity)
   return (isIdTech4Light(entity) ? lightKeys : otherKeys)
          | std::views::filter([&](const auto& key) { return entity.hasProperty(key); })
          | kdl::ranges::to<std::vector>();
+}
+
+EntityRotationUpdate idTech4AnglesUpdate(
+  const Entity& entity, const vm::vec3d& pitchYawRoll)
+{
+  // the engine reads "angles" only if none of these is present, and "angle" only if
+  // "angles" is not present
+  auto remove = idTech4ConvertedRotationKeys(entity);
+  if (entity.hasProperty(EntityPropertyKeys::Angle))
+  {
+    remove.push_back(EntityPropertyKeys::Angle);
+  }
+
+  return {
+    EntityProperty{
+      EntityPropertyKeys::Angles,
+      formatIdTech4Angle(pitchYawRoll.x()) + " " + formatIdTech4Angle(pitchYawRoll.y())
+        + " " + formatIdTech4Angle(pitchYawRoll.z())},
+    std::move(remove),
+  };
 }
 
 namespace

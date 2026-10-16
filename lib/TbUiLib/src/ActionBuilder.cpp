@@ -151,6 +151,10 @@ PopulateMenuResult populateMenuBar(
       {
         result.recentDocumentsMenu = currentMenu;
       }
+      else if (menu.entryType == MenuEntryType::Sidebar)
+      {
+        result.sidebarMenu = currentMenu;
+      }
 
       menu.visitEntries(thisLambda);
       currentMenu = parentMenu;

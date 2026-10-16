@@ -51,6 +51,7 @@
 #include "ui/ExtrudeToolController.h"
 #include "ui/FaceTool.h" // IWYU pragma: keep
 #include "ui/FaceToolController.h"
+#include "ui/LightVolumeToolController.h"
 #include "ui/MapDocument.h"
 #include "ui/MapViewToolBox.h"
 #include "ui/MoveObjectsToolController.h"
@@ -136,6 +137,9 @@ void MapView2D::initializeCamera()
 void MapView2D::initializeToolChain(MapViewToolBox& toolBox)
 {
   addToolController(std::make_unique<CameraTool2D>(*m_camera));
+  // before the move controller, which takes any drag that starts on a selected node
+  addToolController(std::make_unique<LightVolumeToolController2D>(
+    toolBox.lightVolumeTool(), toolBox.moveObjectsTool(), m_document));
   addToolController(
     std::make_unique<MoveObjectsToolController>(toolBox.moveObjectsTool()));
   addToolController(std::make_unique<RotateToolController2D>(toolBox.rotateTool()));
@@ -411,7 +415,10 @@ void MapView2D::renderMap(
   render::RenderContext& renderContext,
   render::RenderBatch& renderBatch)
 {
+  // the fills before the map (after the grid) so that the brush edges draw over them
+  renderLightVolumeFills(renderContext, renderBatch);
   renderer.render(renderContext, renderBatch);
+  renderLightVolumeLines(renderContext, renderBatch);
 
   const auto& map = m_document.map();
   if (const auto& bounds = map.selectionBounds();

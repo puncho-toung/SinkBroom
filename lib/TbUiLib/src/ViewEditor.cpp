@@ -32,6 +32,8 @@
 #include "mdl/EntityDefinition.h"
 #include "mdl/EntityDefinitionGroup.h"
 #include "mdl/EntityDefinitionManager.h"
+#include "mdl/GameConfig.h"
+#include "mdl/GameInfo.h"
 #include "mdl/Map.h"
 #include "mdl/MapFormat.h"
 #include "mdl/Tag.h"
@@ -294,8 +296,9 @@ void ViewEditor::createGui()
 {
   deleteChildWidgetsLaterAndDeleteLayout(this);
 
-  // this checkbox is only created conditionally, see below
+  // these widgets are only created conditionally, see below
   m_showPatchesCheckBox = nullptr;
+  m_lightVolumesRadioGroup = nullptr;
 
   auto* gridLayout = new QGridLayout{};
   gridLayout->setContentsMargins(
@@ -547,6 +550,27 @@ QWidget* ViewEditor::createRendererPanel(QWidget* parent)
     m_entityLinkRadioGroup->addButton(radio, int(i));
   }
 
+  if (mdl::hasLightEditor(m_document.map().gameInfo().gameConfig))
+  {
+    const auto LightVolumeModes = std::vector<std::tuple<QString, QString>>{
+      {"Light volumes: Off", QString::fromStdString(Preferences::ShowLightVolumesOff)},
+      {"Light volumes: Selected",
+       QString::fromStdString(Preferences::ShowLightVolumesSelected)},
+      {"Light volumes: All", QString::fromStdString(Preferences::ShowLightVolumesAll)},
+    };
+
+    // owned by the panel, which the next createGui deletes
+    m_lightVolumesRadioGroup = new QButtonGroup{panel};
+    for (size_t i = 0; i < LightVolumeModes.size(); ++i)
+    {
+      const auto& [label, prefValue] = LightVolumeModes.at(i);
+
+      auto* radio = new QRadioButton{label};
+      radio->setObjectName(prefValue);
+      m_lightVolumesRadioGroup->addButton(radio, int(i));
+    }
+  }
+
   m_showSoftBoundsCheckBox = new QCheckBox{tr("Show soft bounds")};
 
   auto* restoreDefualtsButton = new QPushButton{tr("Restore Defaults")};
@@ -572,6 +596,14 @@ QWidget* ViewEditor::createRendererPanel(QWidget* parent)
     &QButtonGroup::idClicked,
     this,
     &ViewEditor::entityLinkModeChanged);
+  if (m_lightVolumesRadioGroup)
+  {
+    connect(
+      m_lightVolumesRadioGroup,
+      &QButtonGroup::idClicked,
+      this,
+      &ViewEditor::lightVolumesChanged);
+  }
 
   connect(
     m_showSoftBoundsCheckBox,
@@ -600,6 +632,14 @@ QWidget* ViewEditor::createRendererPanel(QWidget* parent)
   for (auto* button : m_entityLinkRadioGroup->buttons())
   {
     layout->addWidget(button);
+  }
+
+  if (m_lightVolumesRadioGroup)
+  {
+    for (auto* button : m_lightVolumesRadioGroup->buttons())
+    {
+      layout->addWidget(button);
+    }
   }
 
   layout->addWidget(m_showSoftBoundsCheckBox);
@@ -670,6 +710,13 @@ void ViewEditor::refreshRendererPanel()
     m_entityLinkRadioGroup,
     QString::fromStdString(pref(Preferences::EntityLinkMode)),
     true);
+  if (m_lightVolumesRadioGroup)
+  {
+    checkButtonInGroup(
+      m_lightVolumesRadioGroup,
+      QString::fromStdString(pref(Preferences::ShowLightVolumes)),
+      true);
+  }
   m_showSoftBoundsCheckBox->setChecked(pref(Preferences::ShowSoftMapBounds));
 }
 
@@ -783,6 +830,22 @@ void ViewEditor::entityLinkModeChanged(const int id)
   }
 }
 
+void ViewEditor::lightVolumesChanged(const int id)
+{
+  switch (id)
+  {
+  case 0:
+    setPref(Preferences::ShowLightVolumes, Preferences::ShowLightVolumesOff);
+    break;
+  case 2:
+    setPref(Preferences::ShowLightVolumes, Preferences::ShowLightVolumesAll);
+    break;
+  default:
+    setPref(Preferences::ShowLightVolumes, Preferences::ShowLightVolumesSelected);
+    break;
+  }
+}
+
 void ViewEditor::showSoftMapBoundsChanged(const bool checked)
 {
   setPref(Preferences::ShowSoftMapBounds, checked);
@@ -804,6 +867,8 @@ void ViewEditor::restoreDefaultsClicked()
   prefs.resetToDefault(Preferences::ShowPointEntities);
   prefs.resetToDefault(Preferences::ShowBrushes);
   prefs.resetToDefault(Preferences::EntityLinkMode);
+  prefs.resetToDefault(Preferences::ShowLightVolumes);
+  prefs.resetToDefault(Preferences::LightVolumeHandleThreshold);
   prefs.saveChanges();
 }
 

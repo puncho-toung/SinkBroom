@@ -101,6 +101,14 @@ vm::mat4x4d entityRotation(
 vm::vec3d entityYawPitchRoll(
   const vm::mat4x4d& transformation, const vm::mat4x4d& rotation);
 
+/**
+ * Formats a number the way the engine's idDict::SetAngles and idDict::SetVector write
+ * each number (idStr::FloatArrayToString): with the given number of decimals, then
+ * without trailing zeros and a trailing dot, e.g. 300, 33.3 or 0.05. A number that comes
+ * out as -0 is written as 0. The number of decimals must be at least 1.
+ */
+std::string formatIdTech4Float(double value, int decimals);
+
 std::optional<EntityProperty> applyEntityRotation(
   const std::vector<EntityProperty>& properties,
   const EntityRotationInfo& info,
@@ -113,6 +121,16 @@ std::optional<EntityProperty> applyEntityRotation(
  * present properties, in the order in which the engine reads them.
  */
 std::vector<std::string> idTech4ConvertedRotationKeys(const Entity& entity);
+
+/**
+ * Returns the property changes that set the rotation of the given point entity to the
+ * given absolute pitch, yaw and roll in degrees, with a positive pitch pointing down,
+ * under the id Tech 4 policy: "angles" written the way the engine writes angles, and the
+ * properties that the engine would read instead removed (idTech4ConvertedRotationKeys
+ * and "angle").
+ */
+EntityRotationUpdate idTech4AnglesUpdate(
+  const Entity& entity, const vm::vec3d& pitchYawRoll);
 
 /**
  * Returns the property changes that make the given entity's rotation properties

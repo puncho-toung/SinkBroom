@@ -129,4 +129,9 @@ EntityPropertyConfig makeEntityPropertyConfig(const GameConfig& config)
   };
 }
 
+bool hasLightEditor(const GameConfig& config)
+{
+  return config.entityConfig.lightEditor.has_value();
+}
+
 } // namespace tb::mdl

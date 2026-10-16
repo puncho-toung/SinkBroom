@@ -68,6 +68,7 @@
 #include "mdl/WorldNode.h"
 #include "prefs/Preferences.h"
 #include "render/Compass.h"
+#include "render/LightVolumeRenderer.h"
 #include "render/MapRenderer.h"
 #include "render/PrimitiveRenderer.h"
 #include "render/RenderBatch.h"
@@ -102,6 +103,37 @@
 
 namespace tb::ui
 {
+namespace
+{
+
+/**
+ * Whether any of the given added or removed nodes is or may hold a light entity: any
+ * node but a brush or a patch.
+ */
+bool mayContainLights(const std::vector<mdl::Node*>& nodes)
+{
+  return std::ranges::any_of(nodes, [](const auto* node) {
+    return !dynamic_cast<const mdl::BrushNode*>(node)
+           && !dynamic_cast<const mdl::PatchNode*>(node);
+  });
+}
+
+render::LightVolumeVisibility lightVolumeVisibility()
+{
+  const auto& visibility = pref(Preferences::ShowLightVolumes);
+  if (visibility == Preferences::ShowLightVolumesOff)
+  {
+    return render::LightVolumeVisibility::Off;
+  }
+  if (visibility == Preferences::ShowLightVolumesAll)
+  {
+    return render::LightVolumeVisibility::All;
+  }
+  return render::LightVolumeVisibility::Selected;
+}
+
+} // namespace
+
 const int MapViewBase::DefaultCameraAnimationDuration = 250;
 
 MapViewBase::MapViewBase(
@@ -111,6 +143,7 @@ MapViewBase::MapViewBase(
   , m_document{document}
   , m_toolBox{toolBox}
   , m_animationManager{std::make_unique<AnimationManager>(this)}
+  , m_lightVolumeRenderer{std::make_unique<render::LightVolumeRenderer>()}
   , m_updateActionStatesSignalDelayer{new SignalDelayer{this}}
   , m_actionCache{document}
 {
@@ -160,6 +193,12 @@ void MapViewBase::connectObservers()
     m_document.documentDidChangeNotifier.connect(this, &MapViewBase::documentDidChange);
   m_notifierConnection +=
     m_document.selectionDidChangeNotifier.connect(this, &MapViewBase::selectionDidChange);
+  m_notifierConnection +=
+    m_document.nodesWereAddedNotifier.connect(this, &MapViewBase::nodesWereAdded);
+  m_notifierConnection +=
+    m_document.nodesWereRemovedNotifier.connect(this, &MapViewBase::nodesWereRemoved);
+  m_notifierConnection +=
+    m_document.nodesDidChangeNotifier.connect(this, &MapViewBase::nodesDidChange);
 
   m_notifierConnection += m_document.materialCollectionsDidChangeNotifier.connect(
     this, &MapViewBase::materialCollectionsDidChange);
@@ -207,6 +246,8 @@ void MapViewBase::createActionsAndUpdatePicking()
 
 void MapViewBase::documentWasLoaded()
 {
+  // the old map is gone, and the light volumes forget its nodes
+  m_lightVolumeRenderer->invalidate();
   createActionsAndUpdatePicking();
   update();
 }
@@ -220,9 +261,32 @@ void MapViewBase::documentDidChange()
 
 void MapViewBase::selectionDidChange(const mdl::SelectionChange&)
 {
+  m_lightVolumeRenderer->invalidateSelection();
   updatePickResult();
   updateActionStates();
   update();
+}
+
+void MapViewBase::nodesWereAdded(const std::vector<mdl::Node*>& nodes)
+{
+  if (mayContainLights(nodes))
+  {
+    m_lightVolumeRenderer->invalidate();
+  }
+}
+
+void MapViewBase::nodesWereRemoved(const std::vector<mdl::Node*>& nodes)
+{
+  if (mayContainLights(nodes))
+  {
+    m_lightVolumeRenderer->invalidate();
+  }
+}
+
+void MapViewBase::nodesDidChange(const std::vector<mdl::Node*>& nodes)
+{
+  // only when a light is among the nodes
+  m_lightVolumeRenderer->nodesDidChange(nodes);
 }
 
 void MapViewBase::toolChanged(Tool&)
@@ -239,6 +303,8 @@ void MapViewBase::materialCollectionsDidChange()
 
 void MapViewBase::entityDefinitionsDidChange()
 {
+  // whether an entity is a light depends on its definition
+  m_lightVolumeRenderer->invalidate();
   createActions();
 }
 
@@ -249,11 +315,13 @@ void MapViewBase::modsDidChange()
 
 void MapViewBase::editorContextDidChange()
 {
+  m_lightVolumeRenderer->invalidate();
   update();
 }
 
 void MapViewBase::nodeVisibilityDidChange(const std::vector<mdl::Node*>&)
 {
+  m_lightVolumeRenderer->invalidate();
   update();
 }
 
@@ -283,6 +351,14 @@ void MapViewBase::preferenceDidChange(const std::filesystem::path& path)
   if (path == Preferences::RendererFontSize.path)
   {
     fontManager().clearCache();
+  }
+
+  if (
+    path == Preferences::ShowLightVolumes.path
+    || path == Preferences::LightVolumeAlpha.path
+    || path == Preferences::LightVolumeShells.path)
+  {
+    m_lightVolumeRenderer->invalidate();
   }
 
   updateActionBindings();
@@ -411,7 +487,12 @@ void MapViewBase::moveObjects(const vm::direction direction)
   auto& map = m_document.map();
   const auto& grid = map.grid();
   const auto delta = moveDirection(direction) * double(grid.actualSize());
-  translateSelection(map, delta);
+
+  // a spot light's clicked base takes the step as a shear of its far cap (D68)
+  if (!m_toolBox.nudgeLightVolumeElement(delta))
+  {
+    translateSelection(map, delta);
+  }
 }
 
 void MapViewBase::duplicateObjects()
@@ -886,6 +967,16 @@ void MapViewBase::hideAllEntityLinks()
   setPref(Preferences::FaceRenderMode, Preferences::EntityLinkModeNone);
 }
 
+void MapViewBase::setShowLightVolumes(const std::string& visibility)
+{
+  contract_pre(
+    visibility == Preferences::ShowLightVolumesOff
+    || visibility == Preferences::ShowLightVolumesSelected
+    || visibility == Preferences::ShowLightVolumesAll);
+
+  setPref(Preferences::ShowLightVolumes, visibility);
+}
+
 bool MapViewBase::event(QEvent* event)
 {
   if (event->type() == QEvent::WindowDeactivate)
@@ -1112,6 +1203,34 @@ void MapViewBase::renderPortalFile(
 void MapViewBase::invalidatePortalFileRenderer()
 {
   m_portalFileRenderer = nullptr;
+}
+
+void MapViewBase::renderLightVolumeFills(
+  render::RenderContext& renderContext, render::RenderBatch& renderBatch)
+{
+  // both views enqueue the fills first, so the volumes are collected here once per frame
+  collectLightVolumes(renderContext);
+  m_lightVolumeRenderer->addFills(renderBatch);
+}
+
+void MapViewBase::renderLightVolumeLines(
+  render::RenderContext&, render::RenderBatch& renderBatch)
+{
+  // the lines share the arrays that renderLightVolumeFills collected for this frame
+  m_lightVolumeRenderer->addLines(renderBatch);
+}
+
+void MapViewBase::collectLightVolumes(render::RenderContext& renderContext)
+{
+  // the preferences are read once per frame, never per light; the renderer rebuilds only
+  // what is dirty and draws nothing unless the game config sets entities.lightEditor
+  const auto style = render::LightVolumeStyle{
+    std::clamp(double(pref(Preferences::LightVolumeAlpha)), 0.0, 1.0),
+    std::clamp(pref(Preferences::LightVolumeShells), 2, 8),
+    renderContext.render2D(),
+    false,
+  };
+  m_lightVolumeRenderer->collect(m_document.map(), lightVolumeVisibility(), style);
 }
 
 void MapViewBase::validatePortalFileRenderer(render::RenderContext&)

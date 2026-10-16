@@ -13,6 +13,8 @@ target_sources(TbAppLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ExtrudeTool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ExtrudeToolController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HandleDragTracker.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightVolumeTool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightVolumeToolController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MoveHandleDragTracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_RotateTool.cpp
@@ -52,6 +54,7 @@ set(TEST_FIXTURE_DEST_DIR $<TARGET_FILE_DIR:TbAppLibTest>/fixture)
 add_custom_command(TARGET TbAppLibTest POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E rm -rf "${TEST_FIXTURE_DEST_DIR}"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TEST_FIXTURE_SOURCE_DIR}" "${TEST_FIXTURE_DEST_DIR}/test"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/../../TbMdlLib/test/fixture/mdl/Game/Doom3BFG" "${TEST_FIXTURE_DEST_DIR}/test/mdl/Game/Doom3BFG"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TB_RESOURCE_DIR}/games" "${TEST_FIXTURE_DEST_DIR}/games"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TB_RESOURCE_DIR}/games-testing" "${TEST_FIXTURE_DEST_DIR}/games"
 )

@@ -17,10 +17,15 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QDockWidget>
+#include <QMenu>
+#include <QMenuBar>
 
 #include "TestEnvironment.h"
+#include "base/PreferenceManager.h"
 #include "base/Result.h"
 #include "gl/Camera.h"
 #include "gl/GlManager.h"
@@ -28,18 +33,42 @@
 #include "gl/ResourceManager.h"
 #include "gl/TestGl.h"
 #include "gl/TestUtils.h"
+#include "mdl/Entity.h"
+#include "mdl/EntityNode.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/Grid.h"
+#include "mdl/Hit.h"
+#include "mdl/HitFilter.h"
+#include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/MapFormat.h"
+#include "mdl/Map_Nodes.h"
+#include "mdl/Map_Selection.h"
+#include "mdl/PickResult.h"
+#include "mdl/Selection.h"
+#include "mdl/WorldNode.h"
+#include "prefs/Preferences.h"
+#include "ui/ActionContext.h"
 #include "ui/AppControllerFixture.h"
 #include "ui/CatchConfig.h"
+#include "ui/LightEditorPanel.h"
+#include "ui/LightVolumeTool.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
 #include "ui/MapView2D.h"
+#include "ui/MapViewBase.h"
+#include "ui/MapViewToolBox.h"
 #include "ui/MapWindow.h"
 
+#include "kd/invoke.h"
+
+#include "vm/ray.h"
 #include "vm/vec.h"
+
+#include <algorithm>
+#include <iterator>
+#include <string>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -194,6 +223,317 @@ TEST_CASE("MapWindow")
       CHECK(camera.position() == position);
       checkCameras(vm::bbox3d{8192.0});
     }
+  }
+
+  SECTION("sidebar docks are listed in View > Sidebar")
+  {
+    auto* dock = window.findChild<QDockWidget*>("MapWindow_Sidebar_LightEditor");
+    REQUIRE(dock != nullptr);
+    CHECK(dock->windowTitle() == "Light Editor");
+    CHECK(qobject_cast<LightEditorPanel*>(dock->widget()) != nullptr);
+
+    QMenu* viewMenu = nullptr;
+    for (auto* action : window.menuBar()->actions())
+    {
+      if (action->text() == "View")
+      {
+        viewMenu = QMenu::menuInAction(action);
+      }
+    }
+    REQUIRE(viewMenu != nullptr);
+
+    // the submenu follows Maximize Current View
+    const auto viewActions = viewMenu->actions();
+    const auto iMaximize = std::ranges::find_if(viewActions, [](const auto* action) {
+      return action->text() == "Maximize Current View";
+    });
+    REQUIRE(iMaximize != viewActions.end());
+    REQUIRE(std::next(iMaximize) != viewActions.end());
+
+    auto* sidebarMenu = QMenu::menuInAction(*std::next(iMaximize));
+    REQUIRE(sidebarMenu != nullptr);
+    CHECK(sidebarMenu->title() == "Sidebar");
+    CHECK(sidebarMenu->actions() == QList<QAction*>{dock->toggleViewAction()});
+  }
+
+  SECTION("View > Light Volumes")
+  {
+    auto& prefs = PreferenceManager::instance();
+    prefs.resetToDefault(Preferences::ShowLightVolumes);
+
+    // also when a REQUIRE fails, so that no later test case sees a changed preference
+    const auto resetShowLightVolumes =
+      kdl::invoke_later{[&] { prefs.resetToDefault(Preferences::ShowLightVolumes); }};
+
+    const auto findLightVolumeActions = [&]() {
+      QMenu* lightVolumesMenu = nullptr;
+      for (auto* menuAction : window.menuBar()->actions())
+      {
+        if (menuAction->text() == "View")
+        {
+          for (auto* action : QMenu::menuInAction(menuAction)->actions())
+          {
+            if (action->text() == "Light Volumes")
+            {
+              lightVolumesMenu = QMenu::menuInAction(action);
+            }
+          }
+        }
+      }
+      REQUIRE(lightVolumesMenu != nullptr);
+      return lightVolumesMenu->actions();
+    };
+
+    SECTION("the check marks follow the preference")
+    {
+      const auto actions = findLightVolumeActions();
+      REQUIRE(actions.size() == 3);
+
+      setPref(Preferences::ShowLightVolumes, Preferences::ShowLightVolumesAll);
+      QApplication::processEvents();
+      CHECK(!actions[0]->isChecked());
+      CHECK(!actions[1]->isChecked());
+      CHECK(actions[2]->isChecked());
+
+      // the Quake game has no light editor
+      CHECK(!actions[0]->isEnabled());
+      CHECK(!actions[1]->isEnabled());
+      CHECK(!actions[2]->isEnabled());
+
+      prefs.resetToDefault(Preferences::ShowLightVolumes);
+      QApplication::processEvents();
+      CHECK(actions[1]->isChecked());
+      CHECK(!actions[2]->isChecked());
+    }
+
+    SECTION("the actions write ShowLightVolumes in a game with the light editor")
+    {
+      REQUIRE(window.document().create(
+        appController.environmentConfig(),
+        mdl::Doom3BFGGameInfo,
+        mdl::MapFormat::Doom3_Valve,
+        vm::bbox3d{8192.0}));
+      QApplication::processEvents();
+
+      const auto actions = findLightVolumeActions();
+      REQUIRE(actions.size() == 3);
+      CHECK(actions[0]->isEnabled());
+      CHECK(actions[1]->isEnabled());
+      CHECK(actions[2]->isEnabled());
+
+      const auto faceRenderMode = pref(Preferences::FaceRenderMode);
+      const auto values = std::vector<std::string>{
+        Preferences::ShowLightVolumesOff,
+        Preferences::ShowLightVolumesSelected,
+        Preferences::ShowLightVolumesAll,
+      };
+
+      for (const auto i : {0, 2, 1})
+      {
+        actions[i]->trigger();
+        QApplication::processEvents();
+
+        CHECK(pref(Preferences::ShowLightVolumes) == values[size_t(i)]);
+        CHECK(pref(Preferences::FaceRenderMode) == faceRenderMode);
+        for (auto j = 0; j < 3; ++j)
+        {
+          CHECK(actions[j]->isChecked() == (j == i));
+        }
+      }
+    }
+  }
+
+  SECTION("the light volume tool leaves the action context at no tool")
+  {
+    // the actions of Delete, Cut, Group, Flip, Edit > Move and the keyboard nudges
+    // require NoTool, so they keep working while the tool is active (D31)
+    const auto views = window.findChildren<MapViewBase*>();
+    REQUIRE(!views.empty());
+
+    auto& toolBox = window.toolBox();
+    const auto contexts = [&]() {
+      auto result = std::vector<ActionContext::Type>{};
+      for (const auto* view : views)
+      {
+        result.push_back(view->actionContext());
+      }
+      return result;
+    };
+
+    const auto contextsWithoutTool = contexts();
+    for (const auto context : contextsWithoutTool)
+    {
+      CHECK((context & ActionContext::NoTool) != 0);
+    }
+
+    toolBox.toggleTool(toolBox.lightVolumeTool());
+    REQUIRE(toolBox.lightVolumeToolActive());
+
+    CHECK(contexts() == contextsWithoutTool);
+    CHECK_FALSE(toolBox.anyModalToolActive());
+
+    toolBox.toggleTool(toolBox.lightVolumeTool());
+    CHECK_FALSE(toolBox.lightVolumeToolActive());
+  }
+
+  SECTION("the light volume tool leaves the action context at no tool with a light")
+  {
+    REQUIRE(window.document().create(
+      appController.environmentConfig(),
+      mdl::Doom3BFGGameInfo,
+      mdl::MapFormat::Doom3_Valve,
+      vm::bbox3d{8192.0}));
+    QApplication::processEvents();
+
+    auto& map = window.document().map();
+    auto* lightNode = new mdl::EntityNode{mdl::Entity{{
+      {"classname", "light"},
+      {"origin", "0 0 0"},
+    }}};
+    REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), {lightNode}}}).empty());
+    mdl::selectNodes(map, {lightNode});
+    QApplication::processEvents();
+
+    const auto views = window.findChildren<MapViewBase*>();
+    REQUIRE(!views.empty());
+
+    auto& toolBox = window.toolBox();
+    REQUIRE(toolBox.lightVolumeTool().selectedLight() == lightNode);
+
+    const auto contexts = [&]() {
+      auto result = std::vector<ActionContext::Type>{};
+      for (const auto* view : views)
+      {
+        result.push_back(view->actionContext());
+      }
+      return result;
+    };
+
+    const auto contextsWithoutTool = contexts();
+    for (const auto context : contextsWithoutTool)
+    {
+      CHECK((context & ActionContext::NoTool) != 0);
+      CHECK((context & ActionContext::NodeSelection) != 0);
+    }
+
+    toolBox.toggleTool(toolBox.lightVolumeTool());
+    REQUIRE(toolBox.lightVolumeToolActive());
+    CHECK(contexts() == contextsWithoutTool);
+
+    toolBox.toggleTool(toolBox.lightVolumeTool());
+    CHECK(contexts() == contextsWithoutTool);
+  }
+
+  SECTION("the keys that move objects shear a spot light's clicked base (D68)")
+  {
+    REQUIRE(window.document().create(
+      appController.environmentConfig(),
+      mdl::Doom3BFGGameInfo,
+      mdl::MapFormat::Doom3_Valve,
+      vm::bbox3d{8192.0}));
+    QApplication::processEvents();
+
+    auto& map = window.document().map();
+    map.grid().setSize(4); // 16 units
+    auto* lightNode = new mdl::EntityNode{mdl::Entity{{
+      {"classname", "light"},
+      {"origin", "0 0 0"},
+      {"light_target", "0 0 -256"},
+      {"light_right", "-128 0 0"},
+      {"light_up", "0 -128 0"},
+    }}};
+    REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), {lightNode}}}).empty());
+    mdl::selectNodes(map, {lightNode});
+    QApplication::processEvents();
+
+    auto& tool = window.toolBox().lightVolumeTool();
+    REQUIRE(tool.selectedLight() == lightNode);
+    const auto clickBase = [&]() {
+      auto pickResult = mdl::PickResult{};
+      tool.pickSurfaces(vm::ray3d{{0, 0, -1000}, {0, 0, 1}}, pickResult);
+      const auto& hit =
+        pickResult.first(mdl::HitFilters::type(LightVolumeTool::SurfaceHitType));
+      REQUIRE(hit.isMatch());
+      REQUIRE(hit.target<LightSurfaceHit>().element == mdl::LightElement::Base);
+      tool.setClickedSurface(hit);
+    };
+    const auto valueOf = [](const mdl::EntityNode& node, const std::string& key) {
+      const auto* value = node.entity().property(key);
+      REQUIRE(value != nullptr);
+      return *value;
+    };
+
+    // a 2D view whose "right" is world +X, one grid step of 16
+    const auto views = window.findChildren<MapView2D*>();
+    const auto iView = std::ranges::find_if(views, [](const auto* view) {
+      return view->moveDirection(vm::direction::right) == vm::vec3d{1, 0, 0};
+    });
+    REQUIRE(iView != views.end());
+    auto* view = *iView;
+    const auto delta =
+      view->moveDirection(vm::direction::right) * double(map.grid().actualSize());
+    REQUIRE(delta == vm::vec3d{16, 0, 0});
+
+    // the clicked base takes the step: the light stays, its beam turns (AC-26)
+    clickBase();
+    view->moveObjects(vm::direction::right);
+    CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+    CHECK(valueOf(*lightNode, "light_target") == "15.52 0 -256.01");
+
+    // without it, the step moves the light
+    tool.clearClickedSurface();
+    view->moveObjects(vm::direction::right);
+    CHECK(valueOf(*lightNode, "origin") == "16 0 0");
+    CHECK(valueOf(*lightNode, "light_target") == "15.52 0 -256.01");
+
+    // Duplicate and move: the duplicate is the new selection, which forgets the clicked
+    // base, so it is moved
+    map.undoCommand();
+    map.undoCommand();
+    REQUIRE(valueOf(*lightNode, "origin") == "0 0 0");
+    REQUIRE(valueOf(*lightNode, "light_target") == "0 0 -256");
+    clickBase();
+    const auto lightCount = map.worldNode().defaultLayer()->childCount();
+    view->duplicateAndMoveObjects(vm::direction::right);
+    CHECK(map.worldNode().defaultLayer()->childCount() == lightCount + 1);
+    REQUIRE(map.selection().entities.size() == 1);
+    const auto* duplicateNode = map.selection().entities.front();
+    CHECK(duplicateNode != lightNode);
+    CHECK(valueOf(*duplicateNode, "origin") == "16 0 0");
+    CHECK(valueOf(*duplicateNode, "light_target") == "0 0 -256");
+    CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+    CHECK(valueOf(*lightNode, "light_target") == "0 0 -256");
+  }
+
+  SECTION("Deactivate Current Tool is unchecked while the light volume tool is active")
+  {
+    QAction* deactivateAction = nullptr;
+    for (auto* menuAction : window.menuBar()->actions())
+    {
+      if (menuAction->text() == "Tools")
+      {
+        for (auto* action : QMenu::menuInAction(menuAction)->actions())
+        {
+          if (action->text() == "Deactivate Current Tool")
+          {
+            deactivateAction = action;
+          }
+        }
+      }
+    }
+    REQUIRE(deactivateAction != nullptr);
+
+    auto& toolBox = window.toolBox();
+    QApplication::processEvents();
+    REQUIRE(deactivateAction->isChecked());
+
+    toolBox.toggleTool(toolBox.lightVolumeTool());
+    QApplication::processEvents();
+    CHECK_FALSE(deactivateAction->isChecked());
+
+    toolBox.toggleTool(toolBox.lightVolumeTool());
+    QApplication::processEvents();
+    CHECK(deactivateAction->isChecked());
   }
 
   SECTION("canReloadMaterialCollections returns false when resources need processing")

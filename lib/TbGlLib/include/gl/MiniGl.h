@@ -176,6 +176,9 @@ using GLsizeiptr = std::intptr_t;
 #ifndef GL_LINES
 #define GL_LINES 0x0001
 #endif
+#ifndef GL_LINE_BIT
+#define GL_LINE_BIT 0x00000004
+#endif
 #ifndef GL_LINE_LOOP
 #define GL_LINE_LOOP 0x0002
 #endif

@@ -24,6 +24,8 @@
 #include "base/PreferenceManager.h"
 #include "mdl/EntityDefinition.h"
 #include "mdl/EntityProperties.h"
+#include "mdl/GameConfig.h"
+#include "mdl/GameInfo.h"
 #include "mdl/Grid.h" // IWYU pragma: keep
 #include "mdl/Map.h"
 #include "mdl/Map_Entities.h"
@@ -50,6 +52,20 @@
 
 namespace tb::ui
 {
+namespace
+{
+
+/**
+ * Whether the document's game has the light editor (entities.lightEditor), which also
+ * gates the light volumes.
+ */
+bool hasLightEditor(const ActionExecutionContext& context)
+{
+  return context.hasDocument()
+         && mdl::hasLightEditor(context.map().gameInfo().gameConfig);
+}
+
+} // namespace
 
 ActionManager::ActionManager()
 {
@@ -1574,7 +1590,9 @@ void ActionManager::createToolsMenu()
     [](auto& context) { context.mapView().deactivateCurrentTool(); },
     [](const auto& context) { return context.hasDocument(); },
     [](const auto& context) {
-      return context.hasDocument() && !context.mapWindow().toolBox().anyModalToolActive();
+      // the light volume tool is not modal for the actions (D31), but it is a tool
+      return context.hasDocument() && !context.mapWindow().toolBox().anyModalToolActive()
+             && !context.mapWindow().toolBox().lightVolumeToolActive();
     },
     std::filesystem::path{"NoTool.svg"},
   }));
@@ -1810,6 +1828,53 @@ void ActionManager::createViewMenu()
     [](const auto& context) { return context.hasDocument(); },
   }));
 
+  // the actions are not exclusive: MapWindow refreshes their check marks when the
+  // preference changes
+  auto& lightVolumesMenu = viewMenu.addMenu("Light Volumes");
+  lightVolumesMenu.addItem(addAction(Action{
+    "Menu/View/Light Volumes/Off",
+    "Off",
+    ActionContext::Any,
+    KeySequence{},
+    [](auto& context) {
+      context.mapView().setShowLightVolumes(Preferences::ShowLightVolumesOff);
+    },
+    [](const auto& context) { return hasLightEditor(context); },
+    [](const auto& context) {
+      return context.hasDocument()
+             && pref(Preferences::ShowLightVolumes) == Preferences::ShowLightVolumesOff;
+    },
+  }));
+  lightVolumesMenu.addItem(addAction(Action{
+    "Menu/View/Light Volumes/Selected",
+    "Selected",
+    ActionContext::Any,
+    KeySequence{},
+    [](auto& context) {
+      context.mapView().setShowLightVolumes(Preferences::ShowLightVolumesSelected);
+    },
+    [](const auto& context) { return hasLightEditor(context); },
+    [](const auto& context) {
+      return context.hasDocument()
+             && pref(Preferences::ShowLightVolumes)
+                  == Preferences::ShowLightVolumesSelected;
+    },
+  }));
+  lightVolumesMenu.addItem(addAction(Action{
+    "Menu/View/Light Volumes/All",
+    "All",
+    ActionContext::Any,
+    KeySequence{},
+    [](auto& context) {
+      context.mapView().setShowLightVolumes(Preferences::ShowLightVolumesAll);
+    },
+    [](const auto& context) { return hasLightEditor(context); },
+    [](const auto& context) {
+      return context.hasDocument()
+             && pref(Preferences::ShowLightVolumes) == Preferences::ShowLightVolumesAll;
+    },
+  }));
+
   viewMenu.addSeparator();
   viewMenu.addItem(addAction(Action{
     "Menu/View/Isolate",
@@ -1916,6 +1981,8 @@ void ActionManager::createViewMenu()
       return context.hasDocument() && context.mapWindow().currentViewMaximized();
     },
   }));
+  // filled by MapWindow with the toggle actions of its sidebar docks
+  viewMenu.addMenu("Sidebar", MenuEntryType::Sidebar);
   viewMenu.addSeparator();
   viewMenu.addItem(addAction(Action{
     "Menu/File/Preferences...",

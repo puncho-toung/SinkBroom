@@ -28,12 +28,16 @@
 #include "mdl/GameConfig.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/GameInfo.h"
+#include "mdl/LoadMaterialCollections.h"
 #include "mdl/ModelSpecification.h"
 
 #include "kd/task_manager.h"
 
 #include "vm/approx.h"
 #include "vm/bbox_io.h" // IWYU pragma: keep
+
+#include <string>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
@@ -181,6 +185,40 @@ TEST_CASE("EntityModelManager")
     const auto* modelAfterClear = manager.model("armor.mdl");
     CHECK(modelAfterClear != nullptr);
     CHECK(modelAfterClear->data() != nullptr);
+  }
+
+  SECTION("shaders")
+  {
+    // empty before the first reload
+    const auto initialShaders = manager.shaders();
+    REQUIRE(initialShaders != nullptr);
+    CHECK(initialShaders->shaders().empty());
+
+    auto doom3FileSystem =
+      fs::DiskFileSystem{getFixtureRoot() / "test/mdl/Game/Doom3BFG/base"};
+    auto taskManager = kdl::task_manager{};
+    auto doom3Manager = EntityModelManager{
+      Doom3BFGGameInfo,
+      doom3FileSystem,
+      [](auto resourceLoader) {
+        return gl::createResourceSync(std::move(resourceLoader));
+      },
+      logger};
+    doom3Manager.reloadShaders(taskManager);
+
+    const auto loadedShaders = doom3Manager.shaders();
+    REQUIRE(loadedShaders != nullptr);
+    CHECK(loadedShaders->findShader("textures/tb_test/wall") != nullptr);
+    // tb_test_lights.mtr: the light materials that the material browser leaves out
+    CHECK(
+      shaderNamesWithPrefix(*loadedShaders, {"lights/", "fogs/"})
+      == std::vector<std::string>{"fogs/tb_test_fog", "lights/tb_test_point"});
+
+    // a reload replaces the shaders, and a caller's pointer keeps the old ones alive
+    doom3Manager.reloadShaders(taskManager);
+    CHECK(doom3Manager.shaders() != loadedShaders);
+    CHECK(doom3Manager.shaders()->findShader("textures/tb_test/wall") != nullptr);
+    CHECK(loadedShaders->findShader("textures/tb_test/wall") != nullptr);
   }
 
   SECTION("id Tech 4 OBJ proxies")

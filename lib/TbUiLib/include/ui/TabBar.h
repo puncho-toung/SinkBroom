@@ -74,6 +74,13 @@ public:
 
   void addTab(TabBookPage* bookPage, const QString& title);
 
+signals:
+  /**
+   * The user clicked the tab of the page with the given index, which is shown by now. A
+   * page change by TabBook::switchToPage sends no such signal.
+   */
+  void tabClicked(int index);
+
 private:
   size_t findButtonIndex(QWidget* button) const;
   void setButtonActive(int index);

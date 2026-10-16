@@ -453,6 +453,39 @@ TEST_CASE("LoadMaterialCollections")
     }
   }
 
+  SECTION("shaderNamesWithPrefix")
+  {
+    const auto makeShader = [](std::filesystem::path shaderPath) {
+      return Quake3Shader{
+        .shaderPath = std::move(shaderPath),
+        .format = Quake3Shader::Format::Doom3,
+      };
+    };
+
+    const auto shaders = IndexedShaders{{
+      makeShader("lights/squarelight1"),
+      makeShader("textures/base_wall/lfwall13f3"),
+      makeShader("Lights/BigLight"),
+      makeShader("fogs/basic_fog"),
+      makeShader("lightsabre/blade"),
+      makeShader("lights/SquareLight1"),
+    }};
+
+    // sorted ignoring case; of two paths that differ only in case the first one stays
+    CHECK(
+      shaderNamesWithPrefix(shaders, {"lights/", "fogs/"})
+      == std::vector<std::string>{
+        "fogs/basic_fog", "Lights/BigLight", "lights/squarelight1"});
+
+    // the prefixes ignore case, too
+    CHECK(
+      shaderNamesWithPrefix(shaders, {"FOGS/"})
+      == std::vector<std::string>{"fogs/basic_fog"});
+
+    CHECK(shaderNamesWithPrefix(shaders, {}).empty());
+    CHECK(shaderNamesWithPrefix(IndexedShaders{}, {"lights/"}).empty());
+  }
+
   SECTION("findIdTech4Material")
   {
     auto fs = fs::DiskFileSystem{getFixtureRoot() / "test/mdl/LoadIdTech4ObjModel"};

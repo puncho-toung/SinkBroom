@@ -107,6 +107,9 @@ struct EntityConfig
   // unique entity names and model = name; absent unless the game turns them on
   std::optional<EntityNamingConfig> naming;
   EntityRotationPolicy rotationPolicy = EntityRotationPolicy::Quake;
+  // the light key schema the light editor panel edits; absent unless the game turns the
+  // panel on ("idtech4" is the only schema)
+  std::optional<std::string> lightEditor;
 
   kdl_reflect_decl(
     EntityConfig,
@@ -116,7 +119,8 @@ struct EntityConfig
     setDefaultProperties,
     modelConvention,
     naming,
-    rotationPolicy);
+    rotationPolicy,
+    lightEditor);
 };
 
 struct FlagConfig
@@ -204,5 +208,12 @@ struct GameConfig
  * of that game hands down to every node.
  */
 EntityPropertyConfig makeEntityPropertyConfig(const GameConfig& config);
+
+/**
+ * Whether the given game has the light editor (entities.lightEditor). The light editor
+ * panel, the light volumes, their View actions and their view editor radios exist only
+ * for such a game.
+ */
+bool hasLightEditor(const GameConfig& config);
 
 } // namespace tb::mdl
