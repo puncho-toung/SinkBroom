@@ -1216,6 +1216,98 @@ An entity link that is connected to a currently selected entity is rendered as a
 
 In the screenshot above, the link between the two info_null entities is rendered in green because neither of the entities is selected.
 
+## The Light Editor {#light_editor}
+
+Games whose [game configuration](#game_configuration_files_entities) sets the `lightEditor` key, as the shipped Doom 3 BFG configuration does, come with the _Light Editor_, a panel for the lights of id Tech 4 engines such as RBDOOM-3-BFG. It edits the same properties as the engine's in-game light editor, it draws the area that a light affects as translucent volumes in the map views, and it lets you resize that area with handles in the map views as if it were a brush. For every other game the panel says that the game has no light editor, the *Light Volumes* menu entries are disabled and the *Light volumes* radio buttons of the view popup are missing.
+
+The Light Editor works on entity properties only. A light stays a point entity: you can select, move, rotate, copy and delete it like any other entity, you can edit its properties in the entity inspector, and a map that you never edit with the Light Editor is saved exactly as before. For the Light Editor, a _light_ is an entity of the class `light` (in any case), of any class whose entity definition has the `spawnclass` `idLight`, or, if it has no entity definition, of any class whose name starts with `light_`.
+
+### The Sidebar {#sidebar}
+
+The Light Editor is the first panel of the _sidebar_, a framework for panels that live in dock windows next to the map views. Choose **View &raquo; Sidebar &raquo; Light Editor** to show the panel in a dock window on the right of the main window, and choose it again, or click the close button of the dock, to hide it. You can drag the dock by its title bar to the left edge of the window, tab it together with another dock, or pull it out of the window to float it above the editor. The place of the dock, floating or not, is saved with the window layout and restored when TrenchBroom starts again; a floating dock that would come back outside every screen is docked again. The Sidebar menu lists one entry for every panel of the sidebar.
+
+Closing the dock, with its close button or with the menu entry, also ends the light volume tool described below. Floating the dock, docking it again, tabbing another dock over it and minimizing the window leave the tool as it is.
+
+### The Light Editor Panel {#light_editor_panel}
+
+The panel follows the selection. If nothing is selected, or something other than a light is selected (a brush, a brush entity, a group that contains a light), it says *Select a light*. If lights are selected together with other objects, it says *Select only lights*. If only lights are selected, it shows their properties. The header names the light, or says how many lights are selected. With several lights selected, the fields show the values of the first light, a field in which the lights differ shows *multi*, and a change applies to all selected lights; a field that shows *multi* is only written when you edit it.
+
+The panel has these sections:
+
+- **Type**: Point, Spot or Sun. Switching the type resets the light to the engine's default for the new type (a point light of radius 300, a spot light with the target `0 0 -256` and the right and up vectors `-128 0 0` and `0 -128 0`, or a sun of radius `2048 2048 1024`), as the in-game editor does. The origin, the color and the math falloff are kept; the texture, the style and the shadow and specular flags go back to their defaults.
+- **Volume**: for point lights and suns, *Equilateral* (one radius for all three axes; without it, a radius per axis), *Radius*, and *Center* with its position. For spot lights, *Target*, *Right* and *Up*, and *Explicit start and end points* with *Start* and *End*. If the selected lights have different types, this section is hidden.
+- **Transform**: *Origin*, and *Angles* (pitch, yaw and roll in degrees; a positive pitch points down).
+- **Color and Texture**: the *Color* button picks the hue, and *Intensity* (0 to 8, the in-game editor's limit) is the brightest component of the color, so a color can be brighter than 1. *Texture* is an editable list that starts with *(engine default)* and contains every material of the game's material files under `lights/` and `fogs/`; you can also type a name. *Style* offers the choices that the entity definition declares for it (-1 to 11), or a number.
+- **Math Falloff**: *Enable math-driven falloff* turns on the engine's math lights, whose falloff you choose here: *Curve* (inverse square (unbounded), linear, smooth, exponential, inverse square (clamped)), *Falloff exponent* (0.1 to 16; unused by linear and smooth), *Inner radius* (0 to 1), and for spot lights *Shape* (1.5 to 32; 2 is an ellipse, 16 a rectangle) and *Penumbra* (0 to 1). *Pattern* adds noise to the light; once you choose a pattern, *Strength* (0 to 1), *Scale* (0.1 to 64) and *Phase* (0 to 100) appear. *Energy clamp (PBR safe)* keeps the light's energy bounded. The math type is shown but cannot be changed: the engine derives it from the light type.
+- **Misc**: *Cast shadows* and *Skip specular*.
+- **Volume Tools**: *Edit volume handles* and *Draw volume* turn on the [light volume tool](#light_volume_tool). *Reset volume to default* puts the volume of every selected light back to the engine's default for its type. It changes only the volume properties; the color, texture, style, shadow flags and math falloff stay.
+
+Above the sections, the panel shows notices where a light needs attention:
+
+- *Bad target info*: some, but not all, of `light_target`, `light_right` and `light_up` are set. The engine reports "bad target info" and lights a point light. *Fix: remove the partial keys* deletes them. The notice stays until you fix it, whatever else you edit.
+- *Stale spot keys on a parallel light*: a sun has all three of `light_target`, `light_right` and `light_up`. The engine then reads neither `light_radius` nor `light_center` for it, which gives it a radius of zero. *Fix: remove the spot keys* deletes the three keys.
+- *Off-centre projection*: the `light_right` or `light_up` vector of a spot is not perpendicular to its target. The volume is drawn as the engine lights it, and the first edit of the volume with the mouse recentres it; the notice says by how many units the largest corner of the far rectangle moves.
+- *Styled: drawn at full radius*: the light has a style other than -1. The engine scales the radius of a styled light with every frame of the style; the volume is drawn at the full radius.
+- *Legacy light_origin*: the light has a `light_origin` property, which some converted maps use and which TrenchBroom does not read. The panel is read-only for such a light until you press *Convert: move light_origin into origin*, which copies the value to `origin`, deletes `light_origin`, and converts its rotation as the *Convert to Angles* quick fix of the [issue browser](#issue_browser) does. Until then, the volume of the light is drawn at `light_origin`, away from the light's entity box, and a line connects the two. The move tool does not move the volume of such a light.
+
+Every control writes its change as soon as you make it, as an [undo step](#undo_redo) named after the control, such as *Set Light Radius*; there is no Apply and no Cancel button, and undo is the way back. A change writes only the properties that it changes: editing the radius of a light does not touch its origin or its color, and with several lights selected, each light keeps its own origin. Setting a control to the value that it already has changes nothing and adds no undo step. TrenchBroom merges changes of the same objects that follow each other within about a second into one undo step, so a color change right after a radius change joins *Set Light Radius*, which keeps its name. Inside a [linked group](#linked_groups) nothing is merged: every change is an undo step of its own, and it updates the other groups of the link set.
+
+### Light Volumes {#light_volumes}
+
+The map views draw the area that each light affects as translucent volumes. Choose #menu(Menu/View/Light Volumes/Off), #menu(Menu/View/Light Volumes/Selected) or #menu(Menu/View/Light Volumes/All) to draw no volumes, the volumes of the selected lights only (the default), or the volumes of all visible lights. The *Light volumes* radio buttons in the view popup at the right of the info bar do the same, and the menu marks and the radio buttons follow each other. While the clip tool hides the selection, the volumes of the selected lights are hidden, too. The color of the tool's handles is the *Light volume handle* color in the colors preferences.
+
+Read the volumes like this:
+
+- A volume has the hue of the light's color. A dim light is fainter, but never invisible; a color brighter than 1 does not make the volume more opaque.
+- The more opaque a place in the volume is, the stronger the light is there. A light's volume is made of nested shells (four for a selected light, only the outermost for the other lights), so it is densest around the center of a point light and fades towards the rim, following the light's falloff curve. The volume of a light with a clamped falloff, or without the math falloff, never gets more opaque than 45 percent, so the walls behind it stay visible; a sun never gets more opaque than that either.
+- A volume that is fully opaque and has sharp edges belongs to an unclamped point or spot light: a light with the math falloff enabled and *Energy clamp* off. With the inverse-square curve and a bright color its core is solid. With *Inner radius* at its maximum the light has no falloff at all, and the volume is a single uniform shell with a sharp edge. A light that is clamped, or whose math falloff is off, never reads fully opaque.
+- A point light is drawn as an ellipsoid inside its box, which is outlined with lines; a small cross marks a *Center*. A sun is a uniform box, because the falloff of a parallel light is constant, with an arrow in the direction that the light travels: from the direction of `light_center` towards the light, and straight down if the light has no center.
+- A spot light is drawn as a beam from the apex to the far cap. Its surface is round with a *Shape* of 2 and nearly rectangular with 16; the beam fades along its length like the light, a fainter inner surface shows where the penumbra begins, and the near and far caps are drawn at half the opacity. Lines mark the edges of the frustum and the near and far rectangles. The engine measures the length of the beam from the near plane, 8 units from the apex unless the light has an explicit start, so the far cap lies beyond the target: the far cap of the default spot light is 264 units below the light, not 256.
+- A light without the math falloff uses the engine's classic falloff image, which the editor cannot read; its volume is drawn with a smooth falloff as a stand-in and is only an approximation.
+- Volumes are tested against the depth of the map but do not write any depth. A volume that reaches through a wall shows only the part that is in front of the wall, translucent surfaces of the map do not hide it, and the volumes of several lights add up. While the volume tool is on, the frustum edges of the selected spot light are also drawn through walls, at reduced opacity.
+- If the camera is inside the volume of a light that is not selected, the volume is drawn with its lines only, so that large lights do not tint the whole view; the volume of a selected light is drawn from the inside.
+- The 2D views draw the fills of the volumes below the brush edges, at 60 percent of their opacity, and the lines above them.
+
+### Editing Light Volumes with the Mouse {#light_volume_tool}
+
+The _light volume tool_ edits the volume of the selected light in the map views. It has no menu entry and no shortcut: you turn it on with the *Edit volume handles* and *Draw volume* buttons of the panel, which are enabled when exactly one light is selected, and which stay pressed while the tool is on. The tool is not one of the modal tools of the table in [Working with Tools](#working-with-tools): the move tool, the selection and the keyboard shortcuts keep working while it is on, so you can still move, rotate, copy, delete, cut, group and flip the light and nudge it with the keys, and the volume follows. Only the resize tool and the simple shape tool are switched off.
+
+In **handle mode**, the tool outlines the light's _edit box_ in the handle color and shows handles on it, like the scale tool does on a brush. For a point light or a sun, the box is the cube from `-radius` to `+radius` around the light, and the volume is drawn inside it. For a spot light, the box is aligned with the beam: the apex is the middle of one face, the far cap is the opposite face, and the real frustum, cone and caps are drawn inside the box. Corners, edges and sides of the box are handles. A spot light also has a handle in the middle of its far cap.
+
+Point light and sun
+:   Drag a side, an edge or a corner, and the box follows the mouse like a brush follows the scale tool. The light's `origin` becomes the center of the new box and `light_radius` its half extents.
+
+Spot light, an edge or corner of the far cap
+:   Dragging it outwards widens the far rectangle and dragging it inwards narrows it, by changing `light_right` and `light_up`; the origin stays. A sideways drag also moves the aim of the beam a little, so the box follows the handle only approximately: a 32-unit drag of the default spot light lands the edge about 9 units from the pointer.
+
+Spot light, the middle of the far cap
+:   Drag it along the beam to make the beam longer or shorter. `light_target` changes (and `light_end` if the light has an explicit start and end), and `light_right` and `light_up` are scaled with the distance, so that the far rectangle stays where the handle left it.
+
+Spot light, the apex face and the far face
+:   Dragging the apex face moves the apex along the beam while the far cap stays where it is; the origin changes. Dragging the far face behaves like dragging the middle of the far cap.
+
+Hold #key(Alt) while you drag to resize the box about its center, so that the opposite side moves the other way. Hold #key(Shift) to resize all axes proportionally; in a 2D view, the axis along the view direction stays. Press #action(Controls/Map view/Cancel) during a drag to put the light back. The tool uses the left mouse button without #key(Ctrl), which selects by painting. The box can only shrink to a half extent of 1 unit, and the beam of a spot light can only get as short as 24 units; a drag that would go beyond keeps the last box that was allowed. A whole drag is one undo step, *Edit Light Volume*, and a drag that ends where it started leaves no undo step.
+
+A drag that starts on a corner, an edge or the middle of the far cap resizes the volume, even if the light's own small box is in the way. A drag that starts on a side of the edit box resizes the volume only if the line of sight under the pointer does not also pass through the light's own box; otherwise it moves the light, as it does without the tool. Clicking a handle, or clicking where there is nothing to select, keeps the light selected; clicking another object selects that object. If the camera is inside the box, you can still drag the handles that are in front of the camera.
+
+In **draw mode**, you draw the volume as you draw a brush with the simple shape tool: drag in the 3D view on a surface or in the horizontal plane, hold #key(Alt) to drag vertically, and the box snaps to the grid. In a 2D view you drag in the view plane, and the extent along the view axis comes from the selected light's box, or is 300 units on either side of the center of the map if no light is selected. When you let go, the light gets the box as its volume and the tool returns to handle mode. A point light or a sun is centered in the box with the half extents of the box as its radius. A spot light points down: its apex is the middle of the top face of the box, its far cap is on the bottom face, and the box must be at least 24 units high, so a flat drag becomes 24 units high. The rotation of the light (`angles` and the other rotation properties) is removed, because the box is aligned with the world. A box with a half extent of less than 1 unit is refused.
+
+Draw mode replaces the volume of the selected light. To draw a **new light**, nothing may be selected: the panel has no *Draw volume* button when nothing is selected, so select a light, press *Draw volume*, and then choose #menu(Menu/Edit/Deselect All); the tool stays on in draw mode. The drag then creates a point `light` entity with its `origin` and `light_radius`, the math falloff already enabled with the settings of the in-game editor (linear curve, inner radius 0.1, exponent 2, shape 2, penumbra 0.15, energy clamp on), and selects it. Creating the light is one undo step, *Create Light*. You can switch it to a spot light or a sun in the panel. If other objects than a single light are selected, a draw drag is refused.
+
+Press #action(Controls/Map view/Cancel) to leave draw mode and again to turn off the tool, or choose #action(Controls/Map view/Deactivate current tool), press the pressed button once more, close the sidebar dock, or load another map.
+
+### The Properties that the Light Editor Writes {#light_keys}
+
+The Light Editor reads and writes the same entity properties as the engine's `ParseSpawnArgsToRenderLight` and the in-game light editor. Which of them it writes depends on the type of the light, and it writes only those that change:
+
+- A **point light** gets `light_radius` and, if *Center* is on, `light_center`. The properties `light_target`, `light_right`, `light_up`, `light_start`, `light_end` and `parallel` are removed, as is `light_center` when *Center* is off.
+- A **sun** gets `light_radius`, `parallel` set to `1`, and `light_center` if *Center* is on. It has no style, so `style` is removed together with `light_target`, `light_right`, `light_up`, `light_start` and `light_end`.
+- A **spot light** gets `light_target`, `light_right` and `light_up`, and `light_start` and `light_end` if *Explicit start and end points* is on. The properties `light_radius`, `light_center` and `parallel` are removed, and so are `light_start` and `light_end` if the light has no explicit start and end.
+
+Every light also has these, written when they change: `origin` (not for a light with `light_origin`), `angles` (which removes `light_rotation`, `rotation`, `light_angles` and `angle`), `_color`, `texture` (removed for the engine default), `style` (removed for -1), `noshadows` (the inverse of *Cast shadows*), `nospecular`. If *Enable math-driven falloff* is on, the light has all twelve math properties, `math_enabled`, `math_type`, `math_falloff`, `math_falloff_exp`, `math_inner_radius`, `math_shape_exp`, `math_penumbra`, `math_pattern`, `math_pattern_strength`, `math_pattern_scale`, `math_pattern_phase` and `math_energy_clamp`; if it is off, all twelve are removed. `math_type` is always written from the light's type, and the engine ignores any other value. The old `light` property is read by the engine only if `light_radius` is missing; the Light Editor writes `light_radius` and leaves `light` where it is.
+
+Vectors are written with three components and at most two decimals, without trailing zeros, such as `-15.52 0 -256.01`; `_color` is the hue multiplied by the intensity, with at most four decimals, such as `2 2 2` for a white light of intensity 2; the math properties have at most four decimals; flags are `1` and `0`.
+
 ## Undo and Redo {#undo_redo}
 
 Almost everything that you do in TrenchBroom can be undone by choosing #menu(Menu/Edit/Undo). This applies to every action that somehow modifies the map file (such as moving objects), but it also applies to some actions that do not change the map file, such as selection, hiding, and locking. There is no limit to how many actions you can undo, and once an action is undone, you can redo it by choosing #menu(Menu/Edit/Redo).
@@ -2968,6 +3060,14 @@ With the rotation policy `"quake"`, TrenchBroom shows and turns entities by thei
 - An entity with brushes or patches never gets `angles` or `rotation`. TrenchBroom turns its brushes, and the engine would turn them a second time. Its `angle`, the direction in which a door or another mover moves, is shown by the entity's arrow and turned with the brushes in whole degrees, with `-1` for up and `-2` for down.
 
 With `"idtech4"`, a validator in the [issue browser](#issue_browser) reports the rotation properties that TrenchBroom does not write: `angles` or `rotation` on an entity with brushes or patches, and `rotation` on a point entity or `light_rotation` and `light_angles` on a light. Its quick fixes delete the reported property, or convert the rotation of the reported point entities to `angles` without turning them. Another validator reports brushes with two adjacent faces within 6 degrees of each other (*Nearly coplanar faces*), which includes cylinder brushes with more than 60 sides, and the *Non-integer vertices* issue explains that dmap welds vertices on a 1/32 grid; dmap leaves cracks at both (see [Sweeping](#sweeping)).
+
+The optional `lightEditor` key turns on the [Light Editor](#light_editor) for a game. The only value is `"idtech4"`, for RBDOOM-3-BFG and other Doom 3 engines, whose lights are described by the properties `light_radius`, `light_target` and so on; any other value is an error. Without the key, the Light Editor panel says that the game has no light editor, the entries of the *Light Volumes* menu are disabled, the *Light volumes* radio buttons are missing from the view popup, and no light volumes are drawn.
+
+    "entities": {
+        "definitions": [ "DOOM-3-slim.fgd" ],
+        "defaultcolor": "0.6 0.6 0.6 1.0",
+        "lightEditor": "idtech4"
+    },
 
 #### Tags {#game_configuration_files_tags}
 
