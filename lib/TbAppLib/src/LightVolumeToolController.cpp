@@ -39,7 +39,9 @@
 #include "vm/line.h"
 #include "vm/plane.h"
 
+#include <optional>
 #include <utility>
+#include <vector>
 
 namespace tb::ui
 {
@@ -90,8 +92,7 @@ std::pair<AnchorPos, ProportionalAxes> modifierSettingsForInputState(
 
 void updateModifierSettings(LightVolumeTool& tool, const InputState& inputState)
 {
-  const auto volume =
-    tool.isDragging() ? std::optional{tool.dragStartVolume()} : tool.volumeBox();
+  const auto volume = tool.isDragging() ? tool.dragStartVolume() : tool.volumeBox();
   if (volume)
   {
     const auto [anchorPos, proportionalAxes] =
@@ -134,6 +135,11 @@ HandlePositionProposer makeHandleProposer(
     makeAbsoluteLineHandleSnapper(grid, handleLine));
 }
 
+/**
+ * The tool's drag can end under the tracker: a deactivation cancels it, and so does an
+ * update that cannot change the light. The delegate then proposes no handle position and
+ * ends the drag at the next update.
+ */
 class LightVolumeHandleDragDelegate : public HandleDragTrackerDelegate
 {
 private:
@@ -151,26 +157,14 @@ public:
     const vm::vec3d& handleOffset) override
   {
     updateModifierSettings(m_tool, inputState);
-
-    return makeHandleProposer(
-      inputState,
-      m_tool.grid(),
-      m_tool.dragHit(),
-      m_tool.dragStartVolume(),
-      handleOffset);
+    return makeProposer(inputState, handleOffset);
   }
 
   std::optional<UpdateDragConfig> modifierKeyChange(
     const InputState& inputState, const DragState& dragState) override
   {
     return UpdateDragConfig{
-      makeHandleProposer(
-        inputState,
-        m_tool.grid(),
-        m_tool.dragHit(),
-        m_tool.dragStartVolume(),
-        dragState.handleOffset),
-      ResetInitialHandlePosition::Keep};
+      makeProposer(inputState, dragState.handleOffset), ResetInitialHandlePosition::Keep};
   }
 
   DragStatus update(
@@ -178,14 +172,22 @@ public:
     const DragState& dragState,
     const vm::vec3d& proposedHandlePosition) override
   {
+    if (!m_tool.isDragging())
+    {
+      return DragStatus::End;
+    }
+
     // a denied step is not accumulated by the tool, and the tracker keeps the handle
     // where it was
     const auto delta = proposedHandlePosition - dragState.currentHandlePosition;
-    return m_tool.update(delta) ? DragStatus::Continue : DragStatus::Deny;
+    return m_tool.update(delta)  ? DragStatus::Continue
+           : m_tool.isDragging() ? DragStatus::Deny
+                                 : DragStatus::End;
   }
 
   void end(const InputState& inputState, const DragState&) override
   {
+    // nothing if the drag was cancelled under the tracker
     m_tool.endDrag();
 
     // the mouse is over a different handle now
@@ -193,6 +195,20 @@ public:
   }
 
   void cancel(const DragState&) override { m_tool.cancelDrag(); }
+
+private:
+  HandlePositionProposer makeProposer(
+    const InputState& inputState, const vm::vec3d& handleOffset) const
+  {
+    if (const auto& volume = m_tool.dragStartVolume())
+    {
+      return makeHandleProposer(
+        inputState, m_tool.grid(), m_tool.dragHit(), *volume, handleOffset);
+    }
+    return [](const InputState&, const DragState&) -> std::optional<vm::vec3d> {
+      return std::nullopt;
+    };
+  }
 };
 
 /**
@@ -642,7 +658,7 @@ std::unique_ptr<GestureTracker> LightVolumeToolController::acceptMouseDrag(
     return nullptr;
   }
 
-  const auto handleLine = lightVolumeHandleLine(m_tool.dragStartVolume(), hit);
+  const auto handleLine = lightVolumeHandleLine(*m_tool.dragStartVolume(), hit);
   return createHandleDragTracker(
     LightVolumeHandleDragDelegate{m_tool},
     inputState,

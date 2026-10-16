@@ -1590,7 +1590,9 @@ void ActionManager::createToolsMenu()
     [](auto& context) { context.mapView().deactivateCurrentTool(); },
     [](const auto& context) { return context.hasDocument(); },
     [](const auto& context) {
-      return context.hasDocument() && !context.mapWindow().toolBox().anyModalToolActive();
+      // the light volume tool is not modal for the actions (D31), but it is a tool
+      return context.hasDocument() && !context.mapWindow().toolBox().anyModalToolActive()
+             && !context.mapWindow().toolBox().lightVolumeToolActive();
     },
     std::filesystem::path{"NoTool.svg"},
   }));

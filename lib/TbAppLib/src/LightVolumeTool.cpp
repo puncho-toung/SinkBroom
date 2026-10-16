@@ -60,7 +60,9 @@
 #include "vm/segment.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -750,16 +752,18 @@ const mdl::Hit& LightVolumeTool::dragHit() const
   return m_dragHit;
 }
 
-const LightVolumeBox& LightVolumeTool::dragStartVolume() const
+const std::optional<LightVolumeBox>& LightVolumeTool::dragStartVolume() const
 {
-  contract_pre(m_dragging);
-
-  return *m_dragStart;
+  return m_dragStart;
 }
 
 bool LightVolumeTool::update(const vm::vec3d& delta)
 {
-  contract_pre(m_dragging);
+  // the drag was cancelled under the drag tracker, by a deactivation or a failed update
+  if (!m_dragging)
+  {
+    return false;
+  }
 
   const auto& start = *m_dragStart;
   const auto dragDelta = m_dragDelta + delta;
@@ -804,10 +808,9 @@ bool LightVolumeTool::update(const vm::vec3d& delta)
       {{entityNode,
         mdl::NodeContents{mdl::applyLightPropertyUpdate(entityNode->entity(), diff)}}}))
   {
-    // the rollback left the light at the start of the drag
-    m_dragBox = start.box;
-    m_dragDelta = vm::vec3d{0, 0, 0};
-    refreshViews();
+    // the light is back at the start of the drag, but the drag tracker would keep the
+    // last accepted handle: end the drag
+    cancelDrag();
     return false;
   }
 
@@ -818,7 +821,10 @@ bool LightVolumeTool::update(const vm::vec3d& delta)
 
 void LightVolumeTool::endDrag()
 {
-  contract_pre(m_dragging);
+  if (!m_dragging)
+  {
+    return;
+  }
 
   auto& map = m_document.map();
   m_dragging = false;
@@ -841,7 +847,10 @@ void LightVolumeTool::endDrag()
 
 void LightVolumeTool::cancelDrag()
 {
-  contract_pre(m_dragging);
+  if (!m_dragging)
+  {
+    return;
+  }
 
   m_document.map().cancelTransaction();
   m_dragging = false;
@@ -1090,6 +1099,20 @@ bool LightVolumeTool::createDrawnLight()
   auto changed =
     mdl::applyLightPropertyUpdate(entity, mdl::lightKeyDiff(entity, *m_drawLight));
   removeRotationProperties(changed);
+
+  // a light drawn around the world origin was moved by nothing, so it has no origin
+  // property yet, and the diff writes none because it reads the same origin before and
+  // after
+  if (!changed.hasProperty(mdl::EntityPropertyKeys::Origin))
+  {
+    for (const auto& property : mdl::lightPropertyUpdate(*m_drawLight).set)
+    {
+      if (property.key() == mdl::EntityPropertyKeys::Origin)
+      {
+        changed.addOrUpdateProperty(property.key(), property.value());
+      }
+    }
+  }
   if (
     !(changed == entity)
     && !mdl::updateNodeContents(

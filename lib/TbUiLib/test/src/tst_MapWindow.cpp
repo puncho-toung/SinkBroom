@@ -365,6 +365,37 @@ TEST_CASE("MapWindow")
     CHECK_FALSE(toolBox.lightVolumeToolActive());
   }
 
+  SECTION("Deactivate Current Tool is unchecked while the light volume tool is active")
+  {
+    QAction* deactivateAction = nullptr;
+    for (auto* menuAction : window.menuBar()->actions())
+    {
+      if (menuAction->text() == "Tools")
+      {
+        for (auto* action : QMenu::menuInAction(menuAction)->actions())
+        {
+          if (action->text() == "Deactivate Current Tool")
+          {
+            deactivateAction = action;
+          }
+        }
+      }
+    }
+    REQUIRE(deactivateAction != nullptr);
+
+    auto& toolBox = window.toolBox();
+    QApplication::processEvents();
+    REQUIRE(deactivateAction->isChecked());
+
+    toolBox.toggleTool(toolBox.lightVolumeTool());
+    QApplication::processEvents();
+    CHECK_FALSE(deactivateAction->isChecked());
+
+    toolBox.toggleTool(toolBox.lightVolumeTool());
+    QApplication::processEvents();
+    CHECK(deactivateAction->isChecked());
+  }
+
   SECTION("canReloadMaterialCollections returns false when resources need processing")
   {
     using TestResourceT = gl::Resource<TestResource>;

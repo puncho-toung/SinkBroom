@@ -20,7 +20,13 @@
 #include <QStackedLayout>
 #include <QWidget>
 
+#include "mdl/Entity.h"
+#include "mdl/EntityNode.h"
+#include "mdl/Hit.h"
+#include "mdl/Map.h"
 #include "mdl/MapFixture.h"
+#include "mdl/Map_Nodes.h"
+#include "mdl/Map_Selection.h"
 #include "ui/CatchConfig.h"
 #include "ui/ClipTool.h" // IWYU pragma: keep
 #include "ui/DrawShapeTool.h"
@@ -31,7 +37,10 @@
 #include "ui/MapViewToolBox.h"
 #include "ui/MoveObjectsTool.h"
 #include "ui/RotateTool.h" // IWYU pragma: keep
+#include "ui/ScaleTool.h"
 #include "ui/VertexTool.h" // IWYU pragma: keep
+
+#include "vm/vec.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -94,6 +103,37 @@ TEST_CASE("MapViewToolBox")
       toolBox.toggleTool(lightVolumeTool);
       REQUIRE(toolBox.deactivateCurrentTool());
       CHECK_FALSE(lightVolumeTool.active());
+    }
+
+    SECTION("a drag ends quietly when another tool replaces it")
+    {
+      auto& map = document.map();
+      auto* lightNode = new mdl::EntityNode{mdl::Entity{{
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+      }}};
+      REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), {lightNode}}}).empty());
+      mdl::selectNodes(map, {lightNode});
+      const auto properties = lightNode->entity().properties();
+      const auto undoName = *map.undoCommandName();
+
+      toolBox.toggleTool(lightVolumeTool);
+      REQUIRE(lightVolumeTool.beginDrag(mdl::Hit{
+        LightVolumeTool::SideHitType,
+        0.0,
+        vm::vec3d{0, 0, 0},
+        BBoxSide{vm::vec3d{1, 0, 0}}}));
+      REQUIRE(lightVolumeTool.update(vm::vec3d{32, 0, 0}));
+
+      toolBox.toggleTool(toolBox.rotateTool());
+      REQUIRE_FALSE(lightVolumeTool.active());
+      CHECK_FALSE(lightVolumeTool.isDragging());
+      CHECK(lightNode->entity().properties() == properties);
+
+      CHECK_FALSE(lightVolumeTool.update(vm::vec3d{32, 0, 0}));
+      lightVolumeTool.endDrag();
+      CHECK(lightNode->entity().properties() == properties);
+      CHECK(*map.undoCommandName() == undoName);
     }
 
     SECTION("is deactivated when a map is loaded")

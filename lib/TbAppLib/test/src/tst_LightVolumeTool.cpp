@@ -579,6 +579,30 @@ TEST_CASE("LightVolumeTool")
       CHECK(*map.undoCommandName() == undoName);
     }
 
+    SECTION("a deactivation cancels the drag, which then does nothing")
+    {
+      auto* lightNode = createLight(map, "0 0 0", {});
+      const auto properties = lightNode->entity().properties();
+      const auto undoName = *map.undoCommandName();
+
+      REQUIRE(tool.activate());
+      REQUIRE(tool.beginDrag(sideHit({1, 0, 0})));
+      REQUIRE(tool.update({32, 0, 0}));
+      REQUIRE(tool.deactivate());
+
+      CHECK_FALSE(tool.isDragging());
+      CHECK(tool.dragStartVolume() == std::nullopt);
+      CHECK(lightNode->entity().properties() == properties);
+
+      // the drag tracker may call the tool after the deactivation
+      CHECK_FALSE(tool.update({32, 0, 0}));
+      tool.endDrag();
+      tool.cancelDrag();
+
+      CHECK(lightNode->entity().properties() == properties);
+      CHECK(*map.undoCommandName() == undoName);
+    }
+
     SECTION("a drag needs a selected light")
     {
       createLight(map, "0 0 0", {});
@@ -758,6 +782,19 @@ TEST_CASE("LightVolumeTool")
       CHECK(*map.undoCommandName() == "Create Light");
       map.undoCommand();
       CHECK(map.worldNode().defaultLayer()->childCount() == entityCount);
+    }
+
+    SECTION("a new light around the world origin has an origin")
+    {
+      mdl::deselectAll(map);
+
+      CHECK(tool.updateDraw(vm::bbox3d{{-64, -64, -32}, {64, 64, 32}}));
+      tool.endDraw();
+
+      REQUIRE(map.selection().entities.size() == 1);
+      const auto* lightNode = map.selection().entities.front();
+      CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+      CHECK(valueOf(*lightNode, "light_radius") == "64 64 32");
     }
 
     SECTION("a half extent below 1 is refused")

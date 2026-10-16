@@ -217,21 +217,29 @@ public:
   const mdl::Hit& dragHit() const;
 
   /**
-   * The volume at the start of the drag. Only while dragging.
+   * The volume at the start of the drag; nothing if no drag is in progress.
    */
-  const LightVolumeBox& dragStartVolume() const;
+  const std::optional<LightVolumeBox>& dragStartVolume() const;
 
   /**
-   * Moves the dragged handle by the given world delta, accumulated since the start of the
-   * drag. Returns false if the moved box is denied (the light keeps the last accepted
-   * box) and the delta is then not accumulated.
+   * Moves the dragged handle by the given world delta, the step since the last accepted
+   * update; the tool adds the steps up to the delta since the start of the drag. Returns
+   * false if the step is denied: the moved box is denied, and the light keeps the last
+   * accepted box and the step is not added. Also returns false if no drag is in progress,
+   * and if the light cannot be changed, in which case the drag is cancelled.
    */
   bool update(const vm::vec3d& delta);
 
   /**
-   * Commits the drag, or cancels it if the light is back at its starting box.
+   * Commits the drag, or cancels it if the light is back at its starting box. Does
+   * nothing if no drag is in progress (it was cancelled by a deactivation or a failed
+   * update while the drag tracker lived on).
    */
   void endDrag();
+
+  /**
+   * Cancels the drag, if one is in progress.
+   */
   void cancelDrag();
 
   /**

@@ -289,6 +289,51 @@ TEST_CASE("LightVolumeToolController")
         CHECK(*lightNode->entity().property("light_radius") == "316 300 300");
       }
 
+      SECTION("a drag that the tool's deactivation cancelled ends quietly")
+      {
+        map.grid().toggleSnap();
+
+        const auto properties = lightNode->entity().properties();
+        const auto undoName = *map.undoCommandName();
+
+        const auto startRay = vm::ray3d{{300, -100, 0}, vm::vec3d{0, 1, 0}};
+        const auto startCamera = perspectiveCameraFor(startRay);
+        auto inputState = inputStateFor(
+          startRay,
+          startCamera,
+          {mdl::Hit{
+            LightVolumeTool::SideHitType,
+            100.0,
+            vm::vec3d{300, 0, 0},
+            BBoxSide{vm::vec3d{1, 0, 0}}}});
+        auto tracker = controller.acceptMouseDrag(inputState);
+        REQUIRE(tracker != nullptr);
+
+        const auto dragRay = vm::ray3d{{332, -100, 0}, vm::vec3d{0, 1, 0}};
+        auto dragInputState = inputStateFor(dragRay, startCamera, {});
+        REQUIRE(tracker->update(dragInputState));
+        REQUIRE(lightNode->entity().properties() != properties);
+
+        // e.g. a key that turns on another tool, which the tool box does not route
+        // through the tracker
+        REQUIRE(tool.deactivate());
+        CHECK(lightNode->entity().properties() == properties);
+
+        // the tracker lives on: its next update ends the drag
+        const auto laterRay = vm::ray3d{{364, -100, 0}, vm::vec3d{0, 1, 0}};
+        CHECK_FALSE(tracker->update(inputStateFor(laterRay, startCamera, {})));
+
+        // and after a modifier change it proposes no handle position at all
+        tracker->modifierKeyChange(
+          inputStateFor(laterRay, startCamera, {}, ModifierKeys::Shift));
+        const auto lastRay = vm::ray3d{{396, -100, 0}, vm::vec3d{0, 1, 0}};
+        CHECK(tracker->update(inputStateFor(lastRay, startCamera, {})));
+        tracker->end(dragInputState);
+
+        CHECK(lightNode->entity().properties() == properties);
+        CHECK(*map.undoCommandName() == undoName);
+      }
+
       SECTION("draw mode")
       {
         tool.setMode(LightVolumeTool::Mode::Draw);
