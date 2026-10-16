@@ -51,6 +51,7 @@
 #include "mdl/NodeContents.h"
 #include "mdl/PropertyDefinition.h"
 #include "mdl/Selection.h"
+#include "prefs/Preferences.h"
 #include "ui/BitmapButton.h"
 #include "ui/ColorButton.h"
 #include "ui/FormWithSectionsLayout.h"
@@ -60,6 +61,7 @@
 #include "ui/QStyleUtils.h"
 #include "ui/SignalDelayer.h"
 #include "ui/SpinControl.h"
+#include "ui/TabBook.h"
 #include "ui/ViewConstants.h"
 
 #include "kd/contracts.h"
@@ -202,8 +204,14 @@ constexpr auto PenumbraRange = SpinRange{0.0, 1.0, 4, 0.01, 0.1, 0.25};
 constexpr auto PatternStrengthRange = SpinRange{0.0, 1.0, 4, 0.01, 0.1, 0.25};
 constexpr auto PatternScaleRange = SpinRange{0.1, 64.0, 4, 0.1, 1.0, 4.0};
 constexpr auto PatternPhaseRange = SpinRange{0.0, 100.0, 4, 0.1, 1.0, 10.0};
+// the light volume handle threshold in percent, 0.01 to 0.5 (D53)
+constexpr auto HandleThresholdRange = SpinRange{1.0, 50.0, 0, 1.0, 5.0, 10.0};
 
 constexpr auto SliderSteps = 1000;
+
+// the pages of the two kinds of light (D50)
+constexpr auto MathPageIndex = 0;
+constexpr auto TexturePageIndex = 1;
 
 SpinControl* createSpin(const QString& name, const SpinRange& range)
 {
@@ -265,6 +273,44 @@ QComboBox* createComboBox(const QString& name, const QStringList& items)
   comboBox->setObjectName(controlName(name));
   comboBox->addItems(items);
   return comboBox;
+}
+
+FormWithSectionsLayout* createForm()
+{
+  auto* form = new FormWithSectionsLayout{};
+  form->setContentsMargins(0, LayoutConstants::WideVMargin, 0, 0);
+  form->setHorizontalSpacing(LayoutConstants::NarrowHMargin);
+  form->setVerticalSpacing(LayoutConstants::NarrowVMargin);
+  return form;
+}
+
+QWidget* createFormWidget(QLayout* form)
+{
+  auto* widget = new QWidget{};
+  widget->setLayout(form);
+  return widget;
+}
+
+TabBookPage* createTabPage(const QString& name, QLayout* form)
+{
+  auto* page = new TabBookPage{};
+  page->setObjectName(controlName(name));
+  page->setLayout(form);
+  return page;
+}
+
+/**
+ * Sizes the tab book to the page that it shows: a stacked layout is as large as its
+ * largest page, unless the other pages ignore their sizes.
+ */
+void fitTabPages(const std::array<TabBookPage*, 2>& pages, const int currentIndex)
+{
+  for (size_t i = 0; i < pages.size(); ++i)
+  {
+    const auto policy =
+      int(i) == currentIndex ? QSizePolicy::Preferred : QSizePolicy::Ignored;
+    pages[i]->setSizePolicy(policy, policy);
+  }
 }
 
 QToolButton* createTextButton(const QString& name, const QString& text)
@@ -618,7 +664,14 @@ struct LightEditorPanel::Controls
   QWidget* styledNotice = nullptr;
 
   QWidget* editor = nullptr;
+  // the light's geometry and colour
   FormWithSectionsLayout* form = nullptr;
+  // the pages of math lights and texture lights, each with its own form (D50)
+  TabBook* tabs = nullptr;
+  TabBookPage* mathPage = nullptr;
+  TabBookPage* texturePage = nullptr;
+  FormWithSectionsLayout* mathForm = nullptr;
+  FormWithSectionsLayout* textureForm = nullptr;
 
   // every control that the user changes, blocked while the controls are set
   std::vector<QObject*> inputs;
@@ -678,8 +731,9 @@ struct LightEditorPanel::Controls
   QToolButton* editVolumeHandlesButton = nullptr;
   QToolButton* drawVolumeButton = nullptr;
   QToolButton* resetVolumeButton = nullptr;
+  SpinControl* handleThreshold = nullptr;
 
-  // the rows that depend on the light's type and options
+  // the rows of form that depend on the light's type and options
   int mixedTypesRow = -1;
   int equalRadiusRow = -1;
   int radiusRow = -1;
@@ -692,8 +746,11 @@ struct LightEditorPanel::Controls
   int explicitStartEndRow = -1;
   int startRow = -1;
   int endRow = -1;
+  // the rows of textureForm
   int styleChoiceRow = -1;
   int styleRow = -1;
+  // the rows of mathForm
+  int mixedMathRow = -1;
   int mathTypeRow = -1;
   int falloffRow = -1;
   int falloffExpRow = -1;
@@ -805,10 +862,51 @@ QWidget* LightEditorPanel::createEditorPage()
   setInfoStyle(styledText);
   c.styledNotice = createNotice(styledText);
 
-  auto* form = new FormWithSectionsLayout{};
-  form->setContentsMargins(0, LayoutConstants::WideVMargin, 0, 0);
-  form->setHorizontalSpacing(LayoutConstants::NarrowHMargin);
-  form->setVerticalSpacing(LayoutConstants::NarrowVMargin);
+  // volume tools, first (D50): the only entry points to the light volume tool (D20)
+  c.editVolumeHandlesButton = createVolumeToolButton(
+    "EditVolumeHandles", "ScaleTool.svg", tr("Edit volume handles"));
+  c.editVolumeHandlesButton->setToolTip(
+    tr("Resize the light's volume with the handles of its box in the map views"));
+  c.drawVolumeButton =
+    createVolumeToolButton("DrawVolume", "BrushTool.svg", tr("Draw volume"));
+  c.drawVolumeButton->setToolTip(
+    tr("Draw a new volume for the light, aligned with the world, in the map views"));
+  for (auto* button : {c.editVolumeHandlesButton, c.drawVolumeButton})
+  {
+    button->setCheckable(true);
+  }
+  c.resetVolumeButton =
+    createVolumeToolButton("ResetVolume", "ResetUV.svg", tr("Reset volume to default"));
+  c.resetVolumeButton->setToolTip(
+    tr("Reset the volume to the engine's default for the light's type"));
+  c.handleThreshold = createSpin("HandleThreshold", HandleThresholdRange);
+  c.handleThreshold->setSuffix(" %");
+  c.handleThreshold->setToolTip(
+    tr("A point light's handle box lies where its falloff drops below this share of "
+       "its brightness"));
+
+  auto* toolLayout = createRowLayout();
+  toolLayout->addWidget(c.editVolumeHandlesButton);
+  toolLayout->addWidget(c.drawVolumeButton);
+  toolLayout->addStretch(1);
+
+  auto* resetLayout = createRowLayout();
+  resetLayout->addWidget(c.resetVolumeButton);
+  resetLayout->addStretch(1);
+  resetLayout->addWidget(new QLabel{tr("Handles at")});
+  resetLayout->addWidget(c.handleThreshold);
+
+  auto* volumeToolsLayout = new QVBoxLayout{};
+  volumeToolsLayout->setContentsMargins(0, 0, LayoutConstants::WideHMargin, 0);
+  volumeToolsLayout->setSpacing(LayoutConstants::NarrowVMargin);
+  volumeToolsLayout->addLayout(toolLayout);
+  volumeToolsLayout->addLayout(resetLayout);
+
+  auto* volumeTools = new QWidget{};
+  volumeTools->setObjectName(controlName("VolumeTools"));
+  volumeTools->setLayout(volumeToolsLayout);
+
+  auto* form = createForm();
   c.form = form;
 
   // type
@@ -866,32 +964,30 @@ QWidget* LightEditorPanel::createEditorPage()
   c.angles[1]->setToolTip(tr("Yaw"));
   c.angles[2]->setToolTip(tr("Roll"));
 
-  // colour and texture
-  form->addSection(tr("Color and Texture"));
+  // colour
+  form->addSection(tr("Color"));
   c.color = new ColorButton{};
   c.color->setObjectName(controlName("Color"));
   form->addRow(tr("Color"), c.color);
   c.intensity = createSpin("Intensity", IntensityRange);
   c.intensity->setToolTip(tr("The brightest component of the color"));
   form->addRow(tr("Intensity"), c.intensity);
-  c.texture = createComboBox("Texture", {EngineDefaultTexture});
-  c.texture->setEditable(true);
-  c.texture->setInsertPolicy(QComboBox::NoInsert);
-  c.texture->setItemData(0, "lights/squarelight1", Qt::ToolTipRole);
-  form->addRow(tr("Texture"), c.texture);
-  // the choices of the entity definition, else a number
-  c.styleChoice = createComboBox("StyleChoice", {});
-  c.styleChoiceRow = addRow(*form, tr("Style"), c.styleChoice);
-  c.style = createSpin("Style", StyleRange);
-  c.styleRow = addRow(*form, tr("Style"), c.style);
 
-  // math falloff
-  form->addSection(tr("Math Falloff"));
+  // the math light page: the math block of the engine's math lights
+  auto* mathForm = createForm();
+  c.mathForm = mathForm;
+  auto* mixedMathText = createNoticeLabel(
+    "MixedMathNotice",
+    tr("The selected lights are math and texture lights: choose a tab to make all of "
+       "them lights of its kind."));
+  mixedMathText->setWordWrap(true);
+  setInfoStyle(mixedMathText);
+  c.mixedMathRow = addRow(*mathForm, mixedMathText);
   c.mathEnabled = createCheckBox("MathEnabled", tr("Enable math-driven falloff"));
-  form->addRow(c.mathEnabled);
+  mathForm->addRow(c.mathEnabled);
   c.mathType = new QLabel{};
   c.mathType->setObjectName(controlName("MathType"));
-  c.mathTypeRow = addRow(*form, tr("Type"), c.mathType);
+  c.mathTypeRow = addRow(*mathForm, tr("Type"), c.mathType);
   c.falloff = createComboBox(
     "Falloff",
     {
@@ -901,23 +997,23 @@ QWidget* LightEditorPanel::createEditorPage()
       tr("Exponential"),
       tr("Inverse Square (clamped) - PBR safe"),
     });
-  c.falloffRow = addRow(*form, tr("Curve"), c.falloff);
+  c.falloffRow = addRow(*mathForm, tr("Curve"), c.falloff);
   c.falloffExpRow = addRow(
-    *form,
+    *mathForm,
     tr("Falloff exponent"),
     createSliderLayout(c.falloffExpSlider, c.falloffExp, "FalloffExp", FalloffExpRange));
   c.innerRadiusRow = addRow(
-    *form,
+    *mathForm,
     tr("Inner radius"),
     createSliderLayout(
       c.innerRadiusSlider, c.innerRadius, "InnerRadius", InnerRadiusRange));
   c.shapeExpRow = addRow(
-    *form,
+    *mathForm,
     tr("Shape"),
     createSliderLayout(c.shapeExpSlider, c.shapeExp, "ShapeExp", ShapeExpRange));
   c.shapeExp->setToolTip(tr("2 is an ellipse, 16 a rectangle"));
   c.penumbraRow = addRow(
-    *form,
+    *mathForm,
     tr("Penumbra"),
     createSliderLayout(c.penumbraSlider, c.penumbra, "Penumbra", PenumbraRange));
   c.pattern = createComboBox(
@@ -930,9 +1026,9 @@ QWidget* LightEditorPanel::createEditorPage()
       tr("Banded (sine rings)"),
       tr("Granular (stippled)"),
     });
-  c.patternRow = addRow(*form, tr("Pattern"), c.pattern);
+  c.patternRow = addRow(*mathForm, tr("Pattern"), c.pattern);
   c.patternStrengthRow = addRow(
-    *form,
+    *mathForm,
     tr("Strength"),
     createSliderLayout(
       c.patternStrengthSlider,
@@ -940,56 +1036,50 @@ QWidget* LightEditorPanel::createEditorPage()
       "PatternStrength",
       PatternStrengthRange));
   c.patternScaleRow = addRow(
-    *form,
+    *mathForm,
     tr("Scale"),
     createSliderLayout(
       c.patternScaleSlider, c.patternScale, "PatternScale", PatternScaleRange));
   c.patternPhaseRow = addRow(
-    *form,
+    *mathForm,
     tr("Phase"),
     createSliderLayout(
       c.patternPhaseSlider, c.patternPhase, "PatternPhase", PatternPhaseRange));
   c.energyClamp = createCheckBox("EnergyClamp", tr("Energy clamp (PBR safe)"));
-  c.energyClampRow = addRow(*form, c.energyClamp);
+  c.energyClampRow = addRow(*mathForm, c.energyClamp);
+
+  // the texture light page: the light material and the engine's style
+  auto* textureForm = createForm();
+  c.textureForm = textureForm;
+  c.texture = createComboBox("Texture", {EngineDefaultTexture});
+  c.texture->setEditable(true);
+  c.texture->setInsertPolicy(QComboBox::NoInsert);
+  c.texture->setItemData(0, "lights/squarelight1", Qt::ToolTipRole);
+  textureForm->addRow(tr("Texture"), c.texture);
+  // the choices of the entity definition, else a number
+  c.styleChoice = createComboBox("StyleChoice", {});
+  c.styleChoiceRow = addRow(*textureForm, tr("Style"), c.styleChoice);
+  c.style = createSpin("Style", StyleRange);
+  c.styleRow = addRow(*textureForm, tr("Style"), c.style);
+
+  c.mathPage = createTabPage("MathPage", mathForm);
+  c.texturePage = createTabPage("TexturePage", textureForm);
+  c.tabs = new TabBook{};
+  c.tabs->setObjectName(controlName("Tabs"));
+  c.tabs->addPage(c.mathPage, tr("Math"));
+  c.tabs->addPage(c.texturePage, tr("Texture"));
+  fitTabPages({c.mathPage, c.texturePage}, MathPageIndex);
 
   // misc
-  form->addSection(tr("Misc"));
+  auto* miscForm = createForm();
+  miscForm->addSection(tr("Misc"));
   c.castShadows = createCheckBox("CastShadows", tr("Cast shadows"));
-  form->addRow(c.castShadows);
+  miscForm->addRow(c.castShadows);
   c.skipSpecular = createCheckBox("SkipSpecular", tr("Skip specular"));
-  form->addRow(c.skipSpecular);
-
-  // volume tools: the only entry points to the light volume tool (D20)
-  form->addSection(tr("Volume Tools"));
-  c.editVolumeHandlesButton = createVolumeToolButton(
-    "EditVolumeHandles", "ScaleTool.svg", tr("Edit volume handles"));
-  c.editVolumeHandlesButton->setToolTip(
-    tr("Resize the light's volume with the handles of its box in the map views"));
-  c.drawVolumeButton =
-    createVolumeToolButton("DrawVolume", "BrushTool.svg", tr("Draw volume"));
-  c.drawVolumeButton->setToolTip(
-    tr("Draw a new volume for the light, aligned with the world, in the map views"));
-  for (auto* button : {c.editVolumeHandlesButton, c.drawVolumeButton})
-  {
-    button->setCheckable(true);
-  }
-  c.resetVolumeButton =
-    createVolumeToolButton("ResetVolume", "ResetUV.svg", tr("Reset volume to default"));
-  c.resetVolumeButton->setToolTip(
-    tr("Reset the volume to the engine's default for the light's type"));
-
-  auto* toolLayout = createRowLayout();
-  toolLayout->addWidget(c.editVolumeHandlesButton);
-  toolLayout->addWidget(c.drawVolumeButton);
-  toolLayout->addStretch(1);
-  form->addRow(toolLayout);
-
-  auto* resetLayout = createRowLayout();
-  resetLayout->addWidget(c.resetVolumeButton);
-  resetLayout->addStretch(1);
-  form->addRow(resetLayout);
+  miscForm->addRow(c.skipSpecular);
 
   c.inputs = {
+    c.handleThreshold,
     c.equalRadius,
     c.radius,
     c.center,
@@ -1035,8 +1125,19 @@ QWidget* LightEditorPanel::createEditorPage()
     c.inputs.insert(c.inputs.end(), spins->begin(), spins->end());
   }
 
+  // top to bottom: the volume tools, the light's geometry and colour, the page of its
+  // kind, the flags (D50)
+  auto* editorLayout = new QVBoxLayout{};
+  editorLayout->setContentsMargins(0, 0, 0, 0);
+  editorLayout->setSpacing(LayoutConstants::WideVMargin);
+  editorLayout->addWidget(volumeTools);
+  editorLayout->addWidget(createFormWidget(form));
+  editorLayout->addWidget(c.tabs);
+  editorLayout->addWidget(createFormWidget(miscForm));
+
   c.editor = new QWidget{};
-  c.editor->setLayout(form);
+  c.editor->setObjectName(controlName("Editor"));
+  c.editor->setLayout(editorLayout);
 
   auto* contentLayout = new QVBoxLayout{};
   contentLayout->setContentsMargins(
@@ -1325,6 +1426,10 @@ void LightEditorPanel::connectEditor()
   connect(c.resetVolumeButton, &QAbstractButton::clicked, this, [this]() {
     editLights("Reset Light Volume", resetLightVolume);
   });
+  // not a light property: the threshold of every point light's handle box (D53)
+  connect(c.handleThreshold, &QDoubleSpinBox::valueChanged, this, [](const double value) {
+    setPref(Preferences::LightVolumeHandleThreshold, float(value / 100.0));
+  });
   connect(
     c.editVolumeHandlesButton,
     &QAbstractButton::clicked,
@@ -1351,6 +1456,10 @@ void LightEditorPanel::connectEditor()
     &QAbstractButton::clicked,
     this,
     &LightEditorPanel::convertLightOrigins);
+
+  connect(c.tabs, &TabBook::pageChanged, this, [this](const int index) {
+    fitTabPages({m_controls->mathPage, m_controls->texturePage}, index);
+  });
 }
 
 void LightEditorPanel::connectObservers()
@@ -1498,6 +1607,9 @@ void LightEditorPanel::updateEditor()
       recentre = std::max(recentre.value_or(0.0), *distance);
     }
   }
+  c.handleThreshold->setValue(
+    double(pref(Preferences::LightVolumeHandleThreshold)) * 100.0);
+
   c.offCentreNotice->setVisible(recentre.has_value());
   if (recentre)
   {
@@ -1619,8 +1731,8 @@ void LightEditorPanel::updateEditor()
         QString::fromStdString(value));
     }
   }
-  c.form->setRowVisible(c.styleChoiceRow, !c.styleOptions.empty());
-  c.form->setRowVisible(c.styleRow, c.styleOptions.empty());
+  c.textureForm->setRowVisible(c.styleChoiceRow, !c.styleOptions.empty());
+  c.textureForm->setRowVisible(c.styleRow, c.styleOptions.empty());
 
   const auto [style, styleMulti] =
     firstValue(lights, [](const auto& light) { return light.style; });
@@ -1628,25 +1740,35 @@ void LightEditorPanel::updateEditor()
   c.styleChoice->setPlaceholderText(styleMulti ? Multi : QString::number(style));
   c.styleChoice->setCurrentIndex(styleMulti ? -1 : findStyleIndex(*c.styleChoice, style));
 
-  // math falloff, its fields only when every light has it
+  // the page follows the lights: math lights, and math lights mixed with texture lights,
+  // on the Math page, texture lights on the Texture page; the tab book's signals are not
+  // blocked, because its tab bar follows them
   const auto mathEnabled =
     allLights([](const auto& light) { return light.math.enabled; });
+  const auto anyMathEnabled =
+    anyLight([](const auto& light) { return light.math.enabled; });
+  const auto mixedMath = anyMathEnabled && !mathEnabled;
+  c.tabs->switchToPage(anyMathEnabled ? MathPageIndex : TexturePageIndex);
+  c.mathForm->setRowVisible(c.mixedMathRow, mixedMath);
+  c.texturePage->setEnabled(!mixedMath);
+
+  // math falloff, its fields only when every light has it
   const auto patterned = anyLight(
     [](const auto& light) { return light.math.pattern != mdl::LightPattern::None; });
 
   setCheckBox(
     c.mathEnabled, lights, [](const auto& light) { return light.math.enabled; });
-  c.form->setRowVisible(c.mathTypeRow, mathEnabled);
-  c.form->setRowVisible(c.falloffRow, mathEnabled);
-  c.form->setRowVisible(c.falloffExpRow, mathEnabled);
-  c.form->setRowVisible(c.innerRadiusRow, mathEnabled);
-  c.form->setRowVisible(c.shapeExpRow, mathEnabled && isSpot);
-  c.form->setRowVisible(c.penumbraRow, mathEnabled && isSpot);
-  c.form->setRowVisible(c.patternRow, mathEnabled);
-  c.form->setRowVisible(c.patternStrengthRow, mathEnabled && patterned);
-  c.form->setRowVisible(c.patternScaleRow, mathEnabled && patterned);
-  c.form->setRowVisible(c.patternPhaseRow, mathEnabled && patterned);
-  c.form->setRowVisible(c.energyClampRow, mathEnabled);
+  c.mathForm->setRowVisible(c.mathTypeRow, mathEnabled);
+  c.mathForm->setRowVisible(c.falloffRow, mathEnabled);
+  c.mathForm->setRowVisible(c.falloffExpRow, mathEnabled);
+  c.mathForm->setRowVisible(c.innerRadiusRow, mathEnabled);
+  c.mathForm->setRowVisible(c.shapeExpRow, mathEnabled && isSpot);
+  c.mathForm->setRowVisible(c.penumbraRow, mathEnabled && isSpot);
+  c.mathForm->setRowVisible(c.patternRow, mathEnabled);
+  c.mathForm->setRowVisible(c.patternStrengthRow, mathEnabled && patterned);
+  c.mathForm->setRowVisible(c.patternScaleRow, mathEnabled && patterned);
+  c.mathForm->setRowVisible(c.patternPhaseRow, mathEnabled && patterned);
+  c.mathForm->setRowVisible(c.energyClampRow, mathEnabled);
 
   // the engine derives the math type from the light's geometry (D40)
   c.mathType->setText(

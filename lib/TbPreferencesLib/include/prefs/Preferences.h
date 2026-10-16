@@ -317,6 +317,10 @@ inline auto ShowLightVolumes =
   Preference<std::string>{"render/Show light volumes", ShowLightVolumesSelected};
 inline auto LightVolumeAlpha = Preference<float>{"render/Light volume alpha", 0.45f};
 inline auto LightVolumeShells = Preference<int>{"render/Light volume shells", 4};
+// the share of its brightness, 0.01 to 0.5, at which a point light's handle box lies: the
+// box shows where the light is still visible, not where its falloff ends
+inline auto LightVolumeHandleThreshold =
+  Preference<float>{"render/Light volume handle threshold", 0.10f};
 inline auto LightVolumeHandleColor =
   Preference<Color>{"render/Colors/Light volume handle", RgbF{1.0f, 0.85f, 0.2f}};
 

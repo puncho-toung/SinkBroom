@@ -868,6 +868,7 @@ void ViewEditor::restoreDefaultsClicked()
   prefs.resetToDefault(Preferences::ShowBrushes);
   prefs.resetToDefault(Preferences::EntityLinkMode);
   prefs.resetToDefault(Preferences::ShowLightVolumes);
+  prefs.resetToDefault(Preferences::LightVolumeHandleThreshold);
   prefs.saveChanges();
 }
 

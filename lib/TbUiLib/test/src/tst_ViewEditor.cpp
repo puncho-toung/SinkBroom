@@ -226,10 +226,13 @@ TEST_CASE("ViewEditor")
 {
   auto& prefs = PreferenceManager::instance();
   prefs.resetToDefault(Preferences::ShowLightVolumes);
+  prefs.resetToDefault(Preferences::LightVolumeHandleThreshold);
 
   // also when a REQUIRE fails, so that no later test case sees a changed preference
-  const auto resetShowLightVolumes =
-    kdl::invoke_later{[&] { prefs.resetToDefault(Preferences::ShowLightVolumes); }};
+  const auto resetShowLightVolumes = kdl::invoke_later{[&] {
+    prefs.resetToDefault(Preferences::ShowLightVolumes);
+    prefs.resetToDefault(Preferences::LightVolumeHandleThreshold);
+  }};
 
   auto fixture = MapDocumentFixture{};
 
@@ -276,6 +279,9 @@ TEST_CASE("ViewEditor")
       CHECK(allRadio->isChecked());
       CHECK(!offRadio->isChecked());
 
+      // the light editor's handle threshold has no control here, but is restored too
+      setPref(Preferences::LightVolumeHandleThreshold, 0.3f);
+
       auto buttons = editor.findChildren<QPushButton*>();
       const auto iRestoreDefaults = std::ranges::find_if(
         buttons, [](const auto* button) { return button->text() == "Restore Defaults"; });
@@ -285,6 +291,7 @@ TEST_CASE("ViewEditor")
       QApplication::processEvents();
       CHECK(pref(Preferences::ShowLightVolumes) == Preferences::ShowLightVolumesSelected);
       CHECK(selectedRadio->isChecked());
+      CHECK(pref(Preferences::LightVolumeHandleThreshold) == 0.10f);
     }
 
     SECTION("a game without a light editor has no light volume radios")
@@ -312,6 +319,12 @@ TEST_CASE("ViewEditor")
       == Preferences::ShowLightVolumesSelected);
     CHECK(Preferences::LightVolumeAlpha.defaultValue == 0.45f);
     CHECK(Preferences::LightVolumeShells.defaultValue == 4);
+    CHECK(!Preferences::LightVolumeHandleThreshold.path.generic_string().starts_with(
+      "Map view"));
+    CHECK(
+      Preferences::LightVolumeHandleThreshold.path.generic_string()
+      == "render/Light volume handle threshold");
+    CHECK(Preferences::LightVolumeHandleThreshold.defaultValue == 0.10f);
 
     const auto colors = Preferences::colorPreferences();
     CHECK(
