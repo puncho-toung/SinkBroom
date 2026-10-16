@@ -23,6 +23,7 @@
 
 #include "vm/vec.h"
 
+#include <cstddef>
 #include <optional>
 #include <vector>
 
@@ -105,6 +106,25 @@ std::vector<double> lightVolumeBandMeans(
  */
 std::vector<double> lightVolumeShellAlphas(
   const mdl::LightProperties& light, const LightVolumeStyle& style);
+
+/**
+ * The numbers of triangle and line vertices that appendLightVolumeMesh appends.
+ */
+struct LightVolumeMeshSize
+{
+  std::size_t triangles = 0;
+  std::size_t lines = 0;
+};
+
+/**
+ * Returns how many vertices appendLightVolumeMesh appends for the given light, so that
+ * a caller appending many lights reserves the mesh once: a mesh that grows vertex by
+ * vertex copies itself and touches fresh memory at every reallocation.
+ */
+LightVolumeMeshSize lightVolumeMeshSize(
+  const mdl::LightProperties& light,
+  const LightVolumeStyle& style,
+  const std::optional<vm::vec3d>& entityOrigin = std::nullopt);
 
 /**
  * Appends the volume of the given light in the given frame to the given mesh: the

@@ -46,15 +46,12 @@
 #include "vm/vec.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace tb::render
 {
 namespace
 {
-
-// the triangles of one point light's outer shell, to reserve the unselected arrays
-constexpr auto ReservedTrianglesPerLight = std::size_t{224 * 3};
-constexpr auto ReservedLinesPerLight = std::size_t{32};
 
 bool sameStyle(const LightVolumeStyle& lhs, const LightVolumeStyle& rhs)
 {
@@ -63,34 +60,58 @@ bool sameStyle(const LightVolumeStyle& lhs, const LightVolumeStyle& rhs)
 }
 
 /**
- * Appends the volume of the given light entity to the given mesh and returns its range.
- * The frame is lightFrame(entity, policy) without parsing the entity a second time.
+ * Builds the volumes of the given light entities and their ranges. Every light is parsed
+ * first, so that the mesh is reserved once for all of them; the frame is
+ * lightFrame(entity, policy) without parsing the entity a second time.
  */
-LightRange appendLight(
-  LightVolumeMesh& mesh,
-  const mdl::EntityNode& entityNode,
+std::pair<LightVolumeMesh, std::vector<LightRange>> buildLights(
+  const std::vector<const mdl::EntityNode*>& lights,
   const mdl::EntityRotationPolicy policy,
   const LightVolumeStyle& style,
   const bool selected)
 {
-  const auto& entity = entityNode.entity();
+  auto ranges = std::vector<LightRange>{};
+  ranges.reserve(lights.size());
 
-  auto range = LightRange{};
-  range.node = &entityNode;
-  range.props = mdl::parseLightProperties(entity);
-  range.frame = mdl::LightFrame{
-    range.props.origin,
-    vm::extract_minor(mdl::entityRotation(entity, policy), 3, 3),
-  };
-  range.selected = selected;
-  range.fillFirst = mesh.triangles.size();
-  range.lineFirst = mesh.lines.size();
+  auto size = LightVolumeMeshSize{};
+  for (const auto* entityNode : lights)
+  {
+    const auto& entity = entityNode->entity();
 
-  appendLightVolumeMesh(mesh, range.props, range.frame, style, entity.origin());
+    auto range = LightRange{};
+    range.node = entityNode;
+    range.props = mdl::parseLightProperties(entity);
+    range.frame = mdl::LightFrame{
+      range.props.origin,
+      vm::extract_minor(mdl::entityRotation(entity, policy), 3, 3),
+    };
+    range.selected = selected;
 
-  range.fillCount = mesh.triangles.size() - range.fillFirst;
-  range.lineCount = mesh.lines.size() - range.lineFirst;
-  return range;
+    const auto lightSize = lightVolumeMeshSize(range.props, style, entity.origin());
+    size.triangles += lightSize.triangles;
+    size.lines += lightSize.lines;
+
+    ranges.push_back(std::move(range));
+  }
+
+  auto mesh = LightVolumeMesh{};
+  mesh.triangles.reserve(size.triangles);
+  mesh.lines.reserve(size.lines);
+
+  for (std::size_t i = 0; i < lights.size(); ++i)
+  {
+    auto& range = ranges[i];
+    range.fillFirst = mesh.triangles.size();
+    range.lineFirst = mesh.lines.size();
+
+    appendLightVolumeMesh(
+      mesh, range.props, range.frame, style, lights[i]->entity().origin());
+
+    range.fillCount = mesh.triangles.size() - range.fillFirst;
+    range.lineCount = mesh.lines.size() - range.lineFirst;
+  }
+
+  return {std::move(mesh), std::move(ranges)};
 }
 
 } // namespace
@@ -262,16 +283,9 @@ void LightVolumeRenderer::rebuildUnselected(const mdl::Map& map)
 
   const auto policy = map.gameInfo().gameConfig.entityConfig.rotationPolicy;
 
-  auto mesh = LightVolumeMesh{};
-  mesh.triangles.reserve(lights.size() * ReservedTrianglesPerLight);
-  mesh.lines.reserve(lights.size() * ReservedLinesPerLight);
-  m_unselected.ranges.reserve(lights.size());
-
-  for (const auto* entityNode : lights)
-  {
-    m_unselected.ranges.push_back(appendLight(mesh, *entityNode, policy, style, false));
-    m_unselected.nodes.insert(entityNode);
-  }
+  auto [mesh, ranges] = buildLights(lights, policy, style, false);
+  m_unselected.ranges = std::move(ranges);
+  m_unselected.nodes.insert(lights.begin(), lights.end());
 
   m_unselected.fills = gl::VertexArray::move(std::move(mesh.triangles));
   m_unselected.lines = gl::VertexArray::move(std::move(mesh.lines));
@@ -289,7 +303,7 @@ void LightVolumeRenderer::rebuildSelected(const mdl::Map& map)
 
   const auto policy = map.gameInfo().gameConfig.entityConfig.rotationPolicy;
 
-  auto mesh = LightVolumeMesh{};
+  auto lights = std::vector<const mdl::EntityNode*>{};
   if (m_visibility != LightVolumeVisibility::Off)
   {
     for (const auto* entityNodeBase : map.selection().allEntities())
@@ -297,11 +311,14 @@ void LightVolumeRenderer::rebuildSelected(const mdl::Map& map)
       const auto* entityNode = dynamic_cast<const mdl::EntityNode*>(entityNodeBase);
       if (entityNode && mdl::isLightEntity(entityNode->entity()))
       {
-        m_selected.ranges.push_back(appendLight(mesh, *entityNode, policy, style, true));
-        m_selected.nodes.insert(entityNode);
+        lights.push_back(entityNode);
       }
     }
   }
+
+  auto [mesh, ranges] = buildLights(lights, policy, style, true);
+  m_selected.ranges = std::move(ranges);
+  m_selected.nodes.insert(lights.begin(), lights.end());
 
   m_selected.fills = gl::VertexArray::move(std::move(mesh.triangles));
   m_selected.lines = gl::VertexArray::move(std::move(mesh.lines));

@@ -373,6 +373,47 @@ double fillScale(const LightVolumeStyle& style)
   return style.twoD ? TwoDFillScale : 1.0;
 }
 
+/**
+ * Whether an ellipsoid or box of the given half extents has an inside (pointFalloffT is
+ * infinite everywhere for a flat one).
+ */
+bool hasVolume(const vm::vec3d& radius)
+{
+  return radius.x() >= DegenerateRadius && radius.y() >= DegenerateRadius
+         && radius.z() >= DegenerateRadius;
+}
+
+bool hasPenumbraSurface(const mdl::LightProperties& light)
+{
+  return light.math.penumbra > MinPenumbra && light.math.penumbra < 1.0;
+}
+
+int spotBands(const LightVolumeStyle& style)
+{
+  return style.outerShellOnly ? 1 : std::max(style.shells, 1);
+}
+
+/**
+ * The factor of a spot light's falloff in its ring alphas: cap b, scaled in 2D.
+ */
+double spotAlphaScale(const mdl::LightProperties& light, const LightVolumeStyle& style)
+{
+  return lightVolumeAlphaCap(light, style.alphaCap) * lightVolumeBrightness(light.color)
+         * fillScale(style);
+}
+
+/**
+ * The alpha of a spot light's cap at the falloff parameter t, as its vertices store it;
+ * a cap whose alpha is 0 is not drawn.
+ */
+float spotCapAlpha(
+  const mdl::LightProperties& light, const LightVolumeStyle& style, const double t)
+{
+  const auto ringAlpha =
+    float(spotAlphaScale(light, style) * lightVolumeFalloff(t, light.math));
+  return float(CapAlphaScale * ringAlpha);
+}
+
 void appendPointLight(
   LightVolumeMesh& mesh,
   const mdl::LightProperties& light,
@@ -383,10 +424,7 @@ void appendPointLight(
   const auto radius = vm::abs(light.radius);
   const auto flip = vm::compute_determinant(frame.R) < 0.0;
 
-  // a flat ellipsoid has no inside (pointFalloffT is infinite everywhere)
-  if (
-    radius.x() >= DegenerateRadius && radius.y() >= DegenerateRadius
-    && radius.z() >= DegenerateRadius)
+  if (hasVolume(radius))
   {
     const auto alphas = lightVolumeShellAlphas(light, style);
     const auto shells = alphas.size();
@@ -433,11 +471,10 @@ void appendSpotLight(
   const auto frameDet = vm::dot(light.right, vm::cross(light.up, frustum->n));
   const auto flip = (frameDet > 0.0) == (vm::compute_determinant(frame.R) > 0.0);
 
-  const auto bands = style.outerShellOnly ? 1 : std::max(style.shells, 1);
+  const auto bands = spotBands(style);
   auto depths = std::vector<double>{};
   auto ringColors = std::vector<vm::vec4f>{};
-  const auto alphaScale = lightVolumeAlphaCap(light, style.alphaCap)
-                          * lightVolumeBrightness(light.color) * fillScale(style);
+  const auto alphaScale = spotAlphaScale(light, style);
   for (int j = 0; j <= bands; ++j)
   {
     const auto t = double(j) / double(bands);
@@ -452,7 +489,7 @@ void appendSpotLight(
 
   addConeSurface(mesh, outer, ringColors, flip);
 
-  const auto hasPenumbra = light.math.penumbra > MinPenumbra && light.math.penumbra < 1.0;
+  const auto hasPenumbra = hasPenumbraSurface(light);
   if (!style.outerShellOnly)
   {
     if (hasPenumbra)
@@ -461,20 +498,20 @@ void appendSpotLight(
       addConeSurface(mesh, inner, ringColors, flip);
     }
 
-    const auto capColor = [&](const std::size_t j) {
+    const auto capColor = [&](const std::size_t j, const double t) {
       auto color = ringColors[j];
-      color[3] = float(CapAlphaScale * color[3]);
+      color[3] = spotCapAlpha(light, style, t);
       return color;
     };
 
     // the near cap faces the apex, the far cap away from it; a cap that adds nothing to
     // any ray is not drawn, like the far cap of every light but a sharp one (F(1) = 0)
-    if (const auto nearColor = capColor(0); nearColor[3] > 0.0f)
+    if (const auto nearColor = capColor(0, 0.0); nearColor[3] > 0.0f)
     {
       const auto nearCentre = toWorld(frame, mdl::spotPoint(light, 0, 0, depths.front()));
       addCap(mesh, nearCentre, outer, 0, nearColor, !flip);
     }
-    if (const auto farColor = capColor(lastRing); farColor[3] > 0.0f)
+    if (const auto farColor = capColor(lastRing, 1.0); farColor[3] > 0.0f)
     {
       const auto farCentre = toWorld(frame, mdl::spotPoint(light, 0, 0, depths.back()));
       addCap(mesh, farCentre, outer, lastRing, farColor, flip);
@@ -619,6 +656,61 @@ std::vector<double> lightVolumeShellAlphas(
   return alphas;
 }
 
+LightVolumeMeshSize lightVolumeMeshSize(
+  const mdl::LightProperties& light,
+  const LightVolumeStyle& style,
+  const std::optional<vm::vec3d>& entityOrigin)
+{
+  // two vertices per line
+  constexpr auto BoxLineVertices = std::size_t{12 * 2};
+  constexpr auto CrossLineVertices = std::size_t{3 * 2};
+  constexpr auto ArrowLineVertices = std::size_t{5 * 2};
+  constexpr auto FrustumLineVertices = std::size_t{3 * 4 * 2};
+  constexpr auto OutlineVertices = SpotSegments * 2;
+  constexpr auto CapVertices = SpotSegments * 3;
+
+  auto size = LightVolumeMeshSize{};
+  switch (light.type)
+  {
+  case mdl::LightType::Point:
+    if (hasVolume(vm::abs(light.radius)))
+    {
+      const auto alphas = lightVolumeShellAlphas(light, style);
+      size.triangles = std::size_t(std::ranges::count_if(
+                         alphas, [](const auto alpha) { return alpha > 0.0; }))
+                       * unitSphere().triangles.size();
+    }
+    size.lines = BoxLineVertices + (light.hasCenter ? CrossLineVertices : 0);
+    break;
+  case mdl::LightType::Spot:
+    if (mdl::spotLightFrustum(light))
+    {
+      const auto surfaceVertices = SpotSegments * std::size_t(spotBands(style)) * 6;
+      size.triangles = surfaceVertices;
+      if (!style.outerShellOnly)
+      {
+        size.triangles += hasPenumbraSurface(light) ? surfaceVertices : 0;
+        size.triangles += spotCapAlpha(light, style, 0.0) > 0.0f ? CapVertices : 0;
+        size.triangles += spotCapAlpha(light, style, 1.0) > 0.0f ? CapVertices : 0;
+      }
+      size.lines = FrustumLineVertices + 2 * OutlineVertices
+                   + (hasPenumbraSurface(light) ? OutlineVertices : 0);
+    }
+    break;
+  case mdl::LightType::Sun:
+    size.triangles = 6 * 2 * 3;
+    size.lines = BoxLineVertices + ArrowLineVertices;
+    break;
+    switchDefault();
+  }
+
+  if (light.hasLightOrigin && entityOrigin)
+  {
+    size.lines += 2;
+  }
+  return size;
+}
+
 void appendLightVolumeMesh(
   LightVolumeMesh& mesh,
   const mdl::LightProperties& light,
@@ -654,7 +746,11 @@ LightVolumeMesh buildLightVolumeMesh(
   const LightVolumeStyle& style,
   const std::optional<vm::vec3d>& entityOrigin)
 {
+  const auto size = lightVolumeMeshSize(light, style, entityOrigin);
+
   auto mesh = LightVolumeMesh{};
+  mesh.triangles.reserve(size.triangles);
+  mesh.lines.reserve(size.lines);
   appendLightVolumeMesh(mesh, light, frame, style, entityOrigin);
   return mesh;
 }
