@@ -37,6 +37,7 @@ target_sources(TbAppLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/InputState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Lasso.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightVolumeTool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LightVolumeToolController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MoveHandleDragTracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MoveObjectsTool.cpp
@@ -108,6 +109,7 @@ target_sources(TbAppLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/InputState.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/Lasso.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LightVolumeTool.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LightVolumeToolController.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapDocument.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MoveHandleDragTracker.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MoveObjectsTool.h

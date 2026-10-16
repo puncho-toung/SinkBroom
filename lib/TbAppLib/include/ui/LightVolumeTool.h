@@ -265,11 +265,14 @@ public:
   const std::optional<mdl::LightProperties>& drawLight() const;
 
   /**
-   * Renders the handle box, the handles, the highlighted handle and a spot light's
-   * frustum edges in handle mode, the drawn volume in draw mode.
+   * Renders the handle box, the handles, the dragged handle, the highlighted handle if
+   * requested (not while another tool drags) and a spot light's frustum edges in handle
+   * mode, the drawn volume in draw mode.
    */
   void render(
-    render::RenderContext& renderContext, render::RenderBatch& renderBatch) const;
+    render::RenderContext& renderContext,
+    render::RenderBatch& renderBatch,
+    bool showHighlightedHit) const;
 
 private:
   bool doActivate() override;

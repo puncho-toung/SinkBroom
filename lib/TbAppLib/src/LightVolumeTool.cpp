@@ -960,7 +960,9 @@ const std::optional<mdl::LightProperties>& LightVolumeTool::drawLight() const
 }
 
 void LightVolumeTool::render(
-  render::RenderContext& renderContext, render::RenderBatch& renderBatch) const
+  render::RenderContext& renderContext,
+  render::RenderBatch& renderBatch,
+  const bool showHighlightedHit) const
 {
   if (m_mode == Mode::Draw)
   {
@@ -1016,7 +1018,9 @@ void LightVolumeTool::render(
     renderService.renderLines(edges);
   }
 
-  const auto& highlight = m_dragging ? m_dragHit : m_highlightedHit;
+  const auto& highlight = m_dragging           ? m_dragHit
+                          : showHighlightedHit ? m_highlightedHit
+                                               : mdl::Hit::NoHit;
   if (highlight.hasType(AnyHitType))
   {
     renderHighlight(renderContext, renderBatch, *volume, highlight);

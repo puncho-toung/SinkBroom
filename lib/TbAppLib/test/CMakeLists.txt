@@ -14,6 +14,7 @@ target_sources(TbAppLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ExtrudeToolController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HandleDragTracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightVolumeTool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightVolumeToolController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapDocument.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MoveHandleDragTracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_RotateTool.cpp
