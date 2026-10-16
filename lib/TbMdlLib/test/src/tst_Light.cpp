@@ -126,9 +126,16 @@ std::vector<std::string> keys(const std::vector<EntityProperty>& properties)
   return sorted(std::move(result));
 }
 
+// the twelve keys that an enabled math block without a style writes
 std::vector<std::string> withMathKeys(std::vector<std::string> strs)
 {
-  strs.insert(strs.end(), mathLightPropertyKeys().begin(), mathLightPropertyKeys().end());
+  for (const auto& key : mathLightPropertyKeys())
+  {
+    if (key != "math_style")
+    {
+      strs.push_back(key);
+    }
+  }
   return sorted(std::move(strs));
 }
 
@@ -164,7 +171,29 @@ TEST_CASE("Light")
         "math_pattern_scale",
         "math_pattern_phase",
         "math_energy_clamp",
+        "math_style",
       });
+    CHECK(mathLightPropertyKeys().size() == 13);
+  }
+
+  SECTION("lightStyleName")
+  {
+    // predef_lightstylesinfo of the engine's renderer/Material.h
+    CHECK(lightStyleName(-1) == "None");
+    CHECK(lightStyleName(0) == "Normal");
+    CHECK(lightStyleName(1) == "Flicker A");
+    CHECK(lightStyleName(2) == "Slow Strong Pulse");
+    CHECK(lightStyleName(3) == "Candle A");
+    CHECK(lightStyleName(4) == "Fast Strobe");
+    CHECK(lightStyleName(5) == "Gentle Pulse");
+    CHECK(lightStyleName(6) == "Flicker B");
+    CHECK(lightStyleName(7) == "Candle B");
+    CHECK(lightStyleName(8) == "Candle C");
+    CHECK(lightStyleName(9) == "Slow Strobe");
+    CHECK(lightStyleName(10) == "Fluorescent Flicker");
+    CHECK(lightStyleName(11) == "Slow Pulse (no black)");
+    CHECK(lightStyleName(LightStyleCount).empty());
+    CHECK(lightStyleName(-2).empty());
   }
 
   // the names ML_WriteToDict writes; ML_ParseFromDict compares them without regard to
@@ -474,12 +503,39 @@ TEST_CASE("Light")
       CHECK(light.math.enabled);
     }
 
-    SECTION("math_enabled 0 disables the math block")
+    SECTION("math_enabled 0 disables the math block and keeps its values")
     {
+      // the values of a disabled block are read too (D51)
       CHECK(
         parse(with(mathLightProperties, {{"math_enabled", "0"}})).math
-        == MathLightProperties{});
+        == MathLightProperties{
+          .enabled = false,
+          .falloff = LightFalloff::Linear,
+          .falloffExp = 3.0,
+          .innerRadius = 0.1,
+          .shapeExp = 4.0,
+          .penumbra = 0.2,
+          .pattern = LightPattern::Ice,
+          .patternStrength = 0.5,
+          .patternScale = 2.0,
+          .patternPhase = 0.25,
+          .energyClamp = false,
+        });
       CHECK(parse(defaultPointProperties).math == MathLightProperties{});
+    }
+
+    SECTION("math_style is read like style and clamped to the predefined styles")
+    {
+      CHECK(parse(mathLightProperties).math.style == -1);
+      CHECK(parse(with(mathLightProperties, {{"math_style", "4"}})).math.style == 4);
+      CHECK(parse(with(mathLightProperties, {{"math_style", "11"}})).math.style == 11);
+      CHECK(parse(with(mathLightProperties, {{"math_style", "12"}})).math.style == 11);
+      CHECK(parse(with(mathLightProperties, {{"math_style", "-5"}})).math.style == -1);
+      CHECK(parse(with(mathLightProperties, {{"math_style", "bogus"}})).math.style == 0);
+      CHECK(
+        parse(with(mathLightProperties, {{"math_enabled", "0"}, {"math_style", "4"}}))
+          .math.style
+        == 4);
     }
 
     SECTION("The math values are clamped like ML_ParseFromDict clamps them")
@@ -553,11 +609,19 @@ TEST_CASE("Light")
 
     SECTION("A point light")
     {
+      // a light without a math block says so and deletes none of its keys (D51)
       const auto update = lightPropertyUpdate(parse(defaultPointProperties));
       CHECK(
         keys(update.set)
-        == sorted({"origin", "noshadows", "nospecular", "_color", "light_radius"}));
-      CHECK(sorted(update.remove) == withMathKeys(pointRemoved));
+        == sorted(
+          {"origin",
+           "noshadows",
+           "nospecular",
+           "_color",
+           "light_radius",
+           "math_enabled"}));
+      CHECK(sorted(update.remove) == sorted(pointRemoved));
+      CHECK(valueOf(update.set, "math_enabled") == "0");
 
       CHECK(valueOf(update.set, "origin") == "0 0 0");
       CHECK(valueOf(update.set, "noshadows") == "0");
@@ -589,8 +653,9 @@ TEST_CASE("Light")
            "_color",
            "light_target",
            "light_up",
-           "light_right"}));
-      CHECK(sorted(update.remove) == withMathKeys(spotRemoved));
+           "light_right",
+           "math_enabled"}));
+      CHECK(sorted(update.remove) == sorted(spotRemoved));
 
       CHECK(valueOf(update.set, "light_target") == "0 0 -256");
       CHECK(valueOf(update.set, "light_up") == "0 -128 0");
@@ -609,10 +674,11 @@ TEST_CASE("Light")
            "light_up",
            "light_right",
            "light_start",
-           "light_end"}));
+           "light_end",
+           "math_enabled"}));
       CHECK(
         sorted(explicitUpdate.remove)
-        == withMathKeys(
+        == sorted(
           {"light", "texture", "light_radius", "light_center", "parallel", "style"}));
       CHECK(valueOf(explicitUpdate.set, "light_start") == "0 0 -32");
       CHECK(valueOf(explicitUpdate.set, "light_end") == "0 0 -200");
@@ -624,10 +690,16 @@ TEST_CASE("Light")
       CHECK(
         keys(update.set)
         == sorted(
-          {"origin", "noshadows", "nospecular", "_color", "light_radius", "parallel"}));
+          {"origin",
+           "noshadows",
+           "nospecular",
+           "_color",
+           "light_radius",
+           "parallel",
+           "math_enabled"}));
       CHECK(
         sorted(update.remove)
-        == withMathKeys(
+        == sorted(
           {"light",
            "texture",
            "light_center",
@@ -699,7 +771,9 @@ TEST_CASE("Light")
       CHECK(
         keys(update.set)
         == withMathKeys({"origin", "noshadows", "nospecular", "_color", "light_radius"}));
-      CHECK(sorted(update.remove) == sorted(pointRemoved));
+      auto removed = pointRemoved;
+      removed.push_back("math_style");
+      CHECK(sorted(update.remove) == sorted(removed));
 
       CHECK(valueOf(update.set, "math_enabled") == "1");
       CHECK(valueOf(update.set, "math_type") == "point");
@@ -721,6 +795,46 @@ TEST_CASE("Light")
       auto sun = parse(sunProperties);
       sun.math = parse(mathLightProperties).math;
       CHECK(valueOf(lightPropertyUpdate(sun).set, "math_type") == "sun");
+    }
+
+    SECTION("math_style is written for a style and removed without one")
+    {
+      auto light = parse(mathLightProperties);
+      light.math.style = 4;
+      CHECK(valueOf(lightPropertyUpdate(light).set, "math_style") == "4");
+      CHECK_FALSE(contains(lightPropertyUpdate(light).remove, "math_style"));
+
+      // unlike style, a sun has one too: it changes the colour, not the radius
+      light.type = LightType::Sun;
+      CHECK(valueOf(lightPropertyUpdate(light).set, "math_style") == "4");
+
+      light.math.style = -1;
+      CHECK(valueOf(lightPropertyUpdate(light).set, "math_style") == "<missing>");
+      CHECK(contains(lightPropertyUpdate(light).remove, "math_style"));
+
+      // a disabled block keeps it
+      light.math.style = 4;
+      light.math.enabled = false;
+      CHECK(valueOf(lightPropertyUpdate(light).set, "math_style") == "<missing>");
+      CHECK_FALSE(contains(lightPropertyUpdate(light).remove, "math_style"));
+    }
+
+    SECTION("A disabled math block is math_enabled 0 and deletes nothing")
+    {
+      auto light = parse(mathLightProperties);
+      light.math.enabled = false;
+
+      const auto update = lightPropertyUpdate(light);
+      CHECK(valueOf(update.set, "math_enabled") == "0");
+      for (const auto& key : mathLightPropertyKeys())
+      {
+        CAPTURE(key);
+        CHECK_FALSE(contains(update.remove, key));
+        if (key != "math_enabled")
+        {
+          CHECK(valueOf(update.set, key) == "<missing>");
+        }
+      }
     }
 
     SECTION("A light_origin light gets neither origin nor light_origin")
@@ -768,6 +882,7 @@ TEST_CASE("Light")
                {{"light_start", "0 0 -32"}, {"light_end", "0 0 -200"}}),
              sunProperties,
              mathLightProperties,
+             with(mathLightProperties, {{"math_style", "4"}}),
            })
       {
         CAPTURE(properties);
@@ -845,6 +960,8 @@ TEST_CASE("Light")
              mathLightProperties,
              with(defaultPointProperties, {{"origin", "100.000 0 0"}}),
              with(mathLightProperties, {{"math_type", "sun"}, {"style", "-1"}}),
+             with(mathLightProperties, {{"math_style", "4"}}),
+             with(mathLightProperties, {{"math_enabled", "0"}}),
              with(defaultPointProperties, {{"math_enabled", "0"}, {"math_type", "spot"}}),
              sunWithUnreadTargetProperties,
            })
@@ -969,15 +1086,80 @@ TEST_CASE("Light")
       CHECK(diff.remove.empty());
     }
 
-    SECTION("Disabling the math block removes the math keys the entity has")
+    SECTION("Disabling the math block writes math_enabled 0 and keeps the other keys")
     {
       const auto entity = Entity{mathLightProperties};
       auto edited = parseLightProperties(entity);
       edited.math.enabled = false;
 
+      // D51: the other eleven math keys stay
       const auto diff = lightKeyDiff(entity, edited);
-      CHECK(diff.set.empty());
-      CHECK(sorted(diff.remove) == withMathKeys({}));
+      CHECK(diff.set == std::vector<EntityProperty>{{"math_enabled", "0"}});
+      CHECK(diff.remove.empty());
+
+      const auto disabled = applyLightPropertyUpdate(entity, diff);
+      CHECK(disabled.properties() == with(mathLightProperties, {{"math_enabled", "0"}}));
+      CHECK(parseLightProperties(disabled) == edited);
+    }
+
+    SECTION("Disabling writes nothing on a light that never had a math block")
+    {
+      // before and after both say math_enabled 0
+      const auto entity = Entity{defaultPointProperties};
+      auto edited = parseLightProperties(entity);
+      REQUIRE_FALSE(edited.math.enabled);
+      edited.math.enabled = false;
+
+      CHECK(lightKeyDiff(entity, edited) == LightPropertyUpdate{});
+    }
+
+    SECTION("Enabling a disabled math block restores its kept values")
+    {
+      const auto entity = Entity{with(mathLightProperties, {{"math_enabled", "0"}})};
+      auto edited = parseLightProperties(entity);
+      edited.math.enabled = true;
+
+      const auto diff = lightKeyDiff(entity, edited);
+      CHECK(diff.set == std::vector<EntityProperty>{{"math_enabled", "1"}});
+      CHECK(diff.remove.empty());
+      CHECK(
+        parseLightProperties(applyLightPropertyUpdate(entity, diff)).math
+        == parse(mathLightProperties).math);
+    }
+
+    SECTION("The seed writes twelve math keys")
+    {
+      // D29: the seed has no style, so math_style is neither written nor removed
+      const auto entity = Entity{defaultPointProperties};
+      auto edited = parseLightProperties(entity);
+      edited.math = seededMathLightProperties();
+
+      const auto diff = lightKeyDiff(entity, edited);
+      CHECK(keys(diff.set) == withMathKeys({}));
+      CHECK(diff.set.size() == 12);
+      CHECK(diff.remove.empty());
+    }
+
+    SECTION("A math style is written and removed")
+    {
+      const auto entity = Entity{mathLightProperties};
+      auto edited = parseLightProperties(entity);
+      REQUIRE(edited.math.style == -1);
+      REQUIRE_FALSE(entity.hasProperty("math_style"));
+
+      edited.math.style = 4;
+      const auto styleDiff = lightKeyDiff(entity, edited);
+      CHECK(styleDiff.set == std::vector<EntityProperty>{{"math_style", "4"}});
+      CHECK(styleDiff.remove.empty());
+
+      const auto styled = applyLightPropertyUpdate(entity, styleDiff);
+      edited.math.style = -1;
+      const auto noStyleDiff = lightKeyDiff(styled, edited);
+      CHECK(noStyleDiff.set.empty());
+      CHECK(noStyleDiff.remove == std::vector<std::string>{"math_style"});
+      CHECK(
+        applyLightPropertyUpdate(styled, noStyleDiff).properties()
+        == mathLightProperties);
     }
   }
 

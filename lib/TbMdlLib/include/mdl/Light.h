@@ -70,13 +70,27 @@ inline const std::string MathPatternStrength = "math_pattern_strength";
 inline const std::string MathPatternScale = "math_pattern_scale";
 inline const std::string MathPatternPhase = "math_pattern_phase";
 inline const std::string MathEnergyClamp = "math_energy_clamp";
+inline const std::string MathStyle = "math_style";
 } // namespace LightPropertyKeys
 
 /**
- * The twelve keys of a math light, in the order in which the engine's ML_WriteToDict
- * writes them.
+ * The thirteen keys of a math light: the twelve that the engine's ML_WriteToDict writes,
+ * in its order, and math_style, which is written only for a style.
  */
 const std::vector<std::string>& mathLightPropertyKeys();
+
+/**
+ * The number of the engine's predefined light styles (predef_lightstyles in
+ * renderer/Material.h), which "style" and "math_style" select by their index; -1 is no
+ * style.
+ */
+inline constexpr auto LightStyleCount = 12;
+
+/**
+ * The name of the given light style as the engine's predef_lightstylesinfo gives it
+ * ("Normal", "Flicker A", ...), "None" for -1, and an empty name for any other number.
+ */
+std::string_view lightStyleName(int style);
 
 enum class LightType
 {
@@ -147,7 +161,9 @@ std::optional<LightPattern> parseLightPatternName(std::string_view name);
 
 /**
  * The math light block of a light (the engine's mathLightData_t) with the defaults of
- * LightInfo::Defaults. It has no type: "math_type" is derived from the light's type.
+ * LightInfo::Defaults. It has no type: "math_type" is derived from the light's type. A
+ * disabled block keeps its values, as the entity keeps its keys: the light is a texture
+ * light until the block is enabled again.
  */
 struct MathLightProperties
 {
@@ -162,6 +178,8 @@ struct MathLightProperties
   double patternScale = 1.0;
   double patternPhase = 0.0;
   bool energyClamp = true;
+  // a predefined light style that the engine applies to the light's colour; -1 is none
+  int style = -1;
 
   kdl_reflect_decl(
     MathLightProperties,
@@ -175,7 +193,8 @@ struct MathLightProperties
     patternStrength,
     patternScale,
     patternPhase,
-    energyClamp);
+    energyClamp,
+    style);
 };
 
 /**
@@ -251,7 +270,8 @@ bool isLightEntity(const Entity& entity);
  * and light_up, and some but not all of them is bad target info, read as a point light;
  * "parallel" makes a sun even with all three; light "0" is a radius of 0). Vectors are
  * read like the engine's sscanf reads them, so a value with one number reads (v, 0, 0).
- * "math_type" is ignored.
+ * "math_type" is ignored. The math keys are read whether "math_enabled" is set or not;
+ * it decides only whether the block is enabled.
  */
 LightProperties parseLightProperties(const Entity& entity);
 
@@ -271,7 +291,9 @@ struct LightPropertyUpdate
  * and the properties it deletes. Vector components are written with two decimals, _color
  * and the math floats with four, all without trailing zeros, and every vector with three
  * components. The rotation properties are never touched; a light with light_origin gets
- * neither origin nor light_origin.
+ * neither origin nor light_origin. A disabled math block is written as math_enabled "0"
+ * alone and none of its keys is deleted, so that the entity keeps them and enabling the
+ * block again restores them.
  */
 LightPropertyUpdate lightPropertyUpdate(const LightProperties& light);
 

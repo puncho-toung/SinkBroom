@@ -480,13 +480,13 @@ TEST_CASE("LightEditorPanel")
     CHECK(valueOf(*lightNode, "math_inner_radius") == "0.5");
     CHECK(findControl<SpinControl>(panel, "InnerRadius").value() == 0.5);
 
+    // disabling keeps the other math properties (D51)
     mathEnabled.click();
     QApplication::processEvents();
-    for (const auto& key : mdl::mathLightPropertyKeys())
-    {
-      CAPTURE(key);
-      CHECK(property(*lightNode, key) == nullptr);
-    }
+    CHECK(valueOf(*lightNode, "math_enabled") == "0");
+    CHECK(valueOf(*lightNode, "math_falloff") == "linear");
+    CHECK(valueOf(*lightNode, "math_inner_radius") == "0.5");
+    CHECK(property(*lightNode, "math_style") == nullptr);
   }
 
   SECTION("the angles are written by the rotation policy")
@@ -1451,7 +1451,8 @@ TEST_CASE("LightEditorPanel")
     CHECK(valueOf(*pointNode, "math_type") == "spot");
     for (const auto& key : mdl::mathLightPropertyKeys())
     {
-      if (key != "math_type")
+      // the seed has no math_style
+      if (key != "math_type" && key != "math_style")
       {
         CAPTURE(key);
         const auto before = std::ranges::find_if(

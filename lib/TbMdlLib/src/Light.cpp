@@ -57,6 +57,7 @@ const std::vector<std::string>& mathLightPropertyKeys()
     LightPropertyKeys::MathPatternScale,
     LightPropertyKeys::MathPatternPhase,
     LightPropertyKeys::MathEnergyClamp,
+    LightPropertyKeys::MathStyle,
   };
   return keys;
 }
@@ -139,6 +140,22 @@ constexpr auto FalloffNames = std::array<std::string_view, 5>{
   "invsquare", "linear", "smooth", "exponential", "invsquare_clamped"};
 constexpr auto PatternNames = std::array<std::string_view, 6>{
   "none", "subsurface", "ice", "caustic", "banded", "granular"};
+
+// predef_lightstylesinfo of the engine's renderer/Material.h
+constexpr auto LightStyleNames = std::array<std::string_view, LightStyleCount>{
+  "Normal",
+  "Flicker A",
+  "Slow Strong Pulse",
+  "Candle A",
+  "Fast Strobe",
+  "Gentle Pulse",
+  "Flicker B",
+  "Candle B",
+  "Candle C",
+  "Slow Strobe",
+  "Fluorescent Flicker",
+  "Slow Pulse (no black)",
+};
 
 template <typename E, std::size_t N>
 std::optional<E> parseName(
@@ -275,6 +292,12 @@ public:
     return value ? parseIdTech4Float(*value) : defaultValue;
   }
 
+  int integer(const std::string& key, const int defaultValue) const
+  {
+    const auto* value = m_entity.property(key);
+    return value ? parseIdTech4Int(*value) : defaultValue;
+  }
+
   bool boolean(const std::string& key, const bool defaultValue) const
   {
     const auto* value = m_entity.property(key);
@@ -288,23 +311,19 @@ public:
 };
 
 /**
- * ML_ParseFromDict, except that a disabled block keeps the defaults of
- * LightInfo::Defaults instead of zeroes, and that "math_type" is ignored.
+ * ML_ParseFromDict, except that "math_type" is ignored. The keys of a disabled block are
+ * read too, because a disabled block keeps them (D51): they are the values that the block
+ * has again when it is enabled.
  */
 MathLightProperties parseMathLightProperties(const LightPropertyReader& reader)
 {
   using namespace LightPropertyKeys;
 
-  if (!reader.boolean(MathEnabled, false))
-  {
-    return MathLightProperties{};
-  }
-
   const auto* falloff = reader.string(MathFalloff);
   const auto* pattern = reader.string(MathPattern);
 
   return MathLightProperties{
-    .enabled = true,
+    .enabled = reader.boolean(MathEnabled, false),
     .falloff = (falloff ? parseLightFalloffName(*falloff) : std::nullopt)
                  .value_or(LightFalloff::InvSquareClamped),
     .falloffExp = std::clamp(reader.number(MathFalloffExp, 2.0), 0.1, 16.0),
@@ -317,6 +336,7 @@ MathLightProperties parseMathLightProperties(const LightPropertyReader& reader)
     .patternScale = reader.number(MathPatternScale, 1.0),
     .patternPhase = reader.number(MathPatternPhase, 0.0),
     .energyClamp = reader.boolean(MathEnergyClamp, true),
+    .style = std::clamp(reader.integer(MathStyle, -1), -1, LightStyleCount - 1),
   };
 }
 
@@ -361,6 +381,17 @@ std::string_view lightPatternName(const LightPattern pattern)
 std::optional<LightPattern> parseLightPatternName(const std::string_view name)
 {
   return parseName<LightPattern>(PatternNames, name);
+}
+
+std::string_view lightStyleName(const int style)
+{
+  if (style == -1)
+  {
+    return "None";
+  }
+  return style >= 0 && style < LightStyleCount
+           ? LightStyleNames[static_cast<std::size_t>(style)]
+           : std::string_view{};
 }
 
 kdl_reflect_impl(MathLightProperties);
@@ -606,13 +637,22 @@ LightPropertyUpdate lightPropertyUpdate(const LightProperties& light)
     set(MathPatternScale, formatIdTech4Float(math.patternScale, 4));
     set(MathPatternPhase, formatIdTech4Float(math.patternPhase, 4));
     set(MathEnergyClamp, formatBool(math.energyClamp));
+
+    // like style, but also for a sun: it changes the colour, not the radius
+    if (math.style != -1)
+    {
+      set(MathStyle, fmt::format("{}", math.style));
+    }
+    else
+    {
+      remove(MathStyle);
+    }
   }
   else
   {
-    for (const auto& key : mathLightPropertyKeys())
-    {
-      remove(key);
-    }
+    // the other math keys stay, so that a light switched to a texture light and back
+    // gets its math block again (D51)
+    set(MathEnabled, "0");
   }
 
   return update;
