@@ -89,7 +89,8 @@ QString currentText(const LightEditorPanel& panel)
 {
   const auto* stack = panel.findChild<QStackedWidget*>("LightEditorPanel_Stack");
   REQUIRE(stack != nullptr);
-  const auto* label = stack->currentWidget()->findChild<QLabel*>();
+  const auto* label = stack->currentWidget()->findChild<QLabel*>(
+    stack->currentIndex() == 0 ? "LightEditorPanel_Message" : "LightEditorPanel_Header");
   REQUIRE(label != nullptr);
   return label->text();
 }

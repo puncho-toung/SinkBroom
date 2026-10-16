@@ -22,8 +22,18 @@
 #include "base/NotifierConnection.h"
 #include "ui/SidebarPanel.h"
 
+#include <cstddef>
+#include <functional>
+#include <memory>
+#include <string>
+
 class QLabel;
 class QStackedWidget;
+
+namespace tb::mdl
+{
+struct LightProperties;
+}
 
 namespace tb::ui
 {
@@ -34,16 +44,22 @@ class SignalDelayer;
  * The sidebar panel that edits id Tech 4 lights. It applies to games whose config sets
  * entities.lightEditor, and edits the selection only if it consists of light entities.
  *
- * Page 0 tells the user what to select; page 1 is the editor.
+ * Page 0 tells the user what to select; page 1 is the editor. Every control writes when
+ * the user changes it, as one undoable command for all selected lights, and only the
+ * properties that its change alters on each light. The controls are set from the map
+ * once the event loop has processed the notifications of a change.
  */
 class LightEditorPanel : public SidebarPanel
 {
   Q_OBJECT
 private:
+  struct Controls;
+
   MapDocument& m_document;
 
   QStackedWidget* m_stack = nullptr;
   QLabel* m_messageLabel = nullptr;
+  std::unique_ptr<Controls> m_controls;
 
   SignalDelayer* m_updateSignalDelayer = nullptr;
 
@@ -60,10 +76,18 @@ public:
 
 private:
   void createGui();
+  QWidget* createEditorPage();
+  void connectEditor();
   void connectObservers();
 
   void refresh();
   void updateControls();
+  void updateEditor();
+
+  void editLights(
+    const std::string& commandName,
+    const std::function<void(mdl::LightProperties&)>& edit);
+  void editAngles(std::size_t component, double value);
 };
 
 } // namespace tb::ui

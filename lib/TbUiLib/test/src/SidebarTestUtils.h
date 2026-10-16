@@ -89,7 +89,8 @@ public:
 };
 
 /**
- * The text of the label on the light editor panel's current page.
+ * The text of the light editor panel's message on page 0, or of the editor's header on
+ * page 1.
  */
 QString currentText(const LightEditorPanel& panel);
 
