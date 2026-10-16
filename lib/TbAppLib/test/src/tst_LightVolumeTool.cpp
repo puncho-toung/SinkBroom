@@ -1159,6 +1159,97 @@ TEST_CASE("LightVolumeTool")
       CHECK_FALSE(pickSurface(tool, vm::ray3d{{0, 0, 0}, {1, 0, 0}}).isMatch());
     }
 
+    SECTION("a selection change reads no light again, an edit the edited one (I7.10)")
+    {
+      setPref(
+        Preferences::ShowLightVolumes, std::string{Preferences::ShowLightVolumesAll});
+      const auto resetVolumes = kdl::invoke_later{[] {
+        PreferenceManager::instance().resetToDefault(Preferences::ShowLightVolumes);
+      }};
+
+      auto* firstNode = createLight(map, "0 0 0", {});
+      createLight(map, "2000 0 100", DefaultSpot);
+      auto* thirdNode = createLight(map, "4000 0 0", {});
+      mdl::deselectAll(map);
+
+      // through the three lights, the first one's shell at 700
+      const auto ray = vm::ray3d{{-1000, 0, 0}, {1, 0, 0}};
+      const auto pickFirst = [&]() {
+        const auto hit = pickSurface(tool, ray);
+        REQUIRE(hit.isMatch());
+        REQUIRE(hit.target<LightSurfaceHit>().node == firstNode);
+        return hit;
+      };
+
+      const auto buildsBefore = tool.pickableLightBuildCount();
+      auto hit = pickFirst();
+      CHECK(hit.distance() == Catch::Approx(700.0).margin(1e-6));
+      CHECK_FALSE(hit.target<LightSurfaceHit>().selected);
+      CHECK(pickSurfaces(tool, ray).size() == 3);
+      const auto builds = tool.pickableLightBuildCount();
+      CHECK(builds == buildsBefore + 3);
+
+      // a selection change reads nothing, only the flags change
+      selectOnly(map, {firstNode});
+      CHECK(pickFirst().target<LightSurfaceHit>().selected);
+      selectOnly(map, {thirdNode});
+      CHECK_FALSE(pickFirst().target<LightSurfaceHit>().selected);
+      mdl::deselectAll(map);
+      CHECK_FALSE(pickFirst().target<LightSurfaceHit>().selected);
+      CHECK(pickSurfaces(tool, ray).size() == 3);
+      CHECK(tool.pickableLightBuildCount() == builds);
+
+      // an edit of one light reads that light again, and its pick follows the edit
+      selectOnly(map, {firstNode});
+      REQUIRE(mdl::setEntityProperty(map, "light_radius", "200 200 200"));
+      hit = pickFirst();
+      CHECK(hit.distance() == Catch::Approx(800.0).margin(1e-6));
+      CHECK(hit.target<LightSurfaceHit>().selected);
+      CHECK(tool.pickableLightBuildCount() == builds + 1);
+      CHECK(pickSurfaces(tool, ray).size() == 3);
+
+      // a new node reads them all again
+      createLight(map, "6000 0 0", {});
+      CHECK(pickSurfaces(tool, ray).size() == 4);
+      CHECK(tool.pickableLightBuildCount() == builds + 1 + 4);
+    }
+
+    SECTION("an unselected light's inner shell is not picked (it is not drawn)")
+    {
+      setPref(
+        Preferences::ShowLightVolumes, std::string{Preferences::ShowLightVolumesAll});
+      const auto resetVolumes = kdl::invoke_later{[] {
+        PreferenceManager::instance().resetToDefault(Preferences::ShowLightVolumes);
+      }};
+
+      createLight(map, "0 0 0", SeededMath);
+      mdl::deselectAll(map);
+
+      const auto hit = pickSurface(tool, vm::ray3d{{1000, 0, 0}, {-1, 0, 0}});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::OuterShell);
+      CHECK(hit.distance() == Catch::Approx(700.0).margin(1e-6));
+    }
+
+    SECTION("a node in front of the inner shell leaves the outer shell (D57)")
+    {
+      createLight(map, "0 0 0", SeededMath);
+      auto* brushNode = createBrush(map);
+      const auto ray = vm::ray3d{{1000, 0, 0}, {-1, 0, 0}};
+
+      // the brush between the shells, at 800: the selected light's outer shell at 700
+      // stays before it
+      auto hit = pickSurface(tool, ray, {brushHit(brushNode, 800)});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::OuterShell);
+      CHECK(hit.distance() == Catch::Approx(700.0).margin(1e-6));
+
+      // the brush behind the inner shell at 970
+      hit = pickSurface(tool, ray, {brushHit(brushNode, 990)});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::InnerShell);
+    }
+
     SECTION("a math point light's inner shell, which the outer one encloses")
     {
       createLight(map, "0 0 0", SeededMath);
@@ -1341,12 +1432,14 @@ TEST_CASE("LightVolumeTool")
       {
         fastestMillis = std::min(fastestMillis, timePick());
       }
+#ifdef NDEBUG
       WARN(
         "300 lights in All mode: the first pick "
         << firstMillis << " ms, then fastest of 5 runs " << fastestMillis << " ms");
-
-#ifdef NDEBUG
       CHECK(fastestMillis <= 2.0);
+#else
+      (void)firstMillis;
+      (void)fastestMillis;
 #endif
     }
   }

@@ -1137,14 +1137,18 @@ TEST_CASE("LightVolumeToolController")
       CHECK(tracker->update(endInputState));
       tracker->end(endInputState);
 
-      // the z extent is +-300 around the reference bounds' centre
+      // the z extent is +-300 t around the reference bounds' centre, 273 for the seeded
+      // light, so that the new light's radius along the view axis is 300
       REQUIRE(map.selection().entities.size() == 1);
       const auto* createdNode = map.selection().entities.front();
       CHECK(createdNode != lightNode);
       const auto origin = vm::parse<double, 3>(valueOf(*createdNode, "origin"));
       REQUIRE(origin);
       CHECK(vm::is_equal(*origin, vm::vec3d{320, 28, referenceZ}, 0.005));
-      checkVector(*createdNode, "light_radius", vm::vec3d{16, 28, 300} / SeededVisibleT);
+      checkVector(
+        *createdNode,
+        "light_radius",
+        {16.0 / SeededVisibleT, 28.0 / SeededVisibleT, 300.0});
       REQUIRE(map.undoCommandName() != nullptr);
       CHECK(*map.undoCommandName() == "Create Light");
       CHECK(tool.mode() == LightVolumeTool::Mode::Handles);

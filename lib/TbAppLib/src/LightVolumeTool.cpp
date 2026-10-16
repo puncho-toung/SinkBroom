@@ -72,6 +72,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -274,9 +275,17 @@ mdl::PickResult pickVolume(
       if (inFront(vm::point_at_distance(segment, closest.position2)))
       {
         const auto hitPoint = vm::point_at_distance(pickRay, *distance);
-        result.addHit(
-          twoD ? mdl::Hit{LightVolumeTool::SideHitType, *distance, hitPoint, outlineSide(volume, edge, pickRay.direction)}
-               : mdl::Hit{LightVolumeTool::EdgeHitType, *distance, hitPoint, edge});
+        if (twoD)
+        {
+          const auto side = outlineSide(volume, edge, pickRay.direction);
+          result.addHit(
+            mdl::Hit{LightVolumeTool::SideHitType, *distance, hitPoint, side});
+        }
+        else
+        {
+          result.addHit(
+            mdl::Hit{LightVolumeTool::EdgeHitType, *distance, hitPoint, edge});
+        }
       }
     }
   }
@@ -488,27 +497,16 @@ std::pair<vm::vec3d, double> boundingSphere(
 std::vector<vm::vec3d> pickedTriangles(
   const mdl::LightProperties& light, const mdl::LightFrame& frame)
 {
-  auto result = std::vector<vm::vec3d>{};
-  if (light.type != mdl::LightType::Point)
+  switch (light.type)
   {
-    // one band is the same surface as many: the rings lie on the cone's straight lines
-    const auto mesh = render::buildLightVolumeMesh(
-      light, frame, render::LightVolumeStyle{1.0, 1, false, true});
-    for (const auto& range : mesh.ranges)
-    {
-      if (
-        range.element == mdl::LightElement::Funnel
-        || range.element == mdl::LightElement::SunBox)
-      {
-        for (std::size_t i = 0; i < range.count; ++i)
-        {
-          result.emplace_back(
-            gl::getVertexComponent<0>(mesh.triangles[range.firstTriangleVertex + i]));
-        }
-      }
-    }
+  case mdl::LightType::Spot:
+    return lightElementTriangles(light, frame, mdl::LightElement::Funnel);
+  case mdl::LightType::Sun:
+    return lightElementTriangles(light, frame, mdl::LightElement::SunBox);
+  case mdl::LightType::Point:
+    return {};
+    switchDefault();
   }
-  return result;
 }
 
 /**
@@ -829,16 +827,9 @@ void renderSurfaceHighlight(
   const LightSurfaceHit& surface,
   const bool bold)
 {
-  // the element is built at full alpha, so that it exists even where the volume is
-  // invisible, like the far cap of most spot lights
-  const auto mesh = render::buildLightVolumeMesh(
-    surface.light,
-    surface.frame,
-    render::LightVolumeStyle{
-      1.0, std::clamp(pref(Preferences::LightVolumeShells), 2, 8), false, false});
-  const auto range = std::ranges::find_if(
-    mesh.ranges, [&](const auto& r) { return r.element == surface.element; });
-  if (range == mesh.ranges.end())
+  const auto triangles =
+    lightElementTriangles(surface.light, surface.frame, surface.element);
+  if (triangles.empty())
   {
     return;
   }
@@ -847,11 +838,10 @@ void renderSurfaceHighlight(
   color[3] = SurfaceHighlightAlpha;
 
   auto fills = std::vector<gl::VertexTypes::P3C4::Vertex>{};
-  fills.reserve(range->count);
-  for (std::size_t i = 0; i < range->count; ++i)
+  fills.reserve(triangles.size());
+  for (const auto& point : triangles)
   {
-    fills.emplace_back(
-      gl::getVertexComponent<0>(mesh.triangles[range->firstTriangleVertex + i]), color);
+    fills.emplace_back(vm::vec3f{point}, color);
   }
 
   // closed surfaces are seen from one side only, open ones from both
@@ -905,6 +895,40 @@ std::optional<LightVolumeBox> volumeOf(
 }
 
 } // namespace
+
+mdl::LightProperties newDrawnLight()
+{
+  auto light = mdl::defaultLight(mdl::LightType::Point, mdl::LightProperties{});
+  light.math = mdl::seededMathLightProperties();
+  return light;
+}
+
+std::vector<vm::vec3d> lightElementTriangles(
+  const mdl::LightProperties& light,
+  const mdl::LightFrame& frame,
+  const mdl::LightElement element)
+{
+  // full alpha, so that every element exists even where the volume is invisible, like
+  // the far cap of most spot lights; one band of the bands of a point light is its outer
+  // shell, and one band of a spot light's cone is the same surface as many, since the
+  // rings lie on the cone's straight lines
+  const auto mesh = render::buildLightVolumeMesh(
+    light, frame, render::LightVolumeStyle{1.0, 1, false, false});
+
+  auto result = std::vector<vm::vec3d>{};
+  for (const auto& range : mesh.ranges)
+  {
+    if (range.element == element)
+    {
+      for (std::size_t i = 0; i < range.count; ++i)
+      {
+        result.emplace_back(
+          gl::getVertexComponent<0>(mesh.triangles[range.firstTriangleVertex + i]));
+      }
+    }
+  }
+  return result;
+}
 
 vm::vec3d LightVolumeBox::toWorld(const vm::vec3d& point) const
 {
@@ -1042,7 +1066,8 @@ LightVolumeTool::LightVolumeTool(MapDocument& document)
   m_notifierConnection += document.nodesWereAddedNotifier.connect(invalidateNodes);
   m_notifierConnection += document.nodesWillBeRemovedNotifier.connect(invalidateNodes);
   m_notifierConnection += document.nodesWereRemovedNotifier.connect(invalidateNodes);
-  m_notifierConnection += document.nodesDidChangeNotifier.connect(invalidateNodes);
+  m_notifierConnection +=
+    document.nodesDidChangeNotifier.connect(this, &LightVolumeTool::nodesDidChange);
   m_notifierConnection +=
     document.nodeVisibilityDidChangeNotifier.connect(invalidateNodes);
   m_notifierConnection += document.editorContextDidChangeNotifier.connect(invalidate);
@@ -1050,7 +1075,8 @@ LightVolumeTool::LightVolumeTool(MapDocument& document)
   m_notifierConnection += document.groupWasOpenedNotifier.connect(invalidate);
   m_notifierConnection += document.groupWasClosedNotifier.connect(invalidate);
   m_notifierConnection += document.selectionDidChangeNotifier.connect([&](const auto&) {
-    invalidatePickableLights();
+    // the lights stay as they are, only which of them are shown and selected changes
+    m_pickableMembershipValid = false;
     m_clickedNode = nullptr;
     m_clickedElement = std::nullopt;
   });
@@ -1212,12 +1238,12 @@ void LightVolumeTool::pickSurfaces(
   using namespace mdl::HitFilters;
 
   // an unselected light's surface yields to any node along the ray (D57)
-  const auto hasNodeHit = pickResult.first(type(mdl::nodeHitType())).isMatch();
+  const auto& nodeHit = pickResult.first(type(mdl::nodeHitType()));
 
   for (const auto& pickable : pickableLights())
   {
     if (
-      (!pickable.selected && hasNodeHit)
+      !pickable.shown || !pickable.pickable || (!pickable.selected && nodeHit.isMatch())
       || !vm::intersect_ray_sphere(pickRay, pickable.centre, pickable.radius))
     {
       continue;
@@ -1230,8 +1256,7 @@ void LightVolumeTool::pickSurfaces(
     switch (light.type)
     {
     case mdl::LightType::Point: {
-      // a shell is picked where the ray enters it, like a brush face; the inner shell,
-      // which the outer one encloses, wins where the ray reaches it
+      // a shell is picked where the ray enters it, like a brush face
       const auto radius = vm::abs(light.radius);
       const auto origin = vm::transpose(frame.R) * (pickRay.origin - frame.origin);
       const auto entering = [&](const double t) {
@@ -1240,14 +1265,19 @@ void LightVolumeTool::pickSurfaces(
                  : std::nullopt;
       };
 
-      if (render::lightVolumeHasInnerShell(light))
+      hit = withElement(entering(1.0), mdl::LightElement::OuterShell);
+
+      // the inner shell, drawn for selected lights only, wins where the ray reaches it,
+      // unless a node lies in front of it: then the outer shell keeps the light's place
+      // before the node (D57)
+      if (pickable.selected && render::lightVolumeHasInnerShell(light))
       {
-        hit =
-          withElement(entering(light.math.innerRadius), mdl::LightElement::InnerShell);
-      }
-      if (!hit)
-      {
-        hit = withElement(entering(1.0), mdl::LightElement::OuterShell);
+        if (const auto inner = withElement(
+              entering(light.math.innerRadius), mdl::LightElement::InnerShell);
+            inner && (!nodeHit.isMatch() || inner->first < nodeHit.distance()))
+        {
+          hit = inner;
+        }
       }
       break;
     }
@@ -1576,8 +1606,7 @@ bool LightVolumeTool::updateDraw(const vm::bbox3d& worldBox)
   }
   else
   {
-    base = mdl::defaultLight(mdl::LightType::Point, mdl::LightProperties{});
-    base.math = mdl::seededMathLightProperties();
+    base = newDrawnLight();
   }
 
   auto box = worldBox;
@@ -1757,10 +1786,16 @@ bool LightVolumeTool::doDeactivate()
   return true;
 }
 
+std::size_t LightVolumeTool::pickableLightBuildCount() const
+{
+  return m_pickableLightBuilds;
+}
+
 void LightVolumeTool::invalidatePickableLights()
 {
   m_pickableLightsValid = false;
   m_pickableLights.clear();
+  m_changedLights.clear();
 }
 
 void LightVolumeTool::lightsDidChange()
@@ -1774,18 +1809,74 @@ void LightVolumeTool::lightsDidChange()
   }
 }
 
-const std::vector<LightVolumeTool::PickableLight>& LightVolumeTool::pickableLights() const
+void LightVolumeTool::nodesDidChange(const std::vector<mdl::Node*>& nodes)
 {
-  if (m_pickableLightsValid)
+  // a group or a layer carries its lights along: they are all read again
+  if (std::ranges::any_of(nodes, [](const auto* node) {
+        return dynamic_cast<const mdl::GroupNode*>(node)
+               || dynamic_cast<const mdl::LayerNode*>(node);
+      }))
   {
-    return m_pickableLights;
+    lightsDidChange();
+    return;
   }
 
-  m_pickableLightsValid = true;
-  m_pickableLights.clear();
+  // only the changed entities are read again (I7.10)
+  for (const auto* node : nodes)
+  {
+    if (const auto* entityNode = dynamic_cast<const mdl::EntityNode*>(node))
+    {
+      m_changedLights.push_back(entityNode);
+
+      if (
+        m_highlightedHit.type() == SurfaceHitType && !m_dragging
+        && m_highlightedHit.target<LightSurfaceHit>().node == entityNode)
+      {
+        m_highlightedHit = mdl::Hit::NoHit;
+      }
+    }
+  }
+}
+
+const std::vector<LightVolumeTool::PickableLight>& LightVolumeTool::pickableLights() const
+{
+  if (!m_pickableLightsValid)
+  {
+    m_pickableLights.clear();
+    m_changedLights.clear();
+    m_pickableLightsValid = true;
+    m_pickableMembershipValid = false;
+  }
+
+  if (!m_changedLights.empty())
+  {
+    // the changed lights are read again below, if they are shown
+    std::erase_if(m_pickableLights, [&](const auto& pickable) {
+      return std::ranges::find(m_changedLights, pickable.node) != m_changedLights.end();
+    });
+    m_changedLights.clear();
+    m_pickableMembershipValid = false;
+  }
+
+  if (!m_pickableMembershipValid)
+  {
+    m_pickableMembershipValid = true;
+    updatePickableLights();
+  }
+
+  return m_pickableLights;
+}
+
+void LightVolumeTool::updatePickableLights() const
+{
+  for (auto& pickable : m_pickableLights)
+  {
+    pickable.shown = false;
+  }
+
   if (!showsVolumes())
   {
-    return m_pickableLights;
+    return;
   }
 
   auto& map = m_document.map();
@@ -1832,27 +1923,43 @@ const std::vector<LightVolumeTool::PickableLight>& LightVolumeTool::pickableLigh
       continue;
     }
 
-    // a light_origin light is read only (D8), a degenerate one has no volume
-    const auto light = mdl::parseLightProperties(entity);
-    if (light.hasLightOrigin || !mdl::lightEditBox(light))
+    // a light that was read before keeps its geometry: a selection change reads nothing
+    auto pickable = std::ranges::find(m_pickableLights, entityNode, &PickableLight::node);
+    if (pickable == m_pickableLights.end())
     {
-      continue;
+      m_pickableLights.push_back(pickableLight(entityNode, policy));
+      pickable = std::prev(m_pickableLights.end());
     }
+    pickable->shown = true;
+    pickable->selected = selected;
+  }
+}
 
-    const auto frame = mdl::lightFrame(entity, policy);
-    const auto [centre, radius] = boundingSphere(light, frame);
-    m_pickableLights.push_back(PickableLight{
-      entityNode,
-      light,
-      frame,
-      selected,
-      centre,
-      radius,
-      pickedTriangles(light, frame),
-    });
+LightVolumeTool::PickableLight LightVolumeTool::pickableLight(
+  mdl::EntityNode* entityNode, const mdl::EntityRotationPolicy policy) const
+{
+  ++m_pickableLightBuilds;
+
+  const auto& entity = entityNode->entity();
+  const auto light = mdl::parseLightProperties(entity);
+
+  // a light_origin light is read only (D8), a degenerate one has no volume
+  if (light.hasLightOrigin || !mdl::lightEditBox(light))
+  {
+    return PickableLight{.node = entityNode, .light = light};
   }
 
-  return m_pickableLights;
+  const auto frame = mdl::lightFrame(entity, policy);
+  const auto [centre, radius] = boundingSphere(light, frame);
+  return PickableLight{
+    .node = entityNode,
+    .light = light,
+    .frame = frame,
+    .pickable = true,
+    .centre = centre,
+    .radius = radius,
+    .triangles = pickedTriangles(light, frame),
+  };
 }
 
 void LightVolumeTool::resetDraw()

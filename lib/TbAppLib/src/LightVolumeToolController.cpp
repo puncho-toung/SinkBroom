@@ -19,6 +19,7 @@
 
 #include "ui/LightVolumeToolController.h"
 
+#include "base/Logger.h"
 #include "base/Macros.h"
 #include "gl/Camera.h"
 #include "mdl/BrushNode.h"
@@ -56,9 +57,9 @@ namespace tb::ui
 namespace
 {
 
-// the view axis extent of a light drawn in a 2D view with nothing selected, a default
-// point light's radius
-constexpr auto DrawExtent2D = 300.0;
+// the radius of a light drawn in a 2D view with nothing selected along the view axis, a
+// default point light's
+constexpr auto DrawRadius2D = 300.0;
 
 bool startsOnSelectedNode(const InputState& inputState)
 {
@@ -595,9 +596,10 @@ private:
 
 /**
  * The bounds whose extent along the view axis a 2D drag in draw mode takes: the world
- * bounds of the selected light's handle box, or +-300 around the map's reference bounds
- * (the draw shape tool's reference bounds would give the selected light's own small box,
- * a flat light).
+ * bounds of the selected light's handle box, or the handle box of a new light of radius
+ * 300 around the map's reference bounds, +-300 t, 273 at the default threshold, so that
+ * the drawn light's radius along the view axis is 300 (D61). The draw shape tool's
+ * reference bounds would give the selected light's own small box, a flat light.
  */
 vm::bbox3d drawReferenceBounds(const LightVolumeTool& tool, const mdl::Map& map)
 {
@@ -610,7 +612,9 @@ vm::bbox3d drawReferenceBounds(const LightVolumeTool& tool, const mdl::Map& map)
   }
 
   const auto center = map.referenceBounds().center();
-  const auto extent = vm::vec3d{DrawExtent2D, DrawExtent2D, DrawExtent2D};
+  const auto halfExtent =
+    DrawRadius2D * mdl::visibleFalloffT(newDrawnLight(), tool.handleThreshold());
+  const auto extent = vm::vec3d{halfExtent, halfExtent, halfExtent};
   return vm::bbox3d{center - extent, center + extent};
 }
 
@@ -769,7 +773,10 @@ bool LightVolumeToolController::selectSurface(
         mdl::deselectAll(map);
       }
       mdl::selectNodes(map, {node});
-      transaction.commit();
+      if (!transaction.commit())
+      {
+        map.logger().error() << "Could not select the light";
+      }
     }
   }
   else
@@ -777,7 +784,10 @@ bool LightVolumeToolController::selectSurface(
     auto transaction = mdl::Transaction{map, "Select Object"};
     mdl::deselectAll(map);
     mdl::selectNodes(map, {node});
-    transaction.commit();
+    if (!transaction.commit())
+    {
+      map.logger().error() << "Could not select the light";
+    }
   }
 
   // the clicked element keeps a bold outline (D60)

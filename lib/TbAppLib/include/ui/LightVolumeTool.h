@@ -48,6 +48,7 @@ namespace mdl
 {
 class EntityNode;
 class Grid;
+class Node;
 class PickResult;
 } // namespace mdl
 
@@ -112,6 +113,7 @@ std::optional<LightVolumeBox> lightVolumeBox(
  */
 struct LightSurfaceHit
 {
+  // identity only, never dereferenced after a notification
   mdl::EntityNode* node = nullptr;
   mdl::LightElement element = mdl::LightElement::OuterShell;
   // the light is selected, or is in a selected group
@@ -133,6 +135,24 @@ struct LightSurfaceHit
  * the base.
  */
 vm::line3d lightVolumeHandleLine(const LightVolumeBox& volume, const mdl::Hit& hit);
+
+/**
+ * The light that draw mode creates when nothing is selected: the engine's default point
+ * light with the math block that the light editor seeds (D24, D29).
+ */
+mdl::LightProperties newDrawnLight();
+
+/**
+ * The world triangles, three points each and CW seen from outside, of the given element
+ * of the given light's volume in the given frame: what a surface hit highlights (D60) and
+ * what the funnel of a spot light and the box of a sun are picked on (D57). Built at full
+ * alpha, so that an element exists even where the volume is invisible; nothing for an
+ * element that the light does not have.
+ */
+std::vector<vm::vec3d> lightElementTriangles(
+  const mdl::LightProperties& light,
+  const mdl::LightFrame& frame,
+  mdl::LightElement element);
 
 class LightVolumeTool;
 
@@ -197,7 +217,11 @@ private:
     mdl::EntityNode* node = nullptr;
     mdl::LightProperties light;
     mdl::LightFrame frame;
+    // its volume is shown now: it is selected, or the volumes of all lights are shown
+    bool shown = false;
     bool selected = false;
+    // it has a volume that can be picked: not light_origin (D8), not degenerate
+    bool pickable = false;
     vm::vec3d centre;
     double radius = 0.0;
     // the world triangles of a spot light's funnel or a sun's box, CW seen from outside
@@ -227,8 +251,13 @@ private:
   std::optional<vm::bbox3d> m_drawBox;
   std::optional<mdl::LightProperties> m_drawLight;
 
+  // the lights read for the surface picks; a selection change only updates which are
+  // shown and selected, a changed entity is read again alone, anything else drops them
   mutable std::vector<PickableLight> m_pickableLights;
   mutable bool m_pickableLightsValid = false;
+  mutable bool m_pickableMembershipValid = false;
+  mutable std::vector<const mdl::EntityNode*> m_changedLights;
+  mutable std::size_t m_pickableLightBuilds = 0;
 
   NotifierConnection m_notifierConnection;
 
@@ -316,12 +345,19 @@ public:
 
   /**
    * Picks the surfaces of the shown light volumes (D57, D60), at most one per light: the
-   * inner shell if the ray enters it, else the outer shell of a point light; the funnel
-   * or the base of a spot light; the box of a sun. Surfaces are picked from outside only,
-   * like brush faces. The surfaces of unselected lights are not picked if the pick result
-   * already holds a node hit, because they would yield to it.
+   * outer shell of a point light, or of a selected one the inner shell where the ray
+   * enters it before any node hit of the pick result; the funnel or the base of a spot
+   * light; the box of a sun. Surfaces are picked from outside only, like brush faces. The
+   * surfaces of unselected lights are not picked if the pick result already holds a node
+   * hit, because they would yield to it.
    */
   void pickSurfaces(const vm::ray3d& pickRay, mdl::PickResult& pickResult) const;
+
+  /**
+   * How many times a light was read for the surface picks since the tool was made: a
+   * selection change reads none, a changed light only itself (I7.10).
+   */
+  std::size_t pickableLightBuildCount() const;
 
   void setAnchorPos(AnchorPos anchorPos);
   AnchorPos anchorPos() const;
@@ -425,7 +461,11 @@ private:
 
   void invalidatePickableLights();
   void lightsDidChange();
+  void nodesDidChange(const std::vector<mdl::Node*>& nodes);
   const std::vector<PickableLight>& pickableLights() const;
+  void updatePickableLights() const;
+  PickableLight pickableLight(
+    mdl::EntityNode* entityNode, mdl::EntityRotationPolicy policy) const;
 
   void resetDraw();
   bool applyDrawnLight();
