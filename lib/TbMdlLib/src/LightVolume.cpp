@@ -25,11 +25,13 @@
 
 #include "kd/contracts.h"
 
+#include "vm/intersection.h"
 #include "vm/vec.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <ostream>
 
 namespace tb::mdl
 {
@@ -38,6 +40,14 @@ namespace
 
 // every guard of the light geometry, checked before anything is normalized
 constexpr auto DegenerateEpsilon = 1e-6;
+
+// the handle box threshold (D53, D61): its range and the bisection's steps
+constexpr auto MinVisibleThreshold = 0.01;
+constexpr auto MaxVisibleThreshold = 0.5;
+constexpr auto VisibleFalloffSteps = 24;
+
+// a math light with an inner radius from here on is uniform to its edge (D43)
+constexpr auto InnerRadiusSharp = 0.999;
 
 // R_ComputeSpotLightProjectionMatrix
 constexpr auto SpotLightMinZNear = 8.0;
@@ -198,21 +208,30 @@ double explicitZNear(const LightProperties& light)
   return SpotLightMinZNear;
 }
 
+/**
+ * The light of the given box, whose half extents are the radius scaled by the given
+ * falloff parameter (1 for the full extent, visibleFalloffT for the handle box).
+ */
 LightProperties pointFromEditBox(
-  const LightProperties& base, const vm::mat3x3d& rotation, const vm::bbox3d& box)
+  const LightProperties& base,
+  const vm::mat3x3d& rotation,
+  const vm::bbox3d& box,
+  const double t)
 {
   const auto halfExtents = box.size() / 2.0;
   if (
     halfExtents.x() < MinHalfExtent || halfExtents.y() < MinHalfExtent
-    || halfExtents.z() < MinHalfExtent)
+    || halfExtents.z() < MinHalfExtent || t < DegenerateEpsilon)
   {
     return base;
   }
 
+  const auto radius = halfExtents / t;
+
   auto light = base;
   light.origin = base.origin + rotation * box.center();
-  light.radius = halfExtents;
-  light.equalRadius = equalComponents(halfExtents);
+  light.radius = radius;
+  light.equalRadius = equalComponents(radius);
   return light;
 }
 
@@ -278,7 +297,48 @@ LightProperties spotFromEditBox(
   return light;
 }
 
+/**
+ * The falloff of the given light that visibleFalloffT compares with its threshold.
+ */
+double visibleFalloff(const double t, const MathLightProperties& math)
+{
+  return std::min(math.enabled ? lightFalloff(t, math) : legacyFalloff(t), 1.0);
+}
+
 } // namespace
+
+std::ostream& operator<<(std::ostream& lhs, const LightElement rhs)
+{
+  switch (rhs)
+  {
+  case LightElement::OuterShell:
+    lhs << "OuterShell";
+    break;
+  case LightElement::InnerShell:
+    lhs << "InnerShell";
+    break;
+  case LightElement::Funnel:
+    lhs << "Funnel";
+    break;
+  case LightElement::Base:
+    lhs << "Base";
+    break;
+  case LightElement::Penumbra:
+    lhs << "Penumbra";
+    break;
+  case LightElement::SunBox:
+    lhs << "SunBox";
+    break;
+  case LightElement::Band:
+    lhs << "Band";
+    break;
+  case LightElement::NearCap:
+    lhs << "NearCap";
+    break;
+    switchDefault();
+  }
+  return lhs;
+}
 
 LightFrame lightFrame(const Entity& entity, const EntityRotationPolicy policy)
 {
@@ -398,6 +458,54 @@ std::optional<vm::bbox3d> lightEditBox(const LightProperties& light)
   }
 }
 
+double visibleFalloffT(const LightProperties& light, const double threshold)
+{
+  const auto& math = light.math;
+  if (math.enabled && math.innerRadius >= InnerRadiusSharp)
+  {
+    return 1.0;
+  }
+
+  const auto level = std::clamp(threshold, MinVisibleThreshold, MaxVisibleThreshold);
+  if (visibleFalloff(1.0, math) >= level)
+  {
+    return 1.0;
+  }
+
+  // every falloff curve decreases from t = 0 to t = 1
+  auto visible = 0.0;
+  auto invisible = 1.0;
+  for (auto step = 0; step < VisibleFalloffSteps; ++step)
+  {
+    const auto t = (visible + invisible) / 2.0;
+    if (visibleFalloff(t, math) >= level)
+    {
+      visible = t;
+    }
+    else
+    {
+      invisible = t;
+    }
+  }
+  return visible;
+}
+
+std::optional<vm::bbox3d> lightEditBox(
+  const LightProperties& light, const double threshold)
+{
+  if (light.type != LightType::Point)
+  {
+    return lightEditBox(light);
+  }
+
+  const auto halfExtents = light.radius * visibleFalloffT(light, threshold);
+  if (hasDegenerateRadius(light.radius) || hasDegenerateRadius(halfExtents))
+  {
+    return std::nullopt;
+  }
+  return vm::bbox3d{-halfExtents, halfExtents};
+}
+
 LightProperties lightFromEditBox(
   const LightProperties& base, const vm::mat3x3d& rotation, const vm::bbox3d& box)
 {
@@ -405,11 +513,22 @@ LightProperties lightFromEditBox(
   {
   case LightType::Point:
   case LightType::Sun:
-    return pointFromEditBox(base, rotation, box);
+    return pointFromEditBox(base, rotation, box, 1.0);
   case LightType::Spot:
     return spotFromEditBox(base, rotation, box);
     switchDefault();
   }
+}
+
+LightProperties lightFromEditBox(
+  const LightProperties& base,
+  const vm::mat3x3d& rotation,
+  const vm::bbox3d& box,
+  const double threshold)
+{
+  return base.type == LightType::Point
+           ? pointFromEditBox(base, rotation, box, visibleFalloffT(base, threshold))
+           : lightFromEditBox(base, rotation, box);
 }
 
 vm::vec3d spotPoint(
@@ -575,6 +694,78 @@ LightProperties pointFromWorldBox(const vm::bbox3d& box, const LightProperties& 
   light.equalRadius = equalComponents(halfExtents);
 
   return light;
+}
+
+LightProperties pointFromWorldBox(
+  const vm::bbox3d& box, const LightProperties& base, const double threshold)
+{
+  const auto t = visibleFalloffT(base, threshold);
+  const auto halfExtents = box.size() / 2.0;
+  if (
+    base.type == LightType::Sun || halfExtents.x() < MinHalfExtent
+    || halfExtents.y() < MinHalfExtent || halfExtents.z() < MinHalfExtent
+    || t < DegenerateEpsilon)
+  {
+    return pointFromWorldBox(box, base);
+  }
+
+  auto light = pointFromWorldBox(box, base);
+  light.radius = halfExtents / t;
+  light.equalRadius = equalComponents(light.radius);
+  return light;
+}
+
+std::optional<double> intersectRayEllipsoid(
+  const LightFrame& frame, const vm::vec3d& radius, const double t, const vm::ray3d& ray)
+{
+  const auto scale = vm::abs(radius) * t;
+  if (hasDegenerateRadius(scale))
+  {
+    return std::nullopt;
+  }
+
+  // in the space where the ellipsoid is the unit sphere, the ray keeps its parameter
+  const auto toLocal = vm::transpose(frame.R);
+  const auto origin = toLocal * (ray.origin - frame.origin) / scale;
+  const auto direction = toLocal * ray.direction / scale;
+
+  const auto a = vm::dot(direction, direction);
+  const auto b = 2.0 * vm::dot(origin, direction);
+  const auto c = vm::dot(origin, origin) - 1.0;
+  const auto discriminant = b * b - 4.0 * a * c;
+  if (a < DegenerateEpsilon || discriminant < 0.0)
+  {
+    return std::nullopt;
+  }
+
+  const auto root = std::sqrt(discriminant);
+  const auto nearer = (-b - root) / (2.0 * a);
+  const auto farther = (-b + root) / (2.0 * a);
+  if (nearer >= 0.0)
+  {
+    return nearer;
+  }
+  if (farther >= 0.0)
+  {
+    return farther;
+  }
+  return std::nullopt;
+}
+
+std::optional<double> intersectRaySpotBase(
+  const LightProperties& light, const LightFrame& frame, const vm::ray3d& ray)
+{
+  const auto frustum = spotLightFrustum(light);
+  if (!frustum)
+  {
+    return std::nullopt;
+  }
+
+  auto corners = std::array<vm::vec3d, 4>{};
+  std::ranges::transform(frustum->farCorners, corners.begin(), [&](const auto& corner) {
+    return frame.origin + frame.R * corner;
+  });
+  return vm::intersect_ray_polygon(ray, corners.begin(), corners.end());
 }
 
 } // namespace tb::mdl

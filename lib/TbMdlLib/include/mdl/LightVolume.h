@@ -24,14 +24,43 @@
 
 #include "vm/bbox.h"
 #include "vm/mat.h"
+#include "vm/ray.h"
 #include "vm/vec.h"
 
 #include <array>
+#include <iosfwd>
 #include <optional>
 
 namespace tb::mdl
 {
 class Entity;
+
+/**
+ * The parts of a drawn light volume (light editor plan, D55). The first six are the
+ * elements that the editor names; the last two are the translucency layers that are
+ * drawn but neither picked nor highlighted, so that the parts tile the volume.
+ */
+enum class LightElement
+{
+  // a point light's ellipsoid at t = 1, where its falloff reaches 0
+  OuterShell,
+  // a math point light's ellipsoid at t = math_inner_radius, the edge of its core
+  InnerShell,
+  // a spot light's cone surface from the near to the far cap
+  Funnel,
+  // a spot light's far cap
+  Base,
+  // a math spot light's inner cone at 1 - math_penumbra, never picked
+  Penumbra,
+  // a sun's box
+  SunBox,
+  // an intermediate translucency shell of a point light, never picked
+  Band,
+  // a spot light's near cap, never picked
+  NearCap,
+};
+
+std::ostream& operator<<(std::ostream& lhs, LightElement rhs);
 
 /**
  * The geometry of an id Tech 4 light as RBDOOM-3-BFG's renderer derives it
@@ -126,6 +155,23 @@ bool isCentredSpot(const LightProperties& light);
 std::optional<vm::bbox3d> lightEditBox(const LightProperties& light);
 
 /**
+ * The largest falloff parameter t in [0, 1] at which the light is still visible: its
+ * falloff curve (lightFalloff for a math light, legacyFalloff for a light without math),
+ * at most 1, is at least the given threshold there. Found by bisection in 24 steps; a
+ * math light with an inner radius of at least 0.999 is visible to t = 1. The threshold is
+ * clamped to [0.01, 0.5].
+ */
+double visibleFalloffT(const LightProperties& light, double threshold);
+
+/**
+ * The handle box of the light volume tool (light editor plan, D61): for a point light the
+ * box of +-radius * visibleFalloffT(light, threshold) in local space, so that its faces
+ * are where the light fades below the threshold; for a spot light and a sun the box of
+ * lightEditBox. Returns nothing for a degenerate light.
+ */
+std::optional<vm::bbox3d> lightEditBox(const LightProperties& light, double threshold);
+
+/**
  * Returns the given light changed so that its edit box is the given box, which is in the
  * space of the base's edit box. The given rotation is the light's R, which places a
  * moved centre or apex in the world.
@@ -142,6 +188,19 @@ std::optional<vm::bbox3d> lightEditBox(const LightProperties& light);
  */
 LightProperties lightFromEditBox(
   const LightProperties& base, const vm::mat3x3d& rotation, const vm::bbox3d& box);
+
+/**
+ * Returns the given light changed so that its handle box (lightEditBox with the given
+ * threshold) is the given box: a point light's radius is the box's half extents divided
+ * by visibleFalloffT of the base, so that dragging a face of the handle box by d moves
+ * the radius on that side by d / visibleFalloffT; spot lights and suns as
+ * lightFromEditBox without a threshold.
+ */
+LightProperties lightFromEditBox(
+  const LightProperties& base,
+  const vm::mat3x3d& rotation,
+  const vm::bbox3d& box,
+  double threshold);
 
 /**
  * Returns the local point of the given spot light at the projected position (u, v) in
@@ -210,5 +269,32 @@ LightProperties spotFromWorldBox(const vm::bbox3d& box, const LightProperties& b
  * is below 1.
  */
 LightProperties pointFromWorldBox(const vm::bbox3d& box, const LightProperties& base);
+
+/**
+ * Returns the given light as a point light (a sun stays a sun) whose handle box
+ * (lightEditBox with the given threshold) is the given world-aligned box: the box's
+ * centre is its origin, and a point light's radius is the box's half extents divided by
+ * visibleFalloffT of the base, so that the drawn box is where the light will be visible.
+ * Returns the base if a half extent is below 1.
+ */
+LightProperties pointFromWorldBox(
+  const vm::bbox3d& box, const LightProperties& base, double threshold);
+
+/**
+ * The distance along the given world ray to the ellipsoid of the given radius scaled by
+ * t in the given frame (a point light's shell at the falloff parameter t): the nearer of
+ * the two intersections that is not behind the ray's origin, so the far one if the
+ * origin is inside. Nothing if the ray misses it or the scaled radius is degenerate.
+ */
+std::optional<double> intersectRayEllipsoid(
+  const LightFrame& frame, const vm::vec3d& radius, double t, const vm::ray3d& ray);
+
+/**
+ * The distance along the given world ray to the far cap of the given spot light in the
+ * given frame, the parallelogram of its far corners at depth zNear + zFar, from either
+ * side. Nothing if the ray misses it or the light is degenerate.
+ */
+std::optional<double> intersectRaySpotBase(
+  const LightProperties& light, const LightFrame& frame, const vm::ray3d& ray);
 
 } // namespace tb::mdl

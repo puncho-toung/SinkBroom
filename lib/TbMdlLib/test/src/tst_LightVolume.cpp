@@ -28,10 +28,13 @@
 #include "vm/bbox_io.h" // IWYU pragma: keep
 #include "vm/mat.h"
 #include "vm/mat_io.h" // IWYU pragma: keep
+#include "vm/ray.h"
 #include "vm/vec.h"
 #include "vm/vec_io.h" // IWYU pragma: keep
 
 #include <cmath>
+#include <optional>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -108,6 +111,36 @@ vm::bbox3d box(const vm::vec3d& min, const vm::vec3d& max)
   return vm::bbox3d{min, max};
 }
 
+// the handle threshold's default (D53)
+constexpr auto DefaultThreshold = 0.10;
+
+/**
+ * A point light of radius 300 with the math block that the light editor seeds (D29):
+ * linear, inner radius 0.1.
+ */
+LightProperties seededPoint()
+{
+  auto light = defaultPoint;
+  light.math = seededMathLightProperties();
+  return light;
+}
+
+/**
+ * The t at which 1 - smoothstep(t) is the given level: smoothstep(t) = 1 - level, whose
+ * inverse is 1/2 - sin(asin(1 - 2 y) / 3).
+ */
+double distanceOf(const std::optional<double>& distance)
+{
+  REQUIRE(distance);
+  return *distance;
+}
+
+double legacyVisibleT(const double level)
+{
+  const auto y = 1.0 - level;
+  return 0.5 - std::sin(std::asin(1.0 - 2.0 * y) / 3.0);
+}
+
 } // namespace
 
 TEST_CASE("LightVolume")
@@ -139,6 +172,23 @@ TEST_CASE("LightVolume")
       lightFrame(lightRotation, EntityRotationPolicy::IdTech4).R * vm::vec3d{1, 0, 0}
       == vm::approx{vm::vec3d{0, 1, 0}, Exact});
     CHECK(lightFrame(lightRotation, EntityRotationPolicy::Quake).R == identity);
+  }
+
+  SECTION("operator<<(LightElement)")
+  {
+    const auto name = [](const LightElement element) {
+      auto str = std::ostringstream{};
+      str << element;
+      return str.str();
+    };
+    CHECK(name(LightElement::OuterShell) == "OuterShell");
+    CHECK(name(LightElement::InnerShell) == "InnerShell");
+    CHECK(name(LightElement::Funnel) == "Funnel");
+    CHECK(name(LightElement::Base) == "Base");
+    CHECK(name(LightElement::Penumbra) == "Penumbra");
+    CHECK(name(LightElement::SunBox) == "SunBox");
+    CHECK(name(LightElement::Band) == "Band");
+    CHECK(name(LightElement::NearCap) == "NearCap");
   }
 
   SECTION("pointLightLocalBox")
@@ -408,6 +458,107 @@ TEST_CASE("LightVolume")
     auto flat = defaultPoint;
     flat.radius = vm::vec3d{300, 300, 0};
     CHECK(lightEditBox(flat) == std::nullopt);
+
+    SECTION("With a threshold, a point light's box is where it fades out (D61)")
+    {
+      // the seeded light is visible to t = 0.91 at 10 %
+      const auto seededBox = lightEditBox(seededPoint(), DefaultThreshold);
+      REQUIRE(seededBox);
+      CHECK(vm::approx{vm::bbox3d{273.0}, 1e-4} == *seededBox);
+
+      // a light without math, by the smooth stand-in
+      const auto legacyT = legacyVisibleT(DefaultThreshold);
+      const auto legacyBox = lightEditBox(defaultPoint, DefaultThreshold);
+      REQUIRE(legacyBox);
+      CHECK(vm::approx{vm::bbox3d{300.0 * legacyT}, 1e-4} == *legacyBox);
+
+      // per axis
+      auto ellipsoid = seededPoint();
+      ellipsoid.radius = vm::vec3d{100, 200, 300};
+      CHECK(
+        vm::approx{vm::bbox3d{vm::vec3d{-91, -182, -273}, vm::vec3d{91, 182, 273}}, 1e-4}
+        == *lightEditBox(ellipsoid, DefaultThreshold));
+
+      // spot lights and suns keep their full box (Q15)
+      CHECK(lightEditBox(defaultSpot, DefaultThreshold) == lightEditBox(defaultSpot));
+      CHECK(lightEditBox(sun, DefaultThreshold) == lightEditBox(sun));
+
+      CHECK(lightEditBox(flat, DefaultThreshold) == std::nullopt);
+    }
+  }
+
+  SECTION("visibleFalloffT")
+  {
+    const auto withMath = [](const MathLightProperties& math) {
+      auto light = defaultPoint;
+      light.math = math;
+      return light;
+    };
+
+    const auto linear = MathLightProperties{
+      .enabled = true, .falloff = LightFalloff::Linear, .innerRadius = 0.0};
+    CHECK(
+      visibleFalloffT(withMath(linear), DefaultThreshold)
+      == Catch::Approx(0.9).margin(Exact));
+
+    // u = (t - 0.1) / 0.9 = 0.9
+    CHECK(
+      visibleFalloffT(seededPoint(), DefaultThreshold)
+      == Catch::Approx(0.91).margin(Exact));
+
+    SECTION("The windowed inverse square, solved longhand")
+    {
+      // the default math block: invsquare_clamped, k = 2, inner radius 0, so u = t
+      const auto math = MathLightProperties{.enabled = true};
+      REQUIRE(math.falloff == LightFalloff::InvSquareClamped);
+      const auto falloff = [](const double u) {
+        const auto w = 1.0 - u * u * u * u;
+        const auto d = 2.0 * u + 1e-3;
+        return w * w / (d * d + 1.0);
+      };
+
+      // 60 bisection steps of the curve as written out here
+      auto lo = 0.0;
+      auto hi = 1.0;
+      for (auto i = 0; i < 60; ++i)
+      {
+        const auto mid = (lo + hi) / 2.0;
+        (falloff(mid) >= DefaultThreshold ? lo : hi) = mid;
+      }
+      REQUIRE(falloff(lo) == Catch::Approx(DefaultThreshold).margin(1e-9));
+      CHECK(
+        visibleFalloffT(withMath(math), DefaultThreshold)
+        == Catch::Approx(lo).margin(Exact));
+    }
+
+    SECTION("A light without math by the smooth stand-in")
+    {
+      CHECK(
+        visibleFalloffT(defaultPoint, DefaultThreshold)
+        == Catch::Approx(legacyVisibleT(DefaultThreshold)).margin(Exact));
+      CHECK(visibleFalloffT(defaultPoint, 0.5) == Catch::Approx(0.5).margin(Exact));
+
+      // a disabled math block is not read
+      auto disabled = seededPoint();
+      disabled.math.enabled = false;
+      CHECK(
+        visibleFalloffT(disabled, DefaultThreshold)
+        == Catch::Approx(legacyVisibleT(DefaultThreshold)).margin(Exact));
+    }
+
+    SECTION("An inner radius of 0.999 is visible to its edge")
+    {
+      auto sharp = linear;
+      sharp.innerRadius = 0.999;
+      CHECK(visibleFalloffT(withMath(sharp), DefaultThreshold) == 1.0);
+    }
+
+    SECTION("The threshold is clamped to [0.01, 0.5]")
+    {
+      CHECK(visibleFalloffT(withMath(linear), 0.9) == Catch::Approx(0.5).margin(Exact));
+      CHECK(
+        visibleFalloffT(withMath(linear), 0.001) == Catch::Approx(0.99).margin(Exact));
+    }
   }
 
   SECTION("lightFromEditBox")
@@ -583,6 +734,74 @@ TEST_CASE("LightVolume")
       CHECK(
         lightFromEditBox(defaultSpot, identity, box({-132, -132, 0}, {132, 132, 24}))
         != defaultSpot);
+    }
+
+    SECTION("With a threshold, the handle box divides by the visible t (D61)")
+    {
+      SECTION("Round trips")
+      {
+        for (const auto& light : {defaultPoint, seededPoint()})
+        {
+          const auto handleBox = lightEditBox(light, DefaultThreshold);
+          REQUIRE(handleBox);
+          const auto result =
+            lightFromEditBox(light, identity, *handleBox, DefaultThreshold);
+          CHECK(result.origin == vm::approx{light.origin, Exact});
+          CHECK(result.radius == vm::approx{light.radius, Exact});
+          CHECK(result.equalRadius);
+        }
+
+        // spot lights and suns as without a threshold
+        CHECK(
+          lightFromEditBox(
+            defaultSpot, identity, *lightEditBox(defaultSpot), DefaultThreshold)
+          == lightFromEditBox(defaultSpot, identity, *lightEditBox(defaultSpot)));
+        CHECK(
+          lightFromEditBox(sun, identity, *lightEditBox(sun), DefaultThreshold)
+          == lightFromEditBox(sun, identity, *lightEditBox(sun)));
+      }
+
+      SECTION("The seeded light's +x face dragged by 32")
+      {
+        const auto t = 0.91;
+
+        // the scale tool's face drag: the +x face follows the handle by 32, the -x face
+        // stays, so the half extent grows by 16 and the radius by 16 / t; the centre
+        // follows by 16
+        const auto light = lightFromEditBox(
+          seededPoint(),
+          identity,
+          box({-273, -273, -273}, {273 + 32, 273, 273}),
+          DefaultThreshold);
+        CHECK(light.radius.x() == Catch::Approx(300.0 + 16.0 / t).margin(Tolerance));
+        CHECK(light.radius.y() == Catch::Approx(300.0).margin(Tolerance));
+        CHECK(light.radius.z() == Catch::Approx(300.0).margin(Tolerance));
+        CHECK(light.origin == vm::approx{vm::vec3d{16, 0, 0}, Tolerance});
+        CHECK_FALSE(light.equalRadius);
+
+        // both x faces by 32 (anchored at the centre): the radius grows by 32 / t, the
+        // centre stays
+        const auto centred = lightFromEditBox(
+          seededPoint(),
+          identity,
+          box({-273 - 32, -273, -273}, {273 + 32, 273, 273}),
+          DefaultThreshold);
+        CHECK(centred.radius.x() == Catch::Approx(300.0 + 32.0 / t).margin(Tolerance));
+        CHECK(centred.radius.x() == Catch::Approx(335.165).margin(Tolerance));
+        CHECK(centred.radius.y() == Catch::Approx(300.0).margin(Tolerance));
+        CHECK(centred.origin == vm::approx{vm::vec3d{0, 0, 0}, Exact});
+      }
+
+      SECTION("A half extent below 1 is denied")
+      {
+        CHECK(
+          lightFromEditBox(
+            seededPoint(),
+            identity,
+            box({-273, -273, -0.5}, {273, 273, 0.5}),
+            DefaultThreshold)
+          == seededPoint());
+      }
     }
   }
 
@@ -839,6 +1058,121 @@ TEST_CASE("LightVolume")
 
     // a half extent below 1 is denied
     CHECK(pointFromWorldBox(box({0, 0, 0}, {128, 128, 1}), defaultPoint) == defaultPoint);
+
+    SECTION("With a threshold, the drawn box is where the light is visible (D61)")
+    {
+      const auto seeded = pointFromWorldBox(W, seededPoint(), DefaultThreshold);
+      CHECK(seeded.origin == vm::approx{vm::vec3d{64, 64, 32}, Exact});
+      CHECK(seeded.radius == vm::approx{vm::vec3d{64, 64, 32} / 0.91, Tolerance});
+      CHECK(
+        vm::approx{box({0, 0, 0}, {128, 128, 64}).translate(-seeded.origin), 1e-4}
+        == *lightEditBox(seeded, DefaultThreshold));
+
+      const auto legacy = pointFromWorldBox(W, defaultPoint, DefaultThreshold);
+      CHECK(
+        legacy.radius
+        == vm::approx{
+          vm::vec3d{64, 64, 32} / legacyVisibleT(DefaultThreshold), Tolerance});
+
+      // a sun fills the box
+      CHECK(
+        pointFromWorldBox(W, sun, DefaultThreshold).radius
+        == vm::approx{vm::vec3d{64, 64, 32}, Exact});
+
+      CHECK(
+        pointFromWorldBox(box({0, 0, 0}, {128, 128, 1}), seededPoint(), DefaultThreshold)
+        == seededPoint());
+    }
+  }
+
+  SECTION("intersectRayEllipsoid")
+  {
+    const auto atOrigin = LightFrame{vm::vec3d{0, 0, 0}, identity};
+    const auto radius = defaultPoint.radius;
+
+    // from outside, the near side
+    CHECK(
+      distanceOf(
+        intersectRayEllipsoid(atOrigin, radius, 1.0, vm::ray3d{{1000, 0, 0}, {-1, 0, 0}}))
+      == Catch::Approx(700.0).margin(Exact));
+    // a shell at t = 0.5
+    CHECK(
+      distanceOf(
+        intersectRayEllipsoid(atOrigin, radius, 0.5, vm::ray3d{{1000, 0, 0}, {-1, 0, 0}}))
+      == Catch::Approx(850.0).margin(Exact));
+    // from inside, the far side
+    CHECK(
+      distanceOf(
+        intersectRayEllipsoid(atOrigin, radius, 1.0, vm::ray3d{{0, 0, 0}, {1, 0, 0}}))
+      == Catch::Approx(300.0).margin(Exact));
+    // a miss, and an ellipsoid behind the ray
+    CHECK(
+      intersectRayEllipsoid(atOrigin, radius, 1.0, vm::ray3d{{1000, 400, 0}, {-1, 0, 0}})
+      == std::nullopt);
+    CHECK(
+      intersectRayEllipsoid(atOrigin, radius, 1.0, vm::ray3d{{1000, 0, 0}, {1, 0, 0}})
+      == std::nullopt);
+
+    // per axis, in a turned frame: local +x is world +Y
+    const auto turned = LightFrame{
+      vm::vec3d{64, 0, 0}, rotationOf({{"classname", "light"}, {"angles", "0 90 0"}})};
+    const auto ellipsoid = vm::vec3d{300, 200, 100};
+    CHECK(
+      distanceOf(intersectRayEllipsoid(
+        turned, ellipsoid, 1.0, vm::ray3d{{64, 1000, 0}, {0, -1, 0}}))
+      == Catch::Approx(700.0).margin(Exact));
+    CHECK(
+      distanceOf(intersectRayEllipsoid(
+        turned, ellipsoid, 1.0, vm::ray3d{{1000, 0, 0}, {-1, 0, 0}}))
+      == Catch::Approx(1000.0 - 64.0 - 200.0).margin(Exact));
+
+    // a flat ellipsoid
+    CHECK(
+      intersectRayEllipsoid(
+        atOrigin, vm::vec3d{300, 300, 0}, 1.0, vm::ray3d{{1000, 0, 0}, {-1, 0, 0}})
+      == std::nullopt);
+  }
+
+  SECTION("intersectRaySpotBase")
+  {
+    const auto atOrigin = LightFrame{vm::vec3d{0, 0, 0}, identity};
+
+    // the far cap of the default spot light, [-132, 132]^2 at z = -264
+    CHECK(
+      distanceOf(
+        intersectRaySpotBase(defaultSpot, atOrigin, vm::ray3d{{0, 0, -1000}, {0, 0, 1}}))
+      == Catch::Approx(736.0).margin(Exact));
+    CHECK(
+      distanceOf(intersectRaySpotBase(
+        defaultSpot, atOrigin, vm::ray3d{{131, -131, -1000}, {0, 0, 1}}))
+      == Catch::Approx(736.0).margin(Exact));
+    // from the apex's side
+    CHECK(
+      distanceOf(
+        intersectRaySpotBase(defaultSpot, atOrigin, vm::ray3d{{0, 0, 0}, {0, 0, -1}}))
+      == Catch::Approx(264.0).margin(Exact));
+    // past its edge
+    CHECK(
+      intersectRaySpotBase(defaultSpot, atOrigin, vm::ray3d{{133, 0, -1000}, {0, 0, 1}})
+      == std::nullopt);
+
+    // in the light's frame
+    const auto raised = LightFrame{vm::vec3d{0, 0, 100}, identity};
+    CHECK(
+      distanceOf(
+        intersectRaySpotBase(defaultSpot, raised, vm::ray3d{{0, 0, -1000}, {0, 0, 1}}))
+      == Catch::Approx(836.0).margin(Exact));
+
+    // the explicit spot light's far cap at 232
+    CHECK(
+      distanceOf(
+        intersectRaySpotBase(explicitSpot, atOrigin, vm::ray3d{{0, 0, -1000}, {0, 0, 1}}))
+      == Catch::Approx(1000.0 - 232.0).margin(Exact));
+
+    CHECK(
+      intersectRaySpotBase(
+        withRight(defaultSpot, {0, 0, 0}), atOrigin, vm::ray3d{{0, 0, -1000}, {0, 0, 1}})
+      == std::nullopt);
   }
 }
 
