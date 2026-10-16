@@ -877,7 +877,7 @@ QWidget* LightEditorPanel::createEditorPage()
   c.texture = createComboBox("Texture", {EngineDefaultTexture});
   c.texture->setEditable(true);
   c.texture->setInsertPolicy(QComboBox::NoInsert);
-  c.texture->setItemData(0, tr("lights/squarelight1"), Qt::ToolTipRole);
+  c.texture->setItemData(0, "lights/squarelight1", Qt::ToolTipRole);
   form->addRow(tr("Texture"), c.texture);
   // the choices of the entity definition, else a number
   c.styleChoice = createComboBox("StyleChoice", {});

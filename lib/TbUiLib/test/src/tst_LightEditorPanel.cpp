@@ -23,6 +23,7 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPushButton>
 #include <QRadioButton>
 #include <QSlider>
 #include <QStackedWidget>
@@ -61,6 +62,7 @@
 #include "vm/bbox.h"
 #include "vm/vec.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -460,6 +462,9 @@ TEST_CASE("LightEditorPanel")
     CHECK(valueOf(*lightNode, "math_pattern_scale") == "1");
     CHECK(valueOf(*lightNode, "math_pattern_phase") == "0");
     CHECK(valueOf(*lightNode, "math_energy_clamp") == "1");
+    CHECK(
+      mdl::parseLightProperties(lightNode->entity()).math
+      == mdl::seededMathLightProperties());
 
     CHECK(findControl<SpinControl>(panel, "InnerRadius").isVisibleTo(&panel));
     // shape and penumbra belong to spot lights
@@ -586,6 +591,13 @@ TEST_CASE("LightEditorPanel")
     map.undoCommand();
     QApplication::processEvents();
     CHECK(radius.value() == 300.0);
+
+    // the update after an undo writes nothing, so the redo stack stays (D47)
+    CHECK(map.canRedoCommand());
+    map.redoCommand();
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode, "light_radius") == "400 400 400");
+    CHECK(radius.value() == 400.0);
   }
 
   SECTION("an edit after the selection was cleared writes nothing")
@@ -996,7 +1008,6 @@ TEST_CASE("LightEditorPanel")
     auto panel = LightEditorPanel{fixture.context()};
     selectOnly(map, {lightNode});
 
-    // tool buttons take no focus when they are clicked
     for (const auto* name : {"EditVolumeHandles", "DrawVolume"})
     {
       CAPTURE(name);
@@ -1004,6 +1015,14 @@ TEST_CASE("LightEditorPanel")
       CHECK(button.isCheckable());
       CHECK(button.isEnabled());
       CHECK_FALSE(button.isChecked());
+    }
+
+    // tool buttons take no focus when they are clicked, unlike push buttons, so the
+    // map view keeps the focus (LWR-28)
+    for (const auto* name : {"EditVolumeHandles", "DrawVolume", "ResetVolume"})
+    {
+      CAPTURE(name);
+      CHECK((findControl<QToolButton>(panel, name).focusPolicy() & Qt::ClickFocus) == 0);
     }
 
     auto& reset = findControl<QToolButton>(panel, "ResetVolume");
@@ -1167,6 +1186,453 @@ TEST_CASE("LightEditorPanel")
     tool.endDrag();
     QApplication::processEvents();
     CHECK(originX.value() == 16.0);
+  }
+  SECTION("a write after the selection became something else writes nothing")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(
+      map,
+      {{"classname", "light"}, {"origin", "0 0 0"}, {"light_radius", "300 300 300"}});
+    auto* playerStartNode = new mdl::EntityNode{
+      mdl::Entity{{{"classname", "info_player_start"}, {"origin", "64 0 0"}}}};
+    const auto builder =
+      mdl::BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()};
+    auto* brushNode = new mdl::BrushNode{
+      builder.createCuboid(vm::bbox3d{{0, 0, 0}, {32, 32, 32}}, "wall") | kdl::value()};
+    mdl::addNodes(map, {{&mdl::parentForNodes(map), {playerStartNode, brushNode}}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+    REQUIRE(showsEditor(panel));
+
+    const auto undoName = [&]() {
+      const auto* name = map.undoCommandName();
+      return name ? *name : std::string{};
+    };
+    const auto lightProperties = lightNode->entity().properties();
+    const auto playerStartProperties = playerStartNode->entity().properties();
+    // the entity of the brush
+    const auto worldProperties = map.worldNode().entity().properties();
+    auto& radius = findControl<SpinControl>(panel, "Radius");
+
+    // the panel has not updated yet: the light and a brush are selected now
+    mdl::deselectAll(map);
+    mdl::selectNodes(map, {lightNode, brushNode});
+    REQUIRE(showsEditor(panel));
+    auto undoNameBefore = undoName();
+    radius.setValue(500.0);
+    CHECK(undoName() == undoNameBefore);
+
+    // a player start alone, which a write by the selection's entities would reach
+    mdl::deselectAll(map);
+    mdl::selectNodes(map, {playerStartNode});
+    REQUIRE(showsEditor(panel));
+    undoNameBefore = undoName();
+    radius.setValue(600.0);
+    CHECK(undoName() == undoNameBefore);
+
+    CHECK(lightNode->entity().properties() == lightProperties);
+    CHECK(playerStartNode->entity().properties() == playerStartProperties);
+    CHECK(property(*playerStartNode, "light_radius") == nullptr);
+    CHECK(map.worldNode().entity().properties() == worldProperties);
+  }
+
+  SECTION("resetting the volume keeps everything else")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* pointNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "8 16 24"},
+        {"texture", "lights/tb_test_point"},
+        {"style", "3"},
+        {"noshadows", "1"},
+        {"nospecular", "1"},
+        {"_color", "2 1 0"},
+        {"math_enabled", "1"},
+        {"math_type", "point"},
+        {"math_falloff", "smooth"},
+        {"math_pattern", "none"},
+        {"math_falloff_exp", "3"},
+        {"math_inner_radius", "0.2"},
+        {"math_shape_exp", "2"},
+        {"math_penumbra", "0.15"},
+        {"math_pattern_strength", "0"},
+        {"math_pattern_scale", "1"},
+        {"math_pattern_phase", "0"},
+        {"math_energy_clamp", "1"},
+        {"light_radius", "64 32 16"},
+      });
+    auto* spotNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "0 0 128"},
+        {"light_target", "0 0 -100"},
+        {"light_up", "0 -50 0"},
+        {"light_right", "-50 0 0"},
+      });
+    auto* otherPointNode = addLight(
+      map, {{"classname", "light"}, {"origin", "64 0 0"}, {"light_radius", "200 50 25"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    auto& reset = findControl<QToolButton>(panel, "ResetVolume");
+
+    // the texture, style, flags, colour and math block stay
+    selectOnly(map, {pointNode});
+    const auto pointBefore = pointNode->entity().properties();
+    reset.click();
+    QApplication::processEvents();
+    CHECK(
+      pointNode->entity().properties()
+      == withValue(pointBefore, "light_radius", "300 300 300"));
+
+    // DefaultProjected's vectors, the origin unchanged
+    selectOnly(map, {spotNode});
+    const auto spotBefore = spotNode->entity().properties();
+    reset.click();
+    QApplication::processEvents();
+    CHECK(
+      spotNode->entity().properties()
+      == withValue(
+        withValue(
+          withValue(spotBefore, "light_target", "0 0 -256"), "light_up", "0 -128 0"),
+        "light_right",
+        "-128 0 0"));
+
+    // every selected light, in one command
+    selectOnly(map, {pointNode});
+    REQUIRE(mdl::setEntityProperty(map, "light_radius", "100 100 100"));
+    selectOnly(map, {pointNode, otherPointNode});
+    const auto modificationCount = map.modificationCount();
+    reset.click();
+    QApplication::processEvents();
+    CHECK(map.modificationCount() == modificationCount + 1);
+    CHECK(valueOf(*pointNode, "light_radius") == "300 300 300");
+    CHECK(valueOf(*otherPointNode, "light_radius") == "300 300 300");
+  }
+
+  SECTION("the math falloff combos and the rows they show")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(
+      map,
+      {{"classname", "light"}, {"origin", "0 0 0"}, {"light_radius", "300 300 300"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    findControl<QCheckBox>(panel, "MathEnabled").click();
+    QApplication::processEvents();
+    REQUIRE(valueOf(*lightNode, "math_falloff") == "linear");
+
+    const auto items = [](const QComboBox& comboBox) {
+      auto result = QStringList{};
+      for (int i = 0; i < comboBox.count(); ++i)
+      {
+        result.push_back(comboBox.itemText(i));
+      }
+      return result;
+    };
+
+    // the in-game editor's labels
+    auto& falloff = findControl<QComboBox>(panel, "Falloff");
+    auto& pattern = findControl<QComboBox>(panel, "Pattern");
+    CHECK(
+      items(falloff)
+      == QStringList{
+        "Inverse Square (unbounded)",
+        "Linear",
+        "Smooth",
+        "Exponential",
+        "Inverse Square (clamped) - PBR safe",
+      });
+    CHECK(
+      items(pattern)
+      == QStringList{
+        "None",
+        "Subsurface (warm halo)",
+        "Ice (cool noise)",
+        "Caustic (sharp noise)",
+        "Banded (sine rings)",
+        "Granular (stippled)",
+      });
+
+    // the exponent is unused by the linear and the smooth curve
+    auto& falloffExp = findControl<SpinControl>(panel, "FalloffExp");
+    auto& falloffExpSlider = findControl<QSlider>(panel, "FalloffExpSlider");
+    CHECK(falloff.currentIndex() == 1);
+    CHECK_FALSE(falloffExp.isEnabled());
+    CHECK_FALSE(falloffExpSlider.isEnabled());
+
+    falloff.setCurrentIndex(3);
+    falloff.activated(3);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode, "math_falloff") == "exponential");
+    CHECK(falloffExp.isEnabled());
+    CHECK(falloffExpSlider.isEnabled());
+
+    falloff.setCurrentIndex(2);
+    falloff.activated(2);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode, "math_falloff") == "smooth");
+    CHECK_FALSE(falloffExp.isEnabled());
+    CHECK_FALSE(falloffExpSlider.isEnabled());
+
+    // the pattern fields only with a pattern
+    for (const auto* name : {"PatternStrength", "PatternScale", "PatternPhase"})
+    {
+      CAPTURE(name);
+      CHECK_FALSE(findControl<SpinControl>(panel, name).isVisibleTo(&panel));
+    }
+    pattern.setCurrentIndex(3);
+    pattern.activated(3);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode, "math_pattern") == "caustic");
+    for (const auto* name : {"PatternStrength", "PatternScale", "PatternPhase"})
+    {
+      CAPTURE(name);
+      CHECK(findControl<SpinControl>(panel, name).isVisibleTo(&panel));
+      CHECK(findControl<QSlider>(panel, QString{name} + "Slider").isVisibleTo(&panel));
+    }
+
+    findControl<QCheckBox>(panel, "EnergyClamp").click();
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode, "math_energy_clamp") == "0");
+  }
+
+  SECTION("the math type follows the light type")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* pointNode = addLight(
+      map,
+      {{"classname", "light"}, {"origin", "0 0 0"}, {"light_radius", "300 300 300"}});
+    auto* spotNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "64 0 0"},
+        {"light_target", "0 0 -256"},
+        {"light_up", "0 -128 0"},
+        {"light_right", "-128 0 0"},
+      });
+    auto* sunNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "128 0 0"},
+        {"parallel", "1"},
+        {"light_radius", "2048 2048 1024"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+    auto& mathEnabled = findControl<QCheckBox>(panel, "MathEnabled");
+    auto& mathType = findControl<QLabel>(panel, "MathType");
+
+    selectOnly(map, {pointNode});
+    mathEnabled.click();
+    QApplication::processEvents();
+    CHECK(valueOf(*pointNode, "math_type") == "point");
+    CHECK(mathType.text() == "point (follows the light type)");
+
+    // a change of type keeps the math block and writes its type (D40)
+    const auto mathBefore = pointNode->entity().properties();
+    findControl<QRadioButton>(panel, "Spot").click();
+    QApplication::processEvents();
+    CHECK(valueOf(*pointNode, "math_type") == "spot");
+    for (const auto& key : mdl::mathLightPropertyKeys())
+    {
+      if (key != "math_type")
+      {
+        CAPTURE(key);
+        const auto before = std::ranges::find_if(
+          mathBefore, [&](const auto& property) { return property.key() == key; });
+        REQUIRE(before != mathBefore.end());
+        CHECK(valueOf(*pointNode, key) == before->value());
+      }
+    }
+    CHECK(mathType.text() == "spot (follows the light type)");
+
+    selectOnly(map, {spotNode});
+    mathEnabled.click();
+    QApplication::processEvents();
+    CHECK(valueOf(*spotNode, "math_type") == "spot");
+    // shape and penumbra belong to spot lights
+    CHECK(findControl<SpinControl>(panel, "ShapeExp").isVisibleTo(&panel));
+    CHECK(findControl<SpinControl>(panel, "Penumbra").isVisibleTo(&panel));
+
+    selectOnly(map, {sunNode});
+    mathEnabled.click();
+    QApplication::processEvents();
+    CHECK(valueOf(*sunNode, "math_type") == "sun");
+    CHECK(mathType.text() == "sun (follows the light type)");
+  }
+
+  SECTION("the fixes are off for a light with light_origin")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+        {"light_origin", "10 20 30"},
+        {"light_target", "0 0 -100"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    CHECK(findControl<QLabel>(panel, "BadTargetNotice").isVisibleTo(&panel));
+    auto& fix = findControl<QToolButton>(panel, "FixBadTarget");
+    CHECK_FALSE(fix.isEnabled());
+
+    // a click that reaches the slot anyway changes nothing
+    const auto before = lightNode->entity().properties();
+    fix.clicked();
+    QApplication::processEvents();
+    CHECK(lightNode->entity().properties() == before);
+  }
+
+  SECTION("each control family writes its own properties")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* pointNode = addLight(
+      map,
+      {{"classname", "light"}, {"origin", "16 32 64"}, {"light_radius", "300 300 300"}});
+    auto* spotNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "64 0 0"},
+        {"light_target", "0 0 -256"},
+        {"light_up", "0 -128 0"},
+        {"light_right", "-128 0 0"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {pointNode});
+
+    const auto pointBefore = pointNode->entity().properties();
+    findControl<SpinControl>(panel, "OriginY").setValue(48.0);
+    QApplication::processEvents();
+    CHECK(
+      pointNode->entity().properties() == withValue(pointBefore, "origin", "16 48 64"));
+    REQUIRE(map.undoCommandName() != nullptr);
+    CHECK(*map.undoCommandName() == "Set Light Origin");
+
+    findControl<QCheckBox>(panel, "SkipSpecular").click();
+    QApplication::processEvents();
+    CHECK(valueOf(*pointNode, "nospecular") == "1");
+
+    auto& centerX = findControl<SpinControl>(panel, "CenterX");
+    CHECK_FALSE(centerX.isVisibleTo(&panel));
+    findControl<QCheckBox>(panel, "Center").click();
+    QApplication::processEvents();
+    CHECK(valueOf(*pointNode, "light_center") == "0 0 0");
+    CHECK(centerX.isVisibleTo(&panel));
+
+    selectOnly(map, {spotNode});
+    const auto spotBefore = spotNode->entity().properties();
+    findControl<SpinControl>(panel, "RightX").setValue(-100.0);
+    QApplication::processEvents();
+    CHECK(
+      spotNode->entity().properties()
+      == withValue(spotBefore, "light_right", "-100 0 0"));
+  }
+
+  SECTION("reads spot lights, suns, math lights and colours")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* colorNode =
+      addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}, {"_color", "2 1 0"}});
+    auto* spotNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "64 0 0"},
+        {"light_target", "0 0 -200"},
+        {"light_up", "0 -32 0"},
+        {"light_right", "-64 0 0"},
+        {"light_start", "0 0 -16"},
+        {"light_end", "0 0 -180"},
+      });
+    auto* sunNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "128 0 0"},
+        {"parallel", "1"},
+        {"light_radius", "2048 2048 1024"},
+      });
+    auto* mathNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "192 0 0"},
+        {"math_enabled", "1"},
+        {"math_falloff", "exponential"},
+        {"math_pattern", "banded"},
+        {"math_falloff_exp", "4"},
+        {"math_inner_radius", "0.25"},
+        {"math_pattern_scale", "2"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+
+    // the hue of 2 1 0 is 1 0.5 0, shown by the button's colour indicator
+    selectOnly(map, {colorNode});
+    const auto& colorButton = findControl<ColorButton>(panel, "Color");
+    const auto children = colorButton.findChildren<QWidget*>(Qt::FindDirectChildrenOnly);
+    const auto indicator = std::ranges::find_if(children, [](const auto* child) {
+      return qobject_cast<const QPushButton*>(child) == nullptr;
+    });
+    REQUIRE(indicator != children.end());
+    CHECK((*indicator)->styleSheet().contains(QColor{255, 128, 0}.name()));
+    CHECK(findControl<SpinControl>(panel, "Intensity").value() == 2.0);
+
+    selectOnly(map, {spotNode});
+    CHECK(findControl<QRadioButton>(panel, "Spot").isChecked());
+    CHECK(findControl<SpinControl>(panel, "TargetZ").value() == -200.0);
+    CHECK(findControl<SpinControl>(panel, "RightX").value() == -64.0);
+    CHECK(findControl<SpinControl>(panel, "UpY").value() == -32.0);
+    CHECK(findControl<QCheckBox>(panel, "ExplicitStartEnd").isChecked());
+    CHECK(findControl<SpinControl>(panel, "StartZ").value() == -16.0);
+    CHECK(findControl<SpinControl>(panel, "EndZ").value() == -180.0);
+
+    selectOnly(map, {sunNode});
+    CHECK(findControl<QRadioButton>(panel, "Sun").isChecked());
+    CHECK(findControl<SpinControl>(panel, "RadiusX").isVisibleTo(&panel));
+    CHECK(findControl<SpinControl>(panel, "RadiusX").value() == 2048.0);
+    CHECK(findControl<SpinControl>(panel, "RadiusY").value() == 2048.0);
+    CHECK(findControl<SpinControl>(panel, "RadiusZ").value() == 1024.0);
+
+    // the sliders map the in-game ranges to 0..1000
+    selectOnly(map, {mathNode});
+    CHECK(findControl<QCheckBox>(panel, "MathEnabled").isChecked());
+    CHECK(findControl<QComboBox>(panel, "Falloff").currentIndex() == 3);
+    CHECK(findControl<QComboBox>(panel, "Pattern").currentIndex() == 4);
+    CHECK(findControl<SpinControl>(panel, "FalloffExp").value() == 4.0);
+    CHECK(findControl<QSlider>(panel, "FalloffExpSlider").value() == 245);
+    CHECK(findControl<SpinControl>(panel, "InnerRadius").value() == 0.25);
+    CHECK(findControl<QSlider>(panel, "InnerRadiusSlider").value() == 250);
+    CHECK(findControl<SpinControl>(panel, "PatternScale").value() == 2.0);
+    CHECK(findControl<QSlider>(panel, "PatternScaleSlider").value() == 30);
   }
 }
 
