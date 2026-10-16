@@ -924,6 +924,37 @@ TEST_CASE("LightVolumeMesh")
           buildLightVolumeMesh(disabled, frame, style).ranges, [](const auto& range) {
             return range.element == mdl::LightElement::InnerShell;
           }));
+
+        // the boundaries: from 0.02 to below 0.999
+        for (const auto innerRadius : {0.02, 0.98})
+        {
+          CAPTURE(innerRadius);
+          auto other = light;
+          other.math.innerRadius = innerRadius;
+          CHECK(lightVolumeHasInnerShell(other));
+          const auto otherMesh = buildLightVolumeMesh(other, frame, style);
+          REQUIRE(!otherMesh.ranges.empty());
+          CHECK(otherMesh.ranges.back().element == mdl::LightElement::InnerShell);
+        }
+        for (const auto innerRadius : {0.0199, 0.999})
+        {
+          auto other = light;
+          other.math.innerRadius = innerRadius;
+          CHECK_FALSE(lightVolumeHasInnerShell(other));
+        }
+        CHECK(lightVolumeHasInnerShell(light));
+        CHECK_FALSE(lightVolumeHasInnerShell(disabled));
+
+        // drawn even at alpha 0, where no band is drawn
+        auto invisible = style;
+        invisible.alphaCap = 0.0;
+        const auto invisibleMesh = buildLightVolumeMesh(light, frame, invisible);
+        REQUIRE(invisibleMesh.ranges.size() == 1);
+        CHECK(invisibleMesh.ranges.front().element == mdl::LightElement::InnerShell);
+        CHECK(std::ranges::all_of(invisibleMesh.triangles, [](const auto& vertex) {
+          return alphaOf(vertex) == 0.0;
+        }));
+        CHECK(lightVolumeMeshSize(light, invisible).ranges == 1);
       }
 
       SECTION("a spot light's funnel, penumbra, caps and base")

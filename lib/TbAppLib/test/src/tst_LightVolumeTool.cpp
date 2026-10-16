@@ -41,6 +41,7 @@
 #include "mdl/PickResult.h"
 #include "mdl/WorldNode.h"
 #include "prefs/Preferences.h"
+#include "ui/LightTestUtils.h"
 #include "ui/LightVolumeTool.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
@@ -77,22 +78,6 @@ constexpr auto LengthTolerance = 0.01;
 
 using Properties = std::vector<std::pair<std::string, std::string>>;
 
-// the handle threshold's default (D53)
-constexpr auto DefaultThreshold = 0.10;
-
-/**
- * The t at which a light without math is visible at the given level, where
- * 1 - smoothstep(t) is the level: smoothstep(t) = 1 - level, whose inverse is
- * 1/2 - sin(asin(1 - 2 y) / 3) (D61). A point light's handle box is +-radius * t.
- */
-double legacyVisibleT(const double level = DefaultThreshold)
-{
-  return 0.5 - std::sin(std::asin(1.0 - 2.0 * (1.0 - level)) / 3.0);
-}
-
-// the in-game editor's auto-seed (D29): visible to t = 0.91 at 10 %, u = (t - 0.1) / 0.9
-constexpr auto SeededVisibleT = 0.91;
-
 const auto SeededMath = Properties{
   {"math_enabled", "1"},
   {"math_falloff", "linear"},
@@ -114,27 +99,6 @@ const auto RotationProperties = Properties{
   {"light_angles", "0 0 0"},
 };
 
-mdl::EntityNode* createLight(
-  mdl::Map& map, const std::string& origin, const Properties& properties)
-{
-  const auto* definition = map.entityDefinitionManager().definition("light");
-  REQUIRE(definition != nullptr);
-
-  const auto position = vm::parse<double, 3>(origin);
-  REQUIRE(position);
-
-  // the new light is selected, and the properties are set on the selection; a light
-  // created at 0 0 0 has no origin property until it is set
-  auto* entityNode = mdl::createPointEntity(map, *definition, *position);
-  REQUIRE(entityNode != nullptr);
-  REQUIRE(mdl::setEntityProperty(map, "origin", origin));
-  for (const auto& [key, value] : properties)
-  {
-    REQUIRE(mdl::setEntityProperty(map, key, value));
-  }
-  return entityNode;
-}
-
 mdl::BrushNode* createBrush(mdl::Map& map)
 {
   auto builder = mdl::BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()};
@@ -149,28 +113,6 @@ void selectOnly(mdl::Map& map, const std::vector<mdl::Node*>& nodes)
 {
   mdl::deselectAll(map);
   mdl::selectNodes(map, nodes);
-}
-
-std::string valueOf(const mdl::EntityNode& entityNode, const std::string& key)
-{
-  const auto* value = entityNode.entity().property(key);
-  REQUIRE(value != nullptr);
-  return *value;
-}
-
-vm::vec3d vectorOf(const mdl::EntityNode& entityNode, const std::string& key)
-{
-  const auto value = vm::parse<double, 3>(valueOf(entityNode, key));
-  REQUIRE(value);
-  return *value;
-}
-
-void checkVector(
-  const mdl::EntityNode& entityNode, const std::string& key, const vm::vec3d& expected)
-{
-  const auto actual = vectorOf(entityNode, key);
-  CAPTURE(key, actual, expected);
-  CHECK(vm::is_equal(actual, expected, ComponentTolerance));
 }
 
 double lengthOf(const mdl::EntityNode& entityNode, const std::string& key)
@@ -306,12 +248,6 @@ std::vector<mdl::Hit> pickSurfaces(const LightVolumeTool& tool, const vm::ray3d&
   return pickResult.all();
 }
 
-mdl::Hit brushHit(mdl::BrushNode* brushNode, const double distance)
-{
-  return mdl::Hit{
-    mdl::BrushNode::BrushHitType, distance, vm::vec3d{distance, 0, 0}, brushNode};
-}
-
 /**
  * The value of the given vector property, checked against the expected one within the
  * two decimals that the tool writes.
@@ -409,6 +345,14 @@ TEST_CASE("LightVolumeTool")
       CHECK(vm::approx{vm::bbox3d{-halfExtents, halfExtents}, 1e-4} == volume->box);
       CHECK(volume->frame.origin == vm::vec3d{16, 32, 48});
       CHECK(volume->rotation == vm::mat3x3d::identity());
+    }
+
+    SECTION("the default light's box is at +-241.26 (AC-18)")
+    {
+      createLight(map, "0 0 0", {});
+      const auto box = tool.editBox();
+      REQUIRE(box);
+      CHECK(vm::approx{vm::bbox3d{241.26}, 0.005} == *box);
     }
 
     SECTION("the seeded light's box is at 0.91 of its radius (AC-18)")
@@ -683,6 +627,53 @@ TEST_CASE("LightVolumeTool")
       CHECK(valueOf(*lightNode, "light_right") == "-143.26 0 8.68");
       CHECK(valueOf(*lightNode, "light_up") == "0 -128.01 0");
       checkVector(*lightNode, "origin", {0, 0, 0});
+    }
+
+    SECTION("a spot light's lateral face centre widens its far rectangle (D58)")
+    {
+      auto* lightNode = createLight(map, "0 0 0", DefaultSpot);
+
+      // the box frame's +x is world -X for the default spot light
+      SECTION("the +x face, the opposite face staying, tilts the beam (D10)")
+      {
+        // the box [-132, 164] x [-132, 132] x [0, 264]: the numbers of D27 (a)
+        CHECK(drag(tool, faceCenterHit({1, 0, 0}), {{-32, 0, 0}}) == std::vector{true});
+        CHECK(valueOf(*lightNode, "light_target") == "-15.52 0 -256.01");
+        CHECK(
+          lengthOf(*lightNode, "light_right")
+          == Catch::Approx(143.5234).margin(LengthTolerance));
+        CHECK(
+          lengthOf(*lightNode, "light_up")
+          == Catch::Approx(128.0073).margin(LengthTolerance));
+        checkVector(*lightNode, "origin", {0, 0, 0});
+      }
+
+      SECTION("the -x face, the opposite face staying, tilts the beam the other way")
+      {
+        CHECK(drag(tool, faceCenterHit({-1, 0, 0}), {{32, 0, 0}}) == std::vector{true});
+        CHECK(valueOf(*lightNode, "light_target") == "15.52 0 -256.01");
+        CHECK(
+          lengthOf(*lightNode, "light_right")
+          == Catch::Approx(143.5234).margin(LengthTolerance));
+      }
+
+      SECTION("with the centre anchor, the target stays and only right changes")
+      {
+        // the box [-164, 164] x [-132, 132] x [0, 264]: right = 164 * 256 / 264
+        tool.setAnchorPos(AnchorPos::Center);
+        for (const auto& [normal, delta] : std::vector<std::pair<vm::vec3d, vm::vec3d>>{
+               {{1, 0, 0}, {-32, 0, 0}}, {{-1, 0, 0}, {32, 0, 0}}})
+        {
+          CAPTURE(normal);
+          REQUIRE(drag(tool, faceCenterHit(normal), {delta}) == std::vector{true});
+          CHECK(valueOf(*lightNode, "light_target") == "0 0 -256");
+          CHECK(
+            lengthOf(*lightNode, "light_right")
+            == Catch::Approx(164.0 * 256.0 / 264.0).margin(LengthTolerance));
+          CHECK(valueOf(*lightNode, "light_up") == "0 -128 0");
+          map.undoCommand();
+        }
+      }
     }
 
     SECTION("a spot light's far side moves like its far cap centre (AC-9)")
@@ -994,6 +985,21 @@ TEST_CASE("LightVolumeTool")
       CHECK(hit.distance() == Catch::Approx(1000.0 - halfExtent).margin(20.0));
     }
 
+    SECTION("an edge in 3D (D58)")
+    {
+      // through the middle of the +x +y edge, along z at x = y = 241.26
+      const auto hit = pick3D(
+        tool,
+        vm::ray3d{
+          {halfExtent + 500.0, halfExtent + 500.0, 0},
+          vm::normalize(vm::vec3d{-1, -1, 0})});
+      REQUIRE(hit.type() == LightVolumeTool::EdgeHitType);
+      const auto edge = hit.target<BBoxEdge>();
+      CHECK(
+        ((edge.point0 == vm::vec3d{1, 1, -1} && edge.point1 == vm::vec3d{1, 1, 1})
+         || (edge.point0 == vm::vec3d{1, 1, 1} && edge.point1 == vm::vec3d{1, 1, -1})));
+    }
+
     SECTION("the six face centres of a point light")
     {
       for (const auto& normal : std::vector<vm::vec3d>{
@@ -1292,6 +1298,78 @@ TEST_CASE("LightVolumeTool")
       CHECK_FALSE(pickSurface(tool, vm::ray3d{{0, 0, -100}, {0, 0, -1}}).isMatch());
     }
 
+    SECTION("a pick follows an edit of the light")
+    {
+      createLight(map, "0 0 0", {});
+      const auto ray = vm::ray3d{{1000, 0, 0}, {-1, 0, 0}};
+
+      CHECK(pickSurface(tool, ray).distance() == Catch::Approx(700.0).margin(1e-6));
+      REQUIRE(mdl::setEntityProperty(map, "light_radius", "200 200 200"));
+      CHECK(pickSurface(tool, ray).distance() == Catch::Approx(800.0).margin(1e-6));
+      REQUIRE(mdl::setEntityProperty(map, "origin", "100 0 0"));
+      CHECK(pickSurface(tool, ray).distance() == Catch::Approx(700.0).margin(1e-6));
+    }
+
+    SECTION("an unselected spot light's base and funnel in All mode")
+    {
+      setPref(
+        Preferences::ShowLightVolumes, std::string{Preferences::ShowLightVolumesAll});
+      const auto resetVolumes = kdl::invoke_later{[] {
+        PreferenceManager::instance().resetToDefault(Preferences::ShowLightVolumes);
+      }};
+
+      createLight(map, "0 0 0", DefaultSpot);
+      mdl::deselectAll(map);
+
+      // the base is picked as its rectangle, also where the light does not draw it
+      auto hit = pickSurface(tool, vm::ray3d{{0, 0, -1000}, {0, 0, 1}});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::Base);
+      CHECK_FALSE(hit.target<LightSurfaceHit>().selected);
+      CHECK(hit.distance() == Catch::Approx(736.0).margin(1e-6));
+
+      hit = pickSurface(tool, vm::ray3d{{1000, 0, -136}, {-1, 0, 0}});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::Funnel);
+      CHECK(hit.distance() == Catch::Approx(932.0).margin(1e-3));
+    }
+
+    SECTION("a math spot light's funnel is its superellipse, without math the frustum")
+    {
+      auto* lightNode = createLight(map, "0 0 0", DefaultSpot);
+      REQUIRE(mdl::setEntityProperty(map, "math_enabled", "1"));
+      REQUIRE(mdl::setEntityProperty(map, "math_shape_exp", "4"));
+      REQUIRE(mdl::setEntityProperty(map, "math_penumbra", "0.2"));
+
+      // along the diagonal at depth 136, where |u|^4 + |v|^4 = 1 gives u = v = 2^-1/4
+      // and the frustum u = v = 1, 68 from the beam per unit
+      const auto diagonal = vm::normalize(vm::vec3d{-1, -1, 0});
+      const auto ray = vm::ray3d{{1000, 1000, -136}, diagonal};
+      auto hit = pickSurface(tool, ray);
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::Funnel);
+      CHECK(
+        hit.distance()
+        == Catch::Approx((1000.0 - 68.0 * std::pow(2.0, -0.25)) * std::sqrt(2.0))
+             .margin(1e-2));
+      CHECK(hit.distance() == Catch::Approx(1333.3).margin(0.1));
+
+      // between the penumbra at 0.8 and the funnel, inwards: the penumbra is never
+      // picked and the funnel's far side faces away
+      const auto inside = 0.9 * 68.0 * std::pow(2.0, -0.25);
+      CHECK_FALSE(
+        pickSurface(tool, vm::ray3d{{inside, inside, -136}, diagonal}).isMatch());
+
+      // without math, the frustum's corner line
+      REQUIRE(mdl::setEntityProperty(map, "math_enabled", "0"));
+      REQUIRE(lightNode->entity().property("math_shape_exp") != nullptr);
+      hit = pickSurface(tool, ray);
+      REQUIRE(hit.isMatch());
+      CHECK(
+        hit.distance() == Catch::Approx((1000.0 - 68.0) * std::sqrt(2.0)).margin(1e-2));
+      CHECK(hit.distance() == Catch::Approx(1318.0).margin(0.1));
+    }
+
     SECTION("a sun's box")
     {
       createLight(map, "0 0 0", {{"parallel", "1"}, {"light_radius", "300 300 300"}});
@@ -1442,6 +1520,54 @@ TEST_CASE("LightVolumeTool")
       (void)fastestMillis;
 #endif
     }
+  }
+
+  SECTION("lightElementTriangles")
+  {
+    const auto frame = mdl::LightFrame{vm::vec3d{64, 32, 16}, vm::mat3x3d::identity()};
+    const auto local = [&](const vm::vec3d& point) { return point - frame.origin; };
+
+    auto point = mdl::LightProperties{};
+    point.radius = vm::vec3d{300, 200, 100};
+
+    // a point light's outer shell, the ellipsoid of its radius
+    auto triangles = lightElementTriangles(point, frame, mdl::LightElement::OuterShell);
+    CHECK(triangles.size() == 224 * 3);
+    CHECK(std::ranges::all_of(triangles, [&](const auto& p) {
+      return std::abs(mdl::pointFalloffT(local(p), point.radius) - 1.0) < 1e-5;
+    }));
+
+    // the inner shell only of a math light with an inner radius
+    CHECK(lightElementTriangles(point, frame, mdl::LightElement::InnerShell).empty());
+    auto seeded = point;
+    seeded.math = mdl::seededMathLightProperties();
+    triangles = lightElementTriangles(seeded, frame, mdl::LightElement::InnerShell);
+    CHECK(triangles.size() == 224 * 3);
+    CHECK(std::ranges::all_of(triangles, [&](const auto& p) {
+      return std::abs(mdl::pointFalloffT(local(p), point.radius) - 0.1) < 1e-5;
+    }));
+
+    // a point light has no funnel or base
+    CHECK(lightElementTriangles(point, frame, mdl::LightElement::Funnel).empty());
+
+    // the default spot light's base at depth 264, its funnel, no penumbra without math
+    auto spot = mdl::LightProperties{};
+    spot.type = mdl::LightType::Spot;
+    spot.target = vm::vec3d{0, 0, -256};
+    spot.right = vm::vec3d{-128, 0, 0};
+    spot.up = vm::vec3d{0, -128, 0};
+    triangles = lightElementTriangles(spot, frame, mdl::LightElement::Base);
+    CHECK(triangles.size() == 32 * 3);
+    CHECK(std::ranges::all_of(
+      triangles, [&](const auto& p) { return std::abs(local(p).z() + 264.0) < 1e-3; }));
+    CHECK(
+      lightElementTriangles(spot, frame, mdl::LightElement::Funnel).size() == 32 * 2 * 3);
+    CHECK(lightElementTriangles(spot, frame, mdl::LightElement::Penumbra).empty());
+
+    // a sun's box
+    auto sun = point;
+    sun.type = mdl::LightType::Sun;
+    CHECK(lightElementTriangles(sun, frame, mdl::LightElement::SunBox).size() == 12 * 3);
   }
 
   SECTION("setHighlightedHit")
@@ -1622,6 +1748,7 @@ TEST_CASE("LightVolumeTool")
       // drawn box
       CHECK(valueOf(*lightNode, "origin") == "64 64 32");
       checkRadius(*lightNode, vm::vec3d{64, 64, 32} / legacyVisibleT());
+      CHECK(valueOf(*lightNode, "light_radius") == "79.58 79.58 39.79");
       const auto handleBox = tool.editBox();
       REQUIRE(handleBox);
       CHECK(

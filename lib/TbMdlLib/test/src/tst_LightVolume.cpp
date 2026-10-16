@@ -126,8 +126,7 @@ LightProperties seededPoint()
 }
 
 /**
- * The t at which 1 - smoothstep(t) is the given level: smoothstep(t) = 1 - level, whose
- * inverse is 1/2 - sin(asin(1 - 2 y) / 3).
+ * The distance of a ray intersection, which must exist.
  */
 double distanceOf(const std::optional<double>& distance)
 {
@@ -135,6 +134,10 @@ double distanceOf(const std::optional<double>& distance)
   return *distance;
 }
 
+/**
+ * The t at which 1 - smoothstep(t) is the given level: smoothstep(t) = 1 - level, whose
+ * inverse is 1/2 - sin(asin(1 - 2 y) / 3).
+ */
 double legacyVisibleT(const double level)
 {
   const auto y = 1.0 - level;
@@ -536,6 +539,9 @@ TEST_CASE("LightVolume")
       CHECK(
         visibleFalloffT(defaultPoint, DefaultThreshold)
         == Catch::Approx(legacyVisibleT(DefaultThreshold)).margin(Exact));
+      CHECK(
+        visibleFalloffT(defaultPoint, DefaultThreshold)
+        == Catch::Approx(0.8042).margin(1e-4));
       CHECK(visibleFalloffT(defaultPoint, 0.5) == Catch::Approx(0.5).margin(Exact));
 
       // a disabled math block is not read

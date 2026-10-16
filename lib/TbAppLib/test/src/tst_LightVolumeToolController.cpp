@@ -24,16 +24,19 @@
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
+#include "mdl/EditorContext.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityDefinitionManager.h"
 #include "mdl/EntityNode.h"
 #include "mdl/Grid.h"
+#include "mdl/GroupNode.h"
 #include "mdl/Hit.h"
 #include "mdl/HitFilter.h"
 #include "mdl/LayerNode.h" // IWYU pragma: keep
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/Map_Entities.h"
+#include "mdl/Map_Groups.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/PickResult.h"
@@ -41,6 +44,7 @@
 #include "prefs/Preferences.h"
 #include "ui/GestureTracker.h"
 #include "ui/InputState.h"
+#include "ui/LightTestUtils.h"
 #include "ui/LightVolumeTool.h"
 #include "ui/LightVolumeToolController.h"
 #include "ui/MapDocument.h"
@@ -70,69 +74,6 @@ namespace tb::ui
 {
 namespace
 {
-
-// the handle threshold's default (D53)
-constexpr auto DefaultThreshold = 0.10;
-
-/**
- * The t at which a light without math is visible at the given level, where
- * 1 - smoothstep(t) is the level: smoothstep(t) = 1 - level, whose inverse is
- * 1/2 - sin(asin(1 - 2 y) / 3) (D61). A point light's handle box is +-radius * t.
- */
-double legacyVisibleT(const double level = DefaultThreshold)
-{
-  return 0.5 - std::sin(std::asin(1.0 - 2.0 * (1.0 - level)) / 3.0);
-}
-
-// the in-game editor's auto-seed (D29), visible to t = 0.91 at 10 %
-constexpr auto SeededVisibleT = 0.91;
-
-mdl::EntityNode* createLight(
-  mdl::Map& map,
-  const std::string& origin,
-  const std::vector<std::pair<std::string, std::string>>& properties = {})
-{
-  const auto* definition = map.entityDefinitionManager().definition("light");
-  REQUIRE(definition != nullptr);
-
-  const auto position = vm::parse<double, 3>(origin);
-  REQUIRE(position);
-
-  auto* entityNode = mdl::createPointEntity(map, *definition, *position);
-  REQUIRE(entityNode != nullptr);
-  REQUIRE(mdl::setEntityProperty(map, "origin", origin));
-  for (const auto& [key, value] : properties)
-  {
-    REQUIRE(mdl::setEntityProperty(map, key, value));
-  }
-  return entityNode;
-}
-
-std::string valueOf(const mdl::EntityNode& entityNode, const std::string& key)
-{
-  const auto* value = entityNode.entity().property(key);
-  REQUIRE(value != nullptr);
-  return *value;
-}
-
-vm::vec3d vectorOf(const mdl::EntityNode& entityNode, const std::string& key)
-{
-  const auto value = vm::parse<double, 3>(valueOf(entityNode, key));
-  REQUIRE(value);
-  return *value;
-}
-
-/**
- * The value of the given vector property, checked against the expected one within the
- * two decimals that the tool writes.
- */
-void checkVector(
-  const mdl::EntityNode& entityNode, const std::string& key, const vm::vec3d& expected)
-{
-  const auto actual = vectorOf(entityNode, key);
-  CAPTURE(key, actual, expected);
-  CHECK(vm::is_equal(actual, expected, 0.005));
-}
 
 mdl::BrushNode* createBrush(mdl::Map& map)
 {
@@ -175,12 +116,6 @@ mdl::Hit faceCenterHit(const double distance)
     distance,
     vm::vec3d{distance, 0, 0},
     BBoxSide{vm::vec3d{1, 0, 0}}};
-}
-
-mdl::Hit brushHit(mdl::BrushNode* brushNode, const double distance)
-{
-  return mdl::Hit{
-    mdl::BrushNode::BrushHitType, distance, vm::vec3d{distance, 0, 0}, brushNode};
 }
 
 /**
@@ -566,6 +501,52 @@ TEST_CASE("LightVolumeToolController")
         CHECK(controller.acceptMouseDrag(inputState) == nullptr);
       }
 
+      SECTION("an Alt drag on the selected light's shell moves it vertically")
+      {
+        const auto hit = pickSurface(tool, pickRay);
+        auto tracker = controller.acceptMouseDrag(
+          inputStateFor(pickRay, camera, {hit}, ModifierKeys::Alt));
+        REQUIRE(tracker != nullptr);
+
+        // across the vertical line through the hit point (300, 0, 0): 30 up, which the
+        // grid of 16 snaps to 32
+        const auto dragRay = vm::ray3d{{300, -1000, 30}, vm::vec3d{0, 1, 0}};
+        const auto dragInputState =
+          inputStateFor(dragRay, perspectiveCameraFor(dragRay), {}, ModifierKeys::Alt);
+        CHECK(tracker->update(dragInputState));
+        tracker->end(dragInputState);
+
+        CHECK(valueOf(*lightNode, "origin") == "0 0 32");
+      }
+
+      SECTION("a plain drag on a surface is not taken while the move tool is off")
+      {
+        REQUIRE(moveTool.deactivate());
+        const auto hit = pickSurface(tool, pickRay);
+        CHECK(
+          controller.acceptMouseDrag(inputStateFor(pickRay, camera, {hit})) == nullptr);
+        REQUIRE(moveTool.activate());
+      }
+
+      SECTION("a Shift drag on a surface of one of two selected lights edits nothing")
+      {
+        auto* otherNode = createLight(map, "2000 0 0");
+        mdl::selectNodes(map, {lightNode});
+        REQUIRE(map.selection().nodes.size() == 2);
+        const auto properties = lightNode->entity().properties();
+        const auto otherProperties = otherNode->entity().properties();
+
+        const auto hit = pickSurface(tool, pickRay);
+        REQUIRE(hit.target<LightSurfaceHit>().node == lightNode);
+        CHECK(
+          controller.acceptMouseDrag(
+            inputStateFor(pickRay, camera, {hit}, ModifierKeys::Shift))
+          == nullptr);
+        CHECK_FALSE(tool.isDragging());
+        CHECK(lightNode->entity().properties() == properties);
+        CHECK(otherNode->entity().properties() == otherProperties);
+      }
+
       SECTION("Shift on a surface edits its element (D60, AC-20)")
       {
         map.grid().toggleSnap(); // for a delta that is not snapped
@@ -736,10 +717,66 @@ TEST_CASE("LightVolumeToolController")
         CHECK(controller.mouseClick(inputState));
       }
 
-      SECTION("a click on nothing is the selection tool's, which deselects (D56)")
+      SECTION("a click on nothing is left to the selection tool (D56)")
       {
         auto inputState = inputStateFor(pickRay, camera, {});
         CHECK_FALSE(controller.mouseClick(inputState));
+      }
+
+      SECTION("a surface click with Alt, or while the selection is blocked, is not taken")
+      {
+        auto* otherNode = createLight(map, "2000 0 0");
+        mdl::deselectAll(map);
+
+        CHECK_FALSE(controller.mouseClick(inputStateFor(
+          pickRay, camera, {surfaceHit(otherNode, 700, false)}, ModifierKeys::Alt)));
+
+        map.editorContext().setBlockSelection(true);
+        CHECK_FALSE(map.editorContext().canChangeSelection());
+        CHECK_FALSE(controller.mouseClick(
+          inputStateFor(pickRay, camera, {surfaceHit(otherNode, 700, false)})));
+        map.editorContext().setBlockSelection(false);
+
+        CHECK(map.selection().nodes.empty());
+      }
+
+      SECTION("a click on a light in a closed group selects the group")
+      {
+        setPref(
+          Preferences::ShowLightVolumes, std::string{Preferences::ShowLightVolumesAll});
+        const auto resetVolumes = kdl::invoke_later{[] {
+          PreferenceManager::instance().resetToDefault(Preferences::ShowLightVolumes);
+        }};
+
+        auto* groupedNode = createLight(map, "2000 0 0");
+        auto* groupNode = mdl::groupSelectedNodes(map, "lights");
+        REQUIRE(groupNode != nullptr);
+        REQUIRE_FALSE(groupNode->opened());
+        mdl::deselectAll(map);
+
+        const auto towardsGrouped = vm::ray3d{{3000, 0, 0}, {-1, 0, 0}};
+        const auto groupedCamera = perspectiveCameraFor(towardsGrouped);
+        auto hit = pickSurface(tool, towardsGrouped);
+        REQUIRE(hit.target<LightSurfaceHit>().node == groupedNode);
+        CHECK_FALSE(hit.target<LightSurfaceHit>().selected);
+
+        CHECK(controller.mouseClick(inputStateFor(towardsGrouped, groupedCamera, {hit})));
+        CHECK(map.selection().nodes == std::vector<mdl::Node*>{groupNode});
+
+        // the light of the selected group is selected, and a plain drag moves the group
+        hit = pickSurface(tool, towardsGrouped);
+        CHECK(hit.target<LightSurfaceHit>().selected);
+        auto tracker =
+          controller.acceptMouseDrag(inputStateFor(towardsGrouped, groupedCamera, {hit}));
+        CHECK(tracker != nullptr);
+        if (tracker)
+        {
+          tracker->cancel();
+        }
+
+        // in a group that is not selected, the light is not
+        mdl::deselectAll(map);
+        CHECK_FALSE(pickSurface(tool, towardsGrouped).target<LightSurfaceHit>().selected);
       }
 
       SECTION("a click on nothing keeps the light selected while drawing")

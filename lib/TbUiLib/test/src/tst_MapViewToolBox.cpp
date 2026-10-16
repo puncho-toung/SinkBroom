@@ -21,6 +21,9 @@
 #include <QStackedLayout>
 #include <QWidget>
 
+#include "mdl/BrushBuilder.h"
+#include "mdl/BrushFaceHandle.h"
+#include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
 #include "mdl/Hit.h"
@@ -31,10 +34,13 @@
 #include "ui/AssembleBrushTool.h"
 #include "ui/CatchConfig.h"
 #include "ui/ClipTool.h" // IWYU pragma: keep
+#include "ui/ControlPointTool.h"
 #include "ui/DrawShapeTool.h"
 #include "ui/EdgeTool.h"
 #include "ui/ExtrudeTool.h"
 #include "ui/FaceTool.h"
+#include "ui/GestureTracker.h"
+#include "ui/InputState.h"
 #include "ui/LightVolumeTool.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
@@ -43,16 +49,60 @@
 #include "ui/RotateTool.h" // IWYU pragma: keep
 #include "ui/ScaleTool.h"
 #include "ui/ShearTool.h"
+#include "ui/SweepTool.h"
+#include "ui/ToolChain.h"
+#include "ui/ToolController.h"
 #include "ui/VertexTool.h" // IWYU pragma: keep
 
+#include "kd/result.h"
+
+#include "vm/bbox.h"
 #include "vm/vec.h"
 
+#include <functional>
+#include <memory>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
 namespace tb::ui
 {
+namespace
+{
+
+class NoTracker : public GestureTracker
+{
+public:
+  bool update(const InputState&) override { return true; }
+  void end(const InputState&) override {}
+  void cancel() override {}
+};
+
+/**
+ * A controller that takes every drag, so that the tool box drags.
+ */
+class DragController : public ToolController
+{
+private:
+  Tool& m_tool;
+
+public:
+  explicit DragController(Tool& tool)
+    : m_tool{tool}
+  {
+  }
+
+  Tool& tool() override { return m_tool; }
+  const Tool& tool() const override { return m_tool; }
+
+  std::unique_ptr<GestureTracker> acceptMouseDrag(const InputState&) override
+  {
+    return std::make_unique<NoTracker>();
+  }
+};
+
+} // namespace
 
 TEST_CASE("MapViewToolBox")
 {
@@ -82,15 +132,37 @@ TEST_CASE("MapViewToolBox")
       CHECK(handles.active());
       toolBox.toggleTool(lightVolumeTool);
 
-      for (auto* modalTool : std::vector<Tool*>{
-             &toolBox.rotateTool(),
-             &toolBox.scaleTool(),
-             &toolBox.shearTool(),
-             &toolBox.vertexTool(),
-             &toolBox.edgeTool(),
-             &toolBox.faceTool(),
-             &toolBox.assembleBrushTool()})
+      // the clip tool needs selected brushes, the sweep tool selected faces
+      auto& map = document.map();
+      auto builder = mdl::BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()};
+      auto* brushNode = new mdl::BrushNode{
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {64, 64, 64}}, "material")
+        | kdl::value()};
+      REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), {brushNode}}}).empty());
+      const auto selectBrush = [&]() {
+        mdl::deselectAll(map);
+        mdl::selectNodes(map, {brushNode});
+      };
+      const auto selectFace = [&]() {
+        mdl::deselectAll(map);
+        mdl::selectBrushFaces(map, {mdl::BrushFaceHandle{brushNode, 0}});
+      };
+      const auto selectNothing = [&]() { mdl::deselectAll(map); };
+
+      for (const auto& [modalTool, select] :
+           std::vector<std::pair<Tool*, std::function<void()>>>{
+             {&toolBox.rotateTool(), selectNothing},
+             {&toolBox.scaleTool(), selectNothing},
+             {&toolBox.shearTool(), selectNothing},
+             {&toolBox.sweepTool(), selectFace},
+             {&toolBox.vertexTool(), selectNothing},
+             {&toolBox.edgeTool(), selectNothing},
+             {&toolBox.faceTool(), selectNothing},
+             {&toolBox.controlPointTool(), selectNothing},
+             {&toolBox.clipTool(), selectBrush},
+             {&toolBox.assembleBrushTool(), selectNothing}})
       {
+        select();
         toolBox.toggleTool(*modalTool);
         REQUIRE(modalTool->active());
         CHECK_FALSE(handles.active());
@@ -192,6 +264,24 @@ TEST_CASE("MapViewToolBox")
       lightVolumeTool.setMode(LightVolumeTool::Mode::Draw);
       QApplication::processEvents();
       CHECK(lightVolumeTool.active());
+    }
+
+    SECTION("does not turn off under a drag that has not gone")
+    {
+      // a drag of another controller of the move tool, which the tool box tracks
+      auto chain = ToolChain{};
+      chain.append(std::make_unique<DragController>(toolBox.moveObjectsTool()));
+      const auto inputState = InputState{0.0f, 0.0f};
+      toolBox.startMouseDrag(chain, inputState);
+      REQUIRE(toolBox.dragging());
+
+      toolBox.toggleTool(lightVolumeTool);
+      lightVolumeTool.setMode(LightVolumeTool::Mode::Draw);
+      lightVolumeTool.setMode(LightVolumeTool::Mode::Handles);
+      QApplication::processEvents();
+      CHECK(lightVolumeTool.active());
+
+      toolBox.endMouseDrag(inputState);
     }
 
     SECTION("is deactivated when a map is loaded")
