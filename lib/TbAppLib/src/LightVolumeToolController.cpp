@@ -700,11 +700,17 @@ bool LightVolumeToolController::mouseClick(const InputState& inputState)
 
   const auto& hit = findLightVolumeHit(pickResult);
 
-  // a click on a handle, or a drag shorter than 100 ms, keeps the light selected; Ctrl
-  // and the left button is the selection tool's toggle
+  // a click on a handle, or a drag shorter than 100 ms, keeps the light selected and
+  // replaces the clicked surface (D68); Ctrl and the left button is the selection tool's
+  // toggle
   if (hit.hasType(LightVolumeTool::HandleHitType))
   {
-    return !inputState.modifierKeysDown(ModifierKeys::CtrlCmd);
+    if (inputState.modifierKeysDown(ModifierKeys::CtrlCmd))
+    {
+      return false;
+    }
+    m_tool.clearClickedSurface();
+    return true;
   }
 
   return hit.type() == LightVolumeTool::SurfaceHitType && selectSurface(inputState, hit);

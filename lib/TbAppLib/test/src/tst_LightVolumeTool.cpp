@@ -2043,7 +2043,7 @@ TEST_CASE("LightVolumeTool")
       tool.highlightedHit().target<LightSurfaceHit>().element
       == mdl::LightElement::InnerShell);
 
-    SECTION("a clicked surface keeps its outline until the hover or selection changes")
+    SECTION("a clicked surface stays clicked until the selection changes (D68)")
     {
       tool.setClickedSurface(innerHit);
       CHECK(tool.isClickedSurface(innerHit));
@@ -2052,12 +2052,168 @@ TEST_CASE("LightVolumeTool")
       tool.setHighlightedHit(innerHit);
       CHECK(tool.isClickedSurface(innerHit));
 
+      // the hover moves elsewhere, and the outline is still drawn: render draws it bold
+      // while it is not the highlighted hit
       tool.setHighlightedHit(outerHit);
+      CHECK(tool.isClickedSurface(innerHit));
+      CHECK_FALSE(tool.isClickedSurface(tool.highlightedHit()));
+      tool.setHighlightedHit(mdl::Hit::NoHit);
+      CHECK(tool.isClickedSurface(innerHit));
+
+      // another surface replaces it
+      tool.setClickedSurface(outerHit);
+      CHECK(tool.isClickedSurface(outerHit));
       CHECK_FALSE(tool.isClickedSurface(innerHit));
 
-      tool.setClickedSurface(outerHit);
       mdl::deselectNodes(map, {lightNode});
       CHECK_FALSE(tool.isClickedSurface(outerHit));
+    }
+
+    SECTION("a handle drag forgets the clicked surface, a surface drag keeps it")
+    {
+      tool.setClickedSurface(innerHit);
+      REQUIRE(tool.beginDrag(faceCenterHit({1, 0, 0})));
+      CHECK_FALSE(tool.isClickedSurface(innerHit));
+      tool.cancelDrag();
+
+      // a surface drag keeps it
+      tool.setClickedSurface(innerHit);
+      REQUIRE(tool.beginDrag(innerHit));
+      CHECK(tool.isClickedSurface(innerHit));
+      tool.cancelDrag();
+
+      tool.clearClickedSurface();
+      CHECK_FALSE(tool.isClickedSurface(innerHit));
+    }
+  }
+
+  SECTION("nudgeClickedElement")
+  {
+    // the default spot light at the origin; its base picked from below and clicked
+    auto* lightNode = createLight(map, "0 0 0", DefaultSpot);
+    const auto baseHit = pickSurface(tool, vm::ray3d{{0, 0, -1000}, {0, 0, 1}});
+    REQUIRE(baseHit.isMatch());
+    REQUIRE(baseHit.target<LightSurfaceHit>().element == mdl::LightElement::Base);
+    tool.setClickedSurface(baseHit);
+    const auto properties = lightNode->entity().properties();
+
+    SECTION("one step along world +X shears the far cap's centre (D68, AC-26)")
+    {
+      // the box's far centre (0, 0, 264) moves to (-16, 0, 264), world (16, 0, -264):
+      // the beam turns towards it, D' = |(16, 264)|, |target| = D' - 8, the far cap keeps
+      // its half extents 132 and right is re-orthogonalised from the old right
+      CHECK(tool.nudgeClickedElement({16, 0, 0}));
+
+      const auto distance = vm::length(vm::vec3d{16, 0, 264});
+      const auto n = vm::vec3d{16, 0, -264} / distance;
+      const auto targetLength = distance - 8.0;
+      const auto r = vm::normalize(vm::vec3d{-1, 0, 0} + n.x() * n);
+      const auto scale = 132.0 * targetLength / distance;
+
+      checkVector(*lightNode, "light_target", n * targetLength);
+      checkVector(*lightNode, "light_right", r * scale);
+      checkVector(*lightNode, "light_up", {0, -scale, 0});
+      CHECK(valueOf(*lightNode, "light_target") == "15.52 0 -256.01");
+      CHECK(valueOf(*lightNode, "light_right") == "-127.77 0 -7.74");
+      CHECK(valueOf(*lightNode, "light_up") == "0 -128.01 0");
+      CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+
+      // the far cap's centre at (16, 0, -264), within the two written decimals
+      const auto frustum =
+        mdl::spotLightFrustum(mdl::parseLightProperties(lightNode->entity()));
+      REQUIRE(frustum);
+      auto farCentre = vm::vec3d{0, 0, 0};
+      for (const auto& corner : frustum->farCorners)
+      {
+        farCentre = farCentre + corner / 4.0;
+      }
+      CHECK(vm::is_equal(farCentre, vm::vec3d{16, 0, -264}, 0.02));
+
+      // one undo step
+      REQUIRE(map.undoCommandName() != nullptr);
+      CHECK(*map.undoCommandName() == "Shear Light Volume");
+      map.undoCommand();
+      CHECK(lightNode->entity().properties() == properties);
+    }
+
+    SECTION("world up shortens the beam along it (AC-26)")
+    {
+      // the box's -z: the far cap at 248, |target| 240, right 132 * 240 / 248
+      CHECK(tool.nudgeClickedElement({0, 0, 16}));
+      CHECK(valueOf(*lightNode, "light_target") == "0 0 -240");
+      CHECK(
+        lengthOf(*lightNode, "light_right")
+        == Catch::Approx(132.0 * 240.0 / 248.0).margin(LengthTolerance));
+      CHECK(valueOf(*lightNode, "light_right") == "-127.74 0 0");
+      CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+    }
+
+    SECTION("a step that leaves a depth below 24 is taken and changes nothing")
+    {
+      const auto undoName = *map.undoCommandName();
+      CHECK(tool.nudgeClickedElement({0, 0, 241}));
+      CHECK(tool.nudgeClickedElement({0, 0, 400}));
+      CHECK(lightNode->entity().properties() == properties);
+      CHECK(*map.undoCommandName() == undoName);
+    }
+
+    SECTION("the clicked base survives a hover change and a nudge")
+    {
+      tool.setHighlightedHit(farCapCenterHit());
+      REQUIRE(tool.nudgeClickedElement({16, 0, 0}));
+      CHECK(tool.isClickedSurface(baseHit));
+      CHECK(tool.nudgeClickedElement({16, 0, 0}));
+      CHECK(tool.isClickedSurface(baseHit));
+    }
+
+    SECTION("the keys move the light for any other element, or none")
+    {
+      const auto funnelHit = pickSurface(tool, vm::ray3d{{1000, 0, -136}, {-1, 0, 0}});
+      REQUIRE(funnelHit.target<LightSurfaceHit>().element == mdl::LightElement::Funnel);
+      tool.setClickedSurface(funnelHit);
+      CHECK_FALSE(tool.nudgeClickedElement({16, 0, 0}));
+
+      tool.clearClickedSurface();
+      CHECK_FALSE(tool.nudgeClickedElement({16, 0, 0}));
+
+      // a point light's outer shell
+      auto* pointNode = createLight(map, "1000 0 0", {});
+      const auto shellHit = pickSurface(tool, vm::ray3d{{2000, 0, 0}, {-1, 0, 0}});
+      REQUIRE(shellHit.target<LightSurfaceHit>().node == pointNode);
+      REQUIRE(
+        shellHit.target<LightSurfaceHit>().element == mdl::LightElement::OuterShell);
+      tool.setClickedSurface(shellHit);
+      CHECK_FALSE(tool.nudgeClickedElement({16, 0, 0}));
+
+      CHECK(lightNode->entity().properties() == properties);
+    }
+
+    SECTION("a selection change forgets the base, the keys then move the light")
+    {
+      auto* otherNode = createLight(map, "1000 0 0", DefaultSpot);
+      CHECK_FALSE(tool.isClickedSurface(baseHit));
+      CHECK_FALSE(tool.nudgeClickedElement({16, 0, 0}));
+
+      // two lights selected
+      selectOnly(map, {lightNode});
+      tool.setClickedSurface(baseHit);
+      mdl::selectNodes(map, {otherNode});
+      CHECK_FALSE(tool.nudgeClickedElement({16, 0, 0}));
+    }
+
+    SECTION("nothing while a modal tool suppresses the handles or volumes are off")
+    {
+      REQUIRE(tool.handles().deactivate());
+      CHECK_FALSE(tool.nudgeClickedElement({16, 0, 0}));
+      REQUIRE(tool.handles().activate());
+
+      setPref(
+        Preferences::ShowLightVolumes, std::string{Preferences::ShowLightVolumesOff});
+      const auto resetVolumes = kdl::invoke_later{[] {
+        PreferenceManager::instance().resetToDefault(Preferences::ShowLightVolumes);
+      }};
+      CHECK_FALSE(tool.nudgeClickedElement({16, 0, 0}));
+      CHECK(lightNode->entity().properties() == properties);
     }
   }
 

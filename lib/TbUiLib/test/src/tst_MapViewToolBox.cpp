@@ -27,10 +27,12 @@
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
 #include "mdl/Hit.h"
+#include "mdl/HitFilter.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
+#include "mdl/PickResult.h"
 #include "ui/AssembleBrushTool.h"
 #include "ui/CatchConfig.h"
 #include "ui/ClipTool.h" // IWYU pragma: keep
@@ -57,6 +59,7 @@
 #include "kd/result.h"
 
 #include "vm/bbox.h"
+#include "vm/ray.h"
 #include "vm/vec.h"
 
 #include <functional>
@@ -292,6 +295,47 @@ TEST_CASE("MapViewToolBox")
       CHECK_FALSE(lightVolumeTool.active());
       CHECK(lightVolumeTool.mode() == LightVolumeTool::Mode::Handles);
     }
+  }
+
+  SECTION("nudgeLightVolumeElement")
+  {
+    // MapViewBase::moveObjects offers each step of the keys that move objects here first
+    // and moves the selection only if this returns false (D68)
+    auto& map = document.map();
+    CHECK_FALSE(toolBox.nudgeLightVolumeElement({16, 0, 0}));
+
+    auto* lightNode = new mdl::EntityNode{mdl::Entity{{
+      {"classname", "light"},
+      {"origin", "0 0 0"},
+      {"light_target", "0 0 -256"},
+      {"light_right", "-128 0 0"},
+      {"light_up", "0 -128 0"},
+    }}};
+    REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), {lightNode}}}).empty());
+    mdl::selectNodes(map, {lightNode});
+
+    // no clicked element: the keys move the light
+    CHECK_FALSE(toolBox.nudgeLightVolumeElement({16, 0, 0}));
+
+    // the clicked base takes the step and shears the far cap
+    auto pickResult = mdl::PickResult{};
+    lightVolumeTool.pickSurfaces(vm::ray3d{{0, 0, -1000}, {0, 0, 1}}, pickResult);
+    const auto& baseHit =
+      pickResult.first(mdl::HitFilters::type(LightVolumeTool::SurfaceHitType));
+    REQUIRE(baseHit.isMatch());
+    REQUIRE(baseHit.target<LightSurfaceHit>().element == mdl::LightElement::Base);
+    lightVolumeTool.setClickedSurface(baseHit);
+
+    CHECK(toolBox.nudgeLightVolumeElement({16, 0, 0}));
+    CHECK(*lightNode->entity().property("light_target") == "15.52 0 -256.01");
+    CHECK(*lightNode->entity().property("origin") == "0 0 0");
+
+    // a modal tool suppresses the handles, and the keys move the light again
+    toolBox.toggleTool(toolBox.rotateTool());
+    REQUIRE(toolBox.rotateToolActive());
+    CHECK_FALSE(toolBox.nudgeLightVolumeElement({16, 0, 0}));
+    toolBox.toggleTool(toolBox.rotateTool());
+    CHECK(toolBox.nudgeLightVolumeElement({16, 0, 0}));
   }
 
   SECTION("lightVolumeToolActive")

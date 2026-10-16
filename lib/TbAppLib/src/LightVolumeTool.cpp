@@ -920,6 +920,25 @@ bool containsCamera(const LightSurfaceHit& surface, const vm::vec3d& camera)
 }
 
 /**
+ * Renders the outline of a surface where it has one (D60) in the selected face colour,
+ * bold if the surface was clicked.
+ */
+void renderSurfaceOutline(
+  render::RenderContext& renderContext,
+  render::RenderBatch& renderBatch,
+  const LightSurfaceHit& surface,
+  const bool bold)
+{
+  if (const auto outline = surfaceOutline(surface); !outline.empty())
+  {
+    auto renderService = render::RenderService{renderContext, renderBatch};
+    renderService.setForegroundColor(pref(Preferences::SelectedFaceColor));
+    renderService.setLineWidth(bold ? 2.0f : 1.0f);
+    renderService.renderLines(outline);
+  }
+}
+
+/**
  * Renders the highlight of a surface (D60): its element's triangles once more in the
  * selected face colour at alpha 0.25, depth tested and without writing depth, and its
  * outline where it has one, bold if the surface was clicked.
@@ -957,14 +976,7 @@ void renderSurfaceHighlight(
       ? VolumeRenderable::Cull::Front
       : VolumeRenderable::Cull::Back;
   renderBatch.addOneShot(new VolumeRenderable{std::move(fills), {}, cull});
-
-  if (const auto outline = surfaceOutline(surface); !outline.empty())
-  {
-    auto renderService = render::RenderService{renderContext, renderBatch};
-    renderService.setForegroundColor(pref(Preferences::SelectedFaceColor));
-    renderService.setLineWidth(bold ? 2.0f : 1.0f);
-    renderService.renderLines(outline);
-  }
+  renderSurfaceOutline(renderContext, renderBatch, surface, bold);
 }
 
 /**
@@ -1200,7 +1212,11 @@ LightVolumeTool::LightVolumeTool(MapDocument& document)
   const auto invalidate = [&]() { lightsDidChange(); };
   const auto invalidateNodes = [&](const auto&) { lightsDidChange(); };
 
-  m_notifierConnection += document.documentWasLoadedNotifier.connect(invalidate);
+  m_notifierConnection += document.documentWasLoadedNotifier.connect([&]() {
+    // a node of the new map may take the address of the clicked one
+    lightsDidChange();
+    clearClickedSurface();
+  });
   m_notifierConnection += document.nodesWereAddedNotifier.connect(invalidateNodes);
   m_notifierConnection += document.nodesWillBeRemovedNotifier.connect(invalidateNodes);
   m_notifierConnection += document.nodesWereRemovedNotifier.connect(invalidateNodes);
@@ -1505,14 +1521,10 @@ void LightVolumeTool::setHighlightedHit(const mdl::Hit& hit)
     return true;
   };
 
+  // the clicked surface stays clicked while the mouse is elsewhere (D68)
   if (hit.type() != m_highlightedHit.type() || !sameTarget())
   {
     m_highlightedHit = hit;
-    if (!isClickedSurface(hit))
-    {
-      m_clickedNode = nullptr;
-      m_clickedElement = std::nullopt;
-    }
     refreshViews();
   }
 }
@@ -1527,6 +1539,16 @@ void LightVolumeTool::setClickedSurface(const mdl::Hit& hit)
   refreshViews();
 }
 
+void LightVolumeTool::clearClickedSurface()
+{
+  if (m_clickedElement)
+  {
+    m_clickedNode = nullptr;
+    m_clickedElement = std::nullopt;
+    refreshViews();
+  }
+}
+
 bool LightVolumeTool::isClickedSurface(const mdl::Hit& hit) const
 {
   if (hit.type() != SurfaceHitType || !m_clickedElement)
@@ -1536,6 +1558,79 @@ bool LightVolumeTool::isClickedSurface(const mdl::Hit& hit) const
 
   const auto surface = hit.target<LightSurfaceHit>();
   return surface.node == m_clickedNode && surface.element == *m_clickedElement;
+}
+
+bool LightVolumeTool::nudgeClickedElement(const vm::vec3d& worldDelta)
+{
+  // the keys shear the clicked base of the one selected spot light, while its handles
+  // work and its volume is shown (D68); anything else is moved by the keys as before
+  if (
+    m_dragging || m_clickedElement != mdl::LightElement::Base || !m_handles.active()
+    || !showsVolumes())
+  {
+    return false;
+  }
+
+  auto* entityNode = selectedLight();
+  if (!entityNode || entityNode != m_clickedNode)
+  {
+    return false;
+  }
+
+  const auto volume = volumeBox();
+  if (!volume || volume->light.type != mdl::LightType::Spot)
+  {
+    return false;
+  }
+
+  // the far face's centre (cx, cy, L) moves by the delta in the box frame; the apex
+  // stays, and the far cap keeps its half extents
+  const auto& box = volume->box;
+  const auto halfExtents = box.size() / 2.0;
+  const auto farCentre = vm::vec3d{box.center().x(), box.center().y(), box.max.z()}
+                         + vm::transpose(volume->rotation) * worldDelta;
+  if (farCentre.z() <= box.min.z())
+  {
+    // the far cap would pass the apex: denied, and the key is still the base's
+    return true;
+  }
+
+  const auto shearedBox = vm::bbox3d{
+    {farCentre.x() - halfExtents.x(), farCentre.y() - halfExtents.y(), box.min.z()},
+    {farCentre.x() + halfExtents.x(), farCentre.y() + halfExtents.y(), farCentre.z()}};
+
+  // the off-centre box re-aims the beam at the moved centre with the roll kept (D37);
+  // the rotation is the light's, never the box frame's (I0.2)
+  const auto light = mdl::lightFromEditBox(volume->light, volume->frame.R, shearedBox);
+  if (light == volume->light)
+  {
+    // denied: a depth below 24
+    return true;
+  }
+
+  auto& map = m_document.map();
+  const auto& entity = entityNode->entity();
+  const auto diff = mdl::lightKeyDiff(entity, light);
+  if (diff.set.empty() && diff.remove.empty())
+  {
+    return true;
+  }
+
+  auto transaction = mdl::Transaction{map, "Shear Light Volume"};
+  if (!mdl::updateNodeContents(
+        map,
+        "Shear Light Volume",
+        {{entityNode, mdl::NodeContents{mdl::applyLightPropertyUpdate(entity, diff)}}}))
+  {
+    transaction.cancel();
+    map.logger().error() << "Could not shear the light volume";
+    return true;
+  }
+  if (!transaction.commit())
+  {
+    map.logger().error() << "Could not shear the light volume";
+  }
+  return true;
 }
 
 bool LightVolumeTool::beginDrag(const mdl::Hit& hit)
@@ -1560,6 +1655,12 @@ bool LightVolumeTool::beginDrag(const mdl::Hit& hit)
     {
       return false;
     }
+  }
+
+  // a handle drag replaces the clicked surface (D68)
+  if (hit.hasType(HandleHitType))
+  {
+    clearClickedSurface();
   }
 
   m_dragStart = std::move(volume);
@@ -1862,6 +1963,20 @@ void LightVolumeTool::render(
         float(std::clamp(hue.z(), 0.0, 1.0))});
       renderService.setLineWidth(2.0f);
       renderService.renderLines(edges);
+    }
+
+    // the clicked surface, while it is not highlighted, as the light is now: what the
+    // keys shear (D68)
+    if (
+      m_clickedElement && m_clickedNode == selectedLight()
+      && !isClickedSurface(highlight))
+    {
+      renderSurfaceOutline(
+        renderContext,
+        renderBatch,
+        LightSurfaceHit{
+          selectedLight(), *m_clickedElement, true, volume->light, volume->frame, {}},
+        true);
     }
 
     if (highlight.hasType(HandleHitType))

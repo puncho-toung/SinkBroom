@@ -510,6 +510,11 @@ void MapViewToolBox::moveNodeHandles(const vm::vec3d& delta)
   }
 }
 
+bool MapViewToolBox::nudgeLightVolumeElement(const vm::vec3d& delta)
+{
+  return m_lightVolumeTool->nudgeClickedElement(delta);
+}
+
 void MapViewToolBox::createTools(QStackedLayout* bookCtrl)
 {
   m_bookCtrl = bookCtrl;

@@ -769,9 +769,22 @@ TEST_CASE("LightVolumeToolController")
     {
       SECTION("a corner keeps the light selected")
       {
+        // and replaces the clicked surface, unless Ctrl leaves the click to the
+        // selection tool (D68)
+        const auto surface = pickSurface(tool, pickRay);
+        tool.setClickedSurface(surface);
+
+        CHECK_FALSE(controller.mouseClick(inputStateFor(
+          pickRay,
+          camera,
+          {entityHit(lightNode, 10), cornerHit(20)},
+          ModifierKeys::CtrlCmd)));
+        CHECK(tool.isClickedSurface(surface));
+
         auto inputState =
           inputStateFor(pickRay, camera, {entityHit(lightNode, 10), cornerHit(20)});
         CHECK(controller.mouseClick(inputState));
+        CHECK_FALSE(tool.isClickedSurface(surface));
       }
 
       SECTION("a click on nothing is left to the selection tool (D56)")
@@ -938,6 +951,19 @@ TEST_CASE("LightVolumeToolController")
           inputStateFor(pickRay, camera, {surfaceHit(lightNode, 20, true)});
         controller.mouseMove(inputState);
         CHECK(tool.highlightedHit().type() == LightVolumeTool::SurfaceHitType);
+      }
+
+      SECTION("keeps the clicked surface when the hover moves on (D68)")
+      {
+        const auto surface = pickSurface(tool, pickRay);
+        tool.setClickedSurface(surface);
+
+        controller.mouseMove(inputStateFor(pickRay, camera, {cornerHit(20)}));
+        CHECK(tool.highlightedHit().type() == LightVolumeTool::CornerHitType);
+        CHECK(tool.isClickedSurface(surface));
+
+        controller.mouseMove(inputStateFor(pickRay, camera, {}));
+        CHECK(tool.isClickedSurface(surface));
       }
 
       SECTION("does nothing while a tool drags")

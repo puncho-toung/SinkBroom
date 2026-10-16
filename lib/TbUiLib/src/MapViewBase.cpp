@@ -487,7 +487,12 @@ void MapViewBase::moveObjects(const vm::direction direction)
   auto& map = m_document.map();
   const auto& grid = map.grid();
   const auto delta = moveDirection(direction) * double(grid.actualSize());
-  translateSelection(map, delta);
+
+  // a spot light's clicked base takes the step as a shear of its far cap (D68)
+  if (!m_toolBox.nudgeLightVolumeElement(delta))
+  {
+    translateSelection(map, delta);
+  }
 }
 
 void MapViewBase::duplicateObjects()

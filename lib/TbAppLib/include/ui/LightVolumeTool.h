@@ -250,8 +250,9 @@ private:
   Mode m_mode = Mode::Handles;
 
   mdl::Hit m_highlightedHit = mdl::Hit::NoHit;
-  // the surface that was last clicked, kept with a bold outline while it is under the
-  // mouse; never dereferenced
+  // the surface that was last clicked (D60, D68): its outline stays bold and the keys
+  // shear a spot light's clicked base until the selection changes, another surface or a
+  // handle is clicked or a handle drag starts; never dereferenced
   const mdl::EntityNode* m_clickedNode = nullptr;
   std::optional<mdl::LightElement> m_clickedElement;
 
@@ -379,16 +380,23 @@ public:
 
   const mdl::Hit& highlightedHit() const;
   /**
-   * Sets the handle or surface under the mouse and refreshes the views if it changed. A
-   * clicked surface loses its bold outline when another one is highlighted.
+   * Sets the handle or surface under the mouse and refreshes the views if it changed. The
+   * clicked surface stays clicked (D68).
    */
   void setHighlightedHit(const mdl::Hit& hit);
 
   /**
-   * Marks the given surface hit as clicked: its element keeps a bold outline while it is
-   * under the mouse, until the selection changes (D60).
+   * Marks the given surface hit as clicked, in place of the one clicked before: its
+   * element keeps a bold outline, also while it is not under the mouse, until the
+   * selection changes, another surface or a handle is clicked or a handle drag starts
+   * (D60, D68).
    */
   void setClickedSurface(const mdl::Hit& hit);
+
+  /**
+   * Forgets the clicked surface: a handle was clicked.
+   */
+  void clearClickedSurface();
 
   /**
    * Whether the given surface hit is the one that was clicked last.
@@ -396,10 +404,22 @@ public:
   bool isClickedSurface(const mdl::Hit& hit) const;
 
   /**
+   * Shears the clicked element by the given world delta, one step of the keys that move
+   * objects (D68): if the one selected light is a spot light whose base is the clicked
+   * surface, its volume is shown and its handles work, the far cap's centre moves by the
+   * delta with the apex, the far cap's half extents and the roll kept, so that the beam
+   * turns towards the new centre; one undo step "Shear Light Volume". Returns true if the
+   * key belongs to the clicked element, also when the step is denied (a depth below 24),
+   * which changes nothing; false otherwise, so that the keys move the selection.
+   */
+  bool nudgeClickedElement(const vm::vec3d& worldDelta);
+
+  /**
    * Starts dragging the handle of the given hit in a long running transaction, or, for a
    * surface of the selected light, editing its element (D60). Returns false if no light
    * is selected, if the surface is not the selected light's or if its element cannot be
-   * edited (a sun's box). The handle threshold is fixed for the drag (D61).
+   * edited (a sun's box). The handle threshold is fixed for the drag (D61). A handle drag
+   * forgets the clicked surface (D68).
    */
   bool beginDrag(const mdl::Hit& hit);
 
@@ -457,8 +477,9 @@ public:
 
   /**
    * Renders the handle box, the handles, the dragged handle, the highlighted handle or
-   * surface if requested (not while another tool drags) and a spot light's frustum edges,
-   * or the drawn volume in draw mode.
+   * surface if requested (not while another tool drags), the bold outline of the clicked
+   * surface of the selected light while it is not highlighted (D68) and a spot light's
+   * frustum edges, or the drawn volume in draw mode.
    */
   void render(
     render::RenderContext& renderContext,

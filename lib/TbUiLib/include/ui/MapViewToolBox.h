@@ -202,6 +202,14 @@ public: // tools
 
   void moveNodeHandles(const vm::vec3d& delta);
 
+  /**
+   * Offers one step of the keys that move objects to the clicked element of the selected
+   * light's volume (D68): a spot light's clicked base is sheared by the given world
+   * delta. Returns false if the step is not the volume's, so that the keys move the
+   * selection.
+   */
+  bool nudgeLightVolumeElement(const vm::vec3d& delta);
+
 private: // Tool related methods
   void createTools(QStackedLayout* bookCtrl);
 
