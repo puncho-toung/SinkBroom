@@ -36,6 +36,9 @@
 #include "vm/approx.h"
 #include "vm/bbox_io.h" // IWYU pragma: keep
 
+#include <string>
+#include <vector>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
@@ -206,6 +209,10 @@ TEST_CASE("EntityModelManager")
     const auto loadedShaders = doom3Manager.shaders();
     REQUIRE(loadedShaders != nullptr);
     CHECK(loadedShaders->findShader("textures/tb_test/wall") != nullptr);
+    // tb_test_lights.mtr: the light materials that the material browser leaves out
+    CHECK(
+      shaderNamesWithPrefix(*loadedShaders, {"lights/", "fogs/"})
+      == std::vector<std::string>{"fogs/tb_test_fog", "lights/tb_test_point"});
 
     // a reload replaces the shaders, and a caller's pointer keeps the old ones alive
     doom3Manager.reloadShaders(taskManager);

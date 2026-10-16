@@ -1,0 +1,25 @@
+// Synthetic Doom 3 BFG light materials for the TrenchBroom test suite.
+// Written by hand for these tests; it is not derived from any id Software asset.
+// The light editor offers every material under lights/ and fogs/ as a light's texture.
+
+// a projected light image, like the engine's lights/ materials
+lights/tb_test_point
+{
+	{
+		forceHighQuality
+		map			textures/tb_test/wall_d
+		colored
+		zeroClamp
+	}
+}
+
+// a fog light, like the engine's fogs/ materials
+fogs/tb_test_fog
+{
+	fogLight
+	noShadows
+	{
+		map			textures/tb_test/wall_d
+		colored
+	}
+}

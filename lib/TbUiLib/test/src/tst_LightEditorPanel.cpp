@@ -33,6 +33,7 @@
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityDefinitionManager.h"
+#include "mdl/EntityModelManager.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GroupNode.h"
 #include "mdl/Hit.h"
@@ -55,6 +56,7 @@
 #include "ui/SpinControl.h"
 
 #include "kd/result.h"
+#include "kd/task_manager.h"
 
 #include "vm/bbox.h"
 #include "vm/vec.h"
@@ -916,21 +918,47 @@ TEST_CASE("LightEditorPanel")
     CHECK(findControl<SpinControl>(panel, "Style").isVisibleTo(&panel));
   }
 
-  SECTION("the texture list starts with the engine default")
+  SECTION("the texture list holds the engine default and the light materials")
   {
     auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
     auto& map = fixture.document().map();
 
     auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+    auto* texturedNode = addLight(
+      map,
+      {{"classname", "light"},
+       {"origin", "64 0 0"},
+       {"texture", "lights/tb_test_point"}});
 
     auto panel = LightEditorPanel{fixture.context()};
     selectOnly(map, {lightNode});
 
-    // the fixture's materials have no lights/ or fogs/ decls
     auto& texture = findControl<QComboBox>(panel, "Texture");
-    REQUIRE(texture.count() == 1);
-    CHECK(texture.itemText(0) == "(engine default)");
+    const auto items = [&]() {
+      auto result = QStringList{};
+      for (int i = 0; i < texture.count(); ++i)
+      {
+        result.push_back(texture.itemText(i));
+      }
+      return result;
+    };
+
+    // the materials of the fixture's tb_test_lights.mtr, sorted
+    const auto expectedItems =
+      QStringList{"(engine default)", "fogs/tb_test_fog", "lights/tb_test_point"};
+    CHECK(items() == expectedItems);
     CHECK(texture.currentIndex() == 0);
+
+    texture.setCurrentIndex(2);
+    texture.activated(2);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode, "texture") == "lights/tb_test_point");
+    CHECK(texture.currentIndex() == 2);
+
+    selectOnly(map, {texturedNode});
+    CHECK(texture.currentIndex() == 2);
+    CHECK(texture.currentText() == "lights/tb_test_point");
+    selectOnly(map, {lightNode});
 
     // a name that is typed in
     texture.setEditText("lights/biground1");
@@ -943,6 +971,18 @@ TEST_CASE("LightEditorPanel")
     texture.activated(0);
     QApplication::processEvents();
     CHECK(property(*lightNode, "texture") == nullptr);
+
+    // the list is read again only when the shaders may have changed
+    texture.removeItem(1);
+    selectOnly(map, {texturedNode});
+    CHECK(texture.count() == 2);
+
+    auto taskManager = kdl::task_manager{};
+    map.entityModelManager().reloadShaders(taskManager);
+    fixture.document().modsDidChangeNotifier();
+    QApplication::processEvents();
+    CHECK(items() == expectedItems);
+    CHECK(texture.currentIndex() == 2);
   }
 
   SECTION("the volume tool buttons")
