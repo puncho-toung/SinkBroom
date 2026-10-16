@@ -1071,6 +1071,23 @@ TEST_CASE("Light")
       });
     CHECK(contains(lightPropertyUpdate(sun).remove, "light_center"));
   }
+
+  SECTION("seededMathLightProperties")
+  {
+    // the in-game editor's auto-seed (LightEditor.cpp), field by field
+    const auto math = seededMathLightProperties();
+    CHECK(math.enabled);
+    CHECK(math.falloff == LightFalloff::Linear);
+    CHECK(math.falloffExp == 2.0);
+    CHECK(math.innerRadius == 0.1);
+    CHECK(math.shapeExp == 2.0);
+    CHECK(math.penumbra == 0.15);
+    CHECK(math.pattern == LightPattern::None);
+    CHECK(math.patternStrength == 0.0);
+    CHECK(math.patternScale == 1.0);
+    CHECK(math.patternPhase == 0.0);
+    CHECK(math.energyClamp);
+  }
 }
 
 } // namespace tb::mdl

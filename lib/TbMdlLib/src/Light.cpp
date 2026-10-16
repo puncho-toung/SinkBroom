@@ -739,4 +739,21 @@ LightProperties defaultLight(const LightType type, const LightProperties& keep)
   return light;
 }
 
+MathLightProperties seededMathLightProperties()
+{
+  auto math = MathLightProperties{};
+  math.enabled = true;
+  math.falloff = LightFalloff::Linear;
+  math.falloffExp = 2.0;
+  math.innerRadius = 0.1;
+  math.shapeExp = 2.0;
+  math.penumbra = 0.15;
+  math.pattern = LightPattern::None;
+  math.patternStrength = 0.0;
+  math.patternScale = 1.0;
+  math.patternPhase = 0.0;
+  math.energyClamp = true;
+  return math;
+}
+
 } // namespace tb::mdl

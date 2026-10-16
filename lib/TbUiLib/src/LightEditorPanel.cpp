@@ -374,27 +374,6 @@ QColor toQColor(const vm::vec3d& hue)
 }
 
 /**
- * The math block that "Enable" gives a light without one: the in-game editor's
- * auto-seed (LightEditor.cpp), a soft linear falloff (D29).
- */
-mdl::MathLightProperties seededMathLightProperties()
-{
-  auto math = mdl::MathLightProperties{};
-  math.enabled = true;
-  math.falloff = mdl::LightFalloff::Linear;
-  math.falloffExp = 2.0;
-  math.innerRadius = 0.1;
-  math.shapeExp = 2.0;
-  math.penumbra = 0.15;
-  math.pattern = mdl::LightPattern::None;
-  math.patternStrength = 0.0;
-  math.patternScale = 1.0;
-  math.patternPhase = 0.0;
-  math.energyClamp = true;
-  return math;
-}
-
-/**
  * Resets the light's volume to the engine's default for its type and keeps everything
  * else.
  */
@@ -1267,7 +1246,8 @@ void LightEditorPanel::connectEditor()
       }
       else if (!light.math.enabled)
       {
-        light.math = seededMathLightProperties();
+        // the in-game editor's auto-seed (D29)
+        light.math = mdl::seededMathLightProperties();
       }
     });
   connect(c.falloff, &QComboBox::activated, this, [this](const int index) {

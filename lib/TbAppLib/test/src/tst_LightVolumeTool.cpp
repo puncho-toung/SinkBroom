@@ -732,7 +732,7 @@ TEST_CASE("LightVolumeTool")
       CHECK(tool.updateDraw(vm::bbox3d{{0, 0, 0}, {128, 128, 64}}));
       // the preview is the would-be light
       REQUIRE(tool.drawLight());
-      CHECK(tool.drawLight()->math == lightVolumeSeedMath());
+      CHECK(tool.drawLight()->math == mdl::seededMathLightProperties());
       tool.endDraw();
 
       REQUIRE(map.selection().entities.size() == 1);
@@ -749,7 +749,9 @@ TEST_CASE("LightVolumeTool")
       CHECK(valueOf(*lightNode, "math_shape_exp") == "2");
       CHECK(valueOf(*lightNode, "math_penumbra") == "0.15");
       CHECK(valueOf(*lightNode, "math_pattern") == "none");
-      CHECK(mdl::parseLightProperties(lightNode->entity()).math == lightVolumeSeedMath());
+      CHECK(
+        mdl::parseLightProperties(lightNode->entity()).math
+        == mdl::seededMathLightProperties());
 
       // one undo step
       REQUIRE(map.undoCommandName() != nullptr);

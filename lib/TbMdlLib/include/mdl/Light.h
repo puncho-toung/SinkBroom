@@ -297,4 +297,12 @@ Entity applyLightPropertyUpdate(Entity entity, const LightPropertyUpdate& update
  */
 LightProperties defaultLight(LightType type, const LightProperties& keep);
 
+/**
+ * The math block that a light without one gets when the light editor enables it or when
+ * the light volume tool draws a new light: the in-game editor's auto-seed of a light
+ * without "math_enabled" (LightEditor.cpp), a soft linear falloff. It differs from both
+ * the defaults of MathLightProperties and the in-game "Seed from legacy light" button.
+ */
+MathLightProperties seededMathLightProperties();
+
 } // namespace tb::mdl

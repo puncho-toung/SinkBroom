@@ -104,12 +104,6 @@ std::optional<LightVolumeBox> lightVolumeBox(
 vm::line3d lightVolumeHandleLine(const LightVolumeBox& volume, const mdl::Hit& hit);
 
 /**
- * The math block of a light that draw mode creates: the in-game editor's auto-seed, a
- * soft linear falloff (light editor plan, D29).
- */
-mdl::MathLightProperties lightVolumeSeedMath();
-
-/**
  * Edits the volume of the one selected light with the handles of its edit box, like the
  * scale tool edits a brush, or draws a new volume for it, or for a new light, like the
  * draw shape tool draws a brush. It is reached only through the light editor panel.

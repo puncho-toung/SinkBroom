@@ -553,24 +553,6 @@ vm::line3d lightVolumeHandleLine(const LightVolumeBox& volume, const mdl::Hit& h
   return vm::line3d{volume.toWorld(start), volume.rotation * vm::normalize(end - start)};
 }
 
-mdl::MathLightProperties lightVolumeSeedMath()
-{
-  // the same values as the light editor panel's "Enable" (LightEditorPanel.cpp)
-  auto math = mdl::MathLightProperties{};
-  math.enabled = true;
-  math.falloff = mdl::LightFalloff::Linear;
-  math.falloffExp = 2.0;
-  math.innerRadius = 0.1;
-  math.shapeExp = 2.0;
-  math.penumbra = 0.15;
-  math.pattern = mdl::LightPattern::None;
-  math.patternStrength = 0.0;
-  math.patternScale = 1.0;
-  math.patternPhase = 0.0;
-  math.energyClamp = true;
-  return math;
-}
-
 const mdl::HitType::Type LightVolumeTool::SideHitType = mdl::HitType::freeType();
 const mdl::HitType::Type LightVolumeTool::EdgeHitType = mdl::HitType::freeType();
 const mdl::HitType::Type LightVolumeTool::CornerHitType = mdl::HitType::freeType();
@@ -900,7 +882,7 @@ bool LightVolumeTool::updateDraw(const vm::bbox3d& worldBox)
   else
   {
     base = mdl::defaultLight(mdl::LightType::Point, mdl::LightProperties{});
-    base.math = lightVolumeSeedMath();
+    base.math = mdl::seededMathLightProperties();
   }
 
   auto box = worldBox;
