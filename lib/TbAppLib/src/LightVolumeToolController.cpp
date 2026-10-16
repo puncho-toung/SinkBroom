@@ -697,7 +697,9 @@ bool LightVolumeToolController::mouseClick(const InputState& inputState)
     return !pickResult.first(type(mdl::nodeHitType()) && isSelectable).isMatch();
   }
 
-  const auto& hit = findLightVolumeHit(pickResult);
+  // a copy: selecting the light makes every view pick again, which replaces the pick
+  // result that the found hit belongs to
+  const auto hit = findLightVolumeHit(pickResult);
 
   // a click on a handle, or a drag shorter than 100 ms, keeps the light selected and
   // replaces the clicked surface (D68); Ctrl and the left button is the selection tool's
@@ -792,7 +794,9 @@ std::unique_ptr<GestureTracker> LightVolumeToolController::acceptMouseDrag(
              : nullptr;
   }
 
-  const auto& hit = findLightVolumeHit(inputState.pickResult());
+  // a copy, like the click's: a document change at the drag's start makes the views
+  // pick again
+  const auto hit = findLightVolumeHit(inputState.pickResult());
   if (hit.type() == LightVolumeTool::SurfaceHitType)
   {
     // the surfaces of a light that is not selected are not dragged, as brushes are not

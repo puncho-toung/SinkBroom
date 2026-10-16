@@ -1001,6 +1001,25 @@ TEST_CASE("LightVolumeToolController")
         CHECK(map.selection().nodes.empty());
       }
 
+      SECTION("a surface click outlives the views' pick on the selection change")
+      {
+        // every view picks again when the selection changes
+        // (MapViewBase::selectionDidChange), which replaces the pick result that the
+        // clicked hit was found in; the click used that hit afterwards, and the Debug app
+        // stopped on the contract of setClickedSurface (2026-10-16)
+        auto* otherNode = createLight(map, "2000 0 0");
+        mdl::deselectAll(map);
+
+        auto inputState =
+          inputStateFor(pickRay, camera, {surfaceHit(otherNode, 700, false)});
+        auto connection = document.selectionDidChangeNotifier.connect(
+          [&](const auto&) { inputState.setPickResult(mdl::PickResult{}); });
+
+        CHECK(controller.mouseClick(inputState));
+        CHECK(map.selection().nodes == std::vector<mdl::Node*>{otherNode});
+        CHECK(tool.isClickedSurface(surfaceHit(otherNode, 700, false)));
+      }
+
       SECTION("a click on a light in a closed group selects the group")
       {
         setPref(
