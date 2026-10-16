@@ -17,6 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <QApplication>
 #include <QStackedLayout>
 #include <QWidget>
 
@@ -27,10 +28,13 @@
 #include "mdl/MapFixture.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
+#include "ui/AssembleBrushTool.h"
 #include "ui/CatchConfig.h"
 #include "ui/ClipTool.h" // IWYU pragma: keep
 #include "ui/DrawShapeTool.h"
+#include "ui/EdgeTool.h"
 #include "ui/ExtrudeTool.h"
+#include "ui/FaceTool.h"
 #include "ui/LightVolumeTool.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
@@ -38,9 +42,12 @@
 #include "ui/MoveObjectsTool.h"
 #include "ui/RotateTool.h" // IWYU pragma: keep
 #include "ui/ScaleTool.h"
+#include "ui/ShearTool.h"
 #include "ui/VertexTool.h" // IWYU pragma: keep
 
 #include "vm/vec.h"
+
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -63,6 +70,35 @@ TEST_CASE("MapViewToolBox")
     SECTION("is inactive until the light editor panel activates it")
     {
       CHECK_FALSE(lightVolumeTool.active());
+    }
+
+    SECTION("its handles are active without it, and the modal tools suppress them")
+    {
+      // the handles work whenever the move tool does (D56)
+      auto& handles = lightVolumeTool.handles();
+      CHECK(handles.active());
+
+      toolBox.toggleTool(lightVolumeTool);
+      CHECK(handles.active());
+      toolBox.toggleTool(lightVolumeTool);
+
+      for (auto* modalTool : std::vector<Tool*>{
+             &toolBox.rotateTool(),
+             &toolBox.scaleTool(),
+             &toolBox.shearTool(),
+             &toolBox.vertexTool(),
+             &toolBox.edgeTool(),
+             &toolBox.faceTool(),
+             &toolBox.assembleBrushTool()})
+      {
+        toolBox.toggleTool(*modalTool);
+        REQUIRE(modalTool->active());
+        CHECK_FALSE(handles.active());
+        CHECK(handles.active() == toolBox.moveObjectsTool().active());
+
+        toolBox.toggleTool(*modalTool);
+        CHECK(handles.active());
+      }
     }
 
     SECTION("is in both exclusive groups")
@@ -105,7 +141,7 @@ TEST_CASE("MapViewToolBox")
       CHECK_FALSE(lightVolumeTool.active());
     }
 
-    SECTION("a drag ends quietly when another tool replaces it")
+    SECTION("a handle drag ends quietly when a modal tool suppresses the handles")
     {
       auto& map = document.map();
       auto* lightNode = new mdl::EntityNode{mdl::Entity{{
@@ -117,16 +153,16 @@ TEST_CASE("MapViewToolBox")
       const auto properties = lightNode->entity().properties();
       const auto undoName = *map.undoCommandName();
 
-      toolBox.toggleTool(lightVolumeTool);
+      // the handles work without the tool (D56)
       REQUIRE(lightVolumeTool.beginDrag(mdl::Hit{
-        LightVolumeTool::SideHitType,
+        LightVolumeTool::FaceCenterHitType,
         0.0,
         vm::vec3d{0, 0, 0},
         BBoxSide{vm::vec3d{1, 0, 0}}}));
       REQUIRE(lightVolumeTool.update(vm::vec3d{32, 0, 0}));
 
       toolBox.toggleTool(toolBox.rotateTool());
-      REQUIRE_FALSE(lightVolumeTool.active());
+      REQUIRE_FALSE(lightVolumeTool.handles().active());
       CHECK_FALSE(lightVolumeTool.isDragging());
       CHECK(lightNode->entity().properties() == properties);
 
@@ -134,6 +170,28 @@ TEST_CASE("MapViewToolBox")
       lightVolumeTool.endDrag();
       CHECK(lightNode->entity().properties() == properties);
       CHECK(*map.undoCommandName() == undoName);
+    }
+
+    SECTION("turns off when it leaves draw mode, once the drag has gone (D56)")
+    {
+      // Esc, or the end of a drawn volume
+      toolBox.toggleTool(lightVolumeTool);
+      lightVolumeTool.setMode(LightVolumeTool::Mode::Draw);
+      lightVolumeTool.setMode(LightVolumeTool::Mode::Handles);
+      CHECK(lightVolumeTool.active());
+
+      QApplication::processEvents();
+      CHECK_FALSE(lightVolumeTool.active());
+      CHECK(toolBox.extrudeTool().active());
+      CHECK(toolBox.drawShapeTool().active());
+
+      // drawing again in the meantime keeps it on
+      toolBox.toggleTool(lightVolumeTool);
+      lightVolumeTool.setMode(LightVolumeTool::Mode::Draw);
+      lightVolumeTool.setMode(LightVolumeTool::Mode::Handles);
+      lightVolumeTool.setMode(LightVolumeTool::Mode::Draw);
+      QApplication::processEvents();
+      CHECK(lightVolumeTool.active());
     }
 
     SECTION("is deactivated when a map is loaded")

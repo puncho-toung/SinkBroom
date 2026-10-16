@@ -657,19 +657,19 @@ int findStyleIndex(const QComboBox& comboBox, const int style)
 }
 
 /**
- * A volume tool button's click: turns the light volume tool off if it is on in the
- * button's mode, else switches it to that mode and turns it on (D20).
+ * The draw button's click: turns the light volume tool off if it draws, else switches it
+ * to draw mode and turns it on (D20). Its handles work without it (D56).
  */
-void toggleLightVolumeTool(MapViewToolBox& toolBox, const LightVolumeTool::Mode mode)
+void toggleLightVolumeDrawing(MapViewToolBox& toolBox)
 {
   auto& tool = toolBox.lightVolumeTool();
-  if (tool.active() && tool.mode() == mode)
+  if (tool.active() && tool.mode() == LightVolumeTool::Mode::Draw)
   {
     toolBox.toggleTool(tool);
   }
   else
   {
-    tool.setMode(mode);
+    tool.setMode(LightVolumeTool::Mode::Draw);
     if (!tool.active())
     {
       toolBox.toggleTool(tool);
@@ -759,7 +759,6 @@ struct LightEditorPanel::Controls
   QCheckBox* castShadows = nullptr;
   QCheckBox* skipSpecular = nullptr;
 
-  QToolButton* editVolumeHandlesButton = nullptr;
   QToolButton* drawVolumeButton = nullptr;
   QToolButton* resetVolumeButton = nullptr;
   SpinControl* handleThreshold = nullptr;
@@ -891,19 +890,13 @@ QWidget* LightEditorPanel::createEditorPage()
   setInfoStyle(styledText);
   c.styledNotice = createNotice(styledText);
 
-  // volume tools, first (D50): the only entry points to the light volume tool (D20)
-  c.editVolumeHandlesButton = createVolumeToolButton(
-    "EditVolumeHandles", "ScaleTool.svg", tr("Edit volume handles"));
-  c.editVolumeHandlesButton->setToolTip(
-    tr("Resize the light's volume with the handles of its box in the map views"));
+  // volume tools, first (D50): the only entry point to the light volume tool's draw mode
+  // (D20); its handles and surfaces work without it (D56)
   c.drawVolumeButton =
     createVolumeToolButton("DrawVolume", "BrushTool.svg", tr("Draw volume"));
   c.drawVolumeButton->setToolTip(
     tr("Draw a new volume for the light, aligned with the world, in the map views"));
-  for (auto* button : {c.editVolumeHandlesButton, c.drawVolumeButton})
-  {
-    button->setCheckable(true);
-  }
+  c.drawVolumeButton->setCheckable(true);
   c.resetVolumeButton =
     createVolumeToolButton("ResetVolume", "ResetUV.svg", tr("Reset volume to default"));
   c.resetVolumeButton->setToolTip(
@@ -915,7 +908,6 @@ QWidget* LightEditorPanel::createEditorPage()
        "its brightness"));
 
   auto* toolLayout = createRowLayout();
-  toolLayout->addWidget(c.editVolumeHandlesButton);
   toolLayout->addWidget(c.drawVolumeButton);
   toolLayout->addStretch(1);
 
@@ -1477,11 +1469,6 @@ void LightEditorPanel::connectEditor()
     setPref(Preferences::LightVolumeHandleThreshold, float(value / 100.0));
   });
   connect(
-    c.editVolumeHandlesButton,
-    &QAbstractButton::clicked,
-    this,
-    &LightEditorPanel::toggleVolumeHandles);
-  connect(
     c.drawVolumeButton,
     &QAbstractButton::clicked,
     this,
@@ -1872,26 +1859,15 @@ void LightEditorPanel::updateVolumeToolButtons()
   const auto& tool = m_toolBox.lightVolumeTool();
   const auto active = tool.active();
 
-  // the tool edits exactly one light without light_origin; while it is active, the
-  // buttons can always turn it off
-  const auto enabled = active || tool.volumeBox().has_value();
-  c.editVolumeHandlesButton->setEnabled(enabled);
-  c.drawVolumeButton->setEnabled(enabled);
-
-  c.editVolumeHandlesButton->setChecked(
-    active && tool.mode() == LightVolumeTool::Mode::Handles);
+  // the tool draws for exactly one light without light_origin; while it is active, the
+  // button can always turn it off
+  c.drawVolumeButton->setEnabled(active || tool.volumeBox().has_value());
   c.drawVolumeButton->setChecked(active && tool.mode() == LightVolumeTool::Mode::Draw);
-}
-
-void LightEditorPanel::toggleVolumeHandles()
-{
-  toggleLightVolumeTool(m_toolBox, LightVolumeTool::Mode::Handles);
-  updateVolumeToolButtons();
 }
 
 void LightEditorPanel::toggleVolumeDrawing()
 {
-  toggleLightVolumeTool(m_toolBox, LightVolumeTool::Mode::Draw);
+  toggleLightVolumeDrawing(m_toolBox);
   updateVolumeToolButtons();
 }
 

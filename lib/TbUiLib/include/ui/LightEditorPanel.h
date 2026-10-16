@@ -100,7 +100,6 @@ private:
   void updateEditor();
   void updateVolumeToolButtons();
 
-  void toggleVolumeHandles();
   void toggleVolumeDrawing();
 
   void editLights(

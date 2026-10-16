@@ -644,8 +644,9 @@ TEST_CASE("LightEditorPanel")
     auto* resetRow = toolRows->itemAt(1)->layout();
     REQUIRE(toolRow != nullptr);
     REQUIRE(resetRow != nullptr);
-    CHECK(toolRow->indexOf(&findControl<QToolButton>(panel, "EditVolumeHandles")) == 0);
-    CHECK(toolRow->indexOf(&findControl<QToolButton>(panel, "DrawVolume")) == 1);
+    // the handles work without a button (D56)
+    CHECK(toolRow->indexOf(&findControl<QToolButton>(panel, "DrawVolume")) == 0);
+    CHECK(panel.findChild<QToolButton*>("LightEditorPanel_EditVolumeHandles") == nullptr);
     CHECK(resetRow->indexOf(&findControl<QToolButton>(panel, "ResetVolume")) == 0);
     CHECK(resetRow->indexOf(&findControl<SpinControl>(panel, "HandleThreshold")) == 3);
 
@@ -1489,18 +1490,14 @@ TEST_CASE("LightEditorPanel")
     auto panel = LightEditorPanel{fixture.context()};
     selectOnly(map, {lightNode});
 
-    for (const auto* name : {"EditVolumeHandles", "DrawVolume"})
-    {
-      CAPTURE(name);
-      const auto& button = findControl<QToolButton>(panel, name);
-      CHECK(button.isCheckable());
-      CHECK(button.isEnabled());
-      CHECK_FALSE(button.isChecked());
-    }
+    const auto& drawButton = findControl<QToolButton>(panel, "DrawVolume");
+    CHECK(drawButton.isCheckable());
+    CHECK(drawButton.isEnabled());
+    CHECK_FALSE(drawButton.isChecked());
 
     // tool buttons take no focus when they are clicked, unlike push buttons, so the
     // map view keeps the focus (LWR-28)
-    for (const auto* name : {"EditVolumeHandles", "DrawVolume", "ResetVolume"})
+    for (const auto* name : {"DrawVolume", "ResetVolume"})
     {
       CAPTURE(name);
       CHECK((findControl<QToolButton>(panel, name).focusPolicy() & Qt::ClickFocus) == 0);
@@ -1515,7 +1512,7 @@ TEST_CASE("LightEditorPanel")
     CHECK(*map.undoCommandName() == "Reset Light Volume");
   }
 
-  SECTION("the volume tool buttons turn the light volume tool on and off")
+  SECTION("the draw button turns the light volume tool's draw mode on and off")
   {
     auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
     auto& map = fixture.document().map();
@@ -1527,37 +1524,31 @@ TEST_CASE("LightEditorPanel")
     auto panel = LightEditorPanel{fixture.context()};
     selectOnly(map, {lightNode});
 
-    auto& handles = findControl<QToolButton>(panel, "EditVolumeHandles");
+    // the handles work without the tool (D56)
+    CHECK(tool.handles().active());
+    CHECK_FALSE(tool.active());
+
     auto& draw = findControl<QToolButton>(panel, "DrawVolume");
 
-    handles.click();
+    draw.click();
     CHECK(tool.active());
-    CHECK(tool.mode() == LightVolumeTool::Mode::Handles);
-    CHECK(handles.isChecked());
-    CHECK_FALSE(draw.isChecked());
+    CHECK(tool.mode() == LightVolumeTool::Mode::Draw);
+    CHECK(draw.isChecked());
     // the tool is not modal: Delete, Cut, Group and the nudges keep working (D31)
     CHECK_FALSE(toolBox.anyModalToolActive());
+    CHECK(tool.handles().active());
 
     draw.click();
-    CHECK(tool.active());
-    CHECK(tool.mode() == LightVolumeTool::Mode::Draw);
-    CHECK_FALSE(handles.isChecked());
-    CHECK(draw.isChecked());
-
-    // Esc or the end of a drawn volume
-    tool.setMode(LightVolumeTool::Mode::Handles);
-    CHECK(handles.isChecked());
-    CHECK_FALSE(draw.isChecked());
-
-    handles.click();
     CHECK_FALSE(tool.active());
-    CHECK_FALSE(handles.isChecked());
     CHECK_FALSE(draw.isChecked());
 
+    // Esc or the end of a drawn volume leaves draw mode, and the tool turns off once the
+    // drag has gone
     draw.click();
-    CHECK(tool.active());
-    CHECK(tool.mode() == LightVolumeTool::Mode::Draw);
-    draw.click();
+    REQUIRE(tool.active());
+    tool.setMode(LightVolumeTool::Mode::Handles);
+    CHECK_FALSE(draw.isChecked());
+    QApplication::processEvents();
     CHECK_FALSE(tool.active());
     CHECK_FALSE(draw.isChecked());
   }
@@ -1573,13 +1564,13 @@ TEST_CASE("LightEditorPanel")
     auto panel = LightEditorPanel{fixture.context()};
     selectOnly(map, {lightNode});
 
-    auto& handles = findControl<QToolButton>(panel, "EditVolumeHandles");
-    handles.click();
+    auto& draw = findControl<QToolButton>(panel, "DrawVolume");
+    draw.click();
     REQUIRE(toolBox.lightVolumeTool().active());
 
     toolBox.toggleTool(toolBox.rotateTool());
     CHECK_FALSE(toolBox.lightVolumeTool().active());
-    CHECK_FALSE(handles.isChecked());
+    CHECK_FALSE(draw.isChecked());
   }
 
   SECTION("closing the panel turns the light volume tool off")
@@ -1618,22 +1609,18 @@ TEST_CASE("LightEditorPanel")
       map, {{"classname", "light"}, {"origin", "0 0 0"}, {"light_origin", "10 20 30"}});
 
     auto panel = LightEditorPanel{fixture.context()};
-    auto& handles = findControl<QToolButton>(panel, "EditVolumeHandles");
     auto& draw = findControl<QToolButton>(panel, "DrawVolume");
 
     selectOnly(map, {lightNode});
-    CHECK(handles.isEnabled());
     CHECK(draw.isEnabled());
 
     selectOnly(map, {lightNode, otherNode});
     REQUIRE(showsEditor(panel));
-    CHECK_FALSE(handles.isEnabled());
     CHECK_FALSE(draw.isEnabled());
 
     // the editor page is read-only (D8)
     selectOnly(map, {legacyNode});
     REQUIRE(showsEditor(panel));
-    CHECK_FALSE(handles.isEnabled());
     CHECK_FALSE(draw.isEnabled());
   }
 
@@ -1648,8 +1635,8 @@ TEST_CASE("LightEditorPanel")
     auto panel = LightEditorPanel{fixture.context()};
     selectOnly(map, {lightNode});
 
-    findControl<QToolButton>(panel, "EditVolumeHandles").click();
-    REQUIRE(tool.active());
+    // the handles work without the tool (D56)
+    REQUIRE_FALSE(tool.active());
 
     auto& originX = findControl<SpinControl>(panel, "OriginX");
     REQUIRE(originX.value() == 0.0);
