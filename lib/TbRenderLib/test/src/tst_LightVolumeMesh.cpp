@@ -646,10 +646,11 @@ TEST_CASE("LightVolumeMesh")
       CHECK(outerPoints.size() == 32 * (4 + 1));
       CHECK(innerPoints.size() == 32 * (4 + 1));
 
-      // the far cap's alpha is 0 (F(1) = 0), so it is not drawn
+      // the far cap's alpha is 0 (F(1) = 0), but it is drawn, so that it can be picked
+      // and highlighted (D55)
       CHECK(nearCapTriangles == 32);
-      CHECK(farCapTriangles == 0);
-      CHECK(mesh.triangles.size() == (2 * 32 * 4 * 2 + 32) * 3);
+      CHECK(farCapTriangles == 32);
+      CHECK(mesh.triangles.size() == (2 * 32 * 4 * 2 + 2 * 32) * 3);
 
       // the last ring is on the far cap at zNear + zFar
       CHECK(maxDepth == Catch::Approx(frustum->zNear + frustum->zFar));
@@ -704,8 +705,8 @@ TEST_CASE("LightVolumeMesh")
 
         const auto mesh = buildLightVolumeMesh(light, atOrigin, style);
 
-        // the outer cone and the near cap; no penumbra outline
-        CHECK(mesh.triangles.size() == (32 * 4 * 2 + 32) * 3);
+        // the outer cone and the two caps; no penumbra outline
+        CHECK(mesh.triangles.size() == (32 * 4 * 2 + 2 * 32) * 3);
         CHECK(mesh.lines.size() == (4 + 4 + 4 + 2 * 32) * 2);
 
         const auto isFinite = [](const auto& vertex) {
@@ -817,6 +818,221 @@ TEST_CASE("LightVolumeMesh")
       const auto mesh = buildLightVolumeMesh(light, atOrigin, style);
       CHECK(mesh.triangles.empty());
       CHECK(mesh.lines.empty());
+      CHECK(mesh.ranges.empty());
+    }
+
+    SECTION("the element ranges tile the triangles, each on its surface (D55)")
+    {
+      auto outerOnly = style;
+      outerOnly.outerShellOnly = true;
+
+      auto seededPoint = mdl::LightProperties{};
+      seededPoint.math = mdl::seededMathLightProperties();
+
+      auto sun = mdl::LightProperties{};
+      sun.type = mdl::LightType::Sun;
+      sun.radius = vm::vec3d{300, 200, 100};
+
+      SECTION("the ranges tile the triangles in order")
+      {
+        for (const auto& light :
+             {linearPointLight(), seededPoint, linearSpotLight(), sun})
+        {
+          for (const auto& rangeStyle : {style, outerOnly})
+          {
+            const auto mesh = buildLightVolumeMesh(light, atOrigin, rangeStyle);
+            auto next = std::size_t{0};
+            for (const auto& range : mesh.ranges)
+            {
+              CAPTURE(range.element);
+              CHECK(range.firstTriangleVertex == next);
+              CHECK(range.count > 0);
+              CHECK(range.count % 3 == 0);
+              next = range.firstTriangleVertex + range.count;
+            }
+            CHECK(next == mesh.triangles.size());
+          }
+        }
+      }
+
+      SECTION("a point light's shells, its outer shell last")
+      {
+        const auto mesh = buildLightVolumeMesh(linearPointLight(), atOrigin, style);
+        REQUIRE(mesh.ranges.size() == 4);
+        for (std::size_t j = 0; j < 4; ++j)
+        {
+          const auto& range = mesh.ranges[j];
+          CHECK(
+            range.element
+            == (j == 3 ? mdl::LightElement::OuterShell : mdl::LightElement::Band));
+          const auto t = double(j + 1) / 4.0;
+          for (std::size_t k = 0; k < range.count; ++k)
+          {
+            const auto p = positionOf(mesh.triangles[range.firstTriangleVertex + k]);
+            CHECK(vm::length(p) / 300.0 == Catch::Approx(t).margin(1e-6));
+          }
+        }
+
+        const auto outer = buildLightVolumeMesh(linearPointLight(), atOrigin, outerOnly);
+        REQUIRE(outer.ranges.size() == 1);
+        CHECK(outer.ranges.front().element == mdl::LightElement::OuterShell);
+      }
+
+      SECTION("a math point light's inner shell at t = inner radius")
+      {
+        // the seeded light, inner radius 0.1, in a turned frame and with three radii
+        auto light = seededPoint;
+        light.radius = vm::vec3d{300, 200, 100};
+        const auto frame =
+          mdl::LightFrame{vm::vec3d{64, 32, 16}, vm::mat3x3d{0, -1, 0, 1, 0, 0, 0, 0, 1}};
+
+        const auto mesh = buildLightVolumeMesh(light, frame, style);
+        REQUIRE(mesh.ranges.size() == 5);
+        const auto& inner = mesh.ranges.back();
+        CHECK(inner.element == mdl::LightElement::InnerShell);
+        CHECK(inner.count == 224 * 3);
+
+        const auto alphas = lightVolumeShellAlphas(light, style);
+        for (std::size_t k = 0; k < inner.count; ++k)
+        {
+          const auto& vertex = mesh.triangles[inner.firstTriangleVertex + k];
+          const auto local = vm::transpose(frame.R) * (positionOf(vertex) - frame.origin);
+          CHECK(
+            mdl::pointFalloffT(local, light.radius) == Catch::Approx(0.1).margin(1e-6));
+          // the alpha of the band that t = 0.1 is in, the innermost of four
+          CHECK(alphaOf(vertex) == Catch::Approx(alphas[0]).margin(1e-6));
+        }
+
+        // the outer shell is still last of the bands
+        CHECK(mesh.ranges[3].element == mdl::LightElement::OuterShell);
+
+        // not drawn for an unselected light, below an inner radius of 0.02, from 0.999
+        // on, or without math
+        CHECK(buildLightVolumeMesh(light, frame, outerOnly).ranges.size() == 1);
+        for (const auto innerRadius : {0.0, 0.01, 0.999})
+        {
+          auto other = light;
+          other.math.innerRadius = innerRadius;
+          const auto otherMesh = buildLightVolumeMesh(other, frame, style);
+          CHECK(std::ranges::none_of(otherMesh.ranges, [](const auto& range) {
+            return range.element == mdl::LightElement::InnerShell;
+          }));
+        }
+        auto disabled = light;
+        disabled.math.enabled = false;
+        CHECK(std::ranges::none_of(
+          buildLightVolumeMesh(disabled, frame, style).ranges, [](const auto& range) {
+            return range.element == mdl::LightElement::InnerShell;
+          }));
+      }
+
+      SECTION("a spot light's funnel, penumbra, caps and base")
+      {
+        const auto light = linearSpotLight();
+        const auto mesh = buildLightVolumeMesh(light, atOrigin, style);
+
+        auto elements = std::vector<mdl::LightElement>{};
+        for (const auto& range : mesh.ranges)
+        {
+          elements.push_back(range.element);
+
+          for (std::size_t k = 0; k < range.count; ++k)
+          {
+            const auto& vertex = mesh.triangles[range.firstTriangleVertex + k];
+            const auto [u, v, d] = defaultSpotCoordinates(positionOf(vertex));
+            const auto r = superellipseRadius(u, v, light.math.shapeExp);
+
+            CAPTURE(range.element, u, v, d);
+            switch (range.element)
+            {
+            case mdl::LightElement::Funnel:
+              CHECK(r == Catch::Approx(1.0).margin(1e-6));
+              break;
+            case mdl::LightElement::Penumbra:
+              CHECK(r == Catch::Approx(1.0 - light.math.penumbra).margin(1e-6));
+              break;
+            case mdl::LightElement::NearCap:
+              CHECK(d == Catch::Approx(8.0).margin(1e-6));
+              CHECK(r <= 1.0 + 1e-6);
+              break;
+            case mdl::LightElement::Base:
+              CHECK(d == Catch::Approx(264.0).margin(1e-6));
+              CHECK(r <= 1.0 + 1e-6);
+              break;
+            case mdl::LightElement::OuterShell:
+            case mdl::LightElement::InnerShell:
+            case mdl::LightElement::SunBox:
+            case mdl::LightElement::Band:
+              FAIL("not an element of a spot light");
+              break;
+            }
+          }
+        }
+
+        CHECK(
+          elements
+          == std::vector{
+            mdl::LightElement::Funnel,
+            mdl::LightElement::Penumbra,
+            mdl::LightElement::NearCap,
+            mdl::LightElement::Base,
+          });
+        // the base at alpha 0 (F(1) = 0)
+        CHECK(alphaOf(mesh.triangles[mesh.ranges.back().firstTriangleVertex]) == 0.0);
+
+        // an unselected spot light has its funnel only
+        const auto outer = buildLightVolumeMesh(light, atOrigin, outerOnly);
+        REQUIRE(outer.ranges.size() == 1);
+        CHECK(outer.ranges.front().element == mdl::LightElement::Funnel);
+      }
+
+      SECTION("a spot light without math is the plain frustum (D63)")
+      {
+        // a texture light whose math keys were kept when it left the math page (D51)
+        auto light = linearSpotLight();
+        light.math.enabled = false;
+        light.math.shapeExp = 2.0;
+        light.math.penumbra = 0.15;
+
+        const auto mesh = buildLightVolumeMesh(light, atOrigin, style);
+        CHECK(std::ranges::none_of(mesh.ranges, [](const auto& range) {
+          return range.element == mdl::LightElement::Penumbra;
+        }));
+
+        // the funnel's rings are squares, on the four lateral planes through the apex
+        const auto& funnel = mesh.ranges.front();
+        REQUIRE(funnel.element == mdl::LightElement::Funnel);
+        auto cornerVertices = 0;
+        for (std::size_t k = 0; k < funnel.count; ++k)
+        {
+          const auto [u, v, d] = defaultSpotCoordinates(
+            positionOf(mesh.triangles[funnel.firstTriangleVertex + k]));
+          CHECK(std::max(std::abs(u), std::abs(v)) == Catch::Approx(1.0).margin(1e-6));
+          if (std::abs(std::abs(u) - 1.0) < 1e-6 && std::abs(std::abs(v) - 1.0) < 1e-6)
+          {
+            ++cornerVertices;
+          }
+        }
+        CHECK(cornerVertices > 0);
+
+        // no penumbra outline: the frustum edges, the two rectangles, two outlines
+        CHECK(mesh.lines.size() == (4 + 4 + 4 + 2 * 32) * 2);
+      }
+
+      SECTION("a sun's box")
+      {
+        const auto mesh = buildLightVolumeMesh(sun, atOrigin, style);
+        REQUIRE(mesh.ranges.size() == 1);
+        CHECK(mesh.ranges.front().element == mdl::LightElement::SunBox);
+        CHECK(mesh.ranges.front().count == 12 * 3);
+        for (const auto& vertex : mesh.triangles)
+        {
+          const auto p = positionOf(vertex);
+          CHECK(
+            vm::get_max_component(vm::abs(p / sun.radius))
+            == Catch::Approx(1.0).margin(1e-6));
+        }
+      }
     }
   }
 
@@ -866,6 +1082,16 @@ TEST_CASE("LightVolumeMesh")
     sun.hasLightOrigin = true;
     lights.push_back(sun);
 
+    // the inner shell of a math light's core (D55)
+    auto seededPoint = mdl::LightProperties{};
+    seededPoint.math = mdl::seededMathLightProperties();
+    lights.push_back(seededPoint);
+
+    // a texture spot light that kept its math keys (D63)
+    auto textureSpot = linearSpotLight();
+    textureSpot.math.enabled = false;
+    lights.push_back(textureSpot);
+
     for (const auto& light : lights)
     {
       for (const auto& sizeStyle : {style, outerOnly, twoD})
@@ -878,6 +1104,7 @@ TEST_CASE("LightVolumeMesh")
           const auto size = lightVolumeMeshSize(light, sizeStyle, entityOrigin);
           CHECK(size.triangles == mesh.triangles.size());
           CHECK(size.lines == mesh.lines.size());
+          CHECK(size.ranges == mesh.ranges.size());
         }
       }
     }

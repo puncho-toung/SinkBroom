@@ -90,6 +90,7 @@ std::pair<LightVolumeMesh, std::vector<LightRange>> buildLights(
     const auto lightSize = lightVolumeMeshSize(range.props, style, entity.origin());
     size.triangles += lightSize.triangles;
     size.lines += lightSize.lines;
+    size.ranges += lightSize.ranges;
 
     ranges.push_back(std::move(range));
   }
@@ -97,6 +98,7 @@ std::pair<LightVolumeMesh, std::vector<LightRange>> buildLights(
   auto mesh = LightVolumeMesh{};
   mesh.triangles.reserve(size.triangles);
   mesh.lines.reserve(size.lines);
+  mesh.ranges.reserve(size.ranges);
 
   for (std::size_t i = 0; i < lights.size(); ++i)
   {

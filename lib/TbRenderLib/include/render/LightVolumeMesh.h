@@ -31,6 +31,7 @@ namespace tb
 {
 namespace mdl
 {
+enum class LightElement;
 struct LightFrame;
 struct LightProperties;
 struct MathLightProperties;
@@ -59,13 +60,28 @@ struct LightVolumeStyle
 };
 
 /**
+ * The triangle vertices of one element of a light volume (light editor plan, D55): count
+ * vertices from firstTriangleVertex on.
+ */
+struct LightElementRange
+{
+  mdl::LightElement element;
+  std::size_t firstTriangleVertex = 0;
+  std::size_t count = 0;
+};
+
+/**
  * The triangles (CW seen from outside, like the map's faces) and lines of a light
- * volume in world space, each vertex with the light's hue and its alpha.
+ * volume in world space, each vertex with the light's hue and its alpha, and the
+ * elements that the triangles make up, in the order of the triangles and without a gap.
+ * The renderer draws the triangles and ignores the ranges; the light volume tool picks
+ * and highlights the elements.
  */
 struct LightVolumeMesh
 {
   std::vector<gl::VertexTypes::P3C4::Vertex> triangles;
   std::vector<gl::VertexTypes::P3C4::Vertex> lines;
+  std::vector<LightElementRange> ranges;
 };
 
 /**
@@ -108,12 +124,14 @@ std::vector<double> lightVolumeShellAlphas(
   const mdl::LightProperties& light, const LightVolumeStyle& style);
 
 /**
- * The numbers of triangle and line vertices that appendLightVolumeMesh appends.
+ * The numbers of triangle and line vertices and of element ranges that
+ * appendLightVolumeMesh appends.
  */
 struct LightVolumeMeshSize
 {
   std::size_t triangles = 0;
   std::size_t lines = 0;
+  std::size_t ranges = 0;
 };
 
 /**
@@ -128,10 +146,17 @@ LightVolumeMeshSize lightVolumeMeshSize(
 
 /**
  * Appends the volume of the given light in the given frame to the given mesh: the
- * nested ellipsoid shells, the clip box and the centre cross of a point light; the cone,
- * penumbra surface, caps, frustum edges and outlines of a spot light; the box and the
- * direction arrow of a sun. If the light has light_origin and the entity's origin is
- * given, a line links the entity's origin to the volume's origin.
+ * nested ellipsoid shells, the inner shell of a math light's core, the clip box and the
+ * centre cross of a point light; the cone, penumbra surface, caps, frustum edges and
+ * outlines of a spot light; the box and the direction arrow of a sun. If the light has
+ * light_origin and the entity's origin is given, a line links the entity's origin to the
+ * volume's origin.
+ *
+ * A spot light without math is the plain frustum, the cone whose rings are the
+ * rectangles of its four lateral planes, without a penumbra surface or outline (D63).
+ * The far cap of a spot light and the inner shell of a math point light are appended
+ * even when their alpha is 0, so that their ranges can be picked and highlighted; an
+ * outer-shell-only volume has neither.
  */
 void appendLightVolumeMesh(
   LightVolumeMesh& mesh,

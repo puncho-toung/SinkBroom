@@ -52,6 +52,8 @@ constexpr auto MinBrightness = 0.25;
 constexpr auto MinHueDivisor = 1e-3;
 constexpr auto InnerRadiusSharp = 0.999;
 constexpr auto MinPenumbra = 1e-3;
+// a math light's core gets its own shell from this inner radius on (D55)
+constexpr auto MinInnerShellRadius = 0.02;
 // like mdl::pointFalloffT
 constexpr auto DegenerateRadius = 1e-6;
 
@@ -159,6 +161,18 @@ void addTriangle(
   {
     mesh.triangles.emplace_back(vm::vec3f{p2}, c2);
     mesh.triangles.emplace_back(vm::vec3f{p3}, c3);
+  }
+}
+
+/**
+ * Records the triangles appended since the given first vertex as one element.
+ */
+void addRange(
+  LightVolumeMesh& mesh, const mdl::LightElement element, const std::size_t first)
+{
+  if (mesh.triangles.size() > first)
+  {
+    mesh.ranges.push_back({element, first, mesh.triangles.size() - first});
   }
 }
 
@@ -275,6 +289,33 @@ std::array<vm::vec2d, SpotSegments> superellipse(const double shapeExp)
 }
 
 /**
+ * The points of the unit square max(|u|, |v|) = 1 at the angles 2 pi i / n, its corners
+ * among them: the rings of a spot light without math, whose cone is the frustum (D63).
+ */
+std::array<vm::vec2d, SpotSegments> square()
+{
+  auto points = std::array<vm::vec2d, SpotSegments>{};
+  for (std::size_t i = 0; i < SpotSegments; ++i)
+  {
+    const auto psi = 2.0 * std::numbers::pi * double(i) / double(SpotSegments);
+    const auto c = std::cos(psi);
+    const auto s = std::sin(psi);
+    const auto r = std::max(std::abs(c), std::abs(s));
+    points[i] = vm::vec2d{c / r, s / r};
+  }
+  return points;
+}
+
+/**
+ * The ring of a spot light's cone: the superellipse of its math block, or the square of
+ * the frustum without math, whose kept math keys are not read (D63).
+ */
+std::array<vm::vec2d, SpotSegments> spotRing(const mdl::LightProperties& light)
+{
+  return light.math.enabled ? superellipse(light.math.shapeExp) : square();
+}
+
+/**
  * The world points of a spot light's cone surface at the given scale of the unit
  * superellipse, ring by ring at the given depths.
  */
@@ -385,7 +426,30 @@ bool hasVolume(const vm::vec3d& radius)
 
 bool hasPenumbraSurface(const mdl::LightProperties& light)
 {
-  return light.math.penumbra > MinPenumbra && light.math.penumbra < 1.0;
+  // the penumbra of a light without math is not read, even if the entity keeps it (D63)
+  return light.math.enabled && light.math.penumbra > MinPenumbra
+         && light.math.penumbra < 1.0;
+}
+
+/**
+ * Whether a point light draws the shell of its core at t = inner radius: a math light
+ * with an inner radius in [0.02, 0.999), drawn with its translucency bands (D55).
+ */
+bool hasInnerShell(const mdl::LightProperties& light, const LightVolumeStyle& style)
+{
+  return !style.outerShellOnly && light.math.enabled
+         && light.math.innerRadius >= MinInnerShellRadius
+         && light.math.innerRadius < InnerRadiusSharp;
+}
+
+/**
+ * The alpha of a point light's inner shell: the alpha of the band that its t is in.
+ */
+double innerShellAlpha(const std::vector<double>& alphas, const double t)
+{
+  const auto shells = double(alphas.size());
+  const auto band = std::clamp(std::ceil(t * shells) - 1.0, 0.0, shells - 1.0);
+  return alphas[std::size_t(band)];
 }
 
 int spotBands(const LightVolumeStyle& style)
@@ -433,9 +497,23 @@ void appendPointLight(
       // a shell that adds nothing to any ray is not drawn
       if (alphas[j] > 0.0)
       {
+        const auto first = mesh.triangles.size();
         const auto t = style.outerShellOnly ? 1.0 : double(j + 1) / double(shells);
         addEllipsoid(mesh, frame, flip, radius * t, vertexColor(hue, alphas[j]));
+        addRange(
+          mesh,
+          j + 1 == shells ? mdl::LightElement::OuterShell : mdl::LightElement::Band,
+          first);
       }
+    }
+
+    if (hasInnerShell(light, style))
+    {
+      const auto first = mesh.triangles.size();
+      const auto t = light.math.innerRadius;
+      addEllipsoid(
+        mesh, frame, flip, radius * t, vertexColor(hue, innerShellAlpha(alphas, t)));
+      addRange(mesh, mdl::LightElement::InnerShell, first);
     }
   }
 
@@ -483,19 +561,23 @@ void appendSpotLight(
       vertexColor(hue, alphaScale * lightVolumeFalloff(t, light.math)));
   }
 
-  const auto ring = superellipse(light.math.shapeExp);
+  const auto ring = spotRing(light);
   const auto outer = coneRings(light, frame, ring, 1.0, depths);
   const auto lastRing = depths.size() - 1;
 
+  const auto firstFunnel = mesh.triangles.size();
   addConeSurface(mesh, outer, ringColors, flip);
+  addRange(mesh, mdl::LightElement::Funnel, firstFunnel);
 
   const auto hasPenumbra = hasPenumbraSurface(light);
   if (!style.outerShellOnly)
   {
     if (hasPenumbra)
     {
+      const auto first = mesh.triangles.size();
       const auto inner = coneRings(light, frame, ring, 1.0 - light.math.penumbra, depths);
       addConeSurface(mesh, inner, ringColors, flip);
+      addRange(mesh, mdl::LightElement::Penumbra, first);
     }
 
     const auto capColor = [&](const std::size_t j, const double t) {
@@ -504,18 +586,21 @@ void appendSpotLight(
       return color;
     };
 
-    // the near cap faces the apex, the far cap away from it; a cap that adds nothing to
-    // any ray is not drawn, like the far cap of every light but a sharp one (F(1) = 0)
+    // the near cap faces the apex, the far cap away from it; a near cap that adds
+    // nothing to any ray is not drawn, the far cap is drawn even at the alpha 0 of every
+    // light but a sharp one (F(1) = 0), so that it can be picked and highlighted (D55)
     if (const auto nearColor = capColor(0, 0.0); nearColor[3] > 0.0f)
     {
+      const auto first = mesh.triangles.size();
       const auto nearCentre = toWorld(frame, mdl::spotPoint(light, 0, 0, depths.front()));
       addCap(mesh, nearCentre, outer, 0, nearColor, !flip);
+      addRange(mesh, mdl::LightElement::NearCap, first);
     }
-    if (const auto farColor = capColor(lastRing, 1.0); farColor[3] > 0.0f)
-    {
-      const auto farCentre = toWorld(frame, mdl::spotPoint(light, 0, 0, depths.back()));
-      addCap(mesh, farCentre, outer, lastRing, farColor, flip);
-    }
+
+    const auto first = mesh.triangles.size();
+    const auto farCentre = toWorld(frame, mdl::spotPoint(light, 0, 0, depths.back()));
+    addCap(mesh, farCentre, outer, lastRing, capColor(lastRing, 1.0), flip);
+    addRange(mesh, mdl::LightElement::Base, first);
   }
 
   const auto lineColor = vertexColor(hue, LineAlpha);
@@ -554,7 +639,9 @@ void appendSun(
   // the falloff of a sun is 1 everywhere
   const auto alpha = lightVolumeAlphaCap(light, style.alphaCap)
                      * lightVolumeBrightness(light.color) * fillScale(style);
+  const auto first = mesh.triangles.size();
   addBoxFill(mesh, corners, flip, vertexColor(hue, alpha));
+  addRange(mesh, mdl::LightElement::SunBox, first);
 
   const auto lineColor = vertexColor(hue, LineAlpha);
   addBoxLines(mesh, corners, lineColor);
@@ -676,9 +763,10 @@ LightVolumeMeshSize lightVolumeMeshSize(
     if (hasVolume(vm::abs(light.radius)))
     {
       const auto alphas = lightVolumeShellAlphas(light, style);
-      size.triangles = std::size_t(std::ranges::count_if(
-                         alphas, [](const auto alpha) { return alpha > 0.0; }))
-                       * unitSphere().triangles.size();
+      size.ranges = std::size_t(
+        std::ranges::count_if(alphas, [](const auto alpha) { return alpha > 0.0; }));
+      size.ranges += hasInnerShell(light, style) ? 1 : 0;
+      size.triangles = size.ranges * unitSphere().triangles.size();
     }
     size.lines = BoxLineVertices + (light.hasCenter ? CrossLineVertices : 0);
     break;
@@ -687,11 +775,14 @@ LightVolumeMeshSize lightVolumeMeshSize(
     {
       const auto surfaceVertices = SpotSegments * std::size_t(spotBands(style)) * 6;
       size.triangles = surfaceVertices;
+      size.ranges = 1;
       if (!style.outerShellOnly)
       {
-        size.triangles += hasPenumbraSurface(light) ? surfaceVertices : 0;
-        size.triangles += spotCapAlpha(light, style, 0.0) > 0.0f ? CapVertices : 0;
-        size.triangles += spotCapAlpha(light, style, 1.0) > 0.0f ? CapVertices : 0;
+        const auto penumbra = hasPenumbraSurface(light);
+        const auto nearCap = spotCapAlpha(light, style, 0.0) > 0.0f;
+        size.triangles +=
+          (penumbra ? surfaceVertices : 0) + (nearCap ? CapVertices : 0) + CapVertices;
+        size.ranges += (penumbra ? 1 : 0) + (nearCap ? 1 : 0) + 1;
       }
       size.lines = FrustumLineVertices + 2 * OutlineVertices
                    + (hasPenumbraSurface(light) ? OutlineVertices : 0);
@@ -700,6 +791,7 @@ LightVolumeMeshSize lightVolumeMeshSize(
   case mdl::LightType::Sun:
     size.triangles = 6 * 2 * 3;
     size.lines = BoxLineVertices + ArrowLineVertices;
+    size.ranges = 1;
     break;
     switchDefault();
   }
@@ -751,6 +843,7 @@ LightVolumeMesh buildLightVolumeMesh(
   auto mesh = LightVolumeMesh{};
   mesh.triangles.reserve(size.triangles);
   mesh.lines.reserve(size.lines);
+  mesh.ranges.reserve(size.ranges);
   appendLightVolumeMesh(mesh, light, frame, style, entityOrigin);
   return mesh;
 }
