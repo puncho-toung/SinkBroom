@@ -32,6 +32,7 @@
 #include "vm/vec.h"
 #include "vm/vec_io.h" // IWYU pragma: keep
 
+#include <array>
 #include <cmath>
 #include <optional>
 #include <sstream>
@@ -810,6 +811,50 @@ TEST_CASE("LightVolume")
           == seededPoint());
       }
     }
+  }
+
+  SECTION("spotProjectedUV")
+  {
+    // the corners of the default spot light's caps, in the order of spotLightFrustum
+    const auto frustum = spotLightFrustum(defaultSpot);
+    REQUIRE(frustum);
+    const auto cornerUVs = std::array<vm::vec2d, 4>{{{-1, -1}, {1, -1}, {1, 1}, {-1, 1}}};
+    for (std::size_t i = 0; i < 4; ++i)
+    {
+      CAPTURE(i);
+      for (const auto& corner : {frustum->nearCorners[i], frustum->farCorners[i]})
+      {
+        const auto uv = spotProjectedUV(defaultSpot, corner);
+        REQUIRE(uv);
+        CHECK(vm::is_equal(*uv, cornerUVs[i], Exact));
+      }
+    }
+
+    // the beam, and the inverse of spotPoint off the corners of an off-centre light
+    const auto onBeam = spotProjectedUV(defaultSpot, {0, 0, -84.8});
+    REQUIRE(onBeam);
+    CHECK(vm::is_equal(*onBeam, vm::vec2d{0, 0}, Exact));
+    const auto offCentre = withRight(defaultSpot, {-128, 0, 30});
+    const auto uv = spotProjectedUV(offCentre, spotPoint(offCentre, 0.3, -0.7, 100.0));
+    REQUIRE(uv);
+    CHECK(vm::is_equal(*uv, vm::vec2d{0.3, -0.7}, Exact));
+
+    // nothing at the apex, behind it, or of a degenerate light
+    CHECK(spotProjectedUV(defaultSpot, {0, 0, 0}) == std::nullopt);
+    CHECK(spotProjectedUV(defaultSpot, {0, 0, 10}) == std::nullopt);
+    CHECK(
+      spotProjectedUV(withRight(defaultSpot, {0, 0, 0}), {0, 0, -100}) == std::nullopt);
+  }
+
+  SECTION("superellipseRadius")
+  {
+    CHECK(superellipseRadius(1, 0, 2) == Catch::Approx(1.0));
+    CHECK(superellipseRadius(0.6, -0.8, 2) == Catch::Approx(1.0));
+    CHECK(superellipseRadius(-0.5, 0.5, 2) == Catch::Approx(std::sqrt(0.5)));
+    CHECK(superellipseRadius(1, 1, 4) == Catch::Approx(std::pow(2.0, 0.25)));
+
+    // the exponent is at least 1e-3: with 0, |0|^0 = 1 would give an infinite radius
+    CHECK(superellipseRadius(1, 0, 0) == Catch::Approx(1.0));
   }
 
   SECTION("containsPoint")

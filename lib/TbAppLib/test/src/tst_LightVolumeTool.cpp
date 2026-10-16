@@ -559,6 +559,7 @@ TEST_CASE("LightVolumeTool")
       tool.endDrag();
 
       checkRadius(*lightNode, {300.0 + 32.0 / SeededVisibleT, 300, 300});
+      CHECK(valueOf(*lightNode, "origin") == "0 0 0");
     }
 
     SECTION("a point light's edge follows the drag on its two axes (AC-10, AC-23)")
@@ -595,6 +596,7 @@ TEST_CASE("LightVolumeTool")
       CHECK(radius.x() > 100.0);
       CHECK(radius.y() / radius.x() == Catch::Approx(2.0).margin(1e-3));
       CHECK(radius.z() / radius.x() == Catch::Approx(3.0).margin(1e-3));
+      CHECK(valueOf(*lightNode, "origin") == "0 0 0");
     }
 
     SECTION("a side scales its own axis only, Shift or not (D65)")
@@ -661,6 +663,45 @@ TEST_CASE("LightVolumeTool")
           == Catch::Approx(132.0 * 320.0 / 328.0).margin(LengthTolerance));
         CHECK(valueOf(*lightNode, "light_up") == "0 -128.78 0");
       }
+    }
+
+    SECTION("a turned spot light's handles work in its own frame (review round 4)")
+    {
+      // angles 45 0 0 turn the beam; the keys are in the light's own frame, so the
+      // numbers are the default spot light's
+      auto turnedSpot = DefaultSpot;
+      turnedSpot.emplace_back("angles", "45 0 0");
+      auto* lightNode = createLight(map, "0 0 0", turnedSpot);
+      const auto volume = tool.volumeBox();
+      REQUIRE(volume);
+      REQUIRE_FALSE(
+        vm::is_equal(volume->rotation * vm::vec3d{0, 0, 1}, vm::vec3d{0, 0, -1}, 1e-3));
+
+      SECTION("the +x face")
+      {
+        CHECK(
+          drag(tool, faceCenterHit({1, 0, 0}), {volume->rotation * vm::vec3d{32, 0, 0}})
+          == std::vector{true});
+        CHECK(valueOf(*lightNode, "light_target") == "0 0 -256");
+        CHECK(valueOf(*lightNode, "light_right") == "-159.03 0 0");
+        CHECK(valueOf(*lightNode, "light_up") == "0 -128 0");
+      }
+
+      SECTION("the far cap's +x edge")
+      {
+        CHECK(
+          drag(
+            tool,
+            edgeHit({1, -1, 1}, {1, 1, 1}),
+            {volume->rotation * vm::vec3d{32, 0, 64}})
+          == std::vector{true});
+        CHECK(valueOf(*lightNode, "light_target") == "0 0 -320");
+        CHECK(valueOf(*lightNode, "light_right") == "-160 0 0");
+        CHECK(valueOf(*lightNode, "light_up") == "0 -128.78 0");
+      }
+
+      CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+      CHECK(valueOf(*lightNode, "angles") == "45 0 0");
     }
 
     SECTION("every step starts from the light at the start of the drag")
@@ -1228,6 +1269,19 @@ TEST_CASE("LightVolumeTool")
       CHECK(
         scaleLightBoxAboutOrigin(box, Coordinates{{0, 100}}, {-99, 0, 0})
         == vm::bbox3d{{-1, -100, -100}, {1, 100, 100}});
+
+      // the -x side dragged through the origin, f = (-100 + 150) / -100 = -0.5
+      CHECK(
+        scaleLightBoxAboutOrigin(box, Coordinates{{0, -100}}, {150, 0, 0})
+        == std::nullopt);
+    }
+
+    SECTION("no move leaves the box as it is")
+    {
+      const auto box = vm::bbox3d{{-132, -132, 0}, {132, 132, 264}};
+      CHECK(
+        scaleLightBoxAboutOrigin(box, Coordinates{{0, 132}, {2, 264}}, {0, 0, 0})
+        == std::optional{box});
     }
   }
 
@@ -1487,6 +1541,7 @@ TEST_CASE("LightVolumeTool")
       CHECK(
         lengthOf(*spotNode, "light_right")
         == Catch::Approx(132.0 * 320.0 / 328.0).margin(LengthTolerance));
+      CHECK(valueOf(*spotNode, "origin") == "0 0 0");
       map.undoCommand();
 
       // a side line, world x = -132, is the box frame's +x side: one lateral axis
@@ -1645,7 +1700,8 @@ TEST_CASE("LightVolumeTool")
     {
       createLight(map, "0 0 0", DefaultSpot);
 
-      // without math, the funnel is the frustum: at depth 136 its side is at x = 68
+      // without math, the funnel is the stand-in's ellipse (D69): at depth 136 its side
+      // is at x = 68, as the frustum's was, on the axis either way
       auto hit = pickSurface(tool, vm::ray3d{{1000, 0, -136}, {-1, 0, 0}});
       REQUIRE(hit.isMatch());
       CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::Funnel);
@@ -2012,6 +2068,20 @@ TEST_CASE("LightVolumeTool")
              < 1e-5;
     }));
 
+    // a math spot light's inner cap at depth 8 + 0.3 * 256 = 84.8 (D69), none without
+    // its core
+    CHECK(lightElementTriangles(spot, frame, mdl::LightElement::InnerCap).empty());
+    auto innerCapSpot = spot;
+    innerCapSpot.math.enabled = true;
+    innerCapSpot.math.innerRadius = 0.3;
+    triangles = lightElementTriangles(innerCapSpot, frame, mdl::LightElement::InnerCap);
+    CHECK(triangles.size() == 96);
+    CHECK(std::ranges::all_of(
+      triangles, [&](const auto& p) { return std::abs(local(p).z() + 84.8) < 1e-4; }));
+    innerCapSpot.math.innerRadius = 0.01;
+    CHECK(
+      lightElementTriangles(innerCapSpot, frame, mdl::LightElement::InnerCap).empty());
+
     // a sun's box
     auto sun = point;
     sun.type = mdl::LightType::Sun;
@@ -2020,7 +2090,7 @@ TEST_CASE("LightVolumeTool")
 
   SECTION("setHighlightedHit")
   {
-    auto* lightNode = createLight(map, "0 0 0", SeededMath);
+    createLight(map, "0 0 0", SeededMath);
     const auto outerHit = pickSurface(tool, vm::ray3d{{1000, 100, 0}, {-1, 0, 0}});
     const auto innerHit = pickSurface(tool, vm::ray3d{{1000, 0, 0}, {-1, 0, 0}});
     REQUIRE(outerHit.isMatch());
@@ -2043,31 +2113,100 @@ TEST_CASE("LightVolumeTool")
       tool.highlightedHit().target<LightSurfaceHit>().element
       == mdl::LightElement::InnerShell);
 
-    SECTION("a clicked surface stays clicked until the selection changes (D68)")
+    SECTION("the clicked surface stays clicked while the hover moves on (D68)")
     {
       tool.setClickedSurface(innerHit);
-      CHECK(tool.isClickedSurface(innerHit));
-      CHECK_FALSE(tool.isClickedSurface(outerHit));
-
       tool.setHighlightedHit(innerHit);
       CHECK(tool.isClickedSurface(innerHit));
 
-      // the hover moves elsewhere, and the outline is still drawn: render draws it bold
-      // while it is not the highlighted hit
+      // the outline is still drawn: render draws it bold while it is not the highlighted
+      // hit
       tool.setHighlightedHit(outerHit);
       CHECK(tool.isClickedSurface(innerHit));
       CHECK_FALSE(tool.isClickedSurface(tool.highlightedHit()));
       tool.setHighlightedHit(mdl::Hit::NoHit);
       CHECK(tool.isClickedSurface(innerHit));
+    }
+  }
 
-      // another surface replaces it
-      tool.setClickedSurface(outerHit);
-      CHECK(tool.isClickedSurface(outerHit));
-      CHECK_FALSE(tool.isClickedSurface(innerHit));
+  SECTION("setClickedSurface")
+  {
+    auto* lightNode = createLight(map, "0 0 0", SeededMath);
+    const auto outerHit = pickSurface(tool, vm::ray3d{{1000, 100, 0}, {-1, 0, 0}});
+    const auto innerHit = pickSurface(tool, vm::ray3d{{1000, 0, 0}, {-1, 0, 0}});
+    REQUIRE(outerHit.isMatch());
+    REQUIRE(innerHit.isMatch());
 
+    tool.setClickedSurface(innerHit);
+    CHECK(tool.isClickedSurface(innerHit));
+    CHECK_FALSE(tool.isClickedSurface(outerHit));
+
+    // another surface replaces it (D68)
+    tool.setClickedSurface(outerHit);
+    CHECK(tool.isClickedSurface(outerHit));
+    CHECK_FALSE(tool.isClickedSurface(innerHit));
+
+    SECTION("a selection change forgets it")
+    {
       mdl::deselectNodes(map, {lightNode});
       CHECK_FALSE(tool.isClickedSurface(outerHit));
     }
+
+    SECTION("a new map forgets it (I10.6)")
+    {
+      document.documentWasLoadedNotifier();
+      CHECK_FALSE(tool.isClickedSurface(outerHit));
+    }
+  }
+
+  SECTION("isClickedSurface")
+  {
+    createLight(map, "0 0 0", SeededMath);
+    const auto outerHit = pickSurface(tool, vm::ray3d{{1000, 100, 0}, {-1, 0, 0}});
+    REQUIRE(outerHit.isMatch());
+    CHECK_FALSE(tool.isClickedSurface(outerHit));
+
+    tool.setClickedSurface(outerHit);
+
+    // the same element of the same light elsewhere
+    CHECK(
+      tool.isClickedSurface(pickSurface(tool, vm::ray3d{{1000, 0, 100}, {-1, 0, 0}})));
+
+    // a handle is never the clicked surface
+    CHECK_FALSE(tool.isClickedSurface(faceCenterHit({1, 0, 0})));
+    CHECK_FALSE(tool.isClickedSurface(mdl::Hit::NoHit));
+
+    // the same element of another light
+    setPref(Preferences::ShowLightVolumes, std::string{Preferences::ShowLightVolumesAll});
+    const auto resetVolumes = kdl::invoke_later{[] {
+      PreferenceManager::instance().resetToDefault(Preferences::ShowLightVolumes);
+    }};
+    auto* otherNode = createLight(map, "2000 0 100", SeededMath);
+    tool.setClickedSurface(outerHit);
+    const auto otherHit = pickSurface(tool, vm::ray3d{{3000, 100, 100}, {-1, 0, 0}});
+    REQUIRE(otherHit.target<LightSurfaceHit>().node == otherNode);
+    REQUIRE(otherHit.target<LightSurfaceHit>().element == mdl::LightElement::OuterShell);
+    CHECK_FALSE(tool.isClickedSurface(otherHit));
+  }
+
+  SECTION("clearClickedSurface")
+  {
+    createLight(map, "0 0 0", SeededMath);
+    const auto innerHit = pickSurface(tool, vm::ray3d{{1000, 0, 0}, {-1, 0, 0}});
+    REQUIRE(innerHit.isMatch());
+
+    auto refreshes = 0;
+    auto connection = tool.refreshViewsNotifier.connect([&](auto&) { ++refreshes; });
+
+    tool.setClickedSurface(innerHit);
+    refreshes = 0;
+    tool.clearClickedSurface();
+    CHECK_FALSE(tool.isClickedSurface(innerHit));
+    CHECK(refreshes == 1);
+
+    // nothing to forget, nothing to refresh
+    tool.clearClickedSurface();
+    CHECK(refreshes == 1);
 
     SECTION("a handle drag forgets the clicked surface, a surface drag keeps it")
     {
@@ -2076,14 +2215,10 @@ TEST_CASE("LightVolumeTool")
       CHECK_FALSE(tool.isClickedSurface(innerHit));
       tool.cancelDrag();
 
-      // a surface drag keeps it
       tool.setClickedSurface(innerHit);
       REQUIRE(tool.beginDrag(innerHit));
       CHECK(tool.isClickedSurface(innerHit));
       tool.cancelDrag();
-
-      tool.clearClickedSurface();
-      CHECK_FALSE(tool.isClickedSurface(innerHit));
     }
   }
 
@@ -2214,6 +2349,69 @@ TEST_CASE("LightVolumeTool")
       }};
       CHECK_FALSE(tool.nudgeClickedElement({16, 0, 0}));
       CHECK(lightNode->entity().properties() == properties);
+    }
+
+    SECTION("nothing in draw mode or during a drag (review round 4)")
+    {
+      REQUIRE(tool.activate());
+      tool.setMode(LightVolumeTool::Mode::Draw);
+      REQUIRE(tool.drawing());
+      CHECK_FALSE(tool.nudgeClickedElement({16, 0, 0}));
+      tool.setMode(LightVolumeTool::Mode::Handles);
+      REQUIRE(tool.deactivate());
+
+      REQUIRE(tool.beginDrag(baseHit));
+      CHECK_FALSE(tool.nudgeClickedElement({16, 0, 0}));
+      tool.cancelDrag();
+      CHECK(tool.isClickedSurface(baseHit));
+
+      CHECK(lightNode->entity().properties() == properties);
+    }
+
+    SECTION("nothing for a clicked inner cap or sun box")
+    {
+      auto* innerCapNode = createLight(map, "0 0 0", InnerCapSpot);
+      const auto innerCapProperties = innerCapNode->entity().properties();
+      const auto capHit = pickSurface(tool, vm::ray3d{{0, 0, -1000}, {0, 0, 1}});
+      REQUIRE(capHit.target<LightSurfaceHit>().element == mdl::LightElement::InnerCap);
+      tool.setClickedSurface(capHit);
+      CHECK_FALSE(tool.nudgeClickedElement({16, 0, 0}));
+      CHECK(innerCapNode->entity().properties() == innerCapProperties);
+
+      auto* sunNode =
+        createLight(map, "0 0 0", {{"parallel", "1"}, {"light_radius", "300 300 300"}});
+      const auto sunProperties = sunNode->entity().properties();
+      const auto sunHit = pickSurface(tool, vm::ray3d{{1000, 0, 0}, {-1, 0, 0}});
+      REQUIRE(sunHit.target<LightSurfaceHit>().element == mdl::LightElement::SunBox);
+      tool.setClickedSurface(sunHit);
+      CHECK_FALSE(tool.nudgeClickedElement({16, 0, 0}));
+      CHECK(sunNode->entity().properties() == sunProperties);
+    }
+
+    SECTION("a turned spot light's base shears in its own frame (review round 4)")
+    {
+      // angles 45 0 0 turn the beam; one step along the box frame's -x, the default spot
+      // light's world +X, gives the keys of AC-26 in the light's own frame
+      auto turnedSpot = DefaultSpot;
+      turnedSpot.emplace_back("angles", "45 0 0");
+      auto* turnedNode = createLight(map, "0 0 0", turnedSpot);
+      const auto volume = tool.volumeBox();
+      REQUIRE(volume);
+
+      const auto beam = volume->rotation * vm::vec3d{0, 0, 1};
+      const auto farCentre = volume->toWorld({0, 0, 264});
+      const auto turnedBaseHit =
+        pickSurface(tool, vm::ray3d{farCentre + beam * 1000.0, -beam});
+      REQUIRE(turnedBaseHit.target<LightSurfaceHit>().node == turnedNode);
+      REQUIRE(turnedBaseHit.target<LightSurfaceHit>().element == mdl::LightElement::Base);
+      tool.setClickedSurface(turnedBaseHit);
+
+      CHECK(tool.nudgeClickedElement(volume->rotation * vm::vec3d{-16, 0, 0}));
+      CHECK(valueOf(*turnedNode, "light_target") == "15.52 0 -256.01");
+      CHECK(valueOf(*turnedNode, "light_right") == "-127.77 0 -7.74");
+      CHECK(valueOf(*turnedNode, "light_up") == "0 -128.01 0");
+      CHECK(valueOf(*turnedNode, "origin") == "0 0 0");
+      CHECK(valueOf(*turnedNode, "angles") == "45 0 0");
     }
   }
 

@@ -217,6 +217,21 @@ LightProperties lightFromEditBox(
 vm::vec3d spotPoint(const LightProperties& light, double u, double v, double d);
 
 /**
+ * Returns the projected position (u, v) of the given local point of the given spot
+ * light, the inverse of spotPoint at the point's depth d = p * n: (u, v) = (+-1, +-1) at
+ * the corners of every cap. Nothing for a degenerate spot light or a point that is not
+ * in front of the apex (d below 1e-6).
+ */
+std::optional<vm::vec2d> spotProjectedUV(
+  const LightProperties& light, const vm::vec3d& local);
+
+/**
+ * The superellipse radius (|u|^k + |v|^k)^(1/k) of the projected position (u, v) for the
+ * shape exponent k, at least 1e-3: 1 on the ring of a spot light's cone.
+ */
+double superellipseRadius(double u, double v, double shapeExp);
+
+/**
  * Whether the given world point is inside the light's volume: the ellipsoid inscribed in
  * the box of a point light, the lit frustum of a spot light, the box of a sun.
  */

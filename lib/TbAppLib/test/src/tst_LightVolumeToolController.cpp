@@ -377,8 +377,11 @@ TEST_CASE("LightVolumeToolController")
       {
         map.grid().toggleSnap();
 
-        const auto modifiers =
-          GENERATE(values<ModifierKeyState>({ModifierKeys::None, ModifierKeys::Shift}));
+        const auto modifiers = GENERATE(values<ModifierKeyState>(
+          {ModifierKeys::None,
+           ModifierKeys::Shift,
+           ModifierKeys::Alt,
+           ModifierKeys::Alt | ModifierKeys::Shift}));
         CAPTURE(modifiers);
 
         // the +x +y edge along z, seen end-on from above: it is dragged in the plane
@@ -407,6 +410,45 @@ TEST_CASE("LightVolumeToolController")
         checkVector(
           *lightNode, "light_radius", {300.0 + 32.0 / t, 300.0 + 16.0 / t, 300});
         CHECK(valueOf(*lightNode, "light_radius") == "339.79 319.9 300");
+      }
+
+      SECTION("a 3D corner scales about the origin, with or without modifiers (AC-25)")
+      {
+        map.grid().toggleSnap();
+
+        const auto modifiers = GENERATE(values<ModifierKeyState>({
+          ModifierKeys::None,
+          ModifierKeys::Shift,
+          ModifierKeys::Alt,
+          ModifierKeys::Alt | ModifierKeys::Shift,
+        }));
+        CAPTURE(modifiers);
+
+        // the corner (1, 1, 1), dragged by (16, 16, 16) along its line from the origin
+        // with a ray across that line
+        const auto corner = vm::vec3d{halfExtent, halfExtent, halfExtent};
+        const auto across = vm::normalize(vm::vec3d{1, -1, 0});
+        const auto startRay = vm::ray3d{corner - across * 500.0, across};
+        const auto startCamera = perspectiveCameraFor(startRay);
+        auto tracker = controller.acceptMouseDrag(inputStateFor(
+          startRay,
+          startCamera,
+          {mdl::Hit{
+            LightVolumeTool::CornerHitType,
+            500.0,
+            corner,
+            BBoxCorner{vm::vec3d{1, 1, 1}}}},
+          modifiers));
+        REQUIRE(tracker != nullptr);
+
+        const auto dragRay =
+          vm::ray3d{startRay.origin + vm::vec3d{16, 16, 16}, startRay.direction};
+        const auto dragInputState = inputStateFor(dragRay, startCamera, {}, modifiers);
+        CHECK(tracker->update(dragInputState));
+        tracker->end(dragInputState);
+
+        CHECK(valueOf(*lightNode, "light_radius") == "319.9 319.9 319.9");
+        CHECK(valueOf(*lightNode, "origin") == "0 0 0");
       }
 
       SECTION("a 3D edge seen broadside stays under the mouse (D66, review round 4)")
@@ -1076,6 +1118,19 @@ TEST_CASE("LightVolumeToolController")
       }
     }
 
+    SECTION("modifierKeyChange only refreshes the views (D71)")
+    {
+      const auto properties = lightNode->entity().properties();
+      auto refreshes = 0;
+      auto connection = tool.refreshViewsNotifier.connect([&](auto&) { ++refreshes; });
+
+      controller.modifierKeyChange(
+        inputStateFor(pickRay, camera, {cornerHit(20)}, ModifierKeys::Shift));
+      CHECK(refreshes == 1);
+      CHECK_FALSE(tool.isDragging());
+      CHECK(lightNode->entity().properties() == properties);
+    }
+
     SECTION("mouseMove")
     {
       SECTION("highlights the hit of a drag")
@@ -1318,8 +1373,11 @@ TEST_CASE("LightVolumeToolController")
     {
       map.grid().toggleSnap();
 
-      const auto modifiers =
-        GENERATE(values<ModifierKeyState>({ModifierKeys::None, ModifierKeys::Shift}));
+      const auto modifiers = GENERATE(values<ModifierKeyState>(
+        {ModifierKeys::None,
+         ModifierKeys::Shift,
+         ModifierKeys::Alt,
+         ModifierKeys::Alt | ModifierKeys::Shift}));
       CAPTURE(modifiers);
 
       // the top view's +x outline by 32: one axis, not the view plane's two
@@ -1348,8 +1406,11 @@ TEST_CASE("LightVolumeToolController")
     {
       map.grid().toggleSnap();
 
-      const auto modifiers =
-        GENERATE(values<ModifierKeyState>({ModifierKeys::None, ModifierKeys::Shift}));
+      const auto modifiers = GENERATE(values<ModifierKeyState>(
+        {ModifierKeys::None,
+         ModifierKeys::Shift,
+         ModifierKeys::Alt,
+         ModifierKeys::Alt | ModifierKeys::Shift}));
       CAPTURE(modifiers);
 
       auto* turnedNode = createLight(map, "0 0 0");

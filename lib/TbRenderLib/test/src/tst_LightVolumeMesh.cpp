@@ -1142,6 +1142,26 @@ TEST_CASE("LightVolumeMesh")
           CHECK(vm::dot(vm::cross(p3 - p1, p2 - p1), vm::vec3d{0, 0, -1}) > 0.0);
         }
 
+        // and still facing the base in a mirrored frame, where the beam is R (0, 0, -1)
+        const auto mirrored = mdl::LightFrame{
+          vm::vec3d{0, 0, 0},
+          vm::mat3x3d{-1, 0, 0, 0, 1, 0, 0, 0, 1},
+        };
+        const auto mirroredMesh = buildLightVolumeMesh(light, mirrored, style);
+        REQUIRE(!mirroredMesh.ranges.empty());
+        const auto& mirroredCap = mirroredMesh.ranges.back();
+        REQUIRE(mirroredCap.element == mdl::LightElement::InnerCap);
+        for (auto i = mirroredCap.firstTriangleVertex;
+             i < mirroredCap.firstTriangleVertex + mirroredCap.count;
+             i += 3)
+        {
+          const auto p1 = positionOf(mirroredMesh.triangles[i]);
+          const auto p2 = positionOf(mirroredMesh.triangles[i + 1]);
+          const auto p3 = positionOf(mirroredMesh.triangles[i + 2]);
+          CHECK(
+            vm::dot(vm::cross(p3 - p1, p2 - p1), mirrored.R * vm::vec3d{0, 0, -1}) > 0.0);
+        }
+
         // its ring outline of 32 segments on the cone at that depth
         CHECK(mesh.lines.size() == (4 + 4 + 4 + 4 * 32) * 2);
         const auto ringVertices =
@@ -1167,31 +1187,17 @@ TEST_CASE("LightVolumeMesh")
             return range.element == mdl::LightElement::InnerCap;
           }));
 
-        // from an inner radius of 0.02 to below 0.999, with math, of a spot light
+        // none below an inner radius of 0.02 or from 0.999 on (lightVolumeHasInnerCap)
         for (const auto innerRadius : {0.0, 0.01, 0.0199, 0.999})
         {
           CAPTURE(innerRadius);
           auto other = light;
           other.math.innerRadius = innerRadius;
-          CHECK_FALSE(lightVolumeHasInnerCap(other));
           CHECK(std::ranges::none_of(
             buildLightVolumeMesh(other, atOrigin, style).ranges, [](const auto& range) {
               return range.element == mdl::LightElement::InnerCap;
             }));
         }
-        for (const auto innerRadius : {0.02, 0.98})
-        {
-          CAPTURE(innerRadius);
-          auto other = light;
-          other.math.innerRadius = innerRadius;
-          CHECK(lightVolumeHasInnerCap(other));
-        }
-        auto disabled = light;
-        disabled.math.enabled = false;
-        CHECK_FALSE(lightVolumeHasInnerCap(disabled));
-        auto point = light;
-        point.type = mdl::LightType::Point;
-        CHECK_FALSE(lightVolumeHasInnerCap(point));
       }
 
       SECTION("a sun's box")
@@ -1208,6 +1214,36 @@ TEST_CASE("LightVolumeMesh")
             == Catch::Approx(1.0).margin(1e-6));
         }
       }
+    }
+  }
+
+  SECTION("lightVolumeHasInnerCap")
+  {
+    // a math spot light with an inner radius from 0.02 to below 0.999 (D69)
+    auto light = linearSpotLight();
+    for (const auto innerRadius : {0.02, 0.3, 0.98})
+    {
+      CAPTURE(innerRadius);
+      light.math.innerRadius = innerRadius;
+      CHECK(lightVolumeHasInnerCap(light));
+    }
+    for (const auto innerRadius : {0.0, 0.01, 0.0199, 0.999})
+    {
+      CAPTURE(innerRadius);
+      light.math.innerRadius = innerRadius;
+      CHECK_FALSE(lightVolumeHasInnerCap(light));
+    }
+
+    // not without math, not of a point light or a sun
+    light.math.innerRadius = 0.3;
+    auto disabled = light;
+    disabled.math.enabled = false;
+    CHECK_FALSE(lightVolumeHasInnerCap(disabled));
+    for (const auto type : {mdl::LightType::Point, mdl::LightType::Sun})
+    {
+      auto other = light;
+      other.type = type;
+      CHECK_FALSE(lightVolumeHasInnerCap(other));
     }
   }
 

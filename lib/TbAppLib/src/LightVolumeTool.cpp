@@ -107,6 +107,9 @@ constexpr auto DegenerateEpsilon = 1e-6;
 // an element of a box this close to the box frame's origin lies on it (D64)
 constexpr auto OriginEpsilon = 1e-6;
 
+// a point of a cap this close outside the ring of its cone is still on the cap (D69)
+constexpr auto RingEpsilon = 1e-6;
+
 const auto FarCapSide = BBoxSide{vm::vec3d{0, 0, 1}};
 
 vm::mat3x3d beamMatrix(const mdl::BeamFrame& beam)
@@ -555,8 +558,41 @@ std::pair<vm::vec3d, double> boundingSphere(
 }
 
 /**
+ * The world triangles of the given element of the given light's volume, built at full
+ * alpha with one band, so that every element exists even where the volume is invisible,
+ * like the far cap of most spot lights; one band of the bands of a point light is its
+ * outer shell, and one band of a spot light's cone is the same surface as many, since the
+ * rings lie on the cone's straight lines. With outerShellOnly, only the outer surface is
+ * built: a spot light's funnel without its penumbra and caps.
+ */
+std::vector<vm::vec3d> elementTriangles(
+  const mdl::LightProperties& light,
+  const mdl::LightFrame& frame,
+  const mdl::LightElement element,
+  const bool outerShellOnly)
+{
+  const auto mesh = render::buildLightVolumeMesh(
+    light, frame, render::LightVolumeStyle{1.0, 1, false, outerShellOnly});
+
+  auto result = std::vector<vm::vec3d>{};
+  for (const auto& range : mesh.ranges)
+  {
+    if (range.element == element)
+    {
+      for (std::size_t i = 0; i < range.count; ++i)
+      {
+        result.emplace_back(
+          gl::getVertexComponent<0>(mesh.triangles[range.firstTriangleVertex + i]));
+      }
+    }
+  }
+  return result;
+}
+
+/**
  * The world triangles of a spot light's funnel or a sun's box, which are picked on the
- * mesh (D57); nothing for a point light, whose shells are picked as ellipsoids.
+ * mesh (D57), built without the surfaces inside them; nothing for a point light, whose
+ * shells are picked as ellipsoids.
  */
 std::vector<vm::vec3d> pickedTriangles(
   const mdl::LightProperties& light, const mdl::LightFrame& frame)
@@ -564,9 +600,9 @@ std::vector<vm::vec3d> pickedTriangles(
   switch (light.type)
   {
   case mdl::LightType::Spot:
-    return lightElementTriangles(light, frame, mdl::LightElement::Funnel);
+    return elementTriangles(light, frame, mdl::LightElement::Funnel, true);
   case mdl::LightType::Sun:
-    return lightElementTriangles(light, frame, mdl::LightElement::SunBox);
+    return elementTriangles(light, frame, mdl::LightElement::SunBox, true);
   case mdl::LightType::Point:
     return {};
     switchDefault();
@@ -575,29 +611,17 @@ std::vector<vm::vec3d> pickedTriangles(
 
 /**
  * Whether the given world point of a cap of the given spot light lies inside the ring of
- * its cone, the superellipse |u|^k + |v|^k = 1 of its shape exponent, where the cap is
- * drawn; intersectRaySpotCap tests the parallelogram around it.
+ * its cone, the superellipse of its shape exponent, where the cap is drawn;
+ * intersectRaySpotCap tests the parallelogram around it.
  */
 bool insideSpotRing(
   const mdl::LightProperties& light, const mdl::LightFrame& frame, const vm::vec3d& world)
 {
-  const auto targetLength = vm::length(light.target);
-  const auto local = vm::transpose(frame.R) * (world - frame.origin);
-  const auto depth = vm::dot(local, light.target) / targetLength;
-  if (depth < DegenerateEpsilon)
-  {
-    return false;
-  }
-
-  // the inverse of mdl::spotPoint, as mdl::containsPoint takes it
-  const auto u = (targetLength * vm::dot(light.right, local) / depth
-                  - vm::dot(light.right, light.target))
-                 / vm::squared_length(light.right);
-  const auto v =
-    (targetLength * vm::dot(light.up, local) / depth - vm::dot(light.up, light.target))
-    / vm::squared_length(light.up);
-  const auto k = std::max(light.math.shapeExp, 1e-3);
-  return std::pow(std::abs(u), k) + std::pow(std::abs(v), k) <= 1.0 + OriginEpsilon;
+  const auto uv =
+    mdl::spotProjectedUV(light, vm::transpose(frame.R) * (world - frame.origin));
+  return uv
+         && mdl::superellipseRadius(uv->x(), uv->y(), light.math.shapeExp)
+              <= 1.0 + RingEpsilon;
 }
 
 /**
@@ -1023,26 +1047,7 @@ std::vector<vm::vec3d> lightElementTriangles(
   const mdl::LightFrame& frame,
   const mdl::LightElement element)
 {
-  // full alpha, so that every element exists even where the volume is invisible, like
-  // the far cap of most spot lights; one band of the bands of a point light is its outer
-  // shell, and one band of a spot light's cone is the same surface as many, since the
-  // rings lie on the cone's straight lines
-  const auto mesh = render::buildLightVolumeMesh(
-    light, frame, render::LightVolumeStyle{1.0, 1, false, false});
-
-  auto result = std::vector<vm::vec3d>{};
-  for (const auto& range : mesh.ranges)
-  {
-    if (range.element == element)
-    {
-      for (std::size_t i = 0; i < range.count; ++i)
-      {
-        result.emplace_back(
-          gl::getVertexComponent<0>(mesh.triangles[range.firstTriangleVertex + i]));
-      }
-    }
-  }
-  return result;
+  return elementTriangles(light, frame, element, false);
 }
 
 vm::vec3d LightVolumeBox::toWorld(const vm::vec3d& point) const
@@ -1231,8 +1236,7 @@ LightVolumeTool::LightVolumeTool(MapDocument& document)
   m_notifierConnection += document.selectionDidChangeNotifier.connect([&](const auto&) {
     // the lights stay as they are, only which of them are shown and selected changes
     m_pickableMembershipValid = false;
-    m_clickedNode = nullptr;
-    m_clickedElement = std::nullopt;
+    forgetClickedSurface();
   });
   m_notifierConnection +=
     PreferenceManager::instance().preferenceDidChangeNotifier.connect(
@@ -1543,10 +1547,15 @@ void LightVolumeTool::clearClickedSurface()
 {
   if (m_clickedElement)
   {
-    m_clickedNode = nullptr;
-    m_clickedElement = std::nullopt;
+    forgetClickedSurface();
     refreshViews();
   }
+}
+
+void LightVolumeTool::forgetClickedSurface()
+{
+  m_clickedNode = nullptr;
+  m_clickedElement = std::nullopt;
 }
 
 bool LightVolumeTool::isClickedSurface(const mdl::Hit& hit) const
@@ -1563,10 +1572,11 @@ bool LightVolumeTool::isClickedSurface(const mdl::Hit& hit) const
 bool LightVolumeTool::nudgeClickedElement(const vm::vec3d& worldDelta)
 {
   // the keys shear the clicked base of the one selected spot light, while its handles
-  // work and its volume is shown (D68); anything else is moved by the keys as before
+  // work and its volume is shown, not during a drag or in draw mode (D68); anything else
+  // is moved by the keys as before
   if (
-    m_dragging || m_clickedElement != mdl::LightElement::Base || !m_handles.active()
-    || !showsVolumes())
+    m_dragging || drawing() || m_clickedElement != mdl::LightElement::Base
+    || !m_handles.active() || !showsVolumes())
   {
     return false;
   }

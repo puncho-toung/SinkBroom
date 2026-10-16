@@ -131,9 +131,9 @@ std::vector<double> lightVolumeShellAlphas(
 bool lightVolumeHasInnerShell(const mdl::LightProperties& light);
 
 /**
- * Whether a spot light drawn with its translucency bands (not outer shell only) has the
- * cap of its core at depth zNear + math_inner_radius zFar: a math spot light with an
- * inner radius in [0.02, 0.999) (D69).
+ * Whether a spot light has the cap of its core at depth zNear + math_inner_radius zFar
+ * when it is drawn with its translucency bands (not outer shell only): a math spot light
+ * with an inner radius in [0.02, 0.999) (D69).
  */
 bool lightVolumeHasInnerCap(const mdl::LightProperties& light);
 

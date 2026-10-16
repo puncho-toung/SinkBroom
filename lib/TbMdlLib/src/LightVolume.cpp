@@ -61,6 +61,9 @@ constexpr auto MinHalfExtent = 1.0;
 constexpr auto CentredRelativeEpsilon = 1e-4;
 constexpr auto CentredAbsoluteEpsilon = 0.01;
 
+// the smallest shape exponent of a superellipse
+constexpr auto MinShapeExp = 1e-3;
+
 /**
  * HLSL's saturate, which unlike std::clamp maps NaN to 0.
  */
@@ -142,6 +145,22 @@ vm::vec3d spotPoint(
   return (b0 * vm::cross(light.up, s.n) + b1 * vm::cross(s.n, light.right)
           + b2 * vm::cross(light.right, light.up))
          / s.det;
+}
+
+/**
+ * The inverse of spotPoint: the projected position of a local point at the depth d along
+ * the beam, which must be in front of the apex.
+ */
+vm::vec2d projectedUV(
+  const LightProperties& light, const Spot& s, const vm::vec3d& local, const double d)
+{
+  const auto u = (s.targetLength * vm::dot(light.right, local) / d
+                  - vm::dot(light.right, light.target))
+                 / vm::squared_length(light.right);
+  const auto v =
+    (s.targetLength * vm::dot(light.up, local) / d - vm::dot(light.up, light.target))
+    / vm::squared_length(light.up);
+  return vm::vec2d{u, v};
 }
 
 constexpr auto CornerUVs = std::array<std::array<double, 2>, 4>{{
@@ -541,6 +560,29 @@ vm::vec3d spotPoint(
   return s ? spotPoint(light, *s, u, v, d) : vm::vec3d{0, 0, 0};
 }
 
+std::optional<vm::vec2d> spotProjectedUV(
+  const LightProperties& light, const vm::vec3d& local)
+{
+  const auto s = spot(light);
+  if (!s)
+  {
+    return std::nullopt;
+  }
+
+  const auto d = vm::dot(local, s->n);
+  if (d < DegenerateEpsilon)
+  {
+    return std::nullopt;
+  }
+  return projectedUV(light, *s, local, d);
+}
+
+double superellipseRadius(const double u, const double v, const double shapeExp)
+{
+  const auto k = std::max(shapeExp, MinShapeExp);
+  return std::pow(std::pow(std::abs(u), k) + std::pow(std::abs(v), k), 1.0 / k);
+}
+
 bool containsPoint(
   const LightProperties& light, const LightFrame& frame, const vm::vec3d& world)
 {
@@ -559,20 +601,14 @@ bool containsPoint(
       return false;
     }
 
-    // the inverse of spotPoint
     const auto d = vm::dot(local, s->n);
     if (d < s->zNear || d > s->zNear + s->zFar)
     {
       return false;
     }
 
-    const auto u = (s->targetLength * vm::dot(light.right, local) / d
-                    - vm::dot(light.right, light.target))
-                   / vm::squared_length(light.right);
-    const auto v =
-      (s->targetLength * vm::dot(light.up, local) / d - vm::dot(light.up, light.target))
-      / vm::squared_length(light.up);
-    return std::abs(u) <= 1.0 && std::abs(v) <= 1.0;
+    const auto uv = projectedUV(light, *s, local, d);
+    return std::abs(uv.x()) <= 1.0 && std::abs(uv.y()) <= 1.0;
   }
     switchDefault();
   }

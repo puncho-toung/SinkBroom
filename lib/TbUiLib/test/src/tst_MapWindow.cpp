@@ -37,10 +37,16 @@
 #include "mdl/EntityNode.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/Grid.h"
+#include "mdl/Hit.h"
+#include "mdl/HitFilter.h"
+#include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/MapFormat.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
+#include "mdl/PickResult.h"
+#include "mdl/Selection.h"
+#include "mdl/WorldNode.h"
 #include "prefs/Preferences.h"
 #include "ui/ActionContext.h"
 #include "ui/AppControllerFixture.h"
@@ -56,6 +62,7 @@
 
 #include "kd/invoke.h"
 
+#include "vm/ray.h"
 #include "vm/vec.h"
 
 #include <algorithm>
@@ -415,6 +422,87 @@ TEST_CASE("MapWindow")
 
     toolBox.toggleTool(toolBox.lightVolumeTool());
     CHECK(contexts() == contextsWithoutTool);
+  }
+
+  SECTION("the keys that move objects shear a spot light's clicked base (D68)")
+  {
+    REQUIRE(window.document().create(
+      appController.environmentConfig(),
+      mdl::Doom3BFGGameInfo,
+      mdl::MapFormat::Doom3_Valve,
+      vm::bbox3d{8192.0}));
+    QApplication::processEvents();
+
+    auto& map = window.document().map();
+    map.grid().setSize(4); // 16 units
+    auto* lightNode = new mdl::EntityNode{mdl::Entity{{
+      {"classname", "light"},
+      {"origin", "0 0 0"},
+      {"light_target", "0 0 -256"},
+      {"light_right", "-128 0 0"},
+      {"light_up", "0 -128 0"},
+    }}};
+    REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), {lightNode}}}).empty());
+    mdl::selectNodes(map, {lightNode});
+    QApplication::processEvents();
+
+    auto& tool = window.toolBox().lightVolumeTool();
+    REQUIRE(tool.selectedLight() == lightNode);
+    const auto clickBase = [&]() {
+      auto pickResult = mdl::PickResult{};
+      tool.pickSurfaces(vm::ray3d{{0, 0, -1000}, {0, 0, 1}}, pickResult);
+      const auto& hit =
+        pickResult.first(mdl::HitFilters::type(LightVolumeTool::SurfaceHitType));
+      REQUIRE(hit.isMatch());
+      REQUIRE(hit.target<LightSurfaceHit>().element == mdl::LightElement::Base);
+      tool.setClickedSurface(hit);
+    };
+    const auto valueOf = [](const mdl::EntityNode& node, const std::string& key) {
+      const auto* value = node.entity().property(key);
+      REQUIRE(value != nullptr);
+      return *value;
+    };
+
+    // a 2D view whose "right" is world +X, one grid step of 16
+    const auto views = window.findChildren<MapView2D*>();
+    const auto iView = std::ranges::find_if(views, [](const auto* view) {
+      return view->moveDirection(vm::direction::right) == vm::vec3d{1, 0, 0};
+    });
+    REQUIRE(iView != views.end());
+    auto* view = *iView;
+    const auto delta =
+      view->moveDirection(vm::direction::right) * double(map.grid().actualSize());
+    REQUIRE(delta == vm::vec3d{16, 0, 0});
+
+    // the clicked base takes the step: the light stays, its beam turns (AC-26)
+    clickBase();
+    view->moveObjects(vm::direction::right);
+    CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+    CHECK(valueOf(*lightNode, "light_target") == "15.52 0 -256.01");
+
+    // without it, the step moves the light
+    tool.clearClickedSurface();
+    view->moveObjects(vm::direction::right);
+    CHECK(valueOf(*lightNode, "origin") == "16 0 0");
+    CHECK(valueOf(*lightNode, "light_target") == "15.52 0 -256.01");
+
+    // Duplicate and move: the duplicate is the new selection, which forgets the clicked
+    // base, so it is moved
+    map.undoCommand();
+    map.undoCommand();
+    REQUIRE(valueOf(*lightNode, "origin") == "0 0 0");
+    REQUIRE(valueOf(*lightNode, "light_target") == "0 0 -256");
+    clickBase();
+    const auto lightCount = map.worldNode().defaultLayer()->childCount();
+    view->duplicateAndMoveObjects(vm::direction::right);
+    CHECK(map.worldNode().defaultLayer()->childCount() == lightCount + 1);
+    REQUIRE(map.selection().entities.size() == 1);
+    const auto* duplicateNode = map.selection().entities.front();
+    CHECK(duplicateNode != lightNode);
+    CHECK(valueOf(*duplicateNode, "origin") == "16 0 0");
+    CHECK(valueOf(*duplicateNode, "light_target") == "0 0 -256");
+    CHECK(valueOf(*lightNode, "origin") == "0 0 0");
+    CHECK(valueOf(*lightNode, "light_target") == "0 0 -256");
   }
 
   SECTION("Deactivate Current Tool is unchecked while the light volume tool is active")

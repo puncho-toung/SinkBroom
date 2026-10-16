@@ -406,11 +406,12 @@ public:
   /**
    * Shears the clicked element by the given world delta, one step of the keys that move
    * objects (D68): if the one selected light is a spot light whose base is the clicked
-   * surface, its volume is shown and its handles work, the far cap's centre moves by the
-   * delta with the apex, the far cap's half extents and the roll kept, so that the beam
-   * turns towards the new centre; one undo step "Shear Light Volume". Returns true if the
-   * key belongs to the clicked element, also when the step is denied (a depth below 24),
-   * which changes nothing; false otherwise, so that the keys move the selection.
+   * surface, its volume is shown and its handles work, and nothing is dragged or drawn,
+   * the far cap's centre moves by the delta with the apex, the far cap's half extents and
+   * the roll kept, so that the beam turns towards the new centre; one undo step "Shear
+   * Light Volume". Returns true if the key belongs to the clicked element, also when the
+   * step is denied (a depth below 24), which changes nothing; false otherwise, so that the
+   * keys move the selection.
    */
   bool nudgeClickedElement(const vm::vec3d& worldDelta);
 
@@ -499,6 +500,8 @@ private:
   void updatePickableLights() const;
   PickableLight pickableLight(
     mdl::EntityNode* entityNode, mdl::EntityRotationPolicy policy) const;
+
+  void forgetClickedSurface();
 
   void resetDraw();
   bool applyDrawnLight();

@@ -277,15 +277,13 @@ void addBoxLines(
  */
 std::array<vm::vec2d, SpotSegments> superellipse(const double shapeExp)
 {
-  const auto k = std::max(shapeExp, 1e-3);
-
   auto points = std::array<vm::vec2d, SpotSegments>{};
   for (std::size_t i = 0; i < SpotSegments; ++i)
   {
     const auto psi = 2.0 * std::numbers::pi * double(i) / double(SpotSegments);
     const auto c = std::cos(psi);
     const auto s = std::sin(psi);
-    const auto r = std::pow(std::pow(std::abs(c), k) + std::pow(std::abs(s), k), 1.0 / k);
+    const auto r = mdl::superellipseRadius(c, s, shapeExp);
     points[i] = vm::vec2d{c / r, s / r};
   }
   return points;
