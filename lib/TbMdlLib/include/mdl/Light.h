@@ -303,7 +303,9 @@ LightPropertyUpdate lightPropertyUpdate(const LightProperties& light);
  * and from the entity's own value, and the properties to remove that the entity has and
  * that the edit does not leave unread. The changes are checked by reading the changed
  * entity again, so that a property the entity lacks but whose engine default differs from
- * the edited value is written too.
+ * the edited value is written too. Enabling a disabled math block that the entity has
+ * (see hasMathLightBlock) writes only math_enabled and what else the edit changes, so
+ * that its kept keys stay as they are written.
  */
 LightPropertyUpdate lightKeyDiff(const Entity& entity, const LightProperties& edited);
 
@@ -326,5 +328,12 @@ LightProperties defaultLight(LightType type, const LightProperties& keep);
  * the defaults of MathLightProperties and the in-game "Seed from legacy light" button.
  */
 MathLightProperties seededMathLightProperties();
+
+/**
+ * Whether the given entity has a math block of its own: any of the math keys other than
+ * math_enabled. A light without one gets seededMathLightProperties() when it becomes a
+ * math light, as the in-game editor's Math tab seeds it.
+ */
+bool hasMathLightBlock(const Entity& entity);
 
 } // namespace tb::mdl

@@ -1366,16 +1366,19 @@ void LightEditorPanel::connectEditor()
           // the other math keys stay
           light.math.enabled = false;
         }
-        else if (!entity.hasProperty(mdl::LightPropertyKeys::MathEnabled))
+        else if (!light.math.enabled)
         {
-          // a light that never had a math block gets the in-game editor's auto-seed
-          // (D29)
-          light.math = mdl::seededMathLightProperties();
-        }
-        else
-        {
-          // a disabled block gets its kept values back
-          light.math.enabled = true;
+          if (mdl::hasMathLightBlock(entity))
+          {
+            // a disabled block gets its kept values back
+            light.math.enabled = true;
+          }
+          else
+          {
+            // a light without a math block of its own gets the in-game editor's seed
+            // (D29), as its Math tab gives it
+            light.math = mdl::seededMathLightProperties();
+          }
         }
       });
   });

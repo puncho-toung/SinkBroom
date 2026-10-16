@@ -524,13 +524,15 @@ TEST_CASE("Light")
       CHECK(parse(defaultPointProperties).math == MathLightProperties{});
     }
 
-    SECTION("math_style is read like style and clamped to the predefined styles")
+    SECTION("math_style is read like style, and an unknown style as none")
     {
+      // like the engine's ML_ParseFromDict, not clamped
       CHECK(parse(mathLightProperties).math.style == -1);
       CHECK(parse(with(mathLightProperties, {{"math_style", "4"}})).math.style == 4);
+      CHECK(parse(with(mathLightProperties, {{"math_style", "0"}})).math.style == 0);
       CHECK(parse(with(mathLightProperties, {{"math_style", "11"}})).math.style == 11);
-      CHECK(parse(with(mathLightProperties, {{"math_style", "12"}})).math.style == 11);
-      CHECK(parse(with(mathLightProperties, {{"math_style", "-5"}})).math.style == -1);
+      CHECK(parse(with(mathLightProperties, {{"math_style", "12"}})).math.style == -1);
+      CHECK(parse(with(mathLightProperties, {{"math_style", "-3"}})).math.style == -1);
       CHECK(parse(with(mathLightProperties, {{"math_style", "bogus"}})).math.style == 0);
       CHECK(
         parse(with(mathLightProperties, {{"math_enabled", "0"}, {"math_style", "4"}}))
@@ -1127,6 +1129,72 @@ TEST_CASE("Light")
         == parse(mathLightProperties).math);
     }
 
+    SECTION("Enabling a block that the engine wrote keeps its numbers as they are")
+    {
+      // ML_WriteToDict writes the floats with "%f"; a value with more than four decimals
+      // would be rounded if it were written again
+      const auto engineProperties = std::vector<EntityProperty>{
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+        {"light_radius", "300 300 300"},
+        {"math_enabled", "0"},
+        {"math_type", "point"},
+        {"math_falloff", "linear"},
+        {"math_pattern", "none"},
+        {"math_falloff_exp", "2.000000"},
+        {"math_inner_radius", "0.100000"},
+        {"math_shape_exp", "2.000000"},
+        {"math_penumbra", "0.150000"},
+        {"math_pattern_strength", "0.000000"},
+        {"math_pattern_scale", "1.000000"},
+        {"math_pattern_phase", "0.333333"},
+        {"math_energy_clamp", "1"},
+      };
+      const auto entity = Entity{engineProperties};
+      auto edited = parseLightProperties(entity);
+      edited.math.enabled = true;
+
+      const auto diff = lightKeyDiff(entity, edited);
+      CHECK(diff.set == std::vector<EntityProperty>{{"math_enabled", "1"}});
+      CHECK(diff.remove.empty());
+      CHECK(
+        applyLightPropertyUpdate(entity, diff).properties()
+        == with(engineProperties, {{"math_enabled", "1"}}));
+
+      // an edit of a kept value while enabling writes that value too
+      edited.math.innerRadius = 0.25;
+      CHECK(
+        lightKeyDiff(entity, edited).set
+        == std::vector<EntityProperty>{
+          {"math_enabled", "1"}, {"math_inner_radius", "0.25"}});
+    }
+
+    SECTION("Enabling a block with an unknown math_style writes no math_style")
+    {
+      // the engine reads it as none, and so does the editor: it stays unread
+      const auto entity =
+        Entity{with(mathLightProperties, {{"math_enabled", "0"}, {"math_style", "12"}})};
+      auto edited = parseLightProperties(entity);
+      REQUIRE(edited.math.style == -1);
+      edited.math.enabled = true;
+
+      const auto diff = lightKeyDiff(entity, edited);
+      CHECK(diff.set == std::vector<EntityProperty>{{"math_enabled", "1"}});
+      CHECK(diff.remove.empty());
+    }
+
+    SECTION("A light with math_enabled alone gets the whole seed")
+    {
+      const auto entity = Entity{with(defaultPointProperties, {{"math_enabled", "0"}})};
+      REQUIRE_FALSE(hasMathLightBlock(entity));
+      auto edited = parseLightProperties(entity);
+      edited.math = seededMathLightProperties();
+
+      const auto diff = lightKeyDiff(entity, edited);
+      CHECK(keys(diff.set) == withMathKeys({}));
+      CHECK(diff.remove.empty());
+    }
+
     SECTION("The seed writes twelve math keys")
     {
       // D29: the seed has no style, so math_style is neither written nor removed
@@ -1269,6 +1337,25 @@ TEST_CASE("Light")
     CHECK(math.patternScale == 1.0);
     CHECK(math.patternPhase == 0.0);
     CHECK(math.energyClamp);
+  }
+
+  SECTION("hasMathLightBlock")
+  {
+    CHECK_FALSE(hasMathLightBlock(Entity{defaultPointProperties}));
+    CHECK_FALSE(
+      hasMathLightBlock(Entity{with(defaultPointProperties, {{"math_enabled", "0"}})}));
+    CHECK_FALSE(
+      hasMathLightBlock(Entity{with(defaultPointProperties, {{"math_enabled", "1"}})}));
+    CHECK(hasMathLightBlock(Entity{mathLightProperties}));
+    CHECK(hasMathLightBlock(Entity{with(mathLightProperties, {{"math_enabled", "0"}})}));
+    for (const auto& key : mathLightPropertyKeys())
+    {
+      if (key != "math_enabled")
+      {
+        CAPTURE(key);
+        CHECK(hasMathLightBlock(Entity{with(defaultPointProperties, {{key, "1"}})}));
+      }
+    }
   }
 }
 

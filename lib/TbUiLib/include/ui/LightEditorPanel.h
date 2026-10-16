@@ -58,9 +58,10 @@ class SignalDelayer;
  * the flags. The page follows the selected lights; a click on a page's tab makes them
  * lights of its kind: math_enabled is set, and the other math properties are kept.
  *
- * Its two volume tool buttons are the only way to the light volume tool: they activate
- * it in handle or draw mode, follow it when it is deactivated or changes its mode, and
- * closing the panel deactivates it.
+ * Its Draw volume button is the only way to the light volume tool, which is active only
+ * to draw a volume: the button activates it in draw mode, follows it when it is
+ * deactivated or leaves draw mode, and closing the panel deactivates it. The handles and
+ * the surfaces of the light volumes work without the tool (D56).
  */
 class LightEditorPanel : public SidebarPanel
 {

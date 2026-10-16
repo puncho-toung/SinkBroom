@@ -321,6 +321,8 @@ MathLightProperties parseMathLightProperties(const LightPropertyReader& reader)
 
   const auto* falloff = reader.string(MathFalloff);
   const auto* pattern = reader.string(MathPattern);
+  // a style that the engine does not know is none
+  const auto style = reader.integer(MathStyle, -1);
 
   return MathLightProperties{
     .enabled = reader.boolean(MathEnabled, false),
@@ -336,7 +338,7 @@ MathLightProperties parseMathLightProperties(const LightPropertyReader& reader)
     .patternScale = reader.number(MathPatternScale, 1.0),
     .patternPhase = reader.number(MathPatternPhase, 0.0),
     .energyClamp = reader.boolean(MathEnergyClamp, true),
-    .style = std::clamp(reader.integer(MathStyle, -1), -1, LightStyleCount - 1),
+    .style = style >= 0 && style < LightStyleCount ? style : -1,
   };
 }
 
@@ -345,6 +347,33 @@ const EntityProperty* findProperty(
 {
   const auto it = findEntityProperty(properties, key);
   return it != properties.end() ? &*it : nullptr;
+}
+
+/**
+ * The properties that the given entity is written with, as the diff towards the edited
+ * light compares them. A disabled math block that the edit enables is read as if it
+ * were enabled, except for math_enabled itself, so that its kept keys compare equal to
+ * themselves and are written only where the edit changes them, not because another
+ * editor wrote them in another format (the engine's "%f", D51).
+ */
+LightPropertyUpdate writtenForDiff(const Entity& entity, const LightProperties& edited)
+{
+  auto light = parseLightProperties(entity);
+  if (light.math.enabled || !edited.math.enabled || !hasMathLightBlock(entity))
+  {
+    return lightPropertyUpdate(light);
+  }
+
+  light.math.enabled = true;
+  auto update = lightPropertyUpdate(light);
+  for (auto& property : update.set)
+  {
+    if (property.key() == LightPropertyKeys::MathEnabled)
+    {
+      property.setValue("0");
+    }
+  }
+  return update;
 }
 
 } // namespace
@@ -660,7 +689,7 @@ LightPropertyUpdate lightPropertyUpdate(const LightProperties& light)
 
 LightPropertyUpdate lightKeyDiff(const Entity& entity, const LightProperties& edited)
 {
-  const auto before = lightPropertyUpdate(parseLightProperties(entity));
+  const auto before = writtenForDiff(entity, edited);
   const auto after = lightPropertyUpdate(edited);
 
   auto diff = LightPropertyUpdate{};
@@ -700,7 +729,7 @@ LightPropertyUpdate lightKeyDiff(const Entity& entity, const LightProperties& ed
     changed = false;
 
     const auto changedEntity = applyLightPropertyUpdate(entity, diff);
-    const auto check = lightPropertyUpdate(parseLightProperties(changedEntity));
+    const auto check = writtenForDiff(changedEntity, edited);
 
     for (const auto& property : after.set)
     {
@@ -777,6 +806,13 @@ LightProperties defaultLight(const LightType type, const LightProperties& keep)
   }
 
   return light;
+}
+
+bool hasMathLightBlock(const Entity& entity)
+{
+  return std::ranges::any_of(mathLightPropertyKeys(), [&](const auto& key) {
+    return key != LightPropertyKeys::MathEnabled && entity.hasProperty(key);
+  });
 }
 
 MathLightProperties seededMathLightProperties()

@@ -749,6 +749,9 @@ TEST_CASE("LightEditorPanel")
     auto& mixedNotice = findControl<QLabel>(panel, "MixedMathNotice");
     auto& texturePage = findControl<TabBookPage>(panel, "TexturePage");
     const auto modificationCount = map.modificationCount();
+    const auto mathBefore = mathNode->entity().properties();
+    const auto textureBefore = textureNode->entity().properties();
+    const auto disabledBefore = disabledNode->entity().properties();
 
     selectOnly(map, {mathNode});
     CHECK(showsMathPage(panel));
@@ -777,7 +780,121 @@ TEST_CASE("LightEditorPanel")
     CHECK_FALSE(mixedNotice.isVisibleTo(&panel));
     CHECK(texturePage.isEnabled());
 
+    // a second switch from the Texture to the Math page, with a light without math, and
+    // one with kept math properties, in the selection
+    selectOnly(map, {textureNode});
+    REQUIRE(showsTexturePage(panel));
+    selectOnly(map, {textureNode, disabledNode, mathNode});
+    CHECK(showsMathPage(panel));
+    CHECK(mixedNotice.isVisibleTo(&panel));
+
+    // no light was written
     CHECK(map.modificationCount() == modificationCount);
+    CHECK(mathNode->entity().properties() == mathBefore);
+    CHECK(textureNode->entity().properties() == textureBefore);
+    CHECK(disabledNode->entity().properties() == disabledBefore);
+  }
+
+  SECTION("only the page that is shown sizes the tab book")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* mathNode =
+      addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}, {"math_enabled", "1"}});
+    auto* textureNode = addLight(map, {{"classname", "light"}, {"origin", "64 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    auto& mathPage = findControl<TabBookPage>(panel, "MathPage");
+    auto& texturePage = findControl<TabBookPage>(panel, "TexturePage");
+    const auto sizedBy = [](const QWidget& page) {
+      return page.sizePolicy().horizontalPolicy() != QSizePolicy::Ignored
+             && page.sizePolicy().verticalPolicy() != QSizePolicy::Ignored;
+    };
+    const auto ignored = [](const QWidget& page) {
+      return page.sizePolicy().horizontalPolicy() == QSizePolicy::Ignored
+             && page.sizePolicy().verticalPolicy() == QSizePolicy::Ignored;
+    };
+
+    selectOnly(map, {textureNode});
+    REQUIRE(showsTexturePage(panel));
+    CHECK(sizedBy(texturePage));
+    CHECK(ignored(mathPage));
+
+    selectOnly(map, {mathNode});
+    REQUIRE(showsMathPage(panel));
+    CHECK(sizedBy(mathPage));
+    CHECK(ignored(texturePage));
+
+    // also after a click on a tab
+    clickTab(panel, TexturePage);
+    CHECK(showsTexturePage(panel));
+    CHECK(sizedBy(texturePage));
+    CHECK(ignored(mathPage));
+  }
+
+  SECTION("the Math tab keeps what the engine wrote and seeds a bare math_enabled")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    // a math light that the in-game editor switched to a texture light: its floats are
+    // written with "%f", and its style is one that the engine does not know
+    auto* engineNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+        {"light_radius", "300 300 300"},
+        {"math_enabled", "0"},
+        {"math_type", "point"},
+        {"math_falloff", "linear"},
+        {"math_pattern", "none"},
+        {"math_falloff_exp", "2.000000"},
+        {"math_inner_radius", "0.100000"},
+        {"math_shape_exp", "2.000000"},
+        {"math_penumbra", "0.150000"},
+        {"math_pattern_strength", "0.000000"},
+        {"math_pattern_scale", "1.000000"},
+        {"math_pattern_phase", "0.000000"},
+        {"math_energy_clamp", "1"},
+        {"math_style", "12"},
+      });
+    // a light without math that the in-game editor saved as a texture light
+    auto* bareNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "64 0 0"},
+        {"light_radius", "300 300 300"},
+        {"math_enabled", "0"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+
+    // only math_enabled is written (AC-16), and the unknown style stays unread
+    selectOnly(map, {engineNode});
+    REQUIRE(showsTexturePage(panel));
+    const auto engineBefore = engineNode->entity().properties();
+    clickTab(panel, MathPage);
+    CHECK(
+      engineNode->entity().properties() == withValue(engineBefore, "math_enabled", "1"));
+    CHECK(valueOf(*engineNode, "math_style") == "12");
+    CHECK(findControl<QComboBox>(panel, "MathStyle").currentIndex() == 0);
+
+    // math_enabled alone is no math block: the light gets the seed, like the in-game
+    // editor's Math tab gives it
+    selectOnly(map, {bareNode});
+    REQUIRE(showsTexturePage(panel));
+    const auto bareBefore = bareNode->entity().properties();
+    clickTab(panel, MathPage);
+    CHECK(
+      mdl::parseLightProperties(bareNode->entity()).math
+      == mdl::seededMathLightProperties());
+    CHECK(valueOf(*bareNode, "math_falloff") == "linear");
+    CHECK(valueOf(*bareNode, "math_inner_radius") == "0.1");
+    // the eleven other math properties
+    CHECK(bareNode->entity().properties().size() == bareBefore.size() + 11);
   }
 
   SECTION("the tabs switch every selected light")
@@ -926,6 +1043,50 @@ TEST_CASE("LightEditorPanel")
     QApplication::processEvents();
     CHECK(valueOf(*lightNode, "style") == "4");
     CHECK(property(*lightNode, "math_style") == nullptr);
+  }
+
+  SECTION("the math style shows multi where the selected lights differ")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    const auto mathLight = [&](const std::string& origin, const std::string& style) {
+      auto properties = std::vector<mdl::EntityProperty>{
+        {"classname", "light"},
+        {"origin", origin},
+        {"math_enabled", "1"},
+        {"math_type", "point"},
+      };
+      if (!style.empty())
+      {
+        properties.emplace_back("math_style", style);
+      }
+      return addLight(map, std::move(properties));
+    };
+    auto* strobeNode = mathLight("0 0 0", "4");
+    auto* otherStrobeNode = mathLight("64 0 0", "4");
+    auto* plainNode = mathLight("128 0 0", "");
+
+    auto panel = LightEditorPanel{fixture.context()};
+    auto& mathStyle = findControl<QComboBox>(panel, "MathStyle");
+
+    selectOnly(map, {strobeNode, plainNode});
+    REQUIRE(showsMathPage(panel));
+    CHECK(mathStyle.currentIndex() == -1);
+    CHECK(mathStyle.placeholderText() == "multi");
+
+    selectOnly(map, {strobeNode, otherStrobeNode});
+    CHECK(mathStyle.currentIndex() == 5);
+    CHECK(mathStyle.currentText() == "4: Fast Strobe");
+
+    // a multi field is written to every light when it is edited
+    selectOnly(map, {strobeNode, plainNode});
+    mathStyle.setCurrentIndex(0);
+    mathStyle.activated(0);
+    QApplication::processEvents();
+    CHECK(property(*strobeNode, "math_style") == nullptr);
+    CHECK(property(*plainNode, "math_style") == nullptr);
+    CHECK(mathStyle.currentIndex() == 0);
   }
 
   SECTION("the handle threshold spin writes the preference")
