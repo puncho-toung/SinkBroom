@@ -76,6 +76,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <memory>
@@ -210,6 +211,8 @@ constexpr auto PatternScaleRange = SpinRange{0.1, 64.0, 4, 0.1, 1.0, 4.0};
 constexpr auto PatternPhaseRange = SpinRange{0.0, 100.0, 4, 0.1, 1.0, 10.0};
 // the light volume handle threshold in percent, 0.01 to 0.5 (D53)
 constexpr auto HandleThresholdRange = SpinRange{1.0, 50.0, 0, 1.0, 5.0, 10.0};
+// how long the threshold's steps must pause before it is written
+constexpr auto HandleThresholdWriteDelay = std::chrono::milliseconds{200};
 
 constexpr auto SliderSteps = 1000;
 
@@ -891,6 +894,9 @@ struct LightEditorPanel::Controls
   QToolButton* drawVolumeButton = nullptr;
   QToolButton* resetVolumeButton = nullptr;
   MultiSpinControl* handleThreshold = nullptr;
+  // the threshold that the spin box writes once its steps pause
+  SignalDelayer* handleThresholdDelayer = nullptr;
+  std::optional<double> pendingHandleThreshold;
 
   // the rows of form that depend on the light's type and options
   int mixedTypesRow = -1;
@@ -1040,6 +1046,7 @@ QWidget* LightEditorPanel::createEditorPage()
   c.handleThreshold->setToolTip(
     tr("A point light's handle box lies where its falloff drops below this share of "
        "its brightness"));
+  c.handleThresholdDelayer = new SignalDelayer{HandleThresholdWriteDelay, this};
 
   auto* toolLayout = createRowLayout();
   toolLayout->addWidget(c.drawVolumeButton);
@@ -1623,9 +1630,22 @@ void LightEditorPanel::connectEditor()
   connect(c.resetVolumeButton, &QAbstractButton::clicked, this, [this]() {
     editLights("Reset Light Volume", resetLightVolume);
   });
-  // not a light property: the threshold of every point light's handle box (D53)
-  connect(c.handleThreshold, &QDoubleSpinBox::valueChanged, this, [](const double value) {
-    setPref(Preferences::LightVolumeHandleThreshold, float(value / 100.0));
+  // not a light property: the threshold of every point light's handle box (D53); each
+  // write saves the preferences and makes every map view and the map window reset their
+  // shortcuts, so a burst of steps is written once, when the steps pause
+  connect(
+    c.handleThreshold, &QDoubleSpinBox::valueChanged, this, [this](const double value) {
+      m_controls->pendingHandleThreshold = value;
+      m_controls->handleThresholdDelayer->queueSignal();
+    });
+  // a write still pending when the panel is destroyed is dropped: at shutdown, the
+  // preference manager may be gone already
+  connect(c.handleThresholdDelayer, &SignalDelayer::processSignal, this, [this]() {
+    if (auto& pending = m_controls->pendingHandleThreshold)
+    {
+      const auto value = *std::exchange(pending, std::nullopt);
+      setPref(Preferences::LightVolumeHandleThreshold, float(value / 100.0));
+    }
   });
   connect(
     c.drawVolumeButton,
@@ -1682,11 +1702,24 @@ void LightEditorPanel::connectObservers()
     m_controls->texturesStale = true;
     refresh();
   });
+  // of the preferences, only two matter: the game path, whose change reloads the models
+  // and materials (Map::setGamePath) with no other notification, and the handle
+  // threshold, which the panel shows and View Options resets; the others are ignored,
+  // because the steps of a spin box or the ticks of the fly speed wheel save them, and
+  // reading the light materials again walks every shader
   m_notifierConnection +=
-    PreferenceManager::instance().preferenceDidChangeNotifier.connect([&](const auto&) {
-      m_controls->texturesStale = true;
-      refresh();
-    });
+    PreferenceManager::instance().preferenceDidChangeNotifier.connect(
+      [&](const std::filesystem::path& path) {
+        if (path == m_document.map().gameInfo().gamePathPreference.path)
+        {
+          m_controls->texturesStale = true;
+          refresh();
+        }
+        else if (path == Preferences::LightVolumeHandleThreshold.path)
+        {
+          refresh();
+        }
+      });
 
   // the buttons follow the tool, which Esc, another tool or a new map also deactivate
   const auto toolChanged = [&](Tool& tool) {
@@ -1799,8 +1832,12 @@ void LightEditorPanel::updateEditor()
       recentre = std::max(recentre.value_or(0.0), *distance);
     }
   }
-  c.handleThreshold->setValue(
-    double(pref(Preferences::LightVolumeHandleThreshold)) * 100.0);
+  // a threshold still to be written stays: the preference holds the one that it replaces
+  if (!c.pendingHandleThreshold)
+  {
+    c.handleThreshold->setValue(
+      double(pref(Preferences::LightVolumeHandleThreshold)) * 100.0);
+  }
 
   c.offCentreNotice->setVisible(recentre.has_value());
   if (recentre)

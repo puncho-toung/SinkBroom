@@ -37,6 +37,7 @@
 #include <QWheelEvent>
 
 #include "SidebarTestUtils.h"
+#include "base/NotifierConnection.h"
 #include "base/PreferenceManager.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushNode.h"
@@ -75,6 +76,7 @@
 #include "vm/vec.h"
 
 #include <algorithm>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -148,6 +150,21 @@ std::string valueOf(const mdl::EntityNode& entityNode, const std::string& key)
   const auto* value = property(entityNode, key);
   REQUIRE(value != nullptr);
   return *value;
+}
+
+/**
+ * Processes events until the predicate holds or two seconds have passed; returns whether
+ * it holds.
+ */
+template <typename Predicate>
+bool waitFor(const Predicate& predicate)
+{
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+  while (!predicate() && std::chrono::steady_clock::now() < deadline)
+  {
+    QTest::qWait(10);
+  }
+  return predicate();
 }
 
 // the pages of the editor's tab book
@@ -1131,17 +1148,83 @@ TEST_CASE("LightEditorPanel")
     CHECK(threshold.minimum() == 1.0);
     CHECK(threshold.maximum() == 50.0);
 
-    // not a light property
+    // not a light property; written once the steps pause
     const auto modificationCount = map.modificationCount();
     threshold.setValue(25.0);
     QApplication::processEvents();
-    CHECK(pref(Preferences::LightVolumeHandleThreshold) == 0.25f);
+    CHECK(waitFor([] { return pref(Preferences::LightVolumeHandleThreshold) == 0.25f; }));
     CHECK(map.modificationCount() == modificationCount);
     CHECK(threshold.value() == 25.0);
+
+    // a burst of steps is written once, with its last value, which a refresh keeps
+    // while the write waits
+    auto thresholdChanges = 0;
+    auto notifierConnection = NotifierConnection{};
+    notifierConnection +=
+      prefs.preferenceDidChangeNotifier.connect([&](const auto& path) {
+        if (path == Preferences::LightVolumeHandleThreshold.path)
+        {
+          ++thresholdChanges;
+        }
+      });
+    threshold.setValue(20.0);
+    threshold.setValue(30.0);
+    threshold.setValue(35.0);
+    selectOnly(map, {lightNode});
+    CHECK(threshold.value() == 35.0);
+    CHECK(waitFor([] { return pref(Preferences::LightVolumeHandleThreshold) == 0.35f; }));
+    QApplication::processEvents();
+    CHECK(thresholdChanges == 1);
+    CHECK(threshold.value() == 35.0);
 
     setPref(Preferences::LightVolumeHandleThreshold, 0.4f);
     QApplication::processEvents();
     CHECK(threshold.value() == 40.0);
+  }
+
+  SECTION("of the preferences, only the game path reads the texture list again")
+  {
+    auto& prefs = PreferenceManager::instance();
+    // also when a check fails, so that no later test case sees a changed preference
+    const auto resetPreferences = kdl::invoke_later{[&] {
+      prefs.resetToDefault(Preferences::CameraFlyMoveSpeed);
+      prefs.resetToDefault(Preferences::LightVolumeHandleThreshold);
+    }};
+
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    // an item that only reading the list again removes
+    auto& texture = findControl<QComboBox>(panel, "Texture");
+    texture.addItem("marker");
+    const auto hasMarker = [&]() { return texture.findText("marker") != -1; };
+
+    // as a tick of the fly speed wheel does
+    setPref(Preferences::CameraFlyMoveSpeed, 2.0f);
+    QApplication::processEvents();
+    CHECK(hasMarker());
+
+    // the threshold refreshes the panel
+    auto& threshold = findControl<SpinControl>(panel, "HandleThreshold");
+    threshold.setValue(25.0);
+    REQUIRE(
+      waitFor([] { return pref(Preferences::LightVolumeHandleThreshold) == 0.25f; }));
+    QApplication::processEvents();
+    CHECK(hasMarker());
+    CHECK(threshold.value() == 25.0);
+
+    // the game path reloads the materials; there are none below base/base
+    auto gamePath = map.gameInfo().gamePathPreference;
+    const auto resetGamePath = kdl::invoke_later{[&] { prefs.resetToDefault(gamePath); }};
+    setPref(gamePath, gamePath.defaultValue / "base");
+    QApplication::processEvents();
+    CHECK_FALSE(hasMarker());
+    CHECK(texture.count() == 1);
   }
 
   SECTION("the angles are written by the rotation policy")
