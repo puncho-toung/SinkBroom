@@ -1674,6 +1674,51 @@ TEST_CASE("LightVolumeTool")
       CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::InnerShell);
     }
 
+    SECTION("a later light's inner shell is held against the node, not an earlier shell")
+    {
+      auto* oneNode = createLight(map, "0 0 0", SeededMath);
+      auto* otherNode = createLight(map, "0 0 0", SeededMath);
+      auto* brushNode = createBrush(map);
+
+      // two selected math lights along the ray, both inner shells before the brush at
+      // 2990: the near one's at 970, the far one's at 2970, behind the near one's
+      const auto pickBoth = [&](mdl::EntityNode* nearNode, mdl::EntityNode* farNode) {
+        selectOnly(map, {nearNode});
+        REQUIRE(mdl::setEntityProperty(map, "origin", "2000 0 0"));
+        selectOnly(map, {farNode});
+        REQUIRE(mdl::setEntityProperty(map, "origin", "0 0 0"));
+        selectOnly(map, {nearNode, farNode});
+
+        // the brush hit and four hits behind it leave one free slot in the pick result's
+        // vector (MSVC grows it to 1, 2, 3, 4, 6): the first light's surface hit is
+        // inserted in front of the brush hit without a reallocation, which shifts the
+        // brush hit
+        auto pickResult = mdl::PickResult{};
+        for (const auto distance : {2990.0, 3100.0, 3200.0, 3300.0, 3400.0})
+        {
+          pickResult.addHit(brushHit(brushNode, distance));
+        }
+        tool.pickSurfaces(vm::ray3d{{3000, 0, 0}, {-1, 0, 0}}, pickResult);
+
+        const auto surfaces =
+          pickResult.all(mdl::HitFilters::type(LightVolumeTool::SurfaceHitType));
+        REQUIRE(surfaces.size() == 2);
+        const auto nearSurface = surfaces.front().target<LightSurfaceHit>();
+        CHECK(nearSurface.node == nearNode);
+        CHECK(nearSurface.element == mdl::LightElement::InnerShell);
+        CHECK(surfaces.front().distance() == Catch::Approx(970.0).margin(1e-6));
+        const auto farSurface = surfaces.back().target<LightSurfaceHit>();
+        CHECK(farSurface.node == farNode);
+        CHECK(farSurface.element == mdl::LightElement::InnerShell);
+        CHECK(surfaces.back().distance() == Catch::Approx(2970.0).margin(1e-6));
+      };
+
+      // the tool reads the selected lights in an order of its own, the same for both
+      // calls: each light is the far one once, so that once the near one comes first
+      pickBoth(oneNode, otherNode);
+      pickBoth(otherNode, oneNode);
+    }
+
     SECTION("a math point light's inner shell, which the outer one encloses")
     {
       createLight(map, "0 0 0", SeededMath);

@@ -1395,8 +1395,9 @@ void LightVolumeTool::pickSurfaces(
 {
   using namespace mdl::HitFilters;
 
-  // an unselected light's surface yields to any node along the ray (D57)
-  const auto& nodeHit = pickResult.first(type(mdl::nodeHitType()));
+  // an unselected light's surface yields to any node along the ray (D57); a copy, because
+  // the loop adds hits to the pick result that it is in
+  const auto nodeHit = pickResult.first(type(mdl::nodeHitType()));
 
   for (const auto& pickable : pickableLights())
   {
