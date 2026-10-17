@@ -39,9 +39,11 @@
 #include "gl/TextureFont.h"
 #include "gl/VertexArray.h"
 #include "gl/VertexType.h"
+#include "mdl/GameInfo.h"
 #include "mdl/Map.h"
 #include "mdl/Map_Assets.h"
 #include "mdl/Map_Selection.h"
+#include "mdl/UtilityMaterials.h"
 #include "prefs/Preferences.h"
 #include "render/Transformation.h"
 #include "ui/MapDocument.h"
@@ -69,7 +71,9 @@ std::vector<const gl::Material*> filterMaterials(
   std::vector<const gl::Material*> materials,
   const bool hideUnused,
   const bool hideMissing,
-  const std::string& filterText)
+  const std::string& filterText,
+  const MaterialBrowserScope scope,
+  const std::vector<mdl::UtilityMaterialConfig>& utilityMaterials)
 {
   if (hideUnused)
   {
@@ -90,7 +94,39 @@ std::vector<const gl::Material*> filterMaterials(
         });
     });
   }
+  if (scope != MaterialBrowserScope::All)
+  {
+    // a regular browser hides the utility materials, which a utility browser lists alone
+    const auto keepUtilityMaterials = scope == MaterialBrowserScope::Utility;
+    std::erase_if(materials, [&](const auto* material) {
+      return mdl::isUtilityMaterial(utilityMaterials, material->name())
+             != keepUtilityMaterials;
+    });
+  }
   return materials;
+}
+
+std::string wrapWords(
+  const std::string& text,
+  const float maxWidth,
+  const std::function<float(const std::string&)>& measureWidth)
+{
+  auto lines = std::vector<std::string>{};
+  for (auto& word : kdl::str_split(text, " "))
+  {
+    if (!lines.empty())
+    {
+      if (auto line = lines.back() + " " + word; measureWidth(line) <= maxWidth)
+      {
+        lines.back() = std::move(line);
+        continue;
+      }
+    }
+    // the first word, or one that no longer fits, starts a line; a word wider than a
+    // line stands alone on its own
+    lines.push_back(std::move(word));
+  }
+  return kdl::str_join(lines, "\n");
 }
 
 MaterialBorder materialBorder(const gl::Material& material, const bool selected)
@@ -114,9 +150,13 @@ MaterialBorder materialBorder(const gl::Material& material, const bool selected)
 }
 
 MaterialBrowserView::MaterialBrowserView(
-  AppController& appController, QScrollBar* scrollBar, MapDocument& document)
+  AppController& appController,
+  QScrollBar* scrollBar,
+  MapDocument& document,
+  const MaterialBrowserScope scope)
   : CellView{appController, scrollBar}
   , m_document{document}
+  , m_scope{scope}
 {
   m_notifierConnection += m_document.materialUsageCountsDidChangeNotifier.connect(
     this, &MaterialBrowserView::reloadMaterials);
@@ -218,6 +258,14 @@ void MaterialBrowserView::doInitLayout(Layout& layout)
   layout.setTitleMargin(2.0f);
   layout.setCellWidth(scaleFactor * 64.0f, scaleFactor * 64.0f);
   layout.setCellHeight(scaleFactor * 64.0f, scaleFactor * 128.0f);
+  if (m_scope == MaterialBrowserScope::Utility)
+  {
+    // a card per material, four thumbnails wide so that the description under the name
+    // wraps to a few lines, and a thumbnail high so that a large preview is drawn at the
+    // size it has in a regular browser; the title lines still grow the card
+    layout.setCellWidth(scaleFactor * 256.0f, scaleFactor * 256.0f);
+    layout.setCellHeight(scaleFactor * 64.0f, scaleFactor * 64.0f);
+  }
 }
 
 void MaterialBrowserView::doReloadLayout(Layout& layout)
@@ -258,8 +306,8 @@ void MaterialBrowserView::addMaterialToLayout(
 {
   const auto maxCellWidth = layout.maxCellWidth();
 
-  const auto materialName = std::filesystem::path{material.name()}.filename().string();
-  const auto titleHeight = fontManager().font(font).measure(materialName).y();
+  const auto title = cellTitle(material, maxCellWidth - 4.0f, font);
+  const auto titleHeight = fontManager().font(font).measure(title).y();
 
   const auto scaleFactor = pref(Preferences::MaterialBrowserIconSize);
   const auto* texture = material.texture();
@@ -268,11 +316,40 @@ void MaterialBrowserView::addMaterialToLayout(
 
   layout.addItem(
     &material,
-    materialName,
+    title,
     scaledTextureSize.x(),
     scaledTextureSize.y(),
     maxCellWidth,
     titleHeight + 4.0f);
+}
+
+std::string MaterialBrowserView::cellTitle(
+  const gl::Material& material, const float maxWidth, const gl::FontDescriptor& font)
+{
+  const auto materialName = std::filesystem::path{material.name()}.filename().string();
+  if (m_scope == MaterialBrowserScope::Utility)
+  {
+    // a utility material's card says what the material does, under its name
+    if (const auto* utilityMaterial =
+          mdl::findUtilityMaterial(utilityMaterials(), material.name());
+        utilityMaterial && !utilityMaterial->description.empty())
+    {
+      const auto& textureFont = fontManager().font(font);
+      return materialName + "\n"
+             + wrapWords(utilityMaterial->description, maxWidth, [&](const auto& line) {
+                 return textureFont.measure(line).x();
+               });
+    }
+  }
+  return materialName;
+}
+
+const std::vector<mdl::UtilityMaterialConfig>& MaterialBrowserView::utilityMaterials()
+  const
+{
+  // read when it is needed: a document of another game loaded into the same window
+  // brings its own list
+  return m_document.map().gameInfo().gameConfig.materialConfig.utilityMaterials;
 }
 
 std::vector<const gl::MaterialCollection*> MaterialBrowserView::getCollections() const
@@ -316,7 +393,12 @@ std::vector<const gl::Material*> MaterialBrowserView::filterMaterials(
   std::vector<const gl::Material*> materials) const
 {
   return ui::filterMaterials(
-    std::move(materials), m_hideUnused, m_hideMissing, m_filterText);
+    std::move(materials),
+    m_hideUnused,
+    m_hideMissing,
+    m_filterText,
+    m_scope,
+    utilityMaterials());
 }
 
 std::vector<const gl::Material*> MaterialBrowserView::sortMaterials(
@@ -507,6 +589,14 @@ QString MaterialBrowserView::tooltip(const Cell& cell)
   auto tooltip = QString{};
   auto ss = QTextStream{&tooltip};
   ss << QString::fromStdString(material.name()) << "\n";
+
+  // a utility material's description, in every browser that lists the material
+  if (const auto* utilityMaterial =
+        mdl::findUtilityMaterial(utilityMaterials(), material.name());
+      utilityMaterial && !utilityMaterial->description.empty())
+  {
+    ss << QString::fromStdString(utilityMaterial->description) << "\n";
+  }
 
   if (const auto* texture = material.texture())
   {

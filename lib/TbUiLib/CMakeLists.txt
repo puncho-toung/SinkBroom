@@ -300,6 +300,7 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapWindow.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapWindowManager.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MaterialBrowser.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MaterialBrowserScope.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MaterialBrowserView.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MaterialCollectionEditor.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MiniToolBarLayout.h

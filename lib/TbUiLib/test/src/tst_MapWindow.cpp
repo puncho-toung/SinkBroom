@@ -107,8 +107,10 @@ const auto OldInspectorPageKey = QString{"Windows/Inspector_TabBook/State"};
 
 /**
  * The keys that the window restores when it is built and that saveWindowState writes,
- * and the keys of the inspector from before the inspectors were docks, which the window
- * reads once and which the test settings may hold from a build of that time.
+ * the Face inspector's material tab, which the panel restores when it is built and saves
+ * when it goes, and the keys of the inspector from before the inspectors were docks,
+ * which the window reads once and which the test settings may hold from a build of that
+ * time.
  */
 const auto WindowStateKeys = std::vector<QString>{
   "Windows/MapWindow/Geometry",
@@ -116,6 +118,7 @@ const auto WindowStateKeys = std::vector<QString>{
   DockLayoutVersionKey,
   "Windows/MapWindow_VerticalSplitterSplitter/State",
   "Windows/MapWindow_InfoPanel/State",
+  "Windows/FaceInspector_TabBook/State",
   OldInspectorKey,
   OldInspectorPageKey,
 };

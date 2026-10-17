@@ -22,6 +22,7 @@
 #include <QWidget>
 
 #include "base/NotifierConnection.h"
+#include "ui/MaterialBrowserScope.h"
 
 #include <filesystem>
 #include <string>
@@ -62,7 +63,10 @@ private:
 
 public:
   MaterialBrowser(
-    AppController& appController, MapDocument& document, QWidget* parent = nullptr);
+    AppController& appController,
+    MapDocument& document,
+    MaterialBrowserScope scope = MaterialBrowserScope::All,
+    QWidget* parent = nullptr);
 
   const gl::Material* selectedMaterial() const;
   void setSelectedMaterial(const gl::Material* selectedMaterial);
@@ -76,7 +80,7 @@ signals:
   void materialSelected(const gl::Material* material);
 
 private:
-  void createGui(AppController& appController);
+  void createGui(AppController& appController, MaterialBrowserScope scope);
   void bindEvents();
 
   void connectObservers();

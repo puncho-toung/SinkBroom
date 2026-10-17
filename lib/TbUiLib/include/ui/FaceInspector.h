@@ -27,6 +27,7 @@
 #include <filesystem>
 
 class QSplitter;
+class QStackedWidget;
 class QWidget;
 
 namespace tb
@@ -43,6 +44,7 @@ class CollapsibleTitledPanel;
 class FaceAttribsEditor;
 class MapDocument;
 class MaterialBrowser;
+class TabBook;
 
 class FaceInspector : public SidebarPanel
 {
@@ -54,8 +56,11 @@ private:
   MapDocument& m_document;
   QSplitter* m_splitter = nullptr;
   FaceAttribsEditor* m_faceAttribsEditor = nullptr;
+  TabBook* m_tabBook = nullptr;
   MaterialBrowser* m_materialBrowser = nullptr;
   QWidget* m_materialBrowserInfo = nullptr;
+  QStackedWidget* m_utilityStack = nullptr;
+  MaterialBrowser* m_utilityMaterialBrowser = nullptr;
 
   NotifierConnection m_notifierConnection;
 
@@ -70,18 +75,27 @@ public:
   bool shownByDefault() const override;
 
   bool cancelMouseDrag();
+
+  /**
+   * Shows the tab that lists the given material, the Utility tab for a utility material
+   * of the game and the Materials tab otherwise, and selects the material there. A null
+   * material shows the Materials tab.
+   */
   void revealMaterial(const gl::Material* material);
 
 private:
   void createGui(AppController& appController);
   QWidget* createFaceAttribsEditor(AppController& appController);
+  QWidget* createMaterialTabs(AppController& appController);
   QWidget* createMaterialBrowser(AppController& appController);
   QWidget* createMaterialBrowserInfo();
+  QWidget* createUtilityMaterialBrowser(AppController& appController);
 
   void materialSelected(const gl::Material* material);
 
   void connectObservers();
   void documentWasLoaded();
+  void updateUtilityPage();
 };
 
 } // namespace ui

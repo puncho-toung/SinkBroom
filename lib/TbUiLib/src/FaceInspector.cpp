@@ -20,6 +20,7 @@
 #include "ui/FaceInspector.h"
 
 #include <QLabel>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 
 #include "gl/Material.h"
@@ -29,14 +30,18 @@
 #include "mdl/Map.h"
 #include "mdl/Map_Brushes.h"
 #include "mdl/UpdateBrushFaceAttributes.h"
+#include "mdl/UtilityMaterials.h"
 #include "ui/BorderLine.h"
 #include "ui/FaceAttribsEditor.h"
 #include "ui/MapDocument.h"
 #include "ui/MaterialBrowser.h"
+#include "ui/MaterialBrowserScope.h"
 #include "ui/MaterialCollectionEditor.h"
 #include "ui/QStyleUtils.h"
 #include "ui/Splitter.h"
 #include "ui/SwitchableTitledPanel.h"
+#include "ui/TabBook.h"
+#include "ui/TitledPanel.h"
 #include "ui/ViewConstants.h"
 #include "ui/WidgetState.h"
 
@@ -48,10 +53,36 @@ namespace tb::ui
 namespace
 {
 
+// the pages of the material tab book
+constexpr auto MaterialsPage = 0;
+constexpr auto UtilityPage = 1;
+
+// the pages of the Utility tab
+constexpr auto UtilityBrowserPage = 0;
+constexpr auto NoUtilityMaterialsPage = 1;
+
 void resetMaterialBrowserInfo(mdl::Map& map, QWidget* materialBrowserInfo)
 {
   const auto& gameConfig = map.gameInfo().gameConfig;
   materialBrowserInfo->setVisible(gameConfig.materialConfig.property != std::nullopt);
+}
+
+const std::vector<mdl::UtilityMaterialConfig>& utilityMaterials(const mdl::Map& map)
+{
+  return map.gameInfo().gameConfig.materialConfig.utilityMaterials;
+}
+
+TabBookPage* createTabPage(const QString& name, QWidget* content)
+{
+  auto* layout = new QVBoxLayout{};
+  layout->setContentsMargins(0, 0, 0, 0);
+  layout->setSpacing(0);
+  layout->addWidget(content, 1);
+
+  auto* page = new TabBookPage{};
+  page->setObjectName(name);
+  page->setLayout(layout);
+  return page;
 }
 
 } // namespace
@@ -70,6 +101,7 @@ FaceInspector::FaceInspector(
 FaceInspector::~FaceInspector()
 {
   saveWidgetState(m_splitter);
+  saveWidgetState(m_tabBook);
 }
 
 QString FaceInspector::panelId() const
@@ -99,8 +131,17 @@ bool FaceInspector::cancelMouseDrag()
 
 void FaceInspector::revealMaterial(const gl::Material* material)
 {
-  m_materialBrowser->revealMaterial(material);
-  m_materialBrowser->setSelectedMaterial(material);
+  // a null material, which the map view passes for a face whose material is missing,
+  // goes to the Materials tab, whose browser finds nothing to reveal
+  const auto isUtilityMaterial =
+    material
+    && mdl::isUtilityMaterial(utilityMaterials(m_document.map()), material->name());
+  m_tabBook->switchToPage(isUtilityMaterial ? UtilityPage : MaterialsPage);
+
+  auto* materialBrowser =
+    isUtilityMaterial ? m_utilityMaterialBrowser : m_materialBrowser;
+  materialBrowser->revealMaterial(material);
+  materialBrowser->setSelectedMaterial(material);
 }
 
 void FaceInspector::createGui(AppController& appController)
@@ -109,7 +150,7 @@ void FaceInspector::createGui(AppController& appController)
   m_splitter->setObjectName("FaceInspector_Splitter");
 
   m_splitter->addWidget(createFaceAttribsEditor(appController));
-  m_splitter->addWidget(createMaterialBrowser(appController));
+  m_splitter->addWidget(createMaterialTabs(appController));
 
   // when the window resizes, the browser should get extra space
   m_splitter->setStretchFactor(0, 0);
@@ -126,8 +167,15 @@ void FaceInspector::createGui(AppController& appController)
     &MaterialBrowser::materialSelected,
     this,
     &FaceInspector::materialSelected);
+  connect(
+    m_utilityMaterialBrowser,
+    &MaterialBrowser::materialSelected,
+    this,
+    &FaceInspector::materialSelected);
 
+  updateUtilityPage();
   restoreWidgetState(m_splitter);
+  restoreWidgetState(m_tabBook);
 }
 
 QWidget* FaceInspector::createFaceAttribsEditor(AppController& appController)
@@ -136,12 +184,30 @@ QWidget* FaceInspector::createFaceAttribsEditor(AppController& appController)
   return m_faceAttribsEditor;
 }
 
+QWidget* FaceInspector::createMaterialTabs(AppController& appController)
+{
+  // the face attributes stay above both tabs: they belong to the selected faces, not to
+  // either set of materials
+  m_tabBook = new TabBook{};
+  m_tabBook->setObjectName("FaceInspector_TabBook");
+  m_tabBook->addPage(
+    createTabPage("FaceInspector_MaterialsPage", createMaterialBrowser(appController)),
+    tr("Materials"));
+  m_tabBook->addPage(
+    createTabPage(
+      "FaceInspector_UtilityPage", createUtilityMaterialBrowser(appController)),
+    tr("Utility"));
+  return m_tabBook;
+}
+
 QWidget* FaceInspector::createMaterialBrowser(AppController& appController)
 {
   auto* panel =
     new SwitchableTitledPanel{tr("Material Browser"), {{tr("Browser"), tr("Settings")}}};
 
-  m_materialBrowser = new MaterialBrowser{appController, m_document};
+  m_materialBrowser =
+    new MaterialBrowser{appController, m_document, MaterialBrowserScope::Regular};
+  m_materialBrowser->setObjectName("FaceInspector_MaterialBrowser");
 
   auto* materialBrowserLayout = new QVBoxLayout{};
   materialBrowserLayout->setContentsMargins(0, 0, 0, 0);
@@ -189,6 +255,33 @@ QWidget* FaceInspector::createMaterialBrowserInfo()
   return panel;
 }
 
+QWidget* FaceInspector::createUtilityMaterialBrowser(AppController& appController)
+{
+  // no Settings page here: the enabled collections belong to the document and apply to
+  // both tabs, so the Materials tab's Settings page covers this browser too
+  auto* browserPanel = new TitledPanel{tr("Utility Materials")};
+  m_utilityMaterialBrowser =
+    new MaterialBrowser{appController, m_document, MaterialBrowserScope::Utility};
+  m_utilityMaterialBrowser->setObjectName("FaceInspector_UtilityMaterialBrowser");
+
+  auto* browserLayout = new QVBoxLayout{};
+  browserLayout->setContentsMargins(0, 0, 0, 0);
+  browserLayout->addWidget(m_utilityMaterialBrowser, 1);
+  browserPanel->getPanel()->setLayout(browserLayout);
+
+  auto* noUtilityMaterialsLabel =
+    new QLabel{tr("This game declares no utility materials.")};
+  noUtilityMaterialsLabel->setObjectName("FaceInspector_NoUtilityMaterials");
+  noUtilityMaterialsLabel->setAlignment(Qt::AlignCenter);
+  noUtilityMaterialsLabel->setWordWrap(true);
+
+  m_utilityStack = new QStackedWidget{};
+  m_utilityStack->setObjectName("FaceInspector_UtilityStack");
+  m_utilityStack->addWidget(browserPanel);
+  m_utilityStack->addWidget(noUtilityMaterialsLabel);
+  return m_utilityStack;
+}
+
 void FaceInspector::materialSelected(const gl::Material* material)
 {
   auto& map = m_document.map();
@@ -226,6 +319,16 @@ void FaceInspector::connectObservers()
 void FaceInspector::documentWasLoaded()
 {
   resetMaterialBrowserInfo(m_document.map(), m_materialBrowserInfo);
+  updateUtilityPage();
+}
+
+void FaceInspector::updateUtilityPage()
+{
+  // the game gate: a game whose config declares no utility materials has nothing to list
+  // on the Utility tab, and its Materials tab lists every material
+  m_utilityStack->setCurrentIndex(
+    utilityMaterials(m_document.map()).empty() ? NoUtilityMaterialsPage
+                                               : UtilityBrowserPage);
 }
 
 } // namespace tb::ui

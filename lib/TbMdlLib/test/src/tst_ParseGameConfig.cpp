@@ -28,6 +28,7 @@
 #include "mdl/ParseGameConfig.h"
 #include "mdl/Tag.h"
 #include "mdl/TagMatcher.h"
+#include "mdl/UtilityMaterials.h"
 
 #include "kd/flat_set.h"
 #include "kd/ranges/to.h"
@@ -97,8 +98,11 @@ TEST_CASE("GameConfigParser")
           .packageFormat = {.extensions = {".pk4"}, .format = "zip"},
         });
 
+      // the utility materials are pinned below; the rest of the material config here
+      auto materialConfigWithoutUtilityMaterials = config.materialConfig;
+      materialConfigWithoutUtilityMaterials.utilityMaterials.clear();
       CHECK(
-        config.materialConfig
+        materialConfigWithoutUtilityMaterials
         == MaterialConfig{
           .root = "textures",
           .extensions = {".tga", ".png", ".jpg", ".jpeg", ".dds"},
@@ -114,6 +118,30 @@ TEST_CASE("GameConfigParser")
       CHECK(
         config.materialConfig.implicitMaterialsFromImages
         == Doom3BFGGameInfo.gameConfig.materialConfig.implicitMaterialsFromImages);
+
+      // the Face inspector's Utility tab: each material before the catch-alls of its
+      // folder, since the first matching entry wins; only the first entry's text, the
+      // count and the catch-alls are pinned, so the descriptions can be reworded
+      const auto& utilityMaterials = config.materialConfig.utilityMaterials;
+      CHECK(utilityMaterials.size() == 48);
+      REQUIRE(utilityMaterials.size() >= 2);
+      CHECK(
+        utilityMaterials.front()
+        == UtilityMaterialConfig{
+          .pattern = "common/caulk",
+          .description =
+            "Invisible and solid; seals the map. Use it on faces the player never sees.",
+        });
+      CHECK(utilityMaterials[utilityMaterials.size() - 2].pattern == "common/*");
+      CHECK(utilityMaterials.back().pattern == "editor/*");
+      // no entry hides a later one: each named material finds its own entry
+      for (size_t i = 0; i + 2 < utilityMaterials.size(); ++i)
+      {
+        const auto& materialName = utilityMaterials[i].pattern;
+        CAPTURE(materialName);
+        CHECK(
+          findUtilityMaterial(utilityMaterials, materialName) == &utilityMaterials[i]);
+      }
 
       // compared per field so that packages adding entity config keys need not edit this
       // the first file is the default for new maps
