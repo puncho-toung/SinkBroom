@@ -22,11 +22,17 @@
 #include "fs/TestEnvironment.h"
 #include "gl/MaterialCollection.h"
 #include "gl/MaterialManager.h"
+#include "gl/Resource.h"
 #include "gl/ResourceManager.h"
+#include "gl/TestGl.h"
+#include "gl/TestUtils.h"
 #include "mdl/BrushFace.h" // IWYU pragma: keep
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
+#include "mdl/EntityDefinitionManager.h"
+#include "mdl/EntityModel.h"
 #include "mdl/EntityModelManager.h"
+#include "mdl/EntityNode.h"
 #include "mdl/EnvironmentConfig.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/LayerNode.h"
@@ -36,6 +42,7 @@
 #include "mdl/MapFormat.h"
 #include "mdl/Map_Assets.h"
 #include "mdl/Map_Entities.h"
+#include "mdl/Map_Selection.h"
 #include "mdl/TestUtils.h"
 #include "mdl/WorldNode.h"
 
@@ -530,6 +537,51 @@ TEST_CASE("Map_Assets")
     CHECK(parseCount() == 2);
     CHECK(map->entityModelManager().shaders() != shaders);
     CHECK(map->materialManager().material("twice") != nullptr);
+  }
+
+  SECTION("reloadMaterialCollections loads the entity models again")
+  {
+    auto& map = fixture.create(Doom3BFGFixtureConfig);
+
+    const auto* definition =
+      map.entityDefinitionManager().definition("genmodel_tb_test_arrow");
+    REQUIRE(definition != nullptr);
+    auto* entityNode = createPointEntity(map, *definition, {0, 0, 0});
+    REQUIRE(entityNode != nullptr);
+
+    auto gl = gl::TestGl{};
+    const auto processResources = [&]() {
+      gl::processResourcesSync(
+        map.resourceManager(), gl::ProcessContext{gl, [](auto, auto) {}});
+    };
+
+    processResources();
+    const auto* model = entityNode->entity().model();
+    REQUIRE(model != nullptr);
+    REQUIRE(model->data() != nullptr);
+    const auto resourceId = model->dataResource().id();
+
+    // the models are shaded with the shaders that the reload parses
+    reloadMaterialCollections(map);
+    processResources();
+
+    model = entityNode->entity().model();
+    REQUIRE(model != nullptr);
+    CHECK(model->data() != nullptr);
+    CHECK(model->dataResource().id() != resourceId);
+
+    // a wad change reloads the material collections inside a command, and so does its
+    // undo
+    deselectAll(map);
+    REQUIRE(setEntityProperty(map, EntityPropertyKeys::Wad, "missing.wad"));
+    processResources();
+    REQUIRE(entityNode->entity().model() != nullptr);
+    CHECK(entityNode->entity().model()->data() != nullptr);
+
+    map.undoCommand();
+    processResources();
+    REQUIRE(entityNode->entity().model() != nullptr);
+    CHECK(entityNode->entity().model()->data() != nullptr);
   }
 
   SECTION("reloadEntityDefinitions")

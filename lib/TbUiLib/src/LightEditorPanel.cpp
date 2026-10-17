@@ -1525,6 +1525,11 @@ void LightEditorPanel::connectObservers()
     m_document.selectionDidChangeNotifier.connect([&](const auto&) { refresh(); });
   m_notifierConnection +=
     m_document.entityDefinitionsDidChangeNotifier.connect([&] { refresh(); });
+  // a reload of the material collections parses the shaders again
+  m_notifierConnection += m_document.materialCollectionsDidChangeNotifier.connect([&] {
+    m_controls->texturesStale = true;
+    refresh();
+  });
 
   // the shaders are loaded again when the mods or the game path change
   m_notifierConnection += m_document.modsDidChangeNotifier.connect([&] {

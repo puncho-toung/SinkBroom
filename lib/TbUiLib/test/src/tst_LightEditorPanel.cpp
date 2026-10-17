@@ -45,6 +45,7 @@
 #include "mdl/Light.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
+#include "mdl/Map_Assets.h"
 #include "mdl/Map_Entities.h"
 #include "mdl/Map_Groups.h"
 #include "mdl/Map_Nodes.h"
@@ -1647,6 +1648,28 @@ TEST_CASE("LightEditorPanel")
     QApplication::processEvents();
     CHECK(items() == expectedItems);
     CHECK(texture.currentIndex() == 2);
+  }
+
+  SECTION("the texture list is read again when the material collections are reloaded")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    auto& texture = findControl<QComboBox>(panel, "Texture");
+    REQUIRE(texture.count() == 3);
+
+    // the reload parses the material scripts again, so the list may have changed
+    texture.removeItem(1);
+    REQUIRE(texture.count() == 2);
+    mdl::reloadMaterialCollections(map);
+    QApplication::processEvents();
+    CHECK(texture.count() == 3);
+    CHECK(texture.itemText(1) == "fogs/tb_test_fog");
   }
 
   SECTION("the volume tool buttons")

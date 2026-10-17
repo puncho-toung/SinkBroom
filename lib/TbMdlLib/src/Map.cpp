@@ -1865,6 +1865,9 @@ void Map::materialCollectionsDidChange()
   // a material script added on disk is only found after the refresh
   refreshMaterialFileSystems();
   reloadShaders();
+  // the models keep the materials of the old shaders until they are loaded again
+  clearEntityModels();
+  setEntityModels();
   loadMaterials();
   setMaterials();
   updateAllFaceTags();
