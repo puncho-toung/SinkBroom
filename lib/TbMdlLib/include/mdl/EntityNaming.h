@@ -200,6 +200,32 @@ void assignUniqueEntityNamesBeforeAdding(
   const Map& map, const std::vector<Node*>& rootsInSourceOrder, bool remapLinkSources);
 
 /**
+ * The positions of the world, every layer, group and entity of a map in a depth first
+ * traversal of the map, collected once for any number of lookups. It is valid while the
+ * map does not change.
+ */
+class TreeOrder
+{
+private:
+  std::unordered_map<const Node*, size_t> m_positions;
+
+public:
+  explicit TreeOrder(const Map& map);
+
+  /**
+   * Returns the position of the given node, or the number of positions if the node has
+   * none.
+   */
+  size_t position(const Node& node) const;
+
+  /**
+   * Sorts the given nodes by their positions; nodes without one go last.
+   */
+  std::vector<EntityNodeBase*> sort(std::vector<EntityNodeBase*> entityNodes) const;
+  std::vector<Node*> sort(std::vector<Node*> nodes) const;
+};
+
+/**
  * Sorts the given nodes of the map in the order of a depth first traversal of the map, so
  * that operations on them depend neither on the order of a selection nor on the memory
  * addresses by which many node collections are ordered. Only the world, layers, groups

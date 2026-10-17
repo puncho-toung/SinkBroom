@@ -92,16 +92,10 @@ std::unordered_map<const Node*, size_t> getTreePositions(const Map& map)
 }
 
 template <typename N>
-std::vector<N*> sortByTreePosition(const Map& map, std::vector<N*> nodes)
+std::vector<N*> sortByTreePosition(const TreeOrder& treeOrder, std::vector<N*> nodes)
 {
-  const auto treePositions = getTreePositions(map);
-  const auto treePosition = [&](const Node* node) {
-    const auto it = treePositions.find(node);
-    return it != treePositions.end() ? it->second : treePositions.size();
-  };
-
   std::ranges::stable_sort(nodes, [&](const auto* lhs, const auto* rhs) {
-    return treePosition(lhs) < treePosition(rhs);
+    return treeOrder.position(*lhs) < treeOrder.position(*rhs);
   });
   return nodes;
 }
@@ -455,15 +449,37 @@ void assignUniqueEntityNamesBeforeAdding(
   }
 }
 
+TreeOrder::TreeOrder(const Map& map)
+  : m_positions{getTreePositions(map)}
+{
+}
+
+size_t TreeOrder::position(const Node& node) const
+{
+  const auto it = m_positions.find(&node);
+  return it != m_positions.end() ? it->second : m_positions.size();
+}
+
+std::vector<EntityNodeBase*> TreeOrder::sort(
+  std::vector<EntityNodeBase*> entityNodes) const
+{
+  return sortByTreePosition(*this, std::move(entityNodes));
+}
+
+std::vector<Node*> TreeOrder::sort(std::vector<Node*> nodes) const
+{
+  return sortByTreePosition(*this, std::move(nodes));
+}
+
 std::vector<EntityNodeBase*> sortInTreeOrder(
   const Map& map, std::vector<EntityNodeBase*> entityNodes)
 {
-  return sortByTreePosition(map, std::move(entityNodes));
+  return TreeOrder{map}.sort(std::move(entityNodes));
 }
 
 std::vector<Node*> sortInTreeOrder(const Map& map, std::vector<Node*> nodes)
 {
-  return sortByTreePosition(map, std::move(nodes));
+  return TreeOrder{map}.sort(std::move(nodes));
 }
 
 std::vector<EntityNodeBase*> collectEntityNodes(

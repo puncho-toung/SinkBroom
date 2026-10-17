@@ -32,12 +32,13 @@
 
 #include "kd/ranges/to.h"
 #include "kd/string_compare.h"
-#include "kd/vector_utils.h"
 
 #include <algorithm>
 #include <ranges>
 #include <string>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace tb::mdl
 {
@@ -71,6 +72,8 @@ IssueQuickFix makeMakeNamesUniqueQuickFix(EntityNamingConfig config)
         }) | kdl::ranges::to<std::vector>(),
         Type);
 
+      // valid, because the map changes only when the new names are applied at the end
+      const auto treeOrder = TreeOrder{map};
       auto allocator = EntityNameAllocator{map};
       auto nodesToSwap = std::vector<std::pair<Node*, NodeContents>>{};
       for (auto* entityNode : entityNodes)
@@ -83,8 +86,12 @@ IssueQuickFix makeMakeNamesUniqueQuickFix(EntityNamingConfig config)
 
         if (!isReservedEntityName(*name))
         {
-          const auto holders = sortInTreeOrder(map, findEntitiesWithName(map, *name));
-          if (holders.size() < 2 || holders.front() == entityNode)
+          // the first holder of the name keeps it
+          const auto position = treeOrder.position(*entityNode);
+          if (std::ranges::none_of(
+                findEntitiesWithName(map, *name), [&](const auto* holder) {
+                  return treeOrder.position(*holder) < position;
+                }))
           {
             continue;
           }
@@ -120,24 +127,23 @@ IssueQuickFix makeRemoveSelfReferencesQuickFix(EntityNamingConfig config)
     "Remove References to Itself",
     [config = std::move(config)](Map& map, const std::vector<const Issue*>& issues) {
       // copied out of the issues first, which a change destroys
-      auto keysByEntityNode = std::vector<std::pair<EntityNodeBase*, std::string>>{};
+      auto keysByEntityNode =
+        std::unordered_map<EntityNodeBase*, std::vector<std::string>>{};
       for (const auto* issue : issues)
       {
         if (issue->type() == Type && !isNameIssue(*issue, config))
         {
           if (auto* entityNode = dynamic_cast<EntityNodeBase*>(&issue->node()))
           {
-            keysByEntityNode.emplace_back(
-              entityNode, static_cast<const EntityPropertyIssue*>(issue)->propertyKey());
+            keysByEntityNode[entityNode].push_back(
+              static_cast<const EntityPropertyIssue*>(issue)->propertyKey());
           }
         }
       }
 
       auto nodesToSwap = std::vector<std::pair<Node*, NodeContents>>{};
       for (auto* entityNode : sortInTreeOrder(
-             map,
-             kdl::vec_sort_and_remove_duplicates(
-               keysByEntityNode | std::views::keys | kdl::ranges::to<std::vector>())))
+             map, keysByEntityNode | std::views::keys | kdl::ranges::to<std::vector>()))
       {
         auto entity = entityNode->entity();
         const auto* name = entity.property(config.nameKey);
@@ -147,11 +153,10 @@ IssueQuickFix makeRemoveSelfReferencesQuickFix(EntityNamingConfig config)
         }
 
         const auto ownName = *name;
-        for (const auto& [keyEntityNode, key] : keysByEntityNode)
+        for (const auto& key : keysByEntityNode[entityNode])
         {
           if (const auto* value = entity.property(key);
-              keyEntityNode == entityNode && value
-              && kdl::ci::str_is_equal(*value, ownName))
+              value && kdl::ci::str_is_equal(*value, ownName))
           {
             entity.removeProperty(key);
           }

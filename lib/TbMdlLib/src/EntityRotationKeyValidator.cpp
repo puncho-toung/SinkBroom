@@ -78,17 +78,23 @@ IssueQuickFix makeDeletePropertyQuickFix()
   return {"Delete Property", [](Map& map, const std::vector<const Issue*>& issues) {
             // read every issue before anything changes, because a change destroys the
             // issues of the changed entity
+            auto keysByNode = std::unordered_map<const Node*, std::vector<std::string>>{};
+            for (const auto* issue : issues)
+            {
+              if (issue->type() == Type)
+              {
+                keysByNode[&issue->node()].push_back(
+                  static_cast<const EntityPropertyIssue*>(issue)->propertyKey());
+              }
+            }
+
             auto nodesToSwap = std::vector<std::pair<Node*, NodeContents>>{};
             for (auto* entityNode : collectEntityNodesToChange(map, issues))
             {
               auto entity = entityNode->entity();
-              for (const auto* issue : issues)
+              for (const auto& key : keysByNode[entityNode])
               {
-                if (issue->type() == Type && &issue->node() == entityNode)
-                {
-                  entity.removeProperty(
-                    static_cast<const EntityPropertyIssue*>(issue)->propertyKey());
-                }
+                entity.removeProperty(key);
               }
               nodesToSwap.emplace_back(entityNode, NodeContents{std::move(entity)});
             }
