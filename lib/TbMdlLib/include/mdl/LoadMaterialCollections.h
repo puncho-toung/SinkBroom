@@ -116,6 +116,9 @@ std::vector<std::string> shaderNamesWithPrefix(
  * root; a Doom 3 material is found by its full canonical decl name, such as
  * "models/mapobjects/crate". An exact match is looked for first, then one that ignores
  * case. Otherwise, the material is made from the image file at the given path.
+ *
+ * Every call scans the shaders, so a caller that loads many materials from the same
+ * shaders passes them indexed to the overload below.
  */
 Result<gl::Material> loadMaterial(
   const fs::FileSystem& fs,
@@ -123,6 +126,23 @@ Result<gl::Material> loadMaterial(
   const std::filesystem::path& materialPath,
   const gl::CreateTextureResource& createResource,
   const std::vector<Quake3Shader>& shaders,
+  const std::optional<Palette>& palette);
+
+/**
+ * Loads the material at the given path like the overload above, but finds its shader in
+ * the index and takes the diffuse images from it instead of a pass over every shader.
+ * Of shaders whose paths differ only in case, the index finds the first one; the
+ * shaders that loadShaderFiles returns have no such paths, so for them both overloads
+ * make the same material.
+ *
+ * The model loaders call this once per material name, on several threads.
+ */
+Result<gl::Material> loadMaterial(
+  const fs::FileSystem& fs,
+  const MaterialConfig& materialConfig,
+  const std::filesystem::path& materialPath,
+  const gl::CreateTextureResource& createResource,
+  const IndexedShaders& shaders,
   const std::optional<Palette>& palette);
 
 /**

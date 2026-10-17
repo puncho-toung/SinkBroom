@@ -192,12 +192,7 @@ Result<EntityModel> EntityModelManager::loadModel(
                              createResource,
                              shaders = m_shaders](const auto& materialPath) {
     return mdl::loadMaterial(
-             fs,
-             materialConfig,
-             materialPath,
-             createResource,
-             shaders->shaders(),
-             std::nullopt)
+             fs, materialConfig, materialPath, createResource, *shaders, std::nullopt)
            | kdl::or_else(makeReadMaterialErrorHandler(fs, logger)) | kdl::value();
   };
 

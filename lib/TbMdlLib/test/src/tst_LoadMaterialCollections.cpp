@@ -218,13 +218,23 @@ TEST_CASE("LoadMaterialCollections")
       .excludes = {},
     };
 
-    CHECK(
-      loadMaterial(fs, materialConfig, "material.jpg", createResource, {}, std::nullopt));
+    CHECK(loadMaterial(
+      fs,
+      materialConfig,
+      "material.jpg",
+      createResource,
+      std::vector<Quake3Shader>{},
+      std::nullopt));
 
     SECTION("find alternative file extensions")
     {
       CHECK(loadMaterial(
-        fs, materialConfig, "material.png", createResource, {}, std::nullopt));
+        fs,
+        materialConfig,
+        "material.png",
+        createResource,
+        std::vector<Quake3Shader>{},
+        std::nullopt));
     }
 
     SECTION(
@@ -249,7 +259,7 @@ TEST_CASE("LoadMaterialCollections")
                               mipMaterialConfig,
                               "textures/{fence.D",
                               lazyCreateResource,
-                              {},
+                              std::vector<Quake3Shader>{},
                               std::nullopt)
                             | kdl::value();
 
@@ -272,7 +282,7 @@ TEST_CASE("LoadMaterialCollections")
                               materialConfig,
                               "textures/{material.jpg",
                               lazyCreateResource,
-                              {},
+                              std::vector<Quake3Shader>{},
                               std::nullopt)
                             | kdl::value();
 
@@ -335,6 +345,59 @@ TEST_CASE("LoadMaterialCollections")
         CHECK(material.texture()->width() == 8);
         CHECK(material.texture()->height() == 24);
         CHECK_FALSE(material.previewImageMissing());
+      }
+    }
+
+    SECTION("the shaders indexed make the same material as the shaders scanned")
+    {
+      const auto doom3Dir = fixtureRoot / "test/mdl/LoadMaterialCollections/doom3";
+      fs.mount("", std::make_unique<fs::DiskFileSystem>(doom3Dir / "fallback"));
+      fs.mount("", std::make_unique<fs::DiskFileSystem>(doom3Dir));
+
+      const auto shaders =
+        loadShaders(fs, Doom3FixtureMaterialConfig, taskManager, logger) | kdl::value();
+      const auto indexedShaders = IndexedShaders{shaders};
+
+      for (const auto* name : {
+             "models/test/crate",
+             // a decl in another case
+             "Models/Test/Crate",
+             // editor images under _tb/ that count only if some material uses them in a
+             // diffuse stage
+             "textures/test/tb_editor",
+             "textures/test/tb_editor_shared",
+             // no decl of that name
+             "models/test/nothing",
+           })
+      {
+        CAPTURE(name);
+
+        const auto scanned =
+          loadMaterial(
+            fs, Doom3FixtureMaterialConfig, name, createResource, shaders, std::nullopt)
+          | kdl::value();
+        const auto indexed = loadMaterial(
+                               fs,
+                               Doom3FixtureMaterialConfig,
+                               name,
+                               createResource,
+                               indexedShaders,
+                               std::nullopt)
+                             | kdl::value();
+
+        CHECK(indexed.name() == scanned.name());
+        CHECK(indexed.relativePath() == scanned.relativePath());
+        CHECK(indexed.previewImageMissing() == scanned.previewImageMissing());
+        CHECK(indexed.surfaceParms() == scanned.surfaceParms());
+        CHECK(indexed.culling() == scanned.culling());
+        CHECK(indexed.effectiveBlendFunc() == scanned.effectiveBlendFunc());
+        CHECK(indexed.effectiveAlphaFunc() == scanned.effectiveAlphaFunc());
+        REQUIRE((indexed.texture() != nullptr) == (scanned.texture() != nullptr));
+        if (indexed.texture())
+        {
+          CHECK(indexed.texture()->width() == scanned.texture()->width());
+          CHECK(indexed.texture()->height() == scanned.texture()->height());
+        }
       }
     }
 

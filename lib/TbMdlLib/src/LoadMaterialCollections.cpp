@@ -1019,6 +1019,28 @@ Result<gl::Material> loadMaterial(
     context);
 }
 
+Result<gl::Material> loadMaterial(
+  const fs::FileSystem& fs,
+  const MaterialConfig& materialConfig,
+  const std::filesystem::path& materialPath,
+  const gl::CreateTextureResource& createResource,
+  const IndexedShaders& shaders,
+  const std::optional<Palette>& palette)
+{
+  auto context = MaterialLoadContext{
+    .directoryIndex = DirectoryIndex{fs, materialConfig.extensions},
+    .diffuseImages = &shaders.diffuseImages(),
+  };
+  return loadMaterialFromShader(
+    fs,
+    materialConfig,
+    materialPath,
+    createResource,
+    shaders.findShader(kdl::path_remove_extension(materialPath)),
+    palette,
+    context);
+}
+
 Result<std::optional<gl::Material>> findIdTech4Material(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
