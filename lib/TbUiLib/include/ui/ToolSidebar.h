@@ -68,8 +68,8 @@ public:
 
   /**
    * Adds the given action at its place in the order of toolSidebarEntryLess, after the
-   * entries that compare equal to it. The action is in the strip only while it is
-   * expanded. The action must not be an entry already.
+   * entries that compare equal to it. The action is in the strip only while the strip
+   * is expanded. The action must not be an entry already.
    */
   void addEntry(QAction* action);
 

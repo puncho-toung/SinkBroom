@@ -139,7 +139,10 @@ void ToolSidebar::paintEvent(QPaintEvent* /* event */)
 {
   // A lone left toolbar always spans the full height of the window, and both the system
   // style and Fusion would paint that column as a bordered panel. The strip is its
-  // buttons and nothing else, so it paints nothing itself.
+  // buttons and nothing else, so it paints nothing itself. This holds only while the
+  // application's style sheet (base.qss, loaded in Main.cpp) has no background or border
+  // rule for QToolBar: such a rule sets WA_StyledBackground, and Qt then paints the
+  // panel as PE_Widget before paintEvent is called.
 }
 
 void ToolSidebar::applyExpanded(const bool expanded)
