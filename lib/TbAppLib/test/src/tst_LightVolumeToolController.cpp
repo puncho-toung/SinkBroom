@@ -66,6 +66,8 @@
 
 #include <cmath>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_approx.hpp>
@@ -1236,6 +1238,11 @@ TEST_CASE("LightVolumeToolController")
       }
       return findLightVolumeHit(pickResult);
     };
+
+    // a copy, never a reference into the pick result, which a selection change replaces
+    STATIC_CHECK(std::is_same_v<
+                 decltype(findLightVolumeHit(std::declval<const mdl::PickResult&>())),
+                 mdl::Hit>);
 
     // D57: handles first, even behind anything
     CHECK(

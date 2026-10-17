@@ -1500,7 +1500,7 @@ const mdl::Hit& LightVolumeTool::highlightedHit() const
   return m_highlightedHit;
 }
 
-void LightVolumeTool::setHighlightedHit(const mdl::Hit& hit)
+void LightVolumeTool::setHighlightedHit(mdl::Hit hit)
 {
   const auto sameTarget = [&]() {
     if (
@@ -1529,7 +1529,7 @@ void LightVolumeTool::setHighlightedHit(const mdl::Hit& hit)
   // the clicked surface stays clicked while the mouse is elsewhere (D68)
   if (hit.type() != m_highlightedHit.type() || !sameTarget())
   {
-    m_highlightedHit = hit;
+    m_highlightedHit = std::move(hit);
     refreshViews();
   }
 }

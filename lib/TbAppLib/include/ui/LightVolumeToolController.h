@@ -49,9 +49,10 @@ class MoveObjectsTool;
  * else the nearest of the surfaces and the nodes, where a surface of a selected light
  * beats the nodes behind it and a surface of an unselected light is passed over if any
  * node is hit at all, so that the brushes seen through a volume stay clickable; nothing
- * if a node is nearest.
+ * if a node is nearest. Returns a copy, which stays valid after the pick result is
+ * replaced: a selection or document change makes every view pick again.
  */
-const mdl::Hit& findLightVolumeHit(const mdl::PickResult& pickResult);
+mdl::Hit findLightVolumeHit(const mdl::PickResult& pickResult);
 
 /**
  * The light volume tool's controller. It is active whenever the tool's always-on handles
