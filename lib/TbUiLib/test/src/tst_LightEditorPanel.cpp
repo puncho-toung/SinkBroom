@@ -2159,6 +2159,43 @@ TEST_CASE("LightEditorPanel")
     QApplication::processEvents();
     CHECK(radiusX.value() == Catch::Approx(339.79).margin(0.005));
   }
+
+  SECTION("the panel is not refreshed while it is out of sight")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* firstNode =
+      addLight(map, {{"classname", "light"}, {"name", "first"}, {"origin", "0 0 0"}});
+    auto* secondNode =
+      addLight(map, {{"classname", "light"}, {"name", "second"}, {"origin", "64 0 0"}});
+
+    // the panel in a window that never appears on the screen, which owns it
+    auto window = QWidget{};
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(400, 800);
+    auto* panel = new LightEditorPanel{fixture.context(), &window};
+    panel->setGeometry(0, 0, 400, 800);
+
+    // hidden, as in a closed dock
+    selectOnly(map, {firstNode});
+    CHECK_FALSE(showsEditor(*panel));
+
+    window.show();
+    panel->panelShown();
+    QApplication::processEvents();
+    CHECK(currentText(*panel) == "Light: first");
+
+    // outside the window, as in a dock tabbed behind another
+    panel->move(-2000, -2000);
+    selectOnly(map, {secondNode});
+    CHECK(currentText(*panel) == "Light: first");
+
+    panel->move(0, 0);
+    panel->panelShown();
+    QApplication::processEvents();
+    CHECK(currentText(*panel) == "Light: second");
+  }
   SECTION("a write after the selection became something else writes nothing")
   {
     auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};

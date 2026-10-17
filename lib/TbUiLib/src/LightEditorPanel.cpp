@@ -29,7 +29,9 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPoint>
 #include <QRadioButton>
+#include <QRect>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -959,7 +961,8 @@ std::filesystem::path LightEditorPanel::iconPath() const
 
 void LightEditorPanel::panelShown()
 {
-  refresh();
+  // not through refresh(): a panel that comes back into sight is brought up to date
+  m_updateSignalDelayer->queueSignal();
 }
 
 void LightEditorPanel::panelHidden()
@@ -1736,7 +1739,23 @@ void LightEditorPanel::connectObservers()
 
 void LightEditorPanel::refresh()
 {
-  m_updateSignalDelayer->queueSignal();
+  // a panel out of sight is brought up to date when it is shown (panelShown)
+  if (!isOutOfSight())
+  {
+    m_updateSignalDelayer->queueSignal();
+  }
+}
+
+bool LightEditorPanel::isOutOfSight() const
+{
+  if (isWindow())
+  {
+    return false;
+  }
+
+  const auto* topLevel = window();
+  return !isVisible()
+         || !QRect{mapTo(topLevel, QPoint{0, 0}), size()}.intersects(topLevel->rect());
 }
 
 void LightEditorPanel::updateControls()
