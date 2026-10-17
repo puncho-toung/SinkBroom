@@ -53,6 +53,25 @@
 namespace tb::ui
 {
 
+gl::AttrString cellTitleString(const std::string& title)
+{
+  auto result = gl::AttrString{};
+  if (!title.empty())
+  {
+    // every line counts, empty ones included, as TextureFont::measure counts them when
+    // the layout makes room for the title
+    auto lineStart = size_t(0);
+    for (auto lineEnd = title.find('\n'); lineEnd != std::string::npos;
+         lineEnd = title.find('\n', lineStart))
+    {
+      result.appendCentered(title.substr(lineStart, lineEnd - lineStart));
+      lineStart = lineEnd + 1;
+    }
+    result.appendCentered(title.substr(lineStart));
+  }
+  return result;
+}
+
 void CellView::updateScrollBar()
 {
   if (m_scrollBar)
@@ -489,11 +508,20 @@ auto collectStringVertices(
           for (const auto& cell : row.cells())
           {
             const auto& title = cell.title();
+            if (title.empty())
+            {
+              // nothing to draw, and the font cannot place a string without lines
+              continue;
+            }
+
             const auto bounds = cell.titleBounds();
             const auto fontDescriptor =
               fontManager.selectFontSize(defaultFont, title, bounds.width, 6);
             const auto& font = fontManager.font(fontDescriptor);
-            const auto size = font.measure(title);
+            // a title may have several lines; drawn as a plain string, every line after
+            // the first would start at the view's left edge, above the first
+            const auto titleString = cellTitleString(title);
+            const auto size = font.measure(titleString);
 
             const auto x =
               bounds.left() + std::max((bounds.width - size.x()) / 2.0f, 0.0f);
@@ -501,7 +529,7 @@ auto collectStringVertices(
             // y is relative to top, but OpenGL coords are relative to bottom, so invert
             const auto yOffset = vm::vec2f{x, y + height - bounds.bottom()};
 
-            const auto quads = font.quads(title, false, yOffset);
+            const auto quads = font.quads(titleString, false, yOffset);
             const auto vertices = TextVertex::toList(kdl::views::zip(
               quads | kdl::views::stride(2),
               quads | std::views::drop(1) | kdl::views::stride(2),
