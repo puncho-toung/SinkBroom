@@ -111,11 +111,22 @@ private:
   InfoPanel* m_infoPanel = nullptr;
   Console* m_console = nullptr;
   SidebarManager* m_sidebarManager = nullptr;
+
   /**
-   * The inspector panels that Toggle Inspector hid and brings back. The first entry is
-   * the one that was in front and is brought to the front again, or empty if none was.
+   * The panels of a dock group that a toggle hid and brings back. A dock's toggle action
+   * is checked while the dock can be seen, which holds for the dock in front of each tab
+   * group and for a dock on its own, so several can be in front at once; they are raised
+   * again after all are shown. None is in front while the window is not shown.
    */
-  std::vector<QString> m_inspectorPanelsToRestore;
+  struct DockGroupRestoreSet
+  {
+    /** The panels whose toggle action was checked, raised last. */
+    std::vector<QString> front;
+    /** The other panels whose docks were not hidden. */
+    std::vector<QString> behind;
+  };
+
+  DockGroupRestoreSet m_inspectorPanelsToRestore;
 
   QComboBox* m_gridChoice = nullptr;
   QLabel* m_statusBarLabel = nullptr;

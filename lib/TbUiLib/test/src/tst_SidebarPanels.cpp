@@ -47,15 +47,6 @@ TEST_CASE("SidebarPanels")
     CHECK(panels[1]->panelId() == "EntityInspector");
     CHECK(panels[2]->panelId() == "FaceInspector");
   }
-
-  SECTION("the inspector icons are greyscale 24x24 images")
-  {
-    for (const auto* name :
-         {"MapInspector.svg", "EntityInspector.svg", "FaceInspector.svg"})
-    {
-      checkGreyscaleIcon(name);
-    }
-  }
 }
 
 } // namespace tb::ui

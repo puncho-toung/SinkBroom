@@ -665,7 +665,7 @@ TEST_CASE("MapWindow")
 
   SECTION("a saved layout comes back in the next window")
   {
-    // the face inspector is moved to the left edge, and the window is closed
+    // the face inspector is moved to the left edge, and the layout is saved
     const auto docks = findSidebarDocks(window);
     window.addDockWidget(Qt::LeftDockWidgetArea, docks.face);
     REQUIRE(window.dockWidgetArea(docks.face) == Qt::LeftDockWidgetArea);
@@ -688,8 +688,8 @@ TEST_CASE("MapWindow")
     CHECK(nextWindow.dockWidgetArea(nextDocks.map) == Qt::RightDockWidgetArea);
     CHECK(nextWindow.dockWidgetArea(nextDocks.entity) == Qt::RightDockWidgetArea);
 
-    // shown and closed as the app does it; a restored tab group must not break the
-    // window's teardown
+    // shown, saved and hidden as the app does when it closes a window; a restored tab
+    // group must not break the window's teardown
     showWithoutGlViews(nextWindow);
     CHECK(
       nextWindow.tabifiedDockWidgets(nextDocks.map)
@@ -697,6 +697,43 @@ TEST_CASE("MapWindow")
     nextWindow.saveWindowState();
     nextWindow.hide();
     QApplication::processEvents();
+  }
+
+  SECTION("Toggle Inspector shows the hidden old inspector's page in front")
+  {
+    // a layout saved before the inspectors were docks, with the inspector hidden on its
+    // Face page; the next window restores it before it is shown, as the app does
+    writeOldState(OldInspectorKey, false);
+    writeOldState(OldInspectorPageKey, 2);
+
+    auto nextDocument = MapDocument::createDocument(
+                          appController.environmentConfig(),
+                          mdl::QuakeGameInfo,
+                          mdl::MapFormat::Valve,
+                          vm::bbox3d{8192.0},
+                          appController.taskManager(),
+                          appController.glManager().resourceManager())
+                        | kdl::value();
+    auto nextWindow = MapWindow{appController, std::move(nextDocument)};
+    nextWindow.positionOnScreen(nullptr);
+
+    const auto nextDocks = findSidebarDocks(nextWindow);
+    for (auto* dock : nextDocks.inspectors())
+    {
+      REQUIRE(dock->isHidden());
+    }
+
+    showWithoutGlViews(nextWindow);
+    findViewMenuAction(nextWindow, "Toggle Inspector")->trigger();
+    QApplication::processEvents();
+
+    for (auto* dock : nextDocks.inspectors())
+    {
+      CHECK(!dock->isHidden());
+    }
+    CHECK(nextDocks.face->toggleViewAction()->isChecked());
+    CHECK(!nextDocks.map->toggleViewAction()->isChecked());
+    CHECK(!nextDocks.entity->toggleViewAction()->isChecked());
   }
 
   SECTION("in a shown window")
@@ -732,6 +769,45 @@ TEST_CASE("MapWindow")
       CHECK(
         window.tabifiedDockWidgets(docks.map)
         == QList<QDockWidget*>{docks.entity, docks.face});
+    }
+
+    SECTION("Toggle Inspector brings every dock that was in front back in front")
+    {
+      // the face inspector on its own at the left edge: Map in front of the group on the
+      // right and Face can both be seen, Entity is behind Map
+      window.removeDockWidget(docks.face);
+      window.addDockWidget(Qt::LeftDockWidgetArea, docks.face);
+      docks.face->show();
+      QApplication::processEvents();
+      REQUIRE(docks.map->toggleViewAction()->isChecked());
+      REQUIRE(docks.face->toggleViewAction()->isChecked());
+      REQUIRE(!docks.entity->toggleViewAction()->isChecked());
+
+      toggleInspector->trigger();
+      QApplication::processEvents();
+      for (auto* dock : docks.inspectors())
+      {
+        CHECK(dock->isHidden());
+      }
+
+      toggleInspector->trigger();
+      QApplication::processEvents();
+      for (auto* dock : docks.inspectors())
+      {
+        CHECK(!dock->isHidden());
+      }
+      CHECK(docks.map->toggleViewAction()->isChecked());
+      CHECK(docks.face->toggleViewAction()->isChecked());
+      CHECK(!docks.entity->toggleViewAction()->isChecked());
+      CHECK(window.dockWidgetArea(docks.face) == Qt::LeftDockWidgetArea);
+    }
+
+    SECTION("Show Face Inspector brings a dock behind a tab to the front")
+    {
+      findViewMenuAction(window, "Show Face Inspector")->trigger();
+      QApplication::processEvents();
+      CHECK(docks.face->toggleViewAction()->isChecked());
+      CHECK(!docks.map->toggleViewAction()->isChecked());
     }
 
     SECTION("the old inspector's page comes to the front")

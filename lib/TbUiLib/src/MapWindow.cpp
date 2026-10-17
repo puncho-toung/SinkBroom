@@ -182,6 +182,11 @@ QString lastCompilationProfileSettingsKey(const std::string& gameName)
 constexpr auto DockLayoutVersion = 1;
 
 /**
+ * The suffix of the dock layout version's settings key, beside the window's State.
+ */
+constexpr auto DockLayoutVersionKey = "DockLayoutVersion";
+
+/**
  * The inspector panels in the order of their tabs.
  */
 std::vector<QString> inspectorPanelIds()
@@ -237,21 +242,6 @@ bool oldInspectorVisible()
   auto visible = true;
   stream >> visible;
   return stream.status() != QDataStream::Ok || visible;
-}
-
-/**
- * The toggle actions of the given docks, in the order of the tool sidebar's buttons.
- */
-std::vector<QAction*> sortedToggleActions(const std::vector<QDockWidget*>& docks)
-{
-  auto toggleActions =
-    docks
-    | std::views::transform([](const auto* dock) { return dock->toggleViewAction(); })
-    | kdl::ranges::to<std::vector>();
-  std::ranges::stable_sort(toggleActions, [](const auto* lhs, const auto* rhs) {
-    return toolSidebarEntryLess(*lhs, *rhs);
-  });
-  return toggleActions;
 }
 
 } // namespace
@@ -311,7 +301,7 @@ MapWindow::~MapWindow()
 
   // Search for a RenderView (QOpenGLWindow subclass) and make it current in order to
   // allow for calling OpenGL methods in destructors.
-  auto* renderView = findChild<RenderView*>();
+  auto* renderView = m_mapView->findChild<RenderView*>();
   if (renderView)
   {
     renderView->makeCurrent();
@@ -341,8 +331,9 @@ MapWindow::~MapWindow()
   // Destroy the children first because they might still access document resources.
   // The children must be deleted in reverse order! Not the tab bars of the dock tab
   // groups, though: the main window's layout refers to them until it is deleted and shows
-  // them whenever a child that it lays out is removed, so deleting them here would leave
-  // it with dangling tab bars. QWidget's destructor deletes them after the layout.
+  // them whenever a child that it lays out is removed or one of their geometry animations
+  // ends, which deleting a tab bar does to its own, so deleting them here would leave it
+  // with dangling tab bars. QWidget's destructor deletes them after the layout.
   auto children = this->children();
   children.removeIf(
     [](const auto* child) { return qobject_cast<const QTabBar*>(child) != nullptr; });
@@ -364,7 +355,7 @@ void MapWindow::saveWindowState()
   saveWidgetState(m_infoPanel);
 
   // the saved state knows every dock, so the next restore arranges none of them
-  QSettings{}.setValue(widgetSettingsPath(this, "DockLayoutVersion"), DockLayoutVersion);
+  QSettings{}.setValue(widgetSettingsPath(this, DockLayoutVersionKey), DockLayoutVersion);
 }
 
 void MapWindow::positionOnScreen(QWidget* reference)
@@ -449,7 +440,14 @@ void MapWindow::createMenus()
   // updateActionState leaves them alone; each dock keeps its own action checked.
   contract_assert(createMenuResult.sidebarMenu != nullptr);
   // in the order of the tool sidebar's buttons, so that both list the panels alike
-  for (auto* toggleAction : sortedToggleActions(m_sidebarManager->docks()))
+  auto toggleActions =
+    m_sidebarManager->docks()
+    | std::views::transform([](const auto* dock) { return dock->toggleViewAction(); })
+    | kdl::ranges::to<std::vector>();
+  std::ranges::stable_sort(toggleActions, [](const auto* lhs, const auto* rhs) {
+    return toolSidebarEntryLess(*lhs, *rhs);
+  });
+  for (auto* toggleAction : toggleActions)
   {
     createMenuResult.sidebarMenu->addAction(toggleAction);
   }
@@ -613,7 +611,7 @@ void MapWindow::restoreWindowState()
   restoreWidgetState(this);
 
   const auto version =
-    QSettings{}.value(widgetSettingsPath(this, "DockLayoutVersion"), 0).toInt();
+    QSettings{}.value(widgetSettingsPath(this, DockLayoutVersionKey), 0).toInt();
   if (version < 1)
   {
     // A layout saved before the inspectors were docks does not know their docks, so Qt
@@ -621,13 +619,23 @@ void MapWindow::restoreWindowState()
     // inspector: tabbed, on its page, and hidden if it was hidden. The app restores
     // twice (the constructor, then positionOnScreen), so this runs again until the
     // window is closed and its layout saved with the version.
-    arrangeInspectorDocks(oldInspectorPage());
+    const auto oldPage = oldInspectorPage();
+    arrangeInspectorDocks(oldPage);
     if (!oldInspectorVisible())
     {
+      auto otherPages = std::vector<QString>{};
       for (const auto& panelId : inspectorPanelIds())
       {
         sidebarDock(*m_sidebarManager, panelId)->hide();
+        if (panelId != oldPage)
+        {
+          otherPages.push_back(panelId);
+        }
       }
+
+      // a group whose docks are all hidden forgets its current tab when it is laid out,
+      // so Toggle Inspector brings the old page to the front
+      m_inspectorPanelsToRestore = {.front = {oldPage}, .behind = std::move(otherPages)};
     }
   }
 
@@ -2297,25 +2305,19 @@ bool MapWindow::infoPanelVisible() const
 void MapWindow::toggleInspectorPanels()
 {
   const auto panelIds = inspectorPanelIds();
+  auto& restoreSet = m_inspectorPanelsToRestore;
   if (inspectorPanelsVisible())
   {
-    // Remember the open docks to bring back, the one in front first: its toggle action
-    // is checked while it can be seen, so it is none when the window is not shown, or
-    // when another panel's dock is tabbed over the group. An empty first entry says so.
-    m_inspectorPanelsToRestore = {QString{}};
+    // remember the open docks to bring back, and which of them could be seen
+    restoreSet = {};
     for (const auto& panelId : panelIds)
     {
-      auto* dock = sidebarDock(*m_sidebarManager, panelId);
+      const auto* dock = sidebarDock(*m_sidebarManager, panelId);
       if (!dock->isHidden())
       {
-        if (dock->toggleViewAction()->isChecked())
-        {
-          m_inspectorPanelsToRestore.front() = panelId;
-        }
-        else
-        {
-          m_inspectorPanelsToRestore.push_back(panelId);
-        }
+        auto& panelIdsOfKind =
+          dock->toggleViewAction()->isChecked() ? restoreSet.front : restoreSet.behind;
+        panelIdsOfKind.push_back(panelId);
       }
     }
 
@@ -2326,28 +2328,29 @@ void MapWindow::toggleInspectorPanels()
   }
   else
   {
-    const auto frontPanelId = !m_inspectorPanelsToRestore.empty()
-                                ? m_inspectorPanelsToRestore.front()
-                                : QString{};
-    const auto& panelIdsToShow =
-      !m_inspectorPanelsToRestore.empty() ? m_inspectorPanelsToRestore : panelIds;
+    auto panelIdsToShow = restoreSet.front;
+    panelIdsToShow.insert(
+      panelIdsToShow.end(), restoreSet.behind.begin(), restoreSet.behind.end());
+    if (panelIdsToShow.empty())
+    {
+      panelIdsToShow = panelIds;
+    }
+
     for (const auto& panelId : panelIdsToShow)
     {
-      if (!panelId.isEmpty())
-      {
-        sidebarDock(*m_sidebarManager, panelId)->show();
-      }
+      sidebarDock(*m_sidebarManager, panelId)->show();
     }
 
     // a dock shown into its tab group does not come to the front, and raising each in
-    // turn would leave the last one in front, so only the one that was in front is
-    // raised, after the others are shown; otherwise the group keeps its current tab
-    if (!frontPanelId.isEmpty())
+    // turn would leave the last one in front, so only the docks that were in front are
+    // raised, after all are shown; they are in different groups. Without them, each
+    // group keeps its current tab.
+    for (const auto& panelId : restoreSet.front)
     {
-      sidebarDock(*m_sidebarManager, frontPanelId)->raise();
+      sidebarDock(*m_sidebarManager, panelId)->raise();
     }
 
-    m_inspectorPanelsToRestore.clear();
+    restoreSet = {};
   }
 }
 
