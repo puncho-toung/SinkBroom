@@ -815,6 +815,54 @@ TEST_CASE("Map_Groups")
         CHECK(nameOf(linkedGroupNode2->children()[2]) == "info_null_2");
       }
     }
+
+    SECTION(
+      "An entity added to a linked group does not take a name that another instance "
+      "keeps")
+    {
+      auto* linkedGroupNode1 = createLinkedDuplicate(namingMap);
+      REQUIRE(linkedGroupNode1 != nullptr);
+      deselectAll(namingMap);
+      selectNodes(namingMap, {groupNode});
+      auto* linkedGroupNode2 = createLinkedDuplicate(namingMap);
+      REQUIRE(linkedGroupNode2 != nullptr);
+      REQUIRE(nameOf(linkedGroupNode1->children()[0]) == "light_1");
+      REQUIRE(nameOf(linkedGroupNode2->children()[0]) == "light_2");
+
+      auto* newLightNode = new EntityNode{Entity{{
+        {"classname", "light"},
+        {"name", "light_3"},
+      }}};
+      addNodes(namingMap, {{groupNode, {newLightNode}}});
+
+      REQUIRE(linkedGroupNode1->childCount() == 3u);
+      REQUIRE(linkedGroupNode2->childCount() == 3u);
+      CHECK(nameOf(newLightNode) == "light_3");
+
+      // the second instance keeps light_2, so the first instance's new light skips it
+      CHECK(nameOf(linkedGroupNode1->children()[0]) == "light_1");
+      CHECK(nameOf(linkedGroupNode2->children()[0]) == "light_2");
+      CHECK(nameOf(linkedGroupNode1->children()[2]) == "light_4");
+      CHECK(nameOf(linkedGroupNode2->children()[2]) == "light_5");
+
+      SECTION("Undo and redo")
+      {
+        namingMap.undoCommand();
+        CHECK(groupNode->childCount() == 2u);
+        REQUIRE(linkedGroupNode1->childCount() == 2u);
+        REQUIRE(linkedGroupNode2->childCount() == 2u);
+        CHECK(nameOf(linkedGroupNode1->children()[0]) == "light_1");
+        CHECK(nameOf(linkedGroupNode2->children()[0]) == "light_2");
+
+        namingMap.redoCommand();
+        REQUIRE(linkedGroupNode1->childCount() == 3u);
+        REQUIRE(linkedGroupNode2->childCount() == 3u);
+        CHECK(nameOf(linkedGroupNode1->children()[0]) == "light_1");
+        CHECK(nameOf(linkedGroupNode2->children()[0]) == "light_2");
+        CHECK(nameOf(linkedGroupNode1->children()[2]) == "light_4");
+        CHECK(nameOf(linkedGroupNode2->children()[2]) == "light_5");
+      }
+    }
   }
 
   SECTION("separateSelectedLinkedGroups")

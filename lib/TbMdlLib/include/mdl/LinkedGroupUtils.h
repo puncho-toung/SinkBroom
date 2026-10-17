@@ -126,9 +126,12 @@ using UpdateLinkedGroupsResult =
  * overwritten during propagation.
  *
  * If the game of the map that contains the target group nodes requires unique entity
- * names (EntityPropertyConfig::naming), then the name key and the brush entity model key
- * are protected in every entity without being added to its protected properties, so
- * that every instance keeps its own names.
+ * names (EntityPropertyConfig::naming), then the name key in every entity, and the brush
+ * entity model key in every entity with brushes or patches whose class has one (see
+ * isBrushEntityModelClass), are protected without being added to the protected
+ * properties, so that every instance keeps its own names. The model of a point entity is
+ * its asset and is propagated like any other property. A protected property keeps its
+ * position among the properties.
  *
  * If this operation fails for any child and target group, then an error is returned. The
  * operation can fail if any of the following conditions arises:
