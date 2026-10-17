@@ -53,6 +53,7 @@ namespace mdl
 class EntityModelFrame;
 class EntityNode;
 class IndexedShaders;
+class ModelMaterialCache;
 
 enum class Orientation;
 
@@ -71,6 +72,12 @@ private:
   // material scripts and shares with its material collections. Models load on worker
   // threads, which keep the shaders they started with when setShaders replaces them.
   std::shared_ptr<const IndexedShaders> m_shaders;
+
+  // The materials of the models that load from now on, which share one texture resource
+  // per image. A new cache replaces it in setShaders and in clear, so that the models
+  // loaded after either get new textures; a load in flight keeps the cache it started
+  // with.
+  std::shared_ptr<ModelMaterialCache> m_materialCache;
 
   mutable std::unordered_map<std::filesystem::path, EntityModel, kdl::path_hash> m_models;
   mutable std::unordered_map<ModelSpecification, std::unique_ptr<gl::MaterialRenderer>>
@@ -112,6 +119,7 @@ public:
     const std::vector<gl::ResourceId>& resourceIds) const;
 
 private:
+  std::shared_ptr<ModelMaterialCache> makeMaterialCache() const;
   Result<EntityModel> loadModel(const std::filesystem::path& path) const;
 
 public:

@@ -29,6 +29,7 @@
 
 #include <filesystem>
 #include <initializer_list>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -186,6 +187,59 @@ Result<std::optional<gl::Material>> findIdTech4Material(
   const std::filesystem::path& materialName,
   const gl::CreateTextureResource& createResource,
   const IndexedShaders& shaders);
+
+/**
+ * Finds and loads the materials of the entity models that one model manager loads, so
+ * that every image is decoded once and all materials that show it share its texture
+ * resource, whatever model they belong to. Every request still returns a new material,
+ * because every surface owns its skins and a gl::Material can't be copied.
+ *
+ * The cache resolves every name once and keeps what it found, misses too, and it lists
+ * every image directory once. So it serves one set of shaders and one state of the file
+ * system; the model manager replaces it when either changes.
+ *
+ * The model loaders call it on several threads at once. Names are resolved under a
+ * lock, but images are decoded outside of it, each by the first thread that needs it,
+ * while the threads that need the same image wait for that one.
+ */
+class ModelMaterialCache
+{
+private:
+  struct State;
+
+  std::unique_ptr<State> m_state;
+
+public:
+  /**
+   * The file system must outlive the cache and the texture resources that it makes, and
+   * the given shaders must not be null.
+   */
+  ModelMaterialCache(
+    const fs::FileSystem& fs,
+    MaterialConfig materialConfig,
+    std::shared_ptr<const IndexedShaders> shaders,
+    gl::CreateTextureResource createResource);
+  ~ModelMaterialCache();
+
+  /**
+   * Finds the material that an id Tech 4 model names by its canonical decl name, as
+   * findIdTech4Material does with the shaders of this cache.
+   */
+  Result<std::optional<gl::Material>> findIdTech4Material(
+    const std::filesystem::path& materialName);
+
+  /**
+   * Loads the material at the given path, as loadMaterial does with the shaders of this
+   * cache and no palette.
+   */
+  Result<gl::Material> loadMaterial(const std::filesystem::path& materialPath);
+
+  /**
+   * Returns the number of texture resources that this cache has made or is making: one
+   * per image that its materials show.
+   */
+  size_t textureResourceCount() const;
+};
 
 /**
  * Loads the materials under materialConfig.root from the given shaders, which are

@@ -20,6 +20,7 @@
 #include "TestEnvironment.h"
 #include "base/Logger.h"
 #include "fs/DiskFileSystem.h"
+#include "fs/VirtualFileSystem.h"
 #include "gl/CreateResource.h"
 #include "gl/Material.h"
 #include "gl/Texture.h"
@@ -30,11 +31,14 @@
 #include "mdl/GameInfo.h"
 #include "mdl/LoadMaterialCollections.h"
 #include "mdl/ModelSpecification.h"
+#include "mdl/Quake3Shader.h"
 #include "mdl/TestUtils.h"
 
 #include "vm/approx.h"
 #include "vm/bbox_io.h" // IWYU pragma: keep
 
+#include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -355,6 +359,88 @@ TEST_CASE("EntityModelManager")
       CHECK(skin->name() == "models/test/wedge");
       REQUIRE(skin->texture() != nullptr);
       CHECK(skin->texture()->width() == 2u);
+    }
+  }
+
+  SECTION("id Tech 4 model materials")
+  {
+    // wedge.obj and noncanonical.obj name the decl models/mapobjects/test/wedge, and
+    // noncanonical.glb has one material of that name on two meshes; the decl is
+    // previewed with models/mapobjects/test/wedge_ed.tga, 4x2
+    auto modelFileSystem = fs::VirtualFileSystem{};
+    modelFileSystem.mount(
+      "",
+      std::make_unique<fs::DiskFileSystem>(
+        getFixtureRoot() / "test/mdl/LoadIdTech4ObjModel"));
+    modelFileSystem.mount(
+      "",
+      std::make_unique<fs::DiskFileSystem>(
+        getFixtureRoot() / "test/mdl/LoadAssimpModel"));
+
+    const auto makeShaders = []() {
+      return std::make_shared<const IndexedShaders>(std::vector<Quake3Shader>{
+        Quake3Shader{
+          .shaderPath = "models/mapobjects/test/wedge",
+          .editorImage = "models/mapobjects/test/wedge_ed.tga",
+          .format = Quake3Shader::Format::Doom3,
+          .previewImages = {"models/mapobjects/test/wedge_ed.tga"},
+        },
+      });
+    };
+
+    auto doom3Manager = EntityModelManager{
+      Doom3BFGGameInfo,
+      modelFileSystem,
+      [](auto resourceLoader) {
+        return gl::createResourceSync(std::move(resourceLoader));
+      },
+      logger};
+    doom3Manager.setShaders(makeShaders());
+
+    const auto skin = [&](
+                        const std::filesystem::path& modelPath,
+                        const size_t surfaceIndex,
+                        const size_t skinIndex) {
+      const auto* model = doom3Manager.model(modelPath);
+      REQUIRE(model != nullptr);
+      REQUIRE(model->data() != nullptr);
+      REQUIRE(surfaceIndex < model->data()->surfaceCount());
+      const auto& surface = model->data()->surface(surfaceIndex);
+      REQUIRE(skinIndex < surface.skinCount());
+      return surface.skin(skinIndex);
+    };
+
+    const auto wedgeObj = std::filesystem::path{"_tb/models/mapobjects/test/wedge.obj"};
+    const auto noncanonicalObj =
+      std::filesystem::path{"_tb/models/mapobjects/test/noncanonical.obj"};
+    const auto noncanonicalGlb = std::filesystem::path{"idtech4/noncanonical.glb"};
+
+    SECTION("models that name the same decl share its texture")
+    {
+      const auto* wedge = skin(wedgeObj, 0, 0);
+      CHECK(wedge->relativePath() == "models/mapobjects/test/wedge");
+      REQUIRE(wedge->texture() != nullptr);
+      CHECK(wedge->texture()->width() == 4u);
+
+      CHECK(&skin(noncanonicalObj, 0, 0)->textureResource() == &wedge->textureResource());
+      // the material of both meshes is looked up for each, but its texture is shared
+      CHECK(&skin(noncanonicalGlb, 0, 0)->textureResource() == &wedge->textureResource());
+      CHECK(&skin(noncanonicalGlb, 1, 0)->textureResource() == &wedge->textureResource());
+    }
+
+    SECTION("models loaded after clear get new textures")
+    {
+      // the old model and its texture are gone, so compare ids, not addresses
+      const auto textureId = skin(wedgeObj, 0, 0)->textureResource().id();
+      doom3Manager.clear();
+      CHECK(skin(wedgeObj, 0, 0)->textureResource().id() != textureId);
+    }
+
+    SECTION("models loaded after setShaders get new textures")
+    {
+      const auto& texture = skin(wedgeObj, 0, 0)->textureResource();
+      doom3Manager.setShaders(makeShaders());
+      CHECK(&skin(noncanonicalObj, 0, 0)->textureResource() != &texture);
     }
   }
 

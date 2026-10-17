@@ -55,6 +55,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -222,7 +223,8 @@ PreviewImage findQuake3PreviewImage(
 /**
  * Lists the image files of a directory once, on its first lookup, and answers every
  * later lookup in that directory from the listing. One index serves one load of the
- * material collections, so it never sees a stale file system.
+ * material collections, or one ModelMaterialCache, which lives until the shaders or the
+ * models are reloaded, so it doesn't see a stale file system.
  */
 class DirectoryIndex
 {
@@ -363,7 +365,8 @@ struct MaterialLoadContext
   const ImageSet* diffuseImages = nullptr;
   const std::vector<Quake3Shader>* diffuseImageShaders = nullptr;
   std::optional<ImageSet> builtDiffuseImages = std::nullopt;
-  // lowercase image path -> the texture resource of every material that shows it
+  // lowercase image path -> the texture resource of every material that shows it; a
+  // ModelMaterialCache keeps its own, which threads can share
   std::unordered_map<
     std::filesystem::path,
     std::shared_ptr<gl::TextureResource>,
@@ -651,6 +654,50 @@ gl::ResourceLoader<gl::Texture> makeShaderTextureLoader(
       -> Result<gl::Texture> { return loadTexture(path, name, fs, palette); };
 }
 
+PreviewImage findPreviewImage(
+  const Quake3Shader& shader,
+  const fs::FileSystem& fs,
+  const MaterialConfig& materialConfig,
+  MaterialLoadContext& context)
+{
+  return shader.format == Quake3Shader::Format::Doom3
+           ? findDoom3PreviewImage(shader, materialConfig, context)
+           : findQuake3PreviewImage(shader, fs, materialConfig);
+}
+
+std::string shaderMaterialName(
+  const Quake3Shader& shader, const MaterialConfig& materialConfig)
+{
+  const auto prefixLength = kdl::path_length(materialConfig.root);
+  return getMaterialNameFromPathSuffix(shader.shaderPath, prefixLength);
+}
+
+/**
+ * Makes the material of a shader, which shows the given texture resource of its preview
+ * image.
+ */
+gl::Material makeShaderMaterial(
+  const Quake3Shader& shader,
+  const bool previewImageMissing,
+  std::string name,
+  std::shared_ptr<gl::TextureResource> textureResource)
+{
+  auto material = gl::Material{std::move(name), std::move(textureResource)};
+  material.setSurfaceParms(shader.surfaceParms);
+  material.setPreviewImageMissing(previewImageMissing);
+  setCulling(material, shader.culling);
+  if (shader.format == Quake3Shader::Format::Doom3)
+  {
+    setDoom3RenderState(material, shader);
+  }
+  else
+  {
+    setQuake3RenderState(material, shader);
+  }
+
+  return material;
+}
+
 Result<gl::Material> loadShaderMaterial(
   const Quake3Shader& shader,
   const fs::FileSystem& fs,
@@ -660,11 +707,8 @@ Result<gl::Material> loadShaderMaterial(
   MaterialLoadContext& context)
 {
   const auto isDoom3 = shader.format == Quake3Shader::Format::Doom3;
-  auto previewImage = isDoom3 ? findDoom3PreviewImage(shader, materialConfig, context)
-                              : findQuake3PreviewImage(shader, fs, materialConfig);
-
-  const auto prefixLength = kdl::path_length(materialConfig.root);
-  auto shaderName = getMaterialNameFromPathSuffix(shader.shaderPath, prefixLength);
+  auto previewImage = findPreviewImage(shader, fs, materialConfig, context);
+  auto shaderName = shaderMaterialName(shader, materialConfig);
 
   // Materials that show the same image share its texture resource, which is decoded and
   // uploaded once. loadTexture picks the decoder by extension, so .dds images keep their
@@ -676,20 +720,8 @@ Result<gl::Material> loadShaderMaterial(
       previewImage.path, shaderName, fs, isDoom3 ? std::nullopt : palette));
   }
 
-  auto material = gl::Material{std::move(shaderName), textureResource};
-  material.setSurfaceParms(shader.surfaceParms);
-  material.setPreviewImageMissing(previewImage.missing);
-  setCulling(material, shader.culling);
-  if (isDoom3)
-  {
-    setDoom3RenderState(material, shader);
-  }
-  else
-  {
-    setQuake3RenderState(material, shader);
-  }
-
-  return material;
+  return makeShaderMaterial(
+    shader, previewImage.missing, std::move(shaderName), textureResource);
 }
 
 Result<gl::Texture> findAndLoadTexture(
@@ -712,12 +744,35 @@ gl::ResourceLoader<gl::Texture> makeTextureResourceLoader(
   const fs::FileSystem& fs,
   const std::optional<Palette>& palette)
 {
-  return [&, path, name, palette]() -> Result<gl::Texture> {
+  // the file system outlives every material and its texture resource, but the extensions
+  // may belong to a ModelMaterialCache that a lazy resource outlives
+  return [&fs, path, name, extensions, palette]() -> Result<gl::Texture> {
     return findAndLoadTexture(path, name, extensions, fs, palette)
            | kdl::or_else([&](auto e) -> Result<gl::Texture> {
                return Error{fmt::format("Could not load texture '{}': {}", path, e.msg)};
              });
   };
+}
+
+/**
+ * Makes the material of an image file, which shows the given texture resource of it.
+ */
+gl::Material makeTextureMaterial(
+  const std::filesystem::path& texturePath,
+  std::string name,
+  std::shared_ptr<gl::TextureResource> textureResource)
+{
+  // For the classic id-tech miptex formats, the `{`-prefixed fence-texture naming
+  // convention is known from the name alone, so the alpha-test decision can be set here
+  // rather than waiting for the (lazily loaded) texture to become ready.
+  const auto isMasked = isMipTexture(texturePath) && isMaskedTextureName(name);
+
+  auto material = gl::Material{std::move(name), std::move(textureResource)};
+  if (isMasked)
+  {
+    material.setAlphaFunc(gl::MaterialAlphaFunc::Compare::GreaterEqual, 0.5f);
+  }
+  return material;
 }
 
 Result<gl::Material> loadTextureMaterial(
@@ -737,17 +792,7 @@ Result<gl::Material> loadTextureMaterial(
     makeTextureResourceLoader(texturePath, name, materialConfig.extensions, fs, palette);
   auto textureResource = createResource(std::move(textureLoader));
 
-  // For the classic id-tech miptex formats, the `{`-prefixed fence-texture naming
-  // convention is known from the name alone, so the alpha-test decision can be set here
-  // rather than waiting for the (lazily loaded) texture to become ready.
-  const auto isMasked = isMipTexture(texturePath) && isMaskedTextureName(name);
-
-  auto material = gl::Material{std::move(name), std::move(textureResource)};
-  if (isMasked)
-  {
-    material.setAlphaFunc(gl::MaterialAlphaFunc::Compare::GreaterEqual, 0.5f);
-  }
-  return material;
+  return makeTextureMaterial(texturePath, std::move(name), std::move(textureResource));
 }
 
 std::string materialCollectionName(
@@ -814,6 +859,22 @@ std::vector<gl::MaterialCollection> groupMaterialsIntoCollections(
          | kdl::ranges::to<std::vector>();
 }
 
+/**
+ * Sets the paths and the collection of a material that was loaded from the given path.
+ */
+void setMaterialPaths(
+  gl::Material& material,
+  const fs::FileSystem& fs,
+  const MaterialConfig& materialConfig,
+  const std::filesystem::path& materialPath)
+{
+  fs.makeAbsolute(materialPath)
+    | kdl::transform([&](auto absPath) { material.setAbsolutePath(absPath); })
+    | kdl::or_else([](auto) { return kdl::void_success; });
+  material.setRelativePath(materialPath);
+  material.setCollectionName(materialCollectionName(fs, materialConfig, materialPath));
+}
+
 Result<gl::Material> loadMaterialFromShader(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
@@ -828,12 +889,7 @@ Result<gl::Material> loadMaterialFromShader(
                  : loadTextureMaterial(
                      materialPath, fs, materialConfig, createResource, palette))
          | kdl::transform([&](auto material) {
-             fs.makeAbsolute(materialPath)
-               | kdl::transform([&](auto absPath) { material.setAbsolutePath(absPath); })
-               | kdl::or_else([](auto) { return kdl::void_success; });
-             material.setRelativePath(materialPath);
-             material.setCollectionName(
-               materialCollectionName(fs, materialConfig, materialPath));
+             setMaterialPaths(material, fs, materialConfig, materialPath);
              return material;
            });
 }
@@ -1099,6 +1155,241 @@ Result<std::optional<gl::Material>> findIdTech4Material(
     return std::optional<gl::Material>{};
   }
   return load(implicitShader);
+}
+
+namespace
+{
+
+/**
+ * The texture resource of the model materials that show one image. The first thread
+ * that needs it makes it, and the other threads that need it wait for that one.
+ */
+struct SharedTexture
+{
+  std::once_flag made;
+  std::shared_ptr<gl::TextureResource> resource;
+};
+
+// An unordered map keeps the address of a texture while other threads add textures, and
+// a ModelMaterialCache never removes one.
+using SharedTextures =
+  std::unordered_map<std::filesystem::path, SharedTexture, kdl::path_hash>;
+
+/**
+ * What a ModelMaterialCache resolved a material name to. It never changes once the
+ * cache has it.
+ */
+struct ResolvedModelMaterial
+{
+  // what the material is made from: one of the cache's shaders, implicitShader, or none
+  // for the image file at the material's path
+  const Quake3Shader* shader = nullptr;
+  // the shader of the material that the engine makes of a name that no decl defines
+  std::unique_ptr<const Quake3Shader> implicitShader = nullptr;
+  PreviewImage previewImage = {};
+  SharedTexture* texture = nullptr;
+};
+
+} // namespace
+
+struct ModelMaterialCache::State
+{
+  const fs::FileSystem& fs;
+  const MaterialConfig materialConfig;
+  // never changes, so it is read without the lock
+  const std::shared_ptr<const IndexedShaders> shaders;
+  const gl::CreateTextureResource createResource;
+
+  // guards the members below, but not the resources of the textures, which are made
+  // outside of it so that a thread that decodes an image doesn't block the others
+  std::mutex mutex;
+  MaterialLoadContext context;
+  // material name -> what findIdTech4Material resolved it to, or nothing
+  std::unordered_map<
+    std::filesystem::path,
+    std::optional<ResolvedModelMaterial>,
+    kdl::path_hash>
+    idTech4Materials;
+  // material path -> what loadMaterial resolved it to
+  std::unordered_map<std::filesystem::path, ResolvedModelMaterial, kdl::path_hash>
+    materials;
+  // lowercase preview image path -> the texture of every shader material that shows it
+  SharedTextures shaderTextures;
+  // lowercase material path -> the texture of every material made from that image file
+  SharedTextures imageTextures;
+
+  State(
+    const fs::FileSystem& fs_,
+    MaterialConfig materialConfig_,
+    std::shared_ptr<const IndexedShaders> shaders_,
+    gl::CreateTextureResource createResource_)
+    : fs{fs_}
+    , materialConfig{std::move(materialConfig_)}
+    , shaders{std::move(shaders_)}
+    , createResource{std::move(createResource_)}
+    , context{
+        .directoryIndex = DirectoryIndex{fs, materialConfig.extensions},
+        .diffuseImages = &shaders->diffuseImages(),
+      }
+  {
+  }
+
+  // Called with the lock held.
+  ResolvedModelMaterial resolveShaderMaterial(
+    const Quake3Shader& shader, PreviewImage previewImage)
+  {
+    auto& texture =
+      shaderTextures.try_emplace(kdl::path_to_lower(previewImage.path)).first->second;
+    return {
+      .shader = &shader, .previewImage = std::move(previewImage), .texture = &texture};
+  }
+
+  // Called with the lock held; resolves the name as findIdTech4Material does.
+  std::optional<ResolvedModelMaterial> resolveIdTech4Material(
+    const std::filesystem::path& materialName)
+  {
+    if (const auto* shader = shaders->findShader(materialName))
+    {
+      return resolveShaderMaterial(
+        *shader, findPreviewImage(*shader, fs, materialConfig, context));
+    }
+
+    auto implicitShader =
+      std::make_unique<const Quake3Shader>(makeImplicitDoom3Shader(materialName));
+    auto previewImage = findDoom3PreviewImage(*implicitShader, materialConfig, context);
+    if (previewImage.missing)
+    {
+      return std::nullopt;
+    }
+
+    auto resolved = resolveShaderMaterial(*implicitShader, std::move(previewImage));
+    resolved.implicitShader = std::move(implicitShader);
+    return resolved;
+  }
+
+  // Called with the lock held; resolves the path as loadMaterial does.
+  ResolvedModelMaterial resolveMaterial(const std::filesystem::path& materialPath)
+  {
+    if (
+      const auto* shader = shaders->findShader(kdl::path_remove_extension(materialPath)))
+    {
+      return resolveShaderMaterial(
+        *shader, findPreviewImage(*shader, fs, materialConfig, context));
+    }
+
+    auto& texture =
+      imageTextures.try_emplace(kdl::path_to_lower(materialPath)).first->second;
+    return {.texture = &texture};
+  }
+
+  // Called without the lock: the resource is made, and its image decoded, exactly once.
+  template <typename MakeLoader>
+  std::shared_ptr<gl::TextureResource> textureResource(
+    SharedTexture& texture, const MakeLoader& makeLoader)
+  {
+    std::call_once(
+      texture.made, [&]() { texture.resource = createResource(makeLoader()); });
+    return texture.resource;
+  }
+
+  // Called without the lock.
+  gl::Material makeMaterial(
+    const ResolvedModelMaterial& resolved, const std::filesystem::path& materialPath)
+  {
+    auto material = [&]() {
+      if (const auto* shader = resolved.shader)
+      {
+        auto name = shaderMaterialName(*shader, materialConfig);
+        // Doom 3 images need no palette, and the models' materials have none
+        auto sharedResource = textureResource(*resolved.texture, [&]() {
+          return makeShaderTextureLoader(
+            resolved.previewImage.path, name, fs, std::nullopt);
+        });
+        return makeShaderMaterial(
+          *shader,
+          resolved.previewImage.missing,
+          std::move(name),
+          std::move(sharedResource));
+      }
+
+      const auto prefixLength = kdl::path_length(materialConfig.root);
+      auto name = getMaterialNameFromPathSuffix(materialPath, prefixLength);
+      auto sharedResource = textureResource(*resolved.texture, [&]() {
+        return makeTextureResourceLoader(
+          materialPath, name, materialConfig.extensions, fs, std::nullopt);
+      });
+      return makeTextureMaterial(
+        materialPath, std::move(name), std::move(sharedResource));
+    }();
+
+    setMaterialPaths(material, fs, materialConfig, materialPath);
+    return material;
+  }
+};
+
+ModelMaterialCache::ModelMaterialCache(
+  const fs::FileSystem& fs,
+  MaterialConfig materialConfig,
+  std::shared_ptr<const IndexedShaders> shaders,
+  gl::CreateTextureResource createResource)
+{
+  contract_pre(shaders != nullptr);
+
+  m_state = std::make_unique<State>(
+    fs, std::move(materialConfig), std::move(shaders), std::move(createResource));
+}
+
+ModelMaterialCache::~ModelMaterialCache() = default;
+
+Result<std::optional<gl::Material>> ModelMaterialCache::findIdTech4Material(
+  const std::filesystem::path& materialName)
+{
+  auto& state = *m_state;
+
+  // A resolved name never changes, so it is read without the lock.
+  const auto* resolved = [&]() -> const ResolvedModelMaterial* {
+    const auto lock = std::lock_guard{state.mutex};
+    auto iResolved = state.idTech4Materials.find(materialName);
+    if (iResolved == state.idTech4Materials.end())
+    {
+      iResolved = state.idTech4Materials
+                    .emplace(materialName, state.resolveIdTech4Material(materialName))
+                    .first;
+    }
+    return iResolved->second ? &*iResolved->second : nullptr;
+  }();
+
+  if (!resolved)
+  {
+    return std::optional<gl::Material>{};
+  }
+  return std::optional{state.makeMaterial(*resolved, materialName)};
+}
+
+Result<gl::Material> ModelMaterialCache::loadMaterial(
+  const std::filesystem::path& materialPath)
+{
+  auto& state = *m_state;
+
+  // A resolved path never changes, so it is read without the lock.
+  const auto& resolved = [&]() -> const ResolvedModelMaterial& {
+    const auto lock = std::lock_guard{state.mutex};
+    auto iResolved = state.materials.find(materialPath);
+    if (iResolved == state.materials.end())
+    {
+      iResolved =
+        state.materials.emplace(materialPath, state.resolveMaterial(materialPath)).first;
+    }
+    return iResolved->second;
+  }();
+
+  return state.makeMaterial(resolved, materialPath);
+}
+
+size_t ModelMaterialCache::textureResourceCount() const
+{
+  const auto lock = std::lock_guard{m_state->mutex};
+  return m_state->shaderTextures.size() + m_state->imageTextures.size();
 }
 
 Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(

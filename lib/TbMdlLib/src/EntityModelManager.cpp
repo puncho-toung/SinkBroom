@@ -45,6 +45,7 @@ EntityModelManager::EntityModelManager(
   , m_createResource{std::move(createResource)}
   , m_logger{logger}
   , m_shaders{std::make_shared<const IndexedShaders>()}
+  , m_materialCache{makeMaterialCache()}
 {
 }
 
@@ -61,6 +62,9 @@ void EntityModelManager::clear()
 
   m_unpreparedRenderers.clear();
 
+  // the models loaded from now on must not share the textures of the dropped ones
+  m_materialCache = makeMaterialCache();
+
   // Remove logging because it might fail when the document is already destroyed.
 }
 
@@ -69,6 +73,7 @@ void EntityModelManager::setShaders(std::shared_ptr<const IndexedShaders> shader
   contract_pre(shaders != nullptr);
 
   m_shaders = std::move(shaders);
+  m_materialCache = makeMaterialCache();
 }
 
 std::shared_ptr<const IndexedShaders> EntityModelManager::shaders() const
@@ -170,6 +175,19 @@ const std::vector<const EntityModel*> EntityModelManager::
          | views::transform(toPointer) | kdl::ranges::to<std::vector>();
 }
 
+std::shared_ptr<ModelMaterialCache> EntityModelManager::makeMaterialCache() const
+{
+  // The models load on worker threads, which decode the images of their materials at
+  // once; the cache makes every image's texture resource once.
+  return std::make_shared<ModelMaterialCache>(
+    m_gameFileSystem,
+    m_gameInfo.gameConfig.materialConfig,
+    m_shaders,
+    [](auto resourceLoader) {
+      return gl::createResourceSync(std::move(resourceLoader));
+    });
+}
+
 Result<EntityModel> EntityModelManager::loadModel(
   const std::filesystem::path& modelPath) const
 {
@@ -177,28 +195,18 @@ Result<EntityModel> EntityModelManager::loadModel(
   // functions own what they read. The file system and the logger outlive the loads.
   const auto& fs = m_gameFileSystem;
   auto& logger = m_logger;
-  const auto createResource = [](auto resourceLoader) {
-    return gl::createResourceSync(std::move(resourceLoader));
-  };
 
-  const auto loadMaterial = [&fs,
-                             &logger,
-                             materialConfig = m_gameInfo.gameConfig.materialConfig,
-                             createResource,
-                             shaders = m_shaders](const auto& materialPath) {
-    return mdl::loadMaterial(
-             fs, materialConfig, materialPath, createResource, *shaders, std::nullopt)
-           | kdl::or_else(makeReadMaterialErrorHandler(fs, logger)) | kdl::value();
-  };
+  const auto loadMaterial =
+    [&fs, &logger, materialCache = m_materialCache](const auto& materialPath) {
+      return materialCache->loadMaterial(materialPath)
+             | kdl::or_else(makeReadMaterialErrorHandler(fs, logger)) | kdl::value();
+    };
 
   // Resolves the material decl names of id Tech 4 models; a name that resolves to
   // nothing is left to the loader, which keeps it on a default material
-  const auto findMaterial = [&fs,
-                             &logger,
-                             materialConfig = m_gameInfo.gameConfig.materialConfig,
-                             createResource,
-                             shaders = m_shaders](const auto& materialName) {
-    return findIdTech4Material(fs, materialConfig, materialName, createResource, *shaders)
+  const auto findMaterial = [&logger,
+                             materialCache = m_materialCache](const auto& materialName) {
+    return materialCache->findIdTech4Material(materialName)
            | kdl::transform_error([&](const auto& e) {
                logger.error() << "Could not load material '"
                               << materialName.generic_string() << "': " << e.msg;
