@@ -604,6 +604,20 @@ bool parseImplicitMaterialsFromImages(
   return MaterialConfig{}.implicitMaterialsFromImages;
 }
 
+std::vector<UtilityMaterialConfig> parseUtilityMaterials(
+  const el::EvaluationContext& context, const el::Value& value)
+{
+  // an absent key is an empty list: the game declares no utility materials
+  return value.atOrDefault(context, "utilityMaterials").arrayValue(context)
+         | std::views::transform([&](const auto& entry) {
+             return UtilityMaterialConfig{
+               entry.at(context, "pattern").stringValue(context),
+               entry.atOrDefault(context, "description").stringValue(context),
+             };
+           })
+         | kdl::ranges::to<std::vector>();
+}
+
 MaterialConfig parseMaterialConfig(
   const el::EvaluationContext& context, const el::Value& value)
 {
@@ -622,6 +636,7 @@ MaterialConfig parseMaterialConfig(
       | std::views::transform([](const auto& str) { return std::filesystem::path{str}; })
       | kdl::ranges::to<std::vector>(),
     parseImplicitMaterialsFromImages(context, value),
+    parseUtilityMaterials(context, value),
   };
 }
 

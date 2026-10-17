@@ -1599,6 +1599,65 @@ TEST_CASE("GameConfigParser")
       auto noImplicitMaterials = config;
       noImplicitMaterials.implicitMaterialsFromImages = false;
       CHECK(noImplicitMaterials != config);
+
+      auto utilityMaterials = config;
+      utilityMaterials.utilityMaterials = {
+        {.pattern = "common/caulk", .description = ""}};
+      CHECK(utilityMaterials != config);
+      CHECK(
+        kdl::str_to_string(utilityMaterials).find("common/caulk") != std::string::npos);
+
+      auto otherDescription = utilityMaterials;
+      otherDescription.utilityMaterials.front().description = "Seals the map.";
+      CHECK(otherDescription != utilityMaterials);
+    }
+
+    SECTION("the utility materials default to none")
+    {
+      const auto config = makeConfig(R"%(
+    {
+        "root": "textures",
+        "extensions": [ ".tga" ]
+    })%");
+
+      CHECK(
+        (parseGameConfig(config) | kdl::value()).materialConfig.utilityMaterials.empty());
+      CHECK(MaterialConfig{}.utilityMaterials.empty());
+    }
+
+    SECTION("the utility materials are read in order")
+    {
+      const auto config = makeConfig(R"%(
+    {
+        "root": "textures",
+        "extensions": [ ".tga" ],
+        "utilityMaterials": [
+            { "pattern": "common/caulk", "description": "Seals the map." },
+            { "pattern": "editor/visportal" },
+            { "pattern": "common/*", "description": "Any common texture." }
+        ]
+    })%");
+
+      CHECK(
+        (parseGameConfig(config) | kdl::value()).materialConfig.utilityMaterials
+        == std::vector<UtilityMaterialConfig>{
+          {.pattern = "common/caulk", .description = "Seals the map."},
+          // the description is optional
+          {.pattern = "editor/visportal", .description = ""},
+          {.pattern = "common/*", .description = "Any common texture."},
+        });
+    }
+
+    SECTION("a utility material without a pattern is an error")
+    {
+      const auto config = makeConfig(R"%(
+    {
+        "root": "textures",
+        "extensions": [ ".tga" ],
+        "utilityMaterials": [ { "description": "Seals the map." } ]
+    })%");
+
+      CHECK(parseGameConfig(config).is_error());
     }
   }
 }

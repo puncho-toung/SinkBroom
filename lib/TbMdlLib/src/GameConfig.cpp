@@ -38,6 +38,8 @@ kdl_reflect_impl(PackageFormatConfig);
 
 kdl_reflect_impl(FileSystemConfig);
 
+kdl_reflect_impl(UtilityMaterialConfig);
+
 kdl_reflect_impl(MaterialConfig);
 
 kdl_reflect_impl(EntityConfig);

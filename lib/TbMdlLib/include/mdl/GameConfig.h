@@ -26,6 +26,7 @@
 #include "mdl/ModelConvention.h"
 #include "mdl/SurfaceAttributes.h"
 #include "mdl/Tag.h"
+#include "mdl/UtilityMaterialConfig.h"
 #include "mdl/UvAttributes.h"
 
 #include "kd/reflection_decl.h"
@@ -83,6 +84,11 @@ struct MaterialConfig
   // whose engine doesn't treat loose images as materials, like Doom 3, list only the
   // materials their scripts declare
   bool implicitMaterialsFromImages = true;
+  // The game's utility materials, such as caulk, clip, triggers and portals, which the
+  // Face inspector shows on a tab of their own with their descriptions; a material
+  // belongs to the first entry whose pattern matches its name. Empty unless the game
+  // declares some.
+  std::vector<UtilityMaterialConfig> utilityMaterials;
 
   kdl_reflect_decl(
     MaterialConfig,
@@ -94,7 +100,8 @@ struct MaterialConfig
     excludes,
     shaderExtensions,
     shaderImageSearchPaths,
-    implicitMaterialsFromImages);
+    implicitMaterialsFromImages,
+    utilityMaterials);
 };
 
 struct EntityConfig

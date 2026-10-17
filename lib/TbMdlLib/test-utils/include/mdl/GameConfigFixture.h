@@ -175,6 +175,13 @@ inline const GameInfo Doom3BFGGameInfo = detail::makeGameInfoFixture(
         .shaderImageSearchPaths = {"_tb"},
         // only the .mtr materials are listed, not the loose images beside them
         .implicitMaterialsFromImages = false,
+        // a short stand-in for the shipped config's list, so that the tests have
+        // utility materials: one material and a catch-all without a description
+        .utilityMaterials =
+          {
+            {.pattern = "common/caulk", .description = "Seals the map."},
+            {.pattern = "common/*", .description = ""},
+          },
       },
     .entityConfig =
       {
