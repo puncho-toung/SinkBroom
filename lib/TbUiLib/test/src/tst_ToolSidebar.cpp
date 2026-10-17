@@ -19,10 +19,13 @@
 
 #include <QAction>
 #include <QImage>
+#include <QLocale>
+#include <QMainWindow>
 #include <QPainter>
 #include <QSettings>
 #include <QSize>
 #include <QSvgRenderer>
+#include <QWidget>
 #include <QWidgetAction>
 
 #include "ui/CatchConfig.h"
@@ -251,6 +254,22 @@ TEST_CASE("ToolSidebar")
     CHECK(sidebar.actions() == QList<QAction*>{&apple, spacer, expander});
   }
 
+  SECTION("stays at the left edge when a window state from before it is restored")
+  {
+    // a window layout saved before the strip existed knows the top toolbar only (F7)
+    auto window = QMainWindow{};
+    window.setCentralWidget(new QWidget{});
+    window.addToolBar("Toolbar")->setObjectName("MapWindowToolBar");
+    const auto oldState = window.saveState();
+
+    auto* sidebar = new ToolSidebar{};
+    window.addToolBar(Qt::LeftToolBarArea, sidebar);
+    REQUIRE(window.restoreState(oldState));
+
+    CHECK(window.toolBarArea(sidebar) == Qt::LeftToolBarArea);
+    CHECK(!sidebar->isHidden());
+  }
+
   SECTION("the icons are greyscale 24x24 images")
   {
     for (const auto* name :
@@ -291,6 +310,14 @@ TEST_CASE("toolSidebarEntryLess")
 
   SECTION("is locale aware")
   {
+    // An ICU collator follows the default locale, which is pinned here because a C or
+    // POSIX locale would compare code points. A Windows build without ICU, like the one
+    // this is developed with, compares in the user's locale whatever the default is.
+    const auto previousLocale = QLocale{};
+    QLocale::setDefault(QLocale{QLocale::English, QLocale::UnitedStates});
+    const auto restoreLocale =
+      kdl::invoke_later{[&] { QLocale::setDefault(previousLocale); }};
+
     // comparing code points puts every capital letter before every small one
     REQUIRE(QString{"Banana"} < QString{"apple"});
 
