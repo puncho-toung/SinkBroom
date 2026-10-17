@@ -50,6 +50,7 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -513,6 +514,28 @@ TEST_CASE("LoadMaterialCollections")
       auto source = IndexedShaders{{makeShader("models/test/a", "models/test/a_d")}};
       const auto moved = std::move(source);
       CHECK(moved.findShader("models/test/a") == &moved.shaders()[0]);
+    }
+
+    SECTION("fileCount and unterminatedCount")
+    {
+      // what loadShaderFiles counted is kept for the summary of a load
+      const auto loaded = IndexedShaders{LoadedShaders{
+        .shaders = {makeShader("models/test/a", "models/test/a_d")},
+        .fileCount = 3,
+        .unterminatedCount = 1,
+      }};
+      CHECK(loaded.fileCount() == 3);
+      CHECK(loaded.unterminatedCount() == 1);
+      CHECK(loaded.findShader("models/test/a") == &loaded.shaders()[0]);
+      CHECK(
+        loaded.diffuseImages()
+        == std::unordered_set<std::filesystem::path, kdl::path_hash>{"models/test/a_d"});
+
+      // the other constructors count no files
+      CHECK(shaders.fileCount() == 0);
+      CHECK(shaders.unterminatedCount() == 0);
+      CHECK(IndexedShaders{}.fileCount() == 0);
+      CHECK(IndexedShaders{}.unterminatedCount() == 0);
     }
   }
 
@@ -1401,6 +1424,50 @@ TEST_CASE("LoadMaterialCollections")
     {
       CHECK(
         logger.countMessagesContaining(
+          "Loaded 30 materials from 3 files (2 defaulted, 1 unterminated); 28 under "
+          "textures/, 5 without a preview image")
+        == 1);
+    }
+
+    SECTION("from shaders parsed beforehand")
+    {
+      // the overload that the map calls with the shaders that it shares with the entity
+      // models makes the same collections and logs the same summary
+      auto indexedLogger = CollectingLogger{};
+      const auto shaders = IndexedShaders{
+        loadShaderFiles(fs, Doom3FixtureMaterialConfig, taskManager, indexedLogger)
+        | kdl::value()};
+      const auto indexedResult = loadMaterialCollections(
+        fs, Doom3FixtureMaterialConfig, shaders, createResource, indexedLogger);
+
+      CHECK_THAT(
+        indexedResult,
+        MatchesMaterialCollections(
+          materialCollections | std::views::transform(makeMaterialCollectionInfo)
+          | kdl::ranges::to<std::vector>()));
+
+      const auto pathsAndPreviewFlags =
+        [](const std::vector<gl::MaterialCollection>& collections) {
+          auto result = std::vector<std::tuple<std::string, std::string, bool>>{};
+          for (const auto& collection : collections)
+          {
+            for (const auto& material : collection.materials())
+            {
+              result.emplace_back(
+                material.name(),
+                material.relativePath().generic_string(),
+                material.previewImageMissing());
+            }
+          }
+          return result;
+        };
+      REQUIRE(indexedResult.is_success());
+      CHECK(
+        pathsAndPreviewFlags(indexedResult.value())
+        == pathsAndPreviewFlags(materialCollections));
+
+      CHECK(
+        indexedLogger.countMessagesContaining(
           "Loaded 30 materials from 3 files (2 defaulted, 1 unterminated); 28 under "
           "textures/, 5 without a preview image")
         == 1);

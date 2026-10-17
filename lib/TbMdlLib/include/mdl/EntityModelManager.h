@@ -32,11 +32,6 @@
 #include <unordered_set>
 #include <vector>
 
-namespace kdl
-{
-class task_manager;
-}
-
 namespace tb
 {
 class Logger;
@@ -72,9 +67,9 @@ private:
   CreateEntityModelDataResource m_createResource;
   Logger& m_logger;
 
-  // The shaders that models are shaded with, indexed once per reloadShaders. Models load
-  // on worker threads, which keep the shaders they started with when reloadShaders
-  // replaces them.
+  // The shaders that models are shaded with, which the map parses once per load of the
+  // material scripts and shares with its material collections. Models load on worker
+  // threads, which keep the shaders they started with when setShaders replaces them.
   std::shared_ptr<const IndexedShaders> m_shaders;
 
   mutable std::unordered_map<std::filesystem::path, EntityModel, kdl::path_hash> m_models;
@@ -93,12 +88,18 @@ public:
   ~EntityModelManager();
 
   void clear();
-  void reloadShaders(kdl::task_manager& taskManager);
 
   /**
-   * The shaders that the last reloadShaders loaded, empty before the first. Every
-   * reloadShaders replaces the pointer, so a caller copies what it needs at once and
-   * keeps neither the pointer nor a reference into the shaders.
+   * Replaces the shaders that the models loaded from now on are shaded with. The given
+   * pointer must not be null. The models already loaded keep their materials until
+   * clear is called.
+   */
+  void setShaders(std::shared_ptr<const IndexedShaders> shaders);
+
+  /**
+   * The shaders that the last setShaders set, empty before the first. Every setShaders
+   * replaces the pointer, so a caller copies what it needs at once and keeps neither the
+   * pointer nor a reference into the shaders.
    */
   std::shared_ptr<const IndexedShaders> shaders() const;
 

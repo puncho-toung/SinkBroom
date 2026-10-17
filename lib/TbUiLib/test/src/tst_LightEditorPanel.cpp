@@ -33,6 +33,7 @@
 
 #include "SidebarTestUtils.h"
 #include "base/PreferenceManager.h"
+#include "fs/DiskFileSystem.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
@@ -48,6 +49,7 @@
 #include "mdl/Map_Groups.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
+#include "mdl/TestUtils.h"
 #include "mdl/WorldNode.h"
 #include "prefs/Preferences.h"
 #include "ui/CatchConfig.h"
@@ -64,7 +66,6 @@
 
 #include "kd/invoke.h"
 #include "kd/result.h"
-#include "kd/task_manager.h"
 
 #include "vm/bbox.h"
 #include "vm/vec.h"
@@ -1639,8 +1640,9 @@ TEST_CASE("LightEditorPanel")
     selectOnly(map, {texturedNode});
     CHECK(texture.count() == 2);
 
-    auto taskManager = kdl::task_manager{};
-    map.entityModelManager().reloadShaders(taskManager);
+    map.entityModelManager().setShaders(mdl::loadIndexedShaders(
+      fs::DiskFileSystem{map.gamePath() / "base"},
+      map.gameInfo().gameConfig.materialConfig));
     fixture.document().modsDidChangeNotifier();
     QApplication::processEvents();
     CHECK(items() == expectedItems);

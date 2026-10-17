@@ -21,6 +21,7 @@
 
 #include "base/Result.h"
 #include "gl/TextureResource.h"
+#include "mdl/LoadShaders.h"
 #include "mdl/Palette.h"
 #include "mdl/Quake3Shader.h"
 
@@ -75,10 +76,19 @@ private:
   std::unordered_map<std::filesystem::path, const Quake3Shader*, kdl::path_hash> m_index;
   // lowercase image paths without extension, as the engine's image manager names them
   std::unordered_set<std::filesystem::path, kdl::path_hash> m_diffuseImages;
+  // what the summary of a load of the material collections reports about the files
+  size_t m_fileCount = 0;
+  size_t m_unterminatedCount = 0;
 
 public:
   IndexedShaders();
   explicit IndexedShaders(std::vector<Quake3Shader> shaders);
+
+  /**
+   * Keeps the shaders that loadShaderFiles found, and what it counted in their files, so
+   * that one parse serves the material collections and the entity models.
+   */
+  explicit IndexedShaders(LoadedShaders loadedShaders);
 
   // the index points into the shaders, which a copy would not own
   IndexedShaders(const IndexedShaders&) = delete;
@@ -99,6 +109,18 @@ public:
    * lowercase and without extension.
    */
   const std::unordered_set<std::filesystem::path, kdl::path_hash>& diffuseImages() const;
+
+  /**
+   * Returns the number of material script files that the shaders were read from, or 0
+   * unless they were made from what loadShaderFiles returned.
+   */
+  size_t fileCount() const;
+
+  /**
+   * Returns the number of Doom 3 material decls that lack their closing brace, or 0
+   * unless the shaders were made from what loadShaderFiles returned.
+   */
+  size_t unterminatedCount() const;
 };
 
 /**
@@ -166,16 +188,32 @@ Result<std::optional<gl::Material>> findIdTech4Material(
   const IndexedShaders& shaders);
 
 /**
- * Loads the materials under materialConfig.root, grouped into collections by directory.
+ * Loads the materials under materialConfig.root from the given shaders, which are
+ * usually what loadShaderFiles read from the material scripts, grouped into collections
+ * by directory. The shaders are not parsed again, so the caller can share one parse with
+ * the entity models.
  *
- * The material scripts are read with loadShaderFiles. Every shader under the root becomes
- * a material. If materialConfig.implicitMaterialsFromImages is set, so does every image
- * file under the root that no shader of the same name (ignoring case) replaces and that
+ * Every shader under the root becomes a material. If
+ * materialConfig.implicitMaterialsFromImages is set, so does every image file under the
+ * root that no shader of the same name (ignoring case) replaces and that
  * materialConfig.excludes doesn't hide; otherwise, image files are only used as the
  * shaders' previews and materialConfig.excludes has no effect. Shader previews are
  * resolved here, on the calling thread, so that previewImageMissing is known at once; the
  * images are decoded by the texture resources that createResource makes, and materials
- * that show the same image share one resource. One summary line is logged per load.
+ * that show the same image share one resource. One summary line is logged per load; it
+ * counts the files that the shaders carry.
+ */
+Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
+  const fs::FileSystem& fs,
+  const MaterialConfig& materialConfig,
+  const IndexedShaders& shaders,
+  const gl::CreateTextureResource& createResource,
+  Logger& logger);
+
+/**
+ * Reads the material scripts with loadShaderFiles and loads the materials from them as
+ * the overload above does. A caller that needs the shaders for anything else parses them
+ * once and calls the overload above.
  */
 Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
   const fs::FileSystem& fs,

@@ -27,9 +27,7 @@
 #include "mdl/GameInfo.h"
 #include "mdl/LoadEntityModel.h"
 #include "mdl/LoadMaterialCollections.h"
-#include "mdl/LoadShaders.h"
 #include "mdl/MaterialUtils.h"
-#include "mdl/Quake3Shader.h"
 
 #include "kd/contracts.h"
 #include "kd/ranges/to.h"
@@ -66,14 +64,11 @@ void EntityModelManager::clear()
   // Remove logging because it might fail when the document is already destroyed.
 }
 
-void EntityModelManager::reloadShaders(kdl::task_manager& taskManager)
+void EntityModelManager::setShaders(std::shared_ptr<const IndexedShaders> shaders)
 {
-  m_shaders = std::make_shared<const IndexedShaders>(
-    loadShaders(
-      m_gameFileSystem, m_gameInfo.gameConfig.materialConfig, taskManager, m_logger)
-    | kdl::if_error(
-      [&](const auto& e) { m_logger.error() << "Failed to reload shaders: " << e.msg; })
-    | kdl::value_or(std::vector<Quake3Shader>{}));
+  contract_pre(shaders != nullptr);
+
+  m_shaders = std::move(shaders);
 }
 
 std::shared_ptr<const IndexedShaders> EntityModelManager::shaders() const

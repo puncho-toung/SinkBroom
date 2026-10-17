@@ -18,27 +18,40 @@
  */
 
 #include "Observer.h"
+#include "base/Logger.h"
 #include "fs/TestEnvironment.h"
 #include "gl/MaterialCollection.h"
 #include "gl/MaterialManager.h"
+#include "gl/ResourceManager.h"
 #include "mdl/BrushFace.h" // IWYU pragma: keep
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
+#include "mdl/EntityModelManager.h"
+#include "mdl/EnvironmentConfig.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/LayerNode.h"
+#include "mdl/LoadMaterialCollections.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
+#include "mdl/MapFormat.h"
 #include "mdl/Map_Assets.h"
 #include "mdl/Map_Entities.h"
 #include "mdl/TestUtils.h"
 #include "mdl/WorldNode.h"
 
 #include "kd/path_utils.h"
+#include "kd/result.h"
+#include "kd/task_manager.h"
+
+#include "vm/bbox.h"
 
 #include <algorithm>
+#include <mutex>
 #include <optional>
 #include <ranges>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -47,6 +60,35 @@
 namespace tb::mdl
 {
 using namespace Catch::Matchers;
+
+namespace
+{
+
+// Keeps every message; shader files are parsed and log on task threads.
+class CollectingLogger : public Logger
+{
+private:
+  mutable std::mutex m_mutex;
+  std::vector<std::string> m_messages;
+
+public:
+  size_t countMessagesContaining(const std::string_view text) const
+  {
+    const auto lock = std::lock_guard{m_mutex};
+    return size_t(std::ranges::count_if(m_messages, [&](const auto& message) {
+      return message.find(text) != std::string::npos;
+    }));
+  }
+
+private:
+  void doLog(const LogLevel, const std::string_view message) override
+  {
+    const auto lock = std::lock_guard{m_mutex};
+    m_messages.emplace_back(message);
+  }
+};
+
+} // namespace
 
 TEST_CASE("Map_Assets")
 {
@@ -445,6 +487,49 @@ TEST_CASE("Map_Assets")
 
     REQUIRE(map.materialManager().collections().size() == 1);
     CHECK(map.materialManager().collections().front().materials().size() == 2);
+  }
+
+  SECTION("the material scripts are parsed once per load of the material collections")
+  {
+    // the material parser warns about the second definition of a name once per parse
+    auto env = fs::TestEnvironment{};
+    env.createDirectory("base/materials");
+    env.createFile(
+      "base/materials/twice.mtr", "textures/twice\n{\n}\ntextures/twice\n{\n}\n");
+
+    const auto environmentConfig = EnvironmentConfig{};
+    const auto gameInfo =
+      detail::makeGameInfoFixture(Doom3BFGGameInfo.gameConfig, env.dir());
+    auto taskManager = kdl::task_manager{};
+    auto resourceManager = gl::ResourceManager{};
+    auto logger = CollectingLogger{};
+    const auto parseCount = [&]() {
+      return logger.countMessagesContaining(
+        "Material 'textures/twice' was already defined");
+    };
+
+    auto map = Map::createMap(
+                 environmentConfig,
+                 gameInfo,
+                 env.dir(),
+                 MapFormat::Doom3_Valve,
+                 vm::bbox3d{8192.0},
+                 taskManager,
+                 resourceManager,
+                 logger)
+               | kdl::value();
+
+    // the entity models and the material collections share one parse
+    CHECK(parseCount() == 1);
+    const auto shaders = map->entityModelManager().shaders();
+    CHECK(shaders->findShader("textures/twice") != nullptr);
+    CHECK(map->materialManager().material("twice") != nullptr);
+
+    // a reload parses them again and replaces the shaders of the entity models
+    reloadMaterialCollections(*map);
+    CHECK(parseCount() == 2);
+    CHECK(map->entityModelManager().shaders() != shaders);
+    CHECK(map->materialManager().material("twice") != nullptr);
   }
 
   SECTION("reloadEntityDefinitions")

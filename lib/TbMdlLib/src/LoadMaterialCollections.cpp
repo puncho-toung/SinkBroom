@@ -115,7 +115,7 @@ Result<std::vector<std::filesystem::path>> findTexturePaths(
 Result<std::vector<std::filesystem::path>> findAllMaterialPaths(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
-  const std::vector<Quake3Shader>& shaders)
+  const std::vector<const Quake3Shader*>& shaders)
 {
   return findTexturePaths(fs, materialConfig)
          | kdl::transform([&](const auto& texturePaths) {
@@ -131,9 +131,10 @@ Result<std::vector<std::filesystem::path>> findAllMaterialPaths(
                pathStemToPath[kdl::path_to_lower(
                  kdl::path_remove_extension(texturePath))] = texturePath;
              }
-             for (const auto& shader : shaders)
+             for (const auto* shader : shaders)
              {
-               pathStemToPath[kdl::path_to_lower(shader.shaderPath)] = shader.shaderPath;
+               pathStemToPath[kdl::path_to_lower(shader->shaderPath)] =
+                 shader->shaderPath;
              }
              return kdl::vec_sort(
                pathStemToPath | std::views::values | kdl::ranges::to<std::vector>());
@@ -958,6 +959,15 @@ IndexedShaders::IndexedShaders(std::vector<Quake3Shader> shaders)
 {
 }
 
+IndexedShaders::IndexedShaders(LoadedShaders loadedShaders)
+  : m_shaders{std::move(loadedShaders.shaders)}
+  , m_index{makeShaderIndex(m_shaders)}
+  , m_diffuseImages{findDiffuseImages(m_shaders)}
+  , m_fileCount{loadedShaders.fileCount}
+  , m_unterminatedCount{loadedShaders.unterminatedCount}
+{
+}
+
 const std::vector<Quake3Shader>& IndexedShaders::shaders() const
 {
   return m_shaders;
@@ -973,6 +983,16 @@ const std::unordered_set<std::filesystem::path, kdl::path_hash>& IndexedShaders:
   diffuseImages() const
 {
   return m_diffuseImages;
+}
+
+size_t IndexedShaders::fileCount() const
+{
+  return m_fileCount;
+}
+
+size_t IndexedShaders::unterminatedCount() const
+{
+  return m_unterminatedCount;
 }
 
 std::vector<std::string> shaderNamesWithPrefix(
@@ -1084,64 +1104,90 @@ Result<std::optional<gl::Material>> findIdTech4Material(
 Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
   const fs::FileSystem& fs,
   const MaterialConfig& materialConfig,
+  const IndexedShaders& shaders,
+  const gl::CreateTextureResource& createResource,
+  Logger& logger)
+{
+  return loadPalette(fs, materialConfig) | kdl::and_then([&](auto palette) {
+           auto summary = ShaderSummary{
+             .fileCount = shaders.fileCount(),
+             .shaderCount = shaders.shaders().size(),
+             .defaultedCount = size_t(std::ranges::count_if(
+               shaders.shaders(),
+               [](const auto& shader) { return shader.engineDefaulted; })),
+             .unterminatedCount = shaders.unterminatedCount(),
+           };
+
+           // Shaders outside of the root can't be used on brush faces, but entity models
+           // can use them. They are selected by pointer, not copied.
+           const auto shadersUnderRoot =
+             shaders.shaders() | std::views::filter([&](const auto& shader) {
+               return kdl::path_has_prefix(shader.shaderPath, materialConfig.root);
+             })
+             | std::views::transform([](const auto& shader) { return &shader; })
+             | kdl::ranges::to<std::vector>();
+           summary.shadersUnderRootCount = shadersUnderRoot.size();
+
+           // For a path under the root, the index of every shader finds the shader that
+           // an index of only the shaders under the root would find: loadShaderFiles
+           // keeps one shader per path ignoring case, and one that spells the root in
+           // another case is not under the root.
+           const auto findShaderUnderRoot =
+             [&](const std::filesystem::path& materialPath) -> const Quake3Shader* {
+             const auto* shader =
+               shaders.findShader(kdl::path_remove_extension(materialPath));
+             return shader
+                        && kdl::path_has_prefix(shader->shaderPath, materialConfig.root)
+                      ? shader
+                      : nullptr;
+           };
+
+           return findAllMaterialPaths(fs, materialConfig, shadersUnderRoot)
+                  | kdl::and_then([&](const auto& materialPaths) {
+                      auto context = MaterialLoadContext{
+                        .directoryIndex = DirectoryIndex{fs, materialConfig.extensions},
+                        // from every shader, including those outside of the root
+                        .diffuseImages = &shaders.diffuseImages(),
+                      };
+
+                      return materialPaths
+                             | std::views::transform([&](const auto& materialPath) {
+                                 return loadMaterialFromShader(
+                                   fs,
+                                   materialConfig,
+                                   materialPath,
+                                   createResource,
+                                   findShaderUnderRoot(materialPath),
+                                   palette,
+                                   context);
+                               })
+                             | kdl::fold;
+                    })
+                  | kdl::transform([&](auto materials) {
+                      logLoadSummary(summary, materials, materialConfig, logger);
+                      return materials;
+                    });
+         })
+         | kdl::transform([&](auto materials) {
+             return groupMaterialsIntoCollections(std::move(materials));
+           });
+}
+
+Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
+  const fs::FileSystem& fs,
+  const MaterialConfig& materialConfig,
   const gl::CreateTextureResource& createResource,
   kdl::task_manager& taskManager,
   Logger& logger)
 {
   return loadShaderFiles(fs, materialConfig, taskManager, logger)
-         | kdl::join(loadPalette(fs, materialConfig))
-         | kdl::and_then([&](auto loadedShaders, auto palette) {
-             auto summary = ShaderSummary{
-               .fileCount = loadedShaders.fileCount,
-               .shaderCount = loadedShaders.shaders.size(),
-               .defaultedCount = size_t(std::ranges::count_if(
-                 loadedShaders.shaders,
-                 [](const auto& shader) { return shader.engineDefaulted; })),
-               .unterminatedCount = loadedShaders.unterminatedCount,
-             };
-
-             // from every shader, before those outside of the root are dropped
-             const auto diffuseImages = findDiffuseImages(loadedShaders.shaders);
-
-             // Shaders outside of the root can't be used on brush faces, but they stay
-             // available to entity models, which load their own.
-             const auto shaders =
-               loadedShaders.shaders | std::views::filter([&](const auto& shader) {
-                 return kdl::path_has_prefix(shader.shaderPath, materialConfig.root);
-               })
-               | kdl::views::as_rvalue | kdl::ranges::to<std::vector>();
-             summary.shadersUnderRootCount = shaders.size();
-
-             return findAllMaterialPaths(fs, materialConfig, shaders)
-                    | kdl::and_then([&](const auto& materialPaths) {
-                        const auto shaderIndex = makeShaderIndex(shaders);
-                        auto context = MaterialLoadContext{
-                          .directoryIndex = DirectoryIndex{fs, materialConfig.extensions},
-                          .diffuseImages = &diffuseImages,
-                        };
-
-                        return materialPaths
-                               | std::views::transform([&](const auto& materialPath) {
-                                   return loadMaterialFromShader(
-                                     fs,
-                                     materialConfig,
-                                     materialPath,
-                                     createResource,
-                                     findShader(
-                                       shaderIndex,
-                                       kdl::path_remove_extension(materialPath)),
-                                     palette,
-                                     context);
-                                 })
-                               | kdl::fold;
-                      })
-                    | kdl::transform([&](auto materials) {
-                        logLoadSummary(summary, materials, materialConfig, logger);
-                        return materials;
-                      });
-           })
-         | kdl::transform([&](auto materials) {
-             return groupMaterialsIntoCollections(std::move(materials));
+         | kdl::and_then([&](auto loadedShaders) {
+             return loadMaterialCollections(
+               fs,
+               materialConfig,
+               IndexedShaders{std::move(loadedShaders)},
+               createResource,
+               logger);
            });
 }
 

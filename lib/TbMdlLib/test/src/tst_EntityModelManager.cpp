@@ -30,8 +30,7 @@
 #include "mdl/GameInfo.h"
 #include "mdl/LoadMaterialCollections.h"
 #include "mdl/ModelSpecification.h"
-
-#include "kd/task_manager.h"
+#include "mdl/TestUtils.h"
 
 #include "vm/approx.h"
 #include "vm/bbox_io.h" // IWYU pragma: keep
@@ -189,14 +188,13 @@ TEST_CASE("EntityModelManager")
 
   SECTION("shaders")
   {
-    // empty before the first reload
+    // empty before the first setShaders
     const auto initialShaders = manager.shaders();
     REQUIRE(initialShaders != nullptr);
     CHECK(initialShaders->shaders().empty());
 
     auto doom3FileSystem =
       fs::DiskFileSystem{getFixtureRoot() / "test/mdl/Game/Doom3BFG/base"};
-    auto taskManager = kdl::task_manager{};
     auto doom3Manager = EntityModelManager{
       Doom3BFGGameInfo,
       doom3FileSystem,
@@ -204,7 +202,11 @@ TEST_CASE("EntityModelManager")
         return gl::createResourceSync(std::move(resourceLoader));
       },
       logger};
-    doom3Manager.reloadShaders(taskManager);
+    const auto parseShaders = [&]() {
+      return loadIndexedShaders(
+        doom3FileSystem, Doom3BFGGameInfo.gameConfig.materialConfig);
+    };
+    doom3Manager.setShaders(parseShaders());
 
     const auto loadedShaders = doom3Manager.shaders();
     REQUIRE(loadedShaders != nullptr);
@@ -214,10 +216,11 @@ TEST_CASE("EntityModelManager")
       shaderNamesWithPrefix(*loadedShaders, {"lights/", "fogs/"})
       == std::vector<std::string>{"fogs/tb_test_fog", "lights/tb_test_point"});
 
-    // a reload replaces the shaders, and a caller's pointer keeps the old ones alive
-    doom3Manager.reloadShaders(taskManager);
+    // setShaders replaces the shaders, and a caller's pointer keeps the old ones alive
+    const auto newShaders = parseShaders();
+    doom3Manager.setShaders(newShaders);
+    CHECK(doom3Manager.shaders() == newShaders);
     CHECK(doom3Manager.shaders() != loadedShaders);
-    CHECK(doom3Manager.shaders()->findShader("textures/tb_test/wall") != nullptr);
     CHECK(loadedShaders->findShader("textures/tb_test/wall") != nullptr);
   }
 
@@ -225,7 +228,6 @@ TEST_CASE("EntityModelManager")
   {
     auto doom3FileSystem =
       fs::DiskFileSystem{getFixtureRoot() / "test/mdl/Game/Doom3BFG/base"};
-    auto taskManager = kdl::task_manager{};
 
     const auto makeManager = [&](const GameInfo& doom3GameInfo) {
       auto doom3Manager = std::make_unique<EntityModelManager>(
@@ -235,7 +237,8 @@ TEST_CASE("EntityModelManager")
           return gl::createResourceSync(std::move(resourceLoader));
         },
         logger);
-      doom3Manager->reloadShaders(taskManager);
+      doom3Manager->setShaders(
+        loadIndexedShaders(doom3FileSystem, doom3GameInfo.gameConfig.materialConfig));
       return doom3Manager;
     };
 
@@ -299,7 +302,6 @@ TEST_CASE("EntityModelManager")
     // the implicit material
     auto assimpFileSystem =
       fs::DiskFileSystem{getFixtureRoot() / "test/mdl/LoadAssimpModel"};
-    auto taskManager = kdl::task_manager{};
 
     const auto makeManager = [&](const GameInfo& gameInfo) {
       auto glbManager = std::make_unique<EntityModelManager>(
@@ -309,7 +311,8 @@ TEST_CASE("EntityModelManager")
           return gl::createResourceSync(std::move(resourceLoader));
         },
         logger);
-      glbManager->reloadShaders(taskManager);
+      glbManager->setShaders(
+        loadIndexedShaders(assimpFileSystem, gameInfo.gameConfig.materialConfig));
       return glbManager;
     };
 
