@@ -36,6 +36,11 @@ std::filesystem::path SidebarPanel::iconPath() const
   return {};
 }
 
+bool SidebarPanel::shownByDefault() const
+{
+  return false;
+}
+
 void SidebarPanel::panelShown() {}
 
 void SidebarPanel::panelHidden() {}

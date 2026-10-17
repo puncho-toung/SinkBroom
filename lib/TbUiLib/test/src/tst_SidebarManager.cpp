@@ -77,6 +77,37 @@ TEST_CASE("SidebarManager")
       == loadSVGIcon("NoTool.svg").cacheKey());
   }
 
+  SECTION("registerPanel hides the dock of a panel that is not shown by default")
+  {
+    const auto shown = registerStubPanel(*manager, "Shown", {}, true);
+    const auto hidden = registerStubPanel(*manager, "Hidden", {}, false);
+
+    CHECK(!shown.dock->isHidden());
+    CHECK(window.dockWidgetArea(shown.dock) == Qt::RightDockWidgetArea);
+    CHECK(hidden.dock->isHidden());
+
+    // registering reports no panel as shown; the window shows the dock later
+    CHECK(shown.panel->shownCount == 0);
+    window.show();
+    QApplication::processEvents();
+    CHECK(shown.dock->isVisible());
+    CHECK(shown.panel->shownCount == 1);
+    CHECK(hidden.dock->isHidden());
+    CHECK(hidden.panel->shownCount == 0);
+  }
+
+  SECTION("panel")
+  {
+    const auto second = registerStubPanel(*manager, "Second");
+    CHECK(manager->panel("Stub") == panel);
+    CHECK(manager->panel("Second") == second.panel);
+    CHECK(manager->panel("Unknown") == nullptr);
+
+    // a panel that Qt destroys with its dock is forgotten
+    delete second.dock;
+    CHECK(manager->panel("Second") == nullptr);
+  }
+
   SECTION("toggleAction")
   {
     window.show();

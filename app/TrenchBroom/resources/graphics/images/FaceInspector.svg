@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="24" height="24" viewBox="0 0 24 24">
+  <!-- a map brush: a block seen from above and in front, its front face shaded -->
+  <path style="fill:#7f7f7f;fill-opacity:0.4;stroke:#3f3f3f;stroke-width:1;stroke-linejoin:miter" d="M 3.5,8.5 8.5,3.5 H 20.5 L 15.5,8.5 Z" />
+  <path style="fill:#7f7f7f;fill-opacity:0.4;stroke:#3f3f3f;stroke-width:1;stroke-linejoin:miter" d="M 15.5,8.5 20.5,3.5 V 15.5 L 15.5,20.5 Z" />
+  <rect style="fill:#3f3f3f;fill-opacity:1;stroke:#3f3f3f;stroke-width:1" x="3.5" y="8.5" width="12" height="12" />
+</svg>

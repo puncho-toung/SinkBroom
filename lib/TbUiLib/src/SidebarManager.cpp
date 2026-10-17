@@ -83,13 +83,18 @@ QDockWidget* SidebarManager::registerPanel(std::unique_ptr<SidebarPanel> panel)
   });
 
   auto* panelPtr = panel.get();
+  const auto shownByDefault = panel->shownByDefault();
   dock->setWidget(panel.release());
 
   m_mainWindow.addDockWidget(Qt::RightDockWidgetArea, dock);
-  dock->hide();
+  if (!shownByDefault)
+  {
+    dock->hide();
+  }
 
-  // connected after hiding so that registering never reports a panel as shown; the panel
-  // is the context, so the connection goes away with it
+  // connected after hiding so that registering never reports a panel as shown; a panel
+  // shown by default is reported once its window shows the dock; the panel is the
+  // context, so the connection goes away with it
   connect(
     dock, &QDockWidget::visibilityChanged, panelPtr, [panelPtr](const bool visible) {
       if (visible)
@@ -100,6 +105,13 @@ QDockWidget* SidebarManager::registerPanel(std::unique_ptr<SidebarPanel> panel)
 
   m_entries.push_back({panelId, dock, panelPtr});
   return dock;
+}
+
+SidebarPanel* SidebarManager::panel(const QString& panelId) const
+{
+  const auto it = std::ranges::find_if(
+    m_entries, [&](const auto& entry) { return entry.panelId == panelId; });
+  return it != m_entries.end() ? it->panel.data() : nullptr;
 }
 
 QAction* SidebarManager::toggleAction(const QString& panelId) const

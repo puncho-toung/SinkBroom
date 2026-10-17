@@ -74,6 +74,13 @@ public:
   virtual std::filesystem::path iconPath() const;
 
   /**
+   * Whether the panel's dock starts visible; false (hidden until shown) unless
+   * overridden. A window state restored later decides for every dock it knows, so this
+   * only shapes a fresh layout and the docks that a saved layout does not know yet.
+   */
+  virtual bool shownByDefault() const;
+
+  /**
    * Called when the panel's dock becomes visible: opened, raised from behind a tab, or
    * shown again after the window was minimised. A refresh hint only.
    */

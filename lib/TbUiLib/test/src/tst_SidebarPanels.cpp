@@ -40,6 +40,15 @@ TEST_CASE("SidebarPanels")
     CHECK(std::ranges::any_of(
       panels, [](const auto& panel) { return panel->panelId() == "LightEditor"; }));
   }
+
+  SECTION("the inspector icons are greyscale 24x24 images")
+  {
+    for (const auto* name :
+         {"MapInspector.svg", "EntityInspector.svg", "FaceInspector.svg"})
+    {
+      checkGreyscaleIcon(name);
+    }
+  }
 }
 
 } // namespace tb::ui

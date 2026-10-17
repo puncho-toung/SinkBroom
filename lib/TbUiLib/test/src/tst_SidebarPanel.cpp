@@ -40,6 +40,13 @@ TEST_CASE("SidebarPanel")
     const auto panel = StubPanel{"Stub", "NoTool.svg"};
     CHECK(panel.SidebarPanel::iconPath().empty());
   }
+
+  SECTION("shownByDefault")
+  {
+    // the default, not the stub's override
+    const auto panel = StubPanel{"Stub", {}, true};
+    CHECK(!panel.SidebarPanel::shownByDefault());
+  }
 }
 
 TEST_CASE("SidebarDock")
