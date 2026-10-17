@@ -772,7 +772,9 @@ std::optional<double> intersectRayEllipsoid(
   const auto b = 2.0 * vm::dot(origin, direction);
   const auto c = vm::dot(origin, origin) - 1.0;
   const auto discriminant = b * b - 4.0 * a * c;
-  if (a < DegenerateEpsilon || discriminant < 0.0)
+
+  // a is about 1 / radius^2 for a unit ray: only a ray without a direction has none
+  if (a <= 0.0 || discriminant < 0.0)
   {
     return std::nullopt;
   }

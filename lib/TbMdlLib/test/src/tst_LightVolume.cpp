@@ -1183,6 +1183,33 @@ TEST_CASE("LightVolume")
       intersectRayEllipsoid(
         atOrigin, vm::vec3d{300, 300, 0}, 1.0, vm::ray3d{{1000, 0, 0}, {-1, 0, 0}})
       == std::nullopt);
+
+    // big lights, whose unit sphere's space shrinks a ray's direction to about 1 / r:
+    // along an axis and along a diagonal
+    const auto big = vm::vec3d{1024, 1024, 1024};
+    CHECK(
+      distanceOf(
+        intersectRayEllipsoid(atOrigin, big, 1.0, vm::ray3d{{5000, 0, 0}, {-1, 0, 0}}))
+      == Catch::Approx(5000.0 - 1024.0).margin(Exact));
+    CHECK(
+      distanceOf(intersectRayEllipsoid(
+        atOrigin,
+        big,
+        1.0,
+        vm::ray3d{{3000, 3000, 3000}, vm::normalize(vm::vec3d{-1, -1, -1})}))
+      == Catch::Approx(3000.0 * std::sqrt(3.0) - 1024.0).margin(Exact));
+
+    // a wide, flat light along a horizontal ray
+    CHECK(
+      distanceOf(intersectRayEllipsoid(
+        atOrigin, vm::vec3d{2048, 2048, 512}, 1.0, vm::ray3d{{5000, 0, 0}, {-1, 0, 0}}))
+      == Catch::Approx(5000.0 - 2048.0).margin(Exact));
+
+    // in the turned frame, world -X is local +y
+    CHECK(
+      distanceOf(intersectRayEllipsoid(
+        turned, vm::vec3d{2048, 1024, 512}, 1.0, vm::ray3d{{5000, 0, 0}, {-1, 0, 0}}))
+      == Catch::Approx(5000.0 - 64.0 - 1024.0).margin(Exact));
   }
 
   SECTION("intersectRaySpotCap")

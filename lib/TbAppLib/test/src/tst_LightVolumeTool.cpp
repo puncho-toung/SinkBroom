@@ -1583,6 +1583,16 @@ TEST_CASE("LightVolumeTool")
       CHECK_FALSE(pickSurface(tool, vm::ray3d{{0, 0, 0}, {1, 0, 0}}).isMatch());
     }
 
+    SECTION("a big point light's outer shell")
+    {
+      createLight(map, "0 0 0", {{"light_radius", "1024 1024 1024"}});
+
+      const auto hit = pickSurface(tool, vm::ray3d{{5000, 0, 0}, {-1, 0, 0}});
+      REQUIRE(hit.isMatch());
+      CHECK(hit.target<LightSurfaceHit>().element == mdl::LightElement::OuterShell);
+      CHECK(hit.distance() == Catch::Approx(5000.0 - 1024.0).margin(1e-6));
+    }
+
     SECTION("a selection change reads no light again, an edit the edited one (I7.10)")
     {
       setPref(
