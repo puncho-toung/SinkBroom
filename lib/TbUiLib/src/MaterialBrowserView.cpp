@@ -83,11 +83,11 @@ std::vector<const gl::Material*> filterMaterials(
   }
   if (!filterText.empty())
   {
+    const auto patterns = kdl::str_split(filterText, " ");
     std::erase_if(materials, [&](const auto* material) {
-      return std::ranges::none_of(
-        kdl::str_split(filterText, " "), [&](const auto& pattern) {
-          return kdl::ci::str_contains(material->name(), pattern);
-        });
+      return std::ranges::none_of(patterns, [&](const auto& pattern) {
+        return kdl::ci::str_contains(material->name(), pattern);
+      });
     });
   }
   return materials;
