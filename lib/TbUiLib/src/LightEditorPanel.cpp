@@ -75,6 +75,7 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -1295,8 +1296,10 @@ void LightEditorPanel::connectEditor()
     }
   };
 
-  // a slider writes when it is released and whenever the keyboard or the wheel moves
-  // it, but not while it is dragged
+  // a slider writes whenever the keyboard, a click on its groove or the wheel moves it,
+  // but not while it is dragged; on release it writes only if the drag moved it, because
+  // its position is the first light's value rounded to its steps, so a click on the
+  // handle alone would write that rounded value to every selected light
   const auto connectSlider =
     [&](
       QSlider* slider, MultiSpinControl* spin, const std::string& commandName, auto set) {
@@ -1306,6 +1309,8 @@ void LightEditorPanel::connectEditor()
         const auto value = sliderValue(*spin, position);
         editLights(commandName, [&](mdl::LightProperties& light) { set(light, value); });
       };
+      // the position at which the handle was pressed
+      const auto pressedPosition = std::make_shared<int>(slider->value());
       connect(slider, &QSlider::valueChanged, this, [=](const int position) {
         if (slider->isSliderDown())
         {
@@ -1317,7 +1322,21 @@ void LightEditorPanel::connectEditor()
           write(position);
         }
       });
-      connect(slider, &QSlider::sliderReleased, this, [=]() { write(slider->value()); });
+      connect(slider, &QSlider::sliderPressed, this, [=]() {
+        *pressedPosition = slider->value();
+      });
+      connect(slider, &QSlider::sliderReleased, this, [=, this]() {
+        if (slider->value() != *pressedPosition)
+        {
+          write(slider->value());
+        }
+        else
+        {
+          // the drag set the spin box without writing; it shows the lights again,
+          // "multi" too
+          refresh();
+        }
+      });
     };
 
   const auto connectCheckBox =

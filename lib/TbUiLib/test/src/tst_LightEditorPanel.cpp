@@ -1407,6 +1407,80 @@ TEST_CASE("LightEditorPanel")
     CHECK(valueOf(*draggedNode2, "math_inner_radius") == "0");
   }
 
+  SECTION("a slider writes on release only if the drag moved it")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    const auto mathLight = [&](const std::string& origin, const std::string& falloffExp) {
+      return addLight(
+        map,
+        {
+          {"classname", "light"},
+          {"origin", origin},
+          {"math_enabled", "1"},
+          {"math_type", "point"},
+          {"math_falloff", "exponential"},
+          {"math_falloff_exp", falloffExp},
+        });
+    };
+    auto* lightNode1 = mathLight("0 0 0", "2");
+    auto* lightNode2 = mathLight("64 0 0", "3");
+
+    auto panel = LightEditorPanel{fixture.context()};
+    auto& slider = findControl<QSlider>(panel, "FalloffExpSlider");
+    auto& falloffExp = findControl<SpinControl>(panel, "FalloffExp");
+
+    // setSliderDown emits sliderPressed and sliderReleased as a click on the handle does;
+    // the slider shows 2 as 1.9921, the nearest of its steps
+    selectOnly(map, {lightNode1});
+    REQUIRE(slider.isEnabled());
+    const auto modificationCount = map.modificationCount();
+    slider.setSliderDown(true);
+    slider.setSliderDown(false);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode1, "math_falloff_exp") == "2");
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(falloffExp.value() == 2.0);
+
+    // nor does a click write the first light's value to lights that differ
+    selectOnly(map, {lightNode1, lightNode2});
+    REQUIRE(showsMulti(falloffExp));
+    slider.setSliderDown(true);
+    slider.setSliderDown(false);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode1, "math_falloff_exp") == "2");
+    CHECK(valueOf(*lightNode2, "math_falloff_exp") == "3");
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(showsMulti(falloffExp));
+
+    // a drag that ends where it started writes nothing and shows the lights again
+    const auto startPosition = slider.value();
+    slider.setSliderDown(true);
+    slider.setSliderPosition(700);
+    CHECK_FALSE(showsMulti(falloffExp));
+    slider.setSliderPosition(startPosition);
+    slider.setSliderDown(false);
+    QApplication::processEvents();
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(showsMulti(falloffExp));
+
+    // a drag writes once, on release, to every selected light
+    slider.setSliderDown(true);
+    slider.setSliderPosition(300);
+    slider.setSliderPosition(500);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode1, "math_falloff_exp") == "2");
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(falloffExp.value() == 8.05);
+
+    slider.setSliderDown(false);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode1, "math_falloff_exp") == "8.05");
+    CHECK(valueOf(*lightNode2, "math_falloff_exp") == "8.05");
+    CHECK(map.modificationCount() == modificationCount + 1);
+  }
+
   SECTION("lights of different types hide the volume")
   {
     auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
