@@ -958,6 +958,29 @@ TEST_CASE("LightVolumeTool")
         CHECK(valueOf(*lightNode, "origin") == "0 0 0");
         checkRadius(*lightNode, {300.0 + 64.0 / t, 300, 300});
       }
+
+      SECTION("a drag back to a start box that is itself denied gives the start light")
+      {
+        // the z half extent of the handle box is 0.5 t, of the full box 0.5
+        auto* lightNode = createLight(map, "0 0 0", {{"light_radius", "300 300 0.5"}});
+        const auto properties = lightNode->entity().properties();
+        const auto undoName = *map.undoCommandName();
+
+        // a handle, out to an accepted box and back
+        CHECK(
+          drag(tool, sideHit({0, 0, 1}), {{0, 0, 32}, {0, 0, -32}})
+          == std::vector{true, true});
+        CHECK(lightNode->entity().properties() == properties);
+        CHECK(*map.undoCommandName() == undoName);
+
+        // the outer shell, by a Shift drag
+        const auto hit = pickSurface(tool, vm::ray3d{{0, 0, 1000}, {0, 0, -1}});
+        REQUIRE(hit.isMatch());
+        REQUIRE(hit.target<LightSurfaceHit>().element == mdl::LightElement::OuterShell);
+        CHECK(drag(tool, hit, {{0, 0, 32}, {0, 0, -32}}) == std::vector{true, true});
+        CHECK(lightNode->entity().properties() == properties);
+        CHECK(*map.undoCommandName() == undoName);
+      }
     }
 
     SECTION("a drag back to its start is no edit")

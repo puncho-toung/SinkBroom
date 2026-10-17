@@ -458,22 +458,30 @@ std::optional<mdl::LightProperties> editSurface(
   const auto toLocal = vm::transpose(start.frame.R);
   const auto toBox = vm::transpose(start.rotation);
 
-  const auto checked =
-    [&](const std::optional<vm::bbox3d>& to) -> std::optional<mdl::LightProperties> {
+  const auto checked = [&](const vm::bbox3d& from, const std::optional<vm::bbox3d>& to)
+    -> std::optional<mdl::LightProperties> {
     if (!to || to->is_empty())
     {
       return std::nullopt;
     }
     // the rotation is the light's, never the box frame's (I0.2)
-    return mdl::lightFromEditBox(start.light, start.frame.R, *to);
+    if (const auto light = mdl::lightFromEditBox(start.light, start.frame.R, *to))
+    {
+      return light;
+    }
+    // a denied start box is the light at the start, so that a drag back to it restores
+    // the light
+    return *to == from ? std::optional{start.light} : std::nullopt;
   };
 
   switch (surface.element)
   {
   case mdl::LightElement::OuterShell: {
     const auto box = mdl::pointLightLocalBox(start.light);
-    return checked(scaleLightBoxAboutOrigin(
-      box, {sideCoordinate(box, shellSide(surface))}, toLocal * delta));
+    return checked(
+      box,
+      scaleLightBoxAboutOrigin(
+        box, {sideCoordinate(box, shellSide(surface))}, toLocal * delta));
   }
   case mdl::LightElement::InnerShell: {
     const auto point = surface.localPoint + toLocal * delta;
@@ -488,11 +496,14 @@ std::optional<mdl::LightProperties> editSurface(
     {
       return std::nullopt;
     }
-    return checked(scaleLightBoxAboutOrigin(start.box, {coordinate}, toBox * delta));
+    return checked(
+      start.box, scaleLightBoxAboutOrigin(start.box, {coordinate}, toBox * delta));
   }
   case mdl::LightElement::Base:
-    return checked(scaleLightBoxAboutOrigin(
-      start.box, {sideCoordinate(start.box, FarCapSide)}, toBox * delta));
+    return checked(
+      start.box,
+      scaleLightBoxAboutOrigin(
+        start.box, {sideCoordinate(start.box, FarCapSide)}, toBox * delta));
   case mdl::LightElement::InnerCap: {
     const auto frustum = mdl::spotLightFrustum(start.light);
     if (!frustum)
@@ -1730,12 +1741,14 @@ bool LightVolumeTool::update(const vm::vec3d& delta)
     // frame
     const auto edited =
       mdl::lightFromEditBox(start.light, start.frame.R, movedBox, m_dragThreshold);
-    if (!edited)
+    if (!edited && movedBox != start.box)
     {
       // denied: a spot box shallower than 24 or a half extent below 1
       return false;
     }
-    light = *edited;
+    // a denied start box is the light at the start, so that a drag back to it restores
+    // the light
+    light = edited.value_or(start.light);
   }
 
   auto* entityNode = selectedLight();

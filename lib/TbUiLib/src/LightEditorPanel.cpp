@@ -454,7 +454,8 @@ bool hasStaleSpotKeys(const mdl::Entity& entity, const mdl::LightProperties& lig
 /**
  * How far the far rectangle of an off-centre spot light moves when the first box edit
  * recentres it: the largest distance between one of its far corners and the same corner
- * of the light that its own edit box gives. Nothing for a centred or degenerate spot.
+ * of the light that its own edit box gives. Nothing for a centred or degenerate spot,
+ * or for one whose own edit box is refused.
  */
 std::optional<double> recentreDistance(const mdl::LightProperties& light)
 {
