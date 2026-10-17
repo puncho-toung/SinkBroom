@@ -235,6 +235,14 @@ public:
   Result<gl::Material> loadMaterial(const std::filesystem::path& materialPath);
 
   /**
+   * Returns a material of the given name that shows the default image, such as the
+   * default skin of an id Tech 4 OBJ model. All of them share one texture resource, whose
+   * image loadDefaultTexture decodes on the first call and reports a failure of to that
+   * call's logger.
+   */
+  gl::Material defaultMaterial(std::string name, Logger& logger);
+
+  /**
    * Returns the number of texture resources that this cache has made or is making: one
    * per image that its materials show.
    */

@@ -1697,6 +1697,24 @@ TEST_CASE("ModelMaterialCache")
     }
   }
 
+  SECTION("defaultMaterial")
+  {
+    auto logger = CollectingLogger{};
+
+    const auto first = cache.defaultMaterial("first", logger);
+    const auto second = cache.defaultMaterial("second", logger);
+    CHECK(first.name() == "first");
+    CHECK(second.name() == "second");
+    CHECK(&first.textureResource() == &second.textureResource());
+
+    // textures/__TB_empty.png, decoded
+    REQUIRE(first.texture() != nullptr);
+    CHECK(first.texture()->width() == 32u);
+    CHECK(first.texture()->buffersIfLoaded().size() == 1u);
+    CHECK(logger.countMessagesContaining("Could not load default texture") == 0u);
+    CHECK(cache.textureResourceCount() == 1u);
+  }
+
   SECTION("several threads at once")
   {
     // counts the resources it makes, and takes its time, so that the threads that want

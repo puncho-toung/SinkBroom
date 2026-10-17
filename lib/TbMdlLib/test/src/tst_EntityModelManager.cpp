@@ -428,6 +428,20 @@ TEST_CASE("EntityModelManager")
       CHECK(&skin(noncanonicalGlb, 1, 0)->textureResource() == &wedge->textureResource());
     }
 
+    SECTION("the default skins of OBJ models share one texture")
+    {
+      // the last skin, for the faces before the first usemtl
+      const auto* wedgeDefault = skin(wedgeObj, 0, 2);
+      CHECK(wedgeDefault->name() == "__TB_empty");
+      REQUIRE(wedgeDefault->texture() != nullptr);
+      CHECK(wedgeDefault->texture()->width() == 32u);
+      CHECK(wedgeDefault->texture()->buffersIfLoaded().size() == 1u);
+
+      CHECK(
+        &skin(noncanonicalObj, 0, 1)->textureResource()
+        == &wedgeDefault->textureResource());
+    }
+
     SECTION("models loaded after clear get new textures")
     {
       // the old model and its texture are gone, so compare ids, not addresses

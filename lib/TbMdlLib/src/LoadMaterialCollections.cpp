@@ -1217,6 +1217,8 @@ struct ModelMaterialCache::State
   SharedTextures shaderTextures;
   // lowercase material path -> the texture of every material made from that image file
   SharedTextures imageTextures;
+  // the texture of every default material, made on first use
+  std::optional<SharedTexture> defaultTexture;
 
   State(
     const fs::FileSystem& fs_,
@@ -1386,10 +1388,30 @@ Result<gl::Material> ModelMaterialCache::loadMaterial(
   return state.makeMaterial(resolved, materialPath);
 }
 
+gl::Material ModelMaterialCache::defaultMaterial(std::string name, Logger& logger)
+{
+  auto& state = *m_state;
+
+  auto& texture = [&]() -> SharedTexture& {
+    const auto lock = std::lock_guard{state.mutex};
+    if (!state.defaultTexture)
+    {
+      state.defaultTexture.emplace();
+    }
+    return *state.defaultTexture;
+  }();
+
+  std::call_once(texture.made, [&]() {
+    texture.resource = gl::createTextureResource(loadDefaultTexture(state.fs, logger));
+  });
+  return gl::Material{std::move(name), texture.resource};
+}
+
 size_t ModelMaterialCache::textureResourceCount() const
 {
   const auto lock = std::lock_guard{m_state->mutex};
-  return m_state->shaderTextures.size() + m_state->imageTextures.size();
+  return m_state->shaderTextures.size() + m_state->imageTextures.size()
+         + (m_state->defaultTexture ? 1u : 0u);
 }
 
 Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(

@@ -215,6 +215,13 @@ Result<EntityModel> EntityModelManager::loadModel(
            | kdl::value();
   };
 
+  // Makes the default skins of id Tech 4 OBJ models, which share one texture of the
+  // default image instead of decoding it for every model
+  const auto loadDefaultMaterial =
+    [&logger, materialCache = m_materialCache](std::string materialName) {
+      return materialCache->defaultMaterial(std::move(materialName), logger);
+    };
+
   return mdl::loadEntityModelAsync(
     m_gameFileSystem,
     m_gameInfo.gameConfig.materialConfig,
@@ -223,7 +230,8 @@ Result<EntityModel> EntityModelManager::loadModel(
     loadMaterial,
     findMaterial,
     m_createResource,
-    m_logger);
+    m_logger,
+    loadDefaultMaterial);
 }
 
 void EntityModelManager::prepare(gl::Gl& gl, gl::VboManager& vboManager)
