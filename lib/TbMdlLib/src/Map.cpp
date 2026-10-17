@@ -1293,9 +1293,9 @@ void Map::clearEntityDefinitions()
 
 void Map::reloadShaders()
 {
-  // Every path that loads the material collections parses the material scripts once,
-  // here, after the game file system is set up or refreshed. The entity models, the
-  // material collections and the light editor read the same shaders.
+  // Every path that loads the material collections parses the material scripts at most
+  // once, here, after the game file system is set up or refreshed. The entity models,
+  // the material collections and the light editor read the same shaders.
   auto loadedShaders =
     loadShaderFiles(
       *m_gameFileSystem, gameInfo().gameConfig.materialConfig, m_taskManager, m_logger)
@@ -1864,10 +1864,18 @@ void Map::materialCollectionsDidChange()
 {
   // a material script added on disk is only found after the refresh
   refreshMaterialFileSystems();
-  reloadShaders();
-  // the models keep the materials of the old shaders until they are loaded again
-  clearEntityModels();
-  setEntityModels();
+
+  // Without material scripts, a reload, such as one after a wad change, can't change
+  // what the models are shaded with: models never use wads. Reloading them anyway would
+  // show the entities as boxes until they have loaded again.
+  if (!gameInfo().gameConfig.materialConfig.shaderSearchPath.empty())
+  {
+    reloadShaders();
+    // the models keep the materials of the old shaders until they are loaded again
+    clearEntityModels();
+    setEntityModels();
+  }
+
   loadMaterials();
   setMaterials();
   updateAllFaceTags();

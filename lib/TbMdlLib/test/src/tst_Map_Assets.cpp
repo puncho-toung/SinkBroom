@@ -584,6 +584,44 @@ TEST_CASE("Map_Assets")
     CHECK(entityNode->entity().model()->data() != nullptr);
   }
 
+  SECTION("reloadMaterialCollections keeps the entity models without material scripts")
+  {
+    // the Doom 3 BFG config without a shader search path, like the Quake configs
+    auto config = Doom3BFGFixtureConfig;
+    config.gameInfo.gameConfig.materialConfig.shaderSearchPath = "";
+    auto& map = fixture.create(config);
+
+    const auto* definition =
+      map.entityDefinitionManager().definition("genmodel_tb_test_arrow");
+    REQUIRE(definition != nullptr);
+    auto* entityNode = createPointEntity(map, *definition, {0, 0, 0});
+    REQUIRE(entityNode != nullptr);
+
+    auto gl = gl::TestGl{};
+    const auto processResources = [&]() {
+      gl::processResourcesSync(
+        map.resourceManager(), gl::ProcessContext{gl, [](auto, auto) {}});
+    };
+    const auto modelResourceId = [&]() {
+      const auto* model = entityNode->entity().model();
+      REQUIRE(model != nullptr);
+      REQUIRE(model->data() != nullptr);
+      return model->dataResource().id();
+    };
+
+    processResources();
+    const auto resourceId = modelResourceId();
+
+    reloadMaterialCollections(map);
+    processResources();
+    CHECK(modelResourceId() == resourceId);
+
+    deselectAll(map);
+    REQUIRE(setEntityProperty(map, EntityPropertyKeys::Wad, "missing.wad"));
+    processResources();
+    CHECK(modelResourceId() == resourceId);
+  }
+
   SECTION("reloadEntityDefinitions")
   {
     const auto fgdFilename = "Test.fgd";
