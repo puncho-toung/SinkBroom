@@ -28,6 +28,7 @@
 #include <QRadioButton>
 #include <QSlider>
 #include <QStackedWidget>
+#include <QTest>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -123,6 +124,14 @@ std::vector<mdl::EntityProperty> withValue(
     }
   }
   return properties;
+}
+
+/**
+ * Whether the spin box shows "multi", the special value text of its minimum.
+ */
+bool showsMulti(const SpinControl& spin)
+{
+  return spin.specialValueText() == "multi" && spin.value() == spin.minimum();
 }
 
 const std::string* property(const mdl::EntityNode& entityNode, const std::string& key)
@@ -1321,6 +1330,81 @@ TEST_CASE("LightEditorPanel")
     QApplication::processEvents();
     CHECK(valueOf(*lightNode1, "noshadows") == "0");
     CHECK(findControl<QCheckBox>(panel, "CastShadows").checkState() == Qt::Checked);
+  }
+
+  SECTION("a multi field writes every value of its range, its minimum too")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    const auto mathLight = [&](
+                             const std::string& origin, const std::string& innerRadius) {
+      return addLight(
+        map,
+        {
+          {"classname", "light"},
+          {"origin", origin},
+          {"math_enabled", "1"},
+          {"math_type", "point"},
+          {"math_inner_radius", innerRadius},
+        });
+    };
+
+    auto panel = LightEditorPanel{fixture.context()};
+    auto& innerRadius = findControl<SpinControl>(panel, "InnerRadius");
+
+    // typing the range minimum changes the value of a multi field, so it is written
+    auto* typedNode1 = mathLight("0 0 0", "0.2");
+    auto* typedNode2 = mathLight("64 0 0", "0.4");
+    selectOnly(map, {typedNode1, typedNode2});
+    REQUIRE(showsMathPage(panel));
+    REQUIRE(showsMulti(innerRadius));
+
+    innerRadius.selectAll();
+    QTest::keyClicks(&innerRadius, "0");
+    QTest::keyClick(&innerRadius, Qt::Key_Return);
+    QApplication::processEvents();
+    CHECK(valueOf(*typedNode1, "math_inner_radius") == "0");
+    CHECK(valueOf(*typedNode2, "math_inner_radius") == "0");
+    CHECK_FALSE(showsMulti(innerRadius));
+    CHECK(innerRadius.value() == 0.0);
+
+    // from multi, a step down writes nothing and a step up starts at the range minimum
+    auto* steppedNode1 = mathLight("128 0 0", "0.3");
+    auto* steppedNode2 = mathLight("192 0 0", "0.6");
+    selectOnly(map, {steppedNode1, steppedNode2});
+    REQUIRE(showsMulti(innerRadius));
+
+    const auto modificationCount = map.modificationCount();
+    innerRadius.stepBy(-1);
+    QApplication::processEvents();
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(valueOf(*steppedNode1, "math_inner_radius") == "0.3");
+    CHECK(valueOf(*steppedNode2, "math_inner_radius") == "0.6");
+    CHECK(showsMulti(innerRadius));
+
+    innerRadius.stepBy(1);
+    QApplication::processEvents();
+    CHECK(valueOf(*steppedNode1, "math_inner_radius") == "0.01");
+    CHECK(valueOf(*steppedNode2, "math_inner_radius") == "0.01");
+    CHECK(innerRadius.value() == 0.01);
+
+    // the slider spans the range: it shows the first light's value and writes the range
+    // minimum at its start, never the value below the range that "multi" holds
+    auto* draggedNode1 = mathLight("256 0 0", "0.2");
+    auto* draggedNode2 = mathLight("320 0 0", "0.4");
+    selectOnly(map, {draggedNode1, draggedNode2});
+    REQUIRE(showsMulti(innerRadius));
+
+    auto& slider = findControl<QSlider>(panel, "InnerRadiusSlider");
+    CHECK(slider.value() == 200);
+
+    slider.setSliderDown(true);
+    slider.setSliderPosition(0);
+    slider.setSliderDown(false);
+    QApplication::processEvents();
+    CHECK(valueOf(*draggedNode1, "math_inner_radius") == "0");
+    CHECK(valueOf(*draggedNode2, "math_inner_radius") == "0");
   }
 
   SECTION("lights of different types hide the volume")

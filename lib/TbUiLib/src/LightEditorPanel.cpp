@@ -213,12 +213,92 @@ constexpr auto SliderSteps = 1000;
 constexpr auto MathPageIndex = 0;
 constexpr auto TexturePageIndex = 1;
 
-SpinControl* createSpin(const QString& name, const SpinRange& range)
+const auto Multi = QString{"multi"};
+
+/**
+ * A spin box that shows "multi" where the selected lights differ. Like in the face
+ * attribute editor, "multi" is the special value text of the minimum, but here the
+ * minimum lies one unit of the last decimal below the range while "multi" is shown: were
+ * it the range minimum, typing the range minimum into a "multi" field would not change
+ * the value, and nothing would be written.
+ */
+class MultiSpinControl : public SpinControl
 {
-  auto* spin = new SpinControl{};
+private:
+  double m_rangeMinimum = 0.0;
+
+public:
+  /**
+   * Sets the range of the values that the spin box shows and writes.
+   */
+  void setValueRange(const double minimum, const double maximum)
+  {
+    m_rangeMinimum = minimum;
+    setRange(minimum, maximum);
+  }
+
+  /**
+   * The lowest value that the spin box shows and writes; its minimum lies below it while
+   * it shows "multi".
+   */
+  double rangeMinimum() const { return m_rangeMinimum; }
+
+  /**
+   * Whether the spin box shows "multi": its value is the minimum below the range.
+   */
+  bool isMulti() const { return minimum() < m_rangeMinimum && value() == minimum(); }
+
+  /**
+   * Shows "multi". It emits nothing, because it shows what the map holds.
+   */
+  void setMulti()
+  {
+    const auto blocker = QSignalBlocker{this};
+    setSpecialValueText(Multi);
+    setMinimum(m_rangeMinimum - std::pow(10.0, -decimals()));
+    setValue(minimum());
+  }
+
+  /**
+   * Shows the value of the selected lights. It emits nothing, because it shows what the
+   * map holds; raising the minimum can change the value on its own.
+   */
+  void setLightValue(const double value)
+  {
+    const auto blocker = QSignalBlocker{this};
+    setSpecialValueText({});
+    setMinimum(m_rangeMinimum);
+    setValue(value);
+  }
+
+  /**
+   * From "multi", a step up starts at the range minimum, and a step down changes nothing
+   * because the value is the lowest already. A value typed over "multi" is stepped from
+   * as it is: raising the minimum first would replace it.
+   */
+  void stepBy(const int steps) override
+  {
+    if (isMulti() && text() == specialValueText())
+    {
+      if (steps <= 0)
+      {
+        return;
+      }
+
+      const auto blocker = QSignalBlocker{this};
+      setMinimum(m_rangeMinimum);
+    }
+
+    SpinControl::stepBy(steps);
+  }
+};
+
+MultiSpinControl* createSpin(const QString& name, const SpinRange& range)
+{
+  auto* spin = new MultiSpinControl{};
   spin->setObjectName(controlName(name));
   spin->setDigits(0, range.decimals);
-  spin->setRange(range.min, range.max);
+  spin->setValueRange(range.min, range.max);
   spin->setIncrements(range.regularIncrement, range.shiftIncrement, range.ctrlIncrement);
   return spin;
 }
@@ -232,7 +312,7 @@ QHBoxLayout* createRowLayout()
 }
 
 QLayout* createVec3Layout(
-  std::array<SpinControl*, 3>& spins, const QString& name, const SpinRange& range)
+  std::array<MultiSpinControl*, 3>& spins, const QString& name, const SpinRange& range)
 {
   const auto suffixes = std::array<QString, 3>{"X", "Y", "Z"};
 
@@ -246,7 +326,7 @@ QLayout* createVec3Layout(
 }
 
 QLayout* createSliderLayout(
-  QSlider*& slider, SpinControl*& spin, const QString& name, const SpinRange& range)
+  QSlider*& slider, MultiSpinControl*& spin, const QString& name, const SpinRange& range)
 {
   slider = new QSlider{Qt::Horizontal};
   slider->setObjectName(controlName(name + "Slider"));
@@ -384,18 +464,20 @@ int addRow(FormWithSectionsLayout& form, QWidget* field)
   return row;
 }
 
-double sliderValue(const SpinControl& spin, const int position)
+// a slider spans the range of its spin box's values, never the "multi" below it
+double sliderValue(const MultiSpinControl& spin, const int position)
 {
-  const auto value =
-    spin.minimum() + (spin.maximum() - spin.minimum()) * position / SliderSteps;
+  const auto minimum = spin.rangeMinimum();
+  const auto value = minimum + (spin.maximum() - minimum) * position / SliderSteps;
   const auto scale = std::pow(10.0, spin.decimals());
   return std::round(value * scale) / scale;
 }
 
-int sliderPosition(const SpinControl& spin, const double value)
+int sliderPosition(const MultiSpinControl& spin, const double value)
 {
-  const auto t = (std::clamp(value, spin.minimum(), spin.maximum()) - spin.minimum())
-                 / (spin.maximum() - spin.minimum());
+  const auto minimum = spin.rangeMinimum();
+  const auto t =
+    (std::clamp(value, minimum, spin.maximum()) - minimum) / (spin.maximum() - minimum);
   return int(std::lround(t * SliderSteps));
 }
 
@@ -515,8 +597,6 @@ QString lightName(const mdl::Entity& entity)
 
 const auto EngineDefaultTexture = QString{"(engine default)"};
 
-const auto Multi = QString{"multi"};
-
 /**
  * The value of the first of the given values, and whether another one differs from it.
  */
@@ -529,23 +609,20 @@ auto firstValue(const std::vector<T>& values, const Get& get)
   return std::pair{value, multi};
 }
 
-// like the face attribute editor: "multi" is the special value text of the minimum
-void setSpinValue(SpinControl* spin, const double value, const bool multi)
+void setSpinValue(MultiSpinControl* spin, const double value, const bool multi)
 {
   if (multi)
   {
-    spin->setSpecialValueText(Multi);
-    spin->setValue(spin->minimum());
+    spin->setMulti();
   }
   else
   {
-    spin->setSpecialValueText("");
-    spin->setValue(value);
+    spin->setLightValue(value);
   }
 }
 
 template <typename T, typename Get>
-void setSpin(SpinControl* spin, const std::vector<T>& values, const Get& get)
+void setSpin(MultiSpinControl* spin, const std::vector<T>& values, const Get& get)
 {
   const auto [value, multi] = firstValue(values, get);
   setSpinValue(spin, double(value), multi);
@@ -553,7 +630,9 @@ void setSpin(SpinControl* spin, const std::vector<T>& values, const Get& get)
 
 template <typename T, typename Get>
 void setVec3(
-  const std::array<SpinControl*, 3>& spins, const std::vector<T>& values, const Get& get)
+  const std::array<MultiSpinControl*, 3>& spins,
+  const std::vector<T>& values,
+  const Get& get)
 {
   for (size_t i = 0; i < 3; ++i)
   {
@@ -564,7 +643,7 @@ void setVec3(
 template <typename Get>
 void setSlider(
   QSlider* slider,
-  SpinControl* spin,
+  MultiSpinControl* spin,
   const std::vector<mdl::LightProperties>& lights,
   const Get& get)
 {
@@ -712,23 +791,23 @@ struct LightEditorPanel::Controls
   // the session's choice of one radius for lights whose three radii are equal, off at
   // first, so that a light shows its three radii (D52)
   bool equilateral = false;
-  SpinControl* radius = nullptr;
-  std::array<SpinControl*, 3> radiusXyz = {};
+  MultiSpinControl* radius = nullptr;
+  std::array<MultiSpinControl*, 3> radiusXyz = {};
   QCheckBox* center = nullptr;
-  std::array<SpinControl*, 3> centerXyz = {};
+  std::array<MultiSpinControl*, 3> centerXyz = {};
 
-  std::array<SpinControl*, 3> target = {};
-  std::array<SpinControl*, 3> right = {};
-  std::array<SpinControl*, 3> up = {};
+  std::array<MultiSpinControl*, 3> target = {};
+  std::array<MultiSpinControl*, 3> right = {};
+  std::array<MultiSpinControl*, 3> up = {};
   QCheckBox* explicitStartEnd = nullptr;
-  std::array<SpinControl*, 3> start = {};
-  std::array<SpinControl*, 3> end = {};
+  std::array<MultiSpinControl*, 3> start = {};
+  std::array<MultiSpinControl*, 3> end = {};
 
-  std::array<SpinControl*, 3> origin = {};
-  std::array<SpinControl*, 3> angles = {};
+  std::array<MultiSpinControl*, 3> origin = {};
+  std::array<MultiSpinControl*, 3> angles = {};
 
   ColorButton* color = nullptr;
-  SpinControl* intensity = nullptr;
+  MultiSpinControl* intensity = nullptr;
   QComboBox* texture = nullptr;
   // the names of the light materials are copied again on the next update
   bool texturesStale = true;
@@ -741,20 +820,20 @@ struct LightEditorPanel::Controls
   QComboBox* mathStyle = nullptr;
   QComboBox* falloff = nullptr;
   QSlider* falloffExpSlider = nullptr;
-  SpinControl* falloffExp = nullptr;
+  MultiSpinControl* falloffExp = nullptr;
   QSlider* innerRadiusSlider = nullptr;
-  SpinControl* innerRadius = nullptr;
+  MultiSpinControl* innerRadius = nullptr;
   QSlider* shapeExpSlider = nullptr;
-  SpinControl* shapeExp = nullptr;
+  MultiSpinControl* shapeExp = nullptr;
   QSlider* penumbraSlider = nullptr;
-  SpinControl* penumbra = nullptr;
+  MultiSpinControl* penumbra = nullptr;
   QComboBox* pattern = nullptr;
   QSlider* patternStrengthSlider = nullptr;
-  SpinControl* patternStrength = nullptr;
+  MultiSpinControl* patternStrength = nullptr;
   QSlider* patternScaleSlider = nullptr;
-  SpinControl* patternScale = nullptr;
+  MultiSpinControl* patternScale = nullptr;
   QSlider* patternPhaseSlider = nullptr;
-  SpinControl* patternPhase = nullptr;
+  MultiSpinControl* patternPhase = nullptr;
   QCheckBox* energyClamp = nullptr;
 
   QCheckBox* castShadows = nullptr;
@@ -762,7 +841,7 @@ struct LightEditorPanel::Controls
 
   QToolButton* drawVolumeButton = nullptr;
   QToolButton* resetVolumeButton = nullptr;
-  SpinControl* handleThreshold = nullptr;
+  MultiSpinControl* handleThreshold = nullptr;
 
   // the rows of form that depend on the light's type and options
   int mixedTypesRow = -1;
@@ -1204,7 +1283,7 @@ void LightEditorPanel::connectEditor()
     };
 
   const auto connectVec3 = [&](
-                             const std::array<SpinControl*, 3>& spins,
+                             const std::array<MultiSpinControl*, 3>& spins,
                              const std::string& commandName,
                              vm::vec3d mdl::LightProperties::* member) {
     for (size_t i = 0; i < 3; ++i)
@@ -1219,7 +1298,8 @@ void LightEditorPanel::connectEditor()
   // a slider writes when it is released and whenever the keyboard or the wheel moves
   // it, but not while it is dragged
   const auto connectSlider =
-    [&](QSlider* slider, SpinControl* spin, const std::string& commandName, auto set) {
+    [&](
+      QSlider* slider, MultiSpinControl* spin, const std::string& commandName, auto set) {
       connectSpin(spin, commandName, set);
 
       const auto write = [=, this](const int position) {
