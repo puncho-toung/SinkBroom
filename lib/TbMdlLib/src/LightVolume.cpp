@@ -229,9 +229,10 @@ double explicitZNear(const LightProperties& light)
 
 /**
  * The light of the given box, whose half extents are the radius scaled by the given
- * falloff parameter (1 for the full extent, visibleFalloffT for the handle box).
+ * falloff parameter (1 for the full extent, visibleFalloffT for the handle box), or
+ * nothing if the box is denied.
  */
-LightProperties pointFromEditBox(
+std::optional<LightProperties> pointFromEditBox(
   const LightProperties& base,
   const vm::mat3x3d& rotation,
   const vm::bbox3d& box,
@@ -242,7 +243,7 @@ LightProperties pointFromEditBox(
     halfExtents.x() < MinHalfExtent || halfExtents.y() < MinHalfExtent
     || halfExtents.z() < MinHalfExtent || t < DegenerateEpsilon)
   {
-    return base;
+    return std::nullopt;
   }
 
   const auto radius = halfExtents / t;
@@ -254,7 +255,7 @@ LightProperties pointFromEditBox(
   return light;
 }
 
-LightProperties spotFromEditBox(
+std::optional<LightProperties> spotFromEditBox(
   const LightProperties& base, const vm::mat3x3d& rotation, const vm::bbox3d& box)
 {
   // step 1
@@ -267,14 +268,14 @@ LightProperties spotFromEditBox(
   // step 2, every deny before anything is normalized
   if (depth < MinSpotBoxDepth || hx < MinHalfExtent || hy < MinHalfExtent)
   {
-    return base;
+    return std::nullopt;
   }
 
   const auto s = spot(base);
   const auto frame = beamFrame(base);
   if (!s || !frame)
   {
-    return base;
+    return std::nullopt;
   }
 
   const auto centre = vm::vec3d{cx, cy, depth};
@@ -528,7 +529,7 @@ std::optional<vm::bbox3d> lightEditBox(
   return vm::bbox3d{-halfExtents, halfExtents};
 }
 
-LightProperties lightFromEditBox(
+std::optional<LightProperties> lightFromEditBox(
   const LightProperties& base, const vm::mat3x3d& rotation, const vm::bbox3d& box)
 {
   switch (base.type)
@@ -542,7 +543,7 @@ LightProperties lightFromEditBox(
   }
 }
 
-LightProperties lightFromEditBox(
+std::optional<LightProperties> lightFromEditBox(
   const LightProperties& base,
   const vm::mat3x3d& rotation,
   const vm::bbox3d& box,

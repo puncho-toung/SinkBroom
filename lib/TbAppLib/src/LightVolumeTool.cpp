@@ -458,25 +458,22 @@ std::optional<mdl::LightProperties> editSurface(
   const auto toLocal = vm::transpose(start.frame.R);
   const auto toBox = vm::transpose(start.rotation);
 
-  const auto checked = [&](const vm::bbox3d& from, const std::optional<vm::bbox3d>& to)
-    -> std::optional<mdl::LightProperties> {
+  const auto checked =
+    [&](const std::optional<vm::bbox3d>& to) -> std::optional<mdl::LightProperties> {
     if (!to || to->is_empty())
     {
       return std::nullopt;
     }
     // the rotation is the light's, never the box frame's (I0.2)
-    const auto light = mdl::lightFromEditBox(start.light, start.frame.R, *to);
-    return light == start.light && *to != from ? std::nullopt : std::optional{light};
+    return mdl::lightFromEditBox(start.light, start.frame.R, *to);
   };
 
   switch (surface.element)
   {
   case mdl::LightElement::OuterShell: {
     const auto box = mdl::pointLightLocalBox(start.light);
-    return checked(
-      box,
-      scaleLightBoxAboutOrigin(
-        box, {sideCoordinate(box, shellSide(surface))}, toLocal * delta));
+    return checked(scaleLightBoxAboutOrigin(
+      box, {sideCoordinate(box, shellSide(surface))}, toLocal * delta));
   }
   case mdl::LightElement::InnerShell: {
     const auto point = surface.localPoint + toLocal * delta;
@@ -491,14 +488,11 @@ std::optional<mdl::LightProperties> editSurface(
     {
       return std::nullopt;
     }
-    return checked(
-      start.box, scaleLightBoxAboutOrigin(start.box, {coordinate}, toBox * delta));
+    return checked(scaleLightBoxAboutOrigin(start.box, {coordinate}, toBox * delta));
   }
   case mdl::LightElement::Base:
-    return checked(
-      start.box,
-      scaleLightBoxAboutOrigin(
-        start.box, {sideCoordinate(start.box, FarCapSide)}, toBox * delta));
+    return checked(scaleLightBoxAboutOrigin(
+      start.box, {sideCoordinate(start.box, FarCapSide)}, toBox * delta));
   case mdl::LightElement::InnerCap: {
     const auto frustum = mdl::spotLightFrustum(start.light);
     if (!frustum)
@@ -1613,7 +1607,7 @@ bool LightVolumeTool::nudgeClickedElement(const vm::vec3d& worldDelta)
   // the off-centre box re-aims the beam at the moved centre with the roll kept (D37);
   // the rotation is the light's, never the box frame's (I0.2)
   const auto light = mdl::lightFromEditBox(volume->light, volume->frame.R, shearedBox);
-  if (light == volume->light)
+  if (!light)
   {
     // denied: a depth below 24
     return true;
@@ -1621,7 +1615,7 @@ bool LightVolumeTool::nudgeClickedElement(const vm::vec3d& worldDelta)
 
   auto& map = m_document.map();
   const auto& entity = entityNode->entity();
-  const auto diff = mdl::lightKeyDiff(entity, light);
+  const auto diff = mdl::lightKeyDiff(entity, *light);
   if (diff.set.empty() && diff.remove.empty())
   {
     return true;
@@ -1734,12 +1728,14 @@ bool LightVolumeTool::update(const vm::vec3d& delta)
 
     // the rotation is the light's, never the box frame's: the light composes the beam
     // frame
-    light = mdl::lightFromEditBox(start.light, start.frame.R, movedBox, m_dragThreshold);
-    if (light == start.light && movedBox != start.box)
+    const auto edited =
+      mdl::lightFromEditBox(start.light, start.frame.R, movedBox, m_dragThreshold);
+    if (!edited)
     {
       // denied: a spot box shallower than 24 or a half extent below 1
       return false;
     }
+    light = *edited;
   }
 
   auto* entityNode = selectedLight();

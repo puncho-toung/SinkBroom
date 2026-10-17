@@ -470,8 +470,8 @@ std::optional<double> recentreDistance(const mdl::LightProperties& light)
     return std::nullopt;
   }
 
-  const auto recentred =
-    mdl::spotLightFrustum(mdl::lightFromEditBox(light, vm::mat3x3d::identity(), *box));
+  const auto edited = mdl::lightFromEditBox(light, vm::mat3x3d::identity(), *box);
+  const auto recentred = edited ? mdl::spotLightFrustum(*edited) : std::nullopt;
   if (!recentred)
   {
     return std::nullopt;
