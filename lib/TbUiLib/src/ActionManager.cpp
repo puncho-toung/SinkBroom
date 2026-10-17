@@ -152,6 +152,7 @@ void ActionManager::resetAllKeySequences()
 
   visitMainMenu(resetVisitor);
   visitToolBar(resetVisitor);
+  visitToolSidebar(resetVisitor);
 
   visitMapViewActions([&](auto& action) { prefs.resetToDefault(action.preference()); });
 }
@@ -161,6 +162,7 @@ void ActionManager::initialize()
   createViewActions();
   createMenu();
   createToolbar();
+  createToolSidebar();
 }
 
 void ActionManager::createViewActions()
@@ -1944,6 +1946,18 @@ void ActionManager::createViewMenu()
     },
   }));
   viewMenu.addItem(addAction(Action{
+    "Menu/View/Toggle Tool Sidebar",
+    "Toggle Tool Sidebar",
+    ActionContext::Any,
+    // no default: the keyboard preferences can assign one
+    KeySequence{},
+    [](auto& context) { context.mapWindow().toggleToolSidebar(); },
+    [](const auto& context) { return context.hasDocument(); },
+    [](const auto& context) {
+      return context.hasDocument() && context.mapWindow().toolSidebarVisible();
+    },
+  }));
+  viewMenu.addItem(addAction(Action{
     "Menu/View/Toggle Info Panel",
     "Toggle Info Panel",
     ActionContext::Any,
@@ -2146,6 +2160,13 @@ void ActionManager::createToolbar()
   m_toolBar.addItem(existingAction("Menu/Edit/Texture Lock"));
   m_toolBar.addItem(existingAction("Menu/Edit/UV Lock"));
   m_toolBar.addSeparator();
+}
+
+void ActionManager::createToolSidebar()
+{
+  // Empty for now: the map window gives every sidebar panel a button of its own. This is
+  // the place for actions that open other windows (inspector pages, the info panel,
+  // dialogs), added with m_toolSidebar.addItem(existingAction(...)).
 }
 
 Action& ActionManager::existingAction(const std::filesystem::path& preferencePath)

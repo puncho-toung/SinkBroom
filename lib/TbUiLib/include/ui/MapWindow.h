@@ -84,6 +84,7 @@ class SidebarManager;
 class SignalDelayer;
 class SwitchableMapViewContainer;
 class Tool;
+class ToolSidebar;
 
 class MapWindow : public QMainWindow
 {
@@ -96,6 +97,7 @@ private:
   QTimer* m_autosaveTimer = nullptr;
 
   QToolBar* m_toolBar = nullptr;
+  ToolSidebar* m_toolSidebar = nullptr;
 
   QSplitter* m_hSplitter = nullptr;
   QSplitter* m_vSplitter = nullptr;
@@ -169,6 +171,7 @@ private: // menu bar
 
 private: // tool bar
   void createToolBar();
+  void createToolSidebar();
   void updateToolBarWidgets();
 
 private: // status bar
@@ -357,6 +360,9 @@ public:
 
   void toggleToolbar();
   bool toolbarVisible() const;
+
+  void toggleToolSidebar();
+  bool toolSidebarVisible() const;
 
   void toggleInfoPanel();
   bool infoPanelVisible() const;

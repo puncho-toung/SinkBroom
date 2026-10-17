@@ -25,6 +25,7 @@
 #include <QMainWindow>
 #include <QScreen>
 
+#include "ui/ImageUtils.h"
 #include "ui/SidebarPanel.h"
 
 #include "kd/contracts.h"
@@ -57,6 +58,29 @@ QDockWidget* SidebarManager::registerPanel(std::unique_ptr<SidebarPanel> panel)
     QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable
     | QDockWidget::DockWidgetFloatable);
   dock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+
+  auto* toggleAction = dock->toggleViewAction();
+  // the tool sidebar draws the icon; menus never show icons
+  if (const auto iconPath = panel->iconPath(); !iconPath.empty())
+  {
+    toggleAction->setIcon(loadSVGIcon(iconPath));
+  }
+
+  // Qt checks the toggle action on show and hide events only, but a dock tabbed behind
+  // another is just moved out of sight: its action would stay checked, and a click would
+  // close the dock. Following visibilityChanged instead, the action is checked while the
+  // dock can be seen, so a click on the unchecked action of a dock behind a tab shows it;
+  // setChecked does not trigger the action, so this never shows or closes a dock itself.
+  connect(dock, &QDockWidget::visibilityChanged, toggleAction, &QAction::setChecked);
+
+  // the toggle action shows a closed dock but does not bring one that is tabbed behind
+  // another to the front, so the menu entry and the tool sidebar button raise it
+  connect(toggleAction, &QAction::triggered, dock, [dock](const bool on) {
+    if (on)
+    {
+      dock->raise();
+    }
+  });
 
   auto* panelPtr = panel.get();
   dock->setWidget(panel.release());

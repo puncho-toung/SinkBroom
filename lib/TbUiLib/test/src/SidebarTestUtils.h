@@ -28,6 +28,8 @@
 #include "ui/MapViewToolBox.h"
 #include "ui/SidebarPanel.h"
 
+#include <filesystem>
+
 class QDockWidget;
 
 namespace tb::ui
@@ -44,15 +46,17 @@ class StubPanel : public SidebarPanel
 {
 private:
   QString m_panelId;
+  std::filesystem::path m_iconPath;
 
 public:
   int shownCount = 0;
   int hiddenCount = 0;
 
-  explicit StubPanel(QString panelId);
+  explicit StubPanel(QString panelId, std::filesystem::path iconPath = {});
 
   QString panelId() const override;
   QString title() const override;
+  std::filesystem::path iconPath() const override;
   void panelShown() override;
   void panelHidden() override;
 };
@@ -64,9 +68,11 @@ struct RegisteredStub
 };
 
 /**
- * Registers a stub panel with the given id; its title is the id followed by " title".
+ * Registers a stub panel with the given id and icon path; its title is the id followed by
+ * " title".
  */
-RegisteredStub registerStubPanel(SidebarManager& manager, const QString& panelId);
+RegisteredStub registerStubPanel(
+  SidebarManager& manager, const QString& panelId, std::filesystem::path iconPath = {});
 
 /**
  * A document of the given game with a tool box, as a map window provides them.

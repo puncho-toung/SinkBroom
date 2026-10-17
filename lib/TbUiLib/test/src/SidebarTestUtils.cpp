@@ -34,8 +34,9 @@
 namespace tb::ui
 {
 
-StubPanel::StubPanel(QString panelId)
+StubPanel::StubPanel(QString panelId, std::filesystem::path iconPath)
   : m_panelId{std::move(panelId)}
+  , m_iconPath{std::move(iconPath)}
 {
 }
 
@@ -49,6 +50,11 @@ QString StubPanel::title() const
   return m_panelId + " title";
 }
 
+std::filesystem::path StubPanel::iconPath() const
+{
+  return m_iconPath;
+}
+
 void StubPanel::panelShown()
 {
   ++shownCount;
@@ -59,9 +65,10 @@ void StubPanel::panelHidden()
   ++hiddenCount;
 }
 
-RegisteredStub registerStubPanel(SidebarManager& manager, const QString& panelId)
+RegisteredStub registerStubPanel(
+  SidebarManager& manager, const QString& panelId, std::filesystem::path iconPath)
 {
-  auto panel = std::make_unique<StubPanel>(panelId);
+  auto panel = std::make_unique<StubPanel>(panelId, std::move(iconPath));
   auto* panelPtr = panel.get();
   auto* dock = manager.registerPanel(std::move(panel));
   return {dock, panelPtr};

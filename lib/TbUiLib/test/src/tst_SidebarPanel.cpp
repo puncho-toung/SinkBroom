@@ -32,6 +32,16 @@
 namespace tb::ui
 {
 
+TEST_CASE("SidebarPanel")
+{
+  SECTION("iconPath")
+  {
+    // the default, not the stub's override
+    const auto panel = StubPanel{"Stub", "NoTool.svg"};
+    CHECK(panel.SidebarPanel::iconPath().empty());
+  }
+}
+
 TEST_CASE("SidebarDock")
 {
   SECTION("closeEvent")

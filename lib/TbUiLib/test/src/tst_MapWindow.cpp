@@ -23,6 +23,7 @@
 #include <QDockWidget>
 #include <QMenu>
 #include <QMenuBar>
+#include <QSettings>
 
 #include "TestEnvironment.h"
 #include "base/PreferenceManager.h"
@@ -59,6 +60,7 @@
 #include "ui/MapViewBase.h"
 #include "ui/MapViewToolBox.h"
 #include "ui/MapWindow.h"
+#include "ui/ToolSidebar.h"
 
 #include "kd/invoke.h"
 
@@ -82,10 +84,35 @@ struct TestResource
   void drop(gl::Gl&) const {}
 };
 
+namespace
+{
+
+const auto ToolSidebarExpandedKey = QString{"Windows/MapWindow_ToolSidebar/Expanded"};
+
+QMenu* findViewMenu(const MapWindow& window)
+{
+  for (auto* action : window.menuBar()->actions())
+  {
+    if (action->text() == "View")
+    {
+      return QMenu::menuInAction(action);
+    }
+  }
+  return nullptr;
+}
+
+} // namespace
+
 TEST_CASE("MapWindow")
 {
   auto appControllerFixture = AppControllerFixture{};
   auto& appController = appControllerFixture.appController();
+
+  // the window's tool sidebar reads its Expanded key: start without it, and leave none
+  // behind for the other cases and the next run
+  QSettings{}.remove(ToolSidebarExpandedKey);
+  const auto removeToolSidebarExpandedKey =
+    kdl::invoke_later{[] { QSettings{}.remove(ToolSidebarExpandedKey); }};
 
   auto document = MapDocument::createDocument(
                     appController.environmentConfig(),
@@ -254,6 +281,79 @@ TEST_CASE("MapWindow")
     REQUIRE(sidebarMenu != nullptr);
     CHECK(sidebarMenu->title() == "Sidebar");
     CHECK(sidebarMenu->actions() == QList<QAction*>{dock->toggleViewAction()});
+  }
+
+  SECTION("the tool sidebar has a button for each sidebar dock")
+  {
+    auto* toolSidebar = window.findChild<ToolSidebar*>("MapWindow_ToolSidebar");
+    REQUIRE(toolSidebar != nullptr);
+    CHECK(window.toolBarArea(toolSidebar) == Qt::LeftToolBarArea);
+    CHECK(!toolSidebar->isMovable());
+    CHECK(toolSidebar->expanded());
+
+    // the Quake game has no light editor, and the button is there all the same
+    auto* dock = window.findChild<QDockWidget*>("MapWindow_Sidebar_LightEditor");
+    REQUIRE(dock != nullptr);
+    auto* toggleAction = dock->toggleViewAction();
+    CHECK(toolSidebar->entries() == std::vector<QAction*>{toggleAction});
+    CHECK(toggleAction->text() == "Light Editor");
+    CHECK(!toggleAction->icon().isNull());
+
+    const auto actions = toolSidebar->actions();
+    REQUIRE(actions.size() == 3);
+    CHECK(actions.front() == toggleAction);
+    CHECK(actions.back() == toolSidebar->expandAction());
+
+    toggleAction->trigger();
+    CHECK(!dock->isHidden());
+    CHECK(toggleAction->isChecked());
+
+    dock->close();
+    CHECK(dock->isHidden());
+    CHECK(!toggleAction->isChecked());
+
+    // collapsing takes the button out of the strip, not out of View > Sidebar
+    toolSidebar->setExpanded(false);
+    CHECK(toolSidebar->actions() == QList<QAction*>{actions[1], actions[2]});
+    CHECK(toggleAction->isVisible());
+
+    auto* viewMenu = findViewMenu(window);
+    REQUIRE(viewMenu != nullptr);
+    const auto viewActions = viewMenu->actions();
+    const auto iSidebarMenu = std::ranges::find_if(
+      viewActions, [](const auto* action) { return action->text() == "Sidebar"; });
+    REQUIRE(iSidebarMenu != viewActions.end());
+    auto* sidebarMenu = QMenu::menuInAction(*iSidebarMenu);
+    REQUIRE(sidebarMenu != nullptr);
+    CHECK(sidebarMenu->actions() == QList<QAction*>{toggleAction});
+  }
+
+  SECTION("View > Toggle Tool Sidebar")
+  {
+    auto* toolSidebar = window.findChild<ToolSidebar*>("MapWindow_ToolSidebar");
+    REQUIRE(toolSidebar != nullptr);
+
+    auto* viewMenu = findViewMenu(window);
+    REQUIRE(viewMenu != nullptr);
+
+    // the entry follows Toggle Toolbar
+    const auto viewActions = viewMenu->actions();
+    const auto iToolbar = std::ranges::find_if(
+      viewActions, [](const auto* action) { return action->text() == "Toggle Toolbar"; });
+    REQUIRE(iToolbar != viewActions.end());
+    REQUIRE(std::next(iToolbar) != viewActions.end());
+
+    auto* action = *std::next(iToolbar);
+    CHECK(action->text() == "Toggle Tool Sidebar");
+    CHECK(action->isCheckable());
+    CHECK(std::ranges::all_of(
+      action->shortcuts(), [](const auto& shortcut) { return shortcut.isEmpty(); }));
+
+    REQUIRE(!toolSidebar->isHidden());
+    action->trigger();
+    CHECK(toolSidebar->isHidden());
+    action->trigger();
+    CHECK(!toolSidebar->isHidden());
   }
 
   SECTION("View > Light Volumes")

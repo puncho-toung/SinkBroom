@@ -23,6 +23,8 @@
 #include <QString>
 #include <QWidget>
 
+#include <filesystem>
+
 class QCloseEvent;
 
 namespace tb::ui
@@ -64,6 +66,12 @@ public:
    * The dock's title and the label of its entry in View > Sidebar.
    */
   virtual QString title() const = 0;
+
+  /**
+   * The icon of the panel's button in the tool sidebar, an image path as loadSVGIcon
+   * takes it. Empty by default: a panel without an icon gets a text button there.
+   */
+  virtual std::filesystem::path iconPath() const;
 
   /**
    * Called when the panel's dock becomes visible: opened, raised from behind a tab, or

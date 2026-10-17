@@ -112,6 +112,7 @@
 #include "ui/SignalDelayer.h"
 #include "ui/Splitter.h"
 #include "ui/SwitchableMapViewContainer.h"
+#include "ui/ToolSidebar.h"
 #include "ui/VertexTool.h"
 #include "ui/ViewUtils.h"
 #include "ui/WadUtils.h"
@@ -135,6 +136,7 @@
 #include <algorithm>
 #include <chrono>
 #include <iterator>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -191,6 +193,7 @@ MapWindow::MapWindow(AppController& appController, std::unique_ptr<MapDocument> 
   createGui();
   createMenus();
   createToolBar();
+  createToolSidebar();
   createStatusBar();
 
   updateShortcuts();
@@ -347,9 +350,17 @@ void MapWindow::createMenus()
   // The toggle actions belong to the docks and are not in m_actionMap, so
   // updateActionState leaves them alone; each dock keeps its own action checked.
   contract_assert(createMenuResult.sidebarMenu != nullptr);
-  for (auto* dock : m_sidebarManager->docks())
+  // in the order of the tool sidebar's buttons, so that both list the panels alike
+  auto toggleActions =
+    m_sidebarManager->docks()
+    | std::views::transform([](const auto* dock) { return dock->toggleViewAction(); })
+    | kdl::ranges::to<std::vector>();
+  std::ranges::stable_sort(toggleActions, [](const auto* lhs, const auto* rhs) {
+    return toolSidebarEntryLess(*lhs, *rhs);
+  });
+  for (auto* toggleAction : toggleActions)
   {
-    createMenuResult.sidebarMenu->addAction(dock->toggleViewAction());
+    createMenuResult.sidebarMenu->addAction(toggleAction);
   }
 
   addRecentDocumentsMenu();
@@ -546,6 +557,27 @@ void MapWindow::createToolBar()
   }
 
   m_toolBar->addWidget(m_gridChoice);
+}
+
+void MapWindow::createToolSidebar()
+{
+  m_toolSidebar = new ToolSidebar{this};
+  addToolBar(Qt::LeftToolBarArea, m_toolSidebar);
+
+  // one button per sidebar panel; the strip sorts its buttons
+  for (auto* dock : m_sidebarManager->docks())
+  {
+    m_toolSidebar->addEntry(dock->toggleViewAction());
+  }
+
+  populateToolSidebar(
+    m_appController.actionManager(),
+    *m_toolSidebar,
+    m_actionMap,
+    [&](const auto& tbAction) {
+      auto context = ActionExecutionContext{m_appController, this, currentMapViewBase()};
+      tbAction.execute(context);
+    });
 }
 
 void MapWindow::updateToolBarWidgets()
@@ -1010,6 +1042,11 @@ void MapWindow::bindEvents()
   connect(
     m_toolBar, &QToolBar::visibilityChanged, this, [this](const bool /* visible */) {
       // update the "Toggle Toolbar" menu item
+      this->updateActionState();
+    });
+  connect(
+    m_toolSidebar, &QToolBar::visibilityChanged, this, [this](const bool /* visible */) {
+      // update the "Toggle Tool Sidebar" menu item
       this->updateActionState();
     });
 
@@ -2089,6 +2126,18 @@ void MapWindow::toggleToolbar()
 bool MapWindow::toolbarVisible() const
 {
   return m_toolBar->isVisible();
+}
+
+void MapWindow::toggleToolSidebar()
+{
+  // by the hidden flag like the inspector, so that it also toggles while the window is
+  // not shown yet
+  m_toolSidebar->setHidden(!m_toolSidebar->isHidden());
+}
+
+bool MapWindow::toolSidebarVisible() const
+{
+  return m_toolSidebar->isVisible();
 }
 
 void MapWindow::toggleInfoPanel()
