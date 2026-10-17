@@ -21,6 +21,7 @@
 #include "TestParserStatus.h"
 #include "base/Logger.h"
 #include "fs/DiskFileSystem.h"
+#include "fs/TestEnvironment.h"
 #include "fs/TestUtils.h"
 #include "fs/VirtualFileSystem.h"
 #include "fs/WadFileSystem.h"
@@ -689,6 +690,38 @@ TEST_CASE("LoadMaterialCollections")
           gl::MaterialBlendFunc::Enable::UseFactors,
           GL_SRC_ALPHA,
           GL_ONE_MINUS_SRC_ALPHA});
+    }
+
+    SECTION("neither the case of a configured extension nor that of a file matters")
+    {
+      auto env = fs::TestEnvironment{};
+      env.createDirectory("models/mapobjects/test");
+      std::filesystem::copy_file(
+        getFixtureRoot()
+          / "test/mdl/LoadIdTech4ObjModel/models/mapobjects/test/wedge_ed.tga",
+        env.dir() / "models/mapobjects/test/wedge_ed.TGA");
+
+      auto upperCaseFs = fs::DiskFileSystem{env.dir()};
+      auto upperCaseConfig = materialConfig;
+      upperCaseConfig.extensions = {".PNG", ".TGA"};
+
+      const auto checkWedgeImage =
+        [&](const std::filesystem::path& materialName, const IndexedShaders& shaders) {
+          const auto material =
+            findIdTech4Material(
+              upperCaseFs, upperCaseConfig, materialName, createResource, shaders)
+            | kdl::value();
+          REQUIRE(material);
+          CHECK_FALSE(material->previewImageMissing());
+          REQUIRE(material->texture());
+          CHECK(material->texture()->width() == 4u);
+          CHECK(material->texture()->height() == 2u);
+        };
+
+      // the editor image as the decl names it, and the image of an implicit material,
+      // which the configured extensions complete
+      checkWedgeImage("models/mapobjects/test/wedge", IndexedShaders{{wedgeShader}});
+      checkWedgeImage("models/mapobjects/test/wedge_ed", {});
     }
 
     SECTION("nothing of that name")

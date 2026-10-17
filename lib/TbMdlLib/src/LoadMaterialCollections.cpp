@@ -228,14 +228,22 @@ PreviewImage findQuake3PreviewImage(
  */
 class DirectoryIndex
 {
+public:
+  struct File
+  {
+    std::filesystem::path path;
+    // the extension of path, lowercase
+    std::filesystem::path extension;
+  };
+
 private:
   // lowercase stem -> files with that stem, in file system order
-  using StemIndex = std::unordered_map<
-    std::filesystem::path,
-    std::vector<std::filesystem::path>,
-    kdl::path_hash>;
+  using StemIndex =
+    std::unordered_map<std::filesystem::path, std::vector<File>, kdl::path_hash>;
 
   const fs::FileSystem& m_fs;
+  // the configured extensions, lowercase, in the order of the config
+  std::vector<std::filesystem::path> m_extensions;
   fs::PathMatcher m_extensionMatcher;
   // lowercase directory path -> its files
   std::unordered_map<std::filesystem::path, StemIndex, kdl::path_hash> m_directories;
@@ -244,18 +252,27 @@ public:
   DirectoryIndex(
     const fs::FileSystem& fs, const std::vector<std::filesystem::path>& extensions)
     : m_fs{fs}
+    , m_extensions{extensions | std::views::transform([](const auto& extension) {
+                     return kdl::path_to_lower(extension);
+                   })
+                   | kdl::ranges::to<std::vector>()}
     , m_extensionMatcher{fs::makeExtensionPathMatcher(extensions)}
   {
   }
 
   /**
+   * Returns the configured image extensions, lowercase and in the order of the config.
+   */
+  const std::vector<std::filesystem::path>& extensions() const { return m_extensions; }
+
+  /**
    * Returns the image files in the given directory whose stem equals the given stem,
    * ignoring case.
    */
-  const std::vector<std::filesystem::path>& find(
+  const std::vector<File>& find(
     const std::filesystem::path& directory, const std::filesystem::path& stem)
   {
-    static const auto noFiles = std::vector<std::filesystem::path>{};
+    static const auto noFiles = std::vector<File>{};
 
     const auto& stemIndex = index(kdl::path_to_lower(directory));
     const auto iFiles = stemIndex.find(kdl::path_to_lower(stem));
@@ -277,7 +294,10 @@ private:
       | kdl::transform([&](auto paths) {
           for (auto& path : paths)
           {
-            stemIndex[kdl::path_to_lower(path.stem())].push_back(std::move(path));
+            auto stem = kdl::path_to_lower(path.stem());
+            auto extension = kdl::path_to_lower(path.extension());
+            stemIndex[std::move(stem)].push_back(
+              File{std::move(path), std::move(extension)});
           }
         })
       | kdl::or_else([](auto) { return kdl::void_success; });
@@ -388,9 +408,7 @@ struct MaterialLoadContext
 };
 
 std::optional<std::filesystem::path> findScriptImageFile(
-  const std::filesystem::path& path,
-  const MaterialConfig& materialConfig,
-  DirectoryIndex& directoryIndex)
+  const std::filesystem::path& path, DirectoryIndex& directoryIndex)
 {
   const auto& candidates = directoryIndex.find(path.parent_path(), path.stem());
   if (candidates.empty())
@@ -398,24 +416,20 @@ std::optional<std::filesystem::path> findScriptImageFile(
     return std::nullopt;
   }
 
-  const auto isConfigured = [&](const std::filesystem::path& extension) {
-    return std::ranges::any_of(materialConfig.extensions, [&](const auto& configured) {
-      return kdl::path_to_lower(configured) == extension;
-    });
-  };
+  const auto& extensions = directoryIndex.extensions();
 
   const auto findCandidate =
     [&](const std::filesystem::path& extension) -> std::optional<std::filesystem::path> {
-    const auto iCandidate = std::ranges::find_if(candidates, [&](const auto& candidate) {
-      return kdl::path_to_lower(candidate.extension()) == extension;
-    });
-    return iCandidate != candidates.end() ? std::optional{*iCandidate} : std::nullopt;
+    const auto iCandidate =
+      std::ranges::find(candidates, extension, &DirectoryIndex::File::extension);
+    return iCandidate != candidates.end() ? std::optional{iCandidate->path}
+                                          : std::nullopt;
   };
 
   // the file as named, then the same name with each configured extension in the order
   // of the config, as the engine tries its image loaders in its own order
   if (const auto extension = kdl::path_to_lower(path.extension());
-      isConfigured(extension))
+      kdl::ranges::contains(extensions, extension))
   {
     if (auto candidate = findCandidate(extension))
     {
@@ -423,9 +437,9 @@ std::optional<std::filesystem::path> findScriptImageFile(
     }
   }
 
-  for (const auto& extension : materialConfig.extensions)
+  for (const auto& extension : extensions)
   {
-    if (auto candidate = findCandidate(kdl::path_to_lower(extension)))
+    if (auto candidate = findCandidate(extension))
     {
       return candidate;
     }
@@ -456,15 +470,14 @@ std::optional<ResolvedScriptImage> resolveScriptImage(
     return std::nullopt;
   }
 
-  if (auto file = findScriptImageFile(*path, materialConfig, directoryIndex))
+  if (auto file = findScriptImageFile(*path, directoryIndex))
   {
     return ResolvedScriptImage{std::move(*file), false};
   }
 
   for (const auto& searchPath : materialConfig.shaderImageSearchPaths)
   {
-    if (
-      auto file = findScriptImageFile(searchPath / *path, materialConfig, directoryIndex))
+    if (auto file = findScriptImageFile(searchPath / *path, directoryIndex))
     {
       return ResolvedScriptImage{std::move(*file), true};
     }
