@@ -19,7 +19,11 @@
 
 #pragma once
 
-#include "ui/TabBook.h"
+#include <QString>
+
+#include "ui/SidebarPanel.h"
+
+#include <filesystem>
 
 class QSplitter;
 
@@ -30,9 +34,12 @@ class EntityBrowser;
 class EntityPropertyEditor;
 class MapDocument;
 
-class EntityInspector : public TabBookPage
+class EntityInspector : public SidebarPanel
 {
   Q_OBJECT
+public:
+  static constexpr auto PanelId = "EntityInspector";
+
 private:
   QSplitter* m_splitter = nullptr;
   EntityPropertyEditor* m_attributeEditor = nullptr;
@@ -42,6 +49,11 @@ public:
   EntityInspector(
     AppController& appController, MapDocument& document, QWidget* parent = nullptr);
   ~EntityInspector() override;
+
+  QString panelId() const override;
+  QString title() const override;
+  std::filesystem::path iconPath() const override;
+  bool shownByDefault() const override;
 
 private:
   void createGui(AppController& appController, MapDocument& document);

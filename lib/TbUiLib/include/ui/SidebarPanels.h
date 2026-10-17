@@ -28,7 +28,9 @@ class SidebarPanel;
 struct SidebarContext;
 
 /**
- * Creates the built-in sidebar panels in the order of their entries in View > Sidebar.
+ * Creates the built-in sidebar panels. Their order is the order of the map window's docks
+ * and of the default tab groups built from them; View > Sidebar and the tool sidebar sort
+ * the panels by title instead.
  */
 std::vector<std::unique_ptr<SidebarPanel>> createSidebarPanels(
   const SidebarContext& context);

@@ -39,7 +39,6 @@ class ClipTool;
 class ControlPointTool;
 class EdgeTool;
 class FaceTool;
-class Inspector;
 class MapDocument;
 class MapViewBar;
 enum class MapViewLayout;
@@ -67,8 +66,6 @@ public:
   SwitchableMapViewContainer(
     AppController& appController, MapDocument& document, QWidget* parent = nullptr);
   ~SwitchableMapViewContainer() override;
-
-  void connectTopWidgets(Inspector* inspector);
 
   void windowActivationStateChanged(bool active);
 

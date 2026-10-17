@@ -22,6 +22,7 @@
 #include <QDialog>
 #include <QMainWindow>
 #include <QPointer>
+#include <QString>
 
 #include "base/NotifierConnection.h"
 #include "mdl/ExportOptions.h"
@@ -32,6 +33,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 class QAction;
 class QComboBox;
@@ -73,9 +75,8 @@ class Action;
 class AppController;
 class CompilationDialog;
 class Console;
+class FaceInspector;
 class InfoPanel;
-class Inspector;
-enum class InspectorPage;
 class MapDocument;
 class MapViewBase;
 class MapViewToolBox;
@@ -99,7 +100,6 @@ private:
   QToolBar* m_toolBar = nullptr;
   ToolSidebar* m_toolSidebar = nullptr;
 
-  QSplitter* m_hSplitter = nullptr;
   QSplitter* m_vSplitter = nullptr;
 
   SwitchableMapViewContainer* m_mapView = nullptr;
@@ -110,8 +110,12 @@ private:
   QPointer<MapViewBase> m_currentMapView;
   InfoPanel* m_infoPanel = nullptr;
   Console* m_console = nullptr;
-  Inspector* m_inspector = nullptr;
   SidebarManager* m_sidebarManager = nullptr;
+  /**
+   * The inspector panels that Toggle Inspector hid and brings back. The first entry is
+   * the one that was in front and is brought to the front again, or empty if none was.
+   */
+  std::vector<QString> m_inspectorPanelsToRestore;
 
   QComboBox* m_gridChoice = nullptr;
   QLabel* m_statusBarLabel = nullptr;
@@ -143,6 +147,11 @@ public:
   ~MapWindow() override;
 
   void positionOnScreen(QWidget* reference);
+
+  /**
+   * Saves the window's geometry and layout, the docks included, as closing it does.
+   */
+  void saveWindowState();
 
   const MapDocument& document() const;
   MapDocument& document();
@@ -181,6 +190,18 @@ private: // status bar
 
 private: // gui creation
   void createGui();
+
+  /**
+   * Restores the saved layout. A layout saved before the inspectors were docks does not
+   * know them, so they are arranged like the old inspector once more.
+   */
+  void restoreWindowState();
+  /**
+   * Tabs the three inspector docks together, in the order Map, Entity, Face, and brings
+   * the given one to the front. Arranging docks that are arranged so changes nothing.
+   */
+  void arrangeInspectorDocks(const QString& raisedPanelId);
+  FaceInspector* faceInspector() const;
 
 private: // notification handlers
   void connectObservers();
@@ -356,7 +377,10 @@ public:
 
   void showAll();
 
-  void switchToInspectorPage(InspectorPage page);
+  /**
+   * Shows the given sidebar panel's dock and brings it to the front of its tab group.
+   */
+  void showSidebarPanel(const QString& panelId);
 
   void toggleToolbar();
   bool toolbarVisible() const;
@@ -367,8 +391,12 @@ public:
   void toggleInfoPanel();
   bool infoPanelVisible() const;
 
-  void toggleInspector();
-  bool inspectorVisible() const;
+  /**
+   * Hides the three inspector docks if any of them is open; otherwise brings back the
+   * ones that it hid, or all three, with the one that was in front in front again.
+   */
+  void toggleInspectorPanels();
+  bool inspectorPanelsVisible() const;
 
   void toggleMaximizeCurrentView();
   bool currentViewMaximized() const;
@@ -409,6 +437,9 @@ private:
 public: // drag and drop
   void dragEnterEvent(QDragEnterEvent* event) override;
   void dropEvent(QDropEvent* event) override;
+
+public: // the context menu of the toolbars and the docks
+  QMenu* createPopupMenu() override;
 
 protected: // other event handlers
   void changeEvent(QEvent* event) override;

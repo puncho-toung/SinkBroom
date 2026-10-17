@@ -85,8 +85,10 @@ QString formatVec(const std::optional<vm::bbox3d>& bbox, const bool max)
 // MapInspector
 
 MapInspector::MapInspector(MapDocument& document, QWidget* parent)
-  : TabBookPage{parent}
+  : SidebarPanel{parent}
 {
+  // no narrower than the inspector that held this page
+  setMinimumWidth(350);
   createGui(document);
 }
 
@@ -94,6 +96,26 @@ MapInspector::~MapInspector()
 {
   saveWidgetState(m_mapPropertiesEditor);
   saveWidgetState(m_modEditor);
+}
+
+QString MapInspector::panelId() const
+{
+  return QString::fromLatin1(PanelId);
+}
+
+QString MapInspector::title() const
+{
+  return tr("Map Inspector");
+}
+
+std::filesystem::path MapInspector::iconPath() const
+{
+  return "MapInspector.svg";
+}
+
+bool MapInspector::shownByDefault() const
+{
+  return true;
 }
 
 void MapInspector::createGui(MapDocument& document)

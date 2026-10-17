@@ -58,9 +58,11 @@ void resetMaterialBrowserInfo(mdl::Map& map, QWidget* materialBrowserInfo)
 
 FaceInspector::FaceInspector(
   AppController& appController, MapDocument& document, QWidget* parent)
-  : TabBookPage{parent}
+  : SidebarPanel{parent}
   , m_document{document}
 {
+  // no narrower than the inspector that held this page
+  setMinimumWidth(350);
   createGui(appController);
   connectObservers();
 }
@@ -68,6 +70,26 @@ FaceInspector::FaceInspector(
 FaceInspector::~FaceInspector()
 {
   saveWidgetState(m_splitter);
+}
+
+QString FaceInspector::panelId() const
+{
+  return QString::fromLatin1(PanelId);
+}
+
+QString FaceInspector::title() const
+{
+  return tr("Face Inspector");
+}
+
+std::filesystem::path FaceInspector::iconPath() const
+{
+  return "FaceInspector.svg";
+}
+
+bool FaceInspector::shownByDefault() const
+{
+  return true;
 }
 
 bool FaceInspector::cancelMouseDrag()

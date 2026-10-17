@@ -35,7 +35,9 @@
 #include "prefs/Preferences.h"
 #include "ui/ActionExecutionContext.h"
 #include "ui/AppController.h" // IWYU pragma: keep
-#include "ui/Inspector.h"
+#include "ui/EntityInspector.h"
+#include "ui/FaceInspector.h"
+#include "ui/MapInspector.h"
 #include "ui/MapView.h"
 #include "ui/MapViewBase.h"
 #include "ui/MapViewToolBox.h" // IWYU pragma: keep
@@ -1912,7 +1914,7 @@ void ActionManager::createViewMenu()
     "Show Map Inspector",
     ActionContext::Any,
     KeySequence{"Ctrl+1"},
-    [](auto& context) { context.mapWindow().switchToInspectorPage(InspectorPage::Map); },
+    [](auto& context) { context.mapWindow().showSidebarPanel(MapInspector::PanelId); },
     [](const auto& context) { return context.hasDocument(); },
   }));
   viewMenu.addItem(addAction(Action{
@@ -1920,9 +1922,7 @@ void ActionManager::createViewMenu()
     "Show Entity Inspector",
     ActionContext::Any,
     KeySequence{"Ctrl+2"},
-    [](auto& context) {
-      context.mapWindow().switchToInspectorPage(InspectorPage::Entity);
-    },
+    [](auto& context) { context.mapWindow().showSidebarPanel(EntityInspector::PanelId); },
     [](const auto& context) { return context.hasDocument(); },
   }));
   viewMenu.addItem(addAction(Action{
@@ -1930,7 +1930,7 @@ void ActionManager::createViewMenu()
     "Show Face Inspector",
     ActionContext::Any,
     KeySequence{"Ctrl+3"},
-    [](auto& context) { context.mapWindow().switchToInspectorPage(InspectorPage::Face); },
+    [](auto& context) { context.mapWindow().showSidebarPanel(FaceInspector::PanelId); },
     [](const auto& context) { return context.hasDocument(); },
   }));
   viewMenu.addSeparator();
@@ -1973,10 +1973,10 @@ void ActionManager::createViewMenu()
     "Toggle Inspector",
     ActionContext::Any,
     KeySequence{"Ctrl+5"},
-    [](auto& context) { context.mapWindow().toggleInspector(); },
+    [](auto& context) { context.mapWindow().toggleInspectorPanels(); },
     [](const auto& context) { return context.hasDocument(); },
     [](const auto& context) {
-      return context.hasDocument() && context.mapWindow().inspectorVisible();
+      return context.hasDocument() && context.mapWindow().inspectorPanelsVisible();
     },
   }));
   viewMenu.addItem(addAction(Action{
@@ -2164,9 +2164,9 @@ void ActionManager::createToolbar()
 
 void ActionManager::createToolSidebar()
 {
-  // Empty for now: the map window gives every sidebar panel a button of its own. This is
-  // the place for actions that open other windows (inspector pages, the info panel,
-  // dialogs), added with m_toolSidebar.addItem(existingAction(...)).
+  // Empty for now: the map window gives every sidebar panel, the inspectors included, a
+  // button of its own. This is the place for actions that open other windows (the info
+  // panel, dialogs), added with m_toolSidebar.addItem(existingAction(...)).
 }
 
 Action& ActionManager::existingAction(const std::filesystem::path& preferencePath)

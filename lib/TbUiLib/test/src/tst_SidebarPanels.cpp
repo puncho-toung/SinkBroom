@@ -39,6 +39,13 @@ TEST_CASE("SidebarPanels")
     // a new panel is one more entry, so only the built-in ones are pinned
     CHECK(std::ranges::any_of(
       panels, [](const auto& panel) { return panel->panelId() == "LightEditor"; }));
+
+    // the inspectors come first, in the order of the old inspector's pages, which is the
+    // order of their tabs
+    REQUIRE(panels.size() >= 4);
+    CHECK(panels[0]->panelId() == "MapInspector");
+    CHECK(panels[1]->panelId() == "EntityInspector");
+    CHECK(panels[2]->panelId() == "FaceInspector");
   }
 
   SECTION("the inspector icons are greyscale 24x24 images")

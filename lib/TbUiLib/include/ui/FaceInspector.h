@@ -19,8 +19,12 @@
 
 #pragma once
 
+#include <QString>
+
 #include "base/NotifierConnection.h"
-#include "ui/TabBook.h"
+#include "ui/SidebarPanel.h"
+
+#include <filesystem>
 
 class QSplitter;
 class QWidget;
@@ -40,9 +44,12 @@ class FaceAttribsEditor;
 class MapDocument;
 class MaterialBrowser;
 
-class FaceInspector : public TabBookPage
+class FaceInspector : public SidebarPanel
 {
   Q_OBJECT
+public:
+  static constexpr auto PanelId = "FaceInspector";
+
 private:
   MapDocument& m_document;
   QSplitter* m_splitter = nullptr;
@@ -56,6 +63,11 @@ public:
   FaceInspector(
     AppController& appController, MapDocument& document, QWidget* parent = nullptr);
   ~FaceInspector() override;
+
+  QString panelId() const override;
+  QString title() const override;
+  std::filesystem::path iconPath() const override;
+  bool shownByDefault() const override;
 
   bool cancelMouseDrag();
   void revealMaterial(const gl::Material* material);

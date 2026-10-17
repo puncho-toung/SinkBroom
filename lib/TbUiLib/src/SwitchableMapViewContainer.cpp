@@ -26,7 +26,6 @@
 #include "mdl/PointTrace.h"
 #include "prefs/Preferences.h"
 #include "ui/FourPaneMapView.h"
-#include "ui/Inspector.h"
 #include "ui/MapDocument.h"
 #include "ui/MapViewActivationTracker.h"
 #include "ui/MapViewBar.h"
@@ -61,11 +60,6 @@ SwitchableMapViewContainer::~SwitchableMapViewContainer()
   // use them in their destructors
   m_activationTracker->clear();
   delete m_mapView;
-}
-
-void SwitchableMapViewContainer::connectTopWidgets(Inspector* inspector)
-{
-  inspector->connectTopWidgets(m_mapViewBar);
 }
 
 void SwitchableMapViewContainer::windowActivationStateChanged(const bool active)
