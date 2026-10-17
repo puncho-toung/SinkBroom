@@ -36,6 +36,7 @@
 #include <cmath>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -185,6 +186,21 @@ TEST_CASE("LightVolume")
       lightFrame(lightRotation, EntityRotationPolicy::IdTech4).R * vm::vec3d{1, 0, 0}
       == vm::approx{vm::vec3d{0, 1, 0}, Exact});
     CHECK(lightFrame(lightRotation, EntityRotationPolicy::Quake).R == identity);
+
+    // a rotation that is not finite is none, like an angle that is not read
+    const auto unturned = [](
+                            const std::string& key,
+                            const std::string& value,
+                            const EntityRotationPolicy policy) {
+      return lightFrame(Entity{{{"classname", "light"}, {key, value}}}, policy).R
+             == identity;
+    };
+    CHECK(unturned("angle", "nan", EntityRotationPolicy::IdTech4));
+    CHECK(unturned("angle", "inf", EntityRotationPolicy::IdTech4));
+    CHECK(unturned("angles", "0 nan 0", EntityRotationPolicy::IdTech4));
+    CHECK(unturned("angle", "nan", EntityRotationPolicy::Quake));
+    CHECK(unturned("angle", "inf", EntityRotationPolicy::Quake));
+    CHECK(unturned("angles", "0 nan 0", EntityRotationPolicy::Quake));
   }
 
   SECTION("operator<<(LightElement)")

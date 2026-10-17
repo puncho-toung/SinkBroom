@@ -487,6 +487,29 @@ TEST_CASE("LightVolumeMesh")
         spotMesh, frame.R * mdl::spotPoint(spot, 0, 0, 136) + frame.origin));
     }
 
+    SECTION("a light whose rotation is not finite is drawn unturned")
+    {
+      for (const auto& angle : {"nan", "inf"})
+      {
+        CAPTURE(angle);
+        const auto frame = mdl::lightFrame(
+          mdl::Entity{{{"classname", "light"}, {"angle", angle}}},
+          mdl::EntityRotationPolicy::IdTech4);
+
+        for (const auto& light : {linearPointLight(), linearSpotLight()})
+        {
+          const auto mesh = buildLightVolumeMesh(light, frame, style);
+          REQUIRE(!mesh.triangles.empty());
+          CHECK(std::ranges::all_of(mesh.triangles, [](const auto& vertex) {
+            return vm::is_finite(positionOf(vertex));
+          }));
+          CHECK(std::ranges::all_of(mesh.lines, [](const auto& vertex) {
+            return vm::is_finite(positionOf(vertex));
+          }));
+        }
+      }
+    }
+
     SECTION("twoD scales the fill alphas by 0.6 and keeps the lines")
     {
       auto twoD = style;

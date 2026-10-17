@@ -363,11 +363,26 @@ std::ostream& operator<<(std::ostream& lhs, const LightElement rhs)
   return lhs;
 }
 
+vm::mat3x3d lightRotation(const Entity& entity, const EntityRotationPolicy policy)
+{
+  const auto R = rotationPart(entityRotation(entity, policy));
+
+  // upstream's angle and Euler parses read nan and inf: no rotation, like an unread angle
+  for (std::size_t c = 0; c < 3; ++c)
+  {
+    if (!vm::is_finite(R[c]))
+    {
+      return vm::mat3x3d::identity();
+    }
+  }
+  return R;
+}
+
 LightFrame lightFrame(const Entity& entity, const EntityRotationPolicy policy)
 {
   return {
     parseLightProperties(entity).origin,
-    rotationPart(entityRotation(entity, policy)),
+    lightRotation(entity, policy),
   };
 }
 

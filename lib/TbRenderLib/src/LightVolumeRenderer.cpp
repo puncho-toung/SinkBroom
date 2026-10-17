@@ -28,7 +28,6 @@
 #include "mdl/EditorContext.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
-#include "mdl/EntityRotation.h"
 #include "mdl/GameConfig.h"
 #include "mdl/GameInfo.h"
 #include "mdl/GroupNode.h"
@@ -83,7 +82,7 @@ std::pair<LightVolumeMesh, std::vector<LightRange>> buildLights(
     range.props = mdl::parseLightProperties(entity);
     range.frame = mdl::LightFrame{
       range.props.origin,
-      vm::extract_minor(mdl::entityRotation(entity, policy), 3, 3),
+      mdl::lightRotation(entity, policy),
     };
     range.selected = selected;
 

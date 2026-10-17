@@ -85,9 +85,17 @@ struct LightFrame
 };
 
 /**
+ * Returns the rotation of the given light entity: the 3x3 part of
+ * entityRotation(entity, policy), or the identity if it is not finite, as for an angle
+ * that is not read. The policy must be passed explicitly, the game's
+ * entities.rotation.policy.
+ */
+vm::mat3x3d lightRotation(const Entity& entity, EntityRotationPolicy policy);
+
+/**
  * Returns the frame of the given light entity: its light_origin if it has one, else its
- * origin, and the 3x3 part of entityRotation(entity, policy). The policy must be passed
- * explicitly, the game's entities.rotation.policy.
+ * origin, and lightRotation(entity, policy). The policy must be passed explicitly, the
+ * game's entities.rotation.policy.
  */
 LightFrame lightFrame(const Entity& entity, EntityRotationPolicy policy);
 
