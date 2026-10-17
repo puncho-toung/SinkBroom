@@ -25,6 +25,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <string>
 
 namespace tb
 {
@@ -49,9 +50,16 @@ enum class ModelConvention;
 using LoadMaterialFunc = std::function<gl::Material(const std::filesystem::path&)>;
 
 /**
+ * Makes a material of the given name that shows the default image.
+ */
+using LoadDefaultMaterialFunc = std::function<gl::Material(std::string)>;
+
+/**
  * Loads the model at the given path with the loader that its format needs. Under
  * ModelConvention::IdTech4, a .obj file is read by loadIdTech4ObjModel instead of assimp,
- * and findMaterial resolves the material decl names of such models.
+ * findMaterial resolves the material decl names of such models, and loadDefaultMaterial
+ * makes their default skins. Without loadDefaultMaterial, each default skin is loaded
+ * with mdl::loadDefaultMaterial and gets a texture of its own.
  */
 Result<EntityModel> loadEntityModelSync(
   const fs::FileSystem& fs,
@@ -60,7 +68,8 @@ Result<EntityModel> loadEntityModelSync(
   const std::filesystem::path& path,
   const LoadMaterialFunc& loadMaterial,
   const FindMaterialFunc& findMaterial,
-  Logger& logger);
+  Logger& logger,
+  const LoadDefaultMaterialFunc& loadDefaultMaterial = {});
 
 /**
  * Like loadEntityModelSync, but the model is loaded by the resource that createResource
@@ -75,7 +84,8 @@ EntityModel loadEntityModelAsync(
   const LoadMaterialFunc& loadMaterial,
   const FindMaterialFunc& findMaterial,
   const CreateEntityModelDataResource& createResource,
-  Logger& logger);
+  Logger& logger,
+  const LoadDefaultMaterialFunc& loadDefaultMaterial = {});
 
 } // namespace mdl
 } // namespace tb

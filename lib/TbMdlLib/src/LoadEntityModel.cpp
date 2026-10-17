@@ -64,6 +64,7 @@ Result<EntityModelData> loadEntityModelData(
   const std::filesystem::path& path,
   const LoadMaterialFunc& loadMaterial,
   const FindMaterialFunc& findMaterial,
+  const LoadDefaultMaterialFunc& loadDefaultMaterial,
   Logger& logger)
 {
   const auto modelName = path.filename().string();
@@ -118,7 +119,9 @@ Result<EntityModelData> loadEntityModelData(
              modelConvention == ModelConvention::IdTech4 && canLoadIdTech4ObjModel(path))
            {
              const auto loadDefault = [&](std::string materialName) {
-               return loadDefaultMaterial(fs, std::move(materialName), logger);
+               return loadDefaultMaterial
+                        ? loadDefaultMaterial(std::move(materialName))
+                        : mdl::loadDefaultMaterial(fs, std::move(materialName), logger);
              };
              return loadIdTech4ObjModel(
                modelName, reader.stringView(), findMaterial, loadDefault, logger);
@@ -150,13 +153,27 @@ gl::ResourceLoader<EntityModelData> makeEntityModelDataResourceLoader(
   const std::filesystem::path& path,
   const LoadMaterialFunc& loadMaterial,
   const FindMaterialFunc& findMaterial,
+  const LoadDefaultMaterialFunc& loadDefaultMaterial,
   Logger& logger)
 {
-  return
-    [&fs, materialConfig, modelConvention, path, loadMaterial, findMaterial, &logger]() {
-      return loadEntityModelData(
-        fs, materialConfig, modelConvention, path, loadMaterial, findMaterial, logger);
-    };
+  return [&fs,
+          materialConfig,
+          modelConvention,
+          path,
+          loadMaterial,
+          findMaterial,
+          loadDefaultMaterial,
+          &logger]() {
+    return loadEntityModelData(
+      fs,
+      materialConfig,
+      modelConvention,
+      path,
+      loadMaterial,
+      findMaterial,
+      loadDefaultMaterial,
+      logger);
+  };
 }
 
 } // namespace
@@ -168,10 +185,18 @@ Result<EntityModel> loadEntityModelSync(
   const std::filesystem::path& path,
   const LoadMaterialFunc& loadMaterial,
   const FindMaterialFunc& findMaterial,
-  Logger& logger)
+  Logger& logger,
+  const LoadDefaultMaterialFunc& loadDefaultMaterial)
 {
   return loadEntityModelData(
-           fs, materialConfig, modelConvention, path, loadMaterial, findMaterial, logger)
+           fs,
+           materialConfig,
+           modelConvention,
+           path,
+           loadMaterial,
+           findMaterial,
+           loadDefaultMaterial,
+           logger)
          | kdl::transform([&](auto modelData) {
              auto modelName = path.filename().string();
              auto modelResource = createEntityModelDataResource(std::move(modelData));
@@ -187,11 +212,19 @@ EntityModel loadEntityModelAsync(
   const LoadMaterialFunc& loadMaterial,
   const FindMaterialFunc& findMaterial,
   const CreateEntityModelDataResource& createResource,
-  Logger& logger)
+  Logger& logger,
+  const LoadDefaultMaterialFunc& loadDefaultMaterial)
 {
   auto name = path.filename().string();
   auto loader = makeEntityModelDataResourceLoader(
-    fs, materialConfig, modelConvention, path, loadMaterial, findMaterial, logger);
+    fs,
+    materialConfig,
+    modelConvention,
+    path,
+    loadMaterial,
+    findMaterial,
+    loadDefaultMaterial,
+    logger);
   auto resource = createResource(std::move(loader));
   return EntityModel{std::move(name), std::move(resource)};
 }

@@ -21,6 +21,7 @@
 
 #include "base/Result.h"
 #include "gl/TextureResource.h"
+#include "mdl/LoadShaders.h"
 #include "mdl/Palette.h"
 #include "mdl/Quake3Shader.h"
 
@@ -28,6 +29,7 @@
 
 #include <filesystem>
 #include <initializer_list>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -75,10 +77,19 @@ private:
   std::unordered_map<std::filesystem::path, const Quake3Shader*, kdl::path_hash> m_index;
   // lowercase image paths without extension, as the engine's image manager names them
   std::unordered_set<std::filesystem::path, kdl::path_hash> m_diffuseImages;
+  // what the summary of a load of the material collections reports about the files
+  size_t m_fileCount = 0;
+  size_t m_unterminatedCount = 0;
 
 public:
   IndexedShaders();
   explicit IndexedShaders(std::vector<Quake3Shader> shaders);
+
+  /**
+   * Keeps the shaders that loadShaderFiles found, and what it counted in their files, so
+   * that one parse serves the material collections and the entity models.
+   */
+  explicit IndexedShaders(LoadedShaders loadedShaders);
 
   // the index points into the shaders, which a copy would not own
   IndexedShaders(const IndexedShaders&) = delete;
@@ -99,6 +110,18 @@ public:
    * lowercase and without extension.
    */
   const std::unordered_set<std::filesystem::path, kdl::path_hash>& diffuseImages() const;
+
+  /**
+   * Returns the number of material script files that the shaders were read from, or 0
+   * unless they were made from what loadShaderFiles returned.
+   */
+  size_t fileCount() const;
+
+  /**
+   * Returns the number of Doom 3 material decls that lack their closing brace, or 0
+   * unless the shaders were made from what loadShaderFiles returned.
+   */
+  size_t unterminatedCount() const;
 };
 
 /**
@@ -116,6 +139,9 @@ std::vector<std::string> shaderNamesWithPrefix(
  * root; a Doom 3 material is found by its full canonical decl name, such as
  * "models/mapobjects/crate". An exact match is looked for first, then one that ignores
  * case. Otherwise, the material is made from the image file at the given path.
+ *
+ * Every call scans the shaders, so a caller that loads many materials from the same
+ * shaders passes them indexed to the overload below.
  */
 Result<gl::Material> loadMaterial(
   const fs::FileSystem& fs,
@@ -123,6 +149,23 @@ Result<gl::Material> loadMaterial(
   const std::filesystem::path& materialPath,
   const gl::CreateTextureResource& createResource,
   const std::vector<Quake3Shader>& shaders,
+  const std::optional<Palette>& palette);
+
+/**
+ * Loads the material at the given path like the overload above, but finds its shader in
+ * the index and takes the diffuse images from it instead of a pass over every shader.
+ * Of shaders whose paths differ only in case, the index finds the first one; the
+ * shaders that loadShaderFiles returns have no such paths, so for them both overloads
+ * make the same material.
+ *
+ * The model loaders call this once per material name, on several threads.
+ */
+Result<gl::Material> loadMaterial(
+  const fs::FileSystem& fs,
+  const MaterialConfig& materialConfig,
+  const std::filesystem::path& materialPath,
+  const gl::CreateTextureResource& createResource,
+  const IndexedShaders& shaders,
   const std::optional<Palette>& palette);
 
 /**
@@ -146,16 +189,93 @@ Result<std::optional<gl::Material>> findIdTech4Material(
   const IndexedShaders& shaders);
 
 /**
- * Loads the materials under materialConfig.root, grouped into collections by directory.
+ * Finds and loads the materials of the entity models that one model manager loads, so
+ * that every image is decoded once and all materials that show it share its texture
+ * resource, whatever model they belong to. Every request still returns a new material,
+ * because every surface owns its skins and a gl::Material can't be copied.
  *
- * The material scripts are read with loadShaderFiles. Every shader under the root becomes
- * a material. If materialConfig.implicitMaterialsFromImages is set, so does every image
- * file under the root that no shader of the same name (ignoring case) replaces and that
+ * The cache resolves every name once and keeps what it found, misses too, and it lists
+ * every image directory once. So it serves one set of shaders and one state of the file
+ * system; the model manager replaces it when either changes.
+ *
+ * The model loaders call it on several threads at once. Names are resolved under a
+ * lock, but images are decoded outside of it, each by the first thread that needs it,
+ * while the threads that need the same image wait for that one.
+ */
+class ModelMaterialCache
+{
+private:
+  struct State;
+
+  std::unique_ptr<State> m_state;
+
+public:
+  /**
+   * The file system must outlive the cache and the texture resources that it makes, and
+   * the given shaders must not be null.
+   */
+  ModelMaterialCache(
+    const fs::FileSystem& fs,
+    MaterialConfig materialConfig,
+    std::shared_ptr<const IndexedShaders> shaders,
+    gl::CreateTextureResource createResource);
+  ~ModelMaterialCache();
+
+  /**
+   * Finds the material that an id Tech 4 model names by its canonical decl name, as
+   * findIdTech4Material does with the shaders of this cache.
+   */
+  Result<std::optional<gl::Material>> findIdTech4Material(
+    const std::filesystem::path& materialName);
+
+  /**
+   * Loads the material at the given path, as loadMaterial does with the shaders of this
+   * cache and no palette.
+   */
+  Result<gl::Material> loadMaterial(const std::filesystem::path& materialPath);
+
+  /**
+   * Returns a material of the given name that shows the default image, such as the
+   * default skin of an id Tech 4 OBJ model. All of them share one texture resource, whose
+   * image loadDefaultTexture decodes on the first call and reports a failure of to that
+   * call's logger.
+   */
+  gl::Material defaultMaterial(std::string name, Logger& logger);
+
+  /**
+   * Returns the number of texture resources that this cache has made or is making: one
+   * per image that its materials show.
+   */
+  size_t textureResourceCount() const;
+};
+
+/**
+ * Loads the materials under materialConfig.root from the given shaders, which are
+ * usually what loadShaderFiles read from the material scripts, grouped into collections
+ * by directory. The shaders are not parsed again, so the caller can share one parse with
+ * the entity models.
+ *
+ * Every shader under the root becomes a material. If
+ * materialConfig.implicitMaterialsFromImages is set, so does every image file under the
+ * root that no shader of the same name (ignoring case) replaces and that
  * materialConfig.excludes doesn't hide; otherwise, image files are only used as the
  * shaders' previews and materialConfig.excludes has no effect. Shader previews are
  * resolved here, on the calling thread, so that previewImageMissing is known at once; the
  * images are decoded by the texture resources that createResource makes, and materials
- * that show the same image share one resource. One summary line is logged per load.
+ * that show the same image share one resource. One summary line is logged per load; it
+ * counts the files that the shaders carry.
+ */
+Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
+  const fs::FileSystem& fs,
+  const MaterialConfig& materialConfig,
+  const IndexedShaders& shaders,
+  const gl::CreateTextureResource& createResource,
+  Logger& logger);
+
+/**
+ * Reads the material scripts with loadShaderFiles and loads the materials from them as
+ * the overload above does. A caller that needs the shaders for anything else parses them
+ * once and calls the overload above.
  */
 Result<std::vector<gl::MaterialCollection>> loadMaterialCollections(
   const fs::FileSystem& fs,

@@ -39,6 +39,7 @@
 #include "SidebarTestUtils.h"
 #include "base/NotifierConnection.h"
 #include "base/PreferenceManager.h"
+#include "fs/DiskFileSystem.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
@@ -50,10 +51,12 @@
 #include "mdl/Light.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
+#include "mdl/Map_Assets.h"
 #include "mdl/Map_Entities.h"
 #include "mdl/Map_Groups.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
+#include "mdl/TestUtils.h"
 #include "mdl/WorldNode.h"
 #include "prefs/Preferences.h"
 #include "ui/CatchConfig.h"
@@ -70,7 +73,6 @@
 
 #include "kd/invoke.h"
 #include "kd/result.h"
-#include "kd/task_manager.h"
 
 #include "vm/bbox.h"
 #include "vm/vec.h"
@@ -1971,12 +1973,35 @@ TEST_CASE("LightEditorPanel")
     selectOnly(map, {texturedNode});
     CHECK(texture.count() == 2);
 
-    auto taskManager = kdl::task_manager{};
-    map.entityModelManager().reloadShaders(taskManager);
+    map.entityModelManager().setShaders(mdl::loadIndexedShaders(
+      fs::DiskFileSystem{map.gamePath() / "base"},
+      map.gameInfo().gameConfig.materialConfig));
     fixture.document().modsDidChangeNotifier();
     QApplication::processEvents();
     CHECK(items() == expectedItems);
     CHECK(texture.currentIndex() == 2);
+  }
+
+  SECTION("the texture list is read again when the material collections are reloaded")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    auto& texture = findControl<QComboBox>(panel, "Texture");
+    REQUIRE(texture.count() == 3);
+
+    // the reload parses the material scripts again, so the list may have changed
+    texture.removeItem(1);
+    REQUIRE(texture.count() == 2);
+    mdl::reloadMaterialCollections(map);
+    QApplication::processEvents();
+    CHECK(texture.count() == 3);
+    CHECK(texture.itemText(1) == "fogs/tb_test_fog");
   }
 
   SECTION("the volume tool buttons")
