@@ -128,11 +128,13 @@ Once you have selected a game and a map format, TrenchBroom will open the main e
 
 ## Main Window {#main_window}
 
-The main window consists of a menu bar, a toolbar, the editing area, an inspector on the right and an info panel at the bottom. In the screenshot below, there are three editing areas: one 3D viewport and two orthographic 2D editing areas.
+The main window consists of a menu bar, a toolbar, the tool sidebar at the left edge under the toolbar, the editing area, an inspector on the right and an info panel at the bottom. In the screenshot below, there are three editing areas: one 3D viewport and two orthographic 2D editing areas.
 
 ![The main editing window (Ubuntu Linux)](images/MainWindow.png)
 
 The sizes of the editing area, the inspector and the info bar can be changed by dragging the dividers with the mouse. This applies to some of the dividers in the inspector as well. If a divider is 2 pixels thick, it can be dragged with the mouse. The positions of the dividers and the size of the editing window are saved when you close a window. The following subsections introduce the most important parts of the main window: the editing area, the inspector, and the info bar. The toolbar and the menu will be explained in more detail in later sections.
+
+The _tool sidebar_ is the strip of buttons at the left edge of the window, under the toolbar. It has one button for every panel of the [sidebar](#sidebar), in alphabetical order; hover over a button to see the name of its panel, and click it to show or hide that panel. A button is checked while its panel can be seen; while the panel's dock is tabbed behind another dock, its button is unchecked, and one click brings that dock to the front. The chevron button at the bottom of the strip collapses the strip to that single button, directly under the toolbar, and expands it again. Whether the strip is expanded is saved with the window layout. To hide the strip completely, choose #menu(Menu/View/Toggle Tool Sidebar).
 
 ### The Editing Area
 
@@ -1224,7 +1226,7 @@ The Light Editor works on entity properties only. A light stays a point entity: 
 
 ### The Sidebar {#sidebar}
 
-The Light Editor is the first panel of the _sidebar_, a framework for panels that live in dock windows next to the map views. Choose **View &raquo; Sidebar &raquo; Light Editor** to show the panel in a dock window on the right of the main window, and choose it again, or click the close button of the dock, to hide it. You can drag the dock by its title bar to the left edge of the window, tab it together with another dock, or pull it out of the window to float it above the editor. The place of the dock, floating or not, is saved with the window layout and restored when TrenchBroom starts again; a floating dock that would come back outside every screen is docked again. The Sidebar menu lists one entry for every panel of the sidebar.
+The Light Editor is the first panel of the _sidebar_, a framework for panels that live in dock windows next to the map views. Choose **View &raquo; Sidebar &raquo; Light Editor** to show the panel in a dock window on the right of the main window, and choose it again, or click the close button of the dock, to hide it. The spotlight button of the [tool sidebar](#main_window) does the same, and it is checked while the dock is visible. You can drag the dock by its title bar to the left edge of the window, tab it together with another dock, or pull it out of the window to float it above the editor. The place of the dock, floating or not, is saved with the window layout and restored when TrenchBroom starts again; a floating dock that would come back outside every screen is docked again. The Sidebar menu lists one entry for every panel of the sidebar, in alphabetical order.
 
 Closing the dock, with its close button or with the menu entry, also ends the draw mode of the light volume tool described below. Floating the dock, docking it again, tabbing another dock over it and minimizing the window leave the tool as it is. The handles and surfaces of the light volumes do not depend on the dock: they work while the dock is closed, too.
 

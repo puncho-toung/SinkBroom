@@ -817,6 +817,11 @@ QString LightEditorPanel::title() const
   return tr("Light Editor");
 }
 
+std::filesystem::path LightEditorPanel::iconPath() const
+{
+  return "LightEditor.svg";
+}
+
 void LightEditorPanel::panelShown()
 {
   refresh();

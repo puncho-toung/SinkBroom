@@ -161,6 +161,40 @@ TEST_CASE("Actions")
       CHECK(!conflicts.contains(size_t(std::distance(allActionInfos.begin(), iInfo))));
     }
   }
+
+  SECTION("The View > Toggle Tool Sidebar action is checkable and conflict-free")
+  {
+    const Action* toggleToolSidebar = nullptr;
+    actionManager.visitMainMenu(kdl::overload(
+      [](const MenuSeparator&) {},
+      [&](const MenuAction& actionItem) {
+        if (
+          actionItem.action.preference().path
+          == std::filesystem::path{"Menu/View/Toggle Tool Sidebar"})
+        {
+          toggleToolSidebar = &actionItem.action;
+        }
+      },
+      [](const auto& thisLambda, const Menu& menu) { menu.visitEntries(thisLambda); }));
+
+    REQUIRE(toggleToolSidebar != nullptr);
+    CHECK(toggleToolSidebar->label() == "Toggle Tool Sidebar");
+    CHECK(toggleToolSidebar->checkable());
+    CHECK(toggleToolSidebar->actionContext() == ActionContext::Any);
+
+    // no default shortcut
+    CHECK(
+      toggleToolSidebar->preference().defaultValue
+      == std::vector<KeySequence>{KeySequence{}});
+
+    const auto allActionInfos = collectAllActionInfos(actionManager);
+    const auto conflicts = findConflicts(allActionInfos);
+    const auto iInfo = std::ranges::find_if(allActionInfos, [&](const auto& info) {
+      return info.displayPath() == toggleToolSidebar->preference().path;
+    });
+    REQUIRE(iInfo != allActionInfos.end());
+    CHECK(!conflicts.contains(size_t(std::distance(allActionInfos.begin(), iInfo))));
+  }
 }
 
 } // namespace tb::ui

@@ -29,6 +29,7 @@
 #include "ui/ActionMenu.h"
 #include "ui/ImageUtils.h"
 #include "ui/QKeySequenceUtils.h"
+#include "ui/ToolSidebar.h"
 
 #include "kd/contracts.h"
 #include "kd/ranges/to.h"
@@ -174,6 +175,22 @@ void populateToolBar(
     [&](const MenuAction& actionItem) {
       auto& qtAction = findOrCreateQtAction(actionMap, actionItem.action, triggerFn);
       qtToolBar.addAction(&qtAction);
+    },
+    [](const auto& thisLambda, const Menu& menu) { menu.visitEntries(thisLambda); }));
+}
+
+void populateToolSidebar(
+  ActionManager& actionManager,
+  ToolSidebar& toolSidebar,
+  std::unordered_map<const Action*, QAction*>& actionMap,
+  const TriggerFn& triggerFn)
+{
+  // the sidebar sorts its buttons, so a separator would have no place to go
+  actionManager.visitToolSidebar(kdl::overload(
+    [](const MenuSeparator&) {},
+    [&](const MenuAction& actionItem) {
+      toolSidebar.addEntry(
+        &findOrCreateQtAction(actionMap, actionItem.action, triggerFn));
     },
     [](const auto& thisLambda, const Menu& menu) { menu.visitEntries(thisLambda); }));
 }

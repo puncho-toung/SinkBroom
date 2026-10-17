@@ -31,6 +31,11 @@ SidebarPanel::SidebarPanel(QWidget* parent)
 
 SidebarPanel::~SidebarPanel() = default;
 
+std::filesystem::path SidebarPanel::iconPath() const
+{
+  return {};
+}
+
 void SidebarPanel::panelShown() {}
 
 void SidebarPanel::panelHidden() {}

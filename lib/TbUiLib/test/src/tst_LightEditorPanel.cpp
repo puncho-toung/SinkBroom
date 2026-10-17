@@ -211,6 +211,13 @@ TEST_CASE("LightEditorPanel")
     CHECK(panel.title() == "Light Editor");
   }
 
+  SECTION("iconPath")
+  {
+    auto fixture = SidebarContextFixture{};
+    auto panel = LightEditorPanel{fixture.context()};
+    CHECK(panel.iconPath() == "LightEditor.svg");
+  }
+
   SECTION("needs a game with a light editor")
   {
     // the Quake game config has no entities.lightEditor

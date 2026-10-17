@@ -59,6 +59,13 @@ private:
    */
   Menu m_toolBar = Menu{"Toolbar", MenuEntryType::None, {}};
 
+  /**
+   * The actions of the map window's tool sidebar, after its buttons for the sidebar
+   * panels. Stored as a menu like the toolbar; the sidebar sorts its buttons and ignores
+   * separators. These will hold pointers to the actions in m_actions.
+   */
+  Menu m_toolSidebar = Menu{"Tool Sidebar", MenuEntryType::None, {}};
+
 public:
   ActionManager();
   deleteCopyAndMove(ActionManager);
@@ -101,6 +108,18 @@ public:
   void visitToolBar(MenuVisitor&& visitor)
   {
     m_toolBar.visitEntries(visitor);
+  }
+
+  template <typename MenuVisitor>
+  void visitToolSidebar(MenuVisitor&& visitor) const
+  {
+    m_toolSidebar.visitEntries(visitor);
+  }
+
+  template <typename MenuVisitor>
+  void visitToolSidebar(MenuVisitor&& visitor)
+  {
+    m_toolSidebar.visitEntries(visitor);
   }
 
   /**
@@ -155,6 +174,7 @@ private:
   Menu& createMainMenu(std::string name);
 
   void createToolbar();
+  void createToolSidebar();
   Action& existingAction(const std::filesystem::path& preferencePath);
 
   Action& addAction(Action action);
