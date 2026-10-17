@@ -78,7 +78,7 @@ class EntityNameAllocator
 private:
   const Map& m_map;
   const EntityNamingConfig& m_config;
-  std::vector<const Node*> m_excluded;
+  std::unordered_set<const Node*> m_excluded;
   // lowercase names reserved during this operation
   std::unordered_set<std::string> m_reserved;
   // lowercase classname -> the lowest N that may still be free
@@ -158,6 +158,10 @@ bool allocateEntityName(
  * Names every entity in the given subtrees, which must not be part of the map yet,
  * depth first and in the given order, which must be the order of their source (the
  * clipboard or the selection) so that the result does not depend on memory addresses.
+ *
+ * In KeepIfFree mode, the names are given in two passes: first every entity whose name
+ * is not taken keeps it and reserves it, then every other entity gets a new name. So a
+ * new name is never the name that an entity further on keeps.
  */
 EntityNamingResult assignUniqueEntityNames(
   const std::vector<Node*>& rootsInSourceOrder,
