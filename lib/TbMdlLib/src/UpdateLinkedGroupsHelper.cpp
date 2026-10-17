@@ -96,12 +96,12 @@ auto doReplaceChildren(
 
 /**
  * Gives the entities that a linked group update adds to the target groups unique names if
- * the game requires them. The names and models of the entities that the target groups
- * already had are protected and kept; an entity that is new in the source group arrives
- * with the name of its original and is renamed. The new children of all target groups
- * are named at once, so that every name a target group keeps is reserved before any
- * entity gets a new name. References are not changed, since they point into the source
- * group by design.
+ * the game requires them. The names of the entities that the target groups already had,
+ * and the models of their brush entities, are protected and kept; an entity that is new
+ * in the source group arrives with the name of its original and is renamed. The new
+ * children of all target groups are named at once, so that every name a target group
+ * keeps is reserved before any entity gets a new name. References are not changed, since
+ * they point into the source group by design.
  */
 void assignUniqueEntityNamesInUpdates(
   const UpdateLinkedGroupsResult& linkedGroupUpdates, const Map& map)

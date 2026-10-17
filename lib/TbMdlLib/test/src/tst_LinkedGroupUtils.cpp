@@ -741,22 +741,30 @@ TEST_CASE("LinkedGroupUtils")
         | kdl::transform_error([](const auto&) { FAIL(); });
     }
 
-    SECTION("Entity names and models are kept per instance if the game has naming rules")
+    SECTION(
+      "Entity names and brush entity models are kept per instance if the game has naming "
+      "rules")
     {
       const auto worldBounds = vm::bbox3d{8192.0};
+      const auto brushBuilder = BrushBuilder{MapFormat::Quake3, worldBounds};
 
-      // updates a target entity named b from a source entity named a
-      const auto updateTargetEntity = [&](std::optional<EntityNamingConfig> naming) {
+      // updates a target entity with the given properties from a source entity with the
+      // given properties, which has a brush if withBrush is true
+      const auto updateTargetEntity = [&](
+                                        std::optional<EntityNamingConfig> naming,
+                                        std::vector<EntityProperty> sourceProperties,
+                                        std::vector<EntityProperty> targetProperties,
+                                        const bool withBrush) {
         auto worldNode = WorldNode{
           EntityPropertyConfig{.naming = std::move(naming)}, Entity{}, MapFormat::Quake3};
 
         auto* sourceGroupNode = new GroupNode{Group{"group"}};
-        auto* sourceEntityNode = new EntityNode{Entity{{
-          {"classname", "func_static"},
-          {"name", "a"},
-          {"model", "a"},
-          {"key", "new"},
-        }}};
+        auto* sourceEntityNode = new EntityNode{Entity{std::move(sourceProperties)}};
+        if (withBrush)
+        {
+          sourceEntityNode->addChild(
+            new BrushNode{brushBuilder.createCube(64.0, "material") | kdl::value()});
+        }
         sourceGroupNode->addChild(sourceEntityNode);
 
         auto* targetGroupNode =
@@ -765,9 +773,7 @@ TEST_CASE("LinkedGroupUtils")
           static_cast<EntityNode*>(targetGroupNode->children().front());
         {
           auto entity = targetEntityNode->entity();
-          entity.addOrUpdateProperty("name", "b");
-          entity.addOrUpdateProperty("model", "b");
-          entity.addOrUpdateProperty("key", "old");
+          entity.setProperties(std::move(targetProperties));
           targetEntityNode->setEntity(std::move(entity));
         }
 
@@ -789,17 +795,89 @@ TEST_CASE("LinkedGroupUtils")
 
       SECTION("With naming rules")
       {
-        const auto entity = updateTargetEntity(
-          EntityNamingConfig{.nameKey = "name", .brushEntityModelKey = "model"});
-        CHECK(*entity.property("name") == "b");
-        CHECK(*entity.property("model") == "b");
-        CHECK(*entity.property("key") == "new");
-        CHECK(entity.protectedProperties().empty());
+        const auto naming =
+          EntityNamingConfig{.nameKey = "name", .brushEntityModelKey = "model"};
+
+        SECTION("A brush entity keeps its name and model")
+        {
+          const auto entity = updateTargetEntity(
+            naming,
+            {{"classname", "func_static"}, {"name", "a"}, {"model", "a"}, {"key", "new"}},
+            {{"classname", "func_static"}, {"name", "b"}, {"model", "b"}, {"key", "old"}},
+            true);
+
+          // the kept properties stay where they are
+          CHECK_THAT(
+            entity.properties(),
+            Equals(std::vector<EntityProperty>{
+              {"classname", "func_static"},
+              {"name", "b"},
+              {"model", "b"},
+              {"key", "new"},
+            }));
+          CHECK(entity.protectedProperties().empty());
+        }
+
+        SECTION("A point entity keeps its name, but takes the model of the source")
+        {
+          const auto entity = updateTargetEntity(
+            naming,
+            {{"classname", "func_static"},
+             {"name", "a"},
+             {"model", "models/new.lwo"},
+             {"key", "new"}},
+            {{"classname", "func_static"},
+             {"name", "b"},
+             {"model", "models/old.lwo"},
+             {"key", "old"}},
+            false);
+
+          CHECK_THAT(
+            entity.properties(),
+            Equals(std::vector<EntityProperty>{
+              {"classname", "func_static"},
+              {"name", "b"},
+              {"model", "models/new.lwo"},
+              {"key", "new"},
+            }));
+          CHECK(entity.protectedProperties().empty());
+        }
+
+        SECTION("The model of a point entity is added and removed like any property")
+        {
+          CHECK_THAT(
+            updateTargetEntity(
+              naming,
+              {{"classname", "func_static"}, {"name", "a"}, {"model", "models/new.lwo"}},
+              {{"classname", "func_static"}, {"name", "b"}},
+              false)
+              .properties(),
+            Equals(std::vector<EntityProperty>{
+              {"classname", "func_static"},
+              {"name", "b"},
+              {"model", "models/new.lwo"},
+            }));
+          CHECK_THAT(
+            updateTargetEntity(
+              naming,
+              {{"classname", "func_static"}, {"name", "a"}},
+              {{"classname", "func_static"}, {"name", "b"}, {"model", "models/old.lwo"}},
+              false)
+              .properties(),
+            Equals(std::vector<EntityProperty>{
+              {"classname", "func_static"},
+              {"name", "b"},
+            }));
+        }
       }
 
       SECTION("Without naming rules")
       {
-        const auto entity = updateTargetEntity(std::nullopt);
+        const auto entity = updateTargetEntity(
+          std::nullopt,
+          {{"classname", "func_static"}, {"name", "a"}, {"model", "a"}, {"key", "new"}},
+          {{"classname", "func_static"}, {"name", "b"}, {"model", "b"}, {"key", "old"}},
+          false);
         CHECK(*entity.property("name") == "a");
         CHECK(*entity.property("model") == "a");
         CHECK(*entity.property("key") == "new");

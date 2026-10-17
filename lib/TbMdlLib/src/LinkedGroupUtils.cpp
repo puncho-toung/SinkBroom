@@ -20,6 +20,7 @@
 #include "mdl/LinkedGroupUtils.h"
 
 #include "base/Uuid.h"
+#include "mdl/EntityNaming.h"
 #include "mdl/EntityProperties.h"
 #include "mdl/ModelUtils.h"
 #include "mdl/Node.h"
@@ -39,6 +40,7 @@
 #include "kd/vector_utils.h"
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -405,6 +407,29 @@ void preserveGroupNames(
       [](const PatchNode&) {}));
 }
 
+/**
+ * Returns the properties that the given entity in a linked group keeps for itself: with
+ * unique entity names, its name, and if it is a brush entity, its brush entity model key,
+ * which differ between the instances of a linked group by design. The model of a point
+ * entity is its asset and is propagated like any other property.
+ */
+std::vector<std::string> getImplicitlyProtectedProperties(
+  const EntityNode& clonedEntityNode, const std::optional<EntityNamingConfig>& naming)
+{
+  auto result = std::vector<std::string>{};
+  if (naming)
+  {
+    result.push_back(naming->nameKey);
+    if (
+      naming->brushEntityModelKey && clonedEntityNode.hasChildren()
+      && isBrushEntityModelClass(clonedEntityNode.entity().classname()))
+    {
+      result.push_back(*naming->brushEntityModelKey);
+    }
+  }
+  return result;
+}
+
 void preserveEntityProperties(
   EntityNode& clonedEntityNode,
   const EntityNode& correspondingEntityNode,
@@ -433,11 +458,13 @@ void preserveEntityProperties(
 
   for (const auto& propertyKey : allProtectedProperties)
   {
-    // this can change the order of properties
-    clonedEntity.removeProperty(propertyKey);
     if (const auto* propertyValue = correspondingEntity.property(propertyKey))
     {
       clonedEntity.addOrUpdateProperty(propertyKey, *propertyValue);
+    }
+    else
+    {
+      clonedEntity.removeProperty(propertyKey);
     }
   }
 
@@ -448,7 +475,7 @@ template <typename T>
 void preserveEntityProperties(
   const std::vector<T>& clonedNodes,
   const std::unordered_map<std::string_view, const Node*>& correspondingNodes,
-  const std::vector<std::string>& implicitlyProtectedProperties)
+  const std::optional<EntityNamingConfig>& naming)
 {
   return Node::visitAll(
     clonedNodes,
@@ -468,30 +495,13 @@ void preserveEntityProperties(
             getCorrespondingNode<EntityNode>(correspondingNodes, entityNode.linkId()))
         {
           preserveEntityProperties(
-            entityNode, *correspondingNode, implicitlyProtectedProperties);
+            entityNode,
+            *correspondingNode,
+            getImplicitlyProtectedProperties(entityNode, naming));
         }
       },
       [](const BrushNode&) {},
       [](const PatchNode&) {}));
-}
-
-/**
- * Returns the properties that every entity in a linked group keeps for itself: with
- * unique entity names, the name and the brush entity model key, which differ between the
- * instances of a linked group by design.
- */
-std::vector<std::string> getImplicitlyProtectedProperties(const Node& node)
-{
-  auto result = std::vector<std::string>{};
-  if (const auto& naming = node.entityPropertyConfig().naming)
-  {
-    result.push_back(naming->nameKey);
-    if (naming->brushEntityModelKey)
-    {
-      result.push_back(*naming->brushEntityModelKey);
-    }
-  }
-  return result;
 }
 
 } // namespace
@@ -525,7 +535,7 @@ Result<UpdateLinkedGroupsResult> updateLinkedGroups(
                       preserveEntityProperties(
                         newChildren,
                         linkIdToNodeMap,
-                        getImplicitlyProtectedProperties(*targetGroupNode));
+                        targetGroupNode->entityPropertyConfig().naming);
                       return std::pair{
                         static_cast<Node*>(targetGroupNode), std::move(newChildren)};
                     });
