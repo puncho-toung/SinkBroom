@@ -43,12 +43,24 @@ IssueQuickFix::IssueQuickFix(
   IssueType issueType, std::string description, SingleIssueFix fix)
   : IssueQuickFix{
       std::move(description), [=](Map& map, const std::vector<const Issue*>& issues) {
+        // every issue is read before the first fix destroys any of them
+        auto snapshots = std::vector<EntityPropertyIssueSnapshot>{};
         for (const auto* issue : issues)
         {
           if (issue->type() == issueType)
           {
-            fix(map, *issue);
+            const auto& propIssue = static_cast<const EntityPropertyIssue&>(*issue);
+            snapshots.push_back(EntityPropertyIssueSnapshot{
+              .node = &propIssue.node(),
+              .propertyKey = propIssue.propertyKey(),
+              .propertyValue = propIssue.propertyValue(),
+            });
           }
+        }
+
+        for (const auto& snapshot : snapshots)
+        {
+          fix(map, snapshot);
         }
       }}
 {
@@ -75,20 +87,18 @@ IssueQuickFix makeDeleteNodesQuickFix()
 
 IssueQuickFix makeRemoveEntityPropertiesQuickFix(const IssueType type)
 {
-  return {type, "Delete Property", [](Map& map, const Issue& issue) {
-            const auto pushSelection = PushSelection{map};
+  return {
+    type, "Delete Property", [](Map& map, const EntityPropertyIssueSnapshot& issue) {
+      const auto pushSelection = PushSelection{map};
 
-            const auto& entityPropertyIssue =
-              static_cast<const EntityPropertyIssue&>(issue);
+      // If world node is affected, the selection will fail, but if nothing is
+      // selected, the removeProperty call will correctly affect worldspawn
+      // either way.
 
-            // If world node is affected, the selection will fail, but if nothing is
-            // selected, the removeProperty call will correctly affect worldspawn
-            // either way.
-
-            deselectAll(map);
-            selectNodes(map, {&issue.node()});
-            removeEntityProperty(map, entityPropertyIssue.propertyKey());
-          }};
+      deselectAll(map);
+      selectNodes(map, {issue.node});
+      removeEntityProperty(map, issue.propertyKey);
+    }};
 }
 
 IssueQuickFix makeTransformEntityPropertiesQuickFix(
@@ -97,38 +107,40 @@ IssueQuickFix makeTransformEntityPropertiesQuickFix(
   std::function<std::string(const std::string&)> keyTransform,
   std::function<std::string(const std::string&)> valueTransform)
 {
-  return {type, std::move(description), [=](Map& map, const Issue& issue) {
-            const auto pushSelection = PushSelection{map};
+  return {
+    type,
+    std::move(description),
+    [=](Map& map, const EntityPropertyIssueSnapshot& issue) {
+      const auto pushSelection = PushSelection{map};
 
-            const auto& propIssue = static_cast<const EntityPropertyIssue&>(issue);
-            const auto& oldkey = propIssue.propertyKey();
-            const auto& oldValue = propIssue.propertyValue();
-            const auto newKey = keyTransform(oldkey);
-            const auto newValue = valueTransform(oldValue);
+      const auto& oldkey = issue.propertyKey;
+      const auto& oldValue = issue.propertyValue;
+      const auto newKey = keyTransform(oldkey);
+      const auto newValue = valueTransform(oldValue);
 
-            // If world node is affected, the selection will fail, but if nothing is
-            // selected, the removeProperty call will correctly affect worldspawn
-            // either way.
+      // If world node is affected, the selection will fail, but if nothing is
+      // selected, the removeProperty call will correctly affect worldspawn
+      // either way.
 
-            deselectAll(map);
-            selectNodes(map, {&issue.node()});
+      deselectAll(map);
+      selectNodes(map, {issue.node});
 
-            if (newKey.empty())
-            {
-              removeEntityProperty(map, propIssue.propertyKey());
-            }
-            else
-            {
-              if (newKey != oldkey)
-              {
-                renameEntityProperty(map, oldkey, newKey);
-              }
-              if (newValue != oldValue)
-              {
-                setEntityProperty(map, newKey, newValue);
-              }
-            }
-          }};
+      if (newKey.empty())
+      {
+        removeEntityProperty(map, oldkey);
+      }
+      else
+      {
+        if (newKey != oldkey)
+        {
+          renameEntityProperty(map, oldkey, newKey);
+        }
+        if (newValue != oldValue)
+        {
+          setEntityProperty(map, newKey, newValue);
+        }
+      }
+    }};
 }
 
 } // namespace tb::mdl

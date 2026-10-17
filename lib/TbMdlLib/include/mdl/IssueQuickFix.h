@@ -29,11 +29,25 @@ namespace tb::mdl
 {
 class Issue;
 class Map;
+class Node;
+
+/**
+ * The parts of an entity property issue that a single issue fix needs, copied out of
+ * every issue before the first fix is applied. A fix changes a node, which destroys the
+ * issues of that node and of the nodes whose issues depend on it: the ends of its links
+ * and, if the game has naming rules, every entity with the same name.
+ */
+struct EntityPropertyIssueSnapshot
+{
+  Node* node;
+  std::string propertyKey;
+  std::string propertyValue;
+};
 
 class IssueQuickFix
 {
 private:
-  using SingleIssueFix = std::function<void(Map&, const Issue&)>;
+  using SingleIssueFix = std::function<void(Map&, const EntityPropertyIssueSnapshot&)>;
   using MultiIssueFix = std::function<void(Map&, const std::vector<const Issue*>&)>;
 
   std::string m_description;
