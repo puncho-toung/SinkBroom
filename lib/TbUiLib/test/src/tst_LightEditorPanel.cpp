@@ -17,6 +17,8 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <QAbstractSlider>
+#include <QAbstractSpinBox>
 #include <QApplication>
 #include <QCheckBox>
 #include <QColor>
@@ -26,11 +28,13 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QScrollBar>
 #include <QSlider>
 #include <QStackedWidget>
 #include <QTest>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include "SidebarTestUtils.h"
 #include "base/PreferenceManager.h"
@@ -1479,6 +1483,93 @@ TEST_CASE("LightEditorPanel")
     CHECK(valueOf(*lightNode1, "math_falloff_exp") == "8.05");
     CHECK(valueOf(*lightNode2, "math_falloff_exp") == "8.05");
     CHECK(map.modificationCount() == modificationCount + 1);
+  }
+
+  SECTION("the wheel over an input without the focus scrolls instead of editing")
+  {
+    auto& prefs = PreferenceManager::instance();
+    // also when a check fails, so that no later test case sees a changed preference
+    const auto resetThreshold = kdl::invoke_later{
+      [&] { prefs.resetToDefault(Preferences::LightVolumeHandleThreshold); }};
+
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "16 32 64"},
+        {"light_radius", "200 100 50"},
+        {"_color", "1 0.5 0"},
+        {"math_enabled", "1"},
+        {"math_type", "point"},
+        {"math_falloff", "exponential"},
+        {"math_falloff_exp", "2"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+    REQUIRE(showsEditor(panel));
+
+    const auto properties = lightNode->entity().properties();
+    const auto modificationCount = map.modificationCount();
+    const auto threshold = pref(Preferences::LightVolumeHandleThreshold);
+
+    // Qt does not propagate a synthesized wheel event ("Synthesized events shouldn't
+    // propagate", qapplication.cpp), so this checks that the input leaves the event to
+    // its parents; that they scroll the panel, and that an input with the focus takes
+    // the wheel, are GUI checks
+    const auto wheelIsAccepted = [](QWidget& input) {
+      auto event = QWheelEvent{
+        QPointF{4, 4},
+        QPointF{4, 4},
+        QPoint{},
+        QPoint{0, 120},
+        Qt::NoButton,
+        Qt::NoModifier,
+        Qt::NoScrollPhase,
+        false};
+      QApplication::sendEvent(&input, &event);
+      return event.isAccepted();
+    };
+    const auto checkWheel = [&](QWidget& input, const auto& valueOf) {
+      CAPTURE(input.objectName().toStdString());
+      CHECK(input.focusPolicy() == Qt::StrongFocus);
+      const auto value = valueOf();
+      CHECK_FALSE(wheelIsAccepted(input));
+      CHECK(valueOf() == value);
+    };
+
+    const auto spins = panel.findChildren<QAbstractSpinBox*>();
+    REQUIRE_FALSE(spins.isEmpty());
+    for (auto* spin : spins)
+    {
+      checkWheel(*spin, [&] { return spin->property("value").toDouble(); });
+    }
+
+    auto sliderCount = 0;
+    for (auto* slider : panel.findChildren<QAbstractSlider*>())
+    {
+      // the scroll bars of the panel and of the combo box lists scroll
+      if (!qobject_cast<QScrollBar*>(slider))
+      {
+        checkWheel(*slider, [&] { return slider->value(); });
+        ++sliderCount;
+      }
+    }
+    CHECK(sliderCount > 0);
+
+    const auto comboBoxes = panel.findChildren<QComboBox*>();
+    REQUIRE_FALSE(comboBoxes.isEmpty());
+    for (auto* comboBox : comboBoxes)
+    {
+      checkWheel(*comboBox, [&] { return comboBox->currentIndex(); });
+    }
+
+    CHECK(lightNode->entity().properties() == properties);
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(pref(Preferences::LightVolumeHandleThreshold) == threshold);
   }
 
   SECTION("lights of different types hide the volume")

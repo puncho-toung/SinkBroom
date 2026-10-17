@@ -19,10 +19,13 @@
 
 #include "ui/LightEditorPanel.h"
 
+#include <QAbstractSlider>
+#include <QAbstractSpinBox>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -354,6 +357,51 @@ QComboBox* createComboBox(const QString& name, const QStringList& items)
   comboBox->setObjectName(controlName(name));
   comboBox->addItems(items);
   return comboBox;
+}
+
+/**
+ * Leaves a wheel event over an input that does not have the focus to the input's parents,
+ * and so to the panel's scroll area: scrolling the panel must not edit the lights, one
+ * command per notch. An input that has the focus still takes the wheel.
+ */
+class WheelGuard : public QObject
+{
+public:
+  using QObject::QObject;
+
+  bool eventFilter(QObject* watched, QEvent* event) override
+  {
+    if (event->type() == QEvent::Wheel)
+    {
+      if (const auto* widget = qobject_cast<QWidget*>(watched);
+          widget && !widget->hasFocus())
+      {
+        // Qt passes an ignored wheel event on to the parents
+        event->ignore();
+        return true;
+      }
+    }
+    return QObject::eventFilter(watched, event);
+  }
+};
+
+/**
+ * Gives the spin boxes, sliders and combo boxes among the given inputs the guard, and a
+ * focus policy without the wheel: a wheel that gave them the focus would get past it.
+ */
+void guardWheel(const std::vector<QObject*>& inputs, WheelGuard* guard)
+{
+  for (auto* input : inputs)
+  {
+    if (
+      qobject_cast<QAbstractSpinBox*>(input) || qobject_cast<QAbstractSlider*>(input)
+      || qobject_cast<QComboBox*>(input))
+    {
+      auto* widget = static_cast<QWidget*>(input);
+      widget->setFocusPolicy(Qt::StrongFocus);
+      widget->installEventFilter(guard);
+    }
+  }
 }
 
 FormWithSectionsLayout* createForm()
@@ -1230,6 +1278,9 @@ QWidget* LightEditorPanel::createEditorPage()
   {
     c.inputs.insert(c.inputs.end(), spins->begin(), spins->end());
   }
+
+  // the wheel scrolls the panel unless the input under it has the focus
+  guardWheel(c.inputs, new WheelGuard{this});
 
   // top to bottom: the volume tools, the light's geometry and colour, the page of its
   // kind, the flags (D50)
