@@ -19,14 +19,19 @@
 
 #include "ui/LightEditorPanel.h"
 
+#include <QAbstractSlider>
+#include <QAbstractSpinBox>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPoint>
 #include <QRadioButton>
+#include <QRect>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -73,8 +78,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -206,6 +213,8 @@ constexpr auto PatternScaleRange = SpinRange{0.1, 64.0, 4, 0.1, 1.0, 4.0};
 constexpr auto PatternPhaseRange = SpinRange{0.0, 100.0, 4, 0.1, 1.0, 10.0};
 // the light volume handle threshold in percent, 0.01 to 0.5 (D53)
 constexpr auto HandleThresholdRange = SpinRange{1.0, 50.0, 0, 1.0, 5.0, 10.0};
+// how long the threshold's steps must pause before it is written
+constexpr auto HandleThresholdWriteDelay = std::chrono::milliseconds{200};
 
 constexpr auto SliderSteps = 1000;
 
@@ -213,12 +222,92 @@ constexpr auto SliderSteps = 1000;
 constexpr auto MathPageIndex = 0;
 constexpr auto TexturePageIndex = 1;
 
-SpinControl* createSpin(const QString& name, const SpinRange& range)
+const auto Multi = QString{"multi"};
+
+/**
+ * A spin box that shows "multi" where the selected lights differ. Like in the face
+ * attribute editor, "multi" is the special value text of the minimum, but here the
+ * minimum lies one unit of the last decimal below the range while "multi" is shown: were
+ * it the range minimum, typing the range minimum into a "multi" field would not change
+ * the value, and nothing would be written.
+ */
+class MultiSpinControl : public SpinControl
 {
-  auto* spin = new SpinControl{};
+private:
+  double m_rangeMinimum = 0.0;
+
+public:
+  /**
+   * Sets the range of the values that the spin box shows and writes.
+   */
+  void setValueRange(const double minimum, const double maximum)
+  {
+    m_rangeMinimum = minimum;
+    setRange(minimum, maximum);
+  }
+
+  /**
+   * The lowest value that the spin box shows and writes; its minimum lies below it while
+   * it shows "multi".
+   */
+  double rangeMinimum() const { return m_rangeMinimum; }
+
+  /**
+   * Whether the spin box shows "multi": its value is the minimum below the range.
+   */
+  bool isMulti() const { return minimum() < m_rangeMinimum && value() == minimum(); }
+
+  /**
+   * Shows "multi". It emits nothing, because it shows what the map holds.
+   */
+  void setMulti()
+  {
+    const auto blocker = QSignalBlocker{this};
+    setSpecialValueText(Multi);
+    setMinimum(m_rangeMinimum - std::pow(10.0, -decimals()));
+    setValue(minimum());
+  }
+
+  /**
+   * Shows the value of the selected lights. It emits nothing, because it shows what the
+   * map holds; raising the minimum can change the value on its own.
+   */
+  void setLightValue(const double value)
+  {
+    const auto blocker = QSignalBlocker{this};
+    setSpecialValueText({});
+    setMinimum(m_rangeMinimum);
+    setValue(value);
+  }
+
+  /**
+   * From "multi", a step up starts at the range minimum, and a step down changes nothing
+   * because the value is the lowest already. A value typed over "multi" is stepped from
+   * as it is: raising the minimum first would replace it.
+   */
+  void stepBy(const int steps) override
+  {
+    if (isMulti() && text() == specialValueText())
+    {
+      if (steps <= 0)
+      {
+        return;
+      }
+
+      const auto blocker = QSignalBlocker{this};
+      setMinimum(m_rangeMinimum);
+    }
+
+    SpinControl::stepBy(steps);
+  }
+};
+
+MultiSpinControl* createSpin(const QString& name, const SpinRange& range)
+{
+  auto* spin = new MultiSpinControl{};
   spin->setObjectName(controlName(name));
   spin->setDigits(0, range.decimals);
-  spin->setRange(range.min, range.max);
+  spin->setValueRange(range.min, range.max);
   spin->setIncrements(range.regularIncrement, range.shiftIncrement, range.ctrlIncrement);
   return spin;
 }
@@ -232,7 +321,7 @@ QHBoxLayout* createRowLayout()
 }
 
 QLayout* createVec3Layout(
-  std::array<SpinControl*, 3>& spins, const QString& name, const SpinRange& range)
+  std::array<MultiSpinControl*, 3>& spins, const QString& name, const SpinRange& range)
 {
   const auto suffixes = std::array<QString, 3>{"X", "Y", "Z"};
 
@@ -246,7 +335,7 @@ QLayout* createVec3Layout(
 }
 
 QLayout* createSliderLayout(
-  QSlider*& slider, SpinControl*& spin, const QString& name, const SpinRange& range)
+  QSlider*& slider, MultiSpinControl*& spin, const QString& name, const SpinRange& range)
 {
   slider = new QSlider{Qt::Horizontal};
   slider->setObjectName(controlName(name + "Slider"));
@@ -273,6 +362,51 @@ QComboBox* createComboBox(const QString& name, const QStringList& items)
   comboBox->setObjectName(controlName(name));
   comboBox->addItems(items);
   return comboBox;
+}
+
+/**
+ * Leaves a wheel event over an input that does not have the focus to the input's parents,
+ * and so to the panel's scroll area: scrolling the panel must not edit the lights, one
+ * command per notch. An input that has the focus still takes the wheel.
+ */
+class WheelGuard : public QObject
+{
+public:
+  using QObject::QObject;
+
+  bool eventFilter(QObject* watched, QEvent* event) override
+  {
+    if (event->type() == QEvent::Wheel)
+    {
+      if (const auto* widget = qobject_cast<QWidget*>(watched);
+          widget && !widget->hasFocus())
+      {
+        // Qt passes an ignored wheel event on to the parents
+        event->ignore();
+        return true;
+      }
+    }
+    return QObject::eventFilter(watched, event);
+  }
+};
+
+/**
+ * Gives the spin boxes, sliders and combo boxes among the given inputs the guard, and a
+ * focus policy without the wheel: a wheel that gave them the focus would get past it.
+ */
+void guardWheel(const std::vector<QObject*>& inputs, WheelGuard* guard)
+{
+  for (auto* input : inputs)
+  {
+    if (
+      qobject_cast<QAbstractSpinBox*>(input) || qobject_cast<QAbstractSlider*>(input)
+      || qobject_cast<QComboBox*>(input))
+    {
+      auto* widget = static_cast<QWidget*>(input);
+      widget->setFocusPolicy(Qt::StrongFocus);
+      widget->installEventFilter(guard);
+    }
+  }
 }
 
 FormWithSectionsLayout* createForm()
@@ -384,18 +518,20 @@ int addRow(FormWithSectionsLayout& form, QWidget* field)
   return row;
 }
 
-double sliderValue(const SpinControl& spin, const int position)
+// a slider spans the range of its spin box's values, never the "multi" below it
+double sliderValue(const MultiSpinControl& spin, const int position)
 {
-  const auto value =
-    spin.minimum() + (spin.maximum() - spin.minimum()) * position / SliderSteps;
+  const auto minimum = spin.rangeMinimum();
+  const auto value = minimum + (spin.maximum() - minimum) * position / SliderSteps;
   const auto scale = std::pow(10.0, spin.decimals());
   return std::round(value * scale) / scale;
 }
 
-int sliderPosition(const SpinControl& spin, const double value)
+int sliderPosition(const MultiSpinControl& spin, const double value)
 {
-  const auto t = (std::clamp(value, spin.minimum(), spin.maximum()) - spin.minimum())
-                 / (spin.maximum() - spin.minimum());
+  const auto minimum = spin.rangeMinimum();
+  const auto t =
+    (std::clamp(value, minimum, spin.maximum()) - minimum) / (spin.maximum() - minimum);
   return int(std::lround(t * SliderSteps));
 }
 
@@ -454,7 +590,8 @@ bool hasStaleSpotKeys(const mdl::Entity& entity, const mdl::LightProperties& lig
 /**
  * How far the far rectangle of an off-centre spot light moves when the first box edit
  * recentres it: the largest distance between one of its far corners and the same corner
- * of the light that its own edit box gives. Nothing for a centred or degenerate spot.
+ * of the light that its own edit box gives. Nothing for a centred or degenerate spot,
+ * or for one whose own edit box is refused.
  */
 std::optional<double> recentreDistance(const mdl::LightProperties& light)
 {
@@ -470,8 +607,8 @@ std::optional<double> recentreDistance(const mdl::LightProperties& light)
     return std::nullopt;
   }
 
-  const auto recentred =
-    mdl::spotLightFrustum(mdl::lightFromEditBox(light, vm::mat3x3d::identity(), *box));
+  const auto edited = mdl::lightFromEditBox(light, vm::mat3x3d::identity(), *box);
+  const auto recentred = edited ? mdl::spotLightFrustum(*edited) : std::nullopt;
   if (!recentred)
   {
     return std::nullopt;
@@ -514,8 +651,6 @@ QString lightName(const mdl::Entity& entity)
 
 const auto EngineDefaultTexture = QString{"(engine default)"};
 
-const auto Multi = QString{"multi"};
-
 /**
  * The value of the first of the given values, and whether another one differs from it.
  */
@@ -528,23 +663,20 @@ auto firstValue(const std::vector<T>& values, const Get& get)
   return std::pair{value, multi};
 }
 
-// like the face attribute editor: "multi" is the special value text of the minimum
-void setSpinValue(SpinControl* spin, const double value, const bool multi)
+void setSpinValue(MultiSpinControl* spin, const double value, const bool multi)
 {
   if (multi)
   {
-    spin->setSpecialValueText(Multi);
-    spin->setValue(spin->minimum());
+    spin->setMulti();
   }
   else
   {
-    spin->setSpecialValueText("");
-    spin->setValue(value);
+    spin->setLightValue(value);
   }
 }
 
 template <typename T, typename Get>
-void setSpin(SpinControl* spin, const std::vector<T>& values, const Get& get)
+void setSpin(MultiSpinControl* spin, const std::vector<T>& values, const Get& get)
 {
   const auto [value, multi] = firstValue(values, get);
   setSpinValue(spin, double(value), multi);
@@ -552,7 +684,9 @@ void setSpin(SpinControl* spin, const std::vector<T>& values, const Get& get)
 
 template <typename T, typename Get>
 void setVec3(
-  const std::array<SpinControl*, 3>& spins, const std::vector<T>& values, const Get& get)
+  const std::array<MultiSpinControl*, 3>& spins,
+  const std::vector<T>& values,
+  const Get& get)
 {
   for (size_t i = 0; i < 3; ++i)
   {
@@ -563,7 +697,7 @@ void setVec3(
 template <typename Get>
 void setSlider(
   QSlider* slider,
-  SpinControl* spin,
+  MultiSpinControl* spin,
   const std::vector<mdl::LightProperties>& lights,
   const Get& get)
 {
@@ -711,23 +845,23 @@ struct LightEditorPanel::Controls
   // the session's choice of one radius for lights whose three radii are equal, off at
   // first, so that a light shows its three radii (D52)
   bool equilateral = false;
-  SpinControl* radius = nullptr;
-  std::array<SpinControl*, 3> radiusXyz = {};
+  MultiSpinControl* radius = nullptr;
+  std::array<MultiSpinControl*, 3> radiusXyz = {};
   QCheckBox* center = nullptr;
-  std::array<SpinControl*, 3> centerXyz = {};
+  std::array<MultiSpinControl*, 3> centerXyz = {};
 
-  std::array<SpinControl*, 3> target = {};
-  std::array<SpinControl*, 3> right = {};
-  std::array<SpinControl*, 3> up = {};
+  std::array<MultiSpinControl*, 3> target = {};
+  std::array<MultiSpinControl*, 3> right = {};
+  std::array<MultiSpinControl*, 3> up = {};
   QCheckBox* explicitStartEnd = nullptr;
-  std::array<SpinControl*, 3> start = {};
-  std::array<SpinControl*, 3> end = {};
+  std::array<MultiSpinControl*, 3> start = {};
+  std::array<MultiSpinControl*, 3> end = {};
 
-  std::array<SpinControl*, 3> origin = {};
-  std::array<SpinControl*, 3> angles = {};
+  std::array<MultiSpinControl*, 3> origin = {};
+  std::array<MultiSpinControl*, 3> angles = {};
 
   ColorButton* color = nullptr;
-  SpinControl* intensity = nullptr;
+  MultiSpinControl* intensity = nullptr;
   QComboBox* texture = nullptr;
   // the names of the light materials are copied again on the next update
   bool texturesStale = true;
@@ -740,20 +874,20 @@ struct LightEditorPanel::Controls
   QComboBox* mathStyle = nullptr;
   QComboBox* falloff = nullptr;
   QSlider* falloffExpSlider = nullptr;
-  SpinControl* falloffExp = nullptr;
+  MultiSpinControl* falloffExp = nullptr;
   QSlider* innerRadiusSlider = nullptr;
-  SpinControl* innerRadius = nullptr;
+  MultiSpinControl* innerRadius = nullptr;
   QSlider* shapeExpSlider = nullptr;
-  SpinControl* shapeExp = nullptr;
+  MultiSpinControl* shapeExp = nullptr;
   QSlider* penumbraSlider = nullptr;
-  SpinControl* penumbra = nullptr;
+  MultiSpinControl* penumbra = nullptr;
   QComboBox* pattern = nullptr;
   QSlider* patternStrengthSlider = nullptr;
-  SpinControl* patternStrength = nullptr;
+  MultiSpinControl* patternStrength = nullptr;
   QSlider* patternScaleSlider = nullptr;
-  SpinControl* patternScale = nullptr;
+  MultiSpinControl* patternScale = nullptr;
   QSlider* patternPhaseSlider = nullptr;
-  SpinControl* patternPhase = nullptr;
+  MultiSpinControl* patternPhase = nullptr;
   QCheckBox* energyClamp = nullptr;
 
   QCheckBox* castShadows = nullptr;
@@ -761,7 +895,10 @@ struct LightEditorPanel::Controls
 
   QToolButton* drawVolumeButton = nullptr;
   QToolButton* resetVolumeButton = nullptr;
-  SpinControl* handleThreshold = nullptr;
+  MultiSpinControl* handleThreshold = nullptr;
+  // the threshold that the spin box writes once its steps pause
+  SignalDelayer* handleThresholdDelayer = nullptr;
+  std::optional<double> pendingHandleThreshold;
 
   // the rows of form that depend on the light's type and options
   int mixedTypesRow = -1;
@@ -824,7 +961,8 @@ std::filesystem::path LightEditorPanel::iconPath() const
 
 void LightEditorPanel::panelShown()
 {
-  refresh();
+  // not through refresh(): a panel that comes back into sight is brought up to date
+  m_updateSignalDelayer->queueSignal();
 }
 
 void LightEditorPanel::panelHidden()
@@ -911,6 +1049,7 @@ QWidget* LightEditorPanel::createEditorPage()
   c.handleThreshold->setToolTip(
     tr("A point light's handle box lies where its falloff drops below this share of "
        "its brightness"));
+  c.handleThresholdDelayer = new SignalDelayer{HandleThresholdWriteDelay, this};
 
   auto* toolLayout = createRowLayout();
   toolLayout->addWidget(c.drawVolumeButton);
@@ -1150,6 +1289,9 @@ QWidget* LightEditorPanel::createEditorPage()
     c.inputs.insert(c.inputs.end(), spins->begin(), spins->end());
   }
 
+  // the wheel scrolls the panel unless the input under it has the focus
+  guardWheel(c.inputs, new WheelGuard{this});
+
   // top to bottom: the volume tools, the light's geometry and colour, the page of its
   // kind, the flags (D50)
   auto* editorLayout = new QVBoxLayout{};
@@ -1203,7 +1345,7 @@ void LightEditorPanel::connectEditor()
     };
 
   const auto connectVec3 = [&](
-                             const std::array<SpinControl*, 3>& spins,
+                             const std::array<MultiSpinControl*, 3>& spins,
                              const std::string& commandName,
                              vm::vec3d mdl::LightProperties::* member) {
     for (size_t i = 0; i < 3; ++i)
@@ -1215,16 +1357,21 @@ void LightEditorPanel::connectEditor()
     }
   };
 
-  // a slider writes when it is released and whenever the keyboard or the wheel moves
-  // it, but not while it is dragged
+  // a slider writes whenever the keyboard, a click on its groove or the wheel moves it,
+  // but not while it is dragged; on release it writes only if the drag moved it, because
+  // its position is the first light's value rounded to its steps, so a click on the
+  // handle alone would write that rounded value to every selected light
   const auto connectSlider =
-    [&](QSlider* slider, SpinControl* spin, const std::string& commandName, auto set) {
+    [&](
+      QSlider* slider, MultiSpinControl* spin, const std::string& commandName, auto set) {
       connectSpin(spin, commandName, set);
 
       const auto write = [=, this](const int position) {
         const auto value = sliderValue(*spin, position);
         editLights(commandName, [&](mdl::LightProperties& light) { set(light, value); });
       };
+      // the position at which the handle was pressed
+      const auto pressedPosition = std::make_shared<int>(slider->value());
       connect(slider, &QSlider::valueChanged, this, [=](const int position) {
         if (slider->isSliderDown())
         {
@@ -1236,7 +1383,21 @@ void LightEditorPanel::connectEditor()
           write(position);
         }
       });
-      connect(slider, &QSlider::sliderReleased, this, [=]() { write(slider->value()); });
+      connect(slider, &QSlider::sliderPressed, this, [=]() {
+        *pressedPosition = slider->value();
+      });
+      connect(slider, &QSlider::sliderReleased, this, [=, this]() {
+        if (slider->value() != *pressedPosition)
+        {
+          write(slider->value());
+        }
+        else
+        {
+          // the drag set the spin box without writing; it shows the lights again,
+          // "multi" too
+          refresh();
+        }
+      });
     };
 
   const auto connectCheckBox =
@@ -1472,9 +1633,22 @@ void LightEditorPanel::connectEditor()
   connect(c.resetVolumeButton, &QAbstractButton::clicked, this, [this]() {
     editLights("Reset Light Volume", resetLightVolume);
   });
-  // not a light property: the threshold of every point light's handle box (D53)
-  connect(c.handleThreshold, &QDoubleSpinBox::valueChanged, this, [](const double value) {
-    setPref(Preferences::LightVolumeHandleThreshold, float(value / 100.0));
+  // not a light property: the threshold of every point light's handle box (D53); each
+  // write saves the preferences and makes every map view and the map window reset their
+  // shortcuts, so a burst of steps is written once, when the steps pause
+  connect(
+    c.handleThreshold, &QDoubleSpinBox::valueChanged, this, [this](const double value) {
+      m_controls->pendingHandleThreshold = value;
+      m_controls->handleThresholdDelayer->queueSignal();
+    });
+  // a write still pending when the panel is destroyed is dropped: at shutdown, the
+  // preference manager may be gone already
+  connect(c.handleThresholdDelayer, &SignalDelayer::processSignal, this, [this]() {
+    if (auto& pending = m_controls->pendingHandleThreshold)
+    {
+      const auto value = *std::exchange(pending, std::nullopt);
+      setPref(Preferences::LightVolumeHandleThreshold, float(value / 100.0));
+    }
   });
   connect(
     c.drawVolumeButton,
@@ -1531,11 +1705,24 @@ void LightEditorPanel::connectObservers()
     m_controls->texturesStale = true;
     refresh();
   });
+  // of the preferences, only two matter: the game path, whose change reloads the models
+  // and materials (Map::setGamePath) with no other notification, and the handle
+  // threshold, which the panel shows and View Options resets; the others are ignored,
+  // because the steps of a spin box or the ticks of the fly speed wheel save them, and
+  // reading the light materials again walks every shader
   m_notifierConnection +=
-    PreferenceManager::instance().preferenceDidChangeNotifier.connect([&](const auto&) {
-      m_controls->texturesStale = true;
-      refresh();
-    });
+    PreferenceManager::instance().preferenceDidChangeNotifier.connect(
+      [&](const std::filesystem::path& path) {
+        if (path == m_document.map().gameInfo().gamePathPreference.path)
+        {
+          m_controls->texturesStale = true;
+          refresh();
+        }
+        else if (path == Preferences::LightVolumeHandleThreshold.path)
+        {
+          refresh();
+        }
+      });
 
   // the buttons follow the tool, which Esc, another tool or a new map also deactivate
   const auto toolChanged = [&](Tool& tool) {
@@ -1552,7 +1739,23 @@ void LightEditorPanel::connectObservers()
 
 void LightEditorPanel::refresh()
 {
-  m_updateSignalDelayer->queueSignal();
+  // a panel out of sight is brought up to date when it is shown (panelShown)
+  if (!isOutOfSight())
+  {
+    m_updateSignalDelayer->queueSignal();
+  }
+}
+
+bool LightEditorPanel::isOutOfSight() const
+{
+  if (isWindow())
+  {
+    return false;
+  }
+
+  const auto* topLevel = window();
+  return !isVisible()
+         || !QRect{mapTo(topLevel, QPoint{0, 0}), size()}.intersects(topLevel->rect());
 }
 
 void LightEditorPanel::updateControls()
@@ -1648,8 +1851,12 @@ void LightEditorPanel::updateEditor()
       recentre = std::max(recentre.value_or(0.0), *distance);
     }
   }
-  c.handleThreshold->setValue(
-    double(pref(Preferences::LightVolumeHandleThreshold)) * 100.0);
+  // a threshold still to be written stays: the preference holds the one that it replaces
+  if (!c.pendingHandleThreshold)
+  {
+    c.handleThreshold->setValue(
+      double(pref(Preferences::LightVolumeHandleThreshold)) * 100.0);
+  }
 
   c.offCentreNotice->setVisible(recentre.has_value());
   if (recentre)

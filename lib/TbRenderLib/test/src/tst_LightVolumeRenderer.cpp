@@ -42,6 +42,7 @@
 #include "kd/filesystem_utils.h"
 #include "kd/result.h"
 
+#include "vm/mat.h"
 #include "vm/vec.h"
 
 #include <algorithm>
@@ -340,6 +341,29 @@ TEST_CASE("LightVolumeRenderer")
       CHECK(recorder.generatedBuffers > 0);
       REQUIRE(renderer->selectedRanges().size() == 1);
       CHECK(renderer->selectedRanges().front().fillCount == 6 * 224 * 3);
+    }
+
+    SECTION("a light whose rotation is not finite is collected unturned")
+    {
+      for (const auto& angle : {"nan", "inf"})
+      {
+        CAPTURE(angle);
+        auto* unturnedLight = new mdl::EntityNode{mdl::Entity{{
+          {"classname", "light"},
+          {"origin", "0 0 0"},
+          {"light_radius", "64 64 64"},
+          {"angle", angle},
+        }}};
+        mdl::addNodes(map, {{&mdl::parentForNodes(map), {unturnedLight}}});
+        mdl::deselectAll(map);
+        mdl::selectNodes(map, {unturnedLight});
+
+        renderer->invalidate();
+        renderer->collect(map, LightVolumeVisibility::Selected, style);
+        REQUIRE(renderer->selectedRanges().size() == 1);
+        CHECK(renderer->selectedRanges().front().node == unturnedLight);
+        CHECK(renderer->selectedRanges().front().frame.R == vm::mat3x3d{});
+      }
     }
 
     SECTION("Off mode collects nothing")

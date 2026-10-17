@@ -85,9 +85,17 @@ struct LightFrame
 };
 
 /**
+ * Returns the rotation of the given light entity: the 3x3 part of
+ * entityRotation(entity, policy), or the identity if it is not finite, as for an angle
+ * that is not read. The policy must be passed explicitly, the game's
+ * entities.rotation.policy.
+ */
+vm::mat3x3d lightRotation(const Entity& entity, EntityRotationPolicy policy);
+
+/**
  * Returns the frame of the given light entity: its light_origin if it has one, else its
- * origin, and the 3x3 part of entityRotation(entity, policy). The policy must be passed
- * explicitly, the game's entities.rotation.policy.
+ * origin, and lightRotation(entity, policy). The policy must be passed explicitly, the
+ * game's entities.rotation.policy.
  */
 LightFrame lightFrame(const Entity& entity, EntityRotationPolicy policy);
 
@@ -186,10 +194,10 @@ std::optional<vm::bbox3d> lightEditBox(const LightProperties& light, double thre
  * face, zN* = min(zNear, D' - 16), |target'| = D' - zN* along the box's centre direction,
  * and right' and up' are scaled so that the far cap is at distance D'.
  *
- * Returns the base unchanged if the box is denied: a point half extent below 1, a spot
- * box shallower than 24 or with a half extent below 1, or a degenerate base.
+ * Returns nothing if the box is denied: a point half extent below 1, a spot box
+ * shallower than 24 or with a half extent below 1, or a degenerate base.
  */
-LightProperties lightFromEditBox(
+std::optional<LightProperties> lightFromEditBox(
   const LightProperties& base, const vm::mat3x3d& rotation, const vm::bbox3d& box);
 
 /**
@@ -198,8 +206,11 @@ LightProperties lightFromEditBox(
  * by visibleFalloffT of the base, so that dragging a face of the handle box by d moves
  * the radius on that side by d / visibleFalloffT; spot lights and suns as
  * lightFromEditBox without a threshold.
+ *
+ * Returns nothing if the box is denied: as without a threshold, or a point light whose
+ * visibleFalloffT is below 1e-6.
  */
-LightProperties lightFromEditBox(
+std::optional<LightProperties> lightFromEditBox(
   const LightProperties& base,
   const vm::mat3x3d& rotation,
   const vm::bbox3d& box,

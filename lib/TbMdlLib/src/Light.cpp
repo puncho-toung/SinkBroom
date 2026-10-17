@@ -176,7 +176,9 @@ constexpr auto Whitespace = std::string_view{" \t\n\v\f\r"};
 /**
  * Reads the number at the start of the given text like atof (and sscanf's "%f") read
  * it: white space is skipped, a plus sign is read. Returns nothing if the text does not
- * start with a number.
+ * start with a number. std::from_chars also accepts "nan", "inf" and "infinity", which
+ * are rejected like any other text that is not a number: atof would read them, but no
+ * light geometry is defined by them.
  */
 std::optional<double> parseLeadingDouble(const std::string_view text, std::size_t& pos)
 {
@@ -197,7 +199,7 @@ std::optional<double> parseLeadingDouble(const std::string_view text, std::size_
   auto result = 0.0;
   const auto [end, error] =
     std::from_chars(text.data() + first, text.data() + text.size(), result);
-  if (error != std::errc{})
+  if (error != std::errc{} || !vm::is_finite(result))
   {
     return std::nullopt;
   }
@@ -530,8 +532,10 @@ LightProperties parseLightProperties(const Entity& entity)
 
   if (const auto* color = reader.string(Color))
   {
-    // never parsed as an Rgb, whose float components stop at 1
-    light.color = vm::parse<double, 3>(*color).value_or(parseIdTech4Vector(*color));
+    // never parsed as an Rgb, whose float components stop at 1; a number that is not
+    // finite is read like parseIdTech4Vector reads it
+    const auto parsed = vm::parse<double, 3>(*color);
+    light.color = parsed && vm::is_finite(*parsed) ? *parsed : parseIdTech4Vector(*color);
   }
 
   if (const auto* texture = reader.string(Texture))

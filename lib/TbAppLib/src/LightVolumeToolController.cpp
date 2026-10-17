@@ -593,7 +593,7 @@ vm::bbox3d drawReferenceBounds(const LightVolumeTool& tool, const mdl::Map& map)
 
 } // namespace
 
-const mdl::Hit& findLightVolumeHit(const mdl::PickResult& pickResult)
+mdl::Hit findLightVolumeHit(const mdl::PickResult& pickResult)
 {
   using namespace mdl::HitFilters;
 
@@ -697,8 +697,7 @@ bool LightVolumeToolController::mouseClick(const InputState& inputState)
     return !pickResult.first(type(mdl::nodeHitType()) && isSelectable).isMatch();
   }
 
-  // a copy: selecting the light makes every view pick again, which replaces the pick
-  // result that the found hit belongs to
+  // the found hit outlives the pick result, which selecting the light replaces
   const auto hit = findLightVolumeHit(pickResult);
 
   // a click on a handle, or a drag shorter than 100 ms, keeps the light selected and
@@ -794,8 +793,8 @@ std::unique_ptr<GestureTracker> LightVolumeToolController::acceptMouseDrag(
              : nullptr;
   }
 
-  // a copy, like the click's: a document change at the drag's start makes the views
-  // pick again
+  // the found hit outlives the pick result, which a document change at the drag's start
+  // replaces
   const auto hit = findLightVolumeHit(inputState.pickResult());
   if (hit.type() == LightVolumeTool::SurfaceHitType)
   {

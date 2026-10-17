@@ -49,9 +49,10 @@ class SignalDelayer;
  * the user changes it, as one undoable command for all selected lights, and only the
  * properties that its change alters on each light; a field in which the selected lights
  * differ shows "multi". The controls are set from the map once the event loop has
- * processed the notifications of a change. The header names the light and shows what
- * the engine reads differently from what the editor shows, with a fix where there is
- * one; a light with the legacy light_origin is read-only until it is converted.
+ * processed the notifications of a change while the panel can be seen, and when it is
+ * shown again. The header names the light and shows what the engine reads differently
+ * from what the editor shows, with a fix where there is one; a light with the legacy
+ * light_origin is read-only until it is converted.
  *
  * The editor shows the volume tools first, then the light's type, volume, transform and
  * colour, then a Math and a Texture page with the options of each kind of light, then
@@ -98,6 +99,12 @@ private:
   void connectObservers();
 
   void refresh();
+  /**
+   * Whether the panel cannot be seen: it is hidden, as in a closed dock, or it lies
+   * outside its window, where Qt moves a dock that is tabbed behind another instead of
+   * hiding it. A panel that is its own window is never out of sight.
+   */
+  bool isOutOfSight() const;
   void updateControls();
   void updateEditor();
   void updateVolumeToolButtons();
