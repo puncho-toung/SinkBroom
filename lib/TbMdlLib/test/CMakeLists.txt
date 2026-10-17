@@ -2,6 +2,7 @@ add_executable(TbMdlLibTest)
 EMBED_UTF8_MANIFEST(TbMdlLibTest)
 
 target_sources(TbMdlLibTest PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_AssetLoadingBenchmark.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_AssetUtils.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Autosaver.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BezierPatch.cpp
