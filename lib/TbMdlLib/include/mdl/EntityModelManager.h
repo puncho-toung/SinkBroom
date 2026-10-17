@@ -79,6 +79,10 @@ private:
   // with.
   std::shared_ptr<ModelMaterialCache> m_materialCache;
 
+  // Models share the textures of their materials through the cache, and a dropped
+  // texture never uploads again (EntityModelSurface::drop drops them). So the models are
+  // only ever dropped all together, in clear, which also replaces the cache; evicting or
+  // reloading one model would leave every model that shares its images untextured.
   mutable std::unordered_map<std::filesystem::path, EntityModel, kdl::path_hash> m_models;
   mutable std::unordered_map<ModelSpecification, std::unique_ptr<gl::MaterialRenderer>>
     m_renderers;
