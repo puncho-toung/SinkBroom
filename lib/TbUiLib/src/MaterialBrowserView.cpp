@@ -100,9 +100,11 @@ MaterialBorder materialBorder(const gl::Material& material, const bool selected)
     return MaterialBorder::Selected;
   }
   // the coverage that the material script implies, not the preview's alpha or blending
+  static const auto translucent = std::string{"coverage_translucent"};
+  static const auto perforated = std::string{"coverage_perforated"};
   if (
-    material.surfaceParms().contains("coverage_translucent")
-    || material.surfaceParms().contains("coverage_perforated"))
+    material.surfaceParms().contains(translucent)
+    || material.surfaceParms().contains(perforated))
   {
     return MaterialBorder::NonSealing;
   }
