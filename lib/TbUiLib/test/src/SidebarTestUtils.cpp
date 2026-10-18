@@ -81,6 +81,7 @@ Qt::DockWidgetArea StubPanel::defaultArea() const
 void StubPanel::panelShown()
 {
   ++shownCount;
+  visibleWhenShown = isVisible();
 }
 
 void StubPanel::panelHidden()

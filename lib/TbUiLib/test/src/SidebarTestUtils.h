@@ -53,6 +53,8 @@ private:
 public:
   int shownCount = 0;
   int hiddenCount = 0;
+  // whether the panel was visible the last time it was told that it is shown
+  bool visibleWhenShown = false;
 
   explicit StubPanel(
     QString panelId,
