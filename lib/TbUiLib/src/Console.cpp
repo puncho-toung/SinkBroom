@@ -65,9 +65,12 @@ auto getForegroundBrush(const LogLevel level, const QPalette& palette)
 } // namespace
 
 Console::Console(QWidget* parent)
-  : TabBookPage{parent}
+  : SidebarPanel{parent}
   , m_timer{new QTimer{this}}
 {
+  // no lower than the info panel that held this page
+  setMinimumHeight(100);
+
   m_textView = new QTextEdit{};
   m_textView->setReadOnly(true);
   m_textView->setWordWrapMode(QTextOption::NoWrap);
@@ -82,6 +85,31 @@ Console::Console(QWidget* parent)
 
   connect(m_timer, &QTimer::timeout, this, &Console::logCachedMessages);
   m_timer->start(50);
+}
+
+QString Console::panelId() const
+{
+  return QString::fromLatin1(PanelId);
+}
+
+QString Console::title() const
+{
+  return tr("Console");
+}
+
+std::filesystem::path Console::iconPath() const
+{
+  return "Console.svg";
+}
+
+bool Console::shownByDefault() const
+{
+  return true;
+}
+
+Qt::DockWidgetArea Console::defaultArea() const
+{
+  return Qt::BottomDockWidgetArea;
 }
 
 void Console::doLog(const LogLevel level, const std::string_view message)

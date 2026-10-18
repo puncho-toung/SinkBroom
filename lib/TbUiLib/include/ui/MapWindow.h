@@ -40,7 +40,6 @@ class QComboBox;
 class QDropEvent;
 class QMenuBar;
 class QLabel;
-class QSplitter;
 class QTimer;
 class QToolBar;
 
@@ -76,7 +75,6 @@ class AppController;
 class CompilationDialog;
 class Console;
 class FaceInspector;
-class InfoPanel;
 class MapDocument;
 class MapViewBase;
 class MapViewToolBox;
@@ -100,15 +98,12 @@ private:
   QToolBar* m_toolBar = nullptr;
   ToolSidebar* m_toolSidebar = nullptr;
 
-  QSplitter* m_vSplitter = nullptr;
-
   SwitchableMapViewContainer* m_mapView = nullptr;
   /**
    * Last focused MapViewBase. It's a QPointer to handle changing from e.g. a 2-pane map
    * view to 1-pane.
    */
   QPointer<MapViewBase> m_currentMapView;
-  InfoPanel* m_infoPanel = nullptr;
   Console* m_console = nullptr;
   SidebarManager* m_sidebarManager = nullptr;
 
@@ -127,6 +122,7 @@ private:
   };
 
   DockGroupRestoreSet m_inspectorPanelsToRestore;
+  DockGroupRestoreSet m_infoPanelsToRestore;
 
   QComboBox* m_gridChoice = nullptr;
   QLabel* m_statusBarLabel = nullptr;
@@ -204,7 +200,9 @@ private: // gui creation
 
   /**
    * Restores the saved layout. A layout saved before the inspectors were docks does not
-   * know them, so they are arranged like the old inspector once more.
+   * know them, so they are arranged like the old inspector once more; one saved before
+   * the Console and Issues panels were docks does not know those, so they are arranged
+   * like the old info panel once more.
    */
   void restoreWindowState();
   /**
@@ -212,7 +210,24 @@ private: // gui creation
    * the given one to the front. Arranging docks that are arranged so changes nothing.
    */
   void arrangeInspectorDocks(const QString& raisedPanelId);
+  /**
+   * Tabs the Console and Issues docks together, in that order, and brings the given one
+   * to the front. Arranging docks that are arranged so changes nothing.
+   */
+  void arrangeInfoDocks(const QString& raisedPanelId);
   FaceInspector* faceInspector() const;
+
+  /**
+   * Hides the given panels' docks if any of them is open, and remembers in the given set
+   * which were open and which of them could be seen; otherwise brings back the
+   * remembered ones, or all, and brings the ones that could be seen to the front again.
+   */
+  void toggleDockGroup(
+    const std::vector<QString>& panelIds, DockGroupRestoreSet& restoreSet);
+  /**
+   * Whether any of the given panels' docks is open.
+   */
+  bool dockGroupVisible(const std::vector<QString>& panelIds) const;
 
 private: // notification handlers
   void connectObservers();
@@ -399,8 +414,12 @@ public:
   void toggleToolSidebar();
   bool toolSidebarVisible() const;
 
-  void toggleInfoPanel();
-  bool infoPanelVisible() const;
+  /**
+   * Hides the Console and Issues docks if either of them is open; otherwise brings back
+   * the ones that it hid, or both, with the one that was in front in front again.
+   */
+  void toggleInfoPanels();
+  bool infoPanelsVisible() const;
 
   /**
    * Hides the three inspector docks if any of them is open; otherwise brings back the

@@ -1962,10 +1962,10 @@ void ActionManager::createViewMenu()
     "Toggle Info Panel",
     ActionContext::Any,
     KeySequence{"Ctrl+4"},
-    [](auto& context) { context.mapWindow().toggleInfoPanel(); },
+    [](auto& context) { context.mapWindow().toggleInfoPanels(); },
     [](const auto& context) { return context.hasDocument(); },
     [](const auto& context) {
-      return context.hasDocument() && context.mapWindow().infoPanelVisible();
+      return context.hasDocument() && context.mapWindow().infoPanelsVisible();
     },
   }));
   viewMenu.addItem(addAction(Action{

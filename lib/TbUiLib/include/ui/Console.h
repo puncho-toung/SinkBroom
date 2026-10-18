@@ -20,11 +20,13 @@
 #pragma once
 
 #include <QMutex>
+#include <QString>
 
 #include "base/Logger.h"
 #include "base/LoggerCache.h"
-#include "ui/TabBook.h"
+#include "ui/SidebarPanel.h"
 
+#include <filesystem>
 #include <string_view>
 
 class QTextEdit;
@@ -33,8 +35,12 @@ class QWidget;
 
 namespace tb::ui
 {
-class Console : public TabBookPage, public Logger
+class Console : public SidebarPanel, public Logger
 {
+  Q_OBJECT
+public:
+  static constexpr auto PanelId = "Console";
+
 private:
   QTextEdit* m_textView = nullptr;
   QTimer* m_timer = nullptr;
@@ -44,6 +50,12 @@ private:
 
 public:
   explicit Console(QWidget* parent = nullptr);
+
+  QString panelId() const override;
+  QString title() const override;
+  std::filesystem::path iconPath() const override;
+  bool shownByDefault() const override;
+  Qt::DockWidgetArea defaultArea() const override;
 
 private:
   void doLog(LogLevel level, std::string_view message) override;

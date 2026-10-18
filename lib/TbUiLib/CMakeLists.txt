@@ -85,7 +85,6 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GlQt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageListBox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageUtils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/InfoPanel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/InputEvent.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/IssueBrowser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/IssueBrowserView.cpp
@@ -272,7 +271,6 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/GlQt.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/ImageListBox.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/ImageUtils.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/InfoPanel.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/InputEvent.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/IssueBrowser.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/IssueBrowserView.h
