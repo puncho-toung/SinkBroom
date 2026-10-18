@@ -329,8 +329,17 @@ MapWindow::~MapWindow()
 
   // Delete the sidebar docks, and with them their panels, while the document and the tool
   // box that the panels observe still exist, and before the snapshot of the children
-  // below, which deletes a child twice if one of its siblings destroys it first.
-  for (auto* dock : m_sidebarManager->docks())
+  // below, which deletes a child twice if one of its siblings destroys it first. They are
+  // hidden first: deleting the second to last dock of a floating tab group makes Qt float
+  // the last one on its own and show it again unless it is hidden, which would create a
+  // GL context for a panel that is about to go. Hiding them only queues an action state
+  // update on a child of this window, which goes with it.
+  const auto docks = m_sidebarManager->docks();
+  for (auto* dock : docks)
+  {
+    dock->hide();
+  }
+  for (auto* dock : docks)
   {
     delete dock;
   }
@@ -605,7 +614,16 @@ void MapWindow::createGui()
 
 void MapWindow::restoreWindowState()
 {
-  restoreWidgetState(this);
+  // The saved window state is applied once per window, although the app calls this twice
+  // (the constructor, then positionOnScreen). Qt builds a new window for each floating
+  // tab group on every restore and moves the docks into it one by one; when the old
+  // group is down to its last dock, it lets that dock go as a floating dock, so a second
+  // restore splits every floating group, and saving keeps the split.
+  if (!m_windowStateRestored)
+  {
+    restoreWidgetState(this);
+    m_windowStateRestored = true;
+  }
 
   // A layout saved before some panels were docks does not know their docks, so Qt leaves
   // them where createGui put them, side by side. They take the place of the panel that

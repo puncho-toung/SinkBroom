@@ -124,6 +124,12 @@ private:
   DockGroupRestoreSet m_inspectorPanelsToRestore;
   DockGroupRestoreSet m_infoPanelsToRestore;
 
+  /**
+   * Whether restoreWindowState has applied the saved window state. It is applied once per
+   * window, see restoreWindowState.
+   */
+  bool m_windowStateRestored = false;
+
   QComboBox* m_gridChoice = nullptr;
   QLabel* m_statusBarLabel = nullptr;
 
@@ -199,10 +205,11 @@ private: // gui creation
   void createGui();
 
   /**
-   * Restores the saved layout. A layout saved before the inspectors were docks does not
-   * know them, so they are arranged like the old inspector once more; one saved before
-   * the Console and Issues panels were docks does not know those, so they are arranged
-   * like the old info panel once more.
+   * Restores the saved layout, on the first call only; the arrangements below and the
+   * docking of floating docks that are off screen run on every call. A layout saved
+   * before the inspectors were docks does not know them, so they are arranged like the
+   * old inspector once more; one saved before the Console and Issues panels were docks
+   * does not know those, so they are arranged like the old info panel once more.
    */
   void restoreWindowState();
   /**

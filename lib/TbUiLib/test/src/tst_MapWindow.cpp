@@ -119,7 +119,9 @@ const auto OldInfoPanelPageKey = QString{"Windows/InfoPanel_TabBook/State"};
  * the Face inspector's material tab, which the panel restores when it is built and saves
  * when it goes, and the keys of the inspector and of the info panel from before their
  * pages were docks, which the window reads once and which the test settings may hold
- * from a build of that time.
+ * from a build of that time. Windows/MapWindow_VerticalSplitterSplitter/State is the key
+ * of the splitter that held the info panel before it was a dock; the window no longer
+ * reads or writes it, and it stays here because the settings may still hold it.
  */
 const auto WindowStateKeys = std::vector<QString>{
   "Windows/MapWindow/Geometry",
@@ -249,6 +251,17 @@ std::unique_ptr<MapWindow> createNextWindow(AppController& appController)
                     appController.glManager().resourceManager())
                   | kdl::value();
   return std::make_unique<MapWindow>(appController, std::move(document));
+}
+
+/**
+ * Whether the dock is in a floating tab group: Qt moves the docks of such a group into a
+ * window of its own, a child of the main window, and they do not count as floating.
+ */
+bool isInFloatingTabGroup(const MapWindow& window, const QDockWidget& dock)
+{
+  const auto* group = dock.parentWidget();
+  return !dock.isFloating() && group != &window && group->isWindow()
+         && group->parentWidget() == &window && group->inherits("QDockWidgetGroupWindow");
 }
 
 /**
@@ -913,7 +926,8 @@ TEST_CASE("MapWindow")
     CHECK(docks.issues->toggleViewAction()->isChecked());
     CHECK(!docks.console->toggleViewAction()->isChecked());
 
-    // saved with the current version, the layout is not arranged again
+    // saved with the current version (the next restore then arranges nothing, see
+    // "saveWindowState writes the dock layout version")
     window.saveWindowState();
     CHECK(QSettings{}.value(DockLayoutVersionKey).toInt() == 2);
   }
@@ -947,6 +961,46 @@ TEST_CASE("MapWindow")
       nextWindow->tabifiedDockWidgets(nextDocks.map)
       == QList<QDockWidget*>{nextDocks.entity});
     nextWindow->saveWindowState();
+    nextWindow->hide();
+    QApplication::processEvents();
+  }
+
+  SECTION("a floating tab group comes back whole in the next window")
+  {
+    // The console and the issue browser hold no GL view, so their group can float in a
+    // test. The app restores the window state twice when it opens a window (the
+    // constructor, then positionOnScreen), and Qt splits a floating group that it
+    // restores twice.
+    const auto docks = findSidebarDocks(window);
+    window.resize(1200, 800);
+    showWithoutGlViews(window);
+
+    // drag the title bar of the console, in front of its group, up over the map views:
+    // with grouped dragging, the whole group floats
+    auto* console = docks.console;
+    const auto press = QPoint{console->width() / 2, 6};
+    QTest::mousePress(console, Qt::LeftButton, {}, press);
+    QApplication::processEvents();
+    for (auto i = 1; i <= 20; ++i)
+    {
+      QTest::mouseMove(console, press + QPoint{0, -15 * i});
+      QApplication::processEvents();
+    }
+    QTest::mouseRelease(console, Qt::LeftButton, {}, press + QPoint{0, -300});
+    QApplication::processEvents();
+
+    REQUIRE(isInFloatingTabGroup(window, *docks.console));
+    REQUIRE(docks.issues->parentWidget() == docks.console->parentWidget());
+    window.saveWindowState();
+
+    auto nextWindow = createNextWindow(appController);
+    nextWindow->positionOnScreen(nullptr);
+
+    const auto nextDocks = findSidebarDocks(*nextWindow);
+    CHECK(isInFloatingTabGroup(*nextWindow, *nextDocks.console));
+    CHECK(isInFloatingTabGroup(*nextWindow, *nextDocks.issues));
+    CHECK(nextDocks.issues->parentWidget() == nextDocks.console->parentWidget());
+
     nextWindow->hide();
     QApplication::processEvents();
   }
