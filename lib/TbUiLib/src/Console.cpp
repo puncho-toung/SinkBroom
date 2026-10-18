@@ -74,6 +74,9 @@ Console::Console(QWidget* parent)
   m_textView = new QTextEdit{};
   m_textView->setReadOnly(true);
   m_textView->setWordWrapMode(QTextOption::NoWrap);
+  // with QTextEdit::WidgetWidth, the whole log would be laid out again on every width
+  // change, although no line wraps
+  m_textView->setLineWrapMode(QTextEdit::NoWrap);
   m_textView->setContextMenuPolicy(Qt::CustomContextMenu);
   connect(
     m_textView, &QWidget::customContextMenuRequested, this, &Console::showContextMenu);

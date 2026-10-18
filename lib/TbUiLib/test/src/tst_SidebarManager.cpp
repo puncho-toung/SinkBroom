@@ -23,6 +23,8 @@
 #include <QGuiApplication>
 #include <QMainWindow>
 #include <QScreen>
+#include <QTabBar>
+#include <QTest>
 
 #include "SidebarTestUtils.h"
 #include "ui/CatchConfig.h"
@@ -36,6 +38,40 @@
 
 namespace tb::ui
 {
+namespace
+{
+
+/**
+ * Clicks the tab of the given dock in the tab bar of its tab group.
+ */
+void clickTab(const QMainWindow& window, const QDockWidget& dock)
+{
+  QTabBar* tabBar = nullptr;
+  auto index = -1;
+  const auto findTab = [&]() {
+    for (auto* candidate : window.findChildren<QTabBar*>())
+    {
+      for (int i = 0; candidate->isVisible() && i < candidate->count(); ++i)
+      {
+        if (candidate->tabText(i) == dock.windowTitle())
+        {
+          tabBar = candidate;
+          index = i;
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  // the window shows the tab bar of a new tab group once the geometry animations of its
+  // layout have gone, which takes deferred deletes
+  REQUIRE(QTest::qWaitFor(findTab));
+  QTest::mouseClick(tabBar, Qt::LeftButton, {}, tabBar->tabRect(index).center());
+  QApplication::processEvents();
+}
+
+} // namespace
 
 TEST_CASE("SidebarManager")
 {
@@ -104,6 +140,91 @@ TEST_CASE("SidebarManager")
     CHECK(window.dockWidgetArea(bottom.dock) == Qt::BottomDockWidgetArea);
     CHECK(bottom.dock->allowedAreas() == Qt::AllDockWidgetAreas);
     CHECK(window.dockWidgetArea(dock) == Qt::RightDockWidgetArea);
+  }
+
+  SECTION("registerPanel hides a panel while its dock is tabbed behind another")
+  {
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(800, 600);
+    const auto second = registerStubPanel(*manager, "Second");
+    panel->setMinimumWidth(300);
+
+    window.show();
+    manager->showPanel("Stub");
+    manager->showPanel("Second");
+    window.tabifyDockWidget(dock, second.dock);
+    clickTab(window, *second.dock);
+
+    // the dock behind the tab stays open, but its panel is hidden
+    CHECK(!dock->isHidden());
+    CHECK(panel->isHidden());
+    CHECK(second.panel->isVisible());
+
+    // the hidden panel keeps its place in the layout: the front dock fills the column,
+    // and the panel behind still holds the column at its minimum width
+    window.resizeDocks({second.dock}, {100}, Qt::Horizontal);
+    QApplication::processEvents();
+    CHECK(second.dock->height() > window.height() / 2);
+    CHECK(second.dock->width() >= 300);
+
+    // the other tab swaps them, and the panel that comes to the front is visible when it
+    // is told
+    const auto shownCount = panel->shownCount;
+    panel->visibleWhenShown = false;
+    clickTab(window, *dock);
+
+    CHECK(panel->isVisible());
+    CHECK(panel->shownCount == shownCount + 1);
+    CHECK(panel->visibleWhenShown);
+    CHECK(second.panel->isHidden());
+
+    // neither was closed
+    CHECK(panel->hiddenCount == 0);
+    CHECK(second.panel->hiddenCount == 0);
+  }
+
+  SECTION("registerPanel hides a panel while its dock is closed")
+  {
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.show();
+    manager->showPanel("Stub");
+    QApplication::processEvents();
+    REQUIRE(panel->isVisible());
+
+    auto* action = dock->toggleViewAction();
+    action->trigger();
+    CHECK(dock->isHidden());
+    CHECK(panel->isHidden());
+    CHECK(panel->hiddenCount == 1);
+
+    panel->visibleWhenShown = false;
+    action->trigger();
+    QApplication::processEvents();
+    CHECK(dock->isVisible());
+    CHECK(panel->isVisible());
+    CHECK(panel->visibleWhenShown);
+  }
+
+  SECTION("registerPanel starts a panel hidden whose dock is behind a tab")
+  {
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    const auto second = registerStubPanel(*manager, "Second");
+
+    // tabbed before the window is shown, with the second dock in front
+    dock->show();
+    second.dock->show();
+    window.tabifyDockWidget(dock, second.dock);
+    second.dock->raise();
+
+    window.show();
+    QApplication::processEvents();
+
+    REQUIRE(!dock->toggleViewAction()->isChecked());
+    REQUIRE(second.dock->toggleViewAction()->isChecked());
+    CHECK(panel->isHidden());
+    CHECK(panel->shownCount == 0);
+    CHECK(second.panel->isVisible());
+    CHECK(second.panel->shownCount == 1);
   }
 
   SECTION("panel")

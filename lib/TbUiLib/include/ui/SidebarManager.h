@@ -63,7 +63,8 @@ public:
    * Wraps the given panel in a dock at the panel's default edge of the main window,
    * hidden unless the panel is shown by default. The dock may be moved to every edge. It
    * is named "MapWindow_Sidebar_<panelId>", which keys its place in the saved window
-   * state. The panel's id must not be registered yet.
+   * state. The panel's id must not be registered yet. The panel is hidden while its dock
+   * cannot be seen, as when it is closed or tabbed behind another dock.
    */
   QDockWidget* registerPanel(std::unique_ptr<SidebarPanel> panel);
 

@@ -63,11 +63,15 @@ private:
   QToolButton* m_setDefaultPropertiesButton;
   QCheckBox* m_showDefaultPropertiesCheckBox;
   std::vector<PropertyGridSelection> m_selectionBackup;
+  bool m_tableUpdateDue = false;
 
   NotifierConnection m_notifierConnection;
 
 public:
   explicit EntityPropertyGrid(MapDocument& document, QWidget* parent = nullptr);
+
+protected:
+  void showEvent(QShowEvent* event) override;
 
 private:
   void backupSelection();
@@ -88,6 +92,7 @@ private:
 private:
   void ensureSelectionVisible();
   void updateControls();
+  void updateTable();
   void updateControlsEnabled();
 
 public:

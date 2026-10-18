@@ -95,14 +95,30 @@ QDockWidget* SidebarManager::registerPanel(std::unique_ptr<SidebarPanel> panel)
     dock->hide();
   }
 
+  // Qt moves a dock that is tabbed behind another out of the window instead of hiding
+  // it, so its panel would still lay itself out and be painted on every change. The
+  // panel is hidden while its dock is out of sight (below), and it keeps its size in the
+  // layout while hidden: a tab group is as large as the largest minimum of its tabs, so
+  // otherwise the group could shrink below the minimum of a tab behind and would grow
+  // again when that tab is raised.
+  auto sizePolicy = panelPtr->sizePolicy();
+  sizePolicy.setRetainSizeWhenHidden(true);
+  panelPtr->setSizePolicy(sizePolicy);
+
   // connected after hiding so that registering never reports a panel as shown; a panel
   // shown by default is reported once its window shows the dock; the panel is the
-  // context, so the connection goes away with it
+  // context, so the connection goes away with it; a panel is shown before it is told,
+  // so that it sees itself visible
   connect(
     dock, &QDockWidget::visibilityChanged, panelPtr, [panelPtr](const bool visible) {
       if (visible)
       {
+        panelPtr->show();
         panelPtr->panelShown();
+      }
+      else
+      {
+        panelPtr->hide();
       }
     });
 
