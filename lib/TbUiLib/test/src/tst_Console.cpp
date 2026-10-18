@@ -80,6 +80,17 @@ TEST_CASE("Console")
     CHECK(QTest::qWaitFor(
       [&] { return textView->toPlainText().contains("a line for the console"); }));
   }
+
+  SECTION("the log does not wrap")
+  {
+    auto* textView = panel.findChild<QTextEdit*>();
+    REQUIRE(textView != nullptr);
+
+    // neither words nor lines: a log laid out to the view's width would be laid out
+    // again on every width change
+    CHECK(textView->wordWrapMode() == QTextOption::NoWrap);
+    CHECK(textView->lineWrapMode() == QTextEdit::NoWrap);
+  }
 }
 
 } // namespace tb::ui
