@@ -58,6 +58,7 @@
 #include "mdl/LinkedGroupUtils.h"
 #include "mdl/LoadEntityDefinitions.h"
 #include "mdl/LoadMaterialCollections.h"
+#include "mdl/LoadShaders.h"
 #include "mdl/LongPropertyKeyValidator.h"
 #include "mdl/LongPropertyValueValidator.h"
 #include "mdl/Map.h"
@@ -593,7 +594,7 @@ Map::Map(
 
   editorContext().setCurrentLayer(m_worldNode->defaultLayer());
 
-  entityModelManager().reloadShaders(m_taskManager);
+  reloadShaders();
 
   loadAssets();
   registerValidators();
@@ -1231,6 +1232,7 @@ void Map::loadAssets()
   loadEntityDefinitions();
   setEntityDefinitions();
   setEntityModels();
+  refreshMaterialFileSystems();
   loadMaterials();
   setMaterials();
 }
@@ -1289,13 +1291,34 @@ void Map::clearEntityDefinitions()
   m_entityDefinitionManager->clear();
 }
 
+void Map::reloadShaders()
+{
+  // Every path that loads the material collections parses the material scripts at most
+  // once, here, after the game file system is set up or refreshed. The entity models,
+  // the material collections and the light editor read the same shaders.
+  auto loadedShaders =
+    loadShaderFiles(
+      *m_gameFileSystem, gameInfo().gameConfig.materialConfig, m_taskManager, m_logger)
+    | kdl::transform([&](auto loaded) {
+        m_logger.info() << "Found " << loaded.shaders.size() << " shaders";
+        return loaded;
+      })
+    | kdl::if_error(
+      [&](const auto& e) { m_logger.error() << "Failed to reload shaders: " << e.msg; })
+    | kdl::value_or(LoadedShaders{});
+
+  m_entityModelManager->setShaders(
+    std::make_shared<const IndexedShaders>(std::move(loadedShaders)));
+}
+
 void Map::reloadMaterials()
 {
   clearMaterials();
+  refreshMaterialFileSystems();
   loadMaterials();
 }
 
-void Map::loadMaterials()
+void Map::refreshMaterialFileSystems()
 {
   if (const auto* wadStr = m_worldNode->entity().property(EntityPropertyKeys::Wad))
   {
@@ -1319,14 +1342,17 @@ void Map::loadMaterials()
   m_gameFileSystem->reload() | kdl::transform_error([&](auto e) {
     m_logger.error() << "Could not reload game file systems: " + e.msg;
   });
+}
 
+void Map::loadMaterials()
+{
   m_materialManager->clear();
 
   loadMaterialCollections(
     *m_gameFileSystem,
     gameInfo().gameConfig.materialConfig,
+    *m_entityModelManager->shaders(),
     makeCreateResource<gl::TextureResource>(m_resourceManager),
-    taskManager(),
     m_logger)
     | kdl::transform([&](auto materialCollections) {
         m_materialManager->setMaterialCollections(std::move(materialCollections));
@@ -1439,7 +1465,7 @@ void Map::updateGameFileSystem()
     searchPaths(*m_worldNode),
     logger());
 
-  entityModelManager().reloadShaders(m_taskManager);
+  reloadShaders();
 }
 
 void Map::initializeNodeIndex()
@@ -1836,6 +1862,20 @@ void Map::materialCollectionsWillChange()
 
 void Map::materialCollectionsDidChange()
 {
+  // a material script added on disk is only found after the refresh
+  refreshMaterialFileSystems();
+
+  // Without material scripts, a reload, such as one after a wad change, can't change
+  // what the models are shaded with: models never use wads. Reloading them anyway would
+  // show the entities as boxes until they have loaded again.
+  if (!gameInfo().gameConfig.materialConfig.shaderSearchPath.empty())
+  {
+    reloadShaders();
+    // the models keep the materials of the old shaders until they are loaded again
+    clearEntityModels();
+    setEntityModels();
+  }
+
   loadMaterials();
   setMaterials();
   updateAllFaceTags();

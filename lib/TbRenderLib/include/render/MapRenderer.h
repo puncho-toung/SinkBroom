@@ -140,6 +140,7 @@ private: // notification
   void resourcesWereProcessed(const std::vector<gl::ResourceId>& resourceIds);
 
   void materialCollectionsWillChange();
+  void materialCollectionsDidChange();
   void entityDefinitionsDidChange();
   void modsDidChange();
 

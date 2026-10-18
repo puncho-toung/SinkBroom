@@ -18,27 +18,47 @@
  */
 
 #include "Observer.h"
+#include "base/Logger.h"
 #include "fs/TestEnvironment.h"
 #include "gl/MaterialCollection.h"
 #include "gl/MaterialManager.h"
+#include "gl/Resource.h"
+#include "gl/ResourceManager.h"
+#include "gl/TestGl.h"
+#include "gl/TestUtils.h"
 #include "mdl/BrushFace.h" // IWYU pragma: keep
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
+#include "mdl/EntityDefinitionManager.h"
+#include "mdl/EntityModel.h"
+#include "mdl/EntityModelManager.h"
+#include "mdl/EntityNode.h"
+#include "mdl/EnvironmentConfig.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/LayerNode.h"
+#include "mdl/LoadMaterialCollections.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
+#include "mdl/MapFormat.h"
 #include "mdl/Map_Assets.h"
 #include "mdl/Map_Entities.h"
+#include "mdl/Map_Selection.h"
 #include "mdl/TestUtils.h"
 #include "mdl/WorldNode.h"
 
 #include "kd/path_utils.h"
+#include "kd/result.h"
+#include "kd/task_manager.h"
+
+#include "vm/bbox.h"
 
 #include <algorithm>
+#include <mutex>
 #include <optional>
 #include <ranges>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -47,6 +67,35 @@
 namespace tb::mdl
 {
 using namespace Catch::Matchers;
+
+namespace
+{
+
+// Keeps every message; shader files are parsed and log on task threads.
+class CollectingLogger : public Logger
+{
+private:
+  mutable std::mutex m_mutex;
+  std::vector<std::string> m_messages;
+
+public:
+  size_t countMessagesContaining(const std::string_view text) const
+  {
+    const auto lock = std::lock_guard{m_mutex};
+    return size_t(std::ranges::count_if(m_messages, [&](const auto& message) {
+      return message.find(text) != std::string::npos;
+    }));
+  }
+
+private:
+  void doLog(const LogLevel, const std::string_view message) override
+  {
+    const auto lock = std::lock_guard{m_mutex};
+    m_messages.emplace_back(message);
+  }
+};
+
+} // namespace
 
 TEST_CASE("Map_Assets")
 {
@@ -445,6 +494,132 @@ TEST_CASE("Map_Assets")
 
     REQUIRE(map.materialManager().collections().size() == 1);
     CHECK(map.materialManager().collections().front().materials().size() == 2);
+  }
+
+  SECTION("the material scripts are parsed once per load of the material collections")
+  {
+    // the material parser warns about the second definition of a name once per parse
+    auto env = fs::TestEnvironment{};
+    env.createDirectory("base/materials");
+    env.createFile(
+      "base/materials/twice.mtr", "textures/twice\n{\n}\ntextures/twice\n{\n}\n");
+
+    const auto environmentConfig = EnvironmentConfig{};
+    const auto gameInfo =
+      detail::makeGameInfoFixture(Doom3BFGGameInfo.gameConfig, env.dir());
+    auto taskManager = kdl::task_manager{};
+    auto resourceManager = gl::ResourceManager{};
+    auto logger = CollectingLogger{};
+    const auto parseCount = [&]() {
+      return logger.countMessagesContaining(
+        "Material 'textures/twice' was already defined");
+    };
+
+    auto map = Map::createMap(
+                 environmentConfig,
+                 gameInfo,
+                 env.dir(),
+                 MapFormat::Doom3_Valve,
+                 vm::bbox3d{8192.0},
+                 taskManager,
+                 resourceManager,
+                 logger)
+               | kdl::value();
+
+    // the entity models and the material collections share one parse
+    CHECK(parseCount() == 1);
+    const auto shaders = map->entityModelManager().shaders();
+    CHECK(shaders->findShader("textures/twice") != nullptr);
+    CHECK(map->materialManager().material("twice") != nullptr);
+
+    // a reload parses them again and replaces the shaders of the entity models
+    reloadMaterialCollections(*map);
+    CHECK(parseCount() == 2);
+    CHECK(map->entityModelManager().shaders() != shaders);
+    CHECK(map->materialManager().material("twice") != nullptr);
+  }
+
+  SECTION("reloadMaterialCollections loads the entity models again")
+  {
+    auto& map = fixture.create(Doom3BFGFixtureConfig);
+
+    const auto* definition =
+      map.entityDefinitionManager().definition("genmodel_tb_test_arrow");
+    REQUIRE(definition != nullptr);
+    auto* entityNode = createPointEntity(map, *definition, {0, 0, 0});
+    REQUIRE(entityNode != nullptr);
+
+    auto gl = gl::TestGl{};
+    const auto processResources = [&]() {
+      gl::processResourcesSync(
+        map.resourceManager(), gl::ProcessContext{gl, [](auto, auto) {}});
+    };
+
+    processResources();
+    const auto* model = entityNode->entity().model();
+    REQUIRE(model != nullptr);
+    REQUIRE(model->data() != nullptr);
+    const auto resourceId = model->dataResource().id();
+
+    // the models are shaded with the shaders that the reload parses
+    reloadMaterialCollections(map);
+    processResources();
+
+    model = entityNode->entity().model();
+    REQUIRE(model != nullptr);
+    CHECK(model->data() != nullptr);
+    CHECK(model->dataResource().id() != resourceId);
+
+    // a wad change reloads the material collections inside a command, and so does its
+    // undo
+    deselectAll(map);
+    REQUIRE(setEntityProperty(map, EntityPropertyKeys::Wad, "missing.wad"));
+    processResources();
+    REQUIRE(entityNode->entity().model() != nullptr);
+    CHECK(entityNode->entity().model()->data() != nullptr);
+
+    map.undoCommand();
+    processResources();
+    REQUIRE(entityNode->entity().model() != nullptr);
+    CHECK(entityNode->entity().model()->data() != nullptr);
+  }
+
+  SECTION("reloadMaterialCollections keeps the entity models without material scripts")
+  {
+    // the Doom 3 BFG config without a shader search path, like the Quake configs
+    auto config = Doom3BFGFixtureConfig;
+    config.gameInfo.gameConfig.materialConfig.shaderSearchPath = "";
+    auto& map = fixture.create(config);
+
+    const auto* definition =
+      map.entityDefinitionManager().definition("genmodel_tb_test_arrow");
+    REQUIRE(definition != nullptr);
+    auto* entityNode = createPointEntity(map, *definition, {0, 0, 0});
+    REQUIRE(entityNode != nullptr);
+
+    auto gl = gl::TestGl{};
+    const auto processResources = [&]() {
+      gl::processResourcesSync(
+        map.resourceManager(), gl::ProcessContext{gl, [](auto, auto) {}});
+    };
+    const auto modelResourceId = [&]() {
+      const auto* model = entityNode->entity().model();
+      REQUIRE(model != nullptr);
+      REQUIRE(model->data() != nullptr);
+      return model->dataResource().id();
+    };
+
+    processResources();
+    const auto resourceId = modelResourceId();
+
+    reloadMaterialCollections(map);
+    processResources();
+    CHECK(modelResourceId() == resourceId);
+
+    deselectAll(map);
+    REQUIRE(setEntityProperty(map, EntityPropertyKeys::Wad, "missing.wad"));
+    processResources();
+    CHECK(modelResourceId() == resourceId);
   }
 
   SECTION("reloadEntityDefinitions")

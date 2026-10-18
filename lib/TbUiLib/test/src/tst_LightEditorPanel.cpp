@@ -17,6 +17,8 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <QAbstractSlider>
+#include <QAbstractSpinBox>
 #include <QApplication>
 #include <QCheckBox>
 #include <QColor>
@@ -26,13 +28,18 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QScrollBar>
 #include <QSlider>
 #include <QStackedWidget>
+#include <QTest>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include "SidebarTestUtils.h"
+#include "base/NotifierConnection.h"
 #include "base/PreferenceManager.h"
+#include "fs/DiskFileSystem.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
@@ -44,10 +51,12 @@
 #include "mdl/Light.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
+#include "mdl/Map_Assets.h"
 #include "mdl/Map_Entities.h"
 #include "mdl/Map_Groups.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
+#include "mdl/TestUtils.h"
 #include "mdl/WorldNode.h"
 #include "prefs/Preferences.h"
 #include "ui/CatchConfig.h"
@@ -64,12 +73,12 @@
 
 #include "kd/invoke.h"
 #include "kd/result.h"
-#include "kd/task_manager.h"
 
 #include "vm/bbox.h"
 #include "vm/vec.h"
 
 #include <algorithm>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -125,6 +134,14 @@ std::vector<mdl::EntityProperty> withValue(
   return properties;
 }
 
+/**
+ * Whether the spin box shows "multi", the special value text of its minimum.
+ */
+bool showsMulti(const SpinControl& spin)
+{
+  return spin.specialValueText() == "multi" && spin.value() == spin.minimum();
+}
+
 const std::string* property(const mdl::EntityNode& entityNode, const std::string& key)
 {
   return entityNode.entity().property(key);
@@ -135,6 +152,21 @@ std::string valueOf(const mdl::EntityNode& entityNode, const std::string& key)
   const auto* value = property(entityNode, key);
   REQUIRE(value != nullptr);
   return *value;
+}
+
+/**
+ * Processes events until the predicate holds or two seconds have passed; returns whether
+ * it holds.
+ */
+template <typename Predicate>
+bool waitFor(const Predicate& predicate)
+{
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+  while (!predicate() && std::chrono::steady_clock::now() < deadline)
+  {
+    QTest::qWait(10);
+  }
+  return predicate();
 }
 
 // the pages of the editor's tab book
@@ -1118,17 +1150,83 @@ TEST_CASE("LightEditorPanel")
     CHECK(threshold.minimum() == 1.0);
     CHECK(threshold.maximum() == 50.0);
 
-    // not a light property
+    // not a light property; written once the steps pause
     const auto modificationCount = map.modificationCount();
     threshold.setValue(25.0);
     QApplication::processEvents();
-    CHECK(pref(Preferences::LightVolumeHandleThreshold) == 0.25f);
+    CHECK(waitFor([] { return pref(Preferences::LightVolumeHandleThreshold) == 0.25f; }));
     CHECK(map.modificationCount() == modificationCount);
     CHECK(threshold.value() == 25.0);
+
+    // a burst of steps is written once, with its last value, which a refresh keeps
+    // while the write waits
+    auto thresholdChanges = 0;
+    auto notifierConnection = NotifierConnection{};
+    notifierConnection +=
+      prefs.preferenceDidChangeNotifier.connect([&](const auto& path) {
+        if (path == Preferences::LightVolumeHandleThreshold.path)
+        {
+          ++thresholdChanges;
+        }
+      });
+    threshold.setValue(20.0);
+    threshold.setValue(30.0);
+    threshold.setValue(35.0);
+    selectOnly(map, {lightNode});
+    CHECK(threshold.value() == 35.0);
+    CHECK(waitFor([] { return pref(Preferences::LightVolumeHandleThreshold) == 0.35f; }));
+    QApplication::processEvents();
+    CHECK(thresholdChanges == 1);
+    CHECK(threshold.value() == 35.0);
 
     setPref(Preferences::LightVolumeHandleThreshold, 0.4f);
     QApplication::processEvents();
     CHECK(threshold.value() == 40.0);
+  }
+
+  SECTION("of the preferences, only the game path reads the texture list again")
+  {
+    auto& prefs = PreferenceManager::instance();
+    // also when a check fails, so that no later test case sees a changed preference
+    const auto resetPreferences = kdl::invoke_later{[&] {
+      prefs.resetToDefault(Preferences::CameraFlyMoveSpeed);
+      prefs.resetToDefault(Preferences::LightVolumeHandleThreshold);
+    }};
+
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    // an item that only reading the list again removes
+    auto& texture = findControl<QComboBox>(panel, "Texture");
+    texture.addItem("marker");
+    const auto hasMarker = [&]() { return texture.findText("marker") != -1; };
+
+    // as a tick of the fly speed wheel does
+    setPref(Preferences::CameraFlyMoveSpeed, 2.0f);
+    QApplication::processEvents();
+    CHECK(hasMarker());
+
+    // the threshold refreshes the panel
+    auto& threshold = findControl<SpinControl>(panel, "HandleThreshold");
+    threshold.setValue(25.0);
+    REQUIRE(
+      waitFor([] { return pref(Preferences::LightVolumeHandleThreshold) == 0.25f; }));
+    QApplication::processEvents();
+    CHECK(hasMarker());
+    CHECK(threshold.value() == 25.0);
+
+    // the game path reloads the materials; there are none below base/base
+    auto gamePath = map.gameInfo().gamePathPreference;
+    const auto resetGamePath = kdl::invoke_later{[&] { prefs.resetToDefault(gamePath); }};
+    setPref(gamePath, gamePath.defaultValue / "base");
+    QApplication::processEvents();
+    CHECK_FALSE(hasMarker());
+    CHECK(texture.count() == 1);
   }
 
   SECTION("the angles are written by the rotation policy")
@@ -1321,6 +1419,242 @@ TEST_CASE("LightEditorPanel")
     QApplication::processEvents();
     CHECK(valueOf(*lightNode1, "noshadows") == "0");
     CHECK(findControl<QCheckBox>(panel, "CastShadows").checkState() == Qt::Checked);
+  }
+
+  SECTION("a multi field writes every value of its range, its minimum too")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    const auto mathLight = [&](
+                             const std::string& origin, const std::string& innerRadius) {
+      return addLight(
+        map,
+        {
+          {"classname", "light"},
+          {"origin", origin},
+          {"math_enabled", "1"},
+          {"math_type", "point"},
+          {"math_inner_radius", innerRadius},
+        });
+    };
+
+    auto panel = LightEditorPanel{fixture.context()};
+    auto& innerRadius = findControl<SpinControl>(panel, "InnerRadius");
+
+    // typing the range minimum changes the value of a multi field, so it is written
+    auto* typedNode1 = mathLight("0 0 0", "0.2");
+    auto* typedNode2 = mathLight("64 0 0", "0.4");
+    selectOnly(map, {typedNode1, typedNode2});
+    REQUIRE(showsMathPage(panel));
+    REQUIRE(showsMulti(innerRadius));
+
+    innerRadius.selectAll();
+    QTest::keyClicks(&innerRadius, "0");
+    QTest::keyClick(&innerRadius, Qt::Key_Return);
+    QApplication::processEvents();
+    CHECK(valueOf(*typedNode1, "math_inner_radius") == "0");
+    CHECK(valueOf(*typedNode2, "math_inner_radius") == "0");
+    CHECK_FALSE(showsMulti(innerRadius));
+    CHECK(innerRadius.value() == 0.0);
+
+    // from multi, a step down writes nothing and a step up starts at the range minimum
+    auto* steppedNode1 = mathLight("128 0 0", "0.3");
+    auto* steppedNode2 = mathLight("192 0 0", "0.6");
+    selectOnly(map, {steppedNode1, steppedNode2});
+    REQUIRE(showsMulti(innerRadius));
+
+    const auto modificationCount = map.modificationCount();
+    innerRadius.stepBy(-1);
+    QApplication::processEvents();
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(valueOf(*steppedNode1, "math_inner_radius") == "0.3");
+    CHECK(valueOf(*steppedNode2, "math_inner_radius") == "0.6");
+    CHECK(showsMulti(innerRadius));
+
+    innerRadius.stepBy(1);
+    QApplication::processEvents();
+    CHECK(valueOf(*steppedNode1, "math_inner_radius") == "0.01");
+    CHECK(valueOf(*steppedNode2, "math_inner_radius") == "0.01");
+    CHECK(innerRadius.value() == 0.01);
+
+    // the slider spans the range: it shows the first light's value and writes the range
+    // minimum at its start, never the value below the range that "multi" holds
+    auto* draggedNode1 = mathLight("256 0 0", "0.2");
+    auto* draggedNode2 = mathLight("320 0 0", "0.4");
+    selectOnly(map, {draggedNode1, draggedNode2});
+    REQUIRE(showsMulti(innerRadius));
+
+    auto& slider = findControl<QSlider>(panel, "InnerRadiusSlider");
+    CHECK(slider.value() == 200);
+
+    slider.setSliderDown(true);
+    slider.setSliderPosition(0);
+    slider.setSliderDown(false);
+    QApplication::processEvents();
+    CHECK(valueOf(*draggedNode1, "math_inner_radius") == "0");
+    CHECK(valueOf(*draggedNode2, "math_inner_radius") == "0");
+  }
+
+  SECTION("a slider writes on release only if the drag moved it")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    const auto mathLight = [&](const std::string& origin, const std::string& falloffExp) {
+      return addLight(
+        map,
+        {
+          {"classname", "light"},
+          {"origin", origin},
+          {"math_enabled", "1"},
+          {"math_type", "point"},
+          {"math_falloff", "exponential"},
+          {"math_falloff_exp", falloffExp},
+        });
+    };
+    auto* lightNode1 = mathLight("0 0 0", "2");
+    auto* lightNode2 = mathLight("64 0 0", "3");
+
+    auto panel = LightEditorPanel{fixture.context()};
+    auto& slider = findControl<QSlider>(panel, "FalloffExpSlider");
+    auto& falloffExp = findControl<SpinControl>(panel, "FalloffExp");
+
+    // setSliderDown emits sliderPressed and sliderReleased as a click on the handle does;
+    // the slider shows 2 as 1.9921, the nearest of its steps
+    selectOnly(map, {lightNode1});
+    REQUIRE(slider.isEnabled());
+    const auto modificationCount = map.modificationCount();
+    slider.setSliderDown(true);
+    slider.setSliderDown(false);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode1, "math_falloff_exp") == "2");
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(falloffExp.value() == 2.0);
+
+    // nor does a click write the first light's value to lights that differ
+    selectOnly(map, {lightNode1, lightNode2});
+    REQUIRE(showsMulti(falloffExp));
+    slider.setSliderDown(true);
+    slider.setSliderDown(false);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode1, "math_falloff_exp") == "2");
+    CHECK(valueOf(*lightNode2, "math_falloff_exp") == "3");
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(showsMulti(falloffExp));
+
+    // a drag that ends where it started writes nothing and shows the lights again
+    const auto startPosition = slider.value();
+    slider.setSliderDown(true);
+    slider.setSliderPosition(700);
+    CHECK_FALSE(showsMulti(falloffExp));
+    slider.setSliderPosition(startPosition);
+    slider.setSliderDown(false);
+    QApplication::processEvents();
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(showsMulti(falloffExp));
+
+    // a drag writes once, on release, to every selected light
+    slider.setSliderDown(true);
+    slider.setSliderPosition(300);
+    slider.setSliderPosition(500);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode1, "math_falloff_exp") == "2");
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(falloffExp.value() == 8.05);
+
+    slider.setSliderDown(false);
+    QApplication::processEvents();
+    CHECK(valueOf(*lightNode1, "math_falloff_exp") == "8.05");
+    CHECK(valueOf(*lightNode2, "math_falloff_exp") == "8.05");
+    CHECK(map.modificationCount() == modificationCount + 1);
+  }
+
+  SECTION("the wheel over an input without the focus scrolls instead of editing")
+  {
+    auto& prefs = PreferenceManager::instance();
+    // also when a check fails, so that no later test case sees a changed preference
+    const auto resetThreshold = kdl::invoke_later{
+      [&] { prefs.resetToDefault(Preferences::LightVolumeHandleThreshold); }};
+
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(
+      map,
+      {
+        {"classname", "light"},
+        {"origin", "16 32 64"},
+        {"light_radius", "200 100 50"},
+        {"_color", "1 0.5 0"},
+        {"math_enabled", "1"},
+        {"math_type", "point"},
+        {"math_falloff", "exponential"},
+        {"math_falloff_exp", "2"},
+      });
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+    REQUIRE(showsEditor(panel));
+
+    const auto properties = lightNode->entity().properties();
+    const auto modificationCount = map.modificationCount();
+    const auto threshold = pref(Preferences::LightVolumeHandleThreshold);
+
+    // Qt does not propagate a synthesized wheel event ("Synthesized events shouldn't
+    // propagate", qapplication.cpp), so this checks that the input leaves the event to
+    // its parents; that they scroll the panel, and that an input with the focus takes
+    // the wheel, are GUI checks
+    const auto wheelIsAccepted = [](QWidget& input) {
+      auto event = QWheelEvent{
+        QPointF{4, 4},
+        QPointF{4, 4},
+        QPoint{},
+        QPoint{0, 120},
+        Qt::NoButton,
+        Qt::NoModifier,
+        Qt::NoScrollPhase,
+        false};
+      QApplication::sendEvent(&input, &event);
+      return event.isAccepted();
+    };
+    const auto checkWheel = [&](QWidget& input, const auto& valueOf) {
+      CAPTURE(input.objectName().toStdString());
+      CHECK(input.focusPolicy() == Qt::StrongFocus);
+      const auto value = valueOf();
+      CHECK_FALSE(wheelIsAccepted(input));
+      CHECK(valueOf() == value);
+    };
+
+    const auto spins = panel.findChildren<QAbstractSpinBox*>();
+    REQUIRE_FALSE(spins.isEmpty());
+    for (auto* spin : spins)
+    {
+      checkWheel(*spin, [&] { return spin->property("value").toDouble(); });
+    }
+
+    auto sliderCount = 0;
+    for (auto* slider : panel.findChildren<QAbstractSlider*>())
+    {
+      // the scroll bars of the panel and of the combo box lists scroll
+      if (!qobject_cast<QScrollBar*>(slider))
+      {
+        checkWheel(*slider, [&] { return slider->value(); });
+        ++sliderCount;
+      }
+    }
+    CHECK(sliderCount > 0);
+
+    const auto comboBoxes = panel.findChildren<QComboBox*>();
+    REQUIRE_FALSE(comboBoxes.isEmpty());
+    for (auto* comboBox : comboBoxes)
+    {
+      checkWheel(*comboBox, [&] { return comboBox->currentIndex(); });
+    }
+
+    CHECK(lightNode->entity().properties() == properties);
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(pref(Preferences::LightVolumeHandleThreshold) == threshold);
   }
 
   SECTION("lights of different types hide the volume")
@@ -1639,12 +1973,35 @@ TEST_CASE("LightEditorPanel")
     selectOnly(map, {texturedNode});
     CHECK(texture.count() == 2);
 
-    auto taskManager = kdl::task_manager{};
-    map.entityModelManager().reloadShaders(taskManager);
+    map.entityModelManager().setShaders(mdl::loadIndexedShaders(
+      fs::DiskFileSystem{map.gamePath() / "base"},
+      map.gameInfo().gameConfig.materialConfig));
     fixture.document().modsDidChangeNotifier();
     QApplication::processEvents();
     CHECK(items() == expectedItems);
     CHECK(texture.currentIndex() == 2);
+  }
+
+  SECTION("the texture list is read again when the material collections are reloaded")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* lightNode = addLight(map, {{"classname", "light"}, {"origin", "0 0 0"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {lightNode});
+
+    auto& texture = findControl<QComboBox>(panel, "Texture");
+    REQUIRE(texture.count() == 3);
+
+    // the reload parses the material scripts again, so the list may have changed
+    texture.removeItem(1);
+    REQUIRE(texture.count() == 2);
+    mdl::reloadMaterialCollections(map);
+    QApplication::processEvents();
+    CHECK(texture.count() == 3);
+    CHECK(texture.itemText(1) == "fogs/tb_test_fog");
   }
 
   SECTION("the volume tool buttons")
@@ -1826,6 +2183,43 @@ TEST_CASE("LightEditorPanel")
     tool.endDrag();
     QApplication::processEvents();
     CHECK(radiusX.value() == Catch::Approx(339.79).margin(0.005));
+  }
+
+  SECTION("the panel is not refreshed while it is out of sight")
+  {
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto& map = fixture.document().map();
+
+    auto* firstNode =
+      addLight(map, {{"classname", "light"}, {"name", "first"}, {"origin", "0 0 0"}});
+    auto* secondNode =
+      addLight(map, {{"classname", "light"}, {"name", "second"}, {"origin", "64 0 0"}});
+
+    // the panel in a window that never appears on the screen, which owns it
+    auto window = QWidget{};
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(400, 800);
+    auto* panel = new LightEditorPanel{fixture.context(), &window};
+    panel->setGeometry(0, 0, 400, 800);
+
+    // hidden, as in a closed dock
+    selectOnly(map, {firstNode});
+    CHECK_FALSE(showsEditor(*panel));
+
+    window.show();
+    panel->panelShown();
+    QApplication::processEvents();
+    CHECK(currentText(*panel) == "Light: first");
+
+    // outside the window, as in a dock tabbed behind another
+    panel->move(-2000, -2000);
+    selectOnly(map, {secondNode});
+    CHECK(currentText(*panel) == "Light: first");
+
+    panel->move(0, 0);
+    panel->panelShown();
+    QApplication::processEvents();
+    CHECK(currentText(*panel) == "Light: second");
   }
   SECTION("a write after the selection became something else writes nothing")
   {

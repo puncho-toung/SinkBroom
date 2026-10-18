@@ -36,6 +36,7 @@
 #include <cmath>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -136,6 +137,15 @@ double distanceOf(const std::optional<double>& distance)
 }
 
 /**
+ * The light of an edit box, which must not be denied.
+ */
+LightProperties editedLight(const std::optional<LightProperties>& light)
+{
+  REQUIRE(light);
+  return *light;
+}
+
+/**
  * The t at which 1 - smoothstep(t) is the given level: smoothstep(t) = 1 - level, whose
  * inverse is 1/2 - sin(asin(1 - 2 y) / 3).
  */
@@ -176,6 +186,21 @@ TEST_CASE("LightVolume")
       lightFrame(lightRotation, EntityRotationPolicy::IdTech4).R * vm::vec3d{1, 0, 0}
       == vm::approx{vm::vec3d{0, 1, 0}, Exact});
     CHECK(lightFrame(lightRotation, EntityRotationPolicy::Quake).R == identity);
+
+    // a rotation that is not finite is none, like an angle that is not read
+    const auto unturned = [](
+                            const std::string& key,
+                            const std::string& value,
+                            const EntityRotationPolicy policy) {
+      return lightFrame(Entity{{{"classname", "light"}, {key, value}}}, policy).R
+             == identity;
+    };
+    CHECK(unturned("angle", "nan", EntityRotationPolicy::IdTech4));
+    CHECK(unturned("angle", "inf", EntityRotationPolicy::IdTech4));
+    CHECK(unturned("angles", "0 nan 0", EntityRotationPolicy::IdTech4));
+    CHECK(unturned("angle", "nan", EntityRotationPolicy::Quake));
+    CHECK(unturned("angle", "inf", EntityRotationPolicy::Quake));
+    CHECK(unturned("angles", "0 nan 0", EntityRotationPolicy::Quake));
   }
 
   SECTION("operator<<(LightElement)")
@@ -276,7 +301,7 @@ TEST_CASE("LightVolume")
       CHECK(spotLightFrustum(noTarget) == std::nullopt);
       CHECK(beamFrame(noTarget) == std::nullopt);
       CHECK(lightEditBox(noTarget) == std::nullopt);
-      CHECK(lightFromEditBox(noTarget, identity, vm::bbox3d{100.0}) == noTarget);
+      CHECK(lightFromEditBox(noTarget, identity, vm::bbox3d{100.0}) == std::nullopt);
 
       const auto rightIsUp = withRight(defaultSpot, defaultSpot.up);
       CHECK(spotLightFrustum(rightIsUp) == std::nullopt);
@@ -573,10 +598,11 @@ TEST_CASE("LightVolume")
   {
     SECTION("Round trips")
     {
-      // the default point light
-      CHECK(
-        lightFromEditBox(defaultPoint, identity, *lightEditBox(defaultPoint))
-        == defaultPoint);
+      // the default point light: an edit that gives the base is not a denial
+      const auto same =
+        lightFromEditBox(defaultPoint, identity, *lightEditBox(defaultPoint));
+      REQUIRE(same);
+      CHECK(*same == defaultPoint);
 
       // a rotated point light
       auto rotatedPoint = defaultPoint;
@@ -585,7 +611,7 @@ TEST_CASE("LightVolume")
       rotatedPoint.equalRadius = false;
       const auto R = rotationOf({{"classname", "light"}, {"angles", "0 90 0"}});
       const auto rotatedResult =
-        lightFromEditBox(rotatedPoint, R, *lightEditBox(rotatedPoint));
+        editedLight(lightFromEditBox(rotatedPoint, R, *lightEditBox(rotatedPoint)));
       CHECK(rotatedResult.origin == vm::approx{rotatedPoint.origin, Exact});
       CHECK(rotatedResult.radius == vm::approx{rotatedPoint.radius, Exact});
     }
@@ -602,13 +628,13 @@ TEST_CASE("LightVolume")
       const auto offset = vm::vec3d{10, 20, 30};
       const auto box = lightEditBox(rotatedPoint)->translate(offset);
 
-      const auto moved = lightFromEditBox(rotatedPoint, R, box);
+      const auto moved = editedLight(lightFromEditBox(rotatedPoint, R, box));
       CHECK(moved.origin == vm::approx{vm::vec3d{64 - 20, 32 + 10, 16 + 30}, Exact});
       CHECK(moved.radius == vm::approx{rotatedPoint.radius, Exact});
 
       // and back
       const auto back =
-        lightFromEditBox(moved, R, lightEditBox(moved)->translate(-offset));
+        editedLight(lightFromEditBox(moved, R, lightEditBox(moved)->translate(-offset)));
       CHECK(back.origin == vm::approx{rotatedPoint.origin, Exact});
       CHECK(back.radius == vm::approx{rotatedPoint.radius, Exact});
     }
@@ -618,7 +644,7 @@ TEST_CASE("LightVolume")
 
       // the default spot light
       const auto defaultBox = *lightEditBox(defaultSpot);
-      const auto spot = lightFromEditBox(defaultSpot, identity, defaultBox);
+      const auto spot = editedLight(lightFromEditBox(defaultSpot, identity, defaultBox));
       CHECK(vm::approx{defaultBox, Exact} == *lightEditBox(spot));
       CHECK(spot.origin == vm::approx{defaultSpot.origin, Exact});
       CHECK(spot.target == vm::approx{defaultSpot.target, Exact});
@@ -628,7 +654,8 @@ TEST_CASE("LightVolume")
 
       // the explicit spot light: the same lit volume with a shorter target
       const auto explicitBox = *lightEditBox(explicitSpot);
-      const auto explicitResult = lightFromEditBox(explicitSpot, identity, explicitBox);
+      const auto explicitResult =
+        editedLight(lightFromEditBox(explicitSpot, identity, explicitBox));
       CHECK(vm::approx{explicitBox, Exact} == *lightEditBox(explicitResult));
       CHECK(explicitResult.explicitStartEnd);
       CHECK(explicitResult.start == vm::approx{explicitSpot.start, Exact});
@@ -641,8 +668,8 @@ TEST_CASE("LightVolume")
     SECTION("(a) A far cap edge dragged along the box's +x by 32")
     {
       // the box's +x is the beam frame's r, world -X for the default spot
-      const auto light =
-        lightFromEditBox(defaultSpot, identity, box({-132, -132, 0}, {164, 132, 264}));
+      const auto light = editedLight(
+        lightFromEditBox(defaultSpot, identity, box({-132, -132, 0}, {164, 132, 264})));
       CHECK(vm::length(light.right) == Catch::Approx(143.5234).margin(Tolerance));
       CHECK(light.target == vm::approx{vm::vec3d{-15.516, 0, -256.015}, Tolerance});
       CHECK(vm::length(light.up) == Catch::Approx(128.0073).margin(Tolerance));
@@ -653,16 +680,16 @@ TEST_CASE("LightVolume")
 
     SECTION("(a) The world +X face dragged by 32")
     {
-      const auto light =
-        lightFromEditBox(defaultSpot, identity, box({-164, -132, 0}, {132, 132, 264}));
+      const auto light = editedLight(
+        lightFromEditBox(defaultSpot, identity, box({-164, -132, 0}, {132, 132, 264})));
       CHECK(light.target == vm::approx{vm::vec3d{15.516, 0, -256.015}, Tolerance});
       CHECK(light.origin == vm::approx{defaultSpot.origin, Exact});
     }
 
     SECTION("(b) The apex face dragged by 16")
     {
-      const auto light =
-        lightFromEditBox(defaultSpot, identity, box({-132, -132, 16}, {132, 132, 264}));
+      const auto light = editedLight(
+        lightFromEditBox(defaultSpot, identity, box({-132, -132, 16}, {132, 132, 264})));
       CHECK(light.origin == vm::approx{vm::vec3d{0, 0, -16}, Exact});
       CHECK(light.target == vm::approx{vm::vec3d{0, 0, -240}, Tolerance});
       CHECK(vm::length(light.right) == Catch::Approx(127.7419).margin(Tolerance));
@@ -679,15 +706,15 @@ TEST_CASE("LightVolume")
     {
       // angles 0 90 0 turns the beam, local -Z, to world -Z: try a pitch instead
       const auto R = rotationOf({{"classname", "light"}, {"angles", "90 0 0"}});
-      const auto light =
-        lightFromEditBox(defaultSpot, R, box({-132, -132, 16}, {132, 132, 264}));
+      const auto light = editedLight(
+        lightFromEditBox(defaultSpot, R, box({-132, -132, 16}, {132, 132, 264})));
       CHECK(light.origin == vm::approx{16.0 * (R * vm::vec3d{0, 0, -1}), Exact});
     }
 
     SECTION("(c) The far face dragged by 64")
     {
-      const auto light =
-        lightFromEditBox(defaultSpot, identity, box({-132, -132, 0}, {132, 132, 328}));
+      const auto light = editedLight(
+        lightFromEditBox(defaultSpot, identity, box({-132, -132, 0}, {132, 132, 328})));
       CHECK(light.target == vm::approx{vm::vec3d{0, 0, -320}, Tolerance});
       CHECK(vm::length(light.right) == Catch::Approx(128.7805).margin(Tolerance));
       CHECK(light.origin == vm::approx{defaultSpot.origin, Exact});
@@ -696,8 +723,8 @@ TEST_CASE("LightVolume")
 
     SECTION("(c') The far face of an explicit spot light dragged by 64")
     {
-      const auto light =
-        lightFromEditBox(explicitSpot, identity, box({-116, -116, 0}, {116, 116, 296}));
+      const auto light = editedLight(
+        lightFromEditBox(explicitSpot, identity, box({-116, -116, 0}, {116, 116, 296})));
       CHECK(light.explicitStartEnd);
       CHECK(light.end == vm::approx{vm::vec3d{0, 0, -264}, Tolerance});
       CHECK(light.start == vm::approx{vm::vec3d{0, 0, -32}, Tolerance});
@@ -708,39 +735,40 @@ TEST_CASE("LightVolume")
 
     SECTION("(d) A point light's side dragged along +x by 32")
     {
-      const auto light = lightFromEditBox(
-        defaultPoint, identity, box({-300, -300, -300}, {332, 300, 300}));
+      const auto light = editedLight(lightFromEditBox(
+        defaultPoint, identity, box({-300, -300, -300}, {332, 300, 300})));
       CHECK(light.origin == vm::approx{vm::vec3d{16, 0, 0}, Exact});
       CHECK(light.radius == vm::approx{vm::vec3d{316, 300, 300}, Exact});
       CHECK_FALSE(light.equalRadius);
 
       // the centre moves in the light's frame
       const auto R = rotationOf({{"classname", "light"}, {"angles", "0 90 0"}});
-      const auto rotated =
-        lightFromEditBox(defaultPoint, R, box({-300, -300, -300}, {332, 300, 300}));
+      const auto rotated = editedLight(
+        lightFromEditBox(defaultPoint, R, box({-300, -300, -300}, {332, 300, 300})));
       CHECK(rotated.origin == vm::approx{vm::vec3d{0, 16, 0}, Exact});
     }
 
-    SECTION("Denied boxes return the base")
+    SECTION("Denied boxes return nothing")
     {
       // depth 23
       CHECK(
         lightFromEditBox(defaultSpot, identity, box({-132, -132, 0}, {132, 132, 23}))
-        == defaultSpot);
+        == std::nullopt);
       // half extent 0.5
       CHECK(
         lightFromEditBox(defaultSpot, identity, box({-0.5, -132, 0}, {0.5, 132, 264}))
-        == defaultSpot);
+        == std::nullopt);
       CHECK(
         lightFromEditBox(defaultSpot, identity, box({-132, -0.5, 0}, {132, 0.5, 264}))
-        == defaultSpot);
+        == std::nullopt);
       CHECK(
         lightFromEditBox(defaultPoint, identity, box({-300, -300, -0.5}, {300, 300, 0.5}))
-        == defaultPoint);
+        == std::nullopt);
 
       // depth 24 is allowed
       CHECK(
-        lightFromEditBox(defaultSpot, identity, box({-132, -132, 0}, {132, 132, 24}))
+        editedLight(
+          lightFromEditBox(defaultSpot, identity, box({-132, -132, 0}, {132, 132, 24})))
         != defaultSpot);
     }
 
@@ -753,7 +781,7 @@ TEST_CASE("LightVolume")
           const auto handleBox = lightEditBox(light, DefaultThreshold);
           REQUIRE(handleBox);
           const auto result =
-            lightFromEditBox(light, identity, *handleBox, DefaultThreshold);
+            editedLight(lightFromEditBox(light, identity, *handleBox, DefaultThreshold));
           CHECK(result.origin == vm::approx{light.origin, Exact});
           CHECK(result.radius == vm::approx{light.radius, Exact});
           CHECK(result.equalRadius);
@@ -761,11 +789,12 @@ TEST_CASE("LightVolume")
 
         // spot lights and suns as without a threshold
         CHECK(
-          lightFromEditBox(
-            defaultSpot, identity, *lightEditBox(defaultSpot), DefaultThreshold)
+          editedLight(lightFromEditBox(
+            defaultSpot, identity, *lightEditBox(defaultSpot), DefaultThreshold))
           == lightFromEditBox(defaultSpot, identity, *lightEditBox(defaultSpot)));
         CHECK(
-          lightFromEditBox(sun, identity, *lightEditBox(sun), DefaultThreshold)
+          editedLight(
+            lightFromEditBox(sun, identity, *lightEditBox(sun), DefaultThreshold))
           == lightFromEditBox(sun, identity, *lightEditBox(sun)));
       }
 
@@ -776,11 +805,11 @@ TEST_CASE("LightVolume")
         // the scale tool's face drag: the +x face follows the handle by 32, the -x face
         // stays, so the half extent grows by 16 and the radius by 16 / t; the centre
         // follows by 16
-        const auto light = lightFromEditBox(
+        const auto light = editedLight(lightFromEditBox(
           seededPoint(),
           identity,
           box({-273, -273, -273}, {273 + 32, 273, 273}),
-          DefaultThreshold);
+          DefaultThreshold));
         CHECK(light.radius.x() == Catch::Approx(300.0 + 16.0 / t).margin(Tolerance));
         CHECK(light.radius.y() == Catch::Approx(300.0).margin(Tolerance));
         CHECK(light.radius.z() == Catch::Approx(300.0).margin(Tolerance));
@@ -789,11 +818,11 @@ TEST_CASE("LightVolume")
 
         // both x faces by 32 (anchored at the centre): the radius grows by 32 / t, the
         // centre stays
-        const auto centred = lightFromEditBox(
+        const auto centred = editedLight(lightFromEditBox(
           seededPoint(),
           identity,
           box({-273 - 32, -273, -273}, {273 + 32, 273, 273}),
-          DefaultThreshold);
+          DefaultThreshold));
         CHECK(centred.radius.x() == Catch::Approx(300.0 + 32.0 / t).margin(Tolerance));
         CHECK(centred.radius.x() == Catch::Approx(335.165).margin(Tolerance));
         CHECK(centred.radius.y() == Catch::Approx(300.0).margin(Tolerance));
@@ -808,7 +837,7 @@ TEST_CASE("LightVolume")
             identity,
             box({-273, -273, -0.5}, {273, 273, 0.5}),
             DefaultThreshold)
-          == seededPoint());
+          == std::nullopt);
       }
     }
   }
@@ -1183,6 +1212,33 @@ TEST_CASE("LightVolume")
       intersectRayEllipsoid(
         atOrigin, vm::vec3d{300, 300, 0}, 1.0, vm::ray3d{{1000, 0, 0}, {-1, 0, 0}})
       == std::nullopt);
+
+    // big lights, whose unit sphere's space shrinks a ray's direction to about 1 / r:
+    // along an axis and along a diagonal
+    const auto big = vm::vec3d{1024, 1024, 1024};
+    CHECK(
+      distanceOf(
+        intersectRayEllipsoid(atOrigin, big, 1.0, vm::ray3d{{5000, 0, 0}, {-1, 0, 0}}))
+      == Catch::Approx(5000.0 - 1024.0).margin(Exact));
+    CHECK(
+      distanceOf(intersectRayEllipsoid(
+        atOrigin,
+        big,
+        1.0,
+        vm::ray3d{{3000, 3000, 3000}, vm::normalize(vm::vec3d{-1, -1, -1})}))
+      == Catch::Approx(3000.0 * std::sqrt(3.0) - 1024.0).margin(Exact));
+
+    // a wide, flat light along a horizontal ray
+    CHECK(
+      distanceOf(intersectRayEllipsoid(
+        atOrigin, vm::vec3d{2048, 2048, 512}, 1.0, vm::ray3d{{5000, 0, 0}, {-1, 0, 0}}))
+      == Catch::Approx(5000.0 - 2048.0).margin(Exact));
+
+    // in the turned frame, world -X is local +y
+    CHECK(
+      distanceOf(intersectRayEllipsoid(
+        turned, vm::vec3d{2048, 1024, 512}, 1.0, vm::ray3d{{5000, 0, 0}, {-1, 0, 0}}))
+      == Catch::Approx(5000.0 - 64.0 - 1024.0).margin(Exact));
   }
 
   SECTION("intersectRaySpotCap")

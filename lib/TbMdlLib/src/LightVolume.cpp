@@ -229,9 +229,10 @@ double explicitZNear(const LightProperties& light)
 
 /**
  * The light of the given box, whose half extents are the radius scaled by the given
- * falloff parameter (1 for the full extent, visibleFalloffT for the handle box).
+ * falloff parameter (1 for the full extent, visibleFalloffT for the handle box), or
+ * nothing if the box is denied.
  */
-LightProperties pointFromEditBox(
+std::optional<LightProperties> pointFromEditBox(
   const LightProperties& base,
   const vm::mat3x3d& rotation,
   const vm::bbox3d& box,
@@ -242,7 +243,7 @@ LightProperties pointFromEditBox(
     halfExtents.x() < MinHalfExtent || halfExtents.y() < MinHalfExtent
     || halfExtents.z() < MinHalfExtent || t < DegenerateEpsilon)
   {
-    return base;
+    return std::nullopt;
   }
 
   const auto radius = halfExtents / t;
@@ -254,7 +255,7 @@ LightProperties pointFromEditBox(
   return light;
 }
 
-LightProperties spotFromEditBox(
+std::optional<LightProperties> spotFromEditBox(
   const LightProperties& base, const vm::mat3x3d& rotation, const vm::bbox3d& box)
 {
   // step 1
@@ -267,14 +268,14 @@ LightProperties spotFromEditBox(
   // step 2, every deny before anything is normalized
   if (depth < MinSpotBoxDepth || hx < MinHalfExtent || hy < MinHalfExtent)
   {
-    return base;
+    return std::nullopt;
   }
 
   const auto s = spot(base);
   const auto frame = beamFrame(base);
   if (!s || !frame)
   {
-    return base;
+    return std::nullopt;
   }
 
   const auto centre = vm::vec3d{cx, cy, depth};
@@ -362,11 +363,26 @@ std::ostream& operator<<(std::ostream& lhs, const LightElement rhs)
   return lhs;
 }
 
+vm::mat3x3d lightRotation(const Entity& entity, const EntityRotationPolicy policy)
+{
+  const auto R = rotationPart(entityRotation(entity, policy));
+
+  // upstream's angle and Euler parses read nan and inf: no rotation, like an unread angle
+  for (std::size_t c = 0; c < 3; ++c)
+  {
+    if (!vm::is_finite(R[c]))
+    {
+      return vm::mat3x3d::identity();
+    }
+  }
+  return R;
+}
+
 LightFrame lightFrame(const Entity& entity, const EntityRotationPolicy policy)
 {
   return {
     parseLightProperties(entity).origin,
-    rotationPart(entityRotation(entity, policy)),
+    lightRotation(entity, policy),
   };
 }
 
@@ -528,7 +544,7 @@ std::optional<vm::bbox3d> lightEditBox(
   return vm::bbox3d{-halfExtents, halfExtents};
 }
 
-LightProperties lightFromEditBox(
+std::optional<LightProperties> lightFromEditBox(
   const LightProperties& base, const vm::mat3x3d& rotation, const vm::bbox3d& box)
 {
   switch (base.type)
@@ -542,7 +558,7 @@ LightProperties lightFromEditBox(
   }
 }
 
-LightProperties lightFromEditBox(
+std::optional<LightProperties> lightFromEditBox(
   const LightProperties& base,
   const vm::mat3x3d& rotation,
   const vm::bbox3d& box,
@@ -772,7 +788,9 @@ std::optional<double> intersectRayEllipsoid(
   const auto b = 2.0 * vm::dot(origin, direction);
   const auto c = vm::dot(origin, origin) - 1.0;
   const auto discriminant = b * b - 4.0 * a * c;
-  if (a < DegenerateEpsilon || discriminant < 0.0)
+
+  // a is about 1 / radius^2 for a unit ray: only a ray without a direction has none
+  if (a <= 0.0 || discriminant < 0.0)
   {
     return std::nullopt;
   }

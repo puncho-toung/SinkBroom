@@ -411,22 +411,21 @@ std::vector<gl::Texture> loadTexturesForMaterial(
 }
 
 /**
- * Finds the material decl that RBDOOM-3-BFG shades the given assimp material with: the
- * one its name names (renderer/Model_gltf.cpp). Assimp gives the material it adds for
- * meshes without one the name AI_DEFAULT_MATERIAL_NAME, which is not a decl.
+ * Returns the name of the material decl that RBDOOM-3-BFG shades the given assimp
+ * material with: the one its name names (renderer/Model_gltf.cpp), or nothing. Assimp
+ * gives the material it adds for meshes without one the name AI_DEFAULT_MATERIAL_NAME,
+ * which is not a decl.
  */
-std::optional<gl::Material> findIdTech4AssimpMaterial(
-  const aiMaterial& material, const FindMaterialFunc& findMaterial)
+std::filesystem::path idTech4AssimpMaterialName(const aiMaterial& material)
 {
   const auto name = material.GetName();
   const auto nameView = std::string_view{name.C_Str(), size_t(name.length)};
   if (nameView.empty() || nameView == AI_DEFAULT_MATERIAL_NAME)
   {
-    return std::nullopt;
+    return {};
   }
 
-  const auto materialName = canonicalIdTech4MaterialName(nameView);
-  return !materialName.empty() ? findMaterial(materialName) : std::nullopt;
+  return canonicalIdTech4MaterialName(nameView);
 }
 
 struct AssimpComputedMeshData
@@ -996,11 +995,20 @@ Result<EntityModelData> loadAssimpModel(
     // if we have no animations, always load 1 frame for the reference model
     const auto numSequences = std::max(scene->mNumAnimations, 1u);
 
-    // Under the id Tech 4 convention, the assimp materials that name no material decl,
-    // so that they are not looked up again for every mesh that uses them. One that does
-    // name a decl is looked up for each of its meshes, because every surface owns its
-    // skins and a gl::Material can't be copied.
-    auto withoutIdTech4Material = std::vector<bool>(scene->mNumMaterials, false);
+    // Under the id Tech 4 convention, the decl name of each assimp material, made once
+    // per material rather than once per mesh. A name that resolves to no decl is
+    // cleared, so that it is not looked up again for every mesh that uses it. One that
+    // does is looked up for each of its meshes, because every surface owns its skins and
+    // a gl::Material can't be copied; the model manager's material cache resolves the
+    // name once and shares the texture between the meshes.
+    auto idTech4MaterialNames = std::vector<std::filesystem::path>(scene->mNumMaterials);
+    if (isIdTech4 && options.findMaterial)
+    {
+      for (size_t i = 0; i < scene->mNumMaterials; ++i)
+      {
+        idTech4MaterialNames[i] = idTech4AssimpMaterialName(*scene->mMaterials[i]);
+      }
+    }
 
     // create a surface for each mesh in the scene and assign the skins/materials to it
     const auto numMeshes = scene->mNumMeshes;
@@ -1016,20 +1024,17 @@ Result<EntityModelData> loadAssimpModel(
 
       // under the id Tech 4 convention, a material decl named like the material wins, as
       // in the engine; without one, the model still shows its own textures
-      if (
-        isIdTech4 && options.findMaterial
-        && !withoutIdTech4Material[mesh->mMaterialIndex])
+      if (auto& idTech4MaterialName = idTech4MaterialNames[mesh->mMaterialIndex];
+          !idTech4MaterialName.empty())
       {
-        if (
-          auto idTech4Material =
-            findIdTech4AssimpMaterial(material, options.findMaterial))
+        if (auto idTech4Material = options.findMaterial(idTech4MaterialName))
         {
           auto materials = std::vector<gl::Material>{};
           materials.push_back(std::move(*idTech4Material));
           surface.setSkins(std::move(materials));
           continue;
         }
-        withoutIdTech4Material[mesh->mMaterialIndex] = true;
+        idTech4MaterialName.clear();
       }
 
       // load skins for this surface, named after the material

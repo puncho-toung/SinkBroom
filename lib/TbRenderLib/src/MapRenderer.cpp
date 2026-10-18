@@ -666,6 +666,8 @@ void MapRenderer::connectObservers()
     m_map.selectionDidChangeNotifier.connect(this, &MapRenderer::selectionDidChange);
   m_notifierConnection += m_map.materialCollectionsWillChangeNotifier.connect(
     this, &MapRenderer::materialCollectionsWillChange);
+  m_notifierConnection += m_map.materialCollectionsDidChangeNotifier.connect(
+    this, &MapRenderer::materialCollectionsDidChange);
   m_notifierConnection += m_map.entityDefinitionsDidChangeNotifier.connect(
     this, &MapRenderer::entityDefinitionsDidChange);
   m_notifierConnection +=
@@ -793,6 +795,13 @@ void MapRenderer::resourcesWereProcessed(const std::vector<gl::ResourceId>& reso
 
 void MapRenderer::materialCollectionsWillChange()
 {
+  invalidateRenderers(Renderer::All);
+}
+
+void MapRenderer::materialCollectionsDidChange()
+{
+  // the map has loaded the entity models again, which frees their old renderers
+  reloadEntityModels();
   invalidateRenderers(Renderer::All);
 }
 

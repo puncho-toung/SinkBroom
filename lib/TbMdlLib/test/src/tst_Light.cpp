@@ -466,6 +466,38 @@ TEST_CASE("Light")
       CHECK_FALSE(oneNumber.equalRadius);
     }
 
+    SECTION("A number that is not finite is not read")
+    {
+      // a vector stops there, with the numbers before it read and the others 0, and a
+      // single number is 0
+      const auto light = parse(with(
+        defaultPointProperties,
+        {{"light_radius", "nan 300 300"},
+         {"light_center", "0 inf 0"},
+         {"_color", "nan 1 1"},
+         {"math_inner_radius", "nan"},
+         {"math_pattern_scale", "inf"}}));
+      CHECK(light.radius == vm::vec3d{0, 0, 0});
+      CHECK(light.hasCenter);
+      CHECK(light.center == vm::vec3d{0, 0, 0});
+      CHECK(light.color == vm::vec3d{0, 0, 0});
+      CHECK(light.math.innerRadius == 0.0);
+      CHECK(light.math.patternScale == 0.0);
+
+      CHECK(
+        parse(with(defaultSpotProperties, {{"light_target", "0 0 -infinity"}})).target
+        == vm::vec3d{0, 0, 0});
+      CHECK(
+        parse(with(defaultPointProperties, {{"light_center", "16 inf 16"}})).center
+        == vm::vec3d{16, 0, 0});
+      CHECK(
+        parse(with(defaultPointProperties, {{"_color", "1 1 -inf"}})).color
+        == vm::vec3d{1, 1, 0});
+      CHECK(
+        parse(with(defaultPointProperties, {{"light", "inf"}})).radius
+        == vm::vec3d{0, 0, 0});
+    }
+
     SECTION("An equal light_radius")
     {
       const auto light =

@@ -387,6 +387,28 @@ TEST_CASE("EntityNaming")
       CHECK(*nameOf(*secondNode) == "info_null_0");
     }
 
+    SECTION("KeepIfFree mode does not give a later entity's name to an earlier one")
+    {
+      addEntity(map, {{"classname", "light"}, {"name", "light_1"}});
+      addEntity(map, {{"classname", "light"}, {"name", "light_2"}});
+
+      auto* firstNode = makeEntityNode({{"classname", "light"}});
+      auto* secondNode = makeEntityNode({{"classname", "light"}, {"name", "light_3"}});
+      nodes.emplace_back(firstNode);
+      nodes.emplace_back(secondNode);
+
+      auto allocator = EntityNameAllocator{map};
+      const auto result = assignUniqueEntityNames(
+        {firstNode, secondNode}, allocator, EntityNamingMode::KeepIfFree);
+
+      CHECK(*nameOf(*firstNode) == "light_4");
+      CHECK(*nameOf(*secondNode) == "light_3");
+      CHECK(
+        result.renamed
+        == std::vector<std::pair<std::string, std::string>>{{"", "light_4"}});
+      CHECK(result.kept == std::vector<std::string>{"light_3"});
+    }
+
     SECTION("KeepIfFree mode sets a missing or wrong model")
     {
       auto* entityNode =
@@ -526,8 +548,8 @@ TEST_CASE("EntityNaming")
 
     SECTION("renames that form a chain follow each entity")
     {
-      // the map has light_0, so the batch's light_0 becomes light_1, which moves the
-      // batch's light_1 on to light_2; each trigger must follow its own light
+      // the map has light_0, so the batch's light_0 is renamed, but not to light_1, which
+      // the batch's light_1 keeps; each trigger must follow its own light
       auto* light0Node = makeEntityNode({{"classname", "light"}, {"name", "light_0"}});
       auto* trigger0Node =
         makeEntityNode({{"classname", "trigger_once"}, {"target", "light_0"}});

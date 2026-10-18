@@ -355,7 +355,10 @@ private: // Asset management
   void loadEntityDefinitions();
   void clearEntityDefinitions();
 
+  void reloadShaders();
+
   void reloadMaterials();
+  void refreshMaterialFileSystems();
   void loadMaterials();
   void clearMaterials();
 
