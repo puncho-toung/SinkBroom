@@ -19,7 +19,12 @@
 
 #include "ui/SidebarPanels.h"
 
+#include "ui/Console.h"
+#include "ui/EntityInspector.h"
+#include "ui/FaceInspector.h"
+#include "ui/IssueBrowser.h"
 #include "ui/LightEditorPanel.h"
+#include "ui/MapInspector.h"
 #include "ui/SidebarPanel.h"
 
 namespace tb::ui
@@ -29,6 +34,13 @@ std::vector<std::unique_ptr<SidebarPanel>> createSidebarPanels(
   const SidebarContext& context)
 {
   auto panels = std::vector<std::unique_ptr<SidebarPanel>>{};
+  panels.push_back(std::make_unique<MapInspector>(context.document));
+  panels.push_back(
+    std::make_unique<EntityInspector>(context.appController, context.document));
+  panels.push_back(
+    std::make_unique<FaceInspector>(context.appController, context.document));
+  panels.push_back(std::make_unique<Console>());
+  panels.push_back(std::make_unique<IssueBrowser>(context.document));
   panels.push_back(std::make_unique<LightEditorPanel>(context));
   // add future panels here, one line each
   return panels;

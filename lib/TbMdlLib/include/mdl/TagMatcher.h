@@ -47,6 +47,14 @@ class Map;
 
 struct GameInfo;
 
+/**
+ * Whether the given root-relative material name matches the given glob pattern, ignoring
+ * case. A pattern without a slash is matched against the last component of the name
+ * only, so "caulk" matches "common/caulk". Material name tags and the game config's
+ * utility materials match by this rule.
+ */
+bool materialNameMatchesPattern(std::string_view materialName, std::string_view pattern);
+
 class MaterialTagMatcher : public TagMatcher
 {
 public:

@@ -40,6 +40,20 @@ TEST_CASE("SidebarPanel")
     const auto panel = StubPanel{"Stub", "NoTool.svg"};
     CHECK(panel.SidebarPanel::iconPath().empty());
   }
+
+  SECTION("shownByDefault")
+  {
+    // the default, not the stub's override
+    const auto panel = StubPanel{"Stub", {}, true};
+    CHECK(!panel.SidebarPanel::shownByDefault());
+  }
+
+  SECTION("defaultArea")
+  {
+    // the default, not the stub's override
+    const auto panel = StubPanel{"Stub", {}, false, Qt::BottomDockWidgetArea};
+    CHECK(panel.SidebarPanel::defaultArea() == Qt::RightDockWidgetArea);
+  }
 }
 
 TEST_CASE("SidebarDock")

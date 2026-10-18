@@ -21,8 +21,11 @@
 
 #include "base/NotifierConnection.h"
 #include "gl/FontDescriptor.h"
+#include "mdl/UtilityMaterialConfig.h"
 #include "ui/CellView.h"
+#include "ui/MaterialBrowserScope.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -54,13 +57,27 @@ enum class MaterialSortOrder
  * Returns the given materials without the ones that the material browser's filters hide:
  * unused materials if hideUnused is set, materials without a preview image if hideMissing
  * is set, and, if filterText isn't empty, materials whose names contain none of its
- * space-separated words.
+ * space-separated words. By the scope, a regular browser also hides the given utility
+ * materials and a utility browser lists nothing else; All ignores them.
  */
 std::vector<const gl::Material*> filterMaterials(
   std::vector<const gl::Material*> materials,
   bool hideUnused,
   bool hideMissing,
-  const std::string& filterText);
+  const std::string& filterText,
+  MaterialBrowserScope scope = MaterialBrowserScope::All,
+  const std::vector<mdl::UtilityMaterialConfig>& utilityMaterials = {});
+
+/**
+ * Breaks text between words so that no line measures wider than maxWidth; a single word
+ * wider than maxWidth stands on its own line. Lines are joined with '\n'. The words are
+ * split with kdl::str_split, so repeated spaces are dropped and a backslash before a
+ * space keeps the two words around it together.
+ */
+std::string wrapWords(
+  const std::string& text,
+  float maxWidth,
+  const std::function<float(const std::string&)>& measureWidth);
 
 enum class MaterialBorder
 {
@@ -85,6 +102,7 @@ class MaterialBrowserView : public CellView
   Q_OBJECT
 private:
   MapDocument& m_document;
+  MaterialBrowserScope m_scope;
   bool m_group = false;
   bool m_hideUnused = false;
   bool m_hideMissing = false;
@@ -97,7 +115,10 @@ private:
 
 public:
   MaterialBrowserView(
-    AppController& appController, QScrollBar* scrollBar, MapDocument& document);
+    AppController& appController,
+    QScrollBar* scrollBar,
+    MapDocument& document,
+    MaterialBrowserScope scope);
   ~MaterialBrowserView() override;
 
   void setSortOrder(MaterialSortOrder sortOrder);
@@ -125,7 +146,10 @@ private:
     const gl::FontDescriptor& font);
   void addMaterialToLayout(
     Layout& layout, const gl::Material& material, const gl::FontDescriptor& font);
+  std::string cellTitle(
+    const gl::Material& material, float maxWidth, const gl::FontDescriptor& font);
 
+  const std::vector<mdl::UtilityMaterialConfig>& utilityMaterials() const;
   std::vector<const gl::MaterialCollection*> getCollections() const;
   std::vector<const gl::Material*> getMaterials(
     const gl::MaterialCollection& collection) const;

@@ -19,11 +19,14 @@
 
 #pragma once
 
+#include <QString>
+
 #include "base/NotifierConnection.h"
-#include "ui/TabBook.h"
+#include "ui/SidebarPanel.h"
 
 #include "vm/bbox.h"
 
+#include <filesystem>
 #include <optional>
 
 class QWidget;
@@ -37,9 +40,12 @@ namespace tb::ui
 class CollapsibleTitledPanel;
 class MapDocument;
 
-class MapInspector : public TabBookPage
+class MapInspector : public SidebarPanel
 {
   Q_OBJECT
+public:
+  static constexpr auto PanelId = "MapInspector";
+
 private:
   CollapsibleTitledPanel* m_mapPropertiesEditor = nullptr;
   CollapsibleTitledPanel* m_modEditor = nullptr;
@@ -47,6 +53,11 @@ private:
 public:
   explicit MapInspector(MapDocument& document, QWidget* parent = nullptr);
   ~MapInspector() override;
+
+  QString panelId() const override;
+  QString title() const override;
+  std::filesystem::path iconPath() const override;
+  bool shownByDefault() const override;
 
 private:
   void createGui(MapDocument& document);

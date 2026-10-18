@@ -33,14 +33,36 @@ namespace tb::ui
 
 EntityInspector::EntityInspector(
   AppController& appController, MapDocument& document, QWidget* parent)
-  : TabBookPage{parent}
+  : SidebarPanel{parent}
 {
+  // no narrower than the inspector that held this page
+  setMinimumWidth(350);
   createGui(appController, document);
 }
 
 EntityInspector::~EntityInspector()
 {
   saveWidgetState(m_splitter);
+}
+
+QString EntityInspector::panelId() const
+{
+  return QString::fromLatin1(PanelId);
+}
+
+QString EntityInspector::title() const
+{
+  return tr("Entity Inspector");
+}
+
+std::filesystem::path EntityInspector::iconPath() const
+{
+  return "EntityInspector.svg";
+}
+
+bool EntityInspector::shownByDefault() const
+{
+  return true;
 }
 
 void EntityInspector::createGui(AppController& appController, MapDocument& document)

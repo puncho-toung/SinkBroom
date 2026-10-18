@@ -21,8 +21,11 @@
 
 #include <QPoint>
 
+#include "gl/AttrString.h"
 #include "ui/CellLayout.h"
 #include "ui/RenderView.h"
+
+#include <string>
 
 class QScrollBar;
 class QDrag;
@@ -31,6 +34,13 @@ class QMimeData;
 namespace tb::ui
 {
 class AppController;
+
+/**
+ * Returns the given cell title as the cell view renders it: one centred line per
+ * '\n'-separated line of the title, each centred on the widest. An empty title has no
+ * lines.
+ */
+gl::AttrString cellTitleString(const std::string& title);
 
 class CellView : public RenderView
 {

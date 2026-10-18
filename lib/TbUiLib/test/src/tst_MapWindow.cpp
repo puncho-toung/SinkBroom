@@ -19,21 +19,32 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QByteArray>
 #include <QComboBox>
+#include <QDataStream>
 #include <QDockWidget>
+#include <QIODevice>
 #include <QMenu>
 #include <QMenuBar>
 #include <QSettings>
+#include <QTabWidget>
+#include <QTest>
+#include <QTextEdit>
+#include <QToolBar>
 
 #include "TestEnvironment.h"
+#include "base/Logger.h"
 #include "base/PreferenceManager.h"
 #include "base/Result.h"
 #include "gl/Camera.h"
 #include "gl/GlManager.h"
+#include "gl/Material.h"
 #include "gl/Resource.h"
 #include "gl/ResourceManager.h"
 #include "gl/TestGl.h"
 #include "gl/TestUtils.h"
+#include "gl/Texture.h"
+#include "gl/TextureResource.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GameConfigFixture.h"
@@ -52,14 +63,21 @@
 #include "ui/ActionContext.h"
 #include "ui/AppControllerFixture.h"
 #include "ui/CatchConfig.h"
+#include "ui/Console.h"
+#include "ui/EntityInspector.h"
+#include "ui/FaceInspector.h"
+#include "ui/IssueBrowser.h"
 #include "ui/LightEditorPanel.h"
 #include "ui/LightVolumeTool.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
+#include "ui/MapInspector.h"
 #include "ui/MapView2D.h"
 #include "ui/MapViewBase.h"
 #include "ui/MapViewToolBox.h"
 #include "ui/MapWindow.h"
+#include "ui/RenderView.h"
+#include "ui/SwitchableMapViewContainer.h"
 #include "ui/ToolSidebar.h"
 
 #include "kd/invoke.h"
@@ -69,6 +87,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -89,6 +108,57 @@ namespace
 
 const auto ToolSidebarExpandedKey = QString{"Windows/MapWindow_ToolSidebar/Expanded"};
 
+const auto DockLayoutVersionKey = QString{"Windows/MapWindow/DockLayoutVersion"};
+const auto OldInspectorKey = QString{"Windows/Inspector/State"};
+const auto OldInspectorPageKey = QString{"Windows/Inspector_TabBook/State"};
+const auto OldInfoPanelKey = QString{"Windows/MapWindow_InfoPanel/State"};
+const auto OldInfoPanelPageKey = QString{"Windows/InfoPanel_TabBook/State"};
+
+/**
+ * The keys that the window restores when it is built and that saveWindowState writes,
+ * the Face inspector's material tab, which the panel restores when it is built and saves
+ * when it goes, and the keys of the inspector and of the info panel from before their
+ * pages were docks, which the window reads once and which the test settings may hold
+ * from a build of that time. Windows/MapWindow_VerticalSplitterSplitter/State is the key
+ * of the splitter that held the info panel before it was a dock; the window no longer
+ * reads or writes it, and it stays here because the settings may still hold it.
+ */
+const auto WindowStateKeys = std::vector<QString>{
+  "Windows/MapWindow/Geometry",
+  "Windows/MapWindow/State",
+  DockLayoutVersionKey,
+  "Windows/MapWindow_VerticalSplitterSplitter/State",
+  "Windows/FaceInspector_TabBook/State",
+  OldInspectorKey,
+  OldInspectorPageKey,
+  OldInfoPanelKey,
+  OldInfoPanelPageKey,
+};
+
+void removeWindowStateKeys()
+{
+  auto settings = QSettings{};
+  for (const auto& key : WindowStateKeys)
+  {
+    settings.remove(key);
+  }
+}
+
+/**
+ * Writes the state of the inspector or of the info panel from before their pages were
+ * docks, as Inspector::saveState, InfoPanel::saveState and TabBook::saveState wrote it.
+ */
+template <typename T>
+void writeOldState(const QString& key, const T& value)
+{
+  auto state = QByteArray{};
+  {
+    auto stream = QDataStream{&state, QIODevice::WriteOnly};
+    stream << value;
+  }
+  QSettings{}.setValue(key, state);
+}
+
 QMenu* findViewMenu(const MapWindow& window)
 {
   for (auto* action : window.menuBar()->actions())
@@ -99,6 +169,114 @@ QMenu* findViewMenu(const MapWindow& window)
     }
   }
   return nullptr;
+}
+
+QAction* findViewMenuAction(const MapWindow& window, const QString& text)
+{
+  auto* viewMenu = findViewMenu(window);
+  REQUIRE(viewMenu != nullptr);
+  const auto actions = viewMenu->actions();
+  const auto iAction = std::ranges::find_if(
+    actions, [&](const auto* action) { return action->text() == text; });
+  REQUIRE(iAction != actions.end());
+  return *iAction;
+}
+
+QMenu* findSidebarMenu(const MapWindow& window)
+{
+  auto* sidebarMenu = QMenu::menuInAction(findViewMenuAction(window, "Sidebar"));
+  REQUIRE(sidebarMenu != nullptr);
+  return sidebarMenu;
+}
+
+struct SidebarDocks
+{
+  QDockWidget* map;
+  QDockWidget* entity;
+  QDockWidget* face;
+  QDockWidget* console;
+  QDockWidget* issues;
+  QDockWidget* lightEditor;
+
+  std::vector<QDockWidget*> inspectors() const { return {map, entity, face}; }
+  std::vector<QDockWidget*> infoPanels() const { return {console, issues}; }
+
+  /**
+   * The toggle actions in the order of the tool sidebar's buttons: sorted by title.
+   */
+  std::vector<QAction*> sortedToggleActions() const
+  {
+    return {
+      console->toggleViewAction(),
+      entity->toggleViewAction(),
+      face->toggleViewAction(),
+      issues->toggleViewAction(),
+      lightEditor->toggleViewAction(),
+      map->toggleViewAction(),
+    };
+  }
+};
+
+SidebarDocks findSidebarDocks(const MapWindow& window)
+{
+  const auto docks = SidebarDocks{
+    window.findChild<QDockWidget*>("MapWindow_Sidebar_MapInspector"),
+    window.findChild<QDockWidget*>("MapWindow_Sidebar_EntityInspector"),
+    window.findChild<QDockWidget*>("MapWindow_Sidebar_FaceInspector"),
+    window.findChild<QDockWidget*>("MapWindow_Sidebar_Console"),
+    window.findChild<QDockWidget*>("MapWindow_Sidebar_Issues"),
+    window.findChild<QDockWidget*>("MapWindow_Sidebar_LightEditor"),
+  };
+  REQUIRE(docks.map != nullptr);
+  REQUIRE(docks.entity != nullptr);
+  REQUIRE(docks.face != nullptr);
+  REQUIRE(docks.console != nullptr);
+  REQUIRE(docks.issues != nullptr);
+  REQUIRE(docks.lightEditor != nullptr);
+  return docks;
+}
+
+/**
+ * Builds a second window on a new document, as the app does for the next map: it
+ * restores the layout that the settings hold.
+ */
+std::unique_ptr<MapWindow> createNextWindow(AppController& appController)
+{
+  auto document = MapDocument::createDocument(
+                    appController.environmentConfig(),
+                    mdl::QuakeGameInfo,
+                    mdl::MapFormat::Valve,
+                    vm::bbox3d{8192.0},
+                    appController.taskManager(),
+                    appController.glManager().resourceManager())
+                  | kdl::value();
+  return std::make_unique<MapWindow>(appController, std::move(document));
+}
+
+/**
+ * Whether the dock is in a floating tab group: Qt moves the docks of such a group into a
+ * window of its own, a child of the main window, and they do not count as floating.
+ */
+bool isInFloatingTabGroup(const MapWindow& window, const QDockWidget& dock)
+{
+  const auto* group = dock.parentWidget();
+  return !dock.isFloating() && group != &window && group->isWindow()
+         && group->parentWidget() == &window && group->inherits("QDockWidgetGroupWindow");
+}
+
+/**
+ * Shows the window with its GL views hidden: they would create GL contexts and load the
+ * renderer's resources, which the tests do not provide, and the docks do not need them to
+ * be seen.
+ */
+void showWithoutGlViews(MapWindow& window)
+{
+  for (auto* view : window.findChildren<RenderView*>())
+  {
+    view->hide();
+  }
+  window.show();
+  QApplication::processEvents();
 }
 
 } // namespace
@@ -113,6 +291,13 @@ TEST_CASE("MapWindow")
   QSettings{}.remove(ToolSidebarExpandedKey);
   const auto removeToolSidebarExpandedKey =
     kdl::invoke_later{[] { QSettings{}.remove(ToolSidebarExpandedKey); }};
+
+  // the window restores its layout when it is built, and saveWindowState writes it: start
+  // without a saved layout, and leave none behind; tests never close the window, which
+  // would also write it, and call saveWindowState instead
+  removeWindowStateKeys();
+  const auto removeWindowStateKeysLater =
+    kdl::invoke_later{[] { removeWindowStateKeys(); }};
 
   auto document = MapDocument::createDocument(
                     appController.environmentConfig(),
@@ -254,19 +439,21 @@ TEST_CASE("MapWindow")
 
   SECTION("sidebar docks are listed in View > Sidebar")
   {
-    auto* dock = window.findChild<QDockWidget*>("MapWindow_Sidebar_LightEditor");
-    REQUIRE(dock != nullptr);
-    CHECK(dock->windowTitle() == "Light Editor");
-    CHECK(qobject_cast<LightEditorPanel*>(dock->widget()) != nullptr);
+    const auto docks = findSidebarDocks(window);
+    CHECK(docks.map->windowTitle() == "Map Inspector");
+    CHECK(qobject_cast<MapInspector*>(docks.map->widget()) != nullptr);
+    CHECK(docks.entity->windowTitle() == "Entity Inspector");
+    CHECK(qobject_cast<EntityInspector*>(docks.entity->widget()) != nullptr);
+    CHECK(docks.face->windowTitle() == "Face Inspector");
+    CHECK(qobject_cast<FaceInspector*>(docks.face->widget()) != nullptr);
+    CHECK(docks.console->windowTitle() == "Console");
+    CHECK(qobject_cast<Console*>(docks.console->widget()) != nullptr);
+    CHECK(docks.issues->windowTitle() == "Issues");
+    CHECK(qobject_cast<IssueBrowser*>(docks.issues->widget()) != nullptr);
+    CHECK(docks.lightEditor->windowTitle() == "Light Editor");
+    CHECK(qobject_cast<LightEditorPanel*>(docks.lightEditor->widget()) != nullptr);
 
-    QMenu* viewMenu = nullptr;
-    for (auto* action : window.menuBar()->actions())
-    {
-      if (action->text() == "View")
-      {
-        viewMenu = QMenu::menuInAction(action);
-      }
-    }
+    auto* viewMenu = findViewMenu(window);
     REQUIRE(viewMenu != nullptr);
 
     // the submenu follows Maximize Current View
@@ -280,7 +467,35 @@ TEST_CASE("MapWindow")
     auto* sidebarMenu = QMenu::menuInAction(*std::next(iMaximize));
     REQUIRE(sidebarMenu != nullptr);
     CHECK(sidebarMenu->title() == "Sidebar");
-    CHECK(sidebarMenu->actions() == QList<QAction*>{dock->toggleViewAction()});
+
+    // sorted by title, like the tool sidebar's buttons
+    const auto toggleActions = docks.sortedToggleActions();
+    CHECK(
+      sidebarMenu->actions()
+      == QList<QAction*>{toggleActions.begin(), toggleActions.end()});
+  }
+
+  SECTION("the toolbar context menu lists the sidebar docks sorted by title")
+  {
+    const auto docks = findSidebarDocks(window);
+    auto* toolBar = window.findChild<QToolBar*>("MapWindowToolBar");
+    auto* toolSidebar = window.findChild<ToolSidebar*>("MapWindow_ToolSidebar");
+    REQUIRE(toolBar != nullptr);
+    REQUIRE(toolSidebar != nullptr);
+
+    auto* menu = window.createPopupMenu();
+    REQUIRE(menu != nullptr);
+    const auto deleteMenu = kdl::invoke_later{[&] { delete menu; }};
+
+    // the docks as the tool sidebar and View > Sidebar list them, then the toolbars
+    const auto toggleActions = docks.sortedToggleActions();
+    const auto actions = menu->actions();
+    REQUIRE(actions.size() == 9);
+    CHECK(
+      actions.mid(0, 6) == QList<QAction*>{toggleActions.begin(), toggleActions.end()});
+    CHECK(actions[6]->isSeparator());
+    CHECK(actions.mid(7).contains(toolBar->toggleViewAction()));
+    CHECK(actions.mid(7).contains(toolSidebar->toggleViewAction()));
   }
 
   SECTION("the tool sidebar has a button for each sidebar dock")
@@ -291,18 +506,24 @@ TEST_CASE("MapWindow")
     CHECK(!toolSidebar->isMovable());
     CHECK(toolSidebar->expanded());
 
-    // the Quake game has no light editor, and the button is there all the same
-    auto* dock = window.findChild<QDockWidget*>("MapWindow_Sidebar_LightEditor");
-    REQUIRE(dock != nullptr);
-    auto* toggleAction = dock->toggleViewAction();
-    CHECK(toolSidebar->entries() == std::vector<QAction*>{toggleAction});
-    CHECK(toggleAction->text() == "Light Editor");
-    CHECK(!toggleAction->icon().isNull());
+    // sorted by title; the Quake game has no light editor, and its button is there all
+    // the same
+    const auto docks = findSidebarDocks(window);
+    const auto toggleActions = docks.sortedToggleActions();
+    CHECK(toolSidebar->entries() == toggleActions);
+    for (const auto* action : toggleActions)
+    {
+      CHECK(!action->icon().isNull());
+    }
 
     const auto actions = toolSidebar->actions();
-    REQUIRE(actions.size() == 3);
-    CHECK(actions.front() == toggleAction);
+    REQUIRE(actions.size() == 8);
+    CHECK(actions.front() == toggleActions.front());
     CHECK(actions.back() == toolSidebar->expandAction());
+
+    auto* dock = docks.lightEditor;
+    auto* toggleAction = dock->toggleViewAction();
+    CHECK(toggleAction->text() == "Light Editor");
 
     toggleAction->trigger();
     CHECK(!dock->isHidden());
@@ -312,20 +533,699 @@ TEST_CASE("MapWindow")
     CHECK(dock->isHidden());
     CHECK(!toggleAction->isChecked());
 
-    // collapsing takes the button out of the strip, not out of View > Sidebar
+    // collapsing takes the buttons out of the strip, not out of View > Sidebar
     toolSidebar->setExpanded(false);
-    CHECK(toolSidebar->actions() == QList<QAction*>{actions[1], actions[2]});
+    CHECK(toolSidebar->actions() == QList<QAction*>{actions[6], actions[7]});
     CHECK(toggleAction->isVisible());
 
-    auto* viewMenu = findViewMenu(window);
-    REQUIRE(viewMenu != nullptr);
-    const auto viewActions = viewMenu->actions();
-    const auto iSidebarMenu = std::ranges::find_if(
-      viewActions, [](const auto* action) { return action->text() == "Sidebar"; });
-    REQUIRE(iSidebarMenu != viewActions.end());
-    auto* sidebarMenu = QMenu::menuInAction(*iSidebarMenu);
-    REQUIRE(sidebarMenu != nullptr);
-    CHECK(sidebarMenu->actions() == QList<QAction*>{toggleAction});
+    CHECK(
+      findSidebarMenu(window)->actions()
+      == QList<QAction*>{toggleActions.begin(), toggleActions.end()});
+  }
+
+  SECTION("the inspector docks start tabbed on the right, the light editor hidden")
+  {
+    const auto docks = findSidebarDocks(window);
+    for (auto* dock : docks.inspectors())
+    {
+      CAPTURE(dock->objectName());
+      CHECK(!dock->isHidden());
+      CHECK(!dock->isFloating());
+      CHECK(window.dockWidgetArea(dock) == Qt::RightDockWidgetArea);
+    }
+    CHECK(docks.lightEditor->isHidden());
+
+    // in the order of the old inspector's pages, with the tab bar at the top
+    CHECK(
+      window.tabifiedDockWidgets(docks.map)
+      == QList<QDockWidget*>{docks.entity, docks.face});
+    CHECK(window.tabPosition(Qt::RightDockWidgetArea) == QTabWidget::North);
+  }
+
+  SECTION("the console and issues docks start tabbed at the bottom")
+  {
+    const auto docks = findSidebarDocks(window);
+    for (auto* dock : docks.infoPanels())
+    {
+      CAPTURE(dock->objectName());
+      CHECK(!dock->isHidden());
+      CHECK(!dock->isFloating());
+      CHECK(window.dockWidgetArea(dock) == Qt::BottomDockWidgetArea);
+    }
+
+    // in the order of the old info panel's pages, under the map views, which fill the
+    // rest of the window
+    CHECK(window.tabifiedDockWidgets(docks.console) == QList<QDockWidget*>{docks.issues});
+    CHECK(window.centralWidget() == window.findChild<SwitchableMapViewContainer*>());
+  }
+
+  SECTION("the console panel is the window's logger")
+  {
+    const auto docks = findSidebarDocks(window);
+    auto* console = qobject_cast<Console*>(docks.console->widget());
+    REQUIRE(console != nullptr);
+    CHECK(&window.logger() == static_cast<Logger*>(console));
+
+    // the document logs to it
+    auto* textView = console->findChild<QTextEdit*>();
+    REQUIRE(textView != nullptr);
+    window.document().logger().info() << "a line from the document";
+    CHECK(QTest::qWaitFor(
+      [&] { return textView->toPlainText().contains("a line from the document"); }));
+  }
+
+  SECTION("every sidebar dock can be tabbed with any other at every edge")
+  {
+    // grouped dragging moves a whole tab group by its title bar and a single dock by its
+    // tab; it wants every dock allowed in the same areas
+    CHECK(window.dockOptions().testFlag(QMainWindow::AnimatedDocks));
+    CHECK(window.dockOptions().testFlag(QMainWindow::AllowTabbedDocks));
+    CHECK(window.dockOptions().testFlag(QMainWindow::GroupedDragging));
+    CHECK(!window.dockOptions().testFlag(QMainWindow::AllowNestedDocks));
+    CHECK(!window.dockOptions().testFlag(QMainWindow::VerticalTabs));
+
+    const auto docks = findSidebarDocks(window);
+    for (auto* dock :
+         {docks.map,
+          docks.entity,
+          docks.face,
+          docks.console,
+          docks.issues,
+          docks.lightEditor})
+    {
+      CAPTURE(dock->objectName());
+      CHECK(dock->allowedAreas() == Qt::AllDockWidgetAreas);
+    }
+
+    // the tab bar of every group at its top
+    for (const auto area :
+         {Qt::LeftDockWidgetArea,
+          Qt::RightDockWidgetArea,
+          Qt::TopDockWidgetArea,
+          Qt::BottomDockWidgetArea})
+    {
+      CAPTURE(area);
+      CHECK(window.tabPosition(area) == QTabWidget::North);
+    }
+
+    // the side edges own the corners: a group at the bottom sits under the map views
+    CHECK(window.corner(Qt::TopLeftCorner) == Qt::LeftDockWidgetArea);
+    CHECK(window.corner(Qt::BottomLeftCorner) == Qt::LeftDockWidgetArea);
+    CHECK(window.corner(Qt::TopRightCorner) == Qt::RightDockWidgetArea);
+    CHECK(window.corner(Qt::BottomRightCorner) == Qt::RightDockWidgetArea);
+  }
+
+  SECTION("Show ... Inspector shows a hidden inspector dock")
+  {
+    const auto docks = findSidebarDocks(window);
+    const auto showActions = std::vector<std::pair<QString, QDockWidget*>>{
+      {"Show Map Inspector", docks.map},
+      {"Show Entity Inspector", docks.entity},
+      {"Show Face Inspector", docks.face},
+    };
+
+    for (const auto& [text, dock] : showActions)
+    {
+      CAPTURE(text);
+      auto* action = findViewMenuAction(window, text);
+      CHECK(!action->isCheckable());
+
+      dock->hide();
+      action->trigger();
+      CHECK(!dock->isHidden());
+    }
+  }
+
+  SECTION("Toggle Inspector hides the inspector docks and shows them again")
+  {
+    const auto docks = findSidebarDocks(window);
+    auto* action = findViewMenuAction(window, "Toggle Inspector");
+    REQUIRE(action->isCheckable());
+
+    // the light editor is not one of them
+    docks.lightEditor->show();
+
+    QApplication::processEvents();
+    REQUIRE(action->isChecked());
+
+    action->trigger();
+    QApplication::processEvents();
+    for (auto* dock : docks.inspectors())
+    {
+      CHECK(dock->isHidden());
+    }
+    CHECK(!action->isChecked());
+    CHECK(!docks.lightEditor->isHidden());
+
+    action->trigger();
+    QApplication::processEvents();
+    for (auto* dock : docks.inspectors())
+    {
+      CHECK(!dock->isHidden());
+    }
+    CHECK(action->isChecked());
+    CHECK(!docks.lightEditor->isHidden());
+  }
+
+  SECTION("Toggle Inspector brings back only the inspector docks that were open")
+  {
+    const auto docks = findSidebarDocks(window);
+    auto* action = findViewMenuAction(window, "Toggle Inspector");
+
+    docks.face->hide();
+
+    action->trigger();
+    for (auto* dock : docks.inspectors())
+    {
+      CHECK(dock->isHidden());
+    }
+
+    action->trigger();
+    CHECK(!docks.map->isHidden());
+    CHECK(!docks.entity->isHidden());
+    CHECK(docks.face->isHidden());
+  }
+
+  SECTION("Toggle Inspector shows all inspector docks when none was open")
+  {
+    const auto docks = findSidebarDocks(window);
+    auto* action = findViewMenuAction(window, "Toggle Inspector");
+
+    for (auto* dock : docks.inspectors())
+    {
+      dock->close();
+    }
+    REQUIRE(!window.inspectorPanelsVisible());
+
+    action->trigger();
+    for (auto* dock : docks.inspectors())
+    {
+      CHECK(!dock->isHidden());
+    }
+  }
+
+  SECTION("Toggle Info Panel hides the console and issues docks and shows them again")
+  {
+    const auto docks = findSidebarDocks(window);
+    auto* action = findViewMenuAction(window, "Toggle Info Panel");
+    REQUIRE(action->isCheckable());
+
+    QApplication::processEvents();
+    REQUIRE(action->isChecked());
+
+    action->trigger();
+    QApplication::processEvents();
+    for (auto* dock : docks.infoPanels())
+    {
+      CHECK(dock->isHidden());
+    }
+    CHECK(!action->isChecked());
+
+    // the inspectors are not part of it
+    for (auto* dock : docks.inspectors())
+    {
+      CHECK(!dock->isHidden());
+    }
+
+    action->trigger();
+    QApplication::processEvents();
+    for (auto* dock : docks.infoPanels())
+    {
+      CHECK(!dock->isHidden());
+    }
+    CHECK(action->isChecked());
+  }
+
+  SECTION("Toggle Info Panel brings back only the docks that were open")
+  {
+    const auto docks = findSidebarDocks(window);
+    auto* action = findViewMenuAction(window, "Toggle Info Panel");
+
+    docks.issues->hide();
+
+    action->trigger();
+    CHECK(docks.console->isHidden());
+    CHECK(docks.issues->isHidden());
+
+    action->trigger();
+    CHECK(!docks.console->isHidden());
+    CHECK(docks.issues->isHidden());
+  }
+
+  SECTION("revealMaterial shows the face inspector")
+  {
+    const auto docks = findSidebarDocks(window);
+    docks.face->hide();
+
+    // the browser does not hold this material, which it tolerates
+    const auto material =
+      gl::Material{"base/plain", gl::createTextureResource(gl::Texture{4, 4})};
+    window.revealMaterial(&material);
+    CHECK(!docks.face->isHidden());
+  }
+
+  SECTION("positionOnScreen arranges the inspector docks again")
+  {
+    // the app restores the window state a second time when it places the window; the
+    // layout was not saved with the dock layout version, so the docks take the place of
+    // the old inspector again, wherever they are
+    const auto docks = findSidebarDocks(window);
+    for (auto* dock : {docks.entity, docks.face})
+    {
+      window.removeDockWidget(dock);
+      window.addDockWidget(Qt::RightDockWidgetArea, dock);
+      dock->show();
+    }
+    REQUIRE(window.tabifiedDockWidgets(docks.map).isEmpty());
+
+    window.positionOnScreen(nullptr);
+    CHECK(
+      window.tabifiedDockWidgets(docks.map)
+      == QList<QDockWidget*>{docks.entity, docks.face});
+    for (auto* dock : docks.inspectors())
+    {
+      CHECK(!dock->isHidden());
+    }
+  }
+
+  SECTION("positionOnScreen arranges the console and issues docks again")
+  {
+    // like the inspector docks, in the old info panel's place
+    const auto docks = findSidebarDocks(window);
+    window.removeDockWidget(docks.issues);
+    window.addDockWidget(Qt::BottomDockWidgetArea, docks.issues);
+    docks.issues->show();
+    REQUIRE(window.tabifiedDockWidgets(docks.console).isEmpty());
+
+    window.positionOnScreen(nullptr);
+    CHECK(window.tabifiedDockWidgets(docks.console) == QList<QDockWidget*>{docks.issues});
+    for (auto* dock : docks.infoPanels())
+    {
+      CHECK(!dock->isHidden());
+      CHECK(window.dockWidgetArea(dock) == Qt::BottomDockWidgetArea);
+    }
+  }
+
+  SECTION("a hidden old inspector hides the inspector docks")
+  {
+    writeOldState(OldInspectorKey, false);
+
+    const auto docks = findSidebarDocks(window);
+    window.positionOnScreen(nullptr);
+    for (auto* dock : docks.inspectors())
+    {
+      CHECK(dock->isHidden());
+    }
+    CHECK(docks.lightEditor->isHidden());
+    for (auto* dock : docks.infoPanels())
+    {
+      CHECK(!dock->isHidden());
+    }
+  }
+
+  SECTION("a hidden old info panel hides the console and issues docks")
+  {
+    writeOldState(OldInfoPanelKey, false);
+
+    const auto docks = findSidebarDocks(window);
+    window.positionOnScreen(nullptr);
+    for (auto* dock : docks.infoPanels())
+    {
+      CHECK(dock->isHidden());
+    }
+    for (auto* dock : docks.inspectors())
+    {
+      CHECK(!dock->isHidden());
+    }
+  }
+
+  SECTION("saveWindowState writes the dock layout version")
+  {
+    REQUIRE(!QSettings{}.contains(DockLayoutVersionKey));
+
+    window.saveWindowState();
+    CHECK(QSettings{}.value(DockLayoutVersionKey).toInt() == 2);
+    CHECK(QSettings{}.contains("Windows/MapWindow/State"));
+
+    // a layout saved with the version knows the docks: the states of the old inspector
+    // and of the old info panel are not read any more
+    writeOldState(OldInspectorKey, false);
+    writeOldState(OldInfoPanelKey, false);
+    const auto docks = findSidebarDocks(window);
+    window.positionOnScreen(nullptr);
+    for (auto* dock : docks.inspectors())
+    {
+      CHECK(!dock->isHidden());
+    }
+    for (auto* dock : docks.infoPanels())
+    {
+      CHECK(!dock->isHidden());
+    }
+  }
+
+  SECTION("a layout saved when only the inspectors were docks gets the info docks once")
+  {
+    // version 1: the inspectors are known, so the face inspector stays on its own at the
+    // left edge; the console and issues docks are not, so Qt leaves them side by side,
+    // and they take the place of the old info panel, hidden on its Issues page
+    const auto docks = findSidebarDocks(window);
+    window.removeDockWidget(docks.face);
+    window.addDockWidget(Qt::LeftDockWidgetArea, docks.face);
+    docks.face->show();
+    window.removeDockWidget(docks.issues);
+    window.addDockWidget(Qt::BottomDockWidgetArea, docks.issues);
+    docks.issues->show();
+    REQUIRE(window.tabifiedDockWidgets(docks.console).isEmpty());
+
+    QSettings{}.setValue(DockLayoutVersionKey, 1);
+    writeOldState(OldInspectorKey, false);
+    writeOldState(OldInfoPanelKey, false);
+    writeOldState(OldInfoPanelPageKey, 1);
+
+    window.positionOnScreen(nullptr);
+    for (auto* dock : docks.infoPanels())
+    {
+      CHECK(dock->isHidden());
+      CHECK(window.dockWidgetArea(dock) == Qt::BottomDockWidgetArea);
+    }
+
+    // the inspectors keep their layout
+    CHECK(window.dockWidgetArea(docks.face) == Qt::LeftDockWidgetArea);
+    CHECK(window.tabifiedDockWidgets(docks.map) == QList<QDockWidget*>{docks.entity});
+    for (auto* dock : docks.inspectors())
+    {
+      CHECK(!dock->isHidden());
+    }
+
+    // Toggle Info Panel brings both back, tabbed, with the old page in front; a tab bar
+    // lists only docks that are not hidden, so this is seen in a shown window
+    showWithoutGlViews(window);
+    findViewMenuAction(window, "Toggle Info Panel")->trigger();
+    QApplication::processEvents();
+    CHECK(window.tabifiedDockWidgets(docks.console) == QList<QDockWidget*>{docks.issues});
+    CHECK(docks.issues->toggleViewAction()->isChecked());
+    CHECK(!docks.console->toggleViewAction()->isChecked());
+
+    // saved with the current version (the next restore then arranges nothing, see
+    // "saveWindowState writes the dock layout version")
+    window.saveWindowState();
+    CHECK(QSettings{}.value(DockLayoutVersionKey).toInt() == 2);
+  }
+
+  SECTION("a saved layout comes back in the next window")
+  {
+    // the face inspector is moved to the left edge and the issue browser above the map
+    // views, and the layout is saved
+    const auto docks = findSidebarDocks(window);
+    window.addDockWidget(Qt::LeftDockWidgetArea, docks.face);
+    REQUIRE(window.dockWidgetArea(docks.face) == Qt::LeftDockWidgetArea);
+    window.addDockWidget(Qt::TopDockWidgetArea, docks.issues);
+    REQUIRE(window.dockWidgetArea(docks.issues) == Qt::TopDockWidgetArea);
+    window.saveWindowState();
+
+    auto nextWindow = createNextWindow(appController);
+    nextWindow->positionOnScreen(nullptr);
+
+    // the layout was saved with the dock layout version, so it is not arranged again
+    const auto nextDocks = findSidebarDocks(*nextWindow);
+    CHECK(nextWindow->dockWidgetArea(nextDocks.face) == Qt::LeftDockWidgetArea);
+    CHECK(nextWindow->dockWidgetArea(nextDocks.map) == Qt::RightDockWidgetArea);
+    CHECK(nextWindow->dockWidgetArea(nextDocks.entity) == Qt::RightDockWidgetArea);
+    CHECK(nextWindow->dockWidgetArea(nextDocks.issues) == Qt::TopDockWidgetArea);
+    CHECK(nextWindow->dockWidgetArea(nextDocks.console) == Qt::BottomDockWidgetArea);
+
+    // shown, saved and hidden as the app does when it closes a window; a restored tab
+    // group must not break the window's teardown
+    showWithoutGlViews(*nextWindow);
+    CHECK(
+      nextWindow->tabifiedDockWidgets(nextDocks.map)
+      == QList<QDockWidget*>{nextDocks.entity});
+    nextWindow->saveWindowState();
+    nextWindow->hide();
+    QApplication::processEvents();
+  }
+
+  SECTION("a floating tab group comes back whole in the next window")
+  {
+    // The console and the issue browser hold no GL view, so their group can float in a
+    // test. The app restores the window state twice when it opens a window (the
+    // constructor, then positionOnScreen), and Qt splits a floating group that it
+    // restores twice.
+    const auto docks = findSidebarDocks(window);
+    window.resize(1200, 800);
+    showWithoutGlViews(window);
+
+    // drag the title bar of the console, in front of its group, up over the map views:
+    // with grouped dragging, the whole group floats
+    auto* console = docks.console;
+    const auto press = QPoint{console->width() / 2, 6};
+    QTest::mousePress(console, Qt::LeftButton, {}, press);
+    QApplication::processEvents();
+    for (auto i = 1; i <= 20; ++i)
+    {
+      QTest::mouseMove(console, press + QPoint{0, -15 * i});
+      QApplication::processEvents();
+    }
+    QTest::mouseRelease(console, Qt::LeftButton, {}, press + QPoint{0, -300});
+    QApplication::processEvents();
+
+    REQUIRE(isInFloatingTabGroup(window, *docks.console));
+    REQUIRE(docks.issues->parentWidget() == docks.console->parentWidget());
+    window.saveWindowState();
+
+    auto nextWindow = createNextWindow(appController);
+    nextWindow->positionOnScreen(nullptr);
+
+    const auto nextDocks = findSidebarDocks(*nextWindow);
+    CHECK(isInFloatingTabGroup(*nextWindow, *nextDocks.console));
+    CHECK(isInFloatingTabGroup(*nextWindow, *nextDocks.issues));
+    CHECK(nextDocks.issues->parentWidget() == nextDocks.console->parentWidget());
+
+    nextWindow->hide();
+    QApplication::processEvents();
+  }
+
+  SECTION("Toggle Inspector shows the hidden old inspector's page in front")
+  {
+    // a layout saved before the inspectors were docks, with the inspector hidden on its
+    // Face page; the next window restores it before it is shown, as the app does
+    writeOldState(OldInspectorKey, false);
+    writeOldState(OldInspectorPageKey, 2);
+
+    auto nextWindow = createNextWindow(appController);
+    nextWindow->positionOnScreen(nullptr);
+
+    const auto nextDocks = findSidebarDocks(*nextWindow);
+    for (auto* dock : nextDocks.inspectors())
+    {
+      REQUIRE(dock->isHidden());
+    }
+
+    showWithoutGlViews(*nextWindow);
+    findViewMenuAction(*nextWindow, "Toggle Inspector")->trigger();
+    QApplication::processEvents();
+
+    for (auto* dock : nextDocks.inspectors())
+    {
+      CHECK(!dock->isHidden());
+    }
+    CHECK(nextDocks.face->toggleViewAction()->isChecked());
+    CHECK(!nextDocks.map->toggleViewAction()->isChecked());
+    CHECK(!nextDocks.entity->toggleViewAction()->isChecked());
+  }
+
+  SECTION("Toggle Info Panel shows the hidden old info panel's page in front")
+  {
+    // a layout saved before the console and the issue browser were docks, with the info
+    // panel hidden on its Issues page
+    writeOldState(OldInfoPanelKey, false);
+    writeOldState(OldInfoPanelPageKey, 1);
+
+    auto nextWindow = createNextWindow(appController);
+    nextWindow->positionOnScreen(nullptr);
+
+    const auto nextDocks = findSidebarDocks(*nextWindow);
+    for (auto* dock : nextDocks.infoPanels())
+    {
+      REQUIRE(dock->isHidden());
+    }
+
+    showWithoutGlViews(*nextWindow);
+    findViewMenuAction(*nextWindow, "Toggle Info Panel")->trigger();
+    QApplication::processEvents();
+
+    for (auto* dock : nextDocks.infoPanels())
+    {
+      CHECK(!dock->isHidden());
+    }
+    CHECK(nextDocks.issues->toggleViewAction()->isChecked());
+    CHECK(!nextDocks.console->toggleViewAction()->isChecked());
+  }
+
+  SECTION("in a shown window")
+  {
+    const auto docks = findSidebarDocks(window);
+    auto* toggleInspector = findViewMenuAction(window, "Toggle Inspector");
+    showWithoutGlViews(window);
+
+    // a toggle action is checked while its dock can be seen
+    REQUIRE(docks.map->toggleViewAction()->isChecked());
+    REQUIRE(!docks.entity->toggleViewAction()->isChecked());
+    REQUIRE(!docks.face->toggleViewAction()->isChecked());
+    REQUIRE(docks.console->toggleViewAction()->isChecked());
+    REQUIRE(!docks.issues->toggleViewAction()->isChecked());
+
+    SECTION("Toggle Info Panel brings the dock that was in front back in front")
+    {
+      auto* toggleInfoPanel = findViewMenuAction(window, "Toggle Info Panel");
+      docks.issues->raise();
+      QApplication::processEvents();
+      REQUIRE(docks.issues->toggleViewAction()->isChecked());
+      REQUIRE(!docks.console->toggleViewAction()->isChecked());
+
+      toggleInfoPanel->trigger();
+      QApplication::processEvents();
+      for (auto* dock : docks.infoPanels())
+      {
+        CHECK(dock->isHidden());
+      }
+
+      toggleInfoPanel->trigger();
+      QApplication::processEvents();
+      CHECK(docks.issues->toggleViewAction()->isChecked());
+      CHECK(!docks.console->toggleViewAction()->isChecked());
+      CHECK(
+        window.tabifiedDockWidgets(docks.console) == QList<QDockWidget*>{docks.issues});
+    }
+
+    SECTION("the old info panel's page comes to the front")
+    {
+      writeOldState(OldInfoPanelPageKey, 1);
+
+      window.positionOnScreen(nullptr);
+      QApplication::processEvents();
+      CHECK(docks.issues->toggleViewAction()->isChecked());
+      CHECK(!docks.console->toggleViewAction()->isChecked());
+    }
+
+    SECTION("closing the console and issues docks unchecks Toggle Info Panel")
+    {
+      auto* toggleInfoPanel = findViewMenuAction(window, "Toggle Info Panel");
+      QApplication::processEvents();
+      REQUIRE(toggleInfoPanel->isChecked());
+
+      // the console in front first, then the issue browser that comes to the front
+      docks.console->toggleViewAction()->trigger();
+      QApplication::processEvents();
+      REQUIRE(docks.issues->toggleViewAction()->isChecked());
+      docks.issues->toggleViewAction()->trigger();
+      QApplication::processEvents();
+
+      for (auto* dock : docks.infoPanels())
+      {
+        CHECK(dock->isHidden());
+      }
+      CHECK(!toggleInfoPanel->isChecked());
+    }
+
+    SECTION("Toggle Inspector brings the dock that was in front back in front")
+    {
+      docks.entity->raise();
+      QApplication::processEvents();
+      REQUIRE(docks.entity->toggleViewAction()->isChecked());
+      REQUIRE(!docks.map->toggleViewAction()->isChecked());
+
+      toggleInspector->trigger();
+      QApplication::processEvents();
+      for (auto* dock : docks.inspectors())
+      {
+        CHECK(dock->isHidden());
+      }
+
+      toggleInspector->trigger();
+      QApplication::processEvents();
+      CHECK(docks.entity->toggleViewAction()->isChecked());
+      CHECK(!docks.map->toggleViewAction()->isChecked());
+      CHECK(!docks.face->toggleViewAction()->isChecked());
+      CHECK(
+        window.tabifiedDockWidgets(docks.map)
+        == QList<QDockWidget*>{docks.entity, docks.face});
+    }
+
+    SECTION("Toggle Inspector brings every dock that was in front back in front")
+    {
+      // the face inspector on its own at the left edge: Map in front of the group on the
+      // right and Face can both be seen, Entity is behind Map
+      window.removeDockWidget(docks.face);
+      window.addDockWidget(Qt::LeftDockWidgetArea, docks.face);
+      docks.face->show();
+      QApplication::processEvents();
+      REQUIRE(docks.map->toggleViewAction()->isChecked());
+      REQUIRE(docks.face->toggleViewAction()->isChecked());
+      REQUIRE(!docks.entity->toggleViewAction()->isChecked());
+
+      toggleInspector->trigger();
+      QApplication::processEvents();
+      for (auto* dock : docks.inspectors())
+      {
+        CHECK(dock->isHidden());
+      }
+
+      toggleInspector->trigger();
+      QApplication::processEvents();
+      for (auto* dock : docks.inspectors())
+      {
+        CHECK(!dock->isHidden());
+      }
+      CHECK(docks.map->toggleViewAction()->isChecked());
+      CHECK(docks.face->toggleViewAction()->isChecked());
+      CHECK(!docks.entity->toggleViewAction()->isChecked());
+      CHECK(window.dockWidgetArea(docks.face) == Qt::LeftDockWidgetArea);
+    }
+
+    SECTION("Show Face Inspector brings a dock behind a tab to the front")
+    {
+      findViewMenuAction(window, "Show Face Inspector")->trigger();
+      QApplication::processEvents();
+      CHECK(docks.face->toggleViewAction()->isChecked());
+      CHECK(!docks.map->toggleViewAction()->isChecked());
+    }
+
+    SECTION("the old inspector's page comes to the front")
+    {
+      writeOldState(OldInspectorPageKey, 2);
+
+      window.positionOnScreen(nullptr);
+      QApplication::processEvents();
+      CHECK(docks.face->toggleViewAction()->isChecked());
+      CHECK(!docks.map->toggleViewAction()->isChecked());
+      CHECK(!docks.entity->toggleViewAction()->isChecked());
+    }
+
+    SECTION("closing the inspector docks unchecks Toggle Inspector")
+    {
+      QApplication::processEvents();
+      REQUIRE(toggleInspector->isChecked());
+
+      // a click on the checked button of the dock in front closes it, and the next one
+      // comes to the front
+      for (auto i = 0; i < 3; ++i)
+      {
+        const auto inspectors = docks.inspectors();
+        const auto iFront = std::ranges::find_if(inspectors, [](const auto* dock) {
+          return dock->toggleViewAction()->isChecked();
+        });
+        REQUIRE(iFront != inspectors.end());
+        (*iFront)->toggleViewAction()->trigger();
+        QApplication::processEvents();
+      }
+
+      for (auto* dock : docks.inspectors())
+      {
+        CHECK(dock->isHidden());
+      }
+      CHECK(!toggleInspector->isChecked());
+    }
   }
 
   SECTION("View > Toggle Tool Sidebar")

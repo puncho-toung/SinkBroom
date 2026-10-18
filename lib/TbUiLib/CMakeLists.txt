@@ -85,9 +85,7 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GlQt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageListBox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageUtils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/InfoPanel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/InputEvent.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/Inspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/IssueBrowser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/IssueBrowserView.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/KeySequenceEdit.cpp
@@ -162,7 +160,6 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/StandardShortcut.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SwitchableMapViewContainer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SwitchableTitledPanel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/SyncHeightEventFilter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SystemPaths.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/TabBar.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/TabBook.cpp
@@ -274,9 +271,7 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/GlQt.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/ImageListBox.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/ImageUtils.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/InfoPanel.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/InputEvent.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/Inspector.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/IssueBrowser.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/IssueBrowserView.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/KeySequenceEdit.h
@@ -303,6 +298,7 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapWindow.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapWindowManager.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MaterialBrowser.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MaterialBrowserScope.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MaterialBrowserView.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MaterialCollectionEditor.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MiniToolBarLayout.h
@@ -353,7 +349,6 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/StandardShortcut.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/SwitchableMapViewContainer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/SwitchableTitledPanel.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/SyncHeightEventFilter.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/SystemPaths.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/TabBar.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/TabBook.h

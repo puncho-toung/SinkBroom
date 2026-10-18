@@ -27,29 +27,64 @@
 #include "mdl/Map.h"
 #include "mdl/Validator.h"
 #include "mdl/WorldNode.h"
+#include "ui/BorderLine.h"
 #include "ui/FlagsPopupEditor.h"
 #include "ui/IssueBrowserView.h"
 #include "ui/MapDocument.h"
+#include "ui/ViewConstants.h"
 
 namespace tb::ui
 {
 
 IssueBrowser::IssueBrowser(MapDocument& document, QWidget* parent)
-  : TabBookPage{parent}
+  : SidebarPanel{parent}
   , m_document{document}
   , m_view{new IssueBrowserView{m_document}}
 {
+  // no lower than the info panel that held this page
+  setMinimumHeight(100);
+
+  // the controls sat at the right of the info panel's tab bar; a dock's tab bar has no
+  // room for them, so they head the panel, at the right as before
   auto* sizer = new QVBoxLayout{};
   sizer->setContentsMargins(0, 0, 0, 0);
-  sizer->addWidget(m_view);
+  sizer->setSpacing(0);
+  sizer->addWidget(createControlBar(), 0);
+  sizer->addWidget(new BorderLine{}, 0);
+  sizer->addWidget(m_view, 1);
   setLayout(sizer);
 
   connectObservers();
 }
 
-QWidget* IssueBrowser::createTabBarPage(QWidget* parent)
+QString IssueBrowser::panelId() const
 {
-  auto* barPage = new QWidget{parent};
+  return QString::fromLatin1(PanelId);
+}
+
+QString IssueBrowser::title() const
+{
+  return tr("Issues");
+}
+
+std::filesystem::path IssueBrowser::iconPath() const
+{
+  return "Issues.svg";
+}
+
+bool IssueBrowser::shownByDefault() const
+{
+  return true;
+}
+
+Qt::DockWidgetArea IssueBrowser::defaultArea() const
+{
+  return Qt::BottomDockWidgetArea;
+}
+
+QWidget* IssueBrowser::createControlBar()
+{
+  auto* barPage = new QWidget{};
   m_showHiddenIssuesCheckBox = new QCheckBox{"Show hidden issues"};
   connect(
     m_showHiddenIssuesCheckBox,
@@ -62,7 +97,12 @@ QWidget* IssueBrowser::createTabBarPage(QWidget* parent)
     m_filterEditor, &FlagsPopupEditor::flagChanged, this, &IssueBrowser::filterChanged);
 
   auto* barPageSizer = new QHBoxLayout{};
-  barPageSizer->setContentsMargins(0, 0, 0, 0);
+  barPageSizer->setContentsMargins(
+    LayoutConstants::NarrowHMargin,
+    LayoutConstants::NarrowVMargin,
+    LayoutConstants::NarrowHMargin,
+    LayoutConstants::NarrowVMargin);
+  barPageSizer->addStretch(1);
   barPageSizer->addWidget(m_showHiddenIssuesCheckBox, 0, Qt::AlignVCenter);
   barPageSizer->addWidget(m_filterEditor, 0, Qt::AlignVCenter);
   barPage->setLayout(barPageSizer);

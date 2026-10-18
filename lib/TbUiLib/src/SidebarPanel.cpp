@@ -36,6 +36,16 @@ std::filesystem::path SidebarPanel::iconPath() const
   return {};
 }
 
+bool SidebarPanel::shownByDefault() const
+{
+  return false;
+}
+
+Qt::DockWidgetArea SidebarPanel::defaultArea() const
+{
+  return Qt::RightDockWidgetArea;
+}
+
 void SidebarPanel::panelShown() {}
 
 void SidebarPanel::panelHidden() {}

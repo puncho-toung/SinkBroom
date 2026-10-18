@@ -206,9 +206,15 @@ bool MaterialNameTagMatcher::matchesMaterial(const gl::Material* material) const
 
 bool MaterialNameTagMatcher::matchesMaterialName(std::string_view materialName) const
 {
+  return materialNameMatchesPattern(materialName, m_pattern);
+}
+
+bool materialNameMatchesPattern(
+  std::string_view materialName, const std::string_view pattern)
+{
   // If the match pattern doesn't contain a slash, match against
   // only the last component of the material name.
-  if (m_pattern.find('/') == std::string::npos)
+  if (pattern.find('/') == std::string::npos)
   {
     const auto pos = materialName.find_last_of('/');
     if (pos != std::string::npos)
@@ -217,7 +223,7 @@ bool MaterialNameTagMatcher::matchesMaterialName(std::string_view materialName) 
     }
   }
 
-  return kdl::ci::str_matches_glob(materialName, m_pattern);
+  return kdl::ci::str_matches_glob(materialName, pattern);
 }
 
 SurfaceParmTagMatcher::SurfaceParmTagMatcher(std::string parameter)

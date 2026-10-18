@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2010 Kristian Duske
+ Copyright (C) 2026 TrenchBroom contributors
 
  This file is part of TrenchBroom.
 
@@ -19,36 +19,20 @@
 
 #pragma once
 
-#include <QWidget>
-
-namespace tb
+namespace tb::ui
 {
-class Logger;
 
-namespace ui
+/**
+ * Which materials a material browser lists, by the game config's utility materials
+ * (materials.utilityMaterials): all of them, all but the utility materials, or the
+ * utility materials only. Kept apart from MaterialBrowserView.h so that a browser's
+ * users need not include the view.
+ */
+enum class MaterialBrowserScope
 {
-class Console;
-class IssueBrowser;
-class MapDocument;
-class TabBook;
-
-class InfoPanel : public QWidget
-{
-  Q_OBJECT
-private:
-  TabBook* m_tabBook = nullptr;
-  Console* m_console = nullptr;
-  IssueBrowser* m_issueBrowser = nullptr;
-
-public:
-  explicit InfoPanel(MapDocument& document, QWidget* parent = nullptr);
-  ~InfoPanel() override;
-
-  Console* console() const;
-
-  QByteArray saveState() const;
-  bool restoreState(const QByteArray& state);
+  All,
+  Regular,
+  Utility
 };
 
-} // namespace ui
-} // namespace tb
+} // namespace tb::ui

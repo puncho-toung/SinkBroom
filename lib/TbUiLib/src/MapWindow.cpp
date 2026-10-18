@@ -23,6 +23,7 @@
 #include <QChildEvent>
 #include <QClipboard>
 #include <QComboBox>
+#include <QDataStream>
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QInputDialog>
@@ -35,6 +36,8 @@
 #include <QStatusBar>
 #include <QString>
 #include <QStringList>
+#include <QTabBar>
+#include <QTabWidget>
 #include <QTableWidget>
 #include <QTimer>
 #include <QToolBar>
@@ -88,12 +91,13 @@
 #include "ui/Console.h"
 #include "ui/CrashReporter.h"
 #include "ui/EdgeTool.h"
+#include "ui/EntityInspector.h"
 #include "ui/FaceInspector.h"
 #include "ui/FaceTool.h"
-#include "ui/InfoPanel.h"
-#include "ui/Inspector.h"
+#include "ui/IssueBrowser.h"
 #include "ui/LaunchGameEngineDialog.h"
 #include "ui/MapDocument.h"
+#include "ui/MapInspector.h"
 #include "ui/MapView2D.h"
 #include "ui/MapViewBase.h"
 #include "ui/MapViewToolBox.h"
@@ -110,7 +114,6 @@
 #include "ui/SidebarPanel.h"
 #include "ui/SidebarPanels.h"
 #include "ui/SignalDelayer.h"
-#include "ui/Splitter.h"
 #include "ui/SwitchableMapViewContainer.h"
 #include "ui/ToolSidebar.h"
 #include "ui/VertexTool.h"
@@ -170,6 +173,90 @@ QString lastCompilationProfileSettingsKey(const std::string& gameName)
     .arg(QString::fromStdString(gameName));
 }
 
+/**
+ * The version of the dock layout that saveWindowState writes next to the window state. A
+ * saved state of an older version lacks docks that restoreWindowState then arranges once:
+ * 1 = the Map, Entity and Face inspectors are docks; 2 = the Console and Issues panels
+ * are docks.
+ */
+constexpr auto DockLayoutVersion = 2;
+
+/**
+ * The suffix of the dock layout version's settings key, beside the window's State.
+ */
+constexpr auto DockLayoutVersionKey = "DockLayoutVersion";
+
+/**
+ * The inspector panels in the order of their tabs.
+ */
+std::vector<QString> inspectorPanelIds()
+{
+  return {
+    QString::fromLatin1(MapInspector::PanelId),
+    QString::fromLatin1(EntityInspector::PanelId),
+    QString::fromLatin1(FaceInspector::PanelId),
+  };
+}
+
+/**
+ * The panels of the old info panel in the order of their tabs.
+ */
+std::vector<QString> infoPanelIds()
+{
+  return {
+    QString::fromLatin1(Console::PanelId),
+    QString::fromLatin1(IssueBrowser::PanelId),
+  };
+}
+
+QDockWidget* findSidebarDock(const SidebarManager& sidebarManager, const QString& panelId)
+{
+  // a dock is the parent of the panel it shows
+  auto* panel = sidebarManager.panel(panelId);
+  return panel ? qobject_cast<QDockWidget*>(panel->parentWidget()) : nullptr;
+}
+
+QDockWidget* sidebarDock(const SidebarManager& sidebarManager, const QString& panelId)
+{
+  auto* dock = findSidebarDock(sidebarManager, panelId);
+  contract_assert(dock != nullptr);
+  return dock;
+}
+
+/**
+ * The page that a tab book of a layout saved before its pages were docks showed, read
+ * from the given key: the inspector's (Map, Entity, Face) or the info panel's (Console,
+ * Issues).
+ */
+QString oldTabBookPage(const QString& key, const std::vector<QString>& panelIds)
+{
+  // TabBook::saveState wrote the index of the current page as one int; the first page
+  // when the key is absent or unreadable
+  const auto state = QSettings{}.value(key).toByteArray();
+  auto stream = QDataStream{state};
+  auto page = 0;
+  stream >> page;
+
+  return stream.status() == QDataStream::Ok && page >= 0 && page < int(panelIds.size())
+           ? panelIds[size_t(page)]
+           : panelIds.front();
+}
+
+/**
+ * Whether the inspector or the info panel of a layout saved before their pages were docks
+ * was visible, read from the given key.
+ */
+bool oldPanelVisible(const QString& key)
+{
+  // Inspector::saveState and InfoPanel::saveState wrote whether the panel was visible as
+  // one bool; visible when the key is absent or unreadable
+  const auto state = QSettings{}.value(key).toByteArray();
+  auto stream = QDataStream{state};
+  auto visible = true;
+  stream >> visible;
+  return stream.status() != QDataStream::Ok || visible;
+}
+
 } // namespace
 
 using namespace std::chrono_literals;
@@ -210,8 +297,7 @@ MapWindow::MapWindow(AppController& appController, std::unique_ptr<MapDocument> 
   bindEvents();
 
   restoreWidgetGeometry(this);
-  restoreWidgetState(this);
-  m_sidebarManager->redockOffScreenDocks();
+  restoreWindowState();
 
   setAcceptDrops(true);
 
@@ -228,14 +314,14 @@ MapWindow::~MapWindow()
 
   // Search for a RenderView (QOpenGLWindow subclass) and make it current in order to
   // allow for calling OpenGL methods in destructors.
-  auto* renderView = findChild<RenderView*>();
+  auto* renderView = m_mapView->findChild<RenderView*>();
   if (renderView)
   {
     renderView->makeCurrent();
   }
 
   // The MapDocument's CachingLogger has a pointer to m_console, which
-  // is about to be destroyed (DestroyChildren()). Clear the pointer
+  // is about to be destroyed with its dock below. Clear the pointer
   // so we don't try to log to a dangling pointer (#1885).
   m_document->setTargetLogger(nullptr);
 
@@ -243,8 +329,17 @@ MapWindow::~MapWindow()
 
   // Delete the sidebar docks, and with them their panels, while the document and the tool
   // box that the panels observe still exist, and before the snapshot of the children
-  // below, which deletes a child twice if one of its siblings destroys it first.
-  for (auto* dock : m_sidebarManager->docks())
+  // below, which deletes a child twice if one of its siblings destroys it first. They are
+  // hidden first: deleting the second to last dock of a floating tab group makes Qt float
+  // the last one on its own and show it again unless it is hidden, which would create a
+  // GL context for a panel that is about to go. Hiding them only queues an action state
+  // update on a child of this window, which goes with it.
+  const auto docks = m_sidebarManager->docks();
+  for (auto* dock : docks)
+  {
+    dock->hide();
+  }
+  for (auto* dock : docks)
   {
     delete dock;
   }
@@ -256,8 +351,14 @@ MapWindow::~MapWindow()
   // need the context manager (and its embedded VBO) to clean up their resources.
 
   // Destroy the children first because they might still access document resources.
-  // The children must be deleted in reverse order!
-  const auto children = this->children();
+  // The children must be deleted in reverse order! Not the tab bars of the dock tab
+  // groups, though: the main window's layout refers to them until it is deleted and shows
+  // them whenever a child that it lays out is removed or one of their geometry animations
+  // ends, which deleting a tab bar does to its own, so deleting them here would leave it
+  // with dangling tab bars. QWidget's destructor deletes them after the layout.
+  auto children = this->children();
+  children.removeIf(
+    [](const auto* child) { return qobject_cast<const QTabBar*>(child) != nullptr; });
   qDeleteAll(std::rbegin(children), std::rend(children));
 
   // let's trigger a final autosave before releasing the document
@@ -268,11 +369,19 @@ MapWindow::~MapWindow()
   // in its destructor
 }
 
+void MapWindow::saveWindowState()
+{
+  saveWidgetGeometry(this);
+  saveWidgetState(this);
+
+  // the saved state knows every dock, so the next restore arranges none of them
+  QSettings{}.setValue(widgetSettingsPath(this, DockLayoutVersionKey), DockLayoutVersion);
+}
+
 void MapWindow::positionOnScreen(QWidget* reference)
 {
   restoreWidgetGeometry(this);
-  restoreWidgetState(this);
-  m_sidebarManager->redockOffScreenDocks();
+  restoreWindowState();
   if (reference)
   {
     const auto offset = QApplication::style()->pixelMetric(QStyle::PM_TitleBarHeight);
@@ -455,68 +564,33 @@ void MapWindow::createGui()
   setWindowIconTB(this);
   setWindowTitle("TrenchBroom");
 
-  m_hSplitter = new Splitter{Qt::Horizontal, DrawKnob::No};
-  m_hSplitter->setChildrenCollapsible(false);
-  m_hSplitter->setObjectName("MapWindow_HorizontalSplitter");
-
-  m_vSplitter = new Splitter{Qt::Vertical, DrawKnob::No};
-  m_vSplitter->setChildrenCollapsible(false);
-  m_vSplitter->setObjectName("MapWindow_VerticalSplitterSplitter");
-
-  m_infoPanel = new InfoPanel{document()};
-  m_infoPanel->setObjectName("MapWindow_InfoPanel");
-  m_console = m_infoPanel->console();
-
   m_mapView = new SwitchableMapViewContainer{m_appController, document()};
   m_currentMapView = m_mapView->firstMapViewBase();
 
   // SwitchableMapViewContainer should have constructed a MapViewBase
   contract_assert(m_currentMapView);
 
-  m_inspector = new Inspector{m_appController, document()};
-  m_inspector->setObjectName("Inspector");
-
-  m_mapView->connectTopWidgets(m_inspector);
-
-  // Add widgets to splitters
-  m_vSplitter->addWidget(m_mapView);
-  m_vSplitter->addWidget(m_infoPanel);
-
-  m_hSplitter->addWidget(m_vSplitter);
-  m_hSplitter->addWidget(m_inspector);
-
-  // configure minimum sizes
+  // the map views fill the window between the docks; the console and the issue browser
+  // under them are docks too
   m_mapView->setMinimumSize(100, 100);
-  m_infoPanel->setMinimumSize(100, 100);
+  setCentralWidget(m_mapView);
 
-  m_vSplitter->setMinimumSize(100, 100);
-  m_inspector->setMinimumSize(350, 100);
+  // Any dock can be dropped on another to tab them. With grouped dragging, a group's
+  // title bar moves the whole group and a single tab is dragged out of its tab bar. Qt
+  // wants the options set before the first dock is added.
+  setDockOptions(
+    QMainWindow::AnimatedDocks | QMainWindow::AllowTabbedDocks
+    | QMainWindow::GroupedDragging);
 
-  // resize only the map view when the window resizes
-  m_vSplitter->setStretchFactor(0, 1);
-  m_vSplitter->setStretchFactor(1, 0);
-  m_hSplitter->setStretchFactor(0, 1);
-  m_hSplitter->setStretchFactor(1, 0);
+  // the tab bar of a dock tab group sits at its top, as the old inspector's did
+  setTabPosition(Qt::AllDockWidgetAreas, QTabWidget::North);
 
-  // give most of the space to the map view
-  m_hSplitter->setSizes(QList<int>{1'000'000, 1});
-  m_vSplitter->setSizes(QList<int>{1'000'000, 1});
-
-  auto* windowLayout = new QVBoxLayout{};
-  windowLayout->setContentsMargins(0, 0, 0, 0);
-  windowLayout->addWidget(m_hSplitter);
-
-  // NOTE: you can't set the layout of a QMainWindow, so make another widget to wrap this
-  // layout in
-  auto* layoutWrapper = new QWidget{};
-  layoutWrapper->setLayout(windowLayout);
-
-  setCentralWidget(layoutWrapper);
-
-  restoreWidgetState(m_hSplitter);
-  restoreWidgetState(m_vSplitter);
-  restoreWidgetState(m_inspector);
-  restoreWidgetState(m_infoPanel);
+  // the side edges own the corners, so a group at a side spans the window's height as the
+  // inspector did, and a group at the bottom sits under the map views only
+  setCorner(Qt::TopLeftCorner, Qt::LeftDockWidgetArea);
+  setCorner(Qt::BottomLeftCorner, Qt::LeftDockWidgetArea);
+  setCorner(Qt::TopRightCorner, Qt::RightDockWidgetArea);
+  setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
 
   // The docks must exist before createMenus lists them in View > Sidebar and before the
   // window state that places them is restored.
@@ -527,6 +601,130 @@ void MapWindow::createGui()
   {
     m_sidebarManager->registerPanel(std::move(panel));
   }
+
+  // the constructor makes the console the document's logger
+  m_console = qobject_cast<Console*>(m_sidebarManager->panel(Console::PanelId));
+  contract_assert(m_console != nullptr);
+
+  // where the inspector and the info panel were, on their first pages; a restored window
+  // state overrides this
+  arrangeInspectorDocks(QString::fromLatin1(MapInspector::PanelId));
+  arrangeInfoDocks(QString::fromLatin1(Console::PanelId));
+}
+
+void MapWindow::restoreWindowState()
+{
+  // The saved window state is applied once per window, although the app calls this twice
+  // (the constructor, then positionOnScreen). Qt builds a new window for each floating
+  // tab group on every restore and moves the docks into it one by one; when the old
+  // group is down to its last dock, it lets that dock go as a floating dock, so a second
+  // restore splits every floating group, and saving keeps the split.
+  if (!m_windowStateRestored)
+  {
+    restoreWidgetState(this);
+    m_windowStateRestored = true;
+  }
+
+  // A layout saved before some panels were docks does not know their docks, so Qt leaves
+  // them where createGui put them, side by side. They take the place of the panel that
+  // held them: tabbed, on its page, and hidden if it was hidden. The app restores twice
+  // (the constructor, then positionOnScreen), so this runs again until the window is
+  // closed and its layout saved with the version.
+  const auto hideDockGroup = [&](
+                               const std::vector<QString>& panelIds,
+                               const QString& oldPage,
+                               DockGroupRestoreSet& restoreSet) {
+    auto otherPages = std::vector<QString>{};
+    for (const auto& panelId : panelIds)
+    {
+      sidebarDock(*m_sidebarManager, panelId)->hide();
+      if (panelId != oldPage)
+      {
+        otherPages.push_back(panelId);
+      }
+    }
+
+    // a group whose docks are all hidden forgets its current tab when it is laid out, so
+    // the group's toggle brings the old page to the front
+    restoreSet = {.front = {oldPage}, .behind = std::move(otherPages)};
+  };
+
+  const auto version =
+    QSettings{}.value(widgetSettingsPath(this, DockLayoutVersionKey), 0).toInt();
+  if (version < 1)
+  {
+    // the inspector's pages
+    const auto panelIds = inspectorPanelIds();
+    const auto oldPage = oldTabBookPage("Windows/Inspector_TabBook/State", panelIds);
+    arrangeInspectorDocks(oldPage);
+    if (!oldPanelVisible("Windows/Inspector/State"))
+    {
+      hideDockGroup(panelIds, oldPage, m_inspectorPanelsToRestore);
+    }
+  }
+  if (version < 2)
+  {
+    // the info panel's pages
+    const auto panelIds = infoPanelIds();
+    const auto oldPage = oldTabBookPage("Windows/InfoPanel_TabBook/State", panelIds);
+    arrangeInfoDocks(oldPage);
+    if (!oldPanelVisible("Windows/MapWindow_InfoPanel/State"))
+    {
+      hideDockGroup(panelIds, oldPage, m_infoPanelsToRestore);
+    }
+  }
+
+  m_sidebarManager->redockOffScreenDocks();
+}
+
+void MapWindow::arrangeInspectorDocks(const QString& raisedPanelId)
+{
+  const auto panelIds = inspectorPanelIds();
+  auto* mapDock = sidebarDock(*m_sidebarManager, panelIds[0]);
+  auto* entityDock = sidebarDock(*m_sidebarManager, panelIds[1]);
+  auto* faceDock = sidebarDock(*m_sidebarManager, panelIds[2]);
+
+  // tabifyDockWidget takes the second dock out of wherever it is, a tab group or the
+  // place that a closed dock keeps, and appends it to the first dock's group, so
+  // arranging the docks again leaves them as they are
+  tabifyDockWidget(mapDock, entityDock);
+  tabifyDockWidget(entityDock, faceDock);
+
+  if (auto* raisedDock = findSidebarDock(*m_sidebarManager, raisedPanelId))
+  {
+    raisedDock->raise();
+  }
+
+  // as wide as the old inspector started
+  resizeDocks({mapDock}, {350}, Qt::Horizontal);
+}
+
+void MapWindow::arrangeInfoDocks(const QString& raisedPanelId)
+{
+  const auto panelIds = infoPanelIds();
+  auto* consoleDock = sidebarDock(*m_sidebarManager, panelIds[0]);
+  auto* issuesDock = sidebarDock(*m_sidebarManager, panelIds[1]);
+
+  // like the inspector docks: tabifyDockWidget appends the second dock to the first
+  // dock's group from wherever it is, so arranging the docks again leaves them as they
+  // are
+  tabifyDockWidget(consoleDock, issuesDock);
+
+  if (auto* raisedDock = findSidebarDock(*m_sidebarManager, raisedPanelId))
+  {
+    raisedDock->raise();
+  }
+
+  // as tall as the old info panel started
+  resizeDocks({consoleDock}, {100}, Qt::Vertical);
+}
+
+FaceInspector* MapWindow::faceInspector() const
+{
+  auto* faceInspector =
+    qobject_cast<FaceInspector*>(m_sidebarManager->panel(FaceInspector::PanelId));
+  contract_assert(faceInspector != nullptr);
+  return faceInspector;
 }
 
 void MapWindow::createToolBar()
@@ -1049,6 +1247,18 @@ void MapWindow::bindEvents()
       // update the "Toggle Tool Sidebar" menu item
       this->updateActionState();
     });
+  auto groupedPanelIds = inspectorPanelIds();
+  std::ranges::copy(infoPanelIds(), std::back_inserter(groupedPanelIds));
+  for (const auto& panelId : groupedPanelIds)
+  {
+    // update the "Toggle Inspector" and "Toggle Info Panel" menu items when a dock is
+    // closed from its title bar, its tool sidebar button or View > Sidebar
+    connect(
+      sidebarDock(*m_sidebarManager, panelId),
+      &QDockWidget::visibilityChanged,
+      this,
+      &MapWindow::updateActionStateDelayed);
+  }
 
   connect(
     m_updateTitleSignalDelayer,
@@ -1372,7 +1582,7 @@ void MapWindow::closeDocument()
 
 void MapWindow::undo()
 {
-  if (canUndo() && !m_mapView->cancelMouseDrag() && !m_inspector->cancelMouseDrag())
+  if (canUndo() && !m_mapView->cancelMouseDrag() && !faceInspector()->cancelMouseDrag())
   {
     m_document->map().undoCommand();
   }
@@ -2112,10 +2322,9 @@ void MapWindow::showAll()
   showAllNodes(m_document->map());
 }
 
-void MapWindow::switchToInspectorPage(const InspectorPage page)
+void MapWindow::showSidebarPanel(const QString& panelId)
 {
-  m_inspector->show();
-  m_inspector->switchToPage(page);
+  m_sidebarManager->showPanel(panelId);
 }
 
 void MapWindow::toggleToolbar()
@@ -2140,24 +2349,83 @@ bool MapWindow::toolSidebarVisible() const
   return m_toolSidebar->isVisible();
 }
 
-void MapWindow::toggleInfoPanel()
+void MapWindow::toggleInfoPanels()
 {
-  m_infoPanel->setHidden(!m_infoPanel->isHidden());
+  toggleDockGroup(infoPanelIds(), m_infoPanelsToRestore);
 }
 
-bool MapWindow::infoPanelVisible() const
+bool MapWindow::infoPanelsVisible() const
 {
-  return m_infoPanel->isVisible();
+  return dockGroupVisible(infoPanelIds());
 }
 
-void MapWindow::toggleInspector()
+void MapWindow::toggleInspectorPanels()
 {
-  m_inspector->setHidden(!m_inspector->isHidden());
+  toggleDockGroup(inspectorPanelIds(), m_inspectorPanelsToRestore);
 }
 
-bool MapWindow::inspectorVisible() const
+bool MapWindow::inspectorPanelsVisible() const
 {
-  return m_inspector->isVisible();
+  return dockGroupVisible(inspectorPanelIds());
+}
+
+void MapWindow::toggleDockGroup(
+  const std::vector<QString>& panelIds, DockGroupRestoreSet& restoreSet)
+{
+  if (dockGroupVisible(panelIds))
+  {
+    // remember the open docks to bring back, and which of them could be seen
+    restoreSet = {};
+    for (const auto& panelId : panelIds)
+    {
+      const auto* dock = sidebarDock(*m_sidebarManager, panelId);
+      if (!dock->isHidden())
+      {
+        auto& panelIdsOfKind =
+          dock->toggleViewAction()->isChecked() ? restoreSet.front : restoreSet.behind;
+        panelIdsOfKind.push_back(panelId);
+      }
+    }
+
+    for (const auto& panelId : panelIds)
+    {
+      sidebarDock(*m_sidebarManager, panelId)->hide();
+    }
+  }
+  else
+  {
+    auto panelIdsToShow = restoreSet.front;
+    panelIdsToShow.insert(
+      panelIdsToShow.end(), restoreSet.behind.begin(), restoreSet.behind.end());
+    if (panelIdsToShow.empty())
+    {
+      panelIdsToShow = panelIds;
+    }
+
+    for (const auto& panelId : panelIdsToShow)
+    {
+      sidebarDock(*m_sidebarManager, panelId)->show();
+    }
+
+    // a dock shown into its tab group does not come to the front, and raising each in
+    // turn would leave the last one in front, so only the docks that were in front are
+    // raised, after all are shown; they are in different groups. Without them, each
+    // group keeps its current tab.
+    for (const auto& panelId : restoreSet.front)
+    {
+      sidebarDock(*m_sidebarManager, panelId)->raise();
+    }
+
+    restoreSet = {};
+  }
+}
+
+bool MapWindow::dockGroupVisible(const std::vector<QString>& panelIds) const
+{
+  // by the hidden flag, so that it also holds while the window is not shown yet
+  return std::ranges::any_of(panelIds, [&](const auto& panelId) {
+    return !sidebarDock(*m_sidebarManager, panelId)->isHidden();
+  });
 }
 
 void MapWindow::toggleMaximizeCurrentView()
@@ -2335,8 +2603,8 @@ void MapWindow::revealMaterial()
 
 void MapWindow::revealMaterial(const gl::Material* material)
 {
-  m_inspector->switchToPage(InspectorPage::Face);
-  m_inspector->faceInspector()->revealMaterial(material);
+  showSidebarPanel(FaceInspector::PanelId);
+  faceInspector()->revealMaterial(material);
 }
 
 void MapWindow::debugPrintVertices()
@@ -2521,6 +2789,33 @@ bool MapWindow::canLaunch() const
   return map.persistent();
 }
 
+QMenu* MapWindow::createPopupMenu()
+{
+  auto* menu = QMainWindow::createPopupMenu();
+  if (menu)
+  {
+    // Qt lists the docks in the order they were created, then a separator and the
+    // toolbars; list the docks in the order of the tool sidebar and View > Sidebar
+    const auto actions = menu->actions();
+    const auto iSeparator = std::ranges::find_if(
+      actions, [](const auto* action) { return action->isSeparator(); });
+    if (iSeparator != actions.end())
+    {
+      auto dockActions = std::vector<QAction*>(actions.begin(), iSeparator);
+      std::ranges::stable_sort(dockActions, [](const auto* lhs, const auto* rhs) {
+        return toolSidebarEntryLess(*lhs, *rhs);
+      });
+      for (auto* action : dockActions)
+      {
+        menu->removeAction(action);
+      }
+      menu->insertActions(
+        *iSeparator, QList<QAction*>(dockActions.begin(), dockActions.end()));
+    }
+  }
+  return menu;
+}
+
 void MapWindow::dragEnterEvent(QDragEnterEvent* event)
 {
   const auto& map = m_document->map();
@@ -2579,12 +2874,7 @@ void MapWindow::closeEvent(QCloseEvent* event)
 
   disconnect(qApp, &QApplication::focusChanged, this, &MapWindow::focusChange);
 
-  saveWidgetGeometry(this);
-  saveWidgetState(this);
-  saveWidgetState(m_hSplitter);
-  saveWidgetState(m_vSplitter);
-  saveWidgetState(m_inspector);
-  saveWidgetState(m_infoPanel);
+  saveWindowState();
 
   m_appController.mapWindowManager().removeMapWindow(this);
   event->accept();

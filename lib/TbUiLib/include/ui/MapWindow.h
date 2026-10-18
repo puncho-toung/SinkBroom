@@ -22,6 +22,7 @@
 #include <QDialog>
 #include <QMainWindow>
 #include <QPointer>
+#include <QString>
 
 #include "base/NotifierConnection.h"
 #include "mdl/ExportOptions.h"
@@ -32,13 +33,13 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 class QAction;
 class QComboBox;
 class QDropEvent;
 class QMenuBar;
 class QLabel;
-class QSplitter;
 class QTimer;
 class QToolBar;
 
@@ -73,9 +74,7 @@ class Action;
 class AppController;
 class CompilationDialog;
 class Console;
-class InfoPanel;
-class Inspector;
-enum class InspectorPage;
+class FaceInspector;
 class MapDocument;
 class MapViewBase;
 class MapViewToolBox;
@@ -99,19 +98,37 @@ private:
   QToolBar* m_toolBar = nullptr;
   ToolSidebar* m_toolSidebar = nullptr;
 
-  QSplitter* m_hSplitter = nullptr;
-  QSplitter* m_vSplitter = nullptr;
-
   SwitchableMapViewContainer* m_mapView = nullptr;
   /**
    * Last focused MapViewBase. It's a QPointer to handle changing from e.g. a 2-pane map
    * view to 1-pane.
    */
   QPointer<MapViewBase> m_currentMapView;
-  InfoPanel* m_infoPanel = nullptr;
   Console* m_console = nullptr;
-  Inspector* m_inspector = nullptr;
   SidebarManager* m_sidebarManager = nullptr;
+
+  /**
+   * The panels of a dock group that a toggle hid and brings back. A dock's toggle action
+   * is checked while the dock can be seen, which holds for the dock in front of each tab
+   * group and for a dock on its own, so several can be in front at once; they are raised
+   * again after all are shown. None is in front while the window is not shown.
+   */
+  struct DockGroupRestoreSet
+  {
+    /** The panels whose toggle action was checked, raised last. */
+    std::vector<QString> front;
+    /** The other panels whose docks were not hidden. */
+    std::vector<QString> behind;
+  };
+
+  DockGroupRestoreSet m_inspectorPanelsToRestore;
+  DockGroupRestoreSet m_infoPanelsToRestore;
+
+  /**
+   * Whether restoreWindowState has applied the saved window state. It is applied once per
+   * window, see restoreWindowState.
+   */
+  bool m_windowStateRestored = false;
 
   QComboBox* m_gridChoice = nullptr;
   QLabel* m_statusBarLabel = nullptr;
@@ -143,6 +160,11 @@ public:
   ~MapWindow() override;
 
   void positionOnScreen(QWidget* reference);
+
+  /**
+   * Saves the window's geometry and layout, the docks included, as closing it does.
+   */
+  void saveWindowState();
 
   const MapDocument& document() const;
   MapDocument& document();
@@ -181,6 +203,38 @@ private: // status bar
 
 private: // gui creation
   void createGui();
+
+  /**
+   * Restores the saved layout, on the first call only; the arrangements below and the
+   * docking of floating docks that are off screen run on every call. A layout saved
+   * before the inspectors were docks does not know them, so they are arranged like the
+   * old inspector once more; one saved before the Console and Issues panels were docks
+   * does not know those, so they are arranged like the old info panel once more.
+   */
+  void restoreWindowState();
+  /**
+   * Tabs the three inspector docks together, in the order Map, Entity, Face, and brings
+   * the given one to the front. Arranging docks that are arranged so changes nothing.
+   */
+  void arrangeInspectorDocks(const QString& raisedPanelId);
+  /**
+   * Tabs the Console and Issues docks together, in that order, and brings the given one
+   * to the front. Arranging docks that are arranged so changes nothing.
+   */
+  void arrangeInfoDocks(const QString& raisedPanelId);
+  FaceInspector* faceInspector() const;
+
+  /**
+   * Hides the given panels' docks if any of them is open, and remembers in the given set
+   * which were open and which of them could be seen; otherwise brings back the
+   * remembered ones, or all, and brings the ones that could be seen to the front again.
+   */
+  void toggleDockGroup(
+    const std::vector<QString>& panelIds, DockGroupRestoreSet& restoreSet);
+  /**
+   * Whether any of the given panels' docks is open.
+   */
+  bool dockGroupVisible(const std::vector<QString>& panelIds) const;
 
 private: // notification handlers
   void connectObservers();
@@ -356,7 +410,10 @@ public:
 
   void showAll();
 
-  void switchToInspectorPage(InspectorPage page);
+  /**
+   * Shows the given sidebar panel's dock and brings it to the front of its tab group.
+   */
+  void showSidebarPanel(const QString& panelId);
 
   void toggleToolbar();
   bool toolbarVisible() const;
@@ -364,11 +421,19 @@ public:
   void toggleToolSidebar();
   bool toolSidebarVisible() const;
 
-  void toggleInfoPanel();
-  bool infoPanelVisible() const;
+  /**
+   * Hides the Console and Issues docks if either of them is open; otherwise brings back
+   * the ones that it hid, or both, with the one that was in front in front again.
+   */
+  void toggleInfoPanels();
+  bool infoPanelsVisible() const;
 
-  void toggleInspector();
-  bool inspectorVisible() const;
+  /**
+   * Hides the three inspector docks if any of them is open; otherwise brings back the
+   * ones that it hid, or all three, with the one that was in front in front again.
+   */
+  void toggleInspectorPanels();
+  bool inspectorPanelsVisible() const;
 
   void toggleMaximizeCurrentView();
   bool currentViewMaximized() const;
@@ -409,6 +474,9 @@ private:
 public: // drag and drop
   void dragEnterEvent(QDragEnterEvent* event) override;
   void dropEvent(QDropEvent* event) override;
+
+public: // the context menu of the toolbars and the docks
+  QMenu* createPopupMenu() override;
 
 protected: // other event handlers
   void changeEvent(QEvent* event) override;

@@ -19,8 +19,12 @@
 
 #pragma once
 
+#include <QString>
+
 #include "base/NotifierConnection.h"
-#include "ui/TabBook.h"
+#include "ui/SidebarPanel.h"
+
+#include <filesystem>
 
 class QCheckBox;
 class QStackedLayout;
@@ -39,9 +43,12 @@ class FlagsPopupEditor;
 class IssueBrowserView;
 class MapDocument;
 
-class IssueBrowser : public TabBookPage
+class IssueBrowser : public SidebarPanel
 {
   Q_OBJECT
+public:
+  static constexpr auto PanelId = "Issues";
+
 private:
   static const int SelectObjectsCommandId = 1;
   static const int ShowIssuesCommandId = 2;
@@ -58,9 +65,14 @@ private:
 public:
   explicit IssueBrowser(MapDocument& document, QWidget* parent = nullptr);
 
-  QWidget* createTabBarPage(QWidget* parent) override;
+  QString panelId() const override;
+  QString title() const override;
+  std::filesystem::path iconPath() const override;
+  bool shownByDefault() const override;
+  Qt::DockWidgetArea defaultArea() const override;
 
 private:
+  QWidget* createControlBar();
   void connectObservers();
 
   void updateFilterFlags();

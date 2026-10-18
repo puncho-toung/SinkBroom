@@ -47,16 +47,24 @@ class StubPanel : public SidebarPanel
 private:
   QString m_panelId;
   std::filesystem::path m_iconPath;
+  bool m_shownByDefault = false;
+  Qt::DockWidgetArea m_defaultArea = Qt::RightDockWidgetArea;
 
 public:
   int shownCount = 0;
   int hiddenCount = 0;
 
-  explicit StubPanel(QString panelId, std::filesystem::path iconPath = {});
+  explicit StubPanel(
+    QString panelId,
+    std::filesystem::path iconPath = {},
+    bool shownByDefault = false,
+    Qt::DockWidgetArea defaultArea = Qt::RightDockWidgetArea);
 
   QString panelId() const override;
   QString title() const override;
   std::filesystem::path iconPath() const override;
+  bool shownByDefault() const override;
+  Qt::DockWidgetArea defaultArea() const override;
   void panelShown() override;
   void panelHidden() override;
 };
@@ -68,11 +76,21 @@ struct RegisteredStub
 };
 
 /**
- * Registers a stub panel with the given id and icon path; its title is the id followed by
- * " title".
+ * Registers a stub panel with the given id, icon path, default visibility and default
+ * area; its title is the id followed by " title".
  */
 RegisteredStub registerStubPanel(
-  SidebarManager& manager, const QString& panelId, std::filesystem::path iconPath = {});
+  SidebarManager& manager,
+  const QString& panelId,
+  std::filesystem::path iconPath = {},
+  bool shownByDefault = false,
+  Qt::DockWidgetArea defaultArea = Qt::RightDockWidgetArea);
+
+/**
+ * Checks that the given image of the images folder renders as a 24x24 greyscale icon,
+ * which is what the tool sidebar draws and what the dark theme can invert.
+ */
+void checkGreyscaleIcon(const std::filesystem::path& imagePath);
 
 /**
  * A document of the given game with a tool box, as a map window provides them.

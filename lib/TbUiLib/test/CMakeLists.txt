@@ -9,16 +9,22 @@ target_sources(TbUiLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ActionContext.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ActionInfo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Actions.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CellView.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompilationDialog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompilationProfileManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompilationRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompilationTaskListBox.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Console.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ViewEditor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityDefinitionFileChooser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityInspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityPropertyModel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FaceInspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_InputEvent.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_IssueBrowser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LaunchGameEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightEditorPanel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapInspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapViewToolBox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialBrowserView.cpp

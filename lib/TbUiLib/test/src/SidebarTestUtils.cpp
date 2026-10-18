@@ -19,13 +19,20 @@
 
 #include "SidebarTestUtils.h"
 
+#include <QImage>
 #include <QLabel>
+#include <QPainter>
+#include <QRect>
+#include <QSize>
 #include <QStackedLayout>
 #include <QStackedWidget>
+#include <QSvgRenderer>
 
 #include "ui/LightEditorPanel.h"
 #include "ui/MapDocument.h"
+#include "ui/QPathUtils.h"
 #include "ui/SidebarManager.h"
+#include "ui/SystemPaths.h"
 
 #include <memory>
 
@@ -34,9 +41,15 @@
 namespace tb::ui
 {
 
-StubPanel::StubPanel(QString panelId, std::filesystem::path iconPath)
+StubPanel::StubPanel(
+  QString panelId,
+  std::filesystem::path iconPath,
+  const bool shownByDefault,
+  const Qt::DockWidgetArea defaultArea)
   : m_panelId{std::move(panelId)}
   , m_iconPath{std::move(iconPath)}
+  , m_shownByDefault{shownByDefault}
+  , m_defaultArea{defaultArea}
 {
 }
 
@@ -55,6 +68,16 @@ std::filesystem::path StubPanel::iconPath() const
   return m_iconPath;
 }
 
+bool StubPanel::shownByDefault() const
+{
+  return m_shownByDefault;
+}
+
+Qt::DockWidgetArea StubPanel::defaultArea() const
+{
+  return m_defaultArea;
+}
+
 void StubPanel::panelShown()
 {
   ++shownCount;
@@ -66,12 +89,37 @@ void StubPanel::panelHidden()
 }
 
 RegisteredStub registerStubPanel(
-  SidebarManager& manager, const QString& panelId, std::filesystem::path iconPath)
+  SidebarManager& manager,
+  const QString& panelId,
+  std::filesystem::path iconPath,
+  const bool shownByDefault,
+  const Qt::DockWidgetArea defaultArea)
 {
-  auto panel = std::make_unique<StubPanel>(panelId, std::move(iconPath));
+  auto panel = std::make_unique<StubPanel>(
+    panelId, std::move(iconPath), shownByDefault, defaultArea);
   auto* panelPtr = panel.get();
   auto* dock = manager.registerPanel(std::move(panel));
   return {dock, panelPtr};
+}
+
+void checkGreyscaleIcon(const std::filesystem::path& imagePath)
+{
+  const auto name = imagePath.string();
+  CAPTURE(name);
+
+  auto renderer = QSvgRenderer{pathAsQPath(
+    SystemPaths::findResourceFile(std::filesystem::path{"images"} / imagePath))};
+  REQUIRE(renderer.isValid());
+  CHECK(renderer.defaultSize() == QSize{24, 24});
+  CHECK(renderer.viewBox() == QRect{0, 0, 24, 24});
+
+  // the dark theme inverts an icon only if it is greyscale
+  auto image = QImage{renderer.defaultSize(), QImage::Format_ARGB32_Premultiplied};
+  image.fill(Qt::transparent);
+  auto painter = QPainter{&image};
+  renderer.render(&painter);
+  painter.end();
+  CHECK(image.isGrayscale());
 }
 
 SidebarContextFixture::SidebarContextFixture(mdl::MapFixtureConfig config)
