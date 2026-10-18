@@ -35,6 +35,7 @@ target_sources(TbUiLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_QStringUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_QVecUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_RecentDocuments.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SelectionHitchBenchmark.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SidebarManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SidebarPanel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SidebarPanels.cpp
@@ -94,6 +95,9 @@ add_custom_command(TARGET TbUiLibTest POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TB_RESOURCE_DIR}/games" "${TEST_FIXTURE_DEST_DIR}/games"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TB_RESOURCE_DIR}/games-testing" "${TEST_FIXTURE_DEST_DIR}/games"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TB_RESOURCE_DIR}/graphics/images" "$<TARGET_FILE_DIR:TbUiLibTest>/images"
+  # the GL views of the selection hitch benchmark load the shaders and the fonts
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${TB_RESOURCE_DIR}/shader" "$<TARGET_FILE_DIR:TbUiLibTest>/shader"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${TB_RESOURCE_DIR}/fonts" "$<TARGET_FILE_DIR:TbUiLibTest>/fonts"
 )
 
 include(Catch)
