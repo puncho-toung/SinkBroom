@@ -399,30 +399,54 @@ void EntityPropertyGrid::connectObservers()
 
 void EntityPropertyGrid::updateControls()
 {
-  // When you change the selected entity in the map, there's a brief intermediate state
-  // where worldspawn is selected. If we call this directly, it'll cause the table to be
-  // rebuilt based on that intermediate state. Everything is fine except you lose the
-  // selected row in the table, unless it's a key name that exists in worldspawn. To avoid
-  // that problem, make a delayed call to update the table.
-  QTimer::singleShot(0, this, [&]() {
-    m_model->updateFromMap();
-
-    if (m_table->selectionModel()->selectedIndexes().empty())
-    {
-      restoreSelection();
-    }
-    ensureSelectionVisible();
-
-    const auto shouldShowProtectedProperties = m_model->shouldShowProtectedProperties();
-    m_table->setColumnHidden(
-      EntityPropertyModel::ColumnProtected, !shouldShowProtectedProperties);
-    m_addProtectedPropertyButton->setHidden(!shouldShowProtectedProperties);
-
-    // QHeaderView::ResizeToContents on ColumnKey does not reliably recompute the
-    // width when the table is updated via dataChanged/beginInsertRows, so force it.
-    m_table->resizeColumnToContents(EntityPropertyModel::ColumnKey);
-  });
+  if (window()->isVisible() && !isVisible())
+  {
+    // A selection change would rebuild a table that nobody sees, as in a closed inspector
+    // or one behind another tab, so the table is updated when the grid is shown again.
+    m_tableUpdateDue = true;
+  }
+  else
+  {
+    // When you change the selected entity in the map, there's a brief intermediate state
+    // where worldspawn is selected. If we call this directly, it'll cause the table to be
+    // rebuilt based on that intermediate state. Everything is fine except you lose the
+    // selected row in the table, unless it's a key name that exists in worldspawn. To
+    // avoid that problem, make a delayed call to update the table.
+    QTimer::singleShot(0, this, [&]() { updateTable(); });
+  }
   updateControlsEnabled();
+}
+
+void EntityPropertyGrid::updateTable()
+{
+  m_tableUpdateDue = false;
+
+  m_model->updateFromMap();
+
+  if (m_table->selectionModel()->selectedIndexes().empty())
+  {
+    restoreSelection();
+  }
+  ensureSelectionVisible();
+
+  const auto shouldShowProtectedProperties = m_model->shouldShowProtectedProperties();
+  m_table->setColumnHidden(
+    EntityPropertyModel::ColumnProtected, !shouldShowProtectedProperties);
+  m_addProtectedPropertyButton->setHidden(!shouldShowProtectedProperties);
+
+  // QHeaderView::ResizeToContents on ColumnKey does not reliably recompute the
+  // width when the table is updated via dataChanged/beginInsertRows, so force it.
+  m_table->resizeColumnToContents(EntityPropertyModel::ColumnKey);
+}
+
+void EntityPropertyGrid::showEvent(QShowEvent* event)
+{
+  QWidget::showEvent(event);
+
+  if (m_tableUpdateDue)
+  {
+    updateTable();
+  }
 }
 
 void EntityPropertyGrid::ensureSelectionVisible()
