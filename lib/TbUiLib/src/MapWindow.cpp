@@ -589,8 +589,22 @@ void MapWindow::createGui()
   restoreWidgetState(m_vSplitter);
   restoreWidgetState(m_infoPanel);
 
+  // Any dock can be dropped on another to tab them. With grouped dragging, a group's
+  // title bar moves the whole group and a single tab is dragged out of its tab bar. Qt
+  // wants the options set before the first dock is added.
+  setDockOptions(
+    QMainWindow::AnimatedDocks | QMainWindow::AllowTabbedDocks
+    | QMainWindow::GroupedDragging);
+
   // the tab bar of a dock tab group sits at its top, as the old inspector's did
   setTabPosition(Qt::AllDockWidgetAreas, QTabWidget::North);
+
+  // the side edges own the corners, so a group at a side spans the window's height as the
+  // inspector did, and a group at the bottom sits under the map views only
+  setCorner(Qt::TopLeftCorner, Qt::LeftDockWidgetArea);
+  setCorner(Qt::BottomLeftCorner, Qt::LeftDockWidgetArea);
+  setCorner(Qt::TopRightCorner, Qt::RightDockWidgetArea);
+  setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
 
   // The docks must exist before createMenus lists them in View > Sidebar and before the
   // window state that places them is restored.

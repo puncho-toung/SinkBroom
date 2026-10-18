@@ -60,9 +60,10 @@ public:
   ~SidebarManager() override;
 
   /**
-   * Wraps the given panel in a dock on the right side of the main window, hidden unless
-   * the panel is shown by default. The dock is named "MapWindow_Sidebar_<panelId>", which
-   * keys its place in the saved window state. The panel's id must not be registered yet.
+   * Wraps the given panel in a dock at the panel's default edge of the main window,
+   * hidden unless the panel is shown by default. The dock may be moved to every edge. It
+   * is named "MapWindow_Sidebar_<panelId>", which keys its place in the saved window
+   * state. The panel's id must not be registered yet.
    */
   QDockWidget* registerPanel(std::unique_ptr<SidebarPanel> panel);
 

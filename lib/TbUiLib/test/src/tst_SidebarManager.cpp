@@ -60,7 +60,8 @@ TEST_CASE("SidebarManager")
     const auto features = QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable
                           | QDockWidget::DockWidgetFloatable;
     CHECK(dock->features() == features);
-    CHECK(dock->allowedAreas() == (Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea));
+    // every edge, as grouped dragging needs
+    CHECK(dock->allowedAreas() == Qt::AllDockWidgetAreas);
     CHECK(!dock->testAttribute(Qt::WA_DeleteOnClose));
     CHECK(dock->isHidden());
 
@@ -94,6 +95,15 @@ TEST_CASE("SidebarManager")
     CHECK(shown.panel->shownCount == 1);
     CHECK(hidden.dock->isHidden());
     CHECK(hidden.panel->shownCount == 0);
+  }
+
+  SECTION("registerPanel adds the dock at the panel's default area")
+  {
+    const auto bottom =
+      registerStubPanel(*manager, "Bottom", {}, false, Qt::BottomDockWidgetArea);
+    CHECK(window.dockWidgetArea(bottom.dock) == Qt::BottomDockWidgetArea);
+    CHECK(bottom.dock->allowedAreas() == Qt::AllDockWidgetAreas);
+    CHECK(window.dockWidgetArea(dock) == Qt::RightDockWidgetArea);
   }
 
   SECTION("panel")

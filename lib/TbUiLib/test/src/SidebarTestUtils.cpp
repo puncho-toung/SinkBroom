@@ -42,10 +42,14 @@ namespace tb::ui
 {
 
 StubPanel::StubPanel(
-  QString panelId, std::filesystem::path iconPath, const bool shownByDefault)
+  QString panelId,
+  std::filesystem::path iconPath,
+  const bool shownByDefault,
+  const Qt::DockWidgetArea defaultArea)
   : m_panelId{std::move(panelId)}
   , m_iconPath{std::move(iconPath)}
   , m_shownByDefault{shownByDefault}
+  , m_defaultArea{defaultArea}
 {
 }
 
@@ -69,6 +73,11 @@ bool StubPanel::shownByDefault() const
   return m_shownByDefault;
 }
 
+Qt::DockWidgetArea StubPanel::defaultArea() const
+{
+  return m_defaultArea;
+}
+
 void StubPanel::panelShown()
 {
   ++shownCount;
@@ -83,9 +92,11 @@ RegisteredStub registerStubPanel(
   SidebarManager& manager,
   const QString& panelId,
   std::filesystem::path iconPath,
-  const bool shownByDefault)
+  const bool shownByDefault,
+  const Qt::DockWidgetArea defaultArea)
 {
-  auto panel = std::make_unique<StubPanel>(panelId, std::move(iconPath), shownByDefault);
+  auto panel = std::make_unique<StubPanel>(
+    panelId, std::move(iconPath), shownByDefault, defaultArea);
   auto* panelPtr = panel.get();
   auto* dock = manager.registerPanel(std::move(panel));
   return {dock, panelPtr};

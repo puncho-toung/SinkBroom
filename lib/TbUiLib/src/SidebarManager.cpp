@@ -57,7 +57,9 @@ QDockWidget* SidebarManager::registerPanel(std::unique_ptr<SidebarPanel> panel)
   dock->setFeatures(
     QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable
     | QDockWidget::DockWidgetFloatable);
-  dock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+  // every panel may go to every edge: grouped dragging moves a whole tab group, which
+  // only works well when the docks in it are allowed in the same areas
+  dock->setAllowedAreas(Qt::AllDockWidgetAreas);
 
   auto* toggleAction = dock->toggleViewAction();
   // the tool sidebar draws the icon; menus never show icons
@@ -84,9 +86,10 @@ QDockWidget* SidebarManager::registerPanel(std::unique_ptr<SidebarPanel> panel)
 
   auto* panelPtr = panel.get();
   const auto shownByDefault = panel->shownByDefault();
+  const auto defaultArea = panel->defaultArea();
   dock->setWidget(panel.release());
 
-  m_mainWindow.addDockWidget(Qt::RightDockWidgetArea, dock);
+  m_mainWindow.addDockWidget(defaultArea, dock);
   if (!shownByDefault)
   {
     dock->hide();

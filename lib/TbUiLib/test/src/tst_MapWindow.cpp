@@ -509,6 +509,41 @@ TEST_CASE("MapWindow")
     CHECK(window.tabPosition(Qt::RightDockWidgetArea) == QTabWidget::North);
   }
 
+  SECTION("every sidebar dock can be tabbed with any other at every edge")
+  {
+    // grouped dragging moves a whole tab group by its title bar and a single dock by its
+    // tab; it wants every dock allowed in the same areas
+    CHECK(window.dockOptions().testFlag(QMainWindow::AnimatedDocks));
+    CHECK(window.dockOptions().testFlag(QMainWindow::AllowTabbedDocks));
+    CHECK(window.dockOptions().testFlag(QMainWindow::GroupedDragging));
+    CHECK(!window.dockOptions().testFlag(QMainWindow::AllowNestedDocks));
+    CHECK(!window.dockOptions().testFlag(QMainWindow::VerticalTabs));
+
+    const auto docks = findSidebarDocks(window);
+    for (auto* dock : {docks.map, docks.entity, docks.face, docks.lightEditor})
+    {
+      CAPTURE(dock->objectName());
+      CHECK(dock->allowedAreas() == Qt::AllDockWidgetAreas);
+    }
+
+    // the tab bar of every group at its top
+    for (const auto area :
+         {Qt::LeftDockWidgetArea,
+          Qt::RightDockWidgetArea,
+          Qt::TopDockWidgetArea,
+          Qt::BottomDockWidgetArea})
+    {
+      CAPTURE(area);
+      CHECK(window.tabPosition(area) == QTabWidget::North);
+    }
+
+    // the side edges own the corners: a group at the bottom sits under the map views
+    CHECK(window.corner(Qt::TopLeftCorner) == Qt::LeftDockWidgetArea);
+    CHECK(window.corner(Qt::BottomLeftCorner) == Qt::LeftDockWidgetArea);
+    CHECK(window.corner(Qt::TopRightCorner) == Qt::RightDockWidgetArea);
+    CHECK(window.corner(Qt::BottomRightCorner) == Qt::RightDockWidgetArea);
+  }
+
   SECTION("Show ... Inspector shows a hidden inspector dock")
   {
     const auto docks = findSidebarDocks(window);

@@ -48,18 +48,23 @@ private:
   QString m_panelId;
   std::filesystem::path m_iconPath;
   bool m_shownByDefault = false;
+  Qt::DockWidgetArea m_defaultArea = Qt::RightDockWidgetArea;
 
 public:
   int shownCount = 0;
   int hiddenCount = 0;
 
   explicit StubPanel(
-    QString panelId, std::filesystem::path iconPath = {}, bool shownByDefault = false);
+    QString panelId,
+    std::filesystem::path iconPath = {},
+    bool shownByDefault = false,
+    Qt::DockWidgetArea defaultArea = Qt::RightDockWidgetArea);
 
   QString panelId() const override;
   QString title() const override;
   std::filesystem::path iconPath() const override;
   bool shownByDefault() const override;
+  Qt::DockWidgetArea defaultArea() const override;
   void panelShown() override;
   void panelHidden() override;
 };
@@ -71,14 +76,15 @@ struct RegisteredStub
 };
 
 /**
- * Registers a stub panel with the given id, icon path and default visibility; its title
- * is the id followed by " title".
+ * Registers a stub panel with the given id, icon path, default visibility and default
+ * area; its title is the id followed by " title".
  */
 RegisteredStub registerStubPanel(
   SidebarManager& manager,
   const QString& panelId,
   std::filesystem::path iconPath = {},
-  bool shownByDefault = false);
+  bool shownByDefault = false,
+  Qt::DockWidgetArea defaultArea = Qt::RightDockWidgetArea);
 
 /**
  * Checks that the given image of the images folder renders as a 24x24 greyscale icon,
