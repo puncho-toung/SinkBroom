@@ -60,6 +60,7 @@
 #include "vm/mat_ext.h"
 #include "vm/vec.h"
 
+#include <algorithm>
 #include <ranges>
 #include <string>
 #include <vector>
@@ -260,10 +261,14 @@ void MaterialBrowserView::doInitLayout(Layout& layout)
   layout.setCellHeight(scaleFactor * 64.0f, scaleFactor * 128.0f);
   if (m_scope == MaterialBrowserScope::Utility)
   {
-    // a card per material, four thumbnails wide so that the description under the name
-    // wraps to a few lines, and a thumbnail high so that a large preview is drawn at the
-    // size it has in a regular browser; the title lines still grow the card
-    layout.setCellWidth(scaleFactor * 256.0f, scaleFactor * 256.0f);
+    // a card per material, as wide as four thumbnails at 100 % so that the description
+    // under the name wraps to a few lines; the browser font, and so the wrapped text,
+    // does not scale with the icon size, so neither does the card, which grows only when
+    // the thumbnail itself is wider: a scaled card would be cut off by a narrow dock or
+    // break the text into many short lines. A thumbnail high, so that a large preview is
+    // drawn at the size it has in a regular browser; the title lines still grow the card
+    const auto cardWidth = std::max(256.0f, scaleFactor * 64.0f);
+    layout.setCellWidth(cardWidth, cardWidth);
     layout.setCellHeight(scaleFactor * 64.0f, scaleFactor * 64.0f);
   }
 }
@@ -280,8 +285,15 @@ void MaterialBrowserView::doReloadLayout(Layout& layout)
   {
     for (const auto* collection : getCollections())
     {
+      auto materials = getMaterials(*collection);
+      if (m_scope != MaterialBrowserScope::All && materials.empty())
+      {
+        // a scoped browser leaves out the collections that hold none of its materials,
+        // or the other tab's folders would show here as empty headings
+        continue;
+      }
       layout.addGroup(collection->path().string(), float(fontSize) + 2.0f);
-      addMaterialsToLayout(layout, getMaterials(*collection), font);
+      addMaterialsToLayout(layout, materials, font);
     }
   }
   else

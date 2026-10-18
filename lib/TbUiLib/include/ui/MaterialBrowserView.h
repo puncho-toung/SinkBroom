@@ -70,7 +70,9 @@ std::vector<const gl::Material*> filterMaterials(
 
 /**
  * Breaks text between words so that no line measures wider than maxWidth; a single word
- * wider than maxWidth stands on its own line. Lines are joined with '\n'.
+ * wider than maxWidth stands on its own line. Lines are joined with '\n'. The words are
+ * split with kdl::str_split, so repeated spaces are dropped and a backslash before a
+ * space keeps the two words around it together.
  */
 std::string wrapWords(
   const std::string& text,

@@ -72,6 +72,11 @@ const std::vector<mdl::UtilityMaterialConfig>& utilityMaterials(const mdl::Map& 
   return map.gameInfo().gameConfig.materialConfig.utilityMaterials;
 }
 
+/**
+ * The object names of the pages, the stacked widget, its label and the two browsers only
+ * let the tests find these parts; unlike the tab book's and the splitter's, they are not
+ * settings keys.
+ */
 TabBookPage* createTabPage(const QString& name, QWidget* content)
 {
   auto* layout = new QVBoxLayout{};
@@ -133,13 +138,12 @@ void FaceInspector::revealMaterial(const gl::Material* material)
 {
   // a null material, which the map view passes for a face whose material is missing,
   // goes to the Materials tab, whose browser finds nothing to reveal
-  const auto isUtilityMaterial =
+  const auto listedAsUtility =
     material
     && mdl::isUtilityMaterial(utilityMaterials(m_document.map()), material->name());
-  m_tabBook->switchToPage(isUtilityMaterial ? UtilityPage : MaterialsPage);
+  m_tabBook->switchToPage(listedAsUtility ? UtilityPage : MaterialsPage);
 
-  auto* materialBrowser =
-    isUtilityMaterial ? m_utilityMaterialBrowser : m_materialBrowser;
+  auto* materialBrowser = listedAsUtility ? m_utilityMaterialBrowser : m_materialBrowser;
   materialBrowser->revealMaterial(material);
   materialBrowser->setSelectedMaterial(material);
 }
