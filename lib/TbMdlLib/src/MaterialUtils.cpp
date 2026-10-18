@@ -109,8 +109,9 @@ bool isMaskedTextureName(std::string_view name)
 
 gl::Texture loadDefaultTexture(const fs::FileSystem& fs, Logger& logger)
 {
-  // recursion guard
-  static auto executing = false;
+  // recursion guard; per thread, because the model loaders call this on several threads
+  // at once and a shared guard would make one load fail while another one runs
+  thread_local auto executing = false;
   if (!executing)
   {
     const auto set_executing = kdl::set_temp{executing};

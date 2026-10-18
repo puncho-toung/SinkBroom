@@ -383,7 +383,7 @@ public:
    * Sets the handle or surface under the mouse and refreshes the views if it changed. The
    * clicked surface stays clicked (D68).
    */
-  void setHighlightedHit(const mdl::Hit& hit);
+  void setHighlightedHit(mdl::Hit hit);
 
   /**
    * Marks the given surface hit as clicked, in place of the one clicked before: its

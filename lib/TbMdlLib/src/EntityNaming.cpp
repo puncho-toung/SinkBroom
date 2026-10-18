@@ -92,16 +92,10 @@ std::unordered_map<const Node*, size_t> getTreePositions(const Map& map)
 }
 
 template <typename N>
-std::vector<N*> sortByTreePosition(const Map& map, std::vector<N*> nodes)
+std::vector<N*> sortByTreePosition(const TreeOrder& treeOrder, std::vector<N*> nodes)
 {
-  const auto treePositions = getTreePositions(map);
-  const auto treePosition = [&](const Node* node) {
-    const auto it = treePositions.find(node);
-    return it != treePositions.end() ? it->second : treePositions.size();
-  };
-
   std::ranges::stable_sort(nodes, [&](const auto* lhs, const auto* rhs) {
-    return treePosition(lhs) < treePosition(rhs);
+    return treeOrder.position(*lhs) < treeOrder.position(*rhs);
   });
   return nodes;
 }
@@ -148,7 +142,7 @@ EntityNameAllocator::EntityNameAllocator(
   const Map& map, std::vector<const Node*> excluded)
   : m_map{map}
   , m_config{*map.worldNode().entityPropertyConfig().naming}
-  , m_excluded{std::move(excluded)}
+  , m_excluded{excluded.begin(), excluded.end()}
 {
   contract_pre(map.entityNameIndex() != nullptr);
 }
@@ -195,9 +189,19 @@ void EntityNameAllocator::reserve(const std::string_view name)
 
 bool EntityNameAllocator::isExcluded(const Node& node) const
 {
-  return std::ranges::any_of(m_excluded, [&](const auto* excludedNode) {
-    return &node == excludedNode || node.isDescendantOf(*excludedNode);
-  });
+  if (m_excluded.empty())
+  {
+    return false;
+  }
+
+  for (const auto* ancestor = &node; ancestor; ancestor = ancestor->parent())
+  {
+    if (m_excluded.contains(ancestor))
+    {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool isReservedEntityName(const std::string_view name)
@@ -211,11 +215,38 @@ bool isBrushEntityModelClass(const std::string_view classname)
   return !isWorldspawn(std::string{classname}) && classname != FuncGroupClassname;
 }
 
-bool allocateEntityName(
+namespace
+{
+
+/**
+ * Reserves the name of the given entity if it has one that is not taken, and returns
+ * whether it did. The worldspawn entity never keeps a name.
+ */
+bool reserveNameIfFree(const Entity& entity, EntityNameAllocator& allocator)
+{
+  if (isWorldspawn(entity.classname()))
+  {
+    return false;
+  }
+
+  const auto* name = entity.property(allocator.config().nameKey);
+  if (name && !name->empty() && !allocator.isTaken(*name))
+  {
+    allocator.reserve(*name);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Like allocateEntityName, but the entity keeps its name if keepName is true, in which
+ * case the name must be reserved already.
+ */
+bool assignEntityName(
   Entity& entity,
   const bool hasBrushesOrPatches,
   EntityNameAllocator& allocator,
-  const EntityNamingMode mode,
+  const bool keepName,
   EntityNamingResult& result)
 {
   // copied, because changing a property clears the entity's cached classname
@@ -231,11 +262,8 @@ bool allocateEntityName(
 
   auto changed = false;
   auto name = oldName;
-  if (
-    mode == EntityNamingMode::KeepIfFree && !oldName.empty()
-    && !allocator.isTaken(oldName))
+  if (keepName)
   {
-    allocator.reserve(oldName);
     result.kept.push_back(oldName);
   }
   else
@@ -261,13 +289,28 @@ bool allocateEntityName(
   return changed;
 }
 
+} // namespace
+
+bool allocateEntityName(
+  Entity& entity,
+  const bool hasBrushesOrPatches,
+  EntityNameAllocator& allocator,
+  const EntityNamingMode mode,
+  EntityNamingResult& result)
+{
+  const auto keepName =
+    mode == EntityNamingMode::KeepIfFree && reserveNameIfFree(entity, allocator);
+  return assignEntityName(entity, hasBrushesOrPatches, allocator, keepName, result);
+}
+
 EntityNamingResult assignUniqueEntityNames(
   const std::vector<Node*>& rootsInSourceOrder,
   EntityNameAllocator& allocator,
   const EntityNamingMode mode)
 {
-  auto result = EntityNamingResult{};
-
+  // the kept names are reserved before any new name is handed out, so that no entity
+  // gets the name that an entity further on keeps
+  auto entityNodes = std::vector<std::pair<EntityNode*, bool>>{};
   Node::visitAll(
     rootsInSourceOrder,
     kdl::overload(
@@ -278,14 +321,22 @@ EntityNamingResult assignUniqueEntityNames(
       [](
         auto&& thisLambda, GroupNode& groupNode) { groupNode.visitChildren(thisLambda); },
       [&](EntityNode& entityNode) {
-        auto entity = entityNode.entity();
-        if (allocateEntityName(entity, entityNode.hasChildren(), allocator, mode, result))
-        {
-          entityNode.setEntity(std::move(entity));
-        }
+        const auto keepName = mode == EntityNamingMode::KeepIfFree
+                              && reserveNameIfFree(entityNode.entity(), allocator);
+        entityNodes.emplace_back(&entityNode, keepName);
       },
       [](BrushNode&) {},
       [](PatchNode&) {}));
+
+  auto result = EntityNamingResult{};
+  for (const auto& [entityNode, keepName] : entityNodes)
+  {
+    auto entity = entityNode->entity();
+    if (assignEntityName(entity, entityNode->hasChildren(), allocator, keepName, result))
+    {
+      entityNode->setEntity(std::move(entity));
+    }
+  }
 
   return result;
 }
@@ -398,15 +449,37 @@ void assignUniqueEntityNamesBeforeAdding(
   }
 }
 
+TreeOrder::TreeOrder(const Map& map)
+  : m_positions{getTreePositions(map)}
+{
+}
+
+size_t TreeOrder::position(const Node& node) const
+{
+  const auto it = m_positions.find(&node);
+  return it != m_positions.end() ? it->second : m_positions.size();
+}
+
+std::vector<EntityNodeBase*> TreeOrder::sort(
+  std::vector<EntityNodeBase*> entityNodes) const
+{
+  return sortByTreePosition(*this, std::move(entityNodes));
+}
+
+std::vector<Node*> TreeOrder::sort(std::vector<Node*> nodes) const
+{
+  return sortByTreePosition(*this, std::move(nodes));
+}
+
 std::vector<EntityNodeBase*> sortInTreeOrder(
   const Map& map, std::vector<EntityNodeBase*> entityNodes)
 {
-  return sortByTreePosition(map, std::move(entityNodes));
+  return TreeOrder{map}.sort(std::move(entityNodes));
 }
 
 std::vector<Node*> sortInTreeOrder(const Map& map, std::vector<Node*> nodes)
 {
-  return sortByTreePosition(map, std::move(nodes));
+  return TreeOrder{map}.sort(std::move(nodes));
 }
 
 std::vector<EntityNodeBase*> collectEntityNodes(

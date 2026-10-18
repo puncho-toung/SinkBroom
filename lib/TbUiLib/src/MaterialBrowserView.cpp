@@ -83,11 +83,11 @@ std::vector<const gl::Material*> filterMaterials(
   }
   if (!filterText.empty())
   {
+    const auto patterns = kdl::str_split(filterText, " ");
     std::erase_if(materials, [&](const auto* material) {
-      return std::ranges::none_of(
-        kdl::str_split(filterText, " "), [&](const auto& pattern) {
-          return kdl::ci::str_contains(material->name(), pattern);
-        });
+      return std::ranges::none_of(patterns, [&](const auto& pattern) {
+        return kdl::ci::str_contains(material->name(), pattern);
+      });
     });
   }
   return materials;
@@ -100,9 +100,11 @@ MaterialBorder materialBorder(const gl::Material& material, const bool selected)
     return MaterialBorder::Selected;
   }
   // the coverage that the material script implies, not the preview's alpha or blending
+  static const auto translucent = std::string{"coverage_translucent"};
+  static const auto perforated = std::string{"coverage_perforated"};
   if (
-    material.surfaceParms().contains("coverage_translucent")
-    || material.surfaceParms().contains("coverage_perforated"))
+    material.surfaceParms().contains(translucent)
+    || material.surfaceParms().contains(perforated))
   {
     return MaterialBorder::NonSealing;
   }

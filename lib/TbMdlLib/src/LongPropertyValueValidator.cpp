@@ -39,21 +39,23 @@ const auto Type = freeIssueType();
 
 IssueQuickFix makeTruncatePropertyValueQuickFix(const size_t maxLength)
 {
-  return {Type, "Truncate Property Values", [=](Map& map, const Issue& issue) {
-            const auto pushSelection = PushSelection{map};
+  return {
+    Type,
+    "Truncate Property Values",
+    [=](Map& map, const EntityPropertyIssueSnapshot& issue) {
+      const auto pushSelection = PushSelection{map};
 
-            const auto& propIssue = static_cast<const EntityPropertyIssue&>(issue);
-            const auto& propertyName = propIssue.propertyKey();
-            const auto& propertyValue = propIssue.propertyValue();
+      const auto& propertyName = issue.propertyKey;
+      const auto& propertyValue = issue.propertyValue;
 
-            // If world node is affected, the selection will fail, but if nothing is
-            // selected, the removeProperty call will correctly affect worldspawn either
-            // way.
+      // If world node is affected, the selection will fail, but if nothing is
+      // selected, the removeProperty call will correctly affect worldspawn either
+      // way.
 
-            deselectAll(map);
-            selectNodes(map, {&issue.node()});
-            setEntityProperty(map, propertyName, propertyValue.substr(0, maxLength));
-          }};
+      deselectAll(map);
+      selectNodes(map, {issue.node});
+      setEntityProperty(map, propertyName, propertyValue.substr(0, maxLength));
+    }};
 }
 } // namespace
 

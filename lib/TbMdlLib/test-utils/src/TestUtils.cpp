@@ -19,6 +19,7 @@
 
 #include "mdl/TestUtils.h"
 
+#include "base/Logger.h"
 #include "gl/Material.h"
 #include "gl/Texture.h"
 #include "mdl/BezierPatch.h"
@@ -29,6 +30,8 @@
 #include "mdl/GroupNode.h"
 #include "mdl/Issue.h"
 #include "mdl/LayerNode.h"
+#include "mdl/LoadMaterialCollections.h"
+#include "mdl/LoadShaders.h"
 #include "mdl/Map.h"
 #include "mdl/ParallelUvCoordSystem.h"
 #include "mdl/ParaxialUvCoordSystem.h"
@@ -444,6 +447,15 @@ Selection makeSelection(Map& map, const std::vector<BrushFaceHandle>& brushFaces
   auto selection = Selection{map};
   selection.brushFaces = brushFaces;
   return selection;
+}
+
+std::shared_ptr<const IndexedShaders> loadIndexedShaders(
+  const fs::FileSystem& fs, const MaterialConfig& materialConfig)
+{
+  auto taskManager = kdl::task_manager{};
+  auto logger = NullLogger{};
+  return std::make_shared<const IndexedShaders>(
+    loadShaderFiles(fs, materialConfig, taskManager, logger) | kdl::value());
 }
 
 } // namespace mdl

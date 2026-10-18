@@ -40,6 +40,11 @@ bool uvListsEqual(
 
 std::unique_ptr<kdl::task_manager> createTestTaskManager();
 
+namespace fs
+{
+class FileSystem;
+} // namespace fs
+
 namespace gl
 {
 class Material;
@@ -53,7 +58,9 @@ class BrushFace;
 class BrushNode;
 struct GameConfig;
 class GroupNode;
+class IndexedShaders;
 class Issue;
+struct MaterialConfig;
 class Node;
 class Validator;
 class WorldNode;
@@ -181,6 +188,13 @@ std::vector<const Issue*> collectIssues(
  * world node report for its nodes.
  */
 std::vector<const Issue*> collectIssues(WorldNode& worldNode, IssueType type);
+
+/**
+ * Parses the material scripts in the given file system as the map does, for
+ * EntityModelManager::setShaders.
+ */
+std::shared_ptr<const IndexedShaders> loadIndexedShaders(
+  const fs::FileSystem& fs, const MaterialConfig& materialConfig);
 
 } // namespace mdl
 

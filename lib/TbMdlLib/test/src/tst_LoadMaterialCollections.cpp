@@ -21,6 +21,7 @@
 #include "TestParserStatus.h"
 #include "base/Logger.h"
 #include "fs/DiskFileSystem.h"
+#include "fs/TestEnvironment.h"
 #include "fs/TestUtils.h"
 #include "fs/VirtualFileSystem.h"
 #include "fs/WadFileSystem.h"
@@ -43,6 +44,8 @@
 #include "kd/task_manager.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -50,6 +53,8 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -218,13 +223,23 @@ TEST_CASE("LoadMaterialCollections")
       .excludes = {},
     };
 
-    CHECK(
-      loadMaterial(fs, materialConfig, "material.jpg", createResource, {}, std::nullopt));
+    CHECK(loadMaterial(
+      fs,
+      materialConfig,
+      "material.jpg",
+      createResource,
+      std::vector<Quake3Shader>{},
+      std::nullopt));
 
     SECTION("find alternative file extensions")
     {
       CHECK(loadMaterial(
-        fs, materialConfig, "material.png", createResource, {}, std::nullopt));
+        fs,
+        materialConfig,
+        "material.png",
+        createResource,
+        std::vector<Quake3Shader>{},
+        std::nullopt));
     }
 
     SECTION(
@@ -249,7 +264,7 @@ TEST_CASE("LoadMaterialCollections")
                               mipMaterialConfig,
                               "textures/{fence.D",
                               lazyCreateResource,
-                              {},
+                              std::vector<Quake3Shader>{},
                               std::nullopt)
                             | kdl::value();
 
@@ -272,7 +287,7 @@ TEST_CASE("LoadMaterialCollections")
                               materialConfig,
                               "textures/{material.jpg",
                               lazyCreateResource,
-                              {},
+                              std::vector<Quake3Shader>{},
                               std::nullopt)
                             | kdl::value();
 
@@ -335,6 +350,59 @@ TEST_CASE("LoadMaterialCollections")
         CHECK(material.texture()->width() == 8);
         CHECK(material.texture()->height() == 24);
         CHECK_FALSE(material.previewImageMissing());
+      }
+    }
+
+    SECTION("the shaders indexed make the same material as the shaders scanned")
+    {
+      const auto doom3Dir = fixtureRoot / "test/mdl/LoadMaterialCollections/doom3";
+      fs.mount("", std::make_unique<fs::DiskFileSystem>(doom3Dir / "fallback"));
+      fs.mount("", std::make_unique<fs::DiskFileSystem>(doom3Dir));
+
+      const auto shaders =
+        loadShaders(fs, Doom3FixtureMaterialConfig, taskManager, logger) | kdl::value();
+      const auto indexedShaders = IndexedShaders{shaders};
+
+      for (const auto* name : {
+             "models/test/crate",
+             // a decl in another case
+             "Models/Test/Crate",
+             // editor images under _tb/ that count only if some material uses them in a
+             // diffuse stage
+             "textures/test/tb_editor",
+             "textures/test/tb_editor_shared",
+             // no decl of that name
+             "models/test/nothing",
+           })
+      {
+        CAPTURE(name);
+
+        const auto scanned =
+          loadMaterial(
+            fs, Doom3FixtureMaterialConfig, name, createResource, shaders, std::nullopt)
+          | kdl::value();
+        const auto indexed = loadMaterial(
+                               fs,
+                               Doom3FixtureMaterialConfig,
+                               name,
+                               createResource,
+                               indexedShaders,
+                               std::nullopt)
+                             | kdl::value();
+
+        CHECK(indexed.name() == scanned.name());
+        CHECK(indexed.relativePath() == scanned.relativePath());
+        CHECK(indexed.previewImageMissing() == scanned.previewImageMissing());
+        CHECK(indexed.surfaceParms() == scanned.surfaceParms());
+        CHECK(indexed.culling() == scanned.culling());
+        CHECK(indexed.effectiveBlendFunc() == scanned.effectiveBlendFunc());
+        CHECK(indexed.effectiveAlphaFunc() == scanned.effectiveAlphaFunc());
+        REQUIRE((indexed.texture() != nullptr) == (scanned.texture() != nullptr));
+        if (indexed.texture())
+        {
+          CHECK(indexed.texture()->width() == scanned.texture()->width());
+          CHECK(indexed.texture()->height() == scanned.texture()->height());
+        }
       }
     }
 
@@ -450,6 +518,28 @@ TEST_CASE("LoadMaterialCollections")
       auto source = IndexedShaders{{makeShader("models/test/a", "models/test/a_d")}};
       const auto moved = std::move(source);
       CHECK(moved.findShader("models/test/a") == &moved.shaders()[0]);
+    }
+
+    SECTION("fileCount and unterminatedCount")
+    {
+      // what loadShaderFiles counted is kept for the summary of a load
+      const auto loaded = IndexedShaders{LoadedShaders{
+        .shaders = {makeShader("models/test/a", "models/test/a_d")},
+        .fileCount = 3,
+        .unterminatedCount = 1,
+      }};
+      CHECK(loaded.fileCount() == 3);
+      CHECK(loaded.unterminatedCount() == 1);
+      CHECK(loaded.findShader("models/test/a") == &loaded.shaders()[0]);
+      CHECK(
+        loaded.diffuseImages()
+        == std::unordered_set<std::filesystem::path, kdl::path_hash>{"models/test/a_d"});
+
+      // the other constructors count no files
+      CHECK(shaders.fileCount() == 0);
+      CHECK(shaders.unterminatedCount() == 0);
+      CHECK(IndexedShaders{}.fileCount() == 0);
+      CHECK(IndexedShaders{}.unterminatedCount() == 0);
     }
   }
 
@@ -600,6 +690,38 @@ TEST_CASE("LoadMaterialCollections")
           gl::MaterialBlendFunc::Enable::UseFactors,
           GL_SRC_ALPHA,
           GL_ONE_MINUS_SRC_ALPHA});
+    }
+
+    SECTION("neither the case of a configured extension nor that of a file matters")
+    {
+      auto env = fs::TestEnvironment{};
+      env.createDirectory("models/mapobjects/test");
+      std::filesystem::copy_file(
+        getFixtureRoot()
+          / "test/mdl/LoadIdTech4ObjModel/models/mapobjects/test/wedge_ed.tga",
+        env.dir() / "models/mapobjects/test/wedge_ed.TGA");
+
+      auto upperCaseFs = fs::DiskFileSystem{env.dir()};
+      auto upperCaseConfig = materialConfig;
+      upperCaseConfig.extensions = {".PNG", ".TGA"};
+
+      const auto checkWedgeImage =
+        [&](const std::filesystem::path& materialName, const IndexedShaders& shaders) {
+          const auto material =
+            findIdTech4Material(
+              upperCaseFs, upperCaseConfig, materialName, createResource, shaders)
+            | kdl::value();
+          REQUIRE(material);
+          CHECK_FALSE(material->previewImageMissing());
+          REQUIRE(material->texture());
+          CHECK(material->texture()->width() == 4u);
+          CHECK(material->texture()->height() == 2u);
+        };
+
+      // the editor image as the decl names it, and the image of an implicit material,
+      // which the configured extensions complete
+      checkWedgeImage("models/mapobjects/test/wedge", IndexedShaders{{wedgeShader}});
+      checkWedgeImage("models/mapobjects/test/wedge_ed", {});
     }
 
     SECTION("nothing of that name")
@@ -1343,6 +1465,50 @@ TEST_CASE("LoadMaterialCollections")
         == 1);
     }
 
+    SECTION("from shaders parsed beforehand")
+    {
+      // the overload that the map calls with the shaders that it shares with the entity
+      // models makes the same collections and logs the same summary
+      auto indexedLogger = CollectingLogger{};
+      const auto shaders = IndexedShaders{
+        loadShaderFiles(fs, Doom3FixtureMaterialConfig, taskManager, indexedLogger)
+        | kdl::value()};
+      const auto indexedResult = loadMaterialCollections(
+        fs, Doom3FixtureMaterialConfig, shaders, createResource, indexedLogger);
+
+      CHECK_THAT(
+        indexedResult,
+        MatchesMaterialCollections(
+          materialCollections | std::views::transform(makeMaterialCollectionInfo)
+          | kdl::ranges::to<std::vector>()));
+
+      const auto pathsAndPreviewFlags =
+        [](const std::vector<gl::MaterialCollection>& collections) {
+          auto result = std::vector<std::tuple<std::string, std::string, bool>>{};
+          for (const auto& collection : collections)
+          {
+            for (const auto& material : collection.materials())
+            {
+              result.emplace_back(
+                material.name(),
+                material.relativePath().generic_string(),
+                material.previewImageMissing());
+            }
+          }
+          return result;
+        };
+      REQUIRE(indexedResult.is_success());
+      CHECK(
+        pathsAndPreviewFlags(indexedResult.value())
+        == pathsAndPreviewFlags(materialCollections));
+
+      CHECK(
+        indexedLogger.countMessagesContaining(
+          "Loaded 30 materials from 3 files (2 defaulted, 1 unterminated); 28 under "
+          "textures/, 5 without a preview image")
+        == 1);
+    }
+
     SECTION("without implicit materials from images")
     {
       // without the patterns, the loose component images are listed
@@ -1391,6 +1557,272 @@ TEST_CASE("LoadMaterialCollections")
           "Loaded 30 materials from 3 files (2 defaulted, 1 unterminated); 28 under "
           "textures/, 5 without a preview image")
         == 1);
+    }
+  }
+}
+
+TEST_CASE("ModelMaterialCache")
+{
+  // the fixture of the findIdTech4Material section above
+  auto fs = fs::DiskFileSystem{getFixtureRoot() / "test/mdl/LoadIdTech4ObjModel"};
+  const auto& materialConfig = Doom3BFGGameInfo.gameConfig.materialConfig;
+
+  // two decls outside of the material root that show the same editor image, 4x2
+  const auto wedgeShader = Quake3Shader{
+    .shaderPath = "models/mapobjects/test/wedge",
+    .editorImage = "models/mapobjects/test/wedge_ed.tga",
+    .format = Quake3Shader::Format::Doom3,
+    .previewImages = {"models/mapobjects/test/wedge_ed.tga"},
+  };
+  auto otherWedgeShader = wedgeShader;
+  otherWedgeShader.shaderPath = "models/mapobjects/test/other_wedge";
+  const auto shaders = std::make_shared<const IndexedShaders>(
+    std::vector<Quake3Shader>{wedgeShader, otherWedgeShader});
+
+  auto cache = ModelMaterialCache{fs, materialConfig, shaders, createResource};
+
+  const auto find = [&](const std::filesystem::path& materialName) {
+    return cache.findIdTech4Material(materialName) | kdl::value();
+  };
+  const auto load = [&](const std::filesystem::path& materialPath) {
+    return cache.loadMaterial(materialPath) | kdl::value();
+  };
+
+  const auto checkSameMaterial = [](const gl::Material& lhs, const gl::Material& rhs) {
+    CHECK(lhs.name() == rhs.name());
+    CHECK(lhs.relativePath() == rhs.relativePath());
+    CHECK(lhs.culling() == rhs.culling());
+    CHECK(lhs.previewImageMissing() == rhs.previewImageMissing());
+    CHECK(lhs.surfaceParms() == rhs.surfaceParms());
+    CHECK(lhs.effectiveBlendFunc() == rhs.effectiveBlendFunc());
+    CHECK(lhs.effectiveAlphaFunc() == rhs.effectiveAlphaFunc());
+    REQUIRE(lhs.texture() != nullptr);
+    REQUIRE(rhs.texture() != nullptr);
+    CHECK(lhs.texture()->width() == rhs.texture()->width());
+    CHECK(lhs.texture()->height() == rhs.texture()->height());
+  };
+
+  SECTION("findIdTech4Material")
+  {
+    SECTION("finds what the free function finds")
+    {
+      for (const auto* name : {
+             "models/mapobjects/test/wedge",
+             "Models/MapObjects/Test/Wedge",
+             // implicit materials, of a loose image and of one under _tb/
+             "textures/base_wall/lfwall27d",
+             "models/mapobjects/test/bulb",
+           })
+      {
+        CAPTURE(name);
+
+        const auto cached = find(name);
+        const auto expected =
+          findIdTech4Material(fs, materialConfig, name, createResource, *shaders)
+          | kdl::value();
+        REQUIRE(cached);
+        REQUIRE(expected);
+        checkSameMaterial(*cached, *expected);
+      }
+
+      CHECK(
+        (findIdTech4Material(
+           fs, materialConfig, "models/mapobjects/test/nothing", createResource, *shaders)
+         | kdl::value())
+        == std::nullopt);
+    }
+
+    SECTION("a decl found twice shares one texture")
+    {
+      const auto first = find("models/mapobjects/test/wedge");
+      const auto second = find("models/mapobjects/test/wedge");
+      REQUIRE(first);
+      REQUIRE(second);
+      CHECK(&first->textureResource() == &second->textureResource());
+      CHECK(cache.textureResourceCount() == 1u);
+    }
+
+    SECTION("decls that show the same image share its texture")
+    {
+      const auto wedge = find("models/mapobjects/test/wedge");
+      const auto otherWedge = find("models/mapobjects/test/other_wedge");
+      REQUIRE(wedge);
+      REQUIRE(otherWedge);
+      CHECK(otherWedge->relativePath() == "models/mapobjects/test/other_wedge");
+      CHECK(&otherWedge->textureResource() == &wedge->textureResource());
+      CHECK(cache.textureResourceCount() == 1u);
+    }
+
+    SECTION("a decl named in another case shares the texture of its canonical name")
+    {
+      const auto wedge = find("models/mapobjects/test/wedge");
+      const auto mixedCase = find("Models/MapObjects/Test/Wedge");
+      REQUIRE(wedge);
+      REQUIRE(mixedCase);
+      CHECK(mixedCase->relativePath() == "Models/MapObjects/Test/Wedge");
+      CHECK(&mixedCase->textureResource() == &wedge->textureResource());
+      CHECK(cache.textureResourceCount() == 1u);
+    }
+
+    SECTION("an implicit material found twice shares one texture")
+    {
+      const auto first = find("textures/base_wall/lfwall27d");
+      const auto second = find("textures/base_wall/lfwall27d");
+      REQUIRE(first);
+      REQUIRE(second);
+      CHECK(&first->textureResource() == &second->textureResource());
+      CHECK(cache.textureResourceCount() == 1u);
+    }
+
+    SECTION("a name that resolves to nothing is nothing every time")
+    {
+      CHECK(find("models/mapobjects/test/nothing") == std::nullopt);
+      CHECK(find("models/mapobjects/test/nothing") == std::nullopt);
+      CHECK(cache.textureResourceCount() == 0u);
+    }
+  }
+
+  SECTION("loadMaterial")
+  {
+    SECTION("loads what the free function loads")
+    {
+      for (const auto* path : {
+             "models/mapobjects/test/wedge",
+             // a decl, found without the extension
+             "models/mapobjects/test/wedge.tga",
+             // no decl: the image file at that path
+             "textures/base_wall/lfwall27d.tga",
+           })
+      {
+        CAPTURE(path);
+
+        const auto cached = load(path);
+        const auto expected =
+          loadMaterial(fs, materialConfig, path, createResource, *shaders, std::nullopt)
+          | kdl::value();
+        checkSameMaterial(cached, expected);
+      }
+    }
+
+    SECTION("a path loaded twice shares one texture")
+    {
+      for (const auto* path : {
+             "models/mapobjects/test/wedge.tga",
+             "textures/base_wall/lfwall27d.tga",
+           })
+      {
+        CAPTURE(path);
+
+        const auto first = load(path);
+        const auto second = load(path);
+        CHECK(&first.textureResource() == &second.textureResource());
+      }
+      CHECK(cache.textureResourceCount() == 2u);
+    }
+
+    SECTION("a decl shares its texture with the decl that findIdTech4Material finds")
+    {
+      const auto loaded = load("models/mapobjects/test/wedge.tga");
+      const auto found = find("models/mapobjects/test/wedge");
+      REQUIRE(found);
+      CHECK(&loaded.textureResource() == &found->textureResource());
+      CHECK(cache.textureResourceCount() == 1u);
+    }
+  }
+
+  SECTION("defaultMaterial")
+  {
+    auto logger = CollectingLogger{};
+
+    const auto first = cache.defaultMaterial("first", logger);
+    const auto second = cache.defaultMaterial("second", logger);
+    CHECK(first.name() == "first");
+    CHECK(second.name() == "second");
+    CHECK(&first.textureResource() == &second.textureResource());
+
+    // textures/__TB_empty.png, decoded
+    REQUIRE(first.texture() != nullptr);
+    CHECK(first.texture()->width() == 32u);
+    CHECK(first.texture()->buffersIfLoaded().size() == 1u);
+    CHECK(logger.countMessagesContaining("Could not load default texture") == 0u);
+    CHECK(cache.textureResourceCount() == 1u);
+  }
+
+  SECTION("several threads at once")
+  {
+    // counts the resources it makes, and takes its time, so that the threads that want
+    // the same image come while it is being made
+    auto madeCount = std::atomic<size_t>{0};
+    const auto slowCreateResource = [&](gl::ResourceLoader<gl::Texture> resourceLoader) {
+      ++madeCount;
+      std::this_thread::sleep_for(std::chrono::milliseconds{10});
+      return createResource(std::move(resourceLoader));
+    };
+    auto threadedCache =
+      ModelMaterialCache{fs, materialConfig, shaders, slowCreateResource};
+
+    const auto names = std::vector<std::filesystem::path>{
+      "models/mapobjects/test/wedge",
+      "models/mapobjects/test/other_wedge",
+      "Models/MapObjects/Test/Wedge",
+      "textures/base_wall/lfwall27d",
+      "models/mapobjects/test/bulb",
+      "models/mapobjects/test/nothing",
+    };
+
+    constexpr auto threadCount = size_t(8);
+
+    // per thread, the texture resource of each name, or none
+    auto resources = std::vector<std::vector<const gl::TextureResource*>>(
+      threadCount, std::vector<const gl::TextureResource*>(names.size(), nullptr));
+    auto waitingCount = std::atomic<size_t>{0};
+
+    auto threads = std::vector<std::thread>{};
+    for (size_t i = 0; i < threadCount; ++i)
+    {
+      threads.emplace_back([&, i]() {
+        // start together, and each with another name
+        ++waitingCount;
+        while (waitingCount < threadCount)
+        {
+          std::this_thread::yield();
+        }
+
+        for (size_t j = 0; j < names.size(); ++j)
+        {
+          const auto n = (i + j) % names.size();
+          if (
+            const auto material =
+              threadedCache.findIdTech4Material(names[n]) | kdl::value())
+          {
+            // the cache keeps the resource alive
+            resources[i][n] = &material->textureResource();
+          }
+        }
+      });
+    }
+    for (auto& thread : threads)
+    {
+      thread.join();
+    }
+
+    // wedge_ed.tga, lfwall27d.tga and bulb.tga
+    CHECK(madeCount == 3u);
+    CHECK(threadedCache.textureResourceCount() == 3u);
+
+    const auto& expected = resources.front();
+    CHECK(expected[0] != nullptr);
+    CHECK(expected[1] == expected[0]);
+    CHECK(expected[2] == expected[0]);
+    CHECK(expected[3] != nullptr);
+    CHECK(expected[3] != expected[0]);
+    CHECK(expected[4] != nullptr);
+    CHECK(expected[4] != expected[0]);
+    CHECK(expected[4] != expected[3]);
+    CHECK(expected[5] == nullptr);
+    for (const auto& threadResources : resources)
+    {
+      CHECK(threadResources == expected);
     }
   }
 }
