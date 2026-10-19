@@ -45,6 +45,22 @@ TEST_CASE("ContentHash")
     CHECK(hash.size() == 16);
     CHECK(hash.find_first_not_of("0123456789abcdef") == std::string::npos);
   }
+
+  SECTION("fnv1a64HexNormalizedLineEndings")
+  {
+    // the same text with CRLF and with LF line endings hashes equal
+    const auto lf = std::string{"{\n\"classname\" \"light\"\n}\n"};
+    const auto crlf = std::string{"{\r\n\"classname\" \"light\"\r\n}\r\n"};
+    CHECK(fnv1a64HexNormalizedLineEndings(crlf) == fnv1a64HexNormalizedLineEndings(lf));
+    CHECK(fnv1a64HexNormalizedLineEndings(lf) == fnv1a64Hex(lf));
+    CHECK(fnv1a64HexNormalizedLineEndings(crlf) != fnv1a64Hex(crlf));
+
+    // a lone CR, also at the end, is kept
+    CHECK(fnv1a64HexNormalizedLineEndings("a\rb") == fnv1a64Hex("a\rb"));
+    CHECK(fnv1a64HexNormalizedLineEndings("a\r") == fnv1a64Hex("a\r"));
+    CHECK(fnv1a64HexNormalizedLineEndings("a\r\r\n") == fnv1a64Hex("a\r\n"));
+    CHECK(fnv1a64HexNormalizedLineEndings("") == fnv1a64Hex(""));
+  }
 }
 
 } // namespace tb::mdl

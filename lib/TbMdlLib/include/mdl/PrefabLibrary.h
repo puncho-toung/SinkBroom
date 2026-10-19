@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "base/Color.h"
 #include "base/Notifier.h"
 #include "base/NotifierConnection.h"
 #include "mdl/PrefabFile.h"
@@ -61,6 +62,15 @@ struct PrefabBodyPreview
   vm::bbox3d bounds;
   // pairs of points: the brush edges and patch grid lines, at most PrefabPreviewMaxEdges
   std::vector<vm::vec3f> edgeVertices;
+
+  // the classname of the body's first entity, and its _color if it is a light, read
+  // before the world was dropped; empty if the body has no entity
+  std::string firstEntityClassname;
+  std::optional<std::string> firstEntityLightColor;
+  // the colour of the cell: the light's _color, else the first entity's definition
+  // colour; set from the two above whenever the library assigns entity definitions,
+  // nullopt if there is neither
+  std::optional<RgbaF> color;
 };
 
 struct PrefabEntry
@@ -77,13 +87,13 @@ struct PrefabEntry
   // <stem>.png beside it, if present
   std::optional<std::filesystem::path> thumbnailPath;
   PrefabMetadata metadata;
-  // fnv1a64Hex of the file bytes
+  // fnv1a64HexNormalizedLineEndings of the file, what a placement records (C3)
   std::string hash;
   // the file's size and modification time when it was read; a rescan reuses an entry
-  // whose file still has both
+  // whose file still has both, unless the file failed (error is set)
   std::uintmax_t fileSize = 0;
   std::filesystem::file_time_type modificationTime;
-  // parsed body; definitions assigned; never mutated; no node tree updates
+  // parsed body; definitions assigned; never mutated; an empty node tree, not updated
   std::unique_ptr<WorldNode> world;
   // set, with world == nullptr, for an assembly of more than PrefabWorldBrushBudget
   // brushes and patches: its world is dropped once this is built, and cloneBody reads
@@ -189,6 +199,8 @@ public:
   /**
    * Starts a scan of the roots. A rescan while one runs abandons the running one. A file
    * whose size and modification time are unchanged is not read again; its entry is kept.
+   * A file that failed is read again by every scan, so that a transient failure is
+   * retried.
    */
   void rescan();
 

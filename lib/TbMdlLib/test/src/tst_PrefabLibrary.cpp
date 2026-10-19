@@ -124,6 +124,13 @@ std::string loadBytes(const std::filesystem::path& path)
   return std::string{std::istreambuf_iterator<char>{stream}, {}};
 }
 
+// writes the bytes as they are, unlike TestEnvironment::createFile, which writes text
+void writeBytes(const std::filesystem::path& path, const std::string& bytes)
+{
+  auto stream = std::ofstream{path, std::ios::out | std::ios::binary};
+  stream << bytes;
+}
+
 std::vector<std::string> linkIds(const std::vector<Node*>& nodes)
 {
   auto result = std::vector<std::string>{};
@@ -245,7 +252,8 @@ TEST_CASE("PrefabLibrary")
       const auto* torch = library.find(PrefabRoot::User, "lights/torch.map");
       REQUIRE(torch == entries[0].get());
       CHECK(torch->absolutePath == env.dir() / "user" / "lights" / "torch.map");
-      CHECK(torch->hash == fnv1a64Hex(loadBytes(torch->absolutePath)));
+      CHECK(
+        torch->hash == fnv1a64HexNormalizedLineEndings(loadBytes(torch->absolutePath)));
       CHECK(!torch->error);
       CHECK(torch->thumbnailPath == std::nullopt);
       CHECK(torch->metadata.kind == PrefabKind::Entity);
@@ -253,6 +261,8 @@ TEST_CASE("PrefabLibrary")
       CHECK(torch->metadata.className == "light");
       CHECK(torch->metadata.tags == std::vector<std::string>{"light", "torch"});
       REQUIRE(torch->world);
+      // DD-20: nothing queries a library world spatially, so its tree is empty
+      CHECK(torch->world->nodeTree().empty());
       // definitions are assigned by classname
       const auto* torchNode = firstEntityNode(*torch->world);
       REQUIRE(torchNode);
@@ -277,7 +287,10 @@ TEST_CASE("PrefabLibrary")
       CHECK(crate->metadata.name == "crate");
       CHECK(
         crate->thumbnailPath == env.dir() / "base" / "prefabs" / "props" / "crate.png");
-      CHECK(crate->hash == fnv1a64Hex(loadBytes(crate->absolutePath)));
+      REQUIRE(crate->world);
+      CHECK(crate->world->nodeTree().empty());
+      CHECK(
+        crate->hash == fnv1a64HexNormalizedLineEndings(loadBytes(crate->absolutePath)));
     }
 
     SECTION("File names compare as the platform compares them")
@@ -298,6 +311,25 @@ TEST_CASE("PrefabLibrary")
       CHECK(library.find(PrefabRoot::User, "props/crate.map") == nullptr);
       CHECK(library.find(PrefabRoot::User, "props/Crate.map") != nullptr);
 #endif
+    }
+
+    SECTION("Line endings do not change the hash")
+    {
+      // DD-12: a checkout may rewrite CRLF to LF or the other way round
+      writeBytes(env.dir() / "user" / "lights" / "lf.map", UserTorch);
+      writeBytes(
+        env.dir() / "user" / "lights" / "crlf.map",
+        kdl::str_replace_every(UserTorch, "\n", "\r\n"));
+      library.rescan();
+      waitForScan(library);
+
+      const auto* lf = library.find(PrefabRoot::User, "lights/lf.map");
+      const auto* crlf = library.find(PrefabRoot::User, "lights/crlf.map");
+      REQUIRE(lf);
+      REQUIRE(crlf);
+      CHECK(lf->fileSize != crlf->fileSize);
+      CHECK(lf->hash == crlf->hash);
+      CHECK(lf->hash == fnv1a64Hex(UserTorch));
     }
 
     SECTION("Payloads")
@@ -415,7 +447,9 @@ TEST_CASE("PrefabLibrary")
         const auto* changedTorch = library.find(PrefabRoot::User, "lights/torch.map");
         REQUIRE(changedTorch);
         CHECK(changedTorch->metadata.name == "Torch (changed)");
-        CHECK(changedTorch->hash == fnv1a64Hex(loadBytes(changedTorch->absolutePath)));
+        CHECK(
+          changedTorch->hash
+          == fnv1a64HexNormalizedLineEndings(loadBytes(changedTorch->absolutePath)));
         // the other entries are kept
         CHECK(library.find(PrefabRoot::Mod, "props/crate.map") == crate);
       }
@@ -577,6 +611,36 @@ TEST_CASE("PrefabLibrary")
     CHECK(crate->world);
   }
 
+  SECTION("A file that failed is read again by the next scan")
+  {
+    // DD-22: the file is unchanged, but a failure may have been transient
+    auto fail = std::atomic<bool>{true};
+    library.setReadHookForTesting([&](const auto& path) {
+      if (fail && path.filename() == "crate.map")
+      {
+        throw std::runtime_error{"locked by another process"};
+      }
+    });
+
+    library.rescan();
+    waitForScan(library);
+
+    const auto* failed = library.find(PrefabRoot::Mod, "props/crate.map");
+    REQUIRE(failed);
+    CHECK(failed->error == "locked by another process");
+    CHECK(!failed->hasBody());
+
+    fail = false;
+    library.rescan();
+    waitForScan(library);
+
+    const auto* crate = library.find(PrefabRoot::Mod, "props/crate.map");
+    REQUIRE(crate);
+    CHECK(!crate->error);
+    CHECK(crate->world);
+    CHECK(crate->metadata.name == "crate");
+  }
+
   SECTION("A large assembly keeps no world")
   {
     auto bigNodes = std::vector<Node*>{};
@@ -600,6 +664,9 @@ TEST_CASE("PrefabLibrary")
     REQUIRE(big->bodyPreview);
     CHECK(big->bodyPreview->edgeVertices.size() == 2 * PrefabPreviewMaxEdges);
     CHECK(big->bodyPreview->bounds.size() == vm::vec3d{32, 32, 32});
+    // no entity, no colour
+    CHECK(big->bodyPreview->firstEntityClassname.empty());
+    CHECK(big->bodyPreview->color == std::nullopt);
 
     // an assembly within the budget keeps its world
     const auto* crate = library.find(PrefabRoot::Mod, "props/crate.map");
@@ -622,6 +689,44 @@ TEST_CASE("PrefabLibrary")
       env.createFile(
         "base/prefabs/big.map", loadBytes(big->absolutePath) + "// changed\n");
       CHECK(library.cloneBody(*big, map.worldBounds()).empty());
+    }
+  }
+
+  SECTION("A large assembly keeps the colour of its first entity")
+  {
+    // DD-21: the cell of a dropped world is drawn in the colour it would have had
+    auto* redLightNode = new EntityNode{
+      Entity{{{"classname", "light"}, {"origin", "0 0 64"}, {"_color", "1 0 0"}}}};
+    auto bigNodes = std::vector<Node*>{redLightNode};
+    for (size_t i = 0; i < PrefabWorldBrushBudget + 1; ++i)
+    {
+      bigNodes.push_back(createBrushNode(map));
+    }
+    addNodes(map, {{&parentForNodes(map), bigNodes}});
+    REQUIRE(
+      savePrefab(
+        map, bigNodes, SavePrefabOptions{.name = "bigred", .root = PrefabRoot::Mod})
+      | kdl::is_success());
+
+    library.rescan();
+    waitForScan(library);
+
+    const auto* big = library.find(PrefabRoot::Mod, "bigred.map");
+    REQUIRE(big);
+    REQUIRE(big->bodyPreview);
+    CHECK(big->world == nullptr);
+    CHECK(big->bodyPreview->firstEntityClassname == "light");
+    CHECK(big->bodyPreview->firstEntityLightColor == "1 0 0");
+    CHECK(big->bodyPreview->color == RgbaF{1.0f, 0.0f, 0.0f, 1.0f});
+
+    SECTION("The colour follows the entity definitions")
+    {
+      // without a definition, a light's _color still counts
+      map.entityDefinitionsWillChangeNotifier();
+      map.entityDefinitionManager().clear();
+      map.entityDefinitionsDidChangeNotifier();
+      library.processPendingResults();
+      CHECK(big->bodyPreview->color == RgbaF{1.0f, 0.0f, 0.0f, 1.0f});
     }
   }
 

@@ -26,6 +26,8 @@
 #include "mdl/Brush.h"
 #include "mdl/BrushNode.h"
 #include "mdl/ContentHash.h"
+#include "mdl/EntityColorPropertyValue.h"
+#include "mdl/EntityDefinition.h"
 #include "mdl/EntityDefinitionManager.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GroupNode.h"
@@ -124,7 +126,8 @@ Result<std::unique_ptr<WorldNode>> readPrefabWorld(
   return fs::Disk::openFile(absolutePath) | kdl::and_then([&](auto file) {
            auto fileReader = file->reader().buffer();
            const auto bytes = fileReader.stringView();
-           hash = fnv1a64Hex(bytes);
+           // a checkout with other line endings is the same prefab (DD-12)
+           hash = fnv1a64HexNormalizedLineEndings(bytes);
 
            auto logger = NullLogger{};
            auto status = SimpleParserStatus{logger};
@@ -134,8 +137,9 @@ Result<std::unique_ptr<WorldNode>> readPrefabWorld(
              bytes, {mapFormat}, worldBounds, entityPropertyConfig, status, taskManager);
          })
          | kdl::transform([](auto worldNode) {
-             // nothing queries a library world spatially
+             // nothing queries a library world spatially; the reader filled the tree
              worldNode->disableNodeTreeUpdates();
+             worldNode->clearNodeTree();
              return worldNode;
            });
 }
@@ -169,6 +173,42 @@ std::size_t countBrushesAndPatches(const WorldNode& worldNode)
     [&](const BrushNode&) { ++count; },
     [&](const PatchNode&) { ++count; }));
   return count;
+}
+
+// the key whose colour a light's cell takes, as the browser does for a kept world
+const auto LightColorKey = std::string{"_color"};
+
+bool isLightClassname(const std::string& classname)
+{
+  return kdl::cs::str_is_prefix(classname, "light");
+}
+
+const EntityNode* firstEntityNode(const std::vector<const Node*>& nodes)
+{
+  auto result = static_cast<const EntityNode*>(nullptr);
+  const auto visitor = kdl::overload(
+    [](auto&& thisLambda, const WorldNode& node) { node.visitChildren(thisLambda); },
+    [](auto&& thisLambda, const LayerNode& node) { node.visitChildren(thisLambda); },
+    [&](auto&& thisLambda, const GroupNode& node) {
+      if (!result)
+      {
+        node.visitChildren(thisLambda);
+      }
+    },
+    [&](const EntityNode& node) {
+      if (!result)
+      {
+        result = &node;
+      }
+    },
+    [](const BrushNode&) {},
+    [](const PatchNode&) {});
+
+  for (const auto* node : nodes)
+  {
+    node->accept(visitor);
+  }
+  return result;
 }
 
 /**
@@ -247,7 +287,48 @@ PrefabBodyPreview makeBodyPreview(const WorldNode& worldNode)
   {
     node->accept(visitor);
   }
+
+  // DD-21: what the cell colour is made of, since the world is dropped before the
+  // library assigns the entity definitions
+  if (const auto* entityNode = firstEntityNode(nodes))
+  {
+    const auto& entity = entityNode->entity();
+    preview.firstEntityClassname = entity.classname();
+    if (isLightClassname(preview.firstEntityClassname))
+    {
+      if (const auto* value = entity.property(LightColorKey))
+      {
+        preview.firstEntityLightColor = *value;
+      }
+    }
+  }
   return preview;
+}
+
+/**
+ * The colour of a cell whose world was dropped, from the entity definitions of the map:
+ * the light's _color, else the first entity's definition colour.
+ */
+std::optional<RgbaF> bodyPreviewColor(
+  const PrefabBodyPreview& preview, const EntityDefinitionManager* manager)
+{
+  if (preview.firstEntityClassname.empty())
+  {
+    return std::nullopt;
+  }
+
+  const auto* definition =
+    manager ? manager->definition(preview.firstEntityClassname) : nullptr;
+  if (preview.firstEntityLightColor)
+  {
+    if (const auto color = parseEntityColorPropertyValue(
+          definition, LightColorKey, *preview.firstEntityLightColor);
+        color.is_success())
+    {
+      return color.value().color.to<RgbaF>();
+    }
+  }
+  return definition ? std::optional{definition->color.to<RgbaF>()} : std::nullopt;
 }
 
 /**
@@ -841,11 +922,13 @@ void PrefabLibrary::startParsing(Listing listing)
     }
 
     if (const auto it = entriesByKey.find(entryKey(file.root, file.pathKey));
-        it != entriesByKey.end() && it->second->absolutePath == file.absolutePath
+        it != entriesByKey.end() && !it->second->error
+        && it->second->absolutePath == file.absolutePath
         && it->second->fileSize == file.fileSize
         && it->second->modificationTime == file.modificationTime)
     {
-      // unchanged: kept, with the thumbnail as it is now
+      // unchanged: kept, with the thumbnail as it is now; a file that failed is read
+      // again, since the failure may have been transient (DD-22)
       m_reusedEntries.push_back(ReusedEntry{it->second, std::move(file.thumbnailPath)});
       continue;
     }
@@ -984,6 +1067,11 @@ void PrefabLibrary::setEntityDefinitions(PrefabEntry& entry) const
   {
     entry.world->accept(
       makeSetEntityDefinitionsVisitor(&m_map.entityDefinitionManager()));
+  }
+  if (entry.bodyPreview)
+  {
+    entry.bodyPreview->color =
+      bodyPreviewColor(*entry.bodyPreview, &m_map.entityDefinitionManager());
   }
 }
 

@@ -691,8 +691,8 @@ void PrefabBrowserView::updatePreviewAppearance(
   }
   else if (entry.bodyPreview)
   {
-    // a large assembly whose world the library dropped (DD-19)
-    color = DefaultColor.toVec();
+    // a large assembly whose world the library dropped (DD-19) keeps its colour (DD-21)
+    color = entry.bodyPreview->color.value_or(DefaultColor).toVec();
   }
 
   if (preview.edges && preview.edgeColor == color)

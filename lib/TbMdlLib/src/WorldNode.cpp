@@ -241,6 +241,11 @@ void WorldNode::rebuildNodeTree()
   }
 }
 
+void WorldNode::clearNodeTree()
+{
+  m_nodeTree->clear();
+}
+
 void WorldNode::invalidateAllIssues()
 {
   accept([](auto&& thisLambda, Node& node) {

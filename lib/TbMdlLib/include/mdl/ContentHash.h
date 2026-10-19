@@ -34,4 +34,12 @@ namespace tb::mdl
  */
 std::string fnv1a64Hex(std::string_view bytes);
 
+/**
+ * Returns fnv1a64Hex of the given text with every "\r\n" folded to "\n", so that a file
+ * hashes the same whether it was written on Windows or checked out with LF line endings.
+ * A lone "\r" is kept. This is the hash of a prefab file (PrefabEntry::hash) and so the
+ * hash that a placement records (_tb_prefab_hash).
+ */
+std::string fnv1a64HexNormalizedLineEndings(std::string_view text);
+
 } // namespace tb::mdl
