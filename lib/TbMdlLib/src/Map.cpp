@@ -88,6 +88,7 @@
 #include "mdl/ObjSerializer.h"
 #include "mdl/PatchNode.h"
 #include "mdl/PointEntityWithBrushesValidator.h"
+#include "mdl/PrefabLibrary.h"
 #include "mdl/PropertyKeyWithDoubleQuotationMarksValidator.h"
 #include "mdl/PropertyValueWithDoubleQuotationMarksValidator.h"
 #include "mdl/PushSelection.h"
@@ -584,6 +585,7 @@ Map::Map(
   , m_commandProcessor{std::make_unique<CommandProcessor>(*this)}
   , m_path{std::move(path)}
   , m_selection{*this}
+  , m_prefabLibrary{std::make_unique<PrefabLibrary>(*this)}
 {
   m_nodeHandles.registerHandleType<VertexHandle>();
   m_nodeHandles.registerHandleType<ControlPointHandle>();
@@ -705,6 +707,16 @@ EntityModelManager& Map::entityModelManager()
 const EntityModelManager& Map::entityModelManager() const
 {
   return *m_entityModelManager;
+}
+
+PrefabLibrary& Map::prefabLibrary()
+{
+  return *m_prefabLibrary;
+}
+
+const PrefabLibrary& Map::prefabLibrary() const
+{
+  return *m_prefabLibrary;
 }
 
 gl::MaterialManager& Map::materialManager()
