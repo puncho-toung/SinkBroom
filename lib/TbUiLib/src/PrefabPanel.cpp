@@ -42,6 +42,8 @@
 #include "ui/SearchBox.h"
 #include "ui/ViewConstants.h"
 
+#include "kd/string_utils.h"
+
 #include <chrono>
 
 namespace tb::ui
@@ -176,7 +178,11 @@ void PrefabPanel::createGui()
 
   m_rescanButton = createBitmapButton("Refresh.svg", tr("Rescan the prefab folders"));
   m_rescanButton->setObjectName("PrefabPanel_rescanButton");
-  connect(m_rescanButton, &QToolButton::clicked, this, &PrefabPanel::rescan);
+  connect(m_rescanButton, &QToolButton::clicked, this, [&]() {
+    // the thumbnails of unchanged prefabs may have changed
+    m_view->reloadThumbnails();
+    rescan();
+  });
 
   m_scrollBar = new QScrollBar{Qt::Vertical};
   m_view = new PrefabBrowserView{m_appController, m_scrollBar, m_document};
@@ -314,7 +320,7 @@ void PrefabPanel::updateFilter()
   {
     filter.category = pathFromQString(category.toString());
   }
-  filter.text = m_filterBox->text().trimmed().toStdString();
+  filter.words = kdl::str_split(m_filterBox->text().trimmed().toStdString(), " ");
   m_view->setFilter(std::move(filter));
 }
 

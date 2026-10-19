@@ -20,6 +20,7 @@
 #include "ui/PrefabBrowserView.h"
 
 #include <QContextMenuEvent>
+#include <QImage>
 #include <QMenu>
 #include <QTextStream>
 
@@ -40,10 +41,13 @@
 #include "gl/ResourceManager.h"
 #include "gl/Shaders.h"
 #include "gl/Texture.h"
+#include "gl/TextureBuffer.h"
 #include "gl/TextureFont.h"
 #include "gl/TextureResource.h"
 #include "gl/VertexArray.h"
 #include "gl/VertexType.h"
+#include "img/DecodeImage.h"
+#include "img/Image.h"
 #include "mdl/AssetUtils.h"
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
@@ -80,8 +84,11 @@
 #include "vm/vec.h"
 
 #include <algorithm>
+#include <cstring>
 #include <ranges>
+#include <set>
 #include <string>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -217,61 +224,70 @@ RgbaF previewColor(const mdl::EntityNode* entityNode)
   return definition ? definition->color.to<RgbaF>() : DefaultColor;
 }
 
-void addEdge(
-  std::vector<EdgeVertex>& vertices,
-  const vm::vec3d& start,
-  const vm::vec3d& end,
-  const vm::vec4f& color)
-{
-  if (vertices.size() / 2 < MaxEdgeSegments)
-  {
-    vertices.emplace_back(vm::vec3f{start}, color);
-    vertices.emplace_back(vm::vec3f{end}, color);
-  }
-}
-
 /**
  * The edges of the brushes and the grid lines of the patches under the given nodes, at
- * most MaxEdgeSegments of them.
+ * most MaxEdgeSegments of them; the walk stops once that many are collected.
  */
 std::vector<EdgeVertex> collectEdges(
   const std::vector<const mdl::Node*>& nodes, const vm::vec4f& color)
 {
   auto vertices = std::vector<EdgeVertex>{};
+  const auto full = [&]() { return vertices.size() / 2 >= MaxEdgeSegments; };
+  const auto addEdge = [&](const vm::vec3d& start, const vm::vec3d& end) {
+    vertices.emplace_back(vm::vec3f{start}, color);
+    vertices.emplace_back(vm::vec3f{end}, color);
+  };
+
   const auto visitor = kdl::overload(
-    [](auto&& thisLambda, const mdl::WorldNode& worldNode) {
-      worldNode.visitChildren(thisLambda);
+    [&](auto&& thisLambda, const mdl::WorldNode& worldNode) {
+      if (!full())
+      {
+        worldNode.visitChildren(thisLambda);
+      }
     },
-    [](auto&& thisLambda, const mdl::LayerNode& layerNode) {
-      layerNode.visitChildren(thisLambda);
+    [&](auto&& thisLambda, const mdl::LayerNode& layerNode) {
+      if (!full())
+      {
+        layerNode.visitChildren(thisLambda);
+      }
     },
-    [](auto&& thisLambda, const mdl::GroupNode& groupNode) {
-      groupNode.visitChildren(thisLambda);
+    [&](auto&& thisLambda, const mdl::GroupNode& groupNode) {
+      if (!full())
+      {
+        groupNode.visitChildren(thisLambda);
+      }
     },
-    [](auto&& thisLambda, const mdl::EntityNode& entityNode) {
-      entityNode.visitChildren(thisLambda);
+    [&](auto&& thisLambda, const mdl::EntityNode& entityNode) {
+      if (!full())
+      {
+        entityNode.visitChildren(thisLambda);
+      }
     },
     [&](const mdl::BrushNode& brushNode) {
       for (const auto* edge : brushNode.brush().edges())
       {
+        if (full())
+        {
+          return;
+        }
         const auto segment = edge->segment();
-        addEdge(vertices, segment.start(), segment.end(), color);
+        addEdge(segment.start(), segment.end());
       }
     },
     [&](const mdl::PatchNode& patchNode) {
       const auto& grid = patchNode.grid();
-      for (size_t row = 0; row < grid.pointRowCount; ++row)
+      for (size_t row = 0; row < grid.pointRowCount && !full(); ++row)
       {
         for (size_t col = 0; col < grid.pointColumnCount; ++col)
         {
           const auto& position = grid.point(row, col).position;
-          if (col + 1 < grid.pointColumnCount)
+          if (col + 1 < grid.pointColumnCount && !full())
           {
-            addEdge(vertices, position, grid.point(row, col + 1).position, color);
+            addEdge(position, grid.point(row, col + 1).position);
           }
-          if (row + 1 < grid.pointRowCount)
+          if (row + 1 < grid.pointRowCount && !full())
           {
-            addEdge(vertices, position, grid.point(row + 1, col).position, color);
+            addEdge(position, grid.point(row + 1, col).position);
           }
         }
       }
@@ -279,6 +295,10 @@ std::vector<EdgeVertex> collectEdges(
 
   for (const auto* node : nodes)
   {
+    if (full())
+    {
+      break;
+    }
     node->accept(visitor);
   }
   return vertices;
@@ -295,20 +315,56 @@ std::vector<EdgeVertex> boundsEdges(const vm::bbox3f& bounds, const vm::vec4f& c
 }
 
 /**
- * A texture resource that reads and decodes the image on a worker; the resource manager
- * uploads it in its tick and drops it once the last cell lets go of it.
+ * The given image, scaled down, keeping its aspect, so that its longest side is at most
+ * PrefabThumbnailMaxSize; a smaller image is returned as it is.
+ */
+img::Image scaleThumbnail(img::Image image)
+{
+  const auto longestSide = std::max(image.width, image.height);
+  if (longestSide <= PrefabThumbnailMaxSize)
+  {
+    return image;
+  }
+
+  const auto width =
+    std::max(image.width * PrefabThumbnailMaxSize / longestSide, size_t(1));
+  const auto height =
+    std::max(image.height * PrefabThumbnailMaxSize / longestSide, size_t(1));
+
+  // wraps the pixels without copying them
+  const auto source = QImage{
+    image.pixels.data(),
+    int(image.width),
+    int(image.height),
+    qsizetype(image.width * 4),
+    QImage::Format_RGBA8888};
+  const auto scaled =
+    source
+      .scaled(int(width), int(height), Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+      .convertToFormat(QImage::Format_RGBA8888);
+
+  auto pixels = std::vector<unsigned char>(width * height * 4);
+  for (size_t row = 0; row < height; ++row)
+  {
+    std::memcpy(
+      pixels.data() + row * width * 4, scaled.constScanLine(int(row)), width * 4);
+  }
+
+  image.width = width;
+  image.height = height;
+  image.pixels = std::move(pixels);
+  return image;
+}
+
+/**
+ * A texture resource that reads, decodes and scales the image on a worker; the resource
+ * manager uploads it in its tick and drops it once the last cell lets go of it.
  */
 std::shared_ptr<gl::TextureResource> createThumbnail(
   gl::ResourceManager& resourceManager, const std::filesystem::path& path)
 {
-  auto resource = std::make_shared<gl::TextureResource>([path]() -> Result<gl::Texture> {
-    return fs::Disk::openFile(path) | kdl::and_then([](auto file) {
-             auto reader = file->reader().buffer();
-             const auto bytes = reader.stringView();
-             return mdl::loadImageTextureFromMemory(
-               reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size());
-           });
-  });
+  auto resource = std::make_shared<gl::TextureResource>(
+    [path]() -> Result<gl::Texture> { return loadPrefabThumbnail(path); });
   resourceManager.addResource(resource);
   return resource;
 }
@@ -318,36 +374,79 @@ std::shared_ptr<gl::TextureResource> createThumbnail(
 std::vector<std::filesystem::path> prefabCategories(
   const std::vector<std::unique_ptr<mdl::PrefabEntry>>& entries)
 {
-  auto result = std::vector<std::filesystem::path>{};
+  auto categories = std::set<std::filesystem::path>{};
   for (const auto& entry : entries)
   {
-    if (auto category = categoryOf(*entry);
-        std::ranges::find(result, category) == result.end())
-    {
-      result.push_back(std::move(category));
-    }
+    categories.insert(categoryOf(*entry));
   }
-  std::ranges::sort(result);
-  return result;
+  return categories | kdl::ranges::to<std::vector>();
 }
 
 bool matchesPrefabFilter(const mdl::PrefabEntry& entry, const PrefabFilter& filter)
 {
   return matchesKind(entry, filter.kind)
          && (!filter.category || categoryOf(entry) == *filter.category)
-         && std::ranges::all_of(kdl::str_split(filter.text, " "), [&](const auto& word) {
-              return matchesWord(entry, word);
-            });
+         && std::ranges::all_of(
+           filter.words, [&](const auto& word) { return matchesWord(entry, word); });
 }
 
-struct PrefabBrowserView::EntryPreview
+Result<gl::Texture> loadPrefabThumbnail(const std::filesystem::path& path)
 {
+  return fs::Disk::openFile(path) | kdl::and_then([](auto file) {
+           auto reader = file->reader().buffer();
+           const auto bytes = reader.stringView();
+           return img::decodeImage(
+             reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size());
+         })
+         | kdl::and_then([](img::Image image) -> Result<gl::Texture> {
+             if (image.width == 0 || image.height == 0)
+             {
+               return Error{"The thumbnail image is empty"};
+             }
+
+             image = scaleThumbnail(std::move(image));
+
+             constexpr auto format = GLenum(GL_RGBA);
+             auto buffer = gl::TextureBuffer{image.pixels.size()};
+             std::memcpy(buffer.data(), image.pixels.data(), image.pixels.size());
+             const auto averageColor = mdl::getAverageColor(buffer, format);
+
+             auto texture = gl::Texture{
+               image.width,
+               image.height,
+               averageColor,
+               format,
+               gl::NoEmbeddedDefaults{},
+               std::move(buffer)};
+             texture.setAlphaDomain(image.alphaDomain);
+             return texture;
+           });
+}
+
+struct PrefabPreview
+{
+  // identifies this preview among those that the view built
+  std::size_t id = 0;
+
+  // what the preview was built from; another value means that the file changed
+  std::string hash;
+  bool failed = false;
+
+  std::optional<std::filesystem::path> thumbnailPath;
+  // created when a cell first draws the thumbnail
   std::shared_ptr<gl::TextureResource> thumbnail;
+
+  vm::bbox3f bounds;
+
+  // what the entity definitions decide, as of definitionGeneration
+  std::size_t definitionGeneration = 0;
+  vm::vec4f edgeColor;
+  std::shared_ptr<gl::VertexArray> edges;
   // the model of an entity snapshot; empty if it has none
   mdl::ModelSpecification modelSpecification;
   vm::vec3f modelScale = vm::vec3f::fill(1.0f);
-  std::shared_ptr<gl::VertexArray> edges;
-  vm::bbox3f bounds;
+  // the entity model manager found no model; it is asked again once the models change
+  bool modelLookupFailed = false;
 };
 
 PrefabBrowserView::PrefabBrowserView(
@@ -368,6 +467,8 @@ PrefabBrowserView::PrefabBrowserView(
     this, &PrefabBrowserView::entityModelsWillChange);
   m_notifierConnection += m_document.entityDefinitionsWillChangeNotifier.connect(
     this, &PrefabBrowserView::entityModelsWillChange);
+  m_notifierConnection += m_document.entityDefinitionsDidChangeNotifier.connect(
+    this, &PrefabBrowserView::entityDefinitionsDidChange);
   m_notifierConnection += m_document.materialCollectionsDidChangeNotifier.connect(
     this, &PrefabBrowserView::entityModelsWillChange);
 
@@ -390,8 +491,18 @@ void PrefabBrowserView::setFilter(PrefabFilter filter)
 
 void PrefabBrowserView::libraryDidChange()
 {
-  // the previews and the cells point into the entries that were just replaced
-  m_previews.clear();
+  // the cells point into the entries, which may have been replaced; a preview is kept
+  // while its file is in the library, and preview() notices a change of the file
+  auto paths = std::unordered_set<std::filesystem::path::string_type>{};
+  for (const auto& entry : m_document.map().prefabLibrary().entries())
+  {
+    paths.insert(entry->absolutePath.native());
+  }
+  std::erase_if(m_previews, [&](const auto& pathAndPreview) {
+    return !paths.contains(pathAndPreview.first);
+  });
+
+  clear();
   invalidate();
   update();
 }
@@ -402,13 +513,32 @@ void PrefabBrowserView::entityModelsWillChange()
   clear();
   invalidate();
   update();
+
+  for (auto& [path, preview] : m_previews)
+  {
+    preview->modelLookupFailed = false;
+  }
+}
+
+void PrefabBrowserView::reloadThumbnails()
+{
+  for (auto& [path, preview] : m_previews)
+  {
+    preview->thumbnail.reset();
+  }
+
+  // a cell whose image could not be read shows it again
+  invalidate();
+  update();
 }
 
 std::vector<PrefabBrowserView::CellSummary> PrefabBrowserView::cellSummaries()
 {
   auto result = std::vector<CellSummary>{};
   scrollToCell([&](const Cell& cell) {
-    result.push_back(CellSummary{cellData(cell).entry, cell.title(), dndData(cell)});
+    const auto& cellData = this->cellData(cell);
+    result.push_back(
+      CellSummary{cellData.entry, cell.title(), dndData(cell), cellData.preview->id});
     return false;
   });
   return result;
@@ -474,38 +604,72 @@ void PrefabBrowserView::preferenceDidChange(const std::filesystem::path& path)
   }
 }
 
-const PrefabBrowserView::EntryPreview& PrefabBrowserView::preview(
-  const mdl::PrefabEntry& entry)
+void PrefabBrowserView::entityDefinitionsDidChange()
 {
-  if (const auto it = m_previews.find(&entry); it != m_previews.end())
+  // the library assigns the new definitions to its entries before the next layout
+  ++m_definitionGeneration;
+}
+
+PrefabPreview& PrefabBrowserView::preview(const mdl::PrefabEntry& entry)
+{
+  auto& preview = m_previews[entry.absolutePath.native()];
+  const auto failed = entry.error.has_value();
+  if (
+    !preview || preview->hash != entry.hash || preview->failed != failed
+    || preview->thumbnailPath != entry.thumbnailPath)
   {
-    return *it->second;
-  }
+    // new, or the file has changed
+    preview = std::make_unique<PrefabPreview>();
+    preview->id = ++m_previewCount;
+    preview->hash = entry.hash;
+    preview->failed = failed;
+    preview->thumbnailPath = entry.thumbnailPath;
 
-  auto& map = m_document.map();
-  auto preview = std::make_unique<EntryPreview>();
-
-  if (entry.thumbnailPath)
-  {
-    preview->thumbnail = createThumbnail(map.resourceManager(), *entry.thumbnailPath);
-  }
-
-  auto bounds = DefaultBounds;
-  auto vertices = std::vector<EdgeVertex>{};
-  if (entry.world)
-  {
-    const auto nodes = bodyNodes(*entry.world);
-    const auto* entityNode = firstEntityNode(nodes);
-    const auto color = previewColor(entityNode).toVec();
-
-    if (!nodes.empty())
+    auto bounds = DefaultBounds;
+    if (entry.world)
     {
-      bounds = nodes.front()->logicalBounds();
-      for (const auto* node : nodes)
+      if (const auto nodes = bodyNodes(*entry.world); !nodes.empty())
       {
-        bounds = vm::merge(bounds, node->logicalBounds());
+        bounds = nodes.front()->logicalBounds();
+        for (const auto* node : nodes)
+        {
+          bounds = vm::merge(bounds, node->logicalBounds());
+        }
       }
     }
+    else if (entry.bodyPreview)
+    {
+      bounds = entry.bodyPreview->bounds;
+    }
+    preview->bounds = vm::bbox3f{bounds};
+
+    updatePreviewAppearance(*preview, entry);
+  }
+  else if (preview->definitionGeneration != m_definitionGeneration)
+  {
+    updatePreviewAppearance(*preview, entry);
+  }
+
+  return *preview;
+}
+
+void PrefabBrowserView::updatePreviewAppearance(
+  PrefabPreview& preview, const mdl::PrefabEntry& entry)
+{
+  auto& map = m_document.map();
+
+  preview.definitionGeneration = m_definitionGeneration;
+  preview.modelSpecification = mdl::ModelSpecification{};
+  preview.modelScale = vm::vec3f::fill(1.0f);
+  preview.modelLookupFailed = false;
+
+  auto nodes = std::vector<const mdl::Node*>{};
+  auto color = ErrorColor.toVec();
+  if (entry.world)
+  {
+    nodes = bodyNodes(*entry.world);
+    const auto* entityNode = firstEntityNode(nodes);
+    color = previewColor(entityNode).toVec();
 
     if (entry.metadata.kind == mdl::PrefabKind::Entity && entityNode)
     {
@@ -514,53 +678,55 @@ const PrefabBrowserView::EntryPreview& PrefabBrowserView::preview(
         const auto* pointEntityDefinition =
           mdl::getPointEntityDefinition(entity.definition()))
       {
-        preview->modelSpecification =
+        preview.modelSpecification =
           mdl::safeGetModelSpecification(map.logger(), entity.classname(), [&]() {
             return entity.modelSpecification();
           });
-        preview->modelScale = vm::vec3f{mdl::safeGetModelScale(
+        preview.modelScale = vm::vec3f{mdl::safeGetModelScale(
           pointEntityDefinition->modelDefinition,
           mdl::EntityPropertiesVariableStore{entity},
           map.worldNode().entityPropertyConfig().defaultModelScaleExpression)};
       }
     }
-
-    vertices = collectEdges(nodes, color);
-    if (vertices.empty())
-    {
-      vertices = boundsEdges(vm::bbox3f{bounds}, color);
-    }
   }
   else if (entry.bodyPreview)
   {
     // a large assembly whose world the library dropped (DD-19)
-    const auto color = DefaultColor.toVec();
-    bounds = entry.bodyPreview->bounds;
+    color = DefaultColor.toVec();
+  }
+
+  if (preview.edges && preview.edgeColor == color)
+  {
+    // the edges are kept unless their colour changes
+    return;
+  }
+
+  auto vertices = std::vector<EdgeVertex>{};
+  if (entry.world)
+  {
+    vertices = collectEdges(nodes, color);
+  }
+  else if (entry.bodyPreview)
+  {
     vertices = entry.bodyPreview->edgeVertices
                | std::views::transform(
                  [&](const auto& position) { return EdgeVertex{position, color}; })
                | kdl::ranges::to<std::vector>();
-    if (vertices.empty())
-    {
-      vertices = boundsEdges(vm::bbox3f{bounds}, color);
-    }
   }
-  else
+  if (vertices.empty())
   {
-    vertices = boundsEdges(vm::bbox3f{bounds}, ErrorColor.toVec());
+    vertices = boundsEdges(preview.bounds, color);
   }
 
-  preview->bounds = vm::bbox3f{bounds};
-  preview->edges =
+  preview.edgeColor = color;
+  preview.edges =
     std::make_shared<gl::VertexArray>(gl::VertexArray::move(std::move(vertices)));
-
-  return *m_previews.emplace(&entry, std::move(preview)).first->second;
 }
 
 void PrefabBrowserView::addEntryToLayout(
   Layout& layout, const mdl::PrefabEntry& entry, const gl::FontDescriptor& font)
 {
-  const auto& preview = this->preview(entry);
+  auto& preview = this->preview(entry);
   const auto name = titleOf(entry);
 
   const auto maxCellWidth = layout.maxCellWidth();
@@ -568,14 +734,17 @@ void PrefabBrowserView::addEntryToLayout(
   const auto actualSize = fontManager().font(actualFont).measure(name);
 
   // an image that cannot be read gives way to the next preview
-  const auto hasThumbnail =
-    preview.thumbnail
-    && !std::holds_alternative<gl::ResourceFailed>(preview.thumbnail->state());
+  const auto showsThumbnail =
+    preview.thumbnailPath
+    && !(
+      preview.thumbnail
+      && std::holds_alternative<gl::ResourceFailed>(preview.thumbnail->state()));
 
   auto cellData = PrefabCellData{
     .entry = &entry,
+    .preview = &preview,
     .fontDescriptor = actualFont,
-    .thumbnail = hasThumbnail ? preview.thumbnail : nullptr,
+    .showsThumbnail = showsThumbnail,
     .modelRenderer = nullptr,
     .modelOrientation = mdl::Orientation::Oriented,
     .edges = preview.edges,
@@ -583,9 +752,15 @@ void PrefabBrowserView::addEntryToLayout(
     .transform = vm::mat4x4f::identity(),
   };
 
+  // a model that is not found is looked up again only once the models change
   auto& entityModelManager = m_document.map().entityModelManager();
   const auto& spec = preview.modelSpecification;
-  const auto* model = hasThumbnail ? nullptr : entityModelManager.model(spec.path);
+  const auto* model = static_cast<const mdl::EntityModel*>(nullptr);
+  if (!showsThumbnail && !spec.path.empty() && !preview.modelLookupFailed)
+  {
+    model = entityModelManager.model(spec.path);
+    preview.modelLookupFailed = model == nullptr;
+  }
   const auto* modelData = model ? model->data() : nullptr;
   if (const auto* modelFrame = modelData ? modelData->frame(spec.frameIndex) : nullptr)
   {
@@ -609,8 +784,8 @@ void PrefabBrowserView::addEntryToLayout(
 
   // a thumbnail fills the cell; its aspect is kept when it is drawn
   const auto rotatedSize = cellData.bounds.transform(cellData.transform).size();
-  const auto itemWidth = cellData.thumbnail ? 64.0f : rotatedSize.y();
-  const auto itemHeight = cellData.thumbnail ? 64.0f : rotatedSize.z();
+  const auto itemWidth = cellData.showsThumbnail ? 64.0f : rotatedSize.y();
+  const auto itemHeight = cellData.showsThumbnail ? 64.0f : rotatedSize.z();
 
   layout.addItem(
     std::move(cellData),
@@ -687,7 +862,7 @@ void PrefabBrowserView::renderEdges(
 
   forEachVisibleCell(layout, y, height, [&](const auto& cell) {
     const auto& cellData = this->cellData(cell);
-    if (!cellData.thumbnail && !cellData.modelRenderer && cellData.edges)
+    if (!cellData.showsThumbnail && !cellData.modelRenderer && cellData.edges)
     {
       const auto multMatrix =
         render::MultiplyModelMatrix{transformation, itemTransformation(cell, y, height)};
@@ -774,9 +949,26 @@ void PrefabBrowserView::renderThumbnails(
   shader.set("Brightness", pref(Preferences::Brightness));
   gl::setAlphaFuncUniforms(shader, nullptr);
 
+  // one quad per thumbnail in one vertex array, drawn per texture by offset
+  auto vertices = std::vector<Vertex>{};
+  auto textures = std::vector<const gl::Texture*>{};
+
+  auto& resourceManager = m_document.map().resourceManager();
   forEachVisibleCell(layout, y, height, [&](const auto& cell) {
     const auto& cellData = this->cellData(cell);
-    const auto* texture = cellData.thumbnail ? cellData.thumbnail->get() : nullptr;
+    if (!cellData.showsThumbnail)
+    {
+      return;
+    }
+
+    // the image is read when a cell first shows it
+    auto& preview = *cellData.preview;
+    if (!preview.thumbnail)
+    {
+      preview.thumbnail = createThumbnail(resourceManager, *preview.thumbnailPath);
+    }
+
+    const auto* texture = preview.thumbnail->get();
     if (texture && texture->isReady())
     {
       // fit the image into the item bounds, keeping its aspect
@@ -791,26 +983,34 @@ void PrefabBrowserView::renderThumbnails(
       const auto right = left + w;
       const auto bottom = top + h;
 
-      auto vertexArray = gl::VertexArray::move(std::vector<Vertex>{
-        Vertex{{left, height - (top - y)}, {0, 0}},
-        Vertex{{left, height - (bottom - y)}, {0, 1}},
-        Vertex{{right, height - (bottom - y)}, {1, 1}},
-        Vertex{{right, height - (top - y)}, {1, 0}},
-      });
-
-      if (texture->activate(
-            gl, pref(Preferences::TextureMinFilter), pref(Preferences::TextureMagFilter)))
-      {
-        vertexArray.prepare(gl, vboManager());
-        if (vertexArray.setup(gl, shader.program()))
-        {
-          vertexArray.render(gl, gl::PrimType::Quads);
-          vertexArray.cleanup(gl, shader.program());
-        }
-        texture->deactivate(gl);
-      }
+      vertices.push_back(Vertex{{left, height - (top - y)}, {0, 0}});
+      vertices.push_back(Vertex{{left, height - (bottom - y)}, {0, 1}});
+      vertices.push_back(Vertex{{right, height - (bottom - y)}, {1, 1}});
+      vertices.push_back(Vertex{{right, height - (top - y)}, {1, 0}});
+      textures.push_back(texture);
     }
   });
+
+  if (textures.empty())
+  {
+    return;
+  }
+
+  auto vertexArray = gl::VertexArray::move(std::move(vertices));
+  vertexArray.prepare(gl, vboManager());
+  if (vertexArray.setup(gl, shader.program()))
+  {
+    for (size_t i = 0; i < textures.size(); ++i)
+    {
+      if (textures[i]->activate(
+            gl, pref(Preferences::TextureMinFilter), pref(Preferences::TextureMagFilter)))
+      {
+        vertexArray.render(gl, gl::PrimType::Quads, GLint(i * 4), 4);
+        textures[i]->deactivate(gl);
+      }
+    }
+    vertexArray.cleanup(gl, shader.program());
+  }
 }
 
 vm::mat4x4f PrefabBrowserView::itemTransformation(

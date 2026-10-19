@@ -22,6 +22,7 @@
 #include <QString>
 
 #include "base/NotifierConnection.h"
+#include "base/Result.h"
 #include "gl/FontDescriptor.h"
 #include "ui/CellView.h"
 
@@ -29,6 +30,7 @@
 #include "vm/mat.h"
 #include "vm/quat.h" // IWYU pragma: keep
 
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -44,9 +46,6 @@ class MaterialRenderer;
 class ResourceId;
 class Texture;
 class VertexArray;
-
-template <typename T>
-class Resource;
 } // namespace gl
 
 namespace mdl
@@ -81,8 +80,9 @@ struct PrefabFilter
   PrefabKindFilter kind = PrefabKindFilter::All;
   // the folder an entry must be in, relative to its root; nullopt shows every folder
   std::optional<std::filesystem::path> category;
-  // space-separated words, each of which must be in the name, a tag or the class name
-  std::string text;
+  // words, each of which must be in the name, a tag or the class name; split once when
+  // the filter text changes
+  std::vector<std::string> words;
 };
 
 /**
@@ -98,6 +98,21 @@ std::vector<std::filesystem::path> prefabCategories(
  */
 bool matchesPrefabFilter(const mdl::PrefabEntry& entry, const PrefabFilter& filter);
 
+// the longest side of a thumbnail as the browser keeps it
+constexpr auto PrefabThumbnailMaxSize = std::size_t(128);
+
+/**
+ * Reads and decodes the given image and scales it down, keeping its aspect, so that its
+ * longest side is at most PrefabThumbnailMaxSize. Runs on a resource manager worker.
+ */
+Result<gl::Texture> loadPrefabThumbnail(const std::filesystem::path& path);
+
+/**
+ * What the browser keeps of a library entry across layouts, clears and library changes;
+ * defined in the implementation.
+ */
+struct PrefabPreview;
+
 /**
  * What a cell of the prefab browser draws, in this order of preference: the thumbnail
  * image beside the file, the model of an entity snapshot, the edges of the prefab's
@@ -106,9 +121,12 @@ bool matchesPrefabFilter(const mdl::PrefabEntry& entry, const PrefabFilter& filt
 struct PrefabCellData
 {
   const mdl::PrefabEntry* entry = nullptr;
+  // owned by the view; outlives the cell
+  PrefabPreview* preview = nullptr;
   gl::FontDescriptor fontDescriptor;
 
-  std::shared_ptr<gl::Resource<gl::Texture>> thumbnail;
+  // the thumbnail is drawn; its texture is created when the cell is first drawn
+  bool showsThumbnail = false;
 
   gl::MaterialRenderer* modelRenderer = nullptr;
   mdl::Orientation modelOrientation;
@@ -132,10 +150,16 @@ private:
   vm::quatf m_rotation;
   PrefabFilter m_filter;
 
-  struct EntryPreview;
-  // per library entry, built when a cell first needs it and dropped when the library
-  // changes, so that a filter change neither reads an image nor walks a brush again
-  std::unordered_map<const mdl::PrefabEntry*, std::unique_ptr<EntryPreview>> m_previews;
+  // per library entry, by its absolute path, built when a cell first needs it and kept
+  // while the entry's file is unchanged, so that neither a filter change, nor a clear,
+  // nor a rescan or an update of another file reads an image or walks a brush again
+  std::unordered_map<std::filesystem::path::string_type, std::unique_ptr<PrefabPreview>>
+    m_previews;
+  // the number of previews built so far, which identifies each of them
+  std::size_t m_previewCount = 0;
+  // bumped when the entity definitions change, so that each preview takes its colour and
+  // its model from the new definitions the next time a cell needs it
+  std::size_t m_definitionGeneration = 0;
 
   NotifierConnection m_notifierConnection;
 
@@ -147,15 +171,23 @@ public:
   void setFilter(PrefabFilter filter);
 
   /**
-   * Call when the library's entries changed: the cells point into them.
+   * Call when the library's entries changed: the cells point into them. Drops the cells
+   * and the previews of files that are no longer in the library.
    */
   void libraryDidChange();
 
   /**
    * Call when the entity models may be reloaded: the cells hold model renderers that the
-   * entity model manager deletes when it is cleared.
+   * entity model manager deletes when it is cleared. The previews look their models up
+   * again.
    */
   void entityModelsWillChange();
+
+  /**
+   * Drops the thumbnails, so that each is read again when a cell next draws it; for an
+   * explicit rescan, since a library change keeps the thumbnails of unchanged files.
+   */
+  void reloadThumbnails();
 
   /**
    * A cell as the view lays it out, for tests.
@@ -166,6 +198,8 @@ public:
     std::string title;
     // what a drag of the cell carries
     QString dndData;
+    // identifies the cell's preview: equal while the preview is kept
+    std::size_t previewId;
   };
 
   /**
@@ -185,8 +219,10 @@ private:
 
   void resourcesWereProcessed(const std::vector<gl::ResourceId>& resources);
   void preferenceDidChange(const std::filesystem::path& path);
+  void entityDefinitionsDidChange();
 
-  const EntryPreview& preview(const mdl::PrefabEntry& entry);
+  PrefabPreview& preview(const mdl::PrefabEntry& entry);
+  void updatePreviewAppearance(PrefabPreview& preview, const mdl::PrefabEntry& entry);
   void addEntryToLayout(
     Layout& layout, const mdl::PrefabEntry& entry, const gl::FontDescriptor& font);
 

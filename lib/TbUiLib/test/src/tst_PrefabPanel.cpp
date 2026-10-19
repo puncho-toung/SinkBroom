@@ -19,6 +19,7 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <QImage>
 #include <QLabel>
 #include <QPushButton>
 #include <QTest>
@@ -27,6 +28,7 @@
 #include "SidebarTestUtils.h"
 #include "base/PreferenceManager.h"
 #include "fs/TestEnvironment.h"
+#include "gl/Texture.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GameConfigFixture.h"
@@ -42,6 +44,7 @@
 #include "ui/MapDocument.h"
 #include "ui/PrefabBrowserView.h"
 #include "ui/PrefabPanel.h"
+#include "ui/QPathUtils.h"
 #include "ui/SavePrefabDialog.h"
 
 #include "kd/result.h"
@@ -164,13 +167,48 @@ TEST_CASE("PrefabBrowserView")
     CHECK(matchesPrefabFilter(hatch, PrefabFilter{.category = "doors/metal"}));
     CHECK(matchesPrefabFilter(*entries[2], PrefabFilter{.category = ""}));
 
-    // text: name, tags and class, case-insensitive, every word
-    CHECK(matchesPrefabFilter(torch, PrefabFilter{.text = "tor"}));
-    CHECK(matchesPrefabFilter(torch, PrefabFilter{.text = "FIRE"}));
-    CHECK(matchesPrefabFilter(torch, PrefabFilter{.text = "light"}));
-    CHECK(matchesPrefabFilter(torch, PrefabFilter{.text = "torch wall"}));
-    CHECK(!matchesPrefabFilter(torch, PrefabFilter{.text = "torch door"}));
-    CHECK(!matchesPrefabFilter(hatch, PrefabFilter{.text = "light"}));
+    // words: name, tags and class, case-insensitive, every word
+    CHECK(matchesPrefabFilter(torch, PrefabFilter{.words = {"tor"}}));
+    CHECK(matchesPrefabFilter(torch, PrefabFilter{.words = {"FIRE"}}));
+    CHECK(matchesPrefabFilter(torch, PrefabFilter{.words = {"light"}}));
+    CHECK(matchesPrefabFilter(torch, PrefabFilter{.words = {"torch", "wall"}}));
+    CHECK(!matchesPrefabFilter(torch, PrefabFilter{.words = {"torch", "door"}}));
+    CHECK(!matchesPrefabFilter(hatch, PrefabFilter{.words = {"light"}}));
+  }
+
+  SECTION("loadPrefabThumbnail")
+  {
+    auto env = fs::TestEnvironment{};
+
+    // scaled down to at most 128 on the longest side, keeping the aspect
+    auto wideImage = QImage{300, 150, QImage::Format_RGBA8888};
+    wideImage.fill(Qt::red);
+    REQUIRE(wideImage.save(pathAsQString(env.dir() / "wide.png")));
+
+    const auto wide = loadPrefabThumbnail(env.dir() / "wide.png") | kdl::value();
+    CHECK(wide.width() == PrefabThumbnailMaxSize);
+    CHECK(wide.height() == PrefabThumbnailMaxSize / 2);
+
+    auto tallImage = QImage{40, 1000, QImage::Format_RGBA8888};
+    tallImage.fill(Qt::blue);
+    REQUIRE(tallImage.save(pathAsQString(env.dir() / "tall.png")));
+
+    const auto tall = loadPrefabThumbnail(env.dir() / "tall.png") | kdl::value();
+    CHECK(tall.height() == PrefabThumbnailMaxSize);
+    CHECK(tall.width() == 5u);
+
+    // a small image is kept as it is
+    auto smallImage = QImage{32, 16, QImage::Format_RGBA8888};
+    smallImage.fill(Qt::green);
+    REQUIRE(smallImage.save(pathAsQString(env.dir() / "small.png")));
+
+    const auto small = loadPrefabThumbnail(env.dir() / "small.png") | kdl::value();
+    CHECK(small.width() == 32u);
+    CHECK(small.height() == 16u);
+
+    // not an image
+    env.createFile("broken.png", "not an image");
+    CHECK(loadPrefabThumbnail(env.dir() / "broken.png").is_error());
   }
 }
 
