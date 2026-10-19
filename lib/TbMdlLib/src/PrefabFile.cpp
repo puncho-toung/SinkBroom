@@ -381,6 +381,16 @@ std::vector<EntityProperty> metadataProperties(
   }
   properties.emplace_back(PrefabPropertyKeys::Saved, localTimestamp());
   properties.emplace_back(PrefabPropertyKeys::Source, sourceName(map));
+
+  // a prefab opened as a document loads the host's entity definitions and mods
+  for (const auto& key :
+       {EntityPropertyKeys::TbEntityDefinitions, EntityPropertyKeys::TbMods})
+  {
+    if (const auto* value = map.worldNode().entity().property(key))
+    {
+      properties.emplace_back(key, *value);
+    }
+  }
   return properties;
 }
 

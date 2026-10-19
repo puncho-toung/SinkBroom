@@ -48,6 +48,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -276,6 +277,24 @@ TEST_CASE("PrefabFile")
       // the map is not touched
       CHECK(property(*lightNode, "target") == "door");
       CHECK(property(*lightNode, "origin") == "64 32 16");
+
+      // the host's definition file and mods are copied when it has them
+      const auto hasDefAndMod = [](const WorldNode& prefabWorldNode) {
+        const auto& entity = prefabWorldNode.entity();
+        return std::pair{entity.hasProperty("_tb_def"), entity.hasProperty("_tb_mod")};
+      };
+      CHECK(hasDefAndMod(*worldNode) == std::pair{false, false});
+
+      auto worldEntity = map.worldNode().entity();
+      worldEntity.addOrUpdateProperty("_tb_def", "external:defs/host.fgd");
+      worldEntity.addOrUpdateProperty("_tb_mod", "hostmod");
+      map.worldNode().setEntity(std::move(worldEntity));
+
+      const auto hostWorldNode =
+        readPrefab(map, savedFile(savePrefab(map, {lightNode}, options) | kdl::value()));
+      CHECK(hasDefAndMod(*hostWorldNode) == std::pair{true, true});
+      CHECK(*hostWorldNode->entity().property("_tb_def") == "external:defs/host.fgd");
+      CHECK(*hostWorldNode->entity().property("_tb_mod") == "hostmod");
     }
 
     SECTION("Keep external links")
