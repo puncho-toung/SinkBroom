@@ -26,6 +26,7 @@
 #include "vm/bbox.h"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -58,10 +59,26 @@ class MapWindow;
 class MapWindowManager : public QObject
 {
   Q_OBJECT
+public:
+  // shows a new window or brings one to the front; see setShowMapWindowForTesting
+  using ShowMapWindow = std::function<void(MapWindow&)>;
+
 private:
+  /**
+   * A prefab editor and the window that opened it, which is nullptr once it is closed.
+   */
+  struct PrefabEditor
+  {
+    MapWindow* editor;
+    MapWindow* host;
+  };
+
   AppController& m_appController;
   bool m_singleMapWindow;
   std::vector<MapWindow*> m_mapWindows;
+  std::vector<PrefabEditor> m_prefabEditors;
+  // replaces showMapWindow's show, raise and activate, if set
+  ShowMapWindow m_showMapWindow;
 
 public:
   MapWindowManager(AppController& appController, bool singleMapWindow);
@@ -78,15 +95,55 @@ public:
     const vm::bbox3d& worldBounds,
     std::filesystem::path path);
 
+  /**
+   * Opens the given prefab file in a prefab editor beside the given window, with the
+   * game, map format and world bounds of that window's document, which the prefab
+   * library reads its files with. The editor is a window of its own even if the manager
+   * keeps a single map window (the one exception, NR D23), and New and Open never
+   * replace its document. If an editor has the file open, it is brought to the front
+   * instead.
+   */
+  Result<void> openPrefabEditor(MapWindow& hostWindow, const std::filesystem::path& path);
+
+  /**
+   * Tells the window that opened the given prefab editor that the editor saved the
+   * given file, or every other window if that window was closed.
+   */
+  void prefabWasSaved(const MapWindow& prefabEditor, const std::filesystem::path& path);
+
   std::vector<MapWindow*> mapWindows() const;
   MapWindow* topMapWindow() const;
   bool allMapWindowsClosed() const;
 
+  /**
+   * Makes the manager keep a single map window, or one per document, as on Windows and
+   * on the other platforms. For tests.
+   */
+  void setSingleMapWindowForTesting(bool singleMapWindow);
+
+  /**
+   * Replaces how a new window is shown and an open prefab editor brought to the front;
+   * an empty function restores both. For tests, whose GL views must not be shown.
+   */
+  void setShowMapWindowForTesting(ShowMapWindow showMapWindow);
+
 private:
   void onFocusChange(QWidget* old, QWidget* now);
 
+  /**
+   * The window whose document New and Open replace if the manager keeps a single map
+   * window: the top one that is not a prefab editor.
+   */
+  MapWindow* documentWindow() const;
+  MapWindow* findPrefabEditor(const std::filesystem::path& path) const;
+
   bool shouldCreateWindowForDocument() const;
-  MapWindow* createMapWindow(std::unique_ptr<MapDocument> document);
+  MapWindow* createMapWindow(
+    std::unique_ptr<MapDocument> document,
+    bool prefabEditor = false,
+    QWidget* reference = nullptr);
+  void showMapWindow(MapWindow& mapWindow);
+  void moveToTop(MapWindow& mapWindow);
   void removeMapWindow(MapWindow* mapWindow);
 
   friend class MapWindow;

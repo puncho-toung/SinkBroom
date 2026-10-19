@@ -2028,7 +2028,9 @@ void ActionManager::createRunMenu()
     ActionContext::Any,
     KeySequence{},
     [](auto& context) { context.mapWindow().showCompileDialog(); },
-    [](const auto& context) { return context.hasDocument(); },
+    [](const auto& context) {
+      return context.hasDocument() && context.mapWindow().canCompile();
+    },
   }));
   runMenu.addItem(addAction(Action{
     "Menu/Run/Launch...",
@@ -2036,7 +2038,9 @@ void ActionManager::createRunMenu()
     ActionContext::Any,
     KeySequence{},
     [](auto& context) { context.mapWindow().showLaunchEngineDialog(); },
-    [](const auto& context) { return context.hasDocument(); },
+    [](const auto& context) {
+      return context.hasDocument() && context.mapWindow().canLaunch();
+    },
   }));
   runMenu.addSeparator();
   runMenu.addItem(
@@ -2047,7 +2051,8 @@ void ActionManager::createRunMenu()
       KeySequence{},
       [](auto& context) { context.mapWindow().rerunLastCompilation(); },
       [](const auto& context) {
-        return context.hasDocument() && context.mapWindow().hasLastCompilationProfile();
+        return context.hasDocument() && context.mapWindow().canCompile()
+               && context.mapWindow().hasLastCompilationProfile();
       },
     }),
     MenuEntryType::Rerun);

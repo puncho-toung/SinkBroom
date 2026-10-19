@@ -1199,8 +1199,8 @@ void PrefabPanel::updateSaveButton()
 
 void PrefabPanel::editPrefab(const QString& path)
 {
-  // D20: until the prefab window exists, a prefab opens as an ordinary document; posted,
-  // because in a single-document window the document is replaced
+  // PF3: a prefab opens in a prefab editor beside this window; posted, so that the
+  // window is not built while the cell's context menu is still open
   QTimer::singleShot(0, this, [this, path]() {
     if (auto* mapWindow = findMapWindow(this))
     {

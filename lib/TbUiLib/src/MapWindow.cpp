@@ -26,12 +26,14 @@
 #include <QDataStream>
 #include <QDockWidget>
 #include <QFileDialog>
+#include <QImage>
 #include <QInputDialog>
 #include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPushButton>
+#include <QSaveFile>
 #include <QSettings>
 #include <QStatusBar>
 #include <QString>
@@ -100,6 +102,7 @@
 #include "ui/MapDocument.h"
 #include "ui/MapInspector.h"
 #include "ui/MapView2D.h"
+#include "ui/MapView3D.h"
 #include "ui/MapViewBase.h"
 #include "ui/MapViewToolBox.h"
 #include "ui/MapWindowManager.h"
@@ -128,6 +131,7 @@
 #include "kd/contracts.h"
 #include "kd/k.h"
 #include "kd/overload.h"
+#include "kd/path_utils.h"
 #include "kd/ranges/to.h"
 #include "kd/string_format.h"
 #include "kd/string_utils.h"
@@ -187,6 +191,12 @@ constexpr auto DockLayoutVersion = 2;
  * The suffix of the dock layout version's settings key, beside the window's State.
  */
 constexpr auto DockLayoutVersionKey = "DockLayoutVersion";
+
+/**
+ * The longer side of a prefab thumbnail at most: the prefab panel's cells show it at up
+ * to 128 pixels, and this leaves room for a larger cell or a high-DPI screen.
+ */
+constexpr auto ThumbnailSize = 256;
 
 /**
  * The inspector panels in the order of their tabs.
@@ -263,9 +273,13 @@ bool oldPanelVisible(const QString& key)
 
 using namespace std::chrono_literals;
 
-MapWindow::MapWindow(AppController& appController, std::unique_ptr<MapDocument> document)
+MapWindow::MapWindow(
+  AppController& appController,
+  std::unique_ptr<MapDocument> document,
+  const bool prefabEditor)
   : m_appController{appController}
   , m_document{std::move(document)}
+  , m_prefabEditor{prefabEditor}
   , m_lastInputTime{std::chrono::system_clock::now()}
   , m_autosaveTimer{new QTimer{this}}
   , m_updateTitleSignalDelayer{new SignalDelayer{500ms, this}}
@@ -275,6 +289,7 @@ MapWindow::MapWindow(AppController& appController, std::unique_ptr<MapDocument> 
   contract_pre(m_document != nullptr);
 
   setAttribute(Qt::WA_DeleteOnClose);
+  // a prefab editor restores the map windows' layout too, and saves none
   setObjectName("MapWindow");
 
   installEventFilter(this);
@@ -293,7 +308,12 @@ MapWindow::MapWindow(AppController& appController, std::unique_ptr<MapDocument> 
 
   m_document->setTargetLogger(m_console);
 
-  m_autosaveTimer->start(1000);
+  // H-PF3-3: the backups of a prefab would land in an autosave folder in the library,
+  // which lists them as prefabs
+  if (!m_prefabEditor)
+  {
+    m_autosaveTimer->start(1000);
+  }
 
   connectObservers();
   bindEvents();
@@ -363,8 +383,12 @@ MapWindow::~MapWindow()
     [](const auto* child) { return qobject_cast<const QTabBar*>(child) != nullptr; });
   qDeleteAll(std::rbegin(children), std::rend(children));
 
-  // let's trigger a final autosave before releasing the document
-  m_document->triggerAutosave();
+  // let's trigger a final autosave before releasing the document; a prefab editor makes
+  // no backups (H-PF3-3)
+  if (!m_prefabEditor)
+  {
+    m_document->triggerAutosave();
+  }
   m_document.reset();
 
   // FIXME: m_contextManager is deleted via smart pointer; it may release openGL resources
@@ -378,6 +402,11 @@ void MapWindow::saveWindowState()
 
   // the saved state knows every dock, so the next restore arranges none of them
   QSettings{}.setValue(widgetSettingsPath(this, DockLayoutVersionKey), DockLayoutVersion);
+}
+
+bool MapWindow::isPrefabEditor() const
+{
+  return m_prefabEditor;
 }
 
 void MapWindow::positionOnScreen(QWidget* reference)
@@ -436,7 +465,9 @@ void MapWindow::updateTitle()
 {
   const auto& map = m_document->map();
   setWindowModified(map.modified());
-  setWindowTitle(tr("%1[*] - TrenchBroom").arg(pathAsQString(map.filename())));
+  setWindowTitle(
+    m_prefabEditor ? tr("%1[*] [Prefab] - TrenchBroom").arg(pathAsQString(map.filename()))
+                   : tr("%1[*] - TrenchBroom").arg(pathAsQString(map.filename())));
   setWindowFilePath(pathAsQPath(map.path()));
 }
 
@@ -555,7 +586,9 @@ void MapWindow::updateRecentDocumentsMenu()
 {
   const auto& map = m_document->map();
   const auto path = map.path();
-  if (path.is_absolute())
+  // a prefab is not a recent map: opened from the list, it would replace a map window's
+  // document (H-PF3-4)
+  if (path.is_absolute() && !m_prefabEditor)
   {
     m_appController.recentDocuments().updatePath(path);
   }
@@ -1100,6 +1133,13 @@ void MapWindow::documentWasSaved()
   updateActionState();
   updateUndoRedoActions();
   updateRecentDocumentsMenu();
+
+  if (m_prefabEditor)
+  {
+    // the thumbnail first, so that the library reads it with the file
+    writePrefabThumbnail();
+    m_appController.mapWindowManager().prefabWasSaved(*this, m_document->map().path());
+  }
 }
 
 void MapWindow::mapModificationStateDidChange()
@@ -1847,13 +1887,32 @@ bool MapWindow::canSaveSelectionAsPrefab() const
 
 void MapWindow::editPrefab(const std::filesystem::path& path)
 {
-  // a prefab file is an ordinary map (D20); in a single-document window it replaces
-  // this document, so its unsaved changes are offered for saving first
-  if (AppController::useSDI && !confirmOrDiscardChanges())
+  // PF3: a window of its own on every platform, so this document stays
+  m_appController.mapWindowManager().openPrefabEditor(*this, path)
+    | kdl::transform_error([&](const auto& e) {
+        logger().error() << "Could not open prefab " << path << ": " << e.msg;
+        QMessageBox::critical(
+          this,
+          "TrenchBroom",
+          QString::fromStdString(
+            fmt::format("Could not open prefab {}: {}", path, e.msg)),
+          QMessageBox::Ok);
+      });
+}
+
+void MapWindow::prefabWasSaved(const std::filesystem::path& path)
+{
+  if (
+    auto* prefabPanel =
+      dynamic_cast<PrefabPanel*>(m_sidebarManager->panel(PrefabPanel::PanelId)))
   {
-    return;
+    prefabPanel->prefabWasSaved(path);
   }
-  m_appController.openDocument(path);
+}
+
+void MapWindow::setThumbnailGrabberForTesting(ThumbnailGrabber thumbnailGrabber)
+{
+  m_thumbnailGrabber = std::move(thumbnailGrabber);
 }
 
 void MapWindow::selectAll()
@@ -2817,13 +2876,54 @@ MapViewBase* MapWindow::currentMapViewBase()
 bool MapWindow::canCompile() const
 {
   const auto& map = m_document->map();
-  return map.persistent();
+  return map.persistent() && !m_prefabEditor;
 }
 
 bool MapWindow::canLaunch() const
 {
   const auto& map = m_document->map();
-  return map.persistent();
+  return map.persistent() && !m_prefabEditor;
+}
+
+void MapWindow::writePrefabThumbnail()
+{
+  const auto& mapPath = m_document->map().path();
+  const auto thumbnailPath = kdl::path_replace_extension(mapPath, ".png");
+
+  auto image = m_thumbnailGrabber ? m_thumbnailGrabber() : grabThumbnail();
+  if (image.isNull())
+  {
+    const auto message = tr("No thumbnail saved: no 3D view is shown");
+    logger().info() << message.toStdString();
+    statusBar()->showMessage(message, 5000);
+    return;
+  }
+
+  if (image.width() > ThumbnailSize || image.height() > ThumbnailSize)
+  {
+    image = image.scaled(
+      ThumbnailSize, ThumbnailSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+  }
+
+  // written beside the file and renamed, so that the library never reads half of it;
+  // not with WritableFileSystem::createFileAtomic, which writes text (H-PF3-5)
+  auto file = QSaveFile{pathAsQString(thumbnailPath)};
+  if (!file.open(QIODevice::WriteOnly) || !image.save(&file, "PNG") || !file.commit())
+  {
+    logger().error() << "Could not write thumbnail " << thumbnailPath << ": "
+                     << file.errorString().toStdString();
+    return;
+  }
+  logger().info() << "Saved thumbnail " << thumbnailPath;
+}
+
+QImage MapWindow::grabThumbnail()
+{
+  // one pane cycles through its views, so the 3D view may be there but not shown
+  const auto views = m_mapView->findChildren<MapView3D*>();
+  const auto it =
+    std::ranges::find_if(views, [](const auto* view) { return view->isVisible(); });
+  return it != views.end() ? (*it)->grabFramebuffer() : QImage{};
 }
 
 QMenu* MapWindow::createPopupMenu()
@@ -2911,7 +3011,12 @@ void MapWindow::closeEvent(QCloseEvent* event)
 
   disconnect(qApp, &QApplication::focusChanged, this, &MapWindow::focusChange);
 
-  saveWindowState();
+  // the map windows and the prefab editors share one saved layout, which only the map
+  // windows write
+  if (!m_prefabEditor)
+  {
+    saveWindowState();
+  }
 
   m_appController.mapWindowManager().removeMapWindow(this);
   event->accept();
