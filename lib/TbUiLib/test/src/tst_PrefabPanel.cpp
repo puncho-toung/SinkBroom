@@ -19,6 +19,8 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <QLabel>
+#include <QPushButton>
 #include <QTest>
 #include <QToolButton>
 
@@ -187,18 +189,47 @@ TEST_CASE("SavePrefabDialog")
   {
     auto* entityNode = addEntity(map, {{"classname", "light"}});
 
-    // the path that savePrefab writes, with the same file name rule
+    // the dialog asks before replacing the file that savePrefab writes
+    const auto& library = map.prefabLibrary();
     const auto options = mdl::SavePrefabOptions{
       .name = " a:b? ", .category = "lights", .root = mdl::PrefabRoot::User};
-    const auto path = prefabFilePath(document, options);
+    const auto path = mdl::prefabFilePath(library, options) | kdl::value();
     CHECK(path == env.dir() / "lights" / "a_b_.map");
     CHECK((mdl::savePrefab(map, {entityNode}, options) | kdl::value()) == path);
 
     // no name, or no root
-    CHECK(prefabFilePath(document, mdl::SavePrefabOptions{.name = " . "}).empty());
-    CHECK(prefabFilePath(
-            document, mdl::SavePrefabOptions{.name = "x", .root = mdl::PrefabRoot::Mod})
-            .empty());
+    CHECK(mdl::prefabFilePath(library, mdl::SavePrefabOptions{.name = " . "}).is_error());
+    CHECK(mdl::prefabFilePath(
+            library, mdl::SavePrefabOptions{.name = "x", .root = mdl::PrefabRoot::Mod})
+            .is_error());
+  }
+
+  SECTION("a category outside the library cannot be saved to")
+  {
+    selectOnly(map, {addEntity(map, {{"classname", "light"}, {"name", "lamp"}})});
+
+    auto dialog = SavePrefabDialog{document};
+    auto* categoryChoice =
+      dialog.findChild<QComboBox*>("SavePrefabDialog_categoryChoice");
+    auto* messageLabel = dialog.findChild<QLabel*>("SavePrefabDialog_messageLabel");
+    auto* saveButton = dialog.findChild<QPushButton*>("SavePrefabDialog_saveButton");
+    REQUIRE(categoryChoice != nullptr);
+    REQUIRE(messageLabel != nullptr);
+    REQUIRE(saveButton != nullptr);
+    CHECK(saveButton->isEnabled());
+    CHECK(messageLabel->text().isEmpty());
+
+    for (const auto* category : {"../out", "lights/../..", "/lights"})
+    {
+      CAPTURE(category);
+      categoryChoice->setCurrentText(category);
+      CHECK(!saveButton->isEnabled());
+      CHECK(!messageLabel->text().isEmpty());
+    }
+
+    categoryChoice->setCurrentText("lights");
+    CHECK(saveButton->isEnabled());
+    CHECK(messageLabel->text().isEmpty());
   }
 }
 

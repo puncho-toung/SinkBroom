@@ -30,6 +30,7 @@ namespace tb::mdl
 class EntityNode;
 class Map;
 class Node;
+class PrefabLibrary;
 class WorldNode;
 
 /**
@@ -122,9 +123,21 @@ struct ExternalLink
 std::vector<ExternalLink> findExternalLinks(const std::vector<Node*>& selectedNodes);
 
 /**
- * Writes the selected nodes to a new prefab file at
- * writeRootFor(options.root) / options.category / <options.name>.map, overwriting an
- * existing file, and returns its absolute path. The map is not modified.
+ * The file that savePrefab writes for the given options:
+ * writeRootFor(options.root) / options.category / <options.name>.map, where the name is
+ * made a file name that every platform can hold (invalid characters replaced, trailing
+ * dots and spaces removed, a reserved device name such as CON or NUL suffixed with '_').
+ *
+ * Returns an error if no character of the name is left, if the category is not a folder
+ * inside the root (it has a root name or a root directory, or leaves the root through
+ * ".."), or if the root is not available.
+ */
+Result<std::filesystem::path> prefabFilePath(
+  const PrefabLibrary& library, const SavePrefabOptions& options);
+
+/**
+ * Writes the selected nodes to a new prefab file at prefabFilePath(options), overwriting
+ * an existing file, and returns its absolute path. The map is not modified.
  */
 Result<std::filesystem::path> savePrefab(
   const Map& map,

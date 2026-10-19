@@ -52,14 +52,6 @@ class MapDocument;
 std::string defaultPrefabName(const MapDocument& document);
 
 /**
- * The file savePrefab writes for the given options, or an empty path if the options'
- * root is not available or the name has no character a file name can hold. Mirrors the
- * file name rule of savePrefab (PrefabFile.cpp).
- */
-std::filesystem::path prefabFilePath(
-  const MapDocument& document, const mdl::SavePrefabOptions& options);
-
-/**
  * Asks for the name, place and options of a new prefab made from the selection and
  * writes it. Saving a prefab does not touch the document.
  */

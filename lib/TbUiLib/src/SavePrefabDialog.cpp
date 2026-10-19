@@ -54,7 +54,6 @@
 #include "kd/string_utils.h"
 
 #include <ranges>
-#include <string_view>
 #include <system_error>
 
 namespace tb::ui
@@ -91,28 +90,6 @@ const mdl::EntityNode* selectedEntityNode(const mdl::Selection& selection)
     }
   }
   return nullptr;
-}
-
-/**
- * The file name rule of savePrefab (sanitizeFileName in PrefabFile.cpp).
- */
-std::string prefabFileName(const std::string& name)
-{
-  auto result = std::string{};
-  for (const auto c : name)
-  {
-    const auto isInvalid =
-      static_cast<unsigned char>(c) < 0x20
-      || std::string_view{"<>:\"/\\|?*"}.find(c) != std::string_view::npos;
-    result.push_back(isInvalid ? '_' : c);
-  }
-
-  result = kdl::str_trim(result);
-  while (!result.empty() && (result.back() == '.' || result.back() == ' '))
-  {
-    result.pop_back();
-  }
-  return result;
 }
 
 std::vector<std::string> splitTags(const QString& text)
@@ -162,16 +139,6 @@ std::string defaultPrefabName(const MapDocument& document)
   return "prefab";
 }
 
-std::filesystem::path prefabFilePath(
-  const MapDocument& document, const mdl::SavePrefabOptions& options)
-{
-  const auto rootPath = document.map().prefabLibrary().writeRootFor(options.root);
-  const auto fileName = prefabFileName(options.name);
-  return !rootPath.empty() && !fileName.empty()
-           ? rootPath / options.category / (fileName + ".map")
-           : std::filesystem::path{};
-}
-
 SavePrefabDialog::SavePrefabDialog(MapDocument& document, QWidget* parent)
   : QDialog{parent}
   , m_document{document}
@@ -193,7 +160,8 @@ void SavePrefabDialog::accept()
   const auto options = this->options();
 
   auto ec = std::error_code{};
-  if (const auto path = prefabFilePath(m_document, options);
+  if (const auto path = mdl::prefabFilePath(m_document.map().prefabLibrary(), options)
+                        | kdl::value_or(std::filesystem::path{});
       !path.empty() && std::filesystem::is_regular_file(path, ec))
   {
     const auto answer = QMessageBox::question(
@@ -243,6 +211,7 @@ void SavePrefabDialog::createGui()
   }
 
   m_categoryChoice = new QComboBox{};
+  m_categoryChoice->setObjectName("SavePrefabDialog_categoryChoice");
   m_categoryChoice->setEditable(true);
   m_categoryChoice->setInsertPolicy(QComboBox::NoInsert);
   for (const auto& category : prefabCategories(library.entries()))
@@ -285,6 +254,7 @@ void SavePrefabDialog::createGui()
        "key"));
 
   m_messageLabel = new QLabel{};
+  m_messageLabel->setObjectName("SavePrefabDialog_messageLabel");
   setInfoStyle(m_messageLabel);
   m_messageLabel->setWordWrap(true);
 
@@ -309,6 +279,7 @@ void SavePrefabDialog::createGui()
 
   auto* buttonBox = new QDialogButtonBox{};
   m_saveButton = buttonBox->addButton(tr("Save"), QDialogButtonBox::AcceptRole);
+  m_saveButton->setObjectName("SavePrefabDialog_saveButton");
   buttonBox->addButton(QDialogButtonBox::Cancel);
   connect(buttonBox, &QDialogButtonBox::accepted, this, &SavePrefabDialog::accept);
   connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -322,6 +293,11 @@ void SavePrefabDialog::createGui()
   setLayout(outerLayout);
 
   connect(m_nameEdit, &QLineEdit::textChanged, this, [&]() { updateControls(); });
+  connect(m_rootChoice, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [&]() {
+    updateControls();
+  });
+  connect(
+    m_categoryChoice, &QComboBox::currentTextChanged, this, [&]() { updateControls(); });
   connect(m_forceAssemblyCheck, &QCheckBox::toggled, this, [&]() { updateControls(); });
   connect(m_clearLinksCheck, &QCheckBox::toggled, this, [&]() { updateControls(); });
 
@@ -343,15 +319,23 @@ void SavePrefabDialog::updateControls()
 
   m_externalLinksList->setEnabled(m_clearLinksCheck->isChecked());
 
+  // the name, the category and the root give the file, or the reason there is none
   const auto hasRoot = m_rootChoice->count() > 0;
-  const auto hasName = !prefabFileName(m_nameEdit->text().toStdString()).empty();
+  auto message = hasRoot ? QString{} : tr("Set a game path or a Prefab Path first");
+  const auto hasPath = mdl::prefabFilePath(m_document.map().prefabLibrary(), options())
+                       | kdl::transform([](const auto&) { return true; })
+                       | kdl::transform_error([&](const auto& e) {
+                           if (message.isEmpty())
+                           {
+                             message = QString::fromStdString(e.msg);
+                           }
+                           return false;
+                         })
+                       | kdl::value();
   m_rootChoice->setEnabled(hasRoot);
-  m_messageLabel->setText(
-    !hasRoot   ? tr("Set a game path or a Prefab Path first")
-    : !hasName ? tr("Enter a name")
-               : QString{});
-  m_messageLabel->setVisible(!m_messageLabel->text().isEmpty());
-  m_saveButton->setEnabled(hasRoot && hasName && !m_nodes.empty());
+  m_messageLabel->setText(message);
+  m_messageLabel->setVisible(!message.isEmpty());
+  m_saveButton->setEnabled(hasPath && !m_nodes.empty());
 }
 
 mdl::SavePrefabOptions SavePrefabDialog::options() const

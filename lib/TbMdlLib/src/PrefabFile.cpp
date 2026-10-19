@@ -49,6 +49,7 @@
 #include "kd/path_utils.h"
 #include "kd/ranges/contains.h"
 #include "kd/ranges/to.h"
+#include "kd/string_compare.h"
 #include "kd/string_format.h"
 #include "kd/string_utils.h"
 #include "kd/task_manager.h"
@@ -59,7 +60,9 @@
 #include <fmt/std.h>
 
 #include <algorithm>
+#include <array>
 #include <ctime>
+#include <optional>
 #include <ranges>
 #include <sstream>
 #include <unordered_set>
@@ -290,8 +293,15 @@ vm::vec3d referencePoint(const Map& map, const PrefabKind kind, const Node& body
   return map.grid().snap(body.logicalBounds().center());
 }
 
+// the device names that Windows reserves in every folder, with or without an extension
+constexpr auto ReservedFileNames = std::array<std::string_view, 22>{
+  "CON",  "PRN",  "AUX",  "NUL",  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+  "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+};
+
 /**
- * Replaces every character that a file name cannot hold on any platform.
+ * Replaces every character that a file name cannot hold on any platform and suffixes a
+ * reserved device name with '_', so that the file can be copied to any platform.
  */
 std::string sanitizeFileName(const std::string& name)
 {
@@ -309,14 +319,36 @@ std::string sanitizeFileName(const std::string& name)
   {
     result.pop_back();
   }
+
+  // Windows takes the part before the first dot for the device name
+  const auto baseLength = std::min(result.find('.'), result.size());
+  const auto base = std::string_view{result}.substr(0, baseLength);
+  if (std::ranges::any_of(ReservedFileNames, [&](const auto reservedName) {
+        return kdl::ci::str_is_equal(base, reservedName);
+      }))
+  {
+    result.insert(baseLength, "_");
+  }
   return result;
 }
 
-bool isValidCategory(const std::filesystem::path& category)
+/**
+ * The category as a folder relative to the root, or nullopt if it is not a folder
+ * inside the root: an absolute path or a drive would replace the root, ".." would leave
+ * it.
+ */
+std::optional<std::filesystem::path> normalizeCategory(
+  const std::filesystem::path& category)
 {
-  return !category.has_root_path()
-         && std::ranges::none_of(
-           category, [](const auto& element) { return element == ".."; });
+  const auto normalized = category.lexically_normal();
+  if (
+    normalized.has_root_name() || normalized.has_root_directory()
+    || std::ranges::any_of(
+      normalized, [](const auto& element) { return element == ".."; }))
+  {
+    return std::nullopt;
+  }
+  return normalized == "." ? std::filesystem::path{} : normalized;
 }
 
 std::string localTimestamp()
@@ -414,78 +446,22 @@ std::string serializePrefab(const Map& map, const WorldNode& worldNode)
 }
 
 Result<std::filesystem::path> writePrefabFile(
-  const std::filesystem::path& directory,
-  const std::string& fileName,
-  const std::string& contents)
+  const std::filesystem::path& path, const std::string& contents)
 {
+  const auto directory = path.parent_path();
   return fs::Disk::createDirectory(directory) | kdl::and_then([&](auto) {
            auto fs = fs::WritableDiskFileSystem{directory};
-           return fs.createFileAtomic(fileName, contents);
+           return fs.createFileAtomic(path.filename(), contents);
          })
-         | kdl::transform([&]() { return directory / fileName; });
+         | kdl::transform([&]() { return path; });
 }
 
-} // namespace
-
-PrefabKind derivePrefabKind(
-  const std::vector<Node*>& selectedNodes, const bool forceAssembly)
-{
-  const auto nodes = normalizeSelection(selectedNodes);
-  return !forceAssembly && nodes.size() == 1
-             && dynamic_cast<const EntityNode*>(nodes.front())
-           ? PrefabKind::Entity
-           : PrefabKind::Assembly;
-}
-
-std::vector<ExternalLink> findExternalLinks(const std::vector<Node*>& selectedNodes)
-{
-  const auto entityNodes = collectEntityNodes(normalizeSelection(selectedNodes));
-  const auto namesInSelection = entityNames(entityNodes);
-
-  auto result = std::vector<ExternalLink>{};
-  for (const auto* entityNode : entityNodes)
-  {
-    for (const auto& property :
-         externalLinkProperties(entityNode->entity(), namesInSelection))
-    {
-      result.push_back(ExternalLink{entityNode, property.key(), property.value()});
-    }
-  }
-  return result;
-}
-
-Result<std::filesystem::path> savePrefab(
+Result<std::filesystem::path> writePrefab(
   const Map& map,
-  const std::vector<Node*>& selectedNodes,
-  const SavePrefabOptions& options)
+  const std::vector<Node*>& nodes,
+  const SavePrefabOptions& options,
+  const std::filesystem::path& path)
 {
-  const auto nodes = normalizeSelection(selectedNodes);
-  if (nodes.empty())
-  {
-    return Error{"Cannot save an empty selection as a prefab"};
-  }
-
-  const auto fileName = sanitizeFileName(options.name);
-  if (fileName.empty())
-  {
-    return Error{"Cannot save a prefab without a name"};
-  }
-
-  if (!isValidCategory(options.category))
-  {
-    return Error{fmt::format(
-      "Prefab category {} must be a folder inside the library", options.category)};
-  }
-
-  const auto rootPath = map.prefabLibrary().writeRootFor(options.root);
-  if (rootPath.empty())
-  {
-    return Error{
-      options.root == PrefabRoot::User
-        ? "Cannot save a prefab to the user library: the Prefab Path is not set"
-        : "Cannot save a prefab to the mod library: the game path is not set"};
-  }
-
   const auto kind = derivePrefabKind(nodes, options.forceAssembly);
   const auto namesInSelection = entityNames(collectEntityNodes(nodes));
   const auto& worldBounds = map.worldBounds();
@@ -548,11 +524,81 @@ Result<std::filesystem::path> savePrefab(
              // placement joins none of the source map's link sets
              rekeyLinkIds({topNode});
 
-             return writePrefabFile(
-               rootPath / options.category,
-               fileName + ".map",
-               serializePrefab(map, *worldNode));
+             return writePrefabFile(path, serializePrefab(map, *worldNode));
            });
+}
+
+} // namespace
+
+PrefabKind derivePrefabKind(
+  const std::vector<Node*>& selectedNodes, const bool forceAssembly)
+{
+  const auto nodes = normalizeSelection(selectedNodes);
+  return !forceAssembly && nodes.size() == 1
+             && dynamic_cast<const EntityNode*>(nodes.front())
+           ? PrefabKind::Entity
+           : PrefabKind::Assembly;
+}
+
+std::vector<ExternalLink> findExternalLinks(const std::vector<Node*>& selectedNodes)
+{
+  const auto entityNodes = collectEntityNodes(normalizeSelection(selectedNodes));
+  const auto namesInSelection = entityNames(entityNodes);
+
+  auto result = std::vector<ExternalLink>{};
+  for (const auto* entityNode : entityNodes)
+  {
+    for (const auto& property :
+         externalLinkProperties(entityNode->entity(), namesInSelection))
+    {
+      result.push_back(ExternalLink{entityNode, property.key(), property.value()});
+    }
+  }
+  return result;
+}
+
+Result<std::filesystem::path> prefabFilePath(
+  const PrefabLibrary& library, const SavePrefabOptions& options)
+{
+  const auto fileName = sanitizeFileName(options.name);
+  if (fileName.empty())
+  {
+    return Error{"Cannot save a prefab without a name"};
+  }
+
+  const auto category = normalizeCategory(options.category);
+  if (!category)
+  {
+    return Error{fmt::format(
+      "Prefab category {} must be a folder inside the library", options.category)};
+  }
+
+  const auto rootPath = library.writeRootFor(options.root);
+  if (rootPath.empty())
+  {
+    return Error{
+      options.root == PrefabRoot::User
+        ? "Cannot save a prefab to the user library: the Prefab Path is not set"
+        : "Cannot save a prefab to the mod library: the game path is not set"};
+  }
+
+  return rootPath / *category / (fileName + ".map");
+}
+
+Result<std::filesystem::path> savePrefab(
+  const Map& map,
+  const std::vector<Node*>& selectedNodes,
+  const SavePrefabOptions& options)
+{
+  const auto nodes = normalizeSelection(selectedNodes);
+  if (nodes.empty())
+  {
+    return Error{"Cannot save an empty selection as a prefab"};
+  }
+
+  return prefabFilePath(map.prefabLibrary(), options)
+         | kdl::and_then(
+           [&](const auto& path) { return writePrefab(map, nodes, options, path); });
 }
 
 Result<PrefabMetadata> readPrefabMetadata(const WorldNode& world)

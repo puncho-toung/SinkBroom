@@ -156,6 +156,66 @@ TEST_CASE("PrefabFile")
     return env.loadFile(path.lexically_relative(env.dir()));
   };
 
+  SECTION("prefabFilePath")
+  {
+    const auto& library = map.prefabLibrary();
+    const auto userRoot = env.dir() / "user";
+    const auto filePath = [&](std::string name, std::filesystem::path category = {}) {
+      return prefabFilePath(
+        library,
+        SavePrefabOptions{
+          .name = std::move(name),
+          .category = std::move(category),
+          .root = PrefabRoot::User});
+    };
+
+    CHECK(
+      (filePath("Red torch", "lights") | kdl::value())
+      == userRoot / "lights" / "Red torch.map");
+    CHECK(
+      (filePath("Crate", "props/wood") | kdl::value())
+      == userRoot / "props" / "wood" / "Crate.map");
+
+    // characters that a file name cannot hold on some platform are replaced; leading and
+    // trailing spaces and trailing dots are removed
+    CHECK(
+      (filePath(" a/b\\c:d*e?f\"g<h>i|j ") | kdl::value())
+      == userRoot / "a_b_c_d_e_f_g_h_i_j.map");
+    CHECK((filePath("tab\there") | kdl::value()) == userRoot / "tab_here.map");
+    CHECK((filePath("dots... ") | kdl::value()) == userRoot / "dots.map");
+    CHECK(filePath(" . ").is_error());
+    CHECK(filePath("").is_error());
+
+    // the device names that Windows reserves get a suffix, with or without an extension
+    CHECK((filePath("CON") | kdl::value()) == userRoot / "CON_.map");
+    CHECK((filePath("nul") | kdl::value()) == userRoot / "nul_.map");
+    CHECK((filePath("Com1") | kdl::value()) == userRoot / "Com1_.map");
+    CHECK((filePath("lpt9.crate") | kdl::value()) == userRoot / "lpt9_.crate.map");
+    CHECK((filePath("console") | kdl::value()) == userRoot / "console.map");
+    CHECK((filePath("com10") | kdl::value()) == userRoot / "com10.map");
+
+    // the category is a folder inside the root
+    CHECK(
+      (filePath("Light", "./lights/") | kdl::value())
+      == userRoot / "lights" / "Light.map");
+    CHECK((filePath("Light", "a/../b") | kdl::value()) == userRoot / "b" / "Light.map");
+    CHECK((filePath("Light", ".") | kdl::value()) == userRoot / "Light.map");
+    CHECK(filePath("Light", "../out").is_error());
+    CHECK(filePath("Light", "a/../..").is_error());
+    CHECK(filePath("Light", "/lights").is_error());
+    CHECK(filePath("Light", env.dir() / "elsewhere").is_error());
+#ifdef _WIN32
+    CHECK(filePath("Light", "C:lights").is_error());
+#endif
+
+    // no root
+    CHECK(
+      prefabFilePath(library, SavePrefabOptions{.name = "Light", .root = PrefabRoot::Mod})
+        .is_success());
+    map.prefabLibrary().setUserRoot({});
+    CHECK(filePath("Light").is_error());
+  }
+
   SECTION("derivePrefabKind")
   {
     auto* lightNode = createEntity({{"classname", "light"}, {"origin", "0 0 0"}});
