@@ -19,11 +19,15 @@
 
 #pragma once
 
+#include "kd/flat_map.h"
+
 #include <string>
+#include <vector>
 
 namespace tb::mdl
 {
 class Map;
+class Node;
 
 enum class PasteType;
 
@@ -31,6 +35,27 @@ std::string serializeSelectedNodes(Map& map);
 std::string serializeSelectedBrushFaces(Map& map);
 
 PasteType paste(Map& map, const std::string& str);
+
+/**
+ * Prepares caller-owned nodes (for example, the result of NodeReader::read) for adding to
+ * the given map, the way paste does:
+ *
+ * - world nodes, layer nodes and worldspawn entities are dissolved: their children are
+ *   moved to parentForNodes(map), and the dissolved nodes are deleted;
+ * - group persistent IDs that are already in the map or repeated among the nodes are
+ *   reset;
+ * - groups that would be added into their own link set are unlinked;
+ * - link IDs follow the paste rule: a group whose link ID exists on exactly one object in
+ *   the map is unlinked, on two or more it joins that link set, on none it keeps its ID.
+ *
+ * Entity names are not touched; see assignUniqueEntityNamesBeforeAdding.
+ *
+ * The returned nodes are detached, owned by the caller and keyed by their new parent,
+ * ready for addNodes. The given vector must not be used afterwards, since some of its
+ * nodes may have been deleted.
+ */
+kdl::flat_map<Node*, std::vector<Node*>> prepareNodesForAdding(
+  Map& map, const std::vector<Node*>& nodes);
 
 
 } // namespace tb::mdl

@@ -68,7 +68,12 @@ auto extractNodesToPaste(const std::vector<Node*>& nodes, Node& parent)
   {
     node->accept(kdl::overload(
       [&](auto&& thisLambda, WorldNode& worldNode) {
-        worldNode.visitChildren(thisLambda);
+        // A world cannot give up its default layer, so its layers are not detached; they
+        // are deleted with the world once their children have been detached.
+        for (auto* layerNode : worldNode.allLayers())
+        {
+          layerNode->visitChildren(thisLambda);
+        }
         nodesToDelete.push_back(&worldNode);
       },
       [&](auto&& thisLambda, LayerNode& layerNode) {
@@ -222,12 +227,24 @@ void copyAndSetLinkIds(
   }
 }
 
-bool pasteNodes(Map& map, const std::vector<Node*>& nodes)
+} // namespace
+
+kdl::flat_map<Node*, std::vector<Node*>> prepareNodesForAdding(
+  Map& map, const std::vector<Node*>& nodes)
 {
-  const auto nodesToAdd = extractNodesToPaste(nodes, parentForNodes(map));
+  auto nodesToAdd = extractNodesToPaste(nodes, parentForNodes(map));
   fixRedundantPersistentIds(nodesToAdd, allPersistentGroupIds(map.worldNode()));
   fixRecursiveLinkedGroups(nodesToAdd, map.logger());
   copyAndSetLinkIds(nodesToAdd, map.worldNode(), map.logger());
+  return nodesToAdd;
+}
+
+namespace
+{
+
+bool pasteNodes(Map& map, const std::vector<Node*>& nodes)
+{
+  const auto nodesToAdd = prepareNodesForAdding(map, nodes);
 
   if (map.worldNode().entityPropertyConfig().naming)
   {
