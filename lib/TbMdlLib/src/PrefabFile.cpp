@@ -484,7 +484,20 @@ Result<std::filesystem::path> writePrefab(
 
   // the world owns the clones from here on
   auto* topNode = static_cast<Node*>(nullptr);
-  if (kind == PrefabKind::Assembly)
+  if (
+    auto* selectedGroupNode = kind == PrefabKind::Assembly && body.size() == 1u
+                                ? dynamic_cast<GroupNode*>(body.front())
+                                : nullptr)
+  {
+    // one selected group is the prefab's group, so that a placement is not nested one
+    // level deeper than what was saved; it gets a fresh link ID below
+    auto group = selectedGroupNode->group();
+    group.setName(options.name);
+    selectedGroupNode->setGroup(std::move(group));
+    worldNode->defaultLayer()->addChild(selectedGroupNode);
+    topNode = selectedGroupNode;
+  }
+  else if (kind == PrefabKind::Assembly)
   {
     // worldspawn-level brushes of the selection end up in the group
     auto* groupNode = new GroupNode{Group{options.name}};

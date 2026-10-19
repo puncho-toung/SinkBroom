@@ -123,8 +123,7 @@ std::string nameOf(const mdl::EntityNode& entityNode)
   return name ? *name : std::string{};
 }
 
-// the first entity in the group, nested groups included (savePrefab puts a saved group
-// inside the prefab's own group)
+// the first entity in the group, nested groups included
 const mdl::EntityNode* findLight(const mdl::GroupNode& groupNode)
 {
   for (const auto* child : groupNode.children())
@@ -287,9 +286,14 @@ TEST_CASE("CreatePrefabTool")
       CHECK_FALSE(kdl::ranges::contains(linkIdsBefore, linkId));
     }
 
+    // the saved group is the placed group, not nested in another one
+    CHECK(groupNode->group().name() == "crate");
+    CHECK(groupNode->childCount() == 2u);
+
     // its light got a name that is free in the map
     const auto* lightNode = findLight(*groupNode);
     REQUIRE(lightNode != nullptr);
+    CHECK(lightNode->parent() == groupNode);
     CHECK(nameOf(*lightNode) != "lamp");
     CHECK(nameOf(*lightNode) != nameOf(*findLight(*crateDuplicateNode)));
 

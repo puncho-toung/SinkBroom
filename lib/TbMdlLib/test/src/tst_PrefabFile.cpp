@@ -506,6 +506,69 @@ TEST_CASE("PrefabFile")
     CHECK(brushNode->logicalBounds().center() == vm::vec3d{64, 0, 0});
   }
 
+  SECTION("Assembly of one group")
+  {
+    auto* pillarNode1 = new GroupNode{Group{"pillar"}};
+    pillarNode1->addChild(createBrushAt(map, {64, 64, 0}));
+    pillarNode1->addChild(
+      createEntity({{"classname", "light"}, {"origin", "64 64 0"}, {"name", "lamp"}}));
+    auto* pillarNode2 =
+      static_cast<GroupNode*>(pillarNode1->cloneRecursively(map.worldBounds()));
+    addNodes(map, {{&parentForNodes(map), {pillarNode1, pillarNode2}}});
+    const auto sourceLinkId = pillarNode1->linkId();
+
+    const auto path =
+      savePrefab(
+        map, {pillarNode1}, SavePrefabOptions{.name = "Pillar", .root = PrefabRoot::User})
+      | kdl::value();
+
+    const auto worldNode = readPrefab(map, savedFile(path));
+    CHECK((readPrefabMetadata(*worldNode) | kdl::value()).kind == PrefabKind::Assembly);
+
+    // the selected group is the prefab's group, renamed, not wrapped in another one
+    const auto& body = worldNode->defaultLayer()->children();
+    REQUIRE(body.size() == 1);
+    const auto* groupNode = dynamic_cast<const GroupNode*>(body.front());
+    REQUIRE(groupNode);
+    CHECK(groupNode->group().name() == "Pillar");
+    CHECK(groupNode->linkId() != sourceLinkId);
+    REQUIRE(groupNode->childCount() == 2);
+    CHECK(dynamic_cast<const BrushNode*>(groupNode->children()[0]));
+    CHECK(dynamic_cast<const EntityNode*>(groupNode->children()[1]));
+    CHECK(groupNode->logicalBounds().center() == vm::vec3d{0, 0, 0});
+
+    // the map is not touched
+    CHECK(pillarNode1->group().name() == "pillar");
+    CHECK(pillarNode1->linkId() == sourceLinkId);
+
+    SECTION("A group with something else is wrapped")
+    {
+      auto* lightNode =
+        createEntity({{"classname", "light"}, {"origin", "0 0 0"}, {"name", "torch"}});
+      addNodes(map, {{&parentForNodes(map), {lightNode}}});
+
+      const auto wrappedWorldNode = readPrefab(
+        map,
+        savedFile(
+          savePrefab(
+            map,
+            {pillarNode1, lightNode},
+            SavePrefabOptions{.name = "Pillar", .root = PrefabRoot::User})
+          | kdl::value()));
+
+      const auto& wrappedBody = wrappedWorldNode->defaultLayer()->children();
+      REQUIRE(wrappedBody.size() == 1);
+      const auto* wrapperNode = dynamic_cast<const GroupNode*>(wrappedBody.front());
+      REQUIRE(wrapperNode);
+      CHECK(wrapperNode->group().name() == "Pillar");
+      REQUIRE(wrapperNode->childCount() == 2);
+      const auto* innerGroupNode =
+        dynamic_cast<const GroupNode*>(wrapperNode->children().front());
+      REQUIRE(innerGroupNode);
+      CHECK(innerGroupNode->group().name() == "pillar");
+    }
+  }
+
   SECTION("Errors")
   {
     auto* lightNode = createEntity({{"classname", "light"}, {"origin", "0 0 0"}});

@@ -138,6 +138,10 @@ Result<std::filesystem::path> prefabFilePath(
 /**
  * Writes the selected nodes to a new prefab file at prefabFilePath(options), overwriting
  * an existing file, and returns its absolute path. The map is not modified.
+ *
+ * The body is the one selected entity for the entity kind. For an assembly it is the one
+ * selected group, renamed to options.name, if nothing else is selected, and otherwise a
+ * new group named options.name that holds the selection.
  */
 Result<std::filesystem::path> savePrefab(
   const Map& map,
