@@ -37,6 +37,7 @@
 #include "mdl/NodeReader.h"
 #include "mdl/NodeWriter.h"
 #include "mdl/PortalFile.h"
+#include "mdl/PrefabLibrary.h"
 #include "mdl/PushSelection.h"
 #include "mdl/Transaction.h"
 #include "mdl/UpdateLinkedGroupsHelper.h"
@@ -216,6 +217,8 @@ void MapDocument::setMap(std::unique_ptr<mdl::Map> map)
 void MapDocument::updateMapFromPreferences()
 {
   m_map->setGamePath(pref(m_map->gameInfo().gamePathPreference));
+  // the library reads no preferences; the prefab panel rescans it when this changes
+  m_map->prefabLibrary().setUserRoot(pref(m_map->gameInfo().prefabPathPreference));
 
   m_map->editorContext().setShowPointEntities(pref(Preferences::ShowPointEntities));
   m_map->editorContext().setShowBrushes(pref(Preferences::ShowBrushes));

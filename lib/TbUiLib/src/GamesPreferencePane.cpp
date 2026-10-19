@@ -227,6 +227,40 @@ void GamePreferencePane::createGui()
     this,
     &GamePreferencePane::chooseGamePathClicked);
 
+  m_prefabPathText = new QLineEdit{};
+  m_prefabPathText->setPlaceholderText(tr("Click on the button to change..."));
+  m_prefabPathText->setToolTip(
+    tr("Your own prefab folder, searched before the prefabs folder of the mod"));
+  connect(m_prefabPathText, &QLineEdit::editingFinished, this, [this]() {
+    updatePrefabPath(m_prefabPathText->text());
+  });
+
+  auto* validPrefabDirectoryIcon = new QAction{m_prefabPathText};
+  m_prefabPathText->addAction(validPrefabDirectoryIcon, QLineEdit::TrailingPosition);
+  connect(
+    m_prefabPathText,
+    &QLineEdit::textChanged,
+    this,
+    [validPrefabDirectoryIcon](const QString& text) {
+      if (text.isEmpty() || QDir{text}.exists())
+      {
+        validPrefabDirectoryIcon->setToolTip("");
+        validPrefabDirectoryIcon->setIcon(QIcon{});
+      }
+      else
+      {
+        validPrefabDirectoryIcon->setToolTip(tr("Directory not found"));
+        validPrefabDirectoryIcon->setIcon(loadSVGIcon("IssueBrowser.svg"));
+      }
+    });
+
+  auto* choosePrefabPathButton = new QPushButton{tr("...")};
+  connect(
+    choosePrefabPathButton,
+    &QPushButton::clicked,
+    this,
+    &GamePreferencePane::choosePrefabPathClicked);
+
   auto* configureEnginesButton = new QPushButton{tr("Configure engines...")};
   connect(
     configureEnginesButton,
@@ -240,6 +274,12 @@ void GamePreferencePane::createGui()
   gamePathLayout->addWidget(m_gamePathText, 1);
   gamePathLayout->addWidget(chooseGamePathButton);
 
+  auto* prefabPathLayout = new QHBoxLayout{};
+  prefabPathLayout->setContentsMargins(QMargins{});
+  prefabPathLayout->setSpacing(LayoutConstants::MediumHMargin);
+  prefabPathLayout->addWidget(m_prefabPathText, 1);
+  prefabPathLayout->addWidget(choosePrefabPathButton);
+
   auto* layout = new FormWithSectionsLayout{};
   layout->setContentsMargins(0, LayoutConstants::MediumVMargin, 0, 0);
   layout->setVerticalSpacing(2);
@@ -247,6 +287,7 @@ void GamePreferencePane::createGui()
 
   layout->addSection(QString::fromStdString(m_gameInfo.gameConfig.name));
   layout->addRow(tr("Game Path"), gamePathLayout);
+  layout->addRow(tr("Prefab Path"), prefabPathLayout);
   layout->addRow("", configureEnginesButton);
 
   layout->addSection(tr("Compilation Tools"));
@@ -318,6 +359,28 @@ void GamePreferencePane::updateGamePath(const QString& str)
   emit requestUpdate();
 }
 
+void GamePreferencePane::choosePrefabPathClicked()
+{
+  const auto currentPath =
+    PreferenceManager::instance().getPendingValue(m_gameInfo.prefabPathPreference);
+  const auto pathStr = QFileDialog::getExistingDirectory(
+    this,
+    tr("Prefab Path"),
+    currentPath.empty() ? fileDialogDefaultDirectory(FileDialogDir::GamePath)
+                        : pathAsQString(currentPath));
+  if (!pathStr.isEmpty())
+  {
+    updatePrefabPath(pathStr);
+  }
+}
+
+void GamePreferencePane::updatePrefabPath(const QString& str)
+{
+  auto& prefs = PreferenceManager::instance();
+  prefs.set(m_gameInfo.prefabPathPreference, pathFromQString(str));
+  emit requestUpdate();
+}
+
 void GamePreferencePane::configureEnginesClicked()
 {
   auto& logger = m_document ? m_document->logger() : FileLogger::instance();
@@ -346,6 +409,11 @@ void GamePreferencePane::updateControls()
   const auto gamePathBlocker = QSignalBlocker{m_gamePathText};
   const auto gamePath = prefs.getPendingValue(m_gameInfo.gamePathPreference);
   m_gamePathText->setText(pathAsQString(gamePath));
+
+  // Refresh prefab path
+  const auto prefabPathBlocker = QSignalBlocker{m_prefabPathText};
+  const auto prefabPath = prefs.getPendingValue(m_gameInfo.prefabPathPreference);
+  m_prefabPathText->setText(pathAsQString(prefabPath));
 }
 
 } // namespace tb::ui

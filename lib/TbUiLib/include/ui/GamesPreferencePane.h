@@ -81,6 +81,7 @@ private:
   const mdl::GameInfo& m_gameInfo;
   QLineEdit* m_gamePathText = nullptr;
   QPushButton* m_chooseGamePathButton = nullptr;
+  QLineEdit* m_prefabPathText = nullptr;
   std::vector<std::tuple<const mdl::CompilationTool*, QLineEdit*>> m_toolPathEditors;
 
 public:
@@ -97,6 +98,8 @@ private:
   void currentGameChanged(const QString& gameName);
   void chooseGamePathClicked();
   void updateGamePath(const QString& str);
+  void choosePrefabPathClicked();
+  void updatePrefabPath(const QString& str);
   void configureEnginesClicked();
 
 public:
