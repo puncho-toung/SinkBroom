@@ -36,6 +36,7 @@
 #include "base/Logger.h"
 #include "base/PreferenceManager.h"
 #include "base/Result.h"
+#include "fs/TestEnvironment.h"
 #include "gl/Camera.h"
 #include "gl/GlManager.h"
 #include "gl/Material.h"
@@ -1595,6 +1596,54 @@ TEST_CASE("MapWindow")
 
     REQUIRE(!appController.glManager().resourceManager().needsProcessing());
     CHECK(window.canReloadEntityDefinitions());
+  }
+
+  SECTION("a prefab editor")
+  {
+    // a prefab editor's map has a file, the prefab; it is not a recent document, so the
+    // file does not reach the recent documents in the settings
+    auto env = fs::TestEnvironment{};
+    auto prefabDocument = MapDocument::createDocument(
+                            appController.environmentConfig(),
+                            mdl::QuakeGameInfo,
+                            mdl::MapFormat::Valve,
+                            vm::bbox3d{8192.0},
+                            appController.taskManager(),
+                            appController.glManager().resourceManager())
+                          | kdl::value();
+    REQUIRE(prefabDocument->map().saveAs(env.dir() / "crate.map") | kdl::is_success());
+
+    auto prefabEditor = MapWindow{appController, std::move(prefabDocument), true};
+
+    CHECK(!window.isPrefabEditor());
+    CHECK(prefabEditor.isPrefabEditor());
+
+    CHECK(window.windowTitle() == "unnamed.map[*] - TrenchBroom");
+    CHECK(prefabEditor.windowTitle() == "crate.map[*] [Prefab] - TrenchBroom");
+
+    // Compile, Launch and Re-run need a map with a file, and a prefab editor's has one
+    CHECK(!window.canCompile());
+    CHECK(!window.canLaunch());
+    CHECK(!prefabEditor.canCompile());
+    CHECK(!prefabEditor.canLaunch());
+    for (const auto& path :
+         {"Menu/Run/Compile...", "Menu/Run/Launch...", "Menu/Run/Rerun..."})
+    {
+      auto* action = prefabEditor.findAction(path);
+      REQUIRE(action != nullptr);
+      CHECK(!action->isEnabled());
+    }
+
+    // saving stays, and so does saving a part of the prefab as another
+    auto* saveAction = prefabEditor.findAction("Menu/File/Save");
+    REQUIRE(saveAction != nullptr);
+    CHECK(saveAction->isEnabled());
+    CHECK(prefabEditor.findAction("Menu/File/Save as...") != nullptr);
+    CHECK(prefabEditor.findAction("Menu/Edit/Save Selection as Prefab...") != nullptr);
+
+    // the same docks as a map window's; the map inspector has no compile page to hide
+    // (H-PF3-2)
+    findSidebarDocks(prefabEditor);
   }
 }
 
