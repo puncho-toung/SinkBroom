@@ -84,6 +84,9 @@ const auto RedLight = std::string{R"PREFAB(// Game: Doom 3 BFG
 "name" "red"
 "light_radius" "300"
 "_color" "1 0 0"
+"target" "snap_target"
+"killtarget" "snap_kill"
+"model" "snap_model"
 }
 )PREFAB"};
 
@@ -114,10 +117,26 @@ BrushNode* createBrushNodeAt(const Map& map, const vm::vec3d& delta)
 }
 
 /**
+ * Writes base/prefabs/props/lamp.map from the given nodes, which are added to the map for
+ * the save and taken out of it again.
+ */
+void saveLampFrom(Map& map, const std::vector<Node*>& nodes)
+{
+  addNodes(map, {{&parentForNodes(map), nodes}});
+  REQUIRE(
+    savePrefab(
+      map,
+      nodes,
+      SavePrefabOptions{.name = "lamp", .category = "props", .root = PrefabRoot::Mod})
+    | kdl::is_success());
+  removeNodes(map, nodes);
+}
+
+/**
  * Writes base/prefabs/props/lamp.map from a brush at the given offset and a light named
- * "lamp" at 0 0 64, in this order, with an info_null between them if withMarker is set,
- * and takes the nodes out of the map again. In the file, the group's brushes come before
- * its entities whatever the order of the selection.
+ * "lamp" at 0 0 64, in this order, with an info_null between them if withMarker is set.
+ * In the file, the group's brushes come before its entities whatever the order of the
+ * selection.
  */
 void saveLamp(Map& map, const vm::vec3d& brushOffset, const bool withMarker = false)
 {
@@ -129,15 +148,69 @@ void saveLamp(Map& map, const vm::vec3d& brushOffset, const bool withMarker = fa
   }
   nodes.push_back(new EntityNode{
     Entity{{{"classname", "light"}, {"origin", "0 0 64"}, {"name", "lamp"}}}});
+  saveLampFrom(map, nodes);
+}
 
-  addNodes(map, {{&parentForNodes(map), nodes}});
+/**
+ * A group named "inner" that holds one brush at the given offset, in the map.
+ */
+GroupNode* addInnerGroup(Map& map, const vm::vec3d& brushOffset)
+{
+  auto* brushNode = createBrushNodeAt(map, brushOffset);
+  addNodes(map, {{&parentForNodes(map), {brushNode}}});
+  deselectAll(map);
+  selectNodes(map, {brushNode});
+  auto* groupNode = groupSelectedNodes(map, "inner");
+  REQUIRE(groupNode);
+  deselectAll(map);
+  return groupNode;
+}
+
+/**
+ * Writes base/prefabs/props/lamp.map from two inner groups, the second 128 units along
+ * X from the first, which are linked if linked is set.
+ */
+void saveInnerPair(Map& map, const bool linked)
+{
+  auto* firstInner = addInnerGroup(map, {0, 0, 0});
+  auto* secondInner = static_cast<GroupNode*>(nullptr);
+  if (linked)
+  {
+    selectNodes(map, {firstInner});
+    secondInner = createLinkedDuplicate(map);
+    REQUIRE(secondInner);
+    deselectAll(map);
+    selectNodes(map, {secondInner});
+    REQUIRE(translateSelection(map, {128, 0, 0}));
+    deselectAll(map);
+    REQUIRE(secondInner->linkId() == firstInner->linkId());
+  }
+  else
+  {
+    secondInner = addInnerGroup(map, {128, 0, 0});
+    REQUIRE(secondInner->linkId() != firstInner->linkId());
+  }
+
   REQUIRE(
     savePrefab(
       map,
-      nodes,
+      {firstInner, secondInner},
       SavePrefabOptions{.name = "lamp", .category = "props", .root = PrefabRoot::Mod})
     | kdl::is_success());
-  removeNodes(map, nodes);
+  removeNodes(map, {firstInner, secondInner});
+}
+
+std::vector<GroupNode*> innerGroupsOf(const GroupNode& groupNode)
+{
+  auto result = std::vector<GroupNode*>{};
+  for (auto* child : groupNode.children())
+  {
+    if (auto* innerNode = dynamic_cast<GroupNode*>(child))
+    {
+      result.push_back(innerNode);
+    }
+  }
+  return result;
 }
 
 const PrefabEntry& findLamp(const PrefabLibrary& library)
@@ -251,7 +324,8 @@ TEST_CASE("PrefabRefresh")
     {"light",
      Color{},
      "",
-     {PropertyDefinition{"name", PropertyValueTypes::LinkTarget{}, "", ""}},
+     {PropertyDefinition{"name", PropertyValueTypes::LinkTarget{}, "", ""},
+      PropertyDefinition{"killtarget", PropertyValueTypes::LinkSource{}, "", ""}},
      PointEntityDefinition{vm::bbox3d{16.0}, {}, {}}},
   });
 
@@ -484,11 +558,10 @@ TEST_CASE("PrefabRefresh")
       const auto movedSecondBrushBounds = findBrush(*secondNode)->logicalBounds();
       REQUIRE(map.worldBounds().contains(movedSecondBrushBounds));
 
-      saveLamp(map, {512, 0, 0});
+      // the light stays (DD-23), so the brush moves by its own delta
+      const auto brushDelta = vm::vec3d{512, 0, 0};
+      saveLamp(map, brushDelta);
       rescan(library);
-      const auto brushDelta =
-        findBrush(fileGroupOf(findLamp(library)))->logicalBounds().min
-        - oldFileBrushBounds.min;
       REQUIRE(map.worldBounds().contains(firstBrushBounds.translate(brushDelta)));
       REQUIRE_FALSE(
         map.worldBounds().contains(movedSecondBrushBounds.translate(brushDelta)));
@@ -504,6 +577,234 @@ TEST_CASE("PrefabRefresh")
       CHECK(findBrush(*firstNode)->logicalBounds() == firstBrushBounds);
       CHECK(firstNode->group().prefabHash() == oldHash);
       CHECK(secondNode->group().prefabHash() == oldHash);
+
+      // R1-pf-mdl-1: no member is left pending for the next commit
+      CHECK_FALSE(firstNode->hasPendingChanges());
+      CHECK_FALSE(secondNode->hasPendingChanges());
+    }
+
+    SECTION("An error before the commit leaves the map untouched and nothing pending")
+    {
+      // the first copy is moved so close to the world bounds that its new brush leaves
+      // them, so the refresh fails before it changes the map
+      deselectAll(map);
+      selectNodes(map, {firstNode});
+      REQUIRE(translateSelection(map, {7680, 0, 0}));
+      deselectAll(map);
+      const auto movedFirstBrushBounds = findBrush(*firstNode)->logicalBounds();
+
+      saveLamp(map, {512, 0, 0});
+      rescan(library);
+      REQUIRE_FALSE(map.worldBounds().contains(
+        movedFirstBrushBounds.translate(vm::vec3d{512, 0, 0})));
+
+      const auto changed = library.changedPlacements();
+      REQUIRE(changed.size() == 1u);
+      REQUIRE(changed.front().firstMember == firstNode);
+
+      const auto firstChildren = firstNode->children();
+      const auto secondChildren = secondNode->children();
+      CHECK(refreshPlacement(map, changed.front()).is_error());
+      CHECK(firstNode->children() == firstChildren);
+      CHECK(secondNode->children() == secondChildren);
+      CHECK(firstNode->group().prefabHash() == oldHash);
+      CHECK_FALSE(firstNode->hasPendingChanges());
+      CHECK_FALSE(secondNode->hasPendingChanges());
+    }
+
+    SECTION("A selection inside a copy is cleared")
+    {
+      saveLamp(map, {64, 0, 0});
+      rescan(library);
+
+      selectNodes(map, {findBrush(*secondNode)});
+      REQUIRE(map.selection().hasNodes());
+
+      const auto changed = library.changedPlacements();
+      REQUIRE(changed.size() == 1u);
+      REQUIRE(refreshPlacement(map, changed.front()).is_success());
+      CHECK_FALSE(map.selection().hasNodes());
+      CHECK(
+        findBrush(*secondNode)->logicalBounds()
+        == secondBrushBounds.translate(vm::vec3d{64, 0, 0}));
+
+      // the undo restores the old children, not the selection
+      map.undoCommand();
+      CHECK(findBrush(*secondNode)->logicalBounds() == secondBrushBounds);
+    }
+
+    SECTION("A placement inside linked groups")
+    {
+      // an unlinked placement of the same file, grouped, and the group duplicated
+      // linked, so that the placement and its copy are members of one link set inside
+      // the members of another
+      auto* innerNode = place(map, findLamp(library), {-512, 0, 0});
+      selectNodes(map, {innerNode});
+      auto* outerNode = groupSelectedNodes(map, "outer");
+      REQUIRE(outerNode);
+      deselectAll(map);
+      selectNodes(map, {outerNode});
+      auto* outerCopyNode = createLinkedDuplicate(map);
+      REQUIRE(outerCopyNode);
+      deselectAll(map);
+      selectNodes(map, {outerCopyNode});
+      REQUIRE(translateSelection(map, {0, -1024, 0}));
+      deselectAll(map);
+
+      const auto innerGroups = innerGroupsOf(*outerCopyNode);
+      REQUIRE(innerGroups.size() == 1u);
+      auto* innerCopyNode = innerGroups.front();
+      REQUIRE(innerCopyNode->linkId() == innerNode->linkId());
+      const auto innerBrushBounds = findBrush(*innerNode)->logicalBounds();
+      const auto innerCopyBrushBounds = findBrush(*innerCopyNode)->logicalBounds();
+
+      saveLamp(map, {64, 0, 0});
+      rescan(library);
+
+      const auto changed = library.changedPlacements();
+      const auto it = std::ranges::find_if(changed, [&](const auto& placement) {
+        return placement.firstMember == innerNode;
+      });
+      REQUIRE(it != changed.end());
+      CHECK(it->members == std::vector<GroupNode*>{innerNode, innerCopyNode});
+
+      REQUIRE(refreshPlacement(map, *it).is_success());
+      CHECK(
+        findBrush(*innerNode)->logicalBounds()
+        == innerBrushBounds.translate(vm::vec3d{64, 0, 0}));
+      CHECK(
+        findBrush(*innerCopyNode)->logicalBounds()
+        == innerCopyBrushBounds.translate(vm::vec3d{64, 0, 0}));
+      CHECK(innerNode->group().prefabHash() == findLamp(library).hash);
+      CHECK(innerCopyNode->group().prefabHash() == findLamp(library).hash);
+      CHECK(outerCopyNode->linkId() == outerNode->linkId());
+
+      // the other placement is untouched
+      CHECK(findBrush(*firstNode)->logicalBounds() == firstBrushBounds);
+    }
+
+    SECTION("A transplanted entity keeps its name against an earlier one of the file")
+    {
+      // no brush, so that the first entity of the file stands where the brush stood, and
+      // takes the light's name; the light stands where the light stood
+      saveLampFrom(
+        map,
+        {new EntityNode{
+           Entity{{{"classname", "info_null"}, {"origin", "0 0 0"}, {"name", "lamp"}}}},
+         new EntityNode{
+           Entity{{{"classname", "light"}, {"origin", "0 0 64"}, {"name", "other"}}}}});
+      rescan(library);
+      const auto& fileGroup = fileGroupOf(findLamp(library));
+      REQUIRE(fileGroup.childCount() == 2u);
+      REQUIRE(
+        propertyOf(*static_cast<const EntityNode*>(fileGroup.children().front()), "name")
+        == firstLightName);
+
+      const auto changed = library.changedPlacements();
+      REQUIRE(changed.size() == 1u);
+      const auto report = refreshPlacement(map, changed.front());
+      REQUIRE(report.is_success());
+      CHECK(report.value().lostEntities.empty());
+
+      // the light keeps its name in both copies, the info_null gets another
+      const auto findLight = [](const GroupNode& groupNode) {
+        return dynamic_cast<const EntityNode*>(groupNode.children().back());
+      };
+      const auto findMarker = [](const GroupNode& groupNode) {
+        return dynamic_cast<const EntityNode*>(groupNode.children().front());
+      };
+      REQUIRE(findLight(*firstNode));
+      REQUIRE(findMarker(*firstNode));
+      CHECK(findLight(*firstNode)->entity().classname() == "light");
+      CHECK(propertyOf(*findLight(*firstNode), "name") == firstLightName);
+      CHECK(propertyOf(*findLight(*secondNode), "name") == secondLightName);
+      CHECK(propertyOf(*findMarker(*firstNode), "name") != firstLightName);
+      CHECK(
+        propertyOf(*findMarker(*firstNode), "name")
+        != propertyOf(*findMarker(*secondNode), "name"));
+      CHECK(propertyOf(*findLight(*secondNode), "_color") == "0 1 0");
+    }
+  }
+
+  SECTION("refreshPlacement with inner groups")
+  {
+    const auto innerIdsLinked = [](const GroupNode& groupNode) {
+      const auto innerGroups = innerGroupsOf(groupNode);
+      REQUIRE(innerGroups.size() == 2u);
+      return innerGroups[0]->linkId() == innerGroups[1]->linkId();
+    };
+
+    SECTION("A file that unlinks the inner groups unlinks them")
+    {
+      saveInnerPair(map, true);
+      rescan(library);
+      auto* placedNode = place(map, findLamp(library), {256, 0, 0});
+      REQUIRE(innerIdsLinked(*placedNode));
+      const auto innerBounds = std::vector{
+        innerGroupsOf(*placedNode)[0]->logicalBounds(),
+        innerGroupsOf(*placedNode)[1]->logicalBounds()};
+
+      saveInnerPair(map, false);
+      rescan(library);
+      const auto changed = library.changedPlacements();
+      REQUIRE(changed.size() == 1u);
+      const auto report = refreshPlacement(map, changed.front());
+      REQUIRE(report.is_success());
+      CHECK(report.value().referenceShift == vm::vec3d{0, 0, 0});
+
+      CHECK_FALSE(innerIdsLinked(*placedNode));
+      CHECK(innerGroupsOf(*placedNode)[0]->logicalBounds() == innerBounds[0]);
+      CHECK(innerGroupsOf(*placedNode)[1]->logicalBounds() == innerBounds[1]);
+    }
+
+    SECTION("A file that links the inner groups links them")
+    {
+      saveInnerPair(map, false);
+      rescan(library);
+      auto* placedNode = place(map, findLamp(library), {256, 0, 0});
+      REQUIRE_FALSE(innerIdsLinked(*placedNode));
+      const auto firstInnerId = innerGroupsOf(*placedNode)[0]->linkId();
+
+      saveInnerPair(map, true);
+      rescan(library);
+      const auto changed = library.changedPlacements();
+      REQUIRE(changed.size() == 1u);
+      REQUIRE(refreshPlacement(map, changed.front()).is_success());
+
+      // the inner link set took the first inner group's old ID
+      CHECK(innerIdsLinked(*placedNode));
+      CHECK(innerGroupsOf(*placedNode)[0]->linkId() == firstInnerId);
+    }
+
+    SECTION("An inner group linked to a group outside the placement keeps its own ID")
+    {
+      saveInnerPair(map, false);
+      rescan(library);
+      auto* placedNode = place(map, findLamp(library), {256, 0, 0});
+
+      // a linked copy of the first inner group outside the placement, as a user may make
+      // one
+      auto* outsideNode = static_cast<GroupNode*>(
+        innerGroupsOf(*placedNode)[0]->cloneRecursively(map.worldBounds()));
+      addNodes(map, {{&parentForNodes(map), {outsideNode}}});
+      const auto outsideId = outsideNode->linkId();
+      REQUIRE(outsideId == innerGroupsOf(*placedNode)[0]->linkId());
+      const auto outsideChildren = outsideNode->children();
+
+      // the file changes, so that the placement is refreshed
+      saveInnerPair(map, true);
+      rescan(library);
+      const auto changed = library.changedPlacements();
+      REQUIRE(changed.size() == 1u);
+      REQUIRE(refreshPlacement(map, changed.front()).is_success());
+
+      // the placement's inner groups do not join the outside group's link set
+      for (const auto* innerNode : innerGroupsOf(*placedNode))
+      {
+        CHECK(innerNode->linkId() != outsideId);
+      }
+      CHECK(innerIdsLinked(*placedNode));
+      CHECK(outsideNode->children() == outsideChildren);
     }
   }
 
@@ -521,6 +822,7 @@ TEST_CASE("PrefabRefresh")
        {"name", "l1"},
        {"target", "l2"},
        {"target2", "l3"},
+       {"killtarget", "l2"},
        {"light_radius", "64"}}}};
     auto* extraKeyNode = new EntityNode{Entity{
       {{"classname", "light"}, {"origin", "128 0 0"}, {"name", "l2"}, {"extra", "1"}}}};
@@ -528,26 +830,34 @@ TEST_CASE("PrefabRefresh")
       Entity{{{"classname", "light"}, {"origin", "192 0 0"}, {"name", "l3"}}}};
     auto* otherNode = new EntityNode{Entity{
       {{"classname", "info_player_start"}, {"origin", "0 0 0"}, {"name", "start"}}}};
+    // a brush entity of the class, whose model is its own (H-E-10)
+    auto* brushLightNode = new EntityNode{Entity{
+      {{"classname", "light"}, {"name", "l4"}, {"model", "l4"}, {"light_radius", "8"}}}};
+    auto* brushNode = createBrushNodeAt(map, {512, 0, 0});
+    brushLightNode->addChild(brushNode);
     addNodes(
       map,
-      {{&parentForNodes(map), {targetingNode, extraKeyNode, protectedNode, otherNode}}});
+      {{&parentForNodes(map),
+        {targetingNode, extraKeyNode, protectedNode, otherNode, brushLightNode}}});
 
     selectNodes(map, {protectedNode});
     REQUIRE(setProtectedEntityProperty(map, "_color", true));
     REQUIRE(setEntityProperty(map, "_color", "0 1 0"));
     deselectAll(map);
 
-    selectNodes(map, {targetingNode, extraKeyNode, protectedNode, otherNode});
+    selectNodes(map, {targetingNode, extraKeyNode, protectedNode, otherNode, brushNode});
     const auto before = std::vector{
       targetingNode->entity(),
       extraKeyNode->entity(),
       protectedNode->entity(),
-      otherNode->entity()};
+      otherNode->entity(),
+      brushLightNode->entity()};
+    REQUIRE(propertyOf(*brushLightNode, "model"));
 
     CHECK(canApplyPrefabToSelection(map, *entry));
     const auto count = applyPrefabToSelection(map, *entry);
     REQUIRE(count.is_success());
-    CHECK(count.value() == 3u);
+    CHECK(count.value() == 4u);
 
     // the snapshot's keys, the placement keys kept
     CHECK(propertyOf(*targetingNode, "light_radius") == "300");
@@ -556,12 +866,26 @@ TEST_CASE("PrefabRefresh")
     CHECK(propertyOf(*targetingNode, "name") == "l1");
     CHECK(propertyOf(*targetingNode, "target") == "l2");
     CHECK(propertyOf(*targetingNode, "target2") == "l3");
+    // C6: a key that the definition types as a link source keeps its value
+    CHECK(propertyOf(*targetingNode, "killtarget") == "l2");
+    // a point entity's model is its asset, which the snapshot gives
+    CHECK(propertyOf(*targetingNode, "model") == "snap_model");
 
     // a key that the snapshot lacks is removed
     CHECK(propertyOf(*extraKeyNode, "extra") == std::nullopt);
     CHECK(propertyOf(*extraKeyNode, "light_radius") == "300");
     CHECK(propertyOf(*extraKeyNode, "name") == "l2");
     CHECK(propertyOf(*extraKeyNode, "origin") == "128 0 0");
+
+    // a kept key that the entity lacks stays absent
+    CHECK(propertyOf(*extraKeyNode, "target") == std::nullopt);
+    CHECK(propertyOf(*extraKeyNode, "killtarget") == std::nullopt);
+
+    // a brush entity keeps its model key (H-E-10) and has no origin key still
+    CHECK(propertyOf(*brushLightNode, "model") == *before[4].property("model"));
+    CHECK(propertyOf(*brushLightNode, "origin") == std::nullopt);
+    CHECK(propertyOf(*brushLightNode, "light_radius") == "300");
+    CHECK(propertyOf(*brushLightNode, "name") == "l4");
 
     // a protected property is untouched
     CHECK(propertyOf(*protectedNode, "_color") == "0 1 0");
@@ -579,6 +903,53 @@ TEST_CASE("PrefabRefresh")
       CHECK(targetingNode->entity() == before[0]);
       CHECK(extraKeyNode->entity() == before[1]);
       CHECK(protectedNode->entity() == before[2]);
+      CHECK(brushLightNode->entity() == before[4]);
+    }
+
+    SECTION("Entities in linked copies change once, through the first copy")
+    {
+      auto* lightNode = new EntityNode{Entity{
+        {{"classname", "light"},
+         {"origin", "0 0 512"},
+         {"name", "l5"},
+         {"light_radius", "1"}}}};
+      addNodes(map, {{&parentForNodes(map), {lightNode}}});
+      deselectAll(map);
+      selectNodes(map, {lightNode});
+      auto* groupNode = groupSelectedNodes(map, "lights");
+      REQUIRE(groupNode);
+      deselectAll(map);
+      selectNodes(map, {groupNode});
+      auto* copyNode = createLinkedDuplicate(map);
+      REQUIRE(copyNode);
+      deselectAll(map);
+      selectNodes(map, {copyNode});
+      REQUIRE(translateSelection(map, {0, 0, 128}));
+      deselectAll(map);
+
+      auto* copyLightNode = findEntity(*copyNode);
+      REQUIRE(copyLightNode);
+      const auto copyLightName = propertyOf(*copyLightNode, "name");
+      REQUIRE(copyLightName != "l5");
+
+      SECTION("Both copies selected")
+      {
+        selectNodes(map, {copyLightNode, lightNode});
+      }
+      SECTION("Only the second copy selected")
+      {
+        selectNodes(map, {copyLightNode});
+      }
+
+      const auto linkedCount = applyPrefabToSelection(map, *entry);
+      REQUIRE(linkedCount.is_success());
+      CHECK(linkedCount.value() == 1u);
+
+      // the linked group update carries the change to the copy, which keeps its name
+      CHECK(propertyOf(*findEntity(*groupNode), "light_radius") == "300");
+      CHECK(propertyOf(*findEntity(*copyNode), "light_radius") == "300");
+      CHECK(propertyOf(*findEntity(*groupNode), "name") == "l5");
+      CHECK(propertyOf(*findEntity(*copyNode), "name") == copyLightName);
     }
 
     SECTION("Nothing of the class is selected")

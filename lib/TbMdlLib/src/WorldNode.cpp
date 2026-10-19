@@ -243,6 +243,8 @@ void WorldNode::rebuildNodeTree()
 
 void WorldNode::clearNodeTree()
 {
+  contract_pre(!m_updateNodeTree);
+
   m_nodeTree->clear();
 }
 

@@ -45,6 +45,7 @@
 #include "mdl/WorldNode.h"
 
 #include "kd/contracts.h"
+#include "kd/invoke.h"
 #include "kd/overload.h"
 #include "kd/ranges/contains.h"
 #include "kd/ranges/to.h"
@@ -125,12 +126,45 @@ bool isCounterpart(const Node& oldNode, const Node& newNode)
  */
 struct LinkIdTransplant
 {
+  // the link IDs of the groups that are not below a member of the placement; a nested
+  // group whose old ID one of them holds keeps its fresh ID, since taking the old one
+  // would join that group's link set (R1-pf-mdl-3)
+  std::unordered_set<std::string> outsideGroupIds;
   // new link ID -> old link ID
   std::unordered_map<std::string, std::string> oldIds;
   std::unordered_set<std::string> usedOldIds;
   // new entity -> the old entity at its position, whose name it keeps
   std::unordered_map<const EntityNode*, const EntityNode*> oldEntities;
 };
+
+/**
+ * The link IDs of the groups in the map that are neither one of the given members nor
+ * below one.
+ */
+std::unordered_set<std::string> groupIdsOutside(
+  const Map& map, const std::vector<GroupNode*>& members)
+{
+  const auto memberSet = std::unordered_set<const Node*>{members.begin(), members.end()};
+  auto result = std::unordered_set<std::string>{};
+  map.worldNode().accept(kdl::overload(
+    [](auto&& thisLambda, const WorldNode& worldNode) {
+      worldNode.visitChildren(thisLambda);
+    },
+    [](auto&& thisLambda, const LayerNode& layerNode) {
+      layerNode.visitChildren(thisLambda);
+    },
+    [&](auto&& thisLambda, const GroupNode& groupNode) {
+      if (!memberSet.contains(&groupNode))
+      {
+        result.insert(groupNode.linkId());
+        groupNode.visitChildren(thisLambda);
+      }
+    },
+    [](const EntityNode&) {},
+    [](const BrushNode&) {},
+    [](const PatchNode&) {}));
+  return result;
+}
 
 void matchChildren(
   const std::vector<Node*>& oldChildren,
@@ -149,6 +183,14 @@ void matchChildren(
 
     const auto& oldId = asObject(oldNode)->linkId();
     const auto& newId = asObject(newNode)->linkId();
+    if (
+      dynamic_cast<const GroupNode*>(&oldNode)
+      && transplant.outsideGroupIds.contains(oldId))
+    {
+      // its entities lose their overrides, since their old IDs go unused
+      continue;
+    }
+
     if (const auto it = transplant.oldIds.find(newId); it != transplant.oldIds.end())
     {
       if (it->second != oldId)
@@ -396,27 +438,76 @@ void nameNewChildren(
   const auto& nameKey = nameKeyOf(map);
   const auto entityNodes = collectEntityNodes(newChildren);
 
-  // the names in the file, before any is changed
+  // the old children are replaced, so their names are free
+  auto allocator = EntityNameAllocator{map, {&firstMember}};
+
+  // the names in the file, before any is changed; an entity that took an old entity's
+  // link ID takes its name, which is reserved before any other entity is named, so that
+  // no entity before it in the file can take it (R1-pf-mdl-2)
   auto fileNames = std::vector<std::string>{};
   fileNames.reserve(entityNodes.size());
+  auto otherEntityNodes = std::vector<EntityNode*>{};
   for (auto* entityNode : entityNodes)
   {
     fileNames.push_back(nameOf(entityNode->entity(), nameKey));
-    if (const auto it = transplant.oldEntities.find(entityNode);
-        it != transplant.oldEntities.end())
+    const auto it = transplant.oldEntities.find(entityNode);
+    const auto oldName = it != transplant.oldEntities.end()
+                           ? nameOf(it->second->entity(), nameKey)
+                           : std::string{};
+    if (!oldName.empty())
     {
-      if (const auto oldName = nameOf(it->second->entity(), nameKey); !oldName.empty())
-      {
-        auto entity = entityNode->entity();
-        entity.addOrUpdateProperty(nameKey, oldName);
-        entityNode->setEntity(std::move(entity));
-      }
+      auto entity = entityNode->entity();
+      entity.addOrUpdateProperty(nameKey, oldName);
+      entityNode->setEntity(std::move(entity));
+      allocator.reserve(oldName);
+    }
+    else
+    {
+      otherEntityNodes.push_back(entityNode);
     }
   }
 
-  // the old children are replaced, so their names are free
-  auto allocator = EntityNameAllocator{map, {&firstMember}};
-  assignUniqueEntityNames(newChildren, allocator, EntityNamingMode::KeepIfFree);
+  // the others as assignUniqueEntityNames names them: every free name is kept and
+  // reserved first, then the others get new names
+  const auto& config = allocator.config();
+  auto keepsName = std::vector<bool>{};
+  keepsName.reserve(otherEntityNodes.size());
+  for (const auto* entityNode : otherEntityNodes)
+  {
+    const auto name = nameOf(entityNode->entity(), nameKey);
+    const auto keep = !name.empty() && !allocator.isTaken(name);
+    if (keep)
+    {
+      allocator.reserve(name);
+    }
+    keepsName.push_back(keep);
+  }
+
+  auto unused = EntityNamingResult{};
+  for (std::size_t i = 0; i < otherEntityNodes.size(); ++i)
+  {
+    auto& entityNode = *otherEntityNodes[i];
+    auto entity = entityNode.entity();
+    if (!keepsName[i])
+    {
+      allocateEntityName(
+        entity, entityNode.hasChildren(), allocator, EntityNamingMode::Create, unused);
+      entityNode.setEntity(std::move(entity));
+    }
+    else if (
+      entityNode.hasChildren() && config.brushEntityModelKey
+      && isBrushEntityModelClass(entity.classname()))
+    {
+      // the brush entity model key follows the name, as allocateEntityName sets it
+      const auto name = nameOf(entity, nameKey);
+      if (const auto* model = entity.property(*config.brushEntityModelKey);
+          !model || *model != name)
+      {
+        entity.addOrUpdateProperty(*config.brushEntityModelKey, name);
+        entityNode.setEntity(std::move(entity));
+      }
+    }
+  }
 
   auto namingResult = EntityNamingResult{};
   for (std::size_t i = 0; i < entityNodes.size(); ++i)
@@ -533,6 +624,7 @@ Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& pl
              // F29: the new children take the old children's link IDs, so that the
              // protected properties of every member survive the linked group update
              auto transplant = LinkIdTransplant{};
+             transplant.outsideGroupIds = groupIdsOutside(map, placement.members);
              matchChildren(oldChildren, fileGroup->children(), transplant);
              applyTransplant(fileGroup->children(), transplant);
 
@@ -590,10 +682,43 @@ Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& pl
                                             : entry.metadata.name;
                         auto transaction = Transaction{map, "Refresh Prefab " + name};
 
+                        // R1-pf-mdl-1: the pending flag is not undoable, so a refresh
+                        // that ends without its commit gives the first member the flag it
+                        // had, and the next commit does not propagate a cancelled change;
+                        // declared after the transaction, so it runs before an unfinished
+                        // transaction is cancelled
+                        const auto wasPending = firstMember.hasPendingChanges();
+                        const auto restorePending = kdl::invoke_later{[&]() {
+                          if (transaction.state() != Transaction::State::Committed)
+                          {
+                            setHasPendingChanges({&firstMember}, wasPending);
+                          }
+                        }};
+
                         if (selectionIsInside(map, placement.members))
                         {
                           // bulk child replacement does not maintain the selection
                           deselectAll(map);
+                        }
+
+                        // DD-6, H-A-1: the update copies children, not the group, so
+                        // every member gets the new hash itself; done first, while no
+                        // group is pending, and no containing group is marked, so only
+                        // the first member's link set is updated at the commit
+                        auto groupsToSwap =
+                          placement.members | std::views::transform([&](auto* member) {
+                            auto group = member->group();
+                            group.setPrefabHash(entry.hash);
+                            return std::pair{
+                              static_cast<Node*>(member), NodeContents{std::move(group)}};
+                          })
+                          | kdl::ranges::to<std::vector>();
+                        if (!updateNodeContents(
+                              map, "Set Prefab Hash", std::move(groupsToSwap), {}))
+                        {
+                          transaction.cancel();
+                          return Error{fmt::format(
+                            "Cannot refresh prefab '{}'", placement.prefabPath)};
                         }
 
                         // added before the old children are removed, since removing every
@@ -614,26 +739,6 @@ Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& pl
                         setHasPendingChanges({&firstMember}, true);
 
                         removeNodes(map, oldChildren);
-
-                        // DD-6, H-A-1: the update copies children, not the group, so
-                        // every member gets the new hash itself; no containing group is
-                        // marked, so only the first member's link set is updated at the
-                        // commit
-                        auto groupsToSwap =
-                          placement.members | std::views::transform([&](auto* member) {
-                            auto group = member->group();
-                            group.setPrefabHash(entry.hash);
-                            return std::pair{
-                              static_cast<Node*>(member), NodeContents{std::move(group)}};
-                          })
-                          | kdl::ranges::to<std::vector>();
-                        if (!updateNodeContents(
-                              map, "Set Prefab Hash", std::move(groupsToSwap), {}))
-                        {
-                          transaction.cancel();
-                          return Error{fmt::format(
-                            "Cannot refresh prefab '{}'", placement.prefabPath)};
-                        }
 
                         if (!transaction.commit())
                         {
@@ -683,11 +788,71 @@ Result<std::size_t> applyPrefabToSelection(Map& map, const PrefabEntry& entry)
   const auto& naming = map.worldNode().entityPropertyConfig().naming;
   const auto& nameKey = nameKeyOf(map);
 
-  auto nodesToSwap = std::vector<std::pair<Node*, NodeContents>>{};
+  auto entityNodes = std::vector<EntityNode*>{};
   for (auto* entityNodeBase : map.selection().allEntities())
   {
     auto* entityNode = dynamic_cast<EntityNode*>(entityNodeBase);
-    if (!entityNode || entityNode->entity().classname() != entry.metadata.className)
+    if (entityNode && entityNode->entity().classname() == entry.metadata.className)
+    {
+      entityNodes.push_back(entityNode);
+    }
+  }
+
+  // R1-pf-mdl-5: entities in two members of one link set would make both members
+  // pending, which cancels the commit (F9), so an entity in a member other than the
+  // first, in the order of the world, of those that hold selected entities is changed
+  // through its linked copy in that first member, once, and the linked group update
+  // carries the change to the others
+  auto groupsByLinkId = std::unordered_map<std::string, std::unordered_set<GroupNode*>>{};
+  for (auto* entityNode : entityNodes)
+  {
+    if (auto* groupNode = entityNode->containingGroup())
+    {
+      groupsByLinkId[groupNode->linkId()].insert(groupNode);
+    }
+  }
+  auto firstGroups = std::unordered_map<std::string, GroupNode*>{};
+  for (const auto& [linkId, groupNodes] : groupsByLinkId)
+  {
+    for (auto* groupNode : groupNodes.size() == 1u
+                             ? std::vector<GroupNode*>{*groupNodes.begin()}
+                             : collectGroupsWithLinkId({&map.worldNode()}, linkId))
+    {
+      if (groupNodes.contains(groupNode))
+      {
+        firstGroups.emplace(linkId, groupNode);
+        break;
+      }
+    }
+  }
+  const auto entityToChange = [&](EntityNode& entityNode) -> EntityNode* {
+    auto* groupNode = entityNode.containingGroup();
+    if (!groupNode)
+    {
+      return &entityNode;
+    }
+    auto* firstGroup = firstGroups.at(groupNode->linkId());
+    if (firstGroup == groupNode)
+    {
+      return &entityNode;
+    }
+    for (auto* child : firstGroup->children())
+    {
+      if (auto* linkedNode = dynamic_cast<EntityNode*>(child);
+          linkedNode && linkedNode->linkId() == entityNode.linkId())
+      {
+        return linkedNode;
+      }
+    }
+    return nullptr;
+  };
+
+  auto nodesToSwap = std::vector<std::pair<Node*, NodeContents>>{};
+  auto changedNodes = std::unordered_set<const EntityNode*>{};
+  for (auto* selectedNode : entityNodes)
+  {
+    auto* entityNode = entityToChange(*selectedNode);
+    if (!entityNode || !changedNodes.insert(entityNode).second)
     {
       continue;
     }
@@ -738,7 +903,10 @@ Result<std::size_t> applyPrefabToSelection(Map& map, const PrefabEntry& entry)
 
   if (!updateNodeContents(map, "Apply Prefab", std::move(nodesToSwap)))
   {
-    return Error{fmt::format("Cannot apply prefab '{}'", entry.metadata.name)};
+    return Error{fmt::format(
+      "Cannot apply prefab '{}': the linked groups that hold the selected entities "
+      "cannot be updated together",
+      entry.metadata.name)};
   }
   return count;
 }

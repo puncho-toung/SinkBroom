@@ -56,9 +56,13 @@ struct PrefabRefreshReport
  * and the inverse of the file group's, as a linked group update would. A new child that
  * stands at the same position as an old child of the same kind (and, for an entity, of
  * the same classname) takes the old child's link ID, recursively, so that the protected
- * properties of every member, and the names of the entities, survive (F29, D18). With
- * naming rules, the other entities keep their names from the file if they are free,
- * else they get new ones, and the link sources among the new children follow the names.
+ * properties of every member, and the names of the entities, survive (F29, D18). A
+ * nested group takes the old group's link ID only if no group outside the placement's
+ * members shares it; otherwise it keeps its own, and the entities below it count as
+ * lost. With naming rules, an entity that took a link ID keeps the old entity's name,
+ * which is reserved first; the other entities keep their names from the file if they are
+ * free, else they get new ones, and the link sources among the new children follow the
+ * names.
  *
  * A file whose group carries no transformation was saved from loose nodes, so its
  * reference point (D10) moves whenever the bounds of its body change, which moves every
@@ -80,9 +84,14 @@ Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& pl
  * (or stay absent); a key that the entity has and the snapshot lacks is removed.
  * Brushes, patches and the protected properties are not touched.
  *
- * Returns the number of entities that match the class, which may be zero, in which case
- * the map is not changed. Returns an error if the entry is not a readable entity
- * snapshot or if the transaction fails.
+ * When the selected entities lie in two or more members of one link set, a selected
+ * entity in a member other than the first of them, in the order of the world, is changed
+ * through its linked copy in that first member, once, since two changed members of one
+ * set cancel the commit (F9); the linked group update carries the change to the others.
+ *
+ * Returns the number of entities that were changed, which may be zero, in which case the
+ * map is not changed. Returns an error if the entry is not a readable entity snapshot or
+ * if the transaction fails.
  */
 Result<std::size_t> applyPrefabToSelection(Map& map, const PrefabEntry& entry);
 
