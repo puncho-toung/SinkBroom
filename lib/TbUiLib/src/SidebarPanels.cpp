@@ -25,6 +25,7 @@
 #include "ui/IssueBrowser.h"
 #include "ui/LightEditorPanel.h"
 #include "ui/MapInspector.h"
+#include "ui/PrefabPanel.h"
 #include "ui/SidebarPanel.h"
 
 namespace tb::ui
@@ -42,6 +43,7 @@ std::vector<std::unique_ptr<SidebarPanel>> createSidebarPanels(
   panels.push_back(std::make_unique<Console>());
   panels.push_back(std::make_unique<IssueBrowser>(context.document));
   panels.push_back(std::make_unique<LightEditorPanel>(context));
+  panels.push_back(std::make_unique<PrefabPanel>(context));
   // add future panels here, one line each
   return panels;
 }

@@ -76,6 +76,7 @@
 #include "ui/MapViewBase.h"
 #include "ui/MapViewToolBox.h"
 #include "ui/MapWindow.h"
+#include "ui/PrefabPanel.h"
 #include "ui/RenderView.h"
 #include "ui/SwitchableMapViewContainer.h"
 #include "ui/ToolSidebar.h"
@@ -197,6 +198,7 @@ struct SidebarDocks
   QDockWidget* console;
   QDockWidget* issues;
   QDockWidget* lightEditor;
+  QDockWidget* prefabs;
 
   std::vector<QDockWidget*> inspectors() const { return {map, entity, face}; }
   std::vector<QDockWidget*> infoPanels() const { return {console, issues}; }
@@ -213,6 +215,7 @@ struct SidebarDocks
       issues->toggleViewAction(),
       lightEditor->toggleViewAction(),
       map->toggleViewAction(),
+      prefabs->toggleViewAction(),
     };
   }
 };
@@ -226,6 +229,7 @@ SidebarDocks findSidebarDocks(const MapWindow& window)
     window.findChild<QDockWidget*>("MapWindow_Sidebar_Console"),
     window.findChild<QDockWidget*>("MapWindow_Sidebar_Issues"),
     window.findChild<QDockWidget*>("MapWindow_Sidebar_LightEditor"),
+    window.findChild<QDockWidget*>("MapWindow_Sidebar_Prefabs"),
   };
   REQUIRE(docks.map != nullptr);
   REQUIRE(docks.entity != nullptr);
@@ -233,6 +237,7 @@ SidebarDocks findSidebarDocks(const MapWindow& window)
   REQUIRE(docks.console != nullptr);
   REQUIRE(docks.issues != nullptr);
   REQUIRE(docks.lightEditor != nullptr);
+  REQUIRE(docks.prefabs != nullptr);
   return docks;
 }
 
@@ -452,6 +457,8 @@ TEST_CASE("MapWindow")
     CHECK(qobject_cast<IssueBrowser*>(docks.issues->widget()) != nullptr);
     CHECK(docks.lightEditor->windowTitle() == "Light Editor");
     CHECK(qobject_cast<LightEditorPanel*>(docks.lightEditor->widget()) != nullptr);
+    CHECK(docks.prefabs->windowTitle() == "Prefabs");
+    CHECK(qobject_cast<PrefabPanel*>(docks.prefabs->widget()) != nullptr);
 
     auto* viewMenu = findViewMenu(window);
     REQUIRE(viewMenu != nullptr);
@@ -490,12 +497,12 @@ TEST_CASE("MapWindow")
     // the docks as the tool sidebar and View > Sidebar list them, then the toolbars
     const auto toggleActions = docks.sortedToggleActions();
     const auto actions = menu->actions();
-    REQUIRE(actions.size() == 9);
+    REQUIRE(actions.size() == 10);
     CHECK(
-      actions.mid(0, 6) == QList<QAction*>{toggleActions.begin(), toggleActions.end()});
-    CHECK(actions[6]->isSeparator());
-    CHECK(actions.mid(7).contains(toolBar->toggleViewAction()));
-    CHECK(actions.mid(7).contains(toolSidebar->toggleViewAction()));
+      actions.mid(0, 7) == QList<QAction*>{toggleActions.begin(), toggleActions.end()});
+    CHECK(actions[7]->isSeparator());
+    CHECK(actions.mid(8).contains(toolBar->toggleViewAction()));
+    CHECK(actions.mid(8).contains(toolSidebar->toggleViewAction()));
   }
 
   SECTION("the tool sidebar has a button for each sidebar dock")
@@ -517,7 +524,7 @@ TEST_CASE("MapWindow")
     }
 
     const auto actions = toolSidebar->actions();
-    REQUIRE(actions.size() == 8);
+    REQUIRE(actions.size() == 9);
     CHECK(actions.front() == toggleActions.front());
     CHECK(actions.back() == toolSidebar->expandAction());
 
@@ -535,7 +542,7 @@ TEST_CASE("MapWindow")
 
     // collapsing takes the buttons out of the strip, not out of View > Sidebar
     toolSidebar->setExpanded(false);
-    CHECK(toolSidebar->actions() == QList<QAction*>{actions[6], actions[7]});
+    CHECK(toolSidebar->actions() == QList<QAction*>{actions[7], actions[8]});
     CHECK(toggleAction->isVisible());
 
     CHECK(
@@ -554,6 +561,9 @@ TEST_CASE("MapWindow")
       CHECK(window.dockWidgetArea(dock) == Qt::RightDockWidgetArea);
     }
     CHECK(docks.lightEditor->isHidden());
+    // D4: hidden by default, on the right edge
+    CHECK(docks.prefabs->isHidden());
+    CHECK(window.dockWidgetArea(docks.prefabs) == Qt::RightDockWidgetArea);
 
     // in the order of the old inspector's pages, with the tab bar at the top
     CHECK(
@@ -611,7 +621,8 @@ TEST_CASE("MapWindow")
           docks.face,
           docks.console,
           docks.issues,
-          docks.lightEditor})
+          docks.lightEditor,
+          docks.prefabs})
     {
       CAPTURE(dock->objectName());
       CHECK(dock->allowedAreas() == Qt::AllDockWidgetAreas);

@@ -1120,6 +1120,17 @@ void ActionManager::createEditMenu()
     },
   }));
   editMenu.addSeparator();
+  editMenu.addItem(addAction(Action{
+    std::filesystem::path{"Menu/Edit/Save Selection as Prefab..."},
+    "Save Selection as Prefab...",
+    ActionContext::Any,
+    KeySequence{},
+    [](auto& context) { context.mapWindow().saveSelectionAsPrefab(); },
+    [](const auto& context) {
+      return context.hasDocument() && context.mapWindow().canSaveSelectionAsPrefab();
+    },
+  }));
+  editMenu.addSeparator();
 
   auto& transformMenu = editMenu.addMenu("Transform");
   transformMenu.addItem(addAction(Action{

@@ -325,6 +325,10 @@ public:
   void deleteSelection();
   bool canDeleteSelection() const;
 
+  void saveSelectionAsPrefab();
+  bool canSaveSelectionAsPrefab() const;
+  void editPrefab(const std::filesystem::path& path);
+
   void selectAll();
   void selectSiblings();
   void selectTouching();

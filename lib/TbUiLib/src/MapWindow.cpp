@@ -103,6 +103,7 @@
 #include "ui/MapViewToolBox.h"
 #include "ui/MapWindowManager.h"
 #include "ui/ObjExportDialog.h"
+#include "ui/PrefabPanel.h"
 #include "ui/QPathUtils.h"
 #include "ui/QStringUtils.h"
 #include "ui/QStyleUtils.h"
@@ -1817,6 +1818,36 @@ bool MapWindow::canDeleteSelection() const
     return toolBox.faceTool().canRemoveSelection();
   }
   return canCutSelection();
+}
+
+void MapWindow::saveSelectionAsPrefab()
+{
+  if (canSaveSelectionAsPrefab())
+  {
+    // the prefab panel rescans the library after a save
+    if (
+      auto* prefabPanel =
+        dynamic_cast<PrefabPanel*>(m_sidebarManager->panel(PrefabPanel::PanelId)))
+    {
+      prefabPanel->saveSelectionAsPrefab();
+    }
+  }
+}
+
+bool MapWindow::canSaveSelectionAsPrefab() const
+{
+  return m_document->map().selection().hasNodes();
+}
+
+void MapWindow::editPrefab(const std::filesystem::path& path)
+{
+  // a prefab file is an ordinary map (D20); in a single-document window it replaces
+  // this document, so its unsaved changes are offered for saving first
+  if (AppController::useSDI && !confirmOrDiscardChanges())
+  {
+    return;
+  }
+  m_appController.openDocument(path);
 }
 
 void MapWindow::selectAll()
