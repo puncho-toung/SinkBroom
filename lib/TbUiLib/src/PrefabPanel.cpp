@@ -93,7 +93,7 @@ PrefabPanel::PrefabPanel(const SidebarContext& context, QWidget* parent)
   connectObservers();
   connectLibraryObserver();
   updateSaveButton();
-  rescan();
+  // the panel is hidden by default; the first scan waits until it is shown
 }
 
 PrefabPanel::~PrefabPanel() = default;
@@ -115,7 +115,14 @@ std::filesystem::path PrefabPanel::iconPath() const
 
 void PrefabPanel::panelShown()
 {
-  processPendingResults();
+  if (m_scanStarted)
+  {
+    processPendingResults();
+  }
+  else
+  {
+    startScan();
+  }
 }
 
 void PrefabPanel::saveSelectionAsPrefab()
@@ -125,22 +132,46 @@ void PrefabPanel::saveSelectionAsPrefab()
     return;
   }
 
+  // the dialog offers the library's categories
+  scanOnce();
+
   auto dialog = SavePrefabDialog{m_document, this};
-  if (dialog.exec() == QDialog::Accepted)
+  if (dialog.exec() == QDialog::Accepted && dialog.savedPath())
   {
-    rescan();
+    prefabWasSaved(*dialog.savedPath());
+  }
+}
+
+void PrefabPanel::prefabWasSaved(const std::filesystem::path& path)
+{
+  // the other entries, and their previews, are kept
+  m_document.map().prefabLibrary().updateEntry(path);
+  processPendingResults();
+}
+
+void PrefabPanel::scanOnce()
+{
+  if (!m_scanStarted)
+  {
+    startScan();
   }
 }
 
 void PrefabPanel::rescan()
 {
-  // the game path or the mods may have changed, which clears the entity models that the
-  // cells hold until the scan has finished
-  m_view->entityModelsWillChange();
+  if (m_scanStarted && !m_rescanPending)
+  {
+    m_rescanPending = true;
+    QTimer::singleShot(0, this, [this]() {
+      m_rescanPending = false;
+      startScan();
+    });
+  }
+}
 
-  m_document.map().prefabLibrary().rescan();
-  // a scan of empty roots is finished at once
-  processPendingResults();
+std::size_t PrefabPanel::scanCount() const
+{
+  return m_scanCount;
 }
 
 void PrefabPanel::createGui()
@@ -267,8 +298,24 @@ void PrefabPanel::connectLibraryObserver()
       this, &PrefabPanel::libraryDidChange);
 }
 
+void PrefabPanel::startScan()
+{
+  m_scanStarted = true;
+  ++m_scanCount;
+
+  // the game path or the mods may have changed, which clears the entity models that the
+  // cells hold until the scan has finished
+  m_view->entityModelsWillChange();
+
+  m_document.map().prefabLibrary().rescan();
+  // a scan of empty roots is finished at once
+  processPendingResults();
+}
+
 void PrefabPanel::processPendingResults()
 {
+  // the timer runs while the roots are listed, while the files are read and while a
+  // saved file is read again
   auto& library = m_document.map().prefabLibrary();
   library.processPendingResults();
 

@@ -1825,7 +1825,7 @@ void MapWindow::saveSelectionAsPrefab()
 {
   if (canSaveSelectionAsPrefab())
   {
-    // the prefab panel rescans the library after a save
+    // the prefab panel reads the saved file into the library
     if (
       auto* prefabPanel =
         dynamic_cast<PrefabPanel*>(m_sidebarManager->panel(PrefabPanel::PanelId)))

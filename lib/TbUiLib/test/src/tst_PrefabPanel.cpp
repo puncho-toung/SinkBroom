@@ -52,6 +52,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -112,6 +113,26 @@ mdl::MapFixtureConfig fixtureConfigWithUserRoot(
   gameInfo.prefabPathPreference = Preference<std::filesystem::path>{
     preferencePath.value_or(gameInfo.prefabPathPreference.path), userRoot};
   return mdl::MapFixtureConfig{.gameInfo = std::move(gameInfo)};
+}
+
+/**
+ * Waits until the panel has started the given number of scans and the library has
+ * taken the last one over.
+ */
+bool waitForScan(
+  const PrefabPanel& panel, const mdl::PrefabLibrary& library, const size_t scanCount)
+{
+  return QTest::qWaitFor(
+    [&] { return panel.scanCount() == scanCount && !library.scanning(); });
+}
+
+const PrefabBrowserView::CellSummary* findCell(
+  const std::vector<PrefabBrowserView::CellSummary>& cells,
+  const std::filesystem::path& relativePath)
+{
+  const auto it = std::ranges::find_if(
+    cells, [&](const auto& cell) { return cell.entry->relativePath == relativePath; });
+  return it != cells.end() ? &*it : nullptr;
 }
 
 } // namespace
@@ -337,9 +358,22 @@ TEST_CASE("PrefabPanel")
           .name = "lamp", .category = "lights", .root = mdl::PrefabRoot::User})
       | kdl::is_success());
 
-    // the panel scans on construction and takes the results on its timer
+    // the panel is hidden by default and scans only once it is shown
     auto panel = PrefabPanel{fixture.context()};
-    CHECK(QTest::qWaitFor([&] { return !library.scanning(); }));
+    QApplication::processEvents();
+    CHECK(panel.scanCount() == 0u);
+    CHECK(!library.scanning());
+    CHECK(library.entries().empty());
+
+    // a rescan before the first scan waits for it
+    panel.rescan();
+    QApplication::processEvents();
+    CHECK(panel.scanCount() == 0u);
+
+    // the first scan takes the results on the panel's timer
+    panel.panelShown();
+    CHECK(panel.scanCount() == 1u);
+    CHECK(waitForScan(panel, library, 1));
     REQUIRE(library.entries().size() == 1);
     CHECK(library.entries().front()->relativePath == "lights/lamp.map");
 
@@ -381,7 +415,7 @@ TEST_CASE("PrefabPanel")
       auto* rescanButton = panel.findChild<QToolButton*>("PrefabPanel_rescanButton");
       REQUIRE(rescanButton != nullptr);
       rescanButton->click();
-      CHECK(QTest::qWaitFor([&] { return !library.scanning(); }));
+      CHECK(waitForScan(panel, library, 2));
       CHECK(library.entries().size() == 2);
       CHECK(categoryChoice->count() == 3);
       CHECK(categoryChoice->itemText(1) == "(top level)");
@@ -411,7 +445,7 @@ TEST_CASE("PrefabPanel")
 }
 )");
       panel.rescan();
-      CHECK(QTest::qWaitFor([&] { return !library.scanning(); }));
+      CHECK(waitForScan(panel, library, 2));
 
       const auto* entry = library.find(mdl::PrefabRoot::User, "unnamed.map");
       REQUIRE(entry != nullptr);
@@ -447,7 +481,7 @@ TEST_CASE("PrefabPanel")
       auto& newLibrary = fixture.document().map().prefabLibrary();
       REQUIRE(&newLibrary != &library);
       CHECK(newLibrary.userRoot() == env.dir());
-      CHECK(QTest::qWaitFor([&] { return !newLibrary.scanning(); }));
+      CHECK(waitForScan(panel, newLibrary, 2));
       REQUIRE(newLibrary.entries().size() == 2u);
 
       // the panel observes the new library: the categories and the cells follow it
@@ -459,6 +493,112 @@ TEST_CASE("PrefabPanel")
       REQUIRE(newCells.size() == 2u);
       CHECK(newCells[0].entry == newLibrary.entries()[0].get());
       CHECK(newCells[1].entry == newLibrary.entries()[1].get());
+    }
+
+    SECTION("Triggers before the event loop runs scan once")
+    {
+      auto changeCount = 0;
+      auto connection =
+        library.libraryDidChangeNotifier.connect([&]() { ++changeCount; });
+
+      // a file that only the coalesced scan finds
+      REQUIRE(
+        mdl::savePrefab(
+          map,
+          {entityNode},
+          mdl::SavePrefabOptions{.name = "lamp2", .root = mdl::PrefabRoot::User})
+        | kdl::is_success());
+
+      fixture.document().modsDidChangeNotifier();
+      panel.rescan();
+      panel.rescan();
+      CHECK(panel.scanCount() == 1u);
+
+      CHECK(waitForScan(panel, library, 2));
+      CHECK(library.entries().size() == 2u);
+
+      // nothing else is posted
+      QTest::qWait(100);
+      CHECK(panel.scanCount() == 2u);
+      CHECK(changeCount == 1);
+    }
+
+    SECTION("A save reads the saved file only")
+    {
+      // a second prefab, so that one is saved again and the other is not
+      REQUIRE(
+        mdl::savePrefab(
+          map,
+          {entityNode},
+          mdl::SavePrefabOptions{
+            .name = "crate", .category = "boxes", .root = mdl::PrefabRoot::User})
+        | kdl::is_success());
+      panel.rescan();
+      REQUIRE(waitForScan(panel, library, 2));
+      REQUIRE(library.entries().size() == 2u);
+
+      const auto savedCells = view->cellSummaries();
+      const auto* crateCell = findCell(savedCells, "boxes/crate.map");
+      const auto* lampCell = findCell(savedCells, "lights/lamp.map");
+      REQUIRE(crateCell != nullptr);
+      REQUIRE(lampCell != nullptr);
+      const auto* lampEntry = lampCell->entry;
+
+      SECTION("The previews survive a clear and new definitions")
+      {
+        view->entityModelsWillChange();
+        fixture.document().entityDefinitionsWillChangeNotifier();
+        fixture.document().entityDefinitionsDidChangeNotifier();
+
+        const auto newCells = view->cellSummaries();
+        REQUIRE(newCells.size() == 2u);
+        CHECK(findCell(newCells, "boxes/crate.map")->previewId == crateCell->previewId);
+        CHECK(findCell(newCells, "lights/lamp.map")->previewId == lampCell->previewId);
+      }
+
+      SECTION("A save updates one entry")
+      {
+        auto readMutex = std::mutex{};
+        auto readPaths = std::vector<std::filesystem::path>{};
+        library.setReadHookForTesting([&](const auto& path) {
+          const auto lock = std::lock_guard{readMutex};
+          readPaths.push_back(path);
+        });
+
+        // the tags make the file differ
+        const auto lampPath = mdl::savePrefab(
+                                map,
+                                {entityNode},
+                                mdl::SavePrefabOptions{
+                                  .name = "lamp",
+                                  .category = "lights",
+                                  .tags = {"new"},
+                                  .root = mdl::PrefabRoot::User})
+                              | kdl::value();
+
+        panel.prefabWasSaved(lampPath);
+        CHECK(QTest::qWaitFor([&] { return !library.scanning(); }));
+        CHECK(panel.scanCount() == 2u);
+        library.setReadHookForTesting({});
+
+        {
+          const auto lock = std::lock_guard{readMutex};
+          REQUIRE(readPaths.size() == 1u);
+          CHECK(readPaths.front().lexically_normal() == lampPath.lexically_normal());
+        }
+
+        // the entry keeps its address and takes the new file
+        REQUIRE(library.entries().size() == 2u);
+        const auto* entry = library.find(mdl::PrefabRoot::User, "lights/lamp.map");
+        CHECK(entry == lampEntry);
+        CHECK(entry->metadata.tags == std::vector<std::string>{"new"});
+
+        // the other entry keeps its preview, the saved one gets a new one
+        const auto newCells = view->cellSummaries();
+        REQUIRE(newCells.size() == 2u);
+        CHECK(findCell(newCells, "boxes/crate.map")->previewId == crateCell->previewId);
+        CHECK(findCell(newCells, "lights/lamp.map")->previewId != lampCell->previewId);
+      }
     }
   }
 
@@ -492,13 +632,14 @@ TEST_CASE("PrefabPanel")
     library.setUserRoot(env.dir());
 
     auto panel = PrefabPanel{fixture.context()};
-    CHECK(QTest::qWaitFor([&] { return !library.scanning(); }));
+    panel.panelShown();
+    CHECK(waitForScan(panel, library, 1));
     CHECK(library.entries().empty());
 
     // the document pushes the new path into the library, the panel rescans it
     setPref(prefabPath, otherEnv.dir());
     CHECK(QTest::qWaitFor([&] { return library.userRoot() == otherEnv.dir(); }));
-    CHECK(QTest::qWaitFor([&] { return !library.scanning(); }));
+    CHECK(waitForScan(panel, library, 2));
     REQUIRE(library.entries().size() == 1u);
     CHECK(library.entries().front()->relativePath == "doors/hatch.map");
 
