@@ -37,6 +37,8 @@ struct GameInfo
 
   Preference<std::filesystem::path> gamePathPreference;
   Preference<std::filesystem::path> defaultEnginePathPreference;
+  // the per-user prefab library root, empty when the user has not set one
+  Preference<std::filesystem::path> prefabPathPreference;
 
   CompilationConfig compilationConfig = {};
   GameEngineConfig gameEngineConfig = {};
@@ -48,6 +50,7 @@ struct GameInfo
     gameConfig,
     gamePathPreference,
     defaultEnginePathPreference,
+    prefabPathPreference,
     compilationConfig,
     gameEngineConfig,
     compilationConfigParseFailed,
