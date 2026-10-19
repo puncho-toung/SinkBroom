@@ -19,10 +19,14 @@
 
 #pragma once
 
+#include <QSet>
+#include <QString>
+
 #include "base/NotifierConnection.h"
 #include "base/Result.h"
 #include "ui/SidebarPanel.h"
 
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
@@ -61,7 +65,8 @@ class PrefabBrowserView;
  * document and a change of the mods, the game path or the Prefab Path rescan, coalesced
  * into one scan per pass of the event loop, and a save reads the saved file only. It
  * never changes the library's entries. While the panel is visible, a change in the
- * library's folders rescans half a second after the last one.
+ * library's folders rescans half a second after the last one; the panel's own save is
+ * not such a change. A closed panel watches no folder; it rescans when it is shown.
  *
  * Placed assemblies whose file has changed are refreshed only when the user says so
  * (D17): once a document is loaded and the library is scanned, a prompt lists them; the
@@ -119,9 +124,21 @@ private:
   // the map changed while the panel was hidden, so the count on the Refresh button may
   // be out of date
   bool m_refreshCountStale = false;
-  // a folder changed while the panel was hidden
+  // the panel is open, so that it watches the library's folders: from panelShown to
+  // panelHidden
+  bool m_watching = false;
+  // a folder may have changed while the panel was hidden or did not watch it
   bool m_watchMissed = false;
+  // the watched paths that changed since the watch timer was started
+  QSet<QString> m_changedPaths;
+  // the panel deleted a file of the library since the watch timer was started
+  bool m_libraryFilesChanged = false;
+  // the files and folders that the panel's own save changed, whose changes the watcher
+  // reports until m_ownWritesUntil; the library has read the saved file already
+  QSet<QString> m_ownWrites;
+  std::chrono::steady_clock::time_point m_ownWritesUntil;
   std::size_t m_changedPlacementCount = 0;
+  std::size_t m_recountCount = 0;
 
   NotifierConnection m_notifierConnection;
   // to the library of the document's current map, renewed when the map is replaced
@@ -136,6 +153,7 @@ public:
   std::filesystem::path iconPath() const override;
 
   void panelShown() override;
+  void panelHidden() override;
 
   /**
    * Opens the save dialog for the current selection and reads the saved file into the
@@ -172,6 +190,12 @@ public:
   std::size_t changedPlacementCount() const;
 
   /**
+   * The number of times the panel has counted the changed placements, a walk of the
+   * map's groups. For tests.
+   */
+  std::size_t recountCount() const;
+
+  /**
    * Lists the given placements, of which those with a file are refreshed if the user
    * agrees, one transaction each (F9); reports the entities that lost their overrides
    * and any placement that could not be refreshed.
@@ -200,15 +224,17 @@ public:
 
   /**
    * Deletes the given prefab file and the thumbnail beside it, without asking, and
-   * rescans. Placements of the prefab in the map are not touched; they count as missing.
-   * Returns an error, and deletes nothing, if the path is not the file of an entry of the
-   * library.
+   * rescans: a visible panel once the library's folders are quiet, as after any change
+   * in them, a hidden one at once. Placements of the prefab in the map are not touched;
+   * they count as missing. Returns an error, and deletes nothing, if the path is not the
+   * file of an entry of the library.
    */
   Result<void> deletePrefabFile(const std::filesystem::path& path);
 
   /**
-   * Deletes the thumbnail of the given prefab file, without asking, and rescans, so that
-   * the cell draws the prefab itself. Returns an error, and deletes nothing, if the path
+   * Deletes the thumbnail of the given prefab file, without asking, and rescans as
+   * deletePrefabFile does, so that the cell draws the prefab itself. Returns an error,
+   * and deletes nothing, if the path
    * is not the file of an entry of the library or the entry has no thumbnail.
    */
   Result<void> removePrefabThumbnail(const std::filesystem::path& path);
@@ -220,6 +246,8 @@ private:
 
   void startScan();
   void processPendingResults();
+  bool scanJustFinished() const;
+  void scanDidFinish();
   void libraryDidChange();
 
   void updateCategories();
@@ -229,7 +257,11 @@ private:
   void updateRefreshButton();
   void updateApplyButton();
   void updateWatchedPaths();
-  void folderDidChange();
+  void watchSavedFile(const std::filesystem::path& path);
+  bool isOwnWrite(const QString& path) const;
+  void folderDidChange(const QString& path);
+  void watchTimerDidRunOut();
+  void libraryFilesDidChange();
   void mapDidChange();
   void promptAfterScanIfNeeded();
 

@@ -44,6 +44,7 @@
 #include "mdl/GameInfo.h"
 #include "mdl/GroupNode.h"
 #include "mdl/Map.h"
+#include "mdl/ModelUtils.h"
 #include "mdl/PrefabLibrary.h"
 #include "mdl/PrefabRefresh.h"
 #include "mdl/Selection.h"
@@ -71,6 +72,7 @@
 #include <set>
 #include <string>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -86,6 +88,9 @@ constexpr auto ScanPollInterval = 50ms;
 
 // how long the library's folders must be quiet before a change in them rescans
 constexpr auto WatchDebounceInterval = 500ms;
+
+// how long the watcher's reports of the panel's own save are ignored
+constexpr auto OwnWriteInterval = 2s;
 
 // the category tree's item data for "All"
 const auto AllCategories = QVariant{};
@@ -124,15 +129,14 @@ MapWindow* findMapWindow(QWidget* widget)
 const mdl::PrefabEntry* findEntry(
   const mdl::PrefabLibrary& library, const std::filesystem::path& absolutePath)
 {
+  // the entries hold lexically normal paths, so only the argument is made normal
+  // (R2-pf-ui-8)
   const auto normalPath = absolutePath.lexically_normal();
-  for (const auto& entry : library.entries())
-  {
-    if (entry->absolutePath.lexically_normal() == normalPath)
-    {
-      return entry.get();
-    }
-  }
-  return nullptr;
+  const auto& entries = library.entries();
+  const auto it = std::ranges::find_if(entries, [&](const auto& entry) {
+    return entry->absolutePath.native() == normalPath.native();
+  });
+  return it != entries.end() ? it->get() : nullptr;
 }
 
 /**
@@ -155,30 +159,45 @@ std::filesystem::path thumbnailPathOf(const mdl::PrefabEntry& entry)
   return entry.thumbnailPath.value_or(thumbnailPathFor(entry.absolutePath));
 }
 
-/**
- * Adds every folder under the given root, the root included, read on the GUI thread,
- * where the library's folders are few.
- */
-void addFoldersUnder(const std::filesystem::path& root, std::set<QString>& folders)
+// whether the given path lies below the given folder; both are lexically normal
+bool isBelow(const std::filesystem::path& path, const std::filesystem::path& folder)
 {
-  auto ec = std::error_code{};
-  if (!std::filesystem::is_directory(root, ec))
+  const auto relativePath = path.lexically_relative(folder);
+  return !relativePath.empty() && relativePath != "."
+         && kdl::path_front(relativePath) != "..";
+}
+
+/**
+ * Whether refreshing the given placement may replace the groups of another of the given
+ * placements. A refresh replaces the children of the placement's members, and so every
+ * group nested in them; if a member is itself inside a group, the linked copies of that
+ * group may have their children replaced too, so such a placement always may.
+ */
+bool refreshMayReplaceOthers(
+  const mdl::PrefabPlacement& placement,
+  const std::map<mdl::PrefabPlacementKey, mdl::PrefabPlacement>& placements)
+{
+  if (std::ranges::any_of(placement.members, [](const auto* member) {
+        return mdl::findContainingGroup(member) != nullptr;
+      }))
   {
-    return;
+    return true;
   }
 
-  folders.insert(pathAsQString(root.lexically_normal()));
-  for (auto it =
-         std::filesystem::recursive_directory_iterator{
-           root, std::filesystem::directory_options::skip_permission_denied, ec};
-       !ec && it != std::filesystem::recursive_directory_iterator{};
-       it.increment(ec))
-  {
-    if (it->is_directory(ec))
-    {
-      folders.insert(pathAsQString(it->path().lexically_normal()));
-    }
-  }
+  const auto members = std::unordered_set<const mdl::Node*>{
+    placement.members.begin(), placement.members.end()};
+  return std::ranges::any_of(placements, [&](const auto& keyAndPlacement) {
+    return std::ranges::any_of(keyAndPlacement.second.members, [&](const auto* member) {
+      for (const auto* parent = member->parent(); parent; parent = parent->parent())
+      {
+        if (members.contains(parent))
+        {
+          return true;
+        }
+      }
+      return false;
+    });
+  });
 }
 
 QString describePlacement(const mdl::PrefabPlacement& placement)
@@ -243,12 +262,15 @@ std::filesystem::path PrefabPanel::iconPath() const
 
 void PrefabPanel::panelShown()
 {
+  m_watching = true;
   if (m_scanStarted)
   {
     processPendingResults();
   }
   else
   {
+    // the first scan watches the folders once it has finished
+    m_watchMissed = false;
     startScan();
   }
 
@@ -261,6 +283,22 @@ void PrefabPanel::panelShown()
   {
     m_watchMissed = false;
     rescan();
+  }
+}
+
+void PrefabPanel::panelHidden()
+{
+  // R2-pf-ui-5: a closed panel holds no folder handles; panelShown rescans, and the end
+  // of that scan watches the folders again
+  m_watching = false;
+  m_watchMissed = true;
+  m_watchTimer->stop();
+  m_changedPaths.clear();
+  m_libraryFilesChanged = false;
+  m_ownWrites.clear();
+  if (const auto paths = m_watcher->directories() + m_watcher->files(); !paths.empty())
+  {
+    m_watcher->removePaths(paths);
   }
 }
 
@@ -286,6 +324,7 @@ void PrefabPanel::prefabWasSaved(const std::filesystem::path& path)
   // the other entries, and their previews, are kept
   m_document.map().prefabLibrary().updateEntry(path);
   processPendingResults();
+  watchSavedFile(path);
 }
 
 void PrefabPanel::scanOnce()
@@ -318,6 +357,11 @@ std::size_t PrefabPanel::changedPlacementCount() const
   return m_changedPlacementCount;
 }
 
+std::size_t PrefabPanel::recountCount() const
+{
+  return m_recountCount;
+}
+
 void PrefabPanel::promptToRefreshPlacements(
   const std::vector<mdl::PrefabPlacement>& placements)
 {
@@ -328,7 +372,7 @@ void PrefabPanel::promptToRefreshPlacements(
 
   // a placement is found again by its path and link ID before it is refreshed, since
   // refreshing one replaces nodes that another may point to
-  auto keys = std::vector<std::pair<std::string, std::string>>{};
+  auto keys = std::vector<mdl::PrefabPlacementKey>{};
   auto lines = QStringList{};
   for (const auto& placement : placements)
   {
@@ -360,19 +404,20 @@ void PrefabPanel::promptToRefreshPlacements(
   auto& map = m_document.map();
   auto lostEntities = QStringList{};
   auto errors = QStringList{};
-  for (const auto& [prefabPath, linkId] : keys)
+  // R2-pf-ui-7: one walk of the map for every key, again only after a refresh that may
+  // have replaced the groups of another placement
+  auto current = map.prefabLibrary().placementsByKey();
+  for (const auto& key : keys)
   {
-    const auto current = map.prefabLibrary().placements();
-    const auto it = std::ranges::find_if(current, [&](const auto& placement) {
-      return placement.prefabPath == prefabPath
-             && placement.firstMember->linkId() == linkId;
-    });
+    const auto it = current.find(key);
     if (it == current.end())
     {
       continue;
     }
 
-    mdl::refreshPlacement(map, *it) | kdl::transform([&](const auto& report) {
+    const auto& prefabPath = key.first;
+    const auto walkAgain = refreshMayReplaceOthers(it->second, current);
+    mdl::refreshPlacement(map, it->second) | kdl::transform([&](const auto& report) {
       for (const auto& name : report.lostEntities)
       {
         lostEntities.push_back(QString{"%1: %2"}
@@ -383,6 +428,11 @@ void PrefabPanel::promptToRefreshPlacements(
       map.logger().error() << e.msg;
       errors.push_back(QString::fromStdString(e.msg));
     });
+
+    if (walkAgain)
+    {
+      current = map.prefabLibrary().placementsByKey();
+    }
   }
 
   updateRefreshButton();
@@ -449,7 +499,7 @@ Result<void> PrefabPanel::deletePrefabFile(const std::filesystem::path& path)
                | kdl::transform([](auto) {});
 
              // the file may be gone even if its thumbnail is not
-             rescan();
+             libraryFilesDidChange();
              return result;
            });
 }
@@ -467,7 +517,7 @@ Result<void> PrefabPanel::removePrefabThumbnail(const std::filesystem::path& pat
                fs::Disk::deleteFile(*entry->thumbnailPath) | kdl::transform([](auto) {});
 
              // the entry learns that it has no thumbnail, and its cell draws the prefab
-             rescan();
+             libraryFilesDidChange();
              return result;
            });
 }
@@ -640,7 +690,7 @@ void PrefabPanel::createGui()
   m_watcher->setObjectName("PrefabPanel_watcher");
   m_watchTimer->setSingleShot(true);
   m_watchTimer->setInterval(WatchDebounceInterval);
-  connect(m_watchTimer, &QTimer::timeout, this, &PrefabPanel::rescan);
+  connect(m_watchTimer, &QTimer::timeout, this, &PrefabPanel::watchTimerDidRunOut);
   connect(
     m_watcher,
     &QFileSystemWatcher::directoryChanged,
@@ -690,11 +740,18 @@ void PrefabPanel::connectObservers()
     updateApplyButton();
   });
 
-  // a refresh, its undo or a removed placement changes the number on the Refresh button
-  m_notifierConnection += m_document.transactionDoneNotifier.connect(
-    [&](const std::string&, bool, bool) { mapDidChange(); });
-  m_notifierConnection += m_document.transactionUndoneNotifier.connect(
-    [&](const std::string&, bool, bool) { mapDidChange(); });
+  // a refresh, its undo or a removed placement changes the number on the Refresh button;
+  // counted when the outermost transaction that changed the map is committed or undone,
+  // not for a selection, and not for the nested transaction of every step of a drag
+  // (R2-pf-ui-2)
+  const auto transactionDone = [&](const std::string&, bool, const bool isModification) {
+    if (isModification && !m_document.map().isTransactionActive())
+    {
+      mapDidChange();
+    }
+  };
+  m_notifierConnection += m_document.transactionDoneNotifier.connect(transactionDone);
+  m_notifierConnection += m_document.transactionUndoneNotifier.connect(transactionDone);
 
   // the document pushes the game path and the Prefab Path into the map first, because
   // it observes the preferences since before the panel exists
@@ -728,10 +785,8 @@ void PrefabPanel::startScan()
   m_scanRunning = true;
   ++m_scanCount;
 
-  // the game path or the mods may have changed, which clears the entity models that the
-  // cells hold until the scan has finished
-  m_view->entityModelsWillChange();
-
+  // R2-pf-ui-4: the view clears the entity models that its cells hold when the mods or
+  // the game path change, which is not on every scan
   m_document.map().prefabLibrary().rescan();
   // a scan of empty roots is finished at once
   processPendingResults();
@@ -743,6 +798,13 @@ void PrefabPanel::processPendingResults()
   // saved file is read again
   auto& library = m_document.map().prefabLibrary();
   library.processPendingResults();
+
+  // H-F4a-1: a scan that changed nothing does not notify, so the end of a scan is seen
+  // here, after the notification of a scan that did
+  if (scanJustFinished())
+  {
+    scanDidFinish();
+  }
 
   if (library.scanning())
   {
@@ -757,30 +819,55 @@ void PrefabPanel::processPendingResults()
   }
 }
 
-void PrefabPanel::libraryDidChange()
+bool PrefabPanel::scanJustFinished() const
+{
+  return m_scanRunning && !m_document.map().prefabLibrary().scanning();
+}
+
+void PrefabPanel::scanDidFinish()
 {
   // only the end of a scan that the panel started, not new definitions or the update of
   // one saved file, makes missing files missing indeed (R1-pf-ui-3)
-  if (m_scanRunning && !m_document.map().prefabLibrary().scanning())
-  {
-    m_scanRunning = false;
-    m_scanFinished = true;
-  }
+  m_scanRunning = false;
+  m_scanFinished = true;
 
+  updateRefreshButton();
+  updateEmptyState();
+  if (m_watching)
+  {
+    updateWatchedPaths();
+  }
+  else
+  {
+    // the folders are watched again, and read again, once the panel is shown
+    m_watchMissed = true;
+  }
+  promptAfterScanIfNeeded();
+}
+
+void PrefabPanel::libraryDidChange()
+{
   updateCategories();
   m_view->libraryDidChange();
-  updateRefreshButton();
   updateApplyButton();
-  updateEmptyState();
-  updateWatchedPaths();
-  promptAfterScanIfNeeded();
+
+  // at the end of a scan that the panel started, scanDidFinish follows at once
+  if (!scanJustFinished())
+  {
+    updateRefreshButton();
+    updateEmptyState();
+  }
 }
 
 void PrefabPanel::updateRefreshButton()
 {
   // until a scan has finished, every placed prefab would count as missing
-  m_changedPlacementCount =
-    m_scanFinished ? m_document.map().prefabLibrary().changedPlacements().size() : 0;
+  m_changedPlacementCount = 0;
+  if (m_scanFinished)
+  {
+    m_changedPlacementCount = m_document.map().prefabLibrary().changedPlacements().size();
+    ++m_recountCount;
+  }
   m_refreshCountStale = false;
 
   m_refreshButton->setText(
@@ -808,15 +895,16 @@ void PrefabPanel::updateApplyButton()
 
 void PrefabPanel::updateWatchedPaths()
 {
-  // every folder under the roots as they are now, so that a new empty folder, and a file
-  // copied into it later, is seen (R1-pf-ui-1), and the prefab files in those folders,
-  // whose changes a folder does not report; an entry under a root that the map no longer
-  // has is not watched (R1-pf-ui-5)
+  // every folder under the roots as the last scan listed them, so that a new empty
+  // folder, and a file copied into it later, is seen (R1-pf-ui-1), and the prefab files
+  // in those folders, whose changes a folder does not report; an entry under a root that
+  // the map no longer has is not watched (R1-pf-ui-5); the folders are not walked again
+  // (R2-pf-ui-1)
   const auto& library = m_document.map().prefabLibrary();
   auto folders = std::set<QString>{};
-  for (const auto& root : library.roots())
+  for (const auto& folder : library.directories())
   {
-    addFoldersUnder(root, folders);
+    folders.insert(pathAsQString(folder));
   }
 
   auto paths = folders;
@@ -848,16 +936,115 @@ void PrefabPanel::updateWatchedPaths()
   }
 }
 
-void PrefabPanel::folderDidChange()
+void PrefabPanel::watchSavedFile(const std::filesystem::path& path)
+{
+  if (!m_watching)
+  {
+    return;
+  }
+
+  // a file outside the roots is not in the library
+  const auto filePath = path.lexically_normal();
+  const auto roots = m_document.map().prefabLibrary().roots();
+  const auto rootIt = std::ranges::find_if(
+    roots, [&](const auto& root) { return isBelow(filePath, root.lexically_normal()); });
+  if (rootIt == roots.end())
+  {
+    return;
+  }
+  const auto rootPath = rootIt->lexically_normal();
+
+  const auto now = std::chrono::steady_clock::now();
+  if (now >= m_ownWritesUntil)
+  {
+    m_ownWrites.clear();
+  }
+  m_ownWritesUntil = now + OwnWriteInterval;
+
+  // R2-pf-ui-1: the saved file, and the folders that the save made, are watched without
+  // a rescan; the save's own change of them, and of the watched folder above them, is
+  // not a reason for one (R2-pf-mdl-6)
+  auto pathsToAdd = QStringList{};
+  const auto fileString = pathAsQString(filePath);
+  m_ownWrites.insert(fileString);
+  if (!m_watcher->files().contains(fileString))
+  {
+    pathsToAdd.push_back(fileString);
+  }
+
+  const auto watchedFolders = m_watcher->directories();
+  for (auto folder = filePath.parent_path();; folder = folder.parent_path())
+  {
+    const auto folderString = pathAsQString(folder);
+    m_ownWrites.insert(folderString);
+    if (watchedFolders.contains(folderString))
+    {
+      break;
+    }
+    pathsToAdd.push_back(folderString);
+    if (!isBelow(folder, rootPath))
+    {
+      // the root
+      break;
+    }
+  }
+
+  if (!pathsToAdd.empty())
+  {
+    m_watcher->addPaths(pathsToAdd);
+  }
+}
+
+bool PrefabPanel::isOwnWrite(const QString& path) const
+{
+  return m_ownWrites.contains(path)
+         && std::chrono::steady_clock::now() < m_ownWritesUntil;
+}
+
+void PrefabPanel::folderDidChange(const QString& path)
 {
   if (isVisible())
   {
     // restarted by every change, so that a copy of many files rescans once
+    m_changedPaths.insert(path);
+    m_watchTimer->start();
+  }
+  else if (!isOwnWrite(path))
+  {
+    m_watchMissed = true;
+  }
+}
+
+void PrefabPanel::watchTimerDidRunOut()
+{
+  // R2-pf-mdl-6: the library has read what the panel's own save changed; the save is
+  // known by now, even if the watcher reported it before the dialog had closed
+  const auto changed =
+    m_libraryFilesChanged || std::ranges::any_of(m_changedPaths, [&](const auto& path) {
+      return !isOwnWrite(path);
+    });
+  m_changedPaths.clear();
+  m_libraryFilesChanged = false;
+
+  if (changed)
+  {
+    rescan();
+  }
+}
+
+void PrefabPanel::libraryFilesDidChange()
+{
+  // R2-pf-ui-3: the watcher reports the panel's own delete too, so a visible panel waits
+  // for the watcher, and the two make one scan; a hidden panel rescans at once, since the
+  // library is used without it
+  if (m_watching && isVisible())
+  {
+    m_libraryFilesChanged = true;
     m_watchTimer->start();
   }
   else
   {
-    m_watchMissed = true;
+    rescan();
   }
 }
 

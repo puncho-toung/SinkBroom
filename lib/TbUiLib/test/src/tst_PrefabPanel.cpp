@@ -43,6 +43,7 @@
 #include "mdl/Map_Selection.h"
 #include "mdl/PrefabFile.h"
 #include "mdl/PrefabLibrary.h"
+#include "mdl/TransactionScope.h"
 #include "mdl/WorldNode.h"
 #include "ui/CatchConfig.h"
 #include "ui/MapDocument.h"
@@ -99,6 +100,37 @@ mdl::EntityNode* addEntity(mdl::Map& map, std::vector<mdl::EntityProperty> prope
   auto* entityNode = new mdl::EntityNode{mdl::Entity{std::move(properties)}};
   REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), {entityNode}}}).empty());
   return entityNode;
+}
+
+/**
+ * Places the body of the given assembly in the map as the drop tool does, with the given
+ * prefab path and placed hash. The clones are owned here until the map takes them, so
+ * that a failed check leaks none (R2-pf-ui-11).
+ */
+mdl::GroupNode* placeAssembly(
+  mdl::Map& map,
+  const mdl::PrefabEntry& entry,
+  const std::string& prefabPath,
+  const std::string& placedHash)
+{
+  auto clones = std::vector<std::unique_ptr<mdl::Node>>{};
+  for (auto* node : map.prefabLibrary().cloneBody(entry, map.worldBounds()))
+  {
+    clones.emplace_back(node);
+  }
+  REQUIRE(clones.size() == 1u);
+  auto* groupNode = dynamic_cast<mdl::GroupNode*>(clones.front().get());
+  REQUIRE(groupNode != nullptr);
+
+  auto group = groupNode->group();
+  group.setPrefabPath(prefabPath);
+  group.setPrefabHash(placedHash);
+  groupNode->setGroup(std::move(group));
+
+  // addNodes owns the node from here; its command deletes a node that it did not add
+  REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), {clones.front().release()}}})
+             .empty());
+  return groupNode;
 }
 
 void selectOnly(mdl::Map& map, const std::vector<mdl::Node*>& nodes)
@@ -1045,15 +1077,8 @@ TEST_CASE("PrefabPanel")
     REQUIRE(pairEntry->thumbnailPath);
 
     // a placement of the assembly, as the drop tool makes it
-    auto clones = library.cloneBody(*pairEntry, map.worldBounds());
-    REQUIRE(clones.size() == 1u);
-    auto* groupNode = dynamic_cast<mdl::GroupNode*>(clones.front());
-    REQUIRE(groupNode != nullptr);
-    auto group = groupNode->group();
-    group.setPrefabPath("user/sets/pair.map");
-    group.setPrefabHash(pairEntry->hash);
-    groupNode->setGroup(std::move(group));
-    REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), clones}}).empty());
+    auto* groupNode =
+      placeAssembly(map, *pairEntry, "user/sets/pair.map", pairEntry->hash);
     const auto groupChildCount = groupNode->childCount();
 
     auto* view = panel.findChild<PrefabBrowserView*>();
@@ -1163,15 +1188,7 @@ TEST_CASE("PrefabPanel")
       // a placement of the assembly, as the drop tool makes it
       const auto* pairEntry = library.find(mdl::PrefabRoot::User, "pair.map");
       REQUIRE(pairEntry != nullptr);
-      auto clones = library.cloneBody(*pairEntry, map.worldBounds());
-      REQUIRE(clones.size() == 1u);
-      auto* groupNode = dynamic_cast<mdl::GroupNode*>(clones.front());
-      REQUIRE(groupNode != nullptr);
-      auto group = groupNode->group();
-      group.setPrefabPath("user/pair.map");
-      group.setPrefabHash(pairEntry->hash);
-      groupNode->setGroup(std::move(group));
-      REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), clones}}).empty());
+      auto* groupNode = placeAssembly(map, *pairEntry, "user/pair.map", pairEntry->hash);
 
       // the file changes on disk; the count follows the library without touching the
       // map
@@ -1194,6 +1211,39 @@ TEST_CASE("PrefabPanel")
       panel.panelShown();
       CHECK(panel.changedPlacementCount() == 0u);
       CHECK(refreshButton->text() == "Refresh");
+    }
+
+    SECTION("A visible panel counts after the outermost transaction only")
+    {
+      panel.show();
+      QApplication::processEvents();
+
+      const auto* pairEntry = library.find(mdl::PrefabRoot::User, "pair.map");
+      REQUIRE(pairEntry != nullptr);
+      const auto recounts = panel.recountCount();
+
+      // a selection changes nothing that the button counts
+      selectOnly(map, {lampNode});
+      CHECK(panel.recountCount() == recounts);
+
+      // a changed placement added in a nested transaction, as every step of a drag is
+      map.startTransaction("Outer", mdl::TransactionScope::LongRunning);
+      placeAssembly(map, *pairEntry, "user/pair.map", "an older hash");
+      QApplication::processEvents();
+      CHECK(panel.recountCount() == recounts);
+      CHECK(refreshButton->text() == "Refresh");
+
+      REQUIRE(map.commitTransaction());
+      QApplication::processEvents();
+      CHECK(panel.recountCount() == recounts + 1);
+      CHECK(refreshButton->text() == "Refresh (1)");
+
+      // an undo of a modification counts once
+      map.undoCommand();
+      QApplication::processEvents();
+      CHECK(panel.recountCount() == recounts + 2);
+      CHECK(refreshButton->text() == "Refresh");
+      panel.hide();
     }
 
     SECTION("Apply to Selection needs an entity prefab and an entity of its class")
@@ -1257,6 +1307,10 @@ TEST_CASE("PrefabPanel")
           .name = "lamp", .category = "lights", .root = mdl::PrefabRoot::User})
       | kdl::value();
 
+    // made before the panel, so that the watcher lets go of its folders before it is
+    // deleted (R2-pf-ui-11)
+    auto otherEnv = fs::TestEnvironment{[](auto& e) { e.createDirectory("doors"); }};
+
     auto panel = PrefabPanel{fixture.context()};
     panel.panelShown();
     REQUIRE(waitForScan(panel, library, 1));
@@ -1276,9 +1330,81 @@ TEST_CASE("PrefabPanel")
     CHECK(watcher->directories().size() == 4);
     CHECK(watcher->files().size() == 1);
 
+    SECTION("A closed panel watches nothing until it is shown again")
+    {
+      panel.panelHidden();
+      CHECK(watcher->directories().empty());
+      CHECK(watcher->files().empty());
+
+      // the folders may have changed in the meantime
+      panel.panelShown();
+      REQUIRE(waitForScan(panel, library, 2));
+      CHECK(watched(watcher->directories(), env.dir() / "empty" / "deeper"));
+      CHECK(watcher->directories().size() == 4);
+      CHECK(watcher->files().size() == 1);
+    }
+
+    SECTION("A save watches the saved file without a rescan")
+    {
+      panel.show();
+      QApplication::processEvents();
+
+      // into a watched folder, and into a folder that the save makes
+      const auto savedPaths = std::vector<std::filesystem::path>{
+        mdl::savePrefab(
+          map,
+          {entityNode},
+          mdl::SavePrefabOptions{
+            .name = "lamp2", .category = "lights", .root = mdl::PrefabRoot::User})
+          | kdl::value(),
+        mdl::savePrefab(
+          map,
+          {entityNode},
+          mdl::SavePrefabOptions{
+            .name = "lamp3", .category = "new/deeper", .root = mdl::PrefabRoot::User})
+          | kdl::value(),
+      };
+      for (const auto& savedPath : savedPaths)
+      {
+        panel.prefabWasSaved(savedPath);
+      }
+      REQUIRE(QTest::qWaitFor(
+        [&] { return !library.scanning() && library.entries().size() == 3u; }));
+
+      CHECK(watched(watcher->files(), savedPaths[0]));
+      CHECK(watched(watcher->files(), savedPaths[1]));
+      CHECK(watcher->files().size() == 3);
+      CHECK(watched(watcher->directories(), env.dir() / "new"));
+      CHECK(watched(watcher->directories(), env.dir() / "new" / "deeper"));
+      CHECK(watcher->directories().size() == 6);
+
+      // the watcher's report of the save does not rescan
+      QTest::qWait(1500);
+      CHECK(panel.scanCount() == 1u);
+      panel.hide();
+    }
+
+    SECTION("A visible panel's delete scans once")
+    {
+      panel.show();
+      QApplication::processEvents();
+
+      CHECK(panel.deletePrefabFile(lampPath) | kdl::is_success());
+      CHECK(QTest::qWaitFor(
+        [&] {
+          return panel.scanCount() == 2u && !library.scanning()
+                 && library.entries().empty();
+        },
+        5000));
+
+      // the watcher's report of the delete is part of that scan
+      QTest::qWait(1000);
+      CHECK(panel.scanCount() == 2u);
+      panel.hide();
+    }
+
     SECTION("A new root is watched instead of the old one")
     {
-      auto otherEnv = fs::TestEnvironment{[](auto& e) { e.createDirectory("doors"); }};
       library.setUserRoot(otherEnv.dir());
       panel.rescan();
       REQUIRE(waitForScan(panel, library, 2));
@@ -1331,15 +1457,7 @@ TEST_CASE("PrefabPanel")
     const auto* pairEntry = map.prefabLibrary().find(mdl::PrefabRoot::User, "pair.map");
     REQUIRE(pairEntry != nullptr);
 
-    auto clones = map.prefabLibrary().cloneBody(*pairEntry, map.worldBounds());
-    REQUIRE(clones.size() == 1u);
-    auto* groupNode = dynamic_cast<mdl::GroupNode*>(clones.front());
-    REQUIRE(groupNode != nullptr);
-    auto group = groupNode->group();
-    group.setPrefabPath("user/pair.map");
-    group.setPrefabHash(pairEntry->hash);
-    groupNode->setGroup(std::move(group));
-    REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), clones}}).empty());
+    auto* groupNode = placeAssembly(map, *pairEntry, "user/pair.map", pairEntry->hash);
     mdl::removeNodes(map, {lampNode, markerNode});
 
     auto tagged = pairOptions;
