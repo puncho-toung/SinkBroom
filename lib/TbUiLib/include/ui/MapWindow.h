@@ -528,9 +528,10 @@ private:
   void updateRerunAction();
 
   /**
-   * Brings the _tb_prefab_saved key of a prefab editor's file, and the _tb_prefab_class
-   * key of an entity snapshot, up to date before a save, in one transaction; warns if an
-   * entity snapshot no longer holds exactly one entity.
+   * Brings the _tb_prefab_class key of a prefab editor's entity snapshot up to date
+   * before a save of a modified document, in a transaction of its own and only if the
+   * class has changed; warns if the snapshot no longer holds exactly one entity. The
+   * _tb_prefab_saved key keeps the time of the snapshot (DD-30).
    */
   void updatePrefabMetadata();
   /**

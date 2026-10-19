@@ -36,6 +36,7 @@
 #include "base/Preference.h"
 #include "fs/TestEnvironment.h"
 #include "gl/GlManager.h"
+#include "mdl/ContentHash.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GameConfigFixture.h"
@@ -64,6 +65,8 @@
 #include "kd/result.h"
 
 #include "vm/bbox.h"
+
+#include <fmt/format.h>
 
 #include <filesystem>
 #include <fstream>
@@ -623,17 +626,16 @@ TEST_CASE("MapWindowManager")
         "Could not write thumbnail lamp.png: "));
     }
 
-    SECTION("a save brings the prefab's keys up to date")
+    SECTION("a save brings the prefab's class up to date and nothing else")
     {
-      // R1-pf3-11
+      // R1-pf3-11, DD-30
       auto& editorMap = editor->document().map();
       auto& worldNode = editorMap.worldNode();
-      auto worldEntity = worldNode.entity();
-      worldEntity.addOrUpdateProperty(mdl::PrefabPropertyKeys::Saved, "an old time");
-      REQUIRE(mdl::updateNodeContents(
-        editorMap,
-        "Set Saved",
-        {{&worldNode, mdl::NodeContents{std::move(worldEntity)}}}));
+      const auto* savedValue =
+        worldNode.entity().property(mdl::PrefabPropertyKeys::Saved);
+      REQUIRE(savedValue != nullptr);
+      const auto savedKey =
+        fmt::format("\"{}\" \"{}\"", mdl::PrefabPropertyKeys::Saved, *savedValue);
 
       REQUIRE(worldNode.defaultLayer()->children().size() == 1u);
       auto* lampNode =
@@ -641,6 +643,43 @@ TEST_CASE("MapWindowManager")
       REQUIRE(lampNode != nullptr);
 
       editor->setThumbnailGrabberForTesting([] { return QImage{}; });
+
+      SECTION("an unmodified save writes the file as it was")
+      {
+        const auto fileBefore = readFile(prefabPath);
+        REQUIRE(!editorMap.modified());
+
+        REQUIRE(editor->saveDocument());
+        finishSave();
+
+        CHECK(
+          mdl::fnv1a64HexNormalizedLineEndings(readFile(prefabPath))
+          == mdl::fnv1a64HexNormalizedLineEndings(fileBefore));
+        CHECK(!editorMap.canUndoCommand());
+      }
+
+      SECTION("a plain edit keeps the snapshot time")
+      {
+        auto lampEntity = lampNode->entity();
+        lampEntity.addOrUpdateProperty("light_radius", "64 64 64");
+        REQUIRE(mdl::updateNodeContents(
+          editorMap,
+          "Set Radius",
+          {{lampNode, mdl::NodeContents{std::move(lampEntity)}}}));
+
+        REQUIRE(editor->saveDocument());
+        finishSave();
+
+        const auto file = readFile(prefabPath);
+        CHECK(file.find("\"light_radius\" \"64 64 64\"") != std::string::npos);
+        CHECK(file.find(savedKey) != std::string::npos);
+        CHECK(file.find("\"_tb_prefab_class\" \"light\"") != std::string::npos);
+
+        // no undo step of its own
+        REQUIRE(editorMap.undoCommandName() != nullptr);
+        CHECK(*editorMap.undoCommandName() == "Set Radius");
+        CHECK(!editorMap.modified());
+      }
 
       SECTION("an entity snapshot of another class")
       {
@@ -656,8 +695,10 @@ TEST_CASE("MapWindowManager")
 
         const auto file = readFile(prefabPath);
         CHECK(file.find("\"_tb_prefab_class\" \"info_null\"") != std::string::npos);
-        CHECK(file.find("an old time") == std::string::npos);
-        CHECK(file.find("\"_tb_prefab_saved\" \"") != std::string::npos);
+        CHECK(file.find(savedKey) != std::string::npos);
+
+        REQUIRE(editorMap.undoCommandName() != nullptr);
+        CHECK(*editorMap.undoCommandName() == "Update Prefab Metadata");
         CHECK(!editorMap.modified());
       }
 
@@ -674,7 +715,7 @@ TEST_CASE("MapWindowManager")
 
         const auto file = readFile(prefabPath);
         CHECK(file.find("\"_tb_prefab_class\" \"light\"") != std::string::npos);
-        CHECK(file.find("an old time") == std::string::npos);
+        CHECK(file.find(savedKey) != std::string::npos);
       }
     }
   }

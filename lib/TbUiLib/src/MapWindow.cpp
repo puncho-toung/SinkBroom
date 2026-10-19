@@ -2993,40 +2993,42 @@ bool MapWindow::canLaunch() const
 
 void MapWindow::updatePrefabMetadata()
 {
+  // DD-30: _tb_prefab_saved keeps the time of the snapshot, so a save of an unmodified
+  // prefab writes the file as it was and adds no undo step
   auto& map = m_document->map();
-  auto& worldNode = map.worldNode();
-  const auto& worldEntity = worldNode.entity();
-  const auto* kind = worldEntity.property(mdl::PrefabPropertyKeys::Kind);
-  if (!kind)
+  if (!map.modified())
   {
-    // not a prefab, so there are no prefab keys to keep up to date
     return;
   }
 
-  // R1-pf3-11: the keys that savePrefab writes and that a plain save would keep as they
-  // were
-  auto newWorldEntity = worldEntity;
-  newWorldEntity.addOrUpdateProperty(
-    mdl::PrefabPropertyKeys::Saved, mdl::prefabTimestamp());
-
-  if (*kind == mdl::PrefabPropertyValues::KindEntity)
+  auto& worldNode = map.worldNode();
+  const auto& worldEntity = worldNode.entity();
+  const auto* kind = worldEntity.property(mdl::PrefabPropertyKeys::Kind);
+  if (!kind || *kind != mdl::PrefabPropertyValues::KindEntity)
   {
-    if (const auto* entityNode = singleBodyEntity(worldNode))
-    {
-      const auto& className = entityNode->entity().classname();
-      if (const auto* oldClassName = worldEntity.property(mdl::PrefabPropertyKeys::Class);
-          !oldClassName || *oldClassName != className)
-      {
-        newWorldEntity.addOrUpdateProperty(mdl::PrefabPropertyKeys::Class, className);
-      }
-    }
-    else
-    {
-      logger().warn() << "Prefab " << map.filename()
-                      << " is an entity snapshot, but it no longer holds exactly one "
-                         "entity";
-    }
+    // only an entity snapshot has a key that an edit can make stale
+    return;
   }
+
+  const auto* entityNode = singleBodyEntity(worldNode);
+  if (!entityNode)
+  {
+    logger().warn() << "Prefab " << map.filename()
+                    << " is an entity snapshot, but it no longer holds exactly one "
+                       "entity";
+    return;
+  }
+
+  // R1-pf3-11: the class that savePrefab wrote, which a plain save would keep as it was
+  const auto& className = entityNode->entity().classname();
+  if (const auto* oldClassName = worldEntity.property(mdl::PrefabPropertyKeys::Class);
+      oldClassName && *oldClassName == className)
+  {
+    return;
+  }
+
+  auto newWorldEntity = worldEntity;
+  newWorldEntity.addOrUpdateProperty(mdl::PrefabPropertyKeys::Class, className);
 
   auto transaction = mdl::Transaction{map, "Update Prefab Metadata"};
   if (!mdl::updateNodeContents(
