@@ -426,6 +426,8 @@ public: // command processing
   void rollbackTransaction();
   bool commitTransaction();
   void cancelTransaction();
+  // a transaction is open, so that a commit now would not be the outermost one
+  bool isTransactionActive() const;
 
   bool isCurrentDocumentStateObservable() const;
 

@@ -23,6 +23,7 @@
 #include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
+#include "mdl/CommandProcessor.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
 #include "mdl/Map.h"
@@ -38,6 +39,9 @@
 #include "mdl/UpdateBrushFaceAttributes.h"
 
 #include "vm/approx.h"
+
+#include <string>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_predicate.hpp>
@@ -396,6 +400,36 @@ TEST_CASE("Map_Commands")
     auto& map = fixture.create();
 
     CHECK_THROWS_AS(map.throwExceptionDuringCommand(), std::exception);
+  }
+
+  SECTION("isTransactionActive")
+  {
+    auto fixture = MapFixture{};
+    auto& map = fixture.create();
+    CHECK_FALSE(map.isTransactionActive());
+
+    // what a transactionDoneNotifier observer sees: true for a nested commit, false for
+    // the outermost one
+    auto activeAtDone = std::vector<bool>{};
+    auto connection = map.commandProcessor().transactionDoneNotifier.connect(
+      [&](const std::string&, bool, bool) {
+        activeAtDone.push_back(map.isTransactionActive());
+      });
+
+    map.startTransaction("outer", TransactionScope::Oneshot);
+    CHECK(map.isTransactionActive());
+    map.startTransaction("inner", TransactionScope::Oneshot);
+    addNodes(map, {{&parentForNodes(map), {createBrushNode(map)}}});
+    REQUIRE(map.commitTransaction());
+    CHECK(map.isTransactionActive());
+    REQUIRE(map.commitTransaction());
+    CHECK_FALSE(map.isTransactionActive());
+    // addNodes, inner, outer
+    CHECK(activeAtDone == std::vector<bool>{true, true, false});
+
+    map.startTransaction("cancelled", TransactionScope::Oneshot);
+    map.cancelTransaction();
+    CHECK_FALSE(map.isTransactionActive());
   }
 }
 

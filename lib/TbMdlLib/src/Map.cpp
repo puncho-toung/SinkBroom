@@ -1678,6 +1678,11 @@ void Map::cancelTransaction()
   m_repeatStack->commitTransaction();
 }
 
+bool Map::isTransactionActive() const
+{
+  return m_commandProcessor->isTransactionActive();
+}
+
 bool Map::isCurrentDocumentStateObservable() const
 {
   return m_commandProcessor->isCurrentDocumentStateObservable();
