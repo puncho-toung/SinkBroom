@@ -108,8 +108,7 @@ QString PrefabPanel::title() const
 
 std::filesystem::path PrefabPanel::iconPath() const
 {
-  // the library is a folder tree
-  return "Folder.svg";
+  return "Prefabs.svg";
 }
 
 void PrefabPanel::panelShown()

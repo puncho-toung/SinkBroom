@@ -245,9 +245,8 @@ TEST_CASE("PrefabPanel")
     CHECK(panel.title() == "Prefabs");
     CHECK(!panel.shownByDefault());
     CHECK(panel.defaultArea() == Qt::RightDockWidgetArea);
-    // a greyscale icon that the dark theme inverts; a 16x16 one until the panel has its
-    // own 24x24 icon
-    CHECK(panel.iconPath() == "Folder.svg");
+    CHECK(panel.iconPath() == "Prefabs.svg");
+    checkGreyscaleIcon(panel.iconPath());
   }
 
   SECTION("save button without a root")
