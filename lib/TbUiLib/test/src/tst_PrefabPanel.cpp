@@ -48,6 +48,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -73,6 +74,12 @@ mdl::PrefabEntry makeEntry(
   entry.metadata.className = std::move(className);
   entry.metadata.tags = std::move(tags);
   return entry;
+}
+
+void pushEntry(
+  std::vector<std::unique_ptr<mdl::PrefabEntry>>& entries, mdl::PrefabEntry entry)
+{
+  entries.push_back(std::make_unique<mdl::PrefabEntry>(std::move(entry)));
 }
 
 mdl::EntityNode* addEntity(mdl::Map& map, std::vector<mdl::EntityProperty> properties)
@@ -108,14 +115,16 @@ mdl::MapFixtureConfig fixtureConfigWithUserRoot(
 
 TEST_CASE("PrefabBrowserView")
 {
-  auto entries = std::vector<mdl::PrefabEntry>{};
-  entries.push_back(makeEntry(
-    "lights/torch.map", mdl::PrefabKind::Entity, "Torch", "light", {"fire", "wall"}));
-  entries.push_back(
-    makeEntry("doors/metal/hatch.map", mdl::PrefabKind::Assembly, "Hatch"));
-  entries.push_back(makeEntry("crate.map", mdl::PrefabKind::Assembly, "Crate"));
-  entries.push_back(
-    makeEntry("lights/lamp.map", mdl::PrefabKind::Entity, "Lamp", "light_lamp"));
+  auto entries = std::vector<std::unique_ptr<mdl::PrefabEntry>>{};
+  pushEntry(
+    entries,
+    makeEntry(
+      "lights/torch.map", mdl::PrefabKind::Entity, "Torch", "light", {"fire", "wall"}));
+  pushEntry(
+    entries, makeEntry("doors/metal/hatch.map", mdl::PrefabKind::Assembly, "Hatch"));
+  pushEntry(entries, makeEntry("crate.map", mdl::PrefabKind::Assembly, "Crate"));
+  pushEntry(
+    entries, makeEntry("lights/lamp.map", mdl::PrefabKind::Entity, "Lamp", "light_lamp"));
 
   auto broken = makeEntry("broken.map", mdl::PrefabKind::Entity, "broken");
   broken.error = "Could not parse";
@@ -131,8 +140,8 @@ TEST_CASE("PrefabBrowserView")
 
   SECTION("matchesPrefabFilter")
   {
-    const auto& torch = entries[0];
-    const auto& hatch = entries[1];
+    const auto& torch = *entries[0];
+    const auto& hatch = *entries[1];
 
     CHECK(matchesPrefabFilter(torch, PrefabFilter{}));
     CHECK(matchesPrefabFilter(hatch, PrefabFilter{}));
@@ -153,7 +162,7 @@ TEST_CASE("PrefabBrowserView")
     CHECK(!matchesPrefabFilter(torch, PrefabFilter{.category = ""}));
     CHECK(!matchesPrefabFilter(hatch, PrefabFilter{.category = "doors"}));
     CHECK(matchesPrefabFilter(hatch, PrefabFilter{.category = "doors/metal"}));
-    CHECK(matchesPrefabFilter(entries[2], PrefabFilter{.category = ""}));
+    CHECK(matchesPrefabFilter(*entries[2], PrefabFilter{.category = ""}));
 
     // text: name, tags and class, case-insensitive, every word
     CHECK(matchesPrefabFilter(torch, PrefabFilter{.text = "tor"}));
@@ -294,7 +303,7 @@ TEST_CASE("PrefabPanel")
     auto panel = PrefabPanel{fixture.context()};
     CHECK(QTest::qWaitFor([&] { return !library.scanning(); }));
     REQUIRE(library.entries().size() == 1);
-    CHECK(library.entries().front().relativePath == "lights/lamp.map");
+    CHECK(library.entries().front()->relativePath == "lights/lamp.map");
 
     auto* categoryChoice = panel.findChild<QComboBox*>("PrefabPanel_categoryChoice");
     REQUIRE(categoryChoice != nullptr);
@@ -307,7 +316,7 @@ TEST_CASE("PrefabPanel")
     REQUIRE(view != nullptr);
     const auto cells = view->cellSummaries();
     REQUIRE(cells.size() == 1u);
-    CHECK(cells[0].entry == &library.entries()[0]);
+    CHECK(cells[0].entry == library.entries()[0].get());
     CHECK(cells[0].title == "lamp");
     CHECK(cells[0].dndData == "prefab:user/lights/lamp.map");
 
@@ -344,7 +353,7 @@ TEST_CASE("PrefabPanel")
       REQUIRE(newCells.size() == 2u);
       for (size_t i = 0; i < newCells.size(); ++i)
       {
-        const auto& entry = library.entries()[i];
+        const auto& entry = *library.entries()[i];
         CHECK(newCells[i].entry == &entry);
         CHECK(newCells[i].dndData == QString::fromStdString(library.payloadFor(entry)));
       }
@@ -410,8 +419,8 @@ TEST_CASE("PrefabPanel")
 
       const auto newCells = view->cellSummaries();
       REQUIRE(newCells.size() == 2u);
-      CHECK(newCells[0].entry == &newLibrary.entries()[0]);
-      CHECK(newCells[1].entry == &newLibrary.entries()[1]);
+      CHECK(newCells[0].entry == newLibrary.entries()[0].get());
+      CHECK(newCells[1].entry == newLibrary.entries()[1].get());
     }
   }
 
@@ -453,7 +462,7 @@ TEST_CASE("PrefabPanel")
     CHECK(QTest::qWaitFor([&] { return library.userRoot() == otherEnv.dir(); }));
     CHECK(QTest::qWaitFor([&] { return !library.scanning(); }));
     REQUIRE(library.entries().size() == 1u);
-    CHECK(library.entries().front().relativePath == "doors/hatch.map");
+    CHECK(library.entries().front()->relativePath == "doors/hatch.map");
 
     auto* categoryChoice = panel.findChild<QComboBox*>("PrefabPanel_categoryChoice");
     REQUIRE(categoryChoice != nullptr);

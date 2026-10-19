@@ -155,7 +155,7 @@ bool CreatePrefabTool::createPrefab(const std::string& payload)
   // C3: the root-qualified path, as in the payload, so that equal relative paths in the
   // two roots are different prefabs
   const auto prefabPath = library.payloadFor(*entry).substr(PayloadPrefix.size());
-  if (!entry->world)
+  if (!entry->hasBody())
   {
     map.logger().warn() << "Cannot place prefab '" << prefabPath
                         << "': " << entry->error.value_or("the file was not read");

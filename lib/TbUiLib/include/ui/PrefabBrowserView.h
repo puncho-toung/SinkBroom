@@ -90,7 +90,7 @@ struct PrefabFilter
  * their generic strings; the top level is the empty path.
  */
 std::vector<std::filesystem::path> prefabCategories(
-  const std::vector<mdl::PrefabEntry>& entries);
+  const std::vector<std::unique_ptr<mdl::PrefabEntry>>& entries);
 
 /**
  * Whether the given entry passes the given filter. An entry whose file failed to load

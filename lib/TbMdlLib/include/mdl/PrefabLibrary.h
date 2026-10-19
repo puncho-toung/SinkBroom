@@ -24,13 +24,22 @@
 #include "mdl/PrefabFile.h"
 
 #include "vm/bbox.h"
+#include "vm/vec.h"
 
+#include <atomic>
+#include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
+
+namespace kdl
+{
+class task_manager;
+}
 
 namespace tb::mdl
 {
@@ -38,19 +47,48 @@ class Map;
 class Node;
 class WorldNode;
 
+// An assembly with more brushes and patches than this keeps no world in the library; see
+// PrefabEntry::bodyPreview.
+constexpr auto PrefabWorldBrushBudget = std::size_t(256);
+// The most edges that a PrefabBodyPreview keeps, as many as a browser cell draws.
+constexpr auto PrefabPreviewMaxEdges = std::size_t(1200);
+
+/**
+ * What a browser cell needs of a body whose world the library does not keep.
+ */
+struct PrefabBodyPreview
+{
+  vm::bbox3d bounds;
+  // pairs of points: the brush edges and patch grid lines, at most PrefabPreviewMaxEdges
+  std::vector<vm::vec3f> edgeVertices;
+};
+
 struct PrefabEntry
 {
   PrefabRoot root = PrefabRoot::User;
-  // forward slashes, includes ".map", unique per root
+  // unique per root, includes ".map"
   std::filesystem::path relativePath;
   std::filesystem::path absolutePath;
+  // relativePath as UTF-8 with forward slashes, what payloads hold and entries sort by
+  std::string relativePathString;
+  // the key by which two relative paths name the same file: relativePathString, lower
+  // case (ASCII only) on Windows, where file names ignore case
+  std::string pathKey;
   // <stem>.png beside it, if present
   std::optional<std::filesystem::path> thumbnailPath;
   PrefabMetadata metadata;
   // fnv1a64Hex of the file bytes
   std::string hash;
-  // parsed body; definitions assigned; never mutated
+  // the file's size and modification time when it was read; a rescan reuses an entry
+  // whose file still has both
+  std::uintmax_t fileSize = 0;
+  std::filesystem::file_time_type modificationTime;
+  // parsed body; definitions assigned; never mutated; no node tree updates
   std::unique_ptr<WorldNode> world;
+  // set, with world == nullptr, for an assembly of more than PrefabWorldBrushBudget
+  // brushes and patches: its world is dropped once this is built, and cloneBody reads
+  // the file again
+  std::optional<PrefabBodyPreview> bodyPreview;
   // set, with world == nullptr, when the file failed
   std::optional<std::string> error;
 
@@ -58,6 +96,9 @@ struct PrefabEntry
   ~PrefabEntry();
   PrefabEntry(PrefabEntry&&) noexcept;
   PrefabEntry& operator=(PrefabEntry&&) noexcept;
+
+  // cloneBody can clone the body: the world is kept, or the file is read again
+  bool hasBody() const;
 };
 
 /**
@@ -65,21 +106,66 @@ struct PrefabEntry
  * Path preference, given by setUserRoot) and <game path>/<mod>/prefabs/. Subfolders are
  * categories. The folders are the registry; nothing else is stored.
  *
- * Files are read and parsed on task manager workers; processPendingResults, called on the
- * GUI thread, takes the results over.
+ * A scan runs in two phases on the library's own task manager, so that it never queues
+ * work in front of the map's: one task lists the roots (path, size, modification time),
+ * then processPendingResults, called on the GUI thread, starts one parse task per file
+ * that is new or changed, and takes the results over once all of them are done.
+ *
+ * Entries live in stable storage: an entry that a rescan reuses, or that updateEntry
+ * reads again, keeps its address.
  */
 class PrefabLibrary
 {
+public:
+  // called on a worker with the absolute path of each file before it is read; for tests
+  using ReadHook = std::function<void(const std::filesystem::path&)>;
+
 private:
+  struct ListedFile
+  {
+    PrefabRoot root = PrefabRoot::User;
+    std::filesystem::path absolutePath;
+    std::filesystem::path relativePath;
+    std::string relativePathString;
+    std::string pathKey;
+    std::uintmax_t fileSize = 0;
+    std::filesystem::file_time_type modificationTime;
+    std::optional<std::filesystem::path> thumbnailPath;
+  };
+
+  struct Listing
+  {
+    std::vector<ListedFile> files;
+    std::vector<std::string> warnings;
+  };
+
+  struct ReusedEntry
+  {
+    PrefabEntry* entry = nullptr;
+    std::optional<std::filesystem::path> thumbnailPath;
+  };
+
   Map& m_map;
   std::filesystem::path m_userRoot;
 
-  std::vector<PrefabEntry> m_entries;
+  std::vector<std::unique_ptr<PrefabEntry>> m_entries;
+
+  // bumped by every rescan; a task of an older generation returns at once
+  std::shared_ptr<std::atomic<std::uint64_t>> m_generation;
+  std::optional<std::future<Listing>> m_pendingListing;
   std::vector<std::future<PrefabEntry>> m_pendingEntries;
+  std::vector<ReusedEntry> m_reusedEntries;
+  std::vector<std::future<PrefabEntry>> m_pendingUpdates;
   bool m_scanning = false;
   bool m_definitionsStale = false;
+  ReadHook m_readHook;
 
   NotifierConnection m_notifierConnection;
+
+  // Declared after the futures, so it is destroyed first: its workers are joined before
+  // the futures go away. Created on the first scan, so that a map that never scans
+  // starts no threads.
+  std::unique_ptr<kdl::task_manager> m_taskManager;
 
 public:
   Notifier<> libraryDidChangeNotifier;
@@ -101,23 +187,32 @@ public:
   std::filesystem::path writeRootFor(PrefabRoot root) const;
 
   /**
-   * Lists the *.map files under the roots and starts reading and parsing them on task
-   * manager workers. A rescan while one runs abandons the running one.
+   * Starts a scan of the roots. A rescan while one runs abandons the running one. A file
+   * whose size and modification time are unchanged is not read again; its entry is kept.
    */
   void rescan();
 
   /**
-   * Call on the GUI thread. Once every file of the current scan is read, replaces the
-   * entries with the scan's results, assigns entity definitions, reads the metadata and
-   * fires libraryDidChangeNotifier once. Also reassigns entity definitions after the
+   * Reads the given file again, or for the first time, on a worker, for example after
+   * it was saved. A file under no root is ignored; a file that no longer exists, or a
+   * call while a scan runs, rescans instead. The result lands in processPendingResults.
+   */
+  void updateEntry(const std::filesystem::path& absolutePath);
+
+  /**
+   * Call on the GUI thread. Starts the parse tasks once the roots are listed; once every
+   * file of the current scan is read, replaces the entries with the scan's results,
+   * assigns entity definitions and fires libraryDidChangeNotifier once. Takes over the
+   * results of updateEntry the same way. Also reassigns entity definitions after the
    * map's definitions were reloaded.
    */
   void processPendingResults();
 
+  // a scan or an update is running
   bool scanning() const;
 
-  // sorted by root, then relativePath
-  const std::vector<PrefabEntry>& entries() const;
+  // sorted by root, then relativePathString
+  const std::vector<std::unique_ptr<PrefabEntry>>& entries() const;
 
   // relative paths compare as file names do on the platform, ignoring case on Windows;
   // the same goes for the rule that the user root wins over the mod root
@@ -131,14 +226,23 @@ public:
 
   /**
    * Returns caller-owned clones of the body (the one entity, or the one top-level group),
-   * link ids re-keyed (rekeyLinkIds), definitions kept; empty when entry.world is null.
+   * link ids re-keyed (rekeyLinkIds), definitions kept; empty when the entry has no
+   * body. An entry without a world reads its file again; if the file has changed since
+   * it was scanned, the result is empty and a warning is logged.
    *
    * The clones are not prepared for adding to a map; see prepareNodesForAdding.
    */
   std::vector<Node*> cloneBody(
     const PrefabEntry& entry, const vm::bbox3d& worldBounds) const;
 
+  void setReadHookForTesting(ReadHook readHook);
+
 private:
+  kdl::task_manager& taskManager();
+  void startParsing(Listing listing);
+  void integrateScan();
+  bool integrateUpdate(std::unique_ptr<PrefabEntry> entry);
+
   void connectObservers();
   void entityDefinitionsWillChange();
   void entityDefinitionsDidChange();

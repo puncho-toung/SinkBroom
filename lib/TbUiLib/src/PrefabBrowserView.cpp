@@ -70,6 +70,7 @@
 
 #include "kd/contracts.h"
 #include "kd/overload.h"
+#include "kd/ranges/to.h"
 #include "kd/string_compare.h"
 #include "kd/string_utils.h"
 
@@ -315,12 +316,12 @@ std::shared_ptr<gl::TextureResource> createThumbnail(
 } // namespace
 
 std::vector<std::filesystem::path> prefabCategories(
-  const std::vector<mdl::PrefabEntry>& entries)
+  const std::vector<std::unique_ptr<mdl::PrefabEntry>>& entries)
 {
   auto result = std::vector<std::filesystem::path>{};
   for (const auto& entry : entries)
   {
-    if (auto category = categoryOf(entry);
+    if (auto category = categoryOf(*entry);
         std::ranges::find(result, category) == result.end())
     {
       result.push_back(std::move(category));
@@ -433,9 +434,9 @@ void PrefabBrowserView::doReloadLayout(Layout& layout)
   const auto font = gl::FontDescriptor{fontPath, static_cast<size_t>(fontSize)};
   for (const auto& entry : m_document.map().prefabLibrary().entries())
   {
-    if (matchesPrefabFilter(entry, m_filter))
+    if (matchesPrefabFilter(*entry, m_filter))
     {
-      addEntryToLayout(layout, entry, font);
+      addEntryToLayout(layout, *entry, font);
     }
   }
 }
@@ -525,6 +526,20 @@ const PrefabBrowserView::EntryPreview& PrefabBrowserView::preview(
     }
 
     vertices = collectEdges(nodes, color);
+    if (vertices.empty())
+    {
+      vertices = boundsEdges(vm::bbox3f{bounds}, color);
+    }
+  }
+  else if (entry.bodyPreview)
+  {
+    // a large assembly whose world the library dropped (DD-19)
+    const auto color = DefaultColor.toVec();
+    bounds = entry.bodyPreview->bounds;
+    vertices = entry.bodyPreview->edgeVertices
+               | std::views::transform(
+                 [&](const auto& position) { return EdgeVertex{position, color}; })
+               | kdl::ranges::to<std::vector>();
     if (vertices.empty())
     {
       vertices = boundsEdges(vm::bbox3f{bounds}, color);
