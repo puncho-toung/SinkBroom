@@ -35,6 +35,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -78,18 +79,47 @@ enum class PrefabKindFilter
 struct PrefabFilter
 {
   PrefabKindFilter kind = PrefabKindFilter::All;
-  // the folder an entry must be in, relative to its root; nullopt shows every folder
+  // the folder an entry must be in or below, relative to its root; nullopt shows every
+  // folder
   std::optional<std::filesystem::path> category;
   // words, each of which must be in the name, a tag or the class name; split once when
   // the filter text changes
   std::vector<std::string> words;
+  // tags, each of which must be one of the entry's tags, whole, ignoring case
+  std::vector<std::string> tags;
 };
+
+// the prefix of a filter word that names a whole tag, as in tag:torch
+constexpr auto PrefabTagFilterPrefix = std::string_view{"tag:"};
+
+/**
+ * A filter of both kinds and every folder with the words and the tags of the given text:
+ * the text is split at spaces; a word with the prefix tag: names a whole tag, any other
+ * word is matched as a part of the name, a tag or the class name.
+ */
+PrefabFilter prefabFilterFromText(std::string_view text);
 
 /**
  * The distinct folders of the given entries, relative to their roots, in the order of
  * their generic strings; the top level is the empty path.
  */
 std::vector<std::filesystem::path> prefabCategories(
+  const std::vector<std::unique_ptr<mdl::PrefabEntry>>& entries);
+
+struct PrefabCategoryCount
+{
+  // relative to the roots; never the top level
+  std::filesystem::path path;
+  // the number of entries in the folder and in the folders below it
+  std::size_t count = 0;
+};
+
+/**
+ * Every folder that holds an entry or a folder that does, with the number of entries in
+ * it and below it, in path order, so that a folder comes before the folders below it.
+ * The top level is not listed.
+ */
+std::vector<PrefabCategoryCount> prefabCategoryCounts(
   const std::vector<std::unique_ptr<mdl::PrefabEntry>>& entries);
 
 /**

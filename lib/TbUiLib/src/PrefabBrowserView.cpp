@@ -87,6 +87,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
 #include <ranges>
 #include <set>
 #include <string>
@@ -113,6 +114,23 @@ const auto ErrorColor = RgbaF{1.0f, 0.3f, 0.3f, 1.0f};
 std::filesystem::path categoryOf(const mdl::PrefabEntry& entry)
 {
   return entry.relativePath.parent_path();
+}
+
+/**
+ * Whether the entry is in the given folder or in a folder below it; every entry is below
+ * the top level.
+ */
+bool isInCategory(const mdl::PrefabEntry& entry, const std::filesystem::path& category)
+{
+  const auto entryCategory = categoryOf(entry);
+  return std::ranges::mismatch(category, entryCategory).in1 == category.end();
+}
+
+bool matchesTag(const mdl::PrefabEntry& entry, const std::string& tag)
+{
+  return std::ranges::any_of(entry.metadata.tags, [&](const auto& entryTag) {
+    return kdl::ci::str_is_equal(entryTag, tag);
+  });
 }
 
 /**
@@ -384,12 +402,54 @@ std::vector<std::filesystem::path> prefabCategories(
   return categories | kdl::ranges::to<std::vector>();
 }
 
+std::vector<PrefabCategoryCount> prefabCategoryCounts(
+  const std::vector<std::unique_ptr<mdl::PrefabEntry>>& entries)
+{
+  // ordered by path components, so that a folder comes before the folders below it
+  auto counts = std::map<std::filesystem::path, std::size_t>{};
+  for (const auto& entry : entries)
+  {
+    for (auto folder = categoryOf(*entry); !folder.empty(); folder = folder.parent_path())
+    {
+      ++counts[folder];
+    }
+  }
+
+  return counts | std::views::transform([](const auto& pathAndCount) {
+           return PrefabCategoryCount{pathAndCount.first, pathAndCount.second};
+         })
+         | kdl::ranges::to<std::vector>();
+}
+
+PrefabFilter prefabFilterFromText(const std::string_view text)
+{
+  auto filter = PrefabFilter{};
+  for (auto& word : kdl::str_split(text, " "))
+  {
+    if (kdl::ci::str_is_prefix(word, PrefabTagFilterPrefix))
+    {
+      // a bare tag: names no tag and filters nothing
+      if (auto tag = word.substr(PrefabTagFilterPrefix.size()); !tag.empty())
+      {
+        filter.tags.push_back(std::move(tag));
+      }
+    }
+    else
+    {
+      filter.words.push_back(std::move(word));
+    }
+  }
+  return filter;
+}
+
 bool matchesPrefabFilter(const mdl::PrefabEntry& entry, const PrefabFilter& filter)
 {
   return matchesKind(entry, filter.kind)
-         && (!filter.category || categoryOf(entry) == *filter.category)
+         && (!filter.category || isInCategory(entry, *filter.category))
          && std::ranges::all_of(
-           filter.words, [&](const auto& word) { return matchesWord(entry, word); });
+           filter.words, [&](const auto& word) { return matchesWord(entry, word); })
+         && std::ranges::all_of(
+           filter.tags, [&](const auto& tag) { return matchesTag(entry, tag); });
 }
 
 Result<gl::Texture> loadPrefabThumbnail(const std::filesystem::path& path)

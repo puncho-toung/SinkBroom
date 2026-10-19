@@ -25,6 +25,7 @@
 #include <QPushButton>
 #include <QTest>
 #include <QToolButton>
+#include <QTreeWidget>
 
 #include "SidebarTestUtils.h"
 #include "base/PreferenceManager.h"
@@ -56,6 +57,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -127,6 +129,47 @@ bool waitForScan(
     [&] { return panel.scanCount() == scanCount && !library.scanning(); });
 }
 
+/**
+ * The texts of the category tree's items, depth first, each indented by two spaces per
+ * level.
+ */
+std::vector<std::string> categoryTreeTexts(const QTreeWidget& tree)
+{
+  auto result = std::vector<std::string>{};
+  const auto addItem =
+    [&](const auto& self, const QTreeWidgetItem& item, const int depth) -> void {
+    result.push_back(std::string(size_t(depth) * 2, ' ') + item.text(0).toStdString());
+    for (int i = 0; i < item.childCount(); ++i)
+    {
+      self(self, *item.child(i), depth + 1);
+    }
+  };
+  for (int i = 0; i < tree.topLevelItemCount(); ++i)
+  {
+    addItem(addItem, *tree.topLevelItem(i), 0);
+  }
+  return result;
+}
+
+/**
+ * The first item of the category tree with the given text.
+ */
+QTreeWidgetItem* findCategoryItem(const QTreeWidget& tree, const QString& text)
+{
+  const auto items = tree.findItems(text, Qt::MatchExactly | Qt::MatchRecursive);
+  return items.empty() ? nullptr : items.front();
+}
+
+std::vector<std::filesystem::path> cellPaths(PrefabBrowserView& view)
+{
+  auto result = std::vector<std::filesystem::path>{};
+  for (const auto& cell : view.cellSummaries())
+  {
+    result.push_back(cell.entry->relativePath);
+  }
+  return result;
+}
+
 const PrefabBrowserView::CellSummary* findCell(
   const std::vector<PrefabBrowserView::CellSummary>& cells,
   const std::filesystem::path& relativePath)
@@ -163,6 +206,33 @@ TEST_CASE("PrefabBrowserView")
     CHECK(prefabCategories({}).empty());
   }
 
+  SECTION("prefabCategoryCounts")
+  {
+    // every folder above an entry, counting the entries below it; the top level is not
+    // listed
+    const auto counts = prefabCategoryCounts(entries);
+    REQUIRE(counts.size() == 3u);
+    CHECK(counts[0].path == "doors");
+    CHECK(counts[0].count == 1u);
+    CHECK(counts[1].path == "doors/metal");
+    CHECK(counts[1].count == 1u);
+    CHECK(counts[2].path == "lights");
+    CHECK(counts[2].count == 2u);
+    CHECK(prefabCategoryCounts({}).empty());
+  }
+
+  SECTION("prefabFilterFromText")
+  {
+    const auto filter = prefabFilterFromText(" torch  tag:Fire TAG:wall tag: ");
+    CHECK(filter.kind == PrefabKindFilter::All);
+    CHECK(!filter.category);
+    CHECK(filter.words == std::vector<std::string>{"torch"});
+    CHECK(filter.tags == std::vector<std::string>{"Fire", "wall"});
+
+    CHECK(prefabFilterFromText("").words.empty());
+    CHECK(prefabFilterFromText("").tags.empty());
+  }
+
   SECTION("matchesPrefabFilter")
   {
     const auto& torch = *entries[0];
@@ -182,11 +252,16 @@ TEST_CASE("PrefabBrowserView")
     CHECK(matchesPrefabFilter(broken, PrefabFilter{}));
     CHECK(!matchesPrefabFilter(broken, PrefabFilter{.kind = PrefabKindFilter::Entities}));
 
-    // category: the entry's own folder only
+    // category: the folder and the folders below it, by whole names
     CHECK(matchesPrefabFilter(torch, PrefabFilter{.category = "lights"}));
-    CHECK(!matchesPrefabFilter(torch, PrefabFilter{.category = ""}));
-    CHECK(!matchesPrefabFilter(hatch, PrefabFilter{.category = "doors"}));
+    CHECK(!matchesPrefabFilter(torch, PrefabFilter{.category = "doors"}));
+    CHECK(matchesPrefabFilter(hatch, PrefabFilter{.category = "doors"}));
     CHECK(matchesPrefabFilter(hatch, PrefabFilter{.category = "doors/metal"}));
+    CHECK(!matchesPrefabFilter(hatch, PrefabFilter{.category = "door"}));
+    CHECK(!matchesPrefabFilter(hatch, PrefabFilter{.category = "doors/metal/old"}));
+    CHECK(!matchesPrefabFilter(*entries[2], PrefabFilter{.category = "lights"}));
+    // the top level holds everything
+    CHECK(matchesPrefabFilter(torch, PrefabFilter{.category = ""}));
     CHECK(matchesPrefabFilter(*entries[2], PrefabFilter{.category = ""}));
 
     // words: name, tags and class, case-insensitive, every word
@@ -196,6 +271,16 @@ TEST_CASE("PrefabBrowserView")
     CHECK(matchesPrefabFilter(torch, PrefabFilter{.words = {"torch", "wall"}}));
     CHECK(!matchesPrefabFilter(torch, PrefabFilter{.words = {"torch", "door"}}));
     CHECK(!matchesPrefabFilter(hatch, PrefabFilter{.words = {"light"}}));
+
+    // tags: whole tags, case-insensitive, every tag
+    CHECK(matchesPrefabFilter(torch, PrefabFilter{.tags = {"fire"}}));
+    CHECK(matchesPrefabFilter(torch, PrefabFilter{.tags = {"WALL", "fire"}}));
+    CHECK(!matchesPrefabFilter(torch, PrefabFilter{.tags = {"fir"}}));
+    CHECK(!matchesPrefabFilter(torch, PrefabFilter{.tags = {"fire", "door"}}));
+    CHECK(!matchesPrefabFilter(torch, PrefabFilter{.tags = {"torch"}}));
+    CHECK(matchesPrefabFilter(torch, prefabFilterFromText("tor tag:fire")));
+    CHECK(!matchesPrefabFilter(torch, prefabFilterFromText("tag:fir")));
+    CHECK(!matchesPrefabFilter(hatch, prefabFilterFromText("tag:fire")));
   }
 
   SECTION("loadPrefabThumbnail")
@@ -452,11 +537,11 @@ TEST_CASE("PrefabPanel")
     REQUIRE(library.entries().size() == 1);
     CHECK(library.entries().front()->relativePath == "lights/lamp.map");
 
-    auto* categoryChoice = panel.findChild<QComboBox*>("PrefabPanel_categoryChoice");
-    REQUIRE(categoryChoice != nullptr);
-    REQUIRE(categoryChoice->count() == 2);
-    CHECK(categoryChoice->itemText(0) == "All");
-    CHECK(categoryChoice->itemText(1) == "lights");
+    auto* categoryTree = panel.findChild<QTreeWidget*>("PrefabPanel_categoryTree");
+    REQUIRE(categoryTree != nullptr);
+    CHECK(
+      categoryTreeTexts(*categoryTree)
+      == std::vector<std::string>{"All (1)", "lights (1)"});
 
     // the cells point at the library's entries and carry their C4 payloads
     auto* view = panel.findChild<PrefabBrowserView*>();
@@ -492,8 +577,10 @@ TEST_CASE("PrefabPanel")
       rescanButton->click();
       CHECK(waitForScan(panel, library, 2));
       CHECK(library.entries().size() == 2);
-      CHECK(categoryChoice->count() == 3);
-      CHECK(categoryChoice->itemText(1) == "(top level)");
+      // a prefab at the top level is in no folder
+      CHECK(
+        categoryTreeTexts(*categoryTree)
+        == std::vector<std::string>{"All (2)", "lights (1)"});
 
       // the cells point at the new entries
       const auto newCells = view->cellSummaries();
@@ -504,6 +591,100 @@ TEST_CASE("PrefabPanel")
         CHECK(newCells[i].entry == &entry);
         CHECK(newCells[i].dndData == QString::fromStdString(library.payloadFor(entry)));
       }
+    }
+
+    SECTION("The category tree shows a folder and the folders below it")
+    {
+      for (const auto& [name, category] :
+           std::vector<std::pair<std::string, std::string>>{
+             {"hatch", "doors"},
+             {"grate", "doors/metal"},
+             {"crate", ""},
+           })
+      {
+        REQUIRE(
+          mdl::savePrefab(
+            map,
+            {entityNode},
+            mdl::SavePrefabOptions{
+              .name = name, .category = category, .root = mdl::PrefabRoot::User})
+          | kdl::is_success());
+      }
+      panel.rescan();
+      REQUIRE(waitForScan(panel, library, 2));
+      REQUIRE(library.entries().size() == 4u);
+
+      // nested folders are nested, each counting the prefabs below it
+      CHECK(
+        categoryTreeTexts(*categoryTree)
+        == std::vector<std::string>{"All (4)", "doors (2)", "  metal (1)", "lights (1)"});
+      CHECK(categoryTree->currentItem() == categoryTree->topLevelItem(0));
+      CHECK(cellPaths(*view).size() == 4u);
+
+      auto* doorsItem = findCategoryItem(*categoryTree, "doors (2)");
+      auto* metalItem = findCategoryItem(*categoryTree, "metal (1)");
+      REQUIRE(doorsItem != nullptr);
+      REQUIRE(metalItem != nullptr);
+
+      categoryTree->setCurrentItem(doorsItem);
+      CHECK(
+        cellPaths(*view)
+        == std::vector<std::filesystem::path>{
+          "doors/hatch.map", "doors/metal/grate.map"});
+
+      categoryTree->setCurrentItem(metalItem);
+      CHECK(
+        cellPaths(*view) == std::vector<std::filesystem::path>{"doors/metal/grate.map"});
+
+      // the chosen folder and the collapsed folders survive a rescan
+      doorsItem->setExpanded(false);
+      panel.rescan();
+      REQUIRE(waitForScan(panel, library, 3));
+      REQUIRE(categoryTree->currentItem() != nullptr);
+      CHECK(categoryTree->currentItem()->text(0) == "metal (1)");
+      CHECK(!findCategoryItem(*categoryTree, "doors (2)")->isExpanded());
+      CHECK(
+        cellPaths(*view) == std::vector<std::filesystem::path>{"doors/metal/grate.map"});
+
+      categoryTree->setCurrentItem(categoryTree->topLevelItem(0));
+      CHECK(cellPaths(*view).size() == 4u);
+    }
+
+    SECTION("tag: in the filter box matches whole tags")
+    {
+      REQUIRE(
+        mdl::savePrefab(
+          map,
+          {entityNode},
+          mdl::SavePrefabOptions{
+            .name = "torch", .tags = {"Fire", "wall"}, .root = mdl::PrefabRoot::User})
+        | kdl::is_success());
+      panel.rescan();
+      REQUIRE(waitForScan(panel, library, 2));
+      REQUIRE(library.entries().size() == 2u);
+
+      auto* filterBox = panel.findChild<QLineEdit*>("PrefabPanel_filterBox");
+      REQUIRE(filterBox != nullptr);
+      CHECK(filterBox->placeholderText().contains("tag:"));
+
+      const auto setFilterText = [&](const QString& text) {
+        filterBox->setText(text);
+        emit filterBox->textEdited(text);
+      };
+
+      setFilterText("tag:fire");
+      CHECK(cellPaths(*view) == std::vector<std::filesystem::path>{"torch.map"});
+
+      // a part of a tag is not a tag
+      setFilterText("tag:fir");
+      CHECK(cellPaths(*view).empty());
+
+      // but it is a part of a word
+      setFilterText("fir");
+      CHECK(cellPaths(*view) == std::vector<std::filesystem::path>{"torch.map"});
+
+      setFilterText("");
+      CHECK(cellPaths(*view).size() == 2u);
     }
 
     SECTION("A prefab without a name is titled by its file")
@@ -560,9 +741,9 @@ TEST_CASE("PrefabPanel")
       REQUIRE(newLibrary.entries().size() == 2u);
 
       // the panel observes the new library: the categories and the cells follow it
-      REQUIRE(categoryChoice->count() == 3);
-      CHECK(categoryChoice->itemText(1) == "doors");
-      CHECK(categoryChoice->itemText(2) == "lights");
+      CHECK(
+        categoryTreeTexts(*categoryTree)
+        == std::vector<std::string>{"All (2)", "doors (1)", "lights (1)"});
 
       const auto newCells = view->cellSummaries();
       REQUIRE(newCells.size() == 2u);
@@ -718,10 +899,11 @@ TEST_CASE("PrefabPanel")
     REQUIRE(library.entries().size() == 1u);
     CHECK(library.entries().front()->relativePath == "doors/hatch.map");
 
-    auto* categoryChoice = panel.findChild<QComboBox*>("PrefabPanel_categoryChoice");
-    REQUIRE(categoryChoice != nullptr);
-    REQUIRE(categoryChoice->count() == 2);
-    CHECK(categoryChoice->itemText(1) == "doors");
+    auto* categoryTree = panel.findChild<QTreeWidget*>("PrefabPanel_categoryTree");
+    REQUIRE(categoryTree != nullptr);
+    CHECK(
+      categoryTreeTexts(*categoryTree)
+      == std::vector<std::string>{"All (1)", "doors (1)"});
   }
 
   SECTION("Refresh count and Apply to Selection")

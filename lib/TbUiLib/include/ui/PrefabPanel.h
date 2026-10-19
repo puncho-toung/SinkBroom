@@ -32,6 +32,7 @@ class QLineEdit;
 class QScrollBar;
 class QTimer;
 class QToolButton;
+class QTreeWidget;
 
 namespace tb::mdl
 {
@@ -46,7 +47,10 @@ class PrefabBrowserView;
 
 /**
  * The prefab library of the document's map: a filterable grid of the prefab files under
- * the library roots, from which prefabs are dragged into the map views.
+ * the library roots, from which prefabs are dragged into the map views. A tree of the
+ * library's folders above the grid shows the prefabs of one folder and the folders below
+ * it; the filter box matches parts of names, tags and classes, and whole tags after
+ * tag:.
  *
  * The panel owns every scan of the library. The first one runs when the panel is first
  * shown, or when a caller first needs the entries (scanOnce); after it, Rescan, a new
@@ -69,7 +73,7 @@ private:
   AppController& m_appController;
   MapDocument& m_document;
 
-  QComboBox* m_categoryChoice = nullptr;
+  QTreeWidget* m_categoryTree = nullptr;
   QComboBox* m_kindChoice = nullptr;
   QLineEdit* m_filterBox = nullptr;
   QToolButton* m_saveButton = nullptr;

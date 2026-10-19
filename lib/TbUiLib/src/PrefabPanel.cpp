@@ -26,9 +26,12 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QToolButton>
+#include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 
 #include "base/Logger.h"
@@ -46,6 +49,7 @@
 #include "ui/QPathUtils.h"
 #include "ui/SavePrefabDialog.h"
 #include "ui/SearchBox.h"
+#include "ui/Splitter.h"
 #include "ui/ViewConstants.h"
 
 #include "kd/result.h"
@@ -55,6 +59,7 @@
 #include <fmt/format.h>
 
 #include <chrono>
+#include <map>
 #include <set>
 #include <string>
 #include <system_error>
@@ -73,8 +78,11 @@ constexpr auto ScanPollInterval = 50ms;
 // how long the library's folders must be quiet before a change in them rescans
 constexpr auto WatchDebounceInterval = 500ms;
 
-// the category choice's item data for "All"
+// the category tree's item data for "All"
 const auto AllCategories = QVariant{};
+
+// the role of a category tree item's folder, a generic path relative to the roots
+constexpr auto CategoryRole = Qt::UserRole;
 
 bool hasWriteRoot(const mdl::PrefabLibrary& library)
 {
@@ -365,15 +373,15 @@ void PrefabPanel::updatePrefabFromSelection(const std::filesystem::path& path)
 
 void PrefabPanel::createGui()
 {
-  m_categoryChoice = new QComboBox{};
-  m_categoryChoice->setObjectName("PrefabPanel_categoryChoice");
-  m_categoryChoice->setToolTip(tr("Show the prefabs of one folder"));
-  m_categoryChoice->addItem(tr("All"), AllCategories);
+  m_categoryTree = new QTreeWidget{};
+  m_categoryTree->setObjectName("PrefabPanel_categoryTree");
+  m_categoryTree->setToolTip(
+    tr("Show the prefabs of one folder and the folders below it"));
+  m_categoryTree->setHeaderHidden(true);
+  m_categoryTree->setUniformRowHeights(true);
+  m_categoryTree->setSelectionMode(QAbstractItemView::SingleSelection);
   connect(
-    m_categoryChoice,
-    QOverload<int>::of(&QComboBox::activated),
-    this,
-    &PrefabPanel::updateFilter);
+    m_categoryTree, &QTreeWidget::currentItemChanged, this, &PrefabPanel::updateFilter);
 
   m_kindChoice = new QComboBox{};
   m_kindChoice->setObjectName("PrefabPanel_kindChoice");
@@ -389,7 +397,10 @@ void PrefabPanel::createGui()
 
   m_filterBox = createSearchBox();
   m_filterBox->setObjectName("PrefabPanel_filterBox");
-  m_filterBox->setToolTip(tr("Filter by name, tag or class"));
+  m_filterBox->setPlaceholderText(tr("Name, tag or class; tag:name for a whole tag"));
+  m_filterBox->setToolTip(
+    tr("Every word must be part of the name, a tag or the class; a word tag:name must be "
+       "one of the tags, whole"));
   connect(m_filterBox, &QLineEdit::textEdited, this, &PrefabPanel::updateFilter);
 
   m_saveButton = createBitmapButton("Add.svg", tr("Save selection as prefab..."));
@@ -444,7 +455,6 @@ void PrefabPanel::createGui()
       });
       promptToRefreshPlacements(placements);
     });
-
   auto* controlLayout = new QHBoxLayout{};
   controlLayout->setContentsMargins(
     LayoutConstants::NarrowHMargin,
@@ -452,7 +462,6 @@ void PrefabPanel::createGui()
     LayoutConstants::NarrowHMargin,
     LayoutConstants::NarrowVMargin);
   controlLayout->setSpacing(LayoutConstants::NarrowHMargin);
-  controlLayout->addWidget(m_categoryChoice, 0);
   controlLayout->addWidget(m_kindChoice, 0);
   controlLayout->addWidget(m_filterBox, 1);
   controlLayout->addWidget(m_saveButton, 0);
@@ -475,12 +484,25 @@ void PrefabPanel::createGui()
   browserLayout->addWidget(m_view, 1);
   browserLayout->addWidget(m_scrollBar, 0);
 
+  auto* browserPage = new QWidget{};
+  browserPage->setLayout(browserLayout);
+
+  // the folders above the grid; dragging the handle up hides them
+  auto* splitter = new Splitter{Qt::Vertical};
+  splitter->setObjectName("PrefabPanel_splitter");
+  splitter->addWidget(m_categoryTree);
+  splitter->addWidget(browserPage);
+  splitter->setCollapsible(1, false);
+  splitter->setStretchFactor(0, 0);
+  splitter->setStretchFactor(1, 1);
+  splitter->setSizes({100, 300});
+
   auto* outerLayout = new QVBoxLayout{};
   outerLayout->setContentsMargins(0, 0, 0, 0);
   outerLayout->setSpacing(0);
   outerLayout->addLayout(controlLayout, 0);
   outerLayout->addLayout(actionLayout, 0);
-  outerLayout->addLayout(browserLayout, 1);
+  outerLayout->addWidget(splitter, 1);
   setLayout(outerLayout);
 
   m_scanTimer->setInterval(ScanPollInterval);
@@ -732,34 +754,69 @@ void PrefabPanel::promptAfterScanIfNeeded()
 
 void PrefabPanel::updateCategories()
 {
-  const auto current = m_categoryChoice->currentData();
-  const auto categories = prefabCategories(m_document.map().prefabLibrary().entries());
+  const auto& entries = m_document.map().prefabLibrary().entries();
+  const auto* currentItem = m_categoryTree->currentItem();
+  const auto current = currentItem ? currentItem->data(0, CategoryRole) : AllCategories;
 
-  const auto blocker = QSignalBlocker{m_categoryChoice};
-  m_categoryChoice->clear();
-  m_categoryChoice->addItem(tr("All"), AllCategories);
-  for (const auto& category : categories)
+  // a folder that the user collapsed stays collapsed
+  auto collapsed = QSet<QString>{};
+  for (auto it = QTreeWidgetItemIterator{m_categoryTree}; *it; ++it)
   {
-    const auto categoryStr = pathAsGenericQString(category);
-    m_categoryChoice->addItem(
-      categoryStr.isEmpty() ? tr("(top level)") : categoryStr, categoryStr);
+    if ((*it)->childCount() > 0 && !(*it)->isExpanded())
+    {
+      collapsed.insert((*it)->data(0, CategoryRole).toString());
+    }
   }
 
-  // keep the chosen folder while it has prefabs
-  const auto index = m_categoryChoice->findData(current);
-  m_categoryChoice->setCurrentIndex(index >= 0 ? index : 0);
+  const auto blocker = QSignalBlocker{m_categoryTree};
+  m_categoryTree->clear();
+
+  auto* allItem = new QTreeWidgetItem{m_categoryTree};
+  allItem->setText(0, tr("All (%1)").arg(entries.size()));
+  allItem->setData(0, CategoryRole, AllCategories);
+  auto* newCurrentItem = allItem;
+
+  // a folder comes before the folders below it, so its item exists when theirs are made
+  auto items = std::map<std::filesystem::path, QTreeWidgetItem*>{};
+  for (const auto& [path, count] : prefabCategoryCounts(entries))
+  {
+    const auto parentPath = path.parent_path();
+    auto* item = parentPath.empty() ? new QTreeWidgetItem{m_categoryTree}
+                                    : new QTreeWidgetItem{items.at(parentPath)};
+    const auto pathStr = pathAsGenericQString(path);
+    item->setText(0, QString{"%1 (%2)"}.arg(pathAsQString(path.filename())).arg(count));
+    item->setData(0, CategoryRole, pathStr);
+    item->setToolTip(0, pathStr);
+    items.emplace(path, item);
+
+    // keep the chosen folder while it has prefabs
+    if (current.isValid() && current.toString() == pathStr)
+    {
+      newCurrentItem = item;
+    }
+  }
+
+  // expanded once every item is in the tree
+  for (const auto& [path, item] : items)
+  {
+    item->setExpanded(!collapsed.contains(item->data(0, CategoryRole).toString()));
+  }
+
+  m_categoryTree->setCurrentItem(newCurrentItem);
   updateFilter();
 }
 
 void PrefabPanel::updateFilter()
 {
-  auto filter = PrefabFilter{};
+  auto filter = prefabFilterFromText(m_filterBox->text().trimmed().toStdString());
   filter.kind = static_cast<PrefabKindFilter>(m_kindChoice->currentData().toInt());
-  if (const auto category = m_categoryChoice->currentData(); category.isValid())
+  if (const auto* item = m_categoryTree->currentItem())
   {
-    filter.category = pathFromQString(category.toString());
+    if (const auto category = item->data(0, CategoryRole); category.isValid())
+    {
+      filter.category = pathFromQString(category.toString());
+    }
   }
-  filter.words = kdl::str_split(m_filterBox->text().trimmed().toStdString(), " ");
   m_view->setFilter(std::move(filter));
 }
 
