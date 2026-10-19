@@ -62,6 +62,7 @@
 #include "mdl/WorldNode.h"
 #include "prefs/Preferences.h"
 #include "ui/ActionContext.h"
+#include "ui/AppController.h"
 #include "ui/AppControllerFixture.h"
 #include "ui/CatchConfig.h"
 #include "ui/Console.h"
@@ -78,11 +79,13 @@
 #include "ui/MapViewToolBox.h"
 #include "ui/MapWindow.h"
 #include "ui/PrefabPanel.h"
+#include "ui/RecentDocuments.h"
 #include "ui/RenderView.h"
 #include "ui/SwitchableMapViewContainer.h"
 #include "ui/ToolSidebar.h"
 
 #include "kd/invoke.h"
+#include "kd/ranges/contains.h"
 
 #include "vm/ray.h"
 #include "vm/vec.h"
@@ -1617,6 +1620,10 @@ TEST_CASE("MapWindow")
 
     CHECK(!window.isPrefabEditor());
     CHECK(prefabEditor.isPrefabEditor());
+
+    // R1-pf3-16: H-PF3-4, a prefab is not a recent document
+    CHECK(!kdl::ranges::contains(
+      appController.recentDocuments().recentDocuments(), env.dir() / "crate.map"));
 
     CHECK(window.windowTitle() == "unnamed.map[*] - TrenchBroom");
     CHECK(prefabEditor.windowTitle() == "crate.map[*] [Prefab] - TrenchBroom");

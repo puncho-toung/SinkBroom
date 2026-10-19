@@ -103,6 +103,8 @@ private:
   bool m_prefabEditor = false;
   // replaces grabThumbnail, if set
   ThumbnailGrabber m_thumbnailGrabber;
+  // the file that a prefab editor saved last, until its thumbnail is written
+  std::optional<std::filesystem::path> m_pendingPrefabSavePath;
 
   std::chrono::time_point<std::chrono::system_clock> m_lastInputTime;
   QTimer* m_autosaveTimer = nullptr;
@@ -172,9 +174,9 @@ public:
    * A prefab editor is a window on a prefab file, opened from another window's prefab
    * library by MapWindowManager::openPrefabEditor (PF3). It cannot compile or launch its
    * map, says [Prefab] in its title, writes the prefab's thumbnail beside the file when
-   * the file is saved, and tells the prefab library of the window that opened it. It
-   * neither autosaves, since the backups would land in the library's folders, nor saves
-   * its layout, which would replace the layout of the map windows; it restores theirs.
+   * the file is saved, and tells the prefab libraries of the other windows. It does not
+   * autosave, since the backups would land in the library's folders, and keeps its
+   * layout apart from the map windows' layout.
    */
   MapWindow(
     AppController& appController,
@@ -300,8 +302,14 @@ public:
   bool exportDocumentAsMap();
   bool exportDocument(const mdl::ExportOptions& options);
 
-private:
+  /**
+   * Offers to save the document's changes, if it has any; returns false if the user
+   * cancels. MapWindowManager asks before New or Open replace the document of a window
+   * behind a prefab editor (R1-pf3-4).
+   */
   bool confirmOrDiscardChanges();
+
+private:
   bool confirmRevertDocument();
 
 public:
@@ -520,10 +528,21 @@ private:
   void updateRerunAction();
 
   /**
-   * Writes the 3D view's picture beside a prefab editor's file as its thumbnail, at most
-   * 256 pixels on its longer side, or says in the status bar why it wrote none.
+   * Brings the _tb_prefab_saved key of a prefab editor's file, and the _tb_prefab_class
+   * key of an entity snapshot, up to date before a save, in one transaction; warns if an
+   * entity snapshot no longer holds exactly one entity.
    */
-  void writePrefabThumbnail();
+  void updatePrefabMetadata();
+  /**
+   * Writes the thumbnail of the last save of a prefab editor and tells the other windows
+   * of it, unless that is done.
+   */
+  void finishPrefabSave();
+  /**
+   * Writes the 3D view's picture beside the given file as its thumbnail, at most 256
+   * pixels on its longer side, or says in the status bar why it wrote none.
+   */
+  void writePrefabThumbnail(const std::filesystem::path& mapPath);
   /**
    * The 3D view's picture, or a null image if no 3D view can be seen.
    */

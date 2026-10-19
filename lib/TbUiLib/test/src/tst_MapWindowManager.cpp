@@ -19,12 +19,15 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QByteArray>
 #include <QCoreApplication>
+#include <QDockWidget>
 #include <QEvent>
 #include <QImage>
 #include <QPointer>
 #include <QSettings>
 #include <QSize>
+#include <QStatusBar>
 #include <QStringList>
 #include <QTest>
 #include <QToolButton>
@@ -36,10 +39,12 @@
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GameConfigFixture.h"
+#include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/MapFormat.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
+#include "mdl/NodeContents.h"
 #include "mdl/PrefabFile.h"
 #include "mdl/PrefabLibrary.h"
 #include "mdl/WorldNode.h"
@@ -51,6 +56,7 @@
 #include "ui/PrefabBrowserView.h"
 #include "ui/PrefabPanel.h"
 #include "ui/QPathUtils.h"
+#include "ui/RenderView.h"
 
 #include "kd/invoke.h"
 #include "kd/result.h"
@@ -60,7 +66,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -128,6 +136,81 @@ QImage redImage(const int width, const int height)
   auto image = QImage{width, height, QImage::Format_RGBA8888};
   image.fill(Qt::red);
   return image;
+}
+
+/**
+ * Runs what a save posted: a prefab editor writes its thumbnail and tells the other
+ * windows once the event loop runs (R1-pf3-10).
+ */
+void finishSave()
+{
+  QCoreApplication::processEvents();
+}
+
+/**
+ * The saved state of the windows and their widgets, but for a prefab editor's own.
+ */
+std::map<QString, QVariant> mapWindowSettings()
+{
+  auto settings = QSettings{};
+  settings.beginGroup("Windows");
+  auto result = std::map<QString, QVariant>{};
+  for (const auto& key : settings.allKeys())
+  {
+    if (!key.startsWith("PrefabEditorWindow/"))
+    {
+      result.emplace(key, settings.value(key));
+    }
+  }
+  return result;
+}
+
+/**
+ * Shows the given window with the dock of its prefab panel in front, but none of its GL
+ * views, which would need GL resources that the tests do not provide, so that the panel
+ * is visible and watches the library's folders.
+ */
+void showPrefabPanel(MapWindow& mapWindow, PrefabPanel& panel)
+{
+  for (auto* view : mapWindow.findChildren<RenderView*>())
+  {
+    view->hide();
+  }
+  mapWindow.show();
+
+  auto* parent = panel.parentWidget();
+  while (parent && !qobject_cast<QDockWidget*>(parent))
+  {
+    parent = parent->parentWidget();
+  }
+  auto* dock = qobject_cast<QDockWidget*>(parent);
+  REQUIRE(dock != nullptr);
+  dock->show();
+  dock->raise();
+  QApplication::processEvents();
+  REQUIRE(panel.isVisible());
+}
+
+/**
+ * Scans the given window's prefab library, unless its panel has, and waits for the scan.
+ */
+void scanLibrary(MapWindow& mapWindow)
+{
+  auto* panel = mapWindow.findChild<PrefabPanel*>();
+  REQUIRE(panel != nullptr);
+  panel->scanOnce();
+  const auto& library = mapWindow.document().map().prefabLibrary();
+  REQUIRE(QTest::qWaitFor([&] { return !library.scanning(); }));
+}
+
+bool hasThumbnail(
+  const MapWindow& mapWindow,
+  const std::string& relativePath,
+  const std::filesystem::path& thumbnailPath)
+{
+  const auto& library = mapWindow.document().map().prefabLibrary();
+  const auto* entry = library.find(mdl::PrefabRoot::User, relativePath);
+  return entry && entry->thumbnailPath == thumbnailPath && !library.scanning();
 }
 
 } // namespace
@@ -274,6 +357,44 @@ TEST_CASE("MapWindowManager")
       | kdl::is_success());
     CHECK(manager.mapWindows().size() == 2u);
     CHECK(manager.topMapWindow() == editor);
+
+    // R1-pf3-17: another path of the same file, which only equivalent recognises
+    const auto linkPath = userRoot / "lights" / "lamp-link.map";
+    auto linkError = std::error_code{};
+    std::filesystem::create_hard_link(prefabPath, linkPath, linkError);
+    REQUIRE(!linkError);
+
+    emit qApp->focusChanged(nullptr, host);
+    REQUIRE(manager.topMapWindow() == host);
+    REQUIRE(manager.openPrefabEditor(*host, linkPath) | kdl::is_success());
+    CHECK(manager.mapWindows().size() == 2u);
+    CHECK(manager.topMapWindow() == editor);
+  }
+
+  SECTION("a prefab open as a map is brought to the front, not opened again")
+  {
+    // R1-pf3-12
+    REQUIRE(
+      manager.loadDocument(gameInfo, mapFormat, worldBounds, prefabPath)
+      | kdl::is_success());
+    REQUIRE(manager.mapWindows().size() == 1u);
+    REQUIRE(host->document().map().path() == prefabPath);
+
+    REQUIRE(manager.openPrefabEditor(*host, prefabPath) | kdl::is_success());
+    CHECK(manager.mapWindows() == std::vector<MapWindow*>{host});
+  }
+
+  SECTION("a prefab is not opened from a closed window")
+  {
+    // R1-pf3-3: the panel posts the request, which may run after the window's close and
+    // before its deletion
+    host->close();
+    REQUIRE(manager.mapWindows().empty());
+
+    CHECK(manager.openPrefabEditor(*host, prefabPath).is_error());
+    CHECK(manager.mapWindows().empty());
+
+    deleteClosedWindows();
   }
 
   SECTION("New and Open with the prefab editor on top replace the host's document")
@@ -292,6 +413,9 @@ TEST_CASE("MapWindowManager")
     CHECK(host->document().map().path() == mapPath);
     CHECK(editor->document().map().path() == prefabPath);
 
+    // R1-pf3-4: the host comes to the front; its document had no changes to ask about
+    CHECK(manager.topMapWindow() == host);
+
     // a map with a file compiles, a prefab does not
     CHECK(host->canCompile());
     CHECK(host->canLaunch());
@@ -309,10 +433,15 @@ TEST_CASE("MapWindowManager")
       CHECK(!editorAction->isEnabled());
     }
 
+    // the editor gets the focus again
+    emit qApp->focusChanged(nullptr, editor);
+    REQUIRE(manager.topMapWindow() == editor);
+
     REQUIRE(manager.createDocument(gameInfo, mapFormat, worldBounds) | kdl::is_success());
     CHECK(manager.mapWindows().size() == 2u);
     CHECK(!host->document().map().persistent());
     CHECK(editor->document().map().path() == prefabPath);
+    CHECK(manager.topMapWindow() == host);
   }
 
   SECTION("closing the prefab editor leaves the host open")
@@ -321,12 +450,22 @@ TEST_CASE("MapWindowManager")
     auto editor = QPointer<MapWindow>{manager.topMapWindow()};
     REQUIRE(editor->isPrefabEditor());
 
+    // R1-pf3-1: the editor's layout is its own, and its widgets' saved state does not
+    // replace the map windows'
+    QSettings{}.setValue(
+      "Windows/MapWindow/Geometry", QByteArray{"the map windows' geometry"});
+    const auto settings = mapWindowSettings();
+
     editor->close();
     deleteClosedWindows();
 
     CHECK(editor == nullptr);
     CHECK(host != nullptr);
     CHECK(manager.mapWindows() == std::vector<MapWindow*>{host});
+
+    CHECK(mapWindowSettings() == settings);
+    CHECK(QSettings{}.contains("Windows/PrefabEditorWindow/Geometry"));
+    CHECK(QSettings{}.contains("Windows/PrefabEditorWindow/State"));
   }
 
   SECTION("closing the host leaves the prefab editor open, and New opens a window")
@@ -344,13 +483,48 @@ TEST_CASE("MapWindowManager")
     // no map window is left whose document New could replace
     REQUIRE(manager.createDocument(gameInfo, mapFormat, worldBounds) | kdl::is_success());
     REQUIRE(manager.mapWindows().size() == 2u);
-    CHECK(manager.topMapWindow() != editor);
-    CHECK(!manager.topMapWindow()->isPrefabEditor());
+    auto* newWindow = manager.topMapWindow();
+    CHECK(newWindow != editor);
+    CHECK(!newWindow->isPrefabEditor());
     CHECK(editor->document().map().path() == prefabPath);
 
-    // a save tells the windows that are left
-    editor->setThumbnailGrabberForTesting([] { return QImage{}; });
-    CHECK(editor->saveDocument());
+    // R1-pf3-14: a save tells the windows that are left
+    scanLibrary(*newWindow);
+    REQUIRE(
+      !hasThumbnail(*newWindow, "lights/lamp.map", userRoot / "lights" / "lamp.png"));
+
+    editor->setThumbnailGrabberForTesting([] { return redImage(16, 16); });
+    REQUIRE(editor->saveDocument());
+    finishSave();
+    CHECK(QTest::qWaitFor([&] {
+      return hasThumbnail(
+        *newWindow, "lights/lamp.map", userRoot / "lights" / "lamp.png");
+    }));
+  }
+
+  SECTION("a prefab editor tells every other window of a save")
+  {
+    // R1-pf3-9: an editor opened from an editor; the host hears of its saves too
+    const auto otherPrefabPath = userRoot / "lights" / "lamp2.map";
+    std::filesystem::copy_file(prefabPath, otherPrefabPath);
+    const auto otherThumbnailPath = userRoot / "lights" / "lamp2.png";
+
+    scanLibrary(*host);
+    REQUIRE(!hasThumbnail(*host, "lights/lamp2.map", otherThumbnailPath));
+
+    REQUIRE(manager.openPrefabEditor(*host, prefabPath) | kdl::is_success());
+    auto* editor = manager.topMapWindow();
+    REQUIRE(manager.openPrefabEditor(*editor, otherPrefabPath) | kdl::is_success());
+    auto* otherEditor = manager.topMapWindow();
+    REQUIRE(manager.mapWindows().size() == 3u);
+    REQUIRE(otherEditor->isPrefabEditor());
+    REQUIRE(otherEditor->document().map().path() == otherPrefabPath);
+
+    otherEditor->setThumbnailGrabberForTesting([] { return redImage(16, 16); });
+    REQUIRE(otherEditor->saveDocument());
+    finishSave();
+    CHECK(QTest::qWaitFor(
+      [&] { return hasThumbnail(*host, "lights/lamp2.map", otherThumbnailPath); }));
   }
 
   SECTION("saving the prefab writes its thumbnail and updates the host's library")
@@ -359,7 +533,8 @@ TEST_CASE("MapWindowManager")
     REQUIRE(hostPanel != nullptr);
     const auto& library = host->document().map().prefabLibrary();
 
-    hostPanel->scanOnce();
+    // R1-pf3-13: a visible panel, which watches the library's folders
+    showPrefabPanel(*host, *hostPanel);
     REQUIRE(QTest::qWaitFor(
       [&] { return hostPanel->scanCount() == 1u && !library.scanning(); }));
     const auto* entry = library.find(mdl::PrefabRoot::User, "lights/lamp.map");
@@ -377,6 +552,10 @@ TEST_CASE("MapWindowManager")
       editor->setThumbnailGrabberForTesting([] { return redImage(512, 256); });
       REQUIRE(editor->saveDocument());
 
+      // R1-pf3-10: written once the event loop runs
+      CHECK(!std::filesystem::exists(thumbnailPath));
+      finishSave();
+
       // at most 256 pixels on the longer side
       const auto thumbnail = QImage{pathAsQString(thumbnailPath)};
       CHECK(thumbnail.size() == QSize{256, 128});
@@ -386,24 +565,111 @@ TEST_CASE("MapWindowManager")
         readFile(prefabPath).find("\"_tb_prefab_name\" \"lamp\"") != std::string::npos);
 
       // the save reads the saved file and its thumbnail, and nothing else
-      REQUIRE(QTest::qWaitFor([&] {
-        const auto* savedEntry = library.find(mdl::PrefabRoot::User, "lights/lamp.map");
-        return savedEntry && savedEntry->thumbnailPath && !library.scanning();
-      }));
-      CHECK(
-        library.find(mdl::PrefabRoot::User, "lights/lamp.map")->thumbnailPath
-        == thumbnailPath);
+      REQUIRE(QTest::qWaitFor(
+        [&] { return hasThumbnail(*host, "lights/lamp.map", thumbnailPath); }));
       CHECK(hostPanel->scanCount() == 1u);
+
+      // R1-pf3-13: nor does the watcher's report of the save rescan, past the debounce
+      QTest::qWait(1500);
+      CHECK(hostPanel->scanCount() == 1u);
+
+      // while a change that is not the panel's own does
+      {
+        auto stream = std::ofstream{userRoot / "other.map"};
+        stream << "// not a prefab\n";
+      }
+      CHECK(QTest::qWaitFor([&] { return hostPanel->scanCount() == 2u; }, 5000));
     }
 
     SECTION("without a 3D view")
     {
       editor->setThumbnailGrabberForTesting([] { return QImage{}; });
       REQUIRE(editor->saveDocument());
+      finishSave();
 
       CHECK(!std::filesystem::exists(thumbnailPath));
+      CHECK(editor->statusBar()->currentMessage().startsWith("No thumbnail saved"));
       CHECK(
         readFile(prefabPath).find("\"_tb_prefab_name\" \"lamp\"") != std::string::npos);
+    }
+
+    SECTION("an editor that is not shown grabs no thumbnail")
+    {
+      // R1-pf3-15: the grab of the 3D view itself, which a hidden view does not draw
+      REQUIRE(editor->saveDocument());
+      finishSave();
+
+      CHECK(!std::filesystem::exists(thumbnailPath));
+      CHECK(editor->statusBar()->currentMessage().startsWith("No thumbnail saved"));
+    }
+
+    SECTION("a thumbnail that cannot be written is reported")
+    {
+      // R1-pf3-7: a folder where the thumbnail goes
+      std::filesystem::create_directory(thumbnailPath);
+
+      editor->setThumbnailGrabberForTesting([] { return redImage(16, 16); });
+      REQUIRE(editor->saveDocument());
+      finishSave();
+
+      CHECK(std::filesystem::is_directory(thumbnailPath));
+      CHECK(editor->statusBar()->currentMessage().startsWith(
+        "Could not write thumbnail lamp.png: "));
+    }
+
+    SECTION("a save brings the prefab's keys up to date")
+    {
+      // R1-pf3-11
+      auto& editorMap = editor->document().map();
+      auto& worldNode = editorMap.worldNode();
+      auto worldEntity = worldNode.entity();
+      worldEntity.addOrUpdateProperty(mdl::PrefabPropertyKeys::Saved, "an old time");
+      REQUIRE(mdl::updateNodeContents(
+        editorMap,
+        "Set Saved",
+        {{&worldNode, mdl::NodeContents{std::move(worldEntity)}}}));
+
+      REQUIRE(worldNode.defaultLayer()->children().size() == 1u);
+      auto* lampNode =
+        dynamic_cast<mdl::EntityNode*>(worldNode.defaultLayer()->children().front());
+      REQUIRE(lampNode != nullptr);
+
+      editor->setThumbnailGrabberForTesting([] { return QImage{}; });
+
+      SECTION("an entity snapshot of another class")
+      {
+        auto lampEntity = lampNode->entity();
+        lampEntity.setClassname("info_null");
+        REQUIRE(mdl::updateNodeContents(
+          editorMap,
+          "Set Classname",
+          {{lampNode, mdl::NodeContents{std::move(lampEntity)}}}));
+
+        REQUIRE(editor->saveDocument());
+        finishSave();
+
+        const auto file = readFile(prefabPath);
+        CHECK(file.find("\"_tb_prefab_class\" \"info_null\"") != std::string::npos);
+        CHECK(file.find("an old time") == std::string::npos);
+        CHECK(file.find("\"_tb_prefab_saved\" \"") != std::string::npos);
+        CHECK(!editorMap.modified());
+      }
+
+      SECTION("an entity snapshot that holds two entities keeps its class")
+      {
+        REQUIRE(!mdl::addNodes(
+                   editorMap,
+                   {{worldNode.defaultLayer(),
+                     {new mdl::EntityNode{mdl::Entity{{{"classname", "info_null"}}}}}}})
+                   .empty());
+
+        REQUIRE(editor->saveDocument());
+        finishSave();
+
+        const auto file = readFile(prefabPath);
+        CHECK(file.find("\"_tb_prefab_class\" \"light\"") != std::string::npos);
+        CHECK(file.find("an old time") == std::string::npos);
+      }
     }
   }
 }

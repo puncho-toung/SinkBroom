@@ -44,6 +44,7 @@
 #include <QTimer>
 #include <QToolBar>
 #include <QVBoxLayout>
+#include <QVariant>
 #include <QtGlobal>
 
 #include "base/PreferenceManager.h"
@@ -76,9 +77,12 @@
 #include "mdl/Map_Selection.h"
 #include "mdl/ModelUtils.h"
 #include "mdl/Node.h"
+#include "mdl/NodeContents.h"
 #include "mdl/PasteType.h"
 #include "mdl/PatchNode.h"
+#include "mdl/PrefabFile.h"
 #include "mdl/PrefabLibrary.h"
+#include "mdl/Transaction.h"
 #include "mdl/VisualEffect.h"
 #include "mdl/WorldNode.h"
 #include "prefs/Preferences.h"
@@ -145,9 +149,11 @@
 #include <algorithm>
 #include <chrono>
 #include <iterator>
+#include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -269,6 +275,74 @@ bool oldPanelVisible(const QString& key)
   return stream.status() != QDataStream::Ok || visible;
 }
 
+/**
+ * R1-pf3-1: a prefab editor saves and restores its own geometry and layout under this
+ * name, not under the map windows' "MapWindow".
+ */
+const auto PrefabEditorObjectName = QString{"PrefabEditorWindow"};
+
+using SettingsValues = std::vector<std::pair<QString, QVariant>>;
+
+bool isPrefabEditorKey(const QString& key)
+{
+  return key.startsWith(PrefabEditorObjectName + "/");
+}
+
+/**
+ * The saved state of the windows' widgets, but for the prefab editor's own. The panels
+ * and splitters of every window save theirs under their own names when they are deleted,
+ * so a prefab editor puts back what the map windows had saved once its own are gone.
+ */
+SettingsValues sharedWidgetState()
+{
+  auto settings = QSettings{};
+  settings.beginGroup("Windows");
+  auto values = SettingsValues{};
+  for (const auto& key : settings.allKeys())
+  {
+    if (!isPrefabEditorKey(key))
+    {
+      values.emplace_back(key, settings.value(key));
+    }
+  }
+  return values;
+}
+
+void restoreSharedWidgetState(const SettingsValues& values)
+{
+  auto settings = QSettings{};
+  settings.beginGroup("Windows");
+  for (const auto& key : settings.allKeys())
+  {
+    if (!isPrefabEditorKey(key))
+    {
+      settings.remove(key);
+    }
+  }
+  for (const auto& [key, value] : values)
+  {
+    settings.setValue(key, value);
+  }
+}
+
+/**
+ * The one entity that the body of an entity snapshot holds, or nullptr if it holds
+ * anything else.
+ */
+const mdl::EntityNode* singleBodyEntity(mdl::WorldNode& worldNode)
+{
+  auto bodyNodes = std::vector<const mdl::Node*>{};
+  for (const auto* layerNode : worldNode.allLayers())
+  {
+    for (const auto* node : layerNode->children())
+    {
+      bodyNodes.push_back(node);
+    }
+  }
+  return bodyNodes.size() == 1 ? dynamic_cast<const mdl::EntityNode*>(bodyNodes.front())
+                               : nullptr;
+}
+
 } // namespace
 
 using namespace std::chrono_literals;
@@ -289,8 +363,8 @@ MapWindow::MapWindow(
   contract_pre(m_document != nullptr);
 
   setAttribute(Qt::WA_DeleteOnClose);
-  // a prefab editor restores the map windows' layout too, and saves none
-  setObjectName("MapWindow");
+  // R1-pf3-1: a prefab editor's layout is its own
+  setObjectName(m_prefabEditor ? PrefabEditorObjectName : QString{"MapWindow"});
 
   installEventFilter(this);
 
@@ -329,6 +403,10 @@ MapWindow::MapWindow(
 
 MapWindow::~MapWindow()
 {
+  // R1-pf3-1: put back below what this prefab editor's widgets replace
+  const auto sharedState =
+    m_prefabEditor ? std::optional{sharedWidgetState()} : std::nullopt;
+
   disconnect(qApp, &QApplication::focusChanged, this, &MapWindow::focusChange);
 
   // Stop the autosave timer
@@ -382,6 +460,11 @@ MapWindow::~MapWindow()
   children.removeIf(
     [](const auto* child) { return qobject_cast<const QTabBar*>(child) != nullptr; });
   qDeleteAll(std::rbegin(children), std::rend(children));
+
+  if (sharedState)
+  {
+    restoreSharedWidgetState(*sharedState);
+  }
 
   // let's trigger a final autosave before releasing the document; a prefab editor makes
   // no backups (H-PF3-3)
@@ -1145,9 +1228,10 @@ void MapWindow::documentWasSaved()
 
   if (m_prefabEditor)
   {
-    // the thumbnail first, so that the library reads it with the file
-    writePrefabThumbnail();
-    m_appController.mapWindowManager().prefabWasSaved(*this, m_document->map().path());
+    // R1-pf3-10: grabbing the 3D view paints it, which processes the input recorded
+    // since its last paint, so it is not done while the save notifies its observers
+    m_pendingPrefabSavePath = m_document->map().path();
+    QTimer::singleShot(0, this, [this]() { finishPrefabSave(); });
   }
 }
 
@@ -1334,6 +1418,11 @@ bool MapWindow::saveDocument()
 
   if (map.persistent())
   {
+    if (m_prefabEditor)
+    {
+      updatePrefabMetadata();
+    }
+
     const auto startTime = std::chrono::high_resolution_clock::now();
     return map.save() | kdl::transform([&]() {
              const auto endTime = std::chrono::high_resolution_clock::now();
@@ -1349,7 +1438,7 @@ bool MapWindow::saveDocument()
                  this,
                  "",
                  QString::fromStdString(
-                   fmt::format("Error while saving {}: ", map.path(), e.msg)),
+                   fmt::format("Error while saving {}: {}", map.path(), e.msg)),
                  QMessageBox::Ok);
              })
            | kdl::is_success();
@@ -1374,6 +1463,11 @@ bool MapWindow::saveDocumentAs()
 
   const auto path = pathFromQString(newFileName);
 
+  if (m_prefabEditor)
+  {
+    updatePrefabMetadata();
+  }
+
   const auto startTime = std::chrono::high_resolution_clock::now();
   return map.saveAs(path) | kdl::transform([&]() {
            const auto endTime = std::chrono::high_resolution_clock::now();
@@ -1389,7 +1483,7 @@ bool MapWindow::saveDocumentAs()
                this,
                "",
                QString::fromStdString(
-                 fmt::format("Error while saving {}: ", path, e.msg)),
+                 fmt::format("Error while saving {}: {}", path, e.msg)),
                QMessageBox::Ok);
            })
          | kdl::is_success();
@@ -2894,9 +2988,67 @@ bool MapWindow::canLaunch() const
   return map.persistent() && !m_prefabEditor;
 }
 
-void MapWindow::writePrefabThumbnail()
+void MapWindow::updatePrefabMetadata()
 {
-  const auto& mapPath = m_document->map().path();
+  auto& map = m_document->map();
+  auto& worldNode = map.worldNode();
+  const auto& worldEntity = worldNode.entity();
+  const auto* kind = worldEntity.property(mdl::PrefabPropertyKeys::Kind);
+  if (!kind)
+  {
+    // not a prefab, so there are no prefab keys to keep up to date
+    return;
+  }
+
+  // R1-pf3-11: the keys that savePrefab writes and that a plain save would keep as they
+  // were
+  auto newWorldEntity = worldEntity;
+  newWorldEntity.addOrUpdateProperty(
+    mdl::PrefabPropertyKeys::Saved, mdl::prefabTimestamp());
+
+  if (*kind == mdl::PrefabPropertyValues::KindEntity)
+  {
+    if (const auto* entityNode = singleBodyEntity(worldNode))
+    {
+      const auto& className = entityNode->entity().classname();
+      if (const auto* oldClassName = worldEntity.property(mdl::PrefabPropertyKeys::Class);
+          !oldClassName || *oldClassName != className)
+      {
+        newWorldEntity.addOrUpdateProperty(mdl::PrefabPropertyKeys::Class, className);
+      }
+    }
+    else
+    {
+      logger().warn() << "Prefab " << map.filename()
+                      << " is an entity snapshot, but it no longer holds exactly one "
+                         "entity";
+    }
+  }
+
+  auto transaction = mdl::Transaction{map, "Update Prefab Metadata"};
+  if (!mdl::updateNodeContents(
+        map,
+        "Update Prefab Metadata",
+        {{&worldNode, mdl::NodeContents{std::move(newWorldEntity)}}}))
+  {
+    transaction.cancel();
+    return;
+  }
+  transaction.commit();
+}
+
+void MapWindow::finishPrefabSave()
+{
+  if (const auto mapPath = std::exchange(m_pendingPrefabSavePath, std::nullopt))
+  {
+    // the thumbnail first, so that the library reads it with the file
+    writePrefabThumbnail(*mapPath);
+    m_appController.mapWindowManager().prefabWasSaved(*this, *mapPath);
+  }
+}
+
+void MapWindow::writePrefabThumbnail(const std::filesystem::path& mapPath)
+{
   const auto thumbnailPath = kdl::path_replace_extension(mapPath, ".png");
 
   auto image = m_thumbnailGrabber ? m_thumbnailGrabber() : grabThumbnail();
@@ -2917,10 +3069,30 @@ void MapWindow::writePrefabThumbnail()
   // written beside the file and renamed, so that the library never reads half of it;
   // not with WritableFileSystem::createFileAtomic, which writes text (H-PF3-5)
   auto file = QSaveFile{pathAsQString(thumbnailPath)};
-  if (!file.open(QIODevice::WriteOnly) || !image.save(&file, "PNG") || !file.commit())
+  auto error = std::optional<QString>{};
+  if (!file.open(QIODevice::WriteOnly))
   {
-    logger().error() << "Could not write thumbnail " << thumbnailPath << ": "
-                     << file.errorString().toStdString();
+    error = file.errorString();
+  }
+  else if (!image.save(&file, "PNG"))
+  {
+    // R1-pf3-7: the file's error, if writing failed, or else the encoder's, which says
+    // nothing
+    error =
+      file.error() != QFileDevice::NoError ? file.errorString() : tr("PNG encode failed");
+    file.cancelWriting();
+  }
+  else if (!file.commit())
+  {
+    error = file.errorString();
+  }
+
+  if (error)
+  {
+    const auto message = tr("Could not write thumbnail %1: %2")
+                           .arg(pathAsQString(thumbnailPath.filename()), *error);
+    logger().error() << message.toStdString();
+    statusBar()->showMessage(message, 5000);
     return;
   }
   logger().info() << "Saved thumbnail " << thumbnailPath;
@@ -3018,14 +3190,13 @@ void MapWindow::closeEvent(QCloseEvent* event)
     return;
   }
 
+  // R1-pf3-10: the thumbnail of a save that the close asked for, while the window is
+  // still shown
+  finishPrefabSave();
+
   disconnect(qApp, &QApplication::focusChanged, this, &MapWindow::focusChange);
 
-  // the map windows and the prefab editors share one saved layout, which only the map
-  // windows write
-  if (!m_prefabEditor)
-  {
-    saveWindowState();
-  }
+  saveWindowState();
 
   m_appController.mapWindowManager().removeMapWindow(this);
   event->accept();

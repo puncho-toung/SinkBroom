@@ -64,19 +64,9 @@ public:
   using ShowMapWindow = std::function<void(MapWindow&)>;
 
 private:
-  /**
-   * A prefab editor and the window that opened it, which is nullptr once it is closed.
-   */
-  struct PrefabEditor
-  {
-    MapWindow* editor;
-    MapWindow* host;
-  };
-
   AppController& m_appController;
   bool m_singleMapWindow;
   std::vector<MapWindow*> m_mapWindows;
-  std::vector<PrefabEditor> m_prefabEditors;
   // replaces showMapWindow's show, raise and activate, if set
   ShowMapWindow m_showMapWindow;
 
@@ -84,6 +74,12 @@ public:
   MapWindowManager(AppController& appController, bool singleMapWindow);
   ~MapWindowManager() override;
 
+  /**
+   * Creates a document in a new window, or, if the manager keeps a single map window, in
+   * the top window that is not a prefab editor. If a prefab editor is on top, that window
+   * first offers to save its changes and is brought to the front; nothing is created if
+   * the user cancels. The same holds for loadDocument.
+   */
   Result<void> createDocument(
     const mdl::GameInfo& gameInfo,
     mdl::MapFormat mapFormat,
@@ -100,14 +96,14 @@ public:
    * game, map format and world bounds of that window's document, which the prefab
    * library reads its files with. The editor is a window of its own even if the manager
    * keeps a single map window (the one exception, NR D23), and New and Open never
-   * replace its document. If an editor has the file open, it is brought to the front
-   * instead.
+   * replace its document. If a window has the file open, an editor or not, it is brought
+   * to the front instead. Returns an error if the given window was closed.
    */
   Result<void> openPrefabEditor(MapWindow& hostWindow, const std::filesystem::path& path);
 
   /**
-   * Tells the window that opened the given prefab editor that the editor saved the
-   * given file, or every other window if that window was closed.
+   * Tells every window but the given prefab editor that the editor saved the given file;
+   * the prefab library of each reads it if it is in one of its roots.
    */
   void prefabWasSaved(const MapWindow& prefabEditor, const std::filesystem::path& path);
 
@@ -135,7 +131,16 @@ private:
    * window: the top one that is not a prefab editor.
    */
   MapWindow* documentWindow() const;
-  MapWindow* findPrefabEditor(const std::filesystem::path& path) const;
+  /**
+   * The window whose document has the given file, which is absolute and lexically
+   * normal.
+   */
+  MapWindow* findMapWindow(const std::filesystem::path& path) const;
+  /**
+   * Returns false if the user keeps the changes of the given window, whose document New
+   * or Open replace; see createDocument.
+   */
+  bool prepareDocumentWindow(MapWindow& mapWindow);
 
   bool shouldCreateWindowForDocument() const;
   MapWindow* createMapWindow(

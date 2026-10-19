@@ -30,6 +30,7 @@
 #include "ui/MapWindow.h"
 
 #include "kd/contracts.h"
+#include "kd/ranges/contains.h"
 
 #include <algorithm>
 #include <memory>
@@ -86,6 +87,10 @@ Result<void> MapWindowManager::createDocument(
 
   auto* mapWindow = documentWindow();
   contract_assert(mapWindow != nullptr);
+  if (!prepareDocumentWindow(*mapWindow))
+  {
+    return Result<void>{};
+  }
 
   return mapWindow->document().create(
     m_appController.environmentConfig(), gameInfo, mapFormat, worldBounds);
@@ -112,6 +117,10 @@ Result<void> MapWindowManager::loadDocument(
 
   auto* mapWindow = documentWindow();
   contract_assert(mapWindow != nullptr);
+  if (!prepareDocumentWindow(*mapWindow))
+  {
+    return Result<void>{};
+  }
 
   return mapWindow->document().load(
     m_appController.environmentConfig(),
@@ -124,47 +133,46 @@ Result<void> MapWindowManager::loadDocument(
 Result<void> MapWindowManager::openPrefabEditor(
   MapWindow& hostWindow, const std::filesystem::path& path)
 {
+  // R1-pf3-3: the panel posts the request, which may run after the window's close
+  if (!kdl::ranges::contains(m_mapWindows, &hostWindow))
+  {
+    return Error{"The window that the prefab was opened from is closed"};
+  }
+
   auto error = std::error_code{};
   auto absolutePath = (path.is_absolute() ? path : std::filesystem::absolute(path, error))
                         .lexically_normal();
 
-  if (auto* prefabEditor = findPrefabEditor(absolutePath))
+  // R1-pf3-12: a prefab open as a map is not opened twice either
+  if (auto* mapWindow = findMapWindow(absolutePath))
   {
-    moveToTop(*prefabEditor);
-    showMapWindow(*prefabEditor);
+    moveToTop(*mapWindow);
+    showMapWindow(*mapWindow);
     return Result<void>{};
   }
 
-  // the prefab library reads the files with the document's game and format, and the file
-  // is saved from a map of that game (C2), so the game is not asked for
+  // the prefab library reads the files with the document's game, format and world bounds
+  // (R1-pf3-8), and the file is saved from a map of that game (C2), so the game is not
+  // asked for
   const auto& hostMap = hostWindow.document().map();
-  const auto& gameInfo = hostMap.gameInfo();
   return MapDocument::loadDocument(
            m_appController.environmentConfig(),
-           gameInfo,
+           hostMap.gameInfo(),
            hostMap.worldNode().mapFormat(),
-           MapDocument::worldBoundsForGame(gameInfo.gameConfig),
+           hostMap.worldBounds(),
            std::move(absolutePath),
            m_appController.taskManager(),
            m_appController.glManager().resourceManager())
          | kdl::transform([&](auto document) {
-             auto* prefabEditor = createMapWindow(std::move(document), true, &hostWindow);
-             m_prefabEditors.push_back({.editor = prefabEditor, .host = &hostWindow});
+             createMapWindow(std::move(document), true, &hostWindow);
            });
 }
 
 void MapWindowManager::prefabWasSaved(
   const MapWindow& prefabEditor, const std::filesystem::path& path)
 {
-  const auto it = std::ranges::find_if(
-    m_prefabEditors, [&](const auto& entry) { return entry.editor == &prefabEditor; });
-  if (it != m_prefabEditors.end() && it->host)
-  {
-    it->host->prefabWasSaved(path);
-    return;
-  }
-
-  // the window that opened the editor was closed, so any window may show the prefab
+  // R1-pf3-9: not only the window that opened the editor, which may have switched its
+  // game or been closed, or be another editor; each library filters by its roots
   for (auto* mapWindow : m_mapWindows)
   {
     if (mapWindow != &prefabEditor)
@@ -203,16 +211,40 @@ MapWindow* MapWindowManager::documentWindow() const
   return it != m_mapWindows.end() ? *it : nullptr;
 }
 
-MapWindow* MapWindowManager::findPrefabEditor(const std::filesystem::path& path) const
+MapWindow* MapWindowManager::findMapWindow(const std::filesystem::path& path) const
 {
-  const auto it = std::ranges::find_if(m_prefabEditors, [&](const auto& entry) {
-    const auto& editorPath = entry.editor->document().map().path();
+  const auto it = std::ranges::find_if(m_mapWindows, [&](const auto* mapWindow) {
+    const auto& mapPath = mapWindow->document().map().path();
+    if (!mapPath.is_absolute())
+    {
+      // a map without a file, whose path is its name
+      return false;
+    }
+
     auto error = std::error_code{};
     // equivalent also matches another spelling of the path, such as its case on Windows
-    return editorPath.lexically_normal() == path
-           || std::filesystem::equivalent(editorPath, path, error);
+    return mapPath.lexically_normal() == path
+           || std::filesystem::equivalent(mapPath, path, error);
   });
-  return it != m_prefabEditors.end() ? it->editor : nullptr;
+  return it != m_mapWindows.end() ? *it : nullptr;
+}
+
+bool MapWindowManager::prepareDocumentWindow(MapWindow& mapWindow)
+{
+  // R1-pf3-4: with a prefab editor on top, the window whose document is replaced is
+  // behind it, so it asks about its changes and comes to the front
+  if (&mapWindow == topMapWindow())
+  {
+    return true;
+  }
+
+  if (!mapWindow.confirmOrDiscardChanges())
+  {
+    return false;
+  }
+  moveToTop(mapWindow);
+  showMapWindow(mapWindow);
+  return true;
 }
 
 bool MapWindowManager::shouldCreateWindowForDocument() const
@@ -242,6 +274,8 @@ void MapWindowManager::showMapWindow(MapWindow& mapWindow)
     return;
   }
 
+  // R1-pf3-5: a minimised window is restored, as it was before
+  mapWindow.setWindowState(mapWindow.windowState() & ~Qt::WindowMinimized);
   mapWindow.show();
   mapWindow.raise();
   mapWindow.activateWindow();
@@ -264,17 +298,6 @@ void MapWindowManager::removeMapWindow(MapWindow* mapWindow)
   {
     m_mapWindows.erase(it);
     // MapWindow uses Qt::WA_DeleteOnClose so we don't need to delete it here
-  }
-
-  // a closed editor is forgotten; the editors of a closed window tell every window
-  std::erase_if(
-    m_prefabEditors, [&](const auto& entry) { return entry.editor == mapWindow; });
-  for (auto& entry : m_prefabEditors)
-  {
-    if (entry.host == mapWindow)
-    {
-      entry.host = nullptr;
-    }
   }
 }
 
