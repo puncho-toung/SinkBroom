@@ -97,6 +97,7 @@
 #include "ui/CompilationDialog.h"
 #include "ui/Console.h"
 #include "ui/CrashReporter.h"
+#include "ui/CreatePrefabTool.h"
 #include "ui/EdgeTool.h"
 #include "ui/EntityInspector.h"
 #include "ui/FaceInspector.h"
@@ -720,13 +721,15 @@ void MapWindow::createGui()
     m_sidebarManager->registerPanel(std::move(panel));
   }
 
-  // DD-28: a prefab holds no placements of prefabs (RQ21)
+  // DD-28, DD-29: a prefab holds no placements of prefabs (RQ21), neither from its own
+  // panel nor from a drag out of another window's panel
   if (m_prefabEditor)
   {
     auto* prefabPanel =
       qobject_cast<PrefabPanel*>(m_sidebarManager->panel(PrefabPanel::PanelId));
     contract_assert(prefabPanel != nullptr);
     prefabPanel->setPlacementEnabled(false);
+    m_mapView->toolBox().createPrefabTool().setPlacementEnabled(false);
   }
 
   // the constructor makes the console the document's logger

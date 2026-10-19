@@ -93,7 +93,8 @@ const Tool& CreatePrefabToolController::tool() const
 bool CreatePrefabToolController::shouldAcceptDrop(
   const InputState&, const std::string& payload) const
 {
-  return kdl::cs::str_is_prefix(payload, PayloadPrefix);
+  // DD-29: refused at drag enter, so the view shows the no-drop cursor
+  return m_tool.placementEnabled() && kdl::cs::str_is_prefix(payload, PayloadPrefix);
 }
 
 std::unique_ptr<DropTracker> CreatePrefabToolController::acceptDrop(

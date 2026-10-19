@@ -139,11 +139,27 @@ CreatePrefabTool::CreatePrefabTool(MapDocument& document)
 {
 }
 
+void CreatePrefabTool::setPlacementEnabled(const bool placementEnabled)
+{
+  m_placementEnabled = placementEnabled;
+}
+
+bool CreatePrefabTool::placementEnabled() const
+{
+  return m_placementEnabled;
+}
+
 bool CreatePrefabTool::createPrefab(const std::string& payload)
 {
   contract_pre(!placing());
 
   auto& map = m_document.map();
+  if (!m_placementEnabled)
+  {
+    map.logger().info() << "Cannot place a prefab: placement is off in a prefab editor";
+    return false;
+  }
+
   const auto& library = map.prefabLibrary();
 
   const auto* entry = library.fromPayload(payload);

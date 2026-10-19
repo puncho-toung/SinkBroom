@@ -58,14 +58,19 @@ private:
   vm::bbox3d m_referenceBounds;
   // the plane of the first face hit in 3D that does not belong to the prefab
   std::optional<vm::plane3d> m_placementPlane;
+  // false in a prefab editor window: a prefab holds no placements of prefabs (DD-29)
+  bool m_placementEnabled = true;
 
 public:
   explicit CreatePrefabTool(MapDocument& document);
 
+  void setPlacementEnabled(bool placementEnabled);
+  bool placementEnabled() const;
+
   /**
    * Resolves the given drop payload (C4) through the map's prefab library and adds the
    * prefab inside a new long running transaction, selected. Returns false and opens no
-   * transaction if the payload names no readable prefab.
+   * transaction if placement is off or if the payload names no readable prefab.
    */
   bool createPrefab(const std::string& payload);
 

@@ -43,8 +43,11 @@
 #include "mdl/TestFactory.h"
 #include "mdl/WorldNode.h"
 #include "ui/CreatePrefabTool.h"
+#include "ui/CreatePrefabToolController.h"
+#include "ui/InputState.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
+#include "ui/ToolController.h"
 
 #include "kd/overload.h"
 #include "kd/ranges/contains.h"
@@ -261,6 +264,38 @@ TEST_CASE("CreatePrefabTool")
     REQUIRE(tool.createPrefab(torchPayload));
     tool.commit();
     map.undoCommand();
+    CHECK(defaultLayerChildren == childrenBefore);
+  }
+
+  SECTION("A tool with placement off places nothing")
+  {
+    // DD-29: a prefab editor's tool
+    REQUIRE(tool.placementEnabled());
+    const auto* undoNameBefore = map.undoCommandName();
+    tool.setPlacementEnabled(false);
+    CHECK_FALSE(tool.placementEnabled());
+
+    // the controllers refuse the drag, so the view shows the no-drop cursor
+    const auto inputState = InputState{0.0f, 0.0f};
+    auto controller2D = CreatePrefabToolController2D{tool};
+    auto controller3D = CreatePrefabToolController3D{tool};
+    const auto acceptsDrop = [&](const ToolController& controller, const auto& payload) {
+      return controller.shouldAcceptDrop(inputState, payload);
+    };
+    CHECK_FALSE(acceptsDrop(controller2D, torchPayload));
+    CHECK_FALSE(acceptsDrop(controller3D, cratePayload));
+
+    CHECK_FALSE(tool.createPrefab(torchPayload));
+    CHECK_FALSE(tool.createPrefab(cratePayload));
+    CHECK_FALSE(tool.placing());
+    CHECK_FALSE(map.isTransactionActive());
+    CHECK(map.undoCommandName() == undoNameBefore);
+    CHECK(defaultLayerChildren == childrenBefore);
+
+    tool.setPlacementEnabled(true);
+    CHECK(acceptsDrop(controller2D, torchPayload));
+    REQUIRE(tool.createPrefab(torchPayload));
+    tool.cancel();
     CHECK(defaultLayerChildren == childrenBefore);
   }
 

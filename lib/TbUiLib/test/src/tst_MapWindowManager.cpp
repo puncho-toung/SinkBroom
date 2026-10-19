@@ -50,7 +50,9 @@
 #include "mdl/WorldNode.h"
 #include "ui/AppControllerFixture.h"
 #include "ui/CatchConfig.h"
+#include "ui/CreatePrefabTool.h"
 #include "ui/MapDocument.h"
+#include "ui/MapViewToolBox.h"
 #include "ui/MapWindow.h"
 #include "ui/MapWindowManager.h"
 #include "ui/PrefabBrowserView.h"
@@ -301,7 +303,7 @@ TEST_CASE("MapWindowManager")
     CHECK(*worldEntity.property(mdl::PrefabPropertyKeys::Name) == "lamp");
   }
 
-  SECTION("a prefab editor's prefab panel cannot place prefabs (DD-28)")
+  SECTION("a prefab editor cannot place prefabs (DD-28, DD-29)")
   {
     REQUIRE(manager.openPrefabEditor(*host, prefabPath) | kdl::is_success());
     auto* editor = manager.topMapWindow();
@@ -329,6 +331,10 @@ TEST_CASE("MapWindowManager")
     REQUIRE(editorCells.size() == 1u);
     CHECK(editorCells[0].dndData.isEmpty());
     CHECK(editorCells[0].tooltip.contains(placementOff));
+
+    // a drag out of the host's panel into the editor's views is refused too
+    CHECK(host->toolBox().createPrefabTool().placementEnabled());
+    CHECK_FALSE(editor->toolBox().createPrefabTool().placementEnabled());
 
     // saving from the editor stays
     auto* saveSelectionAction =
