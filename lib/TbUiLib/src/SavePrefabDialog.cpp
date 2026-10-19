@@ -216,7 +216,7 @@ void SavePrefabDialog::createGui()
   m_categoryChoice->setInsertPolicy(QComboBox::NoInsert);
   for (const auto& category : prefabCategories(library.entries()))
   {
-    m_categoryChoice->addItem(QString::fromStdString(category.generic_string()));
+    m_categoryChoice->addItem(pathAsGenericQString(category));
   }
   m_categoryChoice->setCurrentText("");
   m_categoryChoice->setToolTip(

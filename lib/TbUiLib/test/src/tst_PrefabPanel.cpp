@@ -25,6 +25,7 @@
 #include <QToolButton>
 
 #include "SidebarTestUtils.h"
+#include "base/PreferenceManager.h"
 #include "fs/TestEnvironment.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
@@ -36,6 +37,7 @@
 #include "mdl/Map_Selection.h"
 #include "mdl/PrefabFile.h"
 #include "mdl/PrefabLibrary.h"
+#include "mdl/WorldNode.h"
 #include "ui/CatchConfig.h"
 #include "ui/MapDocument.h"
 #include "ui/PrefabBrowserView.h"
@@ -44,7 +46,9 @@
 
 #include "kd/result.h"
 
+#include <algorithm>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -87,13 +91,16 @@ void selectOnly(mdl::Map& map, const std::vector<mdl::Node*>& nodes)
 
 /**
  * The default game without a game path, so that it has no mod root, and with its Prefab
- * Path preference defaulting to the given folder.
+ * Path preference, under the given preference path if one is given, defaulting to the
+ * given folder.
  */
-mdl::MapFixtureConfig fixtureConfigWithUserRoot(const std::filesystem::path& userRoot)
+mdl::MapFixtureConfig fixtureConfigWithUserRoot(
+  const std::filesystem::path& userRoot,
+  std::optional<std::filesystem::path> preferencePath = std::nullopt)
 {
   auto gameInfo = mdl::detail::makeGameInfoFixture(mdl::DefaultGameInfo.gameConfig, {});
-  gameInfo.prefabPathPreference =
-    Preference<std::filesystem::path>{gameInfo.prefabPathPreference.path, userRoot};
+  gameInfo.prefabPathPreference = Preference<std::filesystem::path>{
+    preferencePath.value_or(gameInfo.prefabPathPreference.path), userRoot};
   return mdl::MapFixtureConfig{.gameInfo = std::move(gameInfo)};
 }
 
@@ -295,6 +302,15 @@ TEST_CASE("PrefabPanel")
     CHECK(categoryChoice->itemText(0) == "All");
     CHECK(categoryChoice->itemText(1) == "lights");
 
+    // the cells point at the library's entries and carry their C4 payloads
+    auto* view = panel.findChild<PrefabBrowserView*>();
+    REQUIRE(view != nullptr);
+    const auto cells = view->cellSummaries();
+    REQUIRE(cells.size() == 1u);
+    CHECK(cells[0].entry == &library.entries()[0]);
+    CHECK(cells[0].title == "lamp");
+    CHECK(cells[0].dndData == "prefab:user/lights/lamp.map");
+
     auto* saveButton = panel.findChild<QToolButton*>("PrefabPanel_saveButton");
     REQUIRE(saveButton != nullptr);
 
@@ -322,7 +338,127 @@ TEST_CASE("PrefabPanel")
       CHECK(library.entries().size() == 2);
       CHECK(categoryChoice->count() == 3);
       CHECK(categoryChoice->itemText(1) == "(top level)");
+
+      // the cells point at the new entries
+      const auto newCells = view->cellSummaries();
+      REQUIRE(newCells.size() == 2u);
+      for (size_t i = 0; i < newCells.size(); ++i)
+      {
+        const auto& entry = library.entries()[i];
+        CHECK(newCells[i].entry == &entry);
+        CHECK(newCells[i].dndData == QString::fromStdString(library.payloadFor(entry)));
+      }
     }
+
+    SECTION("A prefab without a name is titled by its file")
+    {
+      env.createFile("unnamed.map", R"(// entity 0
+{
+"classname" "worldspawn"
+"_tb_prefab_kind" "entity"
+}
+// entity 1
+{
+"classname" "light"
+"origin" "0 0 0"
+}
+)");
+      panel.rescan();
+      CHECK(QTest::qWaitFor([&] { return !library.scanning(); }));
+
+      const auto* entry = library.find(mdl::PrefabRoot::User, "unnamed.map");
+      REQUIRE(entry != nullptr);
+      REQUIRE(!entry->error);
+      REQUIRE(entry->metadata.name.empty());
+
+      const auto newCells = view->cellSummaries();
+      const auto it = std::ranges::find_if(
+        newCells, [&](const auto& cell) { return cell.entry == entry; });
+      REQUIRE(it != newCells.end());
+      CHECK(it->title == "unnamed");
+    }
+
+    SECTION("The panel follows the library of a new map")
+    {
+      // a file that only a scan of the new map's library finds
+      REQUIRE(
+        mdl::savePrefab(
+          map,
+          {entityNode},
+          mdl::SavePrefabOptions{
+            .name = "hatch", .category = "doors", .root = mdl::PrefabRoot::User})
+        | kdl::is_success());
+
+      // the fixture owns the game, so it outlives the old map
+      REQUIRE(fixture.document().create(
+        map.environmentConfig(),
+        map.gameInfo(),
+        map.worldNode().mapFormat(),
+        map.worldBounds()));
+
+      // map and library are gone with the old map
+      auto& newLibrary = fixture.document().map().prefabLibrary();
+      REQUIRE(&newLibrary != &library);
+      CHECK(newLibrary.userRoot() == env.dir());
+      CHECK(QTest::qWaitFor([&] { return !newLibrary.scanning(); }));
+      REQUIRE(newLibrary.entries().size() == 2u);
+
+      // the panel observes the new library: the categories and the cells follow it
+      REQUIRE(categoryChoice->count() == 3);
+      CHECK(categoryChoice->itemText(1) == "doors");
+      CHECK(categoryChoice->itemText(2) == "lights");
+
+      const auto newCells = view->cellSummaries();
+      REQUIRE(newCells.size() == 2u);
+      CHECK(newCells[0].entry == &newLibrary.entries()[0]);
+      CHECK(newCells[1].entry == &newLibrary.entries()[1]);
+    }
+  }
+
+  SECTION("A Prefab Path change moves the user root and rescans")
+  {
+    auto env = fs::TestEnvironment{};
+    auto otherEnv = fs::TestEnvironment{};
+
+    // a preference of its own, so that the value it keeps after the test reaches no
+    // other test, set first, so that no earlier value counts
+    auto prefabPath = Preference<std::filesystem::path>{
+      "Games/PrefabPanelTest/Prefab Path", std::filesystem::path{}};
+    setPref(prefabPath, env.dir());
+
+    auto fixture =
+      SidebarContextFixture{fixtureConfigWithUserRoot(env.dir(), prefabPath.path)};
+    auto& map = fixture.document().map();
+    auto& library = map.prefabLibrary();
+    REQUIRE(library.userRoot() == env.dir());
+
+    // a prefab in the other folder only
+    auto* entityNode = addEntity(map, {{"classname", "light"}, {"name", "hatch"}});
+    library.setUserRoot(otherEnv.dir());
+    REQUIRE(
+      mdl::savePrefab(
+        map,
+        {entityNode},
+        mdl::SavePrefabOptions{
+          .name = "hatch", .category = "doors", .root = mdl::PrefabRoot::User})
+      | kdl::is_success());
+    library.setUserRoot(env.dir());
+
+    auto panel = PrefabPanel{fixture.context()};
+    CHECK(QTest::qWaitFor([&] { return !library.scanning(); }));
+    CHECK(library.entries().empty());
+
+    // the document pushes the new path into the library, the panel rescans it
+    setPref(prefabPath, otherEnv.dir());
+    CHECK(QTest::qWaitFor([&] { return library.userRoot() == otherEnv.dir(); }));
+    CHECK(QTest::qWaitFor([&] { return !library.scanning(); }));
+    REQUIRE(library.entries().size() == 1u);
+    CHECK(library.entries().front().relativePath == "doors/hatch.map");
+
+    auto* categoryChoice = panel.findChild<QComboBox*>("PrefabPanel_categoryChoice");
+    REQUIRE(categoryChoice != nullptr);
+    REQUIRE(categoryChoice->count() == 2);
+    CHECK(categoryChoice->itemText(1) == "doors");
   }
 }
 

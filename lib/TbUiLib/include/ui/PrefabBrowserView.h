@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include <QString>
+
 #include "base/NotifierConnection.h"
 #include "gl/FontDescriptor.h"
 #include "ui/CellView.h"
@@ -149,6 +151,28 @@ public:
    */
   void libraryDidChange();
 
+  /**
+   * Call when the entity models may be reloaded: the cells hold model renderers that the
+   * entity model manager deletes when it is cleared.
+   */
+  void entityModelsWillChange();
+
+  /**
+   * A cell as the view lays it out, for tests.
+   */
+  struct CellSummary
+  {
+    const mdl::PrefabEntry* entry;
+    std::string title;
+    // what a drag of the cell carries
+    QString dndData;
+  };
+
+  /**
+   * The cells in layout order, laid out first if the layout is not valid. For tests.
+   */
+  std::vector<CellSummary> cellSummaries();
+
 signals:
   void editPrefabRequested(const QString& path);
 
@@ -160,6 +184,7 @@ private:
   QString dndData(const Cell& cell) override;
 
   void resourcesWereProcessed(const std::vector<gl::ResourceId>& resources);
+  void preferenceDidChange(const std::filesystem::path& path);
 
   const EntryPreview& preview(const mdl::PrefabEntry& entry);
   void addEntryToLayout(

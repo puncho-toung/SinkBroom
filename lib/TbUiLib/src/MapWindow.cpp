@@ -76,6 +76,7 @@
 #include "mdl/Node.h"
 #include "mdl/PasteType.h"
 #include "mdl/PatchNode.h"
+#include "mdl/PrefabLibrary.h"
 #include "mdl/VisualEffect.h"
 #include "mdl/WorldNode.h"
 #include "prefs/Preferences.h"
@@ -1836,7 +1837,12 @@ void MapWindow::saveSelectionAsPrefab()
 
 bool MapWindow::canSaveSelectionAsPrefab() const
 {
-  return m_document->map().selection().hasNodes();
+  // as the prefab panel's button: a selection and somewhere to save it
+  const auto& map = m_document->map();
+  const auto& library = map.prefabLibrary();
+  return map.selection().hasNodes()
+         && (!library.writeRootFor(mdl::PrefabRoot::User).empty()
+             || !library.writeRootFor(mdl::PrefabRoot::Mod).empty());
 }
 
 void MapWindow::editPrefab(const std::filesystem::path& path)

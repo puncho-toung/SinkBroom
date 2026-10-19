@@ -132,6 +132,10 @@ void PrefabPanel::saveSelectionAsPrefab()
 
 void PrefabPanel::rescan()
 {
+  // the game path or the mods may have changed, which clears the entity models that the
+  // cells hold until the scan has finished
+  m_view->entityModelsWillChange();
+
   m_document.map().prefabLibrary().rescan();
   // a scan of empty roots is finished at once
   processPendingResults();
@@ -291,7 +295,7 @@ void PrefabPanel::updateCategories()
   m_categoryChoice->addItem(tr("All"), AllCategories);
   for (const auto& category : categories)
   {
-    const auto categoryStr = QString::fromStdString(category.generic_string());
+    const auto categoryStr = pathAsGenericQString(category);
     m_categoryChoice->addItem(
       categoryStr.isEmpty() ? tr("(top level)") : categoryStr, categoryStr);
   }

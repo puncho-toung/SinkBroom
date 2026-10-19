@@ -53,6 +53,7 @@
 #include "mdl/EntityModelManager.h"
 #include "mdl/EntityNode.h"
 #include "mdl/EntityPropertiesVariableStore.h"
+#include "mdl/GameInfo.h"
 #include "mdl/GroupNode.h"
 #include "mdl/LayerNode.h"
 #include "mdl/LoadImageTexture.h"
@@ -101,7 +102,18 @@ const auto ErrorColor = RgbaF{1.0f, 0.3f, 0.3f, 1.0f};
 
 std::filesystem::path categoryOf(const mdl::PrefabEntry& entry)
 {
-  return std::filesystem::path{entry.relativePath.parent_path().generic_string()};
+  return entry.relativePath.parent_path();
+}
+
+/**
+ * The cell title: the prefab's name, or the file name without its extension if the file
+ * failed or names no prefab.
+ */
+std::string titleOf(const mdl::PrefabEntry& entry)
+{
+  return !entry.metadata.name.empty()
+           ? entry.metadata.name
+           : pathAsQString(entry.relativePath.stem()).toStdString();
 }
 
 bool matchesWord(const mdl::PrefabEntry& entry, const std::string& word)
@@ -314,9 +326,7 @@ std::vector<std::filesystem::path> prefabCategories(
       result.push_back(std::move(category));
     }
   }
-  std::ranges::sort(result, [](const auto& lhs, const auto& rhs) {
-    return lhs.generic_string() < rhs.generic_string();
-  });
+  std::ranges::sort(result);
   return result;
 }
 
@@ -350,6 +360,19 @@ PrefabBrowserView::PrefabBrowserView(
 
   m_notifierConnection += m_document.resourcesWereProcessedNotifier.connect(
     this, &PrefabBrowserView::resourcesWereProcessed);
+
+  // the map clears its entity models when the mods or the definitions change, and
+  // reloads them when the material collections change; the panel handles the game path
+  m_notifierConnection += m_document.modsWillChangeNotifier.connect(
+    this, &PrefabBrowserView::entityModelsWillChange);
+  m_notifierConnection += m_document.entityDefinitionsWillChangeNotifier.connect(
+    this, &PrefabBrowserView::entityModelsWillChange);
+  m_notifierConnection += m_document.materialCollectionsDidChangeNotifier.connect(
+    this, &PrefabBrowserView::entityModelsWillChange);
+
+  m_notifierConnection +=
+    PreferenceManager::instance().preferenceDidChangeNotifier.connect(
+      this, &PrefabBrowserView::preferenceDidChange);
 }
 
 PrefabBrowserView::~PrefabBrowserView()
@@ -370,6 +393,24 @@ void PrefabBrowserView::libraryDidChange()
   m_previews.clear();
   invalidate();
   update();
+}
+
+void PrefabBrowserView::entityModelsWillChange()
+{
+  // drops the cells and their model renderers; the next paint lays them out again
+  clear();
+  invalidate();
+  update();
+}
+
+std::vector<PrefabBrowserView::CellSummary> PrefabBrowserView::cellSummaries()
+{
+  auto result = std::vector<CellSummary>{};
+  scrollToCell([&](const Cell& cell) {
+    result.push_back(CellSummary{cellData(cell).entry, cell.title(), dndData(cell)});
+    return false;
+  });
+  return result;
 }
 
 void PrefabBrowserView::doInitLayout(Layout& layout)
@@ -415,6 +456,21 @@ void PrefabBrowserView::resourcesWereProcessed(const std::vector<gl::ResourceId>
 {
   // a model or a thumbnail may have loaded
   invalidate();
+}
+
+void PrefabBrowserView::preferenceDidChange(const std::filesystem::path& path)
+{
+  if (path == m_document.map().gameInfo().gamePathPreference.path)
+  {
+    // the map has cleared its entity models
+    entityModelsWillChange();
+  }
+  else
+  {
+    // the font, its size or the colours may have changed
+    invalidate();
+    update();
+  }
 }
 
 const PrefabBrowserView::EntryPreview& PrefabBrowserView::preview(
@@ -490,7 +546,7 @@ void PrefabBrowserView::addEntryToLayout(
   Layout& layout, const mdl::PrefabEntry& entry, const gl::FontDescriptor& font)
 {
   const auto& preview = this->preview(entry);
-  const auto& name = entry.metadata.name;
+  const auto name = titleOf(entry);
 
   const auto maxCellWidth = layout.maxCellWidth();
   const auto actualFont = fontManager().selectFontSize(font, name, maxCellWidth, 5);
@@ -682,6 +738,9 @@ void PrefabBrowserView::renderThumbnails(
 {
   using Vertex = gl::VertexTypes::P2Uv2::Vertex;
 
+  // the models are drawn clockwise, the thumbnails counter-clockwise
+  gl.frontFace(GL_CCW);
+
   const auto viewLeft = float(0);
   const auto viewTop = float(size().height());
   const auto viewRight = float(size().width());
@@ -762,7 +821,7 @@ QString PrefabBrowserView::tooltip(const Cell& cell)
 
   auto tooltip = QString{};
   auto ss = QTextStream{&tooltip};
-  ss << QString::fromStdString(metadata.name);
+  ss << QString::fromStdString(titleOf(entry));
   if (!metadata.className.empty())
   {
     ss << "\n" << tr("Class: ") << QString::fromStdString(metadata.className);
