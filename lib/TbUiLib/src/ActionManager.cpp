@@ -2029,7 +2029,8 @@ void ActionManager::createRunMenu()
     KeySequence{},
     [](auto& context) { context.mapWindow().showCompileDialog(); },
     [](const auto& context) {
-      return context.hasDocument() && context.mapWindow().canCompile();
+      // DD-26: for a map without a file too, as before PF3, but not in a prefab editor
+      return context.hasDocument() && !context.mapWindow().isPrefabEditor();
     },
   }));
   runMenu.addItem(addAction(Action{
@@ -2039,7 +2040,7 @@ void ActionManager::createRunMenu()
     KeySequence{},
     [](auto& context) { context.mapWindow().showLaunchEngineDialog(); },
     [](const auto& context) {
-      return context.hasDocument() && context.mapWindow().canLaunch();
+      return context.hasDocument() && !context.mapWindow().isPrefabEditor();
     },
   }));
   runMenu.addSeparator();
@@ -2051,7 +2052,7 @@ void ActionManager::createRunMenu()
       KeySequence{},
       [](auto& context) { context.mapWindow().rerunLastCompilation(); },
       [](const auto& context) {
-        return context.hasDocument() && context.mapWindow().canCompile()
+        return context.hasDocument() && !context.mapWindow().isPrefabEditor()
                && context.mapWindow().hasLastCompilationProfile();
       },
     }),

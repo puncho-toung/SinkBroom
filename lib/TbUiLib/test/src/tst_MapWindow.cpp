@@ -1621,11 +1621,20 @@ TEST_CASE("MapWindow")
     CHECK(window.windowTitle() == "unnamed.map[*] - TrenchBroom");
     CHECK(prefabEditor.windowTitle() == "crate.map[*] [Prefab] - TrenchBroom");
 
-    // Compile, Launch and Re-run need a map with a file, and a prefab editor's has one
+    // canCompile and canLaunch need a map with a file, and a prefab editor's has one
     CHECK(!window.canCompile());
     CHECK(!window.canLaunch());
     CHECK(!prefabEditor.canCompile());
     CHECK(!prefabEditor.canLaunch());
+
+    // DD-26: Compile and Launch are offered for a map without a file too, as before
+    // PF3, and Re-run once a compilation ran; never in a prefab editor
+    for (const auto& path : {"Menu/Run/Compile...", "Menu/Run/Launch..."})
+    {
+      auto* action = window.findAction(path);
+      REQUIRE(action != nullptr);
+      CHECK(action->isEnabled());
+    }
     for (const auto& path :
          {"Menu/Run/Compile...", "Menu/Run/Launch...", "Menu/Run/Rerun..."})
     {

@@ -17,6 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QEvent>
@@ -253,6 +254,17 @@ TEST_CASE("MapWindowManager")
     CHECK(host->canLaunch());
     CHECK(!editor->canCompile());
     CHECK(!editor->canLaunch());
+
+    // DD-26: and the Run menu says so
+    for (const auto& actionPath : {"Menu/Run/Compile...", "Menu/Run/Launch..."})
+    {
+      auto* hostAction = host->findAction(actionPath);
+      auto* editorAction = editor->findAction(actionPath);
+      REQUIRE(hostAction != nullptr);
+      REQUIRE(editorAction != nullptr);
+      CHECK(hostAction->isEnabled());
+      CHECK(!editorAction->isEnabled());
+    }
 
     REQUIRE(manager.createDocument(gameInfo, mapFormat, worldBounds) | kdl::is_success());
     CHECK(manager.mapWindows().size() == 2u);
