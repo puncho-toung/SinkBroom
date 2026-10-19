@@ -24,6 +24,7 @@
 
 #include "vm/mat.h"
 
+#include <optional>
 #include <string>
 
 namespace tb::mdl
@@ -36,7 +37,10 @@ private:
 
   vm::mat4x4d m_transformation;
 
-  kdl_reflect_decl(Group, m_name, m_transformation);
+  std::optional<std::string> m_prefabPath;
+  std::optional<std::string> m_prefabHash;
+
+  kdl_reflect_decl(Group, m_name, m_transformation, m_prefabPath, m_prefabHash);
 
 public:
   explicit Group(std::string name);
@@ -47,6 +51,20 @@ public:
   const vm::mat4x4d& transformation() const;
   void setTransformation(const vm::mat4x4d& transformation);
   void transform(const vm::mat4x4d& transformation);
+
+  /**
+   * The path of the prefab file this group was placed from, relative to its library root,
+   * with forward slashes. Serialised as _tb_prefab.
+   */
+  const std::optional<std::string>& prefabPath() const;
+  void setPrefabPath(std::optional<std::string> prefabPath);
+
+  /**
+   * The content hash (lower-case hex of a 64-bit FNV-1a, see fnv1a64Hex) of the prefab
+   * file at the time this group was placed or refreshed. Serialised as _tb_prefab_hash.
+   */
+  const std::optional<std::string>& prefabHash() const;
+  void setPrefabHash(std::optional<std::string> prefabHash);
 };
 
 } // namespace tb::mdl

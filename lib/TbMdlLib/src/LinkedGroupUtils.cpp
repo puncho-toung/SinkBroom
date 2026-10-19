@@ -778,6 +778,37 @@ void resetLinkIds(const std::vector<GroupNode*>& groupNodes)
   }
 }
 
+void rekeyLinkIds(const std::vector<Node*>& roots)
+{
+  auto newLinkIds = std::unordered_map<std::string, std::string>{};
+  const auto rekey = [&](Object& object) {
+    const auto [it, inserted] = newLinkIds.try_emplace(object.linkId());
+    if (inserted)
+    {
+      it->second = generateUuid();
+    }
+    object.setLinkId(it->second);
+  };
+
+  Node::visitAll(
+    roots,
+    kdl::overload(
+      [](
+        auto&& thisLambda, WorldNode& worldNode) { worldNode.visitChildren(thisLambda); },
+      [](
+        auto&& thisLambda, LayerNode& layerNode) { layerNode.visitChildren(thisLambda); },
+      [&](auto&& thisLambda, GroupNode& groupNode) {
+        rekey(groupNode);
+        groupNode.visitChildren(thisLambda);
+      },
+      [&](auto&& thisLambda, EntityNode& entityNode) {
+        rekey(entityNode);
+        entityNode.visitChildren(thisLambda);
+      },
+      [&](BrushNode& brushNode) { rekey(brushNode); },
+      [&](PatchNode& patchNode) { rekey(patchNode); }));
+}
+
 Result<std::unordered_map<Node*, std::string>> copyAndReturnLinkIds(
   const GroupNode& sourceGroupNode, const std::vector<GroupNode*>& targetGroupNodes)
 {

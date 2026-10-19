@@ -415,6 +415,15 @@ std::vector<EntityProperty> NodeSerializer::groupProperties(const GroupNode& gro
     result.emplace_back(EntityPropertyKeys::TbGroupTransformation, transformationStr);
   }
 
+  if (const auto& prefabPath = groupNode.group().prefabPath())
+  {
+    result.emplace_back(EntityPropertyKeys::TbPrefab, *prefabPath);
+  }
+  if (const auto& prefabHash = groupNode.group().prefabHash())
+  {
+    result.emplace_back(EntityPropertyKeys::TbPrefabHash, *prefabHash);
+  }
+
   return result;
 }
 

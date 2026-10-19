@@ -66,6 +66,8 @@ inline const std::string TbLayerSortIndex = TbPrefix + "layer_sort_index";
 inline const std::string TbLinkId = TbPrefix + "linked_group_id";
 inline const std::string TbMessage = TbPrefix + "message";
 inline const std::string TbMods = TbPrefix + "mod";
+inline const std::string TbPrefab = TbPrefix + "prefab";
+inline const std::string TbPrefabHash = TbPrefix + "prefab_hash";
 inline const std::string TbProtectedEntityProperties = TbPrefix + "protected_properties";
 inline const std::string TbSoftMapBounds = TbPrefix + "soft_map_bounds";
 } // namespace EntityPropertyKeys

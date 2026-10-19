@@ -522,6 +522,20 @@ CreateNodeResult createGroupNode(const MapReader::EntityInfo& entityInfo)
     group.setTransformation(*transformation);
   }
 
+  // prefab provenance; like every other group key, these are not kept as properties
+  if (const auto& prefabPath =
+        findEntityPropertyOrDefault(entityInfo.properties, EntityPropertyKeys::TbPrefab);
+      !kdl::str_is_blank(prefabPath))
+  {
+    group.setPrefabPath(prefabPath);
+  }
+  if (const auto& prefabHash = findEntityPropertyOrDefault(
+        entityInfo.properties, EntityPropertyKeys::TbPrefabHash);
+      !kdl::str_is_blank(prefabHash))
+  {
+    group.setPrefabHash(prefabHash);
+  }
+
   auto groupNode = std::make_unique<GroupNode>(std::move(group));
   const auto [startLine, lineCount] = getFilePosition(entityInfo);
   groupNode->setFilePosition(startLine, lineCount);

@@ -58,4 +58,24 @@ void Group::transform(const vm::mat4x4d& transformation)
   m_transformation = transformation * m_transformation;
 }
 
+const std::optional<std::string>& Group::prefabPath() const
+{
+  return m_prefabPath;
+}
+
+void Group::setPrefabPath(std::optional<std::string> prefabPath)
+{
+  m_prefabPath = std::move(prefabPath);
+}
+
+const std::optional<std::string>& Group::prefabHash() const
+{
+  return m_prefabHash;
+}
+
+void Group::setPrefabHash(std::optional<std::string> prefabHash)
+{
+  m_prefabHash = std::move(prefabHash);
+}
+
 } // namespace tb::mdl

@@ -158,6 +158,18 @@ std::vector<Error> initializeLinkIds(const std::vector<Node*>& nodes);
  */
 void resetLinkIds(const std::vector<GroupNode*>& groupNodes);
 
+/**
+ * Replaces every link ID under the given roots (the roots included, nested groups and the
+ * children of groups and entities included) with a fresh one, mapping each distinct old
+ * ID to one new ID. Groups that shared a link ID still share one afterwards, and so do
+ * their corresponding children, so every link set under the roots keeps its membership
+ * and its structure; no link ID under the roots equals any ID that was there before, so
+ * the nodes share no link set with nodes outside the roots.
+ *
+ * Unlike resetLinkIds, which gives each group its own fresh ID and skips nested groups.
+ */
+void rekeyLinkIds(const std::vector<Node*>& roots);
+
 Result<std::unordered_map<Node*, std::string>> copyAndReturnLinkIds(
   const GroupNode& sourceGroupNode, const std::vector<GroupNode*>& targetGroupNodes);
 

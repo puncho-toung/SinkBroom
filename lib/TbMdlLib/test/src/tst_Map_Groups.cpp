@@ -669,6 +669,43 @@ TEST_CASE("Map_Groups")
     CHECK_THAT(*linkedGroupNode, MatchesNode(*groupNode));
   }
 
+  SECTION("linked groups keep their prefab properties")
+  {
+    auto group = Group{"prefab"};
+    group.setPrefabPath("props/crate.map");
+    group.setPrefabHash("af63dc4c8601ec8c");
+
+    auto* groupNode = new GroupNode{std::move(group)};
+    auto* brushNode = createBrushNode(map);
+    groupNode->addChild(brushNode);
+    addNodes(map, {{&parentForNodes(map), {groupNode}}});
+
+    selectNodes(map, {groupNode});
+    auto* linkedGroupNode = createLinkedDuplicate(map);
+    REQUIRE(linkedGroupNode != nullptr);
+    REQUIRE(linkedGroupNode->linkId() == groupNode->linkId());
+
+    // the linked duplicate is a clone, so it carries the prefab properties
+    CHECK(linkedGroupNode->group().prefabPath() == "props/crate.map");
+    CHECK(linkedGroupNode->group().prefabHash() == "af63dc4c8601ec8c");
+
+    // propagating a change replaces the children of the other member, not its group
+    deselectAll(map);
+    openGroup(map, *groupNode);
+    selectNodes(map, {brushNode});
+    REQUIRE(translateSelection(map, {0, 0, 16}));
+    closeGroup(map);
+
+    REQUIRE(linkedGroupNode->childCount() == 1u);
+    // the duplicate sits on the original, so the propagated brush has the same bounds
+    CHECK(
+      linkedGroupNode->children().front()->logicalBounds() == brushNode->logicalBounds());
+    CHECK(linkedGroupNode->group().prefabPath() == "props/crate.map");
+    CHECK(linkedGroupNode->group().prefabHash() == "af63dc4c8601ec8c");
+    CHECK(groupNode->group().prefabPath() == "props/crate.map");
+    CHECK(groupNode->group().prefabHash() == "af63dc4c8601ec8c");
+  }
+
   SECTION("linked groups with unique entity names")
   {
     auto namingFixture = MapFixture{};
