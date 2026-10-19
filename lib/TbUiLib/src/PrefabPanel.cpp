@@ -327,6 +327,11 @@ void PrefabPanel::prefabWasSaved(const std::filesystem::path& path)
   watchSavedFile(path);
 }
 
+void PrefabPanel::setPlacementEnabled(const bool placementEnabled)
+{
+  m_view->setPlacementEnabled(placementEnabled);
+}
+
 void PrefabPanel::scanOnce()
 {
   if (!m_scanStarted)

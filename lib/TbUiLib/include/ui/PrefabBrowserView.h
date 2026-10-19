@@ -200,6 +200,9 @@ private:
   mutable std::optional<const mdl::PrefabEntry*> m_selectedEntry;
   mutable const mdl::PrefabLibrary* m_selectedLibrary = nullptr;
 
+  // whether a drag of a cell carries the prefab; see setPlacementEnabled
+  bool m_placementEnabled = true;
+
   NotifierConnection m_notifierConnection;
 
 public:
@@ -208,6 +211,12 @@ public:
   ~PrefabBrowserView() override;
 
   void setFilter(PrefabFilter filter);
+
+  /**
+   * DD-28: in a prefab editor a cell cannot be dragged into the map, since a prefab
+   * holds no placements of prefabs (RQ21); its tooltip says so. On by default.
+   */
+  void setPlacementEnabled(bool placementEnabled);
 
   /**
    * Call when the library's entries changed: the cells point into them. Drops the cells
@@ -245,6 +254,7 @@ public:
     std::string title;
     // what a drag of the cell carries
     QString dndData;
+    QString tooltip;
     // identifies the cell's preview: equal while the preview is kept
     std::size_t previewId;
   };

@@ -594,6 +594,11 @@ void PrefabBrowserView::setFilter(PrefabFilter filter)
   update();
 }
 
+void PrefabBrowserView::setPlacementEnabled(const bool placementEnabled)
+{
+  m_placementEnabled = placementEnabled;
+}
+
 void PrefabBrowserView::libraryDidChange()
 {
   // the cells point into the entries, which may have been replaced; a preview is kept
@@ -678,8 +683,8 @@ std::vector<PrefabBrowserView::CellSummary> PrefabBrowserView::cellSummaries()
   auto result = std::vector<CellSummary>{};
   scrollToCell([&](const Cell& cell) {
     const auto& cellData = this->cellData(cell);
-    result.push_back(
-      CellSummary{cellData.entry, cell.title(), dndData(cell), cellData.preview->id});
+    result.push_back(CellSummary{
+      cellData.entry, cell.title(), dndData(cell), tooltip(cell), cellData.preview->id});
     return false;
   });
   return result;
@@ -715,11 +720,16 @@ void PrefabBrowserView::doReloadLayout(Layout& layout)
 
 bool PrefabBrowserView::dndEnabled()
 {
-  return true;
+  return m_placementEnabled;
 }
 
 QString PrefabBrowserView::dndData(const Cell& cell)
 {
+  if (!m_placementEnabled)
+  {
+    return QString{};
+  }
+
   // C4: the payload names the file; the drop tool takes the body from the library
   const auto& library = m_document.map().prefabLibrary();
   return QString::fromStdString(library.payloadFor(*cellData(cell).entry));
@@ -1194,6 +1204,10 @@ QString PrefabBrowserView::tooltip(const Cell& cell)
   if (entry.error)
   {
     ss << "\n" << tr("Error: ") << QString::fromStdString(*entry.error);
+  }
+  if (!m_placementEnabled)
+  {
+    ss << "\n" << tr("Placement is off in a prefab editor");
   }
   return tooltip;
 }

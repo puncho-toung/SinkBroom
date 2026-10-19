@@ -637,6 +637,15 @@ void MapWindow::createGui()
     m_sidebarManager->registerPanel(std::move(panel));
   }
 
+  // DD-28: a prefab holds no placements of prefabs (RQ21)
+  if (m_prefabEditor)
+  {
+    auto* prefabPanel =
+      qobject_cast<PrefabPanel*>(m_sidebarManager->panel(PrefabPanel::PanelId));
+    contract_assert(prefabPanel != nullptr);
+    prefabPanel->setPlacementEnabled(false);
+  }
+
   // the constructor makes the console the document's logger
   m_console = qobject_cast<Console*>(m_sidebarManager->panel(Console::PanelId));
   contract_assert(m_console != nullptr);

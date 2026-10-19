@@ -27,6 +27,7 @@
 #include <QSize>
 #include <QStringList>
 #include <QTest>
+#include <QToolButton>
 #include <QVariant>
 
 #include "base/Preference.h"
@@ -38,6 +39,7 @@
 #include "mdl/Map.h"
 #include "mdl/MapFormat.h"
 #include "mdl/Map_Nodes.h"
+#include "mdl/Map_Selection.h"
 #include "mdl/PrefabFile.h"
 #include "mdl/PrefabLibrary.h"
 #include "mdl/WorldNode.h"
@@ -46,6 +48,7 @@
 #include "ui/MapDocument.h"
 #include "ui/MapWindow.h"
 #include "ui/MapWindowManager.h"
+#include "ui/PrefabBrowserView.h"
 #include "ui/PrefabPanel.h"
 #include "ui/QPathUtils.h"
 
@@ -213,6 +216,46 @@ TEST_CASE("MapWindowManager")
     const auto& worldEntity = editor->document().map().worldNode().entity();
     REQUIRE(worldEntity.property(mdl::PrefabPropertyKeys::Name) != nullptr);
     CHECK(*worldEntity.property(mdl::PrefabPropertyKeys::Name) == "lamp");
+  }
+
+  SECTION("a prefab editor's prefab panel cannot place prefabs (DD-28)")
+  {
+    REQUIRE(manager.openPrefabEditor(*host, prefabPath) | kdl::is_success());
+    auto* editor = manager.topMapWindow();
+    REQUIRE(editor->isPrefabEditor());
+
+    const auto cellsOf = [](MapWindow& mapWindow) {
+      auto* panel = mapWindow.findChild<PrefabPanel*>();
+      REQUIRE(panel != nullptr);
+      const auto& library = mapWindow.document().map().prefabLibrary();
+      panel->scanOnce();
+      REQUIRE(QTest::qWaitFor([&] { return !library.scanning(); }));
+      auto* view = panel->findChild<PrefabBrowserView*>();
+      REQUIRE(view != nullptr);
+      return view->cellSummaries();
+    };
+
+    const auto placementOff = QString{"Placement is off in a prefab editor"};
+
+    const auto hostCells = cellsOf(*host);
+    REQUIRE(hostCells.size() == 1u);
+    CHECK(hostCells[0].dndData == "prefab:user/lights/lamp.map");
+    CHECK(!hostCells[0].tooltip.contains(placementOff));
+
+    const auto editorCells = cellsOf(*editor);
+    REQUIRE(editorCells.size() == 1u);
+    CHECK(editorCells[0].dndData.isEmpty());
+    CHECK(editorCells[0].tooltip.contains(placementOff));
+
+    // saving from the editor stays
+    auto* saveSelectionAction =
+      editor->findAction("Menu/Edit/Save Selection as Prefab...");
+    REQUIRE(saveSelectionAction != nullptr);
+    mdl::selectAllNodes(editor->document().map());
+    CHECK(QTest::qWaitFor([&] { return saveSelectionAction->isEnabled(); }));
+    auto* saveButton = editor->findChild<QToolButton*>("PrefabPanel_saveButton");
+    REQUIRE(saveButton != nullptr);
+    CHECK(saveButton->isEnabled());
   }
 
   SECTION("opening a prefab again brings its editor to the front")

@@ -167,6 +167,13 @@ public:
   void prefabWasSaved(const std::filesystem::path& path);
 
   /**
+   * DD-28: a prefab editor's panel cannot place prefabs, since a prefab holds no
+   * placements of prefabs (RQ21): a drag of a cell carries nothing. Saving the selection
+   * as a prefab stays. On by default.
+   */
+  void setPlacementEnabled(bool placementEnabled);
+
+  /**
    * Starts the first scan of the library unless it has started; for a caller that needs
    * the entries before the panel was shown.
    */
