@@ -245,6 +245,19 @@ TEST_CASE("PrefabFile")
     CHECK(derivePrefabKind({lightNode, monsterNode}, false) == PrefabKind::Assembly);
     CHECK(derivePrefabKind({groupNode}, false) == PrefabKind::Assembly);
     CHECK(derivePrefabKind({lightNode}, true) == PrefabKind::Assembly);
+
+    // normalizePrefabSelection: brushes stand for their entity, each node once, nodes
+    // below a selected node dropped, the order kept
+    CHECK(
+      normalizePrefabSelection({brushNode1, lightNode, brushNode2})
+      == std::vector<Node*>{brushEntityNode, lightNode});
+    CHECK(
+      normalizePrefabSelection({groupedNode, monsterNode, groupNode})
+      == std::vector<Node*>{monsterNode, groupNode});
+    // a normalised selection normalises to itself
+    CHECK(
+      normalizePrefabSelection({brushEntityNode, lightNode})
+      == std::vector<Node*>{brushEntityNode, lightNode});
   }
 
   SECTION("findExternalLinks")

@@ -47,7 +47,6 @@
 
 #include "kd/overload.h"
 #include "kd/path_utils.h"
-#include "kd/ranges/contains.h"
 #include "kd/ranges/to.h"
 #include "kd/string_compare.h"
 #include "kd/string_format.h"
@@ -79,26 +78,14 @@ const auto BindKey = std::string{"bind"};
 const auto DefaultNameKey = std::string{"name"};
 
 /**
- * Brushes and patches of a brush entity stand for that entity; nodes below another
- * selected node are dropped.
+ * The kind of an already normalised selection; see derivePrefabKind.
  */
-std::vector<Node*> normalizeSelection(const std::vector<Node*>& selectedNodes)
+PrefabKind prefabKindOf(const std::vector<Node*>& nodes, const bool forceAssembly)
 {
-  auto nodes = std::vector<Node*>{};
-  for (auto* node : selectedNodes)
-  {
-    auto* entityNode = dynamic_cast<EntityNode*>(node->parent());
-    auto* nodeToAdd = entityNode ? static_cast<Node*>(entityNode) : node;
-    if (!kdl::ranges::contains(nodes, nodeToAdd))
-    {
-      nodes.push_back(nodeToAdd);
-    }
-  }
-
-  return nodes | std::views::filter([&](const auto* node) {
-           return !node->isDescendantOf(nodes);
-         })
-         | kdl::ranges::to<std::vector>();
+  return !forceAssembly && nodes.size() == 1
+             && dynamic_cast<const EntityNode*>(nodes.front())
+           ? PrefabKind::Entity
+           : PrefabKind::Assembly;
 }
 
 std::vector<EntityNode*> collectEntityNodes(const std::vector<Node*>& nodes)
@@ -153,21 +140,25 @@ std::unordered_set<std::string> entityNames(const std::vector<EntityNode*>& enti
   return result;
 }
 
-bool isLinkKey(const Entity& entity, const std::string& key)
+bool isLinkKey(
+  const std::vector<const PropertyDefinition*>& linkSourceDefinitions,
+  const std::string& key)
 {
   return key == BindKey || isNumberedProperty(EntityPropertyKeys::Target, key)
-         || std::ranges::any_of(
-           getLinkSourcePropertyDefinitions(entity.definition()),
-           [&](const auto* definition) {
-             return isNumberedProperty(definition->key, key);
-           });
+         || std::ranges::any_of(linkSourceDefinitions, [&](const auto* definition) {
+              return isNumberedProperty(definition->key, key);
+            });
 }
 
 std::vector<EntityProperty> externalLinkProperties(
   const Entity& entity, const std::unordered_set<std::string>& namesInSelection)
 {
+  // once per entity, not once per property
+  const auto linkSourceDefinitions =
+    getLinkSourcePropertyDefinitions(entity.definition());
   return entity.properties() | std::views::filter([&](const auto& property) {
-           return !property.value().empty() && isLinkKey(entity, property.key())
+           return !property.value().empty()
+                  && isLinkKey(linkSourceDefinitions, property.key())
                   && !namesInSelection.contains(kdl::str_to_lower(property.value()));
          })
          | kdl::ranges::to<std::vector>();
@@ -488,53 +479,68 @@ Result<std::filesystem::path> writePrefab(
   const SavePrefabOptions& options,
   const std::filesystem::path& path)
 {
-  const auto kind = derivePrefabKind(nodes, options.forceAssembly);
+  // the selection is normalised, so its kind is computed without normalising it again
+  const auto kind = prefabKindOf(nodes, options.forceAssembly);
   const auto namesInSelection = entityNames(collectEntityNodes(nodes));
   const auto& worldBounds = map.worldBounds();
   const auto& entityPropertyConfig = map.worldNode().entityPropertyConfig();
-
-  // the clones keep their entity definitions, which the link and default rules need
-  auto body = nodes | std::views::transform([&](const auto* node) {
-                return node->cloneRecursively(worldBounds);
-              })
-              | kdl::ranges::to<std::vector>();
   const auto className =
     kind == PrefabKind::Entity
-      ? static_cast<const EntityNode*>(body.front())->entity().classname()
+      ? static_cast<const EntityNode*>(nodes.front())->entity().classname()
       : std::string{};
 
   auto worldNode = std::make_unique<WorldNode>(
     entityPropertyConfig,
     Entity{metadataProperties(map, kind, className, options)},
     map.worldNode().mapFormat());
+  // nothing queries the temporary world spatially
+  worldNode->disableNodeTreeUpdates();
+  auto& layerNode = *worldNode->defaultLayer();
 
-  // the world owns the clones from here on
+  // the clones keep their entity definitions, which the link and default rules need;
+  // each clone is owned by a unique_ptr until the world or the new group takes it
+  const auto cloneNode = [&](const Node& node) {
+    return std::unique_ptr<Node>{node.cloneRecursively(worldBounds)};
+  };
+
+  // the nodes that are translated to the reference point: the top-level clones
+  auto body = std::vector<Node*>{};
   auto* topNode = static_cast<Node*>(nullptr);
   if (
-    auto* selectedGroupNode = kind == PrefabKind::Assembly && body.size() == 1u
-                                ? dynamic_cast<GroupNode*>(body.front())
-                                : nullptr)
+    const auto* selectedGroupNode = kind == PrefabKind::Assembly && nodes.size() == 1u
+                                      ? dynamic_cast<const GroupNode*>(nodes.front())
+                                      : nullptr)
   {
     // one selected group is the prefab's group, so that a placement is not nested one
     // level deeper than what was saved; it gets a fresh link ID below
-    auto group = selectedGroupNode->group();
+    auto clone = cloneNode(*selectedGroupNode);
+    auto& groupNode = static_cast<GroupNode&>(*clone);
+    auto group = groupNode.group();
     group.setName(options.name);
-    selectedGroupNode->setGroup(std::move(group));
-    worldNode->defaultLayer()->addChild(selectedGroupNode);
-    topNode = selectedGroupNode;
+    groupNode.setGroup(std::move(group));
+    topNode = clone.get();
+    body.push_back(topNode);
+    layerNode.addChild(clone.release());
   }
   else if (kind == PrefabKind::Assembly)
   {
     // worldspawn-level brushes of the selection end up in the group
-    auto* groupNode = new GroupNode{Group{options.name}};
-    groupNode->addChildren(body);
-    worldNode->defaultLayer()->addChild(groupNode);
-    topNode = groupNode;
+    auto groupNode = std::make_unique<GroupNode>(Group{options.name});
+    for (const auto* node : nodes)
+    {
+      auto clone = cloneNode(*node);
+      body.push_back(clone.get());
+      groupNode->addChild(clone.release());
+    }
+    topNode = groupNode.get();
+    layerNode.addChild(groupNode.release());
   }
   else
   {
-    worldNode->defaultLayer()->addChildren(body);
-    topNode = body.front();
+    auto clone = cloneNode(*nodes.front());
+    topNode = clone.get();
+    body.push_back(topNode);
+    layerNode.addChild(clone.release());
   }
 
   for (auto* entityNode : collectEntityNodes(body))
@@ -571,19 +577,46 @@ Result<std::filesystem::path> writePrefab(
 
 } // namespace
 
+std::vector<Node*> normalizePrefabSelection(const std::vector<Node*>& selectedNodes)
+{
+  auto nodes = std::vector<Node*>{};
+  auto nodeSet = std::unordered_set<const Node*>{};
+  for (auto* node : selectedNodes)
+  {
+    auto* entityNode = dynamic_cast<EntityNode*>(node->parent());
+    auto* nodeToAdd = entityNode ? static_cast<Node*>(entityNode) : node;
+    if (nodeSet.insert(nodeToAdd).second)
+    {
+      nodes.push_back(nodeToAdd);
+    }
+  }
+
+  const auto hasSelectedAncestor = [&](const Node* node) {
+    for (const auto* ancestor = node->parent(); ancestor; ancestor = ancestor->parent())
+    {
+      if (nodeSet.contains(ancestor))
+      {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  return nodes | std::views::filter([&](const auto* node) {
+           return !hasSelectedAncestor(node);
+         })
+         | kdl::ranges::to<std::vector>();
+}
+
 PrefabKind derivePrefabKind(
   const std::vector<Node*>& selectedNodes, const bool forceAssembly)
 {
-  const auto nodes = normalizeSelection(selectedNodes);
-  return !forceAssembly && nodes.size() == 1
-             && dynamic_cast<const EntityNode*>(nodes.front())
-           ? PrefabKind::Entity
-           : PrefabKind::Assembly;
+  return prefabKindOf(normalizePrefabSelection(selectedNodes), forceAssembly);
 }
 
 std::vector<ExternalLink> findExternalLinks(const std::vector<Node*>& selectedNodes)
 {
-  const auto entityNodes = collectEntityNodes(normalizeSelection(selectedNodes));
+  const auto entityNodes = collectEntityNodes(normalizePrefabSelection(selectedNodes));
   const auto namesInSelection = entityNames(entityNodes);
 
   auto result = std::vector<ExternalLink>{};
@@ -631,7 +664,7 @@ Result<std::filesystem::path> savePrefab(
   const std::vector<Node*>& selectedNodes,
   const SavePrefabOptions& options)
 {
-  const auto nodes = normalizeSelection(selectedNodes);
+  const auto nodes = normalizePrefabSelection(selectedNodes);
   if (nodes.empty())
   {
     return Error{"Cannot save an empty selection as a prefab"};

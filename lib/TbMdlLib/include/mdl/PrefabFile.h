@@ -99,6 +99,15 @@ struct SavePrefabOptions
 };
 
 /**
+ * The nodes that a selection saves as a prefab: brushes and patches of a brush entity
+ * stand for that entity, and nodes below another selected node are dropped. Linear in
+ * the selection size times its depth. The functions below normalise their argument
+ * themselves; a caller that asks several of them about one selection can normalise once
+ * and pass the result, which normalises to itself.
+ */
+std::vector<Node*> normalizePrefabSelection(const std::vector<Node*>& selectedNodes);
+
+/**
  * Exactly one entity (a point entity, or a brush entity with its brushes and patches)
  * and nothing else is an entity snapshot unless forceAssembly is set; anything else is an
  * assembly.
