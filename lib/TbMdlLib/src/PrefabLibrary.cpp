@@ -631,17 +631,37 @@ std::filesystem::path PrefabLibrary::writeRootFor(const PrefabRoot root) const
   case PrefabRoot::User:
     return m_userRoot;
   case PrefabRoot::Mod: {
-    const auto& gamePath = m_map.gamePath();
-    if (gamePath.empty())
-    {
-      return {};
-    }
-    // the last enabled mod is the one that wins in the game file system
-    const auto mods = enabledMods(m_map);
-    return gamePath / (mods.empty() ? DefaultModName : mods.back()) / "prefabs";
+    // DD-32: a set Prefab Path replaces the mod root
+    const auto folder = modFolder();
+    return m_userRoot.empty() && !folder.empty() ? folder / "maps" / "prefabs"
+                                                 : std::filesystem::path{};
   }
     switchDefault();
   }
+}
+
+std::optional<PrefabRoot> PrefabLibrary::writeRoot() const
+{
+  for (const auto root : {PrefabRoot::User, PrefabRoot::Mod})
+  {
+    if (!writeRootFor(root).empty())
+    {
+      return root;
+    }
+  }
+  return std::nullopt;
+}
+
+std::filesystem::path PrefabLibrary::modFolder() const
+{
+  const auto& gamePath = m_map.gamePath();
+  if (gamePath.empty())
+  {
+    return {};
+  }
+  // the last enabled mod is the one that wins in the game file system
+  const auto mods = enabledMods(m_map);
+  return gamePath / (mods.empty() ? DefaultModName : mods.back());
 }
 
 void PrefabLibrary::rescan()

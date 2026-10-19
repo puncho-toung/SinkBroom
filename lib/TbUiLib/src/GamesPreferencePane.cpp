@@ -230,7 +230,7 @@ void GamePreferencePane::createGui()
   m_prefabPathText = new QLineEdit{};
   m_prefabPathText->setPlaceholderText(tr("Click on the button to change..."));
   m_prefabPathText->setToolTip(
-    tr("Your own prefab folder, searched before the prefabs folder of the mod"));
+    tr("Your own prefab folder; when set, it replaces the mod's maps/prefabs folder"));
   connect(m_prefabPathText, &QLineEdit::editingFinished, this, [this]() {
     updatePrefabPath(m_prefabPathText->text());
   });

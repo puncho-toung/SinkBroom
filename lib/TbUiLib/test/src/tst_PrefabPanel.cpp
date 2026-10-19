@@ -23,6 +23,7 @@
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QTest>
@@ -430,6 +431,53 @@ TEST_CASE("SavePrefabDialog")
     CHECK(messageLabel->text().isEmpty());
   }
 
+  SECTION("the folder is the library's root, without a choice")
+  {
+    // DD-32: the Prefab Path replaces the mod root, so there is one place to save to
+    selectOnly(map, {addEntity(map, {{"classname", "light"}, {"name", "lamp"}})});
+
+    auto dialog = SavePrefabDialog{document};
+    auto* locationLabel = dialog.findChild<QLabel*>("SavePrefabDialog_locationLabel");
+    REQUIRE(locationLabel != nullptr);
+    CHECK(locationLabel->text() == pathAsQString(env.dir()));
+    // the category is the only combo box
+    CHECK(dialog.findChildren<QComboBox*>().size() == 1);
+  }
+
+  SECTION("the description is limited and written on one line")
+  {
+    // DD-33
+    auto& library = map.prefabLibrary();
+    selectOnly(map, {addEntity(map, {{"classname", "light"}, {"name", "lamp"}})});
+
+    auto dialog = SavePrefabDialog{document};
+    auto* descriptionEdit =
+      dialog.findChild<QPlainTextEdit*>("SavePrefabDialog_descriptionEdit");
+    auto* countLabel =
+      dialog.findChild<QLabel*>("SavePrefabDialog_descriptionCountLabel");
+    REQUIRE(descriptionEdit != nullptr);
+    REQUIRE(countLabel != nullptr);
+    CHECK(countLabel->text() == "0 / 300");
+
+    descriptionEdit->setPlainText(QString(350, 'x'));
+    CHECK(descriptionEdit->toPlainText() == QString(300, 'x'));
+    CHECK(countLabel->text() == "300 / 300");
+
+    descriptionEdit->setPlainText("A lamp\nfor the  hall ");
+    CHECK(countLabel->text() == "21 / 300");
+    dialog.accept();
+    REQUIRE(dialog.savedPath());
+
+    library.updateEntry(*dialog.savedPath());
+    REQUIRE(QTest::qWaitFor([&] {
+      library.processPendingResults();
+      return !library.scanning();
+    }));
+    const auto* entry = library.find(mdl::PrefabRoot::User, "lamp.map");
+    REQUIRE(entry != nullptr);
+    CHECK(entry->metadata.description == "A lamp for the hall");
+  }
+
   SECTION("forEntry updates the prefab's file")
   {
     auto* lampNode = addEntity(map, {{"classname", "light"}, {"name", "lamp"}});
@@ -441,6 +489,7 @@ TEST_CASE("SavePrefabDialog")
           .name = "Lamp",
           .category = "lights",
           .tags = {"old"},
+          .description = "An old lamp",
           .root = mdl::PrefabRoot::User})
       | kdl::is_success());
 
@@ -474,6 +523,9 @@ TEST_CASE("SavePrefabDialog")
     CHECK(nameEdit->text() == "Lamp");
     CHECK(categoryChoice->currentText() == "lights");
     CHECK(tagsEdit->text() == "old");
+    CHECK(
+      dialog.findChild<QPlainTextEdit*>("SavePrefabDialog_descriptionEdit")->toPlainText()
+      == "An old lamp");
     CHECK(saveButton->text() == "Update");
     CHECK(saveButton->isEnabled());
     CHECK(messageLabel->text().isEmpty());
@@ -552,7 +604,11 @@ TEST_CASE("PrefabPanel")
         map,
         {entityNode},
         mdl::SavePrefabOptions{
-          .name = "lamp", .category = "lights", .root = mdl::PrefabRoot::User})
+          .name = "lamp",
+          .category = "lights",
+          .description = "A small lamp that hangs from a chain over a doorway, lit "
+                         "deep red",
+          .root = mdl::PrefabRoot::User})
       | kdl::is_success());
 
     // the panel is hidden by default and scans only once it is shown
@@ -588,6 +644,9 @@ TEST_CASE("PrefabPanel")
     CHECK(cells[0].entry == library.entries()[0].get());
     CHECK(cells[0].title == "lamp");
     CHECK(cells[0].dndData == "prefab:user/lights/lamp.map");
+    // DD-33: the description follows the title, broken into lines of at most 60
+    CHECK(cells[0].tooltip.startsWith(
+      "lamp\nA small lamp that hangs from a chain over a doorway, lit\ndeep red\n"));
 
     auto* saveButton = panel.findChild<QToolButton*>("PrefabPanel_saveButton");
     REQUIRE(saveButton != nullptr);

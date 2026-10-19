@@ -26,6 +26,7 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace tb::mdl
@@ -51,6 +52,7 @@ inline const std::string Class = "_tb_prefab_class";
 inline const std::string Tags = "_tb_prefab_tags";
 inline const std::string Saved = "_tb_prefab_saved";
 inline const std::string Source = "_tb_prefab_source";
+inline const std::string Description = "_tb_prefab_description";
 } // namespace PrefabPropertyKeys
 
 namespace PrefabPropertyValues
@@ -86,7 +88,12 @@ struct PrefabMetadata
   std::string saved;
   // map name it was saved from
   std::string source;
+  // one line, at most PrefabDescriptionMaxLength characters as the dialog writes it
+  std::string description;
 };
+
+// characters (code points) of a prefab description the save dialog accepts (DD-33)
+inline constexpr auto PrefabDescriptionMaxLength = 300;
 
 struct SavePrefabOptions
 {
@@ -94,6 +101,8 @@ struct SavePrefabOptions
   // relative subfolder, may be empty
   std::filesystem::path category;
   std::vector<std::string> tags;
+  // folded by foldPrefabDescription when written; not written when that is empty
+  std::string description;
   PrefabRoot root = PrefabRoot::User;
   // "Save as assembly anyway"
   bool forceAssembly = false;
@@ -111,6 +120,12 @@ struct SavePrefabOptions
  * and pass the result, which normalises to itself.
  */
 std::vector<Node*> normalizePrefabSelection(const std::vector<Node*>& selectedNodes);
+
+/**
+ * A description as a prefab file holds it (DD-33): one line (line breaks, tabs and runs
+ * of spaces become one space), trimmed, cut to PrefabDescriptionMaxLength code points.
+ */
+std::string foldPrefabDescription(std::string_view description);
 
 /**
  * Exactly one entity (a point entity, or a brush entity with its brushes and patches)

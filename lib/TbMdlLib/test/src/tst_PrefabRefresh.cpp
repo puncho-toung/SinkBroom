@@ -117,8 +117,8 @@ BrushNode* createBrushNodeAt(const Map& map, const vm::vec3d& delta)
 }
 
 /**
- * Writes base/prefabs/props/lamp.map from the given nodes, which are added to the map for
- * the save and taken out of it again.
+ * Writes base/maps/prefabs/props/lamp.map from the given nodes, which are added to the
+ * map for the save and taken out of it again.
  */
 void saveLampFrom(Map& map, const std::vector<Node*>& nodes)
 {
@@ -133,10 +133,10 @@ void saveLampFrom(Map& map, const std::vector<Node*>& nodes)
 }
 
 /**
- * Writes base/prefabs/props/lamp.map from a brush at the given offset and a light named
- * "lamp" at 0 0 64, in this order, with an info_null between them if withMarker is set.
- * In the file, the group's brushes come before its entities whatever the order of the
- * selection.
+ * Writes base/maps/prefabs/props/lamp.map from a brush at the given offset and a light
+ * named "lamp" at 0 0 64, in this order, with an info_null between them if withMarker is
+ * set. In the file, the group's brushes come before its entities whatever the order of
+ * the selection.
  */
 void saveLamp(Map& map, const vm::vec3d& brushOffset, const bool withMarker = false)
 {
@@ -167,8 +167,8 @@ GroupNode* addInnerGroup(Map& map, const vm::vec3d& brushOffset)
 }
 
 /**
- * Writes base/prefabs/props/lamp.map from two inner groups, the second 128 units along
- * X from the first, which are linked if linked is set.
+ * Writes base/maps/prefabs/props/lamp.map from two inner groups, the second 128 units
+ * along X from the first, which are linked if linked is set.
  */
 void saveInnerPair(Map& map, const bool linked)
 {
@@ -307,8 +307,8 @@ std::optional<std::string> propertyOf(
 TEST_CASE("PrefabRefresh")
 {
   auto env = fs::TestEnvironment{[](auto& e) {
-    e.createDirectory("base/prefabs/lights");
-    e.createDirectory("base/prefabs/props");
+    e.createDirectory("base/maps/prefabs/lights");
+    e.createDirectory("base/maps/prefabs/props");
   }};
 
   auto fixture = MapFixture{};
@@ -545,7 +545,7 @@ TEST_CASE("PrefabRefresh")
 
     SECTION("A missing file is an error and the map is untouched")
     {
-      REQUIRE(env.remove("base/prefabs/props/lamp.map"));
+      REQUIRE(env.remove("base/maps/prefabs/props/lamp.map"));
       rescan(library);
 
       const auto changed = library.changedPlacements();
@@ -925,7 +925,7 @@ TEST_CASE("PrefabRefresh")
 
   SECTION("applyPrefabToSelection")
   {
-    env.createFile("base/prefabs/lights/red.map", RedLight);
+    env.createFile("base/maps/prefabs/lights/red.map", RedLight);
     rescan(library);
     const auto* entry = library.find(PrefabRoot::Mod, "lights/red.map");
     REQUIRE(entry);

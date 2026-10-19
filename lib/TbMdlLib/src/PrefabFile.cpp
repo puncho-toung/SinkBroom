@@ -380,7 +380,7 @@ std::string localTimestamp()
  */
 std::string sourceName(const Map& map)
 {
-  const auto modRoot = map.prefabLibrary().writeRootFor(PrefabRoot::Mod).parent_path();
+  const auto modRoot = map.prefabLibrary().modFolder();
   if (!modRoot.empty() && map.persistent())
   {
     const auto relativePath = map.path().lexically_relative(modRoot);
@@ -417,6 +417,10 @@ std::vector<EntityProperty> metadataProperties(
   if (!tags.empty())
   {
     properties.emplace_back(PrefabPropertyKeys::Tags, kdl::str_join(tags, ";"));
+  }
+  if (auto description = foldPrefabDescription(options.description); !description.empty())
+  {
+    properties.emplace_back(PrefabPropertyKeys::Description, std::move(description));
   }
   properties.emplace_back(PrefabPropertyKeys::Saved, localTimestamp());
   properties.emplace_back(PrefabPropertyKeys::Source, sourceName(map));
@@ -613,6 +617,41 @@ std::vector<Node*> normalizePrefabSelection(const std::vector<Node*>& selectedNo
          | kdl::ranges::to<std::vector>();
 }
 
+std::string foldPrefabDescription(const std::string_view description)
+{
+  auto result = std::string{};
+  auto codePoints = 0;
+  auto pendingSpace = false;
+  for (const auto c : description)
+  {
+    const auto byte = static_cast<unsigned char>(c);
+    if (byte <= 0x20)
+    {
+      pendingSpace = !result.empty();
+      continue;
+    }
+
+    // a UTF-8 lead byte or an ASCII character starts a code point
+    const auto startsCodePoint = (byte & 0xC0) != 0x80;
+    if (startsCodePoint)
+    {
+      if (codePoints + (pendingSpace ? 2 : 1) > PrefabDescriptionMaxLength)
+      {
+        break;
+      }
+      if (pendingSpace)
+      {
+        result.push_back(' ');
+        ++codePoints;
+        pendingSpace = false;
+      }
+      ++codePoints;
+    }
+    result.push_back(c);
+  }
+  return result;
+}
+
 PrefabKind derivePrefabKind(
   const std::vector<Node*>& selectedNodes, const bool forceAssembly)
 {
@@ -656,9 +695,11 @@ Result<std::filesystem::path> prefabFilePath(
   if (rootPath.empty())
   {
     return Error{
-      options.root == PrefabRoot::User
-        ? "Cannot save a prefab to the user library: the Prefab Path is not set"
-        : "Cannot save a prefab to the mod library: the game path is not set"};
+      library.writeRoot()
+        ? (options.root == PrefabRoot::User
+             ? "Cannot save a prefab to the user library: the Prefab Path is not set"
+             : "Cannot save a prefab to the mod library: the Prefab Path replaces it")
+        : "Cannot save a prefab: set a game path or a Prefab Path first"};
   }
 
   return rootPath / *category / (fileName + ".map");
@@ -727,6 +768,7 @@ Result<PrefabMetadata> readPrefabMetadata(const WorldNode& world)
     | kdl::ranges::to<std::vector>();
   metadata.saved = value(PrefabPropertyKeys::Saved);
   metadata.source = value(PrefabPropertyKeys::Source);
+  metadata.description = value(PrefabPropertyKeys::Description);
   return metadata;
 }
 

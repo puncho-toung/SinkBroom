@@ -66,13 +66,13 @@ namespace
 
 using namespace std::chrono_literals;
 
-const auto UserTorch = std::string{R"PREFAB(// Game: Doom 3 BFG
+const auto Torch = std::string{R"PREFAB(// Game: Doom 3 BFG
 // Format: Doom3 (Valve)
 // entity 0
 {
 "classname" "worldspawn"
 "_tb_prefab_kind" "entity"
-"_tb_prefab_name" "Torch (user)"
+"_tb_prefab_name" "Torch (one)"
 "_tb_prefab_class" "light"
 "_tb_prefab_tags" "light;torch"
 }
@@ -84,13 +84,13 @@ const auto UserTorch = std::string{R"PREFAB(// Game: Doom 3 BFG
 }
 )PREFAB"};
 
-const auto ModTorch = std::string{R"PREFAB(// Game: Doom 3 BFG
+const auto UserTorch = std::string{R"PREFAB(// Game: Doom 3 BFG
 // Format: Doom3 (Valve)
 // entity 0
 {
 "classname" "worldspawn"
 "_tb_prefab_kind" "entity"
-"_tb_prefab_name" "Torch (mod)"
+"_tb_prefab_name" "Torch (user)"
 "_tb_prefab_class" "light"
 }
 // entity 1
@@ -168,12 +168,12 @@ TEST_CASE("PrefabLibrary")
 {
   auto env = fs::TestEnvironment{[](auto& e) {
     e.createDirectory("user/lights");
-    e.createDirectory("base/prefabs/lights");
+    e.createDirectory("base/maps/prefabs/lights");
     e.createFile("user/lights/torch.map", UserTorch);
-    e.createFile("base/prefabs/lights/torch.map", ModTorch);
-    e.createFile("base/prefabs/broken.map", Broken);
-    e.createFile("base/prefabs/notaprefab.map", NotAPrefab);
-    e.createFile("base/prefabs/readme.txt", "not a map");
+    e.createFile("base/maps/prefabs/lights/torch.map", Torch);
+    e.createFile("base/maps/prefabs/broken.map", Broken);
+    e.createFile("base/maps/prefabs/notaprefab.map", NotAPrefab);
+    e.createFile("base/maps/prefabs/readme.txt", "not a map");
   }};
 
   auto fixture = MapFixture{};
@@ -204,27 +204,57 @@ TEST_CASE("PrefabLibrary")
       {lightNode, brushNode},
       SavePrefabOptions{.name = "crate", .category = "props", .root = PrefabRoot::Mod})
     | kdl::is_success());
-  env.createFile("base/prefabs/props/crate.png", "not really a png");
+  env.createFile("base/maps/prefabs/props/crate.png", "not really a png");
 
   SECTION("Roots")
   {
     CHECK(
       library.roots()
-      == std::vector<std::filesystem::path>{env.dir() / "base" / "prefabs"});
+      == std::vector<std::filesystem::path>{env.dir() / "base" / "maps" / "prefabs"});
     CHECK(library.writeRootFor(PrefabRoot::User).empty());
-    CHECK(library.writeRootFor(PrefabRoot::Mod) == env.dir() / "base" / "prefabs");
-
-    library.setUserRoot(env.dir() / "user");
     CHECK(
-      library.roots()
-      == std::vector<std::filesystem::path>{
-        env.dir() / "user", env.dir() / "base" / "prefabs"});
+      library.writeRootFor(PrefabRoot::Mod) == env.dir() / "base" / "maps" / "prefabs");
+
+    CHECK(library.writeRoot() == PrefabRoot::Mod);
+    CHECK(library.modFolder() == env.dir() / "base");
+
+    // DD-32: a Prefab Path replaces the mod root
+    library.setUserRoot(env.dir() / "user");
+    CHECK(library.roots() == std::vector<std::filesystem::path>{env.dir() / "user"});
+    CHECK(library.writeRootFor(PrefabRoot::User) == env.dir() / "user");
+    CHECK(library.writeRootFor(PrefabRoot::Mod).empty());
+    CHECK(library.writeRoot() == PrefabRoot::User);
+    CHECK(library.modFolder() == env.dir() / "base");
+  }
+
+  SECTION("A Prefab Path replaces the mod root")
+  {
+    // DD-32: only the user root is scanned while it is set
+    library.setUserRoot(env.dir() / "user");
+    library.rescan();
+    waitForScan(library);
+    REQUIRE(library.entries().size() == 1u);
+    CHECK(library.entries().front()->root == PrefabRoot::User);
+    CHECK(library.entries().front()->metadata.name == "Torch (user)");
+    CHECK(library.find(PrefabRoot::Mod, "lights/torch.map") == nullptr);
+    CHECK(library.fromPayload("prefab:mod/props/crate.map") == nullptr);
+    CHECK(library.fromPayload("prefab:user/lights/torch.map") != nullptr);
+
+    // a save to the mod root is not read while the user root is set
+    library.updateEntry(env.dir() / "base" / "maps" / "prefabs" / "props" / "crate.map");
+    CHECK_FALSE(library.scanning());
+
+    // cleared, the mod root's files come back
+    library.setUserRoot({});
+    library.rescan();
+    waitForScan(library);
+    CHECK(library.entries().size() == 4u);
+    CHECK(library.find(PrefabRoot::Mod, "props/crate.map") != nullptr);
+    CHECK(library.find(PrefabRoot::User, "lights/torch.map") == nullptr);
   }
 
   SECTION("Scanning")
   {
-    library.setUserRoot(env.dir() / "user");
-
     auto notifications = 0;
     auto connection =
       library.libraryDidChangeNotifier.connect([&]() { ++notifications; });
@@ -241,26 +271,29 @@ TEST_CASE("PrefabLibrary")
       paths.push_back(entry->relativePathString);
     }
 
-    // sorted by root, then path; the user torch shadows the mod torch
+    // sorted by root, then path; the files that are not maps are skipped
     CHECK(
       paths
       == std::vector<std::string>{
-        "lights/torch.map", "broken.map", "notaprefab.map", "props/crate.map"});
-    CHECK(entries[0]->root == PrefabRoot::User);
-    CHECK(entries[1]->root == PrefabRoot::Mod);
-    CHECK(library.find(PrefabRoot::Mod, "lights/torch.map") == nullptr);
+        "broken.map", "lights/torch.map", "notaprefab.map", "props/crate.map"});
+    for (const auto& entry : entries)
+    {
+      CHECK(entry->root == PrefabRoot::Mod);
+    }
 
     SECTION("Entries")
     {
-      const auto* torch = library.find(PrefabRoot::User, "lights/torch.map");
-      REQUIRE(torch == entries[0].get());
-      CHECK(torch->absolutePath == env.dir() / "user" / "lights" / "torch.map");
+      const auto* torch = library.find(PrefabRoot::Mod, "lights/torch.map");
+      REQUIRE(torch == entries[1].get());
+      CHECK(
+        torch->absolutePath
+        == env.dir() / "base" / "maps" / "prefabs" / "lights" / "torch.map");
       CHECK(
         torch->hash == fnv1a64HexNormalizedLineEndings(loadBytes(torch->absolutePath)));
       CHECK(!torch->error);
       CHECK(torch->thumbnailPath == std::nullopt);
       CHECK(torch->metadata.kind == PrefabKind::Entity);
-      CHECK(torch->metadata.name == "Torch (user)");
+      CHECK(torch->metadata.name == "Torch (one)");
       CHECK(torch->metadata.className == "light");
       CHECK(torch->metadata.tags == std::vector<std::string>{"light", "torch"});
       REQUIRE(torch->world);
@@ -289,7 +322,8 @@ TEST_CASE("PrefabLibrary")
       CHECK(crate->metadata.kind == PrefabKind::Assembly);
       CHECK(crate->metadata.name == "crate");
       CHECK(
-        crate->thumbnailPath == env.dir() / "base" / "prefabs" / "props" / "crate.png");
+        crate->thumbnailPath
+        == env.dir() / "base" / "maps" / "prefabs" / "props" / "crate.png");
       REQUIRE(crate->world);
       CHECK(crate->world->nodeTree().empty());
       CHECK(
@@ -298,42 +332,33 @@ TEST_CASE("PrefabLibrary")
 
     SECTION("File names compare as the platform compares them")
     {
-      env.createDirectory("user/props");
-      env.createFile("user/props/Crate.map", UserTorch);
-      library.rescan();
-      waitForScan(library);
-
 #ifdef _WIN32
-      // Crate.map and crate.map are one file name, so the user root wins
-      CHECK(library.find(PrefabRoot::Mod, "props/crate.map") == nullptr);
-      CHECK(library.find(PrefabRoot::User, "props/crate.map") != nullptr);
-      CHECK(library.find(PrefabRoot::User, "PROPS/CRATE.MAP") != nullptr);
-      CHECK(library.fromPayload("prefab:user/Lights/Torch.map") != nullptr);
-      CHECK(library.fromPayload("prefab:user/lights\\torch.map") != nullptr);
+      CHECK(library.find(PrefabRoot::Mod, "PROPS/CRATE.MAP") != nullptr);
+      CHECK(library.fromPayload("prefab:mod/Lights/Torch.map") != nullptr);
+      CHECK(library.fromPayload("prefab:mod/lights\\torch.map") != nullptr);
 #else
-      CHECK(library.find(PrefabRoot::Mod, "props/crate.map") != nullptr);
-      CHECK(library.find(PrefabRoot::User, "props/crate.map") == nullptr);
-      CHECK(library.find(PrefabRoot::User, "props/Crate.map") != nullptr);
+      CHECK(library.find(PrefabRoot::Mod, "PROPS/CRATE.MAP") == nullptr);
+      CHECK(library.fromPayload("prefab:mod/Lights/Torch.map") == nullptr);
 #endif
     }
 
     SECTION("Line endings do not change the hash")
     {
       // DD-12: a checkout may rewrite CRLF to LF or the other way round
-      writeBytes(env.dir() / "user" / "lights" / "lf.map", UserTorch);
+      writeBytes(env.dir() / "base" / "maps" / "prefabs" / "lights" / "lf.map", Torch);
       writeBytes(
-        env.dir() / "user" / "lights" / "crlf.map",
-        kdl::str_replace_every(UserTorch, "\n", "\r\n"));
+        env.dir() / "base" / "maps" / "prefabs" / "lights" / "crlf.map",
+        kdl::str_replace_every(Torch, "\n", "\r\n"));
       library.rescan();
       waitForScan(library);
 
-      const auto* lf = library.find(PrefabRoot::User, "lights/lf.map");
-      const auto* crlf = library.find(PrefabRoot::User, "lights/crlf.map");
+      const auto* lf = library.find(PrefabRoot::Mod, "lights/lf.map");
+      const auto* crlf = library.find(PrefabRoot::Mod, "lights/crlf.map");
       REQUIRE(lf);
       REQUIRE(crlf);
       CHECK(lf->fileSize != crlf->fileSize);
       CHECK(lf->hash == crlf->hash);
-      CHECK(lf->hash == fnv1a64Hex(UserTorch));
+      CHECK(lf->hash == fnv1a64Hex(Torch));
     }
 
     SECTION("Payloads")
@@ -342,9 +367,9 @@ TEST_CASE("PrefabLibrary")
       {
         CHECK(library.fromPayload(library.payloadFor(*entry)) == entry.get());
       }
-      CHECK(library.payloadFor(*entries[0]) == "prefab:user/lights/torch.map");
+      CHECK(library.payloadFor(*entries[1]) == "prefab:mod/lights/torch.map");
       CHECK(library.payloadFor(*entries[3]) == "prefab:mod/props/crate.map");
-      CHECK(library.fromPayload("prefab:mod/lights/torch.map") == nullptr);
+      CHECK(library.fromPayload("prefab:user/lights/torch.map") == nullptr);
       CHECK(library.fromPayload("entity:light") == nullptr);
       CHECK(library.fromPayload("prefab:other/lights/torch.map") == nullptr);
     }
@@ -371,7 +396,7 @@ TEST_CASE("PrefabLibrary")
 
       SECTION("A removed file is reported")
       {
-        REQUIRE(env.remove("base/prefabs/notaprefab.map"));
+        REQUIRE(env.remove("base/maps/prefabs/notaprefab.map"));
         library.rescan();
         waitForScan(library);
         CHECK(library.entries().size() == 3);
@@ -380,7 +405,7 @@ TEST_CASE("PrefabLibrary")
 
       SECTION("A failing file that changed is reported")
       {
-        env.createFile("base/prefabs/broken.map", Broken + "\"more\" \"text\"\n");
+        env.createFile("base/maps/prefabs/broken.map", Broken + "\"more\" \"text\"\n");
         library.rescan();
         waitForScan(library);
         CHECK(notifications == 2);
@@ -395,53 +420,54 @@ TEST_CASE("PrefabLibrary")
       CHECK(
         library.directories()
         == std::vector<std::filesystem::path>{
-          normal(env.dir() / "base" / "prefabs"),
-          normal(env.dir() / "base" / "prefabs" / "lights"),
-          normal(env.dir() / "base" / "prefabs" / "props"),
-          normal(env.dir() / "user"),
-          normal(env.dir() / "user" / "lights"),
+          normal(env.dir() / "base" / "maps" / "prefabs"),
+          normal(env.dir() / "base" / "maps" / "prefabs" / "lights"),
+          normal(env.dir() / "base" / "maps" / "prefabs" / "props"),
         });
 
       // R2-pf-ui-1: an empty folder is listed, so that it can be watched; a new folder
       // changes no entry, so the scan is silent
-      env.createDirectory("user/empty/deeper");
+      env.createDirectory("base/maps/prefabs/empty/deeper");
       library.rescan();
       waitForScan(library);
       CHECK(notifications == 1);
       CHECK(kdl::ranges::contains(
-        library.directories(), normal(env.dir() / "user" / "empty")));
+        library.directories(),
+        normal(env.dir() / "base" / "maps" / "prefabs" / "empty")));
       CHECK(kdl::ranges::contains(
-        library.directories(), normal(env.dir() / "user" / "empty" / "deeper")));
-      CHECK(library.directories().size() == 7u);
+        library.directories(),
+        normal(env.dir() / "base" / "maps" / "prefabs" / "empty" / "deeper")));
+      CHECK(library.directories().size() == 5u);
     }
 
     SECTION("Autosave folders are skipped (DD-27)")
     {
       // the backups of a map saved in a root, in any case of the folder's name
-      env.createDirectory("user/autosave/deeper");
-      env.createFile("user/autosave/x.1.map", UserTorch);
-      env.createFile("user/autosave/deeper/y.map", UserTorch);
-      env.createDirectory("user/lights/AutoSave");
-      env.createFile("user/lights/AutoSave/torch.1.map", UserTorch);
+      env.createDirectory("base/maps/prefabs/autosave/deeper");
+      env.createFile("base/maps/prefabs/autosave/x.1.map", Torch);
+      env.createFile("base/maps/prefabs/autosave/deeper/y.map", Torch);
+      env.createDirectory("base/maps/prefabs/lights/AutoSave");
+      env.createFile("base/maps/prefabs/lights/AutoSave/torch.1.map", Torch);
       library.rescan();
       waitForScan(library);
 
       CHECK(library.entries().size() == 4u);
-      CHECK(library.find(PrefabRoot::User, "autosave/x.1.map") == nullptr);
-      CHECK(library.find(PrefabRoot::User, "autosave/deeper/y.map") == nullptr);
-      CHECK(library.find(PrefabRoot::User, "lights/AutoSave/torch.1.map") == nullptr);
-      CHECK(library.directories().size() == 5u);
+      CHECK(library.find(PrefabRoot::Mod, "autosave/x.1.map") == nullptr);
+      CHECK(library.find(PrefabRoot::Mod, "autosave/deeper/y.map") == nullptr);
+      CHECK(library.find(PrefabRoot::Mod, "lights/AutoSave/torch.1.map") == nullptr);
+      CHECK(library.directories().size() == 3u);
       for (const auto& folder : {
-             env.dir() / "user" / "autosave",
-             env.dir() / "user" / "autosave" / "deeper",
-             env.dir() / "user" / "lights" / "AutoSave",
+             env.dir() / "base" / "maps" / "prefabs" / "autosave",
+             env.dir() / "base" / "maps" / "prefabs" / "autosave" / "deeper",
+             env.dir() / "base" / "maps" / "prefabs" / "lights" / "AutoSave",
            })
       {
         CHECK(!kdl::ranges::contains(library.directories(), folder.lexically_normal()));
       }
 
       // nor is a backup read when it is saved
-      library.updateEntry(env.dir() / "user" / "autosave" / "x.1.map");
+      library.updateEntry(
+        env.dir() / "base" / "maps" / "prefabs" / "autosave" / "x.1.map");
       CHECK_FALSE(library.scanning());
       library.processPendingResults();
       CHECK(library.entries().size() == 4u);
@@ -495,7 +521,7 @@ TEST_CASE("PrefabLibrary")
 
     SECTION("Entity definitions are reloaded")
     {
-      const auto* torchNode = firstEntityNode(*entries[0]->world);
+      const auto* torchNode = firstEntityNode(*entries[1]->world);
       REQUIRE(torchNode);
 
       map.entityDefinitionsWillChangeNotifier();
@@ -511,7 +537,7 @@ TEST_CASE("PrefabLibrary")
 
     SECTION("A rescan reuses unchanged entries")
     {
-      const auto* torch = library.find(PrefabRoot::User, "lights/torch.map");
+      const auto* torch = library.find(PrefabRoot::Mod, "lights/torch.map");
       const auto* crate = library.find(PrefabRoot::Mod, "props/crate.map");
       REQUIRE(torch);
       REQUIRE(crate);
@@ -522,19 +548,19 @@ TEST_CASE("PrefabLibrary")
       // nothing changed, so nothing is reported (R2-pf-ui-3)
       CHECK(notifications == 1);
       // same address, same world
-      CHECK(library.find(PrefabRoot::User, "lights/torch.map") == torch);
+      CHECK(library.find(PrefabRoot::Mod, "lights/torch.map") == torch);
       CHECK(torch->world.get() == torchWorld);
       CHECK(library.find(PrefabRoot::Mod, "props/crate.map") == crate);
 
       SECTION("A changed size is read again")
       {
         env.createFile(
-          "user/lights/torch.map",
-          kdl::str_replace_every(UserTorch, "Torch (user)", "Torch (changed)"));
+          "base/maps/prefabs/lights/torch.map",
+          kdl::str_replace_every(Torch, "Torch (one)", "Torch (changed)"));
         library.rescan();
         waitForScan(library);
 
-        const auto* changedTorch = library.find(PrefabRoot::User, "lights/torch.map");
+        const auto* changedTorch = library.find(PrefabRoot::Mod, "lights/torch.map");
         REQUIRE(changedTorch);
         CHECK(notifications == 2);
         CHECK(changedTorch->metadata.name == "Torch (changed)");
@@ -549,27 +575,30 @@ TEST_CASE("PrefabLibrary")
       {
         // the same size
         env.createFile(
-          "user/lights/torch.map",
-          kdl::str_replace_every(UserTorch, "Torch (user)", "Torch (iser)"));
-        const auto path = env.dir() / "user" / "lights" / "torch.map";
+          "base/maps/prefabs/lights/torch.map",
+          kdl::str_replace_every(Torch, "Torch (one)", "Torch (two)"));
+        const auto path =
+          env.dir() / "base" / "maps" / "prefabs" / "lights" / "torch.map";
         std::filesystem::last_write_time(path, torch->modificationTime + 10s);
         REQUIRE(std::filesystem::file_size(path) == torch->fileSize);
 
         library.rescan();
         waitForScan(library);
 
-        const auto* changedTorch = library.find(PrefabRoot::User, "lights/torch.map");
+        const auto* changedTorch = library.find(PrefabRoot::Mod, "lights/torch.map");
         REQUIRE(changedTorch);
-        CHECK(changedTorch->metadata.name == "Torch (iser)");
+        CHECK(changedTorch->metadata.name == "Torch (two)");
       }
 
       SECTION("A new thumbnail is picked up")
       {
-        env.createFile("user/lights/torch.png", "not really a png");
+        env.createFile("base/maps/prefabs/lights/torch.png", "not really a png");
         library.rescan();
         waitForScan(library);
-        CHECK(library.find(PrefabRoot::User, "lights/torch.map") == torch);
-        CHECK(torch->thumbnailPath == env.dir() / "user" / "lights" / "torch.png");
+        CHECK(library.find(PrefabRoot::Mod, "lights/torch.map") == torch);
+        CHECK(
+          torch->thumbnailPath
+          == env.dir() / "base" / "maps" / "prefabs" / "lights" / "torch.png");
         // the cell shows the thumbnail, so this is a change
         CHECK(notifications == 2);
       }
@@ -577,21 +606,22 @@ TEST_CASE("PrefabLibrary")
 
     SECTION("updateEntry")
     {
-      const auto* torch = library.find(PrefabRoot::User, "lights/torch.map");
+      const auto* torch = library.find(PrefabRoot::Mod, "lights/torch.map");
       REQUIRE(torch);
 
       SECTION("A changed file is read again in place")
       {
         env.createFile(
-          "user/lights/torch.map",
-          kdl::str_replace_every(UserTorch, "Torch (user)", "Torch (saved)"));
-        library.updateEntry(env.dir() / "user" / "lights" / "torch.map");
+          "base/maps/prefabs/lights/torch.map",
+          kdl::str_replace_every(Torch, "Torch (one)", "Torch (saved)"));
+        library.updateEntry(
+          env.dir() / "base" / "maps" / "prefabs" / "lights" / "torch.map");
         CHECK(library.scanning());
         waitForScan(library);
 
         CHECK(notifications == 2);
         CHECK(library.entries().size() == 4);
-        CHECK(library.find(PrefabRoot::User, "lights/torch.map") == torch);
+        CHECK(library.find(PrefabRoot::Mod, "lights/torch.map") == torch);
         CHECK(torch->metadata.name == "Torch (saved)");
         REQUIRE(torch->world);
         CHECK(
@@ -601,33 +631,26 @@ TEST_CASE("PrefabLibrary")
 
       SECTION("A new file is added in order")
       {
-        env.createFile("user/lights/lamp.map", UserTorch);
-        library.updateEntry(env.dir() / "user" / "lights" / "lamp.map");
+        env.createFile("base/maps/prefabs/lights/lamp.map", Torch);
+        library.updateEntry(
+          env.dir() / "base" / "maps" / "prefabs" / "lights" / "lamp.map");
         waitForScan(library);
 
         CHECK(notifications == 2);
         REQUIRE(library.entries().size() == 5);
-        CHECK(library.entries()[0]->relativePathString == "lights/lamp.map");
-        CHECK(library.find(PrefabRoot::User, "lights/torch.map") == torch);
-      }
-
-      SECTION("A shadowed file of the mod root stays hidden")
-      {
-        library.updateEntry(env.dir() / "base" / "prefabs" / "lights" / "torch.map");
-        waitForScan(library);
-        CHECK(library.find(PrefabRoot::Mod, "lights/torch.map") == nullptr);
-        CHECK(library.entries().size() == 4);
+        CHECK(library.entries()[1]->relativePathString == "lights/lamp.map");
+        CHECK(library.find(PrefabRoot::Mod, "lights/torch.map") == torch);
       }
 
       SECTION("A removed file rescans")
       {
-        REQUIRE(env.remove("user/lights/torch.map"));
-        library.updateEntry(env.dir() / "user" / "lights" / "torch.map");
+        REQUIRE(env.remove("base/maps/prefabs/lights/torch.map"));
+        library.updateEntry(
+          env.dir() / "base" / "maps" / "prefabs" / "lights" / "torch.map");
         waitForScan(library);
 
-        CHECK(library.find(PrefabRoot::User, "lights/torch.map") == nullptr);
-        // the mod torch is no longer shadowed
-        CHECK(library.find(PrefabRoot::Mod, "lights/torch.map") != nullptr);
+        CHECK(library.find(PrefabRoot::Mod, "lights/torch.map") == nullptr);
+        CHECK(library.entries().size() == 3);
       }
 
       SECTION("A file under no root is ignored")
@@ -666,10 +689,11 @@ TEST_CASE("PrefabLibrary")
         // the first update is never left blocked, whatever fails below
         const auto releaseFirst = kdl::invoke_later{[state]() { state->release = true; }};
 
-        const auto path = env.dir() / "user" / "lights" / "torch.map";
+        const auto path =
+          env.dir() / "base" / "maps" / "prefabs" / "lights" / "torch.map";
         env.createFile(
-          "user/lights/torch.map",
-          kdl::str_replace_every(UserTorch, "Torch (user)", "Torch (first)"));
+          "base/maps/prefabs/lights/torch.map",
+          kdl::str_replace_every(Torch, "Torch (one)", "Torch (first)"));
         library.updateEntry(path);
         const auto deadline = std::chrono::steady_clock::now() + 10s;
         while (!entered && std::chrono::steady_clock::now() < deadline)
@@ -679,8 +703,8 @@ TEST_CASE("PrefabLibrary")
         REQUIRE(entered);
 
         env.createFile(
-          "user/lights/torch.map",
-          kdl::str_replace_every(UserTorch, "Torch (user)", "Torch (second, longer)"));
+          "base/maps/prefabs/lights/torch.map",
+          kdl::str_replace_every(Torch, "Torch (one)", "Torch (second, longer)"));
         const auto secondSize = std::filesystem::file_size(path);
         library.updateEntry(path);
         while (torch->fileSize != secondSize
@@ -696,7 +720,7 @@ TEST_CASE("PrefabLibrary")
         // the first update finishes now, and is dropped
         release = true;
         waitForScan(library);
-        CHECK(library.find(PrefabRoot::User, "lights/torch.map") == torch);
+        CHECK(library.find(PrefabRoot::Mod, "lights/torch.map") == torch);
         CHECK(torch->fileSize == secondSize);
         CHECK(torch->metadata.name == "Torch (second, longer)");
         CHECK(notifications == 2);
@@ -706,8 +730,6 @@ TEST_CASE("PrefabLibrary")
 
   SECTION("An abandoned scan reads no more files")
   {
-    library.setUserRoot(env.dir() / "user");
-
     auto entered = std::atomic<int>{0};
     auto reads = std::atomic<int>{0};
     auto release = std::atomic<bool>{false};
@@ -725,7 +747,7 @@ TEST_CASE("PrefabLibrary")
     auto connection =
       library.libraryDidChangeNotifier.connect([&]() { ++notifications; });
 
-    // four files to read (the mod torch is shadowed), two of them block the two workers
+    // four files to read, two of them block the two workers
     library.rescan();
     const auto deadline = std::chrono::steady_clock::now() + 10s;
     while (entered < 2 && std::chrono::steady_clock::now() < deadline)
@@ -748,8 +770,6 @@ TEST_CASE("PrefabLibrary")
   SECTION("A save outside the roots does not restart a running scan")
   {
     // R2-pf3-1: another window's prefab editor saves a file of its own library
-    library.setUserRoot(env.dir() / "user");
-
     auto entered = std::atomic<int>{0};
     auto reads = std::atomic<int>{0};
     auto release = std::atomic<bool>{false};
@@ -773,7 +793,7 @@ TEST_CASE("PrefabLibrary")
     REQUIRE(entered == 2);
 
     library.updateEntry(env.dir() / "elsewhere" / "torch.map");
-    library.updateEntry(env.dir() / "user" / "autosave" / "x.1.map");
+    library.updateEntry(env.dir() / "base" / "maps" / "prefabs" / "autosave" / "x.1.map");
     CHECK(library.scanning());
     release = true;
     waitForScan(library);
@@ -882,7 +902,7 @@ TEST_CASE("PrefabLibrary")
     SECTION("cloneBody of a changed file is empty")
     {
       env.createFile(
-        "base/prefabs/big.map", loadBytes(big->absolutePath) + "// changed\n");
+        "base/maps/prefabs/big.map", loadBytes(big->absolutePath) + "// changed\n");
       CHECK(library.cloneBody(*big, map.worldBounds()).empty());
     }
   }

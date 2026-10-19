@@ -141,9 +141,10 @@ struct PrefabPlacement
 using PrefabPlacementKey = std::pair<std::string, std::string>;
 
 /**
- * The prefab files found under the library roots: the per-user root (the game's Prefab
- * Path preference, given by setUserRoot) and <game path>/<mod>/prefabs/. Subfolders are
- * categories. The folders are the registry; nothing else is stored.
+ * The prefab files found under the library root: <game path>/<mod>/maps/prefabs/, or the
+ * per-user root (the game's Prefab Path preference, given by setUserRoot) instead of it
+ * when that is set (DD-32). Subfolders are categories. The folders are the registry;
+ * nothing else is stored.
  *
  * A scan runs in two phases on the library's own task manager, so that it never queues
  * work in front of the map's: one task lists the roots (path, size, modification time),
@@ -241,10 +242,14 @@ public:
   const std::filesystem::path& userRoot() const;
   void setUserRoot(std::filesystem::path userRoot);
 
-  // C1 order: User (if set), Mod (if the game path is set)
+  // DD-32: the user root if set, else the mod root if the game path is set; at most one
   std::vector<std::filesystem::path> roots() const;
-  // where a new file goes; empty if that root is not available
+  // the root of the given kind; empty if it is not the library's root (DD-32)
   std::filesystem::path writeRootFor(PrefabRoot root) const;
+  // the root new files go to, which is the one the library scans; none without a root
+  std::optional<PrefabRoot> writeRoot() const;
+  // <game path>/<mod>, the mod's folder whatever the root; empty without a game path
+  std::filesystem::path modFolder() const;
 
   /**
    * Starts a scan of the roots. A rescan while one runs abandons the running one. A file

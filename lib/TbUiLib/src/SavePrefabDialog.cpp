@@ -28,7 +28,9 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QPlainTextEdit>
 #include <QPushButton>
+#include <QTextDocument>
 
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
@@ -160,6 +162,7 @@ SavePrefabDialog::SavePrefabDialog(MapDocument& document, QWidget* parent)
   , m_singleEntity{mdl::derivePrefabKind(m_nodes, false) == mdl::PrefabKind::Entity}
 {
   createGui();
+  limitDescription();
   updateControls();
 }
 
@@ -175,13 +178,10 @@ void SavePrefabDialog::forEntry(const mdl::PrefabEntry& entry)
   m_nameEdit->setText(
     entry.metadata.name.empty() ? pathAsQString(entry.relativePath.stem())
                                 : QString::fromStdString(entry.metadata.name));
-  if (const auto index = m_rootChoice->findData(static_cast<int>(entry.root)); index >= 0)
-  {
-    m_rootChoice->setCurrentIndex(index);
-  }
   m_categoryChoice->setCurrentText(
     pathAsGenericQString(entry.relativePath.parent_path()));
   m_tagsEdit->setText(QString::fromStdString(kdl::str_join(entry.metadata.tags, "; ")));
+  m_descriptionEdit->setPlainText(QString::fromStdString(entry.metadata.description));
 
   updateControls();
 }
@@ -238,20 +238,20 @@ void SavePrefabDialog::createGui()
   m_nameEdit = new QLineEdit{QString::fromStdString(defaultPrefabName(m_document))};
   m_nameEdit->setObjectName("SavePrefabDialog_nameEdit");
 
-  m_rootChoice = new QComboBox{};
-  if (!library.writeRootFor(mdl::PrefabRoot::User).empty())
+  m_locationLabel = new QLabel{};
+  m_locationLabel->setObjectName("SavePrefabDialog_locationLabel");
+  m_locationLabel->setWordWrap(true);
+  m_locationLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  m_locationLabel->setToolTip(
+    tr("<game path>/<mod>/maps/prefabs, or the Prefab Path of Preferences > Games when "
+       "that is set"));
+  if (const auto root = library.writeRoot())
   {
-    m_rootChoice->addItem(tr("User"), static_cast<int>(mdl::PrefabRoot::User));
+    m_locationLabel->setText(pathAsQString(library.writeRootFor(*root)));
   }
-  if (!library.writeRootFor(mdl::PrefabRoot::Mod).empty())
+  else
   {
-    m_rootChoice->addItem(tr("Mod"), static_cast<int>(mdl::PrefabRoot::Mod));
-  }
-  for (int i = 0; i < m_rootChoice->count(); ++i)
-  {
-    const auto root = static_cast<mdl::PrefabRoot>(m_rootChoice->itemData(i).toInt());
-    m_rootChoice->setItemData(
-      i, pathAsQString(library.writeRootFor(root)), Qt::ToolTipRole);
+    m_locationLabel->setText(tr("(none)"));
   }
 
   m_categoryChoice = new QComboBox{};
@@ -269,6 +269,21 @@ void SavePrefabDialog::createGui()
   m_tagsEdit = new QLineEdit{};
   m_tagsEdit->setObjectName("SavePrefabDialog_tagsEdit");
   m_tagsEdit->setPlaceholderText(tr("tag; tag; ..."));
+
+  m_descriptionEdit = new QPlainTextEdit{};
+  m_descriptionEdit->setObjectName("SavePrefabDialog_descriptionEdit");
+  m_descriptionEdit->setPlaceholderText(
+    tr("What it is and how to use it; shown in the "
+       "prefab's tooltip"));
+  m_descriptionEdit->setTabChangesFocus(true);
+  m_descriptionEdit->setFixedHeight(
+    m_descriptionEdit->fontMetrics().lineSpacing() * 4
+    + 2 * static_cast<int>(m_descriptionEdit->document()->documentMargin())
+    + 2 * m_descriptionEdit->frameWidth());
+
+  m_descriptionCountLabel = new QLabel{};
+  m_descriptionCountLabel->setObjectName("SavePrefabDialog_descriptionCountLabel");
+  setInfoStyle(m_descriptionCountLabel);
 
   m_kindLabel = new QLabel{};
 
@@ -314,9 +329,11 @@ void SavePrefabDialog::createGui()
   formLayout->setHorizontalSpacing(LayoutConstants::WideHMargin);
   formLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
   formLayout->addRow(tr("Name"), m_nameEdit);
-  formLayout->addRow(tr("Library"), m_rootChoice);
+  formLayout->addRow(tr("Folder"), m_locationLabel);
   formLayout->addRow(tr("Category"), m_categoryChoice);
   formLayout->addRow(tr("Tags"), m_tagsEdit);
+  formLayout->addRow(tr("Description"), m_descriptionEdit);
+  formLayout->addRow("", m_descriptionCountLabel);
   formLayout->addRow(tr("Kind"), m_kindLabel);
   formLayout->addRow("", m_forceAssemblyCheck);
   formLayout->addRow("", m_clearLinksCheck);
@@ -340,9 +357,8 @@ void SavePrefabDialog::createGui()
   setLayout(outerLayout);
 
   connect(m_nameEdit, &QLineEdit::textChanged, this, [&]() { updateControls(); });
-  connect(m_rootChoice, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [&]() {
-    updateControls();
-  });
+  connect(
+    m_descriptionEdit, &QPlainTextEdit::textChanged, this, [&]() { limitDescription(); });
   connect(
     m_categoryChoice, &QComboBox::currentTextChanged, this, [&]() { updateControls(); });
   connect(m_forceAssemblyCheck, &QCheckBox::toggled, this, [&]() { updateControls(); });
@@ -363,7 +379,7 @@ void SavePrefabDialog::updateControls()
   m_externalLinksList->setEnabled(m_clearLinksCheck->isChecked());
 
   // the name, the category and the root give the file, or the reason there is none
-  const auto hasRoot = m_rootChoice->count() > 0;
+  const auto hasRoot = m_document.map().prefabLibrary().writeRoot().has_value();
   auto message = hasRoot ? QString{} : tr("Set a game path or a Prefab Path first");
   const auto hasPath = mdl::prefabFilePath(m_document.map().prefabLibrary(), options())
                        | kdl::transform([&](const auto& path) {
@@ -383,10 +399,24 @@ void SavePrefabDialog::updateControls()
                            return false;
                          })
                        | kdl::value();
-  m_rootChoice->setEnabled(hasRoot);
   m_messageLabel->setText(message);
   m_messageLabel->setVisible(!message.isEmpty());
   m_saveButton->setEnabled(hasPath && !m_nodes.empty());
+}
+
+void SavePrefabDialog::limitDescription()
+{
+  const auto text = m_descriptionEdit->toPlainText();
+  if (text.size() > mdl::PrefabDescriptionMaxLength)
+  {
+    // typing or pasting past the limit keeps the first characters; this edit calls
+    // limitDescription again, which then finds the text short enough
+    m_descriptionEdit->setPlainText(text.left(mdl::PrefabDescriptionMaxLength));
+    m_descriptionEdit->moveCursor(QTextCursor::End);
+    return;
+  }
+  m_descriptionCountLabel->setText(
+    tr("%1 / %2").arg(text.size()).arg(mdl::PrefabDescriptionMaxLength));
 }
 
 mdl::SavePrefabOptions SavePrefabDialog::options() const
@@ -395,9 +425,9 @@ mdl::SavePrefabOptions SavePrefabDialog::options() const
   options.name = m_nameEdit->text().trimmed().toStdString();
   options.category = pathFromQString(m_categoryChoice->currentText().trimmed());
   options.tags = splitTags(m_tagsEdit->text());
-  options.root = m_rootChoice->count() > 0
-                   ? static_cast<mdl::PrefabRoot>(m_rootChoice->currentData().toInt())
-                   : mdl::PrefabRoot::User;
+  options.description = m_descriptionEdit->toPlainText().toStdString();
+  options.root =
+    m_document.map().prefabLibrary().writeRoot().value_or(mdl::PrefabRoot::User);
   options.forceAssembly = m_singleEntity && m_forceAssemblyCheck->isChecked();
   options.clearExternalLinks = m_clearLinksCheck->isChecked();
   options.includeDefaults = m_includeDefaultsCheck->isChecked();

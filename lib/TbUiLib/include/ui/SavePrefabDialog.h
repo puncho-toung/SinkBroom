@@ -31,6 +31,7 @@ class QComboBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
+class QPlainTextEdit;
 class QPushButton;
 
 namespace tb
@@ -70,9 +71,13 @@ private:
   std::optional<std::filesystem::path> m_updatedPath;
 
   QLineEdit* m_nameEdit = nullptr;
-  QComboBox* m_rootChoice = nullptr;
+  // the library's root, where the file goes (DD-32: there is no choice)
+  QLabel* m_locationLabel = nullptr;
   QComboBox* m_categoryChoice = nullptr;
   QLineEdit* m_tagsEdit = nullptr;
+  // DD-33: at most mdl::PrefabDescriptionMaxLength characters
+  QPlainTextEdit* m_descriptionEdit = nullptr;
+  QLabel* m_descriptionCountLabel = nullptr;
   QLabel* m_kindLabel = nullptr;
   QCheckBox* m_forceAssemblyCheck = nullptr;
   QCheckBox* m_clearLinksCheck = nullptr;
@@ -86,9 +91,9 @@ public:
   ~SavePrefabDialog() override;
 
   /**
-   * Turns the dialog into "Update Prefab from Selection" (D13): the name, the library,
-   * the category and the tags are those of the given prefab, the kind is derived from the
-   * selection as always, and the prefab's file is overwritten without asking. If the
+   * Turns the dialog into "Update Prefab from Selection" (D13): the name, the category,
+   * the tags and the description are those of the given prefab, the kind is derived from
+   * the selection as always, and the prefab's file is overwritten without asking. If the
    * fields are changed so that they name another file, that file is asked about as usual.
    */
   void forEntry(const mdl::PrefabEntry& entry);
@@ -103,6 +108,8 @@ public:
 private:
   void createGui();
   void updateControls();
+  // cuts the description to its limit and shows its length (DD-33)
+  void limitDescription();
   // the options name the file that forEntry was given
   bool updatesEntryFile(const std::filesystem::path& path) const;
 

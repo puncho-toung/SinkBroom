@@ -177,6 +177,32 @@ std::string titleOf(const mdl::PrefabEntry& entry)
            : pathAsQString(entry.relativePath.stem()).toStdString();
 }
 
+/**
+ * The text broken into lines of at most the given width at its spaces (a longer word
+ * stands on a line of its own), since a plain-text tooltip does not wrap.
+ */
+QString wrapAtSpaces(const QString& text, const qsizetype width)
+{
+  auto result = QString{};
+  auto lineLength = qsizetype{0};
+  for (const auto& word : text.split(' ', Qt::SkipEmptyParts))
+  {
+    if (lineLength > 0 && lineLength + 1 + word.size() > width)
+    {
+      result += '\n';
+      lineLength = 0;
+    }
+    else if (lineLength > 0)
+    {
+      result += ' ';
+      ++lineLength;
+    }
+    result += word;
+    lineLength += word.size();
+  }
+  return result;
+}
+
 bool matchesWord(const mdl::PrefabEntry& entry, const std::string& word)
 {
   const auto& metadata = entry.metadata;
@@ -1189,6 +1215,11 @@ QString PrefabBrowserView::tooltip(const Cell& cell)
   auto tooltip = QString{};
   auto ss = QTextStream{&tooltip};
   ss << QString::fromStdString(titleOf(entry));
+  if (!metadata.description.empty())
+  {
+    // DD-33
+    ss << "\n" << wrapAtSpaces(QString::fromStdString(metadata.description), 60);
+  }
   if (!metadata.className.empty())
   {
     ss << "\n" << tr("Class: ") << QString::fromStdString(metadata.className);

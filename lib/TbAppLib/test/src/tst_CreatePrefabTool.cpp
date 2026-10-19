@@ -175,10 +175,10 @@ const mdl::EntityNode* findLight(const mdl::GroupNode& groupNode)
 TEST_CASE("CreatePrefabTool")
 {
   auto env = fs::TestEnvironment{[](auto& e) {
-    e.createDirectory("base/prefabs/lights");
-    e.createFile("base/prefabs/lights/torch.map", Torch);
-    e.createFile("base/prefabs/broken.map", "{ this is not a map");
-    e.createFile("base/prefabs/malformed.map", Malformed);
+    e.createDirectory("base/maps/prefabs/lights");
+    e.createFile("base/maps/prefabs/lights/torch.map", Torch);
+    e.createFile("base/maps/prefabs/broken.map", "{ this is not a map");
+    e.createFile("base/maps/prefabs/malformed.map", Malformed);
   }};
 
   auto fixture = MapDocumentFixture{};
@@ -474,7 +474,7 @@ TEST_CASE("CreatePrefabTool")
       library.rescan();
       waitForScan(library);
 
-      // the user crate shadows the mod crate in the library (C1), but not in the map
+      // the user root replaces the mod root in the library (DD-32), but not in the map
       REQUIRE(library.find(mdl::PrefabRoot::Mod, "props/crate.map") == nullptr);
       const auto* userCrateEntry = library.find(mdl::PrefabRoot::User, "props/crate.map");
       REQUIRE(userCrateEntry != nullptr);

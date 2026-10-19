@@ -211,12 +211,40 @@ TEST_CASE("PrefabFile")
     CHECK(filePath("Light", "C:lights").is_error());
 #endif
 
-    // no root
-    CHECK(
-      prefabFilePath(library, SavePrefabOptions{.name = "Light", .root = PrefabRoot::Mod})
-        .is_success());
+    // DD-32: the Prefab Path replaces the mod root, which comes back when it is cleared
+    const auto modFilePath = [&]() {
+      return prefabFilePath(
+        library, SavePrefabOptions{.name = "Light", .root = PrefabRoot::Mod});
+    };
+    CHECK(library.writeRoot() == PrefabRoot::User);
+    CHECK(modFilePath().is_error());
     map.prefabLibrary().setUserRoot({});
+    CHECK(library.writeRoot() == PrefabRoot::Mod);
     CHECK(filePath("Light").is_error());
+    CHECK(
+      (modFilePath() | kdl::value())
+      == env.dir() / "base" / "maps" / "prefabs" / "Light.map");
+  }
+
+  SECTION("foldPrefabDescription")
+  {
+    CHECK(foldPrefabDescription("").empty());
+    CHECK(foldPrefabDescription(" \n\t ").empty());
+    CHECK(foldPrefabDescription("  one\r\ntwo\t three  ") == "one two three");
+
+    // cut at PrefabDescriptionMaxLength code points; a space never ends the text
+    const auto xs = [](const size_t count) { return std::string(count, 'x'); };
+    CHECK(foldPrefabDescription(xs(400)) == xs(300));
+    CHECK(foldPrefabDescription(xs(299) + " yz") == xs(299));
+    CHECK(foldPrefabDescription(xs(298) + " y") == xs(298) + " y");
+
+    // two-byte characters count once and are never split
+    auto umlauts = std::string{};
+    for (size_t i = 0; i < 301; ++i)
+    {
+      umlauts += "\xC3\xA4";
+    }
+    CHECK(foldPrefabDescription(umlauts) == umlauts.substr(0, 600));
   }
 
   SECTION("derivePrefabKind")
@@ -335,6 +363,7 @@ TEST_CASE("PrefabFile")
       .name = "Red torch",
       .category = "lights",
       .tags = {"light", " torch ", ""},
+      .description = "  A red torch,\nby the door.\t",
       .root = PrefabRoot::User,
     };
 
@@ -355,6 +384,8 @@ TEST_CASE("PrefabFile")
       CHECK(metadata.saved.size() == 19);
       CHECK(metadata.saved[10] == 'T');
       CHECK(metadata.source == "unnamed.map");
+      // DD-33: one line in the file
+      CHECK(metadata.description == "A red torch, by the door.");
 
       const auto& body = worldNode->defaultLayer()->children();
       REQUIRE(body.size() == 1);
@@ -725,6 +756,7 @@ TEST_CASE("PrefabFile")
       {"_tb_prefab_tags", "door; arch;;"},
       {"_tb_prefab_saved", "2026-10-18T14:02:11"},
       {"_tb_prefab_source", "maps/game/hub.map"},
+      {"_tb_prefab_description", "An arch over a door"},
     }});
     const auto metadata = readPrefabMetadata(worldNode) | kdl::value();
     CHECK(metadata.kind == PrefabKind::Assembly);
@@ -733,6 +765,7 @@ TEST_CASE("PrefabFile")
     CHECK(metadata.tags == std::vector<std::string>{"door", "arch"});
     CHECK(metadata.saved == "2026-10-18T14:02:11");
     CHECK(metadata.source == "maps/game/hub.map");
+    CHECK(metadata.description == "An arch over a door");
 
     worldNode.setEntity(
       Entity{{{"classname", "worldspawn"}, {"_tb_prefab_kind", "something"}}});
