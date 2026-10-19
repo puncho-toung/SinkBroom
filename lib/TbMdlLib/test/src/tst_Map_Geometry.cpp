@@ -267,6 +267,79 @@ TEST_CASE("Map_Geometry")
         }
       }
     }
+
+    GIVEN("A brush in a group, with alignment lock off")
+    {
+      // alignment is forced on only for a brush in a closed group that is linked
+      map.editorContext().setAlignmentLock(false);
+
+      const auto builder = BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()};
+      auto* brushNode = new BrushNode{
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {64, 64, 64}}, "material")
+        | kdl::value()};
+      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      selectNodes(map, {brushNode});
+      auto* groupNode = groupSelectedNodes(map, "testGroup");
+      REQUIRE(groupNode);
+
+      const auto topUvCoords = [&]() {
+        const auto& face =
+          brushNode->brush().face(*brushNode->brush().findFace(vm::vec3d{0, 0, 1}));
+        return face.vertexPositions()
+               | std::views::transform([&](auto x) { return face.uvCoords(x); })
+               | kdl::ranges::to<std::vector>();
+      };
+      const auto delta = vm::vec3d{0.125, 0, 0};
+
+      WHEN("The group is closed and linked")
+      {
+        deselectAll(map);
+        selectNodes(map, {groupNode});
+        REQUIRE(createLinkedDuplicate(map));
+        deselectAll(map);
+        selectNodes(map, {groupNode});
+
+        const auto uvCoordsBefore = topUvCoords();
+        REQUIRE(translateSelection(map, delta));
+
+        THEN("The brush keeps its alignment")
+        {
+          CHECK(uvListsEqual(uvCoordsBefore, topUvCoords()));
+        }
+      }
+
+      WHEN("The group is closed and not linked")
+      {
+        deselectAll(map);
+        selectNodes(map, {groupNode});
+
+        const auto uvCoordsBefore = topUvCoords();
+        REQUIRE(translateSelection(map, delta));
+
+        THEN("The brush does not keep its alignment")
+        {
+          CHECK_FALSE(uvListsEqual(uvCoordsBefore, topUvCoords()));
+        }
+      }
+
+      WHEN("The group is linked and open")
+      {
+        deselectAll(map);
+        selectNodes(map, {groupNode});
+        REQUIRE(createLinkedDuplicate(map));
+        deselectAll(map);
+        openGroup(map, *groupNode);
+        selectNodes(map, {brushNode});
+
+        const auto uvCoordsBefore = topUvCoords();
+        REQUIRE(translateSelection(map, delta));
+
+        THEN("The brush does not keep its alignment")
+        {
+          CHECK_FALSE(uvListsEqual(uvCoordsBefore, topUvCoords()));
+        }
+      }
+    }
   }
 
   SECTION("translateSelection")
