@@ -18,6 +18,7 @@
  */
 
 #include "fs/TestEnvironment.h"
+#include "gl/OrthographicCamera.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/EditorContext.h"
@@ -42,11 +43,16 @@
 #include "mdl/Selection.h"
 #include "mdl/TestFactory.h"
 #include "mdl/WorldNode.h"
+#include "ui/CreateEntityTool.h"
+#include "ui/CreateEntityToolController.h"
 #include "ui/CreatePrefabTool.h"
 #include "ui/CreatePrefabToolController.h"
+#include "ui/DropTracker.h"
 #include "ui/InputState.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
+#include "ui/PickRequest.h"
+#include "ui/ToolChain.h"
 #include "ui/ToolController.h"
 
 #include "kd/overload.h"
@@ -296,6 +302,45 @@ TEST_CASE("CreatePrefabTool")
     CHECK(acceptsDrop(controller2D, torchPayload));
     REQUIRE(tool.createPrefab(torchPayload));
     tool.cancel();
+    CHECK(defaultLayerChildren == childrenBefore);
+  }
+
+  SECTION("A view's drop chain passes a prefab payload by the entity controller")
+  {
+    // RL-29 (checklist CL-7): the views chain the entity controller before the prefab
+    // controller, and the chain offers a drag to each active controller in turn
+    auto entityTool = CreateEntityTool{document};
+    auto chain = ToolChain{};
+    chain.append(std::make_unique<CreateEntityToolController2D>(entityTool));
+    chain.append(std::make_unique<CreatePrefabToolController2D>(tool));
+
+    const auto pickRay = vm::ray3d{{0, 0, 512}, {0, 0, -1}};
+    const auto camera = gl::OrthographicCamera{
+      1.0f,
+      8000.0f,
+      gl::Camera::Viewport{0, 0, 1920, 1080},
+      vm::vec3f{pickRay.origin},
+      vm::vec3f{pickRay.direction},
+      vm::vec3f{0, 1, 0}};
+    auto inputState = InputState{0.0f, 0.0f};
+    inputState.setPickRequest(PickRequest{pickRay, camera});
+
+    REQUIRE(chain.shouldAcceptDrop(inputState, torchPayload));
+    auto dropTracker = chain.dragEnter(inputState, torchPayload);
+    REQUIRE(dropTracker != nullptr);
+    CHECK(tool.placing());
+    dropTracker->leave(inputState);
+    CHECK_FALSE(tool.placing());
+    CHECK(defaultLayerChildren == childrenBefore);
+
+    // each controller hands the other's payload back
+    auto entityController2D = CreateEntityToolController2D{entityTool};
+    auto prefabController2D = CreatePrefabToolController2D{tool};
+    ToolController& entityController = entityController2D;
+    ToolController& prefabController = prefabController2D;
+    CHECK(entityController.acceptDrop(inputState, torchPayload) == nullptr);
+    CHECK(prefabController.acceptDrop(inputState, "entity:light") == nullptr);
+    CHECK_FALSE(map.isTransactionActive());
     CHECK(defaultLayerChildren == childrenBefore);
   }
 

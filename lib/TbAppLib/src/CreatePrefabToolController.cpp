@@ -100,6 +100,11 @@ bool CreatePrefabToolController::shouldAcceptDrop(
 std::unique_ptr<DropTracker> CreatePrefabToolController::acceptDrop(
   const InputState& inputState, const std::string& payload)
 {
+  if (!shouldAcceptDrop(inputState, payload))
+  {
+    return nullptr;
+  }
+
   return m_tool.createPrefab(payload) ? createDropTracker(inputState) : nullptr;
 }
 
