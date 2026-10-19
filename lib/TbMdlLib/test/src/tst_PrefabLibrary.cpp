@@ -39,6 +39,7 @@
 #include "mdl/TestFactory.h"
 #include "mdl/WorldNode.h"
 
+#include "kd/invoke.h"
 #include "kd/overload.h"
 #include "kd/ranges/contains.h"
 #include "kd/string_utils.h"
@@ -46,8 +47,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -306,6 +309,7 @@ TEST_CASE("PrefabLibrary")
       CHECK(library.find(PrefabRoot::User, "props/crate.map") != nullptr);
       CHECK(library.find(PrefabRoot::User, "PROPS/CRATE.MAP") != nullptr);
       CHECK(library.fromPayload("prefab:user/Lights/Torch.map") != nullptr);
+      CHECK(library.fromPayload("prefab:user/lights\\torch.map") != nullptr);
 #else
       CHECK(library.find(PrefabRoot::Mod, "props/crate.map") != nullptr);
       CHECK(library.find(PrefabRoot::User, "props/crate.map") == nullptr);
@@ -347,15 +351,68 @@ TEST_CASE("PrefabLibrary")
 
     SECTION("Rescanning")
     {
+      const auto* broken = library.find(PrefabRoot::Mod, "broken.map");
+      REQUIRE(broken);
+      REQUIRE(broken->error);
+
       library.rescan();
       library.rescan();
       waitForScan(library);
       CHECK(library.entries().size() == 4);
-      CHECK(notifications == 2);
+      // R2-pf-ui-3: nothing changed, so nothing is reported; the files that failed were
+      // read again (DD-22) and failed as before, so their entries are kept
+      CHECK(notifications == 1);
+      CHECK(library.find(PrefabRoot::Mod, "broken.map") == broken);
 
       library.rescan();
       waitForScan(library);
       CHECK(library.entries().size() == 4);
+      CHECK(notifications == 1);
+
+      SECTION("A removed file is reported")
+      {
+        REQUIRE(env.remove("base/prefabs/notaprefab.map"));
+        library.rescan();
+        waitForScan(library);
+        CHECK(library.entries().size() == 3);
+        CHECK(notifications == 2);
+      }
+
+      SECTION("A failing file that changed is reported")
+      {
+        env.createFile("base/prefabs/broken.map", Broken + "\"more\" \"text\"\n");
+        library.rescan();
+        waitForScan(library);
+        CHECK(notifications == 2);
+      }
+    }
+
+    SECTION("Directories")
+    {
+      const auto normal = [](const std::filesystem::path& path) {
+        return path.lexically_normal();
+      };
+      CHECK(
+        library.directories()
+        == std::vector<std::filesystem::path>{
+          normal(env.dir() / "base" / "prefabs"),
+          normal(env.dir() / "base" / "prefabs" / "lights"),
+          normal(env.dir() / "base" / "prefabs" / "props"),
+          normal(env.dir() / "user"),
+          normal(env.dir() / "user" / "lights"),
+        });
+
+      // R2-pf-ui-1: an empty folder is listed, so that it can be watched; a new folder
+      // changes no entry, so the scan is silent
+      env.createDirectory("user/empty/deeper");
+      library.rescan();
+      waitForScan(library);
+      CHECK(notifications == 1);
+      CHECK(kdl::ranges::contains(
+        library.directories(), normal(env.dir() / "user" / "empty")));
+      CHECK(kdl::ranges::contains(
+        library.directories(), normal(env.dir() / "user" / "empty" / "deeper")));
+      CHECK(library.directories().size() == 7u);
     }
 
     SECTION("cloneBody")
@@ -430,7 +487,8 @@ TEST_CASE("PrefabLibrary")
 
       library.rescan();
       waitForScan(library);
-      CHECK(notifications == 2);
+      // nothing changed, so nothing is reported (R2-pf-ui-3)
+      CHECK(notifications == 1);
       // same address, same world
       CHECK(library.find(PrefabRoot::User, "lights/torch.map") == torch);
       CHECK(torch->world.get() == torchWorld);
@@ -446,6 +504,7 @@ TEST_CASE("PrefabLibrary")
 
         const auto* changedTorch = library.find(PrefabRoot::User, "lights/torch.map");
         REQUIRE(changedTorch);
+        CHECK(notifications == 2);
         CHECK(changedTorch->metadata.name == "Torch (changed)");
         CHECK(
           changedTorch->hash
@@ -479,6 +538,8 @@ TEST_CASE("PrefabLibrary")
         waitForScan(library);
         CHECK(library.find(PrefabRoot::User, "lights/torch.map") == torch);
         CHECK(torch->thumbnailPath == env.dir() / "user" / "lights" / "torch.png");
+        // the cell shows the thumbnail, so this is a change
+        CHECK(notifications == 2);
       }
     }
 
@@ -543,6 +604,70 @@ TEST_CASE("PrefabLibrary")
         CHECK_FALSE(library.scanning());
         library.processPendingResults();
         CHECK(notifications == 1);
+      }
+
+      SECTION("Of two updates of one file, the later one wins")
+      {
+        // R2-pf-mdl-6: the first update blocks its worker until the second one has been
+        // taken over, so that it finishes last; the state is shared with the worker,
+        // which may outlive this section if a check fails
+        struct HookState
+        {
+          std::atomic<bool> entered = false;
+          std::atomic<bool> release = false;
+          std::atomic<int> calls = 0;
+        };
+        const auto state = std::make_shared<HookState>();
+        library.setReadHookForTesting([state](const auto&) {
+          if (state->calls++ == 0)
+          {
+            state->entered = true;
+            const auto deadline = std::chrono::steady_clock::now() + 10s;
+            while (!state->release && std::chrono::steady_clock::now() < deadline)
+            {
+              std::this_thread::sleep_for(1ms);
+            }
+          }
+        });
+        auto& entered = state->entered;
+        auto& release = state->release;
+        // the first update is never left blocked, whatever fails below
+        const auto releaseFirst = kdl::invoke_later{[state]() { state->release = true; }};
+
+        const auto path = env.dir() / "user" / "lights" / "torch.map";
+        env.createFile(
+          "user/lights/torch.map",
+          kdl::str_replace_every(UserTorch, "Torch (user)", "Torch (first)"));
+        library.updateEntry(path);
+        const auto deadline = std::chrono::steady_clock::now() + 10s;
+        while (!entered && std::chrono::steady_clock::now() < deadline)
+        {
+          std::this_thread::sleep_for(1ms);
+        }
+        REQUIRE(entered);
+
+        env.createFile(
+          "user/lights/torch.map",
+          kdl::str_replace_every(UserTorch, "Torch (user)", "Torch (second, longer)"));
+        const auto secondSize = std::filesystem::file_size(path);
+        library.updateEntry(path);
+        while (torch->fileSize != secondSize
+               && std::chrono::steady_clock::now() < deadline)
+        {
+          library.processPendingResults();
+          std::this_thread::sleep_for(1ms);
+        }
+        REQUIRE(torch->fileSize == secondSize);
+        CHECK(torch->metadata.name == "Torch (second, longer)");
+        CHECK(notifications == 2);
+
+        // the first update finishes now, and is dropped
+        release = true;
+        waitForScan(library);
+        CHECK(library.find(PrefabRoot::User, "lights/torch.map") == torch);
+        CHECK(torch->fileSize == secondSize);
+        CHECK(torch->metadata.name == "Torch (second, longer)");
+        CHECK(notifications == 2);
       }
     }
   }

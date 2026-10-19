@@ -32,9 +32,12 @@
 #include <filesystem>
 #include <functional>
 #include <future>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace kdl
@@ -132,6 +135,12 @@ struct PrefabPlacement
 };
 
 /**
+ * What finds a placement again after the map has changed: its prefab path and the link ID
+ * of its members.
+ */
+using PrefabPlacementKey = std::pair<std::string, std::string>;
+
+/**
  * The prefab files found under the library roots: the per-user root (the game's Prefab
  * Path preference, given by setUserRoot) and <game path>/<mod>/prefabs/. Subfolders are
  * categories. The folders are the registry; nothing else is stored.
@@ -166,6 +175,8 @@ private:
   struct Listing
   {
     std::vector<ListedFile> files;
+    // every folder under the roots that exist, the roots included
+    std::vector<std::filesystem::path> directories;
     std::vector<std::string> warnings;
   };
 
@@ -175,18 +186,37 @@ private:
     std::optional<std::filesystem::path> thumbnailPath;
   };
 
+  struct PendingUpdate
+  {
+    // the entry key of the file, see m_entriesByKey
+    std::string key;
+    // the file's number in m_updateSequences when the update was started
+    std::uint64_t sequence = 0;
+    std::future<PrefabEntry> future;
+  };
+
   Map& m_map;
   std::filesystem::path m_userRoot;
 
   std::vector<std::unique_ptr<PrefabEntry>> m_entries;
+  // (root, pathKey) as one string -> entry, for find and fromPayload
+  std::unordered_map<std::string, PrefabEntry*> m_entriesByKey;
+  // the directories of the last finished scan, sorted
+  std::vector<std::filesystem::path> m_directories;
 
   // bumped by every rescan; a task of an older generation returns at once
   std::shared_ptr<std::atomic<std::uint64_t>> m_generation;
   std::optional<std::future<Listing>> m_pendingListing;
   std::vector<std::future<PrefabEntry>> m_pendingEntries;
   std::vector<ReusedEntry> m_reusedEntries;
-  std::vector<std::future<PrefabEntry>> m_pendingUpdates;
+  std::vector<std::filesystem::path> m_pendingDirectories;
+  std::vector<PendingUpdate> m_pendingUpdates;
+  // entry key -> the number of the latest update of that file; an update that finishes
+  // after a later one of the same file is dropped
+  std::unordered_map<std::string, std::uint64_t> m_updateSequences;
+  std::uint64_t m_nextUpdateSequence = 0;
   bool m_scanning = false;
+  bool m_scannedOnce = false;
   bool m_definitionsStale = false;
   ReadHook m_readHook;
 
@@ -235,8 +265,15 @@ public:
    * Call on the GUI thread. Starts the parse tasks once the roots are listed; once every
    * file of the current scan is read, replaces the entries with the scan's results,
    * assigns entity definitions and fires libraryDidChangeNotifier once. Takes over the
-   * results of updateEntry the same way. Also reassigns entity definitions after the
-   * map's definitions were reloaded.
+   * results of updateEntry the same way; of two updates of one file, only the one that
+   * was started last is taken over. Also reassigns entity definitions after the map's
+   * definitions were reloaded.
+   *
+   * libraryDidChangeNotifier fires only when the entries changed: the first scan, an
+   * entry that was added, removed or read again, a thumbnail that appeared or went, new
+   * definitions. A scan that reused every entry, and read again only files that fail as
+   * they failed before (whose entries are then kept), is silent; so the end of a scan
+   * shows in scanning() turning false, not always in a notification.
    */
   void processPendingResults();
 
@@ -245,6 +282,13 @@ public:
 
   // sorted by root, then relativePathString
   const std::vector<std::unique_ptr<PrefabEntry>>& entries() const;
+
+  /**
+   * Every folder under the roots as the last finished scan listed them, the roots
+   * included, empty folders too, lexically normal and sorted; for watching the folders
+   * without walking them again. A root that does not exist has none.
+   */
+  const std::vector<std::filesystem::path>& directories() const;
 
   // relative paths compare as file names do on the platform, ignoring case on Windows;
   // the same goes for the rule that the user root wins over the mod root
@@ -259,8 +303,9 @@ public:
   /**
    * Returns caller-owned clones of the body (the one entity, or the one top-level group),
    * link ids re-keyed (rekeyLinkIds), definitions kept; empty when the entry has no
-   * body. An entry without a world reads its file again; if the file has changed since
-   * it was scanned, the result is empty and a warning is logged.
+   * body. An entry without a world reads its file again and returns the nodes it read,
+   * without copying them; if the file has changed since it was scanned, the result is
+   * empty and a warning is logged.
    *
    * The clones are not prepared for adding to a map; see prepareNodesForAdding.
    */
@@ -271,9 +316,19 @@ public:
    * The placed assemblies in the map, from one walk of its groups (the children of
    * entities are not visited), in the order of the world: every group with a prefab path,
    * grouped by that path and its link ID. The entries are looked up in the library as it
-   * is, so a library that was never scanned reports every file missing.
+   * is, so a library that was never scanned reports every file missing. Each distinct
+   * prefab path is looked up once.
    */
   std::vector<PrefabPlacement> placements() const;
+
+  /**
+   * The placements, from the same walk, by their key: the prefab path and the link ID of
+   * the members. Since refreshing one placement replaces the children of the other
+   * members of its link set, and with them the groups of any placement nested in them,
+   * a caller that refreshes several placements walks again after a refresh replaced a
+   * group that another key's placement holds.
+   */
+  std::map<PrefabPlacementKey, PrefabPlacement> placementsByKey() const;
 
   /**
    * The placements whose file has changed since they were placed (its hash differs from
@@ -287,8 +342,9 @@ public:
 private:
   kdl::task_manager& taskManager();
   void startParsing(Listing listing);
-  void integrateScan();
+  bool integrateScan();
   bool integrateUpdate(std::unique_ptr<PrefabEntry> entry);
+  void rebuildEntryIndex();
 
   void connectObservers();
   void entityDefinitionsWillChange();

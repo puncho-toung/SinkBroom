@@ -383,6 +383,17 @@ TEST_CASE("PrefabRefresh")
       REQUIRE(threePlacements.size() == 2u);
       CHECK(threePlacements[1].firstMember == thirdNode);
       CHECK(threePlacements[1].members == std::vector<GroupNode*>{thirdNode});
+
+      // the same placements by their keys
+      const auto byKey = library.placementsByKey();
+      REQUIRE(byKey.size() == 2u);
+      const auto firstIt = byKey.find(PrefabPlacementKey{LampPath, firstNode->linkId()});
+      REQUIRE(firstIt != byKey.end());
+      CHECK(firstIt->second.members == std::vector<GroupNode*>{firstNode, secondNode});
+      const auto thirdIt = byKey.find(PrefabPlacementKey{LampPath, thirdNode->linkId()});
+      REQUIRE(thirdIt != byKey.end());
+      CHECK(thirdIt->second.firstMember == thirdNode);
+      CHECK(thirdIt->second.entry == &findLamp(library));
     }
 
     SECTION("A moved brush follows in every copy, overrides and names survive")
@@ -842,6 +853,74 @@ TEST_CASE("PrefabRefresh")
       placedNode->children()[1]->logicalBounds().min
         - placedNode->children()[0]->logicalBounds().min
       == fileOffset);
+  }
+
+  SECTION("refreshPlacement of a large assembly")
+  {
+    // R2-pf-mdl-2: the library keeps no world for it, so the refresh reads the file and
+    // takes its nodes instead of copying them
+    const auto saveBig = [&](const vm::vec3d& lightOrigin) {
+      auto nodes = std::vector<Node*>{};
+      for (size_t i = 0; i < PrefabWorldBrushBudget + 1; ++i)
+      {
+        nodes.push_back(createBrushNode(map));
+      }
+      nodes.push_back(new EntityNode{Entity{
+        {{"classname", "light"},
+         {"origin",
+          fmt::format("{} {} {}", lightOrigin.x(), lightOrigin.y(), lightOrigin.z())},
+         {"name", "lamp"}}}});
+      saveLampFrom(map, nodes);
+      rescan(library);
+    };
+    const auto findBig = [&]() -> const PrefabEntry& {
+      const auto* entry = library.find(PrefabRoot::Mod, "props/lamp.map");
+      REQUIRE(entry);
+      REQUIRE(entry->world == nullptr);
+      REQUIRE(entry->bodyPreview);
+      return *entry;
+    };
+
+    saveBig({0, 0, 0});
+    auto* firstNode = place(map, findBig(), {256, 0, 0});
+    auto* secondNode = placeLinkedCopy(map, *firstNode, {0, 512, 0});
+    REQUIRE(firstNode->childCount() == PrefabWorldBrushBudget + 2);
+    const auto firstBrushBounds = findBrush(*firstNode)->logicalBounds();
+    const auto firstLightOrigin = findEntity(*firstNode)->entity().origin();
+    const auto secondLightOrigin = findEntity(*secondNode)->entity().origin();
+    const auto oldHash = findBig().hash;
+
+    // the light moves up in the file; the brushes, the majority, stay
+    saveBig({0, 0, 64});
+    const auto& entry = findBig();
+    REQUIRE(entry.hash != oldHash);
+
+    const auto changed = library.changedPlacements();
+    REQUIRE(changed.size() == 1u);
+    const auto report = refreshPlacement(map, changed.front());
+    REQUIRE(report.is_success());
+    CHECK(report.value().entitiesLostOverrides == 0u);
+
+    CHECK(firstNode->childCount() == PrefabWorldBrushBudget + 2);
+    CHECK(secondNode->childCount() == PrefabWorldBrushBudget + 2);
+    CHECK(findBrush(*firstNode)->logicalBounds() == firstBrushBounds);
+    CHECK(
+      findEntity(*firstNode)->entity().origin()
+      == firstLightOrigin + vm::vec3d{0, 0, 64});
+    CHECK(
+      findEntity(*secondNode)->entity().origin()
+      == secondLightOrigin + vm::vec3d{0, 0, 64});
+    CHECK(propertyOf(*findEntity(*firstNode), "name") == "lamp");
+    CHECK(firstNode->group().prefabHash() == entry.hash);
+    CHECK(secondNode->group().prefabHash() == entry.hash);
+    CHECK(library.changedPlacements().empty());
+    // the library still keeps no world for it
+    CHECK(findBig().world == nullptr);
+
+    map.undoCommand();
+    CHECK(findEntity(*firstNode)->entity().origin() == firstLightOrigin);
+    CHECK(findEntity(*secondNode)->entity().origin() == secondLightOrigin);
+    CHECK(firstNode->group().prefabHash() == oldHash);
   }
 
   SECTION("applyPrefabToSelection")

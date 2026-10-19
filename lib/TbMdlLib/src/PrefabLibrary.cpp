@@ -39,6 +39,7 @@
 #include "mdl/WorldNode.h"
 #include "mdl/WorldReader.h"
 
+#include "kd/hash_utils.h"
 #include "kd/overload.h"
 #include "kd/path_utils.h"
 #include "kd/ranges/to.h"
@@ -55,6 +56,7 @@
 #include <map>
 #include <ranges>
 #include <set>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
@@ -96,6 +98,22 @@ std::string makePathKey(const std::string& relativePathString)
   return kdl::str_to_lower(relativePathString);
 #else
   return relativePathString;
+#endif
+}
+
+/**
+ * The path key of the relative path in a payload, which is UTF-8 with forward slashes, as
+ * makePathKey makes it from the path that the payload names; on Windows, a backslash
+ * is a separator there too.
+ */
+std::string makePayloadPathKey(const std::string_view relativePathString)
+{
+#ifdef _WIN32
+  auto result = kdl::str_to_lower(relativePathString);
+  std::ranges::replace(result, '\\', '/');
+  return result;
+#else
+  return std::string{relativePathString};
 #endif
 }
 
@@ -361,6 +379,53 @@ std::vector<Node*> cloneBodyNodes(
   return result;
 }
 
+/**
+ * The body of the given world, taken out of it: caller-owned and re-keyed, like the
+ * clones of cloneBodyNodes, but without a copy. A clone has no persistent group ID and no
+ * file position, so the nodes lose theirs.
+ */
+std::vector<Node*> detachBodyNodes(WorldNode& worldNode)
+{
+  auto detached = std::vector<std::unique_ptr<Node>>{};
+  for (auto* layerNode : worldNode.allLayers())
+  {
+    // copied, since removing a child changes the list
+    for (auto* node : std::vector<Node*>{layerNode->children()})
+    {
+      layerNode->removeChild(node);
+      detached.emplace_back(node);
+    }
+  }
+
+  auto result = detached
+                | std::views::transform([](const auto& node) { return node.get(); })
+                | kdl::ranges::to<std::vector>();
+  Node::visitAll(
+    result,
+    kdl::overload(
+      [](auto&& thisLambda, WorldNode& node) { node.visitChildren(thisLambda); },
+      [](auto&& thisLambda, LayerNode& node) { node.visitChildren(thisLambda); },
+      [](auto&& thisLambda, GroupNode& node) {
+        node.resetPersistentId();
+        node.setFilePosition(0, 0);
+        node.visitChildren(thisLambda);
+      },
+      [](auto&& thisLambda, EntityNode& node) {
+        node.setFilePosition(0, 0);
+        node.visitChildren(thisLambda);
+      },
+      [](BrushNode& node) { node.setFilePosition(0, 0); },
+      [](PatchNode& node) { node.setFilePosition(0, 0); }));
+  rekeyLinkIds(result);
+
+  // the caller owns them now
+  for (auto& node : detached)
+  {
+    static_cast<void>(node.release());
+  }
+  return result;
+}
+
 auto makeSetEntityDefinitionsVisitor(const EntityDefinitionManager* manager)
 {
   // nullptr unsets the definitions
@@ -397,6 +462,19 @@ bool compareEntries(
 {
   return lhs->root != rhs->root ? lhs->root < rhs->root
                                 : lhs->relativePathString < rhs->relativePathString;
+}
+
+/**
+ * Whether the file of an entry that failed was read again and failed in the same way:
+ * the same file, unchanged, the same error. A scan then keeps the old entry.
+ */
+bool failsAsBefore(const PrefabEntry& previousEntry, const PrefabEntry& entry)
+{
+  return previousEntry.error && entry.error && *previousEntry.error == *entry.error
+         && previousEntry.absolutePath == entry.absolutePath
+         && previousEntry.fileSize == entry.fileSize
+         && previousEntry.modificationTime == entry.modificationTime
+         && previousEntry.hash == entry.hash;
 }
 
 } // namespace
@@ -559,7 +637,9 @@ void PrefabLibrary::rescan()
   m_pendingListing.reset();
   m_pendingEntries.clear();
   m_reusedEntries.clear();
+  m_pendingDirectories.clear();
   m_pendingUpdates.clear();
+  m_updateSequences.clear();
   m_scanning = true;
 
   auto rootPaths = std::vector<std::pair<PrefabRoot, std::filesystem::path>>{};
@@ -597,6 +677,7 @@ void PrefabLibrary::rescan()
             // a missing folder is an empty root
             continue;
           }
+          listing.directories.push_back(fixedRootPath.lexically_normal());
 
           // the directory entries carry the file type, size and time, so listing a
           // root costs no stat per file
@@ -611,7 +692,12 @@ void PrefabLibrary::rescan()
           {
             const auto& directoryEntry = *it;
             auto entryError = std::error_code{};
-            if (directoryEntry.is_regular_file(entryError))
+            if (directoryEntry.is_directory(entryError))
+            {
+              // watched by the panel, so that a file copied into an empty folder is seen
+              listing.directories.push_back(directoryEntry.path().lexically_normal());
+            }
+            else if (directoryEntry.is_regular_file(entryError))
             {
               const auto& absolutePath = directoryEntry.path();
               const auto extension = kdl::path_to_lower(absolutePath.extension());
@@ -704,34 +790,43 @@ void PrefabLibrary::updateEntry(const std::filesystem::path& absolutePath)
       thumbnailPath = std::nullopt;
     }
 
+    // R2-pf-mdl-6: two updates of one file run on two workers, so the first may finish
+    // last; only the one that was started last is taken over
+    auto key = entryKey(root, makePathKey(toUtf8String(relativePath)));
+    const auto sequence = ++m_nextUpdateSequence;
+    m_updateSequences[key] = sequence;
+
     const auto& worldNode = m_map.worldNode();
-    m_pendingUpdates.push_back(taskManager().run_task(std::function<PrefabEntry()>{
-      [root,
-       path,
-       relativePath,
-       fileSize,
-       modificationTime,
-       thumbnailPath,
-       mapFormat = worldNode.mapFormat(),
-       entityPropertyConfig = worldNode.entityPropertyConfig(),
-       worldBounds = m_map.worldBounds(),
-       currentGeneration = m_generation,
-       generation = m_generation->load(),
-       readHook = m_readHook]() {
-        return readPrefabEntry(
-          root,
-          path,
-          relativePath,
-          fileSize,
-          modificationTime,
-          thumbnailPath,
-          mapFormat,
-          worldBounds,
-          entityPropertyConfig,
-          *currentGeneration,
-          generation,
-          readHook);
-      }}));
+    m_pendingUpdates.push_back(PendingUpdate{
+      std::move(key),
+      sequence,
+      taskManager().run_task(std::function<PrefabEntry()>{
+        [root,
+         path,
+         relativePath,
+         fileSize,
+         modificationTime,
+         thumbnailPath,
+         mapFormat = worldNode.mapFormat(),
+         entityPropertyConfig = worldNode.entityPropertyConfig(),
+         worldBounds = m_map.worldBounds(),
+         currentGeneration = m_generation,
+         generation = m_generation->load(),
+         readHook = m_readHook]() {
+          return readPrefabEntry(
+            root,
+            path,
+            relativePath,
+            fileSize,
+            modificationTime,
+            thumbnailPath,
+            mapFormat,
+            worldBounds,
+            entityPropertyConfig,
+            *currentGeneration,
+            generation,
+            readHook);
+        }})});
     return;
   }
 }
@@ -755,15 +850,21 @@ void PrefabLibrary::processPendingResults()
     m_scanning && !m_pendingListing
     && std::ranges::all_of(m_pendingEntries, isReady<PrefabEntry>))
   {
-    integrateScan();
-    changed = true;
+    changed = integrateScan() || changed;
   }
 
   for (auto it = m_pendingUpdates.begin(); it != m_pendingUpdates.end();)
   {
-    if (isReady(*it))
+    if (isReady(it->future))
     {
-      changed = integrateUpdate(std::make_unique<PrefabEntry>(it->get())) || changed;
+      auto entry = std::make_unique<PrefabEntry>(it->future.get());
+      if (const auto sequenceIt = m_updateSequences.find(it->key);
+          sequenceIt != m_updateSequences.end() && sequenceIt->second == it->sequence)
+      {
+        m_updateSequences.erase(sequenceIt);
+        changed = integrateUpdate(std::move(entry)) || changed;
+      }
+      // else a later update of the same file was started, and its result wins
       it = m_pendingUpdates.erase(it);
     }
     else
@@ -798,14 +899,17 @@ const std::vector<std::unique_ptr<PrefabEntry>>& PrefabLibrary::entries() const
   return m_entries;
 }
 
+const std::vector<std::filesystem::path>& PrefabLibrary::directories() const
+{
+  return m_directories;
+}
+
 const PrefabEntry* PrefabLibrary::find(
   const PrefabRoot root, const std::filesystem::path& relativePath) const
 {
-  const auto key = makePathKey(toUtf8String(relativePath));
-  const auto it = std::ranges::find_if(m_entries, [&](const auto& entry) {
-    return entry->root == root && entry->pathKey == key;
-  });
-  return it != m_entries.end() ? it->get() : nullptr;
+  const auto it =
+    m_entriesByKey.find(entryKey(root, makePathKey(toUtf8String(relativePath))));
+  return it != m_entriesByKey.end() ? it->second : nullptr;
 }
 
 std::string PrefabLibrary::payloadFor(const PrefabEntry& entry) const
@@ -816,16 +920,21 @@ std::string PrefabLibrary::payloadFor(const PrefabEntry& entry) const
 
 const PrefabEntry* PrefabLibrary::fromPayload(const std::string& payload) const
 {
-  // payloads are UTF-8, whatever the process's code page is
+  // payloads are UTF-8, whatever the process's code page is, so the key is made from the
+  // text, without a path in between (R2-pf-ui-6)
+  const auto lookUp = [&](const PrefabRoot root, const std::string& prefix) {
+    const auto it = m_entriesByKey.find(entryKey(
+      root, makePayloadPathKey(std::string_view{payload}.substr(prefix.size()))));
+    return it != m_entriesByKey.end() ? it->second : nullptr;
+  };
+
   if (kdl::cs::str_is_prefix(payload, PayloadPrefixUser))
   {
-    return find(
-      PrefabRoot::User, kdl::parse_utf8_path(payload.substr(PayloadPrefixUser.size())));
+    return lookUp(PrefabRoot::User, PayloadPrefixUser);
   }
   if (kdl::cs::str_is_prefix(payload, PayloadPrefixMod))
   {
-    return find(
-      PrefabRoot::Mod, kdl::parse_utf8_path(payload.substr(PayloadPrefixMod.size())));
+    return lookUp(PrefabRoot::Mod, PayloadPrefixMod);
   }
   return nullptr;
 }
@@ -851,7 +960,7 @@ std::vector<Node*> PrefabLibrary::cloneBody(
     readPrefabWorld(
       entry.absolutePath,
       worldNode.mapFormat(),
-      m_map.worldBounds(),
+      worldBounds,
       worldNode.entityPropertyConfig(),
       hash)
       | kdl::transform([&](auto prefabWorldNode) {
@@ -864,7 +973,8 @@ std::vector<Node*> PrefabLibrary::cloneBody(
           }
           prefabWorldNode->accept(
             makeSetEntityDefinitionsVisitor(&m_map.entityDefinitionManager()));
-          result = cloneBodyNodes(*prefabWorldNode, worldBounds);
+          // R2-pf-mdl-2: the world is thrown away, so its nodes are taken, not copied
+          result = detachBodyNodes(*prefabWorldNode);
         })
       | kdl::transform_error([&](const auto& e) {
           m_map.logger().warn()
@@ -882,8 +992,14 @@ std::vector<Node*> PrefabLibrary::cloneBody(
 std::vector<PrefabPlacement> PrefabLibrary::placements() const
 {
   auto result = std::vector<PrefabPlacement>{};
+
+  // R2-pf-mdl-14: the keys view the strings of the groups, which the walk does not change
+  using Key = std::pair<std::string_view, std::string_view>;
+  const auto hashKey = [](const Key& key) { return kdl::hash(key.first, key.second); };
   // (prefab path, link ID) -> index into result
-  auto indices = std::map<std::pair<std::string, std::string>, std::size_t>{};
+  auto indices = std::unordered_map<Key, std::size_t, decltype(hashKey)>{0, hashKey};
+  // R2-pf-mdl-3: prefab path -> entry, so that each path is looked up once
+  auto entriesByPath = std::unordered_map<std::string_view, const PrefabEntry*>{};
 
   m_map.worldNode().accept(kdl::overload(
     [](auto&& thisLambda, WorldNode& node) { node.visitChildren(thisLambda); },
@@ -892,15 +1008,22 @@ std::vector<PrefabPlacement> PrefabLibrary::placements() const
       if (const auto& prefabPath = node.group().prefabPath())
       {
         const auto [it, inserted] =
-          indices.try_emplace({*prefabPath, node.linkId()}, result.size());
+          indices.try_emplace(Key{*prefabPath, node.linkId()}, result.size());
         if (inserted)
         {
+          const auto [entryIt, entryInserted] =
+            entriesByPath.try_emplace(*prefabPath, nullptr);
+          if (entryInserted)
+          {
+            entryIt->second = fromPayload(PayloadPrefix + *prefabPath);
+          }
+
           result.push_back(PrefabPlacement{
             .prefabPath = *prefabPath,
             .firstMember = &node,
             .members = {},
             .placedHash = node.group().prefabHash().value_or(""),
-            .entry = fromPayload(PayloadPrefix + *prefabPath),
+            .entry = entryIt->second,
           });
         }
         result[it->second].members.push_back(&node);
@@ -912,6 +1035,17 @@ std::vector<PrefabPlacement> PrefabLibrary::placements() const
     [](BrushNode&) {},
     [](PatchNode&) {}));
 
+  return result;
+}
+
+std::map<PrefabPlacementKey, PrefabPlacement> PrefabLibrary::placementsByKey() const
+{
+  auto result = std::map<PrefabPlacementKey, PrefabPlacement>{};
+  for (auto& placement : placements())
+  {
+    auto key = PrefabPlacementKey{placement.prefabPath, placement.firstMember->linkId()};
+    result.emplace(std::move(key), std::move(placement));
+  }
   return result;
 }
 
@@ -951,11 +1085,8 @@ void PrefabLibrary::startParsing(Listing listing)
     }
   }
 
-  auto entriesByKey = std::unordered_map<std::string, PrefabEntry*>{};
-  for (const auto& entry : m_entries)
-  {
-    entriesByKey.emplace(entryKey(entry->root, entry->pathKey), entry.get());
-  }
+
+  m_pendingDirectories = std::move(listing.directories);
 
   const auto& worldNode = m_map.worldNode();
   const auto mapFormat = worldNode.mapFormat();
@@ -970,8 +1101,8 @@ void PrefabLibrary::startParsing(Listing listing)
       continue;
     }
 
-    if (const auto it = entriesByKey.find(entryKey(file.root, file.pathKey));
-        it != entriesByKey.end() && !it->second->error
+    if (const auto it = m_entriesByKey.find(entryKey(file.root, file.pathKey));
+        it != m_entriesByKey.end() && !it->second->error
         && it->second->absolutePath == file.absolutePath
         && it->second->fileSize == file.fileSize
         && it->second->modificationTime == file.modificationTime)
@@ -1008,79 +1139,122 @@ void PrefabLibrary::startParsing(Listing listing)
   }
 }
 
-void PrefabLibrary::integrateScan()
+bool PrefabLibrary::integrateScan()
 {
-  auto previousEntries =
-    std::unordered_map<const PrefabEntry*, std::unique_ptr<PrefabEntry>>{};
+  // R2-pf-ui-3: only a scan that changed the entries is reported; the first scan changes
+  // the library from not scanned to scanned, even when it finds nothing
+  auto changed = !m_scannedOnce;
+  m_scannedOnce = true;
+
+  auto previousEntries = std::unordered_map<std::string, std::unique_ptr<PrefabEntry>>{};
   for (auto& entry : m_entries)
   {
-    auto* key = entry.get();
-    previousEntries.emplace(key, std::move(entry));
+    auto key = entryKey(entry->root, entry->pathKey);
+    previousEntries.emplace(std::move(key), std::move(entry));
   }
 
   auto entries = std::vector<std::unique_ptr<PrefabEntry>>{};
   entries.reserve(m_reusedEntries.size() + m_pendingEntries.size());
 
-  // reused entries keep their address, their world and their definitions
+  // a kept entry keeps its address, its world and its definitions
+  const auto keep = [&](auto it, std::optional<std::filesystem::path> thumbnailPath) {
+    if (it->second->thumbnailPath != thumbnailPath)
+    {
+      it->second->thumbnailPath = std::move(thumbnailPath);
+      changed = true;
+    }
+    entries.push_back(std::move(it->second));
+    previousEntries.erase(it);
+  };
+
   for (auto& reusedEntry : m_reusedEntries)
   {
-    if (auto it = previousEntries.find(reusedEntry.entry); it != previousEntries.end())
+    if (const auto it = previousEntries.find(
+          entryKey(reusedEntry.entry->root, reusedEntry.entry->pathKey));
+        it != previousEntries.end())
     {
-      it->second->thumbnailPath = std::move(reusedEntry.thumbnailPath);
-      entries.push_back(std::move(it->second));
+      keep(it, std::move(reusedEntry.thumbnailPath));
     }
   }
 
   for (auto& future : m_pendingEntries)
   {
     auto entry = std::make_unique<PrefabEntry>(future.get());
+    if (const auto it = previousEntries.find(entryKey(entry->root, entry->pathKey));
+        it != previousEntries.end() && failsAsBefore(*it->second, *entry))
+    {
+      // read again (DD-22) and failed as before: nothing changed
+      keep(it, std::move(entry->thumbnailPath));
+      continue;
+    }
+
     setEntityDefinitions(*entry);
     entries.push_back(std::move(entry));
+    changed = true;
   }
+
+  // the entries that were neither reused nor kept were removed or read again
+  changed = changed || !previousEntries.empty();
 
   m_reusedEntries.clear();
   m_pendingEntries.clear();
   m_scanning = false;
 
+  // the roots are listed one after the other, and one may lie inside the other
+  std::ranges::sort(m_pendingDirectories);
+  const auto duplicates = std::ranges::unique(m_pendingDirectories);
+  m_pendingDirectories.erase(duplicates.begin(), duplicates.end());
+  m_directories = std::exchange(m_pendingDirectories, {});
+
   std::ranges::sort(entries, compareEntries);
   m_entries = std::move(entries);
-  // the entries that were not reused are deleted with previousEntries
+  rebuildEntryIndex();
+  // the entries that were not kept are deleted with previousEntries
+  return changed;
 }
 
 bool PrefabLibrary::integrateUpdate(std::unique_ptr<PrefabEntry> entry)
 {
   setEntityDefinitions(*entry);
 
-  const auto sameFile = [&](const auto root) {
-    return [&, root](const auto& other) {
-      return other->root == root && other->pathKey == entry->pathKey;
-    };
-  };
-
-  if (const auto it = std::ranges::find_if(m_entries, sameFile(entry->root));
-      it != m_entries.end())
+  if (const auto it = m_entriesByKey.find(entryKey(entry->root, entry->pathKey));
+      it != m_entriesByKey.end())
   {
-    // the entry keeps its address
-    **it = std::move(*entry);
+    // the entry keeps its address, and the index stays as it is
+    *it->second = std::move(*entry);
     return true;
   }
 
   if (entry->root == PrefabRoot::Mod)
   {
-    if (std::ranges::any_of(m_entries, sameFile(PrefabRoot::User)))
+    if (m_entriesByKey.contains(entryKey(PrefabRoot::User, entry->pathKey)))
     {
       // shadowed by the user root
       return false;
     }
   }
-  else
+  else if (const auto it = m_entriesByKey.find(entryKey(PrefabRoot::Mod, entry->pathKey));
+           it != m_entriesByKey.end())
   {
-    std::erase_if(m_entries, sameFile(PrefabRoot::Mod));
+    // the mod root's file is shadowed now
+    std::erase_if(
+      m_entries, [&](const auto& other) { return other.get() == it->second; });
   }
 
   const auto position = std::ranges::upper_bound(m_entries, entry, compareEntries);
   m_entries.insert(position, std::move(entry));
+  rebuildEntryIndex();
   return true;
+}
+
+void PrefabLibrary::rebuildEntryIndex()
+{
+  m_entriesByKey.clear();
+  m_entriesByKey.reserve(m_entries.size());
+  for (const auto& entry : m_entries)
+  {
+    m_entriesByKey.emplace(entryKey(entry->root, entry->pathKey), entry.get());
+  }
 }
 
 void PrefabLibrary::connectObservers()
