@@ -20,6 +20,7 @@
 #pragma once
 
 #include "base/NotifierConnection.h"
+#include "base/Result.h"
 #include "ui/SidebarPanel.h"
 
 #include <cstddef>
@@ -28,8 +29,10 @@
 
 class QComboBox;
 class QFileSystemWatcher;
+class QLabel;
 class QLineEdit;
 class QScrollBar;
+class QStackedWidget;
 class QTimer;
 class QToolButton;
 class QTreeWidget;
@@ -50,7 +53,7 @@ class PrefabBrowserView;
  * the library roots, from which prefabs are dragged into the map views. A tree of the
  * library's folders above the grid shows the prefabs of one folder and the folders below
  * it; the filter box matches parts of names, tags and classes, and whole tags after
- * tag:.
+ * tag:. Without roots, or without prefabs, the grid gives way to a line that says so.
  *
  * The panel owns every scan of the library. The first one runs when the panel is first
  * shown, or when a caller first needs the entries (scanOnce); after it, Rescan, a new
@@ -82,6 +85,10 @@ private:
   QToolButton* m_applyButton = nullptr;
   QScrollBar* m_scrollBar = nullptr;
   PrefabBrowserView* m_view = nullptr;
+  // the grid, or the line that stands in for it while there is nothing to show
+  QStackedWidget* m_browserStack = nullptr;
+  QWidget* m_browserPage = nullptr;
+  QLabel* m_emptyLabel = nullptr;
   QTimer* m_scanTimer = nullptr;
   QFileSystemWatcher* m_watcher = nullptr;
   // restarted by every change in a watched folder; rescans when it runs out
@@ -172,6 +179,18 @@ public:
    */
   void updatePrefabFromSelection(const std::filesystem::path& path);
 
+  /**
+   * Deletes the given prefab file and the thumbnail beside it, without asking, and
+   * rescans. Placements of the prefab in the map are not touched; they count as missing.
+   */
+  Result<void> deletePrefabFile(const std::filesystem::path& path);
+
+  /**
+   * Deletes the thumbnail beside the given prefab file, without asking, and rescans, so
+   * that the cell draws the prefab itself.
+   */
+  Result<void> removePrefabThumbnail(const std::filesystem::path& path);
+
 private:
   void createGui();
   void connectObservers();
@@ -183,6 +202,7 @@ private:
 
   void updateCategories();
   void updateFilter();
+  void updateEmptyState();
   void updateSaveButton();
   void updateRefreshButton();
   void updateApplyButton();
@@ -192,6 +212,10 @@ private:
   void promptAfterScanIfNeeded();
 
   void editPrefab(const QString& path);
+  void revealPrefabInFolder(const std::filesystem::path& path);
+  void openPrefabThumbnail(const std::filesystem::path& path);
+  void confirmDeletePrefabFile(const std::filesystem::path& path);
+  void confirmRemovePrefabThumbnail(const std::filesystem::path& path);
 };
 
 } // namespace tb::ui

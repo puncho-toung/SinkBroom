@@ -23,6 +23,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QStackedWidget>
 #include <QTest>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -904,6 +905,146 @@ TEST_CASE("PrefabPanel")
     CHECK(
       categoryTreeTexts(*categoryTree)
       == std::vector<std::string>{"All (1)", "doors (1)"});
+  }
+
+  SECTION("Empty states")
+  {
+    // the text of the line that stands in for the grid, nullopt if the grid shows
+    const auto emptyText = [](const PrefabPanel& panel) -> std::optional<QString> {
+      const auto* stack = panel.findChild<QStackedWidget*>();
+      const auto* label = panel.findChild<QLabel*>("PrefabPanel_emptyLabel");
+      REQUIRE(stack != nullptr);
+      REQUIRE(label != nullptr);
+      return stack->currentWidget() == label ? std::optional{label->text()}
+                                             : std::nullopt;
+    };
+
+    SECTION("No roots")
+    {
+      auto fixture = SidebarContextFixture{fixtureConfigWithUserRoot({})};
+      auto panel = PrefabPanel{fixture.context()};
+      CHECK(emptyText(panel) == "Set a game path or a Prefab Path in Preferences");
+
+      panel.panelShown();
+      CHECK(waitForScan(panel, fixture.document().map().prefabLibrary(), 1));
+      CHECK(emptyText(panel) == "Set a game path or a Prefab Path in Preferences");
+    }
+
+    SECTION("Empty roots")
+    {
+      auto env = fs::TestEnvironment{};
+      auto fixture = SidebarContextFixture{fixtureConfigWithUserRoot(env.dir())};
+      auto& map = fixture.document().map();
+      auto& library = map.prefabLibrary();
+      auto panel = PrefabPanel{fixture.context()};
+
+      // until a scan has finished, the grid stays
+      CHECK(emptyText(panel) == std::nullopt);
+
+      panel.panelShown();
+      REQUIRE(waitForScan(panel, library, 1));
+      CHECK(emptyText(panel) == "No prefabs yet. Select something and press +");
+
+      // the first prefab brings the grid back
+      auto* entityNode = addEntity(map, {{"classname", "light"}, {"name", "lamp"}});
+      const auto path =
+        mdl::savePrefab(
+          map,
+          {entityNode},
+          mdl::SavePrefabOptions{.name = "lamp", .root = mdl::PrefabRoot::User})
+        | kdl::value();
+      panel.prefabWasSaved(path);
+      REQUIRE(QTest::qWaitFor([&] { return library.entries().size() == 1u; }));
+      CHECK(emptyText(panel) == std::nullopt);
+    }
+  }
+
+  SECTION("Delete File and Remove Thumbnail")
+  {
+    auto env = fs::TestEnvironment{};
+    auto fixture = SidebarContextFixture{fixtureConfigWithUserRoot(env.dir())};
+    auto& map = fixture.document().map();
+    auto& library = map.prefabLibrary();
+
+    // an assembly with a thumbnail, and an entity snapshot
+    auto* lampNode = addEntity(map, {{"classname", "light"}, {"name", "lamp"}});
+    auto* markerNode = addEntity(map, {{"classname", "info_null"}, {"name", "marker"}});
+    const auto pairPath =
+      mdl::savePrefab(
+        map,
+        {lampNode, markerNode},
+        mdl::SavePrefabOptions{
+          .name = "pair", .category = "sets", .root = mdl::PrefabRoot::User})
+      | kdl::value();
+    const auto lampPath =
+      mdl::savePrefab(
+        map,
+        {lampNode},
+        mdl::SavePrefabOptions{.name = "lamp", .root = mdl::PrefabRoot::User})
+      | kdl::value();
+    const auto pairThumbnailPath = env.dir() / "sets" / "pair.png";
+    auto image = QImage{8, 8, QImage::Format_RGBA8888};
+    image.fill(Qt::red);
+    REQUIRE(image.save(pathAsQString(pairThumbnailPath)));
+
+    auto panel = PrefabPanel{fixture.context()};
+    panel.panelShown();
+    REQUIRE(waitForScan(panel, library, 1));
+    REQUIRE(library.entries().size() == 2u);
+
+    const auto* pairEntry = library.find(mdl::PrefabRoot::User, "sets/pair.map");
+    REQUIRE(pairEntry != nullptr);
+    REQUIRE(pairEntry->thumbnailPath);
+
+    // a placement of the assembly, as the drop tool makes it
+    auto clones = library.cloneBody(*pairEntry, map.worldBounds());
+    REQUIRE(clones.size() == 1u);
+    auto* groupNode = dynamic_cast<mdl::GroupNode*>(clones.front());
+    REQUIRE(groupNode != nullptr);
+    auto group = groupNode->group();
+    group.setPrefabPath("user/sets/pair.map");
+    group.setPrefabHash(pairEntry->hash);
+    groupNode->setGroup(std::move(group));
+    REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), clones}}).empty());
+    const auto groupChildCount = groupNode->childCount();
+
+    auto* view = panel.findChild<PrefabBrowserView*>();
+    REQUIRE(view != nullptr);
+    REQUIRE(cellPaths(*view).size() == 2u);
+
+    SECTION("Delete File")
+    {
+      CHECK(panel.deletePrefabFile(pairPath) | kdl::is_success());
+
+      // the file and its thumbnail are gone, and with them the entry and the cell
+      CHECK(!std::filesystem::exists(pairPath));
+      CHECK(!std::filesystem::exists(pairThumbnailPath));
+      REQUIRE(waitForScan(panel, library, 2));
+      CHECK(library.find(mdl::PrefabRoot::User, "sets/pair.map") == nullptr);
+      CHECK(cellPaths(*view) == std::vector<std::filesystem::path>{"lamp.map"});
+
+      // the placement stays as it was, and counts as missing
+      CHECK(groupNode->parent() != nullptr);
+      CHECK(groupNode->childCount() == groupChildCount);
+      CHECK(groupNode->group().prefabPath() == "user/sets/pair.map");
+      CHECK(panel.changedPlacementCount() == 1u);
+
+      // the other file stays
+      CHECK(std::filesystem::exists(lampPath));
+    }
+
+    SECTION("Remove Thumbnail")
+    {
+      CHECK(panel.removePrefabThumbnail(pairPath) | kdl::is_success());
+      CHECK(!std::filesystem::exists(pairThumbnailPath));
+      CHECK(std::filesystem::exists(pairPath));
+
+      REQUIRE(waitForScan(panel, library, 2));
+      const auto* entry = library.find(mdl::PrefabRoot::User, "sets/pair.map");
+      REQUIRE(entry != nullptr);
+      CHECK(!entry->thumbnailPath);
+      CHECK(cellPaths(*view).size() == 2u);
+    }
   }
 
   SECTION("Refresh count and Apply to Selection")

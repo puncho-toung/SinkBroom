@@ -1184,6 +1184,24 @@ void PrefabBrowserView::doContextMenu(
       map.prefabLibrary().changedPlacements(),
       [&](const auto& placement) { return placement.entry == &entry; }));
 
+    menu.addSeparator();
+    menu.addAction(
+      tr("Reveal in Folder"), this, [this, path]() { emit revealPrefabRequested(path); });
+
+    const auto hasThumbnail = entry.thumbnailPath.has_value();
+    auto* openThumbnailAction = menu.addAction(
+      tr("Open Thumbnail"), this, [this, path]() { emit openThumbnailRequested(path); });
+    openThumbnailAction->setEnabled(hasThumbnail);
+    auto* removeThumbnailAction =
+      menu.addAction(tr("Remove Thumbnail..."), this, [this, path]() {
+        emit removeThumbnailRequested(path);
+      });
+    removeThumbnailAction->setEnabled(hasThumbnail);
+
+    menu.addSeparator();
+    menu.addAction(
+      tr("Delete File..."), this, [this, path]() { emit deletePrefabRequested(path); });
+
     menu.exec(event->globalPos());
   }
 }

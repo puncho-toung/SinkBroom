@@ -253,6 +253,10 @@ signals:
   void applyPrefabRequested(const QString& path);
   void updatePrefabRequested(const QString& path);
   void refreshPrefabRequested(const QString& path);
+  void revealPrefabRequested(const QString& path);
+  void deletePrefabRequested(const QString& path);
+  void openThumbnailRequested(const QString& path);
+  void removeThumbnailRequested(const QString& path);
   void selectedEntryChanged();
 
 private:

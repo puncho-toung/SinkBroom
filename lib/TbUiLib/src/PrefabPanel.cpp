@@ -20,22 +20,27 @@
 #include "ui/PrefabPanel.h"
 
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QFileSystemWatcher>
 #include <QHBoxLayout>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSet>
 #include <QSignalBlocker>
+#include <QStackedWidget>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include "base/Logger.h"
 #include "base/PreferenceManager.h"
+#include "fs/DiskIO.h"
 #include "mdl/GameInfo.h"
 #include "mdl/GroupNode.h"
 #include "mdl/Map.h"
@@ -52,6 +57,7 @@
 #include "ui/Splitter.h"
 #include "ui/ViewConstants.h"
 
+#include "kd/path_utils.h"
 #include "kd/result.h"
 #include "kd/string_format.h"
 #include "kd/string_utils.h"
@@ -83,6 +89,12 @@ const auto AllCategories = QVariant{};
 
 // the role of a category tree item's folder, a generic path relative to the roots
 constexpr auto CategoryRole = Qt::UserRole;
+
+// C1: <stem>.png beside <stem>.map
+std::filesystem::path thumbnailPathFor(const std::filesystem::path& path)
+{
+  return kdl::path_replace_extension(path, ".png");
+}
 
 bool hasWriteRoot(const mdl::PrefabLibrary& library)
 {
@@ -151,6 +163,7 @@ PrefabPanel::PrefabPanel(const SidebarContext& context, QWidget* parent)
   updateSaveButton();
   updateRefreshButton();
   updateApplyButton();
+  updateEmptyState();
 
   // the panel is hidden by default; the first scan waits until it is shown, unless the
   // map holds placed prefabs, which are checked for changed files (D17)
@@ -371,6 +384,29 @@ void PrefabPanel::updatePrefabFromSelection(const std::filesystem::path& path)
   }
 }
 
+Result<void> PrefabPanel::deletePrefabFile(const std::filesystem::path& path)
+{
+  // the thumbnail goes with the file; a missing one is no error
+  auto result =
+    fs::Disk::deleteFile(path)
+    | kdl::and_then([&](auto) { return fs::Disk::deleteFile(thumbnailPathFor(path)); })
+    | kdl::transform([](auto) {});
+
+  // the file may be gone even if its thumbnail is not
+  rescan();
+  return result;
+}
+
+Result<void> PrefabPanel::removePrefabThumbnail(const std::filesystem::path& path)
+{
+  auto result =
+    fs::Disk::deleteFile(thumbnailPathFor(path)) | kdl::transform([](auto) {});
+
+  // the entry learns that it has no thumbnail, and its cell draws the prefab
+  rescan();
+  return result;
+}
+
 void PrefabPanel::createGui()
 {
   m_categoryTree = new QTreeWidget{};
@@ -455,6 +491,23 @@ void PrefabPanel::createGui()
       });
       promptToRefreshPlacements(placements);
     });
+  connect(
+    m_view, &PrefabBrowserView::revealPrefabRequested, this, [&](const QString& path) {
+      revealPrefabInFolder(pathFromQString(path));
+    });
+  connect(
+    m_view, &PrefabBrowserView::openThumbnailRequested, this, [&](const QString& path) {
+      openPrefabThumbnail(pathFromQString(path));
+    });
+  connect(
+    m_view, &PrefabBrowserView::removeThumbnailRequested, this, [&](const QString& path) {
+      confirmRemovePrefabThumbnail(pathFromQString(path));
+    });
+  connect(
+    m_view, &PrefabBrowserView::deletePrefabRequested, this, [&](const QString& path) {
+      confirmDeletePrefabFile(pathFromQString(path));
+    });
+
   auto* controlLayout = new QHBoxLayout{};
   controlLayout->setContentsMargins(
     LayoutConstants::NarrowHMargin,
@@ -484,14 +537,24 @@ void PrefabPanel::createGui()
   browserLayout->addWidget(m_view, 1);
   browserLayout->addWidget(m_scrollBar, 0);
 
-  auto* browserPage = new QWidget{};
-  browserPage->setLayout(browserLayout);
+  m_browserPage = new QWidget{};
+  m_browserPage->setLayout(browserLayout);
+
+  m_emptyLabel = new QLabel{};
+  m_emptyLabel->setObjectName("PrefabPanel_emptyLabel");
+  m_emptyLabel->setAlignment(Qt::AlignCenter);
+  m_emptyLabel->setWordWrap(true);
+  m_emptyLabel->setMargin(LayoutConstants::WideHMargin);
+
+  m_browserStack = new QStackedWidget{};
+  m_browserStack->addWidget(m_browserPage);
+  m_browserStack->addWidget(m_emptyLabel);
 
   // the folders above the grid; dragging the handle up hides them
   auto* splitter = new Splitter{Qt::Vertical};
   splitter->setObjectName("PrefabPanel_splitter");
   splitter->addWidget(m_categoryTree);
-  splitter->addWidget(browserPage);
+  splitter->addWidget(m_browserStack);
   splitter->setCollapsible(1, false);
   splitter->setStretchFactor(0, 0);
   splitter->setStretchFactor(1, 1);
@@ -532,6 +595,7 @@ void PrefabPanel::connectObservers()
     updateSaveButton();
     updateRefreshButton();
     updateApplyButton();
+    updateEmptyState();
     rescan();
 
     // D17: the placed prefabs of the new map are checked once its library is scanned
@@ -545,6 +609,7 @@ void PrefabPanel::connectObservers()
   // the mod root follows the last enabled mod
   m_notifierConnection += m_document.modsDidChangeNotifier.connect([&]() {
     updateSaveButton();
+    updateEmptyState();
     rescan();
   });
 
@@ -574,6 +639,7 @@ void PrefabPanel::connectObservers()
           || path == gameInfo.prefabPathPreference.path)
         {
           updateSaveButton();
+          updateEmptyState();
           rescan();
         }
       });
@@ -632,6 +698,7 @@ void PrefabPanel::libraryDidChange()
   m_view->libraryDidChange();
   updateRefreshButton();
   updateApplyButton();
+  updateEmptyState();
   updateWatchedPaths();
   promptAfterScanIfNeeded();
 }
@@ -820,6 +887,20 @@ void PrefabPanel::updateFilter()
   m_view->setFilter(std::move(filter));
 }
 
+void PrefabPanel::updateEmptyState()
+{
+  // a scan that has not finished may still find prefabs
+  const auto& library = m_document.map().prefabLibrary();
+  const auto message = !hasWriteRoot(library)
+                         ? tr("Set a game path or a Prefab Path in Preferences")
+                       : m_scanFinished && library.entries().empty()
+                         ? tr("No prefabs yet. Select something and press +")
+                         : QString{};
+
+  m_emptyLabel->setText(message);
+  m_browserStack->setCurrentWidget(message.isEmpty() ? m_browserPage : m_emptyLabel);
+}
+
 void PrefabPanel::updateSaveButton()
 {
   const auto& map = m_document.map();
@@ -839,6 +920,74 @@ void PrefabPanel::editPrefab(const QString& path)
     {
       mapWindow->editPrefab(pathFromQString(path));
     }
+  });
+}
+
+void PrefabPanel::revealPrefabInFolder(const std::filesystem::path& path)
+{
+  // the folder, not the file, which the system would open with the editor
+  const auto folder = path.parent_path();
+  if (!QDesktopServices::openUrl(QUrl::fromLocalFile(pathAsQPath(folder))))
+  {
+    m_document.map().logger().error() << "Could not open " << folder;
+  }
+}
+
+void PrefabPanel::openPrefabThumbnail(const std::filesystem::path& path)
+{
+  const auto thumbnailPath = thumbnailPathFor(path);
+  if (!QDesktopServices::openUrl(QUrl::fromLocalFile(pathAsQPath(thumbnailPath))))
+  {
+    m_document.map().logger().error() << "Could not open " << thumbnailPath;
+  }
+}
+
+void PrefabPanel::confirmDeletePrefabFile(const std::filesystem::path& path)
+{
+  auto ec = std::error_code{};
+  const auto thumbnailPath = thumbnailPathFor(path);
+  const auto hasThumbnail = std::filesystem::is_regular_file(thumbnailPath, ec);
+
+  auto messageBox = QMessageBox{this};
+  messageBox.setIcon(QMessageBox::Warning);
+  messageBox.setWindowTitle(tr("Delete Prefab"));
+  messageBox.setText(
+    hasThumbnail ? tr("Delete %1 and its thumbnail %2?")
+                     .arg(pathAsQString(path))
+                     .arg(pathAsQString(thumbnailPath.filename()))
+                 : tr("Delete %1?").arg(pathAsQString(path)));
+  messageBox.setInformativeText(
+    tr("The placed copies of the prefab stay in the map. This cannot be undone."));
+  messageBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+  messageBox.setDefaultButton(QMessageBox::No);
+  if (messageBox.exec() != QMessageBox::Yes)
+  {
+    return;
+  }
+
+  deletePrefabFile(path) | kdl::transform_error([&](const auto& e) {
+    m_document.map().logger().error() << e.msg;
+    QMessageBox::warning(this, tr("Delete Prefab"), QString::fromStdString(e.msg));
+  });
+}
+
+void PrefabPanel::confirmRemovePrefabThumbnail(const std::filesystem::path& path)
+{
+  const auto thumbnailPath = thumbnailPathFor(path);
+  const auto answer = QMessageBox::question(
+    this,
+    tr("Remove Thumbnail"),
+    tr("Delete %1?").arg(pathAsQString(thumbnailPath)),
+    QMessageBox::Yes | QMessageBox::No,
+    QMessageBox::No);
+  if (answer != QMessageBox::Yes)
+  {
+    return;
+  }
+
+  removePrefabThumbnail(path) | kdl::transform_error([&](const auto& e) {
+    m_document.map().logger().error() << e.msg;
+    QMessageBox::warning(this, tr("Remove Thumbnail"), QString::fromStdString(e.msg));
   });
 }
 
