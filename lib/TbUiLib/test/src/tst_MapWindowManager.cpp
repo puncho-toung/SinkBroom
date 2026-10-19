@@ -272,6 +272,13 @@ TEST_CASE("MapWindowManager")
   const auto closeWindows = kdl::invoke_later{[&] {
     for (auto* mapWindow : manager.mapWindows())
     {
+      // R2-pf3-5: a check that failed after an edit must not leave a modal prompt; the
+      // count steps back to the last save's, since Map::clearModificationCount is private
+      auto& map = mapWindow->document().map();
+      while (map.modified() && map.modificationCount() > 0)
+      {
+        map.decModificationCount();
+      }
       mapWindow->close();
     }
     deleteClosedWindows();
@@ -578,6 +585,12 @@ TEST_CASE("MapWindowManager")
         [&] { return hasThumbnail(*host, "lights/lamp.map", thumbnailPath); }));
       CHECK(hostPanel->scanCount() == 1u);
 
+      // R2-pf3-2: nor is the file read by the editor's library, which no panel scanned
+      auto* editorPanel = editor->findChild<PrefabPanel*>();
+      REQUIRE(editorPanel != nullptr);
+      CHECK(editorPanel->scanCount() == 0u);
+      CHECK(editor->document().map().prefabLibrary().entries().empty());
+
       // R1-pf3-13: nor does the watcher's report of the save rescan, past the debounce
       QTest::qWait(1500);
       CHECK(hostPanel->scanCount() == 1u);
@@ -588,6 +601,28 @@ TEST_CASE("MapWindowManager")
         stream << "// not a prefab\n";
       }
       CHECK(QTest::qWaitFor([&] { return hostPanel->scanCount() == 2u; }, 5000));
+    }
+
+    SECTION("the editor's own panel takes the save for its own write")
+    {
+      // R2-pf3-3: its folder watcher reports the save, too
+      auto* editorPanel = editor->findChild<PrefabPanel*>();
+      REQUIRE(editorPanel != nullptr);
+      const auto& editorLibrary = editor->document().map().prefabLibrary();
+      showPrefabPanel(*editor, *editorPanel);
+      REQUIRE(QTest::qWaitFor(
+        [&] { return editorPanel->scanCount() == 1u && !editorLibrary.scanning(); }));
+      REQUIRE(!hasThumbnail(*editor, "lights/lamp.map", thumbnailPath));
+
+      editor->setThumbnailGrabberForTesting([] { return redImage(16, 16); });
+      REQUIRE(editor->saveDocument());
+      finishSave();
+      CHECK(QTest::qWaitFor(
+        [&] { return hasThumbnail(*editor, "lights/lamp.map", thumbnailPath); }));
+
+      QTest::qWait(1500);
+      CHECK(editorPanel->scanCount() == 1u);
+      CHECK(hostPanel->scanCount() == 1u);
     }
 
     SECTION("without a 3D view")

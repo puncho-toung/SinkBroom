@@ -321,6 +321,13 @@ void PrefabPanel::saveSelectionAsPrefab()
 
 void PrefabPanel::prefabWasSaved(const std::filesystem::path& path)
 {
+  // R2-pf3-2: a library that was never scanned reads the file with the others when its
+  // panel is first shown, and its panel watches nothing yet
+  if (!m_scanStarted)
+  {
+    return;
+  }
+
   // the other entries, and their previews, are kept
   m_document.map().prefabLibrary().updateEntry(path);
   processPendingResults();

@@ -163,6 +163,7 @@ public:
 
   /**
    * Reads the given file, which was just saved, into the library, and no other file.
+   * Does nothing until the panel has started its first scan, which reads every file.
    */
   void prefabWasSaved(const std::filesystem::path& path);
 

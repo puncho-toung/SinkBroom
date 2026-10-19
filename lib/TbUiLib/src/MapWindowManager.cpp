@@ -168,17 +168,15 @@ Result<void> MapWindowManager::openPrefabEditor(
            });
 }
 
-void MapWindowManager::prefabWasSaved(
-  const MapWindow& prefabEditor, const std::filesystem::path& path)
+void MapWindowManager::prefabWasSaved(const std::filesystem::path& path)
 {
   // R1-pf3-9: not only the window that opened the editor, which may have switched its
-  // game or been closed, or be another editor; each library filters by its roots
+  // game or been closed, or be another editor; each library filters by its roots.
+  // R2-pf3-3: the editor too, so that its own panel takes the save for its own write and
+  // does not rescan its library when its folder watcher reports it
   for (auto* mapWindow : m_mapWindows)
   {
-    if (mapWindow != &prefabEditor)
-    {
-      mapWindow->prefabWasSaved(path);
-    }
+    mapWindow->prefabWasSaved(path);
   }
 }
 

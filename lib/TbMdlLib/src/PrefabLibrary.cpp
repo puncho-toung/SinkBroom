@@ -773,13 +773,6 @@ void PrefabLibrary::rescan()
 
 void PrefabLibrary::updateEntry(const std::filesystem::path& absolutePath)
 {
-  if (m_scanning)
-  {
-    // the scan restarts and lists the file with the others
-    rescan();
-    return;
-  }
-
   const auto path = absolutePath.lexically_normal();
   for (const auto root : {PrefabRoot::User, PrefabRoot::Mod})
   {
@@ -795,6 +788,14 @@ void PrefabLibrary::updateEntry(const std::filesystem::path& absolutePath)
       || isInAutosaveFolder(relativePath))
     {
       continue;
+    }
+
+    // R2-pf3-1: only a file under a root restarts a running scan
+    if (m_scanning)
+    {
+      // the scan restarts and lists the file with the others
+      rescan();
+      return;
     }
 
     auto error = std::error_code{};

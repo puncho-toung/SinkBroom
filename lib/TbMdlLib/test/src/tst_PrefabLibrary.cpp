@@ -745,6 +745,44 @@ TEST_CASE("PrefabLibrary")
     CHECK(notifications == 1);
   }
 
+  SECTION("A save outside the roots does not restart a running scan")
+  {
+    // R2-pf3-1: another window's prefab editor saves a file of its own library
+    library.setUserRoot(env.dir() / "user");
+
+    auto entered = std::atomic<int>{0};
+    auto reads = std::atomic<int>{0};
+    auto release = std::atomic<bool>{false};
+    library.setReadHookForTesting([&](const auto&) {
+      ++reads;
+      ++entered;
+      const auto deadline = std::chrono::steady_clock::now() + 10s;
+      while (!release && std::chrono::steady_clock::now() < deadline)
+      {
+        std::this_thread::sleep_for(1ms);
+      }
+    });
+
+    library.rescan();
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (entered < 2 && std::chrono::steady_clock::now() < deadline)
+    {
+      library.processPendingResults();
+      std::this_thread::sleep_for(1ms);
+    }
+    REQUIRE(entered == 2);
+
+    library.updateEntry(env.dir() / "elsewhere" / "torch.map");
+    library.updateEntry(env.dir() / "user" / "autosave" / "x.1.map");
+    CHECK(library.scanning());
+    release = true;
+    waitForScan(library);
+
+    // each of the four files was read once, by the one scan
+    CHECK(reads == 4);
+    CHECK(library.entries().size() == 4);
+  }
+
   SECTION("An exception on a worker becomes an error")
   {
     library.setReadHookForTesting([](const auto& path) {

@@ -3048,7 +3048,7 @@ void MapWindow::finishPrefabSave()
   {
     // the thumbnail first, so that the library reads it with the file
     writePrefabThumbnail(*mapPath);
-    m_appController.mapWindowManager().prefabWasSaved(*this, *mapPath);
+    m_appController.mapWindowManager().prefabWasSaved(*mapPath);
   }
 }
 

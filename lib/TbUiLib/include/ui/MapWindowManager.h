@@ -102,10 +102,10 @@ public:
   Result<void> openPrefabEditor(MapWindow& hostWindow, const std::filesystem::path& path);
 
   /**
-   * Tells every window but the given prefab editor that the editor saved the given file;
-   * the prefab library of each reads it if it is in one of its roots.
+   * Tells every window, the prefab editor that saved the given file too, of the save; the
+   * prefab library of each reads it if it is in one of its roots.
    */
-  void prefabWasSaved(const MapWindow& prefabEditor, const std::filesystem::path& path);
+  void prefabWasSaved(const std::filesystem::path& path);
 
   std::vector<MapWindow*> mapWindows() const;
   MapWindow* topMapWindow() const;

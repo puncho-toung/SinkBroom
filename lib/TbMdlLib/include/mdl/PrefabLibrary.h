@@ -256,8 +256,9 @@ public:
 
   /**
    * Reads the given file again, or for the first time, on a worker, for example after
-   * it was saved. A file under no root is ignored; a file that no longer exists, or a
-   * call while a scan runs, rescans instead. The result lands in processPendingResults.
+   * it was saved. A file under no root, or in an autosave folder, is ignored, even while
+   * a scan runs; a file that no longer exists, or a call while a scan runs, rescans
+   * instead. The result lands in processPendingResults.
    */
   void updateEntry(const std::filesystem::path& absolutePath);
 
