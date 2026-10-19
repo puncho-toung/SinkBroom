@@ -66,6 +66,8 @@
 #include "mdl/ModelSpecification.h"
 #include "mdl/PatchNode.h"
 #include "mdl/PrefabLibrary.h"
+#include "mdl/PrefabRefresh.h"
+#include "mdl/Selection.h"
 #include "mdl/WorldNode.h"
 #include "prefs/Preferences.h"
 #include "render/Transformation.h"
@@ -530,6 +532,28 @@ void PrefabBrowserView::reloadThumbnails()
   // a cell whose image could not be read shows it again
   invalidate();
   update();
+}
+
+const mdl::PrefabEntry* PrefabBrowserView::selectedEntry() const
+{
+  if (m_selectedPath.empty())
+  {
+    return nullptr;
+  }
+
+  const auto& entries = m_document.map().prefabLibrary().entries();
+  const auto it = std::ranges::find_if(
+    entries, [&](const auto& entry) { return entry->absolutePath == m_selectedPath; });
+  return it != entries.end() ? it->get() : nullptr;
+}
+
+void PrefabBrowserView::selectEntry(const std::filesystem::path& absolutePath)
+{
+  if (absolutePath != m_selectedPath)
+  {
+    m_selectedPath = absolutePath;
+    emit selectedEntryChanged();
+  }
 }
 
 std::vector<PrefabBrowserView::CellSummary> PrefabBrowserView::cellSummaries()
@@ -1056,17 +1080,50 @@ QString PrefabBrowserView::tooltip(const Cell& cell)
   return tooltip;
 }
 
+void PrefabBrowserView::doLeftClick(Layout& layout, const float x, const float y)
+{
+  if (const auto* cell = layout.cellAt(x, y))
+  {
+    selectEntry(cellData(*cell).entry->absolutePath);
+  }
+}
+
 void PrefabBrowserView::doContextMenu(
   Layout& layout, const float x, const float y, QContextMenuEvent* event)
 {
   if (const auto* cell = layout.cellAt(x, y))
   {
+    const auto& entry = *cellData(*cell).entry;
+    selectEntry(entry.absolutePath);
+
     // copied, because the action may replace the document and with it the library
-    const auto path = pathAsQString(cellData(*cell).entry->absolutePath);
+    const auto path = pathAsQString(entry.absolutePath);
+    const auto& map = m_document.map();
 
     auto menu = QMenu{this};
     menu.addAction(
       tr("Edit Prefab..."), this, [this, path]() { emit editPrefabRequested(path); });
+    menu.addSeparator();
+
+    auto* applyAction = menu.addAction(tr("Apply to Selection"), this, [this, path]() {
+      emit applyPrefabRequested(path);
+    });
+    applyAction->setEnabled(mdl::canApplyPrefabToSelection(map, entry));
+
+    auto* updateAction =
+      menu.addAction(tr("Update from Selection..."), this, [this, path]() {
+        emit updatePrefabRequested(path);
+      });
+    updateAction->setEnabled(map.selection().hasNodes());
+
+    auto* refreshAction =
+      menu.addAction(tr("Refresh Placements..."), this, [this, path]() {
+        emit refreshPrefabRequested(path);
+      });
+    refreshAction->setEnabled(std::ranges::any_of(
+      map.prefabLibrary().changedPlacements(),
+      [&](const auto& placement) { return placement.entry == &entry; }));
+
     menu.exec(event->globalPos());
   }
 }

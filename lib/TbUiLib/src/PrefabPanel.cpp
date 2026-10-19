@@ -20,18 +20,24 @@
 #include "ui/PrefabPanel.h"
 
 #include <QComboBox>
+#include <QFileSystemWatcher>
 #include <QHBoxLayout>
 #include <QLineEdit>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QScrollBar>
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 
+#include "base/Logger.h"
 #include "base/PreferenceManager.h"
 #include "mdl/GameInfo.h"
+#include "mdl/GroupNode.h"
 #include "mdl/Map.h"
 #include "mdl/PrefabLibrary.h"
+#include "mdl/PrefabRefresh.h"
 #include "mdl/Selection.h"
 #include "ui/BitmapButton.h"
 #include "ui/MapDocument.h"
@@ -42,9 +48,17 @@
 #include "ui/SearchBox.h"
 #include "ui/ViewConstants.h"
 
+#include "kd/result.h"
+#include "kd/string_format.h"
 #include "kd/string_utils.h"
 
+#include <fmt/format.h>
+
 #include <chrono>
+#include <set>
+#include <string>
+#include <system_error>
+#include <utility>
 
 namespace tb::ui
 {
@@ -55,6 +69,9 @@ using namespace std::chrono_literals;
 
 // how often a running scan is polled for finished files
 constexpr auto ScanPollInterval = 50ms;
+
+// how long the library's folders must be quiet before a change in them rescans
+constexpr auto WatchDebounceInterval = 500ms;
 
 // the category choice's item data for "All"
 const auto AllCategories = QVariant{};
@@ -81,6 +98,35 @@ MapWindow* findMapWindow(QWidget* widget)
   return nullptr;
 }
 
+const mdl::PrefabEntry* findEntry(
+  const mdl::PrefabLibrary& library, const std::filesystem::path& absolutePath)
+{
+  for (const auto& entry : library.entries())
+  {
+    if (entry->absolutePath == absolutePath)
+    {
+      return entry.get();
+    }
+  }
+  return nullptr;
+}
+
+QString describePlacement(const mdl::PrefabPlacement& placement)
+{
+  const auto path = QString::fromStdString(placement.prefabPath);
+  if (!placement.entry)
+  {
+    return QObject::tr("%1 (missing)").arg(path);
+  }
+  const auto& name = placement.entry->metadata.name;
+  return name.empty() ? path : QString{"%1 (%2)"}.arg(QString::fromStdString(name), path);
+}
+
+bool hasPlacements(const mdl::PrefabLibrary& library)
+{
+  return !library.placements().empty();
+}
+
 } // namespace
 
 PrefabPanel::PrefabPanel(const SidebarContext& context, QWidget* parent)
@@ -88,12 +134,23 @@ PrefabPanel::PrefabPanel(const SidebarContext& context, QWidget* parent)
   , m_appController{context.appController}
   , m_document{context.document}
   , m_scanTimer{new QTimer{this}}
+  , m_watcher{new QFileSystemWatcher{this}}
+  , m_watchTimer{new QTimer{this}}
 {
   createGui();
   connectObservers();
   connectLibraryObserver();
   updateSaveButton();
-  // the panel is hidden by default; the first scan waits until it is shown
+  updateRefreshButton();
+  updateApplyButton();
+
+  // the panel is hidden by default; the first scan waits until it is shown, unless the
+  // map holds placed prefabs, which are checked for changed files (D17)
+  m_promptAfterScan = hasPlacements(m_document.map().prefabLibrary());
+  if (m_promptAfterScan)
+  {
+    scanOnce();
+  }
 }
 
 PrefabPanel::~PrefabPanel() = default;
@@ -122,6 +179,17 @@ void PrefabPanel::panelShown()
   else
   {
     startScan();
+  }
+
+  // what happened while the panel was hidden
+  if (m_refreshCountStale)
+  {
+    updateRefreshButton();
+  }
+  if (m_watchMissed)
+  {
+    m_watchMissed = false;
+    rescan();
   }
 }
 
@@ -174,6 +242,127 @@ std::size_t PrefabPanel::scanCount() const
   return m_scanCount;
 }
 
+std::size_t PrefabPanel::changedPlacementCount() const
+{
+  return m_changedPlacementCount;
+}
+
+void PrefabPanel::promptToRefreshPlacements(
+  const std::vector<mdl::PrefabPlacement>& placements)
+{
+  if (placements.empty())
+  {
+    return;
+  }
+
+  // a placement is found again by its path and link ID before it is refreshed, since
+  // refreshing one replaces nodes that another may point to
+  auto keys = std::vector<std::pair<std::string, std::string>>{};
+  auto lines = QStringList{};
+  for (const auto& placement : placements)
+  {
+    lines.push_back(describePlacement(placement));
+    if (placement.entry)
+    {
+      keys.emplace_back(placement.prefabPath, placement.firstMember->linkId());
+    }
+  }
+
+  const auto count = placements.size();
+  auto messageBox = QMessageBox{this};
+  messageBox.setIcon(QMessageBox::Question);
+  messageBox.setWindowTitle(tr("Prefabs"));
+  messageBox.setText(QString::fromStdString(fmt::format(
+    "{} {} changed on disk. Update?",
+    count,
+    kdl::str_plural(count, "prefab", "prefabs"))));
+  messageBox.setInformativeText(lines.join(QChar{'\n'}));
+  auto* updateButton = messageBox.addButton(tr("Update"), QMessageBox::AcceptRole);
+  messageBox.addButton(tr("Not now"), QMessageBox::RejectRole);
+  updateButton->setEnabled(!keys.empty());
+  messageBox.exec();
+  if (messageBox.clickedButton() != updateButton)
+  {
+    return;
+  }
+
+  auto& map = m_document.map();
+  auto lostEntities = QStringList{};
+  auto errors = QStringList{};
+  for (const auto& [prefabPath, linkId] : keys)
+  {
+    const auto current = map.prefabLibrary().placements();
+    const auto it = std::ranges::find_if(current, [&](const auto& placement) {
+      return placement.prefabPath == prefabPath
+             && placement.firstMember->linkId() == linkId;
+    });
+    if (it == current.end())
+    {
+      continue;
+    }
+
+    mdl::refreshPlacement(map, *it) | kdl::transform([&](const auto& report) {
+      for (const auto& name : report.lostEntities)
+      {
+        lostEntities.push_back(QString{"%1: %2"}
+                                 .arg(QString::fromStdString(prefabPath))
+                                 .arg(QString::fromStdString(name)));
+      }
+    }) | kdl::transform_error([&](const auto& e) {
+      map.logger().error() << e.msg;
+      errors.push_back(QString::fromStdString(e.msg));
+    });
+  }
+
+  updateRefreshButton();
+
+  if (!errors.empty())
+  {
+    QMessageBox::warning(this, tr("Prefabs"), errors.join(QChar{'\n'}));
+  }
+  if (!lostEntities.empty())
+  {
+    auto lostBox = QMessageBox{this};
+    lostBox.setIcon(QMessageBox::Information);
+    lostBox.setWindowTitle(tr("Prefabs"));
+    // the prefab file has no entity of the same class at the same place in the group
+    const auto lostCount = std::size_t(lostEntities.size());
+    lostBox.setText(QString::fromStdString(fmt::format(
+      "{} {} lost the overrides of every copy:",
+      lostCount,
+      kdl::str_plural(lostCount, "entity", "entities"))));
+    lostBox.setInformativeText(lostEntities.join(QChar{'\n'}));
+    lostBox.exec();
+  }
+}
+
+void PrefabPanel::applyToSelection()
+{
+  auto& map = m_document.map();
+  if (const auto* entry = m_view->selectedEntry())
+  {
+    mdl::applyPrefabToSelection(map, *entry) | kdl::transform([](const auto&) {})
+      | kdl::transform_error([&](const auto& e) { map.logger().error() << e.msg; });
+  }
+}
+
+void PrefabPanel::updatePrefabFromSelection(const std::filesystem::path& path)
+{
+  const auto& map = m_document.map();
+  const auto* entry = findEntry(map.prefabLibrary(), path);
+  if (!entry || !map.selection().hasNodes())
+  {
+    return;
+  }
+
+  auto dialog = SavePrefabDialog{m_document, this};
+  dialog.forEntry(*entry);
+  if (dialog.exec() == QDialog::Accepted && dialog.savedPath())
+  {
+    prefabWasSaved(*dialog.savedPath());
+  }
+}
+
 void PrefabPanel::createGui()
 {
   m_categoryChoice = new QComboBox{};
@@ -215,10 +404,46 @@ void PrefabPanel::createGui()
     rescan();
   });
 
+  m_refreshButton = new QToolButton{};
+  m_refreshButton->setObjectName("PrefabPanel_refreshButton");
+  m_refreshButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+  connect(m_refreshButton, &QToolButton::clicked, this, [&]() {
+    promptToRefreshPlacements(m_document.map().prefabLibrary().changedPlacements());
+  });
+
+  m_applyButton = new QToolButton{};
+  m_applyButton->setObjectName("PrefabPanel_applyButton");
+  m_applyButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+  m_applyButton->setText(tr("Apply to Selection"));
+  connect(m_applyButton, &QToolButton::clicked, this, &PrefabPanel::applyToSelection);
+
   m_scrollBar = new QScrollBar{Qt::Vertical};
   m_view = new PrefabBrowserView{m_appController, m_scrollBar, m_document};
   connect(
     m_view, &PrefabBrowserView::editPrefabRequested, this, &PrefabPanel::editPrefab);
+  connect(
+    m_view,
+    &PrefabBrowserView::selectedEntryChanged,
+    this,
+    &PrefabPanel::updateApplyButton);
+  connect(
+    m_view, &PrefabBrowserView::applyPrefabRequested, this, [&](const QString& path) {
+      m_view->selectEntry(pathFromQString(path));
+      applyToSelection();
+    });
+  connect(
+    m_view, &PrefabBrowserView::updatePrefabRequested, this, [&](const QString& path) {
+      updatePrefabFromSelection(pathFromQString(path));
+    });
+  connect(
+    m_view, &PrefabBrowserView::refreshPrefabRequested, this, [&](const QString& path) {
+      const auto absolutePath = pathFromQString(path);
+      auto placements = m_document.map().prefabLibrary().changedPlacements();
+      std::erase_if(placements, [&](const auto& placement) {
+        return !placement.entry || placement.entry->absolutePath != absolutePath;
+      });
+      promptToRefreshPlacements(placements);
+    });
 
   auto* controlLayout = new QHBoxLayout{};
   controlLayout->setContentsMargins(
@@ -233,6 +458,17 @@ void PrefabPanel::createGui()
   controlLayout->addWidget(m_saveButton, 0);
   controlLayout->addWidget(m_rescanButton, 0);
 
+  auto* actionLayout = new QHBoxLayout{};
+  actionLayout->setContentsMargins(
+    LayoutConstants::NarrowHMargin,
+    0,
+    LayoutConstants::NarrowHMargin,
+    LayoutConstants::NarrowVMargin);
+  actionLayout->setSpacing(LayoutConstants::NarrowHMargin);
+  actionLayout->addWidget(m_applyButton, 0);
+  actionLayout->addStretch(1);
+  actionLayout->addWidget(m_refreshButton, 0);
+
   auto* browserLayout = new QHBoxLayout{};
   browserLayout->setContentsMargins(0, 0, 0, 0);
   browserLayout->setSpacing(0);
@@ -243,11 +479,24 @@ void PrefabPanel::createGui()
   outerLayout->setContentsMargins(0, 0, 0, 0);
   outerLayout->setSpacing(0);
   outerLayout->addLayout(controlLayout, 0);
+  outerLayout->addLayout(actionLayout, 0);
   outerLayout->addLayout(browserLayout, 1);
   setLayout(outerLayout);
 
   m_scanTimer->setInterval(ScanPollInterval);
   connect(m_scanTimer, &QTimer::timeout, this, &PrefabPanel::processPendingResults);
+
+  // never refreshes the map, only rescans the library (D17)
+  m_watchTimer->setSingleShot(true);
+  m_watchTimer->setInterval(WatchDebounceInterval);
+  connect(m_watchTimer, &QTimer::timeout, this, &PrefabPanel::rescan);
+  connect(
+    m_watcher,
+    &QFileSystemWatcher::directoryChanged,
+    this,
+    &PrefabPanel::folderDidChange);
+  connect(
+    m_watcher, &QFileSystemWatcher::fileChanged, this, &PrefabPanel::folderDidChange);
 }
 
 void PrefabPanel::connectObservers()
@@ -257,8 +506,18 @@ void PrefabPanel::connectObservers()
   m_notifierConnection += m_document.documentWasLoadedNotifier.connect([&]() {
     connectLibraryObserver();
     m_view->libraryDidChange();
+    m_scanFinished = false;
     updateSaveButton();
+    updateRefreshButton();
+    updateApplyButton();
     rescan();
+
+    // D17: the placed prefabs of the new map are checked once its library is scanned
+    m_promptAfterScan = hasPlacements(m_document.map().prefabLibrary());
+    if (m_promptAfterScan)
+    {
+      scanOnce();
+    }
   });
 
   // the mod root follows the last enabled mod
@@ -271,8 +530,16 @@ void PrefabPanel::connectObservers()
   m_notifierConnection += m_document.entityDefinitionsDidChangeNotifier.connect(
     [&]() { processPendingResults(); });
 
-  m_notifierConnection += m_document.selectionDidChangeNotifier.connect(
-    [&](const auto&) { updateSaveButton(); });
+  m_notifierConnection += m_document.selectionDidChangeNotifier.connect([&](const auto&) {
+    updateSaveButton();
+    updateApplyButton();
+  });
+
+  // a refresh, its undo or a removed placement changes the number on the Refresh button
+  m_notifierConnection += m_document.transactionDoneNotifier.connect(
+    [&](const std::string&, bool, bool) { mapDidChange(); });
+  m_notifierConnection += m_document.transactionUndoneNotifier.connect(
+    [&](const std::string&, bool, bool) { mapDidChange(); });
 
   // the document pushes the game path and the Prefab Path into the map first, because
   // it observes the preferences since before the panel exists
@@ -334,8 +601,133 @@ void PrefabPanel::processPendingResults()
 
 void PrefabPanel::libraryDidChange()
 {
+  if (!m_document.map().prefabLibrary().scanning())
+  {
+    m_scanFinished = true;
+  }
+
   updateCategories();
   m_view->libraryDidChange();
+  updateRefreshButton();
+  updateApplyButton();
+  updateWatchedPaths();
+  promptAfterScanIfNeeded();
+}
+
+void PrefabPanel::updateRefreshButton()
+{
+  // until a scan has finished, every placed prefab would count as missing
+  m_changedPlacementCount =
+    m_scanFinished ? m_document.map().prefabLibrary().changedPlacements().size() : 0;
+  m_refreshCountStale = false;
+
+  m_refreshButton->setText(
+    m_changedPlacementCount > 0 ? tr("Refresh (%1)").arg(m_changedPlacementCount)
+                                : tr("Refresh"));
+  m_refreshButton->setEnabled(m_changedPlacementCount > 0);
+  m_refreshButton->setToolTip(
+    m_changedPlacementCount > 0
+      ? tr("Update the placed prefabs whose files changed on disk...")
+      : tr("No placed prefab has changed on disk"));
+}
+
+void PrefabPanel::updateApplyButton()
+{
+  const auto* entry = m_view->selectedEntry();
+  const auto canApply = entry && mdl::canApplyPrefabToSelection(m_document.map(), *entry);
+  m_applyButton->setEnabled(canApply);
+  m_applyButton->setToolTip(
+    entry && entry->metadata.kind == mdl::PrefabKind::Entity
+      ? tr("Make the selected %1 entities match the prefab %2")
+          .arg(QString::fromStdString(entry->metadata.className))
+          .arg(QString::fromStdString(entry->metadata.name))
+      : tr("Click an entity prefab, then select entities of its class"));
+}
+
+void PrefabPanel::updateWatchedPaths()
+{
+  // the roots, the folders of the prefabs in them and the prefab files; a new folder is
+  // found through the change of its parent
+  const auto& library = m_document.map().prefabLibrary();
+  auto paths = std::set<QString>{};
+  for (const auto& root : library.roots())
+  {
+    auto ec = std::error_code{};
+    if (std::filesystem::is_directory(root, ec))
+    {
+      paths.insert(pathAsQString(root));
+    }
+  }
+  for (const auto& entry : library.entries())
+  {
+    const auto rootPath = library.writeRootFor(entry->root);
+    for (auto folder = entry->relativePath.parent_path(); !folder.empty();
+         folder = folder.parent_path())
+    {
+      paths.insert(pathAsQString(rootPath / folder));
+    }
+    paths.insert(pathAsQString(entry->absolutePath));
+  }
+
+  auto pathsToRemove = QStringList{};
+  for (const auto& path : m_watcher->directories() + m_watcher->files())
+  {
+    if (paths.erase(path) == 0)
+    {
+      pathsToRemove.push_back(path);
+    }
+  }
+  if (!pathsToRemove.empty())
+  {
+    m_watcher->removePaths(pathsToRemove);
+  }
+  if (!paths.empty())
+  {
+    m_watcher->addPaths(QStringList{paths.begin(), paths.end()});
+  }
+}
+
+void PrefabPanel::folderDidChange()
+{
+  if (isVisible())
+  {
+    // restarted by every change, so that a copy of many files rescans once
+    m_watchTimer->start();
+  }
+  else
+  {
+    m_watchMissed = true;
+  }
+}
+
+void PrefabPanel::mapDidChange()
+{
+  if (!m_refreshCountStale)
+  {
+    m_refreshCountStale = true;
+    if (isVisible())
+    {
+      // once per pass of the event loop; a hidden panel counts when it is shown
+      QTimer::singleShot(0, this, [this]() {
+        if (m_refreshCountStale)
+        {
+          updateRefreshButton();
+        }
+      });
+    }
+  }
+}
+
+void PrefabPanel::promptAfterScanIfNeeded()
+{
+  if (m_promptAfterScan && m_scanFinished)
+  {
+    m_promptAfterScan = false;
+    // posted, since this runs inside the library's notification
+    QTimer::singleShot(0, this, [this]() {
+      promptToRefreshPlacements(m_document.map().prefabLibrary().changedPlacements());
+    });
+  }
 }
 
 void PrefabPanel::updateCategories()

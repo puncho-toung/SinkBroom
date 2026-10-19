@@ -487,6 +487,7 @@ TEST_CASE("PrefabRefresh")
       protectedNode->entity(),
       otherNode->entity()};
 
+    CHECK(canApplyPrefabToSelection(map, *entry));
     const auto count = applyPrefabToSelection(map, *entry);
     REQUIRE(count.is_success());
     CHECK(count.value() == 3u);
@@ -527,6 +528,7 @@ TEST_CASE("PrefabRefresh")
     {
       deselectAll(map);
       selectNodes(map, {otherNode});
+      CHECK_FALSE(canApplyPrefabToSelection(map, *entry));
       const auto none = applyPrefabToSelection(map, *entry);
       REQUIRE(none.is_success());
       CHECK(none.value() == 0u);
@@ -538,6 +540,7 @@ TEST_CASE("PrefabRefresh")
       rescan(library);
       const auto* lampEntry = library.find(PrefabRoot::Mod, "props/lamp.map");
       REQUIRE(lampEntry);
+      CHECK_FALSE(canApplyPrefabToSelection(map, *lampEntry));
       CHECK(applyPrefabToSelection(map, *lampEntry).is_error());
     }
   }

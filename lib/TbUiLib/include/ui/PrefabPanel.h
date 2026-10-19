@@ -24,12 +24,19 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <vector>
 
 class QComboBox;
+class QFileSystemWatcher;
 class QLineEdit;
 class QScrollBar;
 class QTimer;
 class QToolButton;
+
+namespace tb::mdl
+{
+struct PrefabPlacement;
+} // namespace tb::mdl
 
 namespace tb::ui
 {
@@ -45,7 +52,12 @@ class PrefabBrowserView;
  * shown, or when a caller first needs the entries (scanOnce); after it, Rescan, a new
  * document and a change of the mods, the game path or the Prefab Path rescan, coalesced
  * into one scan per pass of the event loop, and a save reads the saved file only. It
- * never changes the library's entries.
+ * never changes the library's entries. While the panel is visible, a change in the
+ * library's folders rescans half a second after the last one.
+ *
+ * Placed assemblies whose file has changed are refreshed only when the user says so
+ * (D17): once a document is loaded and the library is scanned, a prompt lists them; the
+ * Refresh button shows their number and offers the same prompt on demand.
  */
 class PrefabPanel : public SidebarPanel
 {
@@ -62,15 +74,32 @@ private:
   QLineEdit* m_filterBox = nullptr;
   QToolButton* m_saveButton = nullptr;
   QToolButton* m_rescanButton = nullptr;
+  QToolButton* m_refreshButton = nullptr;
+  QToolButton* m_applyButton = nullptr;
   QScrollBar* m_scrollBar = nullptr;
   PrefabBrowserView* m_view = nullptr;
   QTimer* m_scanTimer = nullptr;
+  QFileSystemWatcher* m_watcher = nullptr;
+  // restarted by every change in a watched folder; rescans when it runs out
+  QTimer* m_watchTimer = nullptr;
 
   // the first scan has started; until then, nothing rescans
   bool m_scanStarted = false;
   // a rescan is posted to the event loop
   bool m_rescanPending = false;
   std::size_t m_scanCount = 0;
+
+  // a document was loaded; once its library is scanned, the changed placements are
+  // offered for a refresh
+  bool m_promptAfterScan = false;
+  // a library scan has finished, so that missing files are missing indeed
+  bool m_scanFinished = false;
+  // the map changed while the panel was hidden, so the count on the Refresh button may
+  // be out of date
+  bool m_refreshCountStale = false;
+  // a folder changed while the panel was hidden
+  bool m_watchMissed = false;
+  std::size_t m_changedPlacementCount = 0;
 
   NotifierConnection m_notifierConnection;
   // to the library of the document's current map, renewed when the map is replaced
@@ -114,6 +143,31 @@ public:
    */
   std::size_t scanCount() const;
 
+  /**
+   * The number of placed assemblies whose file has changed or is missing, as the Refresh
+   * button shows it; 0 until the library was scanned.
+   */
+  std::size_t changedPlacementCount() const;
+
+  /**
+   * Lists the given placements, of which those with a file are refreshed if the user
+   * agrees, one transaction each (F9); reports the entities that lost their overrides
+   * and any placement that could not be refreshed.
+   */
+  void promptToRefreshPlacements(const std::vector<mdl::PrefabPlacement>& placements);
+
+  /**
+   * Makes the entities of the selected cell's class in the map selection match the
+   * selected cell's entity snapshot.
+   */
+  void applyToSelection();
+
+  /**
+   * Opens the save dialog for the current selection, filled in from the prefab with the
+   * given file, and overwrites that file.
+   */
+  void updatePrefabFromSelection(const std::filesystem::path& path);
+
 private:
   void createGui();
   void connectObservers();
@@ -126,6 +180,12 @@ private:
   void updateCategories();
   void updateFilter();
   void updateSaveButton();
+  void updateRefreshButton();
+  void updateApplyButton();
+  void updateWatchedPaths();
+  void folderDidChange();
+  void mapDidChange();
+  void promptAfterScanIfNeeded();
 
   void editPrefab(const QString& path);
 };

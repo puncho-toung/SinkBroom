@@ -576,4 +576,14 @@ Result<std::size_t> applyPrefabToSelection(Map& map, const PrefabEntry& entry)
   return count;
 }
 
+bool canApplyPrefabToSelection(const Map& map, const PrefabEntry& entry)
+{
+  return entry.metadata.kind == PrefabKind::Entity && entry.world
+         && std::ranges::any_of(
+           map.selection().allEntities(), [&](const auto* entityNodeBase) {
+             return dynamic_cast<const EntityNode*>(entityNodeBase)
+                    && entityNodeBase->entity().classname() == entry.metadata.className;
+           });
+}
+
 } // namespace tb::mdl

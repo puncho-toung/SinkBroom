@@ -74,4 +74,10 @@ Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& pl
  */
 Result<std::size_t> applyPrefabToSelection(Map& map, const PrefabEntry& entry);
 
+/**
+ * Whether applyPrefabToSelection would change anything: the entry is an entity snapshot
+ * whose world the library keeps, and the selection holds an entity of its class.
+ */
+bool canApplyPrefabToSelection(const Map& map, const PrefabEntry& entry);
+
 } // namespace tb::mdl

@@ -21,6 +21,7 @@
 #include <QComboBox>
 #include <QImage>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QTest>
 #include <QToolButton>
@@ -305,6 +306,80 @@ TEST_CASE("SavePrefabDialog")
     categoryChoice->setCurrentText("lights");
     CHECK(saveButton->isEnabled());
     CHECK(messageLabel->text().isEmpty());
+  }
+
+  SECTION("forEntry updates the prefab's file")
+  {
+    auto* lampNode = addEntity(map, {{"classname", "light"}, {"name", "lamp"}});
+    REQUIRE(
+      mdl::savePrefab(
+        map,
+        {lampNode},
+        mdl::SavePrefabOptions{
+          .name = "Lamp",
+          .category = "lights",
+          .tags = {"old"},
+          .root = mdl::PrefabRoot::User})
+      | kdl::is_success());
+
+    auto& library = map.prefabLibrary();
+    library.rescan();
+    REQUIRE(QTest::qWaitFor([&] {
+      library.processPendingResults();
+      return !library.scanning();
+    }));
+    const auto* entry = library.find(mdl::PrefabRoot::User, "lights/Lamp.map");
+    REQUIRE(entry != nullptr);
+    const auto entryPath = entry->absolutePath;
+
+    selectOnly(map, {lampNode});
+    auto dialog = SavePrefabDialog{document};
+    dialog.forEntry(*entry);
+
+    auto* nameEdit = dialog.findChild<QLineEdit*>("SavePrefabDialog_nameEdit");
+    auto* tagsEdit = dialog.findChild<QLineEdit*>("SavePrefabDialog_tagsEdit");
+    auto* categoryChoice =
+      dialog.findChild<QComboBox*>("SavePrefabDialog_categoryChoice");
+    auto* messageLabel = dialog.findChild<QLabel*>("SavePrefabDialog_messageLabel");
+    auto* saveButton = dialog.findChild<QPushButton*>("SavePrefabDialog_saveButton");
+    REQUIRE(nameEdit != nullptr);
+    REQUIRE(tagsEdit != nullptr);
+    REQUIRE(categoryChoice != nullptr);
+    REQUIRE(messageLabel != nullptr);
+    REQUIRE(saveButton != nullptr);
+
+    // filled in from the prefab
+    CHECK(nameEdit->text() == "Lamp");
+    CHECK(categoryChoice->currentText() == "lights");
+    CHECK(tagsEdit->text() == "old");
+    CHECK(saveButton->text() == "Update");
+    CHECK(saveButton->isEnabled());
+    CHECK(messageLabel->text().isEmpty());
+
+    SECTION("Another name names another file")
+    {
+      nameEdit->setText("Other");
+      CHECK(saveButton->isEnabled());
+      CHECK(!messageLabel->text().isEmpty());
+    }
+
+    SECTION("The prefab's file is overwritten without asking")
+    {
+      tagsEdit->setText("new");
+      dialog.accept();
+      REQUIRE(dialog.savedPath());
+      CHECK(std::filesystem::equivalent(*dialog.savedPath(), entryPath));
+      CHECK(dialog.result() == QDialog::Accepted);
+
+      library.updateEntry(*dialog.savedPath());
+      REQUIRE(QTest::qWaitFor([&] {
+        library.processPendingResults();
+        return !library.scanning();
+      }));
+      const auto* updatedEntry = library.find(mdl::PrefabRoot::User, "lights/Lamp.map");
+      REQUIRE(updatedEntry != nullptr);
+      CHECK(updatedEntry->metadata.tags == std::vector<std::string>{"new"});
+    }
   }
 }
 
@@ -647,6 +722,125 @@ TEST_CASE("PrefabPanel")
     REQUIRE(categoryChoice != nullptr);
     REQUIRE(categoryChoice->count() == 2);
     CHECK(categoryChoice->itemText(1) == "doors");
+  }
+
+  SECTION("Refresh count and Apply to Selection")
+  {
+    auto env = fs::TestEnvironment{};
+    auto fixture = SidebarContextFixture{fixtureConfigWithUserRoot(env.dir())};
+    auto& map = fixture.document().map();
+    auto& library = map.prefabLibrary();
+
+    // an entity snapshot and an assembly in the user root
+    auto* lampNode =
+      addEntity(map, {{"classname", "light"}, {"name", "lamp"}, {"light_radius", "300"}});
+    auto* markerNode = addEntity(map, {{"classname", "info_null"}, {"name", "marker"}});
+    REQUIRE(
+      mdl::savePrefab(
+        map,
+        {lampNode},
+        mdl::SavePrefabOptions{
+          .name = "lamp", .category = "lights", .root = mdl::PrefabRoot::User})
+      | kdl::is_success());
+    const auto pairOptions =
+      mdl::SavePrefabOptions{.name = "pair", .root = mdl::PrefabRoot::User};
+    const auto pairPath =
+      mdl::savePrefab(map, {lampNode, markerNode}, pairOptions) | kdl::value();
+
+    auto panel = PrefabPanel{fixture.context()};
+    panel.panelShown();
+    REQUIRE(waitForScan(panel, library, 1));
+    REQUIRE(library.entries().size() == 2u);
+
+    auto* refreshButton = panel.findChild<QToolButton*>("PrefabPanel_refreshButton");
+    auto* applyButton = panel.findChild<QToolButton*>("PrefabPanel_applyButton");
+    auto* view = panel.findChild<PrefabBrowserView*>();
+    REQUIRE(refreshButton != nullptr);
+    REQUIRE(applyButton != nullptr);
+    REQUIRE(view != nullptr);
+
+    SECTION("The Refresh button counts the changed placements")
+    {
+      CHECK(panel.changedPlacementCount() == 0u);
+      CHECK(refreshButton->text() == "Refresh");
+      CHECK(!refreshButton->isEnabled());
+
+      // a placement of the assembly, as the drop tool makes it
+      const auto* pairEntry = library.find(mdl::PrefabRoot::User, "pair.map");
+      REQUIRE(pairEntry != nullptr);
+      auto clones = library.cloneBody(*pairEntry, map.worldBounds());
+      REQUIRE(clones.size() == 1u);
+      auto* groupNode = dynamic_cast<mdl::GroupNode*>(clones.front());
+      REQUIRE(groupNode != nullptr);
+      auto group = groupNode->group();
+      group.setPrefabPath("user/pair.map");
+      group.setPrefabHash(pairEntry->hash);
+      groupNode->setGroup(std::move(group));
+      REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), clones}}).empty());
+
+      // the file changes on disk; the count follows the library without touching the
+      // map
+      auto tagged = pairOptions;
+      tagged.tags = {"new"};
+      REQUIRE(mdl::savePrefab(map, {lampNode, markerNode}, tagged) | kdl::is_success());
+      panel.prefabWasSaved(pairPath);
+      REQUIRE(QTest::qWaitFor([&] { return !library.scanning(); }));
+
+      CHECK(panel.changedPlacementCount() == 1u);
+      CHECK(refreshButton->text() == "Refresh (1)");
+      CHECK(refreshButton->isEnabled());
+      CHECK(
+        groupNode->group().prefabHash()
+        != library.find(mdl::PrefabRoot::User, "pair.map")->hash);
+
+      // a change of the map is counted when the hidden panel is shown
+      mdl::removeNodes(map, {groupNode});
+      CHECK(panel.changedPlacementCount() == 1u);
+      panel.panelShown();
+      CHECK(panel.changedPlacementCount() == 0u);
+      CHECK(refreshButton->text() == "Refresh");
+    }
+
+    SECTION("Apply to Selection needs an entity prefab and an entity of its class")
+    {
+      const auto* lampEntry = library.find(mdl::PrefabRoot::User, "lights/lamp.map");
+      const auto* pairEntry = library.find(mdl::PrefabRoot::User, "pair.map");
+      REQUIRE(lampEntry != nullptr);
+      REQUIRE(pairEntry != nullptr);
+
+      auto* otherLightNode = addEntity(
+        map,
+        {{"classname", "light"},
+         {"name", "other"},
+         {"light_radius", "64"},
+         {"extra", "1"}});
+
+      // no cell is selected
+      CHECK(view->selectedEntry() == nullptr);
+      selectOnly(map, {otherLightNode});
+      CHECK(!applyButton->isEnabled());
+
+      view->selectEntry(lampEntry->absolutePath);
+      CHECK(view->selectedEntry() == lampEntry);
+      CHECK(applyButton->isEnabled());
+
+      // another class
+      selectOnly(map, {markerNode});
+      CHECK(!applyButton->isEnabled());
+
+      // an assembly
+      selectOnly(map, {otherLightNode});
+      view->selectEntry(pairEntry->absolutePath);
+      CHECK(!applyButton->isEnabled());
+
+      // the snapshot's keys, the light's own name
+      view->selectEntry(lampEntry->absolutePath);
+      REQUIRE(applyButton->isEnabled());
+      applyButton->click();
+      CHECK(*otherLightNode->entity().property("light_radius") == "300");
+      CHECK(*otherLightNode->entity().property("name") == "other");
+      CHECK(otherLightNode->entity().property("extra") == nullptr);
+    }
   }
 }
 

@@ -161,6 +161,9 @@ private:
   // its model from the new definitions the next time a cell needs it
   std::size_t m_definitionGeneration = 0;
 
+  // the absolute path of the entry that was clicked last, kept across library changes
+  std::filesystem::path m_selectedPath;
+
   NotifierConnection m_notifierConnection;
 
 public:
@@ -190,6 +193,14 @@ public:
   void reloadThumbnails();
 
   /**
+   * The entry that the panel's buttons act on: the one whose cell was clicked last, by
+   * the left or the right button. A cell is selected by its file, so the selection
+   * survives a rescan; nullptr if that file is no longer in the library.
+   */
+  const mdl::PrefabEntry* selectedEntry() const;
+  void selectEntry(const std::filesystem::path& absolutePath);
+
+  /**
    * A cell as the view lays it out, for tests.
    */
   struct CellSummary
@@ -209,6 +220,10 @@ public:
 
 signals:
   void editPrefabRequested(const QString& path);
+  void applyPrefabRequested(const QString& path);
+  void updatePrefabRequested(const QString& path);
+  void refreshPrefabRequested(const QString& path);
+  void selectedEntryChanged();
 
 private:
   void doInitLayout(Layout& layout) override;
@@ -253,6 +268,7 @@ private:
   vm::mat4x4f itemTransformation(const Cell& cell, float y, float height) const;
 
   QString tooltip(const Cell& cell) override;
+  void doLeftClick(Layout& layout, float x, float y) override;
   void doContextMenu(Layout& layout, float x, float y, QContextMenuEvent* event) override;
 
   const PrefabCellData& cellData(const Cell& cell) const;

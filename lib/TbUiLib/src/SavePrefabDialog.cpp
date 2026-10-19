@@ -151,9 +151,36 @@ SavePrefabDialog::SavePrefabDialog(MapDocument& document, QWidget* parent)
 
 SavePrefabDialog::~SavePrefabDialog() = default;
 
+void SavePrefabDialog::forEntry(const mdl::PrefabEntry& entry)
+{
+  m_updatedPath = entry.absolutePath;
+
+  setWindowTitle(tr("Update Prefab from Selection"));
+  m_saveButton->setText(tr("Update"));
+
+  m_nameEdit->setText(
+    entry.metadata.name.empty() ? pathAsQString(entry.relativePath.stem())
+                                : QString::fromStdString(entry.metadata.name));
+  if (const auto index = m_rootChoice->findData(static_cast<int>(entry.root)); index >= 0)
+  {
+    m_rootChoice->setCurrentIndex(index);
+  }
+  m_categoryChoice->setCurrentText(
+    pathAsGenericQString(entry.relativePath.parent_path()));
+  m_tagsEdit->setText(QString::fromStdString(kdl::str_join(entry.metadata.tags, "; ")));
+
+  updateControls();
+}
+
 const std::optional<std::filesystem::path>& SavePrefabDialog::savedPath() const
 {
   return m_savedPath;
+}
+
+bool SavePrefabDialog::updatesEntryFile(const std::filesystem::path& path) const
+{
+  auto ec = std::error_code{};
+  return m_updatedPath && std::filesystem::equivalent(path, *m_updatedPath, ec);
 }
 
 void SavePrefabDialog::accept()
@@ -163,7 +190,8 @@ void SavePrefabDialog::accept()
   auto ec = std::error_code{};
   if (const auto path = mdl::prefabFilePath(m_document.map().prefabLibrary(), options)
                         | kdl::value_or(std::filesystem::path{});
-      !path.empty() && std::filesystem::is_regular_file(path, ec))
+      !path.empty() && std::filesystem::is_regular_file(path, ec)
+      && !updatesEntryFile(path))
   {
     const auto answer = QMessageBox::question(
       this,
@@ -194,6 +222,7 @@ void SavePrefabDialog::createGui()
   const auto& library = m_document.map().prefabLibrary();
 
   m_nameEdit = new QLineEdit{QString::fromStdString(defaultPrefabName(m_document))};
+  m_nameEdit->setObjectName("SavePrefabDialog_nameEdit");
 
   m_rootChoice = new QComboBox{};
   if (!library.writeRootFor(mdl::PrefabRoot::User).empty())
@@ -224,6 +253,7 @@ void SavePrefabDialog::createGui()
     tr("A folder inside the library; empty for the top level"));
 
   m_tagsEdit = new QLineEdit{};
+  m_tagsEdit->setObjectName("SavePrefabDialog_tagsEdit");
   m_tagsEdit->setPlaceholderText(tr("tag; tag; ..."));
 
   m_kindLabel = new QLabel{};
@@ -322,7 +352,15 @@ void SavePrefabDialog::updateControls()
   const auto hasRoot = m_rootChoice->count() > 0;
   auto message = hasRoot ? QString{} : tr("Set a game path or a Prefab Path first");
   const auto hasPath = mdl::prefabFilePath(m_document.map().prefabLibrary(), options())
-                       | kdl::transform([](const auto&) { return true; })
+                       | kdl::transform([&](const auto& path) {
+                           if (m_updatedPath && !updatesEntryFile(path))
+                           {
+                             message = tr(
+                               "These fields name another file than the "
+                               "prefab's; that file is written instead");
+                           }
+                           return true;
+                         })
                        | kdl::transform_error([&](const auto& e) {
                            if (message.isEmpty())
                            {

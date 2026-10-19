@@ -38,6 +38,7 @@ namespace tb
 namespace mdl
 {
 class Node;
+struct PrefabEntry;
 struct SavePrefabOptions;
 } // namespace mdl
 
@@ -65,6 +66,8 @@ private:
   // the selection is one entity, so that it can be saved as either kind
   bool m_singleEntity = false;
   std::optional<std::filesystem::path> m_savedPath;
+  // the file of the prefab that the dialog updates (forEntry)
+  std::optional<std::filesystem::path> m_updatedPath;
 
   QLineEdit* m_nameEdit = nullptr;
   QComboBox* m_rootChoice = nullptr;
@@ -83,6 +86,14 @@ public:
   ~SavePrefabDialog() override;
 
   /**
+   * Turns the dialog into "Update Prefab from Selection" (D13): the name, the library,
+   * the category and the tags are those of the given prefab, the kind is derived from the
+   * selection as always, and the prefab's file is overwritten without asking. If the
+   * fields are changed so that they name another file, that file is asked about as usual.
+   */
+  void forEntry(const mdl::PrefabEntry& entry);
+
+  /**
    * The file that was written, once the dialog was accepted.
    */
   const std::optional<std::filesystem::path>& savedPath() const;
@@ -92,6 +103,8 @@ public:
 private:
   void createGui();
   void updateControls();
+  // the options name the file that forEntry was given
+  bool updatesEntryFile(const std::filesystem::path& path) const;
 
   mdl::SavePrefabOptions options() const;
 };
