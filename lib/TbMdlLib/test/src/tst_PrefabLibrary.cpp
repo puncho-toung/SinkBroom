@@ -415,6 +415,38 @@ TEST_CASE("PrefabLibrary")
       CHECK(library.directories().size() == 7u);
     }
 
+    SECTION("Autosave folders are skipped (DD-27)")
+    {
+      // the backups of a map saved in a root, in any case of the folder's name
+      env.createDirectory("user/autosave/deeper");
+      env.createFile("user/autosave/x.1.map", UserTorch);
+      env.createFile("user/autosave/deeper/y.map", UserTorch);
+      env.createDirectory("user/lights/AutoSave");
+      env.createFile("user/lights/AutoSave/torch.1.map", UserTorch);
+      library.rescan();
+      waitForScan(library);
+
+      CHECK(library.entries().size() == 4u);
+      CHECK(library.find(PrefabRoot::User, "autosave/x.1.map") == nullptr);
+      CHECK(library.find(PrefabRoot::User, "autosave/deeper/y.map") == nullptr);
+      CHECK(library.find(PrefabRoot::User, "lights/AutoSave/torch.1.map") == nullptr);
+      CHECK(library.directories().size() == 5u);
+      for (const auto& folder : {
+             env.dir() / "user" / "autosave",
+             env.dir() / "user" / "autosave" / "deeper",
+             env.dir() / "user" / "lights" / "AutoSave",
+           })
+      {
+        CHECK(!kdl::ranges::contains(library.directories(), folder.lexically_normal()));
+      }
+
+      // nor is a backup read when it is saved
+      library.updateEntry(env.dir() / "user" / "autosave" / "x.1.map");
+      CHECK_FALSE(library.scanning());
+      library.processPendingResults();
+      CHECK(library.entries().size() == 4u);
+    }
+
     SECTION("cloneBody")
     {
       const auto* crate = library.find(PrefabRoot::Mod, "props/crate.map");

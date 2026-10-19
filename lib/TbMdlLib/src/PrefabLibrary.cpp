@@ -127,6 +127,21 @@ std::filesystem::path makeFileKey(const std::filesystem::path& path)
 #endif
 }
 
+/**
+ * DD-27: the autosave folder of a map saved in a root holds backups, not prefabs, so
+ * neither it nor anything under it is listed; its name is matched in any case.
+ */
+bool isAutosaveFolder(const std::filesystem::path& folderName)
+{
+  return kdl::path_to_lower(folderName) == "autosave";
+}
+
+bool isInAutosaveFolder(const std::filesystem::path& relativePath)
+{
+  const auto folders = relativePath.parent_path();
+  return std::any_of(folders.begin(), folders.end(), isAutosaveFolder);
+}
+
 bool isStale(
   const std::atomic<std::uint64_t>& currentGeneration, const std::uint64_t generation)
 {
@@ -694,8 +709,16 @@ void PrefabLibrary::rescan()
             auto entryError = std::error_code{};
             if (directoryEntry.is_directory(entryError))
             {
-              // watched by the panel, so that a file copied into an empty folder is seen
-              listing.directories.push_back(directoryEntry.path().lexically_normal());
+              if (isAutosaveFolder(directoryEntry.path().filename()))
+              {
+                it.disable_recursion_pending();
+              }
+              else
+              {
+                // watched by the panel, so that a file copied into an empty folder is
+                // seen
+                listing.directories.push_back(directoryEntry.path().lexically_normal());
+              }
             }
             else if (directoryEntry.is_regular_file(entryError))
             {
@@ -768,8 +791,8 @@ void PrefabLibrary::updateEntry(const std::filesystem::path& absolutePath)
 
     const auto relativePath = path.lexically_relative(rootPath.lexically_normal());
     if (
-      relativePath.empty() || relativePath == "."
-      || kdl::path_front(relativePath) == "..")
+      relativePath.empty() || relativePath == "." || kdl::path_front(relativePath) == ".."
+      || isInAutosaveFolder(relativePath))
     {
       continue;
     }
