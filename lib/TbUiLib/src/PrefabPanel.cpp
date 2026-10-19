@@ -63,13 +63,16 @@
 #include "kd/string_utils.h"
 
 #include <fmt/format.h>
+#include <fmt/std.h>
 
+#include <algorithm>
 #include <chrono>
 #include <map>
 #include <set>
 #include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace tb::ui
 {
@@ -121,14 +124,61 @@ MapWindow* findMapWindow(QWidget* widget)
 const mdl::PrefabEntry* findEntry(
   const mdl::PrefabLibrary& library, const std::filesystem::path& absolutePath)
 {
+  const auto normalPath = absolutePath.lexically_normal();
   for (const auto& entry : library.entries())
   {
-    if (entry->absolutePath == absolutePath)
+    if (entry->absolutePath.lexically_normal() == normalPath)
     {
       return entry.get();
     }
   }
   return nullptr;
+}
+
+/**
+ * The entry whose file the given path is, or an error that names the path; the file
+ * actions act on entries only, never on a path that a caller made up (R1-pf-ui-2).
+ */
+Result<const mdl::PrefabEntry*> findEntryOrError(
+  const mdl::PrefabLibrary& library, const std::filesystem::path& absolutePath)
+{
+  if (const auto* entry = findEntry(library, absolutePath))
+  {
+    return entry;
+  }
+  return Error{fmt::format("{} is not a prefab of the library", absolutePath)};
+}
+
+// the entry's thumbnail, or where it would be
+std::filesystem::path thumbnailPathOf(const mdl::PrefabEntry& entry)
+{
+  return entry.thumbnailPath.value_or(thumbnailPathFor(entry.absolutePath));
+}
+
+/**
+ * Adds every folder under the given root, the root included, read on the GUI thread,
+ * where the library's folders are few.
+ */
+void addFoldersUnder(const std::filesystem::path& root, std::set<QString>& folders)
+{
+  auto ec = std::error_code{};
+  if (!std::filesystem::is_directory(root, ec))
+  {
+    return;
+  }
+
+  folders.insert(pathAsQString(root.lexically_normal()));
+  for (auto it =
+         std::filesystem::recursive_directory_iterator{
+           root, std::filesystem::directory_options::skip_permission_denied, ec};
+       !ec && it != std::filesystem::recursive_directory_iterator{};
+       it.increment(ec))
+  {
+    if (it->is_directory(ec))
+    {
+      folders.insert(pathAsQString(it->path().lexically_normal()));
+    }
+  }
 }
 
 QString describePlacement(const mdl::PrefabPlacement& placement)
@@ -386,25 +436,40 @@ void PrefabPanel::updatePrefabFromSelection(const std::filesystem::path& path)
 
 Result<void> PrefabPanel::deletePrefabFile(const std::filesystem::path& path)
 {
-  // the thumbnail goes with the file; a missing one is no error
-  auto result =
-    fs::Disk::deleteFile(path)
-    | kdl::and_then([&](auto) { return fs::Disk::deleteFile(thumbnailPathFor(path)); })
-    | kdl::transform([](auto) {});
+  return findEntryOrError(m_document.map().prefabLibrary(), path)
+         | kdl::and_then([&](const auto* entry) {
+             // copied, since the rescan replaces the entry
+             const auto filePath = entry->absolutePath;
+             const auto thumbnailPath = thumbnailPathOf(*entry);
 
-  // the file may be gone even if its thumbnail is not
-  rescan();
-  return result;
+             // the thumbnail goes with the file; a missing one is no error
+             auto result =
+               fs::Disk::deleteFile(filePath)
+               | kdl::and_then([&](auto) { return fs::Disk::deleteFile(thumbnailPath); })
+               | kdl::transform([](auto) {});
+
+             // the file may be gone even if its thumbnail is not
+             rescan();
+             return result;
+           });
 }
 
 Result<void> PrefabPanel::removePrefabThumbnail(const std::filesystem::path& path)
 {
-  auto result =
-    fs::Disk::deleteFile(thumbnailPathFor(path)) | kdl::transform([](auto) {});
+  return findEntryOrError(m_document.map().prefabLibrary(), path)
+         | kdl::and_then([&](const auto* entry) -> Result<void> {
+             if (!entry->thumbnailPath)
+             {
+               return Error{fmt::format("{} has no thumbnail", entry->absolutePath)};
+             }
 
-  // the entry learns that it has no thumbnail, and its cell draws the prefab
-  rescan();
-  return result;
+             auto result =
+               fs::Disk::deleteFile(*entry->thumbnailPath) | kdl::transform([](auto) {});
+
+             // the entry learns that it has no thumbnail, and its cell draws the prefab
+             rescan();
+             return result;
+           });
 }
 
 void PrefabPanel::createGui()
@@ -572,6 +637,7 @@ void PrefabPanel::createGui()
   connect(m_scanTimer, &QTimer::timeout, this, &PrefabPanel::processPendingResults);
 
   // never refreshes the map, only rescans the library (D17)
+  m_watcher->setObjectName("PrefabPanel_watcher");
   m_watchTimer->setSingleShot(true);
   m_watchTimer->setInterval(WatchDebounceInterval);
   connect(m_watchTimer, &QTimer::timeout, this, &PrefabPanel::rescan);
@@ -591,6 +657,8 @@ void PrefabPanel::connectObservers()
   m_notifierConnection += m_document.documentWasLoadedNotifier.connect([&]() {
     connectLibraryObserver();
     m_view->libraryDidChange();
+    ++m_loadGeneration;
+    m_scanRunning = false;
     m_scanFinished = false;
     updateSaveButton();
     updateRefreshButton();
@@ -656,6 +724,8 @@ void PrefabPanel::connectLibraryObserver()
 void PrefabPanel::startScan()
 {
   m_scanStarted = true;
+  // set before the library is told, since a scan of empty roots finishes at once
+  m_scanRunning = true;
   ++m_scanCount;
 
   // the game path or the mods may have changed, which clears the entity models that the
@@ -689,8 +759,11 @@ void PrefabPanel::processPendingResults()
 
 void PrefabPanel::libraryDidChange()
 {
-  if (!m_document.map().prefabLibrary().scanning())
+  // only the end of a scan that the panel started, not new definitions or the update of
+  // one saved file, makes missing files missing indeed (R1-pf-ui-3)
+  if (m_scanRunning && !m_document.map().prefabLibrary().scanning())
   {
+    m_scanRunning = false;
     m_scanFinished = true;
   }
 
@@ -735,27 +808,26 @@ void PrefabPanel::updateApplyButton()
 
 void PrefabPanel::updateWatchedPaths()
 {
-  // the roots, the folders of the prefabs in them and the prefab files; a new folder is
-  // found through the change of its parent
+  // every folder under the roots as they are now, so that a new empty folder, and a file
+  // copied into it later, is seen (R1-pf-ui-1), and the prefab files in those folders,
+  // whose changes a folder does not report; an entry under a root that the map no longer
+  // has is not watched (R1-pf-ui-5)
   const auto& library = m_document.map().prefabLibrary();
-  auto paths = std::set<QString>{};
+  auto folders = std::set<QString>{};
   for (const auto& root : library.roots())
   {
-    auto ec = std::error_code{};
-    if (std::filesystem::is_directory(root, ec))
-    {
-      paths.insert(pathAsQString(root));
-    }
+    addFoldersUnder(root, folders);
   }
+
+  auto paths = folders;
   for (const auto& entry : library.entries())
   {
-    const auto rootPath = library.writeRootFor(entry->root);
-    for (auto folder = entry->relativePath.parent_path(); !folder.empty();
-         folder = folder.parent_path())
+    const auto folder =
+      pathAsQString(entry->absolutePath.parent_path().lexically_normal());
+    if (folders.contains(folder))
     {
-      paths.insert(pathAsQString(rootPath / folder));
+      paths.insert(pathAsQString(entry->absolutePath.lexically_normal()));
     }
-    paths.insert(pathAsQString(entry->absolutePath));
   }
 
   auto pathsToRemove = QStringList{};
@@ -807,14 +879,41 @@ void PrefabPanel::mapDidChange()
   }
 }
 
+void PrefabPanel::setOpenPromptForTesting(RefreshPrompt prompt)
+{
+  m_openPrompt = std::move(prompt);
+}
+
 void PrefabPanel::promptAfterScanIfNeeded()
 {
   if (m_promptAfterScan && m_scanFinished)
   {
     m_promptAfterScan = false;
-    // posted, since this runs inside the library's notification
-    QTimer::singleShot(0, this, [this]() {
-      promptToRefreshPlacements(m_document.map().prefabLibrary().changedPlacements());
+    // posted, since this runs inside the library's notification; a document loaded in
+    // the meantime gets a prompt of its own (R1-pf-ui-4)
+    QTimer::singleShot(0, this, [this, loadGeneration = m_loadGeneration]() {
+      if (loadGeneration != m_loadGeneration || !m_scanFinished)
+      {
+        return;
+      }
+
+      // DD-24: a machine without the files is not asked on every load; the Refresh
+      // button counts the missing placements
+      const auto placements = m_document.map().prefabLibrary().changedPlacements();
+      if (std::ranges::none_of(
+            placements, [](const auto& placement) { return placement.entry != nullptr; }))
+      {
+        return;
+      }
+
+      if (m_openPrompt)
+      {
+        m_openPrompt(placements);
+      }
+      else
+      {
+        promptToRefreshPlacements(placements);
+      }
     });
   }
 }
@@ -925,27 +1024,49 @@ void PrefabPanel::editPrefab(const QString& path)
 
 void PrefabPanel::revealPrefabInFolder(const std::filesystem::path& path)
 {
-  // the folder, not the file, which the system would open with the editor
-  const auto folder = path.parent_path();
-  if (!QDesktopServices::openUrl(QUrl::fromLocalFile(pathAsQPath(folder))))
-  {
-    m_document.map().logger().error() << "Could not open " << folder;
-  }
+  auto& logger = m_document.map().logger();
+  findEntryOrError(m_document.map().prefabLibrary(), path)
+    | kdl::transform([&](const auto* entry) {
+        // the folder, not the file, which the system would open with the editor
+        const auto folder = entry->absolutePath.parent_path();
+        if (!QDesktopServices::openUrl(QUrl::fromLocalFile(pathAsQPath(folder))))
+        {
+          logger.error() << "Could not open " << folder;
+        }
+      })
+    | kdl::transform_error([&](const auto& e) { logger.error() << e.msg; });
 }
 
 void PrefabPanel::openPrefabThumbnail(const std::filesystem::path& path)
 {
-  const auto thumbnailPath = thumbnailPathFor(path);
-  if (!QDesktopServices::openUrl(QUrl::fromLocalFile(pathAsQPath(thumbnailPath))))
-  {
-    m_document.map().logger().error() << "Could not open " << thumbnailPath;
-  }
+  auto& logger = m_document.map().logger();
+  findEntryOrError(m_document.map().prefabLibrary(), path)
+    | kdl::transform([&](const auto* entry) {
+        if (!entry->thumbnailPath)
+        {
+          logger.error() << entry->absolutePath << " has no thumbnail";
+        }
+        else if (!QDesktopServices::openUrl(
+                   QUrl::fromLocalFile(pathAsQPath(*entry->thumbnailPath))))
+        {
+          logger.error() << "Could not open " << *entry->thumbnailPath;
+        }
+      })
+    | kdl::transform_error([&](const auto& e) { logger.error() << e.msg; });
 }
 
 void PrefabPanel::confirmDeletePrefabFile(const std::filesystem::path& path)
 {
+  const auto* entry = findEntry(m_document.map().prefabLibrary(), path);
+  if (!entry)
+  {
+    m_document.map().logger().error()
+      << fmt::format("{} is not a prefab of the library", path);
+    return;
+  }
+
   auto ec = std::error_code{};
-  const auto thumbnailPath = thumbnailPathFor(path);
+  const auto thumbnailPath = thumbnailPathOf(*entry);
   const auto hasThumbnail = std::filesystem::is_regular_file(thumbnailPath, ec);
 
   auto messageBox = QMessageBox{this};
@@ -953,9 +1074,9 @@ void PrefabPanel::confirmDeletePrefabFile(const std::filesystem::path& path)
   messageBox.setWindowTitle(tr("Delete Prefab"));
   messageBox.setText(
     hasThumbnail ? tr("Delete %1 and its thumbnail %2?")
-                     .arg(pathAsQString(path))
+                     .arg(pathAsQString(entry->absolutePath))
                      .arg(pathAsQString(thumbnailPath.filename()))
-                 : tr("Delete %1?").arg(pathAsQString(path)));
+                 : tr("Delete %1?").arg(pathAsQString(entry->absolutePath)));
   messageBox.setInformativeText(
     tr("The placed copies of the prefab stay in the map. This cannot be undone."));
   messageBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
@@ -973,7 +1094,15 @@ void PrefabPanel::confirmDeletePrefabFile(const std::filesystem::path& path)
 
 void PrefabPanel::confirmRemovePrefabThumbnail(const std::filesystem::path& path)
 {
-  const auto thumbnailPath = thumbnailPathFor(path);
+  const auto* entry = findEntry(m_document.map().prefabLibrary(), path);
+  if (!entry || !entry->thumbnailPath)
+  {
+    m_document.map().logger().error()
+      << fmt::format("{} is not a prefab of the library with a thumbnail", path);
+    return;
+  }
+
+  const auto thumbnailPath = *entry->thumbnailPath;
   const auto answer = QMessageBox::question(
     this,
     tr("Remove Thumbnail"),

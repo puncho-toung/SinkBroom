@@ -25,6 +25,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <vector>
 
 class QComboBox;
@@ -72,6 +73,9 @@ class PrefabPanel : public SidebarPanel
 public:
   static constexpr auto PanelId = "Prefabs";
 
+  // offers changed placements for a refresh; see setOpenPromptForTesting
+  using RefreshPrompt = std::function<void(const std::vector<mdl::PrefabPlacement>&)>;
+
 private:
   AppController& m_appController;
   MapDocument& m_document;
@@ -96,6 +100,8 @@ private:
 
   // the first scan has started; until then, nothing rescans
   bool m_scanStarted = false;
+  // a scan that the panel started has not finished yet
+  bool m_scanRunning = false;
   // a rescan is posted to the event loop
   bool m_rescanPending = false;
   std::size_t m_scanCount = 0;
@@ -103,6 +109,11 @@ private:
   // a document was loaded; once its library is scanned, the changed placements are
   // offered for a refresh
   bool m_promptAfterScan = false;
+  // counts the loaded documents, so that a prompt posted for one is not shown for the
+  // next
+  std::size_t m_loadGeneration = 0;
+  // replaces promptToRefreshPlacements for the prompt after a load, if set
+  RefreshPrompt m_openPrompt;
   // a library scan has finished, so that missing files are missing indeed
   bool m_scanFinished = false;
   // the map changed while the panel was hidden, so the count on the Refresh button may
@@ -168,6 +179,14 @@ public:
   void promptToRefreshPlacements(const std::vector<mdl::PrefabPlacement>& placements);
 
   /**
+   * Replaces the prompt that offers the changed placements of a loaded document once its
+   * library is scanned, so that tests see when and with what it is shown; an empty
+   * function restores promptToRefreshPlacements. The prompt is not shown if no changed
+   * placement has a file (DD-24); the Refresh button counts them.
+   */
+  void setOpenPromptForTesting(RefreshPrompt prompt);
+
+  /**
    * Makes the entities of the selected cell's class in the map selection match the
    * selected cell's entity snapshot.
    */
@@ -182,12 +201,15 @@ public:
   /**
    * Deletes the given prefab file and the thumbnail beside it, without asking, and
    * rescans. Placements of the prefab in the map are not touched; they count as missing.
+   * Returns an error, and deletes nothing, if the path is not the file of an entry of the
+   * library.
    */
   Result<void> deletePrefabFile(const std::filesystem::path& path);
 
   /**
-   * Deletes the thumbnail beside the given prefab file, without asking, and rescans, so
-   * that the cell draws the prefab itself.
+   * Deletes the thumbnail of the given prefab file, without asking, and rescans, so that
+   * the cell draws the prefab itself. Returns an error, and deletes nothing, if the path
+   * is not the file of an entry of the library or the entry has no thumbnail.
    */
   Result<void> removePrefabThumbnail(const std::filesystem::path& path);
 

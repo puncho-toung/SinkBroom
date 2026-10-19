@@ -19,6 +19,7 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <QFileSystemWatcher>
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
@@ -53,11 +54,13 @@
 #include "kd/result.h"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -857,6 +860,39 @@ TEST_CASE("PrefabPanel")
         CHECK(findCell(newCells, "lights/lamp.map")->previewId != lampCell->previewId);
       }
     }
+
+    SECTION("The selected entry follows a rescan that reads its file again")
+    {
+      const auto* oldEntry = library.entries().front().get();
+      view->selectEntry(oldEntry->absolutePath);
+      REQUIRE(view->selectedEntry() == oldEntry);
+
+      // the tags make the file differ, so that the rescan reads it again
+      REQUIRE(
+        mdl::savePrefab(
+          map,
+          {entityNode},
+          mdl::SavePrefabOptions{
+            .name = "lamp",
+            .category = "lights",
+            .tags = {"new"},
+            .root = mdl::PrefabRoot::User})
+        | kdl::is_success());
+      panel.rescan();
+      REQUIRE(waitForScan(panel, library, 2));
+
+      // the selection names a file, so it finds the entry that replaced the old one
+      const auto* newEntry = library.find(mdl::PrefabRoot::User, "lights/lamp.map");
+      REQUIRE(newEntry != nullptr);
+      CHECK(view->selectedEntry() == newEntry);
+      CHECK(view->selectedEntry()->metadata.tags == std::vector<std::string>{"new"});
+
+      // and none once the file is gone
+      REQUIRE(std::filesystem::remove(newEntry->absolutePath));
+      panel.rescan();
+      REQUIRE(waitForScan(panel, library, 3));
+      CHECK(view->selectedEntry() == nullptr);
+    }
   }
 
   SECTION("A Prefab Path change moves the user root and rescans")
@@ -1045,6 +1081,30 @@ TEST_CASE("PrefabPanel")
       CHECK(!entry->thumbnailPath);
       CHECK(cellPaths(*view).size() == 2u);
     }
+
+    SECTION("Only the files of entries are deleted")
+    {
+      // a file in the root that no scan has read, and one outside the root
+      env.createFile("sets/unread.map", "{}");
+      env.createFile("sets/unread.png", "png");
+      auto otherEnv = fs::TestEnvironment{};
+      otherEnv.createFile("other.map", "{}");
+
+      CHECK(panel.deletePrefabFile(env.dir() / "sets" / "unread.map").is_error());
+      CHECK(panel.deletePrefabFile(otherEnv.dir() / "other.map").is_error());
+      CHECK(panel.removePrefabThumbnail(env.dir() / "sets" / "unread.map").is_error());
+      CHECK(std::filesystem::exists(env.dir() / "sets" / "unread.map"));
+      CHECK(std::filesystem::exists(env.dir() / "sets" / "unread.png"));
+      CHECK(std::filesystem::exists(otherEnv.dir() / "other.map"));
+
+      // an entry without a thumbnail has none to remove
+      CHECK(panel.removePrefabThumbnail(lampPath).is_error());
+      CHECK(std::filesystem::exists(lampPath));
+
+      // nothing was rescanned
+      QApplication::processEvents();
+      CHECK(panel.scanCount() == 1u);
+    }
   }
 
   SECTION("Refresh count and Apply to Selection")
@@ -1163,6 +1223,189 @@ TEST_CASE("PrefabPanel")
       CHECK(*otherLightNode->entity().property("light_radius") == "300");
       CHECK(*otherLightNode->entity().property("name") == "other");
       CHECK(otherLightNode->entity().property("extra") == nullptr);
+    }
+  }
+
+  SECTION("The watcher")
+  {
+    auto env = fs::TestEnvironment{[](auto& e) {
+      e.createDirectory("lights");
+      e.createDirectory("empty/deeper");
+    }};
+    auto fixture = SidebarContextFixture{fixtureConfigWithUserRoot(env.dir())};
+    auto& map = fixture.document().map();
+    auto& library = map.prefabLibrary();
+
+    auto* entityNode = addEntity(map, {{"classname", "light"}, {"name", "lamp"}});
+    const auto lampPath =
+      mdl::savePrefab(
+        map,
+        {entityNode},
+        mdl::SavePrefabOptions{
+          .name = "lamp", .category = "lights", .root = mdl::PrefabRoot::User})
+      | kdl::value();
+
+    auto panel = PrefabPanel{fixture.context()};
+    panel.panelShown();
+    REQUIRE(waitForScan(panel, library, 1));
+
+    const auto* watcher = panel.findChild<QFileSystemWatcher*>("PrefabPanel_watcher");
+    REQUIRE(watcher != nullptr);
+    const auto watched = [](const QStringList& paths, const std::filesystem::path& path) {
+      return paths.contains(pathAsQString(path.lexically_normal()));
+    };
+
+    // every folder under the root, an empty one too, and the prefab files
+    CHECK(watched(watcher->directories(), env.dir()));
+    CHECK(watched(watcher->directories(), env.dir() / "lights"));
+    CHECK(watched(watcher->directories(), env.dir() / "empty"));
+    CHECK(watched(watcher->directories(), env.dir() / "empty" / "deeper"));
+    CHECK(watched(watcher->files(), lampPath));
+    CHECK(watcher->directories().size() == 4);
+    CHECK(watcher->files().size() == 1);
+
+    SECTION("A new root is watched instead of the old one")
+    {
+      auto otherEnv = fs::TestEnvironment{[](auto& e) { e.createDirectory("doors"); }};
+      library.setUserRoot(otherEnv.dir());
+      panel.rescan();
+      REQUIRE(waitForScan(panel, library, 2));
+
+      CHECK(watched(watcher->directories(), otherEnv.dir()));
+      CHECK(watched(watcher->directories(), otherEnv.dir() / "doors"));
+      CHECK(watcher->directories().size() == 2);
+      CHECK(watcher->files().empty());
+    }
+
+    SECTION("A file copied into a new empty folder rescans after the debounce")
+    {
+      // a hidden panel rescans when it is shown; a visible one after the debounce
+      panel.show();
+      QApplication::processEvents();
+
+      const auto copyPath = env.dir() / "empty" / "deeper" / "copy.map";
+      std::filesystem::copy_file(lampPath, copyPath);
+      CHECK(QTest::qWaitFor(
+        [&] {
+          return panel.scanCount() > 1u && !library.scanning()
+                 && library.find(mdl::PrefabRoot::User, "empty/deeper/copy.map");
+        },
+        5000));
+      CHECK(watched(watcher->files(), copyPath));
+      panel.hide();
+    }
+  }
+
+  SECTION("The prompt after a load")
+  {
+    auto env = fs::TestEnvironment{};
+    auto mapEnv = fs::TestEnvironment{};
+    auto fixture = SidebarContextFixture{fixtureConfigWithUserRoot(env.dir())};
+    auto& document = fixture.document();
+    auto& map = document.map();
+
+    // a placement of an assembly whose file changes afterwards
+    auto* lampNode = addEntity(map, {{"classname", "light"}, {"name", "lamp"}});
+    auto* markerNode = addEntity(map, {{"classname", "info_null"}, {"name", "marker"}});
+    const auto pairOptions =
+      mdl::SavePrefabOptions{.name = "pair", .root = mdl::PrefabRoot::User};
+    const auto pairPath =
+      mdl::savePrefab(map, {lampNode, markerNode}, pairOptions) | kdl::value();
+    map.prefabLibrary().rescan();
+    REQUIRE(QTest::qWaitFor([&] {
+      map.prefabLibrary().processPendingResults();
+      return !map.prefabLibrary().scanning();
+    }));
+    const auto* pairEntry = map.prefabLibrary().find(mdl::PrefabRoot::User, "pair.map");
+    REQUIRE(pairEntry != nullptr);
+
+    auto clones = map.prefabLibrary().cloneBody(*pairEntry, map.worldBounds());
+    REQUIRE(clones.size() == 1u);
+    auto* groupNode = dynamic_cast<mdl::GroupNode*>(clones.front());
+    REQUIRE(groupNode != nullptr);
+    auto group = groupNode->group();
+    group.setPrefabPath("user/pair.map");
+    group.setPrefabHash(pairEntry->hash);
+    groupNode->setGroup(std::move(group));
+    REQUIRE(!mdl::addNodes(map, {{&mdl::parentForNodes(map), clones}}).empty());
+    mdl::removeNodes(map, {lampNode, markerNode});
+
+    auto tagged = pairOptions;
+    tagged.tags = {"new"};
+    REQUIRE(mdl::savePrefab(map, {groupNode}, tagged) | kdl::is_success());
+
+    const auto mapPath = mapEnv.dir() / "level.map";
+    REQUIRE(map.saveTo(mapPath) | kdl::is_success());
+
+    const auto environmentConfig = map.environmentConfig();
+    const auto gameInfo = map.gameInfo();
+    const auto mapFormat = map.worldNode().mapFormat();
+    const auto worldBounds = map.worldBounds();
+    const auto load = [&]() {
+      REQUIRE(
+        document.load(environmentConfig, gameInfo, mapFormat, worldBounds, mapPath)
+        | kdl::is_success());
+    };
+
+    // the panel exists before the map's placements are checked, so it scans at once
+    auto panel = PrefabPanel{fixture.context()};
+    auto prompts = std::vector<std::vector<std::string>>{};
+    panel.setOpenPromptForTesting([&](const auto& placements) {
+      auto paths = std::vector<std::string>{};
+      for (const auto& placement : placements)
+      {
+        paths.push_back(placement.prefabPath);
+      }
+      prompts.push_back(std::move(paths));
+    });
+    REQUIRE(panel.scanCount() == 1u);
+
+    // never before the scan has finished; the scan is taken over without the event
+    // loop, so that the prompt is posted but not shown
+    CHECK(prompts.empty());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+    while (document.map().prefabLibrary().scanning()
+           && std::chrono::steady_clock::now() < deadline)
+    {
+      std::this_thread::sleep_for(std::chrono::milliseconds{1});
+      panel.panelShown();
+    }
+    REQUIRE_FALSE(document.map().prefabLibrary().scanning());
+    CHECK(prompts.empty());
+
+    // a load before the posted prompt runs: the prompt is for the old map, so it is
+    // dropped, and the new map gets its own once its library is scanned
+    load();
+    QApplication::processEvents();
+    CHECK(prompts.empty());
+    CHECK(waitForScan(panel, document.map().prefabLibrary(), 2));
+    CHECK(QTest::qWaitFor([&] { return prompts.size() == 1u; }));
+    CHECK(prompts == std::vector<std::vector<std::string>>{{"user/pair.map"}});
+
+    // once per load: a rescan does not ask again
+    panel.rescan();
+    CHECK(waitForScan(panel, document.map().prefabLibrary(), 3));
+    QTest::qWait(100);
+    CHECK(prompts.size() == 1u);
+
+    SECTION("Not when every changed placement's file is missing")
+    {
+      REQUIRE(std::filesystem::remove(pairPath));
+      load();
+      CHECK(waitForScan(panel, document.map().prefabLibrary(), 4));
+      QTest::qWait(100);
+      CHECK(prompts.size() == 1u);
+      // DD-24: the Refresh button counts it
+      CHECK(panel.changedPlacementCount() == 1u);
+    }
+
+    SECTION("Not for a map without placements")
+    {
+      REQUIRE(document.create(environmentConfig, gameInfo, mapFormat, worldBounds));
+      CHECK(waitForScan(panel, document.map().prefabLibrary(), 4));
+      QTest::qWait(100);
+      CHECK(prompts.size() == 1u);
+      CHECK(panel.changedPlacementCount() == 0u);
     }
   }
 }
