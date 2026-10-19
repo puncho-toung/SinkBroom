@@ -318,12 +318,15 @@ TEST_CASE("PrefabRefresh")
       const auto& entry = findLamp(library);
       REQUIRE(entry.hash != oldHash);
 
-      // the file moved the brush; its reference point, the bounds centre, moved too
+      // the file moved the brush; its reference point, the bounds centre, moved too, so
+      // that the light, which did not move, moved in the file (H-E-5)
       const auto brushDelta =
         findBrush(fileGroupOf(entry))->logicalBounds().min - oldFileBrushBounds.min;
       const auto lightDelta =
         findEntity(fileGroupOf(entry))->entity().origin() - oldFileLightOrigin;
       REQUIRE(brushDelta != lightDelta);
+      REQUIRE(lightDelta != vm::vec3d{0, 0, 0});
+      REQUIRE(brushDelta - lightDelta == vm::vec3d{64, 0, 0});
 
       const auto changed = library.changedPlacements();
       REQUIRE(changed.size() == 1u);
@@ -335,14 +338,17 @@ TEST_CASE("PrefabRefresh")
       CHECK(report.value().entitiesLostOverrides == 0u);
       CHECK(report.value().lostEntities.empty());
 
-      // both copies follow the file
+      // DD-23: one brush against one light is a tie, which the light's origin wins, so
+      // the light stays and the brush moves by its own delta in both copies
+      CHECK(report.value().referenceShift == -lightDelta);
       CHECK(
-        findBrush(*firstNode)->logicalBounds() == firstBrushBounds.translate(brushDelta));
+        findBrush(*firstNode)->logicalBounds()
+        == firstBrushBounds.translate(vm::vec3d{64, 0, 0}));
       CHECK(
         findBrush(*secondNode)->logicalBounds()
-        == secondBrushBounds.translate(brushDelta));
-      CHECK(findEntity(*firstNode)->entity().origin() == firstLightOrigin + lightDelta);
-      CHECK(findEntity(*secondNode)->entity().origin() == secondLightOrigin + lightDelta);
+        == secondBrushBounds.translate(vm::vec3d{64, 0, 0}));
+      CHECK(findEntity(*firstNode)->entity().origin() == firstLightOrigin);
+      CHECK(findEntity(*secondNode)->entity().origin() == secondLightOrigin);
 
       // the second copy keeps its protected colour, every copy its light's name
       CHECK(propertyOf(*findEntity(*firstNode), "_color") == std::nullopt);
@@ -370,6 +376,57 @@ TEST_CASE("PrefabRefresh")
         CHECK(secondNode->group().prefabHash() == oldHash);
         CHECK(library.changedPlacements().size() == 1u);
       }
+    }
+
+    SECTION("A file in which everything moved moves everything")
+    {
+      // an unlinked placement of the same file
+      auto* thirdNode = place(map, findLamp(library), {-512, 0, 0});
+      const auto thirdBrushBounds = findBrush(*thirdNode)->logicalBounds();
+      const auto thirdLightOrigin = findEntity(*thirdNode)->entity().origin();
+
+      // every child of the first copy moves, and the prefab is updated from the copy
+      // (D13), so that its group carries the reference point
+      const auto delta = vm::vec3d{0, 0, 32};
+      openGroup(map, *firstNode);
+      selectNodes(map, firstNode->children());
+      REQUIRE(translateSelection(map, delta));
+      deselectAll(map);
+      closeGroup(map);
+      REQUIRE(
+        savePrefab(
+          map,
+          {firstNode},
+          SavePrefabOptions{.name = "lamp", .category = "props", .root = PrefabRoot::Mod})
+        | kdl::is_success());
+      rescan(library);
+      const auto& entry = findLamp(library);
+      REQUIRE(entry.hash != oldHash);
+
+      const auto changed = library.changedPlacements();
+      REQUIRE(changed.size() == 2u);
+      REQUIRE(changed[0].firstMember == firstNode);
+      REQUIRE(changed[1].firstMember == thirdNode);
+
+      // the copies that were moved already stay where they are
+      const auto firstReport = refreshPlacement(map, changed[0]);
+      REQUIRE(firstReport.is_success());
+      CHECK(firstReport.value().referenceShift == vm::vec3d{0, 0, 0});
+      CHECK(findBrush(*firstNode)->logicalBounds() == firstBrushBounds.translate(delta));
+      CHECK(findEntity(*firstNode)->entity().origin() == firstLightOrigin + delta);
+      CHECK(
+        findBrush(*secondNode)->logicalBounds() == secondBrushBounds.translate(delta));
+
+      // the other placement moves by the whole delta; nothing is corrected away
+      const auto thirdChanged = library.changedPlacements();
+      REQUIRE(thirdChanged.size() == 1u);
+      REQUIRE(thirdChanged.front().firstMember == thirdNode);
+      const auto thirdReport = refreshPlacement(map, thirdChanged.front());
+      REQUIRE(thirdReport.is_success());
+      CHECK(thirdReport.value().referenceShift == vm::vec3d{0, 0, 0});
+      CHECK(findBrush(*thirdNode)->logicalBounds() == thirdBrushBounds.translate(delta));
+      CHECK(findEntity(*thirdNode)->entity().origin() == thirdLightOrigin + delta);
+      CHECK(library.changedPlacements().empty());
     }
 
     SECTION("An entity without a counterpart loses its overrides")

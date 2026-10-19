@@ -27,6 +27,7 @@
 #include "mdl/EntityNaming.h"
 #include "mdl/EntityNode.h"
 #include "mdl/EntityProperties.h"
+#include "mdl/Grid.h"
 #include "mdl/Group.h"
 #include "mdl/GroupNode.h"
 #include "mdl/LayerNode.h"
@@ -49,9 +50,14 @@
 #include "kd/ranges/to.h"
 #include "kd/result.h"
 
+#include "vm/bbox.h"
+#include "vm/mat.h"
+#include "vm/vec.h"
+
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -201,6 +207,147 @@ void applyTransplant(
       },
       [&](BrushNode& brushNode) { setLinkId(brushNode); },
       [&](PatchNode& patchNode) { setLinkId(patchNode); }));
+}
+
+/**
+ * The point of a node that DD-23 compares between an old child and the new child that
+ * took its link ID: a point entity's origin, a brush's or patch's bounds centre; nullopt
+ * for a group or a brush entity, whose children are compared instead.
+ */
+std::optional<vm::vec3d> alignmentPoint(const Node& node)
+{
+  return node.accept(kdl::overload(
+    [](const WorldNode&) -> std::optional<vm::vec3d> { return std::nullopt; },
+    [](const LayerNode&) -> std::optional<vm::vec3d> { return std::nullopt; },
+    [](const GroupNode&) -> std::optional<vm::vec3d> { return std::nullopt; },
+    [](const EntityNode& entityNode) -> std::optional<vm::vec3d> {
+      return entityNode.hasChildren() ? std::nullopt
+                                      : std::optional{entityNode.entity().origin()};
+    },
+    [](const BrushNode& brushNode) -> std::optional<vm::vec3d> {
+      return brushNode.logicalBounds().center();
+    },
+    [](const PatchNode& patchNode) -> std::optional<vm::vec3d> {
+      return patchNode.logicalBounds().center();
+    }));
+}
+
+struct Displacements
+{
+  // of the point entities, which move only when they are moved
+  std::vector<vm::vec3d> ofEntities;
+  // of the brushes and patches, whose centres also move when they are reshaped
+  std::vector<vm::vec3d> ofBrushesAndPatches;
+};
+
+/**
+ * The displacements from the old children to the new children that took their link IDs,
+ * found as matchChildren matched them: at the same position, of the same kind, with the
+ * same link ID after the transplant, recursively.
+ */
+void collectDisplacements(
+  const std::vector<Node*>& oldChildren,
+  const std::vector<Node*>& newChildren,
+  Displacements& displacements)
+{
+  const auto count = std::min(oldChildren.size(), newChildren.size());
+  for (std::size_t i = 0; i < count; ++i)
+  {
+    const auto& oldNode = *oldChildren[i];
+    const auto& newNode = *newChildren[i];
+    if (
+      !isCounterpart(oldNode, newNode)
+      || asObject(oldNode)->linkId() != asObject(newNode)->linkId())
+    {
+      continue;
+    }
+
+    const auto oldPoint = alignmentPoint(oldNode);
+    const auto newPoint = alignmentPoint(newNode);
+    if (oldPoint && newPoint)
+    {
+      auto& target = dynamic_cast<const EntityNode*>(&oldNode)
+                       ? displacements.ofEntities
+                       : displacements.ofBrushesAndPatches;
+      target.push_back(*newPoint - *oldPoint);
+    }
+    else
+    {
+      collectDisplacements(oldNode.children(), newNode.children(), displacements);
+    }
+  }
+}
+
+/**
+ * DD-23: the most common displacement, each rounded to the given grid size; on a tie the
+ * zero vector if it is among the most common, else the first of them, the entities'
+ * coming before the brushes' and patches'. The zero vector if there is none.
+ */
+vm::vec3d modalDisplacement(const Displacements& displacements, const double gridSize)
+{
+  const auto round = [&](const vm::vec3d& v) {
+    return vm::vec3d{
+      gridSize * std::round(v.x() / gridSize),
+      gridSize * std::round(v.y() / gridSize),
+      gridSize * std::round(v.z() / gridSize)};
+  };
+
+  // in the order in which they first appear
+  auto counts = std::vector<std::pair<vm::vec3d, std::size_t>>{};
+  const auto count = [&](const std::vector<vm::vec3d>& values) {
+    for (const auto& value : values)
+    {
+      const auto rounded = round(value);
+      if (const auto it = std::ranges::find_if(
+            counts, [&](const auto& valueCount) { return valueCount.first == rounded; });
+          it != counts.end())
+      {
+        ++it->second;
+      }
+      else
+      {
+        counts.emplace_back(rounded, 1u);
+      }
+    }
+  };
+  count(displacements.ofEntities);
+  count(displacements.ofBrushesAndPatches);
+
+  auto result = vm::vec3d{0, 0, 0};
+  auto maxCount = std::size_t(0);
+  for (const auto& [value, valueCount] : counts)
+  {
+    if (valueCount > maxCount || (valueCount == maxCount && value == vm::vec3d{0, 0, 0}))
+    {
+      result = value;
+      maxCount = valueCount;
+    }
+  }
+  return result;
+}
+
+/**
+ * DD-23 (H-E-5): the translation that keeps the new children that did not move in the
+ * file where the old children were. A file saved from loose nodes has a group without a
+ * transformation, so that a change of its body's bounds moves its reference point (D10)
+ * and with it every child; a file saved from one group carries the reference point in
+ * the group's transformation, which the linked group update undoes, so that its new
+ * children are where the file puts them and need no correction.
+ */
+vm::vec3d alignmentCorrection(
+  const Map& map,
+  const GroupNode& fileGroup,
+  const std::vector<Node*>& oldChildren,
+  const std::vector<Node*>& newChildren)
+{
+  if (fileGroup.group().transformation() != vm::mat4x4d::identity())
+  {
+    return vm::vec3d{0, 0, 0};
+  }
+
+  auto displacements = Displacements{};
+  collectDisplacements(oldChildren, newChildren, displacements);
+  return -modalDisplacement(displacements, map.grid().actualSize());
 }
 
 std::vector<EntityNode*> collectEntityNodes(const std::vector<Node*>& nodes)
@@ -402,6 +549,10 @@ Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& pl
                       *fileGroup, {&firstMember}, map.worldBounds(), map.taskManager())
                     | kdl::and_then([&](auto updates) -> Result<PrefabRefreshReport> {
                         auto newChildren = std::move(updates.front().second);
+                        const auto newChildNodes =
+                          newChildren
+                          | std::views::transform([](auto& child) { return child.get(); })
+                          | kdl::ranges::to<std::vector>();
 
                         if (map.worldNode().entityPropertyConfig().naming)
                         {
@@ -409,11 +560,29 @@ Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& pl
                           // a name twice, since the update matches entities by link ID
                           auto allocator = EntityNameAllocator{map, {&firstMember}};
                           assignUniqueEntityNames(
-                            newChildren | std::views::transform([](auto& child) {
-                              return child.get();
-                            }) | kdl::ranges::to<std::vector>(),
-                            allocator,
-                            EntityNamingMode::KeepIfFree);
+                            newChildNodes, allocator, EntityNamingMode::KeepIfFree);
+                        }
+
+                        // DD-23: what did not move in the file stays where it was
+                        const auto referenceShift = alignmentCorrection(
+                          map, *fileGroup, oldChildren, newChildNodes);
+                        if (referenceShift != vm::vec3d{0, 0, 0})
+                        {
+                          auto shiftError = std::optional<std::string>{};
+                          translateDetachedNodes(
+                            newChildNodes,
+                            referenceShift,
+                            map.worldBounds(),
+                            map.worldNode().entityPropertyConfig())
+                            | kdl::transform_error(
+                              [&](auto e) { shiftError = std::move(e.msg); });
+                          if (shiftError)
+                          {
+                            return Error{fmt::format(
+                              "Cannot refresh prefab '{}': {}",
+                              placement.prefabPath,
+                              *shiftError)};
+                          }
                         }
 
                         const auto name = entry.metadata.name.empty()
@@ -429,11 +598,8 @@ Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& pl
 
                         // added before the old children are removed, since removing every
                         // child of a group removes the group
-                        auto command = AddRemoveNodesCommand::add(
-                          {{&firstMember,
-                            newChildren | std::views::transform([](auto& child) {
-                              return child.get();
-                            }) | kdl::ranges::to<std::vector>()}});
+                        auto command =
+                          AddRemoveNodesCommand::add({{&firstMember, newChildNodes}});
                         // the command owns them now
                         for (auto& child : newChildren)
                         {
@@ -482,6 +648,7 @@ Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& pl
                         report.lostEntities =
                           lostEntities(oldChildren, transplant, nameKeyOf(map));
                         report.entitiesLostOverrides = report.lostEntities.size();
+                        report.referenceShift = referenceShift;
                         return report;
                       });
            });

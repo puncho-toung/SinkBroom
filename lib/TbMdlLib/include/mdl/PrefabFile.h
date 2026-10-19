@@ -21,6 +21,9 @@
 
 #include "base/Result.h"
 
+#include "vm/bbox.h"
+#include "vm/vec.h"
+
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -28,6 +31,7 @@
 namespace tb::mdl
 {
 class EntityNode;
+struct EntityPropertyConfig;
 class Map;
 class Node;
 class PrefabLibrary;
@@ -167,6 +171,18 @@ Result<std::filesystem::path> savePrefab(
   const Map& map,
   const std::vector<Node*>& selectedNodes,
   const SavePrefabOptions& options);
+
+/**
+ * Translates the given nodes, which are not part of a map, and everything below them by
+ * the given delta, as savePrefab moves a body to its reference point: a brush entity's
+ * origin key moves with its brushes, and alignment is locked. Returns an error if a brush
+ * cannot be translated within the world bounds.
+ */
+Result<void> translateDetachedNodes(
+  const std::vector<Node*>& nodes,
+  const vm::vec3d& delta,
+  const vm::bbox3d& worldBounds,
+  const EntityPropertyConfig& entityPropertyConfig);
 
 /**
  * Reads the _tb_prefab_* keys from the worldspawn of the given world. Returns an error if

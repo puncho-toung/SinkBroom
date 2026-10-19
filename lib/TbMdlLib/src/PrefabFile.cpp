@@ -675,6 +675,15 @@ Result<std::filesystem::path> savePrefab(
            [&](const auto& path) { return writePrefab(map, nodes, options, path); });
 }
 
+Result<void> translateDetachedNodes(
+  const std::vector<Node*>& nodes,
+  const vm::vec3d& delta,
+  const vm::bbox3d& worldBounds,
+  const EntityPropertyConfig& entityPropertyConfig)
+{
+  return translateNodes(nodes, delta, worldBounds, entityPropertyConfig);
+}
+
 Result<PrefabMetadata> readPrefabMetadata(const WorldNode& world)
 {
   const auto& entity = world.entity();

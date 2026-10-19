@@ -21,6 +21,8 @@
 
 #include "base/Result.h"
 
+#include "vm/vec.h"
+
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -38,6 +40,9 @@ struct PrefabRefreshReport
   std::size_t entitiesLostOverrides = 0;
   // their names, or their classnames if they have none, in the order of the old member
   std::vector<std::string> lostEntities;
+  // the translation that was added to every new child so that the children that did not
+  // move in the file stay where they were in the map (DD-23); zero if none was needed
+  vm::vec3d referenceShift = vm::vec3d{0, 0, 0};
 };
 
 /**
@@ -54,6 +59,13 @@ struct PrefabRefreshReport
  * properties of every member, and the names of the entities, survive (F29, D18). With
  * naming rules, the other entities keep their names from the file if they are free,
  * else they get new ones, and the link sources among the new children follow the names.
+ *
+ * A file whose group carries no transformation was saved from loose nodes, so its
+ * reference point (D10) moves whenever the bounds of its body change, which moves every
+ * child against the placement. For such a file, the new children are translated by the
+ * negated most common displacement of the matched children (old to new reference point:
+ * an entity's origin, a brush's or patch's bounds centre), rounded to the map's grid,
+ * with ties going to no displacement, else to the first; see referenceShift (DD-23).
  *
  * Returns an error and leaves the map untouched if the file is missing, cannot be read,
  * is not one non-empty group, or if the transaction fails.
