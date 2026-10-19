@@ -60,7 +60,10 @@ class SavePrefabDialog : public QDialog
   Q_OBJECT
 private:
   MapDocument& m_document;
+  // the selection, normalised once (normalizePrefabSelection)
   std::vector<mdl::Node*> m_nodes;
+  // the selection is one entity, so that it can be saved as either kind
+  bool m_singleEntity = false;
   std::optional<std::filesystem::path> m_savedPath;
 
   QLineEdit* m_nameEdit = nullptr;

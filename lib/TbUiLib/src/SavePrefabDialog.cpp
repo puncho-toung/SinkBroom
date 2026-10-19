@@ -142,7 +142,8 @@ std::string defaultPrefabName(const MapDocument& document)
 SavePrefabDialog::SavePrefabDialog(MapDocument& document, QWidget* parent)
   : QDialog{parent}
   , m_document{document}
-  , m_nodes{document.map().selection().nodes}
+  , m_nodes{mdl::normalizePrefabSelection(document.map().selection().nodes)}
+  , m_singleEntity{mdl::derivePrefabKind(m_nodes, false) == mdl::PrefabKind::Entity}
 {
   createGui();
   updateControls();
@@ -230,6 +231,8 @@ void SavePrefabDialog::createGui()
   m_forceAssemblyCheck = new QCheckBox{tr("Save as assembly anyway")};
   m_forceAssemblyCheck->setToolTip(
     tr("Save the entity as a one-entity group whose placements are linked"));
+  // the override is offered only where it changes the kind
+  m_forceAssemblyCheck->setVisible(m_singleEntity);
 
   const auto externalLinks = mdl::findExternalLinks(m_nodes);
   m_clearLinksCheck = new QCheckBox{tr("Clear links that leave the selection")};
@@ -306,13 +309,9 @@ void SavePrefabDialog::createGui()
 
 void SavePrefabDialog::updateControls()
 {
-  // the override is offered only where it changes the kind
-  const auto singleEntity =
-    mdl::derivePrefabKind(m_nodes, false) == mdl::PrefabKind::Entity;
-  m_forceAssemblyCheck->setVisible(singleEntity);
-
-  const auto kind =
-    mdl::derivePrefabKind(m_nodes, singleEntity && m_forceAssemblyCheck->isChecked());
+  const auto kind = m_singleEntity && !m_forceAssemblyCheck->isChecked()
+                      ? mdl::PrefabKind::Entity
+                      : mdl::PrefabKind::Assembly;
   m_kindLabel->setText(
     kind == mdl::PrefabKind::Entity ? tr("Entity snapshot (placed as a plain entity)")
                                     : tr("Assembly (placed as a linked group)"));
@@ -347,9 +346,7 @@ mdl::SavePrefabOptions SavePrefabDialog::options() const
   options.root = m_rootChoice->count() > 0
                    ? static_cast<mdl::PrefabRoot>(m_rootChoice->currentData().toInt())
                    : mdl::PrefabRoot::User;
-  options.forceAssembly =
-    m_forceAssemblyCheck->isChecked()
-    && mdl::derivePrefabKind(m_nodes, false) == mdl::PrefabKind::Entity;
+  options.forceAssembly = m_singleEntity && m_forceAssemblyCheck->isChecked();
   options.clearExternalLinks = m_clearLinksCheck->isChecked();
   options.includeDefaults = m_includeDefaultsCheck->isChecked();
   return options;
