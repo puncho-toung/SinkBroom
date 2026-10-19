@@ -24,6 +24,7 @@ target_sources(TbMdlLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CompilationConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CompilationProfile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CompilationTask.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ContentHash.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CurrentGroupCommand.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DecalDefinition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DefParser.cpp
