@@ -48,6 +48,7 @@
 #include "kd/vector_utils.h"
 
 #include <algorithm>
+#include <memory>
 #include <ranges>
 
 namespace tb::mdl
@@ -401,23 +402,24 @@ void renameSelectedGroups(Map& map, const std::string& name)
 
 GroupNode* placeLinkedDuplicate(Map& map, const GroupNode& sourceGroup, Node& parent)
 {
-  auto* groupNodeClone =
-    static_cast<GroupNode*>(sourceGroup.cloneRecursively(map.worldBounds()));
+  auto groupNodeClone = std::unique_ptr<GroupNode>{
+    static_cast<GroupNode*>(sourceGroup.cloneRecursively(map.worldBounds()))};
 
   if (map.worldNode().entityPropertyConfig().naming)
   {
     // the references stay as they are, as they do when a linked group is updated, since
     // the link source keys are not protected and the next update would undo the change
-    assignUniqueEntityNamesBeforeAdding(map, {groupNodeClone}, false);
+    assignUniqueEntityNamesBeforeAdding(map, {groupNodeClone.get()}, false);
   }
 
-  // addNodes deletes the clone if it fails
-  if (addNodes(map, {{&parent, {groupNodeClone}}}).empty())
+  // addNodes takes the clone and deletes it if it fails
+  auto* groupNodeToAdd = groupNodeClone.release();
+  if (addNodes(map, {{&parent, {groupNodeToAdd}}}).empty())
   {
     return nullptr;
   }
 
-  return groupNodeClone;
+  return groupNodeToAdd;
 }
 
 bool canCreateLinkedDuplicate(const Map& map)

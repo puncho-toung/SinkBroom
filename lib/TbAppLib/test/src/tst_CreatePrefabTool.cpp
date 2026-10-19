@@ -20,6 +20,7 @@
 #include "fs/TestEnvironment.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
+#include "mdl/EditorContext.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityDefinition.h"
 #include "mdl/EntityDefinitionManager.h"
@@ -38,6 +39,7 @@
 #include "mdl/PrefabFile.h"
 #include "mdl/PrefabLibrary.h"
 #include "mdl/PropertyDefinition.h"
+#include "mdl/Selection.h"
 #include "mdl/TestFactory.h"
 #include "mdl/WorldNode.h"
 #include "ui/CreatePrefabTool.h"
@@ -78,6 +80,22 @@ const auto Torch = std::string{R"PREFAB(// Game: Doom 3 BFG
 "origin" "0 0 0"
 "name" "torch"
 "light_radius" "128"
+}
+)PREFAB"};
+
+// an assembly whose body is an entity, not a group
+const auto Malformed = std::string{R"PREFAB(// Game: Doom 3 BFG
+// Format: Doom3 (Valve)
+// entity 0
+{
+"classname" "worldspawn"
+"_tb_prefab_kind" "assembly"
+"_tb_prefab_name" "Malformed"
+}
+// entity 1
+{
+"classname" "light"
+"origin" "0 0 0"
 }
 )PREFAB"};
 
@@ -150,6 +168,8 @@ TEST_CASE("CreatePrefabTool")
   auto env = fs::TestEnvironment{[](auto& e) {
     e.createDirectory("base/prefabs/lights");
     e.createFile("base/prefabs/lights/torch.map", Torch);
+    e.createFile("base/prefabs/broken.map", "{ this is not a map");
+    e.createFile("base/prefabs/malformed.map", Malformed);
   }};
 
   auto fixture = MapDocumentFixture{};
@@ -222,6 +242,21 @@ TEST_CASE("CreatePrefabTool")
     CHECK_FALSE(tool.placing());
     CHECK(defaultLayerChildren == childrenBefore);
 
+    // a file that does not parse, and a body that is not what the kind says
+    const auto* brokenEntry = library.find(mdl::PrefabRoot::Mod, "broken.map");
+    REQUIRE(brokenEntry != nullptr);
+    REQUIRE(brokenEntry->error);
+    CHECK_FALSE(tool.createPrefab(library.payloadFor(*brokenEntry)));
+    CHECK_FALSE(tool.placing());
+
+    const auto* malformedEntry = library.find(mdl::PrefabRoot::Mod, "malformed.map");
+    REQUIRE(malformedEntry != nullptr);
+    REQUIRE(malformedEntry->world);
+    REQUIRE(malformedEntry->metadata.kind == mdl::PrefabKind::Assembly);
+    CHECK_FALSE(tool.createPrefab(library.payloadFor(*malformedEntry)));
+    CHECK_FALSE(tool.placing());
+    CHECK(defaultLayerChildren == childrenBefore);
+
     // no transaction is open, so a new one can be committed on its own
     REQUIRE(tool.createPrefab(torchPayload));
     tool.commit();
@@ -277,7 +312,8 @@ TEST_CASE("CreatePrefabTool")
     REQUIRE(map.selection().nodes.size() == 1u);
     auto* groupNode = dynamic_cast<mdl::GroupNode*>(map.selection().nodes.front());
     REQUIRE(groupNode != nullptr);
-    CHECK(groupNode->group().prefabPath() == "props/crate.map");
+    // C3: the path names the root too
+    CHECK(groupNode->group().prefabPath() == "mod/props/crate.map");
     CHECK(groupNode->group().prefabHash() == crateEntry->hash);
 
     // dropped into the map it was saved from, it joins none of the map's link sets
@@ -309,7 +345,7 @@ TEST_CASE("CreatePrefabTool")
       REQUIRE(secondGroupNode != nullptr);
       CHECK(secondGroupNode != groupNode);
       CHECK(secondGroupNode->linkId() == groupNode->linkId());
-      CHECK(secondGroupNode->group().prefabPath() == "props/crate.map");
+      CHECK(secondGroupNode->group().prefabPath() == "mod/props/crate.map");
       CHECK(secondGroupNode->group().prefabHash() == crateEntry->hash);
       CHECK_FALSE(kdl::ranges::contains(linkIdsBefore, secondGroupNode->linkId()));
 
@@ -325,21 +361,81 @@ TEST_CASE("CreatePrefabTool")
         == groupNode->logicalBounds().translate(vm::vec3d{0, 128, 0}));
       CHECK(defaultLayerChildren.size() == childrenBefore.size() + 2u);
     }
+
+    SECTION("A placement inside the open first placement is not linked to it")
+    {
+      // a linked duplicate cannot be added to its own link set (H-D-4)
+      mdl::openGroup(map, *groupNode);
+      REQUIRE(tool.createPrefab(cratePayload));
+
+      REQUIRE(map.selection().nodes.size() == 1u);
+      auto* innerGroupNode = dynamic_cast<mdl::GroupNode*>(map.selection().nodes.front());
+      REQUIRE(innerGroupNode != nullptr);
+      CHECK(innerGroupNode->parent() == groupNode);
+      CHECK(innerGroupNode->linkId() != groupNode->linkId());
+      CHECK(innerGroupNode->group().prefabPath() == "mod/props/crate.map");
+      CHECK_FALSE(kdl::ranges::contains(linkIdsBefore, innerGroupNode->linkId()));
+
+      tool.commit();
+      mdl::closeGroup(map);
+      CHECK(defaultLayerChildren.size() == childrenBefore.size() + 1u);
+    }
+
+    SECTION("The same relative path in the other root is another prefab")
+    {
+      library.setUserRoot(env.dir() / "user");
+      REQUIRE(
+        mdl::savePrefab(
+          map,
+          {crateNode},
+          mdl::SavePrefabOptions{
+            .name = "crate", .category = "props", .root = mdl::PrefabRoot::User})
+        | kdl::is_success());
+      library.rescan();
+      waitForScan(library);
+
+      // the user crate shadows the mod crate in the library (C1), but not in the map
+      REQUIRE(library.find(mdl::PrefabRoot::Mod, "props/crate.map") == nullptr);
+      const auto* userCrateEntry = library.find(mdl::PrefabRoot::User, "props/crate.map");
+      REQUIRE(userCrateEntry != nullptr);
+
+      REQUIRE(tool.createPrefab(library.payloadFor(*userCrateEntry)));
+      auto* userGroupNode = dynamic_cast<mdl::GroupNode*>(map.selection().nodes.front());
+      REQUIRE(userGroupNode != nullptr);
+      CHECK(userGroupNode != groupNode);
+      CHECK(userGroupNode->linkId() != groupNode->linkId());
+      CHECK(userGroupNode->group().prefabPath() == "user/props/crate.map");
+      tool.commit();
+    }
+  }
+
+  SECTION("A placement that the view filter hides is not made")
+  {
+    map.editorContext().setShowPointEntities(false);
+    CHECK_FALSE(tool.createPrefab(torchPayload));
+    CHECK_FALSE(tool.placing());
+    CHECK(defaultLayerChildren == childrenBefore);
+    map.editorContext().setShowPointEntities(true);
   }
 
   SECTION("Cancelling a placement leaves the map unchanged")
   {
+    // the selection is restored too
+    mdl::selectNodes(map, {torchNode});
+
     SECTION("Entity snapshot")
     {
       REQUIRE(tool.createPrefab(torchPayload));
       tool.updateCreatedPrefab({32, 32, 0});
       tool.cancel();
+      CHECK(map.selection().nodes == std::vector<mdl::Node*>{torchNode});
     }
 
     SECTION("Assembly")
     {
       REQUIRE(tool.createPrefab(cratePayload));
       tool.cancel();
+      CHECK(map.selection().nodes == std::vector<mdl::Node*>{torchNode});
     }
 
     SECTION("Linked duplicate of an assembly")
@@ -347,12 +443,15 @@ TEST_CASE("CreatePrefabTool")
       REQUIRE(tool.createPrefab(cratePayload));
       tool.commit();
       const auto childrenAfterFirst = defaultLayerChildren;
+      const auto selectionAfterFirst = map.selection().nodes;
 
       REQUIRE(tool.createPrefab(cratePayload));
       tool.cancel();
       CHECK(defaultLayerChildren == childrenAfterFirst);
+      CHECK(map.selection().nodes == selectionAfterFirst);
 
       map.undoCommand();
+      CHECK(map.selection().nodes == std::vector<mdl::Node*>{torchNode});
     }
 
     CHECK_FALSE(tool.placing());

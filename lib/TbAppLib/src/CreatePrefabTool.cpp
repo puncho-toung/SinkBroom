@@ -55,6 +55,7 @@
 
 #include <ranges>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace tb::ui
@@ -63,6 +64,9 @@ namespace
 {
 
 const auto TransactionName = std::string{"Place Prefab"};
+
+// C4
+constexpr auto PayloadPrefix = std::string_view{"prefab:"};
 
 /**
  * Returns the first group, in the order of the world, that was placed from the prefab
@@ -146,7 +150,9 @@ bool CreatePrefabTool::createPrefab(const std::string& payload)
     return false;
   }
 
-  const auto prefabPath = entry->relativePath.generic_string();
+  // C3: the root-qualified path, as in the payload, so that equal relative paths in the
+  // two roots are different prefabs
+  const auto prefabPath = library.payloadFor(*entry).substr(PayloadPrefix.size());
   if (!entry->world)
   {
     map.logger().warn() << "Cannot place prefab '" << prefabPath
@@ -154,28 +160,18 @@ bool CreatePrefabTool::createPrefab(const std::string& payload)
     return false;
   }
 
-  m_referenceBounds = map.referenceBounds();
-  m_placementPlane = std::nullopt;
-
   auto& parent = mdl::parentForNodes(map);
   const auto kind = entry->metadata.kind;
 
-  auto addedNodes = std::vector<mdl::Node*>{};
-  if (
-    auto* placedGroupNode = kind == mdl::PrefabKind::Assembly
-                              ? findPlacedAssembly(map.worldNode(), prefabPath, parent)
-                              : nullptr)
+  // a second placement of an assembly is a linked duplicate of the first
+  auto* placedGroupNode = kind == mdl::PrefabKind::Assembly
+                            ? findPlacedAssembly(map.worldNode(), prefabPath, parent)
+                            : nullptr;
+
+  auto clones = std::vector<mdl::Node*>{};
+  if (!placedGroupNode)
   {
-    // a second placement of an assembly is a linked duplicate of the first
-    map.startTransaction(TransactionName, mdl::TransactionScope::LongRunning);
-    if (auto* groupNode = mdl::placeLinkedDuplicate(map, *placedGroupNode, parent))
-    {
-      addedNodes.push_back(groupNode);
-    }
-  }
-  else
-  {
-    auto clones = library.cloneBody(*entry, map.worldBounds());
+    clones = library.cloneBody(*entry, map.worldBounds());
     if (!isWellFormedBody(clones, kind))
     {
       map.logger().warn() << "Cannot place prefab '" << prefabPath
@@ -195,21 +191,50 @@ bool CreatePrefabTool::createPrefab(const std::string& payload)
       group.setPrefabHash(entry->hash);
       groupNode->setGroup(std::move(group));
     }
+  }
 
-    map.startTransaction(TransactionName, mdl::TransactionScope::LongRunning);
+  m_referenceBounds = map.referenceBounds();
+  m_placementPlane = std::nullopt;
 
-    // clones must not be used after this
-    const auto nodesToAdd = mdl::prepareNodesForAdding(map, clones);
-    if (map.worldNode().entityPropertyConfig().naming)
+  map.startTransaction(TransactionName, mdl::TransactionScope::LongRunning);
+
+  auto addedNodes = std::vector<mdl::Node*>{};
+  try
+  {
+    if (placedGroupNode)
     {
-      mdl::assignUniqueEntityNamesBeforeAdding(
-        map,
-        nodesToAdd | std::views::values | std::views::join
-          | kdl::ranges::to<std::vector>(),
-        true);
+      if (auto* groupNode = mdl::placeLinkedDuplicate(map, *placedGroupNode, parent))
+      {
+        addedNodes.push_back(groupNode);
+      }
+    }
+    else
+    {
+      // clones must not be used after this
+      const auto nodesToAdd = mdl::prepareNodesForAdding(map, clones);
+      if (map.worldNode().entityPropertyConfig().naming)
+      {
+        mdl::assignUniqueEntityNamesBeforeAdding(
+          map,
+          nodesToAdd | std::views::values | std::views::join
+            | kdl::ranges::to<std::vector>(),
+          true);
+      }
+
+      addedNodes = mdl::addNodes(map, nodesToAdd);
     }
 
-    addedNodes = mdl::addNodes(map, nodesToAdd);
+    if (!addedNodes.empty())
+    {
+      mdl::deselectAll(map);
+      mdl::selectNodes(map, mdl::collectSelectableNodes(addedNodes, map.editorContext()));
+    }
+  }
+  catch (...)
+  {
+    // the long running transaction must not stay open
+    map.cancelTransaction();
+    throw;
   }
 
   if (addedNodes.empty())
@@ -218,10 +243,16 @@ bool CreatePrefabTool::createPrefab(const std::string& payload)
     return false;
   }
 
-  mdl::deselectAll(map);
-  mdl::selectNodes(map, mdl::collectSelectableNodes(addedNodes, map.editorContext()));
-  m_prefabNode = addedNodes.front();
+  if (!map.selection().hasNodes())
+  {
+    // a view filter hides what was added; the drag would move nothing and leave it
+    map.cancelTransaction();
+    map.logger().warn() << "Cannot place prefab '" << prefabPath
+                        << "': the view filter hides it";
+    return false;
+  }
 
+  m_prefabNode = addedNodes.front();
   return true;
 }
 

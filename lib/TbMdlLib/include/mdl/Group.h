@@ -53,8 +53,10 @@ public:
   void transform(const vm::mat4x4d& transformation);
 
   /**
-   * The path of the prefab file this group was placed from, relative to its library root,
-   * with forward slashes. Serialised as _tb_prefab.
+   * The prefab file this group was placed from, as the drop payload names it without its
+   * "prefab:" prefix: the library root ("user" or "mod"), a slash and the path relative
+   * to that root, with forward slashes, for example "mod/props/crate.map". Serialised as
+   * _tb_prefab.
    */
   const std::optional<std::string>& prefabPath() const;
   void setPrefabPath(std::optional<std::string> prefabPath);
