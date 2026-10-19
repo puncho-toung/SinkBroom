@@ -40,6 +40,18 @@ struct EntityPropertyConfig;
 class WorldNode;
 
 /**
+ * Whether a WorldReader fills the node tree of the world it reads. A world that nothing
+ * queries spatially, such as a prefab library's, skips it: it comes back with an empty
+ * node tree and node tree updates disabled; rebuildNodeTree and then
+ * enableNodeTreeUpdates make it an ordinary world.
+ */
+enum class WorldReaderNodeTree
+{
+  Build,
+  Skip,
+};
+
+/**
  * MapReader subclass for loading a whole .map file.
  */
 class WorldReader : public MapReader
@@ -53,7 +65,10 @@ public:
     const EntityPropertyConfig& entityPropertyConfig);
 
   Result<std::unique_ptr<WorldNode>> read(
-    const vm::bbox3d& worldBounds, ParserStatus& status, kdl::task_manager& taskManager);
+    const vm::bbox3d& worldBounds,
+    ParserStatus& status,
+    kdl::task_manager& taskManager,
+    WorldReaderNodeTree nodeTree = WorldReaderNodeTree::Build);
 
   /**
    * Try to parse the given string as the given map formats, in order.
@@ -64,6 +79,7 @@ public:
    * @param worldBounds world bounds
    * @param status status
    * @param taskManager the task manager to use for parallel tasks
+   * @param nodeTree whether the world's node tree is filled
    * @return the world node or an error if `str` can't be parsed by any of the given
    * formats
    */
@@ -73,7 +89,8 @@ public:
     const vm::bbox3d& worldBounds,
     const EntityPropertyConfig& entityPropertyConfig,
     ParserStatus& status,
-    kdl::task_manager& taskManager);
+    kdl::task_manager& taskManager,
+    WorldReaderNodeTree nodeTree = WorldReaderNodeTree::Build);
 
 private: // implement MapReader interface
   Node* onWorldNode(std::unique_ptr<WorldNode> worldNode, ParserStatus& status) override;

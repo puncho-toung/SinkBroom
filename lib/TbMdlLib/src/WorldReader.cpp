@@ -71,7 +71,8 @@ Result<std::unique_ptr<WorldNode>> WorldReader::tryRead(
   const vm::bbox3d& worldBounds,
   const EntityPropertyConfig& entityPropertyConfig,
   ParserStatus& status,
-  kdl::task_manager& taskManager)
+  kdl::task_manager& taskManager,
+  const WorldReaderNodeTree nodeTree)
 {
   auto parserErrors = std::vector<std::tuple<MapFormat, std::string>>{};
 
@@ -83,7 +84,7 @@ Result<std::unique_ptr<WorldNode>> WorldReader::tryRead(
     }
 
     auto reader = WorldReader{str, mapFormat, entityPropertyConfig};
-    if (auto result = reader.read(worldBounds, status, taskManager))
+    if (auto result = reader.read(worldBounds, status, taskManager, nodeTree))
     {
       return result;
     }
@@ -170,13 +171,19 @@ void setLinkIds(WorldNode& worldNode, ParserStatus& status)
 } // namespace
 
 Result<std::unique_ptr<WorldNode>> WorldReader::read(
-  const vm::bbox3d& worldBounds, ParserStatus& status, kdl::task_manager& taskManager)
+  const vm::bbox3d& worldBounds,
+  ParserStatus& status,
+  kdl::task_manager& taskManager,
+  const WorldReaderNodeTree nodeTree)
 {
   return readEntities(worldBounds, status, taskManager) | kdl::transform([&]() {
            sanitizeLayerSortIndicies(*m_worldNode, status);
            setLinkIds(*m_worldNode, status);
-           m_worldNode->rebuildNodeTree();
-           m_worldNode->enableNodeTreeUpdates();
+           if (nodeTree == WorldReaderNodeTree::Build)
+           {
+             m_worldNode->rebuildNodeTree();
+             m_worldNode->enableNodeTreeUpdates();
+           }
            return std::move(m_worldNode);
          });
 }

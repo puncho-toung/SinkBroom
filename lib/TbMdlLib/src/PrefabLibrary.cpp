@@ -136,15 +136,16 @@ Result<std::unique_ptr<WorldNode>> readPrefabWorld(
            auto status = SimpleParserStatus{logger};
            // a nested task manager would wait on the workers that run this task
            auto taskManager = kdl::task_manager{0};
+           // nothing queries a library world spatially, so it gets no node tree
            return WorldReader::tryRead(
-             bytes, {mapFormat}, worldBounds, entityPropertyConfig, status, taskManager);
-         })
-         | kdl::transform([](auto worldNode) {
-             // nothing queries a library world spatially; the reader filled the tree
-             worldNode->disableNodeTreeUpdates();
-             worldNode->clearNodeTree();
-             return worldNode;
-           });
+             bytes,
+             {mapFormat},
+             worldBounds,
+             entityPropertyConfig,
+             status,
+             taskManager,
+             WorldReaderNodeTree::Skip);
+         });
 }
 
 /**
