@@ -808,6 +808,42 @@ TEST_CASE("PrefabRefresh")
     }
   }
 
+  SECTION("refreshPlacement aligns by the first of tied displacements")
+  {
+    // two brushes 256 units apart, saved from loose nodes
+    saveLampFrom(
+      map, {createBrushNodeAt(map, {0, 0, 0}), createBrushNodeAt(map, {256, 0, 0})});
+    rescan(library);
+    auto* placedNode = place(map, findLamp(library), {0, 0, 512});
+    REQUIRE(placedNode->childCount() == 2u);
+    const auto oldFirstBounds = placedNode->children()[0]->logicalBounds();
+
+    // the second brush moves in the file, which moves the reference point by half of it,
+    // so that the two brushes are displaced in opposite directions: a tie of two
+    // displacements, neither of them zero
+    saveLampFrom(
+      map, {createBrushNodeAt(map, {0, 0, 0}), createBrushNodeAt(map, {320, 0, 0})});
+    rescan(library);
+    const auto& fileGroup = fileGroupOf(findLamp(library));
+    REQUIRE(fileGroup.childCount() == 2u);
+    const auto fileOffset = fileGroup.children()[1]->logicalBounds().min
+                            - fileGroup.children()[0]->logicalBounds().min;
+
+    const auto changed = library.changedPlacements();
+    REQUIRE(changed.size() == 1u);
+    const auto report = refreshPlacement(map, changed.front());
+    REQUIRE(report.is_success());
+
+    // R2-pf-mdl-11: the first displacement wins, so the first child stays where it was
+    CHECK(report.value().referenceShift != vm::vec3d{0, 0, 0});
+    REQUIRE(placedNode->childCount() == 2u);
+    CHECK(placedNode->children()[0]->logicalBounds() == oldFirstBounds);
+    CHECK(
+      placedNode->children()[1]->logicalBounds().min
+        - placedNode->children()[0]->logicalBounds().min
+      == fileOffset);
+  }
+
   SECTION("applyPrefabToSelection")
   {
     env.createFile("base/prefabs/lights/red.map", RedLight);

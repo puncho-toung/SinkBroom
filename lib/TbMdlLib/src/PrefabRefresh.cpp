@@ -45,6 +45,7 @@
 #include "mdl/WorldNode.h"
 
 #include "kd/contracts.h"
+#include "kd/hash_utils.h"
 #include "kd/invoke.h"
 #include "kd/overload.h"
 #include "kd/ranges/contains.h"
@@ -59,9 +60,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -138,14 +141,41 @@ struct LinkIdTransplant
 };
 
 /**
- * The link IDs of the groups in the map that are neither one of the given members nor
- * below one.
+ * The link IDs of the groups below the given nodes that a group of the map holds which
+ * is neither one of the given members nor below one.
  */
 std::unordered_set<std::string> groupIdsOutside(
-  const Map& map, const std::vector<GroupNode*>& members)
+  const Map& map,
+  const std::vector<GroupNode*>& members,
+  const std::vector<Node*>& oldChildren)
 {
-  const auto memberSet = std::unordered_set<const Node*>{members.begin(), members.end()};
+  // R2-pf-mdl-12: only the IDs that a transplant could take are looked for; they live in
+  // the old children, which outlive the walk
+  auto nestedIds = std::unordered_set<std::string_view>{};
+  Node::visitAll(
+    oldChildren,
+    kdl::overload(
+      [](auto&& thisLambda, const WorldNode& worldNode) {
+        worldNode.visitChildren(thisLambda);
+      },
+      [](auto&& thisLambda, const LayerNode& layerNode) {
+        layerNode.visitChildren(thisLambda);
+      },
+      [&](auto&& thisLambda, const GroupNode& groupNode) {
+        nestedIds.insert(groupNode.linkId());
+        groupNode.visitChildren(thisLambda);
+      },
+      [](const EntityNode&) {},
+      [](const BrushNode&) {},
+      [](const PatchNode&) {}));
+
   auto result = std::unordered_set<std::string>{};
+  if (nestedIds.empty())
+  {
+    return result;
+  }
+
+  const auto memberSet = std::unordered_set<const Node*>{members.begin(), members.end()};
   map.worldNode().accept(kdl::overload(
     [](auto&& thisLambda, const WorldNode& worldNode) {
       worldNode.visitChildren(thisLambda);
@@ -156,7 +186,10 @@ std::unordered_set<std::string> groupIdsOutside(
     [&](auto&& thisLambda, const GroupNode& groupNode) {
       if (!memberSet.contains(&groupNode))
       {
-        result.insert(groupNode.linkId());
+        if (nestedIds.contains(groupNode.linkId()))
+        {
+          result.insert(groupNode.linkId());
+        }
         groupNode.visitChildren(thisLambda);
       }
     },
@@ -321,51 +354,84 @@ void collectDisplacements(
 }
 
 /**
+ * A displacement rounded to the grid, in grid steps, so that equal displacements compare
+ * and hash exactly.
+ */
+struct GridSteps
+{
+  std::int64_t x = 0;
+  std::int64_t y = 0;
+  std::int64_t z = 0;
+
+  bool operator==(const GridSteps&) const = default;
+
+  bool isZero() const { return x == 0 && y == 0 && z == 0; }
+};
+
+struct HashGridSteps
+{
+  std::size_t operator()(const GridSteps& steps) const
+  {
+    return kdl::hash(steps.x, steps.y, steps.z);
+  }
+};
+
+/**
  * DD-23: the most common displacement, each rounded to the given grid size; on a tie the
  * zero vector if it is among the most common, else the first of them, the entities'
  * coming before the brushes' and patches'. The zero vector if there is none.
  */
 vm::vec3d modalDisplacement(const Displacements& displacements, const double gridSize)
 {
-  const auto round = [&](const vm::vec3d& v) {
-    return vm::vec3d{
-      gridSize * std::round(v.x() / gridSize),
-      gridSize * std::round(v.y() / gridSize),
-      gridSize * std::round(v.z() / gridSize)};
+  const auto toSteps = [&](const vm::vec3d& v) {
+    return GridSteps{
+      static_cast<std::int64_t>(std::round(v.x() / gridSize)),
+      static_cast<std::int64_t>(std::round(v.y() / gridSize)),
+      static_cast<std::int64_t>(std::round(v.z() / gridSize))};
   };
 
-  // in the order in which they first appear
-  auto counts = std::vector<std::pair<vm::vec3d, std::size_t>>{};
+  struct StepsCount
+  {
+    std::size_t count = 0;
+    // the index of the first displacement with these steps, for the tie rule
+    std::size_t firstIndex = 0;
+  };
+
+  // R2-pf-mdl-11: one lookup per displacement
+  auto counts = std::unordered_map<GridSteps, StepsCount, HashGridSteps>{};
+  auto index = std::size_t(0);
   const auto count = [&](const std::vector<vm::vec3d>& values) {
     for (const auto& value : values)
     {
-      const auto rounded = round(value);
-      if (const auto it = std::ranges::find_if(
-            counts, [&](const auto& valueCount) { return valueCount.first == rounded; });
-          it != counts.end())
-      {
-        ++it->second;
-      }
-      else
-      {
-        counts.emplace_back(rounded, 1u);
-      }
+      auto& stepsCount =
+        counts.try_emplace(toSteps(value), StepsCount{0, index}).first->second;
+      ++stepsCount.count;
+      ++index;
     }
   };
   count(displacements.ofEntities);
   count(displacements.ofBrushesAndPatches);
 
-  auto result = vm::vec3d{0, 0, 0};
-  auto maxCount = std::size_t(0);
-  for (const auto& [value, valueCount] : counts)
+  const auto* result =
+    static_cast<const std::pair<const GridSteps, StepsCount>*>(nullptr);
+  for (const auto& stepsCount : counts)
   {
-    if (valueCount > maxCount || (valueCount == maxCount && value == vm::vec3d{0, 0, 0}))
+    if (
+      !result || stepsCount.second.count > result->second.count
+      || (stepsCount.second.count == result->second.count
+          && !result->first.isZero()
+          && (stepsCount.first.isZero()
+              || stepsCount.second.firstIndex < result->second.firstIndex)))
     {
-      result = value;
-      maxCount = valueCount;
+      result = &stepsCount;
     }
   }
-  return result;
+
+  return result ? vm::vec3d{
+                    gridSize * static_cast<double>(result->first.x),
+                    gridSize * static_cast<double>(result->first.y),
+                    gridSize * static_cast<double>(result->first.z)}
+                : vm::vec3d{0, 0, 0};
 }
 
 /**
@@ -486,23 +552,25 @@ void nameNewChildren(
   auto unused = EntityNamingResult{};
   for (std::size_t i = 0; i < otherEntityNodes.size(); ++i)
   {
+    // R2-pf-mdl-13: the entity is copied only when it changes
     auto& entityNode = *otherEntityNodes[i];
-    auto entity = entityNode.entity();
     if (!keepsName[i])
     {
+      auto entity = entityNode.entity();
       allocateEntityName(
         entity, entityNode.hasChildren(), allocator, EntityNamingMode::Create, unused);
       entityNode.setEntity(std::move(entity));
     }
     else if (
       entityNode.hasChildren() && config.brushEntityModelKey
-      && isBrushEntityModelClass(entity.classname()))
+      && isBrushEntityModelClass(entityNode.entity().classname()))
     {
       // the brush entity model key follows the name, as allocateEntityName sets it
-      const auto name = nameOf(entity, nameKey);
-      if (const auto* model = entity.property(*config.brushEntityModelKey);
+      const auto name = nameOf(entityNode.entity(), nameKey);
+      if (const auto* model = entityNode.entity().property(*config.brushEntityModelKey);
           !model || *model != name)
       {
+        auto entity = entityNode.entity();
         entity.addOrUpdateProperty(*config.brushEntityModelKey, name);
         entityNode.setEntity(std::move(entity));
       }
@@ -517,8 +585,9 @@ void nameNewChildren(
     {
       namingResult.renamed.emplace_back(fileNames[i], name);
     }
-    else
+    else if (!name.empty())
     {
+      // R2-pf-mdl-10: an entity without a name keeps no name that a link could name
       namingResult.kept.push_back(name);
     }
   }
@@ -531,10 +600,18 @@ void nameNewChildren(
  */
 bool selectionIsInside(const Map& map, const std::vector<GroupNode*>& groupNodes)
 {
+  // R2-pf-mdl-5: one walk up from each node
+  const auto groupNodeSet =
+    std::unordered_set<const Node*>{groupNodes.begin(), groupNodes.end()};
   const auto isInside = [&](const Node* node) {
-    return std::ranges::any_of(groupNodes, [&](const auto* groupNode) {
-      return node->isDescendantOf(*groupNode);
-    });
+    for (const auto* ancestor = node->parent(); ancestor; ancestor = ancestor->parent())
+    {
+      if (groupNodeSet.contains(ancestor))
+      {
+        return true;
+      }
+    }
+    return false;
   };
 
   const auto& selection = map.selection();
@@ -624,7 +701,8 @@ Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& pl
              // F29: the new children take the old children's link IDs, so that the
              // protected properties of every member survive the linked group update
              auto transplant = LinkIdTransplant{};
-             transplant.outsideGroupIds = groupIdsOutside(map, placement.members);
+             transplant.outsideGroupIds =
+               groupIdsOutside(map, placement.members, oldChildren);
              matchChildren(oldChildren, fileGroup->children(), transplant);
              applyTransplant(fileGroup->children(), transplant);
 
@@ -811,20 +889,50 @@ Result<std::size_t> applyPrefabToSelection(Map& map, const PrefabEntry& entry)
       groupsByLinkId[groupNode->linkId()].insert(groupNode);
     }
   }
+  // R2-pf-mdl-7: one walk of the world finds the first group, in the order of the world,
+  // of every link set whose selected entities lie in two or more of its members
   auto firstGroups = std::unordered_map<std::string, GroupNode*>{};
+  auto linkIdsToWalk = std::unordered_set<std::string_view>{};
   for (const auto& [linkId, groupNodes] : groupsByLinkId)
   {
-    for (auto* groupNode : groupNodes.size() == 1u
-                             ? std::vector<GroupNode*>{*groupNodes.begin()}
-                             : collectGroupsWithLinkId({&map.worldNode()}, linkId))
+    if (groupNodes.size() == 1u)
     {
-      if (groupNodes.contains(groupNode))
-      {
-        firstGroups.emplace(linkId, groupNode);
-        break;
-      }
+      firstGroups.emplace(linkId, *groupNodes.begin());
+    }
+    else
+    {
+      linkIdsToWalk.insert(linkId);
     }
   }
+  if (!linkIdsToWalk.empty())
+  {
+    map.worldNode().accept(kdl::overload(
+      [](
+        auto&& thisLambda, WorldNode& worldNode) { worldNode.visitChildren(thisLambda); },
+      [](
+        auto&& thisLambda, LayerNode& layerNode) { layerNode.visitChildren(thisLambda); },
+      [&](auto&& thisLambda, GroupNode& groupNode) {
+        if (const auto it = linkIdsToWalk.find(groupNode.linkId());
+            it != linkIdsToWalk.end()
+            && groupsByLinkId.at(groupNode.linkId()).contains(&groupNode))
+        {
+          firstGroups.emplace(groupNode.linkId(), &groupNode);
+          linkIdsToWalk.erase(it);
+        }
+        if (!linkIdsToWalk.empty())
+        {
+          groupNode.visitChildren(thisLambda);
+        }
+      },
+      [](EntityNode&) {},
+      [](BrushNode&) {},
+      [](PatchNode&) {}));
+  }
+
+  // R2-pf-mdl-8: link ID -> entity among the children of a first group, made once per
+  // first group that a selected entity of another member needs
+  auto linkedEntities = std::
+    unordered_map<const GroupNode*, std::unordered_map<std::string_view, EntityNode*>>{};
   const auto entityToChange = [&](EntityNode& entityNode) -> EntityNode* {
     auto* groupNode = entityNode.containingGroup();
     if (!groupNode)
@@ -836,15 +944,33 @@ Result<std::size_t> applyPrefabToSelection(Map& map, const PrefabEntry& entry)
     {
       return &entityNode;
     }
-    for (auto* child : firstGroup->children())
+
+    auto [it, inserted] = linkedEntities.try_emplace(firstGroup);
+    if (inserted)
     {
-      if (auto* linkedNode = dynamic_cast<EntityNode*>(child);
-          linkedNode && linkedNode->linkId() == entityNode.linkId())
+      for (auto* child : firstGroup->children())
       {
-        return linkedNode;
+        if (auto* linkedNode = dynamic_cast<EntityNode*>(child))
+        {
+          it->second.emplace(linkedNode->linkId(), linkedNode);
+        }
       }
     }
-    return nullptr;
+    const auto linkedIt = it->second.find(entityNode.linkId());
+    return linkedIt != it->second.end() ? linkedIt->second : nullptr;
+  };
+
+  // R2-pf-mdl-9: the link source definitions of each entity definition, made once
+  auto linkSourceDefinitionsByDefinition =
+    std::unordered_map<const EntityDefinition*, std::vector<const PropertyDefinition*>>{};
+  const auto linkSourceDefinitionsOf =
+    [&](const EntityDefinition* definition) -> const auto& {
+    auto [it, inserted] = linkSourceDefinitionsByDefinition.try_emplace(definition);
+    if (inserted)
+    {
+      it->second = getLinkSourcePropertyDefinitions(definition);
+    }
+    return it->second;
   };
 
   auto nodesToSwap = std::vector<std::pair<Node*, NodeContents>>{};
@@ -858,8 +984,7 @@ Result<std::size_t> applyPrefabToSelection(Map& map, const PrefabEntry& entry)
     }
 
     const auto& entity = entityNode->entity();
-    const auto linkSourceDefinitions =
-      getLinkSourcePropertyDefinitions(entity.definition());
+    const auto& linkSourceDefinitions = linkSourceDefinitionsOf(entity.definition());
     const auto keepsOwnValue = [&](const std::string& key) {
       return key == nameKey || key == EntityPropertyKeys::Origin
              || isPrefabLinkKey(linkSourceDefinitions, key)
