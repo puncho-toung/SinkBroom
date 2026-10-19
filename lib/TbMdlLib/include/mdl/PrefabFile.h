@@ -31,6 +31,7 @@ class EntityNode;
 class Map;
 class Node;
 class PrefabLibrary;
+struct PropertyDefinition;
 class WorldNode;
 
 /**
@@ -116,6 +117,16 @@ std::vector<Node*> normalizePrefabSelection(const std::vector<Node*>& selectedNo
  * all brushes of one brush entity counts as selecting the entity.
  */
 PrefabKind derivePrefabKind(const std::vector<Node*>& selectedNodes, bool forceAssembly);
+
+/**
+ * Whether the given key is a link key of an entity whose definition types the given
+ * properties as link sources: target and targetN, bind, and every key (or its numbered
+ * form) typed as a link source. These are the keys that savePrefab clears when they
+ * leave the selection (D8) and that applyPrefabToSelection keeps (C6).
+ */
+bool isPrefabLinkKey(
+  const std::vector<const PropertyDefinition*>& linkSourceDefinitions,
+  const std::string& key);
 
 struct ExternalLink
 {

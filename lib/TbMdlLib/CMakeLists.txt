@@ -171,6 +171,7 @@ target_sources(TbMdlLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PortalFile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PrefabFile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PrefabLibrary.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/PrefabRefresh.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PropertyDefinition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PropertyKeyWithDoubleQuotationMarksValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PropertyValueWithDoubleQuotationMarksValidator.cpp

@@ -44,6 +44,7 @@ class task_manager;
 
 namespace tb::mdl
 {
+class GroupNode;
 class Map;
 class Node;
 class WorldNode;
@@ -109,6 +110,25 @@ struct PrefabEntry
 
   // cloneBody can clone the body: the world is kept, or the file is read again
   bool hasBody() const;
+};
+
+/**
+ * The placed assemblies of one prefab file that form one link set: the groups whose
+ * Group::prefabPath is the same and that share a link ID. Two unlinked placements of
+ * one file are two placements. Valid until the map changes.
+ */
+struct PrefabPlacement
+{
+  // C3 as amended by DD-16: user/<rel> or mod/<rel>
+  std::string prefabPath;
+  // the first member in the order of the world, the one that a refresh edits
+  GroupNode* firstMember = nullptr;
+  // every member of the link set that carries the prefab path, in the order of the world
+  std::vector<GroupNode*> members;
+  // the first member's prefabHash, empty if it has none
+  std::string placedHash;
+  // nullptr when the library has no such file
+  const PrefabEntry* entry = nullptr;
 };
 
 /**
@@ -246,6 +266,21 @@ public:
    */
   std::vector<Node*> cloneBody(
     const PrefabEntry& entry, const vm::bbox3d& worldBounds) const;
+
+  /**
+   * The placed assemblies in the map, from one walk of its groups (the children of
+   * entities are not visited), in the order of the world: every group with a prefab path,
+   * grouped by that path and its link ID. The entries are looked up in the library as it
+   * is, so a library that was never scanned reports every file missing.
+   */
+  std::vector<PrefabPlacement> placements() const;
+
+  /**
+   * The placements whose file has changed since they were placed (its hash differs from
+   * the placed hash), and those whose file is missing (entry is nullptr; reported, never
+   * refreshed).
+   */
+  std::vector<PrefabPlacement> changedPlacements() const;
 
   void setReadHookForTesting(ReadHook readHook);
 

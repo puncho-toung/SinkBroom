@@ -52,6 +52,7 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
+#include <map>
 #include <ranges>
 #include <set>
 #include <system_error>
@@ -64,6 +65,8 @@ namespace tb::mdl
 namespace
 {
 
+// C4; a placement's prefab path is the payload without it (DD-16)
+const auto PayloadPrefix = std::string{"prefab:"};
 const auto PayloadPrefixUser = std::string{"prefab:user/"};
 const auto PayloadPrefixMod = std::string{"prefab:mod/"};
 
@@ -872,6 +875,51 @@ std::vector<Node*> PrefabLibrary::cloneBody(
     m_map.logger().warn() << "Cannot read prefab '" << entry.relativePathString
                           << "': " << e.what();
   }
+  return result;
+}
+
+std::vector<PrefabPlacement> PrefabLibrary::placements() const
+{
+  auto result = std::vector<PrefabPlacement>{};
+  // (prefab path, link ID) -> index into result
+  auto indices = std::map<std::pair<std::string, std::string>, std::size_t>{};
+
+  m_map.worldNode().accept(kdl::overload(
+    [](auto&& thisLambda, WorldNode& node) { node.visitChildren(thisLambda); },
+    [](auto&& thisLambda, LayerNode& node) { node.visitChildren(thisLambda); },
+    [&](auto&& thisLambda, GroupNode& node) {
+      if (const auto& prefabPath = node.group().prefabPath())
+      {
+        const auto [it, inserted] =
+          indices.try_emplace({*prefabPath, node.linkId()}, result.size());
+        if (inserted)
+        {
+          result.push_back(PrefabPlacement{
+            .prefabPath = *prefabPath,
+            .firstMember = &node,
+            .members = {},
+            .placedHash = node.group().prefabHash().value_or(""),
+            .entry = fromPayload(PayloadPrefix + *prefabPath),
+          });
+        }
+        result[it->second].members.push_back(&node);
+      }
+      node.visitChildren(thisLambda);
+    },
+    // the children of an entity are brushes and patches
+    [](EntityNode&) {},
+    [](BrushNode&) {},
+    [](PatchNode&) {}));
+
+  return result;
+}
+
+std::vector<PrefabPlacement> PrefabLibrary::changedPlacements() const
+{
+  auto result = placements();
+  std::erase_if(result, [](const auto& placement) {
+    return placement.entry && placement.entry->hash == placement.placedHash;
+  });
   return result;
 }
 

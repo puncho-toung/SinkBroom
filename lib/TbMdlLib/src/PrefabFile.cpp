@@ -140,16 +140,6 @@ std::unordered_set<std::string> entityNames(const std::vector<EntityNode*>& enti
   return result;
 }
 
-bool isLinkKey(
-  const std::vector<const PropertyDefinition*>& linkSourceDefinitions,
-  const std::string& key)
-{
-  return key == BindKey || isNumberedProperty(EntityPropertyKeys::Target, key)
-         || std::ranges::any_of(linkSourceDefinitions, [&](const auto* definition) {
-              return isNumberedProperty(definition->key, key);
-            });
-}
-
 std::vector<EntityProperty> externalLinkProperties(
   const Entity& entity, const std::unordered_set<std::string>& namesInSelection)
 {
@@ -158,7 +148,7 @@ std::vector<EntityProperty> externalLinkProperties(
     getLinkSourcePropertyDefinitions(entity.definition());
   return entity.properties() | std::views::filter([&](const auto& property) {
            return !property.value().empty()
-                  && isLinkKey(linkSourceDefinitions, property.key())
+                  && isPrefabLinkKey(linkSourceDefinitions, property.key())
                   && !namesInSelection.contains(kdl::str_to_lower(property.value()));
          })
          | kdl::ranges::to<std::vector>();
@@ -576,6 +566,16 @@ Result<std::filesystem::path> writePrefab(
 }
 
 } // namespace
+
+bool isPrefabLinkKey(
+  const std::vector<const PropertyDefinition*>& linkSourceDefinitions,
+  const std::string& key)
+{
+  return key == BindKey || isNumberedProperty(EntityPropertyKeys::Target, key)
+         || std::ranges::any_of(linkSourceDefinitions, [&](const auto* definition) {
+              return isNumberedProperty(definition->key, key);
+            });
+}
 
 std::vector<Node*> normalizePrefabSelection(const std::vector<Node*>& selectedNodes)
 {
