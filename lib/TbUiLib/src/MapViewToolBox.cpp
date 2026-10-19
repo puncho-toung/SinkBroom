@@ -30,6 +30,7 @@
 #include "ui/ControlPointTool.h"
 #include "ui/ControlPointToolPage.h"
 #include "ui/CreateEntityTool.h"
+#include "ui/CreatePrefabTool.h"
 #include "ui/DrawShapeTool.h"
 #include "ui/DrawShapeToolPage.h"
 #include "ui/EdgeTool.h"
@@ -86,6 +87,16 @@ const CreateEntityTool& MapViewToolBox::createEntityTool() const
 CreateEntityTool& MapViewToolBox::createEntityTool()
 {
   return KDL_CONST_OVERLOAD(createEntityTool());
+}
+
+const CreatePrefabTool& MapViewToolBox::createPrefabTool() const
+{
+  return *m_createPrefabTool;
+}
+
+CreatePrefabTool& MapViewToolBox::createPrefabTool()
+{
+  return KDL_CONST_OVERLOAD(createPrefabTool());
 }
 
 const DrawShapeTool& MapViewToolBox::drawShapeTool() const
@@ -522,6 +533,7 @@ void MapViewToolBox::createTools(QStackedLayout* bookCtrl)
   m_clipTool = std::make_unique<ClipTool>(m_document);
   m_assembleBrushTool = std::make_unique<AssembleBrushTool>(m_document);
   m_createEntityTool = std::make_unique<CreateEntityTool>(m_document);
+  m_createPrefabTool = std::make_unique<CreatePrefabTool>(m_document);
   m_drawShapeTool = std::make_unique<DrawShapeTool>(m_document);
   m_moveObjectsTool = std::make_unique<MoveObjectsTool>(m_document);
   m_extrudeTool = std::make_unique<ExtrudeTool>(m_document);
@@ -604,6 +616,7 @@ void MapViewToolBox::createTools(QStackedLayout* bookCtrl)
   addTool(faceTool());
   addTool(controlPointTool());
   addTool(createEntityTool());
+  addTool(createPrefabTool());
   addTool(drawShapeTool());
   addTool(lightVolumeTool());
 

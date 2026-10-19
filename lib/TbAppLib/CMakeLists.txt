@@ -18,6 +18,8 @@ target_sources(TbAppLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CreateBrushesToolBase.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CreateEntityTool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CreateEntityToolController.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/CreatePrefabTool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/CreatePrefabToolController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DrawShapeTool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DrawShapeToolController2D.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DrawShapeToolController3D.cpp
@@ -89,6 +91,8 @@ target_sources(TbAppLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/CreateBrushesToolBase.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/CreateEntityTool.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/CreateEntityToolController.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/CreatePrefabTool.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/CreatePrefabToolController.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/DrawShapeTool.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/DrawShapeToolController2D.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/DrawShapeToolController3D.h

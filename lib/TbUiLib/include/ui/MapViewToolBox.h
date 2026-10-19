@@ -41,6 +41,7 @@ namespace ui
 class ClipTool;
 class AssembleBrushTool;
 class CreateEntityTool;
+class CreatePrefabTool;
 class DrawShapeTool;
 class MapDocument;
 class MoveObjectsTool;
@@ -64,6 +65,7 @@ private:
   std::unique_ptr<ClipTool> m_clipTool;
   std::unique_ptr<AssembleBrushTool> m_assembleBrushTool;
   std::unique_ptr<CreateEntityTool> m_createEntityTool;
+  std::unique_ptr<CreatePrefabTool> m_createPrefabTool;
   std::unique_ptr<DrawShapeTool> m_drawShapeTool;
   std::unique_ptr<MoveObjectsTool> m_moveObjectsTool;
   std::unique_ptr<ExtrudeTool> m_extrudeTool;
@@ -99,6 +101,9 @@ public: // tools
 
   const CreateEntityTool& createEntityTool() const;
   CreateEntityTool& createEntityTool();
+
+  const CreatePrefabTool& createPrefabTool() const;
+  CreatePrefabTool& createPrefabTool();
 
   const DrawShapeTool& drawShapeTool() const;
   DrawShapeTool& drawShapeTool();
