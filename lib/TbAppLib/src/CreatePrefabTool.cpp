@@ -29,8 +29,8 @@
 #include "mdl/Grid.h"
 #include "mdl/Group.h"
 #include "mdl/GroupNode.h"
+#include "mdl/Hit.h"
 #include "mdl/HitAdapter.h"
-#include "mdl/HitFilter.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/Map_CopyPaste.h"
@@ -47,6 +47,7 @@
 #include "ui/MapDocument.h"
 
 #include "kd/contracts.h"
+#include "kd/flat_map.h"
 #include "kd/k.h"
 #include "kd/overload.h"
 #include "kd/ranges/contains.h"
@@ -56,6 +57,7 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace tb::ui
@@ -168,39 +170,47 @@ bool CreatePrefabTool::createPrefab(const std::string& payload)
                             ? findPlacedAssembly(map.worldNode(), prefabPath, parent)
                             : nullptr;
 
+  // The clones are ours until addNodes takes them: first in clones, then, once
+  // prepareNodesForAdding has consumed clones, in nodesToAdd. A throw before the hand-off
+  // deletes them; after it, the cancelled transaction does.
   auto clones = std::vector<mdl::Node*>{};
-  if (!placedGroupNode)
-  {
-    clones = library.cloneBody(*entry, map.worldBounds());
-    if (!isWellFormedBody(clones, kind))
-    {
-      map.logger().warn() << "Cannot place prefab '" << prefabPath
-                          << "': its body is not one "
-                          << (kind == mdl::PrefabKind::Entity ? "entity" : "group");
-      kdl::vec_clear_and_delete(clones);
-      return false;
-    }
-
-    if (kind == mdl::PrefabKind::Assembly)
-    {
-      // the first placement records the file it came from (C3); cloneBody gave it, and
-      // every link set inside it, link IDs that are not in the map
-      auto* groupNode = static_cast<mdl::GroupNode*>(clones.front());
-      auto group = groupNode->group();
-      group.setPrefabPath(prefabPath);
-      group.setPrefabHash(entry->hash);
-      groupNode->setGroup(std::move(group));
-    }
-  }
-
-  m_referenceBounds = map.referenceBounds();
-  m_placementPlane = std::nullopt;
-
-  map.startTransaction(TransactionName, mdl::TransactionScope::LongRunning);
+  auto nodesToAdd = kdl::flat_map<mdl::Node*, std::vector<mdl::Node*>>{};
+  auto handedOff = false;
+  auto transactionStarted = false;
 
   auto addedNodes = std::vector<mdl::Node*>{};
   try
   {
+    if (!placedGroupNode)
+    {
+      clones = library.cloneBody(*entry, map.worldBounds());
+      if (!isWellFormedBody(clones, kind))
+      {
+        map.logger().warn() << "Cannot place prefab '" << prefabPath
+                            << "': its body is not one "
+                            << (kind == mdl::PrefabKind::Entity ? "entity" : "group");
+        kdl::vec_clear_and_delete(clones);
+        return false;
+      }
+
+      if (kind == mdl::PrefabKind::Assembly)
+      {
+        // the first placement records the file it came from (C3); cloneBody gave it,
+        // and every link set inside it, link IDs that are not in the map
+        auto* groupNode = static_cast<mdl::GroupNode*>(clones.front());
+        auto group = groupNode->group();
+        group.setPrefabPath(prefabPath);
+        group.setPrefabHash(entry->hash);
+        groupNode->setGroup(std::move(group));
+      }
+    }
+
+    m_referenceBounds = map.referenceBounds();
+    m_placementPlane = std::nullopt;
+
+    map.startTransaction(TransactionName, mdl::TransactionScope::LongRunning);
+    transactionStarted = true;
+
     if (placedGroupNode)
     {
       if (auto* groupNode = mdl::placeLinkedDuplicate(map, *placedGroupNode, parent))
@@ -210,17 +220,22 @@ bool CreatePrefabTool::createPrefab(const std::string& payload)
     }
     else
     {
-      // clones must not be used after this
-      const auto nodesToAdd = mdl::prepareNodesForAdding(map, clones);
+      // clones must not be used after this; some of them may have been deleted (none
+      // are for a prefab body, which has nothing to dissolve, so a throw inside still
+      // leaves them to the catch below)
+      nodesToAdd = mdl::prepareNodesForAdding(map, clones);
+      clones.clear();
+
       if (map.worldNode().entityPropertyConfig().naming)
       {
         mdl::assignUniqueEntityNamesBeforeAdding(
           map,
-          nodesToAdd | std::views::values | std::views::join
+          std::as_const(nodesToAdd) | std::views::values | std::views::join
             | kdl::ranges::to<std::vector>(),
           true);
       }
 
+      handedOff = true;
       addedNodes = mdl::addNodes(map, nodesToAdd);
     }
 
@@ -232,8 +247,19 @@ bool CreatePrefabTool::createPrefab(const std::string& payload)
   }
   catch (...)
   {
-    // the long running transaction must not stay open
-    map.cancelTransaction();
+    if (!handedOff)
+    {
+      kdl::vec_clear_and_delete(clones);
+      for (auto&& parentAndNodes : nodesToAdd)
+      {
+        kdl::vec_clear_and_delete(parentAndNodes.second);
+      }
+    }
+    if (transactionStarted)
+    {
+      // the long running transaction must not stay open
+      map.cancelTransaction();
+    }
     throw;
   }
 
@@ -291,8 +317,6 @@ void CreatePrefabTool::updatePrefabPosition2D(const vm::ray3d& pickRay)
 void CreatePrefabTool::updatePrefabPosition3D(
   const vm::ray3d& pickRay, const mdl::PickResult& pickResult)
 {
-  using namespace mdl::HitFilters;
-
   contract_pre(placing());
 
   auto& map = m_document.map();
@@ -302,9 +326,14 @@ void CreatePrefabTool::updatePrefabPosition3D(
   if (!m_placementPlane)
   {
     // the prefab's own faces are in the pick result too; skip them and lock the plane to
-    // the first face behind them
-    for (const auto& hit : pickResult.all(type(mdl::BrushNode::BrushHitType)))
+    // the first face behind them (all() without a filter copies nothing, which matters
+    // on every mouse move until a plane is locked)
+    for (const auto& hit : pickResult.all())
     {
+      if (!hit.hasType(mdl::BrushNode::BrushHitType))
+      {
+        continue;
+      }
       if (const auto faceHandle = mdl::hitToFaceHandle(hit))
       {
         if (isPrefabNode(*faceHandle->node()))
