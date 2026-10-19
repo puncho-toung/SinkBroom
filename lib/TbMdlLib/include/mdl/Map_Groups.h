@@ -39,6 +39,18 @@ void mergeSelectedGroupsWithGroup(Map& map, GroupNode* group);
 
 void renameSelectedGroups(Map& map, const std::string& name);
 
+/**
+ * Adds a linked duplicate of the given group under the given parent and returns it, or
+ * returns nullptr if it could not be added. The duplicate is a recursive clone of the
+ * group, so it shares its link ID; its entities get unique names if the game has naming
+ * rules, while their references stay as they are (see createLinkedDuplicate).
+ *
+ * Opens no transaction of its own; the caller is expected to be inside one. The parent
+ * must be in the map and must not be the group, one of its descendants or a member of its
+ * link set or a descendant of one.
+ */
+GroupNode* placeLinkedDuplicate(Map& map, const GroupNode& sourceGroup, Node& parent);
+
 bool canCreateLinkedDuplicate(const Map& map);
 GroupNode* createLinkedDuplicate(Map& map);
 

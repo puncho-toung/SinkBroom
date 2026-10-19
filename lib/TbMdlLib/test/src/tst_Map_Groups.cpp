@@ -41,6 +41,7 @@
 #include "mdl/PatchNode.h"
 #include "mdl/TestFactory.h"
 #include "mdl/TestUtils.h"
+#include "mdl/TransactionScope.h"
 #include "mdl/WorldNode.h"
 
 #include <functional>
@@ -667,6 +668,47 @@ TEST_CASE("Map_Groups")
 
     auto* linkedGroupNode = createLinkedDuplicate(map);
     CHECK_THAT(*linkedGroupNode, MatchesNode(*groupNode));
+  }
+
+  SECTION("placeLinkedDuplicate")
+  {
+    auto* brushNode = createBrushNode(map);
+    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+    selectNodes(map, {brushNode});
+
+    auto* groupNode = groupSelectedNodes(map, "test");
+    REQUIRE(groupNode != nullptr);
+    deselectAll(map);
+
+    auto* layerNode = new LayerNode{Layer{"other"}};
+    addNodes(map, {{&map.worldNode(), {layerNode}}});
+
+    map.startTransaction("Place", TransactionScope::LongRunning);
+
+    // opens no transaction of its own, so it works inside the caller's
+    auto* linkedGroupNode = placeLinkedDuplicate(map, *groupNode, *layerNode);
+    REQUIRE(linkedGroupNode != nullptr);
+    CHECK(linkedGroupNode->parent() == layerNode);
+    CHECK(linkedGroupNode->linkId() == groupNode->linkId());
+    CHECK_THAT(*linkedGroupNode, MatchesNode(*groupNode));
+    // the selection is the caller's business
+    CHECK(map.selection().nodes.empty());
+
+    SECTION("Committing keeps the duplicate as one undo step")
+    {
+      REQUIRE(map.commitTransaction());
+      CHECK(layerNode->children() == std::vector<Node*>{linkedGroupNode});
+
+      map.undoCommand();
+      CHECK(layerNode->children().empty());
+    }
+
+    SECTION("Cancelling the caller's transaction removes the duplicate")
+    {
+      map.cancelTransaction();
+      CHECK(layerNode->children().empty());
+      CHECK(map.worldNode().defaultLayer()->children() == std::vector<Node*>{groupNode});
+    }
   }
 
   SECTION("linked groups keep their prefab properties")

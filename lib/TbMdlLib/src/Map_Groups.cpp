@@ -399,6 +399,27 @@ void renameSelectedGroups(Map& map, const std::string& name)
   }
 }
 
+GroupNode* placeLinkedDuplicate(Map& map, const GroupNode& sourceGroup, Node& parent)
+{
+  auto* groupNodeClone =
+    static_cast<GroupNode*>(sourceGroup.cloneRecursively(map.worldBounds()));
+
+  if (map.worldNode().entityPropertyConfig().naming)
+  {
+    // the references stay as they are, as they do when a linked group is updated, since
+    // the link source keys are not protected and the next update would undo the change
+    assignUniqueEntityNamesBeforeAdding(map, {groupNodeClone}, false);
+  }
+
+  // addNodes deletes the clone if it fails
+  if (addNodes(map, {{&parent, {groupNodeClone}}}).empty())
+  {
+    return nullptr;
+  }
+
+  return groupNodeClone;
+}
+
 bool canCreateLinkedDuplicate(const Map& map)
 {
   return map.selection().hasOnlyGroups() && map.selection().groups.size() == 1u;
@@ -412,19 +433,11 @@ GroupNode* createLinkedDuplicate(Map& map)
   }
 
   auto* groupNode = map.selection().groups.front();
-  auto* groupNodeClone =
-    static_cast<GroupNode*>(groupNode->cloneRecursively(map.worldBounds()));
   auto& suggestedParent = parentForNodes(map, {groupNode});
 
-  if (map.worldNode().entityPropertyConfig().naming)
-  {
-    // the references stay as they are, as they do when a linked group is updated, since
-    // the link source keys are not protected and the next update would undo the change
-    assignUniqueEntityNamesBeforeAdding(map, {groupNodeClone}, false);
-  }
-
   auto transaction = Transaction{map, "Create Linked Duplicate"};
-  if (addNodes(map, {{&suggestedParent, {groupNodeClone}}}).empty())
+  auto* groupNodeClone = placeLinkedDuplicate(map, *groupNode, suggestedParent);
+  if (!groupNodeClone)
   {
     transaction.cancel();
     return nullptr;
