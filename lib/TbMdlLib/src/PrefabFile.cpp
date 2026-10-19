@@ -567,6 +567,11 @@ Result<std::filesystem::path> writePrefab(
 
 } // namespace
 
+std::string prefabTimestamp()
+{
+  return localTimestamp();
+}
+
 bool isPrefabLinkKey(
   const std::vector<const PropertyDefinition*>& linkSourceDefinitions,
   const std::string& key)

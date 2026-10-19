@@ -899,18 +899,22 @@ Result<void> Map::saveTo(const std::filesystem::path& path) const
   const auto generator =
     fmt::format("TrenchBroom {} (Build {})", VERSION_STR, BUILD_ID_STR);
 
-  fs::Disk::withOutputStream(path, [&](auto& stream) {
-    writeMapHeader(
-      stream, gameInfo().gameConfig.name, m_worldNode->mapFormat(), generator);
+  // R1-pf3-6: a failed write is an error, so that saveAs keeps the old path and
+  // modification count and its callers report it
+  return fs::Disk::withOutputStream(
+           path,
+           [&](auto& stream) {
+             writeMapHeader(
+               stream, gameInfo().gameConfig.name, m_worldNode->mapFormat(), generator);
 
-    auto writer = NodeWriter{*m_worldNode, stream};
-    writer.setExporting(false);
-    writer.writeMap(m_taskManager);
-  }) | kdl::transform_error([&](const auto& e) {
-    m_logger.error() << "Could not save document: " << e.msg;
-  });
-
-  return Result<void>{};
+             auto writer = NodeWriter{*m_worldNode, stream};
+             writer.setExporting(false);
+             writer.writeMap(m_taskManager);
+           })
+         | kdl::or_else([&](auto e) {
+             m_logger.error() << "Could not save document: " << e.msg;
+             return Result<void>{std::move(e)};
+           });
 }
 
 Result<void> Map::exportAs(const ExportOptions& options) const

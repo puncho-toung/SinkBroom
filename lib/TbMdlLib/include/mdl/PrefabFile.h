@@ -190,4 +190,10 @@ Result<void> translateDetachedNodes(
  */
 Result<PrefabMetadata> readPrefabMetadata(const WorldNode& world);
 
+/**
+ * The local time as savePrefab writes it into _tb_prefab_saved, for a prefab saved
+ * otherwise, as a prefab editor saves its file (R1-pf3-11).
+ */
+std::string prefabTimestamp();
+
 } // namespace tb::mdl
