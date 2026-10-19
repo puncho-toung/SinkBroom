@@ -48,6 +48,7 @@
 #include "ui/QStyleUtils.h"
 #include "ui/ViewConstants.h"
 
+#include "kd/path_utils.h"
 #include "kd/ranges/to.h"
 #include "kd/result.h"
 #include "kd/string_format.h"
@@ -62,6 +63,19 @@ namespace
 {
 
 const auto DefaultNameKey = std::string{"name"};
+
+/**
+ * The form in which two spellings of one file's path are equal: lexically normal, and in
+ * lower case on Windows, where file names ignore case.
+ */
+std::filesystem::path fileKey(const std::filesystem::path& path)
+{
+#ifdef _WIN32
+  return kdl::path_to_lower(path.lexically_normal());
+#else
+  return path.lexically_normal();
+#endif
+}
 
 /**
  * The entity the selection stands for: the selected entity, or the brush entity whose
@@ -153,7 +167,7 @@ SavePrefabDialog::~SavePrefabDialog() = default;
 
 void SavePrefabDialog::forEntry(const mdl::PrefabEntry& entry)
 {
-  m_updatedPath = entry.absolutePath;
+  m_updatedPath = fileKey(entry.absolutePath);
 
   setWindowTitle(tr("Update Prefab from Selection"));
   m_saveButton->setText(tr("Update"));
@@ -179,8 +193,8 @@ const std::optional<std::filesystem::path>& SavePrefabDialog::savedPath() const
 
 bool SavePrefabDialog::updatesEntryFile(const std::filesystem::path& path) const
 {
-  auto ec = std::error_code{};
-  return m_updatedPath && std::filesystem::equivalent(path, *m_updatedPath, ec);
+  // per keystroke, so the paths are compared without opening the files (R2-pf-ui-10)
+  return m_updatedPath && fileKey(path) == *m_updatedPath;
 }
 
 void SavePrefabDialog::accept()

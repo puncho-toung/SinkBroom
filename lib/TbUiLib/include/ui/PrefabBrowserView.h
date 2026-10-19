@@ -54,6 +54,7 @@ namespace mdl
 enum class Orientation;
 
 struct PrefabEntry;
+class PrefabLibrary;
 } // namespace mdl
 
 namespace render
@@ -191,8 +192,13 @@ private:
   // its model from the new definitions the next time a cell needs it
   std::size_t m_definitionGeneration = 0;
 
-  // the absolute path of the entry that was clicked last, kept across library changes
+  // the absolute path of the entry that was clicked last, lexically normal, kept across
+  // library changes
   std::filesystem::path m_selectedPath;
+  // the entry of m_selectedPath in m_selectedLibrary, looked up when first asked for
+  // after a library change or a click; nullopt until then
+  mutable std::optional<const mdl::PrefabEntry*> m_selectedEntry;
+  mutable const mdl::PrefabLibrary* m_selectedLibrary = nullptr;
 
   NotifierConnection m_notifierConnection;
 

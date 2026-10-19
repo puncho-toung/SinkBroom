@@ -66,7 +66,7 @@ private:
   // the selection is one entity, so that it can be saved as either kind
   bool m_singleEntity = false;
   std::optional<std::filesystem::path> m_savedPath;
-  // the file of the prefab that the dialog updates (forEntry)
+  // the file of the prefab that the dialog updates (forEntry), as fileKey gives it
   std::optional<std::filesystem::path> m_updatedPath;
 
   QLineEdit* m_nameEdit = nullptr;

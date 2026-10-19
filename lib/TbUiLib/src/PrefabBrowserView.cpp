@@ -117,13 +117,46 @@ std::filesystem::path categoryOf(const mdl::PrefabEntry& entry)
 }
 
 /**
- * Whether the entry is in the given folder or in a folder below it; every entry is below
- * the top level.
+ * The entry's folder as UTF-8 with forward slashes, a view of its relativePathString;
+ * empty at the top level.
  */
-bool isInCategory(const mdl::PrefabEntry& entry, const std::filesystem::path& category)
+std::string_view categoryStringOf(const mdl::PrefabEntry& entry)
 {
-  const auto entryCategory = categoryOf(entry);
-  return std::ranges::mismatch(category, entryCategory).in1 == category.end();
+  const auto path = std::string_view{entry.relativePathString};
+  const auto slash = path.rfind('/');
+  return slash != std::string_view::npos ? path.substr(0, slash) : std::string_view{};
+}
+
+/**
+ * The filter's folder in the form of categoryStringOf, made once per filter rather than
+ * once per entry (R2-pf-ui-9); nullopt if the filter shows every folder.
+ */
+std::optional<std::string> categoryStringOf(const PrefabFilter& filter)
+{
+  if (!filter.category)
+  {
+    return std::nullopt;
+  }
+
+  const auto str = filter.category->generic_u8string();
+  auto result = std::string{str.begin(), str.end()};
+  while (result.ends_with('/'))
+  {
+    result.pop_back();
+  }
+  return result;
+}
+
+/**
+ * Whether the entry is in the given folder or in a folder below it, by whole names;
+ * every entry is below the top level.
+ */
+bool isInCategory(const mdl::PrefabEntry& entry, const std::string_view category)
+{
+  const auto entryCategory = categoryStringOf(entry);
+  return entryCategory.starts_with(category)
+         && (category.empty() || entryCategory.size() == category.size()
+             || entryCategory[category.size()] == '/');
 }
 
 bool matchesTag(const mdl::PrefabEntry& entry, const std::string& tag)
@@ -166,6 +199,21 @@ bool matchesKind(const mdl::PrefabEntry& entry, const PrefabKindFilter kind)
     return !entry.error && entry.metadata.kind == mdl::PrefabKind::Assembly;
   }
   return false;
+}
+
+/**
+ * matchesPrefabFilter with the filter's folder as categoryStringOf gives it.
+ */
+bool matchesFilter(
+  const mdl::PrefabEntry& entry,
+  const PrefabFilter& filter,
+  const std::optional<std::string>& category)
+{
+  return matchesKind(entry, filter.kind) && (!category || isInCategory(entry, *category))
+         && std::ranges::all_of(
+           filter.words, [&](const auto& word) { return matchesWord(entry, word); })
+         && std::ranges::all_of(
+           filter.tags, [&](const auto& tag) { return matchesTag(entry, tag); });
 }
 
 /**
@@ -444,12 +492,7 @@ PrefabFilter prefabFilterFromText(const std::string_view text)
 
 bool matchesPrefabFilter(const mdl::PrefabEntry& entry, const PrefabFilter& filter)
 {
-  return matchesKind(entry, filter.kind)
-         && (!filter.category || isInCategory(entry, *filter.category))
-         && std::ranges::all_of(
-           filter.words, [&](const auto& word) { return matchesWord(entry, word); })
-         && std::ranges::all_of(
-           filter.tags, [&](const auto& tag) { return matchesTag(entry, tag); });
+  return matchesFilter(entry, filter, categoryStringOf(filter));
 }
 
 Result<gl::Texture> loadPrefabThumbnail(const std::filesystem::path& path)
@@ -563,6 +606,7 @@ void PrefabBrowserView::libraryDidChange()
   std::erase_if(m_previews, [&](const auto& pathAndPreview) {
     return !paths.contains(pathAndPreview.first);
   });
+  m_selectedEntry = std::nullopt;
 
   clear();
   invalidate();
@@ -596,22 +640,35 @@ void PrefabBrowserView::reloadThumbnails()
 
 const mdl::PrefabEntry* PrefabBrowserView::selectedEntry() const
 {
-  if (m_selectedPath.empty())
+  // R2-pf-ui-8: looked up once per library change; the library's address guards against
+  // a map that was replaced before the panel heard of it
+  const auto& library = m_document.map().prefabLibrary();
+  if (!m_selectedEntry || m_selectedLibrary != &library)
   {
-    return nullptr;
+    m_selectedLibrary = &library;
+    m_selectedEntry = static_cast<const mdl::PrefabEntry*>(nullptr);
+    if (!m_selectedPath.empty())
+    {
+      // the entries hold lexically normal paths, as m_selectedPath is
+      const auto& entries = library.entries();
+      const auto it = std::ranges::find_if(entries, [&](const auto& entry) {
+        return entry->absolutePath.native() == m_selectedPath.native();
+      });
+      if (it != entries.end())
+      {
+        m_selectedEntry = it->get();
+      }
+    }
   }
-
-  const auto& entries = m_document.map().prefabLibrary().entries();
-  const auto it = std::ranges::find_if(
-    entries, [&](const auto& entry) { return entry->absolutePath == m_selectedPath; });
-  return it != entries.end() ? it->get() : nullptr;
+  return *m_selectedEntry;
 }
 
 void PrefabBrowserView::selectEntry(const std::filesystem::path& absolutePath)
 {
-  if (absolutePath != m_selectedPath)
+  if (auto normalPath = absolutePath.lexically_normal(); normalPath != m_selectedPath)
   {
-    m_selectedPath = absolutePath;
+    m_selectedPath = std::move(normalPath);
+    m_selectedEntry = std::nullopt;
     emit selectedEntryChanged();
   }
 }
@@ -646,9 +703,10 @@ void PrefabBrowserView::doReloadLayout(Layout& layout)
   contract_assert(fontSize > 0);
 
   const auto font = gl::FontDescriptor{fontPath, static_cast<size_t>(fontSize)};
+  const auto category = categoryStringOf(m_filter);
   for (const auto& entry : m_document.map().prefabLibrary().entries())
   {
-    if (matchesPrefabFilter(*entry, m_filter))
+    if (matchesFilter(*entry, m_filter, category))
     {
       addEntryToLayout(layout, *entry, font);
     }

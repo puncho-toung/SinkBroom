@@ -80,6 +80,7 @@ mdl::PrefabEntry makeEntry(
 {
   auto entry = mdl::PrefabEntry{};
   entry.relativePath = relativePath;
+  entry.relativePathString = relativePath.generic_string();
   entry.metadata.kind = kind;
   entry.metadata.name = std::move(name);
   entry.metadata.className = std::move(className);
@@ -867,6 +868,17 @@ TEST_CASE("PrefabPanel")
       view->selectEntry(oldEntry->absolutePath);
       REQUIRE(view->selectedEntry() == oldEntry);
 
+      // another spelling of the file's path names the same entry
+      view->selectEntry({});
+      CHECK(view->selectedEntry() == nullptr);
+      view->selectEntry(env.dir() / "lights" / ".." / "lights" / "." / "lamp.map");
+      CHECK(view->selectedEntry() == oldEntry);
+
+      // a rescan that changes nothing keeps the entry
+      panel.rescan();
+      REQUIRE(waitForScan(panel, library, 2));
+      CHECK(view->selectedEntry() == oldEntry);
+
       // the tags make the file differ, so that the rescan reads it again
       REQUIRE(
         mdl::savePrefab(
@@ -879,7 +891,7 @@ TEST_CASE("PrefabPanel")
             .root = mdl::PrefabRoot::User})
         | kdl::is_success());
       panel.rescan();
-      REQUIRE(waitForScan(panel, library, 2));
+      REQUIRE(waitForScan(panel, library, 3));
 
       // the selection names a file, so it finds the entry that replaced the old one
       const auto* newEntry = library.find(mdl::PrefabRoot::User, "lights/lamp.map");
@@ -890,7 +902,7 @@ TEST_CASE("PrefabPanel")
       // and none once the file is gone
       REQUIRE(std::filesystem::remove(newEntry->absolutePath));
       panel.rescan();
-      REQUIRE(waitForScan(panel, library, 3));
+      REQUIRE(waitForScan(panel, library, 4));
       CHECK(view->selectedEntry() == nullptr);
     }
   }
