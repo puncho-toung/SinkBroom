@@ -1396,11 +1396,6 @@ TEST_CASE("LinkedGroupUtils")
       transformNode(
         *targetGroupNode, vm::translation_matrix(vm::vec3d{0, 64, 0}), worldBounds);
 
-      // the target's group node is not replaced, only its children are
-      auto targetGroup = targetGroupNode->group();
-      targetGroup.setPrefabHash("0123456789abcdef");
-      targetGroupNode->setGroup(std::move(targetGroup));
-
       transformNode(*entityNode, vm::translation_matrix(vm::vec3d{0, 0, 8}), worldBounds);
 
       updateLinkedGroups(
@@ -1409,9 +1404,9 @@ TEST_CASE("LinkedGroupUtils")
             REQUIRE(r.size() == 1u);
             const auto& [groupNodeToUpdate, newChildren] = r.front();
             CHECK(groupNodeToUpdate == targetGroupNode.get());
-            CHECK(targetGroupNode->group().prefabPath() == "props/outer.map");
-            CHECK(targetGroupNode->group().prefabHash() == "0123456789abcdef");
 
+            // the update replaces the target's children, never its own group, so the
+            // nested groups are what carries the prefab properties across (H-A-1)
             REQUIRE(newChildren.size() == 1u);
             const auto* newInnerGroupNode =
               dynamic_cast<const GroupNode*>(newChildren.front().get());

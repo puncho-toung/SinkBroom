@@ -40,12 +40,14 @@
 #include "kd/overload.h"
 #include "kd/path_utils.h"
 #include "kd/string_compare.h"
+#include "kd/string_format.h"
 #include "kd/task_manager.h"
 
 #include <algorithm>
 #include <chrono>
 #include <functional>
 #include <ranges>
+#include <unordered_set>
 #include <utility>
 
 namespace tb::mdl
@@ -122,6 +124,19 @@ auto makeSetEntityDefinitionsVisitor(const EntityDefinitionManager* manager)
 bool isReady(const std::future<PrefabEntry>& future)
 {
   return future.wait_for(std::chrono::seconds{0}) == std::future_status::ready;
+}
+
+/**
+ * The key by which two relative paths name the same file. Windows file names ignore case,
+ * so there Torch.map and torch.map are one file.
+ */
+std::string pathKey(const std::filesystem::path& relativePath)
+{
+#ifdef _WIN32
+  return kdl::str_to_lower(relativePath.generic_string());
+#else
+  return relativePath.generic_string();
+#endif
 }
 
 bool compareEntries(const PrefabEntry& lhs, const PrefabEntry& rhs)
@@ -271,13 +286,17 @@ void PrefabLibrary::processPendingResults()
     std::ranges::sort(entries, compareEntries);
 
     // the user root wins over the mod root for an equal relative path
+    auto userPaths = std::unordered_set<std::string>{};
+    for (const auto& entry : entries)
+    {
+      if (entry.root == PrefabRoot::User)
+      {
+        userPaths.insert(pathKey(entry.relativePath));
+      }
+    }
     std::erase_if(entries, [&](const auto& entry) {
       return entry.root == PrefabRoot::Mod
-             && std::ranges::any_of(entries, [&](const auto& other) {
-                  return other.root == PrefabRoot::User
-                         && other.relativePath.generic_string()
-                              == entry.relativePath.generic_string();
-                });
+             && userPaths.contains(pathKey(entry.relativePath));
     });
 
     m_entries = std::move(entries);
@@ -314,9 +333,9 @@ const std::vector<PrefabEntry>& PrefabLibrary::entries() const
 const PrefabEntry* PrefabLibrary::find(
   const PrefabRoot root, const std::filesystem::path& relativePath) const
 {
-  const auto relativePathStr = relativePath.generic_string();
+  const auto key = pathKey(relativePath);
   const auto it = std::ranges::find_if(m_entries, [&](const auto& entry) {
-    return entry.root == root && entry.relativePath.generic_string() == relativePathStr;
+    return entry.root == root && pathKey(entry.relativePath) == key;
   });
   return it != m_entries.end() ? &*it : nullptr;
 }

@@ -274,6 +274,32 @@ Result<void> translateNodes(
 }
 
 /**
+ * Removes the prefab path and hash (C3) from every group under the given node. A group
+ * placed from another prefab is part of this prefab now; if it kept them, a placement of
+ * this prefab would hold a group that claims to be the other prefab, so that placing the
+ * other prefab would link to it and refreshing the other prefab would edit it.
+ */
+void clearPrefabProvenance(Node& node)
+{
+  node.accept(kdl::overload(
+    [](auto&& thisLambda, WorldNode& worldNode) { worldNode.visitChildren(thisLambda); },
+    [](auto&& thisLambda, LayerNode& layerNode) { layerNode.visitChildren(thisLambda); },
+    [](auto&& thisLambda, GroupNode& groupNode) {
+      if (groupNode.group().prefabPath() || groupNode.group().prefabHash())
+      {
+        auto group = groupNode.group();
+        group.setPrefabPath(std::nullopt);
+        group.setPrefabHash(std::nullopt);
+        groupNode.setGroup(std::move(group));
+      }
+      groupNode.visitChildren(thisLambda);
+    },
+    [](EntityNode&) {},
+    [](BrushNode&) {},
+    [](PatchNode&) {}));
+}
+
+/**
  * The point that the file puts at 0 0 0 (D10): an entity's origin for the entity kind
  * (the snapped bounds centre for a brush entity without an origin key), the snapped
  * bounds centre of the body for an assembly.
@@ -533,6 +559,8 @@ Result<std::filesystem::path> writePrefab(
   const auto delta = -referencePoint(map, kind, *topNode);
   return translateNodes(body, delta, worldBounds, entityPropertyConfig)
          | kdl::and_then([&]() {
+             clearPrefabProvenance(*topNode);
+
              // link sets inside the prefab keep their membership under fresh ids, so a
              // placement joins none of the source map's link sets
              rekeyLinkIds({topNode});

@@ -35,6 +35,7 @@
 #include "mdl/MapFixture.h"
 #include "mdl/MapFormat.h"
 #include "mdl/Map_Nodes.h"
+#include "mdl/PatchNode.h"
 #include "mdl/PrefabFile.h"
 #include "mdl/PrefabLibrary.h"
 #include "mdl/PropertyDefinition.h"
@@ -42,11 +43,13 @@
 #include "mdl/WorldNode.h"
 #include "mdl/WorldReader.h"
 
+#include "kd/overload.h"
 #include "kd/task_manager.h"
 
 #include "vm/mat_ext.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -281,6 +284,25 @@ TEST_CASE("PrefabFile")
     CHECK(
       keys(findExternalLinks({monsterNode, pathNode, lightNode}))
       == std::vector<std::string>{"cameraTarget", "bind"});
+
+    // savePrefab removes the same keys from the written file
+    const auto worldNode = readPrefab(
+      map,
+      savedFile(
+        savePrefab(
+          map,
+          {monsterNode},
+          SavePrefabOptions{.name = "Zombie", .root = PrefabRoot::User})
+        | kdl::value()));
+    const auto* bodyNode =
+      dynamic_cast<const EntityNode*>(worldNode->defaultLayer()->children().front());
+    REQUIRE(bodyNode);
+    CHECK(property(*bodyNode, "name") == "zombie_1");
+    for (const auto* key : {"target", "target2", "cameraTarget", "bind"})
+    {
+      CAPTURE(key);
+      CHECK(property(*bodyNode, key) == "<missing>");
+    }
   }
 
   SECTION("Entity snapshot round trip")
@@ -337,6 +359,22 @@ TEST_CASE("PrefabFile")
       // the map is not touched
       CHECK(property(*lightNode, "target") == "door");
       CHECK(property(*lightNode, "origin") == "64 32 16");
+
+      // an entity snapshot carries no _tb_ key, protected properties included
+      auto entity = lightNode->entity();
+      entity.setProtectedProperties({"_color"});
+      lightNode->setEntity(std::move(entity));
+      const auto protectedContents =
+        savedFile(savePrefab(map, {lightNode}, options) | kdl::value());
+      CHECK(protectedContents.find("_tb_protected_properties") == std::string::npos);
+      const auto protectedWorldNode = readPrefab(map, protectedContents);
+      const auto* protectedBodyNode = dynamic_cast<const EntityNode*>(
+        protectedWorldNode->defaultLayer()->children().front());
+      REQUIRE(protectedBodyNode);
+      CHECK(protectedBodyNode->entity().protectedProperties().empty());
+      CHECK(property(*protectedBodyNode, "_color") == "1 0 0");
+      CHECK(
+        lightNode->entity().protectedProperties() == std::vector<std::string>{"_color"});
 
       // the host's definition file and mods are copied when it has them
       const auto hasDefAndMod = [](const WorldNode& prefabWorldNode) {
@@ -417,6 +455,31 @@ TEST_CASE("PrefabFile")
     CHECK(property(*bodyNode, "origin") == "0 0 0");
     REQUIRE(bodyNode->childCount() == 1);
     CHECK(bodyNode->children().front()->logicalBounds().center() == vm::vec3d{0, 0, 0});
+  }
+
+  SECTION("Brush entity snapshot without an origin")
+  {
+    // the snapped bounds centre is the reference point (H-B-5); no origin key is added
+    auto* entityNode = createEntity({{"classname", "func_static"}, {"name", "slab"}});
+    entityNode->addChildren(
+      {createBrushAt(map, {64, 0, 0}), createBrushAt(map, {96, 0, 0})});
+    addNodes(map, {{&parentForNodes(map), {entityNode}}});
+
+    const auto path =
+      savePrefab(
+        map, {entityNode}, SavePrefabOptions{.name = "Slab", .root = PrefabRoot::User})
+      | kdl::value();
+
+    const auto worldNode = readPrefab(map, savedFile(path));
+    const auto& body = worldNode->defaultLayer()->children();
+    REQUIRE(body.size() == 1);
+    const auto* bodyNode = dynamic_cast<const EntityNode*>(body.front());
+    REQUIRE(bodyNode);
+    CHECK(property(*bodyNode, "origin") == "<missing>");
+    REQUIRE(bodyNode->childCount() == 2);
+    // the bounds are x 48..112, so the centre 80 0 0 goes to 0 0 0
+    CHECK(bodyNode->logicalBounds().center() == vm::vec3d{0, 0, 0});
+    CHECK(bodyNode->children()[0]->logicalBounds().center() == vm::vec3d{-16, 0, 0});
   }
 
   SECTION("Assembly round trip")
@@ -567,6 +630,52 @@ TEST_CASE("PrefabFile")
       REQUIRE(innerGroupNode);
       CHECK(innerGroupNode->group().name() == "pillar");
     }
+  }
+
+  SECTION("Placed assemblies in the selection lose their prefab keys")
+  {
+    auto placedGroup = Group{"placed"};
+    placedGroup.setPrefabPath("user/props/crate.map");
+    placedGroup.setPrefabHash("af63dc4c8601ec8c");
+    auto* placedNode = new GroupNode{std::move(placedGroup)};
+    placedNode->addChild(createBrushAt(map, {0, 0, 0}));
+    auto* lightNode = createEntity({{"classname", "light"}, {"origin", "64 0 0"}});
+    addNodes(map, {{&parentForNodes(map), {placedNode, lightNode}}});
+
+    const auto checkFile = [&](const std::vector<Node*>& nodes) {
+      const auto contents = savedFile(
+        savePrefab(map, nodes, SavePrefabOptions{.name = "Rig", .root = PrefabRoot::User})
+        | kdl::value());
+      CHECK(contents.find("\"_tb_prefab\"") == std::string::npos);
+      CHECK(contents.find("\"_tb_prefab_hash\"") == std::string::npos);
+
+      const auto worldNode = readPrefab(map, contents);
+      auto groupNodes = std::vector<const GroupNode*>{};
+      worldNode->accept(kdl::overload(
+        [](auto&& thisLambda, const WorldNode& node) { node.visitChildren(thisLambda); },
+        [](auto&& thisLambda, const LayerNode& node) { node.visitChildren(thisLambda); },
+        [&](auto&& thisLambda, const GroupNode& node) {
+          groupNodes.push_back(&node);
+          node.visitChildren(thisLambda);
+        },
+        [](const EntityNode&) {},
+        [](const BrushNode&) {},
+        [](const PatchNode&) {}));
+      CHECK(!groupNodes.empty());
+      for (const auto* groupNode : groupNodes)
+      {
+        CHECK(groupNode->group().prefabPath() == std::nullopt);
+        CHECK(groupNode->group().prefabHash() == std::nullopt);
+      }
+    };
+
+    // as the prefab's own group, and inside the group that wraps a selection
+    checkFile({placedNode});
+    checkFile({placedNode, lightNode});
+
+    // the map is not touched
+    CHECK(placedNode->group().prefabPath() == "user/props/crate.map");
+    CHECK(placedNode->group().prefabHash() == "af63dc4c8601ec8c");
   }
 
   SECTION("Errors")

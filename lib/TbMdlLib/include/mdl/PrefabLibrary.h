@@ -118,6 +118,9 @@ public:
 
   // sorted by root, then relativePath
   const std::vector<PrefabEntry>& entries() const;
+
+  // relative paths compare as file names do on the platform, ignoring case on Windows;
+  // the same goes for the rule that the user root wins over the mod root
   const PrefabEntry* find(
     PrefabRoot root, const std::filesystem::path& relativePath) const;
 

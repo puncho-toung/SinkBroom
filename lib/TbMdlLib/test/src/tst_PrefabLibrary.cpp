@@ -277,6 +277,26 @@ TEST_CASE("PrefabLibrary")
       CHECK(crate->hash == fnv1a64Hex(loadBytes(crate->absolutePath)));
     }
 
+    SECTION("File names compare as the platform compares them")
+    {
+      env.createDirectory("user/props");
+      env.createFile("user/props/Crate.map", UserTorch);
+      library.rescan();
+      waitForScan(library);
+
+#ifdef _WIN32
+      // Crate.map and crate.map are one file name, so the user root wins
+      CHECK(library.find(PrefabRoot::Mod, "props/crate.map") == nullptr);
+      CHECK(library.find(PrefabRoot::User, "props/crate.map") != nullptr);
+      CHECK(library.find(PrefabRoot::User, "PROPS/CRATE.MAP") != nullptr);
+      CHECK(library.fromPayload("prefab:user/Lights/Torch.map") != nullptr);
+#else
+      CHECK(library.find(PrefabRoot::Mod, "props/crate.map") != nullptr);
+      CHECK(library.find(PrefabRoot::User, "props/crate.map") == nullptr);
+      CHECK(library.find(PrefabRoot::User, "props/Crate.map") != nullptr);
+#endif
+    }
+
     SECTION("Payloads")
     {
       for (const auto& entry : entries)
