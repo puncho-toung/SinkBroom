@@ -189,7 +189,9 @@ private:
 
   // Declared after the notifiers so that it can observe them, and constructed before
   // connectObservers() runs, so that its observers run before the map's own: it must
-  // release its entity definitions before the map deletes them.
+  // release its entity definitions before the map deletes them. Those that must run
+  // after the map's, to assign reloaded definitions, it connects when the constructor
+  // calls PrefabLibrary::connectObserversAfterMap.
   std::unique_ptr<PrefabLibrary> m_prefabLibrary;
 
 public: // misc

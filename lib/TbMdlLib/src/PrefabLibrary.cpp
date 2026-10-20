@@ -72,8 +72,9 @@ const auto PayloadPrefix = std::string{"prefab:"};
 const auto PayloadPrefixUser = std::string{"prefab:user/"};
 const auto PayloadPrefixMod = std::string{"prefab:mod/"};
 
-// the mod folder that holds the mod root, when the map enables no mod
-const auto DefaultModName = std::string{"base"};
+// the qualifiers of a placement's prefab path (C3, DD-16)
+const auto PrefabPathPrefixUser = std::string_view{"user/"};
+const auto PrefabPathPrefixMod = std::string_view{"mod/"};
 
 // the scan runs beside the map's own task manager, so it gets few workers
 constexpr auto WorkerCount = std::size_t(2);
@@ -504,6 +505,26 @@ bool PrefabEntry::hasBody() const
   return world || bodyPreview;
 }
 
+const Entity* PrefabEntry::snapshot() const
+{
+  if (metadata.kind != PrefabKind::Entity)
+  {
+    return nullptr;
+  }
+  if (world)
+  {
+    for (const auto* node : bodyNodes(*world))
+    {
+      if (const auto* entityNode = dynamic_cast<const EntityNode*>(node))
+      {
+        return &entityNode->entity();
+      }
+    }
+    return nullptr;
+  }
+  return keptSnapshot ? &*keptSnapshot : nullptr;
+}
+
 namespace
 {
 
@@ -563,16 +584,20 @@ PrefabEntry readPrefabEntry(
         | kdl::transform([&](auto metadata) { entry.metadata = std::move(metadata); })
         | kdl::transform_error([&](auto e) {
             entry.error = std::move(e.msg);
+            entry.notAPrefab = true;
             entry.world.reset();
           });
     }
 
-    if (
-      entry.world && entry.metadata.kind == PrefabKind::Assembly
-      && countBrushesAndPatches(*entry.world) > PrefabWorldBrushBudget)
+    if (entry.world && countBrushesAndPatches(*entry.world) > PrefabWorldBrushBudget)
     {
-      // DD-19: a large assembly keeps what its cell needs; cloneBody reads it again
+      // DD-19: a large body keeps what its cell needs, and an entity snapshot its entity
+      // for Apply (R7-lib-2); cloneBody reads the file again
       entry.bodyPreview = makeBodyPreview(*entry.world);
+      if (const auto* snapshot = entry.snapshot())
+      {
+        entry.keptSnapshot = *snapshot;
+      }
       entry.world.reset();
     }
   }
@@ -580,7 +605,9 @@ PrefabEntry readPrefabEntry(
   {
     entry.world.reset();
     entry.bodyPreview.reset();
+    entry.keptSnapshot.reset();
     entry.error = e.what();
+    entry.notAPrefab = false;
   }
 
   return entry;
@@ -606,9 +633,27 @@ const std::filesystem::path& PrefabLibrary::userRoot() const
   return m_userRoot;
 }
 
-void PrefabLibrary::setUserRoot(std::filesystem::path userRoot)
+void PrefabLibrary::setUserRoot(const std::filesystem::path& userRoot)
 {
-  m_userRoot = std::move(userRoot);
+  m_userRoot = normalizeUserRoot(userRoot);
+}
+
+std::filesystem::path PrefabLibrary::normalizeUserRoot(
+  const std::filesystem::path& userRoot)
+{
+  if (!userRoot.is_absolute())
+  {
+    return {};
+  }
+
+  // "D:\prefabs\" and "D:\prefabs" are one root, which the scan lists without the
+  // separator (R8-ui-4)
+  auto result = userRoot.lexically_normal();
+  while (!result.has_filename() && result.has_relative_path())
+  {
+    result = result.parent_path();
+  }
+  return result;
 }
 
 std::vector<std::filesystem::path> PrefabLibrary::roots() const
@@ -659,9 +704,10 @@ std::filesystem::path PrefabLibrary::modFolder() const
   {
     return {};
   }
-  // the last enabled mod is the one that wins in the game file system
+  // the last enabled mod is the one that wins in the game file system; without one, the
+  // game's own search path (R8-lib-3)
   const auto mods = enabledMods(m_map);
-  return gamePath / (mods.empty() ? DefaultModName : mods.back());
+  return gamePath / (mods.empty() ? defaultMod(m_map) : mods.back());
 }
 
 void PrefabLibrary::rescan()
@@ -673,6 +719,7 @@ void PrefabLibrary::rescan()
   m_pendingEntries.clear();
   m_reusedEntries.clear();
   m_pendingDirectories.clear();
+  m_pendingIncompleteRoots.clear();
   m_pendingUpdates.clear();
   m_updateSequences.clear();
   m_scanning = true;
@@ -693,8 +740,8 @@ void PrefabLibrary::rescan()
   }
 
   // phase 1: list the roots on a worker; processPendingResults starts phase 2
-  m_pendingListing = taskManager().run_task(
-    std::function<Listing()>{[rootPaths, currentGeneration = m_generation, generation]() {
+  m_pendingListing = taskManager().run_task(std::function<Listing()>{
+    [rootPaths, currentGeneration = m_generation, generation, listHook = m_listHook]() {
       auto listing = Listing{};
       for (const auto& [root, rootPath] : rootPaths)
       {
@@ -703,10 +750,25 @@ void PrefabLibrary::rescan()
           return Listing{};
         }
 
+        // R8-lib-2: an error that ends the walk early leaves the root's listing
+        // incomplete; the scan then keeps what it did not see
+        const auto markIncomplete = [&, root = root](
+                                      const std::filesystem::path& listedRootPath,
+                                      const std::string& message) {
+          listing.incompleteRoots.push_back(
+            IncompleteRoot{root, listedRootPath.lexically_normal()});
+          listing.warnings.push_back(fmt::format(
+            "Could not scan prefab folder {} completely, keeping the prefabs it did not "
+            "reach: {}",
+            rootPath,
+            message));
+        };
+
+        auto fixedRootPath = rootPath;
         try
         {
           auto error = std::error_code{};
-          const auto fixedRootPath = fs::Disk::fixPath(rootPath);
+          fixedRootPath = fs::Disk::fixPath(rootPath);
           if (!std::filesystem::is_directory(fixedRootPath, error))
           {
             // a missing folder is an empty root
@@ -715,32 +777,45 @@ void PrefabLibrary::rescan()
           listing.directories.push_back(fixedRootPath.lexically_normal());
 
           // the directory entries carry the file type, size and time, so listing a
-          // root costs no stat per file
+          // root costs no stat per file; a folder that may not be entered is skipped
+          // rather than ending the walk
           auto files = std::vector<ListedFile>{};
           auto thumbnails = std::set<std::filesystem::path>{};
           auto it = std::filesystem::recursive_directory_iterator{
             fixedRootPath,
-            std::filesystem::directory_options::follow_directory_symlink,
+            std::filesystem::directory_options::follow_directory_symlink
+              | std::filesystem::directory_options::skip_permission_denied,
             error};
           const auto end = std::filesystem::recursive_directory_iterator{};
           while (!error && it != end)
           {
+            // R7-lib-1: an abandoned walk of a large tree stops at once, so that
+            // destroying the library does not wait for it
+            if (isStale(*currentGeneration, generation))
+            {
+              return Listing{};
+            }
+
             const auto& directoryEntry = *it;
             auto entryError = std::error_code{};
             if (directoryEntry.is_directory(entryError))
             {
-              if (isAutosaveFolder(directoryEntry.path().filename()))
+              if (
+                isAutosaveFolder(directoryEntry.path().filename())
+                || it.depth() + 1 >= PrefabMaxFolderDepth)
               {
+                // an autosave folder holds backups (DD-27); a folder this deep is
+                // listed but not entered, against link loops
                 it.disable_recursion_pending();
               }
-              else
+              if (!isAutosaveFolder(directoryEntry.path().filename()))
               {
                 // watched by the panel, so that a file copied into an empty folder is
                 // seen
                 listing.directories.push_back(directoryEntry.path().lexically_normal());
               }
             }
-            else if (directoryEntry.is_regular_file(entryError))
+            else if (!entryError && directoryEntry.is_regular_file(entryError))
             {
               const auto& absolutePath = directoryEntry.path();
               const auto extension = kdl::path_to_lower(absolutePath.extension());
@@ -757,17 +832,37 @@ void PrefabLibrary::rescan()
                 file.relativePathString = toUtf8String(file.relativePath);
                 file.pathKey = makePathKey(file.relativePathString);
                 file.fileSize = directoryEntry.file_size(entryError);
-                file.modificationTime = directoryEntry.last_write_time(entryError);
-                files.push_back(std::move(file));
+                if (!entryError)
+                {
+                  file.modificationTime = directoryEntry.last_write_time(entryError);
+                }
+                if (!entryError)
+                {
+                  files.push_back(std::move(file));
+                }
               }
             }
-            it.increment(error);
+
+            if (entryError)
+            {
+              // an entry whose status cannot be read is skipped; for a folder, its
+              // contents too
+              it.disable_recursion_pending();
+            }
+
+            if (listHook)
+            {
+              error = listHook(directoryEntry.path());
+            }
+            if (!error)
+            {
+              it.increment(error);
+            }
           }
 
           if (error)
           {
-            listing.warnings.push_back(fmt::format(
-              "Could not scan prefab folder {}: {}", rootPath, error.message()));
+            markIncomplete(fixedRootPath, error.message());
           }
 
           for (auto& file : files)
@@ -783,8 +878,7 @@ void PrefabLibrary::rescan()
         }
         catch (const std::exception& e)
         {
-          listing.warnings.push_back(
-            fmt::format("Could not scan prefab folder {}: {}", rootPath, e.what()));
+          markIncomplete(fixedRootPath, e.what());
         }
       }
       return listing;
@@ -794,6 +888,12 @@ void PrefabLibrary::rescan()
 void PrefabLibrary::updateEntry(const std::filesystem::path& absolutePath)
 {
   const auto path = absolutePath.lexically_normal();
+  if (kdl::path_to_lower(path.extension()) != ".map")
+  {
+    // R8-lib-6: Save As crate.bak in a root would list a file that no scan lists
+    return;
+  }
+
   for (const auto root : {PrefabRoot::User, PrefabRoot::Mod})
   {
     const auto rootPath = writeRootFor(root);
@@ -917,13 +1017,10 @@ void PrefabLibrary::processPendingResults()
     }
   }
 
-  if (m_definitionsStale)
+  if (m_definitionsChanged)
   {
-    for (auto& entry : m_entries)
-    {
-      setEntityDefinitions(*entry);
-    }
-    m_definitionsStale = false;
+    // R8-lib-7: assigned when the map loaded them; the cells may change colour
+    m_definitionsChanged = false;
     changed = true;
   }
 
@@ -964,21 +1061,45 @@ std::string PrefabLibrary::payloadFor(const PrefabEntry& entry) const
 
 const PrefabEntry* PrefabLibrary::fromPayload(const std::string& payload) const
 {
-  // payloads are UTF-8, whatever the process's code page is, so the key is made from the
-  // text, without a path in between (R2-pf-ui-6)
-  const auto lookUp = [&](const PrefabRoot root, const std::string& prefix) {
-    const auto it = m_entriesByKey.find(entryKey(
-      root, makePayloadPathKey(std::string_view{payload}.substr(prefix.size()))));
-    return it != m_entriesByKey.end() ? it->second : nullptr;
-  };
+  return kdl::cs::str_is_prefix(payload, PayloadPrefix)
+           ? entryForPrefabPath(std::string_view{payload}.substr(PayloadPrefix.size()))
+           : nullptr;
+}
 
-  if (kdl::cs::str_is_prefix(payload, PayloadPrefixUser))
+const PrefabEntry* PrefabLibrary::entryForPrefabPath(
+  const std::string_view prefabPath) const
+{
+  const auto relativePath = [&]() -> std::optional<std::string_view> {
+    for (const auto prefix : {PrefabPathPrefixUser, PrefabPathPrefixMod})
+    {
+      if (prefabPath.starts_with(prefix))
+      {
+        return prefabPath.substr(prefix.size());
+      }
+    }
+    return std::nullopt;
+  }();
+  if (!relativePath)
   {
-    return lookUp(PrefabRoot::User, PayloadPrefixUser);
+    return nullptr;
   }
-  if (kdl::cs::str_is_prefix(payload, PayloadPrefixMod))
+
+  // prefab paths are UTF-8, whatever the process's code page is, so the key is made from
+  // the text, without a path in between (R2-pf-ui-6)
+  const auto pathKey = makePayloadPathKey(*relativePath);
+
+  // DD-37: whatever the qualifier says, the active root first, then the other one, which
+  // has entries only until a scan after the root changed
+  const auto activeRoot = writeRoot().value_or(PrefabRoot::User);
+  const auto otherRoot =
+    activeRoot == PrefabRoot::User ? PrefabRoot::Mod : PrefabRoot::User;
+  for (const auto root : {activeRoot, otherRoot})
   {
-    return lookUp(PrefabRoot::Mod, PayloadPrefixMod);
+    if (const auto it = m_entriesByKey.find(entryKey(root, pathKey));
+        it != m_entriesByKey.end())
+    {
+      return it->second;
+    }
   }
   return nullptr;
 }
@@ -1059,7 +1180,7 @@ std::vector<PrefabPlacement> PrefabLibrary::placements() const
             entriesByPath.try_emplace(*prefabPath, nullptr);
           if (entryInserted)
           {
-            entryIt->second = fromPayload(PayloadPrefix + *prefabPath);
+            entryIt->second = entryForPrefabPath(*prefabPath);
           }
 
           result.push_back(PrefabPlacement{
@@ -1107,6 +1228,11 @@ void PrefabLibrary::setReadHookForTesting(ReadHook readHook)
   m_readHook = std::move(readHook);
 }
 
+void PrefabLibrary::setListHookForTesting(ListHook listHook)
+{
+  m_listHook = std::move(listHook);
+}
+
 kdl::task_manager& PrefabLibrary::taskManager()
 {
   if (!m_taskManager)
@@ -1129,8 +1255,8 @@ void PrefabLibrary::startParsing(Listing listing)
     }
   }
 
-
   m_pendingDirectories = std::move(listing.directories);
+  m_pendingIncompleteRoots = std::move(listing.incompleteRoots);
 
   const auto& worldNode = m_map.worldNode();
   const auto mapFormat = worldNode.mapFormat();
@@ -1146,13 +1272,14 @@ void PrefabLibrary::startParsing(Listing listing)
     }
 
     if (const auto it = m_entriesByKey.find(entryKey(file.root, file.pathKey));
-        it != m_entriesByKey.end() && !it->second->error
+        it != m_entriesByKey.end() && (!it->second->error || it->second->notAPrefab)
         && it->second->absolutePath == file.absolutePath
         && it->second->fileSize == file.fileSize
         && it->second->modificationTime == file.modificationTime)
     {
       // unchanged: kept, with the thumbnail as it is now; a file that failed is read
-      // again, since the failure may have been transient (DD-22)
+      // again, since the failure may have been transient (DD-22), unless it is not a
+      // prefab, which only a change of the file changes (R8-lib-5)
       m_reusedEntries.push_back(ReusedEntry{it->second, std::move(file.thumbnailPath)});
       continue;
     }
@@ -1232,9 +1359,39 @@ bool PrefabLibrary::integrateScan()
       continue;
     }
 
+    // an entry that was read again replaces the previous one
+    previousEntries.erase(entryKey(entry->root, entry->pathKey));
     setEntityDefinitions(*entry);
     entries.push_back(std::move(entry));
     changed = true;
+  }
+
+  // R8-lib-2: a root whose walk ended early keeps the entries and folders that the walk
+  // did not reach, rather than losing an arbitrary set of them
+  const auto isUnder = [](const std::filesystem::path& path, const IncompleteRoot& root) {
+    return kdl::path_has_prefix(
+      makeFileKey(path.lexically_normal()), makeFileKey(root.path));
+  };
+  for (const auto& incompleteRoot : m_pendingIncompleteRoots)
+  {
+    for (auto it = previousEntries.begin(); it != previousEntries.end();)
+    {
+      const auto next = std::next(it);
+      if (
+        it->second->root == incompleteRoot.root
+        && isUnder(it->second->absolutePath, incompleteRoot))
+      {
+        keep(it, it->second->thumbnailPath);
+      }
+      it = next;
+    }
+    for (const auto& directory : m_directories)
+    {
+      if (isUnder(directory, incompleteRoot))
+      {
+        m_pendingDirectories.push_back(directory);
+      }
+    }
   }
 
   // the entries that were neither reused nor kept were removed or read again
@@ -1242,6 +1399,7 @@ bool PrefabLibrary::integrateScan()
 
   m_reusedEntries.clear();
   m_pendingEntries.clear();
+  m_pendingIncompleteRoots.clear();
   m_scanning = false;
 
   // the roots are listed one after the other, and one may lie inside the other
@@ -1303,11 +1461,18 @@ void PrefabLibrary::rebuildEntryIndex()
 
 void PrefabLibrary::connectObservers()
 {
-  // Connected before the map connects its own observers (see Map.h), so these run first.
+  // Connected before the map connects its own observers (see Map.h), so this runs first:
+  // the definitions are released before the map deletes them.
   m_notifierConnection += m_map.entityDefinitionsWillChangeNotifier.connect(
     this, &PrefabLibrary::entityDefinitionsWillChange);
+}
+
+void PrefabLibrary::connectObserversAfterMap()
+{
+  // R8-lib-7: runs after the map has loaded the new definitions, so that an apply or a
+  // refresh before the next processPendingResults sees them
   m_notifierConnection += m_map.entityDefinitionsDidChangeNotifier.connect(
-    this, &PrefabLibrary::entityDefinitionsDidChange);
+    this, &PrefabLibrary::entityDefinitionsDidChangeAfterMap);
 }
 
 void PrefabLibrary::entityDefinitionsWillChange()
@@ -1319,13 +1484,21 @@ void PrefabLibrary::entityDefinitionsWillChange()
     {
       entry->world->accept(makeSetEntityDefinitionsVisitor(nullptr));
     }
+    if (entry->keptSnapshot)
+    {
+      entry->keptSnapshot->setDefinition(nullptr);
+    }
   }
 }
 
-void PrefabLibrary::entityDefinitionsDidChange()
+void PrefabLibrary::entityDefinitionsDidChangeAfterMap()
 {
-  // this runs before the map has loaded the new definitions
-  m_definitionsStale = true;
+  for (auto& entry : m_entries)
+  {
+    setEntityDefinitions(*entry);
+  }
+  // reported by the next processPendingResults
+  m_definitionsChanged = true;
 }
 
 void PrefabLibrary::setEntityDefinitions(PrefabEntry& entry) const
@@ -1334,6 +1507,11 @@ void PrefabLibrary::setEntityDefinitions(PrefabEntry& entry) const
   {
     entry.world->accept(
       makeSetEntityDefinitionsVisitor(&m_map.entityDefinitionManager()));
+  }
+  if (entry.keptSnapshot)
+  {
+    entry.keptSnapshot->setDefinition(
+      m_map.entityDefinitionManager().definition(entry.keptSnapshot->classname()));
   }
   if (entry.bodyPreview)
   {

@@ -593,6 +593,7 @@ Map::Map(
   m_nodeHandles.registerHandleType<FaceHandle>();
 
   connectObservers();
+  m_prefabLibrary->connectObserversAfterMap();
 
   editorContext().setCurrentLayer(m_worldNode->defaultLayer());
 

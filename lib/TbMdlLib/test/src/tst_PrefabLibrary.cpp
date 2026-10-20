@@ -26,6 +26,7 @@
 #include "mdl/EntityDefinitionManager.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GameConfigFixture.h"
+#include "mdl/Group.h"
 #include "mdl/GroupNode.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
@@ -369,9 +370,20 @@ TEST_CASE("PrefabLibrary")
       }
       CHECK(library.payloadFor(*entries[1]) == "prefab:mod/lights/torch.map");
       CHECK(library.payloadFor(*entries[3]) == "prefab:mod/props/crate.map");
-      CHECK(library.fromPayload("prefab:user/lights/torch.map") == nullptr);
+      // DD-37: the relative path is looked up in the active root, whatever the
+      // qualifier says
+      CHECK(library.fromPayload("prefab:user/lights/torch.map") == entries[1].get());
+      CHECK(library.fromPayload("prefab:user/lights/none.map") == nullptr);
       CHECK(library.fromPayload("entity:light") == nullptr);
       CHECK(library.fromPayload("prefab:other/lights/torch.map") == nullptr);
+      CHECK(library.fromPayload("prefab:lights/torch.map") == nullptr);
+
+      CHECK(library.entryForPrefabPath("mod/props/crate.map") == entries[3].get());
+      CHECK(library.entryForPrefabPath("user/props/crate.map") == entries[3].get());
+      CHECK(library.entryForPrefabPath("props/crate.map") == nullptr);
+#ifdef _WIN32
+      CHECK(library.entryForPrefabPath("user/Props/Crate.map") == entries[3].get());
+#endif
     }
 
     SECTION("Rescanning")
@@ -527,11 +539,18 @@ TEST_CASE("PrefabLibrary")
       map.entityDefinitionsWillChangeNotifier();
       CHECK(torchNode->entity().definition() == nullptr);
 
+      // R8-lib-7: assigned as soon as the map has loaded them, before the next
+      // processPendingResults, which reports them
       map.entityDefinitionsDidChangeNotifier();
-      library.processPendingResults();
+      REQUIRE(map.entityDefinitionManager().definition("light"));
       CHECK(
         torchNode->entity().definition()
         == map.entityDefinitionManager().definition("light"));
+      CHECK(notifications == 1);
+
+      library.processPendingResults();
+      CHECK(notifications == 2);
+      library.processPendingResults();
       CHECK(notifications == 2);
     }
 
@@ -659,6 +678,26 @@ TEST_CASE("PrefabLibrary")
         CHECK_FALSE(library.scanning());
         library.processPendingResults();
         CHECK(notifications == 1);
+      }
+
+      SECTION("A file that is not a map is ignored")
+      {
+        // R8-lib-6: Save As crate.bak in a root would add an entry that no scan lists
+        env.createFile("base/maps/prefabs/props/crate.bak", Torch);
+        library.updateEntry(
+          env.dir() / "base" / "maps" / "prefabs" / "props" / "crate.bak");
+        CHECK_FALSE(library.scanning());
+        library.processPendingResults();
+        CHECK(notifications == 1);
+        CHECK(library.entries().size() == 4);
+
+        // the extension is compared in any case
+        env.createFile("base/maps/prefabs/props/BARREL.MAP", Torch);
+        library.updateEntry(
+          env.dir() / "base" / "maps" / "prefabs" / "props" / "BARREL.MAP");
+        CHECK(library.scanning());
+        waitForScan(library);
+        CHECK(library.entries().size() == 5);
       }
 
       SECTION("Of two updates of one file, the later one wins")
@@ -964,6 +1003,352 @@ TEST_CASE("PrefabLibrary")
     waitForScan(otherLibrary);
     CHECK(otherLibrary.entries().empty());
     CHECK(notifications == 1);
+  }
+
+  SECTION("The mod root follows the game's search path")
+  {
+    // R8-lib-3: without an enabled mod, the mod folder is the game's own, not "base"
+    auto otherFixture = MapFixture{};
+    auto& otherMap = otherFixture.create(MapFixtureConfig{
+      .mapFormat = MapFormat::Valve,
+      .gameInfo = detail::makeGameInfoFixture(QuakeGameInfo.gameConfig, env.dir()),
+    });
+    const auto& otherLibrary = otherMap.prefabLibrary();
+    CHECK(otherLibrary.modFolder() == env.dir() / "id1");
+    CHECK(
+      otherLibrary.writeRootFor(PrefabRoot::Mod)
+      == env.dir() / "id1" / "maps" / "prefabs");
+  }
+
+  SECTION("Placements resolve in the active root (DD-37)")
+  {
+    // two unlinked placements, one recorded under each qualifier
+    const auto addPlacement = [&](const std::string& prefabPath) {
+      auto group = Group{"placed"};
+      group.setPrefabPath(prefabPath);
+      auto* groupNode = new GroupNode{std::move(group)};
+      groupNode->addChild(createBrushNode(map));
+      addNodes(map, {{&parentForNodes(map), {groupNode}}});
+      return groupNode;
+    };
+    auto* modPlacedNode = addPlacement("mod/lights/torch.map");
+    auto* userPlacedNode = addPlacement("user/lights/torch.map");
+    REQUIRE(modPlacedNode->linkId() != userPlacedNode->linkId());
+
+    const auto checkPlacements = [&](const PrefabEntry* torch) {
+      REQUIRE(torch);
+      const auto placements = library.placements();
+      REQUIRE(placements.size() == 2u);
+      CHECK(placements[0].firstMember == modPlacedNode);
+      CHECK(placements[0].prefabPath == "mod/lights/torch.map");
+      CHECK(placements[0].entry == torch);
+      CHECK(placements[1].firstMember == userPlacedNode);
+      CHECK(placements[1].prefabPath == "user/lights/torch.map");
+      CHECK(placements[1].entry == torch);
+    };
+
+    SECTION("With the Prefab Path set")
+    {
+      library.setUserRoot(env.dir() / "user");
+      library.rescan();
+      waitForScan(library);
+      checkPlacements(library.find(PrefabRoot::User, "lights/torch.map"));
+    }
+
+    SECTION("Without the Prefab Path")
+    {
+      library.rescan();
+      waitForScan(library);
+      checkPlacements(library.find(PrefabRoot::Mod, "lights/torch.map"));
+    }
+  }
+
+  SECTION("setUserRoot normalises the path")
+  {
+    const auto userRoot = (env.dir() / "user").lexically_normal();
+
+    // R8-ui-4: a trailing separator names the same root
+    library.setUserRoot(env.dir() / "user" / "");
+    CHECK(library.userRoot() == userRoot);
+    CHECK(library.userRoot().has_filename());
+    library.setUserRoot(env.dir() / "user" / "." / "lights" / "..");
+    CHECK(library.userRoot() == userRoot);
+    CHECK(library.userRoot().has_filename());
+
+    // R8-lib-4: a relative path would resolve against the working folder, so it is unset
+    library.setUserRoot("prefabs");
+    CHECK(library.userRoot().empty());
+    CHECK(library.writeRoot() == PrefabRoot::Mod);
+    library.setUserRoot({});
+    CHECK(library.userRoot().empty());
+
+    CHECK(PrefabLibrary::normalizeUserRoot("relative/prefabs").empty());
+    CHECK(PrefabLibrary::normalizeUserRoot(env.dir() / "user" / "") == userRoot);
+    const auto fileSystemRoot = env.dir().root_path();
+    CHECK(PrefabLibrary::normalizeUserRoot(fileSystemRoot) == fileSystemRoot);
+
+    // the scan finds the files of the root
+    library.setUserRoot(env.dir() / "user" / "");
+    library.rescan();
+    waitForScan(library);
+    CHECK(library.find(PrefabRoot::User, "lights/torch.map") != nullptr);
+    library.updateEntry(env.dir() / "user" / "lights" / "torch.map");
+    CHECK(library.scanning());
+    waitForScan(library);
+  }
+
+  SECTION("A file that is not a prefab is not read again (R8-lib-5)")
+  {
+    auto notAPrefabReads = std::atomic<int>{0};
+    auto brokenReads = std::atomic<int>{0};
+    library.setReadHookForTesting([&](const auto& path) {
+      if (path.filename() == "notaprefab.map")
+      {
+        ++notAPrefabReads;
+      }
+      else if (path.filename() == "broken.map")
+      {
+        ++brokenReads;
+      }
+    });
+
+    library.rescan();
+    waitForScan(library);
+    const auto* notAPrefab = library.find(PrefabRoot::Mod, "notaprefab.map");
+    REQUIRE(notAPrefab);
+    CHECK(notAPrefab->error);
+    CHECK(notAPrefab->notAPrefab);
+    const auto* broken = library.find(PrefabRoot::Mod, "broken.map");
+    REQUIRE(broken);
+    CHECK(broken->error);
+    CHECK_FALSE(broken->notAPrefab);
+    CHECK(notAPrefabReads == 1);
+    CHECK(brokenReads == 1);
+
+    // the parse error may be transient (DD-22), the missing kind is not
+    library.rescan();
+    waitForScan(library);
+    CHECK(notAPrefabReads == 1);
+    CHECK(brokenReads == 2);
+    CHECK(library.find(PrefabRoot::Mod, "notaprefab.map") == notAPrefab);
+
+    // a changed file is read again
+    env.createFile("base/maps/prefabs/notaprefab.map", NotAPrefab + "// changed\n");
+    library.rescan();
+    waitForScan(library);
+    CHECK(notAPrefabReads == 2);
+  }
+
+  SECTION("A listing that ends early keeps what it did not reach (R8-lib-2)")
+  {
+    library.rescan();
+    waitForScan(library);
+    REQUIRE(library.entries().size() == 4u);
+    const auto* torch = library.find(PrefabRoot::Mod, "lights/torch.map");
+    const auto* crate = library.find(PrefabRoot::Mod, "props/crate.map");
+    REQUIRE(torch);
+    REQUIRE(crate);
+    const auto directories = library.directories();
+    REQUIRE(directories.size() == 3u);
+
+    auto notifications = 0;
+    auto connection =
+      library.libraryDidChangeNotifier.connect([&]() { ++notifications; });
+
+    // a file is removed, and the walk ends at its first entry, as an iterator error
+    // would end it; a test seam, since an unreadable folder is platform-specific
+    REQUIRE(env.remove("base/maps/prefabs/notaprefab.map"));
+    library.setListHookForTesting(
+      [](const auto&) { return std::make_error_code(std::errc::io_error); });
+    library.rescan();
+    waitForScan(library);
+
+    // the entries that the walk did not see are kept, the removed one among them
+    CHECK(library.entries().size() == 4u);
+    CHECK(library.find(PrefabRoot::Mod, "lights/torch.map") == torch);
+    CHECK(library.find(PrefabRoot::Mod, "props/crate.map") == crate);
+    CHECK(library.find(PrefabRoot::Mod, "notaprefab.map") != nullptr);
+    CHECK(library.directories() == directories);
+    CHECK(notifications == 0);
+
+    // a complete walk removes it
+    library.setListHookForTesting({});
+    library.rescan();
+    waitForScan(library);
+    CHECK(library.entries().size() == 3u);
+    CHECK(library.find(PrefabRoot::Mod, "notaprefab.map") == nullptr);
+    CHECK(library.find(PrefabRoot::Mod, "lights/torch.map") == torch);
+    CHECK(notifications == 1);
+  }
+
+  SECTION("An abandoned listing stops at once (R7-lib-1)")
+  {
+    // the state is shared with the workers, which may outlive this section if a check
+    // fails
+    struct HookState
+    {
+      std::atomic<int> calls = 0;
+      std::atomic<bool> block = false;
+      std::atomic<bool> entered = false;
+      std::atomic<bool> release = false;
+    };
+    const auto state = std::make_shared<HookState>();
+    library.setListHookForTesting([state](const auto&) {
+      if (state->calls++ == 0 && state->block)
+      {
+        state->entered = true;
+        const auto deadline = std::chrono::steady_clock::now() + 10s;
+        while (!state->release && std::chrono::steady_clock::now() < deadline)
+        {
+          std::this_thread::sleep_for(1ms);
+        }
+      }
+      return std::error_code{};
+    });
+    const auto releaseWalk = kdl::invoke_later{[state]() { state->release = true; }};
+
+    // the number of entries that one walk of the root reaches
+    library.rescan();
+    waitForScan(library);
+    const auto walkLength = state->calls.load();
+    REQUIRE(walkLength > 1);
+
+    // the first walk blocks at its first entry, and is abandoned there
+    state->calls = 0;
+    state->block = true;
+    library.rescan();
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (!state->entered && std::chrono::steady_clock::now() < deadline)
+    {
+      std::this_thread::sleep_for(1ms);
+    }
+    REQUIRE(state->entered);
+
+    library.rescan();
+    state->release = true;
+    waitForScan(library);
+
+    // the abandoned walk reached no other entry; the second one reached them all
+    CHECK(state->calls == 1 + walkLength);
+    CHECK(library.entries().size() == 4u);
+  }
+
+  SECTION("A large entity snapshot keeps its entity (R7-lib-2)")
+  {
+    auto* bigEntityNode = new EntityNode{
+      Entity{{{"classname", "light"}, {"name", "slab"}, {"_color", "1 0 0"}}}};
+    for (size_t i = 0; i < PrefabWorldBrushBudget + 1; ++i)
+    {
+      bigEntityNode->addChild(createBrushNode(map));
+    }
+    addNodes(map, {{&parentForNodes(map), {bigEntityNode}}});
+    REQUIRE(
+      savePrefab(
+        map, {bigEntityNode}, SavePrefabOptions{.name = "slab", .root = PrefabRoot::Mod})
+      | kdl::is_success());
+
+    library.rescan();
+    waitForScan(library);
+
+    const auto* big = library.find(PrefabRoot::Mod, "slab.map");
+    REQUIRE(big);
+    CHECK(!big->error);
+    CHECK(big->metadata.kind == PrefabKind::Entity);
+    CHECK(big->world == nullptr);
+    CHECK(big->bodyPreview);
+    REQUIRE(big->keptSnapshot);
+    REQUIRE(big->snapshot() == &*big->keptSnapshot);
+    CHECK(big->snapshot()->classname() == "light");
+    CHECK(big->snapshot()->property("_color") != nullptr);
+    CHECK(
+      big->snapshot()->definition() == map.entityDefinitionManager().definition("light"));
+
+    // a small entity snapshot is read from its world, an assembly has none
+    const auto* torch = library.find(PrefabRoot::Mod, "lights/torch.map");
+    REQUIRE(torch);
+    REQUIRE(torch->world);
+    CHECK(!torch->keptSnapshot);
+    CHECK(torch->snapshot() == &firstEntityNode(*torch->world)->entity());
+    const auto* crate = library.find(PrefabRoot::Mod, "props/crate.map");
+    REQUIRE(crate);
+    CHECK(crate->snapshot() == nullptr);
+
+    SECTION("Its definition follows the map's")
+    {
+      map.entityDefinitionsWillChangeNotifier();
+      CHECK(big->snapshot()->definition() == nullptr);
+      map.entityDefinitionsDidChangeNotifier();
+      REQUIRE(map.entityDefinitionManager().definition("light"));
+      CHECK(
+        big->snapshot()->definition()
+        == map.entityDefinitionManager().definition("light"));
+    }
+
+    SECTION("cloneBody reads the file again")
+    {
+      auto clones = library.cloneBody(*big, map.worldBounds());
+      REQUIRE(clones.size() == 1);
+      const auto* entityNode = dynamic_cast<const EntityNode*>(clones.front());
+      REQUIRE(entityNode);
+      CHECK(entityNode->childCount() == PrefabWorldBrushBudget + 1);
+      kdl::vec_clear_and_delete(clones);
+    }
+  }
+
+  SECTION("Destroying the map while files are read (R7-lib-4)")
+  {
+    // the state is shared with the workers, which outlive the map until they are joined
+    struct HookState
+    {
+      std::atomic<int> calls = 0;
+      std::atomic<int> blocked = 0;
+      std::atomic<bool> release = false;
+    };
+    const auto state = std::make_shared<HookState>();
+    auto releaser = std::thread{};
+    {
+      auto otherFixture = MapFixture{};
+      auto& otherMap = otherFixture.create(MapFixtureConfig{
+        .mapFormat = MapFormat::Doom3_Valve,
+        .gameInfo = detail::makeGameInfoFixture(Doom3BFGGameInfo.gameConfig, env.dir()),
+      });
+      auto& otherLibrary = otherMap.prefabLibrary();
+
+      // the first file is read at once, so that its future is ready and not taken over;
+      // the next two block both workers
+      otherLibrary.setReadHookForTesting([state](const auto&) {
+        if (state->calls++ == 0)
+        {
+          return;
+        }
+        ++state->blocked;
+        const auto deadline = std::chrono::steady_clock::now() + 10s;
+        while (!state->release && std::chrono::steady_clock::now() < deadline)
+        {
+          std::this_thread::sleep_for(1ms);
+        }
+      });
+
+      otherLibrary.rescan();
+      const auto deadline = std::chrono::steady_clock::now() + 10s;
+      while (state->blocked < 2 && std::chrono::steady_clock::now() < deadline)
+      {
+        otherLibrary.processPendingResults();
+        std::this_thread::sleep_for(1ms);
+      }
+      REQUIRE(state->blocked == 2);
+      CHECK(otherLibrary.scanning());
+
+      // released while the map is destroyed, which joins the workers
+      releaser = std::thread{[state]() {
+        std::this_thread::sleep_for(50ms);
+        state->release = true;
+      }};
+    }
+    releaser.join();
+
+    // the fourth file, queued when the map went, was abandoned without being read
+    CHECK(state->calls == 3);
   }
 }
 
