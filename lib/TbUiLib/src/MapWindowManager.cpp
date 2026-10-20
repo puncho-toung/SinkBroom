@@ -117,9 +117,11 @@ Result<void> MapWindowManager::loadDocument(
   const vm::bbox3d& worldBounds,
   std::filesystem::path path)
 {
-  // R8-app-4: a file that a window has open, a prefab editor too, is not opened twice;
-  // that window comes to the front
-  if (auto* mapWindow = findMapWindow(absoluteNormalPath(path)))
+  // R8-app-4: a file that another window has open, a prefab editor too, is not opened
+  // twice; that window comes to the front. The single window opening its own file again
+  // reloads it after its unsaved-changes prompt, as it always did (H-F8-6).
+  if (auto* mapWindow = findMapWindow(absoluteNormalPath(path));
+      mapWindow && (shouldCreateWindowForDocument() || mapWindow != documentWindow()))
   {
     moveToTop(*mapWindow);
     showMapWindow(*mapWindow);
