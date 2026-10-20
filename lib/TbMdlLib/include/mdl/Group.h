@@ -62,8 +62,9 @@ public:
   void setPrefabPath(std::optional<std::string> prefabPath);
 
   /**
-   * The content hash (lower-case hex of a 64-bit FNV-1a, see fnv1a64Hex) of the prefab
-   * file at the time this group was placed or refreshed. Serialised as _tb_prefab_hash.
+   * The content hash (lower-case hex of a 64-bit FNV-1a over the text with its line
+   * endings folded to "\n", see fnv1a64HexNormalizedLineEndings) of the prefab file at
+   * the time this group was placed or refreshed. Serialised as _tb_prefab_hash.
    */
   const std::optional<std::string>& prefabHash() const;
   void setPrefabHash(std::optional<std::string> prefabHash);

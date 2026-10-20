@@ -169,14 +169,23 @@ void clearExternalLinks(
   }
 }
 
+/**
+ * Adds every default of the entity's definition that the entity lacks, except for origin,
+ * which is where the entity is and which a brush entity may lack on purpose, and the link
+ * keys, whose default names an entity the prefab does not hold.
+ */
 void addDefinitionDefaults(EntityNode& entityNode)
 {
   if (const auto* definition = entityNode.entity().definition())
   {
+    const auto linkSourceDefinitions = getLinkSourcePropertyDefinitions(definition);
     auto entity = entityNode.entity();
     for (const auto& propertyDefinition : definition->propertyDefinitions)
     {
-      if (!entity.hasProperty(propertyDefinition.key))
+      if (
+        !entity.hasProperty(propertyDefinition.key)
+        && propertyDefinition.key != EntityPropertyKeys::Origin
+        && !isPrefabLinkKey(linkSourceDefinitions, propertyDefinition.key))
       {
         if (
           const auto defaultValue = PropertyDefinition::defaultValue(propertyDefinition))
@@ -339,13 +348,21 @@ std::string sanitizeFileName(const std::string& name)
   return result;
 }
 
+// the path as UTF-8, whatever the process's code page is
+std::string toUtf8String(const std::filesystem::path& path)
+{
+  const auto str = path.u8string();
+  return std::string{str.begin(), str.end()};
+}
+
 /**
- * The category as a folder relative to the root, or nullopt if it is not a folder
- * inside the root: an absolute path or a drive would replace the root, ".." would leave
- * it.
+ * The category as a folder relative to the root, each folder name made one that every
+ * platform can hold by sanitizeFileName (R8-file-5): Windows drops a trailing dot or
+ * space, so "lights." would be written to "lights". An error if it is not a folder inside
+ * the root (an absolute path or a drive would replace the root, ".." would leave it), or
+ * if a folder name has no character left.
  */
-std::optional<std::filesystem::path> normalizeCategory(
-  const std::filesystem::path& category)
+Result<std::filesystem::path> normalizeCategory(const std::filesystem::path& category)
 {
   const auto normalized = category.lexically_normal();
   if (
@@ -353,9 +370,28 @@ std::optional<std::filesystem::path> normalizeCategory(
     || std::ranges::any_of(
       normalized, [](const auto& element) { return element == ".."; }))
   {
-    return std::nullopt;
+    return Error{
+      fmt::format("Prefab category {} must be a folder inside the library", category)};
   }
-  return normalized == "." ? std::filesystem::path{} : normalized;
+
+  auto result = std::filesystem::path{};
+  for (const auto& element : normalized)
+  {
+    // a trailing separator is an empty element, and "." stands for the root itself
+    if (element.empty() || element == ".")
+    {
+      continue;
+    }
+
+    const auto folderName = sanitizeFileName(toUtf8String(element));
+    if (folderName.empty())
+    {
+      return Error{fmt::format(
+        "Prefab category {} holds a folder name that no platform can hold", category)};
+    }
+    result /= std::filesystem::path{std::u8string{folderName.begin(), folderName.end()}};
+  }
+  return result;
 }
 
 std::string localTimestamp()
@@ -539,13 +575,14 @@ Result<std::filesystem::path> writePrefab(
 
   for (auto* entityNode : collectEntityNodes(body))
   {
-    if (options.clearExternalLinks)
-    {
-      clearExternalLinks(*entityNode, namesInSelection);
-    }
+    // first, so that a default never brings back a link that is cleared
     if (options.includeDefaults)
     {
       addDefinitionDefaults(*entityNode);
+    }
+    if (options.clearExternalLinks)
+    {
+      clearExternalLinks(*entityNode, namesInSelection);
     }
     if (kind == PrefabKind::Entity)
     {
@@ -684,25 +721,25 @@ Result<std::filesystem::path> prefabFilePath(
     return Error{"Cannot save a prefab without a name"};
   }
 
-  const auto category = normalizeCategory(options.category);
-  if (!category)
-  {
-    return Error{fmt::format(
-      "Prefab category {} must be a folder inside the library", options.category)};
-  }
-
-  const auto rootPath = library.writeRootFor(options.root);
-  if (rootPath.empty())
-  {
-    return Error{
-      library.writeRoot()
-        ? (options.root == PrefabRoot::User
-             ? "Cannot save a prefab to the user library: the Prefab Path is not set"
-             : "Cannot save a prefab to the mod library: the Prefab Path replaces it")
-        : "Cannot save a prefab: set a game path or a Prefab Path first"};
-  }
-
-  return rootPath / *category / (fileName + ".map");
+  return normalizeCategory(options.category)
+         | kdl::and_then([&](const auto& category) -> Result<std::filesystem::path> {
+             // R8-file-6: unset, the root is the one the library scans (DD-32)
+             const auto root = options.root ? options.root : library.writeRoot();
+             const auto rootPath =
+               root ? library.writeRootFor(*root) : std::filesystem::path{};
+             if (rootPath.empty())
+             {
+               return Error{
+                 !library.writeRoot()
+                   ? "Cannot save a prefab: set a game path or a Prefab Path first"
+                 : root == PrefabRoot::User
+                   ? "Cannot save a prefab to the user library: the Prefab Path is not "
+                     "set"
+                   : "Cannot save a prefab to the mod library: the Prefab Path replaces "
+                     "it"};
+             }
+             return rootPath / category / (fileName + ".map");
+           });
 }
 
 Result<std::filesystem::path> savePrefab(

@@ -426,8 +426,6 @@ mdl::SavePrefabOptions SavePrefabDialog::options() const
   options.category = pathFromQString(m_categoryChoice->currentText().trimmed());
   options.tags = splitTags(m_tagsEdit->text());
   options.description = m_descriptionEdit->toPlainText().toStdString();
-  options.root =
-    m_document.map().prefabLibrary().writeRoot().value_or(mdl::PrefabRoot::User);
   options.forceAssembly = m_singleEntity && m_forceAssemblyCheck->isChecked();
   options.clearExternalLinks = m_clearLinksCheck->isChecked();
   options.includeDefaults = m_includeDefaultsCheck->isChecked();

@@ -107,6 +107,16 @@ void setDefinitions(Map& map)
      {
        PropertyDefinition{"name", PropertyValueTypes::LinkTarget{}, "", ""},
      }},
+    // types its link key and its origin with defaults, as some FGDs do
+    {"trigger_relay",
+     Color{},
+     "",
+     {
+       PropertyDefinition{"name", PropertyValueTypes::LinkTarget{}, "", ""},
+       PropertyDefinition{"target", PropertyValueTypes::String{"t_default"}, "", ""},
+       PropertyDefinition{"origin", PropertyValueTypes::Origin{"8 8 8"}, "", ""},
+       PropertyDefinition{"wait", PropertyValueTypes::String{"1"}, "", ""},
+     }},
   });
 }
 
@@ -211,6 +221,25 @@ TEST_CASE("PrefabFile")
     CHECK(filePath("Light", "C:lights").is_error());
 #endif
 
+    // R8-file-5: each folder name follows the file name rule, so that the path is the one
+    // that the file system writes
+    CHECK(
+      (filePath("Light", "lights.") | kdl::value()) == userRoot / "lights" / "Light.map");
+    CHECK(
+      (filePath("Light", "a /b") | kdl::value()) == userRoot / "a" / "b" / "Light.map");
+    CHECK((filePath("Light", "con") | kdl::value()) == userRoot / "con_" / "Light.map");
+    CHECK(
+      (filePath("Light", "a*b/ c ") | kdl::value())
+      == userRoot / "a_b" / "c" / "Light.map");
+    CHECK(filePath("Light", "lights/...").is_error());
+    CHECK(filePath("Light", "lights/ /deeper").is_error());
+
+    // R8-file-6: an unset root is the library's root
+    const auto unsetFilePath = [&]() {
+      return prefabFilePath(library, SavePrefabOptions{.name = "Light"});
+    };
+    CHECK((unsetFilePath() | kdl::value()) == userRoot / "Light.map");
+
     // DD-32: the Prefab Path replaces the mod root, which comes back when it is cleared
     const auto modFilePath = [&]() {
       return prefabFilePath(
@@ -223,6 +252,9 @@ TEST_CASE("PrefabFile")
     CHECK(filePath("Light").is_error());
     CHECK(
       (modFilePath() | kdl::value())
+      == env.dir() / "base" / "maps" / "prefabs" / "Light.map");
+    CHECK(
+      (unsetFilePath() | kdl::value())
       == env.dir() / "base" / "maps" / "prefabs" / "Light.map");
   }
 
@@ -461,6 +493,43 @@ TEST_CASE("PrefabFile")
       CHECK(property(*bodyNode, "light_radius") == "300 300 300");
       // own keys win over defaults
       CHECK(property(*bodyNode, "_color") == "1 0 0");
+    }
+
+    SECTION("Definition defaults never add origin or a link key")
+    {
+      // a cleared link stays cleared, and no default names an entity outside the prefab
+      auto* relayNode = createEntity(
+        {{"classname", "trigger_relay"}, {"origin", "0 0 0"}, {"target", "outside"}});
+      auto* quietNode = createEntity({{"classname", "trigger_relay"}});
+      quietNode->addChild(createBrushAt(map, {128, 0, 0}));
+      addNodes(map, {{&parentForNodes(map), {relayNode, quietNode}}});
+
+      const auto saveWithDefaults = [&](Node* node, std::string name) {
+        const auto path = savePrefab(
+                            map,
+                            {node},
+                            SavePrefabOptions{
+                              .name = std::move(name),
+                              .includeDefaults = true,
+                            })
+                          | kdl::value();
+        auto worldNode = readPrefab(map, savedFile(path));
+        const auto* bodyNode =
+          dynamic_cast<const EntityNode*>(worldNode->defaultLayer()->children().front());
+        REQUIRE(bodyNode);
+        return std::pair{std::move(worldNode), bodyNode};
+      };
+
+      const auto [relayWorldNode, relayBodyNode] = saveWithDefaults(relayNode, "Relay");
+      CHECK(property(*relayBodyNode, "target") == "<missing>");
+      CHECK(property(*relayBodyNode, "origin") == "0 0 0");
+      CHECK(property(*relayBodyNode, "wait") == "1");
+
+      // a brush entity without an origin key gets none
+      const auto [quietWorldNode, quietBodyNode] = saveWithDefaults(quietNode, "Quiet");
+      CHECK(property(*quietBodyNode, "target") == "<missing>");
+      CHECK(property(*quietBodyNode, "origin") == "<missing>");
+      CHECK(property(*quietBodyNode, "wait") == "1");
     }
 
     SECTION("Overwrite an existing file")
@@ -738,8 +807,16 @@ TEST_CASE("PrefabFile")
             map, {lightNode}, SavePrefabOptions{.name = "Light", .category = "../out"})
             .is_error());
 
+    // without a Prefab Path, an unset root is the mod root (R8-file-6), and the user
+    // root cannot be written
     map.prefabLibrary().setUserRoot({});
-    CHECK(savePrefab(map, {lightNode}, SavePrefabOptions{.name = "Light"}).is_error());
+    CHECK(
+      savePrefab(
+        map, {lightNode}, SavePrefabOptions{.name = "Light", .root = PrefabRoot::User})
+        .is_error());
+    CHECK(
+      (savePrefab(map, {lightNode}, SavePrefabOptions{.name = "Light"}) | kdl::value())
+      == env.dir() / "base" / "maps" / "prefabs" / "Light.map");
   }
 
   SECTION("readPrefabMetadata")

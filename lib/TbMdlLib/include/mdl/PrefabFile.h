@@ -25,6 +25,7 @@
 #include "vm/vec.h"
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -103,12 +104,15 @@ struct SavePrefabOptions
   std::vector<std::string> tags;
   // folded by foldPrefabDescription when written; not written when that is empty
   std::string description;
-  PrefabRoot root = PrefabRoot::User;
+  // the root to write to; unset, the library's root (PrefabLibrary::writeRoot), which is
+  // what a caller wants unless it names a root on purpose (R8-file-6)
+  std::optional<PrefabRoot> root;
   // "Save as assembly anyway"
   bool forceAssembly = false;
   // remove link keys whose value names an entity outside the selection
   bool clearExternalLinks = true;
-  // write every definition default the entity lacks as an own key
+  // write every definition default the entity lacks as an own key, except for origin and
+  // the link keys (see isPrefabLinkKey); added before external links are cleared
   bool includeDefaults = false;
 };
 
@@ -163,13 +167,16 @@ std::vector<ExternalLink> findExternalLinks(const std::vector<Node*>& selectedNo
 
 /**
  * The file that savePrefab writes for the given options:
- * writeRootFor(options.root) / options.category / <options.name>.map, where the name is
- * made a file name that every platform can hold (invalid characters replaced, trailing
- * dots and spaces removed, a reserved device name such as CON or NUL suffixed with '_').
+ * writeRootFor(root) / options.category / <options.name>.map, where root is options.root
+ * if it is set, else the library's writeRoot(), and where the name is made a file name
+ * that every platform can hold (invalid characters replaced, leading and trailing spaces
+ * and trailing dots removed, a reserved device name such as CON or NUL suffixed with
+ * '_'). Every folder name of the category goes through the same rule (R8-file-5), so
+ * that the path returned is the path that the file system writes.
  *
- * Returns an error if no character of the name is left, if the category is not a folder
- * inside the root (it has a root name or a root directory, or leaves the root through
- * ".."), or if the root is not available.
+ * Returns an error if no character of the name or of a folder name is left, if the
+ * category is not a folder inside the root (it has a root name or a root directory, or
+ * leaves the root through ".."), or if the root is not available.
  */
 Result<std::filesystem::path> prefabFilePath(
   const PrefabLibrary& library, const SavePrefabOptions& options);
