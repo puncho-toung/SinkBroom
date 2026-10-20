@@ -22,11 +22,9 @@
 #include "ui/Tool.h"
 
 #include "vm/bbox.h"
-#include "vm/plane.h"
 #include "vm/ray.h"
 #include "vm/vec.h"
 
-#include <optional>
 #include <string>
 
 namespace tb
@@ -56,8 +54,6 @@ private:
   // the added entity or group; not null while a placement is in progress
   mdl::Node* m_prefabNode = nullptr;
   vm::bbox3d m_referenceBounds;
-  // the plane of the first face hit in 3D that does not belong to the prefab
-  std::optional<vm::plane3d> m_placementPlane;
   // false in a prefab editor window: a prefab holds no placements of prefabs (DD-29)
   bool m_placementEnabled = true;
 

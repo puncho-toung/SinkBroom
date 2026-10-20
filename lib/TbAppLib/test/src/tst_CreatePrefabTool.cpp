@@ -461,8 +461,11 @@ TEST_CASE("CreatePrefabTool")
       CHECK(defaultLayerChildren.size() == childrenBefore.size() + 1u);
     }
 
-    SECTION("The same relative path in the other root is another prefab")
+    SECTION("A placement made under the other root is found by its relative path")
     {
+      // DD-37: the user root replaces the mod root in the library (DD-32); the placement
+      // recorded as mod/props/crate.map names the user root's props/crate.map now, so a
+      // second drop is a linked duplicate of it and not a second link set
       library.setUserRoot(env.dir() / "user");
       REQUIRE(
         mdl::savePrefab(
@@ -474,17 +477,18 @@ TEST_CASE("CreatePrefabTool")
       library.rescan();
       waitForScan(library);
 
-      // the user root replaces the mod root in the library (DD-32), but not in the map
       REQUIRE(library.find(mdl::PrefabRoot::Mod, "props/crate.map") == nullptr);
       const auto* userCrateEntry = library.find(mdl::PrefabRoot::User, "props/crate.map");
       REQUIRE(userCrateEntry != nullptr);
+      REQUIRE(library.entryForPrefabPath("mod/props/crate.map") == userCrateEntry);
 
       REQUIRE(tool.createPrefab(library.payloadFor(*userCrateEntry)));
       auto* userGroupNode = dynamic_cast<mdl::GroupNode*>(map.selection().nodes.front());
       REQUIRE(userGroupNode != nullptr);
       CHECK(userGroupNode != groupNode);
-      CHECK(userGroupNode->linkId() != groupNode->linkId());
-      CHECK(userGroupNode->group().prefabPath() == "user/props/crate.map");
+      CHECK(userGroupNode->linkId() == groupNode->linkId());
+      // a linked duplicate keeps the path of the group that it copies
+      CHECK(userGroupNode->group().prefabPath() == "mod/props/crate.map");
       tool.commit();
     }
   }

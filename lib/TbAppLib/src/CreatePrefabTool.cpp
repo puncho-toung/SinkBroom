@@ -54,6 +54,9 @@
 #include "kd/ranges/to.h"
 #include "kd/vector_utils.h"
 
+#include "vm/plane.h"
+
+#include <optional>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -71,12 +74,17 @@ const auto TransactionName = std::string{"Place Prefab"};
 constexpr auto PayloadPrefix = std::string_view{"prefab:"};
 
 /**
- * Returns the first group, in the order of the world, that was placed from the prefab
- * file with the given path and of which a linked duplicate can be added under the given
- * parent, that is, neither the parent nor one of its ancestors is in its link set.
+ * Returns the first group, in the order of the world, that was placed from the given
+ * entry and of which a linked duplicate can be added under the given parent, that is,
+ * neither the parent nor one of its ancestors is in its link set. A group's prefab path
+ * names the entry if the library resolves it to that entry (DD-37), whatever its root
+ * qualifier and, on Windows, the case of its relative path.
  */
 mdl::GroupNode* findPlacedAssembly(
-  mdl::WorldNode& worldNode, const std::string& prefabPath, const mdl::Node& parent)
+  mdl::WorldNode& worldNode,
+  const mdl::PrefabLibrary& library,
+  const mdl::PrefabEntry& entry,
+  const mdl::Node& parent)
 {
   auto parentLinkIds = std::vector<std::string>{};
   for (const auto* node = &parent; node != nullptr; node = node->parent())
@@ -96,9 +104,9 @@ mdl::GroupNode* findPlacedAssembly(
       {
         return;
       }
-      if (
-        node.group().prefabPath() == prefabPath
-        && !kdl::ranges::contains(parentLinkIds, node.linkId()))
+      if (const auto& prefabPath = node.group().prefabPath();
+          prefabPath && library.entryForPrefabPath(*prefabPath) == &entry
+          && !kdl::ranges::contains(parentLinkIds, node.linkId()))
       {
         result = &node;
         return;
@@ -183,7 +191,7 @@ bool CreatePrefabTool::createPrefab(const std::string& payload)
 
   // a second placement of an assembly is a linked duplicate of the first
   auto* placedGroupNode = kind == mdl::PrefabKind::Assembly
-                            ? findPlacedAssembly(map.worldNode(), prefabPath, parent)
+                            ? findPlacedAssembly(map.worldNode(), library, *entry, parent)
                             : nullptr;
 
   // The clones are ours until addNodes takes them: first in clones, then, once
@@ -200,6 +208,12 @@ bool CreatePrefabTool::createPrefab(const std::string& payload)
     if (!placedGroupNode)
     {
       clones = library.cloneBody(*entry, map.worldBounds());
+      if (clones.empty() && !entry->world)
+      {
+        // DD-19: cloneBody read the file again and has said why it returned nothing,
+        // the file changed since it was scanned or failed to read
+        return false;
+      }
       if (!isWellFormedBody(clones, kind))
       {
         map.logger().warn() << "Cannot place prefab '" << prefabPath
@@ -222,7 +236,6 @@ bool CreatePrefabTool::createPrefab(const std::string& payload)
     }
 
     m_referenceBounds = map.referenceBounds();
-    m_placementPlane = std::nullopt;
 
     map.startTransaction(TransactionName, mdl::TransactionScope::LongRunning);
     transactionStarted = true;
@@ -339,34 +352,33 @@ void CreatePrefabTool::updatePrefabPosition3D(
   const auto& grid = map.grid();
   const auto bounds = m_prefabNode->logicalBounds();
 
-  if (!m_placementPlane)
+  // R8-app-1: the face under the cursor on every move, as the entity tool does, so that
+  // the prefab follows the cursor from one face to the next; the prefab's own faces are
+  // in the pick result too, so the first face behind them (all() without a filter copies
+  // nothing, which matters on every mouse move)
+  auto placementPlane = std::optional<vm::plane3d>{};
+  for (const auto& hit : pickResult.all())
   {
-    // the prefab's own faces are in the pick result too; skip them and lock the plane to
-    // the first face behind them (all() without a filter copies nothing, which matters
-    // on every mouse move until a plane is locked)
-    for (const auto& hit : pickResult.all())
+    if (!hit.hasType(mdl::BrushNode::BrushHitType))
     {
-      if (!hit.hasType(mdl::BrushNode::BrushHitType))
+      continue;
+    }
+    if (const auto faceHandle = mdl::hitToFaceHandle(hit))
+    {
+      if (isPrefabNode(*faceHandle->node()))
       {
         continue;
       }
-      if (const auto faceHandle = mdl::hitToFaceHandle(hit))
-      {
-        if (isPrefabNode(*faceHandle->node()))
-        {
-          continue;
-        }
 
-        m_placementPlane = faceHandle->face().boundary();
-        break;
-      }
+      placementPlane = faceHandle->face().boundary();
+      break;
     }
   }
 
-  if (m_placementPlane)
+  if (placementPlane)
   {
     updateCreatedPrefab(
-      grid.moveDeltaForBounds(*m_placementPlane, bounds, map.worldBounds(), pickRay));
+      grid.moveDeltaForBounds(*placementPlane, bounds, map.worldBounds(), pickRay));
   }
   else
   {
@@ -381,9 +393,15 @@ void CreatePrefabTool::commit()
 {
   contract_pre(placing());
 
-  m_document.map().commitTransaction();
+  auto& map = m_document.map();
   m_prefabNode = nullptr;
-  m_placementPlane = std::nullopt;
+  if (!map.commitTransaction())
+  {
+    // the map cancelled the transaction, for example because two members of one link
+    // set changed, so the placement is gone
+    map.logger().warn()
+      << "Could not place the prefab: its change could not be committed";
+  }
 }
 
 void CreatePrefabTool::cancel()
@@ -392,7 +410,6 @@ void CreatePrefabTool::cancel()
 
   m_document.map().cancelTransaction();
   m_prefabNode = nullptr;
-  m_placementPlane = std::nullopt;
 }
 
 bool CreatePrefabTool::isPrefabNode(const mdl::Node& node) const
