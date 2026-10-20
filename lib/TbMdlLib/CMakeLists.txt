@@ -24,6 +24,7 @@ target_sources(TbMdlLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CompilationConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CompilationProfile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CompilationTask.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ContentHash.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CurrentGroupCommand.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DecalDefinition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DefParser.cpp
@@ -168,6 +169,9 @@ target_sources(TbMdlLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PointTrace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Polyhedron_Instantiation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PortalFile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/PrefabFile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/PrefabLibrary.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/PrefabRefresh.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PropertyDefinition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PropertyKeyWithDoubleQuotationMarksValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PropertyValueWithDoubleQuotationMarksValidator.cpp

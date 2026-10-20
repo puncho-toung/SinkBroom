@@ -23,21 +23,25 @@
 #include <QMainWindow>
 #include <QPointer>
 #include <QString>
+#include <QVariant>
 
 #include "base/NotifierConnection.h"
 #include "mdl/ExportOptions.h"
 
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 class QAction;
 class QComboBox;
 class QDropEvent;
+class QImage;
 class QMenuBar;
 class QLabel;
 class QTimer;
@@ -88,9 +92,24 @@ class ToolSidebar;
 class MapWindow : public QMainWindow
 {
   Q_OBJECT
+public:
+  // grabs the picture that a prefab editor saves as the prefab's thumbnail; see
+  // setThumbnailGrabberForTesting
+  using ThumbnailGrabber = std::function<QImage()>;
+
 private:
   AppController& m_appController;
   std::unique_ptr<MapDocument> m_document;
+
+  // the window edits a prefab file (PF3): see isPrefabEditor
+  bool m_prefabEditor = false;
+  // replaces grabThumbnail, if set
+  ThumbnailGrabber m_thumbnailGrabber;
+  // the file that a prefab editor saved last, until its thumbnail is written
+  std::optional<std::filesystem::path> m_pendingPrefabSavePath;
+  // DD-38: the save that a prefab editor is about to make, or made last, writes the
+  // thumbnail: it saves a modified document, or saves it under another name
+  bool m_prefabSaveWritesThumbnail = false;
 
   std::chrono::time_point<std::chrono::system_clock> m_lastInputTime;
   QTimer* m_autosaveTimer = nullptr;
@@ -156,8 +175,21 @@ private:
   SignalDelayer* m_updateStatusBarSignalDelayer = nullptr;
 
 public:
-  MapWindow(AppController& appController, std::unique_ptr<MapDocument> document);
+  /**
+   * A prefab editor is a window on a prefab file, opened from another window's prefab
+   * library by MapWindowManager::openPrefabEditor (PF3). It cannot compile or launch its
+   * map, says [Prefab] in its title, writes the prefab's thumbnail beside the file when
+   * the file is saved, and tells the prefab libraries of the other windows. It does not
+   * autosave, since the backups would land in the library's folders, and keeps its
+   * layout apart from the map windows' layout.
+   */
+  MapWindow(
+    AppController& appController,
+    std::unique_ptr<MapDocument> document,
+    bool prefabEditor = false);
   ~MapWindow() override;
+
+  bool isPrefabEditor() const;
 
   void positionOnScreen(QWidget* reference);
 
@@ -275,8 +307,14 @@ public:
   bool exportDocumentAsMap();
   bool exportDocument(const mdl::ExportOptions& options);
 
-private:
+  /**
+   * Offers to save the document's changes, if it has any; returns false if the user
+   * cancels. MapWindowManager asks before New or Open replace the document of a window
+   * behind a prefab editor (R1-pf3-4).
+   */
   bool confirmOrDiscardChanges();
+
+private:
   bool confirmRevertDocument();
 
 public:
@@ -324,6 +362,25 @@ public:
 
   void deleteSelection();
   bool canDeleteSelection() const;
+
+  void saveSelectionAsPrefab();
+  bool canSaveSelectionAsPrefab() const;
+  /**
+   * Opens the given prefab file in a prefab editor beside this window, or brings the
+   * editor that has it open to the front.
+   */
+  void editPrefab(const std::filesystem::path& path);
+  /**
+   * Reads the given prefab file, which a prefab editor has just saved, into the prefab
+   * library of this window's document.
+   */
+  void prefabWasSaved(const std::filesystem::path& path);
+  /**
+   * Replaces the grab of the 3D view that a prefab editor saves as the thumbnail; a null
+   * image saves none. An empty function restores the grab. For tests, whose GL views
+   * draw nothing.
+   */
+  void setThumbnailGrabberForTesting(ThumbnailGrabber thumbnailGrabber);
 
   void selectAll();
   void selectSiblings();
@@ -445,6 +502,13 @@ public:
 
   void showLaunchEngineDialog();
 
+  /**
+   * Whether the map can be compiled or the engine launched on it: it has a file and the
+   * window is not a prefab editor.
+   */
+  bool canCompile() const;
+  bool canLaunch() const;
+
   bool canRevealMaterial() const;
   void revealMaterial();
 
@@ -468,8 +532,35 @@ private:
   void loadLastCompilationProfileName();
   void updateRerunAction();
 
-  bool canCompile() const;
-  bool canLaunch() const;
+  /**
+   * Brings the _tb_prefab_class key of a prefab editor's entity snapshot up to date
+   * before a save of a modified document, in a transaction of its own and only if the
+   * class has changed. Warns in the status bar and the log if the body of the prefab is
+   * no longer what its kind says: one entity for an entity snapshot, one group for an
+   * assembly (R8-app-2). The _tb_prefab_saved key keeps the time of the snapshot
+   * (DD-30).
+   */
+  void updatePrefabMetadata();
+  /**
+   * Says in the status bar and the log that the prefab's body does not fit its kind.
+   */
+  void warnMalformedPrefabBody(const QString& message);
+  /**
+   * Writes the thumbnail of the last save of a prefab editor if that save writes one
+   * (DD-38), and tells the other windows of the save, unless that is done.
+   */
+  void finishPrefabSave();
+  /**
+   * Writes the 3D view's picture beside the given file as its thumbnail, at most 256
+   * pixels on its longer side, marked as the editor's own by a PNG text key, or says in
+   * the status bar why it wrote none. An existing file without that mark is the user's
+   * and is kept (DD-38).
+   */
+  void writePrefabThumbnail(const std::filesystem::path& mapPath);
+  /**
+   * The 3D view's picture, or a null image if no 3D view can be seen.
+   */
+  QImage grabThumbnail();
 
 public: // drag and drop
   void dragEnterEvent(QDragEnterEvent* event) override;

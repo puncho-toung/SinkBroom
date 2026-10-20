@@ -40,6 +40,7 @@
 #include "kd/vector_utils.h"
 
 #include <algorithm>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -778,6 +779,37 @@ void resetLinkIds(const std::vector<GroupNode*>& groupNodes)
   }
 }
 
+void rekeyLinkIds(const std::vector<Node*>& roots)
+{
+  auto newLinkIds = std::unordered_map<std::string, std::string>{};
+  const auto rekey = [&](Object& object) {
+    const auto [it, inserted] = newLinkIds.try_emplace(object.linkId());
+    if (inserted)
+    {
+      it->second = generateUuid();
+    }
+    object.setLinkId(it->second);
+  };
+
+  Node::visitAll(
+    roots,
+    kdl::overload(
+      [](
+        auto&& thisLambda, WorldNode& worldNode) { worldNode.visitChildren(thisLambda); },
+      [](
+        auto&& thisLambda, LayerNode& layerNode) { layerNode.visitChildren(thisLambda); },
+      [&](auto&& thisLambda, GroupNode& groupNode) {
+        rekey(groupNode);
+        groupNode.visitChildren(thisLambda);
+      },
+      [&](auto&& thisLambda, EntityNode& entityNode) {
+        rekey(entityNode);
+        entityNode.visitChildren(thisLambda);
+      },
+      [&](BrushNode& brushNode) { rekey(brushNode); },
+      [&](PatchNode& patchNode) { rekey(patchNode); }));
+}
+
 Result<std::unordered_map<Node*, std::string>> copyAndReturnLinkIds(
   const GroupNode& sourceGroupNode, const std::vector<GroupNode*>& targetGroupNodes)
 {
@@ -810,13 +842,56 @@ std::vector<Error> copyAndSetLinkIdsBeforeAddingNodes(
       return lhs->linkId() == rhs->linkId();
     });
 
+  // One pass over the world counts the objects that carry each of the link IDs to add,
+  // rather than one pass per ID. The first object is the one with the lowest address,
+  // which is what collectNodesWithLinkId would put first.
+  struct ExistingLinkedNodes
+  {
+    size_t count = 0;
+    Node* first = nullptr;
+  };
+
+  auto existingLinkedNodesById = std::unordered_map<std::string, ExistingLinkedNodes>{};
+  for (const auto* groupNode : groupsToAdd)
+  {
+    existingLinkedNodesById.try_emplace(groupNode->linkId());
+  }
+
+  const auto countLinkId = [&](auto& node) {
+    if (const auto it = existingLinkedNodesById.find(node.linkId());
+        it != existingLinkedNodesById.end())
+    {
+      auto& existing = it->second;
+      ++existing.count;
+      if (!existing.first || std::less<const Node*>{}(&node, existing.first))
+      {
+        existing.first = &node;
+      }
+    }
+  };
+
+  worldNode.accept(kdl::overload(
+    [](auto&& thisLambda, WorldNode& node) { node.visitChildren(thisLambda); },
+    [](auto&& thisLambda, LayerNode& node) { node.visitChildren(thisLambda); },
+    [&](auto&& thisLambda, GroupNode& node) {
+      countLinkId(node);
+      node.visitChildren(thisLambda);
+    },
+    [&](auto&& thisLambda, EntityNode& node) {
+      countLinkId(node);
+      node.visitChildren(thisLambda);
+    },
+    [&](BrushNode& node) { countLinkId(node); },
+    [&](PatchNode& node) { countLinkId(node); }));
+
   auto errors = std::vector<Error>{};
   for (const auto& linkedGroupsToAdd : groupNodesByLinkId)
   {
-    const auto& linkId = linkedGroupsToAdd.front()->linkId();
-    const auto existingLinkedNodes = collectNodesWithLinkId({&worldNode}, linkId);
+    // the nodes to add are not in the world, so changing their IDs below changes no count
+    const auto& existingLinkedNodes =
+      existingLinkedNodesById.at(linkedGroupsToAdd.front()->linkId());
 
-    if (existingLinkedNodes.size() == 1)
+    if (existingLinkedNodes.count == 1)
     {
       // Unlink the added nodes because we don't want to create linked duplicates
       resetLinkIds({linkedGroupsToAdd.front()});
@@ -829,11 +904,10 @@ std::vector<Error> copyAndSetLinkIdsBeforeAddingNodes(
           std::vector(std::next(linkedGroupsToAdd.begin()), linkedGroupsToAdd.end()));
       }
     }
-    else if (existingLinkedNodes.size() > 1)
+    else if (existingLinkedNodes.count > 1)
     {
       // Keep the pasted nodes linked to their originals, but validate the structure
-      if (
-        auto* existingLinkedGroup = dynamic_cast<GroupNode*>(existingLinkedNodes.front()))
+      if (auto* existingLinkedGroup = dynamic_cast<GroupNode*>(existingLinkedNodes.first))
       {
         kdl::vec_append(
           errors,

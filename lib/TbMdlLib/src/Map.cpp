@@ -88,6 +88,7 @@
 #include "mdl/ObjSerializer.h"
 #include "mdl/PatchNode.h"
 #include "mdl/PointEntityWithBrushesValidator.h"
+#include "mdl/PrefabLibrary.h"
 #include "mdl/PropertyKeyWithDoubleQuotationMarksValidator.h"
 #include "mdl/PropertyValueWithDoubleQuotationMarksValidator.h"
 #include "mdl/PushSelection.h"
@@ -584,6 +585,7 @@ Map::Map(
   , m_commandProcessor{std::make_unique<CommandProcessor>(*this)}
   , m_path{std::move(path)}
   , m_selection{*this}
+  , m_prefabLibrary{std::make_unique<PrefabLibrary>(*this)}
 {
   m_nodeHandles.registerHandleType<VertexHandle>();
   m_nodeHandles.registerHandleType<ControlPointHandle>();
@@ -591,6 +593,7 @@ Map::Map(
   m_nodeHandles.registerHandleType<FaceHandle>();
 
   connectObservers();
+  m_prefabLibrary->connectObserversAfterMap();
 
   editorContext().setCurrentLayer(m_worldNode->defaultLayer());
 
@@ -705,6 +708,16 @@ EntityModelManager& Map::entityModelManager()
 const EntityModelManager& Map::entityModelManager() const
 {
   return *m_entityModelManager;
+}
+
+PrefabLibrary& Map::prefabLibrary()
+{
+  return *m_prefabLibrary;
+}
+
+const PrefabLibrary& Map::prefabLibrary() const
+{
+  return *m_prefabLibrary;
 }
 
 gl::MaterialManager& Map::materialManager()
@@ -887,18 +900,22 @@ Result<void> Map::saveTo(const std::filesystem::path& path) const
   const auto generator =
     fmt::format("TrenchBroom {} (Build {})", VERSION_STR, BUILD_ID_STR);
 
-  fs::Disk::withOutputStream(path, [&](auto& stream) {
-    writeMapHeader(
-      stream, gameInfo().gameConfig.name, m_worldNode->mapFormat(), generator);
+  // R1-pf3-6: a failed write is an error, so that saveAs keeps the old path and
+  // modification count and its callers report it
+  return fs::Disk::withOutputStream(
+           path,
+           [&](auto& stream) {
+             writeMapHeader(
+               stream, gameInfo().gameConfig.name, m_worldNode->mapFormat(), generator);
 
-    auto writer = NodeWriter{*m_worldNode, stream};
-    writer.setExporting(false);
-    writer.writeMap(m_taskManager);
-  }) | kdl::transform_error([&](const auto& e) {
-    m_logger.error() << "Could not save document: " << e.msg;
-  });
-
-  return Result<void>{};
+             auto writer = NodeWriter{*m_worldNode, stream};
+             writer.setExporting(false);
+             writer.writeMap(m_taskManager);
+           })
+         | kdl::or_else([&](auto e) {
+             m_logger.error() << "Could not save document: " << e.msg;
+             return Result<void>{std::move(e)};
+           });
 }
 
 Result<void> Map::exportAs(const ExportOptions& options) const
@@ -1664,6 +1681,11 @@ void Map::cancelTransaction()
   m_repeatStack->rollbackTransaction();
   m_commandProcessor->commitTransaction();
   m_repeatStack->commitTransaction();
+}
+
+bool Map::isTransactionActive() const
+{
+  return m_commandProcessor->isTransactionActive();
 }
 
 bool Map::isCurrentDocumentStateObservable() const

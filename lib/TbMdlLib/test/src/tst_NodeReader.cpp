@@ -21,14 +21,25 @@
 #include "mdl/BezierPatch.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
+#include "mdl/Entity.h"
+#include "mdl/EntityNode.h"
 #include "mdl/GroupNode.h"
+#include "mdl/LayerNode.h"
 #include "mdl/NodeReader.h"
+#include "mdl/NodeWriter.h"
 #include "mdl/ParallelUvCoordSystem.h"
 #include "mdl/ParaxialUvCoordSystem.h"
 #include "mdl/PatchNode.h"
 #include "mdl/SurfaceAttributes.h"
+#include "mdl/WorldNode.h"
 
 #include "kd/task_manager.h"
+#include "kd/vector_utils.h"
+
+#include "vm/mat_ext.h"
+
+#include <optional>
+#include <sstream>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -115,6 +126,107 @@ TEST_CASE("NodeReader")
 
     const auto brush = brushNode->brush();
     CHECK(brush.face(0).uvCoordSystem().is<ParaxialUvCoordSystem>());
+  }
+
+  SECTION("readGroupWithPrefabProperties")
+  {
+    SECTION("Both properties are read into the group")
+    {
+      const auto data = R"(// entity 0
+{
+"classname" "func_group"
+"_tb_type" "_tb_group"
+"_tb_name" "Crates"
+"_tb_id" "3"
+"_tb_linked_group_id" "group_link_id"
+"_tb_prefab" "props/crates/crate_stack.map"
+"_tb_prefab_hash" "af63dc4c8601ec8c"
+}
+)";
+
+      auto nodes =
+        NodeReader::read(data, MapFormat::Standard, worldBounds, {}, status, taskManager);
+      REQUIRE(nodes);
+      REQUIRE(nodes.value().size() == 1);
+
+      auto* groupNode = dynamic_cast<GroupNode*>(nodes.value().front());
+      REQUIRE(groupNode != nullptr);
+      CHECK(groupNode->group().prefabPath() == "props/crates/crate_stack.map");
+      CHECK(groupNode->group().prefabHash() == "af63dc4c8601ec8c");
+      CHECK(groupNode->linkId() == "group_link_id");
+
+      auto nodesToDelete = nodes.value();
+      kdl::vec_clear_and_delete(nodesToDelete);
+    }
+
+    SECTION("A group without the properties has none")
+    {
+      const auto data = R"(// entity 0
+{
+"classname" "func_group"
+"_tb_type" "_tb_group"
+"_tb_name" "Crates"
+"_tb_id" "3"
+"_tb_prefab" ""
+}
+)";
+
+      auto nodes =
+        NodeReader::read(data, MapFormat::Standard, worldBounds, {}, status, taskManager);
+      REQUIRE(nodes);
+      REQUIRE(nodes.value().size() == 1);
+
+      auto* groupNode = dynamic_cast<GroupNode*>(nodes.value().front());
+      REQUIRE(groupNode != nullptr);
+      CHECK(groupNode->group().prefabPath() == std::nullopt);
+      CHECK(groupNode->group().prefabHash() == std::nullopt);
+
+      auto nodesToDelete = nodes.value();
+      kdl::vec_clear_and_delete(nodesToDelete);
+    }
+
+    SECTION("Round trip through NodeWriter")
+    {
+      auto worldNode = WorldNode{{}, {}, MapFormat::Standard};
+
+      auto group = Group{"Crates"};
+      group.setPrefabPath("props/crates/crate_stack.map");
+      group.setPrefabHash("af63dc4c8601ec8c");
+      group.setTransformation(vm::translation_matrix(vm::vec3d{32, 0, 0}));
+
+      auto* groupNode = new GroupNode{std::move(group)};
+      groupNode->setLinkId("group_link_id");
+      auto* entityNode = new EntityNode{Entity{{{"classname", "light"}}}};
+      groupNode->addChild(entityNode);
+      worldNode.defaultLayer()->addChild(groupNode);
+
+      auto str = std::stringstream{};
+      auto writer = NodeWriter{worldNode, str};
+      writer.writeNodes({groupNode}, taskManager);
+
+      auto nodes = NodeReader::read(
+        str.str(), MapFormat::Standard, worldBounds, {}, status, taskManager);
+      REQUIRE(nodes);
+      REQUIRE(nodes.value().size() == 1);
+
+      auto* readGroupNode = dynamic_cast<GroupNode*>(nodes.value().front());
+      REQUIRE(readGroupNode != nullptr);
+      CHECK(readGroupNode->group() == groupNode->group());
+      CHECK(readGroupNode->linkId() == groupNode->linkId());
+
+      // the keys are consumed by the group, they do not reach the children
+      REQUIRE(readGroupNode->childCount() == 1u);
+      auto* readEntityNode = dynamic_cast<EntityNode*>(readGroupNode->children().front());
+      REQUIRE(readEntityNode != nullptr);
+      CHECK(
+        readEntityNode->entity().properties()
+        == groupNode->children().front()->accept(kdl::overload(
+          [](const EntityNode& e) { return e.entity().properties(); },
+          [](const Node&) { return std::vector<EntityProperty>{}; })));
+
+      auto nodesToDelete = nodes.value();
+      kdl::vec_clear_and_delete(nodesToDelete);
+    }
   }
 
   SECTION("reportsBrushErrorsWithLocation")

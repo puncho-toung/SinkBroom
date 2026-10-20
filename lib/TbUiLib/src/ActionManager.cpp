@@ -1120,6 +1120,17 @@ void ActionManager::createEditMenu()
     },
   }));
   editMenu.addSeparator();
+  editMenu.addItem(addAction(Action{
+    std::filesystem::path{"Menu/Edit/Save Selection as Prefab..."},
+    "Save Selection as Prefab...",
+    ActionContext::Any,
+    KeySequence{},
+    [](auto& context) { context.mapWindow().saveSelectionAsPrefab(); },
+    [](const auto& context) {
+      return context.hasDocument() && context.mapWindow().canSaveSelectionAsPrefab();
+    },
+  }));
+  editMenu.addSeparator();
 
   auto& transformMenu = editMenu.addMenu("Transform");
   transformMenu.addItem(addAction(Action{
@@ -2017,7 +2028,10 @@ void ActionManager::createRunMenu()
     ActionContext::Any,
     KeySequence{},
     [](auto& context) { context.mapWindow().showCompileDialog(); },
-    [](const auto& context) { return context.hasDocument(); },
+    [](const auto& context) {
+      // DD-26: for a map without a file too, as before PF3, but not in a prefab editor
+      return context.hasDocument() && !context.mapWindow().isPrefabEditor();
+    },
   }));
   runMenu.addItem(addAction(Action{
     "Menu/Run/Launch...",
@@ -2025,7 +2039,9 @@ void ActionManager::createRunMenu()
     ActionContext::Any,
     KeySequence{},
     [](auto& context) { context.mapWindow().showLaunchEngineDialog(); },
-    [](const auto& context) { return context.hasDocument(); },
+    [](const auto& context) {
+      return context.hasDocument() && !context.mapWindow().isPrefabEditor();
+    },
   }));
   runMenu.addSeparator();
   runMenu.addItem(
@@ -2036,7 +2052,8 @@ void ActionManager::createRunMenu()
       KeySequence{},
       [](auto& context) { context.mapWindow().rerunLastCompilation(); },
       [](const auto& context) {
-        return context.hasDocument() && context.mapWindow().hasLastCompilationProfile();
+        return context.hasDocument() && !context.mapWindow().isPrefabEditor()
+               && context.mapWindow().hasLastCompilationProfile();
       },
     }),
     MenuEntryType::Rerun);

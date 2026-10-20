@@ -40,6 +40,11 @@
 #include "mdl/TestUtils.h"
 #include "mdl/WorldNode.h"
 
+#include <algorithm>
+#include <optional>
+#include <string>
+#include <vector>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
@@ -276,6 +281,101 @@ TEST_CASE("Map_CopyPaste")
 ( 32 32 32 ) ( 33 32 32 ) ( 32 32 33 ) some_material 0 0 0 1 1
 ( 32 32 32 ) ( 32 32 33 ) ( 32 33 32 ) some_material 0 0 0 1 1
 )");
+    }
+  }
+
+  SECTION("prepareNodesForAdding")
+  {
+    auto& map = fixture.create();
+
+    auto* brushNode = createBrushNode(map);
+    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+    selectNodes(map, {brushNode});
+
+    auto* groupNode = groupSelectedNodes(map, "test");
+    REQUIRE(groupNode != nullptr);
+    REQUIRE(groupNode->persistentId().has_value());
+    deselectAll(map);
+
+    const auto groupLinkId = groupNode->linkId();
+    const auto brushLinkId = brushNode->linkId();
+
+    // nodes as NodeReader returns them: the worldspawn of the text becomes a layer, here
+    // with a brush and a copy of the group that carries the group's persistent ID and
+    // link IDs
+    auto* layerNodeToAdd = new LayerNode{Layer{"worldspawn"}};
+    auto* worldBrushNode = createBrushNode(map);
+    auto* groupNodeCopy =
+      static_cast<GroupNode*>(groupNode->cloneRecursively(map.worldBounds()));
+    groupNodeCopy->setPersistentId(*groupNode->persistentId());
+    layerNodeToAdd->addChildren({worldBrushNode, groupNodeCopy});
+
+    REQUIRE(groupNodeCopy->linkId() == groupLinkId);
+
+    SECTION("The layer is dissolved and the paste rules apply")
+    {
+      const auto nodesToAdd = prepareNodesForAdding(map, {layerNodeToAdd});
+
+      REQUIRE(nodesToAdd.size() == 1u);
+      const auto& [parent, nodes] = *nodesToAdd.begin();
+      CHECK(parent == &parentForNodes(map));
+      CHECK(nodes == std::vector<Node*>{worldBrushNode, groupNodeCopy});
+      CHECK(worldBrushNode->parent() == nullptr);
+      CHECK(groupNodeCopy->parent() == nullptr);
+
+      // the persistent ID is taken, so it is reset
+      CHECK(groupNodeCopy->persistentId() == std::nullopt);
+
+      // the link ID exists once in the map, so the copy is unlinked
+      CHECK(groupNodeCopy->linkId() != groupLinkId);
+      const auto* brushNodeCopy =
+        dynamic_cast<const BrushNode*>(groupNodeCopy->children().front());
+      REQUIRE(brushNodeCopy != nullptr);
+      CHECK(brushNodeCopy->linkId() != brushLinkId);
+
+      CHECK(addNodes(map, nodesToAdd).size() == 2u);
+      CHECK(map.worldNode().defaultLayer()->childCount() == 3u);
+    }
+
+    SECTION("A world is dissolved with all of its layers")
+    {
+      // nodes as WorldReader returns them
+      auto* worldNodeToAdd = new WorldNode{{}, {}, map.worldNode().mapFormat()};
+      auto* defaultLayerBrushNode = createBrushNode(map);
+      worldNodeToAdd->defaultLayer()->addChild(defaultLayerBrushNode);
+
+      auto* customLayerNode = new LayerNode{Layer{"custom"}};
+      auto* customLayerEntityNode = new EntityNode{Entity{}};
+      customLayerNode->addChild(customLayerEntityNode);
+      worldNodeToAdd->addChild(customLayerNode);
+
+      const auto nodesToAdd =
+        prepareNodesForAdding(map, {worldNodeToAdd, layerNodeToAdd});
+
+      REQUIRE(nodesToAdd.size() == 1u);
+      const auto& [parent, nodes] = *nodesToAdd.begin();
+      CHECK(parent == &parentForNodes(map));
+      CHECK(
+        nodes
+        == std::vector<Node*>{
+          defaultLayerBrushNode, customLayerEntityNode, worldBrushNode, groupNodeCopy});
+      CHECK(std::ranges::all_of(nodes, [](const auto* node) { return !node->parent(); }));
+
+      CHECK(addNodes(map, nodesToAdd).size() == 4u);
+    }
+
+    SECTION("A link ID that is not in the map is kept")
+    {
+      selectNodes(map, {groupNode});
+      removeSelectedNodes(map);
+
+      const auto nodesToAdd = prepareNodesForAdding(map, {layerNodeToAdd});
+      REQUIRE(nodesToAdd.size() == 1u);
+
+      CHECK(groupNodeCopy->linkId() == groupLinkId);
+      CHECK(groupNodeCopy->persistentId().has_value());
+
+      CHECK(addNodes(map, nodesToAdd).size() == 2u);
     }
   }
 

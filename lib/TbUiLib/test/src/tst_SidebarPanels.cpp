@@ -43,13 +43,14 @@ TEST_CASE("SidebarPanels")
     // the inspectors come first, in the order of the old inspector's pages, then the
     // console and the issue browser in the order of the old info panel's pages, which is
     // the order of their tabs
-    REQUIRE(panels.size() >= 6);
+    REQUIRE(panels.size() >= 7);
     CHECK(panels[0]->panelId() == "MapInspector");
     CHECK(panels[1]->panelId() == "EntityInspector");
     CHECK(panels[2]->panelId() == "FaceInspector");
     CHECK(panels[3]->panelId() == "Console");
     CHECK(panels[4]->panelId() == "Issues");
     CHECK(panels[5]->panelId() == "LightEditor");
+    CHECK(panels[6]->panelId() == "Prefabs");
   }
 }
 

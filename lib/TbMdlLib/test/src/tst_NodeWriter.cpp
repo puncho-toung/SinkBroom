@@ -40,7 +40,9 @@
 
 #include <fmt/format.h>
 
+#include <optional>
 #include <sstream>
+#include <string>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -1412,6 +1414,74 @@ textures/common/caulk
 )",
       *groupNode->persistentId());
     CHECK(actual == expected);
+  }
+
+  SECTION("writeGroupWithPrefabProperties")
+  {
+    const auto worldBounds = vm::bbox3d{8192.0};
+
+    auto worldNode = WorldNode{{}, {}, MapFormat::Standard};
+
+    auto group = Group{"Group"};
+    group.setPrefabPath("props/crates/crate_stack.map");
+    group.setPrefabHash("af63dc4c8601ec8c");
+
+    auto* groupNode = new GroupNode{std::move(group)};
+    setLinkId(*groupNode, "group_link_id");
+    transformNode(
+      *groupNode, vm::translation_matrix(vm::vec3d(32.0, 0.0, 0.0)), worldBounds);
+    worldNode.defaultLayer()->addChild(groupNode);
+
+    SECTION("The prefab properties follow the transformation")
+    {
+      auto str = std::stringstream{};
+      auto writer = NodeWriter{worldNode, str};
+      writer.writeNodes({groupNode}, taskManager);
+
+      const auto actual = str.str();
+      const auto expected = fmt::format(
+        R"(// entity 0
+{{
+"classname" "func_group"
+"_tb_type" "_tb_group"
+"_tb_name" "Group"
+"_tb_id" "{0}"
+"_tb_linked_group_id" "group_link_id"
+"_tb_transformation" "1 0 0 32 0 1 0 0 0 0 1 0 0 0 0 1"
+"_tb_prefab" "props/crates/crate_stack.map"
+"_tb_prefab_hash" "af63dc4c8601ec8c"
+}}
+)",
+        *groupNode->persistentId());
+      CHECK(actual == expected);
+    }
+
+    SECTION("Only the prefab properties that are set are written")
+    {
+      auto groupWithoutHash = groupNode->group();
+      groupWithoutHash.setPrefabHash(std::nullopt);
+      groupNode->setGroup(std::move(groupWithoutHash));
+
+      auto str = std::stringstream{};
+      auto writer = NodeWriter{worldNode, str};
+      writer.writeNodes({groupNode}, taskManager);
+
+      const auto actual = str.str();
+      CHECK(
+        actual.find(R"("_tb_prefab" "props/crates/crate_stack.map")")
+        != std::string::npos);
+      CHECK(actual.find("_tb_prefab_hash") == std::string::npos);
+    }
+
+    SECTION("Stripping _tb_ properties strips the prefab properties")
+    {
+      auto str = std::stringstream{};
+      auto writer = NodeWriter{worldNode, str};
+      writer.setStripTbProperties(true);
+      writer.writeNodes({groupNode}, taskManager);
+
+      CHECK(str.str().find("_tb_prefab") == std::string::npos);
+    }
   }
 
   SECTION("writeProtectedEntityProperties")

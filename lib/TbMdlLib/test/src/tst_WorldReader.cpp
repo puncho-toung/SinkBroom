@@ -355,6 +355,43 @@ TEST_CASE("WorldReader")
     CHECK(*entityNode->entity().property("angle") == " -1 ");
   }
 
+  SECTION("The node tree is filled unless it is skipped")
+  {
+    const auto data = R"(
+{
+"classname" "worldspawn"
+}
+{
+"classname" "info_player_deathmatch"
+"origin" "1 22 -3"
+}
+)";
+
+    auto builtReader = WorldReader{data, mdl::MapFormat::Standard, {}};
+    auto builtResult = builtReader.read(worldBounds, status, taskManager);
+    REQUIRE(builtResult);
+    CHECK(!builtResult.value()->nodeTree().empty());
+
+    auto skippedReader = WorldReader{data, mdl::MapFormat::Standard, {}};
+    auto skippedResult =
+      skippedReader.read(worldBounds, status, taskManager, WorldReaderNodeTree::Skip);
+    REQUIRE(skippedResult);
+    auto& worldNode = *skippedResult.value();
+    CHECK(worldNode.nodeTree().empty());
+
+    // node tree updates stay disabled, so a node can be removed
+    auto* defaultLayerNode = worldNode.defaultLayer();
+    REQUIRE(defaultLayerNode->childCount() == 1u);
+    auto* entityNode = defaultLayerNode->children().front();
+    defaultLayerNode->removeChild(entityNode);
+    CHECK(worldNode.nodeTree().empty());
+
+    defaultLayerNode->addChild(entityNode);
+    worldNode.rebuildNodeTree();
+    worldNode.enableNodeTreeUpdates();
+    CHECK(!worldNode.nodeTree().empty());
+  }
+
   SECTION("Worldspawn and one brush")
   {
     const auto data = R"(

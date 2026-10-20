@@ -31,11 +31,14 @@ GameInfo makeGameInfo(GameConfig gameConfig)
   const auto gamePathPrefPath = std::filesystem::path{"Games"} / gameConfig.name / "Path";
   const auto defaultEnginePrefPath =
     std::filesystem::path{"Games"} / gameConfig.name / "Default Engine";
+  const auto prefabPathPrefPath =
+    std::filesystem::path{"Games"} / gameConfig.name / "Prefab Path";
 
   return GameInfo{
     std::move(gameConfig),
     Preference<std::filesystem::path>{gamePathPrefPath, {}},
     Preference<std::filesystem::path>{defaultEnginePrefPath, {}},
+    Preference<std::filesystem::path>{prefabPathPrefPath, {}},
   };
 }
 

@@ -42,6 +42,13 @@
 
 namespace tb::mdl
 {
+namespace
+{
+
+// the size of the smallest cell of the node tree
+constexpr auto NodeTreeMinSize = 256.0;
+
+} // namespace
 
 WorldNode::WorldNode(
   EntityPropertyConfig entityPropertyConfig, Entity entity, const MapFormat mapFormat)
@@ -49,7 +56,7 @@ WorldNode::WorldNode(
   , m_mapFormat{mapFormat}
   , m_defaultLayer{nullptr}
   , m_validatorRegistry{std::make_unique<ValidatorRegistry>()}
-  , m_nodeTree{std::make_unique<NodeTree>(256.0)}
+  , m_nodeTree{std::make_unique<NodeTree>(NodeTreeMinSize)}
   , m_updateNodeTree{true}
 {
   entity.addOrUpdateProperty(

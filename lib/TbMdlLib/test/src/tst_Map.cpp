@@ -167,6 +167,25 @@ TEST_CASE("Map")
     CHECK_THAT(env.loadFile("test.map"), ContainsSubstring(expectedGenerator));
   }
 
+  SECTION("saveTo a file that cannot be written is an error (R1-pf3-6)")
+  {
+    auto fixture = MapFixture{};
+    auto& map = fixture.create();
+    addNodes(map, {{&parentForNodes(map), {new EntityNode{Entity{}}}}});
+    REQUIRE(map.modified());
+
+    // a folder that does not exist
+    auto env = fs::TestEnvironment{};
+    const auto path = env.dir() / "missing" / "test.map";
+    CHECK(map.saveTo(path).is_error());
+
+    // and saveAs keeps the map as it was
+    const auto oldPath = map.path();
+    CHECK(map.saveAs(path).is_error());
+    CHECK(map.path() == oldPath);
+    CHECK(map.modified());
+  }
+
   SECTION("selection")
   {
     auto fixture = MapFixture{};

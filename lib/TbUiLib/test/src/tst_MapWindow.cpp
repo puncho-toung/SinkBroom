@@ -36,6 +36,7 @@
 #include "base/Logger.h"
 #include "base/PreferenceManager.h"
 #include "base/Result.h"
+#include "fs/TestEnvironment.h"
 #include "gl/Camera.h"
 #include "gl/GlManager.h"
 #include "gl/Material.h"
@@ -61,6 +62,7 @@
 #include "mdl/WorldNode.h"
 #include "prefs/Preferences.h"
 #include "ui/ActionContext.h"
+#include "ui/AppController.h"
 #include "ui/AppControllerFixture.h"
 #include "ui/CatchConfig.h"
 #include "ui/Console.h"
@@ -76,11 +78,14 @@
 #include "ui/MapViewBase.h"
 #include "ui/MapViewToolBox.h"
 #include "ui/MapWindow.h"
+#include "ui/PrefabPanel.h"
+#include "ui/RecentDocuments.h"
 #include "ui/RenderView.h"
 #include "ui/SwitchableMapViewContainer.h"
 #include "ui/ToolSidebar.h"
 
 #include "kd/invoke.h"
+#include "kd/ranges/contains.h"
 
 #include "vm/ray.h"
 #include "vm/vec.h"
@@ -197,6 +202,7 @@ struct SidebarDocks
   QDockWidget* console;
   QDockWidget* issues;
   QDockWidget* lightEditor;
+  QDockWidget* prefabs;
 
   std::vector<QDockWidget*> inspectors() const { return {map, entity, face}; }
   std::vector<QDockWidget*> infoPanels() const { return {console, issues}; }
@@ -213,6 +219,7 @@ struct SidebarDocks
       issues->toggleViewAction(),
       lightEditor->toggleViewAction(),
       map->toggleViewAction(),
+      prefabs->toggleViewAction(),
     };
   }
 };
@@ -226,6 +233,7 @@ SidebarDocks findSidebarDocks(const MapWindow& window)
     window.findChild<QDockWidget*>("MapWindow_Sidebar_Console"),
     window.findChild<QDockWidget*>("MapWindow_Sidebar_Issues"),
     window.findChild<QDockWidget*>("MapWindow_Sidebar_LightEditor"),
+    window.findChild<QDockWidget*>("MapWindow_Sidebar_Prefabs"),
   };
   REQUIRE(docks.map != nullptr);
   REQUIRE(docks.entity != nullptr);
@@ -233,6 +241,7 @@ SidebarDocks findSidebarDocks(const MapWindow& window)
   REQUIRE(docks.console != nullptr);
   REQUIRE(docks.issues != nullptr);
   REQUIRE(docks.lightEditor != nullptr);
+  REQUIRE(docks.prefabs != nullptr);
   return docks;
 }
 
@@ -452,6 +461,8 @@ TEST_CASE("MapWindow")
     CHECK(qobject_cast<IssueBrowser*>(docks.issues->widget()) != nullptr);
     CHECK(docks.lightEditor->windowTitle() == "Light Editor");
     CHECK(qobject_cast<LightEditorPanel*>(docks.lightEditor->widget()) != nullptr);
+    CHECK(docks.prefabs->windowTitle() == "Prefabs");
+    CHECK(qobject_cast<PrefabPanel*>(docks.prefabs->widget()) != nullptr);
 
     auto* viewMenu = findViewMenu(window);
     REQUIRE(viewMenu != nullptr);
@@ -490,12 +501,12 @@ TEST_CASE("MapWindow")
     // the docks as the tool sidebar and View > Sidebar list them, then the toolbars
     const auto toggleActions = docks.sortedToggleActions();
     const auto actions = menu->actions();
-    REQUIRE(actions.size() == 9);
+    REQUIRE(actions.size() == 10);
     CHECK(
-      actions.mid(0, 6) == QList<QAction*>{toggleActions.begin(), toggleActions.end()});
-    CHECK(actions[6]->isSeparator());
-    CHECK(actions.mid(7).contains(toolBar->toggleViewAction()));
-    CHECK(actions.mid(7).contains(toolSidebar->toggleViewAction()));
+      actions.mid(0, 7) == QList<QAction*>{toggleActions.begin(), toggleActions.end()});
+    CHECK(actions[7]->isSeparator());
+    CHECK(actions.mid(8).contains(toolBar->toggleViewAction()));
+    CHECK(actions.mid(8).contains(toolSidebar->toggleViewAction()));
   }
 
   SECTION("the tool sidebar has a button for each sidebar dock")
@@ -517,7 +528,7 @@ TEST_CASE("MapWindow")
     }
 
     const auto actions = toolSidebar->actions();
-    REQUIRE(actions.size() == 8);
+    REQUIRE(actions.size() == 9);
     CHECK(actions.front() == toggleActions.front());
     CHECK(actions.back() == toolSidebar->expandAction());
 
@@ -535,7 +546,7 @@ TEST_CASE("MapWindow")
 
     // collapsing takes the buttons out of the strip, not out of View > Sidebar
     toolSidebar->setExpanded(false);
-    CHECK(toolSidebar->actions() == QList<QAction*>{actions[6], actions[7]});
+    CHECK(toolSidebar->actions() == QList<QAction*>{actions[7], actions[8]});
     CHECK(toggleAction->isVisible());
 
     CHECK(
@@ -554,6 +565,9 @@ TEST_CASE("MapWindow")
       CHECK(window.dockWidgetArea(dock) == Qt::RightDockWidgetArea);
     }
     CHECK(docks.lightEditor->isHidden());
+    // D4: hidden by default, on the right edge
+    CHECK(docks.prefabs->isHidden());
+    CHECK(window.dockWidgetArea(docks.prefabs) == Qt::RightDockWidgetArea);
 
     // in the order of the old inspector's pages, with the tab bar at the top
     CHECK(
@@ -611,7 +625,8 @@ TEST_CASE("MapWindow")
           docks.face,
           docks.console,
           docks.issues,
-          docks.lightEditor})
+          docks.lightEditor,
+          docks.prefabs})
     {
       CAPTURE(dock->objectName());
       CHECK(dock->allowedAreas() == Qt::AllDockWidgetAreas);
@@ -1584,6 +1599,67 @@ TEST_CASE("MapWindow")
 
     REQUIRE(!appController.glManager().resourceManager().needsProcessing());
     CHECK(window.canReloadEntityDefinitions());
+  }
+
+  SECTION("a prefab editor")
+  {
+    // a prefab editor's map has a file, the prefab; it is not a recent document, so the
+    // file does not reach the recent documents in the settings
+    auto env = fs::TestEnvironment{};
+    auto prefabDocument = MapDocument::createDocument(
+                            appController.environmentConfig(),
+                            mdl::QuakeGameInfo,
+                            mdl::MapFormat::Valve,
+                            vm::bbox3d{8192.0},
+                            appController.taskManager(),
+                            appController.glManager().resourceManager())
+                          | kdl::value();
+    REQUIRE(prefabDocument->map().saveAs(env.dir() / "crate.map") | kdl::is_success());
+
+    auto prefabEditor = MapWindow{appController, std::move(prefabDocument), true};
+
+    CHECK(!window.isPrefabEditor());
+    CHECK(prefabEditor.isPrefabEditor());
+
+    // R1-pf3-16: H-PF3-4, a prefab is not a recent document
+    CHECK(!kdl::ranges::contains(
+      appController.recentDocuments().recentDocuments(), env.dir() / "crate.map"));
+
+    CHECK(window.windowTitle() == "unnamed.map[*] - TrenchBroom");
+    CHECK(prefabEditor.windowTitle() == "crate.map[*] [Prefab] - TrenchBroom");
+
+    // canCompile and canLaunch need a map with a file, and a prefab editor's has one
+    CHECK(!window.canCompile());
+    CHECK(!window.canLaunch());
+    CHECK(!prefabEditor.canCompile());
+    CHECK(!prefabEditor.canLaunch());
+
+    // DD-26: Compile and Launch are offered for a map without a file too, as before
+    // PF3, and Re-run once a compilation ran; never in a prefab editor
+    for (const auto& path : {"Menu/Run/Compile...", "Menu/Run/Launch..."})
+    {
+      auto* action = window.findAction(path);
+      REQUIRE(action != nullptr);
+      CHECK(action->isEnabled());
+    }
+    for (const auto& path :
+         {"Menu/Run/Compile...", "Menu/Run/Launch...", "Menu/Run/Rerun..."})
+    {
+      auto* action = prefabEditor.findAction(path);
+      REQUIRE(action != nullptr);
+      CHECK(!action->isEnabled());
+    }
+
+    // saving stays, and so does saving a part of the prefab as another
+    auto* saveAction = prefabEditor.findAction("Menu/File/Save");
+    REQUIRE(saveAction != nullptr);
+    CHECK(saveAction->isEnabled());
+    CHECK(prefabEditor.findAction("Menu/File/Save as...") != nullptr);
+    CHECK(prefabEditor.findAction("Menu/Edit/Save Selection as Prefab...") != nullptr);
+
+    // the same docks as a map window's; the map inspector has no compile page to hide
+    // (H-PF3-2)
+    findSidebarDocks(prefabEditor);
   }
 }
 

@@ -1356,6 +1356,172 @@ TEST_CASE("LinkedGroupUtils")
       CHECK(innerEntityNode->linkId() != linkedInnerEntityNode->linkId());
     }
   }
+
+  SECTION("prefab properties")
+  {
+    auto taskManager = kdl::task_manager{};
+    const auto worldBounds = vm::bbox3d{8192.0};
+
+    auto makePrefabGroup = [](const std::string& name, const std::string& path) {
+      auto group = Group{name};
+      group.setPrefabPath(path);
+      group.setPrefabHash("af63dc4c8601ec8c");
+      return group;
+    };
+
+    auto outerGroupNode =
+      std::make_unique<GroupNode>(makePrefabGroup("outer", "props/outer.map"));
+    auto* innerGroupNode = new GroupNode{makePrefabGroup("inner", "props/inner.map")};
+    auto* entityNode = new EntityNode{Entity{}};
+    innerGroupNode->addChild(entityNode);
+    outerGroupNode->addChild(innerGroupNode);
+
+    SECTION("A clone keeps the prefab properties of every group")
+    {
+      auto clone = std::unique_ptr<GroupNode>{
+        static_cast<GroupNode*>(outerGroupNode->cloneRecursively(worldBounds))};
+      CHECK(clone->group() == outerGroupNode->group());
+      CHECK(clone->linkId() == outerGroupNode->linkId());
+
+      auto* innerClone = dynamic_cast<GroupNode*>(clone->children().front());
+      REQUIRE(innerClone != nullptr);
+      CHECK(innerClone->group().prefabPath() == "props/inner.map");
+      CHECK(innerClone->group().prefabHash() == "af63dc4c8601ec8c");
+    }
+
+    SECTION("Updating a linked group keeps the prefab properties")
+    {
+      auto targetGroupNode = std::unique_ptr<GroupNode>{
+        static_cast<GroupNode*>(outerGroupNode->cloneRecursively(worldBounds))};
+      transformNode(
+        *targetGroupNode, vm::translation_matrix(vm::vec3d{0, 64, 0}), worldBounds);
+
+      transformNode(*entityNode, vm::translation_matrix(vm::vec3d{0, 0, 8}), worldBounds);
+
+      updateLinkedGroups(
+        *outerGroupNode, {targetGroupNode.get()}, worldBounds, taskManager)
+        | kdl::transform([&](const UpdateLinkedGroupsResult& r) {
+            REQUIRE(r.size() == 1u);
+            const auto& [groupNodeToUpdate, newChildren] = r.front();
+            CHECK(groupNodeToUpdate == targetGroupNode.get());
+
+            // the update replaces the target's children, never its own group, so the
+            // nested groups are what carries the prefab properties across (H-A-1)
+            REQUIRE(newChildren.size() == 1u);
+            const auto* newInnerGroupNode =
+              dynamic_cast<const GroupNode*>(newChildren.front().get());
+            REQUIRE(newInnerGroupNode != nullptr);
+            CHECK(newInnerGroupNode->group().prefabPath() == "props/inner.map");
+            CHECK(newInnerGroupNode->group().prefabHash() == "af63dc4c8601ec8c");
+          })
+        | kdl::transform_error([](const auto&) { FAIL(); });
+    }
+  }
+
+  SECTION("rekeyLinkIds")
+  {
+    const auto worldBounds = vm::bbox3d{8192.0};
+    auto brushBuilder = BrushBuilder{MapFormat::Quake3, worldBounds};
+
+    auto worldNode = WorldNode{{}, {}, MapFormat::Quake3};
+
+    auto* outerGroupNode = new GroupNode{Group{"outer"}};
+    auto* outerEntityNode = new EntityNode{Entity{}};
+    auto* outerBrushNode =
+      new BrushNode{brushBuilder.createCube(64.0, "material") | kdl::value()};
+
+    auto* innerGroupNode = new GroupNode{Group{"inner"}};
+    auto* innerPatchNode = createPatchNode();
+    auto* innerEntityNode = new EntityNode{Entity{}};
+
+    innerGroupNode->addChildren({innerPatchNode, innerEntityNode});
+    outerGroupNode->addChildren({outerEntityNode, outerBrushNode, innerGroupNode});
+
+    // a linked duplicate of the outer group shares every link ID with it
+    auto* linkedOuterGroupNode =
+      static_cast<GroupNode*>(outerGroupNode->cloneRecursively(worldBounds));
+    auto* linkedOuterEntityNode = linkedOuterGroupNode->children().at(0);
+    auto* linkedOuterBrushNode = linkedOuterGroupNode->children().at(1);
+    auto* linkedInnerGroupNode = linkedOuterGroupNode->children().at(2);
+    auto* linkedInnerPatchNode = linkedInnerGroupNode->children().at(0);
+    auto* linkedInnerEntityNode = linkedInnerGroupNode->children().at(1);
+
+    // a second, unrelated link set of nested groups whose inner group is linked to the
+    // inner group of the first set
+    auto* otherGroupNode = new GroupNode{Group{"other"}};
+    auto* otherInnerGroupNode =
+      static_cast<GroupNode*>(innerGroupNode->cloneRecursively(worldBounds));
+    otherGroupNode->addChild(otherInnerGroupNode);
+    auto* otherInnerPatchNode = otherInnerGroupNode->children().at(0);
+    auto* otherInnerEntityNode = otherInnerGroupNode->children().at(1);
+
+    worldNode.defaultLayer()->addChildren(
+      {outerGroupNode, linkedOuterGroupNode, otherGroupNode});
+
+    const auto linkIdSets = std::vector<std::vector<const Node*>>{
+      {outerGroupNode, linkedOuterGroupNode},
+      {outerEntityNode, linkedOuterEntityNode},
+      {outerBrushNode, linkedOuterBrushNode},
+      {innerGroupNode, linkedInnerGroupNode, otherInnerGroupNode},
+      {innerPatchNode, linkedInnerPatchNode, otherInnerPatchNode},
+      {innerEntityNode, linkedInnerEntityNode, otherInnerEntityNode},
+      {otherGroupNode},
+    };
+    REQUIRE_THAT(worldNode, MatchesLinkIds(linkIdSets));
+
+    const auto linkIdsBefore = getLinkIds(worldNode);
+    const auto isNewLinkId = [&](const std::string& linkId) {
+      return std::ranges::none_of(
+        linkIdsBefore, [&](const auto& pair) { return pair.second == linkId; });
+    };
+
+    SECTION("Rekeying all roots keeps every link set and its structure")
+    {
+      rekeyLinkIds({outerGroupNode, linkedOuterGroupNode, otherGroupNode});
+
+      CHECK_THAT(worldNode, MatchesLinkIds(linkIdSets));
+      CHECK(std::ranges::all_of(getLinkIds(worldNode), [&](const auto& pair) {
+        return isNewLinkId(pair.second);
+      }));
+    }
+
+    SECTION("Rekeying through a layer reaches its children")
+    {
+      rekeyLinkIds({worldNode.defaultLayer()});
+
+      CHECK_THAT(worldNode, MatchesLinkIds(linkIdSets));
+      CHECK(std::ranges::all_of(getLinkIds(worldNode), [&](const auto& pair) {
+        return isNewLinkId(pair.second);
+      }));
+    }
+
+    SECTION("Rekeying some roots separates them from the nodes outside")
+    {
+      rekeyLinkIds({otherGroupNode});
+
+      CHECK_THAT(
+        worldNode,
+        MatchesLinkIds({
+          {outerGroupNode, linkedOuterGroupNode},
+          {outerEntityNode, linkedOuterEntityNode},
+          {outerBrushNode, linkedOuterBrushNode},
+          {innerGroupNode, linkedInnerGroupNode},
+          {innerPatchNode, linkedInnerPatchNode},
+          {innerEntityNode, linkedInnerEntityNode},
+          {otherGroupNode},
+          {otherInnerGroupNode},
+          {otherInnerPatchNode},
+          {otherInnerEntityNode},
+        }));
+      CHECK(isNewLinkId(otherGroupNode->linkId()));
+      CHECK(isNewLinkId(otherInnerGroupNode->linkId()));
+      const auto linkIdsAfter = getLinkIds(worldNode);
+      CHECK(isNewLinkId(linkIdsAfter.at(otherInnerPatchNode)));
+      CHECK(isNewLinkId(linkIdsAfter.at(otherInnerEntityNode)));
+      CHECK(!isNewLinkId(outerGroupNode->linkId()));
+      CHECK(!isNewLinkId(innerGroupNode->linkId()));
+    }
+  }
 }
 
 } // namespace tb::mdl

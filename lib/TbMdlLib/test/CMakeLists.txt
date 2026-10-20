@@ -14,6 +14,7 @@ target_sources(TbMdlLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CommandProcessor.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompareHits.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompilationConfig.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ContentHash.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DecalDefinition.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DefParser.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Doom3BFGFixture.cpp
@@ -118,6 +119,9 @@ target_sources(TbMdlLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PointTrace.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Polyhedron.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PortalFile.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PrefabFile.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PrefabLibrary.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PrefabRefresh.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Quake3ShaderParser.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Selection.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Tagging.cpp

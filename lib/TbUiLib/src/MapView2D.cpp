@@ -45,6 +45,7 @@
 #include "ui/ControlPointTool.h"
 #include "ui/ControlPointToolController.h"
 #include "ui/CreateEntityToolController.h"
+#include "ui/CreatePrefabToolController.h"
 #include "ui/DrawShapeToolController2D.h"
 #include "ui/EdgeTool.h"
 #include "ui/EdgeToolController.h"
@@ -155,6 +156,8 @@ void MapView2D::initializeToolChain(MapViewToolBox& toolBox)
     std::make_unique<ControlPointToolController>(toolBox.controlPointTool()));
   addToolController(
     std::make_unique<CreateEntityToolController2D>(toolBox.createEntityTool()));
+  addToolController(
+    std::make_unique<CreatePrefabToolController2D>(toolBox.createPrefabTool()));
   addToolController(std::make_unique<SelectionTool>(m_document));
   addToolController(
     std::make_unique<DrawShapeToolController2D>(toolBox.drawShapeTool(), m_document));

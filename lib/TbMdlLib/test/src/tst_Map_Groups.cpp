@@ -41,6 +41,7 @@
 #include "mdl/PatchNode.h"
 #include "mdl/TestFactory.h"
 #include "mdl/TestUtils.h"
+#include "mdl/TransactionScope.h"
 #include "mdl/WorldNode.h"
 
 #include <functional>
@@ -667,6 +668,84 @@ TEST_CASE("Map_Groups")
 
     auto* linkedGroupNode = createLinkedDuplicate(map);
     CHECK_THAT(*linkedGroupNode, MatchesNode(*groupNode));
+  }
+
+  SECTION("placeLinkedDuplicate")
+  {
+    auto* brushNode = createBrushNode(map);
+    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+    selectNodes(map, {brushNode});
+
+    auto* groupNode = groupSelectedNodes(map, "test");
+    REQUIRE(groupNode != nullptr);
+    deselectAll(map);
+
+    auto* layerNode = new LayerNode{Layer{"other"}};
+    addNodes(map, {{&map.worldNode(), {layerNode}}});
+
+    map.startTransaction("Place", TransactionScope::LongRunning);
+
+    // opens no transaction of its own, so it works inside the caller's
+    auto* linkedGroupNode = placeLinkedDuplicate(map, *groupNode, *layerNode);
+    REQUIRE(linkedGroupNode != nullptr);
+    CHECK(linkedGroupNode->parent() == layerNode);
+    CHECK(linkedGroupNode->linkId() == groupNode->linkId());
+    CHECK_THAT(*linkedGroupNode, MatchesNode(*groupNode));
+    // the selection is the caller's business
+    CHECK(map.selection().nodes.empty());
+
+    SECTION("Committing keeps the duplicate as one undo step")
+    {
+      REQUIRE(map.commitTransaction());
+      CHECK(layerNode->children() == std::vector<Node*>{linkedGroupNode});
+
+      map.undoCommand();
+      CHECK(layerNode->children().empty());
+    }
+
+    SECTION("Cancelling the caller's transaction removes the duplicate")
+    {
+      map.cancelTransaction();
+      CHECK(layerNode->children().empty());
+      CHECK(map.worldNode().defaultLayer()->children() == std::vector<Node*>{groupNode});
+    }
+  }
+
+  SECTION("linked groups keep their prefab properties")
+  {
+    auto group = Group{"prefab"};
+    group.setPrefabPath("props/crate.map");
+    group.setPrefabHash("af63dc4c8601ec8c");
+
+    auto* groupNode = new GroupNode{std::move(group)};
+    auto* brushNode = createBrushNode(map);
+    groupNode->addChild(brushNode);
+    addNodes(map, {{&parentForNodes(map), {groupNode}}});
+
+    selectNodes(map, {groupNode});
+    auto* linkedGroupNode = createLinkedDuplicate(map);
+    REQUIRE(linkedGroupNode != nullptr);
+    REQUIRE(linkedGroupNode->linkId() == groupNode->linkId());
+
+    // the linked duplicate is a clone, so it carries the prefab properties
+    CHECK(linkedGroupNode->group().prefabPath() == "props/crate.map");
+    CHECK(linkedGroupNode->group().prefabHash() == "af63dc4c8601ec8c");
+
+    // propagating a change replaces the children of the other member, not its group
+    deselectAll(map);
+    openGroup(map, *groupNode);
+    selectNodes(map, {brushNode});
+    REQUIRE(translateSelection(map, {0, 0, 16}));
+    closeGroup(map);
+
+    REQUIRE(linkedGroupNode->childCount() == 1u);
+    // the duplicate sits on the original, so the propagated brush has the same bounds
+    CHECK(
+      linkedGroupNode->children().front()->logicalBounds() == brushNode->logicalBounds());
+    CHECK(linkedGroupNode->group().prefabPath() == "props/crate.map");
+    CHECK(linkedGroupNode->group().prefabHash() == "af63dc4c8601ec8c");
+    CHECK(groupNode->group().prefabPath() == "props/crate.map");
+    CHECK(groupNode->group().prefabHash() == "af63dc4c8601ec8c");
   }
 
   SECTION("linked groups with unique entity names")

@@ -39,7 +39,6 @@
 #include "kd/overload.h"
 #include "kd/ranges/contains.h"
 #include "kd/ranges/to.h"
-#include "kd/string_compare.h"
 #include "kd/string_format.h"
 #include "kd/vector_utils.h"
 
@@ -47,6 +46,7 @@
 #include <array>
 #include <ranges>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace tb::mdl
 {
@@ -347,18 +347,33 @@ void remapLinkSourceValues(
   const EntityNamingResult& namingResult,
   const std::vector<const GroupNode*>& skippedGroups)
 {
+  // lowercase kept name, made only if a name was renamed
+  auto keptNames = std::unordered_set<std::string>{};
+  if (std::ranges::any_of(
+        namingResult.renamed, [](const auto& renamed) { return !renamed.first.empty(); }))
+  {
+    keptNames.reserve(namingResult.kept.size());
+    for (const auto& keptName : namingResult.kept)
+    {
+      if (!keptName.empty())
+      {
+        keptNames.insert(kdl::str_to_lower(keptName));
+      }
+    }
+  }
+
   // lowercase old name -> new name
   auto newNames = std::unordered_map<std::string, std::string>{};
   for (const auto& [oldName, newName] : namingResult.renamed)
   {
-    if (
-      !oldName.empty()
-      && std::ranges::none_of(namingResult.kept, [&](const auto& keptName) {
-           return kdl::ci::str_is_equal(keptName, oldName);
-         }))
+    if (!oldName.empty())
     {
-      // the first entity that was renamed from a name wins
-      newNames.emplace(kdl::str_to_lower(oldName), newName);
+      if (auto lowerOldName = kdl::str_to_lower(oldName);
+          !keptNames.contains(lowerOldName))
+      {
+        // the first entity that was renamed from a name wins
+        newNames.emplace(std::move(lowerOldName), newName);
+      }
     }
   }
 

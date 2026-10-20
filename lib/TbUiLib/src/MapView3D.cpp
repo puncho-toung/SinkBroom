@@ -50,6 +50,7 @@
 #include "ui/ControlPointTool.h"
 #include "ui/ControlPointToolController.h"
 #include "ui/CreateEntityToolController.h"
+#include "ui/CreatePrefabToolController.h"
 #include "ui/DrawShapeToolController3D.h"
 #include "ui/EdgeTool.h"
 #include "ui/EdgeToolController.h"
@@ -130,6 +131,8 @@ void MapView3D::initializeToolChain(MapViewToolBox& toolBox)
     std::make_unique<ControlPointToolController>(toolBox.controlPointTool()));
   addToolController(
     std::make_unique<CreateEntityToolController3D>(toolBox.createEntityTool()));
+  addToolController(
+    std::make_unique<CreatePrefabToolController3D>(toolBox.createPrefabTool()));
   addToolController(std::make_unique<SetBrushFaceAttributesTool>(m_document));
   addToolController(std::make_unique<SelectionTool>(m_document));
   addToolController(

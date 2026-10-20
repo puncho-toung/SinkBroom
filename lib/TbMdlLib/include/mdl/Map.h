@@ -79,6 +79,7 @@ class Node;
 class NodeIndex;
 class PickResult;
 class PointTrace;
+class PrefabLibrary;
 class RepeatStack;
 class SmartTag;
 class TagManager;
@@ -186,6 +187,13 @@ public: // notification
 private:
   NotifierConnection m_notifierConnection;
 
+  // Declared after the notifiers so that it can observe them, and constructed before
+  // connectObservers() runs, so that its observers run before the map's own: it must
+  // release its entity definitions before the map deletes them. Those that must run
+  // after the map's, to assign reloaded definitions, it connects when the constructor
+  // calls PrefabLibrary::connectObserversAfterMap.
+  std::unique_ptr<PrefabLibrary> m_prefabLibrary;
+
 public: // misc
   Map(
     const EnvironmentConfig& environmentConfig,
@@ -243,6 +251,9 @@ public: // misc
 
   EntityModelManager& entityModelManager();
   const EntityModelManager& entityModelManager() const;
+
+  PrefabLibrary& prefabLibrary();
+  const PrefabLibrary& prefabLibrary() const;
 
   gl::MaterialManager& materialManager();
   const gl::MaterialManager& materialManager() const;
@@ -417,6 +428,8 @@ public: // command processing
   void rollbackTransaction();
   bool commitTransaction();
   void cancelTransaction();
+  // a transaction is open, so that a commit now would not be the outermost one
+  bool isTransactionActive() const;
 
   bool isCurrentDocumentStateObservable() const;
 

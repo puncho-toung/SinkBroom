@@ -59,11 +59,78 @@
 #include "kd/vector_utils.h"
 
 #include <ranges>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace tb::mdl
 {
 
 kdl_reflect_impl(TransformVerticesResult);
+
+namespace
+{
+
+/**
+ * The link IDs of the brushes among the given nodes that are in a closed group and that
+ * more than one object in the world carries, found in one pass over the world rather
+ * than in one pass per brush.
+ */
+std::unordered_set<std::string> collectLinkedBrushIdsInClosedGroups(
+  WorldNode& worldNode, const std::vector<Node*>& nodes)
+{
+  auto counts = std::unordered_map<std::string, size_t>{};
+  for (const auto* node : nodes)
+  {
+    if (const auto* brushNode = dynamic_cast<const BrushNode*>(node))
+    {
+      if (const auto* containingGroup = brushNode->containingGroup();
+          containingGroup && containingGroup->closed())
+      {
+        counts.try_emplace(brushNode->linkId(), 0);
+      }
+    }
+  }
+
+  if (counts.empty())
+  {
+    return {};
+  }
+
+  const auto count = [&](const auto& object) {
+    if (const auto it = counts.find(object.linkId()); it != counts.end())
+    {
+      ++it->second;
+    }
+  };
+
+  worldNode.accept(kdl::overload(
+    [](auto&& thisLambda, WorldNode& node) { node.visitChildren(thisLambda); },
+    [](auto&& thisLambda, LayerNode& node) { node.visitChildren(thisLambda); },
+    [&](auto&& thisLambda, GroupNode& node) {
+      count(node);
+      node.visitChildren(thisLambda);
+    },
+    [&](auto&& thisLambda, EntityNode& node) {
+      count(node);
+      node.visitChildren(thisLambda);
+    },
+    [&](BrushNode& node) { count(node); },
+    [&](PatchNode& node) { count(node); }));
+
+  auto result = std::unordered_set<std::string>{};
+  for (const auto& [linkId, linkIdCount] : counts)
+  {
+    if (linkIdCount > 1)
+    {
+      result.insert(linkId);
+    }
+  }
+  return result;
+}
+
+} // namespace
 
 bool transformSelection(
   Map& map, const std::string& commandName, const vm::mat4x4d& transformation)
@@ -127,6 +194,11 @@ bool transformSelection(
   const auto updateAngleProperty = entityPropertyConfig.updateAnglePropertyAfterTransform;
   const auto rotationPolicy = entityPropertyConfig.rotationPolicy;
 
+  // a brush in a closed group that is linked to another object keeps its alignment
+  const auto linkedBrushIds = alignmentLock ? std::unordered_set<std::string>{}
+                                            : collectLinkedBrushIdsInClosedGroups(
+                                                map.worldNode(), nodesToTransform);
+
   auto tasks =
     nodesToTransform | std::views::transform([&](auto& node) {
       return std::function{[&]() {
@@ -146,8 +218,9 @@ bool transformSelection(
           [&](BrushNode& brushNode) -> TransformResult {
             const auto* containingGroup = brushNode.containingGroup();
             const bool lockAlignment =
-            alignmentLock
-            || (containingGroup && containingGroup->closed() && collectLinkedNodes({&map.worldNode()}, brushNode).size() > 1);
+              alignmentLock
+              || (containingGroup && containingGroup->closed()
+                  && linkedBrushIds.contains(brushNode.linkId()));
 
             auto brush = brushNode.brush();
             return brush.transform(map.worldBounds(), transformation, lockAlignment)
