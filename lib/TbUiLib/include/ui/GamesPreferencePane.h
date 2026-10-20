@@ -21,6 +21,7 @@
 
 #include "ui/PreferencePane.h"
 
+class QAction;
 class QLineEdit;
 class QPushButton;
 class QStackedWidget;
@@ -82,6 +83,8 @@ private:
   QLineEdit* m_gamePathText = nullptr;
   QPushButton* m_chooseGamePathButton = nullptr;
   QLineEdit* m_prefabPathText = nullptr;
+  // flags a Prefab Path that is not absolute or whose folder does not exist
+  QAction* m_prefabPathIcon = nullptr;
   std::vector<std::tuple<const mdl::CompilationTool*, QLineEdit*>> m_toolPathEditors;
 
 public:
@@ -100,6 +103,8 @@ private:
   void updateGamePath(const QString& str);
   void choosePrefabPathClicked();
   void updatePrefabPath(const QString& str);
+  // R8-ui-5, R8-lib-4: for the text in the Prefab Path box
+  void updatePrefabPathIcon();
   void configureEnginesClicked();
 
 public:

@@ -27,6 +27,7 @@
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QImage>
+#include <QImageReader>
 #include <QInputDialog>
 #include <QLabel>
 #include <QMenu>
@@ -154,6 +155,7 @@
 #include <ranges>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -204,6 +206,13 @@ constexpr auto DockLayoutVersionKey = "DockLayoutVersion";
  * to 128 pixels, and this leaves room for a larger cell or a high-DPI screen.
  */
 constexpr auto ThumbnailSize = 256;
+
+/**
+ * DD-38: the PNG text key and value that mark a thumbnail as the prefab editor's own,
+ * which a later save may replace.
+ */
+const auto ThumbnailMarkerKey = QString{"Software"};
+const auto ThumbnailMarkerValue = QString{"SinkBroom prefab editor"};
 
 /**
  * The inspector panels in the order of their tabs.
@@ -327,10 +336,10 @@ void restoreSharedWidgetState(const SettingsValues& values)
 }
 
 /**
- * The one entity that the body of an entity snapshot holds, or nullptr if it holds
- * anything else.
+ * The one node that the body of a prefab holds, in any layer, or nullptr if it holds
+ * none or more than one.
  */
-const mdl::EntityNode* singleBodyEntity(mdl::WorldNode& worldNode)
+const mdl::Node* singleBodyNode(mdl::WorldNode& worldNode)
 {
   auto bodyNodes = std::vector<const mdl::Node*>{};
   for (const auto* layerNode : worldNode.allLayers())
@@ -340,8 +349,7 @@ const mdl::EntityNode* singleBodyEntity(mdl::WorldNode& worldNode)
       bodyNodes.push_back(node);
     }
   }
-  return bodyNodes.size() == 1 ? dynamic_cast<const mdl::EntityNode*>(bodyNodes.front())
-                               : nullptr;
+  return bodyNodes.size() == 1 ? bodyNodes.front() : nullptr;
 }
 
 } // namespace
@@ -362,6 +370,12 @@ MapWindow::MapWindow(
   , m_updateStatusBarSignalDelayer{new SignalDelayer{500ms, this}}
 {
   contract_pre(m_document != nullptr);
+
+  // R8-app-6: before any of the editor's widgets reads or writes its state
+  if (m_prefabEditor)
+  {
+    m_sharedWidgetState = sharedWidgetState();
+  }
 
   setAttribute(Qt::WA_DeleteOnClose);
   // R1-pf3-1: a prefab editor's layout is its own
@@ -404,10 +418,6 @@ MapWindow::MapWindow(
 
 MapWindow::~MapWindow()
 {
-  // R1-pf3-1: put back below what this prefab editor's widgets replace
-  const auto sharedState =
-    m_prefabEditor ? std::optional{sharedWidgetState()} : std::nullopt;
-
   disconnect(qApp, &QApplication::focusChanged, this, &MapWindow::focusChange);
 
   // Stop the autosave timer
@@ -462,9 +472,11 @@ MapWindow::~MapWindow()
     [](const auto* child) { return qobject_cast<const QTabBar*>(child) != nullptr; });
   qDeleteAll(std::rbegin(children), std::rend(children));
 
-  if (sharedState)
+  // R1-pf3-1, R8-app-6: put back what the map windows had saved when this prefab
+  // editor opened, once its widgets have written theirs
+  if (m_sharedWidgetState)
   {
-    restoreSharedWidgetState(*sharedState);
+    restoreSharedWidgetState(*m_sharedWidgetState);
   }
 
   // let's trigger a final autosave before releasing the document; a prefab editor makes
@@ -1423,6 +1435,8 @@ bool MapWindow::saveDocument()
   {
     if (m_prefabEditor)
     {
+      // DD-38: an unmodified save writes the file as it was, and no thumbnail
+      m_prefabSaveWritesThumbnail = map.modified();
       updatePrefabMetadata();
     }
 
@@ -1468,6 +1482,8 @@ bool MapWindow::saveDocumentAs()
 
   if (m_prefabEditor)
   {
+    // a file of another name has no thumbnail of this prefab yet
+    m_prefabSaveWritesThumbnail = true;
     updatePrefabMetadata();
   }
 
@@ -3004,18 +3020,33 @@ void MapWindow::updatePrefabMetadata()
   auto& worldNode = map.worldNode();
   const auto& worldEntity = worldNode.entity();
   const auto* kind = worldEntity.property(mdl::PrefabPropertyKeys::Kind);
+  const auto* bodyNode = singleBodyNode(worldNode);
+
+  if (kind && *kind == mdl::PrefabPropertyValues::KindAssembly)
+  {
+    // R8-app-2: a placement is a copy of the one group, so a node outside it would be
+    // lost, and a body of another shape cannot be placed or refreshed at all
+    if (!dynamic_cast<const mdl::GroupNode*>(bodyNode))
+    {
+      warnMalformedPrefabBody(
+        tr("Prefab %1 is an assembly, but it no longer holds exactly one group")
+          .arg(QString::fromStdString(map.filename())));
+    }
+    return;
+  }
+
   if (!kind || *kind != mdl::PrefabPropertyValues::KindEntity)
   {
     // only an entity snapshot has a key that an edit can make stale
     return;
   }
 
-  const auto* entityNode = singleBodyEntity(worldNode);
+  const auto* entityNode = dynamic_cast<const mdl::EntityNode*>(bodyNode);
   if (!entityNode)
   {
-    logger().warn() << "Prefab " << map.filename()
-                    << " is an entity snapshot, but it no longer holds exactly one "
-                       "entity";
+    warnMalformedPrefabBody(
+      tr("Prefab %1 is an entity snapshot, but it no longer holds exactly one entity")
+        .arg(QString::fromStdString(map.filename())));
     return;
   }
 
@@ -3042,12 +3073,21 @@ void MapWindow::updatePrefabMetadata()
   transaction.commit();
 }
 
+void MapWindow::warnMalformedPrefabBody(const QString& message)
+{
+  logger().warn() << message.toStdString();
+  statusBar()->showMessage(message, 5000);
+}
+
 void MapWindow::finishPrefabSave()
 {
   if (const auto mapPath = std::exchange(m_pendingPrefabSavePath, std::nullopt))
   {
     // the thumbnail first, so that the library reads it with the file
-    writePrefabThumbnail(*mapPath);
+    if (std::exchange(m_prefabSaveWritesThumbnail, false))
+    {
+      writePrefabThumbnail(*mapPath);
+    }
     m_appController.mapWindowManager().prefabWasSaved(*mapPath);
   }
 }
@@ -3055,6 +3095,24 @@ void MapWindow::finishPrefabSave()
 void MapWindow::writePrefabThumbnail(const std::filesystem::path& mapPath)
 {
   const auto thumbnailPath = kdl::path_replace_extension(mapPath, ".png");
+
+  // DD-38: a thumbnail that the editor did not write is the user's (C1)
+  auto ec = std::error_code{};
+  if (std::filesystem::is_regular_file(thumbnailPath, ec))
+  {
+    auto reader = QImageReader{pathAsQString(thumbnailPath)};
+    if (reader.text(ThumbnailMarkerKey) != ThumbnailMarkerValue)
+    {
+      const auto message =
+        tr(
+          "Kept thumbnail %1, which the prefab editor did not write; delete it to have "
+          "the next save write one")
+          .arg(pathAsQString(thumbnailPath.filename()));
+      logger().info() << message.toStdString();
+      statusBar()->showMessage(message, 5000);
+      return;
+    }
+  }
 
   auto image = m_thumbnailGrabber ? m_thumbnailGrabber() : grabThumbnail();
   if (image.isNull())
@@ -3070,6 +3128,7 @@ void MapWindow::writePrefabThumbnail(const std::filesystem::path& mapPath)
     image = image.scaled(
       ThumbnailSize, ThumbnailSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
   }
+  image.setText(ThumbnailMarkerKey, ThumbnailMarkerValue);
 
   // written beside the file and renamed, so that the library never reads half of it;
   // not with WritableFileSystem::createFileAtomic, which writes text (H-PF3-5)

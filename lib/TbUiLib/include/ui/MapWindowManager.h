@@ -85,6 +85,10 @@ public:
     mdl::MapFormat mapFormat,
     const vm::bbox3d& worldBounds);
 
+  /**
+   * Loads the given file as createDocument creates a document; if a window has the file
+   * open, a prefab editor too, that window is brought to the front instead (R8-app-4).
+   */
   Result<void> loadDocument(
     const mdl::GameInfo& gameInfo,
     mdl::MapFormat mapFormat,
@@ -106,6 +110,14 @@ public:
    * prefab library of each reads it if it is in one of its roots.
    */
   void prefabWasSaved(const std::filesystem::path& path);
+
+  /**
+   * DD-39: returns an error that names the given file if a window has it open, a prefab
+   * editor or a map window, and brings that window to the front; for a caller that is
+   * about to overwrite or delete the file, which that window's next save would write
+   * again.
+   */
+  Result<void> checkNotOpen(const std::filesystem::path& path);
 
   std::vector<MapWindow*> mapWindows() const;
   MapWindow* topMapWindow() const;

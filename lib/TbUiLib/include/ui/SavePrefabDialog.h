@@ -21,7 +21,10 @@
 
 #include <QDialog>
 
+#include "base/Result.h"
+
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -60,6 +63,10 @@ std::string defaultPrefabName(const MapDocument& document);
 class SavePrefabDialog : public QDialog
 {
   Q_OBJECT
+public:
+  // returns an error if the given file must not be written; see setOpenFileCheck
+  using OpenFileCheck = std::function<Result<void>(const std::filesystem::path&)>;
+
 private:
   MapDocument& m_document;
   // the selection, normalised once (normalizePrefabSelection)
@@ -69,6 +76,7 @@ private:
   std::optional<std::filesystem::path> m_savedPath;
   // the file of the prefab that the dialog updates (forEntry), as fileKey gives it
   std::optional<std::filesystem::path> m_updatedPath;
+  OpenFileCheck m_openFileCheck;
 
   QLineEdit* m_nameEdit = nullptr;
   // the library's root, where the file goes (DD-32: there is no choice)
@@ -93,21 +101,37 @@ public:
   /**
    * Turns the dialog into "Update Prefab from Selection" (D13): the name, the category,
    * the tags and the description are those of the given prefab, the kind is derived from
-   * the selection as always, and the prefab's file is overwritten without asking. If the
+   * the selection as always, but for one entity, which is saved as an assembly if the
+   * prefab is one (R8-ui-1), and the prefab's file is overwritten without asking. If the
    * fields are changed so that they name another file, that file is asked about as usual.
    */
   void forEntry(const mdl::PrefabEntry& entry);
+
+  /**
+   * DD-39: asked for the file before it is written, whether it is replaced, updated or
+   * new; an error is shown in the dialog, which stays open, and nothing is written. The
+   * prefab panel refuses a file that a window holds open. Unset, every file may be
+   * written.
+   */
+  void setOpenFileCheck(OpenFileCheck openFileCheck);
 
   /**
    * The file that was written, once the dialog was accepted.
    */
   const std::optional<std::filesystem::path>& savedPath() const;
 
+  /**
+   * Writes the prefab and closes the dialog. Writes nothing, and says why in the dialog,
+   * if the selection changed since the dialog was opened (DD-40), which a prompt that
+   * ran inside the dialog's event loop may have done, or if the open file check refuses
+   * the file (DD-39).
+   */
   void accept() override;
 
 private:
   void createGui();
   void updateControls();
+  void showMessage(const QString& message);
   // cuts the description to its limit and shows its length (DD-33)
   void limitDescription();
   // the options name the file that forEntry was given

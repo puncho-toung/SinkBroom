@@ -183,7 +183,19 @@ void SavePrefabDialog::forEntry(const mdl::PrefabEntry& entry)
   m_tagsEdit->setText(QString::fromStdString(kdl::str_join(entry.metadata.tags, "; ")));
   m_descriptionEdit->setPlainText(QString::fromStdString(entry.metadata.description));
 
+  // R8-ui-1: an assembly of one entity stays an assembly, so that its placements stay
+  // linked groups that can be refreshed
+  if (m_singleEntity)
+  {
+    m_forceAssemblyCheck->setChecked(entry.metadata.kind == mdl::PrefabKind::Assembly);
+  }
+
   updateControls();
+}
+
+void SavePrefabDialog::setOpenFileCheck(OpenFileCheck openFileCheck)
+{
+  m_openFileCheck = std::move(openFileCheck);
 }
 
 const std::optional<std::filesystem::path>& SavePrefabDialog::savedPath() const
@@ -199,13 +211,38 @@ bool SavePrefabDialog::updatesEntryFile(const std::filesystem::path& path) const
 
 void SavePrefabDialog::accept()
 {
+  // DD-40: a nested event loop, such as this dialog's, may have run something that
+  // changed the selection, and with it the nodes that the dialog would write
+  if (mdl::normalizePrefabSelection(m_document.map().selection().nodes) != m_nodes)
+  {
+    showMessage(
+      tr("The selection changed while this dialog was open; nothing was "
+         "saved. Cancel, and save the selection again"));
+    return;
+  }
+
   const auto options = this->options();
+  const auto path = mdl::prefabFilePath(m_document.map().prefabLibrary(), options)
+                    | kdl::value_or(std::filesystem::path{});
+
+  // DD-39: a window that has the file open would write it again with its next save
+  if (!path.empty() && m_openFileCheck)
+  {
+    auto refused = false;
+    m_openFileCheck(path) | kdl::transform_error([&](const auto& e) {
+      showMessage(QString::fromStdString(e.msg));
+      refused = true;
+    });
+    if (refused)
+    {
+      return;
+    }
+  }
 
   auto ec = std::error_code{};
-  if (const auto path = mdl::prefabFilePath(m_document.map().prefabLibrary(), options)
-                        | kdl::value_or(std::filesystem::path{});
-      !path.empty() && std::filesystem::is_regular_file(path, ec)
-      && !updatesEntryFile(path))
+  if (
+    !path.empty() && std::filesystem::is_regular_file(path, ec)
+    && !updatesEntryFile(path))
   {
     const auto answer = QMessageBox::question(
       this,
@@ -288,6 +325,7 @@ void SavePrefabDialog::createGui()
   m_kindLabel = new QLabel{};
 
   m_forceAssemblyCheck = new QCheckBox{tr("Save as assembly anyway")};
+  m_forceAssemblyCheck->setObjectName("SavePrefabDialog_forceAssemblyCheck");
   m_forceAssemblyCheck->setToolTip(
     tr("Save the entity as a one-entity group whose placements are linked"));
   // the override is offered only where it changes the kind
@@ -399,9 +437,14 @@ void SavePrefabDialog::updateControls()
                            return false;
                          })
                        | kdl::value();
+  showMessage(message);
+  m_saveButton->setEnabled(hasPath && !m_nodes.empty());
+}
+
+void SavePrefabDialog::showMessage(const QString& message)
+{
   m_messageLabel->setText(message);
   m_messageLabel->setVisible(!message.isEmpty());
-  m_saveButton->setEnabled(hasPath && !m_nodes.empty());
 }
 
 void SavePrefabDialog::limitDescription()
@@ -409,9 +452,15 @@ void SavePrefabDialog::limitDescription()
   const auto text = m_descriptionEdit->toPlainText();
   if (text.size() > mdl::PrefabDescriptionMaxLength)
   {
-    // typing or pasting past the limit keeps the first characters; this edit calls
-    // limitDescription again, which then finds the text short enough
-    m_descriptionEdit->setPlainText(text.left(mdl::PrefabDescriptionMaxLength));
+    // typing or pasting past the limit keeps the first characters, but never half of a
+    // surrogate pair; this edit calls limitDescription again, which then finds the text
+    // short enough
+    auto length = qsizetype{mdl::PrefabDescriptionMaxLength};
+    if (text.at(length - 1).isHighSurrogate())
+    {
+      --length;
+    }
+    m_descriptionEdit->setPlainText(text.left(length));
     m_descriptionEdit->moveCursor(QTextCursor::End);
     return;
   }

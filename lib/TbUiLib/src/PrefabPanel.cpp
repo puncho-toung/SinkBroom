@@ -19,6 +19,7 @@
 
 #include "ui/PrefabPanel.h"
 
+#include <QApplication>
 #include <QComboBox>
 #include <QDesktopServices>
 #include <QFileSystemWatcher>
@@ -48,9 +49,11 @@
 #include "mdl/PrefabLibrary.h"
 #include "mdl/PrefabRefresh.h"
 #include "mdl/Selection.h"
+#include "ui/AppController.h"
 #include "ui/BitmapButton.h"
 #include "ui/MapDocument.h"
 #include "ui/MapWindow.h"
+#include "ui/MapWindowManager.h"
 #include "ui/PrefabBrowserView.h"
 #include "ui/QPathUtils.h"
 #include "ui/SavePrefabDialog.h"
@@ -71,6 +74,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <unordered_set>
 #include <utility>
@@ -91,6 +95,10 @@ constexpr auto WatchDebounceInterval = 500ms;
 
 // how long the watcher's reports of the panel's own save are ignored
 constexpr auto OwnWriteInterval = 2s;
+
+// DD-40: how long the prompt after a load waits before it looks again whether a modal
+// widget or a transaction is gone
+constexpr auto OpenPromptRetryInterval = 100ms;
 
 // the category tree's item data for "All"
 const auto AllCategories = QVariant{};
@@ -216,6 +224,50 @@ bool hasPlacements(const mdl::PrefabLibrary& library)
   return !library.placements().empty();
 }
 
+/**
+ * R8-ui-6: the distinct files of the given placements, those that changed and those
+ * that are missing. Two placements of one file are one; so are two prefab paths that
+ * the library resolves to one entry (DD-37).
+ */
+struct ChangedFileCounts
+{
+  std::size_t changed = 0;
+  std::size_t missing = 0;
+};
+
+ChangedFileCounts countChangedFiles(const std::vector<mdl::PrefabPlacement>& placements)
+{
+  auto entries = std::unordered_set<const mdl::PrefabEntry*>{};
+  auto missingPaths = std::unordered_set<std::string_view>{};
+  for (const auto& placement : placements)
+  {
+    if (placement.entry)
+    {
+      entries.insert(placement.entry);
+    }
+    else
+    {
+      missingPaths.insert(placement.prefabPath);
+    }
+  }
+  return {entries.size(), missingPaths.size()};
+}
+
+// "N changed, M missing", without a part that is 0
+QString describeChangedFiles(const ChangedFileCounts& counts)
+{
+  auto parts = QStringList{};
+  if (counts.changed > 0)
+  {
+    parts.push_back(QObject::tr("%1 changed").arg(counts.changed));
+  }
+  if (counts.missing > 0)
+  {
+    parts.push_back(QObject::tr("%1 missing").arg(counts.missing));
+  }
+  return parts.join(", ");
+}
+
 } // namespace
 
 PrefabPanel::PrefabPanel(const SidebarContext& context, QWidget* parent)
@@ -313,6 +365,7 @@ void PrefabPanel::saveSelectionAsPrefab()
   scanOnce();
 
   auto dialog = SavePrefabDialog{m_document, this};
+  dialog.setOpenFileCheck([&](const auto& path) { return checkNotOpen(path); });
   if (dialog.exec() == QDialog::Accepted && dialog.savedPath())
   {
     prefabWasSaved(*dialog.savedPath());
@@ -364,9 +417,14 @@ std::size_t PrefabPanel::scanCount() const
   return m_scanCount;
 }
 
-std::size_t PrefabPanel::changedPlacementCount() const
+std::size_t PrefabPanel::changedFileCount() const
 {
-  return m_changedPlacementCount;
+  return m_changedFileCount;
+}
+
+std::size_t PrefabPanel::missingFileCount() const
+{
+  return m_missingFileCount;
 }
 
 std::size_t PrefabPanel::recountCount() const
@@ -383,27 +441,63 @@ void PrefabPanel::promptToRefreshPlacements(
   }
 
   // a placement is found again by its path and link ID before it is refreshed, since
-  // refreshing one replaces nodes that another may point to
+  // refreshing one replaces nodes that another may point to; the files are listed once
+  // each, the missing ones apart (R8-ui-6)
   auto keys = std::vector<mdl::PrefabPlacementKey>{};
-  auto lines = QStringList{};
+  auto changedLines = QStringList{};
+  auto missingLines = QStringList{};
+  auto listedEntries = std::unordered_set<const mdl::PrefabEntry*>{};
+  auto listedMissingPaths = std::unordered_set<std::string_view>{};
   for (const auto& placement : placements)
   {
-    lines.push_back(describePlacement(placement));
     if (placement.entry)
     {
       keys.emplace_back(placement.prefabPath, placement.firstMember->linkId());
+      if (listedEntries.insert(placement.entry).second)
+      {
+        changedLines.push_back(describePlacement(placement));
+      }
+    }
+    else if (listedMissingPaths.insert(placement.prefabPath).second)
+    {
+      missingLines.push_back(describePlacement(placement));
     }
   }
 
-  const auto count = placements.size();
+  const auto counts = countChangedFiles(placements);
+  const auto changedText = counts.changed > 0
+                             ? fmt::format(
+                                 "{} prefab {} changed on disk",
+                                 counts.changed,
+                                 kdl::str_plural(counts.changed, "file", "files"))
+                             : std::string{};
+  const auto missingText = counts.missing > 0
+                             ? fmt::format(
+                                 "{} prefab {} missing",
+                                 counts.missing,
+                                 kdl::str_plural(counts.missing, "file is", "files are"))
+                             : std::string{};
+  const auto text =
+    counts.changed > 0 && counts.missing > 0
+      ? fmt::format("{}, {}. Update the changed ones?", changedText, missingText)
+    : counts.changed > 0 ? fmt::format("{}. Update?", changedText)
+                         : fmt::format("{}.", missingText);
+
+  auto informativeText = changedLines.join(QChar{'\n'});
+  if (!missingLines.empty())
+  {
+    if (!informativeText.isEmpty())
+    {
+      informativeText += "\n\n";
+    }
+    informativeText += tr("Missing:") + QChar{'\n'} + missingLines.join(QChar{'\n'});
+  }
+
   auto messageBox = QMessageBox{this};
   messageBox.setIcon(QMessageBox::Question);
   messageBox.setWindowTitle(tr("Prefabs"));
-  messageBox.setText(QString::fromStdString(fmt::format(
-    "{} {} changed on disk. Update?",
-    count,
-    kdl::str_plural(count, "prefab", "prefabs"))));
-  messageBox.setInformativeText(lines.join(QChar{'\n'}));
+  messageBox.setText(QString::fromStdString(text));
+  messageBox.setInformativeText(informativeText);
   auto* updateButton = messageBox.addButton(tr("Update"), QMessageBox::AcceptRole);
   messageBox.addButton(tr("Not now"), QMessageBox::RejectRole);
   updateButton->setEnabled(!keys.empty());
@@ -413,9 +507,33 @@ void PrefabPanel::promptToRefreshPlacements(
     return;
   }
 
+  const auto outcome = refreshPlacementsByKeys(keys);
+
+  if (!outcome.errors.empty())
+  {
+    QMessageBox::warning(this, tr("Prefabs"), outcome.errors.join(QChar{'\n'}));
+  }
+  if (!outcome.lostEntities.empty())
+  {
+    auto lostBox = QMessageBox{this};
+    lostBox.setIcon(QMessageBox::Information);
+    lostBox.setWindowTitle(tr("Prefabs"));
+    // the prefab file has no entity of the same class at the same place in the group
+    const auto lostCount = std::size_t(outcome.lostEntities.size());
+    lostBox.setText(QString::fromStdString(fmt::format(
+      "{} {} lost the overrides of every copy:",
+      lostCount,
+      kdl::str_plural(lostCount, "entity", "entities"))));
+    lostBox.setInformativeText(outcome.lostEntities.join(QChar{'\n'}));
+    lostBox.exec();
+  }
+}
+
+PrefabPanel::RefreshOutcome PrefabPanel::refreshPlacementsByKeys(
+  const std::vector<mdl::PrefabPlacementKey>& keys)
+{
   auto& map = m_document.map();
-  auto lostEntities = QStringList{};
-  auto errors = QStringList{};
+  auto outcome = RefreshOutcome{};
   // R2-pf-ui-7: one walk of the map for every key, again only after a refresh that may
   // have replaced the groups of another placement
   auto current = map.prefabLibrary().placementsByKey();
@@ -432,13 +550,13 @@ void PrefabPanel::promptToRefreshPlacements(
     mdl::refreshPlacement(map, it->second) | kdl::transform([&](const auto& report) {
       for (const auto& name : report.lostEntities)
       {
-        lostEntities.push_back(QString{"%1: %2"}
-                                 .arg(QString::fromStdString(prefabPath))
-                                 .arg(QString::fromStdString(name)));
+        outcome.lostEntities.push_back(QString{"%1: %2"}
+                                         .arg(QString::fromStdString(prefabPath))
+                                         .arg(QString::fromStdString(name)));
       }
     }) | kdl::transform_error([&](const auto& e) {
       map.logger().error() << e.msg;
-      errors.push_back(QString::fromStdString(e.msg));
+      outcome.errors.push_back(QString::fromStdString(e.msg));
     });
 
     if (walkAgain)
@@ -448,25 +566,7 @@ void PrefabPanel::promptToRefreshPlacements(
   }
 
   updateRefreshButton();
-
-  if (!errors.empty())
-  {
-    QMessageBox::warning(this, tr("Prefabs"), errors.join(QChar{'\n'}));
-  }
-  if (!lostEntities.empty())
-  {
-    auto lostBox = QMessageBox{this};
-    lostBox.setIcon(QMessageBox::Information);
-    lostBox.setWindowTitle(tr("Prefabs"));
-    // the prefab file has no entity of the same class at the same place in the group
-    const auto lostCount = std::size_t(lostEntities.size());
-    lostBox.setText(QString::fromStdString(fmt::format(
-      "{} {} lost the overrides of every copy:",
-      lostCount,
-      kdl::str_plural(lostCount, "entity", "entities"))));
-    lostBox.setInformativeText(lostEntities.join(QChar{'\n'}));
-    lostBox.exec();
-  }
+  return outcome;
 }
 
 void PrefabPanel::applyToSelection()
@@ -479,26 +579,34 @@ void PrefabPanel::applyToSelection()
   }
 }
 
-void PrefabPanel::updatePrefabFromSelection(const std::filesystem::path& path)
+Result<void> PrefabPanel::updatePrefabFromSelection(const std::filesystem::path& path)
 {
   const auto& map = m_document.map();
   const auto* entry = findEntry(map.prefabLibrary(), path);
   if (!entry || !map.selection().hasNodes())
   {
-    return;
+    return Result<void>{};
   }
 
-  auto dialog = SavePrefabDialog{m_document, this};
-  dialog.forEntry(*entry);
-  if (dialog.exec() == QDialog::Accepted && dialog.savedPath())
-  {
-    prefabWasSaved(*dialog.savedPath());
-  }
+  return checkNotOpen(entry->absolutePath) | kdl::transform([&]() {
+           auto dialog = SavePrefabDialog{m_document, this};
+           dialog.forEntry(*entry);
+           dialog.setOpenFileCheck(
+             [&](const auto& filePath) { return checkNotOpen(filePath); });
+           if (dialog.exec() == QDialog::Accepted && dialog.savedPath())
+           {
+             prefabWasSaved(*dialog.savedPath());
+           }
+         });
 }
 
 Result<void> PrefabPanel::deletePrefabFile(const std::filesystem::path& path)
 {
   return findEntryOrError(m_document.map().prefabLibrary(), path)
+         | kdl::and_then([&](const auto* entry) {
+             return checkNotOpen(entry->absolutePath)
+                    | kdl::transform([&]() { return entry; });
+           })
          | kdl::and_then([&](const auto* entry) {
              // copied, since the rescan replaces the entry
              const auto filePath = entry->absolutePath;
@@ -607,7 +715,12 @@ void PrefabPanel::createGui()
     });
   connect(
     m_view, &PrefabBrowserView::updatePrefabRequested, this, [&](const QString& path) {
-      updatePrefabFromSelection(pathFromQString(path));
+      updatePrefabFromSelection(pathFromQString(path))
+        | kdl::transform_error([&](const auto& e) {
+            m_document.map().logger().error() << e.msg;
+            QMessageBox::information(
+              this, tr("Update Prefab"), QString::fromStdString(e.msg));
+          });
     });
   connect(
     m_view, &PrefabBrowserView::refreshPrefabRequested, this, [&](const QString& path) {
@@ -795,6 +908,9 @@ void PrefabPanel::startScan()
   m_scanStarted = true;
   // set before the library is told, since a scan of empty roots finishes at once
   m_scanRunning = true;
+  // until this scan has finished, the entries may be those of another root, against
+  // which every placement would count as changed or missing
+  m_scanFinished = false;
   ++m_scanCount;
 
   // R2-pf-ui-4: the view clears the entity models that its cells hold when the mods or
@@ -874,22 +990,23 @@ void PrefabPanel::libraryDidChange()
 void PrefabPanel::updateRefreshButton()
 {
   // until a scan has finished, every placed prefab would count as missing
-  m_changedPlacementCount = 0;
+  auto counts = ChangedFileCounts{};
   if (m_scanFinished)
   {
-    m_changedPlacementCount = m_document.map().prefabLibrary().changedPlacements().size();
+    counts = countChangedFiles(m_document.map().prefabLibrary().changedPlacements());
     ++m_recountCount;
   }
+  m_changedFileCount = counts.changed;
+  m_missingFileCount = counts.missing;
   m_refreshCountStale = false;
 
+  const auto hasFiles = counts.changed > 0 || counts.missing > 0;
   m_refreshButton->setText(
-    m_changedPlacementCount > 0 ? tr("Refresh (%1)").arg(m_changedPlacementCount)
-                                : tr("Refresh"));
-  m_refreshButton->setEnabled(m_changedPlacementCount > 0);
+    hasFiles ? tr("Refresh (%1)").arg(describeChangedFiles(counts)) : tr("Refresh"));
+  m_refreshButton->setEnabled(hasFiles);
   m_refreshButton->setToolTip(
-    m_changedPlacementCount > 0
-      ? tr("Update the placed prefabs whose files changed on disk...")
-      : tr("No placed prefab has changed on disk"));
+    hasFiles ? tr("Update the placed prefabs whose files changed on disk...")
+             : tr("No placed prefab has changed on disk"));
 }
 
 void PrefabPanel::updateApplyButton()
@@ -1088,33 +1205,64 @@ void PrefabPanel::promptAfterScanIfNeeded()
   if (m_promptAfterScan && m_scanFinished)
   {
     m_promptAfterScan = false;
-    // posted, since this runs inside the library's notification; a document loaded in
-    // the meantime gets a prompt of its own (R1-pf-ui-4)
-    QTimer::singleShot(0, this, [this, loadGeneration = m_loadGeneration]() {
-      if (loadGeneration != m_loadGeneration || !m_scanFinished)
-      {
-        return;
-      }
-
-      // DD-24: a machine without the files is not asked on every load; the Refresh
-      // button counts the missing placements
-      const auto placements = m_document.map().prefabLibrary().changedPlacements();
-      if (std::ranges::none_of(
-            placements, [](const auto& placement) { return placement.entry != nullptr; }))
-      {
-        return;
-      }
-
-      if (m_openPrompt)
-      {
-        m_openPrompt(placements);
-      }
-      else
-      {
-        promptToRefreshPlacements(placements);
-      }
-    });
+    // posted, since this runs inside the library's notification
+    postOpenPrompt(m_loadGeneration, 0ms);
   }
+}
+
+void PrefabPanel::postOpenPrompt(
+  const std::size_t loadGeneration, const std::chrono::milliseconds delay)
+{
+  QTimer::singleShot(
+    delay, this, [this, loadGeneration]() { showOpenPrompt(loadGeneration); });
+}
+
+void PrefabPanel::showOpenPrompt(const std::size_t loadGeneration)
+{
+  // a document loaded in the meantime gets a prompt of its own (R1-pf-ui-4)
+  if (loadGeneration != m_loadGeneration)
+  {
+    return;
+  }
+
+  // a scan started in the meantime; its end shows the prompt
+  if (!m_scanFinished)
+  {
+    m_promptAfterScan = true;
+    return;
+  }
+
+  // DD-40: not inside the event loop of a modal widget, such as the save dialog, whose
+  // nodes a refresh would replace, nor inside a transaction, such as a drop's; it looks
+  // again shortly, for as long as the document is the same
+  if (QApplication::activeModalWidget() || m_document.map().isTransactionActive())
+  {
+    postOpenPrompt(loadGeneration, OpenPromptRetryInterval);
+    return;
+  }
+
+  // DD-24: a machine without the files is not asked on every load; the Refresh button
+  // counts the missing placements
+  const auto placements = m_document.map().prefabLibrary().changedPlacements();
+  if (std::ranges::none_of(
+        placements, [](const auto& placement) { return placement.entry != nullptr; }))
+  {
+    return;
+  }
+
+  if (m_openPrompt)
+  {
+    m_openPrompt(placements);
+  }
+  else
+  {
+    promptToRefreshPlacements(placements);
+  }
+}
+
+Result<void> PrefabPanel::checkNotOpen(const std::filesystem::path& path)
+{
+  return m_appController.mapWindowManager().checkNotOpen(path);
 }
 
 void PrefabPanel::updateCategories()
@@ -1187,13 +1335,20 @@ void PrefabPanel::updateFilter()
 
 void PrefabPanel::updateEmptyState()
 {
-  // a scan that has not finished may still find prefabs
+  // a scan that has not finished may still find prefabs; R8-ui-5: a Prefab Path whose
+  // folder does not exist is a typo or an unplugged drive, while the mod's folder is
+  // made by the first save
   const auto& library = m_document.map().prefabLibrary();
-  const auto message = !hasWriteRoot(library)
-                         ? tr("Set a game path or a Prefab Path in Preferences")
-                       : m_scanFinished && library.entries().empty()
-                         ? tr("No prefabs yet. Select something and press +")
-                         : QString{};
+  auto ec = std::error_code{};
+  const auto userRootMissing = library.writeRoot() == mdl::PrefabRoot::User
+                               && !std::filesystem::is_directory(library.userRoot(), ec);
+  const auto message =
+    !hasWriteRoot(library) ? tr("Set a game path or a Prefab Path in Preferences")
+    : userRootMissing
+      ? tr("The prefab folder %1 does not exist").arg(pathAsQString(library.userRoot()))
+    : m_scanFinished && library.entries().empty()
+      ? tr("No prefabs yet. Select something and press +")
+      : QString{};
 
   m_emptyLabel->setText(message);
   m_browserStack->setCurrentWidget(message.isEmpty() ? m_browserPage : m_emptyLabel);
@@ -1261,6 +1416,18 @@ void PrefabPanel::confirmDeletePrefabFile(const std::filesystem::path& path)
   {
     m_document.map().logger().error()
       << fmt::format("{} is not a prefab of the library", path);
+    return;
+  }
+
+  // DD-39: not asked about while a window has the file open
+  auto refused = false;
+  checkNotOpen(entry->absolutePath) | kdl::transform_error([&](const auto& e) {
+    m_document.map().logger().error() << e.msg;
+    QMessageBox::information(this, tr("Delete Prefab"), QString::fromStdString(e.msg));
+    refused = true;
+  });
+  if (refused)
+  {
     return;
   }
 

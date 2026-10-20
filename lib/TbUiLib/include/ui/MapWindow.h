@@ -23,6 +23,7 @@
 #include <QMainWindow>
 #include <QPointer>
 #include <QString>
+#include <QVariant>
 
 #include "base/NotifierConnection.h"
 #include "mdl/ExportOptions.h"
@@ -34,6 +35,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 class QAction;
@@ -105,6 +107,14 @@ private:
   ThumbnailGrabber m_thumbnailGrabber;
   // the file that a prefab editor saved last, until its thumbnail is written
   std::optional<std::filesystem::path> m_pendingPrefabSavePath;
+  // DD-38: the save that a prefab editor is about to make, or made last, writes the
+  // thumbnail: it saves a modified document, or saves it under another name
+  bool m_prefabSaveWritesThumbnail = false;
+  // R1-pf3-1, R8-app-6: a prefab editor's copy of the windows' saved widget state as it
+  // was when the editor opened, but for the editor's own, which it puts back when it
+  // closes, so that what its widgets write while it is open, or when they are deleted,
+  // does not replace the map windows' state
+  std::optional<std::vector<std::pair<QString, QVariant>>> m_sharedWidgetState;
 
   std::chrono::time_point<std::chrono::system_clock> m_lastInputTime;
   QTimer* m_autosaveTimer = nullptr;
@@ -530,18 +540,26 @@ private:
   /**
    * Brings the _tb_prefab_class key of a prefab editor's entity snapshot up to date
    * before a save of a modified document, in a transaction of its own and only if the
-   * class has changed; warns if the snapshot no longer holds exactly one entity. The
-   * _tb_prefab_saved key keeps the time of the snapshot (DD-30).
+   * class has changed. Warns in the status bar and the log if the body of the prefab is
+   * no longer what its kind says: one entity for an entity snapshot, one group for an
+   * assembly (R8-app-2). The _tb_prefab_saved key keeps the time of the snapshot
+   * (DD-30).
    */
   void updatePrefabMetadata();
   /**
-   * Writes the thumbnail of the last save of a prefab editor and tells the other windows
-   * of it, unless that is done.
+   * Says in the status bar and the log that the prefab's body does not fit its kind.
+   */
+  void warnMalformedPrefabBody(const QString& message);
+  /**
+   * Writes the thumbnail of the last save of a prefab editor if that save writes one
+   * (DD-38), and tells the other windows of the save, unless that is done.
    */
   void finishPrefabSave();
   /**
    * Writes the 3D view's picture beside the given file as its thumbnail, at most 256
-   * pixels on its longer side, or says in the status bar why it wrote none.
+   * pixels on its longer side, marked as the editor's own by a PNG text key, or says in
+   * the status bar why it wrote none. An existing file without that mark is the user's
+   * and is kept (DD-38).
    */
   void writePrefabThumbnail(const std::filesystem::path& mapPath);
   /**

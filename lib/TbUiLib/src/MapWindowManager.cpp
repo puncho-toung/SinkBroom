@@ -32,12 +32,27 @@
 #include "kd/contracts.h"
 #include "kd/ranges/contains.h"
 
+#include <fmt/format.h>
+#include <fmt/std.h>
+
 #include <algorithm>
 #include <memory>
 #include <system_error>
 
 namespace tb::ui
 {
+namespace
+{
+
+// the form of a path that findMapWindow takes
+std::filesystem::path absoluteNormalPath(const std::filesystem::path& path)
+{
+  auto error = std::error_code{};
+  return (path.is_absolute() ? path : std::filesystem::absolute(path, error))
+    .lexically_normal();
+}
+
+} // namespace
 
 MapWindowManager::MapWindowManager(
   AppController& appController, const bool singleMapWindow)
@@ -102,6 +117,15 @@ Result<void> MapWindowManager::loadDocument(
   const vm::bbox3d& worldBounds,
   std::filesystem::path path)
 {
+  // R8-app-4: a file that a window has open, a prefab editor too, is not opened twice;
+  // that window comes to the front
+  if (auto* mapWindow = findMapWindow(absoluteNormalPath(path)))
+  {
+    moveToTop(*mapWindow);
+    showMapWindow(*mapWindow);
+    return Result<void>{};
+  }
+
   if (shouldCreateWindowForDocument())
   {
     return MapDocument::loadDocument(
@@ -139,9 +163,7 @@ Result<void> MapWindowManager::openPrefabEditor(
     return Error{"The window that the prefab was opened from is closed"};
   }
 
-  auto error = std::error_code{};
-  auto absolutePath = (path.is_absolute() ? path : std::filesystem::absolute(path, error))
-                        .lexically_normal();
+  auto absolutePath = absoluteNormalPath(path);
 
   // R1-pf3-12: a prefab open as a map is not opened twice either
   if (auto* mapWindow = findMapWindow(absolutePath))
@@ -173,11 +195,25 @@ void MapWindowManager::prefabWasSaved(const std::filesystem::path& path)
   // R1-pf3-9: not only the window that opened the editor, which may have switched its
   // game or been closed, or be another editor; each library filters by its roots.
   // R2-pf3-3: the editor too, so that its own panel takes the save for its own write and
-  // does not rescan its library when its folder watcher reports it
-  for (auto* mapWindow : m_mapWindows)
+  // does not rescan its library when its folder watcher reports it; a copy of the list,
+  // which a window that the notification closes would change
+  const auto mapWindows = m_mapWindows;
+  for (auto* mapWindow : mapWindows)
   {
     mapWindow->prefabWasSaved(path);
   }
+}
+
+Result<void> MapWindowManager::checkNotOpen(const std::filesystem::path& path)
+{
+  if (auto* mapWindow = findMapWindow(absoluteNormalPath(path)))
+  {
+    moveToTop(*mapWindow);
+    showMapWindow(*mapWindow);
+    return Error{
+      fmt::format("{} is open in a window; save or close it there first", path)};
+  }
+  return Result<void>{};
 }
 
 bool MapWindowManager::allMapWindowsClosed() const

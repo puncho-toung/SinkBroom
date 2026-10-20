@@ -18,7 +18,9 @@
  */
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
+#include <QDialog>
 #include <QFileSystemWatcher>
 #include <QImage>
 #include <QLabel>
@@ -40,6 +42,7 @@
 #include "mdl/GroupNode.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
+#include "mdl/Map_Groups.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/PrefabFile.h"
@@ -463,6 +466,14 @@ TEST_CASE("SavePrefabDialog")
     CHECK(descriptionEdit->toPlainText() == QString(300, 'x'));
     CHECK(countLabel->text() == "300 / 300");
 
+    // never half of a surrogate pair
+    const auto emoji = QString::fromUtf8("\xF0\x9F\x92\xA1");
+    REQUIRE(emoji.size() == 2);
+    descriptionEdit->setPlainText(QString(299, 'x') + emoji + "y");
+    CHECK(descriptionEdit->toPlainText() == QString(299, 'x'));
+    descriptionEdit->setPlainText(QString(298, 'x') + emoji + "y");
+    CHECK(descriptionEdit->toPlainText() == QString(298, 'x') + emoji);
+
     descriptionEdit->setPlainText("A lamp\nfor the  hall ");
     CHECK(countLabel->text() == "21 / 300");
     dialog.accept();
@@ -537,6 +548,14 @@ TEST_CASE("SavePrefabDialog")
       CHECK(!messageLabel->text().isEmpty());
     }
 
+    SECTION("An entity snapshot stays an entity snapshot")
+    {
+      auto* forceAssemblyCheck =
+        dialog.findChild<QCheckBox*>("SavePrefabDialog_forceAssemblyCheck");
+      REQUIRE(forceAssemblyCheck != nullptr);
+      CHECK(!forceAssemblyCheck->isChecked());
+    }
+
     SECTION("The prefab's file is overwritten without asking")
     {
       tagsEdit->setText("new");
@@ -554,6 +573,106 @@ TEST_CASE("SavePrefabDialog")
       REQUIRE(updatedEntry != nullptr);
       CHECK(updatedEntry->metadata.tags == std::vector<std::string>{"new"});
     }
+  }
+}
+
+TEST_CASE("SavePrefabDialog forEntry and accept")
+{
+  auto env = fs::TestEnvironment{};
+  auto fixture = SidebarContextFixture{fixtureConfigWithUserRoot(env.dir())};
+  auto& document = fixture.document();
+  auto& map = document.map();
+  auto& library = map.prefabLibrary();
+
+  const auto scan = [&]() {
+    library.rescan();
+    REQUIRE(QTest::qWaitFor([&] {
+      library.processPendingResults();
+      return !library.scanning();
+    }));
+  };
+
+  SECTION("An assembly of one entity is updated as an assembly")
+  {
+    // R8-ui-1: a one-entity assembly updated from one entity must stay an assembly, or
+    // its placements could no longer be refreshed
+    auto* lampNode = addEntity(map, {{"classname", "light"}, {"name", "lamp"}});
+    REQUIRE(
+      mdl::savePrefab(
+        map,
+        {lampNode},
+        mdl::SavePrefabOptions{
+          .name = "lampset", .root = mdl::PrefabRoot::User, .forceAssembly = true})
+      | kdl::is_success());
+    scan();
+    const auto* entry = library.find(mdl::PrefabRoot::User, "lampset.map");
+    REQUIRE(entry != nullptr);
+    REQUIRE(entry->metadata.kind == mdl::PrefabKind::Assembly);
+
+    selectOnly(map, {lampNode});
+    auto dialog = SavePrefabDialog{document};
+    auto* forceAssemblyCheck =
+      dialog.findChild<QCheckBox*>("SavePrefabDialog_forceAssemblyCheck");
+    REQUIRE(forceAssemblyCheck != nullptr);
+    CHECK(!forceAssemblyCheck->isChecked());
+
+    dialog.forEntry(*entry);
+    CHECK(forceAssemblyCheck->isChecked());
+
+    dialog.accept();
+    REQUIRE(dialog.savedPath());
+    scan();
+    const auto* updatedEntry = library.find(mdl::PrefabRoot::User, "lampset.map");
+    REQUIRE(updatedEntry != nullptr);
+    CHECK(updatedEntry->metadata.kind == mdl::PrefabKind::Assembly);
+  }
+
+  SECTION("A selection that changed while the dialog was open is not written")
+  {
+    // DD-40: a prompt that ran inside the dialog's event loop may have replaced the
+    // nodes that it would write
+    auto* lampNode = addEntity(map, {{"classname", "light"}, {"name", "lamp"}});
+    auto* markerNode = addEntity(map, {{"classname", "info_null"}, {"name", "marker"}});
+    selectOnly(map, {lampNode});
+
+    auto dialog = SavePrefabDialog{document};
+    auto* messageLabel = dialog.findChild<QLabel*>("SavePrefabDialog_messageLabel");
+    REQUIRE(messageLabel != nullptr);
+
+    selectOnly(map, {markerNode});
+    dialog.accept();
+    CHECK(!dialog.savedPath());
+    CHECK(dialog.result() != QDialog::Accepted);
+    CHECK(messageLabel->text().startsWith(
+      "The selection changed while this dialog was open"));
+    CHECK(!std::filesystem::exists(env.dir() / "lamp.map"));
+
+    // the same selection again is written
+    selectOnly(map, {lampNode});
+    dialog.accept();
+    CHECK(dialog.savedPath());
+  }
+
+  SECTION("The open file check refuses a file")
+  {
+    // DD-39: the panel refuses a file that a window holds open
+    auto* lampNode = addEntity(map, {{"classname", "light"}, {"name", "lamp"}});
+    selectOnly(map, {lampNode});
+
+    auto dialog = SavePrefabDialog{document};
+    auto* messageLabel = dialog.findChild<QLabel*>("SavePrefabDialog_messageLabel");
+    REQUIRE(messageLabel != nullptr);
+
+    auto checkedPaths = std::vector<std::filesystem::path>{};
+    dialog.setOpenFileCheck([&](const auto& path) -> Result<void> {
+      checkedPaths.push_back(path);
+      return Error{"it is open"};
+    });
+    dialog.accept();
+    CHECK(checkedPaths == std::vector<std::filesystem::path>{env.dir() / "lamp.map"});
+    CHECK(!dialog.savedPath());
+    CHECK(messageLabel->text() == "it is open");
+    CHECK(!std::filesystem::exists(env.dir() / "lamp.map"));
   }
 }
 
@@ -1069,6 +1188,26 @@ TEST_CASE("PrefabPanel")
       CHECK(emptyText(panel) == "Set a game path or a Prefab Path in Preferences");
     }
 
+    SECTION("A Prefab Path whose folder does not exist")
+    {
+      // R8-ui-5
+      auto env = fs::TestEnvironment{};
+      const auto missingPath = env.dir() / "missing";
+      auto fixture = SidebarContextFixture{fixtureConfigWithUserRoot(missingPath)};
+      auto panel = PrefabPanel{fixture.context()};
+      CHECK(
+        emptyText(panel)
+        == QString{"The prefab folder %1 does not exist"}.arg(
+          pathAsQString(missingPath)));
+
+      panel.panelShown();
+      CHECK(waitForScan(panel, fixture.document().map().prefabLibrary(), 1));
+      CHECK(
+        emptyText(panel)
+        == QString{"The prefab folder %1 does not exist"}.arg(
+          pathAsQString(missingPath)));
+    }
+
     SECTION("Empty roots")
     {
       auto env = fs::TestEnvironment{};
@@ -1159,7 +1298,8 @@ TEST_CASE("PrefabPanel")
       CHECK(groupNode->parent() != nullptr);
       CHECK(groupNode->childCount() == groupChildCount);
       CHECK(groupNode->group().prefabPath() == "user/sets/pair.map");
-      CHECK(panel.changedPlacementCount() == 1u);
+      CHECK(panel.missingFileCount() == 1u);
+      CHECK(panel.changedFileCount() == 0u);
 
       // the other file stays
       CHECK(std::filesystem::exists(lampPath));
@@ -1240,7 +1380,7 @@ TEST_CASE("PrefabPanel")
 
     SECTION("The Refresh button counts the changed placements")
     {
-      CHECK(panel.changedPlacementCount() == 0u);
+      CHECK(panel.changedFileCount() == 0u);
       CHECK(refreshButton->text() == "Refresh");
       CHECK(!refreshButton->isEnabled());
 
@@ -1257,8 +1397,8 @@ TEST_CASE("PrefabPanel")
       panel.prefabWasSaved(pairPath);
       REQUIRE(QTest::qWaitFor([&] { return !library.scanning(); }));
 
-      CHECK(panel.changedPlacementCount() == 1u);
-      CHECK(refreshButton->text() == "Refresh (1)");
+      CHECK(panel.changedFileCount() == 1u);
+      CHECK(refreshButton->text() == "Refresh (1 changed)");
       CHECK(refreshButton->isEnabled());
       CHECK(
         groupNode->group().prefabHash()
@@ -1266,10 +1406,74 @@ TEST_CASE("PrefabPanel")
 
       // a change of the map is counted when the hidden panel is shown
       mdl::removeNodes(map, {groupNode});
-      CHECK(panel.changedPlacementCount() == 1u);
+      CHECK(panel.changedFileCount() == 1u);
       panel.panelShown();
-      CHECK(panel.changedPlacementCount() == 0u);
+      CHECK(panel.changedFileCount() == 0u);
       CHECK(refreshButton->text() == "Refresh");
+    }
+
+    SECTION("The Refresh button counts distinct files, the missing ones apart")
+    {
+      // R8-ui-6: two unlinked placements of one changed file, and two of one missing
+      // file, are one file each
+      const auto* pairEntry = library.find(mdl::PrefabRoot::User, "pair.map");
+      REQUIRE(pairEntry != nullptr);
+      placeAssembly(map, *pairEntry, "user/pair.map", "an older hash");
+      placeAssembly(map, *pairEntry, "user/pair.map", "an older hash");
+      placeAssembly(map, *pairEntry, "user/gone.map", "a hash");
+      placeAssembly(map, *pairEntry, "user/gone.map", "a hash");
+      panel.panelShown();
+
+      CHECK(panel.changedFileCount() == 1u);
+      CHECK(panel.missingFileCount() == 1u);
+      CHECK(refreshButton->text() == "Refresh (1 changed, 1 missing)");
+      CHECK(refreshButton->isEnabled());
+    }
+
+    SECTION("refreshPlacementsByKeys")
+    {
+      // R8-ui-7: a placement nested in another, whose refresh replaces it, and a key
+      // whose file is missing
+      const auto* pairEntry = library.find(mdl::PrefabRoot::User, "pair.map");
+      REQUIRE(pairEntry != nullptr);
+
+      auto* outerNode = placeAssembly(map, *pairEntry, "user/pair.map", "an older hash");
+      mdl::openGroup(map, *outerNode);
+      auto* innerNode = placeAssembly(map, *pairEntry, "user/pair.map", "an older hash");
+      mdl::closeGroup(map);
+      REQUIRE(innerNode->parent() == outerNode);
+      REQUIRE(innerNode->linkId() != outerNode->linkId());
+      auto* missingNode = placeAssembly(map, *pairEntry, "user/gone.map", "a hash");
+
+      const auto outerKey = std::pair{std::string{"user/pair.map"}, outerNode->linkId()};
+      const auto innerKey = std::pair{std::string{"user/pair.map"}, innerNode->linkId()};
+      const auto missingKey =
+        std::pair{std::string{"user/gone.map"}, missingNode->linkId()};
+
+      // the outer refresh replaces the inner placement, which the file does not hold,
+      // so its key names nothing afterwards and is skipped
+      const auto outcome =
+        panel.refreshPlacementsByKeys({outerKey, innerKey, missingKey});
+      REQUIRE(outcome.errors.size() == 1);
+      CHECK(outcome.errors.front().contains("user/gone.map"));
+      CHECK(outcome.errors.front().contains("missing"));
+      // the entities of the inner placement, which the file does not hold
+      CHECK(!outcome.lostEntities.empty());
+      CHECK(std::ranges::all_of(outcome.lostEntities, [](const auto& line) {
+        return line.startsWith("user/pair.map: ");
+      }));
+
+      CHECK(outerNode->group().prefabHash() == pairEntry->hash);
+      CHECK(outerNode->childCount() == 2u);
+      CHECK(std::ranges::none_of(outerNode->children(), [](const auto* child) {
+        return dynamic_cast<const mdl::GroupNode*>(child) != nullptr;
+      }));
+      CHECK(missingNode->group().prefabHash() == "a hash");
+
+      // one transaction for the refresh that was made
+      REQUIRE(map.undoCommandName() != nullptr);
+      map.undoCommand();
+      CHECK(outerNode->group().prefabHash() == "an older hash");
     }
 
     SECTION("A visible panel counts after the outermost transaction only")
@@ -1295,7 +1499,7 @@ TEST_CASE("PrefabPanel")
       REQUIRE(map.commitTransaction());
       QApplication::processEvents();
       CHECK(panel.recountCount() == recounts + 1);
-      CHECK(refreshButton->text() == "Refresh (1)");
+      CHECK(refreshButton->text() == "Refresh (1 changed)");
 
       // an undo of a modification counts once
       map.undoCommand();
@@ -1585,7 +1789,7 @@ TEST_CASE("PrefabPanel")
       QTest::qWait(100);
       CHECK(prompts.size() == 1u);
       // DD-24: the Refresh button counts it
-      CHECK(panel.changedPlacementCount() == 1u);
+      CHECK(panel.missingFileCount() == 1u);
     }
 
     SECTION("Not for a map without placements")
@@ -1594,7 +1798,55 @@ TEST_CASE("PrefabPanel")
       CHECK(waitForScan(panel, document.map().prefabLibrary(), 4));
       QTest::qWait(100);
       CHECK(prompts.size() == 1u);
-      CHECK(panel.changedPlacementCount() == 0u);
+      CHECK(panel.changedFileCount() == 0u);
+      CHECK(panel.missingFileCount() == 0u);
+    }
+
+    SECTION("Not while a transaction is open")
+    {
+      // DD-40: a refresh nested in a drop's transaction, say
+      load();
+      document.map().startTransaction("Busy", mdl::TransactionScope::LongRunning);
+      CHECK(waitForScan(panel, document.map().prefabLibrary(), 4));
+      QTest::qWait(300);
+      CHECK(prompts.size() == 1u);
+
+      REQUIRE(document.map().commitTransaction());
+      CHECK(QTest::qWaitFor([&] { return prompts.size() == 2u; }));
+    }
+
+    SECTION("Not while a modal widget is up")
+    {
+      // DD-40: the save dialog, whose nodes a refresh would replace
+      auto modal = QDialog{};
+      modal.setModal(true);
+      modal.show();
+      REQUIRE(
+        QTest::qWaitFor([&] { return QApplication::activeModalWidget() == &modal; }));
+
+      load();
+      CHECK(waitForScan(panel, document.map().prefabLibrary(), 4));
+      QTest::qWait(300);
+      CHECK(prompts.size() == 1u);
+
+      modal.hide();
+      CHECK(QTest::qWaitFor([&] { return prompts.size() == 2u; }));
+    }
+
+    SECTION("A rescan while the prompt waits does not lose it")
+    {
+      // the prompt waits for the transaction; a scan that starts meanwhile shows it at
+      // its end if it is still running when the prompt looks again
+      load();
+      document.map().startTransaction("Busy", mdl::TransactionScope::LongRunning);
+      CHECK(waitForScan(panel, document.map().prefabLibrary(), 4));
+      QTest::qWait(150);
+      panel.rescan();
+      CHECK(waitForScan(panel, document.map().prefabLibrary(), 5));
+      REQUIRE(document.map().commitTransaction());
+      CHECK(QTest::qWaitFor([&] { return prompts.size() == 2u; }));
+      QTest::qWait(300);
+      CHECK(prompts.size() == 2u);
     }
   }
 }

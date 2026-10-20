@@ -36,6 +36,7 @@
 #include "fs/DiskIO.h"
 #include "mdl/GameConfig.h"
 #include "mdl/GameManager.h"
+#include "mdl/PrefabLibrary.h"
 #include "ui/AppController.h"
 #include "ui/BitmapButton.h"
 #include "ui/BorderLine.h"
@@ -235,24 +236,12 @@ void GamePreferencePane::createGui()
     updatePrefabPath(m_prefabPathText->text());
   });
 
-  auto* validPrefabDirectoryIcon = new QAction{m_prefabPathText};
-  m_prefabPathText->addAction(validPrefabDirectoryIcon, QLineEdit::TrailingPosition);
-  connect(
-    m_prefabPathText,
-    &QLineEdit::textChanged,
-    this,
-    [validPrefabDirectoryIcon](const QString& text) {
-      if (text.isEmpty() || QDir{text}.exists())
-      {
-        validPrefabDirectoryIcon->setToolTip("");
-        validPrefabDirectoryIcon->setIcon(QIcon{});
-      }
-      else
-      {
-        validPrefabDirectoryIcon->setToolTip(tr("Directory not found"));
-        validPrefabDirectoryIcon->setIcon(loadSVGIcon("IssueBrowser.svg"));
-      }
-    });
+  m_prefabPathIcon = new QAction{m_prefabPathText};
+  m_prefabPathIcon->setObjectName("GamePreferencePane_prefabPathIcon");
+  m_prefabPathText->addAction(m_prefabPathIcon, QLineEdit::TrailingPosition);
+  connect(m_prefabPathText, &QLineEdit::textChanged, this, [this]() {
+    updatePrefabPathIcon();
+  });
 
   auto* choosePrefabPathButton = new QPushButton{tr("...")};
   connect(
@@ -381,6 +370,22 @@ void GamePreferencePane::updatePrefabPath(const QString& str)
   emit requestUpdate();
 }
 
+void GamePreferencePane::updatePrefabPathIcon()
+{
+  const auto text = m_prefabPathText->text();
+  // the library takes a path that is not absolute for no path at all (R8-lib-4)
+  const auto problem =
+    text.isEmpty() ? QString{}
+    : mdl::PrefabLibrary::normalizeUserRoot(pathFromQString(text)).empty()
+      ? tr("Not an absolute path; the Prefab Path counts as unset")
+    : !QDir{text}.exists() ? tr("Directory not found")
+                           : QString{};
+
+  m_prefabPathIcon->setToolTip(problem);
+  m_prefabPathIcon->setIcon(
+    problem.isEmpty() ? QIcon{} : loadSVGIcon("IssueBrowser.svg"));
+}
+
 void GamePreferencePane::configureEnginesClicked()
 {
   auto& logger = m_document ? m_document->logger() : FileLogger::instance();
@@ -414,6 +419,8 @@ void GamePreferencePane::updateControls()
   const auto prefabPathBlocker = QSignalBlocker{m_prefabPathText};
   const auto prefabPath = prefs.getPendingValue(m_gameInfo.prefabPathPreference);
   m_prefabPathText->setText(pathAsQString(prefabPath));
+  // R8-ui-5: the signal blocker keeps textChanged from doing it
+  updatePrefabPathIcon();
 }
 
 } // namespace tb::ui

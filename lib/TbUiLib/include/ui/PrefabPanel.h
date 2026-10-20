@@ -21,6 +21,7 @@
 
 #include <QSet>
 #include <QString>
+#include <QStringList>
 
 #include "base/NotifierConnection.h"
 #include "base/Result.h"
@@ -30,6 +31,8 @@
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <string>
+#include <utility>
 #include <vector>
 
 class QComboBox;
@@ -80,6 +83,15 @@ public:
 
   // offers changed placements for a refresh; see setOpenPromptForTesting
   using RefreshPrompt = std::function<void(const std::vector<mdl::PrefabPlacement>&)>;
+
+  // what refreshPlacementsByKeys did not do as asked
+  struct RefreshOutcome
+  {
+    // "<prefab path>: <entity>" for each entity that lost its per-copy overrides
+    QStringList lostEntities;
+    // the error of each placement that could not be refreshed
+    QStringList errors;
+  };
 
 private:
   AppController& m_appController;
@@ -137,7 +149,10 @@ private:
   // reports until m_ownWritesUntil; the library has read the saved file already
   QSet<QString> m_ownWrites;
   std::chrono::steady_clock::time_point m_ownWritesUntil;
-  std::size_t m_changedPlacementCount = 0;
+  // R8-ui-6: the distinct prefab files of the placed assemblies that changed on disk,
+  // and of those whose file is missing, as the Refresh button shows them
+  std::size_t m_changedFileCount = 0;
+  std::size_t m_missingFileCount = 0;
   std::size_t m_recountCount = 0;
 
   NotifierConnection m_notifierConnection;
@@ -192,10 +207,18 @@ public:
   std::size_t scanCount() const;
 
   /**
-   * The number of placed assemblies whose file has changed or is missing, as the Refresh
-   * button shows it; 0 until the library was scanned.
+   * The number of distinct prefab files that placed assemblies were made from and that
+   * have changed on disk since, as the Refresh button shows it; 0 until the library was
+   * scanned.
    */
-  std::size_t changedPlacementCount() const;
+  std::size_t changedFileCount() const;
+
+  /**
+   * The number of distinct prefab files that placed assemblies name and that the library
+   * does not have, which the Refresh button shows apart; 0 until the library was
+   * scanned.
+   */
+  std::size_t missingFileCount() const;
 
   /**
    * The number of times the panel has counted the changed placements, a walk of the
@@ -204,17 +227,30 @@ public:
   std::size_t recountCount() const;
 
   /**
-   * Lists the given placements, of which those with a file are refreshed if the user
-   * agrees, one transaction each (F9); reports the entities that lost their overrides
-   * and any placement that could not be refreshed.
+   * Lists the distinct files of the given placements, those that changed and, apart,
+   * those that are missing (R8-ui-6); the placements with a file are refreshed by
+   * refreshPlacementsByKeys if the user agrees. Shows the entities that lost their
+   * overrides and any placement that could not be refreshed.
    */
   void promptToRefreshPlacements(const std::vector<mdl::PrefabPlacement>& placements);
+
+  /**
+   * Refreshes the placements with the given keys (PrefabPlacementKey: prefab path and
+   * link ID), one transaction each (F9). Each key is looked up in the map again, since a
+   * refresh replaces nodes that another placement may hold; a key that no longer names a
+   * placement is skipped. Logs each error and returns the errors and the entities that
+   * lost their overrides, without showing them.
+   */
+  RefreshOutcome refreshPlacementsByKeys(
+    const std::vector<std::pair<std::string, std::string>>& keys);
 
   /**
    * Replaces the prompt that offers the changed placements of a loaded document once its
    * library is scanned, so that tests see when and with what it is shown; an empty
    * function restores promptToRefreshPlacements. The prompt is not shown if no changed
-   * placement has a file (DD-24); the Refresh button counts them.
+   * placement has a file (DD-24); the Refresh button counts them. It waits while a modal
+   * widget is up or a transaction is open (DD-40), and a scan that starts before it is
+   * shown shows it once that scan has finished.
    */
   void setOpenPromptForTesting(RefreshPrompt prompt);
 
@@ -226,16 +262,19 @@ public:
 
   /**
    * Opens the save dialog for the current selection, filled in from the prefab with the
-   * given file, and overwrites that file.
+   * given file, and overwrites that file. Returns an error that names the file, and
+   * opens no dialog, if a window has the file open; that window is brought to the front
+   * (DD-39).
    */
-  void updatePrefabFromSelection(const std::filesystem::path& path);
+  Result<void> updatePrefabFromSelection(const std::filesystem::path& path);
 
   /**
    * Deletes the given prefab file and the thumbnail beside it, without asking, and
    * rescans: a visible panel once the library's folders are quiet, as after any change
    * in them, a hidden one at once. Placements of the prefab in the map are not touched;
    * they count as missing. Returns an error, and deletes nothing, if the path is not the
-   * file of an entry of the library.
+   * file of an entry of the library, or if a window has the file open, which is then
+   * brought to the front (DD-39).
    */
   Result<void> deletePrefabFile(const std::filesystem::path& path);
 
@@ -272,6 +311,10 @@ private:
   void libraryFilesDidChange();
   void mapDidChange();
   void promptAfterScanIfNeeded();
+  void postOpenPrompt(std::size_t loadGeneration, std::chrono::milliseconds delay);
+  void showOpenPrompt(std::size_t loadGeneration);
+  // DD-39: an error that names the file if a window has it open
+  Result<void> checkNotOpen(const std::filesystem::path& path);
 
   void editPrefab(const QString& path);
   void revealPrefabInFolder(const std::filesystem::path& path);

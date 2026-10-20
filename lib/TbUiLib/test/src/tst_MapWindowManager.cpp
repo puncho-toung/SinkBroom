@@ -20,10 +20,13 @@
 #include <QAction>
 #include <QApplication>
 #include <QByteArray>
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QDockWidget>
 #include <QEvent>
 #include <QImage>
+#include <QImageReader>
+#include <QLabel>
 #include <QPointer>
 #include <QSettings>
 #include <QSize>
@@ -60,6 +63,8 @@
 #include "ui/PrefabPanel.h"
 #include "ui/QPathUtils.h"
 #include "ui/RenderView.h"
+#include "ui/SavePrefabDialog.h"
+#include "ui/ToolSidebar.h"
 
 #include "kd/invoke.h"
 #include "kd/result.h"
@@ -67,6 +72,7 @@
 #include "vm/bbox.h"
 
 #include <fmt/format.h>
+#include <fmt/std.h>
 
 #include <filesystem>
 #include <fstream>
@@ -150,6 +156,25 @@ QImage redImage(const int width, const int height)
 void finishSave()
 {
   QCoreApplication::processEvents();
+}
+
+/**
+ * Counts a change of the given window's document, so that its next save writes the
+ * prefab's thumbnail (DD-38).
+ */
+void modify(MapWindow& mapWindow)
+{
+  mapWindow.document().map().incModificationCount();
+}
+
+/**
+ * The message of the given result's error, or an empty string.
+ */
+std::string errorMessage(Result<void> result)
+{
+  auto message = std::string{};
+  std::move(result) | kdl::transform_error([&](const auto& e) { message = e.msg; });
+  return message;
 }
 
 /**
@@ -400,6 +425,126 @@ TEST_CASE("MapWindowManager")
     CHECK(manager.mapWindows() == std::vector<MapWindow*>{host});
   }
 
+  SECTION("Open of a file that a window has open brings that window to the front")
+  {
+    // R8-app-4: with a single map window or one per document
+    REQUIRE(manager.openPrefabEditor(*host, prefabPath) | kdl::is_success());
+    auto* editor = manager.topMapWindow();
+    REQUIRE(editor->isPrefabEditor());
+
+    for (const auto singleMapWindow : {true, false})
+    {
+      CAPTURE(singleMapWindow);
+      manager.setSingleMapWindowForTesting(singleMapWindow);
+      emit qApp->focusChanged(nullptr, host);
+      REQUIRE(manager.topMapWindow() == host);
+
+      REQUIRE(
+        manager.loadDocument(
+          gameInfo, mapFormat, worldBounds, userRoot / "lights" / "." / "lamp.map")
+        | kdl::is_success());
+      CHECK(manager.mapWindows().size() == 2u);
+      CHECK(manager.topMapWindow() == editor);
+      CHECK(!host->document().map().persistent());
+    }
+  }
+
+  SECTION("a file that a window has open is not overwritten or deleted")
+  {
+    // DD-39: the editor's next save would write it again
+    REQUIRE(manager.openPrefabEditor(*host, prefabPath) | kdl::is_success());
+    auto editor = QPointer<MapWindow>{manager.topMapWindow()};
+    REQUIRE(editor->isPrefabEditor());
+
+    scanLibrary(*host);
+    auto* hostPanel = host->findChild<PrefabPanel*>();
+    REQUIRE(hostPanel != nullptr);
+
+    auto& hostMap = host->document().map();
+    auto* lampNode =
+      new mdl::EntityNode{mdl::Entity{{{"classname", "light"}, {"name", "lamp"}}}};
+    REQUIRE(
+      !mdl::addNodes(hostMap, {{&mdl::parentForNodes(hostMap), {lampNode}}}).empty());
+    mdl::selectNodes(hostMap, {lampNode});
+
+    const auto fileBefore = readFile(prefabPath);
+    const auto refusal =
+      fmt::format("{} is open in a window; save or close it there first", prefabPath);
+
+    // Delete File...
+    emit qApp->focusChanged(nullptr, host);
+    REQUIRE(manager.topMapWindow() == host);
+    CHECK(errorMessage(hostPanel->deletePrefabFile(prefabPath)) == refusal);
+    CHECK(std::filesystem::exists(prefabPath));
+    CHECK(manager.topMapWindow() == editor);
+
+    // Update from Selection
+    emit qApp->focusChanged(nullptr, host);
+    REQUIRE(manager.topMapWindow() == host);
+    CHECK(errorMessage(hostPanel->updatePrefabFromSelection(prefabPath)) == refusal);
+    CHECK(manager.topMapWindow() == editor);
+
+    // the save dialog's Replace
+    emit qApp->focusChanged(nullptr, host);
+    REQUIRE(manager.topMapWindow() == host);
+    {
+      auto dialog = SavePrefabDialog{host->document(), host};
+      dialog.setOpenFileCheck(
+        [&](const auto& path) { return manager.checkNotOpen(path); });
+      auto* categoryChoice =
+        dialog.findChild<QComboBox*>("SavePrefabDialog_categoryChoice");
+      auto* messageLabel = dialog.findChild<QLabel*>("SavePrefabDialog_messageLabel");
+      REQUIRE(categoryChoice != nullptr);
+      REQUIRE(messageLabel != nullptr);
+      categoryChoice->setCurrentText("lights");
+
+      dialog.accept();
+      CHECK(!dialog.savedPath());
+      CHECK(messageLabel->text().toStdString() == refusal);
+      CHECK(manager.topMapWindow() == editor);
+    }
+    CHECK(readFile(prefabPath) == fileBefore);
+
+    // once the editor is closed, the file may go
+    editor->close();
+    deleteClosedWindows();
+    REQUIRE(editor == nullptr);
+    CHECK(hostPanel->deletePrefabFile(prefabPath) | kdl::is_success());
+    CHECK(!std::filesystem::exists(prefabPath));
+  }
+
+  SECTION("a save of an assembly whose body is not one group warns")
+  {
+    // R8-app-2: a node outside the group is lost by every placement
+    const auto assemblyPath = mdl::savePrefab(
+                                sourceMap,
+                                {entityNode},
+                                mdl::SavePrefabOptions{
+                                  .name = "lampset",
+                                  .category = "lights",
+                                  .root = mdl::PrefabRoot::User,
+                                  .forceAssembly = true})
+                              | kdl::value();
+
+    REQUIRE(manager.openPrefabEditor(*host, assemblyPath) | kdl::is_success());
+    auto* editor = manager.topMapWindow();
+    REQUIRE(editor->isPrefabEditor());
+    editor->setThumbnailGrabberForTesting([] { return QImage{}; });
+
+    auto& editorMap = editor->document().map();
+    REQUIRE(!mdl::addNodes(
+               editorMap,
+               {{editorMap.worldNode().defaultLayer(),
+                 {new mdl::EntityNode{mdl::Entity{{{"classname", "info_null"}}}}}}})
+               .empty());
+
+    REQUIRE(editor->saveDocument());
+    CHECK(
+      editor->statusBar()->currentMessage()
+      == "Prefab lampset.map is an assembly, but it no longer holds exactly one group");
+    finishSave();
+  }
+
   SECTION("a prefab is not opened from a closed window")
   {
     // R1-pf3-3: the panel posts the request, which may run after the window's close and
@@ -462,15 +607,22 @@ TEST_CASE("MapWindowManager")
 
   SECTION("closing the prefab editor leaves the host open")
   {
+    // R1-pf3-1: the editor's layout is its own, and its widgets' saved state does not
+    // replace the map windows' as they were when the editor opened
+    QSettings{}.setValue(
+      "Windows/MapWindow/Geometry", QByteArray{"the map windows' geometry"});
+    const auto settings = mapWindowSettings();
+
     REQUIRE(manager.openPrefabEditor(*host, prefabPath) | kdl::is_success());
     auto editor = QPointer<MapWindow>{manager.topMapWindow()};
     REQUIRE(editor->isPrefabEditor());
 
-    // R1-pf3-1: the editor's layout is its own, and its widgets' saved state does not
-    // replace the map windows'
-    QSettings{}.setValue(
-      "Windows/MapWindow/Geometry", QByteArray{"the map windows' geometry"});
-    const auto settings = mapWindowSettings();
+    // R8-app-6: nor does what the editor's widgets write while it is open, such as the
+    // tool sidebar's toggle, which writes the key that the map windows read
+    auto* toolSidebar = editor->findChild<ToolSidebar*>();
+    REQUIRE(toolSidebar != nullptr);
+    toolSidebar->setExpanded(!toolSidebar->expanded());
+    REQUIRE(mapWindowSettings() != settings);
 
     editor->close();
     deleteClosedWindows();
@@ -510,6 +662,7 @@ TEST_CASE("MapWindowManager")
       !hasThumbnail(*newWindow, "lights/lamp.map", userRoot / "lights" / "lamp.png"));
 
     editor->setThumbnailGrabberForTesting([] { return redImage(16, 16); });
+    modify(*editor);
     REQUIRE(editor->saveDocument());
     finishSave();
     CHECK(QTest::qWaitFor([&] {
@@ -537,6 +690,7 @@ TEST_CASE("MapWindowManager")
     REQUIRE(otherEditor->document().map().path() == otherPrefabPath);
 
     otherEditor->setThumbnailGrabberForTesting([] { return redImage(16, 16); });
+    modify(*otherEditor);
     REQUIRE(otherEditor->saveDocument());
     finishSave();
     CHECK(QTest::qWaitFor(
@@ -566,6 +720,7 @@ TEST_CASE("MapWindowManager")
     SECTION("with a 3D view")
     {
       editor->setThumbnailGrabberForTesting([] { return redImage(512, 256); });
+      modify(*editor);
       REQUIRE(editor->saveDocument());
 
       // R1-pf3-10: written once the event loop runs
@@ -615,6 +770,7 @@ TEST_CASE("MapWindowManager")
       REQUIRE(!hasThumbnail(*editor, "lights/lamp.map", thumbnailPath));
 
       editor->setThumbnailGrabberForTesting([] { return redImage(16, 16); });
+      modify(*editor);
       REQUIRE(editor->saveDocument());
       finishSave();
       CHECK(QTest::qWaitFor(
@@ -628,6 +784,7 @@ TEST_CASE("MapWindowManager")
     SECTION("without a 3D view")
     {
       editor->setThumbnailGrabberForTesting([] { return QImage{}; });
+      modify(*editor);
       REQUIRE(editor->saveDocument());
       finishSave();
 
@@ -640,6 +797,7 @@ TEST_CASE("MapWindowManager")
     SECTION("an editor that is not shown grabs no thumbnail")
     {
       // R1-pf3-15: the grab of the 3D view itself, which a hidden view does not draw
+      modify(*editor);
       REQUIRE(editor->saveDocument());
       finishSave();
 
@@ -653,12 +811,57 @@ TEST_CASE("MapWindowManager")
       std::filesystem::create_directory(thumbnailPath);
 
       editor->setThumbnailGrabberForTesting([] { return redImage(16, 16); });
+      modify(*editor);
       REQUIRE(editor->saveDocument());
       finishSave();
 
       CHECK(std::filesystem::is_directory(thumbnailPath));
       CHECK(editor->statusBar()->currentMessage().startsWith(
         "Could not write thumbnail lamp.png: "));
+    }
+
+    SECTION("an unmodified save writes no thumbnail")
+    {
+      // DD-38
+      editor->setThumbnailGrabberForTesting([] { return redImage(16, 16); });
+      REQUIRE(!editor->document().map().modified());
+      REQUIRE(editor->saveDocument());
+      finishSave();
+      CHECK(!std::filesystem::exists(thumbnailPath));
+    }
+
+    SECTION("a thumbnail that the editor did not write is kept")
+    {
+      // DD-38: a hand-made thumbnail (C1) carries no mark of the editor
+      REQUIRE(redImage(8, 8).save(pathAsQString(thumbnailPath)));
+      REQUIRE(QImageReader{pathAsQString(thumbnailPath)}.text("Software").isEmpty());
+      const auto thumbnailBefore = readFile(thumbnailPath);
+
+      editor->setThumbnailGrabberForTesting([] { return redImage(16, 16); });
+      modify(*editor);
+      REQUIRE(editor->saveDocument());
+      finishSave();
+
+      CHECK(readFile(thumbnailPath) == thumbnailBefore);
+      CHECK(editor->statusBar()->currentMessage().startsWith("Kept thumbnail lamp.png"));
+    }
+
+    SECTION("the editor's own thumbnail is replaced")
+    {
+      editor->setThumbnailGrabberForTesting([] { return redImage(16, 16); });
+      modify(*editor);
+      REQUIRE(editor->saveDocument());
+      finishSave();
+      CHECK(QImage{pathAsQString(thumbnailPath)}.size() == QSize{16, 16});
+      CHECK(
+        QImageReader{pathAsQString(thumbnailPath)}.text("Software")
+        == "SinkBroom prefab editor");
+
+      editor->setThumbnailGrabberForTesting([] { return redImage(32, 32); });
+      modify(*editor);
+      REQUIRE(editor->saveDocument());
+      finishSave();
+      CHECK(QImage{pathAsQString(thumbnailPath)}.size() == QSize{32, 32});
     }
 
     SECTION("a save brings the prefab's class up to date and nothing else")
@@ -746,6 +949,10 @@ TEST_CASE("MapWindowManager")
                    .empty());
 
         REQUIRE(editor->saveDocument());
+        CHECK(
+          editor->statusBar()->currentMessage()
+          == "Prefab lamp.map is an entity snapshot, but it no longer holds exactly "
+             "one entity");
         finishSave();
 
         const auto file = readFile(prefabPath);
