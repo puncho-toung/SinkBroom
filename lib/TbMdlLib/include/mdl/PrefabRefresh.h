@@ -40,8 +40,9 @@ struct PrefabRefreshReport
   std::size_t entitiesLostOverrides = 0;
   // their names, or their classnames if they have none, in the order of the old member
   std::vector<std::string> lostEntities;
-  // the translation that was added to every new child so that the children that did not
-  // move in the file stay where they were in the map (DD-23); zero if none was needed
+  // the translation, in the map's frame, that was added to every new child so that the
+  // children that did not move in the file stay where they were in the map (DD-23); zero
+  // if none was needed
   vm::vec3d referenceShift = vm::vec3d{0, 0, 0};
 };
 
@@ -68,8 +69,12 @@ struct PrefabRefreshReport
  * reference point (D10) moves whenever the bounds of its body change, which moves every
  * child against the placement. For such a file, the new children are translated by the
  * negated most common displacement of the matched children (old to new reference point:
- * an entity's origin, a brush's or patch's bounds centre), rounded to the map's grid,
- * with ties going to no displacement, else to the first; see referenceShift (DD-23).
+ * an entity's origin, a brush's or patch's bounds centre), with ties going to no
+ * displacement, else to the first; see referenceShift (DD-23). The displacements are
+ * measured and rounded to the map's grid in the file's frame, the first member's
+ * transformation undone, and the correction is mapped back through the member's
+ * rotation and scale, so that a turned placement is corrected along the file's axes
+ * (R8-file-2).
  *
  * While the open group lies strictly below a member, it is closed first, inside the
  * transaction, since the refresh replaces the children of every member (DD-35).

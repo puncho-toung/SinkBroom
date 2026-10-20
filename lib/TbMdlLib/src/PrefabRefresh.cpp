@@ -442,10 +442,17 @@ vm::vec3d modalDisplacement(const Displacements& displacements, const double gri
  * and with it every child; a file saved from one group carries the reference point in
  * the group's transformation, which the linked group update undoes, so that its new
  * children are where the file puts them and need no correction.
+ *
+ * R8-file-2: the reference point moves on the file's grid, so the displacements are
+ * measured and rounded in the file's frame, the first member's transformation undone,
+ * and the rounded correction is mapped back through the member's rotation and scale;
+ * rounded on the map's grid, the correction of a placement turned by 45 degrees would be
+ * wrong by up to half a grid step on each axis.
  */
 vm::vec3d alignmentCorrection(
   const Map& map,
   const GroupNode& fileGroup,
+  const GroupNode& firstMember,
   const std::vector<Node*>& oldChildren,
   const std::vector<Node*>& newChildren)
 {
@@ -456,7 +463,24 @@ vm::vec3d alignmentCorrection(
 
   auto displacements = Displacements{};
   collectDisplacements(oldChildren, newChildren, displacements);
-  return -modalDisplacement(displacements, map.grid().actualSize());
+
+  // a displacement is a difference of points, so only the linear part applies
+  const auto toMap = vm::strip_translation(firstMember.group().transformation());
+  const auto toFile = vm::invert(toMap);
+  if (!toFile)
+  {
+    // a member scaled flat cannot be undone, so its displacements stay in the map's frame
+    return -modalDisplacement(displacements, map.grid().actualSize());
+  }
+
+  for (auto* values : {&displacements.ofEntities, &displacements.ofBrushesAndPatches})
+  {
+    for (auto& value : *values)
+    {
+      value = *toFile * value;
+    }
+  }
+  return toMap * -modalDisplacement(displacements, map.grid().actualSize());
 }
 
 std::vector<EntityNode*> collectEntityNodes(const std::vector<Node*>& nodes)
@@ -761,7 +785,7 @@ Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& pl
 
                         // DD-23: what did not move in the file stays where it was
                         const auto referenceShift = alignmentCorrection(
-                          map, *fileGroup, oldChildren, newChildNodes);
+                          map, *fileGroup, firstMember, oldChildren, newChildNodes);
                         if (referenceShift != vm::vec3d{0, 0, 0})
                         {
                           auto shiftError = std::optional<std::string>{};

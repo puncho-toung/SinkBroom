@@ -967,6 +967,43 @@ TEST_CASE("PrefabRefresh")
       == fileOffset);
   }
 
+  SECTION("refreshPlacement aligns a turned placement in the file's frame")
+  {
+    // R8-file-2: the reference point moves on the file's grid, which is not the map's
+    // grid for a placement turned by 45 degrees
+    saveLamp(map, {0, 0, 0});
+    rescan(library);
+    auto* placedNode = place(map, findLamp(library), {256, 0, 0});
+    selectNodes(map, {placedNode});
+    REQUIRE(rotateSelection(
+      map, placedNode->logicalBounds().center(), {0, 0, 1}, vm::to_radians(45.0)));
+    deselectAll(map);
+
+    const auto oldBrushBounds = findBrush(*placedNode)->logicalBounds();
+    const auto oldLightOrigin = findEntity(*placedNode)->entity().origin();
+
+    // the brush moves 64 units along the file's X axis, which moves the reference point
+    // and with it the light in the file
+    saveLamp(map, {64, 0, 0});
+    rescan(library);
+    const auto changed = library.changedPlacements();
+    REQUIRE(changed.size() == 1u);
+    const auto report = refreshPlacement(map, changed.front());
+    REQUIRE(report.is_success());
+    CHECK(report.value().referenceShift != vm::vec3d{0, 0, 0});
+
+    // the light did not move in the file, so it stays; the brush moves along the turned
+    // X axis
+    constexpr auto epsilon = 0.001;
+    CHECK(
+      vm::is_equal(findEntity(*placedNode)->entity().origin(), oldLightOrigin, epsilon));
+    const auto turnedDelta =
+      vm::rotation_matrix(vm::vec3d{0, 0, 1}, vm::to_radians(45.0)) * vm::vec3d{64, 0, 0};
+    const auto newBrushBounds = findBrush(*placedNode)->logicalBounds();
+    CHECK(vm::is_equal(newBrushBounds.min, oldBrushBounds.min + turnedDelta, epsilon));
+    CHECK(vm::is_equal(newBrushBounds.max, oldBrushBounds.max + turnedDelta, epsilon));
+  }
+
   SECTION("refreshPlacement of a large assembly")
   {
     // R2-pf-mdl-2: the library keeps no world for it, so the refresh reads the file and
