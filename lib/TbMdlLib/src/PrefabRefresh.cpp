@@ -22,6 +22,7 @@
 #include "mdl/AddRemoveNodesCommand.h"
 #include "mdl/BrushFaceHandle.h"
 #include "mdl/BrushNode.h"
+#include "mdl/EditorContext.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityDefinitionUtils.h"
 #include "mdl/EntityNaming.h"
@@ -621,6 +622,30 @@ bool selectionIsInside(const Map& map, const std::vector<GroupNode*>& groupNodes
             });
 }
 
+/**
+ * Whether the open group lies strictly below one of the given groups.
+ */
+bool openGroupIsInside(const Map& map, const std::vector<GroupNode*>& groupNodes)
+{
+  const auto* currentGroup = map.editorContext().currentGroup();
+  if (!currentGroup)
+  {
+    return false;
+  }
+
+  const auto groupNodeSet =
+    std::unordered_set<const Node*>{groupNodes.begin(), groupNodes.end()};
+  for (const auto* ancestor = currentGroup->parent(); ancestor;
+       ancestor = ancestor->parent())
+  {
+    if (groupNodeSet.contains(ancestor))
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::string describeEntity(const Entity& entity, const std::string& nameKey)
 {
   const auto name = nameOf(entity, nameKey);
@@ -684,6 +709,7 @@ Result<std::unique_ptr<GroupNode>> cloneFileGroup(
 Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& placement)
 {
   contract_pre(placement.firstMember != nullptr);
+  contract_pre(placement.firstMember->isDescendantOf(map.worldNode()));
 
   if (!placement.entry)
   {
@@ -772,6 +798,15 @@ Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& pl
                             setHasPendingChanges({&firstMember}, wasPending);
                           }
                         }};
+
+                        // DD-35 (R7-file-1): the children of every member are replaced,
+                        // so an open group below one would be left detached, and the next
+                        // node added to it would fail; it is closed first, as removeNodes
+                        // closes a removed open group
+                        while (openGroupIsInside(map, placement.members))
+                        {
+                          closeGroup(map);
+                        }
 
                         if (selectionIsInside(map, placement.members))
                         {

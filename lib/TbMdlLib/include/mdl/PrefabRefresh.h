@@ -71,6 +71,11 @@ struct PrefabRefreshReport
  * an entity's origin, a brush's or patch's bounds centre), rounded to the map's grid,
  * with ties going to no displacement, else to the first; see referenceShift (DD-23).
  *
+ * While the open group lies strictly below a member, it is closed first, inside the
+ * transaction, since the refresh replaces the children of every member (DD-35).
+ *
+ * The placement's first member must be in the map.
+ *
  * Returns an error and leaves the map untouched if the file is missing, cannot be read,
  * is not one non-empty group, or if the transaction fails.
  */

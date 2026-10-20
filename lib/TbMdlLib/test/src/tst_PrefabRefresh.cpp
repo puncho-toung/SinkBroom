@@ -21,6 +21,7 @@
 #include "mdl/Brush.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
+#include "mdl/EditorContext.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityDefinition.h"
 #include "mdl/EntityDefinitionManager.h"
@@ -816,6 +817,117 @@ TEST_CASE("PrefabRefresh")
       }
       CHECK(innerIdsLinked(*placedNode));
       CHECK(outsideNode->children() == outsideChildren);
+    }
+  }
+
+  SECTION("refreshPlacement closes an open group inside a member")
+  {
+    // DD-35: a group open below a member would be detached by the refresh, and the next
+    // node added to it would fail a contract
+    const auto isInWorld = [&](const Node& node) {
+      return &node == &map.worldNode() || node.isDescendantOf(map.worldNode());
+    };
+    const auto canAddNode = [&]() {
+      auto* brushNode = createBrushNodeAt(map, {0, 0, -256});
+      auto& parentNode = parentForNodes(map);
+      REQUIRE(isInWorld(parentNode));
+      CHECK(addNodes(map, {{&parentNode, {brushNode}}}).size() == 1u);
+    };
+
+    SECTION("A nested group open inside a member other than the first")
+    {
+      saveInnerPair(map, false);
+      rescan(library);
+      auto* firstNode = place(map, findLamp(library), {256, 0, 0});
+      auto* secondNode = placeLinkedCopy(map, *firstNode, {0, 512, 0});
+      const auto firstChildren = firstNode->children();
+      const auto secondChildren = secondNode->children();
+
+      auto* openNode = innerGroupsOf(*secondNode).front();
+      openGroup(map, *secondNode);
+      openGroup(map, *openNode);
+      REQUIRE(map.editorContext().currentGroup() == openNode);
+
+      saveInnerPair(map, true);
+      rescan(library);
+      const auto changed = library.changedPlacements();
+      REQUIRE(changed.size() == 1u);
+      REQUIRE(changed.front().firstMember == firstNode);
+      REQUIRE(refreshPlacement(map, changed.front()).is_success());
+
+      // the old inner group is gone from the second member; the member stays open
+      REQUIRE_FALSE(kdl::ranges::contains(secondNode->children(), openNode));
+      CHECK(map.editorContext().currentGroup() == secondNode);
+      canAddNode();
+
+      SECTION("Undo restores the content and the open group")
+      {
+        // the brush that canAddNode added, then the refresh
+        map.undoCommand();
+        map.undoCommand();
+        CHECK(firstNode->children() == firstChildren);
+        CHECK(secondNode->children() == secondChildren);
+        CHECK(map.editorContext().currentGroup() == openNode);
+      }
+    }
+
+    SECTION("A group two levels deep inside the first member")
+    {
+      // the file's group holds a brush and a group "mid" that holds the group "inner"
+      const auto saveNested = [&](const vm::vec3d& brushOffset) {
+        auto* innerNode = addInnerGroup(map, {0, 0, 0});
+        selectNodes(map, {innerNode});
+        auto* midNode = groupSelectedNodes(map, "mid");
+        REQUIRE(midNode);
+        deselectAll(map);
+        auto* brushNode = createBrushNodeAt(map, brushOffset);
+        addNodes(map, {{&parentForNodes(map), {brushNode}}});
+        REQUIRE(
+          savePrefab(
+            map,
+            {midNode, brushNode},
+            SavePrefabOptions{
+              .name = "lamp", .category = "props", .root = PrefabRoot::Mod})
+          | kdl::is_success());
+        removeNodes(map, {midNode, brushNode});
+      };
+
+      saveNested({128, 0, 0});
+      rescan(library);
+      auto* firstNode = place(map, findLamp(library), {256, 0, 0});
+      auto* secondNode = placeLinkedCopy(map, *firstNode, {0, 512, 0});
+      const auto firstChildren = firstNode->children();
+      const auto secondChildren = secondNode->children();
+
+      const auto midGroups = innerGroupsOf(*firstNode);
+      REQUIRE(midGroups.size() == 1u);
+      auto* midNode = midGroups.front();
+      const auto innerGroups = innerGroupsOf(*midNode);
+      REQUIRE(innerGroups.size() == 1u);
+      auto* openNode = innerGroups.front();
+      openGroup(map, *firstNode);
+      openGroup(map, *midNode);
+      openGroup(map, *openNode);
+      REQUIRE(map.editorContext().currentGroup() == openNode);
+
+      saveNested({192, 0, 0});
+      rescan(library);
+      const auto changed = library.changedPlacements();
+      REQUIRE(changed.size() == 1u);
+      REQUIRE(refreshPlacement(map, changed.front()).is_success());
+
+      REQUIRE_FALSE(kdl::ranges::contains(firstNode->children(), midNode));
+      CHECK(map.editorContext().currentGroup() == firstNode);
+      canAddNode();
+
+      SECTION("Undo restores the content and the open group")
+      {
+        map.undoCommand();
+        map.undoCommand();
+        CHECK(firstNode->children() == firstChildren);
+        CHECK(secondNode->children() == secondChildren);
+        CHECK(map.editorContext().currentGroup() == openNode);
+      }
     }
   }
 
