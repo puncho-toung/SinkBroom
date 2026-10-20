@@ -48,6 +48,7 @@
 
 #include "kd/ranges/contains.h"
 #include "kd/result.h"
+#include "kd/string_utils.h"
 
 #include "vm/mat_ext.h"
 
@@ -88,6 +89,8 @@ const auto RedLight = std::string{R"PREFAB(// Game: Doom 3 BFG
 "target" "snap_target"
 "killtarget" "snap_kill"
 "model" "snap_model"
+"angle" "0"
+"rotation" "1 0 0 0 1 0 0 0 1"
 }
 )PREFAB"};
 
@@ -1087,16 +1090,25 @@ TEST_CASE("PrefabRefresh")
        {"target", "l2"},
        {"target2", "l3"},
        {"killtarget", "l2"},
-       {"light_radius", "64"}}}};
+       {"light_radius", "64"},
+       {"angle", "90"}}}};
     auto* extraKeyNode = new EntityNode{Entity{
       {{"classname", "light"}, {"origin", "128 0 0"}, {"name", "l2"}, {"extra", "1"}}}};
-    auto* protectedNode = new EntityNode{
-      Entity{{{"classname", "light"}, {"origin", "192 0 0"}, {"name", "l3"}}}};
+    auto* protectedNode = new EntityNode{Entity{
+      {{"classname", "light"},
+       {"origin", "192 0 0"},
+       {"name", "l3"},
+       {"angles", "0 90 0"}}}};
     auto* otherNode = new EntityNode{Entity{
       {{"classname", "info_player_start"}, {"origin", "0 0 0"}, {"name", "start"}}}};
-    // a brush entity of the class, whose model is its own (H-E-10)
+    // a brush entity of the class, whose model is its own (H-E-10), turned with its
+    // brushes
     auto* brushLightNode = new EntityNode{Entity{
-      {{"classname", "light"}, {"name", "l4"}, {"model", "l4"}, {"light_radius", "8"}}}};
+      {{"classname", "light"},
+       {"name", "l4"},
+       {"model", "l4"},
+       {"light_radius", "8"},
+       {"rotation", "0 1 0 -1 0 0 0 0 1"}}}};
     auto* brushNode = createBrushNodeAt(map, {512, 0, 0});
     brushLightNode->addChild(brushNode);
     addNodes(
@@ -1161,6 +1173,14 @@ TEST_CASE("PrefabRefresh")
     // another class is untouched
     CHECK(otherNode->entity() == before[3]);
 
+    // DD-36: the orientation keys stay as placed, or absent
+    CHECK(propertyOf(*targetingNode, "angle") == "90");
+    CHECK(propertyOf(*targetingNode, "rotation") == std::nullopt);
+    CHECK(propertyOf(*extraKeyNode, "angle") == std::nullopt);
+    CHECK(propertyOf(*protectedNode, "angles") == "0 90 0");
+    CHECK(propertyOf(*protectedNode, "angle") == std::nullopt);
+    CHECK(propertyOf(*brushLightNode, "rotation") == "0 1 0 -1 0 0 0 0 1");
+
     SECTION("One undo step restores every entity")
     {
       map.undoCommand();
@@ -1168,6 +1188,57 @@ TEST_CASE("PrefabRefresh")
       CHECK(extraKeyNode->entity() == before[1]);
       CHECK(protectedNode->entity() == before[2]);
       CHECK(brushLightNode->entity() == before[4]);
+    }
+
+    SECTION("Applying again changes nothing")
+    {
+      // every entity matches the snapshot already: no swap, nothing counted
+      const auto applied = std::vector{
+        targetingNode->entity(),
+        extraKeyNode->entity(),
+        protectedNode->entity(),
+        brushLightNode->entity()};
+      CHECK(canApplyPrefabToSelection(map, *entry));
+      const auto again = applyPrefabToSelection(map, *entry);
+      REQUIRE(again.is_success());
+      CHECK(again.value() == 0u);
+      CHECK(targetingNode->entity() == applied[0]);
+      CHECK(brushLightNode->entity() == applied[3]);
+
+      // only one entity differs now
+      deselectAll(map);
+      selectNodes(map, {extraKeyNode});
+      REQUIRE(setEntityProperty(map, "light_radius", "1"));
+      selectNodes(map, {targetingNode, protectedNode});
+      const auto once = applyPrefabToSelection(map, *entry);
+      REQUIRE(once.is_success());
+      CHECK(once.value() == 1u);
+      CHECK(propertyOf(*extraKeyNode, "light_radius") == "300");
+      CHECK(targetingNode->entity() == applied[0]);
+      CHECK(protectedNode->entity() == applied[2]);
+    }
+
+    SECTION("Reloaded definitions reach the snapshot before processPendingResults")
+    {
+      // R8-lib-7
+      map.entityDefinitionsWillChangeNotifier();
+      map.entityDefinitionsDidChangeNotifier();
+      REQUIRE(map.entityDefinitionManager().definition("light"));
+      REQUIRE(entry->snapshot());
+      CHECK(
+        entry->snapshot()->definition()
+        == map.entityDefinitionManager().definition("light"));
+
+      deselectAll(map);
+      selectNodes(map, {extraKeyNode});
+      REQUIRE(setEntityProperty(map, "target", "l1"));
+      REQUIRE(setEntityProperty(map, "light_radius", "1"));
+      const auto reapplied = applyPrefabToSelection(map, *entry);
+      REQUIRE(reapplied.is_success());
+      CHECK(reapplied.value() == 1u);
+      // the link key keeps its value, the others are the snapshot's
+      CHECK(propertyOf(*extraKeyNode, "target") == "l1");
+      CHECK(propertyOf(*extraKeyNode, "light_radius") == "300");
     }
 
     SECTION("Entities in linked copies change once, through the first copy")
@@ -1235,6 +1306,85 @@ TEST_CASE("PrefabRefresh")
       CHECK_FALSE(canApplyPrefabToSelection(map, *lampEntry));
       CHECK(applyPrefabToSelection(map, *lampEntry).is_error());
     }
+
+    SECTION("The snapshot's own class counts, not _tb_prefab_class")
+    {
+      // R8-file-4: a file edited by hand, whose entity is a light
+      env.createFile(
+        "base/maps/prefabs/lights/torch.map",
+        kdl::str_replace_every(
+          RedLight,
+          R"("_tb_prefab_class" "light")",
+          R"("_tb_prefab_class" "light_torch")"));
+      rescan(library);
+      const auto* torchEntry = library.find(PrefabRoot::Mod, "lights/torch.map");
+      REQUIRE(torchEntry);
+      REQUIRE(torchEntry->metadata.className == "light_torch");
+
+      auto* torchNode = new EntityNode{Entity{
+        {{"classname", "light_torch"}, {"origin", "0 0 256"}, {"light_radius", "1"}}}};
+      addNodes(map, {{&parentForNodes(map), {torchNode}}});
+      const auto torchBefore = torchNode->entity();
+
+      deselectAll(map);
+      selectNodes(map, {extraKeyNode});
+      REQUIRE(setEntityProperty(map, "light_radius", "1"));
+
+      deselectAll(map);
+      selectNodes(map, {torchNode});
+      CHECK_FALSE(canApplyPrefabToSelection(map, *torchEntry));
+
+      selectNodes(map, {extraKeyNode});
+      CHECK(canApplyPrefabToSelection(map, *torchEntry));
+      const auto applied = applyPrefabToSelection(map, *torchEntry);
+      REQUIRE(applied.is_success());
+      CHECK(applied.value() == 1u);
+      CHECK(propertyOf(*extraKeyNode, "light_radius") == "300");
+      CHECK(extraKeyNode->entity().classname() == "light");
+      CHECK(torchNode->entity() == torchBefore);
+    }
+  }
+
+  SECTION("applyPrefabToSelection of a large entity snapshot")
+  {
+    // R7-lib-2: the library keeps no world for it, only its entity
+    auto* bigLightNode = new EntityNode{
+      Entity{{{"classname", "light"}, {"name", "slab"}, {"light_radius", "999"}}}};
+    for (size_t i = 0; i < PrefabWorldBrushBudget + 1; ++i)
+    {
+      bigLightNode->addChild(createBrushNode(map));
+    }
+    addNodes(map, {{&parentForNodes(map), {bigLightNode}}});
+    REQUIRE(
+      savePrefab(
+        map,
+        {bigLightNode},
+        SavePrefabOptions{.name = "slab", .category = "lights", .root = PrefabRoot::Mod})
+      | kdl::is_success());
+    removeNodes(map, {bigLightNode});
+    rescan(library);
+
+    const auto* entry = library.find(PrefabRoot::Mod, "lights/slab.map");
+    REQUIRE(entry);
+    REQUIRE(entry->world == nullptr);
+    REQUIRE(entry->keptSnapshot);
+
+    auto* lightNode = new EntityNode{Entity{
+      {{"classname", "light"},
+       {"origin", "0 0 0"},
+       {"name", "l1"},
+       {"light_radius", "1"}}}};
+    addNodes(map, {{&parentForNodes(map), {lightNode}}});
+    deselectAll(map);
+    selectNodes(map, {lightNode});
+
+    CHECK(canApplyPrefabToSelection(map, *entry));
+    const auto count = applyPrefabToSelection(map, *entry);
+    REQUIRE(count.is_success());
+    CHECK(count.value() == 1u);
+    CHECK(propertyOf(*lightNode, "light_radius") == "999");
+    CHECK(propertyOf(*lightNode, "name") == "l1");
+    CHECK(propertyOf(*lightNode, "origin") == "0 0 0");
   }
 }
 

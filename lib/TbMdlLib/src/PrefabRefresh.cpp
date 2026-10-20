@@ -728,6 +728,43 @@ Result<std::unique_ptr<GroupNode>> cloneFileGroup(
   return std::unique_ptr<GroupNode>{groupNode};
 }
 
+/**
+ * DD-36: the keys that turn an entity, which Apply keeps as placed, so that turned
+ * monsters and lights keep their facing, and a brush entity's rotation stays with its
+ * brushes.
+ */
+bool isOrientationKey(const std::string& key)
+{
+  return key == EntityPropertyKeys::Angle || key == EntityPropertyKeys::Angles
+         || key == EntityPropertyKeys::Rotation;
+}
+
+/**
+ * Whether the entity has exactly the given properties, in any order.
+ */
+bool hasProperties(const Entity& entity, const std::vector<EntityProperty>& properties)
+{
+  return entity.properties().size() == properties.size()
+         && std::ranges::all_of(properties, [&](const auto& property) {
+              const auto* value = entity.property(property.key());
+              return value && *value == property.value();
+            });
+}
+
+std::vector<EntityNode*> selectedEntitiesOfClass(Map& map, const std::string& classname)
+{
+  auto result = std::vector<EntityNode*>{};
+  for (auto* entityNodeBase : map.selection().allEntities())
+  {
+    auto* entityNode = dynamic_cast<EntityNode*>(entityNodeBase);
+    if (entityNode && entityNode->entity().classname() == classname)
+    {
+      result.push_back(entityNode);
+    }
+  }
+  return result;
+}
+
 } // namespace
 
 Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& placement)
@@ -898,42 +935,27 @@ Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& pl
 
 Result<std::size_t> applyPrefabToSelection(Map& map, const PrefabEntry& entry)
 {
-  if (entry.metadata.kind != PrefabKind::Entity || !entry.world)
+  if (entry.metadata.kind != PrefabKind::Entity || !entry.hasBody())
   {
     return Error{fmt::format(
       "Cannot apply prefab '{}': it is not an entity snapshot", entry.metadata.name)};
   }
 
-  const auto* snapshotNode = static_cast<const EntityNode*>(nullptr);
-  for (const auto* layerNode : entry.world->allLayers())
-  {
-    for (const auto* node : layerNode->children())
-    {
-      if (!snapshotNode)
-      {
-        snapshotNode = dynamic_cast<const EntityNode*>(node);
-      }
-    }
-  }
-  if (!snapshotNode)
+  // R7-lib-2: from the kept world, or the entity kept when the world was dropped
+  const auto* snapshotEntity = entry.snapshot();
+  if (!snapshotEntity)
   {
     return Error{
       fmt::format("Cannot apply prefab '{}': it holds no entity", entry.metadata.name)};
   }
-  const auto& snapshot = snapshotNode->entity();
+  const auto& snapshot = *snapshotEntity;
 
   const auto& naming = map.worldNode().entityPropertyConfig().naming;
   const auto& nameKey = nameKeyOf(map);
 
-  auto entityNodes = std::vector<EntityNode*>{};
-  for (auto* entityNodeBase : map.selection().allEntities())
-  {
-    auto* entityNode = dynamic_cast<EntityNode*>(entityNodeBase);
-    if (entityNode && entityNode->entity().classname() == entry.metadata.className)
-    {
-      entityNodes.push_back(entityNode);
-    }
-  }
+  // R8-file-4: the class is the snapshot's own, which is what the entities get, whatever
+  // _tb_prefab_class says after the file was edited by hand
+  const auto entityNodes = selectedEntitiesOfClass(map, snapshot.classname());
 
   // R1-pf-mdl-5: entities in two members of one link set would make both members
   // pending, which cancels the commit (F9), so an entity in a member other than the
@@ -1046,7 +1068,7 @@ Result<std::size_t> applyPrefabToSelection(Map& map, const PrefabEntry& entry)
     const auto& linkSourceDefinitions = linkSourceDefinitionsOf(entity.definition());
     const auto keepsOwnValue = [&](const std::string& key) {
       return key == nameKey || key == EntityPropertyKeys::Origin
-             || isPrefabLinkKey(linkSourceDefinitions, key)
+             || isOrientationKey(key) || isPrefabLinkKey(linkSourceDefinitions, key)
              || (naming && naming->brushEntityModelKey
                  && key == *naming->brushEntityModelKey && entityNode->hasChildren())
              || kdl::ranges::contains(entity.protectedProperties(), key);
@@ -1074,6 +1096,12 @@ Result<std::size_t> applyPrefabToSelection(Map& map, const PrefabEntry& entry)
       }
     }
 
+    if (hasProperties(entity, properties))
+    {
+      // it matches the snapshot already: no swap, and not counted
+      continue;
+    }
+
     auto newEntity = entity;
     newEntity.setProperties(std::move(properties));
     nodesToSwap.emplace_back(entityNode, NodeContents{std::move(newEntity)});
@@ -1097,11 +1125,13 @@ Result<std::size_t> applyPrefabToSelection(Map& map, const PrefabEntry& entry)
 
 bool canApplyPrefabToSelection(const Map& map, const PrefabEntry& entry)
 {
-  return entry.metadata.kind == PrefabKind::Entity && entry.world
+  const auto* snapshot =
+    entry.metadata.kind == PrefabKind::Entity ? entry.snapshot() : nullptr;
+  return snapshot
          && std::ranges::any_of(
            map.selection().allEntities(), [&](const auto* entityNodeBase) {
              return dynamic_cast<const EntityNode*>(entityNodeBase)
-                    && entityNodeBase->entity().classname() == entry.metadata.className;
+                    && entityNodeBase->entity().classname() == snapshot->classname();
            });
 }
 

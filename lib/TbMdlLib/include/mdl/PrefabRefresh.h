@@ -87,12 +87,18 @@ struct PrefabRefreshReport
 Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& placement);
 
 /**
- * Makes every selected entity of the entry's class match the entity snapshot (C6, D14),
- * in one transaction named "Apply Prefab": its properties become the snapshot's, except
- * that the naming key, origin, the link keys (see isPrefabLinkKey), the brush entity
- * model key of a brush entity and every protected property keep the entity's own values
- * (or stay absent); a key that the entity has and the snapshot lacks is removed.
- * Brushes, patches and the protected properties are not touched.
+ * Makes every selected entity of the snapshot entity's own classname (R8-file-4; not
+ * _tb_prefab_class, which a file edited by hand may contradict) match the entity
+ * snapshot (C6 as amended by DD-36, D14), in one transaction named "Apply Prefab": its
+ * properties become the snapshot's, except that the naming key, origin, the orientation
+ * keys angle, angles and rotation (DD-36), the link keys (see isPrefabLinkKey), the
+ * brush entity model key of a brush entity and every protected property keep the
+ * entity's own values (or stay absent); a key that the entity has and the snapshot lacks
+ * is removed. Brushes, patches and the protected properties are not touched. An entity
+ * whose properties would not change is skipped and not counted.
+ *
+ * The snapshot is the entry's snapshot(), from its kept world or, for an entity snapshot
+ * over the brush budget, from the entity that the library kept (R7-lib-2).
  *
  * When the selected entities lie in two or more members of one link set, a selected
  * entity in a member other than the first of them, in the order of the world, is changed
@@ -106,8 +112,10 @@ Result<PrefabRefreshReport> refreshPlacement(Map& map, const PrefabPlacement& pl
 Result<std::size_t> applyPrefabToSelection(Map& map, const PrefabEntry& entry);
 
 /**
- * Whether applyPrefabToSelection would change anything: the entry is an entity snapshot
- * whose world the library keeps, and the selection holds an entity of its class.
+ * Whether applyPrefabToSelection has anything to work on: the entry is an entity
+ * snapshot that has its entity (PrefabEntry::snapshot), and the selection holds an
+ * entity of that entity's classname. It does not compare properties, so the apply may
+ * still change nothing when every such entity matches the snapshot already.
  */
 bool canApplyPrefabToSelection(const Map& map, const PrefabEntry& entry);
 
