@@ -622,7 +622,15 @@ TEST_CASE("MapWindowManager")
     auto* toolSidebar = editor->findChild<ToolSidebar*>();
     REQUIRE(toolSidebar != nullptr);
     toolSidebar->setExpanded(!toolSidebar->expanded());
-    REQUIRE(mapWindowSettings() != settings);
+    CHECK(mapWindowSettings() == settings);
+    CHECK(QSettings{}.contains(
+      "Windows/PrefabEditorWindow/" + toolSidebar->objectName() + "/Expanded"));
+
+    // H-F8-1: what a map window saves while the editor is open stays
+    QSettings{}.setValue(
+      "Windows/MapWindow/Geometry", QByteArray{"saved while the editor was open"});
+    auto expected = settings;
+    expected["MapWindow/Geometry"] = QByteArray{"saved while the editor was open"};
 
     editor->close();
     deleteClosedWindows();
@@ -631,7 +639,7 @@ TEST_CASE("MapWindowManager")
     CHECK(host != nullptr);
     CHECK(manager.mapWindows() == std::vector<MapWindow*>{host});
 
-    CHECK(mapWindowSettings() == settings);
+    CHECK(mapWindowSettings() == expected);
     CHECK(QSettings{}.contains("Windows/PrefabEditorWindow/Geometry"));
     CHECK(QSettings{}.contains("Windows/PrefabEditorWindow/State"));
   }

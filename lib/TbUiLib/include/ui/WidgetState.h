@@ -29,7 +29,19 @@ class QString;
 namespace tb::ui
 {
 
+/**
+ * The settings key of the given widget's saved state: "Windows/<objectName>/<suffix>",
+ * or, for a widget inside a window that has a settings scope,
+ * "Windows/<scope>/<objectName>/ <suffix>", so that such a window's widgets read and
+ * write their state apart from the same widgets in other windows.
+ */
 QString widgetSettingsPath(const QWidget* widget, const QString& suffix = "");
+
+/**
+ * Gives the window's widgets, but not the window itself, a settings scope (see
+ * widgetSettingsPath). Set it before any widget reads its state.
+ */
+void setWidgetSettingsScope(QWidget* window, const QString& scope);
 
 void saveWidgetGeometry(QWidget* widget);
 void restoreWidgetGeometry(QWidget* widget);

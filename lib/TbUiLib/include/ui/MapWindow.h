@@ -110,11 +110,6 @@ private:
   // DD-38: the save that a prefab editor is about to make, or made last, writes the
   // thumbnail: it saves a modified document, or saves it under another name
   bool m_prefabSaveWritesThumbnail = false;
-  // R1-pf3-1, R8-app-6: a prefab editor's copy of the windows' saved widget state as it
-  // was when the editor opened, but for the editor's own, which it puts back when it
-  // closes, so that what its widgets write while it is open, or when they are deleted,
-  // does not replace the map windows' state
-  std::optional<std::vector<std::pair<QString, QVariant>>> m_sharedWidgetState;
 
   std::chrono::time_point<std::chrono::system_clock> m_lastInputTime;
   QTimer* m_autosaveTimer = nullptr;

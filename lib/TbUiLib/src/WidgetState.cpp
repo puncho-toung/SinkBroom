@@ -24,12 +24,34 @@
 namespace tb::ui
 {
 
-QString widgetSettingsPath(const QWidget* window, const QString& suffix)
+namespace
+{
+const auto WidgetSettingsScopeProperty = "tbWidgetSettingsScope";
+}
+
+QString widgetSettingsPath(const QWidget* widget, const QString& suffix)
+{
+  contract_pre(widget != nullptr);
+  contract_pre(!widget->objectName().isEmpty());
+
+  // the parents, not window(): a floating dock is a window of its own
+  for (const auto* parent = widget->parentWidget(); parent;
+       parent = parent->parentWidget())
+  {
+    if (const auto scope = parent->property(WidgetSettingsScopeProperty).toString();
+        !scope.isEmpty())
+    {
+      return "Windows/" + scope + "/" + widget->objectName() + "/" + suffix;
+    }
+  }
+  return "Windows/" + widget->objectName() + "/" + suffix;
+}
+
+void setWidgetSettingsScope(QWidget* window, const QString& scope)
 {
   contract_pre(window != nullptr);
-  contract_pre(!window->objectName().isEmpty());
 
-  return "Windows/" + window->objectName() + "/" + suffix;
+  window->setProperty(WidgetSettingsScopeProperty, scope);
 }
 
 void saveWidgetGeometry(QWidget* widget)

@@ -291,50 +291,6 @@ bool oldPanelVisible(const QString& key)
  */
 const auto PrefabEditorObjectName = QString{"PrefabEditorWindow"};
 
-using SettingsValues = std::vector<std::pair<QString, QVariant>>;
-
-bool isPrefabEditorKey(const QString& key)
-{
-  return key.startsWith(PrefabEditorObjectName + "/");
-}
-
-/**
- * The saved state of the windows' widgets, but for the prefab editor's own. The panels
- * and splitters of every window save theirs under their own names when they are deleted,
- * so a prefab editor puts back what the map windows had saved once its own are gone.
- */
-SettingsValues sharedWidgetState()
-{
-  auto settings = QSettings{};
-  settings.beginGroup("Windows");
-  auto values = SettingsValues{};
-  for (const auto& key : settings.allKeys())
-  {
-    if (!isPrefabEditorKey(key))
-    {
-      values.emplace_back(key, settings.value(key));
-    }
-  }
-  return values;
-}
-
-void restoreSharedWidgetState(const SettingsValues& values)
-{
-  auto settings = QSettings{};
-  settings.beginGroup("Windows");
-  for (const auto& key : settings.allKeys())
-  {
-    if (!isPrefabEditorKey(key))
-    {
-      settings.remove(key);
-    }
-  }
-  for (const auto& [key, value] : values)
-  {
-    settings.setValue(key, value);
-  }
-}
-
 /**
  * The one node that the body of a prefab holds, in any layer, or nullptr if it holds
  * none or more than one.
@@ -371,15 +327,15 @@ MapWindow::MapWindow(
 {
   contract_pre(m_document != nullptr);
 
-  // R8-app-6: before any of the editor's widgets reads or writes its state
-  if (m_prefabEditor)
-  {
-    m_sharedWidgetState = sharedWidgetState();
-  }
-
   setAttribute(Qt::WA_DeleteOnClose);
   // R1-pf3-1: a prefab editor's layout is its own
   setObjectName(m_prefabEditor ? PrefabEditorObjectName : QString{"MapWindow"});
+  if (m_prefabEditor)
+  {
+    // H-F5-1, R8-app-6, H-F8-1: and so is every state its widgets read and write, while
+    // it is open and when they are deleted, so that none of it reaches the map windows
+    setWidgetSettingsScope(this, PrefabEditorObjectName);
+  }
 
   installEventFilter(this);
 
@@ -471,13 +427,6 @@ MapWindow::~MapWindow()
   children.removeIf(
     [](const auto* child) { return qobject_cast<const QTabBar*>(child) != nullptr; });
   qDeleteAll(std::rbegin(children), std::rend(children));
-
-  // R1-pf3-1, R8-app-6: put back what the map windows had saved when this prefab
-  // editor opened, once its widgets have written theirs
-  if (m_sharedWidgetState)
-  {
-    restoreSharedWidgetState(*m_sharedWidgetState);
-  }
 
   // let's trigger a final autosave before releasing the document; a prefab editor makes
   // no backups (H-PF3-3)
