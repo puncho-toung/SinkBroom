@@ -127,13 +127,6 @@ public: // node tree bulk updating
   void disableNodeTreeUpdates();
   void enableNodeTreeUpdates();
   void rebuildNodeTree();
-  /**
-   * Empties the node tree, for a world that nothing queries spatially, such as a world
-   * that a reader filled. Node tree updates must be disabled (disableNodeTreeUpdates),
-   * or the tree would fill again; re-enable them only after rebuildNodeTree, since an
-   * update of a node that is not in the tree fails a contract.
-   */
-  void clearNodeTree();
 
 private:
   void invalidateAllIssues();

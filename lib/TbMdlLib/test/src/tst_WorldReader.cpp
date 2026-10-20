@@ -390,10 +390,6 @@ TEST_CASE("WorldReader")
     worldNode.rebuildNodeTree();
     worldNode.enableNodeTreeUpdates();
     CHECK(!worldNode.nodeTree().empty());
-
-    worldNode.disableNodeTreeUpdates();
-    worldNode.clearNodeTree();
-    CHECK(worldNode.nodeTree().empty());
   }
 
   SECTION("Worldspawn and one brush")

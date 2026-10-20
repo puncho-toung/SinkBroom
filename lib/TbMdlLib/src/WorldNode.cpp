@@ -248,14 +248,6 @@ void WorldNode::rebuildNodeTree()
   }
 }
 
-void WorldNode::clearNodeTree()
-{
-  contract_pre(!m_updateNodeTree);
-
-  // a new tree, since clearing one keeps the buckets that it had grown
-  m_nodeTree = std::make_unique<NodeTree>(NodeTreeMinSize);
-}
-
 void WorldNode::invalidateAllIssues()
 {
   accept([](auto&& thisLambda, Node& node) {
