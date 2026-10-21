@@ -824,22 +824,21 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
 
       // S3: jobs run on the pool's threads, which are not the render thread's
       auto mutex = std::make_shared<std::mutex>();
-      auto futures = std::vector<std::future<Result<DWORD>>>{};
+      auto futures = std::vector<std::future<CpuJobResult<DWORD>>>{};
       for (auto i = 0; i < 4; ++i)
       {
-        futures.push_back(
-          session->cpuPool()->run(std::function<Result<DWORD>(const CpuJobContext&)>{
-            [mutex, poolThreads](const CpuJobContext&) -> Result<DWORD> {
-              std::this_thread::sleep_for(20ms);
-              const auto id = GetCurrentThreadId();
-              const auto lock = std::scoped_lock{*mutex};
-              poolThreads->insert(id);
-              return id;
-            }}));
+        futures.push_back(session->cpuPool()->run(
+          [mutex, poolThreads](const CpuJobContext&) -> Result<DWORD> {
+            std::this_thread::sleep_for(20ms);
+            const auto id = GetCurrentThreadId();
+            const auto lock = std::scoped_lock{*mutex};
+            poolThreads->insert(id);
+            return id;
+          }));
       }
       for (auto& future : futures)
       {
-        CHECK(future.get().is_success());
+        CHECK(future.get().result.is_success());
       }
       CHECK(poolThreads->size() <= CpuPool::ThreadCount);
       CHECK_FALSE(poolThreads->contains(GetCurrentThreadId()));

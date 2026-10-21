@@ -71,9 +71,14 @@ private:
 public:
   constexpr MessageQueue() = default;
 
-  void push(Node* node) noexcept
+  // B0.1: false, and the node is not taken, when the queue already holds bound nodes
+  bool push(Node* node, const std::size_t bound) noexcept
   {
     const auto lock = std::lock_guard{m_mutex};
+    if (m_size >= bound)
+    {
+      return false;
+    }
     if (m_tail)
     {
       m_tail->next = node;
@@ -84,6 +89,7 @@ public:
     }
     m_tail = node;
     ++m_size;
+    return true;
   }
 
   // unlinks the thread's nodes into a chain of their own, in their order
@@ -135,6 +141,20 @@ MessageQueue engineMessages;
 
 // Error and FatalError messages that could not be kept
 std::atomic<std::uint64_t> lostErrors{0};
+// B0.1: messages dropped because the queue was full or memory ran out, and how many of
+// them the drains have reported so far
+std::atomic<std::uint64_t> droppedMessages{0};
+std::atomic<std::uint64_t> reportedDrops{0};
+
+void lose(const DeclMessageKind kind) noexcept
+{
+  ++droppedMessages;
+  // an error that is lost still counts
+  if (kind == DeclMessageKind::Error || kind == DeclMessageKind::FatalError)
+  {
+    ++lostErrors;
+  }
+}
 
 void push(const DeclMessageKind kind, const bool consolePrint, const char* text) noexcept
 {
@@ -143,16 +163,17 @@ void push(const DeclMessageKind kind, const bool consolePrint, const char* text)
     auto node = std::make_unique<Node>();
     node->thread = std::this_thread::get_id();
     node->message = EngineMessage{kind, consolePrint, std::string{text}};
-    engineMessages.push(node.release());
+    if (engineMessages.push(node.get(), MaxQueuedEngineMessages))
+    {
+      static_cast<void>(node.release());
+      return;
+    }
   }
   catch (...)
   {
-    // C17: nothing is thrown through the copied code; an error that is lost still counts
-    if (kind == DeclMessageKind::Error || kind == DeclMessageKind::FatalError)
-    {
-      ++lostErrors;
-    }
+    // C17: nothing is thrown through the copied code
   }
+  lose(kind);
 }
 
 } // namespace
@@ -196,6 +217,13 @@ void discardEngineMessages(const std::thread::id thread) noexcept
   freeChain(engineMessages.take(thread));
 }
 
+std::uint64_t takeDroppedEngineMessages() noexcept
+{
+  const auto dropped = droppedMessages.load();
+  const auto reported = reportedDrops.exchange(dropped);
+  return dropped > reported ? dropped - reported : 0;
+}
+
 std::uint64_t lostEngineErrors() noexcept
 {
   return lostErrors.load();
@@ -224,7 +252,20 @@ std::vector<DeclMessage> drainEngineMessagesForThread(const std::thread::id thre
     messages.push_back(
       DeclMessage{message.kind, shim::messageText(std::move(message.text))});
   }
+  // B0.1: the first drain after messages were dropped says how many
+  if (const auto dropped = shim::takeDroppedEngineMessages())
+  {
+    messages.push_back(DeclMessage{
+      DeclMessageKind::Warning,
+      std::to_string(dropped) + " engine messages were dropped: the queue holds at most "
+        + std::to_string(shim::MaxQueuedEngineMessages)});
+  }
   return messages;
+}
+
+void discardEngineMessagesForThread(const std::thread::id thread) noexcept
+{
+  shim::discardEngineMessages(thread);
 }
 
 std::size_t pendingEngineMessagesForTesting()

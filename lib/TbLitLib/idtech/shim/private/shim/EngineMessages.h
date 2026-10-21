@@ -27,8 +27,10 @@
 // code takes that thread's (drainEngineMessagesForThread in lit/MaterialDecls.h).
 //
 // The queue is constant-initialised and allocates only when a message is pushed (C9,
-// S27). Pushing never throws (C17): a message that cannot be kept for want of memory is
-// counted instead, and a lost Error or FatalError counts as an error for the registry.
+// S27). It holds at most MaxQueuedEngineMessages (B0.1). Pushing never throws (C17): a
+// message that cannot be kept, for want of memory or room, is counted instead, the next
+// drain says how many were dropped, and a lost Error or FatalError counts as an error for
+// the registry.
 
 #include "lit/MaterialDecls.h"
 
@@ -69,6 +71,12 @@ std::vector<EngineMessage> takeEngineMessages(std::thread::id thread);
 void discardEngineMessages(std::thread::id thread) noexcept;
 // the Error and FatalError messages that could not be kept since the program started
 std::uint64_t lostEngineErrors() noexcept;
+
+// B0.1: the queue keeps at most this many messages of all threads; beyond it a message is
+// dropped and counted (a dropped Error or FatalError also as a lost error)
+inline constexpr std::size_t MaxQueuedEngineMessages = 4096;
+// the messages dropped since the last call; any thread
+std::uint64_t takeDroppedEngineMessages() noexcept;
 
 // a message's text as DeclMessage carries it: without its trailing newlines
 std::string messageText(std::string text);

@@ -168,6 +168,15 @@ struct DeclMessage
  */
 std::vector<DeclMessage> drainEngineMessagesForThread(std::thread::id thread);
 
+/**
+ * B0.1: the sink keeps at most 4096 messages of all threads; beyond that a message is
+ * dropped and counted, and the next drain, of any thread, ends with a Warning that says
+ * how many were dropped. Formatting a message takes MAX_PRINT_MSG (16 KB) of the
+ * reporting thread's stack. drainEngineMessagesForThread's caller is its thread's owner.
+ */
+// drops the messages the sink keeps for a thread, unread; any thread
+void discardEngineMessagesForThread(std::thread::id thread) noexcept;
+
 // the messages the sink keeps for every thread; any thread
 std::size_t pendingEngineMessagesForTesting();
 

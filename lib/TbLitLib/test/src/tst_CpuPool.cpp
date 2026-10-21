@@ -18,9 +18,11 @@
  */
 
 #include "lit/CpuPool.h"
+#include "lit/MaterialDecls.h"
 
 #include "kd/result.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -89,7 +91,7 @@ TEST_CASE("CpuPool")
     // both threads hold a job at once, so two different threads ran them
     auto gate = std::make_shared<Gate>();
     auto ids = std::make_shared<std::vector<std::thread::id>>(2);
-    auto futures = std::vector<std::future<Result<int>>>{};
+    auto futures = std::vector<std::future<CpuJobResult<int>>>{};
     for (auto i = 0; i < 2; ++i)
     {
       futures.push_back(pool->run(std::function<Result<int>(const CpuJobContext&)>{
@@ -101,8 +103,8 @@ TEST_CASE("CpuPool")
     }
     REQUIRE(gate->waitUntilEntered(2));
     gate->openGate();
-    CHECK(futures[0].get() == Result<int>{0});
-    CHECK(futures[1].get() == Result<int>{10});
+    CHECK(futures[0].get().result == Result<int>{0});
+    CHECK(futures[1].get().result == Result<int>{10});
     CHECK((*ids)[0] != (*ids)[1]);
     CHECK((*ids)[0] != std::this_thread::get_id());
     CHECK(CpuPool::ThreadCount == 2u);
@@ -116,11 +118,12 @@ TEST_CASE("CpuPool")
         throw std::runtime_error{"an injected job failure"};
       }});
     CHECK(
-      future.get() == Result<int>{Error{"A CPU job failed: an injected job failure"}});
+      future.get().result
+      == Result<int>{Error{"A CPU job failed: an injected job failure"}});
 
     auto unknown = pool->run(std::function<Result<int>(const CpuJobContext&)>{
       [](const CpuJobContext&) -> Result<int> { throw 42; }});
-    CHECK(unknown.get() == Result<int>{Error{"A CPU job failed"}});
+    CHECK(unknown.get().result == Result<int>{Error{"A CPU job failed"}});
   }
 
   SECTION("stop: running jobs see stale, queued ones are dropped, later ones refused")
@@ -143,7 +146,7 @@ TEST_CASE("CpuPool")
       }};
 
     // two run and wait in the gate, the third waits in the queue
-    auto running = std::vector<std::future<Result<int>>>{};
+    auto running = std::vector<std::future<CpuJobResult<int>>>{};
     running.push_back(pool->run(job));
     running.push_back(pool->run(job));
     REQUIRE(gate->waitUntilEntered(2));
@@ -173,7 +176,7 @@ TEST_CASE("CpuPool")
     CHECK(queued.wait_for(0s) == std::future_status::ready);
 
     auto refused = pool->run(job);
-    CHECK(refused.get() == Result<int>{Error{"The CPU pool is stopped"}});
+    CHECK(refused.get().result == Result<int>{Error{"The CPU pool is stopped"}});
     CHECK(ran->load() == 2);
 
     // a second stop only moves the generation on
@@ -195,8 +198,7 @@ TEST_CASE("CpuPool")
     auto second = pool->run(blocker);
     REQUIRE(gate->waitUntilEntered(2));
 
-    // queued behind the two: dropped, or, if a thread takes it before the task manager
-    // stops, abandoned by its stale context before it calls the job
+    // queued behind the two: the stop drops it before a thread can take it
     auto late = pool->run(std::function<Result<int>(const CpuJobContext&)>{
       [entered](const CpuJobContext&) -> Result<int> {
         ++*entered;
@@ -210,6 +212,67 @@ TEST_CASE("CpuPool")
     opener.join();
     CHECK(entered->load() == 0);
     CHECK(late.wait_for(0s) == std::future_status::ready);
+  }
+
+  SECTION("jobs take callables with move-only captures, and T is deduced (B0.11)")
+  {
+    auto pool = makePool();
+    auto owned = std::make_unique<int>(7);
+    auto future =
+      pool->run([owned = std::move(owned)](const CpuJobContext&) -> Result<int> {
+        return *owned * 6;
+      });
+    CHECK(future.get().result == Result<int>{42});
+  }
+
+  SECTION("D66: the pool's threads are its own, with 8 MB stacks")
+  {
+    auto pool = makePool();
+    // a job that touches 4 MB of its stack, more than the 1 MB Windows default
+    auto future = pool->run([](const CpuJobContext&) -> Result<int> {
+      volatile char block[4 * 1024 * 1024];
+      block[0] = 1;
+      block[sizeof(block) - 1] = 2;
+      return int(block[0] + block[sizeof(block) - 1]);
+    });
+    CHECK(future.get().result == Result<int>{3});
+    const auto ids = pool->threadIdsForTesting();
+    CHECK(ids[0] != std::thread::id{});
+    CHECK(ids[1] != std::thread::id{});
+    CHECK(ids[0] != ids[1]);
+    pool->stop();
+    CHECK(pool->threadIdsForTesting()[0] == std::thread::id{});
+  }
+
+  SECTION("B0.1: a job's engine messages come with its result")
+  {
+    auto pool = makePool();
+    const auto pending = pendingEngineMessagesForTesting();
+
+    // a warning is drained into the result, which stays a success
+    auto warned = pool->run([](const CpuJobContext&) -> Result<int> {
+      reportEngineMessageForTesting(DeclMessageKind::Warning, "an injected warning");
+      return 1;
+    });
+    const auto warning = warned.get();
+    CHECK(warning.result == Result<int>{1});
+    REQUIRE(warning.messages.size() == 1u);
+    CHECK(warning.messages[0].kind == DeclMessageKind::Warning);
+    CHECK(warning.messages[0].text == "an injected warning");
+
+    // an Error fails the job: the engine would have stopped there
+    auto failed = pool->run([](const CpuJobContext&) -> Result<int> {
+      reportEngineMessageForTesting(DeclMessageKind::Error, "an injected error");
+      return 1;
+    });
+    const auto error = failed.get();
+    CHECK(
+      error.result
+      == Result<int>{Error{"The CPU job reached an engine error: an injected error"}});
+    CHECK(error.messages.size() == 1u);
+
+    // nothing stays behind for the threads' ids
+    CHECK(pendingEngineMessagesForTesting() == pending);
   }
 }
 
