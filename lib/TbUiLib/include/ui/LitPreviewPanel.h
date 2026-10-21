@@ -105,6 +105,10 @@ struct LitPreviewReport
   std::uint64_t swapchainGenerations = 0;
   // swapchain handshakes that had to wait for the render thread to park
   std::uint64_t parkTimeouts = 0;
+  // the device-local VRAM in use when the session had its device and once its objects
+  // were released, when the device reports it
+  std::optional<std::uint64_t> vramAtStartBytes;
+  std::optional<std::uint64_t> vramAtStopBytes;
 
   // what a user should know, one sentence each; empty after a clean stop
   std::vector<std::string> problems() const;

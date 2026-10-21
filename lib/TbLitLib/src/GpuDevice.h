@@ -22,6 +22,7 @@
 #include "VulkanDevice.h"
 #include "base/Macros.h"
 #include "base/Result.h"
+#include "lit/LitSession.h"
 #include "lit/VulkanInstance.h"
 
 #include <nvrhi/nvrhi.h>
@@ -32,6 +33,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 namespace tb::lit
 {
@@ -99,6 +101,8 @@ public:
   nvrhi::vulkan::IDevice& vulkanDevice() const;
 
   std::size_t nvrhiErrors() const;
+  // the device-local heaps' usage and budget, when the device has VK_EXT_memory_budget
+  std::optional<VramUsage> vram() const;
   // for the tests' faults, which arrive as NVRHI's would
   MessageCallback& messageCallback();
 

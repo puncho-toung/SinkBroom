@@ -576,6 +576,10 @@ std::vector<std::vector<std::string>> readCsv(const std::filesystem::path& path)
     {
       fields.push_back(field);
     }
+    if (!line.empty() && line.back() == ',')
+    {
+      fields.emplace_back();
+    }
     rows.push_back(std::move(fields));
   }
   return rows;
@@ -765,9 +769,13 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     auto generations = std::set<std::string>{};
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() >= 8u);
-      CHECK(rows[i][3] == "fifo");
-      generations.insert(rows[i][4]);
+      REQUIRE(rows[i].size() == 14u);
+      if (rows[i][1] != "frame")
+      {
+        continue;
+      }
+      CHECK(rows[i][7] == "fifo");
+      generations.insert(rows[i][8]);
     }
     CHECK(generations.size() >= 2u);
     std::cout << "forced FIFO: " << rows.size() - 1 << " frames in " << generations.size()

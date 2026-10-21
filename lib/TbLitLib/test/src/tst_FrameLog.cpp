@@ -20,9 +20,12 @@
 #include "lit/FrameLog.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <string>
+#include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -34,8 +37,11 @@ namespace
 FrameLogRow exampleRow()
 {
   auto row = FrameLogRow{};
+  row.session = 7;
   row.frameIndex = 12;
   row.cpuRecordMs = 0.15349;
+  row.acquireMs = 0.0512;
+  row.presentMs = 16.2049;
   row.gpuClearMs = 0.0214;
   row.presentMode = "mailbox";
   row.swapchainGeneration = 2;
@@ -43,6 +49,21 @@ FrameLogRow exampleRow()
   row.width = 800;
   row.height = 600;
   return row;
+}
+
+FrameLogRow sessionRow(const FrameLogEvent event)
+{
+  auto row = FrameLogRow{};
+  row.session = 7;
+  row.event = event;
+  row.vramUsedMb = 812.34;
+  row.vramBudgetMb = 6912.0;
+  return row;
+}
+
+std::size_t fieldCount(const std::string_view line)
+{
+  return std::size_t(std::count(line.begin(), line.end(), ',')) + 1;
 }
 
 std::string readFile(const std::filesystem::path& path)
@@ -61,26 +82,41 @@ TEST_CASE("FrameLog")
   {
     CHECK(
       frameLogHeader()
-      == "frame,cpu_record_ms,gpu_clear_ms,present_mode,swapchain_generation,frames_skipped,"
-         "width,height\n");
+      == "session,event,frame,cpu_record_ms,acquire_ms,present_ms,gpu_clear_ms,present_"
+         "mode,swapchain_generation,frames_skipped,width,height,vram_used_mb,vram_budget_"
+         "mb\n");
   }
 
   SECTION("formatFrameLogRow")
   {
-    CHECK(formatFrameLogRow(exampleRow()) == "12,0.153,0.021,mailbox,2,3,800,600\n");
+    CHECK(
+      formatFrameLogRow(exampleRow())
+      == "7,frame,12,0.153,0.051,16.205,0.021,mailbox,2,3,800,600,,\n");
 
     // a row without its GPU time has an empty field
     auto row = exampleRow();
     row.gpuClearMs.reset();
+    row.acquireMs = 0.0;
+    row.presentMs = 0.0;
     row.presentMode = "headless";
     row.swapchainGeneration = 0;
-    CHECK(formatFrameLogRow(row) == "12,0.153,,headless,0,3,800,600\n");
+    CHECK(
+      formatFrameLogRow(row) == "7,frame,12,0.153,0.000,0.000,,headless,0,3,800,600,,\n");
+
+    // a session's start and stop carry the VRAM in use, and nothing of a frame
+    CHECK(
+      formatFrameLogRow(sessionRow(FrameLogEvent::Start))
+      == "7,start,,,,,,,,,,,812.3,6912.0\n");
+    auto stop = sessionRow(FrameLogEvent::Stop);
+    stop.vramUsedMb.reset();
+    stop.vramBudgetMb.reset();
+    CHECK(formatFrameLogRow(stop) == "7,stop,,,,,,,,,,,,\n");
 
     // as many fields as the header
-    const auto count = [](const std::string_view line) {
-      return std::count(line.begin(), line.end(), ',');
-    };
-    CHECK(count(formatFrameLogRow(exampleRow())) == count(frameLogHeader()));
+    const auto header = fieldCount(frameLogHeader());
+    CHECK(fieldCount(formatFrameLogRow(exampleRow())) == header);
+    CHECK(fieldCount(formatFrameLogRow(sessionRow(FrameLogEvent::Start))) == header);
+    CHECK(fieldCount(formatFrameLogRow(stop)) == header);
   }
 }
 
@@ -102,13 +138,22 @@ TEST_CASE("FrameLogWriter")
     CHECK_FALSE(writer.close());
     CHECK_FALSE(writer.isOpen());
 
-    CHECK(
-      readFile(path)
-      == std::string{frameLogHeader()} + "12,0.153,0.021,mailbox,2,3,800,600\n"
-           + "13,0.153,0.021,mailbox,2,3,800,600\n");
+    const auto firstSession = std::string{frameLogHeader()}
+                              + formatFrameLogRow(exampleRow())
+                              + formatFrameLogRow(second);
+    CHECK(readFile(path) == firstSession);
 
     // appending after close writes nothing
     writer.append(exampleRow());
+    CHECK(readFile(path) == firstSession);
+
+    // a log that exists is appended to, without a second header (review L3.16)
+    CHECK_FALSE(writer.open(path));
+    writer.append(sessionRow(FrameLogEvent::Start));
+    CHECK_FALSE(writer.close());
+    CHECK(
+      readFile(path)
+      == firstSession + formatFrameLogRow(sessionRow(FrameLogEvent::Start)));
     std::filesystem::remove(path);
   }
 

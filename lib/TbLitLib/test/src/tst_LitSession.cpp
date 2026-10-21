@@ -606,19 +606,27 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     CHECK(messages.errors == 0);
     std::cout << "headless device: " << deviceName << "\n";
 
-    // the first cycle's frame log: every frame with its GPU time, resolved by stop
+    // the first cycle's frame log: its start, every frame with its GPU time, resolved by
+    // stop, and its stop
     const auto rows = readCsv(logPath);
-    REQUIRE(rows.size() >= 5u);
-    CHECK(rows[0][0] == "frame");
-    for (std::size_t i = 1; i < rows.size(); ++i)
+    REQUIRE(rows.size() >= 7u);
+    CHECK(rows[0][0] == "session");
+    CHECK(rows[1][1] == "start");
+    CHECK(rows.back()[1] == "stop");
+    for (std::size_t i = 2; i + 1 < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 8u);
-      CHECK(rows[i][0] == std::to_string(i - 1));
-      CHECK_FALSE(rows[i][2].empty());
-      CHECK(rows[i][3] == "headless");
-      CHECK(rows[i][6] == "64");
-      CHECK(rows[i][7] == "48");
+      REQUIRE(rows[i].size() == 14u);
+      CHECK(rows[i][0] == "1");
+      CHECK(rows[i][1] == "frame");
+      CHECK(rows[i][2] == std::to_string(i - 2));
+      CHECK_FALSE(rows[i][6].empty());
+      CHECK(rows[i][7] == "headless");
+      CHECK(rows[i][10] == "64");
+      CHECK(rows[i][11] == "48");
     }
+    // VK_EXT_memory_budget, which this machine's GPU has
+    CHECK_FALSE(rows[1][12].empty());
+    CHECK_FALSE(rows.back()[12].empty());
     std::cout << "headless frame log, first rows:\n";
     for (std::size_t i = 0; i < std::min(rows.size(), std::size_t{4}); ++i)
     {
@@ -875,20 +883,29 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     messages.print(forceFifo ? "window, forced FIFO" : "window");
     CHECK(messages.errors == 0);
 
-    // what the first cycle presented: present modes, generations and extents
+    // what the first cycle presented: present modes, generations and extents, and how
+    // long the presents took
     const auto rows = readCsv(logPath);
-    REQUIRE(rows.size() >= 12u);
+    REQUIRE(rows.size() >= 14u);
     auto seen = std::set<std::string>{};
+    auto longestPresentMs = 0.0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 8u);
+      REQUIRE(rows[i].size() == 14u);
+      if (rows[i][1] != "frame")
+      {
+        continue;
+      }
       if (forceFifo)
       {
-        CHECK(rows[i][3] == "fifo");
+        CHECK(rows[i][7] == "fifo");
       }
+      longestPresentMs = std::max(longestPresentMs, std::stod(rows[i][5]));
       seen.insert(
-        rows[i][3] + " generation " + rows[i][4] + " " + rows[i][6] + "x" + rows[i][7]);
+        rows[i][7] + " generation " + rows[i][8] + " " + rows[i][10] + "x" + rows[i][11]);
     }
+    std::cout << (forceFifo ? "forced FIFO" : "default")
+              << " longest present call: " << longestPresentMs << " ms\n";
     std::cout << (forceFifo ? "forced FIFO" : "default") << " present modes:\n";
     for (const auto& entry : seen)
     {

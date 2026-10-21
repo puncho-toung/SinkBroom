@@ -101,6 +101,7 @@ Result<void> LitSession::start(
            instance, vk::SurfaceKHR{surface}, m_options.validation, *m_events)
          | kdl::and_then([&](std::unique_ptr<GpuDevice> device) {
              m_device = std::move(device);
+             m_report.vramAtStart = m_device->vram();
              m_renderThread =
                std::make_unique<RenderThread>(*m_device, *m_events, m_options);
              // step 7
@@ -330,6 +331,9 @@ void LitSession::releaseGpuObjects()
         destroySwapchainGeneration(m_device->vkDevice(), *generation);
       }
     }
+
+    // what the session still holds once its objects are released
+    m_report.vramAtStop = m_device->vram();
 
     // step 5: the NVRHI device, wrapper first; its last Release() must return 0
     m_report.deviceReleaseCount = m_device->releaseNvrhiDevice();

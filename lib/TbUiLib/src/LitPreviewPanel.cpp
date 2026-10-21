@@ -496,6 +496,18 @@ void LitPreviewPanel::stopSession(QString reason)
     m_stopReason = std::move(reason);
     m_stopProblems.clear();
     auto& logger = m_document.logger();
+    if (report->hadDevice)
+    {
+      const auto megabytes = [](const std::optional<std::uint64_t>& bytes) {
+        return bytes ? fmt::format("{:.1f} MB", double(*bytes) / (1024.0 * 1024.0))
+                     : std::string{"unknown"};
+      };
+      logger.info() << fmt::format(
+        "Lit preview stopped after {} frames; VRAM in use: {} at start, {} at stop",
+        report->framesPresented,
+        megabytes(report->vramAtStartBytes),
+        megabytes(report->vramAtStopBytes));
+    }
     for (const auto& problem : report->problems())
     {
       logger.warn() << "Lit preview: " << problem;

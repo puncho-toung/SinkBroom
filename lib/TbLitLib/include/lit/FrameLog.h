@@ -29,32 +29,58 @@
 namespace tb::lit
 {
 
+enum class FrameLogEvent
+{
+  // a session started; the row has the device-local VRAM in use then
+  Start,
+  // a presented frame
+  Frame,
+  // a session stopped; the row has the device-local VRAM in use then
+  Stop,
+};
+
 /**
- * One presented frame in the frame log (C16, LP0 subset). The GPU time comes from the
- * timer-query ring once that frame has finished on the GPU, so a row is complete only
- * FramesInFlight frames later, or at stop.
+ * One row of the frame log (C16, LP0 subset). Every row names its session, so that one
+ * log can hold several sessions, for example Start and Stop ten times. A frame's GPU time
+ * comes from the timer-query ring once that frame has finished on the GPU, so a frame row
+ * is complete only FramesInFlight frames later, or at stop.
  */
 struct FrameLogRow
 {
+  // the session's generation
+  std::uint64_t session = 0;
+  FrameLogEvent event = FrameLogEvent::Frame;
+
+  // frame rows
   std::uint64_t frameIndex = 0;
   double cpuRecordMs = 0.0;
+  // how long the acquire waited for an image, and how long the present call took, which
+  // is where FIFO blocks; both 0 without a swapchain
+  double acquireMs = 0.0;
+  double presentMs = 0.0;
   std::optional<double> gpuClearMs;
   std::string_view presentMode; // a presentModeName literal
   std::uint64_t swapchainGeneration = 0;
   std::uint64_t framesSkipped = 0;
   std::uint32_t width = 0;
   std::uint32_t height = 0;
+
+  // start and stop rows: the device-local heaps' usage and budget from
+  // VK_EXT_memory_budget, when the device reports them
+  std::optional<double> vramUsedMb;
+  std::optional<double> vramBudgetMb;
 };
 
 // the CSV header line, ending in a newline
 std::string_view frameLogHeader();
 
-// one CSV line, ending in a newline; an unknown GPU time is an empty field
+// one CSV line, ending in a newline; a field that does not apply or is unknown is empty
 std::string formatFrameLogRow(const FrameLogRow& row);
 
 /**
  * Writes the frame log on the render thread: rows are buffered in memory, written out in
- * large blocks, and flushed when the log is closed at stop.
+ * large blocks, and flushed when the log is closed at stop. A log that exists is appended
+ * to; the header is written only into an empty file.
  */
 class FrameLogWriter
 {

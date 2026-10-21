@@ -411,6 +411,14 @@ void LitSessionHost::recordTeardown()
     m_report.messages = std::move(sessionReport.messages);
     m_report.framesPresented = sessionReport.framesPresented;
     m_report.swapchainGenerations = sessionReport.swapchainGenerations;
+    if (sessionReport.vramAtStart)
+    {
+      m_report.vramAtStartBytes = sessionReport.vramAtStart->usedBytes;
+    }
+    if (sessionReport.vramAtStop)
+    {
+      m_report.vramAtStopBytes = sessionReport.vramAtStop->usedBytes;
+    }
   }
 
   auto& d = m_diagnostics;

@@ -91,6 +91,13 @@ enum class SessionEvent
 using EventSink =
   std::function<void(SessionEvent, std::string message, std::uint64_t generation)>;
 
+// The device-local heaps' VRAM, from VK_EXT_memory_budget.
+struct VramUsage
+{
+  std::uint64_t usedBytes = 0;
+  std::uint64_t budgetBytes = 0;
+};
+
 /**
  * What a session's teardown found, for its owner, which logs and shows a report that is
  * not clean. Complete once releaseGpuObjects has run. Messages that the session would
@@ -109,6 +116,10 @@ struct TeardownReport
   std::vector<std::string> messages;
   std::uint64_t framesPresented = 0;
   std::uint64_t swapchainGenerations = 0;
+  // when the session had its device, and once its objects were released, before the
+  // device went; empty when the device does not report its budget
+  std::optional<VramUsage> vramAtStart;
+  std::optional<VramUsage> vramAtStop;
 };
 
 // Test hooks: faults the render thread raises in its next frame.

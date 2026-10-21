@@ -60,6 +60,11 @@ void FrameTimers::frameShown(const std::size_t slot, const FrameLogRow& row)
   }
 }
 
+void FrameTimers::append(const FrameLogRow& row)
+{
+  m_log.append(row);
+}
+
 bool FrameTimers::pending(const std::size_t slot) const
 {
   return m_slots[slot].pending;
@@ -90,7 +95,7 @@ void FrameTimers::resolveAll(nvrhi::IDevice& device, const std::uint64_t nextFra
   }
 }
 
-std::optional<std::string> FrameTimers::closeLog(const std::uint64_t nextFrameIndex)
+void FrameTimers::flushUnresolved(const std::uint64_t nextFrameIndex)
 {
   for (std::size_t i = 0; i < FramesInFlight; ++i)
   {
@@ -101,6 +106,10 @@ std::optional<std::string> FrameTimers::closeLog(const std::uint64_t nextFrameIn
       s.row.reset();
     }
   }
+}
+
+std::optional<std::string> FrameTimers::closeLog()
+{
   return m_log.close();
 }
 

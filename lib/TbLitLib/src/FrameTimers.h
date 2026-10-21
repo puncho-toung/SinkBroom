@@ -69,6 +69,8 @@ public:
   void frameSubmitted(std::size_t slot);
   // the submitted frame was shown; its row is written once its time is known
   void frameShown(std::size_t slot, const FrameLogRow& row);
+  // a row that needs no GPU time, such as a session's start and stop
+  void append(const FrameLogRow& row);
 
   bool pending(std::size_t slot) const;
   // reads the time of the slot's finished frame and writes its row
@@ -76,9 +78,10 @@ public:
   // every slot, oldest frame first, so that rows stay in frame order
   void resolveAll(nvrhi::IDevice& device, std::uint64_t nextFrameIndex);
 
-  // At stop: writes the rows whose time never arrived, with an empty field, and closes
-  // the log; the first write that failed, if any.
-  std::optional<std::string> closeLog(std::uint64_t nextFrameIndex);
+  // at stop: writes the rows whose time never arrived, with an empty field
+  void flushUnresolved(std::uint64_t nextFrameIndex);
+  // closes the log; the first write that failed, if any
+  std::optional<std::string> closeLog();
 
   // teardown step 2
   void releaseQueries();

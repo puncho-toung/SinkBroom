@@ -183,6 +183,8 @@ private:
   bool waitForIdle(std::string_view when);
   void parkGpuWork();
   void finish() noexcept;
+  // a start or stop row with the VRAM in use
+  void appendSessionRow(FrameLogEvent event);
 
   deleteCopyAndMove(RenderThread);
 };

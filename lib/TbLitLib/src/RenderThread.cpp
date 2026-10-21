@@ -353,6 +353,7 @@ void RenderThread::main() noexcept
     {
       m_events.post(SessionEvent::Warning, *error);
     }
+    appendSessionRow(FrameLogEvent::Start);
     runLoop();
   }
   catch (const std::exception& e)
@@ -505,17 +506,21 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       return FrameOutcome::Skipped;
     }
     auto imageIndex = std::uint32_t{0};
+    auto acquireMs = 0.0;
+    auto presentMs = 0.0;
     nvrhi::ITexture* texture = m_headlessTarget.Get();
     auto extent = m_headlessExtent;
     if (target)
     {
       // the vk::Result overload: OUT_OF_DATE is a value, not an exception
+      const auto acquireStart = FrameClock::now();
       const auto result = m_device.vkDevice().acquireNextImageKHR(
         target->swapchain,
         AcquireTimeoutNs,
         target->acquireSemaphores[slot],
         nullptr,
         &imageIndex);
+      acquireMs = millisecondsSince(acquireStart);
       switch (result)
       {
       case vk::Result::eSuccess:
@@ -631,7 +636,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
                              .setWaitSemaphores(target->presentSemaphores[imageIndex])
                              .setSwapchains(target->swapchain)
                              .setImageIndices(imageIndex);
+      const auto presentStart = FrameClock::now();
       const auto result = m_device.queue().presentKHR(&present);
+      presentMs = millisecondsSince(presentStart);
       switch (result)
       {
       case vk::Result::eSuccess:
@@ -663,8 +670,11 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     if (shown)
     {
       auto row = FrameLogRow{};
+      row.session = m_events.generation();
       row.frameIndex = frame;
       row.cpuRecordMs = cpuRecordMs;
+      row.acquireMs = acquireMs;
+      row.presentMs = presentMs;
       row.presentMode = presentModeName(
         target ? std::optional{VkPresentModeKHR(target->presentMode)} : std::nullopt);
       row.swapchainGeneration = target ? target->number : 0;
@@ -801,6 +811,19 @@ void RenderThread::idleTick()
   }
 }
 
+void RenderThread::appendSessionRow(const FrameLogEvent event)
+{
+  auto row = FrameLogRow{};
+  row.session = m_events.generation();
+  row.event = event;
+  if (const auto vram = m_device.vram())
+  {
+    row.vramUsedMb = double(vram->usedBytes) / (1024.0 * 1024.0);
+    row.vramBudgetMb = double(vram->budgetBytes) / (1024.0 * 1024.0);
+  }
+  m_timers.append(row);
+}
+
 bool RenderThread::waitForIdle(const std::string_view when)
 {
   if (m_device.device().waitForIdle())
@@ -867,7 +890,9 @@ void RenderThread::finish() noexcept
   try
   {
     // rows whose GPU time never arrived keep an empty field
-    m_frameLogError = m_timers.closeLog(m_frameIndex);
+    m_timers.flushUnresolved(m_frameIndex);
+    appendSessionRow(FrameLogEvent::Stop);
+    m_frameLogError = m_timers.closeLog();
   }
   catch (const std::exception& e)
   {

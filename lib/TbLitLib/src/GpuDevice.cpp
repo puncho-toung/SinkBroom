@@ -27,6 +27,7 @@
 #include <fmt/format.h>
 #include <nvrhi/validation.h>
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -203,6 +204,42 @@ std::size_t GpuDevice::nvrhiErrors() const
 MessageCallback& GpuDevice::messageCallback()
 {
   return m_messageCallback;
+}
+
+std::optional<VramUsage> GpuDevice::vram() const
+{
+  if (
+    std::ranges::find(
+      m_gpu.deviceExtensions, std::string{VK_EXT_MEMORY_BUDGET_EXTENSION_NAME})
+    == m_gpu.deviceExtensions.end())
+  {
+    return std::nullopt;
+  }
+
+  try
+  {
+    // as the engine reads it for its statistics (DeviceManager_VK.cpp:1477-1488)
+    auto budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT{};
+    auto properties = vk::PhysicalDeviceMemoryProperties2{};
+    properties.pNext = &budget;
+    m_gpu.physicalDevice.getMemoryProperties2(&properties);
+
+    auto usage = VramUsage{};
+    const auto& heaps = properties.memoryProperties;
+    for (std::uint32_t i = 0; i < heaps.memoryHeapCount; ++i)
+    {
+      if (heaps.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal)
+      {
+        usage.usedBytes += budget.heapUsage[i];
+        usage.budgetBytes += budget.heapBudget[i];
+      }
+    }
+    return usage;
+  }
+  catch (const std::exception&)
+  {
+    return std::nullopt;
+  }
 }
 
 std::uint32_t GpuDevice::releaseNvrhiDevice()
