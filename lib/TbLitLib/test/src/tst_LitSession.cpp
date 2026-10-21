@@ -17,8 +17,11 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "StringMakers.h"
 #include "lit/LitSession.h"
 #include "lit/VulkanInstance.h"
+
+#include "kd/result.h"
 
 #include <vulkan/vulkan.h>
 
@@ -56,11 +59,6 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL noProcAddr(VkInstance, const char*)
   return nullptr;
 }
 
-std::string errorText(const Result<std::unique_ptr<LitSession>>& result)
-{
-  return result.is_error() ? std::get<Error>(result.error()).msg : std::string{};
-}
-
 } // namespace
 
 TEST_CASE("LitSession")
@@ -69,16 +67,17 @@ TEST_CASE("LitSession")
   {
     // what create checks before it touches Vulkan
     const auto sink = EventSink{};
-    CHECK_THAT(
-      errorText(LitSession::create({}, VK_NULL_HANDLE, 64, 64, {}, sink, 1)),
-      Catch::Matchers::Equals("No Vulkan instance"));
+    CHECK(
+      LitSession::create({}, VK_NULL_HANDLE, 64, 64, {}, sink, 1)
+      == Result<std::unique_ptr<LitSession>>{Error{"No Vulkan instance"}});
 
     // a handle without an initialised dispatcher; nothing calls through it
     const auto unloaded = InstanceHandles{
       reinterpret_cast<VkInstance>(std::uintptr_t{0x1000}), &noProcAddr, {}};
-    CHECK_THAT(
-      errorText(LitSession::create(unloaded, VK_NULL_HANDLE, 64, 64, {}, sink, 1)),
-      Catch::Matchers::ContainsSubstring("dispatcher is not initialised"));
+    CHECK(
+      LitSession::create(unloaded, VK_NULL_HANDLE, 64, 64, {}, sink, 1)
+      == Result<std::unique_ptr<LitSession>>{
+        Error{"The Vulkan dispatcher is not initialised for the instance"}});
   }
 }
 
@@ -545,13 +544,10 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
         options.validation = validation;
         options.frameLogPath = cycle == 0 ? logPath : std::filesystem::path{};
 
-        auto result = LitSession::create(
-          instance.handles(), VK_NULL_HANDLE, 64, 48, options, events.sink(), cycle + 1);
-        if (result.is_error())
-        {
-          FAIL(std::get<Error>(result.error()).msg);
-        }
-        auto session = std::move(result).value();
+        auto session =
+          LitSession::create(
+            instance.handles(), VK_NULL_HANDLE, 64, 48, options, events.sink(), cycle + 1)
+          | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
         deviceName = session->deviceName();
         CHECK(session->generation() == cycle + 1);
         CHECK_FALSE(session->hasSwapchain());
@@ -646,13 +642,10 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       auto events = Events{};
       auto options = SessionOptions{};
       options.validation = true;
-      auto result = LitSession::create(
-        instance.handles(), VK_NULL_HANDLE, 32, 32, options, events.sink(), 7);
-      if (result.is_error())
-      {
-        FAIL(std::get<Error>(result.error()).msg);
-      }
-      auto session = std::move(result).value();
+      auto session =
+        LitSession::create(
+          instance.handles(), VK_NULL_HANDLE, 32, 32, options, events.sink(), 7)
+        | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
       session->setExposed(true);
       REQUIRE(waitFor([&] { return session->framesPresented() >= 1; }, 5000ms, false));
 
@@ -724,19 +717,15 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
         options.frameLogPath = cycle == 0 ? logPath : std::filesystem::path{};
 
         const auto [width, height] = window.clientSize();
-        auto result = LitSession::create(
-          instance.handles(),
-          surface,
-          width,
-          height,
-          options,
-          events.sink(),
-          100 + cycle);
-        if (result.is_error())
-        {
-          FAIL(std::get<Error>(result.error()).msg);
-        }
-        auto session = std::move(result).value();
+        auto session = LitSession::create(
+                         instance.handles(),
+                         surface,
+                         width,
+                         height,
+                         options,
+                         events.sink(),
+                         100 + cycle)
+                       | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
         REQUIRE(session->hasSwapchain());
         if (cycle == 0)
         {
@@ -768,11 +757,8 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
                   return std::get<0>(entry) == SessionEvent::SwapchainOutOfDate;
                 });
               }
-              const auto replaced = replaceSwapchain(*session, surface, window);
-              if (replaced.is_error())
-              {
-                FAIL(std::get<Error>(replaced.error()).msg);
-              }
+              replaceSwapchain(*session, surface, window)
+                | kdl::transform_error([](const auto& e) { FAIL(e.msg); });
             }
             waitFor([&] { return false; }, 20ms, true);
           }
@@ -784,11 +770,8 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
         // resize: the handshake replaces the generation
         window.resize(400, 300);
         {
-          const auto replaced = replaceSwapchain(*session, surface, window);
-          if (replaced.is_error())
-          {
-            FAIL(std::get<Error>(replaced.error()).msg);
-          }
+          replaceSwapchain(*session, surface, window)
+            | kdl::transform_error([](const auto& e) { FAIL(e.msg); });
         }
         REQUIRE(session->hasSwapchain());
         REQUIRE(drawFrames(3));
@@ -797,11 +780,8 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
         ShowWindow(window.handle(), SW_MINIMIZE);
         pumpMessages();
         {
-          const auto replaced = replaceSwapchain(*session, surface, window);
-          if (replaced.is_error())
-          {
-            FAIL(std::get<Error>(replaced.error()).msg);
-          }
+          replaceSwapchain(*session, surface, window)
+            | kdl::transform_error([](const auto& e) { FAIL(e.msg); });
         }
         CHECK_FALSE(session->hasSwapchain());
         const auto minimisedFrames = session->framesPresented();
@@ -812,11 +792,8 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
         ShowWindow(window.handle(), SW_SHOWNOACTIVATE);
         pumpMessages();
         {
-          const auto replaced = replaceSwapchain(*session, surface, window);
-          if (replaced.is_error())
-          {
-            FAIL(std::get<Error>(replaced.error()).msg);
-          }
+          replaceSwapchain(*session, surface, window)
+            | kdl::transform_error([](const auto& e) { FAIL(e.msg); });
         }
         REQUIRE(session->hasSwapchain());
         REQUIRE(drawFrames(3));

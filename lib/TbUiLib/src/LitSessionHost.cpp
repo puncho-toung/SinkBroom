@@ -30,13 +30,13 @@
 #include "ui/LitPreviewPanel.h"
 #include "ui/LitPreviewWindow.h"
 
+#include "kd/result.h"
 #include "kd/set_temp.h"
 
 #include <fmt/format.h>
 
 #include <chrono>
 #include <utility>
-#include <variant>
 
 namespace tb::ui
 {
@@ -58,12 +58,6 @@ constexpr auto ServicingInterval = 10ms;
 // how long a stop waits for the render thread before it says so; it keeps waiting,
 // because a thread that still runs uses the session
 constexpr auto StopWarningTime = 2000ms;
-
-template <typename T>
-std::string errorMessage(const Result<T>& result)
-{
-  return std::get<Error>(result.error()).msg;
-}
 
 } // namespace
 
@@ -490,28 +484,25 @@ void LitSessionHost::createSession(const QSize size)
     return;
   }
 
-  auto result = lit::LitSession::create(
+  lit::LitSession::create(
     m_handles,
     surface,
     std::uint32_t(size.width()),
     std::uint32_t(size.height()),
     m_options,
     eventSink(),
-    m_generation);
-  if (result.is_error())
-  {
-    fail(errorMessage(result));
-    return;
-  }
-
-  m_session = std::move(result).value();
-  m_swapchainSize = size;
-  m_swapchainStale = false;
-  m_session->setExposed(m_window->isExposed());
-  if (m_camera)
-  {
-    m_session->setCamera(*m_camera);
-  }
+    m_generation)
+    | kdl::transform([&](std::unique_ptr<lit::LitSession> session) {
+        m_session = std::move(session);
+        m_swapchainSize = size;
+        m_swapchainStale = false;
+        m_session->setExposed(m_window->isExposed());
+        if (m_camera)
+        {
+          m_session->setCamera(*m_camera);
+        }
+      })
+    | kdl::transform_error([&](const auto& e) { fail(e.msg); });
 }
 
 void LitSessionHost::replaceSwapchain(const QSize size)
@@ -536,18 +527,15 @@ void LitSessionHost::replaceSwapchain(const QSize size)
 
   // a 0×0 extent, as of a minimised window, makes no swapchain; the next expose tries
   // again
-  if (const auto result = m_session->createSwapchain(
-        surface, std::uint32_t(size.width()), std::uint32_t(size.height()));
-      result.is_error())
-  {
-    fail(errorMessage(result));
-    return;
-  }
-
-  m_swapchainSize = size;
-  m_swapchainStale = false;
-  m_session->unpark();
-  m_parkPending = false;
+  m_session->createSwapchain(
+    surface, std::uint32_t(size.width()), std::uint32_t(size.height()))
+    | kdl::transform([&]() {
+        m_swapchainSize = size;
+        m_swapchainStale = false;
+        m_session->unpark();
+        m_parkPending = false;
+      })
+    | kdl::transform_error([&](const auto& e) { fail(e.msg); });
 }
 
 bool LitSessionHost::parkServicingSentMessages()

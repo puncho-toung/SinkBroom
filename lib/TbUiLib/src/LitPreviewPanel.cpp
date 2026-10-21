@@ -41,6 +41,8 @@
 #include "ui/QPathUtils.h"
 #include "ui/ViewConstants.h"
 
+#include "kd/result.h"
+
 #include <fmt/format.h>
 
 #include <algorithm>
@@ -202,22 +204,18 @@ void LitPreviewPanel::start()
 
   auto host = std::make_unique<LitSessionHost>(
     sessionOptions(), ++lastGeneration, std::move(eventHandler), diagnostics());
-  auto container = host->start(*m_surfacePage);
-  if (container.is_error())
-  {
+  host->start(*m_surfacePage) | kdl::transform([&](QWidget* container) {
+    m_surfacePage->layout()->addWidget(container);
+    m_host = std::move(host);
+    m_stopReason.clear();
+    m_stopProblems.clear();
+    forwardCamera();
+    claimSession(*this);
+  }) | kdl::transform_error([&](const auto& e) {
     host.reset();
-    m_stopReason = QString::fromStdString(std::get<Error>(container.error()).msg);
-    updateStartPage();
-    return;
-  }
+    m_stopReason = QString::fromStdString(e.msg);
+  });
 
-  m_surfacePage->layout()->addWidget(container.value());
-  m_host = std::move(host);
-  m_stopReason.clear();
-  m_stopProblems.clear();
-  forwardCamera();
-
-  claimSession(*this);
   // showing the surface page shows the window; its first expose runs phase B
   updateStartPage();
 }

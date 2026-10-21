@@ -18,6 +18,7 @@ target_link_libraries(TbLitLibTest
     CompilerConfig
     PrecompileStdHeaders
     Catch2::Catch2WithMain
+    TbBaseTestUtilsLib
     TbLitLib
 )
 
