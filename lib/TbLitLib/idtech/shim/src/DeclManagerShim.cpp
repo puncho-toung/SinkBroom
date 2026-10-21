@@ -311,7 +311,7 @@ std::size_t declFileBytes(const idDeclManagerLocal& manager)
 namespace
 {
 
-// the keywords idMaterial::ParseMaterial turns into one stage each
+// the keywords idMaterial::ParseMaterial turns into one ParseStage call each
 // (Material.cpp:2883-2924)
 constexpr const char* StageShortcuts[] = {
   "diffusemap",
@@ -324,25 +324,12 @@ constexpr const char* StageShortcuts[] = {
   "normalmap",
 };
 
-bool isNameStart(const char c)
-{
-  // idLexer::ReadToken's names, and with LEXFL_ALLOWPATHNAMES the path starts
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '/'
-         || c == '\\' || c == '.';
-}
-
-bool isNamePart(const char c)
-{
-  // idLexer::ReadName with LEXFL_ALLOWPATHNAMES
-  return isNameStart(c) || (c >= '0' && c <= '9') || c == ':';
-}
-
-bool isStageShortcut(const std::string_view token)
+bool isStageShortcut(const idToken& token)
 {
   for (const auto* keyword : StageShortcuts)
   {
-    const auto length = std::char_traits<char>::length(keyword);
-    if (token.size() == length && idStr::Icmpn(token.data(), keyword, int(length)) == 0)
+    // ParseMaterial's !token.Icmp( keyword ), whatever the token's type
+    if (token.Icmp(keyword) == 0)
     {
       return true;
     }
@@ -351,68 +338,28 @@ bool isStageShortcut(const std::string_view token)
 }
 
 /**
- * The stages a material decl's text makes (M-ID-GUARD-05): the brace blocks one level
- * inside the material's own, and the stage shortcut keywords at that level, as idLexer
- * reads the text with DECL_LEXER_FLAGS (comments skipped, a quoted string ends at its
- * quote or its line, no escapes, path names). AddImplicitStages never adds a stage past
- * the limit, so these are the stages ParseStage would be asked for.
+ * An upper bound of the ParseStage calls a material decl's text makes (M-ID-GUARD-05),
+ * from the tokens the copied lexer reads in it (forEachDeclToken). idMaterial::Parse
+ * skips to the first "{" (SkipUntilString); after it, ParseMaterial calls ParseStage only
+ * for a token equal to "{" or for a stage shortcut keyword, once per token, whatever the
+ * token's type. Counting every such token also counts the ones that are an argument
+ * ("diffusemap {", "qer_editorimage {"), a stage's own keyword ("blend diffusemap") or
+ * text after a parse error, so the bound can be higher than the engine's count, never
+ * lower (M-ID-DIFF-03). AddImplicitStages never adds a stage past the limit.
  */
-int stageCount(const std::string& text)
+int stageBound(const std::string& text, const char* name)
 {
-  auto depth = 0;
+  auto opened = false;
   auto stages = 0;
-  const auto length = text.size();
-  for (std::size_t i = 0; i < length; ++i)
-  {
-    const auto c = text[i];
-    if (c == '/' && i + 1 < length && text[i + 1] == '/')
+  tb::lit::shim::forEachDeclToken(text, name, [&](const idToken& token) {
+    const auto brace = token == "{";
+    if (!opened)
     {
-      while (i < length && text[i] != '\n')
-      {
-        ++i;
-      }
+      opened = brace;
+      return;
     }
-    else if (c == '/' && i + 1 < length && text[i + 1] == '*')
-    {
-      i += 2;
-      while (i + 1 < length && !(text[i] == '*' && text[i + 1] == '/'))
-      {
-        ++i;
-      }
-      ++i;
-    }
-    else if (c == '"')
-    {
-      ++i;
-      while (i < length && text[i] != '"' && text[i] != '\n')
-      {
-        ++i;
-      }
-    }
-    else if (isNameStart(c))
-    {
-      // a whole name, so that "//" inside a path is no comment
-      auto end = i + 1;
-      while (end < length && isNamePart(text[end]))
-      {
-        ++end;
-      }
-      if (depth == 1 && isStageShortcut(std::string_view{text}.substr(i, end - i)))
-      {
-        ++stages;
-      }
-      i = end - 1;
-    }
-    else if (c == '{')
-    {
-      stages += depth == 1 ? 1 : 0;
-      ++depth;
-    }
-    else if (c == '}' && depth > 0)
-    {
-      --depth;
-    }
-  }
+    stages += brace || isStageShortcut(token) ? 1 : 0;
+  });
   return stages;
 }
 
@@ -435,7 +382,7 @@ std::vector<int> refuseOversizedMaterials(idDeclManagerLocal& manager)
     text.resize(std::size_t(decl->GetTextLength()) + 1);
     decl->GetText(text.data());
     text.resize(std::size_t(decl->GetTextLength()));
-    if (stageCount(text) > MAX_SHADER_STAGES)
+    if (stageBound(text, decl->GetFileName()) > MAX_SHADER_STAGES)
     {
       // Material.cpp:1642-1646's warning, which the engine reports before it overruns
       common->Warning(

@@ -776,6 +776,54 @@ std::string stagesOf(const int count, const std::string& stage)
   return text;
 }
 
+// count characters of words of nine A and a space: no dot anywhere
+std::string spacedWords(const std::size_t count)
+{
+  auto text = std::string{};
+  while (text.size() < count)
+  {
+    text += text.size() % 10 == 9 ? ' ' : 'A';
+  }
+  return text;
+}
+
+const auto PlainStage = std::string{"\t{ blend add map _white }\n"};
+
+// M-ID-GUARD-06's warning, and the copied LoadAndParse's FatalError for the file it read
+// as unreadable
+void checkNotRead(const MaterialDecls& decls, const std::string& path)
+{
+  CAPTURE(path);
+  CHECK(hasMessage(
+    decls,
+    DeclMessageKind::Warning,
+    path
+      + " holds a token of 1024 or more characters with no '.' among the first 1024, "
+        "which the engine's MakeNameCanonical cannot take; it is not read"));
+  CHECK(hasMessage(decls, DeclMessageKind::FatalError, "couldn't load " + path));
+}
+
+void checkRead(const MaterialDecls& decls, const std::string& path)
+{
+  CAPTURE(path);
+  CHECK_FALSE(hasMessage(decls, DeclMessageKind::FatalError, "couldn't load " + path));
+  for (const auto& message : decls.messages())
+  {
+    CHECK(message.text.find(path) == std::string::npos);
+  }
+}
+
+// M-ID-GUARD-05's warning, and the refused lookup
+void checkStagesRefused(MaterialDecls& decls, const std::string& name)
+{
+  CAPTURE(name);
+  CHECK(hasMessage(
+    decls, DeclMessageKind::Warning, "material '" + name + "' exceeded 256 stages"));
+  const auto refused = decls.lookup(name);
+  REQUIRE_FALSE(refused);
+  CHECK_THAT(refused.error, Catch::Matchers::ContainsSubstring("exceeded 256 stages"));
+}
+
 } // namespace
 
 TEST_CASE("MaterialDecls catches what its source throws")
@@ -813,33 +861,22 @@ TEST_CASE("MaterialDecls guards the engine's overflows")
   {
     // M-ID-GUARD-05: the copied ParseStage writes past parseStages from the 257th stage;
     // brace blocks and stage shortcuts both count
-    const auto stage = std::string{"\t{ blend add map _white }\n"};
     auto source = MemoryDeclSource{{
       DeclFile{
         "materials/stages.mtr",
-        "textures/lp1a/blocks\n{\n" + stagesOf(257, stage) + "}\n"
-          + "textures/lp1a/shortcuts\n{\n" + stagesOf(200, stage)
+        "textures/lp1a/blocks\n{\n" + stagesOf(257, PlainStage) + "}\n"
+          + "textures/lp1a/shortcuts\n{\n" + stagesOf(200, PlainStage)
           + stagesOf(57, "\tdiffusemap _white\n") + "}\n"
           + "textures/lp1a/limit\n{\n// { a comment is no stage }\n\tqer_editorimage "
             "\"{ nor a string }\"\n"
-          + stagesOf(256, stage) + "}\n",
+          + stagesOf(256, PlainStage) + "}\n",
         0},
     }};
     auto decls = MaterialDecls{source};
     REQUIRE(decls.constructionError().empty());
 
-    for (const auto* name : {"textures/lp1a/blocks", "textures/lp1a/shortcuts"})
-    {
-      CAPTURE(name);
-      CHECK(hasMessage(
-        decls,
-        DeclMessageKind::Warning,
-        std::string{"material '"} + name + "' exceeded 256 stages"));
-      const auto refused = decls.lookup(name);
-      REQUIRE_FALSE(refused);
-      CHECK_THAT(
-        refused.error, Catch::Matchers::ContainsSubstring("exceeded 256 stages"));
-    }
+    checkStagesRefused(decls, "textures/lp1a/blocks");
+    checkStagesRefused(decls, "textures/lp1a/shortcuts");
     CHECK(decls.defaultedCount("material") == 2);
 
     // 256 stages are the engine's limit, and parse
@@ -849,6 +886,66 @@ TEST_CASE("MaterialDecls guards the engine's overflows")
       decls,
       DeclMessageKind::Warning,
       "material 'textures/lp1a/limit' exceeded 256 stages"));
+  }
+
+  SECTION("stages the parser reads at material level, which a brace count misses")
+  {
+    // W.1: the bound comes from the copied lexer's tokens, so every one of these reaches
+    // the 257th ParseStage in the engine and is refused here
+    auto source = MemoryDeclSource{{
+      DeclFile{
+        "materials/crafted_stages.mtr",
+        // the shortcut takes "{" as its image, and 256 blocks follow at material level
+        "textures/lp1a/swallowed\n{\n\tdiffusemap {\n" + stagesOf(256, PlainStage)
+          + "}\n}\n"
+          // qer_editorimage reads "{" on its line
+          + "textures/lp1a/editorimage\n{\n\tqer_editorimage {\n"
+          + stagesOf(257, PlainStage)
+          + "}\n}\n"
+          // "/*/" is a whole comment to idLexer (its end test looks at the previous
+          // character)
+          + "textures/lp1a/comment\n{\n\t/*/\n" + stagesOf(257, PlainStage)
+          + "}\n"
+          // ".5diffusemap" is a number, then a shortcut
+          + "textures/lp1a/number\n{\n" + stagesOf(200, PlainStage)
+          + stagesOf(57, "\tpolygonOffset .5diffusemap _white\n") + "}\n",
+        0},
+    }};
+    auto decls = MaterialDecls{source};
+    REQUIRE(decls.constructionError().empty());
+
+    for (const auto* name :
+         {"textures/lp1a/swallowed",
+          "textures/lp1a/editorimage",
+          "textures/lp1a/comment",
+          "textures/lp1a/number"})
+    {
+      checkStagesRefused(decls, name);
+    }
+    CHECK(decls.defaultedCount("material") == 4);
+  }
+
+  SECTION("200 stages parse; interaction stage blocks count twice (M-ID-DIFF-03)")
+  {
+    const auto diffuseStage = std::string{"\t{ blend diffusemap map _white }\n"};
+    auto source = MemoryDeclSource{{
+      DeclFile{
+        "materials/many_stages.mtr",
+        "textures/lp1a/two_hundred\n{\n" + stagesOf(200, PlainStage) + "}\n"
+          + "textures/lp1a/diffuse128\n{\n" + stagesOf(128, diffuseStage) + "}\n"
+          + "textures/lp1a/diffuse129\n{\n" + stagesOf(129, diffuseStage) + "}\n",
+        0},
+    }};
+    auto decls = MaterialDecls{source};
+    REQUIRE(decls.constructionError().empty());
+
+    CHECK(lookup(decls, "textures/lp1a/two_hundred")->stages.size() == 200u);
+    // the bound counts "{" and "diffusemap" of each block: 256, so the material parses,
+    // and AddImplicitStages adds the _flat bump stage
+    CHECK(lookup(decls, "textures/lp1a/diffuse128")->stages.size() == 129u);
+    // 258: refused, although the engine parses 129 stages
+    checkStagesRefused(decls, "textures/lp1a/diffuse129");
+    CHECK(decls.defaultedCount("material") == 1);
   }
 
   SECTION("a decl file with a name of 1024 or more characters is not read")
@@ -877,21 +974,79 @@ TEST_CASE("MaterialDecls guards the engine's overflows")
     auto decls = MaterialDecls{source};
     REQUIRE(decls.constructionError().empty());
 
-    for (const auto* path : {"materials/a_name.mtr", "materials/b_string.mtr"})
-    {
-      CAPTURE(path);
-      CHECK(hasMessage(
-        decls,
-        DeclMessageKind::Warning,
-        std::string{path}
-          + " holds a name of 1024 or more characters, which the engine's "
-            "MakeNameCanonical cannot take; it is not read"));
-      CHECK(hasMessage(
-        decls, DeclMessageKind::FatalError, std::string{"couldn't load "} + path));
-    }
+    checkNotRead(decls, "materials/a_name.mtr");
+    checkNotRead(decls, "materials/b_string.mtr");
     CHECK(lookup(decls, "textures/lp1a/str")->implicit);
     CHECK_FALSE(lookup(decls, "textures/lp1a/short")->implicit);
     CHECK_FALSE(lookup(decls, "textures/lp1a/dotted")->implicit);
+  }
+
+  SECTION("tokens the lexer joins or splits, as the engine reads them")
+  {
+    // W.1: without the guard, each of these files names a decl with a dotless token of
+    // 1100 or more characters, and MakeNameCanonical writes past its buffer
+    const auto half = std::string(600, 'A');
+    auto source = MemoryDeclSource{{
+      // two strings joined across a backslash (LEXFL_ALLOWBACKSLASHSTRINGCONCAT)
+      DeclFile{
+        "materials/a_backslash.mtr",
+        "\"" + half + "\" \\\n\"" + half + "\" { { map _white } }\n",
+        0},
+      // a multi-character literal with spaces (LEXFL_ALLOWMULTICHARLITERALS)
+      DeclFile{
+        "materials/b_literal.mtr", "'" + spacedWords(1100) + "' { { map _white } }\n", 0},
+      // a number, then a name: "1.5" ends at the 'A' ("Expecting '{'" takes "1.5", and
+      // the name names the next decl)
+      DeclFile{
+        "materials/c_number.mtr",
+        "textures/lp1a/number 1.5" + std::string(1100, 'A') + " { { map _white } }\n",
+        0},
+      // a quote inside a block comment is no string
+      DeclFile{
+        "materials/d_comment.mtr",
+        "/* \" */ \"" + spacedWords(1100) + "\" { { map _white } }\n",
+        0},
+      // the same shapes with a dot in the first 1024 characters are read (and named
+      // "text" and "more": the canonical name ends at the last dot it saw)
+      DeclFile{
+        "materials/e_dotted.mtr",
+        "\"Text. " + half + "\" \\\n\"" + half + "\" { { map _white } }\n" + "'More. "
+          + spacedWords(1100) + "' { { map _white } }\n",
+        0},
+    }};
+    auto decls = MaterialDecls{source};
+    REQUIRE(decls.constructionError().empty());
+
+    checkNotRead(decls, "materials/a_backslash.mtr");
+    checkNotRead(decls, "materials/b_literal.mtr");
+    checkNotRead(decls, "materials/c_number.mtr");
+    checkNotRead(decls, "materials/d_comment.mtr");
+    checkRead(decls, "materials/e_dotted.mtr");
+    CHECK(decls.declNames("material") == std::vector<std::string>{"text", "more"});
+  }
+
+  SECTION("a PDA text of more than 1024 characters with an early dot is read")
+  {
+    // the shape of the retail newpdas/enpro_hammer.pda: an email's text alone on its
+    // line, a string of 1075 characters whose first dot is its fifth character
+    auto text = std::string{"Sir. "};
+    while (text.size() < 1075)
+    {
+      text += "word ";
+    }
+    auto source = MemoryDeclSource{{
+      DeclFile{
+        "newpdas/lp1a_long.pda",
+        "pda pda_lp1a_long\n{\n\tname \"LP1A\"\n}\n\nemail lp1a_long_email\n{\n\tfrom "
+        "\"lp1a\"\n\tsubject \"a long text\"\n\ttext\n\""
+          + text + "\"\n}\n",
+        0},
+    }};
+    auto decls = MaterialDecls{source};
+    REQUIRE(decls.constructionError().empty());
+
+    checkRead(decls, "newpdas/lp1a_long.pda");
+    CHECK(decls.declNames("email") == std::vector<std::string>{"lp1a_long_email"});
   }
 }
 

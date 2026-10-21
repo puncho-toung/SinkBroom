@@ -167,69 +167,71 @@ void idCommon::FatalError(const char* fmt, ...)
   va_end(argptr);
 }
 
+namespace tb::lit::shim
+{
+
+void forEachDeclToken(
+  const std::string& text,
+  const char* name,
+  const std::function<void(const idToken&)>& visit)
+{
+  // the copied idLexer::LoadMemory takes an int length, and the lexer stops at the NUL
+  // that std::string keeps after the text, as it stops at the one ReadFile appends
+  auto lexer = idLexer{};
+  if (!lexer.LoadMemory(text.c_str(), int(text.size()), name))
+  {
+    return;
+  }
+  // LEXFL_NOERRORS and LEXFL_NOWARNINGS change only whether the lexer prints
+  // (idLexer::Error and idLexer::Warning return before printing), so the scan reads the
+  // tokens the copied parsers read and reports nothing they would not
+  lexer.SetFlags(DECL_LEXER_FLAGS | LEXFL_NOERRORS | LEXFL_NOWARNINGS);
+
+  auto token = idToken{};
+  for (;;)
+  {
+    const auto offset = lexer.GetFileOffset();
+    if (lexer.ReadToken(&token))
+    {
+      visit(token);
+      continue;
+    }
+    // A token the lexer cannot read: LoadAndParse ignores a failed SkipBracedSection and
+    // reads on from where the lexer stopped, and so does a material parse after a failed
+    // ReadToken, so the scan goes on too while the lexer moves forward. Where it cannot
+    // move (the text's end or NUL, an unknown punctuation), every parser stops as well.
+    if (lexer.EndOfFile() || lexer.GetFileOffset() == offset)
+    {
+      return;
+    }
+  }
+}
+
+} // namespace tb::lit::shim
+
 namespace
 {
 
-// idLexer::ReadName's characters with LEXFL_ALLOWPATHNAMES (Lexer.cpp:766-773)
-bool isNameCharacter(const char c)
-{
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-         || c == '_' || c == '/' || c == '\\' || c == ':' || c == '.';
-}
-
 /**
  * M-ID-GUARD-06: whether the text holds a token that the copied MakeNameCanonical writes
- * one byte past its MAX_STRING_CHARS buffer for: a name, or a quoted string, of
- * MAX_STRING_CHARS or more characters with no '.' among the first MAX_STRING_CHARS (a dot
- * there ends the canonical name before the buffer does). Any token can reach it as a decl
- * name, an inherit value, a table or a material a skin names, so a file holding one is
- * never parsed. Conservative: a run inside a comment counts too. A quoted string ends at
- * its quote or its line, as idLexer::ReadString reads it.
+ * one byte past its MAX_STRING_CHARS buffer for: a token of MAX_STRING_CHARS or more
+ * characters with no '.' among the first MAX_STRING_CHARS (a dot there ends the canonical
+ * name before the buffer does). Any token can reach it as a decl name, an inherit value,
+ * a table or a material a skin names, so a file holding one is never parsed. The tokens
+ * are the copied idLexer's with DECL_LEXER_FLAGS (forEachDeclToken), so a string joined
+ * across a backslash, a '...' literal with spaces, a name after a number and the lexer's
+ * comment rules are read exactly as the engine reads them.
  */
-bool holdsOverlongToken(const std::string& text)
+bool holdsOverlongToken(const std::string& text, const std::string& path)
 {
   const auto limit = std::size_t(MAX_STRING_CHARS);
-  auto run = std::size_t{0};
-  auto dotted = false;
-  auto inString = false;
-  const auto restart = [&] {
-    run = 0;
-    dotted = false;
-  };
-  for (const auto c : text)
-  {
-    if (inString)
-    {
-      if (c == '"' || c == '\n')
-      {
-        inString = false;
-        restart();
-        continue;
-      }
-    }
-    else if (c == '"')
-    {
-      inString = true;
-      restart();
-      continue;
-    }
-    else if (!isNameCharacter(c))
-    {
-      restart();
-      continue;
-    }
-
-    if (run < limit && c == '.')
-    {
-      dotted = true;
-    }
-    ++run;
-    if (run >= limit && !dotted)
-    {
-      return true;
-    }
-  }
-  return false;
+  auto found = false;
+  tb::lit::shim::forEachDeclToken(text, path.c_str(), [&](const idToken& token) {
+    found =
+      found
+      || (std::size_t(token.Length()) >= limit && memchr(token.c_str(), '.', limit) == nullptr);
+  });
+  return found;
 }
 
 } // namespace
@@ -367,12 +369,12 @@ int idFileSystemLocal::ReadFile(
     tb::lit::shim::reportWarning(path + " is 2 GB or larger; it is not read");
     return -1;
   }
-  if (holdsOverlongToken(*text))
+  if (holdsOverlongToken(*text, path))
   {
     tb::lit::shim::reportWarning(
       path
-      + " holds a name of 1024 or more characters, which the engine's "
-        "MakeNameCanonical cannot take; it is not read");
+      + " holds a token of 1024 or more characters with no '.' among the first 1024, "
+        "which the engine's MakeNameCanonical cannot take; it is not read");
     return -1;
   }
 

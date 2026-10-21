@@ -27,6 +27,8 @@
 
 #include <atomic>
 #include <cstdarg>
+#include <functional>
+#include <string>
 
 class idDeclManagerLocal;
 
@@ -45,9 +47,10 @@ extern idDeclManagerLocal* tbLitDeclManagerLocal;
 // It is the exception boundary between the source and the copied code (C17): a source
 // call that throws is reported as a warning, and the copied caller sees an unreadable
 // file or an empty folder. It also refuses, with a warning, a file the copied code cannot
-// take: one of 2 GB or more (the engine's lengths are ints), and one holding a token of
-// MAX_STRING_CHARS or more characters without a dot among them, which the copied
-// MakeNameCanonical writes past its buffer for (M-ID-GUARD-06).
+// take: one of 2 GB or more (the engine's lengths are ints), and one holding a token, as
+// the copied idLexer reads it, of MAX_STRING_CHARS or more characters without a dot among
+// the first MAX_STRING_CHARS, which the copied MakeNameCanonical writes past its buffer
+// for (M-ID-GUARD-06).
 class idFileSystemLocal : public idFileSystem
 {
 public:
@@ -207,6 +210,16 @@ private:
 void reportV(DeclMessageKind kind, const char* fmt, va_list argptr);
 void reportWarning(const std::string& text);
 
+// Every token the copied idLexer reads from decl text with DECL_LEXER_FLAGS, as the
+// copied decl parsers read it (LoadAndParse, idMaterial::Parse), in order, without the
+// lexer's messages; name is the lexer's file name. After a token the lexer cannot read,
+// the scan goes on wherever the lexer moved forward, so it sees every token a copied
+// parser can see (M-ID-GUARD-05, -06).
+void forEachDeclToken(
+  const std::string& text,
+  const char* name,
+  const std::function<void(const idToken&)>& visit);
+
 // The parts that need idDeclManagerLocal's definition, which lives in the copied
 // DeclManager.cpp (shim/src/DeclManagerShim.cpp).
 
@@ -234,11 +247,13 @@ std::size_t declFileBytes(const idDeclManagerLocal& declManager);
 // every registered decl type with its number of decls, in type order
 std::vector<DeclTypeCount> declCounts(idDeclManagerLocal& declManager);
 
-// M-ID-GUARD-05: every material decl whose text makes more than MAX_SHADER_STAGES stages
-// (stage blocks and stage shortcuts, counted as the lexer reads them) is made the default
-// material before anything can parse it, because the copied ParseStage writes past
-// parseStages for the stage after the last; the engine's warning is reported. Returns
-// their indices.
+// M-ID-GUARD-05: every material decl whose text can make more than MAX_SHADER_STAGES
+// stages is made the default material before anything can parse it, because the copied
+// ParseStage writes past parseStages for the stage after the last; the engine's warning
+// is reported. The bound is taken from the copied lexer's tokens: every "{" after the
+// material's first and every stage shortcut keyword, so it refuses some materials of more
+// than about 128 interaction stages that the engine parses (M-ID-DIFF-03). Returns their
+// indices.
 std::vector<int> refuseOversizedMaterials(idDeclManagerLocal& declManager);
 
 // idDeclManagerLocal::MakeNameCanonical into a buffer of MAX_STRING_CHARS + 1, so a name

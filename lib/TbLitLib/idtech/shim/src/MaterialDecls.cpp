@@ -425,8 +425,10 @@ DeclResult<std::shared_ptr<const MaterialEntry>> MaterialDecls::lookup(
     return {std::nullopt, m_constructionError};
   }
 
-  // FindTypeWithoutParsing canonicalises into MAX_STRING_CHARS bytes and writes one past
-  // them for a longer name; the engine never passes one, a SinkBroom face might
+  // M-ID-GUARD-01: FindTypeWithoutParsing canonicalises into MAX_STRING_CHARS bytes and
+  // writes one past them for a name of MAX_STRING_CHARS or more characters without a '.'
+  // among them. A SinkBroom face can name one, so every name that long is refused here;
+  // the decl files' own tokens are guarded when they are read (M-ID-GUARD-06)
   if (name.size() >= size_t(MAX_STRING_CHARS))
   {
     return {std::nullopt, "material name too long"};

@@ -5044,11 +5044,11 @@
         {
           "file": "neo/renderer/Material.cpp",
           "lines": [
-            1642,
-            1659
+            1641,
+            1660
           ],
-          "anchor": "idMaterial::ParseStage, the stage limit",
-          "sha256": "fa4cbb5411f912233c5049198d2361f10d68402d12712e470c1db7c7eb30475f"
+          "anchor": "idMaterial::ParseStage, the stage limit and parseStages[numStages]",
+          "sha256": "08a9d2217d08b424672418863b554f241d2e2c6536436b77f4a795d697a69f3e"
         },
         {
           "file": "neo/renderer/Material.cpp",
@@ -5058,6 +5058,24 @@
           ],
           "anchor": "idMaterial::ParseMaterial, the stage shortcuts",
           "sha256": "73076a96fe5773d9e5396fd213131466e0db9efe32c4930189dc3a954335b8ff"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2971,
+            2976
+          ],
+          "anchor": "idMaterial::ParseMaterial, a stage block",
+          "sha256": "14242b9ff62febf30d844e9215b2cd764a835dc568d95933c1f011abdefe8db8"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3080,
+            3082
+          ],
+          "anchor": "idMaterial::Parse, SkipUntilString( \"{\" )",
+          "sha256": "698e08fbc159c4729dae91cf28b3e89959c2e1a036e277c7f7c9db458dd15a35"
         },
         {
           "file": "neo/renderer/Material.h",
@@ -5076,14 +5094,18 @@
         },
         {
           "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
-          "symbol": "stageCount"
+          "symbol": "stageBound"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "tb::lit::shim::forEachDeclToken"
         },
         {
           "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
           "symbol": "MaterialDecls::MaterialDecls"
         }
       ],
-      "note": "ParseStage warns at the 257th stage but does not return, and writes past pd->parseStages[256] on the parse thread's stack (A2.4; the engine at the pinned commit has the same defect). Before anything can parse it, every material decl whose text makes more than 256 stages (brace blocks and stage shortcut keywords one level inside the material, counted as idLexer reads the text) is made the default material, with the engine's warning, and its lookup fails with that reason. A known difference: the engine would parse the first 256 stages (and then overrun); AddImplicitStages never adds a stage past the limit"
+      "note": "ParseStage warns at the 257th stage but does not return, and writes past pd->parseStages[256] on the parse thread's stack (A2.4; the engine at the pinned commit has the same defect). Before anything can parse it, every material decl whose text can make more than 256 ParseStage calls is made the default material, with the engine's warning, and its lookup fails with that reason. The bound comes from the copied idLexer's tokens with DECL_LEXER_FLAGS (forEachDeclToken, the tokens idMaterial::Parse reads): after the first \"{\" (SkipUntilString), every token equal to \"{\" and every stage shortcut keyword, whatever its type and wherever it stands. ParseMaterial calls ParseStage only for such a token, once per token, so the bound is never below the engine's count; it is above it where such a token is an argument or a stage's own keyword (M-ID-DIFF-03). AddImplicitStages never adds a stage past the limit. W.1 (round 2) replaced a character scan of brace depth that crafted text got past ('diffusemap {', 'qer_editorimage {', the lexer's '/*/' comment, '.5diffusemap')"
     },
     {
       "id": "M-ID-GUARD-06",
@@ -5099,6 +5121,33 @@
           "sha256": "3f0d6b85b0068a4dd27e174c85da50446441a525e55651a285d7159f56fac9a3"
         },
         {
+          "file": "neo/framework/DeclManager.h",
+          "lines": [
+            95,
+            100
+          ],
+          "anchor": "DECL_LEXER_FLAGS",
+          "sha256": "f8d921e7b79c41634abb639ed830b6d58adc101dcb10edab78d469c7dda344f2"
+        },
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            319,
+            403
+          ],
+          "anchor": "idLexer::ReadWhiteSpace (the comment rules)",
+          "sha256": "c219c245f2437c14ea09237d17d8ff6f0f93c885ea2dc8b47293193b75051ab7"
+        },
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            637,
+            749
+          ],
+          "anchor": "idLexer::ReadString (backslash joins, multi-character literals)",
+          "sha256": "04ff5f38add2801c2a1f37ce6485b3604a97a58206ff62a12d5e7fb157b303fb"
+        },
+        {
           "file": "neo/idlib/Lexer.cpp",
           "lines": [
             756,
@@ -5106,6 +5155,15 @@
           ],
           "anchor": "idLexer::ReadName (no length bound)",
           "sha256": "aadcae1403d0d9928e1616ee22dfc46973c601ae928bb94ae81d61e54b7659f4"
+        },
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            1101,
+            1219
+          ],
+          "anchor": "idLexer::ReadToken (numbers before names)",
+          "sha256": "a9c6801bea97a34fd3f9d74a66d73ba8bb374600bd36c388d9d5c35df3bad5a4"
         }
       ],
       "sinkbroom": [
@@ -5116,9 +5174,13 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
           "symbol": "holdsOverlongToken"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "tb::lit::shim::forEachDeclToken"
         }
       ],
-      "note": "a decl file holding a name, or a quoted string, of MAX_STRING_CHARS or more characters with no '.' among the first MAX_STRING_CHARS is refused with a warning and read as unreadable (the copied LoadAndParse then reports 'couldn't load'), because any token can reach MakeNameCanonical and overflow its buffer. A dot ends the canonical name first, so the retail PDAs' long texts are read. A known difference: the engine reads such a file and overruns. A run inside a comment counts too (conservative)"
+      "note": "a decl file holding a token of MAX_STRING_CHARS or more characters with no '.' among the first MAX_STRING_CHARS is refused with a warning and read as unreadable (the copied LoadAndParse then reports 'couldn't load'), because any token can reach MakeNameCanonical and overflow its buffer. The tokens are the copied idLexer's with DECL_LEXER_FLAGS over the whole file (forEachDeclToken, which silences only the lexer's printing with LEXFL_NOERRORS and LEXFL_NOWARNINGS and goes on after a token it cannot read wherever the lexer moved forward, as LoadAndParse and the decl parsers do), so strings joined across a backslash, '...' literals with spaces, a name after a number and the lexer's comment rules are read exactly as the engine reads them; tokens inside comments are not tokens. A dot ends the canonical name first, so the retail PDAs' long texts are read (newpdas/enpro_hammer.pda: a 1075-character string whose first dot is its fifth character). A known difference: the engine reads such a file and overruns. W.1 (round 2) replaced a character scan of names and quoted strings that crafted text got past"
     },
     {
       "id": "M-ID-GUARD-03",
@@ -5840,6 +5902,59 @@
         }
       ],
       "note": "A3.10, carried to LP1c: the engine loads a new image record at once, and the load can rewrite its usage (R_LoadImageProgram, the _rmao rename), which a later lookup with the first usage then does not match; the shim loads nothing, so MaterialImageKey::usage is the requested usage, not the engine's #__UUCC digits. A record is found case-insensitively and keeps the spelling and parameters of the material that made it first; the engine's creation order (start-up, map load) and SinkBroom's (lookups, the bulk parse) differ, so a name's case and a _name's parameters can differ. The goldens compare the usage digits of every image the engine failed to load, and the editor images case-insensitively"
+    },
+    {
+      "id": "M-ID-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            1641,
+            1660
+          ],
+          "anchor": "idMaterial::ParseStage, the stage limit and parseStages[numStages]",
+          "sha256": "08a9d2217d08b424672418863b554f241d2e2c6536436b77f4a795d697a69f3e"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            1103,
+            1117
+          ],
+          "anchor": "idMaterial::ParseBlend, the interaction keywords",
+          "sha256": "fc9078dc9a986ca020d5a3359a1a04b106cb83525f44c26f81a16c211cc65097"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2883,
+            2924
+          ],
+          "anchor": "idMaterial::ParseMaterial, the stage shortcuts",
+          "sha256": "73076a96fe5773d9e5396fd213131466e0db9efe32c4930189dc3a954335b8ff"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2971,
+            2976
+          ],
+          "anchor": "idMaterial::ParseMaterial, a stage block",
+          "sha256": "14242b9ff62febf30d844e9215b2cd764a835dc568d95933c1f011abdefe8db8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "stageBound"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "tb::lit::shim::refuseOversizedMaterials"
+        }
+      ],
+      "note": "W.1 (round 2): M-ID-GUARD-05's bound counts every stage shortcut keyword and every \"{\" after a material's first, wherever they stand, because the engine's own count cannot be had without running the parser that overruns. A stage block that names its interaction with a shortcut keyword ('blend diffusemap', 'blend bumpmap', 'blend specularmap', 'blend rmaomap' and their aliases, ParseBlend) counts twice, so a material of more than 128 such blocks and nothing else is refused (the default material and the engine's 'exceeded 256 stages' warning), although the engine parses up to 256 stages; so is one whose arguments, or whose text after a parse error, hold such tokens. Tested at 128 blocks (parsed) and 129 (refused); no retail material is refused"
     },
     {
       "id": "M-ID-PURE-01",
