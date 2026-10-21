@@ -12,6 +12,7 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialDecls.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialService.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_NvrhiSupport.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_RetailMaterials.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SwapchainRules.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_VulkanInstance.cpp
 )

@@ -1,0 +1,609 @@
+# The engine's printMaterial and printTable output, captured by
+# TOOLS/lit-preview/capture_goldens.py for the LP1a.2 golden test.
+# engine commit 285ea4d18a0aaedf46b0803ea656e4850eba5a01 (the exe: RBDOOM 3 BFG 1.6.0.1405 win-x64 Oct 18 2026 19:55:35)
+# captured 2026-10-21 13:14 from D:/NecroGame/claudespace/NecroGameBuild, fs_game tb_verify; exited with 0 after 5 s
+# each block: '@@ <type> <name>', the log lines between the touch and the next marker
+@@ list decls
+  41k  309 table
+3833k 7788 material
+  91k  675 skin
+ 389k 3091 sound
+3515k 2826 entityDef
+ 849k  842 model
+  10k   93 fx
+  77k  784 particle
+  35k  134 articulatedFigure
+  39k   97 pda
+   2k   21 video
+   9k   67 audio
+  63k  257 email
+   0k    0 export
+  71k   61 mapDef
+17045 total decls is 925 decl files
+8175KB in text, 9031KB in structures
+@@ material shaderdemos/testSos
+WARNING: Couldn't load image: gfx/misc/console01 : gfx/misc/console01#__0200
+material shaderdemos/testsos:
+source: materials/shaderdemo.mtr:135
+----------
+#decl-text fnv1a64=06896a7214fb7983 bytes=92 lines=8
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 0.250000
+register 23: 0.000000
+register 24: 0.000000
+
+23 = 0 OP_TYPE_MULTIPLY 22
+24 = sostable[ 23 ]
+@@ material shaderdemos/testOrderOfOperations
+WARNING: Couldn't load image: lights/window : lights/window#__0500
+material shaderdemos/testorderofoperations:
+source: materials/shaderdemo.mtr:315
+----------
+#decl-text fnv1a64=13fc92ac0c94e5c7 bytes=107 lines=9
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 0.000000
+register 23: 0.100000
+register 24: 0.010000
+register 25: 0.001000
+register 26: 0.000000
+
+22 = fadetable[ 0 ]
+26 = 22 OP_TYPE_ADD 25
+@@ material shaderdemos/testShear
+WARNING: Couldn't load image: gfx/misc/console01 : gfx/misc/console01#__0200
+material shaderdemos/testshear:
+source: materials/shaderdemo.mtr:121
+----------
+#decl-text fnv1a64=8e5cc6f4a0ad7e79 bytes=98 lines=8
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 0.100000
+register 23: 0.000000
+register 24: 0.000000
+register 25: 0.000000
+register 26: -0.500000
+register 27: 0.000000
+
+23 = 0 OP_TYPE_MULTIPLY 22
+24 = scaletable[ 23 ]
+27 = 26 OP_TYPE_MULTIPLY 24
+@@ material shaderdemos/testRotate
+material shaderdemos/testrotate:
+source: materials/shaderdemo.mtr:106
+----------
+#decl-text fnv1a64=e157e4a235d20b30 bytes=103 lines=9
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: -0.100000
+register 23: 0.000000
+register 24: 0.000000
+register 25: 0.000000
+register 26: 0.000000
+register 27: 0.000000
+register 28: 0.500000
+register 29: 0.000000
+register 30: -0.500000
+register 31: 0.000000
+register 32: 0.000000
+register 33: 0.000000
+register 34: 0.000000
+register 35: 0.000000
+register 36: 0.000000
+register 37: 0.000000
+
+23 = 0 OP_TYPE_MULTIPLY 22
+24 = sintable[ 23 ]
+25 = costable[ 23 ]
+27 = 26 OP_TYPE_SUBTRACT 24
+29 = 28 OP_TYPE_MULTIPLY 24
+31 = 30 OP_TYPE_MULTIPLY 25
+32 = 31 OP_TYPE_ADD 29
+33 = 32 OP_TYPE_ADD 28
+34 = 30 OP_TYPE_MULTIPLY 25
+35 = 30 OP_TYPE_MULTIPLY 24
+36 = 35 OP_TYPE_ADD 34
+37 = 36 OP_TYPE_ADD 28
+@@ material shaderdemos/testTranslate
+WARNING: Couldn't load image: gfx/misc/console01 : gfx/misc/console01#__0200
+material shaderdemos/testtranslate:
+source: materials/shaderdemo.mtr:128
+----------
+#decl-text fnv1a64=18f321bf35967dfc bytes=103 lines=8
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 0.100000
+register 23: 0.000000
+register 24: 0.200000
+register 25: 0.000000
+register 26: 0.000000
+
+23 = 0 OP_TYPE_MULTIPLY 22
+25 = 0 OP_TYPE_MULTIPLY 24
+@@ material shaderdemos/testScale
+WARNING: Couldn't load image: gfx/misc/console01 : gfx/misc/console01#__0200
+material shaderdemos/testscale:
+source: materials/shaderdemo.mtr:114
+----------
+#decl-text fnv1a64=6f0b2acb3c078fd7 bytes=119 lines=8
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 0.100000
+register 23: 0.000000
+register 24: 0.000000
+register 25: 0.000000
+register 26: 0.000000
+register 27: 0.000000
+
+23 = 0 OP_TYPE_MULTIPLY 22
+24 = scaletable[ 23 ]
+25 = 0 OP_TYPE_MULTIPLY 22
+26 = scaletable[ 25 ]
+@@ material lights/tableTest
+material lights/tabletest:
+source: materials/shaderdemo.mtr:963
+----------
+#decl-text fnv1a64=bc8720311caaeec2 bytes=97 lines=10
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 0.000000
+
+22 = tabletest[ 0 ]
+@@ material lights/flash
+WARNING: Couldn't load image: lights/light : lights/light#__0500
+material lights/flash:
+source: materials/lights.mtr:1567
+----------
+#decl-text fnv1a64=d28f43fccb449fcb bytes=104 lines=11
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 0.000000
+
+22 = flashtable[ 0 ]
+@@ material lights/squarelight2a
+WARNING: Couldn't load image: lights/squarelight2 : lights/squarelight2#__0500
+material lights/squarelight2a:
+source: materials/lights.mtr:1910
+----------
+#decl-text fnv1a64=6ab1bda35e54894c bytes=119 lines=11
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 0.000000
+
+22 = flashtable[ 0 ]
+@@ material lights/rotatingLight
+WARNING: Couldn't load image: lights/spot05 : lights/spot05#__0500
+material lights/rotatinglight:
+source: materials/lights.mtr:2297
+----------
+#decl-text fnv1a64=605f1c02667562d0 bytes=115 lines=13
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 0.050000
+register 23: 0.000000
+register 24: 0.000000
+register 25: 0.000000
+register 26: 0.000000
+register 27: 0.000000
+register 28: 0.500000
+register 29: 0.000000
+register 30: -0.500000
+register 31: 0.000000
+register 32: 0.000000
+register 33: 0.000000
+register 34: 0.000000
+register 35: 0.000000
+register 36: 0.000000
+register 37: 0.000000
+
+23 = 0 OP_TYPE_MULTIPLY 22
+24 = sintable[ 23 ]
+25 = costable[ 23 ]
+27 = 26 OP_TYPE_SUBTRACT 24
+29 = 28 OP_TYPE_MULTIPLY 24
+31 = 30 OP_TYPE_MULTIPLY 25
+32 = 31 OP_TYPE_ADD 29
+33 = 32 OP_TYPE_ADD 28
+34 = 30 OP_TYPE_MULTIPLY 25
+35 = 30 OP_TYPE_MULTIPLY 24
+36 = 35 OP_TYPE_ADD 34
+37 = 36 OP_TYPE_ADD 28
+@@ material shaderDemos/cubeMap
+WARNING: Couldn't load cube image: env/test
+material shaderdemos/cubemap:
+source: materials/shaderdemo.mtr:413
+----------
+#decl-text fnv1a64=f81e4175840cc13b bytes=69 lines=9
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material shaderDemos/skybox
+material shaderdemos/skybox:
+source: materials/shaderdemo.mtr:445
+----------
+#decl-text fnv1a64=48ec7ba1e24ebdcc bytes=138 lines=11
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 10.000000
+register 23: 0.100000
+
+@@ material shaderDemos/env2
+WARNING: Couldn't load cube image: env/e3_2_amb
+material shaderdemos/env2:
+source: materials/shaderdemo.mtr:421
+----------
+#decl-text fnv1a64=50fdec47bd3c0895 bytes=69 lines=9
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/particles/dust_a
+WARNING: Couldn't load image: textures/sfx/shard00 : textures/sfx/shard00#__1000
+WARNING: Couldn't load image: textures/sfx/shard00 : textures/sfx/shard00#__0100
+material textures/particles/dust_a:
+source: materials/patricktest.mtr:1613
+----------
+#decl-text fnv1a64=b63df4aacab3fa92 bytes=133 lines=13
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 0.550000
+
+@@ material models/monsters/cacodemon/cacoeye
+material models/monsters/cacodemon/cacoeye:
+source: materials/monsters.mtr:2486
+----------
+#decl-text fnv1a64=7054d527ffdf961a bytes=205 lines=15
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 0.000000
+register 23: 0.000000
+
+23 = 8 OP_TYPE_EQ 22
+@@ material gui/door/accesstest
+WARNING: Couldn't load image: guis/assets/common/temp3 : guis/assets/common/temp3#__0200
+WARNING: Couldn't load image: guis/assets/common/temp2 : guis/assets/common/temp2#__0200
+material gui/door/accesstest:
+source: materials/patd.mtr:8765
+----------
+#decl-text fnv1a64=efad992de8f667eb bytes=173 lines=16
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 0.000000
+register 23: 0.000000
+register 24: 0.000000
+
+23 = 8 OP_TYPE_EQ 22
+24 = 8 OP_TYPE_EQ 21
+@@ material models/mapobjects/materialorb/pbrspheres
+material models/mapobjects/materialorb/pbrspheres:
+source: materials/materialorb.mtr:30
+----------
+#decl-text fnv1a64=d29bfef4296a0dbf bytes=158 lines=8
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material models/mapobjects/materialorb/orb
+material models/mapobjects/materialorb/orb:
+source: materials/materialorb.mtr:1
+----------
+#decl-text fnv1a64=e9d5045a2af3b0c8 bytes=267 lines=8
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material shaderDemos/heatHaze
+material shaderdemos/heathaze:
+source: materials/shaderdemo.mtr:972
+----------
+#decl-text fnv1a64=dff636f9d834178f bytes=428 lines=17
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 0.000000
+register 23: 0.050000
+register 24: 0.000000
+
+24 = 0 OP_TYPE_MULTIPLY 23
+@@ material shaderDemos/colorProcess
+material shaderdemos/colorprocess:
+source: materials/shaderdemo.mtr:1085
+----------
+#decl-text fnv1a64=9d2e75902dfdf952 bytes=290 lines=13
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+register 22: 0.100000
+register 23: 0.000000
+register 24: 0.000000
+register 25: 0.900000
+register 26: 0.600000
+
+23 = 0 OP_TYPE_MULTIPLY 22
+24 = sintable[ 23 ]
+@@ material textures/hell/bark1
+WARNING: Couldn't load image: heightmap( textures/hell/bark1_bmp, 4) : heightmap( textures/hell/bark1_bmp, 4)#__0300
+WARNING: Couldn't load image: textures/hell/bark1 : textures/hell/bark1#__0100
+material textures/hell/bark1:
+source: materials/senetemp.mtr:2519
+----------
+#decl-text fnv1a64=04241b893ed0ccf3 bytes=155 lines=9
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/base_wall/ce_panel
+material textures/base_wall/ce_panel:
+source: materials/base_wall.mtr:125
+----------
+#decl-text fnv1a64=d16636d50aeb3b08 bytes=290 lines=9
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material lights/biground1_snd_noflicker
+material lights/biground1_snd_noflicker:
+source: materials/sound.mtr:87
+----------
+#decl-text fnv1a64=27136734fe6dc98b bytes=127 lines=12
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material gui/soundmeter
+material gui/soundmeter:
+source: materials/patd.mtr:2898
+----------
+#decl-text fnv1a64=76b2c291baaa4096 bytes=59 lines=10
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/base_wall/lfwall27d
+material textures/base_wall/lfwall27d:
+source: materials/senetemp.mtr:7477
+----------
+#decl-text fnv1a64=72545ef9ebf7983d bytes=213 lines=9
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/decals/schmutz
+material textures/decals/schmutz:
+source: materials/decals.mtr:165
+----------
+#decl-text fnv1a64=37a5a06029427ad2 bytes=210 lines=22
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/decals/dsplat7
+material textures/decals/dsplat7:
+source: materials/_rbdoom_decals_blood.mtr:140
+----------
+#decl-text fnv1a64=f11a10794d6c6cf3 bytes=724 lines=35
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/decals/bloodpool1
+WARNING: Couldn't load image: textures/decals/bloodpool1 : textures/decals/bloodpool1#__0200
+WARNING: Couldn't load image: heightmap( textures/decals/bloodpool1, 1) : heightmap( textures/decals/bloodpool1, 1)#__0300
+WARNING: Couldn't load image: makealpha( textures/decals/bloodpool1) : makealpha( textures/decals/bloodpool1)#__0200
+material textures/decals/bloodpool1:
+source: materials/_rbdoom_decals_blood.mtr:1
+----------
+#decl-text fnv1a64=46f9ba79046f9526 bytes=1363 lines=72
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/test
+material textures/test:
+source: materials/test.mtr:1
+----------
+#decl-text fnv1a64=233838086c7ae76d bytes=236 lines=7
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/test2
+material textures/test2:
+source: materials/test.mtr:7
+----------
+#decl-text fnv1a64=6a571b8eb1de1ec1 bytes=243 lines=9
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/copper_segment
+material textures/copper_segment:
+source: materials/test.mtr:15
+----------
+#decl-text fnv1a64=fccf328ba9bbdddc bytes=256 lines=9
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/bronze_wall
+material textures/bronze_wall:
+source: materials/test.mtr:23
+----------
+#decl-text fnv1a64=9a9a2d9b49c0fe1a bytes=253 lines=9
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/floortile_cracked_crypt1
+material textures/floortile_cracked_crypt1:
+source: materials/necro_crypt.mtr:1
+----------
+#decl-text fnv1a64=52f16542b8de1a59 bytes=296 lines=7
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/marble_trim_crypt
+material textures/marble_trim_crypt:
+source: materials/necro_crypt.mtr:7
+----------
+#decl-text fnv1a64=c390205c78189236 bytes=291 lines=9
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ table sosTable
+table sostable:
+source: materials/shaderdemo.mtr:1
+----------
+#decl-text fnv1a64=8f54d7f17597f17e bytes=96 lines=2
+----------
+Parsed.
+Currently referenced this level.
+@@ table scaleTable
+table scaletable:
+source: materials/shaderdemo.mtr:2
+----------
+#decl-text fnv1a64=c0242c9c0c2248fa bytes=30 lines=2
+----------
+Parsed.
+Currently referenced this level.
+@@ table sinTable
+table sintable:
+source: materials/shaderdemo.mtr:5
+----------
+#decl-text fnv1a64=709faeba89587eb8 bytes=2814 lines=36
+----------
+Parsed.
+Currently referenced this level.
+@@ table cosTable
+table costable:
+source: materials/shaderdemo.mtr:40
+----------
+#decl-text fnv1a64=6457f7f017f3d5c9 bytes=2740 lines=35
+----------
+Parsed.
+Currently referenced this level.
+@@ table tableTest
+table tabletest:
+source: materials/shaderdemo.mtr:960
+----------
+#decl-text fnv1a64=9936affe71205484 bytes=31 lines=4
+----------
+Parsed.
+Currently referenced this level.
+@@ table blinktable
+table blinktable:
+source: materials/lights.mtr:12
+----------
+#decl-text fnv1a64=b0b5687c23a5f7aa bytes=30 lines=2
+----------
+Parsed.
+Currently referenced this level.
+@@ table throbtable
+table throbtable:
+source: materials/base_floor.mtr:1
+----------
+#decl-text fnv1a64=b43248bc523b0f54 bytes=63 lines=1
+----------
+Parsed.
+Currently referenced this level.
+@@ table adam_strobetable1
+table adam_strobetable1:
+source: materials/adam.mtr:1
+----------
+#decl-text fnv1a64=2490f267bc03b2a9 bytes=53 lines=1
+----------
+Parsed.
+Currently referenced this level.
+@@ table senetable
+table senetable:
+source: materials/base_wall.mtr:1
+----------
+#decl-text fnv1a64=381a5799891f1a60 bytes=53 lines=1
+----------
+Parsed.
+Currently referenced this level.
+@@ warnings previously-defined
+WARNING: file materials/aaduffytest.mtr, line 547: material 'textures/decals/dsplat2' previously defined at materials/_rbdoom_decals_blood.mtr:72
+WARNING: file materials/aaduffytest.mtr, line 564: material 'textures/decals/dsplat5' previously defined at materials/_rbdoom_decals_blood.mtr:106
+WARNING: file materials/aaduffytest.mtr, line 581: material 'textures/decals/dsplat7' previously defined at materials/_rbdoom_decals_blood.mtr:140
+WARNING: file materials/aaduffytest.mtr, line 599: material 'textures/decals/dsplat11' previously defined at materials/_rbdoom_decals_blood.mtr:174
+WARNING: file materials/decals.mtr, line 3152: material 'textures/decals/handprint02' previously defined at materials/_rbdoom_decals_blood.mtr:243
+WARNING: file materials/decals.mtr, line 3170: material 'textures/decals/smear01' previously defined at materials/_rbdoom_decals_blood.mtr:275
+WARNING: file materials/decals.mtr, line 3186: material 'textures/decals/handprint01' previously defined at materials/_rbdoom_decals_blood.mtr:209
+WARNING: file materials/decals2.mtr, line 19: material 'textures/decals2/blood_18' previously defined at materials/_rbdoom_decals_blood.mtr:858
+WARNING: file materials/decals2.mtr, line 39: material 'textures/decals2/blood_19' previously defined at materials/_rbdoom_decals_blood.mtr:897
+WARNING: file materials/decalsd3xp.mtr, line 19: material 'textures/decalsd3xp/blood_18' previously defined at materials/_rbdoom_decals_blood.mtr:931
+WARNING: file materials/decalsd3xp.mtr, line 39: material 'textures/decalsd3xp/blood_19' previously defined at materials/_rbdoom_decals_blood.mtr:965
+WARNING: file materials/decalsd3xp.mtr, line 59: material 'textures/decalsd3xp/blood_20' previously defined at materials/_rbdoom_decals_blood.mtr:998
+WARNING: file materials/necro_wrought.mtr, line 15: material 'textures/marble_trim_crypt' previously defined at materials/necro_crypt.mtr:7
+WARNING: file materials/senetemp.mtr, line 6431: material 'textures/decals/bloodpool1' previously defined at materials/_rbdoom_decals_blood.mtr:1
+WARNING: file materials/senetemp.mtr, line 6447: material 'textures/decals/splat17' previously defined at materials/_rbdoom_decals_blood.mtr:825
+WARNING: file materials/senetemp.mtr, line 6460: material 'textures/decals/splat16' previously defined at materials/_rbdoom_decals_blood.mtr:795
+WARNING: file materials/senetemp.mtr, line 6473: material 'textures/decals/splat15' previously defined at materials/_rbdoom_decals_blood.mtr:765
+WARNING: file materials/senetemp.mtr, line 6486: material 'textures/decals/splat14' previously defined at materials/_rbdoom_decals_blood.mtr:735
+WARNING: file materials/senetemp.mtr, line 6499: material 'textures/decals/splat13' previously defined at materials/_rbdoom_decals_blood.mtr:705
+WARNING: file materials/senetemp.mtr, line 6512: material 'textures/decals/splat12' previously defined at materials/_rbdoom_decals_blood.mtr:675
+WARNING: file materials/senetemp.mtr, line 6525: material 'textures/decals/splat11' previously defined at materials/_rbdoom_decals_blood.mtr:645
+WARNING: file materials/senetemp.mtr, line 6538: material 'textures/decals/splat10' previously defined at materials/_rbdoom_decals_blood.mtr:615
+WARNING: file materials/senetemp.mtr, line 6551: material 'textures/decals/splat9' previously defined at materials/_rbdoom_decals_blood.mtr:585
+WARNING: file materials/senetemp.mtr, line 6564: material 'textures/decals/splat8' previously defined at materials/_rbdoom_decals_blood.mtr:555
+WARNING: file materials/senetemp.mtr, line 6578: material 'textures/decals/splat7' previously defined at materials/_rbdoom_decals_blood.mtr:525
+WARNING: file materials/senetemp.mtr, line 6591: material 'textures/decals/splat6' previously defined at materials/_rbdoom_decals_blood.mtr:495
+WARNING: file materials/senetemp.mtr, line 6604: material 'textures/decals/splat5' previously defined at materials/_rbdoom_decals_blood.mtr:465
+WARNING: file materials/senetemp.mtr, line 6617: material 'textures/decals/splat4' previously defined at materials/_rbdoom_decals_blood.mtr:435
+WARNING: file materials/senetemp.mtr, line 6630: material 'textures/decals/splat3' previously defined at materials/_rbdoom_decals_blood.mtr:405
+WARNING: file materials/senetemp.mtr, line 6643: material 'textures/decals/splat2' previously defined at materials/_rbdoom_decals_blood.mtr:375
+WARNING: file materials/senetemp.mtr, line 6656: material 'textures/decals/splat1' previously defined at materials/_rbdoom_decals_blood.mtr:345
+WARNING: file def/_tb_models.def, line 5230: entityDef 'genmodel_mapobjects_monitors_hangingmonitor' previously defined at def/_tb_models.def:5216
