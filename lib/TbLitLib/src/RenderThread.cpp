@@ -30,6 +30,7 @@
 #include <nvrhi/vulkan.h>
 
 #include <algorithm>
+#include <stdexcept>
 #include <utility>
 
 namespace tb::lit
@@ -327,9 +328,15 @@ std::optional<std::string> RenderThread::frameLogError() const
   return m_frameLogError;
 }
 
-void RenderThread::injectDeviceLost()
+void RenderThread::injectFault(const DebugFault fault)
 {
-  m_injectDeviceLost = true;
+  m_injectedFault = int(fault) + 1;
+}
+
+bool RenderThread::takeFault(const DebugFault fault)
+{
+  auto expected = int(fault) + 1;
+  return m_injectedFault.compare_exchange_strong(expected, 0);
 }
 
 void RenderThread::setBeforePresentHook(std::function<void()> hook)
@@ -394,7 +401,7 @@ void RenderThread::runLoop()
     if (m_events.lost() && !m_events.lostReported())
     {
       lock.unlock();
-      m_events.markLost("NVRHI reported an error");
+      m_events.markLost("NVRHI reported a lost device");
       lock.lock();
       continue;
     }
@@ -459,9 +466,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
 {
   try
   {
-    if (m_injectDeviceLost.exchange(false))
+    if (takeFault(DebugFault::DeviceLostBeforeFrame))
     {
-      throw vk::DeviceLostError{"injected by debugInjectDeviceLost"};
+      throw vk::DeviceLostError{"injected before the frame"};
     }
     // a pass boundary
     if (stopOrParkRequested())
@@ -544,6 +551,10 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       texture = target->imageTextures[imageIndex].Get();
       extent = target->extent;
     }
+    if (takeFault(DebugFault::DeviceLostAfterAcquire))
+    {
+      throw vk::DeviceLostError{"injected after the acquire"};
+    }
 
     const auto recordStart = FrameClock::now();
     auto* const timer = m_timers.query(slot);
@@ -560,6 +571,10 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         texture,
         nvrhi::AllSubresources,
         nvrhi::Color{color[0], color[1], color[2], color[3]});
+      if (takeFault(DebugFault::ThrowWhileRecording))
+      {
+        throw std::runtime_error{"injected while recording"};
+      }
       if (timer)
       {
         commandList.endTimerQuery(timer);
@@ -575,10 +590,20 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       }
       recording.submit();
     }
+    if (takeFault(DebugFault::DeviceRemovedInSubmit))
+    {
+      m_device.messageCallback().message(
+        nvrhi::MessageSeverity::Error, "Device Removed!");
+    }
+    if (takeFault(DebugFault::NvrhiError))
+    {
+      m_device.messageCallback().message(
+        nvrhi::MessageSeverity::Error, "injected by debugInjectFault");
+    }
     // NVRHI's submit reports a lost device only through the message callback (R5.19)
     if (m_events.lost())
     {
-      throw vk::DeviceLostError{"NVRHI reported an error in executeCommandLists"};
+      throw vk::DeviceLostError{"NVRHI reported a lost device in executeCommandLists"};
     }
     device.setEventQuery(m_frameEvents[slot], nvrhi::CommandQueue::Graphics);
     m_frameEventSet[slot] = true;

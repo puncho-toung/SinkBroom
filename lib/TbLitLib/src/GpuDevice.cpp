@@ -28,10 +28,19 @@
 #include <nvrhi/validation.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace tb::lit
 {
+namespace
+{
+
+// what NVRHI's submit reports when it catches vk::DeviceLostError
+// (nvrhi src/vulkan/vulkan-queue.cpp:175)
+constexpr auto DeviceRemovedMessage = std::string_view{"Device Removed!"};
+
+} // namespace
 
 MessageCallback::MessageCallback(SessionEvents& events)
   : m_events{events}
@@ -39,21 +48,34 @@ MessageCallback::MessageCallback(SessionEvents& events)
 }
 
 void MessageCallback::message(
-  const nvrhi::MessageSeverity severity, const char* messageText)
+  const nvrhi::MessageSeverity severity, const char* messageText) noexcept
 {
-  switch (severity)
+  try
   {
-  case nvrhi::MessageSeverity::Info:
-    return;
-  case nvrhi::MessageSeverity::Warning:
-    m_events.post(SessionEvent::Warning, fmt::format("NVRHI warning: {}", messageText));
-    return;
-  case nvrhi::MessageSeverity::Error:
-  case nvrhi::MessageSeverity::Fatal:
-    ++m_errorCount;
-    m_events.setLost();
-    m_events.post(SessionEvent::Error, fmt::format("NVRHI error: {}", messageText));
-    return;
+    const auto text = std::string_view{messageText ? messageText : ""};
+    switch (severity)
+    {
+    case nvrhi::MessageSeverity::Info:
+      return;
+    case nvrhi::MessageSeverity::Warning:
+      m_events.post(SessionEvent::Warning, fmt::format("NVRHI warning: {}", text));
+      return;
+    case nvrhi::MessageSeverity::Error:
+    case nvrhi::MessageSeverity::Fatal:
+      ++m_errorCount;
+      if (text == DeviceRemovedMessage)
+      {
+        // the render thread reports it once it sees the flag (review L2.9)
+        m_events.setLost();
+        return;
+      }
+      m_events.markFailed(fmt::format("NVRHI error: {}", text));
+      return;
+    }
+  }
+  catch (...)
+  {
+    // a message that cannot be formatted is lost; the count stands
   }
 }
 
@@ -176,6 +198,11 @@ nvrhi::vulkan::IDevice& GpuDevice::vulkanDevice() const
 std::size_t GpuDevice::nvrhiErrors() const
 {
   return m_messageCallback.errorCount();
+}
+
+MessageCallback& GpuDevice::messageCallback()
+{
+  return m_messageCallback;
 }
 
 std::uint32_t GpuDevice::releaseNvrhiDevice()

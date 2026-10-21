@@ -357,9 +357,9 @@ TeardownReport LitSession::teardownReport() const
   return m_report;
 }
 
-void LitSession::debugInjectDeviceLost()
+void LitSession::debugInjectFault(const DebugFault fault)
 {
-  m_renderThread->injectDeviceLost();
+  m_renderThread->injectFault(fault);
 }
 
 void LitSession::debugSetBeforePresentHook(std::function<void()> hook)

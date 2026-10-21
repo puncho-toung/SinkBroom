@@ -242,7 +242,7 @@ void LitSessionHost::debugInjectDeviceLost()
 {
   if (m_session)
   {
-    m_session->debugInjectDeviceLost();
+    m_session->debugInjectFault(lit::DebugFault::DeviceLostBeforeFrame);
   }
 }
 

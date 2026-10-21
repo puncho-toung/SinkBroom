@@ -631,8 +631,23 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     std::filesystem::remove(logPath);
   }
 
-  SECTION("an injected device loss ends drawing and tears down cleanly")
+  SECTION("an injected fault ends drawing and tears down cleanly")
   {
+    // a lost device is reported as lost; NVRHI's other errors and a failed frame are
+    // errors, after which garbage is still collected (review L2.9)
+    const auto fault = GENERATE(
+      DebugFault::DeviceLostBeforeFrame,
+      DebugFault::DeviceLostAfterAcquire,
+      DebugFault::DeviceRemovedInSubmit,
+      DebugFault::NvrhiError,
+      DebugFault::ThrowWhileRecording);
+    const auto lost = fault == DebugFault::DeviceLostBeforeFrame
+                      || fault == DebugFault::DeviceLostAfterAcquire
+                      || fault == DebugFault::DeviceRemovedInSubmit;
+    const auto throughCallback =
+      fault == DebugFault::DeviceRemovedInSubmit || fault == DebugFault::NvrhiError;
+    CAPTURE(int(fault));
+
     auto messages = ValidationMessages{};
     {
       const auto instance = TestInstance{library, true, false, messages};
@@ -649,13 +664,14 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       session->setExposed(true);
       REQUIRE(waitFor([&] { return session->framesPresented() >= 1; }, 5000ms, false));
 
-      session->debugInjectDeviceLost();
+      session->debugInjectFault(fault);
       session->requestFrame();
-      REQUIRE(waitFor(
-        [&] { return events.count(SessionEvent::DeviceLost) == 1; }, 5000ms, false));
-      CHECK(session->deviceLost());
+      const auto expected = lost ? SessionEvent::DeviceLost : SessionEvent::Error;
+      REQUIRE(waitFor([&] { return events.count(expected) == 1; }, 5000ms, false));
+      CHECK(session->deviceLost() == lost);
 
       // nothing more is drawn
+      std::this_thread::sleep_for(50ms);
       const auto frames = session->framesPresented();
       session->setCamera(cameraLookingAt(0, 0, 1));
       std::this_thread::sleep_for(150ms);
@@ -666,14 +682,17 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       session->unpark();
 
       teardown(*session);
-      CHECK(session->lastDeviceReleaseCount() == 0u);
-      CHECK(session->teardownReport().deviceLost);
-      CHECK(events.count(SessionEvent::DeviceLost) == 1u);
+      const auto report = session->teardownReport();
+      CHECK(report.deviceReleaseCount == 0u);
+      CHECK(report.deviceLost == lost);
+      CHECK(report.nvrhiErrors == (throughCallback ? 1u : 0u));
+      CHECK(events.count(SessionEvent::DeviceLost) == (lost ? 1u : 0u));
+      CHECK(events.count(SessionEvent::Error) == (lost ? 0u : 1u));
       CHECK(events.allOfGeneration(7));
-      events.print("device loss");
+      events.print("fault");
     }
     resetDispatcher();
-    messages.print("device loss, validation");
+    messages.print("fault, validation");
     CHECK(messages.errors == 0);
   }
 

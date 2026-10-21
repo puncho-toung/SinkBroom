@@ -70,9 +70,10 @@ enum class SessionEvent
   Ready,
   // the render thread parked; sent also when park() timed out and it parked later
   Parked,
-  // the device is lost or NVRHI reported an error: nothing more is drawn, press Start
+  // the device is lost: nothing more is drawn, press Start
   DeviceLost,
-  // a session error; nothing more is drawn, Stop and Start
+  // a session error, also an NVRHI error that is not a lost device; nothing more is
+  // drawn, Stop and Start
   Error,
   // a warning to log (an NVRHI warning, an unwritable frame log); the session goes on
   Warning,
@@ -108,6 +109,22 @@ struct TeardownReport
   std::vector<std::string> messages;
   std::uint64_t framesPresented = 0;
   std::uint64_t swapchainGenerations = 0;
+};
+
+// Test hooks: faults the render thread raises in its next frame.
+enum class DebugFault
+{
+  // vk::DeviceLostError at the start of the frame, before any GPU work
+  DeviceLostBeforeFrame,
+  // vk::DeviceLostError once the frame has acquired its image, before it records
+  DeviceLostAfterAcquire,
+  // NVRHI's "Device Removed!" through its message callback inside the submit, the only
+  // way NVRHI reports a loss in executeCommandLists (R5.19)
+  DeviceRemovedInSubmit,
+  // an Error-severity NVRHI message, as from NVRHI's validation layer, after the submit
+  NvrhiError,
+  // an exception while the frame records its commands
+  ThrowWhileRecording,
 };
 
 // §3.1: the longest park() waits; the plan's bound is the current pass plus two frames in
@@ -233,8 +250,8 @@ public:
 
   // Test hooks
 
-  // the render thread throws vk::DeviceLostError at its next frame
-  void debugInjectDeviceLost();
+  // the render thread raises the fault in its next frame
+  void debugInjectFault(DebugFault fault);
   /**
    * Runs on the render thread in every frame after its commands are submitted and before
    * it presents, until an empty function replaces it: a frame held there is in flight, as

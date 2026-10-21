@@ -95,7 +95,8 @@ private:
   FrameClock::time_point m_lastFrameEnd;
   std::optional<std::string> m_frameLogError;
   std::atomic<std::uint64_t> m_framesPresented = 0;
-  std::atomic<bool> m_injectDeviceLost = false;
+  // the injected DebugFault plus one, 0 for none
+  std::atomic<int> m_injectedFault = 0;
 
   // ----- shared with the GUI thread, under m_mutex -----
   mutable std::mutex m_mutex;
@@ -160,7 +161,7 @@ public:
 
   // Test hooks.
 
-  void injectDeviceLost();
+  void injectFault(DebugFault fault);
   void setBeforePresentHook(std::function<void()> hook);
 
 private:
@@ -171,6 +172,8 @@ private:
   bool canDraw() const;
 
   FrameOutcome drawFrame(const CameraState& camera);
+  // whether the given fault was injected; it is taken
+  bool takeFault(DebugFault fault);
   bool waitForFrameEvent(std::size_t slot);
   void runBeforePresentHook();
   void requestRecreate(

@@ -39,9 +39,11 @@ class SessionEvents;
 
 /**
  * NVRHI's message callback (R5.19). NVRHI's submit catches DeviceLostError itself and
- * reports it only here, so an Error-severity message marks the device lost, which the
- * render thread checks after every executeCommandLists. Warnings go to the log. It is
- * called on whichever thread made the NVRHI call.
+ * reports it only here, as "Device Removed!", which marks the device lost; the render
+ * thread checks after every executeCommandLists. Any other Error-severity message, for
+ * example from NVRHI's validation layer, is counted and fails the session once, so that
+ * the device is not reported lost and garbage is still collected at teardown. Warnings go
+ * to the log. It is called on whichever thread made the NVRHI call, and never throws.
  */
 class MessageCallback : public nvrhi::IMessageCallback
 {
@@ -52,7 +54,8 @@ private:
 public:
   explicit MessageCallback(SessionEvents& events);
 
-  void message(nvrhi::MessageSeverity severity, const char* messageText) override;
+  void message(
+    nvrhi::MessageSeverity severity, const char* messageText) noexcept override;
 
   std::size_t errorCount() const;
 };
@@ -96,6 +99,8 @@ public:
   nvrhi::vulkan::IDevice& vulkanDevice() const;
 
   std::size_t nvrhiErrors() const;
+  // for the tests' faults, which arrive as NVRHI's would
+  MessageCallback& messageCallback();
 
   // step 5: drops the NVRHI device, its validation wrapper first, and returns what its
   // last Release() returned; 0 expected
