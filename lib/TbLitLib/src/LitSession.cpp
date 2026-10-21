@@ -1141,6 +1141,16 @@ const std::string& LitSession::deviceName() const
   return m_impl->gpu.name;
 }
 
+VkPhysicalDevice LitSession::physicalDevice() const
+{
+  return m_impl->gpu.physicalDevice;
+}
+
+std::uint32_t LitSession::queueFamily() const
+{
+  return m_impl->gpu.queueFamily;
+}
+
 void LitSession::setCamera(const CameraState& camera)
 {
   {

@@ -128,6 +128,10 @@ public:
   std::uint64_t generation() const;
   // the physical device's name
   const std::string& deviceName() const;
+  // the GPU and its one graphics and present queue family, for the GUI thread's present
+  // check after a screen change (R5.33)
+  VkPhysicalDevice physicalDevice() const;
+  std::uint32_t queueFamily() const;
 
   // latest-wins camera slot, any thread; a changed camera triggers a frame
   void setCamera(const CameraState& camera);

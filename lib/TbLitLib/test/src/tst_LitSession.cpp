@@ -724,6 +724,16 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
           std::cout << "window device: " << session->deviceName() << "\n";
         }
 
+        // what the GUI thread checks again after a screen change (R5.33)
+        REQUIRE(session->physicalDevice() != VK_NULL_HANDLE);
+        auto presents = VkBool32{VK_FALSE};
+        CHECK(
+          library.get<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(
+            instance.instance(), "vkGetPhysicalDeviceSurfaceSupportKHR")(
+            session->physicalDevice(), session->queueFamily(), surface, &presents)
+          == VK_SUCCESS);
+        CHECK(presents == VK_TRUE);
+
         session->setExposed(true);
         const auto drawFrames = [&](const std::uint64_t count) {
           const auto target = session->framesPresented() + count;
