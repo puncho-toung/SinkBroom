@@ -80,9 +80,18 @@ Result<std::unique_ptr<LitSession>> LitSession::create(
       throw;
     }
     session->m_claimedLiveSession = true;
-    // on an error the destructor tears down whatever exists (§3.1)
     return session->start(instance, surface, width, height)
-           | kdl::transform([&]() { return std::move(session); });
+           | kdl::transform([&]() { return std::move(session); })
+           | kdl::or_else([&](Error e) -> Result<std::unique_ptr<LitSession>> {
+               // whatever exists is torn down (§3.1), and what that found goes with the
+               // error, since no report outlives this session (review V.4)
+               session->releaseGpuObjects();
+               for (const auto& message : session->m_report.messages)
+               {
+                 e.msg += " " + message;
+               }
+               return e;
+             });
   }
   catch (const std::exception& e)
   {
@@ -260,9 +269,14 @@ void LitSession::surfaceChanged()
   m_renderThread->surfaceChanged();
 }
 
-void LitSession::requestStop()
+void LitSession::beginStop()
 {
   m_events->beginStop();
+}
+
+void LitSession::requestStop()
+{
+  beginStop();
   if (m_renderThread)
   {
     m_renderThread->requestStop();
@@ -312,16 +326,16 @@ void LitSession::releaseGpuObjects()
       auto& device = m_device->device();
       if (!device.waitForIdle())
       {
-        m_events->setLost();
+        m_events->markLost("waitForIdle at the release");
       }
       if (!m_events->lost())
       {
         device.runGarbageCollection();
       }
     }
-    catch (const vk::DeviceLostError&)
+    catch (const vk::DeviceLostError& e)
     {
-      m_events->setLost();
+      m_events->markLost(e.what());
     }
     catch (const std::exception& e)
     {
@@ -356,6 +370,11 @@ void LitSession::releaseGpuObjects()
     m_report.nvrhiErrors = m_device->nvrhiErrors();
   }
 
+  // a loss that NVRHI's callback set but no one reported reaches the report (review V.4)
+  if (m_events->lost() && !m_events->lostReported())
+  {
+    m_events->markLost("found at the stop");
+  }
   m_report.deviceLost = m_events->lost();
   if (m_renderThread)
   {

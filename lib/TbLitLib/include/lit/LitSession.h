@@ -276,6 +276,9 @@ public:
   // whether it has exited. stopRenderThread requests the stop and joins without servicing
   // anything, for callers without a window, and after waitForRenderThread returned true.
   void requestStop();
+  // from here on, warnings, errors and a loss go into the teardown report instead of the
+  // event sink; requestStop calls it, and a caller that parks first calls it before that
+  void beginStop();
   bool waitForRenderThread(std::chrono::milliseconds timeout);
   void stopRenderThread();
   // steps 2-5: release every handle, waitForIdle, runGarbageCollection (skipped when

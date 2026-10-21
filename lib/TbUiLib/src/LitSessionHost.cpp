@@ -538,6 +538,8 @@ void LitSessionHost::stopRenderThread()
 {
   const auto busy = BusyScope{*this};
 
+  // what the park finds, a lost device for example, goes into the report (review V.4)
+  m_session->beginStop();
   // parked first, so that the render thread is not inside a present that waits for this
   // thread's messages; one that does not park in time is stopped all the same
   parkServicingSentMessages();

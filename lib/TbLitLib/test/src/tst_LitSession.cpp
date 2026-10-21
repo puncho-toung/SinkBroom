@@ -604,6 +604,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
 
     messages.print(validation ? "headless, validation" : "headless");
     CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
     std::cout << "headless device: " << deviceName << "\n";
 
     // the first cycle's frame log: its start, every frame with its GPU time, resolved by
@@ -675,6 +676,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     CHECK(VULKAN_HPP_DEFAULT_DISPATCHER.vkCreateDevice == nullptr);
     messages.print("one session, validation");
     CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
   }
 
   SECTION("an injected fault ends drawing and tears down cleanly")
@@ -740,6 +742,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     CHECK(resetDispatcher());
     messages.print("fault, validation");
     CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
   }
 
   SECTION("a window: present, resize, minimise, restore")
@@ -910,6 +913,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
 
     messages.print(forceFifo ? "window, forced FIFO" : "window");
     CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
 
     // what the first cycle presented: present modes, generations and extents, and how
     // long the presents took
