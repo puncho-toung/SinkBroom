@@ -9,6 +9,8 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FramePacing.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NvrhiSupport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SwapchainRules.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/VulkanDevice.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/VulkanDevice.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/VulkanInstance.cpp
 
   PUBLIC FILE_SET headers TYPE HEADERS

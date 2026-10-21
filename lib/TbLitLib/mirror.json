@@ -1,0 +1,131 @@
+{
+  "engineCommit": "285ea4d1",
+  "entries": [
+    {
+      "kind": "dispatcher",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "71, 625, 1054, 1291-1292",
+      "sinkbroomFile": "lib/TbLitLib/src/NvrhiSupport.cpp, lib/TbLitLib/src/VulkanInstance.cpp, lib/TbLitLib/src/VulkanDevice.cpp",
+      "note": "vulkan.hpp's default dynamic dispatcher: storage defined once, initialised from vkGetInstanceProcAddr and the instance (initInstanceDispatcher, on every Start) and from the device (createVkDevice). The engine loads the library itself; SinkBroom takes vkGetInstanceProcAddr from Qt (C9)."
+    },
+    {
+      "kind": "instance-api-version",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "533-534",
+      "sinkbroomFile": "lib/TbUiLib (LP0.2b, QVulkanInstance::setApiVersion)",
+      "note": "Vulkan 1.2 instance (S12)."
+    },
+    {
+      "kind": "device-extension",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "232-235",
+      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "note": "Required: VK_KHR_swapchain (only when presenting; the headless test path does not need it) and VK_KHR_maintenance1."
+    },
+    {
+      "kind": "device-extension",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "272, 921-924, 979-980, 999",
+      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "note": "Optional VK_KHR_synchronization2 with VkPhysicalDeviceSynchronization2FeaturesKHR::synchronization2 chained after the 1.2 features. It switches NVRHI's barriers to vkCmdPipelineBarrier2 (nvrhi vulkan-state-tracking.cpp:345), so the preview takes the game's barrier path. Dropped when the extension is listed but the feature is not."
+    },
+    {
+      "kind": "device-extension",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "273, 1477-1488",
+      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "note": "Optional VK_EXT_memory_budget, the VRAM budget's source (S9, LP2)."
+    },
+    {
+      "kind": "feature-chain",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "688-699, 969-972, 1002-1011",
+      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "note": "VkPhysicalDeviceFeatures: shaderImageGatherExtended, samplerAnisotropy, textureCompressionBC, imageCubeArray, dualSrcBlend on; shaderStorageImageReadWithoutFormat, tessellationShader, geometryShader, fillModeNonSolid as supported. The five forced features are checked at device choice (the engine checks only samplerAnisotropy and textureCompressionBC there; the others would fail vkCreateDevice)."
+    },
+    {
+      "kind": "feature-chain",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "1013-1024, 1034",
+      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "note": "VkPhysicalDeviceVulkan12Features in DeviceCreateInfo::pNext: descriptorIndexing, runtimeDescriptorArray, descriptorBindingPartiallyBound, descriptorBindingVariableDescriptorCount, timelineSemaphore (NVRHI's queue tracking), shaderSampledImageArrayNonUniformIndexing; each is checked at device choice."
+    },
+    {
+      "kind": "function",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "648-799",
+      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp (inspect, pickPhysicalDevice), lib/TbLitLib/src/DeviceChoice.cpp",
+      "note": "pickPhysicalDevice: per device the required extensions, features, B8G8R8A8_UNORM surface format, FIFO and present support; the first discrete GPU, else the first other device, in enumeration order. Added: Vulkan 1.2 or newer (S12), and the error text lists every device with its problems instead of FatalError."
+    },
+    {
+      "kind": "function",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "801-863, 931-955, 1043-1052",
+      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "note": "findQueueFamilies and the queue create infos. The engine takes the first graphics family and the first present family separately and may create two queues; the preview requires one family that does both, creates one queue and keeps the swapchain images exclusive."
+    },
+    {
+      "kind": "function",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "1077-1080",
+      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "note": "Timer queries only when timestampPeriod > 0 and the family's timestampValidBits > 0; otherwise the frame log's GPU column stays empty."
+    },
+    {
+      "kind": "constant",
+      "engineFile": "neo/idlib/precompiled.h, neo/sys/DeviceManager.h, neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "precompiled.h:95; DeviceManager.h:57; DeviceManager_VK.cpp:707-708",
+      "sinkbroomFile": "lib/TbLitLib/src/SwapchainRules.cpp (chooseSwapchainImageCount)",
+      "note": "Swapchain image count NUM_FRAME_DATA = 3, clamped to the surface's minImageCount and maxImageCount (0 = no limit)."
+    },
+    {
+      "kind": "not-copied",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "1164-1169",
+      "sinkbroomFile": "lib/TbLitLib/src/SwapchainRules.cpp (chooseSwapchainExtent)",
+      "note": "The engine clamps its back-buffer size into the surface's range. The preview uses currentExtent, takes the passed window size only when currentExtent is 0xFFFFFFFF, and makes no swapchain for 0×0 (§3.1)."
+    },
+    {
+      "kind": "not-copied",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "1066-1070, 1181-1195",
+      "sinkbroomFile": "lib/TbLitLib/src/SwapchainRules.cpp (choosePresentMode)",
+      "note": "The engine's r_swapInterval / r_vkPreferFastSync choice among MAILBOX, IMMEDIATE, FIFO_RELAXED and FIFO. The preview uses MAILBOX if offered, else FIFO, and FIFO when forced (D48, R5.4); IMMEDIATE only if LP0 measures FIFO's present blocking beyond a bound."
+    },
+    {
+      "kind": "not-copied",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "261-271, 277-284, 877-880, 957-998, 1020-1023",
+      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "note": "Optional device extensions and features the preview does not need: VK_EXT_debug_marker (debug utils replaces it), VK_EXT_descriptor_indexing (its features are core 1.2 and enabled through VkPhysicalDeviceVulkan12Features), VK_KHR_buffer_device_address and bufferDeviceAddress (ray tracing only; the engine notes it 'only makes problems'), VK_NV_mesh_shader, VK_KHR_fragment_shading_rate and its features, VK_KHR_format_feature_flags2, VK_GOOGLE_display_timing and hostQueryReset (Optick), the ray-tracing extensions, the macOS portability subset."
+    },
+    {
+      "kind": "not-copied",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "222-252, 630-646",
+      "sinkbroomFile": "lib/TbLitLib/src/VulkanInstance.cpp (requiredInstanceExtensions)",
+      "note": "Instance extensions: VK_KHR_get_physical_device_properties2 (core since 1.1; the instance is 1.2), VK_EXT_sampler_filter_minmax (listed by the engine as an instance extension, but it is a device extension and its feature is never enabled), VK_EXT_debug_report and its callback (the preview asks for VK_EXT_debug_utils with validation). Qt adds the surface extensions."
+    },
+    {
+      "kind": "not-copied",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "1259-1290",
+      "sinkbroomFile": "",
+      "note": "The VK_LAYER_MESSAGE_ID_FILTER environment variable: a process-wide setting; LP0 creates no pipelines, whose warnings it filters. Revisit when pipelines arrive (LP2)."
+    },
+    {
+      "kind": "not-copied",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "1056-1064, 1082-1097, 1377-1382, 1400-1404",
+      "sinkbroomFile": "",
+      "note": "The D24S8 format probe, the VMA allocator, the push-constant size and Optick's GPU init: not used by LP0. The push-constant size and the depth format come with the passes (LP2, C2)."
+    },
+    {
+      "kind": "not-copied",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "818-837, 937-945, 1044-1051, 1355-1364",
+      "sinkbroomFile": "",
+      "note": "Compute and transfer queues: the preview submits everything, uploads included, on the graphics queue (S35)."
+    }
+  ]
+}
