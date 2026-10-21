@@ -14,7 +14,16 @@
     "feature-chain": "device features that are checked and enabled",
     "function": "engine code mirrored with the stated differences",
     "constant": "an engine value used as is",
-    "not-copied": "engine code deliberately not mirrored, with the reason"
+    "not-copied": "engine code deliberately not mirrored, with the reason",
+    "copied-file": "an engine file copied whole and byte for byte into lib/TbLitLib/idtech/engine; gitBlob is its git blob id at engineCommit",
+    "copied-range": "engine line ranges copied verbatim into a partial file under lib/TbLitLib/idtech/engine, each preceded by one marker line",
+    "build": "how TbLitIdLib is compiled: the engine's C++ standard and the compile definitions the copied files branch on",
+    "table": "an engine table mirrored row for row",
+    "shim-virtual": "a virtual of a copied or engine class that the shim defines, so the vtables link",
+    "fatal-site": "a never-returning engine call (Error, FatalError) in the copied or mirrored code, which the shim turns into log-and-return, with what the code does after it returns",
+    "static": "a static or global of the copied code (or the shim's bindings), its kind and why it needs no reset",
+    "temporary": "a stand-in that a later package replaces",
+    "guard": "a check outside the copied code that keeps a latent engine fault from being reached"
   },
   "engineCommit": "285ea4d18a0aaedf46b0803ea656e4850eba5a01",
   "pins": [
@@ -971,6 +980,3599 @@
         }
       ],
       "note": "The engine's destruction order (waitIdle, semaphores, swapchain, device handle, VkDevice, surface, instance) never collects NVRHI garbage. The preview follows §3.1's teardown steps instead: release handles, waitForIdle, runGarbageCollection (skipped when lost), wrappers, vkDestroySwapchainKHR, semaphores, the NVRHI device with its last Release() count, then the VkDevice; the surface and the instance belong to Qt."
+    },
+    {
+      "id": "M-ID-COPY-01",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.h",
+          "lines": [
+            1,
+            443
+          ],
+          "anchor": "whole file",
+          "sha256": "ca70cab2b5ebbf6d954259a61db5c18a7713e2f4c86774126deb27ff93c50d09",
+          "gitBlob": "f57e167d1613d563e5c8bb5d3447049d756dfa6b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/framework/DeclManager.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-02",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/framework/DeclTable.h",
+          "lines": [
+            1,
+            57
+          ],
+          "anchor": "whole file",
+          "sha256": "caca7abcbc68a26125f008b613ad31df23111c4e466852c9c243300d56cdbd39",
+          "gitBlob": "af331b7743fe9405983537dfc984171c3ade327d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/framework/DeclTable.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-03",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/framework/DeclTable.cpp",
+          "lines": [
+            1,
+            205
+          ],
+          "anchor": "whole file",
+          "sha256": "bd62389dcd83450ecf39dd72ebdda38d2c687e4db02f8ae42aa0c1795a4c9edb",
+          "gitBlob": "b9ca9f20b9d01f657b35915545ca20cb240b657d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/framework/DeclTable.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-04",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/framework/DeclEntityDef.h",
+          "lines": [
+            1,
+            56
+          ],
+          "anchor": "whole file",
+          "sha256": "dd44d5f1c6e75a944bb85125d5c76a765f6f67853eb2653fc5c05b88fc1690b9",
+          "gitBlob": "9daca947527ac5bf9ee42e9448cadea437926deb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/framework/DeclEntityDef.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-05",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/framework/DeclEntityDef.cpp",
+          "lines": [
+            1,
+            198
+          ],
+          "anchor": "whole file",
+          "sha256": "b2619db247fa9e943ef85a2c7c6502d0fb91446b7253dbd43fdc1e64abd382d7",
+          "gitBlob": "fc355f2bfd59857767d166fec8103d5c56368474"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/framework/DeclEntityDef.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-06",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/framework/DeclSkin.h",
+          "lines": [
+            1,
+            66
+          ],
+          "anchor": "whole file",
+          "sha256": "523e962c96fd852bfa547264290ee51aaab6e4f51c1acc1a262d3910a0835d2a",
+          "gitBlob": "16e129a04e5d19996589852d40aa5efaa32e1d8e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/framework/DeclSkin.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-07",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/framework/DeclSkin.cpp",
+          "lines": [
+            1,
+            209
+          ],
+          "anchor": "whole file",
+          "sha256": "47e8575c484add8a0e2010bff6974538fe95241d81f1bd0972a1be39cf3b29ff",
+          "gitBlob": "d10027a85988fc0a2ac98e8f51c042521a71f7e8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/framework/DeclSkin.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-08",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            1,
+            1088
+          ],
+          "anchor": "whole file",
+          "sha256": "ecba889acb5f2d1cfc3196c79a21915a1b15a76c587202ab9761795302a8ab6f",
+          "gitBlob": "84c93e7b2c0d6ef20df6f2a4a9a7fcffeaa7c19b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Material.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-09",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_program.cpp",
+          "lines": [
+            1,
+            862
+          ],
+          "anchor": "whole file",
+          "sha256": "26decdf45f5d9d093e4f569ab9b1b7d0d8bcf6c33fa8223d22f030e7659450ef",
+          "gitBlob": "362b66a65015fd5e009887d7e09088b142bb2d54"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Image_program.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-10",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/renderer/GLState.h",
+          "lines": [
+            1,
+            194
+          ],
+          "anchor": "whole file",
+          "sha256": "e3881ad9f54f8c632cb005d690eb2404bf9dee721639cc32affb45b2e23555ff",
+          "gitBlob": "3babb2448d04cb6c20210e8f794f26397896bb86"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/GLState.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-11",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/Lexer.h",
+          "lines": [
+            1,
+            334
+          ],
+          "anchor": "whole file",
+          "sha256": "252da87d1314bf265e83aa2620ffdda2d1d3a087e08c10b0954b7532af9e15b3",
+          "gitBlob": "39695e216f2c421dd283c36dde6fd3cb8f287047"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/Lexer.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-12",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            1,
+            2446
+          ],
+          "anchor": "whole file",
+          "sha256": "3680953b30361a423f96dd892664ffa588b670a3f28ff32199bb52500971a049",
+          "gitBlob": "72b28bc4a21ab5db8929822e82db2330aff6265a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/Lexer.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-13",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/Token.h",
+          "lines": [
+            1,
+            183
+          ],
+          "anchor": "whole file",
+          "sha256": "a0a2cc0966c9e6c094673d514e95937158f702c2fd6b7e2239298e5bd5cbe0d8",
+          "gitBlob": "1557aebc9225ec2fdea7145febb47ac9f14a53aa"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/Token.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-14",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/Token.cpp",
+          "lines": [
+            1,
+            218
+          ],
+          "anchor": "whole file",
+          "sha256": "5dff905e41098576f7d92fed14675bebdb97c3de0790cfe47dd9927a0f4ce55c",
+          "gitBlob": "85ebe84e070d002186ac5dfba578209cabd1afc1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/Token.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-15",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.h",
+          "lines": [
+            1,
+            1466
+          ],
+          "anchor": "whole file",
+          "sha256": "956222bb30391de609fdfebf4cbdfb40d37fb81d4d629ad9479f9345c0e6f2ab",
+          "gitBlob": "fc3a0a0bd9a9112cc9b953c6094d699f2a8e02a3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/Str.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-16",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            1,
+            2597
+          ],
+          "anchor": "whole file",
+          "sha256": "a58b45930b2df393ddd1db5bf7c4978aafd6f79560c5673f8b2d402b4561cf95",
+          "gitBlob": "ba5b9f38411e164c657c77593f04b7ee203bb0d0"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/Str.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-17",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/StrStatic.h",
+          "lines": [
+            1,
+            138
+          ],
+          "anchor": "whole file",
+          "sha256": "9e008ea1191302250edc2c9c2dc9e59ebe927cfc4f334bcc79aaa47b3e5ffe9c",
+          "gitBlob": "9330c75249bd8bc0a3ff51b15bf4bf3e346914e3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/StrStatic.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-18",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/Dict.h",
+          "lines": [
+            1,
+            430
+          ],
+          "anchor": "whole file",
+          "sha256": "72731cfd7bbd915382b61b09b91ed4ef887a7cddb74c631899c6dc5f7d22c9ec",
+          "gitBlob": "f4b5e10ccf1320844c0ccf0476ca8618f9aeb958"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/Dict.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-19",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/CmdArgs.h",
+          "lines": [
+            1,
+            89
+          ],
+          "anchor": "whole file",
+          "sha256": "706e4bc2bd4b5dd91a8d6a289dd395c57303efde57b2ea54389e4295564be19c",
+          "gitBlob": "c49e330202355e38093c35668e390f08962da584"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/CmdArgs.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-20",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/containers/List.h",
+          "lines": [
+            1,
+            1282
+          ],
+          "anchor": "whole file",
+          "sha256": "5b8c27bbee9956ef58d5e5fe5609414363c9455f2168cfa4ac2aa7e6cf52cc9c",
+          "gitBlob": "805beeb3068f1a646eb4ad71067a32af973dc7cc"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/containers/List.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-21",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/containers/Sort.h",
+          "lines": [
+            1,
+            407
+          ],
+          "anchor": "whole file",
+          "sha256": "a4ff1561a5b920d56ec88f24a6271f1c81fc4f4acc750489483e969ada255171",
+          "gitBlob": "c578baf7d4b290344dae07c5d61a9ab95c1ef66d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/containers/Sort.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-22",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/containers/StrList.h",
+          "lines": [
+            1,
+            206
+          ],
+          "anchor": "whole file",
+          "sha256": "96307b29b0c373dbd6e9079e4fb0c693c09d97ee7cc9181378203910e9c2a30e",
+          "gitBlob": "eec8844154a8dd779ba203cc1211ef2efe796824"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/containers/StrList.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-23",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/containers/StrPool.h",
+          "lines": [
+            1,
+            306
+          ],
+          "anchor": "whole file",
+          "sha256": "47383d1523edad4d15752c49dd9c64264842e121073d4d49a001462eee93a7b9",
+          "gitBlob": "74881d3a42f8aa3923df2f96ab377aeacf945c00"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/containers/StrPool.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-24",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/containers/HashIndex.h",
+          "lines": [
+            1,
+            484
+          ],
+          "anchor": "whole file",
+          "sha256": "4f211ba21f3d65396f2b8a1f47e192eebdc48f74ff2a1836af6ad34e3bc66a05",
+          "gitBlob": "42b2f262e1f56407fa1b7de43efa1a916b6db989"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/containers/HashIndex.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-25",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/containers/HashIndex.cpp",
+          "lines": [
+            1,
+            173
+          ],
+          "anchor": "whole file",
+          "sha256": "b46008d6afb6d48f1a38ca56f3085e197f8cce30db1769296b690bc98e82579a",
+          "gitBlob": "cfc99481b70adbd2c3f5bfe675535b3b87b682fa"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/containers/HashIndex.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-26",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/containers/Array.h",
+          "lines": [
+            1,
+            144
+          ],
+          "anchor": "whole file",
+          "sha256": "0121c14683ddeea8d7c6fe6005393e88d66620af37162a9934ad1b498d515fb2",
+          "gitBlob": "85a2fed28a9621dc00e446f7ea631caa189ab72b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/containers/Array.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-27",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            1,
+            1614
+          ],
+          "anchor": "whole file",
+          "sha256": "4876ad98c28b478e09d2645c07f8204beca4793c321aa9fb79f2226abbd85fd4",
+          "gitBlob": "50e0b7ccb3034c1ed62444ec13260516db08595d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Math.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-28",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Math.cpp",
+          "lines": [
+            1,
+            162
+          ],
+          "anchor": "whole file",
+          "sha256": "0bf09ce3a5f459ebf150c1a540b931b439d49ea5911d973d941b96660c48f85a",
+          "gitBlob": "2a2252e868d494be3c1e35ed8ecb411026cfb171"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Math.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-29",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Vector.h",
+          "lines": [
+            1,
+            1802
+          ],
+          "anchor": "whole file",
+          "sha256": "10551197b8fb0269de1819bed0fa6255b4656b8d1ea1d19c93e85cc2194b31e5",
+          "gitBlob": "c8853b6d80c1eb3d08c98558121b82015e12c7df"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Vector.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-30",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Matrix.h",
+          "lines": [
+            1,
+            2285
+          ],
+          "anchor": "whole file",
+          "sha256": "7c5e1e53a65f01a257a2c173f78d371196d1a1f5b3a9745e5fbfb940fe91b9d4",
+          "gitBlob": "1ada10ce63a53c65120df6dab998376395fc1e52"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Matrix.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-31",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Angles.h",
+          "lines": [
+            1,
+            301
+          ],
+          "anchor": "whole file",
+          "sha256": "c560092bd4e8ef9cbfcd03e84ff41625d52f2d4c87bde59ce5e94e511cf712de",
+          "gitBlob": "9bbc3863d9957ca56bdf6d3df07d3cacef867139"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Angles.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-32",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/sys/sys_defines.h",
+          "lines": [
+            1,
+            315
+          ],
+          "anchor": "whole file",
+          "sha256": "710c476df27f7dd7efc90372116b7d35ad71bdf230020eed72a2b82c3f284a87",
+          "gitBlob": "03569f800ffc382de5904edb766482230d096f98"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/sys/sys_defines.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-33",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/sys/sys_types.h",
+          "lines": [
+            1,
+            311
+          ],
+          "anchor": "whole file",
+          "sha256": "42e31660c0fb2f92ddde907d5cca374b20b3af0c3ede357e0ec1ac2e257ec6a4",
+          "gitBlob": "59e8bce634eea506821712246f18b1855580f12b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/sys/sys_types.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-34",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/sys/sys_assert.h",
+          "lines": [
+            1,
+            151
+          ],
+          "anchor": "whole file",
+          "sha256": "3aed95f0b6f6723bf4bb0a80cd6ecb4744dd1acfbc402d9ded139fdb7eb655df",
+          "gitBlob": "045a23b8123bdb1a96703a60484413a5e1961e29"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/sys/sys_assert.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-35",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/sys/sys_alloc_tags.h",
+          "lines": [
+            1,
+            151
+          ],
+          "anchor": "whole file",
+          "sha256": "0f9d398b262d76cee3907c0054b79bca2481fe10db5bd95d88b6265e618dd2c4",
+          "gitBlob": "664bcc062b84d4bdb0890a36d2704fa4ff320298"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/sys/sys_alloc_tags.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-COPY-36",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/sys/sys_intrinsics.h",
+          "lines": [
+            1,
+            306
+          ],
+          "anchor": "whole file",
+          "sha256": "f7d667d205121a1e1d3d9a72cbda0f3081ca76df5faba84aa10c725d70a3d0f8",
+          "gitBlob": "e11bf56fb69933e085e23de720f833ebdb1ef09e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/sys/sys_intrinsics.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-ID-PART-01",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            1,
+            3378
+          ],
+          "anchor": "licence, includes, cvars, CommonInit through idMaterial::Parse, opNames and idMaterial::Print",
+          "sha256": "934e7bb3809e0caa4408168bd7ef3421b21d0eebfd998d84673301b2b7ca752c"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3410,
+            3530
+          ],
+          "anchor": "idMaterial::EvaluateRegisters",
+          "sha256": "e29dfb1a23c1051687cb9721b8a73b2733540ba4c940cedb0bdac24c77afc868"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3661,
+            3788
+          ],
+          "anchor": "CheckForConstantRegisters, ImageName, Size, SetDefaultText, DefaultDefinition",
+          "sha256": "374237000a8c12ac5cea27fed2de0c96c1d9f5d30a99561b987d8fab7af5e01c"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3836,
+            3934
+          ],
+          "anchor": "idMaterial::SetFastPathImages",
+          "sha256": "d30284d7a2e118848c3166446ad09e07f774e68b46036a3f82c334179ab827ba"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Material.cpp"
+        }
+      ],
+      "note": "3726 of the file's 4421 lines, in 4 ranges, each preceded by one marker line"
+    },
+    {
+      "id": "M-ID-PART-02",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/Image.h",
+          "lines": [
+            1,
+            33
+          ],
+          "anchor": "licence and include guard",
+          "sha256": "ab2645a4ed63bc9890f2124064e7daa93a24eea853c95e8d4160c80e837f5666"
+        },
+        {
+          "file": "neo/renderer/Image.h",
+          "lines": [
+            212,
+            266
+          ],
+          "anchor": "MAX_TEXTURE_LEVELS, textureUsage_t, cubeFiles_t",
+          "sha256": "35de26cb6d30bae73a917e07154924818f5dd5a2147b658027427b5983c2c78c"
+        },
+        {
+          "file": "neo/renderer/Image.h",
+          "lines": [
+            272,
+            272
+          ],
+          "anchor": "MAX_IMAGE_NAME",
+          "sha256": "8b1682b58106984ae5407fd8ef7c4bc1bf52907d4e78a1bd373d77be2be539fb"
+        },
+        {
+          "file": "neo/renderer/Image.h",
+          "lines": [
+            679,
+            679
+          ],
+          "anchor": "R_Dropsample declaration",
+          "sha256": "5abd9d3e72adcd6b930929a8db69a812d4504a329e481e902bf2c0b5a3f33e93"
+        },
+        {
+          "file": "neo/renderer/Image.h",
+          "lines": [
+            704,
+            729
+          ],
+          "anchor": "R_LoadImage, R_LoadCubeImages, R_LoadImageProgram, R_ParsePastImageProgram declarations",
+          "sha256": "72f53888b3fb1b9d489009d23ce2260ababa6bf18fd649676e8b30885f9df97e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Image.h"
+        }
+      ],
+      "note": "116 of the file's 729 lines, in 5 ranges, each preceded by one marker line"
+    },
+    {
+      "id": "M-ID-PART-03",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            1,
+            34
+          ],
+          "anchor": "licence and includes",
+          "sha256": "904b0a3e9949bf4e9c0960fb321d4c7cfeaa96e7f1b8d867b51174fc07aa2b7d"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            110,
+            144
+          ],
+          "anchor": "R_Dropsample",
+          "sha256": "c0cbc7b0fce749b0fd7400bdf445fa5f6b0877c911983aa9c3ed98ee61547b2d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Image_process.cpp"
+        }
+      ],
+      "note": "69 of the file's 1168 lines, in 2 ranges, each preceded by one marker line"
+    },
+    {
+      "id": "M-ID-PART-04",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Vector.cpp",
+          "lines": [
+            1,
+            31
+          ],
+          "anchor": "licence and include",
+          "sha256": "55702a835b011f5224312580deedfc9517a3780513d90c1c26c077dfa1b97385"
+        },
+        {
+          "file": "neo/idlib/math/Vector.cpp",
+          "lines": [
+            33,
+            42
+          ],
+          "anchor": "vec2_one through vec6_infinity",
+          "sha256": "309ade22d2f19634d8c0d548e9fac75f999a20fb926c4f1232f940a7e3a03cbf"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Vector.cpp"
+        }
+      ],
+      "note": "41 of the file's 503 lines, in 2 ranges, each preceded by one marker line"
+    },
+    {
+      "id": "M-ID-PART-05",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Matrix.cpp",
+          "lines": [
+            1,
+            30
+          ],
+          "anchor": "licence and include",
+          "sha256": "1830d8912d91786f162688a5a5203f0e3e2c9f969aaef5dbf83bcd63970294ee"
+        },
+        {
+          "file": "neo/idlib/math/Matrix.cpp",
+          "lines": [
+            143,
+            144
+          ],
+          "anchor": "mat3_zero, mat3_identity",
+          "sha256": "18619cfafe2374190dbb2ef23b8148b32b5bd909c7e31de611ba8ac2f4a9975f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Matrix.cpp"
+        }
+      ],
+      "note": "32 of the file's 2997 lines, in 2 ranges, each preceded by one marker line"
+    },
+    {
+      "id": "M-ID-PART-06",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1,
+            31
+          ],
+          "anchor": "licence and include",
+          "sha256": "04845e5beddff3ba727452de29f4253fbb86f30a6314a3b1d0d925e6ed954b00"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            75,
+            284
+          ],
+          "anchor": "idDeclType, idDeclFolder, idDeclLocal, idDeclFile, idDeclManagerLocal",
+          "sha256": "b89dd535a9e4aadbb0d47ac0561a273f791ca7c2e21812990fae429b3da876c7"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            286,
+            286
+          ],
+          "anchor": "idDeclManagerLocal::decl_show",
+          "sha256": "8df88fdcb8e47a13cf08f7322f2e30237e165e124d57811b70e1fc654987a558"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            622,
+            887
+          ],
+          "anchor": "idDeclFile constructors, Reload, LoadAndParse",
+          "sha256": "cb41130b2eaeac952c4c559d003b3b097bc11dffccfdead1f18b7f8826756928"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1083,
+            1221
+          ],
+          "anchor": "idDeclManagerLocal::Reload, BeginLevelLoad, EndLevelLoad, RegisterDeclType, RegisterDeclFolder",
+          "sha256": "4852e631833b475a10519a5cd20e8aa087ffa915d1b66829a79aef113e383e0e"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1273,
+            1450
+          ],
+          "anchor": "GetNumDeclTypes, GetDeclNameFromType, GetDeclTypeFromName, FindType, FindDeclWithoutParsing, ReloadFile, GetNumDecls, DeclByIndex",
+          "sha256": "151423214cfdf458fb1272a505a2e7e99d4fe8072d04dda9d29c7644ecbd9771"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1761,
+            1786
+          ],
+          "anchor": "idDeclManagerLocal::MediaPrint",
+          "sha256": "8464ee848855551d4ef68a8b2fd66e1cdc77510cb1134c83d2d7c341623999f4"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1823,
+            1913
+          ],
+          "anchor": "FindMaterial, MaterialByIndex, FindSkin, SkinByIndex, FindSound, SoundByIndex, Touch, MakeNameCanonical",
+          "sha256": "f354d7697de6a7ebc9dad1e9d72233fda5259dfae622a27332506baa3d348b93"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            4675,
+            4735
+          ],
+          "anchor": "idDeclManagerLocal::FindTypeWithoutParsing",
+          "sha256": "2c4561c2bef9297d2eb06333f1f2ccff4cb6f65ea08afdb7462a0dd020784e5a"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            4922,
+            5135
+          ],
+          "anchor": "idDeclLocal constructor through SetTextLocal",
+          "sha256": "5c1f5554dc78a72340e96c7d9a6c0de843c7aa206fd5bb7505063014145cc295"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            5224,
+            5471
+          ],
+          "anchor": "idDeclLocal::SourceFileChanged through EverReferenced",
+          "sha256": "24efb200fe8aaeb52a66cfde5bc9d56e97a917e3e178aea092e42de51e14a909"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/framework/DeclManager.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "#include"
+        }
+      ],
+      "note": "1465 of the file's 5471 lines, in 11 ranges, each preceded by one marker line; compiled inside shim/src/DeclManagerShim.cpp (HEADER_FILE_ONLY), because idDeclLocal, idDeclFile and idDeclManagerLocal are defined in this file; there the name declManagerLocal is a macro for *tbLitDeclManagerLocal"
+    },
+    {
+      "id": "M-ID-PART-07",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            1,
+            115
+          ],
+          "anchor": "licence, include, globalKeys, globalValues, operator=, Copy",
+          "sha256": "6628c07e05f345651f40cba183e2223c820e789a7c09586bf60a91511f073b9c"
+        },
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            197,
+            256
+          ],
+          "anchor": "idDict::SetDefaults, Clear, Print",
+          "sha256": "697a5514126f03ec7a2933abfa01aa8fd09bbb181f3ea0dbb59cf732318ed1dd"
+        },
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            288,
+            546
+          ],
+          "anchor": "idDict::Allocated, Set and the Get* functions",
+          "sha256": "71810e553328137ff73f2c2a0eadaaab9c40ce2d7de13a8a37f6945dac8e58c0"
+        },
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            563,
+            696
+          ],
+          "anchor": "idDict::FindKey, FindKeyIndex, Delete, DeleteEmptyKeys, MatchPrefix",
+          "sha256": "4d4fe6abceb672c357d2dcc0478301883c8db4e1e2f0d1f1259d64dfe24bdddc"
+        },
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            1043,
+            1063
+          ],
+          "anchor": "idDict::Init, Shutdown",
+          "sha256": "323b3cc6111a4e308000e9e87a18b9acc02167a3c73ee46e11cb7c89f6a7f791"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/Dict.cpp"
+        }
+      ],
+      "note": "589 of the file's 1116 lines, in 5 ranges, each preceded by one marker line"
+    },
+    {
+      "id": "M-ID-PART-08",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/idlib/Heap.h",
+          "lines": [
+            1,
+            48
+          ],
+          "anchor": "licence, include guard, memTag_t, MAX_TAGS",
+          "sha256": "d6cc8c37bc9a87bcab9ed8624d0e035a828ee998123598e101a3d1ac9d9f75bc"
+        },
+        {
+          "file": "neo/idlib/Heap.h",
+          "lines": [
+            1340,
+            1340
+          ],
+          "anchor": "include guard end",
+          "sha256": "460cb71fd0d6691fd8bdf0b76167435b770a2d1d2dbd56c65b49b4542228d13a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/Heap.h"
+        }
+      ],
+      "note": "49 of the file's 1340 lines, in 2 ranges, each preceded by one marker line"
+    },
+    {
+      "id": "M-ID-PART-09",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/framework/CmdSystem.h",
+          "lines": [
+            1,
+            71
+          ],
+          "anchor": "licence, include guard, cmdFlags_t, cmdExecution_t, cmdFunction_t, argCompletion_t",
+          "sha256": "db071d4794d9edd12ac4579e879ac78a4dd8fc7db17862eefaeb038f0c61051d"
+        },
+        {
+          "file": "neo/framework/CmdSystem.h",
+          "lines": [
+            96,
+            141
+          ],
+          "anchor": "CommandLinks, CONSOLE_COMMAND macros",
+          "sha256": "03debc4b16cb981aa2a82ae0a6cc71292f8a9146bd154ee146d4cfded278a41a"
+        },
+        {
+          "file": "neo/framework/CmdSystem.h",
+          "lines": [
+            289,
+            289
+          ],
+          "anchor": "include guard end",
+          "sha256": "17bca012d8726247f96d9d1c97994de20a459ae74a411337309d6dfe2862fbf0"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/framework/CmdSystem.h"
+        }
+      ],
+      "note": "118 of the file's 289 lines, in 3 ranges, each preceded by one marker line"
+    },
+    {
+      "id": "M-ID-PART-10",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/framework/CVarSystem.h",
+          "lines": [
+            1,
+            30
+          ],
+          "anchor": "licence and include guard",
+          "sha256": "f67ef4c390b5ac0ad6a08c02e3cfcf273eecde0c496443141b1082d59cf15101"
+        },
+        {
+          "file": "neo/framework/CVarSystem.h",
+          "lines": [
+            82,
+            105
+          ],
+          "anchor": "cvarFlags_t",
+          "sha256": "a39184476d601a7b3eb218c7a3dd5c0d0e7fe86087cc5a7aed74f02352a7a3b7"
+        },
+        {
+          "file": "neo/framework/CVarSystem.h",
+          "lines": [
+            393,
+            393
+          ],
+          "anchor": "include guard end",
+          "sha256": "6f702cb2e7b1b776534c2f9edd4e64c4205530066b256369b8a6d66e386b355b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/framework/CVarSystem.h"
+        }
+      ],
+      "note": "55 of the file's 393 lines, in 3 ranges, each preceded by one marker line"
+    },
+    {
+      "id": "M-ID-PART-11",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/framework/Common.h",
+          "lines": [
+            1,
+            32
+          ],
+          "anchor": "licence and include guard",
+          "sha256": "0f9651588a900109b1e2eb7f3e53acba8225031fa4862205df037bfd8e659431"
+        },
+        {
+          "file": "neo/framework/Common.h",
+          "lines": [
+            196,
+            212
+          ],
+          "anchor": "toolFlag_t",
+          "sha256": "12a2d4c85e9aa844f302d20843d7b63cfecd4aec299ea73aeb6d82235940beb4"
+        },
+        {
+          "file": "neo/framework/Common.h",
+          "lines": [
+            226,
+            226
+          ],
+          "anchor": "com_editors",
+          "sha256": "a26e39daf5a74d439b877a5e7569e6c9b0196f400981b094bc024c3e84d00307"
+        },
+        {
+          "file": "neo/framework/Common.h",
+          "lines": [
+            451,
+            451
+          ],
+          "anchor": "include guard end",
+          "sha256": "317757847c056fa08c176259fba1ac0555f5c21eee5b140fe6c2c2707feaa8fd"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/framework/Common.h"
+        }
+      ],
+      "note": "51 of the file's 451 lines, in 4 ranges, each preceded by one marker line"
+    },
+    {
+      "id": "M-ID-PART-12",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.h",
+          "lines": [
+            1,
+            102
+          ],
+          "anchor": "licence, FILE_NOT_FOUND_TIMESTAMP, MAX_OSPATH, fsMode_t, findFile_t, idFileList",
+          "sha256": "e1c8590c5ab08513f062504136c2ce6e4d0c9d17d9442b0774b59d578b73dff6"
+        },
+        {
+          "file": "neo/framework/FileSystem.h",
+          "lines": [
+            268,
+            268
+          ],
+          "anchor": "include guard end",
+          "sha256": "f8c0e77c3573a704f596f0020802108ad298a088bf1b50afa1851b5ccebc8aec"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/framework/FileSystem.h"
+        }
+      ],
+      "note": "103 of the file's 268 lines, in 2 ranges, each preceded by one marker line"
+    },
+    {
+      "id": "M-ID-BUILD-01",
+      "kind": "build",
+      "engine": [
+        {
+          "file": "neo/CMakeLists.txt",
+          "lines": [
+            10,
+            10
+          ],
+          "anchor": "CMAKE_CXX_STANDARD",
+          "sha256": "5f9f922b4859a1cc72c01a50bef3cac0efd52b44e5bdf89a81c529099b85f2e8"
+        },
+        {
+          "file": "neo/CMakeLists.txt",
+          "lines": [
+            88,
+            93
+          ],
+          "anchor": "USE_INTRINSICS_SSE option",
+          "sha256": "ff13ec13c57e2275cfe0dce9919e910656f2925a1e2f922a394726d077ff3bc3"
+        },
+        {
+          "file": "neo/CMakeLists.txt",
+          "lines": [
+            269,
+            276
+          ],
+          "anchor": "MSVC add_definitions",
+          "sha256": "e1e32e84e933fd486d8d335524ebe253abe70d5faae4614cc843496757d949d4"
+        },
+        {
+          "file": "neo/CMakeLists.txt",
+          "lines": [
+            288,
+            290
+          ],
+          "anchor": "USE_INTRINSICS_SSE definition",
+          "sha256": "eecec91a4352fde6877cea14c2cf600f0cbb5f859d81dab4c932d1dcf7248438"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/CMakeLists.txt",
+          "symbol": "TbLitIdLib"
+        }
+      ],
+      "cxxStandard": 17,
+      "compileDefinitions": [
+        {
+          "name": "USE_INTRINSICS_SSE",
+          "when": "x86 and x86-64 (the engine option's default there)",
+          "why": "Math.h's Ftoi, Ftoi8, Ftoi16 and FtoiRound and sys_intrinsics.h branch on it; Ftoi truncates through SSE"
+        },
+        {
+          "name": "WIN32, _WINDOWS",
+          "when": "MSVC",
+          "why": "come with CMake's default CMAKE_CXX_FLAGS, as in the engine; sys_defines.h branches on WIN32/_WIN32"
+        }
+      ],
+      "notDefined": [
+        {
+          "name": "DMAP",
+          "why": "under DMAP the parser keeps no programs and handles missing images differently (M8); never defined"
+        },
+        {
+          "name": "USE_STRING_DATA_ALLOCATOR",
+          "why": "would add a global block allocator to Str.cpp that is not thread-safe (R4-2.12)"
+        },
+        {
+          "name": "USE_COMPRESSED_DECLS",
+          "why": "#defined at DeclManager.cpp:72, outside every copied range, so the copied #ifdef blocks keep the text uncompressed; changes storage, not results (R5.10)"
+        },
+        {
+          "name": "GET_HUFFMAN_FREQUENCIES",
+          "why": "commented out in the engine (DeclManager.cpp:73)"
+        },
+        {
+          "name": "ID_RETAIL",
+          "why": "not set in a default engine build; CmdSystem.h then compiles CONSOLE_COMMANDs, which the shim's constexpr idCommandLink keeps unregistered"
+        },
+        {
+          "name": "USE_EXCEPTIONS, NOMINMAX, _CRT_SECURE_NO_DEPRECATE, _CRT_NONSTDC_NO_DEPRECATE, _CRT_SECURE_NO_WARNINGS, _MBCS, USE_NVRHI, __DOOM__, USE_DOOMCLASSIC",
+          "why": "the engine defines them, but no copied file branches on them"
+        }
+      ],
+      "flags": "STATIC, no CompilerConfig and no PrecompileStdHeaders, suppress_dependency_warnings and apply_sanitizer_options, CXX_STANDARD 17 without extensions, MSVC /bigobj in Debug and /Z7 in Release, no /Zc:__cplusplus (as the engine, so sys_assert.h picks its pre-C++11 compile_time_assert)",
+      "note": "D31, S18, R4-1.6, R4-1.14"
+    },
+    {
+      "id": "M-ID-FN-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/ImageManager.cpp",
+          "lines": [
+            400,
+            499
+          ],
+          "anchor": "idImageManager::ImageFromFile",
+          "sha256": "44f1cebf57c48e5a0070c10a8c4afd39670eea07b0ff33733b422e84e806ed4c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "idImageManager::ImageFromFile"
+        }
+      ],
+      "note": "the engine's keying exactly (empty/default/_default, fonts/newfonts and lights prefixes, image extensions stripped anywhere, backslashes, hash lookup, any _name matches, cube map Error, filter/repeat/usage mismatch makes a new record); differences: no loading (ActuallyLoadImage) and no level-load flags, and idStr instead of idStrStatic<MAX_OSPATH> (same result for every name below 1024 characters; the copy passes at most MAX_IMAGE_NAME - 1)"
+    },
+    {
+      "id": "M-ID-FN-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/ImageManager.cpp",
+          "lines": [
+            310,
+            324
+          ],
+          "anchor": "idImageManager::AllocImage",
+          "sha256": "6802d2411cd4dbd967b6ed408f5f8c06e0fb2c99b3718303d1b601f7f800b525"
+        },
+        {
+          "file": "neo/renderer/ImageManager.cpp",
+          "lines": [
+            355,
+            390
+          ],
+          "anchor": "idImageManager::ImageFromFunction",
+          "sha256": "897b9aa461a9097e78f0071a6caed8c2913a5bc31009ec11eff8c4ed0f817564"
+        },
+        {
+          "file": "neo/renderer/ImageManager.cpp",
+          "lines": [
+            359,
+            359
+          ],
+          "anchor": "imageFormats",
+          "sha256": "9a6afbccfa43af3fbc2694c2d05b0bded3a736170214f4ad02e14b575c956b4b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "idImageManager::AllocImage"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "idImageManager::ImageFromFunction"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "ImageFormats"
+        }
+      ],
+      "note": "ImageFromFunction keeps no generator; its records are flagged intrinsic"
+    },
+    {
+      "id": "M-ID-FN-03",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            1060,
+            1161
+          ],
+          "anchor": "idImageManager::CreateIntrinsicImages",
+          "sha256": "b0d9e643b59f64237ebb56a1f718b2e92197266aea3fa0297100fee7fe3e46b1"
+        },
+        {
+          "file": "neo/renderer/Framebuffer.h",
+          "lines": [
+            48,
+            48
+          ],
+          "anchor": "shadowMapResolutions",
+          "sha256": "c44d667308e635d999222f54e107d20a14e7698689a492781cd1b4fa59540c16"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "IntrinsicImagesBeforeShadows"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "ShadowMapResolutions"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "IntrinsicImagesAfterShadows"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "IntrinsicImagesAfterLoadingIcons"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "idImageManager::CreateIntrinsicImages"
+        }
+      ],
+      "note": "every name CreateIntrinsicImages registers, in order, so any _name lookup reaches the same record (S33); the two loading icons go through ImageFromFile as in the engine. _pointlight1-3, _spotlight and _cubiclight of the plan are not intrinsics in this fork"
+    },
+    {
+      "id": "M-ID-FN-04",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            791,
+            953
+          ],
+          "anchor": "builtins[] (name, nameOutSuffix, stages)",
+          "sha256": "f87e4439e9da3c9e53af60cb265ff51747a05e5dce5c6e0f4fb5d8e927329115"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            955,
+            1010
+          ],
+          "anchor": "idRenderProgManager::Init, builtin loop",
+          "sha256": "eef209266eafb650c6a7004e40c574b1a3404df24032922ff02494eab1e8fc29"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "BuiltinShaders"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "idRenderProgManager::idRenderProgManager"
+        }
+      ],
+      "note": "116 builtins; only name, nameOutSuffix and stages are kept, and FindShader runs over them in table order (vertex, fragment, compute), so shader indices match the engine's"
+    },
+    {
+      "id": "M-ID-FN-05",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            1157,
+            1185
+          ],
+          "anchor": "idRenderProgManager::FindShader (macros)",
+          "sha256": "c487c89aa9a307f1e109b941e81c470f45e4357ee04c6376ca99091ac656eaae"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderProgs_NVRHI.cpp",
+          "lines": [
+            285,
+            302
+          ],
+          "anchor": "idRenderProgManager::FindProgram",
+          "sha256": "a2ebd74ec11c4ccb03c4502037931a1631b7ce1c2e924d3877eec9952c228be1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "idRenderProgManager::FindShader"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "idRenderProgManager::FindProgram"
+        }
+      ],
+      "note": "search and append as the engine, keyed on name without extension, stage and suffix (the macros are ignored, as the engine ignores them in the search); nothing is loaded. A user shader gets the next index after the builtins, never 0"
+    },
+    {
+      "id": "M-ID-FN-06",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            393,
+            393
+          ],
+          "anchor": "layoutTypeAttributes[].pcEnabled",
+          "sha256": "78acf3d7d67eb77e8b4f4b38872b4476c3df95d5b961b2542a08245be246765a"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            286,
+            288
+          ],
+          "anchor": "rpNominalSet8, rpNominalSet8LayoutTypes",
+          "sha256": "976c6b8b6a9833ba3c767eed96c2f4ba8341ffdd63e275183847e6351947d784"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1381,
+            1381
+          ],
+          "anchor": "maxPushConstantSize",
+          "sha256": "86fef65153813f03dba82803364ddca67fa69e91c9aa9fcd4c860a913794ddab"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "idRenderProgManager::idRenderProgManager"
+        }
+      ],
+      "note": "for BINDING_LAYOUT_POST_PROCESS_INGAME, the only layout the copy names: 13 vec4s (208 bytes) <= the limit, with NVRHI's c_MaxPushConstantSize (256 outside Apple) standing in for the unknown device; the value only reaches FindShader's ignored macro list. LP2 applies the per-device rule"
+    },
+    {
+      "id": "M-ID-FN-07",
+      "kind": "constant",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            320,
+            327
+          ],
+          "anchor": "rpStage_t",
+          "sha256": "805fd2562ce6f650db7a1512d803f6430b6088220f7095f40ab54361a0691b63"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            368,
+            383
+          ],
+          "anchor": "shaderMacro_t",
+          "sha256": "b863f23b824a38736ce5ace767097d72c91831baa819498c5454a255c72d0b7b"
+        },
+        {
+          "file": "neo/idlib/precompiled.h",
+          "lines": [
+            87,
+            88
+          ],
+          "anchor": "MAX_EXPRESSION_OPS, MAX_EXPRESSION_REGISTERS",
+          "sha256": "28e07d5f35008edfe4cf0a99994538e078ed2e3a9d0a3d14127d88f5d63aed26"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/RenderCommon.h",
+          "symbol": "rpStage_t"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/RenderCommon.h",
+          "symbol": "shaderMacro_t"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimEngine.h",
+          "symbol": "MAX_EXPRESSION_OPS"
+        }
+      ],
+      "note": "bindingLayoutType_t and vertexLayoutType_t hold only the enumerators the copy names; their values index the shim's tables, not the engine's"
+    },
+    {
+      "id": "M-ID-FN-08",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            2537,
+            2555
+          ],
+          "anchor": "idFileSystemLocal::ListFiles",
+          "sha256": "86482ed20a2e32182bfba81a96eb052da7de541bed5399803b79756a8f681be0"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            336,
+            336
+          ],
+          "anchor": "fs_copyfiles",
+          "sha256": "329f1a0012d8c586211a2d113b3d66632cbb5b7a8fd5e39da259ac74c5c657d4"
+        },
+        {
+          "file": "neo/idlib/Str.h",
+          "lines": [
+            428,
+            435
+          ],
+          "anchor": "idSort_PathStr",
+          "sha256": "93120ec9e992e9470a3a5c8faa47c8d5beeb3f97cecea53057ed0b8b785c6a52"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idFileSystemLocal::ListFiles"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idFileSystemLocal::ReadFile"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "NamedCVars"
+        }
+      ],
+      "note": "ListFiles takes the names from the DeclSource (GetFileList's part: flat, merged, unique; LP1a.2 implements the engine's search there), adds each once case-insensitively and sorts with idSort_PathStr. ReadFile returns a Mem_Alloc'ed, NUL-terminated buffer of length + 1, -1 and FILE_NOT_FOUND_TIMESTAMP for an unreadable file"
+    },
+    {
+      "id": "M-ID-FN-09",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/Heap.cpp",
+          "lines": [
+            48,
+            66
+          ],
+          "anchor": "Mem_Alloc16",
+          "sha256": "0fa5a36c1e4d8554663b6ce8a413c8b589a117cff60bbc8004811154d99e3d74"
+        },
+        {
+          "file": "neo/idlib/Heap.cpp",
+          "lines": [
+            73,
+            87
+          ],
+          "anchor": "Mem_Free16",
+          "sha256": "f1a2e26a66285429845ed9b0f2df531aa6f01f9ca949877ef73699139f23f576"
+        },
+        {
+          "file": "neo/idlib/Heap.cpp",
+          "lines": [
+            94,
+            111
+          ],
+          "anchor": "Mem_ClearedAlloc, Mem_CopyString",
+          "sha256": "13e3e616def0f6ec1f72cde15aaf6e5835f18b3224d68e89e6a59a9919cafcac"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            205,
+            240
+          ],
+          "anchor": "R_StaticAlloc, R_ClearedStaticAlloc, R_StaticFree",
+          "sha256": "667f73515ea699fd07f18d1a665e42c892c4c63d9512eea93c9b80ed1b779824"
+        },
+        {
+          "file": "neo/idlib/Heap.h",
+          "lines": [
+            70,
+            116
+          ],
+          "anchor": "operator new/delete (global and tagged)",
+          "sha256": "c2ecec79b98dcc1216ed778c2b2cc39b4a02ebc2aa68a9d5806560df41a604f3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "Mem_Alloc16"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimLib.h",
+          "symbol": "operator new(size_t, memTag_t)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "R_StaticAlloc"
+        }
+      ],
+      "note": "Mem_* and R_Static* on malloc/free (NULL for a zero size, padded to 16); the tagged new/new[] forward to ::operator new/new[] with matching tagged deletes, so the copy's tagged-new/plain-delete pairs match (R4-2.10, S25). Heap.h's global new/delete replacement is never copied (M18)"
+    },
+    {
+      "id": "M-ID-FN-10",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/ui/UserInterface.cpp",
+          "lines": [
+            268,
+            310
+          ],
+          "anchor": "idUserInterfaceManagerLocal::FindGui",
+          "sha256": "46ac7eddbd08f3a2992ab28161414b0e8f7fb776eaa40b93e446c77ec41a5a41"
+        },
+        {
+          "file": "neo/ui/UserInterface.cpp",
+          "lines": [
+            382,
+            478
+          ],
+          "anchor": "idUserInterfaceLocal::InitFromFile",
+          "sha256": "98272efc9a8df30362a09ddea170bdb46c3204d7caa31b62715d6c21f93a4f34"
+        },
+        {
+          "file": "neo/renderer/Cinematic.h",
+          "lines": [
+            70,
+            137
+          ],
+          "anchor": "idCinematic, idSndWindow",
+          "sha256": "e0981b4c167f3d4e263fa12d26c404a8da3ded066656e9eff34029e8c881b374"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "UserInterfaceManagerShim::FindGui"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimEngine.h",
+          "symbol": "idCinematic"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimEngine.h",
+          "symbol": "idSndWindow"
+        }
+      ],
+      "note": "GUI dummies are shared by source file unless a unique one is asked for and never fail for a non-empty name (InitFromFile returns true with an Invalid GUI desktop); cinematics record the file and are owned and freed by the material's FreeData through their virtual destructor, never tracked (R5.11). idSndWindow's two-argument InitFromFile hides the base overload, so the material's call reaches idCinematic::InitFromFile, as in the engine"
+    },
+    {
+      "id": "M-ID-FN-11",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            904,
+            991
+          ],
+          "anchor": "idDeclManagerLocal::Init",
+          "sha256": "c65e07fa4fe2e169ee642f1af83f1e673c2355533394f3eb2d1ba767fa60019f"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            993,
+            997
+          ],
+          "anchor": "idDeclManagerLocal::Init2",
+          "sha256": "f5031e157c916c3f28d18ca3161efbc93a1a73dda1def79d632127f3be1fbde6"
+        },
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            323,
+            331
+          ],
+          "anchor": "idGameLocal::Init decl registrations",
+          "sha256": "a571fe5e3c5dfa6373fbb79810cb797d4e9a34177ea4f251293bd765e7d4ad79"
+        },
+        {
+          "file": "neo/framework/Common.cpp",
+          "lines": [
+            1261,
+            1261
+          ],
+          "anchor": "declManager->Init",
+          "sha256": "d23270a110e30cd72d23d9021de46fd1d6ef5f31844121e8030dc46d4f2adf91"
+        },
+        {
+          "file": "neo/framework/Common.cpp",
+          "lines": [
+            1345,
+            1345
+          ],
+          "anchor": "declManager->Init2",
+          "sha256": "6787cdff151e335e4fc3ee7fec069d6eee09f8f93af2f6ebac0dc2c4c7e105fa"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "idDeclManagerLocal::Init"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "idDeclManagerLocal::Init2"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "tb::lit::shim::initDeclManager"
+        }
+      ],
+      "note": "every decl type and folder the engine registers, in its order (D33, S26, R4-3.22): types table, material, skin, entityDef, sound, mapDef, fx, particle, articulatedFigure, pda, email, video, audio, model, export; folders materials, skins, sound, def, fx, particles, af, newpdas. table, material, skin, entityDef and mapDef parse for real; sound gets the shim's idSoundShader and the rest a plain idDecl (stub allocators), whose parse skips the braced text. No console commands, no Huffman tables"
+    },
+    {
+      "id": "M-ID-FN-12",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1044,
+            1081
+          ],
+          "anchor": "idDeclManagerLocal::Shutdown",
+          "sha256": "b07104e908b145beeb9faa1b628121848f37c41f51d5bffc3dcc434371eee2ac"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "idDeclManagerLocal::Shutdown"
+        }
+      ],
+      "note": "R5.11's order instead of type by type: material and table decls (FreeData then delete) -> skins, entityDefs and the other decls -> image records -> GUI dummies -> decl text, the idDeclLocal records, files, types and folders. Cinematics are freed by idMaterial::FreeData only. The registry then runs idDict::Shutdown (the dict pools) and deletes the manager"
+    },
+    {
+      "id": "M-ID-FN-13",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/Thread.h",
+          "lines": [
+            39,
+            87
+          ],
+          "anchor": "idSysMutex, idScopedCriticalSection",
+          "sha256": "f6aba91a1b2ab26333b3d16bc6ed3d4d661d550a8d9b158c3307953d62ca8248"
+        },
+        {
+          "file": "neo/framework/CmdSystem.h",
+          "lines": [
+            84,
+            94
+          ],
+          "anchor": "idCommandLink",
+          "sha256": "d3e707c1c926f653b3f792e44add621bc408e3b0e138696c7936c7b628a5a833"
+        },
+        {
+          "file": "neo/framework/CmdSystem.h",
+          "lines": [
+            218,
+            224
+          ],
+          "anchor": "idCmdSystem::ArgCompletion_Integer",
+          "sha256": "c3e19647052af83ced19bf37286b06269123b833ba9aff99d8882c0aed5234af"
+        },
+        {
+          "file": "neo/framework/CVarSystem.cpp",
+          "lines": [
+            244,
+            332
+          ],
+          "anchor": "idInternalCVar::UpdateValue",
+          "sha256": "c6358c082e6e9c406af281891262dcccbc85ee89f9e5d26e89fe5c08344fe96f"
+        },
+        {
+          "file": "neo/idlib/LangDict.h",
+          "lines": [
+            125,
+            188
+          ],
+          "anchor": "idStrId",
+          "sha256": "ee9120d0b41e75081826046402146868de8e6afdaf1ee7db4f1aa00ee4d198a2"
+        },
+        {
+          "file": "neo/idlib/sys/sys_includes.h",
+          "lines": [
+            133,
+            154
+          ],
+          "anchor": "NDEBUG rule and the C headers",
+          "sha256": "ce0a069405edcff24d6648ddfd5d1a07292b76c3716c6a44720019bd397840e5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimSystem.h",
+          "symbol": "idSysMutex"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idCommandLink"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idCmdSystem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idCVar"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimLib.h",
+          "symbol": "idStrId"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimSystem.h",
+          "symbol": "NDEBUG"
+        }
+      ],
+      "note": "idSysMutex on std::recursive_mutex (the Windows critical section is recursive and FindType re-enters through a material's table lookup); idCommandLink and idCVar have constexpr constructors and register nothing (S27, C9); idCVar's getters follow UpdateValue's conversions at the engine default (D21); idStrId only for Str.cpp's never-run testStrId command (LangDict.h needs idDynamicBlockAlloc); sys_includes.h's C and C++ headers without windows.h, DirectInput or DirectSound"
+    },
+    {
+      "id": "M-ID-VIRT-01",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            904,
+            991
+          ],
+          "anchor": "idDeclManagerLocal::Init",
+          "sha256": "c65e07fa4fe2e169ee642f1af83f1e673c2355533394f3eb2d1ba767fa60019f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "idDeclManagerLocal::Init"
+        }
+      ],
+      "note": "mirrored: the registrations (M-ID-FN-11)"
+    },
+    {
+      "id": "M-ID-VIRT-02",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            993,
+            997
+          ],
+          "anchor": "idDeclManagerLocal::Init2",
+          "sha256": "f5031e157c916c3f28d18ca3161efbc93a1a73dda1def79d632127f3be1fbde6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "idDeclManagerLocal::Init2"
+        }
+      ],
+      "note": "mirrored (M-ID-FN-11)"
+    },
+    {
+      "id": "M-ID-VIRT-03",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1009,
+            1037
+          ],
+          "anchor": "idDeclManagerLocal::InitTool",
+          "sha256": "863b60260b0cd4523bd4eefb08709cf1f40965692d0d2201373e4c6498ff53d4"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "idDeclManagerLocal::InitTool"
+        }
+      ],
+      "note": "rbdmap only: warns, registers nothing"
+    },
+    {
+      "id": "M-ID-VIRT-04",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1044,
+            1081
+          ],
+          "anchor": "idDeclManagerLocal::Shutdown",
+          "sha256": "b07104e908b145beeb9faa1b628121848f37c41f51d5bffc3dcc434371eee2ac"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "idDeclManagerLocal::Shutdown"
+        }
+      ],
+      "note": "R5.11's freeing order (M-ID-FN-12)"
+    },
+    {
+      "id": "M-ID-VIRT-05",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1228,
+            1271
+          ],
+          "anchor": "idDeclManagerLocal::GetChecksum",
+          "sha256": "b644ffa183eb66a33a735af290c853c1923f127ccfcfd92c449d1fd874331b28"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "idDeclManagerLocal::GetChecksum"
+        }
+      ],
+      "note": "returns 0: the checksums are unused and MD5_BlockChecksum is a stub"
+    },
+    {
+      "id": "M-ID-VIRT-06",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1468,
+            1545
+          ],
+          "anchor": "idDeclManagerLocal::ListType",
+          "sha256": "26e8cd86efac9019881e2018366a9d6ee785fd9c6c3bb41caeb2e1035d2c8d86"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "idDeclManagerLocal::ListType"
+        }
+      ],
+      "note": "console command: does nothing"
+    },
+    {
+      "id": "M-ID-VIRT-07",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1552,
+            1615
+          ],
+          "anchor": "idDeclManagerLocal::PrintType",
+          "sha256": "d130fe94c99703d10d0d0b7e8ea8a885fb0df6d578b26bc86b8fe0a62b984d58"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "idDeclManagerLocal::PrintType"
+        }
+      ],
+      "note": "console command: does nothing"
+    },
+    {
+      "id": "M-ID-VIRT-08",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1622,
+            1706
+          ],
+          "anchor": "idDeclManagerLocal::CreateNewDecl",
+          "sha256": "57b32e738cd452ba1d2e534f320f0ec89a69e954dfd0e5991be456dfd0cb7742"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "idDeclManagerLocal::CreateNewDecl"
+        }
+      ],
+      "note": "editor: warns, returns NULL"
+    },
+    {
+      "id": "M-ID-VIRT-09",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1713,
+            1759
+          ],
+          "anchor": "idDeclManagerLocal::RenameDecl",
+          "sha256": "800e23cb4fbf4ded44acd883748766d73aa2c92c8fcccf6b95eb82fdde80e56a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "idDeclManagerLocal::RenameDecl"
+        }
+      ],
+      "note": "editor: warns, returns false"
+    },
+    {
+      "id": "M-ID-VIRT-10",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1793,
+            1821
+          ],
+          "anchor": "idDeclManagerLocal::WritePrecacheCommands",
+          "sha256": "e99d7d99d2f73cb9ec4aedc37b19832e7d7d685d88452fa091d2efc4b5fd7260"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "idDeclManagerLocal::WritePrecacheCommands"
+        }
+      ],
+      "note": "does nothing"
+    },
+    {
+      "id": "M-ID-VIRT-11",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            5142,
+            5222
+          ],
+          "anchor": "idDeclLocal::ReplaceSourceFileText",
+          "sha256": "74ffa2b90ff96d08f683d508fb5da096ca97b28391609b25145508c4689c7b45"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "idDeclLocal::ReplaceSourceFileText"
+        }
+      ],
+      "note": "warns, returns false: SinkBroom never writes decls"
+    },
+    {
+      "id": "M-ID-VIRT-12",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/File.h",
+          "anchor": "idFile"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idFile"
+        }
+      ],
+      "virtuals": "GetFullPath, Read, Length, Timestamp",
+      "note": "pure virtual: the shim never opens a file"
+    },
+    {
+      "id": "M-ID-VIRT-13",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.h",
+          "anchor": "idFileSystem"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idFileSystem"
+        }
+      ],
+      "virtuals": "ListFiles, FreeFileList, ReadFile, FreeFile, OpenFileRead, OpenExplicitFileRead, CloseFile",
+      "note": "the members the copy calls, implemented by ::idFileSystemLocal over the DeclSource"
+    },
+    {
+      "id": "M-ID-VIRT-14",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/ui/UserInterface.h",
+          "anchor": "idUserInterfaceManager"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimEngine.h",
+          "symbol": "idUserInterfaceManager"
+        }
+      ],
+      "virtuals": "FindGui",
+      "note": "implemented by UserInterfaceManagerShim"
+    },
+    {
+      "id": "M-ID-VIRT-15",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/d3xp/Game.h",
+          "anchor": "idGame"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimEngine.h",
+          "symbol": "idGame"
+        }
+      ],
+      "virtuals": "CacheDictionaryMedia",
+      "note": "implemented by GameShim as a no-op: the preview precaches no media through the game"
+    },
+    {
+      "id": "M-ID-VIRT-16",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/sound/sound.h",
+          "anchor": "idSoundEmitter"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimEngine.h",
+          "symbol": "idSoundEmitter"
+        }
+      ],
+      "virtuals": "CurrentAmplitude",
+      "note": "never called: no emitter is passed (amplitude 0)"
+    },
+    {
+      "id": "M-ID-VIRT-17",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/renderer/Cinematic.h",
+          "anchor": "idCinematic"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimEngine.h",
+          "symbol": "idCinematic"
+        }
+      ],
+      "virtuals": "~idCinematic, InitFromFile",
+      "note": "records the file; freed by idMaterial::FreeData"
+    },
+    {
+      "id": "M-ID-FATAL-01",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3526,
+            3526
+          ],
+          "anchor": "idMaterial::EvaluateRegisters",
+          "sha256": "1bccf44dfcb5d9e59144c42cfb4271701f5ac8c413b536f0da076e474410914b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "the switch's default: the loop goes on with the next op. Unreachable: the parser only emits valid op types"
+    },
+    {
+      "id": "M-ID-FATAL-02",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            706,
+            706
+          ],
+          "anchor": "idDeclFile::LoadAndParse",
+          "sha256": "a0a710aa09150efdb6da370d59f592de6ef973c2a0dcf6d28d2b64a83f05ab34"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": true,
+      "afterReturn": "returns 0; the file's decls stay unknown and the next file loads. Reached by a listed file that cannot be read (tested)"
+    },
+    {
+      "id": "M-ID-FATAL-03",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            712,
+            712
+          ],
+          "anchor": "idDeclFile::LoadAndParse",
+          "sha256": "cdde8ed0efd26509b68661be41b28178cd3b293053df571205954b88e813d605"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "frees the buffer, returns 0. Unreachable: the lexer is fresh, so LoadMemory never fails"
+    },
+    {
+      "id": "M-ID-FATAL-04",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1294,
+            1294
+          ],
+          "anchor": "idDeclManagerLocal::GetDeclNameFromType",
+          "sha256": "f1d3dad6584853c6fd128cbf9e6717e4d8158685f0fa302b187be562e9a71e53"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "UNSAFE after return (indexes declTypes out of range). Unreachable: every caller passes a registered type, and every folder's default type is registered"
+    },
+    {
+      "id": "M-ID-FATAL-05",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1416,
+            1416
+          ],
+          "anchor": "idDeclManagerLocal::GetNumDecls",
+          "sha256": "c58abc881924f06e2d70c0e7be626e90c8fbadc4981670d5734e72636186b7c1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "returns 0. Unreachable: registered types only"
+    },
+    {
+      "id": "M-ID-FATAL-06",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1433,
+            1433
+          ],
+          "anchor": "idDeclManagerLocal::DeclByIndex",
+          "sha256": "d851072990378220e6354ec0633442207c4bbd1e5d9ab72fc6888c310a085705"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "returns NULL, which EvaluateRegisters would dereference. Unreachable: DECL_TABLE and DECL_MATERIAL are registered"
+    },
+    {
+      "id": "M-ID-FATAL-07",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1438,
+            1438
+          ],
+          "anchor": "idDeclManagerLocal::DeclByIndex",
+          "sha256": "857a7d164708dc3da0cee2174dcb5becd22a8a4cc2cf4376697bf7c44836a5e6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "UNSAFE after return (reads past the list). Unreachable: EvaluateRegisters' index is a table's Index() in the same registry, decls are never removed while it lives, and the facade checks an entry's index before calling (guard M-ID-GUARD-02)"
+    },
+    {
+      "id": "M-ID-FATAL-08",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            4689,
+            4689
+          ],
+          "anchor": "idDeclManagerLocal::FindTypeWithoutParsing",
+          "sha256": "6544289edce07739a1dba3e01be732ddc0b1e715583a7bc7e6ee29a132b718af"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "returns NULL, which LoadAndParse would dereference. Unreachable: registered types only (R4-2.11's crash case is closed by registering every type, D33)"
+    },
+    {
+      "id": "M-ID-FATAL-09",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            5290,
+            5290
+          ],
+          "anchor": "idDeclLocal::MakeDefault",
+          "sha256": "e88ba17858ef1d2a986dee1bc67c3d94eba07266da4f52f9cd0ed7d6ee4e5ba7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "recursion would go on past 100. Unreachable: every registered type's DefaultDefinition parses without MakeDefault (the default material of the malformed-decl test parses once); the counter is balanced"
+    },
+    {
+      "id": "M-ID-FATAL-10",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            259,
+            259
+          ],
+          "anchor": "idLexer::Error",
+          "sha256": "45c02517e4e5c08bf8c2f2ca80c571d4d58177b7b9c9c22ba59e29c83ffbb75c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "returns; the caller goes on as after a warning. Unreachable: every lexer of the copied paths sets LEXFL_NOFATALERRORS (DECL_LEXER_FLAGS, the stage shortcuts, the image programs), so the Warning branch runs"
+    },
+    {
+      "id": "M-ID-FATAL-11",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            1107,
+            1107
+          ],
+          "anchor": "idLexer::ReadToken",
+          "sha256": "972198484d9205ee9f3ba78947da2093017453cd393c3e897cb95b0c86cc70f1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "returns 0. Unreachable: every lexer is loaded before it is read"
+    },
+    {
+      "id": "M-ID-FATAL-12",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            1559,
+            1559
+          ],
+          "anchor": "idLexer::UnreadToken",
+          "sha256": "e8eb5214d44e84936ed3d83454ceef1b62f30cc16c4dcc3758240eff4d31a278"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "overwrites the pending token (memory-safe, one token lost). Not reached by any parse path: each unread is followed by a read"
+    },
+    {
+      "id": "M-ID-FATAL-13",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            2225,
+            2225
+          ],
+          "anchor": "idLexer::LoadFile",
+          "sha256": "29852e29ec3b22ddb9ea036a086a0f6e7818886844bd2409c9c7bd5b48ba2a5c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "returns false. Unreachable: LoadFile is never used (the file system opens no file)"
+    },
+    {
+      "id": "M-ID-FATAL-14",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            2285,
+            2285
+          ],
+          "anchor": "idLexer::LoadMemory",
+          "sha256": "4fe54a6ed16a99bd31cba5ff46362103c103741a10f76f681007b05bf129c2a9"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "returns false. Unreachable: every LoadMemory is on a fresh lexer"
+    },
+    {
+      "id": "M-ID-FATAL-15",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            743,
+            743
+          ],
+          "anchor": "idStr::Format",
+          "sha256": "d3ab15cfcd408b5c5a5f0be4dfd7ebced90a180d7cf23df6a0066c11ba82353c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "assigns the truncated, NUL-terminated text. Unreachable: vsnPrintf never returns < 0 here"
+    },
+    {
+      "id": "M-ID-FATAL-16",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            1962,
+            1962
+          ],
+          "anchor": "idStr::Append",
+          "sha256": "3cb07180360123f6b6ced4e3300f66b522fa44810cc1f94f2432f91320fcf1f9"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "Copynz warns 'destsize < 1' and returns. Unreachable: every writer of the buffers it appends to bounds through Copynz"
+    },
+    {
+      "id": "M-ID-FATAL-17",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            2398,
+            2398
+          ],
+          "anchor": "va_str",
+          "sha256": "c3ee5729ffb34b45c7be666b6ab7c4af18364a1d9459443b61a48006f59d1ad3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "returns the truncated, NUL-terminated text. Unreachable: vsnPrintf never returns < 0 here"
+    },
+    {
+      "id": "M-ID-FATAL-18",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/ImageManager.cpp",
+          "lines": [
+            444,
+            444
+          ],
+          "anchor": "idImageManager::ImageFromFile (mirrored)",
+          "sha256": "04d05d53d92fb6bf7e084fa148f2c3b7d8bea1c1c57767f91abcb37405d3303f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": true,
+      "afterReturn": "the comparison goes on: with matching filter, repeat and usage the existing record is returned, else a new one is made. Reached by one image named in a 2D and a cube stage (tested); the facade then reports that material's lookup as failed, every time"
+    },
+    {
+      "id": "M-ID-FATAL-19",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/ImageManager.cpp",
+          "lines": [
+            314,
+            314
+          ],
+          "anchor": "idImageManager::AllocImage (mirrored)",
+          "sha256": "85a1a09b5b4588ebd35cb0304a64877ff88cf82d299339d829b2a8ef46838d15"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "the record is made with the long name (idStr, safe). Unreachable through the copy: image names are cut to MAX_IMAGE_NAME - 1"
+    },
+    {
+      "id": "M-ID-FATAL-20",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            214,
+            214
+          ],
+          "anchor": "R_StaticAlloc (mirrored)",
+          "sha256": "a08726595e04fa49a76261fef35cda685edb96521a5ca540344f6028687f5732"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "returns NULL, which the caller would write to. Reached only when malloc fails"
+    },
+    {
+      "id": "M-ID-STATIC-01",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            37,
+            37
+          ],
+          "anchor": "r_useConstantMaterials",
+          "sha256": "6674e31832d8d0a5e0d4aef85274a64d4e0f938cd5d6701a3da8126ca0921ca5"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "constexpr idCVar: constant-initialised at its engine default \"1\", read-only"
+    },
+    {
+      "id": "M-ID-STATIC-02",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            77,
+            77
+          ],
+          "anchor": "r_forceSoundOpAmplitude",
+          "sha256": "978bdc3b900edc51728f7c4ce370ef8a5c9e66977e7dc0bfc72479115430dfcf"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "constexpr idCVar at \"0\", read-only"
+    },
+    {
+      "id": "M-ID-STATIC-03",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            320,
+            375
+          ],
+          "anchor": "infoParms, numInfoParms",
+          "sha256": "833c168e3034a4ffe68e4f6cd234c3600cbc6109c2d696328855fb3e428fc5f0"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "constant aggregate, read-only"
+    },
+    {
+      "id": "M-ID-STATIC-04",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3335,
+            3351
+          ],
+          "anchor": "opNames",
+          "sha256": "6be2c3af6ee292f122984a37fb93e4ebea7dca4b5f30abd4243e624b773ba132"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "constant strings, read-only (Print)"
+    },
+    {
+      "id": "M-ID-STATIC-05",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            455,
+            485
+          ],
+          "anchor": "predef_lightstyles, predef_lightstylesinfo",
+          "sha256": "2eb35f2c70c24739aed0e99d43f729da12aedc7a416e0459b139c51c51531eb6"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "file-static constant strings in each translation unit, read-only"
+    },
+    {
+      "id": "M-ID-STATIC-06",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_program.cpp",
+          "lines": [
+            302,
+            306
+          ],
+          "anchor": "factors (R_SmoothNormalMap)",
+          "sha256": "20dd6fbbc3f09f7e2a019bff105eeb48c0e8c902d1e1292408a5127ed4175062"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "function-local constant kernel, never written"
+    },
+    {
+      "id": "M-ID-STATIC-07",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_program.cpp",
+          "lines": [
+            432,
+            432
+          ],
+          "anchor": "parseBuffer",
+          "sha256": "6e8a5bda78f8171ac8a2e0fdc115660c4739ff65b82a625f39c223b25322b627"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "per-call scratch",
+      "reason": "cleared at the start of every R_ParsePastImageProgram and R_LoadImageProgram and read before the next; both run only on the parse thread (D32, R4-2.12)"
+    },
+    {
+      "id": "M-ID-STATIC-08",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            269,
+            269
+          ],
+          "anchor": "idDeclManagerLocal::decl_show",
+          "sha256": "60377730accc66444cc1f574136a082316a8ba5f9268fba677d42354049f5b9c"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "constexpr idCVar defined by the copied line 286, at \"0\""
+    },
+    {
+      "id": "M-ID-STATIC-09",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            686,
+            686
+          ],
+          "anchor": "c_savedMemory",
+          "sha256": "184f706b3b9bdd27b7fea53cc5db87ce2d10a06dfa733622b72c5af0ccf25346"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "constant-initialised int, never written by the copy"
+    },
+    {
+      "id": "M-ID-STATIC-10",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            5274,
+            5274
+          ],
+          "anchor": "recursionLevel (idDeclLocal::MakeDefault)",
+          "sha256": "a415950576215bdd457699ad9cb6d24a511dab06b99be4cf4662e0e343adfd25"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "balanced counter",
+      "reason": "incremented and decremented around each default parse; nothing throws or jumps through it (C17), so it is 0 between calls"
+    },
+    {
+      "id": "M-ID-STATIC-11",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            35,
+            108
+          ],
+          "anchor": "default_punctuations",
+          "sha256": "0676a072fba91a0a38a04e6b366f039918e3c63f8f9077d67fec2cb02971e0e8"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "constant aggregate"
+    },
+    {
+      "id": "M-ID-STATIC-12",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            110,
+            112
+          ],
+          "anchor": "default_punctuationtable, default_nextpunctuation, default_setup",
+          "sha256": "ca1daed68833e91040de3e49f66184c914e3ce6a865497e3ad0efbf92284de8a"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "zero-initialised, filled once by the first lexer (CreatePunctuationTable) with the same values every time; first use is on the parse thread (M17's race needs two threads)"
+    },
+    {
+      "id": "M-ID-STATIC-13",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            114,
+            114
+          ],
+          "anchor": "idLexer::baseFolder",
+          "sha256": "11c679c89604eba0a68a7d55610b834ba85b89029a1018420629828db3d36687"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "zero-initialised; only SetBaseFolder writes it, which the copy never calls"
+    },
+    {
+      "id": "M-ID-STATIC-14",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            37,
+            55
+          ],
+          "anchor": "g_color_table",
+          "sha256": "0e9bc887eb791049f2d6be10ca9b88493f85bc20766c1825c70072d7c8dacca9"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "16 idVec4, dynamically initialised at program load without allocating (copied Vector.h has no constexpr constructor); read-only"
+    },
+    {
+      "id": "M-ID-STATIC-15",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            57,
+            61
+          ],
+          "anchor": "units",
+          "sha256": "648cb49a01f99033443ea4445991a6e2000f3cd4617f58c1259a38ebe3bf44ef"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "constant strings"
+    },
+    {
+      "id": "M-ID-STATIC-16",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            2108,
+            2112
+          ],
+          "anchor": "trailingBytes (IsValidUTF8)",
+          "sha256": "10b22f1c06f02338e0d05097ab5e873e68708e129210cbc36a3ec04d4a275dbd"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "function-local constant"
+    },
+    {
+      "id": "M-ID-STATIC-17",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            2180,
+            2187
+          ],
+          "anchor": "trailingBytes, trailingMask (UTF8Char)",
+          "sha256": "076829bdc7db7b90c66c5d34526165de05e7b509c84b314d487d0af0682c388c"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "function-local constants"
+    },
+    {
+      "id": "M-ID-STATIC-18",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            2500,
+            2507
+          ],
+          "anchor": "formatList, numFormatList",
+          "sha256": "2dc26f63939b209f4bb4106d41660958604c5388c56f5b8e51d6bde90a991c86"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "constant aggregate"
+    },
+    {
+      "id": "M-ID-STATIC-19",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            2587,
+            2587
+          ],
+          "anchor": "testStrId_v (CONSOLE_COMMAND)",
+          "sha256": "77d146a442a61c3dc7f95da01cc3ec7a84565fe233bfe84c1c028c28168a4104"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "constexpr idCommandLink: constant-initialised, never registered or run"
+    },
+    {
+      "id": "M-ID-STATIC-20",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            32,
+            33
+          ],
+          "anchor": "idDict::globalKeys, idDict::globalValues",
+          "sha256": "c55bfbaf162491b7c61e82fe89931fe5dab4dd391f9d6d3b10b3c8ae34f7f3fb"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "idStrPool constructed at program load without allocating; reference-counted strings freed with their dicts; the registry runs idDict::Init at construction and idDict::Shutdown after the last dict is cleared, which frees the pools' arrays"
+    },
+    {
+      "id": "M-ID-STATIC-21",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/containers/HashIndex.cpp",
+          "lines": [
+            32,
+            32
+          ],
+          "anchor": "idHashIndex::INVALID_INDEX",
+          "sha256": "c9d49c3e170810c61dd72420c86f28c672439b13eac231f143a44625f8508789"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "constant { -1 }, the empty-hash sentinel, never written"
+    },
+    {
+      "id": "M-ID-STATIC-22",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Math.cpp",
+          "lines": [
+            32,
+            51
+          ],
+          "anchor": "SMALLEST_NON_DENORMAL, NAN_VALUE, idMath::PI ... FLT_SMALLEST_NON_DENORMAL",
+          "sha256": "63ce086a3d6b81c2bb33c6c1b934acd9e6f92aa0297c2c8e2d51db2c56f6212a"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "float constants; some are dynamically initialised from others in the same file at program load, without allocating; read-only"
+    },
+    {
+      "id": "M-ID-STATIC-23",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Math.cpp",
+          "lines": [
+            54,
+            65
+          ],
+          "anchor": "idMath::SIMD_SP_*",
+          "sha256": "e160b66f7e9a59d0a454a9ec6bde68467b43e30b5358edbb2d24b34c2393e788"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "__m128 constants, read-only"
+    },
+    {
+      "id": "M-ID-STATIC-24",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Math.cpp",
+          "lines": [
+            67,
+            68
+          ],
+          "anchor": "idMath::initialized, idMath::iSqrt",
+          "sha256": "8407f4cb597e5599ee7a6118790c8cf86440537779e3022d6fa0feeb6e989a79"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "zero-initialised; only idMath::Init fills them, which nothing calls (RSqrt is unused)"
+    },
+    {
+      "id": "M-ID-STATIC-25",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Math.cpp",
+          "lines": [
+            150,
+            150
+          ],
+          "anchor": "exponentSign (BitsToFloat)",
+          "sha256": "9a6b16136cb14068590c3129e2abe93737d600c3b0ba8724cb2a569285e56ac3"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "function-local constant"
+    },
+    {
+      "id": "M-ID-STATIC-26",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Vector.cpp",
+          "lines": [
+            33,
+            42
+          ],
+          "anchor": "vec2_one ... vec6_infinity",
+          "sha256": "309ade22d2f19634d8c0d548e9fac75f999a20fb926c4f1232f940a7e3a03cbf"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "dynamically initialised at program load without allocating; read-only"
+    },
+    {
+      "id": "M-ID-STATIC-27",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Matrix.cpp",
+          "lines": [
+            143,
+            144
+          ],
+          "anchor": "mat3_zero, mat3_identity",
+          "sha256": "18619cfafe2374190dbb2ef23b8148b32b5bd909c7e31de611ba8ac2f4a9975f"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "dynamically initialised at program load without allocating; read-only"
+    },
+    {
+      "id": "M-ID-STATIC-28",
+      "kind": "static",
+      "engine": [],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "idLib::sys, common, cvarSystem, fileSystem, frameNumber"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "common, cvarSystem, fileSystem, com_editors"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "globalImages, tbLitRenderProgManager, uiManager, game"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "declManager, tbLitDeclManagerLocal"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/Registry.cpp",
+          "symbol": "currentRegistry"
+        }
+      ],
+      "staticKind": "registry binding",
+      "reason": "the shim's globals: null pointers bound to the one registry at its construction and nulled at its destruction (C17, S6); com_editors is a constant 0. The shim's tables (BuiltinShaders, the intrinsic names, ImageFormats, NamedCVars) are constant"
+    },
+    {
+      "id": "M-ID-TEMP-01",
+      "kind": "temporary",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            994,
+            994
+          ],
+          "anchor": "R_LoadImage",
+          "sha256": "8820277e8a9d2b81e928f58a9bf209400c22b55635557c0ad2816c98349eb132"
+        },
+        {
+          "file": "neo/renderer/Image.h",
+          "lines": [
+            713,
+            713
+          ],
+          "anchor": "R_LoadImage declaration",
+          "sha256": "99271a1d2e10a542447531d382be306f25b2048cbf7523804e3cfa1b426b239c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "R_LoadImage"
+        }
+      ],
+      "note": "TEMPORARY until LP1c copies Image_files.cpp and its loaders behind the pre-validation (D51): a compile-only stub that returns no image and FILE_NOT_FOUND_TIMESTAMP. Only the image programs' pixel path (R_LoadImageProgram with a pic or timestamps) reaches it; the parse path never does"
+    },
+    {
+      "id": "M-ID-NC-01",
+      "kind": "not-copied",
+      "engine": [
+        {
+          "file": "neo/idlib/Heap.h",
+          "lines": [
+            70,
+            116
+          ],
+          "anchor": "global and tagged operator new/delete",
+          "sha256": "c2ecec79b98dcc1216ed778c2b2cc39b4a02ebc2aa68a9d5806560df41a604f3"
+        }
+      ],
+      "sinkbroom": [],
+      "note": "Heap.h's global new/delete replacement is never copied (M18); only its memTag_t block is (M-ID-PART), and the shim's tagged new forwards to ::operator new (M-ID-FN-09)"
+    },
+    {
+      "id": "M-ID-NC-02",
+      "kind": "not-copied",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            72,
+            73
+          ],
+          "anchor": "USE_COMPRESSED_DECLS, GET_HUFFMAN_FREQUENCIES",
+          "sha256": "f72930e279831ba95aebe1b1abef2fbb9112f1700c6d2aa3d616a212d95b4ecd"
+        }
+      ],
+      "sinkbroom": [],
+      "note": "left out, so the copied GetText and SetTextLocal keep uncompressed text (R5.10); all decl text is kept, its size reported by MaterialDecls::declTextBytes"
+    },
+    {
+      "id": "M-ID-NC-03",
+      "kind": "not-copied",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            291,
+            612
+          ],
+          "anchor": "Huffman decl text compression",
+          "sha256": "c02b41b8606952b954adc18b64be3e45cdebd0b01fed7d4e779d5bf9a1bbe8b8"
+        }
+      ],
+      "sinkbroom": [],
+      "note": "not needed without USE_COMPRESSED_DECLS"
+    },
+    {
+      "id": "M-ID-NC-04",
+      "kind": "not-copied",
+      "engine": [
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            117,
+            195
+          ],
+          "anchor": "TransferKeyValues, Parse( idParser& )",
+          "sha256": "7ccdc4d350768a1fab49891a3d90f38b3288adc0d2fe768e5b7c86c861ce91c8"
+        }
+      ],
+      "sinkbroom": [],
+      "note": "Dict.cpp is copied in ranges: TransferKeyValues, the idParser and idFile functions, Checksum (CRC32), RandomPrefix, Serialize and the ini and console functions are left out, so idParser, idFile I/O, CRC32 and idRandom stay out of the closure"
+    },
+    {
+      "id": "M-ID-NC-05",
+      "kind": "not-copied",
+      "engine": [
+        {
+          "file": "neo/idlib/LangDict.h",
+          "lines": [
+            48,
+            118
+          ],
+          "anchor": "idLangDict, idLocalization",
+          "sha256": "6488d2b5e6decb880dd31dbedc923c770ff08924c4f2ed8e4da7e37001f6b3ac"
+        }
+      ],
+      "sinkbroom": [],
+      "note": "not copied: it needs Heap.h's idDynamicBlockAlloc; the shim's idStrId serves Str.cpp's one never-run command"
+    },
+    {
+      "id": "M-ID-NC-06",
+      "kind": "not-copied",
+      "engine": [
+        {
+          "file": "neo/framework/DeclEntityDef.cpp",
+          "lines": [
+            146,
+            151
+          ],
+          "anchor": "game->CacheDictionaryMedia",
+          "sha256": "45f164c0f9d050668587cd6909ecdbac243ed0ec56db7cf66e962919441926f1"
+        }
+      ],
+      "sinkbroom": [],
+      "note": "copied, but the shim's game precaches nothing (com_editors 0): precaching only parses referenced decls earlier, which lookups parse lazily anyway"
+    },
+    {
+      "id": "M-ID-NC-07",
+      "kind": "not-copied",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            994,
+            994
+          ],
+          "anchor": "R_LoadImage and the image loaders",
+          "sha256": "8820277e8a9d2b81e928f58a9bf209400c22b55635557c0ad2816c98349eb132"
+        }
+      ],
+      "sinkbroom": [],
+      "note": "LP1c (with stb_image, tinyexr and format_r11g11b10f.h at the engine's versions)"
+    },
+    {
+      "id": "M-ID-GUARD-01",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1883,
+            1913
+          ],
+          "anchor": "idDeclManagerLocal::MakeNameCanonical",
+          "sha256": "3f0d6b85b0068a4dd27e174c85da50446441a525e55651a285d7159f56fac9a3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::lookup"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::entityDefKeys"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "tb::lit::shim::canonicalDeclName"
+        }
+      ],
+      "note": "MakeNameCanonical writes one byte past a MAX_STRING_CHARS buffer for a name of MAX_STRING_CHARS or more characters; the engine never passes one, but a map face might, so the facade refuses such names and canonicalName uses a buffer one byte longer"
+    },
+    {
+      "id": "M-ID-GUARD-02",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1427,
+            1450
+          ],
+          "anchor": "idDeclManagerLocal::DeclByIndex",
+          "sha256": "31030dbfd949094b561a0a24f40fdcfc96bf25bb1856d10e5a6e22dd4dfb80ce"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::evaluate"
+        }
+      ],
+      "note": "DeclByIndex reads past its list after reporting an out-of-range index; the facade checks an entry's index against GetNumDecls and its name before calling it"
     }
   ]
 }
