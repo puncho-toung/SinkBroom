@@ -74,9 +74,15 @@ target_compile_definitions(TbLitLib
 # turns /OPT:REF off, so the copied Str.cpp's six thread_local buffers stay in although
 # nothing calls their functions: 192 KB of static TLS in every thread (mirror.json
 # M-ID-BUILD-01). /OPT:REF drops the unreferenced functions and their TLS, as every Release
-# link without /DEBUG already does.
+# link without /DEBUG already does. An explicit /OPT:REF also folds identical functions
+# (/OPT:ICF) unless /OPT:NOICF is given; W.8 gives it, so that no two functions share an
+# address (cpptrace's frames from the stripped PDB, Qt's pointer-to-member comparisons).
 if(MSVC)
-  target_link_options(TbLitLib INTERFACE $<$<CONFIG:Release>:/OPT:REF>)
+  target_link_options(TbLitLib
+    INTERFACE
+      $<$<CONFIG:Release>:/OPT:REF>
+      $<$<CONFIG:Release>:/OPT:NOICF>
+  )
 endif()
 
 add_subdirectory(test)

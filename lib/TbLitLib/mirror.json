@@ -2432,6 +2432,10 @@
         {
           "file": "lib/TbLitLib/idtech/CMakeLists.txt",
           "symbol": "TbLitIdLib"
+        },
+        {
+          "file": "lib/TbLitLib/CMakeLists.txt",
+          "symbol": "target_link_options(TbLitLib INTERFACE ...)"
         }
       ],
       "cxxStandard": 17,
@@ -2469,7 +2473,19 @@
           "why": "the engine's optimised configurations (:220-222)"
         }
       ],
-      "tls": "the six thread_local buffers of the copied Str.cpp (M-ID-STATIC-30..35, three 4 x MAX_PRINT_MSG buffers, 192 KB) are static TLS in every thread of a binary that keeps them; the copy never calls their functions. dumpbin /tls, raw data (G12, 2026-10-21): TrenchBroom.exe Release before LP1a 0x273C, a Release link of the LP1a.2 state 0x3276C (+0x30030: kept, because TrenchBroom's Release link passes /DEBUG, which turns /OPT:REF off), TbUiLibTest Release 0x2891 (linked without /DEBUG, so /OPT:REF drops them), TbLitLibTest Debug 0x39DA4, TrenchBroom.exe Debug 0x3CAE3. Fix: TbLitLib passes /OPT:REF to every MSVC Release link that uses it (lib/TbLitLib/CMakeLists.txt); a Release TrenchBroom.exe linked with it has 0x273C again (and 20.0 MB instead of 41.5 MB, the unreferenced code of every library dropped). Debug keeps them: accepted",
+      "linkOptions": [
+        {
+          "name": "/OPT:REF",
+          "when": "MSVC Release links of every target that links TbLitLib, only with TB_ENABLE_LIT_PREVIEW (an INTERFACE option of the static TbLitLib: TbLitLibTest, and through TbUiLib the final links of TrenchBroom.exe, DumpShortcuts and TbUiLibTest)",
+          "why": "G12: TrenchBroom.exe's Release link passes /DEBUG (app/TrenchBroom/CMakeLists.txt), whose default is /OPT:NOREF, so the copied Str.cpp's six thread_local buffers (192 KB, M-ID-STATIC-30..35) stayed in its static TLS although nothing calls their functions. The other links have no /DEBUG and drop them already. It removes every library's unreferenced code from TrenchBroom.exe, not only Str.cpp's: the user decides whether that stays (14-LP1A-FIXES-2.md D); if not, the options go and the 192 KB are recorded as accepted"
+        },
+        {
+          "name": "/OPT:NOICF",
+          "when": "MSVC Release links of every target that links TbLitLib, only with TB_ENABLE_LIT_PREVIEW (an INTERFACE option of the static TbLitLib: TbLitLibTest, and through TbUiLib the final links of TrenchBroom.exe, DumpShortcuts and TbUiLibTest)",
+          "why": "W.8 (round 2): an explicit /OPT:REF also folds identical functions (/OPT:ICF) unless /OPT:NOICF is given. Folded functions share one address, so a cpptrace stack trace from the stripped PDB can name the folded twin, and pointer-to-member comparisons of identical bodies compare equal (Qt's PMF-based disconnect). NOICF keeps every function apart; in the links without /DEBUG it turns off the folding they had by default"
+        }
+      ],
+      "tls": "the six thread_local buffers of the copied Str.cpp (M-ID-STATIC-30..35, three 4 x MAX_PRINT_MSG buffers, 192 KB) are static TLS in every thread of a binary that keeps them; the copy never calls their functions. dumpbin /tls, raw data (G12, 2026-10-21): TrenchBroom.exe Release before LP1a 0x273C, a Release link of the LP1a.2 state 0x3276C (+0x30030: kept, because TrenchBroom's Release link passes /DEBUG, which turns /OPT:REF off), TbUiLibTest Release 0x2891 (linked without /DEBUG, so /OPT:REF drops them), TbLitLibTest Debug 0x39DA4, TrenchBroom.exe Debug 0x3CAE3. Fix (linkOptions): /OPT:REF /OPT:NOICF on every MSVC Release link that uses TbLitLib. Measured at round 2 (W.8): TrenchBroom.exe Release 0x273C and 21,978,112 bytes (with /OPT:REF alone, folding: 0x273C and 19,984,384 bytes; without either, 41.5 MB), TbUiLibTest Release 0x2891, TrenchBroom.exe Debug 0x3CAE3. Debug keeps the buffers: accepted",
       "notDefined": [
         {
           "name": "DMAP",
