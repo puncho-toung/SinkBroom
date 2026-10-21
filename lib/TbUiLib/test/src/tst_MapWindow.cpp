@@ -84,6 +84,10 @@
 #include "ui/SwitchableMapViewContainer.h"
 #include "ui/ToolSidebar.h"
 
+#ifdef TB_ENABLE_LIT_PREVIEW
+#include "ui/LitPreviewPanel.h"
+#endif
+
 #include "kd/invoke.h"
 #include "kd/ranges/contains.h"
 
@@ -112,6 +116,13 @@ namespace
 {
 
 const auto ToolSidebarExpandedKey = QString{"Windows/MapWindow_ToolSidebar/Expanded"};
+
+// the docks of the built-in panels; the lit preview's exists with its build switch only
+#ifdef TB_ENABLE_LIT_PREVIEW
+constexpr auto SidebarDockCount = qsizetype{8};
+#else
+constexpr auto SidebarDockCount = qsizetype{7};
+#endif
 
 const auto DockLayoutVersionKey = QString{"Windows/MapWindow/DockLayoutVersion"};
 const auto OldInspectorKey = QString{"Windows/Inspector/State"};
@@ -203,6 +214,9 @@ struct SidebarDocks
   QDockWidget* issues;
   QDockWidget* lightEditor;
   QDockWidget* prefabs;
+#ifdef TB_ENABLE_LIT_PREVIEW
+  QDockWidget* litPreview;
+#endif
 
   std::vector<QDockWidget*> inspectors() const { return {map, entity, face}; }
   std::vector<QDockWidget*> infoPanels() const { return {console, issues}; }
@@ -218,6 +232,9 @@ struct SidebarDocks
       face->toggleViewAction(),
       issues->toggleViewAction(),
       lightEditor->toggleViewAction(),
+#ifdef TB_ENABLE_LIT_PREVIEW
+      litPreview->toggleViewAction(),
+#endif
       map->toggleViewAction(),
       prefabs->toggleViewAction(),
     };
@@ -234,6 +251,9 @@ SidebarDocks findSidebarDocks(const MapWindow& window)
     window.findChild<QDockWidget*>("MapWindow_Sidebar_Issues"),
     window.findChild<QDockWidget*>("MapWindow_Sidebar_LightEditor"),
     window.findChild<QDockWidget*>("MapWindow_Sidebar_Prefabs"),
+#ifdef TB_ENABLE_LIT_PREVIEW
+    window.findChild<QDockWidget*>("MapWindow_Sidebar_LitPreview"),
+#endif
   };
   REQUIRE(docks.map != nullptr);
   REQUIRE(docks.entity != nullptr);
@@ -242,6 +262,9 @@ SidebarDocks findSidebarDocks(const MapWindow& window)
   REQUIRE(docks.issues != nullptr);
   REQUIRE(docks.lightEditor != nullptr);
   REQUIRE(docks.prefabs != nullptr);
+#ifdef TB_ENABLE_LIT_PREVIEW
+  REQUIRE(docks.litPreview != nullptr);
+#endif
   return docks;
 }
 
@@ -463,6 +486,10 @@ TEST_CASE("MapWindow")
     CHECK(qobject_cast<LightEditorPanel*>(docks.lightEditor->widget()) != nullptr);
     CHECK(docks.prefabs->windowTitle() == "Prefabs");
     CHECK(qobject_cast<PrefabPanel*>(docks.prefabs->widget()) != nullptr);
+#ifdef TB_ENABLE_LIT_PREVIEW
+    CHECK(docks.litPreview->windowTitle() == "Lit Preview");
+    CHECK(qobject_cast<LitPreviewPanel*>(docks.litPreview->widget()) != nullptr);
+#endif
 
     auto* viewMenu = findViewMenu(window);
     REQUIRE(viewMenu != nullptr);
@@ -501,12 +528,13 @@ TEST_CASE("MapWindow")
     // the docks as the tool sidebar and View > Sidebar list them, then the toolbars
     const auto toggleActions = docks.sortedToggleActions();
     const auto actions = menu->actions();
-    REQUIRE(actions.size() == 10);
+    REQUIRE(actions.size() == SidebarDockCount + 3);
     CHECK(
-      actions.mid(0, 7) == QList<QAction*>{toggleActions.begin(), toggleActions.end()});
-    CHECK(actions[7]->isSeparator());
-    CHECK(actions.mid(8).contains(toolBar->toggleViewAction()));
-    CHECK(actions.mid(8).contains(toolSidebar->toggleViewAction()));
+      actions.mid(0, SidebarDockCount)
+      == QList<QAction*>{toggleActions.begin(), toggleActions.end()});
+    CHECK(actions[SidebarDockCount]->isSeparator());
+    CHECK(actions.mid(SidebarDockCount + 1).contains(toolBar->toggleViewAction()));
+    CHECK(actions.mid(SidebarDockCount + 1).contains(toolSidebar->toggleViewAction()));
   }
 
   SECTION("the tool sidebar has a button for each sidebar dock")
@@ -524,11 +552,19 @@ TEST_CASE("MapWindow")
     CHECK(toolSidebar->entries() == toggleActions);
     for (const auto* action : toggleActions)
     {
+#ifdef TB_ENABLE_LIT_PREVIEW
+      // the lit preview has no icon, so its button shows its title
+      if (action == docks.litPreview->toggleViewAction())
+      {
+        CHECK(action->icon().isNull());
+        continue;
+      }
+#endif
       CHECK(!action->icon().isNull());
     }
 
     const auto actions = toolSidebar->actions();
-    REQUIRE(actions.size() == 9);
+    REQUIRE(actions.size() == SidebarDockCount + 2);
     CHECK(actions.front() == toggleActions.front());
     CHECK(actions.back() == toolSidebar->expandAction());
 
@@ -546,7 +582,9 @@ TEST_CASE("MapWindow")
 
     // collapsing takes the buttons out of the strip, not out of View > Sidebar
     toolSidebar->setExpanded(false);
-    CHECK(toolSidebar->actions() == QList<QAction*>{actions[7], actions[8]});
+    CHECK(
+      toolSidebar->actions()
+      == QList<QAction*>{actions[SidebarDockCount], actions[SidebarDockCount + 1]});
     CHECK(toggleAction->isVisible());
 
     CHECK(

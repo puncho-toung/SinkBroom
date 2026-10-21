@@ -133,6 +133,10 @@
 #include "ui/WidgetState.h"
 #include "update/Updater.h"
 
+#ifdef TB_ENABLE_LIT_PREVIEW
+#include "ui/LitPreviewPanel.h"
+#endif
+
 #include "kd/const_overload.h"
 #include "kd/contracts.h"
 #include "kd/k.h"
@@ -694,6 +698,14 @@ void MapWindow::createGui()
     contract_assert(prefabPanel != nullptr);
     prefabPanel->setPlacementEnabled(false);
     m_mapView->toolBox().createPrefabTool().setPlacementEnabled(false);
+
+#ifdef TB_ENABLE_LIT_PREVIEW
+    // D29: no lit preview in a prefab editor
+    auto* litPreviewPanel =
+      qobject_cast<LitPreviewPanel*>(m_sidebarManager->panel(LitPreviewPanel::PanelId));
+    contract_assert(litPreviewPanel != nullptr);
+    litPreviewPanel->setPrefabEditor(true);
+#endif
   }
 
   // the constructor makes the console the document's logger

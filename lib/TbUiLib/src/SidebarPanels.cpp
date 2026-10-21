@@ -28,6 +28,10 @@
 #include "ui/PrefabPanel.h"
 #include "ui/SidebarPanel.h"
 
+#ifdef TB_ENABLE_LIT_PREVIEW
+#include "ui/LitPreviewPanel.h"
+#endif
+
 namespace tb::ui
 {
 
@@ -44,6 +48,9 @@ std::vector<std::unique_ptr<SidebarPanel>> createSidebarPanels(
   panels.push_back(std::make_unique<IssueBrowser>(context.document));
   panels.push_back(std::make_unique<LightEditorPanel>(context));
   panels.push_back(std::make_unique<PrefabPanel>(context));
+#ifdef TB_ENABLE_LIT_PREVIEW
+  panels.push_back(std::make_unique<LitPreviewPanel>(context));
+#endif
   // add future panels here, one line each
   return panels;
 }
