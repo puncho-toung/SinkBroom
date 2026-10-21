@@ -17,6 +17,18 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+// ---- engine notice ----
+// Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
+// GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderProgs.cpp,
+// renderer/NVRHI/RenderProgs_NVRHI.cpp, renderer/ImageManager.cpp and
+// renderer/Image_intrinsic.cpp):
+//   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
+//   Copyright (C) 2013-2025 Robert Beckebans
+//   Copyright (C) 2022 Stephen Pridham
+// That code is also subject to the additional terms that follow the GNU General
+// Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
+// ---- end of engine notice ----
+
 // The renderer services for the copied code: image records keyed as the engine keys them,
 // the render program lists, the R_LoadImage stub, cinematic and GUI dummies, and the
 // game.
@@ -432,9 +444,9 @@ idRenderProgManager::idRenderProgManager()
   // RenderProgs.cpp:393 for the one layout the copied stage parser names: rpNominalSet8
   // (RenderProgs.h:286) holds 13 vec4s, 208 bytes, against the push-constant limit
   // DeviceManager_VK.cpp:1381 sets, min(device limit, nvrhi::c_MaxPushConstantSize). The
-  // device is unknown here, so the limit is NVRHI's own, 256 outside Apple. The value only
-  // reaches the macro list the copied code passes to FindShader, which FindShader ignores;
-  // LP2 applies the engine's rule per device when it picks blob permutations.
+  // device is unknown here, so the limit is NVRHI's own, 256 outside Apple. The value
+  // only reaches the macro list the copied code passes to FindShader, which FindShader
+  // ignores; LP2 applies the engine's rule per device when it picks blob permutations.
   constexpr auto rpBufSize = 13 * 16;
   constexpr auto maxPushConstantSize = 256;
   layoutTypeAttributes[BINDING_LAYOUT_POST_PROCESS_INGAME].pcEnabled =

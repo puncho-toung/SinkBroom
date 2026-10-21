@@ -91,7 +91,8 @@ Font Awesome 5 Free (Icons)<br />)");
   creditsText->setText(
     creditsText->text()
     + tr("NVRHI (Rendering hardware interface)<br />"
-         "Vulkan-Headers (Vulkan API headers)<br />"));
+         "Vulkan-Headers (Vulkan API headers)<br />"
+         "RBDOOM-3-BFG / Doom 3 BFG Edition GPL Source Code (material parser)<br />"));
 #endif
   creditsText->setWordWrap(true);
   creditsText->setMaximumWidth(300);

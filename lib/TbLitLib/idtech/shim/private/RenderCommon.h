@@ -17,6 +17,18 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+// ---- engine notice ----
+// Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
+// GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderProgs.h and
+// renderer/tr_frontend_main.cpp):
+//   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
+//   Copyright (C) 2013-2023 Robert Beckebans
+//   Copyright (C) 2016-2017 Dustin Land
+//   Copyright (C) 2022 Stephen Pridham
+// That code is also subject to the additional terms that follow the GNU General
+// Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
+// ---- end of engine notice ----
+
 #pragma once
 
 // Stands in for the engine's renderer/RenderCommon.h, which the copied Material.cpp and
