@@ -48,7 +48,7 @@ jobs:
           extensions: 'c,h,C,H,cpp,hpp,cc,hh,c++,h++,cxx,hxx,fragsh,vertsh'
           files-changed-only: true
           database: ${{github.workspace}}/build
-          ignore: 'build'
+          ignore: 'build|lib/TbLitLib/idtech/engine'
           ignore-tidy: 'app/TrenchBroom/resources/shader'
           step-summary: true
           thread-comments: true

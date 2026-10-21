@@ -1,0 +1,316 @@
+/*
+ Copyright (C) 2026 TrenchBroom contributors
+
+ This file is part of TrenchBroom.
+
+ TrenchBroom is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ TrenchBroom is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+// The facade over the engine's material parser in TbLitIdLib (D12, C7). It uses standard
+// types only: no id type and no id macro reaches a file that includes it. It compiles as
+// C++17 and C++20.
+//
+// Threading: every member of MaterialDecls is single-threaded, and it must stay on one
+// thread for its whole life, because the copied engine code it drives is bound to process
+// globals. LP1a.2 confines every MaterialDecls to the parse thread (D32); other threads
+// see only the immutable MaterialEntry values it returns. At most one MaterialDecls
+// exists at a time (C17).
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace tb::lit
+{
+namespace shim
+{
+class Registry;
+}
+
+// The game files the registry reads decl text from. It answers the two questions the
+// engine's file system answers for the decl manager: the files of a folder with an
+// extension (idFileSystem::ListFiles, flat, names relative to the folder) and a file's
+// text and time (idFileSystem::ReadFile). LP1a.2 implements it with the game-file search.
+class DeclSource
+{
+public:
+  virtual ~DeclSource();
+
+  // the names of the files in folder ending in extension (".mtr"), relative to folder, in
+  // any order and without duplicates; the registry sorts them as the engine does
+  virtual std::vector<std::string> listFiles(
+    const std::string& folder, const std::string& extension) const = 0;
+
+  // the file's bytes and its time, or nullopt when it cannot be read; path is relative to
+  // the game folder ("materials/base_wall.mtr")
+  virtual std::optional<std::string> readFile(
+    const std::string& path, std::int64_t* timestamp) const = 0;
+};
+
+// one decl file held in memory
+struct DeclFile
+{
+  std::string path;
+  // nullopt makes the file listed but unreadable
+  std::optional<std::string> text;
+  std::int64_t timestamp = 0;
+};
+
+// decl text given in memory (LP1a.1 and the tests)
+class MemoryDeclSource : public DeclSource
+{
+public:
+  explicit MemoryDeclSource(std::vector<DeclFile> files);
+
+  std::vector<std::string> listFiles(
+    const std::string& folder, const std::string& extension) const override;
+  std::optional<std::string> readFile(
+    const std::string& path, std::int64_t* timestamp) const override;
+
+private:
+  std::vector<DeclFile> m_files;
+};
+
+enum class DeclMessageKind
+{
+  // idCommon::Printf
+  Info,
+  // idCommon::Warning and idLexer::Warning (developer prints and warnings are dropped, as
+  // at com_developer 0)
+  Warning,
+  // idCommon::Error: the engine would have stopped the frame here
+  Error,
+  // idCommon::FatalError: the engine would have quit here
+  FatalError,
+  // a failed assert in the copied code
+  Assert,
+};
+
+struct DeclMessage
+{
+  DeclMessageKind kind;
+  std::string text;
+};
+
+// An image as a material stage names it: the key of the engine's image record
+// (ImageManager.cpp's ImageFromFile). The integers are the engine's enum values, which
+// the cache name uses as is (#__UUCC).
+struct MaterialImageKey
+{
+  std::string name;
+  // textureUsage_t, e.g. 1 = TD_DIFFUSE, 3 = TD_BUMP, 12 = TD_SPECULAR_PBR_RMAO
+  int usage = 0;
+  // textureFilter_t: 0 = TF_LINEAR, 1 = TF_NEAREST, 2 = TF_NEAREST_MIPMAP, 3 = TF_DEFAULT
+  int filter = 0;
+  // textureRepeat_t: 0 = TR_REPEAT, 1 = TR_CLAMP, 2 = TR_CLAMP_TO_ZERO, 3 =
+  // ..._ZERO_ALPHA
+  int repeat = 0;
+  // cubeFiles_t: 0 = CF_2D, 1 = CF_NATIVE, 2 = CF_CAMERA, ...
+  int cube = 0;
+  int cubeMapSize = 0;
+  // the engine's intrinsic image of this name (created by CreateIntrinsicImages)
+  bool intrinsic = false;
+  // globalImages->defaultImage
+  bool isDefault = false;
+
+  bool operator==(const MaterialImageKey& other) const;
+  bool operator!=(const MaterialImageKey& other) const;
+};
+
+// one shaderStage_t of an idMaterial
+struct MaterialStage
+{
+  // stageLighting_t: 0 = SL_AMBIENT, 1 = SL_BUMP, 2 = SL_DIFFUSE, 3 = SL_SPECULAR,
+  // 4 = SL_COVERAGE
+  int lighting = 0;
+  // the GLS_* state bits (blend, alpha, depth func, masks, polygon offset, ...)
+  std::uint64_t drawStateBits = 0;
+  // register indices: skip the stage when registers[conditionRegister] == 0
+  int conditionRegister = 0;
+  std::array<int, 4> colorRegisters{};
+  bool hasAlphaTest = false;
+  int alphaTestRegister = 0;
+  bool ignoreAlphaTest = false;
+  // stageVertexColor_t: 0 = SVC_IGNORE, 1 = SVC_MODULATE, 2 = SVC_INVERSE_MODULATE
+  int vertexColor = 0;
+  float privatePolygonOffset = 0.0f;
+
+  // the stage image, or nullopt for a stage without one (cinematic, dynamic, program)
+  std::optional<MaterialImageKey> image;
+  // texgen_t: 0 = TG_EXPLICIT, 1 = TG_DIFFUSE_CUBE, 2 = TG_REFLECT_CUBE, ...
+  int texgen = 0;
+  bool hasTextureMatrix = false;
+  // register indices of the 2x3 texture matrix
+  std::array<std::array<int, 3>, 2> textureMatrixRegisters{};
+  // dynamicidImage_t, and the size of a dynamic image
+  int dynamicImage = 0;
+  int dynamicWidth = 0;
+  int dynamicHeight = 0;
+  // the file a videomap or soundmap stage names, or ""
+  std::string cinematic;
+  bool soundMap = false;
+
+  // the stage has a newShaderStage_t: a program, vertexParm or fragmentMap stage
+  bool newStage = false;
+  // the program names FindShader was given, or "" when the stage names none
+  std::string vertexProgram;
+  std::string fragmentProgram;
+  // register indices of the vertex parms, and the fragment-map images
+  std::vector<std::array<int, 4>> vertexParms;
+  std::vector<std::optional<MaterialImageKey>> fragmentImages;
+
+  bool hasStencil = false;
+};
+
+// one parsed idMaterial: plain data, no id pointer (D32)
+struct MaterialEntry
+{
+  // the decl's canonical name
+  std::string name;
+  // the decl file the text came from, or "<implicit file>" for an implicit material
+  std::string sourceFile;
+  int sourceLine = 0;
+  // the decl's index among the registry's materials
+  int index = -1;
+  // the name had no decl; the engine generated the text (idMaterial::SetDefaultText)
+  bool implicit = false;
+  // DS_DEFAULTED: the parse failed and MakeDefault replaced the material with the default
+  // definition
+  bool defaulted = false;
+
+  // materialFlags_t bits
+  int materialFlags = 0;
+  int contentFlags = 0;
+  int surfaceFlags = 0;
+  // materialSort_t values or an explicit sort number
+  float sort = 0.0f;
+  // materialCoverage_t: 0 = MC_BAD, 1 = MC_OPAQUE, 2 = MC_PERFORATED, 3 = MC_TRANSLUCENT
+  int coverage = 0;
+  // cullType_t: 0 = CT_FRONT_SIDED, 1 = CT_BACK_SIDED, 2 = CT_TWO_SIDED
+  int cullType = 0;
+  float polygonOffset = 0.0f;
+  // deform_t, its registers and the particle decl a particle deform names
+  int deform = 0;
+  std::array<int, 4> deformRegisters{};
+  std::string deformDecl;
+  int spectrum = 0;
+  bool fogLight = false;
+  bool blendLight = false;
+  bool ambientLight = false;
+  bool receivesFog = false;
+  bool portalSky = false;
+  bool hasSubview = false;
+  bool receivesLighting = false;
+  bool surfaceCastsShadow = false;
+  int entityGui = 0;
+  std::string gui;
+  std::optional<MaterialImageKey> lightFalloffImage;
+  std::optional<MaterialImageKey> fastPathBumpImage;
+  std::optional<MaterialImageKey> fastPathDiffuseImage;
+  std::optional<MaterialImageKey> fastPathSpecularImage;
+
+  int numRegisters = 0;
+  // the registers are constant (CheckForConstantRegisters kept them)
+  bool constantRegisters = false;
+  bool hasAmbient = false;
+  std::vector<MaterialStage> stages;
+};
+
+// the expression registers idMaterial::EvaluateRegisters filled in
+struct EvaluatedRegisters
+{
+  std::vector<float> registers;
+};
+
+// a value, or the error the engine would have stopped at
+template <typename T>
+struct DeclResult
+{
+  std::optional<T> value;
+  std::string error;
+
+  explicit operator bool() const { return value.has_value(); }
+};
+
+// The decl registry around the copied parser. Constructing it reads every decl folder the
+// engine reads, in the engine's order, through the source; parsing is lazy, as in the
+// engine. Unknown material names get the engine's implicit material.
+class MaterialDecls
+{
+public:
+  // the number of entity shaderParms (MAX_ENTITY_SHADER_PARMS)
+  static constexpr int ShaderParmCount = 12;
+
+  // source must outlive this object
+  explicit MaterialDecls(const DeclSource& source);
+  ~MaterialDecls();
+
+  MaterialDecls(const MaterialDecls&) = delete;
+  MaterialDecls& operator=(const MaterialDecls&) = delete;
+
+  // non-empty when the registry could not be built (another one exists)
+  const std::string& constructionError() const;
+
+  // the material of this name: its decl, or the implicit material the engine makes for a
+  // name without one; an error when its parse reached an engine Error or FatalError,
+  // where the engine would not have returned (then on every later lookup too)
+  DeclResult<std::shared_ptr<const MaterialEntry>> lookup(std::string_view name);
+
+  // idMaterial::EvaluateRegisters with these entity shaderParms, global shaderParms of 0,
+  // the time in seconds and no sound emitter
+  DeclResult<EvaluatedRegisters> evaluate(
+    const MaterialEntry& material,
+    const std::array<float, ShaderParmCount>& shaderParms,
+    float time);
+
+  // the engine's canonical decl name (DeclManager.cpp's MakeNameCanonical): lowercase,
+  // backslashes to slashes, cut at the last dot
+  static std::string canonicalName(std::string_view name);
+
+  // the number of decls of each kind the registry holds
+  int materialCount() const;
+  int tableCount() const;
+  int entityDefCount() const;
+
+  // the merged keys of an entityDef, inherited ones included, in the dict's order
+  DeclResult<std::vector<std::pair<std::string, std::string>>> entityDefKeys(
+    std::string_view name);
+
+  // the bytes of decl text the registry keeps (all decl types, R5.10)
+  std::size_t declTextBytes() const;
+
+  // the messages the copied code reported, oldest first
+  const std::vector<DeclMessage>& messages() const;
+  std::vector<DeclMessage> takeMessages();
+
+private:
+  std::string m_constructionError;
+  std::vector<DeclMessage> m_constructionMessages;
+  std::unique_ptr<shim::Registry> m_registry;
+  // the entries handed out so far, by material index; a material is parsed once
+  std::vector<std::shared_ptr<const MaterialEntry>> m_materials;
+  // the engine error a material's parse reached, by material index; the half-parsed
+  // material is never handed out
+  std::vector<std::string> m_failures;
+};
+
+} // namespace tb::lit

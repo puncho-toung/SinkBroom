@@ -1,0 +1,225 @@
+/*
+ Copyright (C) 2026 TrenchBroom contributors
+
+ This file is part of TrenchBroom.
+
+ TrenchBroom is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ TrenchBroom is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+// Stands in for the engine's renderer/RenderCommon.h, which the copied Material.cpp and
+// Image_program.cpp include by this name, so that those files stay byte-identical (S23).
+// It holds the image records and image manager, the render program indices, the static
+// allocators and the view fields the copied code reads.
+
+// included at the end of precompiled.h, as the engine includes it
+#include "renderer/GLState.h"
+#include "renderer/Image.h"
+
+// renderer/Image.h's idImage, reduced to what a material keeps: the record ImageFromFile
+// keys on. No pixels are ever loaded.
+class idImage
+{
+public:
+  explicit idImage(const char* name);
+
+  const char* GetName() const { return imgName; }
+
+  // whether loading fell back to the default image; nothing is loaded here. Only
+  // idMaterial::GetEditorImage asks, and only when fs_copyfiles is set, which it never
+  // is.
+  bool IsDefaulted() const { return false; }
+
+  idStr imgName;
+  textureFilter_t filter = TF_DEFAULT;
+  textureRepeat_t repeat = TR_REPEAT;
+  textureUsage_t usage = TD_DEFAULT;
+  cubeFiles_t cubeFiles = CF_2D;
+  int cubeMapSize = 0;
+
+  // created by CreateIntrinsicImages through ImageFromFunction
+  bool intrinsic = false;
+};
+
+// renderer/Image.h's idImageManager, reduced to the image registry: ImageFromFile and
+// AllocImage mirror ImageManager.cpp, and the intrinsic records mirror
+// Image_intrinsic.cpp's CreateIntrinsicImages (see mirror.json).
+class idImageManager
+{
+public:
+  idImageManager();
+  ~idImageManager();
+
+  idImageManager(const idImageManager&) = delete;
+  idImageManager& operator=(const idImageManager&) = delete;
+
+  idImage* ImageFromFile(
+    const char* name,
+    textureFilter_t filter,
+    textureRepeat_t repeat,
+    textureUsage_t usage,
+    cubeFiles_t cubeMap = CF_2D,
+    int cubeMapSize = 0);
+
+  idImage* ImageFromFunction(const char* name);
+  idImage* AllocImage(const char* name);
+
+  // creates the intrinsic records, as CreateIntrinsicImages
+  void Init();
+
+  // frees every record (R5.11: after all decls, before the GUI dummies)
+  void Shutdown();
+
+  int NumImages() const { return images.Num(); }
+  const idImage* ImageByIndex(int index) const { return images[index]; }
+
+  // the intrinsics the copied code names
+  idImage* defaultImage = nullptr;
+  idImage* whiteImage = nullptr;
+  idImage* blackImage = nullptr;
+  idImage* flatNormalMap = nullptr;
+  idImage* currentRenderImage = nullptr;
+  idImage* originalCurrentRenderImage = nullptr;
+
+  idList<idImage*, TAG_IDLIB_LIST_IMAGE> images;
+  idHashIndex imageHash;
+
+  // never set: the registry is never inside a level load
+  bool insideLevelLoad = false;
+  bool preloadingMapImages = false;
+
+private:
+  void CreateIntrinsicImages();
+};
+
+extern idImageManager* globalImages;
+
+// renderer/RenderProgs.h, as far as the copied stage parser reaches it
+
+// RenderProgs.h:320-327
+enum rpStage_t
+{
+  SHADER_STAGE_VERTEX = BIT(0),
+  SHADER_STAGE_FRAGMENT = BIT(1),
+  SHADER_STAGE_COMPUTE = BIT(2), // RB: for future use
+
+  SHADER_STAGE_DEFAULT = SHADER_STAGE_VERTEX | SHADER_STAGE_FRAGMENT
+};
+
+// only the layouts the copied code names; their values are indices into the shim's
+// attribute table, not the engine's
+enum vertexLayoutType_t
+{
+  LAYOUT_UNKNOWN = 0,
+  LAYOUT_DRAW_VERT,
+};
+
+enum bindingLayoutType_t
+{
+  BINDING_LAYOUT_POST_PROCESS_INGAME,
+  NUM_BINDING_LAYOUTS
+};
+
+// RenderProgs.h:368-383
+struct shaderMacro_t
+{
+  idStr name;
+  idStr definition;
+
+  shaderMacro_t()
+    : name()
+    , definition()
+  {
+  }
+
+  shaderMacro_t(const idStr& _name, const idStr& _definition)
+    : name(_name)
+    , definition(_definition)
+  {
+  }
+};
+
+// The shader and program lists of renderer/RenderProgs.cpp: FindShader and FindProgram
+// search and append as the engine does, starting from the builtin table, so a user shader
+// gets the non-zero index the engine gives it. Nothing is compiled or loaded.
+class idRenderProgManager
+{
+public:
+  idRenderProgManager();
+
+  int FindShader(
+    const char* name,
+    rpStage_t stage,
+    const char* nameOutSuffix,
+    const idList<shaderMacro_t>& macros,
+    bool builtin,
+    vertexLayoutType_t vertexLayout = LAYOUT_DRAW_VERT);
+  int FindProgram(
+    const char* name, int vIndex, int fIndex, bindingLayoutType_t bindingType);
+
+  // the shader name FindShader stored at this index, or "" for an index out of range
+  const char* ShaderName(int index) const;
+
+  struct layoutTypeAttributes_t
+  {
+    bool pcEnabled = false;
+  };
+
+  layoutTypeAttributes_t layoutTypeAttributes[NUM_BINDING_LAYOUTS];
+
+  struct shader_t
+  {
+    idStr name;
+    idStr nameOutSuffix;
+    rpStage_t stage = SHADER_STAGE_DEFAULT;
+    bool builtin = false;
+  };
+
+  struct renderProg_t
+  {
+    idStr name;
+    int vertexShaderIndex = -1;
+    int fragmentShaderIndex = -1;
+    int computeShaderIndex = -1;
+    bindingLayoutType_t bindingLayoutType = BINDING_LAYOUT_POST_PROCESS_INGAME;
+    bool builtin = false;
+  };
+
+  idList<shader_t, TAG_RENDER> shaders;
+  idList<renderProg_t, TAG_RENDER> renderProgs;
+};
+
+extern idRenderProgManager* tbLitRenderProgManager;
+
+// The engine's renderProgManager is an object; the copied code names it with a dot, so
+// the name refers to the registry's instance (C17: globals bound to the one registry).
+#define renderProgManager (*tbLitRenderProgManager)
+
+// RenderCommon.h:1556-1558, on Mem_Alloc and Mem_Free (S25)
+void* R_StaticAlloc(int bytes, const memTag_t tag = TAG_RENDER_STATIC);
+void* R_ClearedStaticAlloc(int bytes);
+void R_StaticFree(void* data);
+
+// renderer/RenderWorld.h and RenderCommon.h: the only view field the copied code reads is
+// renderView.shaderParms, in CheckForConstantRegisters, after a memset to zero
+struct renderView_t
+{
+  float shaderParms[MAX_GLOBAL_SHADER_PARMS];
+};
+
+struct viewDef_t
+{
+  renderView_t renderView;
+};

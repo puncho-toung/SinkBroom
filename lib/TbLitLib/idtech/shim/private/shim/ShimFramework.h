@@ -1,0 +1,205 @@
+/*
+ Copyright (C) 2026 TrenchBroom contributors
+
+ This file is part of TrenchBroom.
+
+ TrenchBroom is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ TrenchBroom is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+// The framework layer of the engine's precompiled.h: the command, cvar, common and file
+// system interfaces the copied files call, then the copied decl headers. The enums,
+// typedefs and macros come from verbatim header ranges; the classes are SinkBroom's and
+// declare only the members the copied code calls.
+
+// command system (framework/CmdSystem.h)
+class idCommandLink;
+#include "framework/CmdSystem.h"
+
+// constexpr, so the copied CONSOLE_COMMANDs are constant-initialised and register nothing
+// when the program starts (S27, C9)
+class idCommandLink
+{
+public:
+  constexpr idCommandLink(
+    const char* cmdName,
+    cmdFunction_t function,
+    const char* description,
+    argCompletion_t argCompletion = NULL)
+    : next{nullptr}
+    , cmdName_{cmdName}
+    , function_{function}
+    , description_{description}
+    , argCompletion_{argCompletion}
+  {
+  }
+
+  idCommandLink* next;
+  const char* cmdName_;
+  cmdFunction_t function_;
+  const char* description_;
+  argCompletion_t argCompletion_;
+};
+
+class idCmdSystem
+{
+public:
+  // CmdSystem.h:218-224; named by idDeclManagerLocal::decl_show, never called
+  template <int min, int max>
+  static void ArgCompletion_Integer(
+    const idCmdArgs& args, void (*callback)(const char* s))
+  {
+    for (int i = min; i <= max; i++)
+    {
+      callback(va("%s %d", args.Argv(0), i));
+    }
+  }
+};
+
+// cvars (framework/CVarSystem.h)
+#include "framework/CVarSystem.h"
+
+// A cvar at its engine default (D21). The constructors are constexpr, so the copied
+// globals (r_useConstantMaterials, r_forceSoundOpAmplitude, decl_show) allocate and
+// register nothing (S27). The getters follow idInternalCVar::UpdateValue's conversions.
+class idCVar
+{
+public:
+  constexpr idCVar(
+    const char* name,
+    const char* value,
+    int flags,
+    const char* description,
+    argCompletion_t valueCompletion = NULL)
+    : m_name{name}
+    , m_value{value}
+    , m_flags{flags}
+    , m_description{description}
+    , m_valueMin{1.0f}
+    , m_valueMax{-1.0f}
+  {
+    (void)valueCompletion;
+  }
+
+  constexpr idCVar(
+    const char* name,
+    const char* value,
+    int flags,
+    const char* description,
+    float valueMin,
+    float valueMax,
+    argCompletion_t valueCompletion = NULL)
+    : m_name{name}
+    , m_value{value}
+    , m_flags{flags}
+    , m_description{description}
+    , m_valueMin{valueMin}
+    , m_valueMax{valueMax}
+  {
+    (void)valueCompletion;
+  }
+
+  const char* GetName() const { return m_name; }
+  const char* GetString() const { return m_value; }
+  int GetFlags() const { return m_flags; }
+
+  bool GetBool() const { return GetInteger() != 0; }
+  int GetInteger() const;
+  float GetFloat() const;
+
+private:
+  const char* m_name;
+  const char* m_value;
+  int m_flags;
+  const char* m_description;
+  float m_valueMin;
+  float m_valueMax;
+};
+
+class idCVarSystem
+{
+public:
+  // the integer value of a cvar the copied code names but does not declare, at its engine
+  // default; 0 for an unknown name, as the engine's GetCVarInteger
+  int GetCVarInteger(const char* name) const;
+};
+
+extern idCVarSystem* cvarSystem;
+
+// common (framework/Common.h)
+#include "framework/Common.h"
+
+// Collects messages into the bound registry's list. Error and FatalError log and return
+// (C17); FatalError and Error sites and what the copied code does after them are listed
+// in mirror.json.
+class idCommon
+{
+public:
+  void Printf(const char* fmt, ...);
+  void DPrintf(const char* fmt, ...);
+  void Warning(const char* fmt, ...);
+  void DWarning(const char* fmt, ...);
+  void Error(const char* fmt, ...);
+  void FatalError(const char* fmt, ...);
+};
+
+extern idCommon* common;
+
+// file system (framework/FileSystem.h)
+#include "framework/FileSystem.h"
+
+// the members of framework/File.h's idFile that the copied code calls
+class idFile
+{
+public:
+  virtual ~idFile() = default;
+
+  virtual const char* GetFullPath() const = 0;
+  virtual int Read(void* buffer, int len) = 0;
+  virtual int Length() const = 0;
+  virtual ID_TIME_T Timestamp() const = 0;
+};
+
+// the members of framework/FileSystem.h's idFileSystem that the copied code calls
+class idFileSystem
+{
+public:
+  virtual ~idFileSystem() = default;
+
+  virtual idFileList* ListFiles(
+    const char* relativePath,
+    const char* extension,
+    bool sort = false,
+    bool fullRelativePath = false,
+    const char* gamedir = NULL) = 0;
+  virtual void FreeFileList(idFileList* fileList) = 0;
+  virtual int ReadFile(
+    const char* relativePath, void** buffer, ID_TIME_T* timestamp = NULL) = 0;
+  virtual void FreeFile(void* buffer) = 0;
+  virtual idFile* OpenFileRead(
+    const char* relativePath, bool allowCopyFiles = true, const char* gamedir = NULL) = 0;
+  virtual idFile* OpenExplicitFileRead(const char* OSPath) = 0;
+  virtual void CloseFile(idFile* f) = 0;
+};
+
+extern idFileSystem* fileSystem;
+
+// decls
+// clang-format off: the order is the engine's precompiled.h order
+#include "framework/DeclManager.h"
+#include "framework/DeclTable.h"
+#include "framework/DeclSkin.h"
+#include "framework/DeclEntityDef.h"
+// clang-format on

@@ -1,5 +1,9 @@
 # The lit preview's renderer on NVRHI's Vulkan backend. It is Qt-free (D28) and built only
 # with TB_ENABLE_LIT_PREVIEW.
+
+# the engine's material parser, copied verbatim, behind a std-only facade (D12, D31)
+add_subdirectory(idtech)
+
 add_library(TbLitLib STATIC)
 
 target_sources(TbLitLib
@@ -13,6 +17,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LiveSession.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Materials.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NvrhiSupport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.h
@@ -37,11 +42,20 @@ target_link_libraries(TbLitLib
   PRIVATE
     CompilerConfig
     PrecompileStdHeaders
+    TbLitIdLib
   PUBLIC
     TbBaseLib
     nvrhi
     nvrhi_vk
     WrapVulkanHeaders::WrapVulkanHeaders
+)
+
+# TbLitIdLib is private: its shim headers (precompiled.h, RenderCommon.h) and every id type
+# stay inside it. Only its std-only facade, lit/MaterialDecls.h, is passed on, because
+# lit/Materials.h includes it.
+target_include_directories(TbLitLib
+  PUBLIC
+    $<TARGET_PROPERTY:TbLitIdLib,INTERFACE_INCLUDE_DIRECTORIES>
 )
 
 # Vulkan is reached only through vulkan.hpp's dynamic dispatcher and the loader is never
