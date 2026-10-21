@@ -46,6 +46,7 @@ namespace tb::lit
 {
 struct CameraState;
 class LitSession;
+class MaterialService;
 enum class SessionEvent;
 } // namespace tb::lit
 
@@ -163,6 +164,8 @@ public:
 
   // the running session once phase B has run, else null
   lit::LitSession* sessionForTesting() const;
+  // the running session's parse thread from phase A on, else null
+  lit::MaterialService* materialsForTesting() const;
   /**
    * The process's one session is claimed by Start and released by the teardown or the
    * panel's destructor, and every change updates the Start pages of all panels (D29,

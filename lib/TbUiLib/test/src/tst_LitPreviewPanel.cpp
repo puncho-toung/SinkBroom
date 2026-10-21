@@ -37,11 +37,13 @@
 #include <QWindow>
 
 #include "SidebarTestUtils.h"
+#include "base/Logger.h"
 #include "base/PreferenceManager.h"
 #include "fs/TestEnvironment.h"
 #include "gl/GlManager.h"
 #include "gl/PerspectiveCamera.h"
 #include "lit/LitSession.h"
+#include "lit/MaterialService.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/GameInfo.h"
 #include "mdl/Map.h"
@@ -836,6 +838,30 @@ bool waitWithoutEvents(Predicate predicate, const std::chrono::milliseconds time
   return true;
 }
 
+// keeps every message the document logs
+class CapturingLogger : public Logger
+{
+private:
+  mutable std::mutex m_mutex;
+  std::vector<std::pair<LogLevel, std::string>> m_messages;
+
+public:
+  bool contains(const LogLevel level, const std::string& part) const
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    return std::ranges::any_of(m_messages, [&](const auto& message) {
+      return message.first == level && message.second.find(part) != std::string::npos;
+    });
+  }
+
+private:
+  void doLog(const LogLevel level, const std::string_view message) override
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_messages.emplace_back(level, std::string{message});
+  }
+};
+
 /**
  * A main window with the panel in a sidebar dock, a line edit that has the focus, and a
  * camera that the test moves through the context's notifier, as the 3D view's would.
@@ -1578,6 +1604,36 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     CHECK(QApplication::focusWidget() == harness.lineEdit);
     reports.checkLast();
     checkCounts("keyboard");
+  }
+
+  SECTION("the material service reads the game and logs to the document")
+  {
+    auto logger = CapturingLogger{};
+    harness.fixture.document().setTargetLogger(&logger);
+    const auto resetLogger =
+      kdl::invoke_later{[&] { harness.fixture.document().setTargetLogger(nullptr); }};
+
+    // between the phases too: the parse thread starts with phase A
+    panel.start();
+    REQUIRE(panel.materialsForTesting() != nullptr);
+    panel.stop();
+    CHECK(panel.materialsForTesting() == nullptr);
+    reports.checkLast();
+
+    REQUIRE(harness.startAndWaitForFrame());
+    auto* materials = panel.materialsForTesting();
+    REQUIRE(materials != nullptr);
+    REQUIRE(materials->waitForStats([](const auto& s) { return s.parseAllDone; }, 10s));
+    CHECK(materials->stats().materials > 0);
+    REQUIRE(QTest::qWaitFor(
+      [&] { return logger.contains(LogLevel::Info, "Lit preview materials: Parsed "); },
+      5000));
+    CHECK(logger.contains(LogLevel::Info, "Lit preview materials: Read "));
+
+    panel.stop();
+    CHECK(panel.materialsForTesting() == nullptr);
+    reports.checkLast();
+    checkCounts("materials");
   }
 
   SECTION("a document load and a game path change stop the session")

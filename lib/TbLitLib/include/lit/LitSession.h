@@ -77,6 +77,11 @@ enum class SessionEvent
   Error,
   // a warning to log (an NVRHI warning, an unwritable frame log); the session goes on
   Warning,
+  // a line of the material parse thread's log (lit/MaterialService.h): MaterialInfo for
+  // its summaries, MaterialWarning for the copied parser's warnings and errors and for
+  // the game files it could not read; the session goes on (R4-1.17)
+  MaterialInfo,
+  MaterialWarning,
   // acquire or present returned OUT_OF_DATE or SUBOPTIMAL: the GUI thread should park,
   // destroySwapchain, createSwapchain and unpark; posted once per swapchain generation
   SwapchainOutOfDate,

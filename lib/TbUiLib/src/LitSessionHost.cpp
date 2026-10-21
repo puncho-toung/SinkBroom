@@ -27,6 +27,8 @@
 #include <QtLogging>
 
 #include "ServiceSentMessages.h"
+#include "lit/GameDeclSource.h"
+#include "lit/MaterialService.h"
 #include "ui/LitPreviewPanel.h"
 #include "ui/LitPreviewWindow.h"
 
@@ -98,11 +100,13 @@ LitSessionHost::LitSessionHost(
   lit::SessionOptions options,
   const std::uint64_t generation,
   EventHandler eventHandler,
-  CameraProvider camera)
+  CameraProvider camera,
+  std::filesystem::path gamePath)
   : m_options{std::move(options)}
   , m_generation{generation}
   , m_eventHandler{std::move(eventHandler)}
   , m_camera{std::move(camera)}
+  , m_gamePath{std::move(gamePath)}
 {
 }
 
@@ -196,7 +200,51 @@ Result<QWidget*> LitSessionHost::start(QWidget& containerParent)
   m_container = QWidget::createWindowContainer(window, &containerParent);
   m_container->setObjectName("LitPreviewPanel_Container");
   m_container->setFocusPolicy(Qt::NoFocus);
+
+  // the parse thread needs no device, so it starts with phase A (§3.1, §3.5)
+  startMaterials();
   return m_container.data();
+}
+
+void LitSessionHost::startMaterials()
+{
+  if (m_gamePath.empty())
+  {
+    return;
+  }
+
+  auto options = lit::MaterialServiceOptions{};
+  // C1: the game path's base folder only; a reload scans its containers again
+  options.makeSource = [gamePath = m_gamePath] {
+    return std::unique_ptr<lit::DeclSource>{
+      std::make_unique<lit::GameDeclSource>(gamePath)};
+  };
+  // R4-1.17, R5.17: the parse thread's log lines come through the session's queue, with
+  // its generation; new tables are marshalled by the packages that read them (LP1b)
+  options.listener = [sink = eventSink(),
+                      generation = m_generation](const lit::MaterialServiceEvent& event) {
+    if (event.kind == lit::MaterialServiceEvent::Kind::Message)
+    {
+      sink(
+        event.level == lit::DeclMessageKind::Info ? lit::SessionEvent::MaterialInfo
+                                                  : lit::SessionEvent::MaterialWarning,
+        event.text,
+        generation);
+    }
+  };
+  options.parseAll = true;
+  m_materials = std::make_unique<lit::MaterialService>(std::move(options));
+}
+
+void LitSessionHost::stopMaterials()
+{
+  if (m_materials)
+  {
+    // plan step 8: the registry is destroyed on its thread, then the thread is joined
+    m_materials->requestStop();
+    m_materials->join();
+    m_materials.reset();
+  }
 }
 
 bool LitSessionHost::drawing() const
@@ -207,6 +255,11 @@ bool LitSessionHost::drawing() const
 lit::LitSession* LitSessionHost::session() const
 {
   return drawing() ? m_session.get() : nullptr;
+}
+
+lit::MaterialService* LitSessionHost::materials() const
+{
+  return m_materials.get();
 }
 
 void LitSessionHost::setCamera(const lit::CameraState& camera)
@@ -295,7 +348,7 @@ void LitSessionHost::updateRequested()
 
 const LitPreviewReport& LitSessionHost::teardown()
 {
-  runTeardownThrough(TeardownStep::DispatcherReset);
+  runTeardownThrough(TeardownStep::MaterialsDestroyed);
   return m_report;
 }
 
@@ -318,6 +371,12 @@ void LitSessionHost::runTeardownThrough(const TeardownStep last)
       if (m_session)
       {
         stopRenderThread();
+      }
+      // plan step 1, R5.20: the parse thread stops after its current decl file, and
+      // reports nothing more
+      if (m_materials)
+      {
+        m_materials->requestStop();
       }
       break;
     case TeardownStep::GpuObjectsReleased:
@@ -348,6 +407,9 @@ void LitSessionHost::runTeardownThrough(const TeardownStep last)
         m_report.messages.push_back(
           "The Vulkan dispatcher was still in use at the stop.");
       }
+      break;
+    case TeardownStep::MaterialsDestroyed:
+      stopMaterials();
       break;
     }
   }
@@ -647,6 +709,8 @@ void LitSessionHost::dispatchSessionEvent(
     break;
   case lit::SessionEvent::Ready:
   case lit::SessionEvent::Warning:
+  case lit::SessionEvent::MaterialInfo:
+  case lit::SessionEvent::MaterialWarning:
   case lit::SessionEvent::DeviceLost:
   case lit::SessionEvent::Error:
     if (m_eventHandler)

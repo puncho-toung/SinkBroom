@@ -30,6 +30,7 @@
 #include "ui/LitPreviewPanel.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -37,6 +38,11 @@
 
 class QVulkanInstance;
 class QWidget;
+
+namespace tb::lit
+{
+class MaterialService;
+}
 
 namespace tb::ui
 {
@@ -58,15 +64,21 @@ class LitPreviewWindow;
  * park that is no longer needed when it arrives is released. SurfaceAboutToBeDestroyed
  * cannot wait: Qt destroys the surface when it returns, so the swapchain goes first.
  *
+ * The material service (lit/MaterialService.h, the parse thread) starts with phase A,
+ * over the game path the owner gives, and its log lines come through the same queue as
+ * the session's messages, as MaterialInfo and MaterialWarning.
+ *
  * Teardown runs these steps in this order, each once, whatever ran of the start:
  * 1. stop the render thread: park it, then stop and join it, while the window system's
  *    sent messages are serviced, because a present may wait for one (no bound on the
- *    join: a thread that still runs uses the session, so the wait goes on and says so)
+ *    join: a thread that still runs uses the session, so the wait goes on and says so);
+ *    then ask the parse thread to stop after its current decl file (plan step 1, R5.20)
  * 2. LitSession::releaseGpuObjects
  * 3. delete the window container, which destroys the window and Qt's VkSurfaceKHR
  * 4. LitSession::destroyVkDevice
  * 5. destroy the QVulkanInstance
  * 6. reset the dispatcher
+ * 7. destroy the material registry on the parse thread, then join it (plan step 8)
  * The window is detached before the first step.
  *
  * While the host services sent messages it is busy: Qt code that runs then and calls back
@@ -94,6 +106,7 @@ private:
     VkDeviceDestroyed,
     InstanceDestroyed,
     DispatcherReset,
+    MaterialsDestroyed,
   };
 
   class BusyScope;
@@ -102,6 +115,8 @@ private:
   std::uint64_t m_generation;
   EventHandler m_eventHandler;
   CameraProvider m_camera;
+  // the game whose decls the material service reads; empty: no service
+  std::filesystem::path m_gamePath;
 
   std::unique_ptr<QVulkanInstance> m_instance;
   lit::InstanceHandles m_handles;
@@ -110,6 +125,8 @@ private:
   QPointer<LitPreviewWindow> m_window;
   QPointer<QWidget> m_container;
   std::unique_ptr<lit::LitSession> m_session;
+  // the parse thread; it outlives the session, whose render thread will read its tables
+  std::unique_ptr<lit::MaterialService> m_materials;
 
   // the size in pixels that the current swapchain was made for
   QSize m_swapchainSize;
@@ -138,7 +155,8 @@ public:
     lit::SessionOptions options,
     std::uint64_t generation,
     EventHandler eventHandler,
-    CameraProvider camera);
+    CameraProvider camera,
+    std::filesystem::path gamePath = {});
   ~LitSessionHost() override;
 
   std::uint64_t generation() const;
@@ -154,6 +172,8 @@ public:
   bool drawing() const;
   // the session after phase B, else null
   lit::LitSession* session() const;
+  // the parse thread from phase A until the teardown's last step, else null
+  lit::MaterialService* materials() const;
 
   // passed on once phase B has run; phase B asks the camera provider
   void setCamera(const lit::CameraState& camera);
@@ -182,6 +202,8 @@ private:
   void runTeardownThrough(TeardownStep last);
   void stopRenderThread();
   void recordTeardown();
+  void startMaterials();
+  void stopMaterials();
 
   void reconcile();
   void reconcileOnce();

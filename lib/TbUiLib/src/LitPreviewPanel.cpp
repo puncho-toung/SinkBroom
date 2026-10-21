@@ -35,6 +35,7 @@
 #include "gl/Camera.h"
 #include "gl/PerspectiveCamera.h"
 #include "lit/LitSession.h"
+#include "lit/MaterialService.h"
 #include "mdl/GameConfig.h"
 #include "mdl/GameInfo.h"
 #include "mdl/Map.h"
@@ -262,11 +263,13 @@ void LitPreviewPanel::start()
     return m_lastCamera ? std::optional{*m_lastCamera} : std::nullopt;
   };
 
+  // C1: the material service reads the game the document's map belongs to
   auto host = std::make_unique<LitSessionHost>(
     sessionOptions(m_document.logger()),
     ++lastGeneration,
     std::move(eventHandler),
-    std::move(camera));
+    std::move(camera),
+    m_document.map().gamePath());
   host->start(*m_surfacePage) | kdl::transform([&](QWidget* container) {
     m_surfacePage->layout()->addWidget(container);
     m_host = std::move(host);
@@ -307,6 +310,11 @@ QString LitPreviewPanel::unavailableReason() const
 lit::LitSession* LitPreviewPanel::sessionForTesting() const
 {
   return m_host ? m_host->session() : nullptr;
+}
+
+lit::MaterialService* LitPreviewPanel::materialsForTesting() const
+{
+  return m_host ? m_host->materials() : nullptr;
 }
 
 bool LitPreviewPanel::claimSessionForTesting(const LitPreviewPanel& panel)
@@ -456,6 +464,13 @@ void LitPreviewPanel::sessionEventReceived(
     break;
   case lit::SessionEvent::Warning:
     logger.warn() << "Lit preview: " << message;
+    break;
+  case lit::SessionEvent::MaterialInfo:
+    logger.info() << "Lit preview materials: " << message;
+    break;
+  case lit::SessionEvent::MaterialWarning:
+    // R4-1.17: the copied parser's warnings, as the engine's console shows them
+    logger.warn() << "Lit preview materials: " << message;
     break;
   case lit::SessionEvent::DeviceLost:
   case lit::SessionEvent::Error:
