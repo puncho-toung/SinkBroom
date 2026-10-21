@@ -20,6 +20,7 @@
 #include "lit/LitSession.h"
 
 #include "GpuDevice.h"
+#include "LiveSession.h"
 #include "RenderThread.h"
 #include "SessionEvents.h"
 #include "Swapchain.h"
@@ -61,10 +62,24 @@ Result<std::unique_ptr<LitSession>> LitSession::create(
     return Error{"The Vulkan dispatcher is not initialised for the instance"};
   }
 
+  if (!claimLiveSession())
+  {
+    return Error{"Another lit preview session runs in this process"};
+  }
+
   try
   {
-    auto session = std::unique_ptr<LitSession>{
-      new LitSession{std::move(options), std::move(eventSink), generation}};
+    auto session = std::unique_ptr<LitSession>{};
+    try
+    {
+      session.reset(new LitSession{std::move(options), std::move(eventSink), generation});
+    }
+    catch (...)
+    {
+      releaseLiveSession();
+      throw;
+    }
+    session->m_claimedLiveSession = true;
     // on an error the destructor tears down whatever exists (§3.1)
     return session->start(instance, surface, width, height)
            | kdl::transform([&]() { return std::move(session); });
@@ -106,6 +121,10 @@ Result<void> LitSession::start(
 LitSession::~LitSession()
 {
   destroyVkDevice();
+  if (m_claimedLiveSession)
+  {
+    releaseLiveSession();
+  }
 }
 
 std::uint64_t LitSession::generation() const

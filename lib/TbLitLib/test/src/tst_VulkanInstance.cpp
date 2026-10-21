@@ -31,14 +31,14 @@ TEST_CASE("VulkanInstance")
   SECTION("initInstanceDispatcher")
   {
     // without an instance it loads nothing and calls nothing
-    initInstanceDispatcher({});
+    CHECK(initInstanceDispatcher({}));
     CHECK(VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr == nullptr);
     CHECK(VULKAN_HPP_DEFAULT_DISPATCHER.vkEnumeratePhysicalDevices == nullptr);
   }
 
   SECTION("resetDispatcher")
   {
-    resetDispatcher();
+    CHECK(resetDispatcher());
     CHECK(VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr == nullptr);
     CHECK(VULKAN_HPP_DEFAULT_DISPATCHER.vkCreateDevice == nullptr);
   }

@@ -41,10 +41,17 @@ struct InstanceHandles
   std::vector<std::string> enabledExtensions;
 };
 
-// Loads vulkan.hpp's default dispatcher for this instance; done on every Start (R4-2.22).
-void initInstanceDispatcher(const InstanceHandles& handles);
+/**
+ * Loads vulkan.hpp's default dispatcher for this instance; done on every Start
+ * (R4-2.22). False, and nothing loaded, while a session is live: the dispatcher is
+ * process-wide, so only one session exists at a time.
+ */
+bool initInstanceDispatcher(const InstanceHandles& handles);
 
-// Clears the default dispatcher back to null pointers, after the instance is destroyed.
-void resetDispatcher();
+/**
+ * Clears the default dispatcher back to null pointers, after the instance is destroyed.
+ * False, and nothing cleared, while a session is live.
+ */
+bool resetDispatcher();
 
 } // namespace tb::lit

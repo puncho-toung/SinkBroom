@@ -23,7 +23,7 @@
 
 #include "kd/result.h"
 
-#include <vulkan/vulkan.h>
+#include <vulkan/vulkan.hpp>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -534,7 +534,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       {
         CHECK(instance.validationLayer());
       }
-      initInstanceDispatcher(instance.handles());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
 
       for (std::uint64_t cycle = 0; cycle < 20; ++cycle)
       {
@@ -600,7 +600,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
         events.print("headless");
       }
     }
-    resetDispatcher();
+    CHECK(resetDispatcher());
 
     messages.print(validation ? "headless, validation" : "headless");
     CHECK(messages.errors == 0);
@@ -631,6 +631,44 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     std::filesystem::remove(logPath);
   }
 
+  SECTION("one live session in a process, and the dispatcher stays while it lives")
+  {
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+
+      auto events = Events{};
+      auto first = LitSession::create(
+                     instance.handles(), VK_NULL_HANDLE, 16, 16, {}, events.sink(), 1)
+                   | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+
+      // review L2.10: a second session would share the process-wide dispatcher
+      CHECK(
+        LitSession::create(
+          instance.handles(), VK_NULL_HANDLE, 16, 16, {}, events.sink(), 2)
+        == Result<std::unique_ptr<LitSession>>{
+          Error{"Another lit preview session runs in this process"}});
+      CHECK_FALSE(initInstanceDispatcher(instance.handles()));
+      CHECK_FALSE(resetDispatcher());
+      CHECK(VULKAN_HPP_DEFAULT_DISPATCHER.vkCreateDevice != nullptr);
+
+      teardown(*first);
+      first.reset();
+
+      // the slot is free again
+      auto second = LitSession::create(
+                      instance.handles(), VK_NULL_HANDLE, 16, 16, {}, events.sink(), 3)
+                    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+      teardown(*second);
+    }
+    CHECK(resetDispatcher());
+    CHECK(VULKAN_HPP_DEFAULT_DISPATCHER.vkCreateDevice == nullptr);
+    messages.print("one session, validation");
+    CHECK(messages.errors == 0);
+  }
+
   SECTION("an injected fault ends drawing and tears down cleanly")
   {
     // a lost device is reported as lost; NVRHI's other errors and a failed frame are
@@ -652,7 +690,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     {
       const auto instance = TestInstance{library, true, false, messages};
       REQUIRE(instance.valid());
-      initInstanceDispatcher(instance.handles());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
 
       auto events = Events{};
       auto options = SessionOptions{};
@@ -691,7 +729,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       CHECK(events.allOfGeneration(7));
       events.print("fault");
     }
-    resetDispatcher();
+    CHECK(resetDispatcher());
     messages.print("fault, validation");
     CHECK(messages.errors == 0);
   }
@@ -710,7 +748,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
 
       const auto instance = TestInstance{library, true, true, messages};
       REQUIRE(instance.valid());
-      initInstanceDispatcher(instance.handles());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
 
       const auto createSurface = library.get<PFN_vkCreateWin32SurfaceKHR>(
         instance.instance(), "vkCreateWin32SurfaceKHR");
@@ -832,7 +870,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       library.get<PFN_vkDestroySurfaceKHR>(instance.instance(), "vkDestroySurfaceKHR")(
         instance.instance(), surface, nullptr);
     }
-    resetDispatcher();
+    CHECK(resetDispatcher());
 
     messages.print(forceFifo ? "window, forced FIFO" : "window");
     CHECK(messages.errors == 0);

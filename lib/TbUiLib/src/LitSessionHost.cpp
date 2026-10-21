@@ -197,7 +197,11 @@ Result<QWidget*> LitSessionHost::start(QWidget& containerParent)
     m_handles.enabledExtensions.push_back(name.toStdString());
   }
   // R4-2.22: on every Start, for this instance
-  lit::initInstanceDispatcher(m_handles);
+  if (!lit::initInstanceDispatcher(m_handles))
+  {
+    teardown();
+    return Error{"Another lit preview session runs in this process."};
+  }
   m_dispatcherInitialised = true;
 
   // a new window for every session, never reused (§3.1)
@@ -380,9 +384,11 @@ void LitSessionHost::runTeardownThrough(const TeardownStep last)
       m_instance.reset();
       break;
     case TeardownStep::DispatcherReset:
-      if (m_dispatcherInitialised)
+      // after the session, which held the dispatcher, is gone
+      if (m_dispatcherInitialised && !lit::resetDispatcher())
       {
-        lit::resetDispatcher();
+        m_report.messages.push_back(
+          "The Vulkan dispatcher was still in use at the stop.");
       }
       break;
     }

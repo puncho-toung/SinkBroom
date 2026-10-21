@@ -19,22 +19,59 @@
 
 #include "lit/VulkanInstance.h"
 
+#include "LiveSession.h"
+
 #include <vulkan/vulkan.hpp>
+
+#include <atomic>
 
 namespace tb::lit
 {
-
-void initInstanceDispatcher(const InstanceHandles& handles)
+namespace
 {
+
+// constant-initialised; no session exists before the first Start (C9)
+constinit auto liveSession = std::atomic<bool>{false};
+
+} // namespace
+
+bool claimLiveSession()
+{
+  auto expected = false;
+  return liveSession.compare_exchange_strong(expected, true);
+}
+
+void releaseLiveSession()
+{
+  liveSession = false;
+}
+
+bool liveSessionExists()
+{
+  return liveSession;
+}
+
+bool initInstanceDispatcher(const InstanceHandles& handles)
+{
+  if (liveSessionExists())
+  {
+    return false;
+  }
   if (handles.instance != VK_NULL_HANDLE && handles.getInstanceProcAddr != nullptr)
   {
     VULKAN_HPP_DEFAULT_DISPATCHER.init(handles.instance, handles.getInstanceProcAddr);
   }
+  return true;
 }
 
-void resetDispatcher()
+bool resetDispatcher()
 {
+  if (liveSessionExists())
+  {
+    return false;
+  }
   VULKAN_HPP_DEFAULT_DISPATCHER = vk::detail::DispatchLoaderDynamic{};
+  return true;
 }
 
 } // namespace tb::lit

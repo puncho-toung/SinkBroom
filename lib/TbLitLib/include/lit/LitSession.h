@@ -159,6 +159,8 @@ private:
   bool m_gpuReleased = false;
   bool m_vkDeviceDestroyed = false;
   TeardownReport m_report;
+  // the process's one live session slot, released when the destructor has torn down
+  bool m_claimedLiveSession = false;
 
 public:
   /**
@@ -166,7 +168,9 @@ public:
    * surface, creates the VkDevice, the NVRHI device and the first swapchain generation,
    * and starts the render thread. initInstanceDispatcher must have been called for the
    * instance. A null surface is the headless test path: no presentation, no swapchain;
-   * the render thread clears an offscreen texture of the given size instead.
+   * the render thread clears an offscreen texture of the given size instead. Only one
+   * session lives in a process at a time, because the Vulkan dispatcher is process-wide:
+   * a second create fails while one exists.
    */
   static Result<std::unique_ptr<LitSession>> create(
     const InstanceHandles& instance,

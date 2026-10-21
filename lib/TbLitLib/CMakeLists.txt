@@ -12,6 +12,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSession.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LiveSession.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NvrhiSupport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.h
