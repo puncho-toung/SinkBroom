@@ -311,8 +311,8 @@ std::size_t declFileBytes(const idDeclManagerLocal& manager)
 namespace
 {
 
-// the keywords idMaterial::ParseMaterial turns into one ParseStage call each
-// (Material.cpp:2883-2924)
+// the keywords idMaterial::ParseMaterial turns into one ParseStage call each (the
+// engine's Material.cpp:2883-2924)
 constexpr const char* StageShortcuts[] = {
   "diffusemap",
   "basecolormap",
@@ -338,19 +338,32 @@ bool isStageShortcut(const idToken& token)
 }
 
 /**
- * An upper bound of the ParseStage calls a material decl's text makes (M-ID-GUARD-05),
- * from the tokens the copied lexer reads in it (forEachDeclToken). idMaterial::Parse
- * skips to the first "{" (SkipUntilString); after it, ParseMaterial calls ParseStage only
- * for a token equal to "{" or for a stage shortcut keyword, once per token, whatever the
- * token's type. Counting every such token also counts the ones that are an argument
- * ("diffusemap {", "qer_editorimage {"), a stage's own keyword ("blend diffusemap") or
- * text after a parse error, so the bound can be higher than the engine's count, never
- * lower (M-ID-DIFF-03). AddImplicitStages never adds a stage past the limit.
+ * An upper bound of the stage slots a material decl's text makes the copied parser write
+ * (M-ID-GUARD-05), from the tokens the copied lexer reads in it (forEachDeclToken).
+ *
+ * - idMaterial::Parse skips to the first "{" (SkipUntilString); after it, ParseMaterial
+ *   calls ParseStage only for a token equal to "{" or for a stage shortcut keyword, once
+ *   per token, whatever the token's type.
+ * - A ParseStage call writes one slot, and, after numStages++, a second one without a
+ *   limit check, the coverage stage of a diffuse stage with an alpha test (the copy's
+ *   Material.cpp:2299-2303, engine :2298-2302).
+ * - A stage is diffuse only through ParseBlend's "diffusemap" or "basecolormap" (the
+ *   copy's :1109-1112). In a "{" block that is a token of the material's own text, which
+ *   this counts. A shortcut's stage is parsed from text made of its image name without
+ * the quotes (Image_program.cpp:439-447), so diffusemap "_white alphaTest 0.5" makes both
+ *   slots with no further token here.
+ *
+ * So a "{" counts 1 and a shortcut keyword 2: a block's coverage slot is paid for by its
+ * blend keyword, a shortcut's by its second count. AddImplicitStages adds at most one
+ * stage, below the limit, without an alpha test. Counting every such token also counts
+ * arguments ("diffusemap {", "qer_editorimage {"), a block's own keyword and text after a
+ * parse error, so the bound can be higher than the engine's slots, never lower
+ * (M-ID-DIFF-03).
  */
 int stageBound(const std::string& text, const char* name)
 {
   auto opened = false;
-  auto stages = 0;
+  auto slots = 0;
   tb::lit::shim::forEachDeclToken(text, name, [&](const idToken& token) {
     const auto brace = token == "{";
     if (!opened)
@@ -358,9 +371,9 @@ int stageBound(const std::string& text, const char* name)
       opened = brace;
       return;
     }
-    stages += brace || isStageShortcut(token) ? 1 : 0;
+    slots += brace ? 1 : isStageShortcut(token) ? 2 : 0;
   });
-  return stages;
+  return slots;
 }
 
 } // namespace
@@ -384,7 +397,8 @@ std::vector<int> refuseOversizedMaterials(idDeclManagerLocal& manager)
     text.resize(std::size_t(decl->GetTextLength()));
     if (stageBound(text, decl->GetFileName()) > MAX_SHADER_STAGES)
     {
-      // Material.cpp:1642-1646's warning, which the engine reports before it overruns
+      // the warning of the engine's Material.cpp:1641-1645, which it reports before it
+      // overruns
       common->Warning(
         "material '%s' exceeded %i stages", decl->GetName(), MAX_SHADER_STAGES);
       decl->MakeDefault();

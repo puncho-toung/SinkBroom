@@ -941,27 +941,86 @@ TEST_CASE("MaterialDecls guards the engine's overflows")
     CHECK(decls.defaultedCount("material") == 4);
   }
 
-  SECTION("200 stages parse; interaction stage blocks count twice (M-ID-DIFF-03)")
+  SECTION("200 stages parse; interaction stage blocks count three times (M-ID-DIFF-03)")
   {
     const auto diffuseStage = std::string{"\t{ blend diffusemap map _white }\n"};
     auto source = MemoryDeclSource{{
       DeclFile{
         "materials/many_stages.mtr",
         "textures/lp1a/two_hundred\n{\n" + stagesOf(200, PlainStage) + "}\n"
-          + "textures/lp1a/diffuse128\n{\n" + stagesOf(128, diffuseStage) + "}\n"
-          + "textures/lp1a/diffuse129\n{\n" + stagesOf(129, diffuseStage) + "}\n",
+          + "textures/lp1a/diffuse85\n{\n" + stagesOf(85, diffuseStage) + "}\n"
+          + "textures/lp1a/diffuse86\n{\n" + stagesOf(86, diffuseStage) + "}\n",
         0},
     }};
     auto decls = MaterialDecls{source};
     REQUIRE(decls.constructionError().empty());
 
     CHECK(lookup(decls, "textures/lp1a/two_hundred")->stages.size() == 200u);
-    // the bound counts "{" and "diffusemap" of each block: 256, so the material parses,
-    // and AddImplicitStages adds the _flat bump stage
-    CHECK(lookup(decls, "textures/lp1a/diffuse128")->stages.size() == 129u);
-    // 258: refused, although the engine parses 129 stages
-    checkStagesRefused(decls, "textures/lp1a/diffuse129");
+    // the bound counts each block's "{" once and its "diffusemap" twice: 255, so the
+    // material parses, and AddImplicitStages adds the _flat bump stage
+    CHECK(lookup(decls, "textures/lp1a/diffuse85")->stages.size() == 86u);
+    // 258: refused, although the engine parses 87 stages
+    checkStagesRefused(decls, "textures/lp1a/diffuse86");
     CHECK(decls.defaultedCount("material") == 1);
+  }
+
+  SECTION("a shortcut writes up to two stage slots, so it counts twice (X.1)")
+  {
+    // ParseStage adds an unchecked coverage stage after an alpha-tested diffuse stage,
+    // and a shortcut's stage is parsed from its image name without the quotes
+    const auto alphaShortcut = std::string{"\tdiffusemap \"_white alphaTest 0.5\"\n"};
+    const auto spacedShortcut = std::string{"\tdiffusemap \"_white vertexColor\"\n"};
+    auto source = MemoryDeclSource{{
+      DeclFile{
+        "materials/coverage_stages.mtr",
+        // the engine clears parseStages[256] at the 129th shortcut
+        "textures/lp1a/alpha129\n{\n" + stagesOf(129, alphaShortcut)
+          + "}\n"
+          // the engine writes the 128th shortcut's coverage stage at parseStages[256]
+          // without a warning, and the 129th's past it
+          + "textures/lp1a/block_alpha128\n{\n" + PlainStage
+          + stagesOf(128, alphaShortcut) + "}\n" + "textures/lp1a/block_alpha129\n{\n"
+          + PlainStage + stagesOf(129, alphaShortcut)
+          + "}\n"
+          // 256 slots, the engine's limit
+          + "textures/lp1a/alpha128\n{\n" + stagesOf(128, alphaShortcut)
+          + "}\n"
+          // a quoted image name with spaces but no alpha test: one slot, counted as two
+          + "textures/lp1a/spaced254\n{\n" + stagesOf(254, PlainStage) + spacedShortcut
+          + "}\n" + "textures/lp1a/spaced255\n{\n" + stagesOf(255, PlainStage)
+          + spacedShortcut + "}\n",
+        0},
+    }};
+    auto decls = MaterialDecls{source};
+    REQUIRE(decls.constructionError().empty());
+
+    for (const auto* name :
+         {"textures/lp1a/alpha129",
+          "textures/lp1a/block_alpha128",
+          "textures/lp1a/block_alpha129",
+          "textures/lp1a/spaced255"})
+    {
+      checkStagesRefused(decls, name);
+    }
+    CHECK(decls.defaultedCount("material") == 4);
+
+    // 128 diffuse stages and their 128 coverage stages; at 256 AddImplicitStages adds
+    // nothing
+    const auto alpha128 = lookup(decls, "textures/lp1a/alpha128");
+    REQUIRE(alpha128->stages.size() == 256u);
+    CHECK(
+      std::count_if(
+        alpha128->stages.begin(),
+        alpha128->stages.end(),
+        [](const auto& stage) { return stage.lighting == LightingCoverage; })
+      == 128);
+    CHECK_FALSE(alpha128->defaulted);
+
+    // a bound of 256: 254 stages, the shortcut's diffuse stage and the implicit _flat
+    // bump stage; spaced255 makes 256 slots in the engine but has a bound of 257
+    const auto spaced254 = lookup(decls, "textures/lp1a/spaced254");
+    CHECK(spaced254->stages.size() == 256u);
+    CHECK_FALSE(spaced254->defaulted);
   }
 
   SECTION("a decl file with a name of 1024 or more characters is not read")

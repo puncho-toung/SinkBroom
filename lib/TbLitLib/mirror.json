@@ -5073,11 +5073,38 @@
         {
           "file": "neo/renderer/Material.cpp",
           "lines": [
+            2297,
+            2302
+          ],
+          "anchor": "idMaterial::ParseStage, the coverage stage of an alpha-tested diffuse stage (no limit check)",
+          "sha256": "73da3df40d05980ff6d6dad57668bc6d6dfa4c95be7de4ad19780fbf255d4eee"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            1108,
+            1112
+          ],
+          "anchor": "idMaterial::ParseBlend, diffusemap and basecolormap (SL_DIFFUSE)",
+          "sha256": "6b8e55dc209f01ef2556ddb4552abcfbc8bb312725edcdd55eedcbbd82bc3f5d"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
             2883,
             2924
           ],
           "anchor": "idMaterial::ParseMaterial, the stage shortcuts",
           "sha256": "73076a96fe5773d9e5396fd213131466e0db9efe32c4930189dc3a954335b8ff"
+        },
+        {
+          "file": "neo/renderer/Image_program.cpp",
+          "lines": [
+            439,
+            447
+          ],
+          "anchor": "AppendToken (a token's text without its quotes)",
+          "sha256": "0019c7c7a2bdc7aef6dc4960975423106d508ab855d7d1de5f311bfa722b1bfa"
         },
         {
           "file": "neo/renderer/Material.cpp",
@@ -5125,7 +5152,7 @@
           "symbol": "MaterialDecls::MaterialDecls"
         }
       ],
-      "note": "ParseStage warns at the 257th stage but does not return, and writes past pd->parseStages[256] on the parse thread's stack (A2.4; the engine at the pinned commit has the same defect). Before anything can parse it, every material decl whose text can make more than 256 ParseStage calls is made the default material, with the engine's warning, and its lookup fails with that reason. The bound comes from the copied idLexer's tokens with DECL_LEXER_FLAGS (forEachDeclToken, the tokens idMaterial::Parse reads): after the first \"{\" (SkipUntilString), every token equal to \"{\" and every stage shortcut keyword, whatever its type and wherever it stands. ParseMaterial calls ParseStage only for such a token, once per token, so the bound is never below the engine's count; it is above it where such a token is an argument or a stage's own keyword (M-ID-DIFF-03). AddImplicitStages never adds a stage past the limit. W.1 (round 2) replaced a character scan of brace depth that crafted text got past ('diffusemap {', 'qer_editorimage {', the lexer's '/*/' comment, '.5diffusemap')"
+      "note": "ParseStage warns at the 257th stage but does not return, and writes past pd->parseStages[256] on the parse thread's stack (A2.4; the engine at the pinned commit has the same defect). After numStages++ it also writes a coverage stage at parseStages[numStages] with no limit check when the stage is diffuse and alpha-tested (engine Material.cpp:2298-2302, the copy's 2299-2303), so one call can write two slots. Before anything can parse it, every material decl whose text can make more than 256 slots is made the default material, with the engine's warning, and its lookup fails with that reason. The bound comes from the copied idLexer's tokens with DECL_LEXER_FLAGS (forEachDeclToken, the tokens idMaterial::Parse reads): after the first \"{\" (SkipUntilString), every token equal to \"{\" counts 1 and every stage shortcut keyword 2, whatever its type and wherever it stands. ParseMaterial calls ParseStage only for such a token, once per token. A stage is diffuse only through ParseBlend's diffusemap or basecolormap: in a \"{\" block that is a token of the material's text, counted 2, which pays for the block's coverage slot; a shortcut's stage is parsed from synthesised text holding its image name without the quotes (AppendToken), so diffusemap \"_white alphaTest 0.5\" makes two slots that its second count pays for. AddImplicitStages adds at most one stage, below the limit, without an alpha test. So the bound is never below the slots the engine writes; it is above them where such a token is an argument, a block's own keyword or text after a parse error (M-ID-DIFF-03). W.1 (round 2) replaced a character scan of brace depth that crafted text got past ('diffusemap {', 'qer_editorimage {', the lexer's '/*/' comment, '.5diffusemap'); X.1 (round 3) counts shortcuts twice for the coverage stage"
     },
     {
       "id": "M-ID-GUARD-06",
@@ -5200,7 +5227,7 @@
           "symbol": "tb::lit::shim::forEachDeclToken"
         }
       ],
-      "note": "a decl file holding a token of MAX_STRING_CHARS or more characters with no '.' among the first MAX_STRING_CHARS is refused with a warning and read as unreadable (the copied LoadAndParse then reports 'couldn't load'), because any token can reach MakeNameCanonical and overflow its buffer. The tokens are the copied idLexer's with DECL_LEXER_FLAGS over the whole file (forEachDeclToken, which silences only the lexer's printing with LEXFL_NOERRORS and LEXFL_NOWARNINGS and goes on after a token it cannot read wherever the lexer moved forward, as LoadAndParse and the decl parsers do), so strings joined across a backslash, '...' literals with spaces, a name after a number and the lexer's comment rules are read exactly as the engine reads them; tokens inside comments are not tokens. A dot ends the canonical name first, so the retail PDAs' long texts are read (newpdas/enpro_hammer.pda: a 1075-character string whose first dot is its fifth character). A known difference: the engine reads such a file and overruns. W.1 (round 2) replaced a character scan of names and quoted strings that crafted text got past"
+      "note": "a decl file holding a token of MAX_STRING_CHARS or more characters with no '.' among the first MAX_STRING_CHARS is refused with a warning and read as unreadable (the copied LoadAndParse then reports 'couldn't load'), because any token can reach MakeNameCanonical and overflow its buffer. The tokens are the copied idLexer's with DECL_LEXER_FLAGS over the whole file (forEachDeclToken, which silences only the lexer's printing with LEXFL_NOERRORS and LEXFL_NOWARNINGS and goes on after a token it cannot read wherever the lexer moved forward; the decl parsers go on there too, while LoadAndParse stops at a failed top-level read, so the scan reads a superset of the tokens the engine reads), so strings joined across a backslash, '...' literals with spaces, a name after a number and the lexer's comment rules are read exactly as the engine reads them; tokens inside comments are not tokens. A dot ends the canonical name first, so the retail PDAs' long texts are read (newpdas/enpro_hammer.pda: a 1075-character string whose first dot is its fifth character). A known difference: the engine reads such a file and overruns. W.1 (round 2) replaced a character scan of names and quoted strings that crafted text got past"
     },
     {
       "id": "M-ID-GUARD-03",
@@ -5939,6 +5966,15 @@
         {
           "file": "neo/renderer/Material.cpp",
           "lines": [
+            2297,
+            2302
+          ],
+          "anchor": "idMaterial::ParseStage, the coverage stage of an alpha-tested diffuse stage (no limit check)",
+          "sha256": "73da3df40d05980ff6d6dad57668bc6d6dfa4c95be7de4ad19780fbf255d4eee"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
             1103,
             1117
           ],
@@ -5974,7 +6010,7 @@
           "symbol": "tb::lit::shim::refuseOversizedMaterials"
         }
       ],
-      "note": "W.1 (round 2): M-ID-GUARD-05's bound counts every stage shortcut keyword and every \"{\" after a material's first, wherever they stand, because the engine's own count cannot be had without running the parser that overruns. A stage block that names its interaction with a shortcut keyword ('blend diffusemap', 'blend bumpmap', 'blend specularmap', 'blend rmaomap' and their aliases, ParseBlend) counts twice, so a material of more than 128 such blocks and nothing else is refused (the default material and the engine's 'exceeded 256 stages' warning), although the engine parses up to 256 stages; so is one whose arguments, or whose text after a parse error, hold such tokens. Tested at 128 blocks (parsed) and 129 (refused); no retail material is refused"
+      "note": "W.1, X.1 (rounds 2 and 3): M-ID-GUARD-05 refuses a material when the \"{\" tokens after its first, plus twice its stage shortcut keyword tokens, exceed MAX_SHADER_STAGES (256), wherever those tokens stand; the engine's own slot count cannot be had without running the parser that overruns. The engine parses a material whose stages plus coverage stages are at most 256. Engine-parsable materials this refuses: more than 128 shortcut lines without an alpha-tested diffuse image name (the engine takes up to 256); more than 85 stage blocks that name their interaction with a shortcut keyword ('blend diffusemap', 'blend bumpmap', 'blend specularmap', 'blend rmaomap' and their aliases, ParseBlend), each counted 3, where the engine takes up to 256 (128 alpha-tested diffuse ones); any mix of blocks and shortcuts whose count passes 256 while the slots do not (254 plain blocks and one shortcut count 256 and parse; 255 and one count 257 and are refused, though the engine writes 256 slots); and a material whose arguments, or whose text after a parse error, hold such tokens. Tested: 85 interaction blocks parse and 86 are refused; 128 shortcuts with an alpha-tested image name parse to 256 stages and 129 are refused; one plain block and 128 such shortcuts are refused. No retail material is refused"
     },
     {
       "id": "M-ID-PURE-01",

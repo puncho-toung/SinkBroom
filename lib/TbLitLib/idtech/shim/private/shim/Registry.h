@@ -247,13 +247,13 @@ std::size_t declFileBytes(const idDeclManagerLocal& declManager);
 // every registered decl type with its number of decls, in type order
 std::vector<DeclTypeCount> declCounts(idDeclManagerLocal& declManager);
 
-// M-ID-GUARD-05: every material decl whose text can make more than MAX_SHADER_STAGES
-// stages is made the default material before anything can parse it, because the copied
-// ParseStage writes past parseStages for the stage after the last; the engine's warning
-// is reported. The bound is taken from the copied lexer's tokens: every "{" after the
-// material's first and every stage shortcut keyword, so it refuses some materials of more
-// than about 128 interaction stages that the engine parses (M-ID-DIFF-03). Returns their
-// indices.
+// M-ID-GUARD-05: every material decl whose text can make the copied parser write more
+// than MAX_SHADER_STAGES stage slots is made the default material before anything can
+// parse it, because the copied ParseStage writes past parseStages for the stage after the
+// last (and its coverage stage of an alpha-tested diffuse stage, unchecked); the engine's
+// warning is reported. The bound is taken from the copied lexer's tokens: every "{" after
+// the material's first, plus twice every stage shortcut keyword, so it refuses some
+// materials the engine parses (M-ID-DIFF-03). Returns their indices.
 std::vector<int> refuseOversizedMaterials(idDeclManagerLocal& declManager);
 
 // idDeclManagerLocal::MakeNameCanonical into a buffer of MAX_STRING_CHARS + 1, so a name
