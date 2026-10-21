@@ -552,14 +552,6 @@ TEST_CASE("MapWindow")
     CHECK(toolSidebar->entries() == toggleActions);
     for (const auto* action : toggleActions)
     {
-#ifdef TB_ENABLE_LIT_PREVIEW
-      // the lit preview has no icon, so its button shows its title
-      if (action == docks.litPreview->toggleViewAction())
-      {
-        CHECK(action->icon().isNull());
-        continue;
-      }
-#endif
       CHECK(!action->icon().isNull());
     }
 

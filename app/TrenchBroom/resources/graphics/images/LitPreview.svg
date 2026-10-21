@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="24" height="24" viewBox="0 0 24 24">
+  <!-- a screen showing a cube lit from the upper left, its lit face light and its other faces darker: the map as the engine draws it -->
+  <rect style="fill:none;stroke:#3f3f3f;stroke-width:1.5;stroke-linejoin:round" x="1.75" y="2.75" width="20.5" height="15.5" rx="1" />
+  <path style="fill:#3f3f3f;fill-opacity:1;stroke:none" d="M 9,19 H 15 V 21 H 17 V 22 H 7 V 21 H 9 Z" />
+  <path style="fill:#7f7f7f;fill-opacity:0.25;stroke:#3f3f3f;stroke-width:1;stroke-linejoin:round" d="M 12,5.5 17,8 12,10.5 7,8 Z" />
+  <path style="fill:#7f7f7f;fill-opacity:0.5;stroke:#3f3f3f;stroke-width:1;stroke-linejoin:round" d="M 7,8 12,10.5 V 15.5 L 7,13 Z" />
+  <path style="fill:#3f3f3f;fill-opacity:0.8;stroke:#3f3f3f;stroke-width:1;stroke-linejoin:round" d="M 12,10.5 17,8 V 13 L 12,15.5 Z" />
+</svg>

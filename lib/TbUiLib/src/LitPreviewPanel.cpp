@@ -160,6 +160,11 @@ QString LitPreviewPanel::title() const
   return tr("Lit Preview");
 }
 
+std::filesystem::path LitPreviewPanel::iconPath() const
+{
+  return "LitPreview.svg";
+}
+
 void LitPreviewPanel::panelShown()
 {
   // R5.26: another window's session may have stopped while this panel was out of sight

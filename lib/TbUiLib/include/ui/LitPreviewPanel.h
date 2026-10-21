@@ -173,6 +173,7 @@ public:
 
   QString panelId() const override;
   QString title() const override;
+  std::filesystem::path iconPath() const override;
 
   void panelShown() override;
   void panelHidden() override;

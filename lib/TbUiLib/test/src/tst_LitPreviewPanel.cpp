@@ -152,8 +152,8 @@ TEST_CASE("LitPreviewPanel")
     CHECK(panel.panelId() == "LitPreview");
     CHECK(panel.panelId() == LitPreviewPanel::PanelId);
     CHECK(panel.title() == "Lit Preview");
-    // no SVG exists for it, so the tool sidebar shows a text button
-    CHECK(panel.iconPath().empty());
+    CHECK(panel.iconPath() == "LitPreview.svg");
+    checkGreyscaleIcon(panel.iconPath());
     CHECK(!panel.shownByDefault());
     CHECK(panel.defaultArea() == Qt::RightDockWidgetArea);
   }
