@@ -689,8 +689,10 @@ void MapWindow::createGui()
   {
     m_sidebarManager->registerPanel(std::move(panel));
   }
+#ifdef TB_ENABLE_LIT_PREVIEW
   // the view container notified its first camera before the panels existed
   m_mapView->cameraDidChangeNotifier(m_mapView->perspectiveCamera());
+#endif
 
   // DD-28, DD-29: a prefab holds no placements of prefabs (RQ21), neither from its own
   // panel nor from a drag out of another window's panel

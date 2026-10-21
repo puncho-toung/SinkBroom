@@ -50,11 +50,11 @@ void SessionEvents::post(const SessionEvent event, std::string message) noexcept
     if (event == SessionEvent::Warning)
     {
       const auto lock = std::scoped_lock{m_mutex};
-      if (m_warnings.size() > MaxWarnings || !m_warnings.insert(message).second)
+      if (m_warnings.size() >= MaxWarnings || !m_warnings.insert(message).second)
       {
         return;
       }
-      if (m_warnings.size() > MaxWarnings)
+      if (m_warnings.size() == MaxWarnings)
       {
         message = fmt::format(
           "{} (further warnings of this session are not shown)", std::move(message));
