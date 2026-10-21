@@ -177,6 +177,9 @@ struct MaterialService::Shared
 
   std::shared_ptr<const MaterialTable> table = std::make_shared<const MaterialTable>();
   MaterialServiceStats stats;
+  // X.2: once the thread has ended without a stop (stats.threadError), the refusal every
+  // later evaluation gets
+  std::shared_ptr<const EvaluatedRegisters> threadRefusal;
 
   explicit Shared(MaterialServiceOptions options_)
     : options{std::move(options_)}
@@ -227,6 +230,8 @@ private:
   bool m_autoReloadPending = false;
   std::optional<Clock::time_point> m_lastAutoReload;
   std::size_t m_warnings = 0;
+  // the last failure a guard logged
+  std::string m_lastFailure;
 
   int m_bulkMaterial = 0;
   int m_bulkTable = 0;
@@ -257,15 +262,15 @@ private:
   /**
    * A2.1: nothing a work item throws reaches the thread's top. The item is logged and
    * dropped; a build that throws leaves no registry, and every request fails until a
-   * build succeeds (W.4).
+   * build succeeds (W.4). False when f threw.
    */
   template <typename F>
-  void guarded(const char* what, F&& f)
+  bool guarded(const char* what, F&& f)
   {
     try
     {
       f();
-      return;
+      return true;
     }
     catch (const std::exception& e)
     {
@@ -275,6 +280,7 @@ private:
     {
       failed(what, "an unknown exception");
     }
+    return false;
   }
 
   // W.5: called from the guards' handlers, so it throws nothing itself
@@ -289,9 +295,43 @@ private:
     }
     try
     {
-      message(
-        DeclMessageKind::Error,
-        fmt::format("The material parse thread's {} failed: {}", what, reason));
+      m_lastFailure =
+        fmt::format("The material parse thread's {} failed: {}", what, reason);
+      message(DeclMessageKind::Error, m_lastFailure);
+    }
+    catch (...)
+    {
+    }
+  }
+
+  /**
+   * X.2: the thread ends without a stop, so nothing will take a request again. Every
+   * later lookup is answered Failed and every later evaluation refused, with the failure,
+   * by the calling thread (MaterialService::lookup, evaluate), and the requests still
+   * queued are dropped: their callers get the same answer when they ask again.
+   */
+  void endWithoutStop() noexcept
+  {
+    if (stopping())
+    {
+      return;
+    }
+    try
+    {
+      auto reason = m_lastFailure.empty()
+                      ? std::string{"The material parse thread stopped by itself"}
+                      : m_lastFailure;
+      auto refused = refusal(reason);
+      {
+        auto lock = std::scoped_lock{m_shared.mutex};
+        m_shared.stats.threadError = std::move(reason);
+        m_shared.threadRefusal = std::move(refused);
+        m_shared.lookups.clear();
+        m_shared.queuedLookups.clear();
+        m_shared.evaluations.clear();
+        m_shared.queuedEvaluations.clear();
+      }
+      m_shared.changed.notify_all();
     }
     catch (...)
     {
@@ -301,7 +341,7 @@ private:
   /**
    * W.5: what run lets escape (only an allocation failure outside every guard) ends the
    * thread, never the process. The registry is still destroyed on its own thread (C20),
-   * and the reason reaches the listener.
+   * the reason reaches the listener, and every later request fails with it (X.2).
    */
   void escaped(const char* reason) noexcept
   {
@@ -314,6 +354,7 @@ private:
     {
     }
     failed("loop", reason);
+    endWithoutStop();
   }
 
   void run()
@@ -321,10 +362,15 @@ private:
     guarded("build", [&] { build({}); });
     for (;;)
     {
-      // W.5: a request the thread cannot take (an allocation failure while it copies the
-      // queue) ends the loop as a stop does, rather than trying it again at once
+      // W.5, X.2: a request the thread cannot take (an allocation failure while it copies
+      // the queue) ends the loop rather than trying it again at once, and every later
+      // request fails
       auto work = Work{};
-      guarded("request", [&] { work = takeWork(); });
+      if (!guarded("request", [&] { work = takeWork(); }))
+      {
+        endWithoutStop();
+        break;
+      }
       if (work.kind == WorkKind::Stop)
       {
         break;
@@ -381,6 +427,10 @@ private:
 
   Work takeWork()
   {
+    if (m_shared.options.beforeTakeWorkForTesting)
+    {
+      m_shared.options.beforeTakeWorkForTesting();
+    }
     auto lock = std::unique_lock{m_shared.mutex};
     for (;;)
     {
@@ -979,6 +1029,12 @@ MaterialLookup MaterialService::lookup(const std::string_view name)
 
   {
     auto lock = std::scoped_lock{m_shared->mutex};
+    // X.2: no thread will take the lookup
+    if (!m_shared->stats.threadError.empty())
+    {
+      return MaterialLookup{
+        MaterialLookup::State::Failed, nullptr, m_shared->stats.threadError};
+    }
     auto text = std::string{name};
     if (!m_shared->stop && m_shared->queuedLookups.insert(text).second)
     {
@@ -1000,6 +1056,11 @@ std::shared_ptr<const EvaluatedRegisters> MaterialService::evaluate(
 
   {
     auto lock = std::scoped_lock{m_shared->mutex};
+    // X.2: no thread will take the evaluation
+    if (m_shared->threadRefusal)
+    {
+      return m_shared->threadRefusal;
+    }
     if (!m_shared->stop && m_shared->queuedEvaluations.insert(key).second)
     {
       m_shared->evaluations.push_back(key);

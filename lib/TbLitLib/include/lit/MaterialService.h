@@ -174,6 +174,9 @@ struct MaterialServiceOptions
   bool parseAll = false;
   // runs on the parse thread before each bulk step
   std::function<void()> beforeBulkStepForTesting;
+  // runs on the parse thread each time it takes a request; what it throws is a request
+  // the thread cannot take (X.2)
+  std::function<void()> beforeTakeWorkForTesting;
 };
 
 struct MaterialServiceStats
@@ -213,6 +216,8 @@ struct MaterialServiceStats
   std::uint64_t failedWorkItems = 0;
   // the thread waits for a request, and its last work item is done and freed
   bool idle = false;
+  // why the thread ended without a stop (X.2); empty while it serves
+  std::string threadError;
 };
 
 /**
@@ -234,8 +239,11 @@ struct MaterialServiceStats
  * build that throws publishes an empty table; until a build succeeds, every lookup is
  * published as Failed and every evaluation as refused, with the build's failure, and the
  * loose files are still polled through the source, so a changed file builds again (W.4).
- * What escapes every guard (an allocation failure) ends the thread, never the process,
- * and is logged (W.5).
+ * A build whose makeSource threw has no source to poll: only reload() builds again.
+ * A request the thread cannot take, or what escapes every guard (an allocation failure),
+ * ends the thread, never the process: it is logged, stats().threadError says why, and
+ * every later lookup answers Failed and every later evaluation a refusal with it, without
+ * queueing anything (W.5, X.2).
  *
  * Stop (§3.1 teardown steps 1 and 8, R5.20, G4): requestStop returns at once. The thread
  * stops within one directory entry, one container table entry or one .pk4 directory

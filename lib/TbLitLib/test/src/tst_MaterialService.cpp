@@ -340,21 +340,26 @@ std::string diffuseImage(const MaterialEntry& entry)
   return {};
 }
 
-// W.6: enough containers for a full scan of more than 2 s in Debug (about 2.5 s for 96
-// here). Release reads their tables about ten times faster: 384 take about 1 s, still a
-// hundred times the 5 ms the test waits before its stop
+// W.6, X.3: how long a full container scan must take, so that a stop 5 ms into it lands
+// inside it: 2 s in Debug, and in Release, which reads the tables about ten times faster,
+// 250 ms, still fifty times those 5 ms. The test doubles the containers from
+// FirstScanContainers until a scan takes that long (about 128 here in either build, 22 MB
+// of temporary files), and skips at MaxScanContainers.
 #ifdef NDEBUG
-constexpr auto ScanContainers = 384;
-constexpr auto LongScan = std::chrono::milliseconds{500};
+constexpr auto LongScan = std::chrono::milliseconds{250};
 #else
-constexpr auto ScanContainers = 128;
 constexpr auto LongScan = std::chrono::milliseconds{2000};
 #endif
+constexpr auto FirstScanContainers = 64;
+constexpr auto MaxScanContainers = 8 * FirstScanContainers;
 
-// a game folder whose base holds count .resources files of entries each, so that a full
-// container scan takes long
+// adds the .resources files first to count - 1 to the game folder's base, of entries
+// each, so that a full container scan takes long
 void writeScanHeavyGame(
-  const std::filesystem::path& gamePath, const int count, const int entries)
+  const std::filesystem::path& gamePath,
+  const int first,
+  const int count,
+  const int entries)
 {
   auto files = std::vector<std::pair<std::string, std::string>>{};
   for (int i = 0; i < entries; ++i)
@@ -362,7 +367,7 @@ void writeScanHeavyGame(
     files.emplace_back(fmt::format("materials/scan/entry{:05}.mtr", i), "x");
   }
   const auto bytes = resourcesBytes(files);
-  for (int i = 0; i < count; ++i)
+  for (int i = first; i < count; ++i)
   {
     writeTextFile(gamePath / "base" / fmt::format("scan{:03}.resources", i), bytes);
   }
@@ -574,21 +579,36 @@ TEST_CASE("MaterialService")
   SECTION("a stop during the container scan ends within half a second")
   {
     // G4: containers of 4000 entries; the stop flag is checked for every directory entry
-    // and every container table entry. W.6: the full scan takes long (LongScan), so a
-    // stop 5 ms into it lands inside it, and the cancelled source holds fewer containers
+    // and every container table entry. W.6, X.3: the full scan takes long (LongScan), so
+    // a stop 5 ms into it lands inside it, and the cancelled source holds fewer
+    // containers
     const auto folder = TempFolder{"tb-lit-scan"};
-    writeScanHeavyGame(folder.path(), ScanContainers, 4000);
-
-    const auto fullStarted = Clock::now();
+    auto containers = 0;
+    auto fullScan = Clock::duration{};
+    for (auto wanted = FirstScanContainers; fullScan <= LongScan; wanted *= 2)
     {
-      const auto full = GameDeclSource{folder.path()};
-      CHECK(full.searchOrder().size() == std::size_t(ScanContainers));
-      CHECK(full.containerCount() == std::size_t(ScanContainers));
+      if (wanted > MaxScanContainers)
+      {
+        SKIP(fmt::format(
+          "{} containers scan in {:.0f} ms, not over {} ms: this machine is too fast for "
+          "the test",
+          containers,
+          std::chrono::duration<double, std::milli>(fullScan).count(),
+          LongScan.count()));
+      }
+      writeScanHeavyGame(folder.path(), containers, wanted, 4000);
+      containers = wanted;
+
+      const auto fullStarted = Clock::now();
+      {
+        const auto full = GameDeclSource{folder.path()};
+        CHECK(full.searchOrder().size() == std::size_t(containers));
+        CHECK(full.containerCount() == std::size_t(containers));
+      }
+      fullScan = Clock::now() - fullStarted;
+      std::cout << "container scan: " << containers << " containers in "
+                << std::chrono::duration<double, std::milli>(fullScan).count() << " ms\n";
     }
-    const auto fullScan = Clock::now() - fullStarted;
-    std::cout << "container scan: " << ScanContainers << " containers in "
-              << std::chrono::duration<double, std::milli>(fullScan).count() << " ms\n";
-    REQUIRE(fullScan > LongScan);
 
     auto entered = std::make_shared<Gate>();
     auto service = start(options([path = folder.path(),
@@ -610,7 +630,7 @@ TEST_CASE("MaterialService")
     CAPTURE(fullScanMs, stopMs);
     CHECK(stopTime < 500ms);
     CHECK(service->stats().buildCancelled);
-    CHECK(service->stats().sourceContainers < std::size_t(ScanContainers));
+    CHECK(service->stats().sourceContainers < std::size_t(containers));
   }
 
   SECTION("a work item that throws is logged, and the thread goes on")
@@ -701,6 +721,51 @@ TEST_CASE("MaterialService")
       [](const auto& s) { return s.builds == 1u; }, Timeout));
     CHECK(service->stats().pollReloads == 1u);
     CHECK(calls->load() == 2);
+  }
+
+  SECTION("a request the thread cannot take ends it, and every later request fails")
+  {
+    // X.2: the hook throws the first time the thread takes a request, after its build
+    auto collected = Collected{};
+    auto takes = std::make_shared<std::atomic<int>>(0);
+    auto serviceOptions = options(fixtureSource, collected.listener());
+    serviceOptions.beforeTakeWorkForTesting = [takes] {
+      if (++*takes == 1)
+      {
+        throw std::runtime_error{"an injected request failure"};
+      }
+    };
+    auto service = start(std::move(serviceOptions));
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return !s.threadError.empty(); }, Timeout));
+    CHECK_THAT(
+      service->stats().threadError,
+      Catch::Matchers::ContainsSubstring("an injected request failure"));
+    CHECK(service->stats().builds == 1u);
+    CHECK(service->stats().failedWorkItems == 1u);
+    CHECK(collected.problemsWith("an injected request failure") == 1u);
+
+    // each lookup and evaluation is answered at once, and nothing waits for a thread that
+    // is gone
+    for (auto i = 0; i < 2; ++i)
+    {
+      CAPTURE(i);
+      const auto found = service->lookup("textures/lp1a/wall");
+      CHECK(found.state == MaterialLookup::State::Failed);
+      CHECK_FALSE(found.entry);
+      CHECK_THAT(
+        found.error, Catch::Matchers::ContainsSubstring("an injected request failure"));
+
+      const auto registers = service->evaluate(MaterialId{1, 0}, NoParms, 0.0f);
+      REQUIRE(registers);
+      CHECK(registers->registers.empty());
+      CHECK_THAT(
+        registers->error,
+        Catch::Matchers::ContainsSubstring("an injected request failure"));
+    }
+    service->join();
+    CHECK(takes->load() == 1);
+    CHECK(service->stats().failedWorkItems == 1u);
   }
 
   SECTION("a source that keeps changing rebuilds once per autoReloadInterval")
