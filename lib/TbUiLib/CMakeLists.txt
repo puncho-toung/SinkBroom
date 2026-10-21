@@ -405,6 +405,12 @@ target_link_libraries(TbUiLib
     VmLib
 )
 
+if(TB_ENABLE_LIT_PREVIEW)
+  # Only source files test the definition, so it stays private.
+  target_link_libraries(TbUiLib PRIVATE TbLitLib)
+  target_compile_definitions(TbUiLib PRIVATE TB_ENABLE_LIT_PREVIEW=1)
+endif()
+
 set_target_properties(TbUiLib PROPERTIES AUTOMOC TRUE)
 
 if(APPLE)
