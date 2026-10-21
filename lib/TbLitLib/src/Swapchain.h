@@ -57,6 +57,8 @@ struct SwapchainGeneration
   bool stale = false;
   // the recreate request was posted (once per generation)
   bool recreateRequested = false;
+  // SUBOPTIMAL again at the size of the generation it replaced: presented as it is
+  bool suboptimalIgnored = false;
 };
 
 struct SwapchainSpec

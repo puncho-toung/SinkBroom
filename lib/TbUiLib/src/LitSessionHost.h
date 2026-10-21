@@ -171,8 +171,9 @@ public:
 
   // Window events.
 
-  // an expose, a resize or a DPR change: phase B, the exposure, the swapchain's size
+  // an expose or a resize: phase B, the exposure, the swapchain's size
   void windowChanged();
+  void devicePixelRatioChanged();
   void surfaceAboutToBeDestroyed();
   void screenChanged();
   void updateRequested();

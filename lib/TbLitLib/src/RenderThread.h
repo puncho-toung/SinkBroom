@@ -110,6 +110,8 @@ private:
   CameraState m_camera;
   FramePacer m_pacer;
   std::function<void()> m_beforePresentHook;
+  // the extent of the last generation replaced because it was SUBOPTIMAL
+  std::optional<vk::Extent2D> m_suboptimalExtent;
 
   // ----- GUI thread -----
   std::thread m_thread;
@@ -144,6 +146,8 @@ public:
   bool hasSwapchain() const;
   void setSwapchain(std::unique_ptr<SwapchainGeneration> swapchain);
   std::unique_ptr<SwapchainGeneration> takeSwapchain();
+  // the window's DPR or screen changed: SUBOPTIMAL may mean something new again
+  void surfaceChanged();
 
   // GUI thread: teardown step 1, and step 2's frame resources after the join.
 
@@ -169,7 +173,8 @@ private:
   FrameOutcome drawFrame(const CameraState& camera);
   bool waitForFrameEvent(std::size_t slot);
   void runBeforePresentHook();
-  void requestRecreate(SwapchainGeneration& generation, std::string_view reason);
+  void requestRecreate(
+    SwapchainGeneration& generation, std::string_view reason, bool suboptimal = false);
 
   void idleTick();
   bool waitForIdle(std::string_view when);

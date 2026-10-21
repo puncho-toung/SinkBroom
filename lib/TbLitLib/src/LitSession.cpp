@@ -230,6 +230,11 @@ void LitSession::unpark()
   m_renderThread->unpark();
 }
 
+void LitSession::surfaceChanged()
+{
+  m_renderThread->surfaceChanged();
+}
+
 void LitSession::requestStop()
 {
   m_events->beginStop();

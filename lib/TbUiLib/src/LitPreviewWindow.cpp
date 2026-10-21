@@ -77,7 +77,7 @@ bool LitPreviewWindow::event(QEvent* event)
   case QEvent::DevicePixelRatioChange:
     if (m_host)
     {
-      m_host->windowChanged();
+      m_host->devicePixelRatioChanged();
     }
     break;
   // D44: the preview takes no input, so that every key and click stays with the views

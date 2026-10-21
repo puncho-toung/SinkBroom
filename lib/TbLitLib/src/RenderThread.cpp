@@ -280,6 +280,12 @@ std::unique_ptr<SwapchainGeneration> RenderThread::takeSwapchain()
   return std::move(m_swapchain);
 }
 
+void RenderThread::surfaceChanged()
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  m_suboptimalExtent = std::nullopt;
+}
+
 void RenderThread::requestStop()
 {
   {
@@ -509,7 +515,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         break;
       case vk::Result::eSuboptimalKHR:
         // the image is acquired and its semaphore will be signalled: draw and present
-        requestRecreate(*target, "acquire returned SUBOPTIMAL");
+        requestRecreate(*target, "acquire returned SUBOPTIMAL", true);
         break;
       case vk::Result::eTimeout:
       case vk::Result::eNotReady:
@@ -606,7 +612,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       case vk::Result::eSuccess:
         break;
       case vk::Result::eSuboptimalKHR:
-        requestRecreate(*target, "present returned SUBOPTIMAL");
+        requestRecreate(*target, "present returned SUBOPTIMAL", true);
         break;
       case vk::Result::eErrorOutOfDateKHR:
         shown = false;
@@ -701,15 +707,31 @@ void RenderThread::runBeforePresentHook()
 }
 
 void RenderThread::requestRecreate(
-  SwapchainGeneration& generation, const std::string_view reason)
+  SwapchainGeneration& generation, const std::string_view reason, const bool suboptimal)
 {
-  if (!generation.recreateRequested)
+  if (generation.recreateRequested || (suboptimal && generation.suboptimalIgnored))
   {
-    generation.recreateRequested = true;
-    m_events.post(
-      SessionEvent::SwapchainOutOfDate,
-      fmt::format("Swapchain generation {}: {}", generation.number, reason));
+    return;
   }
+
+  if (suboptimal)
+  {
+    // A new generation of the same size that is SUBOPTIMAL again would be replaced on
+    // every frame, so it presents on as it is until the size, DPR or screen changes
+    // (review L2.6, L3.14).
+    const auto lock = std::scoped_lock{m_mutex};
+    if (m_suboptimalExtent == generation.extent)
+    {
+      generation.suboptimalIgnored = true;
+      return;
+    }
+    m_suboptimalExtent = generation.extent;
+  }
+
+  generation.recreateRequested = true;
+  m_events.post(
+    SessionEvent::SwapchainOutOfDate,
+    fmt::format("Swapchain generation {}: {}", generation.number, reason));
 }
 
 void RenderThread::idleTick()

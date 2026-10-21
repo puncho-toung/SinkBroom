@@ -201,6 +201,12 @@ public:
     VkSurfaceKHR surface, std::uint32_t width, std::uint32_t height);
   bool hasSwapchain() const;
   void unpark();
+  /**
+   * The window's DPR or screen changed. A generation that the surface reports SUBOPTIMAL
+   * is replaced once; a new one of the same size that is SUBOPTIMAL again presents on as
+   * it is, until the size changes or this is called.
+   */
+  void surfaceChanged();
 
   // Teardown (§3.1 steps), GUI thread; the Qt side deletes the window container between
   // releaseGpuObjects and destroyVkDevice (step 6). Each step runs once and runs the

@@ -260,6 +260,15 @@ void LitSessionHost::windowChanged()
   reconcile();
 }
 
+void LitSessionHost::devicePixelRatioChanged()
+{
+  if (drawing())
+  {
+    m_session->surfaceChanged();
+  }
+  reconcile();
+}
+
 void LitSessionHost::surfaceAboutToBeDestroyed()
 {
   if (!drawing())
@@ -309,6 +318,7 @@ void LitSessionHost::screenChanged()
     return;
   }
 
+  m_session->surfaceChanged();
   m_swapchainStale = true;
   reconcile();
 }
