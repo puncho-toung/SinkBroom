@@ -829,6 +829,76 @@ const idDecl* idDeclManagerLocal::DeclByIndex( declType_t type, int index, bool 
 
 	return decl->self;
 }
+// ==== engine neo/framework/DeclManager.cpp lines 1547-1615 (idDeclManagerLocal::PrintType) ====
+/*
+===================
+idDeclManagerLocal::PrintType
+===================
+*/
+void idDeclManagerLocal::PrintType( const idCmdArgs& args, declType_t type )
+{
+	// individual decl types may use additional command parameters
+	if( args.Argc() < 2 )
+	{
+		common->Printf( "USAGE: Print<decl type> <decl name> [type specific parms]\n" );
+		return;
+	}
+
+	// look it up, skipping the public path so it won't parse or reference
+	idDeclLocal* decl = FindTypeWithoutParsing( type, args.Argv( 1 ), false );
+	if( !decl )
+	{
+		common->Printf( "%s '%s' not found.\n", declTypes[ type ]->typeName.c_str(), args.Argv( 1 ) );
+		return;
+	}
+
+	// print information common to all decls
+	common->Printf( "%s %s:\n", declTypes[ type ]->typeName.c_str(), decl->name.c_str() );
+	common->Printf( "source: %s:%i\n", decl->sourceFile->fileName.c_str(), decl->sourceLine );
+	common->Printf( "----------\n" );
+	if( decl->textSource != NULL )
+	{
+		char* declText = ( char* )_alloca( decl->textLength + 1 );
+		decl->GetText( declText );
+		common->Printf( "%s\n", declText );
+	}
+	else
+	{
+		common->Printf( "NO SOURCE\n" );
+	}
+	common->Printf( "----------\n" );
+	switch( decl->declState )
+	{
+		case DS_UNPARSED:
+			common->Printf( "Unparsed.\n" );
+			break;
+		case DS_DEFAULTED:
+			common->Printf( "<DEFAULTED>\n" );
+			break;
+		case DS_PARSED:
+			common->Printf( "Parsed.\n" );
+			break;
+	}
+
+	if( decl->referencedThisLevel )
+	{
+		common->Printf( "Currently referenced this level.\n" );
+	}
+	else if( decl->everReferenced )
+	{
+		common->Printf( "Referenced in a previous level.\n" );
+	}
+	else
+	{
+		common->Printf( "Never referenced.\n" );
+	}
+
+	// allow type-specific data to be printed
+	if( decl->self != NULL )
+	{
+		decl->self->Print();
+	}
+}
 // ==== engine neo/framework/DeclManager.cpp lines 1761-1786 (idDeclManagerLocal::MediaPrint) ====
 /*
 ===================

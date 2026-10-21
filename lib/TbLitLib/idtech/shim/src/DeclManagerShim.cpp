@@ -147,10 +147,9 @@ int idDeclManagerLocal::GetChecksum() const
   return 0;
 }
 
-// console commands: nothing is printed
+// console command: nothing is listed (PrintType is copied, for the goldens' printMaterial
+// and printTable)
 void idDeclManagerLocal::ListType(const idCmdArgs&, declType_t) {}
-
-void idDeclManagerLocal::PrintType(const idCmdArgs&, declType_t) {}
 
 // the material editor's functions; SinkBroom never writes decls
 idDecl* idDeclManagerLocal::CreateNewDecl(declType_t, const char* name, const char*)
