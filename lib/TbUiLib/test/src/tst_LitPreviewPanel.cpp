@@ -619,6 +619,48 @@ const DriverCost& driverCostPerSession()
   return cost;
 }
 
+/**
+ * W.2 (plans/lit-preview/13-LITGPU-FLAKE.md): pays the window system's one-time costs of
+ * the process before the first baseline. The first time a window of the process becomes
+ * the foreground window, Windows sets up the GUI thread's text input (about 23 handles,
+ * among them a [CoreUI] ALPC port, and 3 USER objects), and the first minimise or restore
+ * opens the Segoe MDL2 font (2 handles); all of it stays for the life of the process.
+ * When Windows keeps the harness window from the foreground at show (its foreground lock,
+ * while the user works in another application), a later section that minimises, restores
+ * or activates the window would pay them after its baseline. One minimise and restore,
+ * then an activation as the keyboard section's, pay them here, once per process; the log
+ * says whether the process then held the foreground.
+ */
+void payWindowSystemCostsOnce(QMainWindow& window)
+{
+  static auto paid = false;
+  if (std::exchange(paid, true))
+  {
+    return;
+  }
+
+  window.showMinimized();
+  QTest::qWait(300);
+  window.showNormal();
+  REQUIRE(QTest::qWaitForWindowExposed(&window));
+  window.activateWindow();
+  // best effort: Windows may refuse the foreground, which the log line below shows
+  static_cast<void>(QTest::qWaitForWindowActive(&window));
+  QTest::qWait(200);
+
+  auto foregroundProcess = DWORD{0};
+  if (const auto foreground = GetForegroundWindow())
+  {
+    GetWindowThreadProcessId(foreground, &foregroundProcess);
+  }
+  std::cout << "window-system warm-up: the foreground window "
+            << (foregroundProcess == GetCurrentProcessId()
+                  ? "belongs to this process"
+                  : "does not belong to this process (Windows refused it): repeat "
+                    "the run if a count check fails")
+            << "\n";
+}
+
 // beyond the counts after the first Stop: what Qt and the driver make on demand
 constexpr auto ThreadTolerance = 2;
 constexpr auto HandleTolerance = 8;
@@ -994,6 +1036,9 @@ std::vector<std::vector<std::string>> readCsv(const std::filesystem::path& path)
 
 TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
 {
+  // The process counts depend on desktop focus: a run whose log says the process never
+  // held the foreground (the window-system warm-up line) is to be repeated, not read as a
+  // leak.
   const auto validation = ValidationMessages{"panel"};
   auto harness = PanelHarness{};
   auto& panel = *harness.panel;
@@ -1012,6 +1057,7 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
   CHECK(startPageShown(panel));
   CHECK(messageText(panel) == PressStartText);
   QTest::qWait(200);
+  payWindowSystemCostsOnce(harness.window);
   driverCostPerSession();
   const auto baseline = processCounts();
   const auto devicesAtBaseline = reports.sessionsWithDevice();
