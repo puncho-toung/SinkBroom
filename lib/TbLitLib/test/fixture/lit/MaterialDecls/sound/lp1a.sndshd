@@ -1,0 +1,6 @@
+// the sound folder's default type is sound, so a decl needs no type token
+
+lp1a_hum
+{
+	sound/lp1a/hum.wav
+}

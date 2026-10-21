@@ -1,0 +1,23 @@
+// LP1a.1 fixtures: entityDef inheritance and a table outside the materials folder
+
+table lp1aDefTable { { 2, 4 } }
+
+entityDef lp1a_base
+{
+	"spawnclass"	"idStaticEntity"
+	"_color"		"1 0.5 0.25"
+	"noshadows"		"0"
+}
+
+entityDef lp1a_lamp
+{
+	"inherit"		"lp1a_base"
+	"noshadows"		"1"
+	"model"			"models/lp1a/lamp.lwo"
+}
+
+entityDef lp1a_orphan
+{
+	"inherit"		"lp1a_nope"
+	"model"			"models/lp1a/orphan.lwo"
+}

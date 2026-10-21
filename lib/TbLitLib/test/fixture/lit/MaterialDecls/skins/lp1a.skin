@@ -1,0 +1,6 @@
+// LP1a.1 fixtures: a skin decl, so the skins folder is read
+
+skin skins/lp1a/red
+{
+	textures/lp1a/wall	textures/lp1a/pbr
+}

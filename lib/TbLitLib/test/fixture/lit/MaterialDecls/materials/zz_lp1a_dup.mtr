@@ -1,0 +1,6 @@
+// a second definition of a material: the first one in load order wins
+
+textures/lp1a/wall
+{
+	diffusemap textures/lp1a/other_d
+}

@@ -1,0 +1,7 @@
+articulatedFigure lp1a_ragdoll
+{
+	settings
+	{
+		model "models/lp1a/ragdoll.md5mesh"
+	}
+}

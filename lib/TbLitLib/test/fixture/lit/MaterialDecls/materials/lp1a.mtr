@@ -1,0 +1,173 @@
+// LP1a.1 fixtures: one material per parse feature, expected values derived from the
+// engine's renderer/Material.cpp at the pinned commit
+
+table sinTable { { 0, 1, 0, -1 } }
+table cosTable { { 1, 0, -1, 0 } }
+table lp1aRamp { clamp { 0, 10, 20 } }
+table lp1aSnap { snap { 0, 1 } }
+
+textures/lp1a/wall
+{
+	qer_editorimage textures/lp1a/wall_ed.tga
+	diffusemap textures/lp1a/wall_d.tga
+	bumpmap textures/lp1a/wall_local.tga
+	specularmap textures/lp1a/wall_s.tga
+}
+
+textures/lp1a/pbr
+{
+	basecolormap textures/lp1a/pbr_d
+	rmaomap textures/lp1a/pbr_rmao
+	normalmap addnormals( textures/lp1a/pbr_local, heightmap( textures/lp1a/pbr_h, 4 ) )
+}
+
+textures/lp1a/diffuseOnly
+{
+	diffusemap textures/lp1a/plain.png
+}
+
+textures/lp1a/grate
+{
+	{
+		blend diffusemap
+		map textures/lp1a/grate_d
+		alphaTest 0.5
+	}
+}
+
+textures/lp1a/expr
+{
+	{
+		blend add
+		map textures/lp1a/glow
+		rgb lp1aRamp[ parm0 ]
+		alpha 0.5 * sinTable[ time ]
+		scroll time * 0.1, 0
+		if ( parm1 > 0.5 )
+	}
+}
+
+textures/lp1a/snap
+{
+	{
+		blend add
+		map textures/lp1a/glow
+		rgb lp1aSnap[ parm0 ]
+		red lp1aDefTable[ 0.25 ]
+	}
+}
+
+textures/lp1a/rotate
+{
+	{
+		blend blend
+		map textures/lp1a/glow
+		rotate time
+	}
+}
+
+textures/lp1a/constant
+{
+	{
+		blend filter
+		map textures/lp1a/decal
+		alpha 0.25 + 0.5
+		alphaTest 0.5
+	}
+}
+
+textures/lp1a/program
+{
+	{
+		program lp1aEffect.vfp
+		vertexParm 0 time, 1
+		fragmentMap 0 textures/lp1a/prog_map
+		fragmentMap 1 textures/lp1a/prog_local
+	}
+}
+
+textures/lp1a/screen
+{
+	qer_editorimage textures/lp1a/screen_ed
+	{
+		videomap loop video/lp1a_intro.bik
+		linear
+	}
+}
+
+textures/lp1a/soundviz
+{
+	{
+		soundmap waveform
+	}
+}
+
+textures/lp1a/guiscreen
+{
+	guisurf guis/lp1a/screen.gui
+	{
+		blend add
+		map textures/lp1a/screenglow
+	}
+}
+
+textures/lp1a/flare
+{
+	deform flare 16
+	sort nearest
+	translucent
+	{
+		blend add
+		map textures/lp1a/flare_glow
+	}
+}
+
+textures/lp1a/decal
+{
+	DECAL_MACRO
+	twoSided
+	{
+		blend blend
+		map textures/lp1a/decal_d.tga
+		vertexColor
+	}
+}
+
+textures/lp1a/sky
+{
+	noFragment
+	{
+		blend GL_ONE, GL_ONE
+		cubeMap env/lp1a_sky
+		texgen skybox
+		nearest
+		clamp
+	}
+}
+
+lights/lp1a_round
+{
+	lightFalloffImage makeIntensity( lights/lp1a_falloff.tga )
+	{
+		map lights/lp1a_round.tga
+		colored
+		zeroClamp
+	}
+}
+
+textures/lp1a/broken
+{
+	bogusKeyword
+	{
+		map textures/lp1a/never
+	}
+}
+
+textures/lp1a/smoke
+{
+	deform particle lp1a_smoke
+	{
+		blend add
+		map textures/lp1a/smoke
+	}
+}

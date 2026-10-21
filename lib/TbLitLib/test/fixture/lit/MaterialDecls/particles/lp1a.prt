@@ -1,0 +1,10 @@
+// a decl of every type the engine registers in these folders: each must be split
+// without a warning, which needs every type registered (D33)
+
+particle lp1a_smoke
+{
+	{
+		count 4
+		material textures/lp1a/smoke
+	}
+}
