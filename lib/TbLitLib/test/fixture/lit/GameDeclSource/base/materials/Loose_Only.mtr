@@ -1,0 +1,6 @@
+// GameDeclSource fixture: only loose, with the case of its file name kept
+
+textures/gds/looseOnly
+{
+	diffusemap	textures/gds/looseOnly_loose
+}

@@ -1,0 +1,6 @@
+// GameDeclSource fixture: the loose copy, which wins over the .pk4 and .resources copies
+
+textures/gds/shared
+{
+	diffusemap	textures/gds/shared_loose
+}

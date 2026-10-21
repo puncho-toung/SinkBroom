@@ -13,6 +13,8 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FramePacer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameTimers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameTimers.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/GameDeclSource.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/GameFile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSession.cpp
@@ -21,6 +23,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NvrhiSupport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ResourceContainer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SessionEvents.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SessionEvents.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Swapchain.cpp
@@ -37,11 +40,12 @@ target_sources(TbLitLib
 # nvrhi_vk is public for its public VK_USE_PLATFORM_WIN32_KHR: every file that includes
 # vulkan.hpp must see the platform defines NVRHI was compiled with. The Vulkan headers are
 # the pinned set (C13, cmake/dependencies/nvrhi.cmake). TbBaseLib brings Result, VmLib and
-# fmt; nothing here links Qt.
+# fmt; TbFsLib reads the game's .pk4 files (D55); nothing here links Qt.
 target_link_libraries(TbLitLib
   PRIVATE
     CompilerConfig
     PrecompileStdHeaders
+    TbFsLib
     TbLitIdLib
   PUBLIC
     TbBaseLib

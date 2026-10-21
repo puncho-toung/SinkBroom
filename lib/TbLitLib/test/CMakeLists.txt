@@ -2,9 +2,12 @@ add_executable(TbLitLibTest)
 EMBED_UTF8_MANIFEST(TbLitLibTest)
 
 target_sources(TbLitLibTest PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/LitTestUtils.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/LitTestUtils.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DeviceChoice.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FrameLog.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FramePacer.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GameDeclSource.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitSession.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialDecls.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_NvrhiSupport.cpp
@@ -14,6 +17,7 @@ target_sources(TbLitLibTest PRIVATE
 
 add_compile_definitions(CATCH_CONFIG_ENABLE_ALL_STRINGMAKERS=1)
 
+# miniz writes the tests' .pk4 files
 target_link_libraries(TbLitLibTest
   PRIVATE
     CompilerConfig
@@ -21,6 +25,7 @@ target_link_libraries(TbLitLibTest
     Catch2::Catch2WithMain
     TbBaseTestUtilsLib
     TbLitLib
+    miniz
 )
 
 # Copy fixtures
