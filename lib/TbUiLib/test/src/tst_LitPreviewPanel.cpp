@@ -20,6 +20,7 @@
 #include <QApplication>
 #include <QDockWidget>
 #include <QEvent>
+#include <QGuiApplication>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMainWindow>
@@ -29,6 +30,9 @@
 #include <QTest>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QVersionNumber>
+#include <QVulkanFunctions>
+#include <QVulkanInstance>
 #include <QWidget>
 #include <QWindow>
 
@@ -37,6 +41,7 @@
 #include "fs/TestEnvironment.h"
 #include "gl/GlManager.h"
 #include "gl/PerspectiveCamera.h"
+#include "lit/LitSession.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/GameInfo.h"
 #include "mdl/Map.h"
@@ -60,14 +65,22 @@
 #include "vm/bbox.h"
 #include "vm/vec.h"
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -117,6 +130,12 @@ bool startPageShown(const LitPreviewPanel& panel)
   return !page->isHidden();
 }
 
+// a session exists once phase A has made the window's container
+bool sessionRunning(const LitPreviewPanel& panel)
+{
+  return panel.findChild<QWidget*>("LitPreviewPanel_Container") != nullptr;
+}
+
 const auto PressStartText =
   std::string{"Press Start to see the map lit as the engine draws it."};
 
@@ -156,6 +175,10 @@ TEST_CASE("LitPreviewPanel")
     checkGreyscaleIcon(panel.iconPath());
     CHECK(!panel.shownByDefault());
     CHECK(panel.defaultArea() == Qt::RightDockWidgetArea);
+
+    // a click on Start or Stop leaves the keyboard with the 3D view (review L3.12)
+    CHECK(findButton(panel, "Start").focusPolicy() == Qt::TabFocus);
+    CHECK(findButton(panel, "Stop").focusPolicy() == Qt::TabFocus);
   }
 
 #ifdef _WIN32
@@ -186,8 +209,7 @@ TEST_CASE("LitPreviewPanel")
       QApplication::processEvents();
 
       CHECK(dock->isVisible());
-      CHECK(!panel->sessionRunning());
-      CHECK(panel->surfaceWindow() == nullptr);
+      CHECK(!sessionRunning(*panel));
       CHECK(startPageShown(*panel));
       if (!loadedBefore)
       {
@@ -221,7 +243,7 @@ TEST_CASE("LitPreviewPanel")
     CHECK(messageText(panel) == "The lit preview needs an idTech 4 game.");
 
     panel.start();
-    CHECK(!panel.sessionRunning());
+    CHECK(!sessionRunning(panel));
   }
 
   SECTION("Start is unavailable in a prefab editor")
@@ -233,7 +255,7 @@ TEST_CASE("LitPreviewPanel")
     CHECK(messageText(panel) == "The lit preview is not available in a prefab editor.");
 
     panel.start();
-    CHECK(!panel.sessionRunning());
+    CHECK(!sessionRunning(panel));
   }
 
   SECTION("a prefab editor window configures its panel")
@@ -258,30 +280,18 @@ TEST_CASE("LitPreviewPanel")
     auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
     auto owner = LitPreviewPanel{fixture.context()};
     auto other = LitPreviewPanel{fixture.context()};
-    REQUIRE(LitPreviewPanel::sessionOwner() == nullptr);
-
-    auto notifications = 0;
-    auto connection = NotifierConnection{};
-    connection +=
-      LitPreviewPanel::sessionOwnerDidChangeNotifier().connect([&] { ++notifications; });
 
     // as Start claims it
-    CHECK(LitPreviewPanel::claimSession(owner));
-    CHECK(notifications == 1);
-    CHECK(LitPreviewPanel::sessionOwner() == &owner);
-    CHECK(!LitPreviewPanel::claimSession(other));
-    CHECK(notifications == 1);
-
+    CHECK(LitPreviewPanel::claimSessionForTesting(owner));
+    CHECK(!LitPreviewPanel::claimSessionForTesting(other));
     CHECK(!findButton(other, "Start").isEnabled());
     CHECK(messageText(other) == "Another window already runs the lit preview.");
     CHECK(owner.unavailableReason().isEmpty());
 
     // as teardown releases it
-    LitPreviewPanel::releaseSession(other);
-    CHECK(LitPreviewPanel::sessionOwner() == &owner);
-    LitPreviewPanel::releaseSession(owner);
-    CHECK(notifications == 2);
-    CHECK(LitPreviewPanel::sessionOwner() == nullptr);
+    LitPreviewPanel::releaseSessionForTesting(other);
+    CHECK(!findButton(other, "Start").isEnabled());
+    LitPreviewPanel::releaseSessionForTesting(owner);
     CHECK(findButton(other, "Start").isEnabled());
     CHECK(messageText(other) == PressStartText);
 
@@ -290,27 +300,50 @@ TEST_CASE("LitPreviewPanel")
     CHECK(messageText(other) == PressStartText);
   }
 
+  SECTION("a panel that goes away releases the session guard")
+  {
+    // review L2.13: a dead owner would keep Start disabled in every window
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto other = LitPreviewPanel{fixture.context()};
+    {
+      auto owner = LitPreviewPanel{fixture.context()};
+      REQUIRE(LitPreviewPanel::claimSessionForTesting(owner));
+      CHECK(!findButton(other, "Start").isEnabled());
+    }
+    CHECK(findButton(other, "Start").isEnabled());
+    CHECK(messageText(other) == PressStartText);
+  }
+
   SECTION("a load without a session keeps the Start page")
   {
     auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
     auto panel = LitPreviewPanel{fixture.context()};
     fixture.document().documentWasLoadedNotifier();
-    CHECK(!panel.sessionRunning());
+    CHECK(!sessionRunning(panel));
     CHECK(findButton(panel, "Start").isEnabled());
     CHECK(messageText(panel) == PressStartText);
   }
 }
 
 // Hidden GPU tests ("[.][litgpu]"): they need a Vulkan 1.2 driver and a desktop, and they
-// show windows. Every section checks that each teardown leaves no NVRHI device reference
-// and no NVRHI error, that the validation layer (in Debug) reported no error, and that
-// the process's threads and handles come back to what they were after the first Stop,
-// which loads the loader and the driver for good (D5).
+// show windows. Every section checks that each teardown reports a clean stop (no NVRHI
+// device reference left, no NVRHI error, no overrun), that the validation layer reported
+// nothing, and that the process's threads, handles, USER and GDI objects come back to
+// what they were after the first Stop, which loads the loader and the driver for good
+// (D5).
 
 #ifdef _WIN32
 
 namespace
 {
+
+using namespace std::chrono_literals;
+
+constexpr auto ValidationLayerName = "VK_LAYER_KHRONOS_validation";
+
+// how long a stop may take when the render thread holds a frame for HoldTime
+constexpr auto HoldTime = 300ms;
+constexpr auto StopBound = 2000ms;
 
 /**
  * Restores the given settings groups as they were when it was made; a map window saves
@@ -365,31 +398,48 @@ void hideRenderViews(QWidget& window)
   }
 }
 
-// What the process may hold beyond its counts after the first Stop: a few threads and
-// handles that Qt and the driver make on demand, and one handle for every VkDevice that
-// was created on a VkInstance since then. The last is the driver's: a bare
-// vkCreateInstance, vkCreateDevice, vkDestroyDevice, vkDestroyInstance cycle leaves one
-// handle behind on this machine's NVIDIA driver, and a cycle without a device none, while
-// sessions on one instance leave none (measured 2026-10-21 in TbLitLibTest).
-constexpr auto ThreadTolerance = 2;
-constexpr auto HandleTolerance = 8;
-constexpr auto DriverHandlesPerDevice = 1;
+// the preview's window of the process's one session
+QWindow* findSurfaceWindow()
+{
+  for (auto* window : QGuiApplication::allWindows())
+  {
+    if (window->objectName() == "LitPreviewWindow")
+    {
+      return window;
+    }
+  }
+  return nullptr;
+}
+
+std::chrono::milliseconds millisecondsSince(
+  const std::chrono::steady_clock::time_point start)
+{
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::steady_clock::now() - start);
+}
 
 struct ProcessCounts
 {
   long threads = 0;
   long handles = 0;
-  // the sessions so far that reached phase B and so created a VkDevice
-  std::uint64_t devices = 0;
+  long userObjects = 0;
+  long gdiObjects = 0;
 };
+
+long handleCount()
+{
+  auto handles = DWORD{0};
+  GetProcessHandleCount(GetCurrentProcess(), &handles);
+  return long(handles);
+}
 
 ProcessCounts processCounts()
 {
   auto counts = ProcessCounts{};
-  counts.devices = LitPreviewPanel::diagnostics().sessionsWithDevice;
-  auto handles = DWORD{0};
-  GetProcessHandleCount(GetCurrentProcess(), &handles);
-  counts.handles = long(handles);
+  counts.handles = handleCount();
+  // GetProcessHandleCount leaves out USER and GDI objects, a leaked window among them
+  counts.userObjects = long(GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS));
+  counts.gdiObjects = long(GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS));
 
   const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
   if (snapshot != INVALID_HANDLE_VALUE)
@@ -410,74 +460,360 @@ ProcessCounts processCounts()
   return counts;
 }
 
-void checkTeardown()
+/**
+ * What the driver keeps of one session's Vulkan objects after they are destroyed.
+ */
+struct DriverCost
 {
-  const auto& diagnostics = LitPreviewPanel::diagnostics();
-  CHECK(diagnostics.lastDeviceReleaseCount == 0u);
-  CHECK(diagnostics.lastNvrhiErrorCount == 0u);
-  CHECK(LitPreviewPanel::sessionOwner() == nullptr);
+  double handles = 0.0;
+  double gdiObjects = 0.0;
+};
+
+/**
+ * One bare Vulkan session without the preview: a QVulkanInstance, a QWindow with its
+ * surface, a VkDevice on the discrete GPU and one swapchain, all destroyed again.
+ */
+bool bareVulkanCycle()
+{
+  auto instance = QVulkanInstance{};
+  instance.setApiVersion(QVersionNumber{1, 2});
+  instance.setFlags(QVulkanInstance::NoDebugOutputRedirect);
+  if (!instance.create())
+  {
+    return false;
+  }
+  auto window = QWindow{};
+  window.setSurfaceType(QSurface::VulkanSurface);
+  window.setVulkanInstance(&instance);
+  window.resize(200, 150);
+  window.show();
+  if (!QTest::qWaitForWindowExposed(&window))
+  {
+    return false;
+  }
+  const auto surface = QVulkanInstance::surfaceForWindow(&window);
+
+  auto* f = instance.functions();
+  auto count = std::uint32_t{0};
+  f->vkEnumeratePhysicalDevices(instance.vkInstance(), &count, nullptr);
+  auto physicalDevices = std::vector<VkPhysicalDevice>(count);
+  f->vkEnumeratePhysicalDevices(instance.vkInstance(), &count, physicalDevices.data());
+  if (physicalDevices.empty())
+  {
+    return false;
+  }
+  auto physicalDevice = physicalDevices.front();
+  for (const auto candidate : physicalDevices)
+  {
+    auto properties = VkPhysicalDeviceProperties{};
+    f->vkGetPhysicalDeviceProperties(candidate, &properties);
+    if (properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+    {
+      physicalDevice = candidate;
+      break;
+    }
+  }
+
+  const auto getSupport = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(
+    instance.getInstanceProcAddr("vkGetPhysicalDeviceSurfaceSupportKHR"));
+  const auto getCapabilities =
+    reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(
+      instance.getInstanceProcAddr("vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
+  auto supported = VkBool32{VK_FALSE};
+  getSupport(physicalDevice, 0, surface, &supported);
+  if (!supported)
+  {
+    return false;
+  }
+  auto capabilities = VkSurfaceCapabilitiesKHR{};
+  getCapabilities(physicalDevice, surface, &capabilities);
+
+  const auto priority = 1.0f;
+  auto queue = VkDeviceQueueCreateInfo{};
+  queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+  queue.queueFamilyIndex = 0;
+  queue.queueCount = 1;
+  queue.pQueuePriorities = &priority;
+  const char* extension = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+  auto deviceInfo = VkDeviceCreateInfo{};
+  deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+  deviceInfo.queueCreateInfoCount = 1;
+  deviceInfo.pQueueCreateInfos = &queue;
+  deviceInfo.enabledExtensionCount = 1;
+  deviceInfo.ppEnabledExtensionNames = &extension;
+  auto device = VkDevice{VK_NULL_HANDLE};
+  if (f->vkCreateDevice(physicalDevice, &deviceInfo, nullptr, &device) != VK_SUCCESS)
+  {
+    return false;
+  }
+
+  const auto createSwapchain = reinterpret_cast<PFN_vkCreateSwapchainKHR>(
+    f->vkGetDeviceProcAddr(device, "vkCreateSwapchainKHR"));
+  const auto destroySwapchain = reinterpret_cast<PFN_vkDestroySwapchainKHR>(
+    f->vkGetDeviceProcAddr(device, "vkDestroySwapchainKHR"));
+  auto swapchainInfo = VkSwapchainCreateInfoKHR{};
+  swapchainInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+  swapchainInfo.surface = surface;
+  swapchainInfo.minImageCount = std::max(capabilities.minImageCount, 2u);
+  swapchainInfo.imageFormat = VK_FORMAT_B8G8R8A8_UNORM;
+  swapchainInfo.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+  swapchainInfo.imageExtent = capabilities.currentExtent;
+  swapchainInfo.imageArrayLayers = 1;
+  swapchainInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+  swapchainInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  swapchainInfo.preTransform = capabilities.currentTransform;
+  swapchainInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+  swapchainInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+  swapchainInfo.clipped = VK_TRUE;
+  auto swapchain = VkSwapchainKHR{VK_NULL_HANDLE};
+  const auto made = createSwapchain(device, &swapchainInfo, nullptr, &swapchain);
+  if (made == VK_SUCCESS)
+  {
+    destroySwapchain(device, swapchain, nullptr);
+  }
+  instance.deviceFunctions(device)->vkDestroyDevice(device, nullptr);
+  instance.resetDeviceFunctions(device);
+  window.destroy();
+  return made == VK_SUCCESS;
+}
+
+/**
+ * The driver's cost per session, measured once: the bare cycle above ten times, after two
+ * that load the loader and the driver. A bare instance costs nothing here and a device
+ * one handle; the NVIDIA driver also keeps one GDI object of a device that made a
+ * swapchain (RTX 2070 Max-Q, measured 2026-10-21). The allowance is that, per session
+ * with a device, and not an assumed +1.
+ */
+const DriverCost& driverCostPerSession()
+{
+  static const auto cost = [] {
+    REQUIRE(bareVulkanCycle());
+    REQUIRE(bareVulkanCycle());
+    QApplication::processEvents();
+    const auto before = processCounts();
+    constexpr auto cycles = 10;
+    for (auto i = 0; i < cycles; ++i)
+    {
+      REQUIRE(bareVulkanCycle());
+    }
+    QApplication::processEvents();
+    const auto after = processCounts();
+    const auto measured = DriverCost{
+      double(after.handles - before.handles) / double(cycles),
+      double(after.gdiObjects - before.gdiObjects) / double(cycles),
+    };
+    std::cout << "driver cost per bare session: " << measured.handles << " handles, "
+              << measured.gdiObjects << " GDI objects\n";
+    return measured;
+  }();
+  return cost;
+}
+
+// beyond the counts after the first Stop: what Qt and the driver make on demand
+constexpr auto ThreadTolerance = 2;
+constexpr auto HandleTolerance = 8;
+constexpr auto GuiObjectTolerance = 4;
+
+long driverAllowance(const double costPerSession, const std::uint64_t sessions)
+{
+  return long(std::lround(std::max(costPerSession, 0.0) * double(sessions)));
 }
 
 /**
  * Checks the counts against the baseline, waiting a little for driver threads that are
- * still winding down.
+ * still winding down. The handles and the GDI objects may grow by the driver's measured
+ * cost per session that had a device, no more.
  */
-void checkProcessCounts(const ProcessCounts& baseline, const std::string_view label)
+void checkProcessCounts(
+  const ProcessCounts& baseline,
+  const std::uint64_t sessionsWithDevice,
+  const std::string_view label)
 {
-  auto counts = processCounts();
-  const auto devices = long(counts.devices - baseline.devices);
+  const auto& cost = driverCostPerSession();
+  const auto driverHandles = driverAllowance(cost.handles, sessionsWithDevice);
+  const auto driverGdiObjects = driverAllowance(cost.gdiObjects, sessionsWithDevice);
   const auto maxThreads = baseline.threads + ThreadTolerance;
-  const auto maxHandles =
-    baseline.handles + HandleTolerance + devices * DriverHandlesPerDevice;
+  const auto maxHandles = baseline.handles + HandleTolerance + driverHandles;
+  const auto maxUserObjects = baseline.userObjects + GuiObjectTolerance;
+  const auto maxGdiObjects = baseline.gdiObjects + GuiObjectTolerance + driverGdiObjects;
+  auto counts = processCounts();
   const auto settled = QTest::qWaitFor(
     [&] {
       counts = processCounts();
-      return counts.threads <= maxThreads && counts.handles <= maxHandles;
+      return counts.threads <= maxThreads && counts.handles <= maxHandles
+             && counts.userObjects <= maxUserObjects
+             && counts.gdiObjects <= maxGdiObjects;
     },
     3000);
-  std::cout << label << ": threads " << baseline.threads << " -> " << counts.threads
-            << ", handles " << baseline.handles << " -> " << counts.handles << " after "
-            << devices << " devices" << (settled ? "" : " (not settled)") << "\n";
+  std::cout << label << " (" << sessionsWithDevice << " sessions with a device): threads "
+            << baseline.threads << " -> " << counts.threads << ", handles "
+            << baseline.handles << " -> " << counts.handles << " (driver allowance "
+            << driverHandles << "), USER " << baseline.userObjects << " -> "
+            << counts.userObjects << ", GDI " << baseline.gdiObjects << " -> "
+            << counts.gdiObjects << " (driver allowance " << driverGdiObjects << ")"
+            << (settled ? "" : " (not settled)") << "\n";
   CHECK(counts.threads <= maxThreads);
   CHECK(counts.handles <= maxHandles);
+  CHECK(counts.userObjects <= maxUserObjects);
+  CHECK(counts.gdiObjects <= maxGdiObjects);
 }
 
 /**
- * The validation layer's errors (Debug builds) since it was made; printed with the
- * warnings when it goes.
+ * Counts the validation layer's messages, which Qt's debug messenger logs with qDebug as
+ * "vkDebug: ..." (warnings and errors). Qt's messenger exists only between the instance's
+ * creation and its destruction, so messages about the instance itself, and about objects
+ * left when it is destroyed, are not seen here; TbLitLibTest's own hidden test covers
+ * them with a messenger chained into VkInstanceCreateInfo. In Debug the layer must be
+ * present, because the GPU tests claim it; Release has no validation.
  */
-class ValidationCheck
+class ValidationMessages
 {
 private:
+  static inline std::atomic<int> s_count = 0;
+  static inline std::mutex s_mutex;
+  static inline std::vector<std::string> s_texts;
+  static inline QtMessageHandler s_previous = nullptr;
+
   std::string m_label;
-  int m_errors;
-  int m_warnings;
+
+  static void handler(
+    const QtMsgType type, const QMessageLogContext& context, const QString& message)
+  {
+    if (message.startsWith("vkDebug:"))
+    {
+      ++s_count;
+      const auto lock = std::scoped_lock{s_mutex};
+      s_texts.push_back(message.toStdString());
+    }
+    if (s_previous)
+    {
+      s_previous(type, context, message);
+    }
+  }
 
 public:
-  explicit ValidationCheck(std::string label)
+  explicit ValidationMessages(std::string label)
     : m_label{std::move(label)}
-    , m_errors{LitPreviewPanel::diagnostics().validationErrors}
-    , m_warnings{LitPreviewPanel::diagnostics().validationWarnings}
   {
+#ifndef NDEBUG
+    auto instance = QVulkanInstance{};
+    REQUIRE(instance.supportedLayers().contains(ValidationLayerName));
+#endif
+    s_count = 0;
+    {
+      const auto lock = std::scoped_lock{s_mutex};
+      s_texts.clear();
+    }
+    s_previous = qInstallMessageHandler(&handler);
   }
 
-  int errors() const
-  {
-    return LitPreviewPanel::diagnostics().validationErrors - m_errors;
-  }
+  ~ValidationMessages() { qInstallMessageHandler(s_previous); }
 
-  int warnings() const
-  {
-    return LitPreviewPanel::diagnostics().validationWarnings - m_warnings;
-  }
+  ValidationMessages(const ValidationMessages&) = delete;
+  ValidationMessages& operator=(const ValidationMessages&) = delete;
 
   void check() const
   {
-    std::cout << m_label << ": validation layer "
-              << (LitPreviewPanel::diagnostics().validationLayer ? "on" : "off")
-              << ", errors " << errors() << ", warnings " << warnings() << "\n";
-    CHECK(errors() == 0);
+#ifndef NDEBUG
+    std::cout << m_label << ": validation messages " << s_count << "\n";
+    {
+      const auto lock = std::scoped_lock{s_mutex};
+      for (const auto& text : s_texts)
+      {
+        std::cout << "  " << text << "\n";
+      }
+    }
+    CHECK(s_count == 0);
+#else
+    std::cout << m_label << ": validation not checked (Release)\n";
+#endif
   }
+};
+
+// The reports of a panel's sessions, as sessionDidEndNotifier passes them on.
+class Reports
+{
+private:
+  NotifierConnection m_connection;
+
+public:
+  std::vector<LitPreviewReport> reports;
+
+  explicit Reports(LitPreviewPanel& panel)
+  {
+    m_connection += panel.sessionDidEndNotifier.connect(
+      [&](const LitPreviewReport& report) { reports.push_back(report); });
+  }
+
+  const LitPreviewReport& last() const
+  {
+    REQUIRE(!reports.empty());
+    return reports.back();
+  }
+
+  std::uint64_t sessionsWithDevice() const
+  {
+    return std::uint64_t(std::ranges::count_if(
+      reports, [](const auto& report) { return report.hadDevice; }));
+  }
+
+  // the last report is clean; whether it had a device is checked by the caller
+  void checkLast() const
+  {
+    const auto& report = last();
+    CAPTURE(report.generation);
+    CHECK(report.deviceReleaseCount == 0u);
+    CHECK(report.nvrhiErrors == 0u);
+    CHECK(!report.frameLogError);
+    CHECK(report.messages.empty());
+    CHECK(!report.stopOverran);
+    CHECK(report.problems().empty());
+  }
+};
+
+/**
+ * Holds the next frame of a session between its submit and its present, as a present
+ * that waits would hold it, once: for HoldTime, or for whatever whileHeld does.
+ */
+class FrameHold
+{
+private:
+  struct State
+  {
+    std::atomic<bool> used = false;
+    std::atomic<bool> entered = false;
+    std::atomic<bool> left = false;
+  };
+  std::shared_ptr<State> m_state = std::make_shared<State>();
+
+public:
+  explicit FrameHold(lit::LitSession& session, std::function<void()> whileHeld = {})
+  {
+    session.debugSetBeforePresentHook([state = m_state, hold = std::move(whileHeld)]() {
+      if (state->used.exchange(true))
+      {
+        return;
+      }
+      state->entered = true;
+      if (hold)
+      {
+        hold();
+      }
+      else
+      {
+        std::this_thread::sleep_for(HoldTime);
+      }
+      state->left = true;
+    });
+  }
+
+  bool waitUntilEntered() const
+  {
+    return QTest::qWaitFor([&] { return m_state->entered.load(); }, 5000);
+  }
+
+  bool entered() const { return m_state->entered; }
+  bool left() const { return m_state->left; }
 };
 
 /**
@@ -495,12 +831,14 @@ public:
   SidebarManager* manager = nullptr;
   QDockWidget* dock = nullptr;
   LitPreviewPanel* panel = nullptr;
+  std::unique_ptr<Reports> reports;
 
   PanelHarness()
   {
     auto* central = new QWidget{};
     auto* layout = new QVBoxLayout{central};
     lineEdit = new QLineEdit{};
+    lineEdit->setObjectName("HarnessLineEdit");
     layout->addWidget(lineEdit);
     layout->addStretch(1);
     window.setCentralWidget(central);
@@ -513,6 +851,7 @@ public:
     dock = manager->registerPanel(std::make_unique<LitPreviewPanel>(fixture.context()));
     panel = qobject_cast<LitPreviewPanel*>(dock->widget());
     REQUIRE(panel != nullptr);
+    reports = std::make_unique<Reports>(*panel);
 
     window.resize(1000, 700);
     window.show();
@@ -521,6 +860,10 @@ public:
     lineEdit->setFocus();
     REQUIRE(QTest::qWaitForWindowExposed(&window));
   }
+
+  lit::LitSession* session() const { return panel->sessionForTesting(); }
+
+  std::uint64_t frames() const { return session() ? session()->framesPresented() : 0; }
 
   void moveCamera()
   {
@@ -532,10 +875,10 @@ public:
   // moves the camera until a frame more than now is presented
   bool waitForFrame(const int timeout = 10000)
   {
-    const auto before = panel->framesPresented();
+    const auto before = frames();
     return QTest::qWaitFor(
       [&] {
-        if (panel->framesPresented() > before)
+        if (frames() > before)
         {
           return true;
         }
@@ -548,7 +891,15 @@ public:
   bool startAndWaitForFrame()
   {
     panel->start();
-    return panel->sessionRunning() && waitForFrame();
+    return sessionRunning(*panel) && waitForFrame();
+  }
+
+  // stops and returns how long the stop took
+  std::chrono::milliseconds timedStop()
+  {
+    const auto start = std::chrono::steady_clock::now();
+    panel->stop();
+    return millisecondsSince(start);
   }
 
   // no camera change, no frame
@@ -556,9 +907,9 @@ public:
   {
     // a change that arrived within the 30 Hz pacing may still be drawn
     QTest::qWait(100);
-    const auto settled = panel->framesPresented();
+    const auto settled = frames();
     QTest::qWait(200);
-    CHECK(panel->framesPresented() == settled);
+    CHECK(frames() == settled);
   }
 };
 
@@ -589,25 +940,30 @@ std::vector<std::vector<std::string>> readCsv(const std::filesystem::path& path)
 
 TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
 {
+  const auto validation = ValidationMessages{"panel"};
   auto harness = PanelHarness{};
   auto& panel = *harness.panel;
   auto& dock = *harness.dock;
-  const auto validation = ValidationCheck{"panel"};
+  auto& reports = *harness.reports;
 
   // the first session loads the loader and the driver, which stay (D5)
   REQUIRE(harness.startAndWaitForFrame());
-  CHECK(panel.sessionDrawing());
-  CHECK(LitPreviewPanel::sessionOwner() == &panel);
+  CHECK(harness.session() != nullptr);
   CHECK(!startPageShown(panel));
   CHECK(!findButton(panel, "Start").isEnabled());
   CHECK(findButton(panel, "Stop").isEnabled());
   panel.stop();
-  checkTeardown();
-  CHECK(LitPreviewPanel::diagnostics().lastReachedPhaseB);
+  reports.checkLast();
+  CHECK(reports.last().hadDevice);
   CHECK(startPageShown(panel));
   CHECK(messageText(panel) == PressStartText);
   QTest::qWait(200);
+  driverCostPerSession();
   const auto baseline = processCounts();
+  const auto devicesAtBaseline = reports.sessionsWithDevice();
+  const auto checkCounts = [&](const std::string_view label) {
+    checkProcessCounts(baseline, reports.sessionsWithDevice() - devicesAtBaseline, label);
+  };
 
   SECTION("Start and Stop 50 times, also between the two phases and inside a frame")
   {
@@ -620,39 +976,48 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
         // no event is processed between the two calls, so the window has not been
         // exposed and phase B has not run
         panel.start();
-        REQUIRE(panel.sessionRunning());
-        CHECK(!panel.sessionDrawing());
+        REQUIRE(sessionRunning(panel));
+        CHECK(harness.session() == nullptr);
         panel.stop();
-        CHECK(!LitPreviewPanel::diagnostics().lastReachedPhaseB);
+        CHECK(!reports.last().hadDevice);
         break;
-      case 1:
-        // a camera change wakes the render thread, which is drawing when Stop comes
+      case 1: {
+        // D, review L3.7: the render thread holds a frame between its submit and its
+        // present when Stop comes, so the frame is in flight
         REQUIRE(harness.startAndWaitForFrame());
+        const auto hold = FrameHold{*harness.session()};
         harness.moveCamera();
-        panel.stop();
-        CHECK(LitPreviewPanel::diagnostics().lastReachedPhaseB);
+        REQUIRE(hold.waitUntilEntered());
+        CHECK(!hold.left());
+        CHECK(harness.timedStop() < StopBound);
+        CHECK(reports.last().hadDevice);
         break;
+      }
       default: {
         REQUIRE(harness.startAndWaitForFrame());
         harness.checkIdle();
         REQUIRE(harness.waitForFrame());
         panel.stop();
-        CHECK(LitPreviewPanel::diagnostics().lastFramesPresented >= 2u);
+        CHECK(reports.last().framesPresented >= 2u);
         break;
       }
       }
-      checkTeardown();
-      CHECK(!panel.sessionRunning());
+      reports.checkLast();
+      CHECK(!sessionRunning(panel));
     }
     // messages of the stopped sessions that were still queued are dropped (R5.17)
     QTest::qWait(100);
     CHECK(startPageShown(panel));
     CHECK(messageText(panel) == PressStartText);
-    checkProcessCounts(baseline, "Start/Stop x 50");
+    checkCounts("Start/Stop x 50");
   }
 
   SECTION("float and dock again 50 times")
   {
+    // Floating and docking reparent the preview's native window (QWindowContainer moves
+    // it to a fake parent and back with SetParent); Qt 6.10 does not destroy its surface,
+    // so this covers the reparenting and the resizes, and "the window's surface is
+    // destroyed and made again" covers the surface handshake.
     REQUIRE(harness.startAndWaitForFrame());
     for (auto i = 0; i < 50; ++i)
     {
@@ -664,8 +1029,10 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     }
     harness.checkIdle();
     panel.stop();
-    checkTeardown();
-    checkProcessCounts(baseline, "float/redock x 50");
+    reports.checkLast();
+    // the floating dock has another size, so new generations were made
+    CHECK(reports.last().swapchainGenerations >= 2u);
+    checkCounts("float/redock x 50");
   }
 
   SECTION("float and dock a running preview 50 times while the camera moves")
@@ -682,13 +1049,123 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
       QTest::qWait(40);
       dock.setFloating(false);
       QTest::qWait(40);
-      REQUIRE(panel.sessionRunning());
+      REQUIRE(sessionRunning(panel));
     }
     timer.stop();
     REQUIRE(harness.waitForFrame());
     panel.stop();
-    checkTeardown();
-    checkProcessCounts(baseline, "float during camera moves x 50");
+    reports.checkLast();
+    checkCounts("float during camera moves x 50");
+  }
+
+  SECTION("a park that timed out is released when the size comes back")
+  {
+    // F2: the render thread holds a frame past the handshake's 100 ms park, the dock is
+    // resized and resized back before it parks; without the release the preview would
+    // stay parked and draw nothing
+    dock.setFloating(true);
+    REQUIRE(harness.startAndWaitForFrame());
+    REQUIRE(harness.waitForFrame());
+    const auto size = dock.size();
+    for (auto i = 0; i < 3; ++i)
+    {
+      CAPTURE(i);
+      const auto hold = FrameHold{*harness.session()};
+      harness.moveCamera();
+      REQUIRE(hold.waitUntilEntered());
+      dock.resize(size + QSize{80, 60});
+      QTest::qWait(20);
+      dock.resize(size);
+      QTest::qWait(20);
+      REQUIRE(QTest::qWaitFor([&] { return hold.left(); }, 5000));
+      REQUIRE(harness.waitForFrame());
+    }
+    panel.stop();
+    reports.checkLast();
+    CHECK(reports.last().parkTimeouts >= 1u);
+    dock.setFloating(false);
+    checkCounts("park released");
+  }
+
+  SECTION("a park that timed out is released after a float and a redock")
+  {
+    REQUIRE(harness.startAndWaitForFrame());
+    for (auto i = 0; i < 3; ++i)
+    {
+      CAPTURE(i);
+      const auto hold = FrameHold{*harness.session()};
+      harness.moveCamera();
+      REQUIRE(hold.waitUntilEntered());
+      dock.setFloating(true);
+      QTest::qWait(20);
+      dock.setFloating(false);
+      QTest::qWait(20);
+      REQUIRE(QTest::qWaitFor([&] { return hold.left(); }, 5000));
+      REQUIRE(harness.waitForFrame());
+    }
+    panel.stop();
+    reports.checkLast();
+    checkCounts("park released after float");
+  }
+
+  SECTION("Stop, a dock close and a map load finish while a frame is held")
+  {
+    // F1: the render thread holds its frame as a waiting present would; each way of
+    // ending the session waits for it, servicing messages, and never longer than the
+    // bound
+    const auto endings = std::vector<std::pair<std::string, std::function<void()>>>{
+      {"Stop", [&] { panel.stop(); }},
+      {"dock close", [&] { dock.close(); }},
+      {"map load", [&] { harness.fixture.document().documentWasLoadedNotifier(); }},
+    };
+    for (const auto& [name, end] : endings)
+    {
+      CAPTURE(name);
+      dock.show();
+      dock.raise();
+      REQUIRE(harness.startAndWaitForFrame());
+      const auto hold = FrameHold{*harness.session()};
+      harness.moveCamera();
+      REQUIRE(hold.waitUntilEntered());
+      const auto start = std::chrono::steady_clock::now();
+      end();
+      CHECK(millisecondsSince(start) < StopBound);
+      CHECK(!sessionRunning(panel));
+      CHECK(hold.left());
+      reports.checkLast();
+    }
+    checkCounts("ends while held");
+  }
+
+  SECTION("a present that waits for the GUI thread does not hang the Stop")
+  {
+    // R5.18's premise, made certain: the render thread sends a message to the preview's
+    // window, which only the GUI thread answers, just before its present, while the GUI
+    // thread is inside Stop. A Stop that joined without servicing would wait for the
+    // SendMessage's three seconds.
+    REQUIRE(harness.startAndWaitForFrame());
+    auto* window = findSurfaceWindow();
+    REQUIRE(window != nullptr);
+    const auto hwnd = reinterpret_cast<HWND>(window->winId());
+    auto sent = std::atomic<bool>{false};
+    auto sendDone = std::atomic<std::chrono::steady_clock::rep>{0};
+    const auto hold = FrameHold{
+      *harness.session(), [&] {
+        std::this_thread::sleep_for(100ms);
+        auto result = DWORD_PTR{0};
+        sent = SendMessageTimeoutW(hwnd, WM_NULL, 0, 0, SMTO_NORMAL, 3000, &result) != 0;
+        sendDone = std::chrono::steady_clock::now().time_since_epoch().count();
+      }};
+    harness.moveCamera();
+    REQUIRE(hold.waitUntilEntered());
+    const auto stopStart = std::chrono::steady_clock::now();
+    panel.stop();
+    CHECK(millisecondsSince(stopStart) < 1500ms);
+    CHECK(sent);
+    // the message was answered from inside Stop
+    CHECK(sendDone > stopStart.time_since_epoch().count());
+    reports.checkLast();
+    checkCounts("SendMessage during Stop");
   }
 
   SECTION("a tab over the dock stops the frames, and closing the dock stops the session")
@@ -699,25 +1176,26 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     harness.window.tabifyDockWidget(&dock, stub.dock);
     stub.dock->show();
     stub.dock->raise();
-    REQUIRE(QTest::qWaitFor([&] { return !panel.surfaceWindow()->isExposed(); }));
+    REQUIRE(QTest::qWaitFor([&] { return !findSurfaceWindow()->isExposed(); }));
     QTest::qWait(100);
-    const auto hiddenFrames = panel.framesPresented();
+    const auto hiddenFrames = harness.frames();
     for (auto i = 0; i < 10; ++i)
     {
       harness.moveCamera();
       QTest::qWait(20);
     }
-    CHECK(panel.framesPresented() == hiddenFrames);
-    CHECK(panel.sessionRunning());
+    CHECK(harness.frames() == hiddenFrames);
+    CHECK(sessionRunning(panel));
 
     dock.raise();
     REQUIRE(harness.waitForFrame());
 
     // the user's close
     dock.close();
-    CHECK(!panel.sessionRunning());
-    checkTeardown();
-    CHECK(LitPreviewPanel::diagnostics().lastReachedPhaseB);
+    CHECK(!sessionRunning(panel));
+    reports.checkLast();
+    CHECK(reports.last().hadDevice);
+    checkCounts("tab and close");
   }
 
   SECTION("minimise and restore")
@@ -728,82 +1206,135 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
       CAPTURE(i);
       harness.window.showMinimized();
       QTest::qWait(300);
-      const auto minimisedFrames = panel.framesPresented();
+      const auto minimisedFrames = harness.frames();
       for (auto j = 0; j < 10; ++j)
       {
         harness.moveCamera();
         QTest::qWait(20);
       }
-      CHECK(panel.framesPresented() == minimisedFrames);
+      CHECK(harness.frames() == minimisedFrames);
 
       harness.window.showNormal();
       REQUIRE(QTest::qWaitForWindowExposed(&harness.window));
       REQUIRE(harness.waitForFrame());
     }
     panel.stop();
-    checkTeardown();
+    reports.checkLast();
+    checkCounts("minimise");
   }
 
-  SECTION("a forced FIFO present mode")
+  SECTION("a forced FIFO present mode, timed in the frame log")
   {
     const auto logPath =
       std::filesystem::temp_directory_path() / "TbUiLibTest-lit-fifo-frame-log.csv";
     std::filesystem::remove(logPath);
-    qputenv("TB_LIT_FORCE_FIFO", "1");
+    qputenv("TB_LIT_FORCE_FIFO", "yes");
     qputenv("TB_LIT_FRAME_LOG", pathAsQString(logPath).toUtf8());
     const auto unsetEnvironment = kdl::invoke_later{[] {
       qunsetenv("TB_LIT_FORCE_FIFO");
       qunsetenv("TB_LIT_FRAME_LOG");
     }};
 
-    REQUIRE(harness.startAndWaitForFrame());
-    // a new size, a new swapchain generation
-    harness.window.resize(800, 560);
-    REQUIRE(harness.waitForFrame());
-    REQUIRE(harness.waitForFrame());
-    panel.stop();
-    checkTeardown();
+    // two sessions into one log
+    for (auto i = 0; i < 2; ++i)
+    {
+      REQUIRE(harness.startAndWaitForFrame());
+      // a new size, a new swapchain generation
+      harness.window.resize(i == 0 ? 800 : 1000, i == 0 ? 560 : 700);
+      for (auto j = 0; j < 10; ++j)
+      {
+        REQUIRE(harness.waitForFrame());
+      }
+      panel.stop();
+      reports.checkLast();
+    }
 
     const auto rows = readCsv(logPath);
-    REQUIRE(rows.size() >= 4u);
+    REQUIRE(rows.size() >= 10u);
+    CHECK(rows[0][0] == "session");
+    auto sessions = std::set<std::string>{};
+    auto starts = 0;
+    auto stops = 0;
     auto generations = std::set<std::string>{};
+    auto presentMs = std::vector<double>{};
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
       REQUIRE(rows[i].size() == 14u);
-      if (rows[i][1] != "frame")
+      sessions.insert(rows[i][0]);
+      if (rows[i][1] == "start")
       {
+        ++starts;
+        CHECK(!rows[i][12].empty());
+        continue;
+      }
+      if (rows[i][1] == "stop")
+      {
+        ++stops;
+        CHECK(!rows[i][12].empty());
         continue;
       }
       CHECK(rows[i][7] == "fifo");
-      generations.insert(rows[i][8]);
+      generations.insert(rows[i][0] + "/" + rows[i][8]);
+      presentMs.push_back(std::stod(rows[i][5]));
     }
-    CHECK(generations.size() >= 2u);
-    std::cout << "forced FIFO: " << rows.size() - 1 << " frames in " << generations.size()
-              << " swapchain generations\n";
+    CHECK(sessions.size() == 2u);
+    CHECK(starts == 2);
+    CHECK(stops == 2);
+    CHECK(generations.size() >= 3u);
+    std::ranges::sort(presentMs);
+    std::cout << "forced FIFO: " << presentMs.size() << " frames in "
+              << generations.size() << " swapchain generations; present call median "
+              << presentMs[presentMs.size() / 2] << " ms, longest " << presentMs.back()
+              << " ms\n";
     std::filesystem::remove(logPath);
+    checkCounts("forced FIFO");
   }
 
-  SECTION("an injected device loss shows the reason, and Start runs again")
+  SECTION("an injected device loss or NVRHI error shows its reason, and Start runs again")
   {
-    for (auto i = 0; i < 3; ++i)
+    // D, review L3.13: a loss before any GPU work, a loss in the middle of a frame (after
+    // the acquire, before the present), and an NVRHI error through its message callback,
+    // which is an error, not a loss
+    const auto faults = std::vector<lit::DebugFault>{
+      lit::DebugFault::DeviceLostBeforeFrame,
+      lit::DebugFault::DeviceLostAfterAcquire,
+      lit::DebugFault::DeviceRemovedInSubmit,
+      lit::DebugFault::NvrhiError,
+    };
+    for (const auto fault : faults)
     {
-      CAPTURE(i);
+      const auto lost = fault != lit::DebugFault::NvrhiError;
+      CAPTURE(int(fault));
       REQUIRE(harness.startAndWaitForFrame());
-      panel.debugInjectDeviceLost();
+      harness.session()->debugInjectFault(fault);
       harness.moveCamera();
-      REQUIRE(QTest::qWaitFor([&] { return !panel.sessionRunning(); }));
+      REQUIRE(QTest::qWaitFor([&] { return !sessionRunning(panel); }));
 
-      CHECK(LitPreviewPanel::diagnostics().lastDeviceLost);
-      checkTeardown();
+      const auto& report = reports.last();
+      CHECK(report.deviceLost == lost);
+      CHECK(report.deviceReleaseCount == 0u);
+      CHECK(
+        report.nvrhiErrors
+        == (fault == lit::DebugFault::DeviceRemovedInSubmit || fault == lit::DebugFault::NvrhiError ? 1u : 0u));
       CHECK(startPageShown(panel));
       CHECK(findButton(panel, "Start").isEnabled());
-      CHECK_THAT(messageText(panel), Catch::Matchers::ContainsSubstring("lost"));
-      CHECK_THAT(messageText(panel), Catch::Matchers::ContainsSubstring("Press Start"));
+      if (lost)
+      {
+        CHECK_THAT(messageText(panel), Catch::Matchers::ContainsSubstring("lost"));
+        CHECK_THAT(messageText(panel), Catch::Matchers::ContainsSubstring("Press Start"));
+      }
+      else
+      {
+        CHECK_THAT(messageText(panel), Catch::Matchers::ContainsSubstring("NVRHI error"));
+        CHECK_THAT(
+          messageText(panel), !Catch::Matchers::ContainsSubstring("device was lost"));
+      }
     }
     REQUIRE(harness.startAndWaitForFrame());
     CHECK(messageText(panel) == PressStartText);
     panel.stop();
-    checkTeardown();
+    reports.checkLast();
+    checkCounts("faults");
   }
 
   SECTION("the window's surface is destroyed and made again")
@@ -812,63 +1343,74 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     for (auto i = 0; i < 10; ++i)
     {
       CAPTURE(i);
-      auto* window = panel.surfaceWindow();
+      auto* window = findSurfaceWindow();
       REQUIRE(window != nullptr);
+      const auto generations = harness.session()->swapchainGenerations();
       // SurfaceAboutToBeDestroyed parks the render thread and destroys the swapchain
       // before Qt destroys the surface
       window->destroy();
       QApplication::processEvents();
-      REQUIRE(panel.sessionRunning());
+      REQUIRE(sessionRunning(panel));
       window->show();
       REQUIRE(harness.waitForFrame());
+      CHECK(harness.session()->swapchainGenerations() > generations);
     }
     panel.stop();
-    checkTeardown();
+    reports.checkLast();
+    checkCounts("surface remade");
   }
 
-  SECTION("a screen change and a DPR change replace the swapchain")
+  SECTION("a screen change and a simulated DPR change")
   {
+    // A real DPR or monitor change needs a second monitor or a scale change, which the
+    // user checks by hand. Here the window gets the events Qt would send: the screen
+    // change re-checks the GPU's present support (R5.33) and replaces the swapchain; the
+    // DPR event carries the same DPR, so it replaces nothing.
     REQUIRE(harness.startAndWaitForFrame());
     for (auto i = 0; i < 10; ++i)
     {
       CAPTURE(i);
-      auto* window = panel.surfaceWindow();
+      auto* window = findSurfaceWindow();
       REQUIRE(window != nullptr);
-      // as Qt sends them when the dock moves to another screen; the present check of
-      // R5.33 passes on the same screen
+      const auto generations = harness.session()->swapchainGenerations();
       emit window->screenChanged(window->screen());
+      REQUIRE(harness.waitForFrame());
+      CHECK(harness.session()->swapchainGenerations() > generations);
+
       auto dprChange = QEvent{QEvent::DevicePixelRatioChange};
       QCoreApplication::sendEvent(window, &dprChange);
-      REQUIRE(panel.sessionRunning());
+      REQUIRE(sessionRunning(panel));
       REQUIRE(harness.waitForFrame());
     }
     panel.stop();
-    checkTeardown();
+    reports.checkLast();
+    checkCounts("screen and DPR");
   }
 
-  SECTION("the 3D view keeps the keyboard")
+  SECTION("Start pressed with the mouse leaves the keyboard where it was")
   {
-    REQUIRE(harness.startAndWaitForFrame());
-    auto* window = panel.surfaceWindow();
-    auto* container = panel.surfaceContainer();
-    REQUIRE(window != nullptr);
-    REQUIRE(container != nullptr);
-    REQUIRE(harness.window.focusWidget() == harness.lineEdit);
+    // the line edit stands for the 3D view
+    harness.window.activateWindow();
+    REQUIRE(QTest::qWaitForWindowActive(&harness.window));
+    harness.lineEdit->setFocus();
+    REQUIRE(QApplication::focusWidget() == harness.lineEdit);
 
+    QTest::mouseClick(&findButton(panel, "Start"), Qt::LeftButton);
+    REQUIRE(sessionRunning(panel));
+    REQUIRE(harness.waitForFrame());
+    CHECK(QApplication::focusWidget() == harness.lineEdit);
+
+    auto* window = findSurfaceWindow();
+    REQUIRE(window != nullptr);
     // D44
     CHECK(window->flags().testFlag(Qt::WindowDoesNotAcceptFocus));
     CHECK(!window->flags().testFlag(Qt::WindowTransparentForInput));
+    auto* container = panel.findChild<QWidget*>("LitPreviewPanel_Container");
+    REQUIRE(container != nullptr);
     CHECK(container->focusPolicy() == Qt::NoFocus);
 
-    QTest::mouseClick(container, Qt::LeftButton);
+    // a click on the preview, as Qt delivers it and as Windows sends it
     QTest::mouseClick(window, Qt::LeftButton, {}, QPoint{10, 10});
-    QTest::keyClick(window, Qt::Key_A);
-    QApplication::processEvents();
-    CHECK(harness.window.focusWidget() == harness.lineEdit);
-    CHECK(QGuiApplication::focusWindow() != window);
-    CHECK(harness.lineEdit->text().isEmpty());
-
-    // what a real click sends: Windows asks the child whether it activates
     const auto hwnd = reinterpret_cast<HWND>(window->winId());
     const auto topLevel = reinterpret_cast<HWND>(harness.window.winId());
     CHECK(
@@ -881,19 +1423,27 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(10, 10));
     PostMessageW(hwnd, WM_LBUTTONUP, 0, MAKELPARAM(10, 10));
     QApplication::processEvents();
-    CHECK(harness.window.focusWidget() == harness.lineEdit);
-    CHECK(GetFocus() != hwnd);
+    CHECK(QApplication::focusWidget() == harness.lineEdit);
+    CHECK(QGuiApplication::focusWindow() == harness.window.windowHandle());
 
-    panel.stop();
-    checkTeardown();
+    // a key goes through the application's routing to the focused widget
+    QTest::keyClick(harness.window.windowHandle(), Qt::Key_A);
+    CHECK(harness.lineEdit->text() == "a");
+
+    // Stop with the mouse as well
+    QTest::mouseClick(&findButton(panel, "Stop"), Qt::LeftButton);
+    CHECK(!sessionRunning(panel));
+    CHECK(QApplication::focusWidget() == harness.lineEdit);
+    reports.checkLast();
+    checkCounts("keyboard");
   }
 
   SECTION("a document load and a game path change stop the session")
   {
     REQUIRE(harness.startAndWaitForFrame());
     harness.fixture.document().documentWasLoadedNotifier();
-    CHECK(!panel.sessionRunning());
-    checkTeardown();
+    CHECK(!sessionRunning(panel));
+    reports.checkLast();
     CHECK(startPageShown(panel));
     CHECK(messageText(panel) == "A map was loaded. Press Start to preview it.");
 
@@ -902,9 +1452,10 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     auto gamePath = harness.fixture.document().map().gameInfo().gamePathPreference;
     const auto resetGamePath = kdl::invoke_later{[&] { prefs.resetToDefault(gamePath); }};
     setPref(gamePath, gamePath.defaultValue / "base");
-    CHECK(!panel.sessionRunning());
-    checkTeardown();
+    CHECK(!sessionRunning(panel));
+    reports.checkLast();
     CHECK(messageText(panel) == "The game path changed. Press Start to preview with it.");
+    checkCounts("load and game path");
   }
 
   validation.check();
@@ -914,10 +1465,10 @@ TEST_CASE("LitPreviewPanel in a map window on a GPU", "[.][litgpu]")
 {
   // closing a window saves its layout
   const auto settingsSnapshot = SettingsSnapshot{{"Windows"}};
+  const auto validation = ValidationMessages{"map window"};
 
   auto appControllerFixture = AppControllerFixture{};
   auto& appController = appControllerFixture.appController();
-  const auto validation = ValidationCheck{"map window"};
 
   // shows the window without its GL views, and the lit preview's dock
   const auto showWindow = [](MapWindow& window) -> LitPreviewPanel& {
@@ -932,30 +1483,51 @@ TEST_CASE("LitPreviewPanel in a map window on a GPU", "[.][litgpu]")
     return findLitPreviewPanel(window);
   };
 
+  const auto perspectiveCamera = [](MapWindow& window) -> gl::PerspectiveCamera& {
+    auto* mapView = window.findChild<SwitchableMapViewContainer*>();
+    REQUIRE(mapView != nullptr);
+    return mapView->perspectiveCamera();
+  };
+
+  const auto frames = [](const LitPreviewPanel& panel) {
+    auto* session = panel.sessionForTesting();
+    return session ? session->framesPresented() : 0u;
+  };
+
   // moves the window's current 3D camera until a frame more than now is presented
-  const auto waitForFrame = [](MapWindow& window, const LitPreviewPanel& panel) {
-    const auto before = panel.framesPresented();
+  const auto waitForFrame = [&](MapWindow& window, const LitPreviewPanel& panel) {
+    const auto before = frames(panel);
     auto step = 0;
     return QTest::qWaitFor(
       [&] {
-        if (panel.framesPresented() > before)
+        if (frames(panel) > before)
         {
           return true;
         }
-        auto* mapView = window.findChild<SwitchableMapViewContainer*>();
-        REQUIRE(mapView != nullptr);
-        mapView->perspectiveCamera().moveTo(vm::vec3f{float(++step), 0.0f, 64.0f});
+        perspectiveCamera(window).moveTo(vm::vec3f{float(++step), 0.0f, 64.0f});
         return false;
       },
       10000);
   };
 
-  SECTION("a layout switch 20 times; the camera notifier keeps delivering")
+  SECTION("phase B starts from the 3D view's camera; a layout switch 20 times")
   {
     auto window = MapWindow{appController, createDoom3Document(appController)};
     auto& panel = showWindow(window);
+    const auto reports = Reports{panel};
+
+    // review L3.22: the camera was never moved, yet the session has the 3D view's, not a
+    // default one
+    REQUIRE(perspectiveCamera(window).position() != lit::CameraState{}.position);
     panel.start();
-    REQUIRE(waitForFrame(window, panel));
+    REQUIRE(QTest::qWaitFor([&] { return frames(panel) > 0u; }, 10000));
+    const auto viewport = perspectiveCamera(window).viewport();
+    REQUIRE(viewport.width > 0);
+    CHECK(
+      panel.sessionForTesting()->camera().viewportWidth == std::uint32_t(viewport.width));
+    CHECK(
+      panel.sessionForTesting()->camera().position
+      == perspectiveCamera(window).position());
 
     auto& prefs = PreferenceManager::instance();
     const auto resetLayout =
@@ -975,29 +1547,59 @@ TEST_CASE("LitPreviewPanel in a map window on a GPU", "[.][litgpu]")
       setPref(Preferences::MapViewLayout, (i + 1) % 4);
       hideRenderViews(window);
       QApplication::processEvents();
-      REQUIRE(panel.sessionRunning());
+      REQUIRE(sessionRunning(panel));
       REQUIRE(waitForFrame(window, panel));
+      // the notifier delivers the new layout's camera
+      CHECK(
+        panel.sessionForTesting()->camera().position
+        == perspectiveCamera(window).position());
     }
     panel.stop();
-    checkTeardown();
+    reports.checkLast();
   }
 
   SECTION("closing the map window stops the session")
   {
-    auto* window = new MapWindow{appController, createDoom3Document(appController)};
-    const auto guard = QPointer<MapWindow>{window};
-    auto& panel = showWindow(*window);
-    panel.start();
-    REQUIRE(waitForFrame(*window, panel));
+    for (const auto held : {false, true})
+    {
+      CAPTURE(held);
+      auto* window = new MapWindow{appController, createDoom3Document(appController)};
+      const auto guard = QPointer<MapWindow>{window};
+      auto& panel = showWindow(*window);
+      auto reports = std::make_unique<Reports>(panel);
+      // the window goes with its panel; its report arrives from the panel's destructor
+      auto lastReport = std::optional<LitPreviewReport>{};
+      auto connection = NotifierConnection{};
+      connection += panel.sessionDidEndNotifier.connect(
+        [&](const LitPreviewReport& report) { lastReport = report; });
+      panel.start();
+      REQUIRE(waitForFrame(*window, panel));
 
-    const auto teardowns = LitPreviewPanel::diagnostics().teardowns;
-    // the window deletes itself on close
-    window->close();
-    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-    CHECK(guard.isNull());
-    CHECK(LitPreviewPanel::diagnostics().teardowns == teardowns + 1);
-    CHECK(LitPreviewPanel::diagnostics().lastReachedPhaseB);
-    checkTeardown();
+      auto hold = std::optional<FrameHold>{};
+      if (held)
+      {
+        // F1: the render thread is inside its held frame when the window closes
+        hold.emplace(*panel.sessionForTesting());
+        perspectiveCamera(*window).moveTo(vm::vec3f{1000.0f, 0.0f, 64.0f});
+        REQUIRE(hold->waitUntilEntered());
+      }
+
+      // the window deletes itself on close
+      const auto start = std::chrono::steady_clock::now();
+      reports.reset();
+      window->close();
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+      CHECK(millisecondsSince(start) < StopBound);
+      CHECK(guard.isNull());
+      REQUIRE(lastReport);
+      CHECK(lastReport->hadDevice);
+      CHECK(lastReport->deviceReleaseCount == 0u);
+      CHECK(lastReport->problems().empty());
+      if (hold)
+      {
+        CHECK(hold->left());
+      }
+    }
   }
 
   validation.check();

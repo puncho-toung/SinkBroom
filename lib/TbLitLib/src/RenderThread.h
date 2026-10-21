@@ -133,6 +133,7 @@ public:
   // Any thread.
 
   void setCamera(const CameraState& camera);
+  CameraState camera() const;
   void setExposed(bool exposed);
   void requestFrame();
   std::uint64_t framesPresented() const;

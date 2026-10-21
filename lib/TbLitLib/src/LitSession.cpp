@@ -405,6 +405,16 @@ std::uint64_t LitSession::framesPresented() const
   return m_renderThread ? m_renderThread->framesPresented() : 0u;
 }
 
+std::uint64_t LitSession::swapchainGenerations() const
+{
+  return m_swapchainCount;
+}
+
+CameraState LitSession::camera() const
+{
+  return m_renderThread->camera();
+}
+
 bool LitSession::deviceLost() const
 {
   return m_events->lost();

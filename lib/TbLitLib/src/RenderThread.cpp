@@ -199,6 +199,12 @@ void RenderThread::setCamera(const CameraState& camera)
   m_wake.notify_all();
 }
 
+CameraState RenderThread::camera() const
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  return m_camera;
+}
+
 void RenderThread::setExposed(const bool exposed)
 {
   {

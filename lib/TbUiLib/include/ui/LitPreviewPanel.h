@@ -25,9 +25,6 @@
 #include "base/NotifierConnection.h"
 #include "ui/SidebarPanel.h"
 
-#include "vm/vec.h"
-
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -39,7 +36,6 @@ class QLabel;
 class QPushButton;
 class QStackedLayout;
 class QWidget;
-class QWindow;
 
 namespace tb::gl
 {
@@ -48,6 +44,7 @@ class Camera;
 
 namespace tb::lit
 {
+struct CameraState;
 class LitSession;
 enum class SessionEvent;
 } // namespace tb::lit
@@ -56,32 +53,6 @@ namespace tb::ui
 {
 class LitSessionHost;
 class MapDocument;
-
-/**
- * What the lit preview's sessions leave behind, for the teardown tests of LP0: the
- * validation layer's messages of every session so far, counted on any thread, and what
- * the last session reported when its teardown ended (GUI thread). Nothing in it is
- * allocated, so it exists before the first Start without breaking C9.
- */
-struct LitPreviewDiagnostics
-{
-  std::atomic<int> validationErrors = 0;
-  std::atomic<int> validationWarnings = 0;
-  // the last instance had the Khronos validation layer
-  bool validationLayer = false;
-
-  std::uint64_t teardowns = 0;
-  // the sessions that reached phase B
-  std::uint64_t sessionsWithDevice = 0;
-  std::uint64_t lastGeneration = 0;
-  // phase B ran: the session had a device
-  bool lastReachedPhaseB = false;
-  // what the NVRHI device's last Release() returned; 0 expected
-  std::uint32_t lastDeviceReleaseCount = 0;
-  std::size_t lastNvrhiErrorCount = 0;
-  std::uint64_t lastFramesPresented = 0;
-  bool lastDeviceLost = false;
-};
 
 /**
  * What a lit preview session left when it stopped. The panel logs a report with problems
@@ -137,17 +108,6 @@ public:
   static constexpr auto PanelId = "LitPreview";
 
 private:
-  // what the panel copies from the 3D view's camera (§3.2); never the camera itself
-  struct CameraCopy
-  {
-    vm::vec3f position;
-    vm::vec3f direction;
-    vm::vec3f up;
-    float fovDegrees = 90.0f;
-    int viewportWidth = 0;
-    int viewportHeight = 0;
-  };
-
   MapDocument& m_document;
   bool m_prefabEditor = false;
 
@@ -162,8 +122,9 @@ private:
   QString m_stopReason;
   // what the last session's teardown found wrong
   QString m_stopProblems;
-  // the last camera the 3D view reported, so that phase B starts with it
-  std::optional<CameraCopy> m_lastCamera;
+  // a copy of the last camera the 3D view reported, never the camera itself, so that
+  // phase B starts with it; the session host asks for it there
+  std::unique_ptr<lit::CameraState> m_lastCamera;
   std::unique_ptr<LitSessionHost> m_host;
 
   NotifierConnection m_notifierConnection;
@@ -200,38 +161,21 @@ public:
   // Why Start is unavailable, or empty.
   QString unavailableReason() const;
 
-  /**
-   * The one-session guard (D29), GUI thread only: the panel that runs the process's
-   * session, or null. Start claims it and teardown releases it; every change notifies, so
-   * that the other windows' panels update their Start pages (R5.26).
-   */
-  static const LitPreviewPanel* sessionOwner();
-  static bool claimSession(const LitPreviewPanel& panel);
-  static void releaseSession(const LitPreviewPanel& panel);
-  static Notifier<>& sessionOwnerDidChangeNotifier();
-
-  // Test hooks
-
-  // a session exists: phase A ran
-  bool sessionRunning() const;
-  // the session has its device: phase B ran
-  bool sessionDrawing() const;
-  // the running session's presented frames, 0 without one
-  std::uint64_t framesPresented() const;
-  // the running session's render thread throws a device loss at its next frame
-  void debugInjectDeviceLost();
   // the running session once phase B has run, else null
   lit::LitSession* sessionForTesting() const;
-  QWindow* surfaceWindow() const;
-  QWidget* surfaceContainer() const;
-  static LitPreviewDiagnostics& diagnostics();
+  /**
+   * The process's one session is claimed by Start and released by the teardown or the
+   * panel's destructor, and every change updates the Start pages of all panels (D29,
+   * R5.26). Tests claim it for a panel without a GPU.
+   */
+  static bool claimSessionForTesting(const LitPreviewPanel& panel);
+  static void releaseSessionForTesting(const LitPreviewPanel& panel);
 
 private:
   void createGui();
   void connectObservers();
 
   void cameraDidChange(const gl::Camera& camera);
-  void forwardCamera();
   void sessionEventReceived(
     std::uint64_t generation, lit::SessionEvent event, const std::string& message);
 

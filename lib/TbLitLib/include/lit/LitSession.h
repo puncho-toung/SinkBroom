@@ -278,6 +278,10 @@ public:
   std::size_t nvrhiErrorCount() const;
   // frames presented (headless: finished recording and submitted)
   std::uint64_t framesPresented() const;
+  // the swapchain generations made so far; GUI thread
+  std::uint64_t swapchainGenerations() const;
+  // the camera the next frame draws with
+  CameraState camera() const;
   bool deviceLost() const;
 
 private:

@@ -29,6 +29,7 @@
 
 #include "LitSessionHost.h"
 #include "base/Logger.h"
+#include "base/Notifier.h"
 #include "base/PreferenceManager.h"
 #include "gl/Camera.h"
 #include "gl/PerspectiveCamera.h"
@@ -63,35 +64,80 @@ constexpr auto DeferredStopInterval = 10ms;
 // D53: the generation of the last session started in this process; GUI thread only
 auto lastGeneration = std::uint64_t{0};
 
-// D29: the panel that runs the process's one session; GUI thread only
-struct SessionGuard
+/**
+ * D29: the panel that runs the process's one session, GUI thread only. Every change
+ * notifies, so that every panel updates its Start page (R5.26).
+ */
+class SessionGuard
 {
-  const LitPreviewPanel* owner = nullptr;
+private:
+  const LitPreviewPanel* m_owner = nullptr;
+
+public:
   Notifier<> ownerDidChangeNotifier;
+
+  const LitPreviewPanel* owner() const { return m_owner; }
+
+  bool claim(const LitPreviewPanel& panel)
+  {
+    if (m_owner && m_owner != &panel)
+    {
+      return false;
+    }
+    if (!m_owner)
+    {
+      m_owner = &panel;
+      ownerDidChangeNotifier();
+    }
+    return true;
+  }
+
+  void release(const LitPreviewPanel& panel)
+  {
+    if (m_owner == &panel)
+    {
+      m_owner = nullptr;
+      ownerDidChangeNotifier();
+    }
+  }
 };
 
 SessionGuard& sessionGuard()
 {
-  static SessionGuard guard;
+  static auto guard = SessionGuard{};
   return guard;
+}
+
+bool environmentFlag(const char* name)
+{
+  const auto value = qEnvironmentVariable(name).trimmed().toLower();
+  return value == "1" || value == "true" || value == "yes";
 }
 
 /**
  * The options of a session, read once at Start: validation in Debug builds, and two
- * environment variables for tests and measurements, TB_LIT_FORCE_FIFO (any value other
- * than 0) and TB_LIT_FRAME_LOG (the frame log's path, C16).
+ * environment variables for tests and measurements: TB_LIT_FORCE_FIFO (1, true or yes)
+ * and TB_LIT_FRAME_LOG (the frame log's absolute path, C16).
  */
-lit::SessionOptions sessionOptions()
+lit::SessionOptions sessionOptions(Logger& logger)
 {
   auto options = lit::SessionOptions{};
 #ifndef NDEBUG
   options.validation = true;
 #endif
-  options.forceFifo = qEnvironmentVariableIsSet("TB_LIT_FORCE_FIFO")
-                      && qEnvironmentVariable("TB_LIT_FORCE_FIFO") != QStringLiteral("0");
+  options.forceFifo = environmentFlag("TB_LIT_FORCE_FIFO");
   if (const auto frameLog = qEnvironmentVariable("TB_LIT_FRAME_LOG"); !frameLog.isEmpty())
   {
-    options.frameLogPath = pathFromQString(frameLog);
+    // a relative path would depend on the working directory (review L3.16)
+    if (const auto path = pathFromQString(frameLog); path.is_absolute())
+    {
+      options.frameLogPath = path;
+    }
+    else
+    {
+      logger.warn() << "Lit preview: TB_LIT_FRAME_LOG must be an absolute path; "
+                       "no frame log is written";
+    }
   }
   return options;
 }
@@ -148,6 +194,9 @@ LitPreviewPanel::~LitPreviewPanel()
   {
     sessionDidEndNotifier(*report);
   }
+  // also when the guard was claimed without a session, so that it never names a panel
+  // that is gone (review L2.13)
+  sessionGuard().release(*this);
 }
 
 QString LitPreviewPanel::panelId() const
@@ -207,15 +256,22 @@ void LitPreviewPanel::start()
     sessionEventReceived(generation, event, message);
   };
 
+  // phase B starts from the last camera the 3D view reported
+  auto camera = [this]() -> std::optional<lit::CameraState> {
+    return m_lastCamera ? std::optional{*m_lastCamera} : std::nullopt;
+  };
+
   auto host = std::make_unique<LitSessionHost>(
-    sessionOptions(), ++lastGeneration, std::move(eventHandler), diagnostics());
+    sessionOptions(m_document.logger()),
+    ++lastGeneration,
+    std::move(eventHandler),
+    std::move(camera));
   host->start(*m_surfacePage) | kdl::transform([&](QWidget* container) {
     m_surfacePage->layout()->addWidget(container);
     m_host = std::move(host);
     m_stopReason.clear();
     m_stopProblems.clear();
-    forwardCamera();
-    claimSession(*this);
+    sessionGuard().claim(*this);
   }) | kdl::transform_error([&](const auto& e) {
     host.reset();
     m_stopReason = QString::fromStdString(e.msg);
@@ -240,69 +296,11 @@ QString LitPreviewPanel::unavailableReason() const
   {
     return tr("The lit preview is not available in a prefab editor.");
   }
-  if (const auto* owner = sessionOwner(); owner && owner != this)
+  if (const auto* owner = sessionGuard().owner(); owner && owner != this)
   {
     return tr("Another window already runs the lit preview.");
   }
   return {};
-}
-
-const LitPreviewPanel* LitPreviewPanel::sessionOwner()
-{
-  return sessionGuard().owner;
-}
-
-bool LitPreviewPanel::claimSession(const LitPreviewPanel& panel)
-{
-  auto& guard = sessionGuard();
-  if (guard.owner && guard.owner != &panel)
-  {
-    return false;
-  }
-  if (!guard.owner)
-  {
-    guard.owner = &panel;
-    guard.ownerDidChangeNotifier();
-  }
-  return true;
-}
-
-void LitPreviewPanel::releaseSession(const LitPreviewPanel& panel)
-{
-  auto& guard = sessionGuard();
-  if (guard.owner == &panel)
-  {
-    guard.owner = nullptr;
-    guard.ownerDidChangeNotifier();
-  }
-}
-
-Notifier<>& LitPreviewPanel::sessionOwnerDidChangeNotifier()
-{
-  return sessionGuard().ownerDidChangeNotifier;
-}
-
-bool LitPreviewPanel::sessionRunning() const
-{
-  return m_host != nullptr;
-}
-
-bool LitPreviewPanel::sessionDrawing() const
-{
-  return m_host && m_host->drawing();
-}
-
-std::uint64_t LitPreviewPanel::framesPresented() const
-{
-  return m_host ? m_host->framesPresented() : 0;
-}
-
-void LitPreviewPanel::debugInjectDeviceLost()
-{
-  if (m_host)
-  {
-    m_host->debugInjectDeviceLost();
-  }
 }
 
 lit::LitSession* LitPreviewPanel::sessionForTesting() const
@@ -310,29 +308,26 @@ lit::LitSession* LitPreviewPanel::sessionForTesting() const
   return m_host ? m_host->session() : nullptr;
 }
 
-QWindow* LitPreviewPanel::surfaceWindow() const
+bool LitPreviewPanel::claimSessionForTesting(const LitPreviewPanel& panel)
 {
-  return m_host ? m_host->window() : nullptr;
+  return sessionGuard().claim(panel);
 }
 
-QWidget* LitPreviewPanel::surfaceContainer() const
+void LitPreviewPanel::releaseSessionForTesting(const LitPreviewPanel& panel)
 {
-  return m_host ? m_host->container() : nullptr;
-}
-
-LitPreviewDiagnostics& LitPreviewPanel::diagnostics()
-{
-  // constant-initialised: it exists before the first Start without an allocation (C9)
-  static LitPreviewDiagnostics diagnostics;
-  return diagnostics;
+  sessionGuard().release(panel);
 }
 
 void LitPreviewPanel::createGui()
 {
+  // a click leaves the keyboard where it was, with the 3D view; disabling a button that
+  // had the focus would move it to the next widget in the tab chain (review L3.12)
   m_startButton = new QPushButton{tr("Start")};
   m_startButton->setObjectName("LitPreviewPanel_Start");
+  m_startButton->setFocusPolicy(Qt::TabFocus);
   m_stopButton = new QPushButton{tr("Stop")};
   m_stopButton->setObjectName("LitPreviewPanel_Stop");
+  m_stopButton->setFocusPolicy(Qt::TabFocus);
   connect(m_startButton, &QPushButton::clicked, this, &LitPreviewPanel::start);
   connect(m_stopButton, &QPushButton::clicked, this, &LitPreviewPanel::stop);
 
@@ -417,32 +412,23 @@ void LitPreviewPanel::cameraDidChange(const gl::Camera& camera)
   // R4-2.18: the camera may be gone after this notification, so only its values are kept
   const auto& viewport = camera.viewport();
   const auto* perspectiveCamera = dynamic_cast<const gl::PerspectiveCamera*>(&camera);
-  m_lastCamera = CameraCopy{
+  if (!m_lastCamera)
+  {
+    m_lastCamera = std::make_unique<lit::CameraState>();
+  }
+  *m_lastCamera = lit::CameraState{
     camera.position(),
     camera.direction(),
     camera.up(),
     perspectiveCamera ? perspectiveCamera->zoomedFov() : 90.0f,
-    viewport.width,
-    viewport.height,
+    std::uint32_t(std::max(viewport.width, 0)),
+    std::uint32_t(std::max(viewport.height, 0)),
   };
 
   // R5.17: without a session nothing is passed on
-  forwardCamera();
-}
-
-void LitPreviewPanel::forwardCamera()
-{
-  if (m_host && m_lastCamera)
+  if (m_host)
   {
-    const auto& camera = *m_lastCamera;
-    m_host->setCamera(lit::CameraState{
-      camera.position,
-      camera.direction,
-      camera.up,
-      camera.fovDegrees,
-      std::uint32_t(std::max(camera.viewportWidth, 0)),
-      std::uint32_t(std::max(camera.viewportHeight, 0)),
-    });
+    m_host->setCamera(*m_lastCamera);
   }
 }
 
@@ -541,7 +527,7 @@ std::optional<LitPreviewReport> LitPreviewPanel::endSession()
     report = host->teardown();
     host.reset();
   }
-  releaseSession(*this);
+  sessionGuard().release(*this);
   return report;
 }
 

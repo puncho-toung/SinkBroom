@@ -81,6 +81,8 @@ public:
   // receives Ready, Warning, DeviceLost and Error on the GUI thread, queued
   using EventHandler = std::function<void(
     std::uint64_t generation, lit::SessionEvent event, const std::string& message)>;
+  // the owner's last copy of the 3D view's camera, if it has one
+  using CameraProvider = std::function<std::optional<lit::CameraState>()>;
 
 private:
   enum class TeardownStep
@@ -99,7 +101,7 @@ private:
   lit::SessionOptions m_options;
   std::uint64_t m_generation;
   EventHandler m_eventHandler;
-  LitPreviewDiagnostics& m_diagnostics;
+  CameraProvider m_camera;
 
   std::unique_ptr<QVulkanInstance> m_instance;
   lit::InstanceHandles m_handles;
@@ -109,7 +111,6 @@ private:
   QPointer<QWidget> m_container;
   std::unique_ptr<lit::LitSession> m_session;
 
-  std::optional<lit::CameraState> m_camera;
   // the size in pixels that the current swapchain was made for
   QSize m_swapchainSize;
   // the swapchain must be replaced: out of date, or a new screen or surface
@@ -137,7 +138,7 @@ public:
     lit::SessionOptions options,
     std::uint64_t generation,
     EventHandler eventHandler,
-    LitPreviewDiagnostics& diagnostics);
+    CameraProvider camera);
   ~LitSessionHost() override;
 
   std::uint64_t generation() const;
@@ -151,14 +152,10 @@ public:
 
   // phase B ran
   bool drawing() const;
-  LitPreviewWindow* window() const;
-  QWidget* container() const;
-  std::uint64_t framesPresented() const;
-  void debugInjectDeviceLost();
   // the session after phase B, else null
   lit::LitSession* session() const;
 
-  // Kept for phase B, and passed on once it has run.
+  // passed on once phase B has run; phase B asks the camera provider
   void setCamera(const lit::CameraState& camera);
 
   /**
@@ -197,6 +194,7 @@ private:
   lit::EventSink eventSink();
   void sessionEventReceived(
     std::uint64_t generation, lit::SessionEvent event, const std::string& message);
+  void dispatchSessionEvent(lit::SessionEvent event, const std::string& message);
   void fail(std::string reason);
 
   deleteCopyAndMove(LitSessionHost);

@@ -98,11 +98,11 @@ LitSessionHost::LitSessionHost(
   lit::SessionOptions options,
   const std::uint64_t generation,
   EventHandler eventHandler,
-  LitPreviewDiagnostics& diagnostics)
+  CameraProvider camera)
   : m_options{std::move(options)}
   , m_generation{generation}
   , m_eventHandler{std::move(eventHandler)}
-  , m_diagnostics{diagnostics}
+  , m_camera{std::move(camera)}
 {
 }
 
@@ -123,6 +123,7 @@ void LitSessionHost::abandon()
   // children, so that the window and its surface outlive the swapchain.
   m_abandoned = true;
   m_eventHandler = nullptr;
+  m_camera = nullptr;
   if (m_container)
   {
     m_container->hide();
@@ -162,24 +163,6 @@ Result<QWidget*> LitSessionHost::start(QWidget& containerParent)
     m_instance->setFlags(QVulkanInstance::NoDebugOutputRedirect);
   }
 
-  // called on whichever thread made the Vulkan call; the messages still go to Qt's log
-  auto& diagnostics = m_diagnostics;
-  m_instance->installDebugOutputFilter(
-    [&diagnostics](
-      const QVulkanInstance::DebugMessageSeverityFlags severity,
-      QVulkanInstance::DebugMessageTypeFlags,
-      const void*) {
-      if (severity.testFlag(QVulkanInstance::ErrorSeverity))
-      {
-        ++diagnostics.validationErrors;
-      }
-      else if (severity.testFlag(QVulkanInstance::WarningSeverity))
-      {
-        ++diagnostics.validationWarnings;
-      }
-      return false;
-    });
-
   if (!m_instance->create())
   {
     const auto errorCode = int(m_instance->errorCode());
@@ -188,7 +171,6 @@ Result<QWidget*> LitSessionHost::start(QWidget& containerParent)
       fmt::format("Cannot create a Vulkan instance (VkResult {}).", errorCode)};
   }
 
-  m_diagnostics.validationLayer = m_instance->layers().contains(ValidationLayerName);
   m_handles.instance = m_instance->vkInstance();
   m_handles.getInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
     m_instance->getInstanceProcAddr("vkGetInstanceProcAddr"));
@@ -222,37 +204,13 @@ bool LitSessionHost::drawing() const
   return m_session != nullptr && m_teardownStep == TeardownStep::None;
 }
 
-LitPreviewWindow* LitSessionHost::window() const
-{
-  return m_window.data();
-}
-
-QWidget* LitSessionHost::container() const
-{
-  return m_container.data();
-}
-
-std::uint64_t LitSessionHost::framesPresented() const
-{
-  return m_session ? m_session->framesPresented() : 0;
-}
-
 lit::LitSession* LitSessionHost::session() const
 {
   return drawing() ? m_session.get() : nullptr;
 }
 
-void LitSessionHost::debugInjectDeviceLost()
-{
-  if (m_session)
-  {
-    m_session->debugInjectFault(lit::DebugFault::DeviceLostBeforeFrame);
-  }
-}
-
 void LitSessionHost::setCamera(const lit::CameraState& camera)
 {
-  m_camera = camera;
   if (drawing())
   {
     m_session->setCamera(camera);
@@ -420,19 +378,6 @@ void LitSessionHost::recordTeardown()
       m_report.vramAtStopBytes = sessionReport.vramAtStop->usedBytes;
     }
   }
-
-  auto& d = m_diagnostics;
-  ++d.teardowns;
-  if (m_session)
-  {
-    ++d.sessionsWithDevice;
-  }
-  d.lastGeneration = m_generation;
-  d.lastReachedPhaseB = m_session != nullptr;
-  d.lastDeviceReleaseCount = m_session ? m_session->lastDeviceReleaseCount() : 0;
-  d.lastNvrhiErrorCount = m_session ? m_session->nvrhiErrorCount() : 0;
-  d.lastFramesPresented = m_session ? m_session->framesPresented() : 0;
-  d.lastDeviceLost = m_session && m_session->deviceLost();
 }
 
 void LitSessionHost::reconcile()
@@ -521,9 +466,9 @@ void LitSessionHost::createSession(const QSize size)
         m_swapchainSize = size;
         m_swapchainStale = false;
         m_session->setExposed(m_window->isExposed());
-        if (m_camera)
+        if (const auto camera = m_camera ? m_camera() : std::nullopt)
         {
-          m_session->setCamera(*m_camera);
+          m_session->setCamera(*camera);
         }
       })
     | kdl::transform_error([&](const auto& e) { fail(e.msg); });
@@ -660,6 +605,20 @@ void LitSessionHost::sessionEventReceived(
     return;
   }
 
+  // in Qt's event loop, which an exception must not reach (review L3.18)
+  try
+  {
+    dispatchSessionEvent(event, message);
+  }
+  catch (const std::exception& e)
+  {
+    qWarning("Lit preview: a session message could not be handled: %s", e.what());
+  }
+}
+
+void LitSessionHost::dispatchSessionEvent(
+  const lit::SessionEvent event, const std::string& message)
+{
   switch (event)
   {
   case lit::SessionEvent::Parked:
@@ -678,7 +637,7 @@ void LitSessionHost::sessionEventReceived(
   case lit::SessionEvent::Error:
     if (m_eventHandler)
     {
-      m_eventHandler(generation, event, message);
+      m_eventHandler(m_generation, event, message);
     }
     break;
   }
