@@ -212,6 +212,9 @@ private:
   // the parse thread's state; the source outlives the registry that reads through it
   std::unique_ptr<DeclSource> m_source;
   std::unique_ptr<MaterialDecls> m_decls;
+  // why the last build left no registry (W.4); every request fails with it until a build
+  // succeeds
+  std::string m_buildError;
   MaterialTable m_working;
   std::uint64_t m_version = 0;
   std::deque<RegisterKey> m_deltaOrder;
@@ -240,7 +243,10 @@ public:
 
   Result<void> start()
   {
-    return m_thread.start([this] { run(); }, ParseThreadStackBytes);
+    return m_thread.start(
+      [this] { run(); },
+      ParseThreadStackBytes,
+      [this](const char* reason) { escaped(reason); });
   }
 
   void join() { m_thread.join(); }
@@ -250,7 +256,8 @@ private:
 
   /**
    * A2.1: nothing a work item throws reaches the thread's top. The item is logged and
-   * dropped; a build that throws leaves no registry, and an empty table is published.
+   * dropped; a build that throws leaves no registry, and every request fails until a
+   * build succeeds (W.4).
    */
   template <typename F>
   void guarded(const char* what, F&& f)
@@ -270,12 +277,43 @@ private:
     }
   }
 
-  void failed(const char* what, const char* reason)
+  // W.5: called from the guards' handlers, so it throws nothing itself
+  void failed(const char* what, const char* reason) noexcept
   {
-    updateStats([](MaterialServiceStats& stats) { ++stats.failedWorkItems; });
-    message(
-      DeclMessageKind::Error,
-      fmt::format("The material parse thread's {} failed: {}", what, reason));
+    try
+    {
+      updateStats([](MaterialServiceStats& stats) { ++stats.failedWorkItems; });
+    }
+    catch (...)
+    {
+    }
+    try
+    {
+      message(
+        DeclMessageKind::Error,
+        fmt::format("The material parse thread's {} failed: {}", what, reason));
+    }
+    catch (...)
+    {
+    }
+  }
+
+  /**
+   * W.5: what run lets escape (only an allocation failure outside every guard) ends the
+   * thread, never the process. The registry is still destroyed on its own thread (C20),
+   * and the reason reaches the listener.
+   */
+  void escaped(const char* reason) noexcept
+  {
+    try
+    {
+      m_decls.reset();
+      m_source.reset();
+    }
+    catch (...)
+    {
+    }
+    failed("loop", reason);
   }
 
   void run()
@@ -283,7 +321,10 @@ private:
     guarded("build", [&] { build({}); });
     for (;;)
     {
-      auto work = takeWork();
+      // W.5: a request the thread cannot take (an allocation failure while it copies the
+      // queue) ends the loop as a stop does, rather than trying it again at once
+      auto work = Work{};
+      guarded("request", [&] { work = takeWork(); });
       if (work.kind == WorkKind::Stop)
       {
         break;
@@ -547,6 +588,7 @@ private:
   {
     const auto started = Clock::now();
     m_warnings = 0;
+    m_buildError.clear();
 
     // a build that throws leaves no registry and publishes an empty table
     resetWorkingTable(0);
@@ -556,15 +598,58 @@ private:
     {
       buildRegistry(previousNames, started);
     }
-    catch (...)
+    catch (const std::exception& e)
     {
-      m_decls.reset();
-      m_source.reset();
-      resetWorkingTable(0);
-      m_bulkDone = true;
-      publish();
+      buildFailed(e.what());
       throw;
     }
+    catch (...)
+    {
+      buildFailed("an unknown exception");
+      throw;
+    }
+  }
+
+  /**
+   * W.4: after a build that threw, every lookup and evaluation is answered with the
+   * failure, and the loose files are still polled through the source, when there is one,
+   * so that a changed file builds again (at most once per autoReloadInterval). A source
+   * that could not be made leaves nothing to poll; reload() builds again.
+   */
+  void buildFailed(const char* reason)
+  {
+    m_buildError = fmt::format("The material registry could not be built: {}", reason);
+    m_decls.reset();
+    resetWorkingTable(0);
+    m_bulkDone = true;
+    publish();
+
+    if (m_source)
+    {
+      try
+      {
+        m_source->closeFiles();
+        m_stamp = looseStamp(*m_source);
+      }
+      catch (...)
+      {
+        // a source that cannot stamp its files cannot be polled
+        m_source.reset();
+      }
+    }
+    m_nextPoll = Clock::now() + m_shared.options.pollInterval;
+  }
+
+  std::string buildFailure() const
+  {
+    return m_buildError.empty() ? "There is no material registry." : m_buildError;
+  }
+
+  std::shared_ptr<const MaterialSlot> failedSlot() const
+  {
+    auto slot = std::make_shared<MaterialSlot>();
+    slot->error = buildFailure();
+    return slot;
   }
 
   void buildRegistry(
@@ -662,10 +747,6 @@ private:
 
   void lookUp(const std::vector<std::string>& names)
   {
-    if (!m_decls)
-    {
-      return;
-    }
     auto changed = false;
     for (const auto& name : names)
     {
@@ -673,8 +754,10 @@ private:
       {
         return;
       }
+      // the next build looks it up again, also after a failed one
       m_requestedNames.insert(name);
-      changed = lookUpOne(name) || changed;
+      // W.4: without a registry the lookup fails at once, so no caller waits for it
+      changed = (m_decls ? lookUpOne(name) : setSlot(name, failedSlot())) || changed;
     }
     if (changed)
     {
@@ -696,10 +779,6 @@ private:
 
   void evaluate(const std::vector<RegisterKey>& keys)
   {
-    if (!m_decls)
-    {
-      return;
-    }
     auto changed = false;
     auto refused = std::uint64_t{0};
     for (const auto& key : keys)
@@ -713,6 +792,14 @@ private:
         continue;
       }
 
+      // W.4: without a registry the evaluation is refused with the build's failure
+      if (!m_decls)
+      {
+        ++refused;
+        setRegisters(key, refusal(buildFailure()));
+        changed = true;
+        continue;
+      }
       // A2.13: a refusal is published too, so the caller stops asking
       if (key.material.registry != m_decls->id())
       {

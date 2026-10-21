@@ -325,18 +325,44 @@ bool MaterialImageKey::operator!=(const MaterialImageKey& other) const
   return !(*this == other);
 }
 
-MaterialDecls::MaterialDecls(DeclSource& source, const std::atomic<bool>* cancel)
+MaterialDecls::Claim::Claim()
+  : m_held{shim::Registry::claim()}
+{
+}
+
+MaterialDecls::Claim::~Claim()
+{
+  release();
+}
+
+bool MaterialDecls::Claim::held() const
+{
+  return m_held;
+}
+
+void MaterialDecls::Claim::release()
+{
+  if (m_held)
+  {
+    shim::Registry::release();
+    m_held = false;
+  }
+}
+
+MaterialDecls::MaterialDecls(
+  DeclSource& source,
+  const std::atomic<bool>* cancel,
+  const std::function<void()>& afterBuildForTesting)
   : m_id{nextRegistryId++}
 {
-  // C17, A2.6: one registry at a time, claimed atomically
-  if (!shim::Registry::claim())
+  // C17, A2.6: one registry at a time, claimed atomically by m_claim
+  if (!m_claim.held())
   {
     m_constructionError = "another material registry exists";
     m_constructionMessages.push_back(
       DeclMessage{DeclMessageKind::Error, m_constructionError});
     return;
   }
-  m_claimed = true;
 
   try
   {
@@ -356,8 +382,7 @@ MaterialDecls::MaterialDecls(DeclSource& source, const std::atomic<bool>* cancel
   {
     m_constructionMessages.push_back(
       DeclMessage{DeclMessageKind::Error, m_constructionError});
-    shim::Registry::release();
-    m_claimed = false;
+    m_claim.release();
     return;
   }
 
@@ -373,18 +398,20 @@ MaterialDecls::MaterialDecls(DeclSource& source, const std::atomic<bool>* cancel
     m_failures[std::size_t(index)] = fmt_material_refused(
       declManager->DeclByIndex(DECL_MATERIAL, index, false)->GetName());
   }
+
+  if (afterBuildForTesting)
+  {
+    afterBuildForTesting();
+  }
 }
 
 MaterialDecls::~MaterialDecls()
 {
-  // the entries hold no id pointer, so they may outlive the registry
+  // the entries hold no id pointer, so they may outlive the registry; m_claim is released
+  // after the registry is destroyed
   m_materials.clear();
   m_failures.clear();
   m_registry.reset();
-  if (m_claimed)
-  {
-    shim::Registry::release();
-  }
 }
 
 std::vector<DeclFolderInfo> MaterialDecls::engineDeclFolders()

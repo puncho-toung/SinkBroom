@@ -4852,10 +4852,14 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/Registry.cpp",
           "symbol": "registryClaimed"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::Claim"
         }
       ],
       "staticKind": "registry binding",
-      "reason": "G14, A2.6: one registry at a time, claimed with compare_exchange_strong before the registry binds the shim's globals and released after it unbinds them, instead of the copied assert; a second MaterialDecls fails with 'another material registry exists'"
+      "reason": "G14, A2.6: one registry at a time, claimed with compare_exchange_strong before the registry binds the shim's globals and released after it unbinds them, instead of the copied assert; a second MaterialDecls fails with 'another material registry exists'. The claim is MaterialDecls's Claim member, declared before the registry, so it is released after the registry is destroyed, also when the constructor throws after the claim (W.5, round 2)"
     },
     {
       "id": "M-ID-TEMP-01",

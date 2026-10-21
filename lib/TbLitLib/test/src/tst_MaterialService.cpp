@@ -30,11 +30,13 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -181,6 +183,42 @@ public:
       m_gate->enterAndWait();
     }
     return m_source.readFile(path, timestamp);
+  }
+};
+
+// The fixture with one loose file whose time the test sets. A source made with throws
+// set throws when the build ends its read batch, after the registry is read, so that the
+// build fails with the source made (W.4).
+class ThrowOnceSource : public MemoryDeclSource
+{
+private:
+  std::shared_ptr<std::atomic<std::int64_t>> m_looseTime;
+  bool m_throws;
+
+public:
+  ThrowOnceSource(std::shared_ptr<std::atomic<std::int64_t>> looseTime, const bool throws)
+    : MemoryDeclSource{materialDeclsFixture()}
+    , m_looseTime{std::move(looseTime)}
+    , m_throws{throws}
+  {
+  }
+
+  std::vector<DeclFileTime> looseFileTimes(
+    const std::string& folder, const std::string&) const override
+  {
+    if (folder != "materials")
+    {
+      return {};
+    }
+    return {DeclFileTime{"materials/lp1a.mtr", m_looseTime->load(), 1}};
+  }
+
+  void closeFiles() override
+  {
+    if (std::exchange(m_throws, false))
+    {
+      throw std::runtime_error{"an injected build failure"};
+    }
   }
 };
 
@@ -580,6 +618,71 @@ TEST_CASE("MaterialService")
     service->reload();
     CHECK(waitForEntry(*service, "textures/lp1a/wall"));
     CHECK(service->stats().builds == 1u);
+  }
+
+  SECTION("after a build that threw, requests fail, and a changed loose file builds")
+  {
+    // W.4: the first source throws once its files are read; nothing is mute meanwhile
+    auto collected = Collected{};
+    auto looseTime = std::make_shared<std::atomic<std::int64_t>>(1);
+    auto calls = std::make_shared<std::atomic<int>>(0);
+    auto serviceOptions = options(
+      [looseTime, calls](const std::atomic<bool>&) {
+        return std::unique_ptr<DeclSource>{
+          std::make_unique<ThrowOnceSource>(looseTime, ++*calls == 1)};
+      },
+      collected.listener());
+    serviceOptions.pollInterval = 10ms;
+    serviceOptions.autoReloadInterval = 50ms;
+    auto service = start(std::move(serviceOptions));
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.failedWorkItems == 1u && s.idle; }, Timeout));
+    CHECK(service->stats().builds == 0u);
+    CHECK(collected.problemsWith("an injected build failure") == 1u);
+
+    // a lookup is published as failed, with the build's failure
+    const auto name = std::string{"textures/lp1a/wall"};
+    service->lookup(name);
+    const auto failedTable = service->waitForTableForTesting(
+      [&](const MaterialTable& t) { return t.find(name) != nullptr; }, Timeout);
+    const auto slot = failedTable->find(name);
+    REQUIRE(slot);
+    CHECK_FALSE(slot->entry);
+    CHECK_THAT(
+      slot->error, Catch::Matchers::ContainsSubstring("an injected build failure"));
+    CHECK(service->lookup(name).state == MaterialLookup::State::Failed);
+
+    // an evaluation is refused, with the same reason
+    const auto material = MaterialId{42, 0};
+    CHECK_FALSE(service->evaluate(material, NoParms, 0.0f));
+    const auto key = RegisterKey{material, NoParms, 0.0f};
+    const auto refusedTable = service->waitForTableForTesting(
+      [&](const MaterialTable& t) { return t.findRegisters(key) != nullptr; }, Timeout);
+    CHECK_THAT(
+      refusedTable->findRegisters(key)->error,
+      Catch::Matchers::ContainsSubstring("an injected build failure"));
+
+    // polls of an unchanged file build nothing
+    std::this_thread::sleep_for(100ms);
+    REQUIRE(
+      service->waitForStatsForTesting([](const auto& s) { return s.idle; }, Timeout));
+    CHECK(service->stats().builds == 0u);
+    CHECK(service->stats().pollReloads == 0u);
+
+    // a changed loose file builds again, and the asked name resolves
+    looseTime->store(2);
+    const auto table = service->waitForTableForTesting(
+      [&](const MaterialTable& t) {
+        const auto found = t.find(name);
+        return found && found->entry;
+      },
+      Timeout);
+    REQUIRE(table->find(name)->entry);
+    CHECK(table->find(name)->entry->name == name);
+    CHECK(service->waitForStatsForTesting(
+      [](const auto& s) { return s.builds == 1u; }, Timeout));
+    CHECK(service->stats().pollReloads == 1u);
+    CHECK(calls->load() == 2);
   }
 
   SECTION("a source that keeps changing rebuilds once per autoReloadInterval")

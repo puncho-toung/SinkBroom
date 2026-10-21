@@ -227,8 +227,12 @@ struct MaterialServiceStats
  * DeclSource::closeFiles, so no game file stays open (R4-3.26).
  *
  * Exceptions (A2.1): the source's are caught by the registry's file system; anything else
- * a work item throws is logged, counted in failedWorkItems, and the thread goes on; a
- * build that throws publishes an empty table.
+ * a work item throws is logged, counted in failedWorkItems, and the thread goes on. A
+ * build that throws publishes an empty table; until a build succeeds, every lookup is
+ * published as Failed and every evaluation as refused, with the build's failure, and the
+ * loose files are still polled through the source, so a changed file builds again (W.4).
+ * What escapes every guard (an allocation failure) ends the thread, never the process,
+ * and is logged (W.5).
  *
  * Stop (§3.1 teardown steps 1 and 8, R5.20, G4): requestStop returns at once. The thread
  * stops within one directory entry, one container table entry or one .pk4 directory

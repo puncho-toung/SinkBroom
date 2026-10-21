@@ -33,6 +33,8 @@
 
 #include <cassert>
 #include <cerrno>
+#include <exception>
+#include <functional>
 #include <memory>
 #include <utility>
 
@@ -42,19 +44,59 @@ namespace
 {
 
 using Body = std::function<void()>;
+using Escaped = std::function<void(const char* reason)>;
+
+// what the thread owns
+struct Start
+{
+  Body body;
+  Escaped escaped;
+};
+
+void reportEscaped(const Start& start, const char* reason) noexcept
+{
+  if (!start.escaped)
+  {
+    return;
+  }
+  try
+  {
+    start.escaped(reason);
+  }
+  catch (...)
+  {
+  }
+}
+
+// W.5: nothing the body throws reaches the thread's top, where it would end the process
+void runGuarded(const Start& start) noexcept
+{
+  try
+  {
+    start.body();
+  }
+  catch (const std::exception& e)
+  {
+    reportEscaped(start, e.what());
+  }
+  catch (...)
+  {
+    reportEscaped(start, "an unknown exception");
+  }
+}
 
 #if defined(_WIN32)
 unsigned __stdcall runBody(void* argument)
 {
-  const auto body = std::unique_ptr<Body>{static_cast<Body*>(argument)};
-  (*body)();
+  const auto start = std::unique_ptr<Start>{static_cast<Start*>(argument)};
+  runGuarded(*start);
   return 0;
 }
 #else
 void* runBody(void* argument)
 {
-  const auto body = std::unique_ptr<Body>{static_cast<Body*>(argument)};
-  (*body)();
+  const auto start = std::unique_ptr<Start>{static_cast<Start*>(argument)};
+  runGuarded(*start);
   return nullptr;
 }
 #endif
@@ -66,9 +108,9 @@ StackThread::~StackThread()
   assert(!joinable());
 }
 
-Result<void> StackThread::start(Body body, const std::size_t stackBytes)
+Result<void> StackThread::start(Body body, const std::size_t stackBytes, Escaped escaped)
 {
-  auto argument = std::make_unique<Body>(std::move(body));
+  auto argument = std::make_unique<Start>(Start{std::move(body), std::move(escaped)});
 
 #if defined(_WIN32)
   const auto handle = _beginthreadex(

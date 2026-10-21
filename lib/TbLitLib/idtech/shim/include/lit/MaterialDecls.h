@@ -34,6 +34,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -324,9 +325,14 @@ public:
   static constexpr int ShaderParmCount = 12;
 
   // source must outlive this object; once cancel is set, the decl files not read yet are
-  // read as empty, so a construction stops after the file it is reading (R5.20). Never
-  // throws: a failure is the construction error.
-  explicit MaterialDecls(DeclSource& source, const std::atomic<bool>* cancel = nullptr);
+  // read as empty, so a construction stops after the file it is reading (R5.20). A
+  // registry that cannot be built is the construction error; only an allocation failure
+  // (or afterBuildForTesting, called once the registry is built) leaves by an exception,
+  // and then the registry is destroyed and the one-registry claim released (W.5).
+  explicit MaterialDecls(
+    DeclSource& source,
+    const std::atomic<bool>* cancel = nullptr,
+    const std::function<void()>& afterBuildForTesting = {});
   ~MaterialDecls();
 
   // the decl folders the registry registers, in the engine's order (D33): materials,
@@ -412,8 +418,27 @@ public:
   std::vector<DeclMessage> takeMessages();
 
 private:
+  // The process's one registry slot (C17, A2.6), claimed when it is made and released
+  // when it goes. As a member it is released also when the constructor throws after the
+  // claim (W.5), and only after the registry, which is declared after it, is destroyed.
+  class Claim
+  {
+  public:
+    Claim();
+    ~Claim();
+
+    bool held() const;
+    void release();
+
+    Claim(const Claim&) = delete;
+    Claim& operator=(const Claim&) = delete;
+
+  private:
+    bool m_held = false;
+  };
+
   std::uint64_t m_id = 0;
-  bool m_claimed = false;
+  Claim m_claim;
   std::string m_constructionError;
   std::vector<DeclMessage> m_constructionMessages;
   std::unique_ptr<shim::Registry> m_registry;

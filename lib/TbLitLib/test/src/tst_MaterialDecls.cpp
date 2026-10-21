@@ -855,6 +855,22 @@ TEST_CASE("MaterialDecls catches what its source throws")
   CHECK(lookup(decls, "textures/lp1a/thrown")->implicit);
 }
 
+TEST_CASE("MaterialDecls releases its claim when its constructor throws")
+{
+  // W.5: a throw after the claim (an allocation failure in the refuse loop; here the test
+  // hook, once the registry is built) destroys the registry and releases the one-registry
+  // claim, so that the next registry can be built
+  auto source = MemoryDeclSource{fixtureFiles()};
+  CHECK_THROWS_WITH(
+    MaterialDecls(
+      source, nullptr, [] { throw std::runtime_error{"an injected failure"}; }),
+    "an injected failure");
+
+  auto decls = MaterialDecls{source};
+  CHECK(decls.constructionError().empty());
+  CHECK_FALSE(lookup(decls, "textures/lp1a/wall")->implicit);
+}
+
 TEST_CASE("MaterialDecls guards the engine's overflows")
 {
   SECTION("a material of more than 256 stages is refused before it is parsed")

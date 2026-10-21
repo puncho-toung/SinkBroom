@@ -37,6 +37,10 @@ namespace tb::lit
  * and Qt is not used here (D28). On Windows it is _beginthreadex with the size as a
  * reservation, elsewhere a pthread with the size set. The owner joins it before
  * destroying it.
+ *
+ * An exception that leaves the body ends the thread, never the process (W.5): escaped,
+ * when given, is called with its reason on the thread, and what escaped throws is
+ * dropped.
  */
 class StackThread
 {
@@ -56,7 +60,10 @@ public:
   StackThread& operator=(const StackThread&) = delete;
 
   // fails when the thread cannot be created
-  Result<void> start(std::function<void()> body, std::size_t stackBytes);
+  Result<void> start(
+    std::function<void()> body,
+    std::size_t stackBytes,
+    std::function<void(const char* reason)> escaped = {});
   bool joinable() const;
   void join();
 };
