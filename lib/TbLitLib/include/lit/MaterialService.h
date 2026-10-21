@@ -58,6 +58,14 @@ struct MaterialSlot
   std::string error;
 };
 
+// C22: what an entityDef query has found for a classname: an entry, or why there is none
+// (no such entityDef, or the engine error its parse reached)
+struct EntityDefSlot
+{
+  std::shared_ptr<const EntityDefEntry> entry;
+  std::string error;
+};
+
 // the key of an evaluation: the material, its entity shaderParms and the time; equal
 // keys have equal bits
 struct RegisterKey
@@ -82,16 +90,27 @@ std::uint64_t shaderParmsHash(const ShaderParms& shaderParms, float time);
  * thread that holds it, and freed with its last holder. It never holds an id pointer.
  *
  * - materials: what each looked-up or bulk-parsed name found, keyed by the decl's
- *   canonical name and by each name a lookup was asked with;
+ *   canonical name and by each name a lookup was asked with; each entry carries its
+ *   editor-image size (C21), and a Ready size is kept across reloads (D52);
+ * - entityDefs: what each entityDef query found (C22), keyed the same way;
  * - registers: the evaluated registers, keyed by (material, shaderParms, time), published
  *   as deltas; the oldest are dropped beyond MaxRegisterDeltas, and a holder keeps its
  *   last registers until new ones arrive.
  *
- * A new version shares every material and delta that did not change.
+ * A new version shares every material, entityDef and delta that did not change.
  */
 struct MaterialTable
 {
-  using Materials = PersistentMap<std::string, std::shared_ptr<const MaterialSlot>>;
+  using Materials = PersistentMap<
+    std::string,
+    std::shared_ptr<const MaterialSlot>,
+    StringHash,
+    std::equal_to<>>;
+  using EntityDefs = PersistentMap<
+    std::string,
+    std::shared_ptr<const EntityDefSlot>,
+    StringHash,
+    std::equal_to<>>;
   using Registers = PersistentMap<
     RegisterKey,
     std::shared_ptr<const EvaluatedRegisters>,
@@ -107,11 +126,13 @@ struct MaterialTable
   // the bulk parse of this registry has finished: every material and table is parsed
   bool complete = false;
   Materials materials;
+  EntityDefs entityDefs;
   Registers registers;
 
   // the slot of a name, shared with the table, so that it outlives a table held only for
-  // the call; null when the name is not looked up yet
+  // the call; null when the name is not looked up yet. Neither find allocates.
   std::shared_ptr<const MaterialSlot> find(std::string_view name) const;
+  std::shared_ptr<const EntityDefSlot> findEntityDef(std::string_view classname) const;
   // the registers of a key; an EvaluatedRegisters with an error when the evaluation was
   // refused, null when it is not done yet
   std::shared_ptr<const EvaluatedRegisters> findRegisters(const RegisterKey& key) const;
@@ -131,6 +152,17 @@ struct MaterialLookup
 
   State state = State::Pending;
   std::shared_ptr<const MaterialEntry> entry;
+  std::string error;
+};
+
+// what entityDef returns: Pending (queued: a later table has it), Ready, or Failed with
+// the slot's error
+struct EntityDefLookup
+{
+  using State = MaterialLookup::State;
+
+  State state = State::Pending;
+  std::shared_ptr<const EntityDefEntry> entry;
   std::string error;
 };
 
@@ -177,6 +209,13 @@ struct MaterialServiceOptions
   // runs on the parse thread each time it takes a request; what it throws is a request
   // the thread cannot take (X.2)
   std::function<void()> beforeTakeWorkForTesting;
+  // runs on the parse thread once the thread that ends by itself has set its end flag,
+  // before it describes why; what it throws stands for that description's allocation
+  // failing (Y.1)
+  std::function<void()> beforeEndDescriptionForTesting;
+  // runs on the parse thread when an entry is published and replaces the editor-image
+  // size the registry measured (C21; Default until LP1c.2 loads images)
+  std::function<EditorImageSize(const MaterialEntry&)> editorImageSizeForTesting;
 };
 
 struct MaterialServiceStats
@@ -216,7 +255,9 @@ struct MaterialServiceStats
   std::uint64_t failedWorkItems = 0;
   // the thread waits for a request, and its last work item is done and freed
   bool idle = false;
-  // why the thread ended without a stop (X.2); empty while it serves
+  // the thread ended without a stop (X.2): set first, without allocating (Y.1)
+  bool threadEnded = false;
+  // why it ended; empty while it serves, and when not even that could be said (Y.1)
   std::string threadError;
 };
 
@@ -241,9 +282,11 @@ struct MaterialServiceStats
  * loose files are still polled through the source, so a changed file builds again (W.4).
  * A build whose makeSource threw has no source to poll: only reload() builds again.
  * A request the thread cannot take, or what escapes every guard (an allocation failure),
- * ends the thread, never the process: it is logged, stats().threadError says why, and
- * every later lookup answers Failed and every later evaluation a refusal with it, without
- * queueing anything (W.5, X.2).
+ * ends the thread, never the process: it is logged, stats().threadEnded is set first
+ * without allocating, stats().threadError then says why, and every later lookup and
+ * entityDef query answers Failed and every later evaluation a refusal, without queueing
+ * anything (W.5, X.2). When even the reason cannot be made, the answers carry a fixed
+ * text and the refusal made with the service (Y.1).
  *
  * Stop (§3.1 teardown steps 1 and 8, R5.20, G4): requestStop returns at once. The thread
  * stops within one directory entry, one container table entry or one .pk4 directory
@@ -288,6 +331,14 @@ public:
    */
   std::shared_ptr<const EvaluatedRegisters> evaluate(
     MaterialId material, const ShaderParms& shaderParms, float time);
+
+  /**
+   * C22: the entityDef of a classname as the latest table has it, or Pending, and the
+   * name is queued with the lookups; any thread. The name is used as given and published
+   * under it and the decl's canonical name. Every name asked for is asked again after a
+   * reload, so a later table has it from the new registry.
+   */
+  EntityDefLookup entityDef(std::string_view classname);
 
   // bulk-parses every material and table of the current registry and of every later one
   void parseAll();

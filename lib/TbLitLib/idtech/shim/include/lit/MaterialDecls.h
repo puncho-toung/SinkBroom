@@ -27,8 +27,9 @@
 // thread for its whole life, because the copied engine code it drives is bound to process
 // globals. lit/MaterialService.h confines every MaterialDecls to the parse thread (D32);
 // other threads see only the immutable MaterialEntry values it returns. At most one
-// MaterialDecls exists at a time (C17). The two pure name functions, canonicalName and
-// compareEnginePaths, touch no registry state.
+// MaterialDecls exists at a time (C17). The pure functions canonicalName,
+// compareEnginePaths and findKey touch no registry state, and the engine-message
+// functions of D63 may be called from any thread.
 
 #include <array>
 #include <atomic>
@@ -245,6 +246,29 @@ struct MaterialStage
   bool hasStencil = false;
 };
 
+/**
+ * C21: the upload size of a material's editor image (GetEditorImage), which divides the
+ * face texture coordinates (D59). Default is the 8×8 the engine gives a missing image;
+ * until LP1c.2 loads images every material has it. Ready is a size an image load
+ * measured; the material service keeps the last Ready size of each material across
+ * reloads, so that a reload never turns it back into Default (D52).
+ */
+struct EditorImageSize
+{
+  enum class State
+  {
+    Default,
+    Ready,
+  };
+
+  int width = 8;
+  int height = 8;
+  State state = State::Default;
+
+  bool operator==(const EditorImageSize& other) const;
+  bool operator!=(const EditorImageSize& other) const;
+};
+
 // one parsed idMaterial: plain data, no id pointer (D32)
 struct MaterialEntry
 {
@@ -293,6 +317,15 @@ struct MaterialEntry
   // qer_editorimage as the decl spells it, "" for none; the engine makes the image only
   // when an editor asks for it (GetEditorImage)
   std::string editorImageName;
+  // C21: Default (8×8) from the registry; the material service applies its kept Ready
+  // sizes when it publishes the entry
+  EditorImageSize editorImageSize;
+  // C25: the geometry flags the copied parser sets: the "mikktspace" and
+  // "unsmoothedTangents" keywords, and ShouldCreateBackSides (a two-sided material with a
+  // lit or texgen stage, which Parse turns front-sided)
+  bool mikktspace = false;
+  bool unsmoothedTangents = false;
+  bool createBackSides = false;
   std::optional<MaterialImageKey> lightFalloffImage;
   std::optional<MaterialImageKey> fastPathBumpImage;
   std::optional<MaterialImageKey> fastPathDiffuseImage;
@@ -313,6 +346,40 @@ struct EvaluatedRegisters
   // whose parse failed); then registers is empty and this says why
   std::string error;
 };
+
+// an entity's or an entityDef's keys and values, in order
+using EntityKeys = std::vector<std::pair<std::string, std::string>>;
+
+/**
+ * C22: one parsed entityDef, plain data, no id pointer. keys is its merged dictionary in
+ * the dictionary's order (idDeclEntityDef::Parse): its own keys with "classname" set to
+ * its name and the "inherit" keys removed, then the keys of each entityDef it inherits
+ * that it does not set already (idDict::SetDefaults).
+ *
+ * The engine looks keys up in such a dictionary case-insensitively, and an entity's map
+ * keys go into its dictionary with Set, so a key given twice keeps the last value (plan
+ * §13 A10); TrenchBroom's own key lookups are case-sensitive and keep the first. Look
+ * keys up here, and in an entity's map keys, with findKey.
+ */
+struct EntityDefEntry
+{
+  // the registry that made the entry (MaterialDecls::id)
+  std::uint64_t registry = 0;
+  // the decl's canonical name
+  std::string name;
+  EntityKeys keys;
+  // idDeclEntityDef::IsMapOnlyClass: "dmapOnly" is set in the classname's own def (not
+  // the map keys, not an _mp def): dmap and the game drop the entity's primitives
+  bool dmapOnly = false;
+};
+
+/**
+ * The engine's lookup rule of A10: the value of the last key equal to name when ASCII
+ * letters are compared without case (idDict::FindKey's idStr::Icmp; Set replaces a value
+ * in place), or null; an empty name finds nothing, as FindKey's does. A pure function;
+ * any thread.
+ */
+const std::string* findKey(const EntityKeys& keys, std::string_view name);
 
 // a value, or the error the engine would have stopped at
 template <typename T>
@@ -418,9 +485,10 @@ public:
   int declFileCount() const;
   std::size_t declFileBytes() const;
 
-  // the merged keys of an entityDef, inherited ones included, in the dict's order
-  DeclResult<std::vector<std::pair<std::string, std::string>>> entityDefKeys(
-    std::string_view name);
+  // C22: the entityDef of a name (FindType without a default, which parses it once), with
+  // its merged keys and dmapOnly; an error when there is none or its parse reached an
+  // engine error
+  DeclResult<std::shared_ptr<const EntityDefEntry>> entityDef(std::string_view name);
 
   // The console's "touch <type> <name>" (TouchDecl_f): FindType without making a default,
   // which parses the decl and marks it referenced. False when there is no such decl; an

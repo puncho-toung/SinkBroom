@@ -21,7 +21,9 @@
 
 #include <fmt/format.h>
 
+#include <functional>
 #include <string>
+#include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -52,6 +54,28 @@ TEST_CASE("PersistentMap")
   auto sum = 0ll;
   newer.forEach([&](const auto&, const int value) { sum += value; });
   CHECK(sum == 4999ll * 5000 / 2 - 4321 - 1);
+}
+
+TEST_CASE("PersistentMap with a transparent hash")
+{
+  auto map = PersistentMap<std::string, int, StringHash, std::equal_to<>>{};
+  for (int i = 0; i < 500; ++i)
+  {
+    map = map.set(fmt::format("a_key_longer_than_a_small_string_{}", i), i);
+  }
+
+  // a view finds what its string finds, without a std::string made for the call
+  const auto key = std::string{"a_key_longer_than_a_small_string_321"};
+  const auto view = std::string_view{key};
+  REQUIRE(map.find(view));
+  CHECK(map.find(view) == map.find(key));
+  CHECK(*map.find(view) == 321);
+  CHECK_FALSE(map.find(std::string_view{"a_key_longer_than_a_small_string_"}));
+  CHECK(StringHash{}(key) == std::hash<std::string>{}(key));
+
+  const auto erased = map.erase(key);
+  CHECK_FALSE(erased.find(view));
+  CHECK(map.find(view));
 }
 
 } // namespace tb::lit

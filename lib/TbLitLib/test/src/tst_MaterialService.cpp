@@ -34,8 +34,10 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -768,6 +770,167 @@ TEST_CASE("MaterialService")
     CHECK(service->stats().failedWorkItems == 1u);
   }
 
+  SECTION("a thread that ends by itself answers when it cannot say why (Y.1)")
+  {
+    // the request fails, and so does the description of the end: two allocation
+    // failures in a row
+    auto collected = Collected{};
+    auto takes = std::make_shared<std::atomic<int>>(0);
+    auto descriptions = std::make_shared<std::atomic<int>>(0);
+    auto serviceOptions = options(fixtureSource, collected.listener());
+    serviceOptions.beforeTakeWorkForTesting = [takes] {
+      if (++*takes == 1)
+      {
+        throw std::bad_alloc{};
+      }
+    };
+    serviceOptions.beforeEndDescriptionForTesting = [descriptions] {
+      ++*descriptions;
+      throw std::bad_alloc{};
+    };
+    auto service = start(std::move(serviceOptions));
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.threadEnded; }, Timeout));
+    service->join();
+    CHECK(descriptions->load() == 1);
+    CHECK(service->stats().threadError.empty());
+
+    for (auto i = 0; i < 2; ++i)
+    {
+      CAPTURE(i);
+      const auto found = service->lookup("textures/lp1a/wall");
+      CHECK(found.state == MaterialLookup::State::Failed);
+      CHECK(found.error == "The material parse thread stopped by itself");
+
+      const auto def = service->entityDef("lp1a_lamp");
+      CHECK(def.state == EntityDefLookup::State::Failed);
+      CHECK(def.error == "The material parse thread stopped by itself");
+
+      const auto registers = service->evaluate(MaterialId{1, 0}, NoParms, 0.0f);
+      REQUIRE(registers);
+      CHECK(registers->registers.empty());
+      CHECK(registers->error == "The material parse thread stopped by itself");
+    }
+    CHECK(takes->load() == 1);
+  }
+
+  SECTION("an entityDef query is pending, then a later table has it, once (C22)")
+  {
+    auto published = std::make_shared<std::atomic<int>>(0);
+    auto service = start(options(fixtureSource, [published](const auto& event) {
+      if (event.kind == MaterialServiceEvent::Kind::Published)
+      {
+        ++*published;
+      }
+    }));
+    REQUIRE(
+      service->waitForStatsForTesting([](const auto& s) { return s.idle; }, Timeout));
+
+    // asked twice before the thread takes it: one query, one publication
+    const auto publishedBefore = published->load();
+    const auto first = service->entityDef("lp1a_lamp");
+    service->entityDef("lp1a_lamp");
+    CHECK(
+      (first.state == EntityDefLookup::State::Pending
+       || first.state == EntityDefLookup::State::Ready));
+    const auto table = service->waitForTableForTesting(
+      [](const MaterialTable& t) { return t.findEntityDef("lp1a_lamp") != nullptr; },
+      Timeout);
+    REQUIRE(
+      service->waitForStatsForTesting([](const auto& s) { return s.idle; }, Timeout));
+    CHECK(published->load() == publishedBefore + 1);
+
+    const auto ready = service->entityDef("lp1a_lamp");
+    REQUIRE(ready.state == EntityDefLookup::State::Ready);
+    CHECK(ready.entry == table->findEntityDef("lp1a_lamp")->entry);
+    CHECK(ready.entry->registry == table->registry);
+    CHECK_FALSE(ready.entry->dmapOnly);
+    REQUIRE(findKey(ready.entry->keys, "SPAWNCLASS"));
+    CHECK(*findKey(ready.entry->keys, "SPAWNCLASS") == "idStaticEntity");
+    // answered from the table: nothing more is queued or published
+    REQUIRE(
+      service->waitForStatsForTesting([](const auto& s) { return s.idle; }, Timeout));
+    CHECK(published->load() == publishedBefore + 1);
+
+    // another spelling shares the entry
+    service->entityDef("LP1A_Lamp");
+    const auto spelled = service->waitForTableForTesting(
+      [](const MaterialTable& t) { return t.findEntityDef("LP1A_Lamp") != nullptr; },
+      Timeout);
+    CHECK(spelled->findEntityDef("LP1A_Lamp")->entry == ready.entry);
+
+    // an unknown classname fails, once
+    service->entityDef("lp1a_missing");
+    const auto missingTable = service->waitForTableForTesting(
+      [](const MaterialTable& t) { return t.findEntityDef("lp1a_missing") != nullptr; },
+      Timeout);
+    CHECK_FALSE(missingTable->findEntityDef("lp1a_missing")->entry);
+    const auto missing = service->entityDef("lp1a_missing");
+    CHECK(missing.state == EntityDefLookup::State::Failed);
+    CHECK(missing.error == "no entityDef 'lp1a_missing'");
+
+    // a reload asks again, so the new table has it from the new registry
+    service->reload();
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.builds == 2u; }, Timeout));
+    const auto reloaded = service->table();
+    REQUIRE(reloaded->findEntityDef("lp1a_lamp"));
+    REQUIRE(reloaded->findEntityDef("lp1a_lamp")->entry);
+    CHECK(reloaded->findEntityDef("lp1a_lamp")->entry->registry == reloaded->registry);
+    CHECK(reloaded->registry != table->registry);
+  }
+
+  SECTION("editor-image sizes: Default, and a Ready one outlives a reload (C21)")
+  {
+    // what the image loads of LP1c.2 would measure: wall is 64×32 in the first build,
+    // undecided (Default) in the second, 128×128 in the third
+    auto build = std::make_shared<std::atomic<int>>(1);
+    auto serviceOptions = options(fixtureSource);
+    serviceOptions.editorImageSizeForTesting = [build](const MaterialEntry& entry) {
+      if (entry.name != "textures/lp1a/wall" || build->load() == 2)
+      {
+        return EditorImageSize{};
+      }
+      return build->load() == 1
+               ? EditorImageSize{64, 32, EditorImageSize::State::Ready}
+               : EditorImageSize{128, 128, EditorImageSize::State::Ready};
+    };
+    auto service = start(std::move(serviceOptions));
+
+    const auto wall = waitForEntry(*service, "textures/lp1a/wall");
+    CHECK(
+      wall->editorImageSize == EditorImageSize{64, 32, EditorImageSize::State::Ready});
+    const auto expr = waitForEntry(*service, "textures/lp1a/expr");
+    CHECK(expr->editorImageSize == EditorImageSize{});
+    // another spelling shares the sized entry
+    CHECK(waitForEntry(*service, "Textures/LP1A/Wall") == wall);
+
+    // a reload whose measure is Default keeps the Ready size (D52)
+    build->store(2);
+    service->reload();
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.builds == 2u; }, Timeout));
+    const auto kept = service->table()->find("textures/lp1a/wall");
+    REQUIRE(kept);
+    REQUIRE(kept->entry);
+    CHECK(kept->entry->registry == service->table()->registry);
+    CHECK(
+      kept->entry->editorImageSize
+      == EditorImageSize{64, 32, EditorImageSize::State::Ready});
+    CHECK(
+      service->table()->find("textures/lp1a/expr")->entry->editorImageSize
+      == EditorImageSize{});
+
+    // a new Ready size replaces it
+    build->store(3);
+    service->reload();
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.builds == 3u; }, Timeout));
+    CHECK(
+      service->table()->find("textures/lp1a/wall")->entry->editorImageSize
+      == EditorImageSize{128, 128, EditorImageSize::State::Ready});
+  }
+
   SECTION("a source that keeps changing rebuilds once per autoReloadInterval")
   {
     // A2.3, A3.5: the first build asks for one more at once, later ones wait
@@ -1079,6 +1242,58 @@ TEST_CASE("MaterialService start, stop and reload leak nothing")
     });
     CHECK_FALSE(grew);
   }
+}
+
+namespace
+{
+
+// the allocations of one thread while the hook is set
+auto allocations = std::atomic<int>{0};
+auto countedThread = DWORD{0};
+
+int countAllocations(
+  const int allocType,
+  void*,
+  const size_t,
+  const int,
+  const long,
+  const unsigned char*,
+  const int)
+{
+  if (allocType == _HOOK_ALLOC && GetCurrentThreadId() == countedThread)
+  {
+    ++allocations;
+  }
+  return TRUE;
+}
+
+} // namespace
+
+TEST_CASE("MaterialTable's finds allocate nothing")
+{
+  // longer than any small-string buffer, so that a key made for the call would allocate
+  const auto name =
+    std::string{"textures/lp1b/a_material_name_well_beyond_the_small_string_buffer"};
+  auto service = start(options(fixtureSource));
+  waitForEntry(*service, name);
+  service->entityDef("lp1a_lamp");
+  const auto table = service->waitForTableForTesting(
+    [](const MaterialTable& t) { return t.findEntityDef("lp1a_lamp") != nullptr; },
+    Timeout);
+
+  const auto view = std::string_view{name};
+  auto found = true;
+  countedThread = GetCurrentThreadId();
+  allocations = 0;
+  const auto previous = _CrtSetAllocHook(&countAllocations);
+  for (auto i = 0; i < 100; ++i)
+  {
+    found = found && table->find(view) != nullptr
+            && table->findEntityDef("lp1a_lamp") != nullptr;
+  }
+  _CrtSetAllocHook(previous);
+  CHECK(found);
+  CHECK(allocations.load() == 0);
 }
 
 // The control (G16): a source that leaks on every build must make the check fail, so that

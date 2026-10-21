@@ -96,6 +96,10 @@ std::shared_ptr<const EvaluatedRegisters> refusal(std::string reason)
   return registers;
 }
 
+// Y.1: what a request is answered with after the thread ended, when not even the reason
+// could be made
+constexpr auto ThreadEndedText = "The material parse thread stopped by itself";
+
 } // namespace
 
 MaterialId MaterialId::of(const MaterialEntry& entry)
@@ -145,7 +149,15 @@ std::size_t RegisterKeyHash::operator()(const RegisterKey& key) const
 
 std::shared_ptr<const MaterialSlot> MaterialTable::find(const std::string_view name) const
 {
-  const auto* slot = materials.find(std::string{name});
+  // the transparent hash takes the view as it is
+  const auto* slot = materials.find(name);
+  return slot ? *slot : nullptr;
+}
+
+std::shared_ptr<const EntityDefSlot> MaterialTable::findEntityDef(
+  const std::string_view classname) const
+{
+  const auto* slot = entityDefs.find(classname);
   return slot ? *slot : nullptr;
 }
 
@@ -171,15 +183,21 @@ struct MaterialService::Shared
   std::atomic<bool> stop = false;
   bool reloadRequested = false;
   bool parseAllRequested = false;
+  // the lookup queue: material names, and entityDef names (C22)
   std::deque<std::string> lookups;
   std::unordered_set<std::string> queuedLookups;
+  std::deque<std::string> entityDefLookups;
+  std::unordered_set<std::string> queuedEntityDefLookups;
   std::deque<RegisterKey> evaluations;
   std::unordered_set<RegisterKey, RegisterKeyHash> queuedEvaluations;
 
   std::shared_ptr<const MaterialTable> table = std::make_shared<const MaterialTable>();
   MaterialServiceStats stats;
-  // X.2: once the thread has ended without a stop (stats.threadError), the refusal every
-  // later evaluation gets
+  // X.2: once the thread has ended without a stop (stats.threadEnded), the refusal every
+  // later evaluation gets; Y.1: the one made with the service stands in until the
+  // detailed one is made, and for good when it cannot be
+  const std::shared_ptr<const EvaluatedRegisters> threadEndedRefusal =
+    refusal(ThreadEndedText);
   std::shared_ptr<const EvaluatedRegisters> threadRefusal;
 
   explicit Shared(MaterialServiceOptions options_)
@@ -207,6 +225,7 @@ private:
   {
     WorkKind kind = WorkKind::Stop;
     std::vector<std::string> lookups;
+    std::vector<std::string> entityDefLookups;
     std::vector<RegisterKey> evaluations;
   };
 
@@ -222,8 +241,12 @@ private:
   MaterialTable m_working;
   std::uint64_t m_version = 0;
   std::deque<RegisterKey> m_deltaOrder;
-  // the names lookups were asked for, looked up again after a reload
+  // the names lookups and entityDef queries were asked for, asked again after a reload
   std::unordered_set<std::string> m_requestedNames;
+  std::unordered_set<std::string> m_requestedEntityDefs;
+  // C21, D52: the last Ready editor-image size of each material, by canonical name, kept
+  // across reloads, so that a Default size never replaces it
+  std::unordered_map<std::string, EditorImageSize> m_readySizes;
   // the loose files' times when the last build ended
   std::vector<DeclFileTime> m_stamp;
   Clock::time_point m_nextPoll;
@@ -307,9 +330,14 @@ private:
 
   /**
    * X.2: the thread ends without a stop, so nothing will take a request again. Every
-   * later lookup is answered Failed and every later evaluation refused, with the failure,
-   * by the calling thread (MaterialService::lookup, evaluate), and the requests still
-   * queued are dropped: their callers get the same answer when they ask again.
+   * later lookup and entityDef query is answered Failed and every later evaluation
+   * refused, by the calling thread (MaterialService::lookup, entityDef, evaluate), and
+   * the requests still queued are dropped: their callers get the same answer when they
+   * ask again.
+   *
+   * Y.1: it may run because memory ran out, so it first sets stats.threadEnded, which
+   * needs no allocation, and clears the queues; the answers then use the refusal made
+   * with the service. Only after that does it try to say why, which may fail.
    */
   void endWithoutStop() noexcept
   {
@@ -319,18 +347,34 @@ private:
     }
     try
     {
-      auto reason = m_lastFailure.empty()
-                      ? std::string{"The material parse thread stopped by itself"}
-                      : m_lastFailure;
+      {
+        auto lock = std::scoped_lock{m_shared.mutex};
+        m_shared.stats.threadEnded = true;
+        m_shared.lookups.clear();
+        m_shared.queuedLookups.clear();
+        m_shared.entityDefLookups.clear();
+        m_shared.queuedEntityDefLookups.clear();
+        m_shared.evaluations.clear();
+        m_shared.queuedEvaluations.clear();
+      }
+      m_shared.changed.notify_all();
+    }
+    catch (...)
+    {
+    }
+
+    try
+    {
+      if (m_shared.options.beforeEndDescriptionForTesting)
+      {
+        m_shared.options.beforeEndDescriptionForTesting();
+      }
+      auto reason = m_lastFailure.empty() ? std::string{ThreadEndedText} : m_lastFailure;
       auto refused = refusal(reason);
       {
         auto lock = std::scoped_lock{m_shared.mutex};
         m_shared.stats.threadError = std::move(reason);
         m_shared.threadRefusal = std::move(refused);
-        m_shared.lookups.clear();
-        m_shared.queuedLookups.clear();
-        m_shared.evaluations.clear();
-        m_shared.queuedEvaluations.clear();
       }
       m_shared.changed.notify_all();
     }
@@ -360,7 +404,7 @@ private:
 
   void run()
   {
-    guarded("build", [&] { build({}); });
+    guarded("build", [&] { build({}, {}); });
     for (;;)
     {
       // W.5, X.2: a request the thread cannot take (an allocation failure while it copies
@@ -393,7 +437,7 @@ private:
         guarded("evaluation", [&] { evaluate(work.evaluations); });
         break;
       case WorkKind::Lookup:
-        guarded("lookup", [&] { lookUp(work.lookups); });
+        guarded("lookup", [&] { lookUp(work.lookups, work.entityDefLookups); });
         break;
       case WorkKind::Poll:
         guarded("poll", [&] { poll(); });
@@ -475,44 +519,48 @@ private:
   {
     if (stopping())
     {
-      return Work{WorkKind::Stop, {}, {}};
+      return Work{WorkKind::Stop, {}, {}, {}};
     }
     if (m_shared.reloadRequested)
     {
       m_shared.reloadRequested = false;
       m_autoReloadPending = false;
-      return Work{WorkKind::Reload, {}, {}};
+      return Work{WorkKind::Reload, {}, {}, {}};
     }
     if (m_autoReloadPending && Clock::now() >= autoReloadDue())
     {
       m_autoReloadPending = false;
-      return Work{WorkKind::AutoReload, {}, {}};
+      return Work{WorkKind::AutoReload, {}, {}, {}};
     }
     if (!m_shared.evaluations.empty())
     {
-      auto work = Work{WorkKind::Evaluate, {}, {}};
+      auto work = Work{WorkKind::Evaluate, {}, {}, {}};
       work.evaluations.assign(m_shared.evaluations.begin(), m_shared.evaluations.end());
       m_shared.evaluations.clear();
       m_shared.queuedEvaluations.clear();
       return work;
     }
-    if (!m_shared.lookups.empty())
+    if (!m_shared.lookups.empty() || !m_shared.entityDefLookups.empty())
     {
-      auto work = Work{WorkKind::Lookup, {}, {}};
+      auto work = Work{WorkKind::Lookup, {}, {}, {}};
       work.lookups.assign(m_shared.lookups.begin(), m_shared.lookups.end());
+      work.entityDefLookups.assign(
+        m_shared.entityDefLookups.begin(), m_shared.entityDefLookups.end());
       m_shared.lookups.clear();
       m_shared.queuedLookups.clear();
+      m_shared.entityDefLookups.clear();
+      m_shared.queuedEntityDefLookups.clear();
       return work;
     }
     if (
       !m_autoReloadPending && m_shared.options.pollInterval.count() > 0
       && Clock::now() >= m_nextPoll)
     {
-      return Work{WorkKind::Poll, {}, {}};
+      return Work{WorkKind::Poll, {}, {}, {}};
     }
     if (m_shared.parseAllRequested && bulkPending())
     {
-      return Work{WorkKind::Bulk, {}, {}};
+      return Work{WorkKind::Bulk, {}, {}, {}};
     }
     return std::nullopt;
   }
@@ -599,6 +647,34 @@ private:
     return true;
   }
 
+  /**
+   * C21, D52: the entry as it is published, with its editor-image size: the registry's
+   * (or the test hook's); a Default size gives way to the last Ready one of the same
+   * material, kept across reloads, and a Ready one is kept for later.
+   */
+  std::shared_ptr<const MaterialEntry> sized(std::shared_ptr<const MaterialEntry> entry)
+  {
+    auto size = m_shared.options.editorImageSizeForTesting
+                  ? m_shared.options.editorImageSizeForTesting(*entry)
+                  : entry->editorImageSize;
+    if (size.state == EditorImageSize::State::Ready)
+    {
+      m_readySizes.insert_or_assign(entry->name, size);
+    }
+    else if (const auto kept = m_readySizes.find(entry->name); kept != m_readySizes.end())
+    {
+      size = kept->second;
+    }
+    if (size == entry->editorImageSize)
+    {
+      return entry;
+    }
+
+    auto copy = std::make_shared<MaterialEntry>(*entry);
+    copy->editorImageSize = size;
+    return copy;
+  }
+
   // one lookup into the working table, under the asked name and the decl's own
   bool lookUpOne(const std::string& name)
   {
@@ -608,20 +684,84 @@ private:
     }
 
     auto result = m_decls->lookup(name);
-    auto slot = std::make_shared<MaterialSlot>();
+    auto slot = std::shared_ptr<const MaterialSlot>{};
     if (result)
     {
-      slot->entry = *result.value;
+      // another spelling of a material that is published already shares its entry
+      const auto* published = m_working.materials.find((*result.value)->name);
+      if (published && (*published)->entry)
+      {
+        slot = *published;
+      }
+      else
+      {
+        auto made = std::make_shared<MaterialSlot>();
+        made->entry = sized(*result.value);
+        slot = std::move(made);
+      }
     }
     else
     {
-      slot->error = result.error;
+      auto made = std::make_shared<MaterialSlot>();
+      made->error = result.error;
+      slot = std::move(made);
     }
     const auto canonical = slot->entry ? slot->entry->name : std::string{};
     auto changed = setSlot(name, slot);
     if (!canonical.empty() && canonical != name)
     {
       changed = setSlot(canonical, slot) || changed;
+    }
+    return changed;
+  }
+
+  bool setEntityDefSlot(
+    const std::string& name, std::shared_ptr<const EntityDefSlot> slot)
+  {
+    if (m_working.entityDefs.find(name))
+    {
+      return false;
+    }
+    m_working.entityDefs = m_working.entityDefs.set(name, std::move(slot));
+    return true;
+  }
+
+  // C22: one entityDef query into the working table, under the asked name and the decl's
+  bool lookUpEntityDef(const std::string& name)
+  {
+    if (m_working.entityDefs.find(name))
+    {
+      return false;
+    }
+
+    auto result = m_decls->entityDef(name);
+    auto slot = std::shared_ptr<const EntityDefSlot>{};
+    if (result)
+    {
+      // another spelling of an entityDef that is published already shares its entry
+      const auto* published = m_working.entityDefs.find((*result.value)->name);
+      if (published && (*published)->entry)
+      {
+        slot = *published;
+      }
+      else
+      {
+        auto made = std::make_shared<EntityDefSlot>();
+        made->entry = std::move(*result.value);
+        slot = std::move(made);
+      }
+    }
+    else
+    {
+      auto made = std::make_shared<EntityDefSlot>();
+      made->error = result.error;
+      slot = std::move(made);
+    }
+    const auto canonical = slot->entry ? slot->entry->name : std::string{};
+    auto changed = setEntityDefSlot(name, slot);
+    if (!canonical.empty() && canonical != name)
+    {
+      changed = setEntityDefSlot(canonical, slot) || changed;
     }
     return changed;
   }
@@ -637,7 +777,9 @@ private:
     m_bulkStarted.reset();
   }
 
-  void build(const std::vector<std::string>& previousNames)
+  void build(
+    const std::vector<std::string>& previousNames,
+    const std::vector<std::string>& previousEntityDefs)
   {
     const auto started = Clock::now();
     m_warnings = 0;
@@ -649,7 +791,7 @@ private:
     m_source.reset();
     try
     {
-      buildRegistry(previousNames, started);
+      buildRegistry(previousNames, previousEntityDefs, started);
     }
     catch (const std::exception& e)
     {
@@ -705,8 +847,17 @@ private:
     return slot;
   }
 
+  std::shared_ptr<const EntityDefSlot> failedEntityDefSlot() const
+  {
+    auto slot = std::make_shared<EntityDefSlot>();
+    slot->error = buildFailure();
+    return slot;
+  }
+
   void buildRegistry(
-    const std::vector<std::string>& previousNames, const Clock::time_point started)
+    const std::vector<std::string>& previousNames,
+    const std::vector<std::string>& previousEntityDefs,
+    const Clock::time_point started)
   {
     m_source =
       m_shared.options.makeSource ? m_shared.options.makeSource(m_shared.stop) : nullptr;
@@ -748,6 +899,14 @@ private:
         break;
       }
       lookUpOne(name);
+    }
+    for (const auto& name : previousEntityDefs)
+    {
+      if (stopping())
+      {
+        break;
+      }
+      lookUpEntityDef(name);
     }
     drainMessages();
     publish();
@@ -797,10 +956,13 @@ private:
   {
     auto previousNames =
       std::vector<std::string>{m_requestedNames.begin(), m_requestedNames.end()};
-    build(previousNames);
+    auto previousEntityDefs = std::vector<std::string>{
+      m_requestedEntityDefs.begin(), m_requestedEntityDefs.end()};
+    build(previousNames, previousEntityDefs);
   }
 
-  void lookUp(const std::vector<std::string>& names)
+  void lookUp(
+    const std::vector<std::string>& names, const std::vector<std::string>& entityDefNames)
   {
     auto changed = false;
     for (const auto& name : names)
@@ -813,6 +975,17 @@ private:
       m_requestedNames.insert(name);
       // W.4: without a registry the lookup fails at once, so no caller waits for it
       changed = (m_decls ? lookUpOne(name) : setSlot(name, failedSlot())) || changed;
+    }
+    for (const auto& name : entityDefNames)
+    {
+      if (stopping())
+      {
+        return;
+      }
+      m_requestedEntityDefs.insert(name);
+      changed =
+        (m_decls ? lookUpEntityDef(name) : setEntityDefSlot(name, failedEntityDefSlot()))
+        || changed;
     }
     if (changed)
     {
@@ -928,7 +1101,7 @@ private:
         auto slot = std::make_shared<MaterialSlot>();
         if (result)
         {
-          slot->entry = *result.value;
+          slot->entry = sized(*result.value);
         }
         else
         {
@@ -1032,11 +1205,14 @@ MaterialLookup MaterialService::lookup(const std::string_view name)
 
   {
     auto lock = std::scoped_lock{m_shared->mutex};
-    // X.2: no thread will take the lookup
-    if (!m_shared->stats.threadError.empty())
+    // X.2, Y.1: no thread will take the lookup
+    if (m_shared->stats.threadEnded)
     {
       return MaterialLookup{
-        MaterialLookup::State::Failed, nullptr, m_shared->stats.threadError};
+        MaterialLookup::State::Failed,
+        nullptr,
+        m_shared->stats.threadError.empty() ? std::string{ThreadEndedText}
+                                            : m_shared->stats.threadError};
     }
     auto text = std::string{name};
     if (!m_shared->stop && m_shared->queuedLookups.insert(text).second)
@@ -1059,10 +1235,11 @@ std::shared_ptr<const EvaluatedRegisters> MaterialService::evaluate(
 
   {
     auto lock = std::scoped_lock{m_shared->mutex};
-    // X.2: no thread will take the evaluation
-    if (m_shared->threadRefusal)
+    // X.2, Y.1: no thread will take the evaluation
+    if (m_shared->stats.threadEnded)
     {
-      return m_shared->threadRefusal;
+      return m_shared->threadRefusal ? m_shared->threadRefusal
+                                     : m_shared->threadEndedRefusal;
     }
     if (!m_shared->stop && m_shared->queuedEvaluations.insert(key).second)
     {
@@ -1071,6 +1248,36 @@ std::shared_ptr<const EvaluatedRegisters> MaterialService::evaluate(
   }
   m_shared->requested.notify_one();
   return nullptr;
+}
+
+EntityDefLookup MaterialService::entityDef(const std::string_view classname)
+{
+  if (const auto slot = table()->findEntityDef(classname))
+  {
+    return slot->entry
+             ? EntityDefLookup{EntityDefLookup::State::Ready, slot->entry, {}}
+             : EntityDefLookup{EntityDefLookup::State::Failed, nullptr, slot->error};
+  }
+
+  {
+    auto lock = std::scoped_lock{m_shared->mutex};
+    // X.2, Y.1: no thread will take the query
+    if (m_shared->stats.threadEnded)
+    {
+      return EntityDefLookup{
+        EntityDefLookup::State::Failed,
+        nullptr,
+        m_shared->stats.threadError.empty() ? std::string{ThreadEndedText}
+                                            : m_shared->stats.threadError};
+    }
+    auto text = std::string{classname};
+    if (!m_shared->stop && m_shared->queuedEntityDefLookups.insert(text).second)
+    {
+      m_shared->entityDefLookups.push_back(std::move(text));
+    }
+  }
+  m_shared->requested.notify_one();
+  return EntityDefLookup{};
 }
 
 void MaterialService::parseAll()

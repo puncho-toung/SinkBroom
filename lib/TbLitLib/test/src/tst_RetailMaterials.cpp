@@ -474,8 +474,30 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
   const auto total =
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started);
   const auto stats = service->stats();
+  const auto table = service->table();
   service->requestStop();
   service->join();
+
+  // C25, Q18: the retail materials that set each geometry flag, each entry counted once
+  auto entries = std::set<const MaterialEntry*>{};
+  table->materials.forEach([&](const auto&, const auto& slot) {
+    if (slot->entry)
+    {
+      entries.insert(slot->entry.get());
+    }
+  });
+  auto mikktspace = std::vector<std::string>{};
+  auto unsmoothedTangents = 0;
+  auto createBackSides = 0;
+  for (const auto* entry : entries)
+  {
+    if (entry->mikktspace)
+    {
+      mikktspace.push_back(entry->name);
+    }
+    unsmoothedTangents += entry->unsmoothedTangents ? 1 : 0;
+    createBackSides += entry->createBackSides ? 1 : 0;
+  }
 
   auto lock = std::scoped_lock{mutex};
   auto report = std::ostringstream{};
@@ -511,6 +533,17 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
     stats.parseAllSeconds * 1000.0,
     total.count() * 1000.0);
   report << fmt::format("  warnings and errors: {}\n", warnings.size());
+  report << fmt::format(
+    "  geometry flags of {} parsed materials (C25, Q18): mikktspace {}, "
+    "unsmoothedTangents {}, createBackSides {}\n",
+    entries.size(),
+    mikktspace.size(),
+    unsmoothedTangents,
+    createBackSides);
+  for (const auto& name : mikktspace)
+  {
+    report << "  mikktspace: " << name << "\n";
+  }
   for (const auto& info : infos)
   {
     report << "  info: " << info << "\n";

@@ -3296,6 +3296,68 @@
       "note": "always true: the registry lives on one thread (D32), so the copy's main-thread checks hold"
     },
     {
+      "id": "M-ID-FN-25",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            568,
+            588
+          ],
+          "anchor": "idDict::FindKey",
+          "sha256": "169f03c4896917e8cf11885e1330b7abf10b3281e6cdd86b0ae82248c54123ba"
+        },
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            312,
+            336
+          ],
+          "anchor": "idDict::Set",
+          "sha256": "b4bc4c45811bd29b3db208e10c59e55f0510743c7dc686415f4fb11ba9a42184"
+        },
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            1605,
+            1639
+          ],
+          "anchor": "idStr::Icmp",
+          "sha256": "1660259cda03835a000886700d008c524ad0662df06d8b4388bda5c4b36ac993"
+        },
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            202,
+            220
+          ],
+          "anchor": "idDict::SetDefaults",
+          "sha256": "d496a9997f927176ea606d6c9b893b1a4e10dab975117771e1e5d456ecd8a965"
+        },
+        {
+          "file": "neo/framework/DeclEntityDef.cpp",
+          "lines": [
+            194,
+            198
+          ],
+          "anchor": "idDeclEntityDef::IsMapOnlyClass",
+          "sha256": "73c81961eed56b8f8f3150eea75e1eadfe74e6de1dbbca3283613142bb51bd5b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "tb::lit::findKey"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::entityDef"
+        }
+      ],
+      "note": "C22, plan §13 A10: findKey is the engine's lookup in a dictionary, written over a list of keys and values: the value of the last key that equals the name with 'A'-'Z' folded to lower case (Icmp folds nothing else, and compares to the end), because an entity's map keys go into its dict with Set, which replaces a value in place, so the last of two spellings wins; an empty name finds nothing, as FindKey's empty-key check returns NULL (its DWarning is a developer print). Pure, no copied code: any thread. MaterialDecls::entityDef returns the merged dict of the copied idDeclEntityDef::Parse (own keys, classname, then SetDefaults of each inherited def) in its order, and dmapOnly from the copied IsMapOnlyClass (the classname's plain def, no map keys, no _mp def). The dicts' key pool ignores case, so a key is spelled as the pool first saw it (a parent's 'Model' over a child's 'model'), which findKey makes no matter"
+    },
+    {
       "id": "M-ID-FN-14",
       "kind": "function",
       "engine": [
@@ -5069,7 +5131,7 @@
         },
         {
           "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
-          "symbol": "MaterialDecls::entityDefKeys"
+          "symbol": "MaterialDecls::entityDef"
         },
         {
           "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",

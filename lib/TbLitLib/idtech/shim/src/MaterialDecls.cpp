@@ -204,6 +204,9 @@ std::shared_ptr<const MaterialEntry> materialEntry(
   entry->surfaceCastsShadow = material.SurfaceCastsShadow();
   entry->entityGui = material.GetEntityGui();
   entry->editorImageName = (material.*get(EditorImageNameTag{})).c_str();
+  entry->mikktspace = material.UseMikkTSpace();
+  entry->unsmoothedTangents = material.UseUnsmoothedTangents();
+  entry->createBackSides = material.ShouldCreateBackSides();
   if (const auto* gui = material.GlobalGui())
   {
     entry->gui = gui->GetSourceFile();
@@ -328,6 +331,52 @@ bool MaterialImageKey::operator==(const MaterialImageKey& other) const
 bool MaterialImageKey::operator!=(const MaterialImageKey& other) const
 {
   return !(*this == other);
+}
+
+bool EditorImageSize::operator==(const EditorImageSize& other) const
+{
+  return width == other.width && height == other.height && state == other.state;
+}
+
+bool EditorImageSize::operator!=(const EditorImageSize& other) const
+{
+  return !(*this == other);
+}
+
+const std::string* findKey(const EntityKeys& keys, const std::string_view name)
+{
+  // idStr::Icmp folds 'A'-'Z' only; the engine's keys are compared to their end
+  const auto fold = [](const char c) {
+    return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
+  };
+  const auto equal = [&](const std::string& key) {
+    if (key.size() != name.size())
+    {
+      return false;
+    }
+    for (std::size_t i = 0; i < key.size(); ++i)
+    {
+      if (fold(key[i]) != fold(name[i]))
+      {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  if (name.empty())
+  {
+    return nullptr;
+  }
+  // the last one given wins (idDict::Set replaces the value)
+  for (auto it = keys.rbegin(); it != keys.rend(); ++it)
+  {
+    if (equal(it->first))
+    {
+      return &it->second;
+    }
+  }
+  return nullptr;
 }
 
 MaterialDecls::Claim::Claim()
@@ -705,13 +754,14 @@ std::vector<DeclFolderInfo> MaterialDecls::declFolders() const
                     : std::vector<DeclFolderInfo>{};
 }
 
-DeclResult<std::vector<std::pair<std::string, std::string>>> MaterialDecls::entityDefKeys(
+DeclResult<std::shared_ptr<const EntityDefEntry>> MaterialDecls::entityDef(
   const std::string_view name)
 {
   if (!m_registry)
   {
     return {std::nullopt, m_constructionError};
   }
+  // the guard of lookup (M-ID-GUARD-01)
   if (name.size() >= size_t(MAX_STRING_CHARS))
   {
     return {std::nullopt, "entityDef name too long"};
@@ -729,14 +779,18 @@ DeclResult<std::vector<std::pair<std::string, std::string>>> MaterialDecls::enti
     return {std::nullopt, "no entityDef '" + nameText + "'"};
   }
 
-  const auto& entityDef = static_cast<const idDeclEntityDef&>(*decl);
-  auto keys = std::vector<std::pair<std::string, std::string>>{};
-  for (int i = 0; i < entityDef.dict.GetNumKeyVals(); ++i)
+  const auto& def = static_cast<const idDeclEntityDef&>(*decl);
+  auto entry = std::make_shared<EntityDefEntry>();
+  entry->registry = m_id;
+  entry->name = def.GetName();
+  for (int i = 0; i < def.dict.GetNumKeyVals(); ++i)
   {
-    const auto* keyValue = entityDef.dict.GetKeyVal(i);
-    keys.emplace_back(keyValue->GetKey().c_str(), keyValue->GetValue().c_str());
+    const auto* keyValue = def.dict.GetKeyVal(i);
+    entry->keys.emplace_back(keyValue->GetKey().c_str(), keyValue->GetValue().c_str());
   }
-  return {std::move(keys), {}};
+  // the copied rule, which finds the def parsed above
+  entry->dmapOnly = idDeclEntityDef::IsMapOnlyClass(nameText.c_str());
+  return {std::move(entry), {}};
 }
 
 DeclResult<bool> MaterialDecls::touch(

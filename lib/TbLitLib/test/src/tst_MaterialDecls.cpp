@@ -633,16 +633,19 @@ TEST_CASE("MaterialDecls")
     }
   }
 
-  SECTION("entityDefKeys")
+  SECTION("entityDef")
   {
     SECTION("inherited keys are merged under the entityDef's own")
     {
-      const auto keys = decls.entityDefKeys("lp1a_lamp");
-      INFO(keys.error);
-      REQUIRE(keys);
+      const auto def = decls.entityDef("lp1a_lamp");
+      INFO(def.error);
+      REQUIRE(def);
+      const auto& entry = **def.value;
+      CHECK(entry.name == "lp1a_lamp");
+      CHECK_FALSE(entry.dmapOnly);
       CHECK(
-        *keys.value
-        == std::vector<std::pair<std::string, std::string>>{
+        entry.keys
+        == EntityKeys{
           {"noshadows", "1"},
           {"model", "models/lp1a/lamp.lwo"},
           {"classname", "lp1a_lamp"},
@@ -653,8 +656,8 @@ TEST_CASE("MaterialDecls")
 
     SECTION("an unknown parent warns")
     {
-      const auto keys = decls.entityDefKeys("lp1a_orphan");
-      REQUIRE(keys);
+      const auto def = decls.entityDef("lp1a_orphan");
+      REQUIRE(def);
       CHECK(hasMessage(
         decls,
         DeclMessageKind::Warning,
@@ -664,7 +667,9 @@ TEST_CASE("MaterialDecls")
 
     SECTION("an unknown entityDef")
     {
-      CHECK_FALSE(decls.entityDefKeys("lp1a_missing"));
+      const auto def = decls.entityDef("lp1a_missing");
+      CHECK_FALSE(def);
+      CHECK(def.error == "no entityDef 'lp1a_missing'");
     }
   }
 
@@ -1126,6 +1131,134 @@ TEST_CASE("MaterialDecls guards the engine's overflows")
   }
 }
 
+TEST_CASE("MaterialDecls geometry flags and entityDefs (C22, C25)")
+{
+  auto source = MemoryDeclSource{{
+    DeclFile{
+      "materials/lp1b.mtr",
+      "textures/lp1b/mikk { mikktspace diffusemap textures/lp1b/mikk_d }\n"
+      "textures/lp1b/hard { unsmoothedTangents diffusemap textures/lp1b/hard_d }\n"
+      "textures/lp1b/twoLit { twoSided diffusemap textures/lp1b/two_d }\n"
+      "textures/lp1b/twoUnlit { twoSided { blend add map textures/lp1b/glow } }\n"
+      "textures/lp1b/plain { diffusemap textures/lp1b/plain_d }\n",
+      0},
+    DeclFile{
+      "def/lp1b.def",
+      "entityDef lp1b_helper { \"dmapOnly\" \"1\" \"Model\" \"a\" }\n"
+      "entityDef lp1b_derived { \"inherit\" \"lp1b_helper\" \"model\" \"b\" }\n"
+      "entityDef lp1b_off { \"dmapOnly\" \"0\" }\n",
+      0},
+  }};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+
+  SECTION("the flags the copied parser sets")
+  {
+    const auto mikk = lookup(decls, "textures/lp1b/mikk");
+    CHECK(mikk->mikktspace);
+    CHECK_FALSE(mikk->unsmoothedTangents);
+    CHECK_FALSE(mikk->createBackSides);
+
+    const auto hard = lookup(decls, "textures/lp1b/hard");
+    CHECK(hard->unsmoothedTangents);
+    CHECK_FALSE(hard->mikktspace);
+
+    // a lit two-sided material is made front-sided with back sides (Parse)
+    const auto twoLit = lookup(decls, "textures/lp1b/twoLit");
+    CHECK(twoLit->createBackSides);
+    CHECK(twoLit->cullType == 0);
+
+    // an unlit one stays two-sided
+    const auto twoUnlit = lookup(decls, "textures/lp1b/twoUnlit");
+    CHECK_FALSE(twoUnlit->createBackSides);
+    CHECK(twoUnlit->cullType == CullTwoSided);
+
+    const auto plain = lookup(decls, "textures/lp1b/plain");
+    CHECK_FALSE(plain->mikktspace);
+    CHECK_FALSE(plain->unsmoothedTangents);
+    CHECK_FALSE(plain->createBackSides);
+  }
+
+  SECTION("the registry gives every material the default editor image size (C21)")
+  {
+    const auto plain = lookup(decls, "textures/lp1b/plain");
+    CHECK(plain->editorImageSize == EditorImageSize{});
+    CHECK(plain->editorImageSize.width == 8);
+    CHECK(plain->editorImageSize.height == 8);
+    CHECK(plain->editorImageSize.state == EditorImageSize::State::Default);
+  }
+
+  SECTION("dmapOnly comes from the def, inherited keys included")
+  {
+    const auto helper = decls.entityDef("lp1b_helper");
+    REQUIRE(helper);
+    CHECK((*helper.value)->dmapOnly);
+    CHECK((*helper.value)->registry == decls.id());
+
+    // IsMapOnlyClass reads the merged dict, which holds the parent's key
+    const auto derived = decls.entityDef("lp1b_derived");
+    REQUIRE(derived);
+    CHECK((*derived.value)->dmapOnly);
+    // the dicts' key pool ignores case, so "model" is spelled as the pool first saw it
+    CHECK(
+      (*derived.value)->keys
+      == EntityKeys{
+        {"Model", "b"},
+        {"classname", "lp1b_derived"},
+        {"dmapOnly", "1"},
+      });
+    CHECK(*findKey((*derived.value)->keys, "model") == "b");
+
+    const auto off = decls.entityDef("lp1b_off");
+    REQUIRE(off);
+    CHECK_FALSE((*off.value)->dmapOnly);
+
+    // the decl name is canonical
+    const auto upper = decls.entityDef("LP1B_Helper");
+    REQUIRE(upper);
+    CHECK((*upper.value)->name == "lp1b_helper");
+  }
+}
+
+TEST_CASE("findKey")
+{
+  const auto keys = EntityKeys{
+    {"classname", "light"},
+    {"Origin", "0 0 0"},
+    {"_color", "1 1 1"},
+    {"origin", "8 8 8"},
+    {"\xC3\x84\xC3\x96", "upper"},
+  };
+
+  SECTION("ASCII letters compare without case")
+  {
+    REQUIRE(findKey(keys, "CLASSNAME"));
+    CHECK(*findKey(keys, "CLASSNAME") == "light");
+    CHECK(*findKey(keys, "_Color") == "1 1 1");
+  }
+
+  SECTION("the last of two keys that differ in case wins")
+  {
+    REQUIRE(findKey(keys, "ORIGIN"));
+    CHECK(*findKey(keys, "ORIGIN") == "8 8 8");
+    CHECK(findKey(keys, "origin") == &keys[3].second);
+  }
+
+  SECTION("only ASCII letters are folded, and the whole key compares")
+  {
+    CHECK(findKey(keys, "\xC3\xA4\xC3\xB6") == nullptr);
+    CHECK(findKey(keys, "\xC3\x84\xC3\x96") == &keys[4].second);
+    CHECK(findKey(keys, "origi") == nullptr);
+    CHECK(findKey(keys, "origins") == nullptr);
+  }
+
+  SECTION("an empty name finds nothing")
+  {
+    CHECK(findKey(keys, "") == nullptr);
+    CHECK(findKey(EntityKeys{{"", "x"}}, "") == nullptr);
+  }
+}
+
 TEST_CASE("Engine messages (D63)")
 {
   const auto pendingBefore = pendingEngineMessagesForTesting();
@@ -1274,8 +1407,8 @@ TEST_CASE("MaterialDecls build and destroy leak nothing")
         ok = ok && bool(decls.evaluate(**material.value, NoParms, 0.5f));
       }
     }
-    ok = ok && bool(decls.entityDefKeys("lp1a_lamp"));
-    ok = ok && bool(decls.entityDefKeys("lp1a_orphan"));
+    ok = ok && bool(decls.entityDef("lp1a_lamp"));
+    ok = ok && bool(decls.entityDef("lp1a_orphan"));
     return ok;
   };
 

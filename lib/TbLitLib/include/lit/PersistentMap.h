@@ -20,15 +20,30 @@
 #pragma once
 
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace tb::lit
 {
+
+// a string hash that also takes a std::string_view and hashes it alike, so that a map
+// with std::equal_to<> finds a string key without making one
+struct StringHash
+{
+  using is_transparent = void;
+
+  std::size_t operator()(const std::string_view text) const
+  {
+    return std::hash<std::string_view>{}(text);
+  }
+};
 
 /**
  * An immutable hash map whose set and erase return a new map that shares every node off
@@ -37,6 +52,9 @@ namespace tb::lit
  * the values or the rest of the map, so publishing one changed material costs the same
  * whatever the table's size. Maps are values: copying one copies a pointer, and a map
  * may be read from any thread while another thread builds a newer one from it.
+ *
+ * With a Hash and an Equal that are both transparent (StringHash and std::equal_to<>),
+ * find takes any key type they take, without making a Key.
  */
 template <
   typename Key,
@@ -68,7 +86,8 @@ private:
 
   std::shared_ptr<const Root> m_root;
 
-  static std::pair<std::size_t, std::size_t> positionsOf(const Key& key)
+  template <typename K>
+  static std::pair<std::size_t, std::size_t> positionsOf(const K& key)
   {
     // a multiplicative mix, so that both levels use well-mixed bits
     auto x = std::uint64_t(Hash{}(key)) * 0x9E3779B97F4A7C15ull;
@@ -84,14 +103,8 @@ private:
   {
   }
 
-public:
-  PersistentMap() = default;
-
-  std::size_t size() const { return m_root ? m_root->size : 0; }
-  bool empty() const { return size() == 0; }
-
-  // the value of key, or null; valid while this map lives
-  const Value* find(const Key& key) const
+  template <typename K>
+  const Value* findKey(const K& key) const
   {
     if (!m_root)
     {
@@ -116,6 +129,26 @@ public:
       }
     }
     return nullptr;
+  }
+
+public:
+  PersistentMap() = default;
+
+  std::size_t size() const { return m_root ? m_root->size : 0; }
+  bool empty() const { return size() == 0; }
+
+  // the value of key, or null; valid while this map lives
+  const Value* find(const Key& key) const { return findKey(key); }
+
+  // the same, for a map whose Hash and Equal are transparent, without making a Key
+  template <typename K>
+    requires(!std::same_as<K, Key>) && requires {
+      typename Hash::is_transparent;
+      typename Equal::is_transparent;
+    }
+  const Value* find(const K& key) const
+  {
+    return findKey(key);
   }
 
   // a map with key set to value
