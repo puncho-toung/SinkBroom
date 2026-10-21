@@ -19,6 +19,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LiveSession.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/MaterialService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Materials.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NvrhiSupport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.cpp
@@ -26,6 +27,8 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ResourceContainer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SessionEvents.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SessionEvents.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/StackThread.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/StackThread.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Swapchain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Swapchain.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SwapchainRules.cpp
