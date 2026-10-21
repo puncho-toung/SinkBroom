@@ -189,6 +189,9 @@ struct MaterialServiceStats
   bool parseAllDone = false;
   // a build that the stop cut short
   bool buildCancelled = false;
+  // the containers the last build's source holds (DeclSource::containerCount): fewer
+  // than the game has when the stop cut its scan short
+  std::size_t sourceContainers = 0;
   int materials = 0;
   int tables = 0;
   int defaultedMaterials = 0;

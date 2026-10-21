@@ -20,7 +20,9 @@
 // The hidden retail tests ([.][retail]): they read the game folder that TB_LIT_GAME_PATH
 // names (the D3-Sink build folder with base/), and are skipped without it. They compare
 // SinkBroom with the engine's output that TOOLS/lit-preview/capture_goldens.py captured
-// into fixture/lit/goldens (G8); the engine is not run again.
+// into fixture/lit/goldens (G8); the engine is not run again. The goldens and the totals
+// below are a snapshot of that game folder, its loose decl files included (N.4): an edit
+// under base/ fails these tests until capture_goldens.py runs again.
 //
 // - The sweep parses every material and table through GameDeclSource and the parse
 //   thread, and asserts the decl files and bytes, the decls per type and the warnings
@@ -187,13 +189,22 @@ std::vector<std::string> hashDeclText(const std::vector<std::string>& lines)
   return out;
 }
 
+// W.7: the image loader's "Binarize File:" lines name the generated file with the usage
+// digits the load chose after it began (metal04_rmao#__1200: the _rmao rename's usage,
+// M-ID-DIFF-02, A3.10); that post-load usage arrives with LP1c's timestamp call, so until
+// then they are counted, not compared
+bool isBinarizeLine(const std::string& line)
+{
+  return line.rfind("Binarize File:", 0) == 0;
+}
+
 // the engine's image loader prints these while a touch loads a material's images; the
 // preview loads no image in LP1a, so they are compared with the image keys instead
 bool isImageLoaderLine(const std::string& line)
 {
   return line.rfind("WARNING: Couldn't load image", 0) == 0
          || line.rfind("WARNING: Couldn't load cube image", 0) == 0
-         || line.rfind("Binarize File:", 0) == 0;
+         || isBinarizeLine(line);
 }
 
 std::string declTypeOf(const std::string& kind)
@@ -470,7 +481,8 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
   auto report = std::ostringstream{};
   report << "Retail sweep of " << gamePath->string() << "\n";
   report << fmt::format(
-    "  decl files: {} ({:.2f} MB); decl text kept: {:.2f} MB\n",
+    "  containers: {}; decl files: {} ({:.2f} MB); decl text kept: {:.2f} MB\n",
+    stats.sourceContainers,
     stats.declFiles,
     double(stats.declFileBytes) / (1024.0 * 1024.0),
     double(stats.declTextBytes) / (1024.0 * 1024.0));
@@ -510,6 +522,12 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
   CHECK(stats.defaultedMaterials == 15);
   CHECK(stats.warnings == warnings.size());
   CHECK(stats.failedWorkItems == 0u);
+  // W.1: the decl guards refuse nothing here; newpdas/enpro_hammer.pda, a string of 1075
+  // characters whose first dot is its fifth, is read
+  CHECK(std::none_of(warnings.begin(), warnings.end(), [](const auto& warning) {
+    return warning.find("holds a token of 1024") != std::string::npos
+           || warning.find("exceeded 256 stages") != std::string::npos;
+  }));
 
   const auto goldens = readGoldens();
   const auto list = engineDeclList(goldens);
@@ -615,6 +633,7 @@ TEST_CASE("Retail materials: the engine's print output", "[.][retail]")
     auto implicitBlocks = 0;
     auto defaultedBlocks = 0;
     auto imageLines = 0;
+    auto binarizeLines = 0;
     for (const auto& block : goldens)
     {
       if (block.kind != "material" && block.kind != "table" && block.kind != "implicit")
@@ -636,6 +655,7 @@ TEST_CASE("Retail materials: the engine's print output", "[.][retail]")
           {
             engineImages.push_back(std::move(*image));
           }
+          binarizeLines += isBinarizeLine(line) ? 1 : 0;
           continue;
         }
         if (enginePrint.empty() && line.rfind("WARNING: ", 0) == 0)
@@ -719,23 +739,29 @@ TEST_CASE("Retail materials: the engine's print output", "[.][retail]")
 
     std::cout << fmt::format(
       "Goldens: {} blocks compared ({} implicit, {} defaulted materials), {} image "
-      "lines\n",
+      "lines, {} Binarize lines counted\n",
       compared,
       implicitBlocks,
       defaultedBlocks,
-      imageLines);
+      imageLines,
+      binarizeLines);
     // 34 materials and 9 tables, the 15 defaulted materials, 3 more tables that warn,
     // and the 55 implicit materials
     CHECK(compared == 116);
     CHECK(implicitBlocks == 55);
     CHECK(defaultedBlocks == 15);
+    // W.7: the "Couldn't load" lines, each compared above, and the Binarize lines, only
+    // counted until LP1c (isBinarizeLine, A3.10)
+    CHECK(imageLines == 27);
+    CHECK(binarizeLines == 3);
   }
 
   SECTION("the editor images agree with the engine's export")
   {
-    // A3.2: a stage field the print does not show; only the retail containers' decls,
-    // whose text predates the export, are compared (the loose files and .pk4 files are
-    // newer)
+    // A3.2: a stage field the print does not show. Every material the export lists and
+    // SinkBroom has is compared, from loose files, .pk4 files and .resources files alike
+    // (W.7), so an edit of a loose material's editor image fails this test until the
+    // engine's export (base/_bl/materials.json) is made again
     const auto exported =
       engineEditorImages(*gamePath / "base" / "_bl" / "materials.json");
     REQUIRE(exported.size() > 7000u);

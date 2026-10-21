@@ -114,6 +114,7 @@ public:
   std::vector<std::string> takeWarnings() override;
   void closeFiles() override;
   bool changedWhileRead() const override;
+  std::size_t containerCount() const override;
 
   // the source that a read of path finds, or nullopt
   std::optional<GameFileOrigin> origin(const std::string& path) const;

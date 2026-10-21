@@ -31,6 +31,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -339,6 +340,17 @@ std::string diffuseImage(const MaterialEntry& entry)
   return {};
 }
 
+// W.6: enough containers for a full scan of more than 2 s in Debug (about 2.5 s for 96
+// here). Release reads their tables about ten times faster: 384 take about 1 s, still a
+// hundred times the 5 ms the test waits before its stop
+#ifdef NDEBUG
+constexpr auto ScanContainers = 384;
+constexpr auto LongScan = std::chrono::milliseconds{500};
+#else
+constexpr auto ScanContainers = 128;
+constexpr auto LongScan = std::chrono::milliseconds{2000};
+#endif
+
 // a game folder whose base holds count .resources files of entries each, so that a full
 // container scan takes long
 void writeScanHeavyGame(
@@ -561,17 +573,22 @@ TEST_CASE("MaterialService")
 
   SECTION("a stop during the container scan ends within half a second")
   {
-    // G4: 96 containers of 4000 entries; the stop flag is checked for every directory
-    // entry and every container table entry
+    // G4: containers of 4000 entries; the stop flag is checked for every directory entry
+    // and every container table entry. W.6: the full scan takes long (LongScan), so a
+    // stop 5 ms into it lands inside it, and the cancelled source holds fewer containers
     const auto folder = TempFolder{"tb-lit-scan"};
-    writeScanHeavyGame(folder.path(), 96, 4000);
+    writeScanHeavyGame(folder.path(), ScanContainers, 4000);
 
     const auto fullStarted = Clock::now();
     {
       const auto full = GameDeclSource{folder.path()};
-      CHECK(full.searchOrder().size() == 96u);
+      CHECK(full.searchOrder().size() == std::size_t(ScanContainers));
+      CHECK(full.containerCount() == std::size_t(ScanContainers));
     }
     const auto fullScan = Clock::now() - fullStarted;
+    std::cout << "container scan: " << ScanContainers << " containers in "
+              << std::chrono::duration<double, std::milli>(fullScan).count() << " ms\n";
+    REQUIRE(fullScan > LongScan);
 
     auto entered = std::make_shared<Gate>();
     auto service = start(options([path = folder.path(),
@@ -593,6 +610,7 @@ TEST_CASE("MaterialService")
     CAPTURE(fullScanMs, stopMs);
     CHECK(stopTime < 500ms);
     CHECK(service->stats().buildCancelled);
+    CHECK(service->stats().sourceContainers < std::size_t(ScanContainers));
   }
 
   SECTION("a work item that throws is logged, and the thread goes on")

@@ -706,6 +706,7 @@ private:
     const auto files = m_decls->declFileCount();
     const auto fileBytes = m_decls->declFileBytes();
     const auto registry = m_decls->id();
+    const auto containers = m_source->containerCount();
     updateStats([&](MaterialServiceStats& stats) {
       ++stats.builds;
       stats.registry = registry;
@@ -714,6 +715,7 @@ private:
       stats.parseAllSeconds = 0.0;
       stats.parseAllDone = false;
       stats.buildCancelled = cancelled;
+      stats.sourceContainers = containers;
       stats.materials = materials;
       stats.tables = tables;
       stats.defaultedMaterials = 0;

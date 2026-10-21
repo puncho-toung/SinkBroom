@@ -260,6 +260,11 @@ bool DeclSource::changedWhileRead() const
   return false;
 }
 
+std::size_t DeclSource::containerCount() const
+{
+  return 0;
+}
+
 int compareEnginePaths(const std::string& lhs, const std::string& rhs)
 {
   return idStr::IcmpPath(lhs.c_str(), rhs.c_str());

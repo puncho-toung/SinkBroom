@@ -589,6 +589,11 @@ bool GameDeclSource::changedWhileRead() const
   return m_changedWhileRead;
 }
 
+std::size_t GameDeclSource::containerCount() const
+{
+  return m_pk4s.size() + m_resources.size();
+}
+
 std::optional<GameFileOrigin> GameDeclSource::origin(const std::string& path) const
 {
   const auto relative = checkedRelativePath(path);

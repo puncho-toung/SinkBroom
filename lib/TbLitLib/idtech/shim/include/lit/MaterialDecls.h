@@ -101,6 +101,10 @@ public:
   // a file kept changing while it was read, so what was read may be torn; the registry's
   // owner builds again (A3.5)
   virtual bool changedWhileRead() const;
+
+  // the containers (.pk4 and .resources files) whose tables the source holds; fewer than
+  // the game has when a cancel cut its scan short (G4); none for a source without them
+  virtual std::size_t containerCount() const;
 };
 
 // idStr::IcmpPath, the engine's path order (case-insensitive, folders first): negative,
