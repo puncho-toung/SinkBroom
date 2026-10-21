@@ -23,9 +23,16 @@
 #include <QString>
 #include <QWidget>
 
+#include "base/Notifier.h"
+
 #include <filesystem>
 
 class QCloseEvent;
+
+namespace tb::gl
+{
+class Camera;
+}
 
 namespace tb::ui
 {
@@ -34,15 +41,18 @@ class MapDocument;
 class MapViewToolBox;
 
 /**
- * What a sidebar panel may use. The references outlive every panel: the document and the
- * tool box live as long as the map window that owns the panel's dock. A panel holds no
- * pointer into the document's map between notifications.
+ * What a sidebar panel may use. The references outlive every panel: the document, the
+ * tool box and the map views live as long as the map window that owns the panel's dock. A
+ * panel holds no pointer into the document's map between notifications.
  */
 struct SidebarContext
 {
   AppController& appController;
   MapDocument& document;
   MapViewToolBox& toolBox;
+  // forwards the changes of the current 3D camera across layout switches; the camera may
+  // be gone after a notification, so a panel copies what it needs from it
+  Notifier<const gl::Camera&>& cameraDidChangeNotifier;
 };
 
 /**

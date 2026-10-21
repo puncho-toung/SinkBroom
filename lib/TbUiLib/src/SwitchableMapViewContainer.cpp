@@ -22,6 +22,7 @@
 #include <QGridLayout>
 
 #include "base/PreferenceManager.h"
+#include "gl/PerspectiveCamera.h"
 #include "mdl/Map.h"
 #include "mdl/PointTrace.h"
 #include "prefs/Preferences.h"
@@ -110,6 +111,8 @@ void SwitchableMapViewContainer::switchToMapView(const MapViewLayout viewId)
   setLayout(layout);
 
   m_mapView->setFocus();
+
+  connectCameraObserver();
 }
 
 const MapViewToolBox& SwitchableMapViewContainer::toolBox() const
@@ -167,6 +170,12 @@ const gl::PerspectiveCamera& SwitchableMapViewContainer::perspectiveCamera() con
   return m_mapView->perspectiveCamera();
 }
 
+gl::PerspectiveCamera& SwitchableMapViewContainer::perspectiveCamera()
+{
+  // every 3D view owns its camera as a non-const object
+  return KDL_CONST_OVERLOAD(perspectiveCamera());
+}
+
 bool SwitchableMapViewContainer::canMaximizeCurrentView() const
 {
   return m_mapView->canMaximizeCurrentView();
@@ -186,6 +195,18 @@ void SwitchableMapViewContainer::connectObservers()
 {
   m_notifierConnection +=
     m_toolBox->refreshViewsNotifier.connect([&](Tool& tool) { refreshViews(tool); });
+}
+
+void SwitchableMapViewContainer::connectCameraObserver()
+{
+  auto& camera = perspectiveCamera();
+
+  m_cameraNotifierConnection.disconnect();
+  m_cameraNotifierConnection +=
+    camera.cameraDidChangeNotifier.connect(cameraDidChangeNotifier);
+
+  // the views were replaced, so the camera is a new one that observers have not seen
+  cameraDidChangeNotifier(camera);
 }
 
 void SwitchableMapViewContainer::refreshViews(Tool&)

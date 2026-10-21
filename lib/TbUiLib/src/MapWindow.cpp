@@ -675,8 +675,11 @@ void MapWindow::createGui()
   // The docks must exist before createMenus lists them in View > Sidebar and before the
   // window state that places them is restored.
   m_sidebarManager = new SidebarManager{*this};
-  const auto sidebarContext =
-    SidebarContext{m_appController, document(), m_mapView->toolBox()};
+  const auto sidebarContext = SidebarContext{
+    m_appController,
+    document(),
+    m_mapView->toolBox(),
+    m_mapView->cameraDidChangeNotifier};
   for (auto& panel : createSidebarPanels(sidebarContext))
   {
     m_sidebarManager->registerPanel(std::move(panel));

@@ -22,6 +22,7 @@
 #include <QWidget>
 
 #include "base/Macros.h"
+#include "base/Notifier.h"
 #include "base/NotifierConnection.h"
 #include "ui/MapView.h"
 
@@ -29,8 +30,9 @@ namespace tb
 {
 namespace gl
 {
+class Camera;
 class PerspectiveCamera;
-}
+} // namespace gl
 
 namespace ui
 {
@@ -61,8 +63,16 @@ private:
   std::unique_ptr<MapViewActivationTracker> m_activationTracker;
 
   NotifierConnection m_notifierConnection;
+  NotifierConnection m_cameraNotifierConnection;
 
 public:
+  /**
+   * Forwards the changes of the current 3D view's camera. Replacing the views connects it
+   * to the new 3D camera and notifies once, so an observer connects once and follows
+   * every layout switch.
+   */
+  Notifier<const gl::Camera&> cameraDidChangeNotifier;
+
   SwitchableMapViewContainer(
     AppController& appController, MapDocument& document, QWidget* parent = nullptr);
   ~SwitchableMapViewContainer() override;
@@ -81,6 +91,7 @@ public:
   void moveCameraToPreviousTracePoint();
 
   const gl::PerspectiveCamera& perspectiveCamera() const;
+  gl::PerspectiveCamera& perspectiveCamera();
 
   bool canMaximizeCurrentView() const;
   bool currentViewMaximized() const;
@@ -88,6 +99,7 @@ public:
 
 private:
   void connectObservers();
+  void connectCameraObserver();
   void refreshViews(Tool& tool);
 
 public: // implement MapView interface

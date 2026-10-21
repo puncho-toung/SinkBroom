@@ -138,7 +138,11 @@ MapDocument& SidebarContextFixture::document()
 
 SidebarContext SidebarContextFixture::context()
 {
-  return {m_appControllerFixture.appController(), m_document, m_toolBox};
+  return {
+    m_appControllerFixture.appController(),
+    m_document,
+    m_toolBox,
+    m_cameraDidChangeNotifier};
 }
 
 QString currentText(const LightEditorPanel& panel)

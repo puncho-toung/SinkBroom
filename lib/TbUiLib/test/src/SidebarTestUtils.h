@@ -95,7 +95,8 @@ RegisteredStub registerStubPanel(
 void checkGreyscaleIcon(const std::filesystem::path& imagePath);
 
 /**
- * A document of the given game with a tool box, as a map window provides them.
+ * A document of the given game with a tool box, as a map window provides them, and a
+ * camera notifier that no map view drives; a test notifies it with a camera of its own.
  */
 class SidebarContextFixture
 {
@@ -105,6 +106,7 @@ private:
   MapDocument& m_document;
   QWidget m_toolPages;
   MapViewToolBox m_toolBox;
+  Notifier<const gl::Camera&> m_cameraDidChangeNotifier;
 
 public:
   explicit SidebarContextFixture(mdl::MapFixtureConfig config = {});
