@@ -102,6 +102,20 @@ std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& pat
   const auto empty = !std::filesystem::exists(path, existing)
                      || std::filesystem::file_size(path, existing) == 0;
 
+  if (!empty)
+  {
+    // rows of another format would sit under the old header (review V.8)
+    auto existingFile = std::ifstream{path, std::ios::binary};
+    auto firstLine = std::string{};
+    std::getline(existingFile, firstLine);
+    if (firstLine + "\n" != frameLogHeader())
+    {
+      return fmt::format(
+        "The frame log {} has another format; delete it or choose another path",
+        path.string());
+    }
+  }
+
   m_path = path;
   m_file.open(path, std::ios::out | std::ios::app | std::ios::binary);
   if (!m_file)

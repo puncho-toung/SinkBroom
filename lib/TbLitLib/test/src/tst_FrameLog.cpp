@@ -157,6 +157,28 @@ TEST_CASE("FrameLogWriter")
     std::filesystem::remove(path);
   }
 
+  SECTION("a log of another format is not appended to")
+  {
+    // review V.8: rows of the new format under an older header
+    const auto path =
+      std::filesystem::temp_directory_path() / "TbLitLibTest-old-frame-log.csv";
+    const auto oldLog = std::string{"frame,cpu_record_ms,gpu_clear_ms\n0,1.000,0.500\n"};
+    {
+      auto file = std::ofstream{path, std::ios::binary | std::ios::trunc};
+      file << oldLog;
+    }
+
+    auto writer = FrameLogWriter{};
+    const auto error = writer.open(path);
+    REQUIRE(error);
+    CHECK(error->find("another format") != std::string::npos);
+    CHECK_FALSE(writer.isOpen());
+    writer.append(exampleRow());
+    CHECK_FALSE(writer.close());
+    CHECK(readFile(path) == oldLog);
+    std::filesystem::remove(path);
+  }
+
   SECTION("open with an empty path is no log")
   {
     auto writer = FrameLogWriter{};
