@@ -866,6 +866,17 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
         REQUIRE(session->hasSwapchain());
         REQUIRE(drawFrames(3));
 
+        // Review N.3: a last frame that returned SUBOPTIMAL left a request for this
+        // generation, which would suppress the resume's request below; answer it first
+        for (auto attempt = 0; attempt < 3 && session->swapchainReplacementRequested();
+             ++attempt)
+        {
+          replaceSwapchain(*session, surface, window)
+            | kdl::transform_error([](const auto& e) { FAIL(e.msg); });
+          REQUIRE(drawFrames(3));
+        }
+        REQUIRE_FALSE(session->swapchainReplacementRequested());
+
         // Review V.1: a park that completed released the generation's image wrappers. An
         // unpark without a new generation, as the panel's host did after a park that had
         // timed out, must draw nothing on that generation and ask for the next one.

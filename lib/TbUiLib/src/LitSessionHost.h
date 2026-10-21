@@ -32,9 +32,13 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 class QVulkanInstance;
 class QWidget;
@@ -79,7 +83,9 @@ class LitPreviewWindow;
  * 5. destroy the QVulkanInstance
  * 6. reset the dispatcher
  * 7. destroy the material registry on the parse thread, then join it (plan step 8)
- * The window is detached before the first step.
+ * The window is detached before the first step. A warning, error or loss that the
+ * session posted and the event loop did not deliver before the stop is carried into the
+ * report (review R.1).
  *
  * While the host services sent messages it is busy: Qt code that runs then and calls back
  * into the host is deferred to the event loop, and an owner that goes away meanwhile
@@ -109,6 +115,24 @@ private:
     MaterialsDestroyed,
   };
 
+  /**
+   * The session's warnings, errors and losses that are queued to this host and not yet
+   * delivered; any thread. The teardown carries what is left into the report, because
+   * deleting the host drops its posted events (review R.1).
+   */
+  class UndeliveredMessages
+  {
+  private:
+    std::mutex m_mutex;
+    std::uint64_t m_next = 0;
+    std::map<std::uint64_t, std::pair<lit::SessionEvent, std::string>> m_queued;
+
+  public:
+    std::uint64_t add(lit::SessionEvent event, std::string message);
+    void remove(std::uint64_t id);
+    std::vector<std::pair<lit::SessionEvent, std::string>> take();
+  };
+
   class BusyScope;
 
   lit::SessionOptions m_options;
@@ -117,6 +141,8 @@ private:
   CameraProvider m_camera;
   // the game whose decls the material service reads; empty: no service
   std::filesystem::path m_gamePath;
+  std::shared_ptr<UndeliveredMessages> m_undelivered =
+    std::make_shared<UndeliveredMessages>();
 
   std::unique_ptr<QVulkanInstance> m_instance;
   lit::InstanceHandles m_handles;

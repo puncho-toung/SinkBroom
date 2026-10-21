@@ -325,6 +325,14 @@ TEST_CASE("LitPreviewPanel")
     CHECK(findButton(panel, "Start").isEnabled());
     CHECK(messageText(panel) == PressStartText);
   }
+
+  SECTION("a report counts a lost device as a problem (review R.1)")
+  {
+    auto report = LitPreviewReport{};
+    CHECK(report.problems().empty());
+    report.deviceLost = true;
+    CHECK(report.problems() == std::vector<std::string>{"The GPU device was lost."});
+  }
 }
 
 // Hidden GPU tests ("[.][litgpu]"): they need a Vulkan 1.2 driver and a desktop, and they
@@ -1169,6 +1177,10 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     REQUIRE(harness.startAndWaitForFrame());
     REQUIRE(harness.waitForFrame());
     const auto size = dock.size();
+    // review N.1: an iteration in which no swapchain replacement was pending at the
+    // restore takes the host's parked branch; one with a pending request takes the stale
+    // branch and proves nothing
+    auto pinned = 0;
     for (auto i = 0; i < 3; ++i)
     {
       CAPTURE(i);
@@ -1183,11 +1195,13 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
       // the host's park has timed out; no event is processed until the thread has parked
       REQUIRE(waitWithoutEvents([&] { return parked.entered(); }, 2000ms));
       CHECK(session.isParked());
+      pinned += session.swapchainReplacementRequested() ? 0 : 1;
       dock.resize(size);
       REQUIRE(QTest::qWaitFor([&] { return parked.left(); }, 5000));
       REQUIRE(harness.waitForFrame());
       CHECK(session.swapchainGenerations() > generations);
     }
+    CHECK(pinned >= 1);
     panel.stop();
     reports.checkLast();
     CHECK(reports.last().parkTimeouts >= 3u);
@@ -1215,6 +1229,8 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
       CHECK(!session.isParked());
       dock.resize(size);
       QTest::qWait(20);
+      // review N.2: the restore came while the thread was still inside its park
+      CHECK(!parking.left());
       REQUIRE(QTest::qWaitFor([&] { return parking.left(); }, 5000));
       REQUIRE(harness.waitForFrame());
       CHECK(session.swapchainGenerations() > generations);
@@ -1604,6 +1620,42 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     CHECK(QApplication::focusWidget() == harness.lineEdit);
     reports.checkLast();
     checkCounts("keyboard");
+  }
+
+  SECTION("an error or a loss posted just before Stop reaches the report (review R.1)")
+  {
+    for (const auto fault :
+         {lit::DebugFault::NvrhiError, lit::DebugFault::DeviceLostBeforeFrame})
+    {
+      CAPTURE(int(fault));
+      REQUIRE(harness.startAndWaitForFrame());
+      auto& session = *harness.session();
+      session.debugInjectFault(fault);
+      harness.moveCamera();
+      // the render thread posts its message; no event is processed, so none is delivered
+      REQUIRE(waitWithoutEvents(
+        [&] { return session.nvrhiErrorCount() > 0 || session.deviceLost(); }, 5000ms));
+      std::this_thread::sleep_for(50ms);
+      panel.stop();
+
+      const auto& report = reports.last();
+      CHECK(std::ranges::any_of(report.messages, [](const auto& message) {
+        return message.find("(not delivered before the stop)") != std::string::npos;
+      }));
+      const auto problems = report.problems();
+      CHECK(!problems.empty());
+      if (fault == lit::DebugFault::DeviceLostBeforeFrame)
+      {
+        CHECK(report.deviceLost);
+        CHECK(std::ranges::count(problems, std::string{"The GPU device was lost."}) == 1);
+      }
+      CHECK_THAT(
+        messageText(panel), Catch::Matchers::ContainsSubstring("did not stop cleanly"));
+    }
+    REQUIRE(harness.startAndWaitForFrame());
+    panel.stop();
+    reports.checkLast();
+    checkCounts("undelivered");
   }
 
   SECTION("the material service reads the game and logs to the document")

@@ -176,6 +176,11 @@ std::vector<std::string> LitPreviewReport::problems() const
   {
     result.push_back(*frameLogError + ".");
   }
+  // review R.1: also a loss whose message never reached the panel
+  if (deviceLost)
+  {
+    result.push_back("The GPU device was lost.");
+  }
   for (const auto& message : messages)
   {
     result.push_back(message);

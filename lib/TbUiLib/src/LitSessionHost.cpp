@@ -96,6 +96,34 @@ private:
   bool m_outermost;
 };
 
+std::uint64_t LitSessionHost::UndeliveredMessages::add(
+  const lit::SessionEvent event, std::string message)
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  const auto id = m_next++;
+  m_queued.emplace(id, std::pair{event, std::move(message)});
+  return id;
+}
+
+void LitSessionHost::UndeliveredMessages::remove(const std::uint64_t id)
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  m_queued.erase(id);
+}
+
+std::vector<std::pair<lit::SessionEvent, std::string>> LitSessionHost::
+  UndeliveredMessages::take()
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  auto messages = std::vector<std::pair<lit::SessionEvent, std::string>>{};
+  for (auto& entry : m_queued)
+  {
+    messages.push_back(std::move(entry.second));
+  }
+  m_queued.clear();
+  return messages;
+}
+
 LitSessionHost::LitSessionHost(
   lit::SessionOptions options,
   const std::uint64_t generation,
@@ -410,6 +438,15 @@ void LitSessionHost::runTeardownThrough(const TeardownStep last)
       break;
     case TeardownStep::MaterialsDestroyed:
       stopMaterials();
+      // review R.1: what the event loop did not deliver before the stop would go with
+      // this host's posted events, so it goes into the report
+      for (auto& [event, message] : m_undelivered->take())
+      {
+        m_report.messages.push_back(
+          fmt::format("{} (not delivered before the stop)", message));
+        m_report.deviceLost =
+          m_report.deviceLost || event == lit::SessionEvent::DeviceLost;
+      }
       break;
     }
   }
@@ -489,9 +526,11 @@ void LitSessionHost::reconcileOnce()
   // R5.25: frames are drawn only while the window can be seen; a hidden window keeps its
   // swapchain until it is shown again
   m_session->setExposed(exposed);
-  if (
-    exposed
-    && (m_swapchainStale || !m_session->hasSwapchain() || size != m_swapchainSize))
+  // review N.5: a 0x0 extent made no swapchain, and none is wanted until the size
+  // changes; replacing it again would park again and post another Parked
+  const auto missing =
+    !m_session->hasSwapchain() && !(size.isEmpty() && size == m_swapchainSize);
+  if (exposed && (m_swapchainStale || missing || size != m_swapchainSize))
   {
     replaceSwapchain(size);
     return;
@@ -650,15 +689,25 @@ lit::EventSink LitSessionHost::eventSink()
   // and the teardown steps; always queued to this host, which outlives the session's
   // threads, so that no message runs inside the call that sent it. The host's owner sees
   // a message only while it still owns the host (R5.17).
-  return [this](
+  return [this, undelivered = m_undelivered](
            const lit::SessionEvent event,
            std::string message,
            const std::uint64_t generation) {
     try
     {
+      // review R.1: a warning, error or loss that a Stop overtakes reaches the report
+      const auto tracked = event == lit::SessionEvent::Warning
+                           || event == lit::SessionEvent::Error
+                           || event == lit::SessionEvent::DeviceLost;
+      const auto id =
+        tracked ? std::optional{undelivered->add(event, message)} : std::nullopt;
       QMetaObject::invokeMethod(
         this,
-        [this, event, queuedMessage = std::move(message), generation] {
+        [this, event, queuedMessage = std::move(message), generation, id, undelivered] {
+          if (id)
+          {
+            undelivered->remove(*id);
+          }
           sessionEventReceived(generation, event, queuedMessage);
         },
         Qt::QueuedConnection);
