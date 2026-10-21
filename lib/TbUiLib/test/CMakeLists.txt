@@ -81,10 +81,10 @@ target_link_libraries(TbUiLibTest PRIVATE
 )
 
 if(TB_ENABLE_LIT_PREVIEW)
-  # TbUiLib's definition is private; the tests of the panel and of the sidebar docks
-  # test their own. C9: the test target links no Vulkan library either.
+  # The switch's definition comes from TbUiLib. The GPU tests reach the session through
+  # TbLitLib; nothing links a Vulkan library (C9).
   target_sources(TbUiLibTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitPreviewPanel.cpp)
-  target_compile_definitions(TbUiLibTest PRIVATE TB_ENABLE_LIT_PREVIEW=1)
+  target_link_libraries(TbUiLibTest PRIVATE TbLitLib)
 endif()
 
 set_target_properties(TbUiLibTest PROPERTIES AUTOMOC TRUE)

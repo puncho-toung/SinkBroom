@@ -79,13 +79,6 @@ if(WIN32)
   set(TB_UTF8_RC_TEMPLATE "${CMAKE_SOURCE_DIR}/cmake/Utf8CodePage.rc.in")
 endif()
 
-# The lit preview, a Vulkan view that draws the map with the engine's shaders through NVRHI,
-# is opt-in. Unset means off, as for the other TB_ENABLE_* switches; with it off, nothing of
-# it is fetched or built.
-if(TB_ENABLE_LIT_PREVIEW)
-  message(STATUS "Enabling the lit preview")
-endif()
-
 include(cmake/Utils.cmake)
 include(cmake/Sanitizers.cmake)
 include(cmake/CompilerConfig.cmake)

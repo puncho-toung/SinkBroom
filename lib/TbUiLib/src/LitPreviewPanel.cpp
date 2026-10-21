@@ -482,8 +482,8 @@ void LitPreviewPanel::stopSession(QString reason)
     // the host waits inside one of its own frames and services the window system, which
     // brought this call here; it is torn down from the event loop instead
     QTimer::singleShot(
-      DeferredStopInterval, this, [this, reason = std::move(reason)]() mutable {
-        stopSession(std::move(reason));
+      DeferredStopInterval, this, [this, deferredReason = std::move(reason)]() mutable {
+        stopSession(std::move(deferredReason));
       });
     return;
   }

@@ -634,8 +634,8 @@ lit::EventSink LitSessionHost::eventSink()
     {
       QMetaObject::invokeMethod(
         this,
-        [this, event, message = std::move(message), generation] {
-          sessionEventReceived(generation, event, message);
+        [this, event, queuedMessage = std::move(message), generation] {
+          sessionEventReceived(generation, event, queuedMessage);
         },
         Qt::QueuedConnection);
     }

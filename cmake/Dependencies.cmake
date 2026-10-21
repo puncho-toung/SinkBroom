@@ -13,15 +13,27 @@ include(cmake/dependencies/miniz.cmake)
 include(cmake/dependencies/stduuid.cmake)
 include(cmake/dependencies/tinyxml2.cmake)
 
-# The lit preview's dependencies. NVRHI must come before find_package(Qt6) because it pins
-# the Vulkan headers that Qt picks up there.
+# The lit preview, a Vulkan view that draws the map with the engine's shaders through NVRHI,
+# is opt-in. Unset means off, as for the other TB_ENABLE_* switches; with it off, nothing of
+# it is fetched or built. NVRHI must come before find_package(Qt6) because it pins the
+# Vulkan headers that Qt picks up there.
 if(TB_ENABLE_LIT_PREVIEW)
+  message(STATUS "Enabling the lit preview")
+  if(NOT WIN32)
+    message(WARNING "The lit preview is only tested on Windows")
+  endif()
   include(cmake/dependencies/nvrhi.cmake)
 endif()
 
 # Find Qt and OpenGL
 find_package(OpenGL REQUIRED)
 find_package(Qt6 COMPONENTS Core Widgets OpenGL OpenGLWidgets Network Svg Test REQUIRED)
+
+# The lit preview's window is a Vulkan QWindow, which needs Qt's vulkan feature.
+if(TB_ENABLE_LIT_PREVIEW AND NOT QT_FEATURE_vulkan)
+  message(FATAL_ERROR
+    "TB_ENABLE_LIT_PREVIEW needs a Qt built with the vulkan feature, which this Qt lacks")
+endif()
 
 if(DEFINED Qt6_DIR)
   get_filename_component(TB_QT_LIBRARY_DIR "${Qt6_DIR}/../.." ABSOLUTE)

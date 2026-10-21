@@ -120,46 +120,6 @@ bool startPageShown(const LitPreviewPanel& panel)
 const auto PressStartText =
   std::string{"Press Start to see the map lit as the engine draws it."};
 
-/**
- * Restores the given settings groups as they were when it was made; a map window saves
- * its layout when it is closed.
- */
-class SettingsSnapshot
-{
-private:
-  QStringList m_groups;
-  std::vector<std::pair<QString, QVariant>> m_values;
-
-public:
-  explicit SettingsSnapshot(QStringList groups)
-    : m_groups{std::move(groups)}
-  {
-    auto settings = QSettings{};
-    for (const auto& group : m_groups)
-    {
-      settings.beginGroup(group);
-      for (const auto& key : settings.allKeys())
-      {
-        m_values.emplace_back(group + "/" + key, settings.value(key));
-      }
-      settings.endGroup();
-    }
-  }
-
-  ~SettingsSnapshot()
-  {
-    auto settings = QSettings{};
-    for (const auto& group : m_groups)
-    {
-      settings.remove(group);
-    }
-    for (const auto& [key, value] : m_values)
-    {
-      settings.setValue(key, value);
-    }
-  }
-};
-
 std::unique_ptr<MapDocument> createDoom3Document(AppController& appController)
 {
   return MapDocument::createDocument(
@@ -170,19 +130,6 @@ std::unique_ptr<MapDocument> createDoom3Document(AppController& appController)
            appController.taskManager(),
            appController.glManager().resourceManager())
          | kdl::value();
-}
-
-/**
- * Hides the window's GL views, which would create GL contexts and load resources that the
- * tests do not provide; a layout switch makes new ones, which this hides again before
- * they are shown.
- */
-void hideRenderViews(QWidget& window)
-{
-  for (auto* view : window.findChildren<RenderView*>())
-  {
-    view->hide();
-  }
 }
 
 LitPreviewPanel& findLitPreviewPanel(const MapWindow& window)
@@ -364,6 +311,59 @@ TEST_CASE("LitPreviewPanel")
 
 namespace
 {
+
+/**
+ * Restores the given settings groups as they were when it was made; a map window saves
+ * its layout when it is closed.
+ */
+class SettingsSnapshot
+{
+private:
+  QStringList m_groups;
+  std::vector<std::pair<QString, QVariant>> m_values;
+
+public:
+  explicit SettingsSnapshot(QStringList groups)
+    : m_groups{std::move(groups)}
+  {
+    auto settings = QSettings{};
+    for (const auto& group : m_groups)
+    {
+      settings.beginGroup(group);
+      for (const auto& key : settings.allKeys())
+      {
+        m_values.emplace_back(group + "/" + key, settings.value(key));
+      }
+      settings.endGroup();
+    }
+  }
+
+  ~SettingsSnapshot()
+  {
+    auto settings = QSettings{};
+    for (const auto& group : m_groups)
+    {
+      settings.remove(group);
+    }
+    for (const auto& [key, value] : m_values)
+    {
+      settings.setValue(key, value);
+    }
+  }
+};
+
+/**
+ * Hides the window's GL views, which would create GL contexts and load resources that the
+ * tests do not provide; a layout switch makes new ones, which this hides again before
+ * they are shown.
+ */
+void hideRenderViews(QWidget& window)
+{
+  for (auto* view : window.findChildren<RenderView*>())
+  {
+    view->hide();
+  }
+}
 
 // What the process may hold beyond its counts after the first Stop: a few threads and
 // handles that Qt and the driver make on demand, and one handle for every VkDevice that

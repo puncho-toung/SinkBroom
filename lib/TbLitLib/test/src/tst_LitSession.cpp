@@ -102,7 +102,7 @@ struct VulkanLibrary
   HMODULE module = LoadLibraryW(L"vulkan-1.dll");
   PFN_vkGetInstanceProcAddr getInstanceProcAddr =
     module ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(
-               GetProcAddress(module, "vkGetInstanceProcAddr"))
+               reinterpret_cast<void*>(GetProcAddress(module, "vkGetInstanceProcAddr")))
            : nullptr;
 
   VulkanLibrary() = default;

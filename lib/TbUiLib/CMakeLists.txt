@@ -423,9 +423,11 @@ if(TB_ENABLE_LIT_PREVIEW)
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LitPreviewWindow.h
   )
 
-  # Only source files test the definition, so it stays private.
+  # TbLitLib's public definitions (VK_NO_PROTOTYPES, the dynamic dispatcher, NOMINMAX and
+  # NVRHI's VK_USE_PLATFORM_*) apply to every TbUiLib file. The switch's definition is
+  # public, so that the tests see it too.
   target_link_libraries(TbUiLib PRIVATE TbLitLib)
-  target_compile_definitions(TbUiLib PRIVATE TB_ENABLE_LIT_PREVIEW=1)
+  target_compile_definitions(TbUiLib PUBLIC TB_ENABLE_LIT_PREVIEW=1)
 endif()
 
 set_target_properties(TbUiLib PROPERTIES AUTOMOC TRUE)
