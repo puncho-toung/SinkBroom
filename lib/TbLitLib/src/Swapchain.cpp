@@ -63,6 +63,14 @@ vk::SurfaceTransformFlagBitsKHR preTransform(
            : capabilities.currentTransform;
 }
 
+// The engine asks for colour attachment, transfer destination and sampled images (:1200).
+// Only colour attachment is guaranteed; LP0's clear (vkCmdClearColorImage) needs transfer
+// destination, so the surface must offer it, and sampled is asked for when offered.
+constexpr auto RequiredSwapchainUsage =
+  vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst;
+constexpr auto OptionalSwapchainUsage =
+  vk::ImageUsageFlags{vk::ImageUsageFlagBits::eSampled};
+
 } // namespace
 
 Result<std::unique_ptr<SwapchainGeneration>> createSwapchainGeneration(
@@ -91,6 +99,18 @@ Result<std::unique_ptr<SwapchainGeneration>> createSwapchainGeneration(
       return std::unique_ptr<SwapchainGeneration>{};
     }
 
+    // review L2.7
+    if (
+      (capabilities.supportedUsageFlags & RequiredSwapchainUsage)
+      != RequiredSwapchainUsage)
+    {
+      return Error{
+        "This window's surface does not let the preview clear its images "
+        "(no TRANSFER_DST usage)"};
+    }
+    const auto usage = RequiredSwapchainUsage
+                       | (OptionalSwapchainUsage & capabilities.supportedUsageFlags);
+
     const auto formats = spec.physicalDevice.getSurfaceFormatsKHR(spec.surface);
     const auto format = std::ranges::find_if(
       formats, [](const auto& f) { return f.format == SwapchainFormat; });
@@ -110,23 +130,20 @@ Result<std::unique_ptr<SwapchainGeneration>> createSwapchainGeneration(
       vk::PresentModeKHR(choosePresentMode(offeredModes, spec.forceFifo));
 
     // :1197-1212; one queue family, so the images are exclusive to it
-    const auto info =
-      vk::SwapchainCreateInfoKHR{}
-        .setSurface(spec.surface)
-        .setMinImageCount(chooseSwapchainImageCount(capabilities))
-        .setImageFormat(format->format)
-        .setImageColorSpace(format->colorSpace)
-        .setImageExtent(generation->extent)
-        .setImageArrayLayers(1)
-        .setImageUsage(
-          vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst
-          | vk::ImageUsageFlagBits::eSampled)
-        .setImageSharingMode(vk::SharingMode::eExclusive)
-        .setPreTransform(preTransform(capabilities))
-        .setCompositeAlpha(compositeAlpha(capabilities))
-        .setPresentMode(generation->presentMode)
-        .setClipped(VK_TRUE)
-        .setOldSwapchain(nullptr);
+    const auto info = vk::SwapchainCreateInfoKHR{}
+                        .setSurface(spec.surface)
+                        .setMinImageCount(chooseSwapchainImageCount(capabilities))
+                        .setImageFormat(format->format)
+                        .setImageColorSpace(format->colorSpace)
+                        .setImageExtent(generation->extent)
+                        .setImageArrayLayers(1)
+                        .setImageUsage(usage)
+                        .setImageSharingMode(vk::SharingMode::eExclusive)
+                        .setPreTransform(preTransform(capabilities))
+                        .setCompositeAlpha(compositeAlpha(capabilities))
+                        .setPresentMode(generation->presentMode)
+                        .setClipped(VK_TRUE)
+                        .setOldSwapchain(nullptr);
 
     if (const auto result =
           spec.device.createSwapchainKHR(&info, nullptr, &generation->swapchain);
