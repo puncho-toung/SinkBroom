@@ -941,13 +941,10 @@ Result<std::unique_ptr<MaterialService>> MaterialService::create(
 {
   auto service =
     std::unique_ptr<MaterialService>{new MaterialService{std::move(options)}};
-  if (auto started = service->m_worker->start(); started.is_error())
-  {
-    return Error{
-      "The material parse thread could not be started: "
-      + std::get<Error>(started.error()).msg};
-  }
-  return Result<std::unique_ptr<MaterialService>>{std::move(service)};
+  return service->m_worker->start() | kdl::transform([&]() { return std::move(service); })
+         | kdl::or_else([](const auto& e) -> Result<std::unique_ptr<MaterialService>> {
+             return Error{"The material parse thread could not be started: " + e.msg};
+           });
 }
 
 MaterialService::MaterialService(MaterialServiceOptions options)

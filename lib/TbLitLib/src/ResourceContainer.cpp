@@ -63,71 +63,30 @@ std::int32_t readLittleInt32(const char* bytes)
     | (std::uint32_t(b[3]) << 24));
 }
 
-} // namespace
-
-std::string canonicalResourceName(const std::string_view path)
+// GameFile::readAt as a step of a pipeline, failing with error when the bytes cannot be
+// read
+Result<void> readExactly(
+  const GameFile& file,
+  const std::uint64_t offset,
+  char* bytes,
+  const std::size_t count,
+  std::string error)
 {
-  // idStr::BackSlashesToSlashes, then idStr::ToLower; its CharIsUpper also accepts
-  // 0xC0-0xDF, but a char is signed in the engine's builds, so only ASCII is lowered
-  auto name = toLowerAscii(path);
-  std::replace(name.begin(), name.end(), '\\', '/');
-  return name;
+  return file.readAt(offset, bytes, count)
+         | kdl::or_else(
+           [&](const auto&) -> Result<void> { return Error{std::move(error)}; });
 }
 
-Result<ResourceContainer> ResourceContainer::open(
-  const std::filesystem::path& path,
-  std::string name,
+// idResourceCacheEntry::Read for every entry of the table, in its order; an entry whose
+// data does not fit in the file is dropped with a warning
+Result<std::vector<ResourceEntry>> readEntries(
+  const std::string& table,
+  const std::string& name,
+  const std::uint64_t fileSize,
   std::vector<std::string>& warnings,
   const std::atomic<bool>* cancel)
 {
-  auto opened = GameFile::open(path);
-  const auto stat = statGameFile(path);
-  if (opened.is_error() || !stat)
-  {
-    // idResourceContainer::Init's warning
-    return Error{fmt::format("Unable to open resource file {}", name)};
-  }
-  const auto file = std::move(opened).value();
-
-  const auto fileSize = file.size();
-  auto header = std::array<char, HeaderSize>{};
-  if (fileSize < HeaderSize || file.readAt(0, header.data(), header.size()).is_error())
-  {
-    return Error{
-      fmt::format("Resource file {} is too short for its header; it is not read", name)};
-  }
-
-  if (std::uint32_t(readBigInt32(header.data())) != ResourceFileMagic)
-  {
-    // the engine stops here with FatalError( "resourceFileMagic != RESOURCE_FILE_MAGIC" )
-    return Error{fmt::format(
-      "Resource file {}: resourceFileMagic != RESOURCE_FILE_MAGIC; it is not read",
-      name)};
-  }
-
-  const auto tableOffset = readBigInt32(header.data() + 4);
-  const auto tableLength = readBigInt32(header.data() + 8);
-  if (
-    tableOffset < 0 || tableLength < 4
-    || std::uint64_t(tableOffset) + std::uint64_t(tableLength) > fileSize)
-  {
-    return Error{fmt::format(
-      "Resource file {}: its table ({} bytes at {}) does not fit in its {} bytes; it is "
-      "not read",
-      name,
-      tableLength,
-      tableOffset,
-      fileSize)};
-  }
-
-  auto table = std::string{};
-  table.resize(std::size_t(tableLength));
-  if (file.readAt(std::uint64_t(tableOffset), table.data(), table.size()).is_error())
-  {
-    return Error{fmt::format("Resource file {}: its table cannot be read", name)};
-  }
-
-  const auto truncated = [&]() -> Result<ResourceContainer> {
+  const auto truncated = [&]() -> Result<std::vector<ResourceEntry>> {
     return Error{
       fmt::format("Resource file {}: its table is truncated; it is not read", name)};
   };
@@ -138,11 +97,7 @@ Result<ResourceContainer> ResourceContainer::open(
     return truncated();
   }
 
-  auto container = ResourceContainer{};
-  container.m_path = path;
-  container.m_fileSize = fileSize;
-  container.m_fileTime = stat->time;
-
+  auto entries = std::vector<ResourceEntry>{};
   auto position = std::size_t{4};
   for (std::int32_t i = 0; i < numFileResources; ++i)
   {
@@ -197,14 +152,107 @@ Result<ResourceContainer> ResourceContainer::open(
       continue;
     }
 
-    container.m_entries.push_back(
+    entries.push_back(
       ResourceEntry{std::move(entryName), std::uint32_t(offset), std::uint32_t(length)});
-    // the later of two entries with one name wins, as idHashIndex finds it
-    container.m_index[container.m_entries.back().name] = container.m_entries.size() - 1;
   }
+  return entries;
+}
 
-  container.m_name = std::move(name);
-  return Result<ResourceContainer>{std::move(container)};
+} // namespace
+
+std::string canonicalResourceName(const std::string_view path)
+{
+  // idStr::BackSlashesToSlashes, then idStr::ToLower; its CharIsUpper also accepts
+  // 0xC0-0xDF, but a char is signed in the engine's builds, so only ASCII is lowered
+  auto name = toLowerAscii(path);
+  std::replace(name.begin(), name.end(), '\\', '/');
+  return name;
+}
+
+Result<ResourceContainer> ResourceContainer::open(
+  const std::filesystem::path& path,
+  std::string name,
+  std::vector<std::string>& warnings,
+  const std::atomic<bool>* cancel)
+{
+  // idResourceContainer::Init's warning
+  const auto unopened = fmt::format("Unable to open resource file {}", name);
+  return GameFile::open(path)
+         | kdl::or_else([&](const auto&) -> Result<GameFile> { return Error{unopened}; })
+         | kdl::and_then([&](GameFile file) -> Result<ResourceContainer> {
+             const auto stat = statGameFile(path);
+             if (!stat)
+             {
+               return Error{unopened};
+             }
+
+             const auto fileSize = file.size();
+             const auto tooShort = fmt::format(
+               "Resource file {} is too short for its header; it is not read", name);
+             if (fileSize < HeaderSize)
+             {
+               return Error{tooShort};
+             }
+             auto header = std::array<char, HeaderSize>{};
+             auto table = std::string{};
+             return readExactly(file, 0, header.data(), header.size(), tooShort)
+                    | kdl::and_then([&]() -> Result<void> {
+                        if (
+                          std::uint32_t(readBigInt32(header.data())) != ResourceFileMagic)
+                        {
+                          // the engine stops here with FatalError(
+                          // "resourceFileMagic != RESOURCE_FILE_MAGIC" )
+                          return Error{fmt::format(
+                            "Resource file {}: resourceFileMagic != RESOURCE_FILE_MAGIC; "
+                            "it is not read",
+                            name)};
+                        }
+
+                        const auto tableOffset = readBigInt32(header.data() + 4);
+                        const auto tableLength = readBigInt32(header.data() + 8);
+                        if (
+                          tableOffset < 0 || tableLength < 4
+                          || std::uint64_t(tableOffset) + std::uint64_t(tableLength)
+                               > fileSize)
+                        {
+                          return Error{fmt::format(
+                            "Resource file {}: its table ({} bytes at {}) does not fit "
+                            "in "
+                            "its {} bytes; it is not read",
+                            name,
+                            tableLength,
+                            tableOffset,
+                            fileSize)};
+                        }
+
+                        table.resize(std::size_t(tableLength));
+                        return readExactly(
+                          file,
+                          std::uint64_t(tableOffset),
+                          table.data(),
+                          table.size(),
+                          fmt::format(
+                            "Resource file {}: its table cannot be read", name));
+                      })
+                    | kdl::and_then([&]() {
+                        return readEntries(table, name, fileSize, warnings, cancel);
+                      })
+                    | kdl::transform([&](std::vector<ResourceEntry> entries) {
+                        auto container = ResourceContainer{};
+                        container.m_path = path;
+                        container.m_fileSize = fileSize;
+                        container.m_fileTime = stat->time;
+                        container.m_entries = std::move(entries);
+                        for (std::size_t i = 0; i < container.m_entries.size(); ++i)
+                        {
+                          // the later of two entries with one name wins, as idHashIndex
+                          // finds it
+                          container.m_index[container.m_entries[i].name] = i;
+                        }
+                        container.m_name = std::move(name);
+                        return container;
+                      });
+           });
 }
 
 const std::string& ResourceContainer::name() const
@@ -244,12 +292,13 @@ Result<std::string> ResourceContainer::read(
 
   auto bytes = std::string{};
   bytes.resize(entry.length);
-  if (file.readAt(entry.offset, bytes.data(), bytes.size()).is_error())
-  {
-    return Error{
-      fmt::format("Resource file {}: '{}' cannot be read", m_name, entry.name)};
-  }
-  return Result<std::string>{std::move(bytes)};
+  return readExactly(
+           file,
+           entry.offset,
+           bytes.data(),
+           bytes.size(),
+           fmt::format("Resource file {}: '{}' cannot be read", m_name, entry.name))
+         | kdl::transform([&]() { return std::move(bytes); });
 }
 
 std::uint64_t ResourceContainer::fileSize() const

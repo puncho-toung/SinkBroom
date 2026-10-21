@@ -270,49 +270,53 @@ std::unique_ptr<GameDeclSource::Pk4> GameDeclSource::readPk4(const std::string& 
 
   try
   {
-    auto zip = openZip(pk4->path);
-    if (zip.is_error())
-    {
-      m_warnings.push_back(fmt::format(
-        "Unable to open zip file {}: {}", name, std::get<Error>(zip.error()).msg));
-      return nullptr;
-    }
-    auto zipFileSystem = std::move(zip).value();
-
-    auto paths = zipFileSystem->find("", fs::TraversalMode::Recursive);
-    if (paths.is_error())
-    {
-      m_warnings.push_back(fmt::format(
-        "Unable to open zip file {}: {}", name, std::get<Error>(paths.error()).msg));
-      return nullptr;
-    }
-
-    auto binary = false;
-    for (const auto& entryPath : paths.value())
-    {
-      if (
-        static_cast<const fs::FileSystem&>(*zipFileSystem).pathInfo(entryPath)
-        != fs::PathInfo::File)
-      {
-        continue;
-      }
-      // G3: a name that is not valid Unicode is skipped, never thrown for
-      const auto utf8 = pathToUtf8(entryPath);
-      if (!utf8)
-      {
-        m_warnings.push_back(fmt::format(
-          "Zip file {}: an entry name is not valid Unicode; it is skipped", name));
-        continue;
-      }
-      const auto entryName = canonicalResourceName(*utf8);
-      binary = binary || entryName == BinaryConfig;
-      if (pk4->index.emplace(entryName, entryPath).second)
-      {
-        pk4->names.push_back(entryName);
-      }
-    }
-    // "ignore all binary paks", without a message
-    return binary ? nullptr : std::move(pk4);
+    return openZip(pk4->path)
+           | kdl::and_then([&](std::unique_ptr<fs::ZipFileSystem> zipFileSystem) {
+               // the entries, and whether the .pk4 is a binary one
+               return zipFileSystem->find("", fs::TraversalMode::Recursive)
+                      | kdl::transform(
+                        [&](const std::vector<std::filesystem::path>& paths) {
+                          auto binary = false;
+                          for (const auto& entryPath : paths)
+                          {
+                            if (
+                              static_cast<const fs::FileSystem&>(*zipFileSystem)
+                                .pathInfo(entryPath)
+                              != fs::PathInfo::File)
+                            {
+                              continue;
+                            }
+                            // G3: a name that is not valid Unicode is skipped, never
+                            // thrown for
+                            const auto utf8 = pathToUtf8(entryPath);
+                            if (!utf8)
+                            {
+                              m_warnings.push_back(fmt::format(
+                                "Zip file {}: an entry name is not valid Unicode; it is "
+                                "skipped",
+                                name));
+                              continue;
+                            }
+                            const auto entryName = canonicalResourceName(*utf8);
+                            binary = binary || entryName == BinaryConfig;
+                            if (pk4->index.emplace(entryName, entryPath).second)
+                            {
+                              pk4->names.push_back(entryName);
+                            }
+                          }
+                          return binary;
+                        });
+             })
+           | kdl::transform([&](const bool binary) {
+               // "ignore all binary paks", without a message
+               return binary ? nullptr : std::move(pk4);
+             })
+           | kdl::transform_error([&](const auto& e) {
+               m_warnings.push_back(
+                 fmt::format("Unable to open zip file {}: {}", name, e.msg));
+               return std::unique_ptr<Pk4>{};
+             })
+           | kdl::value();
   }
   catch (const std::exception& e)
   {
@@ -385,14 +389,21 @@ std::optional<std::string> GameDeclSource::readLoose(
   for (auto attempt = 0; attempt < MaxLooseReadAttempts; ++attempt)
   {
     const auto before = statGameFile(*file);
-    auto text = readGameFile(*file);
-    if (text.is_error())
+    auto text = readGameFile(*file) | kdl::transform([](std::string bytes) {
+                  return std::optional<std::string>{std::move(bytes)};
+                })
+                | kdl::transform_error([](const auto&) {
+                    // OpenFileReadFlags goes on to the containers without a message, and
+                    // so does this
+                    return std::optional<std::string>{};
+                  })
+                | kdl::value();
+    if (!text)
     {
-      // OpenFileReadFlags goes on to the containers without a message, and so does this
       return std::nullopt;
     }
     const auto after = statGameFile(*file);
-    auto bytes = std::move(text).value();
+    auto bytes = std::move(*text);
     const auto stable =
       before && after && *before == *after && after->size == bytes.size();
     if (stable || attempt + 1 == MaxLooseReadAttempts)
@@ -459,23 +470,25 @@ std::optional<std::string> GameDeclSource::readFile(
       continue;
     }
 
-    if (!resources.open)
-    {
-      auto opened = GameFile::open(resources.container.path());
-      if (opened.is_error())
+    // the container stays open for the read batch (closeFiles)
+    const auto openContainer = [&]() -> Result<void> {
+      if (resources.open)
       {
-        m_warnings.push_back(std::get<Error>(opened.error()).msg);
-        return std::nullopt;
+        return kdl::void_success;
       }
-      resources.open = std::move(opened).value();
-    }
-    auto text = resources.container.read(*entry, *resources.open);
-    if (text.is_error())
-    {
-      m_warnings.push_back(std::get<Error>(text.error()).msg);
-      return std::nullopt;
-    }
-    return std::move(text).value();
+      return GameFile::open(resources.container.path())
+             | kdl::transform([&](GameFile file) { resources.open = std::move(file); });
+    };
+    return openContainer() | kdl::and_then([&]() {
+             return resources.container.read(*entry, *resources.open);
+           })
+           | kdl::transform(
+             [](std::string text) { return std::optional<std::string>{std::move(text)}; })
+           | kdl::transform_error([&](const auto& e) {
+               m_warnings.push_back(e.msg);
+               return std::optional<std::string>{};
+             })
+           | kdl::value();
   }
 
   return std::nullopt;
@@ -486,33 +499,37 @@ std::optional<std::string> GameDeclSource::readFromPk4(
 {
   try
   {
-    if (!pk4.open)
-    {
-      auto zip = openZip(pk4.path);
-      if (zip.is_error())
+    // the .pk4 stays open for the read batch (closeFiles)
+    const auto openPk4 = [&]() -> Result<void> {
+      if (pk4.open)
       {
-        m_warnings.push_back(fmt::format(
-          "{}: {} cannot be opened again: {}",
-          path,
-          pk4.name,
-          std::get<Error>(zip.error()).msg));
-        return std::nullopt;
+        return kdl::void_success;
       }
-      pk4.open = std::move(zip).value();
-    }
-
-    auto file = pk4.open->openFile(entryPath);
-    if (file.is_error())
-    {
-      m_warnings.push_back(fmt::format(
-        "{} cannot be read from {}: {}",
-        path,
-        pk4.name,
-        std::get<Error>(file.error()).msg));
-      return std::nullopt;
-    }
-    auto reader = std::move(file).value()->reader();
-    return reader.readString(reader.size());
+      return openZip(pk4.path)
+             | kdl::transform(
+               [&](std::unique_ptr<fs::ZipFileSystem> zip) { pk4.open = std::move(zip); })
+             | kdl::or_else([&](const auto& e) -> Result<void> {
+                 return Error{fmt::format(
+                   "{}: {} cannot be opened again: {}", path, pk4.name, e.msg)};
+               });
+    };
+    return openPk4() | kdl::and_then([&]() {
+             return pk4.open->openFile(entryPath)
+                    | kdl::or_else(
+                      [&](const auto& e) -> Result<std::shared_ptr<fs::File>> {
+                        return Error{fmt::format(
+                          "{} cannot be read from {}: {}", path, pk4.name, e.msg)};
+                      });
+           })
+           | kdl::transform([](std::shared_ptr<fs::File> file) {
+               auto reader = file->reader();
+               return std::optional<std::string>{reader.readString(reader.size())};
+             })
+           | kdl::transform_error([&](const auto& e) {
+               m_warnings.push_back(e.msg);
+               return std::optional<std::string>{};
+             })
+           | kdl::value();
   }
   catch (const std::exception& e)
   {

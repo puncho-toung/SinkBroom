@@ -264,17 +264,14 @@ void LitSessionHost::startMaterials()
     }
   };
   options.parseAll = true;
-  auto service = lit::MaterialService::create(std::move(options));
-  if (service.is_error())
-  {
-    // no materials: the preview draws without them
-    eventSink()(
-      lit::SessionEvent::MaterialWarning,
-      std::get<Error>(service.error()).msg,
-      m_generation);
-    return;
-  }
-  m_materials = std::move(service).value();
+  lit::MaterialService::create(std::move(options))
+    | kdl::transform([&](std::unique_ptr<lit::MaterialService> service) {
+        m_materials = std::move(service);
+      })
+    | kdl::transform_error([&](const auto& e) {
+        // no materials: the preview draws without them
+        eventSink()(lit::SessionEvent::MaterialWarning, e.msg, m_generation);
+      });
 }
 
 void LitSessionHost::stopMaterials()
