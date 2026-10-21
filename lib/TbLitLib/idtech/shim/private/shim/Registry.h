@@ -25,6 +25,8 @@
 
 #include "lit/MaterialDecls.h"
 
+#include <atomic>
+
 class idDeclManagerLocal;
 
 // the engine's declManagerLocal global, bound to the registry's decl manager
@@ -33,10 +35,19 @@ extern idDeclManagerLocal* tbLitDeclManagerLocal;
 // framework/FileSystem.h's file system, over a DeclSource. It has the engine's name in
 // the global namespace, so the copied idFileList's friend declaration lets it fill the
 // list.
+//
+// Cancel (R5.20): the copied RegisterDeclFolder loops over a folder's files with no
+// cancel point, so once the cancel flag is set every later ReadFile returns an empty
+// file. The folder's loop then ends after the file it was reading, and nothing is
+// reported.
 class idFileSystemLocal : public idFileSystem
 {
 public:
-  explicit idFileSystemLocal(const tb::lit::DeclSource& source);
+  idFileSystemLocal(
+    const tb::lit::DeclSource& source, const std::atomic<bool>* cancel = nullptr);
+
+  // files left empty because the cancel flag was set
+  int cancelledReads() const { return m_cancelledReads; }
 
   idFileList* ListFiles(
     const char* relativePath,
@@ -57,6 +68,8 @@ public:
 
 private:
   const tb::lit::DeclSource& m_source;
+  const std::atomic<bool>* m_cancel;
+  int m_cancelledReads = 0;
 };
 
 namespace tb::lit::shim
@@ -99,8 +112,9 @@ public:
   static Registry* current();
 
   // binds the globals, creates the intrinsic images and registers every decl type and
-  // folder the engine registers, in the engine's order (D33)
-  explicit Registry(const DeclSource& source);
+  // folder the engine registers, in the engine's order (D33); cancel, when set, cuts the
+  // decl files short (idFileSystemLocal)
+  explicit Registry(const DeclSource& source, const std::atomic<bool>* cancel = nullptr);
 
   // frees in R5.11's order and unbinds the globals
   ~Registry();
@@ -117,6 +131,15 @@ public:
   // site where the engine would not have returned
   std::size_t errorCount() const { return m_errorCount; }
 
+  // Between these, idCommon::Printf text goes into a buffer as the engine's console gets
+  // it, newlines included, instead of into the messages (the print commands).
+  void beginCapture();
+  std::string endCapture();
+  bool capturing() const { return m_capturing; }
+  void capture(const char* text);
+
+  bool cancelled() const { return m_fileSystem.cancelledReads() > 0; }
+
   idDeclManagerLocal& declManager() { return *m_declManager; }
   idImageManager& images() { return m_images; }
   idRenderProgManager& renderProgs() { return m_renderProgs; }
@@ -124,6 +147,8 @@ public:
 private:
   std::vector<DeclMessage> m_messages;
   std::size_t m_errorCount = 0;
+  bool m_capturing = false;
+  std::string m_capture;
 
   idCommon m_common;
   idCVarSystem m_cvarSystem;
@@ -153,6 +178,16 @@ void destroyDeclManager(idDeclManagerLocal* declManager);
 
 // the bytes of decl text every decl keeps
 std::size_t declTextBytes(const idDeclManagerLocal& declManager);
+
+// the registered decl folders, in registration order
+std::vector<DeclFolderInfo> declFolders(const idDeclManagerLocal& declManager);
+
+// the decl files read and the bytes they held (idDeclFile::fileSize)
+int declFileCount(const idDeclManagerLocal& declManager);
+std::size_t declFileBytes(const idDeclManagerLocal& declManager);
+
+// every registered decl type with its number of decls, in type order
+std::vector<DeclTypeCount> declCounts(idDeclManagerLocal& declManager);
 
 // idDeclManagerLocal::MakeNameCanonical into a buffer of MAX_STRING_CHARS + 1, so a name
 // of MAX_STRING_CHARS characters cannot write past it

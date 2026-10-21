@@ -134,9 +134,11 @@ MaterialStage stageEntry(const shaderStage_t& stage)
   return entry;
 }
 
-std::shared_ptr<const MaterialEntry> materialEntry(const idMaterial& material)
+std::shared_ptr<const MaterialEntry> materialEntry(
+  const idMaterial& material, const std::uint64_t registry)
 {
   auto entry = std::make_shared<MaterialEntry>();
+  entry->registry = registry;
   entry->name = material.GetName();
   entry->sourceFile = material.GetFileName();
   entry->sourceLine = material.GetLineNum();
@@ -198,9 +200,41 @@ std::shared_ptr<const MaterialEntry> materialEntry(const idMaterial& material)
   return entry;
 }
 
+// the process's registry ids; 0 is never handed out, so a default MaterialEntry belongs
+// to no registry
+auto nextRegistryId = std::atomic<std::uint64_t>{1};
+
 } // namespace
 
+bool DeclFileTime::operator==(const DeclFileTime& other) const
+{
+  return path == other.path && time == other.time && size == other.size;
+}
+
+bool DeclFileTime::operator!=(const DeclFileTime& other) const
+{
+  return !(*this == other);
+}
+
 DeclSource::~DeclSource() = default;
+
+std::vector<DeclFileTime> DeclSource::looseFileTimes(
+  const std::string&, const std::string&) const
+{
+  return {};
+}
+
+std::vector<std::string> DeclSource::takeWarnings()
+{
+  return {};
+}
+
+void DeclSource::closeFiles() {}
+
+int compareEnginePaths(const std::string& lhs, const std::string& rhs)
+{
+  return idStr::IcmpPath(lhs.c_str(), rhs.c_str());
+}
 
 MemoryDeclSource::MemoryDeclSource(std::vector<DeclFile> files)
   : m_files{std::move(files)}
@@ -262,7 +296,8 @@ bool MaterialImageKey::operator!=(const MaterialImageKey& other) const
   return !(*this == other);
 }
 
-MaterialDecls::MaterialDecls(const DeclSource& source)
+MaterialDecls::MaterialDecls(const DeclSource& source, const std::atomic<bool>* cancel)
+  : m_id{nextRegistryId++}
 {
   if (shim::Registry::current())
   {
@@ -271,7 +306,7 @@ MaterialDecls::MaterialDecls(const DeclSource& source)
       DeclMessage{DeclMessageKind::Error, m_constructionError});
     return;
   }
-  m_registry = std::make_unique<shim::Registry>(source);
+  m_registry = std::make_unique<shim::Registry>(source, cancel);
 }
 
 MaterialDecls::~MaterialDecls()
@@ -285,6 +320,16 @@ MaterialDecls::~MaterialDecls()
 const std::string& MaterialDecls::constructionError() const
 {
   return m_constructionError;
+}
+
+std::uint64_t MaterialDecls::id() const
+{
+  return m_id;
+}
+
+bool MaterialDecls::cancelled() const
+{
+  return m_registry && m_registry->cancelled();
 }
 
 DeclResult<std::shared_ptr<const MaterialEntry>> MaterialDecls::lookup(
@@ -330,7 +375,7 @@ DeclResult<std::shared_ptr<const MaterialEntry>> MaterialDecls::lookup(
   }
   if (!m_materials[index])
   {
-    m_materials[index] = materialEntry(material);
+    m_materials[index] = materialEntry(material, m_id);
   }
   return {m_materials[index], {}};
 }
@@ -346,7 +391,9 @@ DeclResult<EvaluatedRegisters> MaterialDecls::evaluate(
   }
 
   // DeclByIndex reads past its list after reporting an out-of-range index
-  if (entry.index < 0 || entry.index >= declManager->GetNumDecls(DECL_MATERIAL))
+  if (
+    entry.registry != m_id || entry.index < 0
+    || entry.index >= declManager->GetNumDecls(DECL_MATERIAL))
   {
     return {std::nullopt, "material '" + entry.name + "' is not in this registry"};
   }
@@ -390,6 +437,54 @@ std::string MaterialDecls::canonicalName(const std::string_view name)
   return shim::canonicalDeclName(text.c_str());
 }
 
+DeclResult<std::shared_ptr<const MaterialEntry>> MaterialDecls::lookupIndex(
+  const int materialIndex)
+{
+  if (!m_registry)
+  {
+    return {std::nullopt, m_constructionError};
+  }
+  if (materialIndex < 0 || materialIndex >= declManager->GetNumDecls(DECL_MATERIAL))
+  {
+    return {std::nullopt, "no material at index " + std::to_string(materialIndex)};
+  }
+
+  // the name only: lookup parses, with its error handling
+  const auto* decl = declManager->DeclByIndex(DECL_MATERIAL, materialIndex, false);
+  return lookup(decl->GetName());
+}
+
+std::string MaterialDecls::materialName(const int materialIndex) const
+{
+  if (
+    !m_registry || materialIndex < 0
+    || materialIndex >= declManager->GetNumDecls(DECL_MATERIAL))
+  {
+    return {};
+  }
+  return declManager->DeclByIndex(DECL_MATERIAL, materialIndex, false)->GetName();
+}
+
+DeclResult<std::string> MaterialDecls::parseTable(const int tableIndex)
+{
+  if (!m_registry)
+  {
+    return {std::nullopt, m_constructionError};
+  }
+  if (tableIndex < 0 || tableIndex >= declManager->GetNumDecls(DECL_TABLE))
+  {
+    return {std::nullopt, "no table at index " + std::to_string(tableIndex)};
+  }
+
+  const auto errorsBefore = m_registry->errorCount();
+  const auto* decl = declManager->DeclByIndex(DECL_TABLE, tableIndex, true);
+  if (m_registry->errorCount() != errorsBefore)
+  {
+    return {std::nullopt, lastError(m_registry->messages())};
+  }
+  return {std::string{decl->GetName()}, {}};
+}
+
 int MaterialDecls::materialCount() const
 {
   return m_registry ? declManager->GetNumDecls(DECL_MATERIAL) : 0;
@@ -403,6 +498,54 @@ int MaterialDecls::tableCount() const
 int MaterialDecls::entityDefCount() const
 {
   return m_registry ? declManager->GetNumDecls(DECL_ENTITYDEF) : 0;
+}
+
+std::vector<DeclTypeCount> MaterialDecls::declCounts() const
+{
+  return m_registry ? shim::declCounts(m_registry->declManager())
+                    : std::vector<DeclTypeCount>{};
+}
+
+int MaterialDecls::defaultedCount(const std::string_view typeName) const
+{
+  if (!m_registry)
+  {
+    return 0;
+  }
+
+  const auto typeText = std::string{typeName};
+  const auto type = declManager->GetDeclTypeFromName(typeText.c_str());
+  if (type == DECL_MAX_TYPES)
+  {
+    return 0;
+  }
+
+  auto count = 0;
+  for (int i = 0; i < declManager->GetNumDecls(type); ++i)
+  {
+    // the state only; nothing is parsed
+    if (declManager->DeclByIndex(type, i, false)->GetState() == DS_DEFAULTED)
+    {
+      ++count;
+    }
+  }
+  return count;
+}
+
+int MaterialDecls::declFileCount() const
+{
+  return m_registry ? shim::declFileCount(m_registry->declManager()) : 0;
+}
+
+std::size_t MaterialDecls::declFileBytes() const
+{
+  return m_registry ? shim::declFileBytes(m_registry->declManager()) : 0;
+}
+
+std::vector<DeclFolderInfo> MaterialDecls::declFolders() const
+{
+  return m_registry ? shim::declFolders(m_registry->declManager())
+                    : std::vector<DeclFolderInfo>{};
 }
 
 DeclResult<std::vector<std::pair<std::string, std::string>>> MaterialDecls::entityDefKeys(
@@ -437,6 +580,73 @@ DeclResult<std::vector<std::pair<std::string, std::string>>> MaterialDecls::enti
     keys.emplace_back(keyValue->GetKey().c_str(), keyValue->GetValue().c_str());
   }
   return {std::move(keys), {}};
+}
+
+DeclResult<bool> MaterialDecls::touch(
+  const std::string_view typeName, const std::string_view name)
+{
+  if (!m_registry)
+  {
+    return {std::nullopt, m_constructionError};
+  }
+  // the guard of lookup (M-ID-GUARD-01)
+  if (name.size() >= size_t(MAX_STRING_CHARS))
+  {
+    return {std::nullopt, "decl name too long"};
+  }
+
+  const auto typeText = std::string{typeName};
+  const auto type = declManager->GetDeclTypeFromName(typeText.c_str());
+  if (type == DECL_MAX_TYPES)
+  {
+    return {std::nullopt, "no decl type '" + typeText + "'"};
+  }
+
+  // DeclManager.cpp's TouchDecl_f
+  const auto nameText = std::string{name};
+  const auto errorsBefore = m_registry->errorCount();
+  const auto* decl = declManager->FindType(type, nameText.c_str(), false);
+  if (m_registry->errorCount() != errorsBefore)
+  {
+    return {std::nullopt, lastError(m_registry->messages())};
+  }
+  return {decl != nullptr, {}};
+}
+
+DeclResult<std::string> MaterialDecls::printDecl(
+  const std::string_view typeName, const std::string_view name)
+{
+  if (!m_registry)
+  {
+    return {std::nullopt, m_constructionError};
+  }
+  // the guard of lookup (M-ID-GUARD-01)
+  if (name.size() >= size_t(MAX_STRING_CHARS))
+  {
+    return {std::nullopt, "decl name too long"};
+  }
+
+  const auto typeText = std::string{typeName};
+  const auto type = declManager->GetDeclTypeFromName(typeText.c_str());
+  if (type == DECL_MAX_TYPES)
+  {
+    return {std::nullopt, "no decl type '" + typeText + "'"};
+  }
+
+  // the console's arguments, as the engine's command line appends them
+  auto args = idCmdArgs{};
+  args.AppendArg(("print" + typeText).c_str());
+  args.AppendArg(std::string{name}.c_str());
+
+  const auto errorsBefore = m_registry->errorCount();
+  m_registry->beginCapture();
+  declManager->PrintType(args, type);
+  auto text = m_registry->endCapture();
+  if (m_registry->errorCount() != errorsBefore)
+  {
+    return {std::nullopt, lastError(m_registry->messages())};
+  }
+  return {std::move(text), {}};
 }
 
 std::size_t MaterialDecls::declTextBytes() const

@@ -100,11 +100,34 @@ int idCVarSystem::GetCVarInteger(const char* name) const
   return 0;
 }
 
+const char* idCVarSystem::GetCVarString(const char* name) const
+{
+  for (const auto& cvar : NamedCVars)
+  {
+    if (idStr::Icmp(cvar.name, name) == 0)
+    {
+      return cvar.value;
+    }
+  }
+  return "";
+}
+
 void idCommon::Printf(const char* fmt, ...)
 {
   va_list argptr;
   va_start(argptr, fmt);
-  reportV(tb::lit::DeclMessageKind::Info, fmt, argptr);
+  auto* registry = tb::lit::shim::Registry::current();
+  if (registry && registry->capturing())
+  {
+    // the print commands: the text as the engine's console gets it
+    char text[MAX_PRINT_MSG];
+    idStr::vsnPrintf(text, sizeof(text), fmt, argptr);
+    registry->capture(text);
+  }
+  else
+  {
+    reportV(tb::lit::DeclMessageKind::Info, fmt, argptr);
+  }
   va_end(argptr);
 }
 
@@ -142,8 +165,10 @@ void idCommon::FatalError(const char* fmt, ...)
   va_end(argptr);
 }
 
-idFileSystemLocal::idFileSystemLocal(const tb::lit::DeclSource& source)
+idFileSystemLocal::idFileSystemLocal(
+  const tb::lit::DeclSource& source, const std::atomic<bool>* cancel)
   : m_source{source}
+  , m_cancel{cancel}
 {
 }
 
@@ -205,6 +230,24 @@ int idFileSystemLocal::ReadFile(
   if (buffer)
   {
     *buffer = nullptr;
+  }
+
+  if (m_cancel && m_cancel->load())
+  {
+    // R5.20: the registry is stopping; the file reads as empty, so LoadAndParse finds no
+    // decl in it and the folder's loop goes on to its end without reading anything
+    ++m_cancelledReads;
+    if (timestamp)
+    {
+      *timestamp = 0;
+    }
+    if (buffer)
+    {
+      auto* bytes = static_cast<char*>(Mem_Alloc(1, TAG_IDFILE));
+      bytes[0] = '\0';
+      *buffer = bytes;
+    }
+    return 0;
   }
 
   auto time = std::int64_t{0};

@@ -13,6 +13,7 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_ENGINE_DIR}/framework/DeclEntityDef.cpp
     ${TB_LIT_ID_ENGINE_DIR}/framework/DeclSkin.cpp
     ${TB_LIT_ID_ENGINE_DIR}/framework/DeclTable.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/CmdArgs.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/Dict.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/Lexer.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/Str.cpp

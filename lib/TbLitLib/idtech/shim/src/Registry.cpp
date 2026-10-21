@@ -37,8 +37,8 @@ Registry* Registry::current()
   return currentRegistry;
 }
 
-Registry::Registry(const DeclSource& source)
-  : m_fileSystem{source}
+Registry::Registry(const DeclSource& source, const std::atomic<bool>* cancel)
+  : m_fileSystem{source, cancel}
 {
   assert(currentRegistry == nullptr);
   currentRegistry = this;
@@ -112,6 +112,23 @@ void Registry::report(const DeclMessageKind kind, const char* text)
 std::vector<DeclMessage> Registry::takeMessages()
 {
   return std::exchange(m_messages, {});
+}
+
+void Registry::beginCapture()
+{
+  m_capturing = true;
+  m_capture.clear();
+}
+
+std::string Registry::endCapture()
+{
+  m_capturing = false;
+  return std::exchange(m_capture, {});
+}
+
+void Registry::capture(const char* text)
+{
+  m_capture += text;
 }
 
 void freeGuiDummies()

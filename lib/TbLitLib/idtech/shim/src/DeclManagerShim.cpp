@@ -187,6 +187,18 @@ struct LinearListsTag
   friend type get(LinearListsTag);
 };
 
+struct DeclFoldersTag
+{
+  using type = idList<idDeclFolder*, TAG_IDLIB_LIST_DECL> idDeclManagerLocal::*;
+  friend type get(DeclFoldersTag);
+};
+
+struct LoadedFilesTag
+{
+  using type = idList<idDeclFile*, TAG_IDLIB_LIST_DECL> idDeclManagerLocal::*;
+  friend type get(LoadedFilesTag);
+};
+
 template <typename Tag, typename Tag::type Member>
 struct PrivateMember
 {
@@ -194,6 +206,8 @@ struct PrivateMember
 };
 
 template struct PrivateMember<LinearListsTag, &idDeclManagerLocal::linearLists>;
+template struct PrivateMember<DeclFoldersTag, &idDeclManagerLocal::declFolders>;
+template struct PrivateMember<LoadedFilesTag, &idDeclManagerLocal::loadedFiles>;
 
 } // namespace
 
@@ -249,6 +263,49 @@ std::size_t declTextBytes(const idDeclManagerLocal& manager)
     }
   }
   return bytes;
+}
+
+std::vector<DeclFolderInfo> declFolders(const idDeclManagerLocal& manager)
+{
+  const auto& folders = manager.*get(DeclFoldersTag{});
+
+  auto result = std::vector<DeclFolderInfo>{};
+  for (int i = 0; i < folders.Num(); ++i)
+  {
+    result.push_back(
+      DeclFolderInfo{folders[i]->folder.c_str(), folders[i]->extension.c_str()});
+  }
+  return result;
+}
+
+int declFileCount(const idDeclManagerLocal& manager)
+{
+  return (manager.*get(LoadedFilesTag{})).Num();
+}
+
+std::size_t declFileBytes(const idDeclManagerLocal& manager)
+{
+  const auto& files = manager.*get(LoadedFilesTag{});
+  auto bytes = std::size_t{0};
+  for (int i = 0; i < files.Num(); ++i)
+  {
+    bytes += std::size_t(std::max(files[i]->fileSize, 0));
+  }
+  return bytes;
+}
+
+std::vector<DeclTypeCount> declCounts(idDeclManagerLocal& manager)
+{
+  auto counts = std::vector<DeclTypeCount>{};
+  for (int i = 0; i < manager.GetNumDeclTypes(); ++i)
+  {
+    if (const auto* declType = manager.GetDeclType(i))
+    {
+      counts.push_back(
+        DeclTypeCount{declType->typeName.c_str(), manager.GetNumDecls(declType->type)});
+    }
+  }
+  return counts;
 }
 
 std::string canonicalDeclName(const char* name)

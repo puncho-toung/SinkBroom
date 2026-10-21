@@ -134,6 +134,9 @@ public:
   // the integer value of a cvar the copied code names but does not declare, at its engine
   // default; 0 for an unknown name, as the engine's GetCVarInteger
   int GetCVarInteger(const char* name) const;
+  // the same as text; "" for an unknown name, as the engine's GetCVarString (idCmdArgs'
+  // cvar expansion, which the shim never feeds)
+  const char* GetCVarString(const char* name) const;
 };
 
 extern idCVarSystem* cvarSystem;
