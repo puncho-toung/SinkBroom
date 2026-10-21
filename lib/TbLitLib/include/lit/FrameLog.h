@@ -1,0 +1,76 @@
+/*
+ Copyright (C) 2026 TrenchBroom contributors
+
+ This file is part of TrenchBroom.
+
+ TrenchBroom is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ TrenchBroom is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <string>
+#include <string_view>
+
+namespace tb::lit
+{
+
+/**
+ * One presented frame in the frame log (C16, LP0 subset). The GPU time comes from the
+ * timer-query ring once that frame has finished on the GPU, so a row is complete only
+ * kFramesInFlight frames later, or at stop.
+ */
+struct FrameLogRow
+{
+  std::uint64_t frameIndex = 0;
+  double cpuRecordMs = 0.0;
+  std::optional<double> gpuClearMs;
+  std::string_view presentMode; // a presentModeName literal
+  std::uint64_t swapchainGeneration = 0;
+  std::uint64_t framesSkipped = 0;
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+};
+
+// the CSV header line, ending in a newline
+std::string_view frameLogHeader();
+
+// one CSV line, ending in a newline; an unknown GPU time is an empty field
+std::string formatFrameLogRow(const FrameLogRow& row);
+
+/**
+ * Writes the frame log on the render thread: rows are buffered in memory, written out in
+ * large blocks, and flushed when the log is closed at stop.
+ */
+class FrameLogWriter
+{
+public:
+  // an empty path means no log; a file that cannot be opened is an error message
+  std::optional<std::string> open(const std::filesystem::path& path);
+  bool isOpen() const;
+
+  void append(const FrameLogRow& row);
+  void close();
+
+private:
+  void writeBuffer();
+
+  std::ofstream m_file;
+  std::string m_buffer;
+};
+
+} // namespace tb::lit

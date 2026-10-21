@@ -4,7 +4,12 @@ add_library(TbLitLib STATIC)
 
 target_sources(TbLitLib
   PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/DeviceChoice.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameLog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/FramePacing.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NvrhiSupport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/SwapchainRules.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/VulkanInstance.cpp
 
   PUBLIC FILE_SET headers TYPE HEADERS
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -12,12 +17,14 @@ target_sources(TbLitLib
 
 # nvrhi_vk is public for its public VK_USE_PLATFORM_WIN32_KHR: every file that includes
 # vulkan.hpp must see the platform defines NVRHI was compiled with. The Vulkan headers are
-# the pinned set (C13, cmake/dependencies/nvrhi.cmake).
+# the pinned set (C13, cmake/dependencies/nvrhi.cmake). TbBaseLib brings Result, VmLib and
+# fmt; nothing here links Qt.
 target_link_libraries(TbLitLib
   PRIVATE
     CompilerConfig
     PrecompileStdHeaders
   PUBLIC
+    TbBaseLib
     nvrhi
     nvrhi_vk
     WrapVulkanHeaders::WrapVulkanHeaders
