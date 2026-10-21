@@ -13,6 +13,12 @@ include(cmake/dependencies/miniz.cmake)
 include(cmake/dependencies/stduuid.cmake)
 include(cmake/dependencies/tinyxml2.cmake)
 
+# The lit preview's dependencies. NVRHI must come before find_package(Qt6) because it pins
+# the Vulkan headers that Qt picks up there.
+if(TB_ENABLE_LIT_PREVIEW)
+  include(cmake/dependencies/nvrhi.cmake)
+endif()
+
 # Find Qt and OpenGL
 find_package(OpenGL REQUIRED)
 find_package(Qt6 COMPONENTS Core Widgets OpenGL OpenGLWidgets Network Svg Test REQUIRED)
