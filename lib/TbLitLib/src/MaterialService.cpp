@@ -20,10 +20,12 @@
 #include "lit/MaterialService.h"
 
 #include "StackThread.h"
-#include "lit/ResourceContainer.h"
+
+#include "kd/result.h"
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
@@ -41,9 +43,10 @@ namespace
 
 using Clock = std::chrono::steady_clock;
 
-// R4-1.1, R4-3.25: the parse thread's stack where the platform does not give the
-// executable's
-constexpr auto PosixStackBytes = std::size_t{2} * 1024 * 1024;
+// R4-1.1, R4-3.25, G13: the parse thread's stack on every platform. The copied parser
+// keeps about 120 KB of parse data on the stack, twice when MakeDefault re-parses inside
+// Parse, and _alloca's each decl's text (A2.9).
+constexpr auto ParseThreadStackBytes = std::size_t{8} * 1024 * 1024;
 
 // a bulk step parses for at most this long, then looks at the queue again (D52)
 constexpr auto BulkStepTime = std::chrono::milliseconds{20};
@@ -71,68 +74,26 @@ bool isProblem(const DeclMessageKind kind)
   return kind != DeclMessageKind::Info;
 }
 
-/**
- * Forwards to the source and records the time each read returned, so that a build can
- * tell whether a loose decl file changed while it was reading.
- */
-class RecordingSource : public DeclSource
+// the loose decl files of the engine's decl folders and their times
+std::vector<DeclFileTime> looseStamp(const DeclSource& source)
 {
-private:
-  DeclSource& m_source;
-  std::unordered_map<std::string, std::int64_t> m_reads;
-
-public:
-  explicit RecordingSource(DeclSource& source)
-    : m_source{source}
+  auto stamp = std::vector<DeclFileTime>{};
+  for (const auto& folder : MaterialDecls::engineDeclFolders())
   {
-  }
-
-  std::vector<std::string> listFiles(
-    const std::string& folder, const std::string& extension) const override
-  {
-    return m_source.listFiles(folder, extension);
-  }
-
-  std::optional<std::string> readFile(
-    const std::string& path, std::int64_t* timestamp) const override
-  {
-    auto time = std::int64_t{0};
-    auto text = m_source.readFile(path, &time);
-    if (timestamp)
+    for (auto& file : source.looseFileTimes(folder.folder, folder.extension))
     {
-      *timestamp = time;
+      stamp.push_back(std::move(file));
     }
-    if (text)
-    {
-      const_cast<RecordingSource*>(this)->m_reads[canonicalResourceName(path)] = time;
-    }
-    return text;
   }
+  return stamp;
+}
 
-  std::vector<DeclFileTime> looseFileTimes(
-    const std::string& folder, const std::string& extension) const override
-  {
-    return m_source.looseFileTimes(folder, extension);
-  }
-
-  std::vector<std::string> takeWarnings() override { return m_source.takeWarnings(); }
-
-  void closeFiles() override { m_source.closeFiles(); }
-
-  // whether stamp shows a loose file that the build did not read as it is now
-  bool changedSinceRead(const std::vector<DeclFileTime>& stamp) const
-  {
-    for (const auto& file : stamp)
-    {
-      const auto read = m_reads.find(canonicalResourceName(file.path));
-      if (read == m_reads.end() || read->second != file.time)
-      {
-        return true;
-      }
-    }
-    return false;
-  }
-};
+std::shared_ptr<const EvaluatedRegisters> refusal(std::string reason)
+{
+  auto registers = std::make_shared<EvaluatedRegisters>();
+  registers->error = std::move(reason);
+  return registers;
+}
 
 } // namespace
 
@@ -181,10 +142,10 @@ std::size_t RegisterKeyHash::operator()(const RegisterKey& key) const
   return std::size_t(hash);
 }
 
-const MaterialSlot* MaterialTable::find(const std::string_view name) const
+std::shared_ptr<const MaterialSlot> MaterialTable::find(const std::string_view name) const
 {
   const auto* slot = materials.find(std::string{name});
-  return slot ? slot->get() : nullptr;
+  return slot ? *slot : nullptr;
 }
 
 std::shared_ptr<const EvaluatedRegisters> MaterialTable::findRegisters(
@@ -195,7 +156,7 @@ std::shared_ptr<const EvaluatedRegisters> MaterialTable::findRegisters(
 }
 
 // What every thread shares: the requests, the published table and the stats, under one
-// mutex; the stop flag is also the registry's cancel flag.
+// mutex; the stop flag is also the registry's and the source's cancel flag.
 struct MaterialService::Shared
 {
   MaterialServiceOptions options;
@@ -231,6 +192,7 @@ private:
   {
     Stop,
     Reload,
+    AutoReload,
     Evaluate,
     Lookup,
     Poll,
@@ -247,18 +209,20 @@ private:
   Shared& m_shared;
   StackThread m_thread;
 
-  // the parse thread's state; the source outlives the recorder, which outlives the
-  // registry that reads through it
+  // the parse thread's state; the source outlives the registry that reads through it
   std::unique_ptr<DeclSource> m_source;
-  std::unique_ptr<RecordingSource> m_recorder;
   std::unique_ptr<MaterialDecls> m_decls;
   MaterialTable m_working;
   std::uint64_t m_version = 0;
   std::deque<RegisterKey> m_deltaOrder;
   // the names lookups were asked for, looked up again after a reload
   std::unordered_set<std::string> m_requestedNames;
+  // the loose files' times when the last build ended
   std::vector<DeclFileTime> m_stamp;
   Clock::time_point m_nextPoll;
+  // a rebuild that a change of the loose files asks for, and when it may run
+  bool m_autoReloadPending = false;
+  std::optional<Clock::time_point> m_lastAutoReload;
   std::size_t m_warnings = 0;
 
   int m_bulkMaterial = 0;
@@ -274,9 +238,9 @@ public:
 
   ~Worker() { join(); }
 
-  bool start(std::string* error)
+  Result<void> start()
   {
-    return m_thread.start([this] { run(); }, PosixStackBytes, error);
+    return m_thread.start([this] { run(); }, ParseThreadStackBytes);
   }
 
   void join() { m_thread.join(); }
@@ -284,9 +248,39 @@ public:
 private:
   bool stopping() const { return m_shared.stop.load(); }
 
+  /**
+   * A2.1: nothing a work item throws reaches the thread's top. The item is logged and
+   * dropped; a build that throws leaves no registry, and an empty table is published.
+   */
+  template <typename F>
+  void guarded(const char* what, F&& f)
+  {
+    try
+    {
+      f();
+      return;
+    }
+    catch (const std::exception& e)
+    {
+      failed(what, e.what());
+    }
+    catch (...)
+    {
+      failed(what, "an unknown exception");
+    }
+  }
+
+  void failed(const char* what, const char* reason)
+  {
+    updateStats([](MaterialServiceStats& stats) { ++stats.failedWorkItems; });
+    message(
+      DeclMessageKind::Error,
+      fmt::format("The material parse thread's {} failed: {}", what, reason));
+  }
+
   void run()
   {
-    build({});
+    guarded("build", [&] { build({}); });
     for (;;)
     {
       auto work = takeWork();
@@ -300,34 +294,48 @@ private:
       case WorkKind::Stop:
         break;
       case WorkKind::Reload:
-        rebuild();
+        guarded("reload", [&] { rebuild(); });
+        break;
+      case WorkKind::AutoReload:
+        m_lastAutoReload = Clock::now();
+        updateStats([](MaterialServiceStats& stats) { ++stats.pollReloads; });
+        guarded("reload", [&] { rebuild(); });
         break;
       case WorkKind::Evaluate:
-        evaluate(work.evaluations);
+        guarded("evaluation", [&] { evaluate(work.evaluations); });
         break;
       case WorkKind::Lookup:
-        lookUp(work.lookups);
+        guarded("lookup", [&] { lookUp(work.lookups); });
         break;
       case WorkKind::Poll:
-        poll();
+        guarded("poll", [&] { poll(); });
         break;
       case WorkKind::Bulk:
-        bulkStep();
+        guarded("bulk parse", [&] { bulkStep(); });
         break;
       }
 
       // every work item is one read batch (R4-3.26)
-      if (m_source)
-      {
-        m_source->closeFiles();
-      }
-      drainMessages();
+      guarded("message drain", [&] {
+        if (m_source)
+        {
+          m_source->closeFiles();
+        }
+        drainMessages();
+      });
     }
 
     // teardown step 8: the registry is destroyed on its own thread
-    m_decls.reset();
-    m_recorder.reset();
-    m_source.reset();
+    guarded("teardown", [&] {
+      m_decls.reset();
+      m_source.reset();
+    });
+  }
+
+  Clock::time_point autoReloadDue() const
+  {
+    return m_lastAutoReload ? *m_lastAutoReload + m_shared.options.autoReloadInterval
+                            : Clock::time_point{};
   }
 
   Work takeWork()
@@ -347,9 +355,19 @@ private:
         m_shared.stats.idle = true;
         m_shared.changed.notify_all();
       }
+
+      auto wakeUp = std::optional<Clock::time_point>{};
       if (m_shared.options.pollInterval.count() > 0)
       {
-        m_shared.requested.wait_until(lock, m_nextPoll);
+        wakeUp = m_nextPoll;
+      }
+      if (m_autoReloadPending)
+      {
+        wakeUp = wakeUp ? std::min(*wakeUp, autoReloadDue()) : autoReloadDue();
+      }
+      if (wakeUp)
+      {
+        m_shared.requested.wait_until(lock, *wakeUp);
       }
       else
       {
@@ -368,7 +386,13 @@ private:
     if (m_shared.reloadRequested)
     {
       m_shared.reloadRequested = false;
+      m_autoReloadPending = false;
       return Work{WorkKind::Reload, {}, {}};
+    }
+    if (m_autoReloadPending && Clock::now() >= autoReloadDue())
+    {
+      m_autoReloadPending = false;
+      return Work{WorkKind::AutoReload, {}, {}};
     }
     if (!m_shared.evaluations.empty())
     {
@@ -386,7 +410,9 @@ private:
       m_shared.queuedLookups.clear();
       return work;
     }
-    if (m_shared.options.pollInterval.count() > 0 && Clock::now() >= m_nextPoll)
+    if (
+      !m_autoReloadPending && m_shared.options.pollInterval.count() > 0
+      && Clock::now() >= m_nextPoll)
     {
       return Work{WorkKind::Poll, {}, {}};
     }
@@ -405,10 +431,24 @@ private:
     {
       ++m_warnings;
     }
-    if (!stopping() && m_shared.options.listener)
+    notify(MaterialServiceEvent{
+      MaterialServiceEvent::Kind::Message, 0, level, std::move(text)});
+  }
+
+  // the listener must not throw; if it does, the event is dropped, so that a failure's
+  // own message cannot throw out of its catch (A2.1)
+  void notify(MaterialServiceEvent event)
+  {
+    if (stopping() || !m_shared.options.listener)
     {
-      m_shared.options.listener(MaterialServiceEvent{
-        MaterialServiceEvent::Kind::Message, 0, level, std::move(text)});
+      return;
+    }
+    try
+    {
+      m_shared.options.listener(event);
+    }
+    catch (...)
+    {
     }
   }
 
@@ -439,13 +479,11 @@ private:
     }
     m_shared.changed.notify_all();
 
-    if (!stopping() && m_shared.options.listener)
-    {
-      m_shared.options.listener(MaterialServiceEvent{
-        MaterialServiceEvent::Kind::Published, m_version, DeclMessageKind::Info, {}});
-    }
+    notify(MaterialServiceEvent{
+      MaterialServiceEvent::Kind::Published, m_version, DeclMessageKind::Info, {}});
   }
 
+  // A2.12: the caller computes what it stores outside the lock
   void updateStats(const std::function<void(MaterialServiceStats&)>& update)
   {
     {
@@ -455,22 +493,7 @@ private:
     m_shared.changed.notify_all();
   }
 
-  std::vector<DeclFileTime> looseStamp() const
-  {
-    auto stamp = std::vector<DeclFileTime>{};
-    if (!m_decls || !m_source)
-    {
-      return stamp;
-    }
-    for (const auto& folder : m_decls->declFolders())
-    {
-      for (auto& file : m_source->looseFileTimes(folder.folder, folder.extension))
-      {
-        stamp.push_back(std::move(file));
-      }
-    }
-    return stamp;
-  }
+  void requestAutoReload() { m_autoReloadPending = true; }
 
   bool setSlot(const std::string& name, std::shared_ptr<const MaterialSlot> slot)
   {
@@ -509,41 +532,75 @@ private:
     return changed;
   }
 
+  void resetWorkingTable(const std::uint64_t registry)
+  {
+    m_working = MaterialTable{};
+    m_working.registry = registry;
+    m_deltaOrder.clear();
+    m_bulkMaterial = 0;
+    m_bulkTable = 0;
+    m_bulkDone = false;
+    m_bulkStarted.reset();
+  }
+
   void build(const std::vector<std::string>& previousNames)
   {
     const auto started = Clock::now();
     m_warnings = 0;
 
-    m_source = m_shared.options.makeSource ? m_shared.options.makeSource() : nullptr;
+    // a build that throws leaves no registry and publishes an empty table
+    resetWorkingTable(0);
+    m_decls.reset();
+    m_source.reset();
+    try
+    {
+      buildRegistry(previousNames, started);
+    }
+    catch (...)
+    {
+      m_decls.reset();
+      m_source.reset();
+      resetWorkingTable(0);
+      m_bulkDone = true;
+      publish();
+      throw;
+    }
+  }
+
+  void buildRegistry(
+    const std::vector<std::string>& previousNames, const Clock::time_point started)
+  {
+    m_source =
+      m_shared.options.makeSource ? m_shared.options.makeSource(m_shared.stop) : nullptr;
     if (!m_source)
     {
       m_source = std::make_unique<MemoryDeclSource>(std::vector<DeclFile>{});
     }
     const auto sourceSeconds = secondsSince(started);
-    m_recorder = std::make_unique<RecordingSource>(*m_source);
+
+    // A2.3: what the loose files were before the read and after it; a change between
+    // them, or a file that kept changing while it was read, asks for one more build
+    const auto stampBefore = looseStamp(*m_source);
     // the decl files are read here; the stop flag cuts them short (R5.20)
-    m_decls = std::make_unique<MaterialDecls>(*m_recorder, &m_shared.stop);
+    m_decls = std::make_unique<MaterialDecls>(*m_source, &m_shared.stop);
     // the read batch ends: no container stays open (R4-3.26)
     m_source->closeFiles();
     const auto buildSeconds = secondsSince(started);
+    m_stamp = looseStamp(*m_source);
 
     if (!m_decls->constructionError().empty())
     {
       message(DeclMessageKind::Error, m_decls->constructionError());
     }
 
-    m_stamp = looseStamp();
-    const auto cancelled = m_decls->cancelled();
-    const auto changedWhileReading = !cancelled && m_recorder->changedSinceRead(m_stamp);
+    const auto cancelled = m_decls->cancelled() || stopping();
+    if (!cancelled && (stampBefore != m_stamp || m_source->changedWhileRead()))
+    {
+      requestAutoReload();
+    }
 
     // a new table for the new registry
-    m_working = MaterialTable{};
-    m_working.registry = m_decls->id();
-    m_deltaOrder.clear();
-    m_bulkMaterial = 0;
-    m_bulkTable = 0;
-    m_bulkDone = false;
-    m_bulkStarted.reset();
+    resetWorkingTable(m_decls->id());
 
     // what the consumers asked for before is there at the switch
     for (const auto& name : previousNames)
@@ -558,20 +615,26 @@ private:
     publish();
 
     const auto counts = m_decls->declCounts();
+    const auto materials = m_decls->materialCount();
+    const auto tables = m_decls->tableCount();
+    const auto textBytes = m_decls->declTextBytes();
+    const auto files = m_decls->declFileCount();
+    const auto fileBytes = m_decls->declFileBytes();
+    const auto registry = m_decls->id();
     updateStats([&](MaterialServiceStats& stats) {
       ++stats.builds;
-      stats.registry = m_decls->id();
+      stats.registry = registry;
       stats.sourceSeconds = sourceSeconds;
       stats.buildSeconds = buildSeconds;
       stats.parseAllSeconds = 0.0;
       stats.parseAllDone = false;
       stats.buildCancelled = cancelled;
-      stats.materials = m_decls->materialCount();
-      stats.tables = m_decls->tableCount();
+      stats.materials = materials;
+      stats.tables = tables;
       stats.defaultedMaterials = 0;
-      stats.declTextBytes = m_decls->declTextBytes();
-      stats.declFiles = m_decls->declFileCount();
-      stats.declFileBytes = m_decls->declFileBytes();
+      stats.declTextBytes = textBytes;
+      stats.declFiles = files;
+      stats.declFileBytes = fileBytes;
       stats.declCountsAtBuild = counts;
       stats.declCounts = counts;
     });
@@ -582,17 +645,10 @@ private:
         DeclMessageKind::Info,
         fmt::format(
           "Read {} materials and {} tables ({:.1f} MB of decl text) in {:.0f} ms",
-          m_decls->materialCount(),
-          m_decls->tableCount(),
-          double(m_decls->declTextBytes()) / (1024.0 * 1024.0),
+          materials,
+          tables,
+          double(textBytes) / (1024.0 * 1024.0),
           buildSeconds * 1000.0));
-    }
-
-    if (changedWhileReading)
-    {
-      // a loose decl file changed while the build read it: read it again
-      auto lock = std::scoped_lock{m_shared.mutex};
-      m_shared.reloadRequested = true;
     }
     m_nextPoll = Clock::now() + m_shared.options.pollInterval;
   }
@@ -601,16 +657,15 @@ private:
   {
     auto previousNames =
       std::vector<std::string>{m_requestedNames.begin(), m_requestedNames.end()};
-
-    // one registry at a time (C17)
-    m_decls.reset();
-    m_recorder.reset();
-    m_source.reset();
     build(previousNames);
   }
 
   void lookUp(const std::vector<std::string>& names)
   {
+    if (!m_decls)
+    {
+      return;
+    }
     auto changed = false;
     for (const auto& name : names)
     {
@@ -627,8 +682,24 @@ private:
     }
   }
 
+  void setRegisters(
+    const RegisterKey& key, std::shared_ptr<const EvaluatedRegisters> registers)
+  {
+    m_working.registers = m_working.registers.set(key, std::move(registers));
+    m_deltaOrder.push_back(key);
+    while (m_deltaOrder.size() > MaterialTable::MaxRegisterDeltas)
+    {
+      m_working.registers = m_working.registers.erase(m_deltaOrder.front());
+      m_deltaOrder.pop_front();
+    }
+  }
+
   void evaluate(const std::vector<RegisterKey>& keys)
   {
+    if (!m_decls)
+    {
+      return;
+    }
     auto changed = false;
     auto refused = std::uint64_t{0};
     for (const auto& key : keys)
@@ -637,36 +708,38 @@ private:
       {
         return;
       }
-      if (key.material.registry != m_decls->id())
-      {
-        ++refused;
-        continue;
-      }
       if (m_working.registers.find(key))
       {
         continue;
       }
 
+      // A2.13: a refusal is published too, so the caller stops asking
+      if (key.material.registry != m_decls->id())
+      {
+        ++refused;
+        setRegisters(key, refusal("the material belongs to an earlier registry"));
+        changed = true;
+        continue;
+      }
       const auto entry = m_decls->lookupIndex(key.material.index);
       if (!entry)
       {
         ++refused;
+        setRegisters(key, refusal(entry.error));
+        changed = true;
         continue;
       }
       auto registers = m_decls->evaluate(**entry.value, key.shaderParms, key.time);
       if (!registers)
       {
+        ++refused;
+        setRegisters(key, refusal(registers.error));
+        changed = true;
         continue;
       }
 
-      m_working.registers = m_working.registers.set(
+      setRegisters(
         key, std::make_shared<const EvaluatedRegisters>(std::move(*registers.value)));
-      m_deltaOrder.push_back(key);
-      while (m_deltaOrder.size() > MaterialTable::MaxRegisterDeltas)
-      {
-        m_working.registers = m_working.registers.erase(m_deltaOrder.front());
-        m_deltaOrder.pop_front();
-      }
       changed = true;
     }
 
@@ -684,22 +757,18 @@ private:
   void poll()
   {
     m_nextPoll = Clock::now() + m_shared.options.pollInterval;
-    if (!m_decls)
+    if (m_source && looseStamp(*m_source) != m_stamp)
     {
-      return;
-    }
-    if (looseStamp() != m_stamp)
-    {
-      updateStats([](MaterialServiceStats& stats) { ++stats.pollReloads; });
-      rebuild();
+      // a changed loose file: one build, at most once per autoReloadInterval
+      requestAutoReload();
     }
   }
 
   void bulkStep()
   {
-    if (m_shared.options.beforeBulkStep)
+    if (m_shared.options.beforeBulkStepForTesting)
     {
-      m_shared.options.beforeBulkStep();
+      m_shared.options.beforeBulkStepForTesting();
     }
     if (!m_bulkStarted)
     {
@@ -733,8 +802,7 @@ private:
       else
       {
         finishBulk();
-        changed = true;
-        break;
+        return;
       }
     }
 
@@ -744,54 +812,62 @@ private:
     }
   }
 
+  // G17: the complete table and the summary come before parseAllDone, so a waiter that
+  // stops on parseAllDone has both
   void finishBulk()
   {
     m_bulkDone = true;
     m_working.complete = true;
+    publish();
 
     const auto seconds = m_bulkStarted ? secondsSince(*m_bulkStarted) : 0.0;
     const auto defaulted = m_decls->defaultedCount("material");
+    const auto materials = m_decls->materialCount();
+    const auto tables = m_decls->tableCount();
+    const auto textBytes = m_decls->declTextBytes();
+    const auto counts = m_decls->declCounts();
     drainMessages();
-    updateStats([&](MaterialServiceStats& stats) {
-      stats.parseAllDone = true;
-      stats.parseAllSeconds = seconds;
-      stats.materials = m_decls->materialCount();
-      stats.tables = m_decls->tableCount();
-      stats.defaultedMaterials = defaulted;
-      stats.declTextBytes = m_decls->declTextBytes();
-      stats.declCounts = m_decls->declCounts();
-    });
     message(
       DeclMessageKind::Info,
       fmt::format(
         "Parsed {} materials ({} defaulted) and {} tables in {:.0f} ms, {} warnings",
-        m_decls->materialCount(),
+        materials,
         defaulted,
-        m_decls->tableCount(),
+        tables,
         seconds * 1000.0,
         m_warnings));
+    updateStats([&](MaterialServiceStats& stats) {
+      stats.parseAllDone = true;
+      stats.parseAllSeconds = seconds;
+      stats.materials = materials;
+      stats.tables = tables;
+      stats.defaultedMaterials = defaulted;
+      stats.declTextBytes = textBytes;
+      stats.declCounts = counts;
+      stats.warnings = m_warnings;
+    });
   }
 };
+
+Result<std::unique_ptr<MaterialService>> MaterialService::create(
+  MaterialServiceOptions options)
+{
+  auto service =
+    std::unique_ptr<MaterialService>{new MaterialService{std::move(options)}};
+  if (auto started = service->m_worker->start(); started.is_error())
+  {
+    return Error{
+      "The material parse thread could not be started: "
+      + std::get<Error>(started.error()).msg};
+  }
+  return Result<std::unique_ptr<MaterialService>>{std::move(service)};
+}
 
 MaterialService::MaterialService(MaterialServiceOptions options)
   : m_shared{std::make_unique<Shared>(std::move(options))}
   , m_worker{std::make_unique<Worker>(*m_shared)}
 {
   m_shared->parseAllRequested = m_shared->options.parseAll;
-
-  auto error = std::string{};
-  if (!m_worker->start(&error))
-  {
-    m_shared->stop = true;
-    if (m_shared->options.listener)
-    {
-      m_shared->options.listener(MaterialServiceEvent{
-        MaterialServiceEvent::Kind::Message,
-        0,
-        DeclMessageKind::Error,
-        fmt::format("The material parse thread could not be started: {}", error)});
-    }
-  }
 }
 
 MaterialService::~MaterialService()
@@ -808,8 +884,7 @@ std::shared_ptr<const MaterialTable> MaterialService::table() const
 
 MaterialLookup MaterialService::lookup(const std::string_view name)
 {
-  const auto latest = table();
-  if (const auto* slot = latest->find(name))
+  if (const auto slot = table()->find(name))
   {
     return slot->entry
              ? MaterialLookup{MaterialLookup::State::Ready, slot->entry, {}}
@@ -892,7 +967,7 @@ MaterialServiceStats MaterialService::stats() const
   return m_shared->stats;
 }
 
-std::shared_ptr<const MaterialTable> MaterialService::waitForTable(
+std::shared_ptr<const MaterialTable> MaterialService::waitForTableForTesting(
   const std::function<bool(const MaterialTable&)>& predicate,
   const std::chrono::milliseconds timeout) const
 {
@@ -901,7 +976,7 @@ std::shared_ptr<const MaterialTable> MaterialService::waitForTable(
   return m_shared->table;
 }
 
-bool MaterialService::waitForStats(
+bool MaterialService::waitForStatsForTesting(
   const std::function<bool(const MaterialServiceStats&)>& predicate,
   const std::chrono::milliseconds timeout) const
 {

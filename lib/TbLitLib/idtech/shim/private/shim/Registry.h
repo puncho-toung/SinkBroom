@@ -26,6 +26,7 @@
 #include "lit/MaterialDecls.h"
 
 #include <atomic>
+#include <cstdarg>
 
 class idDeclManagerLocal;
 
@@ -40,11 +41,18 @@ extern idDeclManagerLocal* tbLitDeclManagerLocal;
 // cancel point, so once the cancel flag is set every later ReadFile returns an empty
 // file. The folder's loop then ends after the file it was reading, and nothing is
 // reported.
+//
+// It is the exception boundary between the source and the copied code (C17): a source
+// call that throws is reported as a warning, and the copied caller sees an unreadable
+// file or an empty folder. It also refuses, with a warning, a file the copied code cannot
+// take: one of 2 GB or more (the engine's lengths are ints), and one holding a token of
+// MAX_STRING_CHARS or more characters without a dot among them, which the copied
+// MakeNameCanonical writes past its buffer for (M-ID-GUARD-06).
 class idFileSystemLocal : public idFileSystem
 {
 public:
   idFileSystemLocal(
-    const tb::lit::DeclSource& source, const std::atomic<bool>* cancel = nullptr);
+    tb::lit::DeclSource& source, const std::atomic<bool>* cancel = nullptr);
 
   // files left empty because the cancel flag was set
   int cancelledReads() const { return m_cancelledReads; }
@@ -67,7 +75,7 @@ public:
   void CloseFile(idFile* f) override;
 
 private:
-  const tb::lit::DeclSource& m_source;
+  tb::lit::DeclSource& m_source;
   const std::atomic<bool>* m_cancel;
   int m_cancelledReads = 0;
 };
@@ -111,10 +119,14 @@ public:
   // the registry the globals are bound to, or nullptr
   static Registry* current();
 
+  // claims the process's one registry slot, atomically (C17); false when it is held
+  static bool claim();
+  static void release();
+
   // binds the globals, creates the intrinsic images and registers every decl type and
   // folder the engine registers, in the engine's order (D33); cancel, when set, cuts the
-  // decl files short (idFileSystemLocal)
-  explicit Registry(const DeclSource& source, const std::atomic<bool>* cancel = nullptr);
+  // decl files short (idFileSystemLocal). The caller holds the slot (claim).
+  explicit Registry(DeclSource& source, const std::atomic<bool>* cancel = nullptr);
 
   // frees in R5.11's order and unbinds the globals
   ~Registry();
@@ -127,8 +139,9 @@ public:
   const std::vector<DeclMessage>& messages() const { return m_messages; }
   std::vector<DeclMessage> takeMessages();
 
-  // Error, FatalError and Assert messages so far; a call that raises the count reached a
-  // site where the engine would not have returned
+  // Error and FatalError messages so far; a call that raises the count reached a site
+  // where the engine would not have returned. An Assert is reported but never counted, so
+  // that Debug and Release parse alike (asserts are compiled out of Release).
   std::size_t errorCount() const { return m_errorCount; }
 
   // Between these, idCommon::Printf text goes into a buffer as the engine's console gets
@@ -140,11 +153,35 @@ public:
 
   bool cancelled() const { return m_fileSystem.cancelledReads() > 0; }
 
-  idDeclManagerLocal& declManager() { return *m_declManager; }
+  idDeclManagerLocal& declManager() { return *m_declManager.manager; }
   idImageManager& images() { return m_images; }
   idRenderProgManager& renderProgs() { return m_renderProgs; }
 
 private:
+  // Binds the globals when it is made and unbinds them when it goes, so that a registry
+  // whose construction throws leaves no global bound to its members (A2.1).
+  class Bindings
+  {
+  public:
+    explicit Bindings(Registry& registry);
+    ~Bindings();
+
+    Bindings(const Bindings&) = delete;
+    Bindings& operator=(const Bindings&) = delete;
+  };
+
+  // owns the decl manager, which it shuts down while the globals are still bound
+  struct DeclManagerOwner
+  {
+    idDeclManagerLocal* manager = nullptr;
+
+    DeclManagerOwner();
+    ~DeclManagerOwner();
+
+    DeclManagerOwner(const DeclManagerOwner&) = delete;
+    DeclManagerOwner& operator=(const DeclManagerOwner&) = delete;
+  };
+
   std::vector<DeclMessage> m_messages;
   std::size_t m_errorCount = 0;
   bool m_capturing = false;
@@ -157,10 +194,18 @@ private:
   idRenderProgManager m_renderProgs;
   UserInterfaceManagerShim m_guis;
   GameShim m_game;
-  idDeclManagerLocal* m_declManager = nullptr;
+  // made after the objects it binds and gone before them
+  Bindings m_bindings;
+  // made after the bindings and gone before them
+  DeclManagerOwner m_declManager;
 
   friend void freeGuiDummies();
 };
+
+// common's and idLib's message functions: the formatted text into the bound registry's
+// messages; nothing without a registry
+void reportV(DeclMessageKind kind, const char* fmt, va_list argptr);
+void reportWarning(const std::string& text);
 
 // The parts that need idDeclManagerLocal's definition, which lives in the copied
 // DeclManager.cpp (shim/src/DeclManagerShim.cpp).
@@ -188,6 +233,13 @@ std::size_t declFileBytes(const idDeclManagerLocal& declManager);
 
 // every registered decl type with its number of decls, in type order
 std::vector<DeclTypeCount> declCounts(idDeclManagerLocal& declManager);
+
+// M-ID-GUARD-05: every material decl whose text makes more than MAX_SHADER_STAGES stages
+// (stage blocks and stage shortcuts, counted as the lexer reads them) is made the default
+// material before anything can parse it, because the copied ParseStage writes past
+// parseStages for the stage after the last; the engine's warning is reported. Returns
+// their indices.
+std::vector<int> refuseOversizedMaterials(idDeclManagerLocal& declManager);
 
 // idDeclManagerLocal::MakeNameCanonical into a buffer of MAX_STRING_CHARS + 1, so a name
 // of MAX_STRING_CHARS characters cannot write past it

@@ -17,6 +17,16 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+// ---- engine notice ----
+// Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
+// GPL Source Code and RBDOOM-3-BFG (neo/framework/FileSystem.cpp and
+// framework/File_Zip.cpp):
+//   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
+//   Copyright (C) 2012-2024 Robert Beckebans
+// That code is also subject to the additional terms that follow the GNU General
+// Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
+// ---- end of engine notice ----
+
 #include "lit/GameDeclSource.h"
 
 #include "fs/File.h"
@@ -45,26 +55,6 @@ namespace
 
 // framework/File_Zip.cpp: a .pk4 holding this file is a binary pak, which Init refuses
 constexpr auto BinaryConfig = "binary.conf";
-
-int icmpn(const std::string& lhs, const std::string& rhs, const std::size_t count)
-{
-  for (std::size_t i = 0; i < count; ++i)
-  {
-    const auto a = i < lhs.size() ? lhs[i] : '\0';
-    const auto b = i < rhs.size() ? rhs[i] : '\0';
-    const auto la = a >= 'A' && a <= 'Z' ? char(a + ('a' - 'A')) : a;
-    const auto lb = b >= 'A' && b <= 'Z' ? char(b + ('a' - 'A')) : b;
-    if (la != lb)
-    {
-      return la < lb ? -1 : 1;
-    }
-    if (a == '\0')
-    {
-      return 0;
-    }
-  }
-  return 0;
-}
 
 void sortEnginePaths(std::vector<std::string>& names)
 {
@@ -98,7 +88,7 @@ std::optional<std::string> flatName(
     return std::nullopt;
   }
   // check for a path match without the trailing '/'
-  if (pathLength && icmpn(filename, relativePath, pathLength - 1) != 0)
+  if (pathLength && compareNoCaseAscii(filename, relativePath, pathLength - 1) != 0)
   {
     return std::nullopt;
   }
@@ -123,11 +113,7 @@ std::optional<std::string> flatName(
   // check for extension match
   if (
     filename.size() < extension.size()
-    || icmpn(
-         filename.substr(filename.size() - extension.size()),
-         extension,
-         extension.size() + 1)
-         != 0)
+    || !equalsNoCaseAscii(filename.substr(filename.size() - extension.size()), extension))
   {
     return std::nullopt;
   }
@@ -179,13 +165,28 @@ struct GameDeclSource::Resources
   std::optional<GameFile> open;
 };
 
-GameDeclSource::GameDeclSource(const std::filesystem::path& gamePath)
+namespace
+{
+
+Result<std::unique_ptr<fs::ZipFileSystem>> openZip(const std::filesystem::path& path)
+{
+  return fs::createCFile(path) | kdl::and_then([](auto file) {
+           return fs::createImageFileSystem<fs::ZipFileSystem>(std::move(file));
+         });
+}
+
+} // namespace
+
+GameDeclSource::GameDeclSource(
+  const std::filesystem::path& gamePath, const std::atomic<bool>* cancel)
   : m_base{gamePath / "base"}
+  , m_cancel{cancel}
 {
   // AddGameDirectory( <game path>, "base" ), FileSystem.cpp:3174-3252
-  auto resourceNames = listOsFiles(m_base, ".resources");
+  auto resourceNames = listOsFiles(m_base, ".resources", &m_warnings, m_cancel);
   sortEnginePaths(resourceNames);
-  auto mapResourceNames = listOsFiles(m_base / "maps", ".resources");
+  auto mapResourceNames =
+    listOsFiles(m_base / "maps", ".resources", &m_warnings, m_cancel);
   sortEnginePaths(mapResourceNames);
   for (auto& name : mapResourceNames)
   {
@@ -199,7 +200,7 @@ GameDeclSource::GameDeclSource(const std::filesystem::path& gamePath)
   {
     for (auto k = i + 1; k < resourceNames.size(); ++k)
     {
-      if (icmpn(resourceNames[i], resourceNames[k], resourceNames[i].size() + 1) == 0)
+      if (equalsNoCaseAscii(resourceNames[i], resourceNames[k]))
       {
         keep[i] = false;
         break;
@@ -209,76 +210,119 @@ GameDeclSource::GameDeclSource(const std::filesystem::path& gamePath)
 
   for (std::size_t i = 0; i < resourceNames.size(); ++i)
   {
-    if (!keep[i])
+    if (cancelled())
+    {
+      return;
+    }
+    const auto path = pathFromUtf8(resourceNames[i]);
+    if (!keep[i] || !path)
     {
       continue;
     }
-    if (
-      auto container = ResourceContainer::open(
-        m_base / pathFromUtf8(resourceNames[i]), resourceNames[i], m_warnings))
-    {
-      m_resources.push_back(
-        std::make_unique<Resources>(Resources{std::move(*container), std::nullopt}));
-    }
+    ResourceContainer::open(m_base / *path, resourceNames[i], m_warnings, m_cancel)
+      | kdl::transform([&](ResourceContainer container) {
+          m_resources.push_back(
+            std::make_unique<Resources>(Resources{std::move(container), std::nullopt}));
+        })
+      | kdl::transform_error([&](const auto& e) {
+          if (!cancelled())
+          {
+            m_warnings.push_back(e.msg);
+          }
+        });
   }
 
   // RB: Zip support, the base pass only
-  auto pk4Names = listOsFiles(m_base, ".pk4");
+  auto pk4Names = listOsFiles(m_base, ".pk4", &m_warnings, m_cancel);
   sortEnginePaths(pk4Names);
   for (const auto& name : pk4Names)
   {
-    auto pk4 = std::make_unique<Pk4>();
-    pk4->name = name;
-    pk4->path = m_base / pathFromUtf8(name);
+    // a .pk4's central directory is read in one call (TbFsLib), so a stop waits for one
+    if (cancelled())
+    {
+      return;
+    }
+    if (auto pk4 = readPk4(name))
+    {
+      m_pk4s.push_back(std::move(pk4));
+    }
+  }
+}
 
-    auto zip = fs::createCFile(pk4->path) | kdl::and_then([](auto file) {
-                 return fs::createImageFileSystem<fs::ZipFileSystem>(std::move(file));
-               });
+GameDeclSource::~GameDeclSource() = default;
+
+bool GameDeclSource::cancelled() const
+{
+  return m_cancel && m_cancel->load();
+}
+
+std::unique_ptr<GameDeclSource::Pk4> GameDeclSource::readPk4(const std::string& name)
+{
+  const auto path = pathFromUtf8(name);
+  if (!path)
+  {
+    return nullptr;
+  }
+
+  auto pk4 = std::make_unique<Pk4>();
+  pk4->name = name;
+  pk4->path = m_base / *path;
+
+  try
+  {
+    auto zip = openZip(pk4->path);
     if (zip.is_error())
     {
-      m_warnings.push_back(fmt::format("Unable to open zip file {}", name));
-      continue;
+      m_warnings.push_back(fmt::format(
+        "Unable to open zip file {}: {}", name, std::get<Error>(zip.error()).msg));
+      return nullptr;
     }
     auto zipFileSystem = std::move(zip).value();
 
     auto paths = zipFileSystem->find("", fs::TraversalMode::Recursive);
     if (paths.is_error())
     {
-      m_warnings.push_back(fmt::format("Unable to open zip file {}", name));
-      continue;
+      m_warnings.push_back(fmt::format(
+        "Unable to open zip file {}: {}", name, std::get<Error>(paths.error()).msg));
+      return nullptr;
     }
 
     auto binary = false;
-    for (const auto& path : paths.value())
+    for (const auto& entryPath : paths.value())
     {
       if (
-        static_cast<const fs::FileSystem&>(*zipFileSystem).pathInfo(path)
+        static_cast<const fs::FileSystem&>(*zipFileSystem).pathInfo(entryPath)
         != fs::PathInfo::File)
       {
         continue;
       }
-      const auto generic = path.generic_u8string();
-      const auto entryName =
-        canonicalResourceName(std::string{generic.begin(), generic.end()});
+      // G3: a name that is not valid Unicode is skipped, never thrown for
+      const auto utf8 = pathToUtf8(entryPath);
+      if (!utf8)
+      {
+        m_warnings.push_back(fmt::format(
+          "Zip file {}: an entry name is not valid Unicode; it is skipped", name));
+        continue;
+      }
+      const auto entryName = canonicalResourceName(*utf8);
       binary = binary || entryName == BinaryConfig;
-      if (pk4->index.emplace(entryName, path).second)
+      if (pk4->index.emplace(entryName, entryPath).second)
       {
         pk4->names.push_back(entryName);
       }
     }
-    if (binary)
-    {
-      // "ignore all binary paks", without a message
-      continue;
-    }
-    m_pk4s.push_back(std::move(pk4));
+    // "ignore all binary paks", without a message
+    return binary ? nullptr : std::move(pk4);
+  }
+  catch (const std::exception& e)
+  {
+    m_warnings.push_back(fmt::format("Unable to open zip file {}: {}", name, e.what()));
+    return nullptr;
   }
 }
 
-GameDeclSource::~GameDeclSource() = default;
-
 std::vector<std::string> GameDeclSource::listFiles(
-  const std::string& folder, const std::string& extension) const
+  const std::string& folder, const std::string& extension)
 {
   auto names = std::vector<std::string>{};
   auto seen = std::unordered_set<std::string>{};
@@ -311,40 +355,66 @@ std::vector<std::string> GameDeclSource::listFiles(
       }
     }
   }
-  for (auto& name : listOsFiles(m_base / pathFromUtf8(folder), extension))
+  if (const auto folderPath = pathFromUtf8(folder))
   {
-    add(std::move(name));
+    for (auto& name : listOsFiles(m_base / *folderPath, extension, &m_warnings, m_cancel))
+    {
+      add(std::move(name));
+    }
   }
 
   return names;
 }
 
 std::optional<std::string> GameDeclSource::readLoose(
-  const std::string& path, std::int64_t* timestamp) const
+  const std::string& path, std::int64_t* timestamp)
 {
-  const auto file = findLooseFile(m_base / pathFromUtf8(path));
+  const auto relative = pathFromUtf8(path);
+  if (!relative)
+  {
+    return std::nullopt;
+  }
+  const auto file = findLooseFile(m_base / *relative);
   if (!file)
   {
     return std::nullopt;
   }
 
-  auto error = std::string{};
-  auto text = readGameFile(*file, &error);
-  if (!text)
+  // A3.5: the file is statted before and after the read; while a save changes it, the
+  // read is tried again, and a file that keeps changing asks for another build
+  for (auto attempt = 0; attempt < MaxLooseReadAttempts; ++attempt)
   {
-    m_warnings.push_back(error);
-    return std::nullopt;
+    const auto before = statGameFile(*file);
+    auto text = readGameFile(*file);
+    if (text.is_error())
+    {
+      // OpenFileReadFlags goes on to the containers without a message, and so does this
+      return std::nullopt;
+    }
+    const auto after = statGameFile(*file);
+    auto bytes = std::move(text).value();
+    const auto stable =
+      before && after && *before == *after && after->size == bytes.size();
+    if (stable || attempt + 1 == MaxLooseReadAttempts)
+    {
+      if (!stable)
+      {
+        m_changedWhileRead = true;
+        m_warnings.push_back(
+          fmt::format("{} changed while it was read; it is read again later", path));
+      }
+      if (timestamp)
+      {
+        *timestamp = after ? after->time : 0;
+      }
+      return bytes;
+    }
   }
-  if (timestamp)
-  {
-    const auto stat = statGameFile(*file);
-    *timestamp = stat ? stat->time : 0;
-  }
-  return text;
+  return std::nullopt;
 }
 
 std::optional<std::string> GameDeclSource::readFile(
-  const std::string& path, std::int64_t* timestamp) const
+  const std::string& path, std::int64_t* timestamp)
 {
   if (timestamp)
   {
@@ -377,42 +447,7 @@ std::optional<std::string> GameDeclSource::readFile(
     {
       continue;
     }
-
-    if (!pk4.open)
-    {
-      auto zip = fs::createCFile(pk4.path) | kdl::and_then([](auto file) {
-                   return fs::createImageFileSystem<fs::ZipFileSystem>(std::move(file));
-                 });
-      if (zip.is_error())
-      {
-        m_warnings.push_back(
-          fmt::format("{}: {} cannot be opened again", *relative, pk4.name));
-        return std::nullopt;
-      }
-      pk4.open = std::move(zip).value();
-    }
-
-    auto file = pk4.open->openFile(entry->second);
-    if (file.is_error())
-    {
-      m_warnings.push_back(fmt::format(
-        "{} cannot be read from {}: {}",
-        *relative,
-        pk4.name,
-        std::get<Error>(file.error()).msg));
-      return std::nullopt;
-    }
-    try
-    {
-      auto reader = std::move(file).value()->reader();
-      return reader.readString(reader.size());
-    }
-    catch (const std::exception& e)
-    {
-      m_warnings.push_back(
-        fmt::format("{} cannot be read from {}: {}", *relative, pk4.name, e.what()));
-      return std::nullopt;
-    }
+    return readFromPk4(pk4, entry->second, *relative);
   }
 
   for (auto it = m_resources.rbegin(); it != m_resources.rend(); ++it)
@@ -426,28 +461,85 @@ std::optional<std::string> GameDeclSource::readFile(
 
     if (!resources.open)
     {
-      auto error = std::string{};
-      resources.open = GameFile::open(resources.container.path(), &error);
-      if (!resources.open)
+      auto opened = GameFile::open(resources.container.path());
+      if (opened.is_error())
       {
-        m_warnings.push_back(error);
+        m_warnings.push_back(std::get<Error>(opened.error()).msg);
         return std::nullopt;
       }
+      resources.open = std::move(opened).value();
     }
-    return resources.container.read(*entry, *resources.open, m_warnings);
+    auto text = resources.container.read(*entry, *resources.open);
+    if (text.is_error())
+    {
+      m_warnings.push_back(std::get<Error>(text.error()).msg);
+      return std::nullopt;
+    }
+    return std::move(text).value();
   }
 
   return std::nullopt;
+}
+
+std::optional<std::string> GameDeclSource::readFromPk4(
+  Pk4& pk4, const std::filesystem::path& entryPath, const std::string& path)
+{
+  try
+  {
+    if (!pk4.open)
+    {
+      auto zip = openZip(pk4.path);
+      if (zip.is_error())
+      {
+        m_warnings.push_back(fmt::format(
+          "{}: {} cannot be opened again: {}",
+          path,
+          pk4.name,
+          std::get<Error>(zip.error()).msg));
+        return std::nullopt;
+      }
+      pk4.open = std::move(zip).value();
+    }
+
+    auto file = pk4.open->openFile(entryPath);
+    if (file.is_error())
+    {
+      m_warnings.push_back(fmt::format(
+        "{} cannot be read from {}: {}",
+        path,
+        pk4.name,
+        std::get<Error>(file.error()).msg));
+      return std::nullopt;
+    }
+    auto reader = std::move(file).value()->reader();
+    return reader.readString(reader.size());
+  }
+  catch (const std::exception& e)
+  {
+    m_warnings.push_back(
+      fmt::format("{} cannot be read from {}: {}", path, pk4.name, e.what()));
+    return std::nullopt;
+  }
 }
 
 std::vector<DeclFileTime> GameDeclSource::looseFileTimes(
   const std::string& folder, const std::string& extension) const
 {
   auto times = std::vector<DeclFileTime>{};
-  const auto folderPath = m_base / pathFromUtf8(folder);
-  for (const auto& name : listOsFiles(folderPath, extension))
+  const auto folderPath = pathFromUtf8(folder);
+  if (!folderPath)
   {
-    if (const auto stat = statGameFile(folderPath / pathFromUtf8(name)))
+    return times;
+  }
+  const auto base = m_base / *folderPath;
+  for (const auto& name : listOsFiles(base, extension))
+  {
+    const auto namePath = pathFromUtf8(name);
+    if (!namePath)
+    {
+      continue;
+    }
+    if (const auto stat = statGameFile(base / *namePath))
     {
       times.push_back(DeclFileTime{folder + "/" + name, stat->time, stat->size});
     }
@@ -475,6 +567,11 @@ void GameDeclSource::closeFiles()
   }
 }
 
+bool GameDeclSource::changedWhileRead() const
+{
+  return m_changedWhileRead;
+}
+
 std::optional<GameFileOrigin> GameDeclSource::origin(const std::string& path) const
 {
   const auto relative = checkedRelativePath(path);
@@ -482,7 +579,8 @@ std::optional<GameFileOrigin> GameDeclSource::origin(const std::string& path) co
   {
     return std::nullopt;
   }
-  if (findLooseFile(m_base / pathFromUtf8(*relative)))
+  const auto relativePath = pathFromUtf8(*relative);
+  if (relativePath && findLooseFile(m_base / *relativePath))
   {
     return GameFileOrigin{GameFileOrigin::Kind::Loose, {}};
   }

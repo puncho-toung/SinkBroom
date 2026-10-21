@@ -1675,7 +1675,8 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     REQUIRE(harness.startAndWaitForFrame());
     auto* materials = panel.materialsForTesting();
     REQUIRE(materials != nullptr);
-    REQUIRE(materials->waitForStats([](const auto& s) { return s.parseAllDone; }, 10s));
+    REQUIRE(materials->waitForStatsForTesting(
+      [](const auto& s) { return s.parseAllDone; }, 10s));
     CHECK(materials->stats().materials > 0);
     REQUIRE(QTest::qWaitFor(
       [&] { return logger.contains(LogLevel::Info, "Lit preview materials: Parsed "); },

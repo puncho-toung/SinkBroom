@@ -17,6 +17,16 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+// ---- engine notice ----
+// Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
+// GPL Source Code and RBDOOM-3-BFG (neo/framework/FileSystem.cpp and
+// framework/CVarSystem.cpp):
+//   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
+//   Copyright (C) 2012-2024 Robert Beckebans
+// That code is also subject to the additional terms that follow the GNU General
+// Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
+// ---- end of engine notice ----
+
 // The framework services for the copied code: cvars at engine defaults, the message
 // collector behind idCommon, and the file system over a DeclSource.
 
@@ -35,15 +45,7 @@ int com_editors = 0;
 namespace
 {
 
-void reportV(const tb::lit::DeclMessageKind kind, const char* fmt, va_list argptr)
-{
-  char text[MAX_PRINT_MSG];
-  idStr::vsnPrintf(text, sizeof(text), fmt, argptr);
-  if (auto* registry = tb::lit::shim::Registry::current())
-  {
-    registry->report(kind, text);
-  }
-}
+using tb::lit::shim::reportV;
 
 // the cvars the copied code reads through cvarSystem by name, at their engine defaults
 struct NamedCVar
@@ -165,8 +167,75 @@ void idCommon::FatalError(const char* fmt, ...)
   va_end(argptr);
 }
 
+namespace
+{
+
+// idLexer::ReadName's characters with LEXFL_ALLOWPATHNAMES (Lexer.cpp:766-773)
+bool isNameCharacter(const char c)
+{
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+         || c == '_' || c == '/' || c == '\\' || c == ':' || c == '.';
+}
+
+/**
+ * M-ID-GUARD-06: whether the text holds a token that the copied MakeNameCanonical writes
+ * one byte past its MAX_STRING_CHARS buffer for: a name, or a quoted string, of
+ * MAX_STRING_CHARS or more characters with no '.' among the first MAX_STRING_CHARS (a dot
+ * there ends the canonical name before the buffer does). Any token can reach it as a decl
+ * name, an inherit value, a table or a material a skin names, so a file holding one is
+ * never parsed. Conservative: a run inside a comment counts too. A quoted string ends at
+ * its quote or its line, as idLexer::ReadString reads it.
+ */
+bool holdsOverlongToken(const std::string& text)
+{
+  const auto limit = std::size_t(MAX_STRING_CHARS);
+  auto run = std::size_t{0};
+  auto dotted = false;
+  auto inString = false;
+  const auto restart = [&] {
+    run = 0;
+    dotted = false;
+  };
+  for (const auto c : text)
+  {
+    if (inString)
+    {
+      if (c == '"' || c == '\n')
+      {
+        inString = false;
+        restart();
+        continue;
+      }
+    }
+    else if (c == '"')
+    {
+      inString = true;
+      restart();
+      continue;
+    }
+    else if (!isNameCharacter(c))
+    {
+      restart();
+      continue;
+    }
+
+    if (run < limit && c == '.')
+    {
+      dotted = true;
+    }
+    ++run;
+    if (run >= limit && !dotted)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
 idFileSystemLocal::idFileSystemLocal(
-  const tb::lit::DeclSource& source, const std::atomic<bool>* cancel)
+  tb::lit::DeclSource& source, const std::atomic<bool>* cancel)
   : m_source{source}
   , m_cancel{cancel}
 {
@@ -185,7 +254,23 @@ idFileList* idFileSystemLocal::ListFiles(
   fileList->basePath = relativePath;
 
   const auto folder = std::string{relativePath};
-  for (const auto& name : m_source.listFiles(folder, std::string{extension}))
+  auto names = std::vector<std::string>{};
+  // the exception boundary (C17): a source that throws lists nothing
+  try
+  {
+    names = m_source.listFiles(folder, std::string{extension});
+  }
+  catch (const std::exception& e)
+  {
+    tb::lit::shim::reportWarning(
+      "The decl files of " + folder + " cannot be listed: " + e.what());
+  }
+  catch (...)
+  {
+    tb::lit::shim::reportWarning("The decl files of " + folder + " cannot be listed");
+  }
+
+  for (const auto& name : names)
   {
     auto entry = idStr{name.c_str()};
     if (fullRelativePath)
@@ -250,17 +335,51 @@ int idFileSystemLocal::ReadFile(
     return 0;
   }
 
-  auto time = std::int64_t{0};
-  const auto text = m_source.readFile(std::string{relativePath}, &time);
   if (timestamp)
   {
-    *timestamp = text ? ID_TIME_T(time) : FILE_NOT_FOUND_TIMESTAMP;
+    *timestamp = FILE_NOT_FOUND_TIMESTAMP;
+  }
+
+  const auto path = std::string{relativePath};
+  auto time = std::int64_t{0};
+  auto text = std::optional<std::string>{};
+  // the exception boundary (C17): a source that throws makes the file unreadable
+  try
+  {
+    text = m_source.readFile(path, &time);
+  }
+  catch (const std::exception& e)
+  {
+    tb::lit::shim::reportWarning(path + " cannot be read: " + e.what());
+  }
+  catch (...)
+  {
+    tb::lit::shim::reportWarning(path + " cannot be read");
   }
   if (!text)
   {
     return -1;
   }
 
+  // the engine's lengths are ints
+  if (text->size() >= std::size_t(INT_MAX))
+  {
+    tb::lit::shim::reportWarning(path + " is 2 GB or larger; it is not read");
+    return -1;
+  }
+  if (holdsOverlongToken(*text))
+  {
+    tb::lit::shim::reportWarning(
+      path
+      + " holds a name of 1024 or more characters, which the engine's "
+        "MakeNameCanonical cannot take; it is not read");
+    return -1;
+  }
+
+  if (timestamp)
+  {
+    *timestamp = ID_TIME_T(time);
+  }
   const auto length = int(text->size());
   if (buffer)
   {

@@ -17,6 +17,17 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+// ---- engine notice ----
+// Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
+// GPL Source Code and RBDOOM-3-BFG (neo/sys/win32/win_main.cpp, sys/posix/posix_main.cpp
+// and framework/FileSystem.cpp):
+//   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
+//   Copyright (C) 1999-2011 id Software LLC, a ZeniMax Media company.
+//   Copyright (C) 2012-2025 Robert Beckebans
+// That code is also subject to the additional terms that follow the GNU General
+// Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
+// ---- end of engine notice ----
+
 #include "lit/GameFile.h"
 
 #if defined(_WIN32)
@@ -31,6 +42,8 @@
 #include <unistd.h>
 #endif
 
+#include "kd/result.h"
+
 #include <fmt/format.h>
 
 #include <algorithm>
@@ -42,21 +55,26 @@ namespace tb::lit
 namespace
 {
 
-char toLowerAscii(const char c)
+std::string displayPath(const std::filesystem::path& path)
 {
-  return c >= 'A' && c <= 'Z' ? char(c + ('a' - 'A')) : c;
+  return pathToUtf8(path).value_or("<a path that is not valid Unicode>");
 }
 
-bool endsWithNoCaseAscii(const std::string& text, const std::string& suffix)
+#if defined(_WIN32)
+
+// the ASCII suffix test on a name that is not converted yet: only 'A' to 'Z' fold
+bool wideEndsWithNoCaseAscii(const std::wstring& text, const std::string_view suffix)
 {
   if (text.size() < suffix.size())
   {
     return false;
   }
-  const auto offset = text.size() - suffix.size();
+  const auto start = text.size() - suffix.size();
   for (std::size_t i = 0; i < suffix.size(); ++i)
   {
-    if (toLowerAscii(text[offset + i]) != toLowerAscii(suffix[i]))
+    const auto c = text[start + i];
+    const auto folded = c >= L'A' && c <= L'Z' ? wchar_t(c - L'A' + L'a') : c;
+    if (folded != wchar_t(toLowerAscii(suffix[i])))
     {
       return false;
     }
@@ -64,95 +82,200 @@ bool endsWithNoCaseAscii(const std::string& text, const std::string& suffix)
   return true;
 }
 
-#if !defined(_WIN32)
-bool equalsNoCaseAscii(const std::string& lhs, const std::string& rhs)
+/**
+ * ListFilesRecursive (win_main.cpp:1017-1058): the folder's files ending in the
+ * extension, then those of each folder below, with prefix in front. A folder that cannot
+ * be read lists nothing, as FindFirstFileW failing returns; the others are still listed.
+ */
+void listFolderRecursive(
+  const std::filesystem::path& folder,
+  const std::string& prefix,
+  const std::string& extension,
+  std::vector<std::string>& names,
+  std::vector<std::string>* warnings,
+  const std::atomic<bool>* cancel)
 {
-  if (lhs.size() != rhs.size())
+  auto ec = std::error_code{};
+  const auto options = std::filesystem::directory_options::skip_permission_denied;
+  auto it = std::filesystem::directory_iterator{folder, options, ec};
+  for (; !ec && it != std::filesystem::directory_iterator{}; it.increment(ec))
   {
-    return false;
-  }
-  for (std::size_t i = 0; i < lhs.size(); ++i)
-  {
-    if (toLowerAscii(lhs[i]) != toLowerAscii(rhs[i]))
+    if (cancel && cancel->load())
     {
-      return false;
+      return;
+    }
+
+    const auto& entry = *it;
+    auto statusError = std::error_code{};
+    const auto status = entry.symlink_status(statusError);
+    if (statusError)
+    {
+      continue;
+    }
+
+    const auto fileName = entry.path().filename();
+    const auto name = pathToUtf8(fileName);
+    if (!name)
+    {
+      // only a folder, or a file this listing would return, is worth a warning
+      const auto wanted = std::filesystem::is_directory(status)
+                          || wideEndsWithNoCaseAscii(fileName.native(), extension);
+      if (warnings && wanted)
+      {
+        warnings->push_back(fmt::format(
+          "A file name in {} is not valid Unicode; it is skipped", displayPath(folder)));
+      }
+      continue;
+    }
+
+    if (std::filesystem::is_directory(status))
+    {
+      listFolderRecursive(
+        entry.path(), prefix + *name + "/", extension, names, warnings, cancel);
+      continue;
+    }
+    if (!std::filesystem::is_regular_file(status))
+    {
+      // a junction or a link to a folder is not followed (mirror.json)
+      auto targetError = std::error_code{};
+      if (entry.is_directory(targetError) || targetError)
+      {
+        continue;
+      }
+    }
+    if (endsWithNoCaseAscii(*name, extension))
+    {
+      names.push_back(prefix + *name);
     }
   }
-  return true;
 }
+
+#else
+
+bool equalsAsciiPaths(const std::string& lhs, const std::string& rhs)
+{
+  return equalsNoCaseAscii(lhs, rhs);
+}
+
 #endif
 
 } // namespace
 
-std::string pathToUtf8(const std::filesystem::path& path)
+char toLowerAscii(const char c)
 {
-  const auto text = path.u8string();
-  return std::string{text.begin(), text.end()};
+  return c >= 'A' && c <= 'Z' ? char(c + ('a' - 'A')) : c;
 }
 
-std::filesystem::path pathFromUtf8(const std::string& path)
+std::string toLowerAscii(const std::string_view text)
 {
-  return std::filesystem::path{std::u8string{path.begin(), path.end()}};
+  auto result = std::string{text};
+  for (auto& c : result)
+  {
+    c = toLowerAscii(c);
+  }
+  return result;
 }
 
-std::optional<GameFile> GameFile::open(
-  const std::filesystem::path& path, std::string* error)
+int compareNoCaseAscii(
+  const std::string_view lhs, const std::string_view rhs, const std::size_t count)
+{
+  for (std::size_t i = 0; i < count; ++i)
+  {
+    const auto a = i < lhs.size() ? lhs[i] : '\0';
+    const auto b = i < rhs.size() ? rhs[i] : '\0';
+    const auto la = toLowerAscii(a);
+    const auto lb = toLowerAscii(b);
+    if (la != lb)
+    {
+      return la < lb ? -1 : 1;
+    }
+    if (a == '\0')
+    {
+      return 0;
+    }
+  }
+  return 0;
+}
+
+bool equalsNoCaseAscii(const std::string_view lhs, const std::string_view rhs)
+{
+  return lhs.size() == rhs.size() && compareNoCaseAscii(lhs, rhs, lhs.size()) == 0;
+}
+
+bool endsWithNoCaseAscii(const std::string_view text, const std::string_view suffix)
+{
+  return text.size() >= suffix.size()
+         && equalsNoCaseAscii(text.substr(text.size() - suffix.size()), suffix);
+}
+
+std::optional<std::string> pathToUtf8(const std::filesystem::path& path) noexcept
+{
+  try
+  {
+    const auto text = path.u8string();
+    return std::string{text.begin(), text.end()};
+  }
+  catch (...)
+  {
+    return std::nullopt;
+  }
+}
+
+std::optional<std::filesystem::path> pathFromUtf8(const std::string& path) noexcept
+{
+  try
+  {
+    return std::filesystem::path{std::u8string{path.begin(), path.end()}};
+  }
+  catch (...)
+  {
+    return std::nullopt;
+  }
+}
+
+Result<GameFile> GameFile::open(const std::filesystem::path& path)
 {
   auto file = GameFile{};
 #if defined(_WIN32)
-  // share read and delete (R4-3.26); a directory fails without FILE_FLAG_BACKUP_SEMANTICS
+  // share read, write and delete (R4-3.26); a directory fails without
+  // FILE_FLAG_BACKUP_SEMANTICS
   const auto handle = CreateFileW(
     path.c_str(),
     GENERIC_READ,
-    FILE_SHARE_READ | FILE_SHARE_DELETE,
+    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
     nullptr,
     OPEN_EXISTING,
     FILE_ATTRIBUTE_NORMAL,
     nullptr);
   if (handle == INVALID_HANDLE_VALUE)
   {
-    if (error)
-    {
-      *error = fmt::format("cannot open {} (error {})", pathToUtf8(path), GetLastError());
-    }
-    return std::nullopt;
+    return Error{
+      fmt::format("Cannot open {} (error {})", displayPath(path), GetLastError())};
   }
   file.m_handle = handle;
 
   auto size = LARGE_INTEGER{};
   if (!GetFileSizeEx(handle, &size))
   {
-    if (error)
-    {
-      *error = fmt::format("cannot read the size of {}", pathToUtf8(path));
-    }
-    return std::nullopt;
+    return Error{fmt::format("Cannot read the size of {}", displayPath(path))};
   }
   file.m_size = std::uint64_t(size.QuadPart);
 #else
   const auto fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0)
   {
-    if (error)
-    {
-      *error = fmt::format("cannot open {}", pathToUtf8(path));
-    }
-    return std::nullopt;
+    return Error{fmt::format("Cannot open {}", displayPath(path))};
   }
   file.m_fd = fd;
 
   struct stat status{};
   if (fstat(fd, &status) != 0 || !S_ISREG(status.st_mode))
   {
-    if (error)
-    {
-      *error = fmt::format("{} is not a readable file", pathToUtf8(path));
-    }
-    return std::nullopt;
+    return Error{fmt::format("{} is not a readable file", displayPath(path))};
   }
   file.m_size = std::uint64_t(status.st_size);
 #endif
-  return file;
+  return Result<GameFile>{std::move(file)};
 }
 
 GameFile::GameFile(GameFile&& other) noexcept
@@ -207,12 +330,13 @@ std::uint64_t GameFile::size() const
   return m_size;
 }
 
-bool GameFile::readAt(
+Result<void> GameFile::readAt(
   const std::uint64_t offset, char* buffer, const std::size_t length) const
 {
   if (offset > m_size || length > m_size - offset)
   {
-    return false;
+    return Error{fmt::format(
+      "{} bytes at {} do not fit in a file of {} bytes", length, offset, m_size)};
   }
 
   auto done = std::size_t{0};
@@ -223,47 +347,38 @@ bool GameFile::readAt(
     auto overlapped = OVERLAPPED{};
     overlapped.Offset = DWORD(position & 0xFFFFFFFFu);
     overlapped.OffsetHigh = DWORD(position >> 32);
-    const auto chunk = DWORD(std::min<std::size_t>(length - done, 1u << 30));
-    auto read = DWORD{0};
-    if (!ReadFile(m_handle, buffer + done, chunk, &read, &overlapped) || read == 0)
+    const auto chunk = DWORD(std::min<std::size_t>(length - done, std::size_t{1} << 30));
+    auto bytesRead = DWORD{0};
+    if (
+      !ReadFile(m_handle, buffer + done, chunk, &bytesRead, &overlapped)
+      || bytesRead == 0)
     {
-      return false;
+      return Error{fmt::format("Reading {} bytes at {} failed", length, offset)};
     }
 #else
-    const auto read = ::pread(m_fd, buffer + done, length - done, off_t(offset + done));
-    if (read <= 0)
+    const auto bytesRead =
+      ::pread(m_fd, buffer + done, length - done, off_t(offset + done));
+    if (bytesRead <= 0)
     {
-      return false;
+      return Error{fmt::format("Reading {} bytes at {} failed", length, offset)};
     }
 #endif
-    done += std::size_t(read);
+    done += std::size_t(bytesRead);
   }
-  return true;
+  return kdl::void_success;
 }
 
-std::optional<std::string> readGameFile(
-  const std::filesystem::path& path, std::string* error)
+Result<std::string> readGameFile(const std::filesystem::path& path)
 {
-  auto file = GameFile::open(path, error);
-  if (!file)
-  {
-    return std::nullopt;
-  }
-
-  auto text = std::string{};
-  text.resize(std::size_t(file->size()));
-  if (!file->readAt(0, text.data(), text.size()))
-  {
-    if (error)
-    {
-      *error = fmt::format("cannot read {}", pathToUtf8(path));
-    }
-    return std::nullopt;
-  }
-  return text;
+  return GameFile::open(path) | kdl::and_then([&](GameFile file) -> Result<std::string> {
+           auto text = std::string{};
+           text.resize(std::size_t(file.size()));
+           return file.readAt(0, text.data(), text.size())
+                  | kdl::transform([&]() { return std::move(text); });
+         });
 }
 
-std::optional<GameFileStat> statGameFile(const std::filesystem::path& path)
+std::optional<GameFileStat> statGameFile(const std::filesystem::path& path) noexcept
 {
   auto ec = std::error_code{};
   if (!std::filesystem::is_regular_file(path, ec) || ec)
@@ -284,36 +399,27 @@ std::optional<GameFileStat> statGameFile(const std::filesystem::path& path)
 }
 
 std::vector<std::string> listOsFiles(
-  const std::filesystem::path& folder, const std::string& extension)
+  const std::filesystem::path& folder,
+  const std::string& extension,
+  std::vector<std::string>* warnings,
+  const std::atomic<bool>* cancel)
 {
   auto names = std::vector<std::string>{};
-  auto ec = std::error_code{};
 
 #if defined(_WIN32)
-  // ListFilesRecursive: every folder below, the name matched by PathMatchSpecW
-  const auto options = std::filesystem::directory_options::skip_permission_denied;
-  for (auto it = std::filesystem::recursive_directory_iterator{folder, options, ec};
-       !ec && it != std::filesystem::recursive_directory_iterator{};
-       it.increment(ec))
-  {
-    auto entryError = std::error_code{};
-    if (it->is_directory(entryError))
-    {
-      continue;
-    }
-    if (endsWithNoCaseAscii(pathToUtf8(it->path().filename()), extension))
-    {
-      const auto relative = it->path().lexically_relative(folder).generic_u8string();
-      names.emplace_back(relative.begin(), relative.end());
-    }
-  }
+  listFolderRecursive(folder, {}, extension, names, warnings, cancel);
 #else
   // the folder only; fnmatch( "*<extension>", name, 0 ) and stat says no directory
   const auto pattern = "*" + extension;
+  auto ec = std::error_code{};
   for (auto it = std::filesystem::directory_iterator{folder, ec};
        !ec && it != std::filesystem::directory_iterator{};
        it.increment(ec))
   {
+    if (cancel && cancel->load())
+    {
+      break;
+    }
     auto entryError = std::error_code{};
     const auto status = it->status(entryError);
     if (entryError || std::filesystem::is_directory(status))
@@ -321,9 +427,18 @@ std::vector<std::string> listOsFiles(
       continue;
     }
     const auto name = pathToUtf8(it->path().filename());
-    if (fnmatch(pattern.c_str(), name.c_str(), 0) == 0)
+    if (!name)
     {
-      names.push_back(name);
+      if (warnings)
+      {
+        warnings->push_back(fmt::format(
+          "A file name in {} is not valid Unicode; it is skipped", displayPath(folder)));
+      }
+      continue;
+    }
+    if (fnmatch(pattern.c_str(), name->c_str(), 0) == 0)
+    {
+      names.push_back(*name);
     }
   }
 #endif
@@ -331,34 +446,47 @@ std::vector<std::string> listOsFiles(
   return names;
 }
 
-std::optional<std::filesystem::path> findLooseFile(const std::filesystem::path& path)
+std::optional<std::filesystem::path> findLooseFile(
+  const std::filesystem::path& path) noexcept
 {
-  auto ec = std::error_code{};
-  if (std::filesystem::is_regular_file(path, ec))
+  try
   {
-    return path;
-  }
-#if defined(_WIN32)
-  return std::nullopt;
-#else
-  // OpenOSFile's fallback: the folder's files compared case-insensitively
-  const auto folder = path.parent_path();
-  const auto wanted = pathToUtf8(path);
-  for (auto it = std::filesystem::directory_iterator{folder, ec};
-       !ec && it != std::filesystem::directory_iterator{};
-       it.increment(ec))
-  {
-    if (equalsNoCaseAscii(pathToUtf8(it->path()), wanted))
+    auto ec = std::error_code{};
+    if (std::filesystem::is_regular_file(path, ec))
     {
-      auto entryError = std::error_code{};
-      if (std::filesystem::is_regular_file(it->path(), entryError))
+      return path;
+    }
+#if defined(_WIN32)
+    return std::nullopt;
+#else
+    // OpenOSFile's fallback: the folder's files compared case-insensitively
+    const auto wanted = pathToUtf8(path);
+    if (!wanted)
+    {
+      return std::nullopt;
+    }
+    const auto folder = path.parent_path();
+    for (auto it = std::filesystem::directory_iterator{folder, ec};
+         !ec && it != std::filesystem::directory_iterator{};
+         it.increment(ec))
+    {
+      const auto candidate = pathToUtf8(it->path());
+      if (candidate && equalsAsciiPaths(*candidate, *wanted))
       {
-        return it->path();
+        auto entryError = std::error_code{};
+        if (std::filesystem::is_regular_file(it->path(), entryError))
+        {
+          return it->path();
+        }
       }
     }
-  }
-  return std::nullopt;
+    return std::nullopt;
 #endif
+  }
+  catch (...)
+  {
+    return std::nullopt;
+  }
 }
 
 } // namespace tb::lit

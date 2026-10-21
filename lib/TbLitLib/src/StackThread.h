@@ -19,13 +19,12 @@
 
 #pragma once
 
+#include "base/Result.h"
+
 #include <cstddef>
 #include <functional>
-#include <string>
 
-#if defined(_WIN32)
-#include <thread>
-#else
+#if !defined(_WIN32)
 #include <pthread.h>
 #endif
 
@@ -33,16 +32,17 @@ namespace tb::lit
 {
 
 /**
- * A thread with a known stack (R4-1.1, R4-3.25). On Windows it is a std::thread, which
- * gets the executable's stack reserve (8 MB for TrenchBroom, /STACK in its CMakeLists).
- * Elsewhere it is a pthread with posixStackBytes, because a macOS secondary thread gets
- * only 512 KB. The owner joins it before destroying it.
+ * A thread with an explicit stack size (R4-1.1, R4-3.25, G13), the same on every platform
+ * and whatever the executable reserves: neither std::thread nor TrenchBroom can set one,
+ * and Qt is not used here (D28). On Windows it is _beginthreadex with the size as a
+ * reservation, elsewhere a pthread with the size set. The owner joins it before
+ * destroying it.
  */
 class StackThread
 {
 private:
 #if defined(_WIN32)
-  std::thread m_thread;
+  void* m_handle = nullptr;
 #else
   pthread_t m_thread{};
   bool m_started = false;
@@ -55,8 +55,8 @@ public:
   StackThread(const StackThread&) = delete;
   StackThread& operator=(const StackThread&) = delete;
 
-  // false, with the reason, when the thread could not be created
-  bool start(std::function<void()> body, std::size_t posixStackBytes, std::string* error);
+  // fails when the thread cannot be created
+  Result<void> start(std::function<void()> body, std::size_t stackBytes);
   bool joinable() const;
   void join();
 };

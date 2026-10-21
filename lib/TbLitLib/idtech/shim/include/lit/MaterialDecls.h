@@ -64,7 +64,8 @@ struct DeclFileTime
 // engine's file system answers for the decl manager: the files of a folder with an
 // extension (idFileSystem::ListFiles, names relative to the folder) and a file's text and
 // time (idFileSystem::ReadFile). lit/GameDeclSource.h implements it with the game-file
-// search. The registry calls it only on the thread that owns the registry.
+// search. The registry calls it only on the thread that owns the registry. A source may
+// throw: the registry's file system catches and reports it (C17).
 class DeclSource
 {
 public:
@@ -74,12 +75,13 @@ public:
   // the order GetFileList adds them; the registry adds each once case-insensitively and
   // sorts them as the engine does
   virtual std::vector<std::string> listFiles(
-    const std::string& folder, const std::string& extension) const = 0;
+    const std::string& folder, const std::string& extension) = 0;
 
   // the file's bytes and its time, or nullopt when it cannot be read; path is relative to
-  // the game folder ("materials/base_wall.mtr")
+  // the game folder ("materials/base_wall.mtr"). A read may open and keep containers
+  // until closeFiles.
   virtual std::optional<std::string> readFile(
-    const std::string& path, std::int64_t* timestamp) const = 0;
+    const std::string& path, std::int64_t* timestamp) = 0;
 
   // the loose files of folder ending in extension, with their times, sorted by path; only
   // loose decl folders are polled for a reload (R4-3.26), so a source without loose files
@@ -94,6 +96,10 @@ public:
   // closes every game file the source holds open; the registry's owner calls it after
   // each read batch, so no container stays open (R4-3.26)
   virtual void closeFiles();
+
+  // a file kept changing while it was read, so what was read may be torn; the registry's
+  // owner builds again (A3.5)
+  virtual bool changedWhileRead() const;
 };
 
 // idStr::IcmpPath, the engine's path order (case-insensitive, folders first): negative,
@@ -116,9 +122,9 @@ public:
   explicit MemoryDeclSource(std::vector<DeclFile> files);
 
   std::vector<std::string> listFiles(
-    const std::string& folder, const std::string& extension) const override;
+    const std::string& folder, const std::string& extension) override;
   std::optional<std::string> readFile(
-    const std::string& path, std::int64_t* timestamp) const override;
+    const std::string& path, std::int64_t* timestamp) override;
 
 private:
   std::vector<DeclFile> m_files;
@@ -260,6 +266,9 @@ struct MaterialEntry
   bool surfaceCastsShadow = false;
   int entityGui = 0;
   std::string gui;
+  // qer_editorimage as the decl spells it, "" for none; the engine makes the image only
+  // when an editor asks for it (GetEditorImage)
+  std::string editorImageName;
   std::optional<MaterialImageKey> lightFalloffImage;
   std::optional<MaterialImageKey> fastPathBumpImage;
   std::optional<MaterialImageKey> fastPathDiffuseImage;
@@ -276,6 +285,9 @@ struct MaterialEntry
 struct EvaluatedRegisters
 {
   std::vector<float> registers;
+  // empty, unless the evaluation was refused (a material of an earlier registry, or one
+  // whose parse failed); then registers is empty and this says why
+  std::string error;
 };
 
 // a value, or the error the engine would have stopped at
@@ -312,15 +324,19 @@ public:
   static constexpr int ShaderParmCount = 12;
 
   // source must outlive this object; once cancel is set, the decl files not read yet are
-  // read as empty, so a construction stops after the file it is reading (R5.20)
-  explicit MaterialDecls(
-    const DeclSource& source, const std::atomic<bool>* cancel = nullptr);
+  // read as empty, so a construction stops after the file it is reading (R5.20). Never
+  // throws: a failure is the construction error.
+  explicit MaterialDecls(DeclSource& source, const std::atomic<bool>* cancel = nullptr);
   ~MaterialDecls();
+
+  // the decl folders the registry registers, in the engine's order (D33): materials,
+  // skins, sound, then the game's def, fx, particles, af and newpdas
+  static std::vector<DeclFolderInfo> engineDeclFolders();
 
   MaterialDecls(const MaterialDecls&) = delete;
   MaterialDecls& operator=(const MaterialDecls&) = delete;
 
-  // non-empty when the registry could not be built (another one exists)
+  // non-empty when the registry could not be built (another one exists, or it threw)
   const std::string& constructionError() const;
 
   // unique in the process; every entry this registry hands out carries it
@@ -361,6 +377,12 @@ public:
   // the decls of a type (an engine type name, "material") in the DS_DEFAULTED state: a
   // parse failed and MakeDefault replaced them
   int defaultedCount(std::string_view typeName) const;
+  // the names of every decl of a type, in index order, without parsing any (the engine's
+  // "list<Type>s all")
+  std::vector<std::string> declNames(std::string_view typeName) const;
+  // every image record the parses made so far, in the order they were made (the engine's
+  // listImages), also those of a parse that failed later
+  std::vector<MaterialImageKey> imageKeys() const;
   // the registered decl folders, in the engine's order (D33)
   std::vector<DeclFolderInfo> declFolders() const;
   // the decl files read, and their bytes (the engine's listDecls totals)
@@ -391,6 +413,7 @@ public:
 
 private:
   std::uint64_t m_id = 0;
+  bool m_claimed = false;
   std::string m_constructionError;
   std::vector<DeclMessage> m_constructionMessages;
   std::unique_ptr<shim::Registry> m_registry;

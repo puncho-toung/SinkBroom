@@ -19,6 +19,9 @@
 
 #pragma once
 
+#include "base/Result.h"
+
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -72,13 +75,15 @@ public:
   /**
    * Init: reads the header and the table of the file at path. name is the container's
    * name as the engine registers it ("_common.resources", "maps/admin.resources").
-   * nullopt when the file cannot be opened or is not a valid container; warnings says
-   * why.
+   * Fails, saying why, when the file cannot be opened or is not a valid container, or
+   * when cancel is set: the table is read entry by entry, and a stop waits for one entry.
+   * warnings receives the entries that are dropped.
    */
-  static std::optional<ResourceContainer> open(
+  static Result<ResourceContainer> open(
     const std::filesystem::path& path,
     std::string name,
-    std::vector<std::string>& warnings);
+    std::vector<std::string>& warnings,
+    const std::atomic<bool>* cancel = nullptr);
 
   const std::string& name() const;
   const std::filesystem::path& path() const;
@@ -90,13 +95,10 @@ public:
 
   /**
    * idFile_InnerResource's read: the entry's bytes from file, which must be this
-   * container's file opened now (GameFile). nullopt, with a warning, when the file has
-   * changed since the table was read or the entry no longer fits in it.
+   * container's file opened now (GameFile). Fails when the file has changed since the
+   * table was read or the entry no longer fits in it.
    */
-  std::optional<std::string> read(
-    const ResourceEntry& entry,
-    const GameFile& file,
-    std::vector<std::string>& warnings) const;
+  Result<std::string> read(const ResourceEntry& entry, const GameFile& file) const;
 
   // the file's size and time when the table was read
   std::uint64_t fileSize() const;

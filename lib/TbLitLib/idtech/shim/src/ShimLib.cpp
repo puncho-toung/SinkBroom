@@ -17,6 +17,17 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+// ---- engine notice ----
+// Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
+// GPL Source Code and RBDOOM-3-BFG (neo/idlib/Heap.cpp and
+// renderer/tr_frontend_main.cpp):
+//   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
+//   Copyright (C) 2012-2014 Robert Beckebans
+//   Copyright (C) 2012 Daniel Gibson
+// That code is also subject to the additional terms that follow the GNU General
+// Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
+// ---- end of engine notice ----
+
 // idLib's services for the copied code: the idLib wrappers, memory, the MD5 stub, asserts
 // and the localisation stubs. Every pointer here is bound by the registry (C17).
 
@@ -25,20 +36,7 @@
 #include "shim/Registry.h"
 // clang-format on
 
-namespace
-{
-
-void reportV(const tb::lit::DeclMessageKind kind, const char* fmt, va_list argptr)
-{
-  char text[MAX_PRINT_MSG];
-  idStr::vsnPrintf(text, sizeof(text), fmt, argptr);
-  if (auto* registry = tb::lit::shim::Registry::current())
-  {
-    registry->report(kind, text);
-  }
-}
-
-} // namespace
+using tb::lit::shim::reportV;
 
 idSys* idLib::sys = nullptr;
 idCommon* idLib::common = nullptr;
@@ -138,7 +136,9 @@ unsigned int MD5_BlockChecksum(const void*, size_t)
   return 0;
 }
 
-// sys_assert.h: an assert in the copied code is reported and execution continues
+// sys_assert.h: an assert in the copied code is reported and execution continues; it
+// never changes a parse's outcome, so Debug and Release parse alike (an Assert message is
+// not an error, Registry::report)
 bool AssertFailed(const char* file, int line, const char* expression)
 {
   if (auto* registry = tb::lit::shim::Registry::current())
@@ -152,7 +152,7 @@ bool AssertFailed(const char* file, int line, const char* expression)
 // LangDict.h's idStrId: only the never-registered testStrId command of Str.cpp names it
 void idStrId::Set(const char*)
 {
-  index = -1;
+  m_index = -1;
 }
 
 const char* idStrId::GetLocalizedString() const

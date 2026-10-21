@@ -148,5 +148,5 @@ public:
   const char* GetLocalizedString() const;
 
 private:
-  int index = -1;
+  int m_index = -1;
 };

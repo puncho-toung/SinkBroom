@@ -27,8 +27,11 @@ namespace tb::lit::shim
 namespace
 {
 
-// the one bound registry (C17); written only by the registry's constructor and destructor
+// the one bound registry (C17); written only by the bindings
 Registry* currentRegistry = nullptr;
+
+// the process's one registry slot (C17, A2.6), claimed before a registry is made
+auto registryClaimed = std::atomic<bool>{false};
 
 } // namespace
 
@@ -37,42 +40,38 @@ Registry* Registry::current()
   return currentRegistry;
 }
 
-Registry::Registry(const DeclSource& source, const std::atomic<bool>* cancel)
-  : m_fileSystem{source, cancel}
+bool Registry::claim()
 {
-  assert(currentRegistry == nullptr);
-  currentRegistry = this;
+  auto expected = false;
+  return registryClaimed.compare_exchange_strong(expected, true);
+}
 
-  // binds declManager and declManagerLocal
-  m_declManager = createDeclManager();
+void Registry::release()
+{
+  registryClaimed = false;
+}
 
-  common = &m_common;
-  idLib::common = &m_common;
-  cvarSystem = &m_cvarSystem;
-  idLib::cvarSystem = &m_cvarSystem;
-  fileSystem = &m_fileSystem;
-  idLib::fileSystem = &m_fileSystem;
-  globalImages = &m_images;
-  tbLitRenderProgManager = &m_renderProgs;
-  uiManager = &m_guis;
-  game = &m_game;
+Registry::Bindings::Bindings(Registry& registry)
+{
+  currentRegistry = &registry;
+
+  common = &registry.m_common;
+  idLib::common = &registry.m_common;
+  cvarSystem = &registry.m_cvarSystem;
+  idLib::cvarSystem = &registry.m_cvarSystem;
+  fileSystem = &registry.m_fileSystem;
+  idLib::fileSystem = &registry.m_fileSystem;
+  globalImages = &registry.m_images;
+  tbLitRenderProgManager = &registry.m_renderProgs;
+  uiManager = &registry.m_guis;
+  game = &registry.m_game;
 
   // idLib::Init: the dict pools' case rules
   idDict::Init();
-
-  // the renderer creates its intrinsic images before any material is parsed
-  m_images.Init();
-
-  initDeclManager(*m_declManager);
 }
 
-Registry::~Registry()
+Registry::Bindings::~Bindings()
 {
-  // decls, image records, GUI dummies, decl text (R5.11), then the decl manager itself;
-  // this unbinds declManager and declManagerLocal
-  destroyDeclManager(m_declManager);
-  m_declManager = nullptr;
-
   // idLib::ShutDown: every entityDef dict is cleared by now, so the pools are empty
   idDict::Shutdown();
 
@@ -90,6 +89,32 @@ Registry::~Registry()
   currentRegistry = nullptr;
 }
 
+Registry::DeclManagerOwner::DeclManagerOwner()
+  // binds declManager and declManagerLocal
+  : manager{createDeclManager()}
+{
+}
+
+Registry::DeclManagerOwner::~DeclManagerOwner()
+{
+  // decls, image records, GUI dummies, decl text (R5.11), then the decl manager itself;
+  // this unbinds declManager and declManagerLocal
+  destroyDeclManager(manager);
+}
+
+Registry::Registry(DeclSource& source, const std::atomic<bool>* cancel)
+  : m_fileSystem{source, cancel}
+  , m_bindings{*this}
+{
+  // the renderer creates its intrinsic images before any material is parsed
+  m_images.Init();
+
+  initDeclManager(*m_declManager.manager);
+}
+
+// the members go in reverse order: the decl manager, then the bindings, then the objects
+Registry::~Registry() = default;
+
 void Registry::report(const DeclMessageKind kind, const char* text)
 {
   auto message = std::string{text};
@@ -100,9 +125,7 @@ void Registry::report(const DeclMessageKind kind, const char* text)
     message.pop_back();
   }
 
-  if (
-    kind == DeclMessageKind::Error || kind == DeclMessageKind::FatalError
-    || kind == DeclMessageKind::Assert)
+  if (kind == DeclMessageKind::Error || kind == DeclMessageKind::FatalError)
   {
     ++m_errorCount;
   }
@@ -129,6 +152,24 @@ std::string Registry::endCapture()
 void Registry::capture(const char* text)
 {
   m_capture += text;
+}
+
+void reportV(const DeclMessageKind kind, const char* fmt, va_list argptr)
+{
+  char text[MAX_PRINT_MSG];
+  idStr::vsnPrintf(text, sizeof(text), fmt, argptr);
+  if (auto* registry = Registry::current())
+  {
+    registry->report(kind, text);
+  }
+}
+
+void reportWarning(const std::string& text)
+{
+  if (auto* registry = Registry::current())
+  {
+    registry->report(DeclMessageKind::Warning, text.c_str());
+  }
 }
 
 void freeGuiDummies()

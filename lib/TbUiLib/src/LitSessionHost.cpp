@@ -37,8 +37,10 @@
 
 #include <fmt/format.h>
 
+#include <atomic>
 #include <chrono>
 #include <utility>
+#include <variant>
 
 namespace tb::ui
 {
@@ -242,10 +244,11 @@ void LitSessionHost::startMaterials()
   }
 
   auto options = lit::MaterialServiceOptions{};
-  // C1: the game path's base folder only; a reload scans its containers again
-  options.makeSource = [gamePath = m_gamePath] {
+  // C1: the game path's base folder only; a reload scans its containers again, and the
+  // stop flag cuts the scan short (G4)
+  options.makeSource = [gamePath = m_gamePath](const std::atomic<bool>& cancel) {
     return std::unique_ptr<lit::DeclSource>{
-      std::make_unique<lit::GameDeclSource>(gamePath)};
+      std::make_unique<lit::GameDeclSource>(gamePath, &cancel)};
   };
   // R4-1.17, R5.17: the parse thread's log lines come through the session's queue, with
   // its generation; new tables are marshalled by the packages that read them (LP1b)
@@ -261,7 +264,17 @@ void LitSessionHost::startMaterials()
     }
   };
   options.parseAll = true;
-  m_materials = std::make_unique<lit::MaterialService>(std::move(options));
+  auto service = lit::MaterialService::create(std::move(options));
+  if (service.is_error())
+  {
+    // no materials: the preview draws without them
+    eventSink()(
+      lit::SessionEvent::MaterialWarning,
+      std::get<Error>(service.error()).msg,
+      m_generation);
+    return;
+  }
+  m_materials = std::move(service).value();
 }
 
 void LitSessionHost::stopMaterials()
@@ -396,15 +409,15 @@ void LitSessionHost::runTeardownThrough(const TeardownStep last)
     case TeardownStep::None:
       break;
     case TeardownStep::RenderThreadStopped:
-      if (m_session)
-      {
-        stopRenderThread();
-      }
-      // plan step 1, R5.20: the parse thread stops after its current decl file, and
-      // reports nothing more
+      // plan step 1, R5.20, G4: first, so that the parse thread's scan or read stops
+      // while the render thread is stopped; it reports nothing more
       if (m_materials)
       {
         m_materials->requestStop();
+      }
+      if (m_session)
+      {
+        stopRenderThread();
       }
       break;
     case TeardownStep::GpuObjectsReleased:

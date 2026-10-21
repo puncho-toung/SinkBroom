@@ -19,10 +19,21 @@
 
 #include "StackThread.h"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <process.h>
+#include <windows.h>
+#endif
+
+#include "kd/result.h"
+
+#include <fmt/format.h>
+
 #include <cassert>
-#include <exception>
+#include <cerrno>
 #include <memory>
-#include <system_error>
 #include <utility>
 
 namespace tb::lit
@@ -30,11 +41,19 @@ namespace tb::lit
 namespace
 {
 
-#if !defined(_WIN32)
+using Body = std::function<void()>;
+
+#if defined(_WIN32)
+unsigned __stdcall runBody(void* argument)
+{
+  const auto body = std::unique_ptr<Body>{static_cast<Body*>(argument)};
+  (*body)();
+  return 0;
+}
+#else
 void* runBody(void* argument)
 {
-  const auto body =
-    std::unique_ptr<std::function<void()>>{static_cast<std::function<void()>*>(argument)};
+  const auto body = std::unique_ptr<Body>{static_cast<Body*>(argument)};
   (*body)();
   return nullptr;
 }
@@ -47,64 +66,53 @@ StackThread::~StackThread()
   assert(!joinable());
 }
 
-bool StackThread::start(
-  std::function<void()> body,
-  [[maybe_unused]] const std::size_t posixStackBytes,
-  std::string* error)
+Result<void> StackThread::start(Body body, const std::size_t stackBytes)
 {
+  auto argument = std::make_unique<Body>(std::move(body));
+
 #if defined(_WIN32)
-  try
+  const auto handle = _beginthreadex(
+    nullptr,
+    unsigned(stackBytes),
+    runBody,
+    argument.get(),
+    STACK_SIZE_PARAM_IS_A_RESERVATION,
+    nullptr);
+  if (handle == 0)
   {
-    m_thread = std::thread{std::move(body)};
-    return true;
+    return Error{fmt::format("_beginthreadex failed (errno {})", errno)};
   }
-  catch (const std::system_error& e)
-  {
-    if (error)
-    {
-      *error = e.what();
-    }
-    return false;
-  }
+  m_handle = reinterpret_cast<void*>(handle);
 #else
   auto attributes = pthread_attr_t{};
   if (pthread_attr_init(&attributes) != 0)
   {
-    if (error)
-    {
-      *error = "pthread_attr_init failed";
-    }
-    return false;
+    return Error{"pthread_attr_init failed"};
   }
-  auto ok = pthread_attr_setstacksize(&attributes, posixStackBytes) == 0;
-  if (!ok && error)
-  {
-    *error = "pthread_attr_setstacksize failed";
-  }
-  if (ok)
-  {
-    auto argument = std::make_unique<std::function<void()>>(std::move(body));
-    ok = pthread_create(&m_thread, &attributes, runBody, argument.get()) == 0;
-    if (ok)
-    {
-      // the thread owns it now
-      static_cast<void>(argument.release());
-      m_started = true;
-    }
-    else if (error)
-    {
-      *error = "pthread_create failed";
-    }
-  }
+  const auto sized = pthread_attr_setstacksize(&attributes, stackBytes) == 0;
+  const auto created =
+    sized && pthread_create(&m_thread, &attributes, runBody, argument.get()) == 0;
   pthread_attr_destroy(&attributes);
-  return ok;
+  if (!sized)
+  {
+    return Error{"pthread_attr_setstacksize failed"};
+  }
+  if (!created)
+  {
+    return Error{"pthread_create failed"};
+  }
+  m_started = true;
 #endif
+
+  // the thread owns it now
+  static_cast<void>(argument.release());
+  return kdl::void_success;
 }
 
 bool StackThread::joinable() const
 {
 #if defined(_WIN32)
-  return m_thread.joinable();
+  return m_handle != nullptr;
 #else
   return m_started;
 #endif
@@ -113,9 +121,11 @@ bool StackThread::joinable() const
 void StackThread::join()
 {
 #if defined(_WIN32)
-  if (m_thread.joinable())
+  if (m_handle)
   {
-    m_thread.join();
+    WaitForSingleObject(m_handle, INFINITE);
+    CloseHandle(m_handle);
+    m_handle = nullptr;
   }
 #else
   if (m_started)

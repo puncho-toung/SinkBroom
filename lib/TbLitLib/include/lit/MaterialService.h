@@ -20,10 +20,12 @@
 #pragma once
 
 #include "base/Macros.h"
+#include "base/Result.h"
 #include "lit/MaterialDecls.h"
 #include "lit/PersistentMap.h"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -107,7 +109,11 @@ struct MaterialTable
   Materials materials;
   Registers registers;
 
-  const MaterialSlot* find(std::string_view name) const;
+  // the slot of a name, shared with the table, so that it outlives a table held only for
+  // the call; null when the name is not looked up yet
+  std::shared_ptr<const MaterialSlot> find(std::string_view name) const;
+  // the registers of a key; an EvaluatedRegisters with an error when the evaluation was
+  // refused, null when it is not done yet
   std::shared_ptr<const EvaluatedRegisters> findRegisters(const RegisterKey& key) const;
 };
 
@@ -148,21 +154,26 @@ struct MaterialServiceEvent
   std::string text;
 };
 
-// called on the parse thread; it must not block and must not call back into the service
+// called on the parse thread; it must not block, throw or call back into the service (an
+// event it throws for is dropped)
 using MaterialListener = std::function<void(const MaterialServiceEvent&)>;
 
 struct MaterialServiceOptions
 {
   // makes the decl source of a registry; called on the parse thread for every build, so a
-  // reload rescans the game's containers
-  std::function<std::unique_ptr<DeclSource>()> makeSource;
+  // reload rescans the game's containers. cancel is the stop flag: a source that scans
+  // stops when it is set (G4).
+  std::function<std::unique_ptr<DeclSource>(const std::atomic<bool>& cancel)> makeSource;
   MaterialListener listener;
   // how often the loose decl files are compared with the last build's; 0 never
   std::chrono::milliseconds pollInterval{1000};
+  // the least time between two builds that a change of the loose files starts, rather
+  // than reload() (A2.3, A3.6)
+  std::chrono::milliseconds autoReloadInterval{5000};
   // bulk-parse every material and table after every build (parseAll)
   bool parseAll = false;
-  // test hook: runs on the parse thread before each bulk step
-  std::function<void()> beforeBulkStep;
+  // runs on the parse thread before each bulk step
+  std::function<void()> beforeBulkStepForTesting;
 };
 
 struct MaterialServiceStats
@@ -191,10 +202,12 @@ struct MaterialServiceStats
   // material's particle deform does for a particle no file defines
   std::vector<DeclTypeCount> declCountsAtBuild;
   std::vector<DeclTypeCount> declCounts;
-  // evaluations of a material of an earlier registry, refused
+  // evaluations of a material of an earlier registry or of a failed parse, refused
   std::uint64_t refusedEvaluations = 0;
-  // reloads because a loose decl file changed
+  // builds because a loose decl file changed, found by a poll or while a build read it
   std::uint64_t pollReloads = 0;
+  // work items that threw; the item is dropped and the thread goes on (A2.1)
+  std::uint64_t failedWorkItems = 0;
   // the thread waits for a request, and its last work item is done and freed
   bool idle = false;
 };
@@ -205,17 +218,24 @@ struct MaterialServiceStats
  * queue in priority order: stop, reload, evaluations, lookups, then the bulk parse, which
  * works in short steps so that evaluations jump ahead of it (D52).
  *
- * The thread builds the first registry at once. A reload, asked for or found by polling
- * the loose decl files' times, destroys the registry, builds a new one, looks up again
- * every name the last table held, and publishes the new table in one step; entries of the
- * old registry are refused by evaluate. A build ends its read batch with
+ * The thread builds the first registry at once. A reload destroys the registry, builds a
+ * new one, looks up again every name the consumers asked for, and publishes the new table
+ * in one step; entries of the old registry are refused by evaluate. reload() rebuilds at
+ * once. A change of the loose decl files' times, found by a poll or between the stamps
+ * taken before and after a build, rebuilds at most once per autoReloadInterval, so a file
+ * that cannot be read never loops (A2.3). A build ends its read batch with
  * DeclSource::closeFiles, so no game file stays open (R4-3.26).
  *
- * Stop (§3.1 teardown steps 1 and 8, R5.20): requestStop returns at once; the thread
- * stops after the decl file it is reading, or the material it is parsing, and reports
- * nothing more. join destroys the registry on the thread, then joins it. On Windows the
- * thread has the executable's stack (8 MB for TrenchBroom); elsewhere 2 MB, because
- * macOS gives a secondary thread 512 KB (R4-1.1, R4-3.25).
+ * Exceptions (A2.1): the source's are caught by the registry's file system; anything else
+ * a work item throws is logged, counted in failedWorkItems, and the thread goes on; a
+ * build that throws publishes an empty table.
+ *
+ * Stop (§3.1 teardown steps 1 and 8, R5.20, G4): requestStop returns at once. The thread
+ * stops within one directory entry, one container table entry or one .pk4 directory
+ * while a game source scans, after the decl file it is reading while the registry is
+ * built, or after the material it is parsing, and reports nothing more. join destroys the
+ * registry on the thread, then joins it. The thread has an 8 MB stack on every platform,
+ * whatever the executable reserves (G13).
  */
 class MaterialService
 {
@@ -226,8 +246,12 @@ private:
   std::unique_ptr<Shared> m_shared;
   std::unique_ptr<Worker> m_worker;
 
-public:
   explicit MaterialService(MaterialServiceOptions options);
+
+public:
+  // starts the parse thread; fails when it cannot be created
+  static Result<std::unique_ptr<MaterialService>> create(MaterialServiceOptions options);
+
   // requestStop, then join
   ~MaterialService();
 
@@ -263,12 +287,12 @@ public:
 
   MaterialServiceStats stats() const;
 
-  // Tests: waits until the latest table satisfies predicate, or timeout
-  std::shared_ptr<const MaterialTable> waitForTable(
+  // waits until the latest table satisfies predicate, or timeout
+  std::shared_ptr<const MaterialTable> waitForTableForTesting(
     const std::function<bool(const MaterialTable&)>& predicate,
     std::chrono::milliseconds timeout) const;
-  // Tests: waits until the stats satisfy predicate, or timeout
-  bool waitForStats(
+  // waits until the stats satisfy predicate, or timeout
+  bool waitForStatsForTesting(
     const std::function<bool(const MaterialServiceStats&)>& predicate,
     std::chrono::milliseconds timeout) const;
 

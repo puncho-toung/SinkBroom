@@ -18,31 +18,38 @@
  */
 
 // The hidden retail tests ([.][retail]): they read the game folder that TB_LIT_GAME_PATH
-// names (the D3-Sink build folder with base/), and are skipped without it.
+// names (the D3-Sink build folder with base/), and are skipped without it. They compare
+// SinkBroom with the engine's output that TOOLS/lit-preview/capture_goldens.py captured
+// into fixture/lit/goldens (G8); the engine is not run again.
 //
-// - The sweep parses every material and table through GameDeclSource and the parse thread
-//   and reports the counts, the defaulted materials, the warnings, the kept decl text and
-//   the times.
-// - The goldens compare SinkBroom's printMaterial and printTable output with the
-// engine's,
-//   captured by TOOLS/lit-preview/capture_goldens.py into fixture/lit/goldens; the
-//   engine is not run again.
+// - The sweep parses every material and table through GameDeclSource and the parse
+//   thread, and asserts the decl files and bytes, the decls per type and the warnings
+//   against the engine's.
+// - The goldens assert the engine's implicit decls, its print output, its parse warnings
+//   and its image keys for every captured decl, and the editor images against the
+//   engine's own export, base/_bl/materials.json.
 
 #include "LitTestUtils.h"
 #include "TestEnvironment.h"
 #include "lit/GameDeclSource.h"
+#include "lit/GameFile.h"
 #include "lit/MaterialDecls.h"
 #include "lit/MaterialService.h"
+
+#include "kd/result.h"
 
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -58,6 +65,8 @@ namespace
 using namespace std::chrono_literals;
 
 constexpr auto Separator = "----------";
+// textureLighting_t's SL_DIFFUSE
+constexpr int LightingDiffuse = 2;
 
 std::optional<std::filesystem::path> retailGamePath()
 {
@@ -179,7 +188,7 @@ std::vector<std::string> hashDeclText(const std::vector<std::string>& lines)
 }
 
 // the engine's image loader prints these while a touch loads a material's images; the
-// preview loads no image in LP1a
+// preview loads no image in LP1a, so they are compared with the image keys instead
 bool isImageLoaderLine(const std::string& line)
 {
   return line.rfind("WARNING: Couldn't load image", 0) == 0
@@ -189,7 +198,232 @@ bool isImageLoaderLine(const std::string& line)
 
 std::string declTypeOf(const std::string& kind)
 {
-  return kind == "material" ? "material" : "table";
+  return kind == "table" ? "table" : "material";
+}
+
+// listDecls: the decls of each type, the decl files and their KB
+struct EngineDeclList
+{
+  std::map<std::string, int> counts;
+  int files = 0;
+  int kilobytes = 0;
+};
+
+EngineDeclList engineDeclList(const std::vector<GoldenBlock>& goldens)
+{
+  auto list = EngineDeclList{};
+  const auto* block = findBlock(goldens, "list", "decls");
+  REQUIRE(block);
+  for (const auto& line : block->lines)
+  {
+    auto size = 0;
+    auto count = 0;
+    char type[64] = {};
+    auto decls = 0;
+    if (
+      std::sscanf(line.c_str(), "%d total decls is %d decl files", &decls, &list.files)
+      == 2)
+    {
+      continue;
+    }
+    auto structures = 0;
+    if (
+      std::sscanf(
+        line.c_str(), "%dKB in text, %dKB in structures", &list.kilobytes, &structures)
+      == 2)
+    {
+      continue;
+    }
+    if (std::sscanf(line.c_str(), " %dk %d %63s", &size, &count, type) == 3)
+    {
+      list.counts[type] = count;
+    }
+  }
+  return list;
+}
+
+// "@@ names <type>": the number of the engine's decls, the hash of their sorted names,
+// and the names no decl file defines for SinkBroom
+struct EngineNames
+{
+  std::size_t count = 0;
+  std::string hash;
+  std::vector<std::string> only;
+};
+
+std::optional<EngineNames> engineNames(
+  const std::vector<GoldenBlock>& goldens, const std::string& type)
+{
+  const auto* block = findBlock(goldens, "names", type);
+  if (!block)
+  {
+    return std::nullopt;
+  }
+  auto names = EngineNames{};
+  for (const auto& line : block->lines)
+  {
+    if (line.rfind("count ", 0) == 0)
+    {
+      names.count = std::size_t(std::stoul(line.substr(6)));
+    }
+    else if (line.rfind("hash ", 0) == 0)
+    {
+      names.hash = line.substr(5);
+    }
+    else if (line.rfind("only ", 0) == 0)
+    {
+      names.only.push_back(line.substr(5));
+    }
+  }
+  return names;
+}
+
+// The engine's warnings that SinkBroom cannot report, each with its reason. Every other
+// warning of the capture must be SinkBroom's, and every one of SinkBroom's the engine's.
+struct EngineOnlyWarning
+{
+  const char* line;
+  const char* why;
+};
+
+const auto EngineOnlyWarnings = std::vector<EngineOnlyWarning>{
+  {"WARNING: Unable to open resource file maps/_startup.resources",
+   "the engine's start-up opens maps/_startup.resources by name "
+   "(idFileSystemLocal::BeginLevelLoad for the start-up map); the game folder has none, "
+   "and SinkBroom registers only the .resources files the folders list (M-FS-02)"},
+};
+
+// what a "Couldn't load image" line names: the image, and the usage and cube digits of
+// its generated name (GetGeneratedName's "#__%02d%02d")
+struct EngineImage
+{
+  std::string name;
+  std::optional<int> usage;
+  bool cube = false;
+};
+
+std::optional<EngineImage> engineImage(const std::string& line)
+{
+  const auto cubePrefix = std::string{"WARNING: Couldn't load cube image: "};
+  if (line.rfind(cubePrefix, 0) == 0)
+  {
+    return EngineImage{line.substr(cubePrefix.size()), std::nullopt, true};
+  }
+  const auto prefix = std::string{"WARNING: Couldn't load image: "};
+  if (line.rfind(prefix, 0) != 0)
+  {
+    return std::nullopt;
+  }
+  const auto rest = line.substr(prefix.size());
+  const auto split = rest.rfind(" : ");
+  const auto marker = rest.rfind("#__");
+  if (
+    split == std::string::npos || marker == std::string::npos || marker + 7 > rest.size())
+  {
+    return std::nullopt;
+  }
+  const auto usage = std::stoi(rest.substr(marker + 3, 2));
+  const auto cube = std::stoi(rest.substr(marker + 5, 2));
+  return EngineImage{rest.substr(0, split), usage, cube != 0};
+}
+
+std::vector<MaterialImageKey> imageKeysOf(const MaterialEntry& entry)
+{
+  auto keys = std::vector<MaterialImageKey>{};
+  const auto add = [&](const std::optional<MaterialImageKey>& key) {
+    if (key)
+    {
+      keys.push_back(*key);
+    }
+  };
+  for (const auto& stage : entry.stages)
+  {
+    add(stage.image);
+    for (const auto& image : stage.fragmentImages)
+    {
+      add(image);
+    }
+  }
+  add(entry.lightFalloffImage);
+  add(entry.fastPathBumpImage);
+  add(entry.fastPathDiffuseImage);
+  add(entry.fastPathSpecularImage);
+  return keys;
+}
+
+// idImageManager::ImageFromFile's image name (M-ID-FN-01): the image extensions removed
+// anywhere, backslashes made slashes
+std::string imageName(std::string name)
+{
+  for (const auto* extension : {".tga", ".jpg", ".png", ".exr", ".hdr"})
+  {
+    for (auto at = name.find(extension); at != std::string::npos;
+         at = name.find(extension))
+    {
+      name.erase(at, std::char_traits<char>::length(extension));
+    }
+  }
+  std::replace(name.begin(), name.end(), '\\', '/');
+  return name;
+}
+
+// idMaterial::GetEditorImage without loading: the first diffuse stage's image, else the
+// first stage's, else _default; an explicit qer_editorimage instead, unless its image
+// turns out to be defaulted, which only loading can tell
+std::vector<std::string> editorImageCandidates(const MaterialEntry& entry)
+{
+  auto fallback = std::optional<MaterialImageKey>{};
+  const auto diffuse =
+    std::find_if(entry.stages.begin(), entry.stages.end(), [](const auto& s) {
+      return s.lighting == LightingDiffuse;
+    });
+  if (diffuse != entry.stages.end())
+  {
+    fallback = diffuse->image;
+  }
+  if (!fallback && !entry.stages.empty())
+  {
+    fallback = entry.stages.front().image;
+  }
+  const auto fallbackName = fallback ? fallback->name : std::string{"_default"};
+  if (entry.editorImageName.empty())
+  {
+    return {fallbackName};
+  }
+  return {imageName(entry.editorImageName), fallbackName};
+}
+
+// base/_bl/materials.json, the engine's exportMaterialsToBlender: each material's name
+// and its editorImage, the one field the export writes
+std::map<std::string, std::string> engineEditorImages(const std::filesystem::path& path)
+{
+  auto images = std::map<std::string, std::string>{};
+  auto stream = std::istringstream{readTextFile(path)};
+  auto line = std::string{};
+  auto material = std::string{};
+  const auto quoted = [](const std::string& text, const std::size_t from) {
+    const auto start = text.find('"', from);
+    const auto end = start == std::string::npos ? start : text.find('"', start + 1);
+    return end == std::string::npos ? std::string{}
+                                    : text.substr(start + 1, end - start - 1);
+  };
+  while (std::getline(stream, line))
+  {
+    if (!line.empty() && line.back() == '\r')
+    {
+      line.pop_back();
+    }
+    const auto key = quoted(line, 0);
+    if (key == "editorImage")
+    {
+      images[material] = quoted(line, line.find(':'));
+    }
+    else if (!key.empty() && line.find('{') != std::string::npos && key != "materials")
+    {
+      material = key;
+    }
+  }
+  return images;
 }
 
 } // namespace
@@ -206,8 +440,8 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
   auto warnings = std::vector<std::string>{};
   auto infos = std::vector<std::string>{};
   auto options = MaterialServiceOptions{};
-  options.makeSource = [path = *gamePath] {
-    return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(path)};
+  options.makeSource = [path = *gamePath](const std::atomic<bool>& cancel) {
+    return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(path, &cancel)};
   };
   options.listener = [&](const MaterialServiceEvent& event) {
     if (event.kind != MaterialServiceEvent::Kind::Message)
@@ -221,13 +455,16 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
   options.parseAll = true;
 
   const auto started = std::chrono::steady_clock::now();
-  auto service = MaterialService{std::move(options)};
-  REQUIRE(service.waitForStats([](const auto& s) { return s.parseAllDone; }, 600s));
+  auto created = MaterialService::create(std::move(options));
+  REQUIRE(created.is_success());
+  auto service = std::move(created).value();
+  REQUIRE(
+    service->waitForStatsForTesting([](const auto& s) { return s.parseAllDone; }, 600s));
   const auto total =
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started);
-  const auto stats = service.stats();
-  service.requestStop();
-  service.join();
+  const auto stats = service->stats();
+  service->requestStop();
+  service->join();
 
   auto lock = std::scoped_lock{mutex};
   auto report = std::ostringstream{};
@@ -262,55 +499,66 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
     stats.parseAllSeconds * 1000.0,
     total.count() * 1000.0);
   report << fmt::format("  warnings and errors: {}\n", warnings.size());
-  for (std::size_t i = 0; i < std::min<std::size_t>(warnings.size(), 20); ++i)
-  {
-    report << "    " << warnings[i] << "\n";
-  }
   for (const auto& info : infos)
   {
     report << "  info: " << info << "\n";
   }
   std::cout << report.str() << std::flush;
 
-  CHECK(stats.materials > 0);
-  CHECK(stats.tables > 0);
+  CHECK(stats.materials == 7733);
+  CHECK(stats.tables == 309);
+  CHECK(stats.defaultedMaterials == 15);
   CHECK(stats.warnings == warnings.size());
+  CHECK(stats.failedWorkItems == 0u);
+
+  const auto goldens = readGoldens();
+  const auto list = engineDeclList(goldens);
 
   // the engine's listDecls of the same data: the same decl files and bytes
-  const auto goldens = readGoldens();
-  const auto* list = findBlock(goldens, "list", "decls");
-  REQUIRE(list);
-  auto engineFiles = 0;
-  auto engineKilobytes = 0;
-  for (const auto& line : list->lines)
-  {
-    auto decls = 0;
-    if (
-      std::sscanf(line.c_str(), "%d total decls is %d decl files", &decls, &engineFiles)
-      == 2)
-    {
-      continue;
-    }
-    std::sscanf(line.c_str(), "%dKB in text", &engineKilobytes);
-  }
-  CHECK(stats.declFiles == engineFiles);
-  CHECK(int(stats.declFileBytes >> 10) == engineKilobytes);
+  CHECK(stats.declFiles == list.files);
+  CHECK(int(stats.declFileBytes >> 10) == list.kilobytes);
 
-  // the engine's "previously defined" warnings of the decl files, each once
-  const auto* duplicates = findBlock(goldens, "warnings", "previously-defined");
-  REQUIRE(duplicates);
-  auto engineDuplicates =
-    std::set<std::string>{duplicates->lines.begin(), duplicates->lines.end()};
-  engineDuplicates.erase("");
-  auto ourDuplicates = std::set<std::string>{};
+  // A3.4: the decls of every type. The engine has more only where its start-up made
+  // implicit decls, which no decl file defines: the golden test asserts their names
+  for (const auto& count : stats.declCountsAtBuild)
+  {
+    CAPTURE(count.type, count.count);
+    const auto names = engineNames(goldens, count.type);
+    const auto implicit = names ? int(names->only.size()) : 0;
+    REQUIRE(list.counts.count(count.type) == 1);
+    CHECK(list.counts.at(count.type) == count.count + implicit);
+  }
+  // 7788 = 7733 + 55 materials, 3091 = 3090 + 1 sound shader
+  CHECK(list.counts.at("material") == 7788);
+  CHECK(engineNames(goldens, "material")->only.size() == 55u);
+  CHECK(list.counts.at("sound") == 3091);
+  CHECK(engineNames(goldens, "sound")->only.size() == 1u);
+
+  // A3.3: SinkBroom's warnings are the engine's, as a set: the capture touched every decl
+  // whose parse warns here, so the engine reported them too
+  const auto* all = findBlock(goldens, "warnings", "all");
+  REQUIRE(all);
+  auto engineWarnings = std::set<std::string>{};
+  for (const auto& line : all->lines)
+  {
+    if (!line.empty() && !isImageLoaderLine(line))
+    {
+      engineWarnings.insert(line);
+    }
+  }
+  for (const auto& engineOnly : EngineOnlyWarnings)
+  {
+    CAPTURE(engineOnly.line, engineOnly.why);
+    CHECK(engineWarnings.erase(engineOnly.line) == 1u);
+  }
+  auto ourWarnings = std::set<std::string>{};
   for (const auto& warning : warnings)
   {
-    if (warning.find(" previously defined at ") != std::string::npos)
-    {
-      ourDuplicates.insert("WARNING: " + warning);
-    }
+    ourWarnings.insert("WARNING: " + warning);
   }
-  CHECK(ourDuplicates == engineDuplicates);
+  CHECK(ourWarnings.size() == warnings.size());
+  CHECK(ourWarnings.size() == 51u);
+  CHECK(ourWarnings == engineWarnings);
 }
 
 TEST_CASE("Retail materials: the engine's print output", "[.][retail]")
@@ -324,89 +572,359 @@ TEST_CASE("Retail materials: the engine's print output", "[.][retail]")
   auto source = GameDeclSource{*gamePath};
   auto decls = MaterialDecls{source};
   source.closeFiles();
+  REQUIRE(decls.constructionError().empty());
   decls.takeMessages();
+  const auto goldens = readGoldens();
 
-  auto matched = 0;
-  auto compared = 0;
-  auto warningDifferences = std::vector<std::string>{};
-  for (const auto& block : readGoldens())
+  SECTION("the engine's implicit decls are the names no decl file defines")
   {
-    if (block.kind != "material" && block.kind != "table")
+    // A3.4: every decl SinkBroom has, the engine has too; the names only the engine has
+    // have no decl in the same files (the same 925 files and KB, asserted by the sweep),
+    // so its start-up made them implicitly (fonts, GUI and SWF assets, _white, and a
+    // material and a sound shader named "}" from a malformed reference)
+    for (const auto* type : {"material", "sound"})
     {
-      continue;
-    }
-    ++compared;
-    CAPTURE(block.kind, block.name);
-
-    // the engine's block: its parse warnings, then its print output
-    auto engineWarnings = std::vector<std::string>{};
-    auto enginePrint = std::vector<std::string>{};
-    for (const auto& line : block.lines)
-    {
-      if (isImageLoaderLine(line))
+      CAPTURE(type);
+      const auto names = engineNames(goldens, type);
+      REQUIRE(names);
+      auto ours = decls.declNames(type);
+      for (const auto& name : names->only)
       {
-        continue;
+        CAPTURE(name);
+        CHECK(std::find(ours.begin(), ours.end(), name) == ours.end());
+        const auto touched = decls.touch(type, name);
+        REQUIRE(touched);
+        CHECK_FALSE(*touched.value);
       }
-      if (enginePrint.empty() && line.rfind("WARNING: ", 0) == 0)
+      ours.insert(ours.end(), names->only.begin(), names->only.end());
+      std::sort(ours.begin(), ours.end());
+      auto joined = std::string{};
+      for (std::size_t i = 0; i < ours.size(); ++i)
       {
-        engineWarnings.push_back(line);
-        continue;
+        joined += (i ? "\n" : "") + ours[i];
       }
-      enginePrint.push_back(line);
+      CHECK(ours.size() == names->count);
+      CHECK(fmt::format("{:016x}", fnv1a64(joined)) == names->hash);
     }
-    while (!enginePrint.empty() && enginePrint.back().empty())
-    {
-      enginePrint.pop_back();
-    }
-
-    // SinkBroom: the console's touch, then the print command
-    const auto type = declTypeOf(block.kind);
-    const auto touched = decls.touch(type, block.name);
-    INFO(touched.error);
-    REQUIRE(touched);
-    CHECK(*touched.value);
-    auto ourWarnings = std::vector<std::string>{};
-    for (const auto& message : decls.takeMessages())
-    {
-      if (message.kind != DeclMessageKind::Info)
-      {
-        ourWarnings.push_back("WARNING: " + message.text);
-      }
-    }
-    const auto printed = decls.printDecl(type, block.name);
-    INFO(printed.error);
-    REQUIRE(printed);
-    auto ourPrint = hashDeclText(splitLines(*printed.value));
-    while (!ourPrint.empty() && ourPrint.back().empty())
-    {
-      ourPrint.pop_back();
-    }
-
-    CHECK(ourPrint == enginePrint);
-    if (ourPrint == enginePrint)
-    {
-      ++matched;
-    }
-    if (ourWarnings != engineWarnings)
-    {
-      warningDifferences.push_back(fmt::format(
-        "{} {}: engine {} warnings, SinkBroom {}",
-        block.kind,
-        block.name,
-        engineWarnings.size(),
-        ourWarnings.size()));
-    }
+    decls.takeMessages();
   }
 
+  SECTION("the print output, the parse warnings and the image keys")
+  {
+    auto compared = 0;
+    auto implicitBlocks = 0;
+    auto defaultedBlocks = 0;
+    auto imageLines = 0;
+    for (const auto& block : goldens)
+    {
+      if (block.kind != "material" && block.kind != "table" && block.kind != "implicit")
+      {
+        continue;
+      }
+      ++compared;
+      CAPTURE(block.kind, block.name);
+
+      // the engine's block: its parse warnings and image loads, then its print output
+      auto engineWarnings = std::vector<std::string>{};
+      auto engineImages = std::vector<EngineImage>{};
+      auto enginePrint = std::vector<std::string>{};
+      for (const auto& line : block.lines)
+      {
+        if (isImageLoaderLine(line))
+        {
+          if (auto image = engineImage(line))
+          {
+            engineImages.push_back(std::move(*image));
+          }
+          continue;
+        }
+        if (enginePrint.empty() && line.rfind("WARNING: ", 0) == 0)
+        {
+          engineWarnings.push_back(line);
+          continue;
+        }
+        enginePrint.push_back(line);
+      }
+      while (!enginePrint.empty() && enginePrint.back().empty())
+      {
+        enginePrint.pop_back();
+      }
+
+      // SinkBroom: the console's touch, then the print command; an implicit material has
+      // no decl to touch, so the lookup makes it, as the engine's start-up did
+      const auto type = declTypeOf(block.kind);
+      const auto touched = decls.touch(type, block.name);
+      INFO(touched.error);
+      REQUIRE(touched);
+      if (block.kind == "implicit")
+      {
+        ++implicitBlocks;
+        CHECK_FALSE(*touched.value);
+        const auto made = decls.lookup(block.name);
+        REQUIRE(made);
+        CHECK((*made.value)->implicit);
+      }
+      else
+      {
+        CHECK(*touched.value);
+      }
+      auto ourWarnings = std::vector<std::string>{};
+      for (const auto& message : decls.takeMessages())
+      {
+        if (message.kind != DeclMessageKind::Info)
+        {
+          ourWarnings.push_back("WARNING: " + message.text);
+        }
+      }
+      const auto printed = decls.printDecl(type, block.name);
+      INFO(printed.error);
+      REQUIRE(printed);
+      auto ourPrint = hashDeclText(splitLines(*printed.value));
+      while (!ourPrint.empty() && ourPrint.back().empty())
+      {
+        ourPrint.pop_back();
+      }
+
+      CHECK(ourPrint == enginePrint);
+      // A3.3: the parse warnings of each block, asserted
+      CHECK(ourWarnings == engineWarnings);
+
+      if (type != "material")
+      {
+        continue;
+      }
+      const auto entry = decls.lookup(block.name);
+      REQUIRE(entry);
+      defaultedBlocks += (*entry.value)->defaulted ? 1 : 0;
+
+      // A3.2: each image the engine failed to load names one of SinkBroom's image keys,
+      // with the generated name's usage and cube state. The engine retries a failed load
+      // at every touch, so an image of an earlier block can show again. A defaulted
+      // material's entry holds the default definition's stages, so the images its failed
+      // parse made are looked for among the registry's image records.
+      const auto keys =
+        (*entry.value)->defaulted ? decls.imageKeys() : imageKeysOf(**entry.value);
+      for (const auto& image : engineImages)
+      {
+        ++imageLines;
+        CAPTURE(image.name, image.usage.value_or(-1), image.cube);
+        const auto key = std::find_if(keys.begin(), keys.end(), [&](const auto& k) {
+          return k.name == image.name && (k.cube != 0) == image.cube
+                 && (!image.usage || k.usage == *image.usage);
+        });
+        CHECK(key != keys.end());
+      }
+    }
+    decls.takeMessages();
+
+    std::cout << fmt::format(
+      "Goldens: {} blocks compared ({} implicit, {} defaulted materials), {} image "
+      "lines\n",
+      compared,
+      implicitBlocks,
+      defaultedBlocks,
+      imageLines);
+    // 34 materials and 9 tables, the 15 defaulted materials, 3 more tables that warn,
+    // and the 55 implicit materials
+    CHECK(compared == 116);
+    CHECK(implicitBlocks == 55);
+    CHECK(defaultedBlocks == 15);
+  }
+
+  SECTION("the editor images agree with the engine's export")
+  {
+    // A3.2: a stage field the print does not show; only the retail containers' decls,
+    // whose text predates the export, are compared (the loose files and .pk4 files are
+    // newer)
+    const auto exported =
+      engineEditorImages(*gamePath / "base" / "_bl" / "materials.json");
+    REQUIRE(exported.size() > 7000u);
+
+    auto checked = std::map<int, int>{};
+    auto mismatches = std::map<int, std::vector<std::string>>{};
+    for (int i = 0; i < decls.materialCount(); ++i)
+    {
+      const auto entry = decls.lookupIndex(i);
+      if (!entry)
+      {
+        continue;
+      }
+      const auto& material = **entry.value;
+      const auto origin = source.origin(material.sourceFile);
+      const auto it = exported.find(material.name);
+      if (it == exported.end() || !origin)
+      {
+        continue;
+      }
+      const auto kind = int(origin->kind);
+      ++checked[kind];
+      // the same image record at the pinned commit: the export (April 2024) predates the
+      // engine's stripping of every image extension (95336f49, January 2025: it wrote
+      // textures/common/origin.png), and a record is found case-insensitively and keeps
+      // the spelling of the material that made it first, which the engine's and
+      // SinkBroom's parse orders choose differently (ice2_d against ice2_D, A3.10)
+      const auto exportedImage = toLowerAscii(imageName(it->second));
+      auto candidates = editorImageCandidates(material);
+      for (auto& candidate : candidates)
+      {
+        candidate = toLowerAscii(candidate);
+      }
+      if (
+        std::find(candidates.begin(), candidates.end(), exportedImage)
+        == candidates.end())
+      {
+        mismatches[kind].push_back(fmt::format(
+          "{} ({}): engine {}, SinkBroom {}",
+          material.name,
+          material.sourceFile,
+          it->second,
+          candidates.front()));
+      }
+    }
+    decls.takeMessages();
+    for (const auto& [kind, count] : checked)
+    {
+      std::cout << fmt::format(
+        "Editor images from {}: {} materials compared, {} differ\n",
+        kind == 0   ? "loose files"
+        : kind == 1 ? ".pk4 files"
+                    : ".resources files",
+        count,
+        mismatches[kind].size());
+      for (std::size_t i = 0; i < std::min<std::size_t>(mismatches[kind].size(), 25); ++i)
+      {
+        std::cout << "  " << mismatches[kind][i] << "\n";
+      }
+    }
+    std::cout << std::flush;
+    auto total = 0;
+    for (const auto& [kind, count] : checked)
+    {
+      total += count;
+      CHECK(mismatches[kind].empty());
+    }
+    // every material the export lists and SinkBroom still has (7661 of 7733)
+    CHECK(total > 7600);
+  }
+}
+
+namespace
+{
+
+std::string jsonString(const std::string& text)
+{
+  auto out = std::string{"\""};
+  for (const auto c : text)
+  {
+    if (c == '"' || c == '\\')
+    {
+      out += '\\';
+      out += c;
+    }
+    else if (static_cast<unsigned char>(c) < 0x20)
+    {
+      out += fmt::format("\\u{:04x}", int(static_cast<unsigned char>(c)));
+    }
+    else
+    {
+      out += c;
+    }
+  }
+  return out + "\"";
+}
+
+std::string jsonList(const std::vector<std::string>& items)
+{
+  auto out = std::string{"["};
+  for (std::size_t i = 0; i < items.size(); ++i)
+  {
+    out += (i ? ",\n  " : "\n  ") + jsonString(items[i]);
+  }
+  return out + "]";
+}
+
+std::vector<std::string> problems(std::vector<DeclMessage> messages)
+{
+  auto texts = std::vector<std::string>{};
+  for (auto& message : messages)
+  {
+    if (message.kind != DeclMessageKind::Info)
+    {
+      texts.push_back(std::move(message.text));
+    }
+  }
+  return texts;
+}
+
+} // namespace
+
+// What TOOLS/lit-preview/capture_goldens.py needs from SinkBroom to choose what the
+// engine touches: every decl name per type, the defaulted materials and the decls whose
+// parse warns. Written to TB_LIT_DUMP_PATH as JSON; skipped without it.
+TEST_CASE("Retail materials: dump for the engine capture", "[.][retail-dump]")
+{
+  const auto gamePath = retailGamePath();
+  const auto* dumpPath = std::getenv("TB_LIT_DUMP_PATH");
+  if (!gamePath || !dumpPath || !*dumpPath)
+  {
+    SKIP("TB_LIT_GAME_PATH and TB_LIT_DUMP_PATH name the game and the dump");
+  }
+
+  auto source = GameDeclSource{*gamePath};
+  auto decls = MaterialDecls{source};
+  source.closeFiles();
+  REQUIRE(decls.constructionError().empty());
+  const auto loadWarnings = problems(decls.takeMessages());
+
+  auto defaulted = std::vector<std::string>{};
+  auto warned = std::vector<std::string>{};
+  auto warnings = loadWarnings;
+  for (int i = 0; i < decls.materialCount(); ++i)
+  {
+    const auto entry = decls.lookupIndex(i);
+    const auto name = decls.materialName(i);
+    if (entry && (*entry.value)->defaulted)
+    {
+      defaulted.push_back(name);
+    }
+    auto found = problems(decls.takeMessages());
+    if (!found.empty() || !entry)
+    {
+      warned.push_back("material " + name);
+    }
+    warnings.insert(warnings.end(), found.begin(), found.end());
+  }
+  for (int i = 0; i < decls.tableCount(); ++i)
+  {
+    const auto table = decls.parseTable(i);
+    auto found = problems(decls.takeMessages());
+    if (!found.empty() || !table)
+    {
+      warned.push_back("table " + (table ? *table.value : std::to_string(i)));
+    }
+    warnings.insert(warnings.end(), found.begin(), found.end());
+  }
+
+  auto json = std::string{"{\n\"types\": {"};
+  auto first = true;
+  for (const auto& count : decls.declCounts())
+  {
+    json += (first ? "\n" : ",\n") + jsonString(count.type) + ": "
+            + jsonList(decls.declNames(count.type));
+    first = false;
+  }
+  json += "},\n\"defaulted\": " + jsonList(defaulted);
+  json += ",\n\"warned\": " + jsonList(warned);
+  json += ",\n\"loadWarnings\": " + jsonList(loadWarnings);
+  json += ",\n\"warnings\": " + jsonList(warnings) + "\n}\n";
+  writeTextFile(dumpPath, json);
   std::cout << fmt::format(
-    "Goldens: {} of {} print blocks match the engine's exactly\n", matched, compared);
-  for (const auto& difference : warningDifferences)
-  {
-    std::cout << "  parse warnings differ: " << difference << "\n";
-  }
-  std::cout << std::flush;
-  CHECK(compared == 43);
-  CHECK(matched == compared);
+    "Dump: {} materials, {} defaulted, {} warned decls, {} warnings -> {}\n",
+    decls.materialCount(),
+    defaulted.size(),
+    warned.size(),
+    warnings.size(),
+    dumpPath);
 }
 
 } // namespace tb::lit

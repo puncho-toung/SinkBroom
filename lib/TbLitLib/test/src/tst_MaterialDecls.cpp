@@ -19,7 +19,6 @@
 
 #include "TestEnvironment.h"
 #include "lit/MaterialDecls.h"
-#include "lit/Materials.h"
 
 #include <algorithm>
 #include <array>
@@ -27,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -192,7 +192,7 @@ constexpr auto NoParms = std::array<float, MaterialDecls::ShaderParmCount>{};
 
 TEST_CASE("MaterialDecls")
 {
-  const auto source = MemoryDeclSource{fixtureFiles()};
+  auto source = MemoryDeclSource{fixtureFiles()};
   auto decls = MaterialDecls{source};
   REQUIRE(decls.constructionError().empty());
 
@@ -680,7 +680,7 @@ TEST_CASE("MaterialDecls former fatal sites")
 {
   SECTION("a listed file that cannot be read")
   {
-    const auto source = MemoryDeclSource{{
+    auto source = MemoryDeclSource{{
       DeclFile{"materials/a_missing.mtr", std::nullopt, 0},
       DeclFile{"materials/b_present.mtr", "textures/lp1a/present { { map _white } }", 0},
     }};
@@ -696,7 +696,7 @@ TEST_CASE("MaterialDecls former fatal sites")
 
   SECTION("an image referenced with conflicting cube map states")
   {
-    const auto source = MemoryDeclSource{{
+    auto source = MemoryDeclSource{{
       DeclFile{
         "materials/conflict.mtr",
         "textures/lp1a/flat2d { { blend add map env/conflict } }\n"
@@ -720,42 +720,185 @@ TEST_CASE("MaterialDecls former fatal sites")
   }
 }
 
-TEST_CASE("Materials")
+TEST_CASE("MaterialDecls refuses an overlong name")
 {
-  const auto source = MemoryDeclSource{fixtureFiles()};
+  auto source = MemoryDeclSource{fixtureFiles()};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+  const auto result = decls.lookup(std::string(2000, 'x'));
+  CHECK_FALSE(result);
+  CHECK_FALSE(result.error.empty());
+}
 
-  SECTION("makeMaterialDecls")
+namespace
+{
+
+// a source that throws where the registry's file system calls it (G3)
+class ThrowingSource : public DeclSource
+{
+private:
+  MemoryDeclSource m_source;
+
+public:
+  explicit ThrowingSource(std::vector<DeclFile> files)
+    : m_source{std::move(files)}
   {
-    auto decls = makeMaterialDecls(source);
-    REQUIRE(decls.is_success());
-    CHECK(makeMaterialDecls(source).is_error());
   }
 
-  SECTION("lookupMaterial and evaluateMaterial")
+  std::vector<std::string> listFiles(
+    const std::string& folder, const std::string& extension) override
   {
-    auto decls = makeMaterialDecls(source) | kdl::value();
-    const auto material = lookupMaterial(*decls, "textures/lp1a/constant") | kdl::value();
-    CHECK(material->name == "textures/lp1a/constant");
-
-    const auto registers =
-      evaluateMaterial(*decls, *material, NoParms, 0.0f) | kdl::value();
-    CHECK(registers.registers.size() == size_t(material->numRegisters));
-
-    CHECK(lookupMaterial(*decls, std::string(2000, 'x')).is_error());
+    if (folder == "skins")
+    {
+      throw std::runtime_error{"an injected listing failure"};
+    }
+    return m_source.listFiles(folder, extension);
   }
 
-  SECTION("lookupEntityDefKeys")
+  std::optional<std::string> readFile(
+    const std::string& path, std::int64_t* timestamp) override
   {
-    auto decls = makeMaterialDecls(source) | kdl::value();
-    CHECK(lookupEntityDefKeys(*decls, "lp1a_base").is_success());
-    CHECK(lookupEntityDefKeys(*decls, "lp1a_missing").is_error());
+    if (path == "materials/b_throws.mtr")
+    {
+      throw std::runtime_error{"an injected read failure"};
+    }
+    return m_source.readFile(path, timestamp);
+  }
+};
+
+std::string stagesOf(const int count, const std::string& stage)
+{
+  auto text = std::string{};
+  for (int i = 0; i < count; ++i)
+  {
+    text += stage;
+  }
+  return text;
+}
+
+} // namespace
+
+TEST_CASE("MaterialDecls catches what its source throws")
+{
+  auto source = ThrowingSource{{
+    DeclFile{"materials/a_good.mtr", "textures/lp1a/good { { map _white } }", 0},
+    DeclFile{"materials/b_throws.mtr", "textures/lp1a/thrown { { map _white } }", 0},
+    DeclFile{"skins/a.skin", "skins/lp1a { * textures/lp1a/good }", 0},
+  }};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+
+  const auto warnings = messagesOf(decls, DeclMessageKind::Warning);
+  CHECK(
+    std::count(
+      warnings.begin(),
+      warnings.end(),
+      "The decl files of skins cannot be listed: an injected listing failure")
+    == 1);
+  CHECK(
+    std::count(
+      warnings.begin(),
+      warnings.end(),
+      "materials/b_throws.mtr cannot be read: an injected read failure")
+    == 1);
+  CHECK(hasMessage(
+    decls, DeclMessageKind::FatalError, "couldn't load materials/b_throws.mtr"));
+  CHECK_FALSE(lookup(decls, "textures/lp1a/good")->implicit);
+  CHECK(lookup(decls, "textures/lp1a/thrown")->implicit);
+}
+
+TEST_CASE("MaterialDecls guards the engine's overflows")
+{
+  SECTION("a material of more than 256 stages is refused before it is parsed")
+  {
+    // M-ID-GUARD-05: the copied ParseStage writes past parseStages from the 257th stage;
+    // brace blocks and stage shortcuts both count
+    const auto stage = std::string{"\t{ blend add map _white }\n"};
+    auto source = MemoryDeclSource{{
+      DeclFile{
+        "materials/stages.mtr",
+        "textures/lp1a/blocks\n{\n" + stagesOf(257, stage) + "}\n"
+          + "textures/lp1a/shortcuts\n{\n" + stagesOf(200, stage)
+          + stagesOf(57, "\tdiffusemap _white\n") + "}\n"
+          + "textures/lp1a/limit\n{\n// { a comment is no stage }\n\tqer_editorimage "
+            "\"{ nor a string }\"\n"
+          + stagesOf(256, stage) + "}\n",
+        0},
+    }};
+    auto decls = MaterialDecls{source};
+    REQUIRE(decls.constructionError().empty());
+
+    for (const auto* name : {"textures/lp1a/blocks", "textures/lp1a/shortcuts"})
+    {
+      CAPTURE(name);
+      CHECK(hasMessage(
+        decls,
+        DeclMessageKind::Warning,
+        std::string{"material '"} + name + "' exceeded 256 stages"));
+      const auto refused = decls.lookup(name);
+      REQUIRE_FALSE(refused);
+      CHECK_THAT(
+        refused.error, Catch::Matchers::ContainsSubstring("exceeded 256 stages"));
+    }
+    CHECK(decls.defaultedCount("material") == 2);
+
+    // 256 stages are the engine's limit, and parse
+    const auto limit = lookup(decls, "textures/lp1a/limit");
+    CHECK(limit->stages.size() == 256u);
+    CHECK_FALSE(hasMessage(
+      decls,
+      DeclMessageKind::Warning,
+      "material 'textures/lp1a/limit' exceeded 256 stages"));
+  }
+
+  SECTION("a decl file with a name of 1024 or more characters is not read")
+  {
+    // M-ID-GUARD-06: MakeNameCanonical writes one byte past its buffer for such a name,
+    // which a decl name, an inherit value or a table reference can pass it
+    const auto longName = "textures/lp1a/" + std::string(1024, 'n');
+    const auto longString = "\"" + std::string(1024, 's') + "\"";
+    auto source = MemoryDeclSource{{
+      DeclFile{"materials/a_name.mtr", longName + " { { map _white } }", 0},
+      DeclFile{
+        "materials/b_string.mtr",
+        "textures/lp1a/str { qer_editorimage " + longString + " }",
+        0},
+      DeclFile{
+        "materials/c_short.mtr",
+        "textures/lp1a/short { qer_editorimage " + std::string(1000, 'k') + " }",
+        0},
+      // a dot ends the canonical name first, as in the retail PDAs' long texts
+      DeclFile{
+        "materials/d_dotted.mtr",
+        "textures/lp1a/dotted { qer_editorimage \"Text. " + std::string(1100, 't')
+          + "\" }",
+        0},
+    }};
+    auto decls = MaterialDecls{source};
+    REQUIRE(decls.constructionError().empty());
+
+    for (const auto* path : {"materials/a_name.mtr", "materials/b_string.mtr"})
+    {
+      CAPTURE(path);
+      CHECK(hasMessage(
+        decls,
+        DeclMessageKind::Warning,
+        std::string{path}
+          + " holds a name of 1024 or more characters, which the engine's "
+            "MakeNameCanonical cannot take; it is not read"));
+      CHECK(hasMessage(
+        decls, DeclMessageKind::FatalError, std::string{"couldn't load "} + path));
+    }
+    CHECK(lookup(decls, "textures/lp1a/str")->implicit);
+    CHECK_FALSE(lookup(decls, "textures/lp1a/short")->implicit);
+    CHECK_FALSE(lookup(decls, "textures/lp1a/dotted")->implicit);
   }
 }
 
 #if defined(_MSC_VER) && defined(_DEBUG)
 TEST_CASE("MaterialDecls build and destroy leak nothing")
 {
-  const auto source = MemoryDeclSource{fixtureFiles()};
+  auto source = MemoryDeclSource{fixtureFiles()};
   const auto names = std::vector<std::string>{
     "textures/lp1a/wall",        "textures/lp1a/pbr",
     "textures/lp1a/diffuseOnly", "textures/lp1a/grate",

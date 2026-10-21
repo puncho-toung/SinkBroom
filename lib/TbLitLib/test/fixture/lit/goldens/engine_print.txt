@@ -1,8 +1,11 @@
-# The engine's printMaterial and printTable output, captured by
-# TOOLS/lit-preview/capture_goldens.py for the LP1a.2 golden test.
+# The engine's decl output, captured by TOOLS/lit-preview/capture_goldens.py for the
+# LP1a golden tests ([.][retail]).
 # engine commit 285ea4d18a0aaedf46b0803ea656e4850eba5a01 (the exe: RBDOOM 3 BFG 1.6.0.1405 win-x64 Oct 18 2026 19:55:35)
-# captured 2026-10-21 13:14 from D:/NecroGame/claudespace/NecroGameBuild, fs_game tb_verify; exited with 0 after 5 s
-# each block: '@@ <type> <name>', the log lines between the touch and the next marker
+# captured 2026-10-21 15:13 from the game folder TB_LIT_GAME_PATH names,
+# fs_game tb_capture in the sandbox; pass 1 exited with 0 after 26 s; pass 2 exited with 0 after 27 s
+# blocks: '@@ <kind> <name>', the log lines between the touch and the next marker;
+# '@@ names <type>': count, hash of the sorted names, the names SinkBroom lacks;
+# '@@ warnings all': every distinct warning line of pass 2, in the log's order
 @@ list decls
   41k  309 table
 3833k 7788 material
@@ -21,6 +24,68 @@
   71k   61 mapDef
 17045 total decls is 925 decl files
 8175KB in text, 9031KB in structures
+@@ names material
+count 7788
+hash ea7a084af3b96f07
+only _doomclassic
+only _imguifont
+only _white
+only generated/swf/dialog
+only generated/swf/doomintro
+only generated/swf/leintro
+only generated/swf/roeintro
+only generated/swf/save_indicator
+only generated/swf/shell
+only guis/assets/hud/controller/mouse1
+only guis/assets/hud/controller/mouse2
+only guis/assets/hud/controller/mouse3
+only guis/assets/hud/controller/ps3/circle
+only guis/assets/hud/controller/ps3/cross
+only guis/assets/hud/controller/ps3/l1
+only guis/assets/hud/controller/ps3/l2
+only guis/assets/hud/controller/ps3/r1
+only guis/assets/hud/controller/ps3/r2
+only guis/assets/hud/controller/ps3/square
+only guis/assets/hud/controller/ps3/triangle
+only guis/assets/hud/controller/xb360/a
+only guis/assets/hud/controller/xb360/b
+only guis/assets/hud/controller/xb360/lb
+only guis/assets/hud/controller/xb360/lt
+only guis/assets/hud/controller/xb360/rb
+only guis/assets/hud/controller/xb360/rt
+only guis/assets/hud/controller/xb360/x
+only guis/assets/hud/controller/xb360/y
+only guis/assets/mainmenu/doom2_cover
+only guis/assets/mainmenu/doom3_cover
+only guis/assets/mainmenu/doom_cover
+only guis/assets/splash/legal_english
+only guis/assets/white
+only newfonts/arial_narrow/48
+only newfonts/bankgothic_md_bt/48
+only newfonts/chainlink_semi_bold/48
+only newfonts/sarasori_rg/48
+only ui/assets/guicursor_arrow
+only ui/assets/guicursor_hand
+only ui/assets/guicursor_hand_a
+only ui/assets/guicursor_hand_b
+only ui/assets/guicursor_hand_circle
+only ui/assets/guicursor_hand_cross
+only ui/assets/guicursor_hand_square
+only ui/assets/guicursor_hand_triangle
+only ui/assets/guicursor_hand_x
+only ui/assets/guicursor_hand_y
+only ui/assets/scrollbar_down
+only ui/assets/scrollbar_left
+only ui/assets/scrollbar_right
+only ui/assets/scrollbar_thumb
+only ui/assets/scrollbar_up
+only ui/assets/scrollbarh
+only ui/assets/scrollbarv
+only }
+@@ names sound
+count 3091
+hash ad680547b582f4ed
+only }
 @@ material shaderdemos/testSos
 WARNING: Couldn't load image: gfx/misc/console01 : gfx/misc/console01#__0200
 material shaderdemos/testsos:
@@ -317,6 +382,9 @@ Currently referenced this level.
 register 21: 1.000000
 
 @@ material models/mapobjects/materialorb/orb
+Binarize File: 'models/mapobjects/pbr/materialorb/substance/metal04_basecolor#__0100' - reason 'binarize: binary file not found 'models/mapobjects/pbr/materialorb/substance/metal04_basecolor#__0100''
+Binarize File: 'models/mapobjects/pbr/materialorb/substance/metal04_normal#__0300' - reason 'binarize: binary file not found 'models/mapobjects/pbr/materialorb/substance/metal04_normal#__0300''
+Binarize File: 'models/mapobjects/pbr/materialorb/substance/metal04_rmao#__1200' - reason 'binarize: binary file not found 'models/mapobjects/pbr/materialorb/substance/metal04_rmao#__1200''
 material models/mapobjects/materialorb/orb:
 source: materials/materialorb.mtr:1
 ----------
@@ -574,7 +642,759 @@ source: materials/base_wall.mtr:1
 ----------
 Parsed.
 Currently referenced this level.
-@@ warnings previously-defined
+@@ material textures/particles/bfgball
+WARNING: unknown general material parameter 'nomipmaps' in 'textures/particles/bfgball'
+material textures/particles/bfgball:
+source: materials/aaduffytest.mtr:117
+----------
+#decl-text fnv1a64=f7b6d90668eab764 bytes=245 lines=18
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/decals/wallsplat1
+WARNING: file materials/aaduffytest.mtr, line 446: missing sort parameter
+material textures/decals/wallsplat1:
+source: materials/aaduffytest.mtr:438
+----------
+#decl-text fnv1a64=2b0396eb79dcb8bc bytes=390 lines=17
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/decals/hellwind
+WARNING: Couldn't load image: textures/decals/hellwind : textures/decals/hellwind#__0200
+WARNING: unknown token 'bugwings' in material 'textures/decals/hellwind'
+material textures/decals/hellwind:
+source: materials/decals.mtr:284
+----------
+#decl-text fnv1a64=cba832d899d46abc bytes=283 lines=27
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/common/nodrop
+WARNING: unknown general material parameter 'nodrop' in 'textures/common/nodrop'
+material textures/common/nodrop:
+source: materials/invisible.mtr:230
+----------
+#decl-text fnv1a64=c1a72de3aabd580f bytes=238 lines=13
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material models/mapobjects/fuel_barrel/pbarrel_flare
+WARNING: unknown general material parameter 'flare' in 'models/mapobjects/fuel_barrel/pbarrel_flare'
+material models/mapobjects/fuel_barrel/pbarrel_flare:
+source: materials/mapobjects.mtr:4556
+----------
+#decl-text fnv1a64=bf89e223c70d86b8 bytes=106 lines=7
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material models/mapobjects/fuel_barrel/fbarrel
+WARNING: unknown general material parameter 'flare' in 'models/mapobjects/fuel_barrel/fbarrel'
+material models/mapobjects/fuel_barrel/fbarrel:
+source: materials/mapobjects.mtr:4574
+----------
+#decl-text fnv1a64=8bcfe31d4cf7765d bytes=467 lines=16
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material models/mapobjects/hellcages/hellcagechain_
+WARNING: Couldn't load image: models/mapobjects/hellcages/HellCagechain_d : models/mapobjects/hellcages/HellCagechain_d#__1000
+WARNING: Couldn't load image: models/mapobjects/hellcages/HellCagechain_d : models/mapobjects/hellcages/HellCagechain_d#__0100
+WARNING: unknown token 'bumpmap' in material 'models/mapobjects/hellcages/hellcagechain_'
+material models/mapobjects/hellcages/hellcagechain_:
+source: materials/patricktest.mtr:927
+----------
+#decl-text fnv1a64=a6b3683d520a8821 bytes=572 lines=30
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/sfx/radiogoop_mix
+WARNING: Couldn't load image: textures/sfx/radiogoopflow_local : textures/sfx/radiogoopflow_local#__0300
+WARNING: unknown token 'inverse' in material 'textures/sfx/radiogoop_mix'
+material textures/sfx/radiogoop_mix:
+source: materials/patricktest.mtr:2032
+----------
+#decl-text fnv1a64=5c5905eb1533a3bd bytes=772 lines=54
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/hell/smokeblend
+WARNING: unknown token 'vertexblend' in material 'textures/hell/smokeblend'
+material textures/hell/smokeblend:
+source: materials/patricktest.mtr:3505
+----------
+#decl-text fnv1a64=7a66efa3a00b2b93 bytes=291 lines=26
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/object/cdplayer
+WARNING: Couldn't load image: textures/object/cdplayer_local : textures/object/cdplayer_local#__0300
+WARNING: Couldn't load image: textures/object/cdplayer_d : textures/object/cdplayer_d#__0100
+WARNING: Couldn't load image: textures/object/cdplayer_s : textures/object/cdplayer_s#__0000
+WARNING: Couldn't load image: textures/object/cdplayer_local : textures/object/cdplayer_local#__0200
+WARNING: file materials/senetemp.mtr, line 11790: Bad term 'cdplayertable'
+WARNING: file materials/senetemp.mtr, line 11790: expected ',' but found '['
+material textures/object/cdplayer:
+source: materials/senetemp.mtr:11769
+----------
+#decl-text fnv1a64=c6aacdeb90ff9577 bytes=455 lines=24
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/sfx/flare_toggle
+WARNING: file materials/sfx.mtr, line 3354: Bad term 'red'
+material textures/sfx/flare_toggle:
+source: materials/sfx.mtr:3340
+----------
+#decl-text fnv1a64=764c360766875500 bytes=273 lines=21
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material textures/sfx/flare_toggle2
+WARNING: file materials/sfx.mtr, line 3374: Bad term 'red'
+material textures/sfx/flare_toggle2:
+source: materials/sfx.mtr:3360
+----------
+#decl-text fnv1a64=8c87f6176131ca80 bytes=274 lines=21
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material shaderdemos/shadowdrawlight
+WARNING: unknown token 'shadowDraw' in material 'shaderdemos/shadowdrawlight'
+material shaderdemos/shadowdrawlight:
+source: materials/shaderdemo.mtr:835
+----------
+#decl-text fnv1a64=47087d5823bab203 bytes=431 lines=24
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material shaderdemos/megatexture
+WARNING: unknown token 'megaTexture' in material 'shaderdemos/megatexture'
+material shaderdemos/megatexture:
+source: materials/shaderdemo.mtr:1031
+----------
+#decl-text fnv1a64=e66a72932edd3589 bytes=1290 lines=55
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ material video/noise
+WARNING: unknown token 'noisemap' in material 'video/noise'
+material video/noise:
+source: materials/video.mtr:100
+----------
+#decl-text fnv1a64=2989923447771e50 bytes=49 lines=8
+----------
+<DEFAULTED>
+Currently referenced this level.
+register 21: 1.000000
+
+@@ table lavaflicker3
+WARNING: file materials/helld3xp.mtr, line 2: expected float value, found '..5'
+table lavaflicker3:
+source: materials/helld3xp.mtr:1
+----------
+#decl-text fnv1a64=b6d914ac4fa17cf5 bytes=55 lines=2
+----------
+<DEFAULTED>
+Currently referenced this level.
+@@ table fivestage
+WARNING: file materials/mapobjects.mtr, line 1: unknown token '1'
+table fivestage:
+source: materials/mapobjects.mtr:1
+----------
+#decl-text fnv1a64=3e51919fdccb0960 bytes=33 lines=1
+----------
+<DEFAULTED>
+Currently referenced this level.
+@@ table blood2
+WARNING: file materials/patricktest.mtr, line 3: expected float value, found '}'
+table blood2:
+source: materials/patricktest.mtr:2
+----------
+#decl-text fnv1a64=34418a30d78ac247 bytes=112 lines=2
+----------
+<DEFAULTED>
+Currently referenced this level.
+@@ implicit _doomclassic
+material _doomclassic:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit _imguifont
+material _imguifont:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit _white
+material _white:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit generated/swf/dialog
+material generated/swf/dialog:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit generated/swf/doomintro
+material generated/swf/doomintro:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit generated/swf/leintro
+material generated/swf/leintro:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit generated/swf/roeintro
+material generated/swf/roeintro:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit generated/swf/save_indicator
+material generated/swf/save_indicator:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit generated/swf/shell
+material generated/swf/shell:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/mouse1
+material guis/assets/hud/controller/mouse1:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/mouse2
+material guis/assets/hud/controller/mouse2:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/mouse3
+material guis/assets/hud/controller/mouse3:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/ps3/circle
+material guis/assets/hud/controller/ps3/circle:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/ps3/cross
+material guis/assets/hud/controller/ps3/cross:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/ps3/l1
+material guis/assets/hud/controller/ps3/l1:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/ps3/l2
+material guis/assets/hud/controller/ps3/l2:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/ps3/r1
+material guis/assets/hud/controller/ps3/r1:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/ps3/r2
+material guis/assets/hud/controller/ps3/r2:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/ps3/square
+material guis/assets/hud/controller/ps3/square:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/ps3/triangle
+material guis/assets/hud/controller/ps3/triangle:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/xb360/a
+material guis/assets/hud/controller/xb360/a:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/xb360/b
+material guis/assets/hud/controller/xb360/b:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/xb360/lb
+material guis/assets/hud/controller/xb360/lb:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/xb360/lt
+material guis/assets/hud/controller/xb360/lt:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/xb360/rb
+material guis/assets/hud/controller/xb360/rb:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/xb360/rt
+material guis/assets/hud/controller/xb360/rt:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/xb360/x
+material guis/assets/hud/controller/xb360/x:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/hud/controller/xb360/y
+material guis/assets/hud/controller/xb360/y:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/mainmenu/doom2_cover
+material guis/assets/mainmenu/doom2_cover:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/mainmenu/doom3_cover
+material guis/assets/mainmenu/doom3_cover:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/mainmenu/doom_cover
+material guis/assets/mainmenu/doom_cover:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/splash/legal_english
+material guis/assets/splash/legal_english:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit guis/assets/white
+material guis/assets/white:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit newfonts/arial_narrow/48
+material newfonts/arial_narrow/48:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit newfonts/bankgothic_md_bt/48
+material newfonts/bankgothic_md_bt/48:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit newfonts/chainlink_semi_bold/48
+material newfonts/chainlink_semi_bold/48:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit newfonts/sarasori_rg/48
+material newfonts/sarasori_rg/48:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/guicursor_arrow
+material ui/assets/guicursor_arrow:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/guicursor_hand
+material ui/assets/guicursor_hand:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/guicursor_hand_a
+material ui/assets/guicursor_hand_a:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/guicursor_hand_b
+material ui/assets/guicursor_hand_b:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/guicursor_hand_circle
+material ui/assets/guicursor_hand_circle:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/guicursor_hand_cross
+material ui/assets/guicursor_hand_cross:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/guicursor_hand_square
+material ui/assets/guicursor_hand_square:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/guicursor_hand_triangle
+material ui/assets/guicursor_hand_triangle:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/guicursor_hand_x
+material ui/assets/guicursor_hand_x:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/guicursor_hand_y
+material ui/assets/guicursor_hand_y:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/scrollbar_down
+material ui/assets/scrollbar_down:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/scrollbar_left
+material ui/assets/scrollbar_left:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/scrollbar_right
+material ui/assets/scrollbar_right:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/scrollbar_thumb
+material ui/assets/scrollbar_thumb:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/scrollbar_up
+material ui/assets/scrollbar_up:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/scrollbarh
+material ui/assets/scrollbarh:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit ui/assets/scrollbarv
+material ui/assets/scrollbarv:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ implicit }
+material }:
+source: <implicit file>:0
+----------
+#decl-text fnv1a64=0c9a047e602be0e3 bytes=9 lines=1
+----------
+Parsed.
+Currently referenced this level.
+register 21: 1.000000
+
+@@ warnings all
+WARNING: Unable to open resource file maps/_startup.resources
 WARNING: file materials/aaduffytest.mtr, line 547: material 'textures/decals/dsplat2' previously defined at materials/_rbdoom_decals_blood.mtr:72
 WARNING: file materials/aaduffytest.mtr, line 564: material 'textures/decals/dsplat5' previously defined at materials/_rbdoom_decals_blood.mtr:106
 WARNING: file materials/aaduffytest.mtr, line 581: material 'textures/decals/dsplat7' previously defined at materials/_rbdoom_decals_blood.mtr:140
@@ -607,3 +1427,52 @@ WARNING: file materials/senetemp.mtr, line 6630: material 'textures/decals/splat
 WARNING: file materials/senetemp.mtr, line 6643: material 'textures/decals/splat2' previously defined at materials/_rbdoom_decals_blood.mtr:375
 WARNING: file materials/senetemp.mtr, line 6656: material 'textures/decals/splat1' previously defined at materials/_rbdoom_decals_blood.mtr:345
 WARNING: file def/_tb_models.def, line 5230: entityDef 'genmodel_mapobjects_monitors_hangingmonitor' previously defined at def/_tb_models.def:5216
+WARNING: Couldn't load image: } : }#__0200
+WARNING: Couldn't load image: _cinematicY : _cinematicY#__0200
+WARNING: Couldn't load image: _cinematicCr : _cinematicCr#__0200
+WARNING: Couldn't load image: _cinematicCb : _cinematicCb#__0200
+WARNING: Couldn't load image: _cinematic : _cinematic#__0200
+WARNING: Couldn't load image: _doomclassic : _doomclassic#__0200
+WARNING: Couldn't load image: gfx/misc/console01 : gfx/misc/console01#__0200
+WARNING: Couldn't load image: lights/window : lights/window#__0500
+WARNING: Couldn't load image: lights/light : lights/light#__0500
+WARNING: Couldn't load image: lights/squarelight2 : lights/squarelight2#__0500
+WARNING: Couldn't load image: lights/spot05 : lights/spot05#__0500
+WARNING: Couldn't load cube image: env/test
+WARNING: Couldn't load cube image: env/e3_2_amb
+WARNING: Couldn't load image: textures/sfx/shard00 : textures/sfx/shard00#__1000
+WARNING: Couldn't load image: textures/sfx/shard00 : textures/sfx/shard00#__0100
+WARNING: Couldn't load image: guis/assets/common/temp3 : guis/assets/common/temp3#__0200
+WARNING: Couldn't load image: guis/assets/common/temp2 : guis/assets/common/temp2#__0200
+WARNING: Couldn't load image: heightmap( textures/hell/bark1_bmp, 4) : heightmap( textures/hell/bark1_bmp, 4)#__0300
+WARNING: Couldn't load image: textures/hell/bark1 : textures/hell/bark1#__0100
+WARNING: Couldn't load image: textures/decals/bloodpool1 : textures/decals/bloodpool1#__0200
+WARNING: Couldn't load image: heightmap( textures/decals/bloodpool1, 1) : heightmap( textures/decals/bloodpool1, 1)#__0300
+WARNING: Couldn't load image: makealpha( textures/decals/bloodpool1) : makealpha( textures/decals/bloodpool1)#__0200
+WARNING: unknown general material parameter 'nomipmaps' in 'textures/particles/bfgball'
+WARNING: file materials/aaduffytest.mtr, line 446: missing sort parameter
+WARNING: Couldn't load image: textures/decals/hellwind : textures/decals/hellwind#__0200
+WARNING: unknown token 'bugwings' in material 'textures/decals/hellwind'
+WARNING: unknown general material parameter 'nodrop' in 'textures/common/nodrop'
+WARNING: unknown general material parameter 'flare' in 'models/mapobjects/fuel_barrel/pbarrel_flare'
+WARNING: unknown general material parameter 'flare' in 'models/mapobjects/fuel_barrel/fbarrel'
+WARNING: Couldn't load image: models/mapobjects/hellcages/HellCagechain_d : models/mapobjects/hellcages/HellCagechain_d#__1000
+WARNING: Couldn't load image: models/mapobjects/hellcages/HellCagechain_d : models/mapobjects/hellcages/HellCagechain_d#__0100
+WARNING: unknown token 'bumpmap' in material 'models/mapobjects/hellcages/hellcagechain_'
+WARNING: Couldn't load image: textures/sfx/radiogoopflow_local : textures/sfx/radiogoopflow_local#__0300
+WARNING: unknown token 'inverse' in material 'textures/sfx/radiogoop_mix'
+WARNING: unknown token 'vertexblend' in material 'textures/hell/smokeblend'
+WARNING: Couldn't load image: textures/object/cdplayer_local : textures/object/cdplayer_local#__0300
+WARNING: Couldn't load image: textures/object/cdplayer_d : textures/object/cdplayer_d#__0100
+WARNING: Couldn't load image: textures/object/cdplayer_s : textures/object/cdplayer_s#__0000
+WARNING: Couldn't load image: textures/object/cdplayer_local : textures/object/cdplayer_local#__0200
+WARNING: file materials/senetemp.mtr, line 11790: Bad term 'cdplayertable'
+WARNING: file materials/senetemp.mtr, line 11790: expected ',' but found '['
+WARNING: file materials/sfx.mtr, line 3354: Bad term 'red'
+WARNING: file materials/sfx.mtr, line 3374: Bad term 'red'
+WARNING: unknown token 'shadowDraw' in material 'shaderdemos/shadowdrawlight'
+WARNING: unknown token 'megaTexture' in material 'shaderdemos/megatexture'
+WARNING: unknown token 'noisemap' in material 'video/noise'
+WARNING: file materials/helld3xp.mtr, line 2: expected float value, found '..5'
+WARNING: file materials/mapobjects.mtr, line 1: unknown token '1'
+WARNING: file materials/patricktest.mtr, line 3: expected float value, found '}'

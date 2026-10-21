@@ -22,16 +22,27 @@
 #include "lit/MaterialDecls.h"
 #include "lit/MaterialService.h"
 
+#include "kd/result.h"
+
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 #if defined(_MSC_VER) && defined(_DEBUG)
 #include <crtdbg.h>
@@ -46,11 +57,15 @@ namespace
 {
 
 using namespace std::chrono_literals;
+using Clock = std::chrono::steady_clock;
 
 constexpr auto Timeout = 30s;
 constexpr auto NoParms = ShaderParms{};
 
-std::unique_ptr<DeclSource> fixtureSource()
+using SourceFactory =
+  std::function<std::unique_ptr<DeclSource>(const std::atomic<bool>& cancel)>;
+
+std::unique_ptr<DeclSource> fixtureSource(const std::atomic<bool>&)
 {
   return std::make_unique<MemoryDeclSource>(materialDeclsFixture());
 }
@@ -68,6 +83,11 @@ std::unique_ptr<DeclSource> bulkSource(const int count)
     std::vector<DeclFile>{DeclFile{"materials/bulk.mtr", std::move(text), 0}});
 }
 
+SourceFactory bulkSourceOf(const int count)
+{
+  return [count](const std::atomic<bool>&) { return bulkSource(count); };
+}
+
 // a one-shot gate: a thread waits in it until the test opens it
 class Gate
 {
@@ -78,6 +98,14 @@ private:
   bool m_open = false;
 
 public:
+  // the entering side, which goes on
+  void enter()
+  {
+    auto lock = std::scoped_lock{m_mutex};
+    m_entered = true;
+    m_changed.notify_all();
+  }
+
   // the waiting side
   void enterAndWait()
   {
@@ -101,6 +129,28 @@ public:
   }
 };
 
+/**
+ * A2.17: opens the gate when the test leaves its scope, also through a failed REQUIRE, so
+ * that the service's destructor never joins a thread that waits in the gate. Declared
+ * after the service, so that it goes first.
+ */
+class GateOpener
+{
+private:
+  std::shared_ptr<Gate> m_gate;
+
+public:
+  explicit GateOpener(std::shared_ptr<Gate> gate)
+    : m_gate{std::move(gate)}
+  {
+  }
+
+  ~GateOpener() { m_gate->open(); }
+
+  GateOpener(const GateOpener&) = delete;
+  GateOpener& operator=(const GateOpener&) = delete;
+};
+
 // a source that waits in the gate when it reads its second file
 class GatedSource : public DeclSource
 {
@@ -118,13 +168,13 @@ public:
   }
 
   std::vector<std::string> listFiles(
-    const std::string& folder, const std::string& extension) const override
+    const std::string& folder, const std::string& extension) override
   {
     return m_source.listFiles(folder, extension);
   }
 
   std::optional<std::string> readFile(
-    const std::string& path, std::int64_t* timestamp) const override
+    const std::string& path, std::int64_t* timestamp) override
   {
     if (++*m_reads == 2)
     {
@@ -132,6 +182,18 @@ public:
     }
     return m_source.readFile(path, timestamp);
   }
+};
+
+// a source whose files always change while they are read (A3.5)
+class ChangingSource : public MemoryDeclSource
+{
+public:
+  ChangingSource()
+    : MemoryDeclSource{materialDeclsFixture()}
+  {
+  }
+
+  bool changedWhileRead() const override { return true; }
 };
 
 struct Collected
@@ -160,12 +222,22 @@ struct Collected
     }
     return texts;
   }
+
+  // the warnings and errors whose text holds part
+  std::size_t problemsWith(const std::string& part)
+  {
+    auto lock = std::scoped_lock{mutex};
+    return std::size_t(
+      std::count_if(events.begin(), events.end(), [&](const auto& event) {
+        return event.kind == MaterialServiceEvent::Kind::Message
+               && event.level != DeclMessageKind::Info
+               && event.text.find(part) != std::string::npos;
+      }));
+  }
 };
 
 MaterialServiceOptions options(
-  std::function<std::unique_ptr<DeclSource>()> makeSource,
-  MaterialListener listener = {},
-  const bool parseAll = false)
+  SourceFactory makeSource, MaterialListener listener = {}, const bool parseAll = false)
 {
   auto result = MaterialServiceOptions{};
   result.makeSource = std::move(makeSource);
@@ -173,6 +245,13 @@ MaterialServiceOptions options(
   result.pollInterval = 0ms;
   result.parseAll = parseAll;
   return result;
+}
+
+std::unique_ptr<MaterialService> start(MaterialServiceOptions serviceOptions)
+{
+  auto service = MaterialService::create(std::move(serviceOptions));
+  REQUIRE(service.is_success());
+  return std::move(service).value();
 }
 
 std::shared_ptr<const MaterialEntry> waitForEntry(
@@ -183,9 +262,9 @@ std::shared_ptr<const MaterialEntry> waitForEntry(
   {
     return found.entry;
   }
-  const auto table = service.waitForTable(
+  const auto table = service.waitForTableForTesting(
     [&](const MaterialTable& t) { return t.find(name) != nullptr; }, Timeout);
-  const auto* slot = table->find(name);
+  const auto slot = table->find(name);
   REQUIRE(slot);
   INFO(slot->error);
   REQUIRE(slot->entry);
@@ -203,7 +282,7 @@ std::shared_ptr<const EvaluatedRegisters> waitForRegisters(
     return registers;
   }
   const auto key = RegisterKey{MaterialId::of(entry), parms, time};
-  const auto table = service.waitForTable(
+  const auto table = service.waitForTableForTesting(
     [&](const MaterialTable& t) { return t.findRegisters(key) != nullptr; }, Timeout);
   auto registers = table->findRegisters(key);
   REQUIRE(registers);
@@ -222,67 +301,86 @@ std::string diffuseImage(const MaterialEntry& entry)
   return {};
 }
 
+// a game folder whose base holds count .resources files of entries each, so that a full
+// container scan takes long
+void writeScanHeavyGame(
+  const std::filesystem::path& gamePath, const int count, const int entries)
+{
+  auto files = std::vector<std::pair<std::string, std::string>>{};
+  for (int i = 0; i < entries; ++i)
+  {
+    files.emplace_back(fmt::format("materials/scan/entry{:05}.mtr", i), "x");
+  }
+  const auto bytes = resourcesBytes(files);
+  for (int i = 0; i < count; ++i)
+  {
+    writeTextFile(gamePath / "base" / fmt::format("scan{:03}.resources", i), bytes);
+  }
+}
+
 } // namespace
 
 TEST_CASE("MaterialService")
 {
   SECTION("a lookup is pending, then a later table has it")
   {
-    auto service = MaterialService{options(fixtureSource)};
-    const auto first = service.lookup("textures/lp1a/wall");
+    auto service = start(options(fixtureSource));
+    const auto first = service->lookup("textures/lp1a/wall");
     CHECK(
       (first.state == MaterialLookup::State::Pending
        || first.state == MaterialLookup::State::Ready));
 
-    const auto entry = waitForEntry(service, "textures/lp1a/wall");
+    const auto entry = waitForEntry(*service, "textures/lp1a/wall");
     CHECK(entry->name == "textures/lp1a/wall");
-    CHECK(entry->registry == service.table()->registry);
-    CHECK(service.lookup("textures/lp1a/wall").state == MaterialLookup::State::Ready);
+    CHECK(entry->registry == service->table()->registry);
+    CHECK(service->lookup("textures/lp1a/wall").state == MaterialLookup::State::Ready);
 
     // the name as asked and the decl's canonical name lead to the same entry
-    const auto spelled = waitForEntry(service, "Textures\\LP1A\\Wall.tga");
+    const auto spelled = waitForEntry(*service, "Textures\\LP1A\\Wall.tga");
     CHECK(spelled == entry);
-    CHECK(service.table()->find("textures/lp1a/wall")->entry == entry);
+    CHECK(service->table()->find("textures/lp1a/wall")->entry == entry);
   }
 
   SECTION("a parse that reached an engine error is published as failed")
   {
-    auto service = MaterialService{options([] {
+    auto service = start(options([](const std::atomic<bool>&) {
       return std::unique_ptr<DeclSource>{
         std::make_unique<MemoryDeclSource>(std::vector<DeclFile>{DeclFile{
           "materials/conflict.mtr",
           "textures/lp1a/flat2d { { blend add map env/conflict } }"
           "textures/lp1a/cube { { blend add cubeMap env/conflict } }",
           0}})};
-    })};
-    waitForEntry(service, "textures/lp1a/flat2d");
-    service.lookup("textures/lp1a/cube");
-    const auto table = service.waitForTable(
+    }));
+    const auto flat = waitForEntry(*service, "textures/lp1a/flat2d");
+    service->lookup("textures/lp1a/cube");
+    const auto table = service->waitForTableForTesting(
       [](const MaterialTable& t) { return t.find("textures/lp1a/cube") != nullptr; },
       Timeout);
-    const auto* slot = table->find("textures/lp1a/cube");
+    const auto slot = table->find("textures/lp1a/cube");
     REQUIRE(slot);
     CHECK_FALSE(slot->entry);
     CHECK(
       slot->error
       == "Image 'env/conflict' has been referenced with conflicting cube map states");
-    CHECK(service.lookup("textures/lp1a/cube").state == MaterialLookup::State::Failed);
+    CHECK(service->lookup("textures/lp1a/cube").state == MaterialLookup::State::Failed);
+    CHECK(flat);
   }
 
   SECTION("an evaluation publishes a delta keyed by material, parms and time")
   {
-    auto service = MaterialService{options(fixtureSource)};
-    const auto entry = waitForEntry(service, "textures/lp1a/expr");
+    auto service = start(options(fixtureSource));
+    const auto entry = waitForEntry(*service, "textures/lp1a/expr");
 
     auto parms = NoParms;
     parms[0] = 0.5f;
-    const auto atHalf = waitForRegisters(service, *entry, parms, 0.0f);
-    const auto atZero = waitForRegisters(service, *entry, NoParms, 0.0f);
+    const auto atHalf = waitForRegisters(*service, *entry, parms, 0.0f);
+    const auto atZero = waitForRegisters(*service, *entry, NoParms, 0.0f);
     CHECK(atHalf != atZero);
-    CHECK(service.evaluate(MaterialId::of(*entry), parms, 0.0f) == atHalf);
+    CHECK(atHalf->error.empty());
+    CHECK(service->evaluate(MaterialId::of(*entry), parms, 0.0f) == atHalf);
 
     // a delta is shared by later tables until it is dropped
-    const auto table = service.table();
+    const auto table = service->table();
     CHECK(
       table->findRegisters(RegisterKey{MaterialId::of(*entry), parms, 0.0f}) == atHalf);
     CHECK(shaderParmsHash(parms, 0.0f) != shaderParmsHash(NoParms, 0.0f));
@@ -290,45 +388,54 @@ TEST_CASE("MaterialService")
 
   SECTION("a reload builds a new registry, keeps the looked-up names, refuses old ids")
   {
-    auto service = MaterialService{options(fixtureSource)};
-    const auto before = waitForEntry(service, "textures/lp1a/screen");
-    const auto firstRegistry = service.table()->registry;
+    auto service = start(options(fixtureSource));
+    const auto before = waitForEntry(*service, "textures/lp1a/screen");
+    const auto firstRegistry = service->table()->registry;
 
-    service.reload();
-    REQUIRE(service.waitForStats([](const auto& s) { return s.builds == 2u; }, Timeout));
-    const auto table = service.table();
+    service->reload();
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.builds == 2u; }, Timeout));
+    const auto table = service->table();
     CHECK(table->registry != firstRegistry);
     // published at the switch, with the name looked up again
-    const auto* slot = table->find("textures/lp1a/screen");
+    const auto slot = table->find("textures/lp1a/screen");
     REQUIRE(slot);
     REQUIRE(slot->entry);
     CHECK(slot->entry->registry == table->registry);
     CHECK(slot->entry != before);
     CHECK(slot->entry->stages.front().cinematic == before->stages.front().cinematic);
 
-    // an evaluation of the old entry is refused
-    CHECK_FALSE(service.evaluate(MaterialId::of(*before), NoParms, 0.0f));
-    REQUIRE(service.waitForStats(
+    // an evaluation of the old entry is refused, and the refusal is published (A2.13)
+    CHECK_FALSE(service->evaluate(MaterialId::of(*before), NoParms, 0.0f));
+    REQUIRE(service->waitForStatsForTesting(
       [](const auto& s) { return s.refusedEvaluations == 1u; }, Timeout));
-    CHECK(waitForRegisters(service, *slot->entry, NoParms, 0.0f));
+    const auto refused = waitForRegisters(*service, *before, NoParms, 0.0f);
+    CHECK(refused->registers.empty());
+    CHECK(refused->error == "the material belongs to an earlier registry");
+    CHECK(service->stats().refusedEvaluations == 1u);
+
+    const auto registers = waitForRegisters(*service, *slot->entry, NoParms, 0.0f);
+    CHECK(registers->error.empty());
   }
 
   SECTION("the bulk parse publishes every material and table")
   {
     auto collected = Collected{};
-    auto service = MaterialService{options(fixtureSource, collected.listener(), true)};
-    const auto table =
-      service.waitForTable([](const MaterialTable& t) { return t.complete; }, Timeout);
+    auto service = start(options(fixtureSource, collected.listener(), true));
+    // G17: the complete table and the summary are there once the stats say done
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.parseAllDone; }, Timeout));
+    const auto table = service->table();
     REQUIRE(table->complete);
 
-    const auto stats = service.stats();
-    CHECK(stats.parseAllDone);
+    const auto stats = service->stats();
     CHECK(stats.materials > 15);
     CHECK(stats.tables == 5);
     CHECK(stats.defaultedMaterials == 1);
     CHECK(int(table->materials.size()) >= stats.materials);
     CHECK(stats.declTextBytes > 0u);
     CHECK(stats.declCounts.size() == 15u);
+    CHECK(stats.failedWorkItems == 0u);
 
     // the copied code's warnings and the service's summaries reach the listener
     const auto warnings = collected.messages(DeclMessageKind::Warning);
@@ -346,68 +453,152 @@ TEST_CASE("MaterialService")
   {
     auto gate = std::make_shared<Gate>();
     auto steps = std::make_shared<std::atomic<int>>(0);
-    auto serviceOptions = options([] { return bulkSource(20000); }, {}, true);
-    serviceOptions.beforeBulkStep = [gate, steps] {
+    auto serviceOptions = options(bulkSourceOf(20000), {}, true);
+    serviceOptions.beforeBulkStepForTesting = [gate, steps] {
       if (++*steps == 1)
       {
         gate->enterAndWait();
       }
     };
-    auto service = MaterialService{std::move(serviceOptions)};
+    auto service = start(std::move(serviceOptions));
+    const auto opener = GateOpener{gate};
 
     // queued during the build, so served before the bulk's first step
-    const auto last = waitForEntry(service, "textures/bulk/m19999");
+    const auto last = waitForEntry(*service, "textures/bulk/m19999");
     REQUIRE(gate->waitUntilEntered());
-    CHECK_FALSE(service.table()->complete);
+    CHECK_FALSE(service->table()->complete);
 
     // queued while the bulk waits before its first step
-    CHECK_FALSE(service.evaluate(MaterialId::of(*last), NoParms, 1.0f));
+    CHECK_FALSE(service->evaluate(MaterialId::of(*last), NoParms, 1.0f));
     gate->open();
-    const auto registers = waitForRegisters(service, *last, NoParms, 1.0f);
+    const auto registers = waitForRegisters(*service, *last, NoParms, 1.0f);
     CHECK(registers);
     // one 20 ms step cannot have parsed 20000 materials
-    CHECK_FALSE(service.table()->complete);
+    CHECK_FALSE(service->table()->complete);
   }
 
   SECTION("a stop during the bulk parse ends after the current step")
   {
     auto gate = std::make_shared<Gate>();
     auto steps = std::make_shared<std::atomic<int>>(0);
-    auto serviceOptions = options([] { return bulkSource(20000); }, {}, true);
-    serviceOptions.beforeBulkStep = [gate, steps] {
+    auto serviceOptions = options(bulkSourceOf(20000), {}, true);
+    serviceOptions.beforeBulkStepForTesting = [gate, steps] {
       if (++*steps == 3)
       {
         gate->enterAndWait();
       }
     };
-    auto service = MaterialService{std::move(serviceOptions)};
+    auto service = start(std::move(serviceOptions));
+    const auto opener = GateOpener{gate};
     REQUIRE(gate->waitUntilEntered());
 
-    service.requestStop();
-    CHECK(service.stopRequested());
-    const auto start = std::chrono::steady_clock::now();
+    service->requestStop();
+    CHECK(service->stopRequested());
+    const auto started = Clock::now();
     gate->open();
-    service.join();
-    CHECK(std::chrono::steady_clock::now() - start < 2s);
-    CHECK_FALSE(service.stats().parseAllDone);
-    CHECK(service.lookup("textures/bulk/m19999").state == MaterialLookup::State::Pending);
+    service->join();
+    CHECK(Clock::now() - started < 2s);
+    CHECK_FALSE(service->stats().parseAllDone);
+    CHECK(
+      service->lookup("textures/bulk/m19999").state == MaterialLookup::State::Pending);
   }
 
   SECTION("a stop during the build ends after the current decl file")
   {
     auto gate = std::make_shared<Gate>();
     auto reads = std::make_shared<std::atomic<int>>(0);
-    auto service = MaterialService{options([gate, reads] {
+    auto service = start(options([gate, reads](const std::atomic<bool>&) {
       return std::unique_ptr<DeclSource>{std::make_unique<GatedSource>(gate, reads)};
-    })};
+    }));
+    const auto opener = GateOpener{gate};
     REQUIRE(gate->waitUntilEntered());
 
-    service.requestStop();
+    service->requestStop();
     gate->open();
-    service.join();
+    service->join();
     // the fixture has 9 decl files; the files after the second were never read
     CHECK(reads->load() == 2);
-    CHECK(service.stats().buildCancelled);
+    CHECK(service->stats().buildCancelled);
+  }
+
+  SECTION("a stop during the container scan ends within half a second")
+  {
+    // G4: 96 containers of 4000 entries; the stop flag is checked for every directory
+    // entry and every container table entry
+    const auto folder = TempFolder{"tb-lit-scan"};
+    writeScanHeavyGame(folder.path(), 96, 4000);
+
+    const auto fullStarted = Clock::now();
+    {
+      const auto full = GameDeclSource{folder.path()};
+      CHECK(full.searchOrder().size() == 96u);
+    }
+    const auto fullScan = Clock::now() - fullStarted;
+
+    auto entered = std::make_shared<Gate>();
+    auto service = start(options([path = folder.path(),
+                                  entered](const std::atomic<bool>& cancel) {
+      // the test goes on when the scan begins
+      entered->enter();
+      return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(path, &cancel)};
+    }));
+    const auto opener = GateOpener{entered};
+    REQUIRE(entered->waitUntilEntered());
+    std::this_thread::sleep_for(5ms);
+
+    const auto stopped = Clock::now();
+    service->requestStop();
+    service->join();
+    const auto stopTime = Clock::now() - stopped;
+    const auto fullScanMs = std::chrono::duration<double, std::milli>(fullScan).count();
+    const auto stopMs = std::chrono::duration<double, std::milli>(stopTime).count();
+    CAPTURE(fullScanMs, stopMs);
+    CHECK(stopTime < 500ms);
+    CHECK(service->stats().buildCancelled);
+  }
+
+  SECTION("a work item that throws is logged, and the thread goes on")
+  {
+    // G3: the first source throws while it is made; the build publishes an empty table
+    auto collected = Collected{};
+    auto calls = std::make_shared<std::atomic<int>>(0);
+    auto service = start(options(
+      [calls](const std::atomic<bool>& cancel) -> std::unique_ptr<DeclSource> {
+        if (++*calls == 1)
+        {
+          throw std::runtime_error{"an injected failure"};
+        }
+        return fixtureSource(cancel);
+      },
+      collected.listener()));
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.failedWorkItems == 1u && s.idle; }, Timeout));
+    CHECK(service->table()->registry == 0u);
+    CHECK(service->stats().builds == 0u);
+    CHECK(collected.problemsWith("an injected failure") == 1u);
+
+    service->reload();
+    CHECK(waitForEntry(*service, "textures/lp1a/wall"));
+    CHECK(service->stats().builds == 1u);
+  }
+
+  SECTION("a source that keeps changing rebuilds once per autoReloadInterval")
+  {
+    // A2.3, A3.5: the first build asks for one more at once, later ones wait
+    auto serviceOptions = options([](const std::atomic<bool>&) {
+      return std::unique_ptr<DeclSource>{std::make_unique<ChangingSource>()};
+    });
+    serviceOptions.autoReloadInterval = 400ms;
+    auto service = start(std::move(serviceOptions));
+
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.builds >= 2u; }, Timeout));
+    const auto second = Clock::now();
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.builds >= 3u; }, Timeout));
+    const auto third = Clock::now();
+    CHECK(third - second >= 300ms);
+    CHECK(service->stats().pollReloads >= 2u);
   }
 
   SECTION("a changed loose decl file reloads the registry")
@@ -416,149 +607,316 @@ TEST_CASE("MaterialService")
     const auto file = folder.path() / "base" / "materials" / "poll.mtr";
     writeTextFile(file, materialText("textures/poll/a", "textures/poll/first"));
 
-    auto serviceOptions = options([path = folder.path()] {
-      return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(path)};
+    auto serviceOptions = options([path =
+                                     folder.path()](const std::atomic<bool>& cancel) {
+      return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(path, &cancel)};
     });
     serviceOptions.pollInterval = 20ms;
-    auto service = MaterialService{std::move(serviceOptions)};
+    auto service = start(std::move(serviceOptions));
     CHECK(
-      diffuseImage(*waitForEntry(service, "textures/poll/a")) == "textures/poll/first");
+      diffuseImage(*waitForEntry(*service, "textures/poll/a")) == "textures/poll/first");
 
     writeTextFile(file, materialText("textures/poll/a", "textures/poll/second"));
     bumpModificationTime(file);
-    REQUIRE(
-      service.waitForStats([](const auto& s) { return s.pollReloads >= 1u; }, Timeout));
-    const auto table = service.waitForTable(
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.pollReloads >= 1u; }, Timeout));
+    const auto table = service->waitForTableForTesting(
       [](const MaterialTable& t) {
-        const auto* slot = t.find("textures/poll/a");
+        const auto slot = t.find("textures/poll/a");
         return slot && slot->entry
                && diffuseImage(*slot->entry) == "textures/poll/second";
       },
       Timeout);
     CHECK(diffuseImage(*table->find("textures/poll/a")->entry) == "textures/poll/second");
   }
-}
 
-TEST_CASE("PersistentMap")
-{
-  auto map = PersistentMap<std::string, int>{};
-  for (int i = 0; i < 5000; ++i)
+#if defined(_WIN32)
+  SECTION("a loose decl file that cannot be read warns once, until it changes")
   {
-    map = map.set(fmt::format("key{}", i), i);
+    // G5: the file lists, and its time is polled, but no one may open it
+    const auto folder = TempFolder{"tb-lit-locked"};
+    const auto materials = folder.path() / "base" / "materials";
+    const auto locked = materials / "locked.mtr";
+    writeTextFile(locked, materialText("textures/locked/a", "textures/locked/first"));
+    writeTextFile(
+      materials / "open.mtr", materialText("textures/locked/open", "textures/locked/o"));
+
+    auto handle = CreateFileW(
+      locked.c_str(),
+      GENERIC_READ,
+      0,
+      nullptr,
+      OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL,
+      nullptr);
+    REQUIRE(handle != INVALID_HANDLE_VALUE);
+    auto closeHandle =
+      std::unique_ptr<void, decltype(&CloseHandle)>{handle, &CloseHandle};
+
+    auto collected = Collected{};
+    auto serviceOptions = options(
+      [path = folder.path()](const std::atomic<bool>& cancel) {
+        return std::unique_ptr<DeclSource>{
+          std::make_unique<GameDeclSource>(path, &cancel)};
+      },
+      collected.listener());
+    serviceOptions.pollInterval = 10ms;
+    serviceOptions.autoReloadInterval = 50ms;
+    auto service = start(std::move(serviceOptions));
+    CHECK(waitForEntry(*service, "textures/locked/open"));
+
+    // many polls and auto-reload intervals later, still the one build and one warning
+    std::this_thread::sleep_for(400ms);
+    REQUIRE(
+      service->waitForStatsForTesting([](const auto& s) { return s.idle; }, Timeout));
+    CHECK(service->stats().builds == 1u);
+    CHECK(service->stats().pollReloads == 0u);
+    CHECK(collected.problemsWith("locked.mtr") == 1u);
+
+    // once it changes, it is read
+    closeHandle.reset();
+    writeTextFile(locked, materialText("textures/locked/a", "textures/locked/second"));
+    bumpModificationTime(locked);
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.pollReloads >= 1u; }, Timeout));
+    CHECK(
+      diffuseImage(*waitForEntry(*service, "textures/locked/a"))
+      == "textures/locked/second");
   }
-  CHECK(map.size() == 5000u);
-  REQUIRE(map.find("key4321"));
-  CHECK(*map.find("key4321") == 4321);
-
-  // a new version shares the old, which is unchanged
-  const auto older = map;
-  const auto newer = map.set("key4321", -1).erase("key0");
-  CHECK(*older.find("key4321") == 4321);
-  CHECK(older.find("key0"));
-  CHECK(*newer.find("key4321") == -1);
-  CHECK_FALSE(newer.find("key0"));
-  CHECK(newer.size() == 4999u);
-  CHECK(newer.erase("absent").sharesRootWith(newer));
-
-  auto sum = 0ll;
-  newer.forEach([&](const auto&, const int value) { sum += value; });
-  CHECK(sum == 4999ll * 5000 / 2 - 4321 - 1);
+#endif
 }
 
 #if defined(_MSC_VER) && defined(_DEBUG)
+namespace
+{
+
+// runs f between two heap checkpoints; true when the heap grew, with its statistics
+template <typename F>
+bool heapGrows(F&& f)
+{
+  _CrtMemState before;
+  _CrtMemCheckpoint(&before);
+  f();
+  _CrtMemState after;
+  _CrtMemCheckpoint(&after);
+  _CrtMemState difference;
+  const auto grew = _CrtMemDifference(&difference, &before, &after) != 0;
+  if (grew)
+  {
+    _CrtMemDumpStatistics(&difference);
+  }
+  return grew;
+}
+
+const auto LeakNames = std::vector<std::string>{
+  "textures/lp1a/wall",
+  "textures/lp1a/expr",
+  "textures/lp1a/screen",
+  "textures/lp1a/soundviz",
+  "textures/lp1a/guiscreen",
+  "textures/lp1a/broken",
+  "textures/lp1a/nodecl",
+};
+
+// looks up and evaluates every name, the videomap material included
+void useService(MaterialService& service, const std::vector<std::string>& names)
+{
+  for (const auto& name : names)
+  {
+    const auto entry = waitForEntry(service, name);
+    waitForRegisters(service, *entry, NoParms, 0.5f);
+  }
+}
+
+// a source that leaks one allocation whenever it is made: the leak tests' control
+class LeakingSource : public MemoryDeclSource
+{
+public:
+  LeakingSource()
+    : MemoryDeclSource{materialDeclsFixture()}
+  {
+    static_cast<void>(new std::string(256, 'x'));
+  }
+};
+
+} // namespace
+
 TEST_CASE("MaterialService start, stop and reload leak nothing")
 {
-  const auto names = std::vector<std::string>{
-    "textures/lp1a/wall",
-    "textures/lp1a/expr",
-    "textures/lp1a/screen",
-    "textures/lp1a/soundviz",
-    "textures/lp1a/guiscreen",
-    "textures/lp1a/broken",
-    "textures/lp1a/nodecl",
-  };
   auto messages = std::make_shared<std::atomic<int>>(0);
   const auto counting = [messages](const MaterialServiceEvent&) { ++*messages; };
 
-  // looks up and evaluates every name, the videomap material included
-  const auto use = [&](MaterialService& service) {
-    for (const auto& name : names)
-    {
-      const auto entry = waitForEntry(service, name);
-      waitForRegisters(service, *entry, NoParms, 0.5f);
-    }
-  };
-
-  // started, used, bulk-parsed and stopped; every third one is stopped at once, while it
-  // builds or bulk-parses
+  // G16: started, used, bulk-parsed and stopped; one in three is stopped in its build
+  // while it reads its second decl file, one in three in its bulk parse after one step
   const auto cycle = [&](const int i) {
-    auto service = MaterialService{options(fixtureSource, counting, true)};
-    if (i % 3 == 2)
+    if (i % 3 == 1)
     {
-      service.requestStop();
-      service.join();
+      auto gate = std::make_shared<Gate>();
+      auto reads = std::make_shared<std::atomic<int>>(0);
+      auto service = start(options(
+        [gate, reads](const std::atomic<bool>&) {
+          return std::unique_ptr<DeclSource>{std::make_unique<GatedSource>(gate, reads)};
+        },
+        counting,
+        true));
+      const auto opener = GateOpener{gate};
+      REQUIRE(gate->waitUntilEntered());
+      service->requestStop();
+      gate->open();
+      service->join();
+      CHECK(service->stats().buildCancelled);
       return;
     }
-    use(service);
-    service.waitForTable([](const MaterialTable& t) { return t.complete; }, Timeout);
+    if (i % 3 == 2)
+    {
+      auto gate = std::make_shared<Gate>();
+      auto steps = std::make_shared<std::atomic<int>>(0);
+      auto serviceOptions = options(bulkSourceOf(2000), counting, true);
+      serviceOptions.beforeBulkStepForTesting = [gate, steps] {
+        if (++*steps == 2)
+        {
+          gate->enterAndWait();
+        }
+      };
+      auto service = start(std::move(serviceOptions));
+      const auto opener = GateOpener{gate};
+      REQUIRE(gate->waitUntilEntered());
+      service->requestStop();
+      gate->open();
+      service->join();
+      CHECK_FALSE(service->stats().parseAllDone);
+      return;
+    }
+    auto service = start(options(fixtureSource, counting, true));
+    useService(*service, LeakNames);
+    service->waitForTableForTesting(
+      [](const MaterialTable& t) { return t.complete; }, Timeout);
   };
 
   SECTION("start and stop 100 times")
   {
     cycle(0);
+    cycle(1);
     cycle(2);
-
-    _CrtMemState before;
-    _CrtMemCheckpoint(&before);
-    for (int i = 0; i < 100; ++i)
-    {
-      cycle(i);
-    }
-    _CrtMemState after;
-    _CrtMemCheckpoint(&after);
-    _CrtMemState difference;
-    const auto grew = _CrtMemDifference(&difference, &before, &after) != 0;
-    if (grew)
-    {
-      _CrtMemDumpStatistics(&difference);
-    }
+    const auto grew = heapGrows([&] {
+      for (int i = 0; i < 100; ++i)
+      {
+        cycle(i);
+      }
+    });
     CHECK_FALSE(grew);
   }
 
   SECTION("reload 100 times")
   {
-    auto service = MaterialService{options(fixtureSource, counting, true)};
+    auto service = start(options(fixtureSource, counting, true));
     const auto reloadAndUse = [&](const std::uint64_t builds) {
-      service.reload();
-      REQUIRE(service.waitForStats(
+      service->reload();
+      REQUIRE(service->waitForStatsForTesting(
         [&](const auto& s) { return s.builds == builds && s.parseAllDone; }, Timeout));
-      use(service);
+      useService(*service, LeakNames);
     };
     // the heap is looked at only while the parse thread waits, its last work freed
     const auto waitUntilIdle = [&] {
-      REQUIRE(service.waitForStats([](const auto& s) { return s.idle; }, Timeout));
+      REQUIRE(
+        service->waitForStatsForTesting([](const auto& s) { return s.idle; }, Timeout));
     };
-    use(service);
+    useService(*service, LeakNames);
     reloadAndUse(2);
     waitUntilIdle();
 
-    _CrtMemState before;
-    _CrtMemCheckpoint(&before);
-    for (std::uint64_t i = 0; i < 100; ++i)
-    {
-      reloadAndUse(i + 3);
-    }
-    waitUntilIdle();
-    _CrtMemState after;
-    _CrtMemCheckpoint(&after);
-    _CrtMemState difference;
-    const auto grew = _CrtMemDifference(&difference, &before, &after) != 0;
-    if (grew)
-    {
-      _CrtMemDumpStatistics(&difference);
-    }
+    const auto grew = heapGrows([&] {
+      for (std::uint64_t i = 0; i < 100; ++i)
+      {
+        reloadAndUse(i + 3);
+      }
+      waitUntilIdle();
+    });
     CHECK_FALSE(grew);
   }
+
+  SECTION("reload a game folder 30 times")
+  {
+    // G16: the real GameDeclSource, with a .pk4 and .resources files, under the
+    // checkpoint
+    const auto folder = TempFolder{"tb-lit-leak-game"};
+    const auto base = folder.path() / "base";
+    writeTextFile(
+      base / "materials" / "loose.mtr",
+      materialText("textures/leak/loose", "textures/leak/loose"));
+    writePk4(
+      base / "leak.pk4",
+      {{"materials/pk4.mtr", materialText("textures/leak/pk4", "textures/leak/pk4")}});
+    writeTextFile(
+      base / "leak.resources",
+      resourcesBytes(
+        {{"materials/res.mtr", materialText("textures/leak/res", "textures/leak/res")}}));
+    writeTextFile(
+      base / "maps" / "leakmap.resources",
+      resourcesBytes(
+        {{"materials/map.mtr", materialText("textures/leak/map", "textures/leak/map")}}));
+    const auto names = std::vector<std::string>{
+      "textures/leak/loose",
+      "textures/leak/pk4",
+      "textures/leak/res",
+      "textures/leak/map",
+      "textures/leak/nodecl",
+    };
+
+    auto service = start(options(
+      [path = folder.path()](const std::atomic<bool>& cancel) {
+        return std::unique_ptr<DeclSource>{
+          std::make_unique<GameDeclSource>(path, &cancel)};
+      },
+      counting,
+      true));
+    const auto reloadAndUse = [&](const std::uint64_t builds) {
+      service->reload();
+      REQUIRE(service->waitForStatsForTesting(
+        [&](const auto& s) { return s.builds == builds && s.parseAllDone; }, Timeout));
+      useService(*service, names);
+    };
+    const auto waitUntilIdle = [&] {
+      REQUIRE(
+        service->waitForStatsForTesting([](const auto& s) { return s.idle; }, Timeout));
+    };
+    useService(*service, names);
+    reloadAndUse(2);
+    waitUntilIdle();
+
+    const auto grew = heapGrows([&] {
+      for (std::uint64_t i = 0; i < 30; ++i)
+      {
+        reloadAndUse(i + 3);
+      }
+      waitUntilIdle();
+    });
+    CHECK_FALSE(grew);
+  }
+}
+
+// The control (G16): a source that leaks on every build must make the check fail, so that
+// a passing leak test means the checkpoint sees the parse thread's heap. Catch2's
+// [!shouldfail] reports it as passed when its check fails.
+TEST_CASE("MaterialService leak check sees an injected leak", "[!shouldfail]")
+{
+  auto service = start(options([](const std::atomic<bool>&) {
+    return std::unique_ptr<DeclSource>{std::make_unique<LeakingSource>()};
+  }));
+  useService(*service, {"textures/lp1a/wall"});
+  service->reload();
+  REQUIRE(service->waitForStatsForTesting(
+    [](const auto& s) { return s.builds == 2u && s.idle; }, Timeout));
+
+  const auto grew = heapGrows([&] {
+    for (std::uint64_t i = 0; i < 5; ++i)
+    {
+      service->reload();
+      REQUIRE(service->waitForStatsForTesting(
+        [&](const auto& s) { return s.builds == i + 3 && s.idle; }, Timeout));
+    }
+  });
+  CHECK_FALSE(grew);
 }
 #endif
 

@@ -73,10 +73,11 @@ class LitPreviewWindow;
  * the session's messages, as MaterialInfo and MaterialWarning.
  *
  * Teardown runs these steps in this order, each once, whatever ran of the start:
- * 1. stop the render thread: park it, then stop and join it, while the window system's
- *    sent messages are serviced, because a present may wait for one (no bound on the
- *    join: a thread that still runs uses the session, so the wait goes on and says so);
- *    then ask the parse thread to stop after its current decl file (plan step 1, R5.20)
+ * 1. ask the parse thread to stop after its current directory entry, container entry or
+ *    decl file (plan step 1, R5.20, G4); then stop the render thread: park it, then stop
+ *    and join it, while the window system's sent messages are serviced, because a
+ *    present may wait for one (no bound on the join: a thread that still runs uses the
+ *    session, so the wait goes on and says so)
  * 2. LitSession::releaseGpuObjects
  * 3. delete the window container, which destroys the window and Qt's VkSurfaceKHR
  * 4. LitSession::destroyVkDevice

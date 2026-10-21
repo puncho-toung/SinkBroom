@@ -22,6 +22,7 @@
 #include "base/Macros.h"
 #include "lit/MaterialDecls.h"
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -68,9 +69,19 @@ struct GameFileOrigin
  *   loose ones as Sys_ListFiles lists them; the registry adds each once and sorts.
  *
  * .pk4 files are read with TrenchBroom's ZipFileSystem (D55), .resources files with
- * lit/ResourceContainer.h. Game files are opened per read, sharing read and delete
+ * lit/ResourceContainer.h. Game files are opened per read, sharing read, write and delete
  * access; containers opened during a read batch stay open until closeFiles() (R4-3.26).
- * The container tables are read once, at construction: a reload makes a new source.
+ * A .pk4 is opened by TbFsLib, without delete sharing (mirror.json M-FS-DIFF-02). The
+ * container tables are read once, at construction: a reload makes a new source.
+ *
+ * Cancel (R5.20, G4): once the flag is set, the scan and the listings stop; the bound is
+ * one directory entry, one container table entry or one .pk4 central directory (TbFsLib
+ * reads it in one call). A cancelled source holds what it scanned so far.
+ *
+ * A loose file that changes while it is read is read again, up to three times; one that
+ * keeps changing is returned as read and changedWhileRead() asks for another build
+ * (A3.5). A loose file that cannot be opened is skipped without a message, as the engine
+ * goes on to the containers.
  *
  * Not thread-safe: it belongs to the thread that owns the registry (the parse thread).
  */
@@ -80,23 +91,29 @@ private:
   struct Pk4;
   struct Resources;
 
+  static constexpr int MaxLooseReadAttempts = 3;
+
   std::filesystem::path m_base;
+  const std::atomic<bool>* m_cancel = nullptr;
   std::vector<std::unique_ptr<Pk4>> m_pk4s;
   std::vector<std::unique_ptr<Resources>> m_resources;
-  mutable std::vector<std::string> m_warnings;
+  std::vector<std::string> m_warnings;
+  bool m_changedWhileRead = false;
 
 public:
-  explicit GameDeclSource(const std::filesystem::path& gamePath);
+  explicit GameDeclSource(
+    const std::filesystem::path& gamePath, const std::atomic<bool>* cancel = nullptr);
   ~GameDeclSource() override;
 
   std::vector<std::string> listFiles(
-    const std::string& folder, const std::string& extension) const override;
+    const std::string& folder, const std::string& extension) override;
   std::optional<std::string> readFile(
-    const std::string& path, std::int64_t* timestamp) const override;
+    const std::string& path, std::int64_t* timestamp) override;
   std::vector<DeclFileTime> looseFileTimes(
     const std::string& folder, const std::string& extension) const override;
   std::vector<std::string> takeWarnings() override;
   void closeFiles() override;
+  bool changedWhileRead() const override;
 
   // the source that a read of path finds, or nullopt
   std::optional<GameFileOrigin> origin(const std::string& path) const;
@@ -106,8 +123,11 @@ public:
   std::size_t openContainers() const;
 
 private:
-  std::optional<std::string> readLoose(
-    const std::string& path, std::int64_t* timestamp) const;
+  bool cancelled() const;
+  std::unique_ptr<Pk4> readPk4(const std::string& name);
+  std::optional<std::string> readLoose(const std::string& path, std::int64_t* timestamp);
+  std::optional<std::string> readFromPk4(
+    Pk4& pk4, const std::filesystem::path& entryPath, const std::string& path);
 
   deleteCopyAndMove(GameDeclSource);
 };

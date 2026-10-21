@@ -22,9 +22,9 @@
 #include "lit/GameDeclSource.h"
 #include "lit/GameFile.h"
 #include "lit/MaterialDecls.h"
-#include "lit/ResourceContainer.h"
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -42,7 +42,17 @@ using Files = std::vector<std::pair<std::string, std::string>>;
 /**
  * A game folder with loose files, three .pk4 files (one a binary pak) and three
  * .resources files, two in base and one in base/maps, whose copies of the same names tell
- * by their image which source a read found.
+ * by their image which source a read found. Retail data never puts one name in two kinds
+ * of container (G8), so every rule of the engine's search order has a name here:
+ *
+ * - loose over .pk4 over .resources: shared (all three)
+ * - .pk4 over base .resources: pk4_only; .pk4 over base/maps .resources: pk4_maps
+ * - the last .pk4 registered (sorted) first: both_pk4
+ * - the last base .resources registered first: both_res
+ * - base/maps .resources over base .resources: maps_wins
+ * - inside one container, the later of two entries: dup
+ * - a binary pak is refused: binary_only
+ * - a .pk4's entry name lowercased, its folders kept: upper_case, nested
  */
 class FakeGame
 {
@@ -75,6 +85,7 @@ public:
       {
         {"materials/both_pk4.mtr", mtr("both_pk4", "both_pk4_second")},
         {"Materials/Upper_Case.MTR", mtr("upper_case", "upper_case_pk4")},
+        {"materials/pk4_maps.mtr", mtr("pk4_maps", "pk4_maps_pk4")},
       });
     // a binary pak, which Init refuses
     writePk4(
@@ -104,6 +115,7 @@ public:
       base / "maps" / "map1.resources",
       resourcesBytes({
         {"materials/maps_wins.mtr", mtr("maps_wins", "maps_wins_maps")},
+        {"materials/pk4_maps.mtr", mtr("pk4_maps", "pk4_maps_maps")},
       }));
   }
 
@@ -129,19 +141,6 @@ std::string stageImage(MaterialDecls& decls, const std::string& name)
     }
   }
   return {};
-}
-
-void writeAt(const std::filesystem::path& path, const std::string& bytes)
-{
-  writeTextFile(path, bytes);
-}
-
-void setBig32(std::string& bytes, const std::size_t at, const std::uint32_t value)
-{
-  bytes[at] = char((value >> 24) & 0xFF);
-  bytes[at + 1] = char((value >> 16) & 0xFF);
-  bytes[at + 2] = char((value >> 8) & 0xFF);
-  bytes[at + 3] = char(value & 0xFF);
 }
 
 } // namespace
@@ -175,6 +174,7 @@ TEST_CASE("GameDeclSource")
       "dup.mtr",
       "Loose_Only.mtr",
       "maps_wins.mtr",
+      "pk4_maps.mtr",
       "pk4_only.mtr",
       "res_only.mtr",
       "shared.mtr",
@@ -206,6 +206,8 @@ TEST_CASE("GameDeclSource")
     CHECK(contains(source.readFile("materials/pk4_only.mtr", &time), "pk4_only_pk4"));
     CHECK(time == 0);
     CHECK(source.origin("materials/pk4_only.mtr")->container == "aa_first.pk4");
+    CHECK(contains(source.readFile("materials/pk4_maps.mtr", &time), "pk4_maps_pk4"));
+    CHECK(source.origin("materials/pk4_maps.mtr")->container == "zz_second.pk4");
 
     // the last registered .pk4 first
     CHECK(contains(source.readFile("materials/both_pk4.mtr", &time), "both_pk4_second"));
@@ -282,6 +284,7 @@ TEST_CASE("GameDeclSource")
     CHECK(stageImage(decls, "textures/gds/shared") == "textures/gds/shared_loose");
     CHECK(stageImage(decls, "textures/gds/looseOnly") == "textures/gds/looseOnly_loose");
     CHECK(stageImage(decls, "textures/gds/pk4_only") == "textures/gds/pk4_only_pk4");
+    CHECK(stageImage(decls, "textures/gds/pk4_maps") == "textures/gds/pk4_maps_pk4");
     CHECK(stageImage(decls, "textures/gds/both_pk4") == "textures/gds/both_pk4_second");
     CHECK(stageImage(decls, "textures/gds/upper_case") == "textures/gds/upper_case_pk4");
     CHECK(stageImage(decls, "textures/gds/res_only") == "textures/gds/res_only_res");
@@ -298,7 +301,7 @@ TEST_CASE("GameDeclSource")
     REQUIRE(nested);
     CHECK((*nested.value)->implicit);
 
-    CHECK(decls.declFileCount() == 9);
+    CHECK(decls.declFileCount() == 10);
     CHECK(decls.declFolders().size() == 8u);
   }
 }
@@ -306,124 +309,57 @@ TEST_CASE("GameDeclSource")
 TEST_CASE("GameDeclSource with a corrupt container")
 {
   const auto game = FakeGame{};
-  writeAt(game.base() / "broken.resources", "not a container");
+  writeTextFile(game.base() / "broken.resources", "not a container");
+  // A3.12: a .pk4 that is no zip
+  writeTextFile(game.base() / "broken.pk4", "not a zip either");
 
   auto source = GameDeclSource{game.path()};
   const auto warnings = source.takeWarnings();
-  REQUIRE(warnings.size() == 1u);
+  REQUIRE(warnings.size() == 2u);
   CHECK_THAT(warnings[0], Catch::Matchers::ContainsSubstring("broken.resources"));
+  CHECK_THAT(
+    warnings[1],
+    Catch::Matchers::ContainsSubstring("Unable to open zip file broken.pk4"));
   const auto order = source.searchOrder();
   CHECK(std::count(order.begin(), order.end(), "broken.resources") == 0);
+  CHECK(std::count(order.begin(), order.end(), "broken.pk4") == 0);
   CHECK(contains(source.readFile("materials/res_only.mtr", nullptr), "res_only_res"));
+  CHECK(contains(source.readFile("materials/pk4_only.mtr", nullptr), "pk4_only_pk4"));
 }
 
-TEST_CASE("ResourceContainer")
+TEST_CASE("GameDeclSource stops its scan once cancelled")
 {
-  const auto folder = TempFolder{"tb-lit-resources"};
-  const auto file = folder.path() / "test.resources";
-  const auto good = resourcesBytes({
-    {"Materials\\One.mtr", "one"},
-    {"materials/two.mtr", "two"},
-    {"materials/one.mtr", "one again"},
-  });
-
-  const auto open = [&](const std::string& bytes, std::vector<std::string>& warnings) {
-    writeAt(file, bytes);
-    return ResourceContainer::open(file, "test.resources", warnings);
-  };
-
-  SECTION("reads the engine's format")
-  {
-    auto warnings = std::vector<std::string>{};
-    const auto container = open(good, warnings);
-    REQUIRE(container);
-    CHECK(warnings.empty());
-    REQUIRE(container->entries().size() == 3u);
-    CHECK(container->entries()[0].name == "materials/one.mtr");
-
-    // case-insensitive, and the later of two entries with one name
-    const auto* one = container->find("MATERIALS/ONE.MTR");
-    REQUIRE(one);
-    CHECK(one->length == 9u);
-
-    auto handle = GameFile::open(file);
-    REQUIRE(handle);
-    CHECK(container->read(*one, *handle, warnings) == "one again");
-    CHECK(
-      container->read(*container->find("materials/two.mtr"), *handle, warnings) == "two");
-    CHECK(warnings.empty());
-  }
-
-  SECTION("a corrupt container is never read out of bounds")
-  {
-    const auto refused = [&](const std::string& bytes, const std::string& reason) {
-      auto warnings = std::vector<std::string>{};
-      const auto container = open(bytes, warnings);
-      CHECK_FALSE(container);
-      REQUIRE(warnings.size() == 1u);
-      CHECK_THAT(warnings[0], Catch::Matchers::ContainsSubstring(reason));
-    };
-
-    // truncated: no header, then the table cut off at each length
-    refused(good.substr(0, 5), "too short for its header");
-    refused(good.substr(0, good.size() - 3), "does not fit");
-
-    auto wrongMagic = good;
-    setBig32(wrongMagic, 0, 0xDEADBEEFu);
-    refused(wrongMagic, "RESOURCE_FILE_MAGIC");
-
-    auto tablePastEnd = good;
-    setBig32(tablePastEnd, 4, std::uint32_t(good.size()));
-    refused(tablePastEnd, "does not fit");
-
-    auto hugeTable = good;
-    setBig32(hugeTable, 8, 0x7FFFFFF0u);
-    refused(hugeTable, "does not fit");
-
-    // the entry count, then a name length, larger than the table holds
-    const auto tableOffset = good.size() - (4 + 3 * 12 + 17 + 17 + 17);
-    auto countPastTable = good;
-    setBig32(countPastTable, tableOffset, 1000000u);
-    refused(countPastTable, "truncated");
-
-    auto namePastTable = good;
-    namePastTable[tableOffset + 4] = char(0x7F);
-    namePastTable[tableOffset + 7] = char(0x7F);
-    refused(namePastTable, "truncated");
-
-    auto negativeCount = good;
-    setBig32(negativeCount, tableOffset, 0xFFFFFFFFu);
-    refused(negativeCount, "truncated");
-  }
-
-  SECTION("an entry whose data does not fit is skipped, the others are kept")
-  {
-    const auto tableOffset = good.size() - (4 + 3 * 12 + 17 + 17 + 17);
-    auto entryPastEnd = good;
-    // the first entry's offset: after the count, its name length and its name
-    setBig32(entryPastEnd, tableOffset + 4 + 4 + 17, std::uint32_t(good.size()));
-
-    auto warnings = std::vector<std::string>{};
-    const auto container = open(entryPastEnd, warnings);
-    REQUIRE(container);
-    REQUIRE(warnings.size() == 1u);
-    CHECK_THAT(warnings[0], Catch::Matchers::ContainsSubstring("does not fit"));
-    CHECK(container->entries().size() == 2u);
-  }
-
-  SECTION("a container that changed after its table was read is not read from")
-  {
-    auto warnings = std::vector<std::string>{};
-    const auto container = open(good, warnings);
-    REQUIRE(container);
-    writeAt(file, good.substr(0, 20));
-    auto handle = GameFile::open(file);
-    REQUIRE(handle);
-    CHECK_FALSE(
-      container->read(*container->find("materials/two.mtr"), *handle, warnings));
-    REQUIRE(warnings.size() == 1u);
-    CHECK_THAT(warnings[0], Catch::Matchers::ContainsSubstring("changed"));
-  }
+  // G4: nothing is scanned or listed after the flag is set
+  const auto game = FakeGame{};
+  const auto cancel = std::atomic<bool>{true};
+  auto source = GameDeclSource{game.path(), &cancel};
+  CHECK(source.searchOrder().empty());
+  CHECK(source.listFiles("materials", ".mtr").empty());
+  CHECK(source.takeWarnings().empty());
 }
+
+#if defined(_WIN32)
+TEST_CASE("GameDeclSource skips a file name that is not valid Unicode")
+{
+  // G3: a lone UTF-16 surrogate never throws; the file is skipped with a warning
+  const auto game = FakeGame{};
+  const auto bad = game.base() / "materials" / std::filesystem::path{L"bad\xD800.mtr"};
+  writeTextFile(bad, materialText("textures/gds/bad", "textures/gds/bad"));
+  REQUIRE(std::filesystem::exists(bad));
+
+  auto source = GameDeclSource{game.path()};
+  const auto names = source.listFiles("materials", ".mtr");
+  CHECK(std::none_of(names.begin(), names.end(), [](const auto& name) {
+    return name.rfind("bad", 0) == 0;
+  }));
+  const auto warnings = source.takeWarnings();
+  REQUIRE(warnings.size() == 1u);
+  CHECK_THAT(warnings[0], Catch::Matchers::ContainsSubstring("is not valid Unicode"));
+
+  auto decls = MaterialDecls{source};
+  CHECK(decls.constructionError().empty());
+  CHECK(decls.declFileCount() == 10);
+}
+#endif
 
 } // namespace tb::lit

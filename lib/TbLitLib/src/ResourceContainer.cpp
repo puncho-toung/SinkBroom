@@ -17,12 +17,25 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+// ---- engine notice ----
+// Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
+// GPL Source Code and RBDOOM-3-BFG (neo/framework/File_Resource.cpp and
+// framework/File.cpp):
+//   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
+//   Copyright (C) 2012-2024 Robert Beckebans
+// That code is also subject to the additional terms that follow the GNU General
+// Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
+// ---- end of engine notice ----
+
 #include "lit/ResourceContainer.h"
 
 #include "lit/GameFile.h"
 
+#include "kd/result.h"
+
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <utility>
@@ -56,49 +69,40 @@ std::string canonicalResourceName(const std::string_view path)
 {
   // idStr::BackSlashesToSlashes, then idStr::ToLower; its CharIsUpper also accepts
   // 0xC0-0xDF, but a char is signed in the engine's builds, so only ASCII is lowered
-  auto name = std::string{path};
-  for (auto& c : name)
-  {
-    if (c == '\\')
-    {
-      c = '/';
-    }
-    else if (c >= 'A' && c <= 'Z')
-    {
-      c = char(c + ('a' - 'A'));
-    }
-  }
+  auto name = toLowerAscii(path);
+  std::replace(name.begin(), name.end(), '\\', '/');
   return name;
 }
 
-std::optional<ResourceContainer> ResourceContainer::open(
-  const std::filesystem::path& path, std::string name, std::vector<std::string>& warnings)
+Result<ResourceContainer> ResourceContainer::open(
+  const std::filesystem::path& path,
+  std::string name,
+  std::vector<std::string>& warnings,
+  const std::atomic<bool>* cancel)
 {
-  auto file = GameFile::open(path);
+  auto opened = GameFile::open(path);
   const auto stat = statGameFile(path);
-  if (!file || !stat)
+  if (opened.is_error() || !stat)
   {
     // idResourceContainer::Init's warning
-    warnings.push_back(fmt::format("Unable to open resource file {}", name));
-    return std::nullopt;
+    return Error{fmt::format("Unable to open resource file {}", name)};
   }
+  const auto file = std::move(opened).value();
 
-  const auto fileSize = file->size();
+  const auto fileSize = file.size();
   auto header = std::array<char, HeaderSize>{};
-  if (fileSize < HeaderSize || !file->readAt(0, header.data(), header.size()))
+  if (fileSize < HeaderSize || file.readAt(0, header.data(), header.size()).is_error())
   {
-    warnings.push_back(
-      fmt::format("Resource file {} is too short for its header; it is not read", name));
-    return std::nullopt;
+    return Error{
+      fmt::format("Resource file {} is too short for its header; it is not read", name)};
   }
 
   if (std::uint32_t(readBigInt32(header.data())) != ResourceFileMagic)
   {
     // the engine stops here with FatalError( "resourceFileMagic != RESOURCE_FILE_MAGIC" )
-    warnings.push_back(fmt::format(
+    return Error{fmt::format(
       "Resource file {}: resourceFileMagic != RESOURCE_FILE_MAGIC; it is not read",
-      name));
-    return std::nullopt;
+      name)};
   }
 
   const auto tableOffset = readBigInt32(header.data() + 4);
@@ -107,28 +111,25 @@ std::optional<ResourceContainer> ResourceContainer::open(
     tableOffset < 0 || tableLength < 4
     || std::uint64_t(tableOffset) + std::uint64_t(tableLength) > fileSize)
   {
-    warnings.push_back(fmt::format(
+    return Error{fmt::format(
       "Resource file {}: its table ({} bytes at {}) does not fit in its {} bytes; it is "
       "not read",
       name,
       tableLength,
       tableOffset,
-      fileSize));
-    return std::nullopt;
+      fileSize)};
   }
 
   auto table = std::string{};
   table.resize(std::size_t(tableLength));
-  if (!file->readAt(std::uint64_t(tableOffset), table.data(), table.size()))
+  if (file.readAt(std::uint64_t(tableOffset), table.data(), table.size()).is_error())
   {
-    warnings.push_back(fmt::format("Resource file {}: its table cannot be read", name));
-    return std::nullopt;
+    return Error{fmt::format("Resource file {}: its table cannot be read", name)};
   }
 
-  const auto truncated = [&]() {
-    warnings.push_back(
-      fmt::format("Resource file {}: its table is truncated; it is not read", name));
-    return std::nullopt;
+  const auto truncated = [&]() -> Result<ResourceContainer> {
+    return Error{
+      fmt::format("Resource file {}: its table is truncated; it is not read", name)};
   };
 
   const auto numFileResources = readBigInt32(table.data());
@@ -138,7 +139,6 @@ std::optional<ResourceContainer> ResourceContainer::open(
   }
 
   auto container = ResourceContainer{};
-  container.m_name = std::move(name);
   container.m_path = path;
   container.m_fileSize = fileSize;
   container.m_fileTime = stat->time;
@@ -146,6 +146,12 @@ std::optional<ResourceContainer> ResourceContainer::open(
   auto position = std::size_t{4};
   for (std::int32_t i = 0; i < numFileResources; ++i)
   {
+    // R5.20: a stop waits for one table entry
+    if (cancel && cancel->load())
+    {
+      return Error{fmt::format("Reading resource file {} was cancelled", name)};
+    }
+
     // idResourceCacheEntry::Read: ReadString, then ReadBig offset and length
     if (table.size() - position < 4)
     {
@@ -184,7 +190,7 @@ std::optional<ResourceContainer> ResourceContainer::open(
       warnings.push_back(fmt::format(
         "Resource file {}: entry '{}' ({} bytes at {}) does not fit in the file; it is "
         "skipped",
-        container.m_name,
+        name,
         entryName,
         length,
         offset));
@@ -197,7 +203,8 @@ std::optional<ResourceContainer> ResourceContainer::open(
     container.m_index[container.m_entries.back().name] = container.m_entries.size() - 1;
   }
 
-  return container;
+  container.m_name = std::move(name);
+  return Result<ResourceContainer>{std::move(container)};
 }
 
 const std::string& ResourceContainer::name() const
@@ -221,32 +228,28 @@ const ResourceEntry* ResourceContainer::find(const std::string_view gamePath) co
   return it != m_index.end() ? &m_entries[it->second] : nullptr;
 }
 
-std::optional<std::string> ResourceContainer::read(
-  const ResourceEntry& entry,
-  const GameFile& file,
-  std::vector<std::string>& warnings) const
+Result<std::string> ResourceContainer::read(
+  const ResourceEntry& entry, const GameFile& file) const
 {
   const auto stat = statGameFile(m_path);
   if (
     !stat || stat->size != m_fileSize || stat->time != m_fileTime
     || file.size() != m_fileSize)
   {
-    warnings.push_back(fmt::format(
+    return Error{fmt::format(
       "Resource file {} changed since its table was read; '{}' is not read from it",
       m_name,
-      entry.name));
-    return std::nullopt;
+      entry.name)};
   }
 
   auto bytes = std::string{};
   bytes.resize(entry.length);
-  if (!file.readAt(entry.offset, bytes.data(), bytes.size()))
+  if (file.readAt(entry.offset, bytes.data(), bytes.size()).is_error())
   {
-    warnings.push_back(
-      fmt::format("Resource file {}: '{}' cannot be read", m_name, entry.name));
-    return std::nullopt;
+    return Error{
+      fmt::format("Resource file {}: '{}' cannot be read", m_name, entry.name)};
   }
-  return bytes;
+  return Result<std::string>{std::move(bytes)};
 }
 
 std::uint64_t ResourceContainer::fileSize() const

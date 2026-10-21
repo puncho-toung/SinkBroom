@@ -17,6 +17,15 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+// ---- engine notice ----
+// Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
+// GPL Source Code and RBDOOM-3-BFG (neo/framework/CmdSystem.h and
+// framework/CVarSystem.cpp):
+//   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
+// That code is also subject to the additional terms that follow the GNU General
+// Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
+// ---- end of engine notice ----
+
 #pragma once
 
 // The framework layer of the engine's precompiled.h: the command, cvar, common and file
@@ -29,7 +38,7 @@ class idCommandLink;
 #include "framework/CmdSystem.h"
 
 // constexpr, so the copied CONSOLE_COMMANDs are constant-initialised and register nothing
-// when the program starts (S27, C9)
+// when the program starts (S27, C9); nothing reads what they name
 class idCommandLink
 {
 public:
@@ -38,19 +47,15 @@ public:
     cmdFunction_t function,
     const char* description,
     argCompletion_t argCompletion = NULL)
-    : next{nullptr}
-    , cmdName_{cmdName}
-    , function_{function}
-    , description_{description}
-    , argCompletion_{argCompletion}
+    : m_cmdName{cmdName}
   {
+    (void)function;
+    (void)description;
+    (void)argCompletion;
   }
 
-  idCommandLink* next;
-  const char* cmdName_;
-  cmdFunction_t function_;
-  const char* description_;
-  argCompletion_t argCompletion_;
+private:
+  const char* m_cmdName;
 };
 
 class idCmdSystem
@@ -86,10 +91,8 @@ public:
     : m_name{name}
     , m_value{value}
     , m_flags{flags}
-    , m_description{description}
-    , m_valueMin{1.0f}
-    , m_valueMax{-1.0f}
   {
+    (void)description;
     (void)valueCompletion;
   }
 
@@ -104,10 +107,10 @@ public:
     : m_name{name}
     , m_value{value}
     , m_flags{flags}
-    , m_description{description}
-    , m_valueMin{valueMin}
-    , m_valueMax{valueMax}
   {
+    (void)description;
+    (void)valueMin;
+    (void)valueMax;
     (void)valueCompletion;
   }
 
@@ -123,9 +126,6 @@ private:
   const char* m_name;
   const char* m_value;
   int m_flags;
-  const char* m_description;
-  float m_valueMin;
-  float m_valueMax;
 };
 
 class idCVarSystem

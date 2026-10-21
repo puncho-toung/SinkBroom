@@ -28,6 +28,23 @@ namespace tb::lit
 namespace
 {
 
+// Reads idMaterial's private editorImageName without changing the copied class, as
+// DeclManagerShim.cpp reads the decl manager's lists: an explicit instantiation may name
+// a private member, and the friend function it defines hands the member pointer out.
+struct EditorImageNameTag
+{
+  using type = idStr idMaterial::*;
+  friend type get(EditorImageNameTag);
+};
+
+template <typename Tag, typename Tag::type Member>
+struct PrivateMember
+{
+  friend typename Tag::type get(Tag) { return Member; }
+};
+
+template struct PrivateMember<EditorImageNameTag, &idMaterial::editorImageName>;
+
 bool endsWithNoCase(const std::string& text, const std::string& suffix)
 {
   return text.size() >= suffix.size()
@@ -54,13 +71,19 @@ std::optional<MaterialImageKey> imageKey(const idImage* image)
   return key;
 }
 
+std::string fmt_material_refused(const char* name)
+{
+  return std::string{"material '"} + name + "' exceeded "
+         + std::to_string(MAX_SHADER_STAGES)
+         + " stages; it is not parsed (the engine's parser writes past its stage array "
+           "there)";
+}
+
 std::string lastError(const std::vector<DeclMessage>& messages)
 {
   for (auto it = messages.rbegin(); it != messages.rend(); ++it)
   {
-    if (
-      it->kind == DeclMessageKind::Error || it->kind == DeclMessageKind::FatalError
-      || it->kind == DeclMessageKind::Assert)
+    if (it->kind == DeclMessageKind::Error || it->kind == DeclMessageKind::FatalError)
     {
       return it->text;
     }
@@ -180,6 +203,7 @@ std::shared_ptr<const MaterialEntry> materialEntry(
   entry->receivesLighting = material.ReceivesLighting();
   entry->surfaceCastsShadow = material.SurfaceCastsShadow();
   entry->entityGui = material.GetEntityGui();
+  entry->editorImageName = (material.*get(EditorImageNameTag{})).c_str();
   if (const auto* gui = material.GlobalGui())
   {
     entry->gui = gui->GetSourceFile();
@@ -231,6 +255,11 @@ std::vector<std::string> DeclSource::takeWarnings()
 
 void DeclSource::closeFiles() {}
 
+bool DeclSource::changedWhileRead() const
+{
+  return false;
+}
+
 int compareEnginePaths(const std::string& lhs, const std::string& rhs)
 {
   return idStr::IcmpPath(lhs.c_str(), rhs.c_str());
@@ -242,7 +271,7 @@ MemoryDeclSource::MemoryDeclSource(std::vector<DeclFile> files)
 }
 
 std::vector<std::string> MemoryDeclSource::listFiles(
-  const std::string& folder, const std::string& extension) const
+  const std::string& folder, const std::string& extension)
 {
   // the files directly inside folder: the engine's ListFiles does not recurse
   auto names = std::vector<std::string>{};
@@ -267,7 +296,7 @@ std::vector<std::string> MemoryDeclSource::listFiles(
 }
 
 std::optional<std::string> MemoryDeclSource::readFile(
-  const std::string& path, std::int64_t* timestamp) const
+  const std::string& path, std::int64_t* timestamp)
 {
   for (const auto& file : m_files)
   {
@@ -296,17 +325,54 @@ bool MaterialImageKey::operator!=(const MaterialImageKey& other) const
   return !(*this == other);
 }
 
-MaterialDecls::MaterialDecls(const DeclSource& source, const std::atomic<bool>* cancel)
+MaterialDecls::MaterialDecls(DeclSource& source, const std::atomic<bool>* cancel)
   : m_id{nextRegistryId++}
 {
-  if (shim::Registry::current())
+  // C17, A2.6: one registry at a time, claimed atomically
+  if (!shim::Registry::claim())
   {
     m_constructionError = "another material registry exists";
     m_constructionMessages.push_back(
       DeclMessage{DeclMessageKind::Error, m_constructionError});
     return;
   }
-  m_registry = std::make_unique<shim::Registry>(source, cancel);
+  m_claimed = true;
+
+  try
+  {
+    m_registry = std::make_unique<shim::Registry>(source, cancel);
+  }
+  catch (const std::exception& e)
+  {
+    // the registry's bindings have unbound the globals
+    m_constructionError =
+      std::string{"the material registry could not be built: "} + e.what();
+  }
+  catch (...)
+  {
+    m_constructionError = "the material registry could not be built";
+  }
+  if (!m_registry)
+  {
+    m_constructionMessages.push_back(
+      DeclMessage{DeclMessageKind::Error, m_constructionError});
+    shim::Registry::release();
+    m_claimed = false;
+    return;
+  }
+
+  // M-ID-GUARD-05: a material with too many stages never reaches the copied parser
+  const auto refused = shim::refuseOversizedMaterials(m_registry->declManager());
+  for (const auto index : refused)
+  {
+    if (std::size_t(index) >= m_failures.size())
+    {
+      m_materials.resize(std::size_t(index) + 1);
+      m_failures.resize(std::size_t(index) + 1);
+    }
+    m_failures[std::size_t(index)] = fmt_material_refused(
+      declManager->DeclByIndex(DECL_MATERIAL, index, false)->GetName());
+  }
 }
 
 MaterialDecls::~MaterialDecls()
@@ -315,6 +381,25 @@ MaterialDecls::~MaterialDecls()
   m_materials.clear();
   m_failures.clear();
   m_registry.reset();
+  if (m_claimed)
+  {
+    shim::Registry::release();
+  }
+}
+
+std::vector<DeclFolderInfo> MaterialDecls::engineDeclFolders()
+{
+  // DeclManager.cpp:936 and :995-996, then d3xp/Game_local.cpp:327-331 (M-ID-FN-11)
+  return {
+    {"materials", ".mtr"},
+    {"skins", ".skin"},
+    {"sound", ".sndshd"},
+    {"def", ".def"},
+    {"fx", ".fx"},
+    {"particles", ".prt"},
+    {"af", ".af"},
+    {"newpdas", ".pda"},
+  };
 }
 
 const std::string& MaterialDecls::constructionError() const
@@ -504,6 +589,44 @@ std::vector<DeclTypeCount> MaterialDecls::declCounts() const
 {
   return m_registry ? shim::declCounts(m_registry->declManager())
                     : std::vector<DeclTypeCount>{};
+}
+
+std::vector<std::string> MaterialDecls::declNames(const std::string_view typeName) const
+{
+  auto names = std::vector<std::string>{};
+  if (!m_registry)
+  {
+    return names;
+  }
+
+  const auto typeText = std::string{typeName};
+  const auto type = declManager->GetDeclTypeFromName(typeText.c_str());
+  if (type == DECL_MAX_TYPES)
+  {
+    return names;
+  }
+  for (int i = 0; i < declManager->GetNumDecls(type); ++i)
+  {
+    names.emplace_back(declManager->DeclByIndex(type, i, false)->GetName());
+  }
+  return names;
+}
+
+std::vector<MaterialImageKey> MaterialDecls::imageKeys() const
+{
+  auto keys = std::vector<MaterialImageKey>{};
+  if (!m_registry)
+  {
+    return keys;
+  }
+  for (int i = 0; i < globalImages->NumImages(); ++i)
+  {
+    if (auto key = imageKey(globalImages->ImageByIndex(i)))
+    {
+      keys.push_back(std::move(*key));
+    }
+  }
+  return keys;
 }
 
 int MaterialDecls::defaultedCount(const std::string_view typeName) const

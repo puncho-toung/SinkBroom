@@ -20,7 +20,6 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LiveSession.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MaterialService.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/Materials.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NvrhiSupport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.h
@@ -49,21 +48,17 @@ target_link_libraries(TbLitLib
     CompilerConfig
     PrecompileStdHeaders
     TbFsLib
-    TbLitIdLib
   PUBLIC
     TbBaseLib
+    TbLitIdLib
     nvrhi
     nvrhi_vk
     WrapVulkanHeaders::WrapVulkanHeaders
 )
 
-# TbLitIdLib is private: its shim headers (precompiled.h, RenderCommon.h) and every id type
-# stay inside it. Only its std-only facade, lit/MaterialDecls.h, is passed on, because
-# lit/Materials.h includes it.
-target_include_directories(TbLitLib
-  PUBLIC
-    $<TARGET_PROPERTY:TbLitIdLib,INTERFACE_INCLUDE_DIRECTORIES>
-)
+# TbLitIdLib is public for its std-only facade, lit/MaterialDecls.h, which
+# lit/MaterialService.h and lit/GameDeclSource.h include. Its shim headers (precompiled.h,
+# RenderCommon.h) and every id type are private to it, so nothing else is passed on.
 
 # Vulkan is reached only through vulkan.hpp's dynamic dispatcher and the loader is never
 # linked (C9), so a call to a static prototype fails to compile. On Windows vulkan.h
@@ -74,5 +69,14 @@ target_compile_definitions(TbLitLib
     VK_NO_PROTOTYPES
     $<$<PLATFORM_ID:Windows>:NOMINMAX>
 )
+
+# G12: TrenchBroom's Release link passes /DEBUG (app/TrenchBroom/CMakeLists.txt), which
+# turns /OPT:REF off, so the copied Str.cpp's six thread_local buffers stay in although
+# nothing calls their functions: 192 KB of static TLS in every thread (mirror.json
+# M-ID-BUILD-01). /OPT:REF drops the unreferenced functions and their TLS, as every Release
+# link without /DEBUG already does.
+if(MSVC)
+  target_link_options(TbLitLib INTERFACE $<$<CONFIG:Release>:/OPT:REF>)
+endif()
 
 add_subdirectory(test)

@@ -2,7 +2,7 @@
 # and std-only facade (shim/). It is built like a dependency (D31, S18): C++17 as in the
 # engine, the engine's semantic compile definitions, no CompilerConfig, no precompiled std
 # headers and no TrenchBroom warnings. Only the facade header (shim/include) is visible to
-# TbLitLib, which links this library PRIVATE.
+# TbLitLib, which links this library PUBLIC for it.
 add_library(TbLitIdLib STATIC)
 
 set(TB_LIT_ID_ENGINE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/engine)
@@ -66,11 +66,30 @@ set_target_properties(TbLitIdLib PROPERTIES
 )
 
 # The engine's compile definitions that the copied files branch on (neo/CMakeLists.txt:
-# USE_INTRINSICS_SSE is the engine's default on x86 and x86-64). DMAP is never defined:
-# under DMAP the parser keeps no programs and handles missing images differently (M8). The
-# full set and the ones deliberately left out are recorded in mirror.json.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i.86|x86)$")
+# USE_INTRINSICS_SSE is the engine option's default on x86 and x86-64, unless an Apple
+# build targets arm64, neo/CMakeLists.txt:88-93). DMAP is never defined: under DMAP the
+# parser keeps no programs and handles missing images differently (M8). The full set and
+# the ones deliberately left out are recorded in mirror.json (M-ID-BUILD-01).
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)|(e2k)|(E2K)"
+   AND NOT CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
   target_compile_definitions(TbLitIdLib PRIVATE USE_INTRINSICS_SSE)
+endif()
+
+# G11, M-ID-BUILD-01: the engine's GCC and Clang code-generation flags. It compiles
+# everything with -fno-strict-aliasing (neo/CMakeLists.txt:199), which the copied idMath's
+# type punning needs, and its optimised configurations with -ffp-contract=off
+# -fno-math-errno -fno-trapping-math (:220-222). -ffp-contract=off applies to every
+# configuration here, so that Debug evaluates registers as Release does. The engine's
+# GCC and Clang Debug defines _DEBUG (:217), as /MDd does on MSVC, so the copied asserts
+# are live in every Debug build.
+if(NOT MSVC)
+  target_compile_options(TbLitIdLib PRIVATE
+    -fno-strict-aliasing
+    -ffp-contract=off
+    $<$<NOT:$<CONFIG:Debug>>:-fno-math-errno>
+    $<$<NOT:$<CONFIG:Debug>>:-fno-trapping-math>
+  )
+  target_compile_definitions(TbLitIdLib PRIVATE $<$<CONFIG:Debug>:_DEBUG>)
 endif()
 
 if(MSVC)

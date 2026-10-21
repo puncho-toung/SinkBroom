@@ -17,6 +17,17 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+// ---- engine notice ----
+// Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
+// GPL Source Code and RBDOOM-3-BFG (neo/framework/DeclManager.cpp and
+// d3xp/Game_local.cpp):
+//   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
+//   Copyright (C) 2014-2023 Robert Beckebans
+//   Copyright (C) 2014-2016 Kot in Action Creative Artel
+// That code is also subject to the additional terms that follow the GNU General
+// Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
+// ---- end of engine notice ----
+
 // The decl manager: the copied ranges of framework/DeclManager.cpp, compiled here because
 // idDeclLocal, idDeclFile and idDeclManagerLocal are defined inside that file (R5.10),
 // and the shim's definitions of the members the copy leaves out. Each of those is listed
@@ -26,6 +37,9 @@
 #include "precompiled.h"
 #include "shim/Registry.h"
 // clang-format on
+
+#include <string>
+#include <string_view>
 
 // The engine's declManagerLocal is a global object, which the copied code names with a
 // dot; here the name refers to the registry's object (C17).
@@ -292,6 +306,145 @@ std::size_t declFileBytes(const idDeclManagerLocal& manager)
     bytes += std::size_t(std::max(files[i]->fileSize, 0));
   }
   return bytes;
+}
+
+namespace
+{
+
+// the keywords idMaterial::ParseMaterial turns into one stage each
+// (Material.cpp:2883-2924)
+constexpr const char* StageShortcuts[] = {
+  "diffusemap",
+  "basecolormap",
+  "specularmap",
+  "rmaomap",
+  "reflectionmap",
+  "pbrmap",
+  "bumpmap",
+  "normalmap",
+};
+
+bool isNameStart(const char c)
+{
+  // idLexer::ReadToken's names, and with LEXFL_ALLOWPATHNAMES the path starts
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '/'
+         || c == '\\' || c == '.';
+}
+
+bool isNamePart(const char c)
+{
+  // idLexer::ReadName with LEXFL_ALLOWPATHNAMES
+  return isNameStart(c) || (c >= '0' && c <= '9') || c == ':';
+}
+
+bool isStageShortcut(const std::string_view token)
+{
+  for (const auto* keyword : StageShortcuts)
+  {
+    const auto length = std::char_traits<char>::length(keyword);
+    if (token.size() == length && idStr::Icmpn(token.data(), keyword, int(length)) == 0)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The stages a material decl's text makes (M-ID-GUARD-05): the brace blocks one level
+ * inside the material's own, and the stage shortcut keywords at that level, as idLexer
+ * reads the text with DECL_LEXER_FLAGS (comments skipped, a quoted string ends at its
+ * quote or its line, no escapes, path names). AddImplicitStages never adds a stage past
+ * the limit, so these are the stages ParseStage would be asked for.
+ */
+int stageCount(const std::string& text)
+{
+  auto depth = 0;
+  auto stages = 0;
+  const auto length = text.size();
+  for (std::size_t i = 0; i < length; ++i)
+  {
+    const auto c = text[i];
+    if (c == '/' && i + 1 < length && text[i + 1] == '/')
+    {
+      while (i < length && text[i] != '\n')
+      {
+        ++i;
+      }
+    }
+    else if (c == '/' && i + 1 < length && text[i + 1] == '*')
+    {
+      i += 2;
+      while (i + 1 < length && !(text[i] == '*' && text[i + 1] == '/'))
+      {
+        ++i;
+      }
+      ++i;
+    }
+    else if (c == '"')
+    {
+      ++i;
+      while (i < length && text[i] != '"' && text[i] != '\n')
+      {
+        ++i;
+      }
+    }
+    else if (isNameStart(c))
+    {
+      // a whole name, so that "//" inside a path is no comment
+      auto end = i + 1;
+      while (end < length && isNamePart(text[end]))
+      {
+        ++end;
+      }
+      if (depth == 1 && isStageShortcut(std::string_view{text}.substr(i, end - i)))
+      {
+        ++stages;
+      }
+      i = end - 1;
+    }
+    else if (c == '{')
+    {
+      stages += depth == 1 ? 1 : 0;
+      ++depth;
+    }
+    else if (c == '}' && depth > 0)
+    {
+      --depth;
+    }
+  }
+  return stages;
+}
+
+} // namespace
+
+std::vector<int> refuseOversizedMaterials(idDeclManagerLocal& manager)
+{
+  const auto& materials = (manager.*get(LinearListsTag{}))[DECL_MATERIAL];
+
+  auto refused = std::vector<int>{};
+  auto text = std::string{};
+  for (int i = 0; i < materials.Num(); ++i)
+  {
+    auto* decl = materials[i];
+    if (decl->GetState() != DS_UNPARSED)
+    {
+      continue;
+    }
+
+    text.resize(std::size_t(decl->GetTextLength()) + 1);
+    decl->GetText(text.data());
+    text.resize(std::size_t(decl->GetTextLength()));
+    if (stageCount(text) > MAX_SHADER_STAGES)
+    {
+      // Material.cpp:1642-1646's warning, which the engine reports before it overruns
+      common->Warning(
+        "material '%s' exceeded %i stages", decl->GetName(), MAX_SHADER_STAGES);
+      decl->MakeDefault();
+      refused.push_back(decl->Index());
+    }
+  }
+  return refused;
 }
 
 std::vector<DeclTypeCount> declCounts(idDeclManagerLocal& manager)
