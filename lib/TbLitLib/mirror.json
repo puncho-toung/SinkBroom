@@ -23,7 +23,8 @@
     "fatal-site": "a never-returning engine call (Error, FatalError) in the copied or mirrored code, which the shim turns into log-and-return, with what the code does after it returns",
     "static": "a static or global of the copied code (or the shim's bindings), its kind and why it needs no reset",
     "temporary": "a stand-in that a later package replaces",
-    "guard": "a check outside the copied code that keeps a latent engine fault from being reached"
+    "guard": "a check outside the copied code that keeps a latent engine fault from being reached",
+    "difference": "a deliberate difference from the engine's behaviour, with its reason"
   },
   "engineCommit": "285ea4d18a0aaedf46b0803ea656e4850eba5a01",
   "pins": [
@@ -1774,6 +1775,28 @@
       "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
     },
     {
+      "id": "M-ID-COPY-37",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/CmdArgs.cpp",
+          "lines": [
+            1,
+            241
+          ],
+          "anchor": "whole file",
+          "sha256": "57e4f96caf29b0d83083e88afb93e004800f6d9455e1718b5abd55edf290caf8",
+          "gitBlob": "6ed5e65251cabd1a1ae552b4c4992486115f263e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/CmdArgs.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob"
+    },
+    {
       "id": "M-ID-PART-01",
       "kind": "copied-range",
       "engine": [
@@ -2029,6 +2052,15 @@
         {
           "file": "neo/framework/DeclManager.cpp",
           "lines": [
+            1547,
+            1615
+          ],
+          "anchor": "idDeclManagerLocal::PrintType",
+          "sha256": "7e0b5112f7dafd10ac3813bed741136555886c2d155147e195b11d9123c7705b"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
             1761,
             1786
           ],
@@ -2081,7 +2113,7 @@
           "symbol": "#include"
         }
       ],
-      "note": "1465 of the file's 5471 lines, in 11 ranges, each preceded by one marker line; compiled inside shim/src/DeclManagerShim.cpp (HEADER_FILE_ONLY), because idDeclLocal, idDeclFile and idDeclManagerLocal are defined in this file; there the name declManagerLocal is a macro for *tbLitDeclManagerLocal"
+      "note": "1534 of the file's 5471 lines, in 12 ranges, each preceded by one marker line; compiled inside shim/src/DeclManagerShim.cpp (HEADER_FILE_ONLY), because idDeclLocal, idDeclFile and idDeclManagerLocal are defined in this file; there the name declManagerLocal is a macro for *tbLitDeclManagerLocal"
     },
     {
       "id": "M-ID-PART-07",
@@ -2736,7 +2768,7 @@
           "symbol": "NamedCVars"
         }
       ],
-      "note": "ListFiles takes the names from the DeclSource (GetFileList's part: flat, merged, unique; LP1a.2 implements the engine's search there), adds each once case-insensitively and sorts with idSort_PathStr. ReadFile returns a Mem_Alloc'ed, NUL-terminated buffer of length + 1, -1 and FILE_NOT_FOUND_TIMESTAMP for an unreadable file"
+      "note": "ListFiles takes the names from the DeclSource (GetFileList's part, which lit/GameDeclSource.h mirrors, M-FS-01), adds each once case-insensitively and sorts with idSort_PathStr. ReadFile returns a Mem_Alloc'ed, NUL-terminated buffer of length + 1, -1 and FILE_NOT_FOUND_TIMESTAMP for an unreadable file. Not in the engine (R5.20): once the registry's cancel flag is set, every later ReadFile returns an empty file without asking the source, so the copied RegisterDeclFolder loop ends after the file it was reading and nothing is reported"
     },
     {
       "id": "M-ID-FN-09",
@@ -3028,6 +3060,54 @@
       "note": "idSysMutex on std::recursive_mutex (the Windows critical section is recursive and FindType re-enters through a material's table lookup); idCommandLink and idCVar have constexpr constructors and register nothing (S27, C9); idCVar's getters follow UpdateValue's conversions at the engine default (D21); idStrId only for Str.cpp's never-run testStrId command (LangDict.h needs idDynamicBlockAlloc); sys_includes.h's C and C++ headers without windows.h, DirectInput or DirectSound"
     },
     {
+      "id": "M-ID-FN-14",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1996,
+            2033
+          ],
+          "anchor": "idDeclManagerLocal::TouchDecl_f",
+          "sha256": "84bb9eb95af359c57c0e405d64c9f2f95f15e6a254c15a669fc4b0260c7f5664"
+        },
+        {
+          "file": "neo/framework/DeclManager.h",
+          "lines": [
+            437,
+            441
+          ],
+          "anchor": "idPrintDecls_f",
+          "sha256": "53e21d125a3f6116bcb65f84f30bee79e12e664f1dd39f08e1c95967429de3f6"
+        },
+        {
+          "file": "neo/framework/Common.cpp",
+          "lines": [
+            262,
+            297
+          ],
+          "anchor": "idCommonLocal::ParseCommandLine",
+          "sha256": "9b9b138e587e9030c08f1705e4f3a3d6420a08a4ddc972bfdf3f915d61ca511a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::touch"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::printDecl"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Printf"
+        }
+      ],
+      "note": "the console's touch (FindType without a default) and print<Type> (the copied PrintType, M-ID-PART), for the engine-captured goldens. printDecl builds the arguments with the copied idCmdArgs::AppendArg, as ParseCommandLine does for a +command, and the registry captures Printf's text while it runs, newlines included"
+    },
+    {
       "id": "M-ID-VIRT-01",
       "kind": "shim-virtual",
       "engine": [
@@ -3155,28 +3235,6 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
           "symbol": "idDeclManagerLocal::ListType"
-        }
-      ],
-      "note": "console command: does nothing"
-    },
-    {
-      "id": "M-ID-VIRT-07",
-      "kind": "shim-virtual",
-      "engine": [
-        {
-          "file": "neo/framework/DeclManager.cpp",
-          "lines": [
-            1552,
-            1615
-          ],
-          "anchor": "idDeclManagerLocal::PrintType",
-          "sha256": "d130fe94c99703d10d0d0b7e8ea8a885fb0df6d578b26bc86b8fe0a62b984d58"
-        }
-      ],
-      "sinkbroom": [
-        {
-          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
-          "symbol": "idDeclManagerLocal::PrintType"
         }
       ],
       "note": "console command: does nothing"
@@ -4373,6 +4431,24 @@
       "reason": "the shim's globals: null pointers bound to the one registry at its construction and nulled at its destruction (C17, S6); com_editors is a constant 0. The shim's tables (BuiltinShaders, the intrinsic names, ImageFormats, NamedCVars) are constant"
     },
     {
+      "id": "M-ID-STATIC-29",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/CmdArgs.cpp",
+          "lines": [
+            56,
+            56
+          ],
+          "anchor": "cmd_args (idCmdArgs::Args)",
+          "sha256": "9773018f660b2e0868cd73082b0d583c773ff5819ad50fb1dea80df7a7f4ceed"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "per-call scratch",
+      "reason": "filled at the start of every Args call and read before the next; Args is never called by the shim (PrintType reads Argv), and every call would run on the parse thread"
+    },
+    {
       "id": "M-ID-TEMP-01",
       "kind": "temporary",
       "engine": [
@@ -4553,6 +4629,66 @@
       "note": "MakeNameCanonical writes one byte past a MAX_STRING_CHARS buffer for a name of MAX_STRING_CHARS or more characters; the engine never passes one, but a map face might, so the facade refuses such names and canonicalName uses a buffer one byte longer"
     },
     {
+      "id": "M-ID-GUARD-03",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1883,
+            1913
+          ],
+          "anchor": "idDeclManagerLocal::MakeNameCanonical",
+          "sha256": "3f0d6b85b0068a4dd27e174c85da50446441a525e55651a285d7159f56fac9a3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::touch"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::printDecl"
+        }
+      ],
+      "note": "as M-ID-GUARD-01, for the console-command functions: a name of MAX_STRING_CHARS or more characters is refused before FindType or PrintType canonicalises it"
+    },
+    {
+      "id": "M-ID-GUARD-04",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1427,
+            1450
+          ],
+          "anchor": "idDeclManagerLocal::DeclByIndex",
+          "sha256": "31030dbfd949094b561a0a24f40fdcfc96bf25bb1856d10e5a6e22dd4dfb80ce"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::lookupIndex"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::materialName"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::parseTable"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::evaluate"
+        }
+      ],
+      "note": "the bulk parse's index functions check the index against GetNumDecls before DeclByIndex; evaluate also refuses an entry whose registry id is not this registry's, so an entry of an earlier build never reaches DeclByIndex"
+    },
+    {
       "id": "M-ID-GUARD-02",
       "kind": "guard",
       "engine": [
@@ -4573,6 +4709,491 @@
         }
       ],
       "note": "DeclByIndex reads past its list after reporting an out-of-range index; the facade checks an entry's index against GetNumDecls and its name before calling it"
+    },
+    {
+      "id": "M-FS-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            2238,
+            2253
+          ],
+          "anchor": "idFileSystemLocal::AddUnique",
+          "sha256": "81046cba81cb4bf8f05866e7391c1e1ec056c8381b69e19f55465e4950424e07"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            2290,
+            2530
+          ],
+          "anchor": "idFileSystemLocal::GetFileList",
+          "sha256": "ca9e9c3802fe2377602e005a38040faaf1416dee7aaa13762a0f3f5c590aa0d8"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            2537,
+            2555
+          ],
+          "anchor": "idFileSystemLocal::ListFiles",
+          "sha256": "86482ed20a2e32182bfba81a96eb052da7de541bed5399803b79756a8f681be0"
+        },
+        {
+          "file": "neo/idlib/Str.h",
+          "lines": [
+            428,
+            435
+          ],
+          "anchor": "idSort_PathStr",
+          "sha256": "93120ec9e992e9470a3a5c8faa47c8d5beeb3f97cecea53057ed0b8b785c6a52"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
+          "symbol": "GameDeclSource::listFiles"
+        },
+        {
+          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
+          "symbol": "flatName"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idFileSystemLocal::ListFiles"
+        }
+      ],
+      "note": "a folder's files with an extension over every source, in GetFileList's order: the resource files (searchPaths and containers from the last), each in its table's order, then the .pk4 files the same way, then the loose files; a container entry only when it lies directly in the folder (allowSubdirsForResourcePaks is false), with GetFileList's own tests, case-insensitively, its trailing slashes stripped. AddUnique keeps the first spelling (containers store lowercased names); the shim's ListFiles adds each once and sorts with idSort_PathStr (the copied IcmpPath)"
+    },
+    {
+      "id": "M-FS-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            3154,
+            3254
+          ],
+          "anchor": "idFileSystemLocal::AddGameDirectory",
+          "sha256": "1bfc27256bb995125dfcf8fcba7edffb232eab9e456c524db1fef4d3a0e71601"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            3263,
+            3275
+          ],
+          "anchor": "idFileSystemLocal::SetupGameDirectories",
+          "sha256": "3b3d116e5d36b3e7b905e7b7fd11d48532778848ce783c53b0c3219751286e7b"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            3311,
+            3332
+          ],
+          "anchor": "idFileSystemLocal::Startup, the game directories",
+          "sha256": "788edfec145e347485df1fdf246de09c82cd20df1e63e6e5a4e0dc7fef551059"
+        },
+        {
+          "file": "neo/framework/File_Zip.cpp",
+          "lines": [
+            32,
+            32
+          ],
+          "anchor": "BINARY_CONFIG",
+          "sha256": "adb0e584514b3fae37adc0048e6be38b6b0b7b945a20bfd34a73733038c50a66"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
+          "symbol": "GameDeclSource::GameDeclSource"
+        }
+      ],
+      "note": "the containers of <game path>/base in registration order: Sys_ListFiles( base, \".resources\" ) sorted with idSort_PathStr, then Sys_ListFiles( base/maps, \".resources\" ) sorted, each with \"maps/\" in front; then Sys_ListFiles( base, \".pk4\" ) sorted. A .pk4 holding binary.conf is refused without a message, as Init refuses it. A container whose Init fails is skipped with the engine's warning. On Windows the first listing recurses and lists base/maps' containers too; the engine then registers them twice, and SinkBroom keeps each once at its later place, which finds the same file for every name (M-FS-DIFF-04). With fs_resourceLoadPriority 0, a read searches each kind from the last registered: base/maps' .resources (z to a), then base's (z to a); .pk4 files z to a"
+    },
+    {
+      "id": "M-FS-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            343,
+            343
+          ],
+          "anchor": "fs_resourceLoadPriority",
+          "sha256": "6363c437ce65e756bf1a86d120e78d23a92178b6b2ad1e070d766d7b593f8ddc"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            2004,
+            2134
+          ],
+          "anchor": "idFileSystemLocal::ReadFile",
+          "sha256": "c4812661288470eadb7d6732f2839a19cf8285887805914bf45c09aea8fb64e8"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            3477,
+            3522
+          ],
+          "anchor": "idFileSystemLocal::GetResourceCacheEntry",
+          "sha256": "6164ddbb88194234f006b64705091f541fd910b4e07b6c7cb8946dd0ab2462f0"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            3533,
+            3576
+          ],
+          "anchor": "idFileSystemLocal::GetZipCacheEntry",
+          "sha256": "e4af7f7b3c2de213797c52fd6b9e711cfc2f1f67de18275392c43ee282dd5e20"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            3723,
+            3938
+          ],
+          "anchor": "idFileSystemLocal::OpenFileReadFlags",
+          "sha256": "53c1a8a2661966d4b67d3e25170c62352bf9a9724940b6668df8516ae2a41d93"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
+          "symbol": "GameDeclSource::readFile"
+        },
+        {
+          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
+          "symbol": "checkedRelativePath"
+        },
+        {
+          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
+          "symbol": "GameDeclSource::origin"
+        }
+      ],
+      "note": "fs_resourceLoadPriority 0 (its default): the loose file first, then the .pk4 files, then the resource files, each kind searched from its last registered container (M-FS-02). A leading slash is dropped; a path holding .. or ::, or an empty one, finds nothing; a container lookup refuses a path with a colon (an OS path), and compares the path with backslashes made slashes, case-insensitively. A container's file has time 0 (the engine wraps it in an idFile_Memory); a loose file's time is its modification time"
+    },
+    {
+      "id": "M-FS-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/File_Resource.cpp",
+          "lines": [
+            60,
+            125
+          ],
+          "anchor": "idResourceContainer::Init",
+          "sha256": "1f9203acb06436ab0603b1d54c51924565c5c15c0a1b8d939d9b19a3e9090807"
+        },
+        {
+          "file": "neo/framework/File_Resource.h",
+          "lines": [
+            56,
+            62
+          ],
+          "anchor": "idResourceCacheEntry::Read",
+          "sha256": "1e8eb87f046a233b2bb64cdf0f455519642abf5c6606347c9a0830778cc0a274"
+        },
+        {
+          "file": "neo/framework/File_Resource.h",
+          "lines": [
+            80,
+            80
+          ],
+          "anchor": "RESOURCE_FILE_MAGIC",
+          "sha256": "257e012109fc5230698062e4bc105c50a493dc83cd035c4c3ae1a0eea9559216"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            339,
+            344
+          ],
+          "anchor": "idFile::ReadInt",
+          "sha256": "e6506be0eb3d12e7db00ff49d04f0d31cf39fb6cb248f08c56772d64049fbf1d"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            432,
+            444
+          ],
+          "anchor": "idFile::ReadString",
+          "sha256": "aee64e2ad0bbc6c4d03f4615e3914a62a2865577dec60bc5567393b092029e84"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            1918,
+            1948
+          ],
+          "anchor": "idFile_InnerResource::Read",
+          "sha256": "ac9ac14f7a09a7e3f6f43e67be922a631ec38197f5d324f497565ed466bc82b5"
+        },
+        {
+          "file": "neo/idlib/containers/HashIndex.h",
+          "lines": [
+            220,
+            236
+          ],
+          "anchor": "idHashIndex::Add",
+          "sha256": "a305f763490756e547e0c059b0c255a09ed1e6a66ade8224b875a6b49c6ecc1b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ResourceContainer.cpp",
+          "symbol": "ResourceContainer::open"
+        },
+        {
+          "file": "lib/TbLitLib/src/ResourceContainer.cpp",
+          "symbol": "ResourceContainer::read"
+        },
+        {
+          "file": "lib/TbLitLib/src/ResourceContainer.cpp",
+          "symbol": "canonicalResourceName"
+        }
+      ],
+      "note": "the header (big-endian magic 0xD000000D, table offset, table length), the table (big-endian count; per entry a little-endian name length, the name, big-endian offset and length; a negative name length reads no name), names with backslashes made slashes and ASCII lowercased (CharIsUpper also accepts 0xC0-0xDF, but char is signed in the engine's builds), the later of two entries with one name first (Add puts the newer at the head of its chain), an entry's bytes at offset. Not in the engine: every offset and length is checked against the file before it is read (M-FS-DIFF-03)"
+    },
+    {
+      "id": "M-FS-05",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/File_Zip.cpp",
+          "lines": [
+            47,
+            182
+          ],
+          "anchor": "idZipContainer::Init",
+          "sha256": "d5ba1ed351320b8447628834682dd07a66162a435a8f090e2c466c0eac80e514"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
+          "symbol": "GameDeclSource::GameDeclSource"
+        }
+      ],
+      "note": "a .pk4's entries as Init stores them, backslashes made slashes and lowercased, read through TrenchBroom's ZipFileSystem (D55), which skips directory entries (GetFileList skips them too) and keeps the later of two entries whose names differ only in case (ImageFileSystemBase::addFile), as the engine's hash finds it; an entry is read with ZipFileSystem::openFile"
+    },
+    {
+      "id": "M-FS-06",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/sys/win32/win_main.cpp",
+          "lines": [
+            1017,
+            1058
+          ],
+          "anchor": "ListFilesRecursive",
+          "sha256": "37f1b801a55e37f03f9e646c04b0a216c8a1a7f5a9dad6053c5f3d02e33b30e8"
+        },
+        {
+          "file": "neo/sys/win32/win_main.cpp",
+          "lines": [
+            1061,
+            1151
+          ],
+          "anchor": "Sys_ListFiles (Windows)",
+          "sha256": "097b70fe37abf93af9d3c66776e602413b53bfee58f3cd66212c0d2e4dc469c0"
+        },
+        {
+          "file": "neo/sys/posix/posix_main.cpp",
+          "lines": [
+            556,
+            653
+          ],
+          "anchor": "Sys_ListFiles (POSIX)",
+          "sha256": "883af87164955762cee27a244dd4c3cae160d4a0745dedd7acdc182839c48753"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            2633,
+            2641
+          ],
+          "anchor": "idFileSystemLocal::ListOSFiles",
+          "sha256": "5ed663c02df9dabf9f7327f8e11df4a35cd6b22b58532402b16a4b6f9256e826"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameFile.cpp",
+          "symbol": "listOsFiles"
+        }
+      ],
+      "note": "on Windows the folder and every folder below it, names relative to the folder with forward slashes, a file's long name matched by PathMatchSpecW against *<extension> (a case-insensitive suffix); elsewhere the folder alone, fnmatch( *<extension>, name, 0 ) (case-sensitive) and no directory. So on Windows a loose decl file in a subfolder of materials is read, as the engine reads it"
+    },
+    {
+      "id": "M-FS-07",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            501,
+            627
+          ],
+          "anchor": "idFileSystemLocal::OpenOSFile",
+          "sha256": "d95afe983c8c66744e18947b77eed33873cd4c697378a50888768104cc9233f8"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            1809,
+            1827
+          ],
+          "anchor": "idFileSystemLocal::BuildOSPath",
+          "sha256": "e71b974610a5ecab85527334abc40109b473d234d6b88efc8f0bb2d83a20c6c2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameFile.cpp",
+          "symbol": "findLooseFile"
+        },
+        {
+          "file": "lib/TbLitLib/src/GameFile.cpp",
+          "symbol": "GameFile::open"
+        }
+      ],
+      "note": "a loose file at <game path>/base/<path>; on POSIX, when the path does not open, the file in the same folder whose path equals it case-insensitively. Opened with share-read and share-delete on Windows, where the engine shares read only (M-FS-DIFF-02)"
+    },
+    {
+      "id": "M-FS-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            3263,
+            3275
+          ],
+          "anchor": "SetupGameDirectories",
+          "sha256": "3b3d116e5d36b3e7b905e7b7fd11d48532778848ce783c53b0c3219751286e7b"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            3311,
+            3332
+          ],
+          "anchor": "Startup",
+          "sha256": "788edfec145e347485df1fdf246de09c82cd20df1e63e6e5a4e0dc7fef551059"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
+          "symbol": "GameDeclSource::GameDeclSource"
+        }
+      ],
+      "note": "C1: one search path, <game path>/base, from Map::gamePath(). No mod, fs_game, fs_game_base or fs_savepath is searched: the engine adds fs_savepath after fs_basepath and each mod after base, and searches the newest first"
+    },
+    {
+      "id": "M-FS-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            501,
+            627
+          ],
+          "anchor": "OpenOSFile",
+          "sha256": "d95afe983c8c66744e18947b77eed33873cd4c697378a50888768104cc9233f8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameFile.cpp",
+          "symbol": "GameFile::open"
+        },
+        {
+          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
+          "symbol": "GameDeclSource::closeFiles"
+        }
+      ],
+      "note": "R4-3.26: loose and .resources files are opened per read batch with share-read and share-delete, so the user can replace them while the preview runs; every container closes at the end of the batch. A .pk4 is opened by TbFsLib's createCFile (_wfopen, which shares read and write but not delete) for its batch only: TbFsLib is not changed (C12)"
+    },
+    {
+      "id": "M-FS-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/framework/File_Resource.cpp",
+          "lines": [
+            60,
+            125
+          ],
+          "anchor": "idResourceContainer::Init",
+          "sha256": "1f9203acb06436ab0603b1d54c51924565c5c15c0a1b8d939d9b19a3e9090807"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ResourceContainer.cpp",
+          "symbol": "ResourceContainer::open"
+        }
+      ],
+      "note": "a container that the engine would quit on (a wrong magic, FatalError) or read out of bounds (a header, table or entry that does not fit in the file) is refused, or the entry dropped, with a warning; a container that changed after its table was read is not read from. A name is cut at its first NUL, as the engine's C-string lookups see it"
+    },
+    {
+      "id": "M-FS-DIFF-04",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            3174,
+            3252
+          ],
+          "anchor": "AddGameDirectory's two passes",
+          "sha256": "13bd0fb0b236441644b7c8825818afc12814953ebab2cd1aab00e3969a48955f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
+          "symbol": "GameDeclSource::GameDeclSource"
+        }
+      ],
+      "note": "a container listed twice (base/maps on Windows) is registered once, at its later place; the engine opens it twice, and its earlier copy never finds a file that the later one does not find first"
+    },
+    {
+      "id": "M-FS-DIFF-05",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1088,
+            1094
+          ],
+          "anchor": "idDeclManagerLocal::Reload",
+          "sha256": "0bd6d4fd9fd4df1ea9334b12867bd8aa6dc292123ef231d75b7bfb2e6484f3fb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::rebuild"
+        }
+      ],
+      "note": "a reload builds a new registry from a new source (the containers are scanned again) instead of the engine's per-file Reload, and re-parses the names the consumers asked for before it publishes; only loose decl folders are polled (R4-3.26)"
     }
   ]
 }
