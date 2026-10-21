@@ -50,6 +50,65 @@ double millisecondsSince(const FrameClock::time_point start)
 }
 
 /**
+ * An open command list that is closed and executed when its scope ends without submit(),
+ * as when recording throws. NVRHI breaks the reference cycle between a list and its
+ * tracked command buffer only when the list is executed, so a list left open would leak
+ * with its command pool (review L2.5). NVRHI's submit swallows a lost device itself.
+ */
+class OpenCommandList
+{
+private:
+  nvrhi::IDevice& m_device;
+  nvrhi::ICommandList& m_list;
+  bool m_closed = false;
+  bool m_executed = false;
+
+public:
+  OpenCommandList(nvrhi::IDevice& device, nvrhi::ICommandList& list)
+    : m_device{device}
+    , m_list{list}
+  {
+    m_list.open();
+  }
+
+  ~OpenCommandList()
+  {
+    if (!m_executed)
+    {
+      try
+      {
+        submit();
+      }
+      catch (...)
+      {
+        // the frame has failed already; this only hands the list back to NVRHI
+      }
+    }
+  }
+
+  OpenCommandList(const OpenCommandList&) = delete;
+  OpenCommandList& operator=(const OpenCommandList&) = delete;
+
+  nvrhi::ICommandList& list() { return m_list; }
+
+  void close()
+  {
+    if (!m_closed)
+    {
+      m_closed = true;
+      m_list.close();
+    }
+  }
+
+  void submit()
+  {
+    close();
+    m_executed = true;
+    m_device.executeCommandList(&m_list);
+  }
+};
+
+/**
  * LP0's frame content: a clear colour from the camera's direction, direction * 0.5 + 0.5,
  * so that a viewer sees the preview follow the camera.
  */
@@ -484,29 +543,32 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     auto* const timer = m_timers.query(slot);
     const auto color = clearColorFor(camera.direction);
 
-    m_commandList->open();
-    if (timer)
     {
-      m_commandList->beginTimerQuery(timer);
-    }
-    m_commandList->clearTextureFloat(
-      texture,
-      nvrhi::AllSubresources,
-      nvrhi::Color{color[0], color[1], color[2], color[3]});
-    if (timer)
-    {
-      m_commandList->endTimerQuery(timer);
-    }
-    m_commandList->close();
+      auto recording = OpenCommandList{device, *m_commandList};
+      auto& commandList = recording.list();
+      if (timer)
+      {
+        commandList.beginTimerQuery(timer);
+      }
+      commandList.clearTextureFloat(
+        texture,
+        nvrhi::AllSubresources,
+        nvrhi::Color{color[0], color[1], color[2], color[3]});
+      if (timer)
+      {
+        commandList.endTimerQuery(timer);
+      }
+      recording.close();
 
-    if (target)
-    {
-      m_device.vulkanDevice().queueWaitForSemaphore(
-        nvrhi::CommandQueue::Graphics, target->acquireSemaphores[slot], 0);
-      m_device.vulkanDevice().queueSignalSemaphore(
-        nvrhi::CommandQueue::Graphics, target->presentSemaphores[imageIndex], 0);
+      if (target)
+      {
+        m_device.vulkanDevice().queueWaitForSemaphore(
+          nvrhi::CommandQueue::Graphics, target->acquireSemaphores[slot], 0);
+        m_device.vulkanDevice().queueSignalSemaphore(
+          nvrhi::CommandQueue::Graphics, target->presentSemaphores[imageIndex], 0);
+      }
+      recording.submit();
     }
-    device.executeCommandList(m_commandList);
     // NVRHI's submit reports a lost device only through the message callback (R5.19)
     if (m_events.lost())
     {
