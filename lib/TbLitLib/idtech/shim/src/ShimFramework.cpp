@@ -27,15 +27,19 @@
 // Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
 // ---- end of engine notice ----
 
-// The framework services for the copied code: cvars at engine defaults, the message
-// collector behind idCommon, and the file system over a DeclSource.
+// The framework services for the copied code: cvars at engine defaults, the permanent
+// message sink behind idCommon (D63), and the file system over a DeclSource.
 
 // clang-format off: precompiled.h comes first in every shim file
 #include "precompiled.h"
+#include "shim/EngineMessages.h"
 #include "shim/Registry.h"
 // clang-format on
 
-idCommon* common = nullptr;
+// D63: the process's one sink; common and idLib::common point to it from the start and
+// are never rebound. cvarSystem and fileSystem are bound by the registry (C17, S6).
+idCommon tbLitCommonSink;
+idCommon* common = &tbLitCommonSink;
 idCVarSystem* cvarSystem = nullptr;
 idFileSystem* fileSystem = nullptr;
 
@@ -116,20 +120,11 @@ const char* idCVarSystem::GetCVarString(const char* name) const
 
 void idCommon::Printf(const char* fmt, ...)
 {
+  // console text: a registry that captures a print command keeps it as the engine's
+  // console gets it, newlines included (Registry::beginCapture)
   va_list argptr;
   va_start(argptr, fmt);
-  auto* registry = tb::lit::shim::Registry::current();
-  if (registry && registry->capturing())
-  {
-    // the print commands: the text as the engine's console gets it
-    char text[MAX_PRINT_MSG];
-    idStr::vsnPrintf(text, sizeof(text), fmt, argptr);
-    registry->capture(text);
-  }
-  else
-  {
-    reportV(tb::lit::DeclMessageKind::Info, fmt, argptr);
-  }
+  reportV(tb::lit::DeclMessageKind::Info, fmt, argptr, true);
   va_end(argptr);
 }
 

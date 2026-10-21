@@ -19,6 +19,7 @@
 
 // clang-format off: precompiled.h comes first in every shim file
 #include "precompiled.h"
+#include "shim/EngineMessages.h"
 #include "shim/Registry.h"
 // clang-format on
 
@@ -55,8 +56,7 @@ Registry::Bindings::Bindings(Registry& registry)
 {
   currentRegistry = &registry;
 
-  common = &registry.m_common;
-  idLib::common = &registry.m_common;
+  // common and idLib::common stay the permanent sink of D63
   cvarSystem = &registry.m_cvarSystem;
   idLib::cvarSystem = &registry.m_cvarSystem;
   fileSystem = &registry.m_fileSystem;
@@ -83,8 +83,6 @@ Registry::Bindings::~Bindings()
   fileSystem = nullptr;
   idLib::cvarSystem = nullptr;
   cvarSystem = nullptr;
-  idLib::common = nullptr;
-  common = nullptr;
 
   currentRegistry = nullptr;
 }
@@ -115,61 +113,72 @@ Registry::Registry(DeclSource& source, const std::atomic<bool>* cancel)
 // the members go in reverse order: the decl manager, then the bindings, then the objects
 Registry::~Registry() = default;
 
-void Registry::report(const DeclMessageKind kind, const char* text)
+Registry::OwnThread::OwnThread()
+  : m_id{std::this_thread::get_id()}
 {
-  auto message = std::string{text};
+  discardEngineMessages(m_id);
+}
 
-  // the engine's prints end in a newline; the messages do not
-  while (!message.empty() && (message.back() == '\n' || message.back() == '\r'))
+Registry::OwnThread::~OwnThread()
+{
+  discardEngineMessages(m_id);
+}
+
+void Registry::drain() const
+{
+  for (auto& message : takeEngineMessages(m_thread.id()))
   {
-    message.pop_back();
+    if (m_capturing && message.consolePrint)
+    {
+      m_capture += message.text;
+    }
+    else
+    {
+      report(message.kind, std::move(message.text));
+    }
   }
+}
 
+void Registry::report(const DeclMessageKind kind, std::string text) const
+{
   if (kind == DeclMessageKind::Error || kind == DeclMessageKind::FatalError)
   {
     ++m_errorCount;
   }
-  m_messages.push_back(DeclMessage{kind, std::move(message)});
+  m_messages.push_back(DeclMessage{kind, messageText(std::move(text))});
+}
+
+const std::vector<DeclMessage>& Registry::messages() const
+{
+  drain();
+  return m_messages;
 }
 
 std::vector<DeclMessage> Registry::takeMessages()
 {
+  drain();
   return std::exchange(m_messages, {});
+}
+
+std::size_t Registry::errorCount() const
+{
+  drain();
+  return m_errorCount + std::size_t(lostEngineErrors());
 }
 
 void Registry::beginCapture()
 {
+  // what the thread printed before goes into the messages
+  drain();
   m_capturing = true;
   m_capture.clear();
 }
 
 std::string Registry::endCapture()
 {
+  drain();
   m_capturing = false;
   return std::exchange(m_capture, {});
-}
-
-void Registry::capture(const char* text)
-{
-  m_capture += text;
-}
-
-void reportV(const DeclMessageKind kind, const char* fmt, va_list argptr)
-{
-  char text[MAX_PRINT_MSG];
-  idStr::vsnPrintf(text, sizeof(text), fmt, argptr);
-  if (auto* registry = Registry::current())
-  {
-    registry->report(kind, text);
-  }
-}
-
-void reportWarning(const std::string& text)
-{
-  if (auto* registry = Registry::current())
-  {
-    registry->report(DeclMessageKind::Warning, text.c_str());
-  }
 }
 
 void freeGuiDummies()

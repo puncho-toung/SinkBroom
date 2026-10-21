@@ -28,6 +28,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(_MSC_VER) && defined(_DEBUG)
@@ -1123,6 +1124,123 @@ TEST_CASE("MaterialDecls guards the engine's overflows")
     checkRead(decls, "newpdas/lp1a_long.pda");
     CHECK(decls.declNames("email") == std::vector<std::string>{"lp1a_long_email"});
   }
+}
+
+TEST_CASE("Engine messages (D63)")
+{
+  const auto pendingBefore = pendingEngineMessagesForTesting();
+
+  SECTION("each thread's messages are kept apart, in order, until drained")
+  {
+    const auto report = [](const std::string& prefix) {
+      reportEngineMessageForTesting(DeclMessageKind::Info, prefix + " info");
+      reportEngineMessageForTesting(DeclMessageKind::Warning, prefix + " warning");
+      reportEngineMessageForTesting(DeclMessageKind::Error, prefix + " error");
+      // C17: the never-returning calls return
+      reportEngineMessageForTesting(DeclMessageKind::FatalError, prefix + " fatal");
+    };
+    auto first = std::thread{[&] { report("first"); }};
+    const auto firstId = first.get_id();
+    first.join();
+    auto second = std::thread{[&] { report("second"); }};
+    const auto secondId = second.get_id();
+    second.join();
+    CHECK(pendingEngineMessagesForTesting() == pendingBefore + 8u);
+
+    const auto firstMessages = drainEngineMessagesForThread(firstId);
+    REQUIRE(firstMessages.size() == 4u);
+    CHECK(firstMessages[0].kind == DeclMessageKind::Info);
+    // without the newline Printf was given
+    CHECK(firstMessages[0].text == "first info");
+    CHECK(firstMessages[1].kind == DeclMessageKind::Warning);
+    CHECK(firstMessages[1].text == "first warning");
+    CHECK(firstMessages[2].kind == DeclMessageKind::Error);
+    CHECK(firstMessages[3].kind == DeclMessageKind::FatalError);
+    CHECK(firstMessages[3].text == "first fatal");
+    CHECK(pendingEngineMessagesForTesting() == pendingBefore + 4u);
+    CHECK(drainEngineMessagesForThread(firstId).empty());
+
+    const auto secondMessages = drainEngineMessagesForThread(secondId);
+    REQUIRE(secondMessages.size() == 4u);
+    CHECK(secondMessages[0].text == "second info");
+    CHECK(secondMessages[3].text == "second fatal");
+    CHECK(pendingEngineMessagesForTesting() == pendingBefore);
+  }
+
+  SECTION("threads that report at once lose nothing")
+  {
+    constexpr auto ThreadCount = 4;
+    constexpr auto MessageCount = 500;
+    auto threads = std::vector<std::thread>{};
+    for (auto t = 0; t < ThreadCount; ++t)
+    {
+      threads.emplace_back([t] {
+        for (auto i = 0; i < MessageCount; ++i)
+        {
+          reportEngineMessageForTesting(
+            DeclMessageKind::Warning, std::to_string(t) + ":" + std::to_string(i));
+        }
+      });
+    }
+    auto ids = std::vector<std::thread::id>{};
+    for (auto& thread : threads)
+    {
+      ids.push_back(thread.get_id());
+      thread.join();
+    }
+    for (std::size_t t = 0; t < ids.size(); ++t)
+    {
+      CAPTURE(t);
+      const auto messages = drainEngineMessagesForThread(ids[t]);
+      REQUIRE(messages.size() == std::size_t(MessageCount));
+      for (std::size_t i = 0; i < messages.size(); ++i)
+      {
+        CHECK(messages[i].text == std::to_string(t) + ":" + std::to_string(i));
+      }
+    }
+    CHECK(pendingEngineMessagesForTesting() == pendingBefore);
+  }
+
+  SECTION("a registry drains its own thread's messages, not another thread's")
+  {
+    // reported before the registry exists: no registry received it
+    reportEngineMessageForTesting(DeclMessageKind::Warning, "before the registry");
+
+    auto source = MemoryDeclSource{fixtureFiles()};
+    auto decls = MaterialDecls{source};
+    REQUIRE(decls.constructionError().empty());
+    CHECK_FALSE(hasMessage(decls, DeclMessageKind::Warning, "before the registry"));
+
+    auto other = std::thread{
+      [] { reportEngineMessageForTesting(DeclMessageKind::Error, "another thread"); }};
+    const auto otherId = other.get_id();
+    other.join();
+    reportEngineMessageForTesting(DeclMessageKind::Warning, "the registry's thread");
+
+    CHECK(hasMessage(decls, DeclMessageKind::Warning, "the registry's thread"));
+    CHECK_FALSE(hasMessage(decls, DeclMessageKind::Error, "another thread"));
+    // another thread's error does not fail the registry's lookups
+    CHECK(decls.lookup("textures/lp1a/wall"));
+
+    const auto otherMessages = drainEngineMessagesForThread(otherId);
+    REQUIRE(otherMessages.size() == 1u);
+    CHECK(otherMessages[0].text == "another thread");
+    CHECK(otherMessages[0].kind == DeclMessageKind::Error);
+  }
+
+  SECTION("an assert is reported from any thread")
+  {
+    auto thread = std::thread{
+      [] { reportEngineMessageForTesting(DeclMessageKind::Assert, "x == y"); }};
+    const auto id = thread.get_id();
+    thread.join();
+    const auto messages = drainEngineMessagesForThread(id);
+    REQUIRE(messages.size() == 1u);
+    CHECK(messages[0].kind == DeclMessageKind::Assert);
+    CHECK(messages[0].text == "EngineMessages.cpp(0): x == y");
+  }
+
+  CHECK(pendingEngineMessagesForTesting() == pendingBefore);
 }
 
 #if defined(_MSC_VER) && defined(_DEBUG)

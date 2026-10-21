@@ -29,6 +29,7 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_ENGINE_DIR}/framework/DeclManager.cpp
 
     ${TB_LIT_ID_SHIM_DIR}/src/DeclManagerShim.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/EngineMessages.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/MaterialDecls.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/Registry.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimFramework.cpp
@@ -36,6 +37,7 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_SHIM_DIR}/src/ShimRenderer.cpp
     ${TB_LIT_ID_SHIM_DIR}/private/precompiled.h
     ${TB_LIT_ID_SHIM_DIR}/private/RenderCommon.h
+    ${TB_LIT_ID_SHIM_DIR}/private/shim/EngineMessages.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/Registry.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimEngine.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimFramework.h

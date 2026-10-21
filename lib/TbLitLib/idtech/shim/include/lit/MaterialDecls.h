@@ -39,6 +39,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -155,6 +156,24 @@ struct DeclMessage
   DeclMessageKind kind;
   std::string text;
 };
+
+/**
+ * D63: what the copied code reports through common and idLib::common (Printf, Warning,
+ * Error, FatalError) and its failed asserts goes to one permanent, thread-safe sink, kept
+ * per calling thread, oldest first, until that thread's owner takes it. A registry takes
+ * its own thread's messages into MaterialDecls::messages; the owner of any other thread
+ * that runs copied code (the session's CPU pool) takes that thread's with this, without
+ * the trailing newlines. Any thread.
+ */
+std::vector<DeclMessage> drainEngineMessagesForThread(std::thread::id thread);
+
+// the messages the sink keeps for every thread; any thread
+std::size_t pendingEngineMessagesForTesting();
+
+// reports text on the calling thread as the copied code would: Info through
+// idLib::common->Printf, Warning through idLib::common->Warning, Error and FatalError
+// through common, Assert as a failed assert; the never-returning ones return (C17)
+void reportEngineMessageForTesting(DeclMessageKind kind, const std::string& text);
 
 // An image as a material stage names it: the key of the engine's image record
 // (ImageManager.cpp's ImageFromFile). The integers are the engine's enum values, which

@@ -29,17 +29,18 @@
 // ---- end of engine notice ----
 
 // idLib's services for the copied code: the idLib wrappers, memory, the MD5 stub, asserts
-// and the localisation stubs. Every pointer here is bound by the registry (C17).
+// and the localisation stubs. idLib::common is the permanent sink of D63; the other
+// pointers here are bound by the registry (C17, S6).
 
 // clang-format off: precompiled.h comes first in every shim file
 #include "precompiled.h"
-#include "shim/Registry.h"
+#include "shim/EngineMessages.h"
 // clang-format on
 
 using tb::lit::shim::reportV;
 
 idSys* idLib::sys = nullptr;
-idCommon* idLib::common = nullptr;
+idCommon* idLib::common = &tbLitCommonSink;
 idCVarSystem* idLib::cvarSystem = nullptr;
 idFileSystem* idLib::fileSystem = nullptr;
 int idLib::frameNumber = 0;
@@ -136,16 +137,14 @@ unsigned int MD5_BlockChecksum(const void*, size_t)
   return 0;
 }
 
-// sys_assert.h: an assert in the copied code is reported and execution continues; it
-// never changes a parse's outcome, so Debug and Release parse alike (an Assert message is
-// not an error, Registry::report)
+// sys_assert.h: an assert in the copied code is reported to the sink of D63, from any
+// thread, and execution continues; it never changes a parse's outcome, so Debug and
+// Release parse alike (an Assert message is not an error, Registry::report). The copied
+// va keeps its buffers per thread.
 bool AssertFailed(const char* file, int line, const char* expression)
 {
-  if (auto* registry = tb::lit::shim::Registry::current())
-  {
-    registry->report(
-      tb::lit::DeclMessageKind::Assert, va("%s(%d): %s", file, line, expression));
-  }
+  tb::lit::shim::report(
+    tb::lit::DeclMessageKind::Assert, va("%s(%d): %s", file, line, expression));
   return false;
 }
 

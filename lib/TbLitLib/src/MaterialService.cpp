@@ -32,6 +32,7 @@
 #include <deque>
 #include <mutex>
 #include <optional>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -412,10 +413,12 @@ private:
       });
     }
 
-    // teardown step 8: the registry is destroyed on its own thread
+    // teardown step 8: the registry is destroyed on its own thread, and what the thread
+    // reported to the sink of D63 after it is dropped
     guarded("teardown", [&] {
       m_decls.reset();
       m_source.reset();
+      static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
     });
   }
 

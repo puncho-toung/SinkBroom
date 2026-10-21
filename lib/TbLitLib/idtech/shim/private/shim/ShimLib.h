@@ -28,8 +28,10 @@ class idCommon;
 class idCVarSystem;
 class idFileSystem;
 
-// idlib/Lib.h's idLib. Error and FatalError log and return: they are not NO_RETURN here,
-// because nothing may throw or jump through copied code (C17).
+// idlib/Lib.h's idLib. Its message functions, like common's, report to the permanent sink
+// of D63 from any thread, and idLib::common is that sink from the start. Error and
+// FatalError log and return: they are not NO_RETURN here, because nothing may throw or
+// jump through copied code (C17).
 class idLib
 {
 public:

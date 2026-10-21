@@ -57,6 +57,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -67,6 +68,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <typeinfo>
 #include <utility>
 #include <vector>

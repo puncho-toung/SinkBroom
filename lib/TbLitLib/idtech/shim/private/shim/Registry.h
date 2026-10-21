@@ -20,15 +20,19 @@
 #pragma once
 
 // Included after precompiled.h. The registry owns every object the copied engine code
-// reaches through its process globals, and binds those globals while it lives (C17). Only
-// one registry exists at a time.
+// reaches through its process globals, and binds those globals while it lives (C17):
+// cvarSystem, fileSystem, declManager, declManagerLocal, globalImages,
+// renderProgManager, uiManager and game. common and idLib::common are not among them:
+// they are the permanent sink of D63 (shim/EngineMessages.h), whose messages of the
+// registry's thread the registry drains into its own. Only one registry exists at a
+// time.
 
 #include "lit/MaterialDecls.h"
 
 #include <atomic>
-#include <cstdarg>
 #include <functional>
 #include <string>
+#include <thread>
 
 class idDeclManagerLocal;
 
@@ -128,7 +132,8 @@ public:
 
   // binds the globals, creates the intrinsic images and registers every decl type and
   // folder the engine registers, in the engine's order (D33); cancel, when set, cuts the
-  // decl files short (idFileSystemLocal). The caller holds the slot (claim).
+  // decl files short (idFileSystemLocal). The caller holds the slot (claim). The calling
+  // thread is the registry's thread: every call into it runs there (C20).
   explicit Registry(DeclSource& source, const std::atomic<bool>* cancel = nullptr);
 
   // frees in R5.11's order and unbinds the globals
@@ -137,22 +142,22 @@ public:
   Registry(const Registry&) = delete;
   Registry& operator=(const Registry&) = delete;
 
-  void report(DeclMessageKind kind, const char* text);
-
-  const std::vector<DeclMessage>& messages() const { return m_messages; }
+  // The messages the registry's thread reported to the sink of D63, oldest first; each of
+  // these takes the thread's new messages out of the sink first.
+  const std::vector<DeclMessage>& messages() const;
   std::vector<DeclMessage> takeMessages();
 
-  // Error and FatalError messages so far; a call that raises the count reached a site
-  // where the engine would not have returned. An Assert is reported but never counted, so
-  // that Debug and Release parse alike (asserts are compiled out of Release).
-  std::size_t errorCount() const { return m_errorCount; }
+  // Error and FatalError messages so far, and those any thread could not keep for want of
+  // memory; a call that raises the count reached a site where the engine would not have
+  // returned. An Assert is reported but never counted, so that Debug and Release parse
+  // alike (asserts are compiled out of Release).
+  std::size_t errorCount() const;
 
-  // Between these, idCommon::Printf text goes into a buffer as the engine's console gets
-  // it, newlines included, instead of into the messages (the print commands).
+  // Between these, the registry's thread's idCommon::Printf text goes into a buffer as
+  // the engine's console gets it, newlines included, instead of into the messages (the
+  // print commands).
   void beginCapture();
   std::string endCapture();
-  bool capturing() const { return m_capturing; }
-  void capture(const char* text);
 
   bool cancelled() const { return m_fileSystem.cancelledReads() > 0; }
 
@@ -185,12 +190,34 @@ private:
     DeclManagerOwner& operator=(const DeclManagerOwner&) = delete;
   };
 
-  std::vector<DeclMessage> m_messages;
-  std::size_t m_errorCount = 0;
-  bool m_capturing = false;
-  std::string m_capture;
+  /**
+   * The registry's thread, whose messages it drains from the sink (D63). Made first and
+   * gone last: what the thread reported before the registry existed, and what it reports
+   * while the registry is destroyed, is dropped, as no registry received it before.
+   */
+  class OwnThread
+  {
+  public:
+    OwnThread();
+    ~OwnThread();
 
-  idCommon m_common;
+    OwnThread(const OwnThread&) = delete;
+    OwnThread& operator=(const OwnThread&) = delete;
+
+    std::thread::id id() const { return m_id; }
+
+  private:
+    std::thread::id m_id;
+  };
+
+  OwnThread m_thread;
+  // the thread's messages as the registry has drained them; draining is how a const
+  // accessor brings them up to date
+  mutable std::vector<DeclMessage> m_messages;
+  mutable std::size_t m_errorCount = 0;
+  bool m_capturing = false;
+  mutable std::string m_capture;
+
   idCVarSystem m_cvarSystem;
   ::idFileSystemLocal m_fileSystem;
   idImageManager m_images;
@@ -202,13 +229,13 @@ private:
   // made after the bindings and gone before them
   DeclManagerOwner m_declManager;
 
+  // takes the registry's thread's messages out of the sink: console text into the capture
+  // while one runs, the rest into the messages
+  void drain() const;
+  void report(DeclMessageKind kind, std::string text) const;
+
   friend void freeGuiDummies();
 };
-
-// common's and idLib's message functions: the formatted text into the bound registry's
-// messages; nothing without a registry
-void reportV(DeclMessageKind kind, const char* fmt, va_list argptr);
-void reportWarning(const std::string& text);
 
 // Every token the copied idLexer reads from decl text with DECL_LEXER_FLAGS, as the
 // copied decl parsers read it (LoadAndParse, idMaterial::Parse), in order, without the

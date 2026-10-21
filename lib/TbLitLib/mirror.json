@@ -4699,11 +4699,11 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
-          "symbol": "idLib::sys, common, cvarSystem, fileSystem, frameNumber"
+          "symbol": "idLib::sys, cvarSystem, fileSystem, frameNumber"
         },
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
-          "symbol": "common, cvarSystem, fileSystem, com_editors"
+          "symbol": "cvarSystem, fileSystem, com_editors"
         },
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
@@ -4719,7 +4719,7 @@
         }
       ],
       "staticKind": "registry binding",
-      "reason": "the shim's globals: null pointers bound to the one registry at its construction and nulled at its destruction (C17, S6); com_editors is a constant 0. The shim's tables (BuiltinShaders, the intrinsic names, ImageFormats, NamedCVars) are constant"
+      "reason": "the shim's globals: null pointers bound to the one registry at its construction and nulled at its destruction (C17, S6); com_editors is a constant 0. common and idLib::common are not bound to the registry any more: they are the permanent sink of D63 (M-ID-STATIC-38). The shim's tables (BuiltinShaders, the intrinsic names, ImageFormats, NamedCVars) are constant"
     },
     {
       "id": "M-ID-STATIC-29",
@@ -4876,6 +4876,27 @@
       ],
       "staticKind": "registry binding",
       "reason": "G14, A2.6: one registry at a time, claimed with compare_exchange_strong before the registry binds the shim's globals and released after it unbinds them, instead of the copied assert; a second MaterialDecls fails with 'another material registry exists'. The claim is MaterialDecls's Claim member, declared before the registry, so it is released after the registry is destroyed, also when the constructor throws after the claim (W.5, round 2)"
+    },
+    {
+      "id": "M-ID-STATIC-38",
+      "kind": "static",
+      "engine": [],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "tbLitCommonSink, common"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "idLib::common"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineMessages.cpp",
+          "symbol": "engineMessages, lostErrors"
+        }
+      ],
+      "staticKind": "permanent sink",
+      "reason": "D63: common and idLib::common point to one idCommon, tbLitCommonSink, from the start of the process and are never rebound; its Printf, Warning, Error and FatalError (and idLib's message functions, AssertFailed and the file system's warnings) format the message on the calling thread and push it, tagged with that thread, into one queue under a mutex. Constant-initialised: the queue's constructor is constexpr (std::mutex, two null node pointers and a count), and it allocates a node only when a message is pushed (C9, S27); nodes still queued at exit are not freed. Pushing never throws (C17): a node that cannot be allocated is lost, and a lost Error or FatalError is counted in lostErrors, which every registry's errorCount adds. The registry drains its own thread's messages (Registry::messages, takeMessages, errorCount, beginCapture, endCapture) and drops those its thread pushed before it was made and while it is destroyed, as no registry received them before; any other thread's are drained by that thread's owner with drainEngineMessagesForThread (the CPU pool's, LP1b.2). Any thread"
     },
     {
       "id": "M-ID-TEMP-01",
@@ -6046,6 +6067,28 @@
         }
       ],
       "note": "A2.16: the two facade functions any thread may call, though they run copied code (C20 otherwise keeps copied code on the parse thread): both read only their arguments and write only their result (IcmpPath's Printf is under #if 0). GameDeclSource calls compareEnginePaths on the thread that makes it"
+    },
+    {
+      "id": "M-ID-PURE-02",
+      "kind": "pure-function",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            2303,
+            2326
+          ],
+          "anchor": "idStr::vsnPrintf",
+          "sha256": "17b888e02fcaed1934f03260e900aed5ab63b90a3b6fa24c5aaf583394a2da5a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineMessages.cpp",
+          "symbol": "tb::lit::shim::reportV"
+        }
+      ],
+      "note": "D63: the sink formats every message with the copied vsnPrintf on the calling thread, into a MAX_PRINT_MSG buffer on that thread's stack, as the registry-bound common did, so a message reads the same whichever thread reports it. vsnPrintf reads only its arguments and writes only dest; it calls no idLib function"
     }
   ],
   "retired": [

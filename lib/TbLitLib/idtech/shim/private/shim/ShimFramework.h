@@ -144,9 +144,13 @@ extern idCVarSystem* cvarSystem;
 // common (framework/Common.h)
 #include "framework/Common.h"
 
-// Collects messages into the bound registry's list. Error and FatalError log and return
-// (C17); FatalError and Error sites and what the copied code does after them are listed
-// in mirror.json.
+// D63: the permanent, thread-safe sink. Its one object, tbLitCommonSink, lives for the
+// process, and common and idLib::common point to it from the start (constant-initialised,
+// C9, S27). Each call formats its message on the calling thread and queues it, tagged
+// with that thread (shim/EngineMessages.h); the registry drains its own thread's, the
+// owner of any other thread drains that thread's. Callable from any thread. Error and
+// FatalError log and return (C17); FatalError and Error sites and what the copied code
+// does after them are listed in mirror.json.
 class idCommon
 {
 public:
@@ -158,6 +162,7 @@ public:
   void FatalError(const char* fmt, ...);
 };
 
+extern idCommon tbLitCommonSink;
 extern idCommon* common;
 
 // file system (framework/FileSystem.h)
