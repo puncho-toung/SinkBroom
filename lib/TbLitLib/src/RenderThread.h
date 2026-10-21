@@ -110,7 +110,9 @@ private:
   bool m_cameraSet = false;
   CameraState m_camera;
   FramePacer m_pacer;
-  std::function<void()> m_beforePresentHook;
+  std::array<std::function<void()>, 3> m_debugHooks;
+  // the number of the last generation whose replacement was requested; GUI thread reads
+  std::atomic<std::uint64_t> m_recreateRequestedFor = 0;
   // the extent of the last generation replaced because it was SUBOPTIMAL
   std::optional<vk::Extent2D> m_suboptimalExtent;
 
@@ -146,6 +148,8 @@ public:
   // parked, or not running
   bool mayReplaceSwapchain() const;
   bool hasSwapchain() const;
+  // see LitSession::swapchainReplacementRequested
+  bool swapchainReplacementRequested() const;
   void setSwapchain(std::unique_ptr<SwapchainGeneration> swapchain);
   std::unique_ptr<SwapchainGeneration> takeSwapchain();
   // the window's DPR or screen changed: SUBOPTIMAL may mean something new again
@@ -163,7 +167,7 @@ public:
   // Test hooks.
 
   void injectFault(DebugFault fault);
-  void setBeforePresentHook(std::function<void()> hook);
+  void setDebugHook(DebugHook point, std::function<void()> hook);
 
 private:
   void main() noexcept;
@@ -176,7 +180,7 @@ private:
   // whether the given fault was injected; it is taken
   bool takeFault(DebugFault fault);
   bool waitForFrameEvent(std::size_t slot);
-  void runBeforePresentHook();
+  void runDebugHook(DebugHook point);
   void requestRecreate(
     SwapchainGeneration& generation, std::string_view reason, bool suboptimal = false);
 

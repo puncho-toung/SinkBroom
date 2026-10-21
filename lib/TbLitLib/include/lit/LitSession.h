@@ -138,6 +138,19 @@ enum class DebugFault
   ThrowWhileRecording,
 };
 
+// Test hooks: where the render thread runs a test's function.
+enum class DebugHook
+{
+  // in every frame after its commands are submitted and before it presents: a frame held
+  // there is in flight, as one waiting inside a present would be
+  BeforePresent,
+  // in every park, once the generation's image wrappers are released, before the thread
+  // counts as parked
+  WhileParking,
+  // in every park, once the thread counts as parked, before it posts Parked
+  AfterParking,
+};
+
 // §3.1: the longest park() waits; the plan's bound is the current pass plus two frames in
 // flight, about 250 ms in a settled frame
 constexpr auto ParkTimeout = std::chrono::milliseconds{500};
@@ -232,7 +245,18 @@ public:
   Result<void> createSwapchain(
     VkSurfaceKHR surface, std::uint32_t width, std::uint32_t height);
   bool hasSwapchain() const;
+  /**
+   * Ends a park. A park that completed released the generation's image wrappers, so a
+   * thread that parked is resumed only after createSwapchain; one resumed without a new
+   * generation draws nothing and asks for one with SwapchainOutOfDate (review V.1).
+   */
   void unpark();
+  /**
+   * Whether a SwapchainOutOfDate still concerns the current generation: false once the
+   * generation it was posted for has been replaced, so that a replacement is not
+   * replaced again (review V.2). True without a swapchain.
+   */
+  bool swapchainReplacementRequested() const;
   /**
    * The window's DPR or screen changed. A generation that the surface reports SUBOPTIMAL
    * is replaced once; a new one of the same size that is SUBOPTIMAL again presents on as
@@ -267,12 +291,8 @@ public:
 
   // the render thread raises the fault in its next frame
   void debugInjectFault(DebugFault fault);
-  /**
-   * Runs on the render thread in every frame after its commands are submitted and before
-   * it presents, until an empty function replaces it: a frame held there is in flight, as
-   * one waiting inside a present would be.
-   */
-  void debugSetBeforePresentHook(std::function<void()> hook);
+  // runs hook on the render thread at point until an empty function replaces it
+  void debugSetHook(DebugHook point, std::function<void()> hook);
   // what the NVRHI device's last Release() returned; 0 expected
   std::uint32_t lastDeviceReleaseCount() const;
   std::size_t nvrhiErrorCount() const;

@@ -250,6 +250,11 @@ void LitSession::unpark()
   m_renderThread->unpark();
 }
 
+bool LitSession::swapchainReplacementRequested() const
+{
+  return m_renderThread->swapchainReplacementRequested();
+}
+
 void LitSession::surfaceChanged()
 {
   m_renderThread->surfaceChanged();
@@ -385,9 +390,9 @@ void LitSession::debugInjectFault(const DebugFault fault)
   m_renderThread->injectFault(fault);
 }
 
-void LitSession::debugSetBeforePresentHook(std::function<void()> hook)
+void LitSession::debugSetHook(const DebugHook point, std::function<void()> hook)
 {
-  m_renderThread->setBeforePresentHook(std::move(hook));
+  m_renderThread->setDebugHook(point, std::move(hook));
 }
 
 std::uint32_t LitSession::lastDeviceReleaseCount() const

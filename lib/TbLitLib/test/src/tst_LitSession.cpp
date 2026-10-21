@@ -863,6 +863,34 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
         REQUIRE(session->hasSwapchain());
         REQUIRE(drawFrames(3));
 
+        // Review V.1: a park that completed released the generation's image wrappers. An
+        // unpark without a new generation, as the panel's host did after a park that had
+        // timed out, must draw nothing on that generation and ask for the next one.
+        {
+          const auto lock = std::scoped_lock{events.mutex};
+          std::erase_if(events.events, [](const auto& entry) {
+            return std::get<0>(entry) == SessionEvent::SwapchainOutOfDate;
+          });
+        }
+        REQUIRE(waitFor([&] { return session->park(100ms); }, 5000ms, true));
+        const auto parkedFrames = session->framesPresented();
+        const auto generations = session->swapchainGenerations();
+        session->unpark();
+        session->setCamera(cameraLookingAt(0.3f, 0.3f, 0.3f));
+        REQUIRE(waitFor(
+          [&] { return events.count(SessionEvent::SwapchainOutOfDate) > 0; },
+          5000ms,
+          true));
+        CHECK(session->swapchainReplacementRequested());
+        session->setCamera(cameraLookingAt(-0.3f, 0.3f, 0.3f));
+        waitFor([&] { return false; }, 100ms, true);
+        CHECK(session->framesPresented() == parkedFrames);
+        // drawFrames answers the request with a new generation
+        REQUIRE(drawFrames(3));
+        CHECK(session->swapchainGenerations() > generations);
+        // the request was for the generation that is gone
+        CHECK_FALSE(session->swapchainReplacementRequested());
+
         teardown(*session);
         CHECK(session->lastDeviceReleaseCount() == 0u);
         CHECK(session->nvrhiErrorCount() == 0u);

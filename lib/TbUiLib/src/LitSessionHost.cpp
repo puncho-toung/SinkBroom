@@ -435,10 +435,21 @@ void LitSessionHost::reconcileOnce()
     return;
   }
 
-  // Nothing to replace, for example because the size came back before the render thread
-  // parked: a park asked for earlier is released, or the preview would stay frozen.
+  // Nothing to replace, for example because the size came back while a park asked for
+  // earlier timed out: that park is released, or the preview would stay frozen.
   if (m_parkPending)
   {
+    if (m_session->isParked())
+    {
+      // Review V.1: a thread that parked released its generation's image wrappers, so it
+      // is resumed only on a new generation, made when the window can be seen.
+      m_swapchainStale = true;
+      if (exposed)
+      {
+        replaceSwapchain(size);
+      }
+      return;
+    }
     m_session->unpark();
     m_parkPending = false;
   }
@@ -625,7 +636,8 @@ void LitSessionHost::dispatchSessionEvent(
     reconcile();
     break;
   case lit::SessionEvent::SwapchainOutOfDate:
-    if (drawing())
+    // a request for a generation that is gone already was answered (review V.2)
+    if (drawing() && m_session->swapchainReplacementRequested())
     {
       m_swapchainStale = true;
       reconcile();

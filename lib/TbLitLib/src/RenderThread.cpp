@@ -277,6 +277,12 @@ bool RenderThread::hasSwapchain() const
   return m_swapchain != nullptr;
 }
 
+bool RenderThread::swapchainReplacementRequested() const
+{
+  // the GUI thread is the only one that replaces m_swapchain, and a number never changes
+  return !m_swapchain || m_recreateRequestedFor == m_swapchain->number;
+}
+
 void RenderThread::setSwapchain(std::unique_ptr<SwapchainGeneration> swapchain)
 {
   m_swapchain = std::move(swapchain);
@@ -345,10 +351,10 @@ bool RenderThread::takeFault(const DebugFault fault)
   return m_injectedFault.compare_exchange_strong(expected, 0);
 }
 
-void RenderThread::setBeforePresentHook(std::function<void()> hook)
+void RenderThread::setDebugHook(const DebugHook point, std::function<void()> hook)
 {
   const auto lock = std::scoped_lock{m_mutex};
-  m_beforePresentHook = std::move(hook);
+  m_debugHooks[std::size_t(point)] = std::move(hook);
 }
 
 void RenderThread::main() noexcept
@@ -394,6 +400,7 @@ void RenderThread::runLoop()
         m_parked = true;
         m_stateChanged.notify_all();
         lock.unlock();
+        runDebugHook(DebugHook::AfterParking);
         m_events.post(SessionEvent::Parked, {});
         lock.lock();
       }
@@ -401,6 +408,15 @@ void RenderThread::runLoop()
       if (!m_parkRequested)
       {
         m_parked = false;
+        // Review V.1: the park released the generation's image wrappers. Resumed without
+        // a new generation, for example by an unpark that came while it parked, it draws
+        // nothing on this one and asks the GUI thread for the next.
+        if (m_swapchain && m_swapchain->imageTextures.empty() && !m_stopRequested)
+        {
+          lock.unlock();
+          requestRecreate(*m_swapchain, "resumed after a park without a new generation");
+          lock.lock();
+        }
       }
       continue;
     }
@@ -466,7 +482,10 @@ bool RenderThread::canDraw() const
   {
     return false;
   }
-  return m_headless ? bool(m_headlessTarget) : m_swapchain && !m_swapchain->stale;
+  // a generation that a park left without its image wrappers is never drawn again
+  return m_headless
+           ? bool(m_headlessTarget)
+           : m_swapchain && !m_swapchain->stale && !m_swapchain->imageTextures.empty();
 }
 
 RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
@@ -509,6 +528,13 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     auto* const target = m_swapchain.get();
     if (!target && !m_headless)
     {
+      return FrameOutcome::Skipped;
+    }
+    if (target && target->imageTextures.empty())
+    {
+      // never indexed: a park released them, and only a new generation brings them back
+      target->stale = true;
+      requestRecreate(*target, "the generation has no image wrappers");
       return FrameOutcome::Skipped;
     }
     auto imageIndex = std::uint32_t{0};
@@ -561,6 +587,10 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       }
       texture = target->imageTextures[imageIndex].Get();
       extent = target->extent;
+      // every submit from here on waits for the image, also the one an exception's unwind
+      // makes (review V.3)
+      m_device.vulkanDevice().queueWaitForSemaphore(
+        nvrhi::CommandQueue::Graphics, target->acquireSemaphores[slot], 0);
     }
     if (takeFault(DebugFault::DeviceLostAfterAcquire))
     {
@@ -594,8 +624,6 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
 
       if (target)
       {
-        m_device.vulkanDevice().queueWaitForSemaphore(
-          nvrhi::CommandQueue::Graphics, target->acquireSemaphores[slot], 0);
         m_device.vulkanDevice().queueSignalSemaphore(
           nvrhi::CommandQueue::Graphics, target->presentSemaphores[imageIndex], 0);
       }
@@ -623,7 +651,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     const auto frame = m_frameIndex++;
     m_idleWorkPending = true;
 
-    runBeforePresentHook();
+    runDebugHook(DebugHook::BeforePresent);
 
     auto shown = true;
     if (target && stopOrParkRequested())
@@ -734,12 +762,12 @@ bool RenderThread::waitForFrameEvent(const std::size_t slot)
   return true;
 }
 
-void RenderThread::runBeforePresentHook()
+void RenderThread::runDebugHook(const DebugHook point)
 {
   auto hook = std::function<void()>{};
   {
     const auto lock = std::scoped_lock{m_mutex};
-    hook = m_beforePresentHook;
+    hook = m_debugHooks[std::size_t(point)];
   }
   if (hook)
   {
@@ -770,6 +798,7 @@ void RenderThread::requestRecreate(
   }
 
   generation.recreateRequested = true;
+  m_recreateRequestedFor = generation.number;
   m_events.post(
     SessionEvent::SwapchainOutOfDate,
     fmt::format("Swapchain generation {}: {}", generation.number, reason));
@@ -854,13 +883,16 @@ void RenderThread::parkGpuWork()
     }
     if (m_swapchain)
     {
+      // the generation is replaced before anything is drawn again (review V.1)
       releaseSwapchainWrappers(*m_swapchain);
+      m_swapchain->stale = true;
     }
     if (!m_events.lost())
     {
       m_device.device().runGarbageCollection();
     }
     m_idleWorkPending = false;
+    runDebugHook(DebugHook::WhileParking);
   }
   catch (const vk::DeviceLostError& e)
   {

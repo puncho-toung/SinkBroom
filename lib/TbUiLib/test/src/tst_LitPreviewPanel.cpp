@@ -772,8 +772,9 @@ public:
 };
 
 /**
- * Holds the next frame of a session between its submit and its present, as a present
- * that waits would hold it, once: for HoldTime, or for whatever whileHeld does.
+ * Holds a session's render thread once at a debug hook: by default the next frame between
+ * its submit and its present, as a present that waits would hold it. It holds for
+ * HoldTime, or for whatever whileHeld does.
  */
 class FrameHold
 {
@@ -787,9 +788,12 @@ private:
   std::shared_ptr<State> m_state = std::make_shared<State>();
 
 public:
-  explicit FrameHold(lit::LitSession& session, std::function<void()> whileHeld = {})
+  explicit FrameHold(
+    lit::LitSession& session,
+    const lit::DebugHook point = lit::DebugHook::BeforePresent,
+    std::function<void()> whileHeld = {})
   {
-    session.debugSetBeforePresentHook([state = m_state, hold = std::move(whileHeld)]() {
+    session.debugSetHook(point, [state = m_state, hold = std::move(whileHeld)]() {
       if (state->used.exchange(true))
       {
         return;
@@ -815,6 +819,22 @@ public:
   bool entered() const { return m_state->entered; }
   bool left() const { return m_state->left; }
 };
+
+// waits on the GUI thread without processing any event
+template <typename Predicate>
+bool waitWithoutEvents(Predicate predicate, const std::chrono::milliseconds timeout)
+{
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (!predicate())
+  {
+    if (std::chrono::steady_clock::now() > deadline)
+    {
+      return false;
+    }
+    std::this_thread::sleep_for(1ms);
+  }
+  return true;
+}
 
 /**
  * A main window with the panel in a sidebar dock, a line edit that has the focus, and a
@@ -1058,7 +1078,9 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     checkCounts("float during camera moves x 50");
   }
 
-  SECTION("a park that timed out is released when the size comes back")
+  SECTION(
+    "a park that timed out before the thread parked is released when the size "
+    "comes back")
   {
     // F2: the render thread holds a frame past the handshake's 100 ms park, the dock is
     // resized and resized back before it parks; without the release the preview would
@@ -1087,7 +1109,9 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     checkCounts("park released");
   }
 
-  SECTION("a park that timed out is released after a float and a redock")
+  SECTION(
+    "a park that timed out before the thread parked is released after a float and "
+    "a redock")
   {
     REQUIRE(harness.startAndWaitForFrame());
     for (auto i = 0; i < 3; ++i)
@@ -1106,6 +1130,73 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     panel.stop();
     reports.checkLast();
     checkCounts("park released after float");
+  }
+
+  SECTION(
+    "a thread that parked after its park timed out resumes only on a new generation")
+  {
+    // Review V.1, L3.2's sequence. The handshake's 100 ms park times out while the render
+    // thread is still inside its park; the thread then parks for good, and only then does
+    // the size come back, so nothing needs replacing by size. The park released the
+    // generation's image wrappers, so the host must not resume the thread on it.
+    dock.setFloating(true);
+    REQUIRE(harness.startAndWaitForFrame());
+    REQUIRE(harness.waitForFrame());
+    const auto size = dock.size();
+    for (auto i = 0; i < 3; ++i)
+    {
+      CAPTURE(i);
+      auto& session = *harness.session();
+      const auto generations = session.swapchainGenerations();
+      // inside the park, past the handshake's 100 ms
+      const auto parking = FrameHold{session, lit::DebugHook::WhileParking};
+      // parked, before the thread posts Parked
+      const auto parked = FrameHold{session, lit::DebugHook::AfterParking};
+      dock.resize(size + QSize{80, 60});
+      REQUIRE(parking.waitUntilEntered());
+      // the host's park has timed out; no event is processed until the thread has parked
+      REQUIRE(waitWithoutEvents([&] { return parked.entered(); }, 2000ms));
+      CHECK(session.isParked());
+      dock.resize(size);
+      REQUIRE(QTest::qWaitFor([&] { return parked.left(); }, 5000));
+      REQUIRE(harness.waitForFrame());
+      CHECK(session.swapchainGenerations() > generations);
+    }
+    panel.stop();
+    reports.checkLast();
+    CHECK(reports.last().parkTimeouts >= 3u);
+    dock.setFloating(false);
+    checkCounts("resumed on a new generation");
+  }
+
+  SECTION("an unpark that comes while the thread parks resumes it on a new generation")
+  {
+    // Review V.1, its second route: the size comes back while the thread is inside its
+    // park, after it released the image wrappers, so the host unparks a thread that it
+    // sees as not parked; the thread then resumes on a generation without wrappers.
+    dock.setFloating(true);
+    REQUIRE(harness.startAndWaitForFrame());
+    REQUIRE(harness.waitForFrame());
+    const auto size = dock.size();
+    for (auto i = 0; i < 3; ++i)
+    {
+      CAPTURE(i);
+      auto& session = *harness.session();
+      const auto generations = session.swapchainGenerations();
+      const auto parking = FrameHold{session, lit::DebugHook::WhileParking};
+      dock.resize(size + QSize{80, 60});
+      REQUIRE(parking.waitUntilEntered());
+      CHECK(!session.isParked());
+      dock.resize(size);
+      QTest::qWait(20);
+      REQUIRE(QTest::qWaitFor([&] { return parking.left(); }, 5000));
+      REQUIRE(harness.waitForFrame());
+      CHECK(session.swapchainGenerations() > generations);
+    }
+    panel.stop();
+    reports.checkLast();
+    dock.setFloating(false);
+    checkCounts("unpark while parking");
   }
 
   SECTION("Stop, a dock close and a map load finish while a frame is held")
@@ -1150,7 +1241,7 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     auto sent = std::atomic<bool>{false};
     auto sendDone = std::atomic<std::chrono::steady_clock::rep>{0};
     const auto hold = FrameHold{
-      *harness.session(), [&] {
+      *harness.session(), lit::DebugHook::BeforePresent, [&] {
         std::this_thread::sleep_for(100ms);
         auto result = DWORD_PTR{0};
         sent = SendMessageTimeoutW(hwnd, WM_NULL, 0, 0, SMTO_NORMAL, 3000, &result) != 0;
