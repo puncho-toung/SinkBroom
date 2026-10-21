@@ -1,0 +1,51 @@
+// LP1b geometry fixtures (plans/lit-preview/15-LP1BC-PACKAGES.md, K20: names under
+// textures/lp1b/ are reserved for fixtures, so that no base/ file shadows them)
+
+textures/lp1b/floor
+{
+	qer_editorimage	textures/lp1b/floor.tga
+	diffusemap	textures/lp1b/floor.tga
+}
+
+textures/lp1b/wall
+{
+	qer_editorimage	textures/lp1b/wall.tga
+	diffusemap	textures/lp1b/wall.tga
+}
+
+// the unsmoothed tangent path (R_BuildDominantTris + R_DeriveTangents)
+textures/lp1b/crate
+{
+	unsmoothedTangents
+	qer_editorimage	textures/lp1b/crate.tga
+	diffusemap	textures/lp1b/crate.tga
+}
+
+// alpha-tested (MC_PERFORATED); two-sided with a lit stage, so the engine creates back sides
+textures/lp1b/grate
+{
+	twoSided
+	qer_editorimage	textures/lp1b/grate.tga
+	{
+		blend	diffusemap
+		map	textures/lp1b/grate.tga
+		alphaTest	0.5
+	}
+}
+
+// translucent (MC_TRANSLUCENT)
+textures/lp1b/glass
+{
+	translucent
+	qer_editorimage	textures/lp1b/glass.tga
+	{
+		blend	blend
+		map	textures/lp1b/glass.tga
+	}
+}
+
+textures/lp1b/patch
+{
+	qer_editorimage	textures/lp1b/patch.tga
+	diffusemap	textures/lp1b/patch.tga
+}

@@ -1,0 +1,4 @@
+# engine-written and image fixtures are compared byte for byte
+*.bproc binary
+*.tga binary
+*.proc -text
