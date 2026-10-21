@@ -24,7 +24,9 @@
     "static": "a static or global of the copied code (or the shim's bindings), its kind and why it needs no reset",
     "temporary": "a stand-in that a later package replaces",
     "guard": "a check outside the copied code that keeps a latent engine fault from being reached",
-    "difference": "a deliberate difference from the engine's behaviour, with its reason"
+    "difference": "a deliberate difference from the engine's behaviour, with its reason",
+    "known-defect": "an engine defect the copy keeps verbatim, with its effect",
+    "pure-function": "copied engine code that the facade lets any thread run, because it touches no state"
   },
   "engineCommit": "285ea4d18a0aaedf46b0803ea656e4850eba5a01",
   "pins": [
@@ -2383,6 +2385,33 @@
         {
           "file": "neo/CMakeLists.txt",
           "lines": [
+            199,
+            199
+          ],
+          "anchor": "-fno-strict-aliasing (GCC, Clang)",
+          "sha256": "c0f95caa408d03e35089c8f216e2cf0d56a58eeb234170000217fbd9d585aa8f"
+        },
+        {
+          "file": "neo/CMakeLists.txt",
+          "lines": [
+            217,
+            222
+          ],
+          "anchor": "CMAKE_C_FLAGS_DEBUG ... MINSIZEREL (GCC, Clang)",
+          "sha256": "2c10f08b2b01b2e6fdc75247124cc28c98749da2854bd588953c7e7c4265f4af"
+        },
+        {
+          "file": "neo/CMakeLists.txt",
+          "lines": [
+            252,
+            252
+          ],
+          "anchor": "MSVC Debug: /D _DEBUG /MDd",
+          "sha256": "33b16e3ed123207d5cb241cb18ee6f65c08c626385c191b8cb6a1618f73668f2"
+        },
+        {
+          "file": "neo/CMakeLists.txt",
+          "lines": [
             269,
             276
           ],
@@ -2409,15 +2438,38 @@
       "compileDefinitions": [
         {
           "name": "USE_INTRINSICS_SSE",
-          "when": "x86 and x86-64 (the engine option's default there)",
+          "when": "x86 and x86-64, unless an Apple build targets arm64 (CMAKE_OSX_ARCHITECTURES), as the engine option's default",
           "why": "Math.h's Ftoi, Ftoi8, Ftoi16 and FtoiRound and sys_intrinsics.h branch on it; Ftoi truncates through SSE"
         },
         {
           "name": "WIN32, _WINDOWS",
           "when": "MSVC",
           "why": "come with CMake's default CMAKE_CXX_FLAGS, as in the engine; sys_defines.h branches on WIN32/_WIN32"
+        },
+        {
+          "name": "_DEBUG",
+          "when": "Debug: from /MDd on MSVC (the engine also passes /D _DEBUG), defined explicitly on GCC and Clang as the engine's -D_DEBUG (G11)",
+          "why": "sys_assert.h and sys_types.h compile the copied asserts in; a reported assert is a warning that never changes a parse's outcome (Registry::report counts only Error and FatalError), so Debug and Release parse alike"
         }
       ],
+      "compileOptions": [
+        {
+          "name": "-fno-strict-aliasing",
+          "when": "GCC and Clang, every configuration",
+          "why": "the engine's (neo/CMakeLists.txt:199): the copied idMath type-puns through reinterpret_cast (Math.h, Math.cpp)"
+        },
+        {
+          "name": "-ffp-contract=off",
+          "when": "GCC and Clang, every configuration",
+          "why": "the engine's optimised configurations (:220-222); here also Debug, so register evaluation is the same in every configuration (Clang contracts by default where FMA exists)"
+        },
+        {
+          "name": "-fno-math-errno -fno-trapping-math",
+          "when": "GCC and Clang, every configuration but Debug",
+          "why": "the engine's optimised configurations (:220-222)"
+        }
+      ],
+      "tls": "the six thread_local buffers of the copied Str.cpp (M-ID-STATIC-30..35, three 4 x MAX_PRINT_MSG buffers, 192 KB) are static TLS in every thread of a binary that keeps them; the copy never calls their functions. dumpbin /tls, raw data (G12, 2026-10-21): TrenchBroom.exe Release before LP1a 0x273C, a Release link of the LP1a.2 state 0x3276C (+0x30030: kept, because TrenchBroom's Release link passes /DEBUG, which turns /OPT:REF off), TbUiLibTest Release 0x2891 (linked without /DEBUG, so /OPT:REF drops them), TbLitLibTest Debug 0x39DA4, TrenchBroom.exe Debug 0x3CAE3. Fix: TbLitLib passes /OPT:REF to every MSVC Release link that uses it (lib/TbLitLib/CMakeLists.txt); a Release TrenchBroom.exe linked with it has 0x273C again (and 20.0 MB instead of 41.5 MB, the unreferenced code of every library dropped). Debug keeps them: accepted",
       "notDefined": [
         {
           "name": "DMAP",
@@ -2768,7 +2820,7 @@
           "symbol": "NamedCVars"
         }
       ],
-      "note": "ListFiles takes the names from the DeclSource (GetFileList's part, which lit/GameDeclSource.h mirrors, M-FS-01), adds each once case-insensitively and sorts with idSort_PathStr. ReadFile returns a Mem_Alloc'ed, NUL-terminated buffer of length + 1, -1 and FILE_NOT_FOUND_TIMESTAMP for an unreadable file. Not in the engine (R5.20): once the registry's cancel flag is set, every later ReadFile returns an empty file without asking the source, so the copied RegisterDeclFolder loop ends after the file it was reading and nothing is reported"
+      "note": "ListFiles takes the names from the DeclSource (GetFileList's part, which lit/GameDeclSource.h mirrors, M-FS-01), adds each once case-insensitively and sorts with idSort_PathStr. ReadFile returns a Mem_Alloc'ed, NUL-terminated buffer of length + 1, -1 and FILE_NOT_FOUND_TIMESTAMP for an unreadable file. Not in the engine (R5.20): once the registry's cancel flag is set, every later ReadFile returns an empty file without asking the source, so the copied RegisterDeclFolder loop ends after the file it was reading and nothing is reported. The exception boundary (C17, G3): a source call that throws is reported as a warning, and the copy sees an unreadable file or an empty folder. ReadFile also refuses, with a warning, a file of 2 GB or more (the engine's lengths are ints) and one M-ID-GUARD-06 refuses"
     },
     {
       "id": "M-ID-FN-09",
@@ -2984,7 +3036,20 @@
           ],
           "anchor": "idSysMutex, idScopedCriticalSection",
           "sha256": "f6aba91a1b2ab26333b3d16bc6ed3d4d661d550a8d9b158c3307953d62ca8248"
-        },
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimSystem.h",
+          "symbol": "idSysMutex"
+        }
+      ],
+      "note": "idSysMutex on std::recursive_mutex: the Windows critical section is recursive, and FindType re-enters through a material's table lookup"
+    },
+    {
+      "id": "M-ID-FN-15",
+      "kind": "function",
+      "engine": [
         {
           "file": "neo/framework/CmdSystem.h",
           "lines": [
@@ -2993,7 +3058,20 @@
           ],
           "anchor": "idCommandLink",
           "sha256": "d3e707c1c926f653b3f792e44add621bc408e3b0e138696c7936c7b628a5a833"
-        },
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idCommandLink"
+        }
+      ],
+      "note": "a constexpr constructor that registers nothing (S27, C9); it keeps only the command's name"
+    },
+    {
+      "id": "M-ID-FN-16",
+      "kind": "function",
+      "engine": [
         {
           "file": "neo/framework/CmdSystem.h",
           "lines": [
@@ -3002,7 +3080,20 @@
           ],
           "anchor": "idCmdSystem::ArgCompletion_Integer",
           "sha256": "c3e19647052af83ced19bf37286b06269123b833ba9aff99d8882c0aed5234af"
-        },
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idCmdSystem"
+        }
+      ],
+      "note": "the completion templates the copied CONSOLE_COMMANDs name; never run"
+    },
+    {
+      "id": "M-ID-FN-17",
+      "kind": "function",
+      "engine": [
         {
           "file": "neo/framework/CVarSystem.cpp",
           "lines": [
@@ -3011,7 +3102,20 @@
           ],
           "anchor": "idInternalCVar::UpdateValue",
           "sha256": "c6358c082e6e9c406af281891262dcccbc85ee89f9e5d26e89fe5c08344fe96f"
-        },
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idCVar"
+        }
+      ],
+      "note": "constexpr, registers nothing; the getters follow UpdateValue's conversions at the engine default (D21). It keeps the name, the value and the flags only (the description and bounds are never read)"
+    },
+    {
+      "id": "M-ID-FN-18",
+      "kind": "function",
+      "engine": [
         {
           "file": "neo/idlib/LangDict.h",
           "lines": [
@@ -3020,7 +3124,20 @@
           ],
           "anchor": "idStrId",
           "sha256": "ee9120d0b41e75081826046402146868de8e6afdaf1ee7db4f1aa00ee4d198a2"
-        },
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimLib.h",
+          "symbol": "idStrId"
+        }
+      ],
+      "note": "only for Str.cpp's never-run testStrId command (LangDict.h needs idDynamicBlockAlloc)"
+    },
+    {
+      "id": "M-ID-FN-19",
+      "kind": "function",
+      "engine": [
         {
           "file": "neo/idlib/sys/sys_includes.h",
           "lines": [
@@ -3034,30 +3151,133 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/idtech/shim/private/shim/ShimSystem.h",
-          "symbol": "idSysMutex"
-        },
-        {
-          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
-          "symbol": "idCommandLink"
-        },
-        {
-          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
-          "symbol": "idCmdSystem"
-        },
-        {
-          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
-          "symbol": "idCVar"
-        },
-        {
-          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimLib.h",
-          "symbol": "idStrId"
-        },
-        {
-          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimSystem.h",
           "symbol": "NDEBUG"
         }
       ],
-      "note": "idSysMutex on std::recursive_mutex (the Windows critical section is recursive and FindType re-enters through a material's table lookup); idCommandLink and idCVar have constexpr constructors and register nothing (S27, C9); idCVar's getters follow UpdateValue's conversions at the engine default (D21); idStrId only for Str.cpp's never-run testStrId command (LangDict.h needs idDynamicBlockAlloc); sys_includes.h's C and C++ headers without windows.h, DirectInput or DirectSound"
+      "note": "sys_includes.h's C and C++ headers without windows.h, DirectInput or DirectSound, and its NDEBUG rule"
+    },
+    {
+      "id": "M-ID-FN-20",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            1556,
+            1558
+          ],
+          "anchor": "R_StaticAlloc, R_ClearedStaticAlloc, R_StaticFree declarations",
+          "sha256": "0799ead4ab68acd3fea30af2f8623b9db0545edb3cc5647257ec4181b1ee458a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/RenderCommon.h",
+          "symbol": "R_StaticAlloc"
+        }
+      ],
+      "note": "the declarations with R_StaticAlloc's default tag TAG_RENDER_STATIC; the definitions are M-ID-FN-09"
+    },
+    {
+      "id": "M-ID-FN-21",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/precompiled.h",
+          "lines": [
+            42,
+            42
+          ],
+          "anchor": "ID_TIME_T",
+          "sha256": "b171a376e64756c757472dc0b5e78069939cd31a923b458ff8e066ecd4995659"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimSystem.h",
+          "symbol": "ID_TIME_T"
+        }
+      ],
+      "note": "int64, signed, as in the engine: -1 is FILE_NOT_FOUND_TIMESTAMP"
+    },
+    {
+      "id": "M-ID-FN-22",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/sys/sys_assert.cpp",
+          "lines": [
+            60,
+            119
+          ],
+          "anchor": "AssertFailed",
+          "sha256": "3a812b1a363cd18162b5f17611113a0c3043605625bebf7c748de699b44c177d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "AssertFailed"
+        }
+      ],
+      "note": "reports the failed assert as a DeclMessageKind::Assert message and returns false (no break into a debugger); the registry does not count it as an error, so a Debug build, whose asserts are live (M-ID-BUILD-01), parses as Release does (G11)"
+    },
+    {
+      "id": "M-ID-FN-23",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld.h",
+          "lines": [
+            266,
+            291
+          ],
+          "anchor": "renderView_t",
+          "sha256": "27828185a0a5e11dfa0d42ebdd6f8af9ebffa5110fedd2a1ab7a18a3c7e54160"
+        },
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            546,
+            643
+          ],
+          "anchor": "viewDef_t",
+          "sha256": "3bcba6e4de138ed75f86a9416823d33baf6fc12579d3ebf899924d334be763c7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/RenderCommon.h",
+          "symbol": "renderView_t"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/RenderCommon.h",
+          "symbol": "viewDef_t"
+        }
+      ],
+      "note": "stand-ins with the one field the copy reads: renderView.shaderParms, in CheckForConstantRegisters, after a memset to zero"
+    },
+    {
+      "id": "M-ID-FN-24",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/Lib.h",
+          "lines": [
+            72,
+            77
+          ],
+          "anchor": "idLib::IsMainThread",
+          "sha256": "ecda6fd88c09ec1abcacc861e156c7a5a03e797d28a43e5b39e1a10673699860"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimLib.h",
+          "symbol": "idLib::IsMainThread"
+        }
+      ],
+      "note": "always true: the registry lives on one thread (D32), so the copy's main-thread checks hold"
     },
     {
       "id": "M-ID-FN-14",
@@ -3333,7 +3553,12 @@
       "engine": [
         {
           "file": "neo/framework/File.h",
-          "anchor": "idFile"
+          "lines": [
+            51,
+            146
+          ],
+          "anchor": "class idFile",
+          "sha256": "36ffb8003abeddd20d3dd2f863e07065543bca2f904a979344b9321c6fe417e3"
         }
       ],
       "sinkbroom": [
@@ -3342,7 +3567,12 @@
           "symbol": "idFile"
         }
       ],
-      "virtuals": "GetFullPath, Read, Length, Timestamp",
+      "virtuals": [
+        "GetFullPath",
+        "Read",
+        "Length",
+        "Timestamp"
+      ],
       "note": "pure virtual: the shim never opens a file"
     },
     {
@@ -3351,7 +3581,12 @@
       "engine": [
         {
           "file": "neo/framework/FileSystem.h",
-          "anchor": "idFileSystem"
+          "lines": [
+            104,
+            264
+          ],
+          "anchor": "class idFileSystem",
+          "sha256": "0d3c0338be5b4698ddfe5ebafa40708a49766a6e1e1ea2a5d1234be1265e1c82"
         }
       ],
       "sinkbroom": [
@@ -3360,7 +3595,15 @@
           "symbol": "idFileSystem"
         }
       ],
-      "virtuals": "ListFiles, FreeFileList, ReadFile, FreeFile, OpenFileRead, OpenExplicitFileRead, CloseFile",
+      "virtuals": [
+        "ListFiles",
+        "FreeFileList",
+        "ReadFile",
+        "FreeFile",
+        "OpenFileRead",
+        "OpenExplicitFileRead",
+        "CloseFile"
+      ],
       "note": "the members the copy calls, implemented by ::idFileSystemLocal over the DeclSource"
     },
     {
@@ -3369,7 +3612,12 @@
       "engine": [
         {
           "file": "neo/ui/UserInterface.h",
-          "anchor": "idUserInterfaceManager"
+          "lines": [
+            114,
+            161
+          ],
+          "anchor": "class idUserInterfaceManager",
+          "sha256": "7243301c5eb7ab2ad8b5ce433e42212485e195cf022ed19946d269c5376d753c"
         }
       ],
       "sinkbroom": [
@@ -3378,7 +3626,9 @@
           "symbol": "idUserInterfaceManager"
         }
       ],
-      "virtuals": "FindGui",
+      "virtuals": [
+        "FindGui"
+      ],
       "note": "implemented by UserInterfaceManagerShim"
     },
     {
@@ -3387,7 +3637,12 @@
       "engine": [
         {
           "file": "neo/d3xp/Game.h",
-          "anchor": "idGame"
+          "lines": [
+            69,
+            191
+          ],
+          "anchor": "class idGame",
+          "sha256": "9acaa69d70a2afd949043e6fdce8a494a14dd5745711d0aa9d4edfec266cd28a"
         }
       ],
       "sinkbroom": [
@@ -3396,7 +3651,9 @@
           "symbol": "idGame"
         }
       ],
-      "virtuals": "CacheDictionaryMedia",
+      "virtuals": [
+        "CacheDictionaryMedia"
+      ],
       "note": "implemented by GameShim as a no-op: the preview precaches no media through the game"
     },
     {
@@ -3405,7 +3662,12 @@
       "engine": [
         {
           "file": "neo/sound/sound.h",
-          "anchor": "idSoundEmitter"
+          "lines": [
+            144,
+            179
+          ],
+          "anchor": "class idSoundEmitter",
+          "sha256": "235ad621c988401e5344e9abf49f135724081e27b716b3bd29dc40792bcf56a6"
         }
       ],
       "sinkbroom": [
@@ -3414,7 +3676,9 @@
           "symbol": "idSoundEmitter"
         }
       ],
-      "virtuals": "CurrentAmplitude",
+      "virtuals": [
+        "CurrentAmplitude"
+      ],
       "note": "never called: no emitter is passed (amplitude 0)"
     },
     {
@@ -3423,7 +3687,12 @@
       "engine": [
         {
           "file": "neo/renderer/Cinematic.h",
-          "anchor": "idCinematic"
+          "lines": [
+            70,
+            111
+          ],
+          "anchor": "class idCinematic",
+          "sha256": "4eb2fdb1084441dc9b96c796c9eb7d4671972cb4eb14d550e7b630cc3acc522a"
         }
       ],
       "sinkbroom": [
@@ -3432,8 +3701,14 @@
           "symbol": "idCinematic"
         }
       ],
-      "virtuals": "~idCinematic, InitFromFile",
-      "note": "records the file; freed by idMaterial::FreeData"
+      "virtuals": [
+        "~idCinematic",
+        "InitFromFile"
+      ],
+      "note": "records the file; freed by idMaterial::FreeData. IsSoundWindow is the shim's own (false here, true in idSndWindow): the facade reads a stage's soundmap from it, where the engine has no such query",
+      "shimOnlyVirtuals": [
+        "IsSoundWindow"
+      ]
     },
     {
       "id": "M-ID-FATAL-01",
@@ -3793,7 +4068,7 @@
       ],
       "call": "FatalError",
       "reachable": false,
-      "afterReturn": "assigns the truncated, NUL-terminated text. Unreachable: vsnPrintf never returns < 0 here"
+      "afterReturn": "assigns the truncated, NUL-terminated text. Unreachable in practice: idStr::vsnPrintf returns -1 on truncation (Str.cpp:2321-2324), but no parse-path Format formats unbounded text (A2.10)"
     },
     {
       "id": "M-ID-FATAL-16",
@@ -3841,7 +4116,7 @@
       ],
       "call": "FatalError",
       "reachable": false,
-      "afterReturn": "returns the truncated, NUL-terminated text. Unreachable: vsnPrintf never returns < 0 here"
+      "afterReturn": "returns the truncated, NUL-terminated text. Unreachable in practice: idStr::vsnPrintf returns -1 on truncation (Str.cpp:2321-2324), but the copy's only va() is in idLexer::LoadFile, which is never used (A2.10)"
     },
     {
       "id": "M-ID-FATAL-18",
@@ -4449,6 +4724,140 @@
       "reason": "filled at the start of every Args call and read before the next; Args is never called by the shim (PrintType reads Argv), and every call would run on the parse thread"
     },
     {
+      "id": "M-ID-STATIC-30",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            504,
+            504
+          ],
+          "anchor": "index (idStr::FloatArrayToString)",
+          "sha256": "25476608f420e4a6f8979640e162e4228d476653085a01573e0317ffd62e8a29"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "thread-local scratch",
+      "reason": "per thread, so the parse thread's are its own; the copy never calls the three functions. Static TLS in every thread of a binary that keeps them (64 KB per buffer): see M-ID-BUILD-01 tls"
+    },
+    {
+      "id": "M-ID-STATIC-31",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            505,
+            505
+          ],
+          "anchor": "str[4][MAX_PRINT_MSG] (idStr::FloatArrayToString)",
+          "sha256": "85c501785c31b065d44642574432a9a0b844bf517fcb135e5813eb4ea524d437"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "thread-local scratch",
+      "reason": "per thread, so the parse thread's are its own; the copy never calls the three functions. Static TLS in every thread of a binary that keeps them (64 KB per buffer): see M-ID-BUILD-01 tls"
+    },
+    {
+      "id": "M-ID-STATIC-32",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            552,
+            552
+          ],
+          "anchor": "index (idStr::CStyleQuote)",
+          "sha256": "25476608f420e4a6f8979640e162e4228d476653085a01573e0317ffd62e8a29"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "thread-local scratch",
+      "reason": "per thread, so the parse thread's are its own; the copy never calls the three functions. Static TLS in every thread of a binary that keeps them (64 KB per buffer): see M-ID-BUILD-01 tls"
+    },
+    {
+      "id": "M-ID-STATIC-33",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            553,
+            553
+          ],
+          "anchor": "buffers[4][MAX_PRINT_MSG] (idStr::CStyleQuote)",
+          "sha256": "199b531cb402393d119d72b29215f7e1640601ff16d423a58a9ba71f635c9ef2"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "thread-local scratch",
+      "reason": "per thread, so the parse thread's are its own; the copy never calls the three functions. Static TLS in every thread of a binary that keeps them (64 KB per buffer): see M-ID-BUILD-01 tls"
+    },
+    {
+      "id": "M-ID-STATIC-34",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            636,
+            636
+          ],
+          "anchor": "index (idStr::CStyleUnQuote)",
+          "sha256": "25476608f420e4a6f8979640e162e4228d476653085a01573e0317ffd62e8a29"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "thread-local scratch",
+      "reason": "per thread, so the parse thread's are its own; the copy never calls the three functions. Static TLS in every thread of a binary that keeps them (64 KB per buffer): see M-ID-BUILD-01 tls"
+    },
+    {
+      "id": "M-ID-STATIC-35",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            637,
+            637
+          ],
+          "anchor": "buffers[4][MAX_PRINT_MSG] (idStr::CStyleUnQuote)",
+          "sha256": "199b531cb402393d119d72b29215f7e1640601ff16d423a58a9ba71f635c9ef2"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "thread-local scratch",
+      "reason": "per thread, so the parse thread's are its own; the copy never calls the three functions. Static TLS in every thread of a binary that keeps them (64 KB per buffer): see M-ID-BUILD-01 tls"
+    },
+    {
+      "id": "M-ID-STATIC-36",
+      "kind": "static",
+      "engine": [],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "nextRegistryId"
+        }
+      ],
+      "staticKind": "process counter",
+      "reason": "an atomic counter outside any registry (A1.7): each MaterialDecls takes the next id, so the entries of different builds never compare equal; never reset, never reused within a process"
+    },
+    {
+      "id": "M-ID-STATIC-37",
+      "kind": "static",
+      "engine": [],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/Registry.cpp",
+          "symbol": "registryClaimed"
+        }
+      ],
+      "staticKind": "registry binding",
+      "reason": "G14, A2.6: one registry at a time, claimed with compare_exchange_strong before the registry binds the shim's globals and released after it unbinds them, instead of the copied assert; a second MaterialDecls fails with 'another material registry exists'"
+    },
+    {
       "id": "M-ID-TEMP-01",
       "kind": "temporary",
       "engine": [
@@ -4626,7 +5035,90 @@
           "symbol": "tb::lit::shim::canonicalDeclName"
         }
       ],
-      "note": "MakeNameCanonical writes one byte past a MAX_STRING_CHARS buffer for a name of MAX_STRING_CHARS or more characters; the engine never passes one, but a map face might, so the facade refuses such names and canonicalName uses a buffer one byte longer"
+      "note": "MakeNameCanonical writes one byte past its MAX_STRING_CHARS buffer for a name of MAX_STRING_CHARS or more characters without a '.' among them. A map face can pass one to the facade, which refuses such names; canonicalName uses a buffer one byte longer. The copied code can pass one too, from a decl file (a decl name in LoadAndParse, an inherit value, a table, particle or skin reference): M-ID-GUARD-06 keeps such files from being parsed (A2.5, A3.9)"
+    },
+    {
+      "id": "M-ID-GUARD-05",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            1642,
+            1659
+          ],
+          "anchor": "idMaterial::ParseStage, the stage limit",
+          "sha256": "fa4cbb5411f912233c5049198d2361f10d68402d12712e470c1db7c7eb30475f"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2883,
+            2924
+          ],
+          "anchor": "idMaterial::ParseMaterial, the stage shortcuts",
+          "sha256": "73076a96fe5773d9e5396fd213131466e0db9efe32c4930189dc3a954335b8ff"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            337,
+            337
+          ],
+          "anchor": "MAX_SHADER_STAGES",
+          "sha256": "7ee24123938f271b20d79b287bae6460facee16edee973f1895859614eab1dc3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "tb::lit::shim::refuseOversizedMaterials"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "stageCount"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::MaterialDecls"
+        }
+      ],
+      "note": "ParseStage warns at the 257th stage but does not return, and writes past pd->parseStages[256] on the parse thread's stack (A2.4; the engine at the pinned commit has the same defect). Before anything can parse it, every material decl whose text makes more than 256 stages (brace blocks and stage shortcut keywords one level inside the material, counted as idLexer reads the text) is made the default material, with the engine's warning, and its lookup fails with that reason. A known difference: the engine would parse the first 256 stages (and then overrun); AddImplicitStages never adds a stage past the limit"
+    },
+    {
+      "id": "M-ID-GUARD-06",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1883,
+            1913
+          ],
+          "anchor": "idDeclManagerLocal::MakeNameCanonical",
+          "sha256": "3f0d6b85b0068a4dd27e174c85da50446441a525e55651a285d7159f56fac9a3"
+        },
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            756,
+            778
+          ],
+          "anchor": "idLexer::ReadName (no length bound)",
+          "sha256": "aadcae1403d0d9928e1616ee22dfc46973c601ae928bb94ae81d61e54b7659f4"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idFileSystemLocal::ReadFile"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "holdsOverlongToken"
+        }
+      ],
+      "note": "a decl file holding a name, or a quoted string, of MAX_STRING_CHARS or more characters with no '.' among the first MAX_STRING_CHARS is refused with a warning and read as unreadable (the copied LoadAndParse then reports 'couldn't load'), because any token can reach MakeNameCanonical and overflow its buffer. A dot ends the canonical name first, so the retail PDAs' long texts are read. A known difference: the engine reads such a file and overruns. A run inside a comment counts too (conservative)"
     },
     {
       "id": "M-ID-GUARD-03",
@@ -5035,7 +5527,7 @@
           "symbol": "listOsFiles"
         }
       ],
-      "note": "on Windows the folder and every folder below it, names relative to the folder with forward slashes, a file's long name matched by PathMatchSpecW against *<extension> (a case-insensitive suffix); elsewhere the folder alone, fnmatch( *<extension>, name, 0 ) (case-sensitive) and no directory. So on Windows a loose decl file in a subfolder of materials is read, as the engine reads it"
+      "note": "on Windows the folder and every folder below it, names relative to the folder with forward slashes, a file's long name matched by PathMatchSpecW against *<extension> (a case-insensitive suffix); elsewhere the folder alone, fnmatch( *<extension>, name, 0 ) (case-sensitive) and no directory. So on Windows a loose decl file in a subfolder of materials is read, as the engine reads it. Not in the engine: a folder that cannot be read lists nothing and the others are still listed (each folder has its own iterator); a name that is not valid Unicode is skipped, with a warning when it is a folder or matches the extension (G3); the listing stops within one directory entry once the cancel flag is set (G4)"
     },
     {
       "id": "M-FS-07",
@@ -5070,7 +5562,7 @@
           "symbol": "GameFile::open"
         }
       ],
-      "note": "a loose file at <game path>/base/<path>; on POSIX, when the path does not open, the file in the same folder whose path equals it case-insensitively. Opened with share-read and share-delete on Windows, where the engine shares read only (M-FS-DIFF-02)"
+      "note": "a loose file at <game path>/base/<path>; on POSIX, when the path does not open, the file in the same folder whose path equals it case-insensitively. Opened with share-read, share-write and share-delete on Windows, where the engine shares read only (M-FS-DIFF-02)"
     },
     {
       "id": "M-FS-DIFF-01",
@@ -5127,7 +5619,7 @@
           "symbol": "GameDeclSource::closeFiles"
         }
       ],
-      "note": "R4-3.26: loose and .resources files are opened per read batch with share-read and share-delete, so the user can replace them while the preview runs; every container closes at the end of the batch. A .pk4 is opened by TbFsLib's createCFile (_wfopen, which shares read and write but not delete) for its batch only: TbFsLib is not changed (C12)"
+      "note": "R4-3.26, A2.15: loose and .resources files are opened per read batch with share-read, share-write and share-delete, so the user can save or replace them while the preview runs; every container closes at the end of the batch. A .pk4 is opened by TbFsLib's createCFile (_wfopen, which shares read and write but not delete) for its batch only: TbFsLib is not changed (C12)"
     },
     {
       "id": "M-FS-DIFF-03",
@@ -5193,7 +5685,203 @@
           "symbol": "MaterialService::Worker::rebuild"
         }
       ],
-      "note": "a reload builds a new registry from a new source (the containers are scanned again) instead of the engine's per-file Reload, and re-parses the names the consumers asked for before it publishes; only loose decl folders are polled (R4-3.26)"
+      "note": "a reload builds a new registry from a new source (the containers are scanned again) instead of the engine's per-file Reload, and re-parses the names the consumers asked for before it publishes; only loose decl folders are polled (R4-3.26). G5, G6 (A2.3, A3.5, A3.6): the loose decl files' times, unreadable ones included, are stamped before and after each build; a build whose stamps differ, or whose source read a loose file that kept changing (stat before and after each read, three attempts), asks for one more build, and a change found by a poll does too, at most once per autoReloadInterval (5 s). A file that lists but cannot be read is reported once (the copied 'couldn't load') and builds nothing until its time changes; case-differing loose duplicates on POSIX stamp alike before and after, so they never loop"
+    },
+    {
+      "id": "M-FS-DIFF-06",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            2238,
+            2253
+          ],
+          "anchor": "idFileSystemLocal::AddUnique",
+          "sha256": "81046cba81cb4bf8f05866e7391c1e1ec056c8381b69e19f55465e4950424e07"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1163,
+            1221
+          ],
+          "anchor": "idDeclManagerLocal::RegisterDeclFolder",
+          "sha256": "a054cfcf50daced362ee73c7e1f0d9bf687210bffb6a101e8ea38ee8bbc64c0f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
+          "symbol": "GameDeclSource::listFiles"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idFileSystemLocal::ListFiles"
+        }
+      ],
+      "note": "A3.11: AddUnique hashes case-sensitively, so a loose Foo.mtr and a container's foo.mtr are both listed; RegisterDeclFolder folds them with Icmp but runs LoadAndParse twice, which is idempotent and reports its warnings twice. SinkBroom folds case-insensitively and keeps the first spelling (the container's lowercase one), so a material's source file can differ in case. No decl content differs; retail has no uppercase decl file names"
+    },
+    {
+      "id": "M-FS-DIFF-07",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/sys/win32/win_main.cpp",
+          "lines": [
+            1017,
+            1058
+          ],
+          "anchor": "ListFilesRecursive",
+          "sha256": "37f1b801a55e37f03f9e646c04b0a216c8a1a7f5a9dad6053c5f3d02e33b30e8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameFile.cpp",
+          "symbol": "listOsFiles"
+        }
+      ],
+      "note": "A3.8: the engine's FindFirstFileW recursion follows a directory junction or link (FILE_ATTRIBUTE_DIRECTORY); SinkBroom does not follow one, so a junctioned folder below base/materials is neither read nor polled. Carried to LP1c"
+    },
+    {
+      "id": "M-FS-DIFF-08",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/framework/File_Zip.cpp",
+          "lines": [
+            47,
+            182
+          ],
+          "anchor": "idZipContainer::Init",
+          "sha256": "d5ba1ed351320b8447628834682dd07a66162a435a8f090e2c466c0eac80e514"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
+          "symbol": "GameDeclSource::readPk4"
+        }
+      ],
+      "note": "A3.13: TbFsLib's ZipFileSystem decodes a .pk4 entry name in the ANSI code page on Windows, so a non-ASCII entry name differs from the engine's raw bytes (another sort place, no fold with a loose file of that name); an entry whose name is not valid Unicode is skipped with a warning (G3). Carried to LP1c"
+    },
+    {
+      "id": "M-ID-DIFF-01",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            1787,
+            1787
+          ],
+          "anchor": "idCinematic::Alloc (videomap)",
+          "sha256": "363036de1e7bae859afb08e08f2cff3a400212d5fe44d345c1ea868c89ae6c87"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            1801,
+            1801
+          ],
+          "anchor": "new idSndWindow (soundmap)",
+          "sha256": "d058a982908c13c6f3e8d464f230f3631af5ded4faed19ac558c0297377ae153"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2242,
+            2242
+          ],
+          "anchor": "stencil Mem_Alloc",
+          "sha256": "e5f834dbb975708dafadaf69fa8709deb4fc30c64f5b284670e77a121e7f814e"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            173,
+            216
+          ],
+          "anchor": "idMaterial::FreeData",
+          "sha256": "252744ef3f2c770832aaeb15f17a495ad553973d966f367b0c7a6d10f6456716"
+        }
+      ],
+      "sinkbroom": [],
+      "note": "A2.8, kept verbatim: a videomap, soundmap or stencil stage that a later error leaves before numStages++ (or a second one in one stage) leaks its cinematic or stencil block, because FreeData frees stages[0..numStages) only; once per malformed decl and build, as in the engine. Retail's 15 defaulted materials were not traced for it"
+    },
+    {
+      "id": "M-ID-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/ImageManager.cpp",
+          "lines": [
+            400,
+            499
+          ],
+          "anchor": "idImageManager::ImageFromFile",
+          "sha256": "44f1cebf57c48e5a0070c10a8c4afd39670eea07b0ff33733b422e84e806ed4c"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            525,
+            537
+          ],
+          "anchor": "idImage::GetGeneratedName",
+          "sha256": "73c307cca6a8aef756b3ca048868701e474ed29baf6ab5036ee5fd4820a07914"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "idImageManager::ImageFromFile"
+        }
+      ],
+      "note": "A3.10, carried to LP1c: the engine loads a new image record at once, and the load can rewrite its usage (R_LoadImageProgram, the _rmao rename), which a later lookup with the first usage then does not match; the shim loads nothing, so MaterialImageKey::usage is the requested usage, not the engine's #__UUCC digits. A record is found case-insensitively and keeps the spelling and parameters of the material that made it first; the engine's creation order (start-up, map load) and SinkBroom's (lookups, the bulk parse) differ, so a name's case and a _name's parameters can differ. The goldens compare the usage digits of every image the engine failed to load, and the editor images case-insensitively"
+    },
+    {
+      "id": "M-ID-PURE-01",
+      "kind": "pure-function",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1883,
+            1913
+          ],
+          "anchor": "idDeclManagerLocal::MakeNameCanonical",
+          "sha256": "3f0d6b85b0068a4dd27e174c85da50446441a525e55651a285d7159f56fac9a3"
+        },
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            1743,
+            1824
+          ],
+          "anchor": "idStr::IcmpPath",
+          "sha256": "691bd8e43e9114e206e85cf7324504ce7f66fd0591adc0995f1b2854eeec5396"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::canonicalName"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "compareEnginePaths"
+        }
+      ],
+      "note": "A2.16: the two facade functions any thread may call, though they run copied code (C20 otherwise keeps copied code on the parse thread): both read only their arguments and write only their result (IcmpPath's Printf is under #if 0). GameDeclSource calls compareEnginePaths on the thread that makes it"
+    }
+  ],
+  "retired": [
+    {
+      "id": "M-ID-VIRT-07",
+      "commit": "de5651ace",
+      "reason": "idDeclManagerLocal::PrintType: copied since LP1a.2 (the DeclManager.cpp ranges of M-ID-PART), so the shim no longer defines it"
     }
   ]
 }

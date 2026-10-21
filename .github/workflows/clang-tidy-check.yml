@@ -49,7 +49,10 @@ jobs:
           files-changed-only: true
           database: ${{github.workspace}}/build
           ignore: 'build|lib/TbLitLib/idtech/engine'
-          ignore-tidy: 'app/TrenchBroom/resources/shader'
+          # A1.18: the shim's id-shaped declarations (NULL defaults, typedefs, const value
+          # parameters) follow the copied engine; the lit code is outside CI's lint coverage
+          # until a job configures TB_ENABLE_LIT_PREVIEW
+          ignore-tidy: 'app/TrenchBroom/resources/shader|lib/TbLitLib/idtech/shim/private'
           step-summary: true
           thread-comments: true
       - name: Fail fast?!
