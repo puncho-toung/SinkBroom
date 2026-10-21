@@ -7,7 +7,10 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DeviceChoice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FramePacing.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NvrhiSupport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Swapchain.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Swapchain.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SwapchainRules.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/VulkanDevice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/VulkanDevice.h

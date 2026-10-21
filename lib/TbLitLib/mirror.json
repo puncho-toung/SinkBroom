@@ -72,11 +72,39 @@
       "note": "Timer queries only when timestampPeriod > 0 and the family's timestampValidBits > 0; otherwise the frame log's GPU column stays empty."
     },
     {
+      "kind": "function",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "1348-1375",
+      "sinkbroomFile": "lib/TbLitLib/src/LitSession.cpp (Impl::start)",
+      "note": "nvrhi::vulkan::DeviceDesc with the enabled instance and device extensions, graphics queue only; nvrhi::validation::createValidationLayer in Debug with SessionOptions::validation (the engine: r_useValidationLayers). errorCB is the session's own callback, which counts errors and sets the lost flag (R5.19), instead of DefaultMessageCallback, which turns errors into FatalError."
+    },
+    {
+      "kind": "constant",
+      "engineFile": "neo/sys/DeviceManager.h, neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "DeviceManager.h:58; DeviceManager_VK.cpp:1158-1162, 1303-1310",
+      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.h (kSwapchainFormat), lib/TbLitLib/src/Swapchain.cpp",
+      "note": "Swapchain format RGBA8_UNORM swapped to B8G8R8A8_UNORM. The engine always pairs it with SRGB_NONLINEAR; the preview takes the colour space of the surface's matching format entry."
+    },
+    {
       "kind": "constant",
       "engineFile": "neo/idlib/precompiled.h, neo/sys/DeviceManager.h, neo/sys/DeviceManager_VK.cpp",
       "engineLines": "precompiled.h:95; DeviceManager.h:57; DeviceManager_VK.cpp:707-708",
       "sinkbroomFile": "lib/TbLitLib/src/SwapchainRules.cpp (chooseSwapchainImageCount)",
       "note": "Swapchain image count NUM_FRAME_DATA = 3, clamped to the surface's minImageCount and maxImageCount (0 = no limit)."
+    },
+    {
+      "kind": "function",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "1197-1212",
+      "sinkbroomFile": "lib/TbLitLib/src/Swapchain.cpp",
+      "note": "VkSwapchainCreateInfoKHR: usage ColorAttachment | TransferDst | Sampled, one array layer, identity pre-transform, opaque composite alpha, clipped, no old swapchain. The preview falls back to the current transform and the first supported alpha mode when identity or opaque is not offered, and always uses exclusive sharing (one family)."
+    },
+    {
+      "kind": "function",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "1221-1239",
+      "sinkbroomFile": "lib/TbLitLib/src/Swapchain.cpp",
+      "note": "Swapchain image wrappers: createHandleForNativeTexture(VK_Image) with initialState Present, keepInitialState, isRenderTarget."
     },
     {
       "kind": "not-copied",
@@ -91,6 +119,20 @@
       "engineLines": "1066-1070, 1181-1195",
       "sinkbroomFile": "lib/TbLitLib/src/SwapchainRules.cpp (choosePresentMode)",
       "note": "The engine's r_swapInterval / r_vkPreferFastSync choice among MAILBOX, IMMEDIATE, FIFO_RELAXED and FIFO. The preview uses MAILBOX if offered, else FIFO, and FIFO when forced (D48, R5.4); IMMEDIATE only if LP0 measures FIFO's present blocking beyond a bound."
+    },
+    {
+      "kind": "not-copied",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "1388-1393, 1490-1498, 1505, 1541-1555",
+      "sinkbroomFile": "lib/TbLitLib/src/Swapchain.cpp, lib/TbLitLib/src/LitSession.cpp (Impl::drawFrame)",
+      "note": "The engine acquires with an infinite timeout and asserts on the result, and cycles one semaphore per image for both acquire and present. The preview acquires with a 50 ms timeout (D48) through the vk::Result overloads, skips on TIMEOUT or NOT_READY, posts SwapchainOutOfDate on OUT_OF_DATE or SUBOPTIMAL, and keeps acquire semaphores per frame in flight and present semaphores per image, all owned by the swapchain generation."
+    },
+    {
+      "kind": "not-copied",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "1395-1396, 1557-1575",
+      "sinkbroomFile": "lib/TbLitLib/src/LitSession.cpp (Impl::drawFrame)",
+      "note": "The engine's single frame event query, waited per NUM_FRAME_DATA. The preview keeps a ring of kFramesInFlight event queries and waits on frame N - 2's before recording frame N (D35)."
     },
     {
       "kind": "not-copied",
@@ -126,6 +168,13 @@
       "engineLines": "818-837, 937-945, 1044-1051, 1355-1364",
       "sinkbroomFile": "",
       "note": "Compute and transfer queues: the preview submits everything, uploads included, on the graphics queue (S35)."
+    },
+    {
+      "kind": "not-copied",
+      "engineFile": "neo/sys/DeviceManager_VK.cpp",
+      "engineLines": "1135-1154, 1409-1471",
+      "sinkbroomFile": "lib/TbLitLib/src/LitSession.cpp (Impl::releaseGpuObjects, Impl::destroyVkDevice)",
+      "note": "The engine's destruction order (waitIdle, semaphores, swapchain, device handle, VkDevice, surface, instance) never collects NVRHI garbage. The preview follows §3.1's teardown steps instead: release handles, waitForIdle, runGarbageCollection (skipped when lost), wrappers, vkDestroySwapchainKHR, semaphores, the NVRHI device with its last Release() count, then the VkDevice; the surface and the instance belong to Qt."
     }
   ]
 }
