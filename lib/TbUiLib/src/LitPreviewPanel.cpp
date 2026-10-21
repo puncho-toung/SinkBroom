@@ -278,9 +278,11 @@ void LitPreviewPanel::start()
   host->start(*m_surfacePage) | kdl::transform([&](QWidget* container) {
     m_surfacePage->layout()->addWidget(container);
     m_host = std::move(host);
+    m_materialsVersion = 0;
     m_stopReason.clear();
     m_stopProblems.clear();
     sessionGuard().claim(*this);
+    connectSessionObservers();
   }) | kdl::transform_error([&](const auto& e) {
     host.reset();
     m_stopReason = QString::fromStdString(e.msg);
@@ -320,6 +322,11 @@ lit::LitSession* LitPreviewPanel::sessionForTesting() const
 lit::MaterialService* LitPreviewPanel::materialsForTesting() const
 {
   return m_host ? m_host->materials() : nullptr;
+}
+
+std::uint64_t LitPreviewPanel::materialsVersionForTesting() const
+{
+  return m_materialsVersion;
 }
 
 bool LitPreviewPanel::claimSessionForTesting(const LitPreviewPanel& panel)
@@ -421,6 +428,23 @@ void LitPreviewPanel::connectObservers()
       });
 }
 
+void LitPreviewPanel::connectSessionObservers()
+{
+  // R5.24: the session's document subscriptions, dropped by endSession
+  m_sessionNotifierConnection += m_document.materialCollectionsDidChangeNotifier.connect(
+    [&] { materialCollectionsDidChange(); });
+}
+
+void LitPreviewPanel::materialCollectionsDidChange()
+{
+  // the material decls may have changed with the collections: the parse thread builds
+  // its registry again and republishes every name it was asked for
+  if (auto* materials = m_host ? m_host->materials() : nullptr)
+  {
+    materials->reload();
+  }
+}
+
 void LitPreviewPanel::cameraDidChange(const gl::Camera& camera)
 {
   // R4-2.18: the camera may be gone after this notification, so only its values are kept
@@ -466,6 +490,16 @@ void LitPreviewPanel::sessionEventReceived(
   case lit::SessionEvent::Parked:
   case lit::SessionEvent::SwapchainOutOfDate:
     // the host handles these itself
+    break;
+  case lit::SessionEvent::MaterialsPublished:
+    // the latest table, which the readers of LP1b and LP1c take from here
+    if (auto* materials = m_host->materials())
+    {
+      m_materialsVersion = materials->table()->version;
+    }
+    break;
+  case lit::SessionEvent::ReadyForSnapshot:
+    // S31: LP1b.1 answers with the snapshot of its dirty set
     break;
   case lit::SessionEvent::Warning:
     logger.warn() << "Lit preview: " << message;
@@ -559,6 +593,8 @@ void LitPreviewPanel::stopSession(
 
 std::optional<LitPreviewReport> LitPreviewPanel::endSession()
 {
+  // R5.24: the session's document subscriptions end with it
+  m_sessionNotifierConnection.disconnect();
   if (!m_host)
   {
     return std::nullopt;

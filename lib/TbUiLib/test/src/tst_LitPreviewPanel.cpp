@@ -44,6 +44,7 @@
 #include "gl/PerspectiveCamera.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
+#include "lit/Snapshot.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/GameInfo.h"
 #include "mdl/Map.h"
@@ -1733,6 +1734,51 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     CHECK(panel.materialsForTesting() == nullptr);
     reports.checkLast();
     checkCounts("materials");
+  }
+
+  SECTION("tables reach the GUI thread, a collection change reloads, the session holds")
+  {
+    REQUIRE(harness.startAndWaitForFrame());
+    auto* materials = panel.materialsForTesting();
+    REQUIRE(materials != nullptr);
+    auto* session = harness.session();
+    REQUIRE(session != nullptr);
+    // phase B handed the service to the session, which also runs its CPU pool
+    CHECK(session->materialService() == materials);
+    CHECK(session->cpuPool() != nullptr);
+
+    // Published is marshalled to the GUI thread, and the panel reads the latest table
+    REQUIRE(materials->waitForStatsForTesting(
+      [](const auto& s) { return s.parseAllDone; }, 10s));
+    REQUIRE(QTest::qWaitFor(
+      [&] { return panel.materialsVersionForTesting() == materials->table()->version; },
+      5000));
+    CHECK(materials->stats().builds == 1u);
+
+    // R5.24: a change of the material collections builds the registry again
+    harness.fixture.document().materialCollectionsDidChangeNotifier();
+    REQUIRE(materials->waitForStatsForTesting(
+      [](const auto& s) { return s.builds == 2u && s.parseAllDone; }, 10s));
+    REQUIRE(QTest::qWaitFor(
+      [&] { return panel.materialsVersionForTesting() == materials->table()->version; },
+      5000));
+
+    // S31: the running session takes a snapshot of its generation at a frame's start
+    auto snapshot = std::make_shared<lit::Snapshot>();
+    snapshot->generation = session->generation();
+    snapshot->sequence = 1;
+    CHECK(session->offerSnapshot(snapshot));
+    REQUIRE(harness.waitForFrame());
+    REQUIRE(
+      QTest::qWaitFor([&] { return session->snapshotsTakenForTesting() == 1u; }, 5000));
+    CHECK(session->lastSnapshotForTesting() == snapshot);
+
+    panel.stop();
+    reports.checkLast();
+    // the subscription went with the session
+    harness.fixture.document().materialCollectionsDidChangeNotifier();
+    CHECK(panel.materialsForTesting() == nullptr);
+    checkCounts("tables, reload and the session's service and pool");
   }
 
   SECTION("a document load and a game path change stop the session")

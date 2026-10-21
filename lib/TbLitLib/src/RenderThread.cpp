@@ -22,6 +22,7 @@
 #include "GpuDevice.h"
 #include "SessionEvents.h"
 #include "Swapchain.h"
+#include "lit/Snapshot.h"
 #include "lit/SwapchainRules.h"
 
 #include "vm/vec.h"
@@ -233,6 +234,35 @@ std::uint64_t RenderThread::framesPresented() const
   return m_framesPresented;
 }
 
+bool RenderThread::offerSnapshot(std::shared_ptr<const Snapshot> snapshot)
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    // S31: one in flight; a thread that stops takes no more
+    if (m_snapshotInbox || m_stopRequested || m_exited)
+    {
+      return false;
+    }
+    m_snapshotInbox = std::move(snapshot);
+    // the next frame's start takes it
+    m_pacer.trigger();
+  }
+  m_wake.notify_all();
+  return true;
+}
+
+std::uint64_t RenderThread::snapshotsTaken() const
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  return m_snapshotsTaken;
+}
+
+std::shared_ptr<const Snapshot> RenderThread::lastSnapshot() const
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  return m_snapshot;
+}
+
 bool RenderThread::park(const std::chrono::milliseconds timeout)
 {
   auto lock = std::unique_lock{m_mutex};
@@ -366,6 +396,8 @@ void RenderThread::main() noexcept
       m_events.post(SessionEvent::Warning, *error);
     }
     appendSessionRow(FrameLogEvent::Start);
+    // S31: the inbox is empty
+    m_events.post(SessionEvent::ReadyForSnapshot, {});
     runLoop();
   }
   catch (const std::exception& e)
@@ -435,7 +467,18 @@ void RenderThread::runLoop()
     {
       m_pacer.frameStarted(now);
       const auto frameCamera = m_camera;
+      // S31: the frame takes the snapshot offered, and the inbox is free again
+      const auto snapshotTaken = m_snapshotInbox != nullptr;
+      if (snapshotTaken)
+      {
+        m_snapshot = std::move(m_snapshotInbox);
+        ++m_snapshotsTaken;
+      }
       lock.unlock();
+      if (snapshotTaken)
+      {
+        m_events.post(SessionEvent::ReadyForSnapshot, {});
+      }
       const auto outcome = drawFrame(frameCamera);
       lock.lock();
       if (outcome == FrameOutcome::Skipped)

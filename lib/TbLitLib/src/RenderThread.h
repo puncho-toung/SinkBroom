@@ -46,6 +46,7 @@ namespace tb::lit
 {
 class GpuDevice;
 class SessionEvents;
+struct Snapshot;
 struct SwapchainGeneration;
 
 /**
@@ -109,6 +110,11 @@ private:
   bool m_exposed = false;
   bool m_cameraSet = false;
   CameraState m_camera;
+  // S31: the one-slot inbox, which the thread empties at a frame's start, and the last
+  // snapshot it took
+  std::shared_ptr<const Snapshot> m_snapshotInbox;
+  std::shared_ptr<const Snapshot> m_snapshot;
+  std::uint64_t m_snapshotsTaken = 0;
   FramePacer m_pacer;
   std::array<std::function<void()>, 3> m_debugHooks;
   // the number of the last generation whose replacement was requested; GUI thread reads
@@ -139,6 +145,10 @@ public:
   void setExposed(bool exposed);
   void requestFrame();
   std::uint64_t framesPresented() const;
+  // see LitSession::offerSnapshot
+  bool offerSnapshot(std::shared_ptr<const Snapshot> snapshot);
+  std::uint64_t snapshotsTaken() const;
+  std::shared_ptr<const Snapshot> lastSnapshot() const;
 
   // GUI thread: the surface handshake.
 

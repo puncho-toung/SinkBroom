@@ -82,9 +82,15 @@ enum class SessionEvent
   // the game files it could not read; the session goes on (R4-1.17)
   MaterialInfo,
   MaterialWarning,
+  // the material service published a new table (MaterialService::table()); the owner
+  // posts it from the parse thread's listener, at most one at a time until it is handled
+  MaterialsPublished,
   // acquire or present returned OUT_OF_DATE or SUBOPTIMAL: the GUI thread should park,
   // destroySwapchain, createSwapchain and unpark; posted once per swapchain generation
   SwapchainOutOfDate,
+  // S31: the render thread can take a snapshot: posted when it starts and whenever it has
+  // taken the one offered (LitSession::offerSnapshot)
+  ReadyForSnapshot,
 };
 
 /**
@@ -160,19 +166,29 @@ enum class DebugHook
 // flight, about 250 ms in a settled frame
 constexpr auto ParkTimeout = std::chrono::milliseconds{500};
 
+class CpuPool;
 class GpuDevice;
+class MaterialService;
 class RenderThread;
 class SessionEvents;
+struct Snapshot;
 
 /**
  * Everything a running preview owns below Qt (C18, D34): the VkDevice, the NVRHI device,
- * the swapchain generations, the render thread and the frame log. The instance and the
- * surface belong to the caller. Nothing in it is static. Its parts live in TbLitLib's
- * sources, so that vulkan.hpp and NVRHI stay out of TbUiLib.
+ * the swapchain generations, the render thread, the CPU pool and the frame log. The
+ * instance, the surface and the material service belong to the caller. Nothing in it is
+ * static. Its parts live in TbLitLib's sources, so that vulkan.hpp and NVRHI stay out of
+ * TbUiLib.
  *
  * Threads (C20): the render thread alone opens, records and executes command lists and
- * collects garbage. The GUI thread creates and destroys swapchains only while the render
- * thread is parked, and runs the teardown steps once it is joined.
+ * collects garbage, and never waits on the GUI thread. The CPU pool's jobs only fill CPU
+ * memory. The GUI thread creates and destroys swapchains only while the render thread is
+ * parked, and runs the teardown steps once it is joined.
+ *
+ * Snapshots are pulled (§3.3, S31): the render thread posts ReadyForSnapshot when it
+ * starts and whenever it has taken the snapshot offered; the GUI thread then offers one
+ * (offerSnapshot), and at most one waits in the session's one-slot inbox. The render
+ * thread takes it at the start of its next frame.
  */
 class LitSession
 {
@@ -182,6 +198,10 @@ private:
   std::unique_ptr<SessionEvents> m_events;
   std::unique_ptr<GpuDevice> m_device;
   std::unique_ptr<RenderThread> m_renderThread;
+  // S3: made at phase B, stopped in teardown step 1
+  std::unique_ptr<CpuPool> m_pool;
+  // the owner's, which outlives the session (LitSessionHost); null after step 1
+  MaterialService* m_materials = nullptr;
   std::uint64_t m_swapchainCount = 0;
 
   bool m_renderThreadStopped = false;
@@ -199,7 +219,9 @@ public:
    * instance. A null surface is the headless test path: no presentation, no swapchain;
    * the render thread clears an offscreen texture of the given size instead. Only one
    * session lives in a process at a time, because the Vulkan dispatcher is process-wide:
-   * a second create fails while one exists.
+   * a second create fails while one exists. Step 8 also starts the CPU pool. materials,
+   * the owner's material service or null, must outlive the session's teardown step 1,
+   * which forgets it.
    */
   static Result<std::unique_ptr<LitSession>> create(
     const InstanceHandles& instance,
@@ -208,7 +230,8 @@ public:
     std::uint32_t height,
     SessionOptions options,
     EventSink eventSink,
-    std::uint64_t generation);
+    std::uint64_t generation,
+    MaterialService* materials = nullptr);
 
   // Runs every teardown step that has not run.
   ~LitSession();
@@ -227,6 +250,22 @@ public:
   void setExposed(bool exposed);
   // any thread
   void requestFrame();
+
+  /**
+   * S31, GUI thread: puts snapshot into the one-slot inbox and triggers a frame, whose
+   * start hands it to the render thread. False, and the snapshot is not taken, when the
+   * slot still holds the last one, when the snapshot is null or of another session
+   * generation (D53), or when the render thread has stopped; the caller keeps its changes
+   * and offers again on the next ReadyForSnapshot.
+   */
+  bool offerSnapshot(std::shared_ptr<const Snapshot> snapshot);
+
+  // S3: the CPU pool from phase B until teardown step 1, else null; any thread that the
+  // session's teardown cannot overtake (the render thread, the GUI thread)
+  CpuPool* cpuPool() const;
+  // the owner's material service, from create until teardown step 1, else null; the same
+  // threads
+  MaterialService* materialService() const;
 
   // Surface handshake (§3.1, D49), GUI thread only.
 
@@ -279,7 +318,9 @@ public:
   // one before the present, waits for the GPU (also when lost, ignoring the result),
   // writes the frame log and exits; waitForRenderThread waits up to timeout and returns
   // whether it has exited. stopRenderThread requests the stop and joins without servicing
-  // anything, for callers without a window, and after waitForRenderThread returned true.
+  // anything, for callers without a window, and after waitForRenderThread returned true;
+  // then it stops the CPU pool (its generation bumped, its threads joined, R5.22) and
+  // forgets the material service.
   void requestStop();
   // from here on, warnings, errors and a loss go into the teardown report instead of the
   // event sink; requestStop calls it, and a caller that parks first calls it before that
@@ -311,9 +352,16 @@ public:
   // the camera the next frame draws with
   CameraState camera() const;
   bool deviceLost() const;
+  // the snapshots the render thread took so far, and the last one; any thread
+  std::uint64_t snapshotsTakenForTesting() const;
+  std::shared_ptr<const Snapshot> lastSnapshotForTesting() const;
 
 private:
-  LitSession(SessionOptions options, EventSink eventSink, std::uint64_t generation);
+  LitSession(
+    SessionOptions options,
+    EventSink eventSink,
+    std::uint64_t generation,
+    MaterialService* materials);
 
   Result<void> start(
     const InstanceHandles& instance,

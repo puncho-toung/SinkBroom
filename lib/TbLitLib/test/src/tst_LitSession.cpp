@@ -18,7 +18,10 @@
  */
 
 #include "StringMakers.h"
+#include "lit/CpuPool.h"
 #include "lit/LitSession.h"
+#include "lit/MaterialService.h"
+#include "lit/Snapshot.h"
 #include "lit/VulkanInstance.h"
 
 #include "kd/result.h"
@@ -35,7 +38,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <future>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <sstream>
@@ -339,7 +345,9 @@ struct Events
     const auto lock = std::scoped_lock{mutex};
     for (const auto& [event, message, generation] : events)
     {
-      if (event != SessionEvent::Ready && event != SessionEvent::Parked)
+      if (
+        event != SessionEvent::Ready && event != SessionEvent::Parked
+        && event != SessionEvent::ReadyForSnapshot)
       {
         std::cout << label << " event " << int(event) << " (gen " << generation
                   << "): " << message << "\n";
@@ -741,6 +749,127 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     }
     CHECK(resetDispatcher());
     messages.print("fault, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("the snapshot inbox, the CPU pool and the material service")
+  {
+    auto messages = ValidationMessages{};
+    auto poolThreads = std::make_shared<std::set<DWORD>>();
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+
+      auto serviceOptions = MaterialServiceOptions{};
+      serviceOptions.pollInterval = 0ms;
+      auto service = MaterialService::create(std::move(serviceOptions))
+                     | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+
+      auto events = Events{};
+      auto options = SessionOptions{};
+      options.validation = true;
+      auto session = LitSession::create(
+                       instance.handles(),
+                       VK_NULL_HANDLE,
+                       32,
+                       32,
+                       options,
+                       events.sink(),
+                       5,
+                       service.get())
+                     | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+      CHECK(session->materialService() == service.get());
+      REQUIRE(session->cpuPool() != nullptr);
+
+      // S31: the render thread starts with an empty inbox and says so
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) == 1u; },
+        5000ms,
+        false));
+
+      const auto snapshotOf = [](const std::uint64_t generation, const std::uint64_t n) {
+        auto snapshot = std::make_shared<Snapshot>();
+        snapshot->generation = generation;
+        snapshot->sequence = n;
+        return std::shared_ptr<const Snapshot>{std::move(snapshot)};
+      };
+
+      // D53: none, and another session's, are not taken
+      CHECK_FALSE(session->offerSnapshot(nullptr));
+      CHECK_FALSE(session->offerSnapshot(snapshotOf(4, 1)));
+
+      // one in flight: a hidden window draws no frame, so the first one waits
+      const auto first = snapshotOf(5, 1);
+      const auto second = snapshotOf(5, 2);
+      CHECK(session->offerSnapshot(first));
+      CHECK_FALSE(session->offerSnapshot(second));
+      std::this_thread::sleep_for(50ms);
+      CHECK(session->snapshotsTakenForTesting() == 0u);
+
+      // the next frame's start takes it, and the render thread is ready again
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return session->snapshotsTakenForTesting() == 1u; }, 5000ms, false));
+      CHECK(session->lastSnapshotForTesting() == first);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) == 2u; },
+        5000ms,
+        false));
+      CHECK(session->offerSnapshot(second));
+      REQUIRE(waitFor(
+        [&] { return session->snapshotsTakenForTesting() == 2u; }, 5000ms, false));
+      CHECK(session->lastSnapshotForTesting() == second);
+
+      // S3: jobs run on the pool's threads, which are not the render thread's
+      auto mutex = std::make_shared<std::mutex>();
+      auto futures = std::vector<std::future<Result<DWORD>>>{};
+      for (auto i = 0; i < 4; ++i)
+      {
+        futures.push_back(
+          session->cpuPool()->run(std::function<Result<DWORD>(const CpuJobContext&)>{
+            [mutex, poolThreads](const CpuJobContext&) -> Result<DWORD> {
+              std::this_thread::sleep_for(20ms);
+              const auto id = GetCurrentThreadId();
+              const auto lock = std::scoped_lock{*mutex};
+              poolThreads->insert(id);
+              return id;
+            }}));
+      }
+      for (auto& future : futures)
+      {
+        CHECK(future.get().is_success());
+      }
+      CHECK(poolThreads->size() <= CpuPool::ThreadCount);
+      CHECK_FALSE(poolThreads->contains(GetCurrentThreadId()));
+
+      // teardown step 1 stops the pool and forgets the service, and takes no snapshot
+      teardown(*session);
+      CHECK(session->cpuPool() == nullptr);
+      CHECK(session->materialService() == nullptr);
+      CHECK_FALSE(session->offerSnapshot(snapshotOf(5, 3)));
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(events.count(SessionEvent::ReadyForSnapshot) == 3u);
+      CHECK(events.allOfGeneration(5));
+      session.reset();
+      service.reset();
+    }
+    CHECK(resetDispatcher());
+
+    // the pool's threads are joined
+    for (const auto id : *poolThreads)
+    {
+      CAPTURE(id);
+      const auto thread = OpenThread(SYNCHRONIZE, FALSE, id);
+      const auto gone = !thread || WaitForSingleObject(thread, 0) == WAIT_OBJECT_0;
+      if (thread)
+      {
+        CloseHandle(thread);
+      }
+      CHECK(gone);
+    }
+    messages.print("snapshots and pool, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }

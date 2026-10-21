@@ -24,6 +24,8 @@
 #include "RenderThread.h"
 #include "SessionEvents.h"
 #include "Swapchain.h"
+#include "lit/CpuPool.h"
+#include "lit/Snapshot.h"
 
 #include "kd/result.h"
 
@@ -38,9 +40,13 @@ namespace tb::lit
 {
 
 LitSession::LitSession(
-  SessionOptions options, EventSink eventSink, const std::uint64_t generation)
+  SessionOptions options,
+  EventSink eventSink,
+  const std::uint64_t generation,
+  MaterialService* materials)
   : m_options{std::move(options)}
   , m_events{std::make_unique<SessionEvents>(std::move(eventSink), generation)}
+  , m_materials{materials}
 {
 }
 
@@ -51,7 +57,8 @@ Result<std::unique_ptr<LitSession>> LitSession::create(
   const std::uint32_t height,
   SessionOptions options,
   EventSink eventSink,
-  const std::uint64_t generation)
+  const std::uint64_t generation,
+  MaterialService* materials)
 {
   if (instance.instance == VK_NULL_HANDLE || instance.getInstanceProcAddr == nullptr)
   {
@@ -72,7 +79,8 @@ Result<std::unique_ptr<LitSession>> LitSession::create(
     auto session = std::unique_ptr<LitSession>{};
     try
     {
-      session.reset(new LitSession{std::move(options), std::move(eventSink), generation});
+      session.reset(
+        new LitSession{std::move(options), std::move(eventSink), generation, materials});
     }
     catch (...)
     {
@@ -125,7 +133,13 @@ Result<void> LitSession::start(
                  : std::nullopt;
              return m_renderThread->createFrameResources(headlessExtent);
            })
-         | kdl::transform([&]() { m_renderThread->start(); });
+         // step 8: the CPU pool before the render thread, which may use it from its
+         // first frame (S3)
+         | kdl::and_then([&]() { return CpuPool::create(); })
+         | kdl::transform([&](std::unique_ptr<CpuPool> pool) {
+             m_pool = std::move(pool);
+             m_renderThread->start();
+           });
 }
 
 LitSession::~LitSession()
@@ -170,6 +184,26 @@ void LitSession::setExposed(const bool exposed)
 void LitSession::requestFrame()
 {
   m_renderThread->requestFrame();
+}
+
+bool LitSession::offerSnapshot(std::shared_ptr<const Snapshot> snapshot)
+{
+  // D53: a snapshot made for another session is dropped
+  if (!snapshot || snapshot->generation != generation() || m_renderThreadStopped)
+  {
+    return false;
+  }
+  return m_renderThread->offerSnapshot(std::move(snapshot));
+}
+
+CpuPool* LitSession::cpuPool() const
+{
+  return m_pool && !m_pool->stopped() ? m_pool.get() : nullptr;
+}
+
+MaterialService* LitSession::materialService() const
+{
+  return m_materials;
 }
 
 bool LitSession::park(const std::chrono::milliseconds timeout)
@@ -300,6 +334,14 @@ void LitSession::stopRenderThread()
   {
     m_renderThread->join();
   }
+  // step 1, after the render thread that queues the jobs: the pool's generation is bumped
+  // and its threads joined; abandoned futures are only waited for (R5.22)
+  if (m_pool)
+  {
+    m_pool->stop();
+  }
+  // nothing that runs from here on reads the owner's material service
+  m_materials = nullptr;
 }
 
 void LitSession::releaseGpuObjects()
@@ -442,6 +484,16 @@ CameraState LitSession::camera() const
 bool LitSession::deviceLost() const
 {
   return m_events->lost();
+}
+
+std::uint64_t LitSession::snapshotsTakenForTesting() const
+{
+  return m_renderThread ? m_renderThread->snapshotsTaken() : 0u;
+}
+
+std::shared_ptr<const Snapshot> LitSession::lastSnapshotForTesting() const
+{
+  return m_renderThread ? m_renderThread->lastSnapshot() : nullptr;
 }
 
 } // namespace tb::lit

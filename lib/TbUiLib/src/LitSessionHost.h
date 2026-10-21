@@ -29,6 +29,7 @@
 #include "lit/VulkanInstance.h"
 #include "ui/LitPreviewPanel.h"
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -70,14 +71,19 @@ class LitPreviewWindow;
  *
  * The material service (lit/MaterialService.h, the parse thread) starts with phase A,
  * over the game path the owner gives, and its log lines come through the same queue as
- * the session's messages, as MaterialInfo and MaterialWarning.
+ * the session's messages, as MaterialInfo and MaterialWarning. A new table comes the same
+ * way, as MaterialsPublished: the parse thread's listener posts it without blocking, at
+ * most one at a time until this host has handled it, and the owner reads the latest
+ * table then. Phase B hands the service to the session, which forgets it in its own
+ * teardown step 1, long before the service goes in the last step here.
  *
  * Teardown runs these steps in this order, each once, whatever ran of the start:
  * 1. ask the parse thread to stop after its current directory entry, container entry or
  *    decl file (plan step 1, R5.20, G4); then stop the render thread: park it, then stop
  *    and join it, while the window system's sent messages are serviced, because a
  *    present may wait for one (no bound on the join: a thread that still runs uses the
- *    session, so the wait goes on and says so)
+ *    session, so the wait goes on and says so); then the session stops its CPU pool and
+ *    forgets the material service
  * 2. LitSession::releaseGpuObjects
  * 3. delete the window container, which destroys the window and Qt's VkSurfaceKHR
  * 4. LitSession::destroyVkDevice
@@ -97,7 +103,8 @@ class LitPreviewWindow;
 class LitSessionHost : public QObject
 {
 public:
-  // receives Ready, Warning, DeviceLost and Error on the GUI thread, queued
+  // receives Ready, Warning, DeviceLost, Error, the material events and ReadyForSnapshot
+  // on the GUI thread, queued
   using EventHandler = std::function<void(
     std::uint64_t generation, lit::SessionEvent event, const std::string& message)>;
   // the owner's last copy of the 3D view's camera, if it has one
@@ -144,6 +151,10 @@ private:
   std::filesystem::path m_gamePath;
   std::shared_ptr<UndeliveredMessages> m_undelivered =
     std::make_shared<UndeliveredMessages>();
+  // a MaterialsPublished is queued and not yet handled; set by the parse thread's
+  // listener, cleared here before the owner reads the table
+  std::shared_ptr<std::atomic<bool>> m_publishPending =
+    std::make_shared<std::atomic<bool>>(false);
 
   std::unique_ptr<QVulkanInstance> m_instance;
   lit::InstanceHandles m_handles;

@@ -100,7 +100,9 @@ struct LitPreviewReport
  * Opening the panel never starts a session. Closing it stops one; a panel tabbed behind
  * another dock only stops drawing, because its window is no longer exposed. Loading a
  * document and changing the game path stop the session, whose files belong to the old
- * game (D41).
+ * game (D41). While a session runs, a change of the material collections reloads its
+ * material service (R5.24); the subscription is made at Start and dropped at Stop, and
+ * moves into the document observer with LP1b.1.
  */
 class LitPreviewPanel : public SidebarPanel
 {
@@ -127,8 +129,13 @@ private:
   // phase B starts with it; the session host asks for it there
   std::unique_ptr<lit::CameraState> m_lastCamera;
   std::unique_ptr<LitSessionHost> m_host;
+  // the version of the last material table the session's service published, as the GUI
+  // thread saw it
+  std::uint64_t m_materialsVersion = 0;
 
   NotifierConnection m_notifierConnection;
+  // the document subscriptions of a running session, from Start to Stop
+  NotifierConnection m_sessionNotifierConnection;
 
 public:
   // after every session's teardown, also one that ended with the panel
@@ -166,6 +173,8 @@ public:
   lit::LitSession* sessionForTesting() const;
   // the running session's parse thread from phase A on, else null
   lit::MaterialService* materialsForTesting() const;
+  // the version of the last material table this panel was told of on the GUI thread
+  std::uint64_t materialsVersionForTesting() const;
   /**
    * The process's one session is claimed by Start and released by the teardown or the
    * panel's destructor, and every change updates the Start pages of all panels (D29,
@@ -177,6 +186,8 @@ public:
 private:
   void createGui();
   void connectObservers();
+  void connectSessionObservers();
+  void materialCollectionsDidChange();
 
   void cameraDidChange(const gl::Camera& camera);
   void sessionEventReceived(

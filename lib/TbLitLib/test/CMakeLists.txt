@@ -4,6 +4,7 @@ EMBED_UTF8_MANIFEST(TbLitLibTest)
 target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/LitTestUtils.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/LitTestUtils.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CpuPool.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DeviceChoice.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FrameLog.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FramePacer.cpp

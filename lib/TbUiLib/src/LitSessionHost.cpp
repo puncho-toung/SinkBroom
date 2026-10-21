@@ -250,19 +250,29 @@ void LitSessionHost::startMaterials()
     return std::unique_ptr<lit::DeclSource>{
       std::make_unique<lit::GameDeclSource>(gamePath, &cancel)};
   };
-  // R4-1.17, R5.17: the parse thread's log lines come through the session's queue, with
-  // its generation; new tables are marshalled by the packages that read them (LP1b)
-  options.listener = [sink = eventSink(),
-                      generation = m_generation](const lit::MaterialServiceEvent& event) {
-    if (event.kind == lit::MaterialServiceEvent::Kind::Message)
-    {
-      sink(
-        event.level == lit::DeclMessageKind::Info ? lit::SessionEvent::MaterialInfo
-                                                  : lit::SessionEvent::MaterialWarning,
-        event.text,
-        generation);
-    }
-  };
+  // R4-1.17, R5.17: the parse thread's log lines and its new tables come through the
+  // session's queue, with its generation. The listener must not block: a table is posted
+  // only when none is pending, and the GUI thread reads the latest one when it handles it
+  options.listener =
+    [sink = eventSink(), generation = m_generation, publishPending = m_publishPending](
+      const lit::MaterialServiceEvent& event) {
+      switch (event.kind)
+      {
+      case lit::MaterialServiceEvent::Kind::Message:
+        sink(
+          event.level == lit::DeclMessageKind::Info ? lit::SessionEvent::MaterialInfo
+                                                    : lit::SessionEvent::MaterialWarning,
+          event.text,
+          generation);
+        break;
+      case lit::MaterialServiceEvent::Kind::Published:
+        if (!publishPending->exchange(true))
+        {
+          sink(lit::SessionEvent::MaterialsPublished, {}, generation);
+        }
+        break;
+      }
+    };
   options.parseAll = true;
   lit::MaterialService::create(std::move(options))
     | kdl::transform([&](std::unique_ptr<lit::MaterialService> service) {
@@ -575,6 +585,8 @@ void LitSessionHost::createSession(const QSize size)
     return;
   }
 
+  // the service outlives the session: it goes in the last teardown step, the session in
+  // step 4, and the session forgets it in its step 1
   lit::LitSession::create(
     m_handles,
     surface,
@@ -582,7 +594,8 @@ void LitSessionHost::createSession(const QSize size)
     std::uint32_t(size.height()),
     m_options,
     eventSink(),
-    m_generation)
+    m_generation,
+    m_materials.get())
     | kdl::transform([&](std::unique_ptr<lit::LitSession> session) {
         m_session = std::move(session);
         m_swapchainSize = size;
@@ -766,12 +779,21 @@ void LitSessionHost::dispatchSessionEvent(
       reconcile();
     }
     break;
+  case lit::SessionEvent::MaterialsPublished:
+    // the next table posts again; the owner reads the latest one now
+    m_publishPending->store(false);
+    if (m_eventHandler)
+    {
+      m_eventHandler(m_generation, event, message);
+    }
+    break;
   case lit::SessionEvent::Ready:
   case lit::SessionEvent::Warning:
   case lit::SessionEvent::MaterialInfo:
   case lit::SessionEvent::MaterialWarning:
   case lit::SessionEvent::DeviceLost:
   case lit::SessionEvent::Error:
+  case lit::SessionEvent::ReadyForSnapshot:
     if (m_eventHandler)
     {
       m_eventHandler(m_generation, event, message);
