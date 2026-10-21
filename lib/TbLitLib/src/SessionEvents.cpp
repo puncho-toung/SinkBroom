@@ -25,6 +25,12 @@
 
 namespace tb::lit
 {
+namespace
+{
+
+constexpr auto MaxWarnings = std::size_t{20};
+
+} // namespace
 
 SessionEvents::SessionEvents(EventSink ownerSink, const std::uint64_t generation)
   : m_ownerSink{std::move(ownerSink)}
@@ -41,6 +47,20 @@ void SessionEvents::post(const SessionEvent event, std::string message) noexcept
 {
   try
   {
+    if (event == SessionEvent::Warning)
+    {
+      const auto lock = std::scoped_lock{m_mutex};
+      if (m_warnings.size() > MaxWarnings || !m_warnings.insert(message).second)
+      {
+        return;
+      }
+      if (m_warnings.size() > MaxWarnings)
+      {
+        message = fmt::format(
+          "{} (further warnings of this session are not shown)", std::move(message));
+      }
+    }
+
     if (!m_stopping)
     {
       if (m_ownerSink)

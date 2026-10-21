@@ -50,6 +50,7 @@
 
 #include "base/PreferenceManager.h"
 #include "gl/GlManager.h"
+#include "gl/PerspectiveCamera.h"
 #include "gl/ResourceManager.h"
 #include "mdl/Autosaver.h"
 #include "mdl/BrushFace.h"
@@ -688,6 +689,8 @@ void MapWindow::createGui()
   {
     m_sidebarManager->registerPanel(std::move(panel));
   }
+  // the view container notified its first camera before the panels existed
+  m_mapView->cameraDidChangeNotifier(m_mapView->perspectiveCamera());
 
   // DD-28, DD-29: a prefab holds no placements of prefabs (RQ21), neither from its own
   // panel nor from a drag out of another window's panel
@@ -700,7 +703,7 @@ void MapWindow::createGui()
     m_mapView->toolBox().createPrefabTool().setPlacementEnabled(false);
 
 #ifdef TB_ENABLE_LIT_PREVIEW
-    // D29: no lit preview in a prefab editor
+    // no lit preview in a prefab editor
     auto* litPreviewPanel =
       qobject_cast<LitPreviewPanel*>(m_sidebarManager->panel(LitPreviewPanel::PanelId));
     contract_assert(litPreviewPanel != nullptr);

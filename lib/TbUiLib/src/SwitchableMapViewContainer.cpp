@@ -172,7 +172,9 @@ const gl::PerspectiveCamera& SwitchableMapViewContainer::perspectiveCamera() con
 
 gl::PerspectiveCamera& SwitchableMapViewContainer::perspectiveCamera()
 {
-  // every 3D view owns its camera as a non-const object
+  // every 3D view owns its camera through a non-const unique_ptr, so casting away the
+  // const of the const overload is sound; a shared or const camera would make it
+  // undefined
   return KDL_CONST_OVERLOAD(perspectiveCamera());
 }
 

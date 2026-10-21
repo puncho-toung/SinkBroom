@@ -77,13 +77,7 @@ FreeImage (Image loading & manipulation library)<br />
 tinyxml2 (XML parsing library)<br />
 miniz (Archive library)<br />
 Assimp (Asset importer library)<br />
-)"
-#ifdef TB_ENABLE_LIT_PREVIEW
-                                R"(NVRHI (Rendering hardware interface, MIT)<br />
-Vulkan-Headers (Vulkan API headers, Apache-2.0)<br />
-)"
-#endif
-                                R"(Catch 2 (C++ testing framework)<br />
+Catch 2 (C++ testing framework)<br />
 StackWalker (C++ stack trace analyzer)<br />
 CMake (Cross platform build manager)<br />
 Pandoc (Universal document converter)<br />
@@ -93,6 +87,12 @@ Font Awesome 5 Free (Icons)<br />)");
 
   auto* infoPanel = new AppInfoPanel{m_appController};
   auto* creditsText = new QLabel{creditsString};
+#ifdef TB_ENABLE_LIT_PREVIEW
+  creditsText->setText(
+    creditsText->text()
+    + tr("NVRHI (Rendering hardware interface)<br />"
+         "Vulkan-Headers (Vulkan API headers)<br />"));
+#endif
   creditsText->setWordWrap(true);
   creditsText->setMaximumWidth(300);
 

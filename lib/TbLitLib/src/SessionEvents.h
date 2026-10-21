@@ -25,6 +25,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -52,12 +53,18 @@ private:
 
   std::mutex m_mutex;
   std::vector<std::string> m_teardownMessages;
+  // the warnings posted so far; a repeated one is not posted again (review L3.17)
+  std::set<std::string> m_warnings;
 
 public:
   SessionEvents(EventSink ownerSink, std::uint64_t generation);
 
   std::uint64_t generation() const;
 
+  /**
+   * A warning is posted once per text, and at most MaxWarnings different ones per
+   * session, so that a warning NVRHI repeats every frame does not flood the log.
+   */
   void post(SessionEvent event, std::string message) noexcept;
 
   // DeviceLost, once; nothing more is drawn
