@@ -1199,6 +1199,57 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     checkCounts("unpark while parking");
   }
 
+  SECTION("a frame held past the park's bound: Stop and a surface destruction")
+  {
+    // Review V.9: the hold is longer than ParkTimeout (500 ms), so the park of the stop
+    // or of SurfaceAboutToBeDestroyed times out and the slow paths run: the stop's wait
+    // with servicing, and the surface's fallback that stops the thread before Qt destroys
+    // the surface. The held frame sends its window a message at 600 ms, which only the
+    // GUI thread answers.
+    for (const auto destroySurface : {false, true})
+    {
+      CAPTURE(destroySurface);
+      REQUIRE(harness.startAndWaitForFrame());
+      auto* window = findSurfaceWindow();
+      REQUIRE(window != nullptr);
+      const auto hwnd = reinterpret_cast<HWND>(window->winId());
+      auto sent = std::atomic<bool>{false};
+      const auto hold = FrameHold{
+        *harness.session(), lit::DebugHook::BeforePresent, [&] {
+          std::this_thread::sleep_for(600ms);
+          auto result = DWORD_PTR{0};
+          sent =
+            SendMessageTimeoutW(hwnd, WM_NULL, 0, 0, SMTO_NORMAL, 3000, &result) != 0;
+          std::this_thread::sleep_for(100ms);
+        }};
+      harness.moveCamera();
+      REQUIRE(hold.waitUntilEntered());
+      const auto start = std::chrono::steady_clock::now();
+      if (destroySurface)
+      {
+        window->destroy();
+      }
+      else
+      {
+        panel.stop();
+      }
+      CHECK(millisecondsSince(start) < 1500ms);
+      CHECK(sent);
+      CHECK(hold.left());
+      if (destroySurface)
+      {
+        // the thread did not park before the surface went, so the session failed
+        REQUIRE(QTest::qWaitFor([&] { return !sessionRunning(panel); }));
+        CHECK_THAT(
+          messageText(panel), Catch::Matchers::ContainsSubstring("did not stop drawing"));
+      }
+      CHECK(!sessionRunning(panel));
+      reports.checkLast();
+      CHECK(reports.last().hadDevice);
+    }
+    checkCounts("held past the park's bound");
+  }
+
   SECTION("Stop, a dock close and a map load finish while a frame is held")
   {
     // F1: the render thread holds its frame as a waiting present would; each way of

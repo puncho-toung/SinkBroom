@@ -21,6 +21,7 @@
 
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPointer>
 #include <QPushButton>
 #include <QStackedLayout>
 #include <QTimer>
@@ -459,25 +460,56 @@ void LitPreviewPanel::sessionEventReceived(
   case lit::SessionEvent::DeviceLost:
   case lit::SessionEvent::Error:
     logger.error() << "Lit preview: " << message;
-    stopSession(QString::fromStdString(message));
+    // this runs inside the host's own event handler, which the teardown would delete
+    deferStopSession(QString::fromStdString(message), generation);
     break;
   }
 }
 
-void LitPreviewPanel::stopSession(QString reason)
+void LitPreviewPanel::deferStopSession(QString reason, const std::uint64_t generation)
 {
-  if (m_host && m_host->busy())
+  QTimer::singleShot(
+    0, this, [this, generation, deferredReason = std::move(reason)]() mutable {
+      stopSession(std::move(deferredReason), generation);
+    });
+}
+
+void LitPreviewPanel::stopSession(
+  QString reason, const std::optional<std::uint64_t> generation)
+{
+  if (!m_host || (generation && m_host->generation() != *generation))
+  {
+    // the session this stop was meant for is gone
+    if (!generation)
+    {
+      updateStartPage();
+    }
+    return;
+  }
+
+  if (m_host->busy())
   {
     // the host waits inside one of its own frames and services the window system, which
     // brought this call here; it is torn down from the event loop instead
     QTimer::singleShot(
-      DeferredStopInterval, this, [this, deferredReason = std::move(reason)]() mutable {
-        stopSession(std::move(deferredReason));
+      DeferredStopInterval,
+      this,
+      [this,
+       hostGeneration = m_host->generation(),
+       deferredReason = std::move(reason)]() mutable {
+        stopSession(std::move(deferredReason), hostGeneration);
       });
     return;
   }
 
-  if (const auto report = endSession())
+  // a panel deleted from a message serviced inside the teardown is not touched again
+  const auto self = QPointer<LitPreviewPanel>{this};
+  const auto report = endSession();
+  if (!self)
+  {
+    return;
+  }
+  if (report)
   {
     m_stopReason = std::move(reason);
     m_stopProblems.clear();
@@ -524,8 +556,13 @@ std::optional<LitPreviewReport> LitPreviewPanel::endSession()
     // R5.17: from here on, every message of this session is dropped; the teardown reports
     // what it finds here, synchronously
     auto host = std::move(m_host);
+    const auto self = QPointer<LitPreviewPanel>{this};
     report = host->teardown();
     host.reset();
+    if (!self)
+    {
+      return report;
+    }
   }
   sessionGuard().release(*this);
   return report;

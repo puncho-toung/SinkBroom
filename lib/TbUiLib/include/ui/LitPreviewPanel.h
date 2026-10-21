@@ -179,8 +179,14 @@ private:
   void sessionEventReceived(
     std::uint64_t generation, lit::SessionEvent event, const std::string& message);
 
-  // the teardown, then the Start page with the reason
-  void stopSession(QString reason);
+  /**
+   * The teardown, then the Start page with the reason. With a generation, only that
+   * session is stopped: a stop that was deferred never ends a later one (review V.7).
+   */
+  void stopSession(
+    QString reason, std::optional<std::uint64_t> generation = std::nullopt);
+  // stopSession from the event loop, never inside the host's own call (review V.5)
+  void deferStopSession(QString reason, std::uint64_t generation);
   std::optional<LitPreviewReport> endSession();
   void updateStartPage();
 };
