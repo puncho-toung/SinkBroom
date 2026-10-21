@@ -284,6 +284,10 @@ struct LitSession::Impl
       return errorOf(gpuResult);
     }
     gpu = std::move(gpuResult).value();
+    for (const auto& skipped : gpu.skippedDevices)
+    {
+      postEvent(SessionEvent::Warning, skipped);
+    }
 
     // step 5
     auto deviceResult = createVkDevice(gpu);

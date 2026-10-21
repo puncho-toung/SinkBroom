@@ -47,13 +47,17 @@ struct GpuChoice
   bool synchronization2 = false;
   // what the device supports of the engine's "if supported" features
   vk::PhysicalDeviceFeatures supportedFeatures;
+  // the other devices whose queries failed, one line each, for the log
+  std::vector<std::string> skippedDevices;
 };
 
 /**
  * §3.1 step 4: a device that presents to the surface, runs Vulkan 1.2 or newer and has
  * the engine's required extensions and features, discrete preferred. A null surface is
  * the headless test path: presentation is not checked and the swapchain extension is not
- * required. Vulkan errors are returned, never thrown.
+ * required. A device is asked for the surface's formats and present modes only once one
+ * of its queue families presents to the surface, and a device whose queries fail is
+ * skipped and listed in skippedDevices. Vulkan errors are returned, never thrown.
  */
 Result<GpuChoice> pickPhysicalDevice(vk::Instance instance, vk::SurfaceKHR surface);
 

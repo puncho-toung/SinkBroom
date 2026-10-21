@@ -109,6 +109,8 @@ struct Inspection
 {
   DeviceCandidate candidate;
   GpuChoice choice;
+  // a Vulkan query threw
+  bool queryFailed = false;
 };
 
 Inspection inspect(const vk::PhysicalDevice device, const vk::SurfaceKHR surface)
@@ -205,22 +207,6 @@ Inspection inspect(const vk::PhysicalDevice device, const vk::SurfaceKHR surface
     }
   }
 
-  // swapchain format and FIFO (:701-747)
-  if (surface)
-  {
-    const auto formats = device.getSurfaceFormatsKHR(surface);
-    if (std::ranges::none_of(
-          formats, [](const auto& format) { return format.format == kSwapchainFormat; }))
-    {
-      problems.push_back("cannot present B8G8R8A8_UNORM images to this window");
-    }
-    const auto presentModes = device.getSurfacePresentModesKHR(surface);
-    if (std::ranges::find(presentModes, vk::PresentModeKHR::eFifo) == presentModes.end())
-    {
-      problems.push_back("does not offer the FIFO present mode");
-    }
-  }
-
   // one queue family that does graphics and present (:749-762). The engine takes the
   // first graphics family and the first present family separately; the preview needs
   // them to be one family, so that the swapchain images stay exclusive to it.
@@ -246,21 +232,66 @@ Inspection inspect(const vk::PhysicalDevice device, const vk::SurfaceKHR surface
       family = i;
     }
   }
-  if (family)
-  {
-    choice.queueFamily = *family;
-    // :1077-1080
-    choice.timerQueries = properties.limits.timestampPeriod > 0.0f
-                          && families[*family].timestampValidBits > 0;
-  }
-  else
+  if (!family)
   {
     problems.push_back(
       surface ? "has no queue family that does both graphics and present to this window"
               : "has no graphics queue family");
+    return result;
+  }
+
+  choice.queueFamily = *family;
+  // :1077-1080
+  choice.timerQueries =
+    properties.limits.timestampPeriod > 0.0f && families[*family].timestampValidBits > 0;
+
+  // swapchain format and FIFO (:701-747), asked only of a device that presents to the
+  // surface, as the specification requires (the engine asks every device)
+  if (surface)
+  {
+    const auto formats = device.getSurfaceFormatsKHR(surface);
+    if (std::ranges::none_of(
+          formats, [](const auto& format) { return format.format == kSwapchainFormat; }))
+    {
+      problems.push_back("cannot present B8G8R8A8_UNORM images to this window");
+    }
+    const auto presentModes = device.getSurfacePresentModesKHR(surface);
+    if (std::ranges::find(presentModes, vk::PresentModeKHR::eFifo) == presentModes.end())
+    {
+      problems.push_back("does not offer the FIFO present mode");
+    }
   }
 
   return result;
+}
+
+/**
+ * A device whose queries fail is skipped with its error as a problem, so that one GPU,
+ * for example the one that no longer presents after a screen change on a hybrid-GPU
+ * laptop, never sinks the choice among the others.
+ */
+Inspection inspectOrSkip(const vk::PhysicalDevice device, const vk::SurfaceKHR surface)
+{
+  try
+  {
+    return inspect(device, surface);
+  }
+  catch (const std::exception& e)
+  {
+    auto result = Inspection{};
+    try
+    {
+      result.candidate.name = device.getProperties().deviceName.data();
+    }
+    catch (const std::exception&)
+    {
+      result.candidate.name = "a Vulkan device";
+    }
+    result.candidate.problems.push_back(
+      fmt::format("could not be queried: {}", e.what()));
+    result.queryFailed = true;
+    return result;
+  }
 }
 
 } // namespace
@@ -273,24 +304,30 @@ Result<GpuChoice> pickPhysicalDevice(
     auto inspections = std::vector<Inspection>{};
     for (const auto device : instance.enumeratePhysicalDevices())
     {
-      inspections.push_back(inspect(device, surface));
+      inspections.push_back(inspectOrSkip(device, surface));
     }
 
     auto candidates = std::vector<DeviceCandidate>{};
+    auto skipped = std::vector<std::string>{};
     for (const auto& inspection : inspections)
     {
       candidates.push_back(inspection.candidate);
+      if (inspection.queryFailed)
+      {
+        skipped.push_back(fmt::format(
+          "Skipped {}: {}",
+          inspection.candidate.name,
+          inspection.candidate.problems.front()));
+      }
     }
 
     if (const auto index = preferredDevice(candidates))
     {
-      return std::move(inspections[*index].choice);
+      auto choice = std::move(inspections[*index].choice);
+      choice.skippedDevices = std::move(skipped);
+      return choice;
     }
     return Error{describeUnusableDevices(candidates)};
-  }
-  catch (const vk::SystemError& e)
-  {
-    return Error{fmt::format("Cannot list the Vulkan devices: {}", e.what())};
   }
   catch (const std::exception& e)
   {
@@ -360,11 +397,6 @@ Result<vk::Device> createVkDevice(const GpuChoice& gpu)
     // :1054
     VULKAN_HPP_DEFAULT_DISPATCHER.init(device);
     return device;
-  }
-  catch (const vk::SystemError& e)
-  {
-    return Error{
-      fmt::format("Cannot create the Vulkan device on {}: {}", gpu.name, e.what())};
   }
   catch (const std::exception& e)
   {
