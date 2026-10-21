@@ -151,12 +151,10 @@ Result<QWidget*> LitSessionHost::start(QWidget& containerParent)
     return Error{"The lit preview needs Vulkan 1.2, which this system does not offer."};
   }
 
+  // Qt adds VK_KHR_surface and the platform's surface extension, and VK_EXT_debug_utils
+  // for its debug output redirect, which validation needs; the session asks for nothing
+  // else (the engine's other instance extensions are listed in TbLitLib's mirror.json)
   m_instance->setApiVersion(QVersionNumber{1, 2});
-  auto extensions = QByteArrayList{};
-  for (const auto* name : lit::requiredInstanceExtensions(m_options.validation))
-  {
-    extensions.push_back(name);
-  }
   if (m_options.validation)
   {
     // R-B16: only a layer that is installed
@@ -164,17 +162,11 @@ Result<QWidget*> LitSessionHost::start(QWidget& containerParent)
     {
       m_instance->setLayers({ValidationLayerName});
     }
-    // Qt's debug output redirect, which counts the messages below, adds
-    // VK_EXT_debug_utils itself and would list it twice
-    extensions.removeAll(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
   }
   else
   {
-    // without validation, Qt's debug messenger and its extension are not needed
     m_instance->setFlags(QVulkanInstance::NoDebugOutputRedirect);
   }
-  // Qt adds VK_KHR_surface and the platform's surface extension
-  m_instance->setExtensions(extensions);
 
   // called on whichever thread made the Vulkan call; the messages still go to Qt's log
   auto& diagnostics = m_diagnostics;
@@ -561,7 +553,7 @@ void LitSessionHost::replaceSwapchain(const QSize size)
 bool LitSessionHost::parkServicingSentMessages()
 {
   const auto busy = BusyScope{*this};
-  const auto deadline = std::chrono::steady_clock::now() + lit::kParkTimeout;
+  const auto deadline = std::chrono::steady_clock::now() + lit::ParkTimeout;
   while (!m_session->park(ServicingInterval))
   {
     if (std::chrono::steady_clock::now() >= deadline)

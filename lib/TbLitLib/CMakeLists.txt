@@ -6,9 +6,17 @@ target_sources(TbLitLib
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DeviceChoice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameLog.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/FramePacing.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/FramePacer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameTimers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameTimers.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NvrhiSupport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/SessionEvents.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/SessionEvents.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Swapchain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Swapchain.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SwapchainRules.cpp

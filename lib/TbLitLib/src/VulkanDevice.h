@@ -32,7 +32,7 @@ namespace tb::lit
 
 // The engine's swapchain format: RGBA8_UNORM, swapped to BGRA8 for Vulkan
 // (neo/sys/DeviceManager.h:58, DeviceManager_VK.cpp:1307-1310).
-constexpr auto kSwapchainFormat = vk::Format::eB8G8R8A8Unorm;
+constexpr auto SwapchainFormat = vk::Format::eB8G8R8A8Unorm;
 
 // The physical device a session runs on, and what its VkDevice enables.
 struct GpuChoice

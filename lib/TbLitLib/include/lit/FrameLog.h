@@ -32,7 +32,7 @@ namespace tb::lit
 /**
  * One presented frame in the frame log (C16, LP0 subset). The GPU time comes from the
  * timer-query ring once that frame has finished on the GPU, so a row is complete only
- * kFramesInFlight frames later, or at stop.
+ * FramesInFlight frames later, or at stop.
  */
 struct FrameLogRow
 {

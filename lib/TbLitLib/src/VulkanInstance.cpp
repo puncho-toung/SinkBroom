@@ -24,18 +24,6 @@
 namespace tb::lit
 {
 
-std::vector<const char*> requiredInstanceExtensions(const bool validation)
-{
-  // The engine also asks for VK_KHR_get_physical_device_properties2 (core since 1.1),
-  // VK_EXT_sampler_filter_minmax (a device extension) and VK_EXT_debug_report (replaced
-  // by debug utils); see mirror.json.
-  if (validation)
-  {
-    return {VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
-  }
-  return {};
-}
-
 void initInstanceDispatcher(const InstanceHandles& handles)
 {
   if (handles.instance != VK_NULL_HANDLE && handles.getInstanceProcAddr != nullptr)

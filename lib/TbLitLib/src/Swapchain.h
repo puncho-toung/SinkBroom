@@ -47,7 +47,7 @@ struct SwapchainGeneration
   std::vector<vk::Image> images;
   // NVRHI handles of the images, released by the render thread while it parks
   std::vector<nvrhi::TextureHandle> imageTextures;
-  // one per frame in flight: frame N reuses frame N - kFramesInFlight's, which the
+  // one per frame in flight: frame N reuses frame N - FramesInFlight's, which the
   // render thread has waited for
   std::vector<vk::Semaphore> acquireSemaphores;
   // one per image: an image is acquired again only after its last present has waited

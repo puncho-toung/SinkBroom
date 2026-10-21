@@ -93,7 +93,7 @@ Result<std::unique_ptr<SwapchainGeneration>> createSwapchainGeneration(
 
     const auto formats = spec.physicalDevice.getSurfaceFormatsKHR(spec.surface);
     const auto format = std::ranges::find_if(
-      formats, [](const auto& f) { return f.format == kSwapchainFormat; });
+      formats, [](const auto& f) { return f.format == SwapchainFormat; });
     if (format == formats.end())
     {
       return Error{"This window cannot show B8G8R8A8_UNORM images"};
@@ -159,7 +159,7 @@ Result<std::unique_ptr<SwapchainGeneration>> createSwapchainGeneration(
       generation->imageTextures.push_back(std::move(texture));
     }
 
-    for (std::size_t i = 0; i < kFramesInFlight; ++i)
+    for (std::size_t i = 0; i < FramesInFlight; ++i)
     {
       generation->acquireSemaphores.push_back(
         spec.device.createSemaphore(vk::SemaphoreCreateInfo{}));
@@ -171,11 +171,6 @@ Result<std::unique_ptr<SwapchainGeneration>> createSwapchainGeneration(
     }
 
     return generation;
-  }
-  catch (const vk::SystemError& e)
-  {
-    destroySwapchainGeneration(spec.device, *generation);
-    return Error{fmt::format("Cannot create the swapchain: {}", e.what())};
   }
   catch (const std::exception& e)
   {

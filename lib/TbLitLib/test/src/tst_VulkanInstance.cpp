@@ -21,8 +21,6 @@
 
 #include <vulkan/vulkan.hpp>
 
-#include <string_view>
-
 #include <catch2/catch_test_macros.hpp>
 
 namespace tb::lit
@@ -30,15 +28,6 @@ namespace tb::lit
 
 TEST_CASE("VulkanInstance")
 {
-  SECTION("requiredInstanceExtensions")
-  {
-    CHECK(requiredInstanceExtensions(false).empty());
-
-    const auto withValidation = requiredInstanceExtensions(true);
-    REQUIRE(withValidation.size() == 1u);
-    CHECK(std::string_view{withValidation[0]} == VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-  }
-
   SECTION("initInstanceDispatcher")
   {
     // without an instance it loads nothing and calls nothing

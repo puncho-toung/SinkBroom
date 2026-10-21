@@ -29,7 +29,7 @@ namespace
 {
 
 // rows are written out once this much is buffered (about 800 frames)
-constexpr auto kWriteThreshold = std::size_t{64 * 1024};
+constexpr auto WriteThreshold = std::size_t{64 * 1024};
 
 } // namespace
 
@@ -87,7 +87,7 @@ void FrameLogWriter::append(const FrameLogRow& row)
   }
 
   m_buffer += formatFrameLogRow(row);
-  if (m_buffer.size() >= kWriteThreshold)
+  if (m_buffer.size() >= WriteThreshold)
   {
     writeBuffer();
   }

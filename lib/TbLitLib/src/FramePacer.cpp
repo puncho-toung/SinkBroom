@@ -17,9 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "lit/FramePacing.h"
-
-#include <algorithm>
+#include "lit/FramePacer.h"
 
 namespace tb::lit
 {
@@ -61,14 +59,6 @@ void FramePacer::frameStarted(const FrameClock::time_point now)
 void FramePacer::frameSkipped()
 {
   m_pending = true;
-}
-
-std::array<float, 4> clearColorFor(const vm::vec3f& direction)
-{
-  const auto channel = [](const float d) {
-    return std::clamp(d * 0.5f + 0.5f, 0.0f, 1.0f);
-  };
-  return {channel(direction.x()), channel(direction.y()), channel(direction.z()), 1.0f};
 }
 
 } // namespace tb::lit

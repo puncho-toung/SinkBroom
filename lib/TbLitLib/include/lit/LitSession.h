@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "base/Macros.h"
 #include "base/Result.h"
 #include "lit/VulkanInstance.h"
 
@@ -111,12 +112,17 @@ struct TeardownReport
 
 // §3.1: the longest park() waits; the plan's bound is the current pass plus two frames in
 // flight, about 250 ms in a settled frame
-constexpr auto kParkTimeout = std::chrono::milliseconds{500};
+constexpr auto ParkTimeout = std::chrono::milliseconds{500};
+
+class GpuDevice;
+class RenderThread;
+class SessionEvents;
 
 /**
  * Everything a running preview owns below Qt (C18, D34): the VkDevice, the NVRHI device,
  * the swapchain generations, the render thread and the frame log. The instance and the
- * surface belong to the caller. Nothing in it is static.
+ * surface belong to the caller. Nothing in it is static. Its parts live in TbLitLib's
+ * sources, so that vulkan.hpp and NVRHI stay out of TbUiLib.
  *
  * Threads (C20): the render thread alone opens, records and executes command lists and
  * collects garbage. The GUI thread creates and destroys swapchains only while the render
@@ -124,6 +130,19 @@ constexpr auto kParkTimeout = std::chrono::milliseconds{500};
  */
 class LitSession
 {
+private:
+  SessionOptions m_options;
+  // declared before the parts that post through it
+  std::unique_ptr<SessionEvents> m_events;
+  std::unique_ptr<GpuDevice> m_device;
+  std::unique_ptr<RenderThread> m_renderThread;
+  std::uint64_t m_swapchainCount = 0;
+
+  bool m_renderThreadStopped = false;
+  bool m_gpuReleased = false;
+  bool m_vkDeviceDestroyed = false;
+  TeardownReport m_report;
+
 public:
   /**
    * Phase B of Start (§3.1 steps 4-7): picks the physical device that presents to
@@ -141,11 +160,8 @@ public:
     EventSink eventSink,
     std::uint64_t generation);
 
-  // Runs every teardown step that has not run yet.
+  // Runs every teardown step that has not run.
   ~LitSession();
-
-  LitSession(const LitSession&) = delete;
-  LitSession& operator=(const LitSession&) = delete;
 
   std::uint64_t generation() const;
   // the physical device's name
@@ -170,7 +186,7 @@ public:
    * it is still inside a present that may need this thread's message loop; the request
    * stays, and SessionEvent::Parked arrives when it parks (check isParked()).
    */
-  bool park(std::chrono::milliseconds timeout = kParkTimeout);
+  bool park(std::chrono::milliseconds timeout = ParkTimeout);
   bool isParked() const;
   // Destroys the swapchain and its semaphores; the render thread has released the
   // wrappers. Does nothing unless parked or stopped.
@@ -227,10 +243,15 @@ public:
   bool deviceLost() const;
 
 private:
-  struct Impl;
-  explicit LitSession(std::unique_ptr<Impl> impl);
+  LitSession(SessionOptions options, EventSink eventSink, std::uint64_t generation);
 
-  std::unique_ptr<Impl> m_impl;
+  Result<void> start(
+    const InstanceHandles& instance,
+    VkSurfaceKHR surface,
+    std::uint32_t width,
+    std::uint32_t height);
+
+  deleteCopyAndMove(LitSession);
 };
 
 } // namespace tb::lit

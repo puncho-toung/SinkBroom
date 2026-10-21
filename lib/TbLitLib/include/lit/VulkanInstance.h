@@ -41,13 +41,6 @@ struct InstanceHandles
   std::vector<std::string> enabledExtensions;
 };
 
-/**
- * The instance extensions a session asks for, beyond the surface extensions that Qt adds
- * itself: VK_EXT_debug_utils with validation, nothing otherwise. An extension the loader
- * lacks is simply not enabled (QVulkanInstance::setExtensions ignores it).
- */
-std::vector<const char*> requiredInstanceExtensions(bool validation);
-
 // Loads vulkan.hpp's default dispatcher for this instance; done on every Start (R4-2.22).
 void initInstanceDispatcher(const InstanceHandles& handles);
 

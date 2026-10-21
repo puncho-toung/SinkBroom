@@ -189,7 +189,15 @@ public:
     auto supported = std::vector<VkExtensionProperties>(count);
     enumerateExtensions(nullptr, &count, supported.data());
 
-    auto wanted = requiredInstanceExtensions(validation);
+    // what the session needs beyond the surface: the debug messenger with validation; the
+    // engine also asks for VK_KHR_get_physical_device_properties2 (core since 1.1),
+    // VK_EXT_sampler_filter_minmax (a device extension) and VK_EXT_debug_report (replaced
+    // by debug utils), see mirror.json
+    auto wanted = std::vector<const char*>{};
+    if (validation)
+    {
+      wanted.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    }
     if (surfaceExtensions)
     {
       wanted.push_back(VK_KHR_SURFACE_EXTENSION_NAME);

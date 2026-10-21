@@ -27,10 +27,10 @@ namespace
 {
 
 // the engine's swapChainBufferCount default, NUM_FRAME_DATA (neo/idlib/precompiled.h:95)
-constexpr auto kEngineSwapchainImageCount = std::uint32_t{3};
+constexpr auto EngineSwapchainImageCount = std::uint32_t{3};
 
 // Vulkan's value of currentExtent for a surface whose size the swapchain decides
-constexpr auto kUndefinedExtent = std::uint32_t{0xFFFFFFFF};
+constexpr auto UndefinedExtent = std::uint32_t{0xFFFFFFFF};
 
 } // namespace
 
@@ -52,7 +52,7 @@ std::optional<VkExtent2D> chooseSwapchainExtent(
   const std::uint32_t height)
 {
   auto extent = capabilities.currentExtent;
-  if (extent.width == kUndefinedExtent || extent.height == kUndefinedExtent)
+  if (extent.width == UndefinedExtent || extent.height == UndefinedExtent)
   {
     // clamp only a non-zero size: a zero size stays zero and means "wait"
     extent.width =
@@ -82,7 +82,7 @@ std::optional<VkExtent2D> chooseSwapchainExtent(
 
 std::uint32_t chooseSwapchainImageCount(const VkSurfaceCapabilitiesKHR& capabilities)
 {
-  auto count = std::max(kEngineSwapchainImageCount, capabilities.minImageCount);
+  auto count = std::max(EngineSwapchainImageCount, capabilities.minImageCount);
   if (capabilities.maxImageCount > 0)
   {
     count = std::min(count, capabilities.maxImageCount);

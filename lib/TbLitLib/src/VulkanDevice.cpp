@@ -37,18 +37,18 @@ namespace
 {
 
 // enabledExtensions.device (:232-235); the swapchain only when presenting
-constexpr auto kSwapchainExtension = std::string_view{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-constexpr auto kRequiredExtensions = std::array<std::string_view, 1>{
+constexpr auto SwapchainExtension = std::string_view{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+constexpr auto RequiredExtensions = std::array<std::string_view, 1>{
   VK_KHR_MAINTENANCE1_EXTENSION_NAME,
 };
 
 // optionalExtensions.device (:256-274), kept where NVRHI or the plan uses them:
 // synchronization2 switches NVRHI's barriers to vkCmdPipelineBarrier2 as in the game
 // (nvrhi vulkan-state-tracking.cpp:345), memory_budget is the VRAM budget's source (S9)
-constexpr auto kSynchronization2Extension =
+constexpr auto Synchronization2Extension =
   std::string_view{VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME};
-constexpr auto kOptionalExtensions = std::array<std::string_view, 2>{
-  kSynchronization2Extension,
+constexpr auto OptionalExtensions = std::array<std::string_view, 2>{
+  Synchronization2Extension,
   VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,
 };
 
@@ -60,7 +60,7 @@ struct CoreFeature
 
 // features createDevice sets to true (:1002-1011); the engine checks the first two in
 // pickPhysicalDevice (:688-699), the others fail vkCreateDevice when missing
-constexpr auto kRequiredCoreFeatures = std::array<CoreFeature, 5>{{
+constexpr auto RequiredCoreFeatures = std::array<CoreFeature, 5>{{
   {"samplerAnisotropy", &vk::PhysicalDeviceFeatures::samplerAnisotropy},
   {"textureCompressionBC", &vk::PhysicalDeviceFeatures::textureCompressionBC},
   {"shaderImageGatherExtended", &vk::PhysicalDeviceFeatures::shaderImageGatherExtended},
@@ -76,7 +76,7 @@ struct Vulkan12Feature
 
 // VkPhysicalDeviceVulkan12Features set to true (:1013-1019); timelineSemaphore is what
 // NVRHI's queues track submissions with
-constexpr auto kRequiredVulkan12Features = std::array<Vulkan12Feature, 6>{{
+constexpr auto RequiredVulkan12Features = std::array<Vulkan12Feature, 6>{{
   {"descriptorIndexing", &vk::PhysicalDeviceVulkan12Features::descriptorIndexing},
   {"runtimeDescriptorArray", &vk::PhysicalDeviceVulkan12Features::runtimeDescriptorArray},
   {"descriptorBindingPartiallyBound",
@@ -145,21 +145,21 @@ Inspection inspect(const vk::PhysicalDevice device, const vk::SurfaceKHR surface
       problems.push_back(fmt::format("missing {}", name));
     }
   };
-  for (const auto name : kRequiredExtensions)
+  for (const auto name : RequiredExtensions)
   {
     require(name);
   }
   if (surface)
   {
-    require(kSwapchainExtension);
+    require(SwapchainExtension);
   }
-  for (const auto name : kOptionalExtensions)
+  for (const auto name : OptionalExtensions)
   {
     if (contains(available, name))
     {
       choice.deviceExtensions.emplace_back(name);
       choice.synchronization2 =
-        choice.synchronization2 || name == kSynchronization2Extension;
+        choice.synchronization2 || name == Synchronization2Extension;
     }
   }
 
@@ -182,7 +182,7 @@ Inspection inspect(const vk::PhysicalDevice device, const vk::SurfaceKHR surface
   }
   choice.supportedFeatures = features2.features;
 
-  for (const auto& feature : kRequiredCoreFeatures)
+  for (const auto& feature : RequiredCoreFeatures)
   {
     if (!(features2.features.*feature.member))
     {
@@ -191,7 +191,7 @@ Inspection inspect(const vk::PhysicalDevice device, const vk::SurfaceKHR surface
   }
   if (hasVulkan12)
   {
-    for (const auto& feature : kRequiredVulkan12Features)
+    for (const auto& feature : RequiredVulkan12Features)
     {
       if (!(vulkan12Features.*feature.member))
       {
@@ -203,7 +203,7 @@ Inspection inspect(const vk::PhysicalDevice device, const vk::SurfaceKHR surface
     if (choice.synchronization2 && !synchronization2Features.synchronization2)
     {
       choice.synchronization2 = false;
-      std::erase(choice.deviceExtensions, std::string{kSynchronization2Extension});
+      std::erase(choice.deviceExtensions, std::string{Synchronization2Extension});
     }
   }
 
@@ -251,7 +251,7 @@ Inspection inspect(const vk::PhysicalDevice device, const vk::SurfaceKHR surface
   {
     const auto formats = device.getSurfaceFormatsKHR(surface);
     if (std::ranges::none_of(
-          formats, [](const auto& format) { return format.format == kSwapchainFormat; }))
+          formats, [](const auto& format) { return format.format == SwapchainFormat; }))
     {
       problems.push_back("cannot present B8G8R8A8_UNORM images to this window");
     }

@@ -17,9 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "lit/FramePacing.h"
-
-#include <set>
+#include "lit/FramePacer.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -35,7 +33,7 @@ TEST_CASE("FramePacer")
 
   SECTION("the cap is 30 Hz")
   {
-    CHECK(kMinFrameInterval == std::chrono::nanoseconds{33'333'334});
+    CHECK(MinFrameInterval == std::chrono::nanoseconds{33'333'334});
   }
 
   SECTION("idle means no frame")
@@ -76,7 +74,7 @@ TEST_CASE("FramePacer")
     pacer.trigger();
     const auto next = pacer.nextFrameTime(true);
     REQUIRE(next);
-    CHECK(*next == t0 + kMinFrameInterval);
+    CHECK(*next == t0 + MinFrameInterval);
     CHECK(*next > t0 + 10ms);
 
     // many triggers before the slot still give one frame
@@ -109,7 +107,7 @@ TEST_CASE("FramePacer")
     CHECK(pacer.pending());
     const auto next = pacer.nextFrameTime(true);
     REQUIRE(next);
-    CHECK(*next == t0 + kMinFrameInterval);
+    CHECK(*next == t0 + MinFrameInterval);
   }
 
   SECTION("a trigger long after the last frame draws at once")
@@ -120,77 +118,6 @@ TEST_CASE("FramePacer")
     const auto next = pacer.nextFrameTime(true);
     REQUIRE(next);
     CHECK(*next <= t0 + 5s);
-  }
-}
-
-TEST_CASE("FramePacing")
-{
-  SECTION("timerQuerySlot")
-  {
-    static_assert(kFramesInFlight == 2);
-
-    SECTION("one pass: frames alternate between two queries")
-    {
-      CHECK(timerQuerySlot(0, 0, 1) == 0u);
-      CHECK(timerQuerySlot(1, 0, 1) == 1u);
-      CHECK(timerQuerySlot(2, 0, 1) == 0u);
-      CHECK(timerQuerySlot(7, 0, 1) == 1u);
-    }
-
-    SECTION("frame N reuses frame N - kFramesInFlight's queries")
-    {
-      for (std::uint64_t frame = kFramesInFlight; frame < 20; ++frame)
-      {
-        for (std::size_t pass = 0; pass < 3; ++pass)
-        {
-          CHECK(
-            timerQuerySlot(frame, pass, 3)
-            == timerQuerySlot(frame - kFramesInFlight, pass, 3));
-        }
-      }
-    }
-
-    SECTION("the ring holds passes × frames in flight distinct queries")
-    {
-      constexpr auto passes = std::size_t{3};
-      auto slots = std::set<std::size_t>{};
-      for (std::uint64_t frame = 0; frame < kFramesInFlight; ++frame)
-      {
-        for (std::size_t pass = 0; pass < passes; ++pass)
-        {
-          const auto slot = timerQuerySlot(frame, pass, passes);
-          CHECK(slot < passes * kFramesInFlight);
-          slots.insert(slot);
-        }
-      }
-      CHECK(slots.size() == passes * kFramesInFlight);
-    }
-
-    SECTION("large frame indices")
-    {
-      CHECK(timerQuerySlot(0xFFFFFFFFFFFFFFFFull, 0, 1) == 1u);
-    }
-  }
-
-  SECTION("volatileBufferMaxVersions")
-  {
-    // writes per frame × frames in flight plus a margin (R5.22)
-    CHECK(volatileBufferMaxVersions(1) > 2u);
-    CHECK(volatileBufferMaxVersions(100) >= 200u);
-    CHECK(volatileBufferMaxVersions(100) < 300u);
-  }
-
-  SECTION("clearColorFor")
-  {
-    CHECK(
-      clearColorFor(vm::vec3f{1, 0, 0}) == std::array<float, 4>{1.0f, 0.5f, 0.5f, 1.0f});
-    CHECK(
-      clearColorFor(vm::vec3f{0, -1, 0}) == std::array<float, 4>{0.5f, 0.0f, 0.5f, 1.0f});
-    CHECK(
-      clearColorFor(vm::vec3f{0, 0, 1}) == std::array<float, 4>{0.5f, 0.5f, 1.0f, 1.0f});
-    // out-of-range input is clamped
-    CHECK(
-      clearColorFor(vm::vec3f{3, -3, 0}) == std::array<float, 4>{1.0f, 0.0f, 0.5f, 1.0f});
   }
 }
 

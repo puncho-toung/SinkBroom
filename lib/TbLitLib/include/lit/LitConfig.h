@@ -26,12 +26,12 @@ namespace tb::lit
 {
 
 // D35: frames in flight; before recording frame N the render thread waits on frame N - 2
-constexpr auto kFramesInFlight = std::size_t{2};
+constexpr auto FramesInFlight = std::size_t{2};
 
 // D48: the longest wait for a swapchain image; a timeout skips the frame until next time
-constexpr auto kAcquireTimeout = std::chrono::milliseconds{50};
+constexpr auto AcquireTimeout = std::chrono::milliseconds{50};
 
 // §3.1: the most frames per second (Hz) while the camera moves
-constexpr auto kMovingCameraFrameRate = 30;
+constexpr auto MovingCameraFrameRate = 30;
 
 } // namespace tb::lit
