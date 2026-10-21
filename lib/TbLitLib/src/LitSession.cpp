@@ -53,6 +53,10 @@ constexpr auto kTimerQueryCount = kPassCount * kFramesInFlight;
 constexpr auto kAcquireTimeoutNs = std::uint64_t(
   std::chrono::duration_cast<std::chrono::nanoseconds>(kAcquireTimeout).count());
 
+// how often the render thread looks at a frame's event query while it waits for the GPU;
+// a stop or a park ends the wait at once
+constexpr auto kEventPollInterval = std::chrono::milliseconds{1};
+
 void post(
   const EventSink& sink,
   const SessionEvent event,
@@ -207,6 +211,8 @@ struct LitSession::Impl
   // buffer; a later one sizes maxVersions with volatileBufferMaxVersions (R5.22).
   nvrhi::CommandListHandle commandList;
   std::array<nvrhi::EventQueryHandle, kFramesInFlight> frameEvents;
+  // the slot's event query was set by a submitted frame and not waited for yet
+  std::array<bool, kFramesInFlight> frameEventSet = {};
   std::array<TimerSlot, kTimerQueryCount> timers;
   std::uint64_t frameIndex = 0;
   std::uint64_t framesSkipped = 0;
@@ -229,6 +235,7 @@ struct LitSession::Impl
   bool cameraSet = false;
   CameraState camera;
   FramePacer pacer;
+  std::function<void()> beforePresentHook;
 
   // ----- GUI thread -----
   std::thread thread;
@@ -594,8 +601,15 @@ struct LitSession::Impl
       // frame N - kFramesInFlight has finished: its event query, acquire semaphore and
       // timer queries are free again (D35)
       const auto slot = std::size_t(frameIndex % kFramesInFlight);
-      device->waitEventQuery(frameEvents[slot]);
-      device->resetEventQuery(frameEvents[slot]);
+      if (frameEventSet[slot])
+      {
+        if (!waitForFrameEvent(slot))
+        {
+          return FrameOutcome::Skipped;
+        }
+        device->resetEventQuery(frameEvents[slot]);
+        frameEventSet[slot] = false;
+      }
       resolveTimers(slot);
 
       // the pass boundary before LP0's one pass: park and stop are honoured before an
@@ -691,13 +705,26 @@ struct LitSession::Impl
         throw vk::DeviceLostError{"NVRHI reported an error in executeCommandLists"};
       }
       device->setEventQuery(frameEvents[slot], nvrhi::CommandQueue::Graphics);
+      frameEventSet[slot] = true;
       timer.pending = bool(timer.query);
       const auto cpuRecordMs = millisecondsSince(recordStart);
       const auto frame = frameIndex++;
       idleWorkPending = true;
 
+      runBeforePresentHook();
+
       auto shown = true;
-      if (target)
+      if (target && stopOrParkRequested())
+      {
+        // a pass boundary: a stop or park asked for during the frame is honoured before
+        // the present, which may wait for messages that the GUI thread answers only
+        // between its waits (R5.18). The acquired image is not shown, so the generation
+        // is replaced before anything is drawn again.
+        shown = false;
+        target->stale = true;
+        requestRecreate(*target, "a stop or park came before the present");
+      }
+      else if (target)
       {
         const auto present = vk::PresentInfoKHR{}
                                .setWaitSemaphores(target->presentSemaphores[imageIndex])
@@ -782,6 +809,35 @@ struct LitSession::Impl
     {
       markFailed(e.what());
       return FrameOutcome::Stopped;
+    }
+  }
+
+  // Waits until the slot's frame has finished on the GPU; false when a stop or a park
+  // came first. NVRHI's waitEventQuery would wait without a bound.
+  bool waitForFrameEvent(const std::size_t slot)
+  {
+    while (!device->pollEventQuery(frameEvents[slot]))
+    {
+      auto lock = std::unique_lock{mutex};
+      if (wake.wait_for(
+            lock, kEventPollInterval, [&] { return stopRequested || parkRequested; }))
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void runBeforePresentHook()
+  {
+    auto hook = std::function<void()>{};
+    {
+      const auto lock = std::scoped_lock{mutex};
+      hook = beforePresentHook;
+    }
+    if (hook)
+    {
+      hook();
     }
   }
 
@@ -969,6 +1025,22 @@ struct LitSession::Impl
   // ===== teardown (§3.1, C18), GUI thread =====
 
   // step 1
+  void requestStop()
+  {
+    {
+      const auto lock = std::scoped_lock{mutex};
+      stopRequested = true;
+    }
+    wake.notify_all();
+  }
+
+  bool waitForRenderThread(const std::chrono::milliseconds timeout)
+  {
+    auto lock = std::unique_lock{mutex};
+    return !thread.joinable()
+           || parkedChanged.wait_for(lock, timeout, [&] { return threadExited; });
+  }
+
   void stopRenderThread()
   {
     if (threadStopped)
@@ -976,21 +1048,11 @@ struct LitSession::Impl
       return;
     }
     threadStopped = true;
-    {
-      const auto lock = std::scoped_lock{mutex};
-      stopRequested = true;
-    }
-    wake.notify_all();
+    requestStop();
+    // never detached: the thread uses this object until it exits
     if (thread.joinable())
     {
-      try
-      {
-        thread.join();
-      }
-      catch (const std::system_error&)
-      {
-        thread.detach();
-      }
+      thread.join();
     }
   }
 
@@ -1246,6 +1308,16 @@ void LitSession::unpark()
   m_impl->wake.notify_all();
 }
 
+void LitSession::requestStop()
+{
+  m_impl->requestStop();
+}
+
+bool LitSession::waitForRenderThread(const std::chrono::milliseconds timeout)
+{
+  return m_impl->waitForRenderThread(timeout);
+}
+
 void LitSession::stopRenderThread()
 {
   m_impl->stopRenderThread();
@@ -1264,6 +1336,12 @@ void LitSession::destroyVkDevice()
 void LitSession::debugInjectDeviceLost()
 {
   m_impl->injectDeviceLost = true;
+}
+
+void LitSession::debugSetBeforePresentHook(std::function<void()> hook)
+{
+  const auto lock = std::scoped_lock{m_impl->mutex};
+  m_impl->beforePresentHook = std::move(hook);
 }
 
 std::uint32_t LitSession::lastDeviceReleaseCount() const

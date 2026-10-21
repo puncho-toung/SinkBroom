@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <QObject>
 #include <QPointer>
 #include <QSize>
 
@@ -28,6 +29,7 @@
 #include "lit/VulkanInstance.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -41,24 +43,25 @@ class LitPreviewWindow;
 struct LitPreviewDiagnostics;
 
 /**
- * The Qt half of one lit preview session (§3.1, C18): the QVulkanInstance, the window and
- * its container, and the LitSession, with the generation that every message of the
- * session carries (D53). GUI thread only.
+ * The Qt half of one lit preview session: the QVulkanInstance, the window and its
+ * container, and the LitSession, with the generation that every message of the session
+ * carries. GUI thread only. Private to TbUiLib: it needs TbLitLib's headers.
  *
- * Start runs in two phases (D46). start() is phase A: the instance with the dispatcher,
- * then a new window and its container, which the caller shows. Phase B runs on the
- * window's first expose with a non-zero size: LitSession::create on the window's surface,
- * then the exposure and the camera.
+ * Start runs in two phases. start() is phase A: the instance with the dispatcher, then a
+ * new window and its container, which the caller shows. Phase B runs on the window's
+ * first expose with a non-zero size, because only then does the window have a surface:
+ * LitSession::create on it, then the exposure and the camera.
  *
- * The surface handshake (§3.1, D49): a resize, a DPR or screen change and an
- * out-of-date swapchain park the render thread, replace the swapchain and unpark it; a
- * render thread that does not park in time is still presenting, so the rest waits for
- * SessionEvent::Parked. SurfaceAboutToBeDestroyed cannot wait: Qt destroys the surface
- * when it returns, so the swapchain goes first, and a render thread that never parks is
- * stopped there.
+ * The surface handshake: a resize, a DPR or screen change and an out-of-date swapchain
+ * park the render thread, replace the swapchain and unpark it. A render thread that does
+ * not park in time is still presenting, so the rest waits for SessionEvent::Parked, and a
+ * park that is no longer needed when it arrives is released. SurfaceAboutToBeDestroyed
+ * cannot wait: Qt destroys the surface when it returns, so the swapchain goes first.
  *
  * Teardown runs these steps in this order, each once, whatever ran of the start:
- * 1. LitSession::stopRenderThread
+ * 1. stop the render thread: park it, then stop and join it, while the window system's
+ *    sent messages are serviced, because a present may wait for one (no bound on the
+ *    join: a thread that still runs uses the session, so the wait goes on and says so)
  * 2. LitSession::releaseGpuObjects
  * 3. delete the window container, which destroys the window and Qt's VkSurfaceKHR
  * 4. LitSession::destroyVkDevice
@@ -66,12 +69,19 @@ struct LitPreviewDiagnostics;
  * 6. reset the dispatcher
  * The window is detached before the first step.
  *
- * Nothing here stops the session itself: a failure is posted to the event sink as
- * SessionEvent::Error, so that the owner's Stop never deletes the window inside one of
- * its own event handlers.
+ * While the host services sent messages it is busy: Qt code that runs then and calls back
+ * into the host is deferred to the event loop, and an owner that goes away meanwhile
+ * abandons the host, which ends itself once the wait is over. Nothing here stops the
+ * session itself: a failure is queued as SessionEvent::Error, so that the owner's Stop
+ * never deletes the window inside one of its own event handlers.
  */
-class LitSessionHost
+class LitSessionHost : public QObject
 {
+public:
+  // receives Ready, Warning, DeviceLost and Error on the GUI thread, queued
+  using EventHandler = std::function<void(
+    std::uint64_t generation, lit::SessionEvent event, const std::string& message)>;
+
 private:
   enum class TeardownStep
   {
@@ -84,9 +94,11 @@ private:
     DispatcherReset,
   };
 
+  class BusyScope;
+
   lit::SessionOptions m_options;
   std::uint64_t m_generation;
-  lit::EventSink m_eventSink;
+  EventHandler m_eventHandler;
   LitPreviewDiagnostics& m_diagnostics;
 
   std::unique_ptr<QVulkanInstance> m_instance;
@@ -102,9 +114,20 @@ private:
   QSize m_swapchainSize;
   // the swapchain must be replaced: out of date, or a new screen or surface
   bool m_swapchainStale = false;
+  // a park was asked for and not released yet
+  bool m_parkPending = false;
+  std::uint64_t m_parkTimeouts = 0;
   bool m_failed = false;
   bool m_reconciling = false;
   bool m_reconcileAgain = false;
+
+  // inside a wait that services sent messages
+  bool m_busy = false;
+  bool m_reconcileDeferred = false;
+  bool m_screenChangeDeferred = false;
+  bool m_abandoned = false;
+  // the render thread did not stop within StopWarningTime
+  bool m_stopOverran = false;
 
   TeardownStep m_teardownStep = TeardownStep::None;
 
@@ -112,9 +135,9 @@ public:
   LitSessionHost(
     lit::SessionOptions options,
     std::uint64_t generation,
-    lit::EventSink eventSink,
+    EventHandler eventHandler,
     LitPreviewDiagnostics& diagnostics);
-  ~LitSessionHost();
+  ~LitSessionHost() override;
 
   std::uint64_t generation() const;
 
@@ -131,9 +154,19 @@ public:
   QWidget* container() const;
   std::uint64_t framesPresented() const;
   void debugInjectDeviceLost();
+  // the session after phase B, else null
+  lit::LitSession* session() const;
 
-  // Kept for phase B, and passed on once it has run (§3.2).
+  // Kept for phase B, and passed on once it has run.
   void setCamera(const lit::CameraState& camera);
+
+  /**
+   * Whether the host is inside a wait that services the window system's sent messages.
+   * The owner must not tear it down then; it defers its Stop, or abandons the host if it
+   * goes away itself.
+   */
+  bool busy() const;
+  void abandon();
 
   // Window events.
 
@@ -143,16 +176,12 @@ public:
   void screenChanged();
   void updateRequested();
 
-  // Session events, queued to the GUI thread.
-
-  void swapchainOutOfDate();
-  void parked();
-
   // Runs every teardown step that has not run.
   void teardown();
 
 private:
   void runTeardownThrough(TeardownStep last);
+  void stopRenderThread();
   void recordTeardown();
 
   void reconcile();
@@ -160,7 +189,12 @@ private:
   void createSession(QSize size);
   void replaceSwapchain(QSize size);
   bool parkServicingSentMessages();
+  void afterBusy();
   QSize pixelSize() const;
+
+  lit::EventSink eventSink();
+  void sessionEventReceived(
+    std::uint64_t generation, lit::SessionEvent event, const std::string& message);
   void fail(std::string reason);
 
   deleteCopyAndMove(LitSessionHost);

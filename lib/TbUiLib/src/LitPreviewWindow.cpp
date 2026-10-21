@@ -25,7 +25,7 @@
 #include <QResizeEvent>
 #include <QScreen>
 
-#include "ui/LitSessionHost.h"
+#include "LitSessionHost.h"
 
 namespace tb::ui
 {

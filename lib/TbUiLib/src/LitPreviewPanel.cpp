@@ -21,12 +21,13 @@
 
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMetaObject>
 #include <QPushButton>
 #include <QStackedLayout>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWindow>
 
+#include "LitSessionHost.h"
 #include "base/Logger.h"
 #include "base/PreferenceManager.h"
 #include "gl/Camera.h"
@@ -36,7 +37,6 @@
 #include "mdl/GameInfo.h"
 #include "mdl/Map.h"
 #include "ui/LitPreviewWindow.h"
-#include "ui/LitSessionHost.h"
 #include "ui/MapDocument.h"
 #include "ui/QPathUtils.h"
 #include "ui/ViewConstants.h"
@@ -49,6 +49,12 @@ namespace tb::ui
 {
 namespace
 {
+
+using namespace std::chrono_literals;
+
+// a Stop that arrives while the session host services the window system's messages is
+// retried this often, from the event loop
+constexpr auto DeferredStopInterval = 10ms;
 
 // D53: the generation of the last session started in this process; GUI thread only
 auto lastGeneration = std::uint64_t{0};
@@ -152,22 +158,17 @@ void LitPreviewPanel::start()
     return;
   }
 
-  // R5.17: messages are queued to this panel, which drops those of other generations;
-  // the session's threads are joined before the panel goes, so the panel outlives them
-  auto eventSink = [this](
-                     const lit::SessionEvent event,
-                     std::string message,
-                     const std::uint64_t generation) {
-    QMetaObject::invokeMethod(
-      this,
-      [this, event, message = std::move(message), generation] {
-        sessionEventReceived(generation, event, message);
-      },
-      Qt::QueuedConnection);
+  // the host queues the session's messages to itself and passes them on while this panel
+  // owns it; the generation is checked again here (R5.17)
+  auto eventHandler = [this](
+                        const std::uint64_t generation,
+                        const lit::SessionEvent event,
+                        const std::string& message) {
+    sessionEventReceived(generation, event, message);
   };
 
   auto host = std::make_unique<LitSessionHost>(
-    sessionOptions(), ++lastGeneration, std::move(eventSink), diagnostics());
+    sessionOptions(), ++lastGeneration, std::move(eventHandler), diagnostics());
   auto container = host->start(*m_surfacePage);
   if (container.is_error())
   {
@@ -265,6 +266,11 @@ void LitPreviewPanel::debugInjectDeviceLost()
   {
     m_host->debugInjectDeviceLost();
   }
+}
+
+lit::LitSession* LitPreviewPanel::sessionForTesting() const
+{
+  return m_host ? m_host->session() : nullptr;
 }
 
 QWindow* LitPreviewPanel::surfaceWindow() const
@@ -421,10 +427,8 @@ void LitPreviewPanel::sessionEventReceived(
     logger.info() << message;
     break;
   case lit::SessionEvent::Parked:
-    m_host->parked();
-    break;
   case lit::SessionEvent::SwapchainOutOfDate:
-    m_host->swapchainOutOfDate();
+    // the host handles these itself
     break;
   case lit::SessionEvent::Warning:
     logger.warn() << "Lit preview: " << message;
@@ -439,6 +443,17 @@ void LitPreviewPanel::sessionEventReceived(
 
 void LitPreviewPanel::stopSession(QString reason)
 {
+  if (m_host && m_host->busy())
+  {
+    // the host waits inside one of its own frames and services the window system, which
+    // brought this call here; it is torn down from the event loop instead
+    QTimer::singleShot(
+      DeferredStopInterval, this, [this, reason = std::move(reason)]() mutable {
+        stopSession(std::move(reason));
+      });
+    return;
+  }
+
   if (m_host)
   {
     teardownSession();
@@ -449,14 +464,25 @@ void LitPreviewPanel::stopSession(QString reason)
 
 void LitPreviewPanel::teardownSession()
 {
-  if (m_host)
+  if (!m_host)
+  {
+    return;
+  }
+
+  if (m_host->busy())
+  {
+    // only from the destructor: the host ends itself once its wait is over
+    m_host->abandon();
+    static_cast<void>(m_host.release());
+  }
+  else
   {
     // R5.17: from here on, every message of this session is dropped
     auto host = std::move(m_host);
     host->teardown();
     host.reset();
-    releaseSession(*this);
   }
+  releaseSession(*this);
 }
 
 void LitPreviewPanel::updateStartPage()

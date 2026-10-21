@@ -47,8 +47,9 @@ class Camera;
 
 namespace tb::lit
 {
+class LitSession;
 enum class SessionEvent;
-}
+} // namespace tb::lit
 
 namespace tb::ui
 {
@@ -181,6 +182,8 @@ public:
   std::uint64_t framesPresented() const;
   // the running session's render thread throws a device loss at its next frame
   void debugInjectDeviceLost();
+  // the running session once phase B has run, else null
+  lit::LitSession* sessionForTesting() const;
   QWindow* surfaceWindow() const;
   QWidget* surfaceContainer() const;
   static LitPreviewDiagnostics& diagnostics();

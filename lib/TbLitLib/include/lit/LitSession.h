@@ -168,8 +168,15 @@ public:
   // releaseGpuObjects and destroyVkDevice (step 6). Each step runs once and runs the
   // earlier ones first if they have not run.
 
-  // step 1: the stop flag; the render thread stops at the next pass boundary, waits for
-  // the GPU (also when lost, ignoring the result), writes the frame log and is joined
+  // Step 1 comes in parts, so that a GUI thread can keep answering the messages that a
+  // present may send to its window while it waits (R5.18): requestStop sets the stop flag
+  // and returns; the render thread stops at the next pass boundary, which includes the
+  // one before the present, waits for the GPU (also when lost, ignoring the result),
+  // writes the frame log and exits; waitForRenderThread waits up to timeout and returns
+  // whether it has exited. stopRenderThread requests the stop and joins without servicing
+  // anything, for callers without a window, and after waitForRenderThread returned true.
+  void requestStop();
+  bool waitForRenderThread(std::chrono::milliseconds timeout);
   void stopRenderThread();
   // steps 2-5: release every handle, waitForIdle, runGarbageCollection (skipped when
   // lost), the swapchain wrappers, vkDestroySwapchainKHR, the semaphores, the NVRHI
@@ -182,6 +189,12 @@ public:
 
   // the render thread throws vk::DeviceLostError at its next frame
   void debugInjectDeviceLost();
+  /**
+   * Runs on the render thread in every frame after its commands are submitted and before
+   * it presents, until an empty function replaces it: a frame held there is in flight, as
+   * one waiting inside a present would be.
+   */
+  void debugSetBeforePresentHook(std::function<void()> hook);
   // what the NVRHI device's last Release() returned; 0 expected
   std::uint32_t lastDeviceReleaseCount() const;
   std::size_t nvrhiErrorCount() const;

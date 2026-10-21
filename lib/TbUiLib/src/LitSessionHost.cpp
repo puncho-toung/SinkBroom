@@ -17,13 +17,16 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "ui/LitSessionHost.h"
+#include "LitSessionHost.h"
 
 #include <QByteArrayList>
+#include <QMetaObject>
 #include <QVersionNumber>
 #include <QVulkanInstance>
 #include <QWidget>
+#include <QtLogging>
 
+#include "ServiceSentMessages.h"
 #include "ui/LitPreviewPanel.h"
 #include "ui/LitPreviewWindow.h"
 
@@ -34,10 +37,6 @@
 #include <chrono>
 #include <utility>
 #include <variant>
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 namespace tb::ui
 {
@@ -52,6 +51,14 @@ constexpr auto ValidationLayerName = "VK_LAYER_KHRONOS_validation";
 // event loop, which the render thread's present may need; SessionEvent::Parked resumes it
 constexpr auto HandshakeParkTimeout = 100ms;
 
+// the waits that service the window system's sent messages look at the render thread this
+// often
+constexpr auto ServicingInterval = 10ms;
+
+// how long a stop waits for the render thread before it says so; it keeps waiting,
+// because a thread that still runs uses the session
+constexpr auto StopWarningTime = 2000ms;
+
 template <typename T>
 std::string errorMessage(const Result<T>& result)
 {
@@ -60,14 +67,47 @@ std::string errorMessage(const Result<T>& result)
 
 } // namespace
 
+/**
+ * Marks the host busy while it waits and services the window system's sent messages,
+ * which can run Qt code that calls back into the host or its owner. Calls that arrive
+ * meanwhile are deferred (see reconcile, screenChanged and the owner's Stop), and the
+ * outermost scope runs them, from the event loop, once the wait is over.
+ */
+class LitSessionHost::BusyScope
+{
+public:
+  explicit BusyScope(LitSessionHost& host)
+    : m_host{host}
+    , m_outermost{!host.m_busy}
+  {
+    m_host.m_busy = true;
+  }
+
+  ~BusyScope()
+  {
+    if (m_outermost)
+    {
+      m_host.m_busy = false;
+      m_host.afterBusy();
+    }
+  }
+
+  BusyScope(const BusyScope&) = delete;
+  BusyScope& operator=(const BusyScope&) = delete;
+
+private:
+  LitSessionHost& m_host;
+  bool m_outermost;
+};
+
 LitSessionHost::LitSessionHost(
   lit::SessionOptions options,
   const std::uint64_t generation,
-  lit::EventSink eventSink,
+  EventHandler eventHandler,
   LitPreviewDiagnostics& diagnostics)
   : m_options{std::move(options)}
   , m_generation{generation}
-  , m_eventSink{std::move(eventSink)}
+  , m_eventHandler{std::move(eventHandler)}
   , m_diagnostics{diagnostics}
 {
 }
@@ -75,6 +115,25 @@ LitSessionHost::LitSessionHost(
 LitSessionHost::~LitSessionHost()
 {
   teardown();
+}
+
+bool LitSessionHost::busy() const
+{
+  return m_busy;
+}
+
+void LitSessionHost::abandon()
+{
+  // The owner goes while this host waits inside one of its own frames. It ends itself
+  // once that wait is over, and keeps its container until then, out of the owner's
+  // children, so that the window and its surface outlive the swapchain.
+  m_abandoned = true;
+  m_eventHandler = nullptr;
+  if (m_container)
+  {
+    m_container->hide();
+    m_container->setParent(nullptr);
+  }
 }
 
 std::uint64_t LitSessionHost::generation() const
@@ -188,6 +247,11 @@ std::uint64_t LitSessionHost::framesPresented() const
   return m_session ? m_session->framesPresented() : 0;
 }
 
+lit::LitSession* LitSessionHost::session() const
+{
+  return drawing() ? m_session.get() : nullptr;
+}
+
 void LitSessionHost::debugInjectDeviceLost()
 {
   if (m_session)
@@ -224,11 +288,13 @@ void LitSessionHost::surfaceAboutToBeDestroyed()
   {
     m_session->destroySwapchain();
     m_swapchainStale = true;
+    m_parkPending = true;
     return;
   }
 
-  // it never parked: stop it, so that the swapchain is gone before the surface; the
-  // rest of the teardown follows with the owner's Stop
+  // it never parked: stop it, servicing messages while it finishes its frame, so that the
+  // swapchain is gone before the surface; the rest of the teardown follows with the
+  // owner's Stop
   runTeardownThrough(TeardownStep::GpuObjectsReleased);
   fail(
     "The lit preview did not stop drawing before its window's surface was destroyed. "
@@ -239,6 +305,11 @@ void LitSessionHost::screenChanged()
 {
   if (!drawing() || m_failed)
   {
+    return;
+  }
+  if (m_busy)
+  {
+    m_screenChangeDeferred = true;
     return;
   }
 
@@ -264,20 +335,6 @@ void LitSessionHost::updateRequested()
   }
 }
 
-void LitSessionHost::swapchainOutOfDate()
-{
-  if (drawing())
-  {
-    m_swapchainStale = true;
-    reconcile();
-  }
-}
-
-void LitSessionHost::parked()
-{
-  reconcile();
-}
-
 void LitSessionHost::teardown()
 {
   runTeardownThrough(TeardownStep::DispatcherReset);
@@ -301,7 +358,7 @@ void LitSessionHost::runTeardownThrough(const TeardownStep last)
     case TeardownStep::RenderThreadStopped:
       if (m_session)
       {
-        m_session->stopRenderThread();
+        stopRenderThread();
       }
       break;
     case TeardownStep::GpuObjectsReleased:
@@ -358,6 +415,13 @@ void LitSessionHost::reconcile()
     return;
   }
 
+  // never inside a wait that services messages, for example while the surface is going
+  if (m_busy)
+  {
+    m_reconcileDeferred = true;
+    return;
+  }
+
   // a swapchain call may dispatch window messages that come back here
   if (m_reconciling)
   {
@@ -391,16 +455,21 @@ void LitSessionHost::reconcileOnce()
   // R5.25: frames are drawn only while the window can be seen; a hidden window keeps its
   // swapchain until it is shown again
   m_session->setExposed(exposed);
-  if (!exposed)
+  if (
+    exposed
+    && (m_swapchainStale || !m_session->hasSwapchain() || size != m_swapchainSize))
   {
+    replaceSwapchain(size);
     return;
   }
 
-  if (!m_swapchainStale && m_session->hasSwapchain() && size == m_swapchainSize)
+  // Nothing to replace, for example because the size came back before the render thread
+  // parked: a park asked for earlier is released, or the preview would stay frozen.
+  if (m_parkPending)
   {
-    return;
+    m_session->unpark();
+    m_parkPending = false;
   }
-  replaceSwapchain(size);
 }
 
 void LitSessionHost::createSession(const QSize size)
@@ -418,7 +487,7 @@ void LitSessionHost::createSession(const QSize size)
     std::uint32_t(size.width()),
     std::uint32_t(size.height()),
     m_options,
-    m_eventSink,
+    eventSink(),
     m_generation);
   if (result.is_error())
   {
@@ -439,9 +508,12 @@ void LitSessionHost::createSession(const QSize size)
 void LitSessionHost::replaceSwapchain(const QSize size)
 {
   // D49: the swapchain is replaced only while the render thread is parked; if it does not
-  // park in time it is still presenting, so this goes back to the event loop
+  // park in time it is still presenting, so this goes back to the event loop, and the
+  // Parked event or the next window event resumes it
+  m_parkPending = true;
   if (!m_session->park(HandshakeParkTimeout))
   {
+    ++m_parkTimeouts;
     return;
   }
 
@@ -466,25 +538,129 @@ void LitSessionHost::replaceSwapchain(const QSize size)
   m_swapchainSize = size;
   m_swapchainStale = false;
   m_session->unpark();
+  m_parkPending = false;
 }
 
 bool LitSessionHost::parkServicingSentMessages()
 {
+  const auto busy = BusyScope{*this};
   const auto deadline = std::chrono::steady_clock::now() + lit::kParkTimeout;
-  while (!m_session->park(10ms))
+  while (!m_session->park(ServicingInterval))
   {
     if (std::chrono::steady_clock::now() >= deadline)
     {
       return false;
     }
-#ifdef _WIN32
-    // R5.18: a present may wait for a message that the window system sends to this
-    // thread; this delivers sent messages only, posted ones stay queued
-    auto message = MSG{};
-    PeekMessageW(&message, nullptr, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
-#endif
+    // R5.18: a present may wait for a message that the window system sends to this thread
+    serviceSentMessages();
   }
   return true;
+}
+
+void LitSessionHost::stopRenderThread()
+{
+  const auto busy = BusyScope{*this};
+
+  // parked first, so that the render thread is not inside a present that waits for this
+  // thread's messages; one that does not park in time is stopped all the same
+  parkServicingSentMessages();
+
+  m_session->requestStop();
+  const auto start = std::chrono::steady_clock::now();
+  while (!m_session->waitForRenderThread(ServicingInterval))
+  {
+    serviceSentMessages();
+    if (!m_stopOverran && std::chrono::steady_clock::now() - start >= StopWarningTime)
+    {
+      // never detached and never abandoned: it runs on this session's objects
+      m_stopOverran = true;
+      qWarning(
+        "Lit preview: the render thread has not stopped after %lld ms; still waiting",
+        static_cast<long long>(StopWarningTime.count()));
+    }
+  }
+  m_session->stopRenderThread();
+}
+
+void LitSessionHost::afterBusy()
+{
+  if (m_abandoned)
+  {
+    deleteLater();
+    return;
+  }
+
+  // from the event loop, outside the wait that deferred them
+  if (m_screenChangeDeferred)
+  {
+    m_screenChangeDeferred = false;
+    QMetaObject::invokeMethod(this, [this] { screenChanged(); }, Qt::QueuedConnection);
+  }
+  if (m_reconcileDeferred)
+  {
+    m_reconcileDeferred = false;
+    QMetaObject::invokeMethod(this, [this] { reconcile(); }, Qt::QueuedConnection);
+  }
+}
+
+lit::EventSink LitSessionHost::eventSink()
+{
+  // Called on the session's threads, and on this thread inside create, createSwapchain
+  // and the teardown steps; always queued to this host, which outlives the session's
+  // threads, so that no message runs inside the call that sent it. The host's owner sees
+  // a message only while it still owns the host (R5.17).
+  return [this](
+           const lit::SessionEvent event,
+           std::string message,
+           const std::uint64_t generation) {
+    try
+    {
+      QMetaObject::invokeMethod(
+        this,
+        [this, event, message = std::move(message), generation] {
+          sessionEventReceived(generation, event, message);
+        },
+        Qt::QueuedConnection);
+    }
+    catch (...)
+    {
+      // a message that cannot be queued is lost, not the session
+    }
+  };
+}
+
+void LitSessionHost::sessionEventReceived(
+  const std::uint64_t generation,
+  const lit::SessionEvent event,
+  const std::string& message)
+{
+  if (generation != m_generation || m_abandoned)
+  {
+    return;
+  }
+
+  switch (event)
+  {
+  case lit::SessionEvent::Parked:
+    reconcile();
+    break;
+  case lit::SessionEvent::SwapchainOutOfDate:
+    if (drawing())
+    {
+      m_swapchainStale = true;
+      reconcile();
+    }
+    break;
+  case lit::SessionEvent::Ready:
+  case lit::SessionEvent::Warning:
+  case lit::SessionEvent::DeviceLost:
+  case lit::SessionEvent::Error:
+    if (m_eventHandler)
+    {
+      m_eventHandler(generation, event, message);
+    }
+    break;
+  }
 }
 
 QSize LitSessionHost::pixelSize() const
@@ -498,7 +674,7 @@ void LitSessionHost::fail(std::string reason)
   {
     m_failed = true;
     // the owner stops the session from the event loop, never from inside this call
-    m_eventSink(lit::SessionEvent::Error, std::move(reason), m_generation);
+    eventSink()(lit::SessionEvent::Error, std::move(reason), m_generation);
   }
 }
 
