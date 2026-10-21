@@ -1,179 +1,975 @@
 {
-  "engineCommit": "285ea4d1",
+  "schema": 1,
+  "description": "Every engine item that SinkBroom's lit preview mirrors, or deliberately does not copy, with the engine commit it was read at. Checked before each landing by TOOLS/lit_mirror_check.py (LP-M).",
+  "rules": {
+    "lines": "first and last line, 1-based and inclusive, in the file at engineCommit",
+    "anchor": "the function, member or symbol that holds the range, for finding it again once the engine's line numbers move",
+    "sha256": "of the range's text at engineCommit: each line without its line ending, followed by \\n",
+    "sinkbroom": "the SinkBroom file and symbol that mirror the range or say why not"
+  },
+  "kinds": {
+    "dispatcher": "the vulkan.hpp dynamic dispatcher's storage and initialisation",
+    "instance": "a property of the Vulkan instance",
+    "device-extension": "a device extension and the code that enables it",
+    "feature-chain": "device features that are checked and enabled",
+    "function": "engine code mirrored with the stated differences",
+    "constant": "an engine value used as is",
+    "not-copied": "engine code deliberately not mirrored, with the reason"
+  },
+  "engineCommit": "285ea4d18a0aaedf46b0803ea656e4850eba5a01",
+  "pins": [
+    {
+      "name": "nvrhi",
+      "sinkbroom": {
+        "file": "cmake/dependencies/nvrhi.cmake",
+        "line": 16
+      },
+      "engine": {
+        "gitlink": "neo/extern/nvrhi"
+      },
+      "commit": "3d81b755010ea27727a39eb53f8e945c358bb058"
+    },
+    {
+      "name": "Vulkan-Headers",
+      "sinkbroom": {
+        "file": "cmake/dependencies/nvrhi.cmake",
+        "line": 17
+      },
+      "engine": {
+        "gitlink": "neo/extern/nvrhi",
+        "submodule": "thirdparty/Vulkan-Headers"
+      },
+      "commit": "39f924b810e561fd86b2558b6711ca68d4363f68",
+      "version": "v1.4.307"
+    }
+  ],
   "entries": [
     {
+      "id": "M-DISP-01",
       "kind": "dispatcher",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "71, 625, 1054, 1291-1292",
-      "sinkbroomFile": "lib/TbLitLib/src/NvrhiSupport.cpp, lib/TbLitLib/src/VulkanInstance.cpp, lib/TbLitLib/src/VulkanDevice.cpp",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            71,
+            71
+          ],
+          "anchor": "VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE",
+          "sha256": "14aed5db587ca3972dcf66ecb77f1b95e325ed85c1ed9cf5680456fc63d9f60f"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            625,
+            625
+          ],
+          "anchor": "DeviceManager_VK::createInstance",
+          "sha256": "49db7a6d0629c991ccde50c51b54a737f33cfbc2d6b4cb946f4d98af4bcd747f"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1054,
+            1054
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "3123d54c06c7faaa15f1e9a154d472d50fde9ab566d02ae0c26fee3514c9cde9"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1291,
+            1292
+          ],
+          "anchor": "DeviceManager_VK::CreateDeviceAndSwapChain",
+          "sha256": "219fb55b8c45bdfacb848f655e1d46724114248704bb115f75951dbe102eac55"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/NvrhiSupport.cpp",
+          "symbol": "VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanInstance.cpp",
+          "symbol": "initInstanceDispatcher"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanInstance.cpp",
+          "symbol": "resetDispatcher"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "createVkDevice"
+        }
+      ],
       "note": "vulkan.hpp's default dynamic dispatcher: storage defined once, initialised from vkGetInstanceProcAddr and the instance (initInstanceDispatcher, on every Start) and from the device (createVkDevice). The engine loads the library itself; SinkBroom takes vkGetInstanceProcAddr from Qt (C9)."
     },
     {
-      "kind": "instance-api-version",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "533-534",
-      "sinkbroomFile": "lib/TbUiLib (LP0.2b, QVulkanInstance::setApiVersion)",
-      "note": "Vulkan 1.2 instance (S12)."
+      "id": "M-INST-01",
+      "kind": "instance",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            533,
+            534
+          ],
+          "anchor": "DeviceManager_VK::createInstance",
+          "sha256": "b7fa6f64ef75df04c8031992de1a291f1d0abc6fbf26a7a9b90bcf8f1113e249"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbUiLib/src/LitSessionHost.cpp",
+          "symbol": "LitSessionHost::start"
+        }
+      ],
+      "note": "Vulkan 1.2 instance (S12), through QVulkanInstance::setApiVersion."
     },
     {
+      "id": "M-DEV-01",
       "kind": "device-extension",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "232-235",
-      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            232,
+            235
+          ],
+          "anchor": "DeviceManager_VK::enabledExtensions",
+          "sha256": "c5e269d4162a1e2fda7cb7a84daa7aa7bf95c6376f9da0e8cb91060ab4ee4d80"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "RequiredExtensions"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "SwapchainExtension"
+        }
+      ],
       "note": "Required: VK_KHR_swapchain (only when presenting; the headless test path does not need it) and VK_KHR_maintenance1."
     },
     {
+      "id": "M-DEV-02",
       "kind": "device-extension",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "272, 921-924, 979-980, 999",
-      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            272,
+            272
+          ],
+          "anchor": "DeviceManager_VK::optionalExtensions",
+          "sha256": "542c0901763e03197e47f2c993bf35edb6273de0241e7b059a509708b72b9eca"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            921,
+            924
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "2c5ebb6170bf7fda70edd00dd46d735c3c5cd3aca0df6c0177010dc31e30d4b7"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            979,
+            980
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "2ec392b900ca52c7d9945c5cc5a642a49e690e989ab4a5c6b6c9fe882abc22e5"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            999,
+            999
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "24d535be1c8fd6501b0412a5cb7fa2987607c58ffa72452026933d84e08fbb21"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "OptionalExtensions"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "inspect"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "createVkDevice"
+        }
+      ],
       "note": "Optional VK_KHR_synchronization2 with VkPhysicalDeviceSynchronization2FeaturesKHR::synchronization2 chained after the 1.2 features. It switches NVRHI's barriers to vkCmdPipelineBarrier2 (nvrhi vulkan-state-tracking.cpp:345), so the preview takes the game's barrier path. Dropped when the extension is listed but the feature is not."
     },
     {
+      "id": "M-DEV-03",
       "kind": "device-extension",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "273, 1477-1488",
-      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            273,
+            273
+          ],
+          "anchor": "DeviceManager_VK::optionalExtensions",
+          "sha256": "ee4adeb4111f683ed9a46f0f4671f5144b805f2a7a349d4e60154358bb932192"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1477,
+            1488
+          ],
+          "anchor": "DeviceManager_VK::BeginFrame",
+          "sha256": "288c64343802d21f346296a28065370abf2b9ae01d9129dfc9f2feeb1f87d2d1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "OptionalExtensions"
+        }
+      ],
       "note": "Optional VK_EXT_memory_budget, the VRAM budget's source (S9, LP2)."
     },
     {
+      "id": "M-DEV-04",
       "kind": "feature-chain",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "688-699, 969-972, 1002-1011",
-      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            688,
+            699
+          ],
+          "anchor": "DeviceManager_VK::pickPhysicalDevice",
+          "sha256": "641f817e253b52cb1d26dcc564811b5f08f1ae02738b267c3bbb85973be98aa8"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            969,
+            972
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "51080c922a8296f939efadd5316bdf8956730e60bd3d1b9c9fac7668576783b9"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1002,
+            1011
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "1cb8465da8dfbdf0597e36e59c7aec864c1480769044a2ae7bca9c695500bf09"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "RequiredCoreFeatures"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "inspect"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "createVkDevice"
+        }
+      ],
       "note": "VkPhysicalDeviceFeatures: shaderImageGatherExtended, samplerAnisotropy, textureCompressionBC, imageCubeArray, dualSrcBlend on; shaderStorageImageReadWithoutFormat, tessellationShader, geometryShader, fillModeNonSolid as supported. The five forced features are checked at device choice (the engine checks only samplerAnisotropy and textureCompressionBC there; the others would fail vkCreateDevice)."
     },
     {
+      "id": "M-DEV-05",
       "kind": "feature-chain",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "1013-1024, 1034",
-      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1013,
+            1024
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "a791f1b62fa13b6411d6037a09c008c52ec308cffeec98d869e361d5bc54d78c"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1034,
+            1034
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "f1accce11a5f1a8f1d6c5da2ed19a8479db3e7c38929edf2d1240981fc198c15"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "RequiredVulkan12Features"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "inspect"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "createVkDevice"
+        }
+      ],
       "note": "VkPhysicalDeviceVulkan12Features in DeviceCreateInfo::pNext: descriptorIndexing, runtimeDescriptorArray, descriptorBindingPartiallyBound, descriptorBindingVariableDescriptorCount, timelineSemaphore (NVRHI's queue tracking), shaderSampledImageArrayNonUniformIndexing; each is checked at device choice."
     },
     {
+      "id": "M-DEV-06",
       "kind": "function",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "648-799",
-      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp (inspect, pickPhysicalDevice), lib/TbLitLib/src/DeviceChoice.cpp",
-      "note": "pickPhysicalDevice: per device the required extensions, features, B8G8R8A8_UNORM surface format, FIFO and present support; the first discrete GPU, else the first other device, in enumeration order. Added: Vulkan 1.2 or newer (S12), and the error text lists every device with its problems instead of FatalError."
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            648,
+            799
+          ],
+          "anchor": "DeviceManager_VK::pickPhysicalDevice",
+          "sha256": "5a56585eaf78daf8ba9e471e6db98364eea3c92f22a20c5e60be328245bebfef"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "inspect"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "inspectOrSkip"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "pickPhysicalDevice"
+        },
+        {
+          "file": "lib/TbLitLib/src/DeviceChoice.cpp",
+          "symbol": "preferredDevice"
+        },
+        {
+          "file": "lib/TbLitLib/src/DeviceChoice.cpp",
+          "symbol": "describeUnusableDevices"
+        }
+      ],
+      "note": "pickPhysicalDevice: per device the required extensions, features, B8G8R8A8_UNORM surface format, FIFO and present support; the first discrete GPU, else the first other device, in enumeration order. Added: Vulkan 1.2 or newer (S12), and the error text lists every device with its problems instead of FatalError. Changed: the surface's formats and present modes are asked only of a device with a family that presents to the surface, as the specification requires, and a device whose queries throw is skipped with a log line instead of ending the choice (review L3.3)."
     },
     {
+      "id": "M-DEV-07",
       "kind": "function",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "801-863, 931-955, 1043-1052",
-      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            801,
+            863
+          ],
+          "anchor": "DeviceManager_VK::findQueueFamilies",
+          "sha256": "9a2e8e05b485e2c53fe39fdf27c0735d0820deb06244d327e09a046e4dfdf54f"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            931,
+            955
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "838f6b704c7512b70a6e12920756029b0e7cfe4f8da27318665961fb220d3d4e"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1043,
+            1052
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "a44e2fcffa709874addb9d2c1a9db05cb9f1ffd01c82c273bd54b3675ea4e70d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "inspect"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "createVkDevice"
+        }
+      ],
       "note": "findQueueFamilies and the queue create infos. The engine takes the first graphics family and the first present family separately and may create two queues; the preview requires one family that does both, creates one queue and keeps the swapchain images exclusive."
     },
     {
+      "id": "M-DEV-08",
       "kind": "function",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "1077-1080",
-      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1077,
+            1080
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "6a68bb0baa454c0cd6463eea2abcb69817f1ce1f36c20ed7ac44d68b918ceae7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "inspect"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameTimers.cpp",
+          "symbol": "FrameTimers::createQueries"
+        }
+      ],
       "note": "Timer queries only when timestampPeriod > 0 and the family's timestampValidBits > 0; otherwise the frame log's GPU column stays empty."
     },
     {
+      "id": "M-DEV-09",
       "kind": "function",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "1348-1375",
-      "sinkbroomFile": "lib/TbLitLib/src/LitSession.cpp (Impl::start)",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1348,
+            1375
+          ],
+          "anchor": "DeviceManager_VK::CreateDeviceAndSwapChain",
+          "sha256": "48add6febb75a29fb1996c94b01469d9ef53c1525c6f5e0c2ecb3881c5a268ab"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GpuDevice.cpp",
+          "symbol": "GpuDevice::create"
+        },
+        {
+          "file": "lib/TbLitLib/src/GpuDevice.cpp",
+          "symbol": "MessageCallback::message"
+        }
+      ],
       "note": "nvrhi::vulkan::DeviceDesc with the enabled instance and device extensions, graphics queue only; nvrhi::validation::createValidationLayer in Debug with SessionOptions::validation (the engine: r_useValidationLayers). errorCB is the session's own callback, which counts errors and sets the lost flag (R5.19), instead of DefaultMessageCallback, which turns errors into FatalError."
     },
     {
+      "id": "M-SWAP-01",
       "kind": "constant",
-      "engineFile": "neo/sys/DeviceManager.h, neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "DeviceManager.h:58; DeviceManager_VK.cpp:1158-1162, 1303-1310",
-      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.h (kSwapchainFormat), lib/TbLitLib/src/Swapchain.cpp",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager.h",
+          "lines": [
+            58,
+            58
+          ],
+          "anchor": "DeviceCreationParameters::swapChainFormat",
+          "sha256": "071bcd1c8b6be1b86894805d419cbbd297482915007f89c8fc70b9f68a3c80e8"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1158,
+            1162
+          ],
+          "anchor": "DeviceManager_VK::createSwapChain",
+          "sha256": "8187d2bc9f756b9e20208058a469f0e37ac5d2e6a9dd2ef6c429849a5a6569f4"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1303,
+            1310
+          ],
+          "anchor": "DeviceManager_VK::CreateDeviceAndSwapChain",
+          "sha256": "543101106fe7b681c7de8fb71a2f3e60139834a7d9f92e811ee87e5ad7c63e06"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.h",
+          "symbol": "SwapchainFormat"
+        },
+        {
+          "file": "lib/TbLitLib/src/Swapchain.cpp",
+          "symbol": "createSwapchainGeneration"
+        }
+      ],
       "note": "Swapchain format RGBA8_UNORM swapped to B8G8R8A8_UNORM. The engine always pairs it with SRGB_NONLINEAR; the preview takes the colour space of the surface's matching format entry."
     },
     {
+      "id": "M-SWAP-02",
       "kind": "constant",
-      "engineFile": "neo/idlib/precompiled.h, neo/sys/DeviceManager.h, neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "precompiled.h:95; DeviceManager.h:57; DeviceManager_VK.cpp:707-708",
-      "sinkbroomFile": "lib/TbLitLib/src/SwapchainRules.cpp (chooseSwapchainImageCount)",
+      "engine": [
+        {
+          "file": "neo/idlib/precompiled.h",
+          "lines": [
+            95,
+            95
+          ],
+          "anchor": "NUM_FRAME_DATA",
+          "sha256": "d47457ef7fb2459dc7d395097e4435bd06d930b336469846694e51ea61d8093e"
+        },
+        {
+          "file": "neo/sys/DeviceManager.h",
+          "lines": [
+            57,
+            57
+          ],
+          "anchor": "DeviceCreationParameters::swapChainBufferCount",
+          "sha256": "c2a45a4cd31e347ed40fda8b4030b7701cecc62b212d20d01e8f57dec5d3cdcd"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            707,
+            708
+          ],
+          "anchor": "DeviceManager_VK::pickPhysicalDevice",
+          "sha256": "dcc9a623b9c643063006f13d5170b7fadb9b5c4ad194d571bfb91e068a6d2f25"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/SwapchainRules.cpp",
+          "symbol": "EngineSwapchainImageCount"
+        },
+        {
+          "file": "lib/TbLitLib/src/SwapchainRules.cpp",
+          "symbol": "chooseSwapchainImageCount"
+        }
+      ],
       "note": "Swapchain image count NUM_FRAME_DATA = 3, clamped to the surface's minImageCount and maxImageCount (0 = no limit)."
     },
     {
+      "id": "M-SWAP-03",
       "kind": "function",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "1197-1212",
-      "sinkbroomFile": "lib/TbLitLib/src/Swapchain.cpp",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1197,
+            1212
+          ],
+          "anchor": "DeviceManager_VK::createSwapChain",
+          "sha256": "f6af7a138a11da08e30a1bb3cb7c955a497ac30fb91f5da01728d96acca9b78e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/Swapchain.cpp",
+          "symbol": "createSwapchainGeneration"
+        }
+      ],
       "note": "VkSwapchainCreateInfoKHR: usage ColorAttachment | TransferDst | Sampled, one array layer, identity pre-transform, opaque composite alpha, clipped, no old swapchain. The preview falls back to the current transform and the first supported alpha mode when identity or opaque is not offered, and always uses exclusive sharing (one family)."
     },
     {
+      "id": "M-SWAP-04",
       "kind": "function",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "1221-1239",
-      "sinkbroomFile": "lib/TbLitLib/src/Swapchain.cpp",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1221,
+            1239
+          ],
+          "anchor": "DeviceManager_VK::createSwapChain",
+          "sha256": "42d63d65a2b4c3b17c6822c6d605758f0d70d9ae4235abc6a8805835ac903560"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/Swapchain.cpp",
+          "symbol": "createSwapchainGeneration"
+        }
+      ],
       "note": "Swapchain image wrappers: createHandleForNativeTexture(VK_Image) with initialState Present, keepInitialState, isRenderTarget."
     },
     {
+      "id": "M-NC-01",
       "kind": "not-copied",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "1164-1169",
-      "sinkbroomFile": "lib/TbLitLib/src/SwapchainRules.cpp (chooseSwapchainExtent)",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1164,
+            1169
+          ],
+          "anchor": "DeviceManager_VK::createSwapChain",
+          "sha256": "81cc2388aa7a194361605dde4272374cbc35ca8bf3dbb80e8bf9f55ebb6045b1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/SwapchainRules.cpp",
+          "symbol": "chooseSwapchainExtent"
+        }
+      ],
       "note": "The engine clamps its back-buffer size into the surface's range. The preview uses currentExtent, takes the passed window size only when currentExtent is 0xFFFFFFFF, and makes no swapchain for 0×0 (§3.1)."
     },
     {
+      "id": "M-NC-02",
       "kind": "not-copied",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "1066-1070, 1181-1195",
-      "sinkbroomFile": "lib/TbLitLib/src/SwapchainRules.cpp (choosePresentMode)",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1066,
+            1070
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "52b4cd1768a6ee64940a5d60c62870a9af740962a0f3dde72ec1a70774bc2962"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1181,
+            1195
+          ],
+          "anchor": "DeviceManager_VK::createSwapChain",
+          "sha256": "8c5eb6b105c7b876763f773bb10683190c9d06646f3b2d708ac90977d8d3fe1f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/SwapchainRules.cpp",
+          "symbol": "choosePresentMode"
+        }
+      ],
       "note": "The engine's r_swapInterval / r_vkPreferFastSync choice among MAILBOX, IMMEDIATE, FIFO_RELAXED and FIFO. The preview uses MAILBOX if offered, else FIFO, and FIFO when forced (D48, R5.4); IMMEDIATE only if LP0 measures FIFO's present blocking beyond a bound."
     },
     {
+      "id": "M-NC-03",
       "kind": "not-copied",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "1388-1393, 1490-1498, 1505, 1541-1555",
-      "sinkbroomFile": "lib/TbLitLib/src/Swapchain.cpp, lib/TbLitLib/src/LitSession.cpp (Impl::drawFrame)",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1388,
+            1393
+          ],
+          "anchor": "DeviceManager_VK::CreateDeviceAndSwapChain",
+          "sha256": "9148117a36d9d779af4bc75512db768c977b8c395d41d50cb806035b0b9d8860"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1490,
+            1498
+          ],
+          "anchor": "DeviceManager_VK::BeginFrame",
+          "sha256": "a1c232dc94fad9dfe66c8de7fcfe91bd93b1d61d7354eef4e75f19f91a680cff"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1505,
+            1505
+          ],
+          "anchor": "DeviceManager_VK::EndFrame",
+          "sha256": "c1f5e4b051dc665ce1cb47a5c0b2ee3bf63711664134cbeeac952092cc853f64"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1541,
+            1555
+          ],
+          "anchor": "DeviceManager_VK::Present",
+          "sha256": "f92205d283b5144481d21a6910d4cea307999a4650ee94683a6b6345adaa6c03"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/Swapchain.cpp",
+          "symbol": "createSwapchainGeneration"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::drawFrame"
+        }
+      ],
       "note": "The engine acquires with an infinite timeout and asserts on the result, and cycles one semaphore per image for both acquire and present. The preview acquires with a 50 ms timeout (D48) through the vk::Result overloads, skips on TIMEOUT or NOT_READY, posts SwapchainOutOfDate on OUT_OF_DATE or SUBOPTIMAL, and keeps acquire semaphores per frame in flight and present semaphores per image, all owned by the swapchain generation."
     },
     {
+      "id": "M-NC-04",
       "kind": "not-copied",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "1395-1396, 1557-1575",
-      "sinkbroomFile": "lib/TbLitLib/src/LitSession.cpp (Impl::drawFrame)",
-      "note": "The engine's single frame event query, waited per NUM_FRAME_DATA. The preview keeps a ring of kFramesInFlight event queries and waits on frame N - 2's before recording frame N (D35)."
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1395,
+            1396
+          ],
+          "anchor": "DeviceManager_VK::CreateDeviceAndSwapChain",
+          "sha256": "ec4a73cd54853bf5e2a06cab0cd307b0ea8b7be05cf7f5b673c407ba65669160"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1557,
+            1575
+          ],
+          "anchor": "DeviceManager_VK::Present",
+          "sha256": "65cade4148c6b47b8c7e585128f583f41aaa5fd6d621760518ae6c3cac517f13"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::drawFrame"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::waitForFrameEvent"
+        }
+      ],
+      "note": "The engine's single frame event query, waited per NUM_FRAME_DATA. The preview keeps a ring of kFramesInFlight event queries and waits on frame N - 2's before recording frame N (D35). The wait polls the event query and ends on a stop or a park, where NVRHI's waitEventQuery would wait without a bound (review L2.1)."
     },
     {
+      "id": "M-NC-05",
       "kind": "not-copied",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "261-271, 277-284, 877-880, 957-998, 1020-1023",
-      "sinkbroomFile": "lib/TbLitLib/src/VulkanDevice.cpp",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            261,
+            271
+          ],
+          "anchor": "DeviceManager_VK::optionalExtensions",
+          "sha256": "50c498aa8e03173ca76fa305f6276cef6f7d18f53dcd77e91e11592d90cf27d3"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            277,
+            284
+          ],
+          "anchor": "DeviceManager_VK::m_RayTracingExtensions",
+          "sha256": "c80648cd20a7311c94f50fef1214f5a3af4173b7ae9c47e711a5b16b8725a8e5"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            877,
+            880
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "50ec7e1a7cdfee04b10063248bffea58f2d1450d0467333c93e027b3a4b637b2"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            957,
+            998
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "a5ec18b0868ab74b781601db93b3adc09b177cbd5ab4a988e3f884f65aec7ecf"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1020,
+            1023
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "b0fbbd8d13fa4a2ba25daa441f603e4fb1d64313bf0a0718968ffa85b3ae905c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "OptionalExtensions"
+        }
+      ],
       "note": "Optional device extensions and features the preview does not need: VK_EXT_debug_marker (debug utils replaces it), VK_EXT_descriptor_indexing (its features are core 1.2 and enabled through VkPhysicalDeviceVulkan12Features), VK_KHR_buffer_device_address and bufferDeviceAddress (ray tracing only; the engine notes it 'only makes problems'), VK_NV_mesh_shader, VK_KHR_fragment_shading_rate and its features, VK_KHR_format_feature_flags2, VK_GOOGLE_display_timing and hostQueryReset (Optick), the ray-tracing extensions, the macOS portability subset."
     },
     {
+      "id": "M-NC-06",
       "kind": "not-copied",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "222-252, 630-646",
-      "sinkbroomFile": "lib/TbLitLib/src/VulkanInstance.cpp (requiredInstanceExtensions)",
-      "note": "Instance extensions: VK_KHR_get_physical_device_properties2 (core since 1.1; the instance is 1.2), VK_EXT_sampler_filter_minmax (listed by the engine as an instance extension, but it is a device extension and its feature is never enabled), VK_EXT_debug_report and its callback (the preview asks for VK_EXT_debug_utils with validation). Qt adds the surface extensions."
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            222,
+            252
+          ],
+          "anchor": "DeviceManager_VK::enabledExtensions",
+          "sha256": "583d0d46e8d9bb8152e5eb2a39e579bab2e4526fc6a63ab82c578ebf7a78f26e"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            630,
+            646
+          ],
+          "anchor": "DeviceManager_VK::installDebugCallback",
+          "sha256": "4f50de0903ba77bb0c471a14c9ab2fd66d519f7fbc01fff06129461734625714"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbUiLib/src/LitSessionHost.cpp",
+          "symbol": "LitSessionHost::start"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "TestInstance::TestInstance"
+        }
+      ],
+      "note": "Instance extensions: VK_KHR_get_physical_device_properties2 (core since 1.1; the instance is 1.2), VK_EXT_sampler_filter_minmax (listed by the engine as an instance extension, but it is a device extension and its feature is never enabled), VK_EXT_debug_report and its callback (replaced by VK_EXT_debug_utils, which Qt adds for its debug output redirect when the session validates; the tests' own instance asks for it itself). Qt adds the surface extensions."
     },
     {
+      "id": "M-NC-07",
       "kind": "not-copied",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "1259-1290",
-      "sinkbroomFile": "",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1259,
+            1290
+          ],
+          "anchor": "DeviceManager_VK::CreateDeviceAndSwapChain",
+          "sha256": "4f9f1f5e32943f9e83438ce75673301ad7442da1b7569bc7d0281376c32de61e"
+        }
+      ],
+      "sinkbroom": [],
       "note": "The VK_LAYER_MESSAGE_ID_FILTER environment variable: a process-wide setting; LP0 creates no pipelines, whose warnings it filters. Revisit when pipelines arrive (LP2)."
     },
     {
+      "id": "M-NC-08",
       "kind": "not-copied",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "1056-1064, 1082-1097, 1377-1382, 1400-1404",
-      "sinkbroomFile": "",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1056,
+            1064
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "e359aa569b926c28dd7e86892da0187739e0826fa467912352a6c6d9702aa333"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1082,
+            1097
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "3910eb8e6733701d3d7d19137139e2bae148165e9c7c44a0a13c1832a285edd2"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1377,
+            1382
+          ],
+          "anchor": "DeviceManager_VK::CreateDeviceAndSwapChain",
+          "sha256": "c571903deb4b4a132bde123e1e772977e88bd70c700b00ad83e2b49cf6fa7a5f"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1400,
+            1404
+          ],
+          "anchor": "DeviceManager_VK::CreateDeviceAndSwapChain",
+          "sha256": "e9851e5a17819783c2b7c662609fc5c3a243945b281f047cfb2a785ff597fd02"
+        }
+      ],
+      "sinkbroom": [],
       "note": "The D24S8 format probe, the VMA allocator, the push-constant size and Optick's GPU init: not used by LP0. The push-constant size and the depth format come with the passes (LP2, C2)."
     },
     {
+      "id": "M-NC-09",
       "kind": "not-copied",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "818-837, 937-945, 1044-1051, 1355-1364",
-      "sinkbroomFile": "",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            818,
+            837
+          ],
+          "anchor": "DeviceManager_VK::findQueueFamilies",
+          "sha256": "54efd4da9875bacd9bab00af1c95df553060c0f1838cc8790f29f89d60acd6c2"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            937,
+            945
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "1603990d83eaac0081e7d692c8e2a6992346e455368b81cd0d7abcfdbff0f015"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1044,
+            1051
+          ],
+          "anchor": "DeviceManager_VK::createDevice",
+          "sha256": "37c09716d186e656363cb49563ad6c3ffcd3ed15f7baa108d695e22fe8a7062b"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1355,
+            1364
+          ],
+          "anchor": "DeviceManager_VK::CreateDeviceAndSwapChain",
+          "sha256": "261a7ef348c5e77fa5674e696797e7ca615d64b07661da5221c3e3994cc77995"
+        }
+      ],
+      "sinkbroom": [],
       "note": "Compute and transfer queues: the preview submits everything, uploads included, on the graphics queue (S35)."
     },
     {
+      "id": "M-NC-10",
       "kind": "not-copied",
-      "engineFile": "neo/sys/DeviceManager_VK.cpp",
-      "engineLines": "1135-1154, 1409-1471",
-      "sinkbroomFile": "lib/TbLitLib/src/LitSession.cpp (Impl::releaseGpuObjects, Impl::destroyVkDevice)",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1135,
+            1154
+          ],
+          "anchor": "DeviceManager_VK::destroySwapChain",
+          "sha256": "2c2bff2564478c1a5d4db0e53ee3323286c05796816c0fdcac79f30d8557aa8e"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1409,
+            1471
+          ],
+          "anchor": "DeviceManager_VK::DestroyDeviceAndSwapChain",
+          "sha256": "238991da5aa9872580f2da3c5a6187100201eccd873dc18118f11cd2e67bf3d7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitSession.cpp",
+          "symbol": "LitSession::releaseGpuObjects"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitSession.cpp",
+          "symbol": "LitSession::destroyVkDevice"
+        },
+        {
+          "file": "lib/TbUiLib/src/LitSessionHost.cpp",
+          "symbol": "LitSessionHost::runTeardownThrough"
+        }
+      ],
       "note": "The engine's destruction order (waitIdle, semaphores, swapchain, device handle, VkDevice, surface, instance) never collects NVRHI garbage. The preview follows §3.1's teardown steps instead: release handles, waitForIdle, runGarbageCollection (skipped when lost), wrappers, vkDestroySwapchainKHR, semaphores, the NVRHI device with its last Release() count, then the VkDevice; the surface and the instance belong to Qt."
     }
   ]
