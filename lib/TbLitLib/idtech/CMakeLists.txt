@@ -1,8 +1,8 @@
-# TbLitIdLib: the engine's material parser, copied verbatim (engine/), with SinkBroom's shim
-# and std-only facade (shim/). It is built like a dependency (D31, S18): C++17 as in the
-# engine, the engine's semantic compile definitions, no CompilerConfig, no precompiled std
-# headers and no TrenchBroom warnings. Only the facade header (shim/include) is visible to
-# TbLitLib, which links this library PUBLIC for it.
+# TbLitIdLib: the engine's material parser and geometry code, copied verbatim (engine/),
+# with SinkBroom's shim and std-only facades (shim/). It is built like a dependency (D31,
+# S18): C++17 as in the engine, the engine's semantic compile definitions, no
+# CompilerConfig, no precompiled std headers and no TrenchBroom warnings. Only the facade
+# headers (shim/include) are visible to TbLitLib, which links this library PUBLIC for them.
 add_library(TbLitIdLib STATIC)
 
 set(TB_LIT_ID_ENGINE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/engine)
@@ -18,17 +18,31 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_ENGINE_DIR}/idlib/Lexer.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/Str.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/Token.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/bv/Bounds.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/containers/HashIndex.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/DrawVert.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/JointTransform.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/Surface.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/Surface_Patch.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/Winding.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Angles.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Math.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Matrix.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Plane.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Pluecker.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Quat.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Rotation.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Vector.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_process.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_program.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Material.cpp
     # compiled inside shim/src/DeclManagerShim.cpp, which defines the members it leaves out
     ${TB_LIT_ID_ENGINE_DIR}/framework/DeclManager.cpp
+    # compiled inside shim/src/EngineGeometry.cpp, which calls its static functions
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/tr_trisurf.cpp
 
     ${TB_LIT_ID_SHIM_DIR}/src/DeclManagerShim.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/EngineGeometry.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineMessages.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/MaterialDecls.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/Registry.cpp
@@ -46,11 +60,14 @@ target_sources(TbLitIdLib
 
   PUBLIC FILE_SET headers TYPE HEADERS
     BASE_DIRS ${TB_LIT_ID_SHIM_DIR}/include
-    FILES ${TB_LIT_ID_SHIM_DIR}/include/lit/MaterialDecls.h
+    FILES
+      ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineGeometry.h
+      ${TB_LIT_ID_SHIM_DIR}/include/lit/MaterialDecls.h
 )
 
 set_source_files_properties(
   ${TB_LIT_ID_ENGINE_DIR}/framework/DeclManager.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/renderer/tr_trisurf.cpp
   PROPERTIES HEADER_FILE_ONLY ON)
 
 # the shim headers named precompiled.h and RenderCommon.h come first, so the copied files'

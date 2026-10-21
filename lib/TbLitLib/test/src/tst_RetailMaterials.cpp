@@ -41,9 +41,11 @@
 #include "kd/result.h"
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -984,6 +986,90 @@ TEST_CASE("Retail materials: dump for the engine capture", "[.][retail-dump]")
     warned.size(),
     warnings.size(),
     dumpPath);
+}
+
+} // namespace tb::lit
+
+namespace tb::lit
+{
+namespace
+{
+
+// the whole-word, case-insensitive occurrences of word in text (comments included, so it
+// can only overcount the keyword)
+std::size_t countWord(const std::string& text, const std::string_view word)
+{
+  const auto isWordChar = [](const char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+  };
+  const auto lower = [](const char c) {
+    return char(std::tolower(static_cast<unsigned char>(c)));
+  };
+  auto count = std::size_t{0};
+  for (auto i = std::size_t{0}; i + word.size() <= text.size(); ++i)
+  {
+    if (i > 0 && isWordChar(text[i - 1]))
+    {
+      continue;
+    }
+    if (i + word.size() < text.size() && isWordChar(text[i + word.size()]))
+    {
+      continue;
+    }
+    if (std::equal(
+          word.begin(),
+          word.end(),
+          text.begin() + std::ptrdiff_t(i),
+          [&](const char a, const char b) { return lower(a) == lower(b); }))
+    {
+      ++count;
+    }
+  }
+  return count;
+}
+
+} // namespace
+
+TEST_CASE("Retail materials: the mikktspace keyword (Q18)", "[.][retail]")
+{
+  const auto gamePath = retailGamePath();
+  if (!gamePath)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the sweep needs the game folder");
+  }
+
+  // Q18 (15-LP1BC-PACKAGES.md): every decl file the registry reads, from the containers
+  // and the user's loose files alike (GameDeclSource's search, read-only), is searched
+  // for the keyword; MikkTSpace is copied only if one is found (M-ID-DIFF-04)
+  auto source = GameDeclSource{*gamePath};
+  auto files = std::size_t{0};
+  auto occurrences = std::size_t{0};
+  auto withKeyword = std::vector<std::string>{};
+  for (const auto& folder : MaterialDecls::engineDeclFolders())
+  {
+    for (const auto& name : source.listFiles(folder.folder, folder.extension))
+    {
+      const auto path = folder.folder + "/" + name;
+      auto time = std::int64_t{0};
+      const auto text = source.readFile(path, &time);
+      REQUIRE(text);
+      ++files;
+      if (const auto count = countWord(*text, "mikktspace"))
+      {
+        occurrences += count;
+        withKeyword.push_back(path);
+      }
+    }
+  }
+  source.closeFiles();
+
+  std::cout << fmt::format(
+    "Q18: {} decl files searched, {} occurrences of the mikktspace keyword{}\n",
+    files,
+    occurrences,
+    withKeyword.empty() ? "" : " in " + fmt::format("{}", fmt::join(withKeyword, ", ")));
+  CHECK(files > 900);
+  CHECK(occurrences == 0);
 }
 
 } // namespace tb::lit

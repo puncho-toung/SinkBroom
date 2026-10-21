@@ -26,7 +26,8 @@
     "guard": "a check outside the copied code that keeps a latent engine fault from being reached",
     "difference": "a deliberate difference from the engine's behaviour, with its reason",
     "known-defect": "an engine defect the copy keeps verbatim, with its effect",
-    "pure-function": "copied engine code that the facade lets any thread run, because it touches no state"
+    "pure-function": "copied engine code that the facade lets any thread run, because it touches no state",
+    "pool-safe": "copied engine code, or a shim function around it, that may run on the session's CPU pool under C24's five conditions: (1) its common and idLib::common calls go to the permanent sink of D63; (2) each FatalError site in it is listed with the pre-validation that keeps it unreachable; (3) SIMDProcessor is the scalar stand-in; (4) it allocates with the tagged new and Mem_Alloc16 on the global allocator; (5) its statics are constant or initialised at program load and read-only (the statics inventory)"
   },
   "engineCommit": "285ea4d18a0aaedf46b0803ea656e4850eba5a01",
   "pins": [
@@ -2190,6 +2191,24 @@
         {
           "file": "neo/idlib/Heap.h",
           "lines": [
+            52,
+            67
+          ],
+          "anchor": "Mem_Alloc16, Mem_Free16, Mem_Alloc, Mem_Free, Mem_ClearedAlloc, Mem_CopyString",
+          "sha256": "1d6917a40a70950b38a064687ddda184dda79f2812dc0d07566c99410d0ab403"
+        },
+        {
+          "file": "neo/idlib/Heap.h",
+          "lines": [
+            122,
+            217
+          ],
+          "anchor": "idTempArray",
+          "sha256": "df952701041a20620c8da88a62768b37a08619a0bc86dcb8f70eab894f69f1ba"
+        },
+        {
+          "file": "neo/idlib/Heap.h",
+          "lines": [
             1340,
             1340
           ],
@@ -2202,7 +2221,7 @@
           "file": "lib/TbLitLib/idtech/engine/idlib/Heap.h"
         }
       ],
-      "note": "49 of the file's 1340 lines, in 2 ranges, each preceded by one marker line"
+      "note": "161 of the file's 1340 lines, in 4 ranges, each preceded by one marker line; LP1b.2 added the Mem_* declarations (52-67, which the shim declared before) and idTempArray (122-217), which the tangent ranges use; the shim defines Mem_Alloc16, Mem_Free16, Mem_ClearedAlloc and Mem_CopyString (M-ID-FN-09)"
     },
     {
       "id": "M-ID-PART-09",
@@ -2902,7 +2921,7 @@
           "symbol": "R_StaticAlloc"
         }
       ],
-      "note": "Mem_* and R_Static* on malloc/free (NULL for a zero size, padded to 16); the tagged new/new[] forward to ::operator new/new[] with matching tagged deletes, so the copy's tagged-new/plain-delete pairs match (R4-2.10, S25). Heap.h's global new/delete replacement is never copied (M18)"
+      "note": "Mem_* and R_Static* on malloc/free (NULL for a zero size, padded to 16); the tagged new/new[] forward to ::operator new/new[] with matching tagged deletes, so the copy's tagged-new/plain-delete pairs match (R4-2.10, S25). Heap.h's global new/delete replacement is never copied (M18); since LP1b.2 the Mem_* declarations are the copied Heap.h lines 52-67 (M-ID-PART-08)"
     },
     {
       "id": "M-ID-FN-10",
@@ -6151,6 +6170,1448 @@
         }
       ],
       "note": "D63: the sink formats every message with the copied vsnPrintf on the calling thread, into a MAX_PRINT_MSG buffer on that thread's stack, as the registry-bound common did, so a message reads the same whichever thread reports it. vsnPrintf reads only its arguments and writes only dest; it calls no idLib function"
+    },
+    {
+      "id": "M-GEO-COPY-01",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Winding.h",
+          "lines": [
+            1,
+            451
+          ],
+          "anchor": "whole file",
+          "sha256": "d025d321ea8b58bfac276af99ee47b6b775c8e40655fb510ff8f497665297e71",
+          "gitBlob": "98940e52e0de7ba006f59665fca9a212e972608e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/geometry/Winding.h"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-02",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Winding.cpp",
+          "lines": [
+            1,
+            1946
+          ],
+          "anchor": "whole file",
+          "sha256": "f43ce408aa839ff40b0403be69e1b9c2c29d46ed4a7aed625de2d8c98fb8db42",
+          "gitBlob": "d4a647a9e6b617633dbf540ff73d3b57288f1e34"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/geometry/Winding.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-03",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Surface.h",
+          "lines": [
+            1,
+            252
+          ],
+          "anchor": "whole file",
+          "sha256": "4c86211b21a8043bfa679ebae5801181bd82d0e273f9af1141d1c120fde9b202",
+          "gitBlob": "63b58dcf7c3da0fa06214e17ec0f61cde2d9774c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/geometry/Surface.h"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-04",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Surface.cpp",
+          "lines": [
+            1,
+            1070
+          ],
+          "anchor": "whole file",
+          "sha256": "3a6ea047e17dff4c69ea88ab3a5ab2bc809c27431642db7c7b36bc93d8280845",
+          "gitBlob": "521a9aa8ece0540806dc7a9c4a348c1ef80e5e31"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/geometry/Surface.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-05",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.h",
+          "lines": [
+            1,
+            153
+          ],
+          "anchor": "whole file",
+          "sha256": "ab21d395663d7921897896d1297349de85204e4620504846c04c539a51f4092a",
+          "gitBlob": "3d06f138b94eee65ddffecdc1962914fb5d4f239"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/geometry/Surface_Patch.h"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-06",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            1,
+            825
+          ],
+          "anchor": "whole file",
+          "sha256": "5bf553375197e478fab3d6de5d097b3340f8bb4dea3c329711abd2d2bfb092ae",
+          "gitBlob": "41b7d82406c73e2763b18c4483a5b8c92f97250e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/geometry/Surface_Patch.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-07",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/DrawVert.h",
+          "lines": [
+            1,
+            851
+          ],
+          "anchor": "whole file",
+          "sha256": "c34ab6e7790fd773650b0159fac008670ae76c49a73671f534cd2bd7898c2f03",
+          "gitBlob": "998e143929d1a7787894bf4d1c33304c55c28183"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/geometry/DrawVert.h"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-08",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/DrawVert.cpp",
+          "lines": [
+            1,
+            82
+          ],
+          "anchor": "whole file",
+          "sha256": "df0ae123c1ef17ca776434b7afa2de30a13ac381559a2e261be9275a58449eeb",
+          "gitBlob": "876f77f9949f9c6e4853bf73a11332b49730d77f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/geometry/DrawVert.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-09",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/JointTransform.h",
+          "lines": [
+            1,
+            595
+          ],
+          "anchor": "whole file",
+          "sha256": "82c5a85c55630c5b05dccb74553e51e8754473f10b88f97cd01e8adac1eaf7ff",
+          "gitBlob": "b9eca99f9255a5ea7cd8544005edccc84e2ba0b6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/geometry/JointTransform.h"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-10",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/JointTransform.cpp",
+          "lines": [
+            1,
+            93
+          ],
+          "anchor": "whole file",
+          "sha256": "f9f3d3562b38748d33e1d486c9668d8a2a57c9b9f557e55993214e04f9651b22",
+          "gitBlob": "15c6b61865c9b41ea9197265ae2d60c917eec9b6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/geometry/JointTransform.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-11",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Plane.h",
+          "lines": [
+            1,
+            462
+          ],
+          "anchor": "whole file",
+          "sha256": "18e52ad0b83fdaa60e7c73423e68187e289fe1d7ff7e86bf28871dd9cceca198",
+          "gitBlob": "35cbc4797f6ce616cce799fa2b826fa1af2582bb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Plane.h"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-12",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Plane.cpp",
+          "lines": [
+            1,
+            173
+          ],
+          "anchor": "whole file",
+          "sha256": "dd44d035ea168a16ec7f33ad4237fba3eda96311af9e370d8f0a3e32566535fe",
+          "gitBlob": "9b69562fc5018630d0fce85d37444960b9a0f0fb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Plane.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-13",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Quat.h",
+          "lines": [
+            1,
+            487
+          ],
+          "anchor": "whole file",
+          "sha256": "d1669aff425624150985d71fd728eefa55cb7db1b90aeccac0a4f067c0c25b90",
+          "gitBlob": "5efa0d8297d5d6caeeb1ea30061454bc8c42b24b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Quat.h"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-14",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Quat.cpp",
+          "lines": [
+            1,
+            338
+          ],
+          "anchor": "whole file",
+          "sha256": "afb788150f1bd4e7f34c761617985fa7313170f12b7fa5da34060962fabef53d",
+          "gitBlob": "0e987d72fc457ddf94aefffbb96d7865906faa53"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Quat.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-15",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/bv/Bounds.h",
+          "lines": [
+            1,
+            490
+          ],
+          "anchor": "whole file",
+          "sha256": "e380041486c03a34c3e0df9155ff16e5c183b6496780e11faea1c7dd89b55201",
+          "gitBlob": "7548eb2fd207efd6f961ea259312bd635200f8c6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/bv/Bounds.h"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-16",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/bv/Bounds.cpp",
+          "lines": [
+            1,
+            485
+          ],
+          "anchor": "whole file",
+          "sha256": "886461d20baf1b05255f190a56b82f2d49064033f45b65ee8a866a3fed4c7fc1",
+          "gitBlob": "4f69a840d1b0977e9c82132b96d838df15614906"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/bv/Bounds.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-17",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Rotation.h",
+          "lines": [
+            1,
+            236
+          ],
+          "anchor": "whole file",
+          "sha256": "b908c8dc0ad3e934c5457c4426b876ee2cedd6155dcd79a4d5991f0106d02504",
+          "gitBlob": "7096ad9faaf4fccb03a6f462194f31bcf30e3dd2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Rotation.h"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-18",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Rotation.cpp",
+          "lines": [
+            1,
+            168
+          ],
+          "anchor": "whole file",
+          "sha256": "440b6489bb5cf4c8150f7540bb6b4f43f5438b3821ec51a25a84bab154f285e8",
+          "gitBlob": "2f58283061cea0ff27b4f49ebf1d01f1acf1f952"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Rotation.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-19",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Pluecker.h",
+          "lines": [
+            1,
+            414
+          ],
+          "anchor": "whole file",
+          "sha256": "822fa488411dfc34efc453ffc76ad6553c2a0757643de92697c4d0b4dd364763",
+          "gitBlob": "eb93c6a2013b0e63ad3db5e6e9df57c98c6183a6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Pluecker.h"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-20",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Pluecker.cpp",
+          "lines": [
+            1,
+            90
+          ],
+          "anchor": "whole file",
+          "sha256": "aa7b18fbb3f5c24e7a747c085be1baf5e165f9ea9a1b8281ac5e77736c9452dd",
+          "gitBlob": "1f8139d95f2423cf5519aa028e1c45e2128e0232"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Pluecker.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-21",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/bv/Sphere.h",
+          "lines": [
+            1,
+            315
+          ],
+          "anchor": "whole file",
+          "sha256": "b1b89cfdcb03bff0fd600a1079de92ff1603c2ccfa5c4d76602553d0ad2f11ca",
+          "gitBlob": "56ad22eee3fed00ceddabe4fbad40252be1b061a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/bv/Sphere.h"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-COPY-22",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Angles.cpp",
+          "lines": [
+            1,
+            268
+          ],
+          "anchor": "whole file",
+          "sha256": "f1c0a61e55423bc35ed97bcad6cd8b5e07bc8dc9bee65eacbd666531869c50a2",
+          "gitBlob": "120d429fac14d56021f0876cfb8186934a70208e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Angles.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte (LP1b.2, D57, C24); the copy's git blob id equals gitBlob"
+    },
+    {
+      "id": "M-GEO-PART-01",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1,
+            34
+          ],
+          "anchor": "licence and includes (the MikkTSpace include is left out, Q18)",
+          "sha256": "9d31a9938b2d2d08ecebaba9af4bc23d87e4af4f9dd8783c11b1876d29afda91"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            38,
+            38
+          ],
+          "anchor": "r_useSilRemap",
+          "sha256": "1ebbc6e0536e9998c92134a66755be313f3d9669ca10be903f2bc8681355abd5"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            374,
+            405
+          ],
+          "anchor": "R_AllocStaticTriSurf, R_CopyStaticTriSurf",
+          "sha256": "f449822ba95809cf7989aa9aabc86315b5390d4ff7f21c2cf3bb61c64db38dcb"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            407,
+            460
+          ],
+          "anchor": "R_AllocStaticTriSurfVerts, Indexes, SilIndexes, DominantTris, MirroredVerts",
+          "sha256": "d659e63a19a35e1a1aa30c31eb8272b3e7f461ede48630d2ca9df92b762459d4"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            495,
+            507
+          ],
+          "anchor": "R_ResizeStaticTriSurfVerts",
+          "sha256": "b1e1def2817aa2b92ded952bde4c15a8d1eaaab6bd27c26ee685bdde4609efd1"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            611,
+            697
+          ],
+          "anchor": "R_CreateSilRemap, R_CreateSilIndexes",
+          "sha256": "b5cad90c498fc30141888b08c61409167141fc7326898b5d2c2c5684e8a3f524"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            742,
+            866
+          ],
+          "anchor": "R_FaceNegativePolarity, tangentVert_t, R_DuplicateMirroredVertexes",
+          "sha256": "8c9af0aa2f17fc6969b5da1c884b6645e634b05f3c1e848317bafc03a823f5bd"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            885,
+            1093
+          ],
+          "anchor": "R_DeriveNormalsAndTangents, R_DeriveUnsmoothedNormalsAndTangents",
+          "sha256": "0201fb5b989f7b59b5137f9e482a236621e40e778694f09647fc5ddca971885f"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1150,
+            1509
+          ],
+          "anchor": "R_DeriveTangentsWithoutNormals, indexSort_t, IndexSort, R_BuildDominantTris, R_DeriveTangents",
+          "sha256": "bfb94a8bac13a951c6ba64cf4efab77a18033dd290cf7299a44d0733ceab6ab4"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1559,
+            1597
+          ],
+          "anchor": "R_RemoveDegenerateTriangles",
+          "sha256": "74e0d8b3bb4214e269cc0408c247b84f7dcd558edc60e20f71ef50d0d9345b31"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1769,
+            1801
+          ],
+          "anchor": "R_ReverseTriangles",
+          "sha256": "0b99f4630110a2dd0beb4bad6e38a8fdb45a06439dea3967a97978e455b5ced5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/tr_trisurf.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "#include \"renderer/tr_trisurf.cpp\""
+        }
+      ],
+      "note": "987 of the file's 2291 lines, in 11 ranges, each preceded by one marker line (D57): the allocators the closure calls, R_CreateSilIndexes, R_DuplicateMirroredVertexes, R_DeriveNormalsAndTangents and R_DeriveUnsmoothedNormalsAndTangents (R_DeriveTangents' closure), R_DeriveTangentsWithoutNormals, R_BuildDominantTris, R_DeriveTangents, R_RemoveDegenerateTriangles, R_ReverseTriangles and r_useSilRemap. Compiled inside EngineGeometry.cpp (HEADER_FILE_ONLY), because three of them are static. Line 36, #include <mikktspace.h>, is left out (Q18)"
+    },
+    {
+      "id": "M-GEO-PART-02",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.h",
+          "lines": [
+            1,
+            30
+          ],
+          "anchor": "licence and include guard",
+          "sha256": "8827d1a5b880fb601236d2c69ddfa7d402e47a63fb6bf2c364f7a814c27a2409"
+        },
+        {
+          "file": "neo/renderer/Model.h",
+          "lines": [
+            52,
+            57
+          ],
+          "anchor": "dominantTri_t",
+          "sha256": "19a1862dc3941dda0c5f2f90a57fa43a4279ac95bf791c89fd3ab39e8829bcda"
+        },
+        {
+          "file": "neo/renderer/Model.h",
+          "lines": [
+            325,
+            325
+          ],
+          "anchor": "include guard end",
+          "sha256": "da22bc7b5ae3648198512bc65cbd528f945d4abfc9ca11e405c4017a46ddd7cb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Model.h"
+        }
+      ],
+      "note": "37 of the file's 325 lines, in 3 ranges: dominantTri_t, which R_BuildDominantTris fills; the shim's RenderCommon.h includes it"
+    },
+    {
+      "id": "M-GEO-FN-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Simd_Generic.cpp",
+          "lines": [
+            90,
+            102
+          ],
+          "anchor": "idSIMD_Generic::MinMax (idVec3 points)",
+          "sha256": "bc8078c95bcf82ceee03c216ce070c95e34170a8cdb09ca61a78817ffc8661f6"
+        },
+        {
+          "file": "neo/idlib/math/Simd.h",
+          "lines": [
+            87,
+            120
+          ],
+          "anchor": "idSIMDProcessor, SIMDProcessor",
+          "sha256": "5f22ec8910d3443b1b84d04f54b2e5b1ab2dedb97d7c0b4ab64cc914b957e541"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimLib.h",
+          "symbol": "idSIMDProcessor"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "idSIMDProcessor::MinMax, SIMDProcessor"
+        }
+      ],
+      "note": "C24 (3): the scalar SIMDProcessor with exactly the methods the closure calls, by name: MinMax(idVec3&, idVec3&, const idVec3*, int), which idBounds::FromPoints calls (Bounds.cpp:293). Non-virtual, const, argument-only, so any thread may call it; min and max are exact, so the engine's SSE MinMax gives the same result. The tangent ranges call no SIMD method"
+    },
+    {
+      "id": "M-GEO-FN-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.h",
+          "lines": [
+            66,
+            115
+          ],
+          "anchor": "srfTriangles_t",
+          "sha256": "71059d1eed63b83e39510c036166b690f8ebb737ee16f3fa16a4b9c8449e2cf3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/RenderCommon.h",
+          "symbol": "srfTriangles_t"
+        }
+      ],
+      "note": "D57: the stand-in has exactly the fields the copied ranges use (tangentsCalculated, numVerts, verts, numIndexes, indexes, silIndexes, numMirroredVerts, mirroredVerts, numDupVerts, dupVerts, dominantTris), as plain data, so R_AllocStaticTriSurf's Mem_ClearedAlloc clears it as in the engine; dupVerts stays empty (R_CreateDupVerts is not copied). The facade frees its blocks with Mem_Free"
+    },
+    {
+      "id": "M-GEO-FN-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1489,
+            1509
+          ],
+          "anchor": "R_DeriveTangents (tr.pc.c_tangentIndexes under !DMAP)",
+          "sha256": "8c83c6b6c6c9e2785125c57dfca73fbd7dfbae98455ffeee10e2b5b3698dfeca"
+        },
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            1092,
+            1092
+          ],
+          "anchor": "extern tr",
+          "sha256": "87222825f77a7f3f6136995fc21b5c41331f100d9a943717a232e0e522186df6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/RenderCommon.h",
+          "symbol": "idRenderSystemLocal, tr"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "tr"
+        }
+      ],
+      "note": "tr reduced to the one counter the copied R_DeriveTangents adds to; std::atomic<int>, so pool threads add to it at once (C24); nothing reads it"
+    },
+    {
+      "id": "M-GEO-FN-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            868,
+            883
+          ],
+          "anchor": "R_DeriveMikktspaceTangents",
+          "sha256": "22154c1000d6ece4d712a267dfea727b8ede6691c5c9dbc790549a520be68473"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "R_DeriveMikktspaceTangents"
+        }
+      ],
+      "note": "Q18: MikkTSpace is not copied (M-ID-DIFF-04); the static the copied R_DeriveTangentsWithoutNormals calls returns false, which the copy turns into its warning and its own derivation, as the engine does when MikkTSpace fails. The facade always passes useMikktspace false, so it is never called"
+    },
+    {
+      "id": "M-GEO-PURE-01",
+      "kind": "pure-function",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/DrawVert.h",
+          "lines": [
+            36,
+            37
+          ],
+          "anchor": "VERTEX_BYTE_TO_FLOAT, VERTEX_FLOAT_TO_BYTE",
+          "sha256": "7fc6df3f29440342c36730b35ef45c6c6be04867d2bbf36c2f060e8e16981dbb"
+        },
+        {
+          "file": "neo/idlib/geometry/DrawVert.h",
+          "lines": [
+            59,
+            105
+          ],
+          "anchor": "F16toF32, F32toF16",
+          "sha256": "d6c1e272ab42056bb4372c10a38ae96b718234dc71541dbcd19bfa669cdd7d53"
+        },
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            104,
+            117
+          ],
+          "anchor": "idMapBrushSide::GetTextureVectors (Valve 220)",
+          "sha256": "8d755e367b6d3b5c6664af589c59f497dcf2db792aa372ac90af7abd7b578efb"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "lines": [
+            233,
+            242
+          ],
+          "anchor": "TriListForSide's st",
+          "sha256": "2d497bb6a96dce3042a29e79a4eb61dff691ab26fdb2090c6b4b956fde975c56"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/output.cpp",
+          "lines": [
+            95,
+            105
+          ],
+          "anchor": "WriteFloat",
+          "sha256": "864287efea7f9135091dcc9a9f8b73119ce4a5e7b054b4eb3ee82676ff9f65ae"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            66,
+            86
+          ],
+          "anchor": "FS_WriteFloatString, %f",
+          "sha256": "6f77ae344e1bcf95105dfce0fed5e163da5e6dbb3498d624c769c04f2ca9f7bf"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/map.cpp",
+          "lines": [
+            68,
+            85
+          ],
+          "anchor": "NORMAL_EPSILON, DIST_EPSILON, FindFloatPlane",
+          "sha256": "bc032fe21ae5524f6d58c1b37761172eadeb97e608575fefc5da6aafced78343"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/tritools.cpp",
+          "lines": [
+            262,
+            300
+          ],
+          "anchor": "TriVertsFromOriginal",
+          "sha256": "a082608e6049822edb0bccb49429c53e62b06a403fee371fe4611f6de3137b19"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineF32toF16, engineF16toF32, engineSetTexCoord, engineTexCoord, engineSetNormal, engineNormal, engineTangent, engineBiTangentSign, engineClearedVert, engineSidePlane, enginePlanesEqual, engineFlippedPlane, engineWindingPlane, engineTriangleArea, engineValveTexCoord, engineProcFloatText, engineVertFromOriginal"
+        }
+      ],
+      "note": "argument-only: the copied idDrawVert encoders, idPlane (FromPoints, FixDegeneracies, Compare), idWinding::GetPlane and TriangleArea, and transcriptions of dmap's arithmetic in the copied types (GetTextureVectors' axis·(1/scale), TriListForSide's dot product and division, WriteFloat, TriVertsFromOriginal). They call no common function and read only constants; any thread"
+    },
+    {
+      "id": "M-GEO-POOL-01",
+      "kind": "pool-safe",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Winding.cpp",
+          "lines": [
+            95,
+            274
+          ],
+          "anchor": "idWinding::Split",
+          "sha256": "f71ea3d042150e81e24269b2e9cfb0121dd03d3d68e057dea416f50c07745023"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineSplitWinding"
+        }
+      ],
+      "commonCalls": [
+        "Winding.cpp:260 idLib::common->FatalError (unreachable, M-GEO-FATAL-01)"
+      ],
+      "note": "the copied Split on a winding of 3 to MaxWindingPoints (1024) points: its _alloca blocks stay below 32 KB of the pool thread's 8 MB stack; it allocates the pieces with the tagged new"
+    },
+    {
+      "id": "M-GEO-POOL-02",
+      "kind": "pool-safe",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            1,
+            825
+          ],
+          "anchor": "idSurface_Patch (SetSize, Subdivide, SubdivideExplicit and what they call)",
+          "sha256": "5bf553375197e478fab3d6de5d097b3340f8bb4dea3c329711abd2d2bfb092ae"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/map.cpp",
+          "lines": [
+            416,
+            418
+          ],
+          "anchor": "ParseSurface's triangle order",
+          "sha256": "02b10b147cc564991d434347e16803de7c62061cd9559a7544e4b1731f82f58b"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/map.cpp",
+          "lines": [
+            443,
+            469
+          ],
+          "anchor": "ParsePatch",
+          "sha256": "2c7c9c65659f91edde2f23fc03b00a1d9daf63bded238ef41a90f7b9e7ebcd45"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineSubdividePatch"
+        }
+      ],
+      "commonCalls": [
+        "Surface_Patch.cpp:41, :45 idLib::common->FatalError (unreachable, M-GEO-FATAL-02)",
+        "Surface_Patch.cpp:214, :241 idLib::common->FatalError (unreachable, M-GEO-FATAL-03)"
+      ],
+      "note": "K19: sides of 1 to 99 control points, explicit subdivisions of 1 to 64, at most 65535 vertices subdivided (refused with a warning beyond); the copy allocates on the heap only (idList, no _alloca in Surface_Patch.cpp at engineCommit, so P.25's stack concern does not apply; pool threads have 8 MB stacks, D66)"
+    },
+    {
+      "id": "M-GEO-POOL-03",
+      "kind": "pool-safe",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1810,
+            1847
+          ],
+          "anchor": "R_CleanupTriangles (the order mirrored)",
+          "sha256": "97989dc6dcb75c4b714fa3c1c818671c27a12654c4009667f65aa2fdda3ce2b0"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            374,
+            405
+          ],
+          "anchor": "R_AllocStaticTriSurf, R_CopyStaticTriSurf",
+          "sha256": "f449822ba95809cf7989aa9aabc86315b5390d4ff7f21c2cf3bb61c64db38dcb"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            407,
+            460
+          ],
+          "anchor": "R_AllocStaticTriSurfVerts, Indexes, SilIndexes, DominantTris, MirroredVerts",
+          "sha256": "d659e63a19a35e1a1aa30c31eb8272b3e7f461ede48630d2ca9df92b762459d4"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            495,
+            507
+          ],
+          "anchor": "R_ResizeStaticTriSurfVerts",
+          "sha256": "b1e1def2817aa2b92ded952bde4c15a8d1eaaab6bd27c26ee685bdde4609efd1"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            611,
+            697
+          ],
+          "anchor": "R_CreateSilRemap, R_CreateSilIndexes",
+          "sha256": "b5cad90c498fc30141888b08c61409167141fc7326898b5d2c2c5684e8a3f524"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            742,
+            866
+          ],
+          "anchor": "R_FaceNegativePolarity, tangentVert_t, R_DuplicateMirroredVertexes",
+          "sha256": "8c9af0aa2f17fc6969b5da1c884b6645e634b05f3c1e848317bafc03a823f5bd"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            885,
+            1093
+          ],
+          "anchor": "R_DeriveNormalsAndTangents, R_DeriveUnsmoothedNormalsAndTangents",
+          "sha256": "0201fb5b989f7b59b5137f9e482a236621e40e778694f09647fc5ddca971885f"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1150,
+            1509
+          ],
+          "anchor": "R_DeriveTangentsWithoutNormals, indexSort_t, IndexSort, R_BuildDominantTris, R_DeriveTangents",
+          "sha256": "bfb94a8bac13a951c6ba64cf4efab77a18033dd290cf7299a44d0733ceab6ab4"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1559,
+            1597
+          ],
+          "anchor": "R_RemoveDegenerateTriangles",
+          "sha256": "74e0d8b3bb4214e269cc0408c247b84f7dcd558edc60e20f71ef50d0d9345b31"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1769,
+            1801
+          ],
+          "anchor": "R_ReverseTriangles",
+          "sha256": "0b99f4630110a2dd0beb4bad6e38a8fdb45a06439dea3967a97978e455b5ced5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineCleanupTriangles, engineReverseTriangles"
+        }
+      ],
+      "commonCalls": [
+        "tr_trisurf.cpp:1595 common->Printf (removed degenerate triangles: to the sink)",
+        "tr_trisurf.cpp:1191 idLib::Warning (MikkTSpace failed: never reached, useMikktspace is false)",
+        "tr_trisurf.cpp:1361 idLib::Error (R_StaticAlloc returned null: only when an allocation fails, M-GEO-FATAL-04)",
+        "R_StaticAlloc's common->FatalError (ShimLib.cpp, only when an allocation fails, M-GEO-FATAL-04)"
+      ],
+      "note": "R_CleanupTriangles' order on a surface without generated normals: the index range check as pre-validation (R_RangeCheckIndexes' three Errors cannot be reached: indexes in range, a multiple of three, at most 65535 vertices), R_CreateSilIndexes (idHashIndex on the heap), R_RemoveDegenerateTriangles, R_DuplicateMirroredVertexes, then R_DeriveTangentsWithoutNormals(tri, false) or R_BuildDominantTris + R_DeriveTangents; FinishSurfaces' back side is R_CopyStaticTriSurf + R_ReverseTriangles. R_TestDegenerateTextureSpace (no effect: its print is commented out), R_CreateDupVerts, R_BoundTriSurf and the MOC data are not run (M-GEO-NC-01)"
+    },
+    {
+      "id": "M-GEO-FATAL-01",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Winding.cpp",
+          "lines": [
+            260,
+            260
+          ],
+          "anchor": "idWinding::Split",
+          "sha256": "6624d4672e69f3c698bce94fd0a547246196d77beaaca506da25eb475027a902"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineSplitWinding"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "unreachable: a split of a convex winding makes at most numPoints + 4 points per side, the estimate; the facade passes only the face polygons and their pieces"
+    },
+    {
+      "id": "M-GEO-FATAL-02",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            41,
+            41
+          ],
+          "anchor": "idSurface_Patch::SetSize",
+          "sha256": "9d0d11ff725ab7a6ca8043281c6d365bca500a7855ae2d62d3d59d4fbfa53413"
+        },
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            45,
+            45
+          ],
+          "anchor": "idSurface_Patch::SetSize",
+          "sha256": "8335f8800b3cd63921f45e1db7776e3dc17a8600b02e63e70e05fd6f7d7ef250"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineSubdividePatch"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "unreachable: the facade constructs the patch with maxWidth = width and maxHeight = height and refuses a side below 1 or above 99 before SetSize"
+    },
+    {
+      "id": "M-GEO-FATAL-03",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            214,
+            214
+          ],
+          "anchor": "idSurface_Patch::Collapse",
+          "sha256": "3310e32d2ef0320514bab30b85acbad9e44bed176ecf0e8ae9de0e9c4a4327a0"
+        },
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            241,
+            241
+          ],
+          "anchor": "idSurface_Patch::Expand",
+          "sha256": "1caf2691d978fbc9a366c15a9aa4ead3dec4e93c2cb88df5d71464a982bd89e9"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineSubdividePatch"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "unreachable: Subdivide and SubdivideExplicit pair Expand and Collapse themselves on a patch the facade made unexpanded"
+    },
+    {
+      "id": "M-GEO-FATAL-04",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1361,
+            1361
+          ],
+          "anchor": "R_BuildDominantTris",
+          "sha256": "6e7070d7f959b212c719c5f983ded2aadb226f3dd959b151677cce44a818ceeb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "R_StaticAlloc"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineCleanupTriangles"
+        }
+      ],
+      "call": "Error",
+      "reachable": true,
+      "afterReturn": "reachable only when malloc fails (R_StaticAlloc's FatalError logs first): the copy returns without dominant triangles and R_DeriveTangents derives smoothed tangents; the pool's job fails on the Error it drains (D66)"
+    },
+    {
+      "id": "M-GEO-FATAL-05",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Winding.cpp",
+          "lines": [
+            1301,
+            1301
+          ],
+          "anchor": "idWinding::RemovePoint",
+          "sha256": "876c08088069eea2b91ff7653e71ad6c283dd0c4a8f008f97563c4d4191f2cb0"
+        },
+        {
+          "file": "neo/idlib/geometry/Winding.cpp",
+          "lines": [
+            1321,
+            1321
+          ],
+          "anchor": "idWinding::InsertPoint",
+          "sha256": "adf24510628d7f2c3331ee41fb6eb670a488cf835917be13260fe9f2967fcf04"
+        },
+        {
+          "file": "neo/idlib/geometry/Winding.cpp",
+          "lines": [
+            1326,
+            1326
+          ],
+          "anchor": "idWinding::InsertPoint",
+          "sha256": "375bb23596af96cf72d0b2b36e95eec5e42ad1bd6279281b821394a360b9a8dc"
+        }
+      ],
+      "sinkbroom": [],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "the facade calls neither function"
+    },
+    {
+      "id": "M-GEO-STATIC-01",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Plane.cpp",
+          "lines": [
+            32,
+            32
+          ],
+          "anchor": "plane_origin",
+          "sha256": "4ed5d84afb43756929f69781ae22053b6c74caa19295d1acdc5aa3e0f75996a9"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "dynamically initialised at program load, before any thread starts, without allocating; read-only"
+    },
+    {
+      "id": "M-GEO-STATIC-02",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/bv/Bounds.cpp",
+          "lines": [
+            32,
+            34
+          ],
+          "anchor": "bounds_zero, bounds_zeroOneCube, bounds_unitCube",
+          "sha256": "00c3caffcadd89247636dd348efbcd381c8d40602b86009e1c323706e6b4fdc9"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "dynamically initialised at program load without allocating; bounds_zero copies vec3_zero, whose value it has also when Vector.cpp initialises later (zero); read-only"
+    },
+    {
+      "id": "M-GEO-STATIC-03",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Pluecker.cpp",
+          "lines": [
+            32,
+            32
+          ],
+          "anchor": "pluecker_origin",
+          "sha256": "d7e4f17405e4d37e2d75ac751d4a845ab3504ee3911a18a27cb63ed4b34dd467"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "dynamically initialised at program load without allocating; read-only"
+    },
+    {
+      "id": "M-GEO-STATIC-04",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Angles.cpp",
+          "lines": [
+            34,
+            34
+          ],
+          "anchor": "ang_zero",
+          "sha256": "fb598929dcb3c7c11cdddc67fd023df2ea52744cbb61aebb9920effd2a472814"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "dynamically initialised at program load without allocating; read-only"
+    },
+    {
+      "id": "M-GEO-STATIC-05",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/JointTransform.cpp",
+          "lines": [
+            47,
+            47
+          ],
+          "anchor": "next (ToJointQuat)",
+          "sha256": "4d5c5c2b7915d274cc71cdd83a042e4397f138135f83f5bd7259fa37c86f1b65"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "function-local constant aggregate, never written"
+    },
+    {
+      "id": "M-GEO-STATIC-06",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            293,
+            293
+          ],
+          "anchor": "neighbors (GenerateNormals)",
+          "sha256": "4184519a4778e3c35a3fc83dee5bc85dbbff4464dec6c38bcf448921552895b4"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "function-local constant aggregate, never written"
+    },
+    {
+      "id": "M-GEO-STATIC-07",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            38,
+            38
+          ],
+          "anchor": "r_useSilRemap",
+          "sha256": "1ebbc6e0536e9998c92134a66755be313f3d9669ca10be903f2bc8681355abd5"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "constexpr idCVar: constant-initialised at its engine default \"1\", read-only"
+    },
+    {
+      "id": "M-GEO-STATIC-08",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            1092,
+            1092
+          ],
+          "anchor": "tr",
+          "sha256": "87222825f77a7f3f6136995fc21b5c41331f100d9a943717a232e0e522186df6"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "process counter",
+      "reason": "the shim's tr: one std::atomic<int> (c_tangentIndexes), constant-initialised; pool threads add to it, nothing reads it"
+    },
+    {
+      "id": "M-GEO-STATIC-09",
+      "kind": "static",
+      "engine": [],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "tbLitScalarSimd, SIMDProcessor"
+        }
+      ],
+      "staticKind": "idempotent table",
+      "reason": "the shim's tbLitScalarSimd and SIMDProcessor: a constexpr object without members and a const pointer to it"
+    },
+    {
+      "id": "M-GEO-NC-01",
+      "kind": "not-copied",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            704,
+            737
+          ],
+          "anchor": "R_CreateDupVerts",
+          "sha256": "15320f919947caff045943b447e59574e03534cdbd890f8cee65efdb773189dc"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1599,
+            1630
+          ],
+          "anchor": "R_TestDegenerateTextureSpace",
+          "sha256": "8779a8456efb93ba393200b15492d5f82e3dd030585cf8c996a0ef53e91fbab2"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            554,
+            609
+          ],
+          "anchor": "R_RangeCheckIndexes, R_BoundTriSurf",
+          "sha256": "1081cdaca512b473503e6a2beff6f804c2fef2216a2beef5925a68598aba5499"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            2267,
+            2267
+          ],
+          "anchor": "R_CreateMaskedOcclusionCullingTris",
+          "sha256": "1ab9cb28386873112b0f823fe13f3bb5d2d56da609957e1ed7b12cda0a8ea3c8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineCleanupTriangles"
+        }
+      ],
+      "note": "D57: R_CreateDupVerts changes nothing drawn (dupVerts serve the smoothed normals of generated-normal surfaces and shadows); R_TestDegenerateTextureSpace has no effect; R_RangeCheckIndexes is the facade's pre-validation; bounds and the MOC data are the chunk builder's or not needed"
+    },
+    {
+      "id": "M-GEO-NC-02",
+      "kind": "not-copied",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            36,
+            36
+          ],
+          "anchor": "#include <mikktspace.h>",
+          "sha256": "de1e9d6de595c6af7ea9bae94aa6468a7fd2b8a0046bbaa6d62b69666e07011e"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            868,
+            883
+          ],
+          "anchor": "R_DeriveMikktspaceTangents",
+          "sha256": "22154c1000d6ece4d712a267dfea727b8ede6691c5c9dbc790549a520be68473"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            2074,
+            2163
+          ],
+          "anchor": "the MikkTSpace interface",
+          "sha256": "7eac0a9fded90c34e4e61c313adb8701441a42c9b1754f4573c2a00813dc704e"
+        }
+      ],
+      "sinkbroom": [],
+      "note": "Q18: the hidden [.][retail] sweep of every decl file (tst_RetailMaterials.cpp, \"the mikktspace keyword\") finds the keyword in no retail or loose decl file, so MikkTSpace (neo/libs/mikktspace) is not copied (M-ID-DIFF-04)"
+    },
+    {
+      "id": "M-ID-DIFF-04",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1278,
+            1283
+          ],
+          "anchor": "FinishSurfaces: mikktspace = useMikktspace || UseMikkTSpace()",
+          "sha256": "dcc1210d8abc7d21189f407b425db3651cc62e4fffbb7db78434066117d2c632"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1184,
+            1200
+          ],
+          "anchor": "R_DeriveTangentsWithoutNormals, the MikkTSpace branch",
+          "sha256": "9010b68b456a362137119cb628631f24a787074dab0028f3c00553257ef4541e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "tangentPath"
+        }
+      ],
+      "note": "Q18 answered 0: a material with the mikktspace keyword takes the unsmoothed path (R_BuildDominantTris + R_DeriveTangents) with a warning, where the engine would run MikkTSpace; no retail or user material has the keyword"
     }
   ],
   "retired": [

@@ -3,7 +3,9 @@
 These files are copied verbatim from the D3-Sink engine (RBDOOM-3-BFG fork) at commit
 `285ea4d18a0aaedf46b0803ea656e4850eba5a01`. The paths below this folder are the engine's
 paths below `neo/`. SinkBroom's lit preview uses them to parse Doom 3 materials, tables,
-skins and entityDefs with the engine's own code (plan `00-PLAN.md` §3.5, D12, C7).
+skins and entityDefs with the engine's own code (plan `00-PLAN.md` §3.5, D12, C7), and to
+build its geometry as the engine does (windings, patches, the vertex format and the
+tangent code of `renderer/tr_trisurf.cpp`; D57, C24).
 
 **Never edit these files.** A change the copied code needs goes into the shim
 (`../shim/`). The shim headers `precompiled.h` and `RenderCommon.h` stand in for the

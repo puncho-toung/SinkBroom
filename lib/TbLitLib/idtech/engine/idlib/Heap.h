@@ -47,5 +47,119 @@ enum memTag_t
 };
 
 static const int MAX_TAGS = 256;
+// ==== engine neo/idlib/Heap.h lines 52-67 (Mem_Alloc16, Mem_Free16, Mem_Alloc, Mem_Free, Mem_ClearedAlloc, Mem_CopyString) ====
+// RB: 64 bit fixes, changed int to size_t
+void* 		Mem_Alloc16( const size_t size, const memTag_t tag );
+void		Mem_Free16( void* ptr );
+
+ID_INLINE void* 	Mem_Alloc( const size_t size, const memTag_t tag )
+{
+	return Mem_Alloc16( size, tag );
+}
+
+ID_INLINE void		Mem_Free( void* ptr )
+{
+	Mem_Free16( ptr );
+}
+
+void* 		Mem_ClearedAlloc( const size_t size, const memTag_t tag );
+char* 		Mem_CopyString( const char* in );
+// ==== engine neo/idlib/Heap.h lines 122-217 (idTempArray) ====
+/*
+================================================
+idTempArray is an array that is automatically free'd when it goes out of scope.
+There is no "cast" operator because these are very unsafe.
+
+The template parameter MUST BE POD!
+
+Compile time asserting POD-ness of the template parameter is complicated due
+to our vector classes that need a default constructor but are otherwise
+considered POD.
+================================================
+*/
+template < class T >
+class idTempArray
+{
+public:
+	idTempArray( idTempArray<T>& other );
+	idTempArray( unsigned int num );
+
+	~idTempArray();
+
+	T& operator []( unsigned int i )
+	{
+		assert( i < num );
+		return buffer[i];
+	}
+	const T& operator []( unsigned int i ) const
+	{
+		assert( i < num );
+		return buffer[i];
+	}
+
+	T* Ptr()
+	{
+		return buffer;
+	}
+	const T* Ptr() const
+	{
+		return buffer;
+	}
+
+	size_t Size() const
+	{
+		return num * sizeof( T );
+	}
+	unsigned int Num() const
+	{
+		return num;
+	}
+
+	void Zero()
+	{
+		memset( Ptr(), 0, Size() );
+	}
+
+private:
+	T* 				buffer;		// Ensure this buffer comes first, so this == &this->buffer
+	unsigned int	num;
+};
+
+/*
+========================
+idTempArray::idTempArray
+========================
+*/
+template < class T >
+ID_INLINE idTempArray<T>::idTempArray( idTempArray<T>& other )
+{
+	this->num = other.num;
+	this->buffer = other.buffer;
+	other.num = 0;
+	other.buffer = NULL;
+}
+
+/*
+========================
+idTempArray::idTempArray
+========================
+*/
+template < class T >
+ID_INLINE idTempArray<T>::idTempArray( unsigned int num )
+{
+	this->num = num;
+	buffer = ( T* )Mem_Alloc( num * sizeof( T ), TAG_TEMP );
+}
+
+/*
+========================
+idTempArray::~idTempArray
+========================
+*/
+template < class T >
+ID_INLINE idTempArray<T>::~idTempArray()
+{
+	Mem_Free( buffer );
+}
 // ==== engine neo/idlib/Heap.h lines 1340-1340 (include guard end) ====
 #endif /* !__HEAP_H__ */

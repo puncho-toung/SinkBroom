@@ -19,8 +19,8 @@
 
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
-// GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderProgs.h and
-// renderer/tr_frontend_main.cpp):
+// GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderProgs.h,
+// renderer/tr_frontend_main.cpp, renderer/Model.h and renderer/RenderCommon.h):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2013-2023 Robert Beckebans
 //   Copyright (C) 2016-2017 Dustin Land
@@ -235,3 +235,67 @@ struct viewDef_t
 {
   renderView_t renderView;
 };
+
+// ----- the geometry copies (LP1b.2, C24) -----
+
+// renderer/Model.h, copied in part: dominantTri_t
+#include "renderer/Model.h"
+
+/**
+ * renderer/Model.h's srfTriangles_t, reduced to exactly the fields the copied ranges of
+ * tr_trisurf.cpp read and write (D57): R_AllocStaticTriSurf clears it with memset, as in
+ * the engine, so every member is plain data. The arrays are Mem_Alloc16 blocks, freed by
+ * the facade (lit/EngineGeometry.h) with Mem_Free.
+ */
+struct srfTriangles_t
+{
+  bool tangentsCalculated;
+
+  int numVerts;
+  idDrawVert* verts;
+
+  int numIndexes;
+  triIndex_t* indexes;
+  triIndex_t* silIndexes;
+
+  int numMirroredVerts;
+  int* mirroredVerts;
+
+  // R_CreateDupVerts is not copied (D57): always 0 and null
+  int numDupVerts;
+  int* dupVerts;
+
+  dominantTri_t* dominantTris;
+};
+
+// RenderCommon.h:1676-1720, the copied ranges' prototypes
+srfTriangles_t* R_AllocStaticTriSurf();
+void R_AllocStaticTriSurfVerts(srfTriangles_t* tri, int numVerts);
+void R_AllocStaticTriSurfIndexes(srfTriangles_t* tri, int numIndexes);
+void R_AllocStaticTriSurfSilIndexes(srfTriangles_t* tri, int numIndexes);
+void R_AllocStaticTriSurfDominantTris(srfTriangles_t* tri, int numVerts);
+void R_AllocStaticTriSurfMirroredVerts(srfTriangles_t* tri, int numMirroredVerts);
+srfTriangles_t* R_CopyStaticTriSurf(const srfTriangles_t* tri);
+void R_ResizeStaticTriSurfVerts(srfTriangles_t* tri, int numVerts);
+void R_CreateSilIndexes(srfTriangles_t* tri);
+void R_RemoveDegenerateTriangles(srfTriangles_t* tri);
+void R_ReverseTriangles(srfTriangles_t* tri);
+void R_DeriveTangents(srfTriangles_t* tri);
+
+/**
+ * RenderCommon.h's idRenderSystemLocal tr, reduced to the one counter the copied
+ * R_DeriveTangents adds to (tr.pc.c_tangentIndexes, under !DMAP). It is atomic, so pool
+ * threads may add to it at once (C24); nothing reads it. Constant-initialised.
+ */
+struct tbLitPerformanceCounters
+{
+  std::atomic<int> c_tangentIndexes{0};
+};
+
+class idRenderSystemLocal
+{
+public:
+  tbLitPerformanceCounters pc;
+};
+
+extern idRenderSystemLocal tr;

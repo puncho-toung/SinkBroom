@@ -19,7 +19,7 @@
 
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
-// GPL Source Code and RBDOOM-3-BFG (neo/idlib/Heap.cpp and
+// GPL Source Code and RBDOOM-3-BFG (neo/idlib/Heap.cpp, idlib/math/Simd_Generic.cpp and
 // renderer/tr_frontend_main.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2012-2014 Robert Beckebans
@@ -28,9 +28,9 @@
 // Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
 // ---- end of engine notice ----
 
-// idLib's services for the copied code: the idLib wrappers, memory, the MD5 stub, asserts
-// and the localisation stubs. idLib::common is the permanent sink of D63; the other
-// pointers here are bound by the registry (C17, S6).
+// idLib's services for the copied code: the idLib wrappers, memory, the scalar
+// SIMDProcessor, the MD5 stub, asserts and the localisation stubs. idLib::common is the
+// permanent sink of D63; the other pointers here are bound by the registry (C17, S6).
 
 // clang-format off: precompiled.h comes first in every shim file
 #include "precompiled.h"
@@ -186,3 +186,48 @@ void R_StaticFree(void* data)
 {
   Mem_Free(data);
 }
+
+// Simd_Generic.cpp:95-102 idSIMD_Generic::MinMax (idVec3 points), with UNROLL1 written
+// out
+void idSIMDProcessor::MinMax(
+  idVec3& min, idVec3& max, const idVec3* src, const int count) const
+{
+  min[0] = min[1] = min[2] = idMath::INFINITUM;
+  max[0] = max[1] = max[2] = -idMath::INFINITUM;
+  for (int i = 0; i < count; i++)
+  {
+    const idVec3& v = src[i];
+    if (v[0] < min[0])
+    {
+      min[0] = v[0];
+    }
+    if (v[0] > max[0])
+    {
+      max[0] = v[0];
+    }
+    if (v[1] < min[1])
+    {
+      min[1] = v[1];
+    }
+    if (v[1] > max[1])
+    {
+      max[1] = v[1];
+    }
+    if (v[2] < min[2])
+    {
+      min[2] = v[2];
+    }
+    if (v[2] > max[2])
+    {
+      max[2] = v[2];
+    }
+  }
+}
+
+namespace
+{
+// C24 (3): the one scalar SIMDProcessor, constant-initialised, never written
+constexpr idSIMDProcessor tbLitScalarSimd;
+} // namespace
+
+const idSIMDProcessor* const SIMDProcessor = &tbLitScalarSimd;

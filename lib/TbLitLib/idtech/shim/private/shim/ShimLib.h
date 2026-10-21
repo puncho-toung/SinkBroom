@@ -48,7 +48,8 @@ public:
   static void Warning(const char* fmt, ...);
   static void WarningIf(const bool test, const char* fmt, ...);
 
-  // every call into the copied code runs on the parse thread
+  // the copied decl code runs on the parse thread, and the geometry copies that run on
+  // the session's CPU pool never ask (C24)
   static bool IsMainThread() { return true; }
 };
 
@@ -61,25 +62,11 @@ class idVec4;
 // the engine's math/Simd.h declares it before Str.h names it
 class idCmdArgs;
 
-// the memory tags (memTag_t); Heap.h's global new and delete replacement is never copied
+// the memory tags (memTag_t), the Mem_* declarations and idTempArray; Heap.h's global new
+// and delete replacement is never copied. The shim defines Mem_Alloc16, Mem_Free16,
+// Mem_ClearedAlloc and Mem_CopyString on malloc and free (ShimLib.cpp), which any thread
+// may call (C24).
 #include "idlib/Heap.h"
-
-// Heap.h's Mem_* functions, on malloc and free
-void* Mem_Alloc16(const size_t size, const memTag_t tag);
-void Mem_Free16(void* ptr);
-
-inline void* Mem_Alloc(const size_t size, const memTag_t tag)
-{
-  return Mem_Alloc16(size, tag);
-}
-
-inline void Mem_Free(void* ptr)
-{
-  Mem_Free16(ptr);
-}
-
-void* Mem_ClearedAlloc(const size_t size, const memTag_t tag);
-char* Mem_CopyString(const char* in);
 
 // Heap.h's tagged new and delete, forwarded to the global operators. The copied code
 // pairs a tagged new with a plain delete (new( TAG_STRING ) char[] with delete [], for
@@ -110,11 +97,49 @@ inline void operator delete[](void* p, memTag_t) noexcept
 #include "idlib/containers/Sort.h"
 #include "idlib/containers/List.h"
 
+// clang-format on
+
+class idVec2;
+class idDrawVert;
+
+/**
+ * math/Simd.h's SIMDProcessor, the scalar stand-in of C24 (3): exactly the methods the
+ * copied code calls, without virtuals, each a transcription of idSIMD_Generic's
+ * (Simd_Generic.cpp) that reads only its arguments and writes only its outputs, so any
+ * thread may call it. The one object is constant-initialised and never written.
+ *
+ * - MinMax (idVec3 points): idBounds::FromPoints (Bounds.cpp).
+ */
+class idSIMDProcessor
+{
+public:
+  void MinMax(idVec3& min, idVec3& max, const idVec3* src, const int count) const;
+};
+
+extern const idSIMDProcessor* const SIMDProcessor;
+
+// clang-format off: the copied headers follow idlib/Lib.h's order
+
 // math
 #include "idlib/math/Math.h"
 #include "idlib/math/Vector.h"
 #include "idlib/math/Matrix.h"
 #include "idlib/math/Angles.h"
+#include "idlib/math/Quat.h"
+#include "idlib/math/Rotation.h"
+#include "idlib/math/Plane.h"
+#include "idlib/math/Pluecker.h"
+
+// bounding volumes
+#include "idlib/bv/Sphere.h"
+#include "idlib/bv/Bounds.h"
+
+// geometry
+#include "idlib/geometry/JointTransform.h"
+#include "idlib/geometry/DrawVert.h"
+#include "idlib/geometry/Winding.h"
+#include "idlib/geometry/Surface.h"
+#include "idlib/geometry/Surface_Patch.h"
 
 // text manipulation
 #include "idlib/Str.h"
