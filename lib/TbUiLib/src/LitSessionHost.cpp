@@ -335,9 +335,10 @@ void LitSessionHost::updateRequested()
   }
 }
 
-void LitSessionHost::teardown()
+const LitPreviewReport& LitSessionHost::teardown()
 {
   runTeardownThrough(TeardownStep::DispatcherReset);
+  return m_report;
 }
 
 void LitSessionHost::runTeardownThrough(const TeardownStep last)
@@ -394,6 +395,22 @@ void LitSessionHost::runTeardownThrough(const TeardownStep last)
 
 void LitSessionHost::recordTeardown()
 {
+  m_report.generation = m_generation;
+  m_report.hadDevice = m_session != nullptr;
+  m_report.stopOverran = m_stopOverran;
+  m_report.parkTimeouts = m_parkTimeouts;
+  if (m_session)
+  {
+    auto sessionReport = m_session->teardownReport();
+    m_report.deviceReleaseCount = sessionReport.deviceReleaseCount;
+    m_report.nvrhiErrors = sessionReport.nvrhiErrors;
+    m_report.deviceLost = sessionReport.deviceLost;
+    m_report.frameLogError = std::move(sessionReport.frameLogError);
+    m_report.messages = std::move(sessionReport.messages);
+    m_report.framesPresented = sessionReport.framesPresented;
+    m_report.swapchainGenerations = sessionReport.swapchainGenerations;
+  }
+
   auto& d = m_diagnostics;
   ++d.teardowns;
   if (m_session)

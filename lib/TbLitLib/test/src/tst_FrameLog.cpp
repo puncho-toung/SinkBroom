@@ -99,7 +99,7 @@ TEST_CASE("FrameLogWriter")
     auto second = exampleRow();
     second.frameIndex = 13;
     writer.append(second);
-    writer.close();
+    CHECK_FALSE(writer.close());
     CHECK_FALSE(writer.isOpen());
 
     CHECK(
@@ -118,7 +118,7 @@ TEST_CASE("FrameLogWriter")
     CHECK_FALSE(writer.open({}));
     CHECK_FALSE(writer.isOpen());
     writer.append(exampleRow());
-    writer.close();
+    CHECK_FALSE(writer.close());
   }
 
   SECTION("open with an unopenable path is an error message")

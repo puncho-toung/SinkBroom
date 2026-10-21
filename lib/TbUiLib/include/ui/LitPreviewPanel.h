@@ -33,6 +33,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 class QLabel;
 class QPushButton;
@@ -83,6 +84,33 @@ struct LitPreviewDiagnostics
 };
 
 /**
+ * What a lit preview session left when it stopped. The panel logs a report with problems
+ * and shows them on its Start page, and passes every report to sessionDidEndNotifier.
+ */
+struct LitPreviewReport
+{
+  std::uint64_t generation = 0;
+  // phase B ran: the session had a device
+  bool hadDevice = false;
+  // what the NVRHI device's last Release() returned; 0 expected
+  std::uint32_t deviceReleaseCount = 0;
+  std::size_t nvrhiErrors = 0;
+  bool deviceLost = false;
+  std::optional<std::string> frameLogError;
+  // the warnings and errors raised while the session stopped
+  std::vector<std::string> messages;
+  // the render thread took longer than two seconds to stop; the stop waited on
+  bool stopOverran = false;
+  std::uint64_t framesPresented = 0;
+  std::uint64_t swapchainGenerations = 0;
+  // swapchain handshakes that had to wait for the render thread to park
+  std::uint64_t parkTimeouts = 0;
+
+  // what a user should know, one sentence each; empty after a clean stop
+  std::vector<std::string> problems() const;
+};
+
+/**
  * The Lit Preview sidebar panel (§1, §3.1): the map lit as D3-Sink draws it, in a Vulkan
  * surface that follows the 3D view's camera. Nothing of the preview exists until Start,
  * and Stop, closing the panel or closing its window tears all of it down (C9, C18).
@@ -128,6 +156,8 @@ private:
 
   // why the last session stopped, unless Stop or a close stopped it
   QString m_stopReason;
+  // what the last session's teardown found wrong
+  QString m_stopProblems;
   // the last camera the 3D view reported, so that phase B starts with it
   std::optional<CameraCopy> m_lastCamera;
   std::unique_ptr<LitSessionHost> m_host;
@@ -135,6 +165,9 @@ private:
   NotifierConnection m_notifierConnection;
 
 public:
+  // after every session's teardown, also one that ended with the panel
+  Notifier<const LitPreviewReport&> sessionDidEndNotifier;
+
   explicit LitPreviewPanel(const SidebarContext& context, QWidget* parent = nullptr);
   ~LitPreviewPanel() override;
 
@@ -199,7 +232,7 @@ private:
 
   // the teardown, then the Start page with the reason
   void stopSession(QString reason);
-  void teardownSession();
+  std::optional<LitPreviewReport> endSession();
   void updateStartPage();
 };
 

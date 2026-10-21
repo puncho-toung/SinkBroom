@@ -32,7 +32,9 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace tb::lit
 {
@@ -86,6 +88,26 @@ enum class SessionEvent
  */
 using EventSink =
   std::function<void(SessionEvent, std::string message, std::uint64_t generation)>;
+
+/**
+ * What a session's teardown found, for its owner, which logs and shows a report that is
+ * not clean. Complete once releaseGpuObjects has run. Messages that the session would
+ * otherwise post while it stops land here, because no owner acts on them any more.
+ */
+struct TeardownReport
+{
+  // what the NVRHI device's last Release() returned; 0 expected
+  std::uint32_t deviceReleaseCount = 0;
+  std::size_t nvrhiErrors = 0;
+  // lost during the session, or found lost while stopping
+  bool deviceLost = false;
+  // the frame log could not be written in full
+  std::optional<std::string> frameLogError;
+  // the warnings and errors raised while stopping
+  std::vector<std::string> messages;
+  std::uint64_t framesPresented = 0;
+  std::uint64_t swapchainGenerations = 0;
+};
 
 // §3.1: the longest park() waits; the plan's bound is the current pass plus two frames in
 // flight, about 250 ms in a settled frame
@@ -184,6 +206,8 @@ public:
   void releaseGpuObjects();
   // step 7, the device part: vkDestroyDevice; the instance belongs to the caller
   void destroyVkDevice();
+  // what the teardown found; complete after releaseGpuObjects
+  TeardownReport teardownReport() const;
 
   // Test hooks
 

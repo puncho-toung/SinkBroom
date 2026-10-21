@@ -574,6 +574,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
         REQUIRE(
           waitFor([&] { return session->framesPresented() > settled; }, 5000ms, false));
 
+        const auto frames = session->framesPresented();
         teardown(*session);
         CHECK(session->lastDeviceReleaseCount() == 0u);
         CHECK(session->nvrhiErrorCount() == 0u);
@@ -583,6 +584,15 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
         CHECK(events.count(SessionEvent::DeviceLost) == 0u);
         CHECK(events.count(SessionEvent::Warning) == 0u);
         CHECK(events.allOfGeneration(cycle + 1));
+
+        // a clean teardown, reported to the caller rather than posted
+        const auto report = session->teardownReport();
+        CHECK(report.deviceReleaseCount == 0u);
+        CHECK(report.nvrhiErrors == 0u);
+        CHECK_FALSE(report.deviceLost);
+        CHECK_FALSE(report.frameLogError);
+        CHECK(report.messages.empty());
+        CHECK(report.framesPresented == frames);
         events.print("headless");
       }
     }
@@ -656,6 +666,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
 
       teardown(*session);
       CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->teardownReport().deviceLost);
       CHECK(events.count(SessionEvent::DeviceLost) == 1u);
       CHECK(events.allOfGeneration(7));
       events.print("device loss");

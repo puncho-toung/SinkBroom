@@ -27,6 +27,7 @@
 #include "base/Result.h"
 #include "lit/LitSession.h"
 #include "lit/VulkanInstance.h"
+#include "ui/LitPreviewPanel.h"
 
 #include <cstdint>
 #include <functional>
@@ -40,7 +41,6 @@ class QWidget;
 namespace tb::ui
 {
 class LitPreviewWindow;
-struct LitPreviewDiagnostics;
 
 /**
  * The Qt half of one lit preview session: the QVulkanInstance, the window and its
@@ -130,6 +130,7 @@ private:
   bool m_stopOverran = false;
 
   TeardownStep m_teardownStep = TeardownStep::None;
+  LitPreviewReport m_report;
 
 public:
   LitSessionHost(
@@ -176,8 +177,8 @@ public:
   void screenChanged();
   void updateRequested();
 
-  // Runs every teardown step that has not run.
-  void teardown();
+  // Runs every teardown step that has not run, and says what it found.
+  const LitPreviewReport& teardown();
 
 private:
   void runTeardownThrough(TeardownStep last);

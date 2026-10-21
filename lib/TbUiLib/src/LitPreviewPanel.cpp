@@ -41,6 +41,8 @@
 #include "ui/QPathUtils.h"
 #include "ui/ViewConstants.h"
 
+#include <fmt/format.h>
+
 #include <algorithm>
 #include <filesystem>
 #include <utility>
@@ -107,12 +109,43 @@ LitPreviewPanel::LitPreviewPanel(const SidebarContext& context, QWidget* parent)
   updateStartPage();
 }
 
+std::vector<std::string> LitPreviewReport::problems() const
+{
+  auto result = std::vector<std::string>{};
+  if (deviceReleaseCount != 0)
+  {
+    result.push_back(fmt::format(
+      "The GPU device was still referenced {} times when it was released.",
+      deviceReleaseCount));
+  }
+  if (nvrhiErrors != 0)
+  {
+    result.push_back(fmt::format("NVRHI reported {} errors.", nvrhiErrors));
+  }
+  if (frameLogError)
+  {
+    result.push_back(*frameLogError + ".");
+  }
+  for (const auto& message : messages)
+  {
+    result.push_back(message);
+  }
+  if (stopOverran)
+  {
+    result.push_back("The render thread took more than two seconds to stop.");
+  }
+  return result;
+}
+
 LitPreviewPanel::~LitPreviewPanel()
 {
   // the guard's notification of this teardown reaches the other panels only, and nothing
   // here reads the document, which may be gone with the window
   m_notifierConnection.disconnect();
-  teardownSession();
+  if (const auto report = endSession())
+  {
+    sessionDidEndNotifier(*report);
+  }
 }
 
 QString LitPreviewPanel::panelId() const
@@ -181,6 +214,7 @@ void LitPreviewPanel::start()
   m_surfacePage->layout()->addWidget(container.value());
   m_host = std::move(host);
   m_stopReason.clear();
+  m_stopProblems.clear();
   forwardCamera();
 
   claimSession(*this);
@@ -454,21 +488,30 @@ void LitPreviewPanel::stopSession(QString reason)
     return;
   }
 
-  if (m_host)
+  if (const auto report = endSession())
   {
-    teardownSession();
     m_stopReason = std::move(reason);
+    m_stopProblems.clear();
+    auto& logger = m_document.logger();
+    for (const auto& problem : report->problems())
+    {
+      logger.warn() << "Lit preview: " << problem;
+      m_stopProblems +=
+        (m_stopProblems.isEmpty() ? "" : " ") + QString::fromStdString(problem);
+    }
+    sessionDidEndNotifier(*report);
   }
   updateStartPage();
 }
 
-void LitPreviewPanel::teardownSession()
+std::optional<LitPreviewReport> LitPreviewPanel::endSession()
 {
   if (!m_host)
   {
-    return;
+    return std::nullopt;
   }
 
+  auto report = std::optional<LitPreviewReport>{};
   if (m_host->busy())
   {
     // only from the destructor: the host ends itself once its wait is over
@@ -477,12 +520,14 @@ void LitPreviewPanel::teardownSession()
   }
   else
   {
-    // R5.17: from here on, every message of this session is dropped
+    // R5.17: from here on, every message of this session is dropped; the teardown reports
+    // what it finds here, synchronously
     auto host = std::move(m_host);
-    host->teardown();
+    report = host->teardown();
     host.reset();
   }
   releaseSession(*this);
+  return report;
 }
 
 void LitPreviewPanel::updateStartPage()
@@ -490,11 +535,14 @@ void LitPreviewPanel::updateStartPage()
   const auto reason = unavailableReason();
   m_startButton->setEnabled(!m_host && reason.isEmpty());
   m_stopButton->setEnabled(m_host != nullptr);
+  const auto text = !reason.isEmpty() ? reason
+                    : !m_stopReason.isEmpty()
+                      ? m_stopReason
+                      : tr("Press Start to see the map lit as the engine draws it.");
   m_messageLabel->setText(
-    !reason.isEmpty() ? reason
-    : !m_stopReason.isEmpty()
-      ? m_stopReason
-      : tr("Press Start to see the map lit as the engine draws it."));
+    m_host || m_stopProblems.isEmpty()
+      ? text
+      : text + "\n" + tr("The last session did not stop cleanly: ") + m_stopProblems);
   m_stack->setCurrentWidget(m_host ? m_surfacePage : m_startPage);
 }
 

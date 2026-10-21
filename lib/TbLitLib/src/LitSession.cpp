@@ -34,6 +34,7 @@
 
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <condition_variable>
 #include <mutex>
 #include <optional>
@@ -170,7 +171,13 @@ struct LitSession::Impl
     const std::uint64_t generation_)
     : instance{std::move(instance_)}
     , options{std::move(options_)}
-    , sink{std::move(sink_)}
+    , ownerSink{std::move(sink_)}
+    , sink{[this](
+             const SessionEvent event,
+             std::string message,
+             const std::uint64_t messageGeneration) {
+      postOrReport(event, std::move(message), messageGeneration);
+    }}
     , generation{generation_}
     , messageCallback{sink, generation, lost}
   {
@@ -179,6 +186,8 @@ struct LitSession::Impl
   // ----- immutable after start -----
   InstanceHandles instance;
   SessionOptions options;
+  // the owner's sink, which sink calls until the stop
+  EventSink ownerSink;
   EventSink sink;
   std::uint64_t generation;
   GpuChoice gpu;
@@ -244,9 +253,33 @@ struct LitSession::Impl
   bool vkDeviceDestroyed = false;
   std::atomic<std::uint32_t> lastReleaseCount = 0;
 
+  // ----- the teardown report, filled by both threads -----
+  // set when the stop is requested; from then on messages go to the report
+  std::atomic<bool> stopping = false;
+  mutable std::mutex reportMutex;
+  TeardownReport report;
+
   void postEvent(const SessionEvent event, std::string message) const
   {
     post(sink, event, std::move(message), generation);
+  }
+
+  // the session's sink: the owner's until the stop, then the report
+  void postOrReport(
+    const SessionEvent event, std::string message, const std::uint64_t messageGeneration)
+  {
+    if (!stopping)
+    {
+      post(ownerSink, event, std::move(message), messageGeneration);
+      return;
+    }
+    if (
+      event == SessionEvent::Warning || event == SessionEvent::Error
+      || event == SessionEvent::DeviceLost)
+    {
+      const auto lock = std::scoped_lock{reportMutex};
+      report.messages.push_back(std::move(message));
+    }
   }
 
   void markLost(const std::string& reason)
@@ -1017,12 +1050,23 @@ struct LitSession::Impl
         }
         return true;
       });
-      frameLog.close();
+      if (auto error = frameLog.close())
+      {
+        const auto lock = std::scoped_lock{reportMutex};
+        report.frameLogError = std::move(error);
+      }
     }
     catch (const std::exception& e)
     {
-      postEvent(
-        SessionEvent::Warning, fmt::format("Cannot write the frame log: {}", e.what()));
+      try
+      {
+        const auto lock = std::scoped_lock{reportMutex};
+        report.frameLogError = fmt::format("Cannot write the frame log: {}", e.what());
+      }
+      catch (...)
+      {
+        // the report loses this line, not the process
+      }
     }
   }
 
@@ -1031,6 +1075,7 @@ struct LitSession::Impl
   // step 1
   void requestStop()
   {
+    stopping = true;
     {
       const auto lock = std::scoped_lock{mutex};
       stopRequested = true;
@@ -1128,7 +1173,16 @@ struct LitSession::Impl
             "The NVRHI device is still referenced {} times after its release",
             std::uint32_t(lastReleaseCount)));
       }
+      // plan step 5: a reference left is a handle the session forgot to release
+      assert(lastReleaseCount == 0);
     }
+
+    const auto lock = std::scoped_lock{reportMutex};
+    report.deviceReleaseCount = lastReleaseCount;
+    report.nvrhiErrors = messageCallback.errorCount();
+    report.deviceLost = lost;
+    report.framesPresented = framesPresented;
+    report.swapchainGenerations = swapchainCount;
   }
 
   // step 7, the device part
@@ -1346,6 +1400,12 @@ void LitSession::debugSetBeforePresentHook(std::function<void()> hook)
 {
   const auto lock = std::scoped_lock{m_impl->mutex};
   m_impl->beforePresentHook = std::move(hook);
+}
+
+TeardownReport LitSession::teardownReport() const
+{
+  const auto lock = std::scoped_lock{m_impl->reportMutex};
+  return m_impl->report;
 }
 
 std::uint32_t LitSession::lastDeviceReleaseCount() const

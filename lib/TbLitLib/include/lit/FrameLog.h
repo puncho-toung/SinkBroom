@@ -64,13 +64,16 @@ public:
   bool isOpen() const;
 
   void append(const FrameLogRow& row);
-  void close();
+  // writes what is buffered and closes the file; the first write that failed, if any
+  std::optional<std::string> close();
 
 private:
   void writeBuffer();
 
+  std::filesystem::path m_path;
   std::ofstream m_file;
   std::string m_buffer;
+  std::optional<std::string> m_error;
 };
 
 } // namespace tb::lit

@@ -21,6 +21,8 @@
 
 #include <fmt/format.h>
 
+#include <utility>
+
 namespace tb::lit
 {
 namespace
@@ -61,6 +63,7 @@ std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& pat
     return std::nullopt;
   }
 
+  m_path = path;
   m_file.open(path, std::ios::out | std::ios::trunc | std::ios::binary);
   if (!m_file)
   {
@@ -90,21 +93,30 @@ void FrameLogWriter::append(const FrameLogRow& row)
   }
 }
 
-void FrameLogWriter::close()
+std::optional<std::string> FrameLogWriter::close()
 {
   if (m_file.is_open())
   {
     writeBuffer();
     m_file.flush();
     m_file.close();
+    if (!m_file && !m_error)
+    {
+      m_error = fmt::format("Cannot write the frame log {}", m_path.string());
+    }
   }
   m_buffer.clear();
+  return std::exchange(m_error, std::nullopt);
 }
 
 void FrameLogWriter::writeBuffer()
 {
   m_file.write(m_buffer.data(), std::streamsize(m_buffer.size()));
   m_buffer.clear();
+  if (!m_file && !m_error)
+  {
+    m_error = fmt::format("Cannot write the frame log {}", m_path.string());
+  }
 }
 
 } // namespace tb::lit
