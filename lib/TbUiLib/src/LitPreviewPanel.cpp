@@ -401,15 +401,20 @@ void LitPreviewPanel::createGui()
 
   // D9 (LP2.3): one line under the surface: the session's state (settled or drawing),
   // the lit passes' counts, the VRAM and the disabled programs with their reasons;
-  // start() puts the window container above it
+  // start() puts the window container above it. One line of a fixed height whose width
+  // is ignored: a new text never resizes the surface (which would draw frames); the
+  // tooltip holds the whole line
   auto* statusLabel = new QLabel{};
   statusLabel->setObjectName(StatusLabelName);
-  statusLabel->setWordWrap(true);
+  statusLabel->setWordWrap(false);
   statusLabel->setContentsMargins(
     LayoutConstants::WideHMargin,
     LayoutConstants::NarrowVMargin,
     LayoutConstants::WideHMargin,
     LayoutConstants::NarrowVMargin);
+  statusLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+  statusLabel->setFixedHeight(
+    statusLabel->fontMetrics().height() + 2 * LayoutConstants::NarrowVMargin);
   statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
   surfacePageLayout->addWidget(statusLabel);
   auto* statusTimer = new QTimer{this};
@@ -417,11 +422,15 @@ void LitPreviewPanel::createGui()
   statusTimer->setInterval(StatusInterval);
   connect(statusTimer, &QTimer::timeout, this, [this, statusLabel] {
     auto* session = m_host ? m_host->session() : nullptr;
-    statusLabel->setText(
-      session ? QString::fromStdString(
-                  lit::sessionStatusLine(session->status(), session->programReport()))
-      : m_host ? tr("starting")
-               : QString{});
+    const auto text = session  ? QString::fromStdString(lit::sessionStatusLine(
+                                  session->status(), session->programReport()))
+                      : m_host ? tr("starting")
+                               : QString{};
+    if (text != statusLabel->text())
+    {
+      statusLabel->setText(text);
+      statusLabel->setToolTip(text);
+    }
   });
 
   m_stack = new QStackedLayout{};
@@ -671,6 +680,7 @@ void LitPreviewPanel::updateStartPage()
       if (auto* statusLabel = findChild<QLabel*>(StatusLabelName))
       {
         statusLabel->clear();
+        statusLabel->setToolTip({});
       }
     }
   }
