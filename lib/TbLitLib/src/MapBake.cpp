@@ -159,6 +159,10 @@ void readLightGrid(DeclSource& source, MapBake& bake)
       | kdl::and_then([&](const LightGridBinaryHeader& header) -> Result<void> {
           if (!lightGridBinaryAccepted(header, textTime))
           {
+            // why, for the status line (A2)
+            bake.gridError = textTime == -1
+                               ? binaryPath + " is not used without " + textPath
+                               : binaryPath + " was not made from this " + textPath;
             return kdl::void_success;
           }
           return readLightGridBinary(data, numAreas)

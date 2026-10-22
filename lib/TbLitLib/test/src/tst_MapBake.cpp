@@ -410,12 +410,14 @@ TEST_CASE("MapBake, the C10 search through the game files")
     CHECK(bake.grid == MapBake::Grid::Text);
     REQUIRE(bake.lightGrid);
     CHECK(bake.lightGrid->areas[0].probeSize == 16);
+    CHECK_THAT(bake.gridError, Catch::Matchers::ContainsSubstring("was not made from"));
 
     // no text file: the binary is not taken, and there is no grid
     std::filesystem::remove(gridPath);
     bake = readBake();
     CHECK(bake.grid == MapBake::Grid::None);
     CHECK_FALSE(bake.lightGrid);
+    CHECK_THAT(bake.gridError, Catch::Matchers::ContainsSubstring("is not used without"));
   }
 
   SECTION("the light grid: a text in a container has time 0, which takes any binary")
