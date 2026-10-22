@@ -38,7 +38,9 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Projection.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ResourceContainer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_RetailMaterials.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_RetailShaders.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ShaderBlobs.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ShaderReflection.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Snapshot.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_StackThread.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SwapchainRules.cpp

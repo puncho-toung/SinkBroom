@@ -12944,6 +12944,40 @@
         }
       ],
       "note": "LP2.0 (C30, D72, P2.13): the engine sub-allocates its textures and buffers through VMA in 256 MB blocks and counts nothing; the preview allocates through NVRHI, one VkDeviceMemory per resource, and counts the live allocations by wrapping the default dispatcher's vkAllocateMemory and vkFreeMemory from the moment the VkDevice's functions are loaded until the device is destroyed (SinkBroom only: nothing in NVRHI changes, and NVRHI calls both through the dispatcher). The counter is process-wide like the dispatcher; its statics are constant-initialised (C9). LP2.2b adds it to the frame log; D72 decides texture heaps on it"
+    },
+    {
+      "id": "M-SHADER-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/NVRHI/RenderProgs_NVRHI.cpp",
+          "lines": [
+            245,
+            258
+          ],
+          "anchor": "idRenderProgManager::LoadProgram",
+          "sha256": "ff48b64d49bd66288e264b030dbfaa820512cd78dcb9daa53e7cb1616637b0b9"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ShaderReflection.cpp",
+          "symbol": "reflectSpirv"
+        },
+        {
+          "file": "lib/TbLitLib/src/ShaderReflection.cpp",
+          "symbol": "engineExpectedLayout"
+        },
+        {
+          "file": "lib/TbLitLib/src/ShaderReflection.cpp",
+          "symbol": "compareReflection"
+        },
+        {
+          "file": "lib/TbLitLib/src/ShaderReflection.cpp",
+          "symbol": "descriptorKindOf"
+        }
+      ],
+      "note": "LP2.0 (D9, C3, C26, P2.19): the engine creates its programs from the blobs without looking into them; the preview reflects every shader it loads with SPIRV-Reflect (the pin SPIRV-Reflect) and compares it with the mirrored tables: every descriptor (set, Vulkan binding = slot + NVRHI's offset, type) is in the program's binding layouts; a push-constant block only where the layout pushes, and of the table's size; the constant block's members (a cbuffer holding one struct is taken as that struct) by name and offset, their count and the block's size against the renderparm set or the pass's struct; a vertex shader's inputs (built-ins left out) at the vertex layout's locations with the component counts of the engine's VS_IN. A shader may leave out what the layout has. A mismatch disables the program with a message naming the field (D9); the hidden retail test reflects all 30 permutations of LP2's ten programs (pushed and not) equal to the tables. Code shorter than SPIR-V's header is refused before SPIRV-Reflect reads it (it reads the generator word unchecked)"
     }
   ],
   "retired": [
