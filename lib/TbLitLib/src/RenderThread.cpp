@@ -435,6 +435,7 @@ void RenderThread::releaseFrameResources()
   m_pipelines.clear();
   m_bindingSets.clear();
   m_images.releaseAll();
+  m_samplers.releaseAll();
   m_arenaTestChunks.reset();
   m_commandList = nullptr;
   for (auto& event : m_frameEvents)
@@ -660,6 +661,7 @@ void RenderThread::runFrameHooks(nvrhi::ICommandList& commandList)
     m_images,
     m_bindingSets,
     m_textureUploads,
+    m_samplers,
     m_frameUploadBytes};
   if (everyFrame)
   {
@@ -1016,7 +1018,12 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       // D70, D78: what the session's start clears and the frame's uploads come before its
       // first pass
       m_frameResources.recordStartClears(commandList);
-      if (!recordUploads(commandList))
+      // D68: the common samplers, once per session
+      const auto samplers =
+        m_samplers.common(device) | kdl::transform([](const auto*) { return true; })
+        | kdl::if_error([&](const auto& e) { m_events.markFailed(e.msg); })
+        | kdl::value_or(false);
+      if (!samplers || !recordUploads(commandList))
       {
         return FrameOutcome::Stopped;
       }

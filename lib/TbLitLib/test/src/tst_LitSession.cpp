@@ -2852,6 +2852,157 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }
+
+  SECTION(
+    "D68, Q19: every sampler, and DRAW_INTERACTION sets with the compare-enabled s0")
+  {
+    namespace ei = engine_image;
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+
+      auto colour = NoImageSlot;
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        colour = access.images.provideForTesting(
+          testImageKey("textures/lp2/colour"), syntheticImage(16, ei::FormatDxt5, 3));
+      }));
+      REQUIRE(waitForSlots(*session, {colour}));
+
+      // DRAW_INTERACTION's sets from the compile thread (C20): set 1 is t0-t2, set 3
+      // s0-s1
+      auto layouts = std::vector<nvrhi::BindingLayoutHandle>{};
+      REQUIRE(waitFor(
+        [&] {
+          inFrame(*session, [&](RenderFrameAccess& access) {
+            const auto& lookup =
+              access.pipelines.layouts(EngineBindingLayout::DrawInteraction);
+            if (lookup.state == BindingLayoutLookup::State::Ready)
+            {
+              layouts = lookup.layouts;
+            }
+          });
+          return !layouts.empty();
+        },
+        10000ms,
+        false));
+      REQUIRE(layouts.size() == 4u);
+
+      struct Seen
+      {
+        bool common = false;
+        nvrhi::SamplerReductionType s0 = nvrhi::SamplerReductionType::Standard;
+        nvrhi::SamplerReductionType border = nvrhi::SamplerReductionType::Standard;
+        int imageSamplers = 0;
+        int refused = 0;
+        nvrhi::SamplerReductionType depth = nvrhi::SamplerReductionType::Standard;
+        std::size_t samplers = 0;
+        bool textures = false;
+        bool samplerSet = false;
+      };
+      auto seen = Seen{};
+      auto sets = std::vector<nvrhi::BindingSetHandle>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        const auto* common =
+          access.samplers.common(access.device) | kdl::value_or(nullptr);
+        if (!common)
+        {
+          return;
+        }
+        seen.common = true;
+        seen.s0 = common->anisotropicWrap->getDesc().reductionType;
+        seen.border = common->linearBorder->getDesc().reductionType;
+        // every filter and repeat of SC269, and a depth image's
+        for (const auto filter :
+             {ei::FilterLinear,
+              ei::FilterNearest,
+              ei::FilterNearestMipmap,
+              ei::FilterDefault})
+        {
+          for (const auto repeat :
+               {ei::RepeatRepeat,
+                ei::RepeatClamp,
+                ei::RepeatClampToZero,
+                ei::RepeatClampToZeroAlpha})
+          {
+            access.samplers.imageSampler(access.device, ei::FormatRgba8, filter, repeat)
+              | kdl::transform([&](nvrhi::ISampler*) { ++seen.imageSamplers; })
+              | kdl::if_error([&](const auto&) { ++seen.refused; }) | kdl::ignore();
+          }
+        }
+        // the same (filter, repeat, depth) is the same sampler
+        const auto twice = [&] {
+          return access.samplers.imageSampler(
+                   access.device, ei::FormatDxt5, ei::FilterDefault, ei::RepeatRepeat)
+                 | kdl::value_or(nullptr);
+        };
+        if (twice() != twice())
+        {
+          ++seen.refused;
+        }
+        seen.depth = (access.samplers.imageSampler(
+                        access.device, ei::FormatDepth, ei::FilterLinear, ei::RepeatClamp)
+                      | kdl::value_or(nullptr))
+                       ->getDesc()
+                       .reductionType;
+        access.samplers.imageSampler(access.device, ei::FormatRgba8, 7, ei::RepeatRepeat)
+          | kdl::if_error([&](const auto&) { ++seen.imageSamplers; }) | kdl::ignore();
+        seen.samplers = access.samplers.size();
+
+        // a colour texture in t0-t2 and the interaction's samplers in s0-s1
+        const auto binding = access.images.binding(colour);
+        auto textures = access.device.createBindingSet(
+          nvrhi::BindingSetDesc{}
+            .addItem(nvrhi::BindingSetItem::Texture_SRV(
+              0, binding.texture, nvrhi::Format::UNKNOWN, binding.subresources))
+            .addItem(nvrhi::BindingSetItem::Texture_SRV(
+              1, binding.texture, nvrhi::Format::UNKNOWN, binding.subresources))
+            .addItem(nvrhi::BindingSetItem::Texture_SRV(
+              2, binding.texture, nvrhi::Format::UNKNOWN, binding.subresources)),
+          layouts[1]);
+        auto samplers = access.device.createBindingSet(
+          nvrhi::BindingSetDesc{}
+            .addItem(nvrhi::BindingSetItem::Sampler(0, common->anisotropicWrap))
+            .addItem(nvrhi::BindingSetItem::Sampler(1, common->linearBorder)),
+          layouts[3]);
+        seen.textures = bool(textures);
+        seen.samplerSet = bool(samplers);
+        sets = {std::move(textures), std::move(samplers)};
+      }));
+      CHECK(seen.common);
+      // D68: the leaked desc: s0 keeps the Comparison reduction, the border sampler not
+      CHECK(seen.s0 == nvrhi::SamplerReductionType::Comparison);
+      CHECK(seen.border == nvrhi::SamplerReductionType::Standard);
+      CHECK(seen.imageSamplers == 17);
+      CHECK(seen.refused == 0);
+      CHECK(seen.depth == nvrhi::SamplerReductionType::Comparison);
+      // the common eight, 16 colour samplers and a depth one
+      CHECK(seen.samplers == 25u);
+      CHECK(seen.textures);
+      CHECK(seen.samplerSet);
+      std::cout
+        << "Q19: DRAW_INTERACTION sets with the compare-enabled s0 made; validation "
+           "errors "
+        << messages.errors << ", warnings " << messages.warnings << "\n";
+
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess&) { sets.clear(); }));
+      layouts.clear();
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("samplers, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
 }
 
 } // namespace tb::lit

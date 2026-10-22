@@ -13600,6 +13600,37 @@
         }
       ],
       "note": "LP2.1 step 6 (D69, K23): the engine generates its intrinsics on the render thread at start (GenerateImage: DeriveOpts, Load2DFromMemory with its encoder, the upload); the preview makes them on the parse thread as Generated images in the shape of a cache (the recipe, DeriveOpts' format and mips, the layout conversion of LP1c.2, then the encoder's constant blocks for a DXT usage), and the render thread uploads them as any other image. The texels equal the engine's; only where and when they are made differs. Every other intrinsic name answers Default with a reason that names it (LP3-LP5 add theirs)"
+    },
+    {
+      "id": "M-SAMP-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Passes/CommonPasses.cpp",
+          "lines": [
+            71,
+            97
+          ],
+          "anchor": "CommonRenderPasses::Init, the samplers",
+          "sha256": "6595578278b5c9b48c2c8f485cfbb82ffc7799eeb9ffcb10bc41f1e401618b64"
+        },
+        {
+          "file": "neo/renderer/NVRHI/Image_NVRHI.cpp",
+          "lines": [
+            310,
+            333
+          ],
+          "anchor": "idImage::GetSampler",
+          "sha256": "1b8935c2de3bb5bd4207a065ff6d42918f6bcfe1f69dcda352a84a893f5c3d8e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/SamplerSet.cpp",
+          "symbol": "SamplerSet::common, SamplerSet::imageSampler"
+        }
+      ],
+      "note": "LP2.1 step 7 (D68, SC240, SC269): the eight common samplers made once per session on the render thread from engineCommonSamplers' descs (M-TABLE: one desc changed in place, so LinearClampCompare, LinearWrap, AnisotropicWrap and AnisotropicClampEdge keep the Comparison reduction; s0 of DRAW_INTERACTION is AnisotropicWrap); an image's sampler from engineImageSamplerDesc, one per (filter, repeat, depth) as GetSampler's SamplerCache keeps one per desc (the preview's key is what the desc is made from; r_usePixelatedLook is off). Q19 measured: DRAW_INTERACTION's texture and sampler sets with the compare-enabled s0 and a BC3 colour texture are made with no validation message (a draw is LP2.2a's)"
     }
   ],
   "retired": [
