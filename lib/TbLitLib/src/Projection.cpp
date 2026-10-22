@@ -19,10 +19,14 @@
 
 #include "lit/Projection.h"
 
+#include "lit/NumberText.h"
+
 #include <fmt/format.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <vector>
 
 namespace tb::lit
 {
@@ -93,6 +97,110 @@ std::string parityCameraLine(const CameraState& camera, const ViewProjection& vi
     view.gFov,
     camera.viewportWidth,
     camera.viewportHeight);
+}
+
+std::optional<float> trenchBroomFovOfGFov(const int gFov)
+{
+  if (gFov < 1 || gFov > 179)
+  {
+    return std::nullopt;
+  }
+  const auto target = float(gFov);
+  // S39's chain in exact arithmetic: tan( g_fov / 2 ) = ( 16 / 9 ) · 0.75 · tan( fov / 2
+  // )
+  const auto estimate = float(
+    2.0 * std::atan(0.75 * std::tan(double(gFov) * 0.5 * 3.14159265358979323846 / 180.0))
+    * 180.0 / 3.14159265358979323846);
+  auto below = estimate;
+  auto above = estimate;
+  for (auto step = 0; step < 4096; ++step)
+  {
+    if (gFovOf(verticalFovOf(below)) == target)
+    {
+      return below;
+    }
+    if (gFovOf(verticalFovOf(above)) == target)
+    {
+      return above;
+    }
+    below = std::nextafter(below, 0.0f);
+    above = std::nextafter(above, 180.0f);
+  }
+  return std::nullopt;
+}
+
+std::optional<ParityCamera> parityCameraOfLine(const std::string_view line)
+{
+  auto tokens = std::vector<std::string_view>{};
+  auto at = std::size_t{0};
+  while (at < line.size())
+  {
+    while (at < line.size() && (line[at] == ' ' || line[at] == '\t'))
+    {
+      ++at;
+    }
+    const auto start = at;
+    while (at < line.size() && line[at] != ' ' && line[at] != '\t')
+    {
+      ++at;
+    }
+    if (at > start)
+    {
+      tokens.push_back(line.substr(start, at - start));
+    }
+  }
+  const auto number = [&](const std::size_t i) -> std::optional<float> {
+    auto value = 0.0f;
+    const auto& token = tokens[i];
+    const auto* end = parseFloatChars(token.data(), token.data() + token.size(), value);
+    return end == token.data() + token.size() ? std::optional{value} : std::nullopt;
+  };
+  if (
+    tokens.size() != 13 || tokens[0] != "camera" || tokens[4] != "yaw"
+    || tokens[6] != "pitch" || tokens[8] != "g_fov" || tokens[10] != "viewport")
+  {
+    return std::nullopt;
+  }
+  const auto x = number(1);
+  const auto y = number(2);
+  const auto z = number(3);
+  const auto yaw = number(5);
+  const auto pitch = number(7);
+  const auto gFov = number(9);
+  const auto width = number(11);
+  const auto height = number(12);
+  if (!x || !y || !z || !yaw || !pitch || !gFov || !width || !height)
+  {
+    return std::nullopt;
+  }
+  // the cvar is CVAR_INTEGER: its integer part (SysCvar.cpp:283)
+  const auto integerFov = int(*gFov);
+  const auto fov = trenchBroomFovOfGFov(integerFov);
+  if (!fov)
+  {
+    return std::nullopt;
+  }
+
+  // idAngles::ToMat3 with roll 0 (Angles.cpp:223-237), DEG2RAD a float product
+  const auto sy = std::sin(*yaw * Deg2Rad);
+  const auto cy = std::cos(*yaw * Deg2Rad);
+  const auto sp = std::sin(*pitch * Deg2Rad);
+  const auto cp = std::cos(*pitch * Deg2Rad);
+  const auto sr = std::sin(0.0f);
+  const auto cr = std::cos(0.0f);
+
+  auto result = ParityCamera{};
+  result.camera.position = vm::vec3f{*x, *y, *z};
+  result.camera.direction = vm::vec3f{cp * cy, cp * sy, -sp};
+  result.camera.up =
+    vm::vec3f{cr * sp * cy + -sr * -sy, cr * sp * sy + -sr * cy, cr * cp};
+  result.camera.fovDegrees = *fov;
+  result.camera.viewportWidth = std::uint32_t(*width);
+  result.camera.viewportHeight = std::uint32_t(*height);
+  result.gFov = integerFov;
+  result.yaw = *yaw;
+  result.pitch = *pitch;
+  return result;
 }
 
 } // namespace tb::lit

@@ -22,7 +22,9 @@
 #include "lit/EngineLight.h"
 #include "lit/LitSession.h"
 
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace tb::lit
 {
@@ -78,5 +80,35 @@ ViewProjection viewProjectionOf(const CameraState& camera);
  * prints g_fov with every digit; the engine's g_fov cvar keeps only its integer part.
  */
 std::string parityCameraLine(const CameraState& camera, const ViewProjection& view);
+
+/**
+ * C29, P2.6 (LP2.3): S39's inverse for the engine's integer g_fov: a TrenchBroom fov
+ * whose gFovOf( verticalFovOf( fov ) ) is exactly g_fov in float, so that
+ * viewProjectionOf's CalcFov and R_SetupProjectionMatrix get the engine's own base_fov.
+ * The float nearest to 2 · atan( 0.75 · tan( g_fov / 2 ) ) that gives it exactly,
+ * searched within 4096 ulps of it; nullopt when none does. Pure; any thread.
+ */
+std::optional<float> trenchBroomFovOfGFov(int gFov);
+
+// A parity camera line read back (C29): the camera with the engine's view, its integer
+// g_fov, and the yaw and pitch it was given in degrees
+struct ParityCamera
+{
+  CameraState camera;
+  int gFov = 0;
+  float yaw = 0.0f;
+  float pitch = 0.0f;
+};
+
+/**
+ * C29 (LP2.3): reads a parity camera line ("camera x y z yaw Y pitch P g_fov G viewport W
+ * H", parityCameraLine's and parity.py's format). The camera's direction and up are
+ * idAngles( pitch, yaw, 0 ).ToMat3()'s rows 0 and 2 in float (Angles.cpp:223-237, with
+ * idMath::SinCos as sinf and cosf on x64), as the engine's player view has them after
+ * setviewpos; its fov is trenchBroomFovOfGFov of the integer g_fov (the line's value
+ * truncated as the cvar truncates it); its viewport the line's. nullopt for a line that
+ * does not read or a g_fov without an exact inverse. Pure; any thread.
+ */
+std::optional<ParityCamera> parityCameraOfLine(std::string_view line);
 
 } // namespace tb::lit
