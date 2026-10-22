@@ -320,6 +320,42 @@ float engineTriangleArea(const EngineVec3& a, const EngineVec3& b, const EngineV
   return idWinding::TriangleArea(toId(a), toId(b), toId(c));
 }
 
+int engineFtoi(const float value)
+{
+  return idMath::Ftoi(value);
+}
+
+EngineMat3 engineAnglesToMat3(const float pitch, const float yaw, const float roll)
+{
+  const auto m = idAngles{pitch, yaw, roll}.ToMat3();
+  return {
+    m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]};
+}
+
+EngineMat3 engineMat3Multiply(const EngineMat3& lhs, const EngineMat3& rhs)
+{
+  const auto a =
+    idMat3{lhs[0], lhs[1], lhs[2], lhs[3], lhs[4], lhs[5], lhs[6], lhs[7], lhs[8]};
+  const auto b =
+    idMat3{rhs[0], rhs[1], rhs[2], rhs[3], rhs[4], rhs[5], rhs[6], rhs[7], rhs[8]};
+  const auto m = a * b;
+  return {
+    m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]};
+}
+
+std::array<EngineVec3, 2> engineBoundsOfPoints(const std::vector<EngineVec3>& points)
+{
+  auto ids = std::vector<idVec3>{};
+  ids.reserve(points.size());
+  for (const auto& point : points)
+  {
+    ids.push_back(toId(point));
+  }
+  auto bounds = idBounds{};
+  bounds.FromPoints(ids.data(), int(ids.size()));
+  return {fromId(bounds[0]), fromId(bounds[1])};
+}
+
 EngineVec2 engineValveTexCoord(
   const EngineVec3& xyz,
   const EngineValveTexture& texture,

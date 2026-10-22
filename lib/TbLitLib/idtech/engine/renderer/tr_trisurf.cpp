@@ -35,6 +35,12 @@ If you have questions concerning this license or the applicable additional terms
 #include "RenderCommon.h"
 // ==== engine neo/renderer/tr_trisurf.cpp lines 38-38 (r_useSilRemap) ====
 idCVar r_useSilRemap( "r_useSilRemap", "1", CVAR_RENDERER | CVAR_BOOL, "consider verts with the same XYZ, but different ST the same for shadows" );
+// ==== engine neo/renderer/tr_trisurf.cpp lines 170-174 (USE_INVA, DERIVE_UNSMOOTHED_BITANGENT) ====
+// this shouldn't change anything, but previously renderbumped models seem to need it
+#define USE_INVA
+
+// instead of using the texture T vector, cross the normal and S vector for an orthogonal axis
+#define DERIVE_UNSMOOTHED_BITANGENT
 // ==== engine neo/renderer/tr_trisurf.cpp lines 374-405 (R_AllocStaticTriSurf, R_CopyStaticTriSurf) ====
 /*
 ==============

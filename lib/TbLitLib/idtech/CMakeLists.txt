@@ -43,6 +43,7 @@ target_sources(TbLitIdLib
 
     ${TB_LIT_ID_SHIM_DIR}/src/DeclManagerShim.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineGeometry.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/EngineLexer.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineMessages.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/MaterialDecls.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/Registry.cpp
@@ -62,6 +63,7 @@ target_sources(TbLitIdLib
     BASE_DIRS ${TB_LIT_ID_SHIM_DIR}/include
     FILES
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineGeometry.h
+      ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineLexer.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/MaterialDecls.h
 )
 

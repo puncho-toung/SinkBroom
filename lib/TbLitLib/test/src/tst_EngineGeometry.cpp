@@ -206,8 +206,10 @@ TEST_CASE("EngineGeometry: triangle cleanup and tangents")
       engineCleanupTriangles(verts, indexes, EngineTangentPath::WithoutNormals);
     REQUIRE(result);
     CHECK(result->indexes.size() == 6u);
+    // s grows with x: the tangent is +x
     const auto tangent = engineTangent(result->verts[0]);
-    CHECK(std::abs(std::abs(tangent[0]) - 1.0f) < 0.01f);
+    CHECK(tangent[0] > 0.99f);
+    CHECK(int(result->verts[0].tangent[0]) == 255);
     // the pool's thread drains what the copy reported
     static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
   }

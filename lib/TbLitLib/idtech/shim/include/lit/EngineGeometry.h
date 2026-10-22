@@ -157,6 +157,23 @@ std::optional<EngineSplit> engineSplitWinding(
 // idWinding::TriangleArea (Winding.cpp), dmap's measure of a triangle
 float engineTriangleArea(const EngineVec3& a, const EngineVec3& b, const EngineVec3& c);
 
+// idMath::Ftoi (Math.h): truncation toward zero, as ParseModel recentres st with it
+int engineFtoi(float value);
+
+// ----- rotations (pure) -----
+
+// an idMat3, row by row
+using EngineMat3 = std::array<float, 9>;
+
+// idAngles( pitch, yaw, roll ).ToMat3() (Angles.cpp)
+EngineMat3 engineAnglesToMat3(float pitch, float yaw, float roll);
+// idMat3 lhs * rhs (Matrix.h)
+EngineMat3 engineMat3Multiply(const EngineMat3& lhs, const EngineMat3& rhs);
+
+// idBounds::FromPoints (Bounds.cpp:291-296, through the scalar SIMDProcessor's MinMax):
+// the minimum and maximum of the points; an inverted box for none
+std::array<EngineVec3, 2> engineBoundsOfPoints(const std::vector<EngineVec3>& points);
+
 // ----- texture coordinates (pure) -----
 
 // a brush side's Valve 220 texture values as the engine reads them from the map

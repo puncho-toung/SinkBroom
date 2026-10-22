@@ -8,8 +8,12 @@ add_library(TbLitLib STATIC)
 
 target_sources(TbLitLib
   PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/AreaTree.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/BprocModel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ChunkBuilder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CpuPool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DeviceChoice.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/EntityState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FramePacer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameTimers.cpp
@@ -22,6 +26,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LiveSession.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MaterialService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NvrhiSupport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ProcFile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ResourceContainer.cpp

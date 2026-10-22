@@ -32,3 +32,29 @@ If you have questions concerning this license or the applicable additional terms
 // ==== engine neo/idlib/math/Matrix.cpp lines 143-144 (mat3_zero, mat3_identity) ====
 idMat3 mat3_zero( idVec3( 0, 0, 0 ), idVec3( 0, 0, 0 ), idVec3( 0, 0, 0 ) );
 idMat3 mat3_identity( idVec3( 1, 0, 0 ), idVec3( 0, 1, 0 ), idVec3( 0, 0, 1 ) );
+// ==== engine neo/idlib/math/Matrix.cpp lines 146-170 (idMat3::ToAngles) ====
+/*
+========================
+idMat3::ToAngles
+
+returns the pitch/yaw/roll each in the range [-180, 180] degrees
+========================
+*/
+idAngles idMat3::ToAngles() const
+{
+	idAngles angles;
+	float s = idMath::Sqrt( mat[0][0] * mat[0][0] + mat[0][1] * mat[0][1] );
+	if( s > idMath::FLOAT_EPSILON )
+	{
+		angles.pitch = RAD2DEG( - idMath::ATan( mat[0][2], s ) );
+		angles.yaw = RAD2DEG( idMath::ATan( mat[0][1], mat[0][0] ) );
+		angles.roll = RAD2DEG( idMath::ATan( mat[1][2], mat[2][2] ) );
+	}
+	else
+	{
+		angles.pitch = mat[0][2] < 0.0f ? 90.0f : -90.0f;
+		angles.yaw = RAD2DEG( - idMath::ATan( mat[1][0], mat[1][1] ) );
+		angles.roll = 0.0f;
+	}
+	return angles;
+}

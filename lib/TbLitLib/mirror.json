@@ -1985,6 +1985,15 @@
           ],
           "anchor": "mat3_zero, mat3_identity",
           "sha256": "18619cfafe2374190dbb2ef23b8148b32b5bd909c7e31de611ba8ac2f4a9975f"
+        },
+        {
+          "file": "neo/idlib/math/Matrix.cpp",
+          "lines": [
+            146,
+            170
+          ],
+          "anchor": "idMat3::ToAngles",
+          "sha256": "872337df3430a0d37a2dcee98562df6c185ba03289a2795dc0d6b393e28bbcac"
         }
       ],
       "sinkbroom": [
@@ -1992,7 +2001,7 @@
           "file": "lib/TbLitLib/idtech/engine/idlib/math/Matrix.cpp"
         }
       ],
-      "note": "32 of the file's 2997 lines, in 2 ranges, each preceded by one marker line"
+      "note": "57 of the file's 2997 lines, in 3 ranges, each preceded by one marker line; LP1b.2 added idMat3::ToAngles, which the copied idRotation::ToAngles calls"
     },
     {
       "id": "M-ID-PART-06",
@@ -6680,6 +6689,15 @@
         {
           "file": "neo/renderer/tr_trisurf.cpp",
           "lines": [
+            170,
+            174
+          ],
+          "anchor": "USE_INVA, DERIVE_UNSMOOTHED_BITANGENT",
+          "sha256": "802e3bfc5d538e2ddeb58f290582d37b79a070a78870021f342fbf3fd2887af3"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
             374,
             405
           ],
@@ -6768,7 +6786,7 @@
           "symbol": "#include \"renderer/tr_trisurf.cpp\""
         }
       ],
-      "note": "987 of the file's 2291 lines, in 11 ranges, each preceded by one marker line (D57): the allocators the closure calls, R_CreateSilIndexes, R_DuplicateMirroredVertexes, R_DeriveNormalsAndTangents and R_DeriveUnsmoothedNormalsAndTangents (R_DeriveTangents' closure), R_DeriveTangentsWithoutNormals, R_BuildDominantTris, R_DeriveTangents, R_RemoveDegenerateTriangles, R_ReverseTriangles and r_useSilRemap. Compiled inside EngineGeometry.cpp (HEADER_FILE_ONLY), because three of them are static. Line 36, #include <mikktspace.h>, is left out (Q18)"
+      "note": "992 of the file's 2291 lines, in 12 ranges, each preceded by one marker line (D57): the allocators the closure calls, R_CreateSilIndexes, R_DuplicateMirroredVertexes, R_DeriveNormalsAndTangents and R_DeriveUnsmoothedNormalsAndTangents (R_DeriveTangents' closure), R_DeriveTangentsWithoutNormals, R_BuildDominantTris, R_DeriveTangents, R_RemoveDegenerateTriangles, R_ReverseTriangles and r_useSilRemap. Compiled inside EngineGeometry.cpp (HEADER_FILE_ONLY), because three of them are static. Line 36, #include <mikktspace.h>, is left out (Q18). Lines 170-174, the USE_INVA and DERIVE_UNSMOOTHED_BITANGENT defines, were added after golden (b) found every tangent of R_DeriveTangentsWithoutNormals negated without them"
     },
     {
       "id": "M-GEO-PART-02",
@@ -6840,6 +6858,10 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
           "symbol": "idSIMDProcessor::MinMax, SIMDProcessor"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineBoundsOfPoints"
         }
       ],
       "note": "C24 (3): the scalar SIMDProcessor with exactly the methods the closure calls, by name: MinMax(idVec3&, idVec3&, const idVec3*, int), which idBounds::FromPoints calls (Bounds.cpp:293). Non-virtual, const, argument-only, so any thread may call it; min and max are exact, so the engine's SSE MinMax gives the same result. The tangent ranges call no SIMD method"
@@ -6998,15 +7020,24 @@
           ],
           "anchor": "TriVertsFromOriginal",
           "sha256": "a082608e6049822edb0bccb49429c53e62b06a403fee371fe4611f6de3137b19"
+        },
+        {
+          "file": "neo/idlib/math/Angles.cpp",
+          "lines": [
+            220,
+            252
+          ],
+          "anchor": "idAngles::ToMat3",
+          "sha256": "044d09d76149fb8177963ce2b92688c3f16c751332986f1b261ab0a81ea8f95b"
         }
       ],
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
-          "symbol": "engineF32toF16, engineF16toF32, engineSetTexCoord, engineTexCoord, engineSetNormal, engineNormal, engineTangent, engineBiTangentSign, engineClearedVert, engineSidePlane, enginePlanesEqual, engineFlippedPlane, engineWindingPlane, engineTriangleArea, engineValveTexCoord, engineProcFloatText, engineVertFromOriginal"
+          "symbol": "engineF32toF16, engineF16toF32, engineSetTexCoord, engineTexCoord, engineSetNormal, engineNormal, engineTangent, engineBiTangentSign, engineClearedVert, engineSidePlane, enginePlanesEqual, engineFlippedPlane, engineWindingPlane, engineTriangleArea, engineValveTexCoord, engineProcFloatText, engineVertFromOriginal, engineFtoi, engineAnglesToMat3, engineMat3Multiply"
         }
       ],
-      "note": "argument-only: the copied idDrawVert encoders, idPlane (FromPoints, FixDegeneracies, Compare), idWinding::GetPlane and TriangleArea, and transcriptions of dmap's arithmetic in the copied types (GetTextureVectors' axis·(1/scale), TriListForSide's dot product and division, WriteFloat, TriVertsFromOriginal). They call no common function and read only constants; any thread"
+      "note": "argument-only: the copied idDrawVert encoders, idPlane (FromPoints, FixDegeneracies, Compare), idWinding::GetPlane and TriangleArea, and transcriptions of dmap's arithmetic in the copied types (GetTextureVectors' axis·(1/scale), TriListForSide's dot product and division, WriteFloat, TriVertsFromOriginal). They call no common function and read only constants; any thread; idMath::Ftoi, idAngles::ToMat3 and idMat3::operator* through the copies"
     },
     {
       "id": "M-GEO-POOL-01",
@@ -7089,6 +7120,15 @@
           ],
           "anchor": "R_CleanupTriangles (the order mirrored)",
           "sha256": "97989dc6dcb75c4b714fa3c1c818671c27a12654c4009667f65aa2fdda3ce2b0"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            170,
+            174
+          ],
+          "anchor": "USE_INVA, DERIVE_UNSMOOTHED_BITANGENT",
+          "sha256": "802e3bfc5d538e2ddeb58f290582d37b79a070a78870021f342fbf3fd2887af3"
         },
         {
           "file": "neo/renderer/tr_trisurf.cpp",
@@ -7612,6 +7652,406 @@
         }
       ],
       "note": "Q18 answered 0: a material with the mikktspace keyword takes the unsmoothed path (R_BuildDominantTris + R_DeriveTangents) with a warning, where the engine would run MikkTSpace; no retail or user material has the keyword"
+    },
+    {
+      "id": "M-GEO-FN-05",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            764,
+            998
+          ],
+          "anchor": "idRenderWorldLocal::InitFromMap (the .proc branch)",
+          "sha256": "a3e3cfd7b04c07ad0be1a6edcac761d5d17ac93dc5dfe802d063f829cbe7237b"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            150,
+            346
+          ],
+          "anchor": "ParseModel (the parse)",
+          "sha256": "3bd42f44313615cd856096de5803ba4ae99dd6f513d934051e64697c5f7437c5"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            376,
+            476
+          ],
+          "anchor": "ParseInterAreaPortals",
+          "sha256": "a5d84a470936b3e00383f154dccb17b24586be7116d549638edc57304eb78670"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            553,
+            599
+          ],
+          "anchor": "ParseNodes",
+          "sha256": "e138a89406b43cd195629db81b617ca6237ca4b33f9fd0101b9fd32815d3df6a"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.h",
+          "lines": [
+            43,
+            61
+          ],
+          "anchor": "PROC_FILE_* and ProcFileVersion",
+          "sha256": "65606c578978f8dbd3b6176229ba0525d96dc71bfbaa97adf74b3a4d7d61152b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ProcFile.cpp",
+          "symbol": "readProcFile"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLexer.cpp",
+          "symbol": "EngineLexer"
+        }
+      ],
+      "note": "D64: tokenised with the copied idLexer (InitFromMap's LEXFL_NOSTRINGCONCAT | LEXFL_NODOLLARPRECOMPILE) on the parse thread; shadowModel skipped; the engine's bounds checks, and a node child that names no node is refused; model geometry kept only on request (the goldens, LP7)"
+    },
+    {
+      "id": "M-GEO-FN-06",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            1240,
+            1275
+          ],
+          "anchor": "idRenderWorldLocal::PointInArea",
+          "sha256": "0ddc4dd76d45c0a2907db8829ab15574b57caf5c91d4dc2389a3e49631520a26"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ProcFile.cpp",
+          "symbol": "pointInArea"
+        }
+      ],
+      "note": "SC71: d > 0 child 0, else child 1; 0 solid (-1); no nodes -1; the Error for an area beyond numPortalAreas is not mirrored (the reader checks the tree's children)"
+    },
+    {
+      "id": "M-GEO-FN-07",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            224,
+            321
+          ],
+          "anchor": "ParseModel: islands, recentred st, half st, byte normals, white",
+          "sha256": "55d74355d3c6a3afcfcdeb377ea518207b9d48e802c34166cbe5dc2f9c7a8943"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ProcFile.cpp",
+          "symbol": "loadProcSurface, recentreTexCoords"
+        }
+      ],
+      "note": "A17, D59: the islands as a union-find, which makes ParseModel's partition; Ftoi((min + max) * 0.5f) per island, then SetTexCoord; the colour format's PackColorRound is LP7's"
+    },
+    {
+      "id": "M-GEO-FN-08",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "lines": [
+            572,
+            640
+          ],
+          "anchor": "PutWindingIntoAreas_r",
+          "sha256": "29a5cc5ce093e28b00aca7d87a23a1bce7a96db440ae7b3ed54981546cba69c5"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "lines": [
+            443,
+            490
+          ],
+          "anchor": "ClipTriIntoTree_r",
+          "sha256": "3d50799fe5cdd64ed80a1c259dcff907e7dd041ac68ac61fdf0bee82527ae830"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/dmap.cpp",
+          "lines": [
+            335,
+            336
+          ],
+          "anchor": "fullCarve",
+          "sha256": "87f247170e697625688cec0eab5797daa8589b23416d6dc21eadb944f100796b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/AreaTree.cpp",
+          "symbol": "clipSideIntoAreas, clipTriangleIntoAreas"
+        }
+      ],
+      "note": "A12, R5.1, D47: walks the .proc's pruned tree; the side-plane rule with dmap's epsilons; pieces in solid kept in area -1 (dmap drops them, K14). Pool-safe: only the geometry facade"
+    },
+    {
+      "id": "M-GEO-FN-09",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/d3xp/Entity.cpp",
+          "lines": [
+            232,
+            408
+          ],
+          "anchor": "idGameEdit::ParseSpawnArgsToRenderEntity",
+          "sha256": "09c1ab9a4bd3148bbd7006126fe9207e147f81df4460cc0986ce29fb1426abcb"
+        },
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            202,
+            220
+          ],
+          "anchor": "idDict::SetDefaults",
+          "sha256": "d496a9997f927176ea606d6c9b893b1a4e10dab975117771e1e5d456ecd8a965"
+        },
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            3878,
+            3909
+          ],
+          "anchor": "SpawnEntityDef's SetDefaults",
+          "sha256": "ed89add1579c5026815e00acf0864fec8b0a0da9f6f50e334c9b922a4b0dbeb2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EntityState.cpp",
+          "symbol": "parseSpawnArgsToRenderEntity, mergeSpawnArgs, spawnVector"
+        }
+      ],
+      "note": "A7, A10, SC51-SC53: the model, the genmodel_ branch and the guis are LP7's; the getters parse as sscanf/atof/atoi in the C locale (std::from_chars), whatever the process locale"
+    },
+    {
+      "id": "M-GEO-FN-10",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            1555,
+            1590
+          ],
+          "anchor": "CalculateBrushOrigin",
+          "sha256": "f033eb35959f0b1ac22d45f1f352574d85a2f2e8299f983acbea167d47b04e0e"
+        },
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            1030,
+            1048
+          ],
+          "anchor": "IsOriginBrush",
+          "sha256": "4c24ec44681de1ce6adb8ffb0dc07d406aa6f031b840f99a395ec32b4aa14ede"
+        },
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            1755,
+            1826
+          ],
+          "anchor": "idMapFile::Parse: removeEntities, overrideMaterial, func_group",
+          "sha256": "f1dd316faad222005bc8a03b67ef4b21d0536dc78abf052cc87e7fcffbab8790"
+        },
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            705,
+            846
+          ],
+          "anchor": "ParseValve220",
+          "sha256": "235d3d8494cd1f225d2b2d51d4d37a5528a3059c359d4cb1f6fa0b46fd6ce60e"
+        },
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            280,
+            360
+          ],
+          "anchor": "idMapPatch::Parse",
+          "sha256": "31aa2a769e744f3bd479dda00741e6cc3f3b74d06df89a57d5e8b2bf8e23b0a1"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "lines": [
+            180,
+            260
+          ],
+          "anchor": "TriListForSide",
+          "sha256": "4e8882df3380d8a99f16d01e0a15d503266e1ed64e02f79843cf345275721fbb"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/output.cpp",
+          "lines": [
+            240,
+            252
+          ],
+          "anchor": "ShareMapTriVerts: SetNormal( GetNormal() )",
+          "sha256": "886d5ec0031af33f7de96a039b1a3d3e553bf1aace24741fb8d3c221aa639e9b"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/output.cpp",
+          "lines": [
+            580,
+            590
+          ],
+          "anchor": "WriteUTriangles( ..., originOffset )",
+          "sha256": "cf06e67a57bdccdba87871470804c7dd102a202f2f80d556b31bab3f91ebe880"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/map.cpp",
+          "lines": [
+            330,
+            469
+          ],
+          "anchor": "ParseBrush, ParseSurface, ParsePatch",
+          "sha256": "67066f3d8da549d27656c2fcfcdba492c82eba412be55df9043eb7275ed7ca15"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1252,
+            1283
+          ],
+          "anchor": "FinishSurfaces: back sides, R_CleanupTriangles",
+          "sha256": "8f70d8db014da2c5bd6fd700db07b57103adc127ca19b2563e99e2e337dde87a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "buildChunks"
+        }
+      ],
+      "note": "D59, C4: the material name with textures/ (a patch's only when missing), overrideMaterial; neither drawn nor shadow-casting sides skipped; plane from the origin-relative points with FixDegeneracies; st from the origin-relative position (TriListForSide runs before WriteUTriangles subtracts originOffset); SetNormal twice as ShareMapTriVerts stores it (golden (a) found the -1 component's byte moving 0 -> 1); patches through the copied subdivision with ParseSurface's rotation, degenerate pinched triangles skipped, fragments by TriVertsFromOriginal"
+    },
+    {
+      "id": "M-GEO-FN-11",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            386,
+            623
+          ],
+          "anchor": "idRenderModelStatic::LoadBinaryModel",
+          "sha256": "8c42dfb90b84006a9ffbd6f19bc812066924f516628f4164edf5f11987e9b7a3"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            128,
+            141
+          ],
+          "anchor": "ReadBinaryModel",
+          "sha256": "d0761dad01664b6b36ec0739705f0d953d87aee9d108aa2a4c60305273fa44d8"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            483,
+            545
+          ],
+          "anchor": "ReadBinaryAreaPortals",
+          "sha256": "0bacadd184b2deb9ce6c3086704412680ace00764c6a60eb2a9dbe7bfc5248aa"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            606,
+            620
+          ],
+          "anchor": "ReadBinaryNodes",
+          "sha256": "760c34a8130e0759c2ca496cce65b3710348763a7f2180432afb77e800738671"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            806,
+            870
+          ],
+          "anchor": "InitFromMap's .bproc branch",
+          "sha256": "6b28f220e21b787a26c0ba7221e7e0a3c8ab61d32bb5fa60ddb2e77bd391e77b"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            336,
+            480
+          ],
+          "anchor": "ReadInt, ReadFloat, ReadString, ReadVec3",
+          "sha256": "555e07d4898196cf67c5b3449e1904012de8046c4fe9659575b736f1b0440b9d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/BprocModel.cpp",
+          "symbol": "readBinaryModel, readBprocFile"
+        }
+      ],
+      "note": "A9, SC72: big-endian ReadBig, little-endian ReadVec3/ReadFloat/strings; every count checked against the bytes left; LP1c.1 reuses readBinaryModel"
+    },
+    {
+      "id": "M-GEO-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/tools/compilers/dmap/output.cpp",
+          "lines": [
+            121,
+            175
+          ],
+          "anchor": "MatchVert (XYZ 0.01, ST 0.001, cosine 0.999)",
+          "sha256": "3b03385076a71be4c1f573ac10d62e97b99c6b63e450db5eec9815b79c6748cc"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "Builder::finishBucket"
+        }
+      ],
+      "note": "K9: a chunk welds vertices that are equal byte for byte, where dmap merges within its epsilons, optimises coplanar triangles and fixes T-junctions; golden (d) compares with a tolerance"
+    },
+    {
+      "id": "M-GEO-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/tools/compilers/dmap/output.cpp",
+          "lines": [
+            484,
+            491
+          ],
+          "anchor": "a brush entity's model by name",
+          "sha256": "b2d66028693a832df4fa06ab73c837d60161c1b5f743b24c55b85ae15f92a56c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "Builder::makeContext"
+        }
+      ],
+      "note": "K17: a brush entity's primitives show only when name and model are set and equal (case-insensitively): dmap names the model by name, the game draws the model key; forceEntityNames is not applied. A brush entity's chunks take the area of its pivot (PointInArea), where the game references the entity in every area its bounds touch (LP4); a node is chunked in the 1024-unit cell of its vertices' centroid"
     }
   ],
   "retired": [
