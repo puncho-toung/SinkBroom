@@ -127,7 +127,7 @@ private:
   std::uint64_t m_appliedSequence = 0;
   std::size_t m_chunkCount = 0;
   FramePacer m_pacer;
-  std::array<std::function<void()>, 3> m_debugHooks;
+  std::array<std::function<void()>, 4> m_debugHooks;
   // the number of the last generation whose replacement was requested; GUI thread reads
   std::atomic<std::uint64_t> m_recreateRequestedFor = 0;
   // the extent of the last generation replaced because it was SUBOPTIMAL

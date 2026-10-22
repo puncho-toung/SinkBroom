@@ -518,10 +518,19 @@ void RenderThread::runLoop()
 
     auto deadline = next.value_or(FrameClock::time_point::max());
 
-    // the chunk jobs: a finished batch is applied, and the inbox may be taken again
+    // the chunk jobs: a finished batch is applied, and the inbox may be taken again;
+    // outside m_mutex, because they take the material service's mutex
     lock.unlock();
+    runDebugHook(DebugHook::IdleUnlocked);
     const auto building = geometryTick();
     lock.lock();
+    // the mutex was released for the chunk jobs: a stop, park, trigger or exposure that
+    // came meanwhile, whose notify found no waiter, or the trigger geometryTick set
+    // itself, is acted on, not waited past (plans/lit-preview/19-LITGPU-HANG.md)
+    if (m_stopRequested || m_parkRequested || m_pacer.nextFrameTime(canDraw()) != next)
+    {
+      continue;
+    }
     if (building)
     {
       deadline = std::min(deadline, now + GeometryPollInterval);

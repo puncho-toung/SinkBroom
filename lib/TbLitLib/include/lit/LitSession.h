@@ -161,6 +161,9 @@ enum class DebugHook
   WhileParking,
   // in every park, once the thread counts as parked, before it posts Parked
   AfterParking,
+  // in every pass that draws no frame, while the render thread's mutex is released for
+  // the chunk jobs, before the pass chooses its wait
+  IdleUnlocked,
 };
 
 // §3.1: the longest park() waits; the plan's bound is the current pass plus two frames in

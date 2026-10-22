@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -48,6 +49,7 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -420,6 +422,10 @@ std::vector<std::vector<std::string>> readCsv(const std::filesystem::path& path)
 
 void teardown(LitSession& session)
 {
+  // a stop the render thread misses fails the check instead of hanging the join
+  // (plans/lit-preview/19-LITGPU-HANG.md); stopRenderThread requests it again
+  session.requestStop();
+  CHECK(session.waitForRenderThread(5000ms));
   session.stopRenderThread();
   session.releaseGpuObjects();
   session.destroyVkDevice();
@@ -753,6 +759,67 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     CHECK(messages.warnings == 0);
   }
 
+  SECTION("a stop that comes while an idle pass has released the mutex ends the thread")
+  {
+    // plans/lit-preview/19-LITGPU-HANG.md: a pass that draws no frame releases the render
+    // thread's mutex for the chunk jobs; a stop requested in that gap notifies nobody,
+    // and the pass must still see it instead of waiting without a deadline
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+
+      auto events = Events{};
+      auto session = LitSession::create(
+                       instance.handles(), VK_NULL_HANDLE, 16, 16, {}, events.sink(), 9)
+                     | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+
+      // the hook holds the next idle pass in the gap until the test releases it, once
+      struct Gate
+      {
+        std::mutex mutex;
+        std::condition_variable changed;
+        bool used = false;
+        bool entered = false;
+        bool released = false;
+      };
+      auto gate = std::make_shared<Gate>();
+      session->debugSetHook(DebugHook::IdleUnlocked, [gate]() {
+        auto lock = std::unique_lock{gate->mutex};
+        if (std::exchange(gate->used, true))
+        {
+          return;
+        }
+        gate->entered = true;
+        gate->changed.notify_all();
+        gate->changed.wait_for(lock, 5s, [&] { return gate->released; });
+      });
+
+      // not exposed: the pass draws nothing, and nothing else is pending
+      session->requestFrame();
+      {
+        auto lock = std::unique_lock{gate->mutex};
+        REQUIRE(gate->changed.wait_for(lock, 5s, [&] { return gate->entered; }));
+      }
+      session->requestStop();
+      {
+        const auto lock = std::scoped_lock{gate->mutex};
+        gate->released = true;
+      }
+      gate->changed.notify_all();
+      CHECK(session->waitForRenderThread(2000ms));
+
+      session->debugSetHook(DebugHook::IdleUnlocked, {});
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("stop in the idle gap, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
   SECTION("the snapshot inbox, the CPU pool and the material service")
   {
     auto messages = ValidationMessages{};
@@ -838,6 +905,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       }
       for (auto& future : futures)
       {
+        REQUIRE(future.wait_for(5s) == std::future_status::ready);
         CHECK(future.get().result.is_success());
       }
       CHECK(poolThreads->size() <= CpuPool::ThreadCount);
