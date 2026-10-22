@@ -1,0 +1,131 @@
+// LP2.3 parity fixtures (plans/lit-preview/27-LP2-PACKAGES.md section 4, C29); written by
+// TOOLS/lit-preview/parity.py fixtures. Names under textures/lp2/ and lights/lp2/ are
+// reserved for fixtures (K20). Every lit material is IBL-neutral (P2.2): legacy without a
+// specular stage, or a specular _s whose _rmao.png has metal 0. No stage names _white or
+// _black (the engine turns them into game files, Image_program.cpp:483-494).
+
+// R01, R02, R03, R04, R07, R08, R09, R10, R12: legacy, diffuse and bump only
+textures/lp2/floor
+{
+	qer_editorimage	textures/lp2/floor.tga
+	diffusemap	textures/lp2/floor.tga
+	bumpmap	textures/lp2/floor_local.tga
+}
+
+textures/lp2/wall
+{
+	qer_editorimage	textures/lp2/wall.tga
+	diffusemap	textures/lp2/wall.tga
+	bumpmap	textures/lp2/wall_local.tga
+}
+
+// R05: PBR, base colour, bump and an _s that resolves to its _rmao.png (metal 0)
+textures/lp2/pbr
+{
+	qer_editorimage	textures/lp2/pbr.tga
+	basecolormap	textures/lp2/pbr.tga
+	bumpmap	textures/lp2/pbr_local.tga
+	specularmap	textures/lp2/pbr_s.tga
+}
+
+// R06: legacy with the _s + _rmao.png pair (TD_SPECULAR_PBR_RMAO, R5.5), metal 0, the
+// implicit _flat bump
+textures/lp2/legacy
+{
+	qer_editorimage	textures/lp2/legacy.tga
+	diffusemap	textures/lp2/legacy.tga
+	specularmap	textures/lp2/legacy_s.tga
+}
+
+// R07: alpha tested (MC_PERFORATED), not translucent
+textures/lp2/grate
+{
+	qer_editorimage	textures/lp2/grate.tga
+	bumpmap	textures/lp2/floor_local.tga
+	{
+		blend	diffusemap
+		map	textures/lp2/grate.tga
+		alphaTest	0.5
+	}
+}
+
+// R07: the same with polygonOffset: the engine leaves MF_POLYGONOFFSET perforated
+// surfaces unlit in the interaction pass (P2.21, D75)
+textures/lp2/grate_offset
+{
+	qer_editorimage	textures/lp2/grate.tga
+	polygonOffset	1
+	bumpmap	textures/lp2/floor_local.tga
+	{
+		blend	diffusemap
+		map	textures/lp2/grate.tga
+		alphaTest	0.5
+	}
+}
+
+// R08, R09: the diffuse stage takes the entity's colour (colored: parm0-parm3)
+textures/lp2/tinted
+{
+	qer_editorimage	textures/lp2/crate.tga
+	bumpmap	textures/lp2/crate_local.tga
+	{
+		blend	diffusemap
+		map	textures/lp2/crate.tga
+		colored
+	}
+}
+
+// R12
+textures/lp2/crate
+{
+	qer_editorimage	textures/lp2/crate.tga
+	diffusemap	textures/lp2/crate.tga
+	bumpmap	textures/lp2/crate_local.tga
+}
+
+// R10
+textures/lp2/patch
+{
+	qer_editorimage	textures/lp2/patch.tga
+	diffusemap	textures/lp2/patch.tga
+	bumpmap	textures/lp2/patch_local.tga
+}
+
+// R11: a face with rotated and scaled texture axes
+textures/lp2/checker
+{
+	qer_editorimage	textures/lp2/checker.tga
+	diffusemap	textures/lp2/checker.tga
+	bumpmap	textures/lp2/floor_local.tga
+}
+
+// the lights: their images are files under lights/lp2/ (no _white, no default light shader)
+lights/lp2/round
+{
+	lightFalloffImage	lights/lp2/falloff.tga
+	{
+		map	lights/lp2/round.tga
+		colored
+		zeroClamp
+	}
+}
+
+lights/lp2/spot
+{
+	lightFalloffImage	lights/lp2/falloff_linear.tga
+	{
+		map	lights/lp2/spot.tga
+		colored
+		zeroClamp
+	}
+}
+
+lights/lp2/square
+{
+	lightFalloffImage	lights/lp2/falloff.tga
+	{
+		map	lights/lp2/square.tga
+		colored
+		zeroClamp
+	}
+}

@@ -1,0 +1,7 @@
+// LP2.3 parity fixtures: R09's entity takes its _color from its entityDef (R5.30); written
+// by TOOLS/lit-preview/parity.py fixtures
+entityDef lp2_parity_tinted
+{
+	"spawnclass"	"idStaticEntity"
+	"_color"	"0.25 1 0.5"
+}
