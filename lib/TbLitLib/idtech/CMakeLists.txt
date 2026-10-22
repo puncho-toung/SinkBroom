@@ -57,7 +57,9 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_SHIM_DIR}/src/EngineLight.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineLexer.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineMessages.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/ImageFileCheck.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimImageFiles.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/ShimImageSource.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/MaterialDecls.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/Registry.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimFramework.cpp

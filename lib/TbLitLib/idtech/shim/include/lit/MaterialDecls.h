@@ -243,6 +243,33 @@ std::size_t pendingEngineMessagesForTesting();
 // through common, Assert as a failed assert; the never-returning ones return (C17)
 void reportEngineMessageForTesting(DeclMessageKind kind, const std::string& text);
 
+/**
+ * LP1c.2 (D51): the size limits of the loader pre-validation. The engine has none (a TGA
+ * may declare 65535 × 65535, stb_image allows 2^24 a side); the preview refuses an image
+ * file beyond these before a loader allocates for it (M-IMG-DIFF-04).
+ */
+inline constexpr int MaxImageFileDimension = 16384;
+inline constexpr std::int64_t MaxImageFilePixels = std::int64_t(8192) * 8192;
+
+// whether the copied imageLoaders table has a loader for this path's extension (tga,
+// png, jpg, exr, hdr, any case). Pure; any thread.
+bool isImageLoaderFile(std::string_view path);
+
+/**
+ * LP1c.2 (D51, R5.3, M-IMG-GUARD-01): why the copied loader that the path's extension
+ * picks must not read these bytes, or nullopt when it may. Outside the copied code it
+ * checks every read the loader will make: a TGA's header, type, colour map, pixel size,
+ * declared size against the file and its run-length packets walked to the last pixel; a
+ * PNG's header as stb_image checks it, its chunks to IEND and the declared size against
+ * what its IDAT bytes can inflate to; a JPG's frame header as stb_image checks it, its
+ * marker segments and scans to EOI and the declared size against its scan bytes; an
+ * OpenEXR header through tinyexr's parsers, its channels and its offset table; a Radiance
+ * HDR header and its scanlines as stb_image reads them; and every size against the
+ * limits above. An empty file fails; a path no loader takes passes. Pure; any thread.
+ */
+std::optional<std::string> imageFileProblem(
+  std::string_view path, std::string_view bytes);
+
 // An image as a material stage names it: the key of the engine's image record
 // (ImageManager.cpp's ImageFromFile). The integers are the engine's enum values, which
 // the cache name uses as is (#__UUCC).
@@ -297,6 +324,52 @@ struct ImageCacheName
   std::string bfhackFile;
   // the engine generates the image (an intrinsic, the default image): it has no cache
   bool generated = false;
+};
+
+// a game file one of the copied loaders' reads found, and where (C8)
+struct FoundGameFile
+{
+  std::string path;
+  GameFileProbe probe;
+};
+
+/**
+ * LP1c.2 (S14, D51): an image's source as idImage::ActuallyLoadImage's pixel path reads
+ * it with the copied loaders: R_LoadImageProgram for a 2D image, R_LoadCubeImages for a
+ * cube. Plain data.
+ */
+struct SourcePixels
+{
+  // a 2D image's size; a cube's side
+  int width = 0;
+  int height = 0;
+  // 1, or 6 for a cube, in R_LoadCubeImages' side order
+  int faces = 1;
+  // textureUsage_t after the pixel path (heightmap and addnormals make a program TD_BUMP)
+  int usage = 0;
+  // the time the pixel path found: a program's newest leaf's (A4)
+  std::int64_t sourceTime = 0;
+  // faces × height rows of width × 4 bytes, top row first, as the loaders give them:
+  // RGBA8, or R11G11B10F packed in 4 bytes for an image the EXR and HDR loaders read
+  std::vector<std::uint8_t> pixels;
+  // every game file the loaders read, in order
+  std::vector<FoundGameFile> files;
+};
+
+/**
+ * LP1c.2: what a source load ended with. pixels, or error with the engine's warning
+ * ("Couldn't load image: <name> : <generated name>", "Couldn't load cube image: <name>")
+ * when no loader made a picture; rejected names every file the loader pre-validation
+ * refused (D51), "<path>: <reason>", and then the image is the default however the rest
+ * loaded, because the engine would have read past a buffer or crashed on that file.
+ */
+struct SourceLoad
+{
+  std::optional<SourcePixels> pixels;
+  std::string error;
+  std::vector<std::string> rejected;
+  // the copied code's messages while it loaded, when the load was quiet
+  std::vector<DeclMessage> messages;
 };
 
 // one shaderStage_t of an idMaterial
@@ -609,6 +682,18 @@ public:
    * engine error. Parse thread (C20).
    */
   DeclResult<ImageCacheName> imageCacheName(const MaterialImageKey& key);
+
+  /**
+   * LP1c.2 (S14, D51): the source of an image as ActuallyLoadImage's pixel path reads it,
+   * after the cache name (Image_load.cpp:716-865 up to Load2DFromMemory): the copied
+   * R_LoadCubeImages for CF_NATIVE, CF_CAMERA, CF_QUAKE1, CF_SINGLE and CF_PANORAMA (a
+   * side size of 0 fails), the copied R_LoadImageProgram of name.imageName with
+   * name.usage for anything else, every file each loader reads validated first by
+   * imageFileProblem. cubeMapSize is the key's. A quiet load keeps the copied code's
+   * messages in its result instead of the registry's (the editor-image sizes, C21). Parse
+   * thread (C20); one image's files at most, so a stop waits for one image (R5.20).
+   */
+  SourceLoad loadImagePixels(const ImageCacheName& name, int cubeMapSize, bool quiet);
 
   // the bytes of decl text the registry keeps (all decl types, R5.10)
   std::size_t declTextBytes() const;

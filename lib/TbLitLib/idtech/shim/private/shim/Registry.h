@@ -59,14 +59,42 @@ extern idDeclManagerLocal* tbLitDeclManagerLocal;
 // A5: ReadFile with no buffer (the loaders' and GetTimestamp's time-only calls) asks the
 // source's probe, which reads no file body: the time is the engine's (A4) and the length
 // the probe's. OpenFileRead reads the file whole into a BufferedFile.
+//
+// LP1c.2: ReadFile with a buffer reads decl text, with the decl guards, except between
+// beginImageReads and endImageReads, where the copied image loaders read: there it reads
+// the game file through the source's readGameFile (no decl bookkeeping, no token scan)
+// and validates it with imageFileProblem before the loader sees it (D51). A file that
+// fails is read as missing, and kept, once per path, for endImageReads.
 class idFileSystemLocal : public idFileSystem
 {
 public:
+  // a file the loader pre-validation refused (D51)
+  struct ImageRejection
+  {
+    std::string path;
+    std::string reason;
+  };
+
+  // a file a probe or an image read found (the time call's leaves, a loader's file)
+  struct FoundFile
+  {
+    std::string path;
+    tb::lit::GameFileProbe probe;
+  };
+
   idFileSystemLocal(
     tb::lit::DeclSource& source, const std::atomic<bool>* cancel = nullptr);
 
   // files left empty because the cancel flag was set
   int cancelledReads() const { return m_cancelledReads; }
+
+  // the copied loaders read between these (parse thread); not nested
+  void beginImageReads();
+  std::vector<ImageRejection> endImageReads();
+
+  // every file a probe or an image read finds between these, in order (parse thread)
+  void beginRecording();
+  std::vector<FoundFile> endRecording();
 
   idFileList* ListFiles(
     const char* relativePath,
@@ -86,9 +114,16 @@ public:
   void CloseFile(idFile* f) override;
 
 private:
+  int readImageFile(const std::string& path, void** buffer, ID_TIME_T* timestamp);
+  void record(const std::string& path, const tb::lit::GameFileProbe& probe);
+
   tb::lit::DeclSource& m_source;
   const std::atomic<bool>* m_cancel;
   int m_cancelledReads = 0;
+  bool m_imageReads = false;
+  std::vector<ImageRejection> m_rejections;
+  bool m_recording = false;
+  std::vector<FoundFile> m_found;
 };
 
 namespace tb::lit::shim
@@ -173,6 +208,9 @@ public:
   // these takes the thread's new messages out of the sink first.
   const std::vector<DeclMessage>& messages() const;
   std::vector<DeclMessage> takeMessages();
+  // LP1c.2: the messages from index first on, taken out (a quiet image load keeps them);
+  // the errors among them stay counted
+  std::vector<DeclMessage> takeMessagesFrom(std::size_t first);
 
   // Error and FatalError messages so far, and those any thread could not keep for want of
   // memory; a call that raises the count reached a site where the engine would not have
@@ -189,6 +227,7 @@ public:
   bool cancelled() const { return m_fileSystem.cancelledReads() > 0; }
 
   idDeclManagerLocal& declManager() { return *m_declManager.manager; }
+  ::idFileSystemLocal& files() { return m_fileSystem; }
   idImageManager& images() { return m_images; }
   idRenderProgManager& renderProgs() { return m_renderProgs; }
 

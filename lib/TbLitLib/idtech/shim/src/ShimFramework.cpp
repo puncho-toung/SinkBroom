@@ -355,6 +355,16 @@ int idFileSystemLocal::ReadFile(
     *buffer = nullptr;
   }
 
+  if (m_cancel && m_cancel->load() && m_imageReads && buffer)
+  {
+    // the registry is stopping: an image file reads as missing, never as an empty buffer,
+    // which a loader would read its header from (D51)
+    if (timestamp)
+    {
+      *timestamp = FILE_NOT_FOUND_TIMESTAMP;
+    }
+    return -1;
+  }
   if (m_cancel && m_cancel->load())
   {
     // R5.20: the registry is stopping; the file reads as empty, so LoadAndParse finds no
@@ -399,11 +409,17 @@ int idFileSystemLocal::ReadFile(
     {
       return -1;
     }
+    record(path, found);
     if (timestamp)
     {
       *timestamp = ID_TIME_T(found.time);
     }
     return int(std::min(found.size, std::uint64_t(INT_MAX)));
+  }
+
+  if (m_imageReads)
+  {
+    return readImageFile(path, buffer, timestamp);
   }
 
   auto time = std::int64_t{0};
@@ -459,6 +475,105 @@ int idFileSystemLocal::ReadFile(
 void idFileSystemLocal::FreeFile(void* buffer)
 {
   Mem_Free(buffer);
+}
+
+void idFileSystemLocal::beginImageReads()
+{
+  m_imageReads = true;
+  m_rejections.clear();
+}
+
+std::vector<idFileSystemLocal::ImageRejection> idFileSystemLocal::endImageReads()
+{
+  m_imageReads = false;
+  return std::exchange(m_rejections, {});
+}
+
+void idFileSystemLocal::beginRecording()
+{
+  m_recording = true;
+  m_found.clear();
+}
+
+std::vector<idFileSystemLocal::FoundFile> idFileSystemLocal::endRecording()
+{
+  m_recording = false;
+  return std::exchange(m_found, {});
+}
+
+void idFileSystemLocal::record(
+  const std::string& path, const tb::lit::GameFileProbe& probe)
+{
+  if (m_recording)
+  {
+    m_found.push_back(FoundFile{path, probe});
+  }
+}
+
+/**
+ * LP1c.2 (D51, follow-up 3 of LP1c.1): an image file for a copied loader, read through
+ * the source's game-file search, with no decl bookkeeping and no decl token scan, then
+ * validated outside the copied code (imageFileProblem). A file that fails is read as
+ * missing (-1, no buffer, FILE_NOT_FOUND_TIMESTAMP), so the loader returns without a
+ * picture and reads nothing; the refusal is kept once per path for endImageReads.
+ * Otherwise the buffer is ReadFile's: Mem_Alloc'ed, NUL-terminated, length + 1 bytes.
+ */
+int idFileSystemLocal::readImageFile(
+  const std::string& path, void** buffer, ID_TIME_T* timestamp)
+{
+  auto found = tb::lit::GameFileProbe{};
+  auto bytes = std::optional<std::string>{};
+  // the exception boundary (C17): a source that throws makes the file unreadable
+  try
+  {
+    bytes = m_source.readGameFile(path, &found);
+  }
+  catch (const std::exception& e)
+  {
+    tb::lit::shim::reportWarning(path + " cannot be read: " + e.what());
+  }
+  catch (...)
+  {
+    tb::lit::shim::reportWarning(path + " cannot be read");
+  }
+  if (!bytes)
+  {
+    return -1;
+  }
+  record(path, found);
+
+  auto problem = std::optional<std::string>{};
+  if (bytes->size() >= std::size_t(INT_MAX))
+  {
+    problem = "it is 2 GB or larger";
+  }
+  else
+  {
+    problem = tb::lit::imageFileProblem(path, *bytes);
+  }
+  if (problem)
+  {
+    const auto known =
+      std::any_of(m_rejections.begin(), m_rejections.end(), [&](const auto& rejection) {
+        return rejection.path == path;
+      });
+    if (!known)
+    {
+      m_rejections.push_back(ImageRejection{path, std::move(*problem)});
+    }
+    return -1;
+  }
+
+  if (timestamp)
+  {
+    *timestamp = ID_TIME_T(found.time);
+  }
+  const auto length = int(bytes->size());
+  auto* data = static_cast<char*>(Mem_Alloc(size_t(length) + 1, TAG_IDFILE));
+  memcpy(data, bytes->data(), size_t(length));
+  data[length] = '\0';
+  *buffer = data;
+  return length;
 }
 
 // OpenFileRead for the copied loaders (LP1c.2): the whole file read through the source's

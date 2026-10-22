@@ -167,6 +167,20 @@ std::vector<DeclMessage> Registry::takeMessages()
   return std::exchange(m_messages, {});
 }
 
+std::vector<DeclMessage> Registry::takeMessagesFrom(const std::size_t first)
+{
+  drain();
+  if (first >= m_messages.size())
+  {
+    return {};
+  }
+  auto taken = std::vector<DeclMessage>(
+    std::make_move_iterator(m_messages.begin() + std::ptrdiff_t(first)),
+    std::make_move_iterator(m_messages.end()));
+  m_messages.resize(first);
+  return taken;
+}
+
 std::size_t Registry::errorCount() const
 {
   drain();

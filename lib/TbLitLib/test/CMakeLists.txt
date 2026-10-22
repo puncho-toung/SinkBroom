@@ -2,6 +2,8 @@ add_executable(TbLitLibTest)
 EMBED_UTF8_MANIFEST(TbLitLibTest)
 
 target_sources(TbLitLibTest PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageTestFiles.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageTestFiles.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src/LitMapFixture.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/LitMapFixture.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src/LitTestUtils.cpp
@@ -17,6 +19,7 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Geometry.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GeometryGoldens.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ImageCache.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ImageFiles.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightData.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightGoldens.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightParse.cpp

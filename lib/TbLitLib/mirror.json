@@ -5228,41 +5228,6 @@
       "reason": "R1.6, C9, C24 (5): the dynamic initialisers (MSVC ??__E symbols) that TbLitIdLib's objects may hold, per configuration, as \"<object> <global>\"; each initialises a read-only global from literals or from another of them that is zero until initialised (bounds_zero from vec3_zero), allocating, opening and starting nothing, except idDict's two idStrPool globals (M-ID-STATIC-*), which allocate nothing until used. The check lists the objects' ??__E symbols with dumpbin and fails on one not listed here, so a later copy with an idStr or idList global is caught; one listed but gone is reported"
     },
     {
-      "id": "M-ID-TEMP-01",
-      "kind": "temporary",
-      "engine": [
-        {
-          "file": "neo/renderer/Image_files.cpp",
-          "lines": [
-            994,
-            994
-          ],
-          "anchor": "R_LoadImage",
-          "sha256": "8820277e8a9d2b81e928f58a9bf209400c22b55635557c0ad2816c98349eb132"
-        },
-        {
-          "file": "neo/renderer/Image.h",
-          "lines": [
-            713,
-            713
-          ],
-          "anchor": "R_LoadImage declaration",
-          "sha256": "99271a1d2e10a542447531d382be306f25b2048cbf7523804e3cfa1b426b239c"
-        }
-      ],
-      "sinkbroom": [
-        {
-          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
-          "symbol": "R_LoadImage"
-        },
-        {
-          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
-          "symbol": "R_LoadCubeImages"
-        }
-      ],
-      "note": "TEMPORARY until LP1c.2 copies Image_files.cpp and its loaders behind the pre-validation (D51): the pixel path of R_LoadImage (pic not NULL) and of R_LoadCubeImages (pics not NULL) reads no image and gives FILE_NOT_FOUND_TIMESTAMP, as for a missing file. LP1c.1 transcribed their time-only paths (M-IMG-01, M-IMG-02); LP1c.2's copy of R_LoadImage replaces both halves of R_LoadImage and must keep the time-only behaviour M-IMG-01 states"
-    },
-    {
       "id": "M-ID-NC-01",
       "kind": "not-copied",
       "engine": [
@@ -5581,7 +5546,7 @@
           "symbol": "tb::lit::shim::forEachDeclToken"
         }
       ],
-      "note": "a decl file holding a token of MAX_STRING_CHARS or more characters with no '.' among the first MAX_STRING_CHARS is refused with a warning and read as unreadable (the copied LoadAndParse then reports 'couldn't load'), because any token can reach MakeNameCanonical and overflow its buffer. The tokens are the copied idLexer's with DECL_LEXER_FLAGS over the whole file (forEachDeclToken, which silences only the lexer's printing with LEXFL_NOERRORS and LEXFL_NOWARNINGS and goes on after a token it cannot read wherever the lexer moved forward; the decl parsers go on there too, while LoadAndParse stops at a failed top-level read, so the scan reads a superset of the tokens the engine reads), so strings joined across a backslash, '...' literals with spaces, a name after a number and the lexer's comment rules are read exactly as the engine reads them; tokens inside comments are not tokens. A dot ends the canonical name first, so the retail PDAs' long texts are read (newpdas/enpro_hammer.pda: a 1075-character string whose first dot is its fifth character). A known difference: the engine reads such a file and overruns. W.1 (round 2) replaced a character scan of names and quoted strings that crafted text got past"
+      "note": "a decl file holding a token of MAX_STRING_CHARS or more characters with no '.' among the first MAX_STRING_CHARS is refused with a warning and read as unreadable (the copied LoadAndParse then reports 'couldn't load'), because any token can reach MakeNameCanonical and overflow its buffer. The tokens are the copied idLexer's with DECL_LEXER_FLAGS over the whole file (forEachDeclToken, which silences only the lexer's printing with LEXFL_NOERRORS and LEXFL_NOWARNINGS and goes on after a token it cannot read wherever the lexer moved forward; the decl parsers go on there too, while LoadAndParse stops at a failed top-level read, so the scan reads a superset of the tokens the engine reads), so strings joined across a backslash, '...' literals with spaces, a name after a number and the lexer's comment rules are read exactly as the engine reads them; tokens inside comments are not tokens. A dot ends the canonical name first, so the retail PDAs' long texts are read (newpdas/enpro_hammer.pda: a 1075-character string whose first dot is its fifth character). A known difference: the engine reads such a file and overruns. W.1 (round 2) replaced a character scan of names and quoted strings that crafted text got past. LP1c.2 (LP1c.1's follow-up 3): the scan runs on decl reads only; the copied image loaders' reads (between beginImageReads and endImageReads) go through readGameFile and the loader pre-validation instead (M-IMG-GUARD-01)"
     },
     {
       "id": "M-ID-GUARD-03",
@@ -9865,104 +9830,7 @@
           "symbol": "BufferedFile::Read"
         }
       ],
-      "note": "LP1c.1, for the loaders LP1c.2 copies: OpenFileRead reads the file whole through the source's C8 search (readGameFile) and serves it from memory as idFile_Memory does (Read copies at most the bytes left and moves past them), with the time the search found: a loose file's Unix seconds, as idFile_Permanent::Timestamp gives them, 0 in a container. The game file is closed once read (R4-3.26); CloseFile frees the object. Null for no file, a file of 2 GB or more, and once the registry's cancel flag is set. Minimal: only GetFullPath, Read, Length and Timestamp exist (M-ID-VIRT-12)"
-    },
-    {
-      "id": "M-IMG-01",
-      "kind": "function",
-      "engine": [
-        {
-          "file": "neo/renderer/Image_files.cpp",
-          "lines": [
-            959,
-            966
-          ],
-          "anchor": "imageLoaders",
-          "sha256": "f26bb07e49107f06725abd53d15beebd31d4206a48ada57fc06b04c63b1deff8"
-        },
-        {
-          "file": "neo/renderer/Image_files.cpp",
-          "lines": [
-            994,
-            1147
-          ],
-          "anchor": "R_LoadImage",
-          "sha256": "f615946f0ccfc4cf34862e57ae611f13b9325b04201046fac37810f696d0b4ad"
-        },
-        {
-          "file": "neo/renderer/Image_files.cpp",
-          "lines": [
-            172,
-            176
-          ],
-          "anchor": "LoadTGA, the time-only path",
-          "sha256": "d7528fdf6fb08b2879321294b973f967a05993af95eda9a0e59708db005dcc13"
-        },
-        {
-          "file": "neo/renderer/Image_files.cpp",
-          "lines": [
-            441,
-            445
-          ],
-          "anchor": "LoadSTB_RGBA8, the time-only path",
-          "sha256": "46194d8b5faafd9b47803450943cce1ee10c6ca738d5617595a95dab48af77de"
-        },
-        {
-          "file": "neo/renderer/Image_files.cpp",
-          "lines": [
-            552,
-            556
-          ],
-          "anchor": "LoadEXR, the time-only path",
-          "sha256": "46194d8b5faafd9b47803450943cce1ee10c6ca738d5617595a95dab48af77de"
-        },
-        {
-          "file": "neo/renderer/Image_files.cpp",
-          "lines": [
-            891,
-            895
-          ],
-          "anchor": "LoadHDR, the time-only path",
-          "sha256": "46194d8b5faafd9b47803450943cce1ee10c6ca738d5617595a95dab48af77de"
-        }
-      ],
-      "sinkbroom": [
-        {
-          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
-          "symbol": "R_LoadImage"
-        },
-        {
-          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
-          "symbol": "ImageLoaderExtensions"
-        },
-        {
-          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
-          "symbol": "loadTimestampOnly"
-        }
-      ],
-      "note": "LP1c.1 (R5.5, SC94, A5): R_LoadImage's time-only path (pic NULL), transcribed with the copied idStr: the .tga default, a name of fewer than 5 characters gives nothing, the name lowercased; for a TD_SPECULAR <base>_s the PBR hack probes <base>_rmao.png, then every loader's extension, and a hit makes the usage TD_SPECULAR_PBR_RMAO with the engine's 'PBR hack' line; otherwise the given extension, then every extension in the table's order (png, tga, jpg, exr, hdr). Each loader's time-only path is ReadFile( name, NULL, timestamp ), the source's probe (M-FS-08). The engine's retry label is a loop"
-    },
-    {
-      "id": "M-IMG-02",
-      "kind": "function",
-      "engine": [
-        {
-          "file": "neo/renderer/Image_files.cpp",
-          "lines": [
-            1156,
-            1404
-          ],
-          "anchor": "R_LoadCubeImages",
-          "sha256": "c18a9a563d2a1b744fc5db72bdfef9314e57a95919ecbc0da51e65f942987905"
-        }
-      ],
-      "sinkbroom": [
-        {
-          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
-          "symbol": "R_LoadCubeImages"
-        }
-      ],
-      "note": "LP1c.1 (SC92): R_LoadCubeImages' time-only path (pics NULL), transcribed: the side suffixes per cube mode (camera, quake, native, native HDR .exr), one R_LoadImageProgram for CF_SINGLE with a size and for CF_PANORAMA, else six; the time is the newest side's, starting at 0 (R_LoadImageProgram starts each side at 0, so a missing side gives 0 and never ends the loop); a size mismatch warns and gives 0. Not in the engine: width and height start at 0 where the engine leaves them uninitialised (every time-only leaf sets them to 0)"
+      "note": "LP1c.1, for the loaders LP1c.2 copies: OpenFileRead reads the file whole through the source's C8 search (readGameFile) and serves it from memory as idFile_Memory does (Read copies at most the bytes left and moves past them), with the time the search found: a loose file's Unix seconds, as idFile_Permanent::Timestamp gives them, 0 in a container. The game file is closed once read (R4-3.26); CloseFile frees the object. Null for no file, a file of 2 GB or more, and once the registry's cancel flag is set. Minimal: only GetFullPath, Read, Length and Timestamp exist (M-ID-VIRT-12). LP1c.2: the copied loaders read with ReadFile, never OpenFileRead (LoadTGA, LoadSTB_RGBA8, LoadEXR and LoadHDR call ReadFile with a buffer), so BufferedFile needed nothing more (LP1c.1's follow-up 4) and OpenFileRead has no copied caller; it stays for idFile's callers to come"
     },
     {
       "id": "M-IMG-03",
@@ -10894,11 +10762,15 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
           "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ImageFileCheck.cpp",
+          "symbol": "imageFileProblem"
         }
       ],
       "call": "Error",
-      "reachable": true,
-      "afterReturn": "the image type is neither 2, 3 nor 10: neither decoder runs, so the R_StaticAlloc'ed picture is returned uninitialised (and flipped when the attribute bit says so). Reachable until the loader pre-validation (D51) lands"
+      "reachable": false,
+      "afterReturn": "the image type is neither 2, 3 nor 10: neither decoder runs, so the R_StaticAlloc'ed picture is returned uninitialised (and flipped when the attribute bit says so). Unreachable: the loader pre-validation (M-IMG-GUARD-01) refuses the file before LoadTGA or LoadHDR reads it unless the image type is 2, 3 or 10 (tgaProblem)"
     },
     {
       "id": "M-IMG-FATAL-02",
@@ -10918,11 +10790,15 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
           "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ImageFileCheck.cpp",
+          "symbol": "imageFileProblem"
         }
       ],
       "call": "Error",
-      "reachable": true,
-      "afterReturn": "the colour map is not skipped: the decoder reads the colour map's bytes as pixels, and the image data past them runs off the buffer's end. Reachable until the loader pre-validation (D51) lands"
+      "reachable": false,
+      "afterReturn": "the colour map is not skipped: the decoder reads the colour map's bytes as pixels, and the image data past them runs off the buffer's end. Unreachable: the loader pre-validation (M-IMG-GUARD-01) refuses the file before LoadTGA or LoadHDR reads it unless the colour map type is 0 (tgaProblem)"
     },
     {
       "id": "M-IMG-FATAL-03",
@@ -10942,11 +10818,15 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
           "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ImageFileCheck.cpp",
+          "symbol": "imageFileProblem"
         }
       ],
       "call": "Error",
-      "reachable": true,
-      "afterReturn": "the size check uses pixel_size >> 3; the uncompressed loop reports 298 per pixel without advancing, the RLE loop 337/389 per packet, so the picture keeps uninitialised or stale pixels. Reachable until the loader pre-validation (D51) lands"
+      "reachable": false,
+      "afterReturn": "the size check uses pixel_size >> 3; the uncompressed loop reports 298 per pixel without advancing, the RLE loop 337/389 per packet, so the picture keeps uninitialised or stale pixels. Unreachable: the loader pre-validation (M-IMG-GUARD-01) refuses the file before LoadTGA or LoadHDR reads it unless the pixel size is 24 or 32, or 8, 24 or 32 for a grey image (tgaProblem)"
     },
     {
       "id": "M-IMG-FATAL-04",
@@ -10966,11 +10846,15 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
           "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ImageFileCheck.cpp",
+          "symbol": "imageFileProblem"
         }
       ],
       "call": "Error",
-      "reachable": true,
-      "afterReturn": "the decoder reads numBytes from a buffer that holds fewer: it reads past the end of the file's buffer. Reachable until the loader pre-validation (D51) lands"
+      "reachable": false,
+      "afterReturn": "the decoder reads numBytes from a buffer that holds fewer: it reads past the end of the file's buffer. Unreachable: the loader pre-validation (M-IMG-GUARD-01) refuses the file before LoadTGA or LoadHDR reads it unless the declared size fits the bytes after the header and comment (tgaProblem)"
     },
     {
       "id": "M-IMG-FATAL-05",
@@ -10990,11 +10874,15 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
           "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ImageFileCheck.cpp",
+          "symbol": "imageFileProblem"
         }
       ],
       "call": "Error",
-      "reachable": true,
-      "afterReturn": "reported once per pixel; neither the read nor the write pointer moves, so the pixel stays uninitialised and the rest of the row shifts. Reachable until the loader pre-validation (D51) lands"
+      "reachable": false,
+      "afterReturn": "reported once per pixel; neither the read nor the write pointer moves, so the pixel stays uninitialised and the rest of the row shifts. Unreachable: the loader pre-validation (M-IMG-GUARD-01) refuses the file before LoadTGA or LoadHDR reads it unless the pixel size is one the uncompressed decoder reads (tgaProblem)"
     },
     {
       "id": "M-IMG-FATAL-06",
@@ -11014,11 +10902,15 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
           "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ImageFileCheck.cpp",
+          "symbol": "imageFileProblem"
         }
       ],
       "call": "Error",
-      "reachable": true,
-      "afterReturn": "the run writes the previous packet's colour packetSize times. Reachable until the loader pre-validation (D51) lands"
+      "reachable": false,
+      "afterReturn": "the run writes the previous packet's colour packetSize times. Unreachable: the loader pre-validation (M-IMG-GUARD-01) refuses the file before LoadTGA or LoadHDR reads it unless the run-length decoder only meets 24 or 32 bits (tgaProblem)"
     },
     {
       "id": "M-IMG-FATAL-07",
@@ -11038,11 +10930,15 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
           "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ImageFileCheck.cpp",
+          "symbol": "imageFileProblem"
         }
       ],
       "call": "Error",
-      "reachable": true,
-      "afterReturn": "the pixel is not written but counted, so it stays uninitialised. Reachable until the loader pre-validation (D51) lands"
+      "reachable": false,
+      "afterReturn": "the pixel is not written but counted, so it stays uninitialised. Unreachable: the loader pre-validation (M-IMG-GUARD-01) refuses the file before LoadTGA or LoadHDR reads it unless the run-length decoder only meets 24 or 32 bits (tgaProblem)"
     },
     {
       "id": "M-IMG-FATAL-08",
@@ -11062,11 +10958,15 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
           "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ImageFileCheck.cpp",
+          "symbol": "imageFileProblem"
         }
       ],
       "call": "Error",
       "reachable": true,
-      "afterReturn": "frees tinyexr's message and returns without a picture; R_LoadImage tries the other extensions. The file's buffer is not freed on this path (M-IMG-DEFECT-01). Reachable for a file whose header passes and whose data tinyexr then refuses"
+      "afterReturn": "frees tinyexr's message and returns without a picture; R_LoadImage tries the other extensions. The file's buffer is not freed on this path (M-IMG-DEFECT-01). Reachable only for a file that passes the pre-validation (M-IMG-GUARD-01: tinyexr's header parse, one channel or R, G and B, a scanline image's offset table and blocks inside the file) and whose data tinyexr then refuses (a corrupt compressed block, a tiled file cut short)"
     },
     {
       "id": "M-IMG-FATAL-09",
@@ -11086,11 +10986,15 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
           "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ImageFileCheck.cpp",
+          "symbol": "imageFileProblem"
         }
       ],
       "call": "Error",
-      "reachable": true,
-      "afterReturn": "with a picture of 1 or 2 channels (a non-Radiance file stb_image loads as LDR) the conversion reads 3 floats per pixel past the end of stb's buffer; with no picture numChannels is read uninitialised. Reachable until the loader pre-validation (D51) lands"
+      "reachable": false,
+      "afterReturn": "with a picture of 1 or 2 channels (a non-Radiance file stb_image loads as LDR) the conversion reads 3 floats per pixel past the end of stb's buffer; with no picture numChannels is read uninitialised. Unreachable: the loader pre-validation (M-IMG-GUARD-01) refuses the file before LoadTGA or LoadHDR reads it unless the file must be a Radiance HDR whose header and scanlines stb_image reads to the end (hdrProblem), and stb_image always gives such a file three channels"
     },
     {
       "id": "M-IMG-DEFECT-01",
@@ -11185,6 +11089,164 @@
       "sinkbroom": [],
       "staticKind": "idempotent table",
       "reason": "a non-const float[256] initialised from literals (constant initialisation), only read by R_MipMapWithGamma; the cmft tables of 854-1167 are static const"
+    },
+    {
+      "id": "M-IMG-GUARD-01",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            162,
+            423
+          ],
+          "anchor": "LoadTGA",
+          "sha256": "7be9c3014067a1c7ae7fe5fe41bfbf6166fa1aa751d86abed3b422cf92173e6c"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            439,
+            489
+          ],
+          "anchor": "LoadSTB_RGBA8",
+          "sha256": "691cd931a3e257fe8ddfa70bf24133b281705d678e5696d3713abe3443670bf9"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            550,
+            632
+          ],
+          "anchor": "LoadEXR",
+          "sha256": "2052a1ed13d205cabeacf19454ab19ed46a669d4c2a5ff798ae37b22f24bd45a"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            889,
+            948
+          ],
+          "anchor": "LoadHDR",
+          "sha256": "6d39b917dac1577364a591f9d8227e54cb1ecef434ddbc1922502e62c604c59f"
+        },
+        {
+          "file": "neo/libs/stb/stb_image.h",
+          "lines": [
+            9515,
+            9721
+          ],
+          "anchor": "stbi__hdr_load",
+          "sha256": "ab4142057003caab5aebb741954423f974c71d52cdd9e0b799fa2031508a849a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ImageFileCheck.cpp",
+          "symbol": "imageFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idFileSystemLocal::readImageFile"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idFileSystemLocal::ReadFile"
+        }
+      ],
+      "note": "LP1c.2 (D51, R5.3, C17): every file a copied loader reads is validated outside the copied code before the loader sees it. The file system, between beginImageReads and endImageReads (MaterialDecls::loadImagePixels), reads it through the source's readGameFile and hands the loader nothing (-1, no buffer, FILE_NOT_FOUND_TIMESTAMP) for a file that fails, keeping the refusal once per path; a stop reads every image file as missing, never as an empty buffer. The checks follow each loader's reads: TGA - the 18-byte header, type 2, 3 or 10, no colour map, 24 or 32 bits (8 too for grey), the declared size of an uncompressed image against the bytes after the header and comment, the RLE packets walked as the decoder walks them up to the last pixel; PNG - stb_image's header rules (signature, a 13-byte IHDR first, depth 1/2/4/8/16, colour type 0/2/3/4/6, 16-bit palettes refused, methods 0, interlace 0 or 1, PLTE before IDAT for a palette, unknown critical chunks), every chunk inside the file up to IEND, and the declared pixels within 1032 bytes per IDAT byte (deflate's limit); JPG - SOI, every marker segment inside the file, a baseline or progressive 8-bit frame of 1, 3 or 4 components with sampling 1-4 and tables 0-3, each scan's entropy-coded bytes walked to the next marker, EOI reached, and at most 8 blocks per scan byte (a block of the finest component costs at least one Huffman bit); EXR - tinyexr's ParseEXRVersionFromMemory and ParseEXRHeaderFromMemory, single part and not deep, one channel or R, G and B (what LoadEXRFromMemory needs), for a scanline image the offset table and every block inside the file; HDR - stb_image's identifier, header with FORMAT=32-bit_rle_rgbe, '-Y h +X w' line, and every pixel byte stb_image reads (flat, run-length scanlines, the flat fallback), so stb_image always decodes it to three channels. Every size: at least 1, at most 16384 a side and 8192 x 8192 in all (M-IMG-DIFF-04). An empty file fails. Tested with truncated, 16-bit, RLE-garbage and oversized TGAs, a PNG with a lying IHDR, a 0-byte file and JPGs cut short or with a 4096 x 4096 header over one block of scan data (tst_ImageFiles.cpp)"
+    },
+    {
+      "id": "M-IMG-GUARD-02",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            1203,
+            1269
+          ],
+          "anchor": "R_LoadCubeImages, CF_SINGLE with a cube size",
+          "sha256": "330a1c8f7379c4292551e0ef99dfc6b2cad6a3549684130e6c21a5bf98c48014"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            782,
+            850
+          ],
+          "anchor": "R_GenerateCubeMapSideFromSingleImage",
+          "sha256": "db37da2d1da99a115fce6e002cc6eb688d352220779b54d6c844477384e6744c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "singleImageCubeFits"
+        }
+      ],
+      "note": "LP1c.2: R_GenerateCubeMapSideFromSingleImage copies a cross of 4 x 3 sides of the cube size out of the picture without looking at the picture's size, so a picture smaller than that is read past its end. Before the copied R_LoadCubeImages runs for a CF_SINGLE image with a cube size, the picture is loaded as it loads it (R_LoadImageProgram, no usage) and a smaller one is refused: the image is the default, with a warning. The picture is decoded twice for such cubes"
+    },
+    {
+      "id": "M-IMG-DIFF-04",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            162,
+            423
+          ],
+          "anchor": "LoadTGA",
+          "sha256": "7be9c3014067a1c7ae7fe5fe41bfbf6166fa1aa751d86abed3b422cf92173e6c"
+        },
+        {
+          "file": "neo/libs/stb/stb_image.h",
+          "lines": [
+            205,
+            212
+          ],
+          "anchor": "STBI_MAX_DIMENSIONS",
+          "sha256": "ebec6f787144d4e407e03805bd935cd33287967c11c7bf6bda1e238286082b67"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ImageFileCheck.cpp",
+          "symbol": "imageFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/MaterialDecls.h",
+          "symbol": "MaxImageFileDimension, MaxImageFilePixels"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "MaterialDecls::loadImagePixels"
+        }
+      ],
+      "note": "LP1c.2: the pre-validation refuses some files the engine would load: images over 16384 a side or 8192 x 8192 in all (the engine has no limit beyond stb_image's 2^24 and the TGA header's 65535), PNG and JPG files cut short that stb_image decodes from zeros, PNG and JPG headers whose size their data cannot hold, unknown critical PNG chunks are refused as stb_image refuses them. An image whose load met a refused file is the default (one warning per refused file, naming it, and not the engine's 'Couldn't load image'), even when R_LoadImage then found another extension of the same name, because the engine would have read past a buffer or crashed on the refused one"
+    },
+    {
+      "id": "M-IMG-08",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            716,
+            865
+          ],
+          "anchor": "ActuallyLoadImage, the source load",
+          "sha256": "5c793a226ef59203ac4f526469d1b34f37e1060395bd2ddaf9605e76e01d7432"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "MaterialDecls::loadImagePixels"
+        }
+      ],
+      "note": "LP1c.2 (S14): an image's source as ActuallyLoadImage loads it once its cache is not used: the copied R_LoadCubeImages for CF_NATIVE, CF_CAMERA, CF_QUAKE1, CF_SINGLE and CF_PANORAMA (a failure or a side of 0 warns 'Couldn't load cube image: <name>'), the copied R_LoadImageProgram of the PBR-renamed name with the time call's usage for anything else, CF_NATIVE_HDR included as in the engine (a missing picture warns 'Couldn't load image: <name> : <generated name>'); every file through the loader pre-validation (M-IMG-GUARD-01, -02). The pictures are copied out and freed with Mem_Free as ActuallyLoadImage frees them; six sides of 0 that the engine keeps are freed. A quiet load (the editor-image sizes) keeps the copied code's messages in its result. No cache file is written (D11)"
     }
   ],
   "retired": [
@@ -11192,6 +11254,21 @@
       "id": "M-ID-VIRT-07",
       "commit": "de5651ace",
       "reason": "idDeclManagerLocal::PrintType: copied since LP1a.2 (the DeclManager.cpp ranges of M-ID-PART), so the shim no longer defines it"
+    },
+    {
+      "id": "M-ID-TEMP-01",
+      "commit": "f6148614b",
+      "reason": "the R_LoadImage and R_LoadCubeImages stand-ins: LP1c.2 copied Image_files.cpp (M-IMG-PART-01), whose functions replace them"
+    },
+    {
+      "id": "M-IMG-01",
+      "commit": "f6148614b",
+      "reason": "R_LoadImage's transcribed time-only path: the copied R_LoadImage (M-IMG-PART-01) replaces it; its time-only path is the engine's own and stays probe-only through ReadFile with no buffer (M-FS-08), as the cache-name tests show"
+    },
+    {
+      "id": "M-IMG-02",
+      "commit": "f6148614b",
+      "reason": "R_LoadCubeImages' transcribed time-only path: the copied R_LoadCubeImages (M-IMG-PART-01) replaces it, its pixel path included"
     }
   ]
 }
