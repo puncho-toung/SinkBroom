@@ -1507,8 +1507,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     device.setEventQuery(m_frameEvents[slot], nvrhi::CommandQueue::Graphics);
     m_frameEventSet[slot] = true;
     m_timers.frameSubmitted(slot);
-    finishLdrReadback(slot);
     const auto cpuRecordMs = millisecondsSince(recordStart);
+    // C29: a readback's wait for the GPU is not the frame's record time
+    finishLdrReadback(slot);
     const auto frame = m_frameIndex++;
     m_idleWorkPending = true;
 
