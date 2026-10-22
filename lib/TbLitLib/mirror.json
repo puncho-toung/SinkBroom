@@ -12069,6 +12069,88 @@
         }
       ],
       "note": "LP1c fix round 2 (X.1): the two branches transcribed into the shim, with the copied R_LoadImageProgram, R_GenerateCubeMapSideFromSingleImage, R_GenerateCubeMapSideFromPanoramaImage, R_RotatePic, R_HorizontalFlip and R_VerticalFlip, and two checks the engine lacks: no picture (or the not-found time) fails the load with \"Couldn't load cube image\" and the default, and a CF_SINGLE picture smaller than the 4 x 3 sides of the cube size is refused (M-IMG-GUARD-02, now in the same place, so the picture is decoded once). A stop at any point reads every image file as missing, so it ends in the same refusal. The pixel path never calls the copied R_LoadCubeImages for these kinds; the time call (imageCacheName) still does, without pixels"
+    },
+    {
+      "id": "M-SHADER-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/NVRHI/RenderProgs_NVRHI.cpp",
+          "lines": [
+            117,
+            135
+          ],
+          "anchor": "createShaderPermutation",
+          "sha256": "a5cacecd801b04f2499382d37a6cad269d3d2c16aab2047dfdce13c9ccc8f0d9"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderProgs_NVRHI.cpp",
+          "lines": [
+            142,
+            219
+          ],
+          "anchor": "idRenderProgManager::LoadShader",
+          "sha256": "0772b2f91d88bd296095b5f1832b808ef2ee45d4a810cdb1ce1eccbb7045825a"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderProgs_NVRHI.cpp",
+          "lines": [
+            226,
+            238
+          ],
+          "anchor": "idRenderProgManager::GetBytecode",
+          "sha256": "c81cf436b2b0d8d7bf16edd649c1fe0f657c9a7fb6eb221d077f57759eae54a5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ShaderBlobs.cpp",
+          "symbol": "shaderBlobPath"
+        },
+        {
+          "file": "lib/TbLitLib/src/ShaderBlobs.cpp",
+          "symbol": "readShaderBlob"
+        },
+        {
+          "file": "lib/TbLitLib/src/ShaderBlobs.cpp",
+          "symbol": "shaderPermutationKey"
+        },
+        {
+          "file": "lib/TbLitLib/src/ShaderBlobs.cpp",
+          "symbol": "findShaderPermutation"
+        },
+        {
+          "file": "lib/TbLitLib/src/ShaderBlobs.cpp",
+          "symbol": "shaderBlobKeys"
+        },
+        {
+          "file": "lib/TbLitLib/src/ShaderBlobs.cpp",
+          "symbol": "engineShaderDesc"
+        }
+      ],
+      "note": "LP2.0 (C1, C2, C26, SC247, SC248): a shader is renderprogs2/spirv/<name without its extension>.<vs|ps|cs>.bin; its permutation is found with the vendored ShaderMake FindPermutationInBlob (the pin ShaderMake) with the defines in the builtins row's order, the key NAME=VALUE pairs joined by single spaces; a non-NVSP file only when no define is asked for (rect.vs); the ShaderDesc has the stage's type, entry main and debug name = name + nameOutSuffix. Differences: the file is read loose only (M-SHADER-DIFF-01); a missing file or permutation is an error that disables the passes needing it (D9), where the engine calls FatalError (GetBytecode) or reports an Error through the message callback, which DefaultMessageCallback turns into FatalError; the code is copied into word-aligned storage before vkCreateShaderModule and reflection, since an entry's code may start at any byte offset; SinkBroom's own walks of a blob (shaderBlobKeys, the not-found message) read each entry header through an aligned copy (P2.22), the reader's lookup is the vendored one (built with -fno-sanitize=alignment under UBSan)"
+    },
+    {
+      "id": "M-SHADER-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/NVRHI/RenderProgs_NVRHI.cpp",
+          "lines": [
+            226,
+            238
+          ],
+          "anchor": "idRenderProgManager::GetBytecode",
+          "sha256": "c81cf436b2b0d8d7bf16edd649c1fe0f657c9a7fb6eb221d077f57759eae54a5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ShaderBlobs.cpp",
+          "symbol": "readShaderBlob"
+        }
+      ],
+      "note": "C1: GetBytecode reads a blob through fileSystem->ReadFile, which also searches .pk4 and .resources containers (and fs_game); the preview reads only the loose file below <game path>/base, its case ignored as OpenOSFile ignores it (lit/GameFile.h findLooseFile), with a plain file read on the compile thread, never through the parse thread's GameFileSource. The loose files are the engine's own shader build output (D6, R-A18)"
     }
   ],
   "retired": [

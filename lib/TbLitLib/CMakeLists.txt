@@ -44,6 +44,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SceneGeometry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SessionEvents.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SessionEvents.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ShaderBlobs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/StackThread.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/StackThread.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Swapchain.cpp
@@ -66,6 +67,8 @@ target_link_libraries(TbLitLib
     CompilerConfig
     PrecompileStdHeaders
     TbFsLib
+    # the engine's shader blobs (C2, cmake/dependencies/shadermake.cmake)
+    ShaderBlob
   PUBLIC
     TbBaseLib
     TbLitIdLib
