@@ -18,6 +18,7 @@
  */
 
 #include "LitTestUtils.h"
+#include "fs/TestEnvironment.h"
 #include "lit/GameFile.h"
 #include "lit/ResourceContainer.h"
 
@@ -101,8 +102,8 @@ std::string errorOf(const Result<ResourceContainer>& result)
 
 TEST_CASE("ResourceContainer")
 {
-  const auto folder = TempFolder{"tb-lit-resources"};
-  const auto file = folder.path() / "test.resources";
+  const auto folder = fs::TestEnvironment{};
+  const auto file = folder.dir() / "test.resources";
   const auto good = resourcesBytes({
     {"Materials\\One.mtr", "one"},
     {"materials/two.mtr", "two"},

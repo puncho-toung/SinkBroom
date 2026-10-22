@@ -18,7 +18,8 @@
  */
 
 #include "LitTestUtils.h"
-#include "lit/GameDeclSource.h"
+#include "fs/TestEnvironment.h"
+#include "lit/GameFileSource.h"
 #include "lit/MaterialDecls.h"
 #include "lit/MaterialService.h"
 
@@ -584,7 +585,7 @@ TEST_CASE("MaterialService")
     // and every container table entry. W.6, X.3: the full scan takes long (LongScan), so
     // a stop 5 ms into it lands inside it, and the cancelled source holds fewer
     // containers
-    const auto folder = TempFolder{"tb-lit-scan"};
+    const auto folder = fs::TestEnvironment{};
     auto containers = 0;
     auto fullScan = Clock::duration{};
     for (auto wanted = FirstScanContainers; fullScan <= LongScan; wanted *= 2)
@@ -598,12 +599,12 @@ TEST_CASE("MaterialService")
           std::chrono::duration<double, std::milli>(fullScan).count(),
           LongScan.count()));
       }
-      writeScanHeavyGame(folder.path(), containers, wanted, 4000);
+      writeScanHeavyGame(folder.dir(), containers, wanted, 4000);
       containers = wanted;
 
       const auto fullStarted = Clock::now();
       {
-        const auto full = GameDeclSource{folder.path()};
+        const auto full = GameFileSource{folder.dir()};
         CHECK(full.searchOrder().size() == std::size_t(containers));
         CHECK(full.containerCount() == std::size_t(containers));
       }
@@ -613,11 +614,11 @@ TEST_CASE("MaterialService")
     }
 
     auto entered = std::make_shared<Gate>();
-    auto service = start(options([path = folder.path(),
+    auto service = start(options([path = folder.dir(),
                                   entered](const std::atomic<bool>& cancel) {
       // the test goes on when the scan begins
       entered->enter();
-      return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(path, &cancel)};
+      return std::unique_ptr<DeclSource>{std::make_unique<GameFileSource>(path, &cancel)};
     }));
     const auto opener = GateOpener{entered};
     REQUIRE(entered->waitUntilEntered());
@@ -952,13 +953,12 @@ TEST_CASE("MaterialService")
 
   SECTION("a changed loose decl file reloads the registry")
   {
-    const auto folder = TempFolder{"tb-lit-poll"};
-    const auto file = folder.path() / "base" / "materials" / "poll.mtr";
+    const auto folder = fs::TestEnvironment{};
+    const auto file = folder.dir() / "base" / "materials" / "poll.mtr";
     writeTextFile(file, materialText("textures/poll/a", "textures/poll/first"));
 
-    auto serviceOptions = options([path =
-                                     folder.path()](const std::atomic<bool>& cancel) {
-      return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(path, &cancel)};
+    auto serviceOptions = options([path = folder.dir()](const std::atomic<bool>& cancel) {
+      return std::unique_ptr<DeclSource>{std::make_unique<GameFileSource>(path, &cancel)};
     });
     serviceOptions.pollInterval = 20ms;
     auto service = start(std::move(serviceOptions));
@@ -983,8 +983,8 @@ TEST_CASE("MaterialService")
   SECTION("a loose decl file that cannot be read warns once, until it changes")
   {
     // G5: the file lists, and its time is polled, but no one may open it
-    const auto folder = TempFolder{"tb-lit-locked"};
-    const auto materials = folder.path() / "base" / "materials";
+    const auto folder = fs::TestEnvironment{};
+    const auto materials = folder.dir() / "base" / "materials";
     const auto locked = materials / "locked.mtr";
     writeTextFile(locked, materialText("textures/locked/a", "textures/locked/first"));
     writeTextFile(
@@ -1004,9 +1004,9 @@ TEST_CASE("MaterialService")
 
     auto collected = Collected{};
     auto serviceOptions = options(
-      [path = folder.path()](const std::atomic<bool>& cancel) {
+      [path = folder.dir()](const std::atomic<bool>& cancel) {
         return std::unique_ptr<DeclSource>{
-          std::make_unique<GameDeclSource>(path, &cancel)};
+          std::make_unique<GameFileSource>(path, &cancel)};
       },
       collected.listener());
     serviceOptions.pollInterval = 10ms;
@@ -1186,10 +1186,10 @@ TEST_CASE("MaterialService start, stop and reload leak nothing")
 
   SECTION("reload a game folder 30 times")
   {
-    // G16: the real GameDeclSource, with a .pk4 and .resources files, under the
+    // G16: the real GameFileSource, with a .pk4 and .resources files, under the
     // checkpoint
-    const auto folder = TempFolder{"tb-lit-leak-game"};
-    const auto base = folder.path() / "base";
+    const auto folder = fs::TestEnvironment{};
+    const auto base = folder.dir() / "base";
     writeTextFile(
       base / "materials" / "loose.mtr",
       materialText("textures/leak/loose", "textures/leak/loose"));
@@ -1213,9 +1213,9 @@ TEST_CASE("MaterialService start, stop and reload leak nothing")
     };
 
     auto service = start(options(
-      [path = folder.path()](const std::atomic<bool>& cancel) {
+      [path = folder.dir()](const std::atomic<bool>& cancel) {
         return std::unique_ptr<DeclSource>{
-          std::make_unique<GameDeclSource>(path, &cancel)};
+          std::make_unique<GameFileSource>(path, &cancel)};
       },
       counting,
       true));

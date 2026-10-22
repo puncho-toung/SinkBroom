@@ -304,8 +304,49 @@ void idFileSystemLocal::FreeFileList(idFileList* fileList)
   delete fileList;
 }
 
+namespace tb::lit::shim
+{
+
+BufferedFile::BufferedFile(std::string path, std::string bytes, const ID_TIME_T time)
+  : m_path{std::move(path)}
+  , m_bytes{std::move(bytes)}
+  , m_time{time}
+{
+}
+
+const char* BufferedFile::GetFullPath() const
+{
+  return m_path.c_str();
+}
+
+// idFile_Memory::Read: at most len bytes from the position on, which moves past them
+int BufferedFile::Read(void* buffer, const int len)
+{
+  if (len <= 0 || !buffer)
+  {
+    return 0;
+  }
+  const auto count = std::min(std::size_t(len), m_bytes.size() - m_position);
+  memcpy(buffer, m_bytes.data() + m_position, count);
+  m_position += count;
+  return int(count);
+}
+
+int BufferedFile::Length() const
+{
+  return int(m_bytes.size());
+}
+
+ID_TIME_T BufferedFile::Timestamp() const
+{
+  return m_time;
+}
+
+} // namespace tb::lit::shim
+
 // FileSystem.cpp's ReadFile: a Mem_Alloc'ed buffer of length + 1 bytes, NUL-terminated;
-// -1 when the file cannot be read
+// -1 when the file cannot be read. A5: with no buffer only the time is wanted, which the
+// source's probe answers without reading the file (the length is the probe's)
 int idFileSystemLocal::ReadFile(
   const char* relativePath, void** buffer, ID_TIME_T* timestamp)
 {
@@ -337,7 +378,34 @@ int idFileSystemLocal::ReadFile(
     *timestamp = FILE_NOT_FOUND_TIMESTAMP;
   }
 
-  const auto path = std::string{relativePath};
+  const auto path = std::string{relativePath ? relativePath : ""};
+  if (!buffer)
+  {
+    auto found = tb::lit::GameFileProbe{};
+    // the exception boundary (C17): a source that throws makes the file missing
+    try
+    {
+      found = m_source.probe(path);
+    }
+    catch (const std::exception& e)
+    {
+      tb::lit::shim::reportWarning(path + " cannot be probed: " + e.what());
+    }
+    catch (...)
+    {
+      tb::lit::shim::reportWarning(path + " cannot be probed");
+    }
+    if (!found.exists())
+    {
+      return -1;
+    }
+    if (timestamp)
+    {
+      *timestamp = ID_TIME_T(found.time);
+    }
+    return int(std::min(found.size, std::uint64_t(INT_MAX)));
+  }
+
   auto time = std::int64_t{0};
   auto text = std::optional<std::string>{};
   // the exception boundary (C17): a source that throws makes the file unreadable
@@ -393,10 +461,37 @@ void idFileSystemLocal::FreeFile(void* buffer)
   Mem_Free(buffer);
 }
 
-// the lexer's LoadFile is never used by the decl parsers, which parse decl text in memory
-idFile* idFileSystemLocal::OpenFileRead(const char*, bool, const char*)
+// OpenFileRead for the copied loaders (LP1c.2): the whole file read through the source's
+// C8 search into a BufferedFile, closed by CloseFile; null when it cannot be read. The
+// decl parsers parse decl text in memory and never call it.
+idFile* idFileSystemLocal::OpenFileRead(const char* relativePath, bool, const char*)
 {
-  return nullptr;
+  if (!relativePath || !relativePath[0] || (m_cancel && m_cancel->load()))
+  {
+    return nullptr;
+  }
+  const auto path = std::string{relativePath};
+  auto found = tb::lit::GameFileProbe{};
+  auto bytes = std::optional<std::string>{};
+  // the exception boundary (C17): a source that throws makes the file unreadable
+  try
+  {
+    bytes = m_source.readGameFile(path, &found);
+  }
+  catch (const std::exception& e)
+  {
+    tb::lit::shim::reportWarning(path + " cannot be read: " + e.what());
+  }
+  catch (...)
+  {
+    tb::lit::shim::reportWarning(path + " cannot be read");
+  }
+  if (!bytes || bytes->size() >= std::size_t(INT_MAX))
+  {
+    return nullptr;
+  }
+  return new (TAG_IDFILE)
+    tb::lit::shim::BufferedFile{path, std::move(*bytes), ID_TIME_T(found.time)};
 }
 
 idFile* idFileSystemLocal::OpenExplicitFileRead(const char*)

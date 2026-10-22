@@ -63,12 +63,48 @@ struct DeclFileTime
   bool operator!=(const DeclFileTime& other) const;
 };
 
-// The game files the registry reads decl text from. It answers the two questions the
-// engine's file system answers for the decl manager: the files of a folder with an
-// extension (idFileSystem::ListFiles, names relative to the folder) and a file's text and
-// time (idFileSystem::ReadFile). lit/GameDeclSource.h implements it with the game-file
-// search. The registry calls it only on the thread that owns the registry. A source may
-// throw: the registry's file system catches and reports it (C17).
+/**
+ * A5: what the C8 search finds for a game file without reading its body (the engine's
+ * ReadFile with no buffer, GetTimestamp): where the file is, and its time as the engine
+ * keeps times (A4).
+ */
+struct GameFileProbe
+{
+  enum class Kind
+  {
+    Missing,
+    Loose,
+    Pk4,
+    Resources,
+  };
+
+  Kind kind = Kind::Missing;
+  // the container's name as the engine registers it ("_rbdoom_core.pk4",
+  // "maps/admin.resources"); empty for a loose or a missing file
+  std::string container;
+  // FILE_NOT_FOUND_TIMESTAMP (-1) for a missing file; a loose file's modification time in
+  // whole Unix seconds (Sys_FileTimeStamp); 0 inside a container (SC95)
+  std::int64_t time = -1;
+  // ReadFile's length: a loose file's or a .resources entry's size; 0 for a .pk4 entry,
+  // whose size only inflating it tells (no copied caller reads it), and for no file
+  std::uint64_t size = 0;
+  // a loose file's modification time in the file system's finest unit, which tells two
+  // saves within one second apart; 0 otherwise. For polling only, never an engine time
+  std::int64_t changeStamp = 0;
+
+  bool exists() const;
+  bool operator==(const GameFileProbe& other) const;
+  bool operator!=(const GameFileProbe& other) const;
+};
+
+// The game files the registry reads decl text from, and the preview reads its other game
+// files from (images, bakes; C8). It answers the questions the engine's file system
+// answers: the files of a folder with an extension (idFileSystem::ListFiles, names
+// relative to the folder), a file's text and time (idFileSystem::ReadFile), and, without
+// reading the file, its time (ReadFile with no buffer). lit/GameFileSource.h implements
+// it with the game-file search. The registry calls it only on the thread that owns the
+// registry, and so does every other caller (the parse thread, C20). A source may throw:
+// the registry's file system catches and reports it (C17).
 class DeclSource
 {
 public:
@@ -80,11 +116,29 @@ public:
   virtual std::vector<std::string> listFiles(
     const std::string& folder, const std::string& extension) = 0;
 
-  // the file's bytes and its time, or nullopt when it cannot be read; path is relative to
-  // the game folder ("materials/base_wall.mtr"). A read may open and keep containers
-  // until closeFiles.
+  // the file's bytes and its time (A4: Unix seconds, 0 in a container), or nullopt when
+  // it cannot be read; path is relative to the game folder ("materials/base_wall.mtr").
+  // A read may open and keep containers until closeFiles.
   virtual std::optional<std::string> readFile(
     const std::string& path, std::int64_t* timestamp) = 0;
+
+  // A5: the file a read of path finds, and its time, without reading its body; the
+  // default reads it (readFile)
+  virtual GameFileProbe probe(const std::string& path);
+
+  // C8: the bytes of any game file (an image cache, a bake), searched as readFile
+  // searches, with where it was found in found; unlike readFile it is not a decl read,
+  // so it never asks for another build. The default is readFile's
+  virtual std::optional<std::string> readGameFile(
+    const std::string& path, GameFileProbe* found);
+
+  // the game-relative path ("maps/x.map") of a file path below the game's base folder,
+  // or nullopt; a source without a game folder has none
+  virtual std::optional<std::string> gameRelativePath(const std::string& filePath) const;
+
+  // idFileSystem::UsingResourceFiles: a .resources container was registered, so the
+  // image loader's BFHACK names apply (SC100)
+  virtual bool usingResourceFiles() const;
 
   // the loose files of folder ending in extension, with their times, sorted by path; only
   // loose decl folders are polled for a reload (R4-3.26), so a source without loose files

@@ -55,6 +55,10 @@ extern idDeclManagerLocal* tbLitDeclManagerLocal;
 // the copied idLexer reads it, of MAX_STRING_CHARS or more characters without a dot among
 // the first MAX_STRING_CHARS, which the copied MakeNameCanonical writes past its buffer
 // for (M-ID-GUARD-06).
+//
+// A5: ReadFile with no buffer (the loaders' and GetTimestamp's time-only calls) asks the
+// source's probe, which reads no file body: the time is the engine's (A4) and the length
+// the probe's. OpenFileRead reads the file whole into a BufferedFile.
 class idFileSystemLocal : public idFileSystem
 {
 public:
@@ -89,6 +93,29 @@ private:
 
 namespace tb::lit::shim
 {
+
+/**
+ * LP1c.1: the idFile that OpenFileRead hands the copied loaders (LP1c.2): a game file
+ * read whole through the source's C8 search, served from memory as idFile_Memory serves
+ * it, with the time the search found (A4). The game file itself is closed once read; the
+ * object is freed by CloseFile. Parse thread (C20).
+ */
+class BufferedFile : public idFile
+{
+public:
+  BufferedFile(std::string path, std::string bytes, ID_TIME_T time);
+
+  const char* GetFullPath() const override;
+  int Read(void* buffer, int len) override;
+  int Length() const override;
+  ID_TIME_T Timestamp() const override;
+
+private:
+  std::string m_path;
+  std::string m_bytes;
+  std::size_t m_position = 0;
+  ID_TIME_T m_time;
+};
 
 // the GUI dummies a material's "gui" keyword creates; freed after the image records
 // (R5.11)

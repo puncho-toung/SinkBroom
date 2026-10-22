@@ -74,11 +74,20 @@ private:
 // the whole file, opened as GameFile opens it and closed again
 Result<std::string> readGameFile(const std::filesystem::path& path);
 
-// a file's size and modification time, without opening it; nullopt for no regular file
+/**
+ * A file's size and modification time, without opening its body; nullopt for no regular
+ * file. time is a change stamp in the file system's finest unit (FILETIME ticks on
+ * Windows), which tells two saves within one second apart and is compared only with
+ * itself (polling). unixSeconds is the time as the engine keeps it (A4, P.15:
+ * Sys_FileTimeStamp): on Windows GetFileAttributesExW's last write time, (ticks −
+ * 116444736000000000) / 10⁷ as the engine divides; elsewhere stat's st_mtime. A link is
+ * followed to its file, as the engine's open follows it. Any thread.
+ */
 struct GameFileStat
 {
   std::uint64_t size = 0;
   std::int64_t time = 0;
+  std::int64_t unixSeconds = 0;
 
   bool operator==(const GameFileStat& other) const = default;
 };
@@ -93,11 +102,14 @@ std::optional<GameFileStat> statGameFile(const std::filesystem::path& path) noex
  * as fnmatch matches it (case-sensitively). Directories are never listed. In no defined
  * order.
  *
- * Differences from the engine (mirror.json): a folder that cannot be read is skipped, as
- * the engine skips it, but the rest is listed; a name that is not valid Unicode is
- * skipped with a warning; a directory junction or link is not followed (the engine's
- * FindFirstFileW recursion follows it). Once cancel is set, nothing more is listed: the
- * listing stops within one directory entry.
+ * A3.8: on Windows a directory junction or link is followed, as the engine's
+ * FindFirstFileW recursion follows any entry with FILE_ATTRIBUTE_DIRECTORY, and listed
+ * under its own name. Differences from the engine (mirror.json): a link to a folder the
+ * listing is inside of (a loop, which the engine follows until its path is too long) is
+ * not followed, with a warning; a folder that cannot be read is skipped, as the engine
+ * skips it, but the rest is listed; a name that is not valid Unicode is skipped with a
+ * warning. Once cancel is set, nothing more is listed: the listing stops within one
+ * directory entry.
  */
 std::vector<std::string> listOsFiles(
   const std::filesystem::path& folder,

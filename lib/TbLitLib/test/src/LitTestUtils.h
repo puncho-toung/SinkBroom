@@ -33,22 +33,6 @@
 namespace tb::lit
 {
 
-// a folder under the system's temporary folder, removed with this object
-class TempFolder
-{
-private:
-  std::filesystem::path m_path;
-
-public:
-  explicit TempFolder(const std::string& prefix);
-  ~TempFolder();
-
-  TempFolder(const TempFolder&) = delete;
-  TempFolder& operator=(const TempFolder&) = delete;
-
-  const std::filesystem::path& path() const { return m_path; }
-};
-
 std::string readTextFile(const std::filesystem::path& path);
 void writeTextFile(const std::filesystem::path& path, const std::string& text);
 

@@ -82,10 +82,24 @@ bool wideEndsWithNoCaseAscii(const std::wstring& text, const std::string_view su
   return true;
 }
 
+// win_main.cpp Sys_FileTimeStamp: the 100-ns ticks since 1601 less those of 1970, divided
+// by 10⁷ with C++'s truncation
+constexpr auto UnixEpochTicks = std::int64_t{116444736000000000};
+constexpr auto TicksPerSecond = std::int64_t{10000000};
+
+std::int64_t ticksOf(const FILETIME& time)
+{
+  return std::int64_t(
+    (std::uint64_t(time.dwHighDateTime) << 32) | std::uint64_t(time.dwLowDateTime));
+}
+
 /**
  * ListFilesRecursive (win_main.cpp:1017-1058): the folder's files ending in the
  * extension, then those of each folder below, with prefix in front. A folder that cannot
  * be read lists nothing, as FindFirstFileW failing returns; the others are still listed.
+ * A3.8: a junction or link to a folder is followed as the engine follows it, unless its
+ * target is a folder on chain (the canonical paths of the folders being listed, the
+ * listed one last), which would loop.
  */
 void listFolderRecursive(
   const std::filesystem::path& folder,
@@ -93,7 +107,8 @@ void listFolderRecursive(
   const std::string& extension,
   std::vector<std::string>& names,
   std::vector<std::string>* warnings,
-  const std::atomic<bool>* cancel)
+  const std::atomic<bool>* cancel,
+  std::vector<std::filesystem::path>& chain)
 {
   auto ec = std::error_code{};
   const auto options = std::filesystem::directory_options::skip_permission_denied;
@@ -130,16 +145,42 @@ void listFolderRecursive(
 
     if (std::filesystem::is_directory(status))
     {
+      chain.push_back(chain.back() / fileName);
       listFolderRecursive(
-        entry.path(), prefix + *name + "/", extension, names, warnings, cancel);
+        entry.path(), prefix + *name + "/", extension, names, warnings, cancel, chain);
+      chain.pop_back();
       continue;
     }
     if (!std::filesystem::is_regular_file(status))
     {
-      // a junction or a link to a folder is not followed (mirror.json)
       auto targetError = std::error_code{};
-      if (entry.is_directory(targetError) || targetError)
+      const auto toFolder = entry.is_directory(targetError);
+      if (targetError)
       {
+        continue;
+      }
+      if (toFolder)
+      {
+        // A3.8: a junction or a link to a folder is followed, unless it loops
+        auto target = std::filesystem::canonical(entry.path(), targetError);
+        if (targetError)
+        {
+          continue;
+        }
+        if (std::find(chain.begin(), chain.end(), target) != chain.end())
+        {
+          if (warnings)
+          {
+            warnings->push_back(fmt::format(
+              "{} links to a folder it lies in; it is not listed again",
+              displayPath(entry.path())));
+          }
+          continue;
+        }
+        chain.push_back(std::move(target));
+        listFolderRecursive(
+          entry.path(), prefix + *name + "/", extension, names, warnings, cancel, chain);
+        chain.pop_back();
         continue;
       }
     }
@@ -380,22 +421,68 @@ Result<std::string> readGameFile(const std::filesystem::path& path)
 
 std::optional<GameFileStat> statGameFile(const std::filesystem::path& path) noexcept
 {
+#if defined(_WIN32)
+  // P.15: the FILETIME of the file's attributes, which opens nothing; a link's own times
+  // are not its file's, so a link is opened (no access, every sharing) to read its
+  // target's
+  auto data = WIN32_FILE_ATTRIBUTE_DATA{};
+  if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data))
+  {
+    return std::nullopt;
+  }
+  if (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+  {
+    const auto handle = CreateFileW(
+      path.c_str(),
+      FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      nullptr,
+      OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS,
+      nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
+    {
+      return std::nullopt;
+    }
+    auto info = BY_HANDLE_FILE_INFORMATION{};
+    const auto read = GetFileInformationByHandle(handle, &info);
+    CloseHandle(handle);
+    if (!read)
+    {
+      return std::nullopt;
+    }
+    data.dwFileAttributes = info.dwFileAttributes;
+    data.ftLastWriteTime = info.ftLastWriteTime;
+    data.nFileSizeHigh = info.nFileSizeHigh;
+    data.nFileSizeLow = info.nFileSizeLow;
+  }
+  if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+  {
+    return std::nullopt;
+  }
+  const auto ticks = ticksOf(data.ftLastWriteTime);
+  return GameFileStat{
+    (std::uint64_t(data.nFileSizeHigh) << 32) | std::uint64_t(data.nFileSizeLow),
+    ticks,
+    (ticks - UnixEpochTicks) / TicksPerSecond};
+#else
+  // posix_main.cpp Sys_FileTimeStamp: st_mtime; the change stamp in the clock's unit
+  struct stat status{};
+  if (::stat(path.c_str(), &status) != 0 || !S_ISREG(status.st_mode))
+  {
+    return std::nullopt;
+  }
   auto ec = std::error_code{};
-  if (!std::filesystem::is_regular_file(path, ec) || ec)
-  {
-    return std::nullopt;
-  }
-  const auto size = std::filesystem::file_size(path, ec);
-  if (ec)
-  {
-    return std::nullopt;
-  }
   const auto time = std::filesystem::last_write_time(path, ec);
   if (ec)
   {
     return std::nullopt;
   }
-  return GameFileStat{std::uint64_t(size), std::int64_t(time.time_since_epoch().count())};
+  return GameFileStat{
+    std::uint64_t(status.st_size),
+    std::int64_t(time.time_since_epoch().count()),
+    std::int64_t(status.st_mtime)};
+#endif
 }
 
 std::vector<std::string> listOsFiles(
@@ -407,7 +494,15 @@ std::vector<std::string> listOsFiles(
   auto names = std::vector<std::string>{};
 
 #if defined(_WIN32)
-  listFolderRecursive(folder, {}, extension, names, warnings, cancel);
+  auto ec = std::error_code{};
+  auto root = std::filesystem::canonical(folder, ec);
+  if (ec)
+  {
+    // a folder that does not exist lists nothing, as FindFirstFileW failing returns
+    return names;
+  }
+  auto chain = std::vector<std::filesystem::path>{std::move(root)};
+  listFolderRecursive(folder, {}, extension, names, warnings, cancel, chain);
 #else
   // the folder only; fnmatch( "*<extension>", name, 0 ) and stat says no directory
   const auto pattern = "*" + extension;

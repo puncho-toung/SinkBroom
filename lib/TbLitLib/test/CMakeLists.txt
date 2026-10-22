@@ -12,7 +12,8 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EngineLight.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FrameLog.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FramePacer.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GameDeclSource.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GameFile.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GameFileSource.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Geometry.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GeometryGoldens.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightData.cpp
@@ -29,21 +30,29 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ResourceContainer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_RetailMaterials.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Snapshot.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_StackThread.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SwapchainRules.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_VulkanInstance.cpp
 )
 
 add_compile_definitions(CATCH_CONFIG_ENABLE_ALL_STRINGMAKERS=1)
 
-# miniz writes the tests' .pk4 files
+# miniz writes the tests' .pk4 files; fs::TestEnvironment makes their game folders (A1.11)
 target_link_libraries(TbLitLibTest
   PRIVATE
     CompilerConfig
     PrecompileStdHeaders
     Catch2::Catch2WithMain
     TbBaseTestUtilsLib
+    TbFsTestUtilsLib
     TbLitLib
     miniz
+)
+
+# A1.11: the private StackThread is tested directly
+target_include_directories(TbLitLibTest
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 
 # Copy fixtures

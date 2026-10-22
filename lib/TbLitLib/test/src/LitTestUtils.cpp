@@ -25,11 +25,9 @@
 #include <miniz.h>
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <fstream>
 #include <sstream>
-#include <system_error>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -63,21 +61,6 @@ void writeBig32(std::string& out, const std::size_t at, const std::uint32_t valu
 }
 
 } // namespace
-
-TempFolder::TempFolder(const std::string& prefix)
-{
-  static auto counter = std::atomic<int>{0};
-  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-  m_path = std::filesystem::temp_directory_path()
-           / fmt::format("{}-{}-{}", prefix, stamp, counter++);
-  std::filesystem::create_directories(m_path);
-}
-
-TempFolder::~TempFolder()
-{
-  auto ec = std::error_code{};
-  std::filesystem::remove_all(m_path, ec);
-}
 
 std::string readTextFile(const std::filesystem::path& path)
 {

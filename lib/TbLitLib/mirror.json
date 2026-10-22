@@ -2877,7 +2877,7 @@
           "symbol": "NamedCVars"
         }
       ],
-      "note": "ListFiles takes the names from the DeclSource (GetFileList's part, which lit/GameDeclSource.h mirrors, M-FS-01), adds each once case-insensitively and sorts with idSort_PathStr. ReadFile returns a Mem_Alloc'ed, NUL-terminated buffer of length + 1, -1 and FILE_NOT_FOUND_TIMESTAMP for an unreadable file. Not in the engine (R5.20): once the registry's cancel flag is set, every later ReadFile returns an empty file without asking the source, so the copied RegisterDeclFolder loop ends after the file it was reading and nothing is reported. The exception boundary (C17, G3): a source call that throws is reported as a warning, and the copy sees an unreadable file or an empty folder. ReadFile also refuses, with a warning, a file of 2 GB or more (the engine's lengths are ints) and one M-ID-GUARD-06 refuses"
+      "note": "ListFiles takes the names from the DeclSource (GetFileList's part, which lit/GameFileSource.h mirrors, M-FS-01), adds each once case-insensitively and sorts with idSort_PathStr. ReadFile returns a Mem_Alloc'ed, NUL-terminated buffer of length + 1, -1 and FILE_NOT_FOUND_TIMESTAMP for an unreadable file. Not in the engine (R5.20): once the registry's cancel flag is set, every later ReadFile returns an empty file without asking the source, so the copied RegisterDeclFolder loop ends after the file it was reading and nothing is reported. The exception boundary (C17, G3): a source call that throws is reported as a warning, and the copy sees an unreadable file or an empty folder. ReadFile also refuses, with a warning, a file of 2 GB or more (the engine's lengths are ints) and one M-ID-GUARD-06 refuses. A5 (LP1c.1): ReadFile with no buffer (the loaders' and GetTimestamp's time-only calls) asks the source's probe, which reads no file body (M-FS-08), and returns the probe's length, or -1 and FILE_NOT_FOUND_TIMESTAMP for no file. OpenFileRead (M-ID-FN-27) reads the file whole into a BufferedFile"
     },
     {
       "id": "M-ID-FN-09",
@@ -3750,6 +3750,10 @@
         {
           "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
           "symbol": "idFile"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/Registry.h",
+          "symbol": "BufferedFile"
         }
       ],
       "virtuals": [
@@ -3758,7 +3762,7 @@
         "Length",
         "Timestamp"
       ],
-      "note": "pure virtual: the shim never opens a file"
+      "note": "pure virtual; LP1c.1: tb::lit::shim::BufferedFile implements them for OpenFileRead (M-ID-FN-27)"
     },
     {
       "id": "M-ID-VIRT-13",
@@ -5619,11 +5623,11 @@
       ],
       "sinkbroom": [
         {
-          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
-          "symbol": "GameDeclSource::listFiles"
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::listFiles"
         },
         {
-          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
           "symbol": "flatName"
         },
         {
@@ -5676,8 +5680,8 @@
       ],
       "sinkbroom": [
         {
-          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
-          "symbol": "GameDeclSource::GameDeclSource"
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::GameFileSource"
         }
       ],
       "note": "the containers of <game path>/base in registration order: Sys_ListFiles( base, \".resources\" ) sorted with idSort_PathStr, then Sys_ListFiles( base/maps, \".resources\" ) sorted, each with \"maps/\" in front; then Sys_ListFiles( base, \".pk4\" ) sorted. A .pk4 holding binary.conf is refused without a message, as Init refuses it. A container whose Init fails is skipped with the engine's warning. On Windows the first listing recurses and lists base/maps' containers too; the engine then registers them twice, and SinkBroom keeps each once at its later place, which finds the same file for every name (M-FS-DIFF-04). With fs_resourceLoadPriority 0, a read searches each kind from the last registered: base/maps' .resources (z to a), then base's (z to a); .pk4 files z to a"
@@ -5734,19 +5738,23 @@
       ],
       "sinkbroom": [
         {
-          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
-          "symbol": "GameDeclSource::readFile"
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::readFile"
         },
         {
-          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
           "symbol": "checkedRelativePath"
         },
         {
-          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
-          "symbol": "GameDeclSource::origin"
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::origin"
+        },
+        {
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::read"
         }
       ],
-      "note": "fs_resourceLoadPriority 0 (its default): the loose file first, then the .pk4 files, then the resource files, each kind searched from its last registered container (M-FS-02). A leading slash is dropped; a path holding .. or ::, or an empty one, finds nothing; a container lookup refuses a path with a colon (an OS path), and compares the path with backslashes made slashes, case-insensitively. A container's file has time 0 (the engine wraps it in an idFile_Memory); a loose file's time is its modification time"
+      "note": "fs_resourceLoadPriority 0 (its default): the loose file first, then the .pk4 files, then the resource files, each kind searched from its last registered container (M-FS-02). A leading slash is dropped; a path holding .. or ::, or an empty one, finds nothing; a container lookup refuses a path with a colon (an OS path), and compares the path with backslashes made slashes, case-insensitively. A container's file has time 0 (the engine wraps it in an idFile_Memory); a loose file's time is its modification time in whole Unix seconds, as Sys_FileTimeStamp gives it (A4, LP1c.1; M-FS-08). LP1c.1: the search serves every game file the preview reads (C8, C10): readFile for decl text, readGameFile for the image caches and bakes, which never asks for another build"
     },
     {
       "id": "M-FS-04",
@@ -5848,8 +5856,8 @@
       ],
       "sinkbroom": [
         {
-          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
-          "symbol": "GameDeclSource::GameDeclSource"
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::GameFileSource"
         }
       ],
       "note": "a .pk4's entries as Init stores them, backslashes made slashes and lowercased, read through TrenchBroom's ZipFileSystem (D55), which skips directory entries (GetFileList skips them too) and keeps the later of two entries whose names differ only in case (ImageFileSystemBase::addFile), as the engine's hash finds it; an entry is read with ZipFileSystem::openFile"
@@ -5963,8 +5971,8 @@
       ],
       "sinkbroom": [
         {
-          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
-          "symbol": "GameDeclSource::GameDeclSource"
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::GameFileSource"
         }
       ],
       "note": "C1: one search path, <game path>/base, from Map::gamePath(). No mod, fs_game, fs_game_base or fs_savepath is searched: the engine adds fs_savepath after fs_basepath and each mod after base, and searches the newest first"
@@ -5989,8 +5997,8 @@
           "symbol": "GameFile::open"
         },
         {
-          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
-          "symbol": "GameDeclSource::closeFiles"
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::closeFiles"
         }
       ],
       "note": "R4-3.26, A2.15: loose and .resources files are opened per read batch with share-read, share-write and share-delete, so the user can save or replace them while the preview runs; every container closes at the end of the batch. A .pk4 is opened by TbFsLib's createCFile (_wfopen, which shares read and write but not delete) for its batch only: TbFsLib is not changed (C12)"
@@ -6033,8 +6041,8 @@
       ],
       "sinkbroom": [
         {
-          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
-          "symbol": "GameDeclSource::GameDeclSource"
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::GameFileSource"
         }
       ],
       "note": "a container listed twice (base/maps on Windows) is registered once, at its later place; the engine opens it twice, and its earlier copy never finds a file that the later one does not find first"
@@ -6086,8 +6094,8 @@
       ],
       "sinkbroom": [
         {
-          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
-          "symbol": "GameDeclSource::listFiles"
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::listFiles"
         },
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
@@ -6114,9 +6122,13 @@
         {
           "file": "lib/TbLitLib/src/GameFile.cpp",
           "symbol": "listOsFiles"
+        },
+        {
+          "file": "lib/TbLitLib/src/GameFile.cpp",
+          "symbol": "listFolderRecursive"
         }
       ],
-      "note": "A3.8: the engine's FindFirstFileW recursion follows a directory junction or link (FILE_ATTRIBUTE_DIRECTORY); SinkBroom does not follow one, so a junctioned folder below base/materials is neither read nor polled. Carried to LP1c"
+      "note": "A3.8 (LP1c.1): the engine's FindFirstFileW recursion follows a directory junction or link (FILE_ATTRIBUTE_DIRECTORY), and so does listOsFiles, listing its files under the link's name. Unlike the engine, a link whose target is a folder the listing is inside of (a loop, which the engine follows until its path is too long) is not followed, with a warning; the folders on the way are compared by canonical path"
     },
     {
       "id": "M-FS-DIFF-08",
@@ -6134,11 +6146,15 @@
       ],
       "sinkbroom": [
         {
-          "file": "lib/TbLitLib/src/GameDeclSource.cpp",
-          "symbol": "GameDeclSource::readPk4"
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::readPk4"
+        },
+        {
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "rawZipName"
         }
       ],
-      "note": "A3.13: TbFsLib's ZipFileSystem decodes a .pk4 entry name in the ANSI code page on Windows, so a non-ASCII entry name differs from the engine's raw bytes (another sort place, no fold with a loose file of that name); an entry whose name is not valid Unicode is skipped with a warning (G3). Carried to LP1c"
+      "note": "A3.13 (LP1c.1): a .pk4 entry is indexed by the name the zip stores, byte for byte, lowercased as Init lowercases it: TbFsLib's ZipFileSystem decodes miniz's name in the narrow code page (std::filesystem::path{std::string}), and the path's native narrow form gives the bytes back (rawZipName). An entry whose name that code page cannot hold is skipped with a warning (G3); TbFsLib may refuse such a .pk4 altogether, with the zip warning"
     },
     {
       "id": "M-ID-DIFF-01",
@@ -9629,6 +9645,138 @@
         }
       ],
       "note": "A15 refined by the LP1b.3 capture: before a light spawns, the game looks up a non-empty texture key of its map entity and of its entityDef with FindType( DECL_MATERIAL, texture ), which makes an implicit material for a name without a decl, so ParseSpawnArgsToRenderLight's FindMaterial( texture, false ) finds it: the engine lists such a light with its texture's name (listRenderLightDefs: lights/lp1b_missing) and its falloff is the default light's. Only the lights/squarelight1 default, which no key names, is looked up without a default, and an empty texture is FindType's _emptyName: those can be NULL and take the default point or projected light"
+    },
+    {
+      "id": "M-FS-08",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.h",
+          "lines": [
+            216,
+            225
+          ],
+          "anchor": "idFileSystem::GetTimestamp",
+          "sha256": "4023341bc4b039a4162521afa727b82c5bdc59583a7590a4f4c693bdfa275577"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            2072,
+            2093
+          ],
+          "anchor": "idFileSystemLocal::ReadFile, the time-only branch",
+          "sha256": "4a6b738c0ca9f89d381bb9f676803f218a24d9ff35526c539491729954434989"
+        },
+        {
+          "file": "neo/sys/win32/win_main.cpp",
+          "lines": [
+            590,
+            623
+          ],
+          "anchor": "Sys_FileTimeStamp (Windows)",
+          "sha256": "d50cc27cb9ae19a03ebd6a7c6b1cc5ae6f7a7ee3e73c7f52878a911c846cf27a"
+        },
+        {
+          "file": "neo/sys/posix/posix_main.cpp",
+          "lines": [
+            864,
+            869
+          ],
+          "anchor": "Sys_FileTimeStamp (POSIX)",
+          "sha256": "1e18b1aa7d33736314f9215f47cc0d3f49f00ac8eadca15317e7f17cb07cea8f"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            1531,
+            1535
+          ],
+          "anchor": "idFile_Permanent::Timestamp",
+          "sha256": "c53f06cc3f14a1cdd958a5ba622cd0a0118d2dd903fe5d56e0360248b86a6e2d"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            1814,
+            1817
+          ],
+          "anchor": "idFile_InZip::Timestamp",
+          "sha256": "861271f116ff5d871ef00b8bb87a346ff16a08f9880d982485534adefe3508b5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameFile.cpp",
+          "symbol": "statGameFile"
+        },
+        {
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::probeFile"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idFileSystemLocal::ReadFile"
+        }
+      ],
+      "note": "A4, A5, P.15 (LP1c.1): the cheap exists/timestamp probe. What a read of the path finds, in C8's order, without opening a file body: a loose file's time is Sys_FileTimeStamp's, on Windows (GetFileAttributesExW's last write ticks - 116444736000000000) / 10^7 with C++'s truncation, on POSIX stat's st_mtime; a .pk4 or .resources entry has time 0, looked up in the tables read at construction; no file has FILE_NOT_FOUND_TIMESTAMP (-1). A link is followed to its file, as the engine's open follows it. The change stamp (FILETIME ticks) is kept beside it for polling only"
+    },
+    {
+      "id": "M-FS-DIFF-09",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            2072,
+            2093
+          ],
+          "anchor": "idFileSystemLocal::ReadFile, the time-only branch",
+          "sha256": "4a6b738c0ca9f89d381bb9f676803f218a24d9ff35526c539491729954434989"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::probeFile"
+        }
+      ],
+      "note": "A5 (LP1c.1): the engine's time-only ReadFile opens the file and returns its length; the probe opens nothing, so a .pk4 entry's length, which only inflating it tells, is 0 (no copied caller reads the length of a time-only call: the loaders return at once). A loose file that can be statted but not opened is found by the probe and missed by a read, which goes on to the containers"
+    },
+    {
+      "id": "M-ID-FN-27",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            3945,
+            3948
+          ],
+          "anchor": "idFileSystemLocal::OpenFileRead",
+          "sha256": "4270f347df32c9366cce8540c561715aa6fd649cbc2435df534df3127a112256"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            780,
+            797
+          ],
+          "anchor": "idFile_Memory::Read",
+          "sha256": "6b68963d4c2f0f16655ba17744cb0a9c1b40aaff3cb0d8e4ce32c7b9cc6413a7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idFileSystemLocal::OpenFileRead"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "BufferedFile::Read"
+        }
+      ],
+      "note": "LP1c.1, for the loaders LP1c.2 copies: OpenFileRead reads the file whole through the source's C8 search (readGameFile) and serves it from memory as idFile_Memory does (Read copies at most the bytes left and moves past them), with the time the search found: a loose file's Unix seconds, as idFile_Permanent::Timestamp gives them, 0 in a container. The game file is closed once read (R4-3.26); CloseFile frees the object. Null for no file, a file of 2 GB or more, and once the registry's cancel flag is set. Minimal: only GetFullPath, Read, Length and Timestamp exist (M-ID-VIRT-12)"
     }
   ],
   "retired": [

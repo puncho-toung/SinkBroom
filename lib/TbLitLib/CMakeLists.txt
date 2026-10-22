@@ -18,7 +18,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FramePacer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameTimers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameTimers.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/GameDeclSource.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/GameFileSource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GameFile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.h
@@ -91,7 +91,7 @@ if(NOT MSVC)
 endif()
 
 # TbLitIdLib is public for its std-only facade, lit/MaterialDecls.h, which
-# lit/MaterialService.h and lit/GameDeclSource.h include. Its shim headers (precompiled.h,
+# lit/MaterialService.h and lit/GameFileSource.h include. Its shim headers (precompiled.h,
 # RenderCommon.h) and every id type are private to it, so nothing else is passed on.
 
 # Vulkan is reached only through vulkan.hpp's dynamic dispatcher and the loader is never

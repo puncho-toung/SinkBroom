@@ -243,7 +243,58 @@ bool DeclFileTime::operator!=(const DeclFileTime& other) const
   return !(*this == other);
 }
 
+bool GameFileProbe::exists() const
+{
+  return kind != Kind::Missing;
+}
+
+bool GameFileProbe::operator==(const GameFileProbe& other) const
+{
+  return kind == other.kind && container == other.container && time == other.time
+         && size == other.size && changeStamp == other.changeStamp;
+}
+
+bool GameFileProbe::operator!=(const GameFileProbe& other) const
+{
+  return !(*this == other);
+}
+
 DeclSource::~DeclSource() = default;
+
+GameFileProbe DeclSource::probe(const std::string& path)
+{
+  auto found = GameFileProbe{};
+  static_cast<void>(readGameFile(path, &found));
+  return found;
+}
+
+std::optional<std::string> DeclSource::readGameFile(
+  const std::string& path, GameFileProbe* found)
+{
+  auto time = std::int64_t{0};
+  auto text = readFile(path, &time);
+  if (found)
+  {
+    *found = GameFileProbe{};
+    if (text)
+    {
+      found->kind = GameFileProbe::Kind::Loose;
+      found->time = time;
+      found->size = text->size();
+    }
+  }
+  return text;
+}
+
+std::optional<std::string> DeclSource::gameRelativePath(const std::string&) const
+{
+  return std::nullopt;
+}
+
+bool DeclSource::usingResourceFiles() const
+{
+  return false;
+}
 
 std::vector<DeclFileTime> DeclSource::looseFileTimes(
   const std::string&, const std::string&) const

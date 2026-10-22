@@ -27,7 +27,7 @@
 // Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
 // ---- end of engine notice ----
 
-#include "lit/GameDeclSource.h"
+#include "lit/GameFileSource.h"
 
 #include "fs/File.h"
 #include "fs/PathInfo.h"
@@ -126,6 +126,25 @@ std::optional<std::string> flatName(
   return work;
 }
 
+/**
+ * A3.13: a .pk4 entry's name as the zip stores it. TbFsLib's ZipFileSystem builds each
+ * entry's path from miniz's raw name (std::filesystem::path{std::string}, which decodes
+ * the bytes in the narrow code page), so the path's native narrow form, encoded in the
+ * same code page, gives the bytes back, as idZipContainer::Init stores them; nullopt when
+ * the code page cannot hold the name.
+ */
+std::optional<std::string> rawZipName(const std::filesystem::path& path) noexcept
+{
+  try
+  {
+    return path.string();
+  }
+  catch (...)
+  {
+    return std::nullopt;
+  }
+}
+
 // OpenFileReadFlags' checks of a relative path: the leading slash is dropped, and a path
 // that could back up the tree, or is empty, finds nothing
 std::optional<std::string> checkedRelativePath(std::string path)
@@ -145,7 +164,7 @@ std::optional<std::string> checkedRelativePath(std::string path)
 
 } // namespace
 
-struct GameDeclSource::Pk4
+struct GameFileSource::Pk4
 {
   // as AddGameDirectory registers it: the name Sys_ListFiles lists below base
   std::string name;
@@ -158,7 +177,7 @@ struct GameDeclSource::Pk4
   std::unique_ptr<fs::ZipFileSystem> open;
 };
 
-struct GameDeclSource::Resources
+struct GameFileSource::Resources
 {
   ResourceContainer container;
   // open during a read batch only
@@ -177,7 +196,7 @@ Result<std::unique_ptr<fs::ZipFileSystem>> openZip(const std::filesystem::path& 
 
 } // namespace
 
-GameDeclSource::GameDeclSource(
+GameFileSource::GameFileSource(
   const std::filesystem::path& gamePath, const std::atomic<bool>* cancel)
   : m_base{gamePath / "base"}
   , m_cancel{cancel}
@@ -249,14 +268,14 @@ GameDeclSource::GameDeclSource(
   }
 }
 
-GameDeclSource::~GameDeclSource() = default;
+GameFileSource::~GameFileSource() = default;
 
-bool GameDeclSource::cancelled() const
+bool GameFileSource::cancelled() const
 {
   return m_cancel && m_cancel->load();
 }
 
-std::unique_ptr<GameDeclSource::Pk4> GameDeclSource::readPk4(const std::string& name)
+std::unique_ptr<GameFileSource::Pk4> GameFileSource::readPk4(const std::string& name)
 {
   const auto path = pathFromUtf8(name);
   if (!path)
@@ -286,10 +305,10 @@ std::unique_ptr<GameDeclSource::Pk4> GameDeclSource::readPk4(const std::string& 
                             {
                               continue;
                             }
-                            // G3: a name that is not valid Unicode is skipped, never
-                            // thrown for
-                            const auto utf8 = pathToUtf8(entryPath);
-                            if (!utf8)
+                            // A3.13: the name as the zip stores it, byte for byte; G3: a
+                            // name that cannot be given back is skipped, never thrown for
+                            const auto raw = rawZipName(entryPath);
+                            if (!raw)
                             {
                               m_warnings.push_back(fmt::format(
                                 "Zip file {}: an entry name is not valid Unicode; it is "
@@ -297,7 +316,7 @@ std::unique_ptr<GameDeclSource::Pk4> GameDeclSource::readPk4(const std::string& 
                                 name));
                               continue;
                             }
-                            const auto entryName = canonicalResourceName(*utf8);
+                            const auto entryName = canonicalResourceName(*raw);
                             binary = binary || entryName == BinaryConfig;
                             if (pk4->index.emplace(entryName, entryPath).second)
                             {
@@ -325,7 +344,7 @@ std::unique_ptr<GameDeclSource::Pk4> GameDeclSource::readPk4(const std::string& 
   }
 }
 
-std::vector<std::string> GameDeclSource::listFiles(
+std::vector<std::string> GameFileSource::listFiles(
   const std::string& folder, const std::string& extension)
 {
   auto names = std::vector<std::string>{};
@@ -370,8 +389,8 @@ std::vector<std::string> GameDeclSource::listFiles(
   return names;
 }
 
-std::optional<std::string> GameDeclSource::readLoose(
-  const std::string& path, std::int64_t* timestamp)
+std::optional<std::string> GameFileSource::readLoose(
+  const std::string& path, GameFileProbe* found, const bool decl)
 {
   const auto relative = pathFromUtf8(path);
   if (!relative)
@@ -385,11 +404,12 @@ std::optional<std::string> GameDeclSource::readLoose(
   }
 
   // A3.5: the file is statted before and after the read; while a save changes it, the
-  // read is tried again, and a file that keeps changing asks for another build
+  // read is tried again; a decl file that keeps changing asks for another build, any
+  // other file reads as none until it is asked for again
   for (auto attempt = 0; attempt < MaxLooseReadAttempts; ++attempt)
   {
     const auto before = statGameFile(*file);
-    auto text = readGameFile(*file) | kdl::transform([](std::string bytes) {
+    auto text = lit::readGameFile(*file) | kdl::transform([](std::string bytes) {
                   return std::optional<std::string>{std::move(bytes)};
                 })
                 | kdl::transform_error([](const auto&) {
@@ -410,13 +430,23 @@ std::optional<std::string> GameDeclSource::readLoose(
     {
       if (!stable)
       {
+        if (!decl)
+        {
+          m_warnings.push_back(fmt::format(
+            "{} changed while it was read; it is read again when it is asked for", path));
+          return std::nullopt;
+        }
         m_changedWhileRead = true;
         m_warnings.push_back(
           fmt::format("{} changed while it was read; it is read again later", path));
       }
-      if (timestamp)
+      if (found)
       {
-        *timestamp = after ? after->time : 0;
+        found->kind = GameFileProbe::Kind::Loose;
+        found->container.clear();
+        found->time = after ? after->unixSeconds : 0;
+        found->size = bytes.size();
+        found->changeStamp = after ? after->time : 0;
       }
       return bytes;
     }
@@ -424,12 +454,12 @@ std::optional<std::string> GameDeclSource::readLoose(
   return std::nullopt;
 }
 
-std::optional<std::string> GameDeclSource::readFile(
-  const std::string& path, std::int64_t* timestamp)
+std::optional<std::string> GameFileSource::read(
+  const std::string& path, GameFileProbe* found, const bool decl)
 {
-  if (timestamp)
+  if (found)
   {
-    *timestamp = 0;
+    *found = GameFileProbe{};
   }
   const auto relative = checkedRelativePath(path);
   if (!relative)
@@ -438,7 +468,7 @@ std::optional<std::string> GameDeclSource::readFile(
   }
 
   // fs_resourceLoadPriority 0: the search paths, then the .pk4 files, then the resources
-  if (auto text = readLoose(*relative, timestamp))
+  if (auto text = readLoose(*relative, found, decl))
   {
     return text;
   }
@@ -458,7 +488,13 @@ std::optional<std::string> GameDeclSource::readFile(
     {
       continue;
     }
-    return readFromPk4(pk4, entry->second, *relative);
+    auto text = readFromPk4(pk4, entry->second, *relative);
+    if (text && found)
+    {
+      // a zip's file has time 0 (idFile_InZip::Timestamp)
+      *found = GameFileProbe{GameFileProbe::Kind::Pk4, pk4.name, 0, text->size(), 0};
+    }
+    return text;
   }
 
   for (auto it = m_resources.rbegin(); it != m_resources.rend(); ++it)
@@ -479,22 +515,164 @@ std::optional<std::string> GameDeclSource::readFile(
       return GameFile::open(resources.container.path())
              | kdl::transform([&](GameFile file) { resources.open = std::move(file); });
     };
-    return openContainer() | kdl::and_then([&]() {
-             return resources.container.read(*entry, *resources.open);
-           })
-           | kdl::transform(
-             [](std::string text) { return std::optional<std::string>{std::move(text)}; })
-           | kdl::transform_error([&](const auto& e) {
-               m_warnings.push_back(e.msg);
-               return std::optional<std::string>{};
-             })
-           | kdl::value();
+    auto text =
+      openContainer()
+      | kdl::and_then([&]() { return resources.container.read(*entry, *resources.open); })
+      | kdl::transform(
+        [](std::string bytes) { return std::optional<std::string>{std::move(bytes)}; })
+      | kdl::transform_error([&](const auto& e) {
+          m_warnings.push_back(e.msg);
+          return std::optional<std::string>{};
+        })
+      | kdl::value();
+    if (text && found)
+    {
+      // an inner resource has time 0 (idFile_InnerResource)
+      *found = GameFileProbe{
+        GameFileProbe::Kind::Resources, resources.container.name(), 0, text->size(), 0};
+    }
+    return text;
   }
 
   return std::nullopt;
 }
 
-std::optional<std::string> GameDeclSource::readFromPk4(
+std::optional<std::string> GameFileSource::readFile(
+  const std::string& path, std::int64_t* timestamp)
+{
+  auto found = GameFileProbe{};
+  auto text = read(path, &found, true);
+  if (timestamp)
+  {
+    // A4: the engine's time; a file that is not read has none
+    *timestamp = text ? found.time : 0;
+  }
+  return text;
+}
+
+std::optional<std::string> GameFileSource::readGameFile(
+  const std::string& path, GameFileProbe* found)
+{
+  return read(path, found, false);
+}
+
+GameFileProbe GameFileSource::probeFile(const std::string& path) const
+{
+  const auto relative = checkedRelativePath(path);
+  if (!relative)
+  {
+    return {};
+  }
+
+  // the loose file, statted: its body is not opened
+  if (const auto relativePath = pathFromUtf8(*relative))
+  {
+    if (const auto file = findLooseFile(m_base / *relativePath))
+    {
+      if (const auto stat = statGameFile(*file))
+      {
+        return GameFileProbe{
+          GameFileProbe::Kind::Loose, {}, stat->unixSeconds, stat->size, stat->time};
+      }
+    }
+  }
+  if (relative->find(':') != std::string::npos)
+  {
+    return {};
+  }
+
+  // the containers' tables, read at construction
+  const auto canonical = canonicalResourceName(*relative);
+  for (auto it = m_pk4s.rbegin(); it != m_pk4s.rend(); ++it)
+  {
+    if ((*it)->index.count(canonical))
+    {
+      return GameFileProbe{GameFileProbe::Kind::Pk4, (*it)->name, 0, 0, 0};
+    }
+  }
+  for (auto it = m_resources.rbegin(); it != m_resources.rend(); ++it)
+  {
+    if (const auto* entry = (*it)->container.find(canonical))
+    {
+      return GameFileProbe{
+        GameFileProbe::Kind::Resources, (*it)->container.name(), 0, entry->length, 0};
+    }
+  }
+  return {};
+}
+
+GameFileProbe GameFileSource::probe(const std::string& path)
+{
+  return probeFile(path);
+}
+
+std::optional<std::string> GameFileSource::gameRelativePath(
+  const std::string& filePath) const
+{
+  // the file path as the document gives it (the native narrow string), compared with the
+  // base folder component by component, ignoring ASCII case on Windows, whose file
+  // system ignores it; the rest joined with slashes
+  try
+  {
+    const auto file = std::filesystem::path{filePath}.lexically_normal();
+    const auto base = m_base.lexically_normal();
+    auto fileIt = file.begin();
+    for (const auto& part : base)
+    {
+      if (part.empty())
+      {
+        continue;
+      }
+      while (fileIt != file.end() && fileIt->empty())
+      {
+        ++fileIt;
+      }
+      if (fileIt == file.end())
+      {
+        return std::nullopt;
+      }
+      const auto a = pathToUtf8(part);
+      const auto b = pathToUtf8(*fileIt);
+#if defined(_WIN32)
+      const auto same = a && b && equalsNoCaseAscii(*a, *b);
+#else
+      const auto same = a && b && *a == *b;
+#endif
+      if (!same)
+      {
+        return std::nullopt;
+      }
+      ++fileIt;
+    }
+    auto relative = std::string{};
+    for (; fileIt != file.end(); ++fileIt)
+    {
+      const auto part = pathToUtf8(*fileIt);
+      if (!part)
+      {
+        return std::nullopt;
+      }
+      if (part->empty())
+      {
+        continue;
+      }
+      relative += (relative.empty() ? "" : "/") + *part;
+    }
+    return relative.empty() ? std::nullopt : std::optional{relative};
+  }
+  catch (...)
+  {
+    return std::nullopt;
+  }
+}
+
+bool GameFileSource::usingResourceFiles() const
+{
+  // resourceFilesFound: a container whose Init succeeded
+  return !m_resources.empty();
+}
+
+std::optional<std::string> GameFileSource::readFromPk4(
   Pk4& pk4, const std::filesystem::path& entryPath, const std::string& path)
 {
   try
@@ -539,7 +717,7 @@ std::optional<std::string> GameDeclSource::readFromPk4(
   }
 }
 
-std::vector<DeclFileTime> GameDeclSource::looseFileTimes(
+std::vector<DeclFileTime> GameFileSource::looseFileTimes(
   const std::string& folder, const std::string& extension) const
 {
   auto times = std::vector<DeclFileTime>{};
@@ -567,12 +745,12 @@ std::vector<DeclFileTime> GameDeclSource::looseFileTimes(
   return times;
 }
 
-std::vector<std::string> GameDeclSource::takeWarnings()
+std::vector<std::string> GameFileSource::takeWarnings()
 {
   return std::exchange(m_warnings, {});
 }
 
-void GameDeclSource::closeFiles()
+void GameFileSource::closeFiles()
 {
   for (auto& pk4 : m_pk4s)
   {
@@ -584,52 +762,34 @@ void GameDeclSource::closeFiles()
   }
 }
 
-bool GameDeclSource::changedWhileRead() const
+bool GameFileSource::changedWhileRead() const
 {
   return m_changedWhileRead;
 }
 
-std::size_t GameDeclSource::containerCount() const
+std::size_t GameFileSource::containerCount() const
 {
   return m_pk4s.size() + m_resources.size();
 }
 
-std::optional<GameFileOrigin> GameDeclSource::origin(const std::string& path) const
+std::optional<GameFileOrigin> GameFileSource::origin(const std::string& path) const
 {
-  const auto relative = checkedRelativePath(path);
-  if (!relative)
+  const auto found = probeFile(path);
+  switch (found.kind)
   {
+  case GameFileProbe::Kind::Missing:
     return std::nullopt;
-  }
-  const auto relativePath = pathFromUtf8(*relative);
-  if (relativePath && findLooseFile(m_base / *relativePath))
-  {
+  case GameFileProbe::Kind::Loose:
     return GameFileOrigin{GameFileOrigin::Kind::Loose, {}};
-  }
-  if (relative->find(':') != std::string::npos)
-  {
-    return std::nullopt;
-  }
-
-  const auto canonical = canonicalResourceName(*relative);
-  for (auto it = m_pk4s.rbegin(); it != m_pk4s.rend(); ++it)
-  {
-    if ((*it)->index.count(canonical))
-    {
-      return GameFileOrigin{GameFileOrigin::Kind::Pk4, (*it)->name};
-    }
-  }
-  for (auto it = m_resources.rbegin(); it != m_resources.rend(); ++it)
-  {
-    if ((*it)->container.find(canonical))
-    {
-      return GameFileOrigin{GameFileOrigin::Kind::Resources, (*it)->container.name()};
-    }
+  case GameFileProbe::Kind::Pk4:
+    return GameFileOrigin{GameFileOrigin::Kind::Pk4, found.container};
+  case GameFileProbe::Kind::Resources:
+    return GameFileOrigin{GameFileOrigin::Kind::Resources, found.container};
   }
   return std::nullopt;
 }
 
-std::vector<std::string> GameDeclSource::searchOrder() const
+std::vector<std::string> GameFileSource::searchOrder() const
 {
   auto order = std::vector<std::string>{};
   for (auto it = m_pk4s.rbegin(); it != m_pk4s.rend(); ++it)
@@ -643,7 +803,7 @@ std::vector<std::string> GameDeclSource::searchOrder() const
   return order;
 }
 
-std::size_t GameDeclSource::openContainers() const
+std::size_t GameFileSource::openContainers() const
 {
   auto count = std::size_t{0};
   for (const auto& pk4 : m_pk4s)
