@@ -435,9 +435,11 @@ public:
   std::uint64_t geometryBatchesForTesting() const;
   // the device to make resources with, from create until teardown step 5; tests only
   nvrhi::IDevice* nvrhiDeviceForTesting() const;
-  // the compile thread, from create until teardown step 2; tests only (LP2.1 hands it to
-  // the render thread)
+  // the compile thread, from create until teardown step 2; tests only (the render thread
+  // has it from its start, LP2.1)
   PipelineCompiler* pipelineCompilerForTesting() const;
+  // the options the session was created with (C1: the game path among them); tests only
+  const SessionOptions& optionsForTesting() const;
   /**
    * D9, any thread: every program the compile thread was asked for, enabled or disabled
    * with the field that disabled it; the session's report of its passes.

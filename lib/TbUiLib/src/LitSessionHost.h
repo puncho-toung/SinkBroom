@@ -229,6 +229,10 @@ public:
   lit::LitSession* session() const;
   // the parse thread from phase A until the teardown's last step, else null
   lit::MaterialService* materials() const;
+  // C1 (LP2.1): the options phase B creates the session with: the owner's, with the
+  // document's game path, whose blobs the compile thread reads; a game-path change ends
+  // the session (D41). Tests
+  lit::SessionOptions sessionOptionsForTesting() const;
 
   // passed on once phase B has run; phase B asks the camera provider
   void setCamera(const lit::CameraState& camera);
@@ -264,6 +268,7 @@ private:
 
   void reconcile();
   void reconcileOnce();
+  lit::SessionOptions sessionOptions() const;
   void createSession(QSize size);
   void replaceSwapchain(QSize size);
   bool parkServicingSentMessages();

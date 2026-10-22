@@ -149,8 +149,10 @@ Result<void> LitSession::start(
              return m_compiler->start([renderThread] { renderThread->requestFrame(); });
            })
          | kdl::transform([&]() {
-             // B0.10: the render thread gets the pool and the service at start
-             m_renderThread->start(m_pool.get(), m_materials, m_lightTables);
+             // B0.10: the render thread gets the pool, the service and (LP2.1) the
+             // compile thread at start; each outlives it
+             m_renderThread->start(
+               m_pool.get(), m_materials, m_lightTables, m_compiler.get());
            });
 }
 
@@ -572,6 +574,11 @@ std::uint64_t LitSession::geometryBatchesForTesting() const
 PipelineCompiler* LitSession::pipelineCompilerForTesting() const
 {
   return m_gpuReleased ? nullptr : m_compiler.get();
+}
+
+const SessionOptions& LitSession::optionsForTesting() const
+{
+  return m_options;
 }
 
 std::vector<ProgramReport> LitSession::programReport() const

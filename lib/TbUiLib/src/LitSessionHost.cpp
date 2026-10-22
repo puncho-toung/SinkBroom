@@ -29,9 +29,11 @@
 #include "ServiceSentMessages.h"
 #include "lit/GameDeclSource.h"
 #include "lit/MaterialService.h"
+#include "mdl/Map.h"
 #include "ui/LitDocumentObserver.h"
 #include "ui/LitPreviewPanel.h"
 #include "ui/LitPreviewWindow.h"
+#include "ui/MapDocument.h"
 
 #include "kd/result.h"
 #include "kd/set_temp.h"
@@ -342,6 +344,20 @@ lit::MaterialService* LitSessionHost::materials() const
   return m_materials.get();
 }
 
+lit::SessionOptions LitSessionHost::sessionOptionsForTesting() const
+{
+  return sessionOptions();
+}
+
+lit::SessionOptions LitSessionHost::sessionOptions() const
+{
+  // C1: the session's compile thread reads the engine's blobs from the game the
+  // document's map belongs to
+  auto options = m_options;
+  options.gamePath = m_document.map().gamePath();
+  return options;
+}
+
 void LitSessionHost::setCamera(const lit::CameraState& camera)
 {
   if (drawing())
@@ -650,7 +666,7 @@ void LitSessionHost::createSession(const QSize size)
     surface,
     std::uint32_t(size.width()),
     std::uint32_t(size.height()),
-    m_options,
+    sessionOptions(),
     eventSink(),
     m_generation,
     m_materials.get())

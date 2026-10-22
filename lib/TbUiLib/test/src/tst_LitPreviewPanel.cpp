@@ -36,6 +36,9 @@
 #include <QWidget>
 #include <QWindow>
 
+// clang-format off: the host is private to TbUiLib, so it is found beside its sources
+#include "../../src/LitSessionHost.h"
+// clang-format on
 #include "SidebarTestUtils.h"
 #include "base/Logger.h"
 #include "base/PreferenceManager.h"
@@ -341,6 +344,27 @@ TEST_CASE("LitPreviewPanel")
     CHECK(report.problems().empty());
     report.deviceLost = true;
     CHECK(report.problems() == std::vector<std::string>{"The GPU device was lost."});
+  }
+
+  SECTION("the session the panel starts reads the document's game path (C1, LP2.1)")
+  {
+    // as LitPreviewPanel::start makes its host: the panel's options carry no game path,
+    // phase B gives the session the document's, whose blobs its compile thread reads
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    auto env = fs::TestEnvironment{};
+    auto& map = fixture.document().map();
+    map.setGamePath(env.dir());
+    auto options = lit::SessionOptions{};
+    options.validation = true;
+    auto host = LitSessionHost{
+      options, 1, {}, {}, fixture.document(), fixture.document().map().gamePath()};
+    const auto sessionOptions = host.sessionOptionsForTesting();
+    CHECK(sessionOptions.gamePath == env.dir());
+    CHECK(sessionOptions.validation);
+
+    // a session is made with the path its document has then (D41: a change ends it)
+    map.setGamePath(env.dir() / "other");
+    CHECK(host.sessionOptionsForTesting().gamePath == env.dir() / "other");
   }
 }
 
@@ -1795,6 +1819,12 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     REQUIRE(harness.startAndWaitForFrame());
     auto* materials = panel.materialsForTesting();
     REQUIRE(materials != nullptr);
+    // C1 (LP2.1): the session's compile thread reads the same game's blobs
+    REQUIRE(harness.session() != nullptr);
+    CHECK(
+      harness.session()->optionsForTesting().gamePath
+      == harness.fixture.document().map().gamePath());
+    CHECK_FALSE(harness.session()->optionsForTesting().gamePath.empty());
     REQUIRE(materials->waitForStatsForTesting(
       [](const auto& s) { return s.parseAllDone; }, 10s));
     CHECK(materials->stats().materials > 0);

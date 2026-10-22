@@ -48,6 +48,7 @@ class CpuPool;
 class GpuDevice;
 class LightTablePublication;
 class MaterialService;
+class PipelineCompiler;
 class SceneGeometry;
 class SessionEvents;
 struct Snapshot;
@@ -86,6 +87,10 @@ private:
   // scene and chunks (B0.3), made at start and destroyed when the thread ends
   CpuPool* m_pool = nullptr;
   MaterialService* m_materials = nullptr;
+  // LP2.1 (D71, B0.10): the session's compile thread, given at start; it outlives this
+  // thread, which never starts or joins it, and its onReady is this thread's frame
+  // trigger (D77)
+  PipelineCompiler* m_compiler = nullptr;
   std::unique_ptr<SceneGeometry> m_geometry;
 
   // ----- the swapchain generation, replaced by the GUI thread only while parked -----
@@ -158,11 +163,14 @@ public:
   bool headless() const;
   // B0.10: the session's CPU pool and material service (either may be null), which the
   // render thread's chunk jobs use; both outlive the thread. R2.9: lights, the session's
-  // light table publication, which the thread's light registry publishes into
+  // light table publication, which the thread's light registry publishes into. LP2.1:
+  // compiler, the session's compile thread (may be null), whose pipelines and binding
+  // layouts the passes draw with; it outlives the thread too
   void start(
     CpuPool* pool,
     MaterialService* materials,
-    std::shared_ptr<LightTablePublication> lights);
+    std::shared_ptr<LightTablePublication> lights,
+    PipelineCompiler* compiler);
 
   // Any thread.
 

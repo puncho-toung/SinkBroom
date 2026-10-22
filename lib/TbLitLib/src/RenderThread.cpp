@@ -190,10 +190,12 @@ bool RenderThread::headless() const
 void RenderThread::start(
   CpuPool* pool,
   MaterialService* materials,
-  std::shared_ptr<LightTablePublication> lights)
+  std::shared_ptr<LightTablePublication> lights,
+  PipelineCompiler* compiler)
 {
   m_pool = pool;
   m_materials = materials;
+  m_compiler = compiler;
   m_geometry = std::make_unique<SceneGeometry>(m_pool, m_materials, std::move(lights));
   m_thread = std::thread{[this] { main(); }};
 }
