@@ -612,6 +612,16 @@ void LitSession::runAfterPassesForTesting(std::function<void(RenderFrameAccess&)
   m_renderThread->runAfterPasses(std::move(hook));
 }
 
+void LitSession::runAfterTonemapForTesting(std::function<void(RenderFrameAccess&)> hook)
+{
+  m_renderThread->runAfterTonemap(std::move(hook));
+}
+
+void LitSession::setHdrClearForTesting(std::optional<std::array<float, 4>> colour)
+{
+  m_renderThread->setHdrClear(colour);
+}
+
 void LitSession::setChunksForTesting(
   std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks)
 {

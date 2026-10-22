@@ -79,6 +79,8 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SwapchainRules.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/TextureUploads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/TextureUploads.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/TonemapPasses.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/TonemapPasses.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/VulkanDevice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/VulkanDevice.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/VulkanInstance.cpp

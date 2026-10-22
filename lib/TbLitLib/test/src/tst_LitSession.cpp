@@ -4060,7 +4060,9 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
       }));
       std::cout << "LP2.2a pipelines asked for: " << programsAsked.size() << ", made "
                 << compiler->pipelinesCreatedForTesting() << "\n";
-      CHECK(programsAsked.size() == compiler->pipelinesCreatedForTesting());
+      // LP2.2b: and the tonemap passes' four, histogram, exposure, tonemapping and the
+      // headless blit, none with an input layout (no mirrored warning)
+      CHECK(programsAsked.size() + 4u == compiler->pipelinesCreatedForTesting());
 
       teardown(*session);
       CHECK(session->lastDeviceReleaseCount() == 0u);

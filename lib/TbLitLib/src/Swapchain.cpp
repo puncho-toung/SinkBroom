@@ -198,6 +198,8 @@ Result<std::unique_ptr<SwapchainGeneration>> createSwapchainGeneration(
 
 void releaseSwapchainWrappers(SwapchainGeneration& generation)
 {
+  // the framebuffers hold views of the images: they go first
+  generation.imageFramebuffers.clear();
   generation.imageTextures.clear();
 }
 

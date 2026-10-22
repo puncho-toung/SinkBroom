@@ -47,6 +47,9 @@ struct SwapchainGeneration
   std::vector<vk::Image> images;
   // NVRHI handles of the images, released by the render thread while it parks
   std::vector<nvrhi::TextureHandle> imageTextures;
+  // LP2.2b: a framebuffer of each image alone, the blit's target, made by the render
+  // thread at the image's first frame and released with the wrappers, before them
+  std::vector<nvrhi::FramebufferHandle> imageFramebuffers;
   // one per frame in flight: frame N reuses frame N - FramesInFlight's, which the
   // render thread has waited for
   std::vector<vk::Semaphore> acquireSemaphores;
@@ -83,7 +86,8 @@ struct SwapchainSpec
 Result<std::unique_ptr<SwapchainGeneration>> createSwapchainGeneration(
   const SwapchainSpec& spec);
 
-// The render thread's half (D49), after waitForIdle: drops the image wrappers.
+// The render thread's half (D49), after waitForIdle: drops the image framebuffers, then
+// the image wrappers.
 void releaseSwapchainWrappers(SwapchainGeneration& generation);
 
 // The GUI thread's half (D49): any wrappers left, vkDestroySwapchainKHR, the semaphores.

@@ -28,6 +28,7 @@
 #include "PipelineCompiler.h"
 #include "SamplerSet.h"
 #include "TextureUploads.h"
+#include "TonemapPasses.h"
 #include "base/Macros.h"
 #include "base/Result.h"
 #include "lit/FramePacer.h"
@@ -106,6 +107,8 @@ struct RenderFrameAccess
   std::uint64_t bytesUploaded;
   // LP2.2a: the lit passes (their lists, stats and test hooks)
   LitPasses& passes;
+  // LP2.2b: the tonemap passes and the blit (their stats)
+  TonemapPasses& tonemap;
 };
 
 /**
@@ -135,6 +138,8 @@ private:
   SessionOptions m_options;
   bool m_headless = false;
   nvrhi::TextureHandle m_headlessTarget;
+  // LP2.2b: a framebuffer of the headless target alone, the blit's target
+  nvrhi::FramebufferHandle m_headlessFramebuffer;
   vk::Extent2D m_headlessExtent;
 
   // B0.10: the session's pool and material service, given at start; the render thread's
@@ -173,6 +178,8 @@ private:
   SamplerSet m_samplers;
   // LP2.2a: the depth prepass and the interactions into hdrFBO
   LitPasses m_passes;
+  // LP2.2b: histogram, exposure and tonemapping into the LDR target, and the blit
+  TonemapPasses m_tonemap;
   std::uint64_t m_arrivalsCheckedVersion = 0;
   // D77: a texture arrival triggers a frame at most every TextureArrivalInterval
   FrameClock::time_point m_lastArrivalTrigger;
@@ -245,6 +252,10 @@ private:
   std::function<void(RenderFrameAccess&)> m_everyFrameHook;
   // LP2.2a test hook: the functions the next frame runs once after its lit passes
   std::vector<std::function<void(RenderFrameAccess&)>> m_afterPassHooks;
+  // LP2.2b test hooks: the functions the next frame runs once after its tonemap passes
+  // and blit; the colour every frame clears the HDR target to instead of its lit passes
+  std::vector<std::function<void(RenderFrameAccess&)>> m_afterTonemapHooks;
+  std::optional<std::array<float, 4>> m_hdrClearForTesting;
   // LP2.1 test hook: the chunks the arenas hold instead of the scene's
   std::shared_ptr<const std::map<ChunkKey, Chunk>> m_testChunks;
   // the render thread's copy of m_testChunks, and the chunks of a thread without a scene
@@ -343,6 +354,13 @@ public:
   // its lit passes, inside its command list (a readback of the HDR target); a frame is
   // triggered
   void runAfterPasses(std::function<void(RenderFrameAccess&)> hook);
+  // LP2.2b, any thread: the next frame drawn runs hook once on the render thread after
+  // its tonemap passes and its blit, inside its command list (a readback of the LDR or
+  // the frame's target); a frame is triggered
+  void runAfterTonemap(std::function<void(RenderFrameAccess&)> hook);
+  // LP2.2b, any thread: while set, every frame clears the HDR target to colour instead
+  // of recording its lit passes, and tonemaps it; a frame is triggered
+  void setHdrClear(std::optional<std::array<float, 4>> colour);
   // any thread: the arenas hold these chunks instead of the scene's until null replaces
   // them; a frame is triggered
   void setTestChunks(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks);
@@ -368,9 +386,27 @@ private:
   void checkVramBudget();
   void runFrameHooks(nvrhi::ICommandList& commandList);
   void runAfterPassHooks(nvrhi::ICommandList& commandList);
+  void runAfterTonemapHooks(nvrhi::ICommandList& commandList);
   // LP2.2a: the frame's lit passes, after its uploads and hooks; whether the next frame
   // is due at once (D77: a skipped draw)
   bool recordLitPasses(nvrhi::ICommandList& commandList, const CameraState& camera);
+  // LP2.2b test hook: the HDR target cleared to colour, the LDR and depth targets as the
+  // lit passes clear them, instead of the lit passes
+  void recordHdrClear(
+    nvrhi::ICommandList& commandList, const std::array<float, 4>& colour);
+  // LP2.2b: the tonemap passes and the blit into the frame's target (hdrDrawn: the HDR
+  // target holds a picture)
+  void recordTonemap(
+    nvrhi::ICommandList& commandList,
+    nvrhi::ITexture* target,
+    nvrhi::IFramebuffer* targetFramebuffer,
+    bool hdrDrawn);
+  // LP2.2b: the framebuffer of a swapchain image alone, made at its first frame; null
+  // when NVRHI cannot make it
+  nvrhi::IFramebuffer* imageFramebuffer(
+    SwapchainGeneration& generation, std::uint32_t imageIndex);
+  // LP2.2b: the headless target and its framebuffer at m_headlessExtent; false: failed
+  bool makeHeadlessTarget();
   // D77 (LP2.2a): an idle pass's look for the material table the lit passes wait for;
   // whether a frame is due
   void litTableTick();

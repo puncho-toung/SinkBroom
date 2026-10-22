@@ -22,13 +22,12 @@
 #include "GpuDevice.h"
 #include "SessionEvents.h"
 #include "Swapchain.h"
+#include "lit/EngineTables.h"
 #include "lit/SceneGeometry.h"
 #include "lit/Snapshot.h"
 #include "lit/SwapchainRules.h"
 
 #include "kd/result.h"
-
-#include "vm/vec.h"
 
 #include <fmt/format.h>
 #include <nvrhi/vulkan.h>
@@ -119,18 +118,6 @@ public:
   }
 };
 
-/**
- * LP0's frame content: a clear colour from the camera's direction, direction * 0.5 + 0.5,
- * so that a viewer sees the preview follow the camera.
- */
-std::array<float, 4> clearColorFor(const vm::vec3f& direction)
-{
-  const auto channel = [](const float d) {
-    return std::clamp(d * 0.5f + 0.5f, 0.0f, 1.0f);
-  };
-  return {channel(direction.x()), channel(direction.y()), channel(direction.z()), 1.0f};
-}
-
 } // namespace
 
 std::uint64_t GpuMemoryAccount::total() const
@@ -171,16 +158,7 @@ Result<void> RenderThread::createFrameResources(
   {
     m_headless = true;
     m_headlessExtent = *headlessExtent;
-    m_headlessTarget =
-      device.createTexture(nvrhi::TextureDesc{}
-                             .setWidth(m_headlessExtent.width)
-                             .setHeight(m_headlessExtent.height)
-                             .setFormat(nvrhi::Format::RGBA8_UNORM)
-                             .setDebugName("Lit preview headless target")
-                             .setIsRenderTarget(true)
-                             .setInitialState(nvrhi::ResourceStates::RenderTarget)
-                             .setKeepInitialState(true));
-    if (!m_headlessTarget)
+    if (!makeHeadlessTarget())
     {
       return Error{"Cannot create the headless target"};
     }
@@ -218,6 +196,45 @@ Result<void> RenderThread::createFrameResources(
 bool RenderThread::headless() const
 {
   return m_headless;
+}
+
+bool RenderThread::makeHeadlessTarget()
+{
+  // SC278: an RGBA8 offscreen target stands in for the swapchain image, with a
+  // framebuffer of it alone for the blit (LP2.2b)
+  auto& device = m_device.device();
+  m_headlessTarget =
+    device.createTexture(nvrhi::TextureDesc{}
+                           .setWidth(m_headlessExtent.width)
+                           .setHeight(m_headlessExtent.height)
+                           .setFormat(nvrhi::Format::RGBA8_UNORM)
+                           .setDebugName("Lit preview headless target")
+                           .setIsRenderTarget(true)
+                           .setInitialState(nvrhi::ResourceStates::RenderTarget)
+                           .setKeepInitialState(true));
+  m_headlessFramebuffer =
+    m_headlessTarget ? device.createFramebuffer(
+                         nvrhi::FramebufferDesc{}.addColorAttachment(m_headlessTarget))
+                     : nullptr;
+  return m_headlessTarget && m_headlessFramebuffer;
+}
+
+nvrhi::IFramebuffer* RenderThread::imageFramebuffer(
+  SwapchainGeneration& generation, const std::uint32_t imageIndex)
+{
+  // made on the render thread at the image's first frame; released with the wrappers
+  // (releaseSwapchainWrappers), before them
+  if (generation.imageFramebuffers.size() < generation.imageTextures.size())
+  {
+    generation.imageFramebuffers.resize(generation.imageTextures.size());
+  }
+  auto& framebuffer = generation.imageFramebuffers[imageIndex];
+  if (!framebuffer)
+  {
+    framebuffer = m_device.device().createFramebuffer(
+      nvrhi::FramebufferDesc{}.addColorAttachment(generation.imageTextures[imageIndex]));
+  }
+  return framebuffer.Get();
 }
 
 void RenderThread::start(
@@ -447,6 +464,7 @@ void RenderThread::releaseFrameResources()
 {
   // §3.1 step 2: every handle the registry and the arenas hold
   m_passes.releaseAll();
+  m_tonemap.releaseAll();
   m_frameResources.releaseAll();
   m_arenas.releaseAll();
   m_pipelines.clear();
@@ -460,6 +478,7 @@ void RenderThread::releaseFrameResources()
     event = nullptr;
   }
   m_timers.releaseQueries();
+  m_headlessFramebuffer = nullptr;
   m_headlessTarget = nullptr;
 }
 
@@ -526,6 +545,26 @@ void RenderThread::runAfterPasses(std::function<void(RenderFrameAccess&)> hook)
   {
     const auto lock = std::scoped_lock{m_mutex};
     m_afterPassHooks.push_back(std::move(hook));
+    m_pacer.trigger();
+  }
+  m_wake.notify_all();
+}
+
+void RenderThread::runAfterTonemap(std::function<void(RenderFrameAccess&)> hook)
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_afterTonemapHooks.push_back(std::move(hook));
+    m_pacer.trigger();
+  }
+  m_wake.notify_all();
+}
+
+void RenderThread::setHdrClear(std::optional<std::array<float, 4>> colour)
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_hdrClearForTesting = colour;
     m_pacer.trigger();
   }
   m_wake.notify_all();
@@ -623,23 +662,15 @@ void RenderThread::applyHeadlessResize()
   {
     return;
   }
-  // D35: the old target is held until the frames in flight that cleared it have finished
-  // (a clear holds no reference of its own)
+  // D35: the old target and its framebuffer are held until the frames in flight that
+  // drew into it have finished (a clear holds no reference of its own)
+  m_frameResources.retire(m_headlessFramebuffer.Get(), 0, m_frameIndex);
   m_frameResources.retire(
     m_headlessTarget.Get(),
     std::uint64_t(m_headlessExtent.width) * m_headlessExtent.height * 4,
     m_frameIndex);
-  m_headlessTarget = m_device.device().createTexture(
-    nvrhi::TextureDesc{}
-      .setWidth(resize->width)
-      .setHeight(resize->height)
-      .setFormat(nvrhi::Format::RGBA8_UNORM)
-      .setDebugName("Lit preview headless target")
-      .setIsRenderTarget(true)
-      .setInitialState(nvrhi::ResourceStates::RenderTarget)
-      .setKeepInitialState(true));
   m_headlessExtent = *resize;
-  if (!m_headlessTarget)
+  if (!makeHeadlessTarget())
   {
     m_events.markFailed("Cannot create the headless target");
   }
@@ -724,7 +755,8 @@ RenderFrameAccess RenderThread::frameAccess(nvrhi::ICommandList& commandList)
     m_textureUploads,
     m_samplers,
     m_frameUploadBytes,
-    m_passes};
+    m_passes,
+    m_tonemap};
 }
 
 void RenderThread::runAfterPassHooks(nvrhi::ICommandList& commandList)
@@ -743,6 +775,72 @@ void RenderThread::runAfterPassHooks(nvrhi::ICommandList& commandList)
   {
     hook(access);
   }
+}
+
+void RenderThread::runAfterTonemapHooks(nvrhi::ICommandList& commandList)
+{
+  auto hooks = std::vector<std::function<void(RenderFrameAccess&)>>{};
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    hooks.swap(m_afterTonemapHooks);
+  }
+  if (hooks.empty())
+  {
+    return;
+  }
+  auto access = frameAccess(commandList);
+  for (auto& hook : hooks)
+  {
+    hook(access);
+  }
+}
+
+void RenderThread::recordHdrClear(
+  nvrhi::ICommandList& commandList, const std::array<float, 4>& colour)
+{
+  // as LitPasses::recordClears, with the HDR target's colour the test's
+  namespace fr = frame_resource;
+  const auto hdr = m_frameResources.find(fr::CurrentRenderHdr);
+  const auto ldr = m_frameResources.find(fr::CurrentRenderLdr);
+  const auto depth = m_frameResources.find(fr::CurrentDepth);
+  if (!hdr || !ldr || !depth)
+  {
+    return;
+  }
+  commandList.clearTextureFloat(
+    hdr->texture,
+    nvrhi::AllSubresources,
+    nvrhi::Color{colour[0], colour[1], colour[2], colour[3]});
+  commandList.clearTextureFloat(
+    ldr->texture, nvrhi::AllSubresources, nvrhi::Color{0.0f, 0.0f, 0.0f, 1.0f});
+  commandList.clearDepthStencilTexture(
+    depth->texture, nvrhi::AllSubresources, true, 1.0f, true, EngineFrame.stencilClear);
+}
+
+void RenderThread::recordTonemap(
+  nvrhi::ICommandList& commandList,
+  nvrhi::ITexture* target,
+  nvrhi::IFramebuffer* targetFramebuffer,
+  const bool hdrDrawn)
+{
+  // LP2.2b (§3.8 pass 10): histogram, exposure and tonemapping into ldrFBO, then the
+  // blit into the frame's target (SC201, SC203)
+  auto inputs = TonemapFrameInputs{};
+  inputs.device = &m_device.device();
+  inputs.commandList = &commandList;
+  inputs.frameIndex = m_frameIndex;
+  inputs.frame = &m_frameResources;
+  inputs.pipelines = &m_pipelines;
+  inputs.images = &m_images;
+  inputs.bindingSets = &m_bindingSets;
+  inputs.samplers = &m_samplers;
+  inputs.target = target;
+  inputs.targetFramebuffer = targetFramebuffer;
+  inputs.hdrDrawn = hdrDrawn;
+  inputs.stopRequested = [this] { return stopOrParkRequested(); };
+  m_tonemap.record(inputs);
+  // C28: the LUT's slot keeps the set it made
+  eraseChangedSets();
 }
 
 bool RenderThread::recordLitPasses(
@@ -1132,15 +1230,18 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
 
     const auto recordStart = FrameClock::now();
     auto* const timer = m_timers.query(slot);
-    const auto color = clearColorFor(camera.direction);
     m_frameResources.setFrameTarget(texture);
     m_frameUploadBytes = 0;
     syncChunks();
     refreshImages();
-    // C14: until LP2.2a the frame's one pass is LP0's clear of its presentation target
-    auto clearPass = PassDesc{};
-    clearPass.name = "clear";
-    clearPass.writes = {std::string{frame_resource::FrameTarget}};
+    // LP2.2b: the blit's target, the frame's presentation target alone
+    auto* const targetFramebuffer =
+      target ? imageFramebuffer(*target, imageIndex) : m_headlessFramebuffer.Get();
+    auto hdrClear = std::optional<std::array<float, 4>>{};
+    {
+      const auto lock = std::scoped_lock{m_mutex};
+      hdrClear = m_hdrClearForTesting;
+    }
 
     {
       auto recording = OpenCommandList{device, *m_commandList};
@@ -1163,25 +1264,29 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       }
       checkVramBudget();
       runFrameHooks(commandList);
-      // LP2.2a: the lit passes into hdrFBO (D77: a draw skipped for a pending pipeline,
-      // a texture without levels or a chunk not placed yet is retried at once; a pending
-      // material or evaluation waits for a table)
-      const auto litUnconverged = recordLitPasses(commandList, camera);
+      // LP2.2a: the lit passes into hdrFBO (D77: a draw skipped for a texture without
+      // levels or a chunk not placed yet is retried at once; a pending material or
+      // evaluation waits for a table, a pending pipeline for the compile thread)
+      auto litUnconverged = false;
+      auto hdrDrawn = false;
+      if (hdrClear)
+      {
+        recordHdrClear(commandList, *hdrClear);
+        hdrDrawn = true;
+      }
+      else
+      {
+        litUnconverged = recordLitPasses(commandList, camera);
+        const auto& litStats = m_passes.lastStats();
+        hdrDrawn = litStats.prepassDraws + litStats.interactionDraws > 0;
+      }
       runAfterPassHooks(commandList);
+      // LP2.2b: the tonemap passes into the LDR target and its blit into the frame's
+      // target, which replace LP0's clear of it
+      recordTonemap(commandList, texture, targetFramebuffer, hdrDrawn);
+      runAfterTonemapHooks(commandList);
       // a slot whose image arrived during the frame is written in the next (D77)
       m_unconverged = m_unconverged || litUnconverged || m_images.hasLoading();
-      const auto clearTarget =
-        m_frameResources.resolve(clearPass)
-        | kdl::transform([](const PassResources& r) { return r.writes.front().texture; })
-        | kdl::if_error([&](const auto& e) { m_events.markFailed(e.msg); })
-        | kdl::value_or(nullptr);
-      if (clearTarget)
-      {
-        commandList.clearTextureFloat(
-          clearTarget,
-          nvrhi::AllSubresources,
-          nvrhi::Color{color[0], color[1], color[2], color[3]});
-      }
       if (takeFault(DebugFault::ThrowWhileRecording))
       {
         throw std::runtime_error{"injected while recording"};

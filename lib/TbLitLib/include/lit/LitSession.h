@@ -32,6 +32,7 @@ namespace nvrhi
 class IDevice;
 }
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -469,6 +470,20 @@ public:
    * dropped.
    */
   void runAfterPassesForTesting(std::function<void(RenderFrameAccess&)> hook);
+  /**
+   * LP2.2b, any thread: the next frame drawn runs hook once on the render thread after
+   * its tonemap passes and its blit, inside its command list, for a readback of the LDR
+   * target or the frame's target; a frame is triggered. A hook that is never run is
+   * dropped.
+   */
+  void runAfterTonemapForTesting(std::function<void(RenderFrameAccess&)> hook);
+  /**
+   * LP2.2b, any thread: while colour is set, every frame clears the HDR target to it
+   * (RGBA16F, so each channel is stored as a half) instead of recording its lit passes,
+   * clears the LDR and depth targets as those passes do, and runs the tonemap passes and
+   * the blit on it; nullopt draws the scene again. A frame is triggered.
+   */
+  void setHdrClearForTesting(std::optional<std::array<float, 4>> colour);
   // LP2.1, any thread: the render thread's arenas hold these chunks instead of the
   // scene's until null replaces them (D36); a frame is triggered
   void setChunksForTesting(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks);

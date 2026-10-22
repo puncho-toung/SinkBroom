@@ -8,6 +8,8 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/LitMapFixture.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src/LitTestUtils.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/LitTestUtils.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/TonemapModel.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/TonemapModel.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CpuPool.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DeviceChoice.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EditorImageSize.cpp
@@ -49,6 +51,7 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_StackThread.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SwapchainRules.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TextureUploads.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TonemapPasses.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_VulkanInstance.cpp
 )
 
