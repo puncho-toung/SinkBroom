@@ -4,3 +4,7 @@
 *.bproc binary
 *.tga binary
 *.bimage binary
+*.png binary
+*.exr binary
+*.hdr binary
+*.bimage-header binary

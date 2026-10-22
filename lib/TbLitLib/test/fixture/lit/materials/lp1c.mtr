@@ -1,0 +1,101 @@
+// LP1c image fixtures (plans/lit-preview/15-LP1BC-PACKAGES.md D61, K20: names under
+// textures/lp1c/ and lights/lp1c/ are reserved for fixtures). Each stage names the usage
+// the engine binarizes the image with; touch material makes the engine write its cache.
+
+// TD_DIFFUSE (#__0100, DXT5 YCoCg): a flat image whose channels differ
+textures/lp1c/flat
+{
+	diffusemap	textures/lp1c/flat.tga
+}
+
+// TD_BUMP (#__0300, DXT5 normal: x in alpha, y in green) of the same image
+textures/lp1c/flat_bump
+{
+	bumpmap	textures/lp1c/flat.tga
+	diffusemap	textures/lp1c/flat.tga
+}
+
+// TD_DEFAULT (#__0200, DXT5) of the same image
+textures/lp1c/flat_blend
+{
+	{
+		blend	blend
+		map	textures/lp1c/flat.tga
+	}
+}
+
+// TD_DIFFUSE of a gradient
+textures/lp1c/gradient
+{
+	diffusemap	textures/lp1c/gradient.tga
+}
+
+// a 16-bit TGA: the engine's LoadTGA stops with an Error, the preview refuses the file
+textures/lp1c/sixteen
+{
+	diffusemap	textures/lp1c/sixteen.tga
+}
+
+// TD_DIFFUSE of a run-length TGA
+textures/lp1c/rle
+{
+	diffusemap	textures/lp1c/rle.tga
+}
+
+// TD_DEFAULT of a PNG
+textures/lp1c/pic
+{
+	{
+		blend	blend
+		map	textures/lp1c/pic.png
+	}
+}
+
+// TD_SPECULAR of metal_s, whose metal_rmao.png makes it TD_SPECULAR_PBR_RMAO (#__1200, DXT1)
+textures/lp1c/metal
+{
+	diffusemap	textures/lp1c/flat.tga
+	specularmap	textures/lp1c/metal_s.tga
+}
+
+// TD_BUMP of a _local normal map
+textures/lp1c/bumpy
+{
+	bumpmap	textures/lp1c/bumpy_local.tga
+	diffusemap	textures/lp1c/flat.tga
+}
+
+// TD_LIGHT (#__0500, RGB565): a lights/ image
+textures/lp1c/light
+{
+	{
+		blend	add
+		map	lights/lp1c/light.tga
+	}
+}
+
+// a six-sided cube (CF_NATIVE, #__0201, DXT5)
+textures/lp1c/sky
+{
+	{
+		blend	add
+		cubeMap	textures/lp1c/sky
+	}
+}
+
+// HDR panoramas (hdriMap: CF_PANORAMA, TD_HDRI, #__2203, BC6H)
+textures/lp1c/pano_exr
+{
+	{
+		blend	add
+		hdriMap	textures/lp1c/pano_exr
+	}
+}
+
+textures/lp1c/pano_hdr
+{
+	{
+		blend	add
+		hdriMap	textures/lp1c/pano_hdr
+	}
+}
