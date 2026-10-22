@@ -128,6 +128,18 @@ enum class SessionEvent
 using EventSink =
   std::function<void(SessionEvent, std::string message, std::uint64_t generation)>;
 
+/**
+ * LP2.2b (C29, P2.25): a copy of a settled frame's LDR target (_currentRenderLDR,
+ * RGBA8_UNORM), the engine's screenshot source, at the target's size: rows top-down, four
+ * bytes a pixel. The engine's screenshot forces alpha to 255; parity compares RGB.
+ */
+struct LdrImage
+{
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::vector<std::uint8_t> rgba;
+};
+
 // The device-local heaps' VRAM, from VK_EXT_memory_budget.
 struct VramUsage
 {
@@ -503,6 +515,16 @@ public:
    * with the field that disabled it; the session's report of its passes.
    */
   std::vector<ProgramReport> programReport() const;
+  /**
+   * LP2.2b (C29, P2.25), any thread but the render thread: asks the render thread for a
+   * copy of the LDR target of the next settled frame (D77), triggers a frame and waits up
+   * to timeout. The render thread copies the target into a staging texture inside that
+   * frame's command list, after its tonemap passes, waits for the frame on the GPU and
+   * maps the copy. nullopt at the timeout, or when the session stops first. Size the
+   * session first (create, resizeHeadlessForTesting): the target has the frame's extent.
+   */
+  std::optional<LdrImage> readbackLdrForTesting(
+    std::chrono::milliseconds timeout = std::chrono::milliseconds{60000});
 
 private:
   LitSession(

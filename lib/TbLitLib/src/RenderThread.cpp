@@ -478,6 +478,8 @@ void RenderThread::releaseFrameResources()
   // §3.1 step 2: every handle the registry and the arenas hold
   m_passes.releaseAll();
   m_tonemap.releaseAll();
+  m_ldrStaging = nullptr;
+  m_ldrReadbacksInFrame.clear();
   m_frameResources.releaseAll();
   m_arenas.releaseAll();
   m_pipelines.clear();
@@ -548,17 +550,6 @@ bool RenderThread::lastFrameSettled() const
   return m_lastSettled;
 }
 
-bool RenderThread::provisionalChunks()
-{
-  if (m_provisionalCheckedVersion != m_chunksVersion)
-  {
-    m_provisionalCheckedVersion = m_chunksVersion;
-    m_anyProvisional = std::ranges::any_of(
-      arenaChunks(), [](const auto& entry) { return entry.second.provisional; });
-  }
-  return m_anyProvisional;
-}
-
 void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableVersion)
 {
   // D77, §3.10
@@ -570,7 +561,9 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
   // a slot whose image arrived during the frame is written in the next
   convergence.uploadsLeft = m_uploadsLeft || m_images.hasLoading();
   convergence.imagesPending = m_images.pending() > 0;
-  convergence.provisionalChunks = provisionalChunks();
+  // the scene's chunks, not a test's
+  convergence.provisionalChunks =
+    m_geometry && !m_arenaTestChunks && m_geometry->waitsForMaterials();
   convergence.lutPending = tonemap.lutPending;
   convergence.passesDisabled =
     lit.prepassDisabled || lit.interactionsDisabled || tonemap.disabled;
@@ -641,6 +634,93 @@ void RenderThread::setHdrClear(std::optional<std::array<float, 4>> colour)
     m_pacer.trigger();
   }
   m_wake.notify_all();
+}
+
+void RenderThread::readbackLdr(std::function<void(LdrImage)> done)
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_ldrReadbacks.push_back(std::move(done));
+    m_pacer.trigger();
+  }
+  m_wake.notify_all();
+}
+
+void RenderThread::recordLdrReadback(nvrhi::ICommandList& commandList)
+{
+  // C29, P2.25: only a settled frame whose tonemap passes ran is copied
+  const auto& tonemap = m_tonemap.lastStats();
+  if (!m_convergence.settled() || !tonemap.tonemapped)
+  {
+    return;
+  }
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    if (m_ldrReadbacks.empty())
+    {
+      return;
+    }
+    m_ldrReadbacksInFrame.swap(m_ldrReadbacks);
+  }
+  const auto ldr = m_frameResources.find(frame_resource::CurrentRenderLdr);
+  if (!ldr)
+  {
+    m_ldrReadbacksInFrame.clear();
+    return;
+  }
+  const auto& desc = ldr->texture->getDesc();
+  m_ldrStaging = m_device.device().createStagingTexture(
+    nvrhi::TextureDesc{}
+      .setWidth(desc.width)
+      .setHeight(desc.height)
+      .setFormat(desc.format)
+      .setDebugName("Lit preview LDR readback"),
+    nvrhi::CpuAccessMode::Read);
+  if (!m_ldrStaging)
+  {
+    m_ldrReadbacksInFrame.clear();
+    return;
+  }
+  commandList.copyTexture(
+    m_ldrStaging, nvrhi::TextureSlice{}, ldr->texture, nvrhi::TextureSlice{});
+}
+
+void RenderThread::finishLdrReadback(const std::size_t slot)
+{
+  if (!m_ldrStaging)
+  {
+    return;
+  }
+  auto staging = std::exchange(m_ldrStaging, nullptr);
+  auto requests = std::exchange(m_ldrReadbacksInFrame, {});
+  // the frame's copy is read once the frame has finished; a stop or a park drops it
+  if (!waitForFrameEvent(slot))
+  {
+    return;
+  }
+  auto& device = m_device.device();
+  const auto& desc = staging->getDesc();
+  auto image = LdrImage{};
+  image.width = desc.width;
+  image.height = desc.height;
+  auto pitch = std::size_t{0};
+  const auto* bytes = static_cast<const std::uint8_t*>(device.mapStagingTexture(
+    staging, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch));
+  if (!bytes)
+  {
+    return;
+  }
+  const auto rowBytes = std::size_t(desc.width) * 4;
+  image.rgba.resize(rowBytes * desc.height);
+  for (std::uint32_t y = 0; y < desc.height; ++y)
+  {
+    std::copy_n(bytes + y * pitch, rowBytes, image.rgba.data() + y * rowBytes);
+  }
+  device.unmapStagingTexture(staging);
+  for (auto& done : requests)
+  {
+    done(image);
+  }
 }
 
 void RenderThread::setTestChunks(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks)
@@ -830,7 +910,8 @@ RenderFrameAccess RenderThread::frameAccess(nvrhi::ICommandList& commandList)
     m_frameUploadBytes,
     m_passes,
     m_tonemap,
-    m_convergence};
+    m_convergence,
+    m_frameHdrClear};
 }
 
 void RenderThread::runAfterPassHooks(nvrhi::ICommandList& commandList)
@@ -1340,6 +1421,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       const auto lock = std::scoped_lock{m_mutex};
       hdrClear = m_hdrClearForTesting;
     }
+    m_frameHdrClear = hdrClear;
 
     // the frame's lit passes' counts (none in the HDR clear test mode)
     auto litStats = LitFrameStats{};
@@ -1386,6 +1468,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       recordTonemap(commandList, texture, targetFramebuffer, hdrDrawn);
       // D77: what the frame waits for, whether it is settled, whether it re-triggers
       converge(litStats, m_materials ? m_materials->table()->version : std::uint64_t{0});
+      // C29: a settled frame's LDR target for the readbacks asked for
+      recordLdrReadback(commandList);
       runAfterTonemapHooks(commandList);
       if (takeFault(DebugFault::ThrowWhileRecording))
       {
@@ -1423,6 +1507,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     device.setEventQuery(m_frameEvents[slot], nvrhi::CommandQueue::Graphics);
     m_frameEventSet[slot] = true;
     m_timers.frameSubmitted(slot);
+    finishLdrReadback(slot);
     const auto cpuRecordMs = millisecondsSince(recordStart);
     const auto frame = m_frameIndex++;
     m_idleWorkPending = true;

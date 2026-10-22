@@ -106,7 +106,9 @@ struct FrameConvergence
   bool uploadsLeft = false;
   // slots the material table has not answered yet
   bool imagesPending = false;
-  // chunks built with a C21 Default editor-image size
+  // chunks built with the defaults of a material the table does not have yet (D77's
+  // provisional chunks; one of a C21 Default size whose material the table has is
+  // final: the engine's 8 × 8 for an image it cannot load)
   bool provisionalChunks = false;
   // the tonemap passes' colour LUT has no written level yet
   bool lutPending = false;
@@ -169,6 +171,9 @@ struct RenderFrameAccess
   // LP2.2b (D77): the frame's convergence in runAfterTonemap's hooks, the last frame's
   // in the others
   const FrameConvergence& convergence;
+  // LP2.2b test hook: the colour the frame clears the HDR target to instead of its lit
+  // passes (setHdrClear), if any
+  std::optional<std::array<float, 4>> hdrClear;
 };
 
 /**
@@ -253,10 +258,6 @@ private:
   bool m_retrigger = false;
   std::size_t m_stalledFrames = 0;
   std::optional<FrameProgress> m_lastProgress;
-  // the chunk version whose chunks were last looked at for a provisional one, and the
-  // answer
-  std::optional<std::uint64_t> m_provisionalCheckedVersion;
-  bool m_anyProvisional = false;
   // any thread (tests): the last frame drawn was settled
   std::atomic<bool> m_lastSettled = false;
   // D77 (LP2.2a): the last frame's lit passes wait for a material table newer than this
@@ -329,6 +330,13 @@ private:
   // and blit; the colour every frame clears the HDR target to instead of its lit passes
   std::vector<std::function<void(RenderFrameAccess&)>> m_afterTonemapHooks;
   std::optional<std::array<float, 4>> m_hdrClearForTesting;
+  // the frame being recorded's copy of it
+  std::optional<std::array<float, 4>> m_frameHdrClear;
+  // LP2.2b (C29): the LDR readbacks asked for, and those the frame being recorded copies
+  // into its staging texture
+  std::vector<std::function<void(LdrImage)>> m_ldrReadbacks;
+  std::vector<std::function<void(LdrImage)>> m_ldrReadbacksInFrame;
+  nvrhi::StagingTextureHandle m_ldrStaging;
   // LP2.1 test hook: the chunks the arenas hold instead of the scene's
   std::shared_ptr<const std::map<ChunkKey, Chunk>> m_testChunks;
   // the render thread's copy of m_testChunks, and the chunks of a thread without a scene
@@ -436,6 +444,10 @@ public:
   // LP2.2b, any thread: while set, every frame clears the HDR target to colour instead
   // of recording its lit passes, and tonemaps it; a frame is triggered
   void setHdrClear(std::optional<std::array<float, 4>> colour);
+  // LP2.2b (C29), any thread: done gets a copy of the next settled frame's LDR target,
+  // on the render thread once that frame has finished on the GPU; a frame is triggered.
+  // A request the thread never serves (it stops first) is dropped
+  void readbackLdr(std::function<void(LdrImage)> done);
   // any thread: the arenas hold these chunks instead of the scene's until null replaces
   // them; a frame is triggered
   void setTestChunks(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks);
@@ -485,8 +497,10 @@ private:
   // D77 (LP2.2b): the frame's convergence after its passes, and whether it re-triggers
   // itself (with the livelock guard)
   void converge(const LitFrameStats& lit, std::uint64_t tableVersion);
-  // C21: a chunk the arenas follow is provisional (looked at once per chunk version)
-  bool provisionalChunks();
+  // LP2.2b (C29): a settled frame copies the LDR target for the readbacks asked for
+  void recordLdrReadback(nvrhi::ICommandList& commandList);
+  // once the frame in slot is submitted: waits for it on the GPU and hands the copy over
+  void finishLdrReadback(std::size_t slot);
   // D77 (LP2.2a): an idle pass's look for the material table the lit passes wait for;
   // whether a frame is due
   void litTableTick();

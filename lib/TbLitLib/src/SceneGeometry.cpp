@@ -359,6 +359,11 @@ void SceneGeometry::refreshTable()
   scanTable();
 }
 
+bool SceneGeometry::waitsForMaterials() const
+{
+  return !m_pendingMaterials.empty();
+}
+
 EditorImageSize SceneGeometry::tableSizeOf(const std::string& material) const
 {
   const auto slot = m_table ? m_table->find(material) : nullptr;

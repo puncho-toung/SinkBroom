@@ -167,6 +167,13 @@ public:
   std::shared_ptr<const LightTable> lightTable() const;
   // what the jobs and the copied code reported, oldest first
   std::vector<std::string> takeWarnings();
+  /**
+   * LP2.2b (D77): chunks were built with the defaults of a material the table does not
+   * have yet; they are built again when it has it. A chunk of a Default editor-image size
+   * (Chunk::provisional) whose material the table has is the engine's own answer for an
+   * image it cannot load (C21's 8 × 8), rebuilt only when a file changes (S2.5).
+   */
+  bool waitsForMaterials() const;
 
   // waits for the batches in flight and applies them, until none is in flight (tests)
   void finishForTesting();

@@ -36,6 +36,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <future>
 #include <utility>
 
 namespace tb::lit
@@ -625,6 +626,32 @@ void LitSession::runAfterTonemapForTesting(std::function<void(RenderFrameAccess&
 void LitSession::setHdrClearForTesting(std::optional<std::array<float, 4>> colour)
 {
   m_renderThread->setHdrClear(colour);
+}
+
+std::optional<LdrImage> LitSession::readbackLdrForTesting(
+  const std::chrono::milliseconds timeout)
+{
+  if (!m_renderThread || m_renderThreadStopped)
+  {
+    return std::nullopt;
+  }
+  auto promise = std::make_shared<std::promise<LdrImage>>();
+  auto future = promise->get_future();
+  m_renderThread->readbackLdr(
+    [promise](LdrImage image) { promise->set_value(std::move(image)); });
+  if (future.wait_for(timeout) != std::future_status::ready)
+  {
+    return std::nullopt;
+  }
+  try
+  {
+    return future.get();
+  }
+  catch (const std::future_error&)
+  {
+    // the render thread ended with the request
+    return std::nullopt;
+  }
 }
 
 void LitSession::setChunksForTesting(

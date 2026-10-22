@@ -395,6 +395,12 @@ TonemapFrameStats TonemapPasses::record(const TonemapFrameInputs& inputs)
     return false;
   };
 
+  // a pass boundary, between the lit passes and these
+  if (stopped())
+  {
+    return m_stats;
+  }
+
   // SimpleRender (TonemapPass.cpp:337-345)
   if (inputs.tonemapTimer)
   {
