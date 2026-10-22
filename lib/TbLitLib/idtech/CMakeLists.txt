@@ -36,6 +36,7 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Quat.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Rotation.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Vector.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Color/ColorSpace.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_process.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_program.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Material.cpp
@@ -43,12 +44,20 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_ENGINE_DIR}/framework/DeclManager.cpp
     # compiled inside shim/src/EngineGeometry.cpp, which calls its static functions
     ${TB_LIT_ID_ENGINE_DIR}/renderer/tr_trisurf.cpp
+    # LP1c.2: the image loaders with the stb_image and tinyexr implementations the engine
+    # compiles in this file (the engine-vendored libraries are D27's recorded exception),
+    # compiled inside shim/src/ShimImageFiles.cpp, which names tinyexr's miniz apart
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_files.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/libs/mesa/format_r11g11b10f.h
+    ${TB_LIT_ID_ENGINE_DIR}/libs/stb/stb_image.h
+    ${TB_LIT_ID_ENGINE_DIR}/libs/tinyexr/tinyexr.h
 
     ${TB_LIT_ID_SHIM_DIR}/src/DeclManagerShim.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineGeometry.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineLight.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineLexer.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineMessages.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/ShimImageFiles.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/MaterialDecls.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/Registry.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimFramework.cpp
@@ -64,6 +73,7 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimFramework.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimLib.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimSystem.h
+    ${TB_LIT_ID_SHIM_DIR}/private/shim/TinyexrMinizNames.h
 
   PUBLIC FILE_SET headers TYPE HEADERS
     BASE_DIRS ${TB_LIT_ID_SHIM_DIR}/include
@@ -77,6 +87,7 @@ target_sources(TbLitIdLib
 set_source_files_properties(
   ${TB_LIT_ID_ENGINE_DIR}/framework/DeclManager.cpp
   ${TB_LIT_ID_ENGINE_DIR}/renderer/tr_trisurf.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_files.cpp
   PROPERTIES HEADER_FILE_ONLY ON)
 
 # the shim headers named precompiled.h and RenderCommon.h come first, so the copied files'

@@ -1899,6 +1899,15 @@
         {
           "file": "neo/renderer/Image.h",
           "lines": [
+            680,
+            699
+          ],
+          "anchor": "the other IMAGEPROCESS declarations, through R_GenerateCubeMapSideFromPanoramaImage",
+          "sha256": "7d97d7f0bbf54678ba180c34a448c240153fd6cb137b82b55e35960c8e078b2b"
+        },
+        {
+          "file": "neo/renderer/Image.h",
+          "lines": [
             704,
             729
           ],
@@ -1911,7 +1920,7 @@
           "file": "lib/TbLitLib/idtech/engine/renderer/Image.h"
         }
       ],
-      "note": "116 of the file's 729 lines, in 5 ranges, each preceded by one marker line"
+      "note": "136 of the file's 729 lines, in 6 ranges, each preceded by one marker line. LP1c.2 added 680-699, the declarations of the Image_process.cpp functions the copied loaders and the source fallback call; R_ResampleTexture, R_MipMapWithAlphaSpecularity, R_BlendOverTexture, R_VerticalFlipRGB16F and R_ApplyCubeMapTransforms are declared there but neither copied nor called (M-IMG-NC-01)"
     },
     {
       "id": "M-ID-PART-03",
@@ -1929,11 +1938,83 @@
         {
           "file": "neo/renderer/Image_process.cpp",
           "lines": [
+            36,
+            36
+          ],
+          "anchor": "format_r11g11b10f.h",
+          "sha256": "c0000afd35d0a1239058ba9c35ac9b8acd07384c6bf02832825df292398bba5c"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
             110,
             144
           ],
           "anchor": "R_Dropsample",
           "sha256": "c0cbc7b0fce749b0fd7400bdf445fa5f6b0877c911983aa9c3ed98ee61547b2d"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            315,
+            399
+          ],
+          "anchor": "mip_gammaTable, R_MipMapWithGamma",
+          "sha256": "c80290af7397c56a4896f8e3a9464997e7addb7b058e8114bd01fdedaff9d73e"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            401,
+            466
+          ],
+          "anchor": "R_MipMap",
+          "sha256": "2a5c6d32c3de5242bd1e35db5f282f378ede504196cccc00651dbc206ef668d3"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            468,
+            612
+          ],
+          "anchor": "R_MipMapR11G11B10F",
+          "sha256": "a614e3693b79f13021d2378df367e6b9bd1c0296d33c2ad5502b1f8f51d62285"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            641,
+            678
+          ],
+          "anchor": "R_HorizontalFlip, R_VerticalFlip",
+          "sha256": "691847c7ef23d7e47c82e0e238b8cd39bf29fca7c8db07a5b61f2bff8ed265cb"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            705,
+            724
+          ],
+          "anchor": "R_RotatePic",
+          "sha256": "8672dcdd775f2bf257ed853a6793c45d62a8bd5f96c581e0374df90f1d8c10b3"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            781,
+            851
+          ],
+          "anchor": "R_GenerateCubeMapSideFromSingleImage",
+          "sha256": "b3d922840ab01e8a02aca5bc465209e17399d4fe7f579d6aba37e95ceeb4ac56"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            854,
+            1167
+          ],
+          "anchor": "the cmft helpers and R_GenerateCubeMapSideFromPanoramaImage",
+          "sha256": "36c35b97602f54d1628c606b198c01fca99896c80c98abf6b76989f0a554c99c"
         }
       ],
       "sinkbroom": [
@@ -1941,7 +2022,7 @@
           "file": "lib/TbLitLib/idtech/engine/renderer/Image_process.cpp"
         }
       ],
-      "note": "69 of the file's 1168 lines, in 2 ranges, each preceded by one marker line"
+      "note": "814 of the file's 1167 lines, in 10 ranges, each preceded by one marker line. LP1c.2 added the mip functions the Load2DFromMemory and LoadCubeFromMemory mirrors call (M-IMG-07) and the flips, rotation and cube-side generators the copied R_LoadCubeImages calls; the rest is M-IMG-NC-01"
     },
     {
       "id": "M-ID-PART-04",
@@ -10485,6 +10566,625 @@
         }
       ],
       "note": "C10 (LP1c.1): the map's engine name comes from the document's path below <game path>/base, its extension cut; a document outside that folder has no bake (the engine cannot have made one for it), where LP1b.2 looked beside the file. The scene asks for the bake when the map path changes and takes only the answer to that request or a later read (its ticket), never a slot read before (a Save As back to a path read earlier); an answer whose files did not change keeps the tree it had, so nothing is rebuilt"
+    },
+    {
+      "id": "M-IMG-COPY-01",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/stb/stb_image.h",
+          "lines": [
+            1,
+            10606
+          ],
+          "anchor": "whole file",
+          "sha256": "3838553fd5d8260c7309d79d79331c97518049fdd5bd66e9e57ad7d30993d20c",
+          "gitBlob": "e2d31b5f6a48509401d3f3a5a838b4a4f2ae8a6b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/stb/stb_image.h"
+        }
+      ],
+      "note": "D27's recorded exception (R5.6): the engine-vendored stb_image v2.29 (its header names NBickford-NV's all-fixes fork, commit 66e4fb6 of 2024-01-30), copied whole so that LoadSTB_RGBA8 and LoadHDR decode PNG, JPG and Radiance HDR files byte for byte as the engine does. Its implementation is compiled by the copied Image_files.cpp (STB_IMAGE_IMPLEMENTATION, STBI_NO_STDIO). Public domain or MIT (LICENSE_EXCEPTIONS.md, \"STB single header libraries\"); credited in the About dialog"
+    },
+    {
+      "id": "M-IMG-COPY-02",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/tinyexr/tinyexr.h",
+          "lines": [
+            1,
+            17732
+          ],
+          "anchor": "whole file",
+          "sha256": "5b58db3edfa2bc86b30622244e3733b7d40ee24e8dbe29f2f95d058400f83cee",
+          "gitBlob": "9cf1ff89f32aebc3f5b355a03fa6d405593ccd18"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/tinyexr/tinyexr.h"
+        }
+      ],
+      "note": "D27's recorded exception (R5.6): the engine-vendored tinyexr with its embedded miniz v1.15, copied whole for LoadEXR. Its implementation is compiled by the copied Image_files.cpp (TINYEXR_IMPLEMENTATION), with the embedded miniz's external names made its own (M-IMG-BUILD-01). BSD-3-Clause, with OpenEXR's PIZ code (LICENSE_EXCEPTIONS.md, \"TinyEXR\", \"OpenEXR\"); credited in the About dialog"
+    },
+    {
+      "id": "M-IMG-COPY-03",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/mesa/format_r11g11b10f.h",
+          "lines": [
+            1,
+            277
+          ],
+          "anchor": "whole file",
+          "sha256": "6361d840f7a17f3c23d9d723dd8f64467f46dda0f54e2944b0eea280626c38e6",
+          "gitBlob": "fbc40b1c1fb6f49ffa3a0476b2681dd4f8e5fbb7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/mesa/format_r11g11b10f.h"
+        }
+      ],
+      "note": "D27's recorded exception (R5.6): Mesa's R11G11B10F packing, which LoadEXR, LoadHDR and R_MipMapR11G11B10F call; the fallback's HDR usages are R11G11B10F (D24, SC99). MIT (LICENSE_EXCEPTIONS.md, \"Mesa R11G11B10 utility functions\"); credited in the About dialog"
+    },
+    {
+      "id": "M-IMG-COPY-04",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/renderer/Color/ColorSpace.h",
+          "lines": [
+            1,
+            65
+          ],
+          "anchor": "whole file",
+          "sha256": "79d4079a051fb45c8768ed78df412dc5b8db2d5591a3b31caa6789aba1064d87",
+          "gitBlob": "98864d61018538325f874982d6e42c16fbaf48f8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Color/ColorSpace.h"
+        }
+      ],
+      "note": "idColorSpace's declarations, for the Load2DFromMemory mirror's YCoCg conversion (M-IMG-07). The brief named idlib/ColorSpace; the engine keeps it in renderer/Color/, and the copy keeps that path"
+    },
+    {
+      "id": "M-IMG-COPY-05",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/renderer/Color/ColorSpace.cpp",
+          "lines": [
+            1,
+            652
+          ],
+          "anchor": "whole file",
+          "sha256": "702c183612b82804ce4e326348caaaae745136e0b4cc331bee72dde31cab733b",
+          "gitBlob": "7042dff6563fa5e0d41a403649a1de66af9cd5e1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Color/ColorSpace.cpp"
+        }
+      ],
+      "note": "idColorSpace: ConvertRGBToCoCg_Y is what Load2DFromMemory runs for CFM_YCOCG_DXT5 before the encoder; the rest of the file is compiled and never called. Parse thread only (C20)"
+    },
+    {
+      "id": "M-IMG-COPY-06",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "LICENSE_EXCEPTIONS.md",
+          "lines": [
+            1,
+            741
+          ],
+          "anchor": "whole file",
+          "sha256": "18581e33aa7d04e56b017de2760f2d2dbeb0e3b752215476b381add173e3cd93",
+          "gitBlob": "abddf271200e1eb6306dc09e5620e1dab3f50d57"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/LICENSE_EXCEPTIONS.md"
+        }
+      ],
+      "note": "the engine's licence exceptions, next to LICENSE.md: the terms of the vendored libraries the copied loaders call (STB, TinyEXR, OpenEXR, Mesa R11G11B10) are among its sections. Copied whole, so it compares by blob id like the other whole files; the path below the engine root is the repository root's, not neo/"
+    },
+    {
+      "id": "M-IMG-PART-01",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            1,
+            38
+          ],
+          "anchor": "licence, includes and the stb_image implementation",
+          "sha256": "ce15085db86b02555447f47a50a5e055838d1eeecf10ba9382ed2716b32a8cce"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            43,
+            48
+          ],
+          "anchor": "the tinyexr implementation, format_r11g11b10f.h, RenderCommon.h",
+          "sha256": "41fcb8f7ff2679a3c0142e9a4d7d79bd7fca1686546fed6787c040cbdd3390a8"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            129,
+            489
+          ],
+          "anchor": "LoadTGA declaration, TargaHeader, LoadTGA, LoadSTB_RGBA8",
+          "sha256": "c3d4c433c9edd3cc915d185f4718772961ecbab66d79651b862d4d7db07d9cbb"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            536,
+            632
+          ],
+          "anchor": "LoadEXR",
+          "sha256": "dac2e521ec331d23081f10469d0625c0fb10902509339ea87765fde24d6befb4"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            872,
+            1404
+          ],
+          "anchor": "LoadHDR, imageLoaders, R_LoadImage, R_LoadCubeImages",
+          "sha256": "e9b112fcbd98b6f3dbf909478689b8d52c7799220a45dba8ba5ea8f548f88470"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Image_files.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageFiles.cpp"
+        }
+      ],
+      "note": "LP1c.2 (§3.5, R5.6, C7): 1037 of the file's 1404 lines, in 5 ranges, each preceded by one marker line. The imageLoaders table dispatches png and jpg to LoadSTB_RGBA8, tga to LoadTGA, exr to LoadEXR and hdr to LoadHDR; all four and their helpers are copied, so no entry is stubbed. R_LoadImage replaces the shim's transcription of its time-only path (LP1c.1's M-IMG-01) and R_LoadCubeImages the transcribed cube path (M-IMG-02): their time-only paths are the engine's own and stay probe-only, because every loader's ReadFile( name, NULL, timestamp ) reaches the source's probe (M-ID-FN-27, M-FS-08); the cache-name tests prove it. Left out: lines 39-42 (stb_image_write, which no copied range calls), jpg_Error and jpg_Printf (never called), R_WriteTGA, R_WritePNG and R_WriteEXR (M-IMG-NC-01)"
+    },
+    {
+      "id": "M-IMG-BUILD-01",
+      "kind": "build",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            43,
+            44
+          ],
+          "anchor": "TINYEXR_IMPLEMENTATION and tinyexr.h",
+          "sha256": "cd61bfffd1babf18da7cc473c6fadfa5cb56c409fd6c322a4b07c68a206328ef"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageFiles.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/TinyexrMinizNames.h"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/CMakeLists.txt",
+          "symbol": "Image_files.cpp HEADER_FILE_ONLY"
+        }
+      ],
+      "note": "LP1c.2: tinyexr.h puts its embedded miniz v1.15 in namespace tinyexr::miniz but declares its functions extern \"C\", so their linker names (mz_inflate, tinfl_decompress, ...) clash with the miniz TrenchBroom links (LNK2005 in every executable that links TbFsLib). The copied Image_files.cpp is therefore compiled inside shim/src/ShimImageFiles.cpp, which first includes shim/TinyexrMinizNames.h: one macro per external function of the embedded miniz (67 names, the archive ones compiled out but listed), each to tbLitExr_<name>. Only linker names change; the code and its results are the engine's. The engine itself links no other miniz"
+    },
+    {
+      "id": "M-IMG-NC-01",
+      "kind": "not-copied",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            39,
+            42
+          ],
+          "anchor": "stb_image_write implementation",
+          "sha256": "c1189137f9c1929ab77db84efea4986f3470ba1bf6f41360d4bc224e6754b42d"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            50,
+            128
+          ],
+          "anchor": "jpg_Error, jpg_Printf, R_WriteTGA",
+          "sha256": "9198dd15f6b0f75fcbe51459cb9f18e1e3b0b2611cfb8db20aa35aa238a3c9ff"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            491,
+            535
+          ],
+          "anchor": "WriteScreenshotForSTBIW, R_WritePNG",
+          "sha256": "c9af9ed84fc71da0ea08352a48aecd474947198134042e699ffb489872f87d4f"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            634,
+            869
+          ],
+          "anchor": "R_WriteEXR",
+          "sha256": "83bf23db9a4be6e953be8a82a873d9dd27d9e45c71e51307c86d70def4bb09ec"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            38,
+            108
+          ],
+          "anchor": "R_ResampleTexture",
+          "sha256": "c195ca076d67c46f762c0c8b9db0934189b3848c616154f00b12430ecd754501"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            146,
+            313
+          ],
+          "anchor": "R_SetAlphaNormalDivergence, R_MipMapWithAlphaSpecularity",
+          "sha256": "b0ace57c9ac305c6a6d96a65627e83997d3d41297503061374d0dd42c58b3fe0"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            614,
+            638
+          ],
+          "anchor": "R_BlendOverTexture",
+          "sha256": "2350ccaec33c77c01f06592271c7d620d03db2692bbddb27484159485660e564"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            680,
+            703
+          ],
+          "anchor": "ColorRGB16F, R_VerticalFlipRGB16F",
+          "sha256": "11cf85861885f228544e8c453a7bcd4b1f0a5c9fd922bf312c79339b82408df0"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            726,
+            779
+          ],
+          "anchor": "R_ApplyCubeMapTransforms, R_CalculateMipRect, R_CalculateUsedAtlasPixels",
+          "sha256": "5a986eba89b234bd99f100f232c9913033e98ab6ae52afaadb78b7c15819dca3"
+        }
+      ],
+      "sinkbroom": [],
+      "note": "LP1c.2: the writers (SinkBroom writes no image, D11's spirit) and the image functions neither the copied loaders nor the fallback's Load2DFromMemory/LoadCubeFromMemory mirrors call. Image.h's copied range 680-699 declares several of them; nothing calls them, so nothing links them"
+    },
+    {
+      "id": "M-IMG-FATAL-01",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            213,
+            213
+          ],
+          "anchor": "LoadTGA, the image type",
+          "sha256": "88c682fc4e6f8340aa6a9cd47190659ff78874e49b67395748304ce9cc7b5173"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": true,
+      "afterReturn": "the image type is neither 2, 3 nor 10: neither decoder runs, so the R_StaticAlloc'ed picture is returned uninitialised (and flipped when the attribute bit says so). Reachable until the loader pre-validation (D51) lands"
+    },
+    {
+      "id": "M-IMG-FATAL-02",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            218,
+            218
+          ],
+          "anchor": "LoadTGA, the colour map",
+          "sha256": "228d9434730274e72c2b3b7a20c17c7db402f11fbe27f9fca29cc203a14744d5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": true,
+      "afterReturn": "the colour map is not skipped: the decoder reads the colour map's bytes as pixels, and the image data past them runs off the buffer's end. Reachable until the loader pre-validation (D51) lands"
+    },
+    {
+      "id": "M-IMG-FATAL-03",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            223,
+            223
+          ],
+          "anchor": "LoadTGA, the pixel size",
+          "sha256": "a90947d20b1e24f9851f53c0b4a9f1c0fb504dcfe03a8d1b9805300a895be06b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": true,
+      "afterReturn": "the size check uses pixel_size >> 3; the uncompressed loop reports 298 per pixel without advancing, the RLE loop 337/389 per packet, so the picture keeps uninitialised or stale pixels. Reachable until the loader pre-validation (D51) lands"
+    },
+    {
+      "id": "M-IMG-FATAL-04",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            231,
+            231
+          ],
+          "anchor": "LoadTGA, incomplete file",
+          "sha256": "c1d426a6e25f0406d05042e0f9287cd1eb5f210d6e930e19a2622bc26cf3a9fa"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": true,
+      "afterReturn": "the decoder reads numBytes from a buffer that holds fewer: it reads past the end of the file's buffer. Reachable until the loader pre-validation (D51) lands"
+    },
+    {
+      "id": "M-IMG-FATAL-05",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            298,
+            298
+          ],
+          "anchor": "LoadTGA, illegal pixel_size (uncompressed)",
+          "sha256": "bfb5c6bb8fd9f4bc1e713b2ed3099df3f5bd7253b68954af54acb0bad676d7c6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": true,
+      "afterReturn": "reported once per pixel; neither the read nor the write pointer moves, so the pixel stays uninitialised and the rest of the row shifts. Reachable until the loader pre-validation (D51) lands"
+    },
+    {
+      "id": "M-IMG-FATAL-06",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            337,
+            337
+          ],
+          "anchor": "LoadTGA, illegal pixel_size (RLE run packet)",
+          "sha256": "301e43845f3142e01c8f1e86da4d0033ade4bea0a95a56cfd445bda4b129a77d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": true,
+      "afterReturn": "the run writes the previous packet's colour packetSize times. Reachable until the loader pre-validation (D51) lands"
+    },
+    {
+      "id": "M-IMG-FATAL-07",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            389,
+            389
+          ],
+          "anchor": "LoadTGA, illegal pixel_size (RLE raw packet)",
+          "sha256": "4d1d9489d4e3d20b98ac107ab94a1f0dfbe9df254b46a77f89503cc105c6332f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": true,
+      "afterReturn": "the pixel is not written but counted, so it stays uninitialised. Reachable until the loader pre-validation (D51) lands"
+    },
+    {
+      "id": "M-IMG-FATAL-08",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            575,
+            575
+          ],
+          "anchor": "LoadEXR, LoadEXRFromMemory failed",
+          "sha256": "217110bf8eeea2bada02da703e100a71c85a74ed829359ab9a43c59cbd478c16"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": true,
+      "afterReturn": "frees tinyexr's message and returns without a picture; R_LoadImage tries the other extensions. The file's buffer is not freed on this path (M-IMG-DEFECT-01). Reachable for a file whose header passes and whose data tinyexr then refuses"
+    },
+    {
+      "id": "M-IMG-FATAL-09",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            913,
+            913
+          ],
+          "anchor": "LoadHDR, not 3 channels",
+          "sha256": "4f75d620d61b84168bad7689ac9a5852722c3b775f0cca0d0fa2a398781ed1d8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        }
+      ],
+      "call": "Error",
+      "reachable": true,
+      "afterReturn": "with a picture of 1 or 2 channels (a non-Radiance file stb_image loads as LDR) the conversion reads 3 floats per pixel past the end of stb's buffer; with no picture numChannels is read uninitialised. Reachable until the loader pre-validation (D51) lands"
+    },
+    {
+      "id": "M-IMG-DEFECT-01",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            571,
+            579
+          ],
+          "anchor": "LoadEXR, the error return",
+          "sha256": "90a9438d660ef93bccd2e3449ddd094cffc2dda40872ee9f9adc8c6898d41711"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Image_files.cpp",
+          "symbol": "LoadEXR"
+        }
+      ],
+      "note": "LoadEXR returns after a failed LoadEXRFromMemory without Mem_Free( fbuffer ): the file's buffer leaks once per such file and load. Kept verbatim (C7); the pre-validation makes it rare, and the shim's buffers are plain Mem_Alloc blocks"
+    },
+    {
+      "id": "M-IMG-STATIC-01",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            959,
+            968
+          ],
+          "anchor": "imageLoaders, numImageLoaders",
+          "sha256": "dcdf888dec10e0d54bbe41a28a6e48e7d374cf77852c6a454f1c7ac94a347b34"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "a constant-initialised table of extensions and function pointers, and its count; never written"
+    },
+    {
+      "id": "M-IMG-STATIC-02",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/libs/stb/stb_image.h",
+          "lines": [
+            969,
+            973
+          ],
+          "anchor": "stbi__g_failure_reason",
+          "sha256": "f683f35d10946c042937320d9d395956e7dbc1d48ffb4a853a79cfcb0ec1bb92"
+        },
+        {
+          "file": "neo/libs/stb/stb_image.h",
+          "lines": [
+            1151,
+            1172
+          ],
+          "anchor": "the vertical flip flags",
+          "sha256": "02675c486759db3fa1021f7c6b854e812787364f7dd6920a41c667d61bde5d8f"
+        },
+        {
+          "file": "neo/libs/stb/stb_image.h",
+          "lines": [
+            1714,
+            1726
+          ],
+          "anchor": "the LDR/HDR gamma and scale",
+          "sha256": "7f2ddb355da7bc7a2b0210e21770298cb50bbbd77705f0f3e827e81961a38022"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "per-call scratch",
+      "reason": "stb_image's globals are constant-initialised: the failure reason is thread_local and written by each failing call on its own thread; the flip, unpremultiply and iPhone-conversion flags and the gamma and scale are written only by their setter functions, which nothing calls. Every load runs on the parse thread (C20)"
+    },
+    {
+      "id": "M-IMG-STATIC-03",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            315,
+            333
+          ],
+          "anchor": "mip_gammaTable",
+          "sha256": "77f412d23e9d5b64fcde4d12a2f82108c456a0490dff23386adba5a704a6568f"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "a non-const float[256] initialised from literals (constant initialisation), only read by R_MipMapWithGamma; the cmft tables of 854-1167 are static const"
     }
   ],
   "retired": [

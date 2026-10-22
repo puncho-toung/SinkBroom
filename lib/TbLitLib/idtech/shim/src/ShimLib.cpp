@@ -159,6 +159,21 @@ const char* idStrId::GetLocalizedString() const
   return "";
 }
 
+// Lib.cpp:364-367 LittleShort, through the function Swap_Init picks: ShortNoSwap on a
+// little-endian host, ShortSwap on a big-endian one. Pure; any thread.
+short LittleShort(const short l)
+{
+  const auto one = std::uint16_t{1};
+  auto first = std::uint8_t{0};
+  memcpy(&first, &one, 1);
+  if (first == 1)
+  {
+    return l;
+  }
+  const auto bits = std::uint16_t(l);
+  return short(std::uint16_t((bits << 8) | (bits >> 8)));
+}
+
 // RenderCommon.h's static allocators (tr_frontend_main.cpp:205-240)
 void* R_StaticAlloc(int bytes, const memTag_t tag)
 {

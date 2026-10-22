@@ -93,7 +93,9 @@ Font Awesome 5 Free (Icons)<br />)");
     + tr("NVRHI (Rendering hardware interface)<br />"
          "Vulkan-Headers (Vulkan API headers)<br />"
          "RBDOOM-3-BFG / Doom 3 BFG Edition GPL Source Code (engine code: materials, "
-         "geometry, lights)<br />"));
+         "geometry, lights, images)<br />"
+         "stb_image, TinyEXR with miniz, Mesa R11G11B10F (image decoders the engine "
+         "vendors)<br />"));
 #endif
   creditsText->setWordWrap(true);
   creditsText->setMaximumWidth(300);

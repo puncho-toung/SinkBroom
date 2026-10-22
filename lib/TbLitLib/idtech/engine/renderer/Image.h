@@ -92,6 +92,27 @@ typedef enum
 #define	MAX_IMAGE_NAME	256
 // ==== engine neo/renderer/Image.h lines 679-679 (R_Dropsample declaration) ====
 byte* R_Dropsample( const byte* in, int inwidth, int inheight, int outwidth, int outheight );
+// ==== engine neo/renderer/Image.h lines 680-699 (the other IMAGEPROCESS declarations, through R_GenerateCubeMapSideFromPanoramaImage) ====
+byte* R_ResampleTexture( const byte* in, int inwidth, int inheight, int outwidth, int outheight );
+byte* R_MipMapWithAlphaSpecularity( const byte* in, int width, int height );
+byte* R_MipMapWithGamma( const byte* in, int width, int height );
+byte* R_MipMap( const byte* in, int width, int height );
+byte* R_MipMapR11G11B10F( const byte* in, int width, int height );
+
+// these operate in-place on the provided pixels
+void R_BlendOverTexture( byte* data, int pixelCount, const byte blend[4] );
+void R_HorizontalFlip( byte* data, int width, int height );
+void R_VerticalFlip( byte* data, int width, int height );
+void R_VerticalFlipRGB16F( byte* data, int width, int height );
+void R_RotatePic( byte* data, int width );
+void R_ApplyCubeMapTransforms( int i, byte* data, int size );
+// SP begin
+// This method takes in a cubemap from a single image. Depending on the side (0-5),
+// the image will be extracted from data and returned. The dimensions will be size x size.
+byte* R_GenerateCubeMapSideFromSingleImage( const byte* in, int srcWidth, int srcHeight, int size, int side );
+// SP end
+// RB
+byte* R_GenerateCubeMapSideFromPanoramaImage( const byte* in, int srcWidth, int srcHeight, int size, int side );
 // ==== engine neo/renderer/Image.h lines 704-729 (R_LoadImage, R_LoadCubeImages, R_LoadImageProgram, R_ParsePastImageProgram declarations) ====
 /*
 ====================================================================

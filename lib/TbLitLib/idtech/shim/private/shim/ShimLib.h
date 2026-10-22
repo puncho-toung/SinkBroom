@@ -160,6 +160,10 @@ extern const idSIMDProcessor* const SIMDProcessor;
 // here, so the shim's stub returns 0 (R5.10, R4-3.10).
 unsigned int MD5_BlockChecksum(const void* data, size_t length);
 
+// idlib/Lib.h:165, the one endian conversion the copied loaders call (LoadTGA reads the
+// header's 16-bit fields with it); parse thread, like every image loader (C20)
+short LittleShort(short l);
+
 // misc
 class idRandom;
 class idSerializer;
