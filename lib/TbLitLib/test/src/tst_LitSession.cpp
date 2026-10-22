@@ -17,15 +17,18 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "ImageTestFiles.h"
 #include "LitMapFixture.h"
 #include "LitTestUtils.h"
 #include "PipelineCompiler.h"
 #include "RenderThread.h"
 #include "StringMakers.h"
+#include "fs/TestEnvironment.h"
 #include "lit/CpuPool.h"
 #include "lit/EnginePipelineState.h"
 #include "lit/EngineTables.h"
 #include "lit/FramePacer.h"
+#include "lit/GameFileSource.h"
 #include "lit/ImageCache.h"
 #include "lit/LightRecord.h"
 #include "lit/LitSession.h"
@@ -2672,6 +2675,180 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     }
     CHECK(resetDispatcher());
     messages.print("cube sides, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION(
+    "C28: a slot's bump erases exactly its sets; a dropped texture binds the intrinsic")
+  {
+    namespace ei = engine_image;
+    auto messages = ValidationMessages{};
+    // a game with two textures; the service makes the intrinsics (D69)
+    const auto env = fs::TestEnvironment{};
+    for (const auto& [name, colour] : std::vector<std::pair<std::string, std::uint8_t>>{
+           {"a", std::uint8_t{40}}, {"b", std::uint8_t{200}}})
+    {
+      writeTextFile(
+        env.dir() / "base" / "textures" / "lp2" / (name + ".tga"),
+        test::tgaFile(test::flat(16, 16, colour, colour, colour), 32));
+    }
+    auto serviceOptions = MaterialServiceOptions{};
+    serviceOptions.makeSource = [path = env.dir()](const std::atomic<bool>& cancel) {
+      return std::unique_ptr<DeclSource>{std::make_unique<GameFileSource>(path, &cancel)};
+    };
+    serviceOptions.pollInterval = 0ms;
+    auto service = MaterialService::create(std::move(serviceOptions))
+                   | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1, service.get());
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+
+      // the owner's part: a published table reaches the render thread (as the host does
+      // on MaterialsPublished)
+      const auto settledSlots = [&](const std::vector<ImageSlotId>& ids) {
+        return waitFor(
+          [&] {
+            session->tableChanged();
+            auto settled = false;
+            inFrame(*session, [&](RenderFrameAccess& access) {
+              settled = std::ranges::all_of(ids, [&](const ImageSlotId id) {
+                return access.images.slot(id)->state == ImageSlots::State::Resident;
+              });
+            });
+            return settled;
+          },
+          20000ms,
+          false);
+      };
+
+      auto keyA = testImageKey("textures/lp2/a");
+      keyA.usage = ei::UsageDiffuse;
+      auto keyB = testImageKey("textures/lp2/b");
+      keyB.usage = ei::UsageDiffuse;
+      auto a = NoImageSlot;
+      auto b = NoImageSlot;
+      auto fallback = NoImageSlot;
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        a = access.images.request(keyA);
+        b = access.images.request(keyB);
+        fallback = *access.images.find(intrinsicImageKey("_default"));
+      }));
+      REQUIRE(settledSlots({a, b, fallback}));
+
+      // TEXTURE's descriptor set 1, Texture_SRV(0), from the compile thread (C20)
+      auto layout = nvrhi::BindingLayoutHandle{};
+      REQUIRE(waitFor(
+        [&] {
+          inFrame(*session, [&](RenderFrameAccess& access) {
+            const auto& lookup = access.pipelines.layouts(EngineBindingLayout::Texture);
+            if (lookup.state == BindingLayoutLookup::State::Ready)
+            {
+              layout = lookup.layouts.at(1);
+            }
+          });
+          return bool(layout);
+        },
+        10000ms,
+        false));
+
+      // the set of a slot as a pass makes it: the slot's binding, keyed by its versions
+      struct SetSeen
+      {
+        nvrhi::IBindingSet* set = nullptr;
+        nvrhi::ITexture* texture = nullptr;
+        bool intrinsic = false;
+      };
+      const auto setOf = [&](RenderFrameAccess& access, const ImageSlotId slot) {
+        const auto binding = access.images.binding(slot);
+        auto key = BindingSetKey{};
+        key.layout = layout.Get();
+        key.slots = binding.versions;
+        const auto set = access.bindingSets.get(key, access.frameIndex, [&] {
+          return access.device.createBindingSet(
+            nvrhi::BindingSetDesc{}.addItem(nvrhi::BindingSetItem::Texture_SRV(
+              0, binding.texture, nvrhi::Format::UNKNOWN, binding.subresources)),
+            layout);
+        });
+        return SetSeen{set.Get(), binding.texture, binding.intrinsic};
+      };
+
+      auto first = std::pair<SetSeen, SetSeen>{};
+      auto textureA = static_cast<nvrhi::ITexture*>(nullptr);
+      auto sets = std::size_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        first = {setOf(access, a), setOf(access, b)};
+        textureA = access.images.slot(a)->texture.Get();
+        sets = access.bindingSets.size();
+      }));
+      CHECK(first.first.texture == textureA);
+      CHECK_FALSE(first.first.intrinsic);
+      CHECK(sets == 2u);
+
+      // A's texture is dropped (as an eviction would); no upload brings it back yet
+      session->setUploadCapForTesting(0);
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        access.images.dropTexture(a, access.frameIndex);
+      }));
+      // the next frame: exactly A's set went, B's stayed, and A binds the intrinsic
+      auto setsOfA = std::size_t{9};
+      auto setsOfB = std::size_t{9};
+      auto dropped = SetSeen{};
+      auto again = SetSeen{};
+      auto fallbackTexture = static_cast<nvrhi::ITexture*>(nullptr);
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        sets = access.bindingSets.size();
+        setsOfA = access.bindingSets.setsOf(a);
+        setsOfB = access.bindingSets.setsOf(b);
+        dropped = setOf(access, a);
+        again = setOf(access, b);
+        fallbackTexture = access.images.slot(fallback)->texture.Get();
+      }));
+      CHECK(sets == 1u);
+      CHECK(setsOfA == 0u);
+      CHECK(setsOfB == 1u);
+      CHECK(dropped.intrinsic);
+      CHECK(dropped.texture == fallbackTexture);
+      CHECK(again.set == first.second.set);
+
+      // uploads again: the texture is back, and the intrinsic's set of A goes with the
+      // version its arrival bumps
+      session->setUploadCapForTesting(UploadBytesPerFrame);
+      REQUIRE(settledSlots({a}));
+      auto back = SetSeen{};
+      auto textureBack = static_cast<nvrhi::ITexture*>(nullptr);
+      auto made = std::uint64_t{0};
+      auto madeBefore = std::uint64_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        madeBefore = access.bindingSets.made();
+        back = setOf(access, a);
+        made = access.bindingSets.made();
+        textureBack = access.images.slot(a)->texture.Get();
+        sets = access.bindingSets.size();
+      }));
+      CHECK_FALSE(back.intrinsic);
+      CHECK(back.texture == textureBack);
+      // a new set was made for A's new version
+      CHECK(made == madeBefore + 1);
+      CHECK(sets == 2u);
+
+      // the test's own reference goes before the device
+      layout = nullptr;
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    service->requestStop();
+    service->join();
+    messages.print("slot bump and drop, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }

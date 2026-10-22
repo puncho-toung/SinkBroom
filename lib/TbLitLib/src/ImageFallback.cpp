@@ -31,6 +31,8 @@
 
 #include "lit/ImageFallback.h"
 
+#include "lit/IntrinsicImages.h"
+
 #include "kd/result.h"
 
 #include <string_view>
@@ -121,6 +123,15 @@ ImageCacheSlot resolveImage(
     return slot;
   }
   auto slot = resolveImageCache(source, *name.value);
+  if (name.value->generated)
+  {
+    // D69 (LP2.1): an intrinsic LP2 draws with is made as the engine's cache would hold
+    // it; any other answers Default with why
+    intrinsicImage(decls, key.name)
+      | kdl::transform([&](auto image) { slot.image = std::move(image); })
+      | kdl::transform_error([&](auto e) { slot.sourceReason = std::move(e.msg); });
+    return slot;
+  }
   // the time call's files, and (LP1c fix S2.5) the names it missed, for the re-probe
   slot.files.insert(
     slot.files.begin(), name.value->missing.begin(), name.value->missing.end());

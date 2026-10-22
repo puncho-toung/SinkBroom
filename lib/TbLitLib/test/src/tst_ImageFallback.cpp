@@ -650,13 +650,27 @@ TEST_CASE("ImageFallback, the fallback runs only where the engine would binarize
     CHECK(warnings == 1);
   }
 
-  SECTION("an intrinsic: generated, no fallback")
+  SECTION("an intrinsic: generated as the engine's cache would hold it (D69, LP2.1)")
   {
     auto key = keyOf("_white", UsageDefault);
     key.intrinsic = true;
     const auto slot = resolveImage(decls, source, key);
     CHECK(slot.name.generated);
-    CHECK_FALSE(slot.image);
+    REQUIRE(slot.image);
+    CHECK(slot.image->storedFormat == FormatDxt5);
+    CHECK(slot.image->format == FormatDxt5);
+    CHECK(slot.image->width == 16);
+    CHECK(slot.sourceReason.empty());
+
+    // one LP2 does not draw with: no image, a reason that names it
+    auto fog = keyOf("_fog", UsageDefault);
+    fog.intrinsic = true;
+    const auto none = resolveImage(decls, source, fog);
+    CHECK(none.name.generated);
+    CHECK_FALSE(none.image);
+    CHECK(
+      none.sourceReason
+      == "the preview does not make the engine's intrinsic image _fog yet");
   }
 
   static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
@@ -677,12 +691,16 @@ TEST_CASE("MaterialService serves source images (LP1c.2)")
   const auto none = keyOf("textures/lp1c/none", UsageDefault);
   auto white = keyOf("_white", UsageDefault);
   white.intrinsic = true;
+  auto cyan = keyOf("_cyan", UsageDefault);
+  cyan.intrinsic = true;
   CHECK(service->image(plain).state == ImageLookup::State::Pending);
   static_cast<void>(service->image(none));
   static_cast<void>(service->image(white));
+  static_cast<void>(service->image(cyan));
   REQUIRE(service->waitForTableForTesting(
     [&](const MaterialTable& t) {
-      return t.findImage(plain) && t.findImage(none) && t.findImage(white);
+      return t.findImage(plain) && t.findImage(none) && t.findImage(white)
+             && t.findImage(cyan);
     },
     10s));
   const auto found = service->image(plain);
@@ -690,7 +708,14 @@ TEST_CASE("MaterialService serves source images (LP1c.2)")
   REQUIRE(found.image);
   CHECK(found.image->fromSource);
   CHECK(service->image(none).state == ImageLookup::State::Default);
-  CHECK(service->image(white).state == ImageLookup::State::Generated);
+  // D69 (LP2.1): LP2's intrinsics are made; any other is the default image
+  const auto generated = service->image(white);
+  CHECK(generated.state == ImageLookup::State::Generated);
+  CHECK(generated.image);
+  const auto notMade = service->image(cyan);
+  CHECK(notMade.state == ImageLookup::State::Default);
+  REQUIRE(notMade.slot);
+  CHECK(notMade.slot->sourceReason.find("_cyan") != std::string::npos);
   service->requestStop();
   service->join();
   static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));

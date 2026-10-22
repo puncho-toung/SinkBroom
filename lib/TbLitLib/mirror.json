@@ -13380,6 +13380,226 @@
         }
       ],
       "note": "LP2.1 (T0.14 of 29-LP2-0-REVIEW.md): the copied GetRowPitch calls BitsForFormat, whose default case asserts in Debug and returns 0 in Release for a format outside textureFormat_t, and FMT_NONE gives 0 too; a zero pitch makes NVRHI's writeTexture copy nothing (nvrhi rule 12). The facade refuses a format outside FMT_RGBA8 to FMT_RGBA16S, FMT_NONE, a width below 1 and a zero pitch (nullopt) before the copy runs, and the uploader makes such an image's slot Default with the reason"
+    },
+    {
+      "id": "M-INTR-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            56,
+            118
+          ],
+          "anchor": "idImage::MakeDefault",
+          "sha256": "ece727c165b4322d20481d7b3b246c8ee9328cff5b2280d784c2ca16413c2d3b"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            120,
+            123
+          ],
+          "anchor": "R_DefaultImage",
+          "sha256": "9e203e9dcf90af08cd737c8ef412bc0b4fa1028186be6080e403645ed6392b86"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/IntrinsicImages.cpp",
+          "symbol": "intrinsicRecipe(\"_default\"), solid"
+        }
+      ],
+      "note": "LP2.1 step 6 (D69, SC271): _default, 16 x 16, TF_DEFAULT, TR_REPEAT, TD_DEFAULT, zeros: com_developer 0 is pinned (the grey with a white border is developer mode's); MakeDefault's defaulted flag has no counterpart (the slot's state carries it). Transcribed, not copied: the generator calls GenerateImage on an idImage the shim does not have"
+    },
+    {
+      "id": "M-INTR-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            125,
+            133
+          ],
+          "anchor": "R_WhiteImage",
+          "sha256": "9061835be8121bfe46a3cabfbd285f1ecff7b0c3581321b8a67aab0c1ba4d8ac"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/IntrinsicImages.cpp",
+          "symbol": "intrinsicRecipe(\"_white\"), solid"
+        }
+      ],
+      "note": "LP2.1 step 6 (D69): _white, 16 x 16 of 255, TF_DEFAULT, TR_REPEAT, TD_DEFAULT (DXT5)"
+    },
+    {
+      "id": "M-INTR-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            135,
+            143
+          ],
+          "anchor": "R_BlackImage",
+          "sha256": "4ad8d06b2047de6bf3356ba9783bb7f29fb13abf543ff1e32ce8cac2c022b0fc"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/IntrinsicImages.cpp",
+          "symbol": "intrinsicRecipe(\"_black\"), solid"
+        }
+      ],
+      "note": "LP2.1 step 6 (D69): _black, 16 x 16 of 0, TF_DEFAULT, TR_REPEAT, TD_DEFAULT (DXT5)"
+    },
+    {
+      "id": "M-INTR-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            145,
+            153
+          ],
+          "anchor": "R_BlackDiffuseImage",
+          "sha256": "d6b6a7d79fc17384a98d39abd63242b3bd6e016b4dc333b798ae14c2fd28e67f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/IntrinsicImages.cpp",
+          "symbol": "intrinsicRecipe(\"_blackDiffuse\"), solid"
+        }
+      ],
+      "note": "LP2.1 step 6 (D69, P2.4): _blackDiffuse, 16 x 16 of 0, TF_DEFAULT, TR_REPEAT, TD_DIFFUSE: DXT5 with CFM_YCOCG_DXT5, so the layout conversion makes every texel (Co 128, Cg 128, 0, Y 0) and the YCoCg encoder's scale and inset give the endpoints (132, 130, 24) and (123, 125, 24) with every index 2: the texel decodes to Co 129, Cg 128 1/3 (P2.4 named the endpoints)"
+    },
+    {
+      "id": "M-INTR-05",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            389,
+            406
+          ],
+          "anchor": "R_FlatNormalImage",
+          "sha256": "9d22e18cbfab735432903fca3bcc4f1476023c135f524661361d45405dbf03d7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/IntrinsicImages.cpp",
+          "symbol": "intrinsicRecipe(\"_flat\"), flatNormal"
+        }
+      ],
+      "note": "LP2.1 step 6 (D69, P2.4): _flat, 16 x 16 of (128, 128, 255, 255), TF_DEFAULT, TR_REPEAT, TD_BUMP: DXT5 with CFM_NORMAL_DXT5 (the layout conversion moves x into alpha); the normal-map encoder's inset gives the alpha endpoints 128 and 127 (index 0: x 128) and the green endpoints 130 and 125 with every index 2: y decodes to 128 1/3"
+    },
+    {
+      "id": "M-INTR-06",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            415,
+            432
+          ],
+          "anchor": "R_CreateNoFalloffImage",
+          "sha256": "ba80819e95f7352c1b92a079f71ec518bec7561f99bf720d690c7dd4990635fc"
+        },
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            49,
+            49
+          ],
+          "anchor": "FALLOFF_TEXTURE_SIZE",
+          "sha256": "708d0ffaff83daa8191797894469caa75b26a891a8c2aa1f1d5504983e27841f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/IntrinsicImages.cpp",
+          "symbol": "intrinsicRecipe(\"_noFalloff\"), noFalloff"
+        }
+      ],
+      "note": "LP2.1 step 6 (D69): _noFalloff, FALLOFF_TEXTURE_SIZE (64) x 16, white with a zero border, TF_DEFAULT, TR_CLAMP_TO_ZERO, TD_LOOKUP_TABLE_MONO (INT8, 7 levels, stored as the layout conversion writes them)"
+    },
+    {
+      "id": "M-INTR-07",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            628,
+            669
+          ],
+          "anchor": "QUADRATIC_WIDTH, QUADRATIC_HEIGHT, R_QuadraticImage",
+          "sha256": "5bf2277672bcb3718d203eebdd6081a69008ee67f7baafad50602610920473a3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/IntrinsicImages.cpp",
+          "symbol": "intrinsicRecipe(\"_quadratic\"), quadratic"
+        }
+      ],
+      "note": "LP2.1 step 6 (D69): _quadratic, 32 x 4, a quadratic falloff across x with the engine's float and double arithmetic kept (the byte cast truncates), TF_DEFAULT, TR_CLAMP, TD_LOOKUP_TABLE_RGB1 (RGBA8, 6 levels)"
+    },
+    {
+      "id": "M-INTR-DXT-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/DXT/DXTCodec.h",
+          "lines": [
+            536,
+            539
+          ],
+          "anchor": "idDxtEncoder::ColorTo565",
+          "sha256": "4b7012f607d9f6e9e3b014bb799fb3f171f531a0a6f7ee67e14a2c46b04b56b6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/IntrinsicImages.cpp",
+          "symbol": "constantDxt5Blocks, constantPlainBlock, constantYCoCgBlock, constantNormalBlock, alphaIndex, greenIndex"
+        }
+      ],
+      "note": "LP2.1 step 6 (D69, D24): a DXT5 level of one colour as the engine's fast SSE2 encoders write it (DXTEncoder_SSE2.cpp at 285ea4d1, the test-only copy M-IMG-DXT-*: CompressImageDXT5Fast, CompressYCoCgDXT5Fast with ScaleYCoCg, InsetYCoCgBBox, SelectYCoCgDiagonal and EmitCoCgIndices, CompressNormalMapDXT5Fast with InsetNormalsBBoxDXT5, EmitAlphaIndices and EmitGreenIndices), by their lane arithmetic for one colour: no encoder runs in the product. tst_IntrinsicImages compares every level of the seven LP2 intrinsics with the copied encoder: byte-equal"
+    },
+    {
+      "id": "M-INTR-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            340,
+            419
+          ],
+          "anchor": "idImage::GenerateImage",
+          "sha256": "78c272cddbcf34ad6efdbc00b8b5aed731dfcee30e362d9efc7b50b2321a6410"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/IntrinsicImages.cpp",
+          "symbol": "intrinsicImage"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageFallback.cpp",
+          "symbol": "resolveImage"
+        }
+      ],
+      "note": "LP2.1 step 6 (D69, K23): the engine generates its intrinsics on the render thread at start (GenerateImage: DeriveOpts, Load2DFromMemory with its encoder, the upload); the preview makes them on the parse thread as Generated images in the shape of a cache (the recipe, DeriveOpts' format and mips, the layout conversion of LP1c.2, then the encoder's constant blocks for a DXT usage), and the render thread uploads them as any other image. The texels equal the engine's; only where and when they are made differs. Every other intrinsic name answers Default with a reason that names it (LP3-LP5 add theirs)"
     }
   ],
   "retired": [

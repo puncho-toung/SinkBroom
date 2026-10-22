@@ -34,6 +34,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageFallback.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageSlots.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/IntrinsicImages.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageSlots.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightData.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightGridFile.cpp

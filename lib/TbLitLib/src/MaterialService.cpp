@@ -2103,7 +2103,9 @@ ImageLookup MaterialService::image(const MaterialImageKey& key)
     }
     if (slot->name.generated)
     {
-      return ImageLookup{ImageLookup::State::Generated, nullptr, slot};
+      // D69 (LP2.1): LP2's intrinsics are made; any other is the default image
+      return slot->image ? ImageLookup{ImageLookup::State::Generated, slot->image, slot}
+                         : ImageLookup{ImageLookup::State::Default, nullptr, slot};
     }
     if (slot->image)
     {
