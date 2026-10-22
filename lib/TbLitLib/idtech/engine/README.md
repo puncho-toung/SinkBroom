@@ -7,7 +7,10 @@ skins and entityDefs with the engine's own code (plan `00-PLAN.md` §3.5, D12, C
 build its geometry as the engine does (windings, patches, the vertex format and the
 tangent code of `renderer/tr_trisurf.cpp`; D57, C24), and to load images as the engine
 loads them (`renderer/Image_files.cpp`, the mip and cube functions of
-`renderer/Image_process.cpp`, `renderer/Color/ColorSpace.*`; LP1c.2).
+`renderer/Image_process.cpp`, `renderer/Color/ColorSpace.*`; LP1c.2). LP2.0 adds two pure
+functions its pipelines and uploads need (C24, P2.25): `PipelineCache::GetRenderState` with
+`GetStencilOpState` (`renderer/PipelineCache.*`) and `GetRowPitch` with what it calls
+(`renderer/Image_load.cpp`), compiled inside `../shim/src/ShimPipelineState.cpp`.
 
 `renderer/DXT/` (`DXTCodec.h`, `DXTCodec_local.h`, `DXTEncoder_SSE2.cpp`) is **test only**
 (LP1c fix S3.2): the engine's fast DXT encoders, compiled into `TbLitIdDxtTestLib`, which

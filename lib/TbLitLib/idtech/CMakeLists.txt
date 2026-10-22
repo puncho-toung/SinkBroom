@@ -51,6 +51,11 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_ENGINE_DIR}/libs/mesa/format_r11g11b10f.h
     ${TB_LIT_ID_ENGINE_DIR}/libs/stb/stb_image.h
     ${TB_LIT_ID_ENGINE_DIR}/libs/tinyexr/tinyexr.h
+    # LP2.0: GetRenderState and GetRowPitch with what they call (C24, P2.25), compiled
+    # inside shim/src/ShimPipelineState.cpp, which declares the class they belong to
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_load.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/PipelineCache.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/PipelineCache.h
 
     ${TB_LIT_ID_SHIM_DIR}/src/DeclManagerShim.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineGeometry.cpp
@@ -65,6 +70,7 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_SHIM_DIR}/src/ShimFramework.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimImages.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimLib.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/ShimPipelineState.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimRenderer.cpp
     ${TB_LIT_ID_SHIM_DIR}/ParallelJobList_JobHeaders.h
     ${TB_LIT_ID_SHIM_DIR}/private/precompiled.h
@@ -80,9 +86,11 @@ target_sources(TbLitIdLib
   PUBLIC FILE_SET headers TYPE HEADERS
     BASE_DIRS ${TB_LIT_ID_SHIM_DIR}/include
     FILES
+      ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineBuiltins.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineGeometry.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineLight.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineLexer.h
+      ${TB_LIT_ID_SHIM_DIR}/include/lit/EnginePipelineState.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/MaterialDecls.h
 )
 
@@ -90,6 +98,8 @@ set_source_files_properties(
   ${TB_LIT_ID_ENGINE_DIR}/framework/DeclManager.cpp
   ${TB_LIT_ID_ENGINE_DIR}/renderer/tr_trisurf.cpp
   ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_files.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_load.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/renderer/PipelineCache.cpp
   PROPERTIES HEADER_FILE_ONLY ON)
 
 # the shim headers named precompiled.h and RenderCommon.h come first, so the copied files'
@@ -99,6 +109,10 @@ target_include_directories(TbLitIdLib
     ${TB_LIT_ID_SHIM_DIR}/private
     ${TB_LIT_ID_ENGINE_DIR}
 )
+
+# LP2.0: the facade lit/EnginePipelineState.h speaks NVRHI's render-state types, and the
+# copied PipelineCache.cpp builds them; NVRHI's headers only, its code is TbLitLib's
+target_link_libraries(TbLitIdLib PUBLIC nvrhi)
 
 set_target_properties(TbLitIdLib PROPERTIES
   CXX_STANDARD 17

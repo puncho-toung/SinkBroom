@@ -1896,6 +1896,15 @@
         {
           "file": "neo/renderer/Image.h",
           "lines": [
+            35,
+            139
+          ],
+          "anchor": "textureType_t, textureFormat_t, the BitsForFormat and GetRowPitch declarations, textureColor_t",
+          "sha256": "d85a5f500fce5ab6987093a03558205d6fa34f90bf55a493db5669a7141f14f5"
+        },
+        {
+          "file": "neo/renderer/Image.h",
+          "lines": [
             212,
             266
           ],
@@ -1944,7 +1953,7 @@
           "file": "lib/TbLitLib/idtech/engine/renderer/Image.h"
         }
       ],
-      "note": "136 of the file's 729 lines, in 6 ranges, each preceded by one marker line. LP1c.2 added 680-699, the declarations of the Image_process.cpp functions the copied loaders and the source fallback call; R_ResampleTexture, R_MipMapWithAlphaSpecularity, R_BlendOverTexture, R_VerticalFlipRGB16F and R_ApplyCubeMapTransforms are declared there but neither copied nor called (M-IMG-NC-01)"
+      "note": "241 of the file's 729 lines, in 7 ranges, each preceded by one marker line. LP1c.2 added 680-699, the declarations of the Image_process.cpp functions the copied loaders and the source fallback call; R_ResampleTexture, R_MipMapWithAlphaSpecularity, R_BlendOverTexture, R_VerticalFlipRGB16F and R_ApplyCubeMapTransforms are declared there but neither copied nor called (M-IMG-NC-01). LP2.0 added 35-139, the format enums the copied GetRowPitch takes (M-IMG-PART-02); the shim's own stand-ins for those values (ShimImages.cpp, ShimImageSource.cpp) are gone"
     },
     {
       "id": "M-ID-PART-03",
@@ -2807,15 +2816,15 @@
       ],
       "sinkbroom": [
         {
-          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
-          "symbol": "BuiltinShaders"
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
+          "symbol": "EngineBuiltins"
         },
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
           "symbol": "idRenderProgManager::idRenderProgManager"
         }
       ],
-      "note": "116 builtins; only name, nameOutSuffix and stages are kept, and FindShader runs over them in table order (vertex, fragment, compute), so shader indices match the engine's"
+      "note": "116 builtins; the shim reads only name, nameOutSuffix and stages of lit/EngineBuiltins.h's rows (LP2.0, P2.24: the one builtins table, M-TABLE-01), and FindShader runs over them in table order (vertex, fragment, compute), so shader indices match the engine's"
     },
     {
       "id": "M-ID-FN-05",
@@ -4997,7 +5006,7 @@
         }
       ],
       "staticKind": "registry binding",
-      "reason": "the shim's globals: null pointers bound to the one registry at its construction and nulled at its destruction (C17, S6); com_editors is a constant 0. common and idLib::common are not bound to the registry any more: they are the permanent sink of D63 (M-ID-STATIC-38). The shim's tables (BuiltinShaders, the intrinsic names, ImageFormats, NamedCVars) are constant"
+      "reason": "the shim's globals: null pointers bound to the one registry at its construction and nulled at its destruction (C17, S6); com_editors is a constant 0. common and idLib::common are not bound to the registry any more: they are the permanent sink of D63 (M-ID-STATIC-38). The shim's tables (the intrinsic names, ImageFormats, NamedCVars) are constant, and the builtins it reads are lit/EngineBuiltins.h's constexpr EngineBuiltins (LP2.0)"
     },
     {
       "id": "M-ID-STATIC-29",
@@ -12151,6 +12160,699 @@
         }
       ],
       "note": "C1: GetBytecode reads a blob through fileSystem->ReadFile, which also searches .pk4 and .resources containers (and fs_game); the preview reads only the loose file below <game path>/base, its case ignored as OpenOSFile ignores it (lit/GameFile.h findLooseFile), with a plain file read on the compile thread, never through the parse thread's GameFileSource. The loose files are the engine's own shader build output (D6, R-A18)"
+    },
+    {
+      "id": "M-TABLE-01",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            776,
+            954
+          ],
+          "anchor": "usePushConstants and builtins[]",
+          "sha256": "3113f916e39d62347771ffc2e003b88d60c0de798a2531640da5163a29f15385"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            320,
+            327
+          ],
+          "anchor": "rpStage_t",
+          "sha256": "805fd2562ce6f650db7a1512d803f6430b6088220f7095f40ab54361a0691b63"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            396,
+            545
+          ],
+          "anchor": "the BUILTIN_ indices",
+          "sha256": "040a6231278fe0d17d29b58a63234dd1f0bcea1cdca120d44d08912476b0acb1"
+        },
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            800,
+            879
+          ],
+          "anchor": "vertexLayoutType_t, bindingLayoutType_t",
+          "sha256": "84e94d6c12bc25f52c698b4bd9d7e508bac8df532995d06070266af5d1a6e2f6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
+          "symbol": "EngineBuiltins"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
+          "symbol": "EngineBindingLayout"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
+          "symbol": "EngineVertexLayout"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
+          "symbol": "EngineStageVertex, EngineStageFragment, EngineStageCompute, EngineStageDefault"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
+          "symbol": "EngineBuiltinColor ... EngineBuiltinExposure"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineBuiltinDefines"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineBuiltin"
+        }
+      ],
+      "note": "LP2.0 (C2, C27, P2.24, SC245): the one builtins table, row for row (116; the BUILTIN_ index equals the row's place), with every define in the row's order; usePushConstants( layout ) is a null value, which engineBuiltinDefines makes \"1\" or \"0\" by the row's layout's pcEnabled (it names the row's own layout in every row); MipMapGenPass::MODE_MAX is \"2\". The shim's render program list reads its names, suffixes and stages (M-ID-FN-04); the compile thread its defines, stages, vertex layout and binding layout. requireGPUSkinningSupport is kept and not used (as in the engine, :970-974)"
+    },
+    {
+      "id": "M-TABLE-02",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            73,
+            217
+          ],
+          "anchor": "renderParm_t",
+          "sha256": "bf86213c04cdcb2d74d0065671f619be91335fe00c3b7c0708c1ae67914bcf3e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "RenderParm"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "RenderParmNames"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "renderParmName"
+        }
+      ],
+      "note": "LP2.0 (C27, SC234): the 106 renderparms in enum order, with the engine's names; RENDERPARM_TOTAL is RenderParm::Total"
+    },
+    {
+      "id": "M-TABLE-03",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            219,
+            318
+          ],
+          "anchor": "renderParmSubSet_t, the rp*Set<N> lists and their layout lists",
+          "sha256": "44361a7381df9188768d67d862e80723794b46fb09b0a7b62f316ff79a0e9f20"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            217,
+            394
+          ],
+          "anchor": "layoutTypeAttributes: rpSubSet, rpBufSize, cbStatic, pcEnabled",
+          "sha256": "81c337975e2d9897544ff16ced98c9a9aa84e4eed7f463bab3978c642caf510a"
+        },
+        {
+          "file": "neo/shaders/renderParmSet0.inc.hlsl",
+          "lines": [
+            32,
+            46
+          ],
+          "anchor": "renderParmSet0_t",
+          "sha256": "e34a6c8f7f6f6e726ef3a91a59f397cbeec4fe0837bd9545751cf2fed18b5a7f"
+        },
+        {
+          "file": "neo/shaders/renderParmSet4.inc.hlsl",
+          "lines": [
+            32,
+            58
+          ],
+          "anchor": "renderParmSet4_t",
+          "sha256": "08e09f87d3f373de5e9512bcec5c6a06c3aa075871d7aef8d1709b29f9e72298"
+        },
+        {
+          "file": "neo/shaders/renderParmSet10.inc.hlsl",
+          "lines": [
+            32,
+            69
+          ],
+          "anchor": "renderParmSet10_t",
+          "sha256": "3464b44ce27341cac902d474025ef1937b6853329e8125aa225e8d53ca57c6e2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineParmSet0"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineParmSet4"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineParmSet10"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineParmSetSizes"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineParmSetOfLayout"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineParmSetMembers"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineParmSetBlock"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineLayoutConstantBlock"
+        }
+      ],
+      "note": "LP2.0 (C27, SC217, SC219, SC232, P2.19): sets 0 (CONSTANT_BUFFER_ONLY, 8 float4), 4 (TEXTURE, 16) and 10 (DRAW_INTERACTION, 25 = 400 bytes) as ordered member lists, each member the renderparm and its float4's name in the set's HLSL struct (member i at 16 * i); every set's length (for rpBufSize) and every layout's set (renderParmNullSet is -1). The reflection check compares a shader's constant block with these by name and offset (M-SHADER-02)"
+    },
+    {
+      "id": "M-TABLE-04",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            79,
+            108
+          ],
+          "anchor": "idRenderProgManager::uniformsLayout",
+          "sha256": "4cb4ecf7a8a757d3407a884b62091a5b7e7525c0523347e7153a0e9fb70aaa06"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            415,
+            452
+          ],
+          "anchor": "the default, TEXTURE, CONSTANT_BUFFER_ONLY and material layouts",
+          "sha256": "7e020d01d2e97a03594b244afded633738d725cb545d70ea09e2c8f201c9e688"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            470,
+            474
+          ],
+          "anchor": "samplerTwoBindingLayout",
+          "sha256": "ccf78766a6b547402b8364a791d877d9fe8638c9892132475d626e8e2c26f555"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            514,
+            528
+          ],
+          "anchor": "DRAW_INTERACTION",
+          "sha256": "42cd16295660058fdda124331ed76cf39a7237339a6f748360de9d1a24911d47"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            393,
+            413
+          ],
+          "anchor": "pcEnabled, the passes' structs, the AMD workaround",
+          "sha256": "6c9c37b319165efc861a3c14e7d716832feffc7d0bd9948b438f8b1bd584e59f"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            119,
+            227
+          ],
+          "anchor": "TonemapPass::Init, the histogram, exposure and tonemap layouts",
+          "sha256": "757cf3f7d387714031f7a77a3b3a523076ed8146f0500f466a3a4798b1c32c56"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass_cb.h",
+          "lines": [
+            25,
+            47
+          ],
+          "anchor": "ToneMappingConstants",
+          "sha256": "e0505d99fd97b4419b288a64b1ba1fa4f4cbf0335304a65b84f087592cf48c84"
+        },
+        {
+          "file": "neo/renderer/Passes/CommonPasses.cpp",
+          "lines": [
+            166,
+            177
+          ],
+          "anchor": "CommonRenderPasses::Init, the blit layout",
+          "sha256": "9440a5178e4c2e21a17f2c142631fae486c0e85bd9db1b5db5ca4b1b165d2cd2"
+        },
+        {
+          "file": "neo/renderer/Passes/CommonPasses.h",
+          "lines": [
+            63,
+            72
+          ],
+          "anchor": "BlitConstants",
+          "sha256": "536d86e0ba108efb30c253e423fa36ee612de7dc59d2bd71e2530d92d808aa95"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineBindingLayoutDescs"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineVulkanBinding"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineVulkanBindingOffsets"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineToneMappingBlock"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineBlitBlock"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "enginePushConstantsEnabled"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "enginePushConstantLimit"
+        }
+      ],
+      "note": "LP2.0 (C3, SC236, SC237, SC262): the binding layouts LP2 uses, one desc per descriptor set in set order (NVRHI's Vulkan backend makes a pipeline's layout i its set i; registerSpaceIsDescriptorSet stays false as in the engine): CONSTANT_BUFFER_ONLY {uniforms}; TEXTURE {uniforms}, {t0 Pixel}, {s0 Pixel}; DRAW_INTERACTION {uniforms}, {t0 t1 t2}, {t3 t4}, {s0 s1}; HISTOGRAM, EXPOSURE, TONEMAP TonemapPass's one layout each; BLIT CommonPasses' {push constants 36 B, t0, s0}, which the engine draws its blits with (the builtin BLIT layout, one volatile constant buffer, is created and never used). The uniforms item is PushConstants(0, the set's or struct's size) where pcEnabled, else VolatileConstantBuffer(0) (cbStatic is always false). Vulkan bindings are the slot plus NVRHI's default offsets (t 0, s 128, b 256, u 384), equal to the engine's -fvk shifts (SC251, C2). The constant blocks: ToneMappingConstants 80 B and BlitConstants 36 B by member name and offset. Skinned and other layouts are not mirrored (nullopt)"
+    },
+    {
+      "id": "M-TABLE-05",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            128,
+            165
+          ],
+          "anchor": "LAYOUT_DRAW_VERT",
+          "sha256": "37c4da112a90ca89fe5c7802a00ce64f51ec3cc0e1702265ce59cd6e4611fc88"
+        },
+        {
+          "file": "neo/shaders/builtin/depth.vs.hlsl",
+          "lines": [
+            38,
+            46
+          ],
+          "anchor": "VS_IN",
+          "sha256": "5108073bdc39932a4d94afe0cddf74660150ee045ca3bbc7afa2681f0c882fac"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineDrawVertAttributes"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineDrawVertInputs"
+        }
+      ],
+      "note": "LP2.0 (C4, SC243): POSITION RGB32_FLOAT, TEXCOORD RG16_FLOAT, NORMAL and TANGENT RGBA8_UNORM, COLOR RGBA8_UNORM with arraySize 2, at idDrawVert's offsets (EngineDrawVert, static_asserted equal), stride 32, buffer 0, per vertex; NVRHI's Vulkan input layout numbers the locations 0 to 5 in that order. The shader-side component counts (float4, float2, float4 x 4) are the VS_IN that builtin/color, depth, texture_color and lighting/interaction declare alike; the reflection check compares a vertex shader's inputs with them by location (no semantics without -fspv-reflect, P2.19)"
+    },
+    {
+      "id": "M-TABLE-06",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/Passes/CommonPasses.cpp",
+          "lines": [
+            71,
+            97
+          ],
+          "anchor": "CommonRenderPasses::Init, the samplers",
+          "sha256": "6595578278b5c9b48c2c8f485cfbb82ffc7799eeb9ffcb10bc41f1e401618b64"
+        },
+        {
+          "file": "neo/renderer/NVRHI/Image_NVRHI.cpp",
+          "lines": [
+            173,
+            243
+          ],
+          "anchor": "idImage::CreateSampler",
+          "sha256": "301784ef9e8fcc6c40a1a9b541939d799444982099e7cdc7cb0a0d3152660a7f"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            110,
+            110
+          ],
+          "anchor": "r_maxAnisotropicFiltering",
+          "sha256": "cd2b9165b8d01325aa85def7bdb26b3e639890ef316e3055d3a76a8177724431"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineCommonSamplers"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineImageSamplerDesc"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineMaxAnisotropicFiltering"
+        }
+      ],
+      "note": "LP2.0 (D68, SC240, SC269): CommonPasses' eight samplers built as the engine builds them, one desc changed in place, so LinearClampCompare, LinearWrap, AnisotropicWrap (aniso 16) and AnisotropicClampEdge all keep the Comparison reduction (the leaked desc; NVRHI Vulkan makes it compareEnable with eLess); the per-image sampler of the TEXTURE layout by format (DEPTH and DEPTH_STENCIL compare), filter (TF_DEFAULT linear with r_maxAnisotropicFiltering 8, TF_LINEAR, TF_NEAREST, TF_NEAREST_MIPMAP the mip filter only) and repeat (REPEAT, CLAMP to edge, CLAMP_TO_ZERO border (0,0,0,1), CLAMP_TO_ZERO_ALPHA border (0,0,0,0)); a filter or repeat the engine refuses with FatalError is nullopt. R_UsePixelatedLook is off"
+    },
+    {
+      "id": "M-TABLE-07",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/NVRHI/Image_NVRHI.cpp",
+          "lines": [
+            345,
+            459
+          ],
+          "anchor": "idImage::AllocImage, the format map",
+          "sha256": "9f246cf87d5375cda4507507e4b406a02ec04d4586589d04a5e7374d1fc26992"
+        },
+        {
+          "file": "neo/renderer/NVRHI/Image_NVRHI.cpp",
+          "lines": [
+            513,
+            554
+          ],
+          "anchor": "the component mappings",
+          "sha256": "39580a1f524ef156f141696d3299ba1504924708641ee17d67155c67a64e50f8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineTextureFormat"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineComponentMapping"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/ImageCache.h",
+          "symbol": "engine_image"
+        }
+      ],
+      "note": "LP2.0 (SC265, SC266): textureFormat_t to NVRHI formats (DEPTH_STENCIL D24S8 when the device has it, else D32S8; X16 and Y16_X16 keep the default RGBA8_UINT; BC7, ETC1 and unknown formats are the engine's idLib::Error, nullopt) and the swizzles (GREEN_ALPHA 111G, LUM8 RRR1, L8A8 RRRG, ALPHA 111R, INT8 RRRR, R11G11B10F RGB1). DeriveOpts' mip rule (SC270) is ImageCache.h's engineMipLevels (LP1c.1); the block-size round-up (:473-477) and the uploads are LP2.1's"
+    },
+    {
+      "id": "M-TABLE-08",
+      "kind": "constant",
+      "engine": [
+        {
+          "file": "neo/renderer/Passes/TonemapPass.h",
+          "lines": [
+            30,
+            41
+          ],
+          "anchor": "ToneMappingParameters",
+          "sha256": "9ce167560dc4890721bf6478a1cad6947a421ad479bb8b8305616146318e4765"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass.h",
+          "lines": [
+            49,
+            49
+          ],
+          "anchor": "CreateParameters::histogramBins",
+          "sha256": "5a48b5a680c9089af6711873a047ac929bceec100ed1e5e03cdef9c309a05b57"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            308,
+            313
+          ],
+          "anchor": "Render, exposureScale and whitePointInvSquared",
+          "sha256": "da50af0ff33e182ae0f5ea54c872fcf9ea535747fd4e76b7c5a66dad68155afd"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            411,
+            412
+          ],
+          "anchor": "AddFrameToHistogram, the luminance scale and bias",
+          "sha256": "0412ff2fed455e41a222fdb39e19f59154d614e64a24fa16e89e86ef8175b3e0"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            439,
+            453
+          ],
+          "anchor": "ComputeExposure",
+          "sha256": "e748621005c3449052773f24376e823f8165b27925da4ae752e41e282d13438c"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            273,
+            275
+          ],
+          "anchor": "r_hdrAdaptionRate, r_hdrMinLuminance, r_hdrMaxLuminance",
+          "sha256": "8e37ee84136369d3a03a4e229db46f6f707ea971cf6f9f54b5bbd58f71f0b59b"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            301,
+            301
+          ],
+          "anchor": "r_exposure",
+          "sha256": "2009719bee41982dbb3450a0f51519f712948e85a3c90ec79755217bf655f8aa"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineTonemapDefaults"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineTonemap"
+        }
+      ],
+      "note": "LP2.0 (SC260, SC261): the percentiles 0.8 and 0.95, the white point 3 (whitePointInvSquared 1/9), the exposure pass's log range -10..4 (scale 14, bias -10), r_hdrAdaptionRate 1 (down half of it), r_hdrMinLuminance 0.02 and r_hdrMaxLuminance 0.5 (the histogram's range and the adapted bounds alike), r_exposure 0.5, 256 bins. The frame time and the steady state are LP2.2b's (D70)"
+    },
+    {
+      "id": "M-PIPE-PART-01",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/PipelineCache.cpp",
+          "lines": [
+            1,
+            27
+          ],
+          "anchor": "licence",
+          "sha256": "a16422692fd3d89c85cf3c4f86c503b763afee0bd50ea91b6603bd501ffc3a50"
+        },
+        {
+          "file": "neo/renderer/PipelineCache.cpp",
+          "lines": [
+            99,
+            530
+          ],
+          "anchor": "PipelineCache::GetRenderState and PipelineCache::GetStencilOpState",
+          "sha256": "8844a3eb63a78d23c63b6ba5aca8eb4e9a0929d2611f5e67434dcf8c7fb79eeb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/PipelineCache.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimPipelineState.cpp"
+        }
+      ],
+      "note": "LP2.0 (C24, C27, P2.25): 459 of the file's 530 lines, in 2 ranges, each preceded by one marker line; compiled inside ShimPipelineState.cpp, which declares PipelineCache with only these two members, public (PipelineCache.h:65-86 keeps them private beside the cache they are not copied for). GetStencilOpState (438-530) comes with GetRenderState, which calls it. The includes (29-33) and GetOrCreatePipeline (36-96) are not copied: the compile thread keys and fills its own cache (M-PIPE-01)"
+    },
+    {
+      "id": "M-PIPE-PART-02",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/PipelineCache.h",
+          "lines": [
+            1,
+            39
+          ],
+          "anchor": "licence, include guard, PipelineKey",
+          "sha256": "0ef6d22aa3523abed144310be30f34a349ad7d01c74f7706639833ba1dd6c150"
+        },
+        {
+          "file": "neo/renderer/PipelineCache.h",
+          "lines": [
+            89,
+            89
+          ],
+          "anchor": "end of the include guard",
+          "sha256": "9a349bbd1a21104f051e34b2c8a9e70cc7fbb50bc19a67781f2a140c386d9438"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/PipelineCache.h"
+        }
+      ],
+      "note": "LP2.0: 40 of the file's 89 lines, in 2 ranges, each preceded by one marker line: GetRenderState's PipelineKey parameter type (it reads depthBias and slopeBias only); Framebuffer is forward-declared by the shim. operator==, std::hash and the class are not copied"
+    },
+    {
+      "id": "M-IMG-PART-02",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            1,
+            31
+          ],
+          "anchor": "licence",
+          "sha256": "79a66db73b89930b8c95e5a1b34aa7f1abd4233b52ad4187357272363cac8539"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            39,
+            143
+          ],
+          "anchor": "BitsForFormat, BlockSizeForFormat, GetRowPitch",
+          "sha256": "ecd270cf234938a0c06cd2535cfa481c3e70d9b96ad5004780bc72e5def0f8a4"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Image_load.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimPipelineState.cpp"
+        }
+      ],
+      "note": "LP2.0 (C24, P2.25, SC268): 136 lines, in 2 ranges, each preceded by one marker line, compiled inside ShimPipelineState.cpp; with Image.h's enums (M-ID-PART-02, 35-139). ImageCache.h's engineBitsForFormat stays the LP1c.1 mirror; a test holds the two equal for every uncompressed format"
+    },
+    {
+      "id": "M-PIPE-PURE-01",
+      "kind": "pure-function",
+      "engine": [
+        {
+          "file": "neo/renderer/PipelineCache.cpp",
+          "lines": [
+            99,
+            530
+          ],
+          "anchor": "PipelineCache::GetRenderState, GetStencilOpState",
+          "sha256": "8844a3eb63a78d23c63b6ba5aca8eb4e9a0929d2611f5e67434dcf8c7fb79eeb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimPipelineState.cpp",
+          "symbol": "tb::lit::engineRenderState"
+        }
+      ],
+      "note": "LP2.0: the copied code, called through the facade lit/EnginePipelineState.h, reads only its arguments and the copied GLState.h and Image.h constants, so any thread runs it (the compile thread). C24's five conditions: (1) it calls no common or idLib::common; (2) it has no FatalError site (its default branches are asserts); (3) no SIMDProcessor; (4) it allocates nothing; (5) it has no statics. The engine's bugs stay (SC209-SC210): GLS_CULL_BITS is 2 << 15, so GLS_CULL_BACKSIDED falls to the default front cull; setBlendOp is commented out and the alpha factors stay at NVRHI's One/Zero/Add; the polygon offset takes the key's int depth bias"
+    },
+    {
+      "id": "M-IMG-PURE-02",
+      "kind": "pure-function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            39,
+            143
+          ],
+          "anchor": "BitsForFormat, BlockSizeForFormat, GetRowPitch",
+          "sha256": "ecd270cf234938a0c06cd2535cfa481c3e70d9b96ad5004780bc72e5def0f8a4"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimPipelineState.cpp",
+          "symbol": "tb::lit::engineRowPitch"
+        }
+      ],
+      "note": "LP2.0: the copied code, called through the facade lit/EnginePipelineState.h, reads only its arguments and the copied GLState.h and Image.h constants, so any thread runs it (the compile thread). C24's five conditions: (1) it calls no common or idLib::common; (2) it has no FatalError site (its default branches are asserts); (3) no SIMDProcessor; (4) it allocates nothing; (5) it has no statics"
+    },
+    {
+      "id": "M-PIPE-02",
+      "kind": "constant",
+      "engine": [
+        {
+          "file": "neo/renderer/GLState.h",
+          "lines": [
+            34,
+            78
+          ],
+          "anchor": "GLS_ blend, mask, polygon offset, depth func and cull bits",
+          "sha256": "f90ce7ba347f431101b915852337e9a3cd2d76da05a7e40fdf79ba8233891921"
+        },
+        {
+          "file": "neo/renderer/GLState.h",
+          "lines": [
+            97,
+            97
+          ],
+          "anchor": "GLS_STENCIL_FUNC_ALWAYS",
+          "sha256": "f56fa6a5928c1d1b4b1a63ebd593b7c7b32055e0468e23523f2cd5ea3a765c97"
+        },
+        {
+          "file": "neo/renderer/GLState.h",
+          "lines": [
+            185,
+            189
+          ],
+          "anchor": "GLS_MIRROR_VIEW, GLS_DEFAULT",
+          "sha256": "792d41a39835405004c6e4cbcb7f75b517cde4540da7f3234a68384921d2b68d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EnginePipelineState.h",
+          "symbol": "engine_gls"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimPipelineState.cpp",
+          "symbol": "static_assert"
+        }
+      ],
+      "note": "LP2.0: the GL state bits the preview's passes compose, as constants beside the facade; each is static_asserted equal to the copied GLState.h's (M-ID-COPY-10) where the copy compiles"
     }
   ],
   "retired": [

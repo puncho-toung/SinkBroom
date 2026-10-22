@@ -57,26 +57,6 @@ void takePicture(
   Mem_Free(pic);
 }
 
-// Image.h:34-139, the enum values the copied Image.h ranges leave out
-constexpr int DTT_2D = 1;
-constexpr int DTT_CUBIC = 2;
-constexpr int FMT_RGBA8 = 1;
-constexpr int FMT_ALPHA = 3;
-constexpr int FMT_L8A8 = 4;
-constexpr int FMT_LUM8 = 5;
-constexpr int FMT_INT8 = 6;
-constexpr int FMT_DXT1 = 7;
-constexpr int FMT_DXT5 = 8;
-constexpr int FMT_RGB565 = 12;
-constexpr int FMT_RG16F = 15;
-constexpr int FMT_R11G11B10F = 19;
-constexpr int FMT_BC6H = 20;
-constexpr int FMT_BC7 = 21;
-constexpr int CFM_DEFAULT = 0;
-constexpr int CFM_NORMAL_DXT5 = 1;
-constexpr int CFM_YCOCG_DXT5 = 2;
-constexpr int CFM_GREEN_ALPHA = 3;
-
 // BinaryImage.cpp:49, pinned at its default: the fast path, whose normal-map swizzle runs
 // before the encoder (the HQ encoders swizzle inside themselves)
 constexpr bool image_highQualityCompression = false;

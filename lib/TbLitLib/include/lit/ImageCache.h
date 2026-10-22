@@ -38,11 +38,16 @@ namespace engine_image
 // textureFormat_t
 constexpr int FormatNone = 0;
 constexpr int FormatRgba8 = 1;
+constexpr int FormatXrgb8 = 2;
 constexpr int FormatAlpha = 3;
+constexpr int FormatL8a8 = 4;
+constexpr int FormatLum8 = 5;
 constexpr int FormatInt8 = 6;
 constexpr int FormatDxt1 = 7;
 constexpr int FormatDxt5 = 8;
 constexpr int FormatDepth = 9;
+constexpr int FormatX16 = 10;
+constexpr int FormatY16X16 = 11;
 constexpr int FormatRgb565 = 12;
 constexpr int FormatEtc1 = 13;
 constexpr int FormatShadowArray = 14;
@@ -79,9 +84,13 @@ constexpr int UsageHdri = 22;
 // textureFilter_t
 constexpr int FilterLinear = 0;
 constexpr int FilterNearest = 1;
+constexpr int FilterNearestMipmap = 2;
 constexpr int FilterDefault = 3;
 // textureRepeat_t
+constexpr int RepeatRepeat = 0;
 constexpr int RepeatClamp = 1;
+constexpr int RepeatClampToZero = 2;
+constexpr int RepeatClampToZeroAlpha = 3;
 // cubeFiles_t
 constexpr int Cube2D = 0;
 constexpr int CubePackedMipChain = 5;

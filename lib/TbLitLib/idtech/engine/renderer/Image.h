@@ -32,6 +32,112 @@ If you have questions concerning this license or the applicable additional terms
 
 #ifndef IMAGE_H_
 #define IMAGE_H_
+// ==== engine neo/renderer/Image.h lines 35-139 (textureType_t, textureFormat_t, the BitsForFormat and GetRowPitch declarations, textureColor_t) ====
+enum textureType_t
+{
+	// RB: renamed to DDT_ to solve conflict with AMD compressonator
+	DTT_DISABLED,
+	DTT_2D,
+	DTT_CUBIC,
+	DTT_2D_ARRAY,		// new
+	DTT_2D_MULTISAMPLE,	// new
+};
+
+/*
+================================================
+The internal *Texture Format Types*, ::textureFormat_t, are:
+================================================
+*/
+enum textureFormat_t
+{
+	FMT_NONE,
+
+	//------------------------
+	// Standard color image formats
+	//------------------------
+
+	FMT_RGBA8,			// 32 bpp
+	FMT_XRGB8,			// 32 bpp
+
+	//------------------------
+	// Alpha channel only
+	//------------------------
+
+	// Alpha ends up being the same as L8A8 in our current implementation, because straight
+	// alpha gives 0 for color, but we want 1.
+	FMT_ALPHA,
+
+	//------------------------
+	// Luminance replicates the value across RGB with a constant A of 255
+	// Intensity replicates the value across RGBA
+	//------------------------
+
+	FMT_L8A8,			// 16 bpp
+	FMT_LUM8,			//  8 bpp
+	FMT_INT8,			//  8 bpp
+
+	//------------------------
+	// Compressed texture formats
+	//------------------------
+
+	FMT_DXT1,			// 4 bpp
+	FMT_DXT5,			// 8 bpp
+
+	//------------------------
+	// Depth buffer formats
+	//------------------------
+
+	FMT_DEPTH,			// 24 bpp
+
+	//------------------------
+	//
+	//------------------------
+
+	FMT_X16,			// 16 bpp
+	FMT_Y16_X16,		// 32 bpp
+	FMT_RGB565,			// 16 bpp
+
+	// ^-- used in BFG edition, don't change above for original .bimage compatibility
+
+	FMT_ETC1_RGB8_OES,	// 4 bpp
+	FMT_SHADOW_ARRAY,	// 32 bpp * 6
+	FMT_RG16F,			// 32 bpp
+	FMT_RGBA16F,		// 64 bpp
+	FMT_RGBA32F,		// 128 bpp
+	FMT_R32F,			// 32 bpp
+	FMT_R11G11B10F,		// 32 bpp
+
+	// ^-- used up until RBDOOM-3-BFG 1.5 == BIMAGE_VERSION_BFG
+
+	FMT_BC6H,			// 8 bpp
+	FMT_BC7,			// 8 bpp
+
+	// ^-- introduced with RBDOOM-3-BFG 1.6 >= BIMAGE_VERSION_BC6
+
+	//------------------------
+	// Render targets only
+	//------------------------
+
+	FMT_R8F,			// 8 bpp, RT only
+	FMT_DEPTH_STENCIL,  // 32 bpp, RT only
+	FMT_RGBA16S,		// 64 bpp, RT only
+};
+
+int BitsForFormat( textureFormat_t format );
+int GetRowPitch( const textureFormat_t& format, int width );
+
+/*
+================================================
+DXT5 color formats
+================================================
+*/
+enum textureColor_t
+{
+	CFM_DEFAULT,			// RGBA
+	CFM_NORMAL_DXT5,		// XY format and use the fast DXT5 compressor
+	CFM_YCOCG_DXT5,			// convert RGBA to CoCg_Y format
+	CFM_GREEN_ALPHA,		// Copy the alpha channel to green
+};
 // ==== engine neo/renderer/Image.h lines 212-266 (MAX_TEXTURE_LEVELS, textureUsage_t, cubeFiles_t) ====
 static const int	MAX_TEXTURE_LEVELS = 14;
 

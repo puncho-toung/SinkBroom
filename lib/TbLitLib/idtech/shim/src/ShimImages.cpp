@@ -45,11 +45,6 @@ namespace tb::lit
 namespace
 {
 
-// Image.h:34-43 textureType_t, which the copied Image.h ranges leave out
-constexpr int DTT_2D = 1;
-constexpr int DTT_CUBIC = 2;
-constexpr int DTT_2D_ARRAY = 3;
-
 // Image_load.cpp:525-537 idImage::GetGeneratedName (an idStr for the engine's
 // idStrStatic< 64 >, which holds every extension the loaders know)
 void getGeneratedName(

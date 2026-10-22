@@ -39,6 +39,8 @@
 #include "shim/Registry.h"
 // clang-format on
 
+#include "lit/EngineBuiltins.h"
+
 idImageManager* globalImages = nullptr;
 idRenderProgManager* tbLitRenderProgManager = nullptr;
 idUserInterfaceManager* uiManager = nullptr;
@@ -46,134 +48,6 @@ idGame* game = nullptr;
 
 namespace
 {
-
-// RenderProgs.cpp:791-953: name, nameOutSuffix and stages of every builtin, in table
-// order
-struct BuiltinShader
-{
-  const char* name;
-  const char* nameOutSuffix;
-  rpStage_t stages;
-};
-
-constexpr BuiltinShader BuiltinShaders[] = {
-  {"builtin/gui", "", SHADER_STAGE_DEFAULT},
-  {"builtin/color", "", SHADER_STAGE_DEFAULT},
-  {"builtin/color", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/vertex_color", "", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/ambient_lighting_IBL", "", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/ambient_lighting_IBL", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/ambient_lighting_IBL", "_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/ambient_lighting_IBL", "_PBR_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/ambient_lightgrid_IBL", "", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/ambient_lightgrid_IBL", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/ambient_lightgrid_IBL", "_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/ambient_lightgrid_IBL", "_PBR_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/gbuffer", "", SHADER_STAGE_DEFAULT},
-  {"builtin/gbuffer", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/texture", "", SHADER_STAGE_DEFAULT},
-  {"builtin/texture_color", "", SHADER_STAGE_DEFAULT},
-  {"builtin/texture_color", "_sRGB", SHADER_STAGE_DEFAULT},
-  {"builtin/texture_color", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/texture_color_texgen", "", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interaction", "", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interaction", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionAmbient", "", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionAmbient", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interaction", "_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interaction", "_skinned_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionAmbient", "_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionAmbient", "_skinned_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_spot", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_spot_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_point", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_point_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_parallel", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_parallel_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_spot_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_spot_skinned_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_point_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_point_skinned_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_parallel_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_parallel_skinned_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_atlas_spot", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_atlas_spot_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_atlas_point", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_atlas_point_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_atlas_parallel", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_atlas_parallel_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_atlas_spot_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_atlas_spot_skinned_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_atlas_point_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_atlas_point_skinned_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_atlas_parallel_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/lighting/interactionSM", "_atlas_parallel_skinned_PBR", SHADER_STAGE_DEFAULT},
-  {"builtin/debug/lightgrid", "", SHADER_STAGE_DEFAULT},
-  {"builtin/debug/lightgrid", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/debug/octahedron", "", SHADER_STAGE_DEFAULT},
-  {"builtin/debug/octahedron", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/legacy/environment", "", SHADER_STAGE_DEFAULT},
-  {"builtin/legacy/environment", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/legacy/bumpyenvironment", "", SHADER_STAGE_DEFAULT},
-  {"builtin/legacy/bumpyenvironment", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/legacy/bumpyenvironment2", "", SHADER_STAGE_DEFAULT},
-  {"builtin/legacy/bumpyenvironment2", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/legacy/bumpyenvironment2", "_SSR", SHADER_STAGE_DEFAULT},
-  {"builtin/legacy/bumpyenvironment2", "_SSR_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/depth", "", SHADER_STAGE_DEFAULT},
-  {"builtin/depth", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/fog/blendlight", "", SHADER_STAGE_DEFAULT},
-  {"builtin/fog/blendlight", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/fog/fog", "", SHADER_STAGE_DEFAULT},
-  {"builtin/fog/fog", "_skinned", SHADER_STAGE_DEFAULT},
-  {"builtin/legacy/skybox", "", SHADER_STAGE_DEFAULT},
-  {"builtin/legacy/wobblesky", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/postprocess", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/retro_2bit", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/retro_c64", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/retro_cpc", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/retro_genesis", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/retro_ps1", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/crt_mattias", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/crt_newpixie", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/crt_advanced", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/screen", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/tonemap", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/tonemap", "_brightpass", SHADER_STAGE_DEFAULT},
-  {"builtin/post/hdr_glare_chromatic", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/tonemap", "_debug", SHADER_STAGE_DEFAULT},
-  {"builtin/post/SMAA_edge_detection", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/SMAA_blending_weight_calc", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/SMAA_final", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/motionBlur", "_vectors", SHADER_STAGE_DEFAULT},
-  {"builtin/post/taa", "", SHADER_STAGE_COMPUTE},
-  {"builtin/post/taa", "_msaa2x", SHADER_STAGE_COMPUTE},
-  {"builtin/post/taa", "_msaa4x", SHADER_STAGE_COMPUTE},
-  {"builtin/post/taa", "_msaa8x", SHADER_STAGE_COMPUTE},
-  {"builtin/SSAO/AmbientOcclusion_AO", "", SHADER_STAGE_DEFAULT},
-  {"builtin/SSAO/AmbientOcclusion_AO", "_write", SHADER_STAGE_DEFAULT},
-  {"builtin/SSAO/AmbientOcclusion_blur", "", SHADER_STAGE_DEFAULT},
-  {"builtin/SSAO/AmbientOcclusion_blur", "_write", SHADER_STAGE_DEFAULT},
-  {"builtin/SSGI/DeepGBufferRadiosity_radiosity", "", SHADER_STAGE_DEFAULT},
-  {"builtin/SSGI/DeepGBufferRadiosity_blur", "", SHADER_STAGE_DEFAULT},
-  {"builtin/SSGI/DeepGBufferRadiosity_blur", "_write", SHADER_STAGE_DEFAULT},
-  {"builtin/VR/stereoDeGhost", "", SHADER_STAGE_DEFAULT},
-  {"builtin/VR/stereoWarp", "", SHADER_STAGE_DEFAULT},
-  {"builtin/video/bink", "", SHADER_STAGE_DEFAULT},
-  {"builtin/video/bink", "_sRGB", SHADER_STAGE_DEFAULT},
-  {"builtin/video/bink_gui", "", SHADER_STAGE_DEFAULT},
-  {"builtin/VR/stereoInterlace", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/motionBlur", "", SHADER_STAGE_DEFAULT},
-  {"builtin/debug/debug_shadowmap", "", SHADER_STAGE_DEFAULT},
-  {"builtin/blit", "", SHADER_STAGE_FRAGMENT},
-  {"builtin/rect", "", SHADER_STAGE_VERTEX},
-  {"builtin/mipmapgen", "", SHADER_STAGE_COMPUTE},
-  {"builtin/post/tonemapping", "", SHADER_STAGE_DEFAULT},
-  {"builtin/post/tonemapping", "_tex_array", SHADER_STAGE_DEFAULT},
-  {"builtin/post/histogram", "", SHADER_STAGE_COMPUTE},
-  {"builtin/post/histogram", "_tex_array", SHADER_STAGE_COMPUTE},
-  {"builtin/post/exposure", "", SHADER_STAGE_COMPUTE},
-};
 
 // Image_intrinsic.cpp:1060-1161, CreateIntrinsicImages: the names ImageFromFunction
 // registers, in order; shadowMapResolutions (Framebuffer.h:48) completes the shadow names
@@ -495,7 +369,9 @@ void idImageManager::Shutdown()
 }
 
 // RenderProgs.cpp:955-1010 (the builtin loop of idRenderProgManager::Init): every
-// builtin's shaders are found in table order, so FindShader indices match the engine's
+// builtin's shaders are found in table order, so FindShader indices match the engine's.
+// The rows are the one builtins table (lit/EngineBuiltins.h, P2.24); the parser needs
+// their names, suffixes and stages only.
 idRenderProgManager::idRenderProgManager()
 {
   // RenderProgs.cpp:393 for the one layout the copied stage parser names: rpNominalSet8
@@ -510,7 +386,7 @@ idRenderProgManager::idRenderProgManager()
     rpBufSize <= maxPushConstantSize;
 
   const auto noMacros = idList<shaderMacro_t>{};
-  for (const auto& builtin : BuiltinShaders)
+  for (const auto& builtin : tb::lit::EngineBuiltins)
   {
     renderProg_t prog;
     prog.name = builtin.name;
