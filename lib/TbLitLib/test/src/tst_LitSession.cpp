@@ -23,6 +23,7 @@
 #include "PipelineCompiler.h"
 #include "RenderThread.h"
 #include "StringMakers.h"
+#include "TonemapModel.h"
 #include "fs/TestEnvironment.h"
 #include "lit/BprocModel.h"
 #include "lit/CpuPool.h"
@@ -4156,6 +4157,842 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
     CHECK(resetDispatcher());
     CHECK(*stoppedEarly);
     messages.print("lit passes stop, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  std::filesystem::remove_all(root);
+}
+
+namespace
+{
+
+// LP2.2b: what a frame of the tonemap passes left, gathered after them on the render
+// thread
+struct ChainFrame
+{
+  TonemapFrameStats tonemap;
+  LitFrameStats lit;
+  FrameConvergence convergence;
+  bool settled = false;
+  std::optional<std::array<float, 4>> hdrClear;
+  nvrhi::Format targetFormat = nvrhi::Format::UNKNOWN;
+};
+
+ChainFrame chainFrameOf(const RenderFrameAccess& access)
+{
+  auto frame = ChainFrame{};
+  frame.tonemap = access.tonemap.lastStats();
+  frame.lit = access.passes.lastStats();
+  frame.convergence = access.convergence;
+  frame.settled = access.convergence.settled();
+  frame.hdrClear = access.hdrClear;
+  if (const auto target = access.frame.find(frame_resource::FrameTarget))
+  {
+    frame.targetFormat = target->texture->getDesc().format;
+  }
+  return frame;
+}
+
+// the readbacks of one frame: its exposure buffer, and the centre pixels of its LDR
+// target and of its frame target
+struct ChainReadback
+{
+  ChainFrame frame;
+  float exposure = 0.0f;
+  std::array<std::uint8_t, 4> ldr = {};
+  std::array<std::uint8_t, 4> target = {};
+};
+
+/**
+ * LP2.2b: sets the HDR clear colour and reads back the first frame whose tonemap passes
+ * ran on it. An every-frame hook sees each frame's colour at the frame's start and
+ * queues, in that same frame, a hook after its tonemap passes that copies the exposure
+ * buffer, the LDR target and the frame's target into staging resources; the next frame
+ * reads them. nullopt at the deadline.
+ */
+std::optional<ChainReadback> firstChainFrame(
+  LitSession& session,
+  const std::array<float, 4>& colour,
+  const std::chrono::milliseconds timeout = 60000ms)
+{
+  struct State
+  {
+    std::mutex mutex;
+    bool queued = false;
+    bool captured = false;
+    ChainFrame frame;
+    nvrhi::BufferHandle exposure;
+    nvrhi::StagingTextureHandle ldr;
+    nvrhi::StagingTextureHandle target;
+  };
+  auto state = std::make_shared<State>();
+  auto* const owner = &session;
+  const auto capture = [state](RenderFrameAccess& access) {
+    auto frame = chainFrameOf(access);
+    const auto lock = std::scoped_lock{state->mutex};
+    if (!frame.tonemap.tonemapped || !frame.tonemap.blitted)
+    {
+      // a pipeline of the passes is pending: the next frame of the colour tries again
+      state->queued = false;
+      return;
+    }
+    namespace fr = frame_resource;
+    auto bufferDesc = nvrhi::BufferDesc{};
+    bufferDesc.byteSize = 4;
+    bufferDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
+    bufferDesc.debugName = "LP2.2b exposure readback";
+    bufferDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    bufferDesc.keepInitialState = true;
+    state->exposure = access.device.createBuffer(bufferDesc);
+    access.commandList.copyBuffer(
+      state->exposure, 0, access.frame.find(fr::ExposureBuffer)->buffer, 0, 4);
+    const auto stage = [&](nvrhi::ITexture* texture) {
+      const auto& desc = texture->getDesc();
+      auto staging = access.device.createStagingTexture(
+        nvrhi::TextureDesc{}
+          .setWidth(desc.width)
+          .setHeight(desc.height)
+          .setFormat(desc.format),
+        nvrhi::CpuAccessMode::Read);
+      access.commandList.copyTexture(
+        staging, nvrhi::TextureSlice{}, texture, nvrhi::TextureSlice{});
+      return staging;
+    };
+    state->ldr = stage(access.frame.find(fr::CurrentRenderLdr)->texture);
+    state->target = stage(access.frame.find(fr::FrameTarget)->texture);
+    state->frame = std::move(frame);
+    state->captured = true;
+  };
+  session.setEveryFrameHookForTesting(
+    [state, owner, colour, capture](RenderFrameAccess& access) {
+      if (access.hdrClear != colour)
+      {
+        return;
+      }
+      {
+        const auto lock = std::scoped_lock{state->mutex};
+        if (state->queued || state->captured)
+        {
+          return;
+        }
+        state->queued = true;
+      }
+      // it runs after this frame's tonemap passes
+      owner->runAfterTonemapForTesting(capture);
+    });
+  session.setHdrClearForTesting(colour);
+  const auto captured = waitFor(
+    [&] {
+      const auto lock = std::scoped_lock{state->mutex};
+      if (!state->captured && !state->queued)
+      {
+        // frames are drawn on triggers only (D77)
+        owner->requestFrame();
+      }
+      return state->captured;
+    },
+    timeout,
+    false);
+  session.setEveryFrameHookForTesting({});
+  if (!captured)
+  {
+    return std::nullopt;
+  }
+
+  auto readback = ChainReadback{};
+  {
+    const auto lock = std::scoped_lock{state->mutex};
+    readback.frame = state->frame;
+  }
+  const auto read = inFrame(session, [&](RenderFrameAccess& access) {
+    auto& device = access.device;
+    if (
+      const auto* value = static_cast<const float*>(
+        device.mapBuffer(state->exposure, nvrhi::CpuAccessMode::Read)))
+    {
+      readback.exposure = *value;
+      device.unmapBuffer(state->exposure);
+    }
+    const auto centre = [&](nvrhi::IStagingTexture* staging) {
+      auto pixel = std::array<std::uint8_t, 4>{};
+      const auto& desc = staging->getDesc();
+      auto pitch = std::size_t{0};
+      if (
+        const auto* bytes = static_cast<const std::uint8_t*>(device.mapStagingTexture(
+          staging, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch)))
+      {
+        std::copy_n(
+          bytes + std::size_t(desc.height / 2) * pitch + std::size_t(desc.width / 2) * 4,
+          4,
+          pixel.begin());
+        device.unmapStagingTexture(staging);
+      }
+      return pixel;
+    };
+    readback.ldr = centre(state->ldr);
+    readback.target = centre(state->target);
+    state->exposure = nullptr;
+    state->ldr = nullptr;
+    state->target = nullptr;
+  });
+  if (!read)
+  {
+    return std::nullopt;
+  }
+  return readback;
+}
+
+/**
+ * LP2.2b: asks for frames of camera until one is settled (D77) with its lit and tonemap
+ * passes drawn and blitted; that frame's record, or nullopt at the deadline.
+ */
+std::optional<ChainFrame> settledChain(
+  LitSession& session,
+  const CameraState& camera,
+  const std::chrono::milliseconds timeout = 60000ms)
+{
+  session.setCamera(camera);
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    session.tableChanged();
+    auto frame = std::make_shared<ChainFrame>();
+    auto done = std::make_shared<std::promise<void>>();
+    auto future = done->get_future();
+    session.runAfterTonemapForTesting([frame, done](RenderFrameAccess& access) {
+      *frame = chainFrameOf(access);
+      done->set_value();
+    });
+    if (future.wait_for(10000ms) != std::future_status::ready)
+    {
+      return std::nullopt;
+    }
+    if (
+      frame->settled && frame->lit.camera == camera && frame->tonemap.tonemapped
+      && frame->tonemap.blitted)
+    {
+      return *frame;
+    }
+    if (std::chrono::steady_clock::now() + 50ms >= deadline)
+    {
+      const auto& c = frame->convergence;
+      std::cout << fmt::format(
+        "not settled: pipelines {} materials {} skipped {} uploads {} images {} "
+        "provisional {} lut {} disabled {}; camera {}, tonemapped {}, blitted {}\n",
+        c.pipelinesPending,
+        c.materialsPending,
+        c.drawsSkipped,
+        c.uploadsLeft,
+        c.imagesPending,
+        c.provisionalChunks,
+        c.lutPending,
+        c.passesDisabled,
+        frame->lit.camera == camera,
+        frame->tonemap.tonemapped,
+        frame->tonemap.blitted);
+    }
+    std::this_thread::sleep_for(50ms);
+  }
+  return std::nullopt;
+}
+
+// a headless 160 × 120 session with validation over the root, logging its frames
+std::unique_ptr<LitSession> loggedRootSession(
+  const TestInstance& instance,
+  Events& events,
+  MaterialService& service,
+  const std::filesystem::path& root,
+  const std::filesystem::path& frameLogPath)
+{
+  auto options = SessionOptions{};
+  options.validation = true;
+  options.gamePath = root;
+  options.frameLogPath = frameLogPath;
+  return LitSession::create(
+           instance.handles(),
+           VK_NULL_HANDLE,
+           160,
+           120,
+           options,
+           events.sink(),
+           7,
+           &service)
+         | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+}
+
+double fieldValue(const std::vector<std::string>& row, const std::size_t column)
+{
+  return row.size() > column && !row[column].empty() ? std::stod(row[column]) : 0.0;
+}
+
+} // namespace
+
+// LP2.2b: the tonemap passes and the blit put the lit picture on the frame's target.
+// Hidden as LP2.2a's lit case: the blobs come from the game folder (TB_LIT_GAME_PATH),
+// copied into a test game root; it needs a GPU.
+TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  const auto library = VulkanLibrary{};
+  REQUIRE(library.getInstanceProcAddr != nullptr);
+
+  SECTION(
+    "three HDR values tonemap as the shaders compute them, the exposure is its clamped "
+    "target from the first frame, and the blit copies the LDR target")
+  {
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+
+      // a bright target (bin 0, whose luminance exp2( -10 ) is clamped up to
+      // minAdaptedLuminance; red is the channel ACESFilm does not saturate), one inside
+      // the bounds (bins 112 and 113), a dark one (bin 255, clamped down to
+      // maxAdaptedLuminance); each value is a half, so the RGBA16F target holds it as is
+      const auto colours = std::array{
+        std::array<float, 4>{0.03125f, 1.5f, 0.0f, 1.0f},
+        std::array<float, 4>{0.875f, 0.875f, 0.875f, 1.0f},
+        std::array<float, 4>{0.25f, 0.25f, 0.25f, 1.0f}};
+      // D70: the exposure buffer is cleared at Start
+      auto oldExposure = 0.0f;
+      for (const auto& colour : colours)
+      {
+        CAPTURE(colour);
+        const auto readback = firstChainFrame(*session, colour);
+        REQUIRE(readback);
+        const auto& frame = readback->frame;
+        CHECK(frame.targetFormat == nvrhi::Format::RGBA8_UNORM);
+
+        const auto hdr = std::array<float, 3>{
+          modelHalf(colour[0]), modelHalf(colour[1]), modelHalf(colour[2])};
+        CHECK(hdr == std::array<float, 3>{colour[0], colour[1], colour[2]});
+        const auto histogram = modelHistogram(hdr, frame.tonemap.histogramConstants);
+        const auto exposure =
+          modelExposure(histogram, oldExposure, frame.tonemap.exposureConstants);
+        // the first frame of the colour is at its clamped target, whatever the last
+        // frame's exposure was: no adaptation tail (D70); the engine's own frameTime of
+        // 0.016 s would have left one
+        CHECK(
+          exposure
+          == modelExposure(histogram, exposure, frame.tonemap.exposureConstants));
+        CHECK(std::abs(readback->exposure - exposure) <= 1e-5f * exposure);
+        auto engineFirstFrame = frame.tonemap.exposureConstants;
+        engineFirstFrame.frameTime = 0.016f;
+        const auto withTail = modelExposure(histogram, oldExposure, engineFirstFrame);
+
+        const auto ldr = modelTonemap(hdr, exposure, frame.tonemap.tonemapConstants);
+        const auto expected =
+          std::array{modelUnorm8(ldr[0]), modelUnorm8(ldr[1]), modelUnorm8(ldr[2])};
+        for (std::size_t i = 0; i < 3; ++i)
+        {
+          CAPTURE(i);
+          CHECK(std::abs(int(readback->ldr[i]) - int(expected[i])) <= 1);
+        }
+        // the HDR target's alpha passes through (SC263)
+        CHECK(readback->ldr[3] == 255);
+        // the blit: the headless target's centre pixel is the LDR target's
+        CHECK(readback->target == readback->ldr);
+
+        std::cout << fmt::format(
+          "LP2.2b tonemap: HDR ({}, {}, {}) -> CPU ({}, {}, {}) exposure {:.6f} -> GPU "
+          "({}, {}, {}, {}) exposure {:.6f}; target ({}, {}, {}, {}); the engine's first "
+          "frame would adapt from {} to {:.6f}\n",
+          hdr[0],
+          hdr[1],
+          hdr[2],
+          expected[0],
+          expected[1],
+          expected[2],
+          exposure,
+          readback->ldr[0],
+          readback->ldr[1],
+          readback->ldr[2],
+          readback->ldr[3],
+          readback->exposure,
+          readback->target[0],
+          readback->target[1],
+          readback->target[2],
+          readback->target[3],
+          oldExposure,
+          withTail);
+        oldExposure = readback->exposure;
+      }
+      session->setHdrClearForTesting(std::nullopt);
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      CHECK(events.count(SessionEvent::Warning) == 0u);
+      events.print("tonemap values");
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    messages.print("tonemap values, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+    // no pipeline with an input layout was made (M-PIPE-DEFECT-01)
+    CHECK(messages.mirrored == 0);
+  }
+
+  SECTION(
+    "idle is zero frames, a camera change one frame; the frame log's columns; the "
+    "LDR readback")
+  {
+    const auto logPath =
+      std::filesystem::temp_directory_path() / "TbLitLibTest-lp22b-frame-log.csv";
+    std::filesystem::remove(logPath);
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto limitRaised = false;
+    auto programsAsked = std::vector<int>{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      limitRaised = instance.messageLimitRaised();
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = loggedRootSession(instance, events, *service, root, logPath);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        access.passes.setDrawLogForTesting(true);
+      }));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+
+      // camera A over the lit floor, camera B at the west wall outside every light: each
+      // settled once, so that a change between them needs nothing new
+      const auto litView = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+      const auto darkView = litCamera({-100, 0, 64}, {-1, 0, 0}, {0, 0, 1});
+      const auto lit = settledChain(*session, litView);
+      REQUIRE(lit);
+      CHECK(lit->lit.prepassDraws > 0u);
+      CHECK(lit->lit.interactionDraws > 0u);
+      CHECK(lit->tonemap.draws == 2u);
+      CHECK(lit->tonemap.dispatches == 2u);
+      REQUIRE(settledChain(*session, darkView));
+      REQUIRE(settledChain(*session, litView));
+
+      // idle = zero frames (D77): a settled session draws nothing without a trigger
+      std::this_thread::sleep_for(300ms);
+      CHECK(session->lastFrameSettledForTesting());
+      const auto idleFrames = session->framesPresented();
+      std::this_thread::sleep_for(3000ms);
+      CHECK(session->framesPresented() == idleFrames);
+      // a camera change is exactly one frame, settled at once
+      session->setCamera(darkView);
+      std::this_thread::sleep_for(1000ms);
+      CHECK(session->framesPresented() == idleFrames + 1);
+      CHECK(session->lastFrameSettledForTesting());
+      std::cout << "LP2.2b idle: " << idleFrames << " frames before 3 s of idling, "
+                << session->framesPresented() << " after it and one camera change\n";
+
+      // C29: the settled frame's LDR target; the dark view is black, the lit one lit on
+      // the floor at the centre
+      const auto dark = session->readbackLdrForTesting();
+      REQUIRE(dark);
+      CHECK(dark->width == 160u);
+      CHECK(dark->height == 120u);
+      REQUIRE(dark->rgba.size() == 160u * 120u * 4u);
+      const auto darkCentre = std::size_t(60 * 160 + 80) * 4;
+      CHECK(dark->rgba[darkCentre] == 0u);
+      CHECK(dark->rgba[darkCentre + 3] == 255u);
+      session->setCamera(litView);
+      const auto litImage = session->readbackLdrForTesting();
+      REQUIRE(litImage);
+      const auto litCentre = std::size_t(60 * 160 + 80) * 4;
+      CHECK(
+        int(litImage->rgba[litCentre]) + litImage->rgba[litCentre + 1]
+          + litImage->rgba[litCentre + 2]
+        > 0);
+      std::cout << fmt::format(
+        "LP2.2b LDR readback: the lit floor's centre ({}, {}, {}, {}), the dark wall's "
+        "({}, {}, {}, {})\n",
+        litImage->rgba[litCentre],
+        litImage->rgba[litCentre + 1],
+        litImage->rgba[litCentre + 2],
+        litImage->rgba[litCentre + 3],
+        dark->rgba[darkCentre],
+        dark->rgba[darkCentre + 1],
+        dark->rgba[darkCentre + 2],
+        dark->rgba[darkCentre + 3]);
+
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        for (const auto& key : access.passes.requestedKeysForTesting())
+        {
+          programsAsked.push_back(key.program);
+        }
+        access.passes.setDrawLogForTesting(false);
+      }));
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      CHECK(!session->teardownReport().frameLogError);
+      events.print("idle");
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    messages.print("idle, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+    auto implied = 0;
+    for (const auto program : programsAsked)
+    {
+      implied += unreadLocations(program);
+    }
+    CHECK(
+      messages.mirrored
+      == (limitRaised ? implied : std::min(implied, ValidationDuplicateMessageLimit)));
+
+    // C16: the columns, plausible: every pass that drew has a GPU time, a settled frame
+    // that drew the scene says so
+    const auto rows = readCsv(logPath);
+    REQUIRE(rows.size() >= 3u);
+    REQUIRE(rows[0].size() == 35u);
+    CHECK(rows[0][18] == "gpu_prepass_ms");
+    CHECK(rows[0][34] == "settled");
+    auto lastLit = std::optional<std::vector<std::string>>{};
+    auto settledRows = 0;
+    for (std::size_t i = 1; i < rows.size(); ++i)
+    {
+      REQUIRE(rows[i].size() == 35u);
+      if (rows[i][1] != "frame")
+      {
+        continue;
+      }
+      CHECK((rows[i][34] == "0" || rows[i][34] == "1"));
+      if (rows[i][34] == "1")
+      {
+        ++settledRows;
+      }
+      // a pass that drew has its time (the times arrive for every shown frame here)
+      if (fieldValue(rows[i], 23) > 0.0)
+      {
+        CHECK(fieldValue(rows[i], 18) > 0.0);
+      }
+      if (fieldValue(rows[i], 24) > 0.0)
+      {
+        CHECK(fieldValue(rows[i], 19) > 0.0);
+      }
+      if (rows[i][34] == "1" && fieldValue(rows[i], 23) > 0.0)
+      {
+        CHECK(fieldValue(rows[i], 22) > 0.0);
+        CHECK(fieldValue(rows[i], 20) > 0.0);
+        CHECK(fieldValue(rows[i], 21) > 0.0);
+        CHECK(fieldValue(rows[i], 6) > 0.0);
+        lastLit = rows[i];
+      }
+    }
+    CHECK(settledRows > 0);
+    REQUIRE(lastLit);
+    std::cout << fmt::format(
+      "LP2.2b fixture frame GPU ms: frame {}, prepass {}, interactions {}, tonemap {}, "
+      "blit {}; draws {} (prepass {}, interactions {}), lights {}, constant bytes {}, "
+      "volatile writes {}, push-constant bytes {}, CPU record {} ms\n",
+      (*lastLit)[6],
+      (*lastLit)[18],
+      (*lastLit)[19],
+      (*lastLit)[20],
+      (*lastLit)[21],
+      (*lastLit)[22],
+      (*lastLit)[23],
+      (*lastLit)[24],
+      (*lastLit)[27],
+      (*lastLit)[30],
+      (*lastLit)[31],
+      (*lastLit)[33],
+      (*lastLit)[3]);
+    std::filesystem::remove(logPath);
+  }
+
+  SECTION("a window: the lit picture is blitted into the swapchain, validation 0")
+  {
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto limitRaised = false;
+    auto programsAsked = std::vector<int>{};
+    {
+      auto window = TestWindow{320, 240};
+      REQUIRE(window.handle() != nullptr);
+      const auto instance = TestInstance{library, true, true, messages};
+      REQUIRE(instance.valid());
+      limitRaised = instance.messageLimitRaised();
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      const auto createSurface = library.get<PFN_vkCreateWin32SurfaceKHR>(
+        instance.instance(), "vkCreateWin32SurfaceKHR");
+      REQUIRE(createSurface != nullptr);
+      auto surfaceInfo = VkWin32SurfaceCreateInfoKHR{};
+      surfaceInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+      surfaceInfo.hinstance = GetModuleHandleW(nullptr);
+      surfaceInfo.hwnd = window.handle();
+      auto surface = VkSurfaceKHR{VK_NULL_HANDLE};
+      REQUIRE(
+        createSurface(instance.instance(), &surfaceInfo, nullptr, &surface)
+        == VK_SUCCESS);
+      {
+        auto service = rootService(root);
+        auto events = Events{};
+        auto options = SessionOptions{};
+        options.validation = true;
+        options.gamePath = root;
+        const auto [width, height] = window.clientSize();
+        auto session = LitSession::create(
+                         instance.handles(),
+                         surface,
+                         width,
+                         height,
+                         options,
+                         events.sink(),
+                         7,
+                         service.get())
+                       | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+        REQUIRE(session->hasSwapchain());
+        session->setExposed(true);
+        REQUIRE(waitFor(
+          [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+          5000ms,
+          true));
+        REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+          access.passes.setDrawLogForTesting(true);
+        }));
+        REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+
+        // the lit view until a settled frame is blitted into a swapchain image
+        const auto litView = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+        session->setCamera(litView);
+        auto blitted = std::optional<ChainFrame>{};
+        const auto deadline = std::chrono::steady_clock::now() + 60000ms;
+        while (!blitted && std::chrono::steady_clock::now() < deadline)
+        {
+          if (events.count(SessionEvent::SwapchainOutOfDate) > 0)
+          {
+            {
+              const auto lock = std::scoped_lock{events.mutex};
+              std::erase_if(events.events, [](const auto& entry) {
+                return std::get<0>(entry) == SessionEvent::SwapchainOutOfDate;
+              });
+            }
+            replaceSwapchain(*session, surface, window)
+              | kdl::transform_error([](const auto& e) { FAIL(e.msg); });
+          }
+          session->tableChanged();
+          auto frame = std::make_shared<ChainFrame>();
+          auto done = std::make_shared<std::promise<void>>();
+          auto future = done->get_future();
+          session->runAfterTonemapForTesting([frame, done](RenderFrameAccess& access) {
+            *frame = chainFrameOf(access);
+            done->set_value();
+          });
+          if (!waitFor(
+                [&] { return future.wait_for(0ms) == std::future_status::ready; },
+                10000ms,
+                true))
+          {
+            break;
+          }
+          if (frame->settled && frame->tonemap.blitted)
+          {
+            blitted = *frame;
+          }
+          waitFor([&] { return false; }, 20ms, true);
+        }
+        REQUIRE(blitted);
+        CHECK(blitted->targetFormat == nvrhi::Format::BGRA8_UNORM);
+        CHECK(blitted->tonemap.tonemapped);
+        CHECK(blitted->lit.interactionDraws > 0u);
+        const auto frames = session->framesPresented();
+        session->setCamera(litCamera({60, 0, 81}, {0, 0, -1}, {1, 0, 0}));
+        REQUIRE(
+          waitFor([&] { return session->framesPresented() > frames; }, 5000ms, true));
+        std::cout << "LP2.2b window: " << session->framesPresented()
+                  << " frames presented, the last settled one blitted into a " << width
+                  << " x " << height << " BGRA8 swapchain image\n";
+
+        REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+          for (const auto& key : access.passes.requestedKeysForTesting())
+          {
+            programsAsked.push_back(key.program);
+          }
+          access.passes.setDrawLogForTesting(false);
+        }));
+        teardown(*session);
+        CHECK(session->lastDeviceReleaseCount() == 0u);
+        CHECK(session->nvrhiErrorCount() == 0u);
+        CHECK(session->deviceMemoryAllocations() == 0);
+        CHECK(events.count(SessionEvent::Error) == 0u);
+        CHECK(events.count(SessionEvent::DeviceLost) == 0u);
+        events.print("window blit");
+        session.reset();
+        service->requestStop();
+        service->join();
+      }
+      library.get<PFN_vkDestroySurfaceKHR>(instance.instance(), "vkDestroySurfaceKHR")(
+        instance.instance(), surface, nullptr);
+    }
+    CHECK(resetDispatcher());
+    messages.print("window blit, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+    auto implied = 0;
+    for (const auto program : programsAsked)
+    {
+      implied += unreadLocations(program);
+    }
+    CHECK(
+      messages.mirrored
+      == (limitRaised ? implied : std::min(implied, ValidationDuplicateMessageLimit)));
+  }
+
+  SECTION("the livelock guard: a frame that cannot progress stops re-triggering itself")
+  {
+    // D77: uploads left re-trigger the next frame at once; with no upload allowed they
+    // never progress, so after MaxStalledFrames frames without progress the thread waits
+    // for another trigger
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+      std::this_thread::sleep_for(200ms);
+      CHECK(session->lastFrameSettledForTesting());
+
+      session->setUploadCapForTesting(0);
+      const auto before = session->framesPresented();
+      session->setChunksForTesting(syntheticChunks(10, 300, 1));
+      std::this_thread::sleep_for(1000ms);
+      const auto stalled = session->framesPresented();
+      // the trigger's frame, then at most MaxStalledFrames frames that re-trigger
+      CHECK(stalled > before);
+      CHECK(stalled - before <= MaxStalledFrames + 1);
+      CHECK_FALSE(session->lastFrameSettledForTesting());
+      std::this_thread::sleep_for(500ms);
+      CHECK(session->framesPresented() == stalled);
+      std::cout << "LP2.2b livelock guard: " << stalled - before
+                << " frames re-triggered without progress, then none\n";
+
+      // a trigger lets the uploads through again, and the frames settle
+      session->setUploadCapForTesting(UploadBytesPerFrame);
+      session->requestFrame();
+      CHECK(
+        waitFor([&] { return session->lastFrameSettledForTesting(); }, 5000ms, false));
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      CHECK(events.count(SessionEvent::Warning) == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("livelock guard, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("a Stop between the lit passes and the tonemap passes")
+  {
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto stoppedEarly = std::make_shared<std::atomic<bool>>(false);
+    auto blittedAfterStop = std::make_shared<std::atomic<bool>>(true);
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+      REQUIRE(settledChain(*session, litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0})));
+
+      // the next frame is held after its lit passes until the stop is asked for: the
+      // tonemap passes stop at their first boundary, the frame is submitted and the
+      // thread exits
+      auto held = std::make_shared<std::promise<void>>();
+      auto heldFuture = held->get_future();
+      auto release = std::make_shared<std::promise<void>>();
+      auto releaseFuture = release->get_future().share();
+      auto once = std::make_shared<std::atomic<bool>>(false);
+      auto* const owner = session.get();
+      session->setEveryFrameHookForTesting(
+        [held, releaseFuture, once, owner, stoppedEarly, blittedAfterStop](
+          RenderFrameAccess&) {
+          if (once->exchange(true))
+          {
+            return;
+          }
+          owner->runAfterPassesForTesting([held, releaseFuture](RenderFrameAccess&) {
+            held->set_value();
+            releaseFuture.wait();
+          });
+          owner->runAfterTonemapForTesting(
+            [stoppedEarly, blittedAfterStop](RenderFrameAccess& access) {
+              *stoppedEarly = access.tonemap.lastStats().stoppedEarly;
+              *blittedAfterStop = access.tonemap.lastStats().blitted;
+            });
+        });
+      session->requestFrame();
+      REQUIRE(heldFuture.wait_for(10000ms) == std::future_status::ready);
+      const auto stopStart = std::chrono::steady_clock::now();
+      session->requestStop();
+      release->set_value();
+      CHECK(session->waitForRenderThread(StopBound));
+      std::cout << "LP2.2b stop between the passes: "
+                << std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - stopStart)
+                     .count()
+                << " ms\n";
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(*stoppedEarly);
+    CHECK_FALSE(*blittedAfterStop);
+    messages.print("tonemap stop, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }
