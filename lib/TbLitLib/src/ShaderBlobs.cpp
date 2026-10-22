@@ -133,6 +133,18 @@ Result<std::string> readShaderBlob(
   const std::string_view name,
   const ShaderStage stage)
 {
+  // T0.4 (LP2.1): only the game folder's blobs, never ones found relative to the
+  // process's working folder (LitSession.h: an empty game path disables every program,
+  // D9)
+  if (gamePath.empty())
+  {
+    return Error{"the game path is empty, so no shader blob is read (C1)"};
+  }
+  if (gamePath.is_relative())
+  {
+    return Error{fmt::format(
+      "the game path {} is relative, so no shader blob is read (C1)", gamePath.string())};
+  }
   const auto relative = shaderBlobPath(name, stage);
   const auto relativePath = pathFromUtf8(relative);
   if (!relativePath)

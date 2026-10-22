@@ -78,7 +78,9 @@ std::string shaderBlobPath(std::string_view name, ShaderStage stage);
  * delete access). Unlike the engine's GetBytecode, which reads through ReadFile, no .pk4
  * or .resources container is searched: the loose files are the engine's own build output
  * (D6, R-A18; mirror.json M-SHADER-DIFF-01). A missing or unreadable file is an error
- * that disables the passes that need the shader (D9), never a fatal one.
+ * that disables the passes that need the shader (D9), never a fatal one; so is an empty
+ * or relative game path (T0.4), which would otherwise be read from the process's working
+ * folder.
  */
 Result<std::string> readShaderBlob(
   const std::filesystem::path& gamePath, std::string_view name, ShaderStage stage);

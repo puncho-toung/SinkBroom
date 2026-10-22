@@ -150,6 +150,18 @@ struct VulkanLibrary
   }
 };
 
+// LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
+// by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
+constexpr auto OutputNotConsumedId = std::string_view{"WARNING-Shader-OutputNotConsumed"};
+
+// T0.2: the Khronos layer's default duplicate_message_limit, the most messages of one id
+// it reports when the test cannot raise it (VK_EXT_layer_settings)
+constexpr auto ValidationDuplicateMessageLimit = 10;
+
+// T0.2: the duplicate limit the test instance asks for through VK_EXT_layer_settings, so
+// that every message of one id is counted
+constexpr auto RaisedDuplicateMessageLimit = std::uint32_t{100000};
+
 // Validation-layer messages, counted through a debug-utils messenger on the test's
 // instance.
 struct ValidationMessages
@@ -158,11 +170,11 @@ struct ValidationMessages
   std::atomic<int> warnings = 0;
   std::mutex mutex;
   std::vector<std::string> texts;
-  // LP2.0: a warning that contains this text is counted in mirrored, not in warnings: the
-  // engine's own LAYOUT_DRAW_VERT input layout (six locations, RenderProgs_NVRHI.cpp:
-  // 250-256) against vertex shaders that read fewer of them, which the layer reports as
-  // attributes "not consumed" (mirror.json M-PIPE-DEFECT-01); empty counts every message
-  std::string_view mirroredWarning;
+  // LP2.0, T0.2: a warning of this message id (pMessageIdName) is counted in mirrored,
+  // not in warnings: the engine's own LAYOUT_DRAW_VERT input layout (six locations,
+  // RenderProgs_NVRHI.cpp:250-256) against vertex shaders that read fewer of them
+  // (mirror.json M-PIPE-DEFECT-01); empty counts every message
+  std::string_view mirroredMessageId;
   std::atomic<int> mirrored = 0;
 
   static VKAPI_ATTR VkBool32 VKAPI_CALL callback(
@@ -172,10 +184,11 @@ struct ValidationMessages
     void* user)
   {
     auto& self = *static_cast<ValidationMessages*>(user);
-    const auto text = std::string_view{data && data->pMessage ? data->pMessage : ""};
+    const auto id =
+      std::string_view{data && data->pMessageIdName ? data->pMessageIdName : ""};
     if (
       !(severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
-      && !self.mirroredWarning.empty() && text.find(self.mirroredWarning) != text.npos)
+      && !self.mirroredMessageId.empty() && id == self.mirroredMessageId)
     {
       ++self.mirrored;
       return VK_FALSE;
@@ -271,6 +284,32 @@ public:
       m_validationLayer = !layers.empty();
     }
 
+    // T0.2: every message of one id is reported (the layer's own VK_EXT_layer_settings)
+    auto limit = RaisedDuplicateMessageLimit;
+    auto setting = VkLayerSettingEXT{};
+    setting.pLayerName = "VK_LAYER_KHRONOS_validation";
+    setting.pSettingName = "duplicate_message_limit";
+    setting.type = VK_LAYER_SETTING_TYPE_UINT32_EXT;
+    setting.valueCount = 1;
+    setting.pValues = &limit;
+    auto layerSettings = VkLayerSettingsCreateInfoEXT{};
+    layerSettings.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
+    layerSettings.settingCount = 1;
+    layerSettings.pSettings = &setting;
+    if (m_validationLayer)
+    {
+      enumerateExtensions("VK_LAYER_KHRONOS_validation", &count, nullptr);
+      auto layerExtensions = std::vector<VkExtensionProperties>(count);
+      enumerateExtensions("VK_LAYER_KHRONOS_validation", &count, layerExtensions.data());
+      m_messageLimitRaised = std::ranges::any_of(layerExtensions, [](const auto& e) {
+        return std::string_view{e.extensionName} == VK_EXT_LAYER_SETTINGS_EXTENSION_NAME;
+      });
+      if (m_messageLimitRaised)
+      {
+        enabled.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+      }
+    }
+
     auto messengerInfo = VkDebugUtilsMessengerCreateInfoEXT{};
     messengerInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
     messengerInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
@@ -293,6 +332,11 @@ public:
     auto info = VkInstanceCreateInfo{};
     info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     info.pNext = useMessenger ? &messengerInfo : nullptr;
+    if (m_messageLimitRaised)
+    {
+      layerSettings.pNext = info.pNext;
+      info.pNext = &layerSettings;
+    }
     info.pApplicationInfo = &application;
     info.enabledLayerCount = std::uint32_t(layers.size());
     info.ppEnabledLayerNames = layers.data();
@@ -331,6 +375,8 @@ public:
 
   bool valid() const { return m_instance != VK_NULL_HANDLE; }
   bool validationLayer() const { return m_validationLayer; }
+  // T0.2: the layer reports every message of an id, not ValidationDuplicateMessageLimit
+  bool messageLimitRaised() const { return m_messageLimitRaised; }
 
   InstanceHandles handles() const
   {
@@ -345,6 +391,7 @@ private:
   VkDebugUtilsMessengerEXT m_messenger = VK_NULL_HANDLE;
   std::vector<std::string> m_extensions;
   bool m_validationLayer = false;
+  bool m_messageLimitRaised = false;
 };
 
 struct Events
@@ -769,251 +816,6 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     }
     CHECK(resetDispatcher());
     messages.print("device facts, validation");
-    CHECK(messages.errors == 0);
-    CHECK(messages.warnings == 0);
-  }
-
-  SECTION("D71: pipelines made on the compile thread while the render thread draws")
-  {
-    const auto* gamePath = std::getenv("TB_LIT_GAME_PATH");
-    if (!gamePath || !*gamePath)
-    {
-      SKIP("TB_LIT_GAME_PATH is not set: the pipelines need the engine's shader blobs");
-    }
-
-    auto messages = ValidationMessages{};
-    messages.mirroredWarning = "not consumed by vertex shader";
-    {
-      const auto instance = TestInstance{library, true, false, messages};
-      REQUIRE(instance.valid());
-      REQUIRE(initInstanceDispatcher(instance.handles()));
-
-      auto events = Events{};
-      auto options = SessionOptions{};
-      options.validation = true;
-      options.gamePath = gamePath;
-      auto session =
-        LitSession::create(
-          instance.handles(), VK_NULL_HANDLE, 64, 48, options, events.sink(), 1)
-        | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
-      auto* compiler = session->pipelineCompilerForTesting();
-      REQUIRE(compiler);
-      session->setExposed(true);
-
-      // D9: a wrong table row (set 0's second member at another offset) disables color
-      auto wrong = *engineExpectedLayout(*engineBuiltin(EngineBuiltinColor), true);
-      wrong.constants->members[1].offset = 20;
-      compiler->setExpectedLayoutForTesting(EngineBuiltinColor, wrong);
-
-      const auto depth = session->deviceFacts().d24s8Supported ? nvrhi::Format::D24S8
-                                                               : nvrhi::Format::D32S8;
-      const auto hdr = FramebufferFormats{nvrhi::Format::RGBA16_FLOAT, depth};
-      const auto ldr = FramebufferFormats{nvrhi::Format::RGBA8_UNORM, depth};
-      const auto swapchain = FramebufferFormats{nvrhi::Format::BGRA8_UNORM};
-      namespace gls = engine_gls;
-      const auto interaction = gls::SrcBlendOne | gls::DstBlendOne | gls::DepthMask
-                               | gls::DepthFuncEqual | gls::StencilFuncAlways;
-      const auto keys = std::vector<PipelineKey>{
-        {PipelineRecipe::Draw, EngineBuiltinDepth, gls::Default, 0, 0.0f, hdr},
-        {PipelineRecipe::Draw,
-         EngineBuiltinTextureVertexColor,
-         gls::Default,
-         0,
-         0.0f,
-         hdr},
-        {PipelineRecipe::Draw,
-         EngineBuiltinTextureVertexColor,
-         gls::PolygonOffset,
-         -600,
-         0.0f,
-         hdr},
-        {PipelineRecipe::Draw, EngineBuiltinInteraction, interaction, 0, 0.0f, hdr},
-        {PipelineRecipe::Draw, EngineBuiltinPbrInteraction, interaction, 0, 0.0f, hdr},
-        {PipelineRecipe::Tonemap, EngineBuiltinTonemapping, 0, 0, 0.0f, ldr},
-        {PipelineRecipe::Blit, EngineBuiltinBlit, 0, 0, 0.0f, swapchain},
-      };
-      const auto colorKey = PipelineKey{
-        PipelineRecipe::Draw,
-        EngineBuiltinColor,
-        gls::SrcBlendDstColor | gls::DstBlendZero,
-        0,
-        0.0f,
-        hdr};
-
-      // the render thread draws a frame per camera change while the compile thread makes
-      // the pipelines; each request returns at once
-      const auto start = session->framesPresented();
-      for (const auto& key : keys)
-      {
-        CHECK(
-          compiler->graphicsPipeline(key).state != GraphicsPipelineLookup::State::Failed);
-      }
-      compiler->graphicsPipeline(colorKey);
-      compiler->computePipeline(EngineBuiltinHistogram);
-      compiler->computePipeline(EngineBuiltinExposure);
-
-      const auto allMade = [&] {
-        for (const auto& key : keys)
-        {
-          if (
-            compiler->graphicsPipeline(key).state != GraphicsPipelineLookup::State::Ready)
-          {
-            return false;
-          }
-        }
-        return compiler->computePipeline(EngineBuiltinHistogram).state
-                 == ComputePipelineLookup::State::Ready
-               && compiler->computePipeline(EngineBuiltinExposure).state
-                    == ComputePipelineLookup::State::Ready
-               && compiler->graphicsPipeline(colorKey).state
-                    != GraphicsPipelineLookup::State::Pending;
-      };
-      auto turn = 0;
-      CHECK(waitFor(
-        [&] {
-          session->setCamera(cameraLookingAt(float(++turn % 7) / 7.0f, -1.0f, 0.5f));
-          return allMade();
-        },
-        30000ms,
-        false));
-      CHECK(session->framesPresented() > start);
-
-      for (const auto& key : keys)
-      {
-        const auto lookup = compiler->graphicsPipeline(key);
-        CAPTURE(key.program, int(key.recipe), lookup.error);
-        CHECK(lookup.state == GraphicsPipelineLookup::State::Ready);
-        CHECK(lookup.pipeline);
-        CHECK_FALSE(lookup.bindingLayouts.empty());
-      }
-      // the same key is the same pipeline
-      CHECK(
-        compiler->graphicsPipeline(keys[0]).pipeline
-        == compiler->graphicsPipeline(keys[0]).pipeline);
-      CHECK(
-        compiler->graphicsPipeline(keys[3]).bindingLayouts.size()
-        == 4u); // DRAW_INTERACTION
-      CHECK(compiler->computePipeline(EngineBuiltinHistogram).pipeline);
-
-      const auto color = compiler->graphicsPipeline(colorKey);
-      CHECK(color.state == GraphicsPipelineLookup::State::Failed);
-      CHECK_THAT(
-        color.error,
-        Catch::Matchers::StartsWith(
-          "disabled: renderprogs2/spirv/builtin/color.vs.bin: the "
-          "push-constant block member 1 is rpColor at 16"));
-
-      // D77: a pipeline that arrives is a frame trigger: with the camera still, a new key
-      // draws one more frame once its pipeline is made
-      std::this_thread::sleep_for(100ms);
-      const auto settled = session->framesPresented();
-      const auto newKey = PipelineKey{
-        PipelineRecipe::Draw, EngineBuiltinDepth, gls::AlphaMask, 0, 0.0f, hdr};
-      compiler->graphicsPipeline(newKey);
-      CHECK(waitFor(
-        [&] {
-          return compiler->graphicsPipeline(newKey).state
-                   == GraphicsPipelineLookup::State::Ready
-                 && session->framesPresented() > settled;
-        },
-        5000ms,
-        false));
-
-      const auto report = session->programReport();
-      CHECK(report.size() == 9u);
-      for (const auto& program : report)
-      {
-        CAPTURE(program.name, program.reason);
-        CHECK(program.enabled == (program.program != EngineBuiltinColor));
-      }
-      std::cout << "pipelines made: " << compiler->pipelinesCreatedForTesting()
-                << ", frames drawn meanwhile: " << session->framesPresented() - start
-                << "\n";
-      for (const auto& program : report)
-      {
-        std::cout << "  " << program.name << ": "
-                  << (program.enabled ? "enabled" : "disabled: " + program.reason)
-                  << "\n";
-      }
-
-      teardown(*session);
-      CHECK(session->lastDeviceReleaseCount() == 0u);
-      CHECK(session->nvrhiErrorCount() == 0u);
-      CHECK(session->deviceMemoryAllocations() == 0);
-      CHECK(events.count(SessionEvent::Error) == 0u);
-      // the one disabled program's warning
-      CHECK(events.count(SessionEvent::Warning) == 1u);
-      events.print("pipelines");
-    }
-    CHECK(resetDispatcher());
-    messages.print("pipelines, validation");
-    CHECK(messages.errors == 0);
-    CHECK(messages.warnings == 0);
-  }
-
-  SECTION("D71: a stop while the compile thread makes a pipeline")
-  {
-    const auto* gamePath = std::getenv("TB_LIT_GAME_PATH");
-    if (!gamePath || !*gamePath)
-    {
-      SKIP("TB_LIT_GAME_PATH is not set: the pipelines need the engine's shader blobs");
-    }
-
-    auto messages = ValidationMessages{};
-    messages.mirroredWarning = "not consumed by vertex shader";
-    {
-      const auto instance = TestInstance{library, true, false, messages};
-      REQUIRE(instance.valid());
-      REQUIRE(initInstanceDispatcher(instance.handles()));
-
-      auto events = Events{};
-      auto options = SessionOptions{};
-      options.validation = true;
-      options.gamePath = gamePath;
-      auto session =
-        LitSession::create(
-          instance.handles(), VK_NULL_HANDLE, 64, 48, options, events.sink(), 1)
-        | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
-      auto* compiler = session->pipelineCompilerForTesting();
-      REQUIRE(compiler);
-      session->setExposed(true);
-
-      // the compile thread signals once it is about to make the first pipeline, and is
-      // held there a while, so that the stop comes while it is at work
-      auto creating = std::promise<void>{};
-      auto signalled = std::atomic<bool>{false};
-      compiler->setBeforeCreateForTesting([&] {
-        if (!signalled.exchange(true))
-        {
-          creating.set_value();
-        }
-        std::this_thread::sleep_for(100ms);
-      });
-      const auto hdr = FramebufferFormats{
-        nvrhi::Format::RGBA16_FLOAT,
-        session->deviceFacts().d24s8Supported ? nvrhi::Format::D24S8
-                                              : nvrhi::Format::D32S8};
-      for (const auto program :
-           {EngineBuiltinInteraction, EngineBuiltinPbrInteraction, EngineBuiltinDepth})
-      {
-        compiler->graphicsPipeline({PipelineRecipe::Draw, program, 0, 0, 0.0f, hdr});
-      }
-      REQUIRE(creating.get_future().wait_for(30000ms) == std::future_status::ready);
-
-      const auto stopStart = std::chrono::steady_clock::now();
-      teardown(*session);
-      const auto stopMs = std::chrono::duration<double, std::milli>(
-                            std::chrono::steady_clock::now() - stopStart)
-                            .count();
-      std::cout << "a stop during a pipeline's creation took " << stopMs << " ms\n";
-      CHECK(stopMs < double(StopBound.count()));
-      CHECK(session->lastDeviceReleaseCount() == 0u);
-      CHECK(session->nvrhiErrorCount() == 0u);
-      CHECK(session->deviceMemoryAllocations() == 0);
-      CHECK(events.count(SessionEvent::Error) == 0u);
-    }
-    CHECK(resetDispatcher());
-    messages.print("a stop while compiling, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }
@@ -1712,6 +1514,275 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
   }
 }
 
+
+// D71 (LP2.0): the compile thread's pipelines from the engine's blobs. It needs
+// TB_LIT_GAME_PATH, so it is its own case (T0.3): a run without the variable passes
+// every other GPU case and skips this one; the [litgpu] gate runs with it set.
+TEST_CASE("LitSession pipelines on a GPU (D71)", "[.][litgpu]")
+{
+  const auto* gamePath = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePath || !*gamePath)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the pipelines need the engine's shader blobs");
+  }
+  const auto library = VulkanLibrary{};
+  REQUIRE(library.getInstanceProcAddr != nullptr);
+
+  SECTION("D71: pipelines made on the compile thread while the render thread draws")
+  {
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto limitRaised = false;
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      limitRaised = instance.messageLimitRaised();
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+
+      auto events = Events{};
+      auto options = SessionOptions{};
+      options.validation = true;
+      options.gamePath = gamePath;
+      auto session =
+        LitSession::create(
+          instance.handles(), VK_NULL_HANDLE, 64, 48, options, events.sink(), 1)
+        | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+      auto* compiler = session->pipelineCompilerForTesting();
+      REQUIRE(compiler);
+      session->setExposed(true);
+
+      // D9: a wrong table row (set 0's second member at another offset) disables color
+      auto wrong = *engineExpectedLayout(*engineBuiltin(EngineBuiltinColor), true);
+      wrong.constants->members[1].offset = 20;
+      compiler->setExpectedLayoutForTesting(EngineBuiltinColor, wrong);
+
+      const auto depth = session->deviceFacts().d24s8Supported ? nvrhi::Format::D24S8
+                                                               : nvrhi::Format::D32S8;
+      const auto hdr = FramebufferFormats{nvrhi::Format::RGBA16_FLOAT, depth};
+      const auto ldr = FramebufferFormats{nvrhi::Format::RGBA8_UNORM, depth};
+      const auto swapchain = FramebufferFormats{nvrhi::Format::BGRA8_UNORM};
+      namespace gls = engine_gls;
+      const auto interaction = gls::SrcBlendOne | gls::DstBlendOne | gls::DepthMask
+                               | gls::DepthFuncEqual | gls::StencilFuncAlways;
+      const auto keys = std::vector<PipelineKey>{
+        {PipelineRecipe::Draw, EngineBuiltinDepth, gls::Default, 0, 0.0f, hdr},
+        {PipelineRecipe::Draw,
+         EngineBuiltinTextureVertexColor,
+         gls::Default,
+         0,
+         0.0f,
+         hdr},
+        {PipelineRecipe::Draw,
+         EngineBuiltinTextureVertexColor,
+         gls::PolygonOffset,
+         -600,
+         0.0f,
+         hdr},
+        {PipelineRecipe::Draw, EngineBuiltinInteraction, interaction, 0, 0.0f, hdr},
+        {PipelineRecipe::Draw, EngineBuiltinPbrInteraction, interaction, 0, 0.0f, hdr},
+        {PipelineRecipe::Tonemap, EngineBuiltinTonemapping, 0, 0, 0.0f, ldr},
+        {PipelineRecipe::Blit, EngineBuiltinBlit, 0, 0, 0.0f, swapchain},
+      };
+      const auto colorKey = PipelineKey{
+        PipelineRecipe::Draw,
+        EngineBuiltinColor,
+        gls::SrcBlendDstColor | gls::DstBlendZero,
+        0,
+        0.0f,
+        hdr};
+
+      // the render thread draws a frame per camera change while the compile thread makes
+      // the pipelines; each request returns at once
+      const auto start = session->framesPresented();
+      for (const auto& key : keys)
+      {
+        CHECK(
+          compiler->graphicsPipeline(key).state != GraphicsPipelineLookup::State::Failed);
+      }
+      compiler->graphicsPipeline(colorKey);
+      compiler->computePipeline(EngineBuiltinHistogram);
+      compiler->computePipeline(EngineBuiltinExposure);
+
+      const auto allMade = [&] {
+        for (const auto& key : keys)
+        {
+          if (
+            compiler->graphicsPipeline(key).state != GraphicsPipelineLookup::State::Ready)
+          {
+            return false;
+          }
+        }
+        return compiler->computePipeline(EngineBuiltinHistogram).state
+                 == ComputePipelineLookup::State::Ready
+               && compiler->computePipeline(EngineBuiltinExposure).state
+                    == ComputePipelineLookup::State::Ready
+               && compiler->graphicsPipeline(colorKey).state
+                    != GraphicsPipelineLookup::State::Pending;
+      };
+      auto turn = 0;
+      CHECK(waitFor(
+        [&] {
+          session->setCamera(cameraLookingAt(float(++turn % 7) / 7.0f, -1.0f, 0.5f));
+          return allMade();
+        },
+        30000ms,
+        false));
+      CHECK(session->framesPresented() > start);
+
+      for (const auto& key : keys)
+      {
+        const auto lookup = compiler->graphicsPipeline(key);
+        CAPTURE(key.program, int(key.recipe), lookup.error);
+        CHECK(lookup.state == GraphicsPipelineLookup::State::Ready);
+        CHECK(lookup.pipeline);
+        CHECK_FALSE(lookup.bindingLayouts.empty());
+      }
+      // the same key is the same pipeline
+      CHECK(
+        compiler->graphicsPipeline(keys[0]).pipeline
+        == compiler->graphicsPipeline(keys[0]).pipeline);
+      CHECK(
+        compiler->graphicsPipeline(keys[3]).bindingLayouts.size()
+        == 4u); // DRAW_INTERACTION
+      CHECK(compiler->computePipeline(EngineBuiltinHistogram).pipeline);
+
+      const auto color = compiler->graphicsPipeline(colorKey);
+      CHECK(color.state == GraphicsPipelineLookup::State::Failed);
+      CHECK_THAT(
+        color.error,
+        Catch::Matchers::StartsWith(
+          "disabled: renderprogs2/spirv/builtin/color.vs.bin: the "
+          "push-constant block member 1 is rpColor at 16"));
+
+      // D77: a pipeline that arrives is a frame trigger: with the camera still, a new key
+      // draws one more frame once its pipeline is made
+      std::this_thread::sleep_for(100ms);
+      const auto settled = session->framesPresented();
+      const auto newKey = PipelineKey{
+        PipelineRecipe::Draw, EngineBuiltinDepth, gls::AlphaMask, 0, 0.0f, hdr};
+      compiler->graphicsPipeline(newKey);
+      CHECK(waitFor(
+        [&] {
+          return compiler->graphicsPipeline(newKey).state
+                   == GraphicsPipelineLookup::State::Ready
+                 && session->framesPresented() > settled;
+        },
+        5000ms,
+        false));
+
+      const auto report = session->programReport();
+      CHECK(report.size() == 9u);
+      for (const auto& program : report)
+      {
+        CAPTURE(program.name, program.reason);
+        CHECK(program.enabled == (program.program != EngineBuiltinColor));
+      }
+      std::cout << "pipelines made: " << compiler->pipelinesCreatedForTesting()
+                << ", frames drawn meanwhile: " << session->framesPresented() - start
+                << "\n";
+      for (const auto& program : report)
+      {
+        std::cout << "  " << program.name << ": "
+                  << (program.enabled ? "enabled" : "disabled: " + program.reason)
+                  << "\n";
+      }
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      // the one disabled program's warning
+      CHECK(events.count(SessionEvent::Warning) == 1u);
+      events.print("pipelines");
+    }
+    CHECK(resetDispatcher());
+    messages.print("pipelines, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+    // T0.2 (M-PIPE-DEFECT-01): the six LAYOUT_DRAW_VERT pipelines made imply 18 of the
+    // one mirrored id, each attribute their vertex shader does not read: depth (two keys)
+    // reads location 0 of 6, 5 each; texture_color (two keys) 0, 1 and 4, 3 each;
+    // interaction and interaction_PBR 0 to 4, 1 each
+    const auto implied = 2 * 5 + 2 * 3 + 1 + 1;
+    std::cout << "mirrored warnings: " << messages.mirrored << " of " << implied
+              << " implied (the layer's duplicate limit "
+              << (limitRaised ? "raised" : "at its default") << ")" << std::endl;
+    CHECK(
+      messages.mirrored
+      == (limitRaised ? implied : std::min(implied, ValidationDuplicateMessageLimit)));
+  }
+
+  SECTION("D71: a stop while the compile thread makes a pipeline")
+  {
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto limitRaised = false;
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      limitRaised = instance.messageLimitRaised();
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+
+      auto events = Events{};
+      auto options = SessionOptions{};
+      options.validation = true;
+      options.gamePath = gamePath;
+      auto session =
+        LitSession::create(
+          instance.handles(), VK_NULL_HANDLE, 64, 48, options, events.sink(), 1)
+        | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+      auto* compiler = session->pipelineCompilerForTesting();
+      REQUIRE(compiler);
+      session->setExposed(true);
+
+      // the compile thread signals once it is about to make the first pipeline, and is
+      // held there a while, so that the stop comes while it is at work
+      auto creating = std::promise<void>{};
+      auto signalled = std::atomic<bool>{false};
+      compiler->setBeforeCreateForTesting([&] {
+        if (!signalled.exchange(true))
+        {
+          creating.set_value();
+        }
+        std::this_thread::sleep_for(100ms);
+      });
+      const auto hdr = FramebufferFormats{
+        nvrhi::Format::RGBA16_FLOAT,
+        session->deviceFacts().d24s8Supported ? nvrhi::Format::D24S8
+                                              : nvrhi::Format::D32S8};
+      for (const auto program :
+           {EngineBuiltinInteraction, EngineBuiltinPbrInteraction, EngineBuiltinDepth})
+      {
+        compiler->graphicsPipeline({PipelineRecipe::Draw, program, 0, 0, 0.0f, hdr});
+      }
+      REQUIRE(creating.get_future().wait_for(30000ms) == std::future_status::ready);
+
+      const auto stopStart = std::chrono::steady_clock::now();
+      teardown(*session);
+      const auto stopMs = std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - stopStart)
+                            .count();
+      std::cout << "a stop during a pipeline's creation took " << stopMs << " ms\n";
+      CHECK(stopMs < double(StopBound.count()));
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("a stop while compiling, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+    // T0.2: the stop comes while the first pipeline, interaction's, is made; the thread
+    // ends after it: one attribute (location 5) not read
+    CHECK(messages.mirrored == 1);
+    std::cout << "mirrored warnings of the stop: " << messages.mirrored
+              << " (the duplicate limit " << (limitRaised ? "raised" : "at its default")
+              << ")" << std::endl;
+  }
+}
+
 namespace
 {
 
@@ -2146,6 +2217,64 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     }
     CHECK(resetDispatcher());
     messages.print("kept lookups, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("T0.4: an empty or a relative game path disables every program (D9)")
+  {
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      for (const auto& [gamePath, reason] :
+           std::vector<std::pair<std::filesystem::path, std::string>>{
+             {{}, "the game path is empty, so no shader blob is read (C1)"},
+             {"relative/game",
+              "the game path relative/game is relative, so no shader blob is read (C1)"}})
+      {
+        CAPTURE(gamePath);
+        auto events = Events{};
+        auto session = gpuSession(instance, events, 1, nullptr, gamePath);
+        auto* compiler = session->pipelineCompilerForTesting();
+        REQUIRE(compiler);
+        const auto key = PipelineKey{
+          PipelineRecipe::Draw,
+          EngineBuiltinDepth,
+          engine_gls::Default,
+          0,
+          0.0f,
+          FramebufferFormats{nvrhi::Format::RGBA16_FLOAT, nvrhi::Format::D24S8}};
+        compiler->graphicsPipeline(key);
+        compiler->computePipeline(EngineBuiltinHistogram);
+        REQUIRE(waitFor(
+          [&] {
+            return compiler->graphicsPipeline(key).state
+                     != GraphicsPipelineLookup::State::Pending
+                   && compiler->computePipeline(EngineBuiltinHistogram).state
+                        != ComputePipelineLookup::State::Pending;
+          },
+          10000ms,
+          false));
+        const auto graphics = compiler->graphicsPipeline(key);
+        CHECK(graphics.state == GraphicsPipelineLookup::State::Failed);
+        CHECK_THAT(graphics.error, Catch::Matchers::EndsWith(reason));
+        CHECK_THAT(graphics.error, Catch::Matchers::StartsWith("disabled: "));
+        const auto compute = compiler->computePipeline(EngineBuiltinHistogram);
+        CHECK(compute.state == ComputePipelineLookup::State::Failed);
+        CHECK_THAT(compute.error, Catch::Matchers::EndsWith(reason));
+        for (const auto& program : session->programReport())
+        {
+          CHECK_FALSE(program.enabled);
+        }
+        teardown(*session);
+        CHECK(session->lastDeviceReleaseCount() == 0u);
+        CHECK(session->deviceMemoryAllocations() == 0);
+      }
+    }
+    CHECK(resetDispatcher());
+    messages.print("game paths, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }

@@ -55,7 +55,8 @@ struct SessionOptions
   // the frame log (C16); empty means no log
   std::filesystem::path frameLogPath;
   // C1: the game folder (Map::gamePath()) whose base/renderprogs2/spirv holds the
-  // engine's shader blobs; empty: no shader loads, every program is disabled (D9)
+  // engine's shader blobs; empty or relative: no shader loads, every program is disabled
+  // (D9, T0.4)
   std::filesystem::path gamePath;
 };
 

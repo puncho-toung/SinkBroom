@@ -21,9 +21,12 @@
 #include "lit/EngineTables.h"
 #include "lit/ImageCache.h"
 
+#include <cctype>
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -200,6 +203,99 @@ TEST_CASE("EngineTables")
       CHECK(names.size() == block.members.size());
       CHECK(parms.size() == block.members.size());
     }
+
+    // T0.1: each member's renderparm is the one its HLSL name names, by the engine's
+    // naming (RENDERPARM_ and rp dropped, underscores removed, case folded; set 0, 4 and
+    // 10's one exception: PROJMATRIX is ProjectionMatrix in the shaders), and the parms
+    // are in the order of RenderProgs.h's lists at 285ea4d1 (:248 rpMinimalSet0, :266
+    // rpNominalSet4, :296 rpMaximalSet10, copied below as the engine spells them)
+    const auto folded = [](std::string_view text, const std::string_view prefix) {
+      text.remove_prefix(prefix.size());
+      auto result = std::string{};
+      for (const auto c : text)
+      {
+        if (c != '_')
+        {
+          result += char(std::tolower(static_cast<unsigned char>(c)));
+        }
+      }
+      if (const auto at = result.find("projmatrix"); at != std::string::npos)
+      {
+        result.replace(at, 10, "projectionmatrix");
+      }
+      return result;
+    };
+    const auto engineLists = std::vector<std::pair<int, std::vector<std::string_view>>>{
+      {0,
+       {"RENDERPARM_LOCALVIEWORIGIN",
+        "RENDERPARM_COLOR",
+        "RENDERPARM_MVPMATRIX_X",
+        "RENDERPARM_MVPMATRIX_Y",
+        "RENDERPARM_MVPMATRIX_Z",
+        "RENDERPARM_MVPMATRIX_W",
+        "RENDERPARM_PROJMATRIX_W",
+        "RENDERPARM_PSX_DISTORTIONS"}},
+      {4,
+       {"RENDERPARM_LOCALVIEWORIGIN",
+        "RENDERPARM_VERTEXCOLOR_MODULATE",
+        "RENDERPARM_VERTEXCOLOR_ADD",
+        "RENDERPARM_COLOR",
+        "RENDERPARM_MVPMATRIX_X",
+        "RENDERPARM_MVPMATRIX_Y",
+        "RENDERPARM_MVPMATRIX_Z",
+        "RENDERPARM_MVPMATRIX_W",
+        "RENDERPARM_PROJMATRIX_W",
+        "RENDERPARM_TEXTUREMATRIX_S",
+        "RENDERPARM_TEXTUREMATRIX_T",
+        "RENDERPARM_TEXGEN_0_S",
+        "RENDERPARM_TEXGEN_0_T",
+        "RENDERPARM_TEXGEN_0_ENABLED",
+        "RENDERPARM_ALPHA_TEST",
+        "RENDERPARM_PSX_DISTORTIONS"}},
+      {10,
+       {"RENDERPARM_DIFFUSEMODIFIER",
+        "RENDERPARM_SPECULARMODIFIER",
+        "RENDERPARM_LOCALLIGHTORIGIN",
+        "RENDERPARM_LOCALVIEWORIGIN",
+        "RENDERPARM_LIGHTPROJECTION_S",
+        "RENDERPARM_LIGHTPROJECTION_T",
+        "RENDERPARM_LIGHTPROJECTION_Q",
+        "RENDERPARM_LIGHTFALLOFF_S",
+        "RENDERPARM_BUMPMATRIX_S",
+        "RENDERPARM_BUMPMATRIX_T",
+        "RENDERPARM_DIFFUSEMATRIX_S",
+        "RENDERPARM_DIFFUSEMATRIX_T",
+        "RENDERPARM_SPECULARMATRIX_S",
+        "RENDERPARM_SPECULARMATRIX_T",
+        "RENDERPARM_VERTEXCOLOR_MODULATE",
+        "RENDERPARM_VERTEXCOLOR_ADD",
+        "RENDERPARM_MVPMATRIX_X",
+        "RENDERPARM_MVPMATRIX_Y",
+        "RENDERPARM_MVPMATRIX_Z",
+        "RENDERPARM_MVPMATRIX_W",
+        "RENDERPARM_PROJMATRIX_W",
+        "RENDERPARM_PSX_DISTORTIONS",
+        "RENDERPARM_USER0",
+        "RENDERPARM_USER1",
+        "RENDERPARM_USER2"}},
+    };
+    for (const auto& [set, list] : engineLists)
+    {
+      CAPTURE(set);
+      const auto members = engineParmSetMembers(set);
+      REQUIRE(members.size() == list.size());
+      for (std::size_t i = 0; i < members.size(); ++i)
+      {
+        CAPTURE(i, members[i].shaderName);
+        CHECK(renderParmName(members[i].parm) == list[i]);
+        CHECK(
+          folded(members[i].shaderName, "rp")
+          == folded(renderParmName(members[i].parm), "RENDERPARM_"));
+      }
+    }
+    // the rule tells a swapped row, as BumpMatrixT named rpBumpMatrixS
+    CHECK(
+      folded("rpBumpMatrixS", "rp") != folded("RENDERPARM_BUMPMATRIX_T", "RENDERPARM_"));
 
     CHECK(
       engineParmSetBlock(10).members[3] == EngineConstantMember{"rpLocalViewOrigin", 48});

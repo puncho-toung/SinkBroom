@@ -270,6 +270,22 @@ TEST_CASE("readShaderBlob")
       env.dir() / "mymod" / "renderprogs2" / "spirv" / "builtin" / "depth.vs.bin", blob);
     CHECK(readShaderBlob(env.dir(), "builtin/depth", ShaderStage::Vertex).is_error());
   }
+
+  SECTION("T0.4: an empty or relative game path reads nothing")
+  {
+    // a blob that a working-folder-relative read would find
+    writeBinaryFile(spirv / "depth.vs.bin", blob);
+    const auto empty = readShaderBlob({}, "builtin/depth", ShaderStage::Vertex);
+    REQUIRE(empty.is_error());
+    CHECK(
+      errorMessage(empty) == "the game path is empty, so no shader blob is read (C1)");
+    const auto relative =
+      readShaderBlob(env.dir().filename(), "builtin/depth", ShaderStage::Vertex);
+    REQUIRE(relative.is_error());
+    CHECK_THAT(
+      errorMessage(relative),
+      Catch::Matchers::EndsWith("is relative, so no shader blob is read (C1)"));
+  }
 }
 
 } // namespace tb::lit
