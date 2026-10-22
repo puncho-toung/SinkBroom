@@ -66,6 +66,13 @@ constexpr auto DeferredStopInterval = 10ms;
 // D53: the generation of the last session started in this process; GUI thread only
 auto lastGeneration = std::uint64_t{0};
 
+// D9 (LP2.3): how often the status line under the surface reads the session's state
+constexpr auto StatusInterval = 250ms;
+
+// the status line's widget and its timer, children of the panel found by name
+constexpr auto StatusLabelName = "LitPreviewPanel_Status";
+constexpr auto StatusTimerName = "LitPreviewPanel_StatusTimer";
+
 /**
  * D29: the panel that runs the process's one session, GUI thread only. Every change
  * notifies, so that every panel updates its Start page (R5.26).
@@ -283,7 +290,8 @@ void LitPreviewPanel::start()
     m_document,
     m_document.map().gamePath());
   host->start(*m_surfacePage) | kdl::transform([&](QWidget* container) {
-    m_surfacePage->layout()->addWidget(container);
+    // above the status line, taking the page's height
+    static_cast<QVBoxLayout*>(m_surfacePage->layout())->insertWidget(0, container, 1);
     m_host = std::move(host);
     m_materialsVersion = 0;
     m_stopReason.clear();
@@ -390,6 +398,31 @@ void LitPreviewPanel::createGui()
   m_surfacePage->setObjectName("LitPreviewPanel_SurfacePage");
   m_surfacePage->setLayout(surfacePageLayout);
   m_surfacePage->setMinimumSize(160, 120);
+
+  // D9 (LP2.3): one line under the surface: the session's state (settled or drawing),
+  // the lit passes' counts, the VRAM and the disabled programs with their reasons;
+  // start() puts the window container above it
+  auto* statusLabel = new QLabel{};
+  statusLabel->setObjectName(StatusLabelName);
+  statusLabel->setWordWrap(true);
+  statusLabel->setContentsMargins(
+    LayoutConstants::WideHMargin,
+    LayoutConstants::NarrowVMargin,
+    LayoutConstants::WideHMargin,
+    LayoutConstants::NarrowVMargin);
+  statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  surfacePageLayout->addWidget(statusLabel);
+  auto* statusTimer = new QTimer{this};
+  statusTimer->setObjectName(StatusTimerName);
+  statusTimer->setInterval(StatusInterval);
+  connect(statusTimer, &QTimer::timeout, this, [this, statusLabel] {
+    auto* session = m_host ? m_host->session() : nullptr;
+    statusLabel->setText(
+      session ? QString::fromStdString(
+                  lit::sessionStatusLine(session->status(), session->programReport()))
+      : m_host ? tr("starting")
+               : QString{});
+  });
 
   m_stack = new QStackedLayout{};
 
@@ -624,6 +657,23 @@ void LitPreviewPanel::updateStartPage()
       ? text
       : text + "\n" + tr("The last session did not stop cleanly: ") + m_stopProblems);
   m_stack->setCurrentWidget(m_host ? m_surfacePage : m_startPage);
+
+  // D9 (LP2.3): the status line reads a running session only
+  if (auto* statusTimer = findChild<QTimer*>(StatusTimerName))
+  {
+    if (m_host && !statusTimer->isActive())
+    {
+      statusTimer->start();
+    }
+    else if (!m_host)
+    {
+      statusTimer->stop();
+      if (auto* statusLabel = findChild<QLabel*>(StatusLabelName))
+      {
+        statusLabel->clear();
+      }
+    }
+  }
 }
 
 } // namespace tb::ui

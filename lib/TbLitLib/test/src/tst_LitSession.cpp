@@ -119,6 +119,46 @@ TEST_CASE("LitSession")
   }
 }
 
+TEST_CASE("LitSession: the panel's status line (D9, LP2.3)")
+{
+  CHECK(sessionStatusLine({}, {}) == "starting");
+
+  auto status = SessionStatus{};
+  status.frames = 12;
+  status.settled = true;
+  status.lightsVisible = 1;
+  status.lightsDrawn = 1;
+  status.draws = 38;
+  status.vramBytes = 85 * 1024 * 1024 + 1024 * 1024 / 5;
+  CHECK(
+    sessionStatusLine(status, {})
+    == "settled | 1 of 1 light drawn | 38 draws | VRAM 85.2 MB");
+
+  status.settled = false;
+  status.lightsVisible = 3;
+  status.lightsDrawn = 2;
+  status.lightsOverflowed = 1;
+  status.skippedDraws = 4;
+  status.pendingPipelines = 2;
+  const auto programs = std::vector<ProgramReport>{
+    {19, "builtin/lighting/interaction", true, ""},
+    {113,
+     "builtin/post/histogram",
+     false,
+     "no shader blob builtin/post/histogram.cs.bin"}};
+  CHECK(
+    sessionStatusLine(status, programs)
+    == "drawing | 2 of 3 lights drawn, 1 overflowed | 38 draws, 4 skipped | 2 pipelines "
+       "pending | VRAM 85.2 MB | disabled: builtin/post/histogram (no shader blob "
+       "builtin/post/histogram.cs.bin)");
+
+  // a disabled program is named before the first frame too
+  CHECK(
+    sessionStatusLine({}, programs)
+    == "starting | disabled: builtin/post/histogram (no shader blob "
+       "builtin/post/histogram.cs.bin)");
+}
+
 } // namespace tb::lit
 
 // Hidden GPU tests ("[.][litgpu]"): they need a Vulkan driver and, for the window
@@ -5003,9 +5043,6 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
   std::filesystem::remove_all(root);
 }
 
-} // namespace tb::lit
-
-#endif
 namespace
 {
 
@@ -5511,3 +5548,6 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
   CHECK(messages.warnings == 0);
 }
 
+} // namespace tb::lit
+
+#endif

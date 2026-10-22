@@ -680,6 +680,53 @@ std::vector<ProgramReport> LitSession::programReport() const
   return m_compiler ? m_compiler->programs() : std::vector<ProgramReport>{};
 }
 
+SessionStatus LitSession::status() const
+{
+  return m_renderThread ? m_renderThread->status() : SessionStatus{};
+}
+
+std::string sessionStatusLine(
+  const SessionStatus& status, const std::vector<ProgramReport>& programs)
+{
+  auto line = std::string{};
+  if (status.frames == 0)
+  {
+    line = "starting";
+  }
+  else
+  {
+    line = fmt::format(
+      "{} | {} of {} {} drawn",
+      status.settled ? "settled" : "drawing",
+      status.lightsDrawn,
+      status.lightsVisible,
+      status.lightsVisible == 1 ? "light" : "lights");
+    if (status.lightsOverflowed > 0)
+    {
+      line += fmt::format(", {} overflowed", status.lightsOverflowed);
+    }
+    line += fmt::format(" | {} draws", status.draws);
+    if (status.skippedDraws > 0)
+    {
+      line += fmt::format(", {} skipped", status.skippedDraws);
+    }
+    if (status.pendingPipelines > 0)
+    {
+      line += fmt::format(" | {} pipelines pending", status.pendingPipelines);
+    }
+    line +=
+      fmt::format(" | VRAM {:.1f} MB", double(status.vramBytes) / (1024.0 * 1024.0));
+  }
+  for (const auto& program : programs)
+  {
+    if (!program.enabled)
+    {
+      line += fmt::format(" | disabled: {} ({})", program.name, program.reason);
+    }
+  }
+  return line;
+}
+
 nvrhi::IDevice* LitSession::nvrhiDeviceForTesting() const
 {
   return m_device && !m_gpuReleased ? &m_device->device() : nullptr;

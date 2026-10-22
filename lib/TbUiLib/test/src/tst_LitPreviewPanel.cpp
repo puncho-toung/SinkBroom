@@ -1814,6 +1814,64 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     checkCounts("undelivered");
   }
 
+  SECTION("the status line shows the session's state and its disabled programs (D9)")
+  {
+    // LP2.3: a game with one material and no shader blobs: the cube drawn with it makes
+    // the passes ask for their programs, which are disabled, each with its reason, and
+    // the line says so under the surface
+    const auto game = std::filesystem::temp_directory_path() / "TbUiLibTest-lp23-status";
+    std::filesystem::remove_all(game);
+    const auto removeGame = kdl::invoke_later{[&] { std::filesystem::remove_all(game); }};
+    std::filesystem::create_directories(game / "base" / "materials");
+    {
+      auto file = std::ofstream{game / "base" / "materials" / "lp23_status.mtr"};
+      file << "textures/lp23/status\n{\n\tdiffusemap\ttextures/lp23/status.tga\n}\n";
+    }
+    auto& map = harness.fixture.document().map();
+    map.setGamePath(game);
+    auto* brushNode = mdl::createBrushNode(map, "lp23/status");
+    mdl::addNodes(map, {{map.editorContext().currentLayer(), {brushNode}}});
+
+    REQUIRE(harness.startAndWaitForFrame());
+    auto* status = panel.findChild<QLabel*>("LitPreviewPanel_Status");
+    REQUIRE(status != nullptr);
+    // in front of the cube at the origin, looking at it, moved by a unit back and forth
+    // so that frames are drawn
+    harness.camera.setDirection(vm::vec3f{1, 0, 0}, vm::vec3f{0, 0, 1});
+    // the line names every program the session reports, each with its reason
+    const auto namesEveryProgram = [&](const QString& text) {
+      const auto programs = harness.session()->programReport();
+      return !programs.empty()
+             && std::ranges::all_of(programs, [&](const lit::ProgramReport& program) {
+                  return !program.enabled
+                         && text.contains(QString::fromStdString(
+                           "disabled: " + program.name + " (" + program.reason + ")"));
+                });
+    };
+    REQUIRE(harness.session() != nullptr);
+    auto nudge = 0;
+    const auto disabledShown = QTest::qWaitFor(
+      [&] {
+        ++nudge;
+        harness.camera.moveTo(vm::vec3f{-128.0f - float(nudge % 2), 0, 0});
+        harness.fixture.context().cameraDidChangeNotifier(harness.camera);
+        return namesEveryProgram(status->text());
+      },
+      10000);
+    const auto text = status->text();
+    CAPTURE(text.toStdString());
+    CHECK(disabledShown);
+    CHECK(text.contains("disabled: builtin/depth ("));
+    CHECK((text.startsWith("settled | ") || text.startsWith("drawing | ")));
+    CHECK(text.contains(" draws"));
+    CHECK(text.contains("VRAM "));
+
+    panel.stop();
+    CHECK(status->text().isEmpty());
+    reports.checkLast();
+    checkCounts("status line");
+  }
+
   SECTION("the material service reads the game and logs to the document")
   {
     auto logger = CapturingLogger{};

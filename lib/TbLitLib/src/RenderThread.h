@@ -260,6 +260,9 @@ private:
   std::optional<FrameProgress> m_lastProgress;
   // any thread (tests): the last frame drawn was settled
   std::atomic<bool> m_lastSettled = false;
+  // LP2.3 (D9): the last frame shown, written by the render thread, read on any thread
+  mutable std::mutex m_statusMutex;
+  SessionStatus m_status;
   // D77 (LP2.2a): the last frame's lit passes wait for a material table newer than this
   // version (a pending material or evaluation); a newer one triggers a frame
   bool m_litWaitsForTable = false;
@@ -330,11 +333,11 @@ private:
   // and blit; the colour every frame clears the HDR target to instead of its lit passes
   std::vector<std::function<void(RenderFrameAccess&)>> m_afterTonemapHooks;
   std::optional<std::array<float, 4>> m_hdrClearForTesting;
+  // LP2.3 (Q21): the tonemap passes' values a test set, taken by the next frame (m_mutex)
+  std::optional<EngineTonemapDefaults> m_tonemapForTesting;
   // the frame being recorded's copy of it
   std::optional<std::array<float, 4>> m_frameHdrClear;
   // LP2.2b (C29): the LDR readbacks asked for, and those the frame being recorded copies
-  // LP2.3 (Q21): the tonemap passes' values a test set, taken by the next frame (m_mutex)
-  std::optional<EngineTonemapDefaults> m_tonemapForTesting;
   // into its staging texture
   std::vector<std::function<void(LdrImage)>> m_ldrReadbacks;
   std::vector<std::function<void(LdrImage)>> m_ldrReadbacksInFrame;
@@ -432,6 +435,8 @@ public:
   std::uint64_t renderTargetGeneration() const;
   // LP2.2b, any thread: the last frame drawn was settled (D77)
   bool lastFrameSettled() const;
+  // LP2.3 (D9), any thread: the last frame shown, for the panel's status line
+  SessionStatus status() const;
   // any thread: every frame runs hook on the render thread (as runInFrame) until an
   // empty function replaces it
   void setEveryFrameHook(std::function<void(RenderFrameAccess&)> hook);
@@ -446,14 +451,14 @@ public:
   // LP2.2b, any thread: while set, every frame clears the HDR target to colour instead
   // of recording its lit passes, and tonemaps it; a frame is triggered
   void setHdrClear(std::optional<std::array<float, 4>> colour);
+  // LP2.3 (Q21), any thread: the tonemap passes' values from the next frame on; a frame
+  // is triggered
+  void setTonemapDefaults(const EngineTonemapDefaults& tonemap);
   // LP2.2b (C29), any thread: done gets a copy of the next settled frame's LDR target,
   // on the render thread once that frame has finished on the GPU; a frame is triggered.
   // A request the thread never serves (it stops first) is dropped
   void readbackLdr(std::function<void(LdrImage)> done);
   // any thread: the arenas hold these chunks instead of the scene's until null replaces
-  // LP2.3 (Q21), any thread: the tonemap passes' values from the next frame on; a frame
-  // is triggered
-  void setTonemapDefaults(const EngineTonemapDefaults& tonemap);
   // them; a frame is triggered
   void setTestChunks(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks);
   // any thread: what a frame uploads at most (§3.10's cap, UploadBytesPerFrame)

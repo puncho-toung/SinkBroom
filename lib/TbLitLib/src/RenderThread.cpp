@@ -550,6 +550,12 @@ bool RenderThread::lastFrameSettled() const
   return m_lastSettled;
 }
 
+SessionStatus RenderThread::status() const
+{
+  const auto lock = std::scoped_lock{m_statusMutex};
+  return m_status;
+}
+
 void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableVersion)
 {
   // D77, §3.10
@@ -636,12 +642,6 @@ void RenderThread::setHdrClear(std::optional<std::array<float, 4>> colour)
   m_wake.notify_all();
 }
 
-void RenderThread::readbackLdr(std::function<void(LdrImage)> done)
-{
-  {
-    const auto lock = std::scoped_lock{m_mutex};
-    m_ldrReadbacks.push_back(std::move(done));
-    m_pacer.trigger();
 void RenderThread::setTonemapDefaults(const EngineTonemapDefaults& tonemap)
 {
   {
@@ -652,6 +652,12 @@ void RenderThread::setTonemapDefaults(const EngineTonemapDefaults& tonemap)
   m_wake.notify_all();
 }
 
+void RenderThread::readbackLdr(std::function<void(LdrImage)> done)
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_ldrReadbacks.push_back(std::move(done));
+    m_pacer.trigger();
   }
   m_wake.notify_all();
 }
@@ -1430,17 +1436,17 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     {
       const auto lock = std::scoped_lock{m_mutex};
       hdrClear = m_hdrClearForTesting;
+      if (m_tonemapForTesting)
+      {
+        m_tonemap.setDefaults(*m_tonemapForTesting);
+        m_tonemapForTesting.reset();
+      }
     }
     m_frameHdrClear = hdrClear;
 
     // the frame's lit passes' counts (none in the HDR clear test mode)
     auto litStats = LitFrameStats{};
 
-      if (m_tonemapForTesting)
-      {
-        m_tonemap.setDefaults(*m_tonemapForTesting);
-        m_tonemapForTesting.reset();
-      }
     {
       auto recording = OpenCommandList{device, *m_commandList};
       auto& commandList = recording.list();
@@ -1614,6 +1620,21 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.settled = m_convergence.settled();
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
+      // LP2.3 (D9): the panel's status line reads the frame's counts
+      {
+        auto status = SessionStatus{};
+        status.frames = m_framesPresented;
+        status.settled = m_convergence.settled();
+        status.lightsVisible = litStats.lightsVisible;
+        status.lightsDrawn = litStats.lightsDrawn;
+        status.lightsOverflowed = litStats.lightsOverflowed;
+        status.draws = litStats.prepassDraws + litStats.interactionDraws + tonemap.draws;
+        status.skippedDraws = litStats.skippedDraws;
+        status.pendingPipelines = litStats.pendingPipelines + tonemap.pendingPipelines;
+        status.vramBytes = accountGpuMemory(m_frameResources, m_arenas, m_images).total();
+        const auto lock = std::scoped_lock{m_statusMutex};
+        m_status = status;
+      }
     }
     else
     {

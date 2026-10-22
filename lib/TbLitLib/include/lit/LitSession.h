@@ -75,6 +75,40 @@ struct ProgramReport
   bool operator==(const ProgramReport&) const = default;
 };
 
+/**
+ * LP2.3 (D9, D77, C16): the last frame drawn, as the panel's status line shows it: its
+ * settled state, the frame log's counts of the lit passes (LitFrameStats) and the VRAM
+ * the session's own resources take (GpuMemoryAccount). Published by the render thread
+ * after each frame it shows; read on any thread.
+ */
+struct SessionStatus
+{
+  // frames shown so far; 0: none yet
+  std::uint64_t frames = 0;
+  // D77: the last frame was settled
+  bool settled = false;
+  std::size_t lightsVisible = 0;
+  std::size_t lightsDrawn = 0;
+  std::size_t lightsOverflowed = 0;
+  // the lit and tonemap passes' draws, the draws skipped, the pipelines pending
+  std::size_t draws = 0;
+  std::size_t skippedDraws = 0;
+  std::size_t pendingPipelines = 0;
+  // the session's arenas, textures and targets (GpuMemoryAccount::total)
+  std::uint64_t vramBytes = 0;
+
+  bool operator==(const SessionStatus&) const = default;
+};
+
+/**
+ * D9 (LP2.3): the panel's status line: "starting" before the first frame, then "settled"
+ * or "drawing", the lights drawn of those visible (and overflowed), the draws (skipped),
+ * the pipelines pending and the VRAM; then every disabled program with its reason. Pure;
+ * any thread.
+ */
+std::string sessionStatusLine(
+  const SessionStatus& status, const std::vector<ProgramReport>& programs);
+
 // A copy of the 3D view's camera (§3.2); never a pointer to it.
 struct CameraState
 {
@@ -523,6 +557,12 @@ public:
    * with the field that disabled it; the session's report of its passes.
    */
   std::vector<ProgramReport> programReport() const;
+  /**
+   * LP2.3 (D9), any thread: the last frame shown, for the panel's status line
+   * (sessionStatusLine); a default status before the first frame and after teardown
+   * step 1.
+   */
+  SessionStatus status() const;
   /**
    * LP2.2b (C29, P2.25), any thread but the render thread: asks the render thread for a
    * copy of the LDR target of the next settled frame (D77), triggers a frame and waits up
