@@ -26,6 +26,7 @@
 #include "fs/TestEnvironment.h"
 #include "lit/BprocModel.h"
 #include "lit/CpuPool.h"
+#include "lit/EngineBuiltins.h"
 #include "lit/EnginePipelineState.h"
 #include "lit/EngineTables.h"
 #include "lit/FramePacer.h"
@@ -35,6 +36,7 @@
 #include "lit/LightRecord.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
+#include "lit/ShaderBlobs.h"
 #include "lit/ShaderReflection.h"
 #include "lit/Snapshot.h"
 #include "lit/VulkanInstance.h"
@@ -50,8 +52,10 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
@@ -60,8 +64,10 @@
 #include <functional>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <span>
 #include <sstream>
@@ -3433,6 +3439,726 @@ TEST_CASE("LitSession GPU resources on the retail game (D72)", "[.][retail]")
   messages.print("D72, validation");
   CHECK(messages.errors == 0);
   CHECK(messages.warnings == 0);
+}
+
+namespace
+{
+
+// LP2.2a: the ten programs' blobs LP2 loads (C26), copied out of the game folder (read
+// only) into a test game root
+constexpr auto Lp2Programs = std::array<int, 10>{
+  EngineBuiltinColor,
+  EngineBuiltinTextureVertexColor,
+  EngineBuiltinInteraction,
+  EngineBuiltinPbrInteraction,
+  EngineBuiltinDepth,
+  EngineBuiltinBlit,
+  EngineBuiltinRect,
+  EngineBuiltinTonemapping,
+  EngineBuiltinHistogram,
+  EngineBuiltinExposure};
+
+// the light stand-ins (a white light of no falloff: the default light shaders the
+// fixture map's lights reach) and a lit translucent material, written into the root
+const auto Lp22aMaterials = std::string{
+  "lights/squarelight1\n{\n\tlightFalloffImage _noFalloff\n"
+  "\t{\n\t\tmap _white\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"
+  "lights/defaultPointLight\n{\n\tlightFalloffImage _noFalloff\n"
+  "\t{\n\t\tmap _white\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"
+  "lights/defaultProjectedLight\n{\n\tlightFalloffImage _noFalloff\n"
+  "\t{\n\t\tmap _white\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"
+  "textures/lp2/litglass\n{\n\ttranslucent\n\tqer_editorimage "
+  "textures/lp1b/glass.tga\n\tdiffusemap textures/lp1b/glass.tga\n}\n"};
+
+/**
+ * LP2.2a (P2.18): a game root assembled by name in a temp folder: the LP1b fixture map,
+ * its .proc, the fixture's materials and textures, the stand-ins above, and copies of the
+ * LP2 blobs from the game folder (never written to). An empty path when a blob is
+ * missing.
+ */
+std::filesystem::path assembleLitRoot(const std::filesystem::path& gamePath)
+{
+  const auto root = std::filesystem::temp_directory_path() / "TbLitLibTest-lp22a";
+  std::filesystem::remove_all(root);
+  const auto base = root / "base";
+  const auto fixture = litFixtureFolder();
+  std::filesystem::create_directories(base / "maps");
+  std::filesystem::create_directories(base / "materials");
+  std::filesystem::copy_file(
+    fixture / "maps" / "lp1b_geometry.map", base / "maps" / "lp1b_geometry.map");
+  std::filesystem::copy_file(
+    fixture / "goldens" / "lp1b_geometry" / "lp1b_geometry.proc",
+    base / "maps" / "lp1b_geometry.proc");
+  std::filesystem::copy_file(
+    fixture / "materials" / "lp1bc.mtr", base / "materials" / "lp1bc.mtr");
+  writeTextFile(base / "materials" / "zz_lp22a.mtr", Lp22aMaterials);
+  // R_ParseImageProgram turns a stage's _white into guis/assets/white, a file of the
+  // game (Image_program.cpp:490-494): a 4 × 4 white TGA (uncompressed, 32 bits)
+  {
+    auto tga = std::string(18, '\0');
+    tga[2] = 2;
+    tga[12] = 4;
+    tga[14] = 4;
+    tga[16] = 32;
+    tga[17] = 8;
+    tga += std::string(4 * 4 * 4, char(-1));
+    std::filesystem::create_directories(base / "guis" / "assets");
+    auto file = std::ofstream{base / "guis" / "assets" / "white.tga", std::ios::binary};
+    file.write(tga.data(), std::streamsize(tga.size()));
+  }
+  std::filesystem::copy(
+    fixture / "textures", base / "textures", std::filesystem::copy_options::recursive);
+  for (const auto program : Lp2Programs)
+  {
+    const auto* builtin = engineBuiltin(program);
+    for (const auto& [flag, stage] :
+         {std::pair{EngineStageVertex, ShaderStage::Vertex},
+          std::pair{EngineStageFragment, ShaderStage::Pixel},
+          std::pair{EngineStageCompute, ShaderStage::Compute}})
+    {
+      if (!(builtin->stages & flag))
+      {
+        continue;
+      }
+      const auto relative = shaderBlobPath(builtin->name, stage);
+      const auto from = gamePath / "base" / relative;
+      if (!std::filesystem::exists(from))
+      {
+        return {};
+      }
+      const auto to = base / relative;
+      std::filesystem::create_directories(to.parent_path());
+      std::filesystem::copy_file(
+        from, to, std::filesystem::copy_options::overwrite_existing);
+    }
+  }
+  return root;
+}
+
+// the fixture map's text with a box of lp2/litglass in front of the pillars (in
+// lp1b_light), and with every light's colour set to colour when given
+std::string lp22aMapText(const std::optional<std::string>& colour = std::nullopt)
+{
+  auto map = readTextFile(litFixtureFolder() / "maps" / "lp1b_geometry.map");
+  const auto entity1 = map.find("// entity 1");
+  map.insert(
+    map.rfind('}', entity1), boxBrush(-40, -16, 16, -36, 16, 48, "lp2/litglass"));
+  if (!colour)
+  {
+    return map;
+  }
+  auto lines = std::vector<std::string>{};
+  auto stream = std::istringstream{map};
+  auto line = std::string{};
+  auto out = std::string{};
+  while (std::getline(stream, line))
+  {
+    if (line.find("\"_color\"") != std::string::npos)
+    {
+      continue;
+    }
+    out += line + "\n";
+    if (line == "\"classname\" \"light\"")
+    {
+      out += fmt::format("\"_color\" \"{}\"\n", *colour);
+    }
+  }
+  return out;
+}
+
+std::shared_ptr<const Snapshot> lp22aSnapshot(
+  const std::string& text,
+  const std::filesystem::path& root,
+  const std::uint64_t generation,
+  const std::uint64_t sequence)
+{
+  auto snapshot = snapshotOfMapText(text);
+  snapshot.generation = generation;
+  snapshot.sequence = sequence;
+  snapshot.mapPath = (root / "base" / "maps" / "lp1b_geometry.map").string();
+  return std::make_shared<const Snapshot>(std::move(snapshot));
+}
+
+CameraState litCamera(
+  const vm::vec3f& position, const vm::vec3f& direction, const vm::vec3f& up)
+{
+  auto camera = CameraState{};
+  camera.position = position;
+  camera.direction = direction;
+  camera.up = up;
+  camera.fovDegrees = 90.0f;
+  camera.viewportWidth = 160;
+  camera.viewportHeight = 120;
+  return camera;
+}
+
+float halfToFloat(const std::uint16_t half)
+{
+  const auto sign = (half >> 15) & 1;
+  const auto exponent = (half >> 10) & 0x1f;
+  const auto mantissa = half & 0x3ff;
+  auto value = 0.0f;
+  if (exponent == 0)
+  {
+    value = std::ldexp(float(mantissa), -24);
+  }
+  else if (exponent == 31)
+  {
+    value = mantissa ? std::numeric_limits<float>::quiet_NaN()
+                     : std::numeric_limits<float>::infinity();
+  }
+  else
+  {
+    value = std::ldexp(float(mantissa | 0x400), exponent - 25);
+  }
+  return sign ? -value : value;
+}
+
+// the HDR target read back (RGBA16F as floats, rows top-down)
+struct HdrImage
+{
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::vector<float> rgba;
+
+  std::array<float, 4> at(const std::uint32_t x, const std::uint32_t y) const
+  {
+    const auto i = (std::size_t(y) * width + x) * 4;
+    return {rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]};
+  }
+
+  // the largest rgb component in the (2r + 1)² pixels around (x, y)
+  float brightest(const std::uint32_t x, const std::uint32_t y, const int r = 2) const
+  {
+    auto most = 0.0f;
+    for (auto dy = -r; dy <= r; ++dy)
+    {
+      for (auto dx = -r; dx <= r; ++dx)
+      {
+        const auto p = at(std::uint32_t(int(x) + dx), std::uint32_t(int(y) + dy));
+        most = std::max({most, p[0], p[1], p[2]});
+      }
+    }
+    return most;
+  }
+};
+
+// what a settled frame recorded, gathered on the render thread
+struct SettledFrame
+{
+  LitFrameStats stats;
+  std::size_t drawSurfs = 0;
+  std::size_t lights = 0;
+};
+
+/**
+ * Waits until a frame of camera is settled (no pending pipeline, image, chunk, material
+ * or evaluation; every slot answered and written; the lists hold drawSurfs) and reads
+ * its HDR target back through a staging texture copied after the passes; nullopt at the
+ * deadline.
+ */
+std::optional<std::pair<HdrImage, SettledFrame>> settledHdr(
+  LitSession& session,
+  const CameraState& camera,
+  const std::size_t minLights,
+  const std::chrono::milliseconds timeout = 60000ms)
+{
+  session.setCamera(camera);
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    session.tableChanged();
+    auto staging = nvrhi::StagingTextureHandle{};
+    auto frame = SettledFrame{};
+    auto settled = false;
+    auto done = std::make_shared<std::promise<void>>();
+    auto future = done->get_future();
+    session.runAfterPassesForTesting([&, done](RenderFrameAccess& access) {
+      const auto& stats = access.passes.lastStats();
+      const auto& lists = access.passes.lists();
+      frame.stats = stats;
+      frame.drawSurfs = lists.drawSurfs.size();
+      frame.lights = lists.lights.size();
+      settled = stats.camera == camera && !stats.unconverged
+                && access.images.pending() == 0 && !access.images.hasLoading()
+                && !lists.drawSurfs.empty() && lists.lights.size() >= minLights
+                && !access.arenas.pending();
+      if (settled)
+      {
+        auto* hdr = access.frame.find(frame_resource::CurrentRenderHdr)->texture;
+        const auto& desc = hdr->getDesc();
+        staging = access.device.createStagingTexture(
+          nvrhi::TextureDesc{}
+            .setWidth(desc.width)
+            .setHeight(desc.height)
+            .setFormat(desc.format),
+          nvrhi::CpuAccessMode::Read);
+        access.commandList.copyTexture(
+          staging, nvrhi::TextureSlice{}, hdr, nvrhi::TextureSlice{});
+      }
+      done->set_value();
+    });
+    if (future.wait_for(10000ms) != std::future_status::ready)
+    {
+      return std::nullopt;
+    }
+    if (!settled)
+    {
+      std::this_thread::sleep_for(50ms);
+      continue;
+    }
+    auto image = HdrImage{};
+    const auto read = inFrame(session, [&](RenderFrameAccess& access) {
+      const auto& desc = staging->getDesc();
+      image.width = desc.width;
+      image.height = desc.height;
+      image.rgba.resize(std::size_t(desc.width) * desc.height * 4);
+      auto pitch = std::size_t{0};
+      const auto* bytes =
+        static_cast<const std::uint8_t*>(access.device.mapStagingTexture(
+          staging, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch));
+      for (std::uint32_t y = 0; y < desc.height; ++y)
+      {
+        const auto* row = reinterpret_cast<const std::uint16_t*>(bytes + y * pitch);
+        for (std::uint32_t x = 0; x < desc.width * 4; ++x)
+        {
+          image.rgba[std::size_t(y) * desc.width * 4 + x] = halfToFloat(row[x]);
+        }
+      }
+      access.device.unmapStagingTexture(staging);
+      staging = nullptr;
+    });
+    if (!read)
+    {
+      return std::nullopt;
+    }
+    return std::pair{std::move(image), frame};
+  }
+  return std::nullopt;
+}
+
+// a material service over a game root, its image budget off
+std::unique_ptr<MaterialService> rootService(const std::filesystem::path& root)
+{
+  auto options = MaterialServiceOptions{};
+  options.makeSource = [root](const std::atomic<bool>& cancel) {
+    return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(root, &cancel)};
+  };
+  options.pollInterval = 0ms;
+  options.imageBudgetBytes = 0;
+  return MaterialService::create(std::move(options))
+         | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+}
+
+// a headless 160 × 120 session with validation over the root
+std::unique_ptr<LitSession> rootSession(
+  const TestInstance& instance,
+  Events& events,
+  MaterialService& service,
+  const std::filesystem::path& root)
+{
+  auto options = SessionOptions{};
+  options.validation = true;
+  options.gamePath = root;
+  return LitSession::create(
+           instance.handles(),
+           VK_NULL_HANDLE,
+           160,
+           120,
+           options,
+           events.sink(),
+           7,
+           &service)
+         | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+}
+
+// T0.2: the mirrored vertex-input warnings a pipeline of program implies (its vertex
+// shader's unread LAYOUT_DRAW_VERT locations)
+int unreadLocations(const int program)
+{
+  switch (program)
+  {
+  case EngineBuiltinDepth:
+    return 5;
+  case EngineBuiltinTextureVertexColor:
+    return 3;
+  case EngineBuiltinInteraction:
+  case EngineBuiltinPbrInteraction:
+    return 1;
+  default:
+    return 0;
+  }
+}
+
+} // namespace
+
+// LP2.2a: the depth prepass and the interactions draw the LP1b fixture map lit into the
+// HDR target, read back through a staging texture (the tonemap and the blit are
+// LP2.2b's). Hidden: the blobs live only in the game folder (TB_LIT_GAME_PATH, P2.18),
+// copied out of it into a test game root; it needs a GPU.
+TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  const auto library = VulkanLibrary{};
+  REQUIRE(library.getInstanceProcAddr != nullptr);
+
+  SECTION("the fixture map lit: probes, D76, the perforated prepass, the lists' order")
+  {
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto limitRaised = false;
+    auto programsAsked = std::vector<int>{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      limitRaised = instance.messageLimitRaised();
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      auto* compiler = session->pipelineCompilerForTesting();
+      REQUIRE(compiler);
+
+      // D77: the compile thread is held, so the first frames find their pipelines pending
+      auto gate = std::make_shared<ParseGate>();
+      gate->close();
+      const auto openGate = OpenAtExit{gate};
+      compiler->setBeforeCreateForTesting([gate] { gate->pass(); });
+
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      // every draw of the session is recorded, for the pipelines it implies (T0.2)
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        access.passes.setDrawLogForTesting(true);
+      }));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+
+      // camera 1: above the floor at (60 0 0), looking down, inside lp1b_light
+      const auto lit = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+      session->setCamera(lit);
+      auto pendingSeen = LitFrameStats{};
+      REQUIRE(waitFor(
+        [&] {
+          session->tableChanged();
+          inFrame(*session, [&](RenderFrameAccess& access) {
+            const auto& stats = access.passes.lastStats();
+            if (stats.pendingPipelines > 0 && access.passes.lists().lights.size() > 0)
+            {
+              pendingSeen = stats;
+            }
+          });
+          return pendingSeen.pendingPipelines > 0;
+        },
+        60000ms,
+        false));
+      // a pending pipeline skips its draws and leaves the frame unconverged
+      CHECK(pendingSeen.unconverged);
+      CHECK(pendingSeen.skippedDraws > 0u);
+      gate->open();
+
+      // the next frames converge
+      const auto lit1 = settledHdr(*session, lit, 1);
+      REQUIRE(lit1);
+      const auto& [litImage, litFrame] = *lit1;
+      CHECK(litFrame.stats.pendingPipelines == 0u);
+      CHECK(litFrame.stats.prepassDraws > 0u);
+      CHECK(litFrame.stats.interactionDraws > 0u);
+      CHECK_FALSE(litFrame.stats.prepassDisabled);
+      CHECK_FALSE(litFrame.stats.interactionsDisabled);
+      CHECK(litFrame.stats.lightsOverflowed == 0u);
+      // the floor at (60 0 0), at the centre of the target: lit
+      const auto centre = litImage.brightest(80, 60);
+      CHECK(centre > 0.0f);
+      CHECK(litImage.at(80, 60)[3] == 1.0f);
+      std::cout << fmt::format(
+        "LP2.2a lit probe (floor at 60 0 0): {:.4f} {:.4f} {:.4f}; lights {}, "
+        "interaction draws {}, prepass draws {}, constant writes {} ({} bytes, the "
+        "frame's "
+        "budget {}), push-constant bytes {}\n",
+        litImage.at(80, 60)[0],
+        litImage.at(80, 60)[1],
+        litImage.at(80, 60)[2],
+        litFrame.lights,
+        litFrame.stats.interactionDraws,
+        litFrame.stats.prepassDraws,
+        litFrame.stats.constantWrites,
+        litFrame.stats.constantBytes,
+        litFrame.stats.constantWriteBudget,
+        litFrame.stats.pushConstantBytes);
+      {
+        const auto lock = std::scoped_lock{messages.mutex};
+        std::cout << "Q19, the first interaction draws' validation output: "
+                  << messages.errors << " errors, " << messages.warnings << " warnings";
+        for (const auto& text : messages.texts)
+        {
+          std::cout << "\n  " << text;
+        }
+        std::cout << std::endl;
+      }
+
+      // camera 2: from x -100 looking west at the west wall, outside every light
+      const auto dark =
+        settledHdr(*session, litCamera({-100, 0, 64}, {-1, 0, 0}, {0, 0, 1}), 0);
+      REQUIRE(dark);
+      CHECK(dark->first.brightest(80, 60) == 0.0f);
+      std::cout << fmt::format(
+        "LP2.2a unlit probe (west wall at -256 0 64): {}\n",
+        dark->first.brightest(80, 60));
+
+      // camera 3: from the west at y -80 looking east: the pillar's west face at
+      // (-8 -80 80) faces away from lp1b_light and hides the lit faces behind it, which
+      // the prepass and DEPTHFUNC_EQUAL keep dark
+      const auto hidden =
+        settledHdr(*session, litCamera({-240, -80, 80}, {1, 0, 0}, {0, 0, 1}), 1);
+      REQUIRE(hidden);
+      CHECK(hidden->first.brightest(80, 60) == 0.0f);
+      std::cout << fmt::format(
+        "LP2.2a occluded probe (pillar face at -8 -80 80): {}\n",
+        hidden->first.brightest(80, 60));
+
+      // camera 4: from x 200 at y 32, z 4 looking west at the grate's east face (x 104),
+      // which faces away from lp1b_light: through its hole (y 32..40, z 0..8: texels 0-7
+      // of rows 24-31, alpha 0) the lit pillar at x 8 shows, its opaque part (y 40..48)
+      // stays black
+      const auto grate =
+        settledHdr(*session, litCamera({200, 32, 4}, {-1, 0, 0}, {0, 0, 1}), 1);
+      REQUIRE(grate);
+      const auto hole = grate->first.brightest(83, 60, 1);
+      const auto bar = grate->first.brightest(90, 60, 1);
+      CHECK(hole > 0.0f);
+      CHECK(bar == 0.0f);
+      std::cout << fmt::format(
+        "LP2.2a perforated probes: behind the hole {}, on the opaque part {}\n",
+        hole,
+        bar);
+
+      // the recorded draw list of one frame from x -100 looking east at the lit glass
+      // (x -40..-36, in lp1b_light): per light, the translucent interactions after the
+      // local and global ones
+      const auto glass = litCamera({-100, 0, 32}, {1, 0, 0}, {0, 0, 1});
+      REQUIRE(settledHdr(*session, glass, 1));
+      auto logged = std::size_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        logged = access.passes.drawLogForTesting().size();
+      }));
+      auto log = std::vector<LitDrawRecord>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        const auto& all = access.passes.drawLogForTesting();
+        log.assign(all.begin() + std::ptrdiff_t(logged), all.end());
+      }));
+      auto translucent = 0;
+      auto lightsWithTranslucent = std::set<PreviewId>{};
+      for (std::size_t i = 0; i < log.size(); ++i)
+      {
+        if (
+          log[i].pass != LitDrawRecord::Pass::Interaction
+          || log[i].list != InteractionList::Translucent)
+        {
+          continue;
+        }
+        ++translucent;
+        lightsWithTranslucent.insert(log[i].light);
+        CHECK(log[i].chunk.material == "textures/lp2/litglass");
+        // DEPTHFUNC_LESS for the translucent list
+        CHECK((log[i].state & (3ull << 13)) == engine_gls::DepthFuncLess);
+        for (std::size_t j = i + 1; j < log.size(); ++j)
+        {
+          if (
+            log[j].pass == LitDrawRecord::Pass::Interaction
+            && log[j].light == log[i].light)
+          {
+            CHECK(log[j].list == InteractionList::Translucent);
+          }
+        }
+      }
+      CHECK(translucent > 0);
+      // the prepass first, every draw of a light within its scissor
+      auto prepassDone = false;
+      for (const auto& record : log)
+      {
+        if (record.pass == LitDrawRecord::Pass::Interaction)
+        {
+          prepassDone = true;
+          CHECK(
+            (record.state & (3ull << 13))
+            == (record.list == InteractionList::Translucent ? engine_gls::DepthFuncLess : engine_gls::DepthFuncEqual));
+        }
+        else
+        {
+          CHECK_FALSE(prepassDone);
+        }
+      }
+
+      // D76: the frame's writes at maxVersions 3 (a budget of one write) overflow every
+      // light, without NVRHI's "maxVersions insufficient" error, and say so once
+      const auto warningsBefore = events.count(SessionEvent::Warning);
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        access.passes.setConstantBufferVersionsForTesting(3);
+      }));
+      auto overflowed = LitFrameStats{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        overflowed = access.passes.lastStats();
+      }));
+      CHECK(overflowed.constantWriteBudget == 1u);
+      CHECK(overflowed.lightsOverflowed > 0u);
+      CHECK(overflowed.lightsOverflowed == overflowed.lightsVisible);
+      CHECK(overflowed.constantWrites <= 1u);
+      CHECK(events.count(SessionEvent::Warning) == warningsBefore + 1);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        access.passes.setConstantBufferVersionsForTesting(
+          EngineFrame.constantBufferVersions);
+      }));
+      const auto again = settledHdr(*session, lit, 1);
+      REQUIRE(again);
+      CHECK(again->second.stats.lightsOverflowed == 0u);
+      CHECK(again->first.brightest(80, 60) > 0.0f);
+
+      // the lights-off control: every light's _color 0 0 0 is black everywhere
+      REQUIRE(waitFor(
+        [&] {
+          return session->offerSnapshot(lp22aSnapshot(lp22aMapText("0 0 0"), root, 7, 2));
+        },
+        10000ms,
+        false));
+      auto control = std::optional<std::pair<HdrImage, SettledFrame>>{};
+      REQUIRE(waitFor(
+        [&] {
+          control = settledHdr(*session, lit, 0, 10000ms);
+          return control && control->second.lights == 0u;
+        },
+        60000ms,
+        false));
+      auto brightest = 0.0f;
+      for (std::size_t i = 0; i < control->first.rgba.size(); i += 4)
+      {
+        brightest = std::max(
+          {brightest,
+           control->first.rgba[i],
+           control->first.rgba[i + 1],
+           control->first.rgba[i + 2]});
+      }
+      CHECK(brightest == 0.0f);
+      std::cout << fmt::format("LP2.2a lights-off control: brightest {}\n", brightest);
+
+      // the pipeline keys the session's draws asked for, drawn or not
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        for (const auto& key : access.passes.requestedKeysForTesting())
+        {
+          programsAsked.push_back(key.program);
+        }
+        access.passes.setDrawLogForTesting(false);
+      }));
+      std::cout << "LP2.2a pipelines asked for: " << programsAsked.size() << ", made "
+                << compiler->pipelinesCreatedForTesting() << "\n";
+      CHECK(programsAsked.size() == compiler->pipelinesCreatedForTesting());
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      events.print("lit passes");
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    messages.print("lit passes, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+    // T0.2 (M-PIPE-DEFECT-01): the mirrored warnings the pipelines made imply
+    auto implied = 0;
+    for (const auto program : programsAsked)
+    {
+      implied += unreadLocations(program);
+    }
+    std::cout << "lit passes, mirrored warnings: " << messages.mirrored << " of "
+              << implied << " implied by the pipelines made" << std::endl;
+    CHECK(
+      messages.mirrored
+      == (limitRaised ? implied : std::min(implied, ValidationDuplicateMessageLimit)));
+  }
+
+  SECTION("a Stop in the middle of a frame")
+  {
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto stoppedEarly = std::make_shared<std::atomic<bool>>(false);
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+      const auto lit = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+      REQUIRE(settledHdr(*session, lit, 1));
+
+      // the next frame is held before its passes until the stop is asked for: the passes
+      // stop at their first boundary, the frame is submitted and the thread exits
+      auto held = std::make_shared<std::promise<void>>();
+      auto heldFuture = held->get_future();
+      auto release = std::make_shared<std::promise<void>>();
+      auto releaseFuture = release->get_future().share();
+      auto once = std::make_shared<std::atomic<bool>>(false);
+      // the capture of the held frame's stats is queued by the hook itself, so that it
+      // runs after that frame's passes and no earlier frame's
+      auto* const lit2 = session.get();
+      session->setEveryFrameHookForTesting(
+        [held, releaseFuture, once, lit2, stoppedEarly](RenderFrameAccess&) {
+          if (!once->exchange(true))
+          {
+            lit2->runAfterPassesForTesting([stoppedEarly](RenderFrameAccess& access) {
+              *stoppedEarly = access.passes.lastStats().stoppedEarly;
+            });
+            held->set_value();
+            releaseFuture.wait();
+          }
+        });
+      session->requestFrame();
+      REQUIRE(heldFuture.wait_for(10000ms) == std::future_status::ready);
+      const auto stopStart = std::chrono::steady_clock::now();
+      session->requestStop();
+      release->set_value();
+      CHECK(session->waitForRenderThread(StopBound));
+      std::cout << "LP2.2a stop mid-frame: "
+                << std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - stopStart)
+                     .count()
+                << " ms\n";
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(*stoppedEarly);
+    messages.print("lit passes stop, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  std::filesystem::remove_all(root);
 }
 
 } // namespace tb::lit
