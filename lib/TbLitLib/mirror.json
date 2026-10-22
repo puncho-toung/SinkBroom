@@ -10130,9 +10130,13 @@
         {
           "file": "lib/TbLitLib/src/MaterialService.cpp",
           "symbol": "MaterialService::Worker::resetWorkingTable"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::pollImageFiles"
         }
       ],
-      "note": "LP1c.1: an image's cache is read once per session, when it is first asked for, and kept across material reloads (it does not depend on the decls); the engine reads it at every image load. A cache or source changed later is seen after a restart of the session until LP1c.2's re-probe on an image file change"
+      "note": "LP1c.1: an image's slot is read once per session, when it is first asked for, and kept across material reloads (it does not depend on the decls); the engine reads it at every image load. LP1c.2 (LP1c.1's follow-up 5): the poll re-reads a slot when a loose file it was read from or its time call found changes (its time, size or change stamp; M-IMG-DIFF-06), so a saved source or a new cache is seen; a file in a container, a file that appears where none was, or a reload's new containers are seen after a restart of the session"
     },
     {
       "id": "M-BAKE-01",
@@ -11377,6 +11381,144 @@
         }
       ],
       "note": "LP1c.2 (D24, D11): the fallback stops before the encoder: no BC1, BC3 or BC6H on the CPU, so its levels are RGBA8 where the cache holds DXT1 or DXT5 blocks and R11G11B10F where it holds BC6H (the engine accepts R11G11B10F for BC6H, SC99); its 2D levels are unpadded, where the engine pads a DXT level with zeros to whole 4 x 4 blocks, and a cube level below 4 x 4 keeps its size, where the engine replicates it into one block and records 4 x 4. It writes no cache file (the engine binarizes and writes one): the image is made again per session and on a source change. Image arrays and packed mip chains (engine-made bakes) and the editor's own image are never made from a source"
+    },
+    {
+      "id": "M-IMG-09",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            223,
+            292
+          ],
+          "anchor": "idMaterial::GetEditorImage",
+          "sha256": "5ff0f5eca5eb847c51a795b86ce8c22d2bee5e3085ce55b858aea7bf76dd8d7a"
+        },
+        {
+          "file": "neo/renderer/ImageManager.cpp",
+          "lines": [
+            400,
+            499
+          ],
+          "anchor": "idImageManager::ImageFromFile",
+          "sha256": "44f1cebf57c48e5a0070c10a8c4afd39670eea07b0ff33733b422e84e806ed4c"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            547,
+            904
+          ],
+          "anchor": "idImage::ActuallyLoadImage (the cache's size, the source's, the 8 x 8 default)",
+          "sha256": "7c34911f5dc7ffa2c95f3c8cca395e3f30b85a129b04945e2866e15ad6819468"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            46,
+            46
+          ],
+          "anchor": "DEFAULT_SIZE",
+          "sha256": "b7ac46bf675a8e64481fe4612176169873e1fd221dcbcd6b3ad886d7583bcaef"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            1060,
+            1161
+          ],
+          "anchor": "idImageManager::CreateIntrinsicImages",
+          "sha256": "b0d9e643b59f64237ebb56a1f718b2e92197266aea3fa0297100fee7fe3e46b1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EditorImageSize.cpp",
+          "symbol": "editorImageSize"
+        },
+        {
+          "file": "lib/TbLitLib/src/EditorImageSize.cpp",
+          "symbol": "imageUploadSize"
+        },
+        {
+          "file": "lib/TbLitLib/src/EditorImageSize.cpp",
+          "symbol": "intrinsicImageSize"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImages.cpp",
+          "symbol": "MaterialDecls::editorImageKey"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "idImageManager::FindImageFromFile"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ImageFileCheck.cpp",
+          "symbol": "imageFileHeader"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageCache.cpp",
+          "symbol": "readBimageHeader"
+        },
+        {
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::readGameFileHead"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::measure"
+        }
+      ],
+      "note": "LP1c.2 (C21, A6, P.4, P.11): MaterialEntry::editorImageSize is GetEditorImage's upload size, measured on the parse thread when the entry is published (sized, LP1b.0's hook), silently (the copied code's messages while it measures are dropped). The chain: qer_editorimage's key as ImageFromFile names and finds it with TF_DEFAULT, TR_REPEAT, TD_DIFFUSE (the default image for an empty or default name, the fonts and lights usages, the extensions stripped, an existing record), without making a record; when its load is defaulted, the first SL_DIFFUSE stage's image or stage 0's when that one has none, but the defaulted editor image when no stage is diffuse; without qer_editorimage the first SL_DIFFUSE stage's image, else stage 0's; no stage or no image: the default image. An image's size: the default image and the fixed-size intrinsics by their generators (16 x 16 for _default, _white, _black, _flat, ...; _quadratic 32 x 4; window-, cvar- and font-sized ones unknown, Default); else the time call names the cache, and a cache the engine would use (not stale, matching DeriveOpts, the BFHACK name too) gives its header's size, read with readGameFileHead (36 bytes, not the body); else the source: a single image's file, the one the copied R_LoadImage's leaf resolution found in the time call (the .tga default, png/tga/jpg/exr/hdr, the _rmao sibling), sized by its header when the loader pre-validation passes it (imageFileHeader); a program or a cube through the copied loaders, quietly (a program by its first leaf; addnormals resamples its second to the first's size); a load that fails or a missing source is the engine's defaulted 8 x 8. Ready is a size the engine uploads; Default is the defaulted 8 x 8 or an unknown size, with the reason. A Ready size is kept per canonical name across reloads (D52). The LP1b fixture's six editor images equal the engine's listImages, from the caches' headers and from the sources' alike (tst_EditorImageSize.cpp)"
+    },
+    {
+      "id": "M-IMG-DIFF-06",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            547,
+            904
+          ],
+          "anchor": "idImage::ActuallyLoadImage",
+          "sha256": "7c34911f5dc7ffa2c95f3c8cca395e3f30b85a129b04945e2866e15ad6819468"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::pollImageFiles"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::resize"
+        }
+      ],
+      "note": "LP1c.2 (C21): the engine loads an image once per level and again on reloadImages; the preview re-reads on its 1 s poll: the loose files each published editor-image size and each image slot was read from, or that the time call found, are probed (no body read), and one whose time, size or change stamp changed makes the slot read again (resolveImage) and the material's size measured again, its kept Ready size dropped so that the new size or the loss of the file is published under every name that shares the entry. Files in containers are not polled (their tables are read once). A Ready size that changes to another Ready size reaches the chunks only when they are rebuilt for another reason: SceneGeometry rebuilds provisional (Default) chunks when their size turns Ready (a follow-up)"
+    },
+    {
+      "id": "M-IMG-DIFF-07",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            223,
+            292
+          ],
+          "anchor": "idMaterial::GetEditorImage",
+          "sha256": "5ff0f5eca5eb847c51a795b86ce8c22d2bee5e3085ce55b858aea7bf76dd8d7a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EditorImageSize.cpp",
+          "symbol": "imageUploadSize"
+        }
+      ],
+      "note": "LP1c.2 (C21): a single source image is sized by its header, never decoded: a file that passes the loader pre-validation but that stb_image or tinyexr then fails to decode (corrupt compressed data) is Ready at its header's size here and the engine's defaulted 8 x 8 there. An intrinsic the engine sizes by its window, a cvar or a font atlas (_currentRender, _shadowMapAtlas, _imguiFont, ...) is Default here. GetEditorImage's record is never made, so listImages-like listings of the registry do not show editor images the engine's dmap would have loaded"
     }
   ],
   "retired": [

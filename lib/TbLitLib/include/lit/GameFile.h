@@ -73,6 +73,9 @@ private:
 
 // the whole file, opened as GameFile opens it and closed again
 Result<std::string> readGameFile(const std::filesystem::path& path);
+// LP1c.2: its first maxBytes bytes (all of a shorter file), the same way
+Result<std::string> readGameFilePrefix(
+  const std::filesystem::path& path, std::size_t maxBytes);
 
 /**
  * A file's size and modification time, without opening its body; nullopt for no regular

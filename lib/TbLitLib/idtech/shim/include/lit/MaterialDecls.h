@@ -132,6 +132,12 @@ public:
   virtual std::optional<std::string> readGameFile(
     const std::string& path, GameFileProbe* found);
 
+  // LP1c.2 (C21): the first maxBytes bytes of a game file (all of a shorter one),
+  // searched as readGameFile searches, with where it was found in found; a header without
+  // the body. The default reads the whole file and cuts it
+  virtual std::optional<std::string> readGameFileHead(
+    const std::string& path, std::size_t maxBytes, GameFileProbe* found);
+
   // the game-relative path ("maps/x.map") of a file path below the game's base folder,
   // or nullopt; a source without a game folder has none
   virtual std::optional<std::string> gameRelativePath(const std::string& filePath) const;
@@ -270,6 +276,23 @@ bool isImageLoaderFile(std::string_view path);
 std::optional<std::string> imageFileProblem(
   std::string_view path, std::string_view bytes);
 
+// LP1c.2 (C21): an image file's size as its header declares it, when the loader
+// pre-validation passes it, else why not
+struct ImageFileHeader
+{
+  int width = 0;
+  int height = 0;
+  std::optional<std::string> problem;
+};
+
+/**
+ * LP1c.2 (C21): imageFileProblem's checks, and the width and height the file's header
+ * declares, which are the size its loader gives (R_LoadImage's picture: a TGA's, PNG's or
+ * JPG's header, a Radiance HDR's resolution line, an OpenEXR data window), without
+ * decoding a pixel. Pure; any thread.
+ */
+ImageFileHeader imageFileHeader(std::string_view path, std::string_view bytes);
+
 // An image as a material stage names it: the key of the engine's image record
 // (ImageManager.cpp's ImageFromFile). The integers are the engine's enum values, which
 // the cache name uses as is (#__UUCC).
@@ -293,6 +316,13 @@ struct MaterialImageKey
 
   bool operator==(const MaterialImageKey& other) const;
   bool operator!=(const MaterialImageKey& other) const;
+};
+
+// a game file one of the copied loaders' reads found, and where (C8)
+struct FoundGameFile
+{
+  std::string path;
+  GameFileProbe probe;
 };
 
 /**
@@ -324,6 +354,9 @@ struct ImageCacheName
   std::string bfhackFile;
   // the engine generates the image (an intrinsic, the default image): it has no cache
   bool generated = false;
+  // LP1c.2: the files the time call's probes found, in order (a single image's one leaf,
+  // a program's leaves, a cube's sides), for the sizes and the re-probe (C21)
+  std::vector<FoundGameFile> sources;
 };
 
 // one mip level (one side's, for a cube) in CachedImage::data
@@ -371,13 +404,6 @@ struct CachedImage
   // copy to NVRHI's row pitch; LP2 pads at upload), RGBA8 as stored, RGB565 as RGBA8
   std::vector<CachedImageLevel> levels;
   std::vector<std::uint8_t> data;
-};
-
-// a game file one of the copied loaders' reads found, and where (C8)
-struct FoundGameFile
-{
-  std::string path;
-  GameFileProbe probe;
 };
 
 /**
@@ -482,6 +508,9 @@ struct EditorImageSize
   int width = 8;
   int height = 8;
   State state = State::Default;
+  // LP1c.2: why the size is Default (the engine's load defaults the image, or its size is
+  // the window's); "" for Ready. Not compared by ==
+  std::string reason;
 
   bool operator==(const EditorImageSize& other) const;
   bool operator!=(const EditorImageSize& other) const;
@@ -767,9 +796,22 @@ public:
   // the bytes of decl text the registry keeps (all decl types, R5.10)
   std::size_t declTextBytes() const;
 
+  /**
+   * LP1c.2 (C21): the key of the image GetEditorImage loads for a material's
+   * qer_editorimage (Material.cpp:261, ImageFromFile( editorImageName, TF_DEFAULT,
+   * TR_REPEAT, TD_DIFFUSE )), named and looked up as ImageFromFile names and looks it up
+   * (the default image for an empty or "default" name, the "fonts" and "lights" usages,
+   * the extensions stripped, an existing record of the name), without making a record;
+   * nullopt for a material without qer_editorimage. Parse thread (C20).
+   */
+  std::optional<MaterialImageKey> editorImageKey(const MaterialEntry& material);
+
   // the messages the copied code reported, oldest first
   const std::vector<DeclMessage>& messages() const;
   std::vector<DeclMessage> takeMessages();
+  // LP1c.2: the messages from index first on, taken out (a quiet computation keeps or
+  // drops them); errors among them stay counted
+  std::vector<DeclMessage> takeMessagesFrom(std::size_t first);
 
 private:
   // The process's one registry slot (C17, A2.6), claimed when it is made and released

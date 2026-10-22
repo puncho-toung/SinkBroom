@@ -23,6 +23,7 @@
 #include "lit/MaterialDecls.h"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -120,6 +121,8 @@ public:
   GameFileProbe probe(const std::string& path) override;
   std::optional<std::string> readGameFile(
     const std::string& path, GameFileProbe* found) override;
+  std::optional<std::string> readGameFileHead(
+    const std::string& path, std::size_t maxBytes, GameFileProbe* found) override;
   std::optional<std::string> gameRelativePath(const std::string& filePath) const override;
   bool usingResourceFiles() const override;
   std::vector<DeclFileTime> looseFileTimes(
@@ -143,9 +146,12 @@ private:
   // the C8 read: the loose file, then the .pk4 files, then the resources; decl says
   // whether a loose file that keeps changing asks for another build (A3.5)
   std::optional<std::string> read(
-    const std::string& path, GameFileProbe* found, bool decl);
+    const std::string& path,
+    GameFileProbe* found,
+    bool decl,
+    std::size_t maxBytes = SIZE_MAX);
   std::optional<std::string> readLoose(
-    const std::string& path, GameFileProbe* found, bool decl);
+    const std::string& path, GameFileProbe* found, bool decl, std::size_t maxBytes);
   std::optional<std::string> readFromPk4(
     Pk4& pk4, const std::filesystem::path& entryPath, const std::string& path);
 

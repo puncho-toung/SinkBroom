@@ -19,8 +19,8 @@
 
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
-// GPL Source Code and RBDOOM-3-BFG (neo/renderer/Image_load.cpp and
-// renderer/BinaryImage.cpp):
+// GPL Source Code and RBDOOM-3-BFG (neo/renderer/Image_load.cpp,
+// renderer/BinaryImage.cpp and renderer/Material.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2013-2025 Robert Beckebans
 //   Copyright (C) 2014-2016 Kot in Action Creative Artel
@@ -31,7 +31,8 @@
 // ---- end of engine notice ----
 
 // LP1c.1: the image cache's name (C8): ActuallyLoadImage up to the generated name, behind
-// the facade's MaterialDecls::imageCacheName.
+// the facade's MaterialDecls::imageCacheName. LP1c.2 (C21): the files its time call
+// found, and the key of a material's editor image (MaterialDecls::editorImageKey).
 
 // clang-format off: the std-only facade, then precompiled.h, then the registry
 #include "lit/MaterialDecls.h"
@@ -148,6 +149,8 @@ DeclResult<ImageCacheName> MaterialDecls::imageCacheName(const MaterialImageKey&
   }
 
   const auto errorsBefore = m_registry->errorCount();
+  auto& files = m_registry->files();
+  files.beginRecording();
 
   // Image_load.cpp:571-617, com_productionMode 0; sourceFileTime starts as the image
   // constructor sets it (Image_NVRHI.cpp:133)
@@ -190,6 +193,12 @@ DeclResult<ImageCacheName> MaterialDecls::imageCacheName(const MaterialImageKey&
   }
   // RB end
 
+  for (auto& found : files.endRecording())
+  {
+    result.sources.push_back(
+      FoundGameFile{std::move(found.path), std::move(found.probe)});
+  }
+
   idStr generatedName = imgName;
   getGeneratedName(generatedName, usage, cubeFiles);
   idStr file;
@@ -213,6 +222,42 @@ DeclResult<ImageCacheName> MaterialDecls::imageCacheName(const MaterialImageKey&
     result.bfhackFile = bfhackFile.c_str();
   }
   return {result, {}};
+}
+
+// Material.cpp:261, GetEditorImage's ImageFromFile for qer_editorimage, without a record
+std::optional<MaterialImageKey> MaterialDecls::editorImageKey(
+  const MaterialEntry& material)
+{
+  if (!m_registry || material.editorImageName.empty())
+  {
+    return std::nullopt;
+  }
+  // RB: changed to TD_DIFFUSE because BFG didn't ship the editor images and the
+  // qer_editorImage might be the same as the diffusemap
+  auto usage = TD_DIFFUSE;
+  auto name = idStr{};
+  const auto* record = m_registry->images().FindImageFromFile(
+    material.editorImageName.c_str(), TF_DEFAULT, TR_REPEAT, usage, CF_2D, name);
+
+  auto key = MaterialImageKey{};
+  if (record)
+  {
+    key.name = record->GetName();
+    key.usage = int(record->usage);
+    key.filter = int(record->filter);
+    key.repeat = int(record->repeat);
+    key.cube = int(record->cubeFiles);
+    key.cubeMapSize = record->cubeMapSize;
+    key.intrinsic = record->intrinsic;
+    key.isDefault = record == globalImages->defaultImage;
+    return key;
+  }
+  key.name = name.c_str();
+  key.usage = int(usage);
+  key.filter = int(TF_DEFAULT);
+  key.repeat = int(TR_REPEAT);
+  key.cube = int(CF_2D);
+  return key;
 }
 
 } // namespace tb::lit

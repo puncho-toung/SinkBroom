@@ -411,9 +411,15 @@ Result<void> GameFile::readAt(
 
 Result<std::string> readGameFile(const std::filesystem::path& path)
 {
+  return readGameFilePrefix(path, SIZE_MAX);
+}
+
+Result<std::string> readGameFilePrefix(
+  const std::filesystem::path& path, const std::size_t maxBytes)
+{
   return GameFile::open(path) | kdl::and_then([&](GameFile file) -> Result<std::string> {
            auto text = std::string{};
-           text.resize(std::size_t(file.size()));
+           text.resize(std::size_t(std::min(file.size(), std::uint64_t(maxBytes))));
            return file.readAt(0, text.data(), text.size())
                   | kdl::transform([&]() { return std::move(text); });
          });

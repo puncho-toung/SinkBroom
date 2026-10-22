@@ -390,7 +390,10 @@ std::vector<std::string> GameFileSource::listFiles(
 }
 
 std::optional<std::string> GameFileSource::readLoose(
-  const std::string& path, GameFileProbe* found, const bool decl)
+  const std::string& path,
+  GameFileProbe* found,
+  const bool decl,
+  const std::size_t maxBytes)
 {
   const auto relative = pathFromUtf8(path);
   if (!relative)
@@ -409,9 +412,10 @@ std::optional<std::string> GameFileSource::readLoose(
   for (auto attempt = 0; attempt < MaxLooseReadAttempts; ++attempt)
   {
     const auto before = statGameFile(*file);
-    auto text = lit::readGameFile(*file) | kdl::transform([](std::string bytes) {
-                  return std::optional<std::string>{std::move(bytes)};
-                })
+    auto text = readGameFilePrefix(*file, maxBytes)
+                | kdl::transform([](std::string bytes) {
+                    return std::optional<std::string>{std::move(bytes)};
+                  })
                 | kdl::transform_error([](const auto&) {
                     // OpenFileReadFlags goes on to the containers without a message, and
                     // so does this
@@ -424,8 +428,8 @@ std::optional<std::string> GameFileSource::readLoose(
     }
     const auto after = statGameFile(*file);
     auto bytes = std::move(*text);
-    const auto stable =
-      before && after && *before == *after && after->size == bytes.size();
+    const auto stable = before && after && *before == *after
+                        && std::min(after->size, std::uint64_t(maxBytes)) == bytes.size();
     if (stable || attempt + 1 == MaxLooseReadAttempts)
     {
       if (!stable)
@@ -445,7 +449,7 @@ std::optional<std::string> GameFileSource::readLoose(
         found->kind = GameFileProbe::Kind::Loose;
         found->container.clear();
         found->time = after ? after->unixSeconds : 0;
-        found->size = bytes.size();
+        found->size = after ? after->size : bytes.size();
         found->changeStamp = after ? after->time : 0;
       }
       return bytes;
@@ -455,7 +459,10 @@ std::optional<std::string> GameFileSource::readLoose(
 }
 
 std::optional<std::string> GameFileSource::read(
-  const std::string& path, GameFileProbe* found, const bool decl)
+  const std::string& path,
+  GameFileProbe* found,
+  const bool decl,
+  const std::size_t maxBytes)
 {
   if (found)
   {
@@ -468,7 +475,7 @@ std::optional<std::string> GameFileSource::read(
   }
 
   // fs_resourceLoadPriority 0: the search paths, then the .pk4 files, then the resources
-  if (auto text = readLoose(*relative, found, decl))
+  if (auto text = readLoose(*relative, found, decl, maxBytes))
   {
     return text;
   }
@@ -494,6 +501,11 @@ std::optional<std::string> GameFileSource::read(
       // a zip's file has time 0 (idFile_InZip::Timestamp)
       *found = GameFileProbe{GameFileProbe::Kind::Pk4, pk4.name, 0, text->size(), 0};
     }
+    if (text && text->size() > maxBytes)
+    {
+      // a zip entry inflates from its start: read whole, then cut
+      text->resize(maxBytes);
+    }
     return text;
   }
 
@@ -515,21 +527,22 @@ std::optional<std::string> GameFileSource::read(
       return GameFile::open(resources.container.path())
              | kdl::transform([&](GameFile file) { resources.open = std::move(file); });
     };
-    auto text =
-      openContainer()
-      | kdl::and_then([&]() { return resources.container.read(*entry, *resources.open); })
-      | kdl::transform(
-        [](std::string bytes) { return std::optional<std::string>{std::move(bytes)}; })
-      | kdl::transform_error([&](const auto& e) {
-          m_warnings.push_back(e.msg);
-          return std::optional<std::string>{};
-        })
-      | kdl::value();
+    auto text = openContainer() | kdl::and_then([&]() {
+                  return resources.container.read(*entry, *resources.open, maxBytes);
+                })
+                | kdl::transform([](std::string bytes) {
+                    return std::optional<std::string>{std::move(bytes)};
+                  })
+                | kdl::transform_error([&](const auto& e) {
+                    m_warnings.push_back(e.msg);
+                    return std::optional<std::string>{};
+                  })
+                | kdl::value();
     if (text && found)
     {
       // an inner resource has time 0 (idFile_InnerResource)
       *found = GameFileProbe{
-        GameFileProbe::Kind::Resources, resources.container.name(), 0, text->size(), 0};
+        GameFileProbe::Kind::Resources, resources.container.name(), 0, entry->length, 0};
     }
     return text;
   }
@@ -554,6 +567,12 @@ std::optional<std::string> GameFileSource::readGameFile(
   const std::string& path, GameFileProbe* found)
 {
   return read(path, found, false);
+}
+
+std::optional<std::string> GameFileSource::readGameFileHead(
+  const std::string& path, const std::size_t maxBytes, GameFileProbe* found)
+{
+  return read(path, found, false, maxBytes);
 }
 
 GameFileProbe GameFileSource::probeFile(const std::string& path) const

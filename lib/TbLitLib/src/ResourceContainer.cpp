@@ -279,6 +279,12 @@ const ResourceEntry* ResourceContainer::find(const std::string_view gamePath) co
 Result<std::string> ResourceContainer::read(
   const ResourceEntry& entry, const GameFile& file) const
 {
+  return read(entry, file, std::size_t(entry.length));
+}
+
+Result<std::string> ResourceContainer::read(
+  const ResourceEntry& entry, const GameFile& file, const std::size_t maxBytes) const
+{
   const auto stat = statGameFile(m_path);
   if (
     !stat || stat->size != m_fileSize || stat->time != m_fileTime
@@ -291,7 +297,7 @@ Result<std::string> ResourceContainer::read(
   }
 
   auto bytes = std::string{};
-  bytes.resize(entry.length);
+  bytes.resize(std::min(std::size_t(entry.length), maxBytes));
   return readExactly(
            file,
            entry.offset,

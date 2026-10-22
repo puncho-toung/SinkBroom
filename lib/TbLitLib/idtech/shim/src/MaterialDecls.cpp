@@ -286,6 +286,17 @@ std::optional<std::string> DeclSource::readGameFile(
   return text;
 }
 
+std::optional<std::string> DeclSource::readGameFileHead(
+  const std::string& path, const std::size_t maxBytes, GameFileProbe* found)
+{
+  auto bytes = readGameFile(path, found);
+  if (bytes && bytes->size() > maxBytes)
+  {
+    bytes->resize(maxBytes);
+  }
+  return bytes;
+}
+
 std::optional<std::string> DeclSource::gameRelativePath(const std::string&) const
 {
   return std::nullopt;
@@ -925,6 +936,11 @@ std::vector<DeclMessage> MaterialDecls::takeMessages()
 {
   return m_registry ? m_registry->takeMessages()
                     : std::exchange(m_constructionMessages, {});
+}
+
+std::vector<DeclMessage> MaterialDecls::takeMessagesFrom(const std::size_t first)
+{
+  return m_registry ? m_registry->takeMessagesFrom(first) : std::vector<DeclMessage>{};
 }
 
 } // namespace tb::lit

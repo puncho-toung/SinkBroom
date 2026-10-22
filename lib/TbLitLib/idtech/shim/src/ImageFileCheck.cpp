@@ -84,8 +84,17 @@ std::uint32_t be32(const std::string_view bytes, const std::size_t at)
   return (be16(bytes, at) << 16) | be16(bytes, at + 2);
 }
 
-Problem sizeProblem(const std::uint64_t width, const std::uint64_t height)
+// the size a header declares, kept by the check that reads it
+struct DeclaredSize
 {
+  std::uint64_t width = 0;
+  std::uint64_t height = 0;
+};
+
+Problem sizeProblem(
+  DeclaredSize& size, const std::uint64_t width, const std::uint64_t height)
+{
+  size = DeclaredSize{width, height};
   if (width < 1 || height < 1)
   {
     return "it declares an empty image (" + std::to_string(width) + " x "
@@ -112,7 +121,7 @@ Problem sizeProblem(const std::uint64_t width, const std::uint64_t height)
  * packet's bytes inside the file, up to the last pixel (the decoder stops there, inside a
  * packet if need be).
  */
-Problem tgaProblem(const std::string_view bytes)
+Problem tgaProblem(const std::string_view bytes, DeclaredSize& size)
 {
   if (bytes.size() < 18)
   {
@@ -144,7 +153,7 @@ Problem tgaProblem(const std::string_view bytes)
     return "its TGA pixel size " + std::to_string(pixelSize) + " is not "
            + (imageType == 3 ? "8, 24 or 32" : "24 or 32");
   }
-  if (const auto problem = sizeProblem(width, height))
+  if (const auto problem = sizeProblem(size, width, height))
   {
     return problem;
   }
@@ -204,7 +213,7 @@ Problem tgaProblem(const std::string_view bytes)
  * 1032 bytes of each (258-byte matches in 2 bits), so a header that lies about the size
  * is refused before stb_image allocates for it.
  */
-Problem pngProblem(const std::string_view bytes)
+Problem pngProblem(const std::string_view bytes, DeclaredSize& size)
 {
   static constexpr unsigned char Signature[] = {137, 80, 78, 71, 13, 10, 26, 10};
   if (bytes.size() < 8 || memcmp(bytes.data(), Signature, 8) != 0)
@@ -247,7 +256,7 @@ Problem pngProblem(const std::string_view bytes)
       height = be32(data, 4);
       depth = std::uint8_t(data[8]);
       const auto color = std::uint8_t(data[9]);
-      if (const auto problem = sizeProblem(width, height))
+      if (const auto problem = sizeProblem(size, width, height))
       {
         return problem;
       }
@@ -319,7 +328,7 @@ Problem pngProblem(const std::string_view bytes)
  * refused rather than decoded from zeros. Every 8×8 block of the most finely sampled
  * component costs at least one Huffman bit, so the declared size must fit the scan bytes.
  */
-Problem jpgProblem(const std::string_view bytes)
+Problem jpgProblem(const std::string_view bytes, DeclaredSize& size)
 {
   if (
     bytes.size() < 4 || std::uint8_t(bytes[0]) != 0xFF || std::uint8_t(bytes[1]) != 0xD8)
@@ -387,7 +396,7 @@ Problem jpgProblem(const std::string_view bytes)
       }
       height = be16(segment, 1);
       width = be16(segment, 3);
-      if (const auto problem = sizeProblem(width, height))
+      if (const auto problem = sizeProblem(size, width, height))
       {
         return problem;
       }
@@ -511,7 +520,7 @@ std::string hdrToken(const std::string_view bytes, std::size_t& at)
  * at a scanline without that header. A file stb_image reads this way always gives three
  * channels, so LoadHDR's channel test (M-IMG-FATAL-09) cannot fail, and no read runs out.
  */
-Problem hdrProblem(const std::string_view bytes)
+Problem hdrProblem(const std::string_view bytes, DeclaredSize& size)
 {
   auto at = std::size_t(0);
   const auto magic = hdrToken(bytes, at);
@@ -558,7 +567,7 @@ Problem hdrProblem(const std::string_view bytes)
   {
     return std::string{"it declares an empty image"};
   }
-  if (const auto problem = sizeProblem(std::uint64_t(width), std::uint64_t(height)))
+  if (const auto problem = sizeProblem(size, std::uint64_t(width), std::uint64_t(height)))
   {
     return problem;
   }
@@ -648,7 +657,7 @@ int exrLinesPerBlock(const int compression)
  * file cut short is refused rather than reaching LoadEXR's error return
  * (M-IMG-FATAL-08). Tiled images are left to tinyexr's own offset checks.
  */
-Problem exrProblem(const std::string_view bytes)
+Problem exrProblem(const std::string_view bytes, DeclaredSize& size)
 {
   const auto* memory = reinterpret_cast<const unsigned char*>(bytes.data());
   auto version = EXRVersion{};
@@ -698,7 +707,7 @@ Problem exrProblem(const std::string_view bytes)
     problem = "its data window is empty";
   }
   else if (
-    const auto sizeError = sizeProblem(std::uint64_t(width), std::uint64_t(height)))
+    const auto sizeError = sizeProblem(size, std::uint64_t(width), std::uint64_t(height)))
   {
     problem = sizeError;
   }
@@ -754,8 +763,11 @@ bool isImageLoaderFile(const std::string_view path)
          || extension == "exr" || extension == "hdr";
 }
 
-std::optional<std::string> imageFileProblem(
-  const std::string_view path, const std::string_view bytes)
+namespace
+{
+
+Problem checkImageFile(
+  const std::string_view path, const std::string_view bytes, DeclaredSize& size)
 {
   const auto extension = lowerExtension(path);
   if (!isImageLoaderFile(path))
@@ -767,11 +779,37 @@ std::optional<std::string> imageFileProblem(
     return std::string{"it is empty"};
   }
   // the imageLoaders table (Image_files.cpp:959-966): the extension picks the loader
-  return extension == "tga"   ? tgaProblem(bytes)
-         : extension == "png" ? pngProblem(bytes)
-         : extension == "jpg" ? jpgProblem(bytes)
-         : extension == "exr" ? exrProblem(bytes)
-                              : hdrProblem(bytes);
+  return extension == "tga"   ? tgaProblem(bytes, size)
+         : extension == "png" ? pngProblem(bytes, size)
+         : extension == "jpg" ? jpgProblem(bytes, size)
+         : extension == "exr" ? exrProblem(bytes, size)
+                              : hdrProblem(bytes, size);
+}
+
+} // namespace
+
+std::optional<std::string> imageFileProblem(
+  const std::string_view path, const std::string_view bytes)
+{
+  auto size = DeclaredSize{};
+  return checkImageFile(path, bytes, size);
+}
+
+ImageFileHeader imageFileHeader(const std::string_view path, const std::string_view bytes)
+{
+  auto size = DeclaredSize{};
+  auto header = ImageFileHeader{};
+  header.problem = checkImageFile(path, bytes, size);
+  if (!header.problem && !isImageLoaderFile(path))
+  {
+    header.problem = "no image loader reads it";
+  }
+  if (!header.problem)
+  {
+    header.width = int(size.width);
+    header.height = int(size.height);
+  }
+  return header;
 }
 
 } // namespace tb::lit

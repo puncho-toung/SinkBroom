@@ -99,6 +99,9 @@ public:
    * table was read or the entry no longer fits in it.
    */
   Result<std::string> read(const ResourceEntry& entry, const GameFile& file) const;
+  // LP1c.2: the entry's first maxBytes bytes (all of a shorter one), checked as read is
+  Result<std::string> read(
+    const ResourceEntry& entry, const GameFile& file, std::size_t maxBytes) const;
 
   // the file's size and time when the table was read
   std::uint64_t fileSize() const;

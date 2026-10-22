@@ -20,6 +20,7 @@
 #include "lit/MaterialService.h"
 
 #include "StackThread.h"
+#include "lit/EditorImageSize.h"
 #include "lit/ImageFallback.h"
 #include "lit/MapBake.h"
 
@@ -298,6 +299,12 @@ private:
   // C21, D52: the last Ready editor-image size of each material, by canonical name, kept
   // across reloads, so that a Default size never replaces it
   std::unordered_map<std::string, EditorImageSize> m_readySizes;
+  // LP1c.2 (C21, LP1c.1's follow-up 5): the loose files each material's editor-image size
+  // and each image slot was read from, as they were then; the poll re-reads a size or a
+  // slot when one of its files changes
+  std::unordered_map<std::string, std::vector<FoundGameFile>> m_sizeFiles;
+  std::unordered_map<MaterialImageKey, std::vector<FoundGameFile>, MaterialImageKeyHash>
+    m_imageFiles;
   // the loose files' times when the last build ended
   std::vector<DeclFileTime> m_stamp;
   Clock::time_point m_nextPoll;
@@ -722,7 +729,7 @@ private:
   {
     auto size = m_shared.options.editorImageSizeForTesting
                   ? m_shared.options.editorImageSizeForTesting(*entry)
-                  : entry->editorImageSize;
+                  : measure(*entry);
     if (size.state == EditorImageSize::State::Ready)
     {
       m_readySizes.insert_or_assign(entry->name, size);
@@ -731,7 +738,7 @@ private:
     {
       size = kept->second;
     }
-    if (size == entry->editorImageSize)
+    if (size == entry->editorImageSize && size.reason == entry->editorImageSize.reason)
     {
       return entry;
     }
@@ -739,6 +746,135 @@ private:
     auto copy = std::make_shared<MaterialEntry>(*entry);
     copy->editorImageSize = size;
     return copy;
+  }
+
+  /**
+   * LP1c.2 (C21): the editor-image size of a material, measured on this thread
+   * (editorImageSize): eagerly, when the entry is published; silent, so the copied code's
+   * messages while it measures are dropped (the image loads report theirs when an image
+   * is asked for). Its loose files are kept for the poll. Without a registry, the
+   * registry's Default.
+   */
+  EditorImageSize measure(const MaterialEntry& entry)
+  {
+    if (!m_decls || !m_source || entry.registry != m_decls->id())
+    {
+      return entry.editorImageSize;
+    }
+    const auto messages = m_decls->messages().size();
+    auto sizing = editorImageSize(*m_decls, *m_source, entry);
+    static_cast<void>(m_decls->takeMessagesFrom(messages));
+    keepLooseFiles(m_sizeFiles, entry.name, std::move(sizing.files));
+    return sizing.size;
+  }
+
+  template <typename Map, typename Key>
+  static void keepLooseFiles(Map& map, const Key& key, std::vector<FoundGameFile> files)
+  {
+    files.erase(
+      std::remove_if(
+        files.begin(),
+        files.end(),
+        [](const auto& file) { return file.probe.kind != GameFileProbe::Kind::Loose; }),
+      files.end());
+    if (files.empty())
+    {
+      map.erase(key);
+    }
+    else
+    {
+      map.insert_or_assign(key, std::move(files));
+    }
+  }
+
+  bool changedOnDisk(const std::vector<FoundGameFile>& files) const
+  {
+    return std::any_of(files.begin(), files.end(), [&](const auto& file) {
+      return m_source->probe(file.path) != file.probe;
+    });
+  }
+
+  /**
+   * LP1c.2 (C21, LP1c.1's follow-up 5): a loose image file that changed since a size or a
+   * slot was read from it (its time, size or change stamp): the slot is read again
+   * (resolveImage), and the material's size measured again, its kept Ready size dropped
+   * so that the file's new size, or its loss, is published. True when anything was
+   * re-read.
+   */
+  bool pollImageFiles()
+  {
+    if (!m_source || !m_decls)
+    {
+      return false;
+    }
+    auto keys = std::vector<MaterialImageKey>{};
+    for (const auto& [key, files] : m_imageFiles)
+    {
+      if (changedOnDisk(files))
+      {
+        keys.push_back(key);
+      }
+    }
+    auto materials = std::vector<std::string>{};
+    for (const auto& [name, files] : m_sizeFiles)
+    {
+      if (changedOnDisk(files))
+      {
+        materials.push_back(name);
+      }
+    }
+
+    for (const auto& key : keys)
+    {
+      if (stopping())
+      {
+        return true;
+      }
+      m_working.images = m_working.images.erase(key);
+      m_imageFiles.erase(key);
+      lookUpImage(key);
+    }
+    for (const auto& name : materials)
+    {
+      if (stopping())
+      {
+        return true;
+      }
+      m_sizeFiles.erase(name);
+      m_readySizes.erase(name);
+      resize(name);
+    }
+    return !keys.empty() || !materials.empty();
+  }
+
+  // the material's entry published again with a size measured again, under every name
+  // that shares it
+  void resize(const std::string& material)
+  {
+    const auto* published = m_working.materials.find(material);
+    if (!published || !(*published)->entry)
+    {
+      return;
+    }
+    const auto old = (*published)->entry;
+    auto entry = sized(old);
+    if (entry == old)
+    {
+      return;
+    }
+    auto slot = std::make_shared<MaterialSlot>();
+    slot->entry = std::move(entry);
+    auto names = std::vector<std::string>{};
+    m_working.materials.forEach([&](const std::string& name, const auto& shared) {
+      if (shared->entry == old)
+      {
+        names.push_back(name);
+      }
+    });
+    for (const auto& name : names)
+    {
+      m_working.materials = m_working.materials.set(name, slot);
+    }
   }
 
   // one lookup into the working table, under the asked name and the decl's own
@@ -834,6 +970,8 @@ private:
 
   void resetWorkingTable(const std::uint64_t registry)
   {
+    // every entry is measured again when it is published
+    m_sizeFiles.clear();
     // the bakes and the image caches do not depend on the registry
     auto mapBakes = std::move(m_working.mapBakes);
     auto images = std::move(m_working.images);
@@ -1117,6 +1255,7 @@ private:
     else
     {
       *slot = resolveImage(*m_decls, *m_source, key);
+      keepLooseFiles(m_imageFiles, key, slot->files);
     }
     m_working.images =
       m_working.images.set(key, std::shared_ptr<const ImageCacheSlot>{std::move(slot)});
@@ -1260,8 +1399,11 @@ private:
       requestAutoReload();
     }
     // C10, §3.7: a bake file that changed (or failed to parse and changed since) is read
-    // again
-    if (pollMapBakes())
+    // again; LP1c.2 (C21): so is an image slot or an editor-image size whose loose file
+    // changed
+    const auto bakes = pollMapBakes();
+    const auto images = pollImageFiles();
+    if (bakes || images)
     {
       publish();
     }

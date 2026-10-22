@@ -344,6 +344,62 @@ idImage* idImageManager::ImageFromFile(
   return image;
 }
 
+// ImageManager.cpp:400-470, ImageFromFile up to its "create a new image", without a
+// record made, a load or the media print
+const idImage* idImageManager::FindImageFromFile(
+  const char* _name,
+  textureFilter_t filter,
+  textureRepeat_t repeat,
+  textureUsage_t& usage,
+  cubeFiles_t cubeMap,
+  idStr& foundName) const
+{
+  if (
+    !_name || !_name[0] || idStr::Icmp(_name, "default") == 0
+    || idStr::Icmp(_name, "_default") == 0)
+  {
+    foundName = defaultImage ? defaultImage->GetName() : "_default";
+    return defaultImage;
+  }
+  if (idStr::Icmpn(_name, "fonts", 5) == 0 || idStr::Icmpn(_name, "newfonts", 8) == 0)
+  {
+    usage = TD_FONT;
+  }
+  if (idStr::Icmpn(_name, "lights", 6) == 0)
+  {
+    usage = TD_LIGHT;
+  }
+
+  idStr name = _name;
+  for (const auto* ext : ImageFormats)
+  {
+    name.Replace(ext, "");
+  }
+  name.BackSlashesToSlashes();
+  foundName = name;
+
+  const int hash = name.FileNameHash();
+  for (int i = imageHash.First(hash); i != -1; i = imageHash.Next(i))
+  {
+    const idImage* image = images[i];
+    if (name.Icmp(image->GetName()) == 0)
+    {
+      // the built in's, like _white and _flat always match the other options
+      if (name[0] == '_')
+      {
+        return image;
+      }
+      if (image->filter != filter || image->repeat != repeat || image->usage != usage)
+      {
+        continue;
+      }
+      static_cast<void>(cubeMap);
+      return image;
+    }
+  }
+  return nullptr;
+}
+
 // ImageManager.cpp:355-390, without the generator: the record of an intrinsic name
 idImage* idImageManager::ImageFromFunction(const char* _name)
 {

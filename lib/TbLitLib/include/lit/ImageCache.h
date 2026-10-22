@@ -131,6 +131,10 @@ int engineBitsForFormat(int format);
  */
 Result<CachedImage> readBimage(std::string_view bytes);
 
+// LP1c.2 (C21): readBimage's header only (the first 36 bytes), without the level records:
+// the size, formats and time; fails as readBimage fails on a header. Pure; any thread.
+Result<CachedImage> readBimageHeader(std::string_view bytes);
+
 /**
  * BinaryImage.cpp:1085-1110: RGB565 levels stored high byte first, expanded to RGBA8 with
  * Option 1 ((5 bits × 527 + 23) >> 6, (6 bits × 259 + 33) >> 6, alpha 255), appended to
@@ -178,6 +182,10 @@ struct ImageCacheSlot
   std::string reason;
   // LP1c.2: why the source fallback made no image, "" when it made one or did not run
   std::string sourceReason;
+  // LP1c.2 (C21): every file the slot was read from or the time call found: the cache
+  // files read, the sources the fallback read; the service re-reads the slot when a
+  // loose one changes
+  std::vector<FoundGameFile> files;
 };
 
 /**

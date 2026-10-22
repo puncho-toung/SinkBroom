@@ -85,6 +85,18 @@ public:
     cubeFiles_t cubeMap = CF_2D,
     int cubeMapSize = 0);
 
+  // LP1c.2 (C21): ImageFromFile's naming and lookup without making a record: the record
+  // it would return (the default image, a built-in of the name, a record of the name and
+  // options), or null when it would make one; name and usage are what that record would
+  // get. The cube-state conflict ImageFromFile reports is not reported here.
+  const idImage* FindImageFromFile(
+    const char* name,
+    textureFilter_t filter,
+    textureRepeat_t repeat,
+    textureUsage_t& usage,
+    cubeFiles_t cubeMap,
+    idStr& foundName) const;
+
   idImage* ImageFromFunction(const char* name);
   idImage* AllocImage(const char* name);
 

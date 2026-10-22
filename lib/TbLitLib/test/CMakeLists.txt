@@ -10,6 +10,7 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/LitTestUtils.h
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CpuPool.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DeviceChoice.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EditorImageSize.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EngineGeometry.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EngineLight.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FrameLog.cpp

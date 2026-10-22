@@ -257,12 +257,13 @@ int engineBitsForFormat(const int format)
   }
 }
 
-Result<CachedImage> readBimage(const std::string_view bytes)
+namespace
 {
-  auto in = BigReader{bytes};
-  auto image = CachedImage{};
 
-  // bimageFile_t, 36 bytes (packed); the engine's Read takes a short header as it is
+// bimageFile_t, 36 bytes (packed); the engine's Read takes a short header as it is
+Result<CachedImage> readHeader(BigReader& in)
+{
+  auto image = CachedImage{};
   const auto time = in.big(8);
   const auto magic = in.int32();
   const auto textureType = in.int32();
@@ -288,6 +289,26 @@ Result<CachedImage> readBimage(const std::string_view bytes)
   image.width = *width;
   image.height = *height;
   image.numLevels = *numLevels;
+  return image;
+}
+
+} // namespace
+
+Result<CachedImage> readBimageHeader(const std::string_view bytes)
+{
+  auto in = BigReader{bytes};
+  return readHeader(in);
+}
+
+Result<CachedImage> readBimage(const std::string_view bytes)
+{
+  auto in = BigReader{bytes};
+  auto header = readHeader(in);
+  if (header.is_error())
+  {
+    return header;
+  }
+  auto image = std::move(header).value();
 
   // :1022-1026
   auto numImages = std::int64_t(image.numLevels);
@@ -387,6 +408,7 @@ ImageCacheSlot resolveImageCache(DeclSource& source, const ImageCacheName& name)
     }
     found = true;
     slot.file = file;
+    slot.files.push_back(FoundGameFile{file, origin});
     return readBimage(*bytes)
            | kdl::and_then([&](CachedImage image) -> Result<CachedImage> {
                if (engineCacheIsStale(name.sourceTime, image.sourceTime))

@@ -47,7 +47,8 @@ std::shared_ptr<const CachedImage> sourceImage(
   MaterialDecls& decls,
   const ImageCacheName& name,
   const MaterialImageKey& key,
-  std::string& why)
+  std::string& why,
+  std::vector<FoundGameFile>& files)
 {
   if (name.generated)
   {
@@ -103,6 +104,7 @@ std::shared_ptr<const CachedImage> sourceImage(
   {
     image.origin = pixels.files.front().probe;
   }
+  files.insert(files.end(), pixels.files.begin(), pixels.files.end());
   return std::make_shared<const CachedImage>(std::move(image));
 }
 
@@ -118,11 +120,13 @@ ImageCacheSlot resolveImage(
     return slot;
   }
   auto slot = resolveImageCache(source, *name.value);
+  slot.files.insert(
+    slot.files.begin(), name.value->sources.begin(), name.value->sources.end());
   if (slot.state == ImageCacheSlot::State::Ready)
   {
     return slot;
   }
-  slot.image = sourceImage(decls, *name.value, key, slot.sourceReason);
+  slot.image = sourceImage(decls, *name.value, key, slot.sourceReason, slot.files);
   return slot;
 }
 
