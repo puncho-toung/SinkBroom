@@ -106,6 +106,7 @@ private:
   // round of polls whose changes they show
   std::unordered_map<std::filesystem::path::string_type, LooseFolder> m_looseFolders;
   std::uint64_t m_looseRound = 0;
+  std::size_t m_looseListings = 0;
 
 public:
   explicit GameFileSource(
@@ -135,6 +136,8 @@ public:
   std::vector<std::string> searchOrder() const;
   // how many containers are open now
   std::size_t openContainers() const;
+  // how many times a loose folder was listed (Y.3)
+  std::size_t looseListingsForTesting() const;
 
 private:
   bool cancelled() const;

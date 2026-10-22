@@ -609,30 +609,102 @@ bool loadSinglePictureCube(
 }
 
 /**
- * LP1c fix round 2 (X.2): side 0 of a six-file cube read whole by the copied
- * R_LoadImageProgram, as R_LoadCubeImages reads it, during the image reads (so the
- * pre-validation sees its body): why it gives no picture, or nullopt. The header check
- * (cubeSideSizes) cannot see a body that is refused or fails to decode, and the copy,
- * which takes side 0's width as the cube's, would stop at side 1 and leak it.
+ * LP1c fix round 3 (Y.1): Image_files.cpp:1156-1201 and :1317-1403, R_LoadCubeImages for
+ * a cube of six files (CF_NATIVE, CF_CAMERA, CF_QUAKE1, CF_SINGLE without a cube size),
+ * transcribed with one change: the side that stops the loop on its size is freed as well,
+ * where the engine leaks it (M-IMG-DEFECT-03). A side's load can find another file than
+ * the one whose header the pre-check read (a refused .tga, then a sibling .png of another
+ * size), so only freeing it here keeps every path free of leaks. The sides go to pics;
+ * false, with nothing left allocated, when a side is missing or of another size.
  */
-std::optional<std::string> sideZeroProblem(
-  const std::string& imageName, const cubeFiles_t cubeFiles)
+bool loadSixFileCube(
+  const char* imgName,
+  const cubeFiles_t extensions,
+  byte* pics[6],
+  int* outSize,
+  ID_TIME_T* timestamp)
 {
+  int i, j;
+  const char* const* sides = cubeSideNames(extensions);
   char fullName[MAX_IMAGE_NAME];
-  idStr::snPrintf(
-    fullName, sizeof(fullName), "%s%s", imageName.c_str(), cubeSideNames(cubeFiles)[0]);
-  byte* pic = nullptr;
-  int width = 0;
-  int height = 0;
-  ID_TIME_T time = 0;
-  R_LoadImageProgram(fullName, &pic, &width, &height, &time);
-  if (!pic)
+  int width = 0, height = 0, size = 0;
+
+  memset(pics, 0, 6 * sizeof(pics[0]));
+  *timestamp = 0;
+
+  for (i = 0; i < 6; i++)
   {
-    return "its side " + std::string{fullName}
-           + " is refused or cannot be decoded (or the session stopped)";
+    idStr::snPrintf(fullName, sizeof(fullName), "%s%s", imgName, sides[i]);
+
+    ID_TIME_T thisTime;
+    R_LoadImageProgram(fullName, &pics[i], &width, &height, &thisTime);
+
+    if (thisTime == FILE_NOT_FOUND_TIMESTAMP)
+    {
+      break;
+    }
+    if (i == 0)
+    {
+      size = width;
+    }
+    if (width != size || height != size)
+    {
+      common->Warning("Mismatched sizes on cube map '%s'", imgName);
+      break;
+    }
+    if (thisTime > *timestamp)
+    {
+      *timestamp = thisTime;
+    }
+    if (extensions == CF_CAMERA)
+    {
+      // convert from "camera" images to native cube map images
+      switch (i)
+      {
+      case 0: // forward
+        R_RotatePic(pics[i], width);
+        break;
+      case 1: // back
+        R_RotatePic(pics[i], width);
+        R_HorizontalFlip(pics[i], width, height);
+        R_VerticalFlip(pics[i], width, height);
+        break;
+      case 2: // left
+        R_VerticalFlip(pics[i], width, height);
+        break;
+      case 3: // right
+        R_HorizontalFlip(pics[i], width, height);
+        break;
+      case 4: // up
+        R_RotatePic(pics[i], width);
+        break;
+      case 5: // down
+        R_RotatePic(pics[i], width);
+        break;
+      }
+    }
   }
-  R_StaticFree(pic);
-  return std::nullopt;
+
+  if (i != 6)
+  {
+    // we had an error, so free everything: the sides before i, and (Y.1) the side i that
+    // stopped the loop, which the engine leaks
+    for (j = 0; j < i; j++)
+    {
+      R_StaticFree(pics[j]);
+      pics[j] = nullptr;
+    }
+    if (pics[i])
+    {
+      R_StaticFree(pics[i]);
+      pics[i] = nullptr;
+    }
+    *timestamp = 0;
+    return false;
+  }
+
+  *outSize = size;
+  return true;
 }
 
 } // namespace
@@ -832,22 +904,13 @@ SourceLoad MaterialDecls::loadImagePixels(
         load.error = "Couldn't load cube image: " + name.imageName + " (" + why + ")";
       }
     }
-    else if (const auto side0 = sideZeroProblem(name.imageName, cubeFiles))
-    {
-      // X.2: side 0 decoded whole first, so that the copy never stops at side 1 with
-      // side 0 empty, which leaks side 1 (M-IMG-DEFECT-03)
-      idLib::Warning("Couldn't load cube image: %s", name.imageName.c_str());
-      load.error = "Couldn't load cube image: " + name.imageName + " (" + *side0 + ")";
-    }
     else
     {
-      loaded = R_LoadCubeImages(
-        name.imageName.c_str(), cubeFiles, pics, &size, &sourceFileTime, cubeMapSize);
+      // Y.1: the six-file loop, transcribed: a side that stops it is freed too
+      loaded =
+        loadSixFileCube(name.imageName.c_str(), cubeFiles, pics, &size, &sourceFileTime);
       if (!loaded)
       {
-        // R_LoadCubeImages freed the sides it loaded before it stopped (a side refused by
-        // the pre-validation reads as missing, as every image read does once the registry
-        // is stopping): nothing is left to free here (S2.1)
         idLib::Warning("Couldn't load cube image: %s", name.imageName.c_str());
         load.error = "Couldn't load cube image: " + name.imageName;
       }

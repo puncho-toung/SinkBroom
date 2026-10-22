@@ -175,6 +175,9 @@ struct GameFileSource::Pk4
   // the zip file system lists them, and the path to open each with
   std::vector<std::string> names;
   std::unordered_map<std::string, std::filesystem::path> index;
+  // Y.2: the file's change stamp and size when its directory was read
+  std::int64_t stamp = 0;
+  std::uint64_t size = 0;
   // open during a read batch only
   std::unique_ptr<fs::ZipFileSystem> open;
 };
@@ -334,6 +337,11 @@ std::unique_ptr<GameFileSource::Pk4> GameFileSource::readPk4(const std::string& 
   auto pk4 = std::make_unique<Pk4>();
   pk4->name = name;
   pk4->path = m_base / *path;
+  if (const auto stat = statGameFile(pk4->path))
+  {
+    pk4->stamp = stat->time;
+    pk4->size = stat->size;
+  }
 
   try
   {
@@ -548,6 +556,8 @@ std::optional<std::string> GameFileSource::read(
     {
       // a zip's file has time 0 (idFile_InZip::Timestamp)
       *found = GameFileProbe{GameFileProbe::Kind::Pk4, pk4.name, 0, text->size(), 0};
+      found->containerStamp = pk4.stamp;
+      found->containerSize = pk4.size;
     }
     if (text && text->size() > maxBytes)
     {
@@ -600,6 +610,8 @@ std::optional<std::string> GameFileSource::read(
       // an inner resource has time 0 (idFile_InnerResource)
       *found = GameFileProbe{
         GameFileProbe::Kind::Resources, resources.container.name(), 0, entry->length, 0};
+      found->containerStamp = resources.container.fileTime();
+      found->containerSize = resources.container.fileSize();
     }
     return text;
   }
@@ -650,9 +662,12 @@ GameFileSource::LooseFolder& GameFileSource::looseFolder(
   const auto exists = !ec && std::filesystem::is_directory(path, ec) && !ec;
   // X.10: a folder listed within 2 s of its time may have had a file added in the same
   // tick of a coarse file-system clock (FAT, HFS+, network shares): listed again
-  const auto recent = exists && entry.listed - time < std::chrono::seconds{2};
+  // Y.3: a time ahead of the clock (a share's skew) counts as listed once, not as recent
+  const auto recent =
+    exists && time <= entry.listed && entry.listed - time < std::chrono::seconds{2};
   if (!listed || exists != entry.exists || (exists && time != entry.time) || recent)
   {
+    ++m_looseListings;
     entry.listed = std::filesystem::file_time_type::clock::now();
     entry.names.clear();
     entry.exists = exists;
@@ -695,6 +710,11 @@ void GameFileSource::looseFilesMayHaveChanged()
   ++m_looseRound;
 }
 
+std::size_t GameFileSource::looseListingsForTesting() const
+{
+  return m_looseListings;
+}
+
 GameFileProbe GameFileSource::probeFile(const std::string& path)
 {
   const auto relative = checkedRelativePath(path);
@@ -726,15 +746,21 @@ GameFileProbe GameFileSource::probeFile(const std::string& path)
   {
     if ((*it)->index.count(canonical))
     {
-      return GameFileProbe{GameFileProbe::Kind::Pk4, (*it)->name, 0, 0, 0};
+      auto found = GameFileProbe{GameFileProbe::Kind::Pk4, (*it)->name, 0, 0, 0};
+      found.containerStamp = (*it)->stamp;
+      found.containerSize = (*it)->size;
+      return found;
     }
   }
   for (auto it = m_resources.rbegin(); it != m_resources.rend(); ++it)
   {
     if (const auto* entry = (*it)->container.find(canonical))
     {
-      return GameFileProbe{
+      auto found = GameFileProbe{
         GameFileProbe::Kind::Resources, (*it)->container.name(), 0, entry->length, 0};
+      found.containerStamp = (*it)->container.fileTime();
+      found.containerSize = (*it)->container.fileSize();
+      return found;
     }
   }
   return {};

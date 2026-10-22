@@ -970,14 +970,16 @@ private:
   /**
    * A file found (or missed) as it was then, against what the source's probe finds now:
    * another kind (a loose file over a container entry, X.5; a file that appeared or
-   * went), another container, another time, and for a loose file another size or change
-   * stamp. A container entry's size is not compared: a read gives a .pk4 entry's size, a
-   * probe 0.
+   * went), another container, another time, for a container entry another stamp or size
+   * of the container file (one rebuilt in place, Y.2), and for a loose file another size
+   * or change stamp. A container entry's own size is not compared: a read gives a .pk4
+   * entry's size, a probe 0.
    */
   static bool sameFile(const GameFileProbe& then, const GameFileProbe& now)
   {
     return then.kind == now.kind && then.container == now.container
-           && then.time == now.time
+           && then.time == now.time && then.containerStamp == now.containerStamp
+           && then.containerSize == now.containerSize
            && (then.kind != GameFileProbe::Kind::Loose
                || (then.size == now.size && then.changeStamp == now.changeStamp));
   }

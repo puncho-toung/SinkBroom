@@ -427,6 +427,14 @@ TEST_CASE("ImageFallback, a cube that fails part-way frees each side once (S2.1)
   // (chunks and sizes) passes it
   broken[broken.find("IDAT") + 5] ^= 0x55;
   game.file("broken0_px.png", broken);
+  // Y.1: a side whose .tga has a good 8 x 8 header over run-length data that runs out,
+  // beside a 4 x 4 .png the copied loop falls through to: side 0, and side 3
+  cubeSides(game, "sib0", all, 8);
+  game.file("sib0_px.tga", garbage);
+  game.file("sib0_px.png", pngFile(flat(4, 4, 1, 2, 3)));
+  cubeSides(game, "sib3", all, 8);
+  game.file("sib3_ny.tga", garbage);
+  game.file("sib3_ny.png", pngFile(flat(4, 4, 1, 2, 3)));
   // X.1: one picture cut into six sides (cubeMapSingle with a size, a panorama): missing,
   // refused (16 bits), undecodable, and a good one
   auto sixteen = tgaFile(flat(16, 12, 1, 2, 3), 32);
@@ -486,7 +494,14 @@ TEST_CASE("ImageFallback, a cube that fails part-way frees each side once (S2.1)
   SECTION("X.2: side 0 refused or undecodable behind a good header: nothing leaked")
   {
     CHECK_THAT(failed("refused0"), Catch::Matchers::ContainsSubstring("refused0_px"));
-    CHECK_THAT(failed("broken0"), Catch::Matchers::ContainsSubstring("broken0_px"));
+    CHECK_THAT(
+      failed("broken0"), Catch::Matchers::ContainsSubstring("Couldn't load cube image"));
+  }
+
+  SECTION("Y.1: a side's .tga refused, a sibling of another size: every side freed")
+  {
+    CHECK_THAT(failed("sib0"), Catch::Matchers::ContainsSubstring("sib0_px.tga"));
+    CHECK_THAT(failed("sib3"), Catch::Matchers::ContainsSubstring("sib3_ny.tga"));
   }
 
   SECTION("X.1: a picture cut into sides that is missing, refused or undecodable")
@@ -553,7 +568,7 @@ TEST_CASE("ImageFallback, a cube that fails part-way frees each side once (S2.1)
   {
     const auto cycle = [&] {
       for (const auto* name :
-           {"five", "mixed", "refused", "stopped", "refused0", "broken0"})
+           {"five", "mixed", "refused", "stopped", "refused0", "broken0", "sib0", "sib3"})
       {
         static_cast<void>(failed(name));
         static_cast<void>(sized(name));

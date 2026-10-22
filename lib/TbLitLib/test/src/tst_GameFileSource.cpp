@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -389,6 +390,29 @@ TEST_CASE("GameFileSource")
     CHECK(decls.declFileCount() == 10);
     CHECK(decls.declFolders().size() == 8u);
   }
+}
+
+TEST_CASE("GameFileSource lists a folder dated ahead of the clock once (Y.3)")
+{
+  const auto env = fs::TestEnvironment{};
+  const auto folder = env.dir() / "base" / "ahead";
+  std::filesystem::create_directories(folder);
+  auto ec = std::error_code{};
+  std::filesystem::last_write_time(
+    folder, std::filesystem::file_time_type::clock::now() + std::chrono::hours{1}, ec);
+  REQUIRE_FALSE(ec);
+
+  auto source = GameFileSource{env.dir()};
+  CHECK_FALSE(source.probe("ahead/a.tga").exists());
+  const auto listed = source.looseListingsForTesting();
+  CHECK(listed >= 1u);
+  for (auto round = 0; round < 3; ++round)
+  {
+    source.looseFilesMayHaveChanged();
+    CHECK_FALSE(source.probe("ahead/a.tga").exists());
+  }
+  // its time did not change and lies ahead: never "recent", so never listed again
+  CHECK(source.looseListingsForTesting() == listed);
 }
 
 TEST_CASE("GameFileSource with a corrupt container")

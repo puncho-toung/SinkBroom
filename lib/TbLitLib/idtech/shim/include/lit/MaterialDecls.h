@@ -91,6 +91,12 @@ struct GameFileProbe
   // a loose file's modification time in the file system's finest unit, which tells two
   // saves within one second apart; 0 otherwise. For polling only, never an engine time
   std::int64_t changeStamp = 0;
+  // LP1c fix round 3 (Y.2): for a container entry, the container file's own change stamp
+  // and size when the source read its table, so that a container rebuilt in place reads
+  // as changed after a reload (the entry's time is 0); 0 otherwise. For polling only, not
+  // compared by ==
+  std::int64_t containerStamp = 0;
+  std::uint64_t containerSize = 0;
 
   bool exists() const;
   bool operator==(const GameFileProbe& other) const;
@@ -841,11 +847,12 @@ public:
    * messages in its result instead of the registry's (the editor-image sizes, C21). Parse
    * thread (C20); one image's files at most, so a stop waits for one image (R5.20).
    *
-   * LP1c fix (S2.1): before the copied R_LoadCubeImages reads a six-file cube's pixels,
-   * its sides are checked by their headers (cubeSideSizes): a side missing or of another
-   * size fails the load without the copy, which would leak the mismatched side
-   * (M-IMG-DEFECT-02). When the copy returns false it has freed the sides it loaded
-   * itself, and nothing more is freed; a loaded cube of side 0 is freed whole.
+   * LP1c fix (S2.1, round 2 X.1, round 3 Y.1): a cube's pixels never go through the
+   * copied R_LoadCubeImages: its six-file loop and its single-picture branches run as
+   * transcriptions in the shim that free every side they loaded when they fail, the
+   * mismatched one included (M-IMG-DEFECT-03, -04), and check for a missing picture. A
+   * six-file cube's sides are checked by their headers first (cubeSideSizes), which fails
+   * a missing side or one of another size early; a loaded cube of side 0 is freed whole.
    */
   SourceLoad loadImagePixels(const ImageCacheName& name, int cubeMapSize, bool quiet);
 

@@ -1298,6 +1298,39 @@ TEST_CASE("MaterialService, the LP1c fix round's work items (S2.2-S2.5, S3.13)")
     CHECK(again->findImage(second)->image->width == 32);
   }
 
+  SECTION("Y.2: a container rebuilt in place drops its images at a reload")
+  {
+    const auto game = ImageServiceGame{1};
+    const auto pack = game.base() / "pack.resources";
+    writeTextFile(
+      pack,
+      resourcesBytes(
+        {{"textures/fix/m0.tga", test::tgaFile(test::gradient(16, 16), 32)}}));
+    auto service = start(game.options(0ms));
+    const auto key = diffuseKey("m0");
+    static_cast<void>(service->image(key));
+    const auto table = service->waitForTableForTesting(
+      [&](const MaterialTable& t) { return t.findImage(key) != nullptr; }, Timeout);
+    REQUIRE(table->findImage(key)->image);
+    CHECK(table->findImage(key)->image->width == 16);
+
+    // the container rebuilt with the image changed, in place, then a reload
+    writeTextFile(
+      pack,
+      resourcesBytes(
+        {{"textures/fix/m0.tga", test::tgaFile(test::gradient(32, 16), 32)}}));
+    bumpModificationTime(pack);
+    service->reload();
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.builds == 2u && s.idle; }, Timeout));
+    CHECK_FALSE(service->table()->findImage(key));
+    static_cast<void>(service->image(key));
+    const auto again = service->waitForTableForTesting(
+      [&](const MaterialTable& t) { return t.findImage(key) != nullptr; }, Timeout);
+    REQUIRE(again->findImage(key)->image);
+    CHECK(again->findImage(key)->image->width == 32);
+  }
+
   SECTION("S3.13: a bake read that throws answers its ticket with a failed slot")
   {
     class ThrowingBakeSource : public MemoryDeclSource
