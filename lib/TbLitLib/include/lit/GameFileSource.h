@@ -35,22 +35,6 @@
 namespace tb::lit
 {
 
-// where a game file was found (for the tests and the log)
-struct GameFileOrigin
-{
-  enum class Kind
-  {
-    Loose,
-    Pk4,
-    Resources,
-  };
-
-  Kind kind = Kind::Loose;
-  // the container's name as the engine registers it ("_rbdoom_core.pk4",
-  // "maps/admin.resources"); empty for a loose file
-  std::string container;
-};
-
 /**
  * The game's files as the engine's file system finds them (C8, C1, D23, D55): every game
  * file the preview reads, the decls, the image caches, the bakes and the .proc/.bproc,
@@ -147,8 +131,6 @@ public:
   bool changedWhileRead() const override;
   std::size_t containerCount() const override;
 
-  // the source that a read of path finds, or nullopt
-  std::optional<GameFileOrigin> origin(const std::string& path);
   // the containers in the order a read searches them, the first searched first
   std::vector<std::string> searchOrder() const;
   // how many containers are open now

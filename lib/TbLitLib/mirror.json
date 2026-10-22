@@ -2023,7 +2023,7 @@
           "file": "lib/TbLitLib/idtech/engine/renderer/Image_process.cpp"
         }
       ],
-      "note": "814 of the file's 1167 lines, in 10 ranges, each preceded by one marker line. LP1c.2 added the mip functions the Load2DFromMemory and LoadCubeFromMemory mirrors call (M-IMG-07) and the flips, rotation and cube-side generators the copied R_LoadCubeImages calls; the rest is M-IMG-NC-01"
+      "note": "809 of the file's 1168 lines, in 10 ranges, each preceded by one marker line. LP1c.2 added the mip functions the Load2DFromMemory and LoadCubeFromMemory mirrors call (M-IMG-07) and the flips, rotation and cube-side generators the copied R_LoadCubeImages calls; the rest is M-IMG-NC-01"
     },
     {
       "id": "M-ID-PART-04",
@@ -2608,7 +2608,7 @@
           "why": "W.8 (round 2): an explicit /OPT:REF also folds identical functions (/OPT:ICF) unless /OPT:NOICF is given. Folded functions share one address, so a cpptrace stack trace from the stripped PDB can name the folded twin, and pointer-to-member comparisons of identical bodies compare equal (Qt's PMF-based disconnect). NOICF keeps every function apart; in the links without /DEBUG it turns off the folding they had by default"
         }
       ],
-      "tls": "the six thread_local buffers of the copied Str.cpp (M-ID-STATIC-30..35, three 4 x MAX_PRINT_MSG buffers, 192 KB) are static TLS in every thread of a binary that keeps them; the copy never calls their functions. dumpbin /tls, raw data (G12, 2026-10-21): TrenchBroom.exe Release before LP1a 0x273C, a Release link of the LP1a.2 state 0x3276C (+0x30030: kept, because TrenchBroom's Release link passes /DEBUG, which turns /OPT:REF off), TbUiLibTest Release 0x2891 (linked without /DEBUG, so /OPT:REF drops them), TbLitLibTest Debug 0x39DA4, TrenchBroom.exe Debug 0x3CAE3. Fix (linkOptions): /OPT:REF /OPT:NOICF on every MSVC Release link that uses TbLitLib. Measured at round 2 (W.8): TrenchBroom.exe Release 0x273C and 21,978,112 bytes (with /OPT:REF alone, folding: 0x273C and 19,984,384 bytes; without either, 41.5 MB), TbUiLibTest Release 0x2891, TrenchBroom.exe Debug 0x3CAE3. Debug keeps the buffers: accepted",
+      "tls": "the six thread_local buffers of the copied Str.cpp (M-ID-STATIC-30..35, three 4 x MAX_PRINT_MSG buffers, 192 KB) are static TLS in every thread of a binary that keeps them; the copy never calls their functions. dumpbin /tls, raw data (G12, 2026-10-21): TrenchBroom.exe Release before LP1a 0x273C, a Release link of the LP1a.2 state 0x3276C (+0x30030: kept, because TrenchBroom's Release link passes /DEBUG, which turns /OPT:REF off), TbUiLibTest Release 0x2891 (linked without /DEBUG, so /OPT:REF drops them), TbLitLibTest Debug 0x39DA4, TrenchBroom.exe Debug 0x3CAE3. Fix (linkOptions): /OPT:REF /OPT:NOICF on every MSVC Release link that uses TbLitLib. Measured at round 2 (W.8): TrenchBroom.exe Release 0x273C and 21,978,112 bytes (with /OPT:REF alone, folding: 0x273C and 19,984,384 bytes; without either, 41.5 MB), TbUiLibTest Release 0x2891, TrenchBroom.exe Debug 0x3CAE3. Debug keeps the buffers: accepted LP1c.2: stb_image's failure reason and load flags are plain statics, not thread-local (STBI_NO_THREAD_LOCALS, M-IMG-BUILD-01), so they add nothing to the TLS block: Release TrenchBroom.exe 0x273C again (LP1c fix S1.4)",
       "notDefined": [
         {
           "name": "DMAP",
@@ -2632,7 +2632,11 @@
         },
         {
           "name": "USE_EXCEPTIONS, NOMINMAX, _CRT_SECURE_NO_DEPRECATE, _CRT_NONSTDC_NO_DEPRECATE, _CRT_SECURE_NO_WARNINGS, _MBCS, USE_NVRHI, __DOOM__, USE_DOOMCLASSIC",
-          "why": "the engine defines them, but no copied file branches on them"
+          "why": "the engine defines them; no copied file branches on them except the vendored tinyexr.h, which defines WIN32_LEAN_AND_MEAN and NOMINMAX itself before it includes windows.h (tinyexr.h:569-575), so its outcome is the same (LP1c fix S1.4)"
+        },
+        {
+          "name": "STBI_NEON",
+          "why": "the engine defines it with USE_INTRINSICS_NEON on ARM (neo/CMakeLists.txt:292-295); TbLitIdLib never does. stb_image designs its SIMD paths to give the scalar result: the NEON IDCT is bit-identical (stb_image.h:3271) and the scalar YCbCr conversion is truncated to match (stb_image.h:4540), so a JPEG decodes to the same bytes (LP1c fix S1.4)"
         }
       ],
       "flags": "STATIC, no CompilerConfig and no PrecompileStdHeaders, suppress_dependency_warnings and apply_sanitizer_options, CXX_STANDARD 17 without extensions, MSVC /bigobj in Debug and /Z7 in Release, no /Zc:__cplusplus (as the engine, so sys_assert.h picks its pre-C++11 compile_time_assert)",
@@ -9825,13 +9829,9 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
           "symbol": "idFileSystemLocal::OpenFileRead"
-        },
-        {
-          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
-          "symbol": "BufferedFile::Read"
         }
       ],
-      "note": "LP1c.1, for the loaders LP1c.2 copies: OpenFileRead reads the file whole through the source's C8 search (readGameFile) and serves it from memory as idFile_Memory does (Read copies at most the bytes left and moves past them), with the time the search found: a loose file's Unix seconds, as idFile_Permanent::Timestamp gives them, 0 in a container. The game file is closed once read (R4-3.26); CloseFile frees the object. Null for no file, a file of 2 GB or more, and once the registry's cancel flag is set. Minimal: only GetFullPath, Read, Length and Timestamp exist (M-ID-VIRT-12). LP1c.2: the copied loaders read with ReadFile, never OpenFileRead (LoadTGA, LoadSTB_RGBA8, LoadEXR and LoadHDR call ReadFile with a buffer), so BufferedFile needed nothing more (LP1c.1's follow-up 4) and OpenFileRead has no copied caller; it stays for idFile's callers to come"
+      "note": "LP1c.1, for the loaders LP1c.2 copies: OpenFileRead reads the file whole through the source's C8 search (readGameFile) and serves it from memory as idFile_Memory does (Read copies at most the bytes left and moves past them), with the time the search found: a loose file's Unix seconds, as idFile_Permanent::Timestamp gives them, 0 in a container. The game file is closed once read (R4-3.26); CloseFile frees the object. Null for no file, a file of 2 GB or more, and once the registry's cancel flag is set. Minimal: only GetFullPath, Read, Length and Timestamp exist (M-ID-VIRT-12). LP1c.2: the copied loaders read with ReadFile, never OpenFileRead (LoadTGA, LoadSTB_RGBA8, LoadEXR and LoadHDR call ReadFile with a buffer), so BufferedFile needed nothing more (LP1c.1's follow-up 4) and OpenFileRead has no copied caller; it stays for idFile's callers to come LP1c fix (S1.7): with no copied caller that runs (the loaders call ReadFile; idLexer::LoadFile, the copy's only caller, is never reached), OpenFileRead is LP1a's null stub again and BufferedFile is gone; a later copy that opens a file brings it back with its validation (D51)"
     },
     {
       "id": "M-IMG-03",
@@ -10412,7 +10412,7 @@
           "symbol": "MaterialService::Worker::pollMapBakes"
         }
       ],
-      "note": "§3.7 (LP1c.1), not in the engine: the area counts of the files that exist must agree: the grid names each area once and as many areas as the tree has, every SH probe's area is -1 or below the count; a mismatch drops the grid and the probes (no-bake behaviour) with the reason, and keeps the tree (the newest dmap's). A file that does not parse (dmap or a bake writing it) counts as no file, where the engine stops the map load at its Error; the parse thread probes the files of every bake it holds each poll and reads a changed bake again, so it is retried on the next change. A binary grid that does not parse falls back to the text"
+      "note": "§3.7 (LP1c.1), not in the engine: the area counts of the files that exist must agree: the grid names each area once and as many areas as the tree has, every SH probe's area is -1 or below the count; a mismatch drops the grid and the probes (no-bake behaviour) with the reason, and keeps the tree (the newest dmap's). A file that does not parse (dmap or a bake writing it) counts as no file, where the engine stops the map load at its Error; the parse thread probes the files of every bake it holds each poll and reads a changed bake again, so it is retried on the next change. A binary grid that does not parse falls back to the text LP1c fix (S3.12): an SH probe outside the area range drops the probes alone (shProbesError), not the grid; LP1c fix (S3 Low): a text grid's points are appended as they parse, so a count the text cannot hold allocates nothing; LP1c fix (S3.13): a bake read that throws answers its ticket with a slot that says why"
     },
     {
       "id": "M-BAKE-DIFF-03",
@@ -10630,7 +10630,7 @@
           "file": "lib/TbLitLib/idtech/shim/src/ShimImageFiles.cpp"
         }
       ],
-      "note": "LP1c.2 (§3.5, R5.6, C7): 1037 of the file's 1404 lines, in 5 ranges, each preceded by one marker line. The imageLoaders table dispatches png and jpg to LoadSTB_RGBA8, tga to LoadTGA, exr to LoadEXR and hdr to LoadHDR; all four and their helpers are copied, so no entry is stubbed. R_LoadImage replaces the shim's transcription of its time-only path (LP1c.1's M-IMG-01) and R_LoadCubeImages the transcribed cube path (M-IMG-02): their time-only paths are the engine's own and stay probe-only, because every loader's ReadFile( name, NULL, timestamp ) reaches the source's probe (M-ID-FN-27, M-FS-08); the cache-name tests prove it. Left out: lines 39-42 (stb_image_write, which no copied range calls), jpg_Error and jpg_Printf (never called), R_WriteTGA, R_WritePNG and R_WriteEXR (M-IMG-NC-01)"
+      "note": "LP1c.2 (§3.5, R5.6, C7): 1035 of the file's 1404 lines, in 5 ranges, each preceded by one marker line. The imageLoaders table dispatches png and jpg to LoadSTB_RGBA8, tga to LoadTGA, exr to LoadEXR and hdr to LoadHDR; all four and their helpers are copied, so no entry is stubbed. R_LoadImage replaces the shim's transcription of its time-only path (LP1c.1's M-IMG-01) and R_LoadCubeImages the transcribed cube path (M-IMG-02): their time-only paths are the engine's own and stay probe-only, because every loader's ReadFile( name, NULL, timestamp ) reaches the source's probe (M-ID-FN-27, M-FS-08); the cache-name tests prove it. Left out: lines 39-42 (stb_image_write, which no copied range calls), jpg_Error and jpg_Printf (never called), R_WriteTGA, R_WritePNG and R_WriteEXR (M-IMG-NC-01)"
     },
     {
       "id": "M-IMG-BUILD-01",
@@ -11080,11 +11080,20 @@
           ],
           "anchor": "the LDR/HDR gamma and scale",
           "sha256": "7f2ddb355da7bc7a2b0210e21770298cb50bbbd77705f0f3e827e81961a38022"
+        },
+        {
+          "file": "neo/libs/stb/stb_image.h",
+          "lines": [
+            6380,
+            6418
+          ],
+          "anchor": "the unpremultiply and iPhone-conversion flags",
+          "sha256": "5a5d29287389822dd6518ec278e753a0ba00833fba6371f29acfc3a70666d465"
         }
       ],
       "sinkbroom": [],
       "staticKind": "per-call scratch",
-      "reason": "stb_image's globals are constant-initialised and, with STBI_NO_THREAD_LOCALS (M-IMG-BUILD-01), process-wide: the failure reason is written by each failing call; the flip, unpremultiply and iPhone-conversion flags and the gamma and scale are written only by their setter functions, which nothing calls. Every load runs on the parse thread (C20), so the one writer is that thread"
+      "reason": "stb_image's globals are constant-initialised and, with STBI_NO_THREAD_LOCALS (M-IMG-BUILD-01), process-wide: the failure reason is written by each failing call; the flip, unpremultiply and iPhone-conversion flags and the gamma and scale are written only by their setter functions, which nothing calls. Every load runs on the parse thread (C20), so the one writer is that thread LP1c fix (S1.5): the unpremultiply and iPhone flags are at stb_image.h:6380-6418, listed now"
     },
     {
       "id": "M-IMG-STATIC-03",
@@ -11168,7 +11177,7 @@
           "symbol": "idFileSystemLocal::ReadFile"
         }
       ],
-      "note": "LP1c.2 (D51, R5.3, C17): every file a copied loader reads is validated outside the copied code before the loader sees it. The file system, between beginImageReads and endImageReads (MaterialDecls::loadImagePixels), reads it through the source's readGameFile and hands the loader nothing (-1, no buffer, FILE_NOT_FOUND_TIMESTAMP) for a file that fails, keeping the refusal once per path; a stop reads every image file as missing, never as an empty buffer. The checks follow each loader's reads: TGA - the 18-byte header, type 2, 3 or 10, no colour map, 24 or 32 bits (8 too for grey), the declared size of an uncompressed image against the bytes after the header and comment, the RLE packets walked as the decoder walks them up to the last pixel; PNG - stb_image's header rules (signature, a 13-byte IHDR first, depth 1/2/4/8/16, colour type 0/2/3/4/6, 16-bit palettes refused, methods 0, interlace 0 or 1, PLTE before IDAT for a palette, unknown critical chunks), every chunk inside the file up to IEND, and the declared pixels within 1032 bytes per IDAT byte (deflate's limit); JPG - SOI, every marker segment inside the file, a baseline or progressive 8-bit frame of 1, 3 or 4 components with sampling 1-4 and tables 0-3, each scan's entropy-coded bytes walked to the next marker, EOI reached, and at most 8 blocks per scan byte (a block of the finest component costs at least one Huffman bit); EXR - tinyexr's ParseEXRVersionFromMemory and ParseEXRHeaderFromMemory, single part and not deep, one channel or R, G and B (what LoadEXRFromMemory needs), for a scanline image the offset table and every block inside the file; HDR - stb_image's identifier, header with FORMAT=32-bit_rle_rgbe, '-Y h +X w' line, and every pixel byte stb_image reads (flat, run-length scanlines, the flat fallback), so stb_image always decodes it to three channels. Every size: at least 1, at most 16384 a side and 8192 x 8192 in all (M-IMG-DIFF-04). An empty file fails. Tested with truncated, 16-bit, RLE-garbage and oversized TGAs, a PNG with a lying IHDR, a 0-byte file and JPGs cut short or with a 4096 x 4096 header over one block of scan data (tst_ImageFiles.cpp) LP1c fix (S3.3): a .png or .jpg is dispatched by its content as stbi__load_main dispatches it (M-IMG-DIFF-04)"
+      "note": "LP1c.2 (D51, R5.3, C17): every file a copied loader reads is validated outside the copied code before the loader sees it. The file system, between beginImageReads and endImageReads (MaterialDecls::loadImagePixels), reads it through the source's readGameFile and hands the loader nothing (-1, no buffer, FILE_NOT_FOUND_TIMESTAMP) for a file that fails, keeping the refusal once per path; a stop reads every image file as missing, never as an empty buffer. The checks follow each loader's reads: TGA - the 18-byte header, type 2, 3 or 10, no colour map, 24 or 32 bits (8 too for grey), the declared size of an uncompressed image against the bytes after the header and comment, the RLE packets walked as the decoder walks them up to the last pixel; PNG - stb_image's header rules (signature, a 13-byte IHDR first, depth 1/2/4/8/16, colour type 0/2/3/4/6, 16-bit palettes refused, methods 0, interlace 0 or 1, PLTE before IDAT for a palette, unknown critical chunks), every chunk inside the file up to IEND, and the declared pixels within 1032 bytes per IDAT byte (deflate's limit); JPG - SOI, every marker segment inside the file, a baseline or progressive 8-bit frame of 1, 3 or 4 components with sampling 1-4 and tables 0-3, each scan's entropy-coded bytes walked to the next marker, EOI reached, and at most 8 blocks per scan byte (a block of the finest component costs at least one Huffman bit); EXR - tinyexr's ParseEXRVersionFromMemory and ParseEXRHeaderFromMemory, single part and not deep, one channel or R, G and B (what LoadEXRFromMemory needs), for a scanline image the offset table and every block inside the file; HDR - stb_image's identifier, header with FORMAT=32-bit_rle_rgbe, '-Y h +X w' line, and every pixel byte stb_image reads (flat, run-length scanlines, the flat fallback), so stb_image always decodes it to three channels. Every size: at least 1, at most 16384 a side and 8192 x 8192 in all (M-IMG-DIFF-04). An empty file fails. Tested with truncated, 16-bit, RLE-garbage and oversized TGAs, a PNG with a lying IHDR, a 0-byte file and JPGs cut short or with a 4096 x 4096 header over one block of scan data (tst_ImageFiles.cpp) LP1c fix (S3.3): a .png or .jpg is dispatched by its content as stbi__load_main dispatches it (M-IMG-DIFF-04) LP1c fix (S2.8): readImageFile and the probe path catch everything, so nothing throws through a copied loader (an allocation failure reads the file as missing); ImageReads begins and ends the image reads and the recording around a load, so they end also when it throws"
     },
     {
       "id": "M-IMG-GUARD-02",
@@ -11870,6 +11879,98 @@
         }
       ],
       "note": "LP1c fix (S3.2), test only: the encoder's ALIGN16 static tables are read-only constants, constant-initialised, except SIMD_SSE2_zero (_mm_set_epi32( 0, 0, 0, 0 )), which MSVC initialises dynamically from literals at program load without allocating: an idempotent table in TbLitIdDxtTestLib, outside TbLitIdLib's objects that check_static_init.py reads, and in no product"
+    },
+    {
+      "id": "M-IMG-STATIC-05",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/libs/stb/stb_image.h",
+          "lines": [
+            6834,
+            6834
+          ],
+          "anchor": "stbi__parse_png_file, invalid_chunk",
+          "sha256": "a5cd49a99d8bb89e7d8aa878ec0236bfc40719fcfd303cbe0fde5495f5d00244"
+        },
+        {
+          "file": "neo/libs/stb/stb_image.h",
+          "lines": [
+            5921,
+            5921
+          ],
+          "anchor": "first_row_filter, the PNG decoder's read-only table",
+          "sha256": "95636e0347515dd51e39620c08191cd585476c9db9d0deb9b089df59aa7600fb"
+        },
+        {
+          "file": "neo/libs/stb/stb_image.h",
+          "lines": [
+            7049,
+            7049
+          ],
+          "anchor": "mul_table, stbi__shiftsigned's read-only table (BMP)",
+          "sha256": "69e5fc4dc9f9f0007abdb3273f89147145c03532b4a650b080696546060e4cc5"
+        },
+        {
+          "file": "neo/libs/stb/stb_image.h",
+          "lines": [
+            7055,
+            7055
+          ],
+          "anchor": "shift_table, stbi__shiftsigned's read-only table (BMP)",
+          "sha256": "318840607b9fdd89365595b63808d9af1fd1948427d0e8334a1c70c69e117990"
+        },
+        {
+          "file": "neo/libs/tinyexr/tinyexr.h",
+          "lines": [
+            2663,
+            2663
+          ],
+          "anchor": "s_error_descs (miniz), a read-only table",
+          "sha256": "a2d0d080c214a3704d4c295ef47b6c2858b0f9475f1928a5c730f4ab9c20857a"
+        },
+        {
+          "file": "neo/libs/tinyexr/tinyexr.h",
+          "lines": [
+            3893,
+            3893
+          ],
+          "anchor": "s_tdefl_packed_code_size_syms_swizzle",
+          "sha256": "7633ae70f06640df5b661767d39e45240cd95f1d602bc0d919c8fc4b9ee86160"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/stb/stb_image.h"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/tinyexr/tinyexr.h"
+        }
+      ],
+      "staticKind": "per-call scratch; idempotent tables",
+      "reason": "LP1c fix (S1.5): stb_image's invalid_chunk is a static char array that stbi__parse_png_file writes on every unknown critical PNG chunk, per call (the pre-validation refuses such chunks first, and every load runs on the parse thread, C20); the other five are read-only tables, constant-initialised and never written. None has a dynamic initialiser (no ??__E symbol)"
+    },
+    {
+      "id": "M-IMG-DIFF-10",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            716,
+            727
+          ],
+          "anchor": "ActuallyLoadImage, the cube branch",
+          "sha256": "4aab2add6fae62917f81b61f2da49fbc5f4f0b18c419cb9e911e558d509c6388"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EditorImageSize.cpp",
+          "symbol": "imageUploadSize"
+        }
+      ],
+      "note": "LP1c fix (S3.7), recorded: a cube that fails to load is defaulted and 0 x 0 in the engine (the cube branch returns before any opts.width = 8), so GetUploadWidth is 0 and dmap's Valve 220 st divide by 0; the preview gives the 8 x 8 Default of any failed load (retail: the 8 \"Couldn't load cube image\" materials). The chunks of such a material use 8 x 8"
     }
   ],
   "retired": [

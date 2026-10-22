@@ -256,14 +256,17 @@ Result<LightGridArea> readTextArea(EngineLexer& lexer, const int numAreas)
     bound = lexer.parseInt();
   }
 
-  area.points.resize(std::size_t(numPoints));
-  for (auto& point : area.points)
+  // LP1c fix (S3 Low): appended as they parse, so that a count the text cannot hold
+  // ("lightGridPoints { 0 2000000000 ...") allocates nothing for it
+  for (auto i = 0; i < numPoints; ++i)
   {
+    auto point = LightGridPoint{};
     point.valid = std::uint8_t(lexer.parseInt());
     if (!lexer.parse1DMatrix(3, point.origin.data()))
     {
       return lexError(lexer, "bad grid point");
     }
+    area.points.push_back(point);
   }
   if (!lexer.expectTokenString("}") || lexer.hadError())
   {

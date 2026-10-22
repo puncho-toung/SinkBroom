@@ -58,7 +58,8 @@ extern idDeclManagerLocal* tbLitDeclManagerLocal;
 //
 // A5: ReadFile with no buffer (the loaders' and GetTimestamp's time-only calls) asks the
 // source's probe, which reads no file body: the time is the engine's (A4) and the length
-// the probe's. OpenFileRead reads the file whole into a BufferedFile.
+// the probe's. OpenFileRead opens nothing (LP1c fix S1.7): no copied code that runs calls
+// it.
 //
 // LP1c.2: ReadFile with a buffer reads decl text, with the decl guards, except between
 // beginImageReads and endImageReads, where the copied image loaders read: there it reads
@@ -92,7 +93,8 @@ public:
   // LP1c fix (S2.1): the source, for the shim's own header reads (parse thread)
   tb::lit::DeclSource& source() { return m_source; }
 
-  // the copied loaders read between these (parse thread); not nested
+  // the copied loaders read between these (parse thread); not nested. LP1c fix (S2.8):
+  // ImageReads begins them and ends them however its scope is left
   void beginImageReads();
   std::vector<ImageRejection> endImageReads();
 
@@ -120,6 +122,8 @@ public:
 
 private:
   int readImageFile(const std::string& path, void** buffer, ID_TIME_T* timestamp);
+  int readImageFileUnguarded(
+    const std::string& path, void** buffer, ID_TIME_T* timestamp);
   void record(const std::string& path, const tb::lit::GameFileProbe& probe);
 
   tb::lit::DeclSource& m_source;
@@ -134,35 +138,54 @@ private:
 namespace tb::lit::shim
 {
 
+/**
+ * LP1c fix (S2.8): the file system's image reads and recording for one load, begun when
+ * it is made and ended when it goes, also when the load throws, so that later decl reads
+ * never skip their guards (M-ID-GUARD-06). take ends them and hands over what they kept.
+ */
+class ImageReads
+{
+public:
+  explicit ImageReads(idFileSystemLocal& files)
+    : m_files{files}
+  {
+    m_files.beginRecording();
+    m_files.beginImageReads();
+  }
+
+  ~ImageReads()
+  {
+    if (!m_taken)
+    {
+      static_cast<void>(m_files.endImageReads());
+      static_cast<void>(m_files.endRecording());
+    }
+  }
+
+  ImageReads(const ImageReads&) = delete;
+  ImageReads& operator=(const ImageReads&) = delete;
+
+  std::pair<
+    std::vector<idFileSystemLocal::ImageRejection>,
+    std::vector<idFileSystemLocal::FoundFile>>
+  take()
+  {
+    m_taken = true;
+    auto rejections = m_files.endImageReads();
+    return {std::move(rejections), m_files.endRecording()};
+  }
+
+private:
+  idFileSystemLocal& m_files;
+  bool m_taken = false;
+};
+
 // LP1c fix (S2.5): what a recording (idFileSystemLocal::endRecording) looked for: the
 // files found, in order, and the names missed, once each
 void splitRecorded(
   std::vector<idFileSystemLocal::FoundFile> recorded,
   std::vector<FoundGameFile>& found,
   std::vector<FoundGameFile>& missing);
-
-/**
- * LP1c.1: the idFile that OpenFileRead hands the copied loaders (LP1c.2): a game file
- * read whole through the source's C8 search, served from memory as idFile_Memory serves
- * it, with the time the search found (A4). The game file itself is closed once read; the
- * object is freed by CloseFile. Parse thread (C20).
- */
-class BufferedFile : public idFile
-{
-public:
-  BufferedFile(std::string path, std::string bytes, ID_TIME_T time);
-
-  const char* GetFullPath() const override;
-  int Read(void* buffer, int len) override;
-  int Length() const override;
-  ID_TIME_T Timestamp() const override;
-
-private:
-  std::string m_path;
-  std::string m_bytes;
-  std::size_t m_position = 0;
-  ID_TIME_T m_time;
-};
 
 // the GUI dummies a material's "gui" keyword creates; freed after the image records
 // (R5.11)

@@ -902,13 +902,14 @@ TEST_CASE("Retail materials: the engine's print output", "[.][retail]")
         continue;
       }
       const auto& material = **entry.value;
-      const auto origin = source.origin(material.sourceFile);
+      const auto origin = source.probe(material.sourceFile);
       const auto it = exported.find(material.name);
-      if (it == exported.end() || !origin)
+      if (it == exported.end() || !origin.exists())
       {
         continue;
       }
-      const auto kind = int(origin->kind);
+      // 0 loose, 1 .pk4, 2 .resources
+      const auto kind = int(origin.kind) - int(GameFileProbe::Kind::Loose);
       ++checked[kind];
       // the same image record at the pinned commit: the export (April 2024) predates the
       // engine's stripping of every image extension (95336f49, January 2025: it wrote

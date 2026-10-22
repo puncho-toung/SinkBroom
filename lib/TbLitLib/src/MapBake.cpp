@@ -224,14 +224,19 @@ void validate(MapBake& bake)
         numAreas);
     }
   }
-  if (bake.dropReason.empty() && bake.shProbes)
+  // LP1c fix (S3.12): an SH probe outside the areas drops the probes alone; the grid,
+  // which the probes do not touch, stays
+  if (bake.shProbes)
   {
     for (const auto& probe : *bake.shProbes)
     {
       if (probe.area < -1 || probe.area >= numAreas)
       {
-        bake.dropReason = fmt::format(
-          "an SH probe is in area {}, the map has {} areas", probe.area, numAreas);
+        bake.shProbesError = fmt::format(
+          "an SH probe is in area {}, the map has {} areas; the probes are dropped",
+          probe.area,
+          numAreas);
+        bake.shProbes.reset();
         break;
       }
     }

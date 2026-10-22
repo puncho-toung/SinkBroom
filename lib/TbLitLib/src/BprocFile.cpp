@@ -22,7 +22,8 @@
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderWorld_load.cpp and
 // renderer/Model.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
-//   Copyright (C) 2014-2025 Robert Beckebans
+//   Copyright (C) 2012-2025 Robert Beckebans
+//   Copyright (C) 2014-2016 Kot in Action Creative Artel
 // That code is also subject to the additional terms that follow the GNU General
 // Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
 // ---- end of engine notice ----

@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "base/Result.h"
 #include "lit/ImageCache.h"
 #include "lit/MaterialDecls.h"
 
@@ -37,17 +38,16 @@ namespace tb::lit
  * (MaterialDecls::sourceImageLevels): with DeriveOpts' format, colour format and gamma
  * mips for the usage the time call found, the mip count for the picture's size and the
  * key's filter, RGBA8 where the engine would encode DXT, R11G11B10F where it would encode
- * BC6H, RGB565 expanded to RGBA8 as the cache reader expands it. Null, with why, when the
- * source cannot be loaded (the image is then the default: the engine's 8 × 8 defaulted
- * image) or the image is one the engine makes itself (an intrinsic, a packed mip chain,
- * an array). The files the loaders read are appended to files. Writes no file (D11's
- * spirit). Parse thread (C20).
+ * BC6H, RGB565 expanded to RGBA8 as the cache reader expands it. An error saying why when
+ * the source cannot be loaded (the image is then the default: the engine's 8 × 8
+ * defaulted image) or the image is one the engine makes itself (an intrinsic, a packed
+ * mip chain, an array). The files the loaders read or looked for are appended to files.
+ * Writes no file (D11's spirit). Parse thread (C20).
  */
-std::shared_ptr<const CachedImage> sourceImage(
+Result<std::shared_ptr<const CachedImage>> sourceImage(
   MaterialDecls& decls,
   const ImageCacheName& name,
   const MaterialImageKey& key,
-  std::string& why,
   std::vector<FoundGameFile>& files);
 
 /**

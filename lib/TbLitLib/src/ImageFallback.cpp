@@ -22,11 +22,16 @@
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/Image_load.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2013-2025 Robert Beckebans
+//   Copyright (C) 2014-2016 Kot in Action Creative Artel
+//   Copyright (C) 2016-2017 Dustin Land
+//   Copyright (C) 2022 Stephen Pridham
 // That code is also subject to the additional terms that follow the GNU General
 // Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
 // ---- end of engine notice ----
 
 #include "lit/ImageFallback.h"
+
+#include "kd/result.h"
 
 #include <string_view>
 #include <utility>
@@ -43,24 +48,21 @@ constexpr int Cube2DArray = 4;
 
 } // namespace
 
-std::shared_ptr<const CachedImage> sourceImage(
+Result<std::shared_ptr<const CachedImage>> sourceImage(
   MaterialDecls& decls,
   const ImageCacheName& name,
   const MaterialImageKey& key,
-  std::string& why,
   std::vector<FoundGameFile>& files)
 {
   if (name.generated)
   {
-    why = "the engine generates this image; it has no source";
-    return nullptr;
+    return Error{"the engine generates this image; it has no source"};
   }
   if (name.cube == Cube2DArray || name.cube == CubePackedMipChain)
   {
-    why =
+    return Error{
       "an image array or packed mip chain comes from the engine's bakes; it has no "
-      "source the preview loads";
-    return nullptr;
+      "source the preview loads"};
   }
 
   // Image_load.cpp:716-865: the source, then DeriveOpts for its size (the format, colour
@@ -68,8 +70,7 @@ std::shared_ptr<const CachedImage> sourceImage(
   auto load = decls.loadImagePixels(name, key.cubeMapSize, false);
   if (!load.pixels)
   {
-    why = std::move(load.error);
-    return nullptr;
+    return Error{std::move(load.error)};
   }
   auto& pixels = *load.pixels;
   const auto opts = engineImageOpts(name.usage);
@@ -83,8 +84,8 @@ std::shared_ptr<const CachedImage> sourceImage(
     std::move(pixels), opts.format, opts.colorFormat, numLevels, opts.gammaMips);
   if (image.levels.empty())
   {
-    why = "the source image has no levels (the session is stopping, or its size is 0)";
-    return nullptr;
+    return Error{
+      "the source image has no levels (the session is stopping, or its size is 0)"};
   }
 
   if (image.format == FormatRgb565)
@@ -129,7 +130,9 @@ ImageCacheSlot resolveImage(
   {
     return slot;
   }
-  slot.image = sourceImage(decls, *name.value, key, slot.sourceReason, slot.files);
+  sourceImage(decls, *name.value, key, slot.files)
+    | kdl::transform([&](auto image) { slot.image = std::move(image); })
+    | kdl::transform_error([&](auto e) { slot.sourceReason = std::move(e.msg); });
   return slot;
 }
 

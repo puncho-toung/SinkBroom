@@ -202,13 +202,13 @@ TEST_CASE("GameFileSource")
     auto time = std::int64_t{0};
     CHECK(contains(source.readFile("materials/shared.mtr", &time), "shared_loose"));
     CHECK(time != 0);
-    CHECK(source.origin("materials/shared.mtr")->kind == GameFileOrigin::Kind::Loose);
+    CHECK(source.probe("materials/shared.mtr").kind == GameFileProbe::Kind::Loose);
 
     CHECK(contains(source.readFile("materials/pk4_only.mtr", &time), "pk4_only_pk4"));
     CHECK(time == 0);
-    CHECK(source.origin("materials/pk4_only.mtr")->container == "aa_first.pk4");
+    CHECK(source.probe("materials/pk4_only.mtr").container == "aa_first.pk4");
     CHECK(contains(source.readFile("materials/pk4_maps.mtr", &time), "pk4_maps_pk4"));
-    CHECK(source.origin("materials/pk4_maps.mtr")->container == "zz_second.pk4");
+    CHECK(source.probe("materials/pk4_maps.mtr").container == "zz_second.pk4");
 
     // the last registered .pk4 first
     CHECK(contains(source.readFile("materials/both_pk4.mtr", &time), "both_pk4_second"));
@@ -218,7 +218,7 @@ TEST_CASE("GameFileSource")
     CHECK(contains(source.readFile("materials/res_only.mtr", &time), "res_only_res"));
     CHECK(contains(source.readFile("materials/both_res.mtr", &time), "both_res_second"));
     CHECK(contains(source.readFile("materials/maps_wins.mtr", &time), "maps_wins_maps"));
-    CHECK(source.origin("materials/maps_wins.mtr")->container == "maps/map1.resources");
+    CHECK(source.probe("materials/maps_wins.mtr").container == "maps/map1.resources");
     CHECK(contains(source.readFile("materials/dup.mtr", &time), "dup_two"));
     CHECK(contains(source.readFile("materials\\res_only.mtr", &time), "res_only_res"));
 

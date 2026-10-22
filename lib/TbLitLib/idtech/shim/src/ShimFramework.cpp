@@ -304,46 +304,6 @@ void idFileSystemLocal::FreeFileList(idFileList* fileList)
   delete fileList;
 }
 
-namespace tb::lit::shim
-{
-
-BufferedFile::BufferedFile(std::string path, std::string bytes, const ID_TIME_T time)
-  : m_path{std::move(path)}
-  , m_bytes{std::move(bytes)}
-  , m_time{time}
-{
-}
-
-const char* BufferedFile::GetFullPath() const
-{
-  return m_path.c_str();
-}
-
-// idFile_Memory::Read: at most len bytes from the position on, which moves past them
-int BufferedFile::Read(void* buffer, const int len)
-{
-  if (len <= 0 || !buffer)
-  {
-    return 0;
-  }
-  const auto count = std::min(std::size_t(len), m_bytes.size() - m_position);
-  memcpy(buffer, m_bytes.data() + m_position, count);
-  m_position += count;
-  return int(count);
-}
-
-int BufferedFile::Length() const
-{
-  return int(m_bytes.size());
-}
-
-ID_TIME_T BufferedFile::Timestamp() const
-{
-  return m_time;
-}
-
-} // namespace tb::lit::shim
-
 // FileSystem.cpp's ReadFile: a Mem_Alloc'ed buffer of length + 1 bytes, NUL-terminated;
 // -1 when the file cannot be read. A5: with no buffer only the time is wanted, which the
 // source's probe answers without reading the file (the length is the probe's)
@@ -388,7 +348,17 @@ int idFileSystemLocal::ReadFile(
     *timestamp = FILE_NOT_FOUND_TIMESTAMP;
   }
 
-  const auto path = std::string{relativePath ? relativePath : ""};
+  // LP1c fix (S2.8): the name, the probe and its record allocate; a failure there makes
+  // the file missing, never an exception through the copied caller
+  auto path = std::string{};
+  try
+  {
+    path = relativePath ? relativePath : "";
+  }
+  catch (...)
+  {
+    return -1;
+  }
   if (!buffer)
   {
     auto found = tb::lit::GameFileProbe{};
@@ -396,18 +366,20 @@ int idFileSystemLocal::ReadFile(
     try
     {
       found = m_source.probe(path);
+      // LP1c fix (S2.5, S3.4): a miss is recorded too, so that a file that appears
+      // later is seen by the re-probe
+      record(path, found);
     }
     catch (const std::exception& e)
     {
       tb::lit::shim::reportWarning(path + " cannot be probed: " + e.what());
+      found = tb::lit::GameFileProbe{};
     }
     catch (...)
     {
       tb::lit::shim::reportWarning(path + " cannot be probed");
+      found = tb::lit::GameFileProbe{};
     }
-    // LP1c fix (S2.5, S3.4): a miss is recorded too, so that a file that appears later
-    // is seen by the re-probe
-    record(path, found);
     if (!found.exists())
     {
       return -1;
@@ -523,6 +495,26 @@ void idFileSystemLocal::record(
 int idFileSystemLocal::readImageFile(
   const std::string& path, void** buffer, ID_TIME_T* timestamp)
 {
+  // LP1c fix (S2.8): nothing it does throws through the copied loader that called it (an
+  // allocation failure in the pre-validation, the record or the refusal list): the file
+  // reads as missing
+  try
+  {
+    return readImageFileUnguarded(path, buffer, timestamp);
+  }
+  catch (...)
+  {
+    if (timestamp)
+    {
+      *timestamp = FILE_NOT_FOUND_TIMESTAMP;
+    }
+    return -1;
+  }
+}
+
+int idFileSystemLocal::readImageFileUnguarded(
+  const std::string& path, void** buffer, ID_TIME_T* timestamp)
+{
   auto found = tb::lit::GameFileProbe{};
   auto bytes = std::optional<std::string>{};
   // the exception boundary (C17): a source that throws makes the file unreadable
@@ -579,37 +571,12 @@ int idFileSystemLocal::readImageFile(
   return length;
 }
 
-// OpenFileRead for the copied loaders (LP1c.2): the whole file read through the source's
-// C8 search into a BufferedFile, closed by CloseFile; null when it cannot be read. The
-// decl parsers parse decl text in memory and never call it.
-idFile* idFileSystemLocal::OpenFileRead(const char* relativePath, bool, const char*)
+// LP1c fix (S1.7): no copied code that runs opens a file (the loaders call ReadFile, and
+// idLexer::LoadFile, the copy's only caller, is never reached), so nothing is opened, as
+// LP1a's stub did (M-ID-FN-27)
+idFile* idFileSystemLocal::OpenFileRead(const char*, bool, const char*)
 {
-  if (!relativePath || !relativePath[0] || (m_cancel && m_cancel->load()))
-  {
-    return nullptr;
-  }
-  const auto path = std::string{relativePath};
-  auto found = tb::lit::GameFileProbe{};
-  auto bytes = std::optional<std::string>{};
-  // the exception boundary (C17): a source that throws makes the file unreadable
-  try
-  {
-    bytes = m_source.readGameFile(path, &found);
-  }
-  catch (const std::exception& e)
-  {
-    tb::lit::shim::reportWarning(path + " cannot be read: " + e.what());
-  }
-  catch (...)
-  {
-    tb::lit::shim::reportWarning(path + " cannot be read");
-  }
-  if (!bytes || bytes->size() >= std::size_t(INT_MAX))
-  {
-    return nullptr;
-  }
-  return new (TAG_IDFILE)
-    tb::lit::shim::BufferedFile{path, std::move(*bytes), ID_TIME_T(found.time)};
+  return nullptr;
 }
 
 idFile* idFileSystemLocal::OpenExplicitFileRead(const char*)

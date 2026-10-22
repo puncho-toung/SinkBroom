@@ -464,13 +464,29 @@ TEST_CASE("MapBake, the C10 search through the game files")
     REQUIRE(bake.shProbes);
     CHECK(bake.shProbes->size() == 1u);
 
-    // an SH probe in an area the map does not have
+    // an SH probe in an area the map does not have: the probes alone are dropped (S3.12)
     writeTextFile(
       base / "maps" / "sub" / "m.shprobes",
       "SHPROBES 1 1\n5 ( 0 0 0 ) ( 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 "
       ")\n");
     bake = readBake();
-    CHECK_THAT(bake.dropReason, Catch::Matchers::ContainsSubstring("SH probe"));
+    CHECK(bake.dropReason.empty());
+    CHECK(bake.lightGrid);
+    CHECK_FALSE(bake.shProbes);
+    CHECK_THAT(bake.shProbesError, Catch::Matchers::ContainsSubstring("SH probe"));
+  }
+
+  SECTION("a text grid's point count is bounded by its points, not allocated ahead")
+  {
+    writeTextFile(procPath, TinyProc);
+    writeTextFile(
+      gridPath,
+      "LGRID 3\nlightGridPoints { 0 2000000000 64 2 ( 0 0 0 ) ( 64 64 128 ) 1 1 1 1 ( 0 "
+      "0 0 "
+      ") }\n");
+    const auto bake = readBake();
+    CHECK_FALSE(bake.lightGrid);
+    CHECK_THAT(bake.gridError, Catch::Matchers::ContainsSubstring("bad grid point"));
   }
 
   SECTION("a changed bake file is seen by a probe")

@@ -907,23 +907,6 @@ std::size_t GameFileSource::containerCount() const
   return m_pk4s.size() + m_resources.size();
 }
 
-std::optional<GameFileOrigin> GameFileSource::origin(const std::string& path)
-{
-  const auto found = probeFile(path);
-  switch (found.kind)
-  {
-  case GameFileProbe::Kind::Missing:
-    return std::nullopt;
-  case GameFileProbe::Kind::Loose:
-    return GameFileOrigin{GameFileOrigin::Kind::Loose, {}};
-  case GameFileProbe::Kind::Pk4:
-    return GameFileOrigin{GameFileOrigin::Kind::Pk4, found.container};
-  case GameFileProbe::Kind::Resources:
-    return GameFileOrigin{GameFileOrigin::Kind::Resources, found.container};
-  }
-  return std::nullopt;
-}
-
 std::vector<std::string> GameFileSource::searchOrder() const
 {
   auto order = std::vector<std::string>{};

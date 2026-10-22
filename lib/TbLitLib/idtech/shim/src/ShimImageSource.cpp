@@ -658,8 +658,7 @@ SourceLoad MaterialDecls::loadImagePixels(
 
   auto& files = m_registry->files();
   const auto messagesBefore = m_registry->messages().size();
-  files.beginRecording();
-  files.beginImageReads();
+  auto reads = shim::ImageReads{files};
 
   // Image_load.cpp:716-865, the source of an image whose cache the engine would not use;
   // GetName() is the name after the PBR rename, usage the time call's
@@ -756,7 +755,8 @@ SourceLoad MaterialDecls::loadImagePixels(
   pixels.sourceTime = std::int64_t(sourceFileTime);
 
   auto forcing = std::vector<std::string>{};
-  for (auto& rejection : files.endImageReads())
+  auto [rejections, recorded] = reads.take();
+  for (auto& rejection : rejections)
   {
     const auto stb = isStbLoaderFile(rejection.path);
     load.rejected.push_back(rejection.path + ": " + rejection.reason);
@@ -765,7 +765,7 @@ SourceLoad MaterialDecls::loadImagePixels(
       forcing.push_back(load.rejected.back());
     }
   }
-  shim::splitRecorded(files.endRecording(), pixels.files, pixels.missing);
+  shim::splitRecorded(std::move(recorded), pixels.files, pixels.missing);
 
   if (!forcing.empty())
   {

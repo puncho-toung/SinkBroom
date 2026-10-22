@@ -33,6 +33,45 @@ Two kinds of file:
   `// ==== engine neo/<file> lines A-B (anchor) ====`; the markers are the only lines that
   are not the engine's.
 
+## Third-party terms beyond `LICENSE_EXCEPTIONS.md` (LP1c fix S1.2)
+
+`LICENSE_EXCEPTIONS.md` is the engine's own file, copied whole. Two terms the copied code
+carries are not in it, and are recorded here:
+
+- **cmft** (cube map utilities): the cube helpers of `renderer/Image_process.cpp` (engine
+  lines 854-1167, "ripped from cmft utils by Dario Manesku") are under the BSD-2-Clause
+  licence:
+
+  > Copyright 2014-2015 Dario Manesku. All rights reserved.
+  >
+  > Redistribution and use in source and binary forms, with or without modification, are
+  > permitted provided that the following conditions are met:
+  >
+  > 1. Redistributions of source code must retain the above copyright notice, this list of
+  >    conditions and the following disclaimer.
+  > 2. Redistributions in binary form must reproduce the above copyright notice, this list
+  >    of conditions and the following disclaimer in the documentation and/or other
+  >    materials provided with the distribution.
+  >
+  > THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
+  > EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+  > MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
+  > THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+  > SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT
+  > OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  > INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+  > STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+  > THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+- **OpenEXR**, inside TinyEXR (`libs/tinyexr/tinyexr.h`), under the BSD-3-Clause licence
+  that `LICENSE_EXCEPTIONS.md` and `tinyexr.h` carry; miniz v1.15 inside it is public
+  domain (the Unlicense).
+
+TrenchBroom credits its other BSD and MIT libraries by name in the About dialog, and so do
+these lines (`lib/TbUiLib/src/AboutDialog.cpp`). A packaged build that ships the lit preview
+must also ship `LICENSE_EXCEPTIONS.md` and this note with the documentation, as the BSD
+terms ask of binary redistributions (for packaging, D7).
+
 `../../mirror.json` lists every file and range with its engine lines, anchor and sha256,
 together with the compile definitions, the C++ standard, the shim's mirrored functions,
 the virtuals the shim defines, the never-returning call sites and the statics. It is
