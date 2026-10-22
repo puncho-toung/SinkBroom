@@ -628,6 +628,11 @@ void LitSession::setHdrClearForTesting(std::optional<std::array<float, 4>> colou
   m_renderThread->setHdrClear(colour);
 }
 
+void LitSession::setTonemapForTesting(const EngineTonemapDefaults& tonemap)
+{
+  m_renderThread->setTonemapDefaults(tonemap);
+}
+
 std::optional<LdrImage> LitSession::readbackLdrForTesting(
   const std::chrono::milliseconds timeout)
 {

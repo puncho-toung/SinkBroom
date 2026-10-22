@@ -642,6 +642,16 @@ void RenderThread::readbackLdr(std::function<void(LdrImage)> done)
     const auto lock = std::scoped_lock{m_mutex};
     m_ldrReadbacks.push_back(std::move(done));
     m_pacer.trigger();
+void RenderThread::setTonemapDefaults(const EngineTonemapDefaults& tonemap)
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_tonemapForTesting = tonemap;
+    m_pacer.trigger();
+  }
+  m_wake.notify_all();
+}
+
   }
   m_wake.notify_all();
 }
@@ -1426,6 +1436,11 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     // the frame's lit passes' counts (none in the HDR clear test mode)
     auto litStats = LitFrameStats{};
 
+      if (m_tonemapForTesting)
+      {
+        m_tonemap.setDefaults(*m_tonemapForTesting);
+        m_tonemapForTesting.reset();
+      }
     {
       auto recording = OpenCommandList{device, *m_commandList};
       auto& commandList = recording.list();

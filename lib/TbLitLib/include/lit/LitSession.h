@@ -220,6 +220,7 @@ constexpr auto ParkTimeout = std::chrono::milliseconds{500};
 
 class CpuPool;
 class GpuDevice;
+struct EngineTonemapDefaults;
 class LightTablePublication;
 class MaterialService;
 class PipelineCompiler;
@@ -502,6 +503,13 @@ public:
    * the blit on it; nullopt draws the scene again. A frame is triggered.
    */
   void setHdrClearForTesting(std::optional<std::array<float, 4>> colour);
+  /**
+   * LP2.3 (Q21's pinned-exposure diagnostic, C29), any thread: the tonemap passes use
+   * these values instead of the engine's defaults (EngineTonemap, lit/EngineTables.h)
+   * from the next frame on, as parity.py --pinned sets r_hdrMinLuminance and
+   * r_hdrMaxLuminance in the engine; a frame is triggered.
+   */
+  void setTonemapForTesting(const EngineTonemapDefaults& tonemap);
   // LP2.1, any thread: the render thread's arenas hold these chunks instead of the
   // scene's until null replaces them (D36); a frame is triggered
   void setChunksForTesting(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks);

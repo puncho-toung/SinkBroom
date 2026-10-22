@@ -418,7 +418,8 @@ TonemapFrameStats TonemapPasses::record(const TonemapFrameInputs& inputs)
   commandList.clearBufferUInt(histogramBuffer, 0);
 
   // AddFrameToHistogram: one viewport, so one dispatch
-  m_stats.histogramConstants = engineHistogramConstants(extent.width, extent.height);
+  m_stats.histogramConstants =
+    engineHistogramConstants(extent.width, extent.height, m_defaults);
   writeConstants(inputs, pushHistogram, m_stats.histogramConstants);
   {
     auto state = nvrhi::ComputeState{};
@@ -439,7 +440,7 @@ TonemapFrameStats TonemapPasses::record(const TonemapFrameInputs& inputs)
   }
 
   // ComputeExposure
-  m_stats.exposureConstants = engineExposureConstants();
+  m_stats.exposureConstants = engineExposureConstants(m_defaults);
   writeConstants(inputs, pushExposure, m_stats.exposureConstants);
   {
     auto state = nvrhi::ComputeState{};
@@ -458,7 +459,7 @@ TonemapFrameStats TonemapPasses::record(const TonemapFrameInputs& inputs)
   }
 
   // Render: into ldrFBO, the + 1 viewport, four TriangleStrip vertices
-  m_stats.tonemapConstants = engineTonemapConstants();
+  m_stats.tonemapConstants = engineTonemapConstants(m_defaults);
   writeConstants(inputs, pushTonemap, m_stats.tonemapConstants);
   {
     auto state = nvrhi::GraphicsState{};
@@ -517,6 +518,11 @@ TonemapFrameStats TonemapPasses::record(const TonemapFrameInputs& inputs)
   }
   m_stats.blitted = true;
   return m_stats;
+}
+
+void TonemapPasses::setDefaults(const EngineTonemapDefaults& defaults)
+{
+  m_defaults = defaults;
 }
 
 const TonemapFrameStats& TonemapPasses::lastStats() const

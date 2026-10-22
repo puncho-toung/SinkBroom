@@ -259,9 +259,14 @@ class TonemapPasses
 private:
   nvrhi::BufferHandle m_constantBuffer;
   TonemapFrameStats m_stats;
+  // the engine's values; LP2.3's pinned-exposure diagnostic replaces them (Q21)
+  EngineTonemapDefaults m_defaults = EngineTonemap;
 
 public:
   TonemapPasses() = default;
+
+  // render thread: the values the next frames' passes compute their constants from
+  void setDefaults(const EngineTonemapDefaults& defaults);
 
   // render thread: the frame's tonemap passes and its blit; what the frame did
   TonemapFrameStats record(const TonemapFrameInputs& inputs);

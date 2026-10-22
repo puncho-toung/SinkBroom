@@ -37,6 +37,8 @@
 #include "lit/LightRecord.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
+#include "lit/NumberText.h"
+#include "lit/Projection.h"
 #include "lit/ShaderBlobs.h"
 #include "lit/ShaderReflection.h"
 #include "lit/Snapshot.h"
@@ -73,6 +75,7 @@
 #include <span>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <unordered_set>
@@ -5003,3 +5006,508 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
 } // namespace tb::lit
 
 #endif
+namespace
+{
+
+/**
+ * LP2.3: a JSON value of parity.py's rows.json (objects, arrays, strings whose only
+ * escapes are \" and \\, numbers, true, false, null); enough for that file, no more.
+ */
+struct JsonValue
+{
+  enum class Kind
+  {
+    Null,
+    Bool,
+    Number,
+    String,
+    Array,
+    Object,
+  };
+  Kind kind = Kind::Null;
+  bool boolean = false;
+  double number = 0.0;
+  std::string string;
+  std::vector<JsonValue> array;
+  std::vector<std::pair<std::string, JsonValue>> object;
+
+  const JsonValue* find(const std::string_view key) const
+  {
+    for (const auto& [name, value] : object)
+    {
+      if (name == key)
+      {
+        return &value;
+      }
+    }
+    return nullptr;
+  }
+
+  std::string text(const std::string_view key) const
+  {
+    const auto* value = find(key);
+    return value && value->kind == Kind::String ? value->string : std::string{};
+  }
+
+  double numberOr(const std::string_view key, const double fallback) const
+  {
+    const auto* value = find(key);
+    return value && value->kind == Kind::Number ? value->number : fallback;
+  }
+
+  bool flag(const std::string_view key) const
+  {
+    const auto* value = find(key);
+    return value && value->kind == Kind::Bool && value->boolean;
+  }
+};
+
+class JsonReader
+{
+private:
+  std::string_view m_text;
+  std::size_t m_at = 0;
+
+  void skipSpace()
+  {
+    while (
+      m_at < m_text.size()
+      && (m_text[m_at] == ' ' || m_text[m_at] == '\n' || m_text[m_at] == '\r' || m_text[m_at] == '\t'))
+    {
+      ++m_at;
+    }
+  }
+
+  bool take(const char c)
+  {
+    skipSpace();
+    if (m_at < m_text.size() && m_text[m_at] == c)
+    {
+      ++m_at;
+      return true;
+    }
+    return false;
+  }
+
+  std::optional<std::string> string()
+  {
+    if (!take('"'))
+    {
+      return std::nullopt;
+    }
+    auto out = std::string{};
+    while (m_at < m_text.size() && m_text[m_at] != '"')
+    {
+      if (m_text[m_at] == '\\' && m_at + 1 < m_text.size())
+      {
+        ++m_at;
+      }
+      out += m_text[m_at++];
+    }
+    if (m_at >= m_text.size())
+    {
+      return std::nullopt;
+    }
+    ++m_at;
+    return out;
+  }
+
+public:
+  explicit JsonReader(const std::string_view text)
+    : m_text{text}
+  {
+  }
+
+  std::optional<JsonValue> value()
+  {
+    skipSpace();
+    if (m_at >= m_text.size())
+    {
+      return std::nullopt;
+    }
+    auto result = JsonValue{};
+    const auto c = m_text[m_at];
+    if (c == '{')
+    {
+      ++m_at;
+      result.kind = JsonValue::Kind::Object;
+      if (take('}'))
+      {
+        return result;
+      }
+      do
+      {
+        auto key = string();
+        if (!key || !take(':'))
+        {
+          return std::nullopt;
+        }
+        auto member = value();
+        if (!member)
+        {
+          return std::nullopt;
+        }
+        result.object.emplace_back(std::move(*key), std::move(*member));
+      } while (take(','));
+      return take('}') ? std::optional{std::move(result)} : std::nullopt;
+    }
+    if (c == '[')
+    {
+      ++m_at;
+      result.kind = JsonValue::Kind::Array;
+      if (take(']'))
+      {
+        return result;
+      }
+      do
+      {
+        auto element = value();
+        if (!element)
+        {
+          return std::nullopt;
+        }
+        result.array.push_back(std::move(*element));
+      } while (take(','));
+      return take(']') ? std::optional{std::move(result)} : std::nullopt;
+    }
+    if (c == '"')
+    {
+      auto text = string();
+      if (!text)
+      {
+        return std::nullopt;
+      }
+      result.kind = JsonValue::Kind::String;
+      result.string = std::move(*text);
+      return result;
+    }
+    for (const auto& [word, kind, flag] :
+         {std::tuple{std::string_view{"true"}, JsonValue::Kind::Bool, true},
+          std::tuple{std::string_view{"false"}, JsonValue::Kind::Bool, false},
+          std::tuple{std::string_view{"null"}, JsonValue::Kind::Null, false}})
+    {
+      if (m_text.substr(m_at, word.size()) == word)
+      {
+        m_at += word.size();
+        result.kind = kind;
+        result.boolean = flag;
+        return result;
+      }
+    }
+    auto number = 0.0;
+    const auto* first = m_text.data() + m_at;
+    const auto* last = m_text.data() + m_text.size();
+    const auto* end = parseFloatChars(first, last, number);
+    if (!end)
+    {
+      return std::nullopt;
+    }
+    m_at += std::size_t(end - first);
+    result.kind = JsonValue::Kind::Number;
+    result.number = number;
+    return result;
+  }
+};
+
+/**
+ * LP2.3 (C29, D77): asks for frames of camera until one is settled with the passes drawn
+ * and tonemapped, the scene's geometry drawn (prepass draws) and, for a lit row, a light
+ * drawn; then, as a guard against a geometry batch still to come (a .proc that arrives
+ * after the first chunks), until the session has applied no new geometry batch for 300 ms
+ * with every frame settled. That frame's record, or nullopt at the deadline.
+ */
+std::optional<ChainFrame> settledParityFrame(
+  LitSession& session,
+  const CameraState& camera,
+  const bool needsLight,
+  const std::chrono::milliseconds timeout)
+{
+  session.setCamera(camera);
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  auto quietSince =
+    std::optional<std::pair<std::chrono::steady_clock::time_point, std::uint64_t>>{};
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    session.tableChanged();
+    auto frame = std::make_shared<ChainFrame>();
+    auto done = std::make_shared<std::promise<void>>();
+    auto future = done->get_future();
+    session.runAfterTonemapForTesting([frame, done](RenderFrameAccess& access) {
+      *frame = chainFrameOf(access);
+      done->set_value();
+    });
+    if (future.wait_for(10000ms) != std::future_status::ready)
+    {
+      return std::nullopt;
+    }
+    const auto ready = frame->settled && frame->lit.camera == camera
+                       && frame->tonemap.tonemapped && frame->tonemap.blitted
+                       && frame->lit.prepassDraws > 0
+                       && (!needsLight || frame->lit.lightsDrawn > 0);
+    const auto batches = session.geometryBatchesForTesting();
+    if (!ready)
+    {
+      quietSince.reset();
+    }
+    else if (!quietSince || quietSince->second != batches)
+    {
+      quietSince = std::pair{std::chrono::steady_clock::now(), batches};
+    }
+    else if (std::chrono::steady_clock::now() - quietSince->first >= 300ms)
+    {
+      return *frame;
+    }
+    std::this_thread::sleep_for(50ms);
+  }
+  return std::nullopt;
+}
+
+// the snapshot of a map of the parity root, its .proc beside it
+std::shared_ptr<const Snapshot> paritySnapshot(
+  const std::filesystem::path& root, const std::string& map, const std::uint64_t sequence)
+{
+  auto snapshot = snapshotOfMapText(readTextFile(root / "base" / map));
+  snapshot.generation = 7;
+  snapshot.sequence = sequence;
+  snapshot.mapPath = (root / "base" / map).string();
+  return std::make_shared<const Snapshot>(std::move(snapshot));
+}
+
+} // namespace
+
+/**
+ * LP2.3 (C29): the parity rows that TOOLS/lit-preview/parity.py run shot in the engine,
+ * drawn by one headless session over the preview game root parity.py assembled
+ * (TB_LIT_PARITY_ROOT, read only: the LP2 blobs, the maps and the engine's .proc files,
+ * the fixture's materials, entityDef and images, the engine's .bimage caches), each row
+ * at its shot's size with the camera of its line and the fov of its integer g_fov,
+ * settled (D77, at most 60 s a row), its LDR target read back and written as
+ * <row>.rgba with <row>.json into TB_LIT_PARITY_OUT, with the row's frames of the frame
+ * log as <row>.framelog.csv; parity.py compare compares them with the engine's shots.
+ * Asserted here: every row settles, the control rows are black, and the validation
+ * layer reports nothing beyond M-PIPE-DEFECT-01's warnings. Hidden: it needs a GPU and
+ * the root of a parity.py run.
+ */
+TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
+{
+  const auto* rootValue = std::getenv("TB_LIT_PARITY_ROOT");
+  const auto* outValue = std::getenv("TB_LIT_PARITY_OUT");
+  if (!rootValue || !*rootValue || !outValue || !*outValue)
+  {
+    SKIP(
+      "TB_LIT_PARITY_ROOT or TB_LIT_PARITY_OUT is not set: the rows need the preview "
+      "root of a parity.py run");
+  }
+  const auto root = std::filesystem::path{rootValue};
+  const auto out = std::filesystem::path{outValue};
+  const auto rowsText = readTextFile(root / "parity" / "rows.json");
+  const auto record = JsonReader{rowsText}.value();
+  REQUIRE(record);
+  const auto* rows = record->find("rows");
+  REQUIRE(rows);
+  REQUIRE(rows->kind == JsonValue::Kind::Array);
+  REQUIRE_FALSE(rows->array.empty());
+  const auto pinned = record->flag("pinned");
+
+  // this test's outputs from an earlier run, by name
+  std::filesystem::create_directories(out);
+  const auto frameLog = out / "preview.framelog.csv";
+  std::filesystem::remove(frameLog);
+  for (const auto& row : rows->array)
+  {
+    const auto id = row.text("id");
+    for (const auto* suffix : {".rgba", ".json", ".framelog.csv"})
+    {
+      std::filesystem::remove(out / (id + suffix));
+    }
+  }
+
+  const auto library = VulkanLibrary{};
+  REQUIRE(library.getInstanceProcAddr != nullptr);
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  // per row: the frames it presented, from and to
+  auto frameRanges = std::vector<std::pair<std::uint64_t, std::uint64_t>>{};
+  {
+    const auto instance = TestInstance{library, true, false, messages};
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto service = rootService(root);
+    auto events = Events{};
+    auto width = std::uint32_t(record->numberOr("width", 1280.0));
+    auto height = std::uint32_t(record->numberOr("height", 720.0));
+    auto options = SessionOptions{};
+    options.validation = true;
+    options.gamePath = root;
+    options.frameLogPath = frameLog;
+    const auto created = std::chrono::steady_clock::now();
+    auto session = LitSession::create(
+                     instance.handles(),
+                     VK_NULL_HANDLE,
+                     width,
+                     height,
+                     options,
+                     events.sink(),
+                     7,
+                     service.get())
+                   | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    if (pinned)
+    {
+      // Q21's diagnostic: the exposure pinned as parity.py pinned the engine's
+      const auto* luminance = record->find("pinned_luminance");
+      REQUIRE(luminance);
+      REQUIRE(luminance->array.size() == 2u);
+      auto tonemap = EngineTonemap;
+      tonemap.hdrMinLuminance = float(luminance->array[0].number);
+      tonemap.hdrMaxLuminance = float(luminance->array[1].number);
+      session->setTonemapForTesting(tonemap);
+    }
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+
+    auto currentMap = std::string{};
+    auto sequence = std::uint64_t{0};
+    for (const auto& row : rows->array)
+    {
+      const auto id = row.text("id");
+      CAPTURE(id);
+      const auto map = row.text("map");
+      if (map != currentMap)
+      {
+        REQUIRE(waitFor([&] { return session->snapshotSlotFree(); }, 10000ms, false));
+        REQUIRE(session->offerSnapshot(paritySnapshot(root, map, ++sequence)));
+        currentMap = map;
+      }
+      const auto parsed = parityCameraOfLine(row.text("camera"));
+      REQUIRE(parsed);
+      // C29: the fov of the integer g_fov, the shot's size
+      CHECK(parsed->gFov == int(row.numberOr("g_fov", 0.0)));
+      CHECK(viewProjectionOf(parsed->camera).gFov == float(parsed->gFov));
+      const auto rowWidth = std::uint32_t(row.numberOr("width", double(width)));
+      const auto rowHeight = std::uint32_t(row.numberOr("height", double(height)));
+      if (rowWidth != width || rowHeight != height)
+      {
+        width = rowWidth;
+        height = rowHeight;
+        session->resizeHeadlessForTesting(width, height);
+      }
+      auto camera = parsed->camera;
+      camera.viewportWidth = width;
+      camera.viewportHeight = height;
+
+      const auto control = row.flag("control");
+      const auto framesBefore = session->framesPresented();
+      const auto started = std::chrono::steady_clock::now();
+      const auto settled = settledParityFrame(*session, camera, !control, 60000ms);
+      REQUIRE(settled);
+      const auto image = session->readbackLdrForTesting(60000ms);
+      REQUIRE(image);
+      const auto settleMs = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - started)
+                              .count();
+      frameRanges.emplace_back(framesBefore, session->framesPresented());
+      REQUIRE(image->width == width);
+      REQUIRE(image->height == height);
+      REQUIRE(image->rgba.size() == std::size_t(width) * height * 4);
+
+      {
+        auto file = std::ofstream{out / (id + ".rgba"), std::ios::binary};
+        file.write(
+          reinterpret_cast<const char*>(image->rgba.data()),
+          std::streamsize(image->rgba.size()));
+      }
+      const auto& lit = settled->lit;
+      writeTextFile(
+        out / (id + ".json"),
+        fmt::format(
+          "{{\"width\": {}, \"height\": {}, \"settle_ms\": {:.1f}, \"frames\": {}, "
+          "\"lights_visible\": {}, \"lights_drawn\": {}, \"prepass_draws\": {}, "
+          "\"interaction_draws\": {}, \"session_ms\": {:.1f}}}\n",
+          width,
+          height,
+          settleMs,
+          session->framesPresented() - framesBefore,
+          lit.lightsVisible,
+          lit.lightsDrawn,
+          lit.prepassDraws,
+          lit.interactionDraws,
+          std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - created)
+            .count()));
+
+      // the lights-off control: black (every channel at most 1)
+      if (control)
+      {
+        auto lightPixels = std::size_t{0};
+        for (std::size_t i = 0; i < image->rgba.size(); i += 4)
+        {
+          if (image->rgba[i] > 1 || image->rgba[i + 1] > 1 || image->rgba[i + 2] > 1)
+          {
+            ++lightPixels;
+          }
+        }
+        CHECK(lightPixels == 0u);
+      }
+      std::cout << fmt::format(
+        "LP2.3 parity {}: settled in {:.0f} ms over {} frames; lights {} of {}, prepass "
+        "draws {}, interaction draws {}\n",
+        id,
+        settleMs,
+        session->framesPresented() - framesBefore,
+        lit.lightsDrawn,
+        lit.lightsVisible,
+        lit.prepassDraws,
+        lit.interactionDraws);
+    }
+
+    for (const auto& program : session->programReport())
+    {
+      CAPTURE(program.name, program.reason);
+      CHECK(program.enabled);
+    }
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    events.print("parity");
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+
+  // the frame log's frames of each row (one session; the k-th frame row is the k-th
+  // frame presented)
+  {
+    const auto text = readTextFile(frameLog);
+    auto stream = std::istringstream{text};
+    auto header = std::string{};
+    std::getline(stream, header);
+    auto frames = std::vector<std::string>{};
+    auto line = std::string{};
+    while (std::getline(stream, line))
+    {
+      if (line.find(",frame,") != std::string::npos)
+      {
+        frames.push_back(line);
+      }
+    }
+    for (std::size_t i = 0; i < frameRanges.size(); ++i)
+    {
+      auto rowLog = header + "\n";
+      for (auto f = frameRanges[i].first; f < frameRanges[i].second && f < frames.size();
+           ++f)
+      {
+        rowLog += frames[std::size_t(f)] + "\n";
+      }
+      writeTextFile(out / (rows->array[i].text("id") + ".framelog.csv"), rowLog);
+    }
+  }
+
+  messages.print("parity, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+}
+

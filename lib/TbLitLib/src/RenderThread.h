@@ -333,6 +333,8 @@ private:
   // the frame being recorded's copy of it
   std::optional<std::array<float, 4>> m_frameHdrClear;
   // LP2.2b (C29): the LDR readbacks asked for, and those the frame being recorded copies
+  // LP2.3 (Q21): the tonemap passes' values a test set, taken by the next frame (m_mutex)
+  std::optional<EngineTonemapDefaults> m_tonemapForTesting;
   // into its staging texture
   std::vector<std::function<void(LdrImage)>> m_ldrReadbacks;
   std::vector<std::function<void(LdrImage)>> m_ldrReadbacksInFrame;
@@ -449,6 +451,9 @@ public:
   // A request the thread never serves (it stops first) is dropped
   void readbackLdr(std::function<void(LdrImage)> done);
   // any thread: the arenas hold these chunks instead of the scene's until null replaces
+  // LP2.3 (Q21), any thread: the tonemap passes' values from the next frame on; a frame
+  // is triggered
+  void setTonemapDefaults(const EngineTonemapDefaults& tonemap);
   // them; a frame is triggered
   void setTestChunks(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks);
   // any thread: what a frame uploads at most (§3.10's cap, UploadBytesPerFrame)
