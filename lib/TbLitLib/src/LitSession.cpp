@@ -138,7 +138,8 @@ Result<void> LitSession::start(
          | kdl::and_then([&]() { return CpuPool::create(); })
          | kdl::transform([&](std::unique_ptr<CpuPool> pool) {
              m_pool = std::move(pool);
-             m_renderThread->start();
+             // B0.10: the render thread gets the pool and the service at start
+             m_renderThread->start(m_pool.get(), m_materials);
            });
 }
 

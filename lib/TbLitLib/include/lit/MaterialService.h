@@ -37,6 +37,7 @@
 
 namespace tb::lit
 {
+struct ProcTree;
 
 using ShaderParms = std::array<float, MaterialDecls::ShaderParmCount>;
 
@@ -63,6 +64,15 @@ struct MaterialSlot
 struct EntityDefSlot
 {
   std::shared_ptr<const EntityDefEntry> entry;
+  std::string error;
+};
+
+// D64: what reading a .proc found: its tree, or why there is none (no file, or the
+// error its parse reached); published with the materials
+struct ProcFileSlot
+{
+  std::string path;
+  std::shared_ptr<const ProcTree> tree;
   std::string error;
 };
 
@@ -115,6 +125,11 @@ struct MaterialTable
     RegisterKey,
     std::shared_ptr<const EvaluatedRegisters>,
     RegisterKeyHash>;
+  using ProcFiles = PersistentMap<
+    std::string,
+    std::shared_ptr<const ProcFileSlot>,
+    StringHash,
+    std::equal_to<>>;
 
   static constexpr std::size_t MaxRegisterDeltas = 16384;
 
@@ -128,11 +143,14 @@ struct MaterialTable
   Materials materials;
   EntityDefs entityDefs;
   Registers registers;
+  // the .proc files read so far (loadProcFile), by path; kept across reloads
+  ProcFiles procFiles;
 
   // the slot of a name, shared with the table, so that it outlives a table held only for
   // the call; null when the name is not looked up yet. Neither find allocates.
   std::shared_ptr<const MaterialSlot> find(std::string_view name) const;
   std::shared_ptr<const EntityDefSlot> findEntityDef(std::string_view classname) const;
+  std::shared_ptr<const ProcFileSlot> findProcFile(std::string_view path) const;
   // the registers of a key; an EvaluatedRegisters with an error when the evaluation was
   // refused, null when it is not done yet
   std::shared_ptr<const EvaluatedRegisters> findRegisters(const RegisterKey& key) const;
@@ -339,6 +357,13 @@ public:
    * reload, so a later table has it from the new registry.
    */
   EntityDefLookup entityDef(std::string_view classname);
+
+  /**
+   * D64: reads the .proc at path (a file path) on the parse thread with the copied lexer
+   * (C20) and publishes what it found in the table's procFiles, under path; any thread.
+   * Each call reads the file again, so a new dmap run is seen when the caller asks.
+   */
+  void loadProcFile(std::string_view path);
 
   // bulk-parses every material and table of the current registry and of every later one
   void parseAll();

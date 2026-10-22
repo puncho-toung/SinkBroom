@@ -30,6 +30,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ResourceContainer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/SceneGeometry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SessionEvents.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SessionEvents.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/StackThread.cpp

@@ -31,6 +31,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -147,6 +148,14 @@ struct SnapshotEntity
  * One snapshot: the nodes that changed since the last one, the ids of the nodes removed
  * since then, and the entities they belong to. At most one is in flight between the GUI
  * thread and the render thread (S31).
+ *
+ * B0.4: an entity record may appear without any of its nodes: its keys changed and its
+ * primitives did not (worldspawn's overrideMaterial or removeEntities, a func_static's
+ * origin, rotation or model); it replaces that entity's state for all its primitives, so
+ * the consumer rebuilds every chunk of that entity's nodes (all chunks, for worldspawn's
+ * keys). removed holds the preview ids of removed entities as well as of removed nodes.
+ * mapPath, when set, is the document's path after a save, where the .proc beside it is
+ * looked for; a session's first snapshot is complete.
  */
 struct Snapshot
 {
@@ -165,6 +174,9 @@ struct Snapshot
   std::vector<vm::vec<double, 5>> controlPoints;
   std::vector<SnapshotKeyValue> keyValues;
   std::string strings;
+
+  // the document's path (B0.4), unset when it did not change
+  std::optional<std::string> mapPath;
 
   std::string_view string(const SnapshotString& string) const
   {

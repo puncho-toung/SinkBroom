@@ -22,6 +22,7 @@
 #include "GpuDevice.h"
 #include "SessionEvents.h"
 #include "Swapchain.h"
+#include "lit/SceneGeometry.h"
 #include "lit/Snapshot.h"
 #include "lit/SwapchainRules.h"
 
@@ -36,6 +37,12 @@
 
 namespace tb::lit
 {
+namespace
+{
+// how often the render thread looks at the chunk jobs of a batch in flight
+constexpr auto GeometryPollInterval = std::chrono::milliseconds{2};
+} // namespace
+
 namespace
 {
 
@@ -180,8 +187,11 @@ bool RenderThread::headless() const
   return m_headless;
 }
 
-void RenderThread::start()
+void RenderThread::start(CpuPool* pool, MaterialService* materials)
 {
+  m_pool = pool;
+  m_materials = materials;
+  m_geometry = std::make_unique<SceneGeometry>(m_pool, m_materials);
   m_thread = std::thread{[this] { main(); }};
 }
 
@@ -261,6 +271,18 @@ std::shared_ptr<const Snapshot> RenderThread::lastSnapshot() const
 {
   const auto lock = std::scoped_lock{m_mutex};
   return m_snapshot;
+}
+
+std::uint64_t RenderThread::appliedSnapshotSequence() const
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  return m_appliedSequence;
+}
+
+std::size_t RenderThread::chunkCount() const
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  return m_chunkCount;
 }
 
 bool RenderThread::park(const std::chrono::milliseconds timeout)
@@ -467,8 +489,10 @@ void RenderThread::runLoop()
     {
       m_pacer.frameStarted(now);
       const auto frameCamera = m_camera;
-      // S31: the frame takes the snapshot offered, and the inbox is free again
-      const auto snapshotTaken = m_snapshotInbox != nullptr;
+      // S31, B0.3: the frame takes the snapshot offered once the last one's chunks are
+      // applied; ReadyForSnapshot then says the inbox is free again
+      const auto snapshotTaken =
+        m_snapshotInbox != nullptr && (!m_geometry || m_geometry->readyForSnapshot());
       if (snapshotTaken)
       {
         m_snapshot = std::move(m_snapshotInbox);
@@ -478,6 +502,10 @@ void RenderThread::runLoop()
       if (snapshotTaken)
       {
         m_events.post(SessionEvent::ReadyForSnapshot, {});
+        if (m_geometry)
+        {
+          m_geometry->takeSnapshot(*m_snapshot);
+        }
       }
       const auto outcome = drawFrame(frameCamera);
       lock.lock();
@@ -489,6 +517,16 @@ void RenderThread::runLoop()
     }
 
     auto deadline = next.value_or(FrameClock::time_point::max());
+
+    // the chunk jobs: a finished batch is applied, and the inbox may be taken again
+    lock.unlock();
+    const auto building = geometryTick();
+    lock.lock();
+    if (building)
+    {
+      deadline = std::min(deadline, now + GeometryPollInterval);
+    }
+
     if (m_idleWorkPending && !m_events.lost())
     {
       const auto idleAt = m_lastFrameEnd + IdleCollectInterval;
@@ -947,6 +985,30 @@ void RenderThread::parkGpuWork()
   }
 }
 
+bool RenderThread::geometryTick()
+{
+  if (!m_geometry)
+  {
+    return false;
+  }
+  if (m_geometry->collect())
+  {
+    for (auto& warning : m_geometry->takeWarnings())
+    {
+      m_events.post(SessionEvent::Warning, std::move(warning));
+    }
+    const auto lock = std::scoped_lock{m_mutex};
+    m_appliedSequence = m_geometry->appliedSequence();
+    m_chunkCount = m_geometry->chunks().size();
+    // a snapshot waiting in the inbox is taken at the next frame
+    if (m_snapshotInbox)
+    {
+      m_pacer.trigger();
+    }
+  }
+  return m_geometry->busy();
+}
+
 void RenderThread::finish() noexcept
 {
   // at exit: the outstanding GPU times, then the frame log (C16: flushed at stop)
@@ -970,6 +1032,9 @@ void RenderThread::finish() noexcept
 
   try
   {
+    // the chunk jobs in flight are waited for (R5.22) before the pool stops
+    m_geometry.reset();
+
     // rows whose GPU time never arrived keep an empty field
     m_timers.flushUnresolved(m_frameIndex);
     appendSessionRow(FrameLogEvent::Stop);

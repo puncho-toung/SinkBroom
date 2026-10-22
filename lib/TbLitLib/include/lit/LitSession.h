@@ -88,8 +88,9 @@ enum class SessionEvent
   // acquire or present returned OUT_OF_DATE or SUBOPTIMAL: the GUI thread should park,
   // destroySwapchain, createSwapchain and unpark; posted once per swapchain generation
   SwapchainOutOfDate,
-  // S31: the render thread can take a snapshot: posted when it starts and whenever it has
-  // taken the one offered (LitSession::offerSnapshot)
+  // S31, B0.3: the inbox is empty: posted when the render thread starts and whenever it
+  // has taken the snapshot offered (LitSession::offerSnapshot); it does not mean that
+  // the last snapshot's chunks are applied
   ReadyForSnapshot,
 };
 
@@ -187,8 +188,11 @@ struct Snapshot;
  *
  * Snapshots are pulled (§3.3, S31): the render thread posts ReadyForSnapshot when it
  * starts and whenever it has taken the snapshot offered; the GUI thread then offers one
- * (offerSnapshot), and at most one waits in the session's one-slot inbox. The render
- * thread takes it at the start of its next frame.
+ * (offerSnapshot), and at most one waits in the session's one-slot inbox. B0.3: the
+ * render thread takes it at the start of a frame once the chunk jobs of the snapshot
+ * before it are applied (lit/SceneGeometry.h), so one snapshot is in flight (taken, its
+ * chunks not yet applied) besides the one in the inbox, and the chunks apply in the
+ * snapshots' sequence order.
  */
 class LitSession
 {
@@ -260,11 +264,11 @@ public:
    */
   bool offerSnapshot(std::shared_ptr<const Snapshot> snapshot);
 
-  // S3: the CPU pool from phase B until teardown step 1, else null; any thread that the
-  // session's teardown cannot overtake (the render thread, the GUI thread)
+  // S3: the CPU pool from phase B until teardown step 1, else null; GUI thread (B0.10:
+  // the render thread gets the pool and the service at its start, not from here)
   CpuPool* cpuPool() const;
-  // the owner's material service, from create until teardown step 1, else null; the same
-  // threads
+  // the owner's material service, from create until teardown step 1, else null; GUI
+  // thread
   MaterialService* materialService() const;
 
   // Surface handshake (§3.1, D49), GUI thread only.

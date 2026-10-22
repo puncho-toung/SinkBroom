@@ -20,6 +20,7 @@
 #include "lit/MaterialService.h"
 
 #include "StackThread.h"
+#include "lit/ProcFile.h"
 
 #include "kd/result.h"
 
@@ -30,6 +31,9 @@
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -154,6 +158,13 @@ std::shared_ptr<const MaterialSlot> MaterialTable::find(const std::string_view n
   return slot ? *slot : nullptr;
 }
 
+std::shared_ptr<const ProcFileSlot> MaterialTable::findProcFile(
+  const std::string_view path) const
+{
+  const auto* slot = procFiles.find(path);
+  return slot ? *slot : nullptr;
+}
+
 std::shared_ptr<const EntityDefSlot> MaterialTable::findEntityDef(
   const std::string_view classname) const
 {
@@ -190,6 +201,9 @@ struct MaterialService::Shared
   std::unordered_set<std::string> queuedEntityDefLookups;
   std::deque<RegisterKey> evaluations;
   std::unordered_set<RegisterKey, RegisterKeyHash> queuedEvaluations;
+  // .proc files to read (D64), with the lookups
+  std::deque<std::string> procFiles;
+  std::unordered_set<std::string> queuedProcFiles;
 
   std::shared_ptr<const MaterialTable> table = std::make_shared<const MaterialTable>();
   MaterialServiceStats stats;
@@ -227,6 +241,7 @@ private:
     std::vector<std::string> lookups;
     std::vector<std::string> entityDefLookups;
     std::vector<RegisterKey> evaluations;
+    std::vector<std::string> procFiles;
   };
 
   Shared& m_shared;
@@ -437,7 +452,8 @@ private:
         guarded("evaluation", [&] { evaluate(work.evaluations); });
         break;
       case WorkKind::Lookup:
-        guarded("lookup", [&] { lookUp(work.lookups, work.entityDefLookups); });
+        guarded(
+          "lookup", [&] { lookUp(work.lookups, work.entityDefLookups, work.procFiles); });
         break;
       case WorkKind::Poll:
         guarded("poll", [&] { poll(); });
@@ -540,16 +556,21 @@ private:
       m_shared.queuedEvaluations.clear();
       return work;
     }
-    if (!m_shared.lookups.empty() || !m_shared.entityDefLookups.empty())
+    if (
+      !m_shared.lookups.empty() || !m_shared.entityDefLookups.empty()
+      || !m_shared.procFiles.empty())
     {
       auto work = Work{WorkKind::Lookup, {}, {}, {}};
       work.lookups.assign(m_shared.lookups.begin(), m_shared.lookups.end());
       work.entityDefLookups.assign(
         m_shared.entityDefLookups.begin(), m_shared.entityDefLookups.end());
+      work.procFiles.assign(m_shared.procFiles.begin(), m_shared.procFiles.end());
       m_shared.lookups.clear();
       m_shared.queuedLookups.clear();
       m_shared.entityDefLookups.clear();
       m_shared.queuedEntityDefLookups.clear();
+      m_shared.procFiles.clear();
+      m_shared.queuedProcFiles.clear();
       return work;
     }
     if (
@@ -768,8 +789,11 @@ private:
 
   void resetWorkingTable(const std::uint64_t registry)
   {
+    // the .proc files do not depend on the registry
+    auto procFiles = std::move(m_working.procFiles);
     m_working = MaterialTable{};
     m_working.registry = registry;
+    m_working.procFiles = std::move(procFiles);
     m_deltaOrder.clear();
     m_bulkMaterial = 0;
     m_bulkTable = 0;
@@ -961,10 +985,44 @@ private:
     build(previousNames, previousEntityDefs);
   }
 
+  // D64: reads and parses a .proc with the copied lexer, on this thread (C20); a file
+  // that is missing or cannot be read gets a slot without a tree
+  void loadProcFile(const std::string& path)
+  {
+    auto slot = std::make_shared<ProcFileSlot>();
+    slot->path = path;
+    auto stream = std::ifstream{std::filesystem::path{path}, std::ios::binary};
+    if (!stream)
+    {
+      slot->error = "no .proc file at " + path;
+    }
+    else
+    {
+      const auto text = std::string{
+        std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+      readProcFile(text) | kdl::transform([&](ProcTree tree) {
+        slot->tree = std::make_shared<const ProcTree>(std::move(tree));
+      }) | kdl::transform_error([&](auto e) { slot->error = std::move(e.msg); });
+    }
+    m_working.procFiles =
+      m_working.procFiles.set(path, std::shared_ptr<const ProcFileSlot>{std::move(slot)});
+  }
+
   void lookUp(
-    const std::vector<std::string>& names, const std::vector<std::string>& entityDefNames)
+    const std::vector<std::string>& names,
+    const std::vector<std::string>& entityDefNames,
+    const std::vector<std::string>& procFiles = {})
   {
     auto changed = false;
+    for (const auto& path : procFiles)
+    {
+      if (stopping())
+      {
+        return;
+      }
+      loadProcFile(path);
+      changed = true;
+    }
     for (const auto& name : names)
     {
       if (stopping())
@@ -1278,6 +1336,21 @@ EntityDefLookup MaterialService::entityDef(const std::string_view classname)
   }
   m_shared->requested.notify_one();
   return EntityDefLookup{};
+}
+
+void MaterialService::loadProcFile(const std::string_view path)
+{
+  {
+    auto lock = std::scoped_lock{m_shared->mutex};
+    auto text = std::string{path};
+    if (
+      !m_shared->stop && !m_shared->stats.threadEnded
+      && m_shared->queuedProcFiles.insert(text).second)
+    {
+      m_shared->procFiles.push_back(std::move(text));
+    }
+  }
+  m_shared->requested.notify_one();
 }
 
 void MaterialService::parseAll()

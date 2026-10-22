@@ -44,7 +44,10 @@
 
 namespace tb::lit
 {
+class CpuPool;
 class GpuDevice;
+class MaterialService;
+class SceneGeometry;
 class SessionEvents;
 struct Snapshot;
 struct SwapchainGeneration;
@@ -78,6 +81,12 @@ private:
   nvrhi::TextureHandle m_headlessTarget;
   vk::Extent2D m_headlessExtent;
 
+  // B0.10: the session's pool and material service, given at start; the render thread's
+  // scene and chunks (B0.3), made at start and destroyed when the thread ends
+  CpuPool* m_pool = nullptr;
+  MaterialService* m_materials = nullptr;
+  std::unique_ptr<SceneGeometry> m_geometry;
+
   // ----- the swapchain generation, replaced by the GUI thread only while parked -----
   std::unique_ptr<SwapchainGeneration> m_swapchain;
 
@@ -110,11 +119,13 @@ private:
   bool m_exposed = false;
   bool m_cameraSet = false;
   CameraState m_camera;
-  // S31: the one-slot inbox, which the thread empties at a frame's start, and the last
-  // snapshot it took
+  // S31: the one-slot inbox, which the thread empties at a frame's start once the last
+  // snapshot's chunks are applied (B0.3), and the last snapshot it took
   std::shared_ptr<const Snapshot> m_snapshotInbox;
   std::shared_ptr<const Snapshot> m_snapshot;
   std::uint64_t m_snapshotsTaken = 0;
+  std::uint64_t m_appliedSequence = 0;
+  std::size_t m_chunkCount = 0;
   FramePacer m_pacer;
   std::array<std::function<void()>, 3> m_debugHooks;
   // the number of the last generation whose replacement was requested; GUI thread reads
@@ -136,7 +147,9 @@ public:
    */
   Result<void> createFrameResources(std::optional<vk::Extent2D> headlessExtent);
   bool headless() const;
-  void start();
+  // B0.10: the session's CPU pool and material service (either may be null), which the
+  // render thread's chunk jobs use; both outlive the thread
+  void start(CpuPool* pool, MaterialService* materials);
 
   // Any thread.
 
@@ -149,6 +162,9 @@ public:
   bool offerSnapshot(std::shared_ptr<const Snapshot> snapshot);
   std::uint64_t snapshotsTaken() const;
   std::shared_ptr<const Snapshot> lastSnapshot() const;
+  // the sequence of the last snapshot whose chunks are applied, and the chunk count
+  std::uint64_t appliedSnapshotSequence() const;
+  std::size_t chunkCount() const;
 
   // GUI thread: the surface handshake.
 
@@ -195,6 +211,8 @@ private:
     SwapchainGeneration& generation, std::string_view reason, bool suboptimal = false);
 
   void idleTick();
+  // collects the chunk jobs and applies a finished batch; whether a batch is in flight
+  bool geometryTick();
   bool waitForIdle(std::string_view when);
   void parkGpuWork();
   void finish() noexcept;

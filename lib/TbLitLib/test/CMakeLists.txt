@@ -12,6 +12,7 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FrameLog.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FramePacer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GameDeclSource.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Geometry.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GeometryGoldens.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitSession.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialDecls.cpp
