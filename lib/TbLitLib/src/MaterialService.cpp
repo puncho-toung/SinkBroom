@@ -20,7 +20,7 @@
 #include "lit/MaterialService.h"
 
 #include "StackThread.h"
-#include "lit/ProcFile.h"
+#include "lit/MapBake.h"
 
 #include "kd/result.h"
 
@@ -31,9 +31,6 @@
 #include <condition_variable>
 #include <cstring>
 #include <deque>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -182,10 +179,10 @@ std::shared_ptr<const MaterialSlot> MaterialTable::find(const std::string_view n
   return slot ? *slot : nullptr;
 }
 
-std::shared_ptr<const ProcFileSlot> MaterialTable::findProcFile(
+std::shared_ptr<const MapBakeSlot> MaterialTable::findMapBake(
   const std::string_view path) const
 {
-  const auto* slot = procFiles.find(path);
+  const auto* slot = mapBakes.find(path);
   return slot ? *slot : nullptr;
 }
 
@@ -225,9 +222,10 @@ struct MaterialService::Shared
   std::unordered_set<std::string> queuedEntityDefLookups;
   std::deque<RegisterKey> evaluations;
   std::unordered_set<RegisterKey, RegisterKeyHash> queuedEvaluations;
-  // .proc files to read (D64), with the lookups
-  std::deque<std::string> procFiles;
-  std::unordered_set<std::string> queuedProcFiles;
+  // maps whose bakes to read (C10), with the lookups, each with its latest ticket
+  std::deque<std::string> mapBakes;
+  std::unordered_map<std::string, std::uint64_t> queuedMapBakes;
+  std::uint64_t lastTicket = 0;
   // LP1c.1: image caches to read, with the lookups
   std::deque<MaterialImageKey> images;
   std::unordered_set<MaterialImageKey, MaterialImageKeyHash> queuedImages;
@@ -268,7 +266,7 @@ private:
     std::vector<std::string> lookups;
     std::vector<std::string> entityDefLookups;
     std::vector<RegisterKey> evaluations;
-    std::vector<std::string> procFiles;
+    std::vector<std::pair<std::string, std::uint64_t>> mapBakes;
     std::vector<MaterialImageKey> images;
   };
 
@@ -492,7 +490,7 @@ private:
         break;
       case WorkKind::Lookup:
         guarded("lookup", [&] {
-          lookUp(work.lookups, work.entityDefLookups, work.procFiles, work.images);
+          lookUp(work.lookups, work.entityDefLookups, work.mapBakes, work.images);
         });
         break;
       case WorkKind::Poll:
@@ -598,20 +596,23 @@ private:
     }
     if (
       !m_shared.lookups.empty() || !m_shared.entityDefLookups.empty()
-      || !m_shared.procFiles.empty() || !m_shared.images.empty())
+      || !m_shared.mapBakes.empty() || !m_shared.images.empty())
     {
       auto work = workOf(WorkKind::Lookup);
       work.lookups.assign(m_shared.lookups.begin(), m_shared.lookups.end());
       work.entityDefLookups.assign(
         m_shared.entityDefLookups.begin(), m_shared.entityDefLookups.end());
-      work.procFiles.assign(m_shared.procFiles.begin(), m_shared.procFiles.end());
+      for (auto& path : m_shared.mapBakes)
+      {
+        work.mapBakes.emplace_back(path, m_shared.queuedMapBakes.at(path));
+      }
       work.images.assign(m_shared.images.begin(), m_shared.images.end());
       m_shared.lookups.clear();
       m_shared.queuedLookups.clear();
       m_shared.entityDefLookups.clear();
       m_shared.queuedEntityDefLookups.clear();
-      m_shared.procFiles.clear();
-      m_shared.queuedProcFiles.clear();
+      m_shared.mapBakes.clear();
+      m_shared.queuedMapBakes.clear();
       m_shared.images.clear();
       m_shared.queuedImages.clear();
       return work;
@@ -832,12 +833,12 @@ private:
 
   void resetWorkingTable(const std::uint64_t registry)
   {
-    // the .proc files and the image caches do not depend on the registry
-    auto procFiles = std::move(m_working.procFiles);
+    // the bakes and the image caches do not depend on the registry
+    auto mapBakes = std::move(m_working.mapBakes);
     auto images = std::move(m_working.images);
     m_working = MaterialTable{};
     m_working.registry = registry;
-    m_working.procFiles = std::move(procFiles);
+    m_working.mapBakes = std::move(mapBakes);
     m_working.images = std::move(images);
     m_deltaOrder.clear();
     m_bulkMaterial = 0;
@@ -1030,27 +1031,66 @@ private:
     build(previousNames, previousEntityDefs);
   }
 
-  // D64: reads and parses a .proc with the copied lexer, on this thread (C20); a file
-  // that is missing or cannot be read gets a slot without a tree
-  void loadProcFile(const std::string& path)
+  /**
+   * C10 (LP1c.1, D64): a map's bake into the working table, under its document path,
+   * answering ticket: the C10 search through the game files (readMapBake), the text files
+   * with the copied lexer, on this thread (C20). A bake whose files did not change keeps
+   * its tree and data (the same pointers), so that a consumer that asked again rebuilds
+   * nothing; a path outside the game folder gets a slot without a tree.
+   */
+  void loadMapBake(const std::string& path, const std::uint64_t ticket)
   {
-    auto slot = std::make_shared<ProcFileSlot>();
+    auto slot = std::make_shared<MapBakeSlot>();
     slot->path = path;
-    auto stream = std::ifstream{std::filesystem::path{path}, std::ios::binary};
-    if (!stream)
+    if (!m_source)
     {
-      slot->error = "no .proc file at " + path;
+      slot->error = buildFailure();
+    }
+    else if (const auto name = engineMapName(*m_source, path))
+    {
+      const auto* kept = m_working.mapBakes.find(path);
+      if (kept && (*kept)->bake && !mapBakeChanged(*m_source, *(*kept)->bake))
+      {
+        *slot = **kept;
+      }
+      else
+      {
+        auto bake = std::make_shared<const MapBake>(readMapBake(*m_source, *name));
+        slot->tree = bake->tree;
+        slot->error = bake->geometryError;
+        slot->bake = std::move(bake);
+      }
     }
     else
     {
-      const auto text = std::string{
-        std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
-      readProcFile(text) | kdl::transform([&](ProcTree tree) {
-        slot->tree = std::make_shared<const ProcTree>(std::move(tree));
-      }) | kdl::transform_error([&](auto e) { slot->error = std::move(e.msg); });
+      slot->error = path
+                    + " is not below the game's base folder, so the engine cannot have "
+                      "baked it (C10)";
     }
-    m_working.procFiles =
-      m_working.procFiles.set(path, std::shared_ptr<const ProcFileSlot>{std::move(slot)});
+    slot->ticket = ticket;
+    m_working.mapBakes =
+      m_working.mapBakes.set(path, std::shared_ptr<const MapBakeSlot>{std::move(slot)});
+  }
+
+  // the bakes whose files changed since they were read are read again (a new dmap run)
+  bool pollMapBakes()
+  {
+    if (!m_source)
+    {
+      return false;
+    }
+    auto changed = std::vector<std::pair<std::string, std::uint64_t>>{};
+    m_working.mapBakes.forEach([&](const std::string& path, const auto& slot) {
+      if (slot->bake && mapBakeChanged(*m_source, *slot->bake))
+      {
+        changed.emplace_back(path, slot->ticket);
+      }
+    });
+    for (const auto& [path, ticket] : changed)
+    {
+      loadMapBake(path, ticket);
+    }
+    return !changed.empty();
   }
 
   /**
@@ -1085,17 +1125,17 @@ private:
   void lookUp(
     const std::vector<std::string>& names,
     const std::vector<std::string>& entityDefNames,
-    const std::vector<std::string>& procFiles = {},
+    const std::vector<std::pair<std::string, std::uint64_t>>& mapBakes = {},
     const std::vector<MaterialImageKey>& images = {})
   {
     auto changed = false;
-    for (const auto& path : procFiles)
+    for (const auto& [path, ticket] : mapBakes)
     {
       if (stopping())
       {
         return;
       }
-      loadProcFile(path);
+      loadMapBake(path, ticket);
       changed = true;
     }
     for (const auto& name : names)
@@ -1217,6 +1257,12 @@ private:
     {
       // a changed loose file: one build, at most once per autoReloadInterval
       requestAutoReload();
+    }
+    // C10, §3.7: a bake file that changed (or failed to parse and changed since) is read
+    // again
+    if (pollMapBakes())
+    {
+      publish();
     }
   }
 
@@ -1437,17 +1483,20 @@ EntityDefLookup MaterialService::entityDef(const std::string_view classname)
   return EntityDefLookup{};
 }
 
-void MaterialService::loadProcFile(const std::string_view path)
+std::uint64_t MaterialService::loadMapBake(const std::string_view mapPath)
 {
   auto queued = false;
+  auto ticket = std::uint64_t{0};
   {
     auto lock = std::scoped_lock{m_shared->mutex};
-    auto text = std::string{path};
-    if (
-      !m_shared->stop && !m_shared->stats.threadEnded
-      && m_shared->queuedProcFiles.insert(text).second)
+    ticket = ++m_shared->lastTicket;
+    auto text = std::string{mapPath};
+    if (!m_shared->stop && !m_shared->stats.threadEnded)
     {
-      m_shared->procFiles.push_back(std::move(text));
+      if (m_shared->queuedMapBakes.insert_or_assign(text, ticket).second)
+      {
+        m_shared->mapBakes.push_back(std::move(text));
+      }
       queued = true;
     }
   }
@@ -1455,6 +1504,7 @@ void MaterialService::loadProcFile(const std::string_view path)
   {
     m_shared->requested.notify_one();
   }
+  return ticket;
 }
 
 ImageLookup MaterialService::image(const MaterialImageKey& key)

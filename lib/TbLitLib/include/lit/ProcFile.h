@@ -77,6 +77,7 @@ struct ProcModel
  */
 struct ProcTree
 {
+  // the .proc's id: 4 (mapProcFile004) or 3; 0 for a tree read from a .bproc
   int version = 0;
   int numAreas = 0;
   std::vector<ProcModel> models;
@@ -91,6 +92,10 @@ struct ProcTree
  * lexer's messages go to the calling thread's sink (D63).
  */
 Result<ProcTree> readProcFile(std::string_view text, bool geometry = false);
+
+// a model's area: N for "_areaN", -1 for any other name (InitFromMap's area models).
+// Pure; any thread.
+int procModelArea(std::string_view name);
 
 /**
  * RenderWorld.cpp:1240-1275 PointInArea: from node 0, d = p·n + plane[3]; d > 0 goes to

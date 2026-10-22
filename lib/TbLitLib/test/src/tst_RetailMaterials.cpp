@@ -32,14 +32,20 @@
 //   engine's own export, base/_bl/materials.json.
 // - The light sweep (LP1b.3) parses every light* entityDef through the light mirror and
 //   allows only the warnings the engine would print too.
+// - LP1c.1: one retail map's bake through the full C8 search (its .bproc in its
+//   .resources, its light grid in the GI .pk4), and the material sweep's image keys
+//   named as the engine names their caches, counted, a sample read, and compared with
+//   the engine's own Binarize lines.
 
 #include "LitTestUtils.h"
 #include "TestEnvironment.h"
 #include "lit/EntityState.h"
 #include "lit/GameDeclSource.h"
 #include "lit/GameFile.h"
+#include "lit/ImageCache.h"
 #include "lit/LightData.h"
 #include "lit/LightParse.h"
+#include "lit/MapBake.h"
 #include "lit/MaterialDecls.h"
 #include "lit/MaterialService.h"
 
@@ -1200,6 +1206,234 @@ TEST_CASE(
     listed.empty() ? "" : ":\n  " + fmt::format("{}", fmt::join(listed, "\n  ")));
   CHECK(parsed > 0);
   CHECK(unexpected.empty());
+}
+
+TEST_CASE("Retail materials: bakes and image caches (LP1c.1)", "[.][retail]")
+{
+  const auto gamePath = retailGamePath();
+  if (!gamePath)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the sweep needs the game folder");
+  }
+  const auto started = std::chrono::steady_clock::now();
+  auto source = GameDeclSource{*gamePath};
+
+  // C10, D55: one retail map's bake through the full search; retail ships the area BSP
+  // as a .bproc in its .resources and the light grid in the GI .pk4
+  const auto mapName = std::string{"maps/game/admin"};
+  const auto bake = readMapBake(source, mapName);
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  const auto foundIn = [&](const std::string& path) {
+    for (const auto& file : bake.files)
+    {
+      if (file.path == path)
+      {
+        return file.probe.kind == GameFileProbe::Kind::Missing ? std::string{"none"}
+               : file.probe.container.empty()                  ? std::string{"loose"}
+                                                               : file.probe.container;
+      }
+    }
+    return std::string{"not consulted"};
+  };
+  REQUIRE(bake.tree);
+  std::cout << fmt::format(
+    "Retail bake of {}: geometry {} ({} areas, {} nodes, {} portals, {} models; .proc "
+    "{}, .bproc {}), bake base {}, grid {} ({} entries; .lightgrid {}, .blightgrid {}), "
+    "SH probes {}, dropped: {}\n",
+    mapName,
+    bake.geometry == MapBake::Geometry::Proc ? "proc" : "bproc",
+    bake.tree->numAreas,
+    bake.tree->nodes.size(),
+    bake.tree->portals.size(),
+    bake.tree->models.size(),
+    foundIn(mapName + ".proc"),
+    foundIn("generated/" + mapName + ".bproc"),
+    bake.bakeBase,
+    bake.grid == MapBake::Grid::Binary ? "binary"
+    : bake.grid == MapBake::Grid::Text ? "text"
+                                       : "none",
+    bake.lightGrid ? bake.lightGrid->areas.size() : std::size_t{0},
+    foundIn(bake.bakeBase + ".lightgrid"),
+    foundIn("generated/" + bake.bakeBase + ".blightgrid"),
+    bake.shProbes ? fmt::format("{}", bake.shProbes->size()) : std::string{"none"},
+    bake.dropReason.empty() ? std::string{"no"} : bake.dropReason);
+  CHECK(bake.geometry != MapBake::Geometry::None);
+  CHECK(bake.grid == MapBake::Grid::Binary);
+  CHECK(foundIn(bake.bakeBase + ".lightgrid") == "_rbdoom_global_illumination_data.pk4");
+  CHECK(
+    foundIn("generated/" + bake.bakeBase + ".blightgrid")
+    == "_rbdoom_global_illumination_data.pk4");
+  CHECK(bake.dropReason.empty());
+
+  // its light grid's irradiance atlases resolve to the GI .pk4's caches (SC105)
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+  auto gridImages = 0;
+  auto noAtlas = std::vector<std::string>{};
+  REQUIRE(bake.lightGrid);
+  for (const auto& entry : bake.lightGrid->areas)
+  {
+    const auto name = decls.imageCacheName(lightGridImageKey(bake.bakeBase, entry.area));
+    REQUIRE(name);
+    const auto slot = resolveImageCache(source, *name.value);
+    if (slot.state == ImageCacheSlot::State::Ready)
+    {
+      ++gridImages;
+      CHECK(slot.image->textureType == engine_image::Type2D);
+      continue;
+    }
+    // an area the baker made no atlas for: report its grid
+    auto valid = 0;
+    for (const auto& point : entry.points)
+    {
+      valid += point.valid ? 1 : 0;
+    }
+    noAtlas.push_back(fmt::format(
+      "area {} ({} points, {} valid, bounds {} {} {})",
+      entry.area,
+      entry.points.size(),
+      valid,
+      entry.bounds[0],
+      entry.bounds[1],
+      entry.bounds[2]));
+    // the baker makes no atlas for an area without grid points
+    CHECK(slot.state == ImageCacheSlot::State::Missing);
+    CHECK(entry.points.empty());
+  }
+  std::cout << fmt::format(
+    "Retail light grid atlases: {} of {} Ready; none for {}\n",
+    gridImages,
+    bake.lightGrid->areas.size(),
+    noAtlas.empty() ? std::string{"none"} : fmt::format("{}", fmt::join(noAtlas, ", ")));
+  source.closeFiles();
+
+  // the image keys of the material sweep (every material parsed, as the sweep parses
+  // them) and their caches, through the probe: the cache file, or the BFHACK name's
+  for (auto i = 0; i < decls.materialCount(); ++i)
+  {
+    static_cast<void>(decls.lookupIndex(i));
+  }
+  const auto keys = decls.imageKeys();
+  auto generated = 0;
+  auto found = 0;
+  auto viaBfhack = 0;
+  auto failed = 0;
+  auto names = std::set<std::string>{};
+  auto existing = std::vector<ImageCacheName>{};
+  for (const auto& key : keys)
+  {
+    const auto name = decls.imageCacheName(key);
+    if (!name)
+    {
+      ++failed;
+      continue;
+    }
+    names.insert(name.value->generatedName);
+    if (name.value->generated)
+    {
+      ++generated;
+    }
+    else if (source.probe(name.value->file).exists())
+    {
+      ++found;
+      existing.push_back(*name.value);
+    }
+    else if (
+      source.usingResourceFiles() && !name.value->bfhackFile.empty()
+      && source.probe(name.value->bfhackFile).exists())
+    {
+      ++viaBfhack;
+      existing.push_back(*name.value);
+    }
+  }
+
+  // every 25th found cache read and checked as the engine checks it, and every light
+  // image's (TD_LIGHT, RGB565 in the BFG's data)
+  auto read = 0;
+  auto ready = 0;
+  auto rgb565 = 0;
+  auto staleReasons = std::map<std::string, int>{};
+  for (std::size_t i = 0; i < existing.size(); ++i)
+  {
+    if (i % 25 != 0 && existing[i].usage != engine_image::UsageLight)
+    {
+      continue;
+    }
+    const auto slot = resolveImageCache(source, existing[i]);
+    source.closeFiles();
+    ++read;
+    if (slot.state == ImageCacheSlot::State::Ready)
+    {
+      ++ready;
+      if (slot.image->storedFormat == engine_image::FormatRgb565)
+      {
+        ++rgb565;
+        // the expansion doubles every level's bytes
+        auto stored = std::size_t{0};
+        for (const auto& level : slot.image->levels)
+        {
+          stored += level.size / 2;
+        }
+        CHECK(slot.image->data.size() == stored * 2);
+      }
+    }
+    else
+    {
+      ++staleReasons[slot.reason.substr(0, slot.reason.find('\''))];
+    }
+  }
+  static_cast<void>(decls.takeMessages());
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+
+  // W.7, A3.10: the engine's own Binarize lines name the post-load usages of the
+  // materialorb's images (the _s specular made _rmao, #__1200): the names are among ours
+  auto binarized = std::vector<std::string>{};
+  for (const auto& block : readGoldens())
+  {
+    for (const auto& line : block.lines)
+    {
+      if (isBinarizeLine(line))
+      {
+        const auto start = line.find('\'') + 1;
+        binarized.push_back(line.substr(start, line.find('\'', start) - start));
+      }
+    }
+  }
+  auto stale = std::vector<std::string>{};
+  for (const auto& [reason, count] : staleReasons)
+  {
+    stale.push_back(fmt::format("{} x{}", reason, count));
+  }
+  std::cout << fmt::format(
+    "Retail image keys: {} keys, {} generated by the engine, {} caches found ({} through "
+    "the BFHACK name), {} without a cache, {} names refused; {} light grid atlases "
+    "Ready; "
+    "read {} caches: {} Ready ({} RGB565 expanded), stale: {}; Binarize names {}; {:.0f} "
+    "ms\n",
+    keys.size(),
+    generated,
+    found + viaBfhack,
+    viaBfhack,
+    int(keys.size()) - generated - found - viaBfhack - failed,
+    failed,
+    gridImages,
+    read,
+    ready,
+    rgb565,
+    stale.empty() ? std::string{"none"} : fmt::format("{}", fmt::join(stale, ", ")),
+    fmt::format("{}", fmt::join(binarized, ", ")),
+    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started)
+      .count());
+  REQUIRE(binarized.size() == 3u);
+  for (const auto& name : binarized)
+  {
+    CAPTURE(name);
+    CHECK(names.count(name) == 1u);
+  }
+  CHECK(failed == 0);
+  CHECK(found > 0);
+  CHECK(ready > 0);
+  CHECK(gridImages + int(noAtlas.size()) == bake.tree->numAreas);
 }
 
 } // namespace tb::lit

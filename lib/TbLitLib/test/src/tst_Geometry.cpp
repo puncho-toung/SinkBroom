@@ -19,9 +19,11 @@
 
 #include "LitMapFixture.h"
 #include "LitTestUtils.h"
+#include "fs/TestEnvironment.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/CpuPool.h"
 #include "lit/EntityState.h"
+#include "lit/GameFileSource.h"
 #include "lit/LightData.h"
 #include "lit/LightRecord.h"
 #include "lit/MaterialService.h"
@@ -45,6 +47,7 @@
 #include <optional>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -53,6 +56,7 @@
 #endif
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 namespace tb::lit
 {
@@ -233,35 +237,137 @@ std::map<ChunkKey, ChunkSummary> ofEntity(
   return summary;
 }
 
-// a material service over the fixture's materials, the stand-ins and the test's own
-// decls, whose parse thread waits at the gate before every request
+// the fixture's materials, the stand-ins and the test's own decls
+std::vector<DeclFile> fixtureDecls()
+{
+  return {
+    DeclFile{
+      "materials/lp1bc.mtr",
+      readTextFile(litFixtureFolder() / "materials" / "lp1bc.mtr"),
+      0},
+    DeclFile{
+      "materials/zz_lp1b_test.mtr",
+      "textures/common/origin\n{\n\torigin\n\tnoshadows\n}\n"
+      "textures/lp1b/test_nodraw\n{\n\tnoshadows\n}\n"
+      "textures/lp1b/test_origin\n{\n\torigin\n\tnoshadows\n}\n",
+      0},
+    DeclFile{
+      "def/lp1b_test.def",
+      "entityDef func_static\n{\n\t\"noshadows\" \"1\"\n}\n"
+      "entityDef func_lp1b_late\n{\n\t\"noshadows\" \"1\"\n}\n",
+      0},
+  };
+}
+
+// a material service over the fixture decls, whose parse thread waits at the gate before
+// every request
 std::unique_ptr<MaterialService> gatedService(const std::shared_ptr<ParseGate>& gate)
 {
   auto options = MaterialServiceOptions{};
   options.makeSource = [](const std::atomic<bool>&) {
     return std::unique_ptr<DeclSource>{
-      std::make_unique<MemoryDeclSource>(std::vector<DeclFile>{
-        DeclFile{
-          "materials/lp1bc.mtr",
-          readTextFile(litFixtureFolder() / "materials" / "lp1bc.mtr"),
-          0},
-        DeclFile{
-          "materials/zz_lp1b_test.mtr",
-          "textures/common/origin\n{\n\torigin\n\tnoshadows\n}\n"
-          "textures/lp1b/test_nodraw\n{\n\tnoshadows\n}\n"
-          "textures/lp1b/test_origin\n{\n\torigin\n\tnoshadows\n}\n",
-          0},
-        DeclFile{
-          "def/lp1b_test.def",
-          "entityDef func_static\n{\n\t\"noshadows\" \"1\"\n}\n"
-          "entityDef func_lp1b_late\n{\n\t\"noshadows\" \"1\"\n}\n",
-          0},
-      })};
+      std::make_unique<MemoryDeclSource>(fixtureDecls())};
   };
   options.pollInterval = std::chrono::milliseconds{0};
   options.beforeTakeWorkForTesting = [gate] { gate->pass(); };
   return MaterialService::create(std::move(options))
          | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+}
+
+/**
+ * C10: a game folder with the fixture decls and the fixture map's .proc as
+ * maps/lp1b_geometry.proc, where the bake search finds it for the map document
+ * base/maps/lp1b_geometry.map.
+ */
+class BakeGame
+{
+private:
+  fs::TestEnvironment m_env;
+
+public:
+  BakeGame()
+  {
+    for (const auto& file : fixtureDecls())
+    {
+      writeTextFile(base() / file.path, *file.text);
+    }
+    writeProc("lp1b_geometry", readTextFile(goldenProc()));
+  }
+
+  std::filesystem::path base() const { return m_env.dir() / "base"; }
+
+  static std::filesystem::path goldenProc()
+  {
+    return litFixtureFolder() / "goldens" / "lp1b_geometry" / "lp1b_geometry.proc";
+  }
+
+  // the document path of a map below base/maps
+  std::string mapPath(const std::string& name) const
+  {
+    return (base() / "maps" / (name + ".map")).string();
+  }
+
+  void writeProc(const std::string& name, const std::string& text) const
+  {
+    writeTextFile(base() / "maps" / (name + ".proc"), text);
+  }
+
+  // a material service over this game folder, gated as gatedService
+  std::unique_ptr<MaterialService> service(
+    const std::shared_ptr<ParseGate>& gate,
+    const std::chrono::milliseconds pollInterval = std::chrono::milliseconds{0}) const
+  {
+    auto options = MaterialServiceOptions{};
+    options.makeSource = [path = m_env.dir()](const std::atomic<bool>& cancel) {
+      return std::unique_ptr<DeclSource>{std::make_unique<GameFileSource>(path, &cancel)};
+    };
+    options.pollInterval = pollInterval;
+    options.beforeTakeWorkForTesting = [gate] { gate->pass(); };
+    return MaterialService::create(std::move(options))
+           | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  }
+};
+
+// collects until nothing is in flight and done holds, or 10 s
+template <typename Done>
+bool settle(SceneGeometry& scene, const Done& done)
+{
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    scene.collect();
+    if (!scene.busy() && done())
+    {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{2});
+  }
+  return false;
+}
+
+/**
+ * Closes the gate once the parse thread stands at it: the thread, waiting for a request,
+ * takes one more (ParseGate), so it is given a lookup of name, and once that is published
+ * it stops before its next request; a request made after this stays queued until open.
+ */
+void closeGateWhenIdle(MaterialService& service, ParseGate& gate, const std::string& name)
+{
+  gate.close();
+  static_cast<void>(service.lookup(name));
+  REQUIRE(service.waitForTableForTesting(
+    [&](const MaterialTable& t) { return t.find(name) != nullptr; },
+    std::chrono::seconds{10}));
+}
+
+// the snapshot's first light node
+const SnapshotNode& lightNodeOf(const Snapshot& snapshot)
+{
+  const auto light = std::find_if(
+    snapshot.nodes.begin(), snapshot.nodes.end(), [](const SnapshotNode& node) {
+      return node.kind == SnapshotNodeKind::Light;
+    });
+  REQUIRE(light != snapshot.nodes.end());
+  return *light;
 }
 
 } // namespace
@@ -1070,52 +1176,55 @@ TEST_CASE("SceneGeometry: worldspawn's overrideMaterial is asked for and drawn (
 }
 
 TEST_CASE(
-  "SceneGeometry: lights are built once when the .proc comes with the snapshot (V.8)")
+  "SceneGeometry, lights are built once when the .proc comes with the snapshot (V.8)")
 {
   using namespace std::chrono_literals;
   static_cast<void>(fixtureTable());
+  const auto game = BakeGame{};
   auto gate = std::make_shared<ParseGate>();
-  auto service = gatedService(gate);
-  // the .proc and everything the light needs are in the table before the snapshot
-  const auto goldens = litFixtureFolder() / "goldens" / "lp1b_geometry";
-  const auto procPath = (goldens / "lp1b_geometry.proc").string();
-  service->loadProcFile(procPath);
+  auto service = game.service(gate);
+  const auto atExit = OpenAtExit{gate};
   static_cast<void>(service->lookup("lights/squarelight1"));
   static_cast<void>(service->lookup(DefaultPointLightMaterial));
   static_cast<void>(service->lookup(DefaultProjectedLightMaterial));
   static_cast<void>(service->entityDef("light"));
   REQUIRE(service->waitForTableForTesting(
     [&](const MaterialTable& t) {
-      const auto proc = t.findProcFile(procPath);
-      return proc && proc->tree && t.find("lights/squarelight1")
-             && t.find(DefaultPointLightMaterial) && t.find(DefaultProjectedLightMaterial)
-             && t.findEntityDef("light");
+      return t.find("lights/squarelight1") && t.find(DefaultPointLightMaterial)
+             && t.find(DefaultProjectedLightMaterial) && t.findEntityDef("light");
     },
     10s));
   auto pool = CpuPool::create() | kdl::value();
   {
     auto scene = SceneGeometry{pool.get(), service.get()};
+    // the first snapshot asks for the map's bake (C10); its batch applies before the
+    // answer arrives
+    closeGateWhenIdle(*service, *gate, "textures/lp1b/v8_gate");
+    auto first = snapshotOfMapText(mapText("", ""));
+    first.sequence = 1;
+    first.mapPath = game.mapPath("lp1b_geometry");
+    scene.takeSnapshot(first);
+    scene.finishForTesting();
+    REQUIRE_FALSE(scene.procTree());
+    gate->open();
+    REQUIRE(service->waitForTableForTesting(
+      [&](const MaterialTable& t) {
+        const auto slot = t.findMapBake(*first.mapPath);
+        return slot && slot->tree;
+      },
+      10s));
+
+    // the snapshot that brings a light adopts the tree before the lights take it
     auto snapshot = snapshotOfMapText(mapText(
       "",
       "{\n\"classname\" \"light\"\n\"origin\" \"64 0 96\"\n\"light_radius\" \"200 200 "
       "200\"\n}\n"));
-    snapshot.sequence = 1;
-    snapshot.mapPath = (goldens / "lp1b_geometry.map").string();
-    const auto light = std::find_if(
-      snapshot.nodes.begin(), snapshot.nodes.end(), [](const SnapshotNode& node) {
-        return node.kind == SnapshotNodeKind::Light;
-      });
-    REQUIRE(light != snapshot.nodes.end());
+    snapshot.sequence = 2;
+    const auto light = lightNodeOf(snapshot);
     scene.takeSnapshot(snapshot);
-    const auto deadline = std::chrono::steady_clock::now() + 10s;
-    while (scene.busy() && std::chrono::steady_clock::now() < deadline)
-    {
-      scene.collect();
-      std::this_thread::sleep_for(2ms);
-    }
     scene.finishForTesting();
     REQUIRE(scene.procTree());
-    const auto record = scene.lightTable()->find(light->entity);
+    const auto record = scene.lightTable()->find(light.entity);
     REQUIRE(record);
     CHECK(record->derived.hasAreaTree);
     CHECK(record->derived.areas.size() == 2u);
@@ -1282,44 +1391,75 @@ TEST_CASE(
 namespace tb::lit
 {
 
-TEST_CASE("MaterialService: .proc files on the parse thread (D64)")
+TEST_CASE("MaterialService, map bakes on the parse thread (C10, D64)")
 {
-  auto options = MaterialServiceOptions{};
-  options.makeSource = [](const std::atomic<bool>&) {
-    return std::unique_ptr<DeclSource>{
-      std::make_unique<MemoryDeclSource>(std::vector<DeclFile>{})};
-  };
-  options.pollInterval = std::chrono::milliseconds{0};
-  auto service = MaterialService::create(std::move(options)) | kdl::value();
+  using namespace std::chrono_literals;
+  const auto game = BakeGame{};
+  auto gate = std::make_shared<ParseGate>();
+  auto service = game.service(gate, 20ms);
+  const auto atExit = OpenAtExit{gate};
 
-  const auto path =
-    (litFixtureFolder() / "goldens" / "lp1b_geometry" / "lp1b_geometry.proc").string();
-  const auto missing = (litFixtureFolder() / "maps" / "no_such_map.proc").string();
-  service->loadProcFile(path);
-  service->loadProcFile(missing);
+  const auto path = game.mapPath("lp1b_geometry");
+  const auto missing = game.mapPath("no_such_map");
+  const auto outside = (game.base().parent_path() / "outside.map").string();
+  const auto ticket = service->loadMapBake(path);
+  CHECK(service->loadMapBake(missing) > ticket);
+  static_cast<void>(service->loadMapBake(outside));
   const auto table = service->waitForTableForTesting(
     [&](const MaterialTable& t) {
-      return t.findProcFile(path) && t.findProcFile(missing);
+      return t.findMapBake(path) && t.findMapBake(missing) && t.findMapBake(outside);
     },
-    std::chrono::seconds{10});
-  const auto found = table->findProcFile(path);
+    10s);
+  const auto found = table->findMapBake(path);
   REQUIRE(found);
+  CHECK(found->ticket == ticket);
   REQUIRE(found->tree);
   CHECK(found->tree->nodes.size() == 39u);
   CHECK(found->tree->numAreas == 2);
-  const auto none = table->findProcFile(missing);
+  REQUIRE(found->bake);
+  CHECK(found->bake->geometry == MapBake::Geometry::Proc);
+  CHECK(found->bake->mapName == "maps/lp1b_geometry");
+  const auto none = table->findMapBake(missing);
   REQUIRE(none);
   CHECK_FALSE(none->tree);
-  CHECK_FALSE(none->error.empty());
+  CHECK_THAT(none->error, Catch::Matchers::ContainsSubstring("no maps/no_such_map.proc"));
+  const auto away = table->findMapBake(outside);
+  REQUIRE(away);
+  CHECK_FALSE(away->bake);
+  CHECK_THAT(
+    away->error, Catch::Matchers::ContainsSubstring("not below the game's base"));
+
+  // asked again with no file changed: a new ticket, the same tree
+  const auto again = service->loadMapBake(path);
+  const auto same = service->waitForTableForTesting(
+    [&](const MaterialTable& t) {
+      const auto slot = t.findMapBake(path);
+      return slot && slot->ticket == again;
+    },
+    10s);
+  CHECK(same->findMapBake(path)->tree == found->tree);
 
   // a reload keeps them
   service->reload();
   const auto reloaded = service->waitForTableForTesting(
+    [&](const MaterialTable& t) { return t.registry != table->registry; }, 10s);
+  CHECK(reloaded->findMapBake(path));
+
+  // a new dmap run is seen by the poll: the tree is read again under the same ticket
+  game.writeProc(
+    "lp1b_geometry",
+    "mapProcFile004\n\ninterAreaPortals { 2 0 }\n\nnodes { 1\n( 1 0 0 0 ) -1 -2\n}\n");
+  bumpModificationTime(game.base() / "maps" / "lp1b_geometry.proc");
+  const auto polled = service->waitForTableForTesting(
     [&](const MaterialTable& t) {
-      return t.version > table->version && t.registry != table->registry;
+      const auto slot = t.findMapBake(path);
+      return slot && slot->tree && slot->tree->nodes.size() == 1u;
     },
-    std::chrono::seconds{10});
-  CHECK(reloaded->findProcFile(path));
+    10s);
+  CHECK(polled->findMapBake(path)->ticket == again);
+  service->requestStop();
+  service->join();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
 }
 
 } // namespace tb::lit

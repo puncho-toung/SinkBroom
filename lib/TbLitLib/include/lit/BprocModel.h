@@ -69,7 +69,9 @@ struct BprocModel
  */
 Result<BprocModel> readBinaryModel(std::span<const std::byte> data, std::size_t& offset);
 
-// a .bproc (RenderWorld_load.cpp:764-998 InitFromMap's binary branch, version 3)
+// a .bproc (RenderWorld_load.cpp:764-998 InitFromMap's binary branch): version 3, or
+// the BFG's 1 (models saved as "shadowmodel") and 2, which InitFromMap takes only without
+// a .proc (lit/BprocFile.h decides)
 struct BprocFile
 {
   std::uint32_t magic = 0;

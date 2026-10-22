@@ -291,6 +291,11 @@ Result<ProcTree> readProcFile(const std::string_view text, const bool geometry)
          });
 }
 
+int procModelArea(const std::string_view name)
+{
+  return areaOfModel(name);
+}
+
 int pointInArea(const ProcTree& tree, const std::array<float, 3>& point)
 {
   // the engine's areaNodes is null: -1

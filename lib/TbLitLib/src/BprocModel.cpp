@@ -51,6 +51,9 @@ constexpr std::uint32_t magicOf(
 }
 constexpr auto BrmMagicBfg = magicOf('B', 'R', 'M', 108);
 constexpr auto BrmMagic = magicOf('B', 'R', 'M', 110);
+// RenderWorld_load.cpp:808-816: BPROC_VERSION_BFG 1, _MOC_DATA 2, _VERTEX_COLOR 3
+constexpr auto BprocMagicBfg = magicOf('P', 'R', 'O', 1);
+constexpr auto BprocMagicMocData = magicOf('P', 'R', 'O', 2);
 constexpr auto BprocMagic = magicOf('P', 'R', 'O', 3);
 
 class Reader
@@ -326,7 +329,9 @@ Result<BprocFile> readBprocFile(const std::span<const std::byte> data)
   auto in = Reader{data, offset};
   auto file = BprocFile{};
   file.magic = in.big<std::uint32_t>();
-  if (file.magic != BprocMagic)
+  if (
+    file.magic != BprocMagic && file.magic != BprocMagicBfg
+    && file.magic != BprocMagicMocData)
   {
     return Error{fmt::format("The .bproc cannot be read: magic {:08x}", file.magic)};
   }
@@ -341,7 +346,8 @@ Result<BprocFile> readBprocFile(const std::span<const std::byte> data)
     std::transform(type.begin(), type.end(), type.begin(), [](const char c) {
       return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
     });
-    if (type == "model")
+    // RB: the original BFG .bproc just saved all models as "shadowmodel"
+    if (type == "model" || (type == "shadowmodel" && file.magic == BprocMagicBfg))
     {
       // RenderWorld_load.cpp:128-141 ReadBinaryModel: the name, then the stream
       const auto name = in.string();

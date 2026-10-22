@@ -7995,9 +7995,13 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/EngineLexer.cpp",
           "symbol": "EngineLexer"
+        },
+        {
+          "file": "lib/TbLitLib/src/MapBake.cpp",
+          "symbol": "readGeometry"
         }
       ],
-      "note": "D64: tokenised with the copied idLexer (InitFromMap's LEXFL_NOSTRINGCONCAT | LEXFL_NODOLLARPRECOMPILE) on the parse thread; shadowModel skipped; the engine's bounds checks, and a node child that names no node is refused; model geometry kept only on request (the goldens, LP7)"
+      "note": "D64: tokenised with the copied idLexer (InitFromMap's LEXFL_NOSTRINGCONCAT | LEXFL_NODOLLARPRECOMPILE) on the parse thread; shadowModel skipped; the engine's bounds checks, and a node child that names no node is refused; model geometry kept only on request (the goldens, LP7). LP1c.1: maps/<map>.proc through the C8 search (C10, D55), from the map document's engine name, not beside the .map file (M-BAKE-02)"
     },
     {
       "id": "M-GEO-FN-06",
@@ -8313,7 +8317,7 @@
           "symbol": "readBinaryModel, readBprocFile"
         }
       ],
-      "note": "A9, SC72: big-endian ReadBig, little-endian ReadVec3/ReadFloat/strings; every count checked against the bytes left; LP1c.1 reuses readBinaryModel"
+      "note": "A9, SC72: big-endian ReadBig, little-endian ReadVec3/ReadFloat/strings; every count checked against the bytes left; LP1c.1 reuses readBinaryModel. LP1c.1: the BFG's version-1 and version-2 files are read too, the version-1 \"shadowmodel\" entries as models (InitFromMap :854-865); when they are used is lit/BprocFile.h's (M-BAKE-01). A .pk4 or .resources .bproc is read through the C8 search"
     },
     {
       "id": "M-GEO-FN-12",
@@ -10180,6 +10184,307 @@
         }
       ],
       "note": "LP1c.1: an image's cache is read once per session, when it is first asked for, and kept across material reloads (it does not depend on the decls); the engine reads it at every image load. A cache or source changed later is seen after a restart of the session until LP1c.2's re-probe on an image file change"
+    },
+    {
+      "id": "M-BAKE-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            806,
+            879
+          ],
+          "anchor": "InitFromMap, the .bproc branch and its version gate",
+          "sha256": "671e3870621e0f2b904305651ee674f1e5f368b17e46e89ff6561ad3efcb92b6"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            400,
+            406
+          ],
+          "anchor": "LoadBinaryModel, the time test",
+          "sha256": "b6c1ce885ef6e7a5ff96e680f3cc02695527bcd5756c0ab925e2bb6708e59309"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/BprocFile.cpp",
+          "symbol": "readBprocTree"
+        },
+        {
+          "file": "lib/TbLitLib/src/BprocModel.cpp",
+          "symbol": "readBprocFile"
+        },
+        {
+          "file": "lib/TbLitLib/src/ProcFile.cpp",
+          "symbol": "procModelArea"
+        }
+      ],
+      "note": "C10, A9, D64 (LP1c.1): the .bproc's area BSP into the .proc reader's ProcTree: the models skipped through the LoadBinaryModel mirror (M-GEO-FN-11) and kept by name and area with their surfaces' materials and counts (the loaded model's: FinishSurfaces adds the back sides of a two-sided material, so the counts differ from the .proc text's), the portals and nodes as stored, equal to the .proc's bit for bit (the engine wrote them from the copied idLexer's values; tested on the fixture). com_productionMode 0: version 3 is never time-checked against the .proc (A9); versions 1 and 2 only when no .proc exists (FILE_NOT_FOUND_TIMESTAMP); a model whose time differs from the header's (neither -1 nor 0) fails the file (ReadBinaryModel). Not in the engine: a portal area past the area count or a node child that names no node fails the file, as the .proc reader's checks"
+    },
+    {
+      "id": "M-BAKE-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            764,
+            998
+          ],
+          "anchor": "idRenderWorldLocal::InitFromMap",
+          "sha256": "a3e3cfd7b04c07ad0be1a6edcac761d5d17ac93dc5dfe802d063f829cbe7237b"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            383,
+            413
+          ],
+          "anchor": "idRenderWorldLocal::SetupLightGrid",
+          "sha256": "6b07cb3caffcd3a65c8555dbf2b71e83a16d7c4bf2c26f8396da88c3f049d8fc"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            526,
+            688
+          ],
+          "anchor": "idRenderWorldLocal::LoadLightGridFile",
+          "sha256": "02e1ceb7c4fcc32b80255ce0b543da5c2b84fc0125248b9f2a8c3de23f7debe0"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            743,
+            798
+          ],
+          "anchor": "idRenderWorldLocal::LoadSHProbesFile",
+          "sha256": "bfe5d04bf384f99ed22c2a1bc8e3ee37871a611dd9ab7015dedb763734fac14c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MapBake.cpp",
+          "symbol": "readMapBake"
+        },
+        {
+          "file": "lib/TbLitLib/src/MapBake.cpp",
+          "symbol": "readLightGrid"
+        },
+        {
+          "file": "lib/TbLitLib/src/MapBake.cpp",
+          "symbol": "readShProbesFile"
+        },
+        {
+          "file": "lib/TbLitLib/src/MapBake.cpp",
+          "symbol": "engineMapName"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::loadMapBake"
+        }
+      ],
+      "note": "C10 (LP1c.1), every file through the C8 search (D55), read only: the area BSP from <map>.proc (SetFileExtension), else generated/<map>.bproc (K16, M-BAKE-DIFF-01); the bake files named after the world's mapName without its extension, the .bproc's stored name when it is used; the light grid: generated/<base>.blightgrid when its magic is PRO 4, the .lightgrid's GetTimestamp equals its stored time or is 0, and it has entries (A2: a missing text, -1, rejects it), else the text; <base>.shprobes, optional. No tree, no bake (InitFromMap fails before SetupLightGrid)"
+    },
+    {
+      "id": "M-BAKE-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            42,
+            50
+          ],
+          "anchor": "LGRID_* and BLGRID_MAGIC",
+          "sha256": "5e45d6695bbf32eeaf6dff2fb05343717724f73bf2ed377b779019e196d170f2"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            690,
+            784
+          ],
+          "anchor": "idRenderWorldLocal::ParseLightGridPoints",
+          "sha256": "fc115ac2ef74bdd10d3cc8b3b3b0026c099bb2ef3409f31bdf00022b11142e42"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            786,
+            849
+          ],
+          "anchor": "idRenderWorldLocal::ReadBinaryLightGridPoints",
+          "sha256": "c487c63d3ba3b8ed863c344e65c1b1b830170f35e71324f8910d40ee72cc40df"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            489,
+            523
+          ],
+          "anchor": "idRenderWorldLocal::WriteLightGrid (the text's form)",
+          "sha256": "e4e1ede7a917cee366e152f2981500159d3fd88855a2389f00bfc507f886c13b"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_local.h",
+          "lines": [
+            63,
+            69
+          ],
+          "anchor": "lightGridPoint_t",
+          "sha256": "d84e33ada84fdb55d2305ba54791911d2493a2fe4a48b05091813fe5d1e2443c"
+        },
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            492,
+            492
+          ],
+          "anchor": "STORE_LIGHTGRID_SHDATA",
+          "sha256": "bfcb6f1c416d0e91dd12f9c62b9d3b9b1b996933e837dda6a5318fa16e2bbe48"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightGridFile.cpp",
+          "symbol": "readLightGridText"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightGridFile.cpp",
+          "symbol": "readLightGridBinary"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightGridFile.cpp",
+          "symbol": "lightGridBinaryAccepted"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightGridFile.cpp",
+          "symbol": "readShProbes"
+        }
+      ],
+      "note": "SC103, SC104 (LP1c.1): the text with the copied idLexer on the parse thread (LGRID, the version 3 or 4 as a number or the quoted string the writer writes, then lightGridPoints entries: area, count, probe size >= 8, border >= 0, ( origin ) ( size ), three bounds, per point valid and ( x y z ), no SH data as STORE_LIGHTGRID_SHDATA is 0); the binary big-endian (magic, int64 time, count, per entry a ReadString type 'lightGridPoints' in any case, area, count, probe and border sizes >= 0, origin and size as three floats, bounds as three ints, per point a byte and three floats). An area outside the map's count, as the engine's Error. Not in the engine: every count is checked against the bytes left, and a failure counts as no file (M-BAKE-DIFF-02). The .shprobes: SHPROBES, version 1, a count 0 to 65536, per probe its area, ( origin ), ( 27 floats )"
+    },
+    {
+      "id": "M-BAKE-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            415,
+            447
+          ],
+          "anchor": "idRenderWorldLocal::LoadLightGridImages",
+          "sha256": "49d780379388baec6c7b8526825681f15b2c5bd3b16aeea505a60dcc9a061d51"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            808,
+            867
+          ],
+          "anchor": "R_DeriveEnvprobeData, the probe images",
+          "sha256": "54efb492e2cf16ccc4aaf7e6c81d5543f200de4660475406e70a00396a106ac5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightGridFile.cpp",
+          "symbol": "lightGridImageKey"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightGridFile.cpp",
+          "symbol": "envProbeImageKeys"
+        }
+      ],
+      "note": "SC105 (LP1c.1): the image keys the cache reader resolves: an area's grid atlas env/<base>/area%i_lightgrid_amb (TF_LINEAR, TR_CLAMP, TD_HDR_LIGHTPROBE, CF_2D: #__2100); a probe's env/<base>/area%i_envprobe_%i_%i_%i_{amb,spec,depth} with every '-' of the name made '_' (amb TF_LINEAR CF_2D_PACKED_MIPCHAIN #__2105, spec TF_DEFAULT CF_NATIVE_HDR #__2108, depth TD_HDRI TF_LINEAR CF_NATIVE_HDR #__2208), the point snapped by the caller (SnapInt). Retail: the baker makes no atlas for an area without grid points (maps/game/admin, three areas)"
+    },
+    {
+      "id": "M-BAKE-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            806,
+            879
+          ],
+          "anchor": "InitFromMap, the .bproc read first",
+          "sha256": "671e3870621e0f2b904305651ee674f1e5f368b17e46e89ff6561ad3efcb92b6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MapBake.cpp",
+          "symbol": "readGeometry"
+        }
+      ],
+      "note": "K16: the engine reads generated/<map>.bproc first and the .proc only when there is no usable .bproc; the preview reads the .proc first, because dmap deletes the .bproc on every run (SC74), so in an editing session the text is the newer file. A .proc that does not parse counts as none and the .bproc stands in, with the version gate the engine applies (a version-1 or 2 file only without any .proc)"
+    },
+    {
+      "id": "M-BAKE-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            526,
+            688
+          ],
+          "anchor": "idRenderWorldLocal::LoadLightGridFile",
+          "sha256": "02e1ceb7c4fcc32b80255ce0b543da5c2b84fc0125248b9f2a8c3de23f7debe0"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            743,
+            798
+          ],
+          "anchor": "idRenderWorldLocal::LoadSHProbesFile",
+          "sha256": "bfe5d04bf384f99ed22c2a1bc8e3ee37871a611dd9ab7015dedb763734fac14c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MapBake.cpp",
+          "symbol": "validate"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::pollMapBakes"
+        }
+      ],
+      "note": "§3.7 (LP1c.1), not in the engine: the area counts of the files that exist must agree: the grid names each area once and as many areas as the tree has, every SH probe's area is -1 or below the count; a mismatch drops the grid and the probes (no-bake behaviour) with the reason, and keeps the tree (the newest dmap's). A file that does not parse (dmap or a bake writing it) counts as no file, where the engine stops the map load at its Error; the parse thread probes the files of every bake it holds each poll and reads a changed bake again, so it is retried on the next change. A binary grid that does not parse falls back to the text"
+    },
+    {
+      "id": "M-BAKE-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            764,
+            790
+          ],
+          "anchor": "InitFromMap( name ): the map's game name",
+          "sha256": "a9a3f87710d1d6c491456175b80f1c970e0e25818f42a1a190cdcbe3574f6300"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MapBake.cpp",
+          "symbol": "engineMapName"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::scanTable"
+        }
+      ],
+      "note": "C10 (LP1c.1): the map's engine name comes from the document's path below <game path>/base, its extension cut; a document outside that folder has no bake (the engine cannot have made one for it), where LP1b.2 looked beside the file. The scene asks for the bake when the map path changes and takes only the answer to that request or a later read (its ticket), never a slot read before (a Save As back to a path read earlier); an answer whose files did not change keeps the tree it had, so nothing is rebuilt"
     }
   ],
   "retired": [

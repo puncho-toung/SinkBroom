@@ -22,6 +22,7 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightParse.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightRecord.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitSession.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapBake.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialDecls.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialService.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_NumberText.cpp

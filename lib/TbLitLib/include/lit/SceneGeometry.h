@@ -38,6 +38,7 @@
 namespace tb::lit
 {
 class MaterialService;
+struct MapBakeSlot;
 struct MaterialTable;
 struct ProcTree;
 
@@ -54,10 +55,17 @@ struct ProcTree;
  * Every batch first adopts the latest material table, and each table it adopts is
  * scanned for what the scene waits for (R3.1, R3.2): a material that was pending when a
  * cell was built, an editor-image size that was Default (C21) and is Ready now, an
- * entityDef that was pending when an entity was built (C22), and the .proc of the map
+ * entityDef that was pending when an entity was built (C22), and the bake of the map
  * path. The cells concerned are built again in that batch. Between snapshots, collect
  * starts such a batch when a newer table has arrived; the owner wakes the render thread
  * for it (LitSession::tableChanged, R2.2).
+ *
+ * The bake (C10, LP1c.1): a new map path asks the material service for its bake
+ * (loadMapBake) and adopts only a slot that answers that request or a later one, never
+ * one read before it (a Save As back to a path read earlier, with dmap run in between);
+ * a later slot of the path with another tree (the service read a changed bake again)
+ * replaces it and every cell is built again. The lights take the tree with the snapshot
+ * when it arrives in a snapshot's pass, so a changed light is built once (W.2).
  *
  * Without a pool (or once it is stopped) the batches run on the calling thread. Without a
  * material service every material takes the defaults, provisionally, and there is no
@@ -88,6 +96,9 @@ private:
   // R2.4: the primitive nodes of each entity (the node's own entity, a func_group's too)
   std::unordered_map<PreviewId, std::set<PreviewId>> m_entityNodes;
   std::optional<std::string> m_mapPath;
+  // the bake slot adopted, and the ticket of the map path's request (C10)
+  std::shared_ptr<const MapBakeSlot> m_bakeSlot;
+  std::uint64_t m_bakeTicket = 0;
   std::shared_ptr<const ProcTree> m_proc;
   // the table the last batch was built with; every table adopted is scanned once
   std::shared_ptr<const MaterialTable> m_table;
@@ -147,7 +158,7 @@ public:
   // what the jobs and the copied code reported, oldest first
   std::vector<std::string> takeWarnings();
 
-  // waits for the batch in flight and applies it (tests)
+  // waits for the batches in flight and applies them, until none is in flight (tests)
   void finishForTesting();
 
   deleteCopyAndMove(SceneGeometry);

@@ -28,7 +28,6 @@
 #include <fmt/format.h>
 
 #include <chrono>
-#include <filesystem>
 #include <limits>
 #include <thread>
 #include <utility>
@@ -53,12 +52,6 @@ bool equalsNoCase(const std::string_view lhs, const std::string_view rhs)
 bool isPrimitive(const SceneNode& node)
 {
   return node.kind == SnapshotNodeKind::Brush || node.kind == SnapshotNodeKind::Patch;
-}
-
-// the .proc beside a map file (C10's search of the game folder is LP1c.1's)
-std::string procPathOf(const std::string& mapPath)
-{
-  return std::filesystem::path{mapPath}.replace_extension(".proc").string();
 }
 
 // removes refs from every set of waiting, and the sets that are empty then
@@ -314,22 +307,23 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
 
   if (snapshot.mapPath && snapshot.mapPath != m_mapPath)
   {
+    // C10: the bake is asked for this path; a slot read before (a Save As back to it) is
+    // never adopted, only the answer to this request
     m_mapPath = snapshot.mapPath;
     m_proc.reset();
-    if (m_materials)
-    {
-      m_materials->loadProcFile(procPathOf(*m_mapPath));
-    }
+    m_bakeSlot.reset();
+    m_bakeTicket = m_materials ? m_materials->loadMapBake(*m_mapPath) : 0;
     markAll();
   }
 
-  // V.8: a .proc the table holds is adopted before the lights take the snapshot, so that
-  // they are built with its areas once, not without them first
+  // V.8: a tree the table holds is adopted before the lights take the snapshot, so that
+  // they are built with its areas once, not without them first; W.2: the lights take it
+  // with the snapshot, not on their own before it
   if (m_jobs.empty())
   {
     refreshTable();
     // the table adopted before the path was known may hold it too
-    if (m_table && m_mapPath && !m_proc)
+    if (m_table && m_mapPath)
     {
       scanTable();
     }
@@ -367,15 +361,20 @@ void SceneGeometry::refreshTable()
 void SceneGeometry::scanTable()
 {
   // R3.1: what the cells wait for is looked for in every table the scene adopts, also
-  // one that a batch for other cells adopts first
-  if (m_mapPath && !m_proc)
+  // one that a batch for other cells adopts first. C10: the bake that answers the map
+  // path's request, or a later read of it; the lights take its tree with the next
+  // snapshot or batch (W.2)
+  if (m_mapPath)
   {
-    if (const auto slot = m_table->findProcFile(procPathOf(*m_mapPath));
-        slot && slot->tree)
+    if (const auto slot = m_table->findMapBake(*m_mapPath);
+        slot && slot != m_bakeSlot && slot->ticket >= m_bakeTicket)
     {
-      m_proc = slot->tree;
-      m_lights.setProcTree(m_proc);
-      markAll();
+      m_bakeSlot = slot;
+      if (slot->tree != m_proc)
+      {
+        m_proc = slot->tree;
+        markAll();
+      }
     }
   }
   for (auto it = m_pendingMaterials.begin(); it != m_pendingMaterials.end();)
@@ -430,6 +429,8 @@ void SceneGeometry::startBatch()
     return;
   }
   refreshTable();
+  // W.2: a tree adopted between snapshots reaches the lights here (none changes)
+  m_lights.setProcTree(m_proc);
   if (m_dirty.empty())
   {
     return;
@@ -696,12 +697,16 @@ std::vector<std::string> SceneGeometry::takeWarnings()
 
 void SceneGeometry::finishForTesting()
 {
-  for (auto& job : m_jobs)
+  // a batch that applies may start the next one (V.1), so until none is in flight
+  while (busy())
   {
-    job.wait();
+    for (auto& job : m_jobs)
+    {
+      job.wait();
+    }
+    m_lights.finishForTesting();
+    collect();
   }
-  collect();
-  m_lights.finishForTesting();
 }
 
 } // namespace tb::lit

@@ -9,6 +9,7 @@ add_library(TbLitLib STATIC)
 target_sources(TbLitLib
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/AreaTree.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/BprocFile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BprocModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ChunkBuilder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CpuPool.cpp
@@ -24,9 +25,11 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightData.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LightGridFile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightParse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightRecord.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSession.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/MapBake.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LiveSession.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MaterialService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NumberText.cpp

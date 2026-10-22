@@ -22,6 +22,7 @@
 #include "base/Macros.h"
 #include "base/Result.h"
 #include "lit/ImageCache.h"
+#include "lit/MapBake.h"
 #include "lit/MaterialDecls.h"
 #include "lit/PersistentMap.h"
 
@@ -68,13 +69,21 @@ struct EntityDefSlot
   std::string error;
 };
 
-// D64: what reading a .proc found: its tree, or why there is none (no file, or the
-// error its parse reached); published with the materials
-struct ProcFileSlot
+// C10 (LP1c.1): what the bake search found for a map, asked by its document path
+// (MaterialService::loadMapBake); published with the materials
+struct MapBakeSlot
 {
+  // the document path asked with
   std::string path;
+  // the latest request it answers (loadMapBake's ticket): an owner that asked again takes
+  // only a slot of its own ticket or later, never one read before it asked
+  std::uint64_t ticket = 0;
+  // the area BSP from the .proc or the .bproc (null: none), and why there is none or why
+  // the .proc was passed over for the .bproc
   std::shared_ptr<const ProcTree> tree;
   std::string error;
+  // everything the search found (null for a path outside the game folder)
+  std::shared_ptr<const MapBake> bake;
 };
 
 // the key of an evaluation: the material, its entity shaderParms and the time; equal
@@ -135,9 +144,9 @@ struct MaterialTable
     RegisterKey,
     std::shared_ptr<const EvaluatedRegisters>,
     RegisterKeyHash>;
-  using ProcFiles = PersistentMap<
+  using MapBakes = PersistentMap<
     std::string,
-    std::shared_ptr<const ProcFileSlot>,
+    std::shared_ptr<const MapBakeSlot>,
     StringHash,
     std::equal_to<>>;
   using Images = PersistentMap<
@@ -157,8 +166,8 @@ struct MaterialTable
   Materials materials;
   EntityDefs entityDefs;
   Registers registers;
-  // the .proc files read so far (loadProcFile), by path; kept across reloads
-  ProcFiles procFiles;
+  // the maps' bakes read so far (loadMapBake), by document path; kept across reloads
+  MapBakes mapBakes;
   // LP1c.1: the image caches read so far (image), by key; kept across reloads
   Images images;
 
@@ -166,7 +175,7 @@ struct MaterialTable
   // the call; null when the name is not looked up yet. Neither find allocates.
   std::shared_ptr<const MaterialSlot> find(std::string_view name) const;
   std::shared_ptr<const EntityDefSlot> findEntityDef(std::string_view classname) const;
-  std::shared_ptr<const ProcFileSlot> findProcFile(std::string_view path) const;
+  std::shared_ptr<const MapBakeSlot> findMapBake(std::string_view path) const;
   std::shared_ptr<const ImageCacheSlot> findImage(const MaterialImageKey& key) const;
   // the registers of a key; an EvaluatedRegisters with an error when the evaluation was
   // refused, null when it is not done yet
@@ -395,11 +404,17 @@ public:
   EntityDefLookup entityDef(std::string_view classname);
 
   /**
-   * D64: reads the .proc at path (a file path) on the parse thread with the copied lexer
-   * (C20) and publishes what it found in the table's procFiles, under path; any thread.
-   * Each call reads the file again, so a new dmap run is seen when the caller asks.
+   * C10 (LP1c.1, D64): reads the bake of the map whose document is at mapPath on the
+   * parse thread (C20): the map's engine name below the game's base folder (a relative
+   * path is taken as one), then readMapBake's search: maps/<map>.proc, else the .bproc,
+   * the light grid and the SH probes, validated (§3.7). Publishes the slot in the table's
+   * mapBakes under mapPath with the returned ticket; any thread. Each call probes the
+   * files again: a bake whose files did not change keeps its tree (the same pointer), a
+   * changed one is read again. While pollInterval runs, the parse thread also probes the
+   * bakes it holds and reads a changed one again with its ticket, so a new dmap run is
+   * seen.
    */
-  void loadProcFile(std::string_view path);
+  std::uint64_t loadMapBake(std::string_view mapPath);
 
   /**
    * LP1c.1 (C8, D23): the engine's cache of an image as the latest table has it, or
