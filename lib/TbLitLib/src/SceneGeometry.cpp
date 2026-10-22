@@ -344,9 +344,10 @@ void SceneGeometry::refreshTable()
     return;
   }
   // V.2: a reload's new registry: every chunk and entity state was built with the old
-  // registry's materials and entityDefs, and the new table answers every name at once
-  const auto reloaded =
-    m_table && m_table->registry != 0 && table->registry != m_table->registry;
+  // registry's materials and entityDefs, and the new table answers every name at once.
+  // W.1: also after a build that failed (registry 0, Failed slots), whose cells waited
+  // for nothing
+  const auto reloaded = m_table && table->registry != m_table->registry;
   m_table = std::move(table);
   if (reloaded)
   {

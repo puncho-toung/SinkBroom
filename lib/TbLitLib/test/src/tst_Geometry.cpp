@@ -1235,6 +1235,195 @@ TEST_CASE(
 }
 
 TEST_CASE(
+  "SceneGeometry, a .proc that arrives with a snapshot changing a light builds it once "
+  "(W.2)")
+{
+  using namespace std::chrono_literals;
+  static_cast<void>(fixtureTable());
+  const auto game = BakeGame{};
+  auto gate = std::make_shared<ParseGate>();
+  auto service = game.service(gate);
+  const auto atExit = OpenAtExit{gate};
+  static_cast<void>(service->lookup("lights/squarelight1"));
+  static_cast<void>(service->lookup(DefaultPointLightMaterial));
+  static_cast<void>(service->lookup(DefaultProjectedLightMaterial));
+  static_cast<void>(service->entityDef("light"));
+  REQUIRE(service->waitForTableForTesting(
+    [&](const MaterialTable& t) {
+      return t.find("lights/squarelight1") && t.find(DefaultPointLightMaterial)
+             && t.find(DefaultProjectedLightMaterial) && t.findEntityDef("light");
+    },
+    10s));
+  auto pool = CpuPool::create() | kdl::value();
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    const auto lightAt = [](const int x) {
+      return mapText(
+        "",
+        "{\n\"classname\" \"light\"\n\"origin\" \"" + std::to_string(x)
+          + " 0 96\"\n\"light_radius\" \"200 200 200\"\n}\n");
+    };
+
+    // the light is built without the tree, which the parse thread holds back
+    closeGateWhenIdle(*service, *gate, "textures/lp1b/w2_gate");
+    auto first = snapshotOfMapText(lightAt(64));
+    first.sequence = 1;
+    first.mapPath = game.mapPath("lp1b_geometry");
+    const auto light = lightNodeOf(first);
+    scene.takeSnapshot(first);
+    scene.finishForTesting();
+    REQUIRE(scene.lightTable()->find(light.entity));
+    REQUIRE(scene.lightTable()->find(light.entity)->version == 1u);
+    CHECK_FALSE(scene.lightTable()->find(light.entity)->derived.hasAreaTree);
+    gate->open();
+    REQUIRE(service->waitForTableForTesting(
+      [&](const MaterialTable& t) {
+        const auto slot = t.findMapBake(*first.mapPath);
+        return slot && slot->tree;
+      },
+      10s));
+
+    // the tree arrives in the pass of a snapshot that moves the light: one job, on the
+    // new keys and the tree; no record of the old keys published in between
+    const auto tablesBefore = scene.lightTable()->version;
+    auto moved = snapshotOfMapText(lightAt(-64));
+    moved.sequence = 2;
+    moved.nodes = {lightNodeOf(moved)};
+    scene.takeSnapshot(moved);
+    scene.finishForTesting();
+    const auto record = scene.lightTable()->find(light.entity);
+    REQUIRE(record);
+    CHECK(record->version == 2u);
+    CHECK(record->derived.hasAreaTree);
+    CHECK(record->derived.areaNum == 1);
+    CHECK(scene.lightTable()->version == tablesBefore + 1);
+  }
+  pool->stop();
+}
+
+TEST_CASE("SceneGeometry: a good build after a failed one rebuilds everything (W.1)")
+{
+  using namespace std::chrono_literals;
+  static_cast<void>(fixtureTable());
+  // the first build's source cannot be made; reload() builds the fixture decls
+  auto builds = std::make_shared<std::atomic<int>>(0);
+  auto options = MaterialServiceOptions{};
+  options.makeSource = [builds](const std::atomic<bool>&) {
+    if (builds->fetch_add(1) == 0)
+    {
+      throw std::runtime_error{"the first build fails"};
+    }
+    return std::unique_ptr<DeclSource>{
+      std::make_unique<MemoryDeclSource>(fixtureDecls())};
+  };
+  options.pollInterval = 0ms;
+  auto service = MaterialService::create(std::move(options)) | kdl::value();
+  REQUIRE(service->waitForStatsForTesting(
+    [](const MaterialServiceStats& stats) { return stats.failedWorkItems > 0; }, 10s));
+  auto pool = CpuPool::create() | kdl::value();
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    auto snapshot = snapshotOfMapText(
+      "{\n\"classname\" \"worldspawn\"\n" + box(0, 0, 0, 32, 32, 32, "lp1b/glass")
+      + box(2048, 0, 0, 2080, 32, 32, "lp1b/grate") + "}\n{\n\"classname\" \"light\"\n\"origin\" \"64 64 64\"\n"
+        "\"light_radius\" \"64 64 64\"\n\"texture\" \"lights/lp1b_w1\"\n}\n");
+    snapshot.sequence = 1;
+    const auto light = lightNodeOf(snapshot);
+    scene.takeSnapshot(snapshot);
+
+    const auto castOfGlass = [&] {
+      for (const auto& [key, chunk] : scene.chunks())
+      {
+        if (key.material == "textures/lp1b/glass")
+        {
+          return std::optional{chunk.castClass};
+        }
+      }
+      return std::optional<CastClass>{};
+    };
+    const auto lightRegistry = [&] {
+      const auto record = scene.lightTable()->find(light.entity);
+      return record && record->material ? record->material->registry : std::uint64_t(-1);
+    };
+    // every name answers Failed in the failed build's table: the glass defaults to opaque
+    CHECK(settle(scene, [&] {
+      const auto glass = service->table()->find("textures/lp1b/glass");
+      return glass && !glass->entry && castOfGlass() == CastClass::Opaque;
+    }));
+    const auto chunksBefore = summaryOf(scene.chunks());
+    const auto lightBefore = scene.lightTable()->find(light.entity);
+    REQUIRE(lightBefore);
+
+    // a good build: every cell and every light is built again with its decls
+    service->reload();
+    const auto good = service->waitForTableForTesting(
+      [](const MaterialTable& t) { return t.registry != 0; }, 10s);
+    REQUIRE(good->registry != 0);
+    CHECK(settle(scene, [&] {
+      return castOfGlass() == CastClass::None && lightRegistry() == good->registry;
+    }));
+    // both cells: the glass translucent, the grate perforated, where the failed build's
+    // defaults made them opaque
+    const auto chunksAfter = summaryOf(scene.chunks());
+    REQUIRE(chunksBefore.size() == 2u);
+    REQUIRE(chunksAfter.size() == chunksBefore.size());
+    for (const auto& [key, before] : chunksBefore)
+    {
+      CAPTURE(key.material);
+      REQUIRE(chunksAfter.count(key) == 1u);
+      CHECK(before.castClass == CastClass::Opaque);
+      CHECK(chunksAfter.at(key).castClass != before.castClass);
+    }
+    CHECK(scene.lightTable()->find(light.entity)->version > lightBefore->version);
+  }
+  pool->stop();
+}
+
+TEST_CASE("SceneGeometry, a Save As back to an earlier path reads its bake again")
+{
+  using namespace std::chrono_literals;
+  static_cast<void>(fixtureTable());
+  const auto game = BakeGame{};
+  game.writeProc("other", readTextFile(BakeGame::goldenProc()));
+  auto gate = std::make_shared<ParseGate>();
+  auto service = game.service(gate);
+  const auto atExit = OpenAtExit{gate};
+  auto pool = CpuPool::create() | kdl::value();
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    const auto first = game.mapPath("lp1b_geometry");
+    const auto take = [&](const std::string& path, const std::uint64_t sequence) {
+      auto snapshot = snapshotOfMapText(mapText("", ""));
+      snapshot.sequence = sequence;
+      snapshot.mapPath = path;
+      scene.takeSnapshot(snapshot);
+    };
+    const auto nodesOf = [&] {
+      return scene.procTree() ? scene.procTree()->nodes.size() : std::size_t{0};
+    };
+
+    take(first, 1);
+    CHECK(settle(scene, [&] { return nodesOf() == 39u; }));
+    // Save As: another path and its bake
+    take(game.mapPath("other"), 2);
+    CHECK(settle(scene, [&] { return nodesOf() == 39u && scene.procTree(); }));
+
+    // dmap runs again on the first map, then a Save As goes back to it: the slot read
+    // before is in the table, but only the answer to the new request is adopted
+    game.writeProc(
+      "lp1b_geometry",
+      "mapProcFile004\n\ninterAreaPortals { 2 0 }\n\nnodes { 1\n( 1 0 0 0 ) -1 -2\n}\n");
+    closeGateWhenIdle(*service, *gate, "textures/lp1b/save_as_gate");
+    take(first, 3);
+    scene.finishForTesting();
+    CHECK_FALSE(scene.procTree());
+    gate->open();
+    CHECK(settle(scene, [&] { return nodesOf() == 1u; }));
+  }
+  pool->stop();
+}
+
+TEST_CASE(
   "ChunkBuilder: every patch triangle's corners through TriVertsFromOriginal (R3.5)")
 {
   // V.9: a patch off every grid, where a corner kept whole and one through

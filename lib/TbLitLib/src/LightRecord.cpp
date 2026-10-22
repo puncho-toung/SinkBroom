@@ -404,9 +404,9 @@ void LightRegistry::refreshTable()
     return;
   }
   // V.2: a reload's new registry: every record holds the old registry's MaterialId and
-  // entityDef keys, so every light is built again
-  const auto reloaded =
-    m_table && m_table->registry != 0 && table->registry != m_table->registry;
+  // entityDef keys, so every light is built again; W.1: also after a build that failed
+  // (registry 0, Failed slots)
+  const auto reloaded = m_table && table->registry != m_table->registry;
   m_table = std::move(table);
   if (reloaded)
   {
