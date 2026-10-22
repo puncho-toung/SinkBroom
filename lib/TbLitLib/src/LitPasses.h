@@ -114,8 +114,9 @@ struct LitFrameStats
   // D77: the frame is not settled (a pending pipeline, image, chunk, material or
   // evaluation)
   bool unconverged = false;
-  // D77: a draw was skipped for a pending pipeline, a texture with no written level or a
-  // chunk not placed yet: the next frame is drawn at once (an unconverged pass)
+  // D77: a draw was skipped for a texture with no written level or a chunk not placed
+  // yet: the next frame is drawn at once (an unconverged pass). LP2.2b: a pending
+  // pipeline does not re-trigger; the compile thread's onReady triggers the next frame
   bool retrigger = false;
   // D77, D52: a material, an evaluation or a light's shader is pending: the next frame
   // is drawn when the material table has a new version (a table published), not at once,

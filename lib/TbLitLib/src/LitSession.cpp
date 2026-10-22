@@ -541,6 +541,11 @@ std::uint64_t LitSession::framesPresented() const
   return m_renderThread ? m_renderThread->framesPresented() : 0u;
 }
 
+bool LitSession::lastFrameSettledForTesting() const
+{
+  return m_renderThread && m_renderThread->lastFrameSettled();
+}
+
 std::uint64_t LitSession::swapchainGenerations() const
 {
   return m_swapchainCount;

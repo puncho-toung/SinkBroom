@@ -1610,8 +1610,10 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
         continue;
       }
       CHECK(rows[i][7] == "fifo");
-      // a frame row has its draws (0 without lit pipelines)
+      // a frame row has its draws (0 without lit pipelines) and says whether it is
+      // settled (D77)
       CHECK(!rows[i][22].empty());
+      CHECK((rows[i][34] == "0" || rows[i][34] == "1"));
       generations.insert(rows[i][0] + "/" + rows[i][8]);
       presentMs.push_back(std::stod(rows[i][5]));
     }

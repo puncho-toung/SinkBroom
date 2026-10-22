@@ -84,6 +84,63 @@ GpuMemoryAccount accountGpuMemory(
   const FrameResources& frame, const GeometryArenas& arenas, const ImageSlots& images);
 
 /**
+ * D77, §3.10 (LP2.2b): what kept a frame from being settled, and which of it the frame
+ * retries by triggering the next one itself. Everything else waits for its own trigger,
+ * so that a frame waiting for another thread costs no frames: a pending pipeline for the
+ * compile thread's onReady, a pending material or evaluation for a table publication
+ * (litTableTick), a pending image for its arrival (arrivalsTick, at most 10 Hz), a
+ * provisional chunk for its rebuild (geometryTick). The exposure is at its target in
+ * every frame the exposure pass runs (D70). A pass that cannot draw (a program disabled
+ * by D9) counts as converged, its state reported (passesDisabled, programReport).
+ */
+struct FrameConvergence
+{
+  // a pipeline of the lit or the tonemap passes is pending
+  bool pipelinesPending = false;
+  // a material, an evaluation or a light's shader is pending
+  bool materialsPending = false;
+  // a draw was skipped for a texture without a written level or a chunk not placed yet
+  bool drawsSkipped = false;
+  // uploads are left for the next frame (arenas, textures), or a slot's image waits to
+  // be written (C21's full mips not reached)
+  bool uploadsLeft = false;
+  // slots the material table has not answered yet
+  bool imagesPending = false;
+  // chunks built with a C21 Default editor-image size
+  bool provisionalChunks = false;
+  // the tonemap passes' colour LUT has no written level yet
+  bool lutPending = false;
+  // D9: a pass is disabled (counts as converged)
+  bool passesDisabled = false;
+
+  bool settled() const;
+  // the frame triggers the next one itself (D77's unconverged pass)
+  bool retriggers() const;
+};
+
+/**
+ * D77 (LP2.2b): the livelock guard's view of a frame: when a frame that re-triggers
+ * itself uploaded nothing and leaves this unchanged, it made no progress; after
+ * MaxStalledFrames such frames the thread stops re-triggering until another trigger.
+ */
+struct FrameProgress
+{
+  std::size_t texturesResident = 0;
+  std::size_t imagesPending = 0;
+  bool imagesLoading = false;
+  std::size_t skippedDraws = 0;
+  std::uint64_t chunksVersion = 0;
+  std::uint64_t tableVersion = 0;
+  std::uint64_t renderTargetGeneration = 0;
+  CameraState camera;
+
+  bool operator==(const FrameProgress&) const = default;
+};
+
+// D77: the frames a session re-triggers without progress before it waits for a trigger
+inline constexpr auto MaxStalledFrames = std::size_t{3};
+
+/**
  * Test hooks (LP2.1): what a frame's hook may use, on the render thread, inside the
  * frame's open command list once its uploads are recorded and before its first pass.
  */
@@ -109,6 +166,9 @@ struct RenderFrameAccess
   LitPasses& passes;
   // LP2.2b: the tonemap passes and the blit (their stats)
   TonemapPasses& tonemap;
+  // LP2.2b (D77): the frame's convergence in runAfterTonemap's hooks, the last frame's
+  // in the others
+  const FrameConvergence& convergence;
 };
 
 /**
@@ -184,8 +244,21 @@ private:
   // D77: a texture arrival triggers a frame at most every TextureArrivalInterval
   FrameClock::time_point m_lastArrivalTrigger;
   std::optional<FrameClock::time_point> m_arrivalTriggerAt;
-  // D77: the last frame left uploads for the next one
-  bool m_unconverged = false;
+  // D77: the frame being recorded leaves uploads for the next one
+  bool m_uploadsLeft = false;
+  // D77 (LP2.2b): the last frame's convergence; whether it re-triggers itself; the
+  // livelock guard's count of frames that re-triggered without progress, and the last
+  // frame's progress
+  FrameConvergence m_convergence;
+  bool m_retrigger = false;
+  std::size_t m_stalledFrames = 0;
+  std::optional<FrameProgress> m_lastProgress;
+  // the chunk version whose chunks were last looked at for a provisional one, and the
+  // answer
+  std::optional<std::uint64_t> m_provisionalCheckedVersion;
+  bool m_anyProvisional = false;
+  // any thread (tests): the last frame drawn was settled
+  std::atomic<bool> m_lastSettled = false;
   // D77 (LP2.2a): the last frame's lit passes wait for a material table newer than this
   // version (a pending material or evaluation); a newer one triggers a frame
   bool m_litWaitsForTable = false;
@@ -347,6 +420,8 @@ public:
   void runInFrame(std::function<void(RenderFrameAccess&)> hook);
   // any thread: the frame resources' render-target generation (C28)
   std::uint64_t renderTargetGeneration() const;
+  // LP2.2b, any thread: the last frame drawn was settled (D77)
+  bool lastFrameSettled() const;
   // any thread: every frame runs hook on the render thread (as runInFrame) until an
   // empty function replaces it
   void setEveryFrameHook(std::function<void(RenderFrameAccess&)> hook);
@@ -407,6 +482,11 @@ private:
     SwapchainGeneration& generation, std::uint32_t imageIndex);
   // LP2.2b: the headless target and its framebuffer at m_headlessExtent; false: failed
   bool makeHeadlessTarget();
+  // D77 (LP2.2b): the frame's convergence after its passes, and whether it re-triggers
+  // itself (with the livelock guard)
+  void converge(const LitFrameStats& lit, std::uint64_t tableVersion);
+  // C21: a chunk the arenas follow is provisional (looked at once per chunk version)
+  bool provisionalChunks();
   // D77 (LP2.2a): an idle pass's look for the material table the lit passes wait for;
   // whether a frame is due
   void litTableTick();

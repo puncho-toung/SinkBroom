@@ -1065,11 +1065,11 @@ LitPasses::DrawOutcome LitPasses::draw(
   const auto& lookup = inputs.pipelines->graphics(key);
   if (lookup.state == GraphicsPipelineLookup::State::Pending)
   {
-    // D77: skipped, and the compile thread triggers a frame when it is made
+    // D77: skipped, and the compile thread triggers a frame when it is made (LP2.2b:
+    // its onReady is the trigger, so the frame does not re-trigger itself for it)
     ++m_stats.pendingPipelines;
     ++m_stats.skippedDraws;
     m_stats.unconverged = true;
-    m_stats.retrigger = true;
     return DrawOutcome::Skipped;
   }
   if (lookup.state == GraphicsPipelineLookup::State::Failed || !lookup.pipeline)

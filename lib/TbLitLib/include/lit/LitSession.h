@@ -429,6 +429,12 @@ public:
   std::size_t nvrhiErrorCount() const;
   // frames presented (headless: finished recording and submitted)
   std::uint64_t framesPresented() const;
+  /**
+   * LP2.2b (D77), any thread: the last frame drawn was settled: no pending pipeline,
+   * material, evaluation or image, no provisional chunk, every texture's levels written,
+   * no draw skipped; a settled session draws nothing until a trigger.
+   */
+  bool lastFrameSettledForTesting() const;
   // the swapchain generations made so far; GUI thread
   std::uint64_t swapchainGenerations() const;
   // the camera the next frame draws with

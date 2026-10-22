@@ -120,6 +120,19 @@ public:
 
 } // namespace
 
+bool FrameConvergence::settled() const
+{
+  return !pipelinesPending && !materialsPending && !drawsSkipped && !uploadsLeft
+         && !imagesPending && !provisionalChunks && !lutPending;
+}
+
+bool FrameConvergence::retriggers() const
+{
+  // what the next frame converges by itself: the uploads it records and the draws they
+  // let it make
+  return drawsSkipped || uploadsLeft;
+}
+
 std::uint64_t GpuMemoryAccount::total() const
 {
   return arenaBytes + textureBytes + renderTargetBytes + releasedBytes;
@@ -530,6 +543,66 @@ std::uint64_t RenderThread::renderTargetGeneration() const
   return m_renderTargetGeneration;
 }
 
+bool RenderThread::lastFrameSettled() const
+{
+  return m_lastSettled;
+}
+
+bool RenderThread::provisionalChunks()
+{
+  if (m_provisionalCheckedVersion != m_chunksVersion)
+  {
+    m_provisionalCheckedVersion = m_chunksVersion;
+    m_anyProvisional = std::ranges::any_of(
+      arenaChunks(), [](const auto& entry) { return entry.second.provisional; });
+  }
+  return m_anyProvisional;
+}
+
+void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableVersion)
+{
+  // D77, §3.10
+  const auto& tonemap = m_tonemap.lastStats();
+  auto convergence = FrameConvergence{};
+  convergence.pipelinesPending = lit.pendingPipelines > 0 || tonemap.pendingPipelines > 0;
+  convergence.materialsPending = lit.waitsForTable;
+  convergence.drawsSkipped = lit.retrigger;
+  // a slot whose image arrived during the frame is written in the next
+  convergence.uploadsLeft = m_uploadsLeft || m_images.hasLoading();
+  convergence.imagesPending = m_images.pending() > 0;
+  convergence.provisionalChunks = provisionalChunks();
+  convergence.lutPending = tonemap.lutPending;
+  convergence.passesDisabled =
+    lit.prepassDisabled || lit.interactionsDisabled || tonemap.disabled;
+  m_convergence = convergence;
+  m_lastSettled = convergence.settled();
+
+  // the livelock guard: a frame that re-triggers itself without uploading anything or
+  // changing what it waits for has made no progress; after MaxStalledFrames of them the
+  // thread waits for another trigger
+  const auto progress = FrameProgress{
+    m_images.resident(),
+    m_images.pending(),
+    m_images.hasLoading(),
+    lit.skippedDraws,
+    m_chunksVersion,
+    tableVersion,
+    m_renderTargetGeneration,
+    lit.camera};
+  if (!convergence.retriggers())
+  {
+    m_stalledFrames = 0;
+    m_retrigger = false;
+  }
+  else
+  {
+    const auto progressed = m_frameUploadBytes > 0 || m_lastProgress != progress;
+    m_stalledFrames = progressed ? 0 : m_stalledFrames + 1;
+    m_retrigger = m_stalledFrames < MaxStalledFrames;
+  }
+  m_lastProgress = progress;
+}
+
 void RenderThread::setEveryFrameHook(std::function<void(RenderFrameAccess&)> hook)
 {
   {
@@ -645,7 +718,7 @@ bool RenderThread::recordUploads(nvrhi::ICommandList& commandList)
   const auto texturesLeft = m_textureUploads.record(
     m_device.device(), commandList, m_images, cap, m_frameUploadBytes);
   // D77: what is left for the next frame makes this one unconverged
-  m_unconverged = m_arenas.pending() || texturesLeft;
+  m_uploadsLeft = m_arenas.pending() || texturesLeft;
   // C28: the slots whose written range grew lose their sets before any pass binds them
   eraseChangedSets();
   return true;
@@ -756,7 +829,8 @@ RenderFrameAccess RenderThread::frameAccess(nvrhi::ICommandList& commandList)
     m_samplers,
     m_frameUploadBytes,
     m_passes,
-    m_tonemap};
+    m_tonemap,
+    m_convergence};
 }
 
 void RenderThread::runAfterPassHooks(nvrhi::ICommandList& commandList)
@@ -1043,9 +1117,9 @@ void RenderThread::runLoop()
       {
         m_pacer.frameSkipped();
       }
-      else if (outcome == FrameOutcome::Presented && m_unconverged)
+      else if (outcome == FrameOutcome::Presented && m_retrigger)
       {
-        // D77: an unconverged frame is a frame trigger
+        // D77: an unconverged pass is a frame trigger
         m_pacer.trigger();
       }
       continue;
@@ -1294,7 +1368,6 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       // LP2.2a: the lit passes into hdrFBO (D77: a draw skipped for a texture without
       // levels or a chunk not placed yet is retried at once; a pending material or
       // evaluation waits for a table, a pending pipeline for the compile thread)
-      auto litUnconverged = false;
       auto hdrDrawn = false;
       if (hdrClear)
       {
@@ -1303,7 +1376,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       }
       else
       {
-        litUnconverged = recordLitPasses(commandList, camera);
+        recordLitPasses(commandList, camera);
         litStats = m_passes.lastStats();
         hdrDrawn = litStats.prepassDraws + litStats.interactionDraws > 0;
       }
@@ -1311,9 +1384,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       // LP2.2b: the tonemap passes into the LDR target and its blit into the frame's
       // target, which replace LP0's clear of it
       recordTonemap(commandList, texture, targetFramebuffer, hdrDrawn);
+      // D77: what the frame waits for, whether it is settled, whether it re-triggers
+      converge(litStats, m_materials ? m_materials->table()->version : std::uint64_t{0});
       runAfterTonemapHooks(commandList);
-      // a slot whose image arrived during the frame is written in the next (D77)
-      m_unconverged = m_unconverged || litUnconverged || m_images.hasLoading();
       if (takeFault(DebugFault::ThrowWhileRecording))
       {
         throw std::runtime_error{"injected while recording"};
@@ -1437,6 +1510,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.volatileWrites = litStats.constantWrites + tonemap.constantWrites;
       row.volatileWriteBudget = litStats.constantWriteBudget;
       row.pushConstantBytes = litStats.pushConstantBytes + tonemap.pushConstantBytes;
+      row.settled = m_convergence.settled();
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
     }
