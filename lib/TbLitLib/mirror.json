@@ -55,6 +55,29 @@
       },
       "commit": "39f924b810e561fd86b2558b6711ca68d4363f68",
       "version": "v1.4.307"
+    },
+    {
+      "name": "ShaderMake",
+      "sinkbroom": {
+        "file": "cmake/dependencies/shadermake.cmake",
+        "line": 13
+      },
+      "engine": {
+        "gitlink": "neo/extern/ShaderMake"
+      },
+      "commit": "642610088c7e1fc940665e7c482e36e0d7b633c8",
+      "note": "the RobertBeckebans fork, download only; the ShaderBlob library is src/ShaderBlob.cpp with include/ShaderMake/ShaderBlob.h (P2.22)"
+    },
+    {
+      "name": "SPIRV-Reflect",
+      "sinkbroom": {
+        "file": "cmake/dependencies/spirv-reflect.cmake",
+        "line": 14
+      },
+      "engine": null,
+      "commit": "281b55edb67b1f2e61e1dc92fdc42a650da05d83",
+      "version": "vulkan-sdk-1.4.304.0",
+      "note": "a SinkBroom pin (R5.23, P2.23): the engine reflects nothing; KhronosGroup/SPIRV-Reflect at the tag of the Vulkan SDK line of the Vulkan-Headers pin, download only; the SpirvReflect library is spirv_reflect.c with its own include/spirv/unified1/spirv.h"
     }
   ],
   "entries": [

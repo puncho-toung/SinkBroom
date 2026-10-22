@@ -23,6 +23,8 @@ if(TB_ENABLE_LIT_PREVIEW)
     message(WARNING "The lit preview is only tested on Windows")
   endif()
   include(cmake/dependencies/nvrhi.cmake)
+  include(cmake/dependencies/shadermake.cmake)
+  include(cmake/dependencies/spirv-reflect.cmake)
 endif()
 
 # Find Qt and OpenGL

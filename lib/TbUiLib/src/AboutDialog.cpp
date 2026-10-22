@@ -92,6 +92,8 @@ Font Awesome 5 Free (Icons)<br />)");
     creditsText->text()
     + tr("NVRHI (Rendering hardware interface)<br />"
          "Vulkan-Headers (Vulkan API headers)<br />"
+         "ShaderMake (shader blob reader, MIT)<br />"
+         "SPIRV-Reflect (SPIR-V reflection, Apache-2.0)<br />"
          "RBDOOM-3-BFG / Doom 3 BFG Edition GPL Source Code (engine code: materials, "
          "geometry, lights, images)<br />"
          "stb_image, TinyEXR with miniz and OpenEXR, Mesa R11G11B10F (image decoders the "
