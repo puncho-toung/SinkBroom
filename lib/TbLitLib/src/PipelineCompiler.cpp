@@ -34,6 +34,7 @@
 #include "GpuDevice.h"
 #include "SessionEvents.h"
 #include "lit/EnginePipelineState.h"
+#include "lit/EngineTables.h"
 
 #include "kd/result.h"
 
@@ -146,6 +147,7 @@ void PipelineCompiler::releaseAll()
     const auto lock = std::scoped_lock{m_mutex};
     m_graphics.clear();
     m_compute.clear();
+    m_layoutLookups.clear();
     m_queue.clear();
   }
   m_inputLayouts.clear();
@@ -164,7 +166,7 @@ GraphicsPipelineLookup PipelineCompiler::graphicsPipeline(const PipelineKey& key
       return it->second;
     }
     m_graphics.emplace(key, GraphicsPipelineLookup{});
-    m_queue.push_back(Job{false, key});
+    m_queue.push_back(Job{false, key, false, EngineBindingLayout::Default});
   }
   m_wake.notify_all();
   return GraphicsPipelineLookup{};
@@ -182,10 +184,25 @@ ComputePipelineLookup PipelineCompiler::computePipeline(const int program)
     m_compute.emplace(program, ComputePipelineLookup{});
     auto key = PipelineKey{};
     key.program = program;
-    m_queue.push_back(Job{true, key});
+    m_queue.push_back(Job{true, key, false, EngineBindingLayout::Default});
   }
   m_wake.notify_all();
   return ComputePipelineLookup{};
+}
+
+BindingLayoutLookup PipelineCompiler::layoutsOf(const EngineBindingLayout layout)
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    if (const auto it = m_layoutLookups.find(layout); it != m_layoutLookups.end())
+    {
+      return it->second;
+    }
+    m_layoutLookups.emplace(layout, BindingLayoutLookup{});
+    m_queue.push_back(Job{false, PipelineKey{}, true, layout});
+  }
+  m_wake.notify_all();
+  return BindingLayoutLookup{};
 }
 
 std::vector<ProgramReport> PipelineCompiler::programs() const
@@ -259,7 +276,20 @@ void PipelineCompiler::run(const Job& job)
 
   try
   {
-    if (job.compute)
+    if (job.layouts)
+    {
+      auto lookup = makeLayouts(job.layout)
+                    | kdl::or_else([&](const auto& e) -> Result<BindingLayoutLookup> {
+                        auto failedLookup = BindingLayoutLookup{};
+                        failedLookup.state = BindingLayoutLookup::State::Failed;
+                        failedLookup.error = e.msg;
+                        return failedLookup;
+                      })
+                    | kdl::value();
+      const auto lock = std::scoped_lock{m_mutex};
+      m_layoutLookups.insert_or_assign(job.layout, std::move(lookup));
+    }
+    else if (job.compute)
     {
       auto lookup = makeCompute(job.key.program)
                     | kdl::or_else([&](const auto& e) -> Result<ComputePipelineLookup> {
@@ -283,7 +313,14 @@ void PipelineCompiler::run(const Job& job)
   catch (const std::exception& e)
   {
     const auto lock = std::scoped_lock{m_mutex};
-    if (job.compute)
+    if (job.layouts)
+    {
+      auto lookup = BindingLayoutLookup{};
+      lookup.state = BindingLayoutLookup::State::Failed;
+      lookup.error = e.what();
+      m_layoutLookups.insert_or_assign(job.layout, std::move(lookup));
+    }
+    else if (job.compute)
     {
       m_compute.insert_or_assign(
         job.key.program, failed(e.what())(ComputePipelineLookup{}));
@@ -627,6 +664,8 @@ RenderPipelines::RenderPipelines()
   m_noGraphics.error = "the session has no compile thread";
   m_noCompute.state = ComputePipelineLookup::State::Failed;
   m_noCompute.error = m_noGraphics.error;
+  m_noLayouts.state = BindingLayoutLookup::State::Failed;
+  m_noLayouts.error = m_noGraphics.error;
 }
 
 void RenderPipelines::setCompiler(PipelineCompiler* compiler)
@@ -673,17 +712,62 @@ const ComputePipelineLookup& RenderPipelines::compute(const int program)
   return m_compute.emplace(program, std::move(lookup)).first->second;
 }
 
+const BindingLayoutLookup& RenderPipelines::layouts(const EngineBindingLayout layout)
+{
+  if (const auto it = m_layouts.find(layout); it != m_layouts.end())
+  {
+    return it->second;
+  }
+  if (!m_compiler)
+  {
+    return m_noLayouts;
+  }
+  auto lookup = m_compiler->layoutsOf(layout);
+  if (lookup.state == BindingLayoutLookup::State::Pending)
+  {
+    m_pendingLayouts = std::move(lookup);
+    return m_pendingLayouts;
+  }
+  return m_layouts.emplace(layout, std::move(lookup)).first->second;
+}
+
 std::size_t RenderPipelines::kept() const
 {
-  return m_graphics.size() + m_compute.size();
+  return m_graphics.size() + m_compute.size() + m_layouts.size();
 }
 
 void RenderPipelines::clear()
 {
   m_graphics.clear();
   m_compute.clear();
+  m_layouts.clear();
   m_pendingGraphics = GraphicsPipelineLookup{};
   m_pendingCompute = ComputePipelineLookup{};
+  m_pendingLayouts = BindingLayoutLookup{};
+}
+
+Result<BindingLayoutLookup> PipelineCompiler::makeLayouts(
+  const EngineBindingLayout layout)
+{
+  // C2, C30: the device's rule, as the pipelines of the type are made (CommonPasses' blit
+  // layout always pushes)
+  const auto pushed =
+    layout == EngineBindingLayout::Blit ? true : m_device.pushConstantsEnabled(layout);
+  auto descs = engineBindingLayoutDescs(layout, pushed);
+  if (!descs)
+  {
+    return Error{fmt::format("the binding layout {} is not mirrored", int(layout))};
+  }
+  auto expected = ExpectedShaderLayout{};
+  expected.sets = std::move(*descs);
+  expected.pushConstants = pushed;
+  return bindingLayouts(layout, pushed, expected)
+         | kdl::transform([](std::vector<nvrhi::BindingLayoutHandle> layouts) {
+             auto lookup = BindingLayoutLookup{};
+             lookup.state = BindingLayoutLookup::State::Ready;
+             lookup.layouts = std::move(layouts);
+             return lookup;
+           });
 }
 
 void PipelineCompiler::enable(const int program)

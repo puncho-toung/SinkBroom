@@ -115,6 +115,18 @@ struct PipelineLookup
 using GraphicsPipelineLookup = PipelineLookup<nvrhi::GraphicsPipelineHandle>;
 using ComputePipelineLookup = PipelineLookup<nvrhi::ComputePipelineHandle>;
 
+// LP2.1 (C20): what a request for a binding layout type's layouts finds: Pending until
+// the compile thread has made them, then the layouts in set order (the ones its
+// pipelines are made with), or Failed with why
+struct BindingLayoutLookup
+{
+  using State = GraphicsPipelineLookup::State;
+
+  State state = State::Pending;
+  std::vector<nvrhi::BindingLayoutHandle> layouts;
+  std::string error;
+};
+
 /**
  * The session's compile thread (D71, §3.1 R4-2.21, C20): a StackThread with 8 MB of stack
  * (P2.27) that creates every shader, binding layout, input layout and pipeline the
@@ -142,6 +154,9 @@ private:
   {
     bool compute = false;
     PipelineKey key;
+    // LP2.1: a binding layout type's layouts, not a pipeline
+    bool layouts = false;
+    EngineBindingLayout layout = EngineBindingLayout::Default;
   };
 
   struct ShaderEntry
@@ -179,6 +194,7 @@ private:
   std::deque<Job> m_queue;
   std::map<PipelineKey, GraphicsPipelineLookup, PipelineKeyLess> m_graphics;
   std::map<int, ComputePipelineLookup> m_compute;
+  std::map<EngineBindingLayout, BindingLayoutLookup> m_layoutLookups;
   std::map<int, ProgramReport> m_programs;
   std::map<int, ExpectedShaderLayout> m_expectedForTesting;
   std::function<void()> m_beforeCreateForTesting;
@@ -204,6 +220,15 @@ public:
   // Any thread (the render thread draws with them): the pipeline of a key, made once.
   GraphicsPipelineLookup graphicsPipeline(const PipelineKey& key);
   ComputePipelineLookup computePipeline(int program);
+  /**
+   * LP2.1 (C20), any thread: the layouts of a binding layout type, in set order, made
+   * once by the compile thread from the tables (engineBindingLayoutDescs with the
+   * device's push-constant rule, C30), the very handles its pipelines of that type are
+   * made with, so that the render thread makes binding sets against them without a
+   * pipeline or a blob. Binding layouts are the compile thread's, binding sets the
+   * render thread's.
+   */
+  BindingLayoutLookup layoutsOf(EngineBindingLayout layout);
 
   // any thread: every program asked for so far and whether it is enabled
   std::vector<ProgramReport> programs() const;
@@ -233,6 +258,7 @@ private:
   Result<ExpectedShaderLayout> expectedLayout(const EngineBuiltin& builtin);
   Result<GraphicsPipelineLookup> makeGraphics(const PipelineKey& key);
   Result<ComputePipelineLookup> makeCompute(int program);
+  Result<BindingLayoutLookup> makeLayouts(EngineBindingLayout layout);
   // a program whose pipeline was made is enabled, unless it was disabled before
   void enable(int program);
   void disable(int program, const std::string& reason);
@@ -254,10 +280,13 @@ private:
   PipelineCompiler* m_compiler = nullptr;
   std::map<PipelineKey, GraphicsPipelineLookup, PipelineKeyLess> m_graphics;
   std::map<int, ComputePipelineLookup> m_compute;
+  std::map<EngineBindingLayout, BindingLayoutLookup> m_layouts;
   GraphicsPipelineLookup m_pendingGraphics;
   ComputePipelineLookup m_pendingCompute;
+  BindingLayoutLookup m_pendingLayouts;
   GraphicsPipelineLookup m_noGraphics;
   ComputePipelineLookup m_noCompute;
+  BindingLayoutLookup m_noLayouts;
 
 public:
   RenderPipelines();
@@ -268,6 +297,7 @@ public:
   // the lookup of a key, valid until the next call or clear
   const GraphicsPipelineLookup& graphics(const PipelineKey& key);
   const ComputePipelineLookup& compute(int program);
+  const BindingLayoutLookup& layouts(EngineBindingLayout layout);
 
   // the Ready and Failed lookups kept
   std::size_t kept() const;

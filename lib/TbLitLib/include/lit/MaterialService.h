@@ -157,6 +157,8 @@ struct MaterialTable
     MaterialImageKey,
     std::shared_ptr<const ImageCacheSlot>,
     MaterialImageKeyHash>;
+  using ImageChanges =
+    PersistentMap<MaterialImageKey, std::uint64_t, MaterialImageKeyHash>;
 
   static constexpr std::size_t MaxRegisterDeltas = 16384;
 
@@ -174,6 +176,16 @@ struct MaterialTable
   MapBakes mapBakes;
   // LP1c.1: the image caches read so far (image), by key; kept across reloads
   Images images;
+  /**
+   * LP2.1 (P2.14b): the image slots dropped because their files changed (a reload's
+   * changed files, the poll's re-probe), each key with imageChanges' count at its last
+   * drop; imageChanges counts the drops. The budget's drops (S2.4) are not changes. A
+   * consumer that holds an image's texture asks for it again when its key's count is
+   * newer than the count it took it at, and looks only when imageChanges moved. Kept
+   * across reloads.
+   */
+  std::uint64_t imageChanges = 0;
+  ImageChanges changedImages;
 
   // the slot of a name, shared with the table, so that it outlives a table held only for
   // the call; null when the name is not looked up yet. Neither find allocates.

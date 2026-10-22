@@ -1232,10 +1232,14 @@ private:
     // the bakes and the image caches do not depend on the registry
     auto mapBakes = std::move(m_working.mapBakes);
     auto images = std::move(m_working.images);
+    const auto imageChanges = m_working.imageChanges;
+    auto changedImages = std::move(m_working.changedImages);
     m_working = MaterialTable{};
     m_working.registry = registry;
     m_working.mapBakes = std::move(mapBakes);
     m_working.images = std::move(images);
+    m_working.imageChanges = imageChanges;
+    m_working.changedImages = std::move(changedImages);
     m_deltaOrder.clear();
     m_bulkMaterial = 0;
     m_bulkTable = 0;
@@ -1548,7 +1552,8 @@ private:
     return slot.image ? slot.image->data.size() : 0;
   }
 
-  // S2.4: an image slot dropped from the table, its files no more polled
+  // S2.4: an image slot dropped from the table, its files no more polled; LP2.1
+  // (P2.14b): a change, which a consumer holding its texture sees in changedImages
   void dropImage(const MaterialImageKey& key)
   {
     if (const auto* slot = m_working.images.find(key))
@@ -1556,6 +1561,8 @@ private:
       m_imageBytes -= std::min(m_imageBytes, imageBytes(**slot));
       m_working.images = m_working.images.erase(key);
     }
+    ++m_working.imageChanges;
+    m_working.changedImages = m_working.changedImages.set(key, m_working.imageChanges);
     m_imageFiles.erase(key);
     m_publishedImages.erase(
       std::remove_if(

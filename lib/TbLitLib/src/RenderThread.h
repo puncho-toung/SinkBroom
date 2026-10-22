@@ -19,9 +19,11 @@
 
 #pragma once
 
+#include "BindingSetCache.h"
 #include "FrameResources.h"
 #include "FrameTimers.h"
 #include "GeometryArenas.h"
+#include "ImageSlots.h"
 #include "PipelineCompiler.h"
 #include "base/Macros.h"
 #include "base/Result.h"
@@ -72,6 +74,9 @@ struct RenderFrameAccess
   GeometryArenas& arenas;
   // T0.9: the render thread's copy of the compile thread's pipelines
   RenderPipelines& pipelines;
+  // C28: the image slots and the binding sets
+  ImageSlots& images;
+  BindingSetCache& bindingSets;
   // the bytes the frame has uploaded before the hook runs
   std::uint64_t bytesUploaded;
 };
@@ -131,6 +136,14 @@ private:
   GeometryArenas m_arenas;
   std::uint64_t m_chunksVersion = 0;
   std::uint64_t m_syncedChunksVersion = 0;
+  // LP2.1 (C28, D37): the image-slot table and the binding sets made against its slots;
+  // the material table the slots last looked at for arrivals
+  ImageSlots m_images;
+  BindingSetCache m_bindingSets{BindingSetCacheSize};
+  std::uint64_t m_arrivalsCheckedVersion = 0;
+  // D77: a texture arrival triggers a frame at most every TextureArrivalInterval
+  FrameClock::time_point m_lastArrivalTrigger;
+  std::optional<FrameClock::time_point> m_arrivalTriggerAt;
   // D77: the last frame left uploads for the next one
   bool m_unconverged = false;
   // the bytes the frame being recorded has uploaded
@@ -310,6 +323,11 @@ private:
   // the chunks the arenas follow (the scene's or the tests'), synchronised when their set
   // changed; whether uploads are queued
   bool syncChunks();
+  // C28: the slots look at the latest material table, and the sets of bumped slots go
+  void refreshImages();
+  void eraseChangedSets();
+  // D77: an idle pass's look for texture arrivals in a new table; whether a frame is due
+  void arrivalsTick();
   const std::map<ChunkKey, Chunk>& arenaChunks() const;
   // D78: the frame's uploads, before its first pass; false: failed
   bool recordUploads(nvrhi::ICommandList& commandList);

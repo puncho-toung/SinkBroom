@@ -213,6 +213,13 @@ void RenderThread::start(
   m_materials = materials;
   m_compiler = compiler;
   m_pipelines.setCompiler(compiler);
+  // C28: the slots ask the service (any thread may)
+  if (m_materials)
+  {
+    m_images.setRequest([materials = m_materials](const MaterialImageKey& key) {
+      return materials->image(key);
+    });
+  }
   m_geometry = std::make_unique<SceneGeometry>(m_pool, m_materials, std::move(lights));
   m_thread = std::thread{[this] { main(); }};
 }
@@ -425,6 +432,8 @@ void RenderThread::releaseFrameResources()
   m_frameResources.releaseAll();
   m_arenas.releaseAll();
   m_pipelines.clear();
+  m_bindingSets.clear();
+  m_images.releaseAll();
   m_arenaTestChunks.reset();
   m_commandList = nullptr;
   for (auto& event : m_frameEvents)
@@ -596,11 +605,17 @@ void RenderThread::applyHeadlessResize()
 
 bool RenderThread::prepareFrameResources(const vk::Extent2D extent)
 {
-  // C28: a new extent makes the targets again and bumps the generation once
-  return m_frameResources.ensureExtent(extent, m_frameIndex) | kdl::transform([&](bool) {
-           m_renderTargetGeneration = m_frameResources.renderTargetGeneration();
-           return true;
-         })
+  // C28: a new extent makes the targets again and bumps the generation once, and the
+  // binding sets of the old targets go
+  return m_frameResources.ensureExtent(extent, m_frameIndex)
+         | kdl::transform([&](const bool changed) {
+             m_renderTargetGeneration = m_frameResources.renderTargetGeneration();
+             if (changed)
+             {
+               m_bindingSets.renderTargetsChanged(m_renderTargetGeneration);
+             }
+             return true;
+           })
          | kdl::if_error([&](const auto& e) { m_events.markFailed(e.msg); })
          | kdl::value_or(false);
 }
@@ -628,6 +643,8 @@ void RenderThread::runFrameHooks(nvrhi::ICommandList& commandList)
     m_frameResources,
     m_arenas,
     m_pipelines,
+    m_images,
+    m_bindingSets,
     m_frameUploadBytes};
   if (everyFrame)
   {
@@ -650,6 +667,14 @@ void RenderThread::main() noexcept
     appendSessionRow(FrameLogEvent::Start);
     // S31: the inbox is empty
     m_events.post(SessionEvent::ReadyForSnapshot, {});
+    // D69: LP2's intrinsic images, which also stand in for pending slots (P2.14d)
+    if (m_materials)
+    {
+      for (const auto& key : lp2IntrinsicKeys())
+      {
+        m_images.request(key);
+      }
+    }
     runLoop();
   }
   catch (const std::exception& e)
@@ -765,7 +790,15 @@ void RenderThread::runLoop()
     lock.unlock();
     runDebugHook(DebugHook::IdleUnlocked);
     const auto building = geometryTick();
+    arrivalsTick();
     lock.lock();
+    // D77: a texture arrival that came within TextureArrivalInterval of the last one
+    if (m_arrivalTriggerAt && *m_arrivalTriggerAt <= FrameClock::now())
+    {
+      m_arrivalTriggerAt.reset();
+      m_lastArrivalTrigger = FrameClock::now();
+      m_pacer.trigger();
+    }
     // the mutex was released for the chunk jobs: a stop, park, trigger, exposure or table
     // that came meanwhile, whose notify found no waiter, or the trigger geometryTick set
     // itself, is acted on, not waited past (plans/lit-preview/19-LITGPU-HANG.md)
@@ -778,6 +811,10 @@ void RenderThread::runLoop()
     if (building)
     {
       deadline = std::min(deadline, now + GeometryPollInterval);
+    }
+    if (m_arrivalTriggerAt)
+    {
+      deadline = std::min(deadline, *m_arrivalTriggerAt);
     }
 
     if (m_idleWorkPending && !m_events.lost())
@@ -948,6 +985,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     m_frameResources.setFrameTarget(texture);
     m_frameUploadBytes = 0;
     syncChunks();
+    refreshImages();
     // C14: until LP2.2a the frame's one pass is LP0's clear of its presentation target
     auto clearPass = PassDesc{};
     clearPass.name = "clear";
@@ -1093,6 +1131,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       ++m_framesSkipped;
     }
 
+    // D37: the binding-set cache's bound, never a set of this frame
+    m_bindingSets.trim(frame);
     device.runGarbageCollection();
     m_lastFrameEnd = FrameClock::now();
 
@@ -1127,6 +1167,57 @@ void RenderThread::framesCompleted(const std::uint64_t completedFrames)
   // be handed out again
   m_frameResources.collectRetired(m_completedFrames);
   m_arenas.reclaim(m_completedFrames);
+  m_images.collectRetired(m_completedFrames);
+}
+
+void RenderThread::refreshImages()
+{
+  if (m_materials)
+  {
+    m_images.refresh(*m_materials->table(), m_frameIndex);
+  }
+  eraseChangedSets();
+}
+
+void RenderThread::eraseChangedSets()
+{
+  // C28: exactly the sets that hold a bumped slot
+  for (const auto slot : m_images.takeChangedSlots())
+  {
+    m_bindingSets.slotChanged(slot);
+  }
+}
+
+void RenderThread::arrivalsTick()
+{
+  if (!m_materials || m_images.pending() == 0)
+  {
+    return;
+  }
+  const auto table = m_materials->table();
+  if (table->version == m_arrivalsCheckedVersion)
+  {
+    return;
+  }
+  m_arrivalsCheckedVersion = table->version;
+  if (!m_images.anyArrivals(*table))
+  {
+    return;
+  }
+  // D77: a texture arrival is a frame trigger, at most every TextureArrivalInterval
+  const auto now = FrameClock::now();
+  const auto at = m_lastArrivalTrigger + TextureArrivalInterval;
+  const auto lock = std::scoped_lock{m_mutex};
+  if (now >= at)
+  {
+    m_lastArrivalTrigger = now;
+    m_arrivalTriggerAt.reset();
+    m_pacer.trigger();
+  }
+  else if (!m_arrivalTriggerAt)
+  {
+    m_arrivalTriggerAt = at;
+  }
 }
 
 bool RenderThread::waitForFrameEvent(const std::size_t slot)

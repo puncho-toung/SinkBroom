@@ -13160,6 +13160,147 @@
         }
       ],
       "note": "LP2.0: every LAYOUT_DRAW_VERT program gets the full input layout (locations 0 to 5), while its vertex shader reads fewer (depth.vs and color.vs location 0; texture_color.vs 0, 1 and 4; interaction.vs 0 to 4, the retail test prints them). NVRHI numbers attribute locations densely, so no layout can leave out 2 and 3 for texture_color without changing NVRHI; the preview keeps the engine's layout, and Vulkan's validation layer reports a warning \"Vertex attribute at location N not consumed by vertex shader\" per attribute, as for the engine under r_useValidationLayers. The [litgpu] pipeline tests count these apart; every other validation message is 0"
+    },
+    {
+      "id": "M-FRAME-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            258,
+            276
+          ],
+          "anchor": "R_LdrNativeImage, R_DepthImage, R_HDR_RGBA16FImage_ResNative_MSAAOpt",
+          "sha256": "744935f87234df267e54448f8d78f9b89619a6deeae19afd5114439f775ed8fe"
+        },
+        {
+          "file": "neo/renderer/NVRHI/Image_NVRHI.cpp",
+          "lines": [
+            556,
+            575
+          ],
+          "anchor": "idImage::AllocImage, the render-target desc",
+          "sha256": "b7d2b9d52092e14a93e423de1a4caf16789401e6ceabf0fd356cad419bd03faf"
+        },
+        {
+          "file": "neo/renderer/NVRHI/Framebuffer_NVRHI.cpp",
+          "lines": [
+            140,
+            148
+          ],
+          "anchor": "Framebuffer::ResizeFramebuffers, ldrFBO and hdrFBO",
+          "sha256": "2e84fa401c1ca448270b0e35723b949c5b093aec5988be5891d6e2e324154b0b"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            77,
+            96
+          ],
+          "anchor": "TonemapPass::Init, the histogram and exposure buffers",
+          "sha256": "de2e95ee9da62d011fa0c1bcf1deef2c66646629f2faae1877b35a179ab75e1f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/FrameResources.cpp",
+          "symbol": "FrameResources::create, FrameResources::makeTargets, renderTargetDesc, storageBufferDesc"
+        }
+      ],
+      "note": "LP2.1 step 2 (C6, C14, SC254-SC256, SC261): _currentRenderHDR RGBA16_FLOAT (render target, and UAV as the engine's one-sample image), _currentDepth TD_DEPTH_STENCIL through AllocImage's format map (D24S8 where the device has it, else D32S8; DepthWrite, clear value 1), _currentRenderLDR RGBA8_UNORM (TD_LOOKUP_TABLE_RGBA), each 2D with one level and one sample, keepInitialState, clear value 0; ldrFBO {LDR, depth} and hdrFBO {HDR, depth}; HistogramBuffer (256 bins) and ExposureBuffer (1) as R32_UINT typed UAVs kept in UnorderedAccess. The preview sizes them to its surface (headless: the headless extent), not renderSystem's window, and makes them again on a size change with the render-target generation bumped (C28); the engine's ResizeFramebuffers deletes and makes the framebuffers likewise. The replaced targets are held until their frame has finished (a clear holds no NVRHI reference)"
+    },
+    {
+      "id": "M-FRAME-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            347,
+            351
+          ],
+          "anchor": "TonemapPass::ResetExposure (no caller)",
+          "sha256": "a3c8c7b0675ca1c2fc4a12a66afb76e8319f48d44eb9f0a574d7eab34506f6b1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/FrameResources.cpp",
+          "symbol": "FrameResources::recordStartClears"
+        }
+      ],
+      "note": "LP2.1 step 2 (D70, SC261): the engine never clears its exposure buffer (ResetExposure has no caller), so its first frame adapts from whatever the allocation held; the preview clears it to 0 once at Start, in the first frame's command list before any pass, so that every session starts from the same value. In the engine's steady state, tens of seconds after start, the difference is gone (K24)"
+    },
+    {
+      "id": "M-ARENA-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/VertexCache.cpp",
+          "lines": [
+            343,
+            367
+          ],
+          "anchor": "idVertexCache::AllocStaticVertex, AllocStaticIndex",
+          "sha256": "01c2690cd2246685e8b6113ce642faf48b481eed9defcb9490689e156f001b21"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            219,
+            229
+          ],
+          "anchor": "idRenderBackend::Init, the command list's upload chunk size",
+          "sha256": "605bb7d613ad7dfe49a9582347da461ece85b4853eb99b3115b7cd031ecb1a89"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            59,
+            59
+          ],
+          "anchor": "r_vkUploadBufferSizeMB",
+          "sha256": "a82e3b6f72226da98edd9760e83ad9ddaf015ec72ae89633b09769532f5dcd6e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GeometryArenas.cpp",
+          "symbol": "GeometryArenas::sync, GeometryArenas::recordUploads, GeometryArenas::allocate"
+        },
+        {
+          "file": "lib/TbLitLib/src/RangeAllocator.cpp",
+          "symbol": "RangeAllocator"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::createFrameResources (UploadChunkBytes)"
+        }
+      ],
+      "note": "LP2.1 step 3 (S8, D36, D78): the engine appends a level's static geometry to one fixed static vertex and index buffer (FatalError when full) and never frees a range until the level unloads; the preview edits the map live, so its chunks live in 64 MB vertex and index arenas with a range allocator whose freed ranges are reused only once the frame that freed them has finished, another arena of the kind added when none holds a chunk, and at most 32 MB uploaded per frame (the rest waits; the frame is unconverged, D77). The render thread's command list uses 32 MB upload chunks; the engine's r_vkUploadBufferSizeMB is 64. The vertex layout (idDrawVert, C4) and the 16-bit indexes are the engine's"
+    },
+    {
+      "id": "M-IMG-DIFF-11",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            878,
+            891
+          ],
+          "anchor": "idImage::ActuallyLoadImage, the upload",
+          "sha256": "34597061dda9e852b194e06ea93429461272e2ccfaa68bb4648f8207e8ed5220"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ImageSlots.cpp",
+          "symbol": "pendingIntrinsicName, ImageSlots::binding"
+        }
+      ],
+      "note": "LP2.1 step 4 (C28, P2.14d): the engine loads every image of a level before it draws (ActuallyLoadImage writes the whole image in one command list), so it never binds a stand-in; the preview loads images while it draws, so a slot whose texture has not arrived, and one the service has no image for (Default), binds its usage's intrinsic: TD_BUMP _flat, TD_LIGHT (falloff and projection images) _white, every other usage _default. A settled frame (D77) has every visible texture at its full mips, so the stand-in never reaches a parity shot"
     }
   ],
   "retired": [
