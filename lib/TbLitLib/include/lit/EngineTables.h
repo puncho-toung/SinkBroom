@@ -21,8 +21,8 @@
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderProgs.h, RenderProgs.cpp,
 // Passes/CommonPasses.cpp, Passes/TonemapPass.cpp, Passes/TonemapPass_cb.h,
-// NVRHI/Image_NVRHI.cpp, RenderSystem_init.cpp, sys/DeviceManager.cpp,
-// sys/DeviceManager_VK.cpp and shaders/renderParmSet*.inc.hlsl):
+// NVRHI/Image_NVRHI.cpp, RenderSystem_init.cpp, RenderBackend.cpp, GLState.h,
+// sys/DeviceManager.cpp, sys/DeviceManager_VK.cpp and shaders/renderParmSet*.inc.hlsl):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2013-2025 Robert Beckebans
 //   Copyright (C) 2022 Stephen Pridham
@@ -40,6 +40,7 @@
 #include <nvrhi/nvrhi.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -445,5 +446,41 @@ struct EngineTonemapDefaults
   std::uint32_t histogramBins = 256;
 };
 inline constexpr auto EngineTonemap = EngineTonemapDefaults{};
+
+// ----- the frame's cvars and limits (LP2.2a, D21: the engine's defaults) -----
+
+/**
+ * The values the engine's frame and interaction code reads, at this tree's defaults
+ * (RenderSystem_init.cpp, RenderBackend.cpp, RenderProgs.cpp; T0.15 of
+ * 29-LP2-0-REVIEW.md). OVERBRIGHT is lightScale · 0.5, and every light stage's colour is
+ * multiplied by lightScale.
+ */
+struct EngineFrameDefaults
+{
+  // r_lightScale "3" (RenderSystem_init.cpp:171)
+  float lightScale = 3.0f;
+  // r_offsetfactor "0" and r_offsetunits "-600" outside __ANDROID__ (:159-164)
+  float offsetFactor = 0.0f;
+  float offsetUnits = -600.0f;
+  // r_clear "2": every frame clears hdrFBO and ldrFBO to (0, 0, 0, 1) (SC202)
+  int clear = 2;
+  // STENCIL_SHADOW_TEST_VALUE (GLState.h:191): the stencil clear of every 3D view
+  std::uint8_t stencilClear = 128;
+  // r_useLightScissors "3": the fully clipped projected bounds (:155)
+  int useLightScissors = 3;
+  // r_skipInteractionFastPath "1" (RenderBackend.cpp:56): every surface runs the stage
+  // loop
+  bool skipInteractionFastPath = true;
+  // r_mathLightsEnabled "1" (:245): a light with math_enabled shades through the math
+  // path (LP5)
+  bool mathLightsEnabled = true;
+  // RenderInteractions' caps (RenderBackend.cpp:1758-1759): surfaces beyond them are
+  // dropped silently (idStaticList::Append)
+  std::size_t maxInteractionsPerLight = 2048;
+  std::size_t maxComplexInteractionsPerLight = 256;
+  // the volatile constant buffers' versions (RenderProgs.cpp:771)
+  std::uint32_t constantBufferVersions = 8192;
+};
+inline constexpr auto EngineFrame = EngineFrameDefaults{};
 
 } // namespace tb::lit

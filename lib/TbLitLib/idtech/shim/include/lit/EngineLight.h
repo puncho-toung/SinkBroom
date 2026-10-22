@@ -207,4 +207,43 @@ EngineGlMatrix engineViewMatrix(const EngineVec3& origin, const EngineMat3& axis
 // forward ) (left), up
 EngineMat3 engineViewAxis(const EngineVec3& forward, const EngineVec3& up);
 
+// ----- the frame's matrices (LP2.2a; the copy, and GLMatrix.cpp transcribed, pure) -----
+
+// idRenderMatrix::Transpose( src, out ): the engine's float[16] view matrices as render
+// matrices (tr_frontend_main.cpp:904-907, tr_frontend_addmodels.cpp:506-507)
+EngineMat4 engineMatrixTranspose(const EngineMat4& matrix);
+
+// idRenderMatrix::CullBoundsToMVP( mvp, bounds, zeroToOne ): true when the bounds are
+// outside one clip plane (the copy, its SSE path)
+bool engineCullBoundsToMvp(
+  const EngineMat4& mvp, const EngineBounds& bounds, bool zeroToOne);
+
+// idRenderMatrix::ProjectedFullyClippedBounds( projected, mvp, bounds, true ): the bounds
+// clipped to the view frustum and projected to window space, x and y 0..1 with y up
+EngineBounds engineProjectedFullyClippedBounds(
+  const EngineMat4& mvp, const EngineBounds& bounds);
+
+// R_AxisToModelMatrix (GLMatrix.cpp:49-70): an entity's float[16] model matrix
+EngineGlMatrix engineModelMatrix(const EngineVec3& origin, const EngineMat3& axis);
+
+// R_MatrixMultiply (GLMatrix.cpp:77-150, its SSE path): out = a · b on float[16]s
+EngineGlMatrix engineGlMatrixMultiply(const EngineGlMatrix& a, const EngineGlMatrix& b);
+
+// R_GlobalPointToLocal (GLMatrix.cpp:267-278), no skew or scale assumed, as there
+EngineVec3 engineGlobalPointToLocal(
+  const EngineGlMatrix& modelMatrix, const EngineVec3& point);
+
+// R_GlobalPlaneToLocal (GLMatrix.cpp:315-321), no skew or scale assumed, as there
+EnginePlane engineGlobalPlaneToLocal(
+  const EngineGlMatrix& modelMatrix, const EnginePlane& plane);
+
+/**
+ * RB_BakeTextureMatrixIntoTexgen (RenderBackend.cpp:223-259): the light projection's S
+ * and T planes multiplied by a light stage's texture matrix (RB_GetShaderTextureMatrix's
+ * layout) through R_MatrixMultiply; Q (plane 2) is read, planes 2 and 3 are left as
+ * they are.
+ */
+void engineBakeTextureMatrixIntoTexgen(
+  std::array<EnginePlane, 4>& lightProject, const EngineGlMatrix& textureMatrix);
+
 } // namespace tb::lit

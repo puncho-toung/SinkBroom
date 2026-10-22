@@ -20,7 +20,7 @@
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderWorld_defs.cpp,
-// renderer/GLMatrix.cpp and d3xp/Game_local.cpp):
+// renderer/GLMatrix.cpp, renderer/RenderBackend.cpp and d3xp/Game_local.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2012-2024 Robert Beckebans
 // That code is also subject to the additional terms that follow the GNU General
@@ -706,6 +706,128 @@ EngineMat3 engineViewAxis(const EngineVec3& forward, const EngineVec3& up)
   const auto u = toId(up);
   const auto left = u.Cross(f);
   return {f.x, f.y, f.z, left.x, left.y, left.z, u.x, u.y, u.z};
+}
+
+EngineMat4 engineMatrixTranspose(const EngineMat4& matrix)
+{
+  auto out = idRenderMatrix{};
+  idRenderMatrix::Transpose(toId(matrix), out);
+  return fromId(out);
+}
+
+bool engineCullBoundsToMvp(
+  const EngineMat4& mvp, const EngineBounds& bounds, const bool zeroToOne)
+{
+  return idRenderMatrix::CullBoundsToMVP(toId(mvp), toId(bounds), zeroToOne);
+}
+
+EngineBounds engineProjectedFullyClippedBounds(
+  const EngineMat4& mvp, const EngineBounds& bounds)
+{
+  auto projected = idBounds{};
+  idRenderMatrix::ProjectedFullyClippedBounds(projected, toId(mvp), toId(bounds), true);
+  return fromId(projected);
+}
+
+EngineGlMatrix engineModelMatrix(const EngineVec3& origin, const EngineMat3& axis)
+{
+  auto modelMatrix = EngineGlMatrix{};
+  R_AxisToModelMatrix(toId(axis), toId(origin), modelMatrix.data());
+  return modelMatrix;
+}
+
+EngineGlMatrix engineGlMatrixMultiply(const EngineGlMatrix& a, const EngineGlMatrix& b)
+{
+  auto out = EngineGlMatrix{};
+  R_MatrixMultiply(a.data(), b.data(), out.data());
+  return out;
+}
+
+EngineVec3 engineGlobalPointToLocal(
+  const EngineGlMatrix& modelMatrix, const EngineVec3& point)
+{
+  // GLMatrix.cpp:267-278 R_GlobalPointToLocal
+  const idVec3 in = toId(point);
+  idVec3 out;
+  idVec3 temp;
+
+  temp[0] = in[0] - modelMatrix[3 * 4 + 0];
+  temp[1] = in[1] - modelMatrix[3 * 4 + 1];
+  temp[2] = in[2] - modelMatrix[3 * 4 + 2];
+
+  out[0] = temp[0] * modelMatrix[0 * 4 + 0] + temp[1] * modelMatrix[0 * 4 + 1]
+           + temp[2] * modelMatrix[0 * 4 + 2];
+  out[1] = temp[0] * modelMatrix[1 * 4 + 0] + temp[1] * modelMatrix[1 * 4 + 1]
+           + temp[2] * modelMatrix[1 * 4 + 2];
+  out[2] = temp[0] * modelMatrix[2 * 4 + 0] + temp[1] * modelMatrix[2 * 4 + 1]
+           + temp[2] * modelMatrix[2 * 4 + 2];
+  return fromId(out);
+}
+
+EnginePlane engineGlobalPlaneToLocal(
+  const EngineGlMatrix& modelMatrix, const EnginePlane& plane)
+{
+  // GLMatrix.cpp:315-321 R_GlobalPlaneToLocal
+  const idPlane in{plane.a, plane.b, plane.c, plane.d};
+  idPlane out;
+  out[0] = in[0] * modelMatrix[0 * 4 + 0] + in[1] * modelMatrix[0 * 4 + 1]
+           + in[2] * modelMatrix[0 * 4 + 2];
+  out[1] = in[0] * modelMatrix[1 * 4 + 0] + in[1] * modelMatrix[1 * 4 + 1]
+           + in[2] * modelMatrix[1 * 4 + 2];
+  out[2] = in[0] * modelMatrix[2 * 4 + 0] + in[1] * modelMatrix[2 * 4 + 1]
+           + in[2] * modelMatrix[2 * 4 + 2];
+  out[3] = in[0] * modelMatrix[3 * 4 + 0] + in[1] * modelMatrix[3 * 4 + 1]
+           + in[2] * modelMatrix[3 * 4 + 2] + in[3];
+  return fromId(out);
+}
+
+void engineBakeTextureMatrixIntoTexgen(
+  std::array<EnginePlane, 4>& planes, const EngineGlMatrix& textureMatrix)
+{
+  // RenderBackend.cpp:223-259 RB_BakeTextureMatrixIntoTexgen, on the copied idPlane
+  idPlane lightProject[3];
+  for (std::size_t i = 0; i < 3; ++i)
+  {
+    lightProject[i] = idPlane{planes[i].a, planes[i].b, planes[i].c, planes[i].d};
+  }
+
+  float genMatrix[16];
+  float final[16];
+
+  genMatrix[0 * 4 + 0] = lightProject[0][0];
+  genMatrix[1 * 4 + 0] = lightProject[0][1];
+  genMatrix[2 * 4 + 0] = lightProject[0][2];
+  genMatrix[3 * 4 + 0] = lightProject[0][3];
+
+  genMatrix[0 * 4 + 1] = lightProject[1][0];
+  genMatrix[1 * 4 + 1] = lightProject[1][1];
+  genMatrix[2 * 4 + 1] = lightProject[1][2];
+  genMatrix[3 * 4 + 1] = lightProject[1][3];
+
+  genMatrix[0 * 4 + 2] = 0.0f;
+  genMatrix[1 * 4 + 2] = 0.0f;
+  genMatrix[2 * 4 + 2] = 0.0f;
+  genMatrix[3 * 4 + 2] = 0.0f;
+
+  genMatrix[0 * 4 + 3] = lightProject[2][0];
+  genMatrix[1 * 4 + 3] = lightProject[2][1];
+  genMatrix[2 * 4 + 3] = lightProject[2][2];
+  genMatrix[3 * 4 + 3] = lightProject[2][3];
+
+  R_MatrixMultiply(genMatrix, textureMatrix.data(), final);
+
+  lightProject[0][0] = final[0 * 4 + 0];
+  lightProject[0][1] = final[1 * 4 + 0];
+  lightProject[0][2] = final[2 * 4 + 0];
+  lightProject[0][3] = final[3 * 4 + 0];
+
+  lightProject[1][0] = final[0 * 4 + 1];
+  lightProject[1][1] = final[1 * 4 + 1];
+  lightProject[1][2] = final[2 * 4 + 1];
+  lightProject[1][3] = final[3 * 4 + 1];
+
+  planes[0] = fromId(lightProject[0]);
+  planes[1] = fromId(lightProject[1]);
 }
 
 } // namespace tb::lit
