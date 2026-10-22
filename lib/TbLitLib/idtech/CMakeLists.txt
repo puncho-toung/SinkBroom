@@ -52,6 +52,7 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_SHIM_DIR}/src/MaterialDecls.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/Registry.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimFramework.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/ShimImages.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimLib.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimRenderer.cpp
     ${TB_LIT_ID_SHIM_DIR}/ParallelJobList_JobHeaders.h

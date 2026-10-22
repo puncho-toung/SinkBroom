@@ -57,6 +57,10 @@ std::vector<std::string> sortedEnginePaths(std::vector<std::string> paths);
 // the time after a write that a modification time can tell apart from the one before it
 void bumpModificationTime(const std::filesystem::path& path);
 
+// sets a file's modification time to whole Unix seconds, as the engine reads them (A4):
+// SetFileTime on Windows, utimensat elsewhere; false when it cannot
+bool setUnixModificationTime(const std::filesystem::path& path, std::int64_t seconds);
+
 /**
  * Holds a material service's parse thread before it takes its next request while closed
  * (MaterialServiceOptions::beforeTakeWorkForTesting calls pass): lookups queued then stay

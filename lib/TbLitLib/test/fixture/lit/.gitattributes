@@ -3,3 +3,4 @@
 * -text
 *.bproc binary
 *.tga binary
+*.bimage binary

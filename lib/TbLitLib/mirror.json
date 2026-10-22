@@ -5173,9 +5173,13 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
           "symbol": "R_LoadImage"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "R_LoadCubeImages"
         }
       ],
-      "note": "TEMPORARY until LP1c copies Image_files.cpp and its loaders behind the pre-validation (D51): a compile-only stub that returns no image and FILE_NOT_FOUND_TIMESTAMP. Only the image programs' pixel path (R_LoadImageProgram with a pic or timestamps) reaches it; the parse path never does"
+      "note": "TEMPORARY until LP1c.2 copies Image_files.cpp and its loaders behind the pre-validation (D51): the pixel path of R_LoadImage (pic not NULL) and of R_LoadCubeImages (pics not NULL) reads no image and gives FILE_NOT_FOUND_TIMESTAMP, as for a missing file. LP1c.1 transcribed their time-only paths (M-IMG-01, M-IMG-02); LP1c.2's copy of R_LoadImage replaces both halves of R_LoadImage and must keep the time-only behaviour M-IMG-01 states"
     },
     {
       "id": "M-ID-NC-01",
@@ -9777,6 +9781,405 @@
         }
       ],
       "note": "LP1c.1, for the loaders LP1c.2 copies: OpenFileRead reads the file whole through the source's C8 search (readGameFile) and serves it from memory as idFile_Memory does (Read copies at most the bytes left and moves past them), with the time the search found: a loose file's Unix seconds, as idFile_Permanent::Timestamp gives them, 0 in a container. The game file is closed once read (R4-3.26); CloseFile frees the object. Null for no file, a file of 2 GB or more, and once the registry's cancel flag is set. Minimal: only GetFullPath, Read, Length and Timestamp exist (M-ID-VIRT-12)"
+    },
+    {
+      "id": "M-IMG-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            959,
+            966
+          ],
+          "anchor": "imageLoaders",
+          "sha256": "f26bb07e49107f06725abd53d15beebd31d4206a48ada57fc06b04c63b1deff8"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            994,
+            1147
+          ],
+          "anchor": "R_LoadImage",
+          "sha256": "f615946f0ccfc4cf34862e57ae611f13b9325b04201046fac37810f696d0b4ad"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            172,
+            176
+          ],
+          "anchor": "LoadTGA, the time-only path",
+          "sha256": "d7528fdf6fb08b2879321294b973f967a05993af95eda9a0e59708db005dcc13"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            441,
+            445
+          ],
+          "anchor": "LoadSTB_RGBA8, the time-only path",
+          "sha256": "46194d8b5faafd9b47803450943cce1ee10c6ca738d5617595a95dab48af77de"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            552,
+            556
+          ],
+          "anchor": "LoadEXR, the time-only path",
+          "sha256": "46194d8b5faafd9b47803450943cce1ee10c6ca738d5617595a95dab48af77de"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            891,
+            895
+          ],
+          "anchor": "LoadHDR, the time-only path",
+          "sha256": "46194d8b5faafd9b47803450943cce1ee10c6ca738d5617595a95dab48af77de"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "R_LoadImage"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "ImageLoaderExtensions"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "loadTimestampOnly"
+        }
+      ],
+      "note": "LP1c.1 (R5.5, SC94, A5): R_LoadImage's time-only path (pic NULL), transcribed with the copied idStr: the .tga default, a name of fewer than 5 characters gives nothing, the name lowercased; for a TD_SPECULAR <base>_s the PBR hack probes <base>_rmao.png, then every loader's extension, and a hit makes the usage TD_SPECULAR_PBR_RMAO with the engine's 'PBR hack' line; otherwise the given extension, then every extension in the table's order (png, tga, jpg, exr, hdr). Each loader's time-only path is ReadFile( name, NULL, timestamp ), the source's probe (M-FS-08). The engine's retry label is a loop"
+    },
+    {
+      "id": "M-IMG-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            1156,
+            1404
+          ],
+          "anchor": "R_LoadCubeImages",
+          "sha256": "c18a9a563d2a1b744fc5db72bdfef9314e57a95919ecbc0da51e65f942987905"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimRenderer.cpp",
+          "symbol": "R_LoadCubeImages"
+        }
+      ],
+      "note": "LP1c.1 (SC92): R_LoadCubeImages' time-only path (pics NULL), transcribed: the side suffixes per cube mode (camera, quake, native, native HDR .exr), one R_LoadImageProgram for CF_SINGLE with a size and for CF_PANORAMA, else six; the time is the newest side's, starting at 0 (R_LoadImageProgram starts each side at 0, so a missing side gives 0 and never ends the loop); a size mismatch warns and gives 0. Not in the engine: width and height start at 0 where the engine leaves them uninitialised (every time-only leaf sets them to 0)"
+    },
+    {
+      "id": "M-IMG-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            525,
+            537
+          ],
+          "anchor": "idImage::GetGeneratedName",
+          "sha256": "73c307cca6a8aef756b3ca048868701e474ed29baf6ab5036ee5fd4820a07914"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            568,
+            617
+          ],
+          "anchor": "ActuallyLoadImage, the time call and the name",
+          "sha256": "df6e96e962c617951ed56087d48f805953938147ae250c9eb4073718a4cae972"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            629,
+            671
+          ],
+          "anchor": "ActuallyLoadImage, the BFHACK names",
+          "sha256": "461e39ec0d747827f3b8c731a9a99be207603b447bc87fd8637b1466574bec1e"
+        },
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            1144,
+            1151
+          ],
+          "anchor": "idBinaryImage::GetGeneratedFileName",
+          "sha256": "5f54fc9a89279ff52309a79a5b48939dfd7ceb21d72775b89e164d985c6d1719"
+        },
+        {
+          "file": "neo/renderer/NVRHI/Image_NVRHI.cpp",
+          "lines": [
+            133,
+            133
+          ],
+          "anchor": "idImage::idImage, sourceFileTime",
+          "sha256": "56840ab11ed7700710c260aacacec6ae8850b5e9b6cd96ac54f1a87834f6016f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImages.cpp",
+          "symbol": "MaterialDecls::imageCacheName"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImages.cpp",
+          "symbol": "getGeneratedName"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImages.cpp",
+          "symbol": "getGeneratedFileName"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImages.cpp",
+          "symbol": "bfhackName"
+        }
+      ],
+      "note": "LP1c.1 (C8, R5.5, SC92, SC96, SC100): the cache name of an image key, with com_productionMode 0: CF_2D_ARRAY makes no call (time -1, the constructor's), a cube mode calls R_LoadCubeImages, anything else the copied R_LoadImageProgram with the usage, which the PBR hack may change; an RMAO usage renames <base>_s to <base>_rmao (StripFileExtension, StripTrailingOnce); GetGeneratedName puts #__%02d%02d (usage, cube) before the extension; GetGeneratedFileName gives generated/images/<name>.bimage with ( and , made / and ) and space removed. The BFHACK name is the first rule whose name Find finds without case, renamed by Replace; the reader tries it only when resource files are in use (M-IMG-06). An intrinsic or the default image (a generatorFunction) has no cache. textureType_t, which the copied Image.h ranges leave out, is three constants. Not in the engine: a name of MAX_IMAGE_NAME or more characters is refused"
+    },
+    {
+      "id": "M-IMG-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            44,
+            104
+          ],
+          "anchor": "BitsForFormat",
+          "sha256": "3ac651ebc98ca7724f209d9a2e364fa4888bb5b319ecf63d170a9932c061c744"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            150,
+            319
+          ],
+          "anchor": "idImage::DeriveOpts",
+          "sha256": "d3897765b9cbe5b5ec623796572341854d17a55bff224be35fa674947c4cee3c"
+        },
+        {
+          "file": "neo/renderer/Image.h",
+          "lines": [
+            35,
+            43
+          ],
+          "anchor": "textureType_t",
+          "sha256": "f123fd693d0b1a75a0ba148017a64526e69aa199b8bf8c7740e46567dffba901"
+        },
+        {
+          "file": "neo/renderer/Image.h",
+          "lines": [
+            50,
+            123
+          ],
+          "anchor": "textureFormat_t",
+          "sha256": "0d272f2615cba6dc56e5c261a8c333b3ffe0ece7540ced14345bc14f20b862a2"
+        },
+        {
+          "file": "neo/renderer/Image.h",
+          "lines": [
+            133,
+            139
+          ],
+          "anchor": "textureColor_t",
+          "sha256": "1cf903192aa42ab0aac5429a488b0c2d3e66545d586d7c569929f40f905dcc7a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ImageCache.cpp",
+          "symbol": "engineImageOpts"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageCache.cpp",
+          "symbol": "engineMipLevels"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageCache.cpp",
+          "symbol": "engineBitsForFormat"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/ImageCache.h",
+          "symbol": "engine_image"
+        }
+      ],
+      "note": "LP1c.1 (SC99): DeriveOpts' format and colour format per usage, the engine as built (STANDALONE off: TD_LIGHT is RGB565, M-IMG-DIFF-02); an unnamed usage asserts in the engine and gets RGBA8. The mip count: 1 for a linear or nearest filter, else one per halving, stopping at a DXT1, DXT5, BC6H or ETC1 level whose size is not a multiple of 4 (the engine-written fixture caches agree). BitsForFormat as is (0 where the engine asserts)"
+    },
+    {
+      "id": "M-IMG-05",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            994,
+            1128
+          ],
+          "anchor": "idBinaryImage::LoadFromGeneratedFile( idFile*, ... )",
+          "sha256": "7f0455562f1c441d771c6caa4a2247d33ada94e6b95c72b00ca328ed428f7230"
+        },
+        {
+          "file": "neo/renderer/BinaryImageData.h",
+          "lines": [
+            42,
+            70
+          ],
+          "anchor": "BIMAGE_MAGIC, bimageImage_t, bimageFile_t",
+          "sha256": "f0db0ac89d87efc1b3967bb7671e9ba83e1a4ef5b1a10ba361c279937d0ea3c5"
+        },
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            927,
+            962
+          ],
+          "anchor": "idBinaryImage::WriteGeneratedFile (the layout)",
+          "sha256": "3132009a5ff19beba1677d1a038df77bb39bbce0b261ac68237185bdd57c62b5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ImageCache.cpp",
+          "symbol": "readBimage"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageCache.cpp",
+          "symbol": "expandRgb565"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageCache.cpp",
+          "symbol": "engineCacheIsStale"
+        }
+      ],
+      "note": "LP1c.1 (SC97, SC98, A3): the .bimage, big-endian: int64 source time, then magic (BIM 10 or 11), textureType, format, colorFormat, width, height, numLevels; numLevels records, six times for a cube, side-major, each {level, destZ, width, height, dataSize} and the bytes. RGB565 is stored high byte first and expanded to RGBA8 with Option 1 ((r5 * 527 + 23) >> 6, (g6 * 259 + 33) >> 6, alpha 255), the format then RGBA8. The staleness test as A3 corrects it: rejected only when the source time is neither -1 nor 0 and differs (not production mode). Differences in M-IMG-DIFF-01"
+    },
+    {
+      "id": "M-IMG-06",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            625,
+            695
+          ],
+          "anchor": "ActuallyLoadImage, the cache load and its test",
+          "sha256": "b82ec983c34d052a8435e8860aac23acd12c8386dbf7b70b960c2fa5049b2869"
+        },
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            971,
+            985
+          ],
+          "anchor": "idBinaryImage::LoadFromGeneratedFile( sourceFileTime )",
+          "sha256": "c0bd2cca4de26463e751261b6f6a855bc71515ad40cd37c891e36e511f49237f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ImageCache.cpp",
+          "symbol": "resolveImageCache"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageCache.cpp",
+          "symbol": "engineCacheMatches"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::lookUpImage"
+        }
+      ],
+      "note": "LP1c.1 (C8, D23, A3): the cache file through the C8 search (OpenFileRead: loose, then .pk4, then .resources), read and time-tested as LoadFromGeneratedFile; when that fails and resource files are in use, the BFHACK name the same way; a loaded cache is used when its colour format, format (RGBA8 for RGB565, R11G11B10F for BC6H) and texture type equal DeriveOpts'. Where the engine would binarize, the preview reports Missing (no file) or Stale (a file it would not use, with the engine's binarize reason) for LP1c.2's fallback; it never writes. The editor image is never asked (C8)"
+    },
+    {
+      "id": "M-IMG-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            994,
+            1128
+          ],
+          "anchor": "idBinaryImage::LoadFromGeneratedFile( idFile*, ... )",
+          "sha256": "7f0455562f1c441d771c6caa4a2247d33ada94e6b95c72b00ca328ed428f7230"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ImageCache.cpp",
+          "symbol": "readBimage"
+        }
+      ],
+      "note": "LP1c.1: every count and size is checked before it is used: a header shorter than 36 bytes (the engine reads it as it is), a negative or impossible level count, a negative data size, an odd RGB565 level (the engine's in-place expansion reads misaligned pairs) or a level cut short fails the read, where the engine reads garbage or past the end; the preview then reports the cache Stale. A block-compressed level keeps its stored bytes: the engine pads its own allocation to NVRHI's row pitch times the rows, which LP2 does at upload"
+    },
+    {
+      "id": "M-IMG-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            206,
+            216
+          ],
+          "anchor": "DeriveOpts, TD_LIGHT",
+          "sha256": "54f1a23a2cc4ff390250e399e1bf04e8054ef40279e1dbc3e4e73f41396bb9a3"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            841,
+            846
+          ],
+          "anchor": "idFileSystemLocal::InProductionMode",
+          "sha256": "524252f4f237d7138069707e731ed39bae26a6c92b546caab759d3b3820c7c71"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ImageCache.cpp",
+          "symbol": "engineImageOpts"
+        }
+      ],
+      "note": "LP1c.1: the preview mirrors the engine as SinkBroom's users build it: STANDALONE off (TD_LIGHT is RGB565; a STANDALONE build stores RGBA8, which the match accepts for RGB565 anyway) and com_productionMode 0 (the time call runs and the staleness test applies; production mode trusts any cache)"
+    },
+    {
+      "id": "M-IMG-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            625,
+            695
+          ],
+          "anchor": "ActuallyLoadImage, the cache load and its test",
+          "sha256": "b82ec983c34d052a8435e8860aac23acd12c8386dbf7b70b960c2fa5049b2869"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::resetWorkingTable"
+        }
+      ],
+      "note": "LP1c.1: an image's cache is read once per session, when it is first asked for, and kept across material reloads (it does not depend on the decls); the engine reads it at every image load. A cache or source changed later is seen after a restart of the session until LP1c.2's re-probe on an image file change"
     }
   ],
   "retired": [

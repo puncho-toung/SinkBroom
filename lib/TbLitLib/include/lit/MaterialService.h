@@ -21,6 +21,7 @@
 
 #include "base/Macros.h"
 #include "base/Result.h"
+#include "lit/ImageCache.h"
 #include "lit/MaterialDecls.h"
 #include "lit/PersistentMap.h"
 
@@ -95,6 +96,12 @@ struct RegisterKeyHash
 // the hash of one set of entity shaderParms at a time
 std::uint64_t shaderParmsHash(const ShaderParms& shaderParms, float time);
 
+// equal image keys hash alike (every field of MaterialImageKey::operator==)
+struct MaterialImageKeyHash
+{
+  std::size_t operator()(const MaterialImageKey& key) const;
+};
+
 /**
  * One published version of the materials (D52, R5.16, C7): immutable, shared by every
  * thread that holds it, and freed with its last holder. It never holds an id pointer.
@@ -105,7 +112,10 @@ std::uint64_t shaderParmsHash(const ShaderParms& shaderParms, float time);
  * - entityDefs: what each entityDef query found (C22), keyed the same way;
  * - registers: the evaluated registers, keyed by (material, shaderParms, time), published
  *   as deltas; the oldest are dropped beyond MaxRegisterDeltas, and a holder keeps its
- *   last registers until new ones arrive.
+ *   last registers until new ones arrive;
+ * - images (LP1c.1, C8): what the image cache reader found for each image key asked for,
+ *   published as deltas and kept across reloads (an image's cache does not depend on the
+ *   decls).
  *
  * A new version shares every material, entityDef and delta that did not change.
  */
@@ -130,6 +140,10 @@ struct MaterialTable
     std::shared_ptr<const ProcFileSlot>,
     StringHash,
     std::equal_to<>>;
+  using Images = PersistentMap<
+    MaterialImageKey,
+    std::shared_ptr<const ImageCacheSlot>,
+    MaterialImageKeyHash>;
 
   static constexpr std::size_t MaxRegisterDeltas = 16384;
 
@@ -145,12 +159,15 @@ struct MaterialTable
   Registers registers;
   // the .proc files read so far (loadProcFile), by path; kept across reloads
   ProcFiles procFiles;
+  // LP1c.1: the image caches read so far (image), by key; kept across reloads
+  Images images;
 
   // the slot of a name, shared with the table, so that it outlives a table held only for
   // the call; null when the name is not looked up yet. Neither find allocates.
   std::shared_ptr<const MaterialSlot> find(std::string_view name) const;
   std::shared_ptr<const EntityDefSlot> findEntityDef(std::string_view classname) const;
   std::shared_ptr<const ProcFileSlot> findProcFile(std::string_view path) const;
+  std::shared_ptr<const ImageCacheSlot> findImage(const MaterialImageKey& key) const;
   // the registers of a key; an EvaluatedRegisters with an error when the evaluation was
   // refused, null when it is not done yet
   std::shared_ptr<const EvaluatedRegisters> findRegisters(const RegisterKey& key) const;
@@ -182,6 +199,25 @@ struct EntityDefLookup
   State state = State::Pending;
   std::shared_ptr<const EntityDefEntry> entry;
   std::string error;
+};
+
+// LP1c.1: what image returns: Pending (queued: a later table has it), or the slot's state
+// with its image (Ready) or why there is none (Missing, Stale)
+struct ImageLookup
+{
+  enum class State
+  {
+    Pending,
+    Ready,
+    // no cache: LP1c.2's source fallback takes over
+    Missing,
+    // a cache the engine would not use (its source time or format differs)
+    Stale,
+  };
+
+  State state = State::Pending;
+  std::shared_ptr<const CachedImage> image;
+  std::shared_ptr<const ImageCacheSlot> slot;
 };
 
 // what the parse thread reports to its owner
@@ -364,6 +400,15 @@ public:
    * Each call reads the file again, so a new dmap run is seen when the caller asks.
    */
   void loadProcFile(std::string_view path);
+
+  /**
+   * LP1c.1 (C8, D23): the engine's cache of an image as the latest table has it, or
+   * Pending, and the key is queued with the lookups; any thread. On the parse thread the
+   * copied timestamp call names the cache (MaterialDecls::imageCacheName) and the image
+   * cache reader reads it through the game-file search (resolveImageCache); the slot is
+   * published once and kept across reloads.
+   */
+  ImageLookup image(const MaterialImageKey& key);
 
   // bulk-parses every material and table of the current registry and of every later one
   void parseAll();

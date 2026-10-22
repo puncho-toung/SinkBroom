@@ -22,6 +22,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GameFile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightData.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightParse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightRecord.cpp

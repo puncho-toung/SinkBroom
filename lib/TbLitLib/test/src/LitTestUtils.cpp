@@ -21,6 +21,16 @@
 
 #include "TestEnvironment.h"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <sys/stat.h>
+#endif
+
 #include <fmt/format.h>
 #include <miniz.h>
 
@@ -157,6 +167,36 @@ void bumpModificationTime(const std::filesystem::path& path)
   // a write within the file system's time resolution may keep the old time
   const auto time = std::filesystem::last_write_time(path);
   std::filesystem::last_write_time(path, time + std::chrono::seconds{2});
+}
+
+bool setUnixModificationTime(
+  const std::filesystem::path& path, const std::int64_t seconds)
+{
+#if defined(_WIN32)
+  // Sys_FileTimeStamp's conversion, backwards
+  const auto ticks = std::uint64_t(seconds * 10000000 + 116444736000000000);
+  const auto time = FILETIME{DWORD(ticks & 0xFFFFFFFFu), DWORD(ticks >> 32)};
+  const auto handle = CreateFileW(
+    path.c_str(),
+    FILE_WRITE_ATTRIBUTES,
+    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    nullptr,
+    OPEN_EXISTING,
+    FILE_ATTRIBUTE_NORMAL,
+    nullptr);
+  if (handle == INVALID_HANDLE_VALUE)
+  {
+    return false;
+  }
+  const auto set = SetFileTime(handle, nullptr, nullptr, &time);
+  CloseHandle(handle);
+  return set != 0;
+#else
+  struct timespec times[2]{};
+  times[0].tv_nsec = UTIME_OMIT;
+  times[1].tv_sec = time_t(seconds);
+  return utimensat(AT_FDCWD, path.c_str(), times, 0) == 0;
+#endif
 }
 
 } // namespace tb::lit

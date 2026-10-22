@@ -151,6 +151,30 @@ std::size_t RegisterKeyHash::operator()(const RegisterKey& key) const
   return std::size_t(hash);
 }
 
+std::size_t MaterialImageKeyHash::operator()(const MaterialImageKey& key) const
+{
+  auto hash = std::uint64_t(std::hash<std::string>{}(key.name));
+  for (const auto value :
+       {key.usage,
+        key.filter,
+        key.repeat,
+        key.cube,
+        key.cubeMapSize,
+        int(key.intrinsic),
+        int(key.isDefault)})
+  {
+    hash = mixHash(hash, std::uint64_t(std::uint32_t(value)));
+  }
+  return std::size_t(hash);
+}
+
+std::shared_ptr<const ImageCacheSlot> MaterialTable::findImage(
+  const MaterialImageKey& key) const
+{
+  const auto* slot = images.find(key);
+  return slot ? *slot : nullptr;
+}
+
 std::shared_ptr<const MaterialSlot> MaterialTable::find(const std::string_view name) const
 {
   // the transparent hash takes the view as it is
@@ -204,6 +228,9 @@ struct MaterialService::Shared
   // .proc files to read (D64), with the lookups
   std::deque<std::string> procFiles;
   std::unordered_set<std::string> queuedProcFiles;
+  // LP1c.1: image caches to read, with the lookups
+  std::deque<MaterialImageKey> images;
+  std::unordered_set<MaterialImageKey, MaterialImageKeyHash> queuedImages;
 
   std::shared_ptr<const MaterialTable> table = std::make_shared<const MaterialTable>();
   MaterialServiceStats stats;
@@ -242,6 +269,7 @@ private:
     std::vector<std::string> entityDefLookups;
     std::vector<RegisterKey> evaluations;
     std::vector<std::string> procFiles;
+    std::vector<MaterialImageKey> images;
   };
 
   // R1.2: default-constructed, then the kind, so that a new member needs no initialiser
@@ -380,6 +408,8 @@ private:
         m_shared.queuedEntityDefLookups.clear();
         m_shared.evaluations.clear();
         m_shared.queuedEvaluations.clear();
+        m_shared.images.clear();
+        m_shared.queuedImages.clear();
       }
       m_shared.changed.notify_all();
     }
@@ -461,8 +491,9 @@ private:
         guarded("evaluation", [&] { evaluate(work.evaluations); });
         break;
       case WorkKind::Lookup:
-        guarded(
-          "lookup", [&] { lookUp(work.lookups, work.entityDefLookups, work.procFiles); });
+        guarded("lookup", [&] {
+          lookUp(work.lookups, work.entityDefLookups, work.procFiles, work.images);
+        });
         break;
       case WorkKind::Poll:
         guarded("poll", [&] { poll(); });
@@ -567,19 +598,22 @@ private:
     }
     if (
       !m_shared.lookups.empty() || !m_shared.entityDefLookups.empty()
-      || !m_shared.procFiles.empty())
+      || !m_shared.procFiles.empty() || !m_shared.images.empty())
     {
       auto work = workOf(WorkKind::Lookup);
       work.lookups.assign(m_shared.lookups.begin(), m_shared.lookups.end());
       work.entityDefLookups.assign(
         m_shared.entityDefLookups.begin(), m_shared.entityDefLookups.end());
       work.procFiles.assign(m_shared.procFiles.begin(), m_shared.procFiles.end());
+      work.images.assign(m_shared.images.begin(), m_shared.images.end());
       m_shared.lookups.clear();
       m_shared.queuedLookups.clear();
       m_shared.entityDefLookups.clear();
       m_shared.queuedEntityDefLookups.clear();
       m_shared.procFiles.clear();
       m_shared.queuedProcFiles.clear();
+      m_shared.images.clear();
+      m_shared.queuedImages.clear();
       return work;
     }
     if (
@@ -798,11 +832,13 @@ private:
 
   void resetWorkingTable(const std::uint64_t registry)
   {
-    // the .proc files do not depend on the registry
+    // the .proc files and the image caches do not depend on the registry
     auto procFiles = std::move(m_working.procFiles);
+    auto images = std::move(m_working.images);
     m_working = MaterialTable{};
     m_working.registry = registry;
     m_working.procFiles = std::move(procFiles);
+    m_working.images = std::move(images);
     m_deltaOrder.clear();
     m_bulkMaterial = 0;
     m_bulkTable = 0;
@@ -1017,10 +1053,40 @@ private:
       m_working.procFiles.set(path, std::shared_ptr<const ProcFileSlot>{std::move(slot)});
   }
 
+  /**
+   * LP1c.1 (C8): one image's cache into the working table: the copied timestamp call
+   * names it, the reader reads it through the game-file search. Without a registry (a
+   * build failed) the image is Missing with the build's failure.
+   */
+  bool lookUpImage(const MaterialImageKey& key)
+  {
+    if (m_working.images.find(key))
+    {
+      return false;
+    }
+    auto slot = std::make_shared<ImageCacheSlot>();
+    if (!m_decls || !m_source)
+    {
+      slot->reason = buildFailure();
+    }
+    else if (auto name = m_decls->imageCacheName(key))
+    {
+      *slot = resolveImageCache(*m_source, *name.value);
+    }
+    else
+    {
+      slot->reason = std::move(name.error);
+    }
+    m_working.images =
+      m_working.images.set(key, std::shared_ptr<const ImageCacheSlot>{std::move(slot)});
+    return true;
+  }
+
   void lookUp(
     const std::vector<std::string>& names,
     const std::vector<std::string>& entityDefNames,
-    const std::vector<std::string>& procFiles = {})
+    const std::vector<std::string>& procFiles = {},
+    const std::vector<MaterialImageKey>& images = {})
   {
     auto changed = false;
     for (const auto& path : procFiles)
@@ -1053,6 +1119,14 @@ private:
       changed =
         (m_decls ? lookUpEntityDef(name) : setEntityDefSlot(name, failedEntityDefSlot()))
         || changed;
+    }
+    for (const auto& key : images)
+    {
+      if (stopping())
+      {
+        return;
+      }
+      changed = lookUpImage(key) || changed;
     }
     if (changed)
     {
@@ -1381,6 +1455,45 @@ void MaterialService::loadProcFile(const std::string_view path)
   {
     m_shared->requested.notify_one();
   }
+}
+
+ImageLookup MaterialService::image(const MaterialImageKey& key)
+{
+  if (const auto slot = table()->findImage(key))
+  {
+    switch (slot->state)
+    {
+    case ImageCacheSlot::State::Ready:
+      return ImageLookup{ImageLookup::State::Ready, slot->image, slot};
+    case ImageCacheSlot::State::Missing:
+      return ImageLookup{ImageLookup::State::Missing, nullptr, slot};
+    case ImageCacheSlot::State::Stale:
+      return ImageLookup{ImageLookup::State::Stale, nullptr, slot};
+    }
+  }
+
+  auto queued = false;
+  {
+    auto lock = std::scoped_lock{m_shared->mutex};
+    // X.2, Y.1: no thread will read it, and the fallback has no registry either
+    if (m_shared->stats.threadEnded)
+    {
+      auto slot = std::make_shared<ImageCacheSlot>();
+      slot->reason = m_shared->stats.threadError.empty() ? std::string{ThreadEndedText}
+                                                         : m_shared->stats.threadError;
+      return ImageLookup{ImageLookup::State::Missing, nullptr, std::move(slot)};
+    }
+    if (!m_shared->stop && m_shared->queuedImages.insert(key).second)
+    {
+      m_shared->images.push_back(key);
+      queued = true;
+    }
+  }
+  if (queued)
+  {
+    m_shared->requested.notify_one();
+  }
+  return ImageLookup{};
 }
 
 void MaterialService::parseAll()

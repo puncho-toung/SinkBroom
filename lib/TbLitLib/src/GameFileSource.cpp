@@ -700,8 +700,11 @@ std::optional<std::string> GameFileSource::readFromPk4(
                       });
            })
            | kdl::transform([](std::shared_ptr<fs::File> file) {
+               // every byte, NULs included (Reader::readString stops at the first)
                auto reader = file->reader();
-               return std::optional<std::string>{reader.readString(reader.size())};
+               auto bytes = std::string(reader.size(), '\0');
+               reader.read(bytes.data(), bytes.size());
+               return std::optional<std::string>{std::move(bytes)};
              })
            | kdl::transform_error([&](const auto& e) {
                m_warnings.push_back(e.msg);

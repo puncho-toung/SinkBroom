@@ -268,6 +268,37 @@ struct MaterialImageKey
   bool operator!=(const MaterialImageKey& other) const;
 };
 
+/**
+ * LP1c.1 (C8, R5.5, SC92, SC96, SC100): where the engine looks for an image's cache, and
+ * the source time it compares the cache's with: idImage::ActuallyLoadImage up to the
+ * generated name, with com_productionMode 0.
+ */
+struct ImageCacheName
+{
+  // the image's name after the PBR rename (an RMAO usage turns <base>_s into <base>_rmao)
+  std::string imageName;
+  // textureUsage_t after the timestamp call: a TD_SPECULAR <base>_s whose <base>_rmao
+  // sibling exists becomes TD_SPECULAR_PBR_RMAO (12)
+  int usage = 0;
+  // cubeFiles_t, as the key has it
+  int cube = 0;
+  // the textureType_t the cache must have: DTT_2D 1, DTT_CUBIC 2, DTT_2D_ARRAY 3
+  int textureType = 0;
+  // the source time (A4): the newest leaf's Unix seconds, 0 in a container and for a
+  // missing source, -1 for CF_2D_ARRAY, which makes no timestamp call
+  std::int64_t sourceTime = -1;
+  // GetGeneratedName: "<name>#__UUCC", the name's extension after it
+  std::string generatedName;
+  // the cache file (BinaryImage.cpp GetGeneratedFileName): "generated/images/<generated
+  // name>.bimage" with '(' and ',' made '/' and ')' and ' ' removed
+  std::string file;
+  // the BFHACK rename's cache file, tried when the first is not found and resource files
+  // are in use; "" when no rule names this image
+  std::string bfhackFile;
+  // the engine generates the image (an intrinsic, the default image): it has no cache
+  bool generated = false;
+};
+
 // one shaderStage_t of an idMaterial
 struct MaterialStage
 {
@@ -567,6 +598,17 @@ public:
   // engine's console receives it, newlines included. Like the command it neither parses
   // nor references the decl; touch first does both.
   DeclResult<std::string> printDecl(std::string_view typeName, std::string_view name);
+
+  /**
+   * LP1c.1 (C8, R5.5): the cache an image of this key is looked for in, and the time its
+   * source has, as ActuallyLoadImage works them out before it opens the cache: the copied
+   * R_LoadImageProgram timestamp call (R_LoadCubeImages' for a cube), whose leaves' time
+   * comes from the source's probe without reading a file (A5), then the PBR rename,
+   * GetGeneratedName, GetGeneratedFileName and the BFHACK name. The key need not be one
+   * of the registry's records (a bake's probe images). An error when the call reached an
+   * engine error. Parse thread (C20).
+   */
+  DeclResult<ImageCacheName> imageCacheName(const MaterialImageKey& key);
 
   // the bytes of decl text the registry keeps (all decl types, R5.10)
   std::size_t declTextBytes() const;
