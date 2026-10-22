@@ -28,6 +28,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace tb::lit
 {
@@ -58,5 +59,15 @@ std::map<std::string, std::pair<int, int>> listImagesSizes(const std::string& te
  */
 std::shared_ptr<const MaterialTable> fixtureMaterialTable(
   const std::map<std::string, std::pair<int, int>>& sizes);
+
+/**
+ * A material table of stand-ins for the light materials the light tests name (the tests
+ * never read the game): lights/squarelight1 and lights/defaultPointLight with a
+ * lightFalloffImage, lights/defaultProjectedLight with _noFalloff, and
+ * lights/lp1b_nofalloff without one, parsed by the copied parser; each of implicitNames
+ * is looked up too and comes out implicit (no decl).
+ */
+std::shared_ptr<const MaterialTable> lightMaterialTable(
+  const std::vector<std::string>& implicitNames = {});
 
 } // namespace tb::lit

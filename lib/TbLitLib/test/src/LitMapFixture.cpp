@@ -538,4 +538,50 @@ std::shared_ptr<const MaterialTable> fixtureMaterialTable(
   return table;
 }
 
+std::shared_ptr<const MaterialTable> lightMaterialTable(
+  const std::vector<std::string>& implicitNames)
+{
+  auto files = std::vector<DeclFile>{
+    DeclFile{
+      "materials/zz_light_stand_ins.mtr",
+      "lights/squarelight1\n{\n\tlightFalloffImage makeIntensity( "
+      "lights/squarelight1a.tga )\n"
+      "\t{\n\t\tmap lights/squarelight1.tga\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"
+      "lights/defaultPointLight\n{\n\tlightFalloffImage makeIntensity( "
+      "lights/squarelight1a.tga )\n"
+      "\t{\n\t\tmap lights/squarelight1.tga\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"
+      "lights/defaultProjectedLight\n{\n\tlightFalloffImage _noFalloff\n"
+      "\t{\n\t\tmap lights/squarelight1.tga\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"
+      "lights/lp1b_nofalloff\n{\n\t{\n\t\tmap "
+      "lights/squarelight1.tga\n\t\tcolored\n\t}\n}\n",
+      0},
+  };
+  auto source = MemoryDeclSource{std::move(files)};
+  auto decls = MaterialDecls{source};
+  if (!decls.constructionError().empty())
+  {
+    throw std::runtime_error{decls.constructionError()};
+  }
+  auto table = std::make_shared<MaterialTable>();
+  table->registry = decls.id();
+  auto names = std::vector<std::string>{
+    "lights/squarelight1",
+    "lights/defaultPointLight",
+    "lights/defaultProjectedLight",
+    "lights/lp1b_nofalloff"};
+  names.insert(names.end(), implicitNames.begin(), implicitNames.end());
+  for (const auto& name : names)
+  {
+    auto found = decls.lookup(name);
+    if (!found)
+    {
+      throw std::runtime_error{found.error};
+    }
+    table->materials = table->materials.set(
+      name, std::make_shared<const MaterialSlot>(MaterialSlot{*found.value, {}}));
+  }
+  decls.takeMessages();
+  return table;
+}
+
 } // namespace tb::lit

@@ -8632,6 +8632,295 @@
         }
       ],
       "note": "two divisions by zero the engine reaches only past an Error or with a bad key: start_off with levels 0 (0 / 0, NaN colour; the game has already stopped at the levels Error) is intensity 0, and a radius style with ls_frametime 0 (0.0f / 0, a NaN radius) takes the style's first character with a warning"
+    },
+    {
+      "id": "M-LIGHT-FN-05",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            214,
+            321
+          ],
+          "anchor": "R_ComputePointLightProjectionMatrix, SPOT_LIGHT_MIN_Z_NEAR/FAR, R_ComputeSpotLightProjectionMatrix, R_ComputeParallelLightProjectionMatrix",
+          "sha256": "2784fa3280966247ff0cf007f40762579fd2b9cb9c91d2c5fb8854155872ba59"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            330,
+            470
+          ],
+          "anchor": "R_DeriveLightData",
+          "sha256": "38a877c82880583c2f2b5bdeb2098ca4c3d2ca0f73a24e9a212d740fe0b8c4d4"
+        },
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            49,
+            70
+          ],
+          "anchor": "R_AxisToModelMatrix",
+          "sha256": "45f31e9249fc3ba52c1dc6042597f4610f891a0d531c2799f264d9cf6083f369"
+        },
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            330,
+            336
+          ],
+          "anchor": "R_LocalPlaneToGlobal",
+          "sha256": "73a72734f6a19f493e6dfb9016c11d82063445ed5368e51c48b1bda8630ce738"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            1784,
+            1785
+          ],
+          "anchor": "tr.defaultPointLight, tr.defaultProjectedLight",
+          "sha256": "57afabfb3ea34619f917ff359d1410e088a817fe41b221583ad21e3814632135"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "R_ComputePointLightProjectionMatrix, R_ComputeSpotLightProjectionMatrix, R_ComputeParallelLightProjectionMatrix, R_AxisToModelMatrix, R_LocalPlaneToGlobal, engineDeriveLightProjection"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightData.cpp",
+          "symbol": "resolveShader, deriveLight"
+        }
+      ],
+      "note": "C5, SC63, SC64: the arithmetic is transcribed in the shim on the copied idVec3, idMat3, idPlane and idRenderMatrix (so its float operations are the engine's, with TbLitIdLib's flags), the Z/W swap and R_LocalPlaneToGlobal included; the light shader half reads the published material table: FindMaterial( texture, false ) is the table's entry unless implicit or failed (NULL), else the default point or projected light by pointLight; the falloff image is the shader's lightFalloffImage, else the default's of the kind. declManager->Touch of the default is not needed (the table keeps its entries). The two idLib::Warning texts are LightData's warnings"
+    },
+    {
+      "id": "M-LIGHT-FN-06",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            694,
+            730
+          ],
+          "anchor": "R_CreateLightRefs",
+          "sha256": "6fbc48266842d9d52cd1451e780d6d19ea3b2472380466c4b2a9fae52007767e"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            2047,
+            2108
+          ],
+          "anchor": "idRenderWorldLocal::PushFrustumIntoTree_r",
+          "sha256": "19e1166106d03beeef0f53b4215499ab0d204a91cad56ac624aa99192c01e308"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            2115,
+            2127
+          ],
+          "anchor": "idRenderWorldLocal::PushFrustumIntoTree",
+          "sha256": "526a039437c399a5f19652650600a303fa02a50268d3bd83d8f10c865d8072ed"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            1852,
+            1877
+          ],
+          "anchor": "idRenderWorldLocal::AddLightRefToArea",
+          "sha256": "1dfe420f4053815ee3b1ca6ea4c452f685d643f576f7b298efb218aac6e3fa6f"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            627,
+            666
+          ],
+          "anchor": "idRenderWorldLocal::CommonChildrenArea_r",
+          "sha256": "210850f5e98e28a301eea4ca524d6864544586efdad80e3a1bc6cc315a46620a"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_local.h",
+          "lines": [
+            131,
+            132
+          ],
+          "anchor": "CHILDREN_HAVE_MULTIPLE_AREAS, AREANUM_SOLID",
+          "sha256": "67612836778b7ef120028e3092d9b18fc4b5d100a1e1aad0ebbcc8769638aaf0"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            107,
+            107
+          ],
+          "anchor": "r_useNodeCommonChildren \"1\"",
+          "sha256": "e96effcb82cb643e7aa62cd92b41bde95a1e57f727f47607de2d7a127ef9b226"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightData.cpp",
+          "symbol": "deriveLight, pushFrustumIntoTree, commonChildrenAreas"
+        }
+      ],
+      "note": "D58, A1: fed as R_CreateLightRefs feeds it: GetFrustumCorners of inverseBaseLightProject on bounds_zeroOneCube, then from node 0 the copied CullFrustumCornersToPlane against each node plane as the .proc reader parsed it (child 0 unless Back, child 1 unless Front, 0 = solid), with commonChildrenArea's early out (r_useNodeCommonChildren 1); a per-call set of referenced areas stands in for tr.viewCount and AddLightRefToArea's duplicate check; the recursion is an explicit stack in the same order, so areas lists the references as reached (the engine's list holds them newest first). areaNum is LP1b.2's pointInArea of globalLightOrigin, else of origin. No .proc (no area nodes): no references, the light reaches its whole volume (D22 as A1 restates it). FlowLightThroughPortals is commented out in the engine and nothing floods (A1)"
+    },
+    {
+      "id": "M-LIGHT-POOL-02",
+      "kind": "pool-safe",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            330,
+            470
+          ],
+          "anchor": "R_DeriveLightData",
+          "sha256": "38a877c82880583c2f2b5bdeb2098ca4c3d2ca0f73a24e9a212d740fe0b8c4d4"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineDeriveLightProjection, engineFixDegenerateNormal, engineAngleNormalize360, engineDefaultLightStyles"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightData.cpp",
+          "symbol": "deriveLight, pushFrustumIntoTree, commonChildrenAreas"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightParse.cpp",
+          "symbol": "parseLight"
+        }
+      ],
+      "commonCalls": [
+        "none: the transcription reports its two invert failures by flags, not through idLib::Warning; the copies it calls (M-LIGHT-POOL-01, Vector.h, Matrix.h, Math.h) hold no common call"
+      ],
+      "note": "C24: the record builder (LightRecord.h) runs parseLight and deriveLight as CPU pool jobs: they read their arguments, the immutable MaterialTable and ProcTree held by shared_ptr, and constant statics, and allocate with the global allocator; the copied asserts are the only messages possible (Debug)"
+    },
+    {
+      "id": "M-LIGHT-GUARD-03",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            445,
+            452
+          ],
+          "anchor": "lightMatrix invert",
+          "sha256": "d0eb3c82f647005e8628d0af46f03ac2d286a0f187a0b525279c9481d53e4c53"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineDeriveLightProjection"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightData.cpp",
+          "symbol": "deriveLight"
+        }
+      ],
+      "note": "where idRenderMatrix::Inverse fails (|det| < 1e-16: a degenerate axis, or a spot light's right and up along one line) the engine warns and goes on with the unwritten local matrix; the transcription zeroes it, and the light has no volume and no area references, with the engine's warning text"
+    },
+    {
+      "id": "M-LIGHT-GUARD-04",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            2047,
+            2108
+          ],
+          "anchor": "PushFrustumIntoTree_r: portalAreas[ areaNum ], portalAreas[ node->commonChildrenArea ]",
+          "sha256": "19e1166106d03beeef0f53b4215499ab0d204a91cad56ac624aa99192c01e308"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            627,
+            666
+          ],
+          "anchor": "CommonChildrenArea_r's recursion",
+          "sha256": "210850f5e98e28a301eea4ca524d6864544586efdad80e3a1bc6cc315a46620a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightData.cpp",
+          "symbol": "pushFrustumIntoTree, commonChildrenAreas"
+        }
+      ],
+      "note": "a .proc tree the reader accepts may still be malformed: an area child beyond numAreas is not referenced (the engine indexes past portalAreas), a node whose children are all solid (common -1) takes no early out (the engine reads portalAreas[ -1 ]; its children add nothing either way), and a node reached again (a cycle) is walked once, its commonChildrenArea counted as multiple areas. dmap's trees have none of these, so the results on them are the engine's"
+    },
+    {
+      "id": "M-LIGHT-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            84,
+            219
+          ],
+          "anchor": "ParseSpawnArgsToRenderLight: return after bad target info",
+          "sha256": "434ead152176f5ac4251cbdc643aa507bc08a2d877ec7bd63594486134013c1f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightData.cpp",
+          "symbol": "deriveLight"
+        }
+      ],
+      "note": "A15: a light with a partial target set keeps a zero axis and colour; the engine still derives a projection from it (Inverse fails, the matrices are unwritten) and pushes that into the tree. The preview derives nothing from it: no volume, no area references, areaNum of its origin, the default projected light as its shader (the memset's NULL). It lights nothing in either"
+    },
+    {
+      "id": "M-LIGHT-DIFF-04",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1325,
+            1369
+          ],
+          "anchor": "idDeclManagerLocal::FindType( type, name, makeDefault false )",
+          "sha256": "0dc17e47fb16f5b3a89aff12e026212b00f7549bc8d04879ce8b7cb4642970f8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightData.cpp",
+          "symbol": "findMaterialNoDefault"
+        }
+      ],
+      "note": "FindMaterial( texture, false ) is NULL for a name without a decl; the material service makes an implicit material for every name it is asked, so an implicit entry stands for NULL. In the game a surface that used the same undeclared name before the light spawned would have made the implicit decl, and the light would use it; the preview always takes the default light then"
+    },
+    {
+      "id": "M-LIGHT-NC-03",
+      "kind": "not-copied",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            647,
+            687
+          ],
+          "anchor": "R_CreateLightDefFogPortals",
+          "sha256": "75a4b7c544d25acfdf1e87bbdcdee8214d699fa97aa1dab428876c507314e1ef"
+        }
+      ],
+      "sinkbroom": [],
+      "note": "a fog light's portals (LP4 with the view-side portal tests); the area references' doubly linked lists are a set and a list in the record"
     }
   ],
   "retired": [

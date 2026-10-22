@@ -112,4 +112,57 @@ float engineAngleNormalize360(float angle);
 // back to (ML_NUM_STYLES of them)
 std::vector<std::string> engineDefaultLightStyles();
 
+// ----- R_DeriveLightData's arithmetic (transcribed, pure) -----
+
+// renderLight_t's geometry, as ParseSpawnArgsToRenderLight leaves it
+struct EngineLightGeometry
+{
+  EngineVec3 origin = {0, 0, 0};
+  EngineMat3 axis = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  EngineVec3 target = {0, 0, 0};
+  EngineVec3 right = {0, 0, 0};
+  EngineVec3 up = {0, 0, 0};
+  EngineVec3 start = {0, 0, 0};
+  EngineVec3 end = {0, 0, 0};
+  EngineVec3 lightRadius = {0, 0, 0};
+  EngineVec3 lightCenter = {0, 0, 0};
+  bool pointLight = false;
+  bool parallel = false;
+};
+
+// what R_DeriveLightData derives from the geometry alone (its material half is
+// LightData's)
+struct EngineLightProjection
+{
+  // the projection before the swap (RenderMatrix row-major) and its zScale (1 for point
+  // and parallel lights, 1 / ( zNear + zFar ) for spot lights)
+  EngineMat4 localProject = {};
+  float zScale = 1.0f;
+  // lightProject[4]: localProject's rows with Z and W swapped (C5: [2] = localProject[3],
+  // [3] = localProject[2] · zScale), each taken to global space by R_LocalPlaneToGlobal
+  std::array<EnginePlane, 4> lightProject = {};
+  // parallel: origin + normalize( lightCenter, or +Z ) · 100000; else origin + axis ·
+  // lightCenter
+  EngineVec3 globalLightOrigin = {0, 0, 0};
+  // global space -> light projective space, and back
+  EngineMat4 baseLightProject = {};
+  EngineMat4 inverseBaseLightProject = {};
+  // ProjectedBounds( inverseBaseLightProject, bounds_zeroOneCube, windowSpace false )
+  EngineBounds globalLightBounds = {};
+  // false where the engine warns "lightMatrix invert failed" or "baseLightProject invert
+  // failed" and goes on with an unwritten matrix; here that matrix is zero
+  bool lightMatrixInverted = true;
+  bool baseLightProjectInverted = true;
+};
+
+/**
+ * RenderWorld_defs.cpp:330-470 R_DeriveLightData from "compute the light projection
+ * matrix" on (SC63, SC64, C5), with R_ComputePointLightProjectionMatrix (:214-230),
+ * R_ComputeSpotLightProjectionMatrix (:242-296), R_ComputeParallelLightProjectionMatrix
+ * (:305-321) and GLMatrix.cpp's R_AxisToModelMatrix and R_LocalPlaneToGlobal, transcribed
+ * on the copied idLib types, and the copied idRenderMatrix's CreateFromOriginAxis,
+ * Inverse, Multiply and ProjectedBounds. Pure; any thread (C24).
+ */
+EngineLightProjection engineDeriveLightProjection(const EngineLightGeometry& light);
+
 } // namespace tb::lit
