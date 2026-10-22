@@ -403,7 +403,20 @@ void LightRegistry::refreshTable()
   {
     return;
   }
+  // V.2: a reload's new registry: every record holds the old registry's MaterialId and
+  // entityDef keys, so every light is built again
+  const auto reloaded =
+    m_table && m_table->registry != 0 && table->registry != m_table->registry;
   m_table = std::move(table);
+  if (reloaded)
+  {
+    m_waitingMaterials.clear();
+    m_waitingEntityDefs.clear();
+    for (const auto& [id, light] : m_lights)
+    {
+      m_dirty.insert(id);
+    }
+  }
   // R3.1: what the lights wait for is looked for in every table the registry adopts
   for (auto it = m_waitingMaterials.begin(); it != m_waitingMaterials.end();)
   {

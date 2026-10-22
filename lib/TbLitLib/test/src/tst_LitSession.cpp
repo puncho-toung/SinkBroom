@@ -960,12 +960,13 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     CHECK(messages.warnings == 0);
   }
 
-  SECTION("R2.1: a stop while a 2000-brush batch is queued ends within the stop bound")
+  SECTION("R2.1: a stop while a batch longer than the bound runs ends within the bound")
   {
-    // 2000 boxes over 16 cells, as the geometry tests have them: 16 chunk jobs queue on
-    // the pool's two threads when the render thread takes the snapshot
+    // V.9: 10,000 boxes over 16 cells, a batch of about 3 s in Debug, longer than the
+    // stop bound: 16 chunk jobs queue on the pool's two threads when the render thread
+    // takes the snapshot, and without the pool's cancel the stop would wait for them
     auto text = std::string{"{\n\"classname\" \"worldspawn\"\n"};
-    for (auto i = 0; i < 2000; ++i)
+    for (auto i = 0; i < 10000; ++i)
     {
       const auto x = (i % 4) * 1024 + ((i / 16) % 10) * 96 + 32;
       const auto y = ((i / 4) % 4) * 1024 + ((i / 160) % 10) * 96 + 32;
@@ -991,6 +992,8 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       session->setExposed(true);
       REQUIRE(waitFor(
         [&] { return session->snapshotsTakenForTesting() == 1u; }, 5000ms, false));
+      // the batch still runs
+      CHECK(session->geometryBatchesForTesting() == 0u);
 
       // teardown step 1: the stop cancels the pool, so the render thread's exit does not
       // wait for the batch
@@ -1000,8 +1003,8 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       session->stopRenderThread();
       const auto took = std::chrono::duration<double, std::milli>{
         std::chrono::steady_clock::now() - start};
-      std::cout << "R2.1: the stop with a 2000-brush batch queued took " << took.count()
-                << " ms\n";
+      std::cout << "R2.1: the stop with a 10,000-brush batch running took "
+                << took.count() << " ms\n";
       CHECK(took < StopBound);
       session->releaseGpuObjects();
       session->destroyVkDevice();

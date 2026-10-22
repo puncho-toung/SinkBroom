@@ -21,8 +21,11 @@
 #include "lit/MaterialDecls.h"
 
 #include <algorithm>
+#include <clocale>
 #include <cmath>
+#include <cstdio>
 #include <future>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -64,6 +67,66 @@ TEST_CASE("EngineGeometry: the idDrawVert encoders")
   CHECK(v.normal[2] == 255);
   const auto n = engineNormal(v);
   CHECK(std::abs(n[2] - 1.0f) < 0.001f);
+}
+
+TEST_CASE("EngineGeometry: WriteFloat's text is the C locale's (V.6)")
+{
+  // the reference: the C runtime's "%1.10f" in the "C" locale (dmap/output.cpp WriteFloat
+  // through FS_WriteFloatString), for non-integers, and one value whose tenth decimal is
+  // an exact tie
+  const auto reference = [](const float value) {
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%1.10f", double(value));
+    auto text = std::string{buffer};
+    while (!text.empty() && text.back() == '0')
+    {
+      text.pop_back();
+    }
+    while (!text.empty() && text.back() == '.')
+    {
+      text.pop_back();
+    }
+    return text;
+  };
+  REQUIRE(std::string{std::setlocale(LC_NUMERIC, nullptr)} == "C");
+  auto random = std::mt19937{5};
+  auto mismatches = 0;
+  for (auto i = 0; i < 20000; ++i)
+  {
+    const auto exponent = int(random() % 30) - 16;
+    const auto value =
+      float(std::ldexp(double(random() % 100000) / 100000.0 + 0.001, exponent))
+      * (random() % 2 ? -1.0f : 1.0f);
+    if (std::fabs(value - std::rint(value)) < 0.001f)
+    {
+      continue;
+    }
+    mismatches += engineProcFloatText(value) == reference(value) ? 0 : 1;
+  }
+  CHECK(mismatches == 0);
+  CHECK(engineProcFloatText(4768.37158203125f) == reference(4768.37158203125f));
+  CHECK(engineProcFloatText(-0.0012345678f) == reference(-0.0012345678f));
+
+  // a locale whose decimal point is a comma changes nothing
+  auto switched = false;
+  for (const auto* name : {"de-DE", "de_DE.UTF-8", "de_DE", "German_Germany.1252"})
+  {
+    if (std::setlocale(LC_NUMERIC, name))
+    {
+      switched = true;
+      break;
+    }
+  }
+  if (switched)
+  {
+    CHECK(engineProcFloatText(0.5f) == "0.5");
+    CHECK(engineProcFloatText(-16.125f) == "-16.125");
+    std::setlocale(LC_NUMERIC, "C");
+  }
+  else
+  {
+    WARN("no comma locale on this machine; the locale half was not run");
+  }
 }
 
 TEST_CASE("EngineGeometry: Valve texture coordinates and WriteFloat")
@@ -191,6 +254,29 @@ TEST_CASE("EngineGeometry: patches")
     huge.height = 3;
     huge.controlPoints.resize(303);
     CHECK_FALSE(engineSubdividePatch(huge, &error));
+  }
+
+  SECTION("V.3: a patch whose subdivision would never end is refused before it runs")
+  {
+    // at z = 1e8 the float spacing is 8: a 16-unit bump stays as curved after every
+    // halving, and the engine's Subdivide would insert columns for ever
+    auto endless = EnginePatch{};
+    endless.width = 3;
+    endless.height = 3;
+    for (auto i = 0; i < 3; ++i)
+    {
+      for (auto j = 0; j < 3; ++j)
+      {
+        endless.controlPoints.push_back(
+          vertAt(float(j) * 16, float(i) * 16, 1.0e8f + (j == 1 ? 16.0f : 0.0f), 0, 0));
+      }
+    }
+    const auto [width, height] = patchSubdivisionBound(endless, 1000000);
+    CHECK(width * height > 1000000);
+    auto error = std::string{};
+    CHECK_FALSE(engineSubdividePatch(endless, &error));
+    CHECK(error.find("never end") != std::string::npos);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
   }
 
   SECTION("R1.3: a subdivision that would overflow the stack is refused before it runs")

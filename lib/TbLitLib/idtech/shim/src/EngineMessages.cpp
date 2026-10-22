@@ -172,15 +172,20 @@ std::uint64_t threadKey(const std::thread::id thread) noexcept
 LossSlot* lossSlot(const std::thread::id thread, const bool claim) noexcept
 {
   const auto key = threadKey(thread);
+  // V.7: the thread's own slot first, wherever it is, so that it never claims a second
   for (auto i = std::size_t{0}; i < LossSlots; ++i)
   {
     auto& slot = losses[(std::size_t(key) + i) % LossSlots];
-    auto owner = slot.owner.load();
-    if (owner == key)
+    if (slot.owner.load() == key)
     {
       return &slot;
     }
-    if (claim && owner == 0 && slot.owner.compare_exchange_strong(owner, key))
+  }
+  for (auto i = std::size_t{0}; claim && i < LossSlots; ++i)
+  {
+    auto& slot = losses[(std::size_t(key) + i) % LossSlots];
+    auto owner = std::uint64_t{0};
+    if (slot.owner.compare_exchange_strong(owner, key))
     {
       return &slot;
     }

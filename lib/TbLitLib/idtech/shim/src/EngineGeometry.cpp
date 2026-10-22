@@ -383,6 +383,52 @@ EngineVec2 engineValveTexCoord(
   return {st.x, st.y};
 }
 
+namespace
+{
+
+/**
+ * V.6: "%1.10f" of a float as the "C" locale prints it, without the C library, whose
+ * decimal point follows LC_NUMERIC (Qt sets it from the environment on Unix): the exact
+ * value rounded to ten decimals, a tie to even, as the C runtimes round. For the values
+ * WriteFloat formats so (not within 0.001 of an integer, so below 2^23 in magnitude).
+ */
+std::string fixedTenDecimals(const float value)
+{
+  if (!std::isfinite(value))
+  {
+    return std::isnan(value) ? "nan" : value < 0 ? "-inf" : "inf";
+  }
+  auto exponent = 0;
+  const auto fraction = std::frexp(double(value), &exponent);
+  // |value| = m / 2^shift, m below 2^24
+  const auto m = std::uint64_t(std::fabs(std::ldexp(fraction, 24)));
+  const auto shift = 24 - exponent;
+  constexpr auto Scale = std::uint64_t{10000000000};
+  auto q = std::uint64_t{0};
+  if (shift < 1)
+  {
+    // an integer of 2^23 or more (WriteFloat prints those with %i)
+    q = std::uint64_t(std::fabs(double(value))) * Scale;
+  }
+  else if (shift < 64)
+  {
+    // round( m * 10^10 / 2^shift ): m * 10^10 is below 2^58
+    const auto product = m * Scale;
+    q = product >> shift;
+    const auto rest = product & ((std::uint64_t{1} << shift) - 1);
+    const auto half = std::uint64_t{1} << (shift - 1);
+    if (rest > half || (rest == half && (q & 1) != 0))
+    {
+      ++q;
+    }
+  }
+  const auto digits = std::to_string(q % Scale);
+  return (std::signbit(value) ? "-" : "") + std::to_string(q / Scale) + "."
+         + std::string(10 - digits.size(), '0') + digits;
+}
+
+} // namespace
+
 std::string engineProcFloatText(const float value)
 {
   // dmap/output.cpp:95-105 WriteFloat
@@ -392,12 +438,18 @@ std::string engineProcFloatText(const float value)
     idStr::snPrintf(buffer, sizeof(buffer), "%i", int(idMath::Rint(value)));
     return buffer;
   }
-  // framework/File.cpp:73-80, a "%f" of two characters
-  idStr text;
-  sprintf(text, "%1.10f", double(value));
-  text.StripTrailing('0');
-  text.StripTrailing('.');
-  return text.c_str();
+  // framework/File.cpp:73-80, a "%f" of two characters: "%1.10f" (V.6: in the "C"
+  // locale), then idStr::StripTrailing of every trailing '0', then of the '.'
+  auto text = fixedTenDecimals(value);
+  while (!text.empty() && text.back() == '0')
+  {
+    text.pop_back();
+  }
+  while (!text.empty() && text.back() == '.')
+  {
+    text.pop_back();
+  }
+  return text;
 }
 
 namespace
@@ -442,11 +494,17 @@ bool spanTooCurved(const PatchLine& a, const PatchLine& b, const PatchLine& c)
   return false;
 }
 
+// V.3: more halvings than a real patch ever needs (each divides a span's deviation by 4)
+constexpr auto MaxSpanHalvings = 30;
+
 /**
  * One span of Subdivide's pass (Surface_Patch.cpp:683-742 or :745-804): a span whose
  * midpoint is off too far gets two new lines, prev, mid and next replacing the peak, and
  * its left half is checked again before its right one. Appends the lines after a to out
- * (when out is given) and counts them; stops once count exceeds limit.
+ * (when out is given) and counts them; stops once count exceeds limit. V.3: a span still
+ * too curved after MaxSpanHalvings is one that float rounding keeps curved for ever
+ * (coordinates beyond about 2^26), where Subdivide would never end: the count is set past
+ * the limit, so that the patch is refused.
  */
 void subdivideSpan(
   const PatchLine& a,
@@ -457,7 +515,7 @@ void subdivideSpan(
   const std::int64_t limit,
   const int depth)
 {
-  if (count > limit || depth > 30 || !spanTooCurved(a, b, c))
+  if (count > limit || !spanTooCurved(a, b, c))
   {
     if (out)
     {
@@ -465,6 +523,11 @@ void subdivideSpan(
       out->push_back(c);
     }
     count += 2;
+    return;
+  }
+  if (depth >= MaxSpanHalvings)
+  {
+    count = limit + 1;
     return;
   }
   const auto prev = lerpLine(a, b);
@@ -611,9 +674,8 @@ std::optional<EngineSurface> engineSubdividePatch(
     if (stackBytes > engineBounds::MaxPatchStackBytes)
     {
       return refuse(
-        "the patch's subdivision could take more than 2 MB of the thread's stack (about "
-        "74,000 "
-        "vertices)");
+        "the patch's subdivision could never end or take more than 2 MB of the thread's "
+        "stack (about 74,000 vertices)");
     }
   }
 

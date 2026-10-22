@@ -77,6 +77,19 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
   )
 endif()
 
+# V.4, G11: the first-party mirrors of the engine's float arithmetic (lit/NumberText.h's
+# lexerFloat, the projection, light and entity code) are compiled with the engine's float
+# flags, as TbLitIdLib is: GCC (fast) and Clang (on, where FMA exists, as on arm64) would
+# otherwise fuse a * b + c (mirror.json M-ID-BUILD-01)
+if(NOT MSVC)
+  target_compile_options(TbLitLib
+    PRIVATE
+      -ffp-contract=off
+      $<$<NOT:$<CONFIG:Debug>>:-fno-math-errno>
+      $<$<NOT:$<CONFIG:Debug>>:-fno-trapping-math>
+  )
+endif()
+
 # TbLitIdLib is public for its std-only facade, lit/MaterialDecls.h, which
 # lit/MaterialService.h and lit/GameDeclSource.h include. Its shim headers (precompiled.h,
 # RenderCommon.h) and every id type are private to it, so nothing else is passed on.

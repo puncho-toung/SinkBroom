@@ -30,6 +30,7 @@
 #include "lit/BprocModel.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/EngineGeometry.h"
+#include "lit/EntityState.h"
 #include "lit/ProcFile.h"
 
 #include "kd/result.h"
@@ -446,6 +447,94 @@ TEST_CASE("Geometry goldens: (a) st at the .proc vertices of the brush entities 
   // the fixture's origin brush moves st by more than an integer, so the test tells
   // dmap's rule (origin) from the pivot's (origin + originOffset)
   CHECK(shifted > 0);
+}
+
+TEST_CASE("Geometry goldens: (a) the chunks' own st and normals at the .proc's vertices")
+{
+  // V.9: what the chunker made, not the rule recomposed: every brush vertex of a chunk
+  // that is also a vertex of the .proc model of its entity (or of the world's areas),
+  // with the same material and normal, has the .proc's st modulo integers (P.18)
+  const auto& f = fixture();
+  const auto input = fixtureInput(f);
+  const auto output = buildChunks(input);
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+
+  struct ProcVert
+  {
+    EngineVec3 xyz;
+    EngineVec2 st;
+    std::array<std::uint8_t, 4> normal;
+  };
+  // the world's by material, an entity model's by (name, material)
+  auto procVerts = std::map<std::pair<std::string, std::string>, std::vector<ProcVert>>{};
+  for (const auto& model : f.proc->models)
+  {
+    for (const auto& surface : model.surfaces)
+    {
+      if (surface.material == "textures/lp1b/patch")
+      {
+        continue;
+      }
+      const auto owner = model.area >= 0 ? std::string{} : model.name;
+      for (auto j = 0; j < surface.numVerts; ++j)
+      {
+        const auto* v = surface.verts.data() + std::size_t(j) * 8;
+        auto vert = engineClearedVert();
+        engineSetNormal(vert, {v[5], v[6], v[7]});
+        procVerts[{owner, surface.material}].push_back(
+          ProcVert{{v[0], v[1], v[2]}, {v[3], v[4]}, vert.normal});
+      }
+    }
+  }
+
+  auto worldChecked = 0;
+  auto entityChecked = 0;
+  for (const auto& chunk : output.chunks)
+  {
+    if (chunk.key.material == "textures/lp1b/patch")
+    {
+      continue;
+    }
+    const auto world = chunk.key.entity == input.worldspawn->id;
+    auto owner = std::string{};
+    if (!world)
+    {
+      owner = std::string{spawnString(input.entities.at(chunk.key.entity)->keys, "name")};
+    }
+    const auto found = procVerts.find({owner, chunk.key.material});
+    if (found == procVerts.end())
+    {
+      continue;
+    }
+    for (const auto& vert : chunk.verts)
+    {
+      // two coplanar faces of one material may meet there with different alignments:
+      // the chunk's st agree with one of the .proc's vertices there
+      const auto st = engineTexCoord(vert);
+      auto matches = 0;
+      auto congruent = false;
+      for (const auto& p : found->second)
+      {
+        if (p.xyz == vert.xyz && p.normal == vert.normal)
+        {
+          ++matches;
+          const auto ds = st[0] - p.st[0];
+          const auto dt = st[1] - p.st[1];
+          congruent = congruent || (ds == std::round(ds) && dt == std::round(dt));
+        }
+      }
+      if (matches == 0)
+      {
+        continue;
+      }
+      CAPTURE(
+        chunk.key.material, owner, vert.xyz[0], vert.xyz[1], vert.xyz[2], st[0], st[1]);
+      CHECK(congruent);
+      (world ? worldChecked : entityChecked) += 1;
+    }
+  }
+  CHECK(worldChecked > 50);
+  CHECK(entityChecked > 10);
 }
 
 TEST_CASE("Geometry goldens: (a) the patches' corner st (R3.5)")

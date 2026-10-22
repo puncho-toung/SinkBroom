@@ -19,6 +19,7 @@
 
 #include "lit/SceneGeometry.h"
 
+#include "lit/EntityState.h"
 #include "lit/MaterialService.h"
 #include "lit/ProcFile.h"
 
@@ -256,6 +257,16 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
     if (isWorld)
     {
       m_worldspawn = id;
+      // V.5: the material that replaces every side and patch (MapFile.cpp:1767-1796) is
+      // asked for, so that a table has it
+      if (m_materials)
+      {
+        const auto merged = mergeSpawnArgs(m_entities[id]->keys, nullptr);
+        if (const auto* material = findKey(merged, "overrideMaterial"))
+        {
+          static_cast<void>(m_materials->lookup(*material));
+        }
+      }
     }
     if (classnameChanged)
     {
@@ -312,6 +323,17 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
     markAll();
   }
 
+  // V.8: a .proc the table holds is adopted before the lights take the snapshot, so that
+  // they are built with its areas once, not without them first
+  if (m_jobs.empty())
+  {
+    refreshTable();
+    // the table adopted before the path was known may hold it too
+    if (m_table && m_mapPath && !m_proc)
+    {
+      scanTable();
+    }
+  }
   m_lights.takeSnapshot(snapshot, m_proc);
   startBatch();
 }
@@ -327,7 +349,18 @@ void SceneGeometry::refreshTable()
   {
     return;
   }
+  // V.2: a reload's new registry: every chunk and entity state was built with the old
+  // registry's materials and entityDefs, and the new table answers every name at once
+  const auto reloaded =
+    m_table && m_table->registry != 0 && table->registry != m_table->registry;
   m_table = std::move(table);
+  if (reloaded)
+  {
+    m_pendingMaterials.clear();
+    m_provisional.clear();
+    m_pendingEntityDefs.clear();
+    markAll();
+  }
   scanTable();
 }
 
@@ -540,6 +573,11 @@ void SceneGeometry::apply(ChunkJobOutput output)
   for (const auto& material : output.pendingMaterials)
   {
     m_pendingMaterials[material].insert(output.cells.begin(), output.cells.end());
+    // V.5: a material only the job knew of (an overrideMaterial) is asked for too
+    if (m_materials)
+    {
+      static_cast<void>(m_materials->lookup(material));
+    }
   }
   if (!output.cells.empty())
   {
@@ -599,6 +637,9 @@ bool SceneGeometry::collectChunks()
       }
     }
     m_appliedSequence = m_batchSequence;
+    // V.1: a table published while the batch ran woke an idle pass that could not adopt
+    // it; it is adopted now, and what the batch left waiting is built at once
+    startBatch();
     return true;
   }
 

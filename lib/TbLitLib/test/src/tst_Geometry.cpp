@@ -22,6 +22,8 @@
 #include "lit/ChunkBuilder.h"
 #include "lit/CpuPool.h"
 #include "lit/EntityState.h"
+#include "lit/LightData.h"
+#include "lit/LightRecord.h"
 #include "lit/MaterialService.h"
 #include "lit/ProcFile.h"
 #include "lit/SceneGeometry.h"
@@ -31,10 +33,13 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <future>
 #include <iostream>
+#include <latch>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -853,6 +858,355 @@ TEST_CASE("SceneGeometry: a cancelled pool's batch ends at once (R2.1)")
     >= 14);
   CHECK(scene.chunks().size() <= 2u);
   pool->stop();
+}
+
+TEST_CASE(
+  "SceneGeometry: a table published while a batch runs is adopted when it applies (V.1)")
+{
+  using namespace std::chrono_literals;
+  static_cast<void>(fixtureTable());
+  auto gate = std::make_shared<ParseGate>();
+  gate->close();
+  auto service = gatedService(gate);
+  const auto atExit = OpenAtExit{gate};
+  REQUIRE(service->waitForTableForTesting(
+    [](const MaterialTable& t) { return t.registry != 0; }, 10s));
+  auto pool = CpuPool::create() | kdl::value();
+
+  // both pool threads held, so that the batch stays in flight while the table arrives
+  auto held = std::make_shared<ParseGate>();
+  held->close();
+  auto started = std::make_shared<std::latch>(std::ptrdiff_t(CpuPool::ThreadCount));
+  auto blockers = std::vector<std::future<CpuJobResult<bool>>>{};
+  for (auto i = std::size_t{0}; i < CpuPool::ThreadCount; ++i)
+  {
+    blockers.push_back(pool->run([held, started](const CpuJobContext&) -> Result<bool> {
+      started->count_down();
+      held->pass();
+      return true;
+    }));
+  }
+  started->wait();
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    // a failed REQUIRE releases the pool before the scene waits for its jobs
+    const auto releaseAtExit = OpenAtExit{held};
+    auto snapshot = snapshotOfMapText(mapText("", ""));
+    snapshot.sequence = 1;
+    scene.takeSnapshot(snapshot);
+    REQUIRE(scene.busy());
+
+    gate->open();
+    REQUIRE(service->waitForTableForTesting(
+      [](const MaterialTable& t) { return t.find("textures/lp1b/wall") != nullptr; },
+      10s));
+    // a pass while the batch runs cannot adopt it
+    CHECK_FALSE(scene.collect());
+    held->open();
+
+    // the batch applies, and with it the table is adopted: its cells are built again at
+    // once, with no snapshot, no table and no further pass
+    auto applied = false;
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (!applied && std::chrono::steady_clock::now() < deadline)
+    {
+      applied = scene.collect();
+      if (!applied)
+      {
+        std::this_thread::sleep_for(1ms);
+      }
+    }
+    REQUIRE(applied);
+    CHECK(scene.busy());
+    scene.finishForTesting();
+  }
+  for (auto& blocker : blockers)
+  {
+    blocker.wait();
+  }
+  pool->stop();
+}
+
+TEST_CASE("SceneGeometry: a material reload builds every chunk and light again (V.2)")
+{
+  using namespace std::chrono_literals;
+  static_cast<void>(fixtureTable());
+  // version 1: an opaque material, and a cube map that fails (its image was referenced
+  // as 2D first); version 2: the first translucent, the second parses
+  auto version = std::make_shared<std::atomic<int>>(1);
+  auto options = MaterialServiceOptions{};
+  options.makeSource = [version](const std::atomic<bool>&) {
+    const auto second = version->load() == 2;
+    auto text = std::string{
+      "textures/lp1b/conflict2d\n{\n\t{\n\t\tblend add\n\t\tmap "
+      "env/lp1b_conflict\n\t}\n}\n"};
+    text += second ? "textures/lp1b/conflictcube\n{\n\t{\n\t\tblend add\n\t\tcubeMap "
+                     "env/lp1b_other\n\t}\n}\n"
+                   : "textures/lp1b/conflictcube\n{\n\t{\n\t\tblend add\n\t\tcubeMap "
+                     "env/lp1b_conflict\n\t}\n}\n";
+    text += second
+              ? "textures/lp1b/reload\n{\n\ttranslucent\n\t{\n\t\tblend blend\n\t\tmap "
+                "textures/lp1b/reload.tga\n\t}\n}\n"
+              : "textures/lp1b/reload\n{\n\tdiffusemap textures/lp1b/reload.tga\n}\n";
+    text +=
+      "lights/lp1b_reloadlight\n{\n\t{\n\t\tblend add\n\t\tmap "
+      "lights/squarelight1.tga\n\t}\n}\n";
+    return std::unique_ptr<DeclSource>{std::make_unique<MemoryDeclSource>(
+      std::vector<DeclFile>{DeclFile{"materials/zz_reload.mtr", text, 0}})};
+  };
+  options.pollInterval = 0ms;
+  auto service = MaterialService::create(std::move(options)) | kdl::value();
+  auto pool = CpuPool::create() | kdl::value();
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    auto snapshot = snapshotOfMapText(
+      "{\n\"classname\" \"worldspawn\"\n" + box(0, 0, 0, 32, 32, 32, "lp1b/conflict2d")
+      + box(64, 0, 0, 96, 32, 32, "lp1b/conflictcube")
+      + box(128, 0, 0, 160, 32, 32, "lp1b/reload")
+      + "}\n{\n\"classname\" \"light\"\n\"origin\" \"64 64 64\"\n"
+        "\"light_radius\" \"64 64 64\"\n\"texture\" \"lights/lp1b_reloadlight\"\n}\n");
+    snapshot.sequence = 1;
+    const auto light = std::find_if(
+      snapshot.nodes.begin(), snapshot.nodes.end(), [](const SnapshotNode& node) {
+        return node.kind == SnapshotNodeKind::Light;
+      });
+    REQUIRE(light != snapshot.nodes.end());
+    const auto lightId = light->entity;
+    scene.takeSnapshot(snapshot);
+
+    const auto castOf = [&](const std::string& material) {
+      for (const auto& [key, chunk] : scene.chunks())
+      {
+        if (key.material == material)
+        {
+          return std::optional{chunk.castClass};
+        }
+      }
+      return std::optional<CastClass>{};
+    };
+    const auto lightRegistry = [&] {
+      const auto record = scene.lightTable()->find(lightId);
+      return record && record->material ? record->material->registry : 0u;
+    };
+    const auto settle = [&](const auto& done) {
+      const auto deadline = std::chrono::steady_clock::now() + 10s;
+      while (std::chrono::steady_clock::now() < deadline)
+      {
+        scene.collect();
+        if (!scene.busy() && done())
+        {
+          return true;
+        }
+        std::this_thread::sleep_for(2ms);
+      }
+      return false;
+    };
+
+    const auto first = service->waitForTableForTesting(
+      [](const MaterialTable& t) {
+        const auto cube = t.find("textures/lp1b/conflictcube");
+        return cube && !cube->entry && t.find("textures/lp1b/reload")
+               && t.find("lights/lp1b_reloadlight");
+      },
+      10s);
+    REQUIRE(first);
+    CHECK(settle([&] {
+      return castOf("textures/lp1b/conflictcube") == CastClass::Opaque
+             && castOf("textures/lp1b/reload") == CastClass::Opaque
+             && lightRegistry() == first->registry;
+    }));
+
+    // the edited decls are read again: a new registry answers every name at once
+    version->store(2);
+    service->reload();
+    const auto second = service->waitForTableForTesting(
+      [&](const MaterialTable& t) {
+        const auto cube = t.find("textures/lp1b/conflictcube");
+        return t.registry != first->registry && cube && cube->entry;
+      },
+      10s);
+    REQUIRE(second);
+    CHECK(settle([&] {
+      return castOf("textures/lp1b/conflictcube") == CastClass::None
+             && castOf("textures/lp1b/reload") == CastClass::None
+             && lightRegistry() == second->registry;
+    }));
+    scene.finishForTesting();
+  }
+  pool->stop();
+}
+
+TEST_CASE("SceneGeometry: worldspawn's overrideMaterial is asked for and drawn (V.5)")
+{
+  using namespace std::chrono_literals;
+  static_cast<void>(fixtureTable());
+  auto gate = std::make_shared<ParseGate>();
+  auto service = gatedService(gate);
+  auto pool = CpuPool::create() | kdl::value();
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    auto snapshot =
+      snapshotOfMapText(mapText("\"overrideMaterial\" \"textures/lp1b/glass\"\n", ""));
+    snapshot.sequence = 1;
+    scene.takeSnapshot(snapshot);
+    // nothing in the map names the override; it replaces every side and is translucent
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    auto drawn = false;
+    while (!drawn && std::chrono::steady_clock::now() < deadline)
+    {
+      scene.collect();
+      drawn = !scene.busy() && !scene.chunks().empty()
+              && std::all_of(
+                scene.chunks().begin(), scene.chunks().end(), [](const auto& entry) {
+                  return entry.first.material == "textures/lp1b/glass"
+                         && entry.second.castClass == CastClass::None;
+                });
+      std::this_thread::sleep_for(2ms);
+    }
+    CHECK(drawn);
+    scene.finishForTesting();
+  }
+  pool->stop();
+}
+
+TEST_CASE(
+  "SceneGeometry: lights are built once when the .proc comes with the snapshot (V.8)")
+{
+  using namespace std::chrono_literals;
+  static_cast<void>(fixtureTable());
+  auto gate = std::make_shared<ParseGate>();
+  auto service = gatedService(gate);
+  // the .proc and everything the light needs are in the table before the snapshot
+  const auto goldens = litFixtureFolder() / "goldens" / "lp1b_geometry";
+  const auto procPath = (goldens / "lp1b_geometry.proc").string();
+  service->loadProcFile(procPath);
+  static_cast<void>(service->lookup("lights/squarelight1"));
+  static_cast<void>(service->lookup(DefaultPointLightMaterial));
+  static_cast<void>(service->lookup(DefaultProjectedLightMaterial));
+  static_cast<void>(service->entityDef("light"));
+  REQUIRE(service->waitForTableForTesting(
+    [&](const MaterialTable& t) {
+      const auto proc = t.findProcFile(procPath);
+      return proc && proc->tree && t.find("lights/squarelight1")
+             && t.find(DefaultPointLightMaterial) && t.find(DefaultProjectedLightMaterial)
+             && t.findEntityDef("light");
+    },
+    10s));
+  auto pool = CpuPool::create() | kdl::value();
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    auto snapshot = snapshotOfMapText(mapText(
+      "",
+      "{\n\"classname\" \"light\"\n\"origin\" \"64 0 96\"\n\"light_radius\" \"200 200 "
+      "200\"\n}\n"));
+    snapshot.sequence = 1;
+    snapshot.mapPath = (goldens / "lp1b_geometry.map").string();
+    const auto light = std::find_if(
+      snapshot.nodes.begin(), snapshot.nodes.end(), [](const SnapshotNode& node) {
+        return node.kind == SnapshotNodeKind::Light;
+      });
+    REQUIRE(light != snapshot.nodes.end());
+    scene.takeSnapshot(snapshot);
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (scene.busy() && std::chrono::steady_clock::now() < deadline)
+    {
+      scene.collect();
+      std::this_thread::sleep_for(2ms);
+    }
+    scene.finishForTesting();
+    REQUIRE(scene.procTree());
+    const auto record = scene.lightTable()->find(light->entity);
+    REQUIRE(record);
+    CHECK(record->derived.hasAreaTree);
+    CHECK(record->derived.areas.size() == 2u);
+    // built once, with the areas, not first without them
+    CHECK(record->version == 1u);
+  }
+  pool->stop();
+}
+
+TEST_CASE(
+  "ChunkBuilder: every patch triangle's corners through TriVertsFromOriginal (R3.5)")
+{
+  // V.9: a patch off every grid, where a corner kept whole and one through
+  // TriVertsFromOriginal differ (the fixture's patch is on a grid, where they agree)
+  const auto text = std::string{
+    "{\n\"classname\" \"worldspawn\"\n{\npatchDef2\n{\n\"lp1b/patch\"\n( 3 3 0 0 0 )\n(\n"
+    "( ( 0.37 1.11 0.13 0.031 0.017 ) ( 33.7 9.29 17.3 0.517 0.093 ) "
+    "( 64.1 2.03 0.71 1.037 0.011 ) )\n"
+    "( ( 1.3 31.7 33.9 0.023 0.511 ) ( 31.9 41.3 49.7 0.497 0.529 ) "
+    "( 63.3 33.1 31.7 1.019 0.503 ) )\n"
+    "( ( 0.91 64.3 0.29 0.013 1.021 ) ( 32.3 57.1 17.9 0.509 1.003 ) "
+    "( 63.7 65.9 0.47 1.031 1.017 ) )\n"
+    ")\n}\n}\n}\n"};
+  const auto snapshot = snapshotOfMapText(text);
+  const auto output = buildChunks(inputOf(snapshot));
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+
+  // dmap's corners: every triangle of the subdivided patch through TriVertsFromOriginal,
+  // at the position the chunk reads back (R3.9); and each vertex as it is, kept whole
+  REQUIRE(snapshot.patches.size() == 1u);
+  const auto& sp = snapshot.patches.front();
+  auto patch = EnginePatch{};
+  patch.width = int(sp.rows);
+  patch.height = int(sp.columns);
+  patch.controlPoints.resize(sp.controlPoints.count);
+  for (auto r = 0u; r < sp.rows; ++r)
+  {
+    for (auto c = 0u; c < sp.columns; ++c)
+    {
+      const auto& p = snapshot.controlPoints[sp.controlPoints.first + r * sp.columns + c];
+      auto vert = engineClearedVert();
+      vert.xyz = {float(p[0]), float(p[1]), float(p[2])};
+      engineSetTexCoord(vert, float(p[3]), float(p[4]));
+      patch.controlPoints[c * sp.rows + r] = vert;
+    }
+  }
+  const auto surface = engineSubdividePatch(patch);
+  REQUIRE(surface);
+  const auto keyOf = [](const EngineVec3& xyz) {
+    return EngineVec3{procReadBack(xyz[0]), procReadBack(xyz[1]), procReadBack(xyz[2])};
+  };
+  auto barycentric = std::map<EngineVec3, std::vector<EngineVec2>>{};
+  auto whole = std::map<EngineVec3, std::vector<EngineVec2>>{};
+  for (auto i = std::size_t{0}; i + 2 < surface->indexes.size(); i += 3)
+  {
+    const auto original = std::array<EngineDrawVert, 3>{
+      surface->verts[std::size_t(surface->indexes[i])],
+      surface->verts[std::size_t(surface->indexes[i + 1])],
+      surface->verts[std::size_t(surface->indexes[i + 2])]};
+    for (const auto& corner : original)
+    {
+      const auto key = keyOf(corner.xyz);
+      barycentric[key].push_back(
+        engineTexCoord(engineVertFromOriginal(corner.xyz, original)));
+      whole[key].push_back(engineTexCoord(corner));
+    }
+  }
+  const auto congruent = [](const EngineVec2& a, const std::vector<EngineVec2>& list) {
+    return std::any_of(list.begin(), list.end(), [&](const EngineVec2& b) {
+      const auto ds = a[0] - b[0];
+      const auto dt = a[1] - b[1];
+      return ds == std::round(ds) && dt == std::round(dt);
+    });
+  };
+  auto checked = 0;
+  auto onlyBarycentric = 0;
+  for (const auto& chunk : output.chunks)
+  {
+    for (const auto& vert : chunk.verts)
+    {
+      const auto it = barycentric.find(vert.xyz);
+      REQUIRE(it != barycentric.end());
+      const auto st = engineTexCoord(vert);
+      CHECK(congruent(st, it->second));
+      onlyBarycentric += congruent(st, whole.at(vert.xyz)) ? 0 : 1;
+      ++checked;
+    }
+  }
+  CHECK(checked > 20);
+  // the test would fail with corners kept whole
+  CHECK(onlyBarycentric > 0);
 }
 
 #if defined(_MSC_VER) && defined(_DEBUG)

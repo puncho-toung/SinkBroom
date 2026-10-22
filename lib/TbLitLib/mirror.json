@@ -575,6 +575,15 @@
           ],
           "anchor": "DeviceManager_VK::createSwapChain",
           "sha256": "f6af7a138a11da08e30a1bb3cb7c955a497ac30fb91f5da01728d96acca9b78e"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1156,
+            1244
+          ],
+          "anchor": "DeviceManager_VK::createSwapChain, the whole function Swapchain.cpp:30 cites (its parts in M-SWAP-01, M-SWAP-03, M-SWAP-04, M-NC-01 and M-NC-02)",
+          "sha256": "6e4fe99eed3600d10f46007136d842f0939d98035c80a8f537eb160870a18be5"
         }
       ],
       "sinkbroom": [
@@ -2464,6 +2473,10 @@
         {
           "file": "lib/TbLitLib/CMakeLists.txt",
           "symbol": "target_link_options(TbLitLib INTERFACE ...)"
+        },
+        {
+          "file": "lib/TbLitLib/CMakeLists.txt",
+          "symbol": "target_compile_options(TbLitLib PRIVATE -ffp-contract=off ...) (V.4)"
         }
       ],
       "cxxStandard": 17,
@@ -2492,12 +2505,12 @@
         },
         {
           "name": "-ffp-contract=off",
-          "when": "GCC and Clang, every configuration",
-          "why": "the engine's optimised configurations (:220-222); here also Debug, so register evaluation is the same in every configuration (Clang contracts by default where FMA exists)"
+          "when": "GCC and Clang, every configuration; TbLitIdLib and (V.4) TbLitLib, whose first-party mirrors of the engine's float arithmetic (lit/NumberText.h's lexerFloat, the projection, light, entity and chunk code) must round as the copies do",
+          "why": "the engine's optimised configurations (:220-222); here also Debug, so register evaluation is the same in every configuration (Clang contracts by default where FMA exists, as on arm64: an Apple build would otherwise fuse a * b + c in lexerFloat and the mirrors; the Mac run is on the user's checklist)"
         },
         {
           "name": "-fno-math-errno -fno-trapping-math",
-          "when": "GCC and Clang, every configuration but Debug",
+          "when": "GCC and Clang, every configuration but Debug; TbLitIdLib and (V.4) TbLitLib",
           "why": "the engine's optimised configurations (:220-222)"
         }
       ],
@@ -2541,7 +2554,7 @@
         }
       ],
       "flags": "STATIC, no CompilerConfig and no PrecompileStdHeaders, suppress_dependency_warnings and apply_sanitizer_options, CXX_STANDARD 17 without extensions, MSVC /bigobj in Debug and /Z7 in Release, no /Zc:__cplusplus (as the engine, so sys_assert.h picks its pre-C++11 compile_time_assert)",
-      "note": "D31, S18, R4-1.6, R4-1.14"
+      "note": "D31, S18, R4-1.6, R4-1.14, V.4"
     },
     {
       "id": "M-ID-FN-01",
@@ -5052,7 +5065,7 @@
         }
       ],
       "staticKind": "permanent sink",
-      "reason": "D63: common and idLib::common point to one idCommon, tbLitCommonSink, from the start of the process and are never rebound; its Printf, Warning, Error and FatalError (and idLib's message functions, AssertFailed and the file system's warnings) format the message on the calling thread and push it, tagged with that thread, into one queue under a mutex. Constant-initialised: the queue's constructor is constexpr (std::mutex, two null node pointers and a count), and it allocates a node only when a message is pushed (C9, S27); nodes still queued at exit are not freed. Pushing never throws (C17): a message that cannot be kept (no room, no memory) is counted for the thread that lost it, in a fixed table of 64 slots claimed by the thread id's hash (B0.5, R2.5, R2.6: never another thread's, never another session's; a discard frees the slot); that thread's next drain ends with a Warning that says how many were dropped and an Error that says how many of them were errors, which the registry adds to its own error count and which fails a CPU job. B0.6: TB_LIT_CONSTINIT has the compiler check the constant initialisation where it can (constinit, Clang's require_constant_initialization, GCC's __constinit; MSVC compiles the shim as C++17 and has none); the queue's mutex is destroyed at exit, after every thread that pushes has been joined. The registry drains its own thread's messages (Registry::messages, takeMessages, errorCount, beginCapture, endCapture) and drops those its thread pushed before it was made and while it is destroyed, as no registry received them before; any other thread's are drained by that thread's owner with drainEngineMessagesForThread (the CPU pool's, LP1b.2). Any thread; since LP1b.2 (D66, B0.1) each CpuPool job drops its thread's leftover messages before it and drains them into its CpuJobResult after it, the queue holds at most 4096 messages (beyond: dropped, counted for the thread, reported by its next drain), and a pool thread discards its messages when it ends"
+      "reason": "D63: common and idLib::common point to one idCommon, tbLitCommonSink, from the start of the process and are never rebound; its Printf, Warning, Error and FatalError (and idLib's message functions, AssertFailed and the file system's warnings) format the message on the calling thread and push it, tagged with that thread, into one queue under a mutex. Constant-initialised: the queue's constructor is constexpr (std::mutex, two null node pointers and a count), and it allocates a node only when a message is pushed (C9, S27); nodes still queued at exit are not freed. Pushing never throws (C17): a message that cannot be kept (no room, no memory) is counted for the thread that lost it, in a fixed table of 64 slots claimed by the thread id's hash (B0.5, R2.5, R2.6: never another thread's, never another session's; a discard frees the slot; V.7: the thread's own slot is looked for in all 64 before a free one is claimed, so that no thread holds two); that thread's next drain ends with a Warning that says how many were dropped and an Error that says how many of them were errors, which the registry adds to its own error count and which fails a CPU job. B0.6: TB_LIT_CONSTINIT has the compiler check the constant initialisation where it can (constinit, Clang's require_constant_initialization, GCC's __constinit; MSVC compiles the shim as C++17 and has none); the queue's mutex is destroyed at exit, after every thread that pushes has been joined. The registry drains its own thread's messages (Registry::messages, takeMessages, errorCount, beginCapture, endCapture) and drops those its thread pushed before it was made and while it is destroyed, as no registry received them before; any other thread's are drained by that thread's owner with drainEngineMessagesForThread (the CPU pool's, LP1b.2). Any thread; since LP1b.2 (D66, B0.1) each CpuPool job drops its thread's leftover messages before it and drains them into its CpuJobResult after it, the queue holds at most 4096 messages (beyond: dropped, counted for the thread, reported by its next drain), and a pool thread discards its messages when it ends"
     },
     {
       "id": "M-ID-STATIC-39",
@@ -7187,7 +7200,7 @@
           "symbol": "engineF32toF16, engineF16toF32, engineSetTexCoord, engineTexCoord, engineSetNormal, engineNormal, engineTangent, engineBiTangentSign, engineClearedVert, engineSidePlane, enginePlanesEqual, engineFlippedPlane, engineWindingPlane, engineTriangleArea, engineValveTexCoord, engineProcFloatText, engineVertFromOriginal, engineFtoi, engineAnglesToMat3, engineMat3Multiply"
         }
       ],
-      "note": "argument-only: the copied idDrawVert encoders, idPlane (FromPoints, FixDegeneracies, Compare), idWinding::GetPlane and TriangleArea, and transcriptions of dmap's arithmetic in the copied types (GetTextureVectors' axis·(1/scale), TriListForSide's dot product and division, WriteFloat, TriVertsFromOriginal). They call no common function and read only constants; any thread; idMath::Ftoi, idAngles::ToMat3 and idMat3::operator* through the copies"
+      "note": "argument-only: the copied idDrawVert encoders, idPlane (FromPoints, FixDegeneracies, Compare), idWinding::GetPlane and TriangleArea, and transcriptions of dmap's arithmetic in the copied types (GetTextureVectors' axis·(1/scale), TriListForSide's dot product and division, WriteFloat, TriVertsFromOriginal). They call no common function and read only constants; any thread; idMath::Ftoi, idAngles::ToMat3 and idMat3::operator* through the copies. V.6: engineProcFloatText formats WriteFloat's \"%1.10f\" (File.cpp:73-80) itself, as the \"C\" locale prints it: the exact value rounded to ten decimals, a tie to even, as the C runtimes round (checked against snprintf in the \"C\" locale), then idStr::StripTrailing of the '0's and the '.'. vsnprintf's decimal point follows LC_NUMERIC, which Qt sets from the environment on Unix, and lexerFloat refuses a comma"
     },
     {
       "id": "M-GEO-POOL-01",
@@ -7419,11 +7432,11 @@
       ],
       "commonCalls": [
         "tr_trisurf.cpp:1595 common->Printf (removed degenerate triangles: to the sink)",
-        "tr_trisurf.cpp:1191 idLib::Warning (MikkTSpace failed: never reached, useMikktspace is false)",
+        "tr_trisurf.cpp:1191 idLib::Warning (\"Mikkelsen tangent space calculation failed\": since R3.11 reached on the pool for every surface of a material with the mikktspace keyword, whose R_DeriveMikktspaceTangents stand-in fails (M-ID-DIFF-04); to the sink of D63, after which the copy derives its own tangents)",
         "tr_trisurf.cpp:1361 idLib::Error (R_StaticAlloc returned null: only when an allocation fails, M-GEO-FATAL-04)",
         "R_StaticAlloc's common->FatalError (ShimLib.cpp, only when an allocation fails, M-GEO-FATAL-04)"
       ],
-      "note": "R_CleanupTriangles' order on a surface without generated normals: the index range check as pre-validation (R_RangeCheckIndexes' three Errors cannot be reached: indexes in range, a multiple of three, at most 65535 vertices), R_CreateSilIndexes (idHashIndex on the heap), R_RemoveDegenerateTriangles, R_DuplicateMirroredVertexes, then R_DeriveTangentsWithoutNormals(tri, false) or R_BuildDominantTris + R_DeriveTangents; FinishSurfaces' back side is R_CopyStaticTriSurf + R_ReverseTriangles. R_TestDegenerateTextureSpace (no effect: its print is commented out), R_CreateDupVerts, R_BoundTriSurf and the MOC data are not run (M-GEO-NC-01). In Debug the copied asserts that fail report through the sink of D63 on the pool thread, as M-LIGHT-POOL-01's do",
+      "note": "R_CleanupTriangles' order on a surface without generated normals: the index range check as pre-validation (R_RangeCheckIndexes' three Errors cannot be reached: indexes in range, a multiple of three, at most 65535 vertices), R_CreateSilIndexes (idHashIndex on the heap), R_RemoveDegenerateTriangles, R_DuplicateMirroredVertexes, then R_DeriveTangentsWithoutNormals(tri, useMikktspace) (R3.11: true for a material with the mikktspace keyword, EngineTangentPath::Mikktspace, as R_CleanupTriangles passes it) or R_BuildDominantTris + R_DeriveTangents; FinishSurfaces' back side is R_CopyStaticTriSurf + R_ReverseTriangles. R_TestDegenerateTextureSpace (no effect: its print is commented out), R_CreateDupVerts, R_BoundTriSurf and the MOC data are not run (M-GEO-NC-01). In Debug the copied asserts that fail report through the sink of D63 on the pool thread, as M-LIGHT-POOL-01's do",
       "asserts": [
         "tr_trisurf.cpp:414, :425, :436, :447, :458 R_AllocStaticTriSurf*'s asserts that the array is not allocated yet (the facade allocates each once)",
         "tr_trisurf.cpp:690, :1572 the silIndexes asserts (R_CreateSilIndexes runs first)"
@@ -7587,6 +7600,37 @@
       "call": "FatalError",
       "reachable": false,
       "afterReturn": "the facade calls neither function"
+    },
+    {
+      "id": "M-GEO-GUARD-01",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            683,
+            742
+          ],
+          "anchor": "Subdivide: the horizontal pass, which inserts columns and checks the span again",
+          "sha256": "886bf706cc5497af425c223175c56031d21db5e08a274b110166facdc9ccfa25"
+        },
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            745,
+            804
+          ],
+          "anchor": "Subdivide: the vertical pass, which inserts rows and checks the span again",
+          "sha256": "522b0c71b8e7712c9467eb95e663e3b4ba64437e65abc1ec2e57e92e1841ec0c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "MaxSpanHalvings, subdivideSpan, patchSubdivisionBound, engineSubdividePatch"
+        }
+      ],
+      "note": "V.3: each pass inserts two columns (rows) while a span's midpoint is off by more than 4 units and checks the left half again. In float a span whose coordinates are beyond about 2^26 (a spacing of 8) can stay as curved after every halving: a 3 x 3 patch at z = 1e8 whose middle column is raised by 16 never ends, and the pool job would spin inside the copied code, where CpuPool::cancel cannot reach it. patchSubdivisionBound runs the passes on the positions before Subdivide does (M-GEO-POOL-02); a span still too curved after 30 halvings (a real span's deviation shrinks about fourfold per halving, so 4^30 times the threshold) sets the count past the limit, and engineSubdividePatch refuses the patch as it refuses one beyond the 2 MB stack bound (\"could never end or take more than 2 MB\"), with a warning. Before V.3 the depth cap accepted the span and let Subdivide run. Test: tst_EngineGeometry.cpp, \"V.3: a patch whose subdivision would never end is refused before it runs\""
     },
     {
       "id": "M-GEO-STATIC-01",
