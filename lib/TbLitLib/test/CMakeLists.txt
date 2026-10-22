@@ -47,6 +47,7 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Snapshot.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_StackThread.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SwapchainRules.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TextureUploads.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_VulkanInstance.cpp
 )
 
