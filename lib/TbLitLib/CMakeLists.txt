@@ -30,6 +30,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MaterialService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NvrhiSupport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ProcFile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Projection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ResourceContainer.cpp

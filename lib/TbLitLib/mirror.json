@@ -8952,6 +8952,177 @@
         }
       ],
       "note": "C15: the light records are the entities the snapshot sends with a Light node (TrenchBroom's isLightEntity); the game spawns an idLight for every entity whose merged dictionary names spawnclass idLight, whatever its classname. The record's spawn args merge the entityDef's keys (C22) under the map's; while the table has no answer for the classname the record is provisional and built again; a classname without an entityDef merges nothing, as SpawnEntityDef would refuse it. The record's version grows with every build of the light, which a change of its keys, classname or visibility, its entityDef or material arriving, or a new .proc starts"
+    },
+    {
+      "id": "M-LIGHT-FN-07",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            418,
+            544
+          ],
+          "anchor": "R_SetupProjectionMatrix",
+          "sha256": "4ce7829afc01bbfce259b26762731c7bf97fadb3f0a38cbd0da71afc90a9fdc2"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            118,
+            118
+          ],
+          "anchor": "r_znear \"3\"",
+          "sha256": "a80ad6774b9fba67ababc664683377a7e9c877cb49f023c9f3ad662d7e7cd33f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineProjectionMatrix"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/Projection.h",
+          "symbol": "ViewZNear"
+        }
+      ],
+      "note": "A16, SC67: the #if 1 branch transcribed on idMath::PI with zNear = r_znear 3 (cramZNear's quarter is the weapon view, never drawn here), no TAA jitter (the offsets -2 * 0 / size are negative zeros), no flipProjection, no oblique projection; the float[16] in the engine's layout. The engine calls tan( float ); the shim's includes make it the STL's float overload (tanf), pinned by a static_assert; were the engine's GLMatrix.cpp to see only the C library's double tan, ymax and xmax would be rounded once instead of twice, at most an ulp apart (LP2's parity rows check it)"
+    },
+    {
+      "id": "M-LIGHT-FN-08",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            353,
+            401
+          ],
+          "anchor": "R_SetupViewMatrix",
+          "sha256": "6cc1c5e2a7d0ebffe553b12f4c210f634d303b4d4e6c0759175942a4d2fdd569"
+        },
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            77,
+            150
+          ],
+          "anchor": "R_MatrixMultiply",
+          "sha256": "b8cd452a2abcb73c35e01044104b804e50539b0c80fd50f9296bc3b765c25281"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineViewMatrix, R_MatrixMultiply, engineViewAxis"
+        },
+        {
+          "file": "lib/TbLitLib/src/Projection.cpp",
+          "symbol": "viewProjectionOf"
+        }
+      ],
+      "note": "the world's modelViewMatrix: the viewer matrix of vieworg and viewaxis, then s_flipMatrix (looking down X to OpenGL's -Z) through R_MatrixMultiply, both of its paths transcribed (the SSE one compiled). The view axis comes from the camera copy: rows forward, up.Cross( forward ) (left), up, as idAngles::ToMat3 orders them; TrenchBroom and the engine are both Z-up. The R_SetupViewMatrix the brief places in tr_frontend_main.cpp is in GLMatrix.cpp at engineCommit"
+    },
+    {
+      "id": "M-LIGHT-FN-09",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            3171,
+            3194
+          ],
+          "anchor": "idGameLocal::CalcFov",
+          "sha256": "62cc0df913ba2ec7a864a583030b816a467b1ac4ac3a6dd3728b7629741f5fcf"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            2835,
+            2851
+          ],
+          "anchor": "idRenderSystemLocal::GetPixelAspect",
+          "sha256": "a3e868144c0d64adc9fb9fd972eae6e35de7d3ced68c4f2458e27cb1b94842be"
+        },
+        {
+          "file": "neo/d3xp/gamesys/SysCvar.cpp",
+          "lines": [
+            283,
+            283
+          ],
+          "anchor": "g_fov \"80\" CVAR_INTEGER",
+          "sha256": "bb3208ef0ce3e736be7dde463802a8d2c623d2929f8397619213d86639487c1b"
+        },
+        {
+          "file": "neo/framework/CVarSystem.cpp",
+          "lines": [
+            258,
+            280
+          ],
+          "anchor": "an integer cvar's floatValue",
+          "sha256": "aaa45d2bfc92b7e97a33ad71ba299fef9aa807235806990f40a8c5d4608e4a1e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineCalcFov"
+        },
+        {
+          "file": "lib/TbLitLib/src/Projection.cpp",
+          "symbol": "viewProjectionOf"
+        }
+      ],
+      "note": "SC68: transcribed on idMath::Tan and ATan (tanf, atan2f) and DEG2RAD and RAD2DEG; the window is the preview's viewport and the pixel aspect glConfig's 1. base_fov is the g_fov the preview computes from TrenchBroom's fov (M-LIGHT-DIFF-06), passed with every digit, where the engine's g_fov is an integer cvar: a parity shot needs a camera fov whose g_fov is a whole number, or differs by the rounding"
+    },
+    {
+      "id": "M-LIGHT-PURE-02",
+      "kind": "pure-function",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            1528,
+            1535
+          ],
+          "anchor": "idMath (Tan, ATan, PI, M_DEG2RAD, M_RAD2DEG: the inline functions and constants the view uses)",
+          "sha256": "da2df869a03c434db076be4a7b94c729553a8ab395090284ae807e7adcee1599"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineCalcFov, engineProjectionMatrix, engineViewMatrix, engineViewAxis"
+        },
+        {
+          "file": "lib/TbLitLib/src/Projection.cpp",
+          "symbol": "verticalFovOf, gFovOf, viewProjectionOf, parityCameraLine"
+        }
+      ],
+      "note": "the view functions run only copied inline code (idMath::Tan, ATan, idVec3::Cross, the sys_intrinsics.h macros) on their arguments, and read idMath's constants, initialised at program load: any thread, the render thread included, which computes the view each frame (LP2). verticalFovOf and gFovOf are SinkBroom's, in float with std::tan and std::atan"
+    },
+    {
+      "id": "M-LIGHT-DIFF-06",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            3171,
+            3194
+          ],
+          "anchor": "idGameLocal::CalcFov's base_fov",
+          "sha256": "62cc0df913ba2ec7a864a583030b816a467b1ac4ac3a6dd3728b7629741f5fcf"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/Projection.cpp",
+          "symbol": "verticalFovOf, gFovOf"
+        }
+      ],
+      "note": "S39, A16, P.16: TrenchBroom's zoomedFov is the horizontal fov of a 4:3 frame, so fov_y = 2 atan( 0.75 tan( f / 2 ) ) and the g_fov handed to CalcFov is 2 atan( ( 16 / 9 ) tan( fov_y / 2 ) ), so that CalcFov's 16:9 ideal gives back TrenchBroom's vertical fov; then CalcFov's horizontal fov follows the viewport's aspect. A square viewport takes g_fov for both axes, as the engine does"
     }
   ],
   "retired": [

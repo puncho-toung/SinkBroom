@@ -19,8 +19,8 @@
 
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
-// GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderWorld_defs.cpp and
-// renderer/GLMatrix.cpp):
+// GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderWorld_defs.cpp,
+// renderer/GLMatrix.cpp and d3xp/Game_local.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2012-2024 Robert Beckebans
 // That code is also subject to the additional terms that follow the GNU General
@@ -267,6 +267,60 @@ void R_LocalPlaneToGlobal(const float modelMatrix[16], const idPlane& in, idPlan
            - modelMatrix[3 * 4 + 2] * out[2];
 }
 
+/*
+==========================
+R_MatrixMultiply (GLMatrix.cpp:77-150)
+==========================
+*/
+void R_MatrixMultiply(const float a[16], const float b[16], float out[16])
+{
+#if defined(USE_INTRINSICS_SSE)
+  __m128 a0 = _mm_loadu_ps(a + 0 * 4);
+  __m128 a1 = _mm_loadu_ps(a + 1 * 4);
+  __m128 a2 = _mm_loadu_ps(a + 2 * 4);
+  __m128 a3 = _mm_loadu_ps(a + 3 * 4);
+
+  __m128 b0 = _mm_loadu_ps(b + 0 * 4);
+  __m128 b1 = _mm_loadu_ps(b + 1 * 4);
+  __m128 b2 = _mm_loadu_ps(b + 2 * 4);
+  __m128 b3 = _mm_loadu_ps(b + 3 * 4);
+
+  __m128 t0 = _mm_mul_ps(_mm_splat_ps(a0, 0), b0);
+  __m128 t1 = _mm_mul_ps(_mm_splat_ps(a1, 0), b0);
+  __m128 t2 = _mm_mul_ps(_mm_splat_ps(a2, 0), b0);
+  __m128 t3 = _mm_mul_ps(_mm_splat_ps(a3, 0), b0);
+
+  t0 = _mm_add_ps(t0, _mm_mul_ps(_mm_splat_ps(a0, 1), b1));
+  t1 = _mm_add_ps(t1, _mm_mul_ps(_mm_splat_ps(a1, 1), b1));
+  t2 = _mm_add_ps(t2, _mm_mul_ps(_mm_splat_ps(a2, 1), b1));
+  t3 = _mm_add_ps(t3, _mm_mul_ps(_mm_splat_ps(a3, 1), b1));
+
+  t0 = _mm_add_ps(t0, _mm_mul_ps(_mm_splat_ps(a0, 2), b2));
+  t1 = _mm_add_ps(t1, _mm_mul_ps(_mm_splat_ps(a1, 2), b2));
+  t2 = _mm_add_ps(t2, _mm_mul_ps(_mm_splat_ps(a2, 2), b2));
+  t3 = _mm_add_ps(t3, _mm_mul_ps(_mm_splat_ps(a3, 2), b2));
+
+  t0 = _mm_add_ps(t0, _mm_mul_ps(_mm_splat_ps(a0, 3), b3));
+  t1 = _mm_add_ps(t1, _mm_mul_ps(_mm_splat_ps(a1, 3), b3));
+  t2 = _mm_add_ps(t2, _mm_mul_ps(_mm_splat_ps(a2, 3), b3));
+  t3 = _mm_add_ps(t3, _mm_mul_ps(_mm_splat_ps(a3, 3), b3));
+
+  _mm_storeu_ps(out + 0 * 4, t0);
+  _mm_storeu_ps(out + 1 * 4, t1);
+  _mm_storeu_ps(out + 2 * 4, t2);
+  _mm_storeu_ps(out + 3 * 4, t3);
+#else
+  for (int i = 0; i < 4; i++)
+  {
+    for (int j = 0; j < 4; j++)
+    {
+      out[i * 4 + j] = a[i * 4 + 0] * b[0 * 4 + j] + a[i * 4 + 1] * b[1 * 4 + j]
+                       + a[i * 4 + 2] * b[2 * 4 + j] + a[i * 4 + 3] * b[3 * 4 + j];
+    }
+  }
+#endif
+}
+
 } // namespace
 
 EngineMat4 engineIdentityMatrix()
@@ -496,6 +550,162 @@ EngineLightProjection engineDeriveLightProjection(const EngineLightGeometry& lig
   result.inverseBaseLightProject = fromId(inverseBaseLightProject);
   result.globalLightBounds = fromId(globalLightBounds);
   return result;
+}
+
+EngineFov engineCalcFov(
+  const float base_fov, const int width, const int height, const float pixelAspect)
+{
+  // d3xp/Game_local.cpp:3171-3194 idGameLocal::CalcFov, renderSystem's GetWidth,
+  // GetHeight and GetPixelAspect as arguments
+  auto fov = EngineFov{};
+  float& fov_x = fov.x;
+  float& fov_y = fov.y;
+  if (width == height)
+  {
+    // this is the Rift, so don't mess with our aspect ratio corrections
+    fov_x = base_fov;
+    fov_y = base_fov;
+    return fov;
+  }
+
+  // Calculate the fov_y based on an ideal aspect ratio
+  const float ideal_ratio_x = 16.0f;
+  const float ideal_ratio_y = 9.0f;
+  const float tanHalfX = idMath::Tan(DEG2RAD(base_fov * 0.5f));
+  fov_y = 2.0f * RAD2DEG(idMath::ATan(ideal_ratio_y * tanHalfX, ideal_ratio_x));
+
+  // Then calculate fov_x based on the true aspect ratio
+  const float ratio_x = width * pixelAspect;
+  const float ratio_y = height;
+  const float tanHalfY = idMath::Tan(DEG2RAD(fov_y * 0.5f));
+  fov_x = 2.0f * RAD2DEG(idMath::ATan(ratio_x * tanHalfY, ratio_y));
+  return fov;
+}
+
+// R_SetupProjectionMatrix calls tan( float ): with the STL's <cmath> among the shim's
+// includes the float overload, tanf (mirror.json M-LIGHT-FN-07)
+static_assert(std::is_same_v<decltype(tan(1.0f)), float>);
+
+EngineGlMatrix engineProjectionMatrix(
+  const float fovX,
+  const float fovY,
+  const float zNear,
+  const int viewWidth,
+  const int viewHeight)
+{
+  // renderer/GLMatrix.cpp:418-544 R_SetupProjectionMatrix: no jitter, the #if 1 branch
+  const float jitterx = 0.0f;
+  const float jittery = 0.0f;
+
+  // this mimics the logic in the Donut Feature Demo
+  const float xoffset = -2.0f * jitterx / (1.0f * viewWidth);
+  const float yoffset = -2.0f * jittery / (1.0f * viewHeight);
+
+  auto result = EngineGlMatrix{};
+  float* projectionMatrix = result.data();
+
+  float ymax = zNear * tan(fovY * idMath::PI / 360.0f);
+  float ymin = -ymax;
+
+  float xmax = zNear * tan(fovX * idMath::PI / 360.0f);
+  float xmin = -xmax;
+
+  const float width = xmax - xmin;
+  const float height = ymax - ymin;
+
+  projectionMatrix[0 * 4 + 0] = 2.0f * zNear / width;
+  projectionMatrix[1 * 4 + 0] = 0.0f;
+  projectionMatrix[2 * 4 + 0] = xoffset;
+  projectionMatrix[3 * 4 + 0] = 0.0f;
+
+  projectionMatrix[0 * 4 + 1] = 0.0f;
+  projectionMatrix[1 * 4 + 1] = 2.0f * zNear / height;
+  projectionMatrix[2 * 4 + 1] = yoffset;
+  projectionMatrix[3 * 4 + 1] = 0.0f;
+
+  // this is the far-plane-at-infinity formulation, and
+  // crunches the Z range slightly so w=0 vertexes do not
+  // rasterize right at the wraparound point
+  projectionMatrix[0 * 4 + 2] = 0.0f;
+  projectionMatrix[1 * 4 + 2] = 0.0f;
+  projectionMatrix[2 * 4 + 2] = -0.999f; // adjust value to prevent imprecision issues
+
+  // RB: was -2.0f * zNear
+  // the transformation into window space has changed from [-1 .. 1] to [0 .. 1]
+  projectionMatrix[3 * 4 + 2] = -1.0f * zNear;
+
+  projectionMatrix[0 * 4 + 3] = 0.0f;
+  projectionMatrix[1 * 4 + 3] = 0.0f;
+  projectionMatrix[2 * 4 + 3] = -1.0f;
+  projectionMatrix[3 * 4 + 3] = 0.0f;
+
+  return result;
+}
+
+EngineGlMatrix engineViewMatrix(const EngineVec3& viewOrigin, const EngineMat3& viewAxis)
+{
+  // renderer/GLMatrix.cpp:353-401 R_SetupViewMatrix, the world's modelViewMatrix
+  static const float s_flipMatrix[16] = {
+    // convert from our coordinate system (looking down X)
+    // to OpenGL's coordinate system (looking down -Z)
+    0,
+    0,
+    -1,
+    0,
+    -1,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1};
+
+  // transform by the camera placement
+  const idVec3 origin = toId(viewOrigin);
+  const idMat3 axis = toId(viewAxis);
+
+  float viewerMatrix[16];
+  viewerMatrix[0 * 4 + 0] = axis[0][0];
+  viewerMatrix[1 * 4 + 0] = axis[0][1];
+  viewerMatrix[2 * 4 + 0] = axis[0][2];
+  viewerMatrix[3 * 4 + 0] =
+    -origin[0] * axis[0][0] - origin[1] * axis[0][1] - origin[2] * axis[0][2];
+
+  viewerMatrix[0 * 4 + 1] = axis[1][0];
+  viewerMatrix[1 * 4 + 1] = axis[1][1];
+  viewerMatrix[2 * 4 + 1] = axis[1][2];
+  viewerMatrix[3 * 4 + 1] =
+    -origin[0] * axis[1][0] - origin[1] * axis[1][1] - origin[2] * axis[1][2];
+
+  viewerMatrix[0 * 4 + 2] = axis[2][0];
+  viewerMatrix[1 * 4 + 2] = axis[2][1];
+  viewerMatrix[2 * 4 + 2] = axis[2][2];
+  viewerMatrix[3 * 4 + 2] =
+    -origin[0] * axis[2][0] - origin[1] * axis[2][1] - origin[2] * axis[2][2];
+
+  viewerMatrix[0 * 4 + 3] = 0.0f;
+  viewerMatrix[1 * 4 + 3] = 0.0f;
+  viewerMatrix[2 * 4 + 3] = 0.0f;
+  viewerMatrix[3 * 4 + 3] = 1.0f;
+
+  // convert from our coordinate system (looking down X)
+  // to OpenGL's coordinate system (looking down -Z)
+  auto modelViewMatrix = EngineGlMatrix{};
+  R_MatrixMultiply(viewerMatrix, s_flipMatrix, modelViewMatrix.data());
+  return modelViewMatrix;
+}
+
+EngineMat3 engineViewAxis(const EngineVec3& forward, const EngineVec3& up)
+{
+  const auto f = toId(forward);
+  const auto u = toId(up);
+  const auto left = u.Cross(f);
+  return {f.x, f.y, f.z, left.x, left.y, left.z, u.x, u.y, u.z};
 }
 
 } // namespace tb::lit

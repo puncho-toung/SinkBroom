@@ -165,4 +165,46 @@ struct EngineLightProjection
  */
 EngineLightProjection engineDeriveLightProjection(const EngineLightGeometry& light);
 
+// ----- the view (transcribed, pure) -----
+
+// a matrix as the engine's float[16] view matrices hold it: OpenGL's column-major layout,
+// element (row r, column c) at [c * 4 + r]
+using EngineGlMatrix = std::array<float, 16>;
+
+struct EngineFov
+{
+  float x = 0.0f;
+  float y = 0.0f;
+};
+
+/**
+ * idGameLocal::CalcFov (d3xp/Game_local.cpp:3171-3194, SC68): fov_y from baseFov
+ * through a 16:9 ideal ratio, then fov_x from the window's true aspect (width ·
+ * pixelAspect : height); a square window takes baseFov for both. width and height are
+ * renderSystem->GetWidth() and GetHeight().
+ */
+EngineFov engineCalcFov(float baseFov, int width, int height, float pixelAspect);
+
+/**
+ * R_SetupProjectionMatrix (renderer/GLMatrix.cpp:418-544, SC67, A16) without TAA jitter
+ * (jitter 0, so xoffset and yoffset are -2 · 0 / size: negative zero), flipProjection or
+ * an oblique projection: ymax = zNear · tan( fov_y · PI / 360 ), xmax likewise, the far
+ * plane at infinity with [2][2] = -0.999, [3][2] = -zNear (clip z 0..1) and [2][3] = -1.
+ * viewWidth and viewHeight are the viewport's (x2 - x1 + 1, y2 - y1 + 1), at least 1.
+ */
+EngineGlMatrix engineProjectionMatrix(
+  float fovX, float fovY, float zNear, int viewWidth, int viewHeight);
+
+/**
+ * R_SetupViewMatrix (renderer/GLMatrix.cpp:353-401): the world's modelViewMatrix, the
+ * viewer matrix of vieworg and viewaxis (rows forward, left, up, the engine's Z-up frame)
+ * times s_flipMatrix through R_MatrixMultiply (its SSE path), from looking down X to
+ * OpenGL's looking down -Z.
+ */
+EngineGlMatrix engineViewMatrix(const EngineVec3& origin, const EngineMat3& axis);
+
+// a view axis from a forward and an up direction as idMat3 rows: forward, up.Cross(
+// forward ) (left), up
+EngineMat3 engineViewAxis(const EngineVec3& forward, const EngineVec3& up);
+
 } // namespace tb::lit
