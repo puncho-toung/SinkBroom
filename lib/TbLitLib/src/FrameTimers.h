@@ -34,22 +34,38 @@
 namespace tb::lit
 {
 
+// C16 (LP2.2b): what a frame times, each with a query of its own per frame slot: the
+// whole command list, and the passes (the tonemap's covers histogram, exposure and
+// tonemapping)
+enum class TimedPass
+{
+  Frame,
+  Prepass,
+  Interactions,
+  Tonemap,
+  Blit,
+};
+inline constexpr auto TimedPassCount = std::size_t{5};
+
 /**
- * The frame log (C16) and the timer queries that time each frame's pass (R4-2.20): one
- * query per frame in flight, because LP0 draws one pass. Frame N reuses the query of
- * frame N - FramesInFlight, which the render thread has waited for before it records
- * frame N. A frame's row is written once its GPU time is known, or at stop. Render thread
- * only.
+ * The frame log (C16) and the timer queries that time each frame and its passes
+ * (R4-2.20, §3.10): a fixed ring of TimedPassCount queries per frame in flight. Frame N
+ * reuses the queries of frame N - FramesInFlight, which the render thread has waited for
+ * before it records frame N; a query is read only when its pass was begun and ended in a
+ * submitted frame. A frame's row is written once its GPU times are known (at the slot's
+ * reuse, or from the idle tick), or at stop. Render thread only.
  */
 class FrameTimers
 {
 private:
   struct Slot
   {
-    nvrhi::TimerQueryHandle query;
+    std::array<nvrhi::TimerQueryHandle, TimedPassCount> queries;
+    // begun and ended in the frame being recorded
+    std::array<bool, TimedPassCount> timed = {};
     // ended in a submitted command list and not read yet
-    bool pending = false;
-    // the shown frame's row, waiting for the time
+    std::array<bool, TimedPassCount> pending = {};
+    // the shown frame's row, waiting for the times
     std::optional<FrameLogRow> row;
   };
 
@@ -62,18 +78,23 @@ public:
   // an empty path means no log; a log that cannot be opened is an error message
   std::optional<std::string> openLog(const std::filesystem::path& path);
 
-  // the query of a frame slot, or null without timestamps
-  nvrhi::ITimerQuery* query(std::size_t slot) const;
+  // the query of a pass in a frame slot, or null without timestamps
+  nvrhi::ITimerQuery* query(std::size_t slot, TimedPass pass) const;
 
-  // a frame that used the slot's query was submitted
+  // a frame starts recording into the slot: no pass of it is timed yet
+  void frameStarted(std::size_t slot);
+  // the pass's query was begun and ended in the frame being recorded
+  void passTimed(std::size_t slot, TimedPass pass);
+  // the frame recorded into the slot was submitted: its timed passes are pending
   void frameSubmitted(std::size_t slot);
   // the submitted frame was shown; its row is written once its time is known
   void frameShown(std::size_t slot, const FrameLogRow& row);
   // a row that needs no GPU time, such as a session's start and stop
   void append(const FrameLogRow& row);
 
+  // a query of the slot is pending
   bool pending(std::size_t slot) const;
-  // reads the time of the slot's finished frame and writes its row
+  // reads the times of the slot's finished frame and writes its row
   void resolve(nvrhi::IDevice& device, std::size_t slot);
   // every slot, oldest frame first, so that rows stay in frame order
   void resolveAll(nvrhi::IDevice& device, std::uint64_t nextFrameIndex);

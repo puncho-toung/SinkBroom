@@ -1580,6 +1580,14 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     const auto rows = readCsv(logPath);
     REQUIRE(rows.size() >= 10u);
     CHECK(rows[0][0] == "session");
+    // LP2.2b (C16): the frame's GPU time, the passes' and the frame's counts
+    REQUIRE(rows[0].size() == 35u);
+    CHECK(rows[0][6] == "gpu_frame_ms");
+    CHECK(rows[0][18] == "gpu_prepass_ms");
+    CHECK(rows[0][21] == "gpu_blit_ms");
+    CHECK(rows[0][22] == "draws");
+    CHECK(rows[0][31] == "volatile_writes");
+    CHECK(rows[0][34] == "settled");
     auto sessions = std::set<std::string>{};
     auto starts = 0;
     auto stops = 0;
@@ -1587,7 +1595,7 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     auto presentMs = std::vector<double>{};
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 18u);
+      REQUIRE(rows[i].size() == 35u);
       sessions.insert(rows[i][0]);
       if (rows[i][1] == "start")
       {
@@ -1602,6 +1610,8 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
         continue;
       }
       CHECK(rows[i][7] == "fifo");
+      // a frame row has its draws (0 without lit pipelines)
+      CHECK(!rows[i][22].empty());
       generations.insert(rows[i][0] + "/" + rows[i][8]);
       presentMs.push_back(std::stod(rows[i][5]));
     }

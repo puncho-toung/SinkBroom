@@ -42,7 +42,7 @@ FrameLogRow exampleRow()
   row.cpuRecordMs = 0.15349;
   row.acquireMs = 0.0512;
   row.presentMs = 16.2049;
-  row.gpuClearMs = 0.0214;
+  row.gpuFrameMs = 0.0214;
   row.presentMode = "mailbox";
   row.swapchainGeneration = 2;
   row.framesSkipped = 3;
@@ -82,16 +82,20 @@ TEST_CASE("FrameLog")
   {
     CHECK(
       frameLogHeader()
-      == "session,event,frame,cpu_record_ms,acquire_ms,present_ms,gpu_clear_ms,present_"
+      == "session,event,frame,cpu_record_ms,acquire_ms,present_ms,gpu_frame_ms,present_"
          "mode,swapchain_generation,frames_skipped,width,height,vram_used_mb,vram_budget_"
-         "mb,alloc_count,bytes_uploaded,textures_resident,arena_bytes\n");
+         "mb,alloc_count,bytes_uploaded,textures_resident,arena_bytes,gpu_prepass_ms,gpu_"
+         "interactions_ms,gpu_tonemap_ms,gpu_blit_ms,draws,prepass_draws,interaction_"
+         "draws,skipped_draws,pending_pipelines,lights_visible,lights_drawn,lights_"
+         "overflowed,constant_bytes,volatile_writes,volatile_write_budget,push_constant_"
+         "bytes,settled\n");
   }
 
   SECTION("formatFrameLogRow")
   {
     CHECK(
       formatFrameLogRow(exampleRow())
-      == "7,frame,12,0.153,0.051,16.205,0.021,mailbox,2,3,800,600,,,,,,\n");
+      == "7,frame,12,0.153,0.051,16.205,0.021,mailbox,2,3,800,600,,,,,,,,,,,,,,,,,,,,,,,\n");
 
     // LP2.1: the allocations, the frame's uploads, the textures and the arenas
     auto withResources = exampleRow();
@@ -102,34 +106,62 @@ TEST_CASE("FrameLog")
     CHECK(
       formatFrameLogRow(withResources)
       == "7,frame,12,0.153,0.051,16.205,0.021,mailbox,2,3,800,600,,,211,33554432,205,"
-         "134217728\n");
+         "134217728,,,,,,,,,,,,,,,,,\n");
+
+    // LP2.2b: the passes' GPU times, the draws, the lights, the constant buffers' writes
+    // and whether the frame is settled
+    auto withPasses = exampleRow();
+    withPasses.gpuPrepassMs = 0.0123;
+    withPasses.gpuInteractionsMs = 0.2501;
+    withPasses.gpuTonemapMs = 0.0456;
+    withPasses.gpuBlitMs = 0.0077;
+    withPasses.draws = 30;
+    withPasses.prepassDraws = 11;
+    withPasses.interactionDraws = 17;
+    withPasses.skippedDraws = 0;
+    withPasses.pendingPipelines = 0;
+    withPasses.lightsVisible = 2;
+    withPasses.lightsDrawn = 2;
+    withPasses.lightsOverflowed = 0;
+    withPasses.constantBytes = 800;
+    withPasses.volatileWrites = 2;
+    withPasses.volatileWriteBudget = 2730;
+    withPasses.pushConstantBytes = 660;
+    withPasses.settled = true;
+    CHECK(
+      formatFrameLogRow(withPasses)
+      == "7,frame,12,0.153,0.051,16.205,0.021,mailbox,2,3,800,600,,,,,,,0.012,0.250,0."
+         "046,0.008,30,11,17,0,0,2,2,0,800,2,2730,660,1\n");
+    withPasses.settled = false;
+    CHECK(formatFrameLogRow(withPasses).ends_with(",660,0\n"));
 
     // a row without its GPU time has an empty field
     auto row = exampleRow();
-    row.gpuClearMs.reset();
+    row.gpuFrameMs.reset();
     row.acquireMs = 0.0;
     row.presentMs = 0.0;
     row.presentMode = "headless";
     row.swapchainGeneration = 0;
     CHECK(
       formatFrameLogRow(row)
-      == "7,frame,12,0.153,0.000,0.000,,headless,0,3,800,600,,,,,,\n");
+      == "7,frame,12,0.153,0.000,0.000,,headless,0,3,800,600,,,,,,,,,,,,,,,,,,,,,,,\n");
 
     // a session's start and stop carry the VRAM in use, and nothing of a frame
     CHECK(
       formatFrameLogRow(sessionRow(FrameLogEvent::Start))
-      == "7,start,,,,,,,,,,,812.3,6912.0,,,,\n");
+      == "7,start,,,,,,,,,,,812.3,6912.0,,,,,,,,,,,,,,,,,,,,,\n");
     auto stop = sessionRow(FrameLogEvent::Stop);
     stop.vramUsedMb.reset();
     stop.vramBudgetMb.reset();
     stop.allocCount = 9;
-    CHECK(formatFrameLogRow(stop) == "7,stop,,,,,,,,,,,,,9,,,\n");
+    CHECK(formatFrameLogRow(stop) == "7,stop,,,,,,,,,,,,,9,,,,,,,,,,,,,,,,,,,,\n");
 
     // as many fields as the header
     const auto header = fieldCount(frameLogHeader());
-    CHECK(header == 18u);
+    CHECK(header == 35u);
     CHECK(fieldCount(formatFrameLogRow(exampleRow())) == header);
     CHECK(fieldCount(formatFrameLogRow(withResources)) == header);
+    CHECK(fieldCount(formatFrameLogRow(withPasses)) == header);
     CHECK(fieldCount(formatFrameLogRow(sessionRow(FrameLogEvent::Start))) == header);
     CHECK(fieldCount(formatFrameLogRow(stop)) == header);
   }

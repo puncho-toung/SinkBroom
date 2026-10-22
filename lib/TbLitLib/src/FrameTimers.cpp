@@ -19,8 +19,33 @@
 
 #include "FrameTimers.h"
 
+#include <algorithm>
+
 namespace tb::lit
 {
+namespace
+{
+
+// the row's field of a timed pass
+std::optional<double>& rowTime(FrameLogRow& row, const TimedPass pass)
+{
+  switch (pass)
+  {
+  case TimedPass::Prepass:
+    return row.gpuPrepassMs;
+  case TimedPass::Interactions:
+    return row.gpuInteractionsMs;
+  case TimedPass::Tonemap:
+    return row.gpuTonemapMs;
+  case TimedPass::Blit:
+    return row.gpuBlitMs;
+  case TimedPass::Frame:
+    break;
+  }
+  return row.gpuFrameMs;
+}
+
+} // namespace
 
 void FrameTimers::createQueries(nvrhi::IDevice& device, const bool timerQueries)
 {
@@ -28,7 +53,10 @@ void FrameTimers::createQueries(nvrhi::IDevice& device, const bool timerQueries)
   {
     for (auto& slot : m_slots)
     {
-      slot.query = device.createTimerQuery();
+      for (auto& query : slot.queries)
+      {
+        query = device.createTimerQuery();
+      }
     }
   }
 }
@@ -38,19 +66,34 @@ std::optional<std::string> FrameTimers::openLog(const std::filesystem::path& pat
   return m_log.open(path);
 }
 
-nvrhi::ITimerQuery* FrameTimers::query(const std::size_t slot) const
+nvrhi::ITimerQuery* FrameTimers::query(const std::size_t slot, const TimedPass pass) const
 {
-  return m_slots[slot].query.Get();
+  return m_slots[slot].queries[std::size_t(pass)].Get();
+}
+
+void FrameTimers::frameStarted(const std::size_t slot)
+{
+  m_slots[slot].timed = {};
+}
+
+void FrameTimers::passTimed(const std::size_t slot, const TimedPass pass)
+{
+  m_slots[slot].timed[std::size_t(pass)] = true;
 }
 
 void FrameTimers::frameSubmitted(const std::size_t slot)
 {
-  m_slots[slot].pending = bool(m_slots[slot].query);
+  auto& s = m_slots[slot];
+  for (std::size_t i = 0; i < TimedPassCount; ++i)
+  {
+    s.pending[i] = s.timed[i] && s.queries[i];
+  }
+  s.timed = {};
 }
 
 void FrameTimers::frameShown(const std::size_t slot, const FrameLogRow& row)
 {
-  if (m_slots[slot].pending)
+  if (pending(slot))
   {
     m_slots[slot].row = row;
   }
@@ -67,21 +110,32 @@ void FrameTimers::append(const FrameLogRow& row)
 
 bool FrameTimers::pending(const std::size_t slot) const
 {
-  return m_slots[slot].pending;
+  const auto& s = m_slots[slot];
+  return std::ranges::any_of(s.pending, [](const bool p) { return p; });
 }
 
 void FrameTimers::resolve(nvrhi::IDevice& device, const std::size_t slot)
 {
   auto& s = m_slots[slot];
-  if (!s.pending)
+  if (!pending(slot))
   {
     return;
   }
-  const auto seconds = device.getTimerQueryTime(s.query);
-  s.pending = false;
+  for (std::size_t i = 0; i < TimedPassCount; ++i)
+  {
+    if (!s.pending[i])
+    {
+      continue;
+    }
+    const auto seconds = device.getTimerQueryTime(s.queries[i]);
+    s.pending[i] = false;
+    if (s.row)
+    {
+      rowTime(*s.row, TimedPass(i)) = double(seconds) * 1000.0;
+    }
+  }
   if (s.row)
   {
-    s.row->gpuClearMs = double(seconds) * 1000.0;
     m_log.append(*s.row);
     s.row.reset();
   }

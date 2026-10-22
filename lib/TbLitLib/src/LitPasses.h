@@ -83,6 +83,9 @@ struct LitFrameInputs
   std::function<bool()> stopRequested;
   // a warning for the session's log (posted once per session)
   std::function<void(std::string)> warn;
+  // C16 (LP2.2b): the queries the prepass and the interactions are timed with, or null
+  nvrhi::ITimerQuery* prepassTimer = nullptr;
+  nvrhi::ITimerQuery* interactionTimer = nullptr;
 };
 
 // C16's columns of the lit passes, per frame (LP2.2b logs them)
@@ -124,6 +127,9 @@ struct LitFrameStats
   std::string disabledReason;
   // a stop or park came between the passes or the lights
   bool stoppedEarly = false;
+  // C16 (LP2.2b): the passes' timer queries were begun and ended
+  bool prepassTimed = false;
+  bool interactionsTimed = false;
 };
 
 // a recorded draw (setDrawLogForTesting)
@@ -277,6 +283,9 @@ public:
 
 private:
   void rebuildLists(const LitFrameInputs& inputs, const LitView& view);
+  // C16: a pass's timer query, begun and ended around it; endTimer says whether it ran
+  void beginTimer(Frame& frame, nvrhi::ITimerQuery* timer);
+  bool endTimer(Frame& frame, nvrhi::ITimerQuery* timer);
   void recordClears(Frame& frame);
   void recordPrepass(Frame& frame);
   // FillDepthBufferGeneric over surfaces

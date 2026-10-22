@@ -160,7 +160,9 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
     m_stats.stoppedEarly = true;
     return m_stats;
   }
+  beginTimer(frame, inputs.prepassTimer);
   recordPrepass(frame);
+  m_stats.prepassTimed = endTimer(frame, inputs.prepassTimer);
 
   if (inputs.stopRequested && inputs.stopRequested())
   {
@@ -174,9 +176,33 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
                                  | kdl::value_or(nullptr);
   if (interactionTarget == frame.framebuffer)
   {
+    beginTimer(frame, inputs.interactionTimer);
     recordInteractions(frame);
+    m_stats.interactionsTimed = endTimer(frame, inputs.interactionTimer);
   }
   return m_stats;
+}
+
+void LitPasses::beginTimer(Frame& frame, nvrhi::ITimerQuery* timer)
+{
+  if (timer)
+  {
+    frame.inputs->commandList->beginTimerQuery(timer);
+    // nvrhi rule 7: a timer query ends the render pass, so the next draw sets its state
+    // again
+    m_state.valid = false;
+  }
+}
+
+bool LitPasses::endTimer(Frame& frame, nvrhi::ITimerQuery* timer)
+{
+  if (!timer)
+  {
+    return false;
+  }
+  frame.inputs->commandList->endTimerQuery(timer);
+  m_state.valid = false;
+  return true;
 }
 
 void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)

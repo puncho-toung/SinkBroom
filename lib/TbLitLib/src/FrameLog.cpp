@@ -56,6 +56,33 @@ std::string resourceFields(const FrameLogRow& row)
     optionalCount(row.arenaBytes));
 }
 
+// LP2.2b's columns: the passes' GPU times, the draws, the lights, the constant buffers'
+// writes and whether the frame is settled; empty in a start or stop row
+std::string passFields(const FrameLogRow& row)
+{
+  const auto settled =
+    row.settled ? std::string{*row.settled ? "1" : "0"} : std::string{};
+  return fmt::format(
+    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+    optionalField(row.gpuPrepassMs, "{:.3f}"),
+    optionalField(row.gpuInteractionsMs, "{:.3f}"),
+    optionalField(row.gpuTonemapMs, "{:.3f}"),
+    optionalField(row.gpuBlitMs, "{:.3f}"),
+    optionalCount(row.draws),
+    optionalCount(row.prepassDraws),
+    optionalCount(row.interactionDraws),
+    optionalCount(row.skippedDraws),
+    optionalCount(row.pendingPipelines),
+    optionalCount(row.lightsVisible),
+    optionalCount(row.lightsDrawn),
+    optionalCount(row.lightsOverflowed),
+    optionalCount(row.constantBytes),
+    optionalCount(row.volatileWrites),
+    optionalCount(row.volatileWriteBudget),
+    optionalCount(row.pushConstantBytes),
+    settled);
+}
+
 std::string_view eventName(const FrameLogEvent event)
 {
   switch (event)
@@ -74,9 +101,13 @@ std::string_view eventName(const FrameLogEvent event)
 
 std::string_view frameLogHeader()
 {
-  return "session,event,frame,cpu_record_ms,acquire_ms,present_ms,gpu_clear_ms,present_"
+  return "session,event,frame,cpu_record_ms,acquire_ms,present_ms,gpu_frame_ms,present_"
          "mode,swapchain_generation,frames_skipped,width,height,vram_used_mb,vram_budget_"
-         "mb,alloc_count,bytes_uploaded,textures_resident,arena_bytes\n";
+         "mb,alloc_count,bytes_uploaded,textures_resident,arena_bytes,gpu_prepass_ms,gpu_"
+         "interactions_ms,gpu_tonemap_ms,gpu_blit_ms,draws,prepass_draws,interaction_"
+         "draws,skipped_draws,pending_pipelines,lights_visible,lights_drawn,lights_"
+         "overflowed,constant_bytes,volatile_writes,volatile_write_budget,push_constant_"
+         "bytes,settled\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -88,28 +119,29 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   if (row.event != FrameLogEvent::Frame)
   {
     return fmt::format(
-      "{},{},,,,,,,,,,,{},{}\n",
+      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,
       resourceFields(row));
   }
   return fmt::format(
-    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{}\n",
+    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{}\n",
     row.session,
     eventName(row.event),
     row.frameIndex,
     row.cpuRecordMs,
     row.acquireMs,
     row.presentMs,
-    optionalField(row.gpuClearMs, "{:.3f}"),
+    optionalField(row.gpuFrameMs, "{:.3f}"),
     row.presentMode,
     row.swapchainGeneration,
     row.framesSkipped,
     row.width,
     row.height,
     vram,
-    resourceFields(row));
+    resourceFields(row),
+    passFields(row));
 }
 
 std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& path)

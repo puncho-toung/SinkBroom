@@ -837,8 +837,19 @@ void RenderThread::recordTonemap(
   inputs.target = target;
   inputs.targetFramebuffer = targetFramebuffer;
   inputs.hdrDrawn = hdrDrawn;
+  const auto slot = std::size_t(m_frameIndex % FramesInFlight);
+  inputs.tonemapTimer = m_timers.query(slot, TimedPass::Tonemap);
+  inputs.blitTimer = m_timers.query(slot, TimedPass::Blit);
   inputs.stopRequested = [this] { return stopOrParkRequested(); };
-  m_tonemap.record(inputs);
+  const auto stats = m_tonemap.record(inputs);
+  if (stats.tonemapTimed)
+  {
+    m_timers.passTimed(slot, TimedPass::Tonemap);
+  }
+  if (stats.blitTimed)
+  {
+    m_timers.passTimed(slot, TimedPass::Blit);
+  }
   // C28: the LUT's slot keeps the set it made
   eraseChangedSets();
 }
@@ -879,7 +890,18 @@ bool RenderThread::recordLitPasses(
   inputs.warn = [this](std::string message) {
     m_events.post(SessionEvent::Warning, std::move(message));
   };
+  const auto slot = std::size_t(m_frameIndex % FramesInFlight);
+  inputs.prepassTimer = m_timers.query(slot, TimedPass::Prepass);
+  inputs.interactionTimer = m_timers.query(slot, TimedPass::Interactions);
   const auto stats = m_passes.record(inputs);
+  if (stats.prepassTimed)
+  {
+    m_timers.passTimed(slot, TimedPass::Prepass);
+  }
+  if (stats.interactionsTimed)
+  {
+    m_timers.passTimed(slot, TimedPass::Interactions);
+  }
   // C28: the slots asked for by the passes' draws lose no set they made
   eraseChangedSets();
   // D77: what a table publication resolves waits for one (litTableTick)
@@ -1229,7 +1251,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     }
 
     const auto recordStart = FrameClock::now();
-    auto* const timer = m_timers.query(slot);
+    // C16: the slot's queries time the frame and its passes (R4-2.20)
+    m_timers.frameStarted(slot);
+    auto* const timer = m_timers.query(slot, TimedPass::Frame);
     m_frameResources.setFrameTarget(texture);
     m_frameUploadBytes = 0;
     syncChunks();
@@ -1242,6 +1266,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       const auto lock = std::scoped_lock{m_mutex};
       hdrClear = m_hdrClearForTesting;
     }
+
+    // the frame's lit passes' counts (none in the HDR clear test mode)
+    auto litStats = LitFrameStats{};
 
     {
       auto recording = OpenCommandList{device, *m_commandList};
@@ -1277,7 +1304,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       else
       {
         litUnconverged = recordLitPasses(commandList, camera);
-        const auto& litStats = m_passes.lastStats();
+        litStats = m_passes.lastStats();
         hdrDrawn = litStats.prepassDraws + litStats.interactionDraws > 0;
       }
       runAfterPassHooks(commandList);
@@ -1294,6 +1321,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       if (timer)
       {
         commandList.endTimerQuery(timer);
+        m_timers.passTimed(slot, TimedPass::Frame);
       }
       recording.close();
 
@@ -1395,6 +1423,20 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.bytesUploaded = m_frameUploadBytes;
       row.texturesResident = m_images.resident();
       row.arenaBytes = m_arenas.capacityBytes();
+      // C16 (LP2.2b): the lit passes' counts (LitFrameStats) and the tonemap passes'
+      const auto& tonemap = m_tonemap.lastStats();
+      row.draws = litStats.prepassDraws + litStats.interactionDraws + tonemap.draws;
+      row.prepassDraws = litStats.prepassDraws;
+      row.interactionDraws = litStats.interactionDraws;
+      row.skippedDraws = litStats.skippedDraws;
+      row.pendingPipelines = litStats.pendingPipelines + tonemap.pendingPipelines;
+      row.lightsVisible = litStats.lightsVisible;
+      row.lightsDrawn = litStats.lightsDrawn;
+      row.lightsOverflowed = litStats.lightsOverflowed;
+      row.constantBytes = litStats.constantBytes + tonemap.constantBytes;
+      row.volatileWrites = litStats.constantWrites + tonemap.constantWrites;
+      row.volatileWriteBudget = litStats.constantWriteBudget;
+      row.pushConstantBytes = litStats.pushConstantBytes + tonemap.pushConstantBytes;
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
     }

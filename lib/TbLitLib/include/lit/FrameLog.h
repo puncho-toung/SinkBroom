@@ -58,7 +58,9 @@ struct FrameLogRow
   // is where FIFO blocks; both 0 without a swapchain
   double acquireMs = 0.0;
   double presentMs = 0.0;
-  std::optional<double> gpuClearMs;
+  // the frame's GPU time, from the command list's start to its end (LP0's column, which
+  // timed LP0's clear: LP2.2b renamed it)
+  std::optional<double> gpuFrameMs;
   std::string_view presentMode; // a presentModeName literal
   std::uint64_t swapchainGeneration = 0;
   std::uint64_t framesSkipped = 0;
@@ -77,6 +79,34 @@ struct FrameLogRow
   std::optional<std::uint64_t> bytesUploaded;
   std::optional<std::uint64_t> texturesResident;
   std::optional<std::uint64_t> arenaBytes;
+
+  // LP2.2b (C16), frame rows: the GPU time of each pass that ran (the tonemap's is
+  // histogram, exposure and tonemapping; empty for a pass that did not run or whose time
+  // never arrived)
+  std::optional<double> gpuPrepassMs;
+  std::optional<double> gpuInteractionsMs;
+  std::optional<double> gpuTonemapMs;
+  std::optional<double> gpuBlitMs;
+  // draw calls (prepass, interactions, tonemap, blit) and the lit passes' own counts
+  // (LitFrameStats): their draws, the draws skipped (D77, D76) and the pipelines pending
+  std::optional<std::uint64_t> draws;
+  std::optional<std::uint64_t> prepassDraws;
+  std::optional<std::uint64_t> interactionDraws;
+  std::optional<std::uint64_t> skippedDraws;
+  std::optional<std::uint64_t> pendingPipelines;
+  // lights with interactions in the view, drawn, and not drawn for the constant
+  // buffer's frame budget (D76)
+  std::optional<std::uint64_t> lightsVisible;
+  std::optional<std::uint64_t> lightsDrawn;
+  std::optional<std::uint64_t> lightsOverflowed;
+  // D76: the volatile constant buffers' bytes and writes, the writes a frame may make,
+  // and the push-constant bytes
+  std::optional<std::uint64_t> constantBytes;
+  std::optional<std::uint64_t> volatileWrites;
+  std::optional<std::uint64_t> volatileWriteBudget;
+  std::optional<std::uint64_t> pushConstantBytes;
+  // D77: the frame is settled
+  std::optional<bool> settled;
 };
 
 // the CSV header line, ending in a newline
