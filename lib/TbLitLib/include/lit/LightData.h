@@ -41,8 +41,10 @@ constexpr auto DefaultProjectedLightMaterial = "lights/defaultProjectedLight";
  * The light shader R_DeriveLightData uses (RenderWorld_defs.cpp:334-378, A15): the
  * material FindMaterial( texture, false ) finds, or, where that is NULL, the default
  * point or projected light; and its falloff image, or the default's of the light's kind.
- * FindMaterial( texture, false ) is NULL when the name has no decl: the table's entry is
- * implicit (the material service makes implicit materials, the engine does not here), or
+ * A texture key's material was precached with makeDefault before the light spawned
+ * (CacheDictionaryMedia), so it is found even without a decl, as an implicit material
+ * whose falloff is the default's; the "lights/squarelight1" default is NULL when it has
+ * no decl (the table's entry is implicit, as the material service makes every name) or
  * its lookup failed.
  */
 struct LightShader

@@ -139,6 +139,12 @@ struct ParsedLight
   // "bad target info" and the light keeps only its origin and target vectors; its colour
   // is zero, so it lights nothing, and the record derives nothing from it
   bool badTarget = false;
+  // the light's texture key names a material (non-empty, from the map or the entityDef):
+  // the game precached it with FindType( DECL_MATERIAL, texture ) before the light
+  // spawned (Game_local.cpp CacheDictionaryMedia, DeclEntityDef.cpp:146-151), so
+  // FindMaterial( texture, false ) finds it, an implicit default material when it has no
+  // decl; only the "lights/squarelight1" default is looked up without that
+  bool texturePrecached = false;
   // keys Spawn reads that the preview does not act on, as found (health, broken, break,
   // count, modelTarget, mat_demonic, midnight_override): the breakable light and the
   // modelTarget link are the game's

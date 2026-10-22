@@ -99,10 +99,14 @@ LightShader resolveShader(const ParsedLight& light, const MaterialTable* table)
     light.parms.pointLight ? DefaultPointLightMaterial : DefaultProjectedLightMaterial;
 
   // decide which light shader we are going to use; a light with bad target info never
-  // asked FindMaterial, so its shader is the memset's NULL
-  const auto texture = light.badTarget
-                         ? Found{FindState::Null, nullptr}
-                         : findMaterialNoDefault(table, light.parms.texture);
+  // asked FindMaterial, so its shader is the memset's NULL; a texture key's material was
+  // precached with makeDefault, so FindMaterial( texture, false ) finds even an implicit
+  // one (CacheDictionaryMedia); only the lights/squarelight1 default can be NULL
+  // an empty texture is FindType's "_emptyName", which no decl has
+  const auto texture =
+    light.badTarget || light.parms.texture.empty() ? Found{FindState::Null, nullptr}
+    : light.texturePrecached ? findMaterialDefault(table, light.parms.texture)
+                             : findMaterialNoDefault(table, light.parms.texture);
   if (texture.state == FindState::Found)
   {
     shader.material = texture.entry;

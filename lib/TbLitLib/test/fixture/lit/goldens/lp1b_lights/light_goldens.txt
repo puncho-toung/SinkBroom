@@ -1,0 +1,513 @@
+# Expected values of the lit preview's light and view mirrors, from TOOLS/lit-preview/light_goldens.py
+# (an independent script of the engine's formulas at 285ea4d1; see its docstring). Lines:
+#   light <name> / key <key> TAB <value> / expect <field> <values...> / end
+#   view <fov> <width> <height> / expect <field> <values...> / end
+#   camera <px py pz> <dx dy dz> <ux uy uz> / expect <field> <values...> / end
+light point_default
+key origin	64 -32 16
+key light_radius	100 50 25
+expect pointLight 1
+expect parallel 0
+expect badTarget 0
+expect mathType 0
+expect levels 1
+expect warnings 0
+expect origin 64.0 -32.0 16.0
+expect axis 1.0 0 0 0 1.0 0 0 0 1.0
+expect target 0 0 0
+expect right 0 0 0
+expect up 0 0 0
+expect start 0 0 0
+expect end 0 0 0
+expect lightRadius 100.0 50.0 25.0
+expect lightCenter 0 0 0
+expect shaderParms 1.0 1.0 1.0 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/squarelight1
+expect zScale 1.0
+expect lightProject 0.004999999888241291 0 0 0.18000000715255737 0 0.009999999776482582 0 0.8199999928474426 0 0 0 1.0 0 0 0.019999999552965164 0.18000000715255737
+expect globalLightOrigin 64.0 -32.0 16.0
+expect baseLightProject 0.004999999888241291 0 0 0.18000000715255737 0 0.009999999776482582 0 0.8199999928474426 0 0 0.019999999552965164 0.18000000715255737 0 0 0 1.0
+expect inverseBaseLightProject 200.0 0 0 -36.000003814697266 0 100.0 0 -82.0 0 0 50.0 -9.000000953674316 0 0 0 1.0
+expect globalLightBounds -36.000003814697266 -82.0 -9.000000953674316 164.0 18.000001907348633 41.0
+end
+light point_light_key
+key origin	0 0 0
+key light	150
+expect pointLight 1
+expect parallel 0
+expect badTarget 0
+expect mathType 0
+expect levels 1
+expect warnings 0
+expect origin 0 0 0
+expect axis 1.0 0 0 0 1.0 0 0 0 1.0
+expect target 0 0 0
+expect right 0 0 0
+expect up 0 0 0
+expect start 0 0 0
+expect end 0 0 0
+expect lightRadius 150.0 150.0 150.0
+expect lightCenter 0 0 0
+expect shaderParms 1.0 1.0 1.0 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/squarelight1
+expect zScale 1.0
+expect lightProject 0.0033333334140479565 0 0 0.5 0 0.0033333334140479565 0 0.5 0 0 0 1.0 0 0 0.0033333334140479565 0.5
+expect globalLightOrigin 0 0 0
+expect baseLightProject 0.0033333334140479565 0 0 0.5 0 0.0033333334140479565 0 0.5 0 0 0.0033333334140479565 0.5 0 0 0 1.0
+expect inverseBaseLightProject 300.0 0 0 -150.0 0 300.0 0 -150.0 0 0 300.0 -150.0 0 0 0 1.0
+expect globalLightBounds -150.0 -150.0 -150.0 150.0 150.0 150.0
+end
+light spot_start_end
+key origin	-128 0 64
+key light_target	256 0 0
+key light_up	0 0 32
+key light_right	0 -32 0
+key light_start	16 0 0
+key light_end	200 0 0
+expect pointLight 0
+expect parallel 0
+expect badTarget 0
+expect mathType 1
+expect levels 1
+expect warnings 0
+expect origin -128.0 0 64.0
+expect axis 1.0 0 0 0 1.0 0 0 0 1.0
+expect target 256.0 0 0
+expect right 0 -32.0 0
+expect up 0 0 32.0
+expect start 16.0 0 0
+expect end 200.0 0 0
+expect lightRadius 0 0 0
+expect lightCenter 0 0 0
+expect shaderParms 1.0 1.0 1.0 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/squarelight1
+expect zScale 0.004629629664123058
+expect lightProject 0.5 -4.0 0 64.0 0.5 0 -4.0 320.0 1.0 0 0 128.0 0.005000000353902578 0 0 0.5600000619888306
+expect globalLightOrigin -128.0 0 64.0
+expect baseLightProject 0.5 -4.0 0 64.0 0.5 0 -4.0 320.0 1.0800000429153442 0 0 120.96000671386719 1.0 0 0 128.0
+expect inverseBaseLightProject 0 0 7.407407283782959 -7.0 -0.25 0 0 0.125 0 -0.25 -3.7037036418914795 4.125 0 0 -0.05787036940455437 0.0625
+expect globalLightBounds -112.0 -26.99998664855957 37.00001525878906 87.99989318847656 26.99998664855957 90.99998474121094
+end
+light spot_rotated
+key origin	10 20 30
+key light_target	0 0 -100
+key light_up	0 50 0
+key light_right	-40 0 0
+key angle	30
+expect pointLight 0
+expect parallel 0
+expect badTarget 0
+expect mathType 1
+expect levels 1
+expect warnings 0
+expect origin 10.0 20.0 30.0
+expect axis 0.8660253882408142 0.5 -0 -0.5 0.8660253882408142 0 0 0 1.0
+expect target 0 0 -100.0
+expect right -40.0 0 0
+expect up 0 50.0 0
+expect start 0 0 0
+expect end 0 0 -100.0
+expect lightRadius 0 0 0
+expect lightCenter 0 0 0
+expect shaderParms 1.0 1.0 1.0 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/squarelight1
+expect zScale 0.009259259328246117
+expect lightProject -1.0825316905975342 -0.625 -0.5 38.3253173828125 0.5 -0.8660253882408142 -0.5 27.320507049560547 0 0 -1.0 30.0 0 0 -0.010000000707805157 0.2199999988079071
+expect globalLightOrigin 10.0 20.0 30.0
+expect baseLightProject -1.0825318098068237 -0.625 -0.5 38.3253173828125 0.5 -0.8660253882408142 -0.5 27.32050895690918 0 0 -1.0800000429153442 23.760000228881836 0 0 -1.0 30.0
+expect inverseBaseLightProject -0.6928203105926514 0.5 -1.1574074029922485 1.3464101552963257 -0.4000000059604645 -0.8660253882408142 -2.314814805984497 3.1330127716064453 0 0 -3.472222089767456 2.75 0 0 -0.11574073880910873 0.125
+expect globalLightBounds -54.41226577758789 -48.36533737182617 -77.99994659423828 74.41226196289062 88.3653335571289 22.0
+end
+light parallel_center
+key origin	-192 -64 48
+key light_radius	32 32 32
+key light_center	0 0 64
+key parallel	1
+expect pointLight 1
+expect parallel 1
+expect badTarget 0
+expect mathType 2
+expect levels 1
+expect warnings 0
+expect origin -192.0 -64.0 48.0
+expect axis 1.0 0 0 0 1.0 0 0 0 1.0
+expect target 0 0 0
+expect right 0 0 0
+expect up 0 0 0
+expect start 0 0 0
+expect end 0 0 0
+expect lightRadius 32.0 32.0 32.0
+expect lightCenter 0 0 64.0
+expect shaderParms 1.0 1.0 1.0 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/squarelight1
+expect zScale 1.0
+expect lightProject 0.015625 0 0 3.5 0 0.015625 0 1.5 0 0 0 1.0 0 0 0.015625 -0.25
+expect globalLightOrigin -192.0 -64.0 100048.0
+expect baseLightProject 0.015625 0 0 3.5 0 0.015625 0 1.5 0 0 0.015625 -0.25 0 0 0 1.0
+expect inverseBaseLightProject 64.0 0 0 -224.0 0 64.0 0 -96.0 0 0 64.0 16.0 0 0 0 1.0
+expect globalLightBounds -224.0 -96.0 16.0 -160.0 -32.0 80.0
+end
+light parallel_up
+key origin	0 0 0
+key light_radius	100 100 100
+key parallel	1
+expect pointLight 1
+expect parallel 1
+expect badTarget 0
+expect mathType 2
+expect levels 1
+expect warnings 0
+expect origin 0 0 0
+expect axis 1.0 0 0 0 1.0 0 0 0 1.0
+expect target 0 0 0
+expect right 0 0 0
+expect up 0 0 0
+expect start 0 0 0
+expect end 0 0 0
+expect lightRadius 100.0 100.0 100.0
+expect lightCenter 0 0 0
+expect shaderParms 1.0 1.0 1.0 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/squarelight1
+expect zScale 1.0
+expect lightProject 0.004999999888241291 0 0 0.5 0 0.004999999888241291 0 0.5 0 0 0 1.0 0 0 0.004999999888241291 0.5
+expect globalLightOrigin 0 0 100000.0
+expect baseLightProject 0.004999999888241291 0 0 0.5 0 0.004999999888241291 0 0.5 0 0 0.004999999888241291 0.5 0 0 0 1.0
+expect inverseBaseLightProject 200.0 0 0 -100.0 0 200.0 0 -100.0 0 0 200.0 -100.0 0 0 0 1.0
+expect globalLightBounds -100.0 -100.0 -100.0 100.0 100.0 100.0
+end
+light start_off
+key origin	1 2 3
+key _color	0.5 1 -1
+key start_off	1
+expect pointLight 1
+expect parallel 0
+expect badTarget 0
+expect mathType 0
+expect levels 1
+expect warnings 0
+expect origin 1.0 2.0 3.0
+expect axis 1.0 0 0 0 1.0 0 0 0 1.0
+expect target 0 0 0
+expect right 0 0 0
+expect up 0 0 0
+expect start 0 0 0
+expect end 0 0 0
+expect lightRadius 300.0 300.0 300.0
+expect lightCenter 0 0 0
+expect shaderParms 0 0 -0 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/squarelight1
+expect zScale 1.0
+expect lightProject 0.0016666667070239782 0 0 0.4983333349227905 0 0.0016666667070239782 0 0.49666666984558105 0 0 0 1.0 0 0 0.0016666667070239782 0.4950000047683716
+expect globalLightOrigin 1.0 2.0 3.0
+expect baseLightProject 0.0016666667070239782 0 0 0.4983333349227905 0 0.0016666667070239782 0 0.49666666984558105 0 0 0.0016666667070239782 0.4950000047683716 0 0 0 1.0
+expect inverseBaseLightProject 600.0 0 0 -299.0 0 600.0 0 -298.0 0 0 600.0 -297.0 0 0 0 1.0
+expect globalLightBounds -299.0 -298.0 -297.0 301.0 302.0 303.0
+end
+light partial_target
+key origin	1 2 3
+key light_target	0 0 -64
+expect pointLight 0
+expect parallel 0
+expect badTarget 1
+expect mathType 0
+expect levels 1
+expect warnings 1
+expect origin 1.0 2.0 3.0
+expect axis 0 0 0 0 0 0 0 0 0
+expect target 0 0 -64.0
+expect right 0 0 0
+expect up 0 0 0
+expect start 0 0 0
+expect end 0 0 -64.0
+expect lightRadius 0 0 0
+expect lightCenter 0 0 0
+expect shaderParms 0 0 0 0 0 0 0 0 0 0 0 0
+expect shader lights/defaultprojectedlight
+end
+light missing_texture
+key origin	0 0 0
+key texture	lights/lp1b_missing
+expect pointLight 1
+expect parallel 0
+expect badTarget 0
+expect mathType 0
+expect levels 1
+expect warnings 0
+expect origin 0 0 0
+expect axis 1.0 0 0 0 1.0 0 0 0 1.0
+expect target 0 0 0
+expect right 0 0 0
+expect up 0 0 0
+expect start 0 0 0
+expect end 0 0 0
+expect lightRadius 300.0 300.0 300.0
+expect lightCenter 0 0 0
+expect shaderParms 1.0 1.0 1.0 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/lp1b_missing
+expect zScale 1.0
+expect lightProject 0.0016666667070239782 0 0 0.5 0 0.0016666667070239782 0 0.5 0 0 0 1.0 0 0 0.0016666667070239782 0.5
+expect globalLightOrigin 0 0 0
+expect baseLightProject 0.0016666667070239782 0 0 0.5 0 0.0016666667070239782 0 0.5 0 0 0.0016666667070239782 0.5 0 0 0 1.0
+expect inverseBaseLightProject 600.0 0 0 -300.0 0 600.0 0 -300.0 0 0 600.0 -300.0 0 0 0 1.0
+expect globalLightBounds -300.0 -300.0 -300.0 300.0 300.0 300.0
+end
+light levels_zero
+key origin	0 0 0
+key levels	0
+expect pointLight 1
+expect parallel 0
+expect badTarget 0
+expect mathType 0
+expect levels 0
+expect warnings 1
+expect origin 0 0 0
+expect axis 1.0 0 0 0 1.0 0 0 0 1.0
+expect target 0 0 0
+expect right 0 0 0
+expect up 0 0 0
+expect start 0 0 0
+expect end 0 0 0
+expect lightRadius 300.0 300.0 300.0
+expect lightCenter 0 0 0
+expect shaderParms 1.0 1.0 1.0 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/squarelight1
+expect zScale 1.0
+expect lightProject 0.0016666667070239782 0 0 0.5 0 0.0016666667070239782 0 0.5 0 0 0 1.0 0 0 0.0016666667070239782 0.5
+expect globalLightOrigin 0 0 0
+expect baseLightProject 0.0016666667070239782 0 0 0.5 0 0.0016666667070239782 0 0.5 0 0 0.0016666667070239782 0.5 0 0 0 1.0
+expect inverseBaseLightProject 600.0 0 0 -300.0 0 600.0 0 -300.0 0 0 600.0 -300.0 0 0 0 1.0
+expect globalLightBounds -300.0 -300.0 -300.0 300.0 300.0 300.0
+end
+light rotation
+key origin	5 5 5
+key light_radius	10 20 30
+key rotation	0 1 0 -1 0 0 0 0 1
+key angles	0 45 0
+expect pointLight 1
+expect parallel 0
+expect badTarget 0
+expect mathType 0
+expect levels 1
+expect warnings 0
+expect origin 5.0 5.0 5.0
+expect axis 0 1.0 0 -1.0 0 0 0 0 1.0
+expect target 0 0 0
+expect right 0 0 0
+expect up 0 0 0
+expect start 0 0 0
+expect end 0 0 0
+expect lightRadius 10.0 20.0 30.0
+expect lightCenter 0 0 0
+expect shaderParms 1.0 1.0 1.0 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/squarelight1
+expect zScale 1.0
+expect lightProject 0 0.05000000074505806 0 0.25 -0.02500000037252903 0 0 0.625 0 0 0 1.0 0 0 0.01666666753590107 0.4166666567325592
+expect globalLightOrigin 5.0 5.0 5.0
+expect baseLightProject 0 0.05000000074505806 0 0.25 -0.02500000037252903 0 0 0.625 0 0 0.01666666753590107 0.4166666567325592 0 0 0 1.0
+expect inverseBaseLightProject 0 -40.0 0 25.0 20.0 0 0 -5.0 0 0 59.999996185302734 -24.999998092651367 0 0 0 1.0
+expect globalLightBounds -15.0 -5.0 -24.999998092651367 25.0 15.0 35.0
+end
+light angles
+key origin	5 5 5
+key light_radius	10 20 30
+key angles	10 20 30
+expect pointLight 1
+expect parallel 0
+expect badTarget 0
+expect mathType 0
+expect levels 1
+expect warnings 0
+expect origin 5.0 5.0 5.0
+expect axis 0.9254165291786194 0.33682405948638916 -0.1736481785774231 -0.21461014449596405 0.8434932231903076 0.49240386486053467 0.31232452392578125 -0.41841205954551697 0.8528684973716736
+expect target 0 0 0
+expect right 0 0 0
+expect up 0 0 0
+expect start 0 0 0
+expect end 0 0 0
+expect lightRadius 10.0 20.0 30.0
+expect lightCenter 0 0 0
+expect shaderParms 1.0 1.0 1.0 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/squarelight1
+expect zScale 1.0
+expect lightProject 0.04627082869410515 0.016841202974319458 -0.008682409301400185 0.22785188257694244 -0.005365253891795874 0.02108733169734478 0.012310096994042397 0.35983914136886597 0 0 0 1.0 0.00520540913566947 -0.006973534822463989 0.014214475639164448 0.43776825070381165
+expect globalLightOrigin 5.0 5.0 5.0
+expect baseLightProject 0.04627083241939545 0.016841204836964607 -0.00868240837007761 0.22785185277462006 -0.005365254357457161 0.02108733355998993 0.012310097925364971 0.3598391115665436 0.0052054100669920444 -0.006973534822463989 0.014214476570487022 0.43776825070381165 0 0 0 1.0
+expect inverseBaseLightProject 18.508329391479492 -8.584405899047852 18.739469528198242 -9.331697463989258 6.736481189727783 33.73972702026367 -25.10472297668457 -2.685743570327759 -3.472963571548462 19.69615364074707 51.1721076965332 -28.697649002075195 0 0 0 1.0
+expect globalLightBounds -17.91610336303711 -27.79046630859375 -32.17061233520508 27.91610336303711 37.79046630859375 42.17061233520508
+end
+light angle
+key origin	5 5 5
+key light_radius	10 20 30
+key angle	-45
+expect pointLight 1
+expect parallel 0
+expect badTarget 0
+expect mathType 0
+expect levels 1
+expect warnings 0
+expect origin 5.0 5.0 5.0
+expect axis 0.7071066498756409 -0.70710688829422 -0 0.70710688829422 0.7071066498756409 0 0 0 1.0
+expect target 0 0 0
+expect right 0 0 0
+expect up 0 0 0
+expect start 0 0 0
+expect end 0 0 0
+expect lightRadius 10.0 20.0 30.0
+expect lightCenter 0 0 0
+expect shaderParms 1.0 1.0 1.0 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/squarelight1
+expect zScale 1.0
+expect lightProject 0.0353553332388401 -0.035355344414711 0 0.5000000596046448 0.0176776722073555 0.01767766661942005 0 0.3232233226299286 0 0 0 1.0 0 0 0.01666666753590107 0.4166666567325592
+expect globalLightOrigin 5.0 5.0 5.0
+expect baseLightProject 0.0353553332388401 -0.035355344414711 0 0.5000000596046448 0.0176776722073555 0.01767766661942005 0 0.3232232928276062 0 0 0.01666666753590107 0.4166666567325592 0 0 0 1.0
+expect inverseBaseLightProject 14.142132759094238 28.28427505493164 0 -16.21320343017578 -14.14213752746582 28.284265518188477 0 -2.071063995361328 0 0 59.999996185302734 -24.999998092651367 0 0 0 1.0
+expect globalLightBounds -16.21320343017578 -16.21320152282715 -24.999998092651367 26.21320343017578 26.21320152282715 35.0
+end
+light light_center
+key origin	200 -64 32
+key light_radius	16 16 16
+key light_center	0 0 64
+key angle	90
+expect pointLight 1
+expect parallel 0
+expect badTarget 0
+expect mathType 0
+expect levels 1
+expect warnings 0
+expect origin 200.0 -64.0 32.0
+expect axis 0 1.0 0 -1.0 0 0 0 0 1.0
+expect target 0 0 0
+expect right 0 0 0
+expect up 0 0 0
+expect start 0 0 0
+expect end 0 0 0
+expect lightRadius 16.0 16.0 16.0
+expect lightCenter 0 0 64.0
+expect shaderParms 1.0 1.0 1.0 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/squarelight1
+expect zScale 1.0
+expect lightProject 0 0.03125 0 2.5 -0.03125 0 0 6.75 0 0 0 1.0 0 0 0.03125 -0.5
+expect globalLightOrigin 200.0 -64.0 96.0
+expect baseLightProject 0 0.03125 0 2.5 -0.03125 0 0 6.75 0 0 0.03125 -0.5 0 0 0 1.0
+expect inverseBaseLightProject 0 -32.0 0 216.0 32.0 0 0 -80.0 0 0 32.0 16.0 0 0 0 1.0
+expect globalLightBounds 184.0 -80.0 16.0 216.0 -48.0 48.0
+end
+light radius_style
+key origin	0 0 0
+key light_radius	100 100 100
+key style	1
+expect pointLight 1
+expect parallel 0
+expect badTarget 0
+expect mathType 0
+expect levels 1
+expect warnings 0
+expect origin 0 0 0
+expect axis 1.0 0 0 0 1.0 0 0 0 1.0
+expect target 0 0 0
+expect right 0 0 0
+expect up 0 0 0
+expect start 0 0 0
+expect end 0 0 0
+expect lightRadius 85.71479797363281 85.71479797363281 85.71479797363281
+expect lightCenter 0 0 0
+expect shaderParms 1.0 1.0 1.0 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/squarelight1
+expect zScale 1.0
+expect lightProject 0.005833298433572054 0 0 0.5 0 0.005833298433572054 0 0.5 0 0 0 1.0 0 0 0.005833298433572054 0.5
+expect globalLightOrigin 0 0 0
+expect baseLightProject 0.005833298433572054 0 0 0.5 0 0.005833298433572054 0 0.5 0 0 0.005833298433572054 0.5 0 0 0 1.0
+expect inverseBaseLightProject 171.42959594726562 0 0 -85.71479797363281 0 171.42959594726562 0 -85.71479797363281 0 0 171.42959594726562 -85.71479797363281 0 0 0 1.0
+expect globalLightBounds -85.71479797363281 -85.71479797363281 -85.71479797363281 85.71479797363281 85.71479797363281 85.71479797363281
+end
+light math_style
+key origin	0 0 0
+key math_enabled	1
+key math_style	4
+key _color	0.5 0.5 0.5
+expect pointLight 1
+expect parallel 0
+expect badTarget 0
+expect mathType 0
+expect levels 1
+expect warnings 0
+expect origin 0 0 0
+expect axis 1.0 0 0 0 1.0 0 0 0 1.0
+expect target 0 0 0
+expect right 0 0 0
+expect up 0 0 0
+expect start 0 0 0
+expect end 0 0 0
+expect lightRadius 300.0 300.0 300.0
+expect lightCenter 0 0 0
+expect shaderParms 0.5 0.5 0.5 1.0 -0 0 0 0 0 0 0 0
+expect shader lights/squarelight1
+expect zScale 1.0
+expect lightProject 0.0016666667070239782 0 0 0.5 0 0.0016666667070239782 0 0.5 0 0 0 1.0 0 0 0.0016666667070239782 0.5
+expect globalLightOrigin 0 0 0
+expect baseLightProject 0.0016666667070239782 0 0 0.5 0 0.0016666667070239782 0 0.5 0 0 0.0016666667070239782 0.5 0 0 0 1.0
+expect inverseBaseLightProject 600.0 0 0 -300.0 0 600.0 0 -300.0 0 0 600.0 -300.0 0 0 0 1.0
+expect globalLightBounds -300.0 -300.0 -300.0 300.0 300.0 300.0
+end
+view 60.0 1920 1080
+expect gFov 75.17817687988281
+expect fovX 75.17817687988281
+expect fovY 46.826446533203125
+expect projection 1.2990381717681885 0 0 0 0 2.309401273727417 0 0 -0 -0 -0.9990000128746033 -1.0 0 0 -3.0 0
+end
+view 60.0 1024 768
+expect gFov 75.17817687988281
+expect fovX 59.99999237060547
+expect fovY 46.826446533203125
+expect projection 1.7320510149002075 0 0 0 0 2.309401273727417 0 0 -0 -0 -0.9990000128746033 -1.0 0 0 -3.0 0
+end
+view 60.0 720 720
+expect gFov 75.17817687988281
+expect fovX 75.17817687988281
+expect fovY 75.17817687988281
+expect projection 1.2990381717681885 0 0 0 0 1.2990381717681885 0 0 -0 -0 -0.9990000128746033 -1.0 0 0 -3.0 0
+end
+view 90.0 1920 1080
+expect gFov 106.26020050048828
+expect fovX 106.26018524169922
+expect fovY 73.73978424072266
+expect projection 0.7500001788139343 0 0 0 0 1.3333336114883423 0 0 -0 -0 -0.9990000128746033 -1.0 0 0 -3.0 0
+end
+view 90.0 1024 768
+expect gFov 106.26020050048828
+expect fovX 89.99998474121094
+expect fovY 73.73978424072266
+expect projection 1.0000003576278687 0 0 0 0 1.3333336114883423 0 0 -0 -0 -0.9990000128746033 -1.0 0 0 -3.0 0
+end
+view 90.0 720 720
+expect gFov 106.26020050048828
+expect fovX 106.26020050048828
+expect fovY 106.26020050048828
+expect projection 0.7500001192092896 0 0 0 0 0.7500001192092896 0 0 -0 -0 -0.9990000128746033 -1.0 0 0 -3.0 0
+end
+view 110.0 1920 1080
+expect gFov 124.5870590209961
+expect fovX 124.5870590209961
+expect fovY 93.93290710449219
+expect projection 0.5251557230949402 0 0 0 0 0.9336103200912476 0 0 -0 -0 -0.9990000128746033 -1.0 0 0 -3.0 0
+end
+view 110.0 1024 768
+expect gFov 124.5870590209961
+expect fovX 109.9999771118164
+expect fovY 93.93290710449219
+expect projection 0.7002077102661133 0 0 0 0 0.9336103200912476 0 0 -0 -0 -0.9990000128746033 -1.0 0 0 -3.0 0
+end
+view 110.0 720 720
+expect gFov 124.5870590209961
+expect fovX 124.5870590209961
+expect fovY 124.5870590209961
+expect projection 0.5251557230949402 0 0 0 0 0.5251557230949402 0 0 -0 -0 -0.9990000128746033 -1.0 0 0 -3.0 0
+end
+camera 10.0 20.0 30.0 0 1.0 0 0 0 1.0
+expect axis 0 1.0 0 -1.0 0 0 0 0 1.0
+expect modelView 1.0 0 0 0 0 0 -1.0 0 0 1.0 0 0 -10.0 -30.0 20.0 1.0
+end
+camera -312.5 77.25 140.0 0.6000000238418579 0.6399999856948853 -0.47999998927116394 0.32829999923706055 0.35019999742507935 0.8773000240325928
+expect axis 0.6000000238418579 0.6399999856948853 -0.47999998927116394 -0.7295680046081543 0.6839640736579895 -8.016824722290039e-06 0.32829999923706055 0.35019999742507935 0.8773000240325928
+expect modelView 0.7295680046081543 0.32829999923706055 -0.6000000238418579 0 -0.6839640736579895 0.35019999742507935 -0.6399999856948853 0 8.016824722290039e-06 0.8773000240325928 0.47999998927116394 0 280.8251037597656 -47.28120422363281 -205.25999450683594 1.0
+end

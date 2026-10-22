@@ -204,3 +204,62 @@ patchDef3
 ( -112 -48 48 ) ( -112 -47 48 ) ( -111 -48 48 ) lp1b/crate [ 1 0 0 4 ] [ 0 -1 0 2 ] 0 0.25 0.25
 }
 }
+// entity 5
+{
+"classname" "light"
+"name" "lp1b_spot_through"
+"origin" "-128 0 64"
+"light_target" "256 0 0"
+"light_up" "0 0 32"
+"light_right" "0 -32 0"
+}
+// entity 6
+{
+"classname" "light"
+"name" "lp1b_small"
+"origin" "192 64 64"
+"light_radius" "24 24 24"
+}
+// entity 7
+{
+"classname" "light"
+"name" "lp1b_missing_texture"
+"origin" "-192 64 64"
+"light_radius" "32 32 32"
+"texture" "lights/lp1b_missing"
+}
+// entity 8
+{
+"classname" "light"
+"name" "lp1b_parallel"
+"origin" "-192 -64 48"
+"light_radius" "32 32 32"
+"light_center" "0 0 64"
+"parallel" "1"
+}
+// entity 9
+{
+"classname" "light"
+"name" "lp1b_rotated"
+"origin" "24 64 48"
+"light_radius" "8 64 8"
+"angle" "90"
+}
+// entity 10
+{
+"classname" "light"
+"name" "lp1b_spot_down"
+"origin" "-192 -64 120"
+"light_target" "0 0 -100"
+"light_up" "0 32 0"
+"light_right" "32 0 0"
+"texture" "lights/lp1b_missing"
+}
+// entity 11
+{
+"classname" "light"
+"name" "lp1b_center"
+"origin" "200 -64 32"
+"light_radius" "16 16 16"
+"light_center" "0 0 64"
+}

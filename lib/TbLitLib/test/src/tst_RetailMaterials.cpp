@@ -30,11 +30,16 @@
 // - The goldens assert the engine's implicit decls, its print output, its parse warnings
 //   and its image keys for every captured decl, and the editor images against the
 //   engine's own export, base/_bl/materials.json.
+// - The light sweep (LP1b.3) parses every light* entityDef through the light mirror and
+//   allows only the warnings the engine would print too.
 
 #include "LitTestUtils.h"
 #include "TestEnvironment.h"
+#include "lit/EntityState.h"
 #include "lit/GameDeclSource.h"
 #include "lit/GameFile.h"
+#include "lit/LightData.h"
+#include "lit/LightParse.h"
 #include "lit/MaterialDecls.h"
 #include "lit/MaterialService.h"
 
@@ -57,6 +62,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -1070,6 +1076,125 @@ TEST_CASE("Retail materials: the mikktspace keyword (Q18)", "[.][retail]")
     withKeyword.empty() ? "" : " in " + fmt::format("{}", fmt::join(withKeyword, ", ")));
   CHECK(files > 900);
   CHECK(occurrences == 0);
+}
+
+TEST_CASE(
+  "Retail materials: the light entityDefs through the light mirror", "[.][retail]")
+{
+  const auto gamePath = retailGamePath();
+  if (!gamePath)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the sweep needs the game folder");
+  }
+
+  // LP1b.3: every retail entityDef named light* parses through the light mirror (its
+  // merged keys as a light's spawn args, no map keys) with no warning but those the
+  // engine would print too: bad target info (gameLocal.Printf), levels <= 0
+  // (gameLocal.Error), an unknown math_type (idLib::Warning), an inverse that fails
+  // (idLib::Warning)
+  auto source = GameDeclSource{*gamePath};
+  auto decls = MaterialDecls{source};
+  source.closeFiles();
+  REQUIRE(decls.constructionError().empty());
+  decls.takeMessages();
+
+  const auto engineWarns = [](const std::string& warning) {
+    return warning.find("has bad target info") != std::string::npos
+           || warning.rfind("Invalid light level", 0) == 0
+           || warning.rfind("math_type '", 0) == 0
+           || warning.find("invert failed") != std::string::npos;
+  };
+
+  auto parsed = 0;
+  auto idLights = 0;
+  auto listed = std::vector<std::string>{};
+  auto unexpected = std::vector<std::string>{};
+  for (const auto& name : decls.declNames("entityDef"))
+  {
+    auto lower = name;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](const unsigned char c) {
+      return char(std::tolower(c));
+    });
+    if (lower.rfind("light", 0) != 0)
+    {
+      continue;
+    }
+    auto def = decls.entityDef(name);
+    REQUIRE(def);
+    const auto& keys = (*def.value)->keys;
+    const auto light = parseLight(mergeSpawnArgs({{"classname", name}}, &keys));
+    const auto derived = deriveLight(light, nullptr, nullptr);
+    ++parsed;
+    const auto* spawnclass = findKey(keys, "spawnclass");
+    if (spawnclass && *spawnclass == "idLight")
+    {
+      ++idLights;
+    }
+    for (const auto* warnings : {&light.warnings, &derived.warnings})
+    {
+      for (const auto& warning : *warnings)
+      {
+        listed.push_back(fmt::format("{}: {}", name, warning));
+        if (!engineWarns(warning))
+        {
+          unexpected.push_back(listed.back());
+        }
+      }
+    }
+    if (name == "light")
+    {
+      // the fixture's light goldens merge no entityDef (tst_LightData.cpp): the retail
+      // light def sets none of the keys the parse and the derivation read, or sets it to
+      // the engine's default
+      const auto defaults =
+        std::map<std::string, std::string>{{"levels", "1"}, {"start_off", "0"}};
+      for (const auto* key :
+           {"light_origin",   "origin",    "light_target", "light_up",     "light_right",
+            "light_start",    "light_end", "light_center", "light_radius", "light",
+            "light_rotation", "rotation",  "light_angles", "angles",       "angle",
+            "_color",         "texture",   "noshadows",    "parallel",     "style",
+            "num_styles",     "levels",    "start_off",    "math_enabled"})
+      {
+        CAPTURE(key);
+        const auto* value = findKey(keys, key);
+        if (const auto d = defaults.find(key); d != defaults.end() && value)
+        {
+          CHECK(*value == d->second);
+        }
+        else
+        {
+          CHECK_FALSE(value);
+        }
+      }
+      std::cout << fmt::format(
+        "entityDef light: {}\n",
+        fmt::join(
+          [&] {
+            auto texts = std::vector<std::string>{};
+            for (const auto& [k, v] : keys)
+            {
+              // the editor's keys say nothing the game reads
+              if (k.rfind("editor_", 0) != 0)
+              {
+                texts.push_back(fmt::format("{} = {}", k, v));
+              }
+            }
+            return texts;
+          }(),
+          "; "));
+    }
+  }
+  decls.takeMessages();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+
+  std::cout << fmt::format(
+    "light entityDefs: {} named light*, {} of them spawnclass idLight; {} warnings{}\n",
+    parsed,
+    idLights,
+    listed.size(),
+    listed.empty() ? "" : ":\n  " + fmt::format("{}", fmt::join(listed, "\n  ")));
+  CHECK(parsed > 0);
+  CHECK(unexpected.empty());
 }
 
 } // namespace tb::lit

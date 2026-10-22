@@ -1,5 +1,13 @@
 # The engine's listRenderLightDefs after map, captured by TOOLS/lit-preview/capture_fixtures.py for the LP1b goldens (D60).
 # engine commit 285ea4d18a0aaedf46b0803ea656e4850eba5a01 (the exe: RBDOOM 3 BFG 1.6.0.1405 win-x64 Oct 18 2026 19:55:35)
-# captured 2026-10-21 19:25 in the sandbox (fs_game tb_capture); engine exited with 0 after 20 s
+# captured 2026-10-21 22:42 in the sandbox (fs_game tb_capture); engine exited with 0 after 23 s
+# one line per lightDef, in the order the map's lights spawned
    0:   6 intr  2 refs lights/squarelight1
-1 lightDefs, 6 interactions, 2 areaRefs
+   1:   6 intr  2 refs lights/squarelight1
+   2:   3 intr  1 refs lights/squarelight1
+   3:   4 intr  1 refs lights/lp1b_missing
+   4:   4 intr  1 refs lights/squarelight1
+   5:   6 intr  2 refs lights/squarelight1
+   6:   4 intr  1 refs lights/lp1b_missing
+   7:   3 intr  1 refs lights/squarelight1
+8 lightDefs, 36 interactions, 11 areaRefs

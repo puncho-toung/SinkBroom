@@ -197,21 +197,38 @@ TEST_CASE("LightData: the light shader and its falloff (A15)")
     REQUIRE(derived.shader.falloffImage);
   }
 
-  SECTION("a texture without a decl: FindMaterial( texture, false ) is NULL")
+  SECTION("a texture key without a decl: precached, an implicit material")
   {
-    const auto point =
-      deriveLight(parseLight({{"texture", "lights/lp1b_missing"}}), table.get(), nullptr);
-    CHECK(point.shader.defaultLight);
-    CHECK(point.shader.name == "lights/defaultpointlight");
-    const auto spot = deriveLight(
-      parseLight(
-        {{"texture", "lights/lp1b_missing"},
-         {"light_target", "0 0 -64"},
-         {"light_up", "0 32 0"},
-         {"light_right", "32 0 0"}}),
-      table.get(),
-      nullptr);
-    CHECK(spot.shader.name == "lights/defaultprojectedlight");
+    // CacheDictionaryMedia made the implicit material before the light spawned; it has no
+    // falloff image, so the default light's is taken
+    const auto light = parseLight({{"texture", "lights/lp1b_missing"}});
+    CHECK(light.texturePrecached);
+    const auto derived = deriveLight(light, table.get(), nullptr);
+    CHECK_FALSE(derived.shader.defaultLight);
+    CHECK(derived.shader.name == "lights/lp1b_missing");
+    CHECK(derived.shader.defaultFalloff);
+    REQUIRE(derived.shader.falloffImage);
+  }
+
+  SECTION("the lights/squarelight1 default without a decl: NULL, the default light")
+  {
+    // no texture key: nothing was precached; the missing name stands for a game without
+    // lights/squarelight1
+    auto point = parseLight({});
+    CHECK_FALSE(point.texturePrecached);
+    point.parms.texture = "lights/lp1b_missing";
+    const auto pointShader = deriveLight(point, table.get(), nullptr).shader;
+    CHECK(pointShader.defaultLight);
+    CHECK(pointShader.name == "lights/defaultpointlight");
+    auto spot = parseLight(
+      {{"light_target", "0 0 -64"}, {"light_up", "0 32 0"}, {"light_right", "32 0 0"}});
+    spot.parms.texture = "lights/lp1b_missing";
+    CHECK(
+      deriveLight(spot, table.get(), nullptr).shader.name
+      == "lights/defaultprojectedlight");
+    // an empty texture key precaches nothing and finds nothing
+    CHECK(deriveLight(parseLight({{"texture", ""}}), table.get(), nullptr)
+            .shader.defaultLight);
   }
 
   SECTION("a material the table does not have yet: pending")

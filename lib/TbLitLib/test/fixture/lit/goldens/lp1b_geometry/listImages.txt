@@ -1,6 +1,6 @@
 # The engine's listImages lines of the fixture images, captured by TOOLS/lit-preview/capture_fixtures.py for the LP1b goldens (D60).
 # engine commit 285ea4d18a0aaedf46b0803ea656e4850eba5a01 (the exe: RBDOOM 3 BFG 1.6.0.1405 win-x64 Oct 18 2026 19:55:35)
-# captured 2026-10-21 19:25 in the sandbox (fs_game tb_capture); engine exited with 0 after 20 s
+# captured 2026-10-21 22:42 in the sandbox (fs_game tb_capture); engine exited with 0 after 23 s
 # '@@ <when>': after dmap (its editor-image loads) and after map; the header line, then
 # every line naming textures/lp1b/
 @@ dmap

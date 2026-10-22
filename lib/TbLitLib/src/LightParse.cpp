@@ -457,6 +457,12 @@ ParsedLight parseLight(const EntityKeys& args)
     parseGoodTarget(args, gotTarget, parms, light.warnings);
   }
 
+  // CacheDictionaryMedia: a non-empty texture key was looked up with makeDefault (A15)
+  if (const auto* texture = findKey(args, "texture"); texture && !texture->empty())
+  {
+    light.texturePrecached = !light.badTarget;
+  }
+
   applySpawn(args, light);
   return light;
 }

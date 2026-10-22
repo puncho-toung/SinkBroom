@@ -8903,7 +8903,7 @@
           "symbol": "findMaterialNoDefault"
         }
       ],
-      "note": "FindMaterial( texture, false ) is NULL for a name without a decl; the material service makes an implicit material for every name it is asked, so an implicit entry stands for NULL. In the game a surface that used the same undeclared name before the light spawned would have made the implicit decl, and the light would use it; the preview always takes the default light then"
+      "note": "where the light's material is looked up without a default (the lights/squarelight1 default, no texture key), an implicit table entry stands for NULL: the material service makes an implicit material for every name it is asked. In the game a surface or another entity that used lights/squarelight1 with makeDefault before the light spawned would have made the implicit decl, and the light would use it; the preview takes the default light. Retail declares lights/squarelight1"
     },
     {
       "id": "M-LIGHT-NC-03",
@@ -9123,6 +9123,50 @@
         }
       ],
       "note": "S39, A16, P.16: TrenchBroom's zoomedFov is the horizontal fov of a 4:3 frame, so fov_y = 2 atan( 0.75 tan( f / 2 ) ) and the g_fov handed to CalcFov is 2 atan( ( 16 / 9 ) tan( fov_y / 2 ) ), so that CalcFov's 16:9 ideal gives back TrenchBroom's vertical fov; then CalcFov's horizontal fov follows the viewport's aspect. A square viewport takes g_fov for both axes, as the engine does"
+    },
+    {
+      "id": "M-LIGHT-FN-10",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            1974,
+            1978
+          ],
+          "anchor": "idGameLocal::CacheDictionaryMedia: the texture key",
+          "sha256": "468b14c9b860d69b730c8032b302b6f96c0ef953accf14852575f8a2c690ec6a"
+        },
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            4141,
+            4145
+          ],
+          "anchor": "SpawnMapEntities: CacheDictionaryMedia( &args ) of each map entity",
+          "sha256": "f0fd7424cb35aed16e374aace7add67ba7f4e24577d8ea40781fec5129646db9"
+        },
+        {
+          "file": "neo/framework/DeclEntityDef.cpp",
+          "lines": [
+            146,
+            151
+          ],
+          "anchor": "idDeclEntityDef::Parse: game->CacheDictionaryMedia( &dict )",
+          "sha256": "45f164c0f9d050668587cd6909ecdbac243ed0ec56db7cf66e962919441926f1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightParse.cpp",
+          "symbol": "ParsedLight::texturePrecached"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightData.cpp",
+          "symbol": "resolveShader"
+        }
+      ],
+      "note": "A15 refined by the LP1b.3 capture: before a light spawns, the game looks up a non-empty texture key of its map entity and of its entityDef with FindType( DECL_MATERIAL, texture ), which makes an implicit material for a name without a decl, so ParseSpawnArgsToRenderLight's FindMaterial( texture, false ) finds it: the engine lists such a light with its texture's name (listRenderLightDefs: lights/lp1b_missing) and its falloff is the default light's. Only the lights/squarelight1 default, which no key names, is looked up without a default, and an empty texture is FindType's _emptyName: those can be NULL and take the default point or projected light"
     }
   ],
   "retired": [
