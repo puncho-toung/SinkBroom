@@ -212,6 +212,7 @@ void RenderThread::start(
   m_pool = pool;
   m_materials = materials;
   m_compiler = compiler;
+  m_pipelines.setCompiler(compiler);
   m_geometry = std::make_unique<SceneGeometry>(m_pool, m_materials, std::move(lights));
   m_thread = std::thread{[this] { main(); }};
 }
@@ -423,6 +424,7 @@ void RenderThread::releaseFrameResources()
   // §3.1 step 2: every handle the registry and the arenas hold
   m_frameResources.releaseAll();
   m_arenas.releaseAll();
+  m_pipelines.clear();
   m_arenaTestChunks.reset();
   m_commandList = nullptr;
   for (auto& event : m_frameEvents)
@@ -625,6 +627,7 @@ void RenderThread::runFrameHooks(nvrhi::ICommandList& commandList)
     m_frameIndex,
     m_frameResources,
     m_arenas,
+    m_pipelines,
     m_frameUploadBytes};
   if (everyFrame)
   {

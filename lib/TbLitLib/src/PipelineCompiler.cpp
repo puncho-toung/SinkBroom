@@ -85,8 +85,7 @@ nvrhi::TextureHandle formatOnlyTexture(
 
 } // namespace
 
-bool PipelineCompiler::KeyLess::operator()(
-  const PipelineKey& lhs, const PipelineKey& rhs) const
+bool PipelineKeyLess::operator()(const PipelineKey& lhs, const PipelineKey& rhs) const
 {
   const auto tie = [](const PipelineKey& key) {
     return std::tuple{
@@ -159,6 +158,7 @@ GraphicsPipelineLookup PipelineCompiler::graphicsPipeline(const PipelineKey& key
 {
   {
     const auto lock = std::scoped_lock{m_mutex};
+    ++m_lookups;
     if (const auto it = m_graphics.find(key); it != m_graphics.end())
     {
       return it->second;
@@ -174,6 +174,7 @@ ComputePipelineLookup PipelineCompiler::computePipeline(const int program)
 {
   {
     const auto lock = std::scoped_lock{m_mutex};
+    ++m_lookups;
     if (const auto it = m_compute.find(program); it != m_compute.end())
     {
       return it->second;
@@ -215,6 +216,12 @@ std::uint64_t PipelineCompiler::pipelinesCreatedForTesting() const
 {
   const auto lock = std::scoped_lock{m_mutex};
   return m_created;
+}
+
+std::uint64_t PipelineCompiler::lookupsForTesting() const
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  return m_lookups;
 }
 
 void PipelineCompiler::main()
@@ -612,6 +619,71 @@ Result<ComputePipelineLookup> PipelineCompiler::makeCompute(const int program)
   lookup.state = ComputePipelineLookup::State::Ready;
   enable(builtin->index);
   return lookup;
+}
+
+RenderPipelines::RenderPipelines()
+{
+  m_noGraphics.state = GraphicsPipelineLookup::State::Failed;
+  m_noGraphics.error = "the session has no compile thread";
+  m_noCompute.state = ComputePipelineLookup::State::Failed;
+  m_noCompute.error = m_noGraphics.error;
+}
+
+void RenderPipelines::setCompiler(PipelineCompiler* compiler)
+{
+  m_compiler = compiler;
+}
+
+const GraphicsPipelineLookup& RenderPipelines::graphics(const PipelineKey& key)
+{
+  if (const auto it = m_graphics.find(key); it != m_graphics.end())
+  {
+    return it->second;
+  }
+  if (!m_compiler)
+  {
+    return m_noGraphics;
+  }
+  // a Pending key is asked again next time; an answer is kept
+  auto lookup = m_compiler->graphicsPipeline(key);
+  if (lookup.state == GraphicsPipelineLookup::State::Pending)
+  {
+    m_pendingGraphics = std::move(lookup);
+    return m_pendingGraphics;
+  }
+  return m_graphics.emplace(key, std::move(lookup)).first->second;
+}
+
+const ComputePipelineLookup& RenderPipelines::compute(const int program)
+{
+  if (const auto it = m_compute.find(program); it != m_compute.end())
+  {
+    return it->second;
+  }
+  if (!m_compiler)
+  {
+    return m_noCompute;
+  }
+  auto lookup = m_compiler->computePipeline(program);
+  if (lookup.state == ComputePipelineLookup::State::Pending)
+  {
+    m_pendingCompute = std::move(lookup);
+    return m_pendingCompute;
+  }
+  return m_compute.emplace(program, std::move(lookup)).first->second;
+}
+
+std::size_t RenderPipelines::kept() const
+{
+  return m_graphics.size() + m_compute.size();
+}
+
+void RenderPipelines::clear()
+{
+  m_graphics.clear();
+  m_compute.clear();
+  m_pendingGraphics = GraphicsPipelineLookup{};
+  m_pendingCompute = ComputePipelineLookup{};
 }
 
 void PipelineCompiler::enable(const int program)

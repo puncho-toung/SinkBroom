@@ -1957,6 +1957,65 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     CHECK(messages.warnings == 0);
   }
 
+  SECTION("T0.9: the render thread keeps the compiler's answers for its draws")
+  {
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      // no game path: every program is disabled, a Failed answer (D9)
+      auto session = gpuSession(instance, events, 1);
+      auto* compiler = session->pipelineCompilerForTesting();
+      REQUIRE(compiler);
+      session->setExposed(true);
+      const auto key = PipelineKey{
+        PipelineRecipe::Draw,
+        EngineBuiltinDepth,
+        engine_gls::Default,
+        0,
+        0.0f,
+        FramebufferFormats{nvrhi::Format::RGBA16_FLOAT, nvrhi::Format::D24S8}};
+
+      // asked each frame while Pending, then kept
+      auto state = GraphicsPipelineLookup::State::Pending;
+      REQUIRE(waitFor(
+        [&] {
+          inFrame(*session, [&](RenderFrameAccess& access) {
+            state = access.pipelines.graphics(key).state;
+          });
+          return state != GraphicsPipelineLookup::State::Pending;
+        },
+        10000ms,
+        false));
+      CHECK(state == GraphicsPipelineLookup::State::Failed);
+      const auto asked = compiler->lookupsForTesting();
+      auto kept = std::size_t{0};
+      auto error = std::string{};
+      for (auto i = 0; i < 5; ++i)
+      {
+        REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+          const auto& lookup = access.pipelines.graphics(key);
+          error = lookup.error;
+          kept = access.pipelines.kept();
+        }));
+      }
+      CHECK(compiler->lookupsForTesting() == asked);
+      CHECK(kept == 1u);
+      CHECK_THAT(error, Catch::Matchers::StartsWith("disabled: "));
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("kept lookups, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
   SECTION("D36: 1000 chunks uploaded, freed and uploaded again; Stop at the baseline")
   {
     auto messages = ValidationMessages{};

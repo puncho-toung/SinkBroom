@@ -88,6 +88,12 @@ struct PipelineKey
   bool operator==(const PipelineKey&) const = default;
 };
 
+// an order of PipelineKeys, for maps of them
+struct PipelineKeyLess
+{
+  bool operator()(const PipelineKey& lhs, const PipelineKey& rhs) const;
+};
+
 // what a request finds: Pending until the compile thread has made it
 template <typename Handle>
 struct PipelineLookup
@@ -152,11 +158,6 @@ private:
     nvrhi::FramebufferHandle framebuffer;
   };
 
-  struct KeyLess
-  {
-    bool operator()(const PipelineKey& lhs, const PipelineKey& rhs) const;
-  };
-
   // ----- set before the thread starts -----
   GpuDevice& m_device;
   SessionEvents& m_events;
@@ -176,12 +177,14 @@ private:
   std::condition_variable m_wake;
   bool m_stopRequested = false;
   std::deque<Job> m_queue;
-  std::map<PipelineKey, GraphicsPipelineLookup, KeyLess> m_graphics;
+  std::map<PipelineKey, GraphicsPipelineLookup, PipelineKeyLess> m_graphics;
   std::map<int, ComputePipelineLookup> m_compute;
   std::map<int, ProgramReport> m_programs;
   std::map<int, ExpectedShaderLayout> m_expectedForTesting;
   std::function<void()> m_beforeCreateForTesting;
   std::uint64_t m_created = 0;
+  // the graphicsPipeline and computePipeline calls so far (T0.9's test)
+  std::uint64_t m_lookups = 0;
 
 public:
   PipelineCompiler(
@@ -213,6 +216,8 @@ public:
   // runs on the compile thread just before each pipeline is created
   void setBeforeCreateForTesting(std::function<void()> hook);
   std::uint64_t pipelinesCreatedForTesting() const;
+  // the graphicsPipeline and computePipeline calls so far, from any thread
+  std::uint64_t lookupsForTesting() const;
 
 private:
   void main();
@@ -234,6 +239,42 @@ private:
   bool programDisabled(int program, std::string& reason) const;
 
   deleteCopyAndMove(PipelineCompiler);
+};
+
+/**
+ * LP2.1 (T0.9): the render thread's copy of the compile thread's answers, so that a draw
+ * asks the compiler nothing once its pipeline is made: a Ready or Failed lookup is kept
+ * here and costs one local find from then on; a Pending one is asked of the compiler
+ * again on every request (every frame that draws it) until it is Ready or Failed. Without
+ * a compiler every lookup is Failed. Render thread only; clear runs in teardown step 2.
+ */
+class RenderPipelines
+{
+private:
+  PipelineCompiler* m_compiler = nullptr;
+  std::map<PipelineKey, GraphicsPipelineLookup, PipelineKeyLess> m_graphics;
+  std::map<int, ComputePipelineLookup> m_compute;
+  GraphicsPipelineLookup m_pendingGraphics;
+  ComputePipelineLookup m_pendingCompute;
+  GraphicsPipelineLookup m_noGraphics;
+  ComputePipelineLookup m_noCompute;
+
+public:
+  RenderPipelines();
+
+  // set before the render thread starts; the compiler outlives the thread (B0.10)
+  void setCompiler(PipelineCompiler* compiler);
+
+  // the lookup of a key, valid until the next call or clear
+  const GraphicsPipelineLookup& graphics(const PipelineKey& key);
+  const ComputePipelineLookup& compute(int program);
+
+  // the Ready and Failed lookups kept
+  std::size_t kept() const;
+  // teardown step 2: every handle kept
+  void clear();
+
+  deleteCopyAndMove(RenderPipelines);
 };
 
 } // namespace tb::lit

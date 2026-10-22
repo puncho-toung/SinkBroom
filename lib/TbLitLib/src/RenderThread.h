@@ -22,6 +22,7 @@
 #include "FrameResources.h"
 #include "FrameTimers.h"
 #include "GeometryArenas.h"
+#include "PipelineCompiler.h"
 #include "base/Macros.h"
 #include "base/Result.h"
 #include "lit/FramePacer.h"
@@ -69,6 +70,8 @@ struct RenderFrameAccess
   std::uint64_t frameIndex;
   FrameResources& frame;
   GeometryArenas& arenas;
+  // T0.9: the render thread's copy of the compile thread's pipelines
+  RenderPipelines& pipelines;
   // the bytes the frame has uploaded before the hook runs
   std::uint64_t bytesUploaded;
 };
@@ -110,6 +113,8 @@ private:
   // thread, which never starts or joins it, and its onReady is this thread's frame
   // trigger (D77)
   PipelineCompiler* m_compiler = nullptr;
+  // T0.9: the compiler's Ready and Failed answers, kept for the draws
+  RenderPipelines m_pipelines;
   std::unique_ptr<SceneGeometry> m_geometry;
 
   // ----- the swapchain generation, replaced by the GUI thread only while parked -----
