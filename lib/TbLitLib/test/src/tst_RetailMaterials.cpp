@@ -43,6 +43,7 @@
 #include "lit/GameDeclSource.h"
 #include "lit/GameFile.h"
 #include "lit/ImageCache.h"
+#include "lit/ImageFallback.h"
 #include "lit/LightData.h"
 #include "lit/LightParse.h"
 #include "lit/MapBake.h"
@@ -210,8 +211,8 @@ std::vector<std::string> hashDeclText(const std::vector<std::string>& lines)
 
 // W.7: the image loader's "Binarize File:" lines name the generated file with the usage
 // digits the load chose after it began (metal04_rmao#__1200: the _rmao rename's usage,
-// M-ID-DIFF-02, A3.10); that post-load usage arrives with LP1c's timestamp call, so until
-// then they are counted, not compared
+// M-ID-DIFF-02, A3.10); the print test counts them, and the image-cache test compares
+// them, name and reason, with the images the service would binarize (LP1c.2)
 bool isBinarizeLine(const std::string& line)
 {
   return line.rfind("Binarize File:", 0) == 0;
@@ -508,6 +509,9 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
   auto mikktspace = std::vector<std::string>{};
   auto unsmoothedTangents = 0;
   auto createBackSides = 0;
+  // LP1c.2 (C21): every parsed material's editor-image size, Ready or Default with why
+  auto readySizes = 0;
+  auto defaultReasons = std::map<std::string, std::vector<std::string>>{};
   for (const auto* entry : entries)
   {
     if (entry->mikktspace)
@@ -516,6 +520,18 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
     }
     unsmoothedTangents += entry->unsmoothedTangents ? 1 : 0;
     createBackSides += entry->createBackSides ? 1 : 0;
+    if (entry->editorImageSize.state == EditorImageSize::State::Ready)
+    {
+      ++readySizes;
+    }
+    else
+    {
+      // the reason without the image's name, so that alike reasons group
+      const auto& reason = entry->editorImageSize.reason;
+      const auto kind = reason.substr(0, reason.find(':'));
+      defaultReasons[kind.empty() ? std::string{"(none)"} : kind].push_back(
+        entry->name + ": " + reason);
+    }
   }
 
   auto lock = std::scoped_lock{mutex};
@@ -563,6 +579,24 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
   {
     report << "  mikktspace: " << name << "\n";
   }
+  auto defaultSizes = std::size_t{0};
+  for (const auto& [kind, materials] : defaultReasons)
+  {
+    defaultSizes += materials.size();
+  }
+  report << fmt::format(
+    "  editor-image sizes (C21) of {} parsed materials: {} Ready, {} Default\n",
+    entries.size(),
+    readySizes,
+    defaultSizes);
+  for (const auto& [kind, materials] : defaultReasons)
+  {
+    report << fmt::format("  Default x{}: {}\n", materials.size(), kind);
+    for (std::size_t i = 0; i < std::min<std::size_t>(materials.size(), 8); ++i)
+    {
+      report << "    " << materials[i] << "\n";
+    }
+  }
   for (const auto& info : infos)
   {
     report << "  info: " << info << "\n";
@@ -571,6 +605,10 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
 
   CHECK(stats.materials == 7733);
   CHECK(stats.tables == 309);
+  // C21: every size resolved, Ready or Default with its reason
+  CHECK(readySizes + int(defaultSizes) == int(entries.size()));
+  CHECK(readySizes > 0);
+  CHECK(defaultReasons.count("(none)") == 0u);
   CHECK(stats.defaultedMaterials == 15);
   CHECK(stats.warnings == warnings.size());
   CHECK(stats.failedWorkItems == 0u);
@@ -1430,6 +1468,75 @@ TEST_CASE("Retail materials: bakes and image caches (LP1c.1)", "[.][retail]")
     CAPTURE(name);
     CHECK(names.count(name) == 1u);
   }
+
+  // A3.10 closes (LP1c.2): each golden block's Binarize lines, name and reason, equal the
+  // images of that material the service would binarize after the time call (no cache, or
+  // one the engine would not use), with the engine's reason; and the source fallback
+  // makes each from its source with the copied loaders
+  auto fromSource = std::vector<std::string>{};
+  for (const auto& block : readGoldens())
+  {
+    auto engineBinarized = std::set<std::pair<std::string, std::string>>{};
+    for (const auto& line : block.lines)
+    {
+      if (isBinarizeLine(line))
+      {
+        const auto start = line.find('\'') + 1;
+        const auto name = line.substr(start, line.find('\'', start) - start);
+        const auto reasonStart = line.find("reason '") + 8;
+        engineBinarized.emplace(
+          name, line.substr(reasonStart, line.size() - reasonStart - 1));
+      }
+    }
+    if (engineBinarized.empty())
+    {
+      continue;
+    }
+    CAPTURE(block.name);
+    const auto entry = decls.lookup(block.name);
+    REQUIRE(entry);
+    auto ourBinarized = std::set<std::pair<std::string, std::string>>{};
+    for (const auto& key : imageKeysOf(**entry.value))
+    {
+      const auto name = decls.imageCacheName(key);
+      REQUIRE(name);
+      // a stage's image is also a fast-path image: once each
+      if (
+        name.value->generated
+        || std::any_of(ourBinarized.begin(), ourBinarized.end(), [&](const auto& made) {
+             return made.first == name.value->generatedName;
+           }))
+      {
+        continue;
+      }
+      const auto slot = resolveImageCache(source, *name.value);
+      if (slot.state == ImageCacheSlot::State::Ready)
+      {
+        continue;
+      }
+      ourBinarized.emplace(name.value->generatedName, slot.reason);
+      const auto made = resolveImage(decls, source, key);
+      INFO(made.sourceReason);
+      REQUIRE(made.image);
+      CHECK(made.image->fromSource);
+      fromSource.push_back(fmt::format(
+        "{} {}x{} format {} colour {} ({} levels)",
+        name.value->generatedName,
+        made.image->width,
+        made.image->height,
+        made.image->storedFormat,
+        made.image->colorFormat,
+        made.image->numLevels));
+    }
+    CHECK(ourBinarized == engineBinarized);
+  }
+  source.closeFiles();
+  static_cast<void>(decls.takeMessages());
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  std::cout << fmt::format(
+    "Retail Binarize images made from their sources: {}\n",
+    fmt::format("{}", fmt::join(fromSource, "; ")));
+  CHECK(fromSource.size() == 3u);
   CHECK(failed == 0);
   CHECK(found > 0);
   CHECK(ready > 0);
