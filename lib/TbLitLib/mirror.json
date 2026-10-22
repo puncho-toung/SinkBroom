@@ -8314,6 +8314,42 @@
           ],
           "anchor": "FinishSurfaces: back sides, R_CleanupTriangles",
           "sha256": "8f70d8db014da2c5bd6fd700db07b57103adc127ca19b2563e99e2e337dde87a"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/output.cpp",
+          "lines": [
+            95,
+            105
+          ],
+          "anchor": "WriteFloat",
+          "sha256": "864287efea7f9135091dcc9a9f8b73119ce4a5e7b054b4eb3ee82676ff9f65ae"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/output.cpp",
+          "lines": [
+            318,
+            338
+          ],
+          "anchor": "WriteUTriangles: each vertex's xyz, st and GetNormal() as text",
+          "sha256": "e42d0575f1986907d2d9571510f6a1708e04a741d919a10409906e71d1d4bfe8"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            304,
+            312
+          ],
+          "anchor": "ParseModel: a cleared vertex with the xyz, st and SetNormal of what it read",
+          "sha256": "628058b34d38397b0c8e4c6df05ffea8d35e92b6eb472cf2c7f2ee08f128ae35"
+        },
+        {
+          "file": "neo/idlib/geometry/DrawVert.h",
+          "lines": [
+            295,
+            302
+          ],
+          "anchor": "idDrawVert::GetNormal: normalised",
+          "sha256": "72ca86b94a09ea93c879de1612e9e3290a8225843b1e7447de39b54b84725308"
         }
       ],
       "sinkbroom": [
@@ -8322,7 +8358,7 @@
           "symbol": "buildChunks"
         }
       ],
-      "note": "D59, C4: the material name with textures/ (a patch's only when missing), overrideMaterial; neither drawn nor shadow-casting sides skipped; plane from the origin-relative points with FixDegeneracies; st from the origin-relative position (TriListForSide runs before WriteUTriangles subtracts originOffset); SetNormal twice as ShareMapTriVerts stores it (golden (a) found the -1 component's byte moving 0 -> 1); patches through the copied subdivision with ParseSurface's rotation, degenerate pinched triangles skipped, every triangle's corners by TriVertsFromOriginal (R3.5, M-GEO-FN-16)"
+      "note": "D59, C4: the material name with textures/ (a patch's only when missing), overrideMaterial; neither drawn nor shadow-casting sides skipped; plane from the origin-relative points with FixDegeneracies; st from the origin-relative position (TriListForSide runs before WriteUTriangles subtracts originOffset); SetNormal twice as ShareMapTriVerts stores it (golden (a) found the -1 component's byte moving 0 -> 1); patches through the copied subdivision with ParseSurface's rotation, degenerate pinched triangles skipped, every triangle's corners by TriVertsFromOriginal (R3.5, M-GEO-FN-16); LP2.3 (found by the parity rows, golden (e)): each welded vertex is then loaded as ParseModel loads what dmap wrote: a cleared vertex with the xyz, st and SetNormal( the text round trip of GetNormal() ), so a face facing -x, -y or -z carries 129 129 0 (not 128 128 1) and the normal's fourth byte is 0"
     },
     {
       "id": "M-GEO-FN-11",
@@ -15002,6 +15038,104 @@
         }
       ],
       "note": "LP2.2b: the engine keeps one histogram and one tonemap binding set per source texture in an idHashIndex for the process (Init makes the exposure set once); the preview takes all four passes' sets from the session's binding-set cache (C28, D37): the HDR and LDR targets by the render-target generation, _black by its slot versions, the buffers and LinearClamp as resources. The same items in the same order"
+    },
+    {
+      "id": "M-PARITY-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Angles.cpp",
+          "lines": [
+            223,
+            237
+          ],
+          "anchor": "idAngles::ToMat3",
+          "sha256": "02aa3c6f70c313bb3793e715c2c1565ceff3ee97b6da0e7fa7356f944a7fef5b"
+        },
+        {
+          "file": "neo/d3xp/gamesys/SysCvar.cpp",
+          "lines": [
+            283,
+            283
+          ],
+          "anchor": "g_fov: CVAR_INTEGER",
+          "sha256": "bb3208ef0ce3e736be7dde463802a8d2c623d2929f8397619213d86639487c1b"
+        },
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            3171,
+            3194
+          ],
+          "anchor": "idGameLocal::CalcFov",
+          "sha256": "62cc0df913ba2ec7a864a583030b816a467b1ac4ac3a6dd3728b7629741f5fcf"
+        },
+        {
+          "file": "neo/d3xp/gamesys/SysCmds.cpp",
+          "lines": [
+            808,
+            840
+          ],
+          "anchor": "Cmd_SetViewpos_f",
+          "sha256": "bb8529257c52dba4e984efcf78e3092f08c9f0271e73b38f75c92845049eceef"
+        },
+        {
+          "file": "neo/d3xp/Player.cpp",
+          "lines": [
+            10251,
+            10271
+          ],
+          "anchor": "idPlayer::Teleport: CM_CLIP_EPSILON, GetFloorPos",
+          "sha256": "d67ecd11f276b7a4bebe4a06f6755eaa032517e45f51b022441d3e8693fbf58a"
+        },
+        {
+          "file": "neo/d3xp/Player.cpp",
+          "lines": [
+            10689,
+            10716
+          ],
+          "anchor": "idPlayer::GetViewPos: g_viewNodalX and Z",
+          "sha256": "893663a1c1561f9fea150dbef008e9f0a67091d231fd20c842416749e7b9d4b3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/Projection.cpp",
+          "symbol": "parityCameraOfLine, trenchBroomFovOfGFov"
+        }
+      ],
+      "note": "LP2.3 (C29, P2.6): a parity camera line read back as the engine's player view has it after setviewpos: direction and up are idAngles( pitch, yaw, 0 ).ToMat3()'s rows 0 and 2 in float (idMath::SinCos is sinf and cosf on x64); the fov is S39's inverse of the integer g_fov (the cvar keeps its integer part), a TrenchBroom fov whose gFovOf( verticalFovOf() ) is exactly that integer in float (g_fov 90: 73.739795; 122 of the 179 integers have one), so CalcFov and R_SetupProjectionMatrix get the engine's base_fov. The line's position is the engine's render-view origin: TOOLS/lit-preview/parity.py places the eye g_viewNodalX (3) behind it along the yaw (GetViewPos: -6 + 6 in z at pitch 0) and passes setviewpos z - 0.5 (Cmd_SetViewpos_f subtracts pm_normalviewheight - 0.25, Teleport adds CM_CLIP_EPSILON 0.25), with the eye 96 above the floor so that GetFloorPos's 16-unit trace finds no floor; getviewpos checks every row"
+    },
+    {
+      "id": "M-PARITY-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "lines": [
+            180,
+            260
+          ],
+          "anchor": "TriListForSide",
+          "sha256": "4e8882df3380d8a99f16d01e0a15d503266e1ed64e02f79843cf345275721fbb"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/output.cpp",
+          "lines": [
+            318,
+            338
+          ],
+          "anchor": "WriteUTriangles: each vertex's xyz, st and GetNormal() as text",
+          "sha256": "e42d0575f1986907d2d9571510f6a1708e04a741d919a10409906e71d1d4bfe8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "buildChunks (addBrush)"
+        }
+      ],
+      "note": "LP2.3, a candidate K (K9's family, for the director): the chunks' triangles of an axial face are the .proc's (the same two triangles, the same diagonal and winding) but each starts at another vertex (a cyclic rotation: the editor's polygon, reversed, against the winding dmap clipped from the brush's planes) and the triangles come in another order. Interpolation and near-plane clipping round differently on the GPU; on a steep PBR bump at a grazing angle near the camera the interaction's specular turns that into up to 12 levels: parity row R05, 2568 of 696,000 unmasked pixels beyond +-1 at the left edge, mean 0.029; every other axial row is within +-1"
     }
   ],
   "retired": [
