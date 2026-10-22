@@ -948,4 +948,66 @@ TEST_CASE("Geometry goldens: (d) the preview's chunks against the .proc")
   CHECK(scaled.parms.shaderParms[3] == 1.0f);
 }
 
+TEST_CASE("Geometry goldens: (e) the chunks' normal and tangent bytes against the .bproc")
+{
+  // LP2.3 (found by the parity rows): the engine's vertices of an axial brush face carry
+  // the normal dmap wrote as text and ParseModel set again (a face facing -x, -y or -z:
+  // 129 129 0, not 128 128 1); the preview's chunk vertices at the same place, with the
+  // same normal, carry the same normal and tangent bytes. Patches are K9's (dmap
+  // smooths their normals over its own triangles)
+  const auto& f = fixture();
+  const auto input = fixtureInput(f);
+  const auto output = buildChunks(input);
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  auto compared = 0;
+  for (const auto& model : f.bproc.models)
+  {
+    if (model.name.rfind("_area", 0) != 0)
+    {
+      continue;
+    }
+    for (const auto& surface : model.surfaces)
+    {
+      if (surface.material == "textures/lp1b/patch")
+      {
+        continue;
+      }
+      for (const auto& engineVert : surface.verts)
+      {
+        for (const auto& chunk : output.chunks)
+        {
+          if (
+            chunk.key.entity != input.worldspawn->id
+            || chunk.key.material != surface.material)
+          {
+            continue;
+          }
+          for (const auto& vert : chunk.verts)
+          {
+            const auto samePlace = std::abs(vert.xyz[0] - engineVert.xyz[0]) < 0.01f
+                                   && std::abs(vert.xyz[1] - engineVert.xyz[1]) < 0.01f
+                                   && std::abs(vert.xyz[2] - engineVert.xyz[2]) < 0.01f;
+            // the same face: each normal byte within the same eighth
+            const auto sameFace = vert.normal[0] / 32 == engineVert.normal[0] / 32
+                                  && vert.normal[1] / 32 == engineVert.normal[1] / 32
+                                  && vert.normal[2] / 32 == engineVert.normal[2] / 32;
+            if (samePlace && sameFace)
+            {
+              CAPTURE(
+                surface.material,
+                engineVert.xyz[0],
+                engineVert.xyz[1],
+                engineVert.xyz[2]);
+              CHECK(bytes(vert.normal) == bytes(engineVert.normal));
+              CHECK(bytes(vert.tangent) == bytes(engineVert.tangent));
+              ++compared;
+            }
+          }
+        }
+      }
+    }
+  }
+  CHECK(compared > 100);
+}
+
 } // namespace tb::lit

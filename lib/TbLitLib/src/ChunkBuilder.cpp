@@ -679,7 +679,18 @@ private:
           weld.try_emplace(WeldKey{vert}, std::uint16_t(verts.size()));
         if (inserted)
         {
-          verts.push_back(vert);
+          // LP2.3 (found by the parity rows): dmap/output.cpp:318-338 writes the welded
+          // vertex's xyz, st and GetNormal() (normalised) as text (WriteFloat, :95-105),
+          // and RenderWorld_load.cpp ParseModel (:304-312) loads a cleared vertex with
+          // what it reads back: SetNormal() moves a -1 component's byte from 1 back to 0
+          // and the zero components' 128 to 129 on faces facing -x, -y or -z (a tilt of
+          // about a degree), and the normal's fourth byte is 0. The st are read back and
+          // recentred in finishChunk (recentreTexCoords), the xyz in sideVert
+          auto loaded = engineClearedVert();
+          loaded.xyz = vert.xyz;
+          loaded.st = vert.st;
+          engineSetNormal(loaded, readBack(engineNormal(vert)));
+          verts.push_back(loaded);
         }
         indexes.push_back(it->second);
       }
