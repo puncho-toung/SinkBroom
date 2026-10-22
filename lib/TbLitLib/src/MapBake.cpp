@@ -290,11 +290,29 @@ MapBake readMapBake(DeclSource& source, const std::string_view mapName)
   return bake;
 }
 
+namespace
+{
+
+/**
+ * Z.1: a bake file found as it was then, against what a probe finds now: GameFileProbe's
+ * == (kind, container, time, size, change stamp) and, for a container entry, the
+ * container file's own stamp and size, so that a .pk4 or .resources rebuilt in place
+ * reads as changed after a reload (Y.2), as MaterialService's sameFile compares an
+ * image's files. Both sides are probes, so a .pk4 entry's size is 0 on both.
+ */
+bool sameBakeFile(const GameFileProbe& then, const GameFileProbe& now)
+{
+  return then == now && then.containerStamp == now.containerStamp
+         && then.containerSize == now.containerSize;
+}
+
+} // namespace
+
 bool mapBakeChanged(DeclSource& source, const MapBake& bake)
 {
   for (const auto& file : bake.files)
   {
-    if (source.probe(file.path) != file.probe)
+    if (!sameBakeFile(file.probe, source.probe(file.path)))
     {
       return true;
     }

@@ -509,6 +509,34 @@ TEST_CASE("MapBake, the C10 search through the game files")
     drain();
   }
 
+  SECTION("Z.1: a bake in a container rebuilt in place is seen after a reload")
+  {
+    const auto pk4Path = base / "maps.pk4";
+    writePk4(pk4Path, {{"maps/sub/m.proc", TinyProc}});
+    auto first = GameFileSource{env.dir()};
+    const auto bake = readMapBake(first, mapName);
+    // the read batch's containers close, as the parse thread closes them after each item
+    first.closeFiles();
+    REQUIRE(bake.geometry == MapBake::Geometry::Proc);
+    REQUIRE(bake.files.front().probe.container == "maps.pk4");
+    CHECK(bake.files.front().probe.containerSize > 0u);
+
+    // a reload over the same container: unchanged
+    {
+      auto again = GameFileSource{env.dir()};
+      CHECK_FALSE(mapBakeChanged(again, bake));
+    }
+
+    // the container rewritten with the same entry: its entry's probe (time 0, size 0,
+    // the container's name) is alike, its stamp and size are not
+    writePk4(pk4Path, {{"maps/sub/m.proc", TinyProc}, {"maps/sub/other.txt", "padding"}});
+    bumpModificationTime(pk4Path);
+    auto rebuilt = GameFileSource{env.dir()};
+    CHECK(rebuilt.probe("maps/sub/m.proc") == bake.files.front().probe);
+    CHECK(mapBakeChanged(rebuilt, bake));
+    drain();
+  }
+
   SECTION("the engine's map name of a document path")
   {
     auto source = GameFileSource{env.dir()};

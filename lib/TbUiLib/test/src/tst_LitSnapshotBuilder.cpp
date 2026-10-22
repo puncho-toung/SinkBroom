@@ -18,6 +18,8 @@
  */
 
 #include <QCoreApplication>
+#include <QEvent>
+#include <QThreadPool>
 
 #include "TestEnvironment.h"
 #include "lit/ChunkBuilder.h"
@@ -62,6 +64,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <string>
@@ -512,23 +515,50 @@ bool closeArea(const double a, const double b, const double relative)
 }
 
 #if defined(_MSC_VER) && defined(_DEBUG)
-// runs f between two heap checkpoints; true when the heap grew, with its statistics
-template <typename F>
-bool heapGrows(F&& f)
+/**
+ * Z.2: the work other threads of the process have pending is done first, so that what
+ * they free or keep does not fall between two checkpoints: Qt's deferred deletes and
+ * posted events on this thread, and the global thread pool's tasks.
+ */
+void settleOtherThreads()
 {
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  QCoreApplication::processEvents();
+  QThreadPool::globalInstance()->waitForDone();
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+/**
+ * Runs f between two settled checkpoints of the CRT's debug heap, which covers every
+ * thread of the process, and returns how many more normal blocks it holds after than
+ * before (fewer is negative), with the statistics dumped when it holds more.
+ */
+template <typename F>
+long long heapBlockGrowth(F&& f)
+{
+  settleOtherThreads();
   _CrtMemState before;
   _CrtMemCheckpoint(&before);
   f();
+  settleOtherThreads();
   _CrtMemState after;
   _CrtMemCheckpoint(&after);
-  _CrtMemState difference;
-  const auto grew = _CrtMemDifference(&difference, &before, &after) != 0;
-  if (grew)
+  const auto growth = static_cast<long long>(after.lCounts[_NORMAL_BLOCK])
+                      - static_cast<long long>(before.lCounts[_NORMAL_BLOCK]);
+  if (growth > 0)
   {
+    _CrtMemState difference;
+    _CrtMemDifference(&difference, &before, &after);
     _CrtMemDumpStatistics(&difference);
   }
-  return grew;
+  return growth;
 }
+
+// Z.2: the heap is the whole process's, and a thread outside the test (a task manager, a
+// network or file-watcher thread, a pool thread that expires) may allocate or free a
+// block or two between the checkpoints; a leak in each of 50 cycles holds 50 blocks or
+// more, so fewer than half of that is no leak
+constexpr auto HeapBlockTolerance = 25LL;
 #endif
 
 } // namespace
@@ -750,9 +780,23 @@ TEST_CASE("LitSnapshotBuilder: 50 observers and 50 snapshots leave the heap (R2.
   // what the first round allocates for good (Qt's event queue, fmt's buffers)
   observe();
   snapshots();
-  CHECK_FALSE(heapGrows(observe));
-  CHECK_FALSE(heapGrows(snapshots));
+  const auto observed = heapBlockGrowth(observe);
+  const auto built = heapBlockGrowth(snapshots);
+  CAPTURE(observed, built);
+  CHECK(observed < HeapBlockTolerance);
+  CHECK(built < HeapBlockTolerance);
   CHECK(missed == 0);
+
+  // the control: one block kept in each of 50 cycles is seen
+  auto kept = std::vector<std::unique_ptr<int>>{};
+  kept.reserve(50);
+  const auto control = heapBlockGrowth([&] {
+    for (auto i = 0; i < 50; ++i)
+    {
+      kept.push_back(std::make_unique<int>(i));
+    }
+  });
+  CHECK(control >= 50);
 }
 #endif
 
