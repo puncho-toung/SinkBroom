@@ -81,6 +81,8 @@ struct LitPreviewReport
   // were released, when the device reports it
   std::optional<std::uint64_t> vramAtStartBytes;
   std::optional<std::uint64_t> vramAtStopBytes;
+  // the session host's teardown steps, in the order they ran
+  std::vector<std::string> teardownSteps;
 
   // what a user should know, one sentence each; empty after a clean stop
   std::vector<std::string> problems() const;
@@ -98,11 +100,12 @@ struct LitPreviewReport
  * the process's one session (D29).
  *
  * Opening the panel never starts a session. Closing it stops one; a panel tabbed behind
- * another dock only stops drawing, because its window is no longer exposed. Loading a
- * document and changing the game path stop the session, whose files belong to the old
- * game (D41). While a session runs, a change of the material collections reloads its
- * material service (R5.24); the subscription is made at Start and dropped at Stop, and
- * moves into the document observer with LP1b.1.
+ * another dock only stops drawing, because its window is no longer exposed, and the
+ * session's document changes coalesce until it is shown again. Loading a document and
+ * changing the game path stop the session, whose files belong to the old game (D41); the
+ * panel keeps only these two watches. Every other document subscription belongs to the
+ * session's document observer (LitDocumentObserver, R5.24), made at Start and dropped at
+ * Stop, which also reloads the material service when the material collections change.
  */
 class LitPreviewPanel : public SidebarPanel
 {
@@ -134,8 +137,6 @@ private:
   std::uint64_t m_materialsVersion = 0;
 
   NotifierConnection m_notifierConnection;
-  // the document subscriptions of a running session, from Start to Stop
-  NotifierConnection m_sessionNotifierConnection;
 
 public:
   // after every session's teardown, also one that ended with the panel
@@ -186,8 +187,6 @@ public:
 private:
   void createGui();
   void connectObservers();
-  void connectSessionObservers();
-  void materialCollectionsDidChange();
 
   void cameraDidChange(const gl::Camera& camera);
   void sessionEventReceived(

@@ -409,6 +409,8 @@ if(TB_ENABLE_LIT_PREVIEW)
   # The lit preview's panel, its window and its session host exist only with the switch.
   target_sources(TbUiLib
     PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/LitDocumentObserver.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/LitDocumentObserver.h
       ${CMAKE_CURRENT_SOURCE_DIR}/src/LitPreviewPanel.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/LitPreviewWindow.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSessionHost.cpp

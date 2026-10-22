@@ -225,6 +225,11 @@ void LitPreviewPanel::panelShown()
 {
   // R5.26: another window's session may have stopped while this panel was out of sight
   updateStartPage();
+  // S31: what the document observer coalesced while the panel was hidden
+  if (m_host)
+  {
+    m_host->panelShown();
+  }
 }
 
 void LitPreviewPanel::panelHidden()
@@ -268,12 +273,14 @@ void LitPreviewPanel::start()
     return m_lastCamera ? std::optional{*m_lastCamera} : std::nullopt;
   };
 
-  // C1: the material service reads the game the document's map belongs to
+  // C1: the material service reads the game the document's map belongs to; the host's
+  // document observer watches the document for the session
   auto host = std::make_unique<LitSessionHost>(
     sessionOptions(m_document.logger()),
     ++lastGeneration,
     std::move(eventHandler),
     std::move(camera),
+    m_document,
     m_document.map().gamePath());
   host->start(*m_surfacePage) | kdl::transform([&](QWidget* container) {
     m_surfacePage->layout()->addWidget(container);
@@ -282,7 +289,6 @@ void LitPreviewPanel::start()
     m_stopReason.clear();
     m_stopProblems.clear();
     sessionGuard().claim(*this);
-    connectSessionObservers();
   }) | kdl::transform_error([&](const auto& e) {
     host.reset();
     m_stopReason = QString::fromStdString(e.msg);
@@ -428,23 +434,6 @@ void LitPreviewPanel::connectObservers()
       });
 }
 
-void LitPreviewPanel::connectSessionObservers()
-{
-  // R5.24: the session's document subscriptions, dropped by endSession
-  m_sessionNotifierConnection += m_document.materialCollectionsDidChangeNotifier.connect(
-    [&] { materialCollectionsDidChange(); });
-}
-
-void LitPreviewPanel::materialCollectionsDidChange()
-{
-  // the material decls may have changed with the collections: the parse thread builds
-  // its registry again and republishes every name it was asked for
-  if (auto* materials = m_host ? m_host->materials() : nullptr)
-  {
-    materials->reload();
-  }
-}
-
 void LitPreviewPanel::cameraDidChange(const gl::Camera& camera)
 {
   // R4-2.18: the camera may be gone after this notification, so only its values are kept
@@ -489,7 +478,8 @@ void LitPreviewPanel::sessionEventReceived(
     break;
   case lit::SessionEvent::Parked:
   case lit::SessionEvent::SwapchainOutOfDate:
-    // the host handles these itself
+  case lit::SessionEvent::ReadyForSnapshot:
+    // the host handles these itself; ReadyForSnapshot goes to its document observer
     break;
   case lit::SessionEvent::MaterialsPublished:
     // the latest table, which the readers of LP1b and LP1c take from here
@@ -497,9 +487,6 @@ void LitPreviewPanel::sessionEventReceived(
     {
       m_materialsVersion = materials->table()->version;
     }
-    break;
-  case lit::SessionEvent::ReadyForSnapshot:
-    // S31: LP1b.1 answers with the snapshot of its dirty set
     break;
   case lit::SessionEvent::Warning:
     logger.warn() << "Lit preview: " << message;
@@ -593,8 +580,7 @@ void LitPreviewPanel::stopSession(
 
 std::optional<LitPreviewReport> LitPreviewPanel::endSession()
 {
-  // R5.24: the session's document subscriptions end with it
-  m_sessionNotifierConnection.disconnect();
+  // R5.24: the session's document subscriptions end with its observer, in the teardown
   if (!m_host)
   {
     return std::nullopt;

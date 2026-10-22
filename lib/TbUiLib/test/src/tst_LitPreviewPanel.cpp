@@ -45,11 +45,16 @@
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
 #include "lit/Snapshot.h"
+#include "mdl/BrushNode.h"
+#include "mdl/EditorContext.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/GameInfo.h"
+#include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/MapFormat.h"
+#include "mdl/Map_Nodes.h"
+#include "mdl/TestFactory.h"
 #include "prefs/Preferences.h"
 #include "ui/AppController.h"
 #include "ui/AppControllerFixture.h"
@@ -1763,22 +1768,73 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
       [&] { return panel.materialsVersionForTesting() == materials->table()->version; },
       5000));
 
-    // S31: the running session takes a snapshot of its generation at a frame's start
-    auto snapshot = std::make_shared<lit::Snapshot>();
-    snapshot->generation = session->generation();
-    snapshot->sequence = 1;
-    CHECK(session->offerSnapshot(snapshot));
-    REQUIRE(harness.waitForFrame());
-    REQUIRE(
-      QTest::qWaitFor([&] { return session->snapshotsTakenForTesting() == 1u; }, 5000));
-    CHECK(session->lastSnapshotForTesting() == snapshot);
-
     panel.stop();
     reports.checkLast();
-    // the subscription went with the session
+    // the subscription went with the session's document observer
     harness.fixture.document().materialCollectionsDidChangeNotifier();
     CHECK(panel.materialsForTesting() == nullptr);
     checkCounts("tables, reload and the session's service and pool");
+  }
+
+  SECTION("the session takes the document's snapshots, also after an edit (LP1b.1)")
+  {
+    auto& document = harness.fixture.document();
+    auto& map = document.map();
+    REQUIRE(harness.startAndWaitForFrame());
+    auto* session = harness.session();
+    REQUIRE(session != nullptr);
+
+    // S31: the first snapshot, complete, of the session's generation
+    REQUIRE(QTest::qWaitFor(
+      [&] {
+        harness.moveCamera();
+        return session->snapshotsTakenForTesting() >= 1u;
+      },
+      10000));
+    const auto first = session->lastSnapshotForTesting();
+    REQUIRE(first != nullptr);
+    CHECK(first->generation == session->generation());
+    CHECK(first->sequence == 1u);
+    CHECK(std::ranges::any_of(first->entities, [&](const auto& entity) {
+      return first->string(entity.classname) == "worldspawn";
+    }));
+
+    // an edit reaches the render thread, which takes it (nothing is drawn of it yet)
+    auto* brushNode = mdl::createBrushNode(map, "lp1b/edit");
+    mdl::addNodes(map, {{map.editorContext().currentLayer(), {brushNode}}});
+    REQUIRE(QTest::qWaitFor(
+      [&] {
+        harness.moveCamera();
+        const auto last = session->lastSnapshotForTesting();
+        return last && last->sequence >= 2u
+               && std::ranges::any_of(last->faces, [&](const auto& face) {
+                    return last->string(face.material) == "lp1b/edit";
+                  });
+      },
+      10000));
+    CHECK(session->snapshotSlotFree());
+
+    panel.stop();
+    reports.checkLast();
+    CHECK(reports.last().hadDevice);
+    // the observer went after the render thread had stopped and before the material
+    // service
+    CHECK(
+      reports.last().teardownSteps
+      == std::vector<std::string>{
+        "render thread stopped",
+        "document observer destroyed",
+        "GPU objects released",
+        "container deleted",
+        "device destroyed",
+        "instance destroyed",
+        "dispatcher reset",
+        "materials destroyed",
+      });
+
+    // the session's subscriptions went with it
+    mdl::removeNodes(map, {brushNode});
+    checkCounts("snapshots");
   }
 
   SECTION("a document load and a game path change stop the session")

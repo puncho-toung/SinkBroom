@@ -26,6 +26,7 @@
 #include <QWidget>
 #include <QtLogging>
 
+#include "LitDocumentObserver.h"
 #include "ServiceSentMessages.h"
 #include "lit/GameDeclSource.h"
 #include "lit/MaterialService.h"
@@ -131,11 +132,13 @@ LitSessionHost::LitSessionHost(
   const std::uint64_t generation,
   EventHandler eventHandler,
   CameraProvider camera,
+  MapDocument& document,
   std::filesystem::path gamePath)
   : m_options{std::move(options)}
   , m_generation{generation}
   , m_eventHandler{std::move(eventHandler)}
   , m_camera{std::move(camera)}
+  , m_document{document}
   , m_gamePath{std::move(gamePath)}
 {
 }
@@ -158,6 +161,8 @@ void LitSessionHost::abandon()
   m_abandoned = true;
   m_eventHandler = nullptr;
   m_camera = nullptr;
+  // the document may go with the owner; the observer is never on the stack of a wait
+  m_observer.reset();
   if (m_container)
   {
     m_container->hide();
@@ -233,6 +238,29 @@ Result<QWidget*> LitSessionHost::start(QWidget& containerParent)
 
   // the parse thread needs no device, so it starts with phase A (§3.1, §3.5)
   startMaterials();
+
+  // §3.3: the session's view of the document; its first snapshot goes to the session as
+  // soon as phase B has run and the render thread is ready
+  m_observer = std::make_unique<LitDocumentObserver>(
+    m_document,
+    m_generation,
+    LitSnapshotTarget{
+      [this] { return m_window && m_window->isExposed(); },
+      [this] {
+        const auto* liveSession = session();
+        return liveSession && liveSession->snapshotSlotFree();
+      },
+      [this](std::shared_ptr<const lit::Snapshot> snapshot) {
+        auto* liveSession = session();
+        return liveSession && liveSession->offerSnapshot(std::move(snapshot));
+      },
+      [this] {
+        if (m_materials)
+        {
+          m_materials->reload();
+        }
+      },
+    });
   return m_container.data();
 }
 
@@ -318,9 +346,22 @@ void LitSessionHost::setCamera(const lit::CameraState& camera)
   }
 }
 
+void LitSessionHost::panelShown()
+{
+  if (m_observer)
+  {
+    m_observer->requestFlush();
+  }
+}
+
 void LitSessionHost::windowChanged()
 {
   reconcile();
+  // an exposed window takes what coalesced while it was hidden (S31)
+  if (m_observer)
+  {
+    m_observer->requestFlush();
+  }
 }
 
 void LitSessionHost::devicePixelRatioChanged()
@@ -426,16 +467,25 @@ void LitSessionHost::runTeardownThrough(const TeardownStep last)
       {
         stopRenderThread();
       }
+      m_report.teardownSteps.emplace_back("render thread stopped");
+      break;
+    case TeardownStep::ObserverDestroyed:
+      // after the render thread, which takes no snapshot any more, and before the
+      // material service, which the observer reloads
+      m_observer.reset();
+      m_report.teardownSteps.emplace_back("document observer destroyed");
       break;
     case TeardownStep::GpuObjectsReleased:
       if (m_session)
       {
         m_session->releaseGpuObjects();
       }
+      m_report.teardownSteps.emplace_back("GPU objects released");
       break;
     case TeardownStep::ContainerDeleted:
       // the window and Qt's VkSurfaceKHR go with it, while the instance is still alive
       delete m_container.data();
+      m_report.teardownSteps.emplace_back("container deleted");
       break;
     case TeardownStep::VkDeviceDestroyed:
       if (m_session)
@@ -444,9 +494,11 @@ void LitSessionHost::runTeardownThrough(const TeardownStep last)
       }
       recordTeardown();
       m_session.reset();
+      m_report.teardownSteps.emplace_back("device destroyed");
       break;
     case TeardownStep::InstanceDestroyed:
       m_instance.reset();
+      m_report.teardownSteps.emplace_back("instance destroyed");
       break;
     case TeardownStep::DispatcherReset:
       // after the session, which held the dispatcher, is gone
@@ -455,6 +507,7 @@ void LitSessionHost::runTeardownThrough(const TeardownStep last)
         m_report.messages.push_back(
           "The Vulkan dispatcher was still in use at the stop.");
       }
+      m_report.teardownSteps.emplace_back("dispatcher reset");
       break;
     case TeardownStep::MaterialsDestroyed:
       stopMaterials();
@@ -467,6 +520,7 @@ void LitSessionHost::runTeardownThrough(const TeardownStep last)
         m_report.deviceLost =
           m_report.deviceLost || event == lit::SessionEvent::DeviceLost;
       }
+      m_report.teardownSteps.emplace_back("materials destroyed");
       break;
     }
   }
@@ -771,6 +825,13 @@ void LitSessionHost::dispatchSessionEvent(
   case lit::SessionEvent::Parked:
     reconcile();
     break;
+  case lit::SessionEvent::ReadyForSnapshot:
+    // S31, B0.3: the inbox is empty
+    if (m_observer)
+    {
+      m_observer->readyForSnapshot();
+    }
+    break;
   case lit::SessionEvent::SwapchainOutOfDate:
     // a request for a generation that is gone already was answered (review V.2)
     if (drawing() && m_session->swapchainReplacementRequested())
@@ -793,7 +854,6 @@ void LitSessionHost::dispatchSessionEvent(
   case lit::SessionEvent::MaterialWarning:
   case lit::SessionEvent::DeviceLost:
   case lit::SessionEvent::Error:
-  case lit::SessionEvent::ReadyForSnapshot:
     if (m_eventHandler)
     {
       m_eventHandler(m_generation, event, message);

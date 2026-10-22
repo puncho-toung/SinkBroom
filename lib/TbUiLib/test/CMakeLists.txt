@@ -85,6 +85,7 @@ if(TB_ENABLE_LIT_PREVIEW)
   # TbLitLib; nothing links a Vulkan library (C9).
   target_sources(TbUiLibTest
     PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitDocumentObserver.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitPreviewPanel.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitSnapshotBuilder.cpp)
   target_link_libraries(TbUiLibTest PRIVATE TbLitLib)

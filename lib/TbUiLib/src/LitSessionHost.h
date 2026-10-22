@@ -51,7 +51,9 @@ class MaterialService;
 
 namespace tb::ui
 {
+class LitDocumentObserver;
 class LitPreviewWindow;
+class MapDocument;
 
 /**
  * The Qt half of one lit preview session: the QVulkanInstance, the window and its
@@ -77,6 +79,12 @@ class LitPreviewWindow;
  * table then. Phase B hands the service to the session, which forgets it in its own
  * teardown step 1, long before the service goes in the last step here.
  *
+ * The document observer (LitDocumentObserver, §3.3, LP1b.1) is made with phase A, after
+ * the material service, and watches the document for the session: it offers the
+ * session its snapshots once phase B has run, while the window is exposed, and reloads
+ * the material service when the material collections change. The host passes it
+ * ReadyForSnapshot, the panel's panelShown and every window change.
+ *
  * Teardown runs these steps in this order, each once, whatever ran of the start:
  * 1. ask the parse thread to stop after its current directory entry, container entry or
  *    decl file (plan step 1, R5.20, G4); then stop the render thread: park it, then stop
@@ -84,15 +92,18 @@ class LitPreviewWindow;
  *    present may wait for one (no bound on the join: a thread that still runs uses the
  *    session, so the wait goes on and says so); then the session stops its CPU pool and
  *    forgets the material service
- * 2. LitSession::releaseGpuObjects
- * 3. delete the window container, which destroys the window and Qt's VkSurfaceKHR
- * 4. LitSession::destroyVkDevice
- * 5. destroy the QVulkanInstance
- * 6. reset the dispatcher
- * 7. destroy the material registry on the parse thread, then join it (plan step 8)
+ * 2. destroy the document observer, which drops its subscriptions: the render thread
+ *    takes no snapshot any more, and the material service it reloads is still alive
+ * 3. LitSession::releaseGpuObjects
+ * 4. delete the window container, which destroys the window and Qt's VkSurfaceKHR
+ * 5. LitSession::destroyVkDevice
+ * 6. destroy the QVulkanInstance
+ * 7. reset the dispatcher
+ * 8. destroy the material registry on the parse thread, then join it (plan step 8)
  * The window is detached before the first step. A warning, error or loss that the
  * session posted and the event loop did not deliver before the stop is carried into the
- * report (review R.1).
+ * report (review R.1), and the report lists the steps in the order they ran. An abandoned
+ * host destroys its observer at once, because the document may go with the owner.
  *
  * While the host services sent messages it is busy: Qt code that runs then and calls back
  * into the host is deferred to the event loop, and an owner that goes away meanwhile
@@ -103,8 +114,8 @@ class LitPreviewWindow;
 class LitSessionHost : public QObject
 {
 public:
-  // receives Ready, Warning, DeviceLost, Error, the material events and ReadyForSnapshot
-  // on the GUI thread, queued
+  // receives Ready, Warning, DeviceLost, Error and the material events on the GUI
+  // thread, queued; ReadyForSnapshot goes to the document observer
   using EventHandler = std::function<void(
     std::uint64_t generation, lit::SessionEvent event, const std::string& message)>;
   // the owner's last copy of the 3D view's camera, if it has one
@@ -115,6 +126,7 @@ private:
   {
     None,
     RenderThreadStopped,
+    ObserverDestroyed,
     GpuObjectsReleased,
     ContainerDeleted,
     VkDeviceDestroyed,
@@ -147,6 +159,8 @@ private:
   std::uint64_t m_generation;
   EventHandler m_eventHandler;
   CameraProvider m_camera;
+  // the owner's document, which outlives this host unless the host is abandoned
+  MapDocument& m_document;
   // the game whose decls the material service reads; empty: no service
   std::filesystem::path m_gamePath;
   std::shared_ptr<UndeliveredMessages> m_undelivered =
@@ -165,6 +179,8 @@ private:
   std::unique_ptr<lit::LitSession> m_session;
   // the parse thread; it outlives the session, whose render thread will read its tables
   std::unique_ptr<lit::MaterialService> m_materials;
+  // from phase A to teardown step 2
+  std::unique_ptr<LitDocumentObserver> m_observer;
 
   // the size in pixels that the current swapchain was made for
   QSize m_swapchainSize;
@@ -194,6 +210,7 @@ public:
     std::uint64_t generation,
     EventHandler eventHandler,
     CameraProvider camera,
+    MapDocument& document,
     std::filesystem::path gamePath = {});
   ~LitSessionHost() override;
 
@@ -215,6 +232,8 @@ public:
 
   // passed on once phase B has run; phase B asks the camera provider
   void setCamera(const lit::CameraState& camera);
+  // the panel was shown: the document observer offers what coalesced while it was hidden
+  void panelShown();
 
   /**
    * Whether the host is inside a wait that services the window system's sent messages.
