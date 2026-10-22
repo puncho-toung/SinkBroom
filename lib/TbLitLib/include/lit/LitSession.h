@@ -211,6 +211,7 @@ class PipelineCompiler;
 class RenderThread;
 class SessionEvents;
 struct LightTable;
+struct RenderFrameAccess;
 struct Snapshot;
 
 /**
@@ -440,6 +441,20 @@ public:
   PipelineCompiler* pipelineCompilerForTesting() const;
   // the options the session was created with (C1: the game path among them); tests only
   const SessionOptions& optionsForTesting() const;
+  // LP2.1, any thread: a headless session's next frame is drawn at this size (its
+  // targets made again, C28), and a frame is triggered
+  void resizeHeadlessForTesting(std::uint32_t width, std::uint32_t height);
+  // C28, any thread: the frame resources' render-target generation (1 after create)
+  std::uint64_t renderTargetGenerationForTesting() const;
+  // the device-local heaps' usage now (VK_EXT_memory_budget); any thread, tests only
+  std::optional<VramUsage> vramForTesting() const;
+  /**
+   * LP2.1, any thread: the next frame drawn runs hook once on the render thread, inside
+   * its command list after its uploads and before its first pass, with the render
+   * thread's resources (RenderFrameAccess, in TbLitLib's RenderThread.h); a frame is
+   * triggered. A hook that is never run (the session stops first) is dropped.
+   */
+  void runInFrameForTesting(std::function<void(RenderFrameAccess&)> hook);
   /**
    * D9, any thread: every program the compile thread was asked for, enabled or disabled
    * with the field that disabled it; the session's report of its passes.

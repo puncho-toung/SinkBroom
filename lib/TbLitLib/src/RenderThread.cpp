@@ -26,6 +26,8 @@
 #include "lit/Snapshot.h"
 #include "lit/SwapchainRules.h"
 
+#include "kd/result.h"
+
 #include "vm/vec.h"
 
 #include <fmt/format.h>
@@ -179,7 +181,19 @@ Result<void> RenderThread::createFrameResources(
   {
     return Error{"Cannot create the frame resources"};
   }
-  return kdl::void_success;
+
+  // LP2.1 (C14, C6): the registry's targets at the surface's extent (headless: the
+  // headless extent); a later frame of another extent makes them again
+  const auto extent = m_headless    ? m_headlessExtent
+                      : m_swapchain ? m_swapchain->extent
+                                    : vk::Extent2D{1, 1};
+  return m_frameResources.create(
+           device,
+           m_device.gpu().d24s8Supported,
+           vk::Extent2D{std::max(extent.width, 1u), std::max(extent.height, 1u)})
+         | kdl::transform([&]() {
+             m_renderTargetGeneration = m_frameResources.renderTargetGeneration();
+           });
 }
 
 bool RenderThread::headless() const
@@ -404,6 +418,8 @@ void RenderThread::join()
 
 void RenderThread::releaseFrameResources()
 {
+  // §3.1 step 2: every handle the registry holds
+  m_frameResources.releaseAll();
   m_commandList = nullptr;
   for (auto& event : m_frameEvents)
   {
@@ -433,6 +449,95 @@ void RenderThread::setDebugHook(const DebugHook point, std::function<void()> hoo
 {
   const auto lock = std::scoped_lock{m_mutex};
   m_debugHooks[std::size_t(point)] = std::move(hook);
+}
+
+void RenderThread::resizeHeadless(const vk::Extent2D extent)
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_headlessResize =
+      vk::Extent2D{std::max(extent.width, 1u), std::max(extent.height, 1u)};
+    m_pacer.trigger();
+  }
+  m_wake.notify_all();
+}
+
+void RenderThread::runInFrame(std::function<void(RenderFrameAccess&)> hook)
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_frameHooks.push_back(std::move(hook));
+    m_pacer.trigger();
+  }
+  m_wake.notify_all();
+}
+
+std::uint64_t RenderThread::renderTargetGeneration() const
+{
+  return m_renderTargetGeneration;
+}
+
+void RenderThread::applyHeadlessResize()
+{
+  auto resize = std::optional<vk::Extent2D>{};
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    resize = std::exchange(m_headlessResize, std::nullopt);
+  }
+  if (!m_headless || !resize || *resize == m_headlessExtent)
+  {
+    return;
+  }
+  // D35: the old target is held until the frames in flight that cleared it have finished
+  // (a clear holds no reference of its own)
+  m_frameResources.retire(
+    m_headlessTarget.Get(),
+    std::uint64_t(m_headlessExtent.width) * m_headlessExtent.height * 4,
+    m_frameIndex);
+  m_headlessTarget = m_device.device().createTexture(
+    nvrhi::TextureDesc{}
+      .setWidth(resize->width)
+      .setHeight(resize->height)
+      .setFormat(nvrhi::Format::RGBA8_UNORM)
+      .setDebugName("Lit preview headless target")
+      .setIsRenderTarget(true)
+      .setInitialState(nvrhi::ResourceStates::RenderTarget)
+      .setKeepInitialState(true));
+  m_headlessExtent = *resize;
+  if (!m_headlessTarget)
+  {
+    m_events.markFailed("Cannot create the headless target");
+  }
+}
+
+bool RenderThread::prepareFrameResources(const vk::Extent2D extent)
+{
+  // C28: a new extent makes the targets again and bumps the generation once
+  return m_frameResources.ensureExtent(extent, m_frameIndex) | kdl::transform([&](bool) {
+           m_renderTargetGeneration = m_frameResources.renderTargetGeneration();
+           return true;
+         })
+         | kdl::if_error([&](const auto& e) { m_events.markFailed(e.msg); })
+         | kdl::value_or(false);
+}
+
+void RenderThread::runFrameHooks(nvrhi::ICommandList& commandList)
+{
+  auto hooks = std::vector<std::function<void(RenderFrameAccess&)>>{};
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    hooks.swap(m_frameHooks);
+  }
+  if (hooks.empty())
+  {
+    return;
+  }
+  auto access =
+    RenderFrameAccess{m_device.device(), commandList, m_frameIndex, m_frameResources};
+  for (auto& hook : hooks)
+  {
+    hook(access);
+  }
 }
 
 void RenderThread::main() noexcept
@@ -642,6 +747,11 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       m_frameEventSet[slot] = false;
     }
     m_timers.resolve(device, slot);
+    // frames 0 to N - FramesInFlight have finished
+    if (m_frameIndex >= FramesInFlight)
+    {
+      framesCompleted(m_frameIndex - FramesInFlight + 1);
+    }
 
     // the pass boundary before LP0's one pass: park and stop are honoured before an
     // image is acquired
@@ -650,6 +760,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       return FrameOutcome::Skipped;
     }
 
+    applyHeadlessResize();
     auto* const target = m_swapchain.get();
     if (!target && !m_headless)
     {
@@ -661,6 +772,11 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       target->stale = true;
       requestRecreate(*target, "the generation has no image wrappers");
       return FrameOutcome::Skipped;
+    }
+    // C14, C28: the frame's targets at the surface's extent, before an image is acquired
+    if (!prepareFrameResources(target ? target->extent : m_headlessExtent))
+    {
+      return FrameOutcome::Stopped;
     }
     auto imageIndex = std::uint32_t{0};
     auto acquireMs = 0.0;
@@ -725,6 +841,11 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     const auto recordStart = FrameClock::now();
     auto* const timer = m_timers.query(slot);
     const auto color = clearColorFor(camera.direction);
+    m_frameResources.setFrameTarget(texture);
+    // C14: until LP2.2a the frame's one pass is LP0's clear of its presentation target
+    auto clearPass = PassDesc{};
+    clearPass.name = "clear";
+    clearPass.writes = {std::string{frame_resource::FrameTarget}};
 
     {
       auto recording = OpenCommandList{device, *m_commandList};
@@ -733,10 +854,22 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       {
         commandList.beginTimerQuery(timer);
       }
-      commandList.clearTextureFloat(
-        texture,
-        nvrhi::AllSubresources,
-        nvrhi::Color{color[0], color[1], color[2], color[3]});
+      // D70, D78: what the session's start clears and the frame's uploads come before its
+      // first pass
+      m_frameResources.recordStartClears(commandList);
+      runFrameHooks(commandList);
+      const auto clearTarget =
+        m_frameResources.resolve(clearPass)
+        | kdl::transform([](const PassResources& r) { return r.writes.front().texture; })
+        | kdl::if_error([&](const auto& e) { m_events.markFailed(e.msg); })
+        | kdl::value_or(nullptr);
+      if (clearTarget)
+      {
+        commandList.clearTextureFloat(
+          clearTarget,
+          nvrhi::AllSubresources,
+          nvrhi::Color{color[0], color[1], color[2], color[3]});
+      }
       if (takeFault(DebugFault::ThrowWhileRecording))
       {
         throw std::runtime_error{"injected while recording"};
@@ -872,6 +1005,16 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
   }
 }
 
+void RenderThread::framesCompleted(const std::uint64_t completedFrames)
+{
+  if (completedFrames > m_completedFrames)
+  {
+    m_completedFrames = completedFrames;
+  }
+  // D35: what only finished frames used is let go
+  m_frameResources.collectRetired(m_completedFrames);
+}
+
 bool RenderThread::waitForFrameEvent(const std::size_t slot)
 {
   // NVRHI's waitEventQuery would wait without a bound
@@ -951,8 +1094,20 @@ void RenderThread::idleTick()
       }
       m_timers.resolve(device, slot);
     }
+    // every submitted frame has finished once each set event query has
+    auto allFinished = true;
+    for (std::size_t slot = 0; slot < FramesInFlight; ++slot)
+    {
+      allFinished =
+        allFinished
+        && (!m_frameEventSet[slot] || device.pollEventQuery(m_frameEvents[slot]));
+    }
+    if (allFinished)
+    {
+      framesCompleted(m_frameIndex);
+    }
     device.runGarbageCollection();
-    if (allResolved)
+    if (allResolved && allFinished)
     {
       m_idleWorkPending = false;
     }
@@ -1005,6 +1160,7 @@ void RenderThread::parkGpuWork()
     if (!m_events.lost())
     {
       m_timers.resolveAll(m_device.device(), m_frameIndex);
+      framesCompleted(m_frameIndex);
     }
     if (m_swapchain)
     {
@@ -1064,6 +1220,7 @@ void RenderThread::finish() noexcept
     if (waitForIdle("at stop") && !m_events.lost())
     {
       m_timers.resolveAll(m_device.device(), m_frameIndex);
+      framesCompleted(m_frameIndex);
     }
   }
   catch (const vk::DeviceLostError& e)

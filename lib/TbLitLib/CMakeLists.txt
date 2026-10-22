@@ -19,6 +19,8 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EntityState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FramePacer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameResources.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameResources.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameTimers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameTimers.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GameFileSource.cpp

@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "FrameResources.h"
 #include "FrameTimers.h"
 #include "base/Macros.h"
 #include "base/Result.h"
@@ -41,6 +42,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace tb::lit
 {
@@ -53,6 +55,19 @@ class SceneGeometry;
 class SessionEvents;
 struct Snapshot;
 struct SwapchainGeneration;
+
+/**
+ * Test hooks (LP2.1): what a frame's hook may use, on the render thread, inside the
+ * frame's open command list once its uploads are recorded and before its first pass.
+ */
+struct RenderFrameAccess
+{
+  nvrhi::IDevice& device;
+  nvrhi::ICommandList& commandList;
+  // the frame's index (m_frameIndex before it is submitted)
+  std::uint64_t frameIndex;
+  FrameResources& frame;
+};
 
 /**
  * A session's render thread (§3.1, C20) and what it draws into. It alone opens, records
@@ -100,11 +115,17 @@ private:
   // the frame's one command list, immediate; any second list that may be open alongside
   // it sets enableImmediateExecution = false (R5.22)
   nvrhi::CommandListHandle m_commandList;
+  // LP2.1 (C14, C6): the frame's targets, framebuffers and tonemap buffers
+  FrameResources m_frameResources;
+  // C28: m_frameResources' render-target generation, for any thread (tests)
+  std::atomic<std::uint64_t> m_renderTargetGeneration = 0;
   std::array<nvrhi::EventQueryHandle, FramesInFlight> m_frameEvents;
   // the slot's event query was set by a submitted frame and not waited for yet
   std::array<bool, FramesInFlight> m_frameEventSet = {};
   FrameTimers m_timers;
   std::uint64_t m_frameIndex = 0;
+  // D35: the frames known to have finished on the GPU (frames 0 to m_completedFrames - 1)
+  std::uint64_t m_completedFrames = 0;
   std::uint64_t m_framesSkipped = 0;
   bool m_readyPosted = false;
   bool m_idleWorkPending = false;
@@ -142,6 +163,10 @@ private:
   std::uint64_t m_batchesApplied = 0;
   FramePacer m_pacer;
   std::array<std::function<void()>, 4> m_debugHooks;
+  // LP2.1 test hooks: the headless extent the next frame takes, and the functions the
+  // next frame runs once (RenderFrameAccess)
+  std::optional<vk::Extent2D> m_headlessResize;
+  std::vector<std::function<void(RenderFrameAccess&)>> m_frameHooks;
   // the number of the last generation whose replacement was requested; GUI thread reads
   std::atomic<std::uint64_t> m_recreateRequestedFor = 0;
   // the extent of the last generation replaced because it was SUBOPTIMAL
@@ -220,6 +245,14 @@ public:
 
   void injectFault(DebugFault fault);
   void setDebugHook(DebugHook point, std::function<void()> hook);
+  // any thread: a headless session's next frame is drawn at extent (its target and the
+  // frame resources made again); a frame is triggered
+  void resizeHeadless(vk::Extent2D extent);
+  // any thread: the next frame drawn runs hook once on the render thread (see
+  // RenderFrameAccess); a frame is triggered
+  void runInFrame(std::function<void(RenderFrameAccess&)> hook);
+  // any thread: the frame resources' render-target generation (C28)
+  std::uint64_t renderTargetGeneration() const;
 
 private:
   void main() noexcept;
@@ -229,9 +262,16 @@ private:
   bool canDraw() const;
 
   FrameOutcome drawFrame(const CameraState& camera);
+  // a headless resize asked for, applied before the frame's extent is known
+  void applyHeadlessResize();
+  // the frame's resources at its extent; false: failed
+  bool prepareFrameResources(vk::Extent2D extent);
+  void runFrameHooks(nvrhi::ICommandList& commandList);
   // whether the given fault was injected; it is taken
   bool takeFault(DebugFault fault);
   bool waitForFrameEvent(std::size_t slot);
+  // frames 0 to completedFrames - 1 have finished: what only they used is let go (D35)
+  void framesCompleted(std::uint64_t completedFrames);
   void runDebugHook(DebugHook point);
   void requestRecreate(
     SwapchainGeneration& generation, std::string_view reason, bool suboptimal = false);

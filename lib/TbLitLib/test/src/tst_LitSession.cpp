@@ -20,6 +20,7 @@
 #include "LitMapFixture.h"
 #include "LitTestUtils.h"
 #include "PipelineCompiler.h"
+#include "RenderThread.h"
 #include "StringMakers.h"
 #include "lit/CpuPool.h"
 #include "lit/EnginePipelineState.h"
@@ -1691,6 +1692,209 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     }
     std::cout << "\n";
     std::filesystem::remove(logPath);
+  }
+}
+
+namespace
+{
+
+// LP2.1: runs hook on the render thread in the session's next frame (RenderFrameAccess)
+// and waits for it; a hook asserts nothing itself (Catch2 is not thread-safe), it
+// gathers what the test checks
+template <typename Hook>
+bool inFrame(
+  LitSession& session, Hook hook, const std::chrono::milliseconds timeout = 10000ms)
+{
+  auto done = std::make_shared<std::promise<void>>();
+  auto future = done->get_future();
+  session.runInFrameForTesting(
+    [hook = std::move(hook), done](RenderFrameAccess& access) mutable {
+      hook(access);
+      done->set_value();
+    });
+  return future.wait_for(timeout) == std::future_status::ready;
+}
+
+// the device-local VRAM in use now, in MB; 0 without VK_EXT_memory_budget
+double vramMb(const LitSession& session)
+{
+  const auto vram = session.vramForTesting();
+  return vram ? double(vram->usedBytes) / (1024.0 * 1024.0) : 0.0;
+}
+
+// a headless session with validation on this machine's GPU
+std::unique_ptr<LitSession> gpuSession(
+  const TestInstance& instance,
+  Events& events,
+  const std::uint64_t generation,
+  MaterialService* materials = nullptr,
+  const std::filesystem::path& gamePath = {},
+  const std::filesystem::path& frameLogPath = {})
+{
+  auto options = SessionOptions{};
+  options.validation = true;
+  options.gamePath = gamePath;
+  options.frameLogPath = frameLogPath;
+  return LitSession::create(
+           instance.handles(),
+           VK_NULL_HANDLE,
+           64,
+           48,
+           options,
+           events.sink(),
+           generation,
+           materials)
+         | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+}
+
+// the frames in flight and the idle pass's garbage collection are done
+void settle(LitSession& session)
+{
+  session.requestFrame();
+  std::this_thread::sleep_for(IdleCollectInterval + 500ms);
+}
+
+} // namespace
+
+// LP2.1: the render thread's GPU resources (FrameResources, the arenas, the image slots
+// and textures, the binding sets, the samplers). Each section tears down with no NVRHI
+// reference, no NVRHI error, no validation message and every device allocation freed.
+TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
+{
+  const auto library = VulkanLibrary{};
+  REQUIRE(library.getInstanceProcAddr != nullptr);
+
+  SECTION("C14, C28: the frame resources, and 100 resizes back at the baseline")
+  {
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+      CHECK(session->renderTargetGenerationForTesting() == 1u);
+
+      // the registry's resources by name, at the headless extent, in the formats of C6
+      struct Seen
+      {
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        bool exposureCleared = false;
+        std::vector<std::string> found;
+        std::vector<nvrhi::Format> formats;
+        bool hdrUav = false;
+        std::uint64_t targetBytes = 0;
+        std::string unknown;
+        std::size_t passWrites = 0;
+      };
+      auto seen = Seen{};
+      const auto d24s8 = session->deviceFacts().d24s8Supported;
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        namespace fr = frame_resource;
+        seen.width = access.frame.extent().width;
+        seen.height = access.frame.extent().height;
+        seen.exposureCleared = access.frame.exposureCleared();
+        for (const auto name :
+             {fr::CurrentRenderHdr,
+              fr::CurrentDepth,
+              fr::CurrentRenderLdr,
+              fr::HdrFramebuffer,
+              fr::LdrFramebuffer,
+              fr::HistogramBuffer,
+              fr::ExposureBuffer,
+              fr::FrameTarget})
+        {
+          if (const auto resource = access.frame.find(name))
+          {
+            seen.found.emplace_back(name);
+            if (resource->texture)
+            {
+              seen.formats.push_back(resource->texture->getDesc().format);
+            }
+          }
+        }
+        seen.hdrUav = access.frame.find(fr::CurrentRenderHdr)->texture->getDesc().isUAV;
+        seen.targetBytes = access.frame.renderTargetBytes();
+        auto pass = PassDesc{};
+        pass.name = "a test pass";
+        pass.reads = {std::string{fr::CurrentRenderHdr}, std::string{fr::ExposureBuffer}};
+        pass.writes = {std::string{fr::LdrFramebuffer}};
+        seen.passWrites = access.frame.resolve(pass)
+                          | kdl::transform([](const auto& r) { return r.writes.size(); })
+                          | kdl::value_or(std::size_t{0});
+        pass.reads.emplace_back("_noSuchImage");
+        access.frame.resolve(pass)
+          | kdl::if_error([&](const auto& e) { seen.unknown = e.msg; }) | kdl::ignore();
+      }));
+      CHECK(seen.width == 64u);
+      CHECK(seen.height == 48u);
+      CHECK(seen.exposureCleared);
+      CHECK(seen.found.size() == 8u);
+      CHECK(
+        seen.formats
+        == std::vector<nvrhi::Format>{
+          nvrhi::Format::RGBA16_FLOAT,
+          d24s8 ? nvrhi::Format::D24S8 : nvrhi::Format::D32S8,
+          nvrhi::Format::RGBA8_UNORM,
+          nvrhi::Format::RGBA8_UNORM});
+      CHECK(seen.hdrUav);
+      CHECK(seen.targetBytes == 64u * 48u * (8u + (d24s8 ? 4u : 8u) + 4u));
+      CHECK(seen.passWrites == 1u);
+      CHECK(
+        seen.unknown
+        == "the pass a test pass reads _noSuchImage, which the frame has not");
+
+      settle(*session);
+      const auto baselineAllocations = session->deviceMemoryAllocations();
+      const auto baselineVram = vramMb(*session);
+
+      // C28: each new extent makes the targets again and bumps the generation once; the
+      // last returns to the first extent
+      for (std::uint32_t i = 1; i <= 100; ++i)
+      {
+        CAPTURE(i);
+        const auto width = i == 100 ? 64u : 65u + i;
+        const auto height = i == 100 ? 48u : 48u + (i % 5u);
+        session->resizeHeadlessForTesting(width, height);
+        REQUIRE(waitFor(
+          [&] { return session->renderTargetGenerationForTesting() == 1u + i; },
+          5000ms,
+          false));
+      }
+      // the same extent again: no new targets
+      const auto frames = session->framesPresented();
+      session->resizeHeadlessForTesting(64, 48);
+      REQUIRE(
+        waitFor([&] { return session->framesPresented() > frames; }, 5000ms, false));
+      CHECK(session->renderTargetGenerationForTesting() == 101u);
+
+      // the old targets are collected: the allocations and the VRAM are the baseline's
+      settle(*session);
+      CHECK(waitFor(
+        [&] { return session->deviceMemoryAllocations() == baselineAllocations; },
+        5000ms,
+        false));
+      const auto vramAfter = vramMb(*session);
+      std::cout << "100 resizes: allocations " << baselineAllocations << " -> "
+                << session->deviceMemoryAllocations() << ", VRAM " << baselineVram
+                << " MB -> " << vramAfter << " MB\n";
+      CHECK(vramAfter <= baselineVram + 1.0);
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      CHECK(events.count(SessionEvent::Warning) == 0u);
+      events.print("frame resources");
+    }
+    CHECK(resetDispatcher());
+    messages.print("frame resources, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
   }
 }
 

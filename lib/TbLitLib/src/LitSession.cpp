@@ -581,6 +581,27 @@ const SessionOptions& LitSession::optionsForTesting() const
   return m_options;
 }
 
+void LitSession::resizeHeadlessForTesting(
+  const std::uint32_t width, const std::uint32_t height)
+{
+  m_renderThread->resizeHeadless(vk::Extent2D{width, height});
+}
+
+std::uint64_t LitSession::renderTargetGenerationForTesting() const
+{
+  return m_renderThread ? m_renderThread->renderTargetGeneration() : 0u;
+}
+
+std::optional<VramUsage> LitSession::vramForTesting() const
+{
+  return m_device && !m_vkDeviceDestroyed ? m_device->vram() : std::nullopt;
+}
+
+void LitSession::runInFrameForTesting(std::function<void(RenderFrameAccess&)> hook)
+{
+  m_renderThread->runInFrame(std::move(hook));
+}
+
 std::vector<ProgramReport> LitSession::programReport() const
 {
   return m_compiler ? m_compiler->programs() : std::vector<ProgramReport>{};
