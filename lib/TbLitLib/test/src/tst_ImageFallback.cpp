@@ -1,0 +1,416 @@
+/*
+ Copyright (C) 2026 TrenchBroom contributors
+
+ This file is part of TrenchBroom.
+
+ TrenchBroom is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ TrenchBroom is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+// LP1c.2 (S14, D24): the source fallback. Where the engine would binarize, the copied
+// loaders read the source and the levels are the engine's encoder input: its channel
+// layouts as RGBA8 (R11G11B10F for HDR usages), checked exactly here against layouts
+// computed independently from Load2DFromMemory's rules; the engine's own caches are
+// compared in tst_ImageGoldens.cpp (D61).
+
+#include "ImageTestFiles.h"
+#include "LitTestUtils.h"
+#include "fs/TestEnvironment.h"
+#include "lit/GameFileSource.h"
+#include "lit/ImageCache.h"
+#include "lit/ImageFallback.h"
+#include "lit/MaterialDecls.h"
+#include "lit/MaterialService.h"
+
+#include "kd/result.h"
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
+
+namespace tb::lit
+{
+namespace
+{
+
+using namespace engine_image;
+using namespace test;
+using namespace std::chrono_literals;
+
+constexpr int CubeNative = 1;
+constexpr int CubePanorama = 3;
+
+MaterialImageKey keyOf(
+  const std::string& name,
+  const int usage,
+  const int cube = Cube2D,
+  const int filter = FilterDefault)
+{
+  auto key = MaterialImageKey{};
+  key.name = name;
+  key.usage = usage;
+  key.filter = filter;
+  key.cube = cube;
+  return key;
+}
+
+int clampByte(const int x)
+{
+  return std::clamp(x, 0, 255);
+}
+
+// ColorSpace.cpp:55-57 and ConvertRGBToCoCg_Y, written out again
+std::vector<std::uint8_t> coCgY(const Rgba& image)
+{
+  auto out = std::vector<std::uint8_t>{};
+  for (auto i = 0; i < image.width * image.height; ++i)
+  {
+    const int r = image.pixels[std::size_t(4 * i)];
+    const int g = image.pixels[std::size_t(4 * i + 1)];
+    const int b = image.pixels[std::size_t(4 * i + 2)];
+    out.push_back(std::uint8_t(clampByte(((((r << 1) - (b << 1)) + 2) >> 2) + 128)));
+    out.push_back(std::uint8_t(clampByte((((-r + (g << 1) - b) + 2) >> 2) + 128)));
+    out.push_back(0);
+    out.push_back(std::uint8_t(clampByte(((r + 2 * g + b) + 2) >> 2)));
+  }
+  return out;
+}
+
+// the box filter of R_MipMap for even sizes
+std::vector<std::uint8_t> boxMip(
+  const std::vector<std::uint8_t>& in, const int width, const int height)
+{
+  auto out = std::vector<std::uint8_t>{};
+  const auto row = width * 4;
+  for (auto y = 0; y < height / 2; ++y)
+  {
+    for (auto x = 0; x < width / 2; ++x)
+    {
+      const auto at = std::size_t(2 * y * row + 2 * x * 4);
+      for (auto c = 0; c < 4; ++c)
+      {
+        out.push_back(std::uint8_t(
+          (in[at + std::size_t(c)] + in[at + 4 + std::size_t(c)]
+           + in[at + std::size_t(row + c)] + in[at + std::size_t(row + 4 + c)])
+          >> 2));
+      }
+    }
+  }
+  return out;
+}
+
+std::vector<std::uint8_t> levelBytes(const CachedImage& image, const std::size_t record)
+{
+  const auto& level = image.levels.at(record);
+  return {
+    image.data.begin() + std::ptrdiff_t(level.offset),
+    image.data.begin() + std::ptrdiff_t(level.offset + level.size)};
+}
+
+class FallbackGame
+{
+private:
+  fs::TestEnvironment m_env;
+
+public:
+  void file(const std::string& name, const std::string& bytes) const
+  {
+    writeTextFile(m_env.dir() / "base" / "textures" / "lp1c" / name, bytes);
+  }
+
+  std::filesystem::path base() const { return m_env.dir() / "base"; }
+  const std::filesystem::path& path() const { return m_env.dir(); }
+};
+
+} // namespace
+
+TEST_CASE("ImageFallback, the engine's channel layouts before its encoder (D24)")
+{
+  const auto game = FallbackGame{};
+  const auto image = gradient(16, 8);
+  game.file("grad.tga", tgaFile(image, 32));
+  game.file("flat.tga", tgaFile(flat(8, 8, 200, 100, 50, 25), 32));
+  game.file("metal_s.tga", tgaFile(flat(8, 8, 1, 2, 3), 32));
+  game.file("metal_rmao.png", pngFile(image));
+  for (const auto* side : {"_px", "_nx", "_py", "_ny", "_pz", "_nz"})
+  {
+    game.file(
+      std::string{"sky"} + side + ".tga",
+      tgaFile(flat(8, 8, std::uint8_t(side[1]), std::uint8_t(side[2]), 7), 32));
+  }
+  auto pano = std::vector<float>{};
+  for (auto i = 0; i < 8 * 4; ++i)
+  {
+    pano.insert(pano.end(), {2.0f, 0.5f, 1.0f});
+  }
+  game.file("pano.exr", exrFile(8, 4, pano));
+
+  auto source = GameFileSource{game.path()};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+  const auto made = [&](const MaterialImageKey& key) {
+    const auto slot = resolveImage(decls, source, key);
+    INFO(slot.sourceReason);
+    REQUIRE(slot.state == ImageCacheSlot::State::Missing);
+    REQUIRE(slot.image);
+    REQUIRE(slot.image->fromSource);
+    return slot;
+  };
+
+  SECTION("TD_DIFFUSE: YCoCg (Co, Cg, 0, Y) through DXT5's mip chain")
+  {
+    const auto slot = made(keyOf("textures/lp1c/grad", UsageDiffuse));
+    const auto& out = *slot.image;
+    CHECK(out.storedFormat == FormatDxt5);
+    CHECK(out.format == FormatRgba8);
+    CHECK(out.colorFormat == ColorYCoCgDxt5);
+    CHECK(out.textureType == Type2D);
+    CHECK(out.numLevels == engineMipLevels(FormatDxt5, FilterDefault, 16, 8));
+    REQUIRE(out.levels.size() == std::size_t(out.numLevels));
+    CHECK(out.levels[0].width == 16);
+    CHECK(out.levels[0].height == 8);
+    CHECK(levelBytes(out, 0) == coCgY(image));
+    CHECK(out.levels[1].width == 8);
+    CHECK(out.levels[1].height == 4);
+  }
+
+  SECTION("TD_BUMP: x in alpha, y in green (0, G, 0, R), box-filtered mips")
+  {
+    const auto slot = made(keyOf("textures/lp1c/grad", UsageBump));
+    const auto& out = *slot.image;
+    CHECK(out.colorFormat == ColorNormalDxt5);
+    auto expected = std::vector<std::uint8_t>{};
+    for (auto i = 0; i < 16 * 8; ++i)
+    {
+      expected.insert(
+        expected.end(),
+        {0, image.pixels[std::size_t(4 * i + 1)], 0, image.pixels[std::size_t(4 * i)]});
+    }
+    CHECK(levelBytes(out, 0) == expected);
+    // no gamma mips for a bump map: R_MipMap's box filter of the swizzled level
+    CHECK(levelBytes(out, 1) == boxMip(expected, 16, 8));
+  }
+
+  SECTION(
+    "TD_COVERAGE: alpha into green (0, A, 0, 0); TD_DEFAULT and TD_SPECULAR as read")
+  {
+    const auto coverage = made(keyOf("textures/lp1c/grad", UsageCoverage));
+    CHECK(coverage.image->storedFormat == FormatDxt1);
+    CHECK(coverage.image->colorFormat == ColorGreenAlpha);
+    auto expected = std::vector<std::uint8_t>{};
+    for (auto i = 0; i < 16 * 8; ++i)
+    {
+      expected.insert(expected.end(), {0, image.pixels[std::size_t(4 * i + 3)], 0, 0});
+    }
+    CHECK(levelBytes(*coverage.image, 0) == expected);
+
+    const auto plain = made(keyOf("textures/lp1c/grad", UsageDefault));
+    CHECK(plain.image->colorFormat == ColorDefault);
+    CHECK(levelBytes(*plain.image, 0) == image.pixels);
+    const auto specular = made(keyOf("textures/lp1c/grad", UsageSpecular));
+    CHECK(specular.image->storedFormat == FormatDxt1);
+    CHECK(levelBytes(*specular.image, 0) == image.pixels);
+  }
+
+  SECTION("gamma mips of a flat image stay flat, at most one step below")
+  {
+    // R_MipMapWithGamma goes through mip_gammaTable and back with Pow and a truncating
+    // Ftob, so a channel may lose one step, as in the engine
+    const auto slot = made(keyOf("textures/lp1c/flat", UsageDefault));
+    const auto& out = *slot.image;
+    CHECK(out.numLevels == 2);
+    const auto mip = levelBytes(out, 1);
+    REQUIRE(mip.size() == 4u * 4u * 4u);
+    const auto input = std::vector<int>{200, 100, 50, 25};
+    for (std::size_t i = 0; i < mip.size(); ++i)
+    {
+      CAPTURE(i);
+      CHECK(mip[i] == mip[i % 4]);
+      CHECK(int(mip[i]) <= input[i % 4]);
+      CHECK(int(mip[i]) >= input[i % 4] - 1);
+    }
+  }
+
+  SECTION("TD_LIGHT: RGB565, expanded as the cache reader expands it")
+  {
+    const auto slot = made(keyOf("textures/lp1c/grad", UsageLight));
+    const auto& out = *slot.image;
+    CHECK(out.storedFormat == FormatRgb565);
+    CHECK(out.format == FormatRgba8);
+    // not block-compressed: a level per halving down to 1 x 1
+    CHECK(out.numLevels == 5);
+    auto expected = std::vector<std::uint8_t>{};
+    for (auto i = 0; i < 16 * 8; ++i)
+    {
+      const auto r5 = image.pixels[std::size_t(4 * i)] >> 3;
+      const auto g6 = image.pixels[std::size_t(4 * i + 1)] >> 2;
+      const auto b5 = image.pixels[std::size_t(4 * i + 2)] >> 3;
+      expected.insert(
+        expected.end(),
+        {std::uint8_t((r5 * 527 + 23) >> 6),
+         std::uint8_t((g6 * 259 + 33) >> 6),
+         std::uint8_t((b5 * 527 + 23) >> 6),
+         255});
+    }
+    CHECK(levelBytes(out, 0) == expected);
+  }
+
+  SECTION("an _s with an _rmao.png sibling loads the sibling as TD_SPECULAR_PBR_RMAO")
+  {
+    const auto slot = made(keyOf("textures/lp1c/metal_s", UsageSpecular));
+    CHECK(slot.name.usage == UsageSpecularPbrRmao);
+    CHECK(slot.name.imageName == "textures/lp1c/metal_rmao");
+    CHECK(slot.image->storedFormat == FormatDxt1);
+    CHECK(levelBytes(*slot.image, 0) == image.pixels);
+    CHECK(slot.image->file == "textures/lp1c/metal_rmao#__1200");
+  }
+
+  SECTION("a six-sided cube: CFM_DEFAULT, six records per level")
+  {
+    const auto slot = made(keyOf("textures/lp1c/sky", UsageDefault, CubeNative));
+    const auto& out = *slot.image;
+    CHECK(out.textureType == TypeCubic);
+    CHECK(out.colorFormat == ColorDefault);
+    CHECK(out.width == 8);
+    REQUIRE(out.levels.size() == std::size_t(6 * out.numLevels));
+    const auto sides = std::vector<std::string>{"px", "nx", "py", "ny", "pz", "nz"};
+    for (std::size_t side = 0; side < 6; ++side)
+    {
+      CAPTURE(side);
+      CHECK(out.levels[side].level == 0);
+      CHECK(out.levels[side].destZ == int(side));
+      CHECK(
+        levelBytes(out, side)
+        == flat(8, 8, std::uint8_t(sides[side][0]), std::uint8_t(sides[side][1]), 7)
+             .pixels);
+      CHECK(out.levels[6 + side].level == 1);
+      CHECK(out.levels[6 + side].width == 4);
+    }
+  }
+
+  SECTION("an HDR panorama (hdriMap, TD_HDRI): six 1024 sides of R11G11B10F")
+  {
+    const auto slot = made(keyOf("textures/lp1c/pano", UsageHdri, CubePanorama));
+    const auto& out = *slot.image;
+    CHECK(out.storedFormat == FormatBc6h);
+    CHECK(out.format == FormatR11g11b10f);
+    CHECK(out.textureType == TypeCubic);
+    CHECK(out.width == 1024);
+    // 2.0, 0.5, 1.0 packed: exact in R11G11B10F
+    const auto texel = levelBytes(out, 0);
+    const auto value = std::uint32_t(texel[0]) | (std::uint32_t(texel[1]) << 8)
+                       | (std::uint32_t(texel[2]) << 16)
+                       | (std::uint32_t(texel[3]) << 24);
+    CHECK((value & 0x7FF) == ((16u << 6) | 0u));
+    CHECK(((value >> 11) & 0x7FF) == ((14u << 6) | 0u));
+    CHECK(((value >> 22) & 0x3FF) == ((15u << 5) | 0u));
+  }
+
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+}
+
+TEST_CASE("ImageFallback, the fallback runs only where the engine would binarize")
+{
+  const auto game = FallbackGame{};
+  const auto image = gradient(8, 8);
+  game.file("plain.tga", tgaFile(image, 32));
+  auto truncated = tgaFile(image, 32);
+  truncated.resize(truncated.size() - 5);
+  game.file("half.tga", truncated);
+
+  auto source = GameFileSource{game.path()};
+  auto decls = MaterialDecls{source};
+
+  SECTION("no cache: the source")
+  {
+    const auto slot =
+      resolveImage(decls, source, keyOf("textures/lp1c/plain", UsageDefault));
+    CHECK(slot.state == ImageCacheSlot::State::Missing);
+    REQUIRE(slot.image);
+    CHECK(slot.image->fromSource);
+    CHECK(slot.image->origin.kind == GameFileProbe::Kind::Loose);
+    CHECK(slot.sourceReason.empty());
+  }
+
+  SECTION("a refused file: no image, the reason names it")
+  {
+    static_cast<void>(decls.takeMessages());
+    const auto slot =
+      resolveImage(decls, source, keyOf("textures/lp1c/half", UsageDefault));
+    CHECK_FALSE(slot.image);
+    CHECK_THAT(
+      slot.sourceReason, Catch::Matchers::ContainsSubstring("textures/lp1c/half.tga"));
+    auto warnings = 0;
+    for (const auto& message : decls.takeMessages())
+    {
+      warnings += message.kind == DeclMessageKind::Warning ? 1 : 0;
+    }
+    CHECK(warnings == 1);
+  }
+
+  SECTION("an intrinsic: generated, no fallback")
+  {
+    auto key = keyOf("_white", UsageDefault);
+    key.intrinsic = true;
+    const auto slot = resolveImage(decls, source, key);
+    CHECK(slot.name.generated);
+    CHECK_FALSE(slot.image);
+  }
+
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+}
+
+TEST_CASE("MaterialService serves source images (LP1c.2)")
+{
+  const auto game = FallbackGame{};
+  game.file("plain.tga", tgaFile(gradient(8, 8), 32));
+  auto options = MaterialServiceOptions{};
+  options.makeSource = [path = game.path()](const std::atomic<bool>& cancel) {
+    return std::unique_ptr<DeclSource>{std::make_unique<GameFileSource>(path, &cancel)};
+  };
+  options.pollInterval = 0ms;
+  auto service = MaterialService::create(std::move(options)) | kdl::value();
+
+  const auto plain = keyOf("textures/lp1c/plain", UsageDefault);
+  const auto none = keyOf("textures/lp1c/none", UsageDefault);
+  auto white = keyOf("_white", UsageDefault);
+  white.intrinsic = true;
+  CHECK(service->image(plain).state == ImageLookup::State::Pending);
+  static_cast<void>(service->image(none));
+  static_cast<void>(service->image(white));
+  REQUIRE(service->waitForTableForTesting(
+    [&](const MaterialTable& t) {
+      return t.findImage(plain) && t.findImage(none) && t.findImage(white);
+    },
+    10s));
+  const auto found = service->image(plain);
+  CHECK(found.state == ImageLookup::State::Source);
+  REQUIRE(found.image);
+  CHECK(found.image->fromSource);
+  CHECK(service->image(none).state == ImageLookup::State::Default);
+  CHECK(service->image(white).state == ImageLookup::State::Generated);
+  service->requestStop();
+  service->join();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+}
+
+} // namespace tb::lit

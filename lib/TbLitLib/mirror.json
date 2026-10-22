@@ -11247,6 +11247,136 @@
         }
       ],
       "note": "LP1c.2 (S14): an image's source as ActuallyLoadImage loads it once its cache is not used: the copied R_LoadCubeImages for CF_NATIVE, CF_CAMERA, CF_QUAKE1, CF_SINGLE and CF_PANORAMA (a failure or a side of 0 warns 'Couldn't load cube image: <name>'), the copied R_LoadImageProgram of the PBR-renamed name with the time call's usage for anything else, CF_NATIVE_HDR included as in the engine (a missing picture warns 'Couldn't load image: <name> : <generated name>'); every file through the loader pre-validation (M-IMG-GUARD-01, -02). The pictures are copied out and freed with Mem_Free as ActuallyLoadImage frees them; six sides of 0 that the engine keeps are freed. A quiet load (the editor-image sizes) keeps the copied code's messages in its result. No cache file is written (D11)"
+    },
+    {
+      "id": "M-IMG-07",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            49,
+            49
+          ],
+          "anchor": "image_highQualityCompression",
+          "sha256": "8c4eb7012627a11afec11b8752497d6d65e9049081f7df7ed00850e3fd32e482"
+        },
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            56,
+            331
+          ],
+          "anchor": "idBinaryImage::Load2DFromMemory",
+          "sha256": "09554d3b501071c3a9fd75c523e5bff21e7433a3cd015fc441bfc0a3f7f7f634"
+        },
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            679,
+            837
+          ],
+          "anchor": "idBinaryImage::LoadCubeFromMemory",
+          "sha256": "104494176c48d5c9673dfa82b9bfe51389e133af26516ef8b0fe0a0eafaeb7c9"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            150,
+            319
+          ],
+          "anchor": "idImage::DeriveOpts (gammaMips, the mip count)",
+          "sha256": "d3897765b9cbe5b5ec623796572341854d17a55bff224be35fa674947c4cee3c"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            716,
+            865
+          ],
+          "anchor": "ActuallyLoadImage, the source load and its DeriveOpts",
+          "sha256": "5c793a226ef59203ac4f526469d1b34f37e1060395bd2ddaf9605e76e01d7432"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "MaterialDecls::sourceImageLevels"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "load2DFromMemory"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "loadCubeFromMemory"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageFallback.cpp",
+          "symbol": "sourceImage"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageFallback.cpp",
+          "symbol": "resolveImage"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageCache.cpp",
+          "symbol": "engineImageOpts (gammaMips)"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageCache.cpp",
+          "symbol": "expandEngineRgb565"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::lookUpImage"
+        }
+      ],
+      "note": "LP1c.2 (S14, D24, A3): the source fallback. Where the engine would binarize (no cache, or one resolveImageCache calls Stale) the copied loaders read the source (M-IMG-08) and the levels are what Load2DFromMemory or LoadCubeFromMemory hands its encoder with image_highQualityCompression 0: the 2D colour conversion (YCoCg through the copied idColorSpace::ConvertRGBToCoCg_Y for CFM_YCOCG_DXT5; the fast normal-map swizzle x -> alpha, red and blue 0 for CFM_NORMAL_DXT5; alpha -> green for CFM_GREEN_ALPHA), DXT5's colour format forced to CFM_DEFAULT when neither, the mip chain through the copied R_MipMapR11G11B10F (BC6H, R11G11B10F), R_MipMapWithGamma (gammaMips) or R_MipMap, each level stored as the engine stores an uncompressed format (RGB565 high byte first, then expanded with the cache reader's Option 1; LUM8/INT8 red, ALPHA, L8A8, RG16F, R11G11B10F, RGBA8 for anything else) or as the encoder's RGBA8 input (DXT1, DXT5) or R11G11B10F input (BC6H: the SSE build encodes it). A cube: no conversion, CFM_DEFAULT, the records in the engine's images[ level * 6 + side ] order. Format, colour format and gamma mips are DeriveOpts' for the usage the time call found (a program's pixel path may turn the usage TD_BUMP afterwards, which changes nothing, as in the engine); the mip count is DeriveOpts' for the picture's size and the key's filter. The result is a CachedImage tagged fromSource, published in the image's slot; MaterialService::image answers Ready (cache), Source (fallback), Generated (intrinsic) or Default. Differences: M-IMG-DIFF-05"
+    },
+    {
+      "id": "M-IMG-DIFF-05",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            108,
+            131
+          ],
+          "anchor": "Load2DFromMemory, the DXT padding",
+          "sha256": "f26ba65c28addbd8a5ac2b6f666f6f32d1039e416fdd119031334a9e9419e9e5"
+        },
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            704,
+            724
+          ],
+          "anchor": "LoadCubeFromMemory, PadImageTo4x4",
+          "sha256": "007d86410f15dce034da67e14013d7adc838d7b04796e764a8ed020ca7728d89"
+        },
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            927,
+            962
+          ],
+          "anchor": "idBinaryImage::WriteGeneratedFile",
+          "sha256": "3132009a5ff19beba1677d1a038df77bb39bbce0b261ac68237185bdd57c62b5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "MaterialDecls::sourceImageLevels"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageFallback.cpp",
+          "symbol": "sourceImage"
+        }
+      ],
+      "note": "LP1c.2 (D24, D11): the fallback stops before the encoder: no BC1, BC3 or BC6H on the CPU, so its levels are RGBA8 where the cache holds DXT1 or DXT5 blocks and R11G11B10F where it holds BC6H (the engine accepts R11G11B10F for BC6H, SC99); its 2D levels are unpadded, where the engine pads a DXT level with zeros to whole 4 x 4 blocks, and a cube level below 4 x 4 keeps its size, where the engine replicates it into one block and records 4 x 4. It writes no cache file (the engine binarizes and writes one): the image is made again per session and on a source change. Image arrays and packed mip chains (engine-made bakes) and the editor's own image are never made from a source"
     }
   ],
   "retired": [

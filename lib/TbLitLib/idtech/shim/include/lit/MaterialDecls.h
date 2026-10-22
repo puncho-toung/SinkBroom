@@ -326,6 +326,53 @@ struct ImageCacheName
   bool generated = false;
 };
 
+// one mip level (one side's, for a cube) in CachedImage::data
+struct CachedImageLevel
+{
+  int level = 0;
+  // the cube side (0-5), 0 for a 2D image
+  int destZ = 0;
+  int width = 0;
+  int height = 0;
+  std::size_t offset = 0;
+  std::size_t size = 0;
+};
+
+/**
+ * A .bimage as LoadFromGeneratedFile reads it (SC98, LP1c.1), or an image the source
+ * fallback made in the same shape (LP1c.2, D24): plain data for the render thread, which
+ * LP2 uploads alike. Immutable once published.
+ */
+struct CachedImage
+{
+  // the cache file the search found, and where (C8); for a source image its generated
+  // name and the first file its loaders read
+  std::string file;
+  GameFileProbe origin;
+  // bimageFile_t: the source time the cache was made from (Unix seconds, A4), the magic
+  // (BIM 10 or 11; 0 for a source image), textureType, the format as stored (for a source
+  // image the format the engine would store, DeriveOpts'), the format of data (RGBA8 for
+  // a stored RGB565, which is expanded as the engine expands it; for a source image RGBA8
+  // where the engine would encode DXT1 or DXT5, R11G11B10F where it would encode BC6H),
+  // colorFormat (the channel layout of data), the size and the mip count
+  std::int64_t sourceTime = 0;
+  std::uint32_t magic = 0;
+  int textureType = 0;
+  int storedFormat = 0;
+  int format = 0;
+  int colorFormat = 0;
+  int width = 0;
+  int height = 0;
+  int numLevels = 0;
+  // made by the source fallback, not read from a cache
+  bool fromSource = false;
+  // numLevels records, six times for a cube (each level's six sides, as written); each
+  // level's bytes in the engine's format: BC blocks as stored (the engine pads its own
+  // copy to NVRHI's row pitch; LP2 pads at upload), RGBA8 as stored, RGB565 as RGBA8
+  std::vector<CachedImageLevel> levels;
+  std::vector<std::uint8_t> data;
+};
+
 // a game file one of the copied loaders' reads found, and where (C8)
 struct FoundGameFile
 {
@@ -694,6 +741,28 @@ public:
    * thread (C20); one image's files at most, so a stop waits for one image (R5.20).
    */
   SourceLoad loadImagePixels(const ImageCacheName& name, int cubeMapSize, bool quiet);
+
+  /**
+   * LP1c.2 (D24, S14): the levels idBinaryImage::Load2DFromMemory (a 2D image) or
+   * LoadCubeFromMemory (six faces) would hand its encoder, with
+   * image_highQualityCompression 0 and the encoder skipped (no BC on the CPU): the 2D
+   * colour conversion per colorFormat (YCoCg through the copied
+   * idColorSpace::ConvertRGBToCoCg_Y, the normal map's x into alpha, green-alpha), the
+   * mip chain through the copied R_MipMap, R_MipMapWithGamma or R_MipMapR11G11B10F, and
+   * each level's bytes as the engine stores them for an uncompressed format (RGB565 high
+   * byte first, LUM8, INT8, ALPHA, L8A8, RG16F, R11G11B10F, RGBA8), as RGBA8 where it
+   * would encode DXT1 or DXT5 and as R11G11B10F where it would encode BC6H. format,
+   * colorFormat, numLevels and gammaMips are DeriveOpts' for the image; a cube's colour
+   * format is CFM_DEFAULT, as the engine stores it. The result is tagged fromSource; its
+   * levels are unpadded (the engine pads a DXT level to whole 4 × 4 blocks before
+   * encoding). Parse thread (C20).
+   */
+  CachedImage sourceImageLevels(
+    const SourcePixels& source,
+    int format,
+    int colorFormat,
+    int numLevels,
+    bool gammaMips);
 
   // the bytes of decl text the registry keeps (all decl types, R5.10)
   std::size_t declTextBytes() const;

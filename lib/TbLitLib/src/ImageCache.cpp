@@ -101,8 +101,10 @@ Error cacheError(const std::string_view what)
   return Error{fmt::format("The image cache cannot be read: {}", what)};
 }
 
+} // namespace
+
 // BinaryImage.cpp:1085-1110: RGB565, high byte first, to RGBA8 (Option 1)
-void expandRgb565(const std::string_view stored, std::vector<std::uint8_t>& out)
+void expandEngineRgb565(const std::string_view stored, std::vector<std::uint8_t>& out)
 {
   for (std::size_t i = 0; i + 1 < stored.size(); i += 2)
   {
@@ -115,33 +117,31 @@ void expandRgb565(const std::string_view stored, std::vector<std::uint8_t>& out)
   }
 }
 
-} // namespace
-
 EngineImageOpts engineImageOpts(const int usage)
 {
   // Image_load.cpp:152-291
   switch (usage)
   {
   case UsageCoverage:
-    return {FormatDxt1, ColorGreenAlpha};
+    return {FormatDxt1, ColorGreenAlpha, false};
   case UsageDiffuse:
     // TD_DIFFUSE gets only set to when its a diffuse texture for an interaction
-    return {FormatDxt5, ColorYCoCgDxt5};
+    return {FormatDxt5, ColorYCoCgDxt5, true};
   case UsageSpecular:
-    return {FormatDxt1, ColorDefault};
+    return {FormatDxt1, ColorDefault, true};
   case UsageSpecularPbrRmao:
-    return {FormatDxt1, ColorDefault};
+    return {FormatDxt1, ColorDefault, false};
   case 13: // TD_SPECULAR_PBR_RMAOD
-    return {FormatDxt5, ColorDefault};
+    return {FormatDxt5, ColorDefault, false};
   case UsageDefault:
-    return {FormatDxt5, ColorDefault};
+    return {FormatDxt5, ColorDefault, true};
   case UsageBump:
-    return {FormatDxt5, ColorNormalDxt5};
+    return {FormatDxt5, ColorNormalDxt5, false};
   case UsageFont:
-    return {FormatDxt1, ColorGreenAlpha};
+    return {FormatDxt1, ColorGreenAlpha, true};
   case UsageLight:
     // D3 BFG assets require RGB565 (the engine is built without STANDALONE)
-    return {FormatRgb565, ColorDefault};
+    return {FormatRgb565, ColorDefault, true};
   case 6: // TD_LOOKUP_TABLE_MONO
     return {FormatInt8, ColorDefault};
   case 7: // TD_LOOKUP_TABLE_ALPHA
@@ -153,7 +153,7 @@ EngineImageOpts engineImageOpts(const int usage)
   case UsageHdri:
     return {FormatBc6h, ColorDefault};
   case 14: // TD_HIGHQUALITY_CUBE
-    return {FormatRgba8, ColorDefault};
+    return {FormatRgba8, ColorDefault, true};
   case 11: // TD_DEPTH
     return {FormatDepth, ColorDefault};
   case 26: // TD_DEPTH_STENCIL
@@ -333,7 +333,7 @@ Result<CachedImage> readBimage(const std::string_view bytes)
     if (rgb565)
     {
       // SRS - Convert FMT_RGB565 16-bits to FMT_RGBA8 32-bits
-      expandRgb565(*stored, image.data);
+      expandEngineRgb565(*stored, image.data);
     }
     else
     {

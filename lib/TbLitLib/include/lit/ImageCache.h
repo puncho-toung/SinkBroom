@@ -92,11 +92,13 @@ constexpr std::uint32_t BimageMagicBfg =
 constexpr std::uint32_t BimageMagic = 0x42u | (0x49u << 8) | (0x4Du << 16) | (11u << 24);
 } // namespace engine_image
 
-// the format and colour format idImage::DeriveOpts gives a usage (SC99)
+// the format and colour format idImage::DeriveOpts gives a usage (SC99), and whether its
+// mips are made with gamma correction (LP1c.2's source fallback)
 struct EngineImageOpts
 {
   int format = engine_image::FormatNone;
   int colorFormat = engine_image::ColorDefault;
+  bool gammaMips = false;
 };
 
 /**
@@ -116,47 +118,6 @@ int engineMipLevels(int format, int filter, int width, int height);
 // Image_load.cpp:44-104 BitsForFormat; 0 for an unknown format. Pure.
 int engineBitsForFormat(int format);
 
-// one mip level (one side's, for a cube) in CachedImage::data
-struct CachedImageLevel
-{
-  int level = 0;
-  // the cube side (0-5), 0 for a 2D image
-  int destZ = 0;
-  int width = 0;
-  int height = 0;
-  std::size_t offset = 0;
-  std::size_t size = 0;
-};
-
-/**
- * A .bimage as LoadFromGeneratedFile reads it (SC98): plain data for the render thread,
- * which LP2 uploads. Immutable once published.
- */
-struct CachedImage
-{
-  // the cache file the search found, and where (C8)
-  std::string file;
-  GameFileProbe origin;
-  // bimageFile_t: the source time the cache was made from (Unix seconds, A4), the magic
-  // (BIM 10 or 11), textureType, the format as stored, the format of data (RGBA8 for a
-  // stored RGB565, which is expanded as the engine expands it), colorFormat, the size and
-  // the mip count
-  std::int64_t sourceTime = 0;
-  std::uint32_t magic = 0;
-  int textureType = 0;
-  int storedFormat = 0;
-  int format = 0;
-  int colorFormat = 0;
-  int width = 0;
-  int height = 0;
-  int numLevels = 0;
-  // numLevels records, six times for a cube (side-major, as written); each level's bytes
-  // in the engine's format: BC blocks as stored (the engine pads its own copy to NVRHI's
-  // row pitch; LP2 pads at upload), RGBA8 as stored, RGB565 as RGBA8
-  std::vector<CachedImageLevel> levels;
-  std::vector<std::uint8_t> data;
-};
-
 /**
  * BinaryImage.cpp:994-1128 LoadFromGeneratedFile's read of a .bimage's bytes, without the
  * time test: big-endian; the header (int64 source time, then magic, textureType, format,
@@ -169,6 +130,14 @@ struct CachedImage
  * the engine. Pure; any thread.
  */
 Result<CachedImage> readBimage(std::string_view bytes);
+
+/**
+ * BinaryImage.cpp:1085-1110: RGB565 levels stored high byte first, expanded to RGBA8 with
+ * Option 1 ((5 bits × 527 + 23) >> 6, (6 bits × 259 + 33) >> 6, alpha 255), appended to
+ * out; a trailing odd byte is dropped. The cache reader and the source fallback share it,
+ * so a light image reads alike from either (D61). Pure; any thread.
+ */
+void expandEngineRgb565(std::string_view stored, std::vector<std::uint8_t>& out);
 
 /**
  * BinaryImage.cpp:1016-1019, the staleness test as A3 corrects it: a cache is rejected
@@ -199,12 +168,16 @@ struct ImageCacheSlot
   };
 
   State state = State::Missing;
+  // Ready: the cache; Missing or Stale: the source fallback's image (fromSource), or null
+  // when the source could not be loaded (sourceReason) and the image is the default
   std::shared_ptr<const CachedImage> image;
   // the name and the source time the search used
   ImageCacheName name;
   // the cache file used or last rejected; "" when none was found
   std::string file;
   std::string reason;
+  // LP1c.2: why the source fallback made no image, "" when it made one or did not run
+  std::string sourceReason;
 };
 
 /**

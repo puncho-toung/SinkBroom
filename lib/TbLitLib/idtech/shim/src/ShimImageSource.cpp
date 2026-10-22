@@ -19,21 +19,25 @@
 
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
-// GPL Source Code and RBDOOM-3-BFG (neo/renderer/Image_load.cpp):
+// GPL Source Code and RBDOOM-3-BFG (neo/renderer/Image_load.cpp,
+// renderer/BinaryImage.cpp and renderer/Image.h):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2013-2025 Robert Beckebans
+//   Copyright (C) 2014-2016 Kot in Action Creative Artel
 // That code is also subject to the additional terms that follow the GNU General
 // Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
 // ---- end of engine notice ----
 
 // LP1c.2: an image's source through the copied loaders (S14, D51), behind the facade's
-// MaterialDecls::loadImagePixels. Parse thread only (C20).
+// MaterialDecls::loadImagePixels, and its levels as the engine's binarizer lays them out
+// before its encoder (D24), MaterialDecls::sourceImageLevels. Parse thread only (C20).
 
 // clang-format off: the std-only facade, then precompiled.h, then the registry
 #include "lit/MaterialDecls.h"
 #include "precompiled.h"
 #include "shim/EngineMessages.h"
 #include "shim/Registry.h"
+#include "renderer/Color/ColorSpace.h"
 // clang-format on
 
 namespace tb::lit
@@ -88,7 +92,343 @@ std::string singleImageCubeFits(
   return {};
 }
 
+// Image.h:34-139, the enum values the copied Image.h ranges leave out
+constexpr int DTT_2D = 1;
+constexpr int DTT_CUBIC = 2;
+constexpr int FMT_RGBA8 = 1;
+constexpr int FMT_ALPHA = 3;
+constexpr int FMT_L8A8 = 4;
+constexpr int FMT_LUM8 = 5;
+constexpr int FMT_INT8 = 6;
+constexpr int FMT_DXT1 = 7;
+constexpr int FMT_DXT5 = 8;
+constexpr int FMT_RGB565 = 12;
+constexpr int FMT_RG16F = 15;
+constexpr int FMT_R11G11B10F = 19;
+constexpr int FMT_BC6H = 20;
+constexpr int FMT_BC7 = 21;
+constexpr int CFM_DEFAULT = 0;
+constexpr int CFM_NORMAL_DXT5 = 1;
+constexpr int CFM_YCOCG_DXT5 = 2;
+constexpr int CFM_GREEN_ALPHA = 3;
+
+// BinaryImage.cpp:49, pinned at its default: the fast path, whose normal-map swizzle runs
+// before the encoder (the HQ encoders swizzle inside themselves)
+constexpr bool image_highQualityCompression = false;
+
+void addLevel(
+  CachedImage& image,
+  const int level,
+  const int destZ,
+  const int width,
+  const int height,
+  std::vector<std::uint8_t> bytes)
+{
+  auto record = CachedImageLevel{};
+  record.level = level;
+  record.destZ = destZ;
+  record.width = width;
+  record.height = height;
+  record.offset = image.data.size();
+  record.size = bytes.size();
+  image.data.insert(image.data.end(), bytes.begin(), bytes.end());
+  image.levels.push_back(record);
+}
+
+// BinaryImage.cpp:309-324 and :807-820, the next level
+byte* shrink(
+  const byte* pic,
+  const int width,
+  const int height,
+  const int textureFormat,
+  const bool gammaMips)
+{
+  if (textureFormat == FMT_R11G11B10F || textureFormat == FMT_BC6H)
+  {
+    return R_MipMapR11G11B10F(pic, width, height);
+  }
+  if (gammaMips)
+  {
+    return R_MipMapWithGamma(pic, width, height);
+  }
+  return R_MipMap(pic, width, height);
+}
+
+/**
+ * BinaryImage.cpp:56-331 idBinaryImage::Load2DFromMemory, the encoder skipped: the colour
+ * conversion, then per level the bytes the engine stores, RGBA8 for DXT1 and DXT5 (the
+ * encoder's input, unpadded) and R11G11B10F for BC6H (the SSE build encodes it from those
+ * bytes), then the next level.
+ */
+void load2DFromMemory(
+  CachedImage& image,
+  const int width,
+  const int height,
+  const byte* pic_const,
+  const int numLevels,
+  int textureFormat,
+  int colorFormat,
+  const bool gammaMips)
+{
+  image.textureType = DTT_2D;
+  image.storedFormat = textureFormat;
+  image.colorFormat = colorFormat;
+  image.width = width;
+  image.height = height;
+  image.numLevels = numLevels;
+
+  byte* pic = (byte*)Mem_Alloc(size_t(width) * size_t(height) * 4, TAG_TEMP);
+  memcpy(pic, pic_const, size_t(width) * size_t(height) * 4);
+
+  if (colorFormat == CFM_YCOCG_DXT5)
+  {
+    // convert the image data to YCoCg and use the YCoCgDXT5 compressor
+    idColorSpace::ConvertRGBToCoCg_Y(pic, pic, width, height);
+  }
+  else if (colorFormat == CFM_NORMAL_DXT5)
+  {
+    // Blah, HQ swizzles automatically, Fast doesn't
+    if (!image_highQualityCompression)
+    {
+      for (int i = 0; i < width * height; i++)
+      {
+        pic[i * 4 + 3] = pic[i * 4 + 0];
+        pic[i * 4 + 0] = 0;
+        pic[i * 4 + 2] = 0;
+      }
+    }
+  }
+  else if (colorFormat == CFM_GREEN_ALPHA)
+  {
+    for (int i = 0; i < width * height; i++)
+    {
+      pic[i * 4 + 1] = pic[i * 4 + 3];
+      pic[i * 4 + 0] = 0;
+      pic[i * 4 + 2] = 0;
+      pic[i * 4 + 3] = 0;
+    }
+  }
+
+  int scaledWidth = width;
+  int scaledHeight = height;
+  for (int level = 0; level < numLevels && pic; level++)
+  {
+    const auto pixels = size_t(scaledWidth) * size_t(scaledHeight);
+    auto bytes = std::vector<std::uint8_t>{};
+    if (textureFormat == FMT_DXT1 || textureFormat == FMT_DXT5)
+    {
+      if (
+        textureFormat == FMT_DXT5 && colorFormat != CFM_NORMAL_DXT5
+        && colorFormat != CFM_YCOCG_DXT5)
+      {
+        image.colorFormat = colorFormat = CFM_DEFAULT;
+      }
+      bytes.assign(pic, pic + pixels * 4);
+      image.format = FMT_RGBA8;
+    }
+    else if (textureFormat == FMT_BC6H || textureFormat == FMT_R11G11B10F)
+    {
+      // RB: store as R11G11B10, the bytes the BC6H encoder takes
+      bytes.assign(pic, pic + pixels * 4);
+      image.format = FMT_R11G11B10F;
+    }
+    else if (textureFormat == FMT_LUM8 || textureFormat == FMT_INT8)
+    {
+      // LUM8 and INT8 just read the red channel
+      for (size_t i = 0; i < pixels; i++)
+      {
+        bytes.push_back(pic[i * 4]);
+      }
+      image.format = textureFormat;
+    }
+    else if (textureFormat == FMT_ALPHA)
+    {
+      // ALPHA reads the alpha channel
+      for (size_t i = 0; i < pixels; i++)
+      {
+        bytes.push_back(pic[i * 4 + 3]);
+      }
+      image.format = textureFormat;
+    }
+    else if (textureFormat == FMT_L8A8)
+    {
+      // L8A8 reads the alpha and red channels
+      for (size_t i = 0; i < pixels; i++)
+      {
+        bytes.push_back(pic[i * 4 + 0]);
+        bytes.push_back(pic[i * 4 + 3]);
+      }
+      image.format = textureFormat;
+    }
+    else if (textureFormat == FMT_RGB565)
+    {
+      for (size_t i = 0; i < pixels; i++)
+      {
+        unsigned short color = ((pic[i * 4 + 0] >> 3) << 11)
+                               | ((pic[i * 4 + 1] >> 2) << 5) | (pic[i * 4 + 2] >> 3);
+        bytes.push_back(std::uint8_t((color >> 8) & 0xFF));
+        bytes.push_back(std::uint8_t(color & 0xFF));
+      }
+      image.format = textureFormat;
+    }
+    else if (textureFormat == FMT_RG16F)
+    {
+      // RB: copy it as it was a RGBA8 because of the same size
+      bytes.assign(pic, pic + pixels * 4);
+      image.format = textureFormat;
+    }
+    else
+    {
+      image.storedFormat = textureFormat = FMT_RGBA8;
+      bytes.assign(pic, pic + pixels * 4);
+      image.format = FMT_RGBA8;
+    }
+    addLevel(image, level, 0, scaledWidth, scaledHeight, std::move(bytes));
+
+    // downsample for the next level
+    byte* shrunk = shrink(pic, scaledWidth, scaledHeight, textureFormat, gammaMips);
+    Mem_Free(pic);
+    pic = shrunk;
+
+    scaledWidth = Max(1, scaledWidth >> 1);
+    scaledHeight = Max(1, scaledHeight >> 1);
+  }
+
+  Mem_Free(pic);
+}
+
+/**
+ * BinaryImage.cpp:679-837 idBinaryImage::LoadCubeFromMemory, the encoder skipped: no
+ * colour conversion, the colour format CFM_DEFAULT; per side and level the bytes the
+ * engine stores, RGBA8 for DXT1 and DXT5 and R11G11B10F for BC6H (unpadded: the engine
+ * replicates a level below 4 × 4 into a whole block for its encoder), R11G11B10F as is,
+ * RGBA8 for anything else. The records go in the engine's order, images[ level * 6 + side
+ * ].
+ */
+void loadCubeFromMemory(
+  CachedImage& image,
+  const int width,
+  const byte* const pics[6],
+  const int numLevels,
+  int textureFormat,
+  const bool gammaMips)
+{
+  image.textureType = DTT_CUBIC;
+  image.storedFormat = textureFormat;
+  image.colorFormat = CFM_DEFAULT;
+  image.width = image.height = width;
+  image.numLevels = numLevels;
+
+  // the levels of each side, made side by side as the engine makes them
+  auto levels = std::vector<std::vector<std::vector<std::uint8_t>>>(6);
+  auto format = FMT_RGBA8;
+  for (int side = 0; side < 6; side++)
+  {
+    const byte* orig = pics[side];
+    const byte* pic = orig;
+    int scaledWidth = width;
+
+    for (int level = 0; level < numLevels && pic; level++)
+    {
+      const auto bytes = size_t(scaledWidth) * size_t(scaledWidth) * 4;
+      if (
+        textureFormat == FMT_DXT1 || textureFormat == FMT_DXT5
+        || textureFormat == FMT_BC7)
+      {
+        format = FMT_RGBA8;
+      }
+      else if (textureFormat == FMT_BC6H || textureFormat == FMT_R11G11B10F)
+      {
+        format = FMT_R11G11B10F;
+      }
+      else
+      {
+        image.storedFormat = textureFormat = FMT_RGBA8;
+        format = FMT_RGBA8;
+      }
+      levels[size_t(side)].emplace_back(pic, pic + bytes);
+
+      // downsample for the next level
+      byte* shrunk = shrink(pic, scaledWidth, scaledWidth, textureFormat, gammaMips);
+      if (pic != orig)
+      {
+        Mem_Free((void*)pic);
+        pic = NULL;
+      }
+      pic = shrunk;
+
+      scaledWidth = Max(1, scaledWidth >> 1);
+    }
+    if (pic != orig)
+    {
+      // free the down sampled version
+      Mem_Free((void*)pic);
+      pic = NULL;
+    }
+  }
+  image.format = format;
+
+  for (int level = 0; level < numLevels; level++)
+  {
+    for (int side = 0; side < 6; side++)
+    {
+      if (size_t(level) < levels[size_t(side)].size())
+      {
+        const auto levelWidth = Max(1, width >> level);
+        addLevel(
+          image,
+          level,
+          side,
+          levelWidth,
+          levelWidth,
+          std::move(levels[size_t(side)][size_t(level)]));
+      }
+    }
+  }
+}
+
 } // namespace
+
+CachedImage MaterialDecls::sourceImageLevels(
+  const SourcePixels& source,
+  const int format,
+  const int colorFormat,
+  const int numLevels,
+  const bool gammaMips)
+{
+  auto image = CachedImage{};
+  image.fromSource = true;
+  image.sourceTime = source.sourceTime;
+  const auto faceBytes = size_t(source.width) * size_t(source.height) * 4;
+  if (
+    source.width < 1 || source.height < 1 || numLevels < 1
+    || source.pixels.size() != faceBytes * size_t(source.faces))
+  {
+    return image;
+  }
+  if (source.faces == 6)
+  {
+    const byte* pics[6];
+    for (size_t side = 0; side < 6; ++side)
+    {
+      pics[side] = source.pixels.data() + side * faceBytes;
+    }
+    loadCubeFromMemory(image, source.width, pics, numLevels, format, gammaMips);
+  }
+  else
+  {
+    load2DFromMemory(
+      image,
+      source.width,
+      source.height,
+      source.pixels.data(),
+      numLevels,
+      format,
+      colorFormat,
+      gammaMips);
+  }
+  return image;
+}
 
 SourceLoad MaterialDecls::loadImagePixels(
   const ImageCacheName& name, const int cubeMapSize, const bool quiet)

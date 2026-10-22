@@ -797,7 +797,13 @@ TEST_CASE("MaterialService serves image caches on the parse thread (C8, C20)")
   CHECK(found.state == ImageLookup::State::Ready);
   REQUIRE(found.image);
   CHECK(found.image->data.front() == std::uint8_t('2'));
-  CHECK(service->image(missing).state == ImageLookup::State::Missing);
+  // no cache and no source (LP1c.2): the default image, the cache Missing
+  const auto none = service->image(missing);
+  CHECK(none.state == ImageLookup::State::Default);
+  REQUIRE(none.slot);
+  CHECK(none.slot->state == ImageCacheSlot::State::Missing);
+  CHECK_THAT(
+    none.slot->sourceReason, Catch::Matchers::ContainsSubstring("Couldn't load"));
 
   // a reload keeps the image caches: they do not depend on the decls
   service->reload();

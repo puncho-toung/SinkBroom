@@ -20,6 +20,7 @@
 #include "lit/MaterialService.h"
 
 #include "StackThread.h"
+#include "lit/ImageFallback.h"
 #include "lit/MapBake.h"
 
 #include "kd/result.h"
@@ -1094,9 +1095,12 @@ private:
   }
 
   /**
-   * LP1c.1 (C8): one image's cache into the working table: the copied timestamp call
-   * names it, the reader reads it through the game-file search. Without a registry (a
-   * build failed) the image is Missing with the build's failure.
+   * LP1c.1 (C8), LP1c.2 (S14, D24): one image into the working table: the copied
+   * timestamp call names its cache, the reader reads it through the game-file search, and
+   * where the engine would binarize (Missing, Stale) the source fallback loads the source
+   * with the copied loaders (resolveImage), one image's files per call, so a stop waits
+   * for one image (R5.20). Without a registry (a build failed) the image is Missing with
+   * the build's failure, and the default.
    */
   bool lookUpImage(const MaterialImageKey& key)
   {
@@ -1108,14 +1112,11 @@ private:
     if (!m_decls || !m_source)
     {
       slot->reason = buildFailure();
-    }
-    else if (auto name = m_decls->imageCacheName(key))
-    {
-      *slot = resolveImageCache(*m_source, *name.value);
+      slot->sourceReason = slot->reason;
     }
     else
     {
-      slot->reason = std::move(name.error);
+      *slot = resolveImage(*m_decls, *m_source, key);
     }
     m_working.images =
       m_working.images.set(key, std::shared_ptr<const ImageCacheSlot>{std::move(slot)});
@@ -1511,15 +1512,19 @@ ImageLookup MaterialService::image(const MaterialImageKey& key)
 {
   if (const auto slot = table()->findImage(key))
   {
-    switch (slot->state)
+    if (slot->state == ImageCacheSlot::State::Ready)
     {
-    case ImageCacheSlot::State::Ready:
       return ImageLookup{ImageLookup::State::Ready, slot->image, slot};
-    case ImageCacheSlot::State::Missing:
-      return ImageLookup{ImageLookup::State::Missing, nullptr, slot};
-    case ImageCacheSlot::State::Stale:
-      return ImageLookup{ImageLookup::State::Stale, nullptr, slot};
     }
+    if (slot->name.generated)
+    {
+      return ImageLookup{ImageLookup::State::Generated, nullptr, slot};
+    }
+    if (slot->image)
+    {
+      return ImageLookup{ImageLookup::State::Source, slot->image, slot};
+    }
+    return ImageLookup{ImageLookup::State::Default, nullptr, slot};
   }
 
   auto queued = false;
@@ -1531,7 +1536,8 @@ ImageLookup MaterialService::image(const MaterialImageKey& key)
       auto slot = std::make_shared<ImageCacheSlot>();
       slot->reason = m_shared->stats.threadError.empty() ? std::string{ThreadEndedText}
                                                          : m_shared->stats.threadError;
-      return ImageLookup{ImageLookup::State::Missing, nullptr, std::move(slot)};
+      slot->sourceReason = slot->reason;
+      return ImageLookup{ImageLookup::State::Default, nullptr, std::move(slot)};
     }
     if (!m_shared->stop && m_shared->queuedImages.insert(key).second)
     {

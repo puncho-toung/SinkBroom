@@ -210,18 +210,23 @@ struct EntityDefLookup
   std::string error;
 };
 
-// LP1c.1: what image returns: Pending (queued: a later table has it), or the slot's state
-// with its image (Ready) or why there is none (Missing, Stale)
+// LP1c.1, LP1c.2: what image returns: Pending (queued: a later table has it), or what the
+// slot holds; the slot says why (its cache state and reasons)
 struct ImageLookup
 {
   enum class State
   {
     Pending,
+    // the engine's cache, in the engine's GPU format
     Ready,
-    // no cache: LP1c.2's source fallback takes over
-    Missing,
-    // a cache the engine would not use (its source time or format differs)
-    Stale,
+    // no cache the engine would use (Missing or Stale): the source fallback's image, in
+    // the engine's channel layouts as RGBA8, R11G11B10F for HDR usages (D24)
+    Source,
+    // an image the engine generates (an intrinsic, the default image): no cache, no
+    // source
+    Generated,
+    // neither a cache nor a source the preview can load: the default image
+    Default,
   };
 
   State state = State::Pending;
@@ -417,11 +422,12 @@ public:
   std::uint64_t loadMapBake(std::string_view mapPath);
 
   /**
-   * LP1c.1 (C8, D23): the engine's cache of an image as the latest table has it, or
+   * LP1c.1 (C8, D23), LP1c.2 (S14, D24): an image as the latest table has it, or
    * Pending, and the key is queued with the lookups; any thread. On the parse thread the
-   * copied timestamp call names the cache (MaterialDecls::imageCacheName) and the image
-   * cache reader reads it through the game-file search (resolveImageCache); the slot is
-   * published once and kept across reloads.
+   * copied timestamp call names the cache (MaterialDecls::imageCacheName), the image
+   * cache reader reads it through the game-file search (resolveImageCache), and where the
+   * engine would binarize, the source fallback makes the image from its source
+   * (resolveImage); the slot is published once and kept across reloads.
    */
   ImageLookup image(const MaterialImageKey& key);
 
