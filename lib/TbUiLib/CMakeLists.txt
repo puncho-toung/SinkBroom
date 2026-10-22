@@ -413,6 +413,8 @@ if(TB_ENABLE_LIT_PREVIEW)
       ${CMAKE_CURRENT_SOURCE_DIR}/src/LitPreviewWindow.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSessionHost.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSessionHost.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSnapshotBuilder.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSnapshotBuilder.h
       ${CMAKE_CURRENT_SOURCE_DIR}/src/ServiceSentMessages.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/ServiceSentMessages.h
 

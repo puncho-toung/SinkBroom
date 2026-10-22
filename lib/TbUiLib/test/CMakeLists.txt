@@ -83,8 +83,13 @@ target_link_libraries(TbUiLibTest PRIVATE
 if(TB_ENABLE_LIT_PREVIEW)
   # The switch's definition comes from TbUiLib. The GPU tests reach the session through
   # TbLitLib; nothing links a Vulkan library (C9).
-  target_sources(TbUiLibTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitPreviewPanel.cpp)
+  target_sources(TbUiLibTest
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitPreviewPanel.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitSnapshotBuilder.cpp)
   target_link_libraries(TbUiLibTest PRIVATE TbLitLib)
+  # the document observer and the snapshot builder are private to TbUiLib
+  target_include_directories(TbUiLibTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 endif()
 
 set_target_properties(TbUiLibTest PROPERTIES AUTOMOC TRUE)
