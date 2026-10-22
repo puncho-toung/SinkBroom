@@ -84,6 +84,9 @@ struct SnapshotNode
   // Brush: its faces in faces; Patch: its one element of patches; PointEntity and Light:
   // their one element of entities
   SnapshotRange elements;
+  // D26, S4: the node changed since the outermost transaction began, and that transaction
+  // is still open (a drag); the node is sent again with false once it has ended
+  bool active = false;
 };
 
 /**

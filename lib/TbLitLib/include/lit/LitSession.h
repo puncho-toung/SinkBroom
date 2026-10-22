@@ -266,6 +266,13 @@ public:
    * and offers again on the next ReadyForSnapshot.
    */
   bool offerSnapshot(std::shared_ptr<const Snapshot> snapshot);
+  /**
+   * B0.7, GUI thread: the one-slot inbox is empty and the render thread has not been
+   * stopped, so that an offer now is taken unless the thread failed meanwhile; an atomic
+   * read. The owner asks whenever it has changes, so that one lost ReadyForSnapshot never
+   * stops the snapshots of the session.
+   */
+  bool snapshotSlotFree() const;
 
   // S3: the CPU pool from phase B until teardown step 1, else null; GUI thread (B0.10:
   // the render thread gets the pool and the service at its start, not from here)

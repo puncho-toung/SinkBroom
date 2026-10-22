@@ -254,11 +254,17 @@ bool RenderThread::offerSnapshot(std::shared_ptr<const Snapshot> snapshot)
       return false;
     }
     m_snapshotInbox = std::move(snapshot);
+    m_snapshotInboxFull = true;
     // the next frame's start takes it
     m_pacer.trigger();
   }
   m_wake.notify_all();
   return true;
+}
+
+bool RenderThread::snapshotSlotFree() const
+{
+  return !m_snapshotInboxFull;
 }
 
 std::uint64_t RenderThread::snapshotsTaken() const
@@ -496,6 +502,7 @@ void RenderThread::runLoop()
       if (snapshotTaken)
       {
         m_snapshot = std::move(m_snapshotInbox);
+        m_snapshotInboxFull = false;
         ++m_snapshotsTaken;
       }
       lock.unlock();

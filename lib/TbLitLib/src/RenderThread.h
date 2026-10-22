@@ -124,6 +124,9 @@ private:
   std::shared_ptr<const Snapshot> m_snapshotInbox;
   std::shared_ptr<const Snapshot> m_snapshot;
   std::uint64_t m_snapshotsTaken = 0;
+  // B0.7: whether m_snapshotInbox holds a snapshot, written with it, read without the
+  // lock
+  std::atomic<bool> m_snapshotInboxFull = false;
   std::uint64_t m_appliedSequence = 0;
   std::size_t m_chunkCount = 0;
   FramePacer m_pacer;
@@ -160,6 +163,8 @@ public:
   std::uint64_t framesPresented() const;
   // see LitSession::offerSnapshot
   bool offerSnapshot(std::shared_ptr<const Snapshot> snapshot);
+  // see LitSession::snapshotSlotFree; an atomic read
+  bool snapshotSlotFree() const;
   std::uint64_t snapshotsTaken() const;
   std::shared_ptr<const Snapshot> lastSnapshot() const;
   // the sequence of the last snapshot whose chunks are applied, and the chunk count

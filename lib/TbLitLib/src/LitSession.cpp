@@ -197,6 +197,11 @@ bool LitSession::offerSnapshot(std::shared_ptr<const Snapshot> snapshot)
   return m_renderThread->offerSnapshot(std::move(snapshot));
 }
 
+bool LitSession::snapshotSlotFree() const
+{
+  return !m_renderThreadStopped && m_renderThread->snapshotSlotFree();
+}
+
 CpuPool* LitSession::cpuPool() const
 {
   return m_pool && !m_pool->stopped() ? m_pool.get() : nullptr;
