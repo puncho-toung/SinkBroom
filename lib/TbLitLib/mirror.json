@@ -10643,6 +10643,15 @@
           ],
           "anchor": "TINYEXR_IMPLEMENTATION and tinyexr.h",
           "sha256": "cd61bfffd1babf18da7cc473c6fadfa5cb56c409fd6c322a4b07c68a206328ef"
+        },
+        {
+          "file": "neo/libs/stb/stb_image.h",
+          "lines": [
+            625,
+            642
+          ],
+          "anchor": "STBI_THREAD_LOCAL",
+          "sha256": "e21a7496356362c5258b7331f4005cedbf3af04ecf9eaf8e162f43a956f9253f"
         }
       ],
       "sinkbroom": [
@@ -10657,7 +10666,7 @@
           "symbol": "Image_files.cpp HEADER_FILE_ONLY"
         }
       ],
-      "note": "LP1c.2: tinyexr.h puts its embedded miniz v1.15 in namespace tinyexr::miniz but declares its functions extern \"C\", so their linker names (mz_inflate, tinfl_decompress, ...) clash with the miniz TrenchBroom links (LNK2005 in every executable that links TbFsLib). The copied Image_files.cpp is therefore compiled inside shim/src/ShimImageFiles.cpp, which first includes shim/TinyexrMinizNames.h: one macro per external function of the embedded miniz (67 names, the archive ones compiled out but listed), each to tbLitExr_<name>. Only linker names change; the code and its results are the engine's. The engine itself links no other miniz"
+      "note": "LP1c.2: tinyexr.h puts its embedded miniz v1.15 in namespace tinyexr::miniz but declares its functions extern \"C\", so their linker names (mz_inflate, tinfl_decompress, ...) clash with the miniz TrenchBroom links (LNK2005 in every executable that links TbFsLib). The copied Image_files.cpp is therefore compiled inside shim/src/ShimImageFiles.cpp, which first includes shim/TinyexrMinizNames.h: one macro per external function of the embedded miniz (67 names, the archive ones compiled out but listed), each to tbLitExr_<name>. Only linker names change; the code and its results are the engine's. The engine itself links no other miniz. ShimImageFiles.cpp also defines STBI_NO_THREAD_LOCALS before the copy: stb_image's failure reason and its three per-thread load flags become plain statics, where the engine keeps them thread-local; the executables' static TLS block stays as it was (Release raw data 0x273C), and every load runs on the parse thread (C20), so nothing races on them"
     },
     {
       "id": "M-IMG-NC-01",
@@ -11074,7 +11083,7 @@
       ],
       "sinkbroom": [],
       "staticKind": "per-call scratch",
-      "reason": "stb_image's globals are constant-initialised: the failure reason is thread_local and written by each failing call on its own thread; the flip, unpremultiply and iPhone-conversion flags and the gamma and scale are written only by their setter functions, which nothing calls. Every load runs on the parse thread (C20)"
+      "reason": "stb_image's globals are constant-initialised and, with STBI_NO_THREAD_LOCALS (M-IMG-BUILD-01), process-wide: the failure reason is written by each failing call; the flip, unpremultiply and iPhone-conversion flags and the gamma and scale are written only by their setter functions, which nothing calls. Every load runs on the parse thread (C20), so the one writer is that thread"
     },
     {
       "id": "M-IMG-STATIC-03",

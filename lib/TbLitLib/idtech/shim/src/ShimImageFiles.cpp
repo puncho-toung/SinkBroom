@@ -25,6 +25,11 @@
 // copied DeclManager.cpp. Nothing may run the loaders' pixel paths before the file system
 // validates every image file outside the copy (D51). Parse thread only (C20).
 
+// stb_image keeps its failure reason and three load flags thread-local, which would grow
+// the executable's static TLS block; every load runs on the parse thread (C20), so plain
+// statics serve (M-IMG-BUILD-01, M-IMG-STATIC-02)
+#define STBI_NO_THREAD_LOCALS
+
 // clang-format off: precompiled.h comes first in every shim file, the names before the copy
 #include "precompiled.h"
 #include "shim/TinyexrMinizNames.h"
