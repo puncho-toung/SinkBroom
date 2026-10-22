@@ -24,6 +24,7 @@
 #include "FrameTimers.h"
 #include "GeometryArenas.h"
 #include "ImageSlots.h"
+#include "LitPasses.h"
 #include "PipelineCompiler.h"
 #include "SamplerSet.h"
 #include "TextureUploads.h"
@@ -103,6 +104,8 @@ struct RenderFrameAccess
   SamplerSet& samplers;
   // the bytes the frame has uploaded before the hook runs
   std::uint64_t bytesUploaded;
+  // LP2.2a: the lit passes (their lists, stats and test hooks)
+  LitPasses& passes;
 };
 
 /**
@@ -168,12 +171,18 @@ private:
   TextureUploads m_textureUploads;
   // LP2.1 (D68): the engine's common samplers and the images' own
   SamplerSet m_samplers;
+  // LP2.2a: the depth prepass and the interactions into hdrFBO
+  LitPasses m_passes;
   std::uint64_t m_arrivalsCheckedVersion = 0;
   // D77: a texture arrival triggers a frame at most every TextureArrivalInterval
   FrameClock::time_point m_lastArrivalTrigger;
   std::optional<FrameClock::time_point> m_arrivalTriggerAt;
   // D77: the last frame left uploads for the next one
   bool m_unconverged = false;
+  // D77 (LP2.2a): the last frame's lit passes wait for a material table newer than this
+  // version (a pending material or evaluation); a newer one triggers a frame
+  bool m_litWaitsForTable = false;
+  std::uint64_t m_litTableVersion = 0;
   // C11: the account was compared with the device's budget at the session's first frame
   bool m_budgetChecked = false;
   // the bytes the frame being recorded has uploaded
@@ -234,6 +243,8 @@ private:
   std::optional<vk::Extent2D> m_headlessResize;
   std::vector<std::function<void(RenderFrameAccess&)>> m_frameHooks;
   std::function<void(RenderFrameAccess&)> m_everyFrameHook;
+  // LP2.2a test hook: the functions the next frame runs once after its lit passes
+  std::vector<std::function<void(RenderFrameAccess&)>> m_afterPassHooks;
   // LP2.1 test hook: the chunks the arenas hold instead of the scene's
   std::shared_ptr<const std::map<ChunkKey, Chunk>> m_testChunks;
   // the render thread's copy of m_testChunks, and the chunks of a thread without a scene
@@ -328,6 +339,10 @@ public:
   // any thread: every frame runs hook on the render thread (as runInFrame) until an
   // empty function replaces it
   void setEveryFrameHook(std::function<void(RenderFrameAccess&)> hook);
+  // LP2.2a, any thread: the next frame drawn runs hook once on the render thread after
+  // its lit passes, inside its command list (a readback of the HDR target); a frame is
+  // triggered
+  void runAfterPasses(std::function<void(RenderFrameAccess&)> hook);
   // any thread: the arenas hold these chunks instead of the scene's until null replaces
   // them; a frame is triggered
   void setTestChunks(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks);
@@ -352,6 +367,14 @@ private:
   // C11, §3.10: at the first frame, the account against VK_EXT_memory_budget's budget
   void checkVramBudget();
   void runFrameHooks(nvrhi::ICommandList& commandList);
+  void runAfterPassHooks(nvrhi::ICommandList& commandList);
+  // LP2.2a: the frame's lit passes, after its uploads and hooks; whether the next frame
+  // is due at once (D77: a skipped draw)
+  bool recordLitPasses(nvrhi::ICommandList& commandList, const CameraState& camera);
+  // D77 (LP2.2a): an idle pass's look for the material table the lit passes wait for;
+  // whether a frame is due
+  void litTableTick();
+  RenderFrameAccess frameAccess(nvrhi::ICommandList& commandList);
   // the chunks the arenas follow (the scene's or the tests'), synchronised when their set
   // changed; whether uploads are queued
   bool syncChunks();

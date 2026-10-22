@@ -462,6 +462,13 @@ public:
   // LP2.1, any thread: every frame runs hook as runInFrameForTesting does, until an empty
   // function replaces it
   void setEveryFrameHookForTesting(std::function<void(RenderFrameAccess&)> hook);
+  /**
+   * LP2.2a, any thread: the next frame drawn runs hook once on the render thread after
+   * its lit passes (the depth prepass and the interactions), inside its command list,
+   * for a readback of the HDR target; a frame is triggered. A hook that is never run is
+   * dropped.
+   */
+  void runAfterPassesForTesting(std::function<void(RenderFrameAccess&)> hook);
   // LP2.1, any thread: the render thread's arenas hold these chunks instead of the
   // scene's until null replaces them (D36); a frame is triggered
   void setChunksForTesting(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks);

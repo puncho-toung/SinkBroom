@@ -607,6 +607,11 @@ void LitSession::setEveryFrameHookForTesting(std::function<void(RenderFrameAcces
   m_renderThread->setEveryFrameHook(std::move(hook));
 }
 
+void LitSession::runAfterPassesForTesting(std::function<void(RenderFrameAccess&)> hook)
+{
+  m_renderThread->runAfterPasses(std::move(hook));
+}
+
 void LitSession::setChunksForTesting(
   std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks)
 {

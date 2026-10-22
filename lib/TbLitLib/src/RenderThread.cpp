@@ -446,6 +446,7 @@ void RenderThread::join()
 void RenderThread::releaseFrameResources()
 {
   // §3.1 step 2: every handle the registry and the arenas hold
+  m_passes.releaseAll();
   m_frameResources.releaseAll();
   m_arenas.releaseAll();
   m_pipelines.clear();
@@ -515,6 +516,16 @@ void RenderThread::setEveryFrameHook(std::function<void(RenderFrameAccess&)> hoo
   {
     const auto lock = std::scoped_lock{m_mutex};
     m_everyFrameHook = std::move(hook);
+    m_pacer.trigger();
+  }
+  m_wake.notify_all();
+}
+
+void RenderThread::runAfterPasses(std::function<void(RenderFrameAccess&)> hook)
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_afterPassHooks.push_back(std::move(hook));
     m_pacer.trigger();
   }
   m_wake.notify_all();
@@ -688,7 +699,20 @@ void RenderThread::runFrameHooks(nvrhi::ICommandList& commandList)
   {
     return;
   }
-  auto access = RenderFrameAccess{
+  auto access = frameAccess(commandList);
+  if (everyFrame)
+  {
+    everyFrame(access);
+  }
+  for (auto& hook : hooks)
+  {
+    hook(access);
+  }
+}
+
+RenderFrameAccess RenderThread::frameAccess(nvrhi::ICommandList& commandList)
+{
+  return RenderFrameAccess{
     m_device.device(),
     commandList,
     m_frameIndex,
@@ -699,15 +723,87 @@ void RenderThread::runFrameHooks(nvrhi::ICommandList& commandList)
     m_bindingSets,
     m_textureUploads,
     m_samplers,
-    m_frameUploadBytes};
-  if (everyFrame)
+    m_frameUploadBytes,
+    m_passes};
+}
+
+void RenderThread::runAfterPassHooks(nvrhi::ICommandList& commandList)
+{
+  auto hooks = std::vector<std::function<void(RenderFrameAccess&)>>{};
   {
-    everyFrame(access);
+    const auto lock = std::scoped_lock{m_mutex};
+    hooks.swap(m_afterPassHooks);
   }
+  if (hooks.empty())
+  {
+    return;
+  }
+  auto access = frameAccess(commandList);
   for (auto& hook : hooks)
   {
     hook(access);
   }
+}
+
+bool RenderThread::recordLitPasses(
+  nvrhi::ICommandList& commandList, const CameraState& camera)
+{
+  // LP2.2a (§3.8 passes 1 and 7): the clears, the prepass and the interactions into
+  // hdrFBO, with the scene the arenas hold (the scene's chunks or a test's)
+  auto inputs = LitFrameInputs{};
+  inputs.device = &m_device.device();
+  inputs.commandList = &commandList;
+  inputs.frameIndex = m_frameIndex;
+  inputs.frame = &m_frameResources;
+  inputs.arenas = &m_arenas;
+  inputs.pipelines = &m_pipelines;
+  inputs.images = &m_images;
+  inputs.bindingSets = &m_bindingSets;
+  inputs.samplers = &m_samplers;
+  inputs.camera = camera;
+  inputs.chunks = &arenaChunks();
+  inputs.chunksVersion = m_chunksVersion;
+  if (m_geometry && !m_arenaTestChunks)
+  {
+    inputs.entities = &m_geometry->entityStates();
+  }
+  if (m_geometry)
+  {
+    inputs.lights = m_geometry->lightTable();
+  }
+  if (m_materials)
+  {
+    inputs.materials = m_materials->table();
+  }
+  const auto tableVersion = inputs.materials ? inputs.materials->version : 0;
+  inputs.service = m_materials;
+  inputs.stopRequested = [this] { return stopOrParkRequested(); };
+  inputs.warn = [this](std::string message) {
+    m_events.post(SessionEvent::Warning, std::move(message));
+  };
+  const auto stats = m_passes.record(inputs);
+  // C28: the slots asked for by the passes' draws lose no set they made
+  eraseChangedSets();
+  // D77: what a table publication resolves waits for one (litTableTick)
+  m_litWaitsForTable = stats.waitsForTable;
+  m_litTableVersion = tableVersion;
+  return stats.retrigger;
+}
+
+void RenderThread::litTableTick()
+{
+  if (!m_litWaitsForTable || !m_materials)
+  {
+    return;
+  }
+  if (m_materials->table()->version == m_litTableVersion)
+  {
+    return;
+  }
+  // D77: a table published while the lit passes waited for one is a frame trigger
+  m_litWaitsForTable = false;
+  const auto lock = std::scoped_lock{m_mutex};
+  m_pacer.trigger();
 }
 
 void RenderThread::main() noexcept
@@ -845,6 +941,7 @@ void RenderThread::runLoop()
     runDebugHook(DebugHook::IdleUnlocked);
     const auto building = geometryTick();
     arrivalsTick();
+    litTableTick();
     lock.lock();
     // D77: a texture arrival that came within TextureArrivalInterval of the last one
     if (m_arrivalTriggerAt && *m_arrivalTriggerAt <= FrameClock::now())
@@ -1066,8 +1163,13 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       }
       checkVramBudget();
       runFrameHooks(commandList);
+      // LP2.2a: the lit passes into hdrFBO (D77: a draw skipped for a pending pipeline,
+      // a texture without levels or a chunk not placed yet is retried at once; a pending
+      // material or evaluation waits for a table)
+      const auto litUnconverged = recordLitPasses(commandList, camera);
+      runAfterPassHooks(commandList);
       // a slot whose image arrived during the frame is written in the next (D77)
-      m_unconverged = m_unconverged || m_images.hasLoading();
+      m_unconverged = m_unconverged || litUnconverged || m_images.hasLoading();
       const auto clearTarget =
         m_frameResources.resolve(clearPass)
         | kdl::transform([](const PassResources& r) { return r.writes.front().texture; })

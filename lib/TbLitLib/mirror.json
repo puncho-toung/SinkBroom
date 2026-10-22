@@ -13631,6 +13631,1108 @@
         }
       ],
       "note": "LP2.1 step 7 (D68, SC240, SC269): the eight common samplers made once per session on the render thread from engineCommonSamplers' descs (M-TABLE: one desc changed in place, so LinearClampCompare, LinearWrap, AnisotropicWrap and AnisotropicClampEdge keep the Comparison reduction; s0 of DRAW_INTERACTION is AnisotropicWrap); an image's sampler from engineImageSamplerDesc, one per (filter, repeat, depth) as GetSampler's SamplerCache keeps one per desc (the preview's key is what the desc is made from; r_usePixelatedLook is off). Q19 measured: DRAW_INTERACTION's texture and sampler sets with the compare-enabled s0 and a BC3 colour texture are made with no validation message (a draw is LP2.2a's)"
+    },
+    {
+      "id": "M-VIEW-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            5891,
+            5998
+          ],
+          "anchor": "DrawViewInternal, ZeroUniforms to RENDERPARM_WINDOWCOORD",
+          "sha256": "a8e119961769983a3a566aff3cc3c3d6c7dda4d7d710023ab8fe1da1cf12ec6c"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            2420,
+            2469
+          ],
+          "anchor": "idRenderBackend::SetBuffer",
+          "sha256": "55c6fad993d2ad5a01ab0636f9f925dcf65cda4581cc1a71585cfc78aaf6e826"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            2253,
+            2280
+          ],
+          "anchor": "idRenderBackend::GL_Clear",
+          "sha256": "da118642f9162d6a2bfdcfa9e528449c161d7b9514b1a245f5a6ad98da830ee5"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            157,
+            157
+          ],
+          "anchor": "r_clear \"2\"",
+          "sha256": "233a2185c7a32945da5959d4490755f6c47c9b6f9008e6c88b83ff03f5e78a56"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            171,
+            171
+          ],
+          "anchor": "r_lightScale \"3\"",
+          "sha256": "f9a385017ff542fe4b52cf4e135318fd8ed7634b3aee6f469550cf9cb851f6fd"
+        },
+        {
+          "file": "neo/renderer/GLState.h",
+          "lines": [
+            191,
+            191
+          ],
+          "anchor": "STENCIL_SHADOW_TEST_VALUE",
+          "sha256": "f4f6e9c7a2ad35fbda5e6565853a52549c3af9e0a54f97efee9a4b0bbc852f75"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitView.cpp",
+          "symbol": "setViewParms"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::record, LitPasses::recordClears"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineFrameDefaults"
+        }
+      ],
+      "note": "LP2.2a step 1 (SC201, SC202, D21, T0.15): at the start of every frame ZeroUniforms (every parm 0, every layout due), then GLOBALEYEPOS (vieworg, 1), OVERBRIGHT r_lightScale 3 * 0.5 in all four, PROJMATRIX_X..W the rows of projectionRenderMatrix, PSX_DISTORTIONS 0 (r_renderMode 0), WINDOWCOORD (1 / w, 1 / h, w, h) with the viewport the whole target; the clears of r_clear 2 (hdrFBO and ldrFBO to (0, 0, 0, 1); SetBuffer also clears the active framebuffer, the presentation target, which LP0 clears itself until LP2.2b blits) and GL_Clear's depth 1 and stencil 128. GL_State( GLS_DEFAULT | GLS_CULL_FRONTSIDED ) at the start records bits no draw reads: every preview draw passes its own bits"
+    },
+    {
+      "id": "M-VIEW-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            102,
+            105
+          ],
+          "anchor": "RB_SetMVP",
+          "sha256": "3deb908ba02390caff917f7baa12353a02f8ceeb0f14d24459553860a7df61b6"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            903,
+            907
+          ],
+          "anchor": "R_RenderView, projectionRenderMatrix and the world mvp",
+          "sha256": "4f864cb6a2686096788917b0741bcd33bd3d7d287dda39ca4a5215d970dbfa4a"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            502,
+            507
+          ],
+          "anchor": "R_SetupViewEntity: modelMatrix, modelViewMatrix, mvp",
+          "sha256": "d3fa209803d1e4c4ef53443922dd87861bc35dad1a1a2d78ae7139ec22a3fbb5"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            51,
+            53
+          ],
+          "anchor": "R_DeriveEntityData: modelMatrix and modelRenderMatrix",
+          "sha256": "bdc909e928b848ea818ab32875b7d13ba98a28f53dd10e9d0fb40e57d42afac3"
+        },
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            49,
+            70
+          ],
+          "anchor": "R_AxisToModelMatrix",
+          "sha256": "45f31e9249fc3ba52c1dc6042597f4610f891a0d531c2799f264d9cf6083f369"
+        },
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            77,
+            150
+          ],
+          "anchor": "R_MatrixMultiply",
+          "sha256": "b8cd452a2abcb73c35e01044104b804e50539b0c80fd50f9296bc3b765c25281"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitView.cpp",
+          "symbol": "litViewOf, litSpaceOf, setMvp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineMatrixTranspose, engineModelMatrix, engineGlMatrixMultiply, engineCullBoundsToMvp, engineProjectedFullyClippedBounds"
+        }
+      ],
+      "note": "LP2.2a step 1 (SC227, A16): projectionRenderMatrix = Transpose( R_SetupProjectionMatrix ), the world mvp projectionRenderMatrix * Transpose( R_SetupViewMatrix ), an entity's modelMatrix R_AxisToModelMatrix of its axis and its pivot (origin + __brushOrigin, ChunkEntityState::modelOrigin), modelViewMatrix R_MatrixMultiply( modelMatrix, the world's ), mvp projectionRenderMatrix * Transpose( modelViewMatrix ), modelRenderMatrix CreateFromOriginAxis, all through the copied idRenderMatrix and the transcribed GL functions so the float order is the engine's; RB_SetMVP writes the rows; worldspawn and test chunks take the identity. The shim's Transpose, CullBoundsToMVP and ProjectedFullyClippedBounds call the copy (pure, any thread)"
+    },
+    {
+      "id": "M-VIEW-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            672,
+            690
+          ],
+          "anchor": "idRenderBackend::ResetViewportAndScissorToDefaultCamera",
+          "sha256": "f4c93ead415b36fc77e50b27c7297b98ccb467d2c2b6db08bf44b7ad93135a0a"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            2176,
+            2181
+          ],
+          "anchor": "idRenderBackend::GL_Scissor",
+          "sha256": "358e9fdc241faef76dcacb2d68f69ad70108fa47283968528a9168c65d6d3ab4"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            2188,
+            2193
+          ],
+          "anchor": "idRenderBackend::GL_Viewport",
+          "sha256": "14623efebbc962a81806aafee38d3aa854053de3830452decefca33016287f98"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            518,
+            536
+          ],
+          "anchor": "DrawElementsWithCounters, the viewport and the scissor rect",
+          "sha256": "1b6b365a8c8b880af83611c39517be35cd011614fce3be388d16082fd5671e31"
+        },
+        {
+          "file": "neo/renderer/ScreenRect.cpp",
+          "lines": [
+            67,
+            73
+          ],
+          "anchor": "idScreenRect::Clear",
+          "sha256": "da9a2919612690d4978662461f315d4cfd0830cd66f8a037c08eb9d16b346554"
+        },
+        {
+          "file": "neo/renderer/ScreenRect.cpp",
+          "lines": [
+            108,
+            114
+          ],
+          "anchor": "idScreenRect::Expand",
+          "sha256": "827ae3a3cded19e9f75bbe0e477ae3db0a64e83ca19bb62c6c787bb7384fa210"
+        },
+        {
+          "file": "neo/renderer/ScreenRect.cpp",
+          "lines": [
+            121,
+            139
+          ],
+          "anchor": "idScreenRect::Intersect",
+          "sha256": "e72fb96510483e12a560f011a13dfd10e460de674075bc3d1068364f85ca2494"
+        },
+        {
+          "file": "neo/renderer/ScreenRect.cpp",
+          "lines": [
+            146,
+            164
+          ],
+          "anchor": "idScreenRect::Union",
+          "sha256": "365a9c7e434f4c877c4adfb92ce8ebdbe243be709918cde9841d20df2d593ded"
+        },
+        {
+          "file": "neo/renderer/ScreenRect.cpp",
+          "lines": [
+            171,
+            174
+          ],
+          "anchor": "idScreenRect::Equals",
+          "sha256": "b548710de30b1308fc39a0b4331c0e229435e4111e87f1244786285235bea6c9"
+        },
+        {
+          "file": "neo/renderer/ScreenRect.cpp",
+          "lines": [
+            181,
+            184
+          ],
+          "anchor": "idScreenRect::IsEmpty",
+          "sha256": "3135cbdd1af0e94473d6cf20225c9cf4a328e56f3dd491b9e42d44fabe6e4c12"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitView.cpp",
+          "symbol": "ScreenRect, viewScissor, engineScissorRect, engineViewport"
+        }
+      ],
+      "note": "LP2.2a step 1 (SC211): GL_Scissor and GL_Viewport store [x, x + w] x [y, y + h], and their callers flip Y themselves: x = viewport.x1 + x1, y = viewport.y2 - y2, w = x2 + 1 - x1, h = y2 + 1 - y1, applied as nvrhi::Rect( x1, x2, y1, y2 ) (an exclusive maximum, so the width is w) or the whole viewport for an empty stored rect; the viewport (0, 0, w, h), depth 0..1. idScreenRect as shorts, GetArea ( x2 - x1 + 1 ) * ( y2 - y1 + 1 )"
+    },
+    {
+      "id": "M-VIEW-04",
+      "kind": "constant",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            1083,
+            1086
+          ],
+          "anchor": "AddWorldModelEntities, shaderParms 0 to 3",
+          "sha256": "4fec8df6fa6840de56bf7f95085feeac996bdacd081a00f26abf963b90897659"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitView.cpp",
+          "symbol": "engineWorldShaderParms"
+        }
+      ],
+      "note": "LP2.2a step 5 (D52): the world's area models are render entities of the identity axis at the origin with shaderParms 0 to 3 at 1 and the rest 0: worldspawn's chunks are evaluated with those (and a chunk of an entity without a ChunkEntityState, a test's, too)"
+    },
+    {
+      "id": "M-FRONT-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            148,
+            284
+          ],
+          "anchor": "R_AddSingleLight: the registers, the additive skip, the light scissor",
+          "sha256": "ea36e3de6b96b73dd1df37a3eb031d6dc2fb6171a1dd853d002f87db9bf9f9dc"
+        },
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            1573,
+            1578
+          ],
+          "anchor": "R_CullModelBoundsToLight",
+          "sha256": "f9615771b0323933e5b67c9f5e1ed56ce3ceebf5eee434c7f649739749bf0132"
+        },
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            1592,
+            1600
+          ],
+          "anchor": "R_LightUsesMathPath",
+          "sha256": "e16dfbe9461187f3fd04061f3fb6d3ea2e6157388e97ee36b6022d03ca21e39d"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            155,
+            155
+          ],
+          "anchor": "r_useLightScissors \"3\"",
+          "sha256": "626601a39082a47ed369c859bd9aa4abef730ad115c02ac7910c3468bd6c06d4"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            245,
+            245
+          ],
+          "anchor": "r_mathLightsEnabled \"1\"",
+          "sha256": "9ed8fe0d9f8591c8a041cc8f289ad264a13840bae448bf8c51831838ac506a0d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "engineSnapLightRegisters, engineLightScissor, engineCullModelBoundsToLight, engineLightUsesMathPath, buildFrontendLists"
+        }
+      ],
+      "note": "LP2.2a step 2 (C27, D67, A20, K22): per light record (visible, a volume, a texture light: not R_LightUsesMathPath, not a fog or blend light) the shader registers at the light's shaderParms (time 0, the global parms 0), each stage on has its colour registers below 0.001 snapped to 0 and a light none of whose stages adds light is skipped; the scissor is ProjectedFullyClippedBounds of the zero-to-one cube through the world mvp * inverseBaseLightProject (r_useLightScissors 3), culled when its z range is empty, x and y times ( viewport.x2 - x1 ) and ( y2 - y1 ) through idMath::Ftoi, expanded, intersected with the view's scissor (the portal flow's rect, at most that, is LP4's), zmin and zmax kept but used by nothing (SC212). R_CullModelBoundsToLight is CullBoundsToMVP( baseLightProject * modelRenderMatrix, bounds, true ), on each chunk's bounds"
+    },
+    {
+      "id": "M-FRONT-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            645,
+            649
+          ],
+          "anchor": "R_AddSingleModel, surfaceDirectlyVisible",
+          "sha256": "b3afcd846f7bce794d66a8f0d85d061722b9e69b6014e9e31632008de75a4d51"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            733,
+            735
+          ],
+          "anchor": "R_AddSingleModel, the base drawSurf of a drawn material",
+          "sha256": "9bc70e36f3cdfade8c51805e50f73a91383a525692aea64e84305cde9d63a0cb"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            791,
+            791
+          ],
+          "anchor": "R_AddSingleModel, the deforms whose source surface is drawn",
+          "sha256": "711644006f9da5b6ae24816a07351af7756b7a64557046dc01cee00f684ab0db"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            913,
+            1008
+          ],
+          "anchor": "R_AddSingleModel, the light interactions and their lists",
+          "sha256": "fb31708dce8d81a04add1a8339900a9bab1fbc4be10c38a31000b3679c11c9ca"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            225,
+            273
+          ],
+          "anchor": "R_SetupDrawSurfShader",
+          "sha256": "044c94126f6fc86f859184e6f41f2dbdf2ade43cfe712c960150f289f37383eb"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            548,
+            551
+          ],
+          "anchor": "idMaterial::IsDrawn",
+          "sha256": "c18398c6ff5e0fc9cbdcfd501fe89b20ff1123f006b2dfcc10a80a3431bf01bd"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists, engineInteractionList, RegisterCache"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineMaterialIsDrawn"
+        }
+      ],
+      "note": "LP2.2a step 2 (C27, A1, SC222): a chunk is a model surface: directly visible unless CullBoundsToMVP( its space's mvp, its bounds ) culls it; a prepass surface when its material IsDrawn and its deform is none or a particle one; an interaction of a light when its material ReceivesLighting, R_CullModelBoundsToLight keeps it and its spectrum is the light shader's; the list: MC_TRANSLUCENT translucent, a light that casts shadows (not noShadows) on an MF_NOSELFSHADOW material local, else global (the material's flag, not the entity's noSelfShadow); the registers of R_SetupDrawSurfShader with the entity's shaderParms (worldspawn's M-VIEW-04), evaluated on the parse thread through MaterialService::evaluate"
+    },
+    {
+      "id": "M-FRONT-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            712,
+            823
+          ],
+          "anchor": "R_OptimizeViewLightsList",
+          "sha256": "d44b4c96882eeecb55a1021202dae78c22be2b7787ab099ae3cf172125903b4e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "engineSortViewLights, buildFrontendLists"
+        }
+      ],
+      "note": "LP2.2a step 2 (SC206): a light with no surface in any list is dropped; the rest are sorted by scissor area with qsort ascending and the list rebuilt by prepending, so the largest light comes first (ties: M-FRONT-DIFF-01). r_useShadowSurfaceScissor 1 shrinks a shadowing light's scissor to the union of its interaction surfaces' rects, which are the light's own (lightDrawSurf->scissorRect = vLight->scissorRect), so it changes nothing"
+    },
+    {
+      "id": "M-FRONT-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1756,
+            1779
+          ],
+          "anchor": "RenderInteractions, the fast-path split and its caps",
+          "sha256": "f646ed20dda0477834ef33c0b0cfb016085e50e810ccb30debdd3dca78a38997"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "engineOrderInteractionSurfaces"
+        }
+      ],
+      "note": "LP2.2a step 2 (SC222): per list, the surfaces whose material has a fast-path bump image first in list order (at most MAX_INTERACTIONS_PER_LIGHT 2048), then the others (at most MAX_COMPLEX_INTERACTIONS_PER_LIGHT 256, appended while the 2048 last); idStaticList::Append drops the rest silently. The order stays although r_skipInteractionFastPath 1 runs the stage loop for every surface; a pending surface counts as complex"
+    },
+    {
+      "id": "M-FRONT-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            794,
+            822
+          ],
+          "anchor": "R_OptimizeViewLightsList, the sort",
+          "sha256": "27cdb9779de1f22ef94af734d28f93935db3a65144d64c75e654f19d5eb3d213"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            1204,
+            1265
+          ],
+          "anchor": "R_AddModels, the light chains",
+          "sha256": "e0815e5cd4be42d4799c1b019bb233613d10c8825774c94820d2a47af599f345"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "engineSortViewLights, buildFrontendLists"
+        }
+      ],
+      "note": "LP2.2a: orders the engine takes from its portal flow (LP4) and its qsort: the viewLights the sort starts from are in the flow's order, here the records' preview-id order, and qsort is not stable, here equal areas keep the reverse of that order; a light's chain holds the entities in reverse viewEntitys order and each entity's surfaces in model order, here the chunks in key order (area, entity, material, cell, part). Only the order of additive fp16 blends changes, which LP2.3's tolerance covers"
+    },
+    {
+      "id": "M-FRONT-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            286,
+            389
+          ],
+          "anchor": "R_AddSingleLight, masked occlusion culling and the shadow LOD",
+          "sha256": "274887e149a2e1a799b6b1d0b2d40b0f2ef6ed5b2353f6684a426ddcbf73ca59"
+        },
+        {
+          "file": "neo/renderer/Interaction.cpp",
+          "lines": [
+            177,
+            349
+          ],
+          "anchor": "R_CreateInteractionLightTris",
+          "sha256": "b0ee199c3c3e39164d6f2b633fbebc9014fe8105d5991ec2badf3cb390906312"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists"
+        }
+      ],
+      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet: the portal rects and the \"area not connected to the view\" cull (LP4), r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), the static interactions' light triangles (with r_lightAllBackFaces 1 only their light-volume cull remains: a chunk is culled by its bounds, and its triangles outside the volume add nothing, the falloff and projection samplers bordering to black), a chunk culled where the engine's whole area surface would not be (the same: no light outside the volume), material LODs, and the shadow LOD (K26, LP3)"
+    },
+    {
+      "id": "M-FRONT-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3984,
+            4171
+          ],
+          "anchor": "idRenderBackend::DrawInteractionsPass",
+          "sha256": "7de3d74adc700da216fa4342eebd65479de1f4475fdc8ebc63008228abbf885b"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4179,
+            4251
+          ],
+          "anchor": "idRenderBackend::DrawInteractions",
+          "sha256": "d024ce77883d58c492783a0b4eeb395742270e8b1517a394b3fc988ff0330b4f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists, FrontendLists"
+        }
+      ],
+      "note": "LP2.2a: LP2 draws texture lights only: fog and blend lights (skipped by DrawInteractionsPass too, drawn by FogAllLights) and math lights (the second phase) wait for LP5, and an ambient light (IsAmbientLight: the interactionAmbient programs, which LP2 does not load) is not drawn; FrontendLists counts each kind"
+    },
+    {
+      "id": "M-PASS-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            934,
+            1041
+          ],
+          "anchor": "idRenderBackend::FillDepthBufferFast",
+          "sha256": "ff7700ed106a70d5c48d96a7d4012ea9cc1ca021b76042073be9bfb952df066d"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            706,
+            914
+          ],
+          "anchor": "idRenderBackend::FillDepthBufferGeneric",
+          "sha256": "0376524a059f3ebad877dc90e614e332278cbac1a564f030e6a764b708f21c29"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            159,
+            165
+          ],
+          "anchor": "r_offsetfactor \"0\", r_offsetunits \"-600\"",
+          "sha256": "3e4f763864ce3382d082b70049084469e4b1a575c44f45321b979775e3031b3b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordPrepass, LitPasses::genericDepth"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineGenericDepthDraws"
+        }
+      ],
+      "note": "LP2.2a step 3 (SC216-SC219, D74, D75, P2.21): the leading SS_SUBVIEW surfaces through the generic path one at a time (DST_COLOR / ZERO, LESS, colour 1, the colour program when no alpha-tested stage drew); the opaque ones with depth (63) and GLS_DEFAULT, the MVP on a space change, no polygon offset; translucent ones skipped; the perforated ones after, through the generic path: per alpha-tested stage whose condition is on, alpha = regs[ color.registers[3] ] (skipped at <= 0 but counted as tried), privatePolygonOffset, GL_Color's clamp, ALPHA_TEST, texture_color (15) with SVC_IGNORE and unit 0 the stage's image through its own sampler, then PrepareStageTexturing; MF_POLYGONOFFSET: GLS_POLYGON_OFFSET with r_offsetfactor 0 and r_offsetunits -600 * polygonOffset; the GLS_ALPHAMASK depth draw when no alpha-tested stage was tried; ALPHA_TEST 0 at the end. depth.ps writes (0, 0, 0, 1), so the prepass paints black"
+    },
+    {
+      "id": "M-PASS-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            155,
+            187
+          ],
+          "anchor": "RB_GetShaderTextureMatrix",
+          "sha256": "c4ea956486cd29f24021493f3987bf8a3d116529be043b80208afac75c115f03"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            194,
+            216
+          ],
+          "anchor": "RB_LoadShaderTextureMatrix",
+          "sha256": "e12d704dd6e3ff174e0bc2ede6dab9518a617148879297ac6cc7dcd98d227a7f"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            352,
+            638
+          ],
+          "anchor": "idRenderBackend::PrepareStageTexturing",
+          "sha256": "33282bb24d375f2dbb9e61064c771ef6187fe09f308f4710cd74d3d6a85a1d92"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineShaderTextureMatrix, engineLoadShaderTextureMatrix"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::genericDepth"
+        }
+      ],
+      "note": "LP2.2a step 3: the texture matrix rows from the stage's registers with the offsets wrapped at +-40 by the (int) cast (the engine's first test reads matrix[12] for matrix[3 * 4 + 0], the same element), TEXTUREMATRIX_S and _T the identity rows without a matrix; TEXGEN_0_ENABLED 0, or 1 with TG_SCREEN's planes from R_MatrixMultiply( modelViewMatrix, projectionMatrix ); the cube and sky texgens bind other programs (M-PASS-DIFF-03)"
+    },
+    {
+      "id": "M-PASS-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3984,
+            4171
+          ],
+          "anchor": "idRenderBackend::DrawInteractionsPass",
+          "sha256": "7de3d74adc700da216fa4342eebd65479de1f4475fdc8ebc63008228abbf885b"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1703,
+            2247
+          ],
+          "anchor": "idRenderBackend::RenderInteractions",
+          "sha256": "6fe6a2f104f397abeedf47c0179c88bf9f11fc2a3b3378d46c0d35fdbecf846b"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            56,
+            56
+          ],
+          "anchor": "r_skipInteractionFastPath \"1\"",
+          "sha256": "5c3ea8208df476e71cb4059bb1ed44a5a68cdb17c61d88236e27d530b00ea3e6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordInteractions, LitPasses::renderInteractions, LitPasses::setInteractionSpace"
+        }
+      ],
+      "note": "LP2.2a step 4 (SC221-SC228, D75, K26): per light, largest first: GL_State( GLS_DEFAULT ), ALPHA_TEST 0, the view's viewport and scissor, then RenderInteractions for the local and global lists with DEPTHFUNC_EQUAL and the translucent list with DEPTHFUNC_LESS: the light's scissor when it differs; SRCBLEND_ONE | DSTBLEND_ONE | DEPTHMASK | depthFunc | STENCIL_FUNC_ALWAYS through GetRenderState (additive RGB, alpha One / Zero, no depth write, cull front, stencil ALWAYS, no polygon offset: a perforated MF_POLYGONOFFSET surface fails EQUAL and stays unlit, mirrored); per light stage on: lightColor ( r_lightScale * regs[ color 0..2 ], regs[ color 3 ] ), specular zeroed for noSpecular, the light texture matrix, units 3 and 4 the falloff and the stage's image, USER0-2 (mlMode 0), RB_SetupForFastPathInteractions, currentSpace reset; per surface on a space change MVP, MODELMATRIX and MODELVIEWMATRIX transposed, GLOBALLIGHTORIGIN, LOCALLIGHTORIGIN (w 0), LOCALVIEWORIGIN (w 1), the projection planes to local and baked, LIGHTFALLOFF_S; then the surface stage loop (M-PASS-04). Shadow parms are not set (K26: the unshadowed program)"
+    },
+    {
+      "id": "M-PASS-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1074,
+            1124
+          ],
+          "anchor": "idRenderBackend::SetupInteractionStage",
+          "sha256": "61d851c54f00203123b8b5e3d96ac2489c6ef9af3ed0c4a2bb19437805325bcc"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1131,
+            1664
+          ],
+          "anchor": "idRenderBackend::DrawSingleInteraction",
+          "sha256": "65ca2c1bf043485f89a877a9f2ecd04497c8a4474436fb647129a58a5713e06d"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1673,
+            1694
+          ],
+          "anchor": "RB_SetupForFastPathInteractions",
+          "sha256": "c6c62ee23070605407d9cd56ed3d7b7268a6bebbf0d82d85d9a7a099ca27c54f"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            129,
+            146
+          ],
+          "anchor": "RB_SetVertexColorParms",
+          "sha256": "7116163379efdf65d97f5b53cf7ecc2a55bd30eb1f0e07599291082741321e61"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            2238,
+            2246
+          ],
+          "anchor": "idRenderBackend::GL_Color",
+          "sha256": "0502f2666b70bd05e893e4cef1b23a3cac62ea40025a315fecb8fdba3085ac24"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineSetupInteractionStage, engineSingleInteraction, engineSurfaceInteractions, pendingSurfaceInteraction, engineVertexColorParms, engineClampedColor, engineMathLightParms"
+        }
+      ],
+      "note": "LP2.2a step 4 (SC229, SC230): SL_COVERAGE and SL_AMBIENT ignored; SL_BUMP (on) draws a pending interaction, takes its image and matrix and clears diffuse and specular; SL_DIFFUSE draws a pending diffuse, takes image, vertexColor, matrix and clamp01( register ) * the light's diffuse colour; SL_SPECULAR likewise, and not for noSpecular lights; a final draw. DrawSingleInteraction: no bump, nothing; a null diffuse becomes _blackDiffuse and a null specular _black, written into the carried drawInteraction_t as the engine writes them into din; no draw when both are black (_black, or rgb <= 0); the program by the specular image's usage after the PBR rename (TD_SPECULAR_PBR_RMAO, _RMAOD: interaction_PBR 23, else interaction 19; K26 the unshadowed one). The vertex colour and the matrices carry from surface to surface within one RenderInteractions call"
+    },
+    {
+      "id": "M-PASS-05",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            223,
+            259
+          ],
+          "anchor": "RB_BakeTextureMatrixIntoTexgen",
+          "sha256": "c2eb1f326eb08e95b3954c157aa75f953d1ebbac3d004f4304027739eaa4fb49"
+        },
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            267,
+            278
+          ],
+          "anchor": "R_GlobalPointToLocal",
+          "sha256": "b44c34cca4bbb9ded63e9c009311e117319aa348b18b943f7dd32adf4640d1fa"
+        },
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            315,
+            321
+          ],
+          "anchor": "R_GlobalPlaneToLocal",
+          "sha256": "c14a74d6fe3413d77383ec59871d9e15e06ca9afac56ff24e87512faac9f13e7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineBakeTextureMatrixIntoTexgen, engineGlobalPointToLocal, engineGlobalPlaneToLocal"
+        }
+      ],
+      "note": "LP2.2a step 4 (SC227): transcribed on the copied idPlane and idVec3 in the shim, the bake through its R_MatrixMultiply (the SSE path), so the float order is the engine's; pure, any thread"
+    },
+    {
+      "id": "M-PASS-06",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            315,
+            565
+          ],
+          "anchor": "idRenderBackend::DrawElementsWithCounters",
+          "sha256": "bc18e9af38300504f0c659aa2412964266f5ef2209d5a079e97829e57a3c5df7"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            567,
+            623
+          ],
+          "anchor": "GetCurrentBindingLayout, the uniforms item and the TEXTURE family",
+          "sha256": "0cbac3c058c41ee1f4333353da94ed5c377271e8295f2c1385bcf3a2690f9328"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            916,
+            996
+          ],
+          "anchor": "GetCurrentBindingLayout, DRAW_INTERACTION",
+          "sha256": "74f3e22ffb4226cf5031bc113485f29836c25d32e9fa798f79804156746f4d97"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            2150,
+            2159
+          ],
+          "anchor": "idRenderBackend::GL_State",
+          "sha256": "b96152a56e09788e70ea19927950807977df0d1659ff3bdb2e90025d38683495"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            2200,
+            2204
+          ],
+          "anchor": "idRenderBackend::GL_PolygonOffset",
+          "sha256": "19db24b323e87961c5c100904ce49691ecbf3d3ac381d1c2411fb52d674d4a79"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::draw, LitPasses::bindingSets"
+        }
+      ],
+      "note": "LP2.2a steps 3-4 (SC220, SC238, D77, D9): per draw the binding sets of the layout (set 0 push constants or ConstantBuffer( 0, the layout's volatile buffer ); TEXTURE: t0 unit 0, s0 the image's own sampler; DRAW_INTERACTION: t0-t2 units 0-2, t3-t4 units 3-4, s0 AnisotropicWrap and s1 LinearBorder), the pipeline of PipelineKey{ the state bits, the program, (int) depthBias, slopeBias, hdrFBO's formats }, the constant buffer committed before setGraphicsState, which runs only when the pipeline, the sets, the buffers, the viewport or the scissor changed or the commit asks it (Vulkan), the push constants after it, then drawIndexed( vertexCount the chunk's indexes, startIndexLocation its byte offset / 2, startVertexLocation its byte offset / 32 ). Images through the slot table (C28): a texture with no written level skips the draw (unconverged); a pending pipeline skips it (unconverged); a failed one disables the pass (programReport). GL_State's GLS_KEEP and mirror bits are never set here (no depth-bounds test, K22; no mirror view, K25)"
+    },
+    {
+      "id": "M-PASS-07",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/NVRHI/RenderProgs_NVRHI.cpp",
+          "lines": [
+            343,
+            364
+          ],
+          "anchor": "idRenderProgManager::SetUniformValue",
+          "sha256": "921749e6631fc96ac7b84cbcc53d5d16a7ecebd256cfa4e49eeb4aae4c27d0e1"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderProgs_NVRHI.cpp",
+          "lines": [
+            371,
+            379
+          ],
+          "anchor": "idRenderProgManager::ZeroUniforms",
+          "sha256": "f8000f67fa748c0e76a2e6c551a17c1563d5506559b8430ed1b2644457307e40"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderProgs_NVRHI.cpp",
+          "lines": [
+            386,
+            533
+          ],
+          "anchor": "idRenderProgManager::SelectUniforms",
+          "sha256": "1a27ab04482e2a06470b5c88eb9d0d773438ab42525b5e29318021bdae890a2d"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderProgs_NVRHI.cpp",
+          "lines": [
+            536,
+            565
+          ],
+          "anchor": "idRenderProgManager::CommitConstantBuffer",
+          "sha256": "7c43cbd42ecb763a42025359bd57b0e982aba3ac52c72cf0bce02dddac2e99c0"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderProgs_NVRHI.cpp",
+          "lines": [
+            567,
+            579
+          ],
+          "anchor": "idRenderProgManager::CommitPushConstants",
+          "sha256": "6ada6f5ed378c0929ee9cc21ca631285cb6e8ffa31d5348fade54f72bc193fd2"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            217,
+            391
+          ],
+          "anchor": "renderParmLayoutTypes and the layout attributes",
+          "sha256": "a2258dc66d2031bb2e8677ecf7250f37f4422b582d6cea65f9911e17dad6d65d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/RenderParms.cpp",
+          "symbol": "RenderParms, engineLayoutsOfParm"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::draw"
+        }
+      ],
+      "note": "LP2.2a step 4 (SC241, T0.1): one float4 per renderParm_t; a value that differs marks every layout whose set holds the parm; the commit selects the layout's set member by member in the set's order (set 10's 25 float4 = 400 bytes) and writes it with writeBuffer only when the layout's uniforms changed or the layout did, then clears the flag; a pushed layout returns the change, and its block is pushed after setGraphicsState"
+    },
+    {
+      "id": "M-PASS-08",
+      "kind": "constant",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            752,
+            774
+          ],
+          "anchor": "the volatile constant buffers, maxVersions 8192",
+          "sha256": "70ac30c260f7367d6711162ed17eb119bb7d7087323667e67f52709f8a6bf475"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::constantBuffer"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineFrameDefaults::constantBufferVersions"
+        }
+      ],
+      "note": "LP2.2a step 4 (D76, SC241): a layout that pushes nothing (DRAW_INTERACTION on this device; CONSTANT_BUFFER_ONLY and TEXTURE on AMD, every one above the push-constant limit) gets CreateVolatileConstantBufferDesc( rpBufSize, \"RenderParams_<layout>\", 8192 ), made by the render thread at its first write (byteSize, isConstantBuffer, isVolatile, maxVersions, debugName, as nvrhi::utils makes it)"
+    },
+    {
+      "id": "M-PASS-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            459,
+            461
+          ],
+          "anchor": "DrawElementsWithCounters, the PipelineKey",
+          "sha256": "5f199130b1aadb58a720339d8402ab1eab58f51153d4b86b67f193ce3bcfd150"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::draw"
+        }
+      ],
+      "note": "LP2.2a: the engine's key carries the backend's last GL_PolygonOffset values whatever the state; GetRenderState reads them only with GLS_POLYGON_OFFSET, so the preview puts them in the key only then (0 otherwise): fewer pipelines, the same render state"
+    },
+    {
+      "id": "M-PASS-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1749,
+            1750
+          ],
+          "anchor": "RenderInteractions, drawInteraction_t inter = {}",
+          "sha256": "9948ef82a1d942929a0059660f6a642d0afaf5452fb28c5d0f07c4bd4cd4180d"
+        },
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            648,
+            666
+          ],
+          "anchor": "drawInteraction_t",
+          "sha256": "3caadac07d1d0d577787beae430b1e11caf35b28ac5bd3b7bb06f2a92a316d7e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.h",
+          "symbol": "InteractionState"
+        }
+      ],
+      "note": "LP2.2a: idVec4's default constructor does nothing, so `inter = {}` leaves the bump, diffuse and specular matrices and the colours indeterminate until a stage of their kind sets them; the preview zeroes them. A draw never reads an unset matrix but for an image that is _black or _blackDiffuse with colour 0 (a constant texture): no visible difference"
+    },
+    {
+      "id": "M-PASS-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            352,
+            638
+          ],
+          "anchor": "idRenderBackend::PrepareStageTexturing, the cube and sky texgens",
+          "sha256": "33282bb24d375f2dbb9e61064c771ef6187fe09f308f4710cd74d3d6a85a1d92"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineGenericDepthDraws"
+        }
+      ],
+      "note": "LP2.2a: an alpha-tested stage of TG_REFLECT_CUBE, TG_REFLECT_CUBE2, TG_SKYBOX_CUBE or TG_WOBBLESKY_CUBE gets another program from PrepareStageTexturing over texture_color, which LP2 does not load; the preview does not draw that stage in the prepass (the surface is then not drawn solid either, as the stage was tried). LP5 adds the programs"
+    },
+    {
+      "id": "M-PASS-DIFF-04",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            752,
+            774
+          ],
+          "anchor": "the volatile constant buffers, maxVersions 8192",
+          "sha256": "70ac30c260f7367d6711162ed17eb119bb7d7087323667e67f52709f8a6bf475"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordInteractions, LitPasses::writeBudget, LitPasses::worstCaseWrites"
+        }
+      ],
+      "note": "LP2.2a (D76, C16): the engine writes as often as it draws and relies on 8192 versions; the preview counts the writes while recording and lets a frame write at most maxVersions / (FramesInFlight + 1) (the versions of the frames before it are recycled only once NVRHI knows they finished, nvrhi rule 2): a light whose worst case (its light stages on times, per surface, its bump, diffuse and specular stages plus one) would pass that is not drawn, nor any light after it, and they count as overflowed, with one warning per session; NVRHI's \"maxVersions insufficient\" error, which fails the session, is never met. Measured on the LP1b fixture: 2 writes in a frame of 17 interaction draws"
+    },
+    {
+      "id": "M-PASS-DIFF-05",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            225,
+            273
+          ],
+          "anchor": "R_SetupDrawSurfShader",
+          "sha256": "044c94126f6fc86f859184e6f41f2dbdf2ade43cfe712c960150f289f37383eb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "pendingSurfaceInteraction"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::genericDepth, LitPasses::recordPrepass"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "RegisterCache"
+        }
+      ],
+      "note": "LP2.2a (D52, D77): the engine has every material and its registers before it draws; the preview's arrive from the parse thread. A chunk whose material or registers are pending is drawn solid in the prepass (not when its known material is translucent) and lit through the bump _flat and the diffuse _default, and the frame is unconverged; until a new evaluation arrives a consumer (an entity or a light) keeps its last registers of the material, never the defaults, so a light-colour drag never flickers"
+    },
+    {
+      "id": "M-PASS-GUARD-01",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1871,
+            1931
+          ],
+          "anchor": "RenderInteractions, the light stage loop and its images",
+          "sha256": "816e41cbdc9afc94863820b031f60884d8602c9cb955018509347c1f544de3d5"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            155,
+            187
+          ],
+          "anchor": "RB_GetShaderTextureMatrix",
+          "sha256": "c4ea956486cd29f24021493f3987bf8a3d116529be043b80208afac75c115f03"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineRegister"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::renderInteractions"
+        }
+      ],
+      "note": "LP2.2a: a register index outside the evaluated registers reads 0 (the engine reads its frame-allocated array unchecked; the parser keeps every index below numRegisters), and a light stage without an image (a cinematic) is skipped (the engine would bind a null image, which GetImageAt does not check)"
+    },
+    {
+      "id": "M-PASS-GUARD-02",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            2176,
+            2181
+          ],
+          "anchor": "idRenderBackend::GL_Scissor",
+          "sha256": "358e9fdc241faef76dcacb2d68f69ad70108fa47283968528a9168c65d6d3ab4"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitView.cpp",
+          "symbol": "engineScissorRect"
+        }
+      ],
+      "note": "LP2.2a: an empty rect, which the engine never passes to GL_Scissor (a light's scissor is tested before; AddPoint of two points is never empty), is the whole viewport, as the engine applies an empty context scissor"
     }
   ],
   "retired": [

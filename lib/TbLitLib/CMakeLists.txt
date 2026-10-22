@@ -42,6 +42,8 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightRecord.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitFrontend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitFrontend.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LitPasses.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LitPasses.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitStages.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitStages.h
