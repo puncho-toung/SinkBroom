@@ -602,6 +602,27 @@ void LitSession::runInFrameForTesting(std::function<void(RenderFrameAccess&)> ho
   m_renderThread->runInFrame(std::move(hook));
 }
 
+void LitSession::setEveryFrameHookForTesting(std::function<void(RenderFrameAccess&)> hook)
+{
+  m_renderThread->setEveryFrameHook(std::move(hook));
+}
+
+void LitSession::setChunksForTesting(
+  std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks)
+{
+  m_renderThread->setTestChunks(std::move(chunks));
+}
+
+void LitSession::setUploadCapForTesting(const std::uint64_t bytes)
+{
+  m_renderThread->setUploadCap(bytes);
+}
+
+void LitSession::holdFrameCompletionForTesting(const bool hold)
+{
+  m_renderThread->holdCompletion(hold);
+}
+
 std::vector<ProgramReport> LitSession::programReport() const
 {
   return m_compiler ? m_compiler->programs() : std::vector<ProgramReport>{};

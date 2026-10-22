@@ -21,6 +21,7 @@
 
 #include "FrameResources.h"
 #include "FrameTimers.h"
+#include "GeometryArenas.h"
 #include "base/Macros.h"
 #include "base/Result.h"
 #include "lit/FramePacer.h"
@@ -67,6 +68,9 @@ struct RenderFrameAccess
   // the frame's index (m_frameIndex before it is submitted)
   std::uint64_t frameIndex;
   FrameResources& frame;
+  GeometryArenas& arenas;
+  // the bytes the frame has uploaded before the hook runs
+  std::uint64_t bytesUploaded;
 };
 
 /**
@@ -117,6 +121,20 @@ private:
   nvrhi::CommandListHandle m_commandList;
   // LP2.1 (C14, C6): the frame's targets, framebuffers and tonemap buffers
   FrameResources m_frameResources;
+  // LP2.1 (S8, D36, D78): the chunks' geometry in arena buffers, and the version of the
+  // chunk set they were last synchronised with (scene batches and test chunks count)
+  GeometryArenas m_arenas;
+  std::uint64_t m_chunksVersion = 0;
+  std::uint64_t m_syncedChunksVersion = 0;
+  // D77: the last frame left uploads for the next one
+  bool m_unconverged = false;
+  // the bytes the frame being recorded has uploaded
+  std::uint64_t m_frameUploadBytes = 0;
+  // §3.10: what a frame uploads at most (UploadBytesPerFrame; tests set less)
+  std::atomic<std::uint64_t> m_uploadCap = UploadBytesPerFrame;
+  // LP2.1 test hook: while set, no frame counts as finished, so freed ranges and retired
+  // resources stay held
+  std::atomic<bool> m_holdCompletion = false;
   // C28: m_frameResources' render-target generation, for any thread (tests)
   std::atomic<std::uint64_t> m_renderTargetGeneration = 0;
   std::array<nvrhi::EventQueryHandle, FramesInFlight> m_frameEvents;
@@ -167,6 +185,12 @@ private:
   // next frame runs once (RenderFrameAccess)
   std::optional<vk::Extent2D> m_headlessResize;
   std::vector<std::function<void(RenderFrameAccess&)>> m_frameHooks;
+  std::function<void(RenderFrameAccess&)> m_everyFrameHook;
+  // LP2.1 test hook: the chunks the arenas hold instead of the scene's
+  std::shared_ptr<const std::map<ChunkKey, Chunk>> m_testChunks;
+  // the render thread's copy of m_testChunks, and the chunks of a thread without a scene
+  std::shared_ptr<const std::map<ChunkKey, Chunk>> m_arenaTestChunks;
+  std::map<ChunkKey, Chunk> m_noChunks;
   // the number of the last generation whose replacement was requested; GUI thread reads
   std::atomic<std::uint64_t> m_recreateRequestedFor = 0;
   // the extent of the last generation replaced because it was SUBOPTIMAL
@@ -253,6 +277,17 @@ public:
   void runInFrame(std::function<void(RenderFrameAccess&)> hook);
   // any thread: the frame resources' render-target generation (C28)
   std::uint64_t renderTargetGeneration() const;
+  // any thread: every frame runs hook on the render thread (as runInFrame) until an
+  // empty function replaces it
+  void setEveryFrameHook(std::function<void(RenderFrameAccess&)> hook);
+  // any thread: the arenas hold these chunks instead of the scene's until null replaces
+  // them; a frame is triggered
+  void setTestChunks(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks);
+  // any thread: what a frame uploads at most (§3.10's cap, UploadBytesPerFrame)
+  void setUploadCap(std::uint64_t bytes);
+  // any thread: while held, no frame counts as finished (freed arena ranges and retired
+  // resources stay held)
+  void holdCompletion(bool hold);
 
 private:
   void main() noexcept;
@@ -267,6 +302,12 @@ private:
   // the frame's resources at its extent; false: failed
   bool prepareFrameResources(vk::Extent2D extent);
   void runFrameHooks(nvrhi::ICommandList& commandList);
+  // the chunks the arenas follow (the scene's or the tests'), synchronised when their set
+  // changed; whether uploads are queued
+  bool syncChunks();
+  const std::map<ChunkKey, Chunk>& arenaChunks() const;
+  // D78: the frame's uploads, before its first pass; false: failed
+  bool recordUploads(nvrhi::ICommandList& commandList);
   // whether the given fault was injected; it is taken
   bool takeFault(DebugFault fault);
   bool waitForFrameEvent(std::size_t slot);

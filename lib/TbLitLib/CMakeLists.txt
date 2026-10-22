@@ -25,6 +25,8 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FrameTimers.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GameFileSource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GameFile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/GeometryArenas.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/GeometryArenas.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageCache.cpp
@@ -42,6 +44,8 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PipelineCompiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PipelineCompiler.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ProcFile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/RangeAllocator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/RangeAllocator.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Projection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.h

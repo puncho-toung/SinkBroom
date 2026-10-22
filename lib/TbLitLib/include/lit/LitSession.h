@@ -37,6 +37,7 @@ class IDevice;
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -210,6 +211,8 @@ class MaterialService;
 class PipelineCompiler;
 class RenderThread;
 class SessionEvents;
+struct Chunk;
+struct ChunkKey;
 struct LightTable;
 struct RenderFrameAccess;
 struct Snapshot;
@@ -455,6 +458,17 @@ public:
    * triggered. A hook that is never run (the session stops first) is dropped.
    */
   void runInFrameForTesting(std::function<void(RenderFrameAccess&)> hook);
+  // LP2.1, any thread: every frame runs hook as runInFrameForTesting does, until an empty
+  // function replaces it
+  void setEveryFrameHookForTesting(std::function<void(RenderFrameAccess&)> hook);
+  // LP2.1, any thread: the render thread's arenas hold these chunks instead of the
+  // scene's until null replaces them (D36); a frame is triggered
+  void setChunksForTesting(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks);
+  // LP2.1, any thread: what a frame uploads at most (§3.10's 32 MB cap)
+  void setUploadCapForTesting(std::uint64_t bytes);
+  // LP2.1, any thread: while held, no frame counts as finished on the GPU, so the ranges
+  // freed in the arenas and the retired targets stay held (D35, D36)
+  void holdFrameCompletionForTesting(bool hold);
   /**
    * D9, any thread: every program the compile thread was asked for, enabled or disabled
    * with the field that disabled it; the session's report of its passes.

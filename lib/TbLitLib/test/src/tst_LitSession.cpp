@@ -1754,6 +1754,66 @@ void settle(LitSession& session)
   std::this_thread::sleep_for(IdleCollectInterval + 500ms);
 }
 
+// D36: count chunks of verts vertices each (a fan of their triangles), keyed by cell,
+// with both versions version
+std::shared_ptr<const std::map<ChunkKey, Chunk>> syntheticChunks(
+  const std::size_t count,
+  const std::size_t verts,
+  const std::uint64_t version,
+  const int firstCell = 0)
+{
+  auto chunks = std::make_shared<std::map<ChunkKey, Chunk>>();
+  for (std::size_t i = 0; i < count; ++i)
+  {
+    auto chunk = Chunk{};
+    chunk.key.material = "textures/lp2/arena";
+    chunk.key.cell = {firstCell + int(i), 0, 0};
+    chunk.verts.resize(verts);
+    for (std::size_t v = 0; v < verts; ++v)
+    {
+      chunk.verts[v].xyz = {float(i), float(v), 0.0f};
+    }
+    for (std::size_t v = 1; v + 1 < verts; ++v)
+    {
+      chunk.indexes.insert(
+        chunk.indexes.end(), {std::uint16_t(0), std::uint16_t(v), std::uint16_t(v + 1)});
+    }
+    chunk.casterVersion = version;
+    chunk.appearanceVersion = version;
+    const auto key = chunk.key;
+    chunks->emplace(key, std::move(chunk));
+  }
+  return chunks;
+}
+
+// a chunk's bytes in the arenas: its vertices and its index words
+std::uint64_t arenaBytesOf(const Chunk& chunk)
+{
+  return chunk.verts.size() * 32u + (chunk.indexes.size() * 2u + 3u) / 4u * 4u;
+}
+
+struct ArenaState
+{
+  std::size_t placed = 0;
+  std::size_t queued = 0;
+  std::size_t vertexArenas = 0;
+  std::size_t indexArenas = 0;
+  std::uint64_t usedBytes = 0;
+};
+
+ArenaState arenaState(LitSession& session)
+{
+  auto state = ArenaState{};
+  inFrame(session, [&](RenderFrameAccess& access) {
+    state.placed = access.arenas.placedChunks();
+    state.queued = access.arenas.queuedChunks();
+    state.vertexArenas = access.arenas.vertexArenas();
+    state.indexArenas = access.arenas.indexArenas();
+    state.usedBytes = access.arenas.usedBytes();
+  });
+  return state;
+}
+
 } // namespace
 
 // LP2.1: the render thread's GPU resources (FrameResources, the arenas, the image slots
@@ -1893,6 +1953,249 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     }
     CHECK(resetDispatcher());
     messages.print("frame resources, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("D36: 1000 chunks uploaded, freed and uploaded again; Stop at the baseline")
+  {
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+      settle(*session);
+      const auto baseline = session->deviceMemoryAllocations();
+
+      // 1000 chunks of 64 vertices, two frames' worth at most
+      const auto chunks = syntheticChunks(1000, 64, 1);
+      auto bytes = std::uint64_t{0};
+      for (const auto& [key, chunk] : *chunks)
+      {
+        bytes += arenaBytesOf(chunk);
+      }
+      session->setChunksForTesting(chunks);
+      REQUIRE(
+        waitFor([&] { return arenaState(*session).placed == 1000u; }, 10000ms, false));
+      const auto placed = arenaState(*session);
+      CHECK(placed.queued == 0u);
+      CHECK(placed.vertexArenas == 1u);
+      CHECK(placed.indexArenas == 1u);
+      CHECK(placed.usedBytes == bytes);
+      // C30: the arenas and the list's upload chunks, never an allocation per chunk
+      const auto withChunks = session->deviceMemoryAllocations();
+      std::cout << "1000 chunks (" << bytes << " bytes): allocations " << baseline
+                << " -> " << withChunks << "\n";
+      CHECK(withChunks - baseline <= 4);
+
+      // freed: the ranges wait for their frame, the arenas stay
+      session->setChunksForTesting(syntheticChunks(0, 0, 1));
+      REQUIRE(waitFor([&] { return arenaState(*session).placed == 0u; }, 10000ms, false));
+      CHECK(arenaState(*session).usedBytes == 0u);
+      // and uploaded again as changed chunks: the freed ranges are handed out again once
+      // their frames have finished, so the arenas do not grow
+      settle(*session);
+      session->setChunksForTesting(syntheticChunks(1000, 64, 2));
+      REQUIRE(
+        waitFor([&] { return arenaState(*session).placed == 1000u; }, 10000ms, false));
+      const auto again = arenaState(*session);
+      CHECK(again.vertexArenas == 1u);
+      CHECK(again.indexArenas == 1u);
+      CHECK(session->deviceMemoryAllocations() - baseline <= 4);
+
+      teardown(*session);
+      const auto report = session->teardownReport();
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      REQUIRE(report.vramAtStart);
+      REQUIRE(report.vramAtStop);
+      const auto startMb = double(report.vramAtStart->usedBytes) / (1024.0 * 1024.0);
+      const auto stopMb = double(report.vramAtStop->usedBytes) / (1024.0 * 1024.0);
+      std::cout << "1000 chunks: VRAM at start " << startMb << " MB, at stop " << stopMb
+                << " MB\n";
+      CHECK(stopMb <= startMb + 1.0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      CHECK(events.count(SessionEvent::Warning) == 0u);
+      events.print("1000 chunks");
+    }
+    CHECK(resetDispatcher());
+    messages.print("1000 chunks, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("D78: a 40 MB batch takes two frames under the 32 MB cap")
+  {
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+
+      // each frame's uploads, as its hook sees them (the hook runs after the uploads)
+      auto mutex = std::mutex{};
+      auto uploads = std::vector<std::uint64_t>{};
+      session->setEveryFrameHookForTesting([&](RenderFrameAccess& access) {
+        const auto lock = std::scoped_lock{mutex};
+        if (access.bytesUploaded > 0)
+        {
+          uploads.push_back(access.bytesUploaded);
+        }
+      });
+      // 17 chunks of 65535 vertices: about 2.5 MB each, about 42 MB in all
+      const auto chunks = syntheticChunks(17, 65535, 1);
+      auto bytes = std::uint64_t{0};
+      for (const auto& [key, chunk] : *chunks)
+      {
+        bytes += arenaBytesOf(chunk);
+      }
+      REQUIRE(bytes > 40u * 1024u * 1024u);
+      session->setChunksForTesting(chunks);
+      // no camera move: the unconverged first frame triggers the second (D77)
+      REQUIRE(waitFor(
+        [&] { return arenaState(*session).placed == chunks->size(); }, 10000ms, false));
+      session->setEveryFrameHookForTesting({});
+      {
+        const auto lock = std::scoped_lock{mutex};
+        std::cout << "a " << bytes << "-byte batch: frames uploaded";
+        for (const auto frameBytes : uploads)
+        {
+          std::cout << " " << frameBytes;
+        }
+        std::cout << "\n";
+        REQUIRE(uploads.size() == 2u);
+        CHECK(uploads[0] <= UploadBytesPerFrame);
+        CHECK(uploads[0] + uploads[1] == bytes);
+      }
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("40 MB batch, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("D36: a freed range is not handed out before its frame has finished")
+  {
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+
+      const auto placementOf = [&](const ChunkKey& key) {
+        auto placement = std::optional<ChunkPlacement>{};
+        inFrame(*session, [&](RenderFrameAccess& access) {
+          placement = access.arenas.placement(key);
+        });
+        return placement;
+      };
+      const auto a = syntheticChunks(1, 256, 1, 0);
+      const auto b = syntheticChunks(1, 256, 1, 1);
+      const auto keyA = a->begin()->first;
+      const auto keyB = b->begin()->first;
+      session->setChunksForTesting(a);
+      REQUIRE(waitFor([&] { return placementOf(keyA).has_value(); }, 5000ms, false));
+      const auto first = *placementOf(keyA);
+
+      // A goes and B comes while no frame counts as finished: A's ranges are held, so B
+      // gets others
+      session->holdFrameCompletionForTesting(true);
+      session->setChunksForTesting(b);
+      REQUIRE(waitFor([&] { return placementOf(keyB).has_value(); }, 5000ms, false));
+      for (auto i = 0; i < 4; ++i)
+      {
+        session->requestFrame();
+        std::this_thread::sleep_for(50ms);
+      }
+      const auto second = *placementOf(keyB);
+      CHECK(second.vertices.offset != first.vertices.offset);
+      CHECK(second.indexes.offset != first.indexes.offset);
+      CHECK_FALSE(placementOf(keyA));
+
+      // once the frame that freed them has finished, A's ranges are handed out again
+      session->holdFrameCompletionForTesting(false);
+      settle(*session);
+      auto bc = std::make_shared<std::map<ChunkKey, Chunk>>(*b);
+      const auto c = syntheticChunks(1, 256, 1, 2);
+      const auto keyC = c->begin()->first;
+      bc->insert(c->begin(), c->end());
+      session->setChunksForTesting(bc);
+      REQUIRE(waitFor([&] { return placementOf(keyC).has_value(); }, 5000ms, false));
+      const auto third = *placementOf(keyC);
+      CHECK(third.vertices.offset == first.vertices.offset);
+      CHECK(third.indexes.offset == first.indexes.offset);
+      std::cout << "freed range: A at " << first.vertices.offset << "/"
+                << first.indexes.offset << ", B (held) at " << second.vertices.offset
+                << "/" << second.indexes.offset << ", C (after) at "
+                << third.vertices.offset << "/" << third.indexes.offset << "\n";
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("freed range, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("D78: a Stop in the middle of an upload batch")
+  {
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+
+      // 1 MB a frame: 40 chunks of about 0.6 MB take about 25 frames
+      session->setUploadCapForTesting(1024 * 1024);
+      session->setChunksForTesting(syntheticChunks(40, 16384, 1));
+      REQUIRE(waitFor(
+        [&] {
+          const auto state = arenaState(*session);
+          return state.placed >= 4u && state.queued > 0u;
+        },
+        5000ms,
+        false));
+      const auto stopStart = std::chrono::steady_clock::now();
+      teardown(*session);
+      const auto stopMs = std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - stopStart)
+                            .count();
+      std::cout << "a stop during an upload batch took " << stopMs << " ms\n";
+      CHECK(stopMs < double(StopBound.count()));
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("stop during uploads, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }

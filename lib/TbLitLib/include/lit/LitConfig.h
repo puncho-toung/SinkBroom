@@ -21,6 +21,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 
 namespace tb::lit
 {
@@ -33,5 +34,26 @@ constexpr auto AcquireTimeout = std::chrono::milliseconds{50};
 
 // §3.1: the most frames per second (Hz) while the camera moves
 constexpr auto MovingCameraFrameRate = 30;
+
+// S8, D36 (LP2.1): the size of one geometry arena buffer, vertex or index; another of the
+// kind is added when none can hold a chunk (one larger than this gets one of its size)
+constexpr auto ArenaBytes = std::uint64_t{64} * 1024 * 1024;
+
+// D78 (LP2.1): the render thread's command list's upload chunks (the engine uses 64 MB,
+// r_vkUploadBufferSizeMB), and §3.10's cap on what one frame uploads; what does not fit
+// waits for the next frame, which the unconverged frame triggers (D77)
+constexpr auto UploadChunkBytes = std::size_t{32} * 1024 * 1024;
+constexpr auto UploadBytesPerFrame = std::uint64_t{32} * 1024 * 1024;
+
+// D77 (LP2.1): texture arrivals trigger a frame at most this often (10 Hz)
+constexpr auto TextureArrivalInterval = std::chrono::milliseconds{100};
+
+// C28, D37 (LP2.1): the binding sets the cache keeps; beyond it the least recently used
+// are released
+constexpr auto BindingSetCacheSize = std::size_t{4096};
+
+// C11 (LP2.1): the texture budget's default (the panel setting comes later), which covers
+// the session's whole VRAM (§3.10)
+constexpr auto DefaultVramBudgetBytes = std::uint64_t{1024} * 1024 * 1024;
 
 } // namespace tb::lit

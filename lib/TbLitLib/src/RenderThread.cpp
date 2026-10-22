@@ -170,8 +170,10 @@ Result<void> RenderThread::createFrameResources(
     }
   }
 
-  // step 8, LP0's part: the frame resources
-  m_commandList = device.createCommandList();
+  // step 8, LP0's part: the frame resources; D78: the list's upload chunks are 32 MB
+  m_commandList = device.createCommandList(
+    nvrhi::CommandListParameters{}.setUploadChunkSize(UploadChunkBytes));
+  m_arenas.setDevice(device, ArenaBytes);
   for (auto& event : m_frameEvents)
   {
     event = device.createEventQuery();
@@ -418,8 +420,10 @@ void RenderThread::join()
 
 void RenderThread::releaseFrameResources()
 {
-  // §3.1 step 2: every handle the registry holds
+  // §3.1 step 2: every handle the registry and the arenas hold
   m_frameResources.releaseAll();
+  m_arenas.releaseAll();
+  m_arenaTestChunks.reset();
   m_commandList = nullptr;
   for (auto& event : m_frameEvents)
   {
@@ -477,6 +481,84 @@ std::uint64_t RenderThread::renderTargetGeneration() const
   return m_renderTargetGeneration;
 }
 
+void RenderThread::setEveryFrameHook(std::function<void(RenderFrameAccess&)> hook)
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_everyFrameHook = std::move(hook);
+    m_pacer.trigger();
+  }
+  m_wake.notify_all();
+}
+
+void RenderThread::setTestChunks(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks)
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_testChunks = std::move(chunks);
+    m_pacer.trigger();
+  }
+  m_wake.notify_all();
+}
+
+void RenderThread::setUploadCap(const std::uint64_t bytes)
+{
+  m_uploadCap = bytes;
+}
+
+void RenderThread::holdCompletion(const bool hold)
+{
+  m_holdCompletion = hold;
+  if (!hold)
+  {
+    requestFrame();
+  }
+}
+
+const std::map<ChunkKey, Chunk>& RenderThread::arenaChunks() const
+{
+  if (m_arenaTestChunks)
+  {
+    return *m_arenaTestChunks;
+  }
+  return m_geometry ? m_geometry->chunks() : m_noChunks;
+}
+
+bool RenderThread::syncChunks()
+{
+  {
+    // the tests' chunks replace the scene's while they are set; their versions count
+    // apart from the scene's batches
+    const auto lock = std::scoped_lock{m_mutex};
+    if (m_arenaTestChunks != m_testChunks)
+    {
+      m_arenaTestChunks = m_testChunks;
+      ++m_chunksVersion;
+    }
+  }
+  if (m_chunksVersion != m_syncedChunksVersion)
+  {
+    m_syncedChunksVersion = m_chunksVersion;
+    // D36: freed in the next frame to be recorded, reused once it has finished
+    m_arenas.sync(arenaChunks(), m_frameIndex);
+  }
+  return m_arenas.pending();
+}
+
+bool RenderThread::recordUploads(nvrhi::ICommandList& commandList)
+{
+  // §3.10, D78: before the frame's first pass, within the frame's cap
+  const auto cap = m_uploadCap.load();
+  return m_arenas.recordUploads(
+           commandList, arenaChunks(), cap - std::min(cap, m_frameUploadBytes))
+         | kdl::transform([&](const std::uint64_t bytes) {
+             m_frameUploadBytes += bytes;
+             return true;
+           })
+         | kdl::if_error([&](const auto& e) { m_events.markFailed(e.msg); })
+         | kdl::value_or(false);
+}
+
 void RenderThread::applyHeadlessResize()
 {
   auto resize = std::optional<vk::Extent2D>{};
@@ -528,12 +610,26 @@ void RenderThread::runFrameHooks(nvrhi::ICommandList& commandList)
     const auto lock = std::scoped_lock{m_mutex};
     hooks.swap(m_frameHooks);
   }
-  if (hooks.empty())
+  auto everyFrame = std::function<void(RenderFrameAccess&)>{};
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    everyFrame = m_everyFrameHook;
+  }
+  if (hooks.empty() && !everyFrame)
   {
     return;
   }
-  auto access =
-    RenderFrameAccess{m_device.device(), commandList, m_frameIndex, m_frameResources};
+  auto access = RenderFrameAccess{
+    m_device.device(),
+    commandList,
+    m_frameIndex,
+    m_frameResources,
+    m_arenas,
+    m_frameUploadBytes};
+  if (everyFrame)
+  {
+    everyFrame(access);
+  }
   for (auto& hook : hooks)
   {
     hook(access);
@@ -648,6 +744,11 @@ void RenderThread::runLoop()
       if (outcome == FrameOutcome::Skipped)
       {
         m_pacer.frameSkipped();
+      }
+      else if (outcome == FrameOutcome::Presented && m_unconverged)
+      {
+        // D77: an unconverged frame is a frame trigger
+        m_pacer.trigger();
       }
       continue;
     }
@@ -842,6 +943,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     auto* const timer = m_timers.query(slot);
     const auto color = clearColorFor(camera.direction);
     m_frameResources.setFrameTarget(texture);
+    m_frameUploadBytes = 0;
+    syncChunks();
     // C14: until LP2.2a the frame's one pass is LP0's clear of its presentation target
     auto clearPass = PassDesc{};
     clearPass.name = "clear";
@@ -857,6 +960,12 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       // D70, D78: what the session's start clears and the frame's uploads come before its
       // first pass
       m_frameResources.recordStartClears(commandList);
+      if (!recordUploads(commandList))
+      {
+        return FrameOutcome::Stopped;
+      }
+      // D77: what is left for the next frame makes this one unconverged
+      m_unconverged = m_arenas.pending();
       runFrameHooks(commandList);
       const auto clearTarget =
         m_frameResources.resolve(clearPass)
@@ -1007,12 +1116,14 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
 
 void RenderThread::framesCompleted(const std::uint64_t completedFrames)
 {
-  if (completedFrames > m_completedFrames)
+  if (completedFrames > m_completedFrames && !m_holdCompletion)
   {
     m_completedFrames = completedFrames;
   }
-  // D35: what only finished frames used is let go
+  // D35, D36: what only finished frames used is let go, and their freed arena ranges may
+  // be handed out again
   m_frameResources.collectRetired(m_completedFrames);
+  m_arenas.reclaim(m_completedFrames);
 }
 
 bool RenderThread::waitForFrameEvent(const std::size_t slot)
@@ -1197,12 +1308,16 @@ bool RenderThread::geometryTick()
     {
       m_events.post(SessionEvent::Warning, std::move(warning));
     }
+    // D36: the applied chunks' uploads; a frame records them (D77: new chunks are a
+    // snapshot's arrival)
+    ++m_chunksVersion;
+    const auto uploads = syncChunks();
     const auto lock = std::scoped_lock{m_mutex};
     m_appliedSequence = m_geometry->appliedSequence();
     m_chunkCount = m_geometry->chunks().size();
     ++m_batchesApplied;
     // a snapshot waiting in the inbox is taken at the next frame
-    if (m_snapshotInbox)
+    if (m_snapshotInbox || uploads)
     {
       m_pacer.trigger();
     }
