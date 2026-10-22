@@ -237,7 +237,11 @@ TEST_CASE("Retail shaders: LP2's blobs, keys and reflection", "[.][retail]")
         }
         if (!r.inputs.empty())
         {
-          std::cout << "; " << r.inputs.size() << " inputs";
+          std::cout << "; inputs at";
+          for (const auto& input : r.inputs)
+          {
+            std::cout << " " << input.location << "(" << input.components << ")";
+          }
         }
         std::cout << "\n";
         ++checked;

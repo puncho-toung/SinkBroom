@@ -21,6 +21,7 @@
 
 #include "GpuDevice.h"
 #include "LiveSession.h"
+#include "PipelineCompiler.h"
 #include "RenderThread.h"
 #include "SessionEvents.h"
 #include "Swapchain.h"
@@ -138,8 +139,16 @@ Result<void> LitSession::start(
          // step 8: the CPU pool before the render thread, which may use it from its
          // first frame (S3)
          | kdl::and_then([&]() { return CpuPool::create(); })
-         | kdl::transform([&](std::unique_ptr<CpuPool> pool) {
+         | kdl::and_then([&](std::unique_ptr<CpuPool> pool) {
              m_pool = std::move(pool);
+             // step 8 (D71): the compile thread; a pipeline it makes triggers a frame
+             // (D77)
+             m_compiler = std::make_unique<PipelineCompiler>(
+               *m_device, *m_events, m_options.gamePath);
+             auto* renderThread = m_renderThread.get();
+             return m_compiler->start([renderThread] { renderThread->requestFrame(); });
+           })
+         | kdl::transform([&]() {
              // B0.10: the render thread gets the pool and the service at start
              m_renderThread->start(m_pool.get(), m_materials, m_lightTables);
            });
@@ -359,6 +368,11 @@ void LitSession::requestStop()
   {
     m_pool->cancel();
   }
+  // D71: the compile thread ends after the pipeline it is making
+  if (m_compiler)
+  {
+    m_compiler->requestStop();
+  }
 }
 
 bool LitSession::waitForRenderThread(const std::chrono::milliseconds timeout)
@@ -377,6 +391,11 @@ void LitSession::stopRenderThread()
   if (m_renderThread)
   {
     m_renderThread->join();
+  }
+  // step 1 (D71): the compile thread, whose last pipeline may still be in the driver
+  if (m_compiler)
+  {
+    m_compiler->join();
   }
   // step 1, after the render thread that queued the jobs: the pool, cancelled when the
   // stop was requested, is stopped (its generation bumped again, its threads joined);
@@ -406,6 +425,10 @@ void LitSession::releaseGpuObjects()
       if (m_renderThread)
       {
         m_renderThread->releaseFrameResources();
+      }
+      if (m_compiler)
+      {
+        m_compiler->releaseAll();
       }
 
       // step 3 (S13): on a lost device the wait's result is ignored and garbage is not
@@ -544,6 +567,16 @@ std::shared_ptr<const Snapshot> LitSession::lastSnapshotForTesting() const
 std::uint64_t LitSession::geometryBatchesForTesting() const
 {
   return m_renderThread ? m_renderThread->batchesApplied() : 0u;
+}
+
+PipelineCompiler* LitSession::pipelineCompilerForTesting() const
+{
+  return m_gpuReleased ? nullptr : m_compiler.get();
+}
+
+std::vector<ProgramReport> LitSession::programReport() const
+{
+  return m_compiler ? m_compiler->programs() : std::vector<ProgramReport>{};
 }
 
 nvrhi::IDevice* LitSession::nvrhiDeviceForTesting() const

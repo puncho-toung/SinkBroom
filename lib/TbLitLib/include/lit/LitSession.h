@@ -53,6 +53,23 @@ struct SessionOptions
   bool forceFifo = false;
   // the frame log (C16); empty means no log
   std::filesystem::path frameLogPath;
+  // C1: the game folder (Map::gamePath()) whose base/renderprogs2/spirv holds the
+  // engine's shader blobs; empty: no shader loads, every program is disabled (D9)
+  std::filesystem::path gamePath;
+};
+
+// D9: a program the compile thread was asked for, and whether the preview can draw with
+// it ("disabled: <field>" otherwise); the panel's status line shows the disabled ones
+struct ProgramReport
+{
+  // a BUILTIN_ index (lit/EngineBuiltins.h)
+  int program = 0;
+  // the builtin's name and suffix
+  std::string name;
+  bool enabled = true;
+  std::string reason;
+
+  bool operator==(const ProgramReport&) const = default;
 };
 
 // A copy of the 3D view's camera (§3.2); never a pointer to it.
@@ -190,6 +207,7 @@ class CpuPool;
 class GpuDevice;
 class LightTablePublication;
 class MaterialService;
+class PipelineCompiler;
 class RenderThread;
 class SessionEvents;
 struct LightTable;
@@ -203,9 +221,10 @@ struct Snapshot;
  * TbUiLib.
  *
  * Threads (C20): the render thread alone opens, records and executes command lists and
- * collects garbage, and never waits on the GUI thread. The CPU pool's jobs only fill CPU
- * memory. The GUI thread creates and destroys swapchains only while the render thread is
- * parked, and runs the teardown steps once it is joined.
+ * collects garbage, and never waits on the GUI thread. The compile thread (D71) only
+ * creates shaders, layouts, its format-only framebuffers and pipelines. The CPU pool's
+ * jobs only fill CPU memory. The GUI thread creates and destroys swapchains only while
+ * the render thread is parked, and runs the teardown steps once it is joined.
  *
  * Snapshots are pulled (§3.3, S31): the render thread posts ReadyForSnapshot when it
  * starts and whenever it has taken the snapshot offered; the GUI thread then offers one
@@ -225,6 +244,9 @@ private:
   std::unique_ptr<RenderThread> m_renderThread;
   // S3: made at phase B, stopped in teardown step 1
   std::unique_ptr<CpuPool> m_pool;
+  // D71: the compile thread, started at phase B, joined in teardown step 1 beside the
+  // pool, its handles released in step 2
+  std::unique_ptr<PipelineCompiler> m_compiler;
   // the owner's, which outlives the session (LitSessionHost); null after step 1
   MaterialService* m_materials = nullptr;
   // R2.9: the render thread's light registry publishes here; it outlives the thread
@@ -413,6 +435,14 @@ public:
   std::uint64_t geometryBatchesForTesting() const;
   // the device to make resources with, from create until teardown step 5; tests only
   nvrhi::IDevice* nvrhiDeviceForTesting() const;
+  // the compile thread, from create until teardown step 2; tests only (LP2.1 hands it to
+  // the render thread)
+  PipelineCompiler* pipelineCompilerForTesting() const;
+  /**
+   * D9, any thread: every program the compile thread was asked for, enabled or disabled
+   * with the field that disabled it; the session's report of its passes.
+   */
+  std::vector<ProgramReport> programReport() const;
 
 private:
   LitSession(
