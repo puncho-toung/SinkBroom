@@ -14733,6 +14733,275 @@
         }
       ],
       "note": "LP2.2a: an empty rect, which the engine never passes to GL_Scissor (a light's scissor is tested before; AddPoint of two points is never empty), is the whole viewport, as the engine applies an empty context scissor"
+    },
+    {
+      "id": "M-TONE-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            6222,
+            6250
+          ],
+          "anchor": "idRenderBackend::DrawViewInternal, the tonemap block",
+          "sha256": "f2c5538413102a8be7c65bd7c723654fdb17a6bd6a0214c0a0b66e5643c2dea8"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            337,
+            345
+          ],
+          "anchor": "TonemapPass::SimpleRender",
+          "sha256": "41b996a0745f1af43d8f18312835800265ce80ba6b622038b9a3f127e939dbee"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            353,
+            356
+          ],
+          "anchor": "TonemapPass::ResetHistogram",
+          "sha256": "5b818249e7f3f9925d5746a635dbe6631a56bae64827b190a4beeb260f6298d6"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            358,
+            437
+          ],
+          "anchor": "TonemapPass::AddFrameToHistogram",
+          "sha256": "492764c72b08c1029191df2cff5d5cea3501252f2af6b2982d8733b8b56d3030"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            439,
+            471
+          ],
+          "anchor": "TonemapPass::ComputeExposure",
+          "sha256": "8628070ab7fd947580a557ee12a0905f95a99a3b8b1da665dfa477ea53c5d3b6"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            245,
+            335
+          ],
+          "anchor": "TonemapPass::Render",
+          "sha256": "93c70bdbad176e2ac3d91e2093261f5c83200f513f109e1758902388f997344b"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            60,
+            75
+          ],
+          "anchor": "TonemapPass::Init, pcEnabled and the shared volatile buffer",
+          "sha256": "dbe2ecc19374dd04dc9b2799eeaca3e2fb51c5d05a6ff91c54008e3567e560eb"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass_cb.h",
+          "lines": [
+            25,
+            47
+          ],
+          "anchor": "ToneMappingConstants",
+          "sha256": "e0505d99fd97b4419b288a64b1ba1fa4f4cbf0335304a65b84f087592cf48c84"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/TonemapPasses.cpp",
+          "symbol": "TonemapPasses::record, engineHistogramViewport, engineHistogramConstants, engineHistogramGroups, engineExposureConstants, engineTonemapViewport, engineTonemapConstants"
+        },
+        {
+          "file": "lib/TbLitLib/src/TonemapPasses.h",
+          "symbol": "EngineToneMappingConstants, TonemapConstantBufferVersions"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::recordTonemap"
+        }
+      ],
+      "note": "LP2.2b steps 1-3 (SC259-SC263, C27): without TAA and MSAA the source is _currentRenderHDR, the target ldrFBO. ResetHistogram clears the 256 bins; AddFrameToHistogram dispatches histogram (113) in 16 x 16 groups over the scissor of the view's viewport x1..x2, y1..y2 without the + 1 (viewSize 159 x 119 at 160 x 120), logLuminanceScale 1 / (r_hdrMinLuminance - r_hdrMaxLuminance) and logLuminanceBias -min * scale in float as written (D20: the encode range is not exposure.cs's decode range, SC286; mirrored, not fixed), sourceSlice 0, the rest 0; ComputeExposure dispatches exposure (115) once with scale 14, bias -10, the percentiles clamped (0.8, 0.95), the speeds r_hdrAdaptionRate and half of it, the bounds r_hdrMinLuminance and r_hdrMaxLuminance (frameTime: M-TONE-DIFF-01); Render draws tonemapping (111) with four TriangleStrip vertices over the viewport with the + 1 into ldrFBO (the Tonemap recipe against {RGBA8, depth}), exposureScale exp2(r_exposure), whitePointInvSquared 1 / 3^2, the adapted bounds, no colour LUT (size and inverse 0, so ACESFilm), binding the source, the exposure buffer, _black through its slot (C28) and LinearClamp. Each pass's uniforms are push constants when its layout has them (C30), else the one 80-byte volatile buffer of 32 versions the passes share, written before the state that binds it"
+    },
+    {
+      "id": "M-BLIT-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            6327,
+            6334
+          ],
+          "anchor": "idRenderBackend::DrawViewInternal, the blit of _currentRenderLDR into the swapchain",
+          "sha256": "748f8b94bc58e5bb9344fac00d497164049615943bd5a36544a4184a7353e8e6"
+        },
+        {
+          "file": "neo/renderer/Passes/CommonPasses.cpp",
+          "lines": [
+            217,
+            324
+          ],
+          "anchor": "CommonRenderPasses::BlitTexture",
+          "sha256": "724ec2392433f61f058e0859ca527d5a2b9372b71de82548970ce3ef7a4d5f62"
+        },
+        {
+          "file": "neo/renderer/Passes/CommonPasses.h",
+          "lines": [
+            47,
+            72
+          ],
+          "anchor": "BlitParameters, BlitConstants",
+          "sha256": "07298bf9dca2f4bb64bca7854c539df9b87b37d52fdf7199b07d89e6b2ec66fc"
+        },
+        {
+          "file": "neo/renderer/Passes/CommonPasses.cpp",
+          "lines": [
+            166,
+            177
+          ],
+          "anchor": "CommonRenderPasses::Init, the blit binding layout",
+          "sha256": "9440a5178e4c2e21a17f2c142631fae486c0e85bd9db1b5db5ca4b1b165d2cd2"
+        },
+        {
+          "file": "neo/renderer/NVRHI/Framebuffer_NVRHI.cpp",
+          "lines": [
+            112,
+            122
+          ],
+          "anchor": "Framebuffer::ResizeFramebuffers, the swapchain framebuffers",
+          "sha256": "ad6ed510f97802a35af14574fa3b19598fe0bd30d83bc075e63ad614af5bdda5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/TonemapPasses.cpp",
+          "symbol": "TonemapPasses::record (the blit), engineBlitConstants, engineBlitViewport"
+        },
+        {
+          "file": "lib/TbLitLib/src/TonemapPasses.h",
+          "symbol": "EngineBlitConstants"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::imageFramebuffer, RenderThread::makeHeadlessTarget"
+        },
+        {
+          "file": "lib/TbLitLib/src/Swapchain.cpp",
+          "symbol": "releaseSwapchainWrappers"
+        }
+      ],
+      "note": "LP2.2b step 4 (SC201, SC203, SC279): BlitParameters' defaults with targetViewport Viewport( width, height ) of the target: source and target boxes (0, 0, 1, 1), sharpenFactor 0, BlitSampler::Linear (LinearClamp), the blend state's default (blending off), rect.vs (raw SPIR-V, no defines) with blit.ps (TEXTURE_ARRAY 0), the 36-byte push constants after setGraphicsState, the source's SRV one mip and one slice as Texture2D, the scissor Rect( viewport ), four TriangleStrip vertices, into a framebuffer of the target alone (the Blit recipe against {BGRA8} for the swapchain, {RGBA8} for the headless target). The engine makes one framebuffer per back buffer in ResizeFramebuffers; the preview makes an image's at its first frame and releases them with the image wrappers, before them (D49). NVRHI's automatic transitions take the swapchain image from Present to RenderTarget and back (keepInitialState)"
+    },
+    {
+      "id": "M-TONE-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            453,
+            453
+          ],
+          "anchor": "ComputeExposure, frameTime = Sys_Milliseconds() / 1000",
+          "sha256": "61a1552fff6d40de4f23ac10a4ef03e18bb1bec2e18225bfc56a6fbe2719972b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/TonemapPasses.h",
+          "symbol": "SteadyStateFrameTime"
+        }
+      ],
+      "note": "LP2.2b step 2 (D70, K24): the engine adapts the exposure by exp2( -frameTime * speed ) with frameTime the seconds since it started, which is about 0 tens of seconds in; the preview passes 1000 s, whose term underflows to 0 in float from the first frame, so every frame's exposure is its own clamped target: frames drawn on demand would otherwise never converge. K24: the engine's first seconds adapt, the preview's do not; parity.py waits past 30 s of uptime"
+    },
+    {
+      "id": "M-TONE-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            6912,
+            6920
+          ],
+          "anchor": "idRenderBackend::PostProcess, the second blit into the swapchain",
+          "sha256": "557536ef7cf37001da70cd10bf4eaf74c17c97322d4d43e264038f2d124272f8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/TonemapPasses.cpp",
+          "symbol": "TonemapPasses::record"
+        }
+      ],
+      "note": "LP2.2b step 4 (SC203): PostProcess, a separate backend command for every non-irradiance view, blits _currentRenderLDR into the swapchain again (and into postProcFBO); with r_useFilmicPostFX 0 and no SMAA nothing changes the LDR target between the two, so the second blit of the same source into the same target gives the same picture: drawn once"
+    },
+    {
+      "id": "M-TONE-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            6222,
+            6250
+          ],
+          "anchor": "idRenderBackend::DrawViewInternal, the tonemap block runs for every 3D view",
+          "sha256": "f2c5538413102a8be7c65bd7c723654fdb17a6bd6a0214c0a0b66e5643c2dea8"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            2444,
+            2456
+          ],
+          "anchor": "idRenderBackend::SetBuffer, r_clear 2: (0, 0, 0, 1)",
+          "sha256": "0246ab6030aa3840620fb3f49ed67c9bf79c80105f0765b25ae5a6d46edf055b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/TonemapPasses.cpp",
+          "symbol": "TonemapPasses::record, TonemapPasses::clearTarget"
+        }
+      ],
+      "note": "LP2.2b: a frame whose HDR target holds nothing (no lit draw: an empty scene, or lit pipelines still pending) skips histogram, exposure, tonemapping and the blit and clears the frame's target to (0, 0, 0, 1): tonemapping a black HDR target gives 0 (ConvertToLDR's luminance 0, ACESFilm(0), pow), alpha 1, so the picture is the same, and a session with nothing to draw asks the compile thread for no program (no D9 warning). The exposure buffer is not written then; D70 makes the next frame's exposure its own target whatever it held. A frame whose tonemap pipelines are pending or failed (D9), or whose LUT has no level, clears the target too (the panel is black until the picture arrives); a stop between the passes leaves it unwritten and unpresented"
+    },
+    {
+      "id": "M-TONE-DIFF-04",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            252,
+            292
+          ],
+          "anchor": "TonemapPass::Render, the binding sets by source texture",
+          "sha256": "c3c6628cab243bfc87a59becdd79ef46dbac9d8ef6976ca90bf16e54c2b90e2a"
+        },
+        {
+          "file": "neo/renderer/Passes/TonemapPass.cpp",
+          "lines": [
+            360,
+            397
+          ],
+          "anchor": "TonemapPass::AddFrameToHistogram, the binding sets by source texture",
+          "sha256": "5ada4c6aac886b4a8f81b61b7e71573ec3882f7d248714fcce4fc17f69464de4"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/TonemapPasses.cpp",
+          "symbol": "TonemapPasses::record"
+        }
+      ],
+      "note": "LP2.2b: the engine keeps one histogram and one tonemap binding set per source texture in an idHashIndex for the process (Init makes the exposure set once); the preview takes all four passes' sets from the session's binding-set cache (C28, D37): the HDR and LDR targets by the render-target generation, _black by its slot versions, the buffers and LinearClamp as resources. The same items in the same order"
     }
   ],
   "retired": [
