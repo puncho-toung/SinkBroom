@@ -1268,6 +1268,36 @@ TEST_CASE("MaterialService, the LP1c fix round's work items (S2.2-S2.5, S3.13)")
       == State::Default);
   }
 
+  SECTION("X.3: a reload keeps the images whose files did not change")
+  {
+    const auto game = ImageServiceGame{2};
+    game.image("m0", 16, 16);
+    game.image("m1", 16, 16);
+    auto service = start(game.options(0ms));
+    const auto first = diffuseKey("m0");
+    const auto second = diffuseKey("m1");
+    static_cast<void>(service->image(first));
+    static_cast<void>(service->image(second));
+    const auto table = service->waitForTableForTesting(
+      [&](const MaterialTable& t) { return t.findImage(first) && t.findImage(second); },
+      Timeout);
+
+    // one source saved anew, then a reload (an .mtr saved)
+    game.image("m1", 32, 16);
+    bumpModificationTime(game.base() / "textures" / "fix" / "m1.tga");
+    service->reload();
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.builds == 2u && s.idle; }, Timeout));
+    const auto reloaded = service->table();
+    CHECK(reloaded->findImage(first) == table->findImage(first));
+    CHECK_FALSE(reloaded->findImage(second));
+    static_cast<void>(service->image(second));
+    const auto again = service->waitForTableForTesting(
+      [&](const MaterialTable& t) { return t.findImage(second) != nullptr; }, Timeout);
+    REQUIRE(again->findImage(second)->image);
+    CHECK(again->findImage(second)->image->width == 32);
+  }
+
   SECTION("S3.13: a bake read that throws answers its ticket with a failed slot")
   {
     class ThrowingBakeSource : public MemoryDeclSource
@@ -1660,7 +1690,9 @@ TEST_CASE("MaterialService start, stop and reload leak nothing")
     heapCycle();
     heapCycle();
     parking->park();
-    const auto grew = heapGrows([&] {
+    // the polling thread's folder listings and kept slots may hold a block or two more or
+    // less at either checkpoint; a leak in any of the 50 cycles shows 50 times
+    const auto growth = heapGrowth([&] {
       parking->open();
       for (auto i = 0; i < 50; ++i)
       {
@@ -1669,7 +1701,9 @@ TEST_CASE("MaterialService start, stop and reload leak nothing")
       parking->park();
     });
     parking->open();
-    CHECK_FALSE(grew);
+    CAPTURE(growth.blocks, growth.bytes);
+    CHECK(growth.blocks <= 8);
+    CHECK(growth.bytes <= 8192);
   }
 }
 

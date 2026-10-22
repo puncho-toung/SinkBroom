@@ -106,6 +106,16 @@ struct OpenAtExit
 // runs f between two checkpoints of the CRT's debug heap; true when the heap grew, with
 // its statistics dumped
 bool heapGrows(const std::function<void()>& f);
+
+// the normal blocks and bytes the heap holds more after f than before it (negative for
+// fewer), for a check whose subject keeps a state of a few blocks that varies (a polling
+// thread's listings): a leak in a loop shows once per pass
+struct HeapGrowth
+{
+  long long blocks = 0;
+  long long bytes = 0;
+};
+HeapGrowth heapGrowth(const std::function<void()>& f);
 #endif
 
 } // namespace tb::lit

@@ -2963,7 +2963,7 @@
           "symbol": "NamedCVars"
         }
       ],
-      "note": "ListFiles takes the names from the DeclSource (GetFileList's part, which lit/GameFileSource.h mirrors, M-FS-01), adds each once case-insensitively and sorts with idSort_PathStr. ReadFile returns a Mem_Alloc'ed, NUL-terminated buffer of length + 1, -1 and FILE_NOT_FOUND_TIMESTAMP for an unreadable file. Not in the engine (R5.20): once the registry's cancel flag is set, every later ReadFile returns an empty file without asking the source, so the copied RegisterDeclFolder loop ends after the file it was reading and nothing is reported. The exception boundary (C17, G3): a source call that throws is reported as a warning, and the copy sees an unreadable file or an empty folder. ReadFile also refuses, with a warning, a file of 2 GB or more (the engine's lengths are ints) and one M-ID-GUARD-06 refuses. A5 (LP1c.1): ReadFile with no buffer (the loaders' and GetTimestamp's time-only calls) asks the source's probe, which reads no file body (M-FS-08), and returns the probe's length, or -1 and FILE_NOT_FOUND_TIMESTAMP for no file. OpenFileRead (M-ID-FN-27) reads the file whole into a BufferedFile"
+      "note": "ListFiles takes the names from the DeclSource (GetFileList's part, which lit/GameFileSource.h mirrors, M-FS-01), adds each once case-insensitively and sorts with idSort_PathStr. ReadFile returns a Mem_Alloc'ed, NUL-terminated buffer of length + 1, -1 and FILE_NOT_FOUND_TIMESTAMP for an unreadable file. Not in the engine (R5.20): once the registry's cancel flag is set, every later ReadFile returns an empty file without asking the source, so the copied RegisterDeclFolder loop ends after the file it was reading and nothing is reported. The exception boundary (C17, G3): a source call that throws is reported as a warning, and the copy sees an unreadable file or an empty folder. ReadFile also refuses, with a warning, a file of 2 GB or more (the engine's lengths are ints) and one M-ID-GUARD-06 refuses. A5 (LP1c.1): ReadFile with no buffer (the loaders' and GetTimestamp's time-only calls) asks the source's probe, which reads no file body (M-FS-08), and returns the probe's length, or -1 and FILE_NOT_FOUND_TIMESTAMP for no file. OpenFileRead (M-ID-FN-27) is a null stub (LP1c fix S1.7)"
     },
     {
       "id": "M-ID-FN-09",
@@ -3836,10 +3836,6 @@
         {
           "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
           "symbol": "idFile"
-        },
-        {
-          "file": "lib/TbLitLib/idtech/shim/private/shim/Registry.h",
-          "symbol": "BufferedFile"
         }
       ],
       "virtuals": [
@@ -3848,7 +3844,7 @@
         "Length",
         "Timestamp"
       ],
-      "note": "pure virtual; LP1c.1: tb::lit::shim::BufferedFile implements them for OpenFileRead (M-ID-FN-27)"
+      "note": "pure virtual; no shim class implements them since the LP1c fix round (S1.7): OpenFileRead returns null (M-ID-FN-27), so no copied caller gets an idFile"
     },
     {
       "id": "M-ID-VIRT-13",
@@ -10137,7 +10133,7 @@
           "symbol": "MaterialService::Worker::pollImageFiles"
         }
       ],
-      "note": "LP1c.1: an image's slot is read once per session, when it is first asked for, and kept across material reloads (it does not depend on the decls); the engine reads it at every image load. LP1c.2 (LP1c.1's follow-up 5): the poll re-reads a slot when a loose file it was read from or its time call found changes (its time, size or change stamp; M-IMG-DIFF-06), so a saved source or a new cache is seen; a file in a container, a file that appears where none was, or a reload's new containers are seen after a restart of the session LP1c fix (S2.5, S3.4): the time call's probes that missed are recorded too (the .tga default, the png/tga/jpg/exr/hdr loop, the _rmao sibling; not the cache names), so a texture written after its material is seen at the next poll, and the slot read again; a reload drops every slot (M-IMG-DIFF-09). New containers, and caches the engine writes into one, are seen through a reload (materialCollectionsDidChange) or a new session"
+      "note": "LP1c.1: an image's slot is read once per session, when it is first asked for, and kept across material reloads (it does not depend on the decls); the engine reads it at every image load. LP1c.2 (LP1c.1's follow-up 5): the poll re-reads a slot when a loose file it was read from or its time call found changes (its time, size or change stamp; M-IMG-DIFF-06), so a saved source or a new cache is seen; a file in a container, a file that appears where none was, or a reload's new containers are seen after a restart of the session LP1c fix (S2.5, S3.4): the time call's probes that missed are recorded too (the .tga default, the png/tga/jpg/exr/hdr loop, the _rmao sibling; not the cache names), so a texture written after its material is seen at the next poll, and the slot read again; a reload drops every slot (M-IMG-DIFF-09). New containers, and caches the engine writes into one, are seen through a reload (materialCollectionsDidChange) or a new session LP1c fix round 2 (X.3, X.5): a slot keeps every file it was read from or looked for, container entries and the cache names a read missed included, and the poll compares them by kind, container and time (and size and change stamp for a loose file): a loose file over a container entry, or a cache the engine writes later as a loose file, is seen at the next poll, a new container's at the next reload. The C21 sizes keep every file alike"
     },
     {
       "id": "M-BAKE-01",
@@ -11205,10 +11201,10 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
-          "symbol": "singleImageCubeFits"
+          "symbol": "loadSinglePictureCube"
         }
       ],
-      "note": "LP1c.2: R_GenerateCubeMapSideFromSingleImage copies a cross of 4 x 3 sides of the cube size out of the picture without looking at the picture's size, so a picture smaller than that is read past its end. Before the copied R_LoadCubeImages runs for a CF_SINGLE image with a cube size, the picture is loaded as it loads it (R_LoadImageProgram, no usage) and a smaller one is refused: the image is the default, with a warning. The picture is decoded twice for such cubes"
+      "note": "LP1c.2: R_GenerateCubeMapSideFromSingleImage copies a cross of 4 x 3 sides of the cube size out of the picture without looking at the picture's size, so a picture smaller than that is read past its end. Before the copied R_LoadCubeImages runs for a CF_SINGLE image with a cube size, the picture is loaded as it loads it (R_LoadImageProgram, no usage) and a smaller one is refused: the image is the default, with a warning. The picture is decoded twice for such cubes LP1c fix round 2 (X.1): the check now runs inside the transcribed branch (M-IMG-GUARD-04) on the picture the cube is cut from, so the picture is decoded once"
     },
     {
       "id": "M-IMG-DIFF-04",
@@ -11247,7 +11243,7 @@
           "symbol": "MaterialDecls::loadImagePixels"
         }
       ],
-      "note": "LP1c.2: the pre-validation refuses some files the engine would load: images over 16384 a side or 8192 x 8192 in all (the engine has no limit beyond stb_image's 2^24 and the TGA header's 65535), PNG and JPG files cut short that stb_image decodes from zeros, PNG and JPG headers whose size their data cannot hold, unknown critical PNG chunks are refused as stb_image refuses them. An image whose load met a refused file is the default (one warning per refused file, naming it, and not the engine's 'Couldn't load image'), even when R_LoadImage then found another extension of the same name, because the engine would have read past a buffer or crashed on the refused one LP1c fix (S3.3): the reason \"the engine would have read past a buffer or crashed\" holds for TGA (Error sites, unchecked RLE), EXR and HDR (Error) only: stb_image checks every read itself and decodes by content, so a .png or .jpg is checked by what it holds (PNG rules for a PNG signature, JPEG rules for a start-of-image marker, stbi_info_from_memory and the size limits for stb_image's other formats), and a refused .png or .jpg is what stb_image's own failure is in the engine: R_LoadImage goes on to the next extension (png, tga, jpg, exr, hdr), and the image is what it finds; a refused TGA, EXR or HDR still makes the image the default. LP1c fix (S2.4): an EXR or HDR file may declare at most a quarter of the pixels (MaxFloatImageFilePixels, 4096 x 4096), as its decoders hold float planes"
+      "note": "LP1c.2: the pre-validation refuses some files the engine would load: images over 16384 a side or 8192 x 8192 in all (the engine has no limit beyond stb_image's 2^24 and the TGA header's 65535), PNG and JPG files cut short that stb_image decodes from zeros, PNG and JPG headers whose size their data cannot hold, unknown critical PNG chunks are refused as stb_image refuses them. An image whose load met a refused file is the default (one warning per refused file, naming it, and not the engine's 'Couldn't load image'), even when R_LoadImage then found another extension of the same name, because the engine would have read past a buffer or crashed on the refused one. LP1c fix (S3.3): the reason \"the engine would have read past a buffer or crashed\" holds for TGA (Error sites, unchecked RLE), EXR and HDR (Error) only: stb_image checks every read itself and decodes by content, so a .png or .jpg is checked by what it holds (PNG rules for a PNG signature, JPEG rules for a start-of-image marker, stbi_info_from_memory and the size limits for stb_image's other formats), and a refused .png or .jpg is what stb_image's own failure is in the engine: R_LoadImage goes on to the next extension (png, tga, jpg, exr, hdr), and the image is what it finds; a refused TGA, EXR or HDR still makes the image the default. LP1c fix (S2.4): an EXR or HDR file may declare at most a quarter of the pixels (MaxFloatImageFilePixels, 4096 x 4096), as its decoders hold float planes"
     },
     {
       "id": "M-IMG-08",
@@ -11598,7 +11594,7 @@
           "symbol": "MaterialDecls::cubeSideSizes"
         }
       ],
-      "note": "LP1c fix (S2.1): when R_LoadCubeImages stops at side i (a side missing, which leaves width 0, or of another size) it frees sides 0 to i-1 without nulling them and returns false; a side i it loaded before the size test failed is leaked (the engine's ActuallyLoadImage frees nothing after the false). Kept verbatim (C7). The shim frees nothing after a false return (LP1c.2 freed every non-null side again: a double free, S2.1/S3.1) and frees the six sides only for a loaded cube of size 0; the six sides' headers are checked first (M-IMG-GUARD-03), so the copy is called only for six sides of one size and the leak is unreachable; a side refused by the pre-validation as the copy reads it, or a stop between sides, reads as missing, and the copy frees what it loaded itself"
+      "note": "LP1c fix (S2.1): when R_LoadCubeImages stops at side i (a side missing, which leaves width 0, or of another size) it frees sides 0 to i-1 without nulling them and returns false; a side i it loaded before the size test failed is leaked (the engine's ActuallyLoadImage frees nothing after the false). Kept verbatim (C7). The shim frees nothing after a false return (LP1c.2 freed every non-null side again: a double free, S2.1/S3.1) and frees the six sides only for a loaded cube of size 0; the six sides' headers are checked first (M-IMG-GUARD-03), so the copy is called only for six sides of one size and the leak is unreachable; a side refused by the pre-validation as the copy reads it, or a stop between sides, reads as missing, and the copy frees what it loaded itself LP1c fix round 2 (X.2): the header check does not make the leak unreachable by itself: a side 0 whose header passes but whose body is refused or does not decode leaves width 0, side 1 then fails the size test and is leaked. So side 0 is also decoded whole (the copied R_LoadImageProgram, inside the image reads) before the copy runs, and a side 0 without a picture fails the load; the leak is unreachable unless a side changes on disk between that decode and the copy's"
     },
     {
       "id": "M-IMG-GUARD-03",
@@ -11624,7 +11620,7 @@
           "symbol": "readImageFileHeader"
         }
       ],
-      "note": "LP1c fix (S2.1, S2.2): before the copied R_LoadCubeImages reads a six-file cube's pixels (CF_NATIVE, CF_CAMERA, CF_QUAKE1, CF_SINGLE without a cube size), each side's name (R_LoadCubeImages' side tables, transcribed) is resolved by the copied time call (R_LoadImageProgram, no pixels) and its file's header read through the source without its body: a side missing, a header refused or sides of different sizes (side 0 square) fail the load with \"Couldn't load cube image\" (and the engine's \"Mismatched sizes on cube map\" for sizes) without the copy. The same check sizes a cube for C21 (side 0's header) without decoding it"
+      "note": "LP1c fix (S2.1, S2.2): before the copied R_LoadCubeImages reads a six-file cube's pixels (CF_NATIVE, CF_CAMERA, CF_QUAKE1, CF_SINGLE without a cube size), each side's name (R_LoadCubeImages' side tables, transcribed) is resolved by the copied time call (R_LoadImageProgram, no pixels) and its file's header read through the source without its body: a side missing, a header refused or sides of different sizes (side 0 square) fail the load with \"Couldn't load cube image\" (and the engine's \"Mismatched sizes on cube map\" for sizes) without the copy. The same check sizes a cube for C21 (side 0's header) without decoding it LP1c fix round 2: side 0 is decoded whole before the copy (X.2, M-IMG-DEFECT-03), and a side whose .png or .jpg header is refused gives way to the next extension of the loader order, as R_LoadImage does after stb_image's failure (X.9)"
     },
     {
       "id": "M-IMG-DIFF-08",
@@ -11689,7 +11685,7 @@
           "symbol": "MaterialDecls::sourceImageLevels"
         }
       ],
-      "note": "LP1c fix (S2.3, S2.4, S2.5): the engine keeps an image in VRAM once loaded; the preview's parse thread reads one image per work item, below the lookups, the measures and the evaluations, and keeps the published images' data within MaterialServiceOptions::imageBudgetBytes (512 MB): beyond it, the least recently published image whose data a consumer has taken (image() returned it) leaves the table and is read again when asked for (about 0.5 ms a cache). A reload drops every image slot, so new containers and caches the engine wrote are seen then (materialCollectionsDidChange, or a new session); between reloads only loose files are re-probed. The source fallback takes the loader's pixels as its working buffer and writes its levels into one buffer reserved for them all (about 1.3 GB less for an 8192 x 8192 source); it stops between levels once the session stops. LP2's upload-and-drop policy and the VRAM budget are LP2's"
+      "note": "LP1c fix (S2.3, S2.4, S2.5): the engine keeps an image in VRAM once loaded; the preview's parse thread reads one image per work item, below the lookups, the measures and the evaluations, and keeps the published images' data within MaterialServiceOptions::imageBudgetBytes (512 MB): beyond it, the least recently published image whose data a consumer has taken (image() returned it) leaves the table and is read again when asked for (about 0.5 ms a cache). A reload drops every image slot, so new containers and caches the engine wrote are seen then (materialCollectionsDidChange, or a new session); between reloads only loose files are re-probed. The source fallback takes the loader's pixels as its working buffer and writes its levels into one buffer reserved for them all (about 1.3 GB less for an 8192 x 8192 source); it stops between levels once the session stops. LP2's upload-and-drop policy and the VRAM budget are LP2's LP1c fix round 2 (X.3): a reload drops only the image slots whose files the new source finds otherwise (a file found or missed, the cache's name included, a container entry's kind and container) and slots with no file; an unchanged slot keeps its pointer, so an .mtr save reads no image again. (X.11) A slot the poll drops is no longer counted as taken. (X.4, recorded) An evaluation waits at most for the work item in flight, which is one image or one bake: a source decode costs about 39 ms per 1024 x 1024 PNG in Release (the retail materialorb sources), so up to about 2.5 s at the 8192 x 8192 cap (D51), more in Debug; LP2's requests should ask small images first or bound a decode per item"
     },
     {
       "id": "M-FS-DIFF-10",
@@ -11715,7 +11711,7 @@
           "symbol": "GameFileSource::read"
         }
       ],
-      "note": "LP1c fix (S2.2): the engine opens a loose file by trying it; the preview lists each loose folder it looks in once and keeps its names (folded as the file system compares them), so a file that is not there costs a lookup, not a file-system call. looseFilesMayHaveChanged (the parse thread's 1 s poll) starts a round: the first look into a folder after it stats the folder and lists it again when its time changed. A file added after its folder was listed is seen at the next poll (the poll's re-probe then reads what missed it again, M-IMG-DIFF-03); a changed file is seen by its own stat as before. A .resources container is statted once when a read batch opens it, not per read: a container replaced during one batch is read through the handle the batch opened, and refused from the next"
+      "note": "LP1c fix (S2.2): the engine opens a loose file by trying it; the preview lists each loose folder it looks in once and keeps its names (folded as the file system compares them), so a file that is not there costs a lookup, not a file-system call. looseFilesMayHaveChanged (the parse thread's 1 s poll) starts a round: the first look into a folder after it stats the folder and lists it again when its time changed. A file added after its folder was listed is seen at the next poll (the poll's re-probe then reads what missed it again, M-IMG-DIFF-03); a changed file is seen by its own stat as before. A .resources container is statted once when a read batch opens it, not per read: a container replaced during one batch is read through the handle the batch opened, and refused from the next LP1c fix round 2 (X.10): a folder whose time is within 2 s of its listing is listed again at each new round, so a file added within the same tick of a coarse file-system clock (FAT, exFAT, HFS+, some network shares) is not missed"
     },
     {
       "id": "M-IMG-DXT-01",
@@ -11856,7 +11852,7 @@
           "symbol": "idCommon::LoadPacifierBinarizeProgressIncrement"
         }
       ],
-      "note": "LP1c fix (S3.2), test only: the binarizer's steps around its encoder, transcribed: a 2D level whose size is not a multiple of 4 zero-padded to whole blocks (Mem_ClearedAlloc), a cube level below 4 x 4 replicated into one block (PadImageTo4x4), the encoder chosen as Load2DFromMemory and LoadCubeFromMemory choose it, the input copied to a 16-byte aligned buffer (the engine's Mem_Alloc is; the _SSE2 encoders load aligned rows). idCommon::LoadPacifierBinarizeProgressIncrement is declared by the product's shim and defined only by the test library (a no-op: no pacifier)"
+      "note": "LP1c fix (S3.2), test only: the binarizer's steps around its encoder, transcribed: a 2D level whose size is not a multiple of 4 zero-padded to whole blocks (Mem_ClearedAlloc), a cube level below 4 x 4 replicated into one block (PadImageTo4x4), the encoder chosen as Load2DFromMemory and LoadCubeFromMemory choose it, the input copied to a 16-byte aligned buffer (the engine's Mem_Alloc is; the _SSE2 encoders load aligned rows). idCommon::LoadPacifierBinarizeProgressIncrement is declared by the product's shim and defined only by the test library (a no-op: no pacifier) LP1c fix round 2: on a build without USE_INTRINSICS_SSE the goldens skip the DXT blocks alone (X.6). (X.7, recorded) The DXT1 linear-mip caches of the fixtures (metal_rmao#__1200, grate#__1000) are equal under gamma and linear mips, so the exact comparison cannot tell those two apart there; a fixture with steep gradients on both axes needs an engine capture, deferred"
     },
     {
       "id": "M-IMG-STATIC-04",
@@ -11971,6 +11967,81 @@
         }
       ],
       "note": "LP1c fix (S3.7), recorded: a cube that fails to load is defaulted and 0 x 0 in the engine (the cube branch returns before any opts.width = 8), so GetUploadWidth is 0 and dmap's Valve 220 st divide by 0; the preview gives the 8 x 8 Default of any failed load (retail: the 8 \"Couldn't load cube image\" materials). The chunks of such a material use 8 x 8"
+    },
+    {
+      "id": "M-IMG-DEFECT-04",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            1203,
+            1315
+          ],
+          "anchor": "R_LoadCubeImages, CF_SINGLE with a cube size and CF_PANORAMA",
+          "sha256": "3513c4fe922c8b4b73b0f7f57dbf37899713feaf5f5c5493c55b98127d6f4f33"
+        },
+        {
+          "file": "neo/renderer/Image_program.cpp",
+          "lines": [
+            833,
+            849
+          ],
+          "anchor": "R_LoadImageProgram",
+          "sha256": "892799e23bcba5dba8c4bb9d88c4de72c7f6af8a7b8ef4b84f411758247f9483"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            782,
+            850
+          ],
+          "anchor": "R_GenerateCubeMapSideFromSingleImage",
+          "sha256": "db37da2d1da99a115fce6e002cc6eb688d352220779b54d6c844477384e6744c"
+        },
+        {
+          "file": "neo/renderer/Image_process.cpp",
+          "lines": [
+            1106,
+            1167
+          ],
+          "anchor": "R_GenerateCubeMapSideFromPanoramaImage",
+          "sha256": "2909c16466c6f594e041dee4a70856ead2acac9da03fb6742b760351aec0040e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "loadSinglePictureCube"
+        }
+      ],
+      "note": "LP1c fix round 2 (X.1): R_LoadCubeImages' two branches that cut six sides out of one picture (cubeMapSingle with a size, hdriMap/panoramaMap) test only thisTime == FILE_NOT_FOUND_TIMESTAMP, but R_LoadImageProgram starts the time at 0 and a leaf that fails leaves it there, so a picture that is missing, refused, cannot be decoded or (in the preview) is read after a stop reaches the side generators as a NULL pointer, which they read: the engine crashes at binarize. The copy is kept verbatim (C7); the shim never calls these branches with pixels: it runs its transcription (M-IMG-GUARD-04)"
+    },
+    {
+      "id": "M-IMG-GUARD-04",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            1203,
+            1315
+          ],
+          "anchor": "R_LoadCubeImages, CF_SINGLE with a cube size and CF_PANORAMA",
+          "sha256": "3513c4fe922c8b4b73b0f7f57dbf37899713feaf5f5c5493c55b98127d6f4f33"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "loadSinglePictureCube"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "MaterialDecls::loadImagePixels"
+        }
+      ],
+      "note": "LP1c fix round 2 (X.1): the two branches transcribed into the shim, with the copied R_LoadImageProgram, R_GenerateCubeMapSideFromSingleImage, R_GenerateCubeMapSideFromPanoramaImage, R_RotatePic, R_HorizontalFlip and R_VerticalFlip, and two checks the engine lacks: no picture (or the not-found time) fails the load with \"Couldn't load cube image\" and the default, and a CF_SINGLE picture smaller than the 4 x 3 sides of the cube size is refused (M-IMG-GUARD-02, now in the same place, so the picture is decoded once). A stop at any point reads every image file as missing, so it ends in the same refusal. The pixel path never calls the copied R_LoadCubeImages for these kinds; the time call (imageCacheName) still does, without pixels"
     }
   ],
   "retired": [

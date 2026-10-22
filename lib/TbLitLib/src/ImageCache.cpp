@@ -525,13 +525,15 @@ ImageCacheSlot resolveImageCache(DeclSource& source, const ImageCacheName& name)
   const auto load = [&](const std::string& file) -> std::optional<CachedImage> {
     auto origin = GameFileProbe{};
     const auto bytes = source.readGameFile(file, &origin);
+    // LP1c fix round 2 (X.3): a missed cache name is kept too, so that a cache the engine
+    // writes later is seen by the re-probe and by a reload
+    slot.files.push_back(FoundGameFile{file, origin});
     if (!bytes)
     {
       return std::nullopt;
     }
     found = true;
     slot.file = file;
-    slot.files.push_back(FoundGameFile{file, origin});
     return readBimage(*bytes)
            | kdl::and_then([&](CachedImage image) -> Result<CachedImage> {
                if (engineCacheIsStale(name.sourceTime, image.sourceTime))

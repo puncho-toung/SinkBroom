@@ -134,9 +134,15 @@ TEST_CASE("ImageGoldens, the source fallback against the engine's caches (D61)")
     }
   }
 
-  if (!dxtEncoderForTestingAvailable())
+  // X.6: without the copied encoders (the engine's SSE2 ones; an Apple Silicon build)
+  // only the DXT blocks go unchecked, never the shapes, the uncompressed caches or the
+  // rest
+  const auto encoders = dxtEncoderForTestingAvailable();
+  if (!encoders)
   {
-    SKIP("the engine's fast DXT encoders are its SSE2 ones, which this build has not");
+    WARN(
+      "the engine's fast DXT encoders are its SSE2 ones, which this build has not: the "
+      "DXT1 and DXT5 blocks are not compared");
   }
   auto lines = std::vector<std::string>{};
   auto compared = 0;
@@ -180,6 +186,10 @@ TEST_CASE("ImageGoldens, the source fallback against the engine's caches (D61)")
       const auto* data = ours.data.data() + level.offset;
       const auto* engineData = golden.data.data() + engineLevel.offset;
       texels += level.width * level.height;
+      if ((golden.format == FormatDxt1 || golden.format == FormatDxt5) && !encoders)
+      {
+        continue;
+      }
       if (golden.format == FormatDxt1 || golden.format == FormatDxt5)
       {
         // S3.2: the fallback's level through the engine's own encoder, block for block

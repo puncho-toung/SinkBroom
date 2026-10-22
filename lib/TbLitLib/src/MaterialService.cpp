@@ -932,7 +932,8 @@ private:
     const auto messages = m_decls->messages().size();
     auto sizing = editorImageSize(*m_decls, *m_source, entry);
     static_cast<void>(m_decls->takeMessagesFrom(messages));
-    auto files = looseOrMissing(sizing.files);
+    // X.5: every file, a container's too, so that a loose file over it is seen
+    auto files = std::move(sizing.files);
     const auto chain = imageChain(entry);
     if (sizing.size.state == EditorImageSize::State::Ready)
     {
@@ -953,21 +954,6 @@ private:
     return sizing.size;
   }
 
-  // the files the poll looks at again: loose ones, and (S2.5) the names that were missed
-  static std::vector<FoundGameFile> looseOrMissing(std::vector<FoundGameFile> files)
-  {
-    files.erase(
-      std::remove_if(
-        files.begin(),
-        files.end(),
-        [](const auto& file) {
-          return file.probe.kind != GameFileProbe::Kind::Loose
-                 && file.probe.kind != GameFileProbe::Kind::Missing;
-        }),
-      files.end());
-    return files;
-  }
-
   template <typename Map, typename Key>
   static void keepFiles(Map& map, const Key& key, std::vector<FoundGameFile> files)
   {
@@ -981,10 +967,25 @@ private:
     }
   }
 
+  /**
+   * A file found (or missed) as it was then, against what the source's probe finds now:
+   * another kind (a loose file over a container entry, X.5; a file that appeared or
+   * went), another container, another time, and for a loose file another size or change
+   * stamp. A container entry's size is not compared: a read gives a .pk4 entry's size, a
+   * probe 0.
+   */
+  static bool sameFile(const GameFileProbe& then, const GameFileProbe& now)
+  {
+    return then.kind == now.kind && then.container == now.container
+           && then.time == now.time
+           && (then.kind != GameFileProbe::Kind::Loose
+               || (then.size == now.size && then.changeStamp == now.changeStamp));
+  }
+
   bool changedOnDisk(const std::vector<FoundGameFile>& files) const
   {
     return m_source && std::any_of(files.begin(), files.end(), [&](const auto& file) {
-             return m_source->probe(file.path) != file.probe;
+             return !sameFile(file.probe, m_source->probe(file.path));
            });
   }
 
@@ -1335,6 +1336,8 @@ private:
       m_source = std::make_unique<MemoryDeclSource>(std::vector<DeclFile>{});
     }
     const auto sourceSeconds = secondsSince(started);
+    // X.3: the image slots the new source finds otherwise go
+    dropChangedImages();
 
     // A2.3: what the loose files were before the read and after it; a change between
     // them, or a file that kept changing while it was read, asks for one more build
@@ -1437,7 +1440,6 @@ private:
       }
       it = changedOnDisk(it->second.files) ? m_readySizes.erase(it) : std::next(it);
     }
-    dropImages();
     auto previousNames =
       std::vector<std::string>{m_requestedNames.begin(), m_requestedNames.end()};
     auto previousEntityDefs = std::vector<std::string>{
@@ -1559,17 +1561,34 @@ private:
         m_publishedImages.end(),
         [&](const auto& published) { return published.key == key; }),
       m_publishedImages.end());
+    // X.11: a slot read again is not taken until a consumer takes it
+    auto lock = std::scoped_lock{m_shared.mutex};
+    m_shared.takenImages.erase(key);
   }
 
-  // S2.5: every image slot dropped (a reload)
-  void dropImages()
+  /**
+   * S2.5, X.3: after a reload's new source is made, the image slots whose files (found or
+   * missed, the cache's name included) the new source finds otherwise are dropped, and so
+   * are slots with no file (one a failed build made); an unchanged slot stays, the same
+   * pointer. So a new container or a cache the engine wrote is seen, and an .mtr save
+   * reads no image again.
+   */
+  void dropChangedImages()
   {
-    m_working.images = MaterialTable::Images{};
-    m_imageFiles.clear();
-    m_publishedImages.clear();
-    m_imageBytes = 0;
-    auto lock = std::scoped_lock{m_shared.mutex};
-    m_shared.takenImages.clear();
+    auto changed = std::vector<MaterialImageKey>{};
+    m_working.images.forEach([&](const MaterialImageKey& key, const auto& slot) {
+      const auto files = m_imageFiles.find(key);
+      if (
+        files == m_imageFiles.end() ? !slot->name.generated
+                                    : changedOnDisk(files->second))
+      {
+        changed.push_back(key);
+      }
+    });
+    for (const auto& key : changed)
+    {
+      dropImage(key);
+    }
   }
 
   /**
@@ -1638,7 +1657,7 @@ private:
     else
     {
       *slot = resolveImage(*m_decls, *m_source, key);
-      keepFiles(m_imageFiles, key, looseOrMissing(slot->files));
+      keepFiles(m_imageFiles, key, slot->files);
     }
     const auto bytes = imageBytes(*slot);
     m_working.images =

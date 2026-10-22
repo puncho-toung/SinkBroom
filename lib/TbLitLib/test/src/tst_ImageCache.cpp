@@ -892,18 +892,13 @@ TEST_CASE("MaterialService serves image caches on the parse thread (C8, C20)")
   CHECK_THAT(
     none.slot->sourceReason, Catch::Matchers::ContainsSubstring("Couldn't load"));
 
-  // LP1c fix (S2.5): a reload drops the image slots, so that the new source's containers
-  // and caches are seen; asked again, the image is read again, alike
+  // X.3: a reload keeps an image slot whose files the new source finds alike, the same
+  // pointer (the cache in its container, and the missed names)
   service->reload();
   const auto reloaded = service->waitForTableForTesting(
     [&](const MaterialTable& t) { return t.registry != table->registry; }, 10s);
-  CHECK_FALSE(reloaded->findImage(ready));
-  CHECK(service->image(ready).state == ImageLookup::State::Pending);
-  const auto again = service->waitForTableForTesting(
-    [&](const MaterialTable& t) { return t.findImage(ready) != nullptr; }, 10s);
-  REQUIRE(again->findImage(ready));
-  REQUIRE(again->findImage(ready)->image);
-  CHECK(again->findImage(ready)->image->data == table->findImage(ready)->image->data);
+  CHECK(reloaded->findImage(ready) == table->findImage(ready));
+  CHECK(reloaded->findImage(missing) == table->findImage(missing));
   service->requestStop();
   service->join();
   static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));

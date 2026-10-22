@@ -57,43 +57,6 @@ void takePicture(
   Mem_Free(pic);
 }
 
-/**
- * M-IMG-GUARD-02: the copied R_LoadCubeImages turns a CF_SINGLE image with a cube size
- * into six sides with R_GenerateCubeMapSideFromSingleImage, which copies a cross of 4 × 3
- * sides of that size out of the picture without looking at the picture's size. The
- * picture is loaded first, as R_LoadCubeImages loads it (R_LoadImageProgram, no usage),
- * and a picture smaller than the cross is refused: an empty text means it fits (or there
- * is no picture, which R_LoadCubeImages reports itself).
- */
-std::string singleImageCubeFits(
-  const std::string& imageName, const cubeFiles_t cubeFiles, const int cubeMapSize)
-{
-  if (cubeFiles != CF_SINGLE || cubeMapSize == 0)
-  {
-    return {};
-  }
-  byte* pic = nullptr;
-  int width = 0;
-  int height = 0;
-  ID_TIME_T time = 0;
-  R_LoadImageProgram(imageName.c_str(), &pic, &width, &height, &time);
-  if (!pic)
-  {
-    return {};
-  }
-  R_StaticFree(pic);
-  if (
-    cubeMapSize < 0 || std::int64_t(width) < 4 * std::int64_t(cubeMapSize)
-    || std::int64_t(height) < 3 * std::int64_t(cubeMapSize))
-  {
-    return "the single-image cube " + imageName + " is " + std::to_string(width) + " x "
-           + std::to_string(height) + ", smaller than the 4 x 3 sides of "
-           + std::to_string(cubeMapSize)
-           + " that the engine copies out of it; it is the default image";
-  }
-  return {};
-}
-
 // Image.h:34-139, the enum values the copied Image.h ranges leave out
 constexpr int DTT_2D = 1;
 constexpr int DTT_CUBIC = 2;
@@ -504,6 +467,174 @@ bool isSixFileCube(const cubeFiles_t cubeFiles, const int cubeMapSize)
          || (cubeFiles == CF_SINGLE && cubeMapSize == 0);
 }
 
+// Image_files.cpp:959-966 imageLoaders, the order R_LoadImage tries the extensions in
+constexpr const char* LoaderExtensions[] = {"png", "tga", "jpg", "exr", "hdr"};
+
+/**
+ * LP1c fix round 2 (X.9): a cube side's header, as readImageFileHeader reads it; a .png
+ * or .jpg whose header is refused gives way to the next extension of the loader order
+ * that passes, as R_LoadImage's loop goes on after stb_image's failure (M-IMG-DIFF-04); a
+ * refused TGA, EXR or HDR does not. Every file looked at is added to files.
+ */
+ImageFileHeader sideHeader(
+  tb::lit::DeclSource& source, const std::string& path, std::vector<FoundGameFile>& files)
+{
+  auto probe = GameFileProbe{};
+  auto header = readImageFileHeader(source, path, &probe);
+  if (!header.problem || !isStbLoaderFile(path))
+  {
+    return header;
+  }
+  const auto base = path.substr(0, path.find_last_of('.'));
+  for (const auto* extension : LoaderExtensions)
+  {
+    const auto next = base + "." + extension;
+    if (next == path)
+    {
+      continue;
+    }
+    auto nextProbe = GameFileProbe{};
+    auto nextHeader = readImageFileHeader(source, next, &nextProbe);
+    files.push_back(FoundGameFile{next, nextProbe});
+    if (!nextProbe.exists() || (nextHeader.problem && isStbLoaderFile(next)))
+    {
+      continue;
+    }
+    return nextHeader;
+  }
+  return header;
+}
+
+/**
+ * LP1c fix round 2 (X.1): Image_files.cpp:1203-1315, R_LoadCubeImages' two branches that
+ * cut six sides out of one picture (CF_SINGLE with a cube size, CF_PANORAMA), transcribed
+ * with the check the engine lacks: the copied R_LoadImageProgram leaves no picture and a
+ * time of 0 (never FILE_NOT_FOUND_TIMESTAMP) when the picture is missing, refused by the
+ * pre-validation, cannot be decoded, or is read after a stop, and the engine's
+ * generators read that NULL picture (M-IMG-DEFECT-04). Here no picture fails the load, as
+ * does a picture smaller than the 4 x 3 sides R_GenerateCubeMapSideFromSingleImage copies
+ * (M-IMG-GUARD-02). The sides go to pics; false with why when there are none.
+ */
+bool loadSinglePictureCube(
+  const char* imgName,
+  const cubeFiles_t extensions,
+  byte* pics[6],
+  int* outSize,
+  ID_TIME_T* timestamp,
+  int cubeMapSize,
+  std::string& why)
+{
+  int width = 0;
+  int height = 0;
+  memset(pics, 0, 6 * sizeof(pics[0]));
+  *timestamp = 0;
+
+  ID_TIME_T thisTime;
+  byte* thisPic[1];
+  thisPic[0] = nullptr;
+  R_LoadImageProgram(imgName, thisPic, &width, &height, &thisTime);
+  if (thisTime == FILE_NOT_FOUND_TIMESTAMP || !thisPic[0])
+  {
+    if (thisPic[0])
+    {
+      R_StaticFree(thisPic[0]);
+    }
+    why = std::string{"its picture "} + imgName
+          + " is missing, refused or cannot be decoded (or the session stopped)";
+    return false;
+  }
+  if (thisTime > *timestamp)
+  {
+    *timestamp = thisTime;
+  }
+
+  if (extensions == CF_SINGLE)
+  {
+    if (
+      cubeMapSize < 0 || std::int64_t(width) < 4 * std::int64_t(cubeMapSize)
+      || std::int64_t(height) < 3 * std::int64_t(cubeMapSize))
+    {
+      R_StaticFree(thisPic[0]);
+      why = "the single-image cube " + std::string{imgName} + " is "
+            + std::to_string(width) + " x " + std::to_string(height)
+            + ", smaller than the 4 x 3 sides of " + std::to_string(cubeMapSize)
+            + " that the engine copies out of it";
+      return false;
+    }
+    *outSize = cubeMapSize;
+
+    for (int i = 0; i < 6; i++)
+    {
+      pics[i] =
+        R_GenerateCubeMapSideFromSingleImage(thisPic[0], width, height, cubeMapSize, i);
+      switch (i)
+      {
+      case 0: // forward
+        R_RotatePic(pics[i], cubeMapSize);
+        break;
+      case 1: // back
+        R_RotatePic(pics[i], cubeMapSize);
+        R_HorizontalFlip(pics[i], cubeMapSize, cubeMapSize);
+        R_VerticalFlip(pics[i], cubeMapSize, cubeMapSize);
+        break;
+      case 2: // left
+        R_VerticalFlip(pics[i], cubeMapSize, cubeMapSize);
+        break;
+      case 3: // right
+        R_HorizontalFlip(pics[i], cubeMapSize, cubeMapSize);
+        break;
+      case 4: // up
+        R_RotatePic(pics[i], cubeMapSize);
+        break;
+      case 5: // down
+        R_RotatePic(pics[i], cubeMapSize);
+        break;
+      }
+    }
+  }
+  else
+  {
+    cubeMapSize = 1024;
+    *outSize = cubeMapSize;
+
+    for (int i = 0; i < 6; i++)
+    {
+      pics[i] =
+        R_GenerateCubeMapSideFromPanoramaImage(thisPic[0], width, height, cubeMapSize, i);
+    }
+  }
+
+  R_StaticFree(thisPic[0]);
+  return true;
+}
+
+/**
+ * LP1c fix round 2 (X.2): side 0 of a six-file cube read whole by the copied
+ * R_LoadImageProgram, as R_LoadCubeImages reads it, during the image reads (so the
+ * pre-validation sees its body): why it gives no picture, or nullopt. The header check
+ * (cubeSideSizes) cannot see a body that is refused or fails to decode, and the copy,
+ * which takes side 0's width as the cube's, would stop at side 1 and leak it.
+ */
+std::optional<std::string> sideZeroProblem(
+  const std::string& imageName, const cubeFiles_t cubeFiles)
+{
+  char fullName[MAX_IMAGE_NAME];
+  idStr::snPrintf(
+    fullName, sizeof(fullName), "%s%s", imageName.c_str(), cubeSideNames(cubeFiles)[0]);
+  byte* pic = nullptr;
+  int width = 0;
+  int height = 0;
+  ID_TIME_T time = 0;
+  R_LoadImageProgram(fullName, &pic, &width, &height, &time);
+  if (!pic)
+  {
+    return "its side " + std::string{fullName}
+           + " is refused or cannot be decoded (or the session stopped)";
+  }
+  R_StaticFree(pic);
+  return std::nullopt;
+}
+
 } // namespace
 
 CachedImage MaterialDecls::sourceImageLevels(
@@ -597,11 +728,11 @@ CubeSideSizes MaterialDecls::cubeSideSizes(
       result.problem = "its side " + std::string{fullName} + " is missing";
       break;
     }
-    // the file a side's leaf resolution found last is the one it loads
-    const auto& sideFile = found.back();
-    auto probe = GameFileProbe{};
-    const auto header = readImageFileHeader(files.source(), sideFile.path, &probe);
+    // the file a side's leaf resolution found last is the one it loads (X.9: or the
+    // next extension's, when a .png or .jpg is refused)
+    const auto sideFile = found.back();
     result.files.insert(result.files.end(), found.begin(), found.end());
+    const auto header = sideHeader(files.source(), sideFile.path, result.files);
     if (header.problem)
     {
       result.problem = "its side " + sideFile.path + ": " + *header.problem;
@@ -671,8 +802,8 @@ SourceLoad MaterialDecls::loadImagePixels(
   {
     int size = 0;
     byte* pics[6] = {};
-    auto fits = singleImageCubeFits(name.imageName, cubeFiles, cubeMapSize);
-    if (fits.empty() && sides && !sides->problem.empty())
+    auto loaded = false;
+    if (sides && !sides->problem.empty())
     {
       // the engine's own warning for a mismatched side, then its failure
       if (sides->problem.rfind("Mismatched sizes", 0) == 0)
@@ -683,14 +814,34 @@ SourceLoad MaterialDecls::loadImagePixels(
       load.error =
         "Couldn't load cube image: " + name.imageName + " (" + sides->problem + ")";
     }
-    else if (!fits.empty())
+    else if (!sides)
     {
-      shim::reportWarning(fits);
-      load.error = fits;
+      // X.1: one picture cut into six sides, with the check the engine lacks
+      auto why = std::string{};
+      loaded = loadSinglePictureCube(
+        name.imageName.c_str(),
+        cubeFiles,
+        pics,
+        &size,
+        &sourceFileTime,
+        cubeMapSize,
+        why);
+      if (!loaded)
+      {
+        idLib::Warning("Couldn't load cube image: %s", name.imageName.c_str());
+        load.error = "Couldn't load cube image: " + name.imageName + " (" + why + ")";
+      }
+    }
+    else if (const auto side0 = sideZeroProblem(name.imageName, cubeFiles))
+    {
+      // X.2: side 0 decoded whole first, so that the copy never stops at side 1 with
+      // side 0 empty, which leaks side 1 (M-IMG-DEFECT-03)
+      idLib::Warning("Couldn't load cube image: %s", name.imageName.c_str());
+      load.error = "Couldn't load cube image: " + name.imageName + " (" + *side0 + ")";
     }
     else
     {
-      const auto loaded = R_LoadCubeImages(
+      loaded = R_LoadCubeImages(
         name.imageName.c_str(), cubeFiles, pics, &size, &sourceFileTime, cubeMapSize);
       if (!loaded)
       {
@@ -700,29 +851,29 @@ SourceLoad MaterialDecls::loadImagePixels(
         idLib::Warning("Couldn't load cube image: %s", name.imageName.c_str());
         load.error = "Couldn't load cube image: " + name.imageName;
       }
-      else if (size == 0)
+    }
+    if (loaded && size == 0)
+    {
+      // six sides of size 0: the engine keeps them; they are freed here
+      for (auto* pic : pics)
       {
-        // six sides of size 0: the engine keeps them; they are freed here
-        for (auto* pic : pics)
+        if (pic)
         {
-          if (pic)
-          {
-            Mem_Free(pic);
-          }
+          Mem_Free(pic);
         }
-        idLib::Warning("Couldn't load cube image: %s", name.imageName.c_str());
-        load.error = "Couldn't load cube image: " + name.imageName;
       }
-      else
+      idLib::Warning("Couldn't load cube image: %s", name.imageName.c_str());
+      load.error = "Couldn't load cube image: " + name.imageName;
+    }
+    else if (loaded)
+    {
+      pixels.width = size;
+      pixels.height = size;
+      pixels.faces = 6;
+      pixels.pixels.reserve(std::size_t(size) * std::size_t(size) * 4 * 6);
+      for (auto* pic : pics)
       {
-        pixels.width = size;
-        pixels.height = size;
-        pixels.faces = 6;
-        pixels.pixels.reserve(std::size_t(size) * std::size_t(size) * 4 * 6);
-        for (auto* pic : pics)
-        {
-          takePicture(pic, size, size, pixels.pixels);
-        }
+        takePicture(pic, size, size, pixels.pixels);
       }
     }
   }

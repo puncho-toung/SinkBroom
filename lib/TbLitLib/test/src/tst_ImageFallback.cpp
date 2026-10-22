@@ -61,6 +61,7 @@ using namespace std::chrono_literals;
 
 constexpr int CubeNative = 1;
 constexpr int CubePanorama = 3;
+constexpr int CubeSingle = 6;
 
 MaterialImageKey keyOf(
   const std::string& name,
@@ -416,6 +417,26 @@ TEST_CASE("ImageFallback, a cube that fails part-way frees each side once (S2.1)
   garbage += std::string{"\x05\x01\x02\x03", 4};
   game.file("refused_py.tga", garbage);
   cubeSides(game, "stopped", all, 8);
+  // X.2: side 0 with a good header and a body refused (run-length data running out) or
+  // undecodable (a PNG whose deflate data stb_image rejects)
+  cubeSides(game, "refused0", all, 8);
+  game.file("refused0_px.tga", garbage);
+  cubeSides(game, "broken0", {"nx", "py", "ny", "pz", "nz"}, 8);
+  auto broken = pngFile(flat(8, 8, 1, 2, 3));
+  // the zlib header's check bits broken: stb_image refuses the stream, the pre-validation
+  // (chunks and sizes) passes it
+  broken[broken.find("IDAT") + 5] ^= 0x55;
+  game.file("broken0_px.png", broken);
+  // X.1: one picture cut into six sides (cubeMapSingle with a size, a panorama): missing,
+  // refused (16 bits), undecodable, and a good one
+  auto sixteen = tgaFile(flat(16, 12, 1, 2, 3), 32);
+  sixteen[16] = 16;
+  game.file("single_refused.tga", sixteen);
+  game.file("pano_refused.tga", sixteen);
+  game.file("single_broken.png", broken);
+  game.file("pano_broken.png", broken);
+  game.file("single_good.tga", tgaFile(gradient(16, 12), 32));
+  game.file("pano_good.tga", tgaFile(gradient(16, 8), 32));
 
   auto files = GameFileSource{game.path()};
   auto stop = std::atomic<bool>{false};
@@ -462,6 +483,58 @@ TEST_CASE("ImageFallback, a cube that fails part-way frees each side once (S2.1)
     CHECK(sized("refused").state == EditorImageSize::State::Ready);
   }
 
+  SECTION("X.2: side 0 refused or undecodable behind a good header: nothing leaked")
+  {
+    CHECK_THAT(failed("refused0"), Catch::Matchers::ContainsSubstring("refused0_px"));
+    CHECK_THAT(failed("broken0"), Catch::Matchers::ContainsSubstring("broken0_px"));
+  }
+
+  SECTION("X.1: a picture cut into sides that is missing, refused or undecodable")
+  {
+    for (const auto* kind : {"single", "pano"})
+    {
+      for (const auto* what : {"missing", "refused", "broken"})
+      {
+        const auto name = std::string{kind} + "_" + what;
+        CAPTURE(name);
+        auto key = keyOf(
+          "textures/lp1c/" + name,
+          std::string{kind} == "pano" ? UsageHdri : UsageDefault,
+          std::string{kind} == "pano" ? CubePanorama : CubeSingle);
+        key.cubeMapSize = 4;
+        const auto slot = resolveImage(decls, source, key);
+        CHECK_FALSE(slot.image);
+        // a refused TGA names its file; the others the cube's failure
+        CHECK_THAT(
+          slot.sourceReason,
+          Catch::Matchers::ContainsSubstring(
+            std::string{what} == "refused" ? name + ".tga" : "Couldn't load cube image"));
+        static_cast<void>(decls.takeMessages());
+        static_cast<void>(source.takeWarnings());
+      }
+    }
+    // a stop before the picture is read: every read fails, the load refuses cleanly
+    for (const auto* kind : {"single", "pano"})
+    {
+      auto key = keyOf(
+        "textures/lp1c/" + std::string{kind} + "_good",
+        std::string{kind} == "pano" ? UsageHdri : UsageDefault,
+        std::string{kind} == "pano" ? CubePanorama : CubeSingle);
+      key.cubeMapSize = 4;
+      const auto name = decls.imageCacheName(key);
+      REQUIRE(name);
+      stop = true;
+      const auto stopped = decls.loadImagePixels(*name.value, key.cubeMapSize, true);
+      stop = false;
+      CHECK_FALSE(stopped.pixels);
+      // and without the stop it loads: six sides of the cube size, or of 1024
+      const auto loaded = decls.loadImagePixels(*name.value, key.cubeMapSize, true);
+      REQUIRE(loaded.pixels);
+      CHECK(loaded.pixels->faces == 6);
+      CHECK(loaded.pixels->width == (std::string{kind} == "pano" ? 1024 : 4));
+    }
+  }
+
   SECTION("a stop between sides: the image reads after it fail, nothing is freed twice")
   {
     CHECK_THAT(
@@ -479,10 +552,34 @@ TEST_CASE("ImageFallback, a cube that fails part-way frees each side once (S2.1)
   SECTION("under the debug heap, 20 times over (S2.6)")
   {
     const auto cycle = [&] {
-      for (const auto* name : {"five", "mixed", "refused", "stopped"})
+      for (const auto* name :
+           {"five", "mixed", "refused", "stopped", "refused0", "broken0"})
       {
         static_cast<void>(failed(name));
         static_cast<void>(sized(name));
+      }
+      // X.1: the picture cut into sides, missing, refused, undecodable and stopped
+      for (const auto* kind : {"single", "pano"})
+      {
+        for (const auto* what : {"missing", "refused", "broken", "good"})
+        {
+          auto key = keyOf(
+            "textures/lp1c/" + std::string{kind} + "_" + what,
+            std::string{kind} == "pano" ? UsageHdri : UsageDefault,
+            std::string{kind} == "pano" ? CubePanorama : CubeSingle);
+          key.cubeMapSize = 4;
+          if (std::string{what} != "good")
+          {
+            static_cast<void>(resolveImage(decls, source, key));
+          }
+          const auto name = decls.imageCacheName(key);
+          REQUIRE(name);
+          stop = true;
+          static_cast<void>(decls.loadImagePixels(*name.value, key.cubeMapSize, true));
+          stop = false;
+          static_cast<void>(decls.takeMessages());
+          static_cast<void>(source.takeWarnings());
+        }
       }
     };
     cycle();

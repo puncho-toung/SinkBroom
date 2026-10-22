@@ -225,6 +225,20 @@ bool heapGrows(const std::function<void()>& f)
   }
   return grew;
 }
+
+HeapGrowth heapGrowth(const std::function<void()>& f)
+{
+  _CrtMemState before;
+  _CrtMemCheckpoint(&before);
+  f();
+  _CrtMemState after;
+  _CrtMemCheckpoint(&after);
+  return HeapGrowth{
+    static_cast<long long>(after.lCounts[_NORMAL_BLOCK])
+      - static_cast<long long>(before.lCounts[_NORMAL_BLOCK]),
+    static_cast<long long>(after.lSizes[_NORMAL_BLOCK])
+      - static_cast<long long>(before.lSizes[_NORMAL_BLOCK])};
+}
 #endif
 
 } // namespace tb::lit

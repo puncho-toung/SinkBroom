@@ -42,6 +42,7 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cwctype>
 #include <exception>
 #include <unordered_map>
@@ -190,6 +191,8 @@ struct GameFileSource::LooseFolder
   // the folder's time when it was listed, and whether it was there
   std::filesystem::file_time_type time{};
   bool exists = false;
+  // X.10: when it was listed, by the file clock
+  std::filesystem::file_time_type listed{};
   // its entries' names, case-folded
   std::unordered_set<std::filesystem::path::string_type> names;
   // the round of polls it was last looked at in
@@ -645,8 +648,12 @@ GameFileSource::LooseFolder& GameFileSource::looseFolder(
   auto ec = std::error_code{};
   const auto time = std::filesystem::last_write_time(path, ec);
   const auto exists = !ec && std::filesystem::is_directory(path, ec) && !ec;
-  if (!listed || exists != entry.exists || (exists && time != entry.time))
+  // X.10: a folder listed within 2 s of its time may have had a file added in the same
+  // tick of a coarse file-system clock (FAT, HFS+, network shares): listed again
+  const auto recent = exists && entry.listed - time < std::chrono::seconds{2};
+  if (!listed || exists != entry.exists || (exists && time != entry.time) || recent)
   {
+    entry.listed = std::filesystem::file_time_type::clock::now();
     entry.names.clear();
     entry.exists = exists;
     entry.time = exists ? time : std::filesystem::file_time_type{};
