@@ -50,6 +50,27 @@ bool spawnVector(
   std::string_view key,
   std::string_view fallback,
   EngineVec3& out);
+// GetFloat( key, defaultString, out ): atof of the value or of fallback; whether the key
+// exists
+bool spawnFloat(
+  const EntityKeys& keys, std::string_view key, std::string_view fallback, float& out);
+// GetInt( key, defaultString ): atoi of the value or of fallback
+int spawnInt(
+  const EntityKeys& keys, std::string_view key, std::string_view fallback = "0");
+// GetInt( key, defaultInt ): atoi of the value, or fallback when the key is missing
+int spawnIntOr(const EntityKeys& keys, std::string_view key, int fallback);
+// GetMatrix: the identity, then sscanf of nine floats, row by row; whether the key exists
+bool spawnMatrix(
+  const EntityKeys& keys,
+  std::string_view key,
+  std::string_view fallback,
+  EngineMat3& out);
+// GetAngles: zero, then sscanf "%f %f %f" (pitch, yaw, roll); whether the key exists
+bool spawnAngles(
+  const EntityKeys& keys,
+  std::string_view key,
+  std::string_view fallback,
+  std::array<float, 3>& out);
 
 /**
  * idDict::Set for each map key (a key given again replaces the value in place, compared

@@ -149,4 +149,27 @@ EngineFrustumCull engineCullFrustumCorners(
   }
 }
 
+EngineVec3 engineFixDegenerateNormal(const EngineVec3& v)
+{
+  auto result = toId(v);
+  result.FixDegenerateNormal();
+  return fromId(result);
+}
+
+float engineAngleNormalize360(const float angle)
+{
+  return idMath::AngleNormalize360(angle);
+}
+
+std::vector<std::string> engineDefaultLightStyles()
+{
+  static_assert(sizeof(predef_lightstyles) / sizeof(predef_lightstyles[0]) == 12);
+  auto styles = std::vector<std::string>{};
+  for (const auto* style : predef_lightstyles)
+  {
+    styles.emplace_back(style);
+  }
+  return styles;
+}
+
 } // namespace tb::lit

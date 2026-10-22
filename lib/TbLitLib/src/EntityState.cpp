@@ -164,6 +164,57 @@ bool spawnVector(
   return value != nullptr;
 }
 
+bool spawnFloat(
+  const EntityKeys& keys,
+  const std::string_view key,
+  const std::string_view fallback,
+  float& out)
+{
+  // Dict.cpp GetFloat( key, defaultString, out ): out = atof( s ); return found
+  const auto* value = findKey(keys, key);
+  out = cFloat(value ? std::string_view{*value} : fallback);
+  return value != nullptr;
+}
+
+int spawnInt(
+  const EntityKeys& keys, const std::string_view key, const std::string_view fallback)
+{
+  return cInt(spawnString(keys, key, fallback));
+}
+
+int spawnIntOr(const EntityKeys& keys, const std::string_view key, const int fallback)
+{
+  // Dict.cpp GetInt( key, defaultInt, out ): FindKey, atoi of the value or the default
+  const auto* value = findKey(keys, key);
+  return value ? cInt(*value) : fallback;
+}
+
+bool spawnMatrix(
+  const EntityKeys& keys,
+  const std::string_view key,
+  const std::string_view fallback,
+  EngineMat3& out)
+{
+  // Dict.cpp GetMatrix: out.Identity(); sscanf nine floats into out[0].x ... out[2].z
+  const auto* value = findKey(keys, key);
+  out = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  scanFloats(value ? std::string_view{*value} : fallback, out.data(), 9);
+  return value != nullptr;
+}
+
+bool spawnAngles(
+  const EntityKeys& keys,
+  const std::string_view key,
+  const std::string_view fallback,
+  std::array<float, 3>& out)
+{
+  // Dict.cpp GetAngles: out.Zero(); sscanf( s, "%f %f %f", pitch, yaw, roll )
+  const auto* value = findKey(keys, key);
+  out = {0, 0, 0};
+  scanFloats(value ? std::string_view{*value} : fallback, out.data(), 3);
+  return value != nullptr;
+}
+
 EntityKeys mergeSpawnArgs(const EntityKeys& mapKeys, const EntityKeys* defKeys)
 {
   auto merged = EntityKeys{};

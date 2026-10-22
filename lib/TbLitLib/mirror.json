@@ -8295,6 +8295,343 @@
       "sinkbroom": [],
       "staticKind": "idempotent table",
       "reason": "constant aggregates; boxEdgePolygons is not const, but only the commented-out generators name it, so nothing writes it"
+    },
+    {
+      "id": "M-LIGHT-FN-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            84,
+            219
+          ],
+          "anchor": "idGameEdit::ParseSpawnArgsToRenderLight",
+          "sha256": "434ead152176f5ac4251cbdc643aa507bc08a2d877ec7bd63594486134013c1f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightParse.cpp",
+          "symbol": "parseLight, parseGoodTarget, parseLightAxis"
+        }
+      ],
+      "note": "C5, SC54-SC56, A15: over the merged dictionary (mergeSpawnArgs, findKey: case-insensitive, the last duplicate wins, A10). Differences: the light's material is not looked up here; texture keeps the name FindMaterial( texture, false ) is asked for, which LightData resolves; gameLocal.Printf's bad target info becomes a warning of the parse; shaderParm4's -MS2SEC( gameLocal.time ) is -0 (K5)"
+    },
+    {
+      "id": "M-LIGHT-FN-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/MathLight.cpp",
+          "lines": [
+            45,
+            118
+          ],
+          "anchor": "ML_ParseFromDict",
+          "sha256": "fc16f88363dcfeaeac29ff57d7aff69a96cc94672fb203564c96d84f947676b3"
+        },
+        {
+          "file": "neo/renderer/MathLight.cpp",
+          "lines": [
+            200,
+            221
+          ],
+          "anchor": "ML_StyleMultiplier",
+          "sha256": "ad6cdf177e88b1488501865d98e9bfb69d0a80a11f7139b93777942e3c89c1cc"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightParse.cpp",
+          "symbol": "parseMathLight, mathLightStyleMultiplier"
+        }
+      ],
+      "note": "F16, D20: as the engine reads the math_* keys at engineCommit, quirks kept: the seed is clamped, the struct is cleared (a disabled block keeps type 0 until ParseSpawnArgsToRenderLight forces it, and style -1), an unknown math_type warns through idLib::Warning (here a warning of the parse) and takes the seed, unknown falloff and pattern names take the defaults, the four floats are clamped with idMath::ClampFloat (a NaN passes), math_style outside 0-11 is -1. idStr::Icmp is mirrored as an ASCII case-insensitive comparison"
+    },
+    {
+      "id": "M-LIGHT-FN-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            464,
+            628
+          ],
+          "anchor": "idLight::Spawn",
+          "sha256": "be0adb36fc543df8cb066a9e9d2199a7b867ef8429adf13044d310e1c89c7668"
+        },
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            635,
+            666
+          ],
+          "anchor": "idLight::SetLightLevel",
+          "sha256": "4cfe84e5db2da564da0b940a54de00ab15a3bddb408e3ac69056430f5c729be5"
+        },
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            838,
+            850
+          ],
+          "anchor": "idLight::Off",
+          "sha256": "86aabd883f9bcc3def154bd85c18d8758543cc72b06e59e48cebb87e94541ca2"
+        },
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            1113,
+            1220
+          ],
+          "anchor": "idLight::SharedThink",
+          "sha256": "6950315cf5314d2cae4ab4a7e90a28d8532568ea67a8383bce287dffd534ee00"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            455,
+            469
+          ],
+          "anchor": "predef_lightstyles",
+          "sha256": "ed1f14839e1b60165ba49f4cbbd6dcfcee47136c6e0f7cf2369983b2045dd93d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightParse.cpp",
+          "symbol": "applySpawn"
+        }
+      ],
+      "note": "SC57, K5: the effects on the render light at time 0: levels (\"1\"), start_off (Off, then SetLightLevel: the base colour times currentLevel / levels = 0, which is also the math style's base), ls_frametime (\"100\"), style (GetInt with -1), num_styles and light_style%d (\"\" each, or the copied Material.h's Quake table, each overridable); then the first SharedThink: the math style scales the colour by ML_StyleMultiplier at time 0, and the radius style's lightval is the first character's (char - 'a') * 0.071429f clamped to 0-20 (at time 0 the frame is 0 and the back-lerp 0) times the parsed radius. The Midnight CTF branch is multiplayer and not mirrored"
+    },
+    {
+      "id": "M-LIGHT-FN-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            343,
+            351
+          ],
+          "anchor": "idDict::GetFloat( key, defaultString, out )",
+          "sha256": "31a1208d5443aaf3352518a33c01456d87b76064a0624cc2353a4d2c3045a89a"
+        },
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            448,
+            462
+          ],
+          "anchor": "idDict::GetAngles",
+          "sha256": "dc9f16fbccaadd4f9a8a78b1961156731095c8e2567608d847c664a55b9f19f7"
+        },
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            532,
+            546
+          ],
+          "anchor": "idDict::GetMatrix",
+          "sha256": "c0d8f5438e756e36d5e6aaeb86ee88055958ec1fd950346c2d49beb14f285e62"
+        },
+        {
+          "file": "neo/idlib/Dict.h",
+          "lines": [
+            341,
+            344
+          ],
+          "anchor": "idDict::GetInt( key, defaultString )",
+          "sha256": "7449412825fb7de3c8ac9a4ed370f8fb8370d19a0166326d95b2b8b86d8a620f"
+        },
+        {
+          "file": "neo/idlib/Dict.h",
+          "lines": [
+            361,
+            369
+          ],
+          "anchor": "idDict::GetInt( key, defaultInt )",
+          "sha256": "f67ed984925756f29e514fc6d324ff9432abfd4472e7faa4bd5f7936ef9188c5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EntityState.cpp",
+          "symbol": "spawnFloat (found), spawnInt, spawnIntOr, spawnMatrix, spawnAngles"
+        }
+      ],
+      "note": "the getters LightParse adds to LP1b.2's (spawnString, spawnFloat, spawnBool, spawnVector), on the same \"C\"-locale %f and atoi scanners: GetMatrix fills the identity before its nine floats, GetAngles zero before its three; atof is read as float, as LP1b.2's spawnFloat reads it"
+    },
+    {
+      "id": "M-LIGHT-PURE-01",
+      "kind": "pure-function",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Vector.h",
+          "lines": [
+            644,
+            740
+          ],
+          "anchor": "idVec3::FixDegenerateNormal",
+          "sha256": "4e1f2df4d77da6a3981eb36ec6043a0919830b0d6db9458a9aa3986fda840dd6"
+        },
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            1528,
+            1535
+          ],
+          "anchor": "idMath::AngleNormalize360",
+          "sha256": "da2df869a03c434db076be4a7b94c729553a8ab395090284ae807e7adcee1599"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            455,
+            469
+          ],
+          "anchor": "predef_lightstyles",
+          "sha256": "ed1f14839e1b60165ba49f4cbbd6dcfcee47136c6e0f7cf2369983b2045dd93d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineFixDegenerateNormal, engineAngleNormalize360, engineDefaultLightStyles"
+        }
+      ],
+      "note": "the copied inline code and table themselves (Vector.h, Math.h, Material.h in TbLitIdLib), called through the facade: they read only their arguments and a constant table, so any thread (C24). parseLight also calls LP1b.2's engineAnglesToMat3 (idAngles::ToMat3, Angles.cpp)"
+    },
+    {
+      "id": "M-LIGHT-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            487,
+            492
+          ],
+          "anchor": "levels <= 0: gameLocal.Error",
+          "sha256": "b80d3f2cad1ff6be41e26131357de13b9207aa0b937308b22d4433523688896f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightParse.cpp",
+          "symbol": "applySpawn"
+        }
+      ],
+      "note": "the game stops the map at a light with levels <= 0; the preview warns and keeps the light (A15's brief: the light kept)"
+    },
+    {
+      "id": "M-LIGHT-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            1026,
+            1074
+          ],
+          "anchor": "idLight::Present: renderLight.axis and origin from the physics pose",
+          "sha256": "7cae5992f321ea444ad7896f8f9e6e0ab83f9d4f2bcf5ecbe5df8afa6c3d6df8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightParse.cpp",
+          "symbol": "parseLight"
+        }
+      ],
+      "note": "the game presents the light at physics origin + axis · localLightOrigin with axis localLightAxis · physics axis, a float round trip of the parsed pose through the entity's own (Spawn, :470-475); the preview keeps the parsed pose. They are equal for a light without a rotation or an offset light_origin, and may differ in the last bits otherwise; LP2's parity rows show whether it matters"
+    },
+    {
+      "id": "M-LIGHT-NC-02",
+      "kind": "not-copied",
+      "engine": [
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            521,
+            528
+          ],
+          "anchor": "health, broken, break, count",
+          "sha256": "1ec685317c841d9ba89b17b612d25908cc70d08d28c73641e70102f588dac047"
+        },
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            563,
+            622
+          ],
+          "anchor": "the breakable light and the modelTarget link",
+          "sha256": "ec03ddacc92d01edbafbb6560c519ac611e16b380b2414e3015bda777130c700"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightParse.cpp",
+          "symbol": "ParsedLight::ignoredKeys"
+        }
+      ],
+      "note": "game behaviour (damage, the broken model, the func_static the light colours, the demonic material's caching): recorded in ignoredKeys as found, not acted on"
+    },
+    {
+      "id": "M-LIGHT-GUARD-01",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            464,
+            628
+          ],
+          "anchor": "idLight::Spawn: num_styles",
+          "sha256": "be0adb36fc543df8cb066a9e9d2199a7b867ef8429adf13044d310e1c89c7668"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightParse.cpp",
+          "symbol": "MaxLightStyles"
+        }
+      ],
+      "note": "num_styles has no bound in the engine, which appends that many idStr; the preview reads at most 1024 light_style keys and warns beyond"
+    },
+    {
+      "id": "M-LIGHT-GUARD-02",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            635,
+            666
+          ],
+          "anchor": "SetLightLevel: currentLevel / levels",
+          "sha256": "4cfe84e5db2da564da0b940a54de00ab15a3bddb408e3ac69056430f5c729be5"
+        },
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            1113,
+            1220
+          ],
+          "anchor": "SharedThink: otime / lightStyleFrameTime",
+          "sha256": "6950315cf5314d2cae4ab4a7e90a28d8532568ea67a8383bce287dffd534ee00"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightParse.cpp",
+          "symbol": "applySpawn"
+        }
+      ],
+      "note": "two divisions by zero the engine reaches only past an Error or with a bad key: start_off with levels 0 (0 / 0, NaN colour; the game has already stopped at the levels Error) is intensity 0, and a radius style with ls_frametime 0 (0.0f / 0, a NaN radius) takes the style's first character with a warning"
     }
   ],
   "retired": [

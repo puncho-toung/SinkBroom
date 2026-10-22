@@ -34,6 +34,8 @@
 
 #include <array>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace tb::lit
 {
@@ -96,5 +98,18 @@ EngineFrustumCorners engineFrustumCorners(
  */
 EngineFrustumCull engineCullFrustumCorners(
   const EngineFrustumCorners& corners, const EnginePlane& plane);
+
+// ----- what ParseSpawnArgsToRenderLight and idLight::Spawn call (the copy, pure) -----
+
+// idVec3::FixDegenerateNormal (Vector.h): an axial vector becomes the unit axis its
+// non-zero component points along; zero becomes (0 0 -1)
+EngineVec3 engineFixDegenerateNormal(const EngineVec3& v);
+
+// idMath::AngleNormalize360 (Math.h)
+float engineAngleNormalize360(float angle);
+
+// renderer/Material.h's predef_lightstyles, the Quake light styles idLight::Spawn falls
+// back to (ML_NUM_STYLES of them)
+std::vector<std::string> engineDefaultLightStyles();
 
 } // namespace tb::lit
