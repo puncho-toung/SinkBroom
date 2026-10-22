@@ -182,6 +182,27 @@ void ImageSlots::dropPixels(const ImageSlotId id)
   }
 }
 
+void ImageSlots::refuse(const ImageSlotId id, std::string reason)
+{
+  auto& slot = m_slots[id];
+  m_pending.erase(id);
+  // what was written stays bound until the slot is asked again; nothing more is written
+  slot.pixels.reset();
+  slot.state = State::Default;
+  slot.reason = std::move(reason);
+}
+
+ImageSlotId ImageSlots::provideForTesting(
+  const MaterialImageKey& key, std::shared_ptr<const CachedImage> image)
+{
+  const auto id = request(key);
+  auto lookup = ImageLookup{};
+  lookup.state = ImageLookup::State::Ready;
+  lookup.image = std::move(image);
+  adopt(id, lookup, m_seenChanges);
+  return id;
+}
+
 void ImageSlots::dropTexture(const ImageSlotId id, const std::uint64_t frame)
 {
   reRequest(id, frame);
@@ -257,6 +278,12 @@ std::vector<ImageSlotId> ImageSlots::loading() const
     }
   }
   return ids;
+}
+
+bool ImageSlots::hasLoading() const
+{
+  return std::ranges::any_of(
+    m_slots, [](const Slot& slot) { return slot.state == State::Loading; });
 }
 
 std::size_t ImageSlots::resident() const

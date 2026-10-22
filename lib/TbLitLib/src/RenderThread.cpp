@@ -174,6 +174,7 @@ Result<void> RenderThread::createFrameResources(
   m_commandList = device.createCommandList(
     nvrhi::CommandListParameters{}.setUploadChunkSize(UploadChunkBytes));
   m_arenas.setDevice(device, ArenaBytes);
+  m_textureUploads.setD24s8Supported(m_device.gpu().d24s8Supported);
   for (auto& event : m_frameEvents)
   {
     event = device.createEventQuery();
@@ -558,16 +559,29 @@ bool RenderThread::syncChunks()
 
 bool RenderThread::recordUploads(nvrhi::ICommandList& commandList)
 {
-  // §3.10, D78: before the frame's first pass, within the frame's cap
+  // §3.10, D78: before the frame's first pass, within the frame's cap: the chunks first,
+  // then the textures, low mips first (P2.14c)
   const auto cap = m_uploadCap.load();
-  return m_arenas.recordUploads(
-           commandList, arenaChunks(), cap - std::min(cap, m_frameUploadBytes))
-         | kdl::transform([&](const std::uint64_t bytes) {
-             m_frameUploadBytes += bytes;
-             return true;
-           })
-         | kdl::if_error([&](const auto& e) { m_events.markFailed(e.msg); })
-         | kdl::value_or(false);
+  const auto recorded =
+    m_arenas.recordUploads(
+      commandList, arenaChunks(), cap - std::min(cap, m_frameUploadBytes))
+    | kdl::transform([&](const std::uint64_t bytes) {
+        m_frameUploadBytes += bytes;
+        return true;
+      })
+    | kdl::if_error([&](const auto& e) { m_events.markFailed(e.msg); })
+    | kdl::value_or(false);
+  if (!recorded)
+  {
+    return false;
+  }
+  const auto texturesLeft = m_textureUploads.record(
+    m_device.device(), commandList, m_images, cap, m_frameUploadBytes);
+  // D77: what is left for the next frame makes this one unconverged
+  m_unconverged = m_arenas.pending() || texturesLeft;
+  // C28: the slots whose written range grew lose their sets before any pass binds them
+  eraseChangedSets();
+  return true;
 }
 
 void RenderThread::applyHeadlessResize()
@@ -645,6 +659,7 @@ void RenderThread::runFrameHooks(nvrhi::ICommandList& commandList)
     m_pipelines,
     m_images,
     m_bindingSets,
+    m_textureUploads,
     m_frameUploadBytes};
   if (everyFrame)
   {
@@ -1005,9 +1020,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       {
         return FrameOutcome::Stopped;
       }
-      // D77: what is left for the next frame makes this one unconverged
-      m_unconverged = m_arenas.pending();
       runFrameHooks(commandList);
+      // a slot whose image arrived during the frame is written in the next (D77)
+      m_unconverged = m_unconverged || m_images.hasLoading();
       const auto clearTarget =
         m_frameResources.resolve(clearPass)
         | kdl::transform([](const PassResources& r) { return r.writes.front().texture; })

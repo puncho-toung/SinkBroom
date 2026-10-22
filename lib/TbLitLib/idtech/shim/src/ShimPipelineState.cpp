@@ -96,9 +96,15 @@ void engineRenderState(
   cache.GetRenderState(stateBits, key, renderState);
 }
 
-int engineRowPitch(const int textureFormat, const int width)
+std::optional<int> engineRowPitch(const int textureFormat, const int width)
 {
-  return GetRowPitch(textureFormat_t(textureFormat), width);
+  // T0.14: BitsForFormat knows FMT_NONE (0 bits) to FMT_RGBA16S; outside them it asserts
+  if (textureFormat <= int(FMT_NONE) || textureFormat > int(FMT_RGBA16S) || width < 1)
+  {
+    return std::nullopt;
+  }
+  const auto pitch = GetRowPitch(textureFormat_t(textureFormat), width);
+  return pitch > 0 ? std::optional{pitch} : std::nullopt;
 }
 
 } // namespace tb::lit

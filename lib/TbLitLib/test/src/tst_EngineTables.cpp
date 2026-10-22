@@ -552,6 +552,13 @@ TEST_CASE("EnginePipelineState")
     CHECK(engineRowPitch(ei::FormatRgba8, 10) == 40);
     CHECK(engineRowPitch(ei::FormatRgb565, 10) == 20);
     CHECK(engineRowPitch(ei::FormatRgba16f, 3) == 24);
+    // T0.14: a format the copy does not know, FMT_NONE and an empty row have no pitch
+    CHECK_FALSE(engineRowPitch(-1, 8));
+    CHECK_FALSE(engineRowPitch(ei::FormatNone, 8));
+    CHECK_FALSE(engineRowPitch(ei::FormatRgba16s + 1, 8));
+    CHECK_FALSE(engineRowPitch(1000, 8));
+    CHECK_FALSE(engineRowPitch(ei::FormatRgba8, 0));
+    CHECK(engineRowPitch(ei::FormatRgba16s, 2) == 16);
     // the uncompressed formats agree with the mirrored BitsForFormat (LP1c.1)
     for (const auto format :
          {ei::FormatRgba8,

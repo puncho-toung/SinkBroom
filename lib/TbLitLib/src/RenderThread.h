@@ -25,6 +25,7 @@
 #include "GeometryArenas.h"
 #include "ImageSlots.h"
 #include "PipelineCompiler.h"
+#include "TextureUploads.h"
 #include "base/Macros.h"
 #include "base/Result.h"
 #include "lit/FramePacer.h"
@@ -77,6 +78,7 @@ struct RenderFrameAccess
   // C28: the image slots and the binding sets
   ImageSlots& images;
   BindingSetCache& bindingSets;
+  TextureUploads& textures;
   // the bytes the frame has uploaded before the hook runs
   std::uint64_t bytesUploaded;
 };
@@ -140,6 +142,8 @@ private:
   // the material table the slots last looked at for arrivals
   ImageSlots m_images;
   BindingSetCache m_bindingSets{BindingSetCacheSize};
+  // LP2.1 (SC268, P2.14c): the textures made from the slots' images, low mips first
+  TextureUploads m_textureUploads;
   std::uint64_t m_arrivalsCheckedVersion = 0;
   // D77: a texture arrival triggers a frame at most every TextureArrivalInterval
   FrameClock::time_point m_lastArrivalTrigger;

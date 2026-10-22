@@ -26,6 +26,7 @@
 #include "lit/EnginePipelineState.h"
 #include "lit/EngineTables.h"
 #include "lit/FramePacer.h"
+#include "lit/ImageCache.h"
 #include "lit/LightRecord.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
@@ -35,6 +36,7 @@
 
 #include "kd/result.h"
 
+#include <fmt/format.h>
 #include <nvrhi/nvrhi.h>
 #include <vulkan/vulkan.hpp>
 
@@ -1814,6 +1816,123 @@ ArenaState arenaState(LitSession& session)
   return state;
 }
 
+using CachedImages =
+  std::vector<std::pair<std::string, std::shared_ptr<const CachedImage>>>;
+
+// the LP1c cache fixtures, read as the cache reader reads them (RGB565 as RGBA8)
+CachedImages goldenCaches()
+{
+  auto caches = CachedImages{};
+  const auto root = litFixtureFolder() / "goldens" / "lp1c" / "generated" / "images";
+  for (const auto& entry : std::filesystem::recursive_directory_iterator{root})
+  {
+    if (entry.path().extension() == ".bimage")
+    {
+      auto image = readBimage(readTextFile(entry.path())) | kdl::value();
+      caches.emplace_back(
+        entry.path().lexically_relative(root).generic_string(),
+        std::make_shared<const CachedImage>(std::move(image)));
+    }
+  }
+  return caches;
+}
+
+// a 2D image of one format with every level down to 1 × 1 (blocks down to 4 × 4), each
+// level's bytes value + its level
+std::shared_ptr<const CachedImage> syntheticImage(
+  const int size, const int format, const std::uint8_t value, const int sides = 1)
+{
+  namespace ei = engine_image;
+  auto image = CachedImage{};
+  image.textureType = sides == 6 ? ei::TypeCubic : ei::Type2D;
+  image.format = format;
+  image.storedFormat = format;
+  image.width = size;
+  image.height = size;
+  const auto block = format == ei::FormatDxt1   ? 8
+                     : format == ei::FormatDxt5 ? 16
+                     : format == ei::FormatBc6h ? 16
+                                                : 0;
+  for (auto level = 0; (size >> level) >= (block ? 4 : 1); ++level)
+  {
+    for (auto side = 0; side < sides; ++side)
+    {
+      const auto width = size >> level;
+      const auto bytes =
+        block ? std::size_t(width / 4) * std::size_t(width / 4) * std::size_t(block)
+              : std::size_t(width) * std::size_t(width) * 4;
+      image.levels.push_back(
+        CachedImageLevel{level, side, width, width, image.data.size(), bytes});
+      image.data.resize(
+        image.data.size() + bytes, std::uint8_t(value + level * 8 + side * 40));
+    }
+    image.numLevels = level + 1;
+  }
+  return std::make_shared<const CachedImage>(std::move(image));
+}
+
+MaterialImageKey testImageKey(const std::string& name)
+{
+  auto key = MaterialImageKey{};
+  key.name = name;
+  key.usage = engine_image::UsageDefault;
+  key.filter = engine_image::FilterDefault;
+  return key;
+}
+
+struct SlotSeen
+{
+  ImageSlots::State state = ImageSlots::State::Pending;
+  std::uint64_t version = 0;
+  int firstWrittenMip = 0;
+  int mipLevels = 0;
+  nvrhi::TextureDesc desc;
+  std::string reason;
+  nvrhi::TextureSubresourceSet bound;
+  bool boundIntrinsic = false;
+};
+
+SlotSeen slotSeen(const ImageSlots& slots, const ImageSlotId id)
+{
+  const auto* slot = slots.slot(id);
+  auto seen = SlotSeen{};
+  seen.state = slot->state;
+  seen.version = slot->version;
+  seen.firstWrittenMip = slot->firstWrittenMip;
+  seen.mipLevels = slot->mipLevels;
+  seen.reason = slot->reason;
+  if (slot->texture)
+  {
+    seen.desc = slot->texture->getDesc();
+  }
+  const auto binding = slots.binding(id);
+  seen.bound = binding.subresources;
+  seen.boundIntrinsic = binding.intrinsic;
+  return seen;
+}
+
+// waits until every slot of ids is Resident (or Default), asking each frame
+bool waitForSlots(
+  LitSession& session,
+  const std::vector<ImageSlotId>& ids,
+  const std::chrono::milliseconds timeout = 20000ms)
+{
+  return waitFor(
+    [&] {
+      auto settled = false;
+      inFrame(session, [&](RenderFrameAccess& access) {
+        settled = std::ranges::all_of(ids, [&](const ImageSlotId id) {
+          const auto state = access.images.slot(id)->state;
+          return state == ImageSlots::State::Resident
+                 || state == ImageSlots::State::Default;
+        });
+      });
+      return settled;
+    },
+    timeout,
+    false);
+}
+
 } // namespace
 
 // LP2.1: the render thread's GPU resources (FrameResources, the arenas, the image slots
@@ -2255,6 +2374,304 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     }
     CHECK(resetDispatcher());
     messages.print("stop during uploads, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("SC265-SC268: the LP1c caches and a BC6H image become textures")
+  {
+    namespace ei = engine_image;
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+
+      auto caches = goldenCaches();
+      REQUIRE(caches.size() == 18u);
+      // the HDR panoramas' BC6H caches are 8 MB and only their headers are fixtures: a
+      // synthetic BC6H image of arbitrary blocks stands in
+      caches.emplace_back("bc6h", syntheticImage(16, ei::FormatBc6h, 7));
+      auto ids = std::vector<ImageSlotId>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        for (const auto& [name, image] : caches)
+        {
+          ids.push_back(access.images.provideForTesting(testImageKey(name), image));
+        }
+      }));
+      REQUIRE(waitForSlots(*session, ids));
+
+      auto seen = std::vector<SlotSeen>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        for (const auto id : ids)
+        {
+          seen.push_back(slotSeen(access.images, id));
+        }
+      }));
+      const auto d24s8 = session->deviceFacts().d24s8Supported;
+      for (std::size_t i = 0; i < caches.size(); ++i)
+      {
+        const auto& image = *caches[i].second;
+        CAPTURE(caches[i].first, seen[i].reason);
+        CHECK(seen[i].state == ImageSlots::State::Resident);
+        CHECK(seen[i].desc.format == *engineTextureFormat(image.format, d24s8));
+        CHECK(seen[i].desc.mipLevels == std::uint32_t(image.numLevels));
+        CHECK(seen[i].firstWrittenMip == 0);
+        CHECK(seen[i].bound.numMipLevels == std::uint32_t(image.numLevels));
+        CHECK(
+          seen[i].desc.dimension
+          == (image.textureType == ei::TypeCubic ? nvrhi::TextureDimension::TextureCube : nvrhi::TextureDimension::Texture2D));
+        const auto mapping = engineComponentMapping(image.format, image.colorFormat);
+        CHECK(seen[i].desc.componentMapping.r == mapping.r);
+        CHECK(seen[i].desc.componentMapping.g == mapping.g);
+        CHECK(seen[i].desc.componentMapping.b == mapping.b);
+        CHECK(seen[i].desc.componentMapping.a == mapping.a);
+      }
+      std::cout << "LP1c caches as textures:";
+      for (std::size_t i = 0; i < caches.size(); ++i)
+      {
+        std::cout << " " << caches[i].first << " ("
+                  << nvrhi::getFormatInfo(seen[i].desc.format).name << ")";
+      }
+      std::cout << "\n";
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("LP1c caches, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("200 textures uploaded, then Stop at the baseline")
+  {
+    namespace ei = engine_image;
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+      settle(*session);
+      const auto baseline = session->deviceMemoryAllocations();
+
+      auto ids = std::vector<ImageSlotId>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        for (auto i = 0; i < 200; ++i)
+        {
+          ids.push_back(access.images.provideForTesting(
+            testImageKey(fmt::format("textures/lp2/t{}", i)),
+            syntheticImage(
+              i % 2 ? 64 : 32,
+              i % 3 ? ei::FormatRgba8 : ei::FormatDxt5,
+              std::uint8_t(i))));
+        }
+      }));
+      REQUIRE(waitForSlots(*session, ids));
+      auto resident = std::size_t{0};
+      auto bytes = std::uint64_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        resident = access.images.resident();
+        bytes = access.images.textureBytes();
+      }));
+      CHECK(resident == 200u);
+      const auto withTextures = session->deviceMemoryAllocations();
+      std::cout << "200 textures (" << bytes << " bytes): allocations " << baseline
+                << " -> " << withTextures << "\n";
+      // one allocation per texture (D72 measures what that means for a whole map)
+      CHECK(withTextures - baseline >= 200);
+
+      teardown(*session);
+      const auto report = session->teardownReport();
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      REQUIRE(report.vramAtStart);
+      REQUIRE(report.vramAtStop);
+      const auto startMb = double(report.vramAtStart->usedBytes) / (1024.0 * 1024.0);
+      const auto stopMb = double(report.vramAtStop->usedBytes) / (1024.0 * 1024.0);
+      std::cout << "200 textures: VRAM at start " << startMb << " MB, at stop " << stopMb
+                << " MB\n";
+      CHECK(stopMb <= startMb + 1.0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("200 textures, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION(
+    "P2.14c: levels over three frames, smallest first, never an unwritten one bound")
+  {
+    namespace ei = engine_image;
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+
+      // 256² RGBA8, 9 levels: 2 to 8 are 21844 bytes, 1 is 65536, 0 is 262144; under a
+      // 70000-byte cap they take three frames, level 0 alone as its frame's first upload
+      session->setUploadCapForTesting(70000);
+      auto mutex = std::mutex{};
+      auto frames = std::vector<std::pair<std::uint64_t, SlotSeen>>{};
+      auto id = NoImageSlot;
+      session->setEveryFrameHookForTesting([&](RenderFrameAccess& access) {
+        const auto lock = std::scoped_lock{mutex};
+        if (id != NoImageSlot && access.bytesUploaded > 0)
+        {
+          frames.emplace_back(access.bytesUploaded, slotSeen(access.images, id));
+        }
+      });
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        const auto lock = std::scoped_lock{mutex};
+        id = access.images.provideForTesting(
+          testImageKey("textures/lp2/levels"), syntheticImage(256, ei::FormatRgba8, 1));
+      }));
+      REQUIRE(waitForSlots(*session, {id}));
+      session->setEveryFrameHookForTesting({});
+
+      const auto lock = std::scoped_lock{mutex};
+      REQUIRE(frames.size() == 3u);
+      CHECK(frames[0].first == 21844u);
+      CHECK(frames[1].first == 65536u);
+      CHECK(frames[2].first == 262144u);
+      const auto firsts = std::vector<int>{2, 1, 0};
+      const auto versions = std::vector<std::uint64_t>{8, 9, 10};
+      for (std::size_t i = 0; i < frames.size(); ++i)
+      {
+        CAPTURE(i);
+        const auto& seen = frames[i].second;
+        CHECK(seen.firstWrittenMip == firsts[i]);
+        CHECK(seen.version == versions[i]);
+        // the binding covers exactly the written levels
+        CHECK(seen.bound.baseMipLevel == std::uint32_t(firsts[i]));
+        CHECK(seen.bound.numMipLevels == std::uint32_t(9 - firsts[i]));
+        CHECK_FALSE(seen.boundIntrinsic);
+      }
+      std::cout << "levels over three frames: bytes " << frames[0].first << ", "
+                << frames[1].first << ", " << frames[2].first << "\n";
+    }
+    CHECK(resetDispatcher());
+    messages.print("levels over three frames, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("SC268: a cube's six sides land in their slices")
+  {
+    namespace ei = engine_image;
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+
+      // the LP1c sky cube (BC3, level-major records) and an RGBA8 cube of a colour per
+      // side
+      auto sky = std::shared_ptr<const CachedImage>{};
+      for (const auto& [name, image] : goldenCaches())
+      {
+        if (image->textureType == ei::TypeCubic)
+        {
+          sky = image;
+        }
+      }
+      REQUIRE(sky);
+      const auto colours = syntheticImage(4, ei::FormatRgba8, 10, 6);
+      auto ids = std::vector<ImageSlotId>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        // a permanent ShaderResource texture is never a copy source
+        access.textures.setPermanentStateForTesting(false);
+        ids.push_back(access.images.provideForTesting(testImageKey("env/sky"), sky));
+        ids.push_back(
+          access.images.provideForTesting(testImageKey("env/colours"), colours));
+      }));
+      REQUIRE(waitForSlots(*session, ids));
+
+      // each side's first 4 × 4 block (one texel of the RGBA8 cube) copied into a staging
+      // texture of its own, read back two frames later
+      auto staging = std::vector<std::pair<nvrhi::StagingTextureHandle, std::size_t>>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        for (std::size_t c = 0; c < ids.size(); ++c)
+        {
+          auto* texture = access.images.slot(ids[c])->texture.Get();
+          const auto format = texture->getDesc().format;
+          const auto size = c == 0 ? 4u : 1u;
+          for (std::uint32_t side = 0; side < 6; ++side)
+          {
+            auto handle = access.device.createStagingTexture(
+              nvrhi::TextureDesc{}.setWidth(size).setHeight(size).setFormat(format),
+              nvrhi::CpuAccessMode::Read);
+            access.commandList.copyTexture(
+              handle,
+              nvrhi::TextureSlice{}.setSize(size, size, 1),
+              texture,
+              nvrhi::TextureSlice{}.setSize(size, size, 1).setArraySlice(side));
+            staging.emplace_back(std::move(handle), c);
+          }
+        }
+      }));
+      settle(*session);
+      auto read = std::vector<std::vector<std::uint8_t>>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        for (auto& [handle, c] : staging)
+        {
+          auto pitch = std::size_t{0};
+          const auto* bytes =
+            static_cast<const std::uint8_t*>(access.device.mapStagingTexture(
+              handle, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch));
+
+          read.emplace_back(bytes, bytes + (c == 0 ? 16 : 4));
+          access.device.unmapStagingTexture(handle);
+        }
+        staging.clear();
+      }));
+      REQUIRE(read.size() == 12u);
+      for (std::size_t side = 0; side < 6; ++side)
+      {
+        CAPTURE(side);
+        // the cache's record of level 0 on this side (level-major: record side)
+        const auto& record = sky->levels[side];
+        REQUIRE(record.level == 0);
+        REQUIRE(record.destZ == int(side));
+        const auto expected = std::vector<std::uint8_t>(
+          sky->data.begin() + std::ptrdiff_t(record.offset),
+          sky->data.begin() + std::ptrdiff_t(record.offset) + 16);
+        CHECK(read[side] == expected);
+        // the colour cube's side s is 10 + 40 s in every channel
+        CHECK(
+          read[6 + side] == std::vector<std::uint8_t>(4, std::uint8_t(10 + 40 * side)));
+      }
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("cube sides, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }

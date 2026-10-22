@@ -182,6 +182,11 @@ public:
   void levelsWritten(ImageSlotId slot, int firstMip);
   // every level is written: the bytes are let go (P2.14a)
   void dropPixels(ImageSlotId slot);
+  // the uploader cannot make the image (a format the engine refuses): Default, with why
+  void refuse(ImageSlotId slot, std::string reason);
+  // tests: the slot of key holds image, as if the service had answered it (Loading)
+  ImageSlotId provideForTesting(
+    const MaterialImageKey& key, std::shared_ptr<const CachedImage> image);
   // the slot's texture is let go and it is asked again (eviction, a test's drop): Pending
   // and its intrinsic until the texture is back
   void dropTexture(ImageSlotId slot, std::uint64_t frame);
@@ -195,6 +200,7 @@ public:
   std::size_t pending() const;
   // the slots whose images wait to be written (Loading), in id order
   std::vector<ImageSlotId> loading() const;
+  bool hasLoading() const;
   // slots with at least one written level, and their textures' bytes (C16, C11)
   std::size_t resident() const;
   std::uint64_t textureBytes() const;

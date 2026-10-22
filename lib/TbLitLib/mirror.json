@@ -13301,6 +13301,85 @@
         }
       ],
       "note": "LP2.1 step 4 (C28, P2.14d): the engine loads every image of a level before it draws (ActuallyLoadImage writes the whole image in one command list), so it never binds a stand-in; the preview loads images while it draws, so a slot whose texture has not arrived, and one the service has no image for (Default), binds its usage's intrinsic: TD_BUMP _flat, TD_LIGHT (falloff and projection images) _white, every other usage _default. A settled frame (D77) has every visible texture at its full mips, so the stand-in never reaches a parity shot"
+    },
+    {
+      "id": "M-TEX-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/NVRHI/Image_NVRHI.cpp",
+          "lines": [
+            345,
+            630
+          ],
+          "anchor": "idImage::AllocImage",
+          "sha256": "9eeb73865a25001f541fdb2c69862434b90a2e88a6b85f2444d10a04e479e9db"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            878,
+            891
+          ],
+          "anchor": "idImage::ActuallyLoadImage, the upload",
+          "sha256": "34597061dda9e852b194e06ea93429461272e2ccfaa68bb4648f8207e8ed5220"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/TextureUploads.cpp",
+          "symbol": "engineTextureDesc, levelUploadBytes, TextureUploads::record"
+        }
+      ],
+      "note": "LP2.1 step 5 (SC265-SC268, P2.14c/e): an image of the cache's shape becomes the texture AllocImage makes: the format map (engineTextureFormat, M-TABLE), the component mapping (engineComponentMapping), Texture2D or TextureCube with 6 slices (DTT_2D_ARRAY a Texture2DArray of 6), numLevels levels, a compressed image's size rounded up to whole 4 x 4 blocks (473-477); every level record is written with writeTexture(texture, destZ, level, bytes, GetRowPitch(format, width)) and the texture ends ShaderResource with setPermanentTextureState and commitBarriers (890-891). RGB565 caches arrive as RGBA8 (the cache reader's expansion, as BinaryImage expands them), source images in the engine's layouts as RGBA8 or R11G11B10F (D24): nothing is converted on the render thread. Not as the engine: the texture is not allocated through VMA (one NVRHI allocation each, D72), it is created with ShaderResource as its kept initial state instead of being tracked from Common, and its levels may arrive over several frames (M-TEX-DIFF-01). The cache's BC levels are unpadded, so the pitch is exactly one block row; an image whose level holds fewer bytes than its rows need, or whose format has no NVRHI format or pitch (BC7, ETC1), makes its slot Default with the reason"
+    },
+    {
+      "id": "M-TEX-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            878,
+            891
+          ],
+          "anchor": "idImage::ActuallyLoadImage, the upload",
+          "sha256": "34597061dda9e852b194e06ea93429461272e2ccfaa68bb4648f8207e8ed5220"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/TextureUploads.cpp",
+          "symbol": "TextureUploads::record"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageSlots.cpp",
+          "symbol": "ImageSlots::levelsWritten, ImageSlots::binding"
+        }
+      ],
+      "note": "LP2.1 step 5 (§3.10, D78, P2.14c): the engine writes every level of an image in one command list before it draws; the preview writes the smallest levels first, a level (all six sides of a cube's) at a time, within the frame's 32 MB upload cap (a level larger than the cap goes alone as its frame's first upload), and binds the texture through an SRV subresource range of the written levels only, never an unwritten one; each extension of the range bumps the slot's version, so the binding sets that hold it are made again. A settled frame (D77) has every visible texture at its full mips"
+    },
+    {
+      "id": "M-IMG-GUARD-05",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            131,
+            143
+          ],
+          "anchor": "GetRowPitch",
+          "sha256": "ef3e020ab58f7473e24d334b571d4b299098332f55c55f9b77fe086c8eafef17"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimPipelineState.cpp",
+          "symbol": "engineRowPitch"
+        }
+      ],
+      "note": "LP2.1 (T0.14 of 29-LP2-0-REVIEW.md): the copied GetRowPitch calls BitsForFormat, whose default case asserts in Debug and returns 0 in Release for a format outside textureFormat_t, and FMT_NONE gives 0 too; a zero pitch makes NVRHI's writeTexture copy nothing (nvrhi rule 12). The facade refuses a format outside FMT_RGBA8 to FMT_RGBA16S, FMT_NONE, a width below 1 and a zero pitch (nullopt) before the copy runs, and the uploader makes such an image's slot Default with the reason"
     }
   ],
   "retired": [

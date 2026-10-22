@@ -31,6 +31,7 @@
 #include <nvrhi/nvrhi.h>
 
 #include <cstdint>
+#include <optional>
 
 // LP2.0 (C24, P2.25): two engine functions copied verbatim into TbLitIdLib, behind a
 // facade any thread may call, because they read nothing but their arguments (mirror.json
@@ -80,8 +81,11 @@ void engineRenderState(
 /**
  * GetRowPitch (renderer/Image_load.cpp:131-143, with BitsForFormat and BlockSizeForFormat
  * :39-123, copied): the bytes of one row of an image level of this textureFormat_t and
- * width; for a block-compressed format one row of 4×4 blocks. Pure; any thread.
+ * width; for a block-compressed format one row of 4×4 blocks. LP2.1 (T0.14): nullopt for
+ * a format outside textureFormat_t's FMT_RGBA8 to FMT_RGBA16S (the copy asserts in Debug
+ * and returns 0 in Release, and a zero pitch uploads nothing, nvrhi rule 12), for
+ * FMT_NONE and for a width below 1: the caller refuses the image. Pure; any thread.
  */
-int engineRowPitch(int textureFormat, int width);
+std::optional<int> engineRowPitch(int textureFormat, int width);
 
 } // namespace tb::lit
