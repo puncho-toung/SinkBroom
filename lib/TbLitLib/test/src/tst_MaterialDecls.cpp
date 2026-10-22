@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <latch>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -1272,11 +1273,19 @@ TEST_CASE("Engine messages (D63)")
       // C17: the never-returning calls return
       reportEngineMessageForTesting(DeclMessageKind::FatalError, prefix + " fatal");
     };
-    auto first = std::thread{[&] { report("first"); }};
+    // B0.14 (d): both threads live until both have reported, so their ids differ
+    auto reported = std::latch{2};
+    auto first = std::thread{[&] {
+      report("first");
+      reported.arrive_and_wait();
+    }};
+    auto second = std::thread{[&] {
+      report("second");
+      reported.arrive_and_wait();
+    }};
     const auto firstId = first.get_id();
-    first.join();
-    auto second = std::thread{[&] { report("second"); }};
     const auto secondId = second.get_id();
+    first.join();
     second.join();
     CHECK(pendingEngineMessagesForTesting() == pendingBefore + 8u);
 
@@ -1297,6 +1306,45 @@ TEST_CASE("Engine messages (D63)")
     REQUIRE(secondMessages.size() == 4u);
     CHECK(secondMessages[0].text == "second info");
     CHECK(secondMessages[3].text == "second fatal");
+    CHECK(pendingEngineMessagesForTesting() == pendingBefore);
+  }
+
+  SECTION("B0.5, R2.5: what a thread loses is counted for it and said by its own drain")
+  {
+    auto lost = std::vector<DeclMessage>{};
+    auto other = std::vector<DeclMessage>{};
+    auto losing = std::thread{[&] {
+      // the queue's room, then five warnings and two errors that do not fit
+      const auto room =
+        MaxQueuedEngineMessagesOfAllThreads - pendingEngineMessagesForTesting();
+      for (auto i = std::size_t{0}; i < room; ++i)
+      {
+        reportEngineMessageForTesting(DeclMessageKind::Info, "fill");
+      }
+      for (auto i = 0; i < 5; ++i)
+      {
+        reportEngineMessageForTesting(DeclMessageKind::Warning, "lost warning");
+      }
+      for (auto i = 0; i < 2; ++i)
+      {
+        reportEngineMessageForTesting(DeclMessageKind::Error, "lost error");
+      }
+      // another thread's drain says nothing of them
+      auto bystander = std::thread{
+        [&] { other = drainEngineMessagesForThread(std::this_thread::get_id()); }};
+      bystander.join();
+      lost = drainEngineMessagesForThread(std::this_thread::get_id());
+    }};
+    losing.join();
+    CHECK(other.empty());
+    REQUIRE(lost.size() >= 2u);
+    const auto& dropped = lost[lost.size() - 2];
+    CHECK(dropped.kind == DeclMessageKind::Warning);
+    CHECK_THAT(
+      dropped.text,
+      Catch::Matchers::StartsWith("7 engine messages of this thread were dropped"));
+    CHECK(lost.back().kind == DeclMessageKind::Error);
+    CHECK(lost.back().text == "2 of them were errors");
     CHECK(pendingEngineMessagesForTesting() == pendingBefore);
   }
 

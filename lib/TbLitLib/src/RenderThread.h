@@ -46,6 +46,7 @@ namespace tb::lit
 {
 class CpuPool;
 class GpuDevice;
+class LightTablePublication;
 class MaterialService;
 class SceneGeometry;
 class SessionEvents;
@@ -120,7 +121,8 @@ private:
   bool m_cameraSet = false;
   CameraState m_camera;
   // S31: the one-slot inbox, which the thread empties at a frame's start once the last
-  // snapshot's chunks are applied (B0.3), and the last snapshot it took
+  // snapshot's chunks are applied (B0.3), and the last snapshot it took (for the tests;
+  // B0.9: the one it replaces is freed outside m_mutex)
   std::shared_ptr<const Snapshot> m_snapshotInbox;
   std::shared_ptr<const Snapshot> m_snapshot;
   std::uint64_t m_snapshotsTaken = 0;
@@ -155,8 +157,12 @@ public:
   Result<void> createFrameResources(std::optional<vk::Extent2D> headlessExtent);
   bool headless() const;
   // B0.10: the session's CPU pool and material service (either may be null), which the
-  // render thread's chunk jobs use; both outlive the thread
-  void start(CpuPool* pool, MaterialService* materials);
+  // render thread's chunk jobs use; both outlive the thread. R2.9: lights, the session's
+  // light table publication, which the thread's light registry publishes into
+  void start(
+    CpuPool* pool,
+    MaterialService* materials,
+    std::shared_ptr<LightTablePublication> lights);
 
   // Any thread.
 

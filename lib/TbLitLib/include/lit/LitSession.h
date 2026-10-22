@@ -172,9 +172,11 @@ constexpr auto ParkTimeout = std::chrono::milliseconds{500};
 
 class CpuPool;
 class GpuDevice;
+class LightTablePublication;
 class MaterialService;
 class RenderThread;
 class SessionEvents;
+struct LightTable;
 struct Snapshot;
 
 /**
@@ -209,6 +211,8 @@ private:
   std::unique_ptr<CpuPool> m_pool;
   // the owner's, which outlives the session (LitSessionHost); null after step 1
   MaterialService* m_materials = nullptr;
+  // R2.9: the render thread's light registry publishes here; it outlives the thread
+  std::shared_ptr<LightTablePublication> m_lightTables;
   std::uint64_t m_swapchainCount = 0;
 
   bool m_renderThreadStopped = false;
@@ -281,13 +285,19 @@ public:
    * flag under the render thread's mutex and notifies.
    */
   void tableChanged();
+  /**
+   * C15, R2.9, any thread: the latest light records the render thread published (never
+   * null; empty before the first snapshot's lights are built), also after teardown step
+   * 1, when the render thread has ended.
+   */
+  std::shared_ptr<const LightTable> lightTable() const;
 
-  // S3: the CPU pool from phase B until teardown step 1, else null; GUI thread (B0.10:
-  // the render thread gets the pool and the service at its start, not from here)
-  CpuPool* cpuPool() const;
+  // S3: the CPU pool from phase B until teardown step 1, else null; GUI thread, tests
+  // only (B0.10, R1.11: the render thread gets the pool and the service at its start)
+  CpuPool* cpuPoolForTesting() const;
   // the owner's material service, from create until teardown step 1, else null; GUI
-  // thread
-  MaterialService* materialService() const;
+  // thread, tests only
+  MaterialService* materialServiceForTesting() const;
 
   // Surface handshake (§3.1, D49), GUI thread only.
 

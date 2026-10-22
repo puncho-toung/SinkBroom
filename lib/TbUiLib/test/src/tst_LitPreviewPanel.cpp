@@ -42,6 +42,7 @@
 #include "fs/TestEnvironment.h"
 #include "gl/GlManager.h"
 #include "gl/PerspectiveCamera.h"
+#include "lit/CpuPool.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
 #include "lit/Snapshot.h"
@@ -81,7 +82,9 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <iostream>
+#include <latch>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -667,8 +670,10 @@ void payWindowSystemCostsOnce(QMainWindow& window)
             << "\n";
 }
 
-// beyond the counts after the first Stop: what Qt and the driver make on demand
-constexpr auto ThreadTolerance = 2;
+// beyond the counts after the first Stop: what Qt and the driver make on demand. R2.14:
+// no thread may stay, so that a session's CPU pool left unjoined (CpuPool::ThreadCount
+// threads) fails; the pool's own threads are also checked one by one (PanelHarness)
+constexpr auto ThreadTolerance = 0;
 constexpr auto HandleTolerance = 8;
 constexpr auto GuiObjectTolerance = 4;
 
@@ -993,8 +998,70 @@ public:
   bool startAndWaitForFrame()
   {
     panel->start();
-    return sessionRunning(*panel) && waitForFrame();
+    const auto running = sessionRunning(*panel) && waitForFrame();
+    if (running)
+    {
+      capturePoolThreads();
+    }
+    return running;
   }
+
+  // R2.14: handles of the running session's pool threads, which each thread duplicates
+  // itself while all of them wait for each other, so that every thread is counted once
+  void capturePoolThreads()
+  {
+    auto* pool = session() ? session()->cpuPoolForTesting() : nullptr;
+    if (!pool)
+    {
+      return;
+    }
+    auto met = std::make_shared<std::latch>(std::ptrdiff_t(lit::CpuPool::ThreadCount));
+    auto handles = std::make_shared<std::vector<HANDLE>>();
+    auto mutex = std::make_shared<std::mutex>();
+    auto futures = std::vector<std::future<lit::CpuJobResult<bool>>>{};
+    for (auto i = std::size_t{0}; i < lit::CpuPool::ThreadCount; ++i)
+    {
+      futures.push_back(
+        pool->run([met, handles, mutex](const lit::CpuJobContext&) -> Result<bool> {
+          met->arrive_and_wait();
+          auto handle = HANDLE{};
+          const auto duplicated = DuplicateHandle(
+            GetCurrentProcess(),
+            GetCurrentThread(),
+            GetCurrentProcess(),
+            &handle,
+            SYNCHRONIZE,
+            FALSE,
+            0);
+          if (duplicated)
+          {
+            const auto lock = std::scoped_lock{*mutex};
+            handles->push_back(handle);
+          }
+          return duplicated != 0;
+        }));
+    }
+    for (auto& future : futures)
+    {
+      REQUIRE(future.wait_for(std::chrono::seconds{10}) == std::future_status::ready);
+      CHECK(future.get().result == Result<bool>{true});
+    }
+    REQUIRE(handles->size() == lit::CpuPool::ThreadCount);
+    poolThreads.insert(poolThreads.end(), handles->begin(), handles->end());
+  }
+
+  // every pool thread captured so far has ended (the session's stop joined it)
+  void checkPoolThreadsJoined()
+  {
+    for (const auto handle : poolThreads)
+    {
+      CHECK(WaitForSingleObject(handle, 3000) == WAIT_OBJECT_0);
+      CloseHandle(handle);
+    }
+    poolThreads.clear();
+  }
+
+  std::vector<HANDLE> poolThreads;
 
   // stops and returns how long the stop took
   std::chrono::milliseconds timedStop()
@@ -1068,6 +1135,7 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
   const auto baseline = processCounts();
   const auto devicesAtBaseline = reports.sessionsWithDevice();
   const auto checkCounts = [&](const std::string_view label) {
+    harness.checkPoolThreadsJoined();
     checkProcessCounts(baseline, reports.sessionsWithDevice() - devicesAtBaseline, label);
   };
 
@@ -1749,8 +1817,8 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     auto* session = harness.session();
     REQUIRE(session != nullptr);
     // phase B handed the service to the session, which also runs its CPU pool
-    CHECK(session->materialService() == materials);
-    CHECK(session->cpuPool() != nullptr);
+    CHECK(session->materialServiceForTesting() == materials);
+    CHECK(session->cpuPoolForTesting() != nullptr);
 
     // Published is marshalled to the GUI thread, and the panel reads the latest table
     REQUIRE(materials->waitForStatsForTesting(

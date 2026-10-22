@@ -89,8 +89,6 @@ if(TB_ENABLE_LIT_PREVIEW)
       ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitPreviewPanel.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitSnapshotBuilder.cpp)
   target_link_libraries(TbUiLibTest PRIVATE TbLitLib)
-  # the document observer and the snapshot builder are private to TbUiLib
-  target_include_directories(TbUiLibTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 endif()
 
 set_target_properties(TbUiLibTest PROPERTIES AUTOMOC TRUE)
@@ -115,6 +113,14 @@ add_custom_command(TARGET TbUiLibTest POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TB_RESOURCE_DIR}/shader" "$<TARGET_FILE_DIR:TbUiLibTest>/shader"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TB_RESOURCE_DIR}/fonts" "$<TARGET_FILE_DIR:TbUiLibTest>/fonts"
 )
+
+if(TB_ENABLE_LIT_PREVIEW)
+  # the lit preview's LP1b fixture map and its engine goldens, for the end-to-end golden
+  # (tst_LitSnapshotBuilder.cpp); after the copy above, which removes the folder first
+  add_custom_command(TARGET TbUiLibTest POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/../../TbLitLib/test/fixture/lit" "${TEST_FIXTURE_DEST_DIR}/test/lit"
+  )
+endif()
 
 include(Catch)
 catch_discover_tests(TbUiLibTest)

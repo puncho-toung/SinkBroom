@@ -151,7 +151,7 @@ LightShader resolveShader(const ParsedLight& light, const MaterialTable* table)
 
 std::vector<int> commonChildrenAreas(const ProcTree& tree)
 {
-  // RenderWorld_load.cpp:627-670, as a post-order walk from node 0; a node reached again
+  // RenderWorld_load.cpp:627-666, as a post-order walk from node 0; a node reached again
   // while open (a malformed tree's cycle, never in dmap's output) counts as multiple
   // areas (M-LIGHT-GUARD-04)
   const auto count = tree.nodes.size();

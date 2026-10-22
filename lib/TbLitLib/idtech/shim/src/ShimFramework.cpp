@@ -38,7 +38,7 @@
 
 // D63: the process's one sink; common and idLib::common point to it from the start and
 // are never rebound. cvarSystem and fileSystem are bound by the registry (C17, S6).
-idCommon tbLitCommonSink;
+TB_LIT_CONSTINIT idCommon tbLitCommonSink;
 idCommon* common = &tbLitCommonSink;
 idCVarSystem* cvarSystem = nullptr;
 idFileSystem* fileSystem = nullptr;

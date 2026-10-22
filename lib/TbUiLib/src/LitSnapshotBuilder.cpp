@@ -17,7 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "LitSnapshotBuilder.h"
+#include "ui/LitSnapshotBuilder.h"
 
 #include "lit/NumberText.h"
 #include "mdl/BezierPatch.h"

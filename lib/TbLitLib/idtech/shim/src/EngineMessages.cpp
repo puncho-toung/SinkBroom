@@ -25,6 +25,10 @@
 #include "shim/EngineMessages.h"
 // clang-format on
 
+#include <array>
+#include <atomic>
+#include <functional>
+
 namespace tb::lit::shim
 {
 namespace
@@ -137,22 +141,66 @@ public:
   }
 };
 
-MessageQueue engineMessages;
+TB_LIT_CONSTINIT MessageQueue engineMessages;
 
-// Error and FatalError messages that could not be kept
-std::atomic<std::uint64_t> lostErrors{0};
-// B0.1: messages dropped because the queue was full or memory ran out, and how many of
-// them the drains have reported so far
-std::atomic<std::uint64_t> droppedMessages{0};
-std::atomic<std::uint64_t> reportedDrops{0};
+/**
+ * B0.5, R2.5, R2.6: what a thread lost (the queue full, or no memory for a node), kept
+ * for that thread in a fixed table, so that counting allocates nothing and a thread that
+ * cannot allocate still counts. A thread claims a slot by its id's hash at its first
+ * loss; the slot is freed when the thread's messages are discarded (its owner does that
+ * when it starts and when it ends), so a later thread with a recycled id inherits
+ * nothing.
+ */
+struct LossSlot
+{
+  // the owning thread's id hash, 0 for a free slot
+  std::atomic<std::uint64_t> owner{0};
+  std::atomic<std::uint64_t> dropped{0};
+  std::atomic<std::uint64_t> errors{0};
+};
+
+constexpr auto LossSlots = std::size_t{64};
+TB_LIT_CONSTINIT std::array<LossSlot, LossSlots> losses;
+TB_LIT_CONSTINIT std::atomic<std::uint64_t> unattributedLosses{0};
+
+std::uint64_t threadKey(const std::thread::id thread) noexcept
+{
+  const auto key = std::uint64_t(std::hash<std::thread::id>{}(thread));
+  return key == 0 ? 1 : key;
+}
+
+LossSlot* lossSlot(const std::thread::id thread, const bool claim) noexcept
+{
+  const auto key = threadKey(thread);
+  for (auto i = std::size_t{0}; i < LossSlots; ++i)
+  {
+    auto& slot = losses[(std::size_t(key) + i) % LossSlots];
+    auto owner = slot.owner.load();
+    if (owner == key)
+    {
+      return &slot;
+    }
+    if (claim && owner == 0 && slot.owner.compare_exchange_strong(owner, key))
+    {
+      return &slot;
+    }
+  }
+  return nullptr;
+}
 
 void lose(const DeclMessageKind kind) noexcept
 {
-  ++droppedMessages;
-  // an error that is lost still counts
+  auto* slot = lossSlot(std::this_thread::get_id(), true);
+  if (!slot)
+  {
+    ++unattributedLosses;
+    return;
+  }
+  ++slot->dropped;
+  // an error that is lost still counts, for this thread
   if (kind == DeclMessageKind::Error || kind == DeclMessageKind::FatalError)
   {
-    ++lostErrors;
+    ++slot->errors;
   }
 }
 
@@ -215,18 +263,43 @@ std::vector<EngineMessage> takeEngineMessages(const std::thread::id thread)
 void discardEngineMessages(const std::thread::id thread) noexcept
 {
   freeChain(engineMessages.take(thread));
+  if (auto* slot = lossSlot(thread, false))
+  {
+    slot->dropped = 0;
+    slot->errors = 0;
+    slot->owner = 0;
+  }
 }
 
-std::uint64_t takeDroppedEngineMessages() noexcept
+EngineLosses takeEngineLosses(const std::thread::id thread) noexcept
 {
-  const auto dropped = droppedMessages.load();
-  const auto reported = reportedDrops.exchange(dropped);
-  return dropped > reported ? dropped - reported : 0;
+  auto* slot = lossSlot(thread, false);
+  return slot ? EngineLosses{slot->dropped.exchange(0), slot->errors.exchange(0)}
+              : EngineLosses{};
 }
 
-std::uint64_t lostEngineErrors() noexcept
+std::vector<DeclMessage> lossMessages(const EngineLosses& lost)
 {
-  return lostErrors.load();
+  auto messages = std::vector<DeclMessage>{};
+  if (lost.dropped > 0)
+  {
+    messages.push_back(DeclMessage{
+      DeclMessageKind::Warning,
+      std::to_string(lost.dropped)
+        + " engine messages of this thread were dropped: the queue holds at most "
+        + std::to_string(MaxQueuedEngineMessages)});
+  }
+  if (lost.errors > 0)
+  {
+    messages.push_back(DeclMessage{
+      DeclMessageKind::Error, std::to_string(lost.errors) + " of them were errors"});
+  }
+  return messages;
+}
+
+std::uint64_t unattributedEngineLossesForTesting() noexcept
+{
+  return unattributedLosses.load();
 }
 
 std::string messageText(std::string text)
@@ -252,13 +325,10 @@ std::vector<DeclMessage> drainEngineMessagesForThread(const std::thread::id thre
     messages.push_back(
       DeclMessage{message.kind, shim::messageText(std::move(message.text))});
   }
-  // B0.1: the first drain after messages were dropped says how many
-  if (const auto dropped = shim::takeDroppedEngineMessages())
+  // B0.1, R2.5: the thread's first drain after it lost messages says how many
+  for (auto& message : shim::lossMessages(shim::takeEngineLosses(thread)))
   {
-    messages.push_back(DeclMessage{
-      DeclMessageKind::Warning,
-      std::to_string(dropped) + " engine messages were dropped: the queue holds at most "
-        + std::to_string(shim::MaxQueuedEngineMessages)});
+    messages.push_back(std::move(message));
   }
   return messages;
 }

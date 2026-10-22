@@ -601,20 +601,21 @@ private:
           ++m_output.solidPieces;
         }
         auto& target = bucket(piece.area, context, material, cell);
-        const auto whole = pieces.size() == 1 && piece.points.size() == 3;
         const auto& w = piece.points;
         for (auto k = std::size_t{2}; k < w.size(); ++k)
         {
           auto tri = Triangle{};
-          const auto corner = [&](const EngineVec3& xyz, const std::size_t index) {
-            // a fragment's corners from the original's (TriVertsFromOriginal)
-            auto vert = whole ? original[index] : engineVertFromOriginal(xyz, original);
+          const auto corner = [&](const EngineVec3& xyz) {
+            // R3.5: usurface.cpp:649-663 sends every patch triangle, split or not,
+            // through WindingToTriList, which takes its corners from the original's
+            // (TriVertsFromOriginal)
+            auto vert = engineVertFromOriginal(xyz, original);
             vert.xyz = readBack(sub(xyz, context.originOffset));
             vert.color = {255, 255, 255, 255};
             vert.color2 = {0, 0, 0, 0};
             return vert;
           };
-          tri.verts = {corner(w[0], 0), corner(w[k - 1], k - 1), corner(w[k], k)};
+          tri.verts = {corner(w[0]), corner(w[k - 1]), corner(w[k])};
           target.triangles.push_back(tri);
         }
       }

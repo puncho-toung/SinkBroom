@@ -27,7 +27,7 @@
     "difference": "a deliberate difference from the engine's behaviour, with its reason",
     "known-defect": "an engine defect the copy keeps verbatim, with its effect",
     "pure-function": "copied engine code that the facade lets any thread run, because it touches no state",
-    "pool-safe": "copied engine code, or a shim function around it, that may run on the session's CPU pool under C24's five conditions: (1) its common and idLib::common calls go to the permanent sink of D63; (2) each FatalError site in it is listed with the pre-validation that keeps it unreachable; (3) SIMDProcessor is the scalar stand-in; (4) it allocates with the tagged new and Mem_Alloc16 on the global allocator; (5) its statics are constant or initialised at program load and read-only (the statics inventory)"
+    "pool-safe": "copied engine code, or a shim function around it, that may run on the session's CPU pool under C24's five conditions: (1) its common and idLib::common calls go to the permanent sink of D63; (2) each FatalError site in it is listed with the pre-validation that keeps it unreachable; (3) SIMDProcessor is the scalar stand-in; (4) it allocates with the tagged new and Mem_Alloc16 on the global allocator; (5) its statics are constant-initialised, or dynamically initialised at program load from literals alone, without allocating, opening, loading or starting anything and without depending on another file's statics beyond zero (R1.6: the dynamic initialisers allowed are listed in M-ID-STATIC-39 and checked by TOOLS/lit-preview/check_static_init.py), and read-only (the statics inventory)"
   },
   "engineCommit": "285ea4d18a0aaedf46b0803ea656e4850eba5a01",
   "pins": [
@@ -5048,11 +5048,86 @@
         },
         {
           "file": "lib/TbLitLib/idtech/shim/src/EngineMessages.cpp",
-          "symbol": "engineMessages, lostErrors"
+          "symbol": "engineMessages, losses, unattributedLosses"
         }
       ],
       "staticKind": "permanent sink",
-      "reason": "D63: common and idLib::common point to one idCommon, tbLitCommonSink, from the start of the process and are never rebound; its Printf, Warning, Error and FatalError (and idLib's message functions, AssertFailed and the file system's warnings) format the message on the calling thread and push it, tagged with that thread, into one queue under a mutex. Constant-initialised: the queue's constructor is constexpr (std::mutex, two null node pointers and a count), and it allocates a node only when a message is pushed (C9, S27); nodes still queued at exit are not freed. Pushing never throws (C17): a node that cannot be allocated is lost, and a lost Error or FatalError is counted in lostErrors, which every registry's errorCount adds. The registry drains its own thread's messages (Registry::messages, takeMessages, errorCount, beginCapture, endCapture) and drops those its thread pushed before it was made and while it is destroyed, as no registry received them before; any other thread's are drained by that thread's owner with drainEngineMessagesForThread (the CPU pool's, LP1b.2). Any thread; since LP1b.2 (D66, B0.1) each CpuPool job drops its thread's leftover messages before it and drains them into its CpuJobResult after it, the queue holds at most 4096 messages (beyond: dropped, counted, reported at the next drain), and a pool thread discards its messages when it ends"
+      "reason": "D63: common and idLib::common point to one idCommon, tbLitCommonSink, from the start of the process and are never rebound; its Printf, Warning, Error and FatalError (and idLib's message functions, AssertFailed and the file system's warnings) format the message on the calling thread and push it, tagged with that thread, into one queue under a mutex. Constant-initialised: the queue's constructor is constexpr (std::mutex, two null node pointers and a count), and it allocates a node only when a message is pushed (C9, S27); nodes still queued at exit are not freed. Pushing never throws (C17): a message that cannot be kept (no room, no memory) is counted for the thread that lost it, in a fixed table of 64 slots claimed by the thread id's hash (B0.5, R2.5, R2.6: never another thread's, never another session's; a discard frees the slot); that thread's next drain ends with a Warning that says how many were dropped and an Error that says how many of them were errors, which the registry adds to its own error count and which fails a CPU job. B0.6: TB_LIT_CONSTINIT has the compiler check the constant initialisation where it can (constinit, Clang's require_constant_initialization, GCC's __constinit; MSVC compiles the shim as C++17 and has none); the queue's mutex is destroyed at exit, after every thread that pushes has been joined. The registry drains its own thread's messages (Registry::messages, takeMessages, errorCount, beginCapture, endCapture) and drops those its thread pushed before it was made and while it is destroyed, as no registry received them before; any other thread's are drained by that thread's owner with drainEngineMessagesForThread (the CPU pool's, LP1b.2). Any thread; since LP1b.2 (D66, B0.1) each CpuPool job drops its thread's leftover messages before it and drains them into its CpuJobResult after it, the queue holds at most 4096 messages (beyond: dropped, counted for the thread, reported by its next drain), and a pool thread discards its messages when it ends"
+    },
+    {
+      "id": "M-ID-STATIC-39",
+      "kind": "static",
+      "engine": [],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/check_static_init.py",
+          "symbol": "the check (outside the repository)"
+        }
+      ],
+      "staticKind": "dynamic initialisers allowed",
+      "dynamicInitialisers": {
+        "Debug": [
+          "Angles.obj ang_zero",
+          "Bounds.obj bounds_unitCube",
+          "Bounds.obj bounds_zero",
+          "Bounds.obj bounds_zeroOneCube",
+          "Dict.obj ?globalKeys@idDict",
+          "Dict.obj ?globalValues@idDict",
+          "Math.obj ?FLT_SMALLEST_NON_DENORMAL@idMath",
+          "Math.obj ?SIMD_SP_smallestNonDenorm@idMath",
+          "Matrix.obj mat3_identity",
+          "Matrix.obj mat3_zero",
+          "Plane.obj plane_origin",
+          "Pluecker.obj pluecker_origin",
+          "RenderMatrix.obj renderMatrix_clipSpaceToWindowSpace",
+          "RenderMatrix.obj renderMatrix_flipToOpenGL",
+          "RenderMatrix.obj renderMatrix_fullscreen",
+          "RenderMatrix.obj renderMatrix_identity",
+          "RenderMatrix.obj renderMatrix_windowSpaceToClipSpace",
+          "RenderMatrix.obj vector_float_abs_mask",
+          "RenderMatrix.obj vector_float_keep_last",
+          "RenderMatrix.obj vector_float_mask0",
+          "RenderMatrix.obj vector_float_mask1",
+          "RenderMatrix.obj vector_float_mask2",
+          "RenderMatrix.obj vector_float_mask3",
+          "RenderMatrix.obj vector_float_mask4",
+          "RenderMatrix.obj vector_float_mask5",
+          "RenderMatrix.obj vector_float_sign_bit",
+          "RenderMatrix.obj vector_int_0123",
+          "RenderMatrix.obj vector_int_1",
+          "RenderMatrix.obj vector_int_4",
+          "Str.obj g_color_table",
+          "Vector.obj vec2_one",
+          "Vector.obj vec2_origin",
+          "Vector.obj vec3_one",
+          "Vector.obj vec3_origin",
+          "Vector.obj vec4_one",
+          "Vector.obj vec4_origin",
+          "Vector.obj vec5_origin",
+          "Vector.obj vec6_infinity",
+          "Vector.obj vec6_origin"
+        ],
+        "Release": [
+          "Bounds.obj bounds_zero",
+          "Dict.obj ?globalKeys@idDict",
+          "Dict.obj ?globalValues@idDict",
+          "Math.obj ?SIMD_SP_smallestNonDenorm@idMath",
+          "RenderMatrix.obj vector_float_abs_mask",
+          "RenderMatrix.obj vector_float_keep_last",
+          "RenderMatrix.obj vector_float_mask0",
+          "RenderMatrix.obj vector_float_mask1",
+          "RenderMatrix.obj vector_float_mask2",
+          "RenderMatrix.obj vector_float_mask3",
+          "RenderMatrix.obj vector_float_mask4",
+          "RenderMatrix.obj vector_float_mask5",
+          "RenderMatrix.obj vector_float_sign_bit",
+          "RenderMatrix.obj vector_int_0123",
+          "RenderMatrix.obj vector_int_1",
+          "RenderMatrix.obj vector_int_4",
+          "Vector.obj vec6_infinity"
+        ]
+      },
+      "reason": "R1.6, C9, C24 (5): the dynamic initialisers (MSVC ??__E symbols) that TbLitIdLib's objects may hold, per configuration, as \"<object> <global>\"; each initialises a read-only global from literals or from another of them that is zero until initialised (bounds_zero from vec3_zero), allocating, opening and starting nothing, except idDict's two idStrPool globals (M-ID-STATIC-*), which allocate nothing until used. The check lists the objects' ??__E symbols with dumpbin and fails on one not listed here, so a later copy with an idStr or idList global is caught; one listed but gone is reported"
     },
     {
       "id": "M-ID-TEMP-01",
@@ -6944,6 +7019,15 @@
           ],
           "anchor": "srfTriangles_t",
           "sha256": "71059d1eed63b83e39510c036166b690f8ebb737ee16f3fa16a4b9c8449e2cf3"
+        },
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            1676,
+            1720
+          ],
+          "anchor": "R_AllocStaticTriSurf and the tri-surface functions the copied ranges declare",
+          "sha256": "44a0cf76f3402139968ee290b53dd41872cb401acf000e1406946d2b8ed8eb94"
         }
       ],
       "sinkbroom": [
@@ -7063,11 +7147,11 @@
         {
           "file": "neo/framework/File.cpp",
           "lines": [
-            66,
+            41,
             86
           ],
           "anchor": "FS_WriteFloatString, %f",
-          "sha256": "6f77ae344e1bcf95105dfce0fed5e163da5e6dbb3498d624c769c04f2ca9f7bf"
+          "sha256": "155cb86a9f66145d6c234a06ffdde3998b19a4de06172a8487619bc0654c1fb4"
         },
         {
           "file": "neo/tools/compilers/dmap/map.cpp",
@@ -7128,7 +7212,13 @@
       "commonCalls": [
         "Winding.cpp:260 idLib::common->FatalError (unreachable, M-GEO-FATAL-01)"
       ],
-      "note": "the copied Split on a winding of 3 to MaxWindingPoints (1024) points: its _alloca blocks stay below 32 KB of the pool thread's 8 MB stack; it allocates the pieces with the tagged new"
+      "note": "the copied Split on a winding of 3 to MaxWindingPoints (1024) points: its _alloca blocks stay below 32 KB of the pool thread's 8 MB stack; it allocates the pieces with the tagged new",
+      "asserts": [
+        "Winding.cpp:107 assert( this ) in Split (the facade calls it on a winding it made)"
+      ],
+      "statics": [
+        "none read"
+      ]
     },
     {
       "id": "M-GEO-POOL-02",
@@ -7187,6 +7277,15 @@
           ],
           "anchor": "LerpVert: the position",
           "sha256": "4134b2987e4e4672012d44540b6c5f4edd45bc9da5b6dced4b210efae9cdeece"
+        },
+        {
+          "file": "neo/idlib/MapFile.h",
+          "lines": [
+            54,
+            57
+          ],
+          "anchor": "DEFAULT_CURVE_MAX_ERROR, DEFAULT_CURVE_MAX_LENGTH (and their _CD variants)",
+          "sha256": "083e0c21f3fe657613dc416702c8452eedea50ce92ae808e627bb6c103a9a559"
         }
       ],
       "sinkbroom": [
@@ -7199,7 +7298,14 @@
         "Surface_Patch.cpp:41, :45 idLib::common->FatalError (unreachable, M-GEO-FATAL-02)",
         "Surface_Patch.cpp:214, :241 idLib::common->FatalError (unreachable, M-GEO-FATAL-03)"
       ],
-      "note": "K19, R1.3: sides of 1 to 99 control points; explicit subdivisions of 1 to 64 with at most 65535 vertices; for patchDef2 the size Subdivide( 4, 4, -1, true ) reaches before PutOnCurve and RemoveLinearColumnsRows (which only remove) is counted first by patchSubdivisionBound, the two passes on the positions alone in the copy's float arithmetic, and the patch is refused before Subdivide runs when GenerateEdgeIndexes' two _alloca16 blocks (4 bytes per vertex and per index, Surface.cpp:964-972) would take more than MaxPatchStackBytes (2 MB, about 74,000 vertices) of the pool thread's 8 MB stack (D66); a subdivided patch of more than 65535 vertices is refused after. The copy's own blocks (idList, the explicit case's new[]) are on the heap; the stack use is GenerateEdgeIndexes'. Refusals warn (lit/ChunkBuilder.h)"
+      "note": "K19, R1.3: sides of 1 to 99 control points; explicit subdivisions of 1 to 64 with at most 65535 vertices; for patchDef2 the size Subdivide( 4, 4, -1, true ) reaches before PutOnCurve and RemoveLinearColumnsRows (which only remove) is counted first by patchSubdivisionBound, the two passes on the positions alone in the copy's float arithmetic, and the patch is refused before Subdivide runs when GenerateEdgeIndexes' two _alloca16 blocks (4 bytes per vertex and per index, Surface.cpp:964-972) would take more than MaxPatchStackBytes (2 MB, about 74,000 vertices) of the pool thread's 8 MB stack (D66); a subdivided patch of more than 65535 vertices is refused after. The copy's own blocks (idList, the explicit case's new[]) are on the heap; the stack use is GenerateEdgeIndexes'. Refusals warn (lit/ChunkBuilder.h)",
+      "asserts": [
+        "Surface_Patch.cpp:64, :116, :182 assert( expanded == true ) and :298 assert( expanded == false ) (Subdivide and SubdivideExplicit call them in that state)",
+        "Surface.cpp:1022, :1028 GenerateEdgeIndexes' assert that an edge has at most two triangles (a patch grid holds)"
+      ],
+      "statics": [
+        "M-GEO-STATIC-06 (GenerateNormals' neighbors, a constant table)"
+      ]
     },
     {
       "id": "M-GEO-POOL-03",
@@ -7317,7 +7423,15 @@
         "tr_trisurf.cpp:1361 idLib::Error (R_StaticAlloc returned null: only when an allocation fails, M-GEO-FATAL-04)",
         "R_StaticAlloc's common->FatalError (ShimLib.cpp, only when an allocation fails, M-GEO-FATAL-04)"
       ],
-      "note": "R_CleanupTriangles' order on a surface without generated normals: the index range check as pre-validation (R_RangeCheckIndexes' three Errors cannot be reached: indexes in range, a multiple of three, at most 65535 vertices), R_CreateSilIndexes (idHashIndex on the heap), R_RemoveDegenerateTriangles, R_DuplicateMirroredVertexes, then R_DeriveTangentsWithoutNormals(tri, false) or R_BuildDominantTris + R_DeriveTangents; FinishSurfaces' back side is R_CopyStaticTriSurf + R_ReverseTriangles. R_TestDegenerateTextureSpace (no effect: its print is commented out), R_CreateDupVerts, R_BoundTriSurf and the MOC data are not run (M-GEO-NC-01)"
+      "note": "R_CleanupTriangles' order on a surface without generated normals: the index range check as pre-validation (R_RangeCheckIndexes' three Errors cannot be reached: indexes in range, a multiple of three, at most 65535 vertices), R_CreateSilIndexes (idHashIndex on the heap), R_RemoveDegenerateTriangles, R_DuplicateMirroredVertexes, then R_DeriveTangentsWithoutNormals(tri, false) or R_BuildDominantTris + R_DeriveTangents; FinishSurfaces' back side is R_CopyStaticTriSurf + R_ReverseTriangles. R_TestDegenerateTextureSpace (no effect: its print is commented out), R_CreateDupVerts, R_BoundTriSurf and the MOC data are not run (M-GEO-NC-01). In Debug the copied asserts that fail report through the sink of D63 on the pool thread, as M-LIGHT-POOL-01's do",
+      "asserts": [
+        "tr_trisurf.cpp:414, :425, :436, :447, :458 R_AllocStaticTriSurf*'s asserts that the array is not allocated yet (the facade allocates each once)",
+        "tr_trisurf.cpp:690, :1572 the silIndexes asserts (R_CreateSilIndexes runs first)"
+      ],
+      "statics": [
+        "M-GEO-STATIC-07 (r_useSilRemap, constant)",
+        "M-GEO-STATIC-08 (tr, an atomic counter)"
+      ]
     },
     {
       "id": "M-GEO-FATAL-01",
@@ -7943,11 +8057,11 @@
         {
           "file": "neo/idlib/MapFile.cpp",
           "lines": [
-            1173,
+            1171,
             1181
           ],
           "anchor": "idMapEntity::Parse: the origin key, sscanf \"%lf %lf %lf\" assigned to floats",
-          "sha256": "18b24fe5553514babd6a9c8b737318732f05c657129e6a4a428914f3e060d8ac"
+          "sha256": "de8f2468f1fd9802fbd5c748fe53ac9bc2e64e7b1eaa0e4b8f47b1fb0315bd9f"
         }
       ],
       "sinkbroom": [
@@ -8059,7 +8173,7 @@
           "symbol": "buildChunks"
         }
       ],
-      "note": "D59, C4: the material name with textures/ (a patch's only when missing), overrideMaterial; neither drawn nor shadow-casting sides skipped; plane from the origin-relative points with FixDegeneracies; st from the origin-relative position (TriListForSide runs before WriteUTriangles subtracts originOffset); SetNormal twice as ShareMapTriVerts stores it (golden (a) found the -1 component's byte moving 0 -> 1); patches through the copied subdivision with ParseSurface's rotation, degenerate pinched triangles skipped, fragments by TriVertsFromOriginal"
+      "note": "D59, C4: the material name with textures/ (a patch's only when missing), overrideMaterial; neither drawn nor shadow-casting sides skipped; plane from the origin-relative points with FixDegeneracies; st from the origin-relative position (TriListForSide runs before WriteUTriangles subtracts originOffset); SetNormal twice as ShareMapTriVerts stores it (golden (a) found the -1 component's byte moving 0 -> 1); patches through the copied subdivision with ParseSurface's rotation, degenerate pinched triangles skipped, every triangle's corners by TriVertsFromOriginal (R3.5, M-GEO-FN-16)"
     },
     {
       "id": "M-GEO-FN-11",
@@ -8118,6 +8232,15 @@
           ],
           "anchor": "ReadInt, ReadFloat, ReadString, ReadVec3",
           "sha256": "555e07d4898196cf67c5b3449e1904012de8046c4fe9659575b736f1b0440b9d"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            47,
+            52
+          ],
+          "anchor": "BRM_VERSION_BFG, BRM_VERSION, BRM_MAGIC_BFG, BRM_MAGIC",
+          "sha256": "7fa41d70eb6041e0e43c0333f6f36a13887de253f4ace29c9d0a1af4ad28fee5"
         }
       ],
       "sinkbroom": [
@@ -8168,6 +8291,112 @@
       "note": "A11, R3.12: the map loader deletes every entity whose classname a removeEntities* key of worldspawn names (the keys matched without case, a key given again replacing the value, the classnames compared without case); the chunks of such an entity are not built, and a light of such a class has no record; a change of worldspawn's keys rebuilds every light. InhibitEntitySpawn's not_easy/not_medium/not_hard is not mirrored (the preview shows every skill)"
     },
     {
+      "id": "M-GEO-FN-13",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            978,
+            985
+          ],
+          "anchor": "the game: map-only helpers (IsMapOnlyClass) lose their primitives",
+          "sha256": "0aea01847b1e44126dcac47e761d21dfa4551b2997752511f6332b53f7102025"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/map.cpp",
+          "lines": [
+            601,
+            606
+          ],
+          "anchor": "dmap: a map-only helper gets no primitives, nothing of it reaches the .proc",
+          "sha256": "a5523eb9b7b826d47bd389abd40fcd9192bbc5940b3417e5a7497e179c9a3cc4"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "Builder::makeContext"
+        }
+      ],
+      "note": "A10, R1.5: an entity whose classname's entityDef has dmapOnly (MaterialService::entityDef, C22) has no chunks; until the entityDef is known the entity is built without it and built again when a table has it (R3.2)"
+    },
+    {
+      "id": "M-GEO-FN-14",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            1109,
+            1112
+          ],
+          "anchor": "idMapEntity::Parse: worldspawn's origin forced to zero",
+          "sha256": "a4e4ffe81375d83975fbf16887a3dc7050a08226eab02cae289bc1670bcffd64"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "Builder::makeContext"
+        }
+      ],
+      "note": "A11, R1.5: worldspawn's primitives are relative to the zero origin whatever its origin key says; a func_group's join worldspawn relative to the func_group's origin (M-GEO-FN-10)"
+    },
+    {
+      "id": "M-GEO-FN-15",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/d3xp/Entity.cpp",
+          "lines": [
+            701,
+            707
+          ],
+          "anchor": "idEntity: the model of a brush entity, its origin brushes",
+          "sha256": "e2fb3868a90b5890e909f97522adc81576fb60e1cf9f09fa0df14ae0a4992aed"
+        },
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            4141,
+            4149
+          ],
+          "anchor": "SpawnMapEntities: __brushOrigin = originOffset",
+          "sha256": "6d959c70ab27bebed71f40fb6ababa79b0dba7ecea9f347b2bfa75191b663b7d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "Builder::makeContext (modelOrigin)"
+        }
+      ],
+      "note": "A7, D59, R1.5: a brush entity is drawn at origin + __brushOrigin (the origin brushes' mean centre); ChunkEntityState::modelOrigin; R3.4: a change of that pivot rebuilds every cell of the entity"
+    },
+    {
+      "id": "M-GEO-FN-16",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "lines": [
+            649,
+            663
+          ],
+          "anchor": "the patch triangles: degenerate ones skipped, every one through ClipTriIntoTree_r",
+          "sha256": "184fd3a3656c44639f68e1ba03121bb2dcea935f08f1c486dc42db3cbe913d02"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "Builder::addPatch"
+        }
+      ],
+      "note": "R1.5, R3.5: a pinched patch triangle of no area is skipped; every other one, split or not, takes its corners through TriVertsFromOriginal (engineVertFromOriginal), as fullCarve's WindingToTriList does, so a corner's st and normal are the barycentric ones dmap writes"
+    },
+    {
       "id": "M-GEO-DIFF-01",
       "kind": "difference",
       "engine": [
@@ -8210,6 +8439,28 @@
         }
       ],
       "note": "K17: a brush entity's primitives show only when name and model are set and equal (case-insensitively): dmap names the model by name, the game draws the model key; forceEntityNames is not applied. A brush entity's chunks take the area of its pivot (PointInArea), where the game references the entity in every area its bounds touch (LP4); a node is chunked in the 1024-unit cell of its vertices' centroid"
+    },
+    {
+      "id": "M-GEO-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            194,
+            196
+          ],
+          "anchor": "R_CreateEntityRefs: PushFrustumIntoTree over the entity's bounds (inverseBaseModelProject)",
+          "sha256": "6004060cdf08c6121c57aec30c847e5ef1c1c6ba7f0d9e5f562ad709d2ccd21d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "Builder::makeContext (context.area)"
+        }
+      ],
+      "note": "R3.8, for LP4: a brush entity's chunks take the area of its pivot (PointInArea of modelOrigin), where the engine references the entity in every area its bounds touch; a pivot in a wall (a door hinge, an origin brush in the frame) gives area -1, the no-.proc case. Before LP4 reads ChunkKey::area, entity chunks must take the engine's area set (the bounds pushed down the tree, as lights are, M-LIGHT-FN-06). Deferred from the LP1b fix round: the chunk key holds one area"
     },
     {
       "id": "M-LIGHT-COPY-01",
@@ -8497,6 +8748,24 @@
           ],
           "anchor": "ML_StyleMultiplier",
           "sha256": "ad6cdf177e88b1488501865d98e9bfb69d0a80a11f7139b93777942e3c89c1cc"
+        },
+        {
+          "file": "neo/renderer/MathLight.h",
+          "lines": [
+            43,
+            48
+          ],
+          "anchor": "mathLightType_t",
+          "sha256": "908c2a39c9a53ea976da83f0dd5e6292356b413bd3fe11acd8a75950a0da3b0b"
+        },
+        {
+          "file": "neo/renderer/MathLight.h",
+          "lines": [
+            77,
+            96
+          ],
+          "anchor": "mathLightData_t",
+          "sha256": "83873e95a7ef207718815215f6db0160ad167c85409b3a133a660ca2ed7b8b99"
         }
       ],
       "sinkbroom": [
@@ -8658,10 +8927,10 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
-          "symbol": "engineFixDegenerateNormal, engineAngleNormalize360, engineDefaultLightStyles"
+          "symbol": "engineFixDegenerateNormal, engineAngleNormalize360, engineDefaultLightStyles, engineIdentityMatrix, engineZeroOneCube"
         }
       ],
-      "note": "the copied inline code and table themselves (Vector.h, Math.h, Material.h in TbLitIdLib), called through the facade: they read only their arguments and a constant table, so any thread (C24). parseLight also calls LP1b.2's engineAnglesToMat3 (idAngles::ToMat3, Angles.cpp)"
+      "note": "the copied inline code and table themselves (Vector.h, Math.h, Material.h in TbLitIdLib), called through the facade: they read only their arguments and a constant table, so any thread (C24). parseLight also calls LP1b.2's engineAnglesToMat3 (idAngles::ToMat3, Angles.cpp). R1.5: engineIdentityMatrix returns idRenderMatrix's identity (renderMatrix_identity, M-LIGHT-STATIC-01..03) and engineZeroOneCube the copied bounds_zeroOneCube (M-GEO-STATIC-02, dynamically initialised at program load from literals, read-only); engineZeroOneCube runs on the pool (LightData.cpp's deriveLight)"
     },
     {
       "id": "M-LIGHT-DIFF-01",
@@ -8858,6 +9127,15 @@
       "kind": "function",
       "engine": [
         {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            2047,
+            2127
+          ],
+          "anchor": "idRenderWorldLocal::PushFrustumIntoTree_r and PushFrustumIntoTree",
+          "sha256": "26e16fde9ff96623bebea833fc7460d5d6a3a3d49aca57b23bb0e610b1e98756"
+        },
+        {
           "file": "neo/renderer/RenderWorld_defs.cpp",
           "lines": [
             694,
@@ -8865,24 +9143,6 @@
           ],
           "anchor": "R_CreateLightRefs",
           "sha256": "6fbc48266842d9d52cd1451e780d6d19ea3b2472380466c4b2a9fae52007767e"
-        },
-        {
-          "file": "neo/renderer/RenderWorld.cpp",
-          "lines": [
-            2047,
-            2108
-          ],
-          "anchor": "idRenderWorldLocal::PushFrustumIntoTree_r",
-          "sha256": "19e1166106d03beeef0f53b4215499ab0d204a91cad56ac624aa99192c01e308"
-        },
-        {
-          "file": "neo/renderer/RenderWorld.cpp",
-          "lines": [
-            2115,
-            2127
-          ],
-          "anchor": "idRenderWorldLocal::PushFrustumIntoTree",
-          "sha256": "526a039437c399a5f19652650600a303fa02a50268d3bd83d8f10c865d8072ed"
         },
         {
           "file": "neo/renderer/RenderWorld.cpp",

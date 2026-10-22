@@ -244,6 +244,7 @@ TEST_CASE("CpuPool")
   SECTION("a job still queued when the pool stops never runs")
   {
     auto pool = makePool();
+    const auto generation = pool->generation();
     auto gate = std::make_shared<Gate>();
     auto entered = std::make_shared<std::atomic<int>>(0);
     const auto blocker = std::function<Result<int>(const CpuJobContext&)>{
@@ -261,8 +262,13 @@ TEST_CASE("CpuPool")
         ++*entered;
         return 0;
       }});
+    // B0.14 (b): the gate opens once stop has dropped the queue (the generation moves on
+    // under the same lock), not after a fixed time
     auto opener = std::thread{[&] {
-      std::this_thread::sleep_for(50ms);
+      while (pool->generation() == generation)
+      {
+        std::this_thread::sleep_for(1ms);
+      }
       gate->openGate();
     }};
     pool->stop();
@@ -327,6 +333,27 @@ TEST_CASE("CpuPool")
       error.result
       == Result<int>{Error{"The CPU job reached an engine error: an injected error"}});
     CHECK(error.messages.size() == 1u);
+
+    // R2.6: an Error the queue had no room for fails the job too, and only that job
+    auto flooded = pool->run([](const CpuJobContext&) -> Result<int> {
+      const auto room =
+        MaxQueuedEngineMessagesOfAllThreads - pendingEngineMessagesForTesting();
+      for (auto i = std::size_t{0}; i < room; ++i)
+      {
+        reportEngineMessageForTesting(DeclMessageKind::Info, "fill");
+      }
+      reportEngineMessageForTesting(DeclMessageKind::Error, "a lost error");
+      return 1;
+    });
+    const auto lost = flooded.get();
+    CHECK_FALSE(lost.result.is_success());
+    REQUIRE_FALSE(lost.messages.empty());
+    CHECK(lost.messages.back().kind == DeclMessageKind::Error);
+    CHECK(lost.messages.back().text == "1 of them were errors");
+    auto next = pool->run([](const CpuJobContext&) -> Result<int> { return 2; });
+    const auto clean = next.get();
+    CHECK(clean.result == Result<int>{2});
+    CHECK(clean.messages.empty());
 
     // nothing stays behind for the threads' ids
     CHECK(pendingEngineMessagesForTesting() == pending);

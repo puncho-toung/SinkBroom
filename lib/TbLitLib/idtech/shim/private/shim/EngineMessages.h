@@ -27,10 +27,13 @@
 // code takes that thread's (drainEngineMessagesForThread in lit/MaterialDecls.h).
 //
 // The queue is constant-initialised and allocates only when a message is pushed (C9,
-// S27). It holds at most MaxQueuedEngineMessages (B0.1). Pushing never throws (C17): a
-// message that cannot be kept, for want of memory or room, is counted instead, the next
-// drain says how many were dropped, and a lost Error or FatalError counts as an error for
-// the registry.
+// S27; B0.6: checked by the compiler where it can, TB_LIT_CONSTINIT). It holds at most
+// MaxQueuedEngineMessages (B0.1). Pushing never throws (C17): a message that cannot be
+// kept, for want of memory or room, is counted instead, for the thread that lost it
+// (B0.5, R2.5, R2.6), and that thread's next drain says how many were dropped and how
+// many of them were errors, so a lost Error or FatalError counts as an error for that
+// thread's registry or job alone. The queue's mutex is destroyed at exit (its destructor
+// is not trivial on MSVC and Apple); every thread that pushes is joined before then.
 
 #include "lit/MaterialDecls.h"
 
@@ -40,6 +43,17 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+// B0.6: constant initialisation the compiler checks, where it can (TbLitIdLib is C++17)
+#if defined(__cpp_constinit)
+#define TB_LIT_CONSTINIT constinit
+#elif defined(__clang__)
+#define TB_LIT_CONSTINIT [[clang::require_constant_initialization]]
+#elif defined(__GNUC__)
+#define TB_LIT_CONSTINIT __constinit
+#else
+#define TB_LIT_CONSTINIT
+#endif
 
 namespace tb::lit::shim
 {
@@ -67,16 +81,29 @@ void reportWarning(const std::string& text) noexcept;
 
 // the messages of one thread, oldest first, taken out of the queue; any thread
 std::vector<EngineMessage> takeEngineMessages(std::thread::id thread);
-// drops the messages of one thread; any thread
+// drops the messages of one thread, and what it lost; any thread
 void discardEngineMessages(std::thread::id thread) noexcept;
-// the Error and FatalError messages that could not be kept since the program started
-std::uint64_t lostEngineErrors() noexcept;
 
 // B0.1: the queue keeps at most this many messages of all threads; beyond it a message is
-// dropped and counted (a dropped Error or FatalError also as a lost error)
-inline constexpr std::size_t MaxQueuedEngineMessages = 4096;
-// the messages dropped since the last call; any thread
-std::uint64_t takeDroppedEngineMessages() noexcept;
+// dropped and counted (lit/MaterialDecls.h)
+inline constexpr std::size_t MaxQueuedEngineMessages =
+  MaxQueuedEngineMessagesOfAllThreads;
+
+// what one thread lost since its last take: every dropped message, and the Error and
+// FatalError messages among them
+struct EngineLosses
+{
+  std::uint64_t dropped = 0;
+  std::uint64_t errors = 0;
+};
+// B0.5, R2.5, R2.6: what the thread lost, taken; any thread
+EngineLosses takeEngineLosses(std::thread::id thread) noexcept;
+// the lines a drain of the thread ends with for what it lost: a Warning with the count
+// of dropped messages, and an Error with the count of errors among them
+std::vector<DeclMessage> lossMessages(const EngineLosses& losses);
+// what was lost by threads that found no slot of their own (more than LossSlots threads
+// losing at once); never reported to any drain
+std::uint64_t unattributedEngineLossesForTesting() noexcept;
 
 // a message's text as DeclMessage carries it: without its trailing newlines
 std::string messageText(std::string text);

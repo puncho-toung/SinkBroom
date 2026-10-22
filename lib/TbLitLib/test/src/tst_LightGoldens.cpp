@@ -236,7 +236,12 @@ TEST_CASE("LightGoldens: a CRLF copy of the goldens reads as the file (R1.4)")
   CHECK(readGoldens(crlf) == blocks);
 }
 
-TEST_CASE("LightGoldens: the light parse and derived data against the formulas")
+// R3.16: the derived data within 16 ulps, or within 1e-6 (lightProject,
+// globalLightOrigin) or 1e-5 (baseLightProject, its inverse, the bounds) of the field's
+// largest element; the projection and the view within 1 ulp
+TEST_CASE(
+  "LightGoldens: the light parse and derived data against the formulas within 16 ulps or "
+  "1e-6/1e-5 of the largest element")
 {
   const auto blocks = readGoldens();
   const auto table = lightMaterialTable({"lights/lp1b_missing"});
@@ -313,7 +318,7 @@ TEST_CASE("LightGoldens: the light parse and derived data against the formulas")
   CHECK(lights == 16);
 }
 
-TEST_CASE("LightGoldens: CalcFov and the projection within an ulp (A16)")
+TEST_CASE("LightGoldens: CalcFov and the projection within 1 ulp (A16)")
 {
   auto views = 0;
   for (const auto& block : readGoldens())
@@ -344,7 +349,7 @@ TEST_CASE("LightGoldens: CalcFov and the projection within an ulp (A16)")
   CHECK(views == 9);
 }
 
-TEST_CASE("LightGoldens: the view matrix within an ulp")
+TEST_CASE("LightGoldens: the view axis and matrix within 1 ulp")
 {
   auto cameras = 0;
   for (const auto& block : readGoldens())

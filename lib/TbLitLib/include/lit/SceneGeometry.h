@@ -65,10 +65,11 @@ struct ProcTree;
  *
  * The scene's lights are the LightRegistry's (LP1b.3, C15): it takes the same snapshots
  * and .proc tree, builds the light records as its own pool job, and publishes them in a
- * LightTable (lightTable()). A snapshot is taken only when neither the chunks nor the
+ * LightTable, into the session's LightTablePublication (R2.9: LitSession::lightTable is
+ * what other threads read). A snapshot is taken only when neither the chunks nor the
  * lights have a job in flight.
  *
- * Threads: the render thread only, lightTable() aside (any thread); the jobs on the pool
+ * Threads: the render thread only; the jobs on the pool
  * see only their inputs, and return early once the pool is cancelled (R2.1).
  */
 class SceneGeometry
@@ -112,7 +113,11 @@ private:
   LightRegistry m_lights;
 
 public:
-  SceneGeometry(CpuPool* pool, MaterialService* materials);
+  // lights may be null: the light registry then publishes into a publication of its own
+  SceneGeometry(
+    CpuPool* pool,
+    MaterialService* materials,
+    std::shared_ptr<LightTablePublication> lights = nullptr);
   ~SceneGeometry();
 
   // B0.3: no batch is in flight
@@ -136,7 +141,8 @@ public:
   std::size_t solidPieces() const;
   std::uint64_t appliedSequence() const;
   std::shared_ptr<const ProcTree> procTree() const;
-  // C15: the latest published light records (never null); any thread
+  // C15: the latest published light records (never null); the render thread, which owns
+  // the scene (other threads read LitSession::lightTable, R2.9)
   std::shared_ptr<const LightTable> lightTable() const;
   // what the jobs and the copied code reported, oldest first
   std::vector<std::string> takeWarnings();

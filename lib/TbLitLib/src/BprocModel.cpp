@@ -295,26 +295,29 @@ Result<BprocModel> readBinaryModel(
   {
     return streamError("bad numSurfaces", offset);
   }
-  for (auto i = std::size_t{0}; i < *numSurfaces; ++i)
+  // R1.7: the surfaces through the pipeline, a surface's own error kept
+  auto read = Result<void>{kdl::void_success};
+  for (auto i = std::size_t{0}; i < *numSurfaces && read.is_success(); ++i)
   {
-    auto surface = readSurface(in, magic);
-    if (!surface.is_success())
-    {
-      return streamError(fmt::format("surface {}", i), offset);
-    }
-    model.surfaces.push_back(std::move(surface) | kdl::value());
+    read = readSurface(in, magic) | kdl::transform([&](BprocSurface surface) {
+             model.surfaces.push_back(std::move(surface));
+           })
+           | kdl::or_else([&](Error e) -> Result<void> {
+               return streamError(fmt::format("surface {}: {}", i, e.msg), offset);
+             });
   }
-
-  // the model's bounds, then overlaysAdded, lastModifiedFrame, lastArchivedFrame, the
-  // name and nine bools
-  in.skip(24 + 12);
-  model.name = in.string();
-  in.skip(9);
-  if (in.failed())
-  {
-    return streamError("the model is cut short", offset);
-  }
-  return model;
+  return std::move(read) | kdl::and_then([&]() -> Result<BprocModel> {
+           // the model's bounds, then overlaysAdded, lastModifiedFrame,
+           // lastArchivedFrame, the name and nine bools
+           in.skip(24 + 12);
+           model.name = in.string();
+           in.skip(9);
+           if (in.failed())
+           {
+             return streamError("the model is cut short", offset);
+           }
+           return std::move(model);
+         });
 }
 
 Result<BprocFile> readBprocFile(const std::span<const std::byte> data)
@@ -330,7 +333,9 @@ Result<BprocFile> readBprocFile(const std::span<const std::byte> data)
   const auto numEntries = in.big<std::int32_t>();
   file.mapName = in.string();
   file.timeStamp = in.big<std::int64_t>();
-  for (auto i = 0; i < numEntries && !in.failed(); ++i)
+  // R1.7: the models through the pipeline; the first error ends the read
+  auto read = Result<void>{kdl::void_success};
+  for (auto i = 0; i < numEntries && !in.failed() && read.is_success(); ++i)
   {
     auto type = in.string();
     std::transform(type.begin(), type.end(), type.begin(), [](const char c) {
@@ -340,14 +345,10 @@ Result<BprocFile> readBprocFile(const std::span<const std::byte> data)
     {
       // RenderWorld_load.cpp:128-141 ReadBinaryModel: the name, then the stream
       const auto name = in.string();
-      auto model = readBinaryModel(data, offset);
-      if (!model.is_success())
-      {
-        return std::move(model) | kdl::transform([](auto) { return BprocFile{}; });
-      }
-      auto loaded = std::move(model) | kdl::value();
-      loaded.name = name;
-      file.models.push_back(std::move(loaded));
+      read = readBinaryModel(data, offset) | kdl::transform([&](BprocModel loaded) {
+               loaded.name = name;
+               file.models.push_back(std::move(loaded));
+             });
     }
     else if (type == "interareaportals")
     {
@@ -389,14 +390,16 @@ Result<BprocFile> readBprocFile(const std::span<const std::byte> data)
     }
     else
     {
-      return Error{fmt::format("The .bproc cannot be read: unexpected type {}", type)};
+      read = Error{fmt::format("The .bproc cannot be read: unexpected type {}", type)};
     }
   }
-  if (in.failed())
-  {
-    return Error{"The .bproc cannot be read: it is cut short"};
-  }
-  return file;
+  return std::move(read) | kdl::and_then([&]() -> Result<BprocFile> {
+           if (in.failed())
+           {
+             return Error{"The .bproc cannot be read: it is cut short"};
+           }
+           return std::move(file);
+         });
 }
 
 } // namespace tb::lit

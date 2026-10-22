@@ -253,52 +253,42 @@ Result<ProcTree> readProcFile(const std::string_view text, const bool geometry)
       ProcFileId,
       ProcFileId003)};
   }
-  while (lexer.readToken(token))
+  // R1.7: each section through the pipeline; the first error ends the read
+  auto read = Result<void>{kdl::void_success};
+  while (read.is_success() && lexer.readToken(token))
   {
-    if (token == "model")
-    {
-      auto model = parseModel(lexer, tree.version, geometry);
-      if (!model.is_success())
-      {
-        return std::move(model) | kdl::transform([](auto) { return ProcTree{}; });
-      }
-      tree.models.push_back(std::move(model) | kdl::value());
-      continue;
-    }
-    if (token == "shadowModel")
-    {
-      // the engine just skips it
-      if (!lexer.skipBracedSection())
-      {
-        return lexError(lexer, "shadowModel");
-      }
-      continue;
-    }
-    if (token == "interAreaPortals")
-    {
-      auto parsed = parsePortals(lexer, tree);
-      if (!parsed.is_success())
-      {
-        return std::move(parsed) | kdl::transform([]() { return ProcTree{}; });
-      }
-      continue;
-    }
-    if (token == "nodes")
-    {
-      auto parsed = parseNodes(lexer, tree);
-      if (!parsed.is_success())
-      {
-        return std::move(parsed) | kdl::transform([]() { return ProcTree{}; });
-      }
-      continue;
-    }
-    return lexError(lexer, fmt::format("bad token \"{}\"", token));
+    read = std::move(read) | kdl::and_then([&]() -> Result<void> {
+             if (token == "model")
+             {
+               return parseModel(lexer, tree.version, geometry)
+                      | kdl::transform([&](ProcModel model) {
+                          tree.models.push_back(std::move(model));
+                        });
+             }
+             if (token == "shadowModel")
+             {
+               // the engine just skips it
+               return lexer.skipBracedSection() ? Result<void>{kdl::void_success}
+                                                : lexError(lexer, "shadowModel");
+             }
+             if (token == "interAreaPortals")
+             {
+               return parsePortals(lexer, tree);
+             }
+             if (token == "nodes")
+             {
+               return parseNodes(lexer, tree);
+             }
+             return lexError(lexer, fmt::format("bad token \"{}\"", token));
+           });
   }
-  if (lexer.hadError())
-  {
-    return lexError(lexer, "the lexer failed");
-  }
-  return tree;
+  return std::move(read) | kdl::and_then([&]() -> Result<ProcTree> {
+           if (lexer.hadError())
+           {
+             return lexError(lexer, "the lexer failed");
+           }
+           return std::move(tree);
+         });
 }
 
 int pointInArea(const ProcTree& tree, const std::array<float, 3>& point)

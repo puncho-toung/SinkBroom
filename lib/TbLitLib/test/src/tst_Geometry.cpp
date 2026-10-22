@@ -43,6 +43,10 @@
 #include <thread>
 #include <vector>
 
+#if defined(_MSC_VER) && defined(_DEBUG)
+#include <crtdbg.h>
+#endif
+
 #include <catch2/catch_test_macros.hpp>
 
 namespace tb::lit
@@ -586,6 +590,9 @@ TEST_CASE("ChunkBuilder: the tangent path of a material (C25, R3.11)")
 TEST_CASE("SceneGeometry: what a later material table brings is built (R3.1, R3.2)")
 {
   using namespace std::chrono_literals;
+  // the stand-in table (a registry of its own) before the service's registry exists:
+  // only one lives at a time, and the tests run in any order
+  static_cast<void>(fixtureTable());
   auto gate = std::make_shared<ParseGate>();
   gate->close();
   auto service = gatedService(gate);
@@ -847,6 +854,74 @@ TEST_CASE("SceneGeometry: a cancelled pool's batch ends at once (R2.1)")
   CHECK(scene.chunks().size() <= 2u);
   pool->stop();
 }
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+TEST_CASE(
+  "SceneGeometry: 50 snapshots, chunk batches and light jobs leave the heap (R2.14)")
+{
+  const auto heapGrows = [](const auto& f) {
+    _CrtMemState before;
+    _CrtMemCheckpoint(&before);
+    f();
+    _CrtMemState after;
+    _CrtMemCheckpoint(&after);
+    _CrtMemState difference;
+    const auto grew = _CrtMemDifference(&difference, &before, &after) != 0;
+    if (grew)
+    {
+      _CrtMemDumpStatistics(&difference);
+    }
+    return grew;
+  };
+  const auto mapWith = [](const int x) {
+    return mapText(
+      "",
+      "{\n\"classname\" \"func_static\"\n\"name\" \"a\"\n\"model\" \"a\"\n"
+        + box(x, 0, 0, x + 32, 32, 32, "lp1b/crate")
+        + box(1100, 0, 0, 1132, 32, 32, "lp1b/grate") + "}\n"
+        + "{\n\"classname\" \"light\"\n\"origin\" \"" + std::to_string(x)
+        + " 0 64\"\n\"light_radius\" \"64 64 64\"\n}\n");
+  };
+  const auto first = snapshotOfMapText(mapWith(100));
+  const auto moved = snapshotOfMapText(mapWith(164));
+  const auto crate = nodeWithMaterial(first, "lp1b/crate");
+  const auto light =
+    std::find_if(first.nodes.begin(), first.nodes.end(), [](const SnapshotNode& node) {
+      return node.kind == SnapshotNodeKind::Light;
+    });
+  REQUIRE(light != first.nodes.end());
+  // a node and a light record that move back and forth: every batch replaces chunks,
+  // entity states and a light record, and the state stays bounded
+  auto back = nodesOnly(first, {crate, light->id}, 0);
+  back.entities = first.entities;
+  auto forth = nodesOnly(moved, {crate, light->id}, 0);
+  forth.entities = moved.entities;
+
+  const auto run = [&] {
+    auto pool = CpuPool::create() | kdl::value();
+    {
+      auto scene = SceneGeometry{pool.get(), nullptr};
+      auto start = first;
+      start.sequence = 1;
+      scene.takeSnapshot(start);
+      scene.finishForTesting();
+      for (auto i = 0; i < 50; ++i)
+      {
+        auto next = i % 2 ? back : forth;
+        next.sequence = std::uint64_t(i + 2);
+        scene.takeSnapshot(next);
+        scene.finishForTesting();
+      }
+      static_cast<void>(scene.takeWarnings());
+    }
+    pool->stop();
+  };
+  // what the first round allocates for good
+  run();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  CHECK_FALSE(heapGrows(run));
+}
+#endif
 
 } // namespace tb::lit
 

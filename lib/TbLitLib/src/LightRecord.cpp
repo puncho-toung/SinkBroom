@@ -150,10 +150,35 @@ LightJobOutput buildLightRecords(const LightJobInput& input, const CpuJobContext
   return output;
 }
 
-LightRegistry::LightRegistry(CpuPool* pool, MaterialService* materials)
+LightTablePublication::LightTablePublication()
+  : m_table{std::make_shared<const LightTable>()}
+{
+}
+
+std::shared_ptr<const LightTable> LightTablePublication::table() const
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  return m_table;
+}
+
+void LightTablePublication::publish(std::shared_ptr<const LightTable> table)
+{
+  auto previous = std::shared_ptr<const LightTable>{};
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    previous = std::exchange(m_table, std::move(table));
+  }
+  // the table replaced is freed outside the lock
+}
+
+LightRegistry::LightRegistry(
+  CpuPool* pool,
+  MaterialService* materials,
+  std::shared_ptr<LightTablePublication> publication)
   : m_pool{pool}
   , m_materials{materials}
-  , m_published{std::make_shared<const LightTable>()}
+  , m_publication{
+      publication ? std::move(publication) : std::make_shared<LightTablePublication>()}
 {
   // the default lights every light may fall back to (RenderSystem_init.cpp:1784-1785)
   if (m_materials)
@@ -302,8 +327,7 @@ void LightRegistry::publish()
   auto table = std::make_shared<LightTable>();
   table->version = ++m_tableVersion;
   table->records = m_records;
-  const auto lock = std::scoped_lock{m_publishMutex};
-  m_published = std::move(table);
+  m_publication->publish(std::move(table));
 }
 
 void LightRegistry::startBatch()
@@ -490,8 +514,7 @@ bool LightRegistry::collect()
 
 std::shared_ptr<const LightTable> LightRegistry::table() const
 {
-  const auto lock = std::scoped_lock{m_publishMutex};
-  return m_published;
+  return m_publication->table();
 }
 
 std::vector<std::string> LightRegistry::takeWarnings()

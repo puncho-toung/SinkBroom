@@ -22,6 +22,7 @@
 #include "StringMakers.h"
 #include "lit/CpuPool.h"
 #include "lit/FramePacer.h"
+#include "lit/LightRecord.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
 #include "lit/Snapshot.h"
@@ -830,6 +831,9 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
   {
     auto messages = ValidationMessages{};
     auto poolThreads = std::make_shared<std::set<DWORD>>();
+    // B0.14 (c): handles of the pool's threads, duplicated by the threads themselves, so
+    // that a later thread with a recycled id is never the one waited for
+    auto poolHandles = std::make_shared<std::vector<HANDLE>>();
     {
       const auto instance = TestInstance{library, true, false, messages};
       REQUIRE(instance.valid());
@@ -853,8 +857,8 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
                        5,
                        service.get())
                      | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
-      CHECK(session->materialService() == service.get());
-      REQUIRE(session->cpuPool() != nullptr);
+      CHECK(session->materialServiceForTesting() == service.get());
+      REQUIRE(session->cpuPoolForTesting() != nullptr);
 
       // S31: the render thread starts with an empty inbox and says so
       REQUIRE(waitFor(
@@ -900,12 +904,26 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       auto futures = std::vector<std::future<CpuJobResult<DWORD>>>{};
       for (auto i = 0; i < 4; ++i)
       {
-        futures.push_back(session->cpuPool()->run(
-          [mutex, poolThreads](const CpuJobContext&) -> Result<DWORD> {
+        futures.push_back(session->cpuPoolForTesting()->run(
+          [mutex, poolThreads, poolHandles](const CpuJobContext&) -> Result<DWORD> {
             std::this_thread::sleep_for(20ms);
             const auto id = GetCurrentThreadId();
             const auto lock = std::scoped_lock{*mutex};
-            poolThreads->insert(id);
+            if (poolThreads->insert(id).second)
+            {
+              auto handle = HANDLE{};
+              if (DuplicateHandle(
+                    GetCurrentProcess(),
+                    GetCurrentThread(),
+                    GetCurrentProcess(),
+                    &handle,
+                    SYNCHRONIZE,
+                    FALSE,
+                    0))
+              {
+                poolHandles->push_back(handle);
+              }
+            }
             return id;
           }));
       }
@@ -919,8 +937,8 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
 
       // teardown step 1 stops the pool and forgets the service, and takes no snapshot
       teardown(*session);
-      CHECK(session->cpuPool() == nullptr);
-      CHECK(session->materialService() == nullptr);
+      CHECK(session->cpuPoolForTesting() == nullptr);
+      CHECK(session->materialServiceForTesting() == nullptr);
       CHECK_FALSE(session->offerSnapshot(snapshotOf(5, 3)));
       CHECK(session->lastDeviceReleaseCount() == 0u);
       CHECK(events.count(SessionEvent::ReadyForSnapshot) == 3u);
@@ -931,16 +949,11 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     CHECK(resetDispatcher());
 
     // the pool's threads are joined
-    for (const auto id : *poolThreads)
+    CHECK(poolHandles->size() == poolThreads->size());
+    for (const auto handle : *poolHandles)
     {
-      CAPTURE(id);
-      const auto thread = OpenThread(SYNCHRONIZE, FALSE, id);
-      const auto gone = !thread || WaitForSingleObject(thread, 0) == WAIT_OBJECT_0;
-      if (thread)
-      {
-        CloseHandle(thread);
-      }
-      CHECK(gone);
+      CHECK(WaitForSingleObject(handle, 0) == WAIT_OBJECT_0);
+      CloseHandle(handle);
     }
     messages.print("snapshots and pool, validation");
     CHECK(messages.errors == 0);
@@ -1043,11 +1056,20 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       auto passes = std::make_shared<std::atomic<int>>(0);
       session->debugSetHook(DebugHook::IdleUnlocked, [passes] { ++*passes; });
 
-      auto snapshot = std::make_shared<Snapshot>(snapshotOfMapText(
-        "{\n\"classname\" \"worldspawn\"\n" + boxBrush(0, 0, 0, 64, 64, 64, "lp1b/wall")
-        + boxBrush(128, 0, 0, 160, 32, 32, "lp1b/grate") + "}\n"));
+      auto snapshot =
+        std::make_shared<Snapshot>(snapshotOfMapText(
+          "{\n\"classname\" \"worldspawn\"\n" + boxBrush(0, 0, 0, 64, 64, 64, "lp1b/wall")
+          + boxBrush(128, 0, 0, 160, 32, 32, "lp1b/grate")
+          + "}\n{\n\"classname\" \"light\"\n\"origin\" \"32 32 96\"\n"
+            "\"light_radius\" \"64 64 64\"\n}\n"));
       snapshot->generation = 12;
       snapshot->sequence = 1;
+      const auto light = std::find_if(
+        snapshot->nodes.begin(), snapshot->nodes.end(), [](const SnapshotNode& node) {
+          return node.kind == SnapshotNodeKind::Light;
+        });
+      REQUIRE(light != snapshot->nodes.end());
+      const auto lightId = light->entity;
       REQUIRE(session->offerSnapshot(snapshot));
       session->setExposed(true);
       REQUIRE(waitFor(
@@ -1088,10 +1110,21 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       // and the chunks built while the materials were pending are built again
       CHECK(waitFor(
         [&] { return session->geometryBatchesForTesting() > batches; }, 10000ms, false));
+      // so is the light, whose entityDef the table now answers (R2.9: read from the
+      // session, on this thread)
+      CHECK(waitFor(
+        [&] {
+          const auto record = session->lightTable()->find(lightId);
+          return record && !record->pendingEntityDef;
+        },
+        10000ms,
+        false));
 
       session->debugSetHook(DebugHook::IdleUnlocked, {});
       teardown(*session);
       CHECK(session->lastDeviceReleaseCount() == 0u);
+      // R2.9: the records outlive the render thread
+      CHECK(session->lightTable()->find(lightId) != nullptr);
       session.reset();
     }
     CHECK(resetDispatcher());

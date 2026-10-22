@@ -26,10 +26,10 @@
 #include <QWidget>
 #include <QtLogging>
 
-#include "LitDocumentObserver.h"
 #include "ServiceSentMessages.h"
 #include "lit/GameDeclSource.h"
 #include "lit/MaterialService.h"
+#include "ui/LitDocumentObserver.h"
 #include "ui/LitPreviewPanel.h"
 #include "ui/LitPreviewWindow.h"
 
@@ -282,21 +282,25 @@ void LitSessionHost::startMaterials()
   // session's queue, with its generation. The listener must not block: a table is posted
   // only when none is pending, and the GUI thread reads the latest one when it handles it
   options.listener =
-    [sink = eventSink(), generation = m_generation, publishPending = m_publishPending](
+    [queue = eventQueue(), generation = m_generation, publishPending = m_publishPending](
       const lit::MaterialServiceEvent& event) {
       switch (event.kind)
       {
       case lit::MaterialServiceEvent::Kind::Message:
-        sink(
+        static_cast<void>(queue(
           event.level == lit::DeclMessageKind::Info ? lit::SessionEvent::MaterialInfo
                                                     : lit::SessionEvent::MaterialWarning,
           event.text,
-          generation);
+          generation));
         break;
       case lit::MaterialServiceEvent::Kind::Published:
-        if (!publishPending->exchange(true))
+        // B0.8: a table that could not be posted leaves the flag free, so that the next
+        // one is posted
+        if (
+          !publishPending->exchange(true)
+          && !queue(lit::SessionEvent::MaterialsPublished, {}, generation))
         {
-          sink(lit::SessionEvent::MaterialsPublished, {}, generation);
+          publishPending->store(false);
         }
         break;
       }
@@ -762,6 +766,17 @@ void LitSessionHost::afterBusy()
 
 lit::EventSink LitSessionHost::eventSink()
 {
+  return [queue = eventQueue()](
+           const lit::SessionEvent event,
+           std::string message,
+           const std::uint64_t generation) {
+    static_cast<void>(queue(event, std::move(message), generation));
+  };
+}
+
+std::function<bool(lit::SessionEvent, std::string, std::uint64_t)> LitSessionHost::
+  eventQueue()
+{
   // Called on the session's threads, and on this thread inside create, createSwapchain
   // and the teardown steps; always queued to this host, which outlives the session's
   // threads, so that no message runs inside the call that sent it. The host's owner sees
@@ -788,10 +803,12 @@ lit::EventSink LitSessionHost::eventSink()
           sessionEventReceived(generation, event, queuedMessage);
         },
         Qt::QueuedConnection);
+      return true;
     }
     catch (...)
     {
       // a message that cannot be queued is lost, not the session
+      return false;
     }
   };
 }

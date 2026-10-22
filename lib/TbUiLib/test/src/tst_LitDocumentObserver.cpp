@@ -19,7 +19,6 @@
 
 #include <QCoreApplication>
 
-#include "LitDocumentObserver.h"
 #include "base/PreferenceManager.h"
 #include "fs/TestEnvironment.h"
 #include "lit/Snapshot.h"
@@ -43,6 +42,7 @@
 #include "mdl/TransactionScope.h"
 #include "mdl/WorldNode.h"
 #include "prefs/Preferences.h"
+#include "ui/LitDocumentObserver.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
 

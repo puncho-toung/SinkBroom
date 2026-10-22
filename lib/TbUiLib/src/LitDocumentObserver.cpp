@@ -17,12 +17,11 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "LitDocumentObserver.h"
+#include "ui/LitDocumentObserver.h"
 
 #include <QMetaObject>
 #include <QtLogging>
 
-#include "LitSnapshotBuilder.h"
 #include "base/PreferenceManager.h"
 #include "mdl/BrushNode.h"
 #include "mdl/EditorContext.h"
@@ -35,6 +34,7 @@
 #include "mdl/PatchNode.h"
 #include "mdl/WorldNode.h"
 #include "prefs/Preferences.h"
+#include "ui/LitSnapshotBuilder.h"
 #include "ui/MapDocument.h"
 
 #include "kd/overload.h"

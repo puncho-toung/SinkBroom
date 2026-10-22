@@ -25,6 +25,7 @@
 #include "SessionEvents.h"
 #include "Swapchain.h"
 #include "lit/CpuPool.h"
+#include "lit/LightRecord.h"
 #include "lit/Snapshot.h"
 
 #include "kd/result.h"
@@ -47,6 +48,7 @@ LitSession::LitSession(
   : m_options{std::move(options)}
   , m_events{std::make_unique<SessionEvents>(std::move(eventSink), generation)}
   , m_materials{materials}
+  , m_lightTables{std::make_shared<LightTablePublication>()}
 {
 }
 
@@ -139,7 +141,7 @@ Result<void> LitSession::start(
          | kdl::transform([&](std::unique_ptr<CpuPool> pool) {
              m_pool = std::move(pool);
              // B0.10: the render thread gets the pool and the service at start
-             m_renderThread->start(m_pool.get(), m_materials);
+             m_renderThread->start(m_pool.get(), m_materials, m_lightTables);
            });
 }
 
@@ -202,6 +204,11 @@ bool LitSession::snapshotSlotFree() const
   return !m_renderThreadStopped && m_renderThread->snapshotSlotFree();
 }
 
+std::shared_ptr<const LightTable> LitSession::lightTable() const
+{
+  return m_lightTables->table();
+}
+
 void LitSession::tableChanged()
 {
   if (!m_renderThreadStopped && m_renderThread)
@@ -210,12 +217,12 @@ void LitSession::tableChanged()
   }
 }
 
-CpuPool* LitSession::cpuPool() const
+CpuPool* LitSession::cpuPoolForTesting() const
 {
   return m_pool && !m_pool->stopped() ? m_pool.get() : nullptr;
 }
 
-MaterialService* LitSession::materialService() const
+MaterialService* LitSession::materialServiceForTesting() const
 {
   return m_materials;
 }

@@ -1270,6 +1270,7 @@ MaterialLookup MaterialService::lookup(const std::string_view name)
              : MaterialLookup{MaterialLookup::State::Failed, nullptr, slot->error};
   }
 
+  auto queued = false;
   {
     auto lock = std::scoped_lock{m_shared->mutex};
     // X.2, Y.1: no thread will take the lookup
@@ -1285,9 +1286,14 @@ MaterialLookup MaterialService::lookup(const std::string_view name)
     if (!m_shared->stop && m_shared->queuedLookups.insert(text).second)
     {
       m_shared->lookups.push_back(std::move(text));
+      queued = true;
     }
   }
-  m_shared->requested.notify_one();
+  // B0.13: a name already queued wakes nobody
+  if (queued)
+  {
+    m_shared->requested.notify_one();
+  }
   return MaterialLookup{};
 }
 
@@ -1300,6 +1306,7 @@ std::shared_ptr<const EvaluatedRegisters> MaterialService::evaluate(
     return registers;
   }
 
+  auto queued = false;
   {
     auto lock = std::scoped_lock{m_shared->mutex};
     // X.2, Y.1: no thread will take the evaluation
@@ -1311,9 +1318,13 @@ std::shared_ptr<const EvaluatedRegisters> MaterialService::evaluate(
     if (!m_shared->stop && m_shared->queuedEvaluations.insert(key).second)
     {
       m_shared->evaluations.push_back(key);
+      queued = true;
     }
   }
-  m_shared->requested.notify_one();
+  if (queued)
+  {
+    m_shared->requested.notify_one();
+  }
   return nullptr;
 }
 
@@ -1326,6 +1337,7 @@ EntityDefLookup MaterialService::entityDef(const std::string_view classname)
              : EntityDefLookup{EntityDefLookup::State::Failed, nullptr, slot->error};
   }
 
+  auto queued = false;
   {
     auto lock = std::scoped_lock{m_shared->mutex};
     // X.2, Y.1: no thread will take the query
@@ -1341,14 +1353,19 @@ EntityDefLookup MaterialService::entityDef(const std::string_view classname)
     if (!m_shared->stop && m_shared->queuedEntityDefLookups.insert(text).second)
     {
       m_shared->entityDefLookups.push_back(std::move(text));
+      queued = true;
     }
   }
-  m_shared->requested.notify_one();
+  if (queued)
+  {
+    m_shared->requested.notify_one();
+  }
   return EntityDefLookup{};
 }
 
 void MaterialService::loadProcFile(const std::string_view path)
 {
+  auto queued = false;
   {
     auto lock = std::scoped_lock{m_shared->mutex};
     auto text = std::string{path};
@@ -1357,9 +1374,13 @@ void MaterialService::loadProcFile(const std::string_view path)
       && m_shared->queuedProcFiles.insert(text).second)
     {
       m_shared->procFiles.push_back(std::move(text));
+      queued = true;
     }
   }
-  m_shared->requested.notify_one();
+  if (queued)
+  {
+    m_shared->requested.notify_one();
+  }
 }
 
 void MaterialService::parseAll()

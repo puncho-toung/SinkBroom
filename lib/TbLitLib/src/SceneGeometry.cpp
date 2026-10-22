@@ -76,10 +76,13 @@ void forgetCells(
 
 } // namespace
 
-SceneGeometry::SceneGeometry(CpuPool* pool, MaterialService* materials)
+SceneGeometry::SceneGeometry(
+  CpuPool* pool,
+  MaterialService* materials,
+  std::shared_ptr<LightTablePublication> lights)
   : m_pool{pool}
   , m_materials{materials}
-  , m_lights{pool, materials}
+  , m_lights{pool, materials, std::move(lights)}
 {
 }
 

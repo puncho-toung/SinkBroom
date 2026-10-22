@@ -33,6 +33,7 @@
 
 #include <cmath>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <thread>
 
@@ -313,6 +314,15 @@ TEST_CASE("LightData: area references and shaders equal listRenderLightDefs (D58
   const auto table = lightMaterialTable(missing);
   const auto common = commonChildrenAreas(tree);
 
+  // R3.7: which areas, not only how many. listRenderLightDefs prints no area numbers, so
+  // these come from the fixture's geometry: area 0 is the +x room (x > 8), area 1 the -x
+  // room (x < -8), the partition between them holds the portal; each light's volume from
+  // its keys (lp1b_light: x -136..264; lp1b_spot_through: from -128 towards +x through
+  // the portal; lp1b_rotated: its 64-unit radius along x at x 24, -40..88; the others
+  // stay within one room)
+  const auto expectedAreas =
+    std::vector<std::set<int>>{{0, 1}, {0, 1}, {0}, {1}, {1}, {0, 1}, {1}, {0}};
+  REQUIRE(lights.size() == expectedAreas.size());
   REQUIRE(lights.size() == listed.size());
   for (auto i = std::size_t{0}; i < lights.size(); ++i)
   {
@@ -325,6 +335,7 @@ TEST_CASE("LightData: area references and shaders equal listRenderLightDefs (D58
       lights[i].parms.origin[2],
       fmt::join(derived.areas, " ")));
     CHECK(int(derived.areas.size()) == listed[i].refs);
+    CHECK(std::set<int>{derived.areas.begin(), derived.areas.end()} == expectedAreas[i]);
     CHECK(derived.shader.name == listed[i].shader);
     CHECK_FALSE(derived.shader.pending);
   }

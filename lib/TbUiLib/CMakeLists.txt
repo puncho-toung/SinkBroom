@@ -410,21 +410,21 @@ if(TB_ENABLE_LIT_PREVIEW)
   target_sources(TbUiLib
     PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/src/LitDocumentObserver.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/src/LitDocumentObserver.h
       ${CMAKE_CURRENT_SOURCE_DIR}/src/LitPreviewPanel.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/LitPreviewWindow.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSessionHost.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSessionHost.h
       ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSnapshotBuilder.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSnapshotBuilder.h
       ${CMAKE_CURRENT_SOURCE_DIR}/src/ServiceSentMessages.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/ServiceSentMessages.h
 
     PUBLIC FILE_SET headers TYPE HEADERS
       BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include
       FILES
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LitDocumentObserver.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LitPreviewPanel.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LitPreviewWindow.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LitSnapshotBuilder.h
   )
 
   # TbLitLib's public definitions (VK_NO_PROTOTYPES, the dynamic dispatcher, NOMINMAX and

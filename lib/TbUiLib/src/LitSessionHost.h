@@ -271,6 +271,8 @@ private:
   QSize pixelSize() const;
 
   lit::EventSink eventSink();
+  // what eventSink posts through: false when the message could not be queued (B0.8)
+  std::function<bool(lit::SessionEvent, std::string, std::uint64_t)> eventQueue();
   void sessionEventReceived(
     std::uint64_t generation, lit::SessionEvent event, const std::string& message);
   void dispatchSessionEvent(lit::SessionEvent event, const std::string& message);

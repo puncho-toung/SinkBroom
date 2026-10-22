@@ -187,11 +187,14 @@ bool RenderThread::headless() const
   return m_headless;
 }
 
-void RenderThread::start(CpuPool* pool, MaterialService* materials)
+void RenderThread::start(
+  CpuPool* pool,
+  MaterialService* materials,
+  std::shared_ptr<LightTablePublication> lights)
 {
   m_pool = pool;
   m_materials = materials;
-  m_geometry = std::make_unique<SceneGeometry>(m_pool, m_materials);
+  m_geometry = std::make_unique<SceneGeometry>(m_pool, m_materials, std::move(lights));
   m_thread = std::thread{[this] { main(); }};
 }
 
@@ -512,21 +515,25 @@ void RenderThread::runLoop()
       const auto frameCamera = m_camera;
       // S31, B0.3: the frame takes the snapshot offered once the last one's chunks are
       // applied; ReadyForSnapshot then says the inbox is free again
-      const auto snapshotTaken =
-        m_snapshotInbox != nullptr && (!m_geometry || m_geometry->readyForSnapshot());
-      if (snapshotTaken)
+      auto snapshot = std::shared_ptr<const Snapshot>{};
+      auto previous = std::shared_ptr<const Snapshot>{};
+      if (m_snapshotInbox && (!m_geometry || m_geometry->readyForSnapshot()))
       {
-        m_snapshot = std::move(m_snapshotInbox);
+        snapshot = std::move(m_snapshotInbox);
+        previous = std::exchange(m_snapshot, snapshot);
         m_snapshotInboxFull = false;
         ++m_snapshotsTaken;
       }
       lock.unlock();
-      if (snapshotTaken)
+      // B0.9: the snapshot taken before is freed here, outside m_mutex, which the GUI
+      // thread's setCamera and offerSnapshot take
+      previous.reset();
+      if (snapshot)
       {
         m_events.post(SessionEvent::ReadyForSnapshot, {});
         if (m_geometry)
         {
-          m_geometry->takeSnapshot(*m_snapshot);
+          m_geometry->takeSnapshot(*snapshot);
         }
       }
       const auto outcome = drawFrame(frameCamera);

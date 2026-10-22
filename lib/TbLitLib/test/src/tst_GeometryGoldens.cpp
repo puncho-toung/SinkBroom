@@ -39,6 +39,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
 #include <thread>
 
@@ -202,6 +203,74 @@ bool closeArea(const double a, const double b, const double relative)
   return std::abs(a - b) <= relative * std::max(1.0, std::abs(b));
 }
 
+// every cell of the fixture's snapshot as one job, with its .proc and materials
+ChunkJobInput fixtureInput(const Fixture& f)
+{
+  auto input = ChunkJobInput{};
+  for (const auto& entity : sceneEntitiesOf(f.snapshot))
+  {
+    input.entities[entity->id] = entity;
+    if (entity->classname == "worldspawn")
+    {
+      input.worldspawn = entity;
+    }
+  }
+  auto cells = std::set<CellRef>{};
+  for (const auto& node : sceneNodesOf(f.snapshot))
+  {
+    input.nodes.push_back(node);
+    if (node->kind == SnapshotNodeKind::Brush || node->kind == SnapshotNodeKind::Patch)
+    {
+      const auto entity = input.entities.at(node->entity);
+      cells.insert(CellRef{
+        entity->classname == "func_group" ? input.worldspawn->id : node->entity,
+        cellOfNode(*node)});
+    }
+  }
+  input.cells.assign(cells.begin(), cells.end());
+  input.proc = f.proc;
+  input.materials = f.materials;
+  return input;
+}
+
+// the entity whose name key is name
+const SnapshotEntity* entityNamed(const Snapshot& snapshot, const std::string& name)
+{
+  for (const auto& entity : snapshot.entities)
+  {
+    for (auto k = entity.keys.first; k < entity.keys.first + entity.keys.count; ++k)
+    {
+      if (
+        snapshot.string(snapshot.keyValues[k].key) == "name"
+        && snapshot.string(snapshot.keyValues[k].value) == name)
+      {
+        return &entity;
+      }
+    }
+  }
+  return nullptr;
+}
+
+// the preview's st rule (D59) for a side vertex: relative to the entity's origin key,
+// through SetTexCoord and the chunker's read-back of what dmap writes
+EngineVec2 previewSt(
+  const SnapshotFace& face, const EngineVec3& relative, const std::pair<int, int>& size)
+{
+  const auto texture = EngineValveTexture{
+    {face.uAxis.x(), face.uAxis.y(), face.uAxis.z()},
+    face.offset.x(),
+    {face.vAxis.x(), face.vAxis.y(), face.vAxis.z()},
+    face.offset.y(),
+    face.scale.x(),
+    face.scale.y()};
+  const auto st =
+    engineValveTexCoord(relative, texture, float(size.first), float(size.second));
+  auto vert = engineClearedVert();
+  engineSetTexCoord(vert, st[0], st[1]);
+  const auto stored = engineTexCoord(vert);
+  return {procReadBack(stored[0]), procReadBack(stored[1])};
+}
+
 } // namespace
 
 TEST_CASE("Geometry goldens: the fixture's engine output reads back")
@@ -281,27 +350,17 @@ TEST_CASE(
         CAPTURE(surface.material, j, v[0], v[1], v[2]);
 
         // the preview's st rule (D59), through SetTexCoord and the chunker's own
-        // read-back of what dmap writes (R3.9: procReadBack, WriteFloat's snap included)
-        const auto texture = EngineValveTexture{
-          {face.uAxis.x(), face.uAxis.y(), face.uAxis.z()},
-          face.offset.x(),
-          {face.vAxis.x(), face.vAxis.y(), face.vAxis.z()},
-          face.offset.y(),
-          face.scale.x(),
-          face.scale.y()};
-        const auto st = engineValveTexCoord(
-          {v[0], v[1], v[2]}, texture, float(size.first), float(size.second));
-        auto vert = engineClearedVert();
-        engineSetTexCoord(vert, st[0], st[1]);
-        const auto stored = engineTexCoord(vert);
+        // read-back of what dmap writes (R3.9: procReadBack, WriteFloat's snap included);
         // P.18: modulo integers
-        const auto ds = procReadBack(stored[0]) - v[3];
-        const auto dt = procReadBack(stored[1]) - v[4];
+        const auto st = previewSt(face, {v[0], v[1], v[2]}, size);
+        const auto ds = st[0] - v[3];
+        const auto dt = st[1] - v[4];
         CHECK(ds == std::round(ds));
         CHECK(dt == std::round(dt));
 
         // the side plane's normal through SetNormal, again through SetNormal(GetNormal())
         // as ShareMapTriVerts stores it (dmap/output.cpp:250), and the mirror, exactly
+        auto vert = engineClearedVert();
         const auto plane = sidePlane(face);
         engineSetNormal(vert, {plane.a, plane.b, plane.c});
         engineSetNormal(vert, engineNormal(vert));
@@ -314,6 +373,149 @@ TEST_CASE(
     }
   }
   CHECK(checked > 50);
+}
+
+TEST_CASE("Geometry goldens: (a) st at the .proc vertices of the brush entities (R3.6)")
+{
+  // A19: dmap's st come from the position relative to the origin key (TriListForSide
+  // runs before WriteUTriangles subtracts originOffset), its vertices are relative to
+  // origin + originOffset; so a vertex v of an entity model is at v + originOffset
+  // relative to the origin
+  const auto& f = fixture();
+  const auto output = buildChunks(fixtureInput(f));
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  auto checked = 0;
+  auto shifted = 0;
+  for (const auto& model : f.proc->models)
+  {
+    if (model.area >= 0)
+    {
+      continue;
+    }
+    const auto* entity = entityNamed(f.snapshot, model.name);
+    REQUIRE(entity);
+    const auto state =
+      std::find_if(output.entities.begin(), output.entities.end(), [&](const auto& s) {
+        return s.id == entity->id;
+      });
+    REQUIRE(state != output.entities.end());
+    const auto origin = state->parms.origin;
+    const auto offset = state->originOffset;
+    for (const auto& surface : model.surfaces)
+    {
+      const auto& size = f.sizes.at(surface.material);
+      for (auto j = 0; j < surface.numVerts; ++j)
+      {
+        const auto* v = surface.verts.data() + std::size_t(j) * 8;
+        const auto relative =
+          EngineVec3{v[0] + offset[0], v[1] + offset[1], v[2] + offset[2]};
+        const auto world = vm::vec3d{
+          double(relative[0] + origin[0]),
+          double(relative[1] + origin[1]),
+          double(relative[2] + origin[2])};
+        const auto normal = vm::vec3d{v[5], v[6], v[7]};
+        const auto faces = facesOf(f.snapshot);
+        const auto it = std::find_if(faces.begin(), faces.end(), [&](const FaceRef& ref) {
+          const auto& face = *ref.face;
+          return ref.entity == entity->id
+                 && engineSideMaterial(std::string{f.snapshot.string(face.material)})
+                      == surface.material
+                 && std::abs(vm::dot(face.plane.normal, world) - face.plane.distance)
+                      < 0.01
+                 && vm::dot(face.plane.normal, normal) > 0.9
+                 && insidePolygon(f.snapshot, face, world);
+        });
+        REQUIRE(it != faces.end());
+        CAPTURE(model.name, surface.material, j, v[0], v[1], v[2]);
+        const auto st = previewSt(*it->face, relative, size);
+        const auto ds = st[0] - v[3];
+        const auto dt = st[1] - v[4];
+        CHECK(ds == std::round(ds));
+        CHECK(dt == std::round(dt));
+        // whether the rule's choice (origin, not origin + originOffset) shows here: the
+        // st of the pivot-relative position differ by more than an integer
+        const auto pivot = previewSt(*it->face, {v[0], v[1], v[2]}, size);
+        const auto ps = pivot[0] - v[3];
+        const auto pt = pivot[1] - v[4];
+        shifted += ps != std::round(ps) || pt != std::round(pt) ? 1 : 0;
+        ++checked;
+      }
+    }
+  }
+  CHECK(checked > 20);
+  // the fixture's origin brush moves st by more than an integer, so the test tells
+  // dmap's rule (origin) from the pivot's (origin + originOffset)
+  CHECK(shifted > 0);
+}
+
+TEST_CASE("Geometry goldens: (a) the patches' corner st (R3.5)")
+{
+  // dmap sends every patch triangle through TriVertsFromOriginal (fullCarve); the
+  // preview's chunks against the .proc at each patch's four corner control points, which
+  // both have as vertices, modulo integers (P.18)
+  const auto& f = fixture();
+  const auto output = buildChunks(fixtureInput(f));
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  auto checked = 0;
+  for (const auto& sp : f.snapshot.patches)
+  {
+    const auto corner = [&](const std::uint32_t row, const std::uint32_t column) {
+      return f.snapshot.controlPoints[sp.controlPoints.first + row * sp.columns + column];
+    };
+    for (const auto& p :
+         {corner(0, 0),
+          corner(0, sp.columns - 1),
+          corner(sp.rows - 1, 0),
+          corner(sp.rows - 1, sp.columns - 1)})
+    {
+      const auto xyz = EngineVec3{float(p[0]), float(p[1]), float(p[2])};
+      CAPTURE(xyz[0], xyz[1], xyz[2]);
+      // the .proc's vertex there
+      auto procSt = std::optional<EngineVec2>{};
+      for (const auto& model : f.proc->models)
+      {
+        for (const auto& surface : model.surfaces)
+        {
+          if (surface.material != "textures/lp1b/patch")
+          {
+            continue;
+          }
+          for (auto j = 0; j < surface.numVerts; ++j)
+          {
+            const auto* v = surface.verts.data() + std::size_t(j) * 8;
+            if (EngineVec3{v[0], v[1], v[2]} == xyz)
+            {
+              procSt = EngineVec2{v[3], v[4]};
+            }
+          }
+        }
+      }
+      // the chunks' vertex there
+      auto chunkSt = std::optional<EngineVec2>{};
+      for (const auto& chunk : output.chunks)
+      {
+        if (chunk.key.material != "textures/lp1b/patch")
+        {
+          continue;
+        }
+        for (const auto& vert : chunk.verts)
+        {
+          if (vert.xyz == xyz)
+          {
+            chunkSt = engineTexCoord(vert);
+          }
+        }
+      }
+      REQUIRE(procSt);
+      REQUIRE(chunkSt);
+      const auto ds = (*chunkSt)[0] - (*procSt)[0];
+      const auto dt = (*chunkSt)[1] - (*procSt)[1];
+      CHECK(ds == std::round(ds));
+      CHECK(dt == std::round(dt));
+      ++checked;
+    }
+  }
+  CHECK(checked == 8);
 }
 
 TEST_CASE("Geometry goldens: (b) the copied tangent code against the .bproc")
@@ -543,30 +745,7 @@ TEST_CASE("Geometry goldens: wall faces on node planes, both orientations")
 TEST_CASE("Geometry goldens: (d) the preview's chunks against the .proc")
 {
   const auto& f = fixture();
-  auto input = ChunkJobInput{};
-  for (const auto& entity : sceneEntitiesOf(f.snapshot))
-  {
-    input.entities[entity->id] = entity;
-    if (entity->classname == "worldspawn")
-    {
-      input.worldspawn = entity;
-    }
-  }
-  auto cells = std::set<CellRef>{};
-  for (const auto& node : sceneNodesOf(f.snapshot))
-  {
-    input.nodes.push_back(node);
-    if (node->kind == SnapshotNodeKind::Brush || node->kind == SnapshotNodeKind::Patch)
-    {
-      const auto entity = input.entities.at(node->entity);
-      cells.insert(CellRef{
-        entity->classname == "func_group" ? input.worldspawn->id : node->entity,
-        cellOfNode(*node)});
-    }
-  }
-  input.cells.assign(cells.begin(), cells.end());
-  input.proc = f.proc;
-  input.materials = f.materials;
+  const auto input = fixtureInput(f);
   const auto output = buildChunks(input);
   static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
   CHECK(output.warnings.empty());
@@ -603,9 +782,19 @@ TEST_CASE("Geometry goldens: (d) the preview's chunks against the .proc")
         chunkAreas[{chunk.key.area, chunk.key.material}] += area / sides;
       }
     }
-    else
+    else if (const auto it = entityBounds.find(chunk.key.entity);
+             it == entityBounds.end())
     {
       entityBounds[chunk.key.entity] = chunk.bounds;
+    }
+    else
+    {
+      // R3.6: the union of the entity's chunks
+      for (auto k = std::size_t{0}; k < 3; ++k)
+      {
+        it->second[0][k] = std::min(it->second[0][k], chunk.bounds[0][k]);
+        it->second[1][k] = std::max(it->second[1][k], chunk.bounds[1][k]);
+      }
     }
     if (chunk.key.material == "textures/lp1b/grate")
     {
@@ -633,20 +822,8 @@ TEST_CASE("Geometry goldens: (d) the preview's chunks against the .proc")
     {
       continue;
     }
-    const auto entity = std::find_if(
-      f.snapshot.entities.begin(), f.snapshot.entities.end(), [&](const auto& e) {
-        for (auto k = e.keys.first; k < e.keys.first + e.keys.count; ++k)
-        {
-          if (
-            f.snapshot.string(f.snapshot.keyValues[k].key) == "name"
-            && f.snapshot.string(f.snapshot.keyValues[k].value) == model.name)
-          {
-            return true;
-          }
-        }
-        return false;
-      });
-    REQUIRE(entity != f.snapshot.entities.end());
+    const auto* entity = entityNamed(f.snapshot, model.name);
+    REQUIRE(entity);
     auto points = std::vector<EngineVec3>{};
     for (const auto& surface : model.surfaces)
     {

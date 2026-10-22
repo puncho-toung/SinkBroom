@@ -72,7 +72,7 @@ float clampFloat(const float min, const float max, const float value)
   return min > inner ? min : inner;
 }
 
-// MathLight.cpp:45-130 ML_ParseFromDict; m->type holds the type the caller seeded
+// MathLight.cpp:45-118 ML_ParseFromDict; m->type holds the type the caller seeded
 void parseMathLight(
   const EntityKeys& args, MathLightParms& m, std::vector<std::string>& warnings)
 {

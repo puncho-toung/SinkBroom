@@ -137,6 +137,13 @@ void Registry::drain() const
       report(message.kind, std::move(message.text));
     }
   }
+  // R2.5, R2.6: what this thread lost: the drops said, every lost error counted
+  const auto lost = takeEngineLosses(m_thread.id());
+  for (auto& message : lossMessages(lost))
+  {
+    m_messages.push_back(std::move(message));
+  }
+  m_errorCount += std::size_t(lost.errors);
 }
 
 void Registry::report(const DeclMessageKind kind, std::string text) const
@@ -163,7 +170,7 @@ std::vector<DeclMessage> Registry::takeMessages()
 std::size_t Registry::errorCount() const
 {
   drain();
-  return m_errorCount + std::size_t(lostEngineErrors());
+  return m_errorCount;
 }
 
 void Registry::beginCapture()

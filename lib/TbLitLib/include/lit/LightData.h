@@ -89,7 +89,7 @@ struct DerivedLight
 constexpr auto MultipleAreas = -2;
 
 /**
- * RenderWorld_load.cpp:627-670 CommonChildrenArea_r for every node of the tree: the one
+ * RenderWorld_load.cpp:627-666 CommonChildrenArea_r for every node of the tree: the one
  * area all of a node's leaves are in (solid matches any), -1 when all are solid, or
  * MultipleAreas. Pure; any thread.
  */

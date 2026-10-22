@@ -95,6 +95,28 @@ struct LightTable
   std::shared_ptr<const LightRecord> find(PreviewId id) const;
 };
 
+/**
+ * R2.9: where a light registry publishes its tables. The session owns it and the render
+ * thread's registry publishes into it, so that any thread, the GUI thread and LP2's
+ * readers included, reads the latest table also once the render thread has ended (its
+ * scene is destroyed at its exit). One pointer swap under a mutex; never null.
+ */
+class LightTablePublication
+{
+private:
+  mutable std::mutex m_mutex;
+  std::shared_ptr<const LightTable> m_table;
+
+public:
+  LightTablePublication();
+
+  // the latest table; any thread
+  std::shared_ptr<const LightTable> table() const;
+  void publish(std::shared_ptr<const LightTable> table);
+
+  deleteCopyAndMove(LightTablePublication);
+};
+
 // one batch's input (held by shared_ptr, immutable): the lights to build, the material
 // table (null without a service), the .proc's tree (null without one) and worldspawn's
 // map keys (removeEntities*, R3.12)
@@ -185,11 +207,14 @@ private:
   std::uint64_t m_tableVersion = 0;
   std::vector<std::string> m_warnings;
 
-  mutable std::mutex m_publishMutex;
-  std::shared_ptr<const LightTable> m_published;
+  std::shared_ptr<LightTablePublication> m_publication;
 
 public:
-  LightRegistry(CpuPool* pool, MaterialService* materials);
+  // publication may be null: the registry then publishes into one of its own
+  LightRegistry(
+    CpuPool* pool,
+    MaterialService* materials,
+    std::shared_ptr<LightTablePublication> publication = nullptr);
   // waits for the job in flight (R5.22: only waited for)
   ~LightRegistry();
 

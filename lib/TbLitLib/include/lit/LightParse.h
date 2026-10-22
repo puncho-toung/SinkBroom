@@ -43,7 +43,7 @@ enum class MathLightType
 constexpr auto MathLightStyleCount = 12;
 
 /**
- * mathLightData_t (MathLight.h:77-96) as ML_ParseFromDict (MathLight.cpp:45-130) fills
+ * mathLightData_t (MathLight.h:77-96) as ML_ParseFromDict (MathLight.cpp:45-118) fills
  * it, before ParseSpawnArgsToRenderLight forces the type: everything zero and style -1
  * unless math_enabled; then math_type (or the type the light's geometry seeds), the
  * falloff and pattern names (an unknown name is the default), the clamped floats, the
