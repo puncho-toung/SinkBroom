@@ -27,6 +27,11 @@
 
 #include <vulkan/vulkan_core.h>
 
+namespace nvrhi
+{
+class IDevice;
+}
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -108,6 +113,17 @@ struct VramUsage
 {
   std::uint64_t usedBytes = 0;
   std::uint64_t budgetBytes = 0;
+};
+
+// C30: what the session's device tells the engine's rules (P2.10, P2.13)
+struct DeviceFacts
+{
+  std::uint32_t maxPushConstantsSize = 0;
+  std::uint32_t vendorID = 0;
+  std::uint32_t maxMemoryAllocationCount = 0;
+  // min(maxPushConstantsSize, NVRHI's c_MaxPushConstantSize)
+  std::uint32_t pushConstantLimit = 0;
+  bool d24s8Supported = false;
 };
 
 /**
@@ -250,6 +266,10 @@ public:
   std::uint64_t generation() const;
   // the physical device's name
   const std::string& deviceName() const;
+  // C30: the device's limits and vendor; any thread
+  DeviceFacts deviceFacts() const;
+  // C30, D72: the device memory allocations live now (lit's GpuDevice); any thread
+  std::int64_t deviceMemoryAllocations() const;
   // the GPU and its one graphics and present queue family, for the GUI thread's present
   // check after a screen change (R5.33)
   VkPhysicalDevice physicalDevice() const;
@@ -391,6 +411,8 @@ public:
   std::shared_ptr<const Snapshot> lastSnapshotForTesting() const;
   // the batches of chunk or light jobs the render thread has applied; any thread
   std::uint64_t geometryBatchesForTesting() const;
+  // the device to make resources with, from create until teardown step 5; tests only
+  nvrhi::IDevice* nvrhiDeviceForTesting() const;
 
 private:
   LitSession(

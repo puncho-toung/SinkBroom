@@ -410,6 +410,49 @@ TEST_CASE("EngineTables")
     CHECK(identity.a == C::Alpha);
   }
 
+  SECTION("the push-constant rule (C30, SC242)")
+  {
+    using L = EngineBindingLayout;
+    constexpr auto nvidia = std::uint32_t{0x10DE};
+    CHECK(enginePushConstantLimit(4096, 256) == 256u);
+    CHECK(enginePushConstantLimit(128, 256) == 128u);
+    CHECK(enginePushConstantLimit(4096, 4096) == 4096u);
+
+    // Windows and Linux: NVRHI's 256 bytes
+    const auto desktop = enginePushConstantLimit(4096, 256);
+    CHECK(enginePushConstantsEnabled(L::ConstantBufferOnly, desktop, nvidia));
+    CHECK(enginePushConstantsEnabled(L::Texture, desktop, nvidia));
+    CHECK_FALSE(enginePushConstantsEnabled(L::DrawInteraction, desktop, nvidia));
+    CHECK(enginePushConstantsEnabled(L::Tonemap, desktop, nvidia));
+    CHECK(enginePushConstantsEnabled(L::Histogram, desktop, nvidia));
+    CHECK(enginePushConstantsEnabled(L::Exposure, desktop, nvidia));
+    CHECK(enginePushConstantsEnabled(L::Mipmapgen, desktop, nvidia));
+    CHECK(enginePushConstantsEnabled(L::TaaResolve, desktop, nvidia));
+    CHECK_FALSE(enginePushConstantsEnabled(L::Blit, desktop, nvidia));
+    CHECK_FALSE(enginePushConstantsEnabled(L::AmbientLightingIbl, desktop, nvidia));
+
+    // MoltenVK: 4096 bytes, so the interaction's 400 are pushed (P2.10)
+    const auto apple = enginePushConstantLimit(4096, 4096);
+    CHECK(enginePushConstantsEnabled(L::DrawInteraction, apple, nvidia));
+    CHECK(enginePushConstantsEnabled(L::AmbientLightingIbl, apple, nvidia));
+    CHECK(enginePushConstantsEnabled(L::Texture, apple, nvidia));
+
+    // AMD: GBUFFER and TEXTURE (and their skinned forms) are forced to a buffer
+    CHECK_FALSE(enginePushConstantsEnabled(L::Texture, desktop, EngineVendorAmd));
+    CHECK_FALSE(enginePushConstantsEnabled(L::TextureSkinned, desktop, EngineVendorAmd));
+    CHECK_FALSE(enginePushConstantsEnabled(L::Gbuffer, desktop, EngineVendorAmd));
+    CHECK(enginePushConstantsEnabled(L::ConstantBufferOnly, desktop, EngineVendorAmd));
+    CHECK(enginePushConstantsEnabled(L::Tonemap, desktop, EngineVendorAmd));
+    CHECK_FALSE(enginePushConstantsEnabled(L::Texture, apple, EngineVendorAmd));
+
+    // a device that offers only Vulkan's guaranteed 128 bytes
+    const auto small = enginePushConstantLimit(128, 256);
+    CHECK(enginePushConstantsEnabled(L::ConstantBufferOnly, small, nvidia));
+    CHECK_FALSE(enginePushConstantsEnabled(L::Texture, small, nvidia));
+    CHECK(enginePushConstantsEnabled(L::Tonemap, small, nvidia));
+    CHECK_FALSE(enginePushConstantsEnabled(L::TaaResolve, small, nvidia));
+  }
+
   SECTION("the tonemap constants")
   {
     CHECK(EngineTonemap.histogramBins == 256u);

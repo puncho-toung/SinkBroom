@@ -47,6 +47,15 @@ struct GpuChoice
   bool synchronization2 = false;
   // what the device supports of the engine's "if supported" features
   vk::PhysicalDeviceFeatures supportedFeatures;
+  // C30 (P2.10, P2.13): the limits and vendor the engine's push-constant rule reads
+  // (DeviceManager_VK.cpp:1377-1382, RenderProgs.cpp:403-413), and the driver's limit on
+  // live device memory allocations (D72)
+  std::uint32_t maxPushConstantsSize = 0;
+  std::uint32_t vendorID = 0;
+  std::uint32_t maxMemoryAllocationCount = 0;
+  // DeviceManager_VK.cpp:1056-1064: whether D24S8 can be a depth-stencil attachment; the
+  // depth target is D32S8 otherwise (Image_NVRHI.cpp:404-414)
+  bool d24s8Supported = false;
   // the other devices whose queries failed, one line each, for the log
   std::vector<std::string> skippedDevices;
 };

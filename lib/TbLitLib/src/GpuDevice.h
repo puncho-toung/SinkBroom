@@ -22,6 +22,7 @@
 #include "VulkanDevice.h"
 #include "base/Macros.h"
 #include "base/Result.h"
+#include "lit/EngineBuiltins.h"
 #include "lit/LitSession.h"
 #include "lit/VulkanInstance.h"
 
@@ -103,6 +104,21 @@ public:
   std::size_t nvrhiErrors() const;
   // the device-local heaps' usage and budget, when the device has VK_EXT_memory_budget
   std::optional<VramUsage> vram() const;
+
+  // C30: the engine's push-constant budget on this device, min(maxPushConstantsSize,
+  // NVRHI's c_MaxPushConstantSize), and whether a binding layout uses push constants
+  // (pcEnabled with this device's limit and vendor). Any thread.
+  std::uint32_t pushConstantLimit() const;
+  bool pushConstantsEnabled(EngineBindingLayout layout) const;
+
+  /**
+   * C30, D72 (P2.13): the device memory allocations live now, counted by wrapping the
+   * dispatcher's vkAllocateMemory and vkFreeMemory from just after the VkDevice's
+   * functions are loaded until it is destroyed, so every NVRHI allocation is seen
+   * (textures, buffers, upload chunks, staging). The counter is process-wide like the
+   * dispatcher, which one session at a time owns. Any thread; for the frame log.
+   */
+  std::int64_t deviceMemoryAllocations() const;
   // for the tests' faults, which arrive as NVRHI's would
   MessageCallback& messageCallback();
 

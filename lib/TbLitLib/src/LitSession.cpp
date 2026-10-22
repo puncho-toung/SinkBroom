@@ -164,6 +164,23 @@ const std::string& LitSession::deviceName() const
   return m_device->gpu().name;
 }
 
+DeviceFacts LitSession::deviceFacts() const
+{
+  const auto& gpu = m_device->gpu();
+  return DeviceFacts{
+    gpu.maxPushConstantsSize,
+    gpu.vendorID,
+    gpu.maxMemoryAllocationCount,
+    m_device->pushConstantLimit(),
+    gpu.d24s8Supported,
+  };
+}
+
+std::int64_t LitSession::deviceMemoryAllocations() const
+{
+  return m_device ? m_device->deviceMemoryAllocations() : 0;
+}
+
 VkPhysicalDevice LitSession::physicalDevice() const
 {
   return m_device->gpu().physicalDevice;
@@ -527,6 +544,11 @@ std::shared_ptr<const Snapshot> LitSession::lastSnapshotForTesting() const
 std::uint64_t LitSession::geometryBatchesForTesting() const
 {
   return m_renderThread ? m_renderThread->batchesApplied() : 0u;
+}
+
+nvrhi::IDevice* LitSession::nvrhiDeviceForTesting() const
+{
+  return m_device && !m_gpuReleased ? &m_device->device() : nullptr;
 }
 
 } // namespace tb::lit

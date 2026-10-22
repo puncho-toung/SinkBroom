@@ -12853,6 +12853,97 @@
         }
       ],
       "note": "LP2.0: the GL state bits the preview's passes compose, as constants beside the facade; each is static_asserted equal to the copied GLState.h's (M-ID-COPY-10) where the copy compiles"
+    },
+    {
+      "id": "M-DEV-10",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1377,
+            1382
+          ],
+          "anchor": "DeviceManager_VK::CreateDeviceAndSwapChain, maxPushConstantSize",
+          "sha256": "c571903deb4b4a132bde123e1e772977e88bd70c700b00ad83e2b49cf6fa7a5f"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            68,
+            68
+          ],
+          "anchor": "r_vkUsePushConstants",
+          "sha256": "fc3345ea1d516ceef42d55b5138406d81f2bd991ce45a82f2ad798e62ab94f2c"
+        },
+        {
+          "file": "neo/sys/DeviceManager.cpp",
+          "lines": [
+            62,
+            77
+          ],
+          "anchor": "DeviceManager::getGPUVendor",
+          "sha256": "0bcdfd38f24bdeb1e196adfc8e98f2c769090d29de7622b09a6bf422b0d0a069"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1056,
+            1064
+          ],
+          "anchor": "DeviceManager_VK::createDevice, the D24S8 probe",
+          "sha256": "e359aa569b926c28dd7e86892da0187739e0826fa467912352a6c6d9702aa333"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "inspect"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.h",
+          "symbol": "GpuChoice"
+        },
+        {
+          "file": "lib/TbLitLib/src/GpuDevice.cpp",
+          "symbol": "GpuDevice::pushConstantLimit"
+        },
+        {
+          "file": "lib/TbLitLib/src/GpuDevice.cpp",
+          "symbol": "GpuDevice::pushConstantsEnabled"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitSession.cpp",
+          "symbol": "LitSession::deviceFacts"
+        }
+      ],
+      "note": "LP2.0 (C30, P2.10): GpuChoice keeps limits.maxPushConstantsSize, vendorID and limits.maxMemoryAllocationCount of the chosen device, and whether D24_UNORM_S8_UINT can be an optimal 2D depth-stencil attachment (getImageFormatProperties, as the engine probes it). The push-constant budget is min(maxPushConstantsSize, nvrhi::c_MaxPushConstantSize) with r_vkUsePushConstants at its default 1; the pcEnabled rule (M-TABLE-04) reads it with the vendor (0x1002 is AMD). maxMemoryAllocationCount is read by SinkBroom only: the engine never reads it (SC274)"
+    },
+    {
+      "id": "M-DEV-11",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1088,
+            1096
+          ],
+          "anchor": "DeviceManager_VK::createDevice, the VMA allocator",
+          "sha256": "81a00018271ba150949aba6cecdf26fb0cbf2df71ff1d0488106825654b5a6e5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GpuDevice.cpp",
+          "symbol": "installAllocationCounter, countingAllocateMemory, countingFreeMemory, removeAllocationCounter"
+        },
+        {
+          "file": "lib/TbLitLib/src/GpuDevice.cpp",
+          "symbol": "GpuDevice::deviceMemoryAllocations"
+        }
+      ],
+      "note": "LP2.0 (C30, D72, P2.13): the engine sub-allocates its textures and buffers through VMA in 256 MB blocks and counts nothing; the preview allocates through NVRHI, one VkDeviceMemory per resource, and counts the live allocations by wrapping the default dispatcher's vkAllocateMemory and vkFreeMemory from the moment the VkDevice's functions are loaded until the device is destroyed (SinkBroom only: nothing in NVRHI changes, and NVRHI calls both through the dispatcher). The counter is process-wide like the dispatcher; its statics are constant-initialised (C9). LP2.2b adds it to the frame log; D72 decides texture heaps on it"
     }
   ],
   "retired": [

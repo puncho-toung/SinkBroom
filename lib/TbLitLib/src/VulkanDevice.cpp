@@ -245,6 +245,22 @@ Inspection inspect(const vk::PhysicalDevice device, const vk::SurfaceKHR surface
   choice.timerQueries =
     properties.limits.timestampPeriod > 0.0f && families[*family].timestampValidBits > 0;
 
+  // C30: the push-constant limit (:1380-1381), the vendor (:782, :790, getGPUVendor), the
+  // allocation limit (read by SinkBroom only, D72), and the D24S8 probe (:1056-1064)
+  choice.maxPushConstantsSize = properties.limits.maxPushConstantsSize;
+  choice.vendorID = properties.vendorID;
+  choice.maxMemoryAllocationCount = properties.limits.maxMemoryAllocationCount;
+  auto imageFormatProperties = vk::ImageFormatProperties{};
+  choice.d24s8Supported =
+    device.getImageFormatProperties(
+      vk::Format::eD24UnormS8Uint,
+      vk::ImageType::e2D,
+      vk::ImageTiling::eOptimal,
+      vk::ImageUsageFlags{vk::ImageUsageFlagBits::eDepthStencilAttachment},
+      vk::ImageCreateFlags{},
+      &imageFormatProperties)
+    == vk::Result::eSuccess;
+
   // swapchain format and FIFO (:701-747), asked only of a device that presents to the
   // surface, as the specification requires (the engine asks every device)
   if (surface)

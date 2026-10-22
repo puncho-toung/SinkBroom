@@ -20,6 +20,7 @@
 #include "GpuDevice.h"
 
 #include "SessionEvents.h"
+#include "lit/EngineTables.h"
 #include "lit/NvrhiSupport.h"
 
 #include "kd/result.h"
@@ -40,6 +41,70 @@ namespace
 // what NVRHI's submit reports when it catches vk::DeviceLostError
 // (nvrhi src/vulkan/vulkan-queue.cpp:175)
 constexpr auto DeviceRemovedMessage = std::string_view{"Device Removed!"};
+
+// C30, D72: the allocation counter. The dispatcher's own two functions, kept while the
+// counting ones stand in for them, and the live count; constant-initialised (C9) and
+// process-wide like the dispatcher, which one session at a time owns (LiveSession.h)
+constinit auto s_allocateMemory = std::atomic<PFN_vkAllocateMemory>{nullptr};
+constinit auto s_freeMemory = std::atomic<PFN_vkFreeMemory>{nullptr};
+constinit auto s_liveAllocations = std::atomic<std::int64_t>{0};
+
+// Any thread that allocates through NVRHI: the render thread, the compile thread, the
+// GUI thread in teardown.
+VKAPI_ATTR VkResult VKAPI_CALL countingAllocateMemory(
+  VkDevice device,
+  const VkMemoryAllocateInfo* info,
+  const VkAllocationCallbacks* allocator,
+  VkDeviceMemory* memory)
+{
+  const auto result = s_allocateMemory.load()(device, info, allocator, memory);
+  if (result == VK_SUCCESS)
+  {
+    ++s_liveAllocations;
+  }
+  return result;
+}
+
+VKAPI_ATTR void VKAPI_CALL countingFreeMemory(
+  VkDevice device, VkDeviceMemory memory, const VkAllocationCallbacks* allocator)
+{
+  if (memory != VK_NULL_HANDLE)
+  {
+    --s_liveAllocations;
+  }
+  s_freeMemory.load()(device, memory, allocator);
+}
+
+// GUI thread, phase B, right after createVkDevice loaded the device's functions and
+// before NVRHI makes its first allocation
+void installAllocationCounter()
+{
+  auto& dispatcher = VULKAN_HPP_DEFAULT_DISPATCHER;
+  if (dispatcher.vkAllocateMemory == &countingAllocateMemory)
+  {
+    return;
+  }
+  s_allocateMemory = dispatcher.vkAllocateMemory;
+  s_freeMemory = dispatcher.vkFreeMemory;
+  s_liveAllocations = 0;
+  if (dispatcher.vkAllocateMemory && dispatcher.vkFreeMemory)
+  {
+    dispatcher.vkAllocateMemory = &countingAllocateMemory;
+    dispatcher.vkFreeMemory = &countingFreeMemory;
+  }
+}
+
+// GUI thread, teardown step 7, before the VkDevice goes: the dispatcher's own functions
+// again
+void removeAllocationCounter()
+{
+  auto& dispatcher = VULKAN_HPP_DEFAULT_DISPATCHER;
+  if (dispatcher.vkAllocateMemory == &countingAllocateMemory)
+  {
+    dispatcher.vkAllocateMemory = s_allocateMemory.load();
+    dispatcher.vkFreeMemory = s_freeMemory.load();
+  }
+}
 
 } // namespace
 
@@ -119,6 +184,8 @@ Result<std::unique_ptr<GpuDevice>> GpuDevice::create(
              auto& d = *gpuDevice;
              d.m_vkDevice = vkDevice;
              d.m_queue = vkDevice.getQueue(d.m_gpu.queueFamily, 0);
+             // C30: every allocation NVRHI makes on this device is counted
+             installAllocationCounter();
 
              // step 6, as the engine does it (DeviceManager_VK.cpp:1348-1375)
              auto instanceExtensions = std::vector<const char*>{};
@@ -242,6 +309,21 @@ std::optional<VramUsage> GpuDevice::vram() const
   }
 }
 
+std::uint32_t GpuDevice::pushConstantLimit() const
+{
+  return enginePushConstantLimit(m_gpu.maxPushConstantsSize);
+}
+
+bool GpuDevice::pushConstantsEnabled(const EngineBindingLayout layout) const
+{
+  return enginePushConstantsEnabled(layout, pushConstantLimit(), m_gpu.vendorID);
+}
+
+std::int64_t GpuDevice::deviceMemoryAllocations() const
+{
+  return s_liveAllocations;
+}
+
 std::uint32_t GpuDevice::releaseNvrhiDevice()
 {
   m_device = nullptr;
@@ -253,6 +335,7 @@ void GpuDevice::destroyVkDevice()
 {
   if (m_vkDevice)
   {
+    removeAllocationCounter();
     m_vkDevice.destroy();
     m_vkDevice = nullptr;
   }

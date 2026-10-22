@@ -21,6 +21,7 @@
 #include "LitTestUtils.h"
 #include "StringMakers.h"
 #include "lit/CpuPool.h"
+#include "lit/EngineTables.h"
 #include "lit/FramePacer.h"
 #include "lit/LightRecord.h"
 #include "lit/LitSession.h"
@@ -30,6 +31,7 @@
 
 #include "kd/result.h"
 
+#include <nvrhi/nvrhi.h>
 #include <vulkan/vulkan.hpp>
 
 #ifdef _WIN32
@@ -659,6 +661,80 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       std::cout << "\n";
     }
     std::filesystem::remove(logPath);
+  }
+
+  SECTION("C30: the device facts and the allocation counter")
+  {
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+
+      auto events = Events{};
+      auto options = SessionOptions{};
+      options.validation = true;
+      auto session =
+        LitSession::create(
+          instance.handles(), VK_NULL_HANDLE, 64, 48, options, events.sink(), 1)
+        | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+
+      // the facts this machine's GPU reports, and the engine's rule on them
+      const auto facts = session->deviceFacts();
+      std::cout << "device facts: maxPushConstantsSize " << facts.maxPushConstantsSize
+                << ", vendorID 0x" << std::hex << facts.vendorID << std::dec
+                << ", maxMemoryAllocationCount " << facts.maxMemoryAllocationCount
+                << ", push-constant limit " << facts.pushConstantLimit << ", D24S8 "
+                << facts.d24s8Supported << "\n";
+      CHECK(facts.maxPushConstantsSize >= 128u);
+      CHECK(facts.vendorID != 0u);
+      CHECK(facts.maxMemoryAllocationCount >= 4096u);
+      CHECK(
+        facts.pushConstantLimit
+        == std::min(facts.maxPushConstantsSize, nvrhi::c_MaxPushConstantSize));
+      for (const auto layout :
+           {EngineBindingLayout::ConstantBufferOnly,
+            EngineBindingLayout::Texture,
+            EngineBindingLayout::DrawInteraction,
+            EngineBindingLayout::Tonemap,
+            EngineBindingLayout::Histogram,
+            EngineBindingLayout::Exposure})
+      {
+        std::cout << "  pcEnabled(layout " << int(layout) << ") = "
+                  << enginePushConstantsEnabled(
+                       layout, facts.pushConstantLimit, facts.vendorID)
+                  << "\n";
+      }
+
+      // NVRHI's allocations are counted: the headless target and the frame resources
+      // already, a new texture adds one, and releasing it gives it back
+      const auto before = session->deviceMemoryAllocations();
+      CHECK(before > 0);
+      auto* device = session->nvrhiDeviceForTesting();
+      REQUIRE(device);
+      auto texture = device->createTexture(nvrhi::TextureDesc{}
+                                             .setWidth(256)
+                                             .setHeight(256)
+                                             .setFormat(nvrhi::Format::RGBA8_UNORM)
+                                             .setDebugName("C30 counter test"));
+      REQUIRE(texture);
+      const auto withTexture = session->deviceMemoryAllocations();
+      CHECK(withTexture == before + 1);
+      texture = nullptr;
+      CHECK(session->deviceMemoryAllocations() == before);
+      std::cout << "device memory allocations: " << before << ", with a texture "
+                << withTexture << "\n";
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      // every allocation is freed once the NVRHI device is gone
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("device facts, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
   }
 
   SECTION("one live session in a process, and the dispatcher stays while it lives")
