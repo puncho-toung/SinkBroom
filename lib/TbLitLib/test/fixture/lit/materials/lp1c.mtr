@@ -1,6 +1,7 @@
-// LP1c image fixtures (plans/lit-preview/15-LP1BC-PACKAGES.md D61, K20: names under
-// textures/lp1c/ and lights/lp1c/ are reserved for fixtures). Each stage names the usage
-// the engine binarizes the image with; touch material makes the engine write its cache.
+// LP1c image fixtures (plans/lit-preview/15-LP1BC-PACKAGES.md D61; K20 reserves the names
+// under textures/lp1c/ for fixtures, and the light fixture's lights/lp1c/ is reserved here
+// alike). Each stage names the usage the engine binarizes the image with; touch material
+// makes the engine write its cache (capture_fixtures.py, which touches all but sixteen).
 
 // TD_DIFFUSE (#__0100, DXT5 YCoCg): a flat image whose channels differ
 textures/lp1c/flat

@@ -36,6 +36,7 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <cstring>
 #include <optional>
 #include <utility>
@@ -260,7 +261,41 @@ int engineBitsForFormat(const int format)
 namespace
 {
 
-// bimageFile_t, 36 bytes (packed); the engine's Read takes a short header as it is
+// LP1c fix (S3.5): the largest side a cache may declare (the image limits of the loader
+// pre-validation, D51)
+constexpr int MaxCacheSide = MaxImageFileDimension;
+
+// floor(log2(side)) + 1: the most levels a side can halve into
+int mostLevels(const int side)
+{
+  auto levels = 1;
+  for (auto s = side; s > 1; s >>= 1)
+  {
+    ++levels;
+  }
+  return levels;
+}
+
+// the formats the engine encodes in 4 × 4 blocks, and a block's bytes
+int blockBytes(const int format)
+{
+  switch (format)
+  {
+  case FormatDxt1:
+  case FormatEtc1:
+    return 8;
+  case FormatDxt5:
+  case FormatBc6h:
+  case FormatBc7:
+    return 16;
+  default:
+    return 0;
+  }
+}
+
+// bimageFile_t, 36 bytes (packed); the engine's Read takes a short header as it is.
+// LP1c fix (S3.5): its size and level count are checked, so that no header with sides of
+// 0, beyond the limits or more levels than its sides halve into is used
 Result<CachedImage> readHeader(BigReader& in)
 {
   auto image = CachedImage{};
@@ -289,27 +324,93 @@ Result<CachedImage> readHeader(BigReader& in)
   image.width = *width;
   image.height = *height;
   image.numLevels = *numLevels;
+  if (
+    image.width < 1 || image.height < 1 || image.width > MaxCacheSide
+    || image.height > MaxCacheSide)
+  {
+    return cacheError(fmt::format("bad size {} x {}", image.width, image.height));
+  }
+  if (
+    image.numLevels < 1
+    || image.numLevels > mostLevels(std::max(image.width, image.height)))
+  {
+    return cacheError(fmt::format(
+      "bad level count {} for {} x {}", image.numLevels, image.width, image.height));
+  }
   return image;
 }
 
-} // namespace
-
-Result<CachedImage> readBimageHeader(const std::string_view bytes)
+/**
+ * LP1c fix (S3.5): a level record as the engine's binarizer writes it
+ * (BinaryImage.cpp:56-331, :679-837): record k of a 2D image is level k, of a cube level
+ * k / 6 and side k % 6 (images[ level * 6 + side ]); its size is the level's, a block
+ * format's cube level below 4 padded to 4 (PadImageTo4x4); and its data size at least
+ * the bytes its format needs for that size (whole blocks for a block format, as
+ * LoadFromGeneratedFile's assert demands).
+ */
+std::optional<std::string> recordProblem(
+  const CachedImage& image,
+  const std::int64_t index,
+  const int level,
+  const int destZ,
+  const int width,
+  const int height,
+  const std::int64_t dataSize)
 {
-  auto in = BigReader{bytes};
-  return readHeader(in);
+  const auto cube = image.textureType == TypeCubic;
+  const auto expectedLevel = int(cube ? index / 6 : index);
+  const auto expectedSide = int(cube ? index % 6 : 0);
+  const auto blocks = blockBytes(image.storedFormat);
+  auto expectedWidth = std::max(1, image.width >> expectedLevel);
+  auto expectedHeight = std::max(1, image.height >> expectedLevel);
+  if (cube && blocks > 0 && expectedWidth < 4)
+  {
+    expectedWidth = expectedHeight = 4;
+  }
+  if (level != expectedLevel || destZ != expectedSide)
+  {
+    return fmt::format(
+      "level record {} is level {} side {}, not level {} side {}",
+      index,
+      level,
+      destZ,
+      expectedLevel,
+      expectedSide);
+  }
+  if (width != expectedWidth || height != expectedHeight)
+  {
+    return fmt::format(
+      "level record {} is {} x {}, not {} x {}",
+      index,
+      width,
+      height,
+      expectedWidth,
+      expectedHeight);
+  }
+  const auto bits = engineBitsForFormat(image.storedFormat);
+  if (bits == 0)
+  {
+    return fmt::format("its format {} is not one the engine stores", image.storedFormat);
+  }
+  const auto needed =
+    blocks > 0 ? std::int64_t((width + 3) / 4) * std::int64_t((height + 3) / 4) * blocks
+               : std::int64_t(width) * std::int64_t(height) * bits / 8;
+  if (dataSize < needed)
+  {
+    return fmt::format(
+      "level record {} holds {} bytes, fewer than the {} its {} x {} need",
+      index,
+      dataSize,
+      needed,
+      width,
+      height);
+  }
+  return std::nullopt;
 }
 
-Result<CachedImage> readBimage(const std::string_view bytes)
+// the level records and their bytes after the header
+Result<CachedImage> readLevels(BigReader& in, CachedImage image)
 {
-  auto in = BigReader{bytes};
-  auto header = readHeader(in);
-  if (header.is_error())
-  {
-    return header;
-  }
-  auto image = std::move(header).value();
-
   // :1022-1026
   auto numImages = std::int64_t(image.numLevels);
   if (image.textureType == TypeCubic)
@@ -338,6 +439,12 @@ Result<CachedImage> readBimage(const std::string_view bytes)
     if (*dataSize < 0 || (rgb565 && *dataSize % 2 != 0))
     {
       return cacheError(fmt::format("level {} has a bad size {}", i, *dataSize));
+    }
+    if (
+      const auto problem =
+        recordProblem(image, i, *level, *destZ, *levelWidth, *levelHeight, *dataSize))
+    {
+      return cacheError(*problem);
     }
     const auto stored = in.bytes(std::size_t(*dataSize));
     if (!stored)
@@ -368,6 +475,22 @@ Result<CachedImage> readBimage(const std::string_view bytes)
     image.format = FormatRgba8;
   }
   return image;
+}
+
+} // namespace
+
+Result<CachedImage> readBimageHeader(const std::string_view bytes)
+{
+  auto in = BigReader{bytes};
+  return readHeader(in);
+}
+
+Result<CachedImage> readBimage(const std::string_view bytes)
+{
+  auto in = BigReader{bytes};
+  return readHeader(in) | kdl::and_then([&](CachedImage image) {
+           return readLevels(in, std::move(image));
+         });
 }
 
 bool engineCacheIsStale(const std::int64_t sourceTime, const std::int64_t storedTime)

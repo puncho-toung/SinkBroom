@@ -103,6 +103,15 @@ public:
   Result<std::string> read(
     const ResourceEntry& entry, const GameFile& file, std::size_t maxBytes) const;
 
+  // LP1c fix (S2.2): fails when the container's file has changed since the table was
+  // read (its size or time), which read checks before every read; a reader that keeps
+  // the file open checks it once, when it opens it, then reads with readOpened
+  Result<void> unchanged() const;
+  // read's bytes without the file system's check: file must be this container's file,
+  // opened after unchanged() succeeded; its size is still checked
+  Result<std::string> readOpened(
+    const ResourceEntry& entry, const GameFile& file, std::size_t maxBytes) const;
+
   // the file's size and time when the table was read
   std::uint64_t fileSize() const;
   std::int64_t fileTime() const;

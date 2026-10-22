@@ -17,6 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "ImageTestFiles.h"
 #include "LitTestUtils.h"
 #include "fs/TestEnvironment.h"
 #include "lit/GameFileSource.h"
@@ -296,16 +297,89 @@ std::unique_ptr<MaterialService> start(MaterialServiceOptions serviceOptions)
   return std::move(service).value();
 }
 
+// LP1c fix: a game folder of materials with one diffuse image each, and their images
+class ImageServiceGame
+{
+private:
+  fs::TestEnvironment m_env;
+
+public:
+  explicit ImageServiceGame(const int materials = 0)
+  {
+    auto text = std::string{};
+    for (auto i = 0; i < materials; ++i)
+    {
+      text += materialText(
+        fmt::format("textures/fix/m{}", i), fmt::format("textures/fix/m{}", i));
+    }
+    text += materialText("textures/fix/later", "textures/fix/later");
+    text += materialText("textures/fix/kept", "textures/fix/kept");
+    writeTextFile(base() / "materials" / "fix.mtr", text);
+  }
+
+  // a w × h TGA as textures/fix/<name>.tga
+  void image(const std::string& name, const int width, const int height) const
+  {
+    writeTextFile(
+      base() / "textures" / "fix" / (name + ".tga"),
+      test::tgaFile(test::gradient(width, height), 32));
+  }
+
+  void remove(const std::string& name) const
+  {
+    std::filesystem::remove(base() / "textures" / "fix" / (name + ".tga"));
+  }
+
+  std::filesystem::path base() const { return m_env.dir() / "base"; }
+
+  MaterialServiceOptions options(const std::chrono::milliseconds pollInterval) const
+  {
+    auto result = MaterialServiceOptions{};
+    result.makeSource = [path = m_env.dir()](const std::atomic<bool>& cancel) {
+      return std::unique_ptr<DeclSource>{std::make_unique<GameFileSource>(path, &cancel)};
+    };
+    result.pollInterval = pollInterval;
+    return result;
+  }
+};
+
+MaterialImageKey diffuseKey(const std::string& name)
+{
+  auto key = MaterialImageKey{};
+  key.name = "textures/fix/" + name;
+  key.usage = 1;
+  key.filter = 3;
+  return key;
+}
+
+// the measured slot of a name, once its size satisfies predicate
+std::shared_ptr<const MaterialSlot> waitForSize(
+  MaterialService& service,
+  const std::string& name,
+  const std::function<bool(const EditorImageSize&)>& predicate)
+{
+  static_cast<void>(service.lookup(name));
+  const auto table = service.waitForTableForTesting(
+    [&](const MaterialTable& t) {
+      const auto slot = t.find(name);
+      return slot && slot->entry && slot->sizeMeasured
+             && predicate(slot->entry->editorImageSize);
+    },
+    Timeout);
+  return table->find(name);
+}
+
+// the entry once its editor-image size is measured (S2.2: the measure publishes it again)
 std::shared_ptr<const MaterialEntry> waitForEntry(
   MaterialService& service, const std::string& name)
 {
-  if (const auto found = service.lookup(name);
-      found.state == MaterialLookup::State::Ready)
-  {
-    return found.entry;
-  }
+  static_cast<void>(service.lookup(name));
   const auto table = service.waitForTableForTesting(
-    [&](const MaterialTable& t) { return t.find(name) != nullptr; }, Timeout);
+    [&](const MaterialTable& t) {
+      const auto slot = t.find(name);
+      return slot && (!slot->entry || slot->sizeMeasured);
+    },
+    Timeout);
   const auto slot = table->find(name);
   REQUIRE(slot);
   INFO(slot->error);
@@ -893,14 +967,15 @@ TEST_CASE("MaterialService")
         return EditorImageSize{};
       }
       return build->load() == 1
-               ? EditorImageSize{64, 32, EditorImageSize::State::Ready}
-               : EditorImageSize{128, 128, EditorImageSize::State::Ready};
+               ? EditorImageSize{64, 32, EditorImageSize::State::Ready, {}}
+               : EditorImageSize{128, 128, EditorImageSize::State::Ready, {}};
     };
     auto service = start(std::move(serviceOptions));
 
     const auto wall = waitForEntry(*service, "textures/lp1a/wall");
     CHECK(
-      wall->editorImageSize == EditorImageSize{64, 32, EditorImageSize::State::Ready});
+      wall->editorImageSize
+      == EditorImageSize{64, 32, EditorImageSize::State::Ready, {}});
     const auto expr = waitForEntry(*service, "textures/lp1a/expr");
     CHECK(expr->editorImageSize == EditorImageSize{});
     // another spelling shares the sized entry
@@ -917,7 +992,7 @@ TEST_CASE("MaterialService")
     CHECK(kept->entry->registry == service->table()->registry);
     CHECK(
       kept->entry->editorImageSize
-      == EditorImageSize{64, 32, EditorImageSize::State::Ready});
+      == EditorImageSize{64, 32, EditorImageSize::State::Ready, {}});
     CHECK(
       service->table()->find("textures/lp1a/expr")->entry->editorImageSize
       == EditorImageSize{});
@@ -929,7 +1004,7 @@ TEST_CASE("MaterialService")
       [](const auto& s) { return s.builds == 3u; }, Timeout));
     CHECK(
       service->table()->find("textures/lp1a/wall")->entry->editorImageSize
-      == EditorImageSize{128, 128, EditorImageSize::State::Ready});
+      == EditorImageSize{128, 128, EditorImageSize::State::Ready, {}});
   }
 
   SECTION("a source that keeps changing rebuilds once per autoReloadInterval")
@@ -1035,27 +1110,250 @@ TEST_CASE("MaterialService")
 #endif
 }
 
+TEST_CASE("MaterialService, the LP1c fix round's work items (S2.2-S2.5, S3.13)")
+{
+  using State = EditorImageSize::State;
+
+  SECTION("S2.2: the bulk parse measures nothing; a lookup queues the measure")
+  {
+    const auto game = ImageServiceGame{4};
+    game.image("m1", 16, 8);
+    auto serviceOptions = game.options(0ms);
+    serviceOptions.parseAll = true;
+    auto service = start(std::move(serviceOptions));
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.parseAllDone; }, Timeout));
+    const auto bulk = service->table()->find("textures/fix/m1");
+    REQUIRE(bulk);
+    REQUIRE(bulk->entry);
+    CHECK_FALSE(bulk->sizeMeasured);
+    CHECK(bulk->entry->editorImageSize.state == State::Default);
+
+    const auto measured =
+      waitForSize(*service, "textures/fix/m1", [](const auto&) { return true; });
+    CHECK(measured->entry->editorImageSize == EditorImageSize{16, 8, State::Ready, {}});
+    // a name nobody asked for stays unmeasured
+    CHECK_FALSE(service->table()->find("textures/fix/m2")->sizeMeasured);
+  }
+
+  SECTION("S2.3: an evaluation behind a batch of 100 images is answered within 50 ms")
+  {
+    const auto game = ImageServiceGame{100};
+    for (auto i = 0; i < 100; ++i)
+    {
+      game.image(fmt::format("m{}", i), 64, 64);
+    }
+    auto service = start(game.options(0ms));
+    const auto entry = waitForEntry(*service, "textures/fix/m0");
+    REQUIRE(
+      service->waitForStatsForTesting([](const auto& s) { return s.idle; }, Timeout));
+
+    for (auto i = 0; i < 100; ++i)
+    {
+      static_cast<void>(service->image(diffuseKey(fmt::format("m{}", i))));
+    }
+    auto parms = NoParms;
+    parms[0] = 0.25f;
+    const auto asked = Clock::now();
+    CHECK_FALSE(service->evaluate(MaterialId::of(*entry), parms, 0.0f));
+    const auto key = RegisterKey{MaterialId::of(*entry), parms, 0.0f};
+    const auto table = service->waitForTableForTesting(
+      [&](const MaterialTable& t) { return t.findRegisters(key) != nullptr; }, Timeout);
+    const auto waited = Clock::now() - asked;
+    REQUIRE(table->findRegisters(key));
+    // the images were still coming: the evaluation did not wait for the batch
+    CHECK_FALSE(table->findImage(diffuseKey("m99")));
+    CHECK(waited < 50ms);
+    std::cout << fmt::format(
+      "S2.3: an evaluation behind 100 images answered in {:.2f} ms\n",
+      std::chrono::duration<double, std::milli>(waited).count());
+    REQUIRE(service->waitForTableForTesting(
+      [&](const MaterialTable& t) { return t.findImage(diffuseKey("m99")) != nullptr; },
+      Timeout));
+  }
+
+  SECTION("S2.4: images beyond the budget that a consumer took are dropped, then re-read")
+  {
+    const auto game = ImageServiceGame{10};
+    for (auto i = 0; i < 10; ++i)
+    {
+      game.image(fmt::format("m{}", i), 64, 64);
+    }
+    auto serviceOptions = game.options(0ms);
+    // about three of the images (64 × 64 RGBA8 with its mips is 21,844 bytes)
+    serviceOptions.imageBudgetBytes = 70000;
+    auto service = start(std::move(serviceOptions));
+    auto bytes = std::size_t{0};
+    for (auto i = 0; i < 10; ++i)
+    {
+      const auto key = diffuseKey(fmt::format("m{}", i));
+      static_cast<void>(service->image(key));
+      REQUIRE(service->waitForTableForTesting(
+        [&](const MaterialTable& t) { return t.findImage(key) != nullptr; }, Timeout));
+      const auto taken = service->image(key);
+      REQUIRE(taken.image);
+      bytes = taken.image->data.size();
+    }
+    const auto stats = service->stats();
+    CHECK(stats.imageBytes <= 70000 + bytes);
+    CHECK(stats.evictedImages >= 6u);
+    // the first one was dropped: asked again, it is read again
+    const auto first = diffuseKey("m0");
+    CHECK_FALSE(service->table()->findImage(first));
+    CHECK(service->image(first).state == ImageLookup::State::Pending);
+    REQUIRE(service->waitForTableForTesting(
+      [&](const MaterialTable& t) { return t.findImage(first) != nullptr; }, Timeout));
+    CHECK(service->image(first).state == ImageLookup::State::Source);
+  }
+
+  SECTION("S2.5: a texture written after its material, a deleted one, a resized one")
+  {
+    const auto game = ImageServiceGame{};
+    game.image("kept", 32, 16);
+    auto service = start(game.options(20ms));
+
+    // written later: Default until the poll sees the file, then its size; the image slot
+    // is read again too
+    const auto later =
+      waitForSize(*service, "textures/fix/later", [](const auto&) { return true; });
+    CHECK(later->entry->editorImageSize.state == State::Default);
+    static_cast<void>(service->image(diffuseKey("later")));
+    REQUIRE(service->waitForTableForTesting(
+      [&](const MaterialTable& t) { return t.findImage(diffuseKey("later")) != nullptr; },
+      Timeout));
+    CHECK(service->image(diffuseKey("later")).state == ImageLookup::State::Default);
+    game.image("later", 16, 8);
+    CHECK(
+      waitForSize(
+        *service,
+        "textures/fix/later",
+        [](const auto& size) { return size.state == State::Ready; })
+        ->entry->editorImageSize
+      == EditorImageSize{16, 8, State::Ready, {}});
+    REQUIRE(service->waitForTableForTesting(
+      [&](const MaterialTable& t) {
+        const auto slot = t.findImage(diffuseKey("later"));
+        return slot && slot->image;
+      },
+      Timeout));
+
+    // resized: Ready to another Ready size
+    CHECK(
+      waitForSize(*service, "textures/fix/kept", [](const auto&) { return true; })
+        ->entry->editorImageSize
+      == EditorImageSize{32, 16, State::Ready, {}});
+    game.image("kept", 64, 16);
+    bumpModificationTime(game.base() / "textures" / "fix" / "kept.tga");
+    CHECK(
+      waitForSize(
+        *service, "textures/fix/kept", [](const auto& size) { return size.width == 64; })
+        ->entry->editorImageSize
+      == EditorImageSize{64, 16, State::Ready, {}});
+
+    // deleted: back to Default, also across a reload (the kept Ready size goes with it)
+    game.remove("kept");
+    CHECK(
+      waitForSize(
+        *service,
+        "textures/fix/kept",
+        [](const auto& size) { return size.state == State::Default; })
+        ->entry->editorImageSize.state
+      == State::Default);
+    service->reload();
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.builds == 2u; }, Timeout));
+    CHECK(
+      waitForSize(*service, "textures/fix/kept", [](const auto&) { return true; })
+        ->entry->editorImageSize.state
+      == State::Default);
+  }
+
+  SECTION("S3.13: a bake read that throws answers its ticket with a failed slot")
+  {
+    class ThrowingBakeSource : public MemoryDeclSource
+    {
+    public:
+      ThrowingBakeSource()
+        : MemoryDeclSource{materialDeclsFixture()}
+      {
+      }
+      std::optional<std::string> gameRelativePath(const std::string&) const override
+      {
+        return std::string{"maps/thrown.map"};
+      }
+      GameFileProbe probe(const std::string& path) override
+      {
+        if (path.rfind("maps/", 0) == 0 || path.rfind("generated/maps/", 0) == 0)
+        {
+          throw std::runtime_error{"the bake cannot be probed"};
+        }
+        return MemoryDeclSource::probe(path);
+      }
+    };
+    auto service = start(options([](const std::atomic<bool>&) {
+      return std::unique_ptr<DeclSource>{std::make_unique<ThrowingBakeSource>()};
+    }));
+    const auto ticket = service->loadMapBake("thrown.map");
+    const auto table = service->waitForTableForTesting(
+      [&](const MaterialTable& t) {
+        const auto slot = t.findMapBake("thrown.map");
+        return slot && slot->ticket >= ticket;
+      },
+      Timeout);
+    const auto slot = table->findMapBake("thrown.map");
+    REQUIRE(slot);
+    CHECK_FALSE(slot->tree);
+    CHECK_THAT(slot->error, Catch::Matchers::ContainsSubstring("could not be read"));
+    CHECK_THAT(slot->error, Catch::Matchers::ContainsSubstring("cannot be probed"));
+    CHECK(service->stats().failedWorkItems == 0u);
+  }
+}
+
 #if defined(_MSC_VER) && defined(_DEBUG)
 namespace
 {
 
-// runs f between two heap checkpoints; true when the heap grew, with its statistics
-template <typename F>
-bool heapGrows(F&& f)
+// S2.6: holds a polling parse thread before it takes its next request (its last work item
+// done and freed), and tells when it is held there
+struct Parking
 {
-  _CrtMemState before;
-  _CrtMemCheckpoint(&before);
-  f();
-  _CrtMemState after;
-  _CrtMemCheckpoint(&after);
-  _CrtMemState difference;
-  const auto grew = _CrtMemDifference(&difference, &before, &after) != 0;
-  if (grew)
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool closed = false;
+  bool parked = false;
+
+  void pass()
   {
-    _CrtMemDumpStatistics(&difference);
+    auto lock = std::unique_lock{mutex};
+    parked = true;
+    changed.notify_all();
+    changed.wait(lock, [&] { return !closed; });
+    parked = false;
   }
-  return grew;
-}
+
+  // closes, and waits until the thread is held
+  void park()
+  {
+    auto lock = std::unique_lock{mutex};
+    closed = true;
+    changed.wait(lock, [&] { return parked; });
+  }
+
+  void open()
+  {
+    {
+      auto lock = std::scoped_lock{mutex};
+      closed = false;
+    }
+    changed.notify_all();
+  }
+};
+
+struct UnparkAtExit
+{
+  std::shared_ptr<Parking> parking;
+  ~UnparkAtExit() { parking->open(); }
+};
 
 const auto LeakNames = std::vector<std::string>{
   "textures/lp1a/wall",
@@ -1240,6 +1538,137 @@ TEST_CASE("MaterialService start, stop and reload leak nothing")
       }
       waitUntilIdle();
     });
+    CHECK_FALSE(grew);
+  }
+
+  SECTION("S2.6: image lookups, the fallback, sizes, re-probes and bakes, 50 times")
+  {
+    // images from caches, from sources, a refused file and a cube missing a side; the
+    // sizes measured; a map's bake; the poll's re-probe of a changed and an appearing
+    // file
+    const auto folder = fs::TestEnvironment{};
+    const auto base = folder.dir() / "base";
+    auto text = std::string{};
+    for (const auto* name : {"plain", "refused", "later", "changing"})
+    {
+      text += materialText(
+        std::string{"textures/heap/"} + name, std::string{"textures/heap/"} + name);
+    }
+    writeTextFile(base / "materials" / "heap.mtr", text);
+    const auto tga = [&](const std::string& name, const int size) {
+      writeTextFile(
+        base / "textures" / "heap" / (name + ".tga"),
+        test::tgaFile(test::gradient(size, size), 32));
+    };
+    tga("plain", 16);
+    tga("changing", 8);
+    auto refused = test::tgaFile(test::gradient(4, 4), 32);
+    refused[16] = 16;
+    writeTextFile(base / "textures" / "heap" / "refused.tga", refused);
+    for (const auto* side : {"_px", "_nx", "_py", "_ny", "_pz"})
+    {
+      tga(std::string{"sky"} + side, 8);
+    }
+    writeTextFile(base / "maps" / "heap.proc", "mapProcFile003\n");
+
+    auto serviceOptions = options(
+      [path = folder.dir()](const std::atomic<bool>& cancel) {
+        return std::unique_ptr<DeclSource>{
+          std::make_unique<GameFileSource>(path, &cancel)};
+      },
+      counting);
+    serviceOptions.pollInterval = 10ms;
+    // the heap is looked at only while the polling parse thread waits before its next
+    // request, its last work item freed
+    auto parking = std::make_shared<Parking>();
+    serviceOptions.beforeTakeWorkForTesting = [parking] { parking->pass(); };
+    auto service = start(std::move(serviceOptions));
+    const auto unparkAtExit = UnparkAtExit{parking};
+    const auto key = [](const std::string& name, const int cube = 0) {
+      auto image = MaterialImageKey{};
+      image.name = "textures/heap/" + name;
+      image.usage = 1;
+      image.filter = 3;
+      image.cube = cube;
+      return image;
+    };
+    const auto names = std::vector<std::string>{
+      "textures/heap/plain",
+      "textures/heap/refused",
+      "textures/heap/later",
+      "textures/heap/changing"};
+    const auto mapPath = (base / "maps" / "heap.map").string();
+    auto round = 0;
+    const auto heapCycle = [&] {
+      ++round;
+      service->reload();
+      REQUIRE(service->waitForStatsForTesting(
+        [&](const auto& s) { return s.builds == std::uint64_t(round + 1); }, Timeout));
+      for (const auto& name : names)
+      {
+        static_cast<void>(waitForSize(*service, name, [](const auto&) { return true; }));
+      }
+      const auto images =
+        std::vector<MaterialImageKey>{key("plain"), key("refused"), key("sky", 1)};
+      for (const auto& image : images)
+      {
+        static_cast<void>(service->image(image));
+      }
+      REQUIRE(service->waitForTableForTesting(
+        [&](const MaterialTable& t) {
+          return std::all_of(images.begin(), images.end(), [&](const auto& image) {
+            return t.findImage(image) != nullptr;
+          });
+        },
+        Timeout));
+      // a file that changes and one that appears, seen by the poll
+      tga("changing", round % 2 == 0 ? 8 : 16);
+      bumpModificationTime(base / "textures" / "heap" / "changing.tga");
+      tga("later", 8);
+      const auto expected = round % 2 == 0 ? 8 : 16;
+      static_cast<void>(
+        waitForSize(*service, "textures/heap/changing", [&](const auto& size) {
+          return size.width == expected;
+        }));
+      static_cast<void>(
+        waitForSize(*service, "textures/heap/later", [](const auto& size) {
+          return size.state == EditorImageSize::State::Ready;
+        }));
+      // a deleted one, back to Default
+      std::filesystem::remove(base / "textures" / "heap" / "later.tga");
+      static_cast<void>(
+        waitForSize(*service, "textures/heap/later", [](const auto& size) {
+          return size.state == EditorImageSize::State::Default;
+        }));
+      // the bake, and once its file changed, read again by the poll
+      const auto ticket = service->loadMapBake(mapPath);
+      const auto read = service->waitForTableForTesting(
+        [&](const MaterialTable& t) {
+          const auto slot = t.findMapBake(mapPath);
+          return slot && slot->ticket >= ticket;
+        },
+        Timeout);
+      const auto first = read->findMapBake(mapPath);
+      REQUIRE(first);
+      bumpModificationTime(base / "maps" / "heap.proc");
+      REQUIRE(service->waitForTableForTesting(
+        [&](const MaterialTable& t) { return t.findMapBake(mapPath) != first; },
+        Timeout));
+      REQUIRE(
+        service->waitForStatsForTesting([](const auto& s) { return s.idle; }, Timeout));
+    };
+    heapCycle();
+    heapCycle();
+    parking->park();
+    const auto grew = heapGrows([&] {
+      parking->open();
+      for (auto i = 0; i < 50; ++i)
+      {
+        heapCycle();
+      }
+      parking->park();
+    });
+    parking->open();
     CHECK_FALSE(grew);
   }
 }

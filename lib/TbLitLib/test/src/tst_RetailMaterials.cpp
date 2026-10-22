@@ -494,7 +494,32 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
   const auto total =
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started);
   const auto stats = service->stats();
-  const auto table = service->table();
+
+  // S2.2: the bulk parse measures no size; a lookup of every material queues its
+  // measure (C21, by headers), timed on its own
+  auto measuredNames = std::vector<std::string>{};
+  service->table()->materials.forEach([&](const auto& name, const auto& slot) {
+    if (slot->entry && name == slot->entry->name)
+    {
+      measuredNames.push_back(name);
+    }
+  });
+  const auto measureStarted = std::chrono::steady_clock::now();
+  for (const auto& name : measuredNames)
+  {
+    static_cast<void>(service->lookup(name));
+  }
+  const auto table = service->waitForTableForTesting(
+    [&](const MaterialTable& t) {
+      return std::all_of(
+        measuredNames.begin(), measuredNames.end(), [&](const auto& name) {
+          const auto slot = t.find(name);
+          return slot && slot->sizeMeasured;
+        });
+    },
+    600s);
+  const auto measured =
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - measureStarted);
   service->requestStop();
   service->join();
 
@@ -585,10 +610,12 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
     defaultSizes += materials.size();
   }
   report << fmt::format(
-    "  editor-image sizes (C21) of {} parsed materials: {} Ready, {} Default\n",
+    "  editor-image sizes (C21) of {} parsed materials: {} Ready, {} Default; "
+    "measured on request in {:.0f} ms\n",
     entries.size(),
     readySizes,
-    defaultSizes);
+    defaultSizes,
+    measured.count() * 1000.0);
   for (const auto& [kind, materials] : defaultReasons)
   {
     report << fmt::format("  Default x{}: {}\n", materials.size(), kind);
@@ -605,10 +632,19 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
 
   CHECK(stats.materials == 7733);
   CHECK(stats.tables == 309);
-  // C21: every size resolved, Ready or Default with its reason
+  // C21: every size resolved, Ready or Default with its reason; S3.9: the counts of the
+  // retail game, and the Default reasons only of the three kinds seen
   CHECK(readySizes + int(defaultSizes) == int(entries.size()));
-  CHECK(readySizes > 0);
+  CHECK(readySizes == 4485);
+  CHECK(defaultSizes == 3248u);
   CHECK(defaultReasons.count("(none)") == 0u);
+  for (const auto& [kind, materials] : defaultReasons)
+  {
+    CAPTURE(kind);
+    CHECK(
+      (kind == "Couldn't load image" || kind == "Couldn't load cube image"
+       || kind.rfind("the engine sizes ", 0) == 0));
+  }
   CHECK(stats.defaultedMaterials == 15);
   CHECK(stats.warnings == warnings.size());
   CHECK(stats.failedWorkItems == 0u);
@@ -1541,6 +1577,13 @@ TEST_CASE("Retail materials: bakes and image caches (LP1c.1)", "[.][retail]")
   CHECK(found > 0);
   CHECK(ready > 0);
   CHECK(gridImages + int(noAtlas.size()) == bake.tree->numAreas);
+  // S3.9: the retail game's counts, every cache read Ready (S3.5's record checks pass)
+  CHECK(keys.size() == 14241u);
+  CHECK(found + viaBfhack == 8198);
+  CHECK(read == 411);
+  CHECK(ready == read);
+  CHECK(rgb565 == 85);
+  CHECK(staleReasons.empty());
 }
 
 } // namespace tb::lit

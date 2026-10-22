@@ -352,11 +352,29 @@ void SceneGeometry::refreshTable()
   if (reloaded)
   {
     m_pendingMaterials.clear();
-    m_provisional.clear();
+    m_sizedCells.clear();
     m_pendingEntityDefs.clear();
     markAll();
   }
   scanTable();
+}
+
+EditorImageSize SceneGeometry::tableSizeOf(const std::string& material) const
+{
+  const auto slot = m_table ? m_table->find(material) : nullptr;
+  return slot && slot->entry ? slot->entry->editorImageSize : EditorImageSize{};
+}
+
+void SceneGeometry::forgetSizedCells(const std::vector<CellRef>& cells)
+{
+  for (auto it = m_sizedCells.begin(); it != m_sizedCells.end();)
+  {
+    for (const auto& ref : cells)
+    {
+      it->second.cells.erase(ref);
+    }
+    it = it->second.cells.empty() ? m_sizedCells.erase(it) : std::next(it);
+  }
 }
 
 void SceneGeometry::scanTable()
@@ -390,15 +408,15 @@ void SceneGeometry::scanTable()
       ++it;
     }
   }
-  for (auto it = m_provisional.begin(); it != m_provisional.end();)
+  // LP1c fix (S2.5): a material whose editor-image size is no more the one its cells
+  // were built with rebuilds them (Default to Ready, Ready to another size, a deleted
+  // image back to Default)
+  for (auto it = m_sizedCells.begin(); it != m_sizedCells.end();)
   {
-    const auto slot = m_table->find(it->first);
-    if (
-      slot && slot->entry
-      && slot->entry->editorImageSize.state == EditorImageSize::State::Ready)
+    if (tableSizeOf(it->first) != it->second.size)
     {
-      m_dirty.insert(it->second.begin(), it->second.end());
-      it = m_provisional.erase(it);
+      m_dirty.insert(it->second.cells.begin(), it->second.cells.end());
+      it = m_sizedCells.erase(it);
     }
     else
     {
@@ -548,7 +566,7 @@ void SceneGeometry::startBatch()
 void SceneGeometry::apply(ChunkJobOutput output)
 {
   // what the rebuilt cells waited for is replaced by what they wait for now
-  forgetCells(m_provisional, output.cells);
+  forgetSizedCells(output.cells);
   forgetCells(m_pendingMaterials, output.cells);
   for (const auto& ref : output.cells)
   {
@@ -565,10 +583,13 @@ void SceneGeometry::apply(ChunkJobOutput output)
   for (auto& chunk : output.chunks)
   {
     const auto ref = CellRef{chunk.key.entity, chunk.key.cell};
-    if (chunk.provisional)
+    // the table the batch was built with is still the scene's (a batch adopts no other)
+    auto& sized = m_sizedCells[chunk.key.material];
+    if (sized.cells.empty())
     {
-      m_provisional[chunk.key.material].insert(ref);
+      sized.size = tableSizeOf(chunk.key.material);
     }
+    sized.cells.insert(ref);
     auto key = chunk.key;
     m_chunks.insert_or_assign(std::move(key), std::move(chunk));
   }

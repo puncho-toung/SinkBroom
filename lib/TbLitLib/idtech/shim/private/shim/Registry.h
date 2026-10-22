@@ -87,12 +87,17 @@ public:
 
   // files left empty because the cancel flag was set
   int cancelledReads() const { return m_cancelledReads; }
+  // LP1c fix (S2.2): the cancel flag is set (the registry is stopping)
+  bool cancelling() const { return m_cancel && m_cancel->load(); }
+  // LP1c fix (S2.1): the source, for the shim's own header reads (parse thread)
+  tb::lit::DeclSource& source() { return m_source; }
 
   // the copied loaders read between these (parse thread); not nested
   void beginImageReads();
   std::vector<ImageRejection> endImageReads();
 
-  // every file a probe or an image read finds between these, in order (parse thread)
+  // every file a probe or an image read looks for between these, in order, found or not
+  // (LP1c fix S2.5: a missing one has a Missing probe) (parse thread); not nested
   void beginRecording();
   std::vector<FoundFile> endRecording();
 
@@ -128,6 +133,13 @@ private:
 
 namespace tb::lit::shim
 {
+
+// LP1c fix (S2.5): what a recording (idFileSystemLocal::endRecording) looked for: the
+// files found, in order, and the names missed, once each
+void splitRecorded(
+  std::vector<idFileSystemLocal::FoundFile> recorded,
+  std::vector<FoundGameFile>& found,
+  std::vector<FoundGameFile>& missing);
 
 /**
  * LP1c.1: the idFile that OpenFileRead hands the copied loaders (LP1c.2): a game file

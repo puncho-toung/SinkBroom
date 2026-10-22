@@ -54,6 +54,8 @@ target_link_libraries(TbLitLibTest
     TbBaseTestUtilsLib
     TbFsTestUtilsLib
     TbLitLib
+    # LP1c fix (S3.2): the engine's fast DXT encoders, for the tests only
+    TbLitIdDxtTestLib
     miniz
 )
 

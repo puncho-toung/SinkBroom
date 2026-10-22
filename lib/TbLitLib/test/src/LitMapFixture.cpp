@@ -582,7 +582,7 @@ std::shared_ptr<const MaterialTable> fixtureMaterialTable(
     if (const auto size = sizes.find(name); size != sizes.end())
     {
       entry->editorImageSize = EditorImageSize{
-        size->second.first, size->second.second, EditorImageSize::State::Ready};
+        size->second.first, size->second.second, EditorImageSize::State::Ready, {}};
     }
     table->materials = table->materials.set(
       name, std::make_shared<const MaterialSlot>(MaterialSlot{std::move(entry), {}}));

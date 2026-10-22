@@ -9,6 +9,12 @@ tangent code of `renderer/tr_trisurf.cpp`; D57, C24), and to load images as the 
 loads them (`renderer/Image_files.cpp`, the mip and cube functions of
 `renderer/Image_process.cpp`, `renderer/Color/ColorSpace.*`; LP1c.2).
 
+`renderer/DXT/` (`DXTCodec.h`, `DXTCodec_local.h`, `DXTEncoder_SSE2.cpp`) is **test only**
+(LP1c fix S3.2): the engine's fast DXT encoders, compiled into `TbLitIdDxtTestLib`, which
+`TbLitLibTest` alone links, so that the image goldens compare the source fallback with the
+engine's caches block for block. No product target links it: the preview never encodes BC
+on the CPU (D24). `mirror.json` marks these entries `testOnly`.
+
 `libs/` holds the libraries the engine itself vendors and the copied loaders call:
 `stb/stb_image.h`, `tinyexr/tinyexr.h` and `mesa/format_r11g11b10f.h`, whole and at the
 engine's versions, so that a source image decodes to the same bytes (D27's recorded

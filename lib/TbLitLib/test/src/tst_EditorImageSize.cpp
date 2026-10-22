@@ -432,9 +432,11 @@ TEST_CASE("MaterialService publishes editor-image sizes and re-probes changed im
   key.usage = UsageDiffuse;
   key.filter = FilterDefault;
   static_cast<void>(service->image(key));
+  // S2.2: the sizes once measured (a lookup queues the measure)
   const auto table = service->waitForTableForTesting(
     [&](const MaterialTable& t) {
-      return t.find(editor) && t.find(missing) && t.findImage(key);
+      return t.find(editor) && t.find(editor)->sizeMeasured && t.find(missing)
+             && t.find(missing)->sizeMeasured && t.findImage(key);
     },
     10s);
   REQUIRE(table->find(editor)->entry);

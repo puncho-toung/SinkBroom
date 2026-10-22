@@ -144,3 +144,53 @@ endif()
 
 suppress_dependency_warnings(TbLitIdLib)
 apply_sanitizer_options(TbLitIdLib)
+
+# LP1c fix (S3.2): the engine's fast DXT encoders, copied verbatim, for the image goldens'
+# exact comparison with the engine's caches. Test only: linked by TbLitLibTest alone, never
+# by the product, which encodes no BC on the CPU (D24). Built as TbLitIdLib is built.
+add_library(TbLitIdDxtTestLib STATIC)
+
+target_sources(TbLitIdDxtTestLib
+  PRIVATE
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/DXT/DXTCodec.h
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/DXT/DXTCodec_local.h
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/DXT/DXTEncoder_SSE2.cpp
+    ${TB_LIT_ID_SHIM_DIR}/testing/src/DxtEncoderForTesting.cpp
+
+  PUBLIC FILE_SET headers TYPE HEADERS
+    BASE_DIRS ${TB_LIT_ID_SHIM_DIR}/testing/include
+    FILES
+      ${TB_LIT_ID_SHIM_DIR}/testing/include/lit/DxtEncoderForTesting.h
+)
+
+target_include_directories(TbLitIdDxtTestLib
+  PRIVATE
+    ${TB_LIT_ID_SHIM_DIR}/private
+    ${TB_LIT_ID_ENGINE_DIR}
+)
+
+target_link_libraries(TbLitIdDxtTestLib PRIVATE TbLitIdLib)
+
+set_target_properties(TbLitIdDxtTestLib PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)|(e2k)|(E2K)"
+   AND NOT CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
+  target_compile_definitions(TbLitIdDxtTestLib PRIVATE USE_INTRINSICS_SSE)
+endif()
+
+if(NOT MSVC)
+  target_compile_options(TbLitIdDxtTestLib PRIVATE
+    -fno-strict-aliasing
+    -ffp-contract=off
+    $<$<NOT:$<CONFIG:Debug>>:-fno-math-errno>
+    $<$<NOT:$<CONFIG:Debug>>:-fno-trapping-math>
+  )
+  target_compile_definitions(TbLitIdDxtTestLib PRIVATE $<$<CONFIG:Debug>:_DEBUG>)
+endif()
+
+suppress_dependency_warnings(TbLitIdDxtTestLib)
+apply_sanitizer_options(TbLitIdDxtTestLib)

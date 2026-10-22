@@ -17,6 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "ImageTestFiles.h"
 #include "LitMapFixture.h"
 #include "LitTestUtils.h"
 #include "fs/TestEnvironment.h"
@@ -838,6 +839,85 @@ TEST_CASE("SceneGeometry: what a later material table brings is built (R3.1, R3.
     CHECK(lateCast() == CastClass::None);
   }
   pool->stop();
+}
+
+TEST_CASE("SceneGeometry, a resized editor image builds its cells again (S2.5)")
+{
+  using namespace std::chrono_literals;
+  // the texture is 32 × 16, then 64 × 16, then deleted: its cells are built with each
+  const auto env = fs::TestEnvironment{};
+  const auto base = env.dir() / "base";
+  writeTextFile(
+    base / "materials" / "resized.mtr",
+    materialText("textures/fix/resized", "textures/fix/resized"));
+  const auto tga = [&](const int width, const int height) {
+    writeTextFile(
+      base / "textures" / "fix" / "resized.tga",
+      test::tgaFile(test::gradient(width, height), 32));
+  };
+  tga(32, 16);
+
+  auto options = MaterialServiceOptions{};
+  options.makeSource = [path = env.dir()](const std::atomic<bool>& cancel) {
+    return std::unique_ptr<DeclSource>{std::make_unique<GameFileSource>(path, &cancel)};
+  };
+  options.pollInterval = 20ms;
+  auto service = MaterialService::create(std::move(options)) | kdl::value();
+  auto pool = CpuPool::create() | kdl::value();
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    auto snapshot = snapshotOfMapText(
+      "{\n\"classname\" \"worldspawn\"\n" + box(0, 0, 0, 64, 64, 64, "fix/resized")
+      + "}\n");
+    snapshot.sequence = 1;
+    scene.takeSnapshot(snapshot);
+
+    // the material's chunk once it is built again after the table's size changed: other
+    // vertices (st divided by another size), provisional for a Default size
+    auto previous = std::vector<EngineDrawVert>{};
+    const auto builtWith = [&](const int width, const EditorImageSize::State state) {
+      static_cast<void>(service->lookup("textures/fix/resized"));
+      REQUIRE(service->waitForTableForTesting(
+        [&](const MaterialTable& t) {
+          const auto slot = t.find("textures/fix/resized");
+          return slot && slot->entry && slot->sizeMeasured
+                 && slot->entry->editorImageSize.width == width
+                 && slot->entry->editorImageSize.state == state;
+        },
+        10s));
+      const auto deadline = std::chrono::steady_clock::now() + 10s;
+      while (std::chrono::steady_clock::now() < deadline)
+      {
+        scene.collect();
+        scene.finishForTesting();
+        const auto& chunks = scene.chunks();
+        const auto chunk =
+          std::find_if(chunks.begin(), chunks.end(), [](const auto& entry) {
+            return entry.first.material == "textures/fix/resized";
+          });
+        if (
+          chunk != chunks.end()
+          && chunk->second.provisional == (state == EditorImageSize::State::Default)
+          && chunk->second.verts != previous)
+        {
+          previous = chunk->second.verts;
+          return true;
+        }
+        std::this_thread::sleep_for(5ms);
+      }
+      return false;
+    };
+    CHECK(builtWith(32, EditorImageSize::State::Ready));
+    tga(64, 16);
+    bumpModificationTime(base / "textures" / "fix" / "resized.tga");
+    CHECK(builtWith(64, EditorImageSize::State::Ready));
+    std::filesystem::remove(base / "textures" / "fix" / "resized.tga");
+    CHECK(builtWith(8, EditorImageSize::State::Default));
+  }
+  pool->stop();
+  service->requestStop();
+  service->join();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
 }
 
 TEST_CASE("SceneGeometry: a classname change to and from func_group re-keys (R2.3)")

@@ -109,6 +109,31 @@ bool bfhackName(idStr& generatedName)
   return false;
 }
 
+} // namespace
+
+void shim::splitRecorded(
+  std::vector<idFileSystemLocal::FoundFile> recorded,
+  std::vector<FoundGameFile>& found,
+  std::vector<FoundGameFile>& missing)
+{
+  for (auto& file : recorded)
+  {
+    if (file.probe.exists())
+    {
+      found.push_back(FoundGameFile{std::move(file.path), std::move(file.probe)});
+    }
+    else if (std::none_of(missing.begin(), missing.end(), [&](const auto& known) {
+               return known.path == file.path;
+             }))
+    {
+      missing.push_back(FoundGameFile{std::move(file.path), std::move(file.probe)});
+    }
+  }
+}
+
+namespace
+{
+
 std::string lastErrorOf(const std::vector<DeclMessage>& messages)
 {
   for (auto it = messages.rbegin(); it != messages.rend(); ++it)
@@ -193,11 +218,9 @@ DeclResult<ImageCacheName> MaterialDecls::imageCacheName(const MaterialImageKey&
   }
   // RB end
 
-  for (auto& found : files.endRecording())
-  {
-    result.sources.push_back(
-      FoundGameFile{std::move(found.path), std::move(found.probe)});
-  }
+  auto recorded = files.endRecording();
+  result.resolved = !recorded.empty() && recorded.back().probe.exists();
+  shim::splitRecorded(std::move(recorded), result.sources, result.missing);
 
   idStr generatedName = imgName;
   getGeneratedName(generatedName, usage, cubeFiles);

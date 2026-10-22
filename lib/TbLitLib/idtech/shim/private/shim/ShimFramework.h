@@ -160,6 +160,11 @@ public:
   void DWarning(const char* fmt, ...);
   void Error(const char* fmt, ...);
   void FatalError(const char* fmt, ...);
+
+  // LP1c fix (S3.2): the binarizer's progress, which the copied DXT encoders report;
+  // declared only, and defined by the test-only TbLitIdDxtTestLib (the product copies no
+  // encoder, D24)
+  void LoadPacifierBinarizeProgressIncrement(int count);
 };
 
 extern idCommon tbLitCommonSink;

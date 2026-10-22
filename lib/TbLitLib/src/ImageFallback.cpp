@@ -71,15 +71,19 @@ std::shared_ptr<const CachedImage> sourceImage(
     why = std::move(load.error);
     return nullptr;
   }
-  const auto& pixels = *load.pixels;
+  auto& pixels = *load.pixels;
   const auto opts = engineImageOpts(name.usage);
   const auto numLevels =
     engineMipLevels(opts.format, key.filter, pixels.width, pixels.height);
+  // the files are kept before the pixels are taken (S2.4: moved, not copied)
+  files.insert(files.end(), pixels.files.begin(), pixels.files.end());
+  files.insert(files.end(), pixels.missing.begin(), pixels.missing.end());
+  auto origin = pixels.files.empty() ? GameFileProbe{} : pixels.files.front().probe;
   auto image = decls.sourceImageLevels(
-    pixels, opts.format, opts.colorFormat, numLevels, opts.gammaMips);
+    std::move(pixels), opts.format, opts.colorFormat, numLevels, opts.gammaMips);
   if (image.levels.empty())
   {
-    why = "the source image has no levels";
+    why = "the source image has no levels (the session is stopping, or its size is 0)";
     return nullptr;
   }
 
@@ -100,11 +104,7 @@ std::shared_ptr<const CachedImage> sourceImage(
   }
 
   image.file = name.generatedName;
-  if (!pixels.files.empty())
-  {
-    image.origin = pixels.files.front().probe;
-  }
-  files.insert(files.end(), pixels.files.begin(), pixels.files.end());
+  image.origin = std::move(origin);
   return std::make_shared<const CachedImage>(std::move(image));
 }
 
@@ -120,6 +120,9 @@ ImageCacheSlot resolveImage(
     return slot;
   }
   auto slot = resolveImageCache(source, *name.value);
+  // the time call's files, and (LP1c fix S2.5) the names it missed, for the re-probe
+  slot.files.insert(
+    slot.files.begin(), name.value->missing.begin(), name.value->missing.end());
   slot.files.insert(
     slot.files.begin(), name.value->sources.begin(), name.value->sources.end());
   if (slot.state == ImageCacheSlot::State::Ready)

@@ -39,6 +39,10 @@
 #include <fstream>
 #include <sstream>
 
+#if defined(_MSC_VER) && defined(_DEBUG)
+#include <crtdbg.h>
+#endif
+
 #include <catch2/catch_test_macros.hpp>
 
 namespace tb::lit
@@ -198,5 +202,29 @@ bool setUnixModificationTime(
   return utimensat(AT_FDCWD, path.c_str(), times, 0) == 0;
 #endif
 }
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+bool heapGrows(const std::function<void()>& f)
+{
+  _CrtMemState before;
+  _CrtMemCheckpoint(&before);
+  f();
+  _CrtMemState after;
+  _CrtMemCheckpoint(&after);
+  _CrtMemState difference;
+  const auto grew = _CrtMemDifference(&difference, &before, &after) != 0;
+  if (grew)
+  {
+    // the statistics and the blocks still allocated since, on stderr
+    const auto mode = _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
+    const auto file = _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
+    _CrtMemDumpStatistics(&difference);
+    _CrtMemDumpAllObjectsSince(&before);
+    _CrtSetReportFile(_CRT_WARN, file);
+    _CrtSetReportMode(_CRT_WARN, mode);
+  }
+  return grew;
+}
+#endif
 
 } // namespace tb::lit

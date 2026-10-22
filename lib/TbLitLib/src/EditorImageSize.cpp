@@ -20,9 +20,11 @@
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/Material.cpp,
-// renderer/Image_load.cpp and renderer/Image_intrinsic.cpp):
+// renderer/Image_load.cpp, renderer/Image_intrinsic.cpp and renderer/Image_files.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
-//   Copyright (C) 2013-2025 Robert Beckebans
+//   Copyright (C) 2012-2025 Robert Beckebans
+//   Copyright (C) 2014-2016 Kot in Action Creative Artel
+//   Copyright (C) 2016-2017 Dustin Land
 //   Copyright (C) 2022 Stephen Pridham
 // That code is also subject to the additional terms that follow the GNU General
 // Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
@@ -69,10 +71,78 @@ ImageUploadSize defaulted(std::string reason, std::vector<FoundGameFile> files)
   return ImageUploadSize{8, 8, State::Default, true, std::move(reason), std::move(files)};
 }
 
+// cubeFiles_t: CF_NATIVE, CF_CAMERA, CF_PANORAMA, CF_SINGLE, CF_QUAKE1
+constexpr int CubeNative = 1;
+constexpr int CubeCamera = 2;
+constexpr int CubePanorama = 3;
+constexpr int CubeSingle = 6;
+constexpr int CubeQuake1 = 7;
+// R_LoadCubeImages' side size for a panorama
+constexpr int PanoramaSideSize = 1024;
+
 bool isCube(const int cube)
 {
   // Image_load.cpp:716 (CF_NATIVE, CF_CAMERA, CF_QUAKE1, CF_SINGLE, CF_PANORAMA)
-  return cube == 1 || cube == 2 || cube == 7 || cube == 6 || cube == 3;
+  return cube == CubeNative || cube == CubeCamera || cube == CubeQuake1
+         || cube == CubeSingle || cube == CubePanorama;
+}
+
+// R_LoadCubeImages' loop over six files (CF_SINGLE without a cube size takes it too)
+bool isSixFileCube(const int cube, const int cubeMapSize)
+{
+  return cube == CubeNative || cube == CubeCamera || cube == CubeQuake1
+         || (cube == CubeSingle && cubeMapSize == 0);
+}
+
+// Image_files.cpp:959-966 imageLoaders, the order R_LoadImage tries the extensions in
+constexpr std::array<std::string_view, 5> LoaderExtensions = {
+  "png", "tga", "jpg", "exr", "hdr"};
+
+/**
+ * LP1c fix (S2.2, S3.3): a leaf's size by its header, read without its body
+ * (readImageFileHeader). A .png or .jpg that the pre-validation refuses is stb_image's
+ * failure in the engine, whose R_LoadImage goes on to the next extension: the next file
+ * of the loader order is sized instead; a refused TGA, EXR or HDR file is the default.
+ */
+ImageFileHeader leafHeader(
+  DeclSource& source, const std::string& path, std::vector<FoundGameFile>& files)
+{
+  auto probe = GameFileProbe{};
+  auto header = readImageFileHeader(source, path, &probe);
+  if (!header.problem || !isStbLoaderFile(path))
+  {
+    if (header.problem)
+    {
+      header.problem = "the image file " + path + ": " + *header.problem;
+    }
+    return header;
+  }
+  const auto refusal = "the image file " + path + ": " + *header.problem;
+  const auto dot = path.find_last_of('.');
+  const auto base = path.substr(0, dot);
+  for (const auto extension : LoaderExtensions)
+  {
+    const auto next = base + "." + std::string{extension};
+    if (next == path)
+    {
+      continue;
+    }
+    auto nextProbe = GameFileProbe{};
+    auto nextHeader = readImageFileHeader(source, next, &nextProbe);
+    files.push_back(FoundGameFile{next, nextProbe});
+    if (!nextProbe.exists() || (nextHeader.problem && isStbLoaderFile(next)))
+    {
+      continue;
+    }
+    if (nextHeader.problem)
+    {
+      nextHeader.problem =
+        refusal + "; the image file " + next + ": " + *nextHeader.problem;
+    }
+    return nextHeader;
+  }
+  header.problem = refusal;
+  return header;
 }
 
 // the usable cache's header, read without the body (BinaryImage.cpp:994-1036 and
@@ -203,51 +273,79 @@ ImageUploadSize imageUploadSize(
   {
     return defaulted("the image's name cannot be made: " + name.error, {});
   }
+  // LP1c fix (S2.5): the names the time call missed too, so that a file that appears
+  // later is measured
   auto files = name.value->sources;
+  files.insert(files.end(), name.value->missing.begin(), name.value->missing.end());
   if (const auto header = cacheHeader(source, *name.value, files))
   {
     return ready(header->width, header->height, std::move(files));
   }
 
-  // Image_load.cpp:716-865: the source
-  if (name.value->cube == Cube2DArray || name.value->cube == CubePackedMipChain)
+  // Image_load.cpp:716-865: the source, sized by headers without decoding (LP1c fix S2.2)
+  const auto cube = name.value->cube;
+  if (cube == Cube2DArray || cube == CubePackedMipChain)
   {
     return defaulted(
       "an image array or packed mip chain without its cache: the engine's bake makes it",
       std::move(files));
   }
   const auto& imageName = name.value->imageName;
-  if (isCube(name.value->cube) || imageName.find('(') != std::string::npos)
+  if (isSixFileCube(cube, key.cubeMapSize))
   {
-    // a cube or an image program: the copied loaders, quietly, as the engine sizes them
-    auto load = decls.loadImagePixels(*name.value, key.cubeMapSize, true);
-    if (load.pixels)
+    // R_LoadCubeImages' loop: six sides of one square size, side 0's
+    auto sides = decls.cubeSideSizes(*name.value, key.cubeMapSize);
+    files.insert(files.end(), sides.files.begin(), sides.files.end());
+    if (!sides.problem.empty())
     {
-      files.insert(files.end(), load.pixels->files.begin(), load.pixels->files.end());
-      return ready(load.pixels->width, load.pixels->height, std::move(files));
+      return defaulted(
+        fmt::format("Couldn't load cube image: {} ({})", imageName, sides.problem),
+        std::move(files));
     }
-    return defaulted(load.error, std::move(files));
+    return ready(sides.size, sides.size, std::move(files));
   }
 
-  // one image: the file the time call's leaf resolution found, by its header
-  if (name.value->sources.empty())
+  // one picture: a 2D image or program by its first leaf (addnormals resamples its
+  // second to the first's size; no program changes the size), a CF_SINGLE cube or a
+  // panorama by the picture R_LoadCubeImages cuts its sides from. A missing leaf ends the
+  // time call, and the engine's load then has no picture
+  if (name.value->sources.empty() || (!isCube(cube) && !name.value->resolved))
   {
     return defaulted(
-      fmt::format("Couldn't load image: {} : {}", imageName, name.value->generatedName),
+      isCube(cube)
+        ? fmt::format("Couldn't load cube image: {}", imageName)
+        : fmt::format(
+            "Couldn't load image: {} : {}", imageName, name.value->generatedName),
       std::move(files));
   }
-  const auto& leaf = name.value->sources.back();
-  auto found = GameFileProbe{};
-  const auto bytes = source.readGameFile(leaf.path, &found);
-  if (!bytes)
-  {
-    return defaulted(leaf.path + " cannot be read", std::move(files));
-  }
-  const auto header = imageFileHeader(leaf.path, *bytes);
+  const auto header = leafHeader(source, name.value->sources.front().path, files);
   if (header.problem)
   {
-    return defaulted(
-      "the image file " + leaf.path + ": " + *header.problem, std::move(files));
+    return defaulted(*header.problem, std::move(files));
+  }
+  if (cube == CubeSingle)
+  {
+    // M-IMG-GUARD-02: the cross of 4 × 3 sides must fit the picture
+    if (
+      key.cubeMapSize < 0
+      || std::int64_t(header.width) < 4 * std::int64_t(key.cubeMapSize)
+      || std::int64_t(header.height) < 3 * std::int64_t(key.cubeMapSize))
+    {
+      return defaulted(
+        fmt::format(
+          "the single-image cube {} is {} x {}, smaller than the 4 x 3 sides of {}",
+          imageName,
+          header.width,
+          header.height,
+          key.cubeMapSize),
+        std::move(files));
+    }
+    return ready(key.cubeMapSize, key.cubeMapSize, std::move(files));
+  }
+  if (cube == CubePanorama)
+  {
+    // R_LoadCubeImages: cubeMapSize = 1024 for a panorama
+    return ready(PanoramaSideSize, PanoramaSideSize, std::move(files));
   }
   return ready(header.width, header.height, std::move(files));
 }
@@ -256,13 +354,20 @@ EditorImageSizing editorImageSize(
   MaterialDecls& decls, DeclSource& source, const MaterialEntry& material)
 {
   auto sizing = EditorImageSizing{};
-  const auto use = [&](ImageUploadSize size) {
+  const auto use = [&](ImageUploadSize size, std::string image) {
     sizing.size = EditorImageSize{size.width, size.height, size.state, size.reason};
+    sizing.image = std::move(image);
     sizing.files.insert(sizing.files.end(), size.files.begin(), size.files.end());
   };
   const auto sizeOf = [&](const std::optional<MaterialImageKey>& image) {
-    return image ? imageUploadSize(decls, source, *image)
-                 : ready(DefaultImageSize, DefaultImageSize, {});
+    if (image)
+    {
+      use(imageUploadSize(decls, source, *image), image->name);
+    }
+    else
+    {
+      use(ready(DefaultImageSize, DefaultImageSize, {}), {});
+    }
   };
   // Material.cpp:236-251: the first diffuse stage's image, else stage 0's; null when
   // neither has one
@@ -289,7 +394,7 @@ EditorImageSizing editorImageSize(
     auto editor = imageUploadSize(decls, source, *key);
     if (!editor.defaulted || material.stages.empty())
     {
-      use(std::move(editor));
+      use(std::move(editor), key->name);
       return sizing;
     }
     // look for the diffusemap alternative like TrenchBroom does: the first diffuse
@@ -302,18 +407,23 @@ EditorImageSizing editorImageSize(
     }
     if (!diffuse)
     {
-      use(std::move(editor));
+      use(std::move(editor), key->name);
       return sizing;
     }
     sizing.files = std::move(editor.files);
-    use(sizeOf(stageImage()));
+    sizeOf(stageImage());
     return sizing;
   }
 
   // if we don't have an editorImageName, use the first stage image
-  use(
-    material.stages.empty() ? ready(DefaultImageSize, DefaultImageSize, {})
-                            : sizeOf(stageImage()));
+  if (material.stages.empty())
+  {
+    use(ready(DefaultImageSize, DefaultImageSize, {}), {});
+  }
+  else
+  {
+    sizeOf(stageImage());
+  }
   return sizing;
 }
 

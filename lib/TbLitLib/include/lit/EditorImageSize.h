@@ -51,27 +51,33 @@ struct ImageUploadSize
 };
 
 /**
- * LP1c.2 (C21, A6, P.4): an image's upload size, without decoding pixels where the
- * format allows: the default image 16 × 16 and an intrinsic by its generator
- * (Image_intrinsic.cpp); otherwise the copied time call names the cache
- * (MaterialDecls::imageCacheName), and a cache the engine would use (not stale, its
- * format matching DeriveOpts', the BFHACK name too) gives its header's size, read without
- * its body; otherwise the source: one image's file, found by the copied R_LoadImage's
- * leaf resolution in the time call (the .tga default, png/tga/jpg/exr/hdr, the _rmao
- * sibling), gives its header's size when the loader pre-validation passes it (D51); an
- * image program or a cube is loaded with the copied loaders (quietly) and sized as the
- * engine sizes it (a program by its first leaf: addnormals resamples its second to the
- * first's size). A load that fails, or a source that is missing, is the defaulted 8 × 8.
- * Messages the copied code reports stay in the registry; the caller drops them. Parse
- * thread (C20).
+ * LP1c.2 (C21, A6, P.4), LP1c fix (S2.2): an image's upload size, never decoding a pixel:
+ * the default image 16 × 16 and an intrinsic by its generator (Image_intrinsic.cpp);
+ * otherwise the copied time call names the cache (MaterialDecls::imageCacheName), and a
+ * cache the engine would use (not stale, its format matching DeriveOpts', the BFHACK name
+ * too) gives its header's size, read without its body; otherwise the source, by headers
+ * read through small bounded reads (readImageFileHeader): a 2D image or an image program
+ * by its first leaf as the time call's leaf resolution found it (the .tga default,
+ * png/tga/jpg/exr/hdr, the _rmao sibling; addnormals resamples its second leaf to the
+ * first's size, and no program changes the size), when the time call found every leaf; a
+ * .png or .jpg whose header is refused gives way to the next extension, as stb_image's
+ * failure does in the engine (S3.3); a six-file cube by side 0 once all six exist at one
+ * square size (MaterialDecls::cubeSideSizes); a CF_SINGLE cube by its cube size once the
+ * picture holds the 4 × 3 sides; a panorama 1024. A missing leaf or side, or a refused
+ * header, is the defaulted 8 × 8. Every file found or looked for is in files, for the
+ * re-probe. Messages the copied code reports stay in the registry; the caller drops them.
+ * Parse thread (C20).
  */
 ImageUploadSize imageUploadSize(
   MaterialDecls& decls, DeclSource& source, const MaterialImageKey& key);
 
-// the size of a material's editor image, and every file it was read from
+// the size of a material's editor image, and every file it was read from or looked for
 struct EditorImageSizing
 {
   EditorImageSize size;
+  // LP1c fix (S3.15): the name of the image the size is of ("" for the default image),
+  // which a kept Ready size is keyed by
+  std::string image;
   std::vector<FoundGameFile> files;
 };
 

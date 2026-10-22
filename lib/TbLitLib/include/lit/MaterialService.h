@@ -59,6 +59,10 @@ struct MaterialSlot
 {
   std::shared_ptr<const MaterialEntry> entry;
   std::string error;
+  // LP1c fix (S2.2): the entry's editor-image size was measured (C21); until then it is
+  // the last Ready size of the material (D52) or the registry's Default, and a lookup of
+  // the name queues the measure
+  bool sizeMeasured = false;
 };
 
 // C22: what an entityDef query has found for a classname: an entry, or why there is none
@@ -282,8 +286,14 @@ struct MaterialServiceOptions
   // failing (Y.1)
   std::function<void()> beforeEndDescriptionForTesting;
   // runs on the parse thread when an entry is published and replaces the editor-image
-  // size the registry measured (C21; Default until LP1c.2 loads images)
+  // size the registry measured (C21; Default until LP1c.2 loads images); the entry is
+  // then published measured
   std::function<EditorImageSize(const MaterialEntry&)> editorImageSizeForTesting;
+  // LP1c fix (S2.4): the bytes of the published images' data the table keeps: beyond it
+  // the images a consumer has taken (image() returned their data) are dropped from the
+  // table, the least recently published first, and read again when asked for; 0 keeps
+  // every image
+  std::size_t imageBudgetBytes = std::size_t{512} * 1024 * 1024;
 };
 
 struct MaterialServiceStats
@@ -321,6 +331,10 @@ struct MaterialServiceStats
   std::uint64_t pollReloads = 0;
   // work items that threw; the item is dropped and the thread goes on (A2.1)
   std::uint64_t failedWorkItems = 0;
+  // LP1c fix (S2.4): the bytes of the image data the latest table holds, and the images
+  // dropped for the budget so far
+  std::size_t imageBytes = 0;
+  std::uint64_t evictedImages = 0;
   // the thread waits for a request, and its last work item is done and freed
   bool idle = false;
   // the thread ended without a stop (X.2): set first, without allocating (Y.1)
@@ -332,13 +346,27 @@ struct MaterialServiceStats
 /**
  * The parse thread (D32, C20, §3.5 Threading): it alone constructs, uses and destroys the
  * MaterialDecls, and every other thread sees only the published MaterialTable. Requests
- * queue in priority order: stop, reload, evaluations, lookups, then the bulk parse, which
- * works in short steps so that evaluations jump ahead of it (D52).
+ * queue in priority order: stop, reload, evaluations, lookups (materials and entityDefs),
+ * a bake, the poll, the editor-image measures, an image, then the bulk parse. LP1c fix
+ * (S2.3): every work item is short, so that an evaluation (a light drag) waits for one
+ * step at most: a lookup or measure item takes names until about 20 ms have passed (or
+ * 256 names) and publishes what it did, leaving the rest queued; a bake and an image are
+ * one item each; the bulk parse works in 20 ms steps (D52).
+ *
+ * LP1c fix (S2.2): an entry is published at once with the last Ready editor-image size
+ * of its material (D52) or the registry's Default, unmeasured; its measure (C21, by
+ * headers, never a decode) is queued for a name a consumer looked up (lookup queues it
+ * for a slot the bulk parse made), and publishes the entry measured. A kept Ready size
+ * stands for a Default measure only while the files it was measured from are unchanged
+ * and the material's image chain is the same (S3.15), so a deleted or renamed texture
+ * returns to Default.
  *
  * The thread builds the first registry at once. A reload destroys the registry, builds a
  * new one, looks up again every name the consumers asked for, and publishes the new table
  * in one step; entries of the old registry are refused by evaluate. reload() rebuilds at
- * once. A change of the loose decl files' times, found by a poll or between the stamps
+ * once. LP1c fix (S2.5): a reload also drops every image slot (a reload is the way to
+ * see new containers and caches the engine wrote), and the kept Ready sizes whose files
+ * changed. A change of the loose decl files' times, found by a poll or between the stamps
  * taken before and after a build, rebuilds at most once per autoReloadInterval, so a file
  * that cannot be read never loops (A2.3). A build ends its read batch with
  * DeclSource::closeFiles, so no game file stays open (R4-3.26).
@@ -427,7 +455,10 @@ public:
    * copied timestamp call names the cache (MaterialDecls::imageCacheName), the image
    * cache reader reads it through the game-file search (resolveImageCache), and where the
    * engine would binarize, the source fallback makes the image from its source
-   * (resolveImage); the slot is published once and kept across reloads.
+   * (resolveImage); the slot is published once, one image per work item (S2.3). LP1c fix:
+   * a reload drops every slot (S2.5), and the image budget drops a slot whose data a
+   * consumer has taken through this call once the table's image data is beyond
+   * MaterialServiceOptions::imageBudgetBytes (S2.4); asked for again, it is read again.
    */
   ImageLookup image(const MaterialImageKey& key);
 

@@ -26,6 +26,7 @@
 #include "ImageTestFiles.h"
 #include "LitTestUtils.h"
 #include "fs/TestEnvironment.h"
+#include "lit/EditorImageSize.h"
 #include "lit/GameFileSource.h"
 #include "lit/ImageCache.h"
 #include "lit/ImageFallback.h"
@@ -40,8 +41,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -324,6 +327,174 @@ TEST_CASE("ImageFallback, the engine's channel layouts before its encoder (D24)"
     CHECK(((value >> 11) & 0x7FF) == ((14u << 6) | 0u));
     CHECK(((value >> 22) & 0x3FF) == ((15u << 5) | 0u));
   }
+
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+}
+
+namespace
+{
+
+// S2.1: a game source that sets the stop flag the first time a file is read whole (a
+// Stop between two sides of a cube); every other call goes to the game's GameFileSource
+class StoppingSource : public DeclSource
+{
+private:
+  GameFileSource& m_files;
+  std::atomic<bool>& m_stop;
+  std::string m_stopAt;
+
+public:
+  StoppingSource(GameFileSource& files, std::atomic<bool>& stop, std::string stopAt)
+    : m_files{files}
+    , m_stop{stop}
+    , m_stopAt{std::move(stopAt)}
+  {
+  }
+
+  std::vector<std::string> listFiles(
+    const std::string& folder, const std::string& extension) override
+  {
+    return m_files.listFiles(folder, extension);
+  }
+  std::optional<std::string> readFile(
+    const std::string& path, std::int64_t* timestamp) override
+  {
+    return m_files.readFile(path, timestamp);
+  }
+  GameFileProbe probe(const std::string& path) override { return m_files.probe(path); }
+  std::optional<std::string> readGameFile(
+    const std::string& path, GameFileProbe* found) override
+  {
+    if (path == m_stopAt)
+    {
+      m_stop = true;
+      m_stopAt.clear();
+    }
+    return m_files.readGameFile(path, found);
+  }
+  std::optional<std::string> readGameFileHead(
+    const std::string& path, const std::size_t maxBytes, GameFileProbe* found) override
+  {
+    return m_files.readGameFileHead(path, maxBytes, found);
+  }
+  bool usingResourceFiles() const override { return m_files.usingResourceFiles(); }
+  // sets the stop flag when this file is read next
+  void stopAt(std::string path) { m_stopAt = std::move(path); }
+  std::vector<std::string> takeWarnings() override { return m_files.takeWarnings(); }
+  void closeFiles() override { m_files.closeFiles(); }
+};
+
+// the six sides of a CF_NATIVE cube, each flat in its own colour
+void cubeSides(
+  const FallbackGame& game,
+  const std::string& name,
+  const std::vector<std::string>& sides,
+  const int size)
+{
+  for (const auto& side : sides)
+  {
+    game.file(
+      name + "_" + side + ".tga",
+      tgaFile(flat(size, size, std::uint8_t(side[0]), std::uint8_t(side[1]), 7), 32));
+  }
+}
+
+} // namespace
+
+TEST_CASE("ImageFallback, a cube that fails part-way frees each side once (S2.1)")
+{
+  const auto all = std::vector<std::string>{"px", "nx", "py", "ny", "pz", "nz"};
+  const auto game = FallbackGame{};
+  // _nz missing; one side of another size; a side whose header passes and whose
+  // run-length data runs out (the pre-validation refuses it as the copy reads it); six
+  // good sides, read with a stop after the fourth
+  cubeSides(game, "five", {"px", "nx", "py", "ny", "pz"}, 8);
+  cubeSides(game, "mixed", all, 8);
+  game.file("mixed_ny.tga", tgaFile(flat(4, 4, 1, 2, 3), 32));
+  cubeSides(game, "refused", all, 8);
+  auto garbage = rleTgaFile(flat(8, 8, 9, 9, 9), 32).substr(0, 18);
+  garbage += std::string{"\x05\x01\x02\x03", 4};
+  game.file("refused_py.tga", garbage);
+  cubeSides(game, "stopped", all, 8);
+
+  auto files = GameFileSource{game.path()};
+  auto stop = std::atomic<bool>{false};
+  auto source = StoppingSource{files, stop, "textures/lp1c/stopped_ny.tga"};
+  auto decls = MaterialDecls{source, &stop};
+  REQUIRE(decls.constructionError().empty());
+
+  const auto failed = [&](const std::string& name) {
+    CAPTURE(name);
+    source.stopAt("textures/lp1c/stopped_ny.tga");
+    const auto key = keyOf("textures/lp1c/" + name, UsageDefault, CubeNative);
+    const auto slot = resolveImage(decls, source, key);
+    stop = false;
+    CHECK_FALSE(slot.image);
+    static_cast<void>(decls.takeMessages());
+    static_cast<void>(source.takeWarnings());
+    return slot.sourceReason;
+  };
+  const auto sized = [&](const std::string& name) {
+    const auto key = keyOf("textures/lp1c/" + name, UsageDefault, CubeNative);
+    auto size = imageUploadSize(decls, source, key);
+    static_cast<void>(decls.takeMessages());
+    return size;
+  };
+
+  SECTION("a missing side: the cube is the default, its size Default")
+  {
+    CHECK_THAT(failed("five"), Catch::Matchers::ContainsSubstring("five_nz"));
+    const auto size = sized("five");
+    CHECK(size.state == EditorImageSize::State::Default);
+    CHECK_THAT(size.reason, Catch::Matchers::ContainsSubstring("five_nz"));
+  }
+
+  SECTION("sides of two sizes: the engine's warning, nothing leaked")
+  {
+    CHECK_THAT(failed("mixed"), Catch::Matchers::ContainsSubstring("Mismatched sizes"));
+    CHECK(sized("mixed").state == EditorImageSize::State::Default);
+  }
+
+  SECTION("a side refused as the copy reads it: the copy frees what it loaded")
+  {
+    CHECK_THAT(failed("refused"), Catch::Matchers::ContainsSubstring("refused_py.tga"));
+    // its header is a good 8 × 8 one: the size is measured by headers (M-IMG-DIFF-07)
+    CHECK(sized("refused").state == EditorImageSize::State::Ready);
+  }
+
+  SECTION("a stop between sides: the image reads after it fail, nothing is freed twice")
+  {
+    CHECK_THAT(
+      failed("stopped"), Catch::Matchers::ContainsSubstring("Couldn't load cube image"));
+    // without the stop the same cube loads
+    const auto slot = resolveImage(
+      decls, source, keyOf("textures/lp1c/stopped", UsageDefault, CubeNative));
+    stop = false;
+    REQUIRE(slot.image);
+    CHECK(slot.image->levels.size() == std::size_t(6 * slot.image->numLevels));
+    CHECK(sized("stopped").width == 8);
+  }
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+  SECTION("under the debug heap, 20 times over (S2.6)")
+  {
+    const auto cycle = [&] {
+      for (const auto* name : {"five", "mixed", "refused", "stopped"})
+      {
+        static_cast<void>(failed(name));
+        static_cast<void>(sized(name));
+      }
+    };
+    cycle();
+    const auto grew = heapGrows([&] {
+      for (auto i = 0; i < 20; ++i)
+      {
+        cycle();
+      }
+    });
+    CHECK_FALSE(grew);
+  }
+#endif
 
   static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
 }

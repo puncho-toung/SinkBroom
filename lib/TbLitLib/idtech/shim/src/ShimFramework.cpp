@@ -405,11 +405,13 @@ int idFileSystemLocal::ReadFile(
     {
       tb::lit::shim::reportWarning(path + " cannot be probed");
     }
+    // LP1c fix (S2.5, S3.4): a miss is recorded too, so that a file that appears later
+    // is seen by the re-probe
+    record(path, found);
     if (!found.exists())
     {
       return -1;
     }
-    record(path, found);
     if (timestamp)
     {
       *timestamp = ID_TIME_T(found.time);
@@ -536,11 +538,12 @@ int idFileSystemLocal::readImageFile(
   {
     tb::lit::shim::reportWarning(path + " cannot be read");
   }
+  // LP1c fix (S2.5): a miss is recorded too, with its Missing probe
+  record(path, bytes ? found : tb::lit::GameFileProbe{});
   if (!bytes)
   {
     return -1;
   }
-  record(path, found);
 
   auto problem = std::optional<std::string>{};
   if (bytes->size() >= std::size_t(INT_MAX))

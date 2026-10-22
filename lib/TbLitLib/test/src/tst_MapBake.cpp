@@ -486,6 +486,9 @@ TEST_CASE("MapBake, the C10 search through the game files")
     REQUIRE(setUnixModificationTime(procPath, 1700000000));
     CHECK_FALSE(mapBakeChanged(source, bake));
     writeTextFile(gridPath, gridText(gridOf(2)));
+    // a new file is seen once the source looks at its folder again, as the poll makes it
+    // (S2.2)
+    source.looseFilesMayHaveChanged();
     CHECK(mapBakeChanged(source, bake));
     drain();
   }

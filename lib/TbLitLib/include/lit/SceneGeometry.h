@@ -103,13 +103,23 @@ private:
   // the table the last batch was built with; every table adopted is scanned once
   std::shared_ptr<const MaterialTable> m_table;
 
+  // the cells of each material and the editor-image size they were built with (LP1c fix
+  // S2.5: a cell is built again when the table's size of its material changes, Default to
+  // Ready, Ready to another Ready, or back to Default)
+  struct SizedCells
+  {
+    EditorImageSize size;
+    std::set<CellRef> cells;
+  };
+
   // the chunks, and what their cells wait for (R3.1, R3.2): the cells built while a
-  // material was not in the table, the cells built with a Default editor-image size, and
-  // the entities built while their classname's entityDef was not in the table
+  // material was not in the table, the cells of each material with the editor-image size
+  // they were built with, and the entities built while their classname's entityDef was
+  // not in the table
   std::map<ChunkKey, Chunk> m_chunks;
   std::unordered_map<PreviewId, ChunkEntityState> m_entityStates;
   std::map<std::string, std::set<CellRef>> m_pendingMaterials;
-  std::map<std::string, std::set<CellRef>> m_provisional;
+  std::map<std::string, SizedCells> m_sizedCells;
   std::map<std::string, std::set<PreviewId>> m_pendingEntityDefs;
   std::map<CellRef, std::size_t> m_solidPieces;
 
@@ -174,6 +184,10 @@ private:
   // adopts the latest material table and, when it is new, scans it (R3.1)
   void refreshTable();
   void scanTable();
+  // S2.5: the editor-image size the scene's table has for a material (Default when it
+  // has none)
+  EditorImageSize tableSizeOf(const std::string& material) const;
+  void forgetSizedCells(const std::vector<CellRef>& cells);
   void apply(ChunkJobOutput output);
   bool collectChunks();
   PreviewId chunkEntityOf(const SceneNode& node) const;

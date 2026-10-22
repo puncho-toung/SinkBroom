@@ -20,10 +20,12 @@
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/Image_load.cpp,
-// renderer/BinaryImage.cpp and renderer/Image.h):
+// renderer/BinaryImage.cpp, renderer/Image.h and renderer/Image_files.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
-//   Copyright (C) 2013-2025 Robert Beckebans
+//   Copyright (C) 2012-2025 Robert Beckebans
 //   Copyright (C) 2014-2016 Kot in Action Creative Artel
+//   Copyright (C) 2016-2017 Dustin Land
+//   Copyright (C) 2022 Stephen Pridham
 // That code is also subject to the additional terms that follow the GNU General
 // Public License in lib/TbLitLib/idtech/engine/LICENSE.md.
 // ---- end of engine notice ----
@@ -116,13 +118,50 @@ constexpr int CFM_GREEN_ALPHA = 3;
 // before the encoder (the HQ encoders swizzle inside themselves)
 constexpr bool image_highQualityCompression = false;
 
+// the bytes per pixel of a 2D level as Load2DFromMemory stores it below (the encoders'
+// input for DXT1 and DXT5, R11G11B10F for BC6H)
+std::size_t storedPixelBytes(const int textureFormat)
+{
+  switch (textureFormat)
+  {
+  case FMT_LUM8:
+  case FMT_INT8:
+  case FMT_ALPHA:
+    return 1;
+  case FMT_L8A8:
+  case FMT_RGB565:
+    return 2;
+  default:
+    return 4;
+  }
+}
+
+// LP1c fix (S2.4): the bytes of every level, so that the image's data is allocated once
+std::size_t levelBytes(
+  const int width, const int height, const int numLevels, const std::size_t pixelBytes)
+{
+  auto total = std::size_t{0};
+  auto w = width;
+  auto h = height;
+  for (int level = 0; level < numLevels; level++)
+  {
+    total += std::size_t(w) * std::size_t(h) * pixelBytes;
+    w = Max(1, w >> 1);
+    h = Max(1, h >> 1);
+  }
+  return total;
+}
+
+// one level's record, its bytes appended to the image's data by append (LP1c fix S2.4:
+// written in place, no level buffer)
+template <typename Append>
 void addLevel(
   CachedImage& image,
   const int level,
   const int destZ,
   const int width,
   const int height,
-  std::vector<std::uint8_t> bytes)
+  Append&& append)
 {
   auto record = CachedImageLevel{};
   record.level = level;
@@ -130,8 +169,8 @@ void addLevel(
   record.width = width;
   record.height = height;
   record.offset = image.data.size();
-  record.size = bytes.size();
-  image.data.insert(image.data.end(), bytes.begin(), bytes.end());
+  append(image.data);
+  record.size = image.data.size() - record.offset;
   image.levels.push_back(record);
 }
 
@@ -158,17 +197,21 @@ byte* shrink(
  * BinaryImage.cpp:56-331 idBinaryImage::Load2DFromMemory, the encoder skipped: the colour
  * conversion, then per level the bytes the engine stores, RGBA8 for DXT1 and DXT5 (the
  * encoder's input, unpadded) and R11G11B10F for BC6H (the SSE build encodes it from those
- * bytes), then the next level.
+ * bytes), then the next level. The engine copies the picture into a Mem_Alloc'ed working
+ * buffer; here the source's pixels are that buffer (moved from, LP1c fix S2.4). A stop
+ * between levels (cancelled) leaves no level (LP1c fix S2.2).
  */
+template <typename Cancelled>
 void load2DFromMemory(
   CachedImage& image,
   const int width,
   const int height,
-  const byte* pic_const,
+  std::vector<std::uint8_t> work,
   const int numLevels,
   int textureFormat,
   int colorFormat,
-  const bool gammaMips)
+  const bool gammaMips,
+  Cancelled&& cancelled)
 {
   image.textureType = DTT_2D;
   image.storedFormat = textureFormat;
@@ -177,8 +220,7 @@ void load2DFromMemory(
   image.height = height;
   image.numLevels = numLevels;
 
-  byte* pic = (byte*)Mem_Alloc(size_t(width) * size_t(height) * 4, TAG_TEMP);
-  memcpy(pic, pic_const, size_t(width) * size_t(height) * 4);
+  byte* pic = work.data();
 
   if (colorFormat == CFM_YCOCG_DXT5)
   {
@@ -209,12 +251,38 @@ void load2DFromMemory(
     }
   }
 
+  image.data.reserve(
+    levelBytes(width, height, numLevels, storedPixelBytes(textureFormat)));
+
+  // the working buffer is the source's vector for level 0, then the mips' Mem_Alloc'ed
+  // pictures, freed as the engine frees them
+  const auto release = [&]() {
+    if (pic == work.data())
+    {
+      work = {};
+    }
+    else
+    {
+      Mem_Free(pic);
+    }
+    pic = nullptr;
+  };
+
   int scaledWidth = width;
   int scaledHeight = height;
   for (int level = 0; level < numLevels && pic; level++)
   {
+    if (cancelled())
+    {
+      release();
+      image.levels.clear();
+      image.data = {};
+      return;
+    }
     const auto pixels = size_t(scaledWidth) * size_t(scaledHeight);
-    auto bytes = std::vector<std::uint8_t>{};
+    const auto copy = [&](std::vector<std::uint8_t>& out) {
+      out.insert(out.end(), pic, pic + pixels * 4);
+    };
     if (textureFormat == FMT_DXT1 || textureFormat == FMT_DXT5)
     {
       if (
@@ -223,78 +291,88 @@ void load2DFromMemory(
       {
         image.colorFormat = colorFormat = CFM_DEFAULT;
       }
-      bytes.assign(pic, pic + pixels * 4);
+      addLevel(image, level, 0, scaledWidth, scaledHeight, copy);
       image.format = FMT_RGBA8;
     }
     else if (textureFormat == FMT_BC6H || textureFormat == FMT_R11G11B10F)
     {
       // RB: store as R11G11B10, the bytes the BC6H encoder takes
-      bytes.assign(pic, pic + pixels * 4);
+      addLevel(image, level, 0, scaledWidth, scaledHeight, copy);
       image.format = FMT_R11G11B10F;
     }
     else if (textureFormat == FMT_LUM8 || textureFormat == FMT_INT8)
     {
       // LUM8 and INT8 just read the red channel
-      for (size_t i = 0; i < pixels; i++)
-      {
-        bytes.push_back(pic[i * 4]);
-      }
+      addLevel(image, level, 0, scaledWidth, scaledHeight, [&](auto& out) {
+        for (size_t i = 0; i < pixels; i++)
+        {
+          out.push_back(pic[i * 4]);
+        }
+      });
       image.format = textureFormat;
     }
     else if (textureFormat == FMT_ALPHA)
     {
       // ALPHA reads the alpha channel
-      for (size_t i = 0; i < pixels; i++)
-      {
-        bytes.push_back(pic[i * 4 + 3]);
-      }
+      addLevel(image, level, 0, scaledWidth, scaledHeight, [&](auto& out) {
+        for (size_t i = 0; i < pixels; i++)
+        {
+          out.push_back(pic[i * 4 + 3]);
+        }
+      });
       image.format = textureFormat;
     }
     else if (textureFormat == FMT_L8A8)
     {
       // L8A8 reads the alpha and red channels
-      for (size_t i = 0; i < pixels; i++)
-      {
-        bytes.push_back(pic[i * 4 + 0]);
-        bytes.push_back(pic[i * 4 + 3]);
-      }
+      addLevel(image, level, 0, scaledWidth, scaledHeight, [&](auto& out) {
+        for (size_t i = 0; i < pixels; i++)
+        {
+          out.push_back(pic[i * 4 + 0]);
+          out.push_back(pic[i * 4 + 3]);
+        }
+      });
       image.format = textureFormat;
     }
     else if (textureFormat == FMT_RGB565)
     {
-      for (size_t i = 0; i < pixels; i++)
-      {
-        unsigned short color = ((pic[i * 4 + 0] >> 3) << 11)
-                               | ((pic[i * 4 + 1] >> 2) << 5) | (pic[i * 4 + 2] >> 3);
-        bytes.push_back(std::uint8_t((color >> 8) & 0xFF));
-        bytes.push_back(std::uint8_t(color & 0xFF));
-      }
+      addLevel(image, level, 0, scaledWidth, scaledHeight, [&](auto& out) {
+        for (size_t i = 0; i < pixels; i++)
+        {
+          unsigned short color = ((pic[i * 4 + 0] >> 3) << 11)
+                                 | ((pic[i * 4 + 1] >> 2) << 5) | (pic[i * 4 + 2] >> 3);
+          out.push_back(std::uint8_t((color >> 8) & 0xFF));
+          out.push_back(std::uint8_t(color & 0xFF));
+        }
+      });
       image.format = textureFormat;
     }
     else if (textureFormat == FMT_RG16F)
     {
       // RB: copy it as it was a RGBA8 because of the same size
-      bytes.assign(pic, pic + pixels * 4);
+      addLevel(image, level, 0, scaledWidth, scaledHeight, copy);
       image.format = textureFormat;
     }
     else
     {
       image.storedFormat = textureFormat = FMT_RGBA8;
-      bytes.assign(pic, pic + pixels * 4);
+      addLevel(image, level, 0, scaledWidth, scaledHeight, copy);
       image.format = FMT_RGBA8;
     }
-    addLevel(image, level, 0, scaledWidth, scaledHeight, std::move(bytes));
 
     // downsample for the next level
     byte* shrunk = shrink(pic, scaledWidth, scaledHeight, textureFormat, gammaMips);
-    Mem_Free(pic);
+    release();
     pic = shrunk;
 
     scaledWidth = Max(1, scaledWidth >> 1);
     scaledHeight = Max(1, scaledHeight >> 1);
   }
 
-  Mem_Free(pic);
+  if (pic)
+  {
+    release();
+  }
 }
 
 /**
@@ -303,15 +381,17 @@ void load2DFromMemory(
  * engine stores, RGBA8 for DXT1 and DXT5 and R11G11B10F for BC6H (unpadded: the engine
  * replicates a level below 4 × 4 into a whole block for its encoder), R11G11B10F as is,
  * RGBA8 for anything else. The records go in the engine's order, images[ level * 6 + side
- * ].
+ * ]. A stop between levels (cancelled) leaves no level (LP1c fix S2.2).
  */
+template <typename Cancelled>
 void loadCubeFromMemory(
   CachedImage& image,
   const int width,
   const byte* const pics[6],
   const int numLevels,
   int textureFormat,
-  const bool gammaMips)
+  const bool gammaMips,
+  Cancelled&& cancelled)
 {
   image.textureType = DTT_CUBIC;
   image.storedFormat = textureFormat;
@@ -330,6 +410,16 @@ void loadCubeFromMemory(
 
     for (int level = 0; level < numLevels && pic; level++)
     {
+      if (cancelled())
+      {
+        if (pic != orig)
+        {
+          Mem_Free((void*)pic);
+        }
+        image.levels.clear();
+        image.data = {};
+        return;
+      }
       const auto bytes = size_t(scaledWidth) * size_t(scaledWidth) * 4;
       if (
         textureFormat == FMT_DXT1 || textureFormat == FMT_DXT5
@@ -368,6 +458,7 @@ void loadCubeFromMemory(
   }
   image.format = format;
 
+  image.data.reserve(6 * levelBytes(width, width, numLevels, 4));
   for (int level = 0; level < numLevels; level++)
   {
     for (int side = 0; side < 6; side++)
@@ -375,22 +466,48 @@ void loadCubeFromMemory(
       if (size_t(level) < levels[size_t(side)].size())
       {
         const auto levelWidth = Max(1, width >> level);
-        addLevel(
-          image,
-          level,
-          side,
-          levelWidth,
-          levelWidth,
-          std::move(levels[size_t(side)][size_t(level)]));
+        auto& bytes = levels[size_t(side)][size_t(level)];
+        addLevel(image, level, side, levelWidth, levelWidth, [&](auto& out) {
+          out.insert(out.end(), bytes.begin(), bytes.end());
+        });
+        bytes = {};
       }
     }
   }
 }
 
+// R_LoadCubeImages' side names (Image_files.cpp:1155-1167); CF_SINGLE without a cube
+// size takes the axis sides, as its else branch does
+const char* const* cubeSideNames(const cubeFiles_t extensions)
+{
+  static const char* const quakeSides[6] = {
+    "_ft.tga", "_bk.tga", "_lf.tga", "_rt.tga", "_up.tga", "_dn.tga"};
+  static const char* const cameraSides[6] = {
+    "_forward.tga", "_back.tga", "_left.tga", "_right.tga", "_up.tga", "_down.tga"};
+  static const char* const axisSides[6] = {
+    "_px.tga", "_nx.tga", "_py.tga", "_ny.tga", "_pz.tga", "_nz.tga"};
+  if (extensions == CF_CAMERA)
+  {
+    return cameraSides;
+  }
+  if (extensions == CF_QUAKE1)
+  {
+    return quakeSides;
+  }
+  return axisSides;
+}
+
+// a cube R_LoadCubeImages loads from six files
+bool isSixFileCube(const cubeFiles_t cubeFiles, const int cubeMapSize)
+{
+  return cubeFiles == CF_NATIVE || cubeFiles == CF_CAMERA || cubeFiles == CF_QUAKE1
+         || (cubeFiles == CF_SINGLE && cubeMapSize == 0);
+}
+
 } // namespace
 
 CachedImage MaterialDecls::sourceImageLevels(
-  const SourcePixels& source,
+  SourcePixels&& source,
   const int format,
   const int colorFormat,
   const int numLevels,
@@ -406,6 +523,10 @@ CachedImage MaterialDecls::sourceImageLevels(
   {
     return image;
   }
+  auto* registry = m_registry.get();
+  const auto cancelled = [registry]() {
+    return registry && registry->files().cancelling();
+  };
   if (source.faces == 6)
   {
     const byte* pics[6];
@@ -413,7 +534,8 @@ CachedImage MaterialDecls::sourceImageLevels(
     {
       pics[side] = source.pixels.data() + side * faceBytes;
     }
-    loadCubeFromMemory(image, source.width, pics, numLevels, format, gammaMips);
+    loadCubeFromMemory(
+      image, source.width, pics, numLevels, format, gammaMips, cancelled);
   }
   else
   {
@@ -421,13 +543,87 @@ CachedImage MaterialDecls::sourceImageLevels(
       image,
       source.width,
       source.height,
-      source.pixels.data(),
+      std::move(source.pixels),
       numLevels,
       format,
       colorFormat,
-      gammaMips);
+      gammaMips,
+      cancelled);
   }
+  source.pixels = {};
   return image;
+}
+
+CubeSideSizes MaterialDecls::cubeSideSizes(
+  const ImageCacheName& name, const int cubeMapSize)
+{
+  auto result = CubeSideSizes{};
+  if (!m_registry)
+  {
+    result.problem = m_constructionError;
+    return result;
+  }
+  const auto cubeFiles = cubeFiles_t(name.cube);
+  if (!isSixFileCube(cubeFiles, cubeMapSize))
+  {
+    result.problem = "the cube " + name.imageName + " is not made of six files";
+    return result;
+  }
+  // R_LoadCubeImages copies the name into a MAX_IMAGE_NAME buffer
+  if (name.imageName.empty() || name.imageName.size() >= std::size_t(MAX_IMAGE_NAME))
+  {
+    result.problem = "image name too long or empty";
+    return result;
+  }
+
+  auto& files = m_registry->files();
+  const auto messagesBefore = m_registry->messages().size();
+  const auto* const* sides = cubeSideNames(cubeFiles);
+  auto size = 0;
+  for (int i = 0; i < 6; i++)
+  {
+    // the side's name as R_LoadCubeImages makes it, resolved by the copied time call
+    char fullName[MAX_IMAGE_NAME];
+    idStr::snPrintf(fullName, sizeof(fullName), "%s%s", name.imageName.c_str(), sides[i]);
+    files.beginRecording();
+    int width = 0;
+    int height = 0;
+    ID_TIME_T time = 0;
+    R_LoadImageProgram(fullName, NULL, &width, &height, &time);
+    auto found = std::vector<FoundGameFile>{};
+    shim::splitRecorded(files.endRecording(), found, result.files);
+    if (found.empty())
+    {
+      result.problem = "its side " + std::string{fullName} + " is missing";
+      break;
+    }
+    // the file a side's leaf resolution found last is the one it loads
+    const auto& sideFile = found.back();
+    auto probe = GameFileProbe{};
+    const auto header = readImageFileHeader(files.source(), sideFile.path, &probe);
+    result.files.insert(result.files.end(), found.begin(), found.end());
+    if (header.problem)
+    {
+      result.problem = "its side " + sideFile.path + ": " + *header.problem;
+      break;
+    }
+    if (i == 0)
+    {
+      size = header.width;
+    }
+    // R_LoadCubeImages: "Mismatched sizes on cube map"
+    if (header.width != size || header.height != size)
+    {
+      result.problem = "Mismatched sizes on cube map '" + name.imageName + "'";
+      break;
+    }
+  }
+  static_cast<void>(m_registry->takeMessagesFrom(messagesBefore));
+  if (result.problem.empty())
+  {
+    result.size = size;
+  }
+  return result;
 }
 
 SourceLoad MaterialDecls::loadImagePixels(
@@ -451,6 +647,15 @@ SourceLoad MaterialDecls::loadImagePixels(
     return load;
   }
 
+  const auto cubeFiles = cubeFiles_t(name.cube);
+  // LP1c fix (S2.1): a six-file cube's sides by their headers first, before the copy
+  // reads any pixels, so that it never stops part-way on a missing or mismatched side
+  auto sides = std::optional<CubeSideSizes>{};
+  if (isSixFileCube(cubeFiles, cubeMapSize))
+  {
+    sides = cubeSideSizes(name, cubeMapSize);
+  }
+
   auto& files = m_registry->files();
   const auto messagesBefore = m_registry->messages().size();
   files.beginRecording();
@@ -458,7 +663,6 @@ SourceLoad MaterialDecls::loadImagePixels(
 
   // Image_load.cpp:716-865, the source of an image whose cache the engine would not use;
   // GetName() is the name after the PBR rename, usage the time call's
-  const auto cubeFiles = cubeFiles_t(name.cube);
   auto usage = textureUsage_t(name.usage);
   ID_TIME_T sourceFileTime = ID_TIME_T(name.sourceTime);
   auto pixels = SourcePixels{};
@@ -468,37 +672,58 @@ SourceLoad MaterialDecls::loadImagePixels(
   {
     int size = 0;
     byte* pics[6] = {};
-    const auto fits = singleImageCubeFits(name.imageName, cubeFiles, cubeMapSize);
-    const auto loaded =
-      fits.empty()
-      && R_LoadCubeImages(
-        name.imageName.c_str(), cubeFiles, pics, &size, &sourceFileTime, cubeMapSize);
-    if (!fits.empty())
+    auto fits = singleImageCubeFits(name.imageName, cubeFiles, cubeMapSize);
+    if (fits.empty() && sides && !sides->problem.empty())
+    {
+      // the engine's own warning for a mismatched side, then its failure
+      if (sides->problem.rfind("Mismatched sizes", 0) == 0)
+      {
+        idLib::Warning("%s", sides->problem.c_str());
+      }
+      idLib::Warning("Couldn't load cube image: %s", name.imageName.c_str());
+      load.error =
+        "Couldn't load cube image: " + name.imageName + " (" + sides->problem + ")";
+    }
+    else if (!fits.empty())
     {
       shim::reportWarning(fits);
       load.error = fits;
     }
-    else if (!loaded || size == 0)
-    {
-      // a cube that loaded six sides of size 0 keeps them in the engine; they are freed
-      for (auto* pic : pics)
-      {
-        if (pic)
-        {
-          Mem_Free(pic);
-        }
-      }
-      idLib::Warning("Couldn't load cube image: %s", name.imageName.c_str());
-      load.error = "Couldn't load cube image: " + name.imageName;
-    }
     else
     {
-      pixels.width = size;
-      pixels.height = size;
-      pixels.faces = 6;
-      for (auto* pic : pics)
+      const auto loaded = R_LoadCubeImages(
+        name.imageName.c_str(), cubeFiles, pics, &size, &sourceFileTime, cubeMapSize);
+      if (!loaded)
       {
-        takePicture(pic, size, size, pixels.pixels);
+        // R_LoadCubeImages freed the sides it loaded before it stopped (a side refused by
+        // the pre-validation reads as missing, as every image read does once the registry
+        // is stopping): nothing is left to free here (S2.1)
+        idLib::Warning("Couldn't load cube image: %s", name.imageName.c_str());
+        load.error = "Couldn't load cube image: " + name.imageName;
+      }
+      else if (size == 0)
+      {
+        // six sides of size 0: the engine keeps them; they are freed here
+        for (auto* pic : pics)
+        {
+          if (pic)
+          {
+            Mem_Free(pic);
+          }
+        }
+        idLib::Warning("Couldn't load cube image: %s", name.imageName.c_str());
+        load.error = "Couldn't load cube image: " + name.imageName;
+      }
+      else
+      {
+        pixels.width = size;
+        pixels.height = size;
+        pixels.faces = 6;
+        pixels.pixels.reserve(std::size_t(size) * std::size_t(size) * 4 * 6);
+        for (auto* pic : pics)
+        {
+          takePicture(pic, size, size, pixels.pixels);
+        }
       }
     }
   }
@@ -530,31 +755,45 @@ SourceLoad MaterialDecls::loadImagePixels(
   pixels.usage = int(usage);
   pixels.sourceTime = std::int64_t(sourceFileTime);
 
+  auto forcing = std::vector<std::string>{};
   for (auto& rejection : files.endImageReads())
   {
+    const auto stb = isStbLoaderFile(rejection.path);
     load.rejected.push_back(rejection.path + ": " + rejection.reason);
+    if (!stb)
+    {
+      forcing.push_back(load.rejected.back());
+    }
   }
-  for (auto& file : files.endRecording())
-  {
-    pixels.files.push_back(FoundGameFile{std::move(file.path), std::move(file.probe)});
-  }
+  shim::splitRecorded(files.endRecording(), pixels.files, pixels.missing);
 
-  if (!load.rejected.empty())
+  if (!forcing.empty())
   {
-    // D51: the engine would have read past a buffer or crashed on a refused file, so the
-    // image is the default, whatever else loaded; one warning per refused file, and not
-    // the engine's own for the failed load
+    // D51: the engine would have read past a buffer or stopped on a refused TGA, EXR or
+    // HDR file, so the image is the default, whatever else loaded; one warning per
+    // refused file, and not the engine's own for the failed load
     static_cast<void>(m_registry->takeMessagesFrom(messagesBefore));
     for (const auto& rejection : load.rejected)
     {
       shim::reportWarning(
         "the image file " + rejection + "; " + name.imageName + " is the default image");
     }
-    load.error = "the image file " + load.rejected.front();
+    load.error = "the image file " + forcing.front();
   }
-  else if (load.error.empty())
+  else
   {
-    load.pixels = std::move(pixels);
+    // LP1c fix (S3.3): a refused .png or .jpg is stb_image's failure in the engine, which
+    // warns and goes on to the next extension; the image is what that found
+    for (const auto& rejection : load.rejected)
+    {
+      shim::reportWarning(
+        "the image file " + rejection + "; stb_image would not load it either, so the "
+        "next extension is tried");
+    }
+    if (load.error.empty())
+    {
+      load.pixels = std::move(pixels);
+    }
   }
 
   if (quiet)

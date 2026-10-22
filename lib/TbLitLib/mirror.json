@@ -5,7 +5,8 @@
     "lines": "first and last line, 1-based and inclusive, in the file at engineCommit",
     "anchor": "the function, member or symbol that holds the range, for finding it again once the engine's line numbers move",
     "sha256": "of the range's text at engineCommit: each line without its line ending, followed by \\n",
-    "sinkbroom": "the SinkBroom file and symbol that mirror the range or say why not"
+    "sinkbroom": "the SinkBroom file and symbol that mirror the range or say why not",
+    "testOnly": "true for an engine copy (and its shim) linked by TbLitLibTest alone, never by the product: the LP1c fix round's fast DXT encoders for the image goldens (S3.2; D24 bars CPU BC encoding from the product only)"
   },
   "kinds": {
     "dispatcher": "the vulkan.hpp dynamic dispatcher's storage and initialisation",
@@ -10079,7 +10080,7 @@
           "symbol": "readBimage"
         }
       ],
-      "note": "LP1c.1: every count and size is checked before it is used: a header shorter than 36 bytes (the engine reads it as it is), a negative or impossible level count, a negative data size, an odd RGB565 level (the engine's in-place expansion reads misaligned pairs) or a level cut short fails the read, where the engine reads garbage or past the end; the preview then reports the cache Stale. A block-compressed level keeps its stored bytes: the engine pads its own allocation to NVRHI's row pitch times the rows, which LP2 does at upload"
+      "note": "LP1c.1: every count and size is checked before it is used: a header shorter than 36 bytes (the engine reads it as it is), a negative or impossible level count, a negative data size, an odd RGB565 level (the engine's in-place expansion reads misaligned pairs) or a level cut short fails the read, where the engine reads garbage or past the end; the preview then reports the cache Stale. A block-compressed level keeps its stored bytes: the engine pads its own allocation to NVRHI's row pitch times the rows, which LP2 does at upload LP1c fix (S3.5): the header's sides must be 1 to 16384 and its level count 1 to the levels its larger side halves into; each level record must be the one the engine's binarizer writes at its place (record k of a 2D image is level k, side 0; of a cube level k / 6, side k % 6: level-major), of that level's size (max(1, side >> level); a block format's cube level below 4 padded to 4) and with at least the bytes its format needs for that size (whole 4 x 4 blocks for DXT1, DXT5, BC6H, BC7, ETC1; the engine asserts dataSize >= w * h * bpp / 8); else the cache is Stale with the reason and never Ready, so LP2 never uploads a shape its header does not state"
     },
     {
       "id": "M-IMG-DIFF-02",
@@ -10136,7 +10137,7 @@
           "symbol": "MaterialService::Worker::pollImageFiles"
         }
       ],
-      "note": "LP1c.1: an image's slot is read once per session, when it is first asked for, and kept across material reloads (it does not depend on the decls); the engine reads it at every image load. LP1c.2 (LP1c.1's follow-up 5): the poll re-reads a slot when a loose file it was read from or its time call found changes (its time, size or change stamp; M-IMG-DIFF-06), so a saved source or a new cache is seen; a file in a container, a file that appears where none was, or a reload's new containers are seen after a restart of the session"
+      "note": "LP1c.1: an image's slot is read once per session, when it is first asked for, and kept across material reloads (it does not depend on the decls); the engine reads it at every image load. LP1c.2 (LP1c.1's follow-up 5): the poll re-reads a slot when a loose file it was read from or its time call found changes (its time, size or change stamp; M-IMG-DIFF-06), so a saved source or a new cache is seen; a file in a container, a file that appears where none was, or a reload's new containers are seen after a restart of the session LP1c fix (S2.5, S3.4): the time call's probes that missed are recorded too (the .tga default, the png/tga/jpg/exr/hdr loop, the _rmao sibling; not the cache names), so a texture written after its material is seen at the next poll, and the slot read again; a reload drops every slot (M-IMG-DIFF-09). New containers, and caches the engine writes into one, are seen through a reload (materialCollectionsDidChange) or a new session"
     },
     {
       "id": "M-BAKE-01",
@@ -11167,7 +11168,7 @@
           "symbol": "idFileSystemLocal::ReadFile"
         }
       ],
-      "note": "LP1c.2 (D51, R5.3, C17): every file a copied loader reads is validated outside the copied code before the loader sees it. The file system, between beginImageReads and endImageReads (MaterialDecls::loadImagePixels), reads it through the source's readGameFile and hands the loader nothing (-1, no buffer, FILE_NOT_FOUND_TIMESTAMP) for a file that fails, keeping the refusal once per path; a stop reads every image file as missing, never as an empty buffer. The checks follow each loader's reads: TGA - the 18-byte header, type 2, 3 or 10, no colour map, 24 or 32 bits (8 too for grey), the declared size of an uncompressed image against the bytes after the header and comment, the RLE packets walked as the decoder walks them up to the last pixel; PNG - stb_image's header rules (signature, a 13-byte IHDR first, depth 1/2/4/8/16, colour type 0/2/3/4/6, 16-bit palettes refused, methods 0, interlace 0 or 1, PLTE before IDAT for a palette, unknown critical chunks), every chunk inside the file up to IEND, and the declared pixels within 1032 bytes per IDAT byte (deflate's limit); JPG - SOI, every marker segment inside the file, a baseline or progressive 8-bit frame of 1, 3 or 4 components with sampling 1-4 and tables 0-3, each scan's entropy-coded bytes walked to the next marker, EOI reached, and at most 8 blocks per scan byte (a block of the finest component costs at least one Huffman bit); EXR - tinyexr's ParseEXRVersionFromMemory and ParseEXRHeaderFromMemory, single part and not deep, one channel or R, G and B (what LoadEXRFromMemory needs), for a scanline image the offset table and every block inside the file; HDR - stb_image's identifier, header with FORMAT=32-bit_rle_rgbe, '-Y h +X w' line, and every pixel byte stb_image reads (flat, run-length scanlines, the flat fallback), so stb_image always decodes it to three channels. Every size: at least 1, at most 16384 a side and 8192 x 8192 in all (M-IMG-DIFF-04). An empty file fails. Tested with truncated, 16-bit, RLE-garbage and oversized TGAs, a PNG with a lying IHDR, a 0-byte file and JPGs cut short or with a 4096 x 4096 header over one block of scan data (tst_ImageFiles.cpp)"
+      "note": "LP1c.2 (D51, R5.3, C17): every file a copied loader reads is validated outside the copied code before the loader sees it. The file system, between beginImageReads and endImageReads (MaterialDecls::loadImagePixels), reads it through the source's readGameFile and hands the loader nothing (-1, no buffer, FILE_NOT_FOUND_TIMESTAMP) for a file that fails, keeping the refusal once per path; a stop reads every image file as missing, never as an empty buffer. The checks follow each loader's reads: TGA - the 18-byte header, type 2, 3 or 10, no colour map, 24 or 32 bits (8 too for grey), the declared size of an uncompressed image against the bytes after the header and comment, the RLE packets walked as the decoder walks them up to the last pixel; PNG - stb_image's header rules (signature, a 13-byte IHDR first, depth 1/2/4/8/16, colour type 0/2/3/4/6, 16-bit palettes refused, methods 0, interlace 0 or 1, PLTE before IDAT for a palette, unknown critical chunks), every chunk inside the file up to IEND, and the declared pixels within 1032 bytes per IDAT byte (deflate's limit); JPG - SOI, every marker segment inside the file, a baseline or progressive 8-bit frame of 1, 3 or 4 components with sampling 1-4 and tables 0-3, each scan's entropy-coded bytes walked to the next marker, EOI reached, and at most 8 blocks per scan byte (a block of the finest component costs at least one Huffman bit); EXR - tinyexr's ParseEXRVersionFromMemory and ParseEXRHeaderFromMemory, single part and not deep, one channel or R, G and B (what LoadEXRFromMemory needs), for a scanline image the offset table and every block inside the file; HDR - stb_image's identifier, header with FORMAT=32-bit_rle_rgbe, '-Y h +X w' line, and every pixel byte stb_image reads (flat, run-length scanlines, the flat fallback), so stb_image always decodes it to three channels. Every size: at least 1, at most 16384 a side and 8192 x 8192 in all (M-IMG-DIFF-04). An empty file fails. Tested with truncated, 16-bit, RLE-garbage and oversized TGAs, a PNG with a lying IHDR, a 0-byte file and JPGs cut short or with a 4096 x 4096 header over one block of scan data (tst_ImageFiles.cpp) LP1c fix (S3.3): a .png or .jpg is dispatched by its content as stbi__load_main dispatches it (M-IMG-DIFF-04)"
     },
     {
       "id": "M-IMG-GUARD-02",
@@ -11237,7 +11238,7 @@
           "symbol": "MaterialDecls::loadImagePixels"
         }
       ],
-      "note": "LP1c.2: the pre-validation refuses some files the engine would load: images over 16384 a side or 8192 x 8192 in all (the engine has no limit beyond stb_image's 2^24 and the TGA header's 65535), PNG and JPG files cut short that stb_image decodes from zeros, PNG and JPG headers whose size their data cannot hold, unknown critical PNG chunks are refused as stb_image refuses them. An image whose load met a refused file is the default (one warning per refused file, naming it, and not the engine's 'Couldn't load image'), even when R_LoadImage then found another extension of the same name, because the engine would have read past a buffer or crashed on the refused one"
+      "note": "LP1c.2: the pre-validation refuses some files the engine would load: images over 16384 a side or 8192 x 8192 in all (the engine has no limit beyond stb_image's 2^24 and the TGA header's 65535), PNG and JPG files cut short that stb_image decodes from zeros, PNG and JPG headers whose size their data cannot hold, unknown critical PNG chunks are refused as stb_image refuses them. An image whose load met a refused file is the default (one warning per refused file, naming it, and not the engine's 'Couldn't load image'), even when R_LoadImage then found another extension of the same name, because the engine would have read past a buffer or crashed on the refused one LP1c fix (S3.3): the reason \"the engine would have read past a buffer or crashed\" holds for TGA (Error sites, unchecked RLE), EXR and HDR (Error) only: stb_image checks every read itself and decodes by content, so a .png or .jpg is checked by what it holds (PNG rules for a PNG signature, JPEG rules for a start-of-image marker, stbi_info_from_memory and the size limits for stb_image's other formats), and a refused .png or .jpg is what stb_image's own failure is in the engine: R_LoadImage goes on to the next extension (png, tga, jpg, exr, hdr), and the image is what it finds; a refused TGA, EXR or HDR still makes the image the default. LP1c fix (S2.4): an EXR or HDR file may declare at most a quarter of the pixels (MaxFloatImageFilePixels, 4096 x 4096), as its decoders hold float planes"
     },
     {
       "id": "M-IMG-08",
@@ -11505,7 +11506,7 @@
           "symbol": "MaterialService::Worker::resize"
         }
       ],
-      "note": "LP1c.2 (C21): the engine loads an image once per level and again on reloadImages; the preview re-reads on its 1 s poll: the loose files each published editor-image size and each image slot was read from, or that the time call found, are probed (no body read), and one whose time, size or change stamp changed makes the slot read again (resolveImage) and the material's size measured again, its kept Ready size dropped so that the new size or the loss of the file is published under every name that shares the entry. Files in containers are not polled (their tables are read once). A Ready size that changes to another Ready size reaches the chunks only when they are rebuilt for another reason: SceneGeometry rebuilds provisional (Default) chunks when their size turns Ready (a follow-up)"
+      "note": "LP1c.2 (C21): the engine loads an image once per level and again on reloadImages; the preview re-reads on its 1 s poll: the loose files each published editor-image size and each image slot was read from, or that the time call found, are probed (no body read), and one whose time, size or change stamp changed makes the slot read again (resolveImage) and the material's size measured again, its kept Ready size dropped so that the new size or the loss of the file is published under every name that shares the entry. Files in containers are not polled (their tables are read once). A Ready size that changes to another Ready size reaches the chunks only when they are rebuilt for another reason: SceneGeometry rebuilds provisional (Default) chunks when their size turns Ready (a follow-up) LP1c fix (S2.5, S2.7): SceneGeometry keeps the size each material's cells were built with and builds them again on any change of the table's size (Default to Ready, Ready to another Ready, Ready back to Default for a deleted texture); the poll re-probes a slice of at most 5 ms per poll, going on where it stopped, with stop checks; a measure that the poll asks for is queued (M-IMG-DIFF-08)"
     },
     {
       "id": "M-IMG-DIFF-07",
@@ -11527,7 +11528,348 @@
           "symbol": "imageUploadSize"
         }
       ],
-      "note": "LP1c.2 (C21): a single source image is sized by its header, never decoded: a file that passes the loader pre-validation but that stb_image or tinyexr then fails to decode (corrupt compressed data) is Ready at its header's size here and the engine's defaulted 8 x 8 there. An intrinsic the engine sizes by its window, a cvar or a font atlas (_currentRender, _shadowMapAtlas, _imguiFont, ...) is Default here. GetEditorImage's record is never made, so listImages-like listings of the registry do not show editor images the engine's dmap would have loaded"
+      "note": "LP1c.2 (C21): a single source image is sized by its header, never decoded: a file that passes the loader pre-validation but that stb_image or tinyexr then fails to decode (corrupt compressed data) is Ready at its header's size here and the engine's defaulted 8 x 8 there. An intrinsic the engine sizes by its window, a cvar or a font atlas (_currentRender, _shadowMapAtlas, _imguiFont, ...) is Default here. GetEditorImage's record is never made, so listImages-like listings of the registry do not show editor images the engine's dmap would have loaded LP1c fix (S2.2, S3.3): every source size is a header's now (M-IMG-DIFF-08), a program's by its first leaf and a cube's by its sides' headers; a .png or .jpg whose header is refused gives way to the next extension's file, as the engine's loop does"
+    },
+    {
+      "id": "M-IMG-DEFECT-02",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            220,
+            224
+          ],
+          "anchor": "LoadTGA, the pixel-size Error",
+          "sha256": "d71a1e21129b3e881e9c97417e35155844d83bd88a4addb3dcb4e4c834a7caee"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ImageFileCheck.cpp",
+          "symbol": "tgaHeaderProblem"
+        },
+        {
+          "file": "TOOLS/lit-preview/capture_fixtures.py",
+          "symbol": "TOUCHED"
+        }
+      ],
+      "note": "LP1c fix (S3.8): LoadTGA's Error sites throw in the engine (idCommonLocal::Error, ERP_DROP), and on the touch path the throw ends the process (0xC0000409, the LP1c.2 capture): a 16-bit RGB TGA (pixel size 16, types 2 and 10) stops the engine. Kept verbatim (C7); in the shim Error returns, and the pre-validation refuses such a file before LoadTGA reads it (M-IMG-GUARD-01, M-IMG-FATAL-03). The fixture textures/lp1c/sixteen.tga serves the pre-validation test only: capture_fixtures.py never touches its material"
+    },
+    {
+      "id": "M-IMG-DEFECT-03",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            1317,
+            1397
+          ],
+          "anchor": "R_LoadCubeImages, the six-side loop and its error path",
+          "sha256": "c2fe9b7d4b512b57c7284756a56b1e9e59d7431384468f29e35339be983e5e1d"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            716,
+            727
+          ],
+          "anchor": "ActuallyLoadImage, the cube branch",
+          "sha256": "4aab2add6fae62917f81b61f2da49fbc5f4f0b18c419cb9e911e558d509c6388"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "MaterialDecls::loadImagePixels"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "MaterialDecls::cubeSideSizes"
+        }
+      ],
+      "note": "LP1c fix (S2.1): when R_LoadCubeImages stops at side i (a side missing, which leaves width 0, or of another size) it frees sides 0 to i-1 without nulling them and returns false; a side i it loaded before the size test failed is leaked (the engine's ActuallyLoadImage frees nothing after the false). Kept verbatim (C7). The shim frees nothing after a false return (LP1c.2 freed every non-null side again: a double free, S2.1/S3.1) and frees the six sides only for a loaded cube of size 0; the six sides' headers are checked first (M-IMG-GUARD-03), so the copy is called only for six sides of one size and the leak is unreachable; a side refused by the pre-validation as the copy reads it, or a stop between sides, reads as missing, and the copy frees what it loaded itself"
+    },
+    {
+      "id": "M-IMG-GUARD-03",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            1156,
+            1404
+          ],
+          "anchor": "R_LoadCubeImages",
+          "sha256": "c18a9a563d2a1b744fc5db72bdfef9314e57a95919ecbc0da51e65f942987905"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "MaterialDecls::cubeSideSizes"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ImageFileCheck.cpp",
+          "symbol": "readImageFileHeader"
+        }
+      ],
+      "note": "LP1c fix (S2.1, S2.2): before the copied R_LoadCubeImages reads a six-file cube's pixels (CF_NATIVE, CF_CAMERA, CF_QUAKE1, CF_SINGLE without a cube size), each side's name (R_LoadCubeImages' side tables, transcribed) is resolved by the copied time call (R_LoadImageProgram, no pixels) and its file's header read through the source without its body: a side missing, a header refused or sides of different sizes (side 0 square) fail the load with \"Couldn't load cube image\" (and the engine's \"Mismatched sizes on cube map\" for sizes) without the copy. The same check sizes a cube for C21 (side 0's header) without decoding it"
+    },
+    {
+      "id": "M-IMG-DIFF-08",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            223,
+            292
+          ],
+          "anchor": "idMaterial::GetEditorImage",
+          "sha256": "5ff0f5eca5eb847c51a795b86ce8c22d2bee5e3085ce55b858aea7bf76dd8d7a"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            716,
+            865
+          ],
+          "anchor": "ActuallyLoadImage, the source load",
+          "sha256": "5c793a226ef59203ac4f526469d1b34f37e1060395bd2ddaf9605e76e01d7432"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::measureStep"
+        },
+        {
+          "file": "lib/TbLitLib/src/EditorImageSize.cpp",
+          "symbol": "imageUploadSize"
+        }
+      ],
+      "note": "LP1c fix (S2.2): the engine sizes an editor image when dmap loads it; the preview publishes a material at once with its last Ready size for the same image chain (D52, S3.15) or the registry's Default, unmeasured, and measures it on a low-priority queue (steps of 20 ms) only once a consumer looked it up (the bulk parse measures nothing; a lookup of a bulk-parsed name queues it). The measure never decodes: a usable cache's 36-byte header; else a 2D image or program by its first leaf's header, once the time call found every leaf (a missing leaf ends the copied time call, so its last probe is a miss); a six-file cube by side 0 after M-IMG-GUARD-03; a CF_SINGLE cube by its cube size once the picture's header holds the 4 x 3 sides; a panorama 1024. Headers come through small bounded reads (4 KB, 64 KB, 1 MB; readImageFileHeader), with the header rules and the lengths a header tells; the body of a file (RLE packets, PNG chunks, JPEG scans, EXR blocks) is not walked, so a file the pre-validation refuses by its body has a Ready size here (M-IMG-DIFF-07). A kept Ready size stands for a Default measure only while the files it was measured from are unchanged; a deleted texture returns to Default"
+    },
+    {
+      "id": "M-IMG-DIFF-09",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            547,
+            904
+          ],
+          "anchor": "idImage::ActuallyLoadImage",
+          "sha256": "7c34911f5dc7ffa2c95f3c8cca395e3f30b85a129b04945e2866e15ad6819468"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::keepImageBudget"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::rebuild"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "MaterialDecls::sourceImageLevels"
+        }
+      ],
+      "note": "LP1c fix (S2.3, S2.4, S2.5): the engine keeps an image in VRAM once loaded; the preview's parse thread reads one image per work item, below the lookups, the measures and the evaluations, and keeps the published images' data within MaterialServiceOptions::imageBudgetBytes (512 MB): beyond it, the least recently published image whose data a consumer has taken (image() returned it) leaves the table and is read again when asked for (about 0.5 ms a cache). A reload drops every image slot, so new containers and caches the engine wrote are seen then (materialCollectionsDidChange, or a new session); between reloads only loose files are re-probed. The source fallback takes the loader's pixels as its working buffer and writes its levels into one buffer reserved for them all (about 1.3 GB less for an 8192 x 8192 source); it stops between levels once the session stops. LP2's upload-and-drop policy and the VRAM budget are LP2's"
+    },
+    {
+      "id": "M-FS-DIFF-10",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            3723,
+            3938
+          ],
+          "anchor": "idFileSystemLocal::OpenFileReadFlags",
+          "sha256": "53c1a8a2661966d4b67d3e25170c62352bf9a9724940b6668df8516ae2a41d93"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::looseFolder"
+        },
+        {
+          "file": "lib/TbLitLib/src/GameFileSource.cpp",
+          "symbol": "GameFileSource::read"
+        }
+      ],
+      "note": "LP1c fix (S2.2): the engine opens a loose file by trying it; the preview lists each loose folder it looks in once and keeps its names (folded as the file system compares them), so a file that is not there costs a lookup, not a file-system call. looseFilesMayHaveChanged (the parse thread's 1 s poll) starts a round: the first look into a folder after it stats the folder and lists it again when its time changed. A file added after its folder was listed is seen at the next poll (the poll's re-probe then reads what missed it again, M-IMG-DIFF-03); a changed file is seen by its own stat as before. A .resources container is statted once when a read batch opens it, not per read: a container replaced during one batch is read through the handle the batch opened, and refused from the next"
+    },
+    {
+      "id": "M-IMG-DXT-01",
+      "kind": "copied-file",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/DXT/DXTCodec.h",
+          "lines": [
+            1,
+            754
+          ],
+          "anchor": "whole file",
+          "sha256": "f6eec8168f5113bbd57cb512fd9b8fd1b676116efcc3105254b4400e634c94a0",
+          "gitBlob": "4ed71fa7fed3915f4f96b1352ee179018b2965ca"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/DXT/DXTCodec.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob. LP1c fix (S3.2), test only: compiled into TbLitIdDxtTestLib, which TbLitLibTest alone links, so that the image goldens compare the source fallback's levels with the engine's caches block for block through the encoders the engine's x64 build runs (image_highQualityCompression 0: CompressImageDXT1Fast, CompressImageDXT5Fast, CompressYCoCgDXT5Fast, CompressNormalMapDXT5Fast, the _SSE2 ones under USE_INTRINSICS_SSE). Never in the product (D24)"
+    },
+    {
+      "id": "M-IMG-DXT-02",
+      "kind": "copied-file",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/DXT/DXTCodec_local.h",
+          "lines": [
+            1,
+            38
+          ],
+          "anchor": "whole file",
+          "sha256": "d40d26fe8bcb1dd4d3657341de016a734aeaecd5e00cbb1a5721c01921f3be51",
+          "gitBlob": "07e54f39dd6ceb374936435339f54bfdb7120485"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/DXT/DXTCodec_local.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob. LP1c fix (S3.2), test only: compiled into TbLitIdDxtTestLib, which TbLitLibTest alone links, so that the image goldens compare the source fallback's levels with the engine's caches block for block through the encoders the engine's x64 build runs (image_highQualityCompression 0: CompressImageDXT1Fast, CompressImageDXT5Fast, CompressYCoCgDXT5Fast, CompressNormalMapDXT5Fast, the _SSE2 ones under USE_INTRINSICS_SSE). Never in the product (D24)"
+    },
+    {
+      "id": "M-IMG-DXT-03",
+      "kind": "copied-file",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/DXT/DXTEncoder_SSE2.cpp",
+          "lines": [
+            1,
+            1637
+          ],
+          "anchor": "whole file",
+          "sha256": "6351b4508215e9fa4b50f264580c952180e91c7aed544361448d752b941dda21",
+          "gitBlob": "5f6ed6075e77c5a431a06a663dc2864348721921"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/DXT/DXTEncoder_SSE2.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob. LP1c fix (S3.2), test only: compiled into TbLitIdDxtTestLib, which TbLitLibTest alone links, so that the image goldens compare the source fallback's levels with the engine's caches block for block through the encoders the engine's x64 build runs (image_highQualityCompression 0: CompressImageDXT1Fast, CompressImageDXT5Fast, CompressYCoCgDXT5Fast, CompressNormalMapDXT5Fast, the _SSE2 ones under USE_INTRINSICS_SSE). Never in the product (D24)"
+    },
+    {
+      "id": "M-IMG-NC-02",
+      "kind": "not-copied",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/DXT/DXTEncoder.cpp",
+          "lines": [
+            1,
+            6010
+          ],
+          "anchor": "whole file",
+          "sha256": "c68b9159079deec86e058d46b7110a7c2cbe5aad019b15bbec03e45d47475a3a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/testing/src/DxtEncoderForTesting.cpp",
+          "symbol": "encodeDxtForTesting"
+        }
+      ],
+      "note": "LP1c fix (S3.2): not copied, unlike the decision's list: it holds the HQ encoders, the generic fast encoders the x64 build does not call (DXTCodec.h's inline dispatch picks the _SSE2 ones), CTX1/DXN and the BC6H encoder, whose SIMD path includes the ISPC texture compressor (libs/ispc_texcomp, compiled kernels) and so cannot link here. Every encoder the engine's binarizer calls for DXT1 and DXT5 is in DXTEncoder_SSE2.cpp (M-IMG-DXT-03); the BC6H texel goldens stay deferred"
+    },
+    {
+      "id": "M-IMG-TEST-01",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            56,
+            331
+          ],
+          "anchor": "idBinaryImage::Load2DFromMemory, the padding and the encoder calls",
+          "sha256": "09554d3b501071c3a9fd75c523e5bff21e7433a3cd015fc441bfc0a3f7f7f634"
+        },
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            647,
+            671
+          ],
+          "anchor": "PadImageTo4x4",
+          "sha256": "fc7c3e2a61671ef1687e9651a28355eed4b78ec5723f40c2f19825ad11d78551"
+        },
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            679,
+            837
+          ],
+          "anchor": "idBinaryImage::LoadCubeFromMemory, the encoder calls",
+          "sha256": "104494176c48d5c9673dfa82b9bfe51389e133af26516ef8b0fe0a0eafaeb7c9"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/testing/src/DxtEncoderForTesting.cpp",
+          "symbol": "encodeDxtForTesting"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/testing/src/DxtEncoderForTesting.cpp",
+          "symbol": "idCommon::LoadPacifierBinarizeProgressIncrement"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idCommon::LoadPacifierBinarizeProgressIncrement"
+        }
+      ],
+      "note": "LP1c fix (S3.2), test only: the binarizer's steps around its encoder, transcribed: a 2D level whose size is not a multiple of 4 zero-padded to whole blocks (Mem_ClearedAlloc), a cube level below 4 x 4 replicated into one block (PadImageTo4x4), the encoder chosen as Load2DFromMemory and LoadCubeFromMemory choose it, the input copied to a 16-byte aligned buffer (the engine's Mem_Alloc is; the _SSE2 encoders load aligned rows). idCommon::LoadPacifierBinarizeProgressIncrement is declared by the product's shim and defined only by the test library (a no-op: no pacifier)"
+    },
+    {
+      "id": "M-IMG-STATIC-04",
+      "kind": "static",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/DXT/DXTEncoder_SSE2.cpp",
+          "lines": [
+            59,
+            136
+          ],
+          "anchor": "the SIMD_SSE2_* constant tables",
+          "sha256": "23ad6f7ad49e2395b34d100814482866ea34e8826f3116d568c35db5280dba11"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/DXT/DXTEncoder_SSE2.cpp"
+        }
+      ],
+      "note": "LP1c fix (S3.2), test only: the encoder's ALIGN16 static tables are read-only constants, constant-initialised, except SIMD_SSE2_zero (_mm_set_epi32( 0, 0, 0, 0 )), which MSVC initialises dynamically from literals at program load without allocating: an idempotent table in TbLitIdDxtTestLib, outside TbLitIdLib's objects that check_static_init.py reads, and in no product"
     }
   ],
   "retired": [

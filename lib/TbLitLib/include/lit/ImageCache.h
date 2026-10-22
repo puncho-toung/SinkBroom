@@ -127,12 +127,18 @@ int engineBitsForFormat(int format);
  * 6, alpha 255). Every count and size is checked against the bytes before it is used: a
  * file that is cut short, has a negative count or an odd RGB565 level fails, where the
  * engine would read past the end or garbage (M-IMG-DIFF-01). A wrong magic fails as in
- * the engine. Pure; any thread.
+ * the engine. LP1c fix (S3.5): the header's sides must be 1 to 16384 and its level count
+ * 1 to the levels its larger side halves into, and each level record must be the one the
+ * engine's binarizer writes at its place (record k of a 2D image level k; of a cube level
+ * k / 6, side k % 6), of that level's size (a block format's cube level below 4 padded to
+ * 4) and with at least the bytes its format needs for that size (whole 4 × 4 blocks for
+ * DXT1, DXT5, BC6H, BC7, ETC1), else the read fails and the cache is Stale: the shape LP2
+ * uploads is the header's. Pure; any thread.
  */
 Result<CachedImage> readBimage(std::string_view bytes);
 
 // LP1c.2 (C21): readBimage's header only (the first 36 bytes), without the level records:
-// the size, formats and time; fails as readBimage fails on a header. Pure; any thread.
+// the size, formats and time, with readBimage's header checks. Pure; any thread.
 Result<CachedImage> readBimageHeader(std::string_view bytes);
 
 /**

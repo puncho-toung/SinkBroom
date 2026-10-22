@@ -285,10 +285,27 @@ Result<std::string> ResourceContainer::read(
 Result<std::string> ResourceContainer::read(
   const ResourceEntry& entry, const GameFile& file, const std::size_t maxBytes) const
 {
+  return unchanged() | kdl::and_then([&]() { return readOpened(entry, file, maxBytes); })
+         | kdl::or_else([&](const auto& e) -> Result<std::string> {
+             return Error{fmt::format("{}; '{}' is not read from it", e.msg, entry.name)};
+           });
+}
+
+Result<void> ResourceContainer::unchanged() const
+{
   const auto stat = statGameFile(m_path);
-  if (
-    !stat || stat->size != m_fileSize || stat->time != m_fileTime
-    || file.size() != m_fileSize)
+  if (!stat || stat->size != m_fileSize || stat->time != m_fileTime)
+  {
+    return Error{
+      fmt::format("Resource file {} changed since its table was read", m_name)};
+  }
+  return kdl::void_success;
+}
+
+Result<std::string> ResourceContainer::readOpened(
+  const ResourceEntry& entry, const GameFile& file, const std::size_t maxBytes) const
+{
+  if (file.size() != m_fileSize)
   {
     return Error{fmt::format(
       "Resource file {} changed since its table was read; '{}' is not read from it",

@@ -160,6 +160,10 @@ public:
   // each read batch, so no container stays open (R4-3.26)
   virtual void closeFiles();
 
+  // LP1c fix (S2.2): the registry's owner polls the loose files: a source that keeps a
+  // listing of them looks again (GameFileSource); the default does nothing
+  virtual void looseFilesMayHaveChanged();
+
   // a file kept changing while it was read, so what was read may be torn; the registry's
   // owner builds again (A3.5)
   virtual bool changedWhileRead() const;
@@ -256,10 +260,18 @@ void reportEngineMessageForTesting(DeclMessageKind kind, const std::string& text
  */
 inline constexpr int MaxImageFileDimension = 16384;
 inline constexpr std::int64_t MaxImageFilePixels = std::int64_t(8192) * 8192;
+// LP1c fix (S2.4): an OpenEXR or Radiance HDR file, whose decoders hold float planes (16
+// bytes and more a pixel), may hold a quarter of that
+inline constexpr std::int64_t MaxFloatImageFilePixels = MaxImageFilePixels / 4;
 
 // whether the copied imageLoaders table has a loader for this path's extension (tga,
 // png, jpg, exr, hdr, any case). Pure; any thread.
 bool isImageLoaderFile(std::string_view path);
+
+// LP1c fix (S3.3): whether the loader for this path's extension is LoadSTB_RGBA8 (png,
+// jpg, any case), which decodes by content and whose failure lets R_LoadImage try the
+// next extension. Pure; any thread.
+bool isStbLoaderFile(std::string_view path);
 
 /**
  * LP1c.2 (D51, R5.3, M-IMG-GUARD-01): why the copied loader that the path's extension
@@ -271,7 +283,12 @@ bool isImageLoaderFile(std::string_view path);
  * marker segments and scans to EOI and the declared size against its scan bytes; an
  * OpenEXR header through tinyexr's parsers, its channels and its offset table; a Radiance
  * HDR header and its scanlines as stb_image reads them; and every size against the
- * limits above. An empty file fails; a path no loader takes passes. Pure; any thread.
+ * limits above. LP1c fix (S3.3): a .png or .jpg is checked by its content, as
+ * LoadSTB_RGBA8's stb_image decodes it: PNG rules for a PNG signature, JPEG rules for a
+ * start-of-image marker, else stb_image's own header reader for its other formats (BMP,
+ * GIF, PSD, PIC, PNM, HDR, TGA), which checks every read itself, with the size limits. An
+ * empty file fails; a path no loader takes passes. Pure; for a .png or .jpg of another
+ * format stb_image's failure reason (a plain static) is written: parse thread.
  */
 std::optional<std::string> imageFileProblem(
   std::string_view path, std::string_view bytes);
@@ -283,15 +300,40 @@ struct ImageFileHeader
   int width = 0;
   int height = 0;
   std::optional<std::string> problem;
+  // LP1c fix (S2.2): imageFileHeadHeader only: the header goes on beyond the bytes given
+  bool needsMore = false;
 };
 
 /**
  * LP1c.2 (C21): imageFileProblem's checks, and the width and height the file's header
  * declares, which are the size its loader gives (R_LoadImage's picture: a TGA's, PNG's or
  * JPG's header, a Radiance HDR's resolution line, an OpenEXR data window), without
- * decoding a pixel. Pure; any thread.
+ * decoding a pixel. Pure (see imageFileProblem for stb_image's other formats).
  */
 ImageFileHeader imageFileHeader(std::string_view path, std::string_view bytes);
+
+/**
+ * LP1c fix (S2.2): the size the header in a file's first bytes declares (head; the
+ * file's length is fileSize), with imageFileProblem's header rules and the size checks a
+ * header alone tells (an uncompressed TGA's pixels against fileSize), without the body:
+ * a TGA's 18 bytes, a PNG's IHDR, a JPEG's segments up to its frame header, an OpenEXR
+ * header, a Radiance HDR's text header and resolution line, or stb_image's other headers.
+ * needsMore (and no problem) when the header goes on beyond head. Run-length data, PNG
+ * chunks, JPEG scans and EXR blocks are not walked: a file whose body the loader
+ * pre-validation refuses may have a header size here (M-IMG-DIFF-07). Pure, as
+ * imageFileProblem.
+ */
+ImageFileHeader imageFileHeadHeader(
+  std::string_view path, std::string_view head, std::uint64_t fileSize);
+
+/**
+ * LP1c fix (S2.2): imageFileHeadHeader of a game file read through source's C8 search
+ * with small bounded reads (its first 4 KB, then 64 KB, then 1 MB; never the whole
+ * file), where it was found in found. A file that cannot be read, or whose header goes on
+ * beyond 1 MB, has a problem. Parse thread (the source's).
+ */
+ImageFileHeader readImageFileHeader(
+  DeclSource& source, const std::string& path, GameFileProbe* found);
 
 // An image as a material stage names it: the key of the engine's image record
 // (ImageManager.cpp's ImageFromFile). The integers are the engine's enum values, which
@@ -357,6 +399,31 @@ struct ImageCacheName
   // LP1c.2: the files the time call's probes found, in order (a single image's one leaf,
   // a program's leaves, a cube's sides), for the sizes and the re-probe (C21)
   std::vector<FoundGameFile> sources;
+  // LP1c fix (S2.5, S3.4): the names the time call's probes looked for and did not find
+  // (Missing probes: the .tga default, the png/tga/jpg/exr/hdr loop, the _rmao sibling),
+  // once each, so that the re-probe sees a file that appears later
+  std::vector<FoundGameFile> missing;
+  // LP1c fix (S2.2): the time call's last probe found its file. A missing leaf ends the
+  // copied time call of a 2D image or program, so for one of those this says that every
+  // leaf exists (the pixel path then has a picture to make)
+  bool resolved = false;
+};
+
+/**
+ * LP1c fix (S2.1, S2.2): what a six-file cube's sides are, read without decoding: each
+ * side's file as the copied time call resolves it (R_LoadImageProgram of the name and
+ * the side's suffix, as R_LoadCubeImages names them), and its header's size
+ * (readImageFileHeader).
+ */
+struct CubeSideSizes
+{
+  // the sides' size (each side square, all alike); 0 with a problem
+  int size = 0;
+  // why R_LoadCubeImages would fail: a side missing, a side's header refused, sides of
+  // different sizes; "" when the six sides would load
+  std::string problem;
+  // the sides' files and the names their time calls missed, for the re-probe
+  std::vector<FoundGameFile> files;
 };
 
 // one mip level (one side's, for a cube) in CachedImage::data
@@ -427,14 +494,19 @@ struct SourcePixels
   std::vector<std::uint8_t> pixels;
   // every game file the loaders read, in order
   std::vector<FoundGameFile> files;
+  // LP1c fix (S2.5): the names the loaders looked for and did not find, once each
+  std::vector<FoundGameFile> missing;
 };
 
 /**
  * LP1c.2: what a source load ended with. pixels, or error with the engine's warning
  * ("Couldn't load image: <name> : <generated name>", "Couldn't load cube image: <name>")
  * when no loader made a picture; rejected names every file the loader pre-validation
- * refused (D51), "<path>: <reason>", and then the image is the default however the rest
- * loaded, because the engine would have read past a buffer or crashed on that file.
+ * refused (D51), "<path>: <reason>". A refused TGA, EXR or HDR file makes the image the
+ * default however the rest loaded, because the engine would have read past a buffer or
+ * stopped on it; a refused .png or .jpg is what stb_image's own failure is in the engine
+ * (LP1c fix S3.3): the copied R_LoadImage goes on to the next extension, and the image is
+ * what that finds.
  */
 struct SourceLoad
 {
@@ -768,8 +840,24 @@ public:
    * imageFileProblem. cubeMapSize is the key's. A quiet load keeps the copied code's
    * messages in its result instead of the registry's (the editor-image sizes, C21). Parse
    * thread (C20); one image's files at most, so a stop waits for one image (R5.20).
+   *
+   * LP1c fix (S2.1): before the copied R_LoadCubeImages reads a six-file cube's pixels,
+   * its sides are checked by their headers (cubeSideSizes): a side missing or of another
+   * size fails the load without the copy, which would leak the mismatched side
+   * (M-IMG-DEFECT-02). When the copy returns false it has freed the sides it loaded
+   * itself, and nothing more is freed; a loaded cube of side 0 is freed whole.
    */
   SourceLoad loadImagePixels(const ImageCacheName& name, int cubeMapSize, bool quiet);
+
+  /**
+   * LP1c fix (S2.1, S2.2): the sides of a cube that R_LoadCubeImages loads from six
+   * files (CF_NATIVE, CF_CAMERA, CF_QUAKE1, and CF_SINGLE with no cube size): each side's
+   * file as the copied time call resolves its name (R_LoadImageProgram, no pixels), its
+   * header through the source (readImageFileHeader, no body), and whether the six are one
+   * square size, as R_LoadCubeImages' loop requires. A problem for any other cube kind.
+   * Parse thread (C20).
+   */
+  CubeSideSizes cubeSideSizes(const ImageCacheName& name, int cubeMapSize);
 
   /**
    * LP1c.2 (D24, S14): the levels idBinaryImage::Load2DFromMemory (a 2D image) or
@@ -785,13 +873,14 @@ public:
    * format is CFM_DEFAULT, as the engine stores it. The result is tagged fromSource; its
    * levels are unpadded (the engine pads a DXT level to whole 4 × 4 blocks before
    * encoding). Parse thread (C20).
+   *
+   * LP1c fix (S2.2, S2.4): the source's pixels are taken (moved from, not copied) as the
+   * working buffer, the levels are written into one buffer reserved for them all, and a
+   * stop is looked at between levels: once the registry is stopping, no level more is
+   * made and the result has none.
    */
   CachedImage sourceImageLevels(
-    const SourcePixels& source,
-    int format,
-    int colorFormat,
-    int numLevels,
-    bool gammaMips);
+    SourcePixels&& source, int format, int colorFormat, int numLevels, bool gammaMips);
 
   // the bytes of decl text the registry keeps (all decl types, R5.10)
   std::size_t declTextBytes() const;

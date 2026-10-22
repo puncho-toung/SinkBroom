@@ -325,11 +325,15 @@ TEST_CASE("GameFileSource")
 
 #if defined(_WIN32)
     // the open container shares delete access: the user may replace it (R4-3.26); the
-    // source then refuses to read from its stale table
+    // batch goes on reading the file it opened, whose table it has (LP1c fix S2.2: the
+    // container is statted once per open), and the next batch refuses to read from the
+    // stale table
     const auto container = game.base() / "_first.resources";
     auto ec = std::error_code{};
     std::filesystem::rename(container, game.base() / "_first.old", ec);
     CHECK_FALSE(ec);
+    CHECK(source.readFile("materials/res_only.mtr", nullptr));
+    source.closeFiles();
     CHECK_FALSE(source.readFile("materials/res_only.mtr", nullptr));
     CHECK_THAT(
       source.takeWarnings().front(),

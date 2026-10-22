@@ -320,6 +320,8 @@ std::vector<std::string> DeclSource::takeWarnings()
 
 void DeclSource::closeFiles() {}
 
+void DeclSource::looseFilesMayHaveChanged() {}
+
 bool DeclSource::changedWhileRead() const
 {
   return false;

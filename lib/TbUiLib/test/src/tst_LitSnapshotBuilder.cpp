@@ -467,7 +467,7 @@ std::shared_ptr<const lit::MaterialTable> fixtureTable(const std::filesystem::pa
     if (const auto size = sizes.find(name); size != sizes.end())
     {
       entry->editorImageSize = lit::EditorImageSize{
-        size->second.first, size->second.second, lit::EditorImageSize::State::Ready};
+        size->second.first, size->second.second, lit::EditorImageSize::State::Ready, {}};
     }
     table->materials = table->materials.set(
       name,

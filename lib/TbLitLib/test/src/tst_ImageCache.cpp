@@ -404,7 +404,7 @@ TEST_CASE("ImageCache, the .bimage layout")
     CHECK_FALSE(engineCacheMatches(image, UsageDefault, Type2D));
   }
 
-  SECTION("a cube has six records per level, side-major")
+  SECTION("a cube has six records per level, level-major (images[ level * 6 + side ])")
   {
     auto levels = std::vector<Level>{};
     for (auto side = 0; side < 6; ++side)
@@ -444,6 +444,81 @@ TEST_CASE("ImageCache, the .bimage layout")
     auto negative = bimageBytes(0, Type2D, FormatRgba8, 0, 1, 1, 1, {{0, 0, 1, 1, ""}});
     negative[36 + 16] = static_cast<char>(-1);
     CHECK(readBimage(negative).is_error());
+  }
+
+  SECTION("the level records must be the header's (S3.5)")
+  {
+    const auto problem = [](const std::string& bytes) {
+      return readBimage(bytes) | kdl::transform([](const auto&) { return std::string{}; })
+             | kdl::transform_error([](const auto& e) { return e.msg; }) | kdl::value();
+    };
+    // no level, and more levels than a side halves into
+    CHECK_THAT(
+      problem(bimageBytes(0, Type2D, FormatRgba8, 0, 1, 1, 0, {})),
+      Catch::Matchers::ContainsSubstring("bad level count 0"));
+    auto many = std::vector<Level>{};
+    for (auto i = 0; i < 200; ++i)
+    {
+      many.push_back({i, 0, 1, 1, "abcd"});
+    }
+    CHECK_THAT(
+      problem(bimageBytes(0, Type2D, FormatRgba8, 0, 1, 1, 200, many)),
+      Catch::Matchers::ContainsSubstring("bad level count 200"));
+    // a header beyond the limits, over small levels
+    CHECK_THAT(
+      problem(
+        bimageBytes(0, Type2D, FormatRgba8, 0, 65536, 65536, 1, {{0, 0, 1, 1, "abcd"}})),
+      Catch::Matchers::ContainsSubstring("bad size"));
+    // a level of fewer bytes than its size needs: 8 × 8 DXT5 is four blocks
+    CHECK_THAT(
+      problem(bimageBytes(
+        0, Type2D, FormatDxt5, 0, 8, 8, 1, {{0, 0, 8, 8, std::string(32, 'x')}})),
+      Catch::Matchers::ContainsSubstring("fewer than the 64"));
+    // a record of another level, or of another size
+    CHECK_THAT(
+      problem(bimageBytes(
+        0,
+        Type2D,
+        FormatRgba8,
+        0,
+        2,
+        2,
+        2,
+        {{0, 0, 2, 2, std::string(16, 'x')}, {0, 0, 1, 1, "abcd"}})),
+      Catch::Matchers::ContainsSubstring("is level 0 side 0, not level 1 side 0"));
+    CHECK_THAT(
+      problem(bimageBytes(
+        0, Type2D, FormatRgba8, 0, 2, 2, 1, {{0, 0, 4, 4, std::string(64, 'x')}})),
+      Catch::Matchers::ContainsSubstring("is 4 x 4, not 2 x 2"));
+    // a cube with five faces' records
+    auto five = std::vector<Level>{};
+    for (auto side = 0; side < 5; ++side)
+    {
+      five.push_back({0, side, 4, 4, std::string(16, 'x')});
+    }
+    CHECK_THAT(
+      problem(bimageBytes(0, TypeCubic, FormatBc6h, ColorDefault, 4, 4, 1, five)),
+      Catch::Matchers::ContainsSubstring("level record 5 is cut short"));
+    // a cube's sides in another order
+    auto swapped = std::vector<Level>{};
+    for (auto side = 0; side < 6; ++side)
+    {
+      swapped.push_back({0, 5 - side, 4, 4, std::string(16, 'x')});
+    }
+    CHECK_THAT(
+      problem(bimageBytes(0, TypeCubic, FormatBc6h, ColorDefault, 4, 4, 1, swapped)),
+      Catch::Matchers::ContainsSubstring("not level 0 side 0"));
+    // a block format's cube level below 4 is padded to 4 (PadImageTo4x4)
+    auto padded = std::vector<Level>{};
+    for (auto level = 0; level < 2; ++level)
+    {
+      for (auto side = 0; side < 6; ++side)
+      {
+        padded.push_back({level, side, 4, 4, std::string(16, 'x')});
+      }
+    }
+    CHECK(problem(bimageBytes(0, TypeCubic, FormatDxt5, ColorDefault, 4, 4, 2, padded))
+            .empty());
   }
 }
 
@@ -596,6 +671,8 @@ TEST_CASE("ImageCache, the cache reader (C8, A3, D23)")
   auto source = GameFileSource{game.path()};
   auto decls = MaterialDecls{source};
   const auto resolve = [&](const MaterialImageKey& key) {
+    // the files the sections write are seen as the service's poll sees them (S2.2)
+    source.looseFilesMayHaveChanged();
     auto name = decls.imageCacheName(key);
     REQUIRE(name);
     return resolveImageCache(source, *name.value);
@@ -635,6 +712,16 @@ TEST_CASE("ImageCache, the cache reader (C8, A3, D23)")
     CHECK(clash.state == ImageCacheSlot::State::Stale);
     CHECK_THAT(
       clash.reason, Catch::Matchers::ContainsSubstring("mismatched color format"));
+
+    // S3.5: a cache whose records are not its header's is Stale with the reason
+    writeTextFile(
+      game.base() / "generated" / "images" / "textures" / "lp1c"
+        / "records#__0200.bimage",
+      bimageBytes(0, Type2D, FormatDxt5, ColorDefault, 4, 4, 0, {}));
+    const auto records = resolve(keyOf("textures/lp1c/records", UsageDefault));
+    CHECK(records.state == ImageCacheSlot::State::Stale);
+    CHECK_FALSE(records.image);
+    CHECK_THAT(records.reason, Catch::Matchers::ContainsSubstring("bad level count"));
   }
 
   SECTION("staleness: an equal time accepts, 0 accepts, a different time rejects (A3)")
@@ -805,11 +892,18 @@ TEST_CASE("MaterialService serves image caches on the parse thread (C8, C20)")
   CHECK_THAT(
     none.slot->sourceReason, Catch::Matchers::ContainsSubstring("Couldn't load"));
 
-  // a reload keeps the image caches: they do not depend on the decls
+  // LP1c fix (S2.5): a reload drops the image slots, so that the new source's containers
+  // and caches are seen; asked again, the image is read again, alike
   service->reload();
   const auto reloaded = service->waitForTableForTesting(
     [&](const MaterialTable& t) { return t.registry != table->registry; }, 10s);
-  CHECK(reloaded->findImage(ready) == table->findImage(ready));
+  CHECK_FALSE(reloaded->findImage(ready));
+  CHECK(service->image(ready).state == ImageLookup::State::Pending);
+  const auto again = service->waitForTableForTesting(
+    [&](const MaterialTable& t) { return t.findImage(ready) != nullptr; }, 10s);
+  REQUIRE(again->findImage(ready));
+  REQUIRE(again->findImage(ready)->image);
+  CHECK(again->findImage(ready)->image->data == table->findImage(ready)->image->data);
   service->requestStop();
   service->join();
   static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));

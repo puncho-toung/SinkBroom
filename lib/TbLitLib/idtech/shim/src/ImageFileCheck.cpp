@@ -38,12 +38,15 @@
 
 #include "lit/MaterialDecls.h"
 
-// the declarations of the engine-vendored tinyexr, whose implementation the copied
-// Image_files.cpp compiles (shim/src/ShimImageFiles.cpp)
+// the declarations of the engine-vendored tinyexr and stb_image, whose implementations
+// the copied Image_files.cpp compiles (shim/src/ShimImageFiles.cpp), with its settings
 #include "libs/tinyexr/tinyexr.h"
+#define STBI_NO_STDIO
+#include "libs/stb/stb_image.h"
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -91,8 +94,13 @@ struct DeclaredSize
   std::uint64_t height = 0;
 };
 
+// pixels: the limit of the pixels in all, MaxImageFilePixels, or (LP1c fix S2.4) the
+// lower one of a float format's decoders, MaxFloatImageFilePixels
 Problem sizeProblem(
-  DeclaredSize& size, const std::uint64_t width, const std::uint64_t height)
+  DeclaredSize& size,
+  const std::uint64_t width,
+  const std::uint64_t height,
+  const std::int64_t pixels = MaxImageFilePixels)
 {
   size = DeclaredSize{width, height};
   if (width < 1 || height < 1)
@@ -103,36 +111,50 @@ Problem sizeProblem(
   if (
     width > std::uint64_t(MaxImageFileDimension)
     || height > std::uint64_t(MaxImageFileDimension)
-    || width * height > std::uint64_t(MaxImageFilePixels))
+    || width * height > std::uint64_t(pixels))
   {
     return "it declares " + std::to_string(width) + " x " + std::to_string(height)
            + " pixels, more than the preview loads ("
-           + std::to_string(MaxImageFileDimension) + " a side, "
-           + std::to_string(MaxImageFilePixels) + " in all)";
+           + std::to_string(MaxImageFileDimension) + " a side, " + std::to_string(pixels)
+           + " in all)";
   }
   return std::nullopt;
 }
 
+// the 18-byte TGA header's fields LoadTGA reads
+struct TgaHeader
+{
+  std::size_t idLength = 0;
+  std::uint8_t imageType = 0;
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::uint8_t pixelSize = 0;
+};
+
 /**
- * Image_files.cpp:162-423 LoadTGA, every read it makes, without writing: the 18-byte
- * header, the sizes and types its Error sites refuse (M-IMG-FATAL-01..07), the declared
- * size of an uncompressed image against the file's length (its "incomplete file" check,
- * which only reports), and the RLE packets walked as the decoder walks them, each
- * packet's bytes inside the file, up to the last pixel (the decoder stops there, inside a
- * packet if need be).
+ * Image_files.cpp:162-246 LoadTGA's header: the types and pixel sizes its Error sites
+ * refuse (M-IMG-FATAL-01..07), the size limits, and, when the file's length is known, the
+ * declared size of an uncompressed image against it (its "incomplete file" check, which
+ * only reports).
  */
-Problem tgaProblem(const std::string_view bytes, DeclaredSize& size)
+Problem tgaHeaderProblem(
+  const std::string_view bytes,
+  const std::uint64_t fileSize,
+  DeclaredSize& size,
+  TgaHeader& header)
 {
   if (bytes.size() < 18)
   {
     return "it is shorter than a TGA header (" + std::to_string(bytes.size()) + " bytes)";
   }
-  const auto idLength = std::size_t(std::uint8_t(bytes[0]));
+  header.idLength = std::size_t(std::uint8_t(bytes[0]));
   const auto colormapType = std::uint8_t(bytes[1]);
-  const auto imageType = std::uint8_t(bytes[2]);
-  const auto width = le16(bytes, 12);
-  const auto height = le16(bytes, 14);
-  const auto pixelSize = std::uint8_t(bytes[16]);
+  header.imageType = std::uint8_t(bytes[2]);
+  header.width = le16(bytes, 12);
+  header.height = le16(bytes, 14);
+  header.pixelSize = std::uint8_t(bytes[16]);
+  const auto imageType = header.imageType;
+  const auto pixelSize = header.pixelSize;
 
   if (imageType != 2 && imageType != 10 && imageType != 3)
   {
@@ -153,31 +175,52 @@ Problem tgaProblem(const std::string_view bytes, DeclaredSize& size)
     return "its TGA pixel size " + std::to_string(pixelSize) + " is not "
            + (imageType == 3 ? "8, 24 or 32" : "24 or 32");
   }
-  if (const auto problem = sizeProblem(size, width, height))
+  if (const auto problem = sizeProblem(size, header.width, header.height))
   {
     return problem;
   }
 
-  const auto dataStart = std::size_t(18) + idLength;
-  if (dataStart > bytes.size())
+  const auto dataStart = std::uint64_t(18) + header.idLength;
+  if (dataStart > fileSize)
   {
     return "its TGA image comment runs past the end of the file";
   }
-  const auto available = bytes.size() - dataStart;
-  const auto bytesPerPixel = std::size_t(pixelSize >> 3);
-  const auto pixels = std::size_t(width) * std::size_t(height);
-
   if (imageType == 2 || imageType == 3)
   {
-    const auto needed = pixels * bytesPerPixel;
+    const auto available = fileSize - dataStart;
+    const auto needed =
+      std::uint64_t(header.width) * header.height * std::uint64_t(pixelSize >> 3);
     if (needed > available)
     {
-      return "it is cut short: its " + std::to_string(width) + " x "
-             + std::to_string(height) + " pixels need " + std::to_string(needed)
+      return "it is cut short: its " + std::to_string(header.width) + " x "
+             + std::to_string(header.height) + " pixels need " + std::to_string(needed)
              + " bytes, the file holds " + std::to_string(available);
     }
+  }
+  return std::nullopt;
+}
+
+/**
+ * Image_files.cpp:162-423 LoadTGA, every read it makes, without writing: the header
+ * (tgaHeaderProblem) against the file's length, and the RLE packets walked as the decoder
+ * walks them, each packet's bytes inside the file, up to the last pixel (the decoder
+ * stops there, inside a packet if need be).
+ */
+Problem tgaProblem(const std::string_view bytes, DeclaredSize& size)
+{
+  auto header = TgaHeader{};
+  if (const auto problem = tgaHeaderProblem(bytes, bytes.size(), size, header))
+  {
+    return problem;
+  }
+  if (header.imageType != 10)
+  {
     return std::nullopt;
   }
+
+  const auto dataStart = std::size_t(18) + header.idLength;
+  const auto bytesPerPixel = std::size_t(header.pixelSize >> 3);
+  const auto pixels = std::size_t(header.width) * std::size_t(header.height);
 
   // type 10: the packets, as the decoder reads them
   auto at = dataStart;
@@ -189,10 +232,10 @@ Problem tgaProblem(const std::string_view bytes, DeclaredSize& size)
       return "its run-length data ends with " + std::to_string(left)
              + " pixels still to come";
     }
-    const auto header = std::uint8_t(bytes[at++]);
-    const auto count = std::size_t(1 + (header & 0x7f));
+    const auto packet = std::uint8_t(bytes[at++]);
+    const auto count = std::size_t(1 + (packet & 0x7f));
     const auto used = std::min(count, left);
-    const auto needed = (header & 0x80) ? bytesPerPixel : used * bytesPerPixel;
+    const auto needed = (packet & 0x80) ? bytesPerPixel : used * bytesPerPixel;
     if (needed > bytes.size() - at)
     {
       return "a run-length packet runs past the end of the file, with "
@@ -213,21 +256,92 @@ Problem tgaProblem(const std::string_view bytes, DeclaredSize& size)
  * 1032 bytes of each (258-byte matches in 2 bits), so a header that lies about the size
  * is refused before stb_image allocates for it.
  */
-Problem pngProblem(const std::string_view bytes, DeclaredSize& size)
+constexpr unsigned char PngSignature[] = {137, 80, 78, 71, 13, 10, 26, 10};
+
+bool hasPngSignature(const std::string_view bytes)
 {
-  static constexpr unsigned char Signature[] = {137, 80, 78, 71, 13, 10, 26, 10};
-  if (bytes.size() < 8 || memcmp(bytes.data(), Signature, 8) != 0)
+  return bytes.size() >= 8 && memcmp(bytes.data(), PngSignature, 8) == 0;
+}
+
+bool hasJpegStart(const std::string_view bytes)
+{
+  return bytes.size() >= 2 && std::uint8_t(bytes[0]) == 0xFF
+         && std::uint8_t(bytes[1]) == 0xD8;
+}
+
+// what a PNG's IHDR declares
+struct PngHeader
+{
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  int channels = 0;
+  int depth = 0;
+  bool palette = false;
+};
+
+/**
+ * stb_image.h's IHDR rules (stbi__parse_png_file): the signature, IHDR first and 13 bytes
+ * long, its size, depth, colour type, compression, filter and interlace methods; the
+ * first 33 bytes of the file.
+ */
+Problem pngHeaderProblem(
+  const std::string_view bytes, DeclaredSize& size, PngHeader& header)
+{
+  if (!hasPngSignature(bytes))
   {
     return std::string{"it has no PNG signature"};
   }
+  if (bytes.size() < 8 + 12 + 13)
+  {
+    return std::string{"it is cut short before its IHDR chunk ends"};
+  }
+  const auto length = be32(bytes, 8);
+  if (bytes.substr(12, 4) != "IHDR" || length != 13)
+  {
+    return std::string{"its first chunk is not a 13-byte IHDR"};
+  }
+  const auto data = bytes.substr(16, 13);
+  header.width = be32(data, 0);
+  header.height = be32(data, 4);
+  header.depth = std::uint8_t(data[8]);
+  const auto color = std::uint8_t(data[9]);
+  if (const auto problem = sizeProblem(size, header.width, header.height))
+  {
+    return problem;
+  }
+  const auto depth = header.depth;
+  if (depth != 1 && depth != 2 && depth != 4 && depth != 8 && depth != 16)
+  {
+    return "its bit depth " + std::to_string(depth) + " is not 1, 2, 4, 8 or 16";
+  }
+  if (color > 6 || (color == 3 && depth == 16) || (color != 3 && (color & 1)))
+  {
+    return "its colour type " + std::to_string(color) + " with depth "
+           + std::to_string(depth) + " is not one stb_image reads";
+  }
+  header.palette = color == 3;
+  header.channels = color == 2 ? 3 : color == 4 ? 2 : color == 6 ? 4 : 1;
+  if (data[10] != 0 || data[11] != 0 || std::uint8_t(data[12]) > 1)
+  {
+    return std::string{"its compression, filter or interlace method is unknown"};
+  }
+  return std::nullopt;
+}
 
-  auto at = std::size_t(8);
-  auto first = true;
-  auto width = std::uint32_t{0};
-  auto height = std::uint32_t{0};
-  auto channels = 0;
-  auto depth = 0;
-  auto palette = false;
+Problem pngProblem(const std::string_view bytes, DeclaredSize& size)
+{
+  auto header = PngHeader{};
+  if (const auto problem = pngHeaderProblem(bytes, size, header))
+  {
+    return problem;
+  }
+
+  const auto width = header.width;
+  const auto height = header.height;
+  const auto channels = header.channels;
+  const auto depth = header.depth;
+  const auto palette = header.palette;
+  auto at = std::size_t(8 + 12 + 13);
   auto hasPalette = false;
   auto idatBytes = std::uint64_t{0};
   for (;;)
@@ -242,41 +356,7 @@ Problem pngProblem(const std::string_view bytes, DeclaredSize& size)
     {
       return "its " + std::string{type} + " chunk runs past the end of the file";
     }
-    const auto data = bytes.substr(at + 8, length);
     at += 12 + std::size_t(length);
-
-    if (first)
-    {
-      if (type != "IHDR" || length != 13)
-      {
-        return std::string{"its first chunk is not a 13-byte IHDR"};
-      }
-      first = false;
-      width = be32(data, 0);
-      height = be32(data, 4);
-      depth = std::uint8_t(data[8]);
-      const auto color = std::uint8_t(data[9]);
-      if (const auto problem = sizeProblem(size, width, height))
-      {
-        return problem;
-      }
-      if (depth != 1 && depth != 2 && depth != 4 && depth != 8 && depth != 16)
-      {
-        return "its bit depth " + std::to_string(depth) + " is not 1, 2, 4, 8 or 16";
-      }
-      if (color > 6 || (color == 3 && depth == 16) || (color != 3 && (color & 1)))
-      {
-        return "its colour type " + std::to_string(color) + " with depth "
-               + std::to_string(depth) + " is not one stb_image reads";
-      }
-      palette = color == 3;
-      channels = color == 2 ? 3 : color == 4 ? 2 : color == 6 ? 4 : 1;
-      if (data[10] != 0 || data[11] != 0 || std::uint8_t(data[12]) > 1)
-      {
-        return std::string{"its compression, filter or interlace method is unknown"};
-      }
-      continue;
-    }
 
     if (type == "IHDR")
     {
@@ -328,10 +408,65 @@ Problem pngProblem(const std::string_view bytes, DeclaredSize& size)
  * refused rather than decoded from zeros. Every 8×8 block of the most finely sampled
  * component costs at least one Huffman bit, so the declared size must fit the scan bytes.
  */
+bool isJpegFrame(const std::uint8_t marker)
+{
+  return marker == 0xC0 || marker == 0xC1 || marker == 0xC2;
+}
+
+// a lossless, hierarchical or arithmetic-coded frame, which stb_image does not read
+bool isOtherJpegFrame(const std::uint8_t marker)
+{
+  return marker >= 0xC3 && marker <= 0xCF && marker != 0xC4 && marker != 0xC8
+         && marker != 0xCC;
+}
+
+/**
+ * stb_image.h's frame header rules (stbi__process_frame_header): 8-bit samples, a height
+ * and width, 1, 3 or 4 components with sampling factors 1 to 4 and quantisation tables 0
+ * to 3; segment is the SOF segment without its length.
+ */
+Problem jpgFrameProblem(const std::string_view segment, DeclaredSize& size)
+{
+  if (segment.size() < 6)
+  {
+    return std::string{"its frame header is cut short"};
+  }
+  if (std::uint8_t(segment[0]) != 8)
+  {
+    return "its samples have " + std::to_string(std::uint8_t(segment[0]))
+           + " bits; stb_image reads 8";
+  }
+  const auto height = be16(segment, 1);
+  const auto width = be16(segment, 3);
+  if (const auto problem = sizeProblem(size, width, height))
+  {
+    return problem;
+  }
+  const auto components = std::size_t(std::uint8_t(segment[5]));
+  if (components != 1 && components != 3 && components != 4)
+  {
+    return "it has " + std::to_string(components) + " components";
+  }
+  if (segment.size() != 6 + 3 * components)
+  {
+    return std::string{"its frame header has the wrong length"};
+  }
+  for (std::size_t c = 0; c < components; ++c)
+  {
+    const auto sampling = std::uint8_t(segment[6 + 3 * c + 1]);
+    const auto h = sampling >> 4;
+    const auto v = sampling & 15;
+    if (h < 1 || h > 4 || v < 1 || v > 4 || std::uint8_t(segment[6 + 3 * c + 2]) > 3)
+    {
+      return std::string{"a component has a bad sampling factor or table"};
+    }
+  }
+  return std::nullopt;
+}
+
 Problem jpgProblem(const std::string_view bytes, DeclaredSize& size)
 {
-  if (
-    bytes.size() < 4 || std::uint8_t(bytes[0]) != 0xFF || std::uint8_t(bytes[1]) != 0xD8)
+  if (bytes.size() < 4 || !hasJpegStart(bytes))
   {
     return std::string{"it has no JPEG start-of-image marker"};
   }
@@ -378,51 +513,22 @@ Problem jpgProblem(const std::string_view bytes, DeclaredSize& size)
     const auto segment = bytes.substr(at + 2, length - 2);
     at += length;
 
-    if (marker == 0xC0 || marker == 0xC1 || marker == 0xC2)
+    if (isJpegFrame(marker))
     {
       if (frame)
       {
         return std::string{"it has a second frame header"};
       }
       frame = true;
-      if (segment.size() < 6)
-      {
-        return std::string{"its frame header is cut short"};
-      }
-      if (std::uint8_t(segment[0]) != 8)
-      {
-        return "its samples have " + std::to_string(std::uint8_t(segment[0]))
-               + " bits; stb_image reads 8";
-      }
-      height = be16(segment, 1);
-      width = be16(segment, 3);
-      if (const auto problem = sizeProblem(size, width, height))
+      if (const auto problem = jpgFrameProblem(segment, size))
       {
         return problem;
       }
-      const auto components = std::size_t(std::uint8_t(segment[5]));
-      if (components != 1 && components != 3 && components != 4)
-      {
-        return "it has " + std::to_string(components) + " components";
-      }
-      if (segment.size() != 6 + 3 * components)
-      {
-        return std::string{"its frame header has the wrong length"};
-      }
-      for (std::size_t c = 0; c < components; ++c)
-      {
-        const auto sampling = std::uint8_t(segment[6 + 3 * c + 1]);
-        const auto h = sampling >> 4;
-        const auto v = sampling & 15;
-        if (h < 1 || h > 4 || v < 1 || v > 4 || std::uint8_t(segment[6 + 3 * c + 2]) > 3)
-        {
-          return std::string{"a component has a bad sampling factor or table"};
-        }
-      }
+      width = std::uint32_t(size.width);
+      height = std::uint32_t(size.height);
       continue;
     }
-    if ((marker >= 0xC3 && marker <= 0xCF && marker != 0xC4 && marker != 0xC8
-         && marker != 0xCC))
+    if (isOtherJpegFrame(marker))
     {
       return std::string{"it is a lossless, hierarchical or arithmetic-coded JPEG"};
     }
@@ -520,9 +626,25 @@ std::string hdrToken(const std::string_view bytes, std::size_t& at)
  * at a scanline without that header. A file stb_image reads this way always gives three
  * channels, so LoadHDR's channel test (M-IMG-FATAL-09) cannot fail, and no read runs out.
  */
-Problem hdrProblem(const std::string_view bytes, DeclaredSize& size)
+// the text an HDR header fails on before its end: the file is cut short there, or the
+// header goes on beyond the bytes read
+constexpr auto HdrHeaderEnd = "its header has no end";
+constexpr auto HdrResolutionEnd = "its resolution line has no end";
+
+/**
+ * stb_image.h:9515-9560 stbi__hdr_load's header: the Radiance identifier, the header up
+ * to its empty line with FORMAT=32-bit_rle_rgbe, and the "-Y <height> +X <width>" line;
+ * at is left after it.
+ */
+Problem hdrHeaderProblem(
+  const std::string_view bytes,
+  std::size_t& at,
+  DeclaredSize& size,
+  long& width,
+  long& height,
+  const bool head = false)
 {
-  auto at = std::size_t(0);
+  at = 0;
   const auto magic = hdrToken(bytes, at);
   if (magic != "#?RADIANCE" && magic != "#?RGBE")
   {
@@ -533,7 +655,7 @@ Problem hdrProblem(const std::string_view bytes, DeclaredSize& size)
   {
     if (at >= bytes.size())
     {
-      return std::string{"its header has no end"};
+      return std::string{HdrHeaderEnd};
     }
     const auto token = hdrToken(bytes, at);
     if (token.empty())
@@ -547,13 +669,17 @@ Problem hdrProblem(const std::string_view bytes, DeclaredSize& size)
     return std::string{"it is not in the 32-bit_rle_rgbe format"};
   }
 
+  if (head && bytes.find('\n', at) == std::string_view::npos)
+  {
+    return std::string{HdrResolutionEnd};
+  }
   const auto resolution = hdrToken(bytes, at);
   if (resolution.compare(0, 3, "-Y ") != 0)
   {
     return std::string{"its resolution line is not \"-Y <height> +X <width>\""};
   }
   char* end = nullptr;
-  const auto height = std::strtol(resolution.c_str() + 3, &end, 10);
+  height = std::strtol(resolution.c_str() + 3, &end, 10);
   while (*end == ' ')
   {
     ++end;
@@ -562,12 +688,21 @@ Problem hdrProblem(const std::string_view bytes, DeclaredSize& size)
   {
     return std::string{"its resolution line is not \"-Y <height> +X <width>\""};
   }
-  const auto width = std::strtol(end + 3, nullptr, 10);
+  width = std::strtol(end + 3, nullptr, 10);
   if (width < 1 || height < 1)
   {
     return std::string{"it declares an empty image"};
   }
-  if (const auto problem = sizeProblem(size, std::uint64_t(width), std::uint64_t(height)))
+  return sizeProblem(
+    size, std::uint64_t(width), std::uint64_t(height), MaxFloatImageFilePixels);
+}
+
+Problem hdrProblem(const std::string_view bytes, DeclaredSize& size)
+{
+  auto at = std::size_t(0);
+  auto width = long{0};
+  auto height = long{0};
+  if (const auto problem = hdrHeaderProblem(bytes, at, size, width, height))
   {
     return problem;
   }
@@ -655,14 +790,24 @@ int exrLinesPerBlock(const int compression)
  * single-part image, one channel or R, G and B, a data window inside the size limit; for
  * a scanline image the offset table and every block it points to inside the file, so a
  * file cut short is refused rather than reaching LoadEXR's error return
- * (M-IMG-FATAL-08). Tiled images are left to tinyexr's own offset checks.
+ * (M-IMG-FATAL-08). Tiled images are left to tinyexr's own offset checks. With headOnly
+ * the bytes are the file's first bytes: the offset table is not looked at, and a header
+ * that cannot be parsed sets cutShort (it may go on beyond them).
  */
-Problem exrProblem(const std::string_view bytes, DeclaredSize& size)
+Problem exrProblem(
+  const std::string_view bytes,
+  DeclaredSize& size,
+  const bool headOnly = false,
+  bool* cutShort = nullptr)
 {
   const auto* memory = reinterpret_cast<const unsigned char*>(bytes.data());
   auto version = EXRVersion{};
   if (ParseEXRVersionFromMemory(&version, memory, bytes.size()) != TINYEXR_SUCCESS)
   {
+    if (cutShort && bytes.size() < 8)
+    {
+      *cutShort = true;
+    }
     return std::string{"it is not an OpenEXR file"};
   }
   if (version.multipart || version.non_image)
@@ -684,6 +829,10 @@ Problem exrProblem(const std::string_view bytes, DeclaredSize& size)
       FreeEXRErrorMessage(error);
     }
     FreeEXRHeader(&header);
+    if (cutShort)
+    {
+      *cutShort = true;
+    }
     return problem;
   }
 
@@ -707,11 +856,12 @@ Problem exrProblem(const std::string_view bytes, DeclaredSize& size)
     problem = "its data window is empty";
   }
   else if (
-    const auto sizeError = sizeProblem(size, std::uint64_t(width), std::uint64_t(height)))
+    const auto sizeError = sizeProblem(
+      size, std::uint64_t(width), std::uint64_t(height), MaxFloatImageFilePixels))
   {
     problem = sizeError;
   }
-  else if (!header.tiled)
+  else if (!header.tiled && !headOnly)
   {
     const auto lines = exrLinesPerBlock(header.compression_type);
     const auto blocks = std::uint64_t(
@@ -763,8 +913,63 @@ bool isImageLoaderFile(const std::string_view path)
          || extension == "exr" || extension == "hdr";
 }
 
+bool isStbLoaderFile(const std::string_view path)
+{
+  const auto extension = lowerExtension(path);
+  return extension == "png" || extension == "jpg";
+}
+
 namespace
 {
+
+/**
+ * LP1c fix (S3.3): a format other than PNG and JPEG in a .png or .jpg file, which
+ * LoadSTB_RGBA8's stbi_load_from_memory decodes by its content (BMP, GIF, PSD, PIC, PNM,
+ * Radiance HDR, TGA; stb_image's decoders check every read against the buffer): its size
+ * through stb_image's own header reader, against the size limits. stbi_info_from_memory
+ * writes stb_image's failure reason, a plain static (STBI_NO_THREAD_LOCALS): parse
+ * thread, as every stb_image call.
+ */
+Problem stbOtherProblem(const std::string_view bytes, DeclaredSize& size)
+{
+  if (bytes.size() >= std::size_t(INT_MAX))
+  {
+    return std::string{"it is 2 GB or larger"};
+  }
+  auto width = 0;
+  auto height = 0;
+  auto components = 0;
+  if (!stbi_info_from_memory(
+        reinterpret_cast<const stbi_uc*>(bytes.data()),
+        int(bytes.size()),
+        &width,
+        &height,
+        &components))
+  {
+    const auto* reason = stbi_failure_reason();
+    return "it is neither a PNG nor a JPEG, and stb_image reads no other format in it"
+           + (reason ? " (" + std::string{reason} + ")" : std::string{});
+  }
+  return sizeProblem(size, std::uint64_t(width), std::uint64_t(height));
+}
+
+/**
+ * LP1c fix (S3.3): LoadSTB_RGBA8 decodes by content, so a .png or .jpg is checked by what
+ * it holds, as stbi__load_main tests it: a PNG signature, a JPEG start-of-image marker,
+ * else stb_image's other formats.
+ */
+Problem stbProblem(const std::string_view bytes, DeclaredSize& size)
+{
+  if (hasPngSignature(bytes))
+  {
+    return pngProblem(bytes, size);
+  }
+  if (hasJpegStart(bytes))
+  {
+    return jpgProblem(bytes, size);
+  }
+  return stbOtherProblem(bytes, size);
+}
 
 Problem checkImageFile(
   const std::string_view path, const std::string_view bytes, DeclaredSize& size)
@@ -778,13 +983,155 @@ Problem checkImageFile(
   {
     return std::string{"it is empty"};
   }
-  // the imageLoaders table (Image_files.cpp:959-966): the extension picks the loader
+  // the imageLoaders table (Image_files.cpp:959-966): the extension picks the loader;
+  // stb_image's picks the format by the content
   return extension == "tga"   ? tgaProblem(bytes, size)
-         : extension == "png" ? pngProblem(bytes, size)
-         : extension == "jpg" ? jpgProblem(bytes, size)
+         : extension == "png" ? stbProblem(bytes, size)
+         : extension == "jpg" ? stbProblem(bytes, size)
          : extension == "exr" ? exrProblem(bytes, size)
                               : hdrProblem(bytes, size);
 }
+
+/**
+ * The JPEG's marker segments up to its frame header, which jpgFrameProblem checks; a
+ * scan or the end before it fails. needMore when the bytes end before it.
+ */
+Problem jpgHeadProblem(const std::string_view bytes, DeclaredSize& size, bool& needMore)
+{
+  if (!hasJpegStart(bytes))
+  {
+    return std::string{"it has no JPEG start-of-image marker"};
+  }
+  auto at = std::size_t(2);
+  for (;;)
+  {
+    if (at >= bytes.size())
+    {
+      needMore = true;
+      return std::nullopt;
+    }
+    if (std::uint8_t(bytes[at]) != 0xFF)
+    {
+      return std::string{"it is broken before its frame header"};
+    }
+    while (at < bytes.size() && std::uint8_t(bytes[at]) == 0xFF)
+    {
+      ++at;
+    }
+    if (at >= bytes.size())
+    {
+      needMore = true;
+      return std::nullopt;
+    }
+    const auto marker = std::uint8_t(bytes[at++]);
+    if (marker == 0xD9)
+    {
+      return std::string{"it ends before its frame header"};
+    }
+    if (marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7))
+    {
+      continue;
+    }
+    if (bytes.size() - at < 2)
+    {
+      needMore = true;
+      return std::nullopt;
+    }
+    const auto length = std::size_t(be16(bytes, at));
+    if (length < 2)
+    {
+      return std::string{"a marker segment is malformed"};
+    }
+    if (length > bytes.size() - at)
+    {
+      needMore = true;
+      return std::nullopt;
+    }
+    const auto segment = bytes.substr(at + 2, length - 2);
+    at += length;
+    if (isJpegFrame(marker))
+    {
+      return jpgFrameProblem(segment, size);
+    }
+    if (isOtherJpegFrame(marker))
+    {
+      return std::string{"it is a lossless, hierarchical or arithmetic-coded JPEG"};
+    }
+    if (marker == 0xDA)
+    {
+      return std::string{"a scan comes before the frame header"};
+    }
+  }
+}
+
+/**
+ * LP1c fix (S2.2): the header rules of checkImageFile on a file's first bytes, the size
+ * checks against fileSize where a header alone tells them (an uncompressed TGA's pixels);
+ * needMore when the header goes on beyond the bytes given.
+ */
+Problem checkImageHead(
+  const std::string_view path,
+  const std::string_view head,
+  const std::uint64_t fileSize,
+  DeclaredSize& size,
+  bool& needMore)
+{
+  const auto extension = lowerExtension(path);
+  if (!isImageLoaderFile(path))
+  {
+    return std::nullopt;
+  }
+  if (fileSize == 0 || head.empty())
+  {
+    return std::string{"it is empty"};
+  }
+  if (extension == "tga")
+  {
+    if (head.size() < 18 && head.size() < fileSize)
+    {
+      needMore = true;
+      return std::nullopt;
+    }
+    auto header = TgaHeader{};
+    return tgaHeaderProblem(head, fileSize, size, header);
+  }
+  if (extension == "png" || extension == "jpg")
+  {
+    if (head.size() < 33 && head.size() < fileSize)
+    {
+      needMore = true;
+      return std::nullopt;
+    }
+    if (hasPngSignature(head))
+    {
+      auto header = PngHeader{};
+      return pngHeaderProblem(head, size, header);
+    }
+    if (hasJpegStart(head))
+    {
+      return jpgHeadProblem(head, size, needMore);
+    }
+    auto problem = stbOtherProblem(head, size);
+    needMore = problem && head.size() < fileSize;
+    return problem;
+  }
+  if (extension == "exr")
+  {
+    auto cutShort = false;
+    auto problem = exrProblem(head, size, true, &cutShort);
+    needMore = problem && cutShort;
+    return problem;
+  }
+  auto at = std::size_t(0);
+  auto width = long{0};
+  auto height = long{0};
+  auto problem = hdrHeaderProblem(head, at, size, width, height, true);
+  needMore = problem && (*problem == HdrHeaderEnd || *problem == HdrResolutionEnd);
+  return problem;
+}
+
+// the bytes read for a header: the first 4 KB, then 64 KB, then 1 MB
+constexpr std::size_t HeadReads[] = {4096, 65536, 1u << 20};
 
 } // namespace
 
@@ -809,6 +1156,64 @@ ImageFileHeader imageFileHeader(const std::string_view path, const std::string_v
     header.width = int(size.width);
     header.height = int(size.height);
   }
+  return header;
+}
+
+ImageFileHeader imageFileHeadHeader(
+  const std::string_view path, const std::string_view head, const std::uint64_t fileSize)
+{
+  auto size = DeclaredSize{};
+  auto header = ImageFileHeader{};
+  auto needMore = false;
+  header.problem = checkImageHead(path, head, fileSize, size, needMore);
+  if (needMore && head.size() < fileSize)
+  {
+    header.needsMore = true;
+    header.problem.reset();
+    return header;
+  }
+  if (needMore && !header.problem)
+  {
+    header.problem = "it is cut short in its header";
+  }
+  if (!header.problem && !isImageLoaderFile(path))
+  {
+    header.problem = "no image loader reads it";
+  }
+  if (!header.problem)
+  {
+    header.width = int(size.width);
+    header.height = int(size.height);
+  }
+  return header;
+}
+
+ImageFileHeader readImageFileHeader(
+  DeclSource& source, const std::string& path, GameFileProbe* found)
+{
+  auto header = ImageFileHeader{};
+  for (const auto bytes : HeadReads)
+  {
+    auto where = GameFileProbe{};
+    const auto head = source.readGameFileHead(path, bytes, &where);
+    if (found)
+    {
+      *found = where;
+    }
+    if (!head)
+    {
+      header.problem = "it cannot be read";
+      return header;
+    }
+    header = imageFileHeadHeader(path, *head, where.size);
+    if (!header.needsMore)
+    {
+      return header;
+    }
+  }
+  header.needsMore = false;
+  header.problem =
+    "its header goes on beyond its first " + std::to_string(HeadReads[2]) + " bytes";
   return header;
 }
 

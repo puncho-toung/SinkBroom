@@ -29,6 +29,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace tb::lit
@@ -86,6 +87,14 @@ struct GameFileOrigin
  * one directory entry, one container table entry or one .pk4 central directory (TbFsLib
  * reads it in one call). A cancelled source holds what it scanned so far.
  *
+ * LP1c fix (S2.2): the loose folders a probe or a read looks in are listed once each and
+ * kept with their names (case-folded as the file system compares them: without case on
+ * Windows, ASCII case elsewhere), so that a loose file that is not there is a lookup, not
+ * a file-system call. looseFilesMayHaveChanged (the parse thread's poll) starts a new
+ * round: the first look into a folder after it stats the folder and lists it again when
+ * its time changed (a file added, removed or renamed in it), so a new file is seen at the
+ * next poll; a file's own changes are seen by its stat, as before.
+ *
  * A loose file that changes while it is read is read again, up to three times. A decl
  * read (readFile) that keeps changing is returned as read and changedWhileRead() asks for
  * another build (A3.5); any other read (readGameFile) that keeps changing reads as no
@@ -99,6 +108,7 @@ class GameFileSource : public DeclSource
 private:
   struct Pk4;
   struct Resources;
+  struct LooseFolder;
 
   static constexpr int MaxLooseReadAttempts = 3;
 
@@ -108,6 +118,10 @@ private:
   std::vector<std::unique_ptr<Resources>> m_resources;
   std::vector<std::string> m_warnings;
   bool m_changedWhileRead = false;
+  // LP1c fix (S2.2): the loose folders looked in, by their case-folded path, and the
+  // round of polls whose changes they show
+  std::unordered_map<std::filesystem::path::string_type, LooseFolder> m_looseFolders;
+  std::uint64_t m_looseRound = 0;
 
 public:
   explicit GameFileSource(
@@ -129,11 +143,12 @@ public:
     const std::string& folder, const std::string& extension) const override;
   std::vector<std::string> takeWarnings() override;
   void closeFiles() override;
+  void looseFilesMayHaveChanged() override;
   bool changedWhileRead() const override;
   std::size_t containerCount() const override;
 
   // the source that a read of path finds, or nullopt
-  std::optional<GameFileOrigin> origin(const std::string& path) const;
+  std::optional<GameFileOrigin> origin(const std::string& path);
   // the containers in the order a read searches them, the first searched first
   std::vector<std::string> searchOrder() const;
   // how many containers are open now
@@ -142,7 +157,11 @@ public:
 private:
   bool cancelled() const;
   std::unique_ptr<Pk4> readPk4(const std::string& name);
-  GameFileProbe probeFile(const std::string& path) const;
+  // the loose file a read of this relative path opens, or nullopt; nullopt at once when
+  // the folder's listing has no such name (S2.2)
+  std::optional<std::filesystem::path> looseFile(const std::filesystem::path& relative);
+  LooseFolder& looseFolder(const std::filesystem::path& folder);
+  GameFileProbe probeFile(const std::string& path);
   // the C8 read: the loose file, then the .pk4 files, then the resources; decl says
   // whether a loose file that keeps changing asks for another build (A3.5)
   std::optional<std::string> read(

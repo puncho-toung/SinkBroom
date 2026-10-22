@@ -24,6 +24,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -100,5 +101,11 @@ struct OpenAtExit
   std::shared_ptr<ParseGate> gate;
   ~OpenAtExit() { gate->open(); }
 };
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+// runs f between two checkpoints of the CRT's debug heap; true when the heap grew, with
+// its statistics dumped
+bool heapGrows(const std::function<void()>& f);
+#endif
 
 } // namespace tb::lit

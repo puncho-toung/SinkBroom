@@ -33,6 +33,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -52,8 +53,16 @@ using Clock = std::chrono::steady_clock;
 // Parse, and _alloca's each decl's text (A2.9).
 constexpr auto ParseThreadStackBytes = std::size_t{8} * 1024 * 1024;
 
-// a bulk step parses for at most this long, then looks at the queue again (D52)
-constexpr auto BulkStepTime = std::chrono::milliseconds{20};
+// a bulk step parses for at most this long, then looks at the queue again (D52); S2.3: so
+// does a lookup or measure step, which also stops after StepNames names
+constexpr auto StepTime = std::chrono::milliseconds{20};
+constexpr auto StepNames = 256;
+// S2.7: the poll re-probes loose image files for at most this long, then goes on at the
+// next poll
+constexpr auto PollSliceTime = std::chrono::milliseconds{5};
+
+// materialStage lighting: SL_DIFFUSE
+constexpr int StageDiffuse = 2;
 
 std::uint32_t floatBits(const float value)
 {
@@ -224,13 +233,18 @@ struct MaterialService::Shared
   std::unordered_set<std::string> queuedEntityDefLookups;
   std::deque<RegisterKey> evaluations;
   std::unordered_set<RegisterKey, RegisterKeyHash> queuedEvaluations;
-  // maps whose bakes to read (C10), with the lookups, each with its latest ticket
+  // maps whose bakes to read (C10), one per work item, each with its latest ticket
   std::deque<std::string> mapBakes;
   std::unordered_map<std::string, std::uint64_t> queuedMapBakes;
   std::uint64_t lastTicket = 0;
-  // LP1c.1: image caches to read, with the lookups
+  // LP1c fix (S2.2): the materials whose editor-image size to measure, by canonical name
+  std::deque<std::string> measures;
+  std::unordered_set<std::string> queuedMeasures;
+  // LP1c.1: image caches to read, one per work item (S2.3)
   std::deque<MaterialImageKey> images;
   std::unordered_set<MaterialImageKey, MaterialImageKeyHash> queuedImages;
+  // LP1c fix (S2.4): the images whose data a consumer has taken (image() returned it)
+  std::unordered_set<MaterialImageKey, MaterialImageKeyHash> takenImages;
 
   std::shared_ptr<const MaterialTable> table = std::make_shared<const MaterialTable>();
   MaterialServiceStats stats;
@@ -245,6 +259,17 @@ struct MaterialService::Shared
     : options{std::move(options_)}
   {
   }
+
+  // queues a measure of a material's editor-image size, with the mutex held
+  bool queueMeasure(const std::string& name)
+  {
+    if (stop || stats.threadEnded || !queuedMeasures.insert(name).second)
+    {
+      return false;
+    }
+    measures.push_back(name);
+    return true;
+  }
 };
 
 // The parse thread and everything only it touches.
@@ -258,18 +283,19 @@ private:
     AutoReload,
     Evaluate,
     Lookup,
+    Bake,
     Poll,
+    Measure,
+    Image,
     Bulk,
   };
 
   struct Work
   {
     WorkKind kind = WorkKind::Stop;
-    std::vector<std::string> lookups;
-    std::vector<std::string> entityDefLookups;
     std::vector<RegisterKey> evaluations;
-    std::vector<std::pair<std::string, std::uint64_t>> mapBakes;
-    std::vector<MaterialImageKey> images;
+    std::pair<std::string, std::uint64_t> mapBake;
+    MaterialImageKey image;
   };
 
   // R1.2: default-constructed, then the kind, so that a new member needs no initialiser
@@ -280,6 +306,22 @@ private:
     work.kind = kind;
     return work;
   }
+
+  // C21, D52, S3.15: the last Ready editor-image size of a material, the image chain it
+  // was measured for and the files it was measured from
+  struct KeptSize
+  {
+    EditorImageSize size;
+    std::string chain;
+    std::vector<FoundGameFile> files;
+  };
+
+  // S2.4: a published image's data, in publication order
+  struct PublishedImage
+  {
+    MaterialImageKey key;
+    std::size_t bytes = 0;
+  };
 
   Shared& m_shared;
   StackThread m_thread;
@@ -296,15 +338,26 @@ private:
   // the names lookups and entityDef queries were asked for, asked again after a reload
   std::unordered_set<std::string> m_requestedNames;
   std::unordered_set<std::string> m_requestedEntityDefs;
+  // S2.2: every name a material's slot is published under, by the material's canonical
+  // name, so that a measured entry replaces each without a walk of the table
+  std::unordered_map<std::string, std::vector<std::string>> m_spellings;
   // C21, D52: the last Ready editor-image size of each material, by canonical name, kept
-  // across reloads, so that a Default size never replaces it
-  std::unordered_map<std::string, EditorImageSize> m_readySizes;
+  // across reloads
+  std::unordered_map<std::string, KeptSize> m_readySizes;
   // LP1c.2 (C21, LP1c.1's follow-up 5): the loose files each material's editor-image size
-  // and each image slot was read from, as they were then; the poll re-reads a size or a
-  // slot when one of its files changes
+  // and each image slot was read from, as they were then, and (S2.5) the names they
+  // missed; the poll re-reads a size or a slot when one of them changes
   std::unordered_map<std::string, std::vector<FoundGameFile>> m_sizeFiles;
   std::unordered_map<MaterialImageKey, std::vector<FoundGameFile>, MaterialImageKeyHash>
     m_imageFiles;
+  // S2.4: the published images' bytes, the oldest publication first
+  std::deque<PublishedImage> m_publishedImages;
+  std::size_t m_imageBytes = 0;
+  std::uint64_t m_evictedImages = 0;
+  // S2 Low (S2.7): the poll's place in the files it re-probes, a slice per poll
+  std::vector<MaterialImageKey> m_pollImageKeys;
+  std::vector<std::string> m_pollMaterials;
+  std::size_t m_pollCursor = 0;
   // the loose files' times when the last build ended
   std::vector<DeclFileTime> m_stamp;
   Clock::time_point m_nextPoll;
@@ -414,6 +467,8 @@ private:
         m_shared.queuedEntityDefLookups.clear();
         m_shared.evaluations.clear();
         m_shared.queuedEvaluations.clear();
+        m_shared.measures.clear();
+        m_shared.queuedMeasures.clear();
         m_shared.images.clear();
         m_shared.queuedImages.clear();
       }
@@ -497,12 +552,19 @@ private:
         guarded("evaluation", [&] { evaluate(work.evaluations); });
         break;
       case WorkKind::Lookup:
-        guarded("lookup", [&] {
-          lookUp(work.lookups, work.entityDefLookups, work.mapBakes, work.images);
-        });
+        guarded("lookup", [&] { lookUpStep(); });
+        break;
+      case WorkKind::Bake:
+        guarded("bake", [&] { bakeItem(work.mapBake.first, work.mapBake.second); });
         break;
       case WorkKind::Poll:
         guarded("poll", [&] { poll(); });
+        break;
+      case WorkKind::Measure:
+        guarded("measure", [&] { measureStep(); });
+        break;
+      case WorkKind::Image:
+        guarded("image", [&] { imageItem(work.image); });
         break;
       case WorkKind::Bulk:
         guarded("bulk parse", [&] { bulkStep(); });
@@ -602,27 +664,19 @@ private:
       m_shared.queuedEvaluations.clear();
       return work;
     }
-    if (
-      !m_shared.lookups.empty() || !m_shared.entityDefLookups.empty()
-      || !m_shared.mapBakes.empty() || !m_shared.images.empty())
+    // S2.3: the lookup step takes its names from the queues itself, a step at a time
+    if (!m_shared.lookups.empty() || !m_shared.entityDefLookups.empty())
     {
-      auto work = workOf(WorkKind::Lookup);
-      work.lookups.assign(m_shared.lookups.begin(), m_shared.lookups.end());
-      work.entityDefLookups.assign(
-        m_shared.entityDefLookups.begin(), m_shared.entityDefLookups.end());
-      for (auto& path : m_shared.mapBakes)
-      {
-        work.mapBakes.emplace_back(path, m_shared.queuedMapBakes.at(path));
-      }
-      work.images.assign(m_shared.images.begin(), m_shared.images.end());
-      m_shared.lookups.clear();
-      m_shared.queuedLookups.clear();
-      m_shared.entityDefLookups.clear();
-      m_shared.queuedEntityDefLookups.clear();
-      m_shared.mapBakes.clear();
-      m_shared.queuedMapBakes.clear();
-      m_shared.images.clear();
-      m_shared.queuedImages.clear();
+      return workOf(WorkKind::Lookup);
+    }
+    if (!m_shared.mapBakes.empty())
+    {
+      auto work = workOf(WorkKind::Bake);
+      auto path = std::move(m_shared.mapBakes.front());
+      m_shared.mapBakes.pop_front();
+      const auto ticket = m_shared.queuedMapBakes.at(path);
+      m_shared.queuedMapBakes.erase(path);
+      work.mapBake = {std::move(path), ticket};
       return work;
     }
     if (
@@ -630,6 +684,18 @@ private:
       && Clock::now() >= m_nextPoll)
     {
       return workOf(WorkKind::Poll);
+    }
+    if (!m_shared.measures.empty())
+    {
+      return workOf(WorkKind::Measure);
+    }
+    if (!m_shared.images.empty())
+    {
+      auto work = workOf(WorkKind::Image);
+      work.image = std::move(m_shared.images.front());
+      m_shared.images.pop_front();
+      m_shared.queuedImages.erase(work.image);
+      return work;
     }
     if (m_shared.parseAllRequested && bulkPending())
     {
@@ -688,9 +754,13 @@ private:
   {
     m_working.version = ++m_version;
     auto table = std::make_shared<const MaterialTable>(m_working);
+    const auto imageBytes = m_imageBytes;
+    const auto evicted = m_evictedImages;
     {
       auto lock = std::scoped_lock{m_shared.mutex};
       m_shared.table = std::move(table);
+      m_shared.stats.imageBytes = imageBytes;
+      m_shared.stats.evictedImages = evicted;
     }
     m_shared.changed.notify_all();
 
@@ -710,50 +780,148 @@ private:
 
   void requestAutoReload() { m_autoReloadPending = true; }
 
+  // a name taken from a queue (S2.3), with the mutex held for the take only
+  std::optional<std::string> takeName(
+    std::deque<std::string>& queue, std::unordered_set<std::string>& queued)
+  {
+    auto lock = std::scoped_lock{m_shared.mutex};
+    if (queue.empty())
+    {
+      return std::nullopt;
+    }
+    auto name = std::move(queue.front());
+    queue.pop_front();
+    queued.erase(name);
+    return name;
+  }
+
+  // queues the measure of a material's size, from this thread
+  void queueMeasure(const std::string& name)
+  {
+    {
+      auto lock = std::scoped_lock{m_shared.mutex};
+      static_cast<void>(m_shared.queueMeasure(name));
+    }
+  }
+
+  void setSlotUnder(const std::string& name, std::shared_ptr<const MaterialSlot> slot)
+  {
+    if (slot->entry)
+    {
+      auto& names = m_spellings[slot->entry->name];
+      if (std::find(names.begin(), names.end(), name) == names.end())
+      {
+        names.push_back(name);
+      }
+    }
+    m_working.materials = m_working.materials.set(name, std::move(slot));
+  }
+
   bool setSlot(const std::string& name, std::shared_ptr<const MaterialSlot> slot)
   {
     if (m_working.materials.find(name))
     {
       return false;
     }
-    m_working.materials = m_working.materials.set(name, std::move(slot));
+    setSlotUnder(name, std::move(slot));
     return true;
   }
 
-  /**
-   * C21, D52: the entry as it is published, with its editor-image size: the registry's
-   * (or the test hook's); a Default size gives way to the last Ready one of the same
-   * material, kept across reloads, and a Ready one is kept for later.
-   */
-  std::shared_ptr<const MaterialEntry> sized(std::shared_ptr<const MaterialEntry> entry)
+  // a slot published again under every name it is published under (its spellings)
+  void replaceSlot(const std::string& material, std::shared_ptr<const MaterialSlot> slot)
   {
-    auto size = m_shared.options.editorImageSizeForTesting
-                  ? m_shared.options.editorImageSizeForTesting(*entry)
-                  : measure(*entry);
-    if (size.state == EditorImageSize::State::Ready)
+    const auto spellings = m_spellings.find(material);
+    if (spellings == m_spellings.end())
     {
-      m_readySizes.insert_or_assign(entry->name, size);
+      return;
     }
-    else if (const auto kept = m_readySizes.find(entry->name); kept != m_readySizes.end())
+    for (const auto& name : spellings->second)
     {
-      size = kept->second;
+      m_working.materials = m_working.materials.set(name, slot);
     }
+  }
+
+  /**
+   * S3.15: the images a material's editor-image size comes from, as its decl names them
+   * (qer_editorimage, the first diffuse stage's, stage 0's): a kept size stands only for
+   * the same chain.
+   */
+  static std::string imageChain(const MaterialEntry& entry)
+  {
+    auto chain = entry.editorImageName;
+    for (const auto& stage : entry.stages)
+    {
+      if (stage.lighting == StageDiffuse && stage.image)
+      {
+        chain += "|" + stage.image->name;
+        break;
+      }
+    }
+    if (!entry.stages.empty() && entry.stages.front().image)
+    {
+      chain += "|" + entry.stages.front().image->name;
+    }
+    return chain;
+  }
+
+  // an entry with this editor-image size, the entry itself when it has it
+  static std::shared_ptr<const MaterialEntry> withSize(
+    std::shared_ptr<const MaterialEntry> entry, const EditorImageSize& size)
+  {
     if (size == entry->editorImageSize && size.reason == entry->editorImageSize.reason)
     {
       return entry;
     }
-
     auto copy = std::make_shared<MaterialEntry>(*entry);
     copy->editorImageSize = size;
     return copy;
   }
 
   /**
-   * LP1c.2 (C21): the editor-image size of a material, measured on this thread
-   * (editorImageSize): eagerly, when the entry is published; silent, so the copied code's
-   * messages while it measures are dropped (the image loads report theirs when an image
-   * is asked for). Its loose files are kept for the poll. Without a registry, the
-   * registry's Default.
+   * C21, D52, S2.2: the slot of an entry as it is first published: with the test hook's
+   * size (measured), else unmeasured with the last Ready size its material had for the
+   * same image chain (D52, S3.15), else the registry's Default; its measure is queued by
+   * the caller.
+   */
+  std::shared_ptr<const MaterialSlot> firstSlot(
+    std::shared_ptr<const MaterialEntry> entry)
+  {
+    auto slot = std::make_shared<MaterialSlot>();
+    if (m_shared.options.editorImageSizeForTesting)
+    {
+      auto size = m_shared.options.editorImageSizeForTesting(*entry);
+      if (size.state == EditorImageSize::State::Ready)
+      {
+        m_readySizes.insert_or_assign(
+          entry->name, KeptSize{size, imageChain(*entry), {}});
+      }
+      else if (const auto kept = m_readySizes.find(entry->name);
+               kept != m_readySizes.end() && kept->second.chain == imageChain(*entry))
+      {
+        size = kept->second.size;
+      }
+      slot->entry = withSize(std::move(entry), size);
+      slot->sizeMeasured = true;
+      return slot;
+    }
+    if (const auto kept = m_readySizes.find(entry->name);
+        kept != m_readySizes.end() && kept->second.chain == imageChain(*entry))
+    {
+      entry = withSize(std::move(entry), kept->second.size);
+    }
+    slot->entry = std::move(entry);
+    // without a registry's decls nothing can measure it
+    slot->sizeMeasured = !m_decls || !m_source;
+    return slot;
+  }
+
+  /**
+   * LP1c.2 (C21), S2.2: the editor-image size of a material, measured on this thread by
+   * headers (editorImageSize); silent, so the copied code's messages while it measures
+   * are dropped. Its loose files and the names it missed are kept for the poll. A Default
+   * measure takes the kept Ready size only while the files that size was measured from
+   * are unchanged and the image chain is the same (D52, S3.15); otherwise the kept size
+   * goes.
    */
   EditorImageSize measure(const MaterialEntry& entry)
   {
@@ -764,19 +932,45 @@ private:
     const auto messages = m_decls->messages().size();
     auto sizing = editorImageSize(*m_decls, *m_source, entry);
     static_cast<void>(m_decls->takeMessagesFrom(messages));
-    keepLooseFiles(m_sizeFiles, entry.name, std::move(sizing.files));
+    auto files = looseOrMissing(sizing.files);
+    const auto chain = imageChain(entry);
+    if (sizing.size.state == EditorImageSize::State::Ready)
+    {
+      m_readySizes.insert_or_assign(entry.name, KeptSize{sizing.size, chain, files});
+    }
+    else if (const auto kept = m_readySizes.find(entry.name); kept != m_readySizes.end())
+    {
+      if (kept->second.chain == chain && !changedOnDisk(kept->second.files))
+      {
+        sizing.size = kept->second.size;
+      }
+      else
+      {
+        m_readySizes.erase(kept);
+      }
+    }
+    keepFiles(m_sizeFiles, entry.name, std::move(files));
     return sizing.size;
   }
 
-  template <typename Map, typename Key>
-  static void keepLooseFiles(Map& map, const Key& key, std::vector<FoundGameFile> files)
+  // the files the poll looks at again: loose ones, and (S2.5) the names that were missed
+  static std::vector<FoundGameFile> looseOrMissing(std::vector<FoundGameFile> files)
   {
     files.erase(
       std::remove_if(
         files.begin(),
         files.end(),
-        [](const auto& file) { return file.probe.kind != GameFileProbe::Kind::Loose; }),
+        [](const auto& file) {
+          return file.probe.kind != GameFileProbe::Kind::Loose
+                 && file.probe.kind != GameFileProbe::Kind::Missing;
+        }),
       files.end());
+    return files;
+  }
+
+  template <typename Map, typename Key>
+  static void keepFiles(Map& map, const Key& key, std::vector<FoundGameFile> files)
+  {
     if (files.empty())
     {
       map.erase(key);
@@ -789,17 +983,75 @@ private:
 
   bool changedOnDisk(const std::vector<FoundGameFile>& files) const
   {
-    return std::any_of(files.begin(), files.end(), [&](const auto& file) {
-      return m_source->probe(file.path) != file.probe;
-    });
+    return m_source && std::any_of(files.begin(), files.end(), [&](const auto& file) {
+             return m_source->probe(file.path) != file.probe;
+           });
   }
 
   /**
-   * LP1c.2 (C21, LP1c.1's follow-up 5): a loose image file that changed since a size or a
-   * slot was read from it (its time, size or change stamp): the slot is read again
-   * (resolveImage), and the material's size measured again, its kept Ready size dropped
-   * so that the file's new size, or its loss, is published. True when anything was
-   * re-read.
+   * S2.2: one queued measure: the material's entry published again with its measured
+   * size, measured, under every name it is published under.
+   */
+  bool measureOne(const std::string& name)
+  {
+    const auto* published = m_working.materials.find(name);
+    if (!published || !(*published)->entry || (*published)->sizeMeasured)
+    {
+      return false;
+    }
+    const auto old = (*published)->entry;
+    auto slot = std::make_shared<MaterialSlot>();
+    slot->entry = withSize(old, measure(*old));
+    slot->sizeMeasured = true;
+    replaceSlot(old->name, std::move(slot));
+    return true;
+  }
+
+  // S2.2, S2.3: measures until about a step's time has passed, then publishes
+  void measureStep()
+  {
+    const auto deadline = Clock::now() + StepTime;
+    auto changed = false;
+    for (auto taken = 0;; ++taken)
+    {
+      if (stopping() || (taken > 0 && (Clock::now() >= deadline || taken >= StepNames)))
+      {
+        break;
+      }
+      const auto name = takeName(m_shared.measures, m_shared.queuedMeasures);
+      if (!name)
+      {
+        break;
+      }
+      changed = measureOne(*name) || changed;
+    }
+    if (changed)
+    {
+      publish();
+    }
+  }
+
+  // the slot of a material published again unmeasured, and its measure queued
+  void remeasure(const std::string& material)
+  {
+    const auto* published = m_working.materials.find(material);
+    if (!published || !(*published)->entry)
+    {
+      return;
+    }
+    auto slot = std::make_shared<MaterialSlot>(**published);
+    slot->sizeMeasured = false;
+    replaceSlot(material, std::move(slot));
+    queueMeasure(material);
+  }
+
+  /**
+   * LP1c.2 (C21, LP1c.1's follow-up 5), S2.5: a loose image file that changed since a
+   * size or a slot was read from it (its time, size or change stamp), or a name that was
+   * missed and is there now: the slot is dropped and read again when asked for (it is
+   * queued), and the material's size measured again (queued). S2.7: a slice of at most
+   * a few milliseconds per poll, with stop checks; the next poll goes on where it ended.
+   * True when anything changed.
    */
   bool pollImageFiles()
   {
@@ -807,81 +1059,76 @@ private:
     {
       return false;
     }
-    auto keys = std::vector<MaterialImageKey>{};
-    for (const auto& [key, files] : m_imageFiles)
+    if (m_pollImageKeys.empty() && m_pollMaterials.empty())
     {
-      if (changedOnDisk(files))
+      m_pollCursor = 0;
+      for (const auto& [key, files] : m_imageFiles)
       {
-        keys.push_back(key);
+        m_pollImageKeys.push_back(key);
       }
-    }
-    auto materials = std::vector<std::string>{};
-    for (const auto& [name, files] : m_sizeFiles)
-    {
-      if (changedOnDisk(files))
+      for (const auto& [name, files] : m_sizeFiles)
       {
-        materials.push_back(name);
+        m_pollMaterials.push_back(name);
       }
     }
 
-    for (const auto& key : keys)
+    const auto deadline = Clock::now() + PollSliceTime;
+    auto changed = false;
+    while (m_pollCursor < m_pollImageKeys.size() + m_pollMaterials.size())
     {
-      if (stopping())
+      if (stopping() || Clock::now() >= deadline)
       {
-        return true;
+        break;
       }
-      m_working.images = m_working.images.erase(key);
-      m_imageFiles.erase(key);
-      lookUpImage(key);
-    }
-    for (const auto& name : materials)
-    {
-      if (stopping())
+      const auto at = m_pollCursor++;
+      if (at < m_pollImageKeys.size())
       {
-        return true;
+        const auto& key = m_pollImageKeys[at];
+        const auto files = m_imageFiles.find(key);
+        if (files != m_imageFiles.end() && changedOnDisk(files->second))
+        {
+          dropImage(key);
+          {
+            auto lock = std::scoped_lock{m_shared.mutex};
+            if (m_shared.queuedImages.insert(key).second)
+            {
+              m_shared.images.push_back(key);
+            }
+          }
+          changed = true;
+        }
+        continue;
       }
-      m_sizeFiles.erase(name);
-      m_readySizes.erase(name);
-      resize(name);
-    }
-    return !keys.empty() || !materials.empty();
-  }
-
-  // the material's entry published again with a size measured again, under every name
-  // that shares it
-  void resize(const std::string& material)
-  {
-    const auto* published = m_working.materials.find(material);
-    if (!published || !(*published)->entry)
-    {
-      return;
-    }
-    const auto old = (*published)->entry;
-    auto entry = sized(old);
-    if (entry == old)
-    {
-      return;
-    }
-    auto slot = std::make_shared<MaterialSlot>();
-    slot->entry = std::move(entry);
-    auto names = std::vector<std::string>{};
-    m_working.materials.forEach([&](const std::string& name, const auto& shared) {
-      if (shared->entry == old)
+      const auto& name = m_pollMaterials[at - m_pollImageKeys.size()];
+      const auto files = m_sizeFiles.find(name);
+      if (files != m_sizeFiles.end() && changedOnDisk(files->second))
       {
-        names.push_back(name);
+        m_sizeFiles.erase(files);
+        m_readySizes.erase(name);
+        remeasure(name);
+        changed = true;
       }
-    });
-    for (const auto& name : names)
-    {
-      m_working.materials = m_working.materials.set(name, slot);
     }
+    if (m_pollCursor >= m_pollImageKeys.size() + m_pollMaterials.size())
+    {
+      // a round done: the next poll takes a new list, and none is kept in between
+      m_pollImageKeys = {};
+      m_pollMaterials = {};
+      m_pollCursor = 0;
+    }
+    return changed;
   }
 
   // one lookup into the working table, under the asked name and the decl's own
   bool lookUpOne(const std::string& name)
   {
-    if (m_working.materials.find(name))
+    if (const auto* published = m_working.materials.find(name))
     {
+      // S2.2: a name the bulk parse published unmeasured is measured once asked for
+      if ((*published)->entry && !(*published)->sizeMeasured)
+      {
+        queueMeasure((*published)->entry->name);
+      }
       return false;
     }
 
@@ -897,9 +1144,7 @@ private:
       }
       else
       {
-        auto made = std::make_shared<MaterialSlot>();
-        made->entry = sized(*result.value);
-        slot = std::move(made);
+        slot = firstSlot(*result.value);
       }
     }
     else
@@ -909,10 +1154,15 @@ private:
       slot = std::move(made);
     }
     const auto canonical = slot->entry ? slot->entry->name : std::string{};
+    const auto measured = slot->sizeMeasured;
     auto changed = setSlot(name, slot);
     if (!canonical.empty() && canonical != name)
     {
       changed = setSlot(canonical, slot) || changed;
+    }
+    if (!canonical.empty() && !measured)
+    {
+      queueMeasure(canonical);
     }
     return changed;
   }
@@ -970,8 +1220,12 @@ private:
 
   void resetWorkingTable(const std::uint64_t registry)
   {
-    // every entry is measured again when it is published
+    // every entry is measured again when it is asked for
     m_sizeFiles.clear();
+    m_spellings.clear();
+    m_pollImageKeys = {};
+    m_pollMaterials = {};
+    m_pollCursor = 0;
     // the bakes and the image caches do not depend on the registry
     auto mapBakes = std::move(m_working.mapBakes);
     auto images = std::move(m_working.images);
@@ -984,6 +1238,12 @@ private:
     m_bulkTable = 0;
     m_bulkDone = false;
     m_bulkStarted.reset();
+    {
+      // the measures queued for the old registry's entries
+      auto lock = std::scoped_lock{m_shared.mutex};
+      m_shared.measures.clear();
+      m_shared.queuedMeasures.clear();
+    }
   }
 
   void build(
@@ -1100,7 +1360,8 @@ private:
     // a new table for the new registry
     resetWorkingTable(m_decls->id());
 
-    // what the consumers asked for before is there at the switch
+    // what the consumers asked for before is there at the switch, with its kept sizes
+    // (D52); the measures are queued (S2.2)
     for (const auto& name : previousNames)
     {
       if (stopping())
@@ -1161,8 +1422,22 @@ private:
     m_nextPoll = Clock::now() + m_shared.options.pollInterval;
   }
 
+  /**
+   * S2.5: a reload drops every image slot, so that new containers and caches the engine
+   * wrote are seen when the image is asked for again, and the kept Ready sizes whose
+   * files changed (a deleted texture returns to Default); then it rebuilds.
+   */
   void rebuild()
   {
+    for (auto it = m_readySizes.begin(); it != m_readySizes.end();)
+    {
+      if (stopping())
+      {
+        break;
+      }
+      it = changedOnDisk(it->second.files) ? m_readySizes.erase(it) : std::next(it);
+    }
+    dropImages();
     auto previousNames =
       std::vector<std::string>{m_requestedNames.begin(), m_requestedNames.end()};
     auto previousEntityDefs = std::vector<std::string>{
@@ -1175,48 +1450,76 @@ private:
    * answering ticket: the C10 search through the game files (readMapBake), the text files
    * with the copied lexer, on this thread (C20). A bake whose files did not change keeps
    * its tree and data (the same pointers), so that a consumer that asked again rebuilds
-   * nothing; a path outside the game folder gets a slot without a tree.
+   * nothing; a path outside the game folder gets a slot without a tree. S3.13: a read
+   * that throws answers the ticket with a slot that says why.
    */
   void loadMapBake(const std::string& path, const std::uint64_t ticket)
   {
     auto slot = std::make_shared<MapBakeSlot>();
     slot->path = path;
-    if (!m_source)
+    try
     {
-      slot->error = buildFailure();
-    }
-    else if (const auto name = engineMapName(*m_source, path))
-    {
-      const auto* kept = m_working.mapBakes.find(path);
-      if (kept && (*kept)->bake && !mapBakeChanged(*m_source, *(*kept)->bake))
+      if (!m_source)
       {
-        *slot = **kept;
+        slot->error = buildFailure();
+      }
+      else if (const auto name = engineMapName(*m_source, path))
+      {
+        const auto* kept = m_working.mapBakes.find(path);
+        if (kept && (*kept)->bake && !mapBakeChanged(*m_source, *(*kept)->bake))
+        {
+          *slot = **kept;
+        }
+        else
+        {
+          auto bake = std::make_shared<const MapBake>(readMapBake(*m_source, *name));
+          slot->tree = bake->tree;
+          slot->error = bake->geometryError;
+          slot->bake = std::move(bake);
+        }
       }
       else
       {
-        auto bake = std::make_shared<const MapBake>(readMapBake(*m_source, *name));
-        slot->tree = bake->tree;
-        slot->error = bake->geometryError;
-        slot->bake = std::move(bake);
+        slot->error = path
+                      + " is not below the game's base folder, so the engine cannot have "
+                        "baked it (C10)";
       }
     }
-    else
+    catch (const std::exception& e)
     {
-      slot->error = path
-                    + " is not below the game's base folder, so the engine cannot have "
-                      "baked it (C10)";
+      *slot = MapBakeSlot{};
+      slot->path = path;
+      slot->error = fmt::format("The bake of {} could not be read: {}", path, e.what());
+    }
+    catch (...)
+    {
+      *slot = MapBakeSlot{};
+      slot->path = path;
+      slot->error = fmt::format("The bake of {} could not be read", path);
     }
     slot->ticket = ticket;
     m_working.mapBakes =
       m_working.mapBakes.set(path, std::shared_ptr<const MapBakeSlot>{std::move(slot)});
   }
 
-  // the bakes whose files changed since they were read are read again (a new dmap run)
-  bool pollMapBakes()
+  // S2.3: one bake per work item
+  void bakeItem(const std::string& path, const std::uint64_t ticket)
+  {
+    if (stopping())
+    {
+      return;
+    }
+    loadMapBake(path, ticket);
+    publish();
+  }
+
+  // the bakes whose files changed since they were read are queued to be read again (a
+  // new dmap run), each its own work item (S2.3), answering the ticket it answered
+  void pollMapBakes()
   {
     if (!m_source)
     {
-      return false;
+      return;
     }
     auto changed = std::vector<std::pair<std::string, std::uint64_t>>{};
     m_working.mapBakes.forEach([&](const std::string& path, const auto& slot) {
@@ -1225,11 +1528,91 @@ private:
         changed.emplace_back(path, slot->ticket);
       }
     });
-    for (const auto& [path, ticket] : changed)
+    auto lock = std::scoped_lock{m_shared.mutex};
+    for (auto& [path, ticket] : changed)
     {
-      loadMapBake(path, ticket);
+      if (m_shared.queuedMapBakes.emplace(path, ticket).second)
+      {
+        m_shared.mapBakes.push_back(std::move(path));
+      }
     }
-    return !changed.empty();
+  }
+
+  // the image data's bytes the budget counts
+  static std::size_t imageBytes(const ImageCacheSlot& slot)
+  {
+    return slot.image ? slot.image->data.size() : 0;
+  }
+
+  // S2.4: an image slot dropped from the table, its files no more polled
+  void dropImage(const MaterialImageKey& key)
+  {
+    if (const auto* slot = m_working.images.find(key))
+    {
+      m_imageBytes -= std::min(m_imageBytes, imageBytes(**slot));
+      m_working.images = m_working.images.erase(key);
+    }
+    m_imageFiles.erase(key);
+    m_publishedImages.erase(
+      std::remove_if(
+        m_publishedImages.begin(),
+        m_publishedImages.end(),
+        [&](const auto& published) { return published.key == key; }),
+      m_publishedImages.end());
+  }
+
+  // S2.5: every image slot dropped (a reload)
+  void dropImages()
+  {
+    m_working.images = MaterialTable::Images{};
+    m_imageFiles.clear();
+    m_publishedImages.clear();
+    m_imageBytes = 0;
+    auto lock = std::scoped_lock{m_shared.mutex};
+    m_shared.takenImages.clear();
+  }
+
+  /**
+   * S2.4: while the published images' data is beyond the budget, the least recently
+   * published image whose data a consumer has taken is dropped (it is read again when
+   * asked for); an image nobody has taken yet stays.
+   */
+  void keepImageBudget()
+  {
+    const auto budget = m_shared.options.imageBudgetBytes;
+    if (budget == 0 || m_imageBytes <= budget)
+    {
+      return;
+    }
+    auto taken = std::unordered_set<MaterialImageKey, MaterialImageKeyHash>{};
+    {
+      auto lock = std::scoped_lock{m_shared.mutex};
+      taken = m_shared.takenImages;
+    }
+    auto evicted = std::vector<MaterialImageKey>{};
+    for (auto it = m_publishedImages.begin();
+         it != m_publishedImages.end() && m_imageBytes > budget;)
+    {
+      if (!taken.contains(it->key))
+      {
+        ++it;
+        continue;
+      }
+      m_imageBytes -= std::min(m_imageBytes, it->bytes);
+      m_working.images = m_working.images.erase(it->key);
+      m_imageFiles.erase(it->key);
+      evicted.push_back(it->key);
+      it = m_publishedImages.erase(it);
+      ++m_evictedImages;
+    }
+    if (!evicted.empty())
+    {
+      auto lock = std::scoped_lock{m_shared.mutex};
+      for (const auto& key : evicted)
+      {
+        m_shared.takenImages.erase(key);
+      }
+    }
   }
 
   /**
@@ -1255,58 +1638,63 @@ private:
     else
     {
       *slot = resolveImage(*m_decls, *m_source, key);
-      keepLooseFiles(m_imageFiles, key, slot->files);
+      keepFiles(m_imageFiles, key, looseOrMissing(slot->files));
     }
+    const auto bytes = imageBytes(*slot);
     m_working.images =
       m_working.images.set(key, std::shared_ptr<const ImageCacheSlot>{std::move(slot)});
+    m_publishedImages.push_back(PublishedImage{key, bytes});
+    m_imageBytes += bytes;
     return true;
   }
 
-  void lookUp(
-    const std::vector<std::string>& names,
-    const std::vector<std::string>& entityDefNames,
-    const std::vector<std::pair<std::string, std::uint64_t>>& mapBakes = {},
-    const std::vector<MaterialImageKey>& images = {})
+  // S2.3: one image per work item, then the budget (S2.4)
+  void imageItem(const MaterialImageKey& key)
   {
+    if (stopping())
+    {
+      return;
+    }
+    if (lookUpImage(key))
+    {
+      keepImageBudget();
+      publish();
+    }
+  }
+
+  /**
+   * S2.3: names from the lookup queues (materials, then entityDefs) until about a step's
+   * time has passed or StepNames are done; the rest stays queued, and what was done is
+   * published.
+   */
+  void lookUpStep()
+  {
+    const auto deadline = Clock::now() + StepTime;
     auto changed = false;
-    for (const auto& [path, ticket] : mapBakes)
+    for (auto taken = 0;; ++taken)
     {
-      if (stopping())
+      if (stopping() || (taken > 0 && (Clock::now() >= deadline || taken >= StepNames)))
       {
-        return;
+        break;
       }
-      loadMapBake(path, ticket);
-      changed = true;
-    }
-    for (const auto& name : names)
-    {
-      if (stopping())
+      if (auto name = takeName(m_shared.lookups, m_shared.queuedLookups))
       {
-        return;
+        // the next build looks it up again, also after a failed one
+        m_requestedNames.insert(*name);
+        // W.4: without a registry the lookup fails at once, so no caller waits for it
+        changed = (m_decls ? lookUpOne(*name) : setSlot(*name, failedSlot())) || changed;
+        continue;
       }
-      // the next build looks it up again, also after a failed one
-      m_requestedNames.insert(name);
-      // W.4: without a registry the lookup fails at once, so no caller waits for it
-      changed = (m_decls ? lookUpOne(name) : setSlot(name, failedSlot())) || changed;
-    }
-    for (const auto& name : entityDefNames)
-    {
-      if (stopping())
+      if (
+        auto name = takeName(m_shared.entityDefLookups, m_shared.queuedEntityDefLookups))
       {
-        return;
+        m_requestedEntityDefs.insert(*name);
+        changed = (m_decls ? lookUpEntityDef(*name)
+                           : setEntityDefSlot(*name, failedEntityDefSlot()))
+                  || changed;
+        continue;
       }
-      m_requestedEntityDefs.insert(name);
-      changed =
-        (m_decls ? lookUpEntityDef(name) : setEntityDefSlot(name, failedEntityDefSlot()))
-        || changed;
-    }
-    for (const auto& key : images)
-    {
-      if (stopping())
-      {
-        return;
-      }
-      changed = lookUpImage(key) || changed;
+      break;
     }
     if (changed)
     {
@@ -1393,17 +1781,21 @@ private:
   void poll()
   {
     m_nextPoll = Clock::now() + m_shared.options.pollInterval;
-    if (m_source && looseStamp(*m_source) != m_stamp)
+    if (m_source)
     {
-      // a changed loose file: one build, at most once per autoReloadInterval
-      requestAutoReload();
+      // S2.2: a new round of the loose folders' listings, so that new files are seen
+      m_source->looseFilesMayHaveChanged();
+      if (looseStamp(*m_source) != m_stamp)
+      {
+        // a changed loose file: one build, at most once per autoReloadInterval
+        requestAutoReload();
+      }
     }
     // C10, §3.7: a bake file that changed (or failed to parse and changed since) is read
     // again; LP1c.2 (C21): so is an image slot or an editor-image size whose loose file
-    // changed
-    const auto bakes = pollMapBakes();
-    const auto images = pollImageFiles();
-    if (bakes || images)
+    // changed, or (S2.5) whose missing file appeared
+    pollMapBakes();
+    if (pollImageFiles())
     {
       publish();
     }
@@ -1420,7 +1812,7 @@ private:
       m_bulkStarted = Clock::now();
     }
 
-    const auto deadline = Clock::now() + BulkStepTime;
+    const auto deadline = Clock::now() + StepTime;
     auto changed = false;
     while (!stopping() && Clock::now() < deadline)
     {
@@ -1428,14 +1820,17 @@ private:
       {
         const auto index = m_bulkMaterial++;
         const auto result = m_decls->lookupIndex(index);
-        auto slot = std::make_shared<MaterialSlot>();
+        // S2.2: the bulk parse measures nothing; a later lookup of the name queues it
+        auto slot = std::shared_ptr<const MaterialSlot>{};
         if (result)
         {
-          slot->entry = sized(*result.value);
+          slot = firstSlot(*result.value);
         }
         else
         {
-          slot->error = result.error;
+          auto failed = std::make_shared<MaterialSlot>();
+          failed->error = result.error;
+          slot = std::move(failed);
         }
         changed = setSlot(m_decls->materialName(index), std::move(slot)) || changed;
       }
@@ -1528,6 +1923,20 @@ MaterialLookup MaterialService::lookup(const std::string_view name)
 {
   if (const auto slot = table()->find(name))
   {
+    // S2.2: a slot whose editor-image size is not measured yet (the bulk parse made it)
+    // has its measure queued
+    if (slot->entry && !slot->sizeMeasured)
+    {
+      auto queued = false;
+      {
+        auto lock = std::scoped_lock{m_shared->mutex};
+        queued = m_shared->queueMeasure(slot->entry->name);
+      }
+      if (queued)
+      {
+        m_shared->requested.notify_one();
+      }
+    }
     return slot->entry
              ? MaterialLookup{MaterialLookup::State::Ready, slot->entry, {}}
              : MaterialLookup{MaterialLookup::State::Failed, nullptr, slot->error};
@@ -1654,6 +2063,12 @@ ImageLookup MaterialService::image(const MaterialImageKey& key)
 {
   if (const auto slot = table()->findImage(key))
   {
+    if (slot->image)
+    {
+      // S2.4: its data is taken, so the budget may drop it from the table
+      auto lock = std::scoped_lock{m_shared->mutex};
+      m_shared->takenImages.insert(key);
+    }
     if (slot->state == ImageCacheSlot::State::Ready)
     {
       return ImageLookup{ImageLookup::State::Ready, slot->image, slot};

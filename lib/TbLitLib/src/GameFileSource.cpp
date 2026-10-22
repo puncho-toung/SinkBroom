@@ -42,6 +42,7 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <cwctype>
 #include <exception>
 #include <unordered_map>
 #include <unordered_set>
@@ -180,12 +181,56 @@ struct GameFileSource::Pk4
 struct GameFileSource::Resources
 {
   ResourceContainer container;
-  // open during a read batch only
+  // open during a read batch only (S2.2: statted once, when it is opened)
   std::optional<GameFile> open;
+};
+
+struct GameFileSource::LooseFolder
+{
+  // the folder's time when it was listed, and whether it was there
+  std::filesystem::file_time_type time{};
+  bool exists = false;
+  // its entries' names, case-folded
+  std::unordered_set<std::filesystem::path::string_type> names;
+  // the round of polls it was last looked at in
+  std::uint64_t round = 0;
 };
 
 namespace
 {
+
+/**
+ * LP1c fix (S2.2): a name as the loose file system compares it: on Windows without case
+ * (each UTF-16 unit through towlower, as the file system's upcase table folds the usual
+ * scripts), elsewhere ASCII case, which the engine's OpenOSFile fallback ignores within a
+ * folder.
+ */
+std::filesystem::path::string_type foldedName(std::filesystem::path::string_type name)
+{
+#if defined(_WIN32)
+  for (auto& c : name)
+  {
+    c = wchar_t(std::towlower(std::wint_t(c)));
+  }
+#else
+  for (auto& c : name)
+  {
+    c = toLowerAscii(c);
+  }
+#endif
+  return name;
+}
+
+// a folder path as the index keys it: on Windows case-folded, elsewhere as it is (the
+// fallback looks only in the folder the path names)
+std::filesystem::path::string_type folderKey(const std::filesystem::path& folder)
+{
+#if defined(_WIN32)
+  return foldedName(folder.lexically_normal().native());
+#else
+  return folder.lexically_normal().native();
+#endif
+}
 
 Result<std::unique_ptr<fs::ZipFileSystem>> openZip(const std::filesystem::path& path)
 {
@@ -400,7 +445,7 @@ std::optional<std::string> GameFileSource::readLoose(
   {
     return std::nullopt;
   }
-  const auto file = findLooseFile(m_base / *relative);
+  const auto file = looseFile(*relative);
   if (!file)
   {
     return std::nullopt;
@@ -518,26 +563,35 @@ std::optional<std::string> GameFileSource::read(
       continue;
     }
 
-    // the container stays open for the read batch (closeFiles)
+    // the container stays open for the read batch (closeFiles); S2.2: whether it changed
+    // since its table was read is looked at once, when it is opened
     const auto openContainer = [&]() -> Result<void> {
       if (resources.open)
       {
         return kdl::void_success;
       }
-      return GameFile::open(resources.container.path())
-             | kdl::transform([&](GameFile file) { resources.open = std::move(file); });
+      return resources.container.unchanged()
+             | kdl::or_else([&](const auto& e) -> Result<void> {
+                 return Error{
+                   fmt::format("{}; '{}' is not read from it", e.msg, entry->name)};
+               })
+             | kdl::and_then([&]() {
+                 return GameFile::open(resources.container.path())
+                        | kdl::transform(
+                          [&](GameFile file) { resources.open = std::move(file); });
+               });
     };
-    auto text = openContainer() | kdl::and_then([&]() {
-                  return resources.container.read(*entry, *resources.open, maxBytes);
-                })
-                | kdl::transform([](std::string bytes) {
-                    return std::optional<std::string>{std::move(bytes)};
-                  })
-                | kdl::transform_error([&](const auto& e) {
-                    m_warnings.push_back(e.msg);
-                    return std::optional<std::string>{};
-                  })
-                | kdl::value();
+    auto text =
+      openContainer() | kdl::and_then([&]() {
+        return resources.container.readOpened(*entry, *resources.open, maxBytes);
+      })
+      | kdl::transform(
+        [](std::string bytes) { return std::optional<std::string>{std::move(bytes)}; })
+      | kdl::transform_error([&](const auto& e) {
+          m_warnings.push_back(e.msg);
+          return std::optional<std::string>{};
+        })
+      | kdl::value();
     if (text && found)
     {
       // an inner resource has time 0 (idFile_InnerResource)
@@ -575,7 +629,66 @@ std::optional<std::string> GameFileSource::readGameFileHead(
   return read(path, found, false, maxBytes);
 }
 
-GameFileProbe GameFileSource::probeFile(const std::string& path) const
+GameFileSource::LooseFolder& GameFileSource::looseFolder(
+  const std::filesystem::path& folder)
+{
+  auto& entry = m_looseFolders[folderKey(folder)];
+  const auto listed = entry.round != 0;
+  if (listed && entry.round == m_looseRound + 1)
+  {
+    return entry;
+  }
+
+  // a new round (or the first look): the folder's time, and its names again when it
+  // changed
+  const auto path = m_base / folder;
+  auto ec = std::error_code{};
+  const auto time = std::filesystem::last_write_time(path, ec);
+  const auto exists = !ec && std::filesystem::is_directory(path, ec) && !ec;
+  if (!listed || exists != entry.exists || (exists && time != entry.time))
+  {
+    entry.names.clear();
+    entry.exists = exists;
+    entry.time = exists ? time : std::filesystem::file_time_type{};
+    if (exists)
+    {
+      auto listError = std::error_code{};
+      for (auto it = std::filesystem::directory_iterator{path, listError};
+           !listError && it != std::filesystem::directory_iterator{};
+           it.increment(listError))
+      {
+        entry.names.insert(foldedName(it->path().filename().native()));
+      }
+    }
+  }
+  entry.round = m_looseRound + 1;
+  return entry;
+}
+
+std::optional<std::filesystem::path> GameFileSource::looseFile(
+  const std::filesystem::path& relative)
+{
+  try
+  {
+    const auto& folder = looseFolder(relative.parent_path());
+    if (!folder.names.contains(foldedName(relative.filename().native())))
+    {
+      return std::nullopt;
+    }
+  }
+  catch (...)
+  {
+    // a folder that cannot be listed is looked at as before
+  }
+  return findLooseFile(m_base / relative);
+}
+
+void GameFileSource::looseFilesMayHaveChanged()
+{
+  ++m_looseRound;
+}
+
+GameFileProbe GameFileSource::probeFile(const std::string& path)
 {
   const auto relative = checkedRelativePath(path);
   if (!relative)
@@ -586,7 +699,7 @@ GameFileProbe GameFileSource::probeFile(const std::string& path) const
   // the loose file, statted: its body is not opened
   if (const auto relativePath = pathFromUtf8(*relative))
   {
-    if (const auto file = findLooseFile(m_base / *relativePath))
+    if (const auto file = looseFile(*relativePath))
     {
       if (const auto stat = statGameFile(*file))
       {
@@ -794,7 +907,7 @@ std::size_t GameFileSource::containerCount() const
   return m_pk4s.size() + m_resources.size();
 }
 
-std::optional<GameFileOrigin> GameFileSource::origin(const std::string& path) const
+std::optional<GameFileOrigin> GameFileSource::origin(const std::string& path)
 {
   const auto found = probeFile(path);
   switch (found.kind)

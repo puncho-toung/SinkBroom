@@ -116,7 +116,7 @@ std::vector<float> hdrRows(const int width, const int height)
   {
     for (auto c = 0; c < 3; ++c)
     {
-      rgb.push_back(HdrRgb[std::size_t((3 * i + c) % HdrRgb.size())]);
+      rgb.push_back(HdrRgb[std::size_t(3 * i + c) % HdrRgb.size()]);
     }
   }
   return rgb;
@@ -236,6 +236,56 @@ TEST_CASE("Image files, the loader pre-validation (D51)")
     CHECK(problemOf("a.png", "\x89PNG but not one"));
   }
 
+  SECTION("PNG and JPG by their content, as stb_image decodes them (S3.3)")
+  {
+    // a .png holding a JPEG, a .jpg holding a PNG: checked by the JPEG and PNG rules
+    CHECK_FALSE(problemOf("a.png", greyJpgFile(8, 8)));
+    CHECK_FALSE(problemOf("a.jpg", pngFile(image)));
+    CHECK(problemOf("a.png", greyJpgFile(4096, 4096, 1)));
+    // stb_image's other formats in a .png: a TGA, read by stb_image's own TGA decoder
+    CHECK_FALSE(problemOf("a.png", tgaFile(image, 32)));
+    CHECK(isStbLoaderFile("textures/a.PNG"));
+    CHECK_FALSE(isStbLoaderFile("textures/a.tga"));
+  }
+
+  SECTION("headers from a file's first bytes (S2.2)")
+  {
+    const auto check = [](
+                         const std::string& path,
+                         const std::string& bytes,
+                         const std::size_t head,
+                         const int width,
+                         const int height) {
+      CAPTURE(path, head);
+      const auto header = imageFileHeadHeader(
+        path, bytes.substr(0, std::min(head, bytes.size())), bytes.size());
+      INFO(header.problem.value_or(""));
+      CHECK_FALSE(header.problem);
+      CHECK_FALSE(header.needsMore);
+      CHECK(header.width == width);
+      CHECK(header.height == height);
+    };
+    check("a.tga", tgaFile(image, 32), 18, 6, 5);
+    check("a.tga", rleTgaFile(image, 32), 18, 6, 5);
+    check("a.png", pngFile(image), 33, 6, 5);
+    check("a.jpg", greyJpgFile(40, 24), 4096, 40, 24);
+    check("a.png", greyJpgFile(40, 24), 4096, 40, 24);
+    check("a.hdr", hdrFile(8, 2, hdrRows(8, 2)), 4096, 8, 2);
+    check("a.exr", exrFile(3, 2, hdrRows(3, 2)), 4096, 3, 2);
+
+    // a header that goes on beyond the bytes given asks for more
+    const auto jpg = greyJpgFile(40, 24);
+    CHECK(imageFileHeadHeader("a.jpg", jpg.substr(0, 10), jpg.size()).needsMore);
+    CHECK(imageFileHeadHeader("a.tga", tgaFile(image).substr(0, 10), 200).needsMore);
+    // the header's own rules and the length a header tells
+    auto sixteen = tgaFile(image, 32);
+    sixteen[16] = 16;
+    CHECK(imageFileHeadHeader("a.tga", sixteen.substr(0, 18), sixteen.size()).problem);
+    const auto tga = tgaFile(image, 32);
+    CHECK(imageFileHeadHeader("a.tga", tga.substr(0, 18), tga.size() - 7).problem);
+    CHECK(imageFileHeadHeader("a.tga", "", 0).problem);
+  }
+
   SECTION("JPG: the frame header, the segments and scans to EOI, the declared size")
   {
     CHECK_FALSE(problemOf("a.jpg", greyJpgFile(8, 8)));
@@ -265,6 +315,13 @@ TEST_CASE("Image files, the loader pre-validation (D51)")
     auto badLength = rle;
     badLength[rle.find("+X 8\n") + 5 + 3] = 9;
     CHECK(problemOf("a.hdr", badLength));
+    // S2.4: a float format holds a quarter of the pixels (4097 x 4096 is beyond it)
+    CHECK_THAT(
+      *problemOf("a.hdr", "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 4097 +X 4096\n"),
+      Catch::Matchers::ContainsSubstring("more than the preview loads"));
+    CHECK_THAT(
+      *problemOf("a.hdr", "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 4096 +X 4096\n"),
+      Catch::Matchers::ContainsSubstring("cut short"));
   }
 
   SECTION("EXR: tinyexr's header parse, the channels and the offset table")
@@ -325,6 +382,10 @@ TEST_CASE("Image files, the copied loaders behind the pre-validation (D51, S14)"
   game.file("empty.tga", "");
   game.file("ten.jpg", greyJpgFile(4096, 4096, 1));
   game.file("cut.jpg", greyJpgFile(8, 8).substr(0, 10));
+  // S3.3: a .png holding a JPEG, and a refused .png with a .tga beside it
+  game.file("jpeg_in.png", greyJpgFile(10, 1));
+  game.file("fall.png", lying);
+  game.file("fall.tga", tgaFile(image, 32));
 
   auto source = GameFileSource{game.path()};
   auto decls = MaterialDecls{source};
@@ -373,17 +434,9 @@ TEST_CASE("Image files, the copied loaders behind the pre-validation (D51, S14)"
     }
   }
 
-  SECTION("bad files are the default, with one warning naming the file")
+  SECTION("bad TGA files are the default, with one warning naming the file")
   {
-    for (const auto* file :
-         {"truncated",
-          "sixteen",
-          "garbage",
-          "oversized",
-          "lying.png",
-          "empty",
-          "ten.jpg",
-          "cut.jpg"})
+    for (const auto* file : {"truncated", "sixteen", "garbage", "oversized", "empty"})
     {
       CAPTURE(file);
       const auto loaded = loadFrom(decls, file, UsageDiffuse);
@@ -396,6 +449,46 @@ TEST_CASE("Image files, the copied loaders behind the pre-validation (D51, S14)"
       CHECK_THAT(
         loaded.warnings.front(), Catch::Matchers::ContainsSubstring("the default image"));
     }
+  }
+
+  SECTION("a bad PNG or JPG is stb_image's failure: the next extension is tried (S3.3)")
+  {
+    for (const auto* file : {"lying.png", "ten.jpg", "cut.jpg"})
+    {
+      CAPTURE(file);
+      const auto loaded = loadFrom(decls, file, UsageDiffuse);
+      CHECK_FALSE(loaded.load.pixels);
+      REQUIRE(loaded.load.rejected.size() == 1u);
+      // the engine's own warning for the failed load, then the refusal
+      REQUIRE(loaded.warnings.size() == 2u);
+      CHECK_THAT(
+        loaded.warnings.front(),
+        Catch::Matchers::ContainsSubstring("Couldn't load image"));
+      CHECK_THAT(
+        loaded.warnings.back(),
+        Catch::Matchers::ContainsSubstring(std::string{"textures/lp1c/"} + file));
+      CHECK_THAT(
+        loaded.warnings.back(), Catch::Matchers::ContainsSubstring("next extension"));
+    }
+
+    // a refused .png with a .tga beside it loads the .tga, as the engine's loop does
+    const auto fall = loadFrom(decls, "fall.png", UsageDiffuse);
+    INFO(fall.load.error);
+    REQUIRE(fall.load.pixels);
+    CHECK(fall.load.pixels->pixels == image.pixels);
+    CHECK(fall.load.rejected.size() == 1u);
+    CHECK(fall.load.pixels->files.back().path == "textures/lp1c/fall.tga");
+  }
+
+  SECTION("a .png holding a JPEG loads (S3.3)")
+  {
+    const auto loaded = loadFrom(decls, "jpeg_in.png", UsageDefault);
+    INFO(loaded.load.error);
+    REQUIRE(loaded.load.pixels);
+    CHECK(loaded.load.pixels->width == 10);
+    CHECK(loaded.load.pixels->height == 1);
+    CHECK(loaded.load.pixels->pixels == greyOf(flat(10, 1, 128, 0, 0)));
+    CHECK(loaded.load.rejected.empty());
   }
 
   SECTION("a missing image gives the engine's warning")
