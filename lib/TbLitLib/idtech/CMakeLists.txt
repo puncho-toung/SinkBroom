@@ -22,6 +22,9 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_ENGINE_DIR}/idlib/containers/HashIndex.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/DrawVert.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/JointTransform.cpp
+    # includes "../ParallelJobList_JobHeaders.h", which resolves to the shim's stand-in
+    # through the shim/private include folder (shim/ParallelJobList_JobHeaders.h)
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/RenderMatrix.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/Surface.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/Surface_Patch.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/Winding.cpp
@@ -43,6 +46,7 @@ target_sources(TbLitIdLib
 
     ${TB_LIT_ID_SHIM_DIR}/src/DeclManagerShim.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineGeometry.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/EngineLight.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineLexer.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineMessages.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/MaterialDecls.cpp
@@ -50,6 +54,7 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_SHIM_DIR}/src/ShimFramework.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimLib.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimRenderer.cpp
+    ${TB_LIT_ID_SHIM_DIR}/ParallelJobList_JobHeaders.h
     ${TB_LIT_ID_SHIM_DIR}/private/precompiled.h
     ${TB_LIT_ID_SHIM_DIR}/private/RenderCommon.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/EngineMessages.h
@@ -63,6 +68,7 @@ target_sources(TbLitIdLib
     BASE_DIRS ${TB_LIT_ID_SHIM_DIR}/include
     FILES
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineGeometry.h
+      ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineLight.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineLexer.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/MaterialDecls.h
 )

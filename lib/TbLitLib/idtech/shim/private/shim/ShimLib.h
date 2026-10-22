@@ -135,6 +135,7 @@ extern const idSIMDProcessor* const SIMDProcessor;
 #include "idlib/bv/Bounds.h"
 
 // geometry
+#include "idlib/geometry/RenderMatrix.h"
 #include "idlib/geometry/JointTransform.h"
 #include "idlib/geometry/DrawVert.h"
 #include "idlib/geometry/Winding.h"

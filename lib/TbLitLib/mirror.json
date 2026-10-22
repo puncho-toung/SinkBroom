@@ -8052,6 +8052,249 @@
         }
       ],
       "note": "K17: a brush entity's primitives show only when name and model are set and equal (case-insensitively): dmap names the model by name, the game draws the model key; forceEntityNames is not applied. A brush entity's chunks take the area of its pivot (PointInArea), where the game references the entity in every area its bounds touch (LP4); a node is chunked in the 1024-unit cell of its vertices' centroid"
+    },
+    {
+      "id": "M-LIGHT-COPY-01",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.h",
+          "lines": [
+            1,
+            567
+          ],
+          "anchor": "whole file",
+          "sha256": "821cccd80a2d5071a704494294187495e343327ef49b001a677b0f3d39e1f83f",
+          "gitBlob": "f3c6a3db4095e09b71c3d5c86ed4196990dc1043"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/geometry/RenderMatrix.h"
+        }
+      ],
+      "note": "copied whole and byte for byte with git show (LP1b.3, D58, C24); the copy's git blob id equals gitBlob. The engine keeps it in idlib/geometry, not idlib/math as the package plan names it, and the copy keeps the engine's path. The shim's ShimLib.h includes it in idlib/Lib.h's order, before JointTransform.h"
+    },
+    {
+      "id": "M-LIGHT-COPY-02",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            1,
+            4702
+          ],
+          "anchor": "whole file",
+          "sha256": "eed935f91c77c8b0baeb949efa76ad6e43809a4fc84ecac3f3b83024c8ce67e9",
+          "gitBlob": "df67aedf20e041c350e10b78b835602ffe5825ec"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/geometry/RenderMatrix.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte with git show (LP1b.3, D58, C24); the copy's git blob id equals gitBlob. Compiled as its own translation unit with USE_INTRINSICS_SSE (M-ID-BUILD-01), so its SSE paths are the ones the engine runs; CLIP_SPACE_D3D is defined by the file itself (clip z 0..1). Its closure is in the copy already: math/Math, Vector, Matrix, Rotation, Plane, bv/Sphere, Bounds (LP1a, LP1b.2) and sys_intrinsics.h's __m128c, _mm_madd_ps, _mm_splat_ps, _mm_perm_ps, _mm_sel_ps, _mm_rcp32_ps and _mm_loadu_bounds_0/1; its one other include is the shim's stand-in (M-LIGHT-NC-01)"
+    },
+    {
+      "id": "M-LIGHT-NC-01",
+      "kind": "not-copied",
+      "engine": [
+        {
+          "file": "neo/idlib/ParallelJobList_JobHeaders.h",
+          "lines": [
+            1,
+            89
+          ],
+          "anchor": "whole file",
+          "sha256": "0177fa3d1ad4dec4d0cdecd04e70383f1a227fc9affe7b3c3067bacfa436ecd5"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            30,
+            38
+          ],
+          "anchor": "RenderMatrix.cpp's includes",
+          "sha256": "9652fa3868062cadd5c639ac1df452c8787327ab827ffeaf0473150b6ec28f6c"
+        },
+        {
+          "file": "neo/CMakeLists.txt",
+          "lines": [
+            1318,
+            1325
+          ],
+          "anchor": "-include idlib/precompiled.h (GCC, Clang)",
+          "sha256": "bd4151c920378676aa8db4be8ed7535d1f80020ee84cfa45811ba4fd0c7c52a3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/ParallelJobList_JobHeaders.h"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimLib.h",
+          "symbol": "#include \"idlib/geometry/RenderMatrix.h\""
+        }
+      ],
+      "note": "RenderMatrix.cpp includes \"../ParallelJobList_JobHeaders.h\", which pulls in ParallelJobList.h (the job system, never used by the copy). The stand-in is reached through the shim/private include folder and includes the shim's precompiled.h, as the engine's GCC and Clang builds force-include idlib/precompiled.h before every file; the copy's own includes are then skipped by their guards"
+    },
+    {
+      "id": "M-LIGHT-POOL-01",
+      "kind": "pool-safe",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            611,
+            632
+          ],
+          "anchor": "idRenderMatrix::CreateFromOriginAxis",
+          "sha256": "966f663680a916dc33e0431511203a56ab157d76a2bedcd70bb2734bba063250"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            997,
+            1070
+          ],
+          "anchor": "idRenderMatrix::Multiply",
+          "sha256": "58115cadc97cf1624277a2333090e813c4d38bd2efd5f0afc17003e50f2cc35c"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            1087,
+            1279
+          ],
+          "anchor": "idRenderMatrix::Inverse",
+          "sha256": "951c4da3cf3a25182fffc9ff888fc5a8a27b8fe30fb24d0e3890a45ab70672af"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            2311,
+            2525
+          ],
+          "anchor": "idRenderMatrix::ProjectedBounds",
+          "sha256": "67f6ef1f994ede16457302929dc2019c8a831156c0ce96d8ffb5fa95dc260430"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            4522,
+            4629
+          ],
+          "anchor": "idRenderMatrix::GetFrustumCorners",
+          "sha256": "9efc60fc942c98c9078479f20ab523efd5f6d11a24a59aa304808b5929dc1d7f"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            4636,
+            4702
+          ],
+          "anchor": "idRenderMatrix::CullFrustumCornersToPlane",
+          "sha256": "a700607ebc28f386ea6dcdd9e6d259bc22dbcf2b49f967fdc165e7ea9d90c1f1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineMatrixFromOriginAxis, engineMatrixMultiply, engineMatrixInverse, engineProjectedBounds, engineFrustumCorners, engineCullFrustumCorners"
+        }
+      ],
+      "commonCalls": [
+        "none: RenderMatrix.h and RenderMatrix.cpp call neither common nor idLib::common, and hold no FatalError site"
+      ],
+      "asserts": [
+        "RenderMatrix.h:68, :73 operator[]'s index (0 to 3 at every call site)",
+        "RenderMatrix.cpp:4524, :4638 assert_16_byte_aligned of the corners (the facade passes ALIGNTYPE16 copies, as PushFrustumIntoTree does)",
+        "RenderMatrix.cpp:4617 the generic path's w (not compiled: USE_INTRINSICS_SSE)"
+      ],
+      "note": "C24: the six functions read only their arguments and the file's constant statics (M-LIGHT-STATIC-01..03), write only their outputs, allocate nothing and call no SIMDProcessor; any thread, the CPU pool included. Inverse, ProjectedBounds and GetFrustumCorners divide through _mm_rcp32_ps (two Newton steps on _mm_rcp_ps), whose 12-bit estimate is the CPU's own (Intel and AMD differ), so their last bits are the engine's on the same CPU only. Inverse leaves its output unwritten when it fails; the facade zeroes it first and returns null"
+    },
+    {
+      "id": "M-LIGHT-STATIC-01",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            69,
+            106
+          ],
+          "anchor": "renderMatrix_identity, _flipToOpenGL, _windowSpaceToClipSpace, _clipSpaceToWindowSpace, _fullscreen",
+          "sha256": "bab467c743216c1fb2674d56149ab77a01ed3f70feba3d22e5ec718ca566ec4c"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "built by the ID_INLINE constructor from literals: initialised at program load (or constant-initialised, where the compiler folds the constructor) before any thread starts, without allocating or reading another file's statics; read-only"
+    },
+    {
+      "id": "M-LIGHT-STATIC-02",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            117,
+            141
+          ],
+          "anchor": "the SIMD constants (vector_int_*, vector_float_*)",
+          "sha256": "7b9d12819315b8aa96011422d4983234a383749e74ba594ac7696e9693f32eb4"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "C24 (5): the brace-initialised __m128 constants are constant-initialised; the _mm_set*_epi32 and __m128c( ... ) ones are not constant expressions, so they are initialised at program load from literals, before any thread starts, without allocating or reading another file's statics; all are file-local and read-only"
+    },
+    {
+      "id": "M-LIGHT-STATIC-03",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            168,
+            190
+          ],
+          "anchor": "boxPolygonVertices, boxEdgeVertices, boxEdgePolygons",
+          "sha256": "012f8df6ad0d101e5de009029fd97e27de861d8bdcacdd8578175b063dee436f"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            230,
+            300
+          ],
+          "anchor": "boxFrontPolygonsForFrontBits",
+          "sha256": "676c88ba65b826abef4408fac18fbefeab405475da776229df14aaf7f087846f"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            343,
+            413
+          ],
+          "anchor": "boxSilhouetteEdgesForFrontBits",
+          "sha256": "1201ba43bdaa755555edd1c4175012b8169b56b4425107d4d47d80edbd8212d3"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            481,
+            551
+          ],
+          "anchor": "boxSilhouetteVerticesForFrontBits",
+          "sha256": "9289ae0bcebca29597e22301fab5d5ff0afee0589a2171291ba56093d1aea1e8"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "constant aggregates; boxEdgePolygons is not const, but only the commented-out generators name it, so nothing writes it"
     }
   ],
   "retired": [
