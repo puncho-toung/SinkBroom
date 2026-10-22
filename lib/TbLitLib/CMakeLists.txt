@@ -28,6 +28,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LiveSession.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MaterialService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/NumberText.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NvrhiSupport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ProcFile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Projection.cpp
@@ -66,6 +67,15 @@ target_link_libraries(TbLitLib
     nvrhi_vk
     WrapVulkanHeaders::WrapVulkanHeaders
 )
+
+# R1.1: AppleClang's libc++ has no floating-point std::from_chars; lit/NumberText.h uses
+# fast_float's there, as KdLib does (cmake/Dependencies.cmake adds it for AppleClang)
+if (CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+  target_link_libraries(TbLitLib
+    PRIVATE
+      FastFloat::fast_float
+  )
+endif()
 
 # TbLitIdLib is public for its std-only facade, lit/MaterialDecls.h, which
 # lit/MaterialService.h and lit/GameDeclSource.h include. Its shim headers (precompiled.h,

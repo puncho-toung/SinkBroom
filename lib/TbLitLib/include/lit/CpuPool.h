@@ -89,10 +89,12 @@ struct CpuJobValue<Result<T>>
  * A session's private CPU pool (§3.1, S3, R5.12, R5.22, D66): two worker threads of its
  * own, each a StackThread with an 8 MB stack on every platform (G13; so K19's macOS
  * stack limit does not apply to the pool), and one task queue, never the document's
- * thread pool. The session makes it at Start phase B and stops it in teardown step 1,
- * after the render thread is joined; stopping bumps its generation, drops the queued
- * tasks and joins the threads. A pool whose second thread cannot be made stops and joins
- * the first and is not created: nothing ends the process.
+ * thread pool. The session makes it at Start phase B. Teardown step 1 cancels it when
+ * the stop is requested (R2.1: its generation bumped, no join, so the queued jobs return
+ * at once and the running ones at their next check of stale) and stops it after the
+ * render thread is joined; stopping bumps its generation again, drops the queued tasks
+ * and joins the threads. A pool whose second thread cannot be made stops and joins the
+ * first and is not created: nothing ends the process.
  *
  * Jobs hold their inputs by shared_ptr and never the session or the pool; they look at
  * context.stale() and return early when it is set. They never touch the NVRHI device:
@@ -209,6 +211,8 @@ private:
     std::condition_variable wake;
     std::deque<std::unique_ptr<Task>> queue;
     bool stopping = false;
+    // cancel: the queued tasks still run (abandoned at once), no new task is taken
+    bool cancelled = false;
     std::array<std::thread::id, ThreadCount> threads{};
   };
 
@@ -220,7 +224,7 @@ private:
 
   Result<void> startThreads();
   void work(std::size_t index) noexcept;
-  // queues the task; false once the pool is stopped
+  // queues the task; false once the pool is cancelled or stopped
   bool post(std::unique_ptr<Task> task);
 
 public:
@@ -256,6 +260,13 @@ public:
     return future;
   }
 
+  /**
+   * R2.1: bumps the generation without joining, so every job made so far is stale: the
+   * queued ones return "abandoned" without running their callable, the running ones at
+   * their next check, and every future of them is ready soon without a join; later jobs
+   * are refused. Any thread, also one that a job waits for.
+   */
+  void cancel();
   // bumps the generation, drops the queued tasks and joins the threads
   void stop();
   bool stopped() const;

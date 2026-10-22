@@ -32,6 +32,7 @@
 #include "lit/ChunkBuilder.h"
 
 #include "lit/AreaTree.h"
+#include "lit/CpuPool.h"
 #include "lit/MaterialService.h"
 #include "lit/ProcFile.h"
 
@@ -91,6 +92,12 @@ EngineVec3 toFloat(const vm::vec3d& v)
 EngineVec3 sub(const EngineVec3& a, const EngineVec3& b)
 {
   return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+}
+
+// R3.9: a vertex position as ParseModel reads back what dmap wrote (WriteFloat, idLexer)
+EngineVec3 readBack(const EngineVec3& xyz)
+{
+  return {procReadBack(xyz[0]), procReadBack(xyz[1]), procReadBack(xyz[2])};
 }
 
 // what a face needs of its material
@@ -180,15 +187,14 @@ struct Bucket
 // given, as TrenchBroom writes the keys first)
 EngineVec3 parseOriginOf(const SceneEntity& entity)
 {
-  auto origin = EngineVec3{};
-  spawnVector(entity.keys, "origin", "0 0 0", origin);
-  return origin;
+  return mapOrigin(entity.keys);
 }
 
 class Builder
 {
 private:
   const ChunkJobInput& m_input;
+  const CpuJobContext* m_context;
   ChunkJobOutput m_output;
   MaterialCache m_materials;
   std::string m_overrideMaterial;
@@ -199,8 +205,9 @@ private:
   std::set<CellRef> m_cells;
 
 public:
-  explicit Builder(const ChunkJobInput& input)
+  Builder(const ChunkJobInput& input, const CpuJobContext* context)
     : m_input{input}
+    , m_context{context}
     , m_materials{input.materials.get(), {}, {}}
   {
     m_cells.insert(input.cells.begin(), input.cells.end());
@@ -212,6 +219,11 @@ public:
     m_output.cells = m_input.cells;
     for (const auto& node : m_input.nodes)
     {
+      // R2.1: a cancelled pool's job stops here; its output is dropped
+      if (m_context && m_context->stale())
+      {
+        return std::move(m_output);
+      }
       if (!node || !node->visible)
       {
         continue;
@@ -260,15 +272,8 @@ private:
     {
       return;
     }
+    m_removedClasses = removedClassnames(m_input.worldspawn->keys);
     const auto merged = mergeSpawnArgs(m_input.worldspawn->keys, nullptr);
-    for (const auto& [key, value] : merged)
-    {
-      // MatchPrefix: idStr::Icmpn
-      if (startsWithNoCase(key, "removeEntities"))
-      {
-        m_removedClasses.push_back(value);
-      }
-    }
     if (const auto* material = findKey(merged, "overrideMaterial"))
     {
       m_override = true;
@@ -278,10 +283,7 @@ private:
 
   bool removed(const std::string& classname) const
   {
-    return std::any_of(
-      m_removedClasses.begin(), m_removedClasses.end(), [&](const std::string& c) {
-        return equalsNoCase(c, classname);
-      });
+    return isRemovedClassname(m_removedClasses, classname);
   }
 
   const EntityContext* contextOf(const PreviewId id)
@@ -471,8 +473,8 @@ private:
       engineValveTexCoord(parsed, face.texture, material.width, material.height);
     engineSetTexCoord(vert, st[0], st[1]);
     engineSetNormal(vert, {plane.a, plane.b, plane.c});
-    // dmap/output.cpp:589 WriteUTriangles( ..., entity->originOffset )
-    vert.xyz = sub(parsed, context.originOffset);
+    // dmap/output.cpp:589 WriteUTriangles( ..., entity->originOffset ), read back
+    vert.xyz = readBack(sub(parsed, context.originOffset));
     return vert;
   }
 
@@ -486,13 +488,6 @@ private:
       if (!material.drawn && !material.castsShadow)
       {
         continue;
-      }
-      if (material.entry && material.entry->mikktspace)
-      {
-        warnOnce(fmt::format(
-          "material {} asks for MikkTSpace tangents, which the preview does not make: "
-          "it uses the unsmoothed tangents",
-          material.name));
       }
       // ParseValve220: the plane from the three points relative to the origin;
       // FindFloatPlane fixes it
@@ -614,7 +609,7 @@ private:
           const auto corner = [&](const EngineVec3& xyz, const std::size_t index) {
             // a fragment's corners from the original's (TriVertsFromOriginal)
             auto vert = whole ? original[index] : engineVertFromOriginal(xyz, original);
-            vert.xyz = sub(xyz, context.originOffset);
+            vert.xyz = readBack(sub(xyz, context.originOffset));
             vert.color = {255, 255, 255, 255};
             vert.color2 = {0, 0, 0, 0};
             return vert;
@@ -700,8 +695,8 @@ private:
     const auto& material = *bucket.material;
     const auto& context = *bucket.entity;
 
-    // D59: st recentred per island, through SetTexCoord again (RenderWorld_load.cpp
-    // ParseModel)
+    // D59: st read back as ParseModel reads them (R3.9) and recentred per island,
+    // through SetTexCoord again (RenderWorld_load.cpp ParseModel)
     recentreTexCoords(verts, indexes);
 
     // Model.cpp:1252-1283 FinishSurfaces: a reversed copy for back sides, then each
@@ -1020,11 +1015,14 @@ CellCoord cellOfNode(const SceneNode& node)
 
 EngineTangentPath tangentPath(const MaterialEntry* material)
 {
-  // C25; Q18 answered 0: MikkTSpace is not copied, a material asking for it takes the
-  // unsmoothed path (M-ID-DIFF-04)
-  return material && (material->unsmoothedTangents || material->mikktspace)
-           ? EngineTangentPath::Unsmoothed
-           : EngineTangentPath::WithoutNormals;
+  // C25, tr_trisurf.cpp:1831-1839: unsmoothedTangents first; R3.11: mikktspace takes the
+  // engine's failure path, since MikkTSpace is not copied (Q18, M-ID-DIFF-04)
+  if (material && material->unsmoothedTangents)
+  {
+    return EngineTangentPath::Unsmoothed;
+  }
+  return material && material->mikktspace ? EngineTangentPath::Mikktspace
+                                          : EngineTangentPath::WithoutNormals;
 }
 
 std::string engineSideMaterial(const std::string& tbName)
@@ -1039,9 +1037,9 @@ std::string enginePatchMaterial(const std::string& tbName)
   return startsWithNoCase(tbName, "textures/") ? tbName : "textures/" + tbName;
 }
 
-ChunkJobOutput buildChunks(const ChunkJobInput& input)
+ChunkJobOutput buildChunks(const ChunkJobInput& input, const CpuJobContext* context)
 {
-  return Builder{input}.build();
+  return Builder{input, context}.build();
 }
 
 } // namespace tb::lit

@@ -31,6 +31,7 @@
 
 #include "lit/EngineGeometry.h"
 #include "lit/EngineLexer.h"
+#include "lit/NumberText.h"
 
 #include "kd/result.h"
 
@@ -333,6 +334,11 @@ float procFloat(const float value)
   return engineLexFloat(engineProcFloatText(value)).value_or(value);
 }
 
+float procReadBack(const float value)
+{
+  return lexerFloat(engineProcFloatText(value)).value_or(value);
+}
+
 } // namespace tb::lit
 
 namespace tb::lit
@@ -463,7 +469,11 @@ void recentreTexCoords(
   recentre(
     verts.size(),
     indexes,
-    [&](const std::size_t k) { return engineTexCoord(verts[k]); },
+    [&](const std::size_t k) {
+      // R3.9: the st dmap wrote (WriteFloat) as ParseModel reads them back
+      const auto st = engineTexCoord(verts[k]);
+      return EngineVec2{procReadBack(st[0]), procReadBack(st[1])};
+    },
     [&](const std::size_t k, const EngineVec2& st) {
       engineSetTexCoord(verts[k], st[0], st[1]);
     });

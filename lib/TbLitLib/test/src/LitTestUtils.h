@@ -21,8 +21,11 @@
 
 #include "lit/MaterialDecls.h"
 
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -69,5 +72,45 @@ std::vector<std::string> sortedEnginePaths(std::vector<std::string> paths);
 
 // the time after a write that a modification time can tell apart from the one before it
 void bumpModificationTime(const std::filesystem::path& path);
+
+/**
+ * Holds a material service's parse thread before it takes its next request while closed
+ * (MaterialServiceOptions::beforeTakeWorkForTesting calls pass): lookups queued then stay
+ * pending until it opens. A thread already inside its wait for a request takes one more.
+ */
+struct ParseGate
+{
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool closed = false;
+
+  void pass()
+  {
+    auto lock = std::unique_lock{mutex};
+    changed.wait(lock, [&] { return !closed; });
+  }
+
+  void close()
+  {
+    const auto lock = std::scoped_lock{mutex};
+    closed = true;
+  }
+
+  void open()
+  {
+    {
+      const auto lock = std::scoped_lock{mutex};
+      closed = false;
+    }
+    changed.notify_all();
+  }
+};
+
+// opens the gate when the test leaves, so that the service's join never waits for it
+struct OpenAtExit
+{
+  std::shared_ptr<ParseGate> gate;
+  ~OpenAtExit() { gate->open(); }
+};
 
 } // namespace tb::lit

@@ -191,6 +191,21 @@ TEST_CASE("LightRecord: the registry's records and versions (C15)")
     CHECK(latest->light.parms.origin == EngineVec3{2, 2, 2});
   }
 
+  SECTION("R3.12: worldspawn's removeEntities* removes the light, like every entity")
+  {
+    const auto world = snapshot.entities.front().id;
+    registry.takeSnapshot(
+      keysOnly(world, "worldspawn", {{"removeEntities1", "LIGHT"}}, 2), nullptr);
+    registry.finishForTesting();
+    CHECK_FALSE(registry.table()->find(id));
+
+    // the key goes: the light is back
+    registry.takeSnapshot(keysOnly(world, "worldspawn", {}, 3), nullptr);
+    registry.finishForTesting();
+    REQUIRE(registry.table()->find(id));
+    CHECK(registry.table()->find(id)->light.parms.origin == EngineVec3{64, 0, 96});
+  }
+
   SECTION("bad target info: a warning, a record without a volume")
   {
     registry.takeSnapshot(

@@ -47,8 +47,14 @@ std::filesystem::path litFixtureFolder();
  */
 Snapshot snapshotOfMapText(const std::string& text);
 
+// an axial box brush in the map's Valve 220 text, its faces with this material
+// (TrenchBroom's name) and plain axes: (p3 - p1) x (p2 - p1) is each face's outward
+// normal
+std::string boxBrush(
+  int x0, int y0, int z0, int x1, int y1, int z1, const std::string& material);
+
 // the lines of a captured listing (goldens/lp1b_geometry/listImages.txt) after "@@ map":
-// image name -> (width, height)
+// image name -> (width, height); CR before LF is ignored (R1.4)
 std::map<std::string, std::pair<int, int>> listImagesSizes(const std::string& text);
 
 /**

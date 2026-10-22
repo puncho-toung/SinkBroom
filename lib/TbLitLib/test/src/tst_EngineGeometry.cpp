@@ -20,8 +20,10 @@
 #include "lit/EngineGeometry.h"
 #include "lit/MaterialDecls.h"
 
+#include <algorithm>
 #include <cmath>
 #include <future>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -159,6 +161,9 @@ TEST_CASE("EngineGeometry: patches")
     REQUIRE(surface);
     CHECK(surface->verts.size() > 9u);
     CHECK(surface->indexes.size() % 3 == 0u);
+    // R1.3: the bound from the control points holds what Subdivide made
+    const auto [width, height] = patchSubdivisionBound(patch, 1000000);
+    CHECK(std::size_t(width * height) >= surface->verts.size());
   }
 
   SECTION("patchDef3 subdivides explicitly")
@@ -186,6 +191,45 @@ TEST_CASE("EngineGeometry: patches")
     huge.height = 3;
     huge.controlPoints.resize(303);
     CHECK_FALSE(engineSubdividePatch(huge, &error));
+  }
+
+  SECTION("R1.3: a subdivision that would overflow the stack is refused before it runs")
+  {
+    // rows and columns that swing by 512 units: each span's midpoint deviates by 256,
+    // three halvings, 785 × 785 vertices and 17 MB of GenerateEdgeIndexes' _alloca16
+    const auto swinging = [](const int side) {
+      auto swing = EnginePatch{};
+      swing.width = side;
+      swing.height = side;
+      for (auto i = 0; i < side; ++i)
+      {
+        for (auto j = 0; j < side; ++j)
+        {
+          swing.controlPoints.push_back(vertAt(
+            float(j) * 64,
+            float(j % 2 + i % 2) * 512.0f,
+            float(i) * 64,
+            float(j) * 0.5f,
+            float(i) * 0.5f));
+        }
+      }
+      return swing;
+    };
+    const auto big = swinging(99);
+    CHECK(patchSubdivisionBound(big, 1000000) == std::array<std::int64_t, 2>{785, 785});
+    auto error = std::string{};
+    CHECK_FALSE(engineSubdividePatch(big, &error));
+    CHECK(error.find("stack") != std::string::npos);
+
+    // the same swings on 9 × 9 control points are subdivided, within the bound
+    const auto small = swinging(9);
+    const auto [width, height] = patchSubdivisionBound(small, 1000000);
+    CHECK(width == 65);
+    CHECK(height == 65);
+    const auto surface = engineSubdividePatch(small, &error);
+    REQUIRE(surface);
+    CHECK(std::size_t(width * height) >= surface->verts.size());
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
   }
 }
 
@@ -222,6 +266,26 @@ TEST_CASE("EngineGeometry: triangle cleanup and tangents")
     const auto normal = engineNormal(result->verts[0]);
     CHECK(std::abs(std::abs(normal[2]) - 1.0f) < 0.01f);
     static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  }
+
+  SECTION("R3.11: mikktspace takes the engine's failure path, with its warning")
+  {
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    const auto mikk =
+      engineCleanupTriangles(verts, indexes, EngineTangentPath::Mikktspace);
+    const auto messages = drainEngineMessagesForThread(std::this_thread::get_id());
+    const auto plain =
+      engineCleanupTriangles(verts, indexes, EngineTangentPath::WithoutNormals);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    REQUIRE(mikk);
+    REQUIRE(plain);
+    CHECK(mikk->verts == plain->verts);
+    CHECK(mikk->indexes == plain->indexes);
+    CHECK(std::any_of(messages.begin(), messages.end(), [](const DeclMessage& m) {
+      return m.kind == DeclMessageKind::Warning
+             && m.text.find("Mikkelsen tangent space calculation failed")
+                  != std::string::npos;
+    }));
   }
 
   SECTION("an index out of range is refused")

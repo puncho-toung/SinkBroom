@@ -244,6 +244,15 @@ private:
     std::vector<std::string> procFiles;
   };
 
+  // R1.2: default-constructed, then the kind, so that a new member needs no initialiser
+  // here (-Wmissing-field-initializers)
+  static Work workOf(const WorkKind kind)
+  {
+    auto work = Work{};
+    work.kind = kind;
+    return work;
+  }
+
   Shared& m_shared;
   StackThread m_thread;
 
@@ -535,22 +544,22 @@ private:
   {
     if (stopping())
     {
-      return Work{WorkKind::Stop, {}, {}, {}};
+      return workOf(WorkKind::Stop);
     }
     if (m_shared.reloadRequested)
     {
       m_shared.reloadRequested = false;
       m_autoReloadPending = false;
-      return Work{WorkKind::Reload, {}, {}, {}};
+      return workOf(WorkKind::Reload);
     }
     if (m_autoReloadPending && Clock::now() >= autoReloadDue())
     {
       m_autoReloadPending = false;
-      return Work{WorkKind::AutoReload, {}, {}, {}};
+      return workOf(WorkKind::AutoReload);
     }
     if (!m_shared.evaluations.empty())
     {
-      auto work = Work{WorkKind::Evaluate, {}, {}, {}};
+      auto work = workOf(WorkKind::Evaluate);
       work.evaluations.assign(m_shared.evaluations.begin(), m_shared.evaluations.end());
       m_shared.evaluations.clear();
       m_shared.queuedEvaluations.clear();
@@ -560,7 +569,7 @@ private:
       !m_shared.lookups.empty() || !m_shared.entityDefLookups.empty()
       || !m_shared.procFiles.empty())
     {
-      auto work = Work{WorkKind::Lookup, {}, {}, {}};
+      auto work = workOf(WorkKind::Lookup);
       work.lookups.assign(m_shared.lookups.begin(), m_shared.lookups.end());
       work.entityDefLookups.assign(
         m_shared.entityDefLookups.begin(), m_shared.entityDefLookups.end());
@@ -577,11 +586,11 @@ private:
       !m_autoReloadPending && m_shared.options.pollInterval.count() > 0
       && Clock::now() >= m_nextPoll)
     {
-      return Work{WorkKind::Poll, {}, {}, {}};
+      return workOf(WorkKind::Poll);
     }
     if (m_shared.parseAllRequested && bulkPending())
     {
-      return Work{WorkKind::Bulk, {}, {}, {}};
+      return workOf(WorkKind::Bulk);
     }
     return std::nullopt;
   }

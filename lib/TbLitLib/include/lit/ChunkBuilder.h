@@ -38,6 +38,7 @@
 
 namespace tb::lit
 {
+class CpuJobContext;
 struct MaterialTable;
 struct ProcTree;
 
@@ -224,14 +225,17 @@ struct ChunkJobOutput
  * SetTexCoord, the side plane's normal through SetNormal, TriListForSide's fan; patches
  * through the copied subdivision; then per chunk: welded vertices, st recentred per
  * island and truncated again, R_CleanupTriangles' steps with the material's tangent path
- * (C25: unsmoothedTangents; mikktspace takes the unsmoothed path with a warning,
+ * (C25: unsmoothedTangents; mikktspace the engine's failure path, whose copy warns,
  * M-ID-DIFF-04), a cleaned reversed copy for createBackSides, the triangles ordered by
  * sub-cell, the bounds, the cast class and the versions.
  *
  * Pool-safe (C24): it calls only the geometry facade and plain code; any thread. The
- * copied code's messages go to the calling thread's sink, which the pool drains.
+ * copied code's messages go to the calling thread's sink, which the pool drains. With a
+ * job context it stops at the first node after the pool was cancelled (R2.1), and what it
+ * returns then is incomplete.
  */
-ChunkJobOutput buildChunks(const ChunkJobInput& input);
+ChunkJobOutput buildChunks(
+  const ChunkJobInput& input, const CpuJobContext* context = nullptr);
 
 // the tangent path of a material (C25, M-ID-DIFF-04)
 EngineTangentPath tangentPath(const MaterialEntry* material);

@@ -3386,6 +3386,72 @@
       "note": "C22, plan §13 A10: findKey is the engine's lookup in a dictionary, written over a list of keys and values: the value of the last key that equals the name with 'A'-'Z' folded to lower case (Icmp folds nothing else, and compares to the end), because an entity's map keys go into its dict with Set, which replaces a value in place, so the last of two spellings wins; an empty name finds nothing, as FindKey's empty-key check returns NULL (its DWarning is a developer print). Pure, no copied code: any thread. MaterialDecls::entityDef returns the merged dict of the copied idDeclEntityDef::Parse (own keys, classname, then SetDefaults of each inherited def) in its order, and dmapOnly from the copied IsMapOnlyClass (the classname's plain def, no map keys, no _mp def). The dicts' key pool ignores case, so a key is spelled as the pool first saw it (a parent's 'Model' over a child's 'model'), which findKey makes no matter"
     },
     {
+      "id": "M-ID-FN-26",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/Token.cpp",
+          "lines": [
+            38,
+            131
+          ],
+          "anchor": "idToken::NumberValue: the float and decimal branches",
+          "sha256": "da6f97b6566e85d3dbac3683c618ecae37a375abbba2ce4fc8ec56ab5fbd543f"
+        },
+        {
+          "file": "neo/idlib/Token.cpp",
+          "lines": [
+            160,
+            170
+          ],
+          "anchor": "idToken::NumberValue: the octal branch",
+          "sha256": "af72e74d7401f277c07b5d824baf399869cce10fdd37fb0ff6517b51bb113fd5"
+        },
+        {
+          "file": "neo/idlib/Token.h",
+          "lines": [
+            136,
+            152
+          ],
+          "anchor": "idToken::GetDoubleValue, GetFloatValue",
+          "sha256": "1f2affe1e3e3087d3f807e65ed938a38ecd5a41d7343b4abe2a94c309c768aba"
+        },
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            804,
+            1043
+          ],
+          "anchor": "idLexer::ReadNumber",
+          "sha256": "44520a29dbad80a40cf66a32e4d52364e5ae42273e10679e320d74a0d241d28f"
+        },
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            1678,
+            1718
+          ],
+          "anchor": "idLexer::ParseFloat: a \"-\" punctuation token, then the number, negated",
+          "sha256": "f5905aaaf0977bb8add5d888b54c1a81dad72ff37c6eb6552bf380ece31afe0e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/NumberText.cpp",
+          "symbol": "lexerFloat"
+        },
+        {
+          "file": "lib/TbLitLib/src/ProcFile.cpp",
+          "symbol": "procReadBack"
+        },
+        {
+          "file": "lib/TbUiLib/src/LitSnapshotBuilder.cpp",
+          "symbol": "serialisedFloat, serialisedPoint"
+        }
+      ],
+      "note": "R3.10, R3.9: a plain C++ transcription of what ParseFloat makes of one number token (the digits as v * 10 + d in double, the fraction as v + d * m with m *= 0.1, the exponent as a product of tens, an integer in 32 unsigned bits, octal after a leading 0, the suffixes skipped), so that the GUI thread (the serialised Valve values, face points and patch control points) and the CPU pool (the chunker's read-back of WriteFloat's text) read numbers as the engine does without the copied lexer (C20). Hexadecimal, binary, IP addresses, float exceptions and white space are refused (null); a serialiser writes none of them. tst_NumberText proves it equal to the copied idLexer on 50,000 texts (1,000,000 in the hidden [.][numbers] test)"
+    },
+    {
       "id": "M-ID-FN-14",
       "kind": "function",
       "engine": [
@@ -6943,7 +7009,7 @@
           "symbol": "R_DeriveMikktspaceTangents"
         }
       ],
-      "note": "Q18: MikkTSpace is not copied (M-ID-DIFF-04); the static the copied R_DeriveTangentsWithoutNormals calls returns false, which the copy turns into its warning and its own derivation, as the engine does when MikkTSpace fails. The facade always passes useMikktspace false, so it is never called"
+      "note": "Q18: MikkTSpace is not copied (M-ID-DIFF-04); the static the copied R_DeriveTangentsWithoutNormals calls returns false, which the copy turns into its warning and its own derivation, as the engine does when MikkTSpace fails. R3.11: the facade passes useMikktspace true for a material with the mikktspace keyword (EngineTangentPath::Mikktspace), so a call reaches it and fails"
     },
     {
       "id": "M-GEO-PURE-01",
@@ -7094,19 +7160,46 @@
           ],
           "anchor": "ParsePatch",
           "sha256": "2c7c9c65659f91edde2f23fc03b00a1d9daf63bded238ef41a90f7b9e7ebcd45"
+        },
+        {
+          "file": "neo/idlib/geometry/Surface.cpp",
+          "lines": [
+            964,
+            972
+          ],
+          "anchor": "idSurface::GenerateEdgeIndexes: vertexEdges and edgeChain, _alloca16 of 4 bytes per vertex and per index",
+          "sha256": "1b4d375ce6e0d142c1e97ed4f70e22768248575784dbfefd8ec99084c1cc14d6"
+        },
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            676,
+            804
+          ],
+          "anchor": "Subdivide: the horizontal and vertical passes patchSubdivisionBound transcribes on the positions",
+          "sha256": "4317c684ed11bd12951acfb052b82048633ef4c38af23ad473cc9fb1cec5a28b"
+        },
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            262,
+            266
+          ],
+          "anchor": "LerpVert: the position",
+          "sha256": "4134b2987e4e4672012d44540b6c5f4edd45bc9da5b6dced4b210efae9cdeece"
         }
       ],
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
-          "symbol": "engineSubdividePatch"
+          "symbol": "engineSubdividePatch, patchSubdivisionBound"
         }
       ],
       "commonCalls": [
         "Surface_Patch.cpp:41, :45 idLib::common->FatalError (unreachable, M-GEO-FATAL-02)",
         "Surface_Patch.cpp:214, :241 idLib::common->FatalError (unreachable, M-GEO-FATAL-03)"
       ],
-      "note": "K19: sides of 1 to 99 control points, explicit subdivisions of 1 to 64, at most 65535 vertices subdivided (refused with a warning beyond); the copy allocates on the heap only (idList, no _alloca in Surface_Patch.cpp at engineCommit, so P.25's stack concern does not apply; pool threads have 8 MB stacks, D66)"
+      "note": "K19, R1.3: sides of 1 to 99 control points; explicit subdivisions of 1 to 64 with at most 65535 vertices; for patchDef2 the size Subdivide( 4, 4, -1, true ) reaches before PutOnCurve and RemoveLinearColumnsRows (which only remove) is counted first by patchSubdivisionBound, the two passes on the positions alone in the copy's float arithmetic, and the patch is refused before Subdivide runs when GenerateEdgeIndexes' two _alloca16 blocks (4 bytes per vertex and per index, Surface.cpp:964-972) would take more than MaxPatchStackBytes (2 MB, about 74,000 vertices) of the pool thread's 8 MB stack (D66); a subdivided patch of more than 65535 vertices is refused after. The copy's own blocks (idList, the explicit case's new[]) are on the heap; the stack use is GenerateEdgeIndexes'. Refusals warn (lit/ChunkBuilder.h)"
     },
     {
       "id": "M-GEO-POOL-03",
@@ -7643,15 +7736,28 @@
           ],
           "anchor": "R_DeriveTangentsWithoutNormals, the MikkTSpace branch",
           "sha256": "9010b68b456a362137119cb628631f24a787074dab0028f3c00553257ef4541e"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1831,
+            1839
+          ],
+          "anchor": "R_CleanupTriangles: unsmoothedTangents first, then R_DeriveTangentsWithoutNormals( tri, useMikktspace )",
+          "sha256": "e6063868f7b96bd4cf158d75cb625de2c71691c29f6c3ce42e0c0187f237ca0b"
         }
       ],
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
           "symbol": "tangentPath"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineCleanupTriangles (EngineTangentPath::Mikktspace)"
         }
       ],
-      "note": "Q18 answered 0: a material with the mikktspace keyword takes the unsmoothed path (R_BuildDominantTris + R_DeriveTangents) with a warning, where the engine would run MikkTSpace; no retail or user material has the keyword"
+      "note": "Q18 answered 0, R3.11: a material with the mikktspace keyword takes the engine's failure path: R_DeriveTangentsWithoutNormals( tri, true ) calls the stub R_DeriveMikktspaceTangents (M-GEO-FN-04), which fails, so the copy warns \"Mikkelsen tangent space calculation failed\" and derives the tangents without normals, as the engine does when MikkTSpace fails; unsmoothedTangents comes first, as in R_CleanupTriangles. The difference: the engine would run MikkTSpace and succeed. No retail or user material has the keyword"
     },
     {
       "id": "M-GEO-FN-05",
@@ -7754,10 +7860,14 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/src/ProcFile.cpp",
-          "symbol": "loadProcSurface, recentreTexCoords"
+          "symbol": "loadProcSurface, recentreTexCoords, procReadBack"
+        },
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "readBack (vertex positions)"
         }
       ],
-      "note": "A17, D59: the islands as a union-find, which makes ParseModel's partition; Ftoi((min + max) * 0.5f) per island, then SetTexCoord; the colour format's PackColorRound is LP7's"
+      "note": "A17, D59: the islands as a union-find, which makes ParseModel's partition; Ftoi((min + max) * 0.5f) per island, then SetTexCoord; the colour format's PackColorRound is LP7's. R3.9: the chunker reads its st and vertex positions back as ParseModel reads what dmap wrote: WriteFloat's text (its snap to an integer within 0.001 included), then lit/NumberText.h's lexerFloat (M-ID-FN-26), before the recentring and SetTexCoord"
     },
     {
       "id": "M-GEO-FN-08",
@@ -7829,15 +7939,24 @@
           ],
           "anchor": "SpawnEntityDef's SetDefaults",
           "sha256": "ed89add1579c5026815e00acf0864fec8b0a0da9f6f50e334c9b922a4b0dbeb2"
+        },
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            1173,
+            1181
+          ],
+          "anchor": "idMapEntity::Parse: the origin key, sscanf \"%lf %lf %lf\" assigned to floats",
+          "sha256": "18b24fe5553514babd6a9c8b737318732f05c657129e6a4a428914f3e060d8ac"
         }
       ],
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/src/EntityState.cpp",
-          "symbol": "parseSpawnArgsToRenderEntity, mergeSpawnArgs, spawnVector"
+          "symbol": "parseSpawnArgsToRenderEntity, mergeSpawnArgs, spawnVector, mapOrigin"
         }
       ],
-      "note": "A7, A10, SC51-SC53: the model, the genmodel_ branch and the guis are LP7's; the getters parse as sscanf/atof/atoi in the C locale (std::from_chars), whatever the process locale"
+      "note": "A7, A10, SC51-SC53: the model, the genmodel_ branch and the guis are LP7's; the getters parse as the C library does in the C locale, whatever the process locale (R1.1: lit/NumberText.h's parseFloatChars, std::from_chars, fast_float's on Apple): sscanf's %f straight to a float, atof (GetFloat) and the map loader's %lf origin to a double, then a float, atoi through from_chars"
     },
     {
       "id": "M-GEO-FN-10",
@@ -8008,6 +8127,45 @@
         }
       ],
       "note": "A9, SC72: big-endian ReadBig, little-endian ReadVec3/ReadFloat/strings; every count checked against the bytes left; LP1c.1 reuses readBinaryModel"
+    },
+    {
+      "id": "M-GEO-FN-12",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            1759,
+            1765
+          ],
+          "anchor": "idMapFile::Parse: MatchPrefix( \"removeEntities\" ) on worldspawn",
+          "sha256": "98d492d41782a5b50672edc274452c6635837b904270dcb73301e8f672aa8070"
+        },
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            2270,
+            2282
+          ],
+          "anchor": "idMapFile::RemoveEntities: idStr::Icmp of the classnames",
+          "sha256": "bc6fc1e89060f46a4568d11d6b1be03036209b9aea6eb12be9b2255163b6c3d8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EntityState.cpp",
+          "symbol": "removedClassnames, isRemovedClassname"
+        },
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "Builder::readWorldspawn, Builder::makeContext"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightRecord.cpp",
+          "symbol": "buildLightRecords, LightRegistry::takeSnapshot"
+        }
+      ],
+      "note": "A11, R3.12: the map loader deletes every entity whose classname a removeEntities* key of worldspawn names (the keys matched without case, a key given again replacing the value, the classnames compared without case); the chunks of such an entity are not built, and a light of such a class has no record; a change of worldspawn's keys rebuilds every light. InhibitEntitySpawn's not_easy/not_medium/not_hard is not mirrored (the preview shows every skill)"
     },
     {
       "id": "M-GEO-DIFF-01",

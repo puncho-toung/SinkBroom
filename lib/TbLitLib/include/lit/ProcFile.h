@@ -108,6 +108,15 @@ int pointInArea(const ProcTree& tree, const std::array<float, 3>& point);
 float procFloat(float value);
 
 /**
+ * R3.9: procFloat's round trip without the copied lexer: engineProcFloatText, then
+ * lit/NumberText.h's lexerFloat, the plain C++ mirror of idLexer's ParseFloat (equal to
+ * procFloat, tst_NumberText.cpp). The chunker reads its st and positions back with it, as
+ * ParseModel reads what dmap wrote (WriteFloat's snap to an integer within 0.001
+ * included). Pure; any thread.
+ */
+float procReadBack(float value);
+
+/**
  * RenderWorld_load.cpp:224-321, the ParseModel mirror of one surface: st recentred per
  * island of triangles sharing a vertex by Ftoi((min + max) / 2) per component, then
  * SetTexCoord (half floats) and SetNormal (bytes), white colour and color2 zero for the
@@ -117,8 +126,9 @@ std::vector<EngineDrawVert> loadProcSurface(const ProcSurface& surface);
 
 /**
  * The same recentring on surface vertices already through SetTexCoord (D59): the decoded
- * st of each island moved by Ftoi((min + max) / 2), then through SetTexCoord again.
- * Vertices no triangle uses are left alone, as in ParseModel. Pure; any thread.
+ * st, read back as ParseModel reads what dmap wrote (procReadBack, R3.9), of each island
+ * moved by Ftoi((min + max) / 2), then through SetTexCoord again. Vertices no triangle
+ * uses are left alone, as in ParseModel. Pure; any thread.
  */
 void recentreTexCoords(
   std::vector<EngineDrawVert>& verts, const std::vector<std::uint16_t>& indexes);

@@ -1,4 +1,5 @@
-# engine-written and image fixtures are compared byte for byte
+# R1.4: every fixture is read or compared byte for byte, so no checkout converts line
+# endings, whatever core.autocrlf says; the engine-written and image fixtures are binary
+* -text
 *.bproc binary
 *.tga binary
-*.proc -text

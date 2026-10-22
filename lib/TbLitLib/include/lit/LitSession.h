@@ -273,6 +273,14 @@ public:
    * stops the snapshots of the session.
    */
   bool snapshotSlotFree() const;
+  /**
+   * R2.2, any thread: the material service published a table (the owner calls it on
+   * SessionEvent::MaterialsPublished). The render thread wakes and adopts it at its next
+   * pass that draws no frame, so that chunks and lights built while a material, an
+   * entityDef or the .proc was pending are built again without a camera move. It sets a
+   * flag under the render thread's mutex and notifies.
+   */
+  void tableChanged();
 
   // S3: the CPU pool from phase B until teardown step 1, else null; GUI thread (B0.10:
   // the render thread gets the pool and the service at its start, not from here)
@@ -327,14 +335,16 @@ public:
   // earlier ones first if they have not run.
 
   // Step 1 comes in parts, so that a GUI thread can keep answering the messages that a
-  // present may send to its window while it waits (R5.18): requestStop sets the stop flag
-  // and returns; the render thread stops at the next pass boundary, which includes the
-  // one before the present, waits for the GPU (also when lost, ignoring the result),
-  // writes the frame log and exits; waitForRenderThread waits up to timeout and returns
-  // whether it has exited. stopRenderThread requests the stop and joins without servicing
-  // anything, for callers without a window, and after waitForRenderThread returned true;
-  // then it stops the CPU pool (its generation bumped, its threads joined, R5.22) and
-  // forgets the material service.
+  // present may send to its window while it waits (R5.18): requestStop sets the stop
+  // flag, cancels the CPU pool (R2.1: its generation bumped without a join, so its queued
+  // and running jobs return at once) and returns; the render thread stops at the next
+  // pass boundary, which includes the one before the present, waits for the GPU (also
+  // when lost, ignoring the result) and for its jobs, writes the frame log and exits;
+  // waitForRenderThread waits up to timeout and returns whether it has exited.
+  // stopRenderThread requests the stop and joins without servicing anything, for callers
+  // without a window, and after waitForRenderThread returned true; then it stops the CPU
+  // pool (its generation bumped again, its threads joined, R5.22) and forgets the
+  // material service.
   void requestStop();
   // from here on, warnings, errors and a loss go into the teardown report instead of the
   // event sink; requestStop calls it, and a caller that parks first calls it before that
@@ -369,6 +379,8 @@ public:
   // the snapshots the render thread took so far, and the last one; any thread
   std::uint64_t snapshotsTakenForTesting() const;
   std::shared_ptr<const Snapshot> lastSnapshotForTesting() const;
+  // the batches of chunk or light jobs the render thread has applied; any thread
+  std::uint64_t geometryBatchesForTesting() const;
 
 private:
   LitSession(

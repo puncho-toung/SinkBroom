@@ -19,6 +19,7 @@
 
 #include "LitSnapshotBuilder.h"
 
+#include "lit/NumberText.h"
 #include "mdl/BezierPatch.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushFace.h"
@@ -40,7 +41,8 @@
 #include <fmt/format.h>
 
 #include <algorithm>
-#include <charconv>
+#include <array>
+#include <string_view>
 #include <utility>
 
 namespace tb::ui
@@ -55,14 +57,16 @@ bool anyChildVisibleInPreview(const mdl::EditorContext& context, const mdl::Node
   });
 }
 
-// idLexer keeps a number as a double; ParseFloat hands out its float
-float readBackAsFloat(const std::string& text, const float fallback)
+// R3.10: the serialiser's text of the value (fmt's "{}", formatted into a buffer on the
+// stack, R2.13) as the engine's idLexer reads it: NumberValue's double, then its float
+template <typename T>
+float readBack(const T value)
 {
-  auto value = 0.0;
-  const auto [end, error] =
-    std::from_chars(text.data(), text.data() + text.size(), value);
-  return error == std::errc{} && end == text.data() + text.size() ? float(value)
-                                                                  : fallback;
+  auto buffer = std::array<char, 64>{};
+  const auto written = fmt::format_to_n(buffer.data(), buffer.size(), "{}", value);
+  const auto text =
+    std::string_view{buffer.data(), std::min(written.size, buffer.size())};
+  return lit::lexerFloat(text).value_or(float(value));
 }
 
 std::uint32_t count(const std::size_t size)
@@ -117,12 +121,20 @@ lit::SnapshotNodeKind pointEntityKind(const mdl::Entity& entity)
 
 float serialisedFloat(const double value)
 {
-  return readBackAsFloat(fmt::format("{}", value), float(value));
+  return readBack(value);
 }
 
 float serialisedFloat(const float value)
 {
-  return readBackAsFloat(fmt::format("{}", value), value);
+  return readBack(value);
+}
+
+vm::vec3d serialisedPoint(const vm::vec3d& point)
+{
+  return vm::vec3d{
+    double(serialisedFloat(point.x())),
+    double(serialisedFloat(point.y())),
+    double(serialisedFloat(point.z()))};
 }
 
 SerialisedValveTexture serialisedValveTexture(const mdl::BrushFace& face)
@@ -168,9 +180,14 @@ void LitSnapshotBuilder::addBrush(
     const auto& materialName =
       face.materialName().empty() ? mdl::BrushFace::NoMaterialName : face.materialName();
     const auto texture = serialisedValveTexture(face);
+    auto points = face.points();
+    for (auto& point : points)
+    {
+      point = serialisedPoint(point);
+    }
     m_snapshot.faces.push_back(lit::SnapshotFace{
       lit::SnapshotRange{firstVertex, count(polygon.vertices().size())},
-      face.points(),
+      points,
       face.boundary(),
       addString(materialName),
       texture.uAxis,
@@ -200,8 +217,16 @@ void LitSnapshotBuilder::addPatch(
   const auto& patch = patchNode.patch();
   const auto& controlPoints = patch.controlPoints();
   const auto firstPoint = count(m_snapshot.controlPoints.size());
-  m_snapshot.controlPoints.insert(
-    m_snapshot.controlPoints.end(), controlPoints.begin(), controlPoints.end());
+  for (const auto& point : controlPoints)
+  {
+    // R3.10: as the engine's idLexer reads the serialiser's text back
+    auto value = vm::vec<double, 5>{};
+    for (auto k = std::size_t{0}; k < 5; ++k)
+    {
+      value[k] = double(serialisedFloat(point[k]));
+    }
+    m_snapshot.controlPoints.push_back(value);
+  }
 
   const auto& subdivisions = patch.explicitSubdivisions();
   const auto patchIndex = count(m_snapshot.patches.size());

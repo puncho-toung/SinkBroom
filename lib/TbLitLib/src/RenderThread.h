@@ -129,6 +129,10 @@ private:
   std::atomic<bool> m_snapshotInboxFull = false;
   std::uint64_t m_appliedSequence = 0;
   std::size_t m_chunkCount = 0;
+  // R2.2: a material table was published since the last idle pass looked
+  bool m_tableChanged = false;
+  // the batches of chunk or light jobs applied so far (tests)
+  std::uint64_t m_batchesApplied = 0;
   FramePacer m_pacer;
   std::array<std::function<void()>, 4> m_debugHooks;
   // the number of the last generation whose replacement was requested; GUI thread reads
@@ -170,6 +174,9 @@ public:
   // the sequence of the last snapshot whose chunks are applied, and the chunk count
   std::uint64_t appliedSnapshotSequence() const;
   std::size_t chunkCount() const;
+  // see LitSession::tableChanged
+  void tableChanged();
+  std::uint64_t batchesApplied() const;
 
   // GUI thread: the surface handshake.
 

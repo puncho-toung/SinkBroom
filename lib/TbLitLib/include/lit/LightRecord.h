@@ -40,6 +40,7 @@
 
 namespace tb::lit
 {
+class CpuJobContext;
 struct ProcTree;
 
 /**
@@ -95,7 +96,8 @@ struct LightTable
 };
 
 // one batch's input (held by shared_ptr, immutable): the lights to build, the material
-// table (null without a service) and the .proc's tree (null without one)
+// table (null without a service), the .proc's tree (null without one) and worldspawn's
+// map keys (removeEntities*, R3.12)
 struct LightJobInput
 {
   struct Light
@@ -110,11 +112,15 @@ struct LightJobInput
   std::vector<Light> lights;
   std::shared_ptr<const MaterialTable> materials;
   std::shared_ptr<const ProcTree> proc;
+  EntityKeys worldspawn;
 };
 
 struct LightJobOutput
 {
   std::vector<LightRecord> records;
+  // R3.12: the lights (id, version) of a class worldspawn's removeEntities* names: the
+  // engine's map loader deletes them, so they have no record
+  std::vector<std::pair<PreviewId, std::uint64_t>> removed;
   // what the records' warnings said, with the light they are about
   std::vector<std::string> warnings;
 };
@@ -123,19 +129,23 @@ struct LightJobOutput
  * Builds the records of the input's lights: the entityDef's keys from the table
  * (findEntityDef: pending while the table has no answer, none when there is no such
  * def), mergeSpawnArgs, parseLight, deriveLight over the tree with its
- * commonChildrenArea computed once. Pure: it reads the immutable input and calls only
+ * commonChildrenArea computed once; a light whose class worldspawn's removeEntities*
+ * names is removed instead (R3.12). Pure: it reads the immutable input and calls only
  * the light code, so any thread, the CPU pool included (C24, mirror.json
- * M-LIGHT-POOL-02); the copied code's messages go to the calling thread's sink.
+ * M-LIGHT-POOL-02); the copied code's messages go to the calling thread's sink. With a
+ * job context it stops at the first light after the pool was cancelled (R2.1).
  */
-LightJobOutput buildLightRecords(const LightJobInput& input);
+LightJobOutput buildLightRecords(
+  const LightJobInput& input, const CpuJobContext* context = nullptr);
 
 /**
  * The render thread's light records (§3.6, C15, R-C10): it keeps each light's map keys
  * from the snapshots (the entities with a Light node, B0.4's rules), builds the changed
  * ones as one CPU pool job at a time, inputs by shared_ptr (C24), and publishes the
  * records in a LightTable. Like SceneGeometry it queues the entityDefs and materials the
- * lights need with the material service and builds a provisional light again when a
- * newer material table has them; a new .proc tree rebuilds every light.
+ * lights need with the material service; every table a job adopts is scanned for them
+ * (R3.1), and a light that waited is built again in that job. A new .proc tree, and a
+ * change of worldspawn's keys (removeEntities*, R3.12), rebuild every light.
  *
  * Without a pool (or once it is stopped) the job runs on the calling thread. Without a
  * material service every record stays provisional.
@@ -159,7 +169,11 @@ private:
 
   std::unordered_map<PreviewId, Light> m_lights;
   std::shared_ptr<const ProcTree> m_proc;
-  std::uint64_t m_lastTableVersion = 0;
+  // worldspawn's map keys, for removeEntities* (R3.12)
+  PreviewId m_worldspawn = NoPreviewId;
+  EntityKeys m_worldspawnKeys;
+  // the table the last job was built with; every table adopted is scanned once
+  std::shared_ptr<const MaterialTable> m_table;
   std::set<PreviewId> m_dirty;
   std::set<PreviewId> m_removed;
   // the provisional lights by the material or classname they wait for
@@ -211,6 +225,8 @@ public:
 
 private:
   void startBatch();
+  // adopts the latest material table and, when it is new, scans what the lights wait for
+  void refreshTable();
   void publish();
   void apply(LightJobOutput output);
 };

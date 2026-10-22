@@ -33,10 +33,15 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <iostream>
+#include <map>
+#include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <thread>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -54,41 +59,7 @@ std::string box(
   const int z1,
   const std::string& material)
 {
-  // TrenchBroom's points: (p3 - p1) x (p2 - p1) is the outward normal
-  const auto face = [&](
-                      const int ax,
-                      const int ay,
-                      const int az,
-                      const int bx,
-                      const int by,
-                      const int bz,
-                      const int cx,
-                      const int cy,
-                      const int cz,
-                      const std::string& axes) {
-    return fmt::format(
-      "( {} {} {} ) ( {} {} {} ) ( {} {} {} ) {} {} 0 1 1\n",
-      ax,
-      ay,
-      az,
-      bx,
-      by,
-      bz,
-      cx,
-      cy,
-      cz,
-      material,
-      axes);
-  };
-  const auto xAxes = std::string{"[ 0 1 0 0 ] [ 0 0 -1 0 ]"};
-  const auto yAxes = std::string{"[ 1 0 0 0 ] [ 0 0 -1 0 ]"};
-  const auto zAxes = std::string{"[ 1 0 0 0 ] [ 0 -1 0 0 ]"};
-  return "{\n" + face(x0, y0, z0, x0, y0 + 1, z0, x0, y0, z0 + 1, xAxes)
-         + face(x1, y1, z1, x1, y1, z1 + 1, x1, y1 + 1, z1, xAxes)
-         + face(x0, y0, z0, x0, y0, z0 + 1, x0 + 1, y0, z0, yAxes)
-         + face(x1, y1, z1, x1 + 1, y1, z1, x1, y1, z1 + 1, yAxes)
-         + face(x0, y0, z0, x0 + 1, y0, z0, x0, y0 + 1, z0, zAxes)
-         + face(x1, y1, z1, x1, y1 + 1, z1, x1 + 1, y1, z1, zAxes) + "}\n";
+  return boxBrush(x0, y0, z0, x1, y1, z1, material);
 }
 
 const std::shared_ptr<const MaterialTable>& fixtureTable()
@@ -145,6 +116,143 @@ std::string mapText(const std::string& worldKeys, const std::string& rest)
 {
   return "{\n\"classname\" \"worldspawn\"\n" + worldKeys
          + box(0, 0, 0, 64, 64, 64, "lp1b/wall") + "}\n" + rest;
+}
+
+// the nodes of full whose ids are given, without entity records or removals
+Snapshot nodesOnly(
+  const Snapshot& full, const std::set<PreviewId>& ids, const std::uint64_t sequence)
+{
+  auto snapshot = full;
+  snapshot.sequence = sequence;
+  snapshot.entities.clear();
+  snapshot.removed.clear();
+  std::erase_if(
+    snapshot.nodes, [&](const SnapshotNode& node) { return !ids.contains(node.id); });
+  return snapshot;
+}
+
+// the snapshot of text with every node and entity id moved by offset; the nodes of the
+// first entity (worldspawn) keep entity 1, the scene's worldspawn
+Snapshot withIdOffset(Snapshot snapshot, const PreviewId offset)
+{
+  for (auto& node : snapshot.nodes)
+  {
+    node.id += offset;
+    node.entity = node.entity == 1 ? 1 : node.entity + offset;
+  }
+  for (auto& entity : snapshot.entities)
+  {
+    entity.id += offset;
+  }
+  return snapshot;
+}
+
+// one entity record with these keys, without its nodes (B0.4)
+Snapshot entityRecord(
+  const PreviewId id,
+  const std::string& classname,
+  const std::vector<std::pair<std::string, std::string>>& keys,
+  const std::uint64_t sequence)
+{
+  auto snapshot = Snapshot{};
+  snapshot.sequence = sequence;
+  const auto add = [&](const std::string& text) {
+    const auto offset = std::uint32_t(snapshot.strings.size());
+    snapshot.strings += text;
+    return SnapshotString{offset, std::uint32_t(text.size())};
+  };
+  auto entity = SnapshotEntity{};
+  entity.id = id;
+  entity.classname = add(classname);
+  for (const auto& [key, value] : keys)
+  {
+    snapshot.keyValues.push_back(SnapshotKeyValue{add(key), add(value)});
+  }
+  entity.keys = SnapshotRange{0, std::uint32_t(snapshot.keyValues.size())};
+  snapshot.entities.push_back(entity);
+  return snapshot;
+}
+
+// the node whose first face has this material
+PreviewId nodeWithMaterial(const Snapshot& snapshot, const std::string& material)
+{
+  for (const auto& node : snapshot.nodes)
+  {
+    if (
+      node.kind == SnapshotNodeKind::Brush && node.elements.count > 0
+      && snapshot.string(snapshot.faces[node.elements.first].material) == material)
+    {
+      return node.id;
+    }
+  }
+  return NoPreviewId;
+}
+
+// what a chunk is, for comparing two builds of it
+struct ChunkSummary
+{
+  CastClass castClass = CastClass::Opaque;
+  std::uint64_t appearanceVersion = 0;
+  std::uint64_t casterVersion = 0;
+  bool operator==(const ChunkSummary&) const = default;
+};
+
+std::map<ChunkKey, ChunkSummary> summaryOf(const std::map<ChunkKey, Chunk>& chunks)
+{
+  auto summary = std::map<ChunkKey, ChunkSummary>{};
+  for (const auto& [key, chunk] : chunks)
+  {
+    summary[key] = {chunk.castClass, chunk.appearanceVersion, chunk.casterVersion};
+  }
+  return summary;
+}
+
+std::map<ChunkKey, ChunkSummary> summaryOf(const std::vector<Chunk>& chunks)
+{
+  auto summary = std::map<ChunkKey, ChunkSummary>{};
+  for (const auto& chunk : chunks)
+  {
+    summary[chunk.key] = {chunk.castClass, chunk.appearanceVersion, chunk.casterVersion};
+  }
+  return summary;
+}
+
+std::map<ChunkKey, ChunkSummary> ofEntity(
+  std::map<ChunkKey, ChunkSummary> summary, const PreviewId entity)
+{
+  std::erase_if(summary, [&](const auto& entry) { return entry.first.entity != entity; });
+  return summary;
+}
+
+// a material service over the fixture's materials, the stand-ins and the test's own
+// decls, whose parse thread waits at the gate before every request
+std::unique_ptr<MaterialService> gatedService(const std::shared_ptr<ParseGate>& gate)
+{
+  auto options = MaterialServiceOptions{};
+  options.makeSource = [](const std::atomic<bool>&) {
+    return std::unique_ptr<DeclSource>{
+      std::make_unique<MemoryDeclSource>(std::vector<DeclFile>{
+        DeclFile{
+          "materials/lp1bc.mtr",
+          readTextFile(litFixtureFolder() / "materials" / "lp1bc.mtr"),
+          0},
+        DeclFile{
+          "materials/zz_lp1b_test.mtr",
+          "textures/common/origin\n{\n\torigin\n\tnoshadows\n}\n"
+          "textures/lp1b/test_nodraw\n{\n\tnoshadows\n}\n"
+          "textures/lp1b/test_origin\n{\n\torigin\n\tnoshadows\n}\n",
+          0},
+        DeclFile{
+          "def/lp1b_test.def",
+          "entityDef func_static\n{\n\t\"noshadows\" \"1\"\n}\n"
+          "entityDef func_lp1b_late\n{\n\t\"noshadows\" \"1\"\n}\n",
+          0},
+      })};
+  };
+  options.pollInterval = std::chrono::milliseconds{0};
+  options.beforeTakeWorkForTesting = [gate] { gate->pass(); };
+  return MaterialService::create(std::move(options))
+         | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
 }
 
 } // namespace
@@ -390,6 +498,354 @@ TEST_CASE("SceneGeometry: a 2000-brush snapshot's changed cells on the pool")
     batch.count(),
     batch.count() / 16.0);
   CHECK(scene.chunks().size() >= 16u);
+
+  // R2.4: 200 brush entities beside the 2000 boxes; a snapshot that changes their 200
+  // entity records alone is merged by the entity -> nodes index, not by a scan of every
+  // node per entity
+  auto withEntities = text;
+  for (auto i = 0; i < 200; ++i)
+  {
+    const auto x = 5000 + (i % 20) * 64;
+    const auto y = (i / 20) * 64;
+    withEntities += fmt::format(
+      "{{\n\"classname\" \"func_static\"\n\"name\" \"f{}\"\n\"model\" \"f{}\"\n", i, i);
+    withEntities += box(x, y, 0, x + 32, y + 32, 32, "lp1b/crate") + "}\n";
+  }
+  auto full = snapshotOfMapText(withEntities);
+  full.sequence = 1;
+  auto changed = Snapshot{};
+  changed.sequence = 2;
+  for (const auto& entity : full.entities)
+  {
+    if (full.string(entity.classname) == "worldspawn")
+    {
+      continue;
+    }
+    const auto name =
+      std::string{full.string(full.keyValues[entity.keys.first + 1].value)};
+    auto one = entityRecord(
+      entity.id,
+      "func_static",
+      {{"classname", "func_static"},
+       {"name", name},
+       {"model", name},
+       {"_color", "1 0 0"}},
+      2);
+    const auto base = std::uint32_t(changed.strings.size());
+    const auto firstKey = std::uint32_t(changed.keyValues.size());
+    changed.strings += one.strings;
+    for (auto keyValue : one.keyValues)
+    {
+      keyValue.key.offset += base;
+      keyValue.value.offset += base;
+      changed.keyValues.push_back(keyValue);
+    }
+    auto record = one.entities.front();
+    record.classname.offset += base;
+    record.keys.first = firstKey;
+    changed.entities.push_back(record);
+  }
+  REQUIRE(changed.entities.size() == 200u);
+  auto pool2 = CpuPool::create() | kdl::value();
+  {
+    auto entities = SceneGeometry{pool2.get(), nullptr};
+    const auto mergeFull = std::chrono::steady_clock::now();
+    entities.takeSnapshot(full);
+    const auto fullTook = std::chrono::duration<double, std::milli>{
+      std::chrono::steady_clock::now() - mergeFull};
+    entities.finishForTesting();
+    const auto mergeChanged = std::chrono::steady_clock::now();
+    entities.takeSnapshot(changed);
+    const auto changedTook = std::chrono::duration<double, std::milli>{
+      std::chrono::steady_clock::now() - mergeChanged};
+    entities.finishForTesting();
+    std::cout << fmt::format(
+      "R2.4: merging the snapshot of 2000 boxes and 200 brush entities took {:.2f} ms on "
+      "the render thread, merging 200 changed entity records {:.2f} ms\n",
+      fullTook.count(),
+      changedTook.count());
+    CHECK(entities.appliedSequence() == 2u);
+    CHECK(entities.entityStates().size() == 200u);
+  }
+  pool2->stop();
+}
+
+TEST_CASE("ChunkBuilder: the tangent path of a material (C25, R3.11)")
+{
+  auto entry = MaterialEntry{};
+  CHECK(tangentPath(nullptr) == EngineTangentPath::WithoutNormals);
+  CHECK(tangentPath(&entry) == EngineTangentPath::WithoutNormals);
+  // the engine's failure path: MikkTSpace is not copied
+  entry.mikktspace = true;
+  CHECK(tangentPath(&entry) == EngineTangentPath::Mikktspace);
+  // unsmoothedTangents comes first (tr_trisurf.cpp:1831-1839)
+  entry.unsmoothedTangents = true;
+  CHECK(tangentPath(&entry) == EngineTangentPath::Unsmoothed);
+}
+
+TEST_CASE("SceneGeometry: what a later material table brings is built (R3.1, R3.2)")
+{
+  using namespace std::chrono_literals;
+  auto gate = std::make_shared<ParseGate>();
+  gate->close();
+  auto service = gatedService(gate);
+  // destroyed before the service, so that its join never waits at the gate
+  const auto atExit = OpenAtExit{gate};
+  // the first registry is built before the thread waits at the gate
+  REQUIRE(service->waitForTableForTesting(
+    [](const MaterialTable& t) { return t.registry != 0; }, 10s));
+  auto pool = CpuPool::create() | kdl::value();
+
+  const auto world = std::string{"{\n\"classname\" \"worldspawn\"\n"}
+                     + box(0, 0, 0, 64, 64, 64, "lp1b/wall")
+                     + box(200, 0, 0, 232, 32, 32, "lp1b/grate")
+                     + box(300, 0, 0, 332, 32, 32, "lp1b/test_nodraw")
+                     + box(400, 0, 0, 432, 32, 32, "lp1b/crate") + "}\n";
+  const auto func = std::string{"{\n\"classname\" \"func_static\"\n\"name\" \"a\"\n"}
+                    + "\"model\" \"a\"\n" + box(1100, 0, 0, 1132, 32, 32, "lp1b/floor")
+                    + box(1200, 0, 0, 1216, 16, 16, "lp1b/test_origin") + "}\n";
+  auto snapshot = snapshotOfMapText(world + func);
+  snapshot.sequence = 1;
+  const auto funcId = snapshot.entities[1].id;
+  // a far brush of worldspawn, the only node of a later snapshot
+  const auto far = [&](const PreviewId offset, const std::uint64_t sequence) {
+    return nodesOnly(
+      withIdOffset(
+        snapshotOfMapText(
+          "{\n\"classname\" \"worldspawn\"\n" + box(5000, 0, 0, 5032, 32, 32, "lp1b/wall")
+          + "}\n"),
+        offset),
+      {2 + offset},
+      sequence);
+  };
+  const auto withoutFar = [](std::map<ChunkKey, ChunkSummary> summary) {
+    std::erase_if(summary, [](const auto& entry) { return entry.first.cell[0] >= 4; });
+    return summary;
+  };
+
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    scene.takeSnapshot(snapshot);
+    scene.finishForTesting();
+
+    // built while every material and the entityDef were pending: the defaults
+    const auto pending = scene.chunks();
+    CHECK(std::any_of(pending.begin(), pending.end(), [](const auto& entry) {
+      return entry.first.material == "textures/lp1b/test_nodraw";
+    }));
+    REQUIRE(scene.entityStates().contains(funcId));
+    CHECK(scene.entityStates().at(funcId).originOffset == EngineVec3{0, 0, 0});
+
+    // the table arrives; a later snapshot for another cell adopts it first (R3.1's
+    // failing sequence), and every pending cell is built again in its batch
+    gate->open();
+    const auto table = service->waitForTableForTesting(
+      [](const MaterialTable& t) {
+        return t.find("textures/lp1b/grate") && t.find("textures/lp1b/test_nodraw")
+               && t.find("textures/lp1b/test_origin") && t.find("textures/lp1b/crate")
+               && t.find("textures/lp1b/floor") && t.find("textures/lp1b/wall")
+               && t.findEntityDef("func_static");
+      },
+      10s);
+    REQUIRE(table);
+    scene.takeSnapshot(far(1000, 2));
+    scene.finishForTesting();
+
+    auto expectedInput = inputOf(snapshot);
+    expectedInput.materials = table;
+    expectedInput.entityDefs["func_static"] = table->findEntityDef("func_static")->entry;
+    const auto expected = buildChunks(expectedInput);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    CHECK(withoutFar(summaryOf(scene.chunks())) == summaryOf(expected.chunks));
+
+    // what that means: no face of a material neither drawn nor casting, the grate
+    // perforated, the origin brush found by its material, the entityDef's noshadows
+    const auto& chunks = scene.chunks();
+    CHECK(std::none_of(chunks.begin(), chunks.end(), [](const auto& entry) {
+      return entry.first.material == "textures/lp1b/test_nodraw"
+             || entry.first.material == "textures/lp1b/test_origin";
+    }));
+    for (const auto& [key, chunk] : chunks)
+    {
+      CAPTURE(key.material, key.entity);
+      if (key.material == "textures/lp1b/grate")
+      {
+        CHECK(chunk.castClass == CastClass::Perforated);
+      }
+      if (key.entity == funcId)
+      {
+        CHECK(chunk.castClass == CastClass::None);
+      }
+    }
+    REQUIRE(scene.entityStates().contains(funcId));
+    CHECK(scene.entityStates().at(funcId).originOffset == EngineVec3{1208, 8, 8});
+
+    // R3.2 alone: an entity whose classname's entityDef is asked for only now, while the
+    // materials are known; the gate holds the parse thread after one more request
+    gate->close();
+    static_cast<void>(service->lookup("textures/lp1b/patch"));
+    REQUIRE(service->waitForTableForTesting(
+      [](const MaterialTable& t) { return t.find("textures/lp1b/patch") != nullptr; },
+      10s));
+    auto late = withIdOffset(
+      snapshotOfMapText(
+        "{\n\"classname\" \"worldspawn\"\n}\n{\n\"classname\" \"func_lp1b_late\"\n"
+        "\"name\" \"late\"\n\"model\" \"late\"\n"
+        + box(3100, 0, 0, 3132, 32, 32, "lp1b/crate") + "}\n"),
+      2000);
+    std::erase_if(
+      late.entities, [](const SnapshotEntity& entity) { return entity.id == 2001; });
+    late.sequence = 3;
+    const auto lateId = PreviewId{2002};
+    scene.takeSnapshot(late);
+    scene.finishForTesting();
+    const auto lateCast = [&] {
+      for (const auto& [key, chunk] : scene.chunks())
+      {
+        if (key.entity == lateId)
+        {
+          return std::optional{chunk.castClass};
+        }
+      }
+      return std::optional<CastClass>{};
+    };
+    CHECK(lateCast() == CastClass::Opaque);
+
+    gate->open();
+    REQUIRE(service->waitForTableForTesting(
+      [](const MaterialTable& t) { return t.findEntityDef("func_lp1b_late") != nullptr; },
+      10s));
+    scene.takeSnapshot(far(3000, 4));
+    scene.finishForTesting();
+    CHECK(lateCast() == CastClass::None);
+  }
+  pool->stop();
+}
+
+TEST_CASE("SceneGeometry: a classname change to and from func_group re-keys (R2.3)")
+{
+  auto pool = CpuPool::create() | kdl::value();
+  auto scene = SceneGeometry{pool.get(), nullptr};
+  auto snapshot = snapshotOfMapText(mapText(
+    "",
+    "{\n\"classname\" \"func_group\"\n" + box(100, 0, 0, 132, 32, 32, "lp1b/crate")
+      + "}\n"));
+  snapshot.sequence = 1;
+  const auto world = snapshot.entities[0].id;
+  const auto group = snapshot.entities[1].id;
+  const auto crateUnder = [&](const PreviewId entity) {
+    return std::count_if(
+      scene.chunks().begin(), scene.chunks().end(), [&](const auto& e) {
+        return e.first.entity == entity && e.first.material == "textures/lp1b/crate";
+      });
+  };
+
+  scene.takeSnapshot(snapshot);
+  scene.finishForTesting();
+  CHECK(crateUnder(world) > 0);
+  CHECK(crateUnder(group) == 0);
+
+  // only the entity record comes: its brushes move to its own key
+  scene.takeSnapshot(entityRecord(
+    group,
+    "func_static",
+    {{"classname", "func_static"}, {"name", "g"}, {"model", "g"}},
+    2));
+  scene.finishForTesting();
+  CHECK(crateUnder(world) == 0);
+  CHECK(crateUnder(group) > 0);
+
+  // and back into worldspawn
+  scene.takeSnapshot(entityRecord(group, "func_group", {{"classname", "func_group"}}, 3));
+  scene.finishForTesting();
+  CHECK(crateUnder(world) > 0);
+  CHECK(crateUnder(group) == 0);
+  pool->stop();
+}
+
+TEST_CASE("SceneGeometry: a moved origin brush rebuilds every cell of its entity (R3.4)")
+{
+  const auto mapWith = [](const int originX) {
+    return mapText(
+      "",
+      std::string{"{\n\"classname\" \"func_static\"\n\"name\" \"a\"\n\"model\" \"a\"\n"}
+        + box(100, 0, 0, 132, 32, 32, "lp1b/crate")
+        + box(1100, 0, 0, 1132, 32, 32, "lp1b/crate")
+        + box(2100, 0, 0, 2132, 32, 32, "lp1b/crate")
+        + box(originX, 0, 0, originX + 16, 16, 16, "common/origin") + "}\n");
+  };
+  auto before = snapshotOfMapText(mapWith(1200));
+  before.sequence = 1;
+  const auto after = snapshotOfMapText(mapWith(2200));
+  const auto entity = before.entities[1].id;
+  const auto originBrush = nodeWithMaterial(before, "common/origin");
+  REQUIRE(originBrush != NoPreviewId);
+
+  auto pool = CpuPool::create() | kdl::value();
+  auto scene = SceneGeometry{pool.get(), nullptr};
+  scene.takeSnapshot(before);
+  scene.finishForTesting();
+  auto cells = std::set<CellCoord>{};
+  for (const auto& [key, chunk] : scene.chunks())
+  {
+    if (key.entity == entity)
+    {
+      cells.insert(key.cell);
+    }
+  }
+  CHECK(cells.size() == 3u);
+
+  // the origin brush moves from cell 1 to cell 2: cell 0's chunks are relative to the
+  // new pivot too
+  scene.takeSnapshot(nodesOnly(after, {originBrush}, 2));
+  scene.finishForTesting();
+  auto input = inputOf(after);
+  input.materials = nullptr;
+  const auto expected = buildChunks(input);
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  CHECK(
+    ofEntity(summaryOf(scene.chunks()), entity)
+    == ofEntity(summaryOf(expected.chunks), entity));
+  REQUIRE(scene.entityStates().contains(entity));
+  CHECK(scene.entityStates().at(entity).originOffset == EngineVec3{2208, 8, 8});
+  pool->stop();
+}
+
+TEST_CASE("SceneGeometry: a cancelled pool's batch ends at once (R2.1)")
+{
+  auto text = std::string{"{\n\"classname\" \"worldspawn\"\n"};
+  for (auto i = 0; i < 2000; ++i)
+  {
+    const auto x = (i % 4) * 1024 + ((i / 16) % 10) * 96 + 32;
+    const auto y = ((i / 4) % 4) * 1024 + ((i / 160) % 10) * 96 + 32;
+    const auto z = (i / 1600) * 96;
+    text += box(x, y, z, x + 48, y + 48, z + 48, "lp1b/wall");
+  }
+  text += "}\n";
+  auto snapshot = snapshotOfMapText(text);
+  snapshot.sequence = 1;
+
+  auto pool = CpuPool::create() | kdl::value();
+  auto scene = SceneGeometry{pool.get(), nullptr};
+  scene.takeSnapshot(snapshot);
+  // the stop's first step: the queued jobs return without building, the running ones at
+  // their next node, and nothing is joined
+  pool->cancel();
+  const auto start = std::chrono::steady_clock::now();
+  scene.finishForTesting();
+  const auto took =
+    std::chrono::duration<double, std::milli>{std::chrono::steady_clock::now() - start};
+  std::cout << fmt::format(
+    "a cancelled 2000-brush batch of 16 cells ended in {:.2f} ms\n", took.count());
+  const auto warnings = scene.takeWarnings();
+  CHECK(
+    std::count_if(
+      warnings.begin(),
+      warnings.end(),
+      [](const std::string& w) { return w.find("abandoned") != std::string::npos; })
+    >= 14);
+  CHECK(scene.chunks().size() <= 2u);
+  pool->stop();
 }
 
 } // namespace tb::lit

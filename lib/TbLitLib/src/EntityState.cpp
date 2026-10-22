@@ -28,6 +28,9 @@
 
 #include "lit/EntityState.h"
 
+#include "lit/NumberText.h"
+
+#include <algorithm>
 #include <charconv>
 #include <cstring>
 #include <optional>
@@ -42,8 +45,10 @@ bool isCSpace(const char c)
   return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
 }
 
-// one %f conversion at pos, in the "C" locale: leading white space, an optional sign
-std::optional<float> scanFloat(const std::string_view text, std::size_t& pos)
+// one conversion at pos, in the "C" locale: leading white space, an optional sign; T is
+// float for sscanf's %f, double for its %lf and for atof
+template <typename T>
+std::optional<T> scanNumber(const std::string_view text, std::size_t& pos)
 {
   while (pos < text.size() && isCSpace(text[pos]))
   {
@@ -55,9 +60,9 @@ std::optional<float> scanFloat(const std::string_view text, std::size_t& pos)
   {
     ++begin;
   }
-  auto value = 0.0f;
-  const auto [next, error] = std::from_chars(begin, end, value);
-  if (error != std::errc{})
+  auto value = T{0};
+  const auto* next = parseFloatChars(begin, end, value);
+  if (!next)
   {
     return std::nullopt;
   }
@@ -71,7 +76,7 @@ void scanFloats(const std::string_view text, float* out, const std::size_t count
   auto pos = std::size_t{0};
   for (auto i = std::size_t{0}; i < count; ++i)
   {
-    const auto value = scanFloat(text, pos);
+    const auto value = scanNumber<float>(text, pos);
     if (!value)
     {
       return;
@@ -80,11 +85,11 @@ void scanFloats(const std::string_view text, float* out, const std::size_t count
   }
 }
 
-// atof
+// atof: a double, which idDict::GetFloat returns as a float
 float cFloat(const std::string_view text)
 {
   auto pos = std::size_t{0};
-  return scanFloat(text, pos).value_or(0.0f);
+  return float(scanNumber<double>(text, pos).value_or(0.0));
 }
 
 // atoi
@@ -215,6 +220,27 @@ bool spawnAngles(
   return value != nullptr;
 }
 
+EngineVec3 mapOrigin(const EntityKeys& mapKeys)
+{
+  // MapFile.cpp:1172-1180: v1 = v2 = v3 = 0; sscanf( value, "%lf %lf %lf", ... ), each
+  // assigned to a float
+  auto origin = EngineVec3{0, 0, 0};
+  if (const auto* value = findKey(mapKeys, "origin"))
+  {
+    auto pos = std::size_t{0};
+    for (auto& component : origin)
+    {
+      const auto v = scanNumber<double>(*value, pos);
+      if (!v)
+      {
+        break;
+      }
+      component = float(*v);
+    }
+  }
+  return origin;
+}
+
 EntityKeys mergeSpawnArgs(const EntityKeys& mapKeys, const EntityKeys* defKeys)
 {
   auto merged = EntityKeys{};
@@ -267,6 +293,33 @@ bool RenderEntityParms::operator==(const RenderEntityParms& other) const
 bool RenderEntityParms::operator!=(const RenderEntityParms& other) const
 {
   return !(*this == other);
+}
+
+std::vector<std::string> removedClassnames(const EntityKeys& worldspawnKeys)
+{
+  // MapFile.cpp:1759-1765: MatchPrefix( "removeEntities" ) on worldspawn's epairs
+  // (idStr::Icmpn), a key given again replacing the value in place
+  constexpr auto prefix = std::string_view{"removeEntities"};
+  auto classnames = std::vector<std::string>{};
+  for (const auto& [key, value] : mergeSpawnArgs(worldspawnKeys, nullptr))
+  {
+    if (
+      key.size() >= prefix.size()
+      && equalsNoCase(std::string_view{key}.substr(0, prefix.size()), prefix))
+    {
+      classnames.push_back(value);
+    }
+  }
+  return classnames;
+}
+
+bool isRemovedClassname(
+  const std::vector<std::string>& removed, const std::string_view classname)
+{
+  // MapFile.cpp:2270-2282 RemoveEntities: idStr::Icmp of the classnames
+  return std::any_of(removed.begin(), removed.end(), [&](const std::string& c) {
+    return equalsNoCase(c, classname);
+  });
 }
 
 RenderEntityParms parseSpawnArgsToRenderEntity(const EntityKeys& args)

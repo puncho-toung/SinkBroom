@@ -17,8 +17,11 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "LitMapFixture.h"
+#include "LitTestUtils.h"
 #include "StringMakers.h"
 #include "lit/CpuPool.h"
+#include "lit/FramePacer.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
 #include "lit/Snapshot.h"
@@ -419,6 +422,9 @@ std::vector<std::vector<std::string>> readCsv(const std::filesystem::path& path)
   }
   return rows;
 }
+
+// how long a stop may take (as in TbUiLibTest's panel tests)
+constexpr auto StopBound = 2000ms;
 
 void teardown(LitSession& session)
 {
@@ -937,6 +943,159 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       CHECK(gone);
     }
     messages.print("snapshots and pool, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("R2.1: a stop while a 2000-brush batch is queued ends within the stop bound")
+  {
+    // 2000 boxes over 16 cells, as the geometry tests have them: 16 chunk jobs queue on
+    // the pool's two threads when the render thread takes the snapshot
+    auto text = std::string{"{\n\"classname\" \"worldspawn\"\n"};
+    for (auto i = 0; i < 2000; ++i)
+    {
+      const auto x = (i % 4) * 1024 + ((i / 16) % 10) * 96 + 32;
+      const auto y = ((i / 4) % 4) * 1024 + ((i / 160) % 10) * 96 + 32;
+      const auto z = (i / 1600) * 96;
+      text += boxBrush(x, y, z, x + 48, y + 48, z + 48, "lp1b/wall");
+    }
+    text += "}\n";
+    auto snapshot = std::make_shared<Snapshot>(snapshotOfMapText(text));
+    snapshot->generation = 11;
+    snapshot->sequence = 1;
+
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = LitSession::create(
+                       instance.handles(), VK_NULL_HANDLE, 16, 16, {}, events.sink(), 11)
+                     | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+
+      REQUIRE(session->offerSnapshot(snapshot));
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return session->snapshotsTakenForTesting() == 1u; }, 5000ms, false));
+
+      // teardown step 1: the stop cancels the pool, so the render thread's exit does not
+      // wait for the batch
+      const auto start = std::chrono::steady_clock::now();
+      session->requestStop();
+      CHECK(session->waitForRenderThread(StopBound));
+      session->stopRenderThread();
+      const auto took = std::chrono::duration<double, std::milli>{
+        std::chrono::steady_clock::now() - start};
+      std::cout << "R2.1: the stop with a 2000-brush batch queued took " << took.count()
+                << " ms\n";
+      CHECK(took < StopBound);
+      session->releaseGpuObjects();
+      session->destroyVkDevice();
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("stop with a batch queued, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("R2.2: a published material table wakes a render thread that waits for nothing")
+  {
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+
+      // the parse thread waits at the gate after its first build, so every lookup of the
+      // first snapshot stays pending
+      auto gate = std::make_shared<ParseGate>();
+      gate->close();
+      auto serviceOptions = MaterialServiceOptions{};
+      serviceOptions.makeSource = [](const std::atomic<bool>&) {
+        return std::unique_ptr<DeclSource>{
+          std::make_unique<MemoryDeclSource>(std::vector<DeclFile>{DeclFile{
+            "materials/lp1bc.mtr",
+            readTextFile(litFixtureFolder() / "materials" / "lp1bc.mtr"),
+            0}})};
+      };
+      serviceOptions.pollInterval = 0ms;
+      serviceOptions.beforeTakeWorkForTesting = [gate] { gate->pass(); };
+      auto service = MaterialService::create(std::move(serviceOptions))
+                     | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+      // destroyed before the service, so that its join never waits at the gate
+      const auto atExit = OpenAtExit{gate};
+      REQUIRE(service->waitForTableForTesting(
+        [](const MaterialTable& t) { return t.registry != 0; }, 10s));
+
+      auto events = Events{};
+      auto session = LitSession::create(
+                       instance.handles(),
+                       VK_NULL_HANDLE,
+                       16,
+                       16,
+                       {},
+                       events.sink(),
+                       12,
+                       service.get())
+                     | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+      auto passes = std::make_shared<std::atomic<int>>(0);
+      session->debugSetHook(DebugHook::IdleUnlocked, [passes] { ++*passes; });
+
+      auto snapshot = std::make_shared<Snapshot>(snapshotOfMapText(
+        "{\n\"classname\" \"worldspawn\"\n" + boxBrush(0, 0, 0, 64, 64, 64, "lp1b/wall")
+        + boxBrush(128, 0, 0, 160, 32, 32, "lp1b/grate") + "}\n"));
+      snapshot->generation = 12;
+      snapshot->sequence = 1;
+      REQUIRE(session->offerSnapshot(snapshot));
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return session->geometryBatchesForTesting() >= 1u; }, 10000ms, false));
+
+      // about a second after the last frame the idle work is done and the wait has no
+      // deadline: no pass for 300 ms
+      std::this_thread::sleep_for(IdleCollectInterval + 200ms);
+      REQUIRE(waitFor(
+        [&] {
+          const auto before = passes->load();
+          std::this_thread::sleep_for(300ms);
+          return passes->load() == before;
+        },
+        10000ms,
+        false));
+      const auto batches = session->geometryBatchesForTesting();
+      const auto idlePasses = passes->load();
+
+      // the table arrives; its owner tells the session, as the host does on
+      // MaterialsPublished
+      gate->open();
+      REQUIRE(service->waitForTableForTesting(
+        [](const MaterialTable& t) {
+          return t.find("textures/lp1b/wall") != nullptr
+                 && t.find("textures/lp1b/grate") != nullptr;
+        },
+        10s));
+      const auto published = std::chrono::steady_clock::now();
+      session->tableChanged();
+      CHECK(waitFor([&] { return passes->load() > idlePasses; }, 100ms, false));
+      std::cout << "R2.2: the render thread's first pass came "
+                << std::chrono::duration<
+                     double,
+                     std::milli>{std::chrono::steady_clock::now() - published}
+                     .count()
+                << " ms after tableChanged\n";
+      // and the chunks built while the materials were pending are built again
+      CHECK(waitFor(
+        [&] { return session->geometryBatchesForTesting() > batches; }, 10000ms, false));
+
+      session->debugSetHook(DebugHook::IdleUnlocked, {});
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      session.reset();
+    }
+    CHECK(resetDispatcher());
+    messages.print("a table wakes the render thread, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }

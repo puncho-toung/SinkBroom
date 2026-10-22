@@ -184,6 +184,63 @@ TEST_CASE("CpuPool")
     CHECK(pool->generation() == generation + 2);
   }
 
+  SECTION("R2.1: cancel makes every job stale without a join; later jobs are refused")
+  {
+    auto pool = makePool();
+    const auto generation = pool->generation();
+    auto gate = std::make_shared<Gate>();
+    auto ranBody = std::make_shared<std::atomic<int>>(0);
+    auto sawStale = std::make_shared<std::atomic<int>>(0);
+    const auto job = std::function<Result<int>(const CpuJobContext&)>{
+      [gate, ranBody, sawStale](const CpuJobContext& context) -> Result<int> {
+        ++*ranBody;
+        gate->enterAndWait();
+        // a running job's next check of stale
+        if (context.stale())
+        {
+          ++*sawStale;
+          return Error{"stale"};
+        }
+        return 1;
+      }};
+    auto running = std::vector<std::future<CpuJobResult<int>>>{};
+    running.push_back(pool->run(job));
+    running.push_back(pool->run(job));
+    REQUIRE(gate->waitUntilEntered(2));
+    auto queued = std::vector<std::future<CpuJobResult<int>>>{};
+    for (auto i = 0; i < 8; ++i)
+    {
+      queued.push_back(pool->run(job));
+    }
+
+    // this thread does not join: cancel returns at once, and the threads go on
+    pool->cancel();
+    CHECK(pool->generation() == generation + 1);
+    CHECK_FALSE(pool->stopped());
+    gate->openGate();
+    for (auto& future : running)
+    {
+      REQUIRE(future.wait_for(Timeout) == std::future_status::ready);
+      CHECK_FALSE(future.get().result.is_success());
+    }
+    // the queued ones return "abandoned" without running their callable
+    for (auto& future : queued)
+    {
+      REQUIRE(future.wait_for(Timeout) == std::future_status::ready);
+      CHECK(future.get().result == Result<int>{Error{"The CPU job was abandoned"}});
+    }
+    CHECK(ranBody->load() == 2);
+    CHECK(sawStale->load() == 2);
+
+    // nothing new is taken
+    auto refused = pool->run(job);
+    CHECK(refused.get().result == Result<int>{Error{"The CPU pool is stopped"}});
+    CHECK(ranBody->load() == 2);
+
+    pool->stop();
+    CHECK(pool->generation() == generation + 2);
+  }
+
   SECTION("a job still queued when the pool stops never runs")
   {
     auto pool = makePool();
@@ -219,8 +276,8 @@ TEST_CASE("CpuPool")
     auto pool = makePool();
     auto owned = std::make_unique<int>(7);
     auto future =
-      pool->run([owned = std::move(owned)](const CpuJobContext&) -> Result<int> {
-        return *owned * 6;
+      pool->run([value = std::move(owned)](const CpuJobContext&) -> Result<int> {
+        return *value * 6;
       });
     CHECK(future.get().result == Result<int>{42});
   }

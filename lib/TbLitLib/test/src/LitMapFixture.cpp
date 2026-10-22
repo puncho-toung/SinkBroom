@@ -25,6 +25,8 @@
 #include "vm/plane.h"
 #include "vm/vec.h"
 
+#include <fmt/format.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -458,6 +460,52 @@ Snapshot snapshotOfMapText(const std::string& text)
   return snapshot;
 }
 
+std::string boxBrush(
+  const int x0,
+  const int y0,
+  const int z0,
+  const int x1,
+  const int y1,
+  const int z1,
+  const std::string& material)
+{
+  // TrenchBroom's points: (p3 - p1) x (p2 - p1) is the outward normal
+  const auto face = [&](
+                      const int ax,
+                      const int ay,
+                      const int az,
+                      const int bx,
+                      const int by,
+                      const int bz,
+                      const int cx,
+                      const int cy,
+                      const int cz,
+                      const std::string& axes) {
+    return fmt::format(
+      "( {} {} {} ) ( {} {} {} ) ( {} {} {} ) {} {} 0 1 1\n",
+      ax,
+      ay,
+      az,
+      bx,
+      by,
+      bz,
+      cx,
+      cy,
+      cz,
+      material,
+      axes);
+  };
+  const auto xAxes = std::string{"[ 0 1 0 0 ] [ 0 0 -1 0 ]"};
+  const auto yAxes = std::string{"[ 1 0 0 0 ] [ 0 0 -1 0 ]"};
+  const auto zAxes = std::string{"[ 1 0 0 0 ] [ 0 -1 0 0 ]"};
+  return "{\n" + face(x0, y0, z0, x0, y0 + 1, z0, x0, y0, z0 + 1, xAxes)
+         + face(x1, y1, z1, x1, y1, z1 + 1, x1, y1 + 1, z1, xAxes)
+         + face(x0, y0, z0, x0, y0, z0 + 1, x0 + 1, y0, z0, yAxes)
+         + face(x1, y1, z1, x1 + 1, y1, z1, x1, y1, z1 + 1, yAxes)
+         + face(x0, y0, z0, x0 + 1, y0, z0, x0, y0 + 1, z0, zAxes)
+         + face(x1, y1, z1, x1, y1 + 1, z1, x1 + 1, y1, z1, zAxes) + "}\n";
+}
+
 std::map<std::string, std::pair<int, int>> listImagesSizes(const std::string& text)
 {
   auto sizes = std::map<std::string, std::pair<int, int>>{};
@@ -466,6 +514,11 @@ std::map<std::string, std::pair<int, int>> listImagesSizes(const std::string& te
   auto inMap = false;
   while (std::getline(in, line))
   {
+    // R1.4: a CRLF checkout reads as an LF one
+    if (!line.empty() && line.back() == '\r')
+    {
+      line.pop_back();
+    }
     if (line.rfind("@@ ", 0) == 0)
     {
       inMap = line == "@@ map";

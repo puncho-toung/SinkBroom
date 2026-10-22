@@ -47,9 +47,17 @@ struct ProcTree;
  * in), works out the cells that changed, and builds them as jobs on the session's CPU
  * pool (D59), inputs by shared_ptr. One batch of jobs is in flight at a time: the render
  * thread takes the next snapshot only when the last one's chunks are applied
- * (readyForSnapshot), so results apply in the snapshots' sequence order. A batch is also
- * started, between snapshots, when the material table makes a provisional chunk's size
- * Ready or brings a pending material (C21), or when the .proc of the map path arrives.
+ * (readyForSnapshot), so results apply in the snapshots' sequence order. A brush entity's
+ * job rebuilds every cell of the entity, because its state (the origin brushes' pivot
+ * among it) applies to all its chunks.
+ *
+ * Every batch first adopts the latest material table, and each table it adopts is
+ * scanned for what the scene waits for (R3.1, R3.2): a material that was pending when a
+ * cell was built, an editor-image size that was Default (C21) and is Ready now, an
+ * entityDef that was pending when an entity was built (C22), and the .proc of the map
+ * path. The cells concerned are built again in that batch. Between snapshots, collect
+ * starts such a batch when a newer table has arrived; the owner wakes the render thread
+ * for it (LitSession::tableChanged, R2.2).
  *
  * Without a pool (or once it is stopped) the batches run on the calling thread. Without a
  * material service every material takes the defaults, provisionally, and there is no
@@ -61,7 +69,7 @@ struct ProcTree;
  * lights have a job in flight.
  *
  * Threads: the render thread only, lightTable() aside (any thread); the jobs on the pool
- * see only their inputs.
+ * see only their inputs, and return early once the pool is cancelled (R2.1).
  */
 class SceneGeometry
 {
@@ -76,14 +84,21 @@ private:
   // the cell each primitive node is chunked in, and the nodes of each cell
   std::unordered_map<PreviewId, CellRef> m_nodeCells;
   std::map<CellRef, std::set<PreviewId>> m_cellNodes;
+  // R2.4: the primitive nodes of each entity (the node's own entity, a func_group's too)
+  std::unordered_map<PreviewId, std::set<PreviewId>> m_entityNodes;
   std::optional<std::string> m_mapPath;
   std::shared_ptr<const ProcTree> m_proc;
+  // the table the last batch was built with; every table adopted is scanned once
   std::shared_ptr<const MaterialTable> m_table;
 
-  // the chunks, and the cells built with materials that were pending or provisional
+  // the chunks, and what their cells wait for (R3.1, R3.2): the cells built while a
+  // material was not in the table, the cells built with a Default editor-image size, and
+  // the entities built while their classname's entityDef was not in the table
   std::map<ChunkKey, Chunk> m_chunks;
   std::unordered_map<PreviewId, ChunkEntityState> m_entityStates;
+  std::map<std::string, std::set<CellRef>> m_pendingMaterials;
   std::map<std::string, std::set<CellRef>> m_provisional;
+  std::map<std::string, std::set<PreviewId>> m_pendingEntityDefs;
   std::map<CellRef, std::size_t> m_solidPieces;
 
   // the batch in flight
@@ -91,7 +106,6 @@ private:
   std::vector<std::future<CpuJobResult<ChunkJobOutput>>> m_jobs;
   std::uint64_t m_batchSequence = 0;
   std::uint64_t m_appliedSequence = 0;
-  std::uint64_t m_lastTableVersion = 0;
   std::vector<std::string> m_warnings;
 
   // the light records (declared last: its job is waited for first)
@@ -135,8 +149,14 @@ public:
 private:
   void markEntity(PreviewId entity);
   void markAll();
+  // R2.3: the cells of an entity's nodes once its chunk entity may have changed
+  void rekeyEntity(PreviewId entity);
+  void addNode(PreviewId id, const CellRef& ref, PreviewId entity);
+  void removeNode(PreviewId id);
   void startBatch();
+  // adopts the latest material table and, when it is new, scans it (R3.1)
   void refreshTable();
+  void scanTable();
   void apply(ChunkJobOutput output);
   bool collectChunks();
   PreviewId chunkEntityOf(const SceneNode& node) const;

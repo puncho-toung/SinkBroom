@@ -291,6 +291,21 @@ std::size_t RenderThread::chunkCount() const
   return m_chunkCount;
 }
 
+void RenderThread::tableChanged()
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_tableChanged = true;
+  }
+  m_wake.notify_all();
+}
+
+std::uint64_t RenderThread::batchesApplied() const
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  return m_batchesApplied;
+}
+
 bool RenderThread::park(const std::chrono::milliseconds timeout)
 {
   auto lock = std::unique_lock{m_mutex};
@@ -525,16 +540,20 @@ void RenderThread::runLoop()
 
     auto deadline = next.value_or(FrameClock::time_point::max());
 
-    // the chunk jobs: a finished batch is applied, and the inbox may be taken again;
+    // the chunk jobs: a finished batch is applied, the inbox may be taken again, and a
+    // newer material table is adopted (R2.2: tableChanged wakes the thread for it);
     // outside m_mutex, because they take the material service's mutex
+    m_tableChanged = false;
     lock.unlock();
     runDebugHook(DebugHook::IdleUnlocked);
     const auto building = geometryTick();
     lock.lock();
-    // the mutex was released for the chunk jobs: a stop, park, trigger or exposure that
-    // came meanwhile, whose notify found no waiter, or the trigger geometryTick set
+    // the mutex was released for the chunk jobs: a stop, park, trigger, exposure or table
+    // that came meanwhile, whose notify found no waiter, or the trigger geometryTick set
     // itself, is acted on, not waited past (plans/lit-preview/19-LITGPU-HANG.md)
-    if (m_stopRequested || m_parkRequested || m_pacer.nextFrameTime(canDraw()) != next)
+    if (
+      m_stopRequested || m_parkRequested || m_tableChanged
+      || m_pacer.nextFrameTime(canDraw()) != next)
     {
       continue;
     }
@@ -1016,6 +1035,7 @@ bool RenderThread::geometryTick()
     const auto lock = std::scoped_lock{m_mutex};
     m_appliedSequence = m_geometry->appliedSequence();
     m_chunkCount = m_geometry->chunks().size();
+    ++m_batchesApplied;
     // a snapshot waiting in the inbox is taken at the next frame
     if (m_snapshotInbox)
     {

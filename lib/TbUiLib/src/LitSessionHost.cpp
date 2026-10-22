@@ -843,6 +843,11 @@ void LitSessionHost::dispatchSessionEvent(
   case lit::SessionEvent::MaterialsPublished:
     // the next table posts again; the owner reads the latest one now
     m_publishPending->store(false);
+    // R2.2: the render thread adopts it, also while it waits for nothing else
+    if (drawing())
+    {
+      m_session->tableChanged();
+    }
     if (m_eventHandler)
     {
       m_eventHandler(m_generation, event, message);

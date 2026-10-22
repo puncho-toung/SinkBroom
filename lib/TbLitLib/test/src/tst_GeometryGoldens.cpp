@@ -223,6 +223,19 @@ TEST_CASE("Geometry goldens: the fixture's engine output reads back")
   CHECK(f.sizes.at("textures/lp1b/floor") == std::pair{64, 32});
   CHECK(f.sizes.at("textures/lp1b/patch") == std::pair{64, 16});
 
+  // R1.4: a CRLF checkout of the listing gives the same sizes
+  auto crlf = std::string{};
+  for (const auto c :
+       readTextFile(litFixtureFolder() / "goldens" / "lp1b_geometry" / "listImages.txt"))
+  {
+    if (c == '\n')
+    {
+      crlf += '\r';
+    }
+    crlf += c;
+  }
+  CHECK(listImagesSizes(crlf) == f.sizes);
+
   // PointInArea: the two rooms, a wall, outside
   CHECK(pointInArea(*f.proc, {128, 0, 64}) == 0);
   CHECK(pointInArea(*f.proc, {-128, 0, 64}) == 1);
@@ -267,7 +280,8 @@ TEST_CASE(
         const auto& face = *it->face;
         CAPTURE(surface.material, j, v[0], v[1], v[2]);
 
-        // the preview's st rule (D59), through SetTexCoord and the WriteFloat mirror
+        // the preview's st rule (D59), through SetTexCoord and the chunker's own
+        // read-back of what dmap writes (R3.9: procReadBack, WriteFloat's snap included)
         const auto texture = EngineValveTexture{
           {face.uAxis.x(), face.uAxis.y(), face.uAxis.z()},
           face.offset.x(),
@@ -281,8 +295,8 @@ TEST_CASE(
         engineSetTexCoord(vert, st[0], st[1]);
         const auto stored = engineTexCoord(vert);
         // P.18: modulo integers
-        const auto ds = procFloat(stored[0]) - v[3];
-        const auto dt = procFloat(stored[1]) - v[4];
+        const auto ds = procReadBack(stored[0]) - v[3];
+        const auto dt = procReadBack(stored[1]) - v[4];
         CHECK(ds == std::round(ds));
         CHECK(dt == std::round(dt));
 

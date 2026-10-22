@@ -84,6 +84,10 @@ inline constexpr int MaxPatchSide = 99;
 inline constexpr int MaxPatchSubdivisions = 64;
 // what a subdivided patch may have: its triangles are indexed with 16 bits
 inline constexpr int MaxPatchVertices = 65535;
+// R1.3: the stack an adaptive subdivision's GenerateEdgeIndexes may take for its two
+// _alloca16 blocks, 4 bytes per vertex and per index (Surface.cpp:964-972), bounded
+// before Subdivide runs: 2 MB of the pool thread's 8 MB, about 74,000 vertices
+inline constexpr std::int64_t MaxPatchStackBytes = 2 * 1024 * 1024;
 // the vertices of a triangle surface the tangent code takes (triIndex_t)
 inline constexpr int MaxSurfaceVertices = 65535;
 } // namespace engineBounds
@@ -235,10 +239,25 @@ struct EngineSurface
  * or SubdivideExplicit(h, v, true) for patchDef3, then ParseSurface's triangle order
  * (i + 1, i + 2, i) (map.cpp:416-418). Null, with why in error, when the patch is outside
  * the bounds (K19): sides of 1 to MaxPatchSide, subdivisions of 1 to
- * MaxPatchSubdivisions, at most MaxPatchVertices vertices once subdivided.
+ * MaxPatchSubdivisions, at most MaxPatchVertices vertices once subdivided; and, before
+ * an adaptive subdivision runs (R1.3), an upper bound on its size from the control
+ * points (patchSubdivisionBound) whose GenerateEdgeIndexes blocks would take more than
+ * MaxPatchStackBytes of the stack: those blocks are _alloca16, and an unbounded patch
+ * (99 × 99 control points whose rows swing by 512 units: 785 × 785 vertices, 17 MB)
+ * would overflow the pool thread's stack.
  */
 std::optional<EngineSurface> engineSubdividePatch(
   const EnginePatch& patch, std::string* error = nullptr);
+
+/**
+ * R1.3: the width and height Subdivide(4, 4, -1, true) gives the patch before PutOnCurve,
+ * RemoveLinearColumnsRows and Collapse, which only remove columns and rows: its two
+ * passes (Surface_Patch.cpp:683-804) on the positions alone, in the copy's float
+ * arithmetic, so an upper bound on what GenerateEdgeIndexes gets. It stops once width ×
+ * height exceeds maxVertices, and returns the size it reached. Pure; any thread.
+ */
+std::array<std::int64_t, 2> patchSubdivisionBound(
+  const EnginePatch& patch, std::int64_t maxVertices);
 
 // ----- triangle surfaces (pure) -----
 
@@ -250,6 +269,11 @@ enum class EngineTangentPath
   // unsmoothedTangents: R_BuildDominantTris, then R_DeriveTangents, which derives the
   // normals too
   Unsmoothed,
+  // mikktspace: R_DeriveTangentsWithoutNormals( tri, true ), whose MikkTSpace call fails
+  // here (it is not copied, Q18), so the copy warns "Mikkelsen tangent space calculation
+  // failed" and derives without normals, as the engine does when MikkTSpace fails
+  // (mirror.json M-ID-DIFF-04)
+  Mikktspace,
 };
 
 struct EngineTriangles

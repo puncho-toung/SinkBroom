@@ -103,6 +103,11 @@ std::vector<GoldenBlock> readGoldens()
   auto line = std::string{};
   while (std::getline(stream, line))
   {
+    // R1.4: a CRLF checkout reads as an LF one
+    if (!line.empty() && line.back() == '\r')
+    {
+      line.pop_back();
+    }
     if (line.rfind("@@ ", 0) == 0)
     {
       const auto kindEnd = line.find(' ', 3);

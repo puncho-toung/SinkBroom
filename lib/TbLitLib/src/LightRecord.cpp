@@ -19,6 +19,7 @@
 
 #include "lit/LightRecord.h"
 
+#include "lit/CpuPool.h"
 #include "lit/EntityState.h"
 #include "lit/ProcFile.h"
 
@@ -26,7 +27,9 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <chrono>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -47,6 +50,19 @@ EntityKeys keysOf(const Snapshot& snapshot, const SnapshotEntity& entity)
   return keys;
 }
 
+bool isWorldspawn(const std::string_view classname)
+{
+  constexpr auto worldspawn = std::string_view{"worldspawn"};
+  return classname.size() == worldspawn.size()
+         && std::equal(
+           classname.begin(),
+           classname.end(),
+           worldspawn.begin(),
+           [](const char a, const char b) {
+             return (a >= 'A' && a <= 'Z' ? char(a - 'A' + 'a') : a) == b;
+           });
+}
+
 void eraseFromAll(std::map<std::string, std::set<PreviewId>>& waiting, const PreviewId id)
 {
   for (auto it = waiting.begin(); it != waiting.end();)
@@ -64,15 +80,27 @@ std::shared_ptr<const LightRecord> LightTable::find(const PreviewId id) const
   return record ? *record : nullptr;
 }
 
-LightJobOutput buildLightRecords(const LightJobInput& input)
+LightJobOutput buildLightRecords(const LightJobInput& input, const CpuJobContext* context)
 {
   auto output = LightJobOutput{};
   const auto* table = input.materials.get();
   const auto* tree = input.proc.get();
   const auto common = tree ? commonChildrenAreas(*tree) : std::vector<int>{};
+  const auto removedClasses = removedClassnames(input.worldspawn);
 
   for (const auto& in : input.lights)
   {
+    // R2.1: a cancelled pool's job stops here; its output is dropped
+    if (context && context->stale())
+    {
+      break;
+    }
+    // R3.12: MapFile.cpp:2270-2282 deletes the entities of a removed class
+    if (isRemovedClassname(removedClasses, in.classname))
+    {
+      output.removed.emplace_back(in.id, in.version);
+      continue;
+    }
     auto record = LightRecord{};
     record.id = in.id;
     record.version = in.version;
@@ -174,12 +202,35 @@ void LightRegistry::takeSnapshot(
       m_removed.insert(id);
       m_dirty.erase(id);
     }
+    if (id == m_worldspawn)
+    {
+      m_worldspawn = NoPreviewId;
+      m_worldspawnKeys.clear();
+      for (const auto& [light, state] : m_lights)
+      {
+        m_dirty.insert(light);
+      }
+    }
   }
 
   auto entities = std::unordered_map<PreviewId, const SnapshotEntity*>{};
   for (const auto& entity : snapshot.entities)
   {
     entities[entity.id] = &entity;
+    // R3.12: worldspawn's removeEntities* keys decide which lights exist
+    if (isWorldspawn(snapshot.string(entity.classname)))
+    {
+      auto keys = keysOf(snapshot, entity);
+      if (entity.id != m_worldspawn || keys != m_worldspawnKeys)
+      {
+        m_worldspawn = entity.id;
+        m_worldspawnKeys = std::move(keys);
+        for (const auto& [id, light] : m_lights)
+        {
+          m_dirty.insert(id);
+        }
+      }
+    }
   }
 
   auto changed = std::set<PreviewId>{};
@@ -272,18 +323,16 @@ void LightRegistry::startBatch()
     m_removed.clear();
     publish();
   }
+  refreshTable();
   if (m_dirty.empty())
   {
     return;
   }
 
   auto input = std::make_shared<LightJobInput>();
-  input->materials = m_materials ? m_materials->table() : nullptr;
-  if (input->materials)
-  {
-    m_lastTableVersion = input->materials->version;
-  }
+  input->materials = m_table;
   input->proc = m_proc;
+  input->worldspawn = m_worldspawnKeys;
   for (const auto id : m_dirty)
   {
     auto& light = m_lights.at(id);
@@ -296,11 +345,13 @@ void LightRegistry::startBatch()
   m_dirty.clear();
 
   auto job = [input](const CpuJobContext& context) -> Result<LightJobOutput> {
+    // R2.1: the job of a cancelled pool returns at its next light
+    auto output = buildLightRecords(*input, &context);
     if (context.stale())
     {
       return Error{"The light job was abandoned"};
     }
-    return buildLightRecords(*input);
+    return output;
   };
   if (m_pool && !m_pool->stopped())
   {
@@ -317,8 +368,57 @@ void LightRegistry::startBatch()
   }
 }
 
+void LightRegistry::refreshTable()
+{
+  if (!m_materials)
+  {
+    return;
+  }
+  auto table = m_materials->table();
+  if (!table || table == m_table)
+  {
+    return;
+  }
+  m_table = std::move(table);
+  // R3.1: what the lights wait for is looked for in every table the registry adopts
+  for (auto it = m_waitingMaterials.begin(); it != m_waitingMaterials.end();)
+  {
+    if (m_table->find(it->first))
+    {
+      m_dirty.insert(it->second.begin(), it->second.end());
+      it = m_waitingMaterials.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
+  }
+  for (auto it = m_waitingEntityDefs.begin(); it != m_waitingEntityDefs.end();)
+  {
+    if (m_table->findEntityDef(it->first))
+    {
+      m_dirty.insert(it->second.begin(), it->second.end());
+      it = m_waitingEntityDefs.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
+  }
+}
+
 void LightRegistry::apply(LightJobOutput output)
 {
+  for (const auto& [id, version] : output.removed)
+  {
+    // R3.12: a removed class has no record; a newer build of the light is queued when
+    // it changed again
+    const auto light = m_lights.find(id);
+    if (light != m_lights.end() && light->second.version == version)
+    {
+      m_records = m_records.erase(id);
+    }
+  }
   for (auto& record : output.records)
   {
     // a light removed, or changed again, while the job ran: its record is dropped (a
@@ -382,40 +482,9 @@ bool LightRegistry::collect()
     return true;
   }
 
-  // between jobs: what a newer material table brought
-  if (m_materials)
-  {
-    const auto table = m_materials->table();
-    if (table && table->version != m_lastTableVersion)
-    {
-      m_lastTableVersion = table->version;
-      for (auto it = m_waitingMaterials.begin(); it != m_waitingMaterials.end();)
-      {
-        if (table->find(it->first))
-        {
-          m_dirty.insert(it->second.begin(), it->second.end());
-          it = m_waitingMaterials.erase(it);
-        }
-        else
-        {
-          ++it;
-        }
-      }
-      for (auto it = m_waitingEntityDefs.begin(); it != m_waitingEntityDefs.end();)
-      {
-        if (table->findEntityDef(it->first))
-        {
-          m_dirty.insert(it->second.begin(), it->second.end());
-          it = m_waitingEntityDefs.erase(it);
-        }
-        else
-        {
-          ++it;
-        }
-      }
-      startBatch();
-    }
-  }
+  // between jobs: a newer material table may bring what lights wait for (startBatch
+  // adopts and scans it)
+  startBatch();
   return false;
 }
 

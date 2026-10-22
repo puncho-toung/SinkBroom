@@ -30,13 +30,13 @@
 #include "lit/LightData.h"
 #include "lit/LightParse.h"
 #include "lit/MaterialService.h"
+#include "lit/NumberText.h"
 #include "lit/Projection.h"
 
 #include <fmt/format.h>
 
 #include <algorithm>
 #include <bit>
-#include <charconv>
 #include <climits>
 #include <cmath>
 #include <cstdint>
@@ -73,15 +73,24 @@ std::vector<std::string> words(const std::string& text)
   return result;
 }
 
-std::vector<Block> readGoldens()
+std::string goldensText()
 {
-  const auto text =
-    readTextFile(litFixtureFolder() / "goldens" / "lp1b_lights" / "light_goldens.txt");
+  return readTextFile(
+    litFixtureFolder() / "goldens" / "lp1b_lights" / "light_goldens.txt");
+}
+
+std::vector<Block> readGoldens(const std::string& text = goldensText())
+{
   auto blocks = std::vector<Block>{};
   auto in = std::istringstream{text};
   auto line = std::string{};
   while (std::getline(in, line))
   {
+    // R1.4: a CRLF checkout reads as an LF one
+    if (!line.empty() && line.back() == '\r')
+    {
+      line.pop_back();
+    }
     if (line.empty() || line[0] == '#')
     {
       continue;
@@ -116,8 +125,9 @@ std::vector<Block> readGoldens()
 
 float parseFloat(const std::string& text)
 {
+  // R1.1: from_chars, or fast_float's on Apple
   auto value = 0.0f;
-  std::from_chars(text.data(), text.data() + text.size(), value);
+  parseFloatChars(text.data(), text.data() + text.size(), value);
   return value;
 }
 
@@ -194,7 +204,37 @@ bool close(
   return true;
 }
 
+bool operator==(const Block& lhs, const Block& rhs)
+{
+  return lhs.kind == rhs.kind && lhs.header == rhs.header && lhs.keys == rhs.keys
+         && lhs.expect == rhs.expect;
+}
+
+std::string withCrlf(const std::string& text)
+{
+  auto result = std::string{};
+  for (const auto c : text)
+  {
+    if (c == '\n')
+    {
+      result += '\r';
+    }
+    result += c;
+  }
+  return result;
+}
+
 } // namespace
+
+TEST_CASE("LightGoldens: a CRLF copy of the goldens reads as the file (R1.4)")
+{
+  const auto text = goldensText();
+  const auto crlf = withCrlf(text);
+  REQUIRE(crlf.size() > text.size());
+  const auto blocks = readGoldens(text);
+  CHECK(blocks.size() > 10u);
+  CHECK(readGoldens(crlf) == blocks);
+}
 
 TEST_CASE("LightGoldens: the light parse and derived data against the formulas")
 {

@@ -115,7 +115,7 @@ bool CpuPool::post(std::unique_ptr<Task> task)
 {
   {
     const auto lock = std::scoped_lock{m_shared->mutex};
-    if (m_shared->stopping)
+    if (m_shared->stopping || m_shared->cancelled)
     {
       return false;
     }
@@ -123,6 +123,15 @@ bool CpuPool::post(std::unique_ptr<Task> task)
   }
   m_shared->wake.notify_one();
   return true;
+}
+
+void CpuPool::cancel()
+{
+  const auto lock = std::scoped_lock{m_shared->mutex};
+  // every job made so far is stale from here on; the workers keep taking the queued
+  // tasks, which return at once, so no future waits for a join
+  ++*m_generation;
+  m_shared->cancelled = true;
 }
 
 void CpuPool::stop()

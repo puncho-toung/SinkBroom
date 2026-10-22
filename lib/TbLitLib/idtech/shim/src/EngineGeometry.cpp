@@ -20,8 +20,9 @@
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/framework/File.cpp, renderer/Model.cpp,
-// renderer/tr_trisurf.cpp, idlib/MapFile.cpp, tools/compilers/dmap/map.cpp,
-// dmap/output.cpp, dmap/tritools.cpp and dmap/usurface.cpp):
+// renderer/tr_trisurf.cpp, idlib/MapFile.cpp, idlib/geometry/Surface_Patch.cpp,
+// tools/compilers/dmap/map.cpp, dmap/output.cpp, dmap/tritools.cpp and
+// dmap/usurface.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2012-2024 Robert Beckebans
 //   Copyright (C) 2020 Stephen Pridham
@@ -42,10 +43,9 @@
 
 /**
  * tr_trisurf.cpp:876-883's R_DeriveMikktspaceTangents, not copied (Q18: no retail or user
- * material uses the mikktspace keyword, so MikkTSpace itself is not copied). The facade
- * never asks for MikkTSpace (mirror.json M-ID-DIFF-04): a material with the keyword takes
- * the unsmoothed path with a warning (lit/ChunkBuilder.h). Were it called, it would fail,
- * and the copied R_DeriveTangentsWithoutNormals would warn and fall back to its own
+ * material uses the mikktspace keyword, so MikkTSpace itself is not copied). A material
+ * with the keyword asks for it (EngineTangentPath::Mikktspace, mirror.json M-ID-DIFF-04):
+ * it fails, and the copied R_DeriveTangentsWithoutNormals warns and falls back to its own
  * derivation, as the engine does when MikkTSpace fails.
  */
 static bool R_DeriveMikktspaceTangents(srfTriangles_t*)
@@ -400,6 +400,163 @@ std::string engineProcFloatText(const float value)
   return text.c_str();
 }
 
+namespace
+{
+
+using PatchPoint = std::array<float, 3>;
+using PatchLine = std::vector<PatchPoint>;
+
+// Surface_Patch.cpp:262-266 LerpVert's position
+PatchPoint lerpPoint(const PatchPoint& a, const PatchPoint& b)
+{
+  return {0.5f * (a[0] + b[0]), 0.5f * (a[1] + b[1]), 0.5f * (a[2] + b[2])};
+}
+
+PatchLine lerpLine(const PatchLine& a, const PatchLine& b)
+{
+  auto line = PatchLine(a.size());
+  for (auto i = std::size_t{0}; i < a.size(); ++i)
+  {
+    line[i] = lerpPoint(a[i], b[i]);
+  }
+  return line;
+}
+
+// Surface_Patch.cpp:690-693, :705-706 (and :754-756, :767-768): the midpoint of a span
+// of three points off far enough to subdivide, Square( 4.0f ) for both directions
+bool spanTooCurved(const PatchLine& a, const PatchLine& b, const PatchLine& c)
+{
+  for (auto i = std::size_t{0}; i < a.size(); ++i)
+  {
+    auto delta = PatchPoint{};
+    for (auto l = std::size_t{0}; l < 3; ++l)
+    {
+      const auto mid = (a[i][l] + b[i][l] * 2.0f + c[i][l]) * 0.25f;
+      delta[l] = b[i][l] - mid;
+    }
+    if (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2] > 16.0f)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * One span of Subdivide's pass (Surface_Patch.cpp:683-742 or :745-804): a span whose
+ * midpoint is off too far gets two new lines, prev, mid and next replacing the peak, and
+ * its left half is checked again before its right one. Appends the lines after a to out
+ * (when out is given) and counts them; stops once count exceeds limit.
+ */
+void subdivideSpan(
+  const PatchLine& a,
+  const PatchLine& b,
+  const PatchLine& c,
+  std::vector<PatchLine>* out,
+  std::int64_t& count,
+  const std::int64_t limit,
+  const int depth)
+{
+  if (count > limit || depth > 30 || !spanTooCurved(a, b, c))
+  {
+    if (out)
+    {
+      out->push_back(b);
+      out->push_back(c);
+    }
+    count += 2;
+    return;
+  }
+  const auto prev = lerpLine(a, b);
+  const auto next = lerpLine(b, c);
+  const auto mid = lerpLine(prev, next);
+  subdivideSpan(a, prev, mid, out, count, limit, depth + 1);
+  subdivideSpan(mid, next, c, out, count, limit, depth + 1);
+}
+
+} // namespace
+
+std::array<std::int64_t, 2> patchSubdivisionBound(
+  const EnginePatch& patch, const std::int64_t maxVertices)
+{
+  const auto width = patch.width;
+  const auto height = patch.height;
+  if (
+    width < 1 || height < 1
+    || patch.controlPoints.size() != std::size_t(width) * std::size_t(height))
+  {
+    return {0, 0};
+  }
+
+  // the horizontal pass on the control columns (verts[i * width + j]: i the row, j the
+  // column); each column is a line of height points
+  auto columns =
+    std::vector<PatchLine>(std::size_t(width), PatchLine(std::size_t(height)));
+  for (auto i = 0; i < height; ++i)
+  {
+    for (auto j = 0; j < width; ++j)
+    {
+      columns[std::size_t(j)][std::size_t(i)] =
+        patch.controlPoints[std::size_t(i * width + j)].xyz;
+    }
+  }
+  const auto columnLimit = maxVertices / height;
+  auto expanded = std::vector<PatchLine>{columns.front()};
+  auto outWidth = std::int64_t{1};
+  auto j = 0;
+  for (; j + 2 < width; j += 2)
+  {
+    subdivideSpan(
+      columns[std::size_t(j)],
+      columns[std::size_t(j + 1)],
+      columns[std::size_t(j + 2)],
+      &expanded,
+      outWidth,
+      columnLimit,
+      0);
+    if (outWidth > columnLimit)
+    {
+      return {outWidth, height};
+    }
+  }
+  for (++j; j < width; ++j)
+  {
+    expanded.push_back(columns[std::size_t(j)]);
+    ++outWidth;
+  }
+
+  // the vertical pass on the rows of the expanded patch, counted only
+  auto rows = std::vector<PatchLine>(std::size_t(height), PatchLine(expanded.size()));
+  for (auto c = std::size_t{0}; c < expanded.size(); ++c)
+  {
+    for (auto r = std::size_t{0}; r < std::size_t(height); ++r)
+    {
+      rows[r][c] = expanded[c][r];
+    }
+  }
+  expanded.clear();
+  const auto rowLimit = maxVertices / outWidth;
+  auto outHeight = std::int64_t{1};
+  auto r = 0;
+  for (; r + 2 < height; r += 2)
+  {
+    subdivideSpan(
+      rows[std::size_t(r)],
+      rows[std::size_t(r + 1)],
+      rows[std::size_t(r + 2)],
+      nullptr,
+      outHeight,
+      rowLimit,
+      0);
+    if (outHeight > rowLimit)
+    {
+      return {outWidth, outHeight};
+    }
+  }
+  outHeight += height - 1 - r;
+  return {outWidth, outHeight};
+}
+
 std::optional<EngineSurface> engineSubdividePatch(
   const EnginePatch& patch, std::string* error)
 {
@@ -440,6 +597,23 @@ std::optional<EngineSurface> engineSubdividePatch(
     if (columns * rows > engineBounds::MaxPatchVertices)
     {
       return refuse("the subdivided patch would have more than 65535 vertices");
+    }
+  }
+  else
+  {
+    // R1.3: Subdivide ends in GenerateEdgeIndexes, whose two blocks are _alloca16 of 4
+    // bytes per vertex and per index (Surface.cpp:964-972), so the size is bounded
+    // before it runs, not after
+    const auto [columns, rows] =
+      patchSubdivisionBound(patch, engineBounds::MaxPatchStackBytes / 4);
+    const auto stackBytes =
+      4 * columns * rows + 4 * 6 * (columns - 1) * (rows - 1) + 2 * 16;
+    if (stackBytes > engineBounds::MaxPatchStackBytes)
+    {
+      return refuse(
+        "the patch's subdivision could take more than 2 MB of the thread's stack (about "
+        "74,000 "
+        "vertices)");
     }
   }
 
@@ -523,7 +697,7 @@ std::optional<EngineTriangles> engineCleanupTriangles(
   }
   else
   {
-    R_DeriveTangentsWithoutNormals(tri.get(), false);
+    R_DeriveTangentsWithoutNormals(tri.get(), path == EngineTangentPath::Mikktspace);
   }
   return trianglesOf(*tri);
 }

@@ -60,6 +60,20 @@ std::string procPathOf(const std::string& mapPath)
   return std::filesystem::path{mapPath}.replace_extension(".proc").string();
 }
 
+// removes refs from every set of waiting, and the sets that are empty then
+void forgetCells(
+  std::map<std::string, std::set<CellRef>>& waiting, const std::vector<CellRef>& refs)
+{
+  for (auto it = waiting.begin(); it != waiting.end();)
+  {
+    for (const auto& ref : refs)
+    {
+      it->second.erase(ref);
+    }
+    it = it->second.empty() ? waiting.erase(it) : std::next(it);
+  }
+}
+
 } // namespace
 
 SceneGeometry::SceneGeometry(CpuPool* pool, MaterialService* materials)
@@ -106,12 +120,15 @@ PreviewId SceneGeometry::chunkEntityOf(const SceneNode& node) const
 
 void SceneGeometry::markEntity(const PreviewId entity)
 {
-  for (const auto& [id, ref] : m_nodeCells)
+  // R2.4: the entity's own nodes, not every node of the scene
+  if (const auto nodes = m_entityNodes.find(entity); nodes != m_entityNodes.end())
   {
-    const auto node = m_nodes.find(id);
-    if (node != m_nodes.end() && node->second->entity == entity)
+    for (const auto id : nodes->second)
     {
-      m_dirty.insert(ref);
+      if (const auto ref = m_nodeCells.find(id); ref != m_nodeCells.end())
+      {
+        m_dirty.insert(ref->second);
+      }
     }
   }
 }
@@ -128,6 +145,80 @@ void SceneGeometry::markAll()
   }
 }
 
+void SceneGeometry::addNode(
+  const PreviewId id, const CellRef& ref, const PreviewId entity)
+{
+  m_nodeCells[id] = ref;
+  m_cellNodes[ref].insert(id);
+  m_entityNodes[entity].insert(id);
+  m_dirty.insert(ref);
+}
+
+void SceneGeometry::removeNode(const PreviewId id)
+{
+  if (const auto cell = m_nodeCells.find(id); cell != m_nodeCells.end())
+  {
+    m_dirty.insert(cell->second);
+    if (const auto nodes = m_cellNodes.find(cell->second); nodes != m_cellNodes.end())
+    {
+      nodes->second.erase(id);
+      if (nodes->second.empty())
+      {
+        m_cellNodes.erase(nodes);
+      }
+    }
+    m_nodeCells.erase(cell);
+  }
+  if (const auto node = m_nodes.find(id); node != m_nodes.end())
+  {
+    if (const auto nodes = m_entityNodes.find(node->second->entity);
+        nodes != m_entityNodes.end())
+    {
+      nodes->second.erase(id);
+      if (nodes->second.empty())
+      {
+        m_entityNodes.erase(nodes);
+      }
+    }
+  }
+}
+
+void SceneGeometry::rekeyEntity(const PreviewId entity)
+{
+  const auto nodes = m_entityNodes.find(entity);
+  if (nodes == m_entityNodes.end())
+  {
+    return;
+  }
+  for (const auto id : nodes->second)
+  {
+    const auto cell = m_nodeCells.find(id);
+    const auto node = m_nodes.find(id);
+    if (cell == m_nodeCells.end() || node == m_nodes.end())
+    {
+      continue;
+    }
+    const auto ref = CellRef{chunkEntityOf(*node->second), cell->second.cell};
+    if (ref == cell->second)
+    {
+      continue;
+    }
+    // the old key's chunks go, the new key's are built
+    m_dirty.insert(cell->second);
+    if (const auto old = m_cellNodes.find(cell->second); old != m_cellNodes.end())
+    {
+      old->second.erase(id);
+      if (old->second.empty())
+      {
+        m_cellNodes.erase(old);
+      }
+    }
+    cell->second = ref;
+    m_cellNodes[ref].insert(id);
+    m_dirty.insert(ref);
+  }
+}
+
 void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
 {
   m_batchSequence = snapshot.sequence;
@@ -135,12 +226,7 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
   // B0.4: removed holds node and entity ids
   for (const auto id : snapshot.removed)
   {
-    if (const auto cell = m_nodeCells.find(id); cell != m_nodeCells.end())
-    {
-      m_dirty.insert(cell->second);
-      m_cellNodes[cell->second].erase(id);
-      m_nodeCells.erase(cell);
-    }
+    removeNode(id);
     m_nodes.erase(id);
     if (m_entities.erase(id) > 0)
     {
@@ -159,12 +245,19 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
     const auto id = entity->id;
     const auto isWorld = equalsNoCase(entity->classname, "worldspawn");
     const auto old = m_entities.find(id);
-    const auto changed = old == m_entities.end() || old->second->keys != entity->keys
-                         || old->second->classname != entity->classname;
+    const auto classnameChanged =
+      old != m_entities.end() && old->second->classname != entity->classname;
+    const auto changed =
+      old == m_entities.end() || old->second->keys != entity->keys || classnameChanged;
     m_entities[id] = std::move(entity);
     if (isWorld)
     {
       m_worldspawn = id;
+    }
+    if (classnameChanged)
+    {
+      // R2.3: into or out of func_group, the nodes' chunk entity changes with it
+      rekeyEntity(id);
     }
     if (changed)
     {
@@ -184,18 +277,10 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
   for (auto& node : sceneNodesOf(snapshot))
   {
     const auto id = node->id;
-    if (const auto old = m_nodeCells.find(id); old != m_nodeCells.end())
-    {
-      m_dirty.insert(old->second);
-      m_cellNodes[old->second].erase(id);
-      m_nodeCells.erase(old);
-    }
+    removeNode(id);
     if (isPrimitive(*node))
     {
-      const auto ref = CellRef{chunkEntityOf(*node), cellOfNode(*node)};
-      m_nodeCells[id] = ref;
-      m_cellNodes[ref].insert(id);
-      m_dirty.insert(ref);
+      addNode(id, CellRef{chunkEntityOf(*node), cellOfNode(*node)}, node->entity);
       // the materials are asked for now, so that the table has them soon (C21)
       if (m_materials)
       {
@@ -234,101 +319,177 @@ void SceneGeometry::refreshTable()
   {
     return;
   }
-  m_table = m_materials->table();
-  for (const auto& [id, entity] : m_entities)
+  auto table = m_materials->table();
+  if (!table || table == m_table)
   {
-    static_cast<void>(m_materials->entityDef(entity->classname));
+    return;
+  }
+  m_table = std::move(table);
+  scanTable();
+}
+
+void SceneGeometry::scanTable()
+{
+  // R3.1: what the cells wait for is looked for in every table the scene adopts, also
+  // one that a batch for other cells adopts first
+  if (m_mapPath && !m_proc)
+  {
+    if (const auto slot = m_table->findProcFile(procPathOf(*m_mapPath));
+        slot && slot->tree)
+    {
+      m_proc = slot->tree;
+      m_lights.setProcTree(m_proc);
+      markAll();
+    }
+  }
+  for (auto it = m_pendingMaterials.begin(); it != m_pendingMaterials.end();)
+  {
+    if (m_table->find(it->first))
+    {
+      m_dirty.insert(it->second.begin(), it->second.end());
+      it = m_pendingMaterials.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
+  }
+  for (auto it = m_provisional.begin(); it != m_provisional.end();)
+  {
+    const auto slot = m_table->find(it->first);
+    if (
+      slot && slot->entry
+      && slot->entry->editorImageSize.state == EditorImageSize::State::Ready)
+    {
+      m_dirty.insert(it->second.begin(), it->second.end());
+      it = m_provisional.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
+  }
+  // R3.2: an entityDef that arrives after the entity's first batch rebuilds its chunks
+  for (auto it = m_pendingEntityDefs.begin(); it != m_pendingEntityDefs.end();)
+  {
+    if (m_table->findEntityDef(it->first))
+    {
+      for (const auto entity : it->second)
+      {
+        markEntity(entity);
+      }
+      it = m_pendingEntityDefs.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
   }
 }
 
 void SceneGeometry::startBatch()
 {
-  if (m_dirty.empty() || !m_jobs.empty())
+  if (!m_jobs.empty())
   {
     return;
   }
   refreshTable();
-  if (m_table)
+  if (m_dirty.empty())
   {
-    m_lastTableVersion = m_table->version;
+    return;
   }
 
-  // one job per world cell, one per brush entity with all its cells
-  auto jobs = std::map<PreviewId, std::vector<CellRef>>{};
-  auto worldJobs = std::vector<std::vector<CellRef>>{};
+  // one job per world cell; one per brush entity with every cell of the entity (R3.4:
+  // the pivot of its origin brushes applies to all its chunks)
+  auto entityJobs = std::map<PreviewId, std::set<CellRef>>{};
+  auto jobs = std::vector<std::vector<CellRef>>{};
   for (const auto& ref : m_dirty)
   {
     if (ref.entity == m_worldspawn)
     {
-      worldJobs.push_back({ref});
+      jobs.push_back({ref});
     }
     else
     {
-      jobs[ref.entity].push_back(ref);
+      entityJobs[ref.entity].insert(ref);
     }
   }
-  for (auto& [entity, refs] : jobs)
-  {
-    worldJobs.push_back(std::move(refs));
-  }
   m_dirty.clear();
+  for (auto& [entity, refs] : entityJobs)
+  {
+    if (const auto nodes = m_entityNodes.find(entity); nodes != m_entityNodes.end())
+    {
+      for (const auto id : nodes->second)
+      {
+        if (const auto ref = m_nodeCells.find(id);
+            ref != m_nodeCells.end() && ref->second.entity == entity)
+        {
+          refs.insert(ref->second);
+        }
+      }
+    }
+    jobs.emplace_back(refs.begin(), refs.end());
+  }
 
   const auto worldspawn = m_entities.find(m_worldspawn);
-  for (auto& refs : worldJobs)
+  for (auto& refs : jobs)
   {
     auto input = std::make_shared<ChunkJobInput>();
     input->cells = refs;
     input->proc = m_proc;
     input->materials = m_table;
-    if (worldspawn != m_entities.end())
-    {
-      input->worldspawn = worldspawn->second;
-      input->entities[m_worldspawn] = worldspawn->second;
-    }
     const auto addEntity = [&](const PreviewId id) {
       const auto it = m_entities.find(id);
-      if (it == m_entities.end())
+      if (it == m_entities.end() || input->entities.contains(id))
       {
         return;
       }
       input->entities[id] = it->second;
-      if (m_table)
+      const auto& classname = it->second->classname;
+      if (input->entityDefs.contains(classname))
       {
-        if (const auto slot = m_table->findEntityDef(it->second->classname);
-            slot && slot->entry)
+        return;
+      }
+      if (const auto slot = m_table ? m_table->findEntityDef(classname) : nullptr)
+      {
+        if (slot->entry)
         {
-          input->entityDefs[it->second->classname] = slot->entry;
+          input->entityDefs[classname] = slot->entry;
         }
       }
+      else if (m_materials)
+      {
+        // C22: asked now; R3.2: the entity is built again once a table has the answer
+        static_cast<void>(m_materials->entityDef(classname));
+        m_pendingEntityDefs[classname].insert(id);
+      }
     };
+    if (worldspawn != m_entities.end())
+    {
+      input->worldspawn = worldspawn->second;
+      addEntity(m_worldspawn);
+    }
     for (const auto& ref : refs)
     {
-      for (const auto id : m_cellNodes[ref])
+      if (const auto nodes = m_cellNodes.find(ref); nodes != m_cellNodes.end())
       {
-        const auto& node = m_nodes.at(id);
-        input->nodes.push_back(node);
-        addEntity(node->entity);
-      }
-    }
-    // a brush entity's origin brushes may lie in other cells
-    if (refs.front().entity != m_worldspawn)
-    {
-      const auto entity = refs.front().entity;
-      for (const auto& [id, node] : m_nodes)
-      {
-        if (node->entity == entity && !m_cellNodes[refs.front()].contains(id))
+        for (const auto id : nodes->second)
         {
+          const auto& node = m_nodes.at(id);
           input->nodes.push_back(node);
+          addEntity(node->entity);
         }
       }
     }
 
     auto job = [input](const CpuJobContext& context) -> Result<ChunkJobOutput> {
+      // R2.1: the job of a cancelled pool returns at its next node
+      auto output = buildChunks(*input, &context);
       if (context.stale())
       {
         return Error{"The chunk job was abandoned"};
       }
-      return buildChunks(*input);
+      return output;
     };
     if (m_pool && !m_pool->stopped())
     {
@@ -348,6 +509,9 @@ void SceneGeometry::startBatch()
 
 void SceneGeometry::apply(ChunkJobOutput output)
 {
+  // what the rebuilt cells waited for is replaced by what they wait for now
+  forgetCells(m_provisional, output.cells);
+  forgetCells(m_pendingMaterials, output.cells);
   for (const auto& ref : output.cells)
   {
     // the cell's old chunks go
@@ -357,10 +521,6 @@ void SceneGeometry::apply(ChunkJobOutput output)
          && it->first.cell == ref.cell;)
     {
       it = m_chunks.erase(it);
-    }
-    for (auto& [material, cells] : m_provisional)
-    {
-      cells.erase(ref);
     }
     m_solidPieces.erase(ref);
   }
@@ -376,10 +536,7 @@ void SceneGeometry::apply(ChunkJobOutput output)
   }
   for (const auto& material : output.pendingMaterials)
   {
-    for (const auto& ref : output.cells)
-    {
-      m_provisional[material].insert(ref);
-    }
+    m_pendingMaterials[material].insert(output.cells.begin(), output.cells.end());
   }
   if (!output.cells.empty())
   {
@@ -442,47 +599,9 @@ bool SceneGeometry::collectChunks()
     return true;
   }
 
-  // between snapshots: what a newer table or the .proc made stale
-  if (m_materials)
-  {
-    const auto table = m_materials->table();
-    if (table && table->version != m_lastTableVersion)
-    {
-      m_lastTableVersion = table->version;
-      if (m_mapPath && !m_proc)
-      {
-        if (const auto slot = table->findProcFile(procPathOf(*m_mapPath));
-            slot && slot->tree)
-        {
-          m_proc = slot->tree;
-          m_lights.setProcTree(m_proc);
-          markAll();
-        }
-      }
-      for (auto it = m_provisional.begin(); it != m_provisional.end();)
-      {
-        const auto slot = table->find(it->first);
-        if (
-          slot && slot->entry
-          && slot->entry->editorImageSize.state == EditorImageSize::State::Ready)
-        {
-          m_dirty.insert(it->second.begin(), it->second.end());
-          it = m_provisional.erase(it);
-        }
-        else if (slot && slot->entry && (!m_table || !m_table->find(it->first)))
-        {
-          // a material that was pending is known now
-          m_dirty.insert(it->second.begin(), it->second.end());
-          ++it;
-        }
-        else
-        {
-          ++it;
-        }
-      }
-      startBatch();
-    }
-  }
+  // between snapshots: a newer table may bring what cells wait for (startBatch adopts
+  // and scans it)
+  startBatch();
   return false;
 }
 

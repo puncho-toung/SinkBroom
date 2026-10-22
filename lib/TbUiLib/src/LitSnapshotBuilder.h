@@ -58,11 +58,13 @@ lit::SnapshotNodeKind pointEntityKind(const mdl::Entity& entity);
 
 /**
  * C23, P.19: one number as the map serialiser writes it (fmt's "{}", the shortest text
- * that reads back to the value in its own type) and the engine's idLexer reads it back: a
- * double, then a float.
+ * that reads back to the value in its own type) and the engine's idLexer reads it back
+ * (R3.10: idToken::NumberValue's double arithmetic, then a float; lit/NumberText.h).
  */
 float serialisedFloat(double value);
 float serialisedFloat(float value);
+// a face point, each component through serialisedFloat
+vm::vec3d serialisedPoint(const vm::vec3d& point);
 
 // C23, P.19: a face's Valve 220 texture values as the serialiser writes them, as floats
 struct SerialisedValveTexture
@@ -96,8 +98,8 @@ public:
 
   /**
    * A brush: each face's BrushFace::polygon (world space, in its order), its three
-   * points, its boundary plane, its material as the serialiser writes it (no textures/
-   * prefix, __TB_empty for none) and its serialised Valve texture.
+   * points (serialisedPoint), its boundary plane, its material as the serialiser writes
+   * it (no textures/ prefix, __TB_empty for none) and its serialised Valve texture.
    */
   void addBrush(
     lit::PreviewId id,
@@ -107,7 +109,8 @@ public:
     const mdl::BrushNode& brushNode);
 
   /**
-   * A patch: its control points (x y z u v) row by row, its point row and column counts
+   * A patch: its control points (x y z u v) row by row, each value through
+   * serialisedFloat, its point row and column counts
    * (TrenchBroom's rows are the engine's width, SC48), its patchDef3 subdivisions if it
    * has them, and its material.
    */

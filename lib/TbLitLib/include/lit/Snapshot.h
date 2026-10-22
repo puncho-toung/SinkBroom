@@ -92,16 +92,17 @@ struct SnapshotNode
 /**
  * One face of a brush, in world space. The Valve 220 values are those the map serialiser
  * writes for the face (MapFileSerializer's writeValveMaterialInfo: BrushFace::uAxis,
- * vAxis and uvAttributes' offset and scale), round-tripped to float as the engine reads
- * them (P.19), so that the engine's float arithmetic of GetTextureVectors and
- * TriListForSide can be reproduced.
+ * vAxis and uvAttributes' offset and scale), round-tripped to float as the engine's
+ * idLexer reads them (P.19, R3.10: lit/NumberText.h's lexerFloat), so that the engine's
+ * float arithmetic of GetTextureVectors and TriListForSide can be reproduced.
  */
 struct SnapshotFace
 {
   // BrushFace::polygon's vertices, in its order, in vertices
   SnapshotRange polygon;
-  // the three points the serialiser writes for the face (BrushFace::points), and its
-  // boundary plane
+  // the three points the serialiser writes for the face (BrushFace::points), each
+  // component as the engine's idLexer reads it back (floats, R3.10), and its boundary
+  // plane
   std::array<vm::vec3d, 3> points = {};
   vm::plane3d plane;
   // BrushFace::materialName, without the textures/ prefix the engine adds when it reads
@@ -121,7 +122,8 @@ struct SnapshotPatch
   // pointRowCount and pointColumnCount
   std::uint32_t rows = 0;
   std::uint32_t columns = 0;
-  // rows × columns control points (x y z u v) in controlPoints, row by row
+  // rows × columns control points (x y z u v) in controlPoints, row by row, each value
+  // as the engine's idLexer reads the serialiser's text back (floats, R3.10)
   SnapshotRange controlPoints;
   // patchDef3: explicit subdivisions (BezierPatch::explicitSubdivisions); patchDef2
   // otherwise

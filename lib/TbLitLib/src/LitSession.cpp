@@ -202,6 +202,14 @@ bool LitSession::snapshotSlotFree() const
   return !m_renderThreadStopped && m_renderThread->snapshotSlotFree();
 }
 
+void LitSession::tableChanged()
+{
+  if (!m_renderThreadStopped && m_renderThread)
+  {
+    m_renderThread->tableChanged();
+  }
+}
+
 CpuPool* LitSession::cpuPool() const
 {
   return m_pool && !m_pool->stopped() ? m_pool.get() : nullptr;
@@ -321,6 +329,12 @@ void LitSession::requestStop()
   {
     m_renderThread->requestStop();
   }
+  // step 1 (R2.1): the jobs queued and running return at once, so the render thread's
+  // exit, which waits for its batch, and this thread's join wait for no batch
+  if (m_pool)
+  {
+    m_pool->cancel();
+  }
 }
 
 bool LitSession::waitForRenderThread(const std::chrono::milliseconds timeout)
@@ -340,8 +354,9 @@ void LitSession::stopRenderThread()
   {
     m_renderThread->join();
   }
-  // step 1, after the render thread that queues the jobs: the pool's generation is bumped
-  // and its threads joined; abandoned futures are only waited for (R5.22)
+  // step 1, after the render thread that queued the jobs: the pool, cancelled when the
+  // stop was requested, is stopped (its generation bumped again, its threads joined);
+  // abandoned futures are only waited for (R5.22)
   if (m_pool)
   {
     m_pool->stop();
@@ -500,6 +515,11 @@ std::uint64_t LitSession::snapshotsTakenForTesting() const
 std::shared_ptr<const Snapshot> LitSession::lastSnapshotForTesting() const
 {
   return m_renderThread ? m_renderThread->lastSnapshot() : nullptr;
+}
+
+std::uint64_t LitSession::geometryBatchesForTesting() const
+{
+  return m_renderThread ? m_renderThread->batchesApplied() : 0u;
 }
 
 } // namespace tb::lit

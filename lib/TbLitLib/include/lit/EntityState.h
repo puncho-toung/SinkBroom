@@ -26,14 +26,15 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace tb::lit
 {
 
 // The idDict getters the engine reads spawn args with, on the engine's lookup rule
 // (findKey: case-insensitive, the last duplicate wins, A10), parsing as the C library
-// does in the "C" locale (sscanf's %f, atof, atoi), whatever the process locale. Pure;
-// any thread.
+// does in the "C" locale (sscanf's %f to a float, atof to a double the getter returns as
+// a float, atoi), whatever the process locale (lit/NumberText.h). Pure; any thread.
 
 // GetString: the value, or fallback when the key is missing
 std::string_view spawnString(
@@ -71,6 +72,17 @@ bool spawnAngles(
   std::string_view key,
   std::string_view fallback,
   std::array<float, 3>& out);
+
+// the origin idMapEntity::Parse subtracts from the primitives after it (MapFile.cpp:
+// 1172-1180): the last origin key's sscanf "%lf %lf %lf", each assigned to a float; zero
+// without the key. mapKeys are the entity's own keys in map order
+EngineVec3 mapOrigin(const EntityKeys& mapKeys);
+
+// MapFile.cpp:1759-1765: the classnames that worldspawn's removeEntities* keys name; the
+// map loader deletes every entity of those classes (:2270-2282), lights included (R3.12)
+std::vector<std::string> removedClassnames(const EntityKeys& worldspawnKeys);
+bool isRemovedClassname(
+  const std::vector<std::string>& removed, std::string_view classname);
 
 /**
  * idDict::Set for each map key (a key given again replaces the value in place, compared
