@@ -5227,6 +5227,8 @@
           "RenderMatrix.obj vector_int_0123",
           "RenderMatrix.obj vector_int_1",
           "RenderMatrix.obj vector_int_4",
+          "ShimPipelineState.obj AllSubresources@nvrhi",
+          "ShimPipelineState.obj EntireBuffer@nvrhi",
           "Str.obj g_color_table",
           "Vector.obj vec2_one",
           "Vector.obj vec2_origin",
@@ -5258,7 +5260,7 @@
           "Vector.obj vec6_infinity"
         ]
       },
-      "reason": "R1.6, C9, C24 (5): the dynamic initialisers (MSVC ??__E symbols) that TbLitIdLib's objects may hold, per configuration, as \"<object> <global>\"; each initialises a read-only global from literals or from another of them that is zero until initialised (bounds_zero from vec3_zero), allocating, opening and starting nothing, except idDict's two idStrPool globals (M-ID-STATIC-*), which allocate nothing until used. The check lists the objects' ??__E symbols with dumpbin and fails on one not listed here, so a later copy with an idStr or idList global is caught; one listed but gone is reported"
+      "reason": "R1.6, C9, C24 (5): the dynamic initialisers (MSVC ??__E symbols) that TbLitIdLib's objects may hold, per configuration, as \"<object> <global>\"; each initialises a read-only global from literals or from another of them that is zero until initialised (bounds_zero from vec3_zero), allocating, opening and starting nothing, except idDict's two idStrPool globals (M-ID-STATIC-*), which allocate nothing until used. The check lists the objects' ??__E symbols with dumpbin and fails on one not listed here, so a later copy with an idStr or idList global is caught; one listed but gone is reported LP2.0: ShimPipelineState.obj, which compiles the copied GetRenderState against nvrhi/nvrhi.h, holds that header's two namespace-scope constants nvrhi::AllSubresources (TextureSubresourceSet(0, AllMipLevels, 0, AllArraySlices)) and nvrhi::EntireBuffer (BufferRange(0, ~0ull)), which Debug initialises at load from those literals through their non-constexpr constructors and Release constant-initialises; they allocate nothing. ShaderMake's ShaderBlob.obj and SPIRV-Reflect's spirv_reflect.obj hold none (dumpbin, both configurations)"
     },
     {
       "id": "M-ID-NC-01",
