@@ -22,6 +22,7 @@
 #include "base/Macros.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/CpuPool.h"
+#include "lit/LightRecord.h"
 #include "lit/Snapshot.h"
 
 #include <cstdint>
@@ -54,7 +55,13 @@ struct ProcTree;
  * material service every material takes the defaults, provisionally, and there is no
  * .proc: every piece is in area 0.
  *
- * Threads: the render thread only; the jobs on the pool see only their inputs.
+ * The scene's lights are the LightRegistry's (LP1b.3, C15): it takes the same snapshots
+ * and .proc tree, builds the light records as its own pool job, and publishes them in a
+ * LightTable (lightTable()). A snapshot is taken only when neither the chunks nor the
+ * lights have a job in flight.
+ *
+ * Threads: the render thread only, lightTable() aside (any thread); the jobs on the pool
+ * see only their inputs.
  */
 class SceneGeometry
 {
@@ -87,6 +94,9 @@ private:
   std::uint64_t m_lastTableVersion = 0;
   std::vector<std::string> m_warnings;
 
+  // the light records (declared last: its job is waited for first)
+  LightRegistry m_lights;
+
 public:
   SceneGeometry(CpuPool* pool, MaterialService* materials);
   ~SceneGeometry();
@@ -100,8 +110,9 @@ public:
 
   /**
    * Collects the finished jobs; once every job of the batch is done its results replace
-   * the chunks of its cells, and true is returned. When nothing is in flight it starts a
-   * batch for what a new material table or .proc made stale.
+   * the chunks of its cells, and true is returned; so too when the light job is done and
+   * its records are published. When nothing is in flight it starts a batch for what a
+   * new material table or .proc made stale.
    */
   bool collect();
 
@@ -111,6 +122,8 @@ public:
   std::size_t solidPieces() const;
   std::uint64_t appliedSequence() const;
   std::shared_ptr<const ProcTree> procTree() const;
+  // C15: the latest published light records (never null); any thread
+  std::shared_ptr<const LightTable> lightTable() const;
   // what the jobs and the copied code reported, oldest first
   std::vector<std::string> takeWarnings();
 
@@ -125,6 +138,7 @@ private:
   void startBatch();
   void refreshTable();
   void apply(ChunkJobOutput output);
+  bool collectChunks();
   PreviewId chunkEntityOf(const SceneNode& node) const;
 };
 

@@ -8921,6 +8921,37 @@
       ],
       "sinkbroom": [],
       "note": "a fog light's portals (LP4 with the view-side portal tests); the area references' doubly linked lists are a set and a list in the record"
+    },
+    {
+      "id": "M-LIGHT-DIFF-05",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            3929,
+            3945
+          ],
+          "anchor": "SpawnEntityDef: the spawnclass",
+          "sha256": "b1a3d81ed40a0a9cbb49ae3a42e4939b591401f07e4056f4778f32e0c41250a0"
+        },
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            3878,
+            3909
+          ],
+          "anchor": "SpawnEntityDef: SetDefaults( &def->dict )",
+          "sha256": "ed89add1579c5026815e00acf0864fec8b0a0da9f6f50e334c9b922a4b0dbeb2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LightRecord.cpp",
+          "symbol": "LightRegistry::takeSnapshot, buildLightRecords"
+        }
+      ],
+      "note": "C15: the light records are the entities the snapshot sends with a Light node (TrenchBroom's isLightEntity); the game spawns an idLight for every entity whose merged dictionary names spawnclass idLight, whatever its classname. The record's spawn args merge the entityDef's keys (C22) under the map's; while the table has no answer for the classname the record is provisional and built again; a classname without an entityDef merges nothing, as SpawnEntityDef would refuse it. The record's version grows with every build of the light, which a change of its keys, classname or visibility, its entityDef or material arriving, or a new .proc starts"
     }
   ],
   "retired": [

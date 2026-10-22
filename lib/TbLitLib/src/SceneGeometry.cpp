@@ -65,6 +65,7 @@ std::string procPathOf(const std::string& mapPath)
 SceneGeometry::SceneGeometry(CpuPool* pool, MaterialService* materials)
   : m_pool{pool}
   , m_materials{materials}
+  , m_lights{pool, materials}
 {
 }
 
@@ -82,12 +83,12 @@ SceneGeometry::~SceneGeometry()
 
 bool SceneGeometry::readyForSnapshot() const
 {
-  return m_jobs.empty();
+  return m_jobs.empty() && m_lights.readyForSnapshot();
 }
 
 bool SceneGeometry::busy() const
 {
-  return !m_jobs.empty();
+  return !m_jobs.empty() || m_lights.busy();
 }
 
 PreviewId SceneGeometry::chunkEntityOf(const SceneNode& node) const
@@ -223,6 +224,7 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
     markAll();
   }
 
+  m_lights.takeSnapshot(snapshot, m_proc);
   startBatch();
 }
 
@@ -396,6 +398,13 @@ void SceneGeometry::apply(ChunkJobOutput output)
 
 bool SceneGeometry::collect()
 {
+  const auto lightsApplied = m_lights.collect();
+  const auto chunksApplied = collectChunks();
+  return chunksApplied || lightsApplied;
+}
+
+bool SceneGeometry::collectChunks()
+{
   if (!m_jobs.empty())
   {
     for (const auto& job : m_jobs)
@@ -446,6 +455,7 @@ bool SceneGeometry::collect()
             slot && slot->tree)
         {
           m_proc = slot->tree;
+          m_lights.setProcTree(m_proc);
           markAll();
         }
       }
@@ -506,9 +516,19 @@ std::shared_ptr<const ProcTree> SceneGeometry::procTree() const
   return m_proc;
 }
 
+std::shared_ptr<const LightTable> SceneGeometry::lightTable() const
+{
+  return m_lights.table();
+}
+
 std::vector<std::string> SceneGeometry::takeWarnings()
 {
-  return std::exchange(m_warnings, {});
+  auto warnings = std::exchange(m_warnings, {});
+  for (auto& warning : m_lights.takeWarnings())
+  {
+    warnings.push_back(std::move(warning));
+  }
+  return warnings;
 }
 
 void SceneGeometry::finishForTesting()
@@ -518,6 +538,7 @@ void SceneGeometry::finishForTesting()
     job.wait();
   }
   collect();
+  m_lights.finishForTesting();
 }
 
 } // namespace tb::lit
