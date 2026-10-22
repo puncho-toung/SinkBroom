@@ -39,6 +39,23 @@ std::string optionalField(
   return value ? fmt::format(fmt::runtime(format), *value) : std::string{};
 }
 
+template <typename T>
+std::string optionalCount(const std::optional<T>& value)
+{
+  return value ? fmt::format("{}", *value) : std::string{};
+}
+
+// LP2.1's columns: alloc_count, bytes_uploaded, textures_resident, arena_bytes
+std::string resourceFields(const FrameLogRow& row)
+{
+  return fmt::format(
+    "{},{},{},{}",
+    optionalCount(row.allocCount),
+    optionalCount(row.bytesUploaded),
+    optionalCount(row.texturesResident),
+    optionalCount(row.arenaBytes));
+}
+
 std::string_view eventName(const FrameLogEvent event)
 {
   switch (event)
@@ -59,7 +76,7 @@ std::string_view frameLogHeader()
 {
   return "session,event,frame,cpu_record_ms,acquire_ms,present_ms,gpu_clear_ms,present_"
          "mode,swapchain_generation,frames_skipped,width,height,vram_used_mb,vram_budget_"
-         "mb\n";
+         "mb,alloc_count,bytes_uploaded,textures_resident,arena_bytes\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -70,10 +87,15 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     optionalField(row.vramBudgetMb, "{:.1f}"));
   if (row.event != FrameLogEvent::Frame)
   {
-    return fmt::format("{},{},,,,,,,,,,,{}\n", row.session, eventName(row.event), vram);
+    return fmt::format(
+      "{},{},,,,,,,,,,,{},{}\n",
+      row.session,
+      eventName(row.event),
+      vram,
+      resourceFields(row));
   }
   return fmt::format(
-    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{}\n",
+    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{}\n",
     row.session,
     eventName(row.event),
     row.frameIndex,
@@ -86,7 +108,8 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     row.framesSkipped,
     row.width,
     row.height,
-    vram);
+    vram,
+    resourceFields(row));
 }
 
 std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& path)

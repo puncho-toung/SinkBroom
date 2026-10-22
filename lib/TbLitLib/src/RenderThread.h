@@ -63,6 +63,25 @@ struct Snapshot;
 struct SwapchainGeneration;
 
 /**
+ * §3.10, C11 (LP2.1 step 9): what the session's GPU memory is spent on, as the render
+ * thread counts it: the geometry arenas' buffers, the slots' textures, the frame's
+ * targets and buffers, and what was released and waits for its frames to finish (D35).
+ */
+struct GpuMemoryAccount
+{
+  std::uint64_t arenaBytes = 0;
+  std::uint64_t textureBytes = 0;
+  std::uint64_t renderTargetBytes = 0;
+  std::uint64_t releasedBytes = 0;
+
+  std::uint64_t total() const;
+};
+
+// render thread
+GpuMemoryAccount accountGpuMemory(
+  const FrameResources& frame, const GeometryArenas& arenas, const ImageSlots& images);
+
+/**
  * Test hooks (LP2.1): what a frame's hook may use, on the render thread, inside the
  * frame's open command list once its uploads are recorded and before its first pass.
  */
@@ -155,6 +174,8 @@ private:
   std::optional<FrameClock::time_point> m_arrivalTriggerAt;
   // D77: the last frame left uploads for the next one
   bool m_unconverged = false;
+  // C11: the account was compared with the device's budget at the session's first frame
+  bool m_budgetChecked = false;
   // the bytes the frame being recorded has uploaded
   std::uint64_t m_frameUploadBytes = 0;
   // §3.10: what a frame uploads at most (UploadBytesPerFrame; tests set less)
@@ -328,6 +349,8 @@ private:
   void applyHeadlessResize();
   // the frame's resources at its extent; false: failed
   bool prepareFrameResources(vk::Extent2D extent);
+  // C11, §3.10: at the first frame, the account against VK_EXT_memory_budget's budget
+  void checkVramBudget();
   void runFrameHooks(nvrhi::ICommandList& commandList);
   // the chunks the arenas follow (the scene's or the tests'), synchronised when their set
   // changed; whether uploads are queued

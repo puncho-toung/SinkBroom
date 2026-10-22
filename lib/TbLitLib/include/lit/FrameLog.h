@@ -69,6 +69,14 @@ struct FrameLogRow
   // VK_EXT_memory_budget, when the device reports them
   std::optional<double> vramUsedMb;
   std::optional<double> vramBudgetMb;
+
+  // LP2.1 (C16, C30, D72): every row: the device memory allocations live then (lit's
+  // counter); frame rows, and the stop row: the bytes the frame uploaded, the textures
+  // with a written level and the geometry arenas' bytes
+  std::optional<std::int64_t> allocCount;
+  std::optional<std::uint64_t> bytesUploaded;
+  std::optional<std::uint64_t> texturesResident;
+  std::optional<std::uint64_t> arenaBytes;
 };
 
 // the CSV header line, ending in a newline

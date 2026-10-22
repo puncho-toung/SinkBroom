@@ -133,6 +133,22 @@ std::array<float, 4> clearColorFor(const vm::vec3f& direction)
 
 } // namespace
 
+std::uint64_t GpuMemoryAccount::total() const
+{
+  return arenaBytes + textureBytes + renderTargetBytes + releasedBytes;
+}
+
+GpuMemoryAccount accountGpuMemory(
+  const FrameResources& frame, const GeometryArenas& arenas, const ImageSlots& images)
+{
+  auto account = GpuMemoryAccount{};
+  account.arenaBytes = arenas.capacityBytes();
+  account.textureBytes = images.textureBytes();
+  account.renderTargetBytes = frame.renderTargetBytes() + frame.bufferBytes();
+  account.releasedBytes = frame.retiredBytes() + images.retiredBytes();
+  return account;
+}
+
 RenderThread::RenderThread(
   GpuDevice& device, SessionEvents& events, SessionOptions options)
   : m_device{device}
@@ -635,6 +651,27 @@ bool RenderThread::prepareFrameResources(const vk::Extent2D extent)
          | kdl::value_or(false);
 }
 
+void RenderThread::checkVramBudget()
+{
+  if (m_budgetChecked)
+  {
+    return;
+  }
+  m_budgetChecked = true;
+  // §3.10, C11: the account and the device's budget at Start; LP6 evicts against it,
+  // until then a session past it says so once
+  const auto account = accountGpuMemory(m_frameResources, m_arenas, m_images);
+  if (const auto vram = m_device.vram(); vram && account.total() > vram->budgetBytes)
+  {
+    m_events.post(
+      SessionEvent::Warning,
+      fmt::format(
+        "The lit preview's GPU memory ({} MB) passes the device's budget ({} MB)",
+        account.total() / (1024 * 1024),
+        vram->budgetBytes / (1024 * 1024)));
+  }
+}
+
 void RenderThread::runFrameHooks(nvrhi::ICommandList& commandList)
 {
   auto hooks = std::vector<std::function<void(RenderFrameAccess&)>>{};
@@ -1027,6 +1064,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       {
         return FrameOutcome::Stopped;
       }
+      checkVramBudget();
       runFrameHooks(commandList);
       // a slot whose image arrived during the frame is written in the next (D77)
       m_unconverged = m_unconverged || m_images.hasLoading();
@@ -1145,6 +1183,11 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.framesSkipped = m_framesSkipped;
       row.width = extent.width;
       row.height = extent.height;
+      // C16, C30 (LP2.1): the allocations, the frame's uploads, the textures, the arenas
+      row.allocCount = m_device.deviceMemoryAllocations();
+      row.bytesUploaded = m_frameUploadBytes;
+      row.texturesResident = m_images.resident();
+      row.arenaBytes = m_arenas.capacityBytes();
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
     }
@@ -1362,6 +1405,14 @@ void RenderThread::appendSessionRow(const FrameLogEvent event)
   {
     row.vramUsedMb = double(vram->usedBytes) / (1024.0 * 1024.0);
     row.vramBudgetMb = double(vram->budgetBytes) / (1024.0 * 1024.0);
+  }
+  // C30, D72: the allocations at the start and at the stop, before step 2 releases what
+  // the render thread holds; the stop row also says what it holds
+  row.allocCount = m_device.deviceMemoryAllocations();
+  if (event == FrameLogEvent::Stop)
+  {
+    row.texturesResident = m_images.resident();
+    row.arenaBytes = m_arenas.capacityBytes();
   }
   m_timers.append(row);
 }

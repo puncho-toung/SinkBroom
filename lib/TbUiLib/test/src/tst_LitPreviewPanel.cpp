@@ -1587,7 +1587,7 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     auto presentMs = std::vector<double>{};
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 14u);
+      REQUIRE(rows[i].size() == 18u);
       sessions.insert(rows[i][0]);
       if (rows[i][1] == "start")
       {

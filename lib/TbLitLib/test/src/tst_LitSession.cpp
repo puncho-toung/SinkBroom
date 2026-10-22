@@ -24,10 +24,12 @@
 #include "RenderThread.h"
 #include "StringMakers.h"
 #include "fs/TestEnvironment.h"
+#include "lit/BprocModel.h"
 #include "lit/CpuPool.h"
 #include "lit/EnginePipelineState.h"
 #include "lit/EngineTables.h"
 #include "lit/FramePacer.h"
+#include "lit/GameDeclSource.h"
 #include "lit/GameFileSource.h"
 #include "lit/ImageCache.h"
 #include "lit/LightRecord.h"
@@ -61,10 +63,12 @@
 #include <memory>
 #include <mutex>
 #include <set>
+#include <span>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <tuple>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -663,7 +667,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     CHECK(rows.back()[1] == "stop");
     for (std::size_t i = 2; i + 1 < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 14u);
+      REQUIRE(rows[i].size() == 18u);
       CHECK(rows[i][0] == "1");
       CHECK(rows[i][1] == "frame");
       CHECK(rows[i][2] == std::to_string(i - 2));
@@ -671,10 +675,18 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       CHECK(rows[i][7] == "headless");
       CHECK(rows[i][10] == "64");
       CHECK(rows[i][11] == "48");
+      // LP2.1: the allocations, nothing uploaded, no texture or arena
+      CHECK_FALSE(rows[i][14].empty());
+      CHECK(rows[i][15] == "0");
+      CHECK(rows[i][16] == "0");
+      CHECK(rows[i][17] == "0");
     }
     // VK_EXT_memory_budget, which this machine's GPU has
     CHECK_FALSE(rows[1][12].empty());
     CHECK_FALSE(rows.back()[12].empty());
+    // the allocations at the start and the stop
+    CHECK_FALSE(rows[1][14].empty());
+    CHECK_FALSE(rows.back()[14].empty());
     std::cout << "headless frame log, first rows:\n";
     for (std::size_t i = 0; i < std::min(rows.size(), std::size_t{4}); ++i)
     {
@@ -1670,7 +1682,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     auto longestPresentMs = 0.0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 14u);
+      REQUIRE(rows[i].size() == 18u);
       if (rows[i][1] != "frame")
       {
         continue;
@@ -2213,12 +2225,16 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
   SECTION("D78: a 40 MB batch takes two frames under the 32 MB cap")
   {
     auto messages = ValidationMessages{};
+    const auto logPath =
+      std::filesystem::temp_directory_path() / "TbLitLibTest-upload-frame-log.csv";
+    std::filesystem::remove(logPath);
+    auto logged = std::vector<std::uint64_t>{};
     {
       const auto instance = TestInstance{library, true, false, messages};
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
-      auto session = gpuSession(instance, events, 1);
+      auto session = gpuSession(instance, events, 1, nullptr, {}, logPath);
       session->setExposed(true);
       REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
 
@@ -2256,6 +2272,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
         REQUIRE(uploads.size() == 2u);
         CHECK(uploads[0] <= UploadBytesPerFrame);
         CHECK(uploads[0] + uploads[1] == bytes);
+        logged = uploads;
       }
 
       teardown(*session);
@@ -2264,6 +2281,21 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
       CHECK(session->deviceMemoryAllocations() == 0);
       CHECK(events.count(SessionEvent::Error) == 0u);
     }
+    // C16 (LP2.1): the frame log's bytes_uploaded column says the same, and its
+    // arena_bytes the two arenas
+    auto fromLog = std::vector<std::uint64_t>{};
+    auto arenaBytes = std::string{};
+    for (const auto& row : readCsv(logPath))
+    {
+      if (row.size() == 18u && row[1] == "frame" && !row[15].empty() && row[15] != "0")
+      {
+        fromLog.push_back(std::stoull(row[15]));
+        arenaBytes = row[17];
+      }
+    }
+    CHECK(fromLog == logged);
+    CHECK(arenaBytes == std::to_string(2 * ArenaBytes));
+    std::filesystem::remove(logPath);
     CHECK(resetDispatcher());
     messages.print("40 MB batch, validation");
     CHECK(messages.errors == 0);
@@ -3003,6 +3035,275 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }
+}
+
+namespace
+{
+
+// the quoted value after each "texture" key of a .map's text (the light shaders)
+std::set<std::string> textureKeys(const std::string& text)
+{
+  auto values = std::set<std::string>{};
+  const auto key = std::string_view{"\"texture\""};
+  for (auto at = text.find(key); at != std::string::npos; at = text.find(key, at + 1))
+  {
+    const auto open = text.find('"', at + key.size());
+    const auto close = open == std::string::npos ? open : text.find('"', open + 1);
+    if (close != std::string::npos && text.find('\n', at) > close)
+    {
+      values.insert(text.substr(open + 1, close - open - 1));
+    }
+  }
+  return values;
+}
+
+} // namespace
+
+// D72 (LP2.1 step 8): the texture heaps (D50) wait for a measurement: every image of the
+// Q20 map's materials and of its lights' shaders made a texture, with the device memory
+// allocations counted (C30). Hidden: it needs the retail game (TB_LIT_GAME_PATH, read
+// only) and a GPU.
+TEST_CASE("LitSession GPU resources on the retail game (D72)", "[.][retail]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the measurement needs the game folder");
+  }
+  const auto gamePath = std::filesystem::path{gamePathValue};
+  const auto started = std::chrono::steady_clock::now();
+  // within the 180 s wall-clock bound of a hidden GPU run, with room for its start and
+  // stop
+  const auto deadline = started + 150s;
+  const auto library = VulkanLibrary{};
+  REQUIRE(library.getInstanceProcAddr != nullptr);
+
+  // the map's materials: its .bproc's surfaces (BprocModel's reader records each
+  // surface's material); its lights' shaders: the .map's "texture" keys, when the game
+  // has the .map
+  const auto mapName = std::string{"maps/game/admin"};
+  auto materials = std::set<std::string>{};
+  auto lightShaders = std::set<std::string>{};
+  auto mapFound = false;
+  {
+    auto source = GameDeclSource{gamePath};
+    auto found = GameFileProbe{};
+    const auto bproc = source.readGameFile("generated/" + mapName + ".bproc", &found);
+    REQUIRE(bproc);
+    const auto file =
+      readBprocFile(std::as_bytes(std::span{bproc->data(), bproc->size()}))
+      | kdl::value();
+    for (const auto& model : file.models)
+    {
+      for (const auto& surface : model.surfaces)
+      {
+        materials.insert(surface.material);
+      }
+    }
+    if (const auto map = source.readGameFile(mapName + ".map", &found))
+    {
+      mapFound = true;
+      lightShaders = textureKeys(*map);
+    }
+    source.closeFiles();
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  }
+  REQUIRE_FALSE(materials.empty());
+
+  // the service over the retail game, its image budget off so that nothing is evicted
+  auto serviceOptions = MaterialServiceOptions{};
+  serviceOptions.makeSource = [gamePath](const std::atomic<bool>& cancel) {
+    return std::unique_ptr<DeclSource>{
+      std::make_unique<GameDeclSource>(gamePath, &cancel)};
+  };
+  serviceOptions.pollInterval = 0ms;
+  serviceOptions.imageBudgetBytes = 0;
+  auto service = MaterialService::create(std::move(serviceOptions))
+                 | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+
+  // every stage image of the materials, and the light shaders' falloff and projection
+  // images
+  auto names = materials;
+  names.insert(lightShaders.begin(), lightShaders.end());
+  auto entries = std::vector<std::shared_ptr<const MaterialEntry>>{};
+  REQUIRE(waitFor(
+    [&] {
+      entries.clear();
+      for (const auto& name : names)
+      {
+        const auto lookup = service->lookup(name);
+        if (lookup.state == MaterialLookup::State::Pending)
+        {
+          return std::chrono::steady_clock::now() > deadline;
+        }
+        if (lookup.entry)
+        {
+          entries.push_back(lookup.entry);
+        }
+      }
+      return true;
+    },
+    150000ms,
+    false));
+  auto keys = std::vector<MaterialImageKey>{};
+  auto unique = std::unordered_set<MaterialImageKey, MaterialImageKeyHash>{};
+  const auto add = [&](const std::optional<MaterialImageKey>& key) {
+    if (key && unique.insert(*key).second)
+    {
+      keys.push_back(*key);
+    }
+  };
+  for (const auto& entry : entries)
+  {
+    for (const auto& stage : entry->stages)
+    {
+      add(stage.image);
+    }
+    if (lightShaders.contains(entry->name))
+    {
+      add(entry->lightFalloffImage);
+    }
+  }
+
+  auto messages = ValidationMessages{};
+  const auto logPath =
+    std::filesystem::temp_directory_path() / "TbLitLibTest-d72-frame-log.csv";
+  std::filesystem::remove(logPath);
+  struct Peak
+  {
+    std::int64_t allocations = 0;
+    std::size_t resident = 0;
+    std::size_t defaulted = 0;
+    std::size_t pending = 0;
+    std::size_t slots = 0;
+    GpuMemoryAccount account;
+    std::optional<VramUsage> vram;
+  };
+  auto peak = Peak{};
+  auto atStart = std::optional<VramUsage>{};
+  auto allocationsAfterStop = std::int64_t{-1};
+  auto loadSeconds = 0.0;
+  {
+    const auto instance = TestInstance{library, true, false, messages};
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto events = Events{};
+    auto session = gpuSession(instance, events, 1, service.get(), gamePath, logPath);
+    atStart = session->vramForTesting();
+    session->setExposed(true);
+    REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+
+    const auto requested = std::chrono::steady_clock::now();
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      for (const auto& key : keys)
+      {
+        access.images.request(key);
+      }
+    }));
+    // until no slot is Pending nor Loading, as the owner passes every table on
+    auto settled = false;
+    while (!settled && std::chrono::steady_clock::now() < deadline)
+    {
+      session->tableChanged();
+      inFrame(*session, [&](RenderFrameAccess& access) {
+        auto loading = access.images.hasLoading();
+        peak.pending = access.images.pending();
+        peak.slots = access.images.size();
+        settled = peak.pending == 0 && !loading;
+        const auto account = accountGpuMemory(access.frame, access.arenas, access.images);
+        if (account.total() >= peak.account.total())
+        {
+          peak.account = account;
+          peak.resident = access.images.resident();
+        }
+      });
+      peak.allocations = std::max(peak.allocations, session->deviceMemoryAllocations());
+    }
+    loadSeconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - requested).count();
+    peak.vram = session->vramForTesting();
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      for (std::uint32_t id = 0; id < access.images.size(); ++id)
+      {
+        peak.defaulted +=
+          access.images.slot(id)->state == ImageSlots::State::Default ? 1 : 0;
+      }
+    }));
+    CHECK(settled);
+
+    teardown(*session);
+    allocationsAfterStop = session->deviceMemoryAllocations();
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+  }
+  CHECK(resetDispatcher());
+  service->requestStop();
+  service->join();
+
+  // the frame log's alloc_count column agrees
+  auto loggedPeak = std::int64_t{0};
+  auto stopAllocations = std::string{};
+  for (const auto& row : readCsv(logPath))
+  {
+    if (row.size() == 18u && row[1] != "event" && !row[14].empty() && row[0] != "session")
+    {
+      loggedPeak = std::max(loggedPeak, std::int64_t(std::stoll(row[14])));
+      if (row[1] == "stop")
+      {
+        stopAllocations = row[14];
+      }
+    }
+  }
+  std::filesystem::remove(logPath);
+
+  const auto mb = [](const std::uint64_t bytes) {
+    return double(bytes) / (1024.0 * 1024.0);
+  };
+  std::cout << fmt::format(
+    "D72 on {}: {} materials from the .bproc's surfaces, {} light shaders from the .map "
+    "({}), {} image keys, {} slots ({} intrinsics among them): {} with a texture, {} "
+    "Default, {} still pending; loaded in {:.1f} s\n",
+    mapName,
+    materials.size(),
+    lightShaders.size(),
+    mapFound ? "found" : "not in the game",
+    keys.size(),
+    peak.slots,
+    peak.slots >= keys.size() ? peak.slots - keys.size() : 0,
+    peak.resident,
+    peak.defaulted,
+    peak.pending,
+    loadSeconds);
+  std::cout << fmt::format(
+    "D72 peak: alloc_count {} (frame log {}; the limit {}, a quarter {}), textures "
+    "{:.1f} "
+    "MB, arenas {:.1f} MB, targets and buffers {:.1f} MB, released {:.1f} MB, total "
+    "{:.1f} MB against the default budget {:.0f} MB\n",
+    peak.allocations,
+    loggedPeak,
+    4096,
+    1024,
+    mb(peak.account.textureBytes),
+    mb(peak.account.arenaBytes),
+    mb(peak.account.renderTargetBytes),
+    mb(peak.account.releasedBytes),
+    mb(peak.account.total()),
+    mb(DefaultVramBudgetBytes));
+  std::cout << fmt::format(
+    "D72 VRAM (VK_EXT_memory_budget): at start {:.1f} of {:.1f} MB, at the peak {:.1f} "
+    "MB; allocations after Stop {} (the stop row before step 2: {})\n",
+    atStart ? mb(atStart->usedBytes) : 0.0,
+    atStart ? mb(atStart->budgetBytes) : 0.0,
+    peak.vram ? mb(peak.vram->usedBytes) : 0.0,
+    allocationsAfterStop,
+    stopAllocations);
+  // back at the baseline: every allocation freed with the session
+  CHECK(allocationsAfterStop == 0);
+  CHECK(loggedPeak == peak.allocations);
+  messages.print("D72, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
 }
 
 } // namespace tb::lit
