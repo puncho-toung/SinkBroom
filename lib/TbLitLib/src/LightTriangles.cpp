@@ -76,21 +76,27 @@ bool LightTriangleCache::Key::operator<(const Key& other) const
   return std::tie(light, chunk) < std::tie(other.light, other.chunk);
 }
 
-std::vector<LightTriangleCache::Answer> LightTriangleCache::answer(
-  const std::vector<Request>& requests)
+Result<std::vector<LightTriangleCache::Answer>> LightTriangleCache::answer(
+  const std::vector<Request>& requests, const CpuJobContext* context)
 {
   auto answers = std::vector<Answer>{};
   answers.reserve(requests.size());
   for (const auto& request : requests)
   {
+    // V2.5: a Stop waits for one pair at most
+    if (context && context->stale())
+    {
+      return Error{"The light triangles' job was abandoned"};
+    }
+    const auto& geometry = *request.geometry;
     const auto kept = engineInteractionLightTris(
       request.baseLightProject,
       request.stamp.modelMatrix,
       request.bounds,
-      request.positions,
-      request.indexes);
+      geometry.positions,
+      geometry.indexes);
     answers.push_back(
-      Answer{request.key, request.stamp, lightTrianglesOf(request.indexes, kept)});
+      Answer{request.key, request.stamp, lightTrianglesOf(geometry.indexes, kept)});
   }
   return answers;
 }
@@ -150,17 +156,26 @@ std::shared_ptr<const LightTriangles> LightTriangleCache::triangles(
   entry.stamp = stamp;
   entry.triangles = nullptr;
   entry.asked = true;
+  // V2.5: one copy of the chunk per build, whatever the number of lights asking
+  auto& geometry = m_buildGeometry[chunk.key];
+  if (!geometry || geometry->casterVersion != chunk.casterVersion)
+  {
+    auto copy = std::make_shared<ChunkGeometry>();
+    copy->casterVersion = chunk.casterVersion;
+    copy->positions.reserve(chunk.verts.size());
+    for (const auto& vert : chunk.verts)
+    {
+      copy->positions.push_back(vert.xyz);
+    }
+    copy->indexes = chunk.indexes;
+    geometry = std::move(copy);
+  }
   auto request = Request{};
   request.key = key;
   request.stamp = stamp;
   request.baseLightProject = baseLightProject;
   request.bounds = chunk.bounds;
-  request.positions.reserve(chunk.verts.size());
-  for (const auto& vert : chunk.verts)
-  {
-    request.positions.push_back(vert.xyz);
-  }
-  request.indexes = chunk.indexes;
+  request.geometry = geometry;
   m_requests.push_back(std::move(request));
   return m_pending;
 }
@@ -171,6 +186,8 @@ void LightTriangleCache::endBuild(CpuPool* pool)
   {
     std::erase_if(m_entries, [](const auto& entry) { return !entry.second.used; });
   }
+  // the requests hold what they need
+  m_buildGeometry.clear();
   if (m_requests.empty() || m_job)
   {
     return;
@@ -179,7 +196,9 @@ void LightTriangleCache::endBuild(CpuPool* pool)
   auto requests_ = std::exchange(m_requests, {});
   if (!pool)
   {
-    store(answer(requests_));
+    answer(requests_, nullptr)
+      | kdl::transform([&](std::vector<Answer> answers) { store(std::move(answers)); })
+      | kdl::ignore();
     return;
   }
   m_jobAsked.clear();
@@ -189,14 +208,8 @@ void LightTriangleCache::endBuild(CpuPool* pool)
   }
   // C20, C24: the job holds copies only, never the cache or the session
   m_job = pool->run(
-    [requests = std::move(requests_)](
-      const CpuJobContext& context) -> Result<std::vector<Answer>> {
-      if (context.stale())
-      {
-        return Error{"The light triangles' job was abandoned"};
-      }
-      return answer(requests);
-    });
+    [requests = std::move(requests_)](const CpuJobContext& context)
+      -> Result<std::vector<Answer>> { return answer(requests, &context); });
   ++m_jobs;
 }
 
@@ -261,6 +274,7 @@ void LightTriangleCache::clear()
 {
   m_entries.clear();
   m_requests.clear();
+  m_buildGeometry.clear();
   m_jobAsked.clear();
   m_job.reset();
 }

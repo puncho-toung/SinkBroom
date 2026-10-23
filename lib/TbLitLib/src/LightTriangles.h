@@ -20,6 +20,7 @@
 #pragma once
 
 #include "base/Macros.h"
+#include "base/Result.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/CpuPool.h"
 #include "lit/EngineLight.h"
@@ -88,10 +89,11 @@ LightTriangles lightTrianglesOf(
  * of them changes; a pair a camera move leaves out of the lists is kept for when it comes
  * back, and once the cache holds more than LightTriangleCacheSize pairs the ones the last
  * build did not ask for go. A miss is answered Pending and queued; endBuild hands the
- * misses to the CPU pool as one job (copies of the positions and indexes, the light's
- * projection, the model matrix), which runs the copied code (engineInteractionLightTris);
- * collect takes a finished job's answers and bumps version, which the lists' key holds.
- * Without a pool (tests) the misses are answered at endBuild. Render thread.
+ * misses to the CPU pool as one job (one copy of a chunk's positions and indexes, shared
+ * by every light that asks for it (V2.5), the light's projection, the model matrix),
+ * which runs the copied code (engineInteractionLightTris) and sees a Stop before each
+ * pair; collect takes a finished job's answers and bumps version, which the lists' key
+ * holds. Without a pool (tests) the misses are answered at endBuild. Render thread.
  */
 class LightTriangleCache
 {
@@ -123,14 +125,21 @@ private:
     bool asked = false;
   };
 
+  // V2.5: a chunk's positions and indexes, copied once per build for every light
+  struct ChunkGeometry
+  {
+    std::uint64_t casterVersion = 0;
+    std::vector<EngineVec3> positions;
+    std::vector<std::uint16_t> indexes;
+  };
+
   struct Request
   {
     Key key;
     Stamp stamp;
     EngineMat4 baseLightProject = {};
     EngineBounds bounds = {};
-    std::vector<EngineVec3> positions;
-    std::vector<std::uint16_t> indexes;
+    std::shared_ptr<const ChunkGeometry> geometry;
   };
 
   struct Answer
@@ -142,6 +151,8 @@ private:
 
   std::map<Key, Entry> m_entries;
   std::vector<Request> m_requests;
+  // the build's copies of the chunks its misses name (V2.5)
+  std::map<ChunkKey, std::shared_ptr<const ChunkGeometry>> m_buildGeometry;
   std::optional<std::future<CpuJobResult<std::vector<Answer>>>> m_job;
   // what the job in flight was asked
   std::vector<std::pair<Key, Stamp>> m_jobAsked;
@@ -152,7 +163,9 @@ private:
   std::uint64_t m_jobs = 0;
   std::uint64_t m_answered = 0;
 
-  static std::vector<Answer> answer(const std::vector<Request>& requests);
+  // a Stop (context's) is seen before each pair; without a context (no pool) none comes
+  static Result<std::vector<Answer>> answer(
+    const std::vector<Request>& requests, const CpuJobContext* context);
   void store(std::vector<Answer> answers);
 
 public:

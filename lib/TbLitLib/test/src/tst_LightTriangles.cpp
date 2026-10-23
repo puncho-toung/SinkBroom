@@ -21,6 +21,7 @@
 // (engineInteractionLightTris), its runs and the render thread's cache of them.
 
 #include "LightTriangles.h"
+#include "LitTestUtils.h"
 #include "lit/CpuPool.h"
 #include "lit/EngineLight.h"
 
@@ -305,6 +306,49 @@ TEST_CASE("LightTriangleCache")
     cache.endBuild(nullptr);
     CHECK(cache.size() == 1u);
   }
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+  SECTION("V2.5: N builds at a small capacity keep the heap where it was")
+  {
+    // two chunks asked for in turn by two lights, one pair kept beyond the bound: every
+    // build asks for misses again, so entries, requests and the shared copies churn
+    auto pool = CpuPool::create() | kdl::if_error([](const auto& e) { FAIL(e.msg); })
+                | kdl::value();
+    auto cache = LightTriangleCache{};
+    cache.setCapacityForTesting(1);
+    auto other = chunk;
+    other.key.material = "textures/lp2/floor";
+    auto version = std::uint64_t{0};
+    const auto build = [&](const Chunk& c) {
+      ++version;
+      cache.beginBuild();
+      cache.triangles(1, version, project, c, identity);
+      cache.triangles(2, version, project, c, identity);
+      cache.endBuild(pool.get());
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+      while (!cache.collect() && std::chrono::steady_clock::now() < deadline)
+      {
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+      }
+      cache.beginBuild();
+      cache.triangles(1, version, project, c, identity);
+      cache.triangles(2, version, project, c, identity);
+      cache.endBuild(pool.get());
+    };
+    build(chunk);
+    build(other);
+    CHECK_FALSE(heapGrows([&] {
+      for (auto i = 0; i < 50; ++i)
+      {
+        build(chunk);
+        build(other);
+      }
+    }));
+    CHECK(cache.size() == 2u);
+    CHECK(cache.jobs() == 102u);
+    pool->stop();
+  }
+#endif
 
   SECTION("on the CPU pool: one job, its answers taken by collect")
   {
