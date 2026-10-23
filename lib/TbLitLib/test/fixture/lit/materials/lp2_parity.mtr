@@ -110,8 +110,10 @@ textures/lp2/near
 	bumpmap	textures/lp2/wall_local.tga
 }
 
-// R19, R20, R21 (V2.1): legacy diffuse on an explicit flat normal and no specular stage,
-// so the shading reads no view vector and the triangulation cannot change a pixel (K28)
+// R19, R20, R21 (V2.1, V3.1): legacy diffuse on an explicit flat normal and no specular
+// stage: the specular colour is zero, but the view-dependent normal contrast still scales
+// _flat's decoded xy by the per-vertex view vector, so the triangulation moves pixels by 1
+// (K28)
 textures/lp2/flatwall
 {
 	qer_editorimage	textures/lp2/wall.tga
