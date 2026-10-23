@@ -4536,82 +4536,138 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
 
   SECTION("DX.4: no frame is settled while the bake or an entityDef is pending")
   {
-    auto messages = ValidationMessages{};
-    messages.mirroredMessageId = OutputNotConsumedId;
+    // V2.4 (32-LP2-VERIFY.md): once the parse thread answers, a settled frame comes by
+    // itself (framesPresented moves without a frame asked for): the snapshot with its
+    // map path (the bake and the lights' entityDefs), the same without a map path (the
+    // entityDefs alone), and its worldspawn alone with the map path (the bake)
+    const auto text = lp22aMapText();
+    const auto worldspawnOnly = text.substr(0, text.find("// entity 1"));
+    struct Variant
     {
-      const auto instance = TestInstance{library, true, false, messages};
-      REQUIRE(instance.valid());
-      REQUIRE(initInstanceDispatcher(instance.handles()));
-      // the parse thread waits at the gate after its first build: the snapshot's
-      // entityDefs and the bake of its map path stay pending
-      auto gate = std::make_shared<ParseGate>();
-      gate->close();
-      auto options = MaterialServiceOptions{};
-      options.makeSource = [root](const std::atomic<bool>& cancel) {
-        return std::unique_ptr<DeclSource>{
-          std::make_unique<GameDeclSource>(root, &cancel)};
-      };
-      options.pollInterval = 0ms;
-      options.imageBudgetBytes = 0;
-      options.beforeTakeWorkForTesting = [gate] { gate->pass(); };
-      auto service = MaterialService::create(std::move(options))
-                     | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
-      const auto atExit = OpenAtExit{gate};
-      REQUIRE(service->waitForTableForTesting(
-        [](const MaterialTable& t) { return t.registry != 0; }, 10s));
-      auto events = Events{};
-      auto session = rootSession(instance, events, *service, root);
-      session->setExposed(true);
-      REQUIRE(waitFor(
-        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
-        5000ms,
-        false));
-      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
-      session->setCamera(litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0}));
+      std::string label;
+      std::shared_ptr<const Snapshot> snapshot;
+      bool entityDefs = false;
+      bool bake = false;
+    };
+    auto withoutBake = snapshotOfMapText(text);
+    withoutBake.generation = 7;
+    withoutBake.sequence = 1;
+    const auto variants = std::vector<Variant>{
+      {"the bake and the entityDefs", lp22aSnapshot(text, root, 7, 1), true, true},
+      {"the entityDefs alone",
+       std::make_shared<const Snapshot>(std::move(withoutBake)),
+       true,
+       false},
+      // the worldspawn asks for its entityDef too
+      {"the bake (and the worldspawn's entityDef)",
+       lp22aSnapshot(worldspawnOnly, root, 7, 1),
+       true,
+       true},
+    };
+    for (const auto& variant : variants)
+    {
+      CAPTURE(variant.label);
+      auto messages = ValidationMessages{};
+      messages.mirroredMessageId = OutputNotConsumedId;
+      {
+        const auto instance = TestInstance{library, true, false, messages};
+        REQUIRE(instance.valid());
+        REQUIRE(initInstanceDispatcher(instance.handles()));
+        // the parse thread waits at the gate after its first build: the snapshot's
+        // entityDefs and the bake of its map path stay pending
+        auto gate = std::make_shared<ParseGate>();
+        gate->close();
+        auto options = MaterialServiceOptions{};
+        options.makeSource = [root](const std::atomic<bool>& cancel) {
+          return std::unique_ptr<DeclSource>{
+            std::make_unique<GameDeclSource>(root, &cancel)};
+        };
+        options.pollInterval = 0ms;
+        options.imageBudgetBytes = 0;
+        options.beforeTakeWorkForTesting = [gate] { gate->pass(); };
+        auto service = MaterialService::create(std::move(options))
+                       | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+        const auto atExit = OpenAtExit{gate};
+        REQUIRE(service->waitForTableForTesting(
+          [](const MaterialTable& t) { return t.registry != 0; }, 10s));
+        auto events = Events{};
+        auto session = rootSession(instance, events, *service, root);
+        session->setExposed(true);
+        REQUIRE(waitFor(
+          [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+          5000ms,
+          false));
+        // V2.7: every pipeline key the draws ask for, from the first frame on
+        REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+          access.passes.setDrawLogForTesting(true);
+        }));
+        REQUIRE(session->offerSnapshot(variant.snapshot));
+        session->setCamera(litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0}));
 
-      // the first batch applies with the entityDefs pending; the bake is not answered
-      auto seen = FrameConvergence{};
-      REQUIRE(waitFor(
-        [&] {
-          inFrame(
-            *session, [&](RenderFrameAccess& access) { seen = access.convergence; });
-          return session->geometryBatchesForTesting() >= 1u && seen.entityDefsPending;
-        },
-        30000ms,
-        false));
-      CHECK(seen.entityDefsPending);
-      CHECK(seen.geometryInFlight);
-      CHECK_FALSE(seen.settled());
-      CHECK_FALSE(session->lastFrameSettledForTesting());
+        // the first batch applies with the parse thread held: not settled
+        auto seen = FrameConvergence{};
+        REQUIRE(waitFor(
+          [&] {
+            inFrame(
+              *session, [&](RenderFrameAccess& access) { seen = access.convergence; });
+            return session->geometryBatchesForTesting() >= 1u
+                   && (seen.entityDefsPending || seen.geometryInFlight);
+          },
+          30000ms,
+          false));
+        CHECK(seen.entityDefsPending == variant.entityDefs);
+        CHECK((!variant.bake || seen.geometryInFlight));
+        CHECK_FALSE(seen.settled());
+        CHECK_FALSE(session->lastFrameSettledForTesting());
 
-      // the service answers: the entities and the lights are built again, the bake
-      // adopted, and a frame settles
-      gate->open();
-      auto settledSeen = FrameConvergence{};
-      CHECK(waitFor(
-        [&] {
-          session->tableChanged();
-          inFrame(*session, [&](RenderFrameAccess& access) {
-            settledSeen = access.convergence;
-          });
-          return settledSeen.settled();
-        },
-        60000ms,
-        false));
-      CHECK_FALSE(settledSeen.entityDefsPending);
-      CHECK_FALSE(settledSeen.geometryInFlight);
-      CHECK_FALSE(settledSeen.lightsProvisional);
+        // the service answers; no frame is asked for: the scene's change triggers the
+        // frames that settle
+        const auto framesAtOpen = session->framesPresented();
+        gate->open();
+        CHECK(waitFor(
+          [&] {
+            return session->framesPresented() > framesAtOpen
+                   && session->lastFrameSettledForTesting();
+          },
+          60000ms,
+          false));
+        const auto framesSettled = session->framesPresented();
+        auto settledSeen = FrameConvergence{};
+        auto asked = std::set<PipelineKey, PipelineKeyLess>{};
+        auto startKeys = std::vector<PipelineKey>{};
+        REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+          settledSeen = access.convergence;
+          asked = access.passes.requestedKeysForTesting();
+          startKeys = litStartPipelineKeys(access.frame.depthFormat());
+          access.passes.setDrawLogForTesting(false);
+        }));
+        // V2.7 (DX.5): the lit passes ask for no key the session did not ask for at Start
+        CHECK_FALSE(asked.empty());
+        for (const auto& key : asked)
+        {
+          CAPTURE(key.program, key.state, key.depthBias, key.slopeBias);
+          CHECK(std::ranges::find(startKeys, key) != startKeys.end());
+        }
+        CHECK(settledSeen.settled());
+        CHECK_FALSE(settledSeen.entityDefsPending);
+        CHECK_FALSE(settledSeen.geometryInFlight);
+        CHECK_FALSE(settledSeen.lightsProvisional);
+        std::cout << fmt::format(
+          "V2.4 {}: settled by itself after {} frames\n",
+          variant.label,
+          framesSettled - framesAtOpen);
 
-      teardown(*session);
-      CHECK(session->lastDeviceReleaseCount() == 0u);
-      CHECK(session->nvrhiErrorCount() == 0u);
-      CHECK(session->deviceMemoryAllocations() == 0);
-      service->requestStop();
+        teardown(*session);
+        CHECK(session->lastDeviceReleaseCount() == 0u);
+        CHECK(session->nvrhiErrorCount() == 0u);
+        CHECK(session->deviceMemoryAllocations() == 0);
+        service->requestStop();
+      }
+      CHECK(resetDispatcher());
+      messages.print("DX.4 the bake and entityDefs pending, validation");
+      CHECK(messages.errors == 0);
+      CHECK(messages.warnings == 0);
     }
-    CHECK(resetDispatcher());
-    messages.print("DX.4 the bake and entityDefs pending, validation");
-    CHECK(messages.errors == 0);
-    CHECK(messages.warnings == 0);
   }
 
   SECTION("U2.1: a small image budget lets the uploaded images' bytes go")

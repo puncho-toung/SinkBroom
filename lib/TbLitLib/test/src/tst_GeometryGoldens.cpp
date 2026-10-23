@@ -584,8 +584,12 @@ TEST_CASE("Geometry goldens: (a) the chunks' own st and normals at the .proc's v
   }
   std::cout << "goldens (a): world vertices " << worldChecked << ", brush entities' "
             << entityChecked << "; where dmap left the face out " << faceAbsent << "\n";
-  CHECK(worldChecked > 50);
-  CHECK(entityChecked > 10);
+  // V2.3 (32-LP2-VERIFY.md): every count pinned, the vertices without a .proc vertex of
+  // their face among them, so that a flipped or wrong normal cannot pass as a face dmap
+  // left out
+  CHECK(worldChecked == 153);
+  CHECK(entityChecked == 48);
+  CHECK(faceAbsent == 421);
 }
 
 TEST_CASE("Geometry goldens: (a) the patches' corner st (R3.5)")
@@ -1090,9 +1094,11 @@ TEST_CASE("Geometry goldens: (e) the chunks' normal and tangent bytes against th
   std::cout << "goldens (e): world vertices " << compared << ", brush entities' "
             << entityCompared << "; patch vertices " << patchAt << ", byte-equal "
             << patchEqual << ", the largest byte difference " << patchWorst << "\n";
-  CHECK(compared > 100);
-  CHECK(entityCompared > 10);
-  CHECK(patchAt > 0);
+  // V2.3: the counts pinned, so that no vertex leaves the comparison unseen
+  CHECK(compared == 178);
+  CHECK(entityCompared == 48);
+  CHECK(patchAt == 18);
+  CHECK(patchEqual == 15);
   CHECK(patchWorst <= PatchNormalByteTolerance);
 }
 

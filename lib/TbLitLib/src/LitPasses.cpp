@@ -892,6 +892,8 @@ std::vector<PipelineKey> litStartPipelineKeys(const nvrhi::Format depthFormat)
   };
   return {
     key(EngineBuiltinDepth, gls::Default),
+    // V2.7: the solid prepass draw of a surface whose registers are pending (D77)
+    key(EngineBuiltinDepth, gls::AlphaMask),
     key(EngineBuiltinTextureVertexColor, gls::Default),
     key(EngineBuiltinInteraction, interactionStateBits(gls::DepthFuncEqual)),
     key(EngineBuiltinInteraction, interactionStateBits(gls::DepthFuncLess)),

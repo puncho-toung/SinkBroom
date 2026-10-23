@@ -171,8 +171,9 @@ std::uint64_t interactionStateBits(std::uint64_t depthFunc);
 /**
  * DX.5: the lit passes' pipelines that every lit scene draws with, as their first draws
  * ask for them against the HDR target and this depth format: the depth prepass
- * (builtin/depth, GLS_DEFAULT), a perforated surface's (texture_color, state 0) and the
- * interaction programs' four (interaction and PBR interaction, EQUAL and LESS). Pure.
+ * (builtin/depth, GLS_DEFAULT, and GLS_ALPHAMASK for a surface whose registers are
+ * pending), a perforated surface's (texture_color, state 0) and the interaction programs'
+ * four (interaction and PBR interaction, EQUAL and LESS). Pure.
  */
 std::vector<PipelineKey> litStartPipelineKeys(nvrhi::Format depthFormat);
 
