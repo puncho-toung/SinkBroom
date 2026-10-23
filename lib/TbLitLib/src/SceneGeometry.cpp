@@ -375,6 +375,17 @@ bool SceneGeometry::waitsForMaterials() const
   return !m_pendingMaterials.empty();
 }
 
+bool SceneGeometry::waitsForEntityDefs() const
+{
+  return !m_pendingEntityDefs.empty();
+}
+
+bool SceneGeometry::waitsForBake() const
+{
+  return m_mapPath && m_materials && m_bakeTicket != 0
+         && (!m_bakeSlot || m_bakeSlot->ticket < m_bakeTicket);
+}
+
 EditorImageSize SceneGeometry::tableSizeOf(const std::string& material) const
 {
   const auto slot = m_table ? m_table->find(material) : nullptr;

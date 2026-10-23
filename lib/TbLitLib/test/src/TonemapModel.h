@@ -30,6 +30,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace tb::lit
 {
@@ -45,6 +46,17 @@ using ModelHistogram = std::array<std::uint32_t, ModelHistogramBins>;
  */
 ModelHistogram modelHistogram(
   const std::array<float, 3>& rgb, const EngineToneMappingConstants& constants);
+
+/**
+ * U3.4: histogram.cs.hlsl over an image: every pixel of rgba (width x height, four floats
+ * a pixel, the RGBA16F target's values) inside viewOrigin + viewSize adds its weights to
+ * the two bins around its own luminance.
+ */
+ModelHistogram modelHistogramOfImage(
+  const std::vector<float>& rgba,
+  std::uint32_t width,
+  std::uint32_t height,
+  const EngineToneMappingConstants& constants);
 
 /**
  * exposure.cs.hlsl: the weighted mean of the bins' luminances exp2( i / 256 · scale +

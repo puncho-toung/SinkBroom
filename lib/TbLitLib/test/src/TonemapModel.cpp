@@ -81,13 +81,17 @@ float acesFilm(const float x)
 
 } // namespace
 
-ModelHistogram modelHistogram(
-  const std::array<float, 3>& rgb, const EngineToneMappingConstants& constants)
+namespace
 {
-  // histogram.cs.hlsl:58-108 for viewSize.x · viewSize.y pixels of one colour
-  auto histogram = ModelHistogram{};
-  const auto pixels =
-    std::uint64_t(constants.viewSize[0]) * std::uint64_t(constants.viewSize[1]);
+
+// histogram.cs.hlsl:58-108: count pixels of the colour rgb add their weights to the two
+// bins around its luminance
+void addToHistogram(
+  ModelHistogram& histogram,
+  const std::array<float, 3>& rgb,
+  const std::uint64_t count,
+  const EngineToneMappingConstants& constants)
+{
   const auto biasedLogLuminance =
     std::log2(luminance(rgb)) * constants.logLuminanceScale + constants.logLuminanceBias;
   const auto histogramBin = saturate(biasedLogLuminance) * float(ModelHistogramBins - 1);
@@ -101,11 +105,47 @@ ModelHistogram modelHistogram(
 
   if (leftWeight != 0 && leftBin < ModelHistogramBins)
   {
-    histogram[leftBin] += std::uint32_t(pixels * leftWeight);
+    histogram[leftBin] += std::uint32_t(count * leftWeight);
   }
   if (rightWeight != 0 && rightBin < ModelHistogramBins)
   {
-    histogram[rightBin] += std::uint32_t(pixels * rightWeight);
+    histogram[rightBin] += std::uint32_t(count * rightWeight);
+  }
+}
+
+} // namespace
+
+ModelHistogram modelHistogram(
+  const std::array<float, 3>& rgb, const EngineToneMappingConstants& constants)
+{
+  // viewSize.x · viewSize.y pixels of one colour
+  auto histogram = ModelHistogram{};
+  const auto pixels =
+    std::uint64_t(constants.viewSize[0]) * std::uint64_t(constants.viewSize[1]);
+  addToHistogram(histogram, rgb, pixels, constants);
+  return histogram;
+}
+
+ModelHistogram modelHistogramOfImage(
+  const std::vector<float>& rgba,
+  const std::uint32_t width,
+  const std::uint32_t height,
+  const EngineToneMappingConstants& constants)
+{
+  // every pixel of the view (viewOrigin + viewSize, inside the image) on its own
+  auto histogram = ModelHistogram{};
+  const auto x0 = std::uint32_t(std::max(constants.viewOrigin[0], 0));
+  const auto y0 = std::uint32_t(std::max(constants.viewOrigin[1], 0));
+  const auto x1 = std::min(width, x0 + std::uint32_t(std::max(constants.viewSize[0], 0)));
+  const auto y1 =
+    std::min(height, y0 + std::uint32_t(std::max(constants.viewSize[1], 0)));
+  for (auto y = y0; y < y1; ++y)
+  {
+    for (auto x = x0; x < x1; ++x)
+    {
+      const auto i = (std::size_t(y) * width + x) * 4;
+      addToHistogram(histogram, {rgba[i], rgba[i + 1], rgba[i + 2]}, 1, constants);
+    }
   }
   return histogram;
 }

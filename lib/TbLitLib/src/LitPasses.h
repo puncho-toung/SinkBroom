@@ -99,6 +99,10 @@ struct LitFrameStats
   std::size_t lightsVisible = 0;
   std::size_t lightsDrawn = 0;
   std::size_t lightsOverflowed = 0;
+  // U2.11: draws dropped for the volatile constant buffer's budget (D76), the prepass's
+  // (a perforated surface on a device whose TEXTURE layout is a volatile buffer) and any
+  // interaction's
+  std::size_t overflowedDraws = 0;
   std::size_t prepassDraws = 0;
   std::size_t interactionDraws = 0;
   // draws skipped: a pending pipeline, a texture with no written level, a chunk not
@@ -249,6 +253,7 @@ private:
   std::uint32_t m_constantBufferVersions = EngineFrame.constantBufferVersions;
   LitFrameStats m_stats;
   bool m_overflowWarned = false;
+  bool m_drawOverflowWarned = false;
   bool m_logDraws = false;
   std::vector<LitDrawRecord> m_drawLog;
   // the pipeline keys asked for while the log is on, drawn or not
@@ -301,6 +306,8 @@ private:
     std::uint64_t depthFunc);
   // D76: the most writes a light's interactions may make
   std::uint64_t worstCaseWrites(const ViewLight& light) const;
+  // U2.11: a draw dropped for the budget: counted, and said once
+  void drawOverflowed(Frame& frame);
   std::uint64_t writeBudget() const;
 
   void setSpace(Frame& frame, std::size_t space);

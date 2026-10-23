@@ -174,6 +174,12 @@ public:
    * image it cannot load (C21's 8 × 8), rebuilt only when a file changes (S2.5).
    */
   bool waitsForMaterials() const;
+  // DX.4: entities were built with default parms while their classname's entityDef was
+  // not in the table; they are built again when it is
+  bool waitsForEntityDefs() const;
+  // DX.4 (C10): the bake of the map's path was asked for and the table has not answered
+  // that request yet
+  bool waitsForBake() const;
 
   // waits for the batches in flight and applies them, until none is in flight (tests)
   void finishForTesting();

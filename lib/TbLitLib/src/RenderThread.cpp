@@ -123,7 +123,8 @@ public:
 bool FrameConvergence::settled() const
 {
   return !pipelinesPending && !materialsPending && !drawsSkipped && !uploadsLeft
-         && !imagesPending && !provisionalChunks && !lutPending;
+         && !imagesPending && !provisionalChunks && !lutPending && !entityDefsPending
+         && !lightsProvisional && !geometryInFlight && !drawsOverflowed;
 }
 
 bool FrameConvergence::retriggers() const
@@ -569,13 +570,26 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
   convergence.uploadsLeft = m_uploadsLeft || m_images.hasLoading();
   convergence.imagesPending = m_images.pending() > 0;
   // the scene's chunks, not a test's
-  convergence.provisionalChunks =
-    m_geometry && !m_arenaTestChunks && m_geometry->waitsForMaterials();
+  const auto scene = m_geometry && !m_arenaTestChunks;
+  convergence.provisionalChunks = scene && m_geometry->waitsForMaterials();
+  // DX.4: what the scene still waits for, and the snapshot not taken yet
+  convergence.entityDefsPending = scene && m_geometry->waitsForEntityDefs();
+  convergence.geometryInFlight =
+    scene && (m_geometry->busy() || m_geometry->waitsForBake() || m_snapshotInboxFull);
+  convergence.lightsProvisional =
+    std::ranges::any_of(m_passes.lists().lights, [](const ViewLight& light) {
+      return light.record
+             && (light.record->provisional || light.record->pendingEntityDef
+                 || !light.record->pendingMaterials.empty());
+    });
+  // U2.11
+  convergence.drawsOverflowed = lit.lightsOverflowed > 0 || lit.overflowedDraws > 0;
   convergence.lutPending = tonemap.lutPending;
   convergence.passesDisabled =
     lit.prepassDisabled || lit.interactionsDisabled || tonemap.disabled;
   m_convergence = convergence;
   m_lastSettled = convergence.settled();
+  m_sceneWaitSeen = m_geometry ? std::optional{sceneWaitState()} : std::nullopt;
 
   // the livelock guard: a frame that re-triggers itself without uploading anything or
   // changing what it waits for has made no progress; after MaxStalledFrames of them the
@@ -1130,10 +1144,28 @@ void RenderThread::litTableTick()
   {
     return;
   }
-  // D77: a table published while the lit passes waited for one is a frame trigger
+  // D77: a table published while the lit passes waited for one is a frame trigger;
+  // U2.5: through the arrival clock, so a start's stream of publications (one a texture)
+  // draws at most 10 frames a second, each a rebuild of the lists
   m_litWaitsForTable = false;
+  const auto now = FrameClock::now();
   const auto lock = std::scoped_lock{m_mutex};
-  m_pacer.trigger();
+  arrivalTrigger(now);
+}
+
+void RenderThread::arrivalTrigger(const FrameClock::time_point now)
+{
+  const auto at = m_lastArrivalTrigger + TextureArrivalInterval;
+  if (now >= at)
+  {
+    m_lastArrivalTrigger = now;
+    m_arrivalTriggerAt.reset();
+    m_pacer.trigger();
+  }
+  else if (!m_arrivalTriggerAt)
+  {
+    m_arrivalTriggerAt = at;
+  }
 }
 
 void RenderThread::main() noexcept
@@ -1758,18 +1790,8 @@ void RenderThread::arrivalsTick()
   }
   // D77: a texture arrival is a frame trigger, at most every TextureArrivalInterval
   const auto now = FrameClock::now();
-  const auto at = m_lastArrivalTrigger + TextureArrivalInterval;
   const auto lock = std::scoped_lock{m_mutex};
-  if (now >= at)
-  {
-    m_lastArrivalTrigger = now;
-    m_arrivalTriggerAt.reset();
-    m_pacer.trigger();
-  }
-  else if (!m_arrivalTriggerAt)
-  {
-    m_arrivalTriggerAt = at;
-  }
+  arrivalTrigger(now);
 }
 
 bool RenderThread::waitForFrameEvent(const std::size_t slot)
@@ -1950,13 +1972,35 @@ void RenderThread::parkGpuWork()
   }
 }
 
+std::tuple<std::uint64_t, bool, bool, bool, bool> RenderThread::sceneWaitState() const
+{
+  return {
+    m_geometry->appliedSequence(),
+    m_geometry->busy(),
+    m_geometry->waitsForBake(),
+    m_geometry->waitsForEntityDefs(),
+    m_geometry->waitsForMaterials()};
+}
+
 bool RenderThread::geometryTick()
 {
   if (!m_geometry)
   {
     return false;
   }
-  if (m_geometry->collect())
+  const auto applied = m_geometry->collect();
+  // DX.4: a frame that waited for the scene (a batch, the bake, an entityDef, a light
+  // rebuilt) is drawn again once the scene's state moves, also when nothing was uploaded
+  if (
+    (m_convergence.geometryInFlight || m_convergence.entityDefsPending
+     || m_convergence.lightsProvisional || m_convergence.provisionalChunks)
+    && m_sceneWaitSeen && *m_sceneWaitSeen != sceneWaitState())
+  {
+    m_sceneWaitSeen = sceneWaitState();
+    const auto lock = std::scoped_lock{m_mutex};
+    m_pacer.trigger();
+  }
+  if (applied)
   {
     for (auto& warning : m_geometry->takeWarnings())
     {

@@ -62,6 +62,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -117,6 +118,35 @@ TEST_CASE("LitSession")
       == Result<std::unique_ptr<LitSession>>{
         Error{"The Vulkan dispatcher is not initialised for the instance"}});
   }
+}
+
+TEST_CASE("FrameConvergence: what keeps a frame from being settled (D77 DX.4 U2.11)")
+{
+  CHECK(FrameConvergence{}.settled());
+  CHECK_FALSE(FrameConvergence{}.retriggers());
+  using Term = bool FrameConvergence::*;
+  for (const auto& [term, retriggers] : std::vector<std::pair<Term, bool>>{
+         {&FrameConvergence::pipelinesPending, false},
+         {&FrameConvergence::materialsPending, false},
+         {&FrameConvergence::drawsSkipped, true},
+         {&FrameConvergence::uploadsLeft, true},
+         {&FrameConvergence::imagesPending, false},
+         {&FrameConvergence::provisionalChunks, false},
+         {&FrameConvergence::lutPending, false},
+         {&FrameConvergence::entityDefsPending, false},
+         {&FrameConvergence::lightsProvisional, false},
+         {&FrameConvergence::geometryInFlight, false},
+         {&FrameConvergence::drawsOverflowed, false}})
+  {
+    auto convergence = FrameConvergence{};
+    convergence.*term = true;
+    CHECK_FALSE(convergence.settled());
+    CHECK(convergence.retriggers() == retriggers);
+  }
+  // D9: a disabled pass counts as converged
+  auto disabled = FrameConvergence{};
+  disabled.passesDisabled = true;
+  CHECK(disabled.settled());
 }
 
 TEST_CASE("LitSession: the panel's status line (D9, LP2.3)")
@@ -764,7 +794,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     CHECK(rows.back()[1] == "stop");
     for (std::size_t i = 2; i + 1 < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 35u);
+      REQUIRE(rows[i].size() == 36u);
       CHECK(rows[i][0] == "1");
       CHECK(rows[i][1] == "frame");
       CHECK(rows[i][2] == std::to_string(i - 2));
@@ -1534,7 +1564,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     auto longestPresentMs = 0.0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 35u);
+      REQUIRE(rows[i].size() == 36u);
       if (rows[i][1] != "frame")
       {
         continue;
@@ -2219,6 +2249,76 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     CHECK(messages.warnings == 0);
   }
 
+  SECTION("DX.4: no frame is settled while a geometry batch runs")
+  {
+    // R2.1's 10,000 boxes: a batch of seconds in Debug, of many frames in Release
+    auto text = std::string{"{\n\"classname\" \"worldspawn\"\n"};
+    for (auto i = 0; i < 10000; ++i)
+    {
+      const auto x = (i % 4) * 1024 + ((i / 16) % 10) * 96 + 32;
+      const auto y = ((i / 4) % 4) * 1024 + ((i / 160) % 10) * 96 + 32;
+      const auto z = (i / 1600) * 96;
+      text += boxBrush(x, y, z, x + 48, y + 48, z + 48, "lp1b/wall");
+    }
+    text += "}\n";
+    auto snapshot = std::make_shared<Snapshot>(snapshotOfMapText(text));
+    snapshot->generation = 12;
+    snapshot->sequence = 1;
+
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = LitSession::create(
+                       instance.handles(), VK_NULL_HANDLE, 16, 16, {}, events.sink(), 12)
+                     | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+      settle(*session);
+      CHECK(session->lastFrameSettledForTesting());
+
+      REQUIRE(session->offerSnapshot(snapshot));
+      REQUIRE(waitFor(
+        [&] { return session->snapshotsTakenForTesting() == 1u; }, 5000ms, false));
+      // a frame drawn while the batch runs, and the convergence it left
+      auto during = FrameConvergence{};
+      auto batches = std::uint64_t{1};
+      REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
+      REQUIRE(inFrame(
+        *session, [&](RenderFrameAccess& access) { during = access.convergence; }));
+      // the hook saw the convergence of the frame before it, which ended before the hook
+      // returned: with no batch applied by now, that frame was drawn while it ran
+      batches = session->geometryBatchesForTesting();
+      if (batches == 0u)
+      {
+        CHECK(during.geometryInFlight);
+        CHECK_FALSE(during.settled());
+      }
+      else
+      {
+        WARN("the batch was applied before a frame could look at it");
+      }
+      // the batch applies: the frames after it no longer wait for it (the session has no
+      // material service, so its chunks stay provisional: it never settles)
+      REQUIRE(waitFor(
+        [&] { return session->geometryBatchesForTesting() >= 1u; }, 30000ms, false));
+      auto after = FrameConvergence{};
+      REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
+      REQUIRE(inFrame(
+        *session, [&](RenderFrameAccess& access) { after = access.convergence; }));
+      CHECK_FALSE(after.geometryInFlight);
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("a batch in flight, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
   SECTION("T0.9: the render thread keeps the compiler's answers for its draws")
   {
     auto messages = ValidationMessages{};
@@ -2473,7 +2573,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     auto arenaBytes = std::string{};
     for (const auto& row : readCsv(logPath))
     {
-      if (row.size() == 35u && row[1] == "frame" && !row[15].empty() && row[15] != "0")
+      if (row.size() == 36u && row[1] == "frame" && !row[15].empty() && row[15] != "0")
       {
         fromLog.push_back(std::stoull(row[15]));
         arenaBytes = row[17];
@@ -3631,7 +3731,7 @@ TEST_CASE("LitSession GPU resources on the retail game (D72)", "[.][retail]")
   auto stopAllocations = std::string{};
   for (const auto& row : readCsv(logPath))
   {
-    if (row.size() == 35u && row[1] != "event" && !row[14].empty() && row[0] != "session")
+    if (row.size() == 36u && row[1] != "event" && !row[14].empty() && row[0] != "session")
     {
       loggedPeak = std::max(loggedPeak, std::int64_t(std::stoll(row[14])));
       if (row[1] == "stop")
@@ -4342,6 +4442,86 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
       == (limitRaised ? implied : std::min(implied, ValidationDuplicateMessageLimit)));
   }
 
+  SECTION("DX.4: no frame is settled while the bake or an entityDef is pending")
+  {
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      // the parse thread waits at the gate after its first build: the snapshot's
+      // entityDefs and the bake of its map path stay pending
+      auto gate = std::make_shared<ParseGate>();
+      gate->close();
+      auto options = MaterialServiceOptions{};
+      options.makeSource = [root](const std::atomic<bool>& cancel) {
+        return std::unique_ptr<DeclSource>{
+          std::make_unique<GameDeclSource>(root, &cancel)};
+      };
+      options.pollInterval = 0ms;
+      options.imageBudgetBytes = 0;
+      options.beforeTakeWorkForTesting = [gate] { gate->pass(); };
+      auto service = MaterialService::create(std::move(options))
+                     | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+      const auto atExit = OpenAtExit{gate};
+      REQUIRE(service->waitForTableForTesting(
+        [](const MaterialTable& t) { return t.registry != 0; }, 10s));
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+      session->setCamera(litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0}));
+
+      // the first batch applies with the entityDefs pending; the bake is not answered
+      auto seen = FrameConvergence{};
+      REQUIRE(waitFor(
+        [&] {
+          inFrame(
+            *session, [&](RenderFrameAccess& access) { seen = access.convergence; });
+          return session->geometryBatchesForTesting() >= 1u && seen.entityDefsPending;
+        },
+        30000ms,
+        false));
+      CHECK(seen.entityDefsPending);
+      CHECK(seen.geometryInFlight);
+      CHECK_FALSE(seen.settled());
+      CHECK_FALSE(session->lastFrameSettledForTesting());
+
+      // the service answers: the entities and the lights are built again, the bake
+      // adopted, and a frame settles
+      gate->open();
+      auto settledSeen = FrameConvergence{};
+      CHECK(waitFor(
+        [&] {
+          session->tableChanged();
+          inFrame(*session, [&](RenderFrameAccess& access) {
+            settledSeen = access.convergence;
+          });
+          return settledSeen.settled();
+        },
+        60000ms,
+        false));
+      CHECK_FALSE(settledSeen.entityDefsPending);
+      CHECK_FALSE(settledSeen.geometryInFlight);
+      CHECK_FALSE(settledSeen.lightsProvisional);
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      service->requestStop();
+    }
+    CHECK(resetDispatcher());
+    messages.print("DX.4 the bake and entityDefs pending, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
   SECTION("U2.1: a small image budget lets the uploaded images' bytes go")
   {
     auto messages = ValidationMessages{};
@@ -5032,14 +5212,15 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     // that drew the scene says so
     const auto rows = readCsv(logPath);
     REQUIRE(rows.size() >= 3u);
-    REQUIRE(rows[0].size() == 35u);
+    REQUIRE(rows[0].size() == 36u);
     CHECK(rows[0][18] == "gpu_prepass_ms");
     CHECK(rows[0][34] == "settled");
+    CHECK(rows[0][35] == "alloc_refused");
     auto lastLit = std::optional<std::vector<std::string>>{};
     auto settledRows = 0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 35u);
+      REQUIRE(rows[i].size() == 36u);
       if (rows[i][1] != "frame")
       {
         continue;
@@ -5561,9 +5742,9 @@ public:
 /**
  * LP2.3 (C29, D77): asks for frames of camera until one is settled with the passes drawn
  * and tonemapped, the scene's geometry drawn (prepass draws) and, for a lit row, a light
- * drawn; then, as a guard against a geometry batch still to come (a .proc that arrives
- * after the first chunks), until the session has applied no new geometry batch for 300 ms
- * with every frame settled. That frame's record, or nullopt at the deadline.
+ * drawn. DX.4: "settled" waits for every batch, bake read, entityDef and provisional
+ * light itself, so LP2.3's guard of 300 ms without a new batch is gone. That frame's
+ * record, or nullopt at the deadline.
  */
 std::optional<ChainFrame> settledParityFrame(
   LitSession& session,
@@ -5573,8 +5754,6 @@ std::optional<ChainFrame> settledParityFrame(
 {
   session.setCamera(camera);
   const auto deadline = std::chrono::steady_clock::now() + timeout;
-  auto quietSince =
-    std::optional<std::pair<std::chrono::steady_clock::time_point, std::uint64_t>>{};
   while (std::chrono::steady_clock::now() < deadline)
   {
     session.tableChanged();
@@ -5593,22 +5772,118 @@ std::optional<ChainFrame> settledParityFrame(
                        && frame->tonemap.tonemapped && frame->tonemap.blitted
                        && frame->lit.prepassDraws > 0
                        && (!needsLight || frame->lit.lightsDrawn > 0);
-    const auto batches = session.geometryBatchesForTesting();
-    if (!ready)
-    {
-      quietSince.reset();
-    }
-    else if (!quietSince || quietSince->second != batches)
-    {
-      quietSince = std::pair{std::chrono::steady_clock::now(), batches};
-    }
-    else if (std::chrono::steady_clock::now() - quietSince->first >= 300ms)
+    if (ready)
     {
       return *frame;
     }
     std::this_thread::sleep_for(50ms);
   }
   return std::nullopt;
+}
+
+// U3.4: the exposure the preview's exposure pass left in its buffer, and the CPU model's
+// exposure of the same frame's HDR target (TonemapModel: histogram.cs and exposure.cs
+// over every pixel of the histogram's view, with the constants the frame gave the passes)
+struct ParityExposure
+{
+  float preview = 0.0f;
+  float model = 0.0f;
+};
+
+std::optional<ParityExposure> parityExposure(
+  LitSession& session, const std::chrono::milliseconds timeout)
+{
+  struct State
+  {
+    bool copied = false;
+    nvrhi::BufferHandle exposure;
+    nvrhi::StagingTextureHandle hdr;
+    EngineToneMappingConstants histogram;
+    EngineToneMappingConstants exposureConstants;
+  };
+  auto state = std::make_shared<State>();
+  auto done = std::make_shared<std::promise<void>>();
+  auto future = done->get_future();
+  session.runAfterTonemapForTesting([state, done](RenderFrameAccess& access) {
+    const auto& tonemap = access.tonemap.lastStats();
+    if (tonemap.tonemapped)
+    {
+      namespace fr = frame_resource;
+      auto bufferDesc = nvrhi::BufferDesc{};
+      bufferDesc.byteSize = 4;
+      bufferDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
+      bufferDesc.debugName = "U3.4 exposure readback";
+      bufferDesc.initialState = nvrhi::ResourceStates::CopyDest;
+      bufferDesc.keepInitialState = true;
+      state->exposure = access.device.createBuffer(bufferDesc);
+      access.commandList.copyBuffer(
+        state->exposure, 0, access.frame.find(fr::ExposureBuffer)->buffer, 0, 4);
+      auto* hdr = access.frame.find(fr::CurrentRenderHdr)->texture;
+      const auto& desc = hdr->getDesc();
+      state->hdr = access.device.createStagingTexture(
+        nvrhi::TextureDesc{}
+          .setWidth(desc.width)
+          .setHeight(desc.height)
+          .setFormat(desc.format),
+        nvrhi::CpuAccessMode::Read);
+      access.commandList.copyTexture(
+        state->hdr, nvrhi::TextureSlice{}, hdr, nvrhi::TextureSlice{});
+      state->histogram = tonemap.histogramConstants;
+      state->exposureConstants = tonemap.exposureConstants;
+      state->copied = true;
+    }
+    done->set_value();
+  });
+  if (future.wait_for(timeout) != std::future_status::ready || !state->copied)
+  {
+    return std::nullopt;
+  }
+  auto image = HdrImage{};
+  auto value = std::optional<float>{};
+  const auto read = inFrame(
+    session,
+    [&](RenderFrameAccess& access) {
+      const auto* bits = static_cast<const std::uint32_t*>(
+        access.device.mapBuffer(state->exposure, nvrhi::CpuAccessMode::Read));
+      if (bits)
+      {
+        auto exposure = 0.0f;
+        std::memcpy(&exposure, bits, sizeof(exposure));
+        value = exposure;
+        access.device.unmapBuffer(state->exposure);
+      }
+      const auto& desc = state->hdr->getDesc();
+      image.width = desc.width;
+      image.height = desc.height;
+      image.rgba.resize(std::size_t(desc.width) * desc.height * 4);
+      auto pitch = std::size_t{0};
+      const auto* bytes =
+        static_cast<const std::uint8_t*>(access.device.mapStagingTexture(
+          state->hdr, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch));
+      for (std::uint32_t y = 0; bytes && y < desc.height; ++y)
+      {
+        const auto* row = reinterpret_cast<const std::uint16_t*>(bytes + y * pitch);
+        for (std::uint32_t x = 0; x < desc.width * 4; ++x)
+        {
+          image.rgba[std::size_t(y) * desc.width * 4 + x] = halfToFloat(row[x]);
+        }
+      }
+      if (bytes)
+      {
+        access.device.unmapStagingTexture(state->hdr);
+      }
+      state->exposure = nullptr;
+      state->hdr = nullptr;
+    },
+    timeout);
+  if (!read || !value)
+  {
+    return std::nullopt;
+  }
+  const auto histogram =
+    modelHistogramOfImage(image.rgba, image.width, image.height, state->histogram);
+  return ParityExposure{
+    *value, modelExposure(histogram, *value, state->exposureConstants)};
 }
 
 // the snapshot of a map of the parity root, its .proc beside it
@@ -5657,6 +5932,20 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
   REQUIRE(rows->kind == JsonValue::Kind::Array);
   REQUIRE_FALSE(rows->array.empty());
   const auto pinned = record->flag("pinned");
+  // DX.4: R09's _color comes from an entityDef; read first, right after the parity map is
+  // offered, its pixels prove that a settled frame has the entityDef applied
+  auto order = std::vector<std::size_t>{};
+  for (std::size_t i = 0; i < rows->array.size(); ++i)
+  {
+    if (rows->array[i].text("id") == "R09")
+    {
+      order.insert(order.begin(), i);
+    }
+    else
+    {
+      order.push_back(i);
+    }
+  }
 
   // this test's outputs from an earlier run, by name
   std::filesystem::create_directories(out);
@@ -5715,10 +6004,14 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
     REQUIRE(waitFor(
       [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
 
+    // the written stamp of the rows.json each read-back was made from (U1.9)
+    const auto written = record->text("written");
+
     auto currentMap = std::string{};
     auto sequence = std::uint64_t{0};
-    for (const auto& row : rows->array)
+    for (const auto index : order)
     {
+      const auto& row = rows->array[index];
       const auto id = row.text("id");
       CAPTURE(id);
       const auto map = row.text("map");
@@ -5756,6 +6049,9 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
                               std::chrono::steady_clock::now() - started)
                               .count();
       frameRanges.emplace_back(framesBefore, session->framesPresented());
+      // U3.4: the exposure the frame left, beside the CPU model's of its HDR target
+      const auto exposure = parityExposure(*session, 10000ms);
+      REQUIRE(exposure);
       REQUIRE(image->width == width);
       REQUIRE(image->height == height);
       REQUIRE(image->rgba.size() == std::size_t(width) * height * 4);
@@ -5772,7 +6068,8 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
         fmt::format(
           "{{\"width\": {}, \"height\": {}, \"settle_ms\": {:.1f}, \"frames\": {}, "
           "\"lights_visible\": {}, \"lights_drawn\": {}, \"prepass_draws\": {}, "
-          "\"interaction_draws\": {}, \"session_ms\": {:.1f}}}\n",
+          "\"interaction_draws\": {}, \"session_ms\": {:.1f}, \"exposure\": {:.9g}, "
+          "\"exposure_model\": {:.9g}, \"rows_written\": \"{}\", \"order\": {}}}\n",
           width,
           height,
           settleMs,
@@ -5783,7 +6080,11 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           lit.interactionDraws,
           std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - created)
-            .count()));
+            .count(),
+          exposure->preview,
+          exposure->model,
+          written,
+          frameRanges.size() - 1));
 
       // the lights-off control: black (every channel at most 1)
       if (control)
@@ -5800,14 +6101,16 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
       }
       std::cout << fmt::format(
         "LP2.3 parity {}: settled in {:.0f} ms over {} frames; lights {} of {}, prepass "
-        "draws {}, interaction draws {}\n",
+        "draws {}, interaction draws {}; exposure {:.6f}, the CPU model's {:.6f}\n",
         id,
         settleMs,
         session->framesPresented() - framesBefore,
         lit.lightsDrawn,
         lit.lightsVisible,
         lit.prepassDraws,
-        lit.interactionDraws);
+        lit.interactionDraws,
+        exposure->preview,
+        exposure->model);
     }
 
     for (const auto& program : session->programReport())
@@ -5851,7 +6154,7 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
       {
         rowLog += frames[std::size_t(f)] + "\n";
       }
-      writeTextFile(out / (rows->array[i].text("id") + ".framelog.csv"), rowLog);
+      writeTextFile(out / (rows->array[order[i]].text("id") + ".framelog.csv"), rowLog);
     }
   }
 

@@ -50,6 +50,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace tb::lit
@@ -89,7 +90,9 @@ GpuMemoryAccount accountGpuMemory(
  * so that a frame waiting for another thread costs no frames: a pending pipeline for the
  * compile thread's onReady, a pending material or evaluation for a table publication
  * (litTableTick), a pending image for its arrival (arrivalsTick, at most 10 Hz), a
- * provisional chunk for its rebuild (geometryTick). The exposure is at its target in
+ * provisional chunk for its rebuild (geometryTick), a pending entityDef, a provisional
+ * light, a batch, the bake or a snapshot for the scene's next change (geometryTick, the
+ * snapshot's offer). The exposure is at its target in
  * every frame the exposure pass runs (D70). A pass that cannot draw (a program disabled
  * by D9) counts as converged, its state reported (passesDisabled, programReport).
  */
@@ -112,6 +115,18 @@ struct FrameConvergence
   bool provisionalChunks = false;
   // the tonemap passes' colour LUT has no written level yet
   bool lutPending = false;
+  // DX.4 (31-LP2-FIXES.md): entities drawn with default parms while their entityDef is
+  // pending; a drawn light built while its entityDef or a material was pending
+  // (LightRecord::provisional, pendingEntityDef, pendingMaterials)
+  bool entityDefsPending = false;
+  bool lightsProvisional = false;
+  // DX.4: a geometry batch or the light job runs, the map's bake has not been answered,
+  // or a snapshot waits in the inbox; each brings its own trigger (geometryTick, the
+  // offer)
+  bool geometryInFlight = false;
+  // U2.11: a draw or a light was dropped for the volatile constant buffer's budget (D76);
+  // it does not re-trigger (nothing the next frame does changes the budget)
+  bool drawsOverflowed = false;
   // D9: a pass is disabled (counts as converged)
   bool passesDisabled = false;
 
@@ -255,6 +270,9 @@ private:
   // livelock guard's count of frames that re-triggered without progress, and the last
   // frame's progress
   FrameConvergence m_convergence;
+  // DX.4: what the scene waited for when the last frame looked (its applied batches,
+  // busy, bake, entityDefs, provisional chunks), for geometryTick's trigger
+  std::optional<std::tuple<std::uint64_t, bool, bool, bool, bool>> m_sceneWaitSeen;
   bool m_retrigger = false;
   std::size_t m_stalledFrames = 0;
   std::optional<FrameProgress> m_lastProgress;
@@ -531,6 +549,9 @@ private:
   void eraseChangedSets();
   // D77: an idle pass's look for texture arrivals in a new table; whether a frame is due
   void arrivalsTick();
+  // D77, U2.5: a trigger at most every TextureArrivalInterval: now, or at the interval's
+  // end; under m_mutex
+  void arrivalTrigger(FrameClock::time_point now);
   const std::map<ChunkKey, Chunk>& arenaChunks() const;
   // D78: the frame's uploads, before its first pass; false: failed
   bool recordUploads(nvrhi::ICommandList& commandList);
@@ -548,6 +569,8 @@ private:
   void idleTick();
   // collects the chunk jobs and applies a finished batch; whether a batch is in flight
   bool geometryTick();
+  // DX.4: the scene's state that a frame's geometry terms read
+  std::tuple<std::uint64_t, bool, bool, bool, bool> sceneWaitState() const;
   bool waitForIdle(std::string_view when);
   void parkGpuWork();
   void finish() noexcept;

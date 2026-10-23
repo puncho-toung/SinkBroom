@@ -343,6 +343,10 @@ void LitPasses::recordPrepass(Frame& frame)
       m_stats.prepassDisabled = true;
       return;
     }
+    if (outcome == DrawOutcome::Overflowed)
+    {
+      drawOverflowed(frame);
+    }
     if (outcome == DrawOutcome::Drawn)
     {
       ++m_stats.prepassDraws;
@@ -448,6 +452,10 @@ bool LitPasses::genericDepth(Frame& frame, const std::vector<const LitSurface*>&
         m_stats.prepassDisabled = true;
         return false;
       }
+      if (outcome == DrawOutcome::Overflowed)
+      {
+        drawOverflowed(frame);
+      }
       if (outcome == DrawOutcome::Drawn)
       {
         ++m_stats.prepassDraws;
@@ -470,6 +478,22 @@ std::uint64_t LitPasses::writeBudget() const
   // the versions of the frames in flight and of the one before them may still be held
   // (nvrhi rule 2: they are recycled once NVRHI knows a frame finished)
   return m_constantBufferVersions / (FramesInFlight + 1);
+}
+
+void LitPasses::drawOverflowed(Frame& frame)
+{
+  // U2.11: the surface has no depth (or no light) where the engine draws it, so the frame
+  // is not the engine's picture: unconverged, and said once, as an overflowed light is
+  ++m_stats.overflowedDraws;
+  m_stats.unconverged = true;
+  if (!m_drawOverflowWarned && frame.inputs->warn)
+  {
+    m_drawOverflowWarned = true;
+    frame.inputs->warn(fmt::format(
+      "The lit preview's draws overflowed its constant buffer ({} writes a frame): some "
+      "surfaces are not drawn",
+      writeBudget()));
+  }
 }
 
 std::uint64_t LitPasses::worstCaseWrites(const ViewLight& light) const
@@ -729,8 +753,10 @@ bool LitPasses::renderInteractions(
         case DrawOutcome::Disabled:
           disabled = true;
           break;
-        case DrawOutcome::Skipped:
         case DrawOutcome::Overflowed:
+          drawOverflowed(frame);
+          break;
+        case DrawOutcome::Skipped:
           break;
         }
       };
