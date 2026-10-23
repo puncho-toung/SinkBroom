@@ -99,6 +99,83 @@ textures/lp2/checker
 	bumpmap	textures/lp2/floor_local.tga
 }
 
+// K28 (31-LP2-FIXES.md): the near pieces of a room's floor, ceiling and side walls, cut 100
+// units ahead of the row's camera so that no triangle the camera sees crosses its near
+// plane; a material of their own, so that dmap's optimizer keeps them apart from the far
+// pieces; never in view
+textures/lp2/near
+{
+	qer_editorimage	textures/lp2/wall.tga
+	diffusemap	textures/lp2/wall.tga
+	bumpmap	textures/lp2/wall_local.tga
+}
+
+// R14: a white wall without a bump map (the implicit _flat)
+textures/lp2/white
+{
+	qer_editorimage	textures/lp2/white.tga
+	diffusemap	textures/lp2/white.tga
+}
+
+// R18: a translucent lit surface (interactions with DEPTHFUNC_LESS, no prepass)
+textures/lp2/glass_lit
+{
+	qer_editorimage	textures/lp2/checker.tga
+	translucent
+	diffusemap	textures/lp2/checker.tga
+}
+
+// R18: a surface stage's texture matrix past RB_GetShaderTextureMatrix's +-40 wrap
+textures/lp2/wrap
+{
+	qer_editorimage	textures/lp2/checker.tga
+	bumpmap	textures/lp2/floor_local.tga
+	{
+		blend	diffusemap
+		map	textures/lp2/checker.tga
+		translate	45.5, -41.25
+	}
+}
+
+// R18: a vertex-colour diffuse stage
+textures/lp2/vcolor
+{
+	qer_editorimage	textures/lp2/crate.tga
+	bumpmap	textures/lp2/crate_local.tga
+	{
+		blend	diffusemap
+		map	textures/lp2/crate.tga
+		vertexColor
+	}
+}
+
+// R18: stages on condition registers (the entity's shaderParm5 1 turns the first on, its
+// shaderParm6 0 leaves the second off)
+textures/lp2/cond
+{
+	qer_editorimage	textures/lp2/crate.tga
+	bumpmap	textures/lp2/crate_local.tga
+	{
+		if ( parm5 > 0.5 )
+		blend	diffusemap
+		map	textures/lp2/crate.tga
+	}
+	{
+		if ( parm6 > 0.5 )
+		blend	diffusemap
+		map	textures/lp2/checker.tga
+	}
+}
+
+// R18: polygon offset on an opaque surface
+textures/lp2/offset
+{
+	qer_editorimage	textures/lp2/legacy.tga
+	polygonOffset	1
+	diffusemap	textures/lp2/legacy.tga
+	bumpmap	textures/lp2/floor_local.tga
+}
+
 // the lights: their images are files under lights/lp2/ (no _white, no default light shader)
 lights/lp2/round
 {
@@ -127,5 +204,58 @@ lights/lp2/square
 		map	lights/lp2/square.tga
 		colored
 		zeroClamp
+	}
+}
+
+// R13, R14: white to the volume's planes and past them (clamp), the falloff white too
+lights/lp2/flat
+{
+	lightFalloffImage	lights/lp2/white_falloff.tga
+	{
+		map	lights/lp2/white.tga
+		colored
+		clamp
+	}
+}
+
+// R13: a projected light whose falloff is white at its near and far planes
+lights/lp2/spotflat
+{
+	lightFalloffImage	lights/lp2/white_falloff.tga
+	{
+		map	lights/lp2/spot.tga
+		colored
+		zeroClamp
+	}
+}
+
+// R17: a light material of two stages
+lights/lp2/twostage
+{
+	lightFalloffImage	lights/lp2/falloff.tga
+	{
+		map	lights/lp2/round.tga
+		colored
+		zeroClamp
+	}
+	{
+		map	lights/lp2/square.tga
+		red	0.25
+		green	0.5
+		blue	0.75
+		zeroClamp
+	}
+}
+
+// R18: a light stage with a texture matrix (RB_BakeTextureMatrixIntoTexgen)
+lights/lp2/matrix
+{
+	lightFalloffImage	lights/lp2/falloff.tga
+	{
+		map	lights/lp2/round.tga
+		colored
+		zeroClamp
+		scale	0.8, 0.8
+		translate	0.1, 0.1
 	}
 }
