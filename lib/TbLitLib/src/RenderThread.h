@@ -69,11 +69,13 @@ struct SwapchainGeneration;
  * §3.10, C11 (LP2.1 step 9): what the session's GPU memory is spent on, as the render
  * thread counts it: the geometry arenas' buffers, the slots' textures, the frame's
  * targets and buffers, and what was released and waits for its frames to finish (D35).
- * U2.6: also the volatile constant buffers (every version) and the rest of the
- * host-visible memory the device holds: NVRHI's upload chunks (UploadChunkBytes each,
- * kept by each command list until teardown) and a readback's staging. U2.9: arenas
- * never shrink before teardown, so a whole-map rebuild may leave up to twice the
- * geometry plus one arena per kind in arenaBytes (M-ARENA-DIFF-01; compaction in LP6).
+ * U2.6: also, as their own column, the volatile constant buffers (every version) and the
+ * rest of the host-visible memory the device holds: NVRHI's upload chunks
+ * (UploadChunkBytes each, kept by each command list until teardown) and a readback's
+ * staging; V2.6: total() is the device-local part alone, the budget is compared with the
+ * driver's own figure (VramUsage::usedBytes). U2.9: arenas never shrink before teardown,
+ * so a whole-map rebuild may leave up to twice the geometry plus one arena per kind in
+ * arenaBytes (M-ARENA-DIFF-01; compaction in LP6).
  */
 struct GpuMemoryAccount
 {
@@ -84,7 +86,10 @@ struct GpuMemoryAccount
   std::uint64_t volatileBufferBytes = 0;
   std::uint64_t uploadPoolBytes = 0;
 
+  // the device-local estimate: arenas, textures, targets and what waits for its frames
   std::uint64_t total() const;
+  // V2.6: the host-visible column, the volatile buffers and the upload pool
+  std::uint64_t hostVisible() const;
 };
 
 // render thread

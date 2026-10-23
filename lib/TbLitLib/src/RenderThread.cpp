@@ -141,8 +141,12 @@ bool FrameConvergence::retriggers() const
 
 std::uint64_t GpuMemoryAccount::total() const
 {
-  return arenaBytes + textureBytes + renderTargetBytes + releasedBytes
-         + volatileBufferBytes + uploadPoolBytes;
+  return arenaBytes + textureBytes + renderTargetBytes + releasedBytes;
+}
+
+std::uint64_t GpuMemoryAccount::hostVisible() const
+{
+  return volatileBufferBytes + uploadPoolBytes;
 }
 
 GpuMemoryAccount accountGpuMemory(
@@ -958,8 +962,10 @@ bool RenderThread::prepareFrameResources(const vk::Extent2D extent)
 
 void RenderThread::checkVramBudget()
 {
-  // §3.10, C11 (U2.6): the account and the device's budget at the session's first frame
-  // and at every settled frame (the caller's); LP6 evicts against it, until then a
+  // §3.10, C11 (U2.6, V2.6): the device-local heaps' usage, as the driver counts it for
+  // this process (VK_EXT_memory_budget's heapUsage; the account's device-local estimate
+  // without the extension), and the device's budget for them, at the session's first
+  // frame and at every settled frame (the caller's); LP6 evicts against it, until then a
   // session past it says so once
   if (m_budgetWarned)
   {
@@ -967,20 +973,22 @@ void RenderThread::checkVramBudget()
   }
   m_budgetChecked = true;
   const auto set = m_vramBudgetForTesting.load();
-  const auto vram = set == 0 ? m_device.vram() : std::nullopt;
+  const auto vram = m_device.vram();
   const auto budget = set != 0 ? std::optional{set}
                       : vram   ? std::optional{vram->budgetBytes}
                                : std::nullopt;
-  const auto account =
-    accountGpuMemory(m_frameResources, m_arenas, m_images, m_passes, m_tonemap);
-  if (budget && account.total() > *budget)
+  const auto used =
+    vram ? vram->usedBytes
+         : accountGpuMemory(m_frameResources, m_arenas, m_images, m_passes, m_tonemap)
+             .total();
+  if (budget && used > *budget)
   {
     m_budgetWarned = true;
     m_events.post(
       SessionEvent::Warning,
       fmt::format(
         "The lit preview's GPU memory ({} MB) passes the device's budget ({} MB)",
-        account.total() / (1024 * 1024),
+        used / (1024 * 1024),
         *budget / (1024 * 1024)));
   }
 }

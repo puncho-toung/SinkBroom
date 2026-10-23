@@ -5367,9 +5367,12 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
       CHECK(events.countContaining(SessionEvent::Warning, budgetText) == 1u);
       session->setVramBudgetForTesting(0);
       std::cout << fmt::format(
-        "U2.6: the account {:.1f} MB: arenas {:.1f}, textures {:.1f}, targets {:.1f}, "
-        "released {:.1f}, volatile buffers {:.1f}, upload pool {:.1f}\n",
+        "U2.6: the account {:.1f} MB device-local and {:.1f} MB host-visible: arenas "
+        "{:.1f}, textures {:.1f}, targets {:.1f}, released {:.1f}, volatile buffers "
+        "{:.1f}, "
+        "upload pool {:.1f}\n",
         double(account.total()) / (1024.0 * 1024.0),
+        double(account.hostVisible()) / (1024.0 * 1024.0),
         double(account.arenaBytes) / (1024.0 * 1024.0),
         double(account.textureBytes) / (1024.0 * 1024.0),
         double(account.renderTargetBytes) / (1024.0 * 1024.0),
