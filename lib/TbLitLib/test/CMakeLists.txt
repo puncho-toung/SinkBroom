@@ -57,6 +57,7 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TextureUploads.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TonemapPasses.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ViewFlow.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ViewProbes.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_VulkanInstance.cpp
 )
 

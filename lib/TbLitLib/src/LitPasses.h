@@ -40,6 +40,7 @@
 #include "PipelineCompiler.h"
 #include "RenderParms.h"
 #include "SamplerSet.h"
+#include "ViewProbes.h"
 #include "base/Macros.h"
 
 #include <nvrhi/nvrhi.h>
@@ -81,6 +82,9 @@ struct LitFrameInputs
   // areaData), which the frontend's portal flow runs on; null: no flow, LP2's rules
   std::shared_ptr<const ProcTree> procTree;
   std::shared_ptr<const AreaData> areas;
+  // LP4.2a (C37, D87): the scene's probe records (SceneGeometry::probeTable), which the
+  // view's probe choice reads every frame; null: none
+  std::shared_ptr<const ProbeTable> probes;
   std::shared_ptr<const MaterialTable> materials;
   MaterialService* service = nullptr;
   // DX.2: the session's CPU pool, which makes the light triangles (none: at once)
@@ -159,6 +163,10 @@ struct LitFrameStats
   std::size_t portalChains = 0;
   std::size_t entitiesCulled = 0;
   double flowMs = 0.0;
+  // LP4.2a (C37, D88): the view's probe choice: the connected probes, and whether an
+  // image it read was not loaded yet (the default stood; the frame is unconverged)
+  std::size_t probeCandidates = 0;
+  bool probeImagesPending = false;
 };
 
 // a recorded draw (setDrawLogForTesting)
@@ -287,6 +295,8 @@ private:
   // DX.2: the static interactions' light triangles
   LightTriangleCache m_lightTriangles;
   FrontendLists m_lists;
+  // LP4.2a (C37, D79): the view's probes, chosen every frame outside the cached lists
+  ViewProbes m_viewProbes;
   std::optional<ListsKey> m_listsKey;
   std::uint64_t m_listsTableVersion = 0;
   DrawState m_state;
@@ -321,6 +331,8 @@ public:
 
   // the lists of the last build (tests, on the render thread)
   const FrontendLists& lists() const;
+  // LP4.2a: the last frame's probe choice (tests, on the render thread)
+  const ViewProbes& viewProbes() const;
   // DX.2, render thread: a finished light triangles job is taken (whether one was), and
   // whether one runs or waits
   bool collectLightTriangles();

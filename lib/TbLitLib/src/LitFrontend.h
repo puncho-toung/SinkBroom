@@ -138,6 +138,9 @@ struct FrontendLists
   bool flowed = false;
   // PointInArea( vieworg ): -1 outside the world, and without a tree
   int viewArea = -1;
+  // LP4.2a (C37, D79): tr.viewDef->connectedAreas, one per area (all true at view area
+  // -1; empty without a tree), which the per-frame probe choice reads from the lists
+  std::vector<bool> connectedAreas;
   // the areas AddAreaToView marked (area.viewCount), and the chains it was called with
   std::size_t areasFlowed = 0;
   std::size_t portalChains = 0;

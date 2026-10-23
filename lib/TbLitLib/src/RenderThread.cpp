@@ -129,7 +129,7 @@ bool FrameConvergence::settled() const
   return !pipelinesPending && !materialsPending && !drawsSkipped && !uploadsLeft
          && !imagesPending && !provisionalChunks && !lutPending && !entityDefsPending
          && !lightsProvisional && !geometryInFlight && !drawsOverflowed
-         && !lightTrianglesPending;
+         && !lightTrianglesPending && !probeImagesPending;
 }
 
 bool FrameConvergence::retriggers() const
@@ -610,6 +610,8 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
   convergence.drawsOverflowed = lit.lightsOverflowed > 0 || lit.overflowedDraws > 0;
   // DX.2
   convergence.lightTrianglesPending = lit.lightTrianglesPending;
+  // LP4.2a (D88)
+  convergence.probeImagesPending = lit.probeImagesPending;
   convergence.lutPending = tonemap.lutPending;
   convergence.passesDisabled =
     lit.prepassDisabled || lit.interactionsDisabled || tonemap.disabled;
@@ -1166,6 +1168,8 @@ bool RenderThread::recordLitPasses(
   if (m_geometry)
   {
     inputs.lights = m_geometry->lightTable();
+    // LP4.2a (C37): the probes, which the view chooses from every frame
+    inputs.probes = m_geometry->probeTable();
   }
   if (m_materials)
   {

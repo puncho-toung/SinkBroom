@@ -121,6 +121,11 @@ EngineBounds engineUnitCube();
 // idBounds::GetCenter (Bounds.h:238-241): ( b[1] + b[0] ) · 0.5 per component
 EngineVec3 engineBoundsCenter(const EngineBounds& bounds);
 
+// LP4.2a (C37): idVec3::Length (Vector.h:777-780), idMath::Sqrt( x·x + y·y + z·z ), which
+// is x · InvSqrt( x ) = x · sqrtf( 1 / x ) above FLT_SMALLEST_NON_DENORMAL
+// (Math.h:527-552), not sqrtf( x ): its last bit may differ from a plain square root
+float engineVec3Length(const EngineVec3& v);
+
 /**
  * idRenderMatrix::OffsetScaleForBounds( src, bounds, out ) (RenderMatrix.cpp:793-869, its
  * SSE path): the matrix that takes the unit cube onto bounds in src's space, as

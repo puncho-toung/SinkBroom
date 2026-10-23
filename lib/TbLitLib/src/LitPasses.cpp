@@ -159,6 +159,37 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
   m_stats.unconverged = m_stats.unconverged || m_stats.lightTrianglesPending;
   m_stats.culledTriangles = m_lists.culledTriangles;
 
+  // LP4.2a (C37, D79, D88): R_FindClosestEnvironmentProbes, every frame, from the probe
+  // table and the slots' states: Ready once a slot binds a written level of its own,
+  // Pending before (its intrinsic stand-in is 2D, never a cube: P4.28), Defaulted when
+  // the service has no image for it
+  auto& images = *inputs.images;
+  const auto probeState = [&](const MaterialImageKey& key) {
+    const auto id = images.request(key);
+    const auto* slot = images.slot(id);
+    if (!slot || slot->state == ImageSlots::State::Pending)
+    {
+      return ProbeImageState::Pending;
+    }
+    if (slot->state == ImageSlots::State::Default)
+    {
+      return ProbeImageState::Defaulted;
+    }
+    const auto binding = images.binding(id);
+    return binding.texture && !binding.intrinsic ? ProbeImageState::Ready
+                                                 : ProbeImageState::Pending;
+  };
+  m_viewProbes = chooseViewProbes(
+    inputs.probes.get(),
+    frame.view.viewOrigin,
+    m_lists.viewArea,
+    m_lists.connectedAreas,
+    m_lists.flowed,
+    probeState);
+  m_stats.probeCandidates = m_viewProbes.candidates;
+  m_stats.probeImagesPending = m_viewProbes.imagesPending;
+  m_stats.unconverged = m_stats.unconverged || m_stats.probeImagesPending;
+
   frame.framebuffer = inputs.frame->resolve(prepassDesc())
                       | kdl::transform([](const PassResources& resources) {
                           return resources.writes.front().framebuffer;
@@ -1332,6 +1363,11 @@ const FrontendLists& LitPasses::lists() const
   return m_lists;
 }
 
+const ViewProbes& LitPasses::viewProbes() const
+{
+  return m_viewProbes;
+}
+
 const LitFrameStats& LitPasses::lastStats() const
 {
   return m_stats;
@@ -1359,6 +1395,7 @@ void LitPasses::releaseAll()
 {
   m_constantBuffers.clear();
   m_lists = FrontendLists{};
+  m_viewProbes = ViewProbes{};
   m_listsKey.reset();
   m_registers.clear();
   m_lightTriangles.clear();

@@ -143,7 +143,9 @@ TEST_CASE("FrameConvergence: what keeps a frame from being settled (D77 DX.2 DX.
          {&FrameConvergence::lightsProvisional, false},
          {&FrameConvergence::geometryInFlight, false},
          {&FrameConvergence::drawsOverflowed, false},
-         {&FrameConvergence::lightTrianglesPending, false}})
+         {&FrameConvergence::lightTrianglesPending, false},
+         // LP4.2a (D88): the slot's arrival is the trigger
+         {&FrameConvergence::probeImagesPending, false}})
   {
     auto convergence = FrameConvergence{};
     convergence.*term = true;

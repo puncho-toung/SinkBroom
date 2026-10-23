@@ -436,6 +436,11 @@ EngineVec3 engineBoundsCenter(const EngineBounds& bounds)
   return fromId(toId(bounds).GetCenter());
 }
 
+float engineVec3Length(const EngineVec3& v)
+{
+  return toId(v).Length();
+}
+
 EngineMat4 engineOffsetScaleForBounds(const EngineMat4& src, const EngineBounds& bounds)
 {
   auto out = idRenderMatrix{};

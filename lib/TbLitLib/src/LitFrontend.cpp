@@ -307,6 +307,7 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   lists.areasFlowed =
     std::size_t(std::count(flow.areaFlowed.begin(), flow.areaFlowed.end(), true));
   lists.portalChains = flow.chains;
+  lists.connectedAreas = flow.connectedAreas;
   const auto numAreas = flow.flowed ? inputs.areas->areas.size() : std::size_t{0};
 
   // R_AddModels: the surfaces directly visible, each with its material and registers;

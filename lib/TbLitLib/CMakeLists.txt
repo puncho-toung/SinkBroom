@@ -87,6 +87,8 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/TonemapPasses.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ViewFlow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ViewFlow.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ViewProbes.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ViewProbes.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/VulkanDevice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/VulkanDevice.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/VulkanInstance.cpp

@@ -147,6 +147,9 @@ struct FrameConvergence
   // DX.2: a lit surface's light triangles are being made on the CPU pool (it is drawn
   // whole meanwhile); the job's end is the trigger (lightTrianglesTick)
   bool lightTrianglesPending = false;
+  // LP4.2a (D88): an image the view's probe choice read is not loaded yet (the default
+  // cube stands); its arrival is the trigger (arrivalsTick)
+  bool probeImagesPending = false;
   // D9: a pass is disabled (counts as converged)
   bool passesDisabled = false;
 
