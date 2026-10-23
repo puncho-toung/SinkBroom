@@ -507,6 +507,119 @@ TEST_CASE("ViewFlow: lightCastsShadows (RenderCommon.h:181-184, P4.21)")
   }
 }
 
+TEST_CASE("ViewFlow: the light-surface pairing through shared areas (C33, D81)")
+{
+  // three areas: 0 and 1 joined by a portal, 2 alone (two components)
+  auto tree = ProcTree{};
+  tree.numAreas = 3;
+  tree.portals.push_back(ProcPortal{0, 1, portalAtX(0)});
+  tree.nodes.push_back(ProcNode{{1, 0, 0, 0}, {-1, -2}});
+  const auto areas = buildAreaData(tree);
+  REQUIRE(areas.components == std::vector<int>{0, 0, 1});
+
+  const auto in01 = std::vector<int>{0, 1};
+  const auto in1 = std::vector<int>{1};
+  const auto in2 = std::vector<int>{2};
+  const auto in02 = std::vector<int>{0, 2};
+  const auto none = std::vector<int>{};
+  const auto world = [](const int area, const bool visible = true) {
+    return AreaSurface{AreaSurfaceKind::WorldArea, area, {}, visible};
+  };
+  const auto entity = [](const std::vector<int>& refs, const bool visible = true) {
+    return AreaSurface{AreaSurfaceKind::Entity, -1, refs, visible};
+  };
+  const auto outsideWorld = AreaSurface{AreaSurfaceKind::WorldOutside, -1, {}, false};
+
+  SECTION("(a) a world chunk of area N: N among the light's areas, connected to its own")
+  {
+    const auto light = AreaLight{0, in01};
+    CHECK(lightReachesSurface(light, world(0), areas));
+    CHECK(lightReachesSurface(light, world(1), areas));
+    // not referenced: not lit, though the volume may reach it
+    CHECK_FALSE(lightReachesSurface(light, world(2), areas));
+    // referenced but not connected to the light's area
+    CHECK_FALSE(lightReachesSurface(AreaLight{0, in02}, world(2), areas));
+    // a light whose own area is -1 skips the connectivity test
+    CHECK(lightReachesSurface(AreaLight{-1, in02}, world(2), areas));
+    // the world entity N not directly visible
+    CHECK_FALSE(lightReachesSurface(light, world(0, false), areas));
+  }
+
+  SECTION("(b) a brush entity: a shared, connected area of its references")
+  {
+    const auto light = AreaLight{0, in01};
+    CHECK(lightReachesSurface(light, entity(in1), areas));
+    CHECK(lightReachesSurface(light, entity(in02), areas));
+    CHECK_FALSE(lightReachesSurface(light, entity(in2), areas));
+    // a shared area that is not connected to the light's own
+    CHECK_FALSE(lightReachesSurface(AreaLight{1, in02}, entity(in2), areas));
+    // shared through the connected one of two
+    CHECK(lightReachesSurface(AreaLight{1, in02}, entity(in02), areas));
+    CHECK_FALSE(lightReachesSurface(light, entity(in1, false), areas));
+  }
+
+  SECTION("(c) the outside set (D81): lit by volume, by every light")
+  {
+    const auto referencing = AreaLight{0, in01};
+    const auto outsideLight = AreaLight{-1, none};
+    // world pieces in area -1 and entities without references, by every light
+    CHECK(lightReachesSurface(referencing, outsideWorld, areas));
+    CHECK(lightReachesSurface(outsideLight, outsideWorld, areas));
+    CHECK(lightReachesSurface(referencing, entity(none, false), areas));
+    CHECK(lightReachesSurface(outsideLight, entity(none), areas));
+    // a light without references lights nothing inside the hull
+    CHECK_FALSE(lightReachesSurface(outsideLight, world(0), areas));
+    CHECK_FALSE(lightReachesSurface(outsideLight, entity(in01), areas));
+  }
+}
+
+TEST_CASE("ViewFlow: the grid area of a model surface (C36, P4.11)")
+{
+  const auto& f = fixture();
+  const auto identity = engineIdentityMatrix();
+  const auto valid = [](const std::vector<int>& areas) {
+    return [areas](const int area) {
+      return std::find(areas.begin(), areas.end(), area) != areas.end();
+    };
+  };
+  // a door's material bounds astride the doorway's plane, its centre (16 0 48) in area 0
+  const auto door = EngineBounds{EngineVec3{-8, -16, 16}, EngineVec3{40, 16, 80}};
+  const auto refs = std::vector<int>{1, 0};
+
+  // the centre's own area when its grid is valid
+  CHECK(surfaceGridArea(f.tree, identity, door, refs, valid({0, 1})) == 0);
+  // else the first reference with a valid grid, in chain order
+  CHECK(surfaceGridArea(f.tree, identity, door, refs, valid({1})) == 1);
+  CHECK(surfaceGridArea(f.tree, identity, door, std::vector<int>{0, 1}, valid({1})) == 1);
+  // none valid: the probe path
+  CHECK_FALSE(surfaceGridArea(f.tree, identity, door, refs, valid({})));
+  // a centre in solid (x 300 is east of the room) takes the first valid reference
+  const auto solid = EngineBounds{EngineVec3{290, -8, 40}, EngineVec3{310, 8, 56}};
+  CHECK(surfaceGridArea(f.tree, identity, solid, refs, valid({0, 1})) == 1);
+
+  // the world: refs [N] with its (area, material) bounds; the floor's centre lies on the
+  // plane z = 0, whose back is solid, so the first valid reference answers
+  const auto westFloor = EngineBounds{EngineVec3{-256, -128, 0}, EngineVec3{8, 128, 0}};
+  CHECK(
+    surfaceGridArea(f.tree, identity, westFloor, std::vector<int>{1}, valid({1})) == 1);
+  CHECK_FALSE(
+    surfaceGridArea(f.tree, identity, westFloor, std::vector<int>{1}, valid({0})));
+
+  // an entity spread over two cells has one union per material, so one centre: local
+  // x 0..400 about the pivot (-200 0 48), its centre x 0 local 200 at world x 0: area 1
+  // (x <= 0 is the west side of node 0), though both its ends lie elsewhere
+  const auto pivot =
+    engineMatrixFromOriginAxis({-200, 0, 48}, {1, 0, 0, 0, 1, 0, 0, 0, 1});
+  const auto spread = EngineBounds{EngineVec3{0, -8, -8}, EngineVec3{400, 8, 8}};
+  CHECK(
+    surfaceGridArea(f.tree, pivot, spread, std::vector<int>{0, 1}, valid({0, 1})) == 1);
+  // moved east by 20, its centre (20 0 48) is past the doorway, in area 0
+  const auto east =
+    engineMatrixFromOriginAxis({-180, 0, 48}, {1, 0, 0, 0, 1, 0, 0, 0, 1});
+  CHECK(
+    surfaceGridArea(f.tree, east, spread, std::vector<int>{1, 0}, valid({0, 1})) == 0);
+}
+
 #if defined(_MSC_VER) && defined(_DEBUG)
 TEST_CASE("ViewFlow: 100 flows on the debug heap (P4.23)")
 {

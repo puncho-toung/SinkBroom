@@ -198,4 +198,74 @@ bool engineCullCornersByPortals(
  */
 std::optional<bool> lightCastsShadows(const LightRecord& light);
 
+// ----- the pairing and the grid area (C33, C36, D81; pure, wired in LP4.1) -----
+
+// a view light as the pairing reads it: derived.areaNum and derived.areas (push order)
+struct AreaLight
+{
+  int areaNum = -1;
+  // empty: the light pushed into no area (the outside set, D81)
+  std::span<const int> areas;
+};
+
+enum class AreaSurfaceKind
+{
+  // a world chunk of area N >= 0
+  WorldArea,
+  // a world chunk in area -1: a piece that reached solid (D47, K14): the outside set
+  WorldOutside,
+  // a brush entity's chunk
+  Entity,
+};
+
+// a drawn surface as the pairing reads it
+struct AreaSurface
+{
+  AreaSurfaceKind kind = AreaSurfaceKind::WorldArea;
+  // WorldArea: the chunk's area
+  int area = -1;
+  // Entity: ChunkEntityState::areas; empty: the outside set (D81)
+  std::span<const int> refs;
+  // its entity's flow rect is not empty (the world entity N's, or the brush entity's):
+  // IsDirectlyVisible (tr_frontend_addlights.cpp:578)
+  bool directlyVisible = false;
+};
+
+/**
+ * R_AddSingleLight's area walk (tr_frontend_addlights.cpp:488-582) with
+ * R_AddSingleModel's contacted lights (tr_frontend_addmodels.cpp:340-381), as C33 (a)-(c)
+ * states it: a surface is lit by the light (subject to the caller's volume test,
+ * R_CullModelBoundsToLight, and LP2's other tests) when
+ * - (a) a world chunk of area N: the world entity N is directly visible, N is one of the
+ *   light's areas, and the light's area is -1 or connected to N
+ *   (r_useAreasConnectedForShadowCulling 2, areasConnected);
+ * - (b) a brush entity's chunk: the entity is directly visible and some area of its
+ *   references is one of the light's areas and passes the same test (the engine decides
+ *   an entity once, at the first such area, so where is irrelevant;
+ *   MAX_CONTACTED_LIGHTS 128 per entity is not kept here, mirror.json M-FLOW-DIFF-03);
+ * - (c) D81's outside set: a light without references lights only the outside geometry
+ *   (world chunks in area -1, entities without references), and a light with references
+ *   lights the outside geometry it meets: both by volume alone.
+ * Only with a tree (D94: without one LP2's rules stand). Pure.
+ */
+bool lightReachesSurface(
+  const AreaLight& light, const AreaSurface& surface, const AreaData& areas);
+
+/**
+ * The grid area of a model surface (tr_frontend_addmodels.cpp:814-853, C36, P4.11), for a
+ * material that receives lighting: surfaceArea = PointInArea( modelRenderMatrix ·
+ * GetCenter( materialBounds ) ) (CreateFromOriginAxis and TransformPoint; the bounds
+ * ChunkEntityState::materialBounds, per (entity, material)); then the first of refs (the
+ * entity's chain order; the world entity's [N] with its (area, material) bounds) equal
+ * to surfaceArea whose grid is valid (points, an atlas, not defaulted: gridValid), else
+ * the first with a valid grid, else none: the probe path. Pure; gridValid is the
+ * caller's.
+ */
+std::optional<int> surfaceGridArea(
+  const ProcTree& tree,
+  const EngineMat4& modelRenderMatrix,
+  const EngineBounds& materialBounds,
+  std::span<const int> refs,
+  const std::function<bool(int area)>& gridValid);
+
 } // namespace tb::lit

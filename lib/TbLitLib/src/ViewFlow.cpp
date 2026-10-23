@@ -52,6 +52,7 @@ static_assert(!EngineFrame.singleArea);
 static_assert(EngineFrame.useLightPortalCulling == 1);
 static_assert(EngineFrame.useEntityPortalCulling == 1);
 static_assert(EngineFrame.useLightAreaCulling);
+static_assert(EngineFrame.useAreasConnectedForShadowCulling == 2);
 
 // the view's own stack went through no portal
 constexpr auto ViewSide = std::numeric_limits<std::size_t>::max();
@@ -546,6 +547,78 @@ std::optional<bool> lightCastsShadows(const LightRecord& light)
   // parms.forceShadows || ( ... ): a map light's forceShadows is false
   // (ParseSpawnArgsToRenderLight's memset), so the shader and noShadows decide
   return !light.light.parms.noShadows && engineLightCastsShadows(*shader.material);
+}
+
+bool lightReachesSurface(
+  const AreaLight& light, const AreaSurface& surface, const AreaData& areas)
+{
+  // D81: the outside set is lit by volume, by every light
+  const auto outside =
+    surface.kind == AreaSurfaceKind::WorldOutside
+    || (surface.kind == AreaSurfaceKind::Entity && surface.refs.empty());
+  if (outside)
+  {
+    return true;
+  }
+  // a light without references lights only the outside set
+  if (light.areas.empty() || !surface.directlyVisible)
+  {
+    return false;
+  }
+  // tr_frontend_addlights.cpp:492-501: some lights have their center of projection
+  // outside the world, but otherwise areas not connected to the light center (behind a
+  // closed door) are ignored
+  const auto reaches = [&](const int area) {
+    if (std::find(light.areas.begin(), light.areas.end(), area) == light.areas.end())
+    {
+      return false;
+    }
+    // r_useAreasConnectedForShadowCulling 2
+    if (light.areaNum != -1)
+    {
+      return areasConnected(areas.components, light.areaNum, area);
+    }
+    return true;
+  };
+  if (surface.kind == AreaSurfaceKind::WorldArea)
+  {
+    // the world entity N is referenced in area N alone
+    return surface.area >= 0 && reaches(surface.area);
+  }
+  // the entity's references, in its chain order
+  return std::any_of(surface.refs.begin(), surface.refs.end(), reaches);
+}
+
+std::optional<int> surfaceGridArea(
+  const ProcTree& tree,
+  const EngineMat4& modelRenderMatrix,
+  const EngineBounds& materialBounds,
+  const std::span<const int> refs,
+  const std::function<bool(int area)>& gridValid)
+{
+  // RB: use area the surface is in because a model can span multiple areas #965
+  const auto triCenter = engineBoundsCenter(materialBounds);
+  const auto surfaceCenter = engineTransformPoint(modelRenderMatrix, triCenter);
+  const auto surfaceArea = pointInArea(tree, surfaceCenter);
+
+  for (const auto area : refs)
+  {
+    if (surfaceArea == area && gridValid(area))
+    {
+      return area;
+    }
+  }
+
+  // RB: use first valid lightgrid; this would be wrong but less wrong than a flickering
+  // env_probe fallback
+  for (const auto area : refs)
+  {
+    if (gridValid(area))
+    {
+      return area;
+    }
+  }
+  return std::nullopt;
 }
 
 ViewFlowResult flowView(const ViewFlowInputs& inputs)
