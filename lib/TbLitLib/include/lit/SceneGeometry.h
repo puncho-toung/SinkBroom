@@ -38,6 +38,7 @@
 namespace tb::lit
 {
 class MaterialService;
+struct AreaData;
 struct MapBakeSlot;
 struct MaterialTable;
 struct ProcTree;
@@ -100,6 +101,8 @@ private:
   std::shared_ptr<const MapBakeSlot> m_bakeSlot;
   std::uint64_t m_bakeTicket = 0;
   std::shared_ptr<const ProcTree> m_proc;
+  // C31 (LP4.0): the bake's AreaData, adopted with the tree (null without one)
+  std::shared_ptr<const AreaData> m_areas;
   // the table the last batch was built with; every table adopted is scanned once
   std::shared_ptr<const MaterialTable> m_table;
 
@@ -162,6 +165,9 @@ public:
   std::size_t solidPieces() const;
   std::uint64_t appliedSequence() const;
   std::shared_ptr<const ProcTree> procTree() const;
+  // C31 (LP4.0): the AreaData of procTree()'s bake (MapBake::areas), null without a tree;
+  // immutable, so any thread may read what it points to
+  std::shared_ptr<const AreaData> areaData() const;
   // C15: the latest published light records (never null); the render thread, which owns
   // the scene (other threads read LitSession::lightTable, R2.9)
   std::shared_ptr<const LightTable> lightTable() const;

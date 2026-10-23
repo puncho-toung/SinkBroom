@@ -46,7 +46,8 @@ struct BprocTree
  * C10, A9, D64: a .bproc's area BSP as InitFromMap's binary branch reads it
  * (RenderWorld_load.cpp:818-879), into the ProcTree the .proc reader makes: the models
  * skipped through the LoadBinaryModel mirror (lit/BprocModel.h), kept by name and area
- * with their surfaces' materials and counts; the inter-area portals and the nodes, which
+ * with their surfaces' materials, counts and bounds and their stored model bounds
+ * (ProcModel::boundsKnown, C31); the inter-area portals and the nodes, which
  * the engine wrote from the copied idLexer's values, so they equal the .proc's exactly.
  *
  * As the engine with com_productionMode 0: a version-3 file is never time-checked against

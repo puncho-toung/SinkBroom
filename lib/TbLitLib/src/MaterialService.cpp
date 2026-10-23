@@ -1480,7 +1480,19 @@ private:
         }
         else
         {
-          auto bake = std::make_shared<const MapBake>(readMapBake(*m_source, *name));
+          // C31: the areas' deforms from the copied registry, as ParseModel's
+          // FindMaterial( name ) with makeDefault true (an unknown name is implicit)
+          const auto materials =
+            [&](const std::string& material) -> std::shared_ptr<const MaterialEntry> {
+            if (!m_decls)
+            {
+              return nullptr;
+            }
+            auto found = m_decls->lookup(material);
+            return found ? *found.value : nullptr;
+          };
+          auto bake =
+            std::make_shared<const MapBake>(readMapBake(*m_source, *name, materials));
           slot->tree = bake->tree;
           slot->error = bake->geometryError;
           slot->bake = std::move(bake);

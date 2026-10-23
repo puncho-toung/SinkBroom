@@ -58,6 +58,10 @@ struct BprocModel
   std::string name;
   std::int64_t timeStamp = 0;
   std::vector<BprocSurface> surfaces;
+  // C31 (LP4.0): the model's stored bounds (Model.cpp:607-608, two little-endian
+  // ReadVec3s after the surfaces): FinishSurfaces' bounds, Zero for a model without
+  // surfaces, the surfaces of a deforming material grown
+  std::array<EngineVec3, 2> bounds = {};
 };
 
 /**

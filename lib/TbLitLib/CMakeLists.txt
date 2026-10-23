@@ -8,6 +8,7 @@ add_library(TbLitLib STATIC)
 
 target_sources(TbLitLib
   PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/AreaData.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/AreaTree.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BindingSetCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BindingSetCache.h

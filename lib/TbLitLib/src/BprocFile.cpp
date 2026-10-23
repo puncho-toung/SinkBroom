@@ -31,6 +31,7 @@
 #include "lit/BprocFile.h"
 
 #include "lit/BprocModel.h"
+#include "lit/EngineLight.h"
 
 #include "kd/result.h"
 
@@ -86,12 +87,18 @@ Result<BprocTree> readBprocTree(
              }
              auto procModel = ProcModel{};
              procModel.area = procModelArea(model.name);
+             // C31: the stored bounds are FinishSurfaces' own (deforming surfaces grown)
+             procModel.bounds = model.bounds;
+             procModel.boundsKnown = true;
              for (const auto& surface : model.surfaces)
              {
                auto procSurface = ProcSurface{};
                procSurface.material = surface.material;
                procSurface.numVerts = surface.numVerts;
                procSurface.numIndexes = int(surface.indexes.size());
+               // a surface without geometry stores no bounds
+               procSurface.bounds =
+                 surface.geometry ? surface.bounds : engineClearedBounds();
                procModel.surfaces.push_back(std::move(procSurface));
              }
              procModel.name = std::move(model.name);

@@ -59,6 +59,12 @@ struct ProcSurface
   // 8 or 12 floats per vertex (xyz st normal [rgba]), as the lexer parsed them
   std::vector<float> verts;
   std::vector<int> indexes;
+  // C31 (LP4.0): the bounds R_BoundTriSurf gives the surface (tr_trisurf.cpp:606-609,
+  // SIMDProcessor->MinMax over every vertex: the shim's scalar MinMax, mirror.json
+  // M-GEO-FN-01), recorded from the parsed positions whether or not the reader keeps the
+  // geometry; cleared (+INFINITUM, -INFINITUM) for a surface without vertices. Read from
+  // a .bproc: the stored bounds, which FinishSurfaces grew for a material with a deform
+  std::array<EngineVec3, 2> bounds = {};
 };
 
 struct ProcModel
@@ -67,6 +73,12 @@ struct ProcModel
   // _areaN: N; any other model: -1
   int area = -1;
   std::vector<ProcSurface> surfaces;
+  // C31: the model's bounds as a .bproc stores them (LoadBinaryModel, Model.cpp:607-608:
+  // FinishSurfaces' bounds, already grown for the surfaces whose material has a deform);
+  // a .proc's model bounds need the materials (lit/AreaData.h), so boundsKnown is false
+  // for every model the .proc reader makes
+  std::array<EngineVec3, 2> bounds = {};
+  bool boundsKnown = false;
 };
 
 /**

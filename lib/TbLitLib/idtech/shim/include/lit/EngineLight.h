@@ -100,6 +100,46 @@ EngineFrustumCorners engineFrustumCorners(
 EngineFrustumCull engineCullFrustumCorners(
   const EngineFrustumCorners& corners, const EnginePlane& plane);
 
+// ----- idBounds and the area bounds (LP4.0, C31; the copy and a transcription, pure)
+// -----
+
+// idBounds::Clear (Bounds.h:226-230): inside out, ( +INFINITUM, -INFINITUM )
+EngineBounds engineClearedBounds();
+
+// idBounds::Zero (Bounds.h:232-236): a single point at the origin, not cleared
+EngineBounds engineZeroBounds();
+
+// idBounds::IsCleared (Bounds.h:252-255): the minimum's x above the maximum's
+bool engineBoundsIsCleared(const EngineBounds& bounds);
+
+// idBounds::AddBounds (Bounds.h:264-298): bounds grown to hold other, per component
+EngineBounds engineAddBounds(const EngineBounds& bounds, const EngineBounds& other);
+
+// bounds_unitCube (Bounds.cpp:34): (-1 -1 -1) to (1 1 1)
+EngineBounds engineUnitCube();
+
+// idBounds::GetCenter (Bounds.h:238-241): ( b[1] + b[0] ) · 0.5 per component
+EngineVec3 engineBoundsCenter(const EngineBounds& bounds);
+
+/**
+ * idRenderMatrix::OffsetScaleForBounds( src, bounds, out ) (RenderMatrix.cpp:793-869, its
+ * SSE path): the matrix that takes the unit cube onto bounds in src's space, as
+ * R_DeriveEntityData makes an entity's inverseBaseModelProject (RenderWorld_defs.cpp:56).
+ */
+EngineMat4 engineOffsetScaleForBounds(const EngineMat4& src, const EngineBounds& bounds);
+
+// idRenderMatrix::TransformPoint( in, out ) (RenderMatrix.h:328-336): the rows' first
+// three columns times the point plus the fourth
+EngineVec3 engineTransformPoint(const EngineMat4& matrix, const EngineVec3& point);
+
+/**
+ * idRenderModelStatic::FinishSurfaces' growth of the bounds of a surface whose material
+ * has a deform (Model.cpp:1343-1360, transcribed on the copied idVec3): the cube
+ * mid ± ( ( bounds[0] - mid ).Length() + 20 ), mid = ( bounds[1] + bounds[0] ) · 0.5,
+ * Length through idMath::Sqrt (x · InvSqrt( x )).
+ */
+EngineBounds engineDeformSurfaceBounds(const EngineBounds& bounds);
+
 // ----- what ParseSpawnArgsToRenderLight and idLight::Spawn call (the copy, pure) -----
 
 // idVec3::FixDegenerateNormal (Vector.h): an axial vector becomes the unit axis its

@@ -20,7 +20,8 @@
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderWorld_defs.cpp,
-// renderer/GLMatrix.cpp, renderer/RenderBackend.cpp and d3xp/Game_local.cpp):
+// renderer/GLMatrix.cpp, renderer/RenderBackend.cpp, renderer/Model.cpp and
+// d3xp/Game_local.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2012-2024 Robert Beckebans
 // That code is also subject to the additional terms that follow the GNU General
@@ -397,6 +398,74 @@ EngineFrustumCull engineCullFrustumCorners(
   default:
     return EngineFrustumCull::Cross;
   }
+}
+
+EngineBounds engineClearedBounds()
+{
+  auto bounds = idBounds{};
+  bounds.Clear();
+  return fromId(bounds);
+}
+
+EngineBounds engineZeroBounds()
+{
+  auto bounds = idBounds{};
+  bounds.Zero();
+  return fromId(bounds);
+}
+
+bool engineBoundsIsCleared(const EngineBounds& bounds)
+{
+  return toId(bounds).IsCleared();
+}
+
+EngineBounds engineAddBounds(const EngineBounds& bounds, const EngineBounds& other)
+{
+  auto result = toId(bounds);
+  static_cast<void>(result.AddBounds(toId(other)));
+  return fromId(result);
+}
+
+EngineBounds engineUnitCube()
+{
+  return fromId(bounds_unitCube);
+}
+
+EngineVec3 engineBoundsCenter(const EngineBounds& bounds)
+{
+  return fromId(toId(bounds).GetCenter());
+}
+
+EngineMat4 engineOffsetScaleForBounds(const EngineMat4& src, const EngineBounds& bounds)
+{
+  auto out = idRenderMatrix{};
+  idRenderMatrix::OffsetScaleForBounds(toId(src), toId(bounds), out);
+  return fromId(out);
+}
+
+EngineVec3 engineTransformPoint(const EngineMat4& matrix, const EngineVec3& point)
+{
+  auto out = idVec3{};
+  toId(matrix).TransformPoint(toId(point), out);
+  return fromId(out);
+}
+
+EngineBounds engineDeformSurfaceBounds(const EngineBounds& bounds)
+{
+  // Model.cpp:1343-1360, FinishSurfaces' bounds of a surface whose shader has a deform
+  auto tri = toId(bounds);
+  idVec3 mid = (tri[1] + tri[0]) * 0.5f;
+  float radius = (tri[0] - mid).Length();
+  radius += 20.0f;
+
+  tri[0][0] = mid[0] - radius;
+  tri[0][1] = mid[1] - radius;
+  tri[0][2] = mid[2] - radius;
+
+  tri[1][0] = mid[0] + radius;
+  tri[1][1] = mid[1] + radius;
+  tri[1][2] = mid[2] + radius;
+  return fromId(tri);
 }
 
 EngineVec3 engineFixDegenerateNormal(const EngineVec3& v)

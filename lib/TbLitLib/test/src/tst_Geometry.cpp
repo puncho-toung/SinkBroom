@@ -21,6 +21,7 @@
 #include "LitMapFixture.h"
 #include "LitTestUtils.h"
 #include "fs/TestEnvironment.h"
+#include "lit/AreaData.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/CpuPool.h"
 #include "lit/EntityState.h"
@@ -1304,6 +1305,9 @@ TEST_CASE(
     scene.takeSnapshot(snapshot);
     scene.finishForTesting();
     REQUIRE(scene.procTree());
+    // C31 (LP4.0): the bake's AreaData comes with the tree
+    REQUIRE(scene.areaData());
+    CHECK(scene.areaData()->areas.size() == 2u);
     const auto record = scene.lightTable()->find(light.entity);
     REQUIRE(record);
     CHECK(record->derived.hasAreaTree);

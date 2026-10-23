@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "lit/AreaData.h"
 #include "lit/LightGridFile.h"
 #include "lit/MaterialDecls.h"
 #include "lit/ProcFile.h"
@@ -73,6 +74,9 @@ struct MapBake
   std::shared_ptr<const ProcTree> tree;
   // why there is no tree, or why the .proc was passed over for the .bproc
   std::string geometryError;
+  // C31 (LP4.0): the areas' bounds and what the portal flow reads of the tree, built with
+  // it on the parse thread (buildAreaData); null without a tree
+  std::shared_ptr<const AreaData> areas;
 
   Grid grid = Grid::None;
   std::shared_ptr<const LightGrid> lightGrid;
@@ -111,10 +115,14 @@ std::optional<std::string> engineMapName(
  * - §3.7: each entry of the grid names a distinct area, and the grid names as many areas
  *   as the tree has; every SH probe's area is -1 or below the tree's count. A mismatch
  *   drops the grid and the probes with the reason.
- * Without a tree there is no bake (InitFromMap fails, SetupLightGrid never runs). Parse
- * thread (C20: the copied lexer reads the text files; the source belongs to it).
+ * Without a tree there is no bake (InitFromMap fails, SetupLightGrid never runs). With a
+ * tree, its AreaData (C31: buildAreaData), each surface's material asked of materials as
+ * ParseModel's FindMaterial asks it (empty: no deform anywhere). Parse thread (C20: the
+ * copied lexer reads the text files, materials the copied registry; the source belongs
+ * to it).
  */
-MapBake readMapBake(DeclSource& source, std::string_view mapName);
+MapBake readMapBake(
+  DeclSource& source, std::string_view mapName, const AreaMaterialLookup& materials = {});
 
 // the files of a bake probed again: whether any changed since it was read (a new dmap
 // run, a bake, a saved file). Parse thread

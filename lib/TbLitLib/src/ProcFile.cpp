@@ -20,7 +20,7 @@
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderWorld_load.cpp,
-// renderer/RenderWorld.cpp and renderer/RenderWorld.h):
+// renderer/RenderWorld.cpp, renderer/RenderWorld.h and renderer/tr_trisurf.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2014-2024 Robert Beckebans
 // That code is also subject to the additional terms that follow the GNU General
@@ -133,6 +133,17 @@ Result<ProcModel> parseModel(EngineLexer& lexer, const int version, const bool g
         return lexError(lexer, "bad vertex");
       }
     }
+    // tr_trisurf.cpp:606-609 R_BoundTriSurf, which FinishSurfaces' R_CleanupTriangles
+    // runs on the parsed positions: MinMax over every vertex, a surface without one
+    // cleared (C31)
+    auto points = std::vector<EngineVec3>{};
+    points.reserve(std::size_t(surface.numVerts));
+    for (auto j = std::size_t{0}; j < std::size_t(surface.numVerts); ++j)
+    {
+      const auto* v = verts.data() + j * std::size_t(floats);
+      points.push_back({v[0], v[1], v[2]});
+    }
+    surface.bounds = engineBoundsOfPoints(points);
     auto indexes = std::vector<int>(std::size_t(surface.numIndexes));
     for (auto& index : indexes)
     {

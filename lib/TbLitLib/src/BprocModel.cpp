@@ -310,9 +310,12 @@ Result<BprocModel> readBinaryModel(
              });
   }
   return std::move(read) | kdl::and_then([&]() -> Result<BprocModel> {
-           // the model's bounds, then overlaysAdded, lastModifiedFrame,
-           // lastArchivedFrame, the name and nine bools
-           in.skip(24 + 12);
+           // Model.cpp:607-619: the model's bounds (C31), then overlaysAdded,
+           // lastModifiedFrame, lastArchivedFrame, the name and nine bools
+           const auto min = in.vec3();
+           const auto max = in.vec3();
+           model.bounds = {min, max};
+           in.skip(12);
            model.name = in.string();
            in.skip(9);
            if (in.failed())

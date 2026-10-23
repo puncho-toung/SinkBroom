@@ -275,7 +275,8 @@ std::optional<std::string> engineMapName(
   return std::nullopt;
 }
 
-MapBake readMapBake(DeclSource& source, const std::string_view mapName)
+MapBake readMapBake(
+  DeclSource& source, const std::string_view mapName, const AreaMaterialLookup& materials)
 {
   auto bake = MapBake{};
   bake.mapName = std::string{mapName};
@@ -284,6 +285,9 @@ MapBake readMapBake(DeclSource& source, const std::string_view mapName)
   {
     return bake;
   }
+  // C31: the areas' bounds with the materials ParseModel's FindMaterial would find, once
+  // the tree is chosen (RenderWorld_load.cpp:245, Model.cpp:1330-1363, :1029-1095)
+  bake.areas = std::make_shared<const AreaData>(buildAreaData(*bake.tree, materials));
   readLightGrid(source, bake);
   readShProbesFile(source, bake);
   validate(bake);

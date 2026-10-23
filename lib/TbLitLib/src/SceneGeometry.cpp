@@ -322,6 +322,7 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
     // never adopted, only the answer to this request
     m_mapPath = std::move(mapPath);
     m_proc.reset();
+    m_areas.reset();
     m_bakeSlot.reset();
     m_bakeTicket = m_materials ? m_materials->loadMapBake(*m_mapPath) : 0;
     markAll();
@@ -416,6 +417,8 @@ void SceneGeometry::scanTable()
         slot && slot != m_bakeSlot && slot->ticket >= m_bakeTicket)
     {
       m_bakeSlot = slot;
+      // C31: the bake's AreaData comes with its tree
+      m_areas = slot->tree && slot->bake ? slot->bake->areas : nullptr;
       if (slot->tree != m_proc)
       {
         m_proc = slot->tree;
@@ -727,6 +730,11 @@ std::uint64_t SceneGeometry::appliedSequence() const
 std::shared_ptr<const ProcTree> SceneGeometry::procTree() const
 {
   return m_proc;
+}
+
+std::shared_ptr<const AreaData> SceneGeometry::areaData() const
+{
+  return m_areas;
 }
 
 std::shared_ptr<const LightTable> SceneGeometry::lightTable() const
