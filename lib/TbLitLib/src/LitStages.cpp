@@ -439,7 +439,12 @@ std::optional<InteractionDraw> engineSingleInteraction(
   return draw;
 }
 
-void engineSurfaceInteractions(
+namespace
+{
+
+// the stage loop RenderInteractions (RenderBackend.cpp:2160-2235) and AmbientPass
+// (:2573-2703) share: their states start apart, their loops are alike
+void surfaceStageLoop(
   const MaterialEntry& material,
   const std::span<const float> registers,
   const Vec4& diffuseColor,
@@ -455,12 +460,6 @@ void engineSurfaceInteractions(
       draw(*made);
     }
   };
-
-  state.bumpImage.reset();
-  state.specularImage.reset();
-  state.diffuseImage.reset();
-  state.diffuseColor = Vec4{0.0f, 0.0f, 0.0f, 0.0f};
-  state.specularColor = Vec4{0.0f, 0.0f, 0.0f, 0.0f};
 
   // go through the individual surface stages
   for (const auto& stage : material.stages)
@@ -525,6 +524,46 @@ void engineSurfaceInteractions(
 
   // draw the final interaction
   drawPending();
+}
+
+} // namespace
+
+void engineSurfaceInteractions(
+  const MaterialEntry& material,
+  const std::span<const float> registers,
+  const Vec4& diffuseColor,
+  const Vec4& specularColor,
+  const bool noSpecular,
+  InteractionState& state,
+  const ImageUsage& usage,
+  const std::function<void(const InteractionDraw&)>& draw)
+{
+  // RenderBackend.cpp:2147-2151
+  state.bumpImage.reset();
+  state.specularImage.reset();
+  state.diffuseImage.reset();
+  state.diffuseColor = Vec4{0.0f, 0.0f, 0.0f, 0.0f};
+  state.specularColor = Vec4{0.0f, 0.0f, 0.0f, 0.0f};
+  surfaceStageLoop(
+    material, registers, diffuseColor, specularColor, noSpecular, state, usage, draw);
+}
+
+void engineAmbientSurfaceInteractions(
+  const MaterialEntry& material,
+  const std::span<const float> registers,
+  const Vec4& diffuseColor,
+  const Vec4& specularColor,
+  const ImageUsage& usage,
+  const std::function<void(const InteractionDraw&)>& draw)
+{
+  // RenderBackend.cpp:2538-2542, 2563-2565: drawInteraction_t inter = {} per surface,
+  // diffuseColor 1 and specularColor 0, the images null, vertexColor SVC_IGNORE
+  auto state = InteractionState{};
+  state.diffuseColor = Vec4{1.0f, 1.0f, 1.0f, 1.0f};
+  state.specularColor = Vec4{0.0f, 0.0f, 0.0f, 0.0f};
+  // no light: noSpecular is false (the stage loop's specular test, :2660)
+  surfaceStageLoop(
+    material, registers, diffuseColor, specularColor, false, state, usage, draw);
 }
 
 std::optional<InteractionDraw> pendingSurfaceInteraction(

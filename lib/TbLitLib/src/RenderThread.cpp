@@ -906,6 +906,16 @@ void RenderThread::setAllocationLimit(const std::uint32_t limit)
   m_allocationLimitForTesting = limit;
 }
 
+void RenderThread::setSkipInteractions(const bool skip)
+{
+  m_skipInteractionsForTesting = skip;
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_pacer.trigger();
+  }
+  m_wake.notify_all();
+}
+
 void RenderThread::setVramBudget(const std::uint64_t bytes)
 {
   m_vramBudgetForTesting = bytes;
@@ -1185,10 +1195,18 @@ bool RenderThread::recordLitPasses(
   const auto slot = std::size_t(m_frameIndex % FramesInFlight);
   inputs.prepassTimer = m_timers.query(slot, TimedPass::Prepass);
   inputs.interactionTimer = m_timers.query(slot, TimedPass::Interactions);
+  inputs.ambientTimer = m_timers.query(slot, TimedPass::Ambient);
+  inputs.afterPrepass = [this] { runDebugHook(DebugHook::AfterPrepass); };
+  // C38 (LP4.2b): r_skipInteractions 1's stand-in, a test's switch
+  m_passes.setSkipInteractionsForTesting(m_skipInteractionsForTesting.load());
   const auto stats = m_passes.record(inputs);
   if (stats.prepassTimed)
   {
     m_timers.passTimed(slot, TimedPass::Prepass);
+  }
+  if (stats.ambientTimed)
+  {
+    m_timers.passTimed(slot, TimedPass::Ambient);
   }
   if (stats.interactionsTimed)
   {
@@ -1639,7 +1657,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       {
         recordLitPasses(commandList, camera);
         litStats = m_passes.lastStats();
-        hdrDrawn = litStats.prepassDraws + litStats.interactionDraws > 0;
+        hdrDrawn =
+          litStats.prepassDraws + litStats.ambientDraws + litStats.interactionDraws > 0;
       }
       runAfterPassHooks(commandList);
       // LP2.2b: the tonemap passes into the LDR target and its blit into the frame's
@@ -1776,9 +1795,12 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.lightsInView = litStats.lightsInView;
       row.portalChains = litStats.portalChains;
       row.flowMs = litStats.flowMs;
+      // LP4.2a (C34): the ambient pass's draws (its GPU time from the timers)
+      row.ambientDraws = litStats.ambientDraws;
       // C16 (LP2.2b): the lit passes' counts (LitFrameStats) and the tonemap passes'
       const auto& tonemap = m_tonemap.lastStats();
-      row.draws = litStats.prepassDraws + litStats.interactionDraws + tonemap.draws;
+      row.draws = litStats.prepassDraws + litStats.ambientDraws
+                  + litStats.interactionDraws + tonemap.draws;
       row.prepassDraws = litStats.prepassDraws;
       row.interactionDraws = litStats.interactionDraws;
       row.skippedDraws = litStats.skippedDraws;
@@ -1801,7 +1823,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         status.lightsVisible = litStats.lightsVisible;
         status.lightsDrawn = litStats.lightsDrawn;
         status.lightsOverflowed = litStats.lightsOverflowed;
-        status.draws = litStats.prepassDraws + litStats.interactionDraws + tonemap.draws;
+        status.draws = litStats.prepassDraws + litStats.ambientDraws
+                       + litStats.interactionDraws + tonemap.draws;
         status.skippedDraws = litStats.skippedDraws;
         status.pendingPipelines = litStats.pendingPipelines + tonemap.pendingPipelines;
         status.vramBytes =

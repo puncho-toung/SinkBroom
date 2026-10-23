@@ -751,9 +751,12 @@ void SceneGeometry::updateEntityReferences()
 bool SceneGeometry::collect()
 {
   const auto lightsApplied = m_lights.collect();
-  const auto probesApplied = m_probes.collect();
+  // C37: a finished probe build publishes its table; it is no batch of the scene's (a
+  // frame that waited for it sees busy() change, geometryTick's trigger), and its
+  // warnings are posted with the next batch
+  m_probes.collect();
   const auto chunksApplied = collectChunks();
-  return chunksApplied || lightsApplied || probesApplied;
+  return chunksApplied || lightsApplied;
 }
 
 ProbeJobInput SceneGeometry::probeInput()

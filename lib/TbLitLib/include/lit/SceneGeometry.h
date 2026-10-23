@@ -181,8 +181,9 @@ public:
   /**
    * Collects the finished jobs; once every job of the batch is done its results replace
    * the chunks of its cells, and true is returned; so too when the light job is done and
-   * its records are published. When nothing is in flight it starts a batch for what a
-   * new material table or .proc made stale.
+   * its records are published. LP4.2a: a finished probe build is published too, without
+   * counting as a batch (busy() says it ran). When nothing is in flight it starts a batch
+   * for what a new material table or .proc made stale.
    */
   bool collect();
 

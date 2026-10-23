@@ -26,6 +26,7 @@
 #include "SessionEvents.h"
 #include "Swapchain.h"
 #include "lit/CpuPool.h"
+#include "lit/EngineBuiltins.h"
 #include "lit/LightRecord.h"
 #include "lit/ProbeRecord.h"
 #include "lit/SceneGeometry.h"
@@ -703,6 +704,11 @@ void LitSession::setVramBudgetForTesting(const std::uint64_t bytes)
   m_renderThread->setVramBudget(bytes);
 }
 
+void LitSession::skipInteractionsForTesting(const bool skip)
+{
+  m_renderThread->setSkipInteractions(skip);
+}
+
 void LitSession::failHostAllocationsForTesting(const bool fail)
 {
   tb::lit::failHostAllocationsForTesting(fail);
@@ -775,7 +781,14 @@ std::string sessionStatusLine(
   {
     if (!program.enabled)
     {
-      line += fmt::format(" | disabled: {} ({})", program.name, program.reason);
+      // LP4.2a (D9, C34): an ambient program disables the ambient pass, said as such
+      const auto ambient = program.program >= EngineBuiltinAmbientLightingIbl
+                           && program.program <= EngineBuiltinAmbientLightgridIblPbr + 1;
+      line += fmt::format(
+        " | {}disabled: {} ({})",
+        ambient ? "ambient " : "",
+        program.name,
+        program.reason);
     }
   }
   return line;

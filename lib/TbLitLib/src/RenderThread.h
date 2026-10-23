@@ -316,6 +316,8 @@ private:
   bool m_budgetChecked = false;
   bool m_budgetWarned = false;
   std::atomic<std::uint64_t> m_vramBudgetForTesting = 0;
+  // C38 (LP4.2b): the interactions are not recorded (setSkipInteractions)
+  std::atomic<bool> m_skipInteractionsForTesting = false;
   // the bytes the frame being recorded has uploaded
   std::uint64_t m_frameUploadBytes = 0;
   // §3.10: what a frame uploads at most (UploadBytesPerFrame; tests set less)
@@ -373,7 +375,7 @@ private:
   // the batches of chunk or light jobs applied so far (tests)
   std::uint64_t m_batchesApplied = 0;
   FramePacer m_pacer;
-  std::array<std::function<void()>, 4> m_debugHooks;
+  std::array<std::function<void()>, 5> m_debugHooks;
   // LP2.1 test hooks: the headless extent the next frame takes, and the functions the
   // next frame runs once (RenderFrameAccess)
   std::optional<vk::Extent2D> m_headlessResize;
@@ -526,6 +528,9 @@ public:
   // U2.6, any thread: the budget the account is compared with instead of the device's
   // (VK_EXT_memory_budget); 0 for the device's
   void setVramBudget(std::uint64_t bytes);
+  // C38 (LP4.2b), any thread: while set, the frames record no interactions
+  // (LitPasses::setSkipInteractionsForTesting); a frame is triggered
+  void setSkipInteractions(bool skip);
   // DX.5, GUI thread, phase B, once the frame resources exist and before start: the
   // pipelines the first lit frames ask for (litStartPipelineKeys, the tonemap pass's and
   // the blit's against this session's targets)

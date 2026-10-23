@@ -26,7 +26,11 @@
 #include "LitTestUtils.h"
 #include "lit/AreaData.h"
 #include "lit/CpuPool.h"
+#include "lit/GameDeclSource.h"
+#include "lit/ImageCache.h"
+#include "lit/ImageFallback.h"
 #include "lit/LightGridFile.h"
+#include "lit/MapBake.h"
 #include "lit/MaterialService.h"
 #include "lit/ProbeRecord.h"
 #include "lit/ProcFile.h"
@@ -37,9 +41,13 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -443,5 +451,188 @@ TEST_CASE("ProbeRecord: 100 rebuilds on the debug heap")
   CHECK(registry.table()->records.size() == 2u);
 }
 #endif
+
+
+// LP4.2a (C37, D85, A29): admin's probes over the retail game (TB_LIT_GAME_PATH, read
+// only): its bake (the .bproc tree, no .shprobes), its entities' classnames, the
+// env_probe entityDef, the automatic probes, and the states of their images as the parse
+// thread resolves them: no _spec at the engine's #__2108 (the GI .pk4 holds an older
+// bake's
+// #__2105), no _depth, so every probe is defaulted and the probe path is black on retail.
+TEST_CASE(
+  "Retail probes: admin's automatic probes and their images (LP4.2a)", "[.][retail]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the probes need the game folder");
+  }
+  const auto gamePath = std::filesystem::path{gamePathValue};
+  auto source = GameDeclSource{gamePath};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+
+  // the areas' deforms from the copied registry, as the service reads the bake (C31)
+  const auto mapName = std::string{"maps/game/admin"};
+  const auto materials =
+    [&](const std::string& material) -> std::shared_ptr<const MaterialEntry> {
+    auto found = decls.lookup(material);
+    return found ? *found.value : nullptr;
+  };
+  const auto bake = readMapBake(source, mapName, materials);
+  drain();
+  REQUIRE(bake.tree);
+  REQUIRE(bake.areas);
+  CHECK_FALSE(bake.shProbes);
+
+  // the map's entities by classname (the .map's "classname" keys): none is a placed probe
+  auto classnames = std::map<std::string, int>{};
+  auto mapRead = false;
+  if (const auto map = source.readGameFile(mapName + ".map", nullptr))
+  {
+    mapRead = true;
+    const auto text = std::string_view{map->data(), map->size()};
+    constexpr auto key = std::string_view{"\"classname\" \""};
+    for (auto at = text.find(key); at != std::string_view::npos; at = text.find(key, at))
+    {
+      at += key.size();
+      const auto end = text.find('"', at);
+      ++classnames[std::string{text.substr(at, end - at)}];
+    }
+  }
+  auto placed = 0;
+  auto unknownClasses = 0;
+  for (const auto& [classname, count] : classnames)
+  {
+    const auto def = decls.entityDef(classname);
+    if (!def || !*def.value)
+    {
+      ++unknownClasses;
+      continue;
+    }
+    const auto* spawnclass = findKey((*def.value)->keys, "spawnclass");
+    if (spawnclass && *spawnclass == EnvProbeSpawnclass)
+    {
+      placed += count;
+    }
+  }
+  drain();
+  CHECK(placed == 0);
+  const auto envProbe = decls.entityDef(EnvProbeClassname);
+  drain();
+  REQUIRE(envProbe);
+
+  auto input = ProbeJobInput{};
+  input.tree = bake.tree;
+  input.areas = bake.areas;
+  input.shProbes = bake.shProbes;
+  input.bakeBase = bake.bakeBase;
+  input.envProbeDef = EnvProbeDefState::Found;
+  const auto output = buildProbeRecords(input);
+  CHECK(output.records.size() + output.automaticSkipped == bake.areas->areas.size());
+
+  // the image states: the cache as the engine would look for it (resolveImageCache) and
+  // the preview's answer (resolveImage: the source fallback after a missing cache)
+  struct Count
+  {
+    int ready = 0;
+    int missing = 0;
+    int stale = 0;
+    int defaulted = 0;
+  };
+  auto counts = std::array<Count, 3>{};
+  auto olderSpec = 0;
+  for (const auto& probe : output.records)
+  {
+    CHECK(probe.automatic);
+    CHECK_FALSE(probe.shFound);
+    for (std::size_t i = 0; i < 3; ++i)
+    {
+      const auto name = decls.imageCacheName(probe.images[i]);
+      REQUIRE(name);
+      const auto cache = resolveImageCache(source, *name.value);
+      auto& count = counts[i];
+      count.ready += cache.state == ImageCacheSlot::State::Ready ? 1 : 0;
+      count.missing += cache.state == ImageCacheSlot::State::Missing ? 1 : 0;
+      count.stale += cache.state == ImageCacheSlot::State::Stale ? 1 : 0;
+      if (i > 0)
+      {
+        const auto answer = resolveImage(decls, source, probe.images[i]);
+        count.defaulted += answer.image ? 0 : 1;
+      }
+    }
+    // the GI .pk4's _spec of this probe under the older bake's usage digits
+    auto older = probe.images[1];
+    older.cube = engine_image::CubePackedMipChain;
+    older.filter = engine_image::FilterLinear;
+    if (const auto name = decls.imageCacheName(older))
+    {
+      olderSpec +=
+        resolveImageCache(source, *name.value).state != ImageCacheSlot::State::Missing
+          ? 1
+          : 0;
+    }
+  }
+  drain();
+  source.closeFiles();
+  std::cout << fmt::format(
+    "LP4.2a retail probes of {}: {} areas, {} automatic probes ({} skipped), {} placed; "
+    "map read {} ({} classnames, {} without an entityDef); .shprobes {}; _amb caches "
+    "{} Ready / {} Missing / {} Stale; _spec {} Ready / {} Missing / {} Stale ({} "
+    "defaulted; {} found at #__2105); _depth {} Ready / {} Missing / {} Stale ({} "
+    "defaulted)\n",
+    mapName,
+    bake.areas->areas.size(),
+    output.records.size(),
+    output.automaticSkipped,
+    placed,
+    mapRead,
+    classnames.size(),
+    unknownClasses,
+    bake.shProbes ? "found" : "absent",
+    counts[0].ready,
+    counts[0].missing,
+    counts[0].stale,
+    counts[1].ready,
+    counts[1].missing,
+    counts[1].stale,
+    counts[1].defaulted,
+    olderSpec,
+    counts[2].ready,
+    counts[2].missing,
+    counts[2].stale,
+    counts[2].defaulted);
+  for (const auto& warning : output.warnings)
+  {
+    std::cout << "  " << warning << "\n";
+  }
+  // the areas whose snapped centre is in solid, the engine's skip (Game_local.cpp:
+  // 1313-1318): their points
+  for (std::size_t i = 0; i < bake.areas->areas.size(); ++i)
+  {
+    const auto point =
+      engineSnapInt(engineBoundsCenter(bake.areas->areas[i].globalBounds));
+    if (pointInArea(*bake.tree, point) < 0)
+    {
+      std::cout << fmt::format(
+        "  area {} centre ({} {} {}) in solid\n", i, point[0], point[1], point[2]);
+    }
+  }
+  // the plan's §1 (A29): every probe defaulted on retail. 72 areas, of which three
+  // (4, 12, 62) have their snapped centre in solid: 69 automatic probes, the 72 caches of
+  // the GI .pk4 coming from an older bake's probe set (area 45 holds four of them, areas
+  // 4, 13 and 62 none)
+  const auto probes = int(output.records.size());
+  CHECK(bake.areas->areas.size() == 72u);
+  CHECK(output.automaticSkipped == 3u);
+  CHECK(probes == 69);
+  // the _amb caches of the older bake match the preview's keys for every probe (the keys
+  // as the engine makes them), never requested (D85)
+  CHECK(counts[0].ready == probes);
+  CHECK(counts[1].missing == probes);
+  CHECK(counts[2].missing == probes);
+  CHECK(counts[1].defaulted == probes);
+  CHECK(counts[2].defaulted == probes);
+}
 
 } // namespace tb::lit

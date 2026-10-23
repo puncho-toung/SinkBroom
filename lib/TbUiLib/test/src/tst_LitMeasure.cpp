@@ -1126,7 +1126,10 @@ constexpr auto AreasFlowed = std::size_t{38};
 constexpr auto LightsInView = std::size_t{39};
 constexpr auto PortalChains = std::size_t{40};
 constexpr auto FlowMs = std::size_t{41};
-constexpr auto Count = std::size_t{42};
+// LP4.2a (C34, P4.27): the ambient pass's
+constexpr auto AmbientDraws = std::size_t{42};
+constexpr auto GpuAmbientMs = std::size_t{43};
+constexpr auto Count = std::size_t{44};
 } // namespace column
 
 std::vector<LogRow> readFrameLog(const std::filesystem::path& path)

@@ -273,6 +273,27 @@ void engineSurfaceInteractions(
   const ImageUsage& usage,
   const std::function<void(const InteractionDraw&)>& draw);
 
+/**
+ * LP4.2a (C34, P4.19): AmbientPass' surface stage loop (RenderBackend.cpp:2538-2703,
+ * r_skipInteractionFastPath 1) for one surface, the light colours white ×
+ * r_lightScale: a new drawInteraction_t per surface (inter = {}: the images null, the
+ * matrices zero, vertexColor SVC_IGNORE) with diffuseColor 1 and specularColor 0
+ * (:2538-2542), then the loop of engineSurfaceInteractions (no light, so no
+ * noSpecular), its SetupInteractionStage colours clamp01( reg ) × the light colour and
+ * its flush rule; each draw DrawSingleInteraction makes (the no-bump and both-black skips
+ * of :1135-1173: a material without a lit stage has no implicit _flat, Material.cpp:
+ * 2491-2503) is passed to draw, in order, with the state's vertexColor at that moment
+ * (set by the diffuse and specular stages, kept across a bump stage), which chooses the
+ * draw's blend (ambientStateBits, :2600-2700).
+ */
+void engineAmbientSurfaceInteractions(
+  const MaterialEntry& material,
+  std::span<const float> registers,
+  const Vec4& diffuseColor,
+  const Vec4& specularColor,
+  const ImageUsage& usage,
+  const std::function<void(const InteractionDraw&)>& draw);
+
 // the image keys of DrawSingleInteraction's fallbacks and of a pending surface
 MaterialImageKey engineBlackImageKey();
 MaterialImageKey engineBlackDiffuseImageKey();

@@ -88,6 +88,10 @@ struct LitSurface
   // DX.2: in a light's lists, the runs of the chunk's triangles the static interaction
   // lights (R_CreateInteractionLightTris); null: all of them
   std::shared_ptr<const LightTriangles> lightTriangles;
+  // LP4.3 (C36): drawSurf->area, the area whose light grid lights the surface in the
+  // ambient pass (RenderBackend.cpp:1196); never set in LP4.2a, so every surface takes
+  // the probe path (mirror.json M-AMB-DIFF-03)
+  std::optional<int> gridArea;
 };
 
 /**

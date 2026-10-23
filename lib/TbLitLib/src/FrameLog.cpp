@@ -91,16 +91,19 @@ std::string refusalFields(const FrameLogRow& row)
     "{},{}", optionalCount(row.allocRefused), optionalCount(row.culledTriangles));
 }
 
-// LP4.1's columns, the view's portal flow; empty in a start or stop row
+// LP4.1's columns, the view's portal flow, and LP4.2a's, the ambient pass's; empty in a
+// start or stop row
 std::string flowFields(const FrameLogRow& row)
 {
   return fmt::format(
-    "{},{},{},{},{}",
+    "{},{},{},{},{},{},{}",
     optionalCount(row.viewArea),
     optionalCount(row.areasFlowed),
     optionalCount(row.lightsInView),
     optionalCount(row.portalChains),
-    optionalField(row.flowMs, "{:.3f}"));
+    optionalField(row.flowMs, "{:.3f}"),
+    optionalCount(row.ambientDraws),
+    optionalField(row.gpuAmbientMs, "{:.3f}"));
 }
 
 std::string_view eventName(const FrameLogEvent event)
@@ -128,7 +131,7 @@ std::string_view frameLogHeader()
          "draws,skipped_draws,pending_pipelines,lights_visible,lights_drawn,lights_"
          "overflowed,constant_bytes,volatile_writes,volatile_write_budget,push_constant_"
          "bytes,settled,alloc_refused,culled_triangles,view_area,areas_flowed,lights_in_"
-         "view,portal_chains,flow_ms\n";
+         "view,portal_chains,flow_ms,ambient_draws,gpu_ambient_ms\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -140,7 +143,7 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   if (row.event != FrameLogEvent::Frame)
   {
     return fmt::format(
-      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,\n",
+      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,

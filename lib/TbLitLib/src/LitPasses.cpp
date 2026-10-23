@@ -99,6 +99,42 @@ PassDesc prepassDesc()
   return pass;
 }
 
+// LP4.2a (C34): AmbientPass( false ) into hdrFBO, depth EQUAL against the prepass's
+PassDesc ambientPassDesc()
+{
+  auto pass = PassDesc{};
+  pass.name = "ambient";
+  pass.reads = {std::string{frame_resource::CurrentDepth}};
+  pass.writes = {std::string{frame_resource::HdrFramebuffer}};
+  return pass;
+}
+
+// RenderBackend_NVRHI.cpp:698-788: set 1 t0-t2, set 2 t3 t4 t7 t8 t9 t10 t12 t13 t14
+constexpr auto AmbientUnits = std::array<AmbientUnitBinding, 12>{{
+  {1, 0, 0},
+  {1, 1, 1},
+  {1, 2, 2},
+  {2, 3, 3},
+  {2, 4, 4},
+  {2, 7, 7},
+  {2, 8, 8},
+  {2, 9, 9},
+  {2, 10, 10},
+  {2, 12, 12},
+  {2, 13, 13},
+  {2, 14, 14},
+}};
+
+// RenderBackend.cpp:1051-1067 INTERACTION_TEXUNIT_*: the units of the IBL path
+constexpr auto UnitBump = std::size_t{0};
+constexpr auto UnitSpecular = std::size_t{1};
+constexpr auto UnitBaseColor = std::size_t{2};
+constexpr auto UnitBrdfLut = std::size_t{3};
+constexpr auto UnitSsao = std::size_t{4};
+constexpr auto UnitAmbientCube = std::size_t{7};
+constexpr auto UnitSpecularCube1 = std::size_t{8};
+constexpr auto UnitDepthCube = std::size_t{12};
+
 PassDesc interactionPassDesc()
 {
   auto pass = PassDesc{};
@@ -209,10 +245,40 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
   beginTimer(frame, inputs.prepassTimer);
   recordPrepass(frame);
   m_stats.prepassTimed = endTimer(frame, inputs.prepassTimer);
+  if (inputs.afterPrepass)
+  {
+    inputs.afterPrepass();
+  }
 
   if (inputs.stopRequested && inputs.stopRequested())
   {
     m_stats.stoppedEarly = true;
+    return m_stats;
+  }
+  // LP4.2a (C34): AmbientPass( false ) after the prepass, before the shadow atlas and the
+  // interactions (RenderBackend.cpp:6057-6063); r_skipAmbient gates only
+  // DrawShaderPasses, not this pass (SC348)
+  const auto ambientTarget = inputs.frame->resolve(ambientPassDesc())
+                             | kdl::transform([](const PassResources& resources) {
+                                 return resources.writes.front().framebuffer;
+                               })
+                             | kdl::value_or(nullptr);
+  if (ambientTarget == frame.framebuffer)
+  {
+    beginTimer(frame, inputs.ambientTimer);
+    recordAmbient(frame);
+    m_stats.ambientTimed = endTimer(frame, inputs.ambientTimer);
+  }
+
+  if (inputs.stopRequested && inputs.stopRequested())
+  {
+    m_stats.stoppedEarly = true;
+    return m_stats;
+  }
+  // C38 (LP4.2b): r_skipInteractions 1 records no interactions (RenderBackend.cpp:4181)
+  if (m_skipInteractions)
+  {
+    m_stats.interactionsSkipped = true;
     return m_stats;
   }
   const auto interactionTarget = inputs.frame->resolve(interactionPassDesc())
@@ -928,6 +994,264 @@ std::uint64_t interactionStateBits(const std::uint64_t depthFunc)
          | gls::StencilFuncAlways;
 }
 
+std::uint64_t ambientStateBits(const int vertexColor)
+{
+  // RenderBackend.cpp:2603-2611 (and 2636, 2668, 2692): SVC_IGNORE overwrites, any
+  // other vertex colour adds ("a bit hacky: use additive blending to blend the
+  // normals")
+  return (vertexColor == em::VertexColorIgnore ? gls::DstBlendZero : gls::DstBlendOne)
+         | gls::SrcBlendOne | gls::DepthMask | gls::DepthFuncEqual
+         | gls::StencilFuncAlways;
+}
+
+std::span<const AmbientUnitBinding> ambientUnitBindings()
+{
+  return AmbientUnits;
+}
+
+void LitPasses::setAmbientSpace(Frame& frame, const std::size_t index)
+{
+  // RenderBackend.cpp:2480-2502: change the matrix if needed
+  m_currentSpace = index;
+  const auto& space = m_lists.spaces[index];
+  setMvp(m_parms, space.mvp);
+
+  // tranform the view origin into model local space
+  const auto localView =
+    engineGlobalPointToLocal(space.modelMatrix, frame.view.viewOrigin);
+  m_parms.set(
+    RenderParm::LocalViewOrigin, Vec4{localView[0], localView[1], localView[2], 1.0f});
+
+  // the model -> world matrix and the model -> camera matrix, transposed
+  m_parms.set(RenderParm::ModelMatrixX, engineMatrixTranspose(space.modelMatrix));
+  m_parms.set(RenderParm::ModelViewMatrixX, engineMatrixTranspose(space.modelViewMatrix));
+}
+
+void LitPasses::recordAmbient(Frame& frame)
+{
+  // AmbientPass( drawSurfs, numDrawSurfs, fillGbuffer false ) (RenderBackend.cpp:
+  // 2264-2731) on the probe path (DrawSingleInteraction's useIBL branch, :1306-1394).
+  // The early outs (:2268-2287): no surface; a view without entities and RDF_NOAMBIENT
+  // never reach the preview's 3D view
+  const auto& surfaces = m_lists.drawSurfs;
+  if (surfaces.empty())
+  {
+    return;
+  }
+  const auto skippedBefore = m_stats.skippedDraws;
+  const auto pendingBefore = m_stats.pendingPipelines;
+
+  // make sure rpWindowCoord is set even without post processing surfaces in the view
+  // (:2292-2304): w = x2 - x1 + 1 of the viewport, the whole target here
+  const auto w = float(frame.view.width);
+  const auto h = float(frame.view.height);
+  m_parms.set(RenderParm::WindowCoord, Vec4{1.0f / w, 1.0f / h, w, h});
+
+  // force MVP change on first surface (:2362)
+  m_currentSpace.reset();
+
+  // :2366-2375: GL_State( GLS_DEFAULT ), then ONE / ZERO | DEPTHMASK | DEPTHFUNC_EQUAL,
+  // which each draw's pipeline key carries (ambientStateBits); GL_Color( colorWhite )
+  m_parms.set(RenderParm::Color, engineClampedColor(Vec4{1.0f, 1.0f, 1.0f, 1.0f}));
+
+  // :2401-2418: the light colour white × r_lightScale for diffuse and specular, and
+  // AMBIENT_COLOR ( r_forceAmbient, same, same, 1 ) (ambientBoost 1)
+  const auto lightScale = EngineFrame.lightScale;
+  const auto lightColor = Vec4{lightScale, lightScale, lightScale, lightScale};
+  const auto diffuseColor = lightColor;
+  const auto specularColor = lightColor;
+  const auto ambient = EngineFrame.forceAmbient;
+  m_parms.set(RenderParm::AmbientColor, Vec4{ambient, ambient, ambient, 1.0f});
+
+  // :2420-2423: useIBL, and RB_SetupForFastPathInteractions( diffuseColor,
+  // specularColor ) (:1673-1694), whose modifiers every draw sets again (:1189-1190)
+  m_parms.set(RenderParm::BumpMatrixS, RowS);
+  m_parms.set(RenderParm::BumpMatrixT, RowT);
+  m_parms.set(RenderParm::DiffuseMatrixS, RowS);
+  m_parms.set(RenderParm::DiffuseMatrixT, RowT);
+  m_parms.set(RenderParm::SpecularMatrixS, RowS);
+  m_parms.set(RenderParm::SpecularMatrixT, RowT);
+  const auto ignore = engineVertexColorParms(em::VertexColorIgnore);
+  m_parms.set(RenderParm::VertexColorModulate, ignore[0]);
+  m_parms.set(RenderParm::VertexColorAdd, ignore[1]);
+  m_parms.set(RenderParm::DiffuseModifier, diffuseColor);
+  m_parms.set(RenderParm::SpecularModifier, specularColor);
+
+  // the probe path's view parms (:1308-1335), the same for every draw of the view: the
+  // probe bounds with their validity, the three probe positions, the radiance blends and
+  // the blended SH (SetVertexParms of nine contiguous float4s)
+  const auto& probes = m_viewProbes;
+  const auto& bounds = probes.globalProbeBounds;
+  const auto cleared = engineBoundsIsCleared(bounds);
+  const auto centre = engineBoundsCenter(bounds);
+  const auto probeParms = std::array<std::pair<RenderParm, Vec4>, 7>{{
+    {RenderParm::WobbleSkyX,
+     Vec4{bounds[0][0], bounds[0][1], bounds[0][2], cleared ? 0.0f : 1.0f}},
+    {RenderParm::WobbleSkyY, Vec4{bounds[1][0], bounds[1][1], bounds[1][2], 0.0f}},
+    {RenderParm::WobbleSkyZ, Vec4{centre[0], centre[1], centre[2], 1.0f}},
+    {RenderParm::TexGen0S, probes.probePositions[0]},
+    {RenderParm::TexGen0T, probes.probePositions[1]},
+    {RenderParm::TexGen0Q, probes.probePositions[2]},
+    {RenderParm::LocalLightOrigin, probes.blends},
+  }};
+  auto sh = std::array<float, 36>{};
+  for (std::size_t i = 0; i < 9; ++i)
+  {
+    for (std::size_t c = 0; c < 4; ++c)
+    {
+      sh[i * 4 + c] = probes.sh[i][c];
+    }
+  }
+
+  // the view's images (:1361-1393): t3 the BRDF LUT, t4 _white (K31: r_useSSAO 0 until
+  // LP6), t7 _default for the irradiance image no probe-path shader reads (D85), t8-t10
+  // the radiance cubes, t12 the nearest's depth cube, t13 and t14 the next two's; a probe
+  // image that is not Ready is the default cube, never a slot's 2D stand-in (P4.28)
+  const auto defaultCube = intrinsicImageKey("_defaultUACRadiance");
+  const auto cubeOr = [&](const std::optional<MaterialImageKey>& key) {
+    return key ? *key : defaultCube;
+  };
+
+  auto& images = *frame.inputs->images;
+  const auto usage =
+    ImageUsage{[&](const MaterialImageKey& key) { return imageUsage(images, key); }};
+
+  for (const auto& surface : surfaces)
+  {
+    // a pass boundary is not taken between surfaces: the pass is one GL state's draws
+    // M-AMB-DIFF-02: a surface whose material or registers are pending gets no ambient
+    // draw (the interactions draw it with _default until they arrive); the frame is
+    // unconverged already (FrontendLists::pending)
+    if (!surface.material || !surface.registers)
+    {
+      continue;
+    }
+    const auto& material = *surface.material;
+
+    // translucent surfaces don't put anything in the depth buffer and don't test
+    // against it (:2430-2435)
+    if (material.coverage == em::CoverageTranslucent)
+    {
+      continue;
+    }
+
+    // if all stages of a material have been conditioned off, don't do anything
+    // (:2440-2454: surfaceRegs[ pStage->conditionRegister ] != 0 for some stage)
+    const auto& registers = surface.registers->registers;
+    if (std::ranges::none_of(material.stages, [&](const MaterialStage& stage) {
+          return engineRegister(registers, stage.conditionRegister) != 0.0f;
+        }))
+    {
+      continue;
+    }
+
+    // :2480-2502
+    if (m_currentSpace != surface.space)
+    {
+      setAmbientSpace(frame, surface.space);
+    }
+
+    // LP4.3: a surface with a grid area takes the light-grid path when r_useLightGrid is
+    // 1 (:1196-1305); gridArea is never set in LP4.2a (M-AMB-DIFF-03: "grid: LP4.3")
+    if (EngineFrame.useLightGrid && surface.gridArea)
+    {
+      ++m_stats.ambientGridSurfaces;
+      continue;
+    }
+
+    // :2538-2703: inter = {} (diffuse 1, specular 0), the fast path dead
+    // (r_skipInteractionFastPath 1, :2545), the stage loop and the final draw
+    auto disabled = false;
+    const auto drawOne = [&](const InteractionDraw& interaction) {
+      if (disabled)
+      {
+        return;
+      }
+      // :2603-2611 and alike: the group's blend, by the vertexColor its diffuse or
+      // specular stage set (kept across a bump stage, P4.19)
+      const auto stateBits = ambientStateBits(interaction.vertexColor);
+
+      // DrawSingleInteraction (:1175-1190): the matrices, the vertex colour, the group's
+      // colours as the modifiers
+      m_parms.set(RenderParm::BumpMatrixS, interaction.bumpMatrix[0]);
+      m_parms.set(RenderParm::BumpMatrixT, interaction.bumpMatrix[1]);
+      m_parms.set(RenderParm::DiffuseMatrixS, interaction.diffuseMatrix[0]);
+      m_parms.set(RenderParm::DiffuseMatrixT, interaction.diffuseMatrix[1]);
+      m_parms.set(RenderParm::SpecularMatrixS, interaction.specularMatrix[0]);
+      m_parms.set(RenderParm::SpecularMatrixT, interaction.specularMatrix[1]);
+      const auto vertexColor = engineVertexColorParms(interaction.vertexColor);
+      m_parms.set(RenderParm::VertexColorModulate, vertexColor[0]);
+      m_parms.set(RenderParm::VertexColorAdd, vertexColor[1]);
+      m_parms.set(RenderParm::DiffuseModifier, interaction.diffuseColor);
+      m_parms.set(RenderParm::SpecularModifier, interaction.specularColor);
+
+      // the probe path (:1306-1335)
+      for (const auto& [parm, value] : probeParms)
+      {
+        m_parms.set(parm, value);
+      }
+      m_parms.set(RenderParm::ShIrradiance0, sh);
+
+      // :1337-1359: the PBR program by the specular image's usage (no skinning)
+      const auto program = interaction.program == InteractionProgram::PbrInteraction
+                             ? EngineBuiltinAmbientLightingIblPbr
+                             : EngineBuiltinAmbientLightingIbl;
+
+      // the units: the interaction's three, then the view's (:1361-1393)
+      m_units[UnitBump] = interaction.bumpImage;
+      m_units[UnitSpecular] = interaction.specularImage;
+      m_units[UnitBaseColor] = interaction.diffuseImage;
+      m_units[UnitBrdfLut] = intrinsicImageKey("_brdfLut");
+      static_assert(!EngineFrame.useSsao, "K31: _ao0 is LP6's");
+      m_units[UnitSsao] = engineWhiteImageKey();
+      m_units[UnitAmbientCube] = engineDefaultImageKey();
+      for (std::size_t i = 0; i < 3; ++i)
+      {
+        m_units[UnitSpecularCube1 + i] = cubeOr(probes.radiance[i]);
+      }
+      m_units[UnitDepthCube] = cubeOr(probes.depth);
+      m_units[UnitDepthCube + 1] = cubeOr(probes.probeDepth[0]);
+      m_units[UnitDepthCube + 2] = cubeOr(probes.probeDepth[1]);
+
+      // no polygon offset: :2504-2536 are commented out (P4.19)
+      switch (draw(frame, program, *surface.chunk, stateBits, 0.0f, 0.0f))
+      {
+      case DrawOutcome::Drawn:
+        ++m_stats.ambientDraws;
+        log(frame, LitDrawRecord::Pass::Ambient, *surface.chunk, program, stateBits);
+        break;
+      case DrawOutcome::Disabled:
+        disabled = true;
+        break;
+      case DrawOutcome::Overflowed:
+        // D86: set 9's own buffer and budget, U2.11's accounting
+        ++m_stats.ambientOverflowed;
+        drawOverflowed(frame);
+        break;
+      case DrawOutcome::Skipped:
+        break;
+      }
+    };
+    engineAmbientSurfaceInteractions(
+      material, registers, diffuseColor, specularColor, usage, drawOne);
+    if (disabled)
+    {
+      // D9: the pass is disabled; programReport() says why
+      m_stats.ambientDisabled = true;
+      break;
+    }
+  }
+
+  // :2708-2712: disable blending (the next pass's pipeline sets its own state),
+  // ALPHA_TEST 0, GL_SelectTexture( 0 ); renderProgManager.Unbind() has no NVRHI
+  // counterpart (the next draw's pipeline replaces the program)
+  m_parms.set(RenderParm::AlphaTest, ZeroVec4);
+  // draw() counts an overflowed draw as skipped too
+  m_stats.ambientSkipped =
+    m_stats.skippedDraws - skippedBefore - m_stats.ambientOverflowed;
+  m_stats.ambientPendingPipelines = m_stats.pendingPipelines - pendingBefore;
+}
+
 std::vector<PipelineKey> litStartPipelineKeys(const nvrhi::Format depthFormat)
 {
   const auto formats = FramebufferFormats{nvrhi::Format::RGBA16_FLOAT, depthFormat};
@@ -943,6 +1267,11 @@ std::vector<PipelineKey> litStartPipelineKeys(const nvrhi::Format depthFormat)
     key(EngineBuiltinInteraction, interactionStateBits(gls::DepthFuncLess)),
     key(EngineBuiltinPbrInteraction, interactionStateBits(gls::DepthFuncEqual)),
     key(EngineBuiltinPbrInteraction, interactionStateBits(gls::DepthFuncLess)),
+    // LP4.2a (C34): the ambient pass's probe path, overwriting and adding
+    key(EngineBuiltinAmbientLightingIbl, ambientStateBits(em::VertexColorIgnore)),
+    key(EngineBuiltinAmbientLightingIbl, ambientStateBits(em::VertexColorModulate)),
+    key(EngineBuiltinAmbientLightingIblPbr, ambientStateBits(em::VertexColorIgnore)),
+    key(EngineBuiltinAmbientLightingIblPbr, ambientStateBits(em::VertexColorModulate)),
   };
 }
 
@@ -983,9 +1312,10 @@ bool LitPasses::bindingSets(
   auto& cache = *inputs.bindingSets;
   auto& device = *inputs.device;
 
-  const auto expected = layout == EngineBindingLayout::DrawInteraction ? 4u
-                        : layout == EngineBindingLayout::Texture       ? 3u
-                                                                       : 1u;
+  const auto expected = layout == EngineBindingLayout::DrawInteraction      ? 4u
+                        : layout == EngineBindingLayout::AmbientLightingIbl ? 4u
+                        : layout == EngineBindingLayout::Texture            ? 3u
+                                                                            : 1u;
   if (layouts.size() != expected)
   {
     return false;
@@ -1041,14 +1371,15 @@ bool LitPasses::bindingSets(
     }
     return binding;
   };
-  const auto textureSet = [&](
-                            const std::size_t set,
-                            const std::vector<std::size_t>& units,
-                            const std::uint32_t firstSlot) -> bool {
+  // a set of textures, each unit at its slot, in the layout's item order (nvrhi rule 4)
+  const auto slottedSet =
+    [&](
+      const std::size_t set,
+      const std::vector<std::pair<std::size_t, std::uint32_t>>& unitSlots) -> bool {
     auto bindings = std::vector<ImageSlots::Binding>{};
     auto key = BindingSetKey{};
     key.layout = layouts[set].Get();
-    for (const auto unit : units)
+    for (const auto& [unit, slot] : unitSlots)
     {
       auto binding = unitBinding(unit);
       if (!binding)
@@ -1065,10 +1396,10 @@ bool LitPasses::bindingSets(
                     frameIndex,
                     [&] {
                       auto desc = nvrhi::BindingSetDesc{};
-                      for (std::uint32_t i = 0; i < bindings.size(); ++i)
+                      for (std::size_t i = 0; i < bindings.size(); ++i)
                       {
                         desc.addItem(Item::Texture_SRV(
-                          firstSlot + i,
+                          unitSlots[i].second,
                           bindings[i].texture,
                           nvrhi::Format::UNKNOWN,
                           bindings[i].subresources));
@@ -1077,6 +1408,18 @@ bool LitPasses::bindingSets(
                     })
                   .Get();
     return sets[set] != nullptr;
+  };
+  // consecutive units from firstSlot on
+  const auto textureSet = [&](
+                            const std::size_t set,
+                            const std::vector<std::size_t>& units,
+                            const std::uint32_t firstSlot) -> bool {
+    auto unitSlots = std::vector<std::pair<std::size_t, std::uint32_t>>{};
+    for (std::size_t i = 0; i < units.size(); ++i)
+    {
+      unitSlots.emplace_back(units[i], firstSlot + std::uint32_t(i));
+    }
+    return slottedSet(set, unitSlots);
   };
 
   switch (layout)
@@ -1138,6 +1481,50 @@ bool LitPasses::bindingSets(
                       nvrhi::BindingSetDesc{}
                         .addItem(Item::Sampler(0, common->anisotropicWrap))
                         .addItem(Item::Sampler(1, common->linearBorder)),
+                      layouts[3]);
+                  })
+                .Get();
+    return sets[3] != nullptr;
+  }
+  case EngineBindingLayout::AmbientLightingIbl: {
+    // LP4.2a (C34, C35): AMBIENT_LIGHTING_IBL (RenderBackend_NVRHI.cpp:698-788): t0-t2
+    // the units 0-2; t3 t4 t7 t8 t9 t10 t12 t13 t14 the units of the same number; s0
+    // AnisotropicWrap (compare-enabled, D68; PointWrap only under R_UsePixelatedLook) and
+    // s1 LinearClamp
+    for (const auto set : {std::size_t{1}, std::size_t{2}})
+    {
+      auto unitSlots = std::vector<std::pair<std::size_t, std::uint32_t>>{};
+      for (const auto& binding : AmbientUnits)
+      {
+        if (binding.set == set)
+        {
+          unitSlots.emplace_back(binding.unit, binding.slot);
+        }
+      }
+      if (!slottedSet(set, unitSlots))
+      {
+        return false;
+      }
+    }
+    const auto* common = inputs.samplers->common(device)
+                         | kdl::value_or(static_cast<const SamplerSet::Common*>(nullptr));
+    if (!common)
+    {
+      return false;
+    }
+    auto samplerKey = BindingSetKey{};
+    samplerKey.layout = layouts[3].Get();
+    samplerKey.samplers = 3;
+    samplerKey.resources = {common->anisotropicWrap.Get(), common->linearClamp.Get()};
+    sets[3] = cache
+                .get(
+                  samplerKey,
+                  frameIndex,
+                  [&] {
+                    return device.createBindingSet(
+                      nvrhi::BindingSetDesc{}
+                        .addItem(Item::Sampler(0, common->anisotropicWrap))
+                        .addItem(Item::Sampler(1, common->linearClamp)),
                       layouts[3]);
                   })
                 .Get();
@@ -1413,6 +1800,11 @@ void LitPasses::setConstantBufferVersionsForTesting(const std::uint32_t versions
 void LitPasses::setLightTriangleCullForTesting(const bool on)
 {
   m_lightTriangleCull = on;
+}
+
+void LitPasses::setSkipInteractionsForTesting(const bool on)
+{
+  m_skipInteractions = on;
 }
 
 void LitPasses::setDrawLogForTesting(const bool on)

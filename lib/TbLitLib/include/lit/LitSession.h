@@ -136,7 +136,8 @@ struct CompileTimings
  * or "drawing", the lights drawn of those visible (and overflowed), the draws (skipped),
  * the pipelines pending and the VRAM, and while a tree exists (D90, LP4.1) "area A, F of
  * N areas" (the view's area, -1 outside the world, the areas flowed and the tree's); then
- * every disabled program with its reason. Pure; any thread.
+ * every disabled program with its reason, "ambient disabled: ..." for one of the ambient
+ * pass's (LP4.2a: the pass draws nothing without it). Pure; any thread.
  */
 std::string sessionStatusLine(
   const SessionStatus& status, const std::vector<ProgramReport>& programs);
@@ -278,6 +279,9 @@ enum class DebugHook
   // in every pass that draws no frame, while the render thread's mutex is released for
   // the chunk jobs, before the pass chooses its wait
   IdleUnlocked,
+  // LP4.2a: in every frame that records its lit passes, after the depth prepass and
+  // before the pass boundary of the ambient pass
+  AfterPrepass,
 };
 
 // §3.1: the longest park() waits; the plan's bound is the current pass plus two frames in
@@ -600,6 +604,14 @@ public:
   // the first frame and at every settled frame, instead of the device's
   // (VK_EXT_memory_budget); 0 for the device's
   void setVramBudgetForTesting(std::uint64_t bytes);
+  /**
+   * C38 (LP4.2b's ambient-only parity rows, mirror.json M-TEST-AMB-01), any thread: while
+   * on, the frames do not record the interactions pass, as the engine's
+   * r_skipInteractions 1 skips DrawInteractions (RenderBackend.cpp:4181); the clears, the
+   * prepass, the ambient pass and the tonemap passes run as they do. A frame is
+   * triggered. Tests only.
+   */
+  void skipInteractionsForTesting(bool skip);
   /**
    * U2.3, any thread: while set, every device memory allocation in a type that is
    * host-visible and not device-local fails as a driver's out-of-memory would (NVRHI's

@@ -46,12 +46,14 @@
 #include <nvrhi/nvrhi.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -91,11 +93,16 @@ struct LitFrameInputs
   CpuPool* pool = nullptr;
   // a pass boundary: a stop or a park was asked for
   std::function<bool()> stopRequested;
+  // LP4.2a test hook: run after the depth prepass, before the ambient pass's boundary
+  // (DebugHook::AfterPrepass)
+  std::function<void()> afterPrepass;
   // a warning for the session's log (posted once per session)
   std::function<void(std::string)> warn;
   // C16 (LP2.2b): the queries the prepass and the interactions are timed with, or null
   nvrhi::ITimerQuery* prepassTimer = nullptr;
   nvrhi::ITimerQuery* interactionTimer = nullptr;
+  // LP4.2a (C34, C16): the ambient pass's, or null
+  nvrhi::ITimerQuery* ambientTimer = nullptr;
 };
 
 // C16's columns of the lit passes, per frame (LP2.2b logs them)
@@ -167,6 +174,21 @@ struct LitFrameStats
   // image it read was not loaded yet (the default stood; the frame is unconverged)
   std::size_t probeCandidates = 0;
   bool probeImagesPending = false;
+  // LP4.2a (C34, D86): the ambient pass: its draws, those dropped for set 9's volatile
+  // buffer budget (also in overflowedDraws), those skipped (also in skippedDraws) and of
+  // them for a pending pipeline (also in pendingPipelines), the surfaces left to the
+  // light-grid path (LP4.3: none, gridArea is never set), whether its timer ran, and
+  // whether a failed pipeline disabled it (D9, disabledReason says why)
+  std::size_t ambientDraws = 0;
+  std::size_t ambientOverflowed = 0;
+  std::size_t ambientSkipped = 0;
+  std::size_t ambientPendingPipelines = 0;
+  std::size_t ambientGridSurfaces = 0;
+  bool ambientTimed = false;
+  bool ambientDisabled = false;
+  // C38 (LP4.2b's ambient-only rows): the interactions were not recorded
+  // (skipInteractionsForTesting, r_skipInteractions 1)
+  bool interactionsSkipped = false;
 };
 
 // a recorded draw (setDrawLogForTesting)
@@ -176,6 +198,8 @@ struct LitDrawRecord
   {
     Prepass,
     Interaction,
+    // LP4.2a: the ambient pass
+    Ambient,
   };
 
   Pass pass = Pass::Prepass;
@@ -200,6 +224,33 @@ std::uint64_t interactionStateBits(std::uint64_t depthFunc);
  * four (interaction and PBR interaction, EQUAL and LESS). Pure.
  */
 std::vector<PipelineKey> litStartPipelineKeys(nvrhi::Format depthFormat);
+
+/**
+ * LP4.2a (C34, SC322): the ambient pass's GL state before a draw (AmbientPass,
+ * RenderBackend.cpp:2373 and 2600-2700): ONE / ZERO (RGBA overwritten) for a group whose
+ * vertexColor is SVC_IGNORE, ONE / ONE (RGB added; alpha stays One / Zero through the
+ * copied GetRenderState, SC210) otherwise; no depth write, depth EQUAL, stencil ALWAYS.
+ * Pure.
+ */
+std::uint64_t ambientStateBits(int vertexColor);
+
+/**
+ * LP4.2a (C34, C35): where AMBIENT_LIGHTING_IBL's texture units go
+ * (RenderBackend_NVRHI.cpp:698-788): set 1 the units 0-2 at t0-t2, set 2 the units 3, 4,
+ * 7, 8, 9, 10, 12, 13, 14 at the slots of the same number, in the layout's item order
+ * (nvrhi rule 4). Pure.
+ */
+struct AmbientUnitBinding
+{
+  std::uint32_t set = 0;
+  std::size_t unit = 0;
+  std::uint32_t slot = 0;
+};
+std::span<const AmbientUnitBinding> ambientUnitBindings();
+
+// the texture units the passes select (GL_SelectTexture): 0-4 of the interactions, 0 of
+// texture_color, and (LP4.2a) up to 14 of the ambient pass
+inline constexpr std::size_t LitTextureUnits = 15;
 
 /**
  * LP2.2a (§3.8 passes 1 and 7, C14, C27, D74-D77): the frame's lit passes into hdrFBO,
@@ -300,8 +351,9 @@ private:
   std::optional<ListsKey> m_listsKey;
   std::uint64_t m_listsTableVersion = 0;
   DrawState m_state;
-  // GL_SelectTexture's units: 0-4 of the interactions, 0 of texture_color
-  std::array<std::optional<MaterialImageKey>, 5> m_units;
+  // GL_SelectTexture's units: 0-4 of the interactions, 0 of texture_color, 0-14 of the
+  // ambient pass (LP4.2a)
+  std::array<std::optional<MaterialImageKey>, LitTextureUnits> m_units;
   // the backend's currentSpace, and currentScissor (RenderBackend.cpp:672-690)
   std::optional<std::size_t> m_currentSpace;
   ScreenRect m_currentScissor;
@@ -316,6 +368,8 @@ private:
   bool m_logDraws = false;
   // V2.2's measurement: the static interaction cull applies (the engine's behaviour)
   bool m_lightTriangleCull = true;
+  // C38 (LP4.2b): the interactions are not recorded (r_skipInteractions 1)
+  bool m_skipInteractions = false;
   std::vector<LitDrawRecord> m_drawLog;
   // the pipeline keys asked for while the log is on, drawn or not
   std::set<PipelineKey, PipelineKeyLess> m_requestedKeys;
@@ -355,6 +409,10 @@ public:
   // V2.2: off, every surface is drawn whole as if no static interaction cull ran (the
   // fixture measurement's comparison); the lists are built again
   void setLightTriangleCullForTesting(bool on);
+  // C38 (LP4.2b's ambient-only rows, mirror.json M-TEST-AMB-01): while on, the
+  // interactions pass is not recorded, as r_skipInteractions 1 skips DrawInteractions
+  // (RenderBackend.cpp:4181); every other pass as it is
+  void setSkipInteractionsForTesting(bool on);
   const std::vector<LitDrawRecord>& drawLogForTesting() const;
   // the pipeline keys the draws asked for while the log was on, also those of skipped
   // draws (a pending pipeline)
@@ -370,6 +428,10 @@ private:
   // FillDepthBufferGeneric over surfaces
   bool genericDepth(Frame& frame, const std::vector<const LitSurface*>& surfaces);
   void recordInteractions(Frame& frame);
+  // LP4.2a (C34): AmbientPass( fillGbuffer false ) on the probe path
+  void recordAmbient(Frame& frame);
+  // AmbientPass' space change (RenderBackend.cpp:2480-2502)
+  void setAmbientSpace(Frame& frame, std::size_t space);
   // RenderInteractions for one list; false when the pass is disabled
   bool renderInteractions(
     Frame& frame,

@@ -39,6 +39,8 @@ std::optional<double>& rowTime(FrameLogRow& row, const TimedPass pass)
     return row.gpuTonemapMs;
   case TimedPass::Blit:
     return row.gpuBlitMs;
+  case TimedPass::Ambient:
+    return row.gpuAmbientMs;
   case TimedPass::Frame:
     break;
   }

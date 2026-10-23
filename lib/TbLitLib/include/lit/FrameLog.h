@@ -123,6 +123,10 @@ struct FrameLogRow
   std::optional<std::uint64_t> lightsInView;
   std::optional<std::uint64_t> portalChains;
   std::optional<double> flowMs;
+  // LP4.2a (C34, C16), frame rows: the ambient pass's draws and its GPU time (empty when
+  // it did not run or its time never arrived)
+  std::optional<std::uint64_t> ambientDraws;
+  std::optional<double> gpuAmbientMs;
 };
 
 // the CSV header line, ending in a newline
