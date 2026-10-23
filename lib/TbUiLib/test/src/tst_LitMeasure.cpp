@@ -1037,7 +1037,9 @@ public:
 
   /**
    * D77, settled for good: the last frame is settled (and lit, when asked), no frame
-   * came for QuietTime, and the scene's batches and the table did not change meanwhile.
+   * came for QuietTime or twice the longest gap between two frames so far (a Debug
+   * build's frames may take seconds), and the scene's batches and the table did not
+   * change meanwhile.
    */
   bool quietlySettled(const bool requireLit = true) const
   {
@@ -1045,10 +1047,15 @@ public:
     {
       return false;
     }
+    auto quiet = std::chrono::duration_cast<Clock::duration>(QuietTime);
+    for (std::size_t i = 1; i < frames.size(); ++i)
+    {
+      quiet = std::max(quiet, 2 * (frames[i].at - frames[i - 1].at));
+    }
     const auto& last = frames.back();
     auto* session = panel.sessionForTesting();
     return session && last.status.settled && (!requireLit || isLit(last))
-           && Clock::now() - last.at >= QuietTime
+           && Clock::now() - last.at >= quiet
            && session->geometryBatchesForTesting() == last.geometryBatches
            && panel.materialsVersionForTesting() == last.tableVersion;
   }
@@ -1459,11 +1466,17 @@ void printForegroundLine(QWidget& window)
 }
 
 
-// Counts the validation layer's messages (Debug: Qt's messenger logs them as "vkDebug:").
+/**
+ * Counts the validation layer's messages (Debug: Qt's messenger logs them as "vkDebug:"),
+ * apart from M-PIPE-DEFECT-01's: the engine's whole vertex input against shaders that
+ * read fewer locations, accepted as the engine's own behaviour, with the layer's notice
+ * that it stops repeating them (Qt's instance keeps the layer's duplicate limit of 10).
+ */
 class ValidationCount
 {
 private:
   static inline std::atomic<int> s_count = 0;
+  static inline std::atomic<int> s_mirrored = 0;
   static inline QtMessageHandler s_previous = nullptr;
 
   static void handler(
@@ -1471,8 +1484,17 @@ private:
   {
     if (message.startsWith("vkDebug:"))
     {
-      ++s_count;
-      std::cout << message.toStdString() << "\n";
+      if (
+        message.contains("not consumed by vertex shader")
+        || message.contains("duplicate_message_limit"))
+      {
+        ++s_mirrored;
+      }
+      else
+      {
+        ++s_count;
+        std::cout << message.toStdString() << "\n";
+      }
     }
     if (s_previous)
     {
@@ -1484,6 +1506,7 @@ public:
   ValidationCount()
   {
     s_count = 0;
+    s_mirrored = 0;
     s_previous = qInstallMessageHandler(&handler);
   }
 
@@ -1493,6 +1516,7 @@ public:
   ValidationCount& operator=(const ValidationCount&) = delete;
 
   int count() const { return s_count; }
+  int mirrored() const { return s_mirrored; }
 };
 
 // what the loaded document holds
@@ -1581,6 +1605,9 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   }
   const auto runStart = Clock::now();
   const auto validation = ValidationCount{};
+  // every line at once, so that a run stopped at its bound keeps what it printed
+  std::cout << std::unitbuf;
+  const auto restoreBuffering = kdl::invoke_later{[] { std::cout << std::nounitbuf; }};
   const auto gamePath = pathFromQString(gamePathValue);
   const auto out = outputFolder();
   std::filesystem::create_directories(out);
@@ -1801,6 +1828,13 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       measure.lastCompileEndMs =
         millisecondsBetween(measure.pressed, *measure.compileAtSettled.lastJobEnd);
     }
+    std::cout << fmt::format(
+      "{} Start: first frame {}, first table {}, settled for good {} (frame {})\n",
+      label,
+      msText(measure.firstFrameMs),
+      msText(measure.firstTableMs),
+      msText(measure.settledMs),
+      measure.settledFrame);
     return measure;
   };
 
@@ -2192,7 +2226,11 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
 #else
   const auto build = std::string{"Debug: the layer is on"};
 #endif
-  summary += fmt::format("\nValidation messages: {} ({}).\n", validation.count(), build);
+  summary += fmt::format(
+    "\nValidation messages: {} ({}); M-PIPE-DEFECT-01's mirrored warnings apart: {}.\n",
+    validation.count(),
+    build,
+    validation.mirrored());
 
   {
     auto file = std::ofstream{summaryPath, std::ios::binary};
