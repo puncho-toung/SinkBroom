@@ -23,6 +23,7 @@
 #include "lit/EngineLight.h"
 #include "lit/EntityState.h"
 #include "lit/LightData.h"
+#include "lit/MapBake.h"
 #include "lit/MaterialService.h"
 #include "lit/ProcFile.h"
 
@@ -81,11 +82,18 @@ void forgetCells(
 SceneGeometry::SceneGeometry(
   CpuPool* pool,
   MaterialService* materials,
-  std::shared_ptr<LightTablePublication> lights)
+  std::shared_ptr<LightTablePublication> lights,
+  std::shared_ptr<ProbeTablePublication> probes)
   : m_pool{pool}
   , m_materials{materials}
+  , m_probes{pool, std::move(probes)}
   , m_lights{pool, materials, std::move(lights)}
 {
+  // C37: the automatic probes need the env_probe entityDef (Game_local.cpp:1295)
+  if (m_materials)
+  {
+    static_cast<void>(m_materials->entityDef(EnvProbeClassname));
+  }
 }
 
 SceneGeometry::~SceneGeometry()
@@ -107,7 +115,7 @@ bool SceneGeometry::readyForSnapshot() const
 
 bool SceneGeometry::busy() const
 {
-  return !m_jobs.empty() || m_lights.busy();
+  return !m_jobs.empty() || m_lights.busy() || m_probes.busy();
 }
 
 PreviewId SceneGeometry::chunkEntityOf(const SceneNode& node) const
@@ -227,6 +235,8 @@ void SceneGeometry::rekeyEntity(const PreviewId entity)
 void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
 {
   m_batchSequence = snapshot.sequence;
+  // C37: the entities, and with them the placed probes, may have changed
+  m_probesDirty = true;
 
   // B0.4: removed holds node and entity ids
   for (const auto id : snapshot.removed)
@@ -410,6 +420,8 @@ void SceneGeometry::forgetSizedCells(const std::vector<CellRef>& cells)
 
 void SceneGeometry::scanTable()
 {
+  // C37: a new table may answer an entityDef the probes wait for, or bring a bake
+  m_probesDirty = true;
   // R3.1: what the cells wait for is looked for in every table the scene adopts, also
   // one that a batch for other cells adopts first. C10: the bake that answers the map
   // path's request, or a later read of it; the lights take its tree with the next
@@ -483,6 +495,12 @@ void SceneGeometry::startBatch()
   refreshTable();
   // W.2: a tree adopted between snapshots reaches the lights here (none changes)
   m_lights.setProcTree(m_proc);
+  // C37, D87: the probes' inputs, built again when they changed
+  if (m_probesDirty)
+  {
+    m_probesDirty = false;
+    m_probes.update(probeInput());
+  }
   if (m_dirty.empty())
   {
     return;
@@ -733,8 +751,75 @@ void SceneGeometry::updateEntityReferences()
 bool SceneGeometry::collect()
 {
   const auto lightsApplied = m_lights.collect();
+  const auto probesApplied = m_probes.collect();
   const auto chunksApplied = collectChunks();
-  return chunksApplied || lightsApplied;
+  return chunksApplied || lightsApplied || probesApplied;
+}
+
+ProbeJobInput SceneGeometry::probeInput()
+{
+  // PopulateEnvironmentProbes' inputs (Game_local.cpp:1275-1336) and
+  // R_DeriveEnvprobeData's (RenderWorld_defs.cpp:808-924)
+  auto input = ProbeJobInput{};
+  input.tree = m_proc;
+  input.areas = m_proc ? m_areas : nullptr;
+  if (m_proc && m_bakeSlot && m_bakeSlot->bake)
+  {
+    input.shProbes = m_bakeSlot->bake->shProbes;
+    input.bakeBase = m_bakeSlot->bake->bakeBase;
+  }
+
+  // C22: an entityDef the table does not have yet is asked for, and what depends on it
+  // is provisional until a table answers
+  auto asked = std::set<std::string>{};
+  const auto entityDef = [&](const std::string& classname) {
+    const auto slot = m_table ? m_table->findEntityDef(classname) : nullptr;
+    if (!slot)
+    {
+      input.provisional = true;
+      if (m_materials && asked.insert(classname).second)
+      {
+        static_cast<void>(m_materials->entityDef(classname));
+      }
+    }
+    return slot;
+  };
+  if (const auto slot = entityDef(std::string{EnvProbeClassname}))
+  {
+    input.envProbeDef = slot->entry ? EnvProbeDefState::Found : EnvProbeDefState::Missing;
+  }
+
+  // the placed probes: SpawnEntityDef's spawnclass of the merged spawn args (the map's
+  // keys over the entityDef's, Game_local.cpp:3909), EnvironmentProbe; in preview-id
+  // order
+  auto ids = std::vector<PreviewId>{};
+  ids.reserve(m_entities.size());
+  for (const auto& [id, entity] : m_entities)
+  {
+    if (id != m_worldspawn && !entity->classname.empty())
+    {
+      ids.push_back(id);
+    }
+  }
+  std::sort(ids.begin(), ids.end());
+  for (const auto id : ids)
+  {
+    const auto& entity = *m_entities.at(id);
+    const auto slot = entityDef(entity.classname);
+    if (!slot)
+    {
+      continue;
+    }
+    const auto* defKeys = slot->entry ? &slot->entry->keys : nullptr;
+    const auto* own = findKey(entity.keys, "spawnclass");
+    const auto* inherited = defKeys ? findKey(*defKeys, "spawnclass") : nullptr;
+    const auto* spawnclass = own ? own : inherited;
+    if (spawnclass && *spawnclass == EnvProbeSpawnclass)
+    {
+      input.placed.push_back(ProbeEntity{id, mergeSpawnArgs(entity.keys, defKeys)});
+    }
+  }
+  return input;
 }
 
 bool SceneGeometry::collectChunks()
@@ -827,10 +912,19 @@ std::shared_ptr<const LightTable> SceneGeometry::lightTable() const
   return m_lights.table();
 }
 
+std::shared_ptr<const ProbeTable> SceneGeometry::probeTable() const
+{
+  return m_probes.table();
+}
+
 std::vector<std::string> SceneGeometry::takeWarnings()
 {
   auto warnings = std::exchange(m_warnings, {});
   for (auto& warning : m_lights.takeWarnings())
+  {
+    warnings.push_back(std::move(warning));
+  }
+  for (auto& warning : m_probes.takeWarnings())
   {
     warnings.push_back(std::move(warning));
   }
@@ -847,6 +941,7 @@ void SceneGeometry::finishForTesting()
       job.wait();
     }
     m_lights.finishForTesting();
+    m_probes.finishForTesting();
     collect();
   }
 }

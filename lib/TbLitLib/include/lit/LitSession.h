@@ -288,6 +288,7 @@ class CpuPool;
 class GpuDevice;
 struct EngineTonemapDefaults;
 class LightTablePublication;
+class ProbeTablePublication;
 class MaterialService;
 class PipelineCompiler;
 class RenderThread;
@@ -295,6 +296,7 @@ class SessionEvents;
 struct Chunk;
 struct ChunkKey;
 struct LightTable;
+struct ProbeTable;
 struct RenderFrameAccess;
 struct Snapshot;
 
@@ -336,6 +338,8 @@ private:
   MaterialService* m_materials = nullptr;
   // R2.9: the render thread's light registry publishes here; it outlives the thread
   std::shared_ptr<LightTablePublication> m_lightTables;
+  // LP4.2a (D87): and its probe registry here, alike
+  std::shared_ptr<ProbeTablePublication> m_probeTables;
   std::uint64_t m_swapchainCount = 0;
 
   bool m_renderThreadStopped = false;
@@ -418,6 +422,11 @@ public:
    * 1, when the render thread has ended.
    */
   std::shared_ptr<const LightTable> lightTable() const;
+  /**
+   * LP4.2a (C37, D87, R2.9), any thread: the latest probe records the render thread
+   * published (never null; empty before the first build), also after teardown step 1.
+   */
+  std::shared_ptr<const ProbeTable> probeTable() const;
 
   // S3: the CPU pool from phase B until teardown step 1, else null; GUI thread, tests
   // only (B0.10, R1.11: the render thread gets the pool and the service at its start)

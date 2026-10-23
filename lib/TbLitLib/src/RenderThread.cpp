@@ -278,7 +278,8 @@ void RenderThread::start(
   CpuPool* pool,
   MaterialService* materials_,
   std::shared_ptr<LightTablePublication> lights,
-  PipelineCompiler* compiler)
+  PipelineCompiler* compiler,
+  std::shared_ptr<ProbeTablePublication> probes)
 {
   m_pool = pool;
   m_materials = materials_;
@@ -291,7 +292,8 @@ void RenderThread::start(
       return materials->image(key);
     });
   }
-  m_geometry = std::make_unique<SceneGeometry>(m_pool, m_materials, std::move(lights));
+  m_geometry = std::make_unique<SceneGeometry>(
+    m_pool, m_materials, std::move(lights), std::move(probes));
   m_thread = std::thread{[this] { main(); }};
 }
 
@@ -1577,6 +1579,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     m_frameUploadBytes = 0;
     syncChunks();
     refreshImages();
+    requestProbeImages();
     // LP2.2b: the blit's target, the frame's presentation target alone
     auto* const targetFramebuffer =
       target ? imageFramebuffer(*target, imageIndex) : m_headlessFramebuffer.Get();
@@ -1860,6 +1863,26 @@ void RenderThread::refreshImages()
     m_images.refresh(*m_materials->table(), m_frameIndex);
   }
   eraseChangedSets();
+}
+
+void RenderThread::requestProbeImages()
+{
+  if (!m_geometry || !m_materials)
+  {
+    return;
+  }
+  auto table = m_geometry->probeTable();
+  if (table == m_probeImagesTable)
+  {
+    return;
+  }
+  // before the frame's uploads, so that an answered slot is written in this frame (D78)
+  for (const auto& probe : table->records)
+  {
+    m_images.request(probe.images[1]);
+    m_images.request(probe.images[2]);
+  }
+  m_probeImagesTable = std::move(table);
 }
 
 void RenderThread::eraseChangedSets()

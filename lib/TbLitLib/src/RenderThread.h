@@ -58,6 +58,7 @@ namespace tb::lit
 class CpuPool;
 class GpuDevice;
 class LightTablePublication;
+class ProbeTablePublication;
 class MaterialService;
 class PipelineCompiler;
 class SceneGeometry;
@@ -280,6 +281,8 @@ private:
   // LP2.2b: histogram, exposure and tonemapping into the LDR target, and the blit
   TonemapPasses m_tonemap;
   std::uint64_t m_arrivalsCheckedVersion = 0;
+  // LP4.2a (D87): the probe table whose _spec and _depth slots were asked for
+  std::shared_ptr<const ProbeTable> m_probeImagesTable;
   // D77: a texture arrival triggers a frame at most every TextureArrivalInterval
   FrameClock::time_point m_lastArrivalTrigger;
   std::optional<FrameClock::time_point> m_arrivalTriggerAt;
@@ -416,12 +419,14 @@ public:
   // render thread's chunk jobs use; both outlive the thread. R2.9: lights, the session's
   // light table publication, which the thread's light registry publishes into. LP2.1:
   // compiler, the session's compile thread (may be null), whose pipelines and binding
-  // layouts the passes draw with; it outlives the thread too
+  // layouts the passes draw with; it outlives the thread too. LP4.2a: probes, the
+  // session's probe table publication (null: the registry's own)
   void start(
     CpuPool* pool,
     MaterialService* materials,
     std::shared_ptr<LightTablePublication> lights,
-    PipelineCompiler* compiler);
+    PipelineCompiler* compiler,
+    std::shared_ptr<ProbeTablePublication> probes = nullptr);
 
   // Any thread.
 
@@ -576,6 +581,9 @@ private:
   bool syncChunks();
   // C28: the slots look at the latest material table, and the sets of bumped slots go
   void refreshImages();
+  // LP4.2a (D87, D85): a probe table not seen yet: every probe's _spec and _depth slots
+  // are asked for (never _amb)
+  void requestProbeImages();
   void eraseChangedSets();
   // D77: an idle pass's look for texture arrivals in a new table; whether a frame is due
   void arrivalsTick();

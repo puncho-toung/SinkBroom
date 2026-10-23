@@ -27,6 +27,7 @@
 #include "Swapchain.h"
 #include "lit/CpuPool.h"
 #include "lit/LightRecord.h"
+#include "lit/ProbeRecord.h"
 #include "lit/SceneGeometry.h"
 #include "lit/Snapshot.h"
 
@@ -52,6 +53,7 @@ LitSession::LitSession(
   , m_events{std::make_unique<SessionEvents>(std::move(eventSink), generation)}
   , m_materials{materials}
   , m_lightTables{std::make_shared<LightTablePublication>()}
+  , m_probeTables{std::make_shared<ProbeTablePublication>()}
 {
 }
 
@@ -164,7 +166,7 @@ Result<void> LitSession::start(
              // B0.10: the render thread gets the pool, the service and (LP2.1) the
              // compile thread at start; each outlives it
              m_renderThread->start(
-               m_pool.get(), m_materials, m_lightTables, m_compiler.get());
+               m_pool.get(), m_materials, m_lightTables, m_compiler.get(), m_probeTables);
            });
 }
 
@@ -247,6 +249,11 @@ bool LitSession::snapshotSlotFree() const
 std::shared_ptr<const LightTable> LitSession::lightTable() const
 {
   return m_lightTables->table();
+}
+
+std::shared_ptr<const ProbeTable> LitSession::probeTable() const
+{
+  return m_probeTables->table();
 }
 
 void LitSession::tableChanged()

@@ -23,6 +23,7 @@
 #include "lit/ChunkBuilder.h"
 #include "lit/CpuPool.h"
 #include "lit/LightRecord.h"
+#include "lit/ProbeRecord.h"
 #include "lit/Snapshot.h"
 
 #include <cstdint>
@@ -86,6 +87,15 @@ struct ProcTree;
  * what other threads read). A snapshot is taken only when neither the chunks nor the
  * lights have a job in flight.
  *
+ * The scene's probes are the ProbeRegistry's (LP4.2a, C37, D87): whenever a snapshot is
+ * taken, a table adopted or a bake adopted, the scene hands it the bake's tree, AreaData,
+ * .shprobes and base name, the env_probe entityDef's state and the placed probes (every
+ * entity but worldspawn whose merged spawn args name spawnclass EnvironmentProbe, its
+ * classname's entityDef asked for when the table has none: the probes are provisional
+ * meanwhile), and the registry builds every probe again as a pool job when they differ
+ * from the last build's, publishing into the session's ProbeTablePublication
+ * (LitSession::probeTable).
+ *
  * Threads: the render thread only; the jobs on the pool
  * see only their inputs, and return early once the pool is cancelled (R2.1).
  */
@@ -144,15 +154,21 @@ private:
   std::uint64_t m_appliedSequence = 0;
   std::vector<std::string> m_warnings;
 
+  // LP4.2a (D87): the probe inputs may have changed since they were last handed over
+  bool m_probesDirty = true;
+  // the probe records
+  ProbeRegistry m_probes;
   // the light records (declared last: its job is waited for first)
   LightRegistry m_lights;
 
 public:
-  // lights may be null: the light registry then publishes into a publication of its own
+  // lights and probes may be null: the registries then publish into publications of
+  // their own
   SceneGeometry(
     CpuPool* pool,
     MaterialService* materials,
-    std::shared_ptr<LightTablePublication> lights = nullptr);
+    std::shared_ptr<LightTablePublication> lights = nullptr,
+    std::shared_ptr<ProbeTablePublication> probes = nullptr);
   ~SceneGeometry();
 
   // B0.3: no batch is in flight
@@ -182,6 +198,9 @@ public:
   // C15: the latest published light records (never null); the render thread, which owns
   // the scene (other threads read LitSession::lightTable, R2.9)
   std::shared_ptr<const LightTable> lightTable() const;
+  // LP4.2a (C37, D87): the latest published probe records (never null); the render
+  // thread (other threads read LitSession::probeTable)
+  std::shared_ptr<const ProbeTable> probeTable() const;
   // what the jobs and the copied code reported, oldest first
   std::vector<std::string> takeWarnings();
   /**
@@ -223,6 +242,8 @@ private:
   void updateEntityReferences();
   bool collectChunks();
   PreviewId chunkEntityOf(const SceneNode& node) const;
+  // LP4.2a (C37): the probe registry's inputs now, its entityDefs asked for
+  ProbeJobInput probeInput();
 };
 
 /**
