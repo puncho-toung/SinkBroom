@@ -38,6 +38,7 @@
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
 #include "lit/NumberText.h"
+#include "lit/ProcFile.h"
 #include "lit/Projection.h"
 #include "lit/ShaderBlobs.h"
 #include "lit/ShaderReflection.h"
@@ -72,6 +73,7 @@
 #include <future>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -6231,14 +6233,29 @@ public:
   }
 };
 
+// LP4.1 (C38): the view lights of a parity row's frame, by their record's "name", with
+// their scissors (GL's unflipped space), and the time of the flow that built its lists
+struct ParityLists
+{
+  std::vector<std::pair<std::string, ScreenRect>> lights;
+  double flowMs = 0.0;
+};
+
+struct ParityFrame
+{
+  ChainFrame frame;
+  ParityLists lists;
+};
+
 /**
  * LP2.3 (C29, D77): asks for frames of camera until one is settled with the passes drawn
  * and tonemapped, the scene's geometry drawn (prepass draws) and, for a lit row, a light
- * drawn. DX.4: "settled" waits for every batch, bake read, entityDef and provisional
- * light itself, so LP2.3's guard of 300 ms without a new batch is gone. That frame's
- * record, or nullopt at the deadline.
+ * drawn (LP4.1: unless the row expects none). DX.4: "settled" waits for every batch, bake
+ * read, entityDef and provisional light itself, so LP2.3's guard of 300 ms without a new
+ * batch is gone. That frame's record with its lists' view lights, or nullopt at the
+ * deadline.
  */
-std::optional<ChainFrame> settledParityFrame(
+std::optional<ParityFrame> settledParityFrame(
   LitSession& session,
   const CameraState& camera,
   const bool needsLight,
@@ -6249,21 +6266,28 @@ std::optional<ChainFrame> settledParityFrame(
   while (std::chrono::steady_clock::now() < deadline)
   {
     session.tableChanged();
-    auto frame = std::make_shared<ChainFrame>();
+    auto frame = std::make_shared<ParityFrame>();
     auto done = std::make_shared<std::promise<void>>();
     auto future = done->get_future();
     session.runAfterTonemapForTesting([frame, done](RenderFrameAccess& access) {
-      *frame = chainFrameOf(access);
+      frame->frame = chainFrameOf(access);
+      const auto& lists = access.passes.lists();
+      frame->lists.flowMs = lists.flowMs;
+      for (const auto& light : lists.lights)
+      {
+        const auto* name = findKey(light.record->spawnArgs, "name");
+        frame->lists.lights.emplace_back(name ? *name : std::string{}, light.scissor);
+      }
       done->set_value();
     });
     if (future.wait_for(10000ms) != std::future_status::ready)
     {
       return std::nullopt;
     }
-    const auto ready = frame->settled && frame->lit.camera == camera
-                       && frame->tonemap.tonemapped && frame->tonemap.blitted
-                       && frame->lit.prepassDraws > 0
-                       && (!needsLight || frame->lit.lightsDrawn > 0);
+    const auto& f = frame->frame;
+    const auto ready = f.settled && f.lit.camera == camera && f.tonemap.tonemapped
+                       && f.tonemap.blitted && f.lit.prepassDraws > 0
+                       && (!needsLight || f.lit.lightsDrawn > 0);
     if (ready)
     {
       return *frame;
@@ -6378,6 +6402,23 @@ std::optional<ParityExposure> parityExposure(
     *value, modelExposure(histogram, *value, state->exposureConstants)};
 }
 
+// LP4.1: the .proc beside a map of the parity root (the engine's dmap of it), read once
+const ProcTree& parityTree(const std::filesystem::path& root, const std::string& map)
+{
+  static auto trees = std::map<std::string, ProcTree>{};
+  auto proc = (root / "base" / map).replace_extension(".proc");
+  const auto key = proc.string();
+  if (const auto it = trees.find(key); it != trees.end())
+  {
+    return it->second;
+  }
+  auto tree = readProcFile(readTextFile(proc))
+              | kdl::if_error([&](const auto& e) { FAIL(key << ": " << e.msg); })
+              | kdl::value();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  return trees.emplace(key, std::move(tree)).first->second;
+}
+
 // the snapshot of a map of the parity root, its .proc beside it
 std::shared_ptr<const Snapshot> paritySnapshot(
   const std::filesystem::path& root, const std::string& map, const std::uint64_t sequence)
@@ -6403,8 +6444,12 @@ std::shared_ptr<const Snapshot> paritySnapshot(
  * <row>.rgba with <row>.json into TB_LIT_PARITY_OUT, with the row's frames of the frame
  * log as <row>.framelog.csv; parity.py compare compares them with the engine's shots.
  * Asserted here: every row settles, the control rows are black, and the validation
- * layer reports nothing beyond M-PIPE-DEFECT-01's warnings. Hidden: it needs a GPU and
- * the root of a parity.py run.
+ * layer reports nothing beyond M-PIPE-DEFECT-01's warnings. LP4.1 (C38): each row's .json
+ * also holds the frame's portal-flow statistics and its view lights' scissors; a row's
+ * "expect" (parity.py's row table) is asserted, and every light of the row's map that the
+ * engine's listRenderLightDefs printed has as many area references in the preview as
+ * there, and the areas of the room centres its volume is built to reach. Hidden: it needs
+ * a GPU and the root of a parity.py run.
  */
 TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
 {
@@ -6547,8 +6592,17 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
             rowDeadline - std::chrono::steady_clock::now()),
           std::chrono::milliseconds{1});
       };
-      const auto settled = settledParityFrame(*session, camera, !control, left());
-      REQUIRE(settled);
+      // LP4.1 (C38): the row's expected flow statistics; a lit row that expects no light
+      // drawn (P02) settles without one
+      const auto* expect = row.find("expect");
+      const auto expectsNoLight =
+        expect && expect->find("lights_drawn")
+        && expect->find("lights_drawn")->kind == JsonValue::Kind::Number
+        && expect->find("lights_drawn")->number == 0.0;
+      const auto settledRow =
+        settledParityFrame(*session, camera, !control && !expectsNoLight, left());
+      REQUIRE(settledRow);
+      const auto* settled = &settledRow->frame;
       const auto image = session->readbackLdrForTesting(left());
       REQUIRE(image);
       const auto settleMs = std::chrono::duration<double, std::milli>(
@@ -6569,13 +6623,34 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           std::streamsize(image->rgba.size()));
       }
       const auto& lit = settled->lit;
+      // LP4.1 (C38): the view lights' scissors, in GL's unflipped space, and whether one
+      // is smaller than the view's (0, 0, w - 1, h - 1)
+      auto viewLights = std::vector<std::string>{};
+      auto smallerScissor = false;
+      for (const auto& [name, scissor] : settledRow->lists.lights)
+      {
+        viewLights.push_back(fmt::format(
+          "{{\"name\": \"{}\", \"scissor\": [{}, {}, {}, {}]}}",
+          name,
+          scissor.x1,
+          scissor.y1,
+          scissor.x2,
+          scissor.y2));
+        smallerScissor = smallerScissor || scissor.x1 > 0 || scissor.y1 > 0
+                         || scissor.x2 < int(width) - 1 || scissor.y2 < int(height) - 1;
+      }
       writeTextFile(
         out / (id + ".json"),
         fmt::format(
           "{{\"width\": {}, \"height\": {}, \"settle_ms\": {:.1f}, \"frames\": {}, "
           "\"lights_visible\": {}, \"lights_drawn\": {}, \"prepass_draws\": {}, "
           "\"interaction_draws\": {}, \"session_ms\": {:.1f}, \"exposure\": {:.9g}, "
-          "\"exposure_model\": {:.9g}, \"rows_written\": \"{}\", \"order\": {}}}\n",
+          "\"exposure_model\": {:.9g}, \"rows_written\": \"{}\", \"order\": {}, "
+          "\"view_area\": {}, \"areas_flowed\": {}, \"areas\": {}, \"lights_in_view\": "
+          "{}, "
+          "\"portal_chains\": {}, \"flow_ms\": {:.4f}, \"scissor_smaller_than_view\": "
+          "{}, "
+          "\"view_lights\": [{}]}}\n",
           width,
           height,
           settleMs,
@@ -6590,7 +6665,108 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           exposure->preview,
           exposure->model,
           written,
-          frameRanges.size() - 1));
+          frameRanges.size() - 1,
+          lit.viewArea,
+          lit.areasFlowed,
+          lit.areas,
+          lit.lightsInView,
+          lit.portalChains,
+          settledRow->lists.flowMs,
+          smallerScissor ? "true" : "false",
+          fmt::join(viewLights, ", ")));
+
+      // LP4.1 (C38): the row's expected flow statistics, as parity.py's row table records
+      // them (view_area "known": an area, not -1)
+      if (expect)
+      {
+        for (const auto& [key, value] : expect->object)
+        {
+          CAPTURE(key);
+          if (key == "view_area" && value.kind == JsonValue::Kind::String)
+          {
+            CHECK(value.string == "known");
+            CHECK(lit.viewArea >= 0);
+          }
+          else if (key == "view_area")
+          {
+            CHECK(lit.viewArea == int(value.number));
+          }
+          else if (key == "areas_flowed")
+          {
+            CHECK(lit.areasFlowed == std::size_t(value.number));
+          }
+          else if (key == "lights_in_view")
+          {
+            CHECK(lit.lightsInView == std::size_t(value.number));
+          }
+          else if (key == "lights_drawn")
+          {
+            CHECK(lit.lightsDrawn == std::size_t(value.number));
+          }
+          else if (key == "scissor_smaller_than_view")
+          {
+            CHECK(smallerScissor == value.boolean);
+          }
+          else
+          {
+            FAIL("an expectation this test does not know: " << key);
+          }
+        }
+      }
+
+      // LP4.1 (C38, LP1b.3's golden per parity map): the engine's listRenderLightDefs of
+      // the row's map against the preview's light records: each light's number of area
+      // references (the engine prints how many, not which) equals its derived.areas', and
+      // its areas are those of the room centres its volume is built to reach (PointInArea
+      // over the map's .proc)
+      if (const auto* listed = row.find("lights"))
+      {
+        if (const auto* problem = listed->find("problem"))
+        {
+          FAIL(
+            "parity.py could not match the engine's light listing: " << problem->string);
+        }
+        const auto* entries = listed->find("lights");
+        REQUIRE(entries);
+        const auto& tree = parityTree(root, map);
+        const auto table = session->lightTable();
+        REQUIRE(table);
+        for (const auto& entry : entries->array)
+        {
+          const auto name = entry.text("name");
+          CAPTURE(name);
+          auto found = std::shared_ptr<const LightRecord>{};
+          table->records.forEach([&](const PreviewId&, const auto& record) {
+            const auto* recordName =
+              record ? findKey(record->spawnArgs, "name") : nullptr;
+            if (recordName && *recordName == name)
+            {
+              found = record;
+            }
+          });
+          REQUIRE(found);
+          CHECK(found->derived.areas.size() == std::size_t(entry.numberOr("refs", -1.0)));
+          auto expected = std::set<int>{};
+          if (const auto* reaches = entry.find("reaches"))
+          {
+            for (const auto& point : reaches->array)
+            {
+              REQUIRE(point.array.size() == 3u);
+              const auto area = pointInArea(
+                tree,
+                EngineVec3{
+                  float(point.array[0].number),
+                  float(point.array[1].number),
+                  float(point.array[2].number)});
+              CHECK(area >= 0);
+              expected.insert(area);
+            }
+          }
+          CHECK(
+            std::set<int>{found->derived.areas.begin(), found->derived.areas.end()}
+            == expected);
+        }
+      }
 
       // the lights-off control: black (every channel at most 1); R17's light takes a dark
       // copy of its material there (V2.8)
