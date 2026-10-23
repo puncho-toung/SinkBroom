@@ -20,8 +20,9 @@
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderProgs.h, RenderProgs.cpp,
-// Passes/CommonPasses.cpp, Passes/TonemapPass.cpp, NVRHI/Image_NVRHI.cpp,
-// sys/DeviceManager.cpp and sys/DeviceManager_VK.cpp):
+// Passes/CommonPasses.h, Passes/CommonPasses.cpp, Passes/TonemapPass.cpp,
+// Passes/TonemapPass_cb.h, NVRHI/Image_NVRHI.cpp, sys/DeviceManager.cpp,
+// sys/DeviceManager_VK.cpp and neo/shaders/blit.cb.h):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2013-2025 Robert Beckebans
 //   Copyright (C) 2022 Stephen Pridham

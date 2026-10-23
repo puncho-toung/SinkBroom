@@ -469,6 +469,15 @@ TEST_CASE("ImageCache, the .bimage layout")
       problem(
         bimageBytes(0, Type2D, FormatRgba8, 0, 65536, 65536, 1, {{0, 0, 1, 1, "abcd"}})),
       Catch::Matchers::ContainsSubstring("bad size"));
+    // U3.15: a cube whose sides are not square
+    auto sides = std::vector<Level>{};
+    for (auto side = 0; side < 6; ++side)
+    {
+      sides.push_back({0, side, 2, 1, "abcdefgh"});
+    }
+    CHECK_THAT(
+      problem(bimageBytes(0, TypeCubic, FormatRgba8, 0, 2, 1, 1, sides)),
+      Catch::Matchers::ContainsSubstring("its sides are not square"));
     // a level of fewer bytes than its size needs: 8 × 8 DXT5 is four blocks
     CHECK_THAT(
       problem(bimageBytes(

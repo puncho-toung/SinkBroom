@@ -20,8 +20,7 @@
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/idlib/MapFile.cpp: ComputeAxisBase and the
-// brush primitives' texture vectors of idMapBrushSide::GetTextureVectors;
-// neo/idlib/math/Angles.cpp: idAngles::ToMat3):
+// brush primitives' texture vectors of idMapBrushSide::GetTextureVectors):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2012-2025 Robert Beckebans
 // That code is also subject to the additional terms that follow the GNU General Public
@@ -43,6 +42,7 @@
 #include "base/PreferenceManager.h"
 #include "gl/GlManager.h"
 #include "gl/PerspectiveCamera.h"
+#include "lit/EngineGeometry.h"
 #include "lit/GameDeclSource.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
@@ -510,18 +510,16 @@ struct EntityTransform
   vm::vec3d apply(const vm::vec3d& v) const { return rotate(v) + origin; }
 };
 
-// idAngles::ToMat3 (Angles.cpp:223-237), in double
+// DX.6: the copied idAngles::ToMat3 (engineAnglesToMat3, M-GEO-PURE-01), its float rows
+// as the engine's ConvertToValve220Format has them
 std::array<vm::vec3d, 3> anglesToAxis(
   const double pitch, const double yaw, const double roll)
 {
-  const auto rad = std::numbers::pi / 180.0;
-  const auto sy = std::sin(yaw * rad), cy = std::cos(yaw * rad);
-  const auto sp = std::sin(pitch * rad), cp = std::cos(pitch * rad);
-  const auto sr = std::sin(roll * rad), cr = std::cos(roll * rad);
+  const auto m = lit::engineAnglesToMat3(float(pitch), float(yaw), float(roll));
   return {
-    vm::vec3d{cp * cy, cp * sy, -sp},
-    vm::vec3d{sr * sp * cy + cr * -sy, sr * sp * sy + cr * cy, sr * cp},
-    vm::vec3d{cr * sp * cy + -sr * -sy, cr * sp * sy + -sr * cy, cr * cp},
+    vm::vec3d{m[0], m[1], m[2]},
+    vm::vec3d{m[3], m[4], m[5]},
+    vm::vec3d{m[6], m[7], m[8]},
   };
 }
 

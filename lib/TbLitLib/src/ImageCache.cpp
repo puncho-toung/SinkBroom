@@ -330,6 +330,13 @@ Result<CachedImage> readHeader(BigReader& in)
   {
     return cacheError(fmt::format("bad size {} x {}", image.width, image.height));
   }
+  // U3.15: a cube's sides are square (Vulkan's cube-compatible images; the engine's
+  // binarizer writes the six sides of a square image)
+  if (image.textureType == TypeCubic && image.width != image.height)
+  {
+    return cacheError(fmt::format(
+      "a cube of {} x {}: its sides are not square", image.width, image.height));
+  }
   if (
     image.numLevels < 1
     || image.numLevels > mostLevels(std::max(image.width, image.height)))

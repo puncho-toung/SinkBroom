@@ -157,4 +157,14 @@ std::optional<ExpectedShaderLayout> engineExpectedLayout(
 std::optional<std::string> compareReflection(
   const ShaderReflection& reflection, const ExpectedShaderLayout& expected);
 
+/**
+ * T0.5: the reverse of compareReflection over a program's stages: nullopt when every
+ * descriptor of the layout is declared by some stage, with the layout's type, and the
+ * layout's push constants by some stage's push-constant block; else the first item no
+ * stage declares, named. With compareReflection on each stage, the program's shaders
+ * and the tables are then equal as sets.
+ */
+std::optional<std::string> compareLayoutCoverage(
+  const std::vector<ShaderReflection>& stages, const ExpectedShaderLayout& expected);
+
 } // namespace tb::lit

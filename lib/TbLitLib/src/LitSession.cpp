@@ -151,6 +151,16 @@ Result<void> LitSession::start(
              return m_compiler->start([renderThread] { renderThread->requestFrame(); });
            })
          | kdl::transform([&]() {
+             // DX.5: the pipelines every lit scene draws with, made while the scene
+             // loads; not for a session whose game path disables every program (T0.4)
+             if (m_options.requestStartPipelines && m_options.gamePath.is_absolute())
+             {
+               m_compiler->request(
+                 m_renderThread->startPipelineKeys(),
+                 {TonemapComputePrograms.begin(), TonemapComputePrograms.end()});
+             }
+           })
+         | kdl::transform([&]() {
              // B0.10: the render thread gets the pool, the service and (LP2.1) the
              // compile thread at start; each outlives it
              m_renderThread->start(
@@ -679,6 +689,11 @@ void LitSession::holdFrameCompletionForTesting(const bool hold)
 void LitSession::setAllocationLimitForTesting(const std::uint32_t limit)
 {
   m_renderThread->setAllocationLimit(limit);
+}
+
+void LitSession::setVramBudgetForTesting(const std::uint64_t bytes)
+{
+  m_renderThread->setVramBudget(bytes);
 }
 
 void LitSession::failHostAllocationsForTesting(const bool fail)

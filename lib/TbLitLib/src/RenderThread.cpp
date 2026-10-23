@@ -27,6 +27,7 @@
 #include "lit/Snapshot.h"
 #include "lit/SwapchainRules.h"
 
+#include "kd/invoke.h"
 #include "kd/result.h"
 
 #include <fmt/format.h>
@@ -51,8 +52,11 @@ constexpr auto AcquireTimeoutNs = std::uint64_t(
   std::chrono::duration_cast<std::chrono::nanoseconds>(AcquireTimeout).count());
 
 // how often the render thread looks at a frame's event query while it waits for the GPU;
-// a stop or a park ends the wait at once
+// a stop, a park or a lost device ends the wait at once
 constexpr auto EventPollInterval = std::chrono::milliseconds{1};
+// U2.7: a frame's event that has not completed after this long is said once (a GPU that
+// hangs without the driver reporting the device lost); the wait goes on until a stop
+constexpr auto GpuAnswerBound = std::chrono::seconds{2};
 
 double millisecondsSince(const FrameClock::time_point start)
 {
@@ -137,17 +141,30 @@ bool FrameConvergence::retriggers() const
 
 std::uint64_t GpuMemoryAccount::total() const
 {
-  return arenaBytes + textureBytes + renderTargetBytes + releasedBytes;
+  return arenaBytes + textureBytes + renderTargetBytes + releasedBytes
+         + volatileBufferBytes + uploadPoolBytes;
 }
 
 GpuMemoryAccount accountGpuMemory(
-  const FrameResources& frame, const GeometryArenas& arenas, const ImageSlots& images)
+  const FrameResources& frame,
+  const GeometryArenas& arenas,
+  const ImageSlots& images,
+  const LitPasses& passes,
+  const TonemapPasses& tonemap)
 {
   auto account = GpuMemoryAccount{};
   account.arenaBytes = arenas.capacityBytes();
   account.textureBytes = images.textureBytes();
   account.renderTargetBytes = frame.renderTargetBytes() + frame.bufferBytes();
   account.releasedBytes = frame.retiredBytes() + images.retiredBytes();
+  // U2.6: the volatile buffers are host-visible (NVRHI allocates them for CPU writes);
+  // the rest of the host-visible bytes is the upload pool and a readback's staging
+  account.volatileBufferBytes =
+    passes.volatileBufferBytes() + tonemap.volatileBufferBytes();
+  const auto hostVisible = liveHostVisibleBytes();
+  account.uploadPoolBytes = hostVisible > account.volatileBufferBytes
+                              ? hostVisible - account.volatileBufferBytes
+                              : 0;
   return account;
 }
 
@@ -593,6 +610,11 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
   m_convergence = convergence;
   m_lastSettled = convergence.settled();
   m_sceneWaitSeen = m_geometry ? std::optional{sceneWaitState()} : std::nullopt;
+  if (m_lastSettled)
+  {
+    // U2.6: what a settled frame holds against the device's budget
+    checkVramBudget();
+  }
 
   // the livelock guard: a frame that re-triggers itself without uploading anything or
   // changing what it waits for has made no progress; after MaxStalledFrames of them the
@@ -876,6 +898,22 @@ void RenderThread::setAllocationLimit(const std::uint32_t limit)
   m_allocationLimitForTesting = limit;
 }
 
+void RenderThread::setVramBudget(const std::uint64_t bytes)
+{
+  m_vramBudgetForTesting = bytes;
+}
+
+std::vector<PipelineKey> RenderThread::startPipelineKeys() const
+{
+  const auto depth = m_frameResources.depthFormat();
+  auto keys = litStartPipelineKeys(depth);
+  keys.push_back(tonemapPipelineKey(depth));
+  keys.push_back(blitPipelineKey(
+    m_headless && m_headlessTarget ? m_headlessTarget->getDesc().format
+                                   : SwapchainImageFormat));
+  return keys;
+}
+
 void RenderThread::applyHeadlessResize()
 {
   auto resize = std::optional<vk::Extent2D>{};
@@ -920,22 +958,30 @@ bool RenderThread::prepareFrameResources(const vk::Extent2D extent)
 
 void RenderThread::checkVramBudget()
 {
-  if (m_budgetChecked)
+  // §3.10, C11 (U2.6): the account and the device's budget at the session's first frame
+  // and at every settled frame (the caller's); LP6 evicts against it, until then a
+  // session past it says so once
+  if (m_budgetWarned)
   {
     return;
   }
   m_budgetChecked = true;
-  // §3.10, C11: the account and the device's budget at Start; LP6 evicts against it,
-  // until then a session past it says so once
-  const auto account = accountGpuMemory(m_frameResources, m_arenas, m_images);
-  if (const auto vram = m_device.vram(); vram && account.total() > vram->budgetBytes)
+  const auto set = m_vramBudgetForTesting.load();
+  const auto vram = set == 0 ? m_device.vram() : std::nullopt;
+  const auto budget = set != 0 ? std::optional{set}
+                      : vram   ? std::optional{vram->budgetBytes}
+                               : std::nullopt;
+  const auto account =
+    accountGpuMemory(m_frameResources, m_arenas, m_images, m_passes, m_tonemap);
+  if (budget && account.total() > *budget)
   {
+    m_budgetWarned = true;
     m_events.post(
       SessionEvent::Warning,
       fmt::format(
         "The lit preview's GPU memory ({} MB) passes the device's budget ({} MB)",
         account.total() / (1024 * 1024),
-        vram->budgetBytes / (1024 * 1024)));
+        *budget / (1024 * 1024)));
   }
 }
 
@@ -1512,6 +1558,10 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     m_timers.frameStarted(slot);
     auto* const timer = m_timers.query(slot, TimedPass::Frame);
     m_frameResources.setFrameTarget(texture);
+    // U2.8 (nvrhi rule 1): the swapchain's texture is the frame's only; it is not kept
+    // past the frame, whose end or park may let it go
+    const auto clearFrameTarget =
+      kdl::invoke_later{[&] { m_frameResources.setFrameTarget(nullptr); }};
     m_frameUploadBytes = 0;
     syncChunks();
     refreshImages();
@@ -1552,7 +1602,10 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       {
         return FrameOutcome::Stopped;
       }
-      checkVramBudget();
+      if (!m_budgetChecked)
+      {
+        checkVramBudget();
+      }
       runFrameHooks(commandList);
       // LP2.2a: the lit passes into hdrFBO (D77: a draw skipped for a texture without
       // levels or a chunk not placed yet is retried at once; a pending material or
@@ -1720,7 +1773,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         status.draws = litStats.prepassDraws + litStats.interactionDraws + tonemap.draws;
         status.skippedDraws = litStats.skippedDraws;
         status.pendingPipelines = litStats.pendingPipelines + tonemap.pendingPipelines;
-        status.vramBytes = accountGpuMemory(m_frameResources, m_arenas, m_images).total();
+        status.vramBytes =
+          accountGpuMemory(m_frameResources, m_arenas, m_images, m_passes, m_tonemap)
+            .total();
         const auto lock = std::scoped_lock{m_statusMutex};
         m_status = status;
       }
@@ -1811,9 +1866,25 @@ void RenderThread::arrivalsTick()
 
 bool RenderThread::waitForFrameEvent(const std::size_t slot)
 {
-  // NVRHI's waitEventQuery would wait without a bound
+  // NVRHI's waitEventQuery would wait without a bound. U2.7: a lost device ends the wait
+  // (D38), and a GPU that does not answer within GpuAnswerBound is said once
+  const auto start = FrameClock::now();
+  auto said = false;
   while (!m_device.device().pollEventQuery(m_frameEvents[slot]))
   {
+    if (m_events.lost())
+    {
+      return false;
+    }
+    if (!said && FrameClock::now() - start >= GpuAnswerBound)
+    {
+      said = true;
+      m_events.post(
+        SessionEvent::Warning,
+        fmt::format(
+          "The GPU does not answer: a frame has waited {} s for it",
+          std::chrono::duration_cast<std::chrono::seconds>(GpuAnswerBound).count()));
+    }
     auto lock = std::unique_lock{m_mutex};
     if (m_wake.wait_for(
           lock, EventPollInterval, [&] { return m_stopRequested || m_parkRequested; }))
@@ -1964,6 +2035,8 @@ void RenderThread::parkGpuWork()
       m_timers.resolveAll(m_device.device(), m_frameIndex);
       framesCompleted(m_frameIndex);
     }
+    // U2.8 (nvrhi rule 1): no raw pointer to a swapchain texture outlives its wrappers
+    m_frameResources.setFrameTarget(nullptr);
     if (m_swapchain)
     {
       // the generation is replaced before anything is drawn again (review V.1)

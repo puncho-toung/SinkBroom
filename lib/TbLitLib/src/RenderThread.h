@@ -69,6 +69,11 @@ struct SwapchainGeneration;
  * §3.10, C11 (LP2.1 step 9): what the session's GPU memory is spent on, as the render
  * thread counts it: the geometry arenas' buffers, the slots' textures, the frame's
  * targets and buffers, and what was released and waits for its frames to finish (D35).
+ * U2.6: also the volatile constant buffers (every version) and the rest of the
+ * host-visible memory the device holds: NVRHI's upload chunks (UploadChunkBytes each,
+ * kept by each command list until teardown) and a readback's staging. U2.9: arenas
+ * never shrink before teardown, so a whole-map rebuild may leave up to twice the
+ * geometry plus one arena per kind in arenaBytes (M-ARENA-DIFF-01; compaction in LP6).
  */
 struct GpuMemoryAccount
 {
@@ -76,13 +81,19 @@ struct GpuMemoryAccount
   std::uint64_t textureBytes = 0;
   std::uint64_t renderTargetBytes = 0;
   std::uint64_t releasedBytes = 0;
+  std::uint64_t volatileBufferBytes = 0;
+  std::uint64_t uploadPoolBytes = 0;
 
   std::uint64_t total() const;
 };
 
 // render thread
 GpuMemoryAccount accountGpuMemory(
-  const FrameResources& frame, const GeometryArenas& arenas, const ImageSlots& images);
+  const FrameResources& frame,
+  const GeometryArenas& arenas,
+  const ImageSlots& images,
+  const LitPasses& passes,
+  const TonemapPasses& tonemap);
 
 /**
  * D77, §3.10 (LP2.2b): what kept a frame from being settled, and which of it the frame
@@ -288,8 +299,12 @@ private:
   // version (a pending material or evaluation); a newer one triggers a frame
   bool m_litWaitsForTable = false;
   std::uint64_t m_litTableVersion = 0;
-  // C11: the account was compared with the device's budget at the session's first frame
+  // C11 (U2.6): the account is compared with the device's budget at the session's first
+  // frame and at every settled frame; whether the session said once that it passed it,
+  // and the budget a test set instead of the device's (0: the device's)
   bool m_budgetChecked = false;
+  bool m_budgetWarned = false;
+  std::atomic<std::uint64_t> m_vramBudgetForTesting = 0;
   // the bytes the frame being recorded has uploaded
   std::uint64_t m_frameUploadBytes = 0;
   // §3.10: what a frame uploads at most (UploadBytesPerFrame; tests set less)
@@ -495,6 +510,13 @@ public:
   // U2.3, any thread: the allocation limit the headroom counts from instead of the
   // device's maxMemoryAllocationCount (0: the device's)
   void setAllocationLimit(std::uint32_t limit);
+  // U2.6, any thread: the budget the account is compared with instead of the device's
+  // (VK_EXT_memory_budget); 0 for the device's
+  void setVramBudget(std::uint64_t bytes);
+  // DX.5, GUI thread, phase B, once the frame resources exist and before start: the
+  // pipelines the first lit frames ask for (litStartPipelineKeys, the tonemap pass's and
+  // the blit's against this session's targets)
+  std::vector<PipelineKey> startPipelineKeys() const;
 
 private:
   void main() noexcept;

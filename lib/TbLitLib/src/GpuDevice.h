@@ -138,6 +138,11 @@ private:
 // session has gone: what that session's teardown left; tests and measurements only
 std::int64_t liveDeviceMemoryAllocations();
 
+// U2.6, any thread: the bytes of the host-visible device memory allocations live now
+// (NVRHI's upload chunks, the volatile constant buffers, a readback's staging), counted
+// by the same wrapping; process-wide like it
+std::uint64_t liveHostVisibleBytes();
+
 // U2.3, any thread: while set, every device memory allocation in a type that is
 // host-visible and not device-local fails (NVRHI's upload chunks and staging); tests only
 void failHostAllocationsForTesting(bool fail);

@@ -397,11 +397,19 @@ TEST_CASE("EngineTables")
     REQUIRE(attributes.size() == 5u);
     CHECK(attributes[0].name == "POSITION");
     CHECK(attributes[0].format == nvrhi::Format::RGB32_FLOAT);
+    CHECK(attributes[1].name == "TEXCOORD");
     CHECK(attributes[1].offset == 12u);
     CHECK(attributes[1].format == nvrhi::Format::RG16_FLOAT);
+    // T0.5: RenderProgs.cpp:145-165's names and formats (a wrong one is silent)
+    CHECK(attributes[2].name == "NORMAL");
     CHECK(attributes[2].offset == 16u);
+    CHECK(attributes[2].format == nvrhi::Format::RGBA8_UNORM);
+    CHECK(attributes[3].name == "TANGENT");
     CHECK(attributes[3].offset == 20u);
+    CHECK(attributes[3].format == nvrhi::Format::RGBA8_UNORM);
+    CHECK(attributes[4].name == "COLOR");
     CHECK(attributes[4].offset == 24u);
+    CHECK(attributes[4].format == nvrhi::Format::RGBA8_UNORM);
     CHECK(attributes[4].arraySize == 2u);
     for (const auto& attribute : attributes)
     {

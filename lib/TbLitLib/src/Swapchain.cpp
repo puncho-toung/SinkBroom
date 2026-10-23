@@ -161,7 +161,7 @@ Result<std::unique_ptr<SwapchainGeneration>> createSwapchainGeneration(
       const auto desc = nvrhi::TextureDesc{}
                           .setWidth(generation->extent.width)
                           .setHeight(generation->extent.height)
-                          .setFormat(nvrhi::Format::BGRA8_UNORM)
+                          .setFormat(SwapchainImageFormat)
                           .setDebugName("Lit preview swapchain image")
                           .setInitialState(nvrhi::ResourceStates::Present)
                           .setKeepInitialState(true)

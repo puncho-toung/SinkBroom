@@ -39,6 +39,7 @@
 #include "kd/result.h"
 
 #include <fmt/format.h>
+#include <nvrhi/utils.h>
 
 #include <algorithm>
 
@@ -658,8 +659,7 @@ bool LitPasses::renderInteractions(
   }
 
   // additive RGB, alpha overwritten, no depth write, stencil ALWAYS (D75)
-  const auto stateBits = gls::SrcBlendOne | gls::DstBlendOne | gls::DepthMask | depthFunc
-                         | gls::StencilFuncAlways;
+  const auto stateBits = interactionStateBits(depthFunc);
 
   const auto& shader = *light.shader;
   const auto& record = *light.record;
@@ -874,6 +874,28 @@ void LitPasses::setInteractionSpace(
   m_parms.set(RenderParm::LightFalloffS, vec4Of(lightProjection[3]));
 }
 
+std::uint64_t interactionStateBits(const std::uint64_t depthFunc)
+{
+  return gls::SrcBlendOne | gls::DstBlendOne | gls::DepthMask | depthFunc
+         | gls::StencilFuncAlways;
+}
+
+std::vector<PipelineKey> litStartPipelineKeys(const nvrhi::Format depthFormat)
+{
+  const auto formats = FramebufferFormats{nvrhi::Format::RGBA16_FLOAT, depthFormat};
+  const auto key = [&](const int program, const std::uint64_t state) {
+    return PipelineKey{PipelineRecipe::Draw, program, state, 0, 0.0f, formats};
+  };
+  return {
+    key(EngineBuiltinDepth, gls::Default),
+    key(EngineBuiltinTextureVertexColor, gls::Default),
+    key(EngineBuiltinInteraction, interactionStateBits(gls::DepthFuncEqual)),
+    key(EngineBuiltinInteraction, interactionStateBits(gls::DepthFuncLess)),
+    key(EngineBuiltinPbrInteraction, interactionStateBits(gls::DepthFuncEqual)),
+    key(EngineBuiltinPbrInteraction, interactionStateBits(gls::DepthFuncLess)),
+  };
+}
+
 int LitPasses::imageUsage(ImageSlots& images, const MaterialImageKey& key) const
 {
   // the record's usage once loaded (the PBR rename), the key's until then
@@ -888,13 +910,11 @@ nvrhi::IBuffer* LitPasses::constantBuffer(Frame& frame, const EngineBindingLayou
   auto& buffer = m_constantBuffers[layout];
   if (!buffer || buffer->getDesc().maxVersions != m_constantBufferVersions)
   {
-    auto desc = nvrhi::BufferDesc{};
-    desc.byteSize = parmSetBytes(layout);
-    desc.isConstantBuffer = true;
-    desc.isVolatile = true;
-    desc.maxVersions = m_constantBufferVersions;
-    desc.debugName = fmt::format("RenderParams_{}", int(layout));
-    buffer = frame.inputs->device->createBuffer(desc);
+    // U1.10: the engine's own helper
+    const auto name = fmt::format("RenderParams_{}", int(layout));
+    buffer =
+      frame.inputs->device->createBuffer(nvrhi::utils::CreateVolatileConstantBufferDesc(
+        parmSetBytes(layout), name.c_str(), m_constantBufferVersions));
   }
   return buffer.Get();
 }
@@ -1296,6 +1316,19 @@ const FrontendLists& LitPasses::lists() const
 const LitFrameStats& LitPasses::lastStats() const
 {
   return m_stats;
+}
+
+std::uint64_t LitPasses::volatileBufferBytes() const
+{
+  auto bytes = std::uint64_t{0};
+  for (const auto& [layout, buffer] : m_constantBuffers)
+  {
+    if (buffer)
+    {
+      bytes += buffer->getDesc().byteSize * buffer->getDesc().maxVersions;
+    }
+  }
+  return bytes;
 }
 
 const RenderParms& LitPasses::parms() const

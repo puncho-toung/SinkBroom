@@ -46,11 +46,7 @@ namespace
 
 using namespace engine_image;
 
-// textureUsage_t's lookup tables (Image.h)
-constexpr int UsageLookupTableMono = 6;
-constexpr int UsageLookupTableRgb1 = 8;
-
-// Image_intrinsic.cpp:43 DEFAULT_SIZE; tr_local.h FALLOFF_TEXTURE_SIZE; :623-624
+// Image_intrinsic.cpp:46 DEFAULT_SIZE; RenderCommon.h:49 FALLOFF_TEXTURE_SIZE; :628-629
 constexpr int DefaultSize = 16;
 constexpr int FalloffTextureSize = 64;
 constexpr int QuadraticWidth = 32;
@@ -110,7 +106,7 @@ IntrinsicRecipe noFalloff()
   return recipe;
 }
 
-// R_QuadraticImage (:631-670): a quadratic falloff across x, TR_CLAMP,
+// R_QuadraticImage (:631-669): a quadratic falloff across x, TR_CLAMP,
 // TD_LOOKUP_TABLE_RGB1; the engine's float and double arithmetic kept as it is
 IntrinsicRecipe quadratic()
 {

@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -174,6 +175,9 @@ TEST_CASE("Retail shaders: LP2's blobs, keys and reflection", "[.][retail]")
   CHECK_FALSE(isPermutationBlob(rect.value()));
 
   auto checked = 0;
+  // T0.5: each program's stages by push-constant variant, for the reverse check (the
+  // blit draws rect.vs with blit.ps, CommonPasses.cpp:59-65)
+  auto programStages = std::map<std::pair<int, bool>, std::vector<ShaderReflection>>{};
   for (const auto index : programs)
   {
     const auto& builtin = *engineBuiltin(index);
@@ -210,6 +214,11 @@ TEST_CASE("Retail shaders: LP2's blobs, keys and reflection", "[.][retail]")
         REQUIRE(expected);
         const auto difference = compareReflection(reflection.value(), *expected);
         CHECK_FALSE(difference);
+        programStages[{index, pushed}].push_back(reflection.value());
+        if (index == EngineBuiltinRect)
+        {
+          programStages[{EngineBuiltinBlit, pushed}].push_back(reflection.value());
+        }
         if (difference)
         {
           std::cout << builtin.name << builtin.nameOutSuffix << "."
@@ -249,6 +258,30 @@ TEST_CASE("Retail shaders: LP2's blobs, keys and reflection", "[.][retail]")
     }
   }
 
+  // T0.5: the table's every item declared by a stage of its program (rect.vs alone is no
+  // program); the reflection and the tables are then equal as sets
+  auto covered = 0;
+  for (const auto& [program, stages] : programStages)
+  {
+    const auto& builtin = *engineBuiltin(program.first);
+    if (program.first == EngineBuiltinRect)
+    {
+      continue;
+    }
+    CAPTURE(builtin.name, builtin.nameOutSuffix, program.second);
+    const auto expected = engineExpectedLayout(builtin, program.second);
+    REQUIRE(expected);
+    const auto uncovered = compareLayoutCoverage(stages, *expected);
+    CHECK_FALSE(uncovered);
+    if (uncovered)
+    {
+      std::cout << builtin.name << builtin.nameOutSuffix << " pushed " << program.second
+                << ": " << *uncovered << "\n";
+    }
+    ++covered;
+  }
+  CHECK(covered > 0);
+
   // set 10's 25 members by name and offset, in the interaction's constant buffer
   const auto& interaction = *engineBuiltin(EngineBuiltinInteraction);
   const auto blob = readShaderBlob(*gamePath, interaction.name, ShaderStage::Pixel);
@@ -276,7 +309,10 @@ TEST_CASE("Retail shaders: LP2's blobs, keys and reflection", "[.][retail]")
   }
   CHECK(set10->size == 400u);
 
-  std::cout << "reflected and compared " << checked << " permutations\n";
+  std::cout << "reflected and compared " << checked << " permutations, " << covered
+            << " programs covered\n";
+  // T0.5: the ten programs' stages, each of their permutations
+  CHECK(checked == 30);
 }
 
 } // namespace tb::lit

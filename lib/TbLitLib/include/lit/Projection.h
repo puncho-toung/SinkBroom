@@ -103,8 +103,8 @@ struct ParityCamera
 /**
  * C29 (LP2.3): reads a parity camera line ("camera x y z yaw Y pitch P g_fov G viewport W
  * H", parityCameraLine's and parity.py's format). The camera's direction and up are
- * idAngles( pitch, yaw, 0 ).ToMat3()'s rows 0 and 2 in float (Angles.cpp:223-237, with
- * idMath::SinCos as sinf and cosf on x64), as the engine's player view has them after
+ * idAngles( pitch, yaw, 0 ).ToMat3()'s rows 0 and 2, from the copied code through
+ * engineAnglesToMat3 (U1.6, M-PARITY-01), as the engine's player view has them after
  * setviewpos; its fov is trenchBroomFovOfGFov of the integer g_fov (the line's value
  * truncated as the cvar truncates it); its viewport the line's. nullopt for a line that
  * does not read or a g_fov without an exact inverse. Pure; any thread.

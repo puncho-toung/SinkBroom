@@ -19,6 +19,7 @@
 
 #include "lit/Projection.h"
 
+#include "lit/EngineGeometry.h"
 #include "lit/NumberText.h"
 
 #include <fmt/format.h>
@@ -181,19 +182,14 @@ std::optional<ParityCamera> parityCameraOfLine(const std::string_view line)
     return std::nullopt;
   }
 
-  // idAngles::ToMat3 with roll 0 (Angles.cpp:223-237), DEG2RAD a float product
-  const auto sy = std::sin(*yaw * Deg2Rad);
-  const auto cy = std::cos(*yaw * Deg2Rad);
-  const auto sp = std::sin(*pitch * Deg2Rad);
-  const auto cp = std::cos(*pitch * Deg2Rad);
-  const auto sr = std::sin(0.0f);
-  const auto cr = std::cos(0.0f);
+  // U1.6: the copied idAngles( pitch, yaw, 0 ).ToMat3() (M-GEO-PURE-01): its forward
+  // row and its up row
+  const auto axis = engineAnglesToMat3(*pitch, *yaw, 0.0f);
 
   auto result = ParityCamera{};
   result.camera.position = vm::vec3f{*x, *y, *z};
-  result.camera.direction = vm::vec3f{cp * cy, cp * sy, -sp};
-  result.camera.up =
-    vm::vec3f{cr * sp * cy + -sr * -sy, cr * sp * sy + -sr * cy, cr * cp};
+  result.camera.direction = vm::vec3f{axis[0], axis[1], axis[2]};
+  result.camera.up = vm::vec3f{axis[6], axis[7], axis[8]};
   result.camera.fovDegrees = *fov;
   result.camera.viewportWidth = std::uint32_t(*width);
   result.camera.viewportHeight = std::uint32_t(*height);

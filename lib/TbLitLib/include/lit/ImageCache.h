@@ -20,6 +20,7 @@
 #pragma once
 
 #include "base/Result.h"
+#include "lit/EngineImageEnums.h"
 #include "lit/MaterialDecls.h"
 
 #include <cstddef>
@@ -31,75 +32,6 @@
 
 namespace tb::lit
 {
-
-// renderer/Image.h's enum values that the cache stores and checks (SC96, SC99)
-namespace engine_image
-{
-// textureFormat_t
-constexpr int FormatNone = 0;
-constexpr int FormatRgba8 = 1;
-constexpr int FormatXrgb8 = 2;
-constexpr int FormatAlpha = 3;
-constexpr int FormatL8a8 = 4;
-constexpr int FormatLum8 = 5;
-constexpr int FormatInt8 = 6;
-constexpr int FormatDxt1 = 7;
-constexpr int FormatDxt5 = 8;
-constexpr int FormatDepth = 9;
-constexpr int FormatX16 = 10;
-constexpr int FormatY16X16 = 11;
-constexpr int FormatRgb565 = 12;
-constexpr int FormatEtc1 = 13;
-constexpr int FormatShadowArray = 14;
-constexpr int FormatRg16f = 15;
-constexpr int FormatRgba16f = 16;
-constexpr int FormatRgba32f = 17;
-constexpr int FormatR32f = 18;
-constexpr int FormatR11g11b10f = 19;
-constexpr int FormatBc6h = 20;
-constexpr int FormatBc7 = 21;
-constexpr int FormatR8f = 22;
-constexpr int FormatDepthStencil = 23;
-constexpr int FormatRgba16s = 24;
-// textureColor_t
-constexpr int ColorDefault = 0;
-constexpr int ColorNormalDxt5 = 1;
-constexpr int ColorYCoCgDxt5 = 2;
-constexpr int ColorGreenAlpha = 3;
-// textureType_t
-constexpr int Type2D = 1;
-constexpr int TypeCubic = 2;
-constexpr int Type2DArray = 3;
-// textureUsage_t
-constexpr int UsageSpecular = 0;
-constexpr int UsageDiffuse = 1;
-constexpr int UsageDefault = 2;
-constexpr int UsageBump = 3;
-constexpr int UsageFont = 4;
-constexpr int UsageLight = 5;
-constexpr int UsageCoverage = 10;
-constexpr int UsageSpecularPbrRmao = 12;
-constexpr int UsageHdrLightProbe = 21;
-constexpr int UsageHdri = 22;
-// textureFilter_t
-constexpr int FilterLinear = 0;
-constexpr int FilterNearest = 1;
-constexpr int FilterNearestMipmap = 2;
-constexpr int FilterDefault = 3;
-// textureRepeat_t
-constexpr int RepeatRepeat = 0;
-constexpr int RepeatClamp = 1;
-constexpr int RepeatClampToZero = 2;
-constexpr int RepeatClampToZeroAlpha = 3;
-// cubeFiles_t
-constexpr int Cube2D = 0;
-constexpr int CubePackedMipChain = 5;
-constexpr int CubeNativeHdr = 8;
-// BinaryImageData.h: 'B' 'I' 'M' and the version, little-endian bytes of one int
-constexpr std::uint32_t BimageMagicBfg =
-  0x42u | (0x49u << 8) | (0x4Du << 16) | (10u << 24);
-constexpr std::uint32_t BimageMagic = 0x42u | (0x49u << 8) | (0x4Du << 16) | (11u << 24);
-} // namespace engine_image
 
 // the format and colour format idImage::DeriveOpts gives a usage (SC99), and whether its
 // mips are made with gamma correction (LP1c.2's source fallback)

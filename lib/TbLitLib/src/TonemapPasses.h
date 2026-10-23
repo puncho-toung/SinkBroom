@@ -37,6 +37,7 @@
 #include "PipelineCompiler.h"
 #include "SamplerSet.h"
 #include "base/Macros.h"
+#include "lit/EngineBuiltins.h"
 #include "lit/EngineTables.h"
 
 #include <nvrhi/nvrhi.h>
@@ -104,6 +105,14 @@ inline constexpr auto SteadyStateFrameTime = 1000.0f;
 // versions of the one volatile constant buffer the passes share where a pass has no push
 // constants
 inline constexpr auto TonemapConstantBufferVersions = std::uint32_t{32};
+
+// DX.5: the tonemap pass's pipeline (into the LDR target, with the HDR pass's depth
+// format as TonemapPass's framebuffer has it) and the blit's (into the frame's target
+// alone), as record asks for them; and the two compute programs
+PipelineKey tonemapPipelineKey(nvrhi::Format depthFormat);
+PipelineKey blitPipelineKey(nvrhi::Format targetFormat);
+inline constexpr auto TonemapComputePrograms =
+  std::array{EngineBuiltinHistogram, EngineBuiltinExposure};
 
 // Pure functions of the engine's arithmetic, for any thread.
 
@@ -272,6 +281,9 @@ public:
   TonemapFrameStats record(const TonemapFrameInputs& inputs);
 
   const TonemapFrameStats& lastStats() const;
+  // U2.6, render thread: the volatile constant buffer's bytes, every version (NVRHI's
+  // aligned size times maxVersions)
+  std::uint64_t volatileBufferBytes() const;
 
   // teardown step 2: every handle
   void releaseAll();

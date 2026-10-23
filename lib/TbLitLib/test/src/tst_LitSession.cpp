@@ -52,6 +52,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+// after windows.h
+#include <tlhelp32.h>
 #endif
 
 #include <algorithm>
@@ -497,6 +499,15 @@ struct Events
       events, [&](const auto& entry) { return std::get<0>(entry) == event; }));
   }
 
+  std::size_t countContaining(const SessionEvent event, const std::string_view text)
+  {
+    const auto lock = std::scoped_lock{mutex};
+    return std::size_t(std::ranges::count_if(events, [&](const auto& entry) {
+      return std::get<0>(entry) == event
+             && std::get<1>(entry).find(text) != std::string::npos;
+    }));
+  }
+
   bool allOfGeneration(const std::uint64_t generation)
   {
     const auto lock = std::scoped_lock{mutex};
@@ -519,6 +530,40 @@ struct Events
     }
   }
 };
+
+// U2.12: the process's threads and OS handles, as TbUiLibTest's checkCounts counts them
+// (tst_LitPreviewPanel.cpp), with its tolerance and the driver's measured cost of one
+// device (one handle)
+struct ProcessCounts
+{
+  long threads = 0;
+  long handles = 0;
+};
+
+constexpr auto HandleTolerance = 8L;
+constexpr auto DriverHandlesPerSession = 1L;
+
+ProcessCounts processCounts()
+{
+  auto counts = ProcessCounts{};
+  auto handles = DWORD{0};
+  GetProcessHandleCount(GetCurrentProcess(), &handles);
+  counts.handles = long(handles);
+  const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+  if (snapshot != INVALID_HANDLE_VALUE)
+  {
+    auto entry = THREADENTRY32{};
+    entry.dwSize = sizeof(entry);
+    const auto processId = GetCurrentProcessId();
+    for (auto found = Thread32First(snapshot, &entry); found;
+         found = Thread32Next(snapshot, &entry))
+    {
+      counts.threads += entry.th32OwnerProcessID == processId ? 1 : 0;
+    }
+    CloseHandle(snapshot);
+  }
+  return counts;
+}
 
 void pumpMessages()
 {
@@ -1624,6 +1669,8 @@ TEST_CASE("LitSession pipelines on a GPU (D71)", "[.][litgpu]")
       auto options = SessionOptions{};
       options.validation = true;
       options.gamePath = gamePath;
+      // the section counts the pipelines it asks for (DX.5's are not asked for)
+      options.requestStartPipelines = false;
       auto session =
         LitSession::create(
           instance.handles(), VK_NULL_HANDLE, 64, 48, options, events.sink(), 1)
@@ -1809,6 +1856,8 @@ TEST_CASE("LitSession pipelines on a GPU (D71)", "[.][litgpu]")
       auto options = SessionOptions{};
       options.validation = true;
       options.gamePath = gamePath;
+      // the test orders the compile thread's jobs (DX.5's are not asked for)
+      options.requestStartPipelines = false;
       auto session =
         LitSession::create(
           instance.handles(), VK_NULL_HANDLE, 64, 48, options, events.sink(), 1)
@@ -1846,6 +1895,13 @@ TEST_CASE("LitSession pipelines on a GPU (D71)", "[.][litgpu]")
                             .count();
       std::cout << "a stop during a pipeline's creation took " << stopMs << " ms\n";
       CHECK(stopMs < double(StopBound.count()));
+      // T0.7: the stop ends the thread before its next creation step; the jobs it did
+      // not finish disable nothing
+      for (const auto& program : session->programReport())
+      {
+        CAPTURE(program.name, program.reason);
+        CHECK(program.enabled);
+      }
       CHECK(session->lastDeviceReleaseCount() == 0u);
       CHECK(session->nvrhiErrorCount() == 0u);
       CHECK(session->deviceMemoryAllocations() == 0);
@@ -1904,6 +1960,9 @@ std::unique_ptr<LitSession> gpuSession(
   options.validation = true;
   options.gamePath = gamePath;
   options.frameLogPath = frameLogPath;
+  // its tests draw no lit scene and count what the session allocates (DX.5's pipelines
+  // are not asked for)
+  options.requestStartPipelines = false;
   return LitSession::create(
            instance.handles(),
            VK_NULL_HANDLE,
@@ -3068,7 +3127,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
       REQUIRE(waitForSlots(*session, {id}));
       session->setEveryFrameHookForTesting({});
 
-      const auto lock = std::scoped_lock{mutex};
+      auto lock = std::unique_lock{mutex};
       REQUIRE(frames.size() == 3u);
       CHECK(frames[0].first == 21844u);
       CHECK(frames[1].first == 65536u);
@@ -3088,6 +3147,15 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
       }
       std::cout << "levels over three frames: bytes " << frames[0].first << ", "
                 << frames[1].first << ", " << frames[2].first << "\n";
+
+      // U2.12: the teardown checks of the other GPU sections (a frame that took the hook
+      // before it was cleared may still wait for the lock)
+      lock.unlock();
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
     }
     CHECK(resetDispatcher());
     messages.print("levels over three frames, validation");
@@ -3696,7 +3764,8 @@ TEST_CASE("LitSession GPU resources on the retail game (D72)", "[.][retail]")
         peak.pending = access.images.pending();
         peak.slots = access.images.size();
         settled = peak.pending == 0 && !loading;
-        const auto account = accountGpuMemory(access.frame, access.arenas, access.images);
+        const auto account = accountGpuMemory(
+          access.frame, access.arenas, access.images, access.passes, access.tonemap);
         if (account.total() >= peak.account.total())
         {
           peak.account = account;
@@ -4102,16 +4171,19 @@ std::unique_ptr<MaterialService> rootService(
          | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
 }
 
-// a headless 160 × 120 session with validation over the root
+// a headless 160 × 120 session with validation over the root; startPipelines false for a
+// test that holds the compile thread from the start (DX.5)
 std::unique_ptr<LitSession> rootSession(
   const TestInstance& instance,
   Events& events,
   MaterialService& service,
-  const std::filesystem::path& root)
+  const std::filesystem::path& root,
+  const bool startPipelines = true)
 {
   auto options = SessionOptions{};
   options.validation = true;
   options.gamePath = root;
+  options.requestStartPipelines = startPipelines;
   return LitSession::create(
            instance.handles(),
            VK_NULL_HANDLE,
@@ -4126,6 +4198,20 @@ std::unique_ptr<LitSession> rootSession(
 
 // T0.2: the mirrored vertex-input warnings a pipeline of program implies (its vertex
 // shader's unread LAYOUT_DRAW_VERT locations)
+// DX.5: the lit passes' keys the compile thread was asked for: the draws' and the ones
+// the session asked for at Start
+std::set<PipelineKey, PipelineKeyLess> litKeysMade(
+  const std::set<PipelineKey, PipelineKeyLess>& requested,
+  const nvrhi::Format depthFormat)
+{
+  auto keys = requested;
+  for (const auto& key : litStartPipelineKeys(depthFormat))
+  {
+    keys.insert(key);
+  }
+  return keys;
+}
+
 int unreadLocations(const int program)
 {
   switch (program)
@@ -4173,7 +4259,7 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
       auto events = Events{};
-      auto session = rootSession(instance, events, *service, root);
+      auto session = rootSession(instance, events, *service, root, false);
       auto* compiler = session->pipelineCompilerForTesting();
       REQUIRE(compiler);
 
@@ -4985,9 +5071,11 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
   {
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
+    auto limitRaised = false;
     {
       const auto instance = TestInstance{library, true, false, messages};
       REQUIRE(instance.valid());
+      limitRaised = instance.messageLimitRaised();
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
       auto events = Events{};
@@ -5039,7 +5127,8 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
         for (std::size_t i = 0; i < 3; ++i)
         {
           CAPTURE(i);
-          CHECK(std::abs(int(readback->ldr[i]) - int(expected[i])) <= 1);
+          // U3.10: the shader maths exactly
+          CHECK(int(readback->ldr[i]) == int(expected[i]));
         }
         // the HDR target's alpha passes through (SC263)
         CHECK(readback->ldr[3] == 255);
@@ -5087,8 +5176,16 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     messages.print("tonemap values, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
-    // no pipeline with an input layout was made (M-PIPE-DEFECT-01)
-    CHECK(messages.mirrored == 0);
+    // the session draws no chunk: only DX.5's pipelines with an input layout were made,
+    // and they imply the mirrored warnings (M-PIPE-DEFECT-01)
+    auto implied = 0;
+    for (const auto& key : litStartPipelineKeys(nvrhi::Format::D24S8))
+    {
+      implied += unreadLocations(key.program);
+    }
+    CHECK(
+      messages.mirrored
+      == (limitRaised ? implied : std::min(implied, ValidationDuplicateMessageLimit)));
   }
 
   SECTION(
@@ -5178,12 +5275,46 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
         dark->rgba[darkCentre + 3]);
 
       REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
-        for (const auto& key : access.passes.requestedKeysForTesting())
+        for (const auto& key : litKeysMade(
+               access.passes.requestedKeysForTesting(), access.frame.depthFormat()))
         {
           programsAsked.push_back(key.program);
         }
         access.passes.setDrawLogForTesting(false);
       }));
+
+      // U2.6: the account holds the volatile constant buffers and the upload pool; a
+      // settled frame past the budget says so once, a later settled frame not again
+      auto account = GpuMemoryAccount{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        account = accountGpuMemory(
+          access.frame, access.arenas, access.images, access.passes, access.tonemap);
+      }));
+      CHECK(account.volatileBufferBytes > 0u);
+      CHECK(account.uploadPoolBytes >= UploadChunkBytes);
+      const auto budgetText = std::string_view{"passes the device's budget"};
+      CHECK(events.countContaining(SessionEvent::Warning, budgetText) == 0u);
+      session->setVramBudgetForTesting(std::uint64_t{1024} * 1024);
+      session->setCamera(darkView);
+      CHECK(waitFor(
+        [&] { return events.countContaining(SessionEvent::Warning, budgetText) == 1u; },
+        5000ms,
+        false));
+      session->setCamera(litView);
+      std::this_thread::sleep_for(1000ms);
+      CHECK(session->lastFrameSettledForTesting());
+      CHECK(events.countContaining(SessionEvent::Warning, budgetText) == 1u);
+      session->setVramBudgetForTesting(0);
+      std::cout << fmt::format(
+        "U2.6: the account {:.1f} MB: arenas {:.1f}, textures {:.1f}, targets {:.1f}, "
+        "released {:.1f}, volatile buffers {:.1f}, upload pool {:.1f}\n",
+        double(account.total()) / (1024.0 * 1024.0),
+        double(account.arenaBytes) / (1024.0 * 1024.0),
+        double(account.textureBytes) / (1024.0 * 1024.0),
+        double(account.renderTargetBytes) / (1024.0 * 1024.0),
+        double(account.releasedBytes) / (1024.0 * 1024.0),
+        double(account.volatileBufferBytes) / (1024.0 * 1024.0),
+        double(account.uploadPoolBytes) / (1024.0 * 1024.0));
 
       teardown(*session);
       CHECK(session->lastDeviceReleaseCount() == 0u);
@@ -5375,7 +5506,8 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
                   << " x " << height << " BGRA8 swapchain image\n";
 
         REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
-          for (const auto& key : access.passes.requestedKeysForTesting())
+          for (const auto& key : litKeysMade(
+                 access.passes.requestedKeysForTesting(), access.frame.depthFormat()))
           {
             programsAsked.push_back(key.program);
           }
@@ -5407,6 +5539,70 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     CHECK(
       messages.mirrored
       == (limitRaised ? implied : std::min(implied, ValidationDuplicateMessageLimit)));
+  }
+
+  SECTION("U2.12: a blob-backed session under a thread and handle baseline")
+  {
+    // the compile thread's real pipelines, the fixture's textures, the lit and tonemap
+    // passes and the LDR readback, Start to Stop; the first cycle pays the process's
+    // one-time costs (the driver's and the loader's), the baseline is taken after it
+    const auto cycle = [&] {
+      auto messages = ValidationMessages{};
+      messages.mirroredMessageId = OutputNotConsumedId;
+      {
+        const auto instance = TestInstance{library, true, false, messages};
+        REQUIRE(instance.valid());
+        REQUIRE(initInstanceDispatcher(instance.handles()));
+        auto service = rootService(root);
+        auto events = Events{};
+        auto session = rootSession(instance, events, *service, root);
+        session->setExposed(true);
+        REQUIRE(waitFor(
+          [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+          5000ms,
+          false));
+        REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+        const auto lit =
+          settledChain(*session, litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0}));
+        REQUIRE(lit);
+        CHECK(lit->lit.interactionDraws > 0u);
+        CHECK(session->readbackLdrForTesting());
+        teardown(*session);
+        CHECK(session->lastDeviceReleaseCount() == 0u);
+        CHECK(session->nvrhiErrorCount() == 0u);
+        CHECK(session->deviceMemoryAllocations() == 0);
+        CHECK(events.count(SessionEvent::Error) == 0u);
+        session.reset();
+        service->requestStop();
+        service->join();
+      }
+      CHECK(resetDispatcher());
+      CHECK(messages.errors == 0);
+      CHECK(messages.warnings == 0);
+    };
+    cycle();
+    const auto baseline = processCounts();
+    constexpr auto cycles = 2L;
+    for (auto i = 0L; i < cycles; ++i)
+    {
+      cycle();
+    }
+    const auto maxHandles =
+      baseline.handles + HandleTolerance + cycles * DriverHandlesPerSession;
+    auto counts = processCounts();
+    const auto settled = waitFor(
+      [&] {
+        counts = processCounts();
+        return counts.threads <= baseline.threads && counts.handles <= maxHandles;
+      },
+      3000ms,
+      false);
+    std::cout << "U2.12: " << cycles << " blob-backed sessions: threads "
+              << baseline.threads << " -> " << counts.threads << ", handles "
+              << baseline.handles << " -> " << counts.handles << " (allowed "
+              << maxHandles << ")" << (settled ? "" : " (not settled)") << "\n";
+    CHECK(counts.threads <= baseline.threads);
+    CHECK(counts.handles <= maxHandles);
   }
 
   SECTION("the livelock guard: a frame that cannot progress stops re-triggering itself")
@@ -5906,7 +6102,9 @@ std::shared_ptr<const Snapshot> paritySnapshot(
  * (TB_LIT_PARITY_ROOT, read only: the LP2 blobs, the maps and the engine's .proc files,
  * the fixture's materials, entityDef and images, the engine's .bimage caches), each row
  * at its shot's size with the camera of its line and the fov of its integer g_fov,
- * settled (D77, at most 60 s a row), its LDR target read back and written as
+ * settled (D77; U2.13: at most 10 s a row with its readback, the whole test under
+ * ParityTestBound, so that a stuck row is named before the run's 180 s bound), its LDR
+ * target read back and written as
  * <row>.rgba with <row>.json into TB_LIT_PARITY_OUT, with the row's frames of the frame
  * log as <row>.framelog.csv; parity.py compare compares them with the engine's shots.
  * Asserted here: every row settles, the control rows are black, and the validation
@@ -5915,6 +6113,10 @@ std::shared_ptr<const Snapshot> paritySnapshot(
  */
 TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
 {
+  // U2.13
+  constexpr auto ParityRowBound = std::chrono::milliseconds{10000};
+  constexpr auto ParityTestBound = std::chrono::milliseconds{150000};
+  const auto testDeadline = std::chrono::steady_clock::now() + ParityTestBound;
   const auto* rootValue = std::getenv("TB_LIT_PARITY_ROOT");
   const auto* outValue = std::getenv("TB_LIT_PARITY_OUT");
   if (!rootValue || !*rootValue || !outValue || !*outValue)
@@ -6042,16 +6244,24 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
       const auto control = row.flag("control");
       const auto framesBefore = session->framesPresented();
       const auto started = std::chrono::steady_clock::now();
-      const auto settled = settledParityFrame(*session, camera, !control, 60000ms);
+      // U2.13: what is left of the row's bound, and of the test's
+      const auto rowDeadline = std::min(started + ParityRowBound, testDeadline);
+      const auto left = [&] {
+        return std::max(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+            rowDeadline - std::chrono::steady_clock::now()),
+          std::chrono::milliseconds{1});
+      };
+      const auto settled = settledParityFrame(*session, camera, !control, left());
       REQUIRE(settled);
-      const auto image = session->readbackLdrForTesting(60000ms);
+      const auto image = session->readbackLdrForTesting(left());
       REQUIRE(image);
       const auto settleMs = std::chrono::duration<double, std::milli>(
                               std::chrono::steady_clock::now() - started)
                               .count();
       frameRanges.emplace_back(framesBefore, session->framesPresented());
       // U3.4: the exposure the frame left, beside the CPU model's of its HDR target
-      const auto exposure = parityExposure(*session, 10000ms);
+      const auto exposure = parityExposure(*session, left());
       REQUIRE(exposure);
       REQUIRE(image->width == width);
       REQUIRE(image->height == height);

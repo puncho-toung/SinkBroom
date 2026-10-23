@@ -8,10 +8,14 @@
 # only spirv_reflect.c is built, as the static library SpirvReflect, with the SPIR-V
 # header it ships (include/spirv/unified1/spirv.h). It needs no Vulkan header, so the one
 # Vulkan header set (C13) and VK_NO_PROTOTYPES (C9) stand.
+#
+# T0.11: by the commit of the tag vulkan-sdk-1.4.304.0 (a tag can move), without its
+# third_party/googletest submodule (CMP0097: "" clones none)
 CPMAddPackage(
   NAME SPIRV-Reflect
   GITHUB_REPOSITORY KhronosGroup/SPIRV-Reflect
-  GIT_TAG vulkan-sdk-1.4.304.0
+  GIT_TAG 281b55edb67b1f2e61e1dc92fdc42a650da05d83
+  GIT_SUBMODULES ""
   DOWNLOAD_ONLY YES
 )
 

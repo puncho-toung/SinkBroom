@@ -93,8 +93,9 @@ target_sources(TbLitIdLib
     FILES
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineBuiltins.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineGeometry.h
-      ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineLight.h
+      ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineImageEnums.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineLexer.h
+      ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineLight.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EnginePipelineState.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/MaterialDecls.h
 )

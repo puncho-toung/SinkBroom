@@ -472,4 +472,48 @@ std::optional<std::string> compareReflection(
   return std::nullopt;
 }
 
+std::optional<std::string> compareLayoutCoverage(
+  const std::vector<ShaderReflection>& stages, const ExpectedShaderLayout& expected)
+{
+  for (std::uint32_t set = 0; set < expected.sets.size(); ++set)
+  {
+    for (const auto& item : expected.sets[set].bindings)
+    {
+      if (nvrhi::ResourceType(item.type) == nvrhi::ResourceType::PushConstants)
+      {
+        if (!std::ranges::any_of(
+              stages, [](const auto& stage) { return stage.pushConstants.has_value(); }))
+        {
+          return fmt::format(
+            "the table's set {} pushes {} bytes of constants, no stage declares a "
+            "push-constant block",
+            set,
+            std::uint32_t(item.size));
+        }
+        continue;
+      }
+      const auto kind = descriptorKindOf(item);
+      if (!kind)
+      {
+        continue;
+      }
+      const auto binding = engineVulkanBinding(item);
+      const auto declared = std::ranges::any_of(stages, [&](const auto& stage) {
+        return std::ranges::any_of(stage.bindings, [&](const auto& b) {
+          return b.set == set && b.binding == binding && b.kind == *kind;
+        });
+      });
+      if (!declared)
+      {
+        return fmt::format(
+          "the table's set {} binding {} ({}) is declared by no stage",
+          set,
+          binding,
+          describeDescriptorKind(*kind));
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 } // namespace tb::lit

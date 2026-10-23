@@ -34,8 +34,8 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageFallback.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageSlots.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/IntrinsicImages.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageSlots.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/IntrinsicImages.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightData.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightGridFile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightParse.cpp
@@ -51,17 +51,17 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitStages.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitView.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitView.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/MapBake.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LiveSession.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/MapBake.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MaterialService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NumberText.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NvrhiSupport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PipelineCompiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PipelineCompiler.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ProcFile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Projection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RangeAllocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RangeAllocator.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/Projection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderParms.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderParms.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderThread.cpp

@@ -41,8 +41,8 @@
 #include <fmt/format.h>
 
 #include <exception>
+#include <string_view>
 #include <utility>
-#include <variant>
 
 namespace tb::lit
 {
@@ -63,20 +63,26 @@ std::string disabledReason(const std::string& reason)
   return "disabled: " + reason;
 }
 
-template <typename T>
-std::string errorText(const Result<T>& result)
+// T0.7: what a creation step finds once a stop has come
+constexpr auto StoppedText = std::string_view{"the compile thread is stopping"};
+
+bool stopped(const Error& e)
 {
-  return std::get<Error>(result.error()).msg;
+  return e.msg == StoppedText;
 }
 
 nvrhi::TextureHandle formatOnlyTexture(
-  nvrhi::IDevice& device, const nvrhi::Format format, const bool depth)
+  nvrhi::IDevice& device,
+  const nvrhi::Format format,
+  const std::uint32_t sampleCount,
+  const bool depth)
 {
   return device.createTexture(
     nvrhi::TextureDesc{}
       .setWidth(1)
       .setHeight(1)
       .setFormat(format)
+      .setSampleCount(sampleCount)
       .setDebugName("Lit preview format-only target")
       .setIsRenderTarget(true)
       .setInitialState(
@@ -96,7 +102,8 @@ bool PipelineKeyLess::operator()(const PipelineKey& lhs, const PipelineKey& rhs)
       key.depthBias,
       key.slopeBias,
       int(key.framebuffer.color),
-      int(key.framebuffer.depth)};
+      int(key.framebuffer.depth),
+      key.framebuffer.sampleCount};
   };
   return tie(lhs) < tie(rhs);
 }
@@ -124,6 +131,31 @@ Result<void> PipelineCompiler::start(std::function<void()> onReady)
     [this](const char* reason) {
       m_events.markFailed(fmt::format("the compile thread failed: {}", reason));
     });
+}
+
+void PipelineCompiler::request(
+  const std::vector<PipelineKey>& graphics, const std::vector<int>& compute)
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    for (const auto& key : graphics)
+    {
+      if (m_graphics.emplace(key, GraphicsPipelineLookup{}).second)
+      {
+        m_queue.push_back(Job{false, key, false, EngineBindingLayout::Default});
+      }
+    }
+    for (const auto program : compute)
+    {
+      if (m_compute.emplace(program, ComputePipelineLookup{}).second)
+      {
+        auto key = PipelineKey{};
+        key.program = program;
+        m_queue.push_back(Job{true, key, false, EngineBindingLayout::Default});
+      }
+    }
+  }
+  m_wake.notify_all();
 }
 
 void PipelineCompiler::requestStop()
@@ -316,38 +348,49 @@ void PipelineCompiler::run(const Job& job)
 
   try
   {
+    // T0.6: each answer is stored inside its chain; T0.7: a stopped job's stays Pending
     if (job.layouts)
     {
-      auto lookup = makeLayouts(job.layout)
-                    | kdl::or_else([&](const auto& e) -> Result<BindingLayoutLookup> {
-                        auto failedLookup = BindingLayoutLookup{};
-                        failedLookup.state = BindingLayoutLookup::State::Failed;
-                        failedLookup.error = e.msg;
-                        return failedLookup;
-                      })
-                    | kdl::value();
-      const auto lock = std::scoped_lock{m_mutex};
-      m_layoutLookups.insert_or_assign(job.layout, std::move(lookup));
+      makeLayouts(job.layout) | kdl::transform([&](BindingLayoutLookup lookup) {
+        const auto lock = std::scoped_lock{m_mutex};
+        m_layoutLookups.insert_or_assign(job.layout, std::move(lookup));
+      }) | kdl::transform_error([&](const auto& e) {
+        if (!stopped(e))
+        {
+          auto lookup = BindingLayoutLookup{};
+          lookup.state = BindingLayoutLookup::State::Failed;
+          lookup.error = e.msg;
+          const auto lock = std::scoped_lock{m_mutex};
+          m_layoutLookups.insert_or_assign(job.layout, std::move(lookup));
+        }
+      });
     }
     else if (job.compute)
     {
-      auto lookup = makeCompute(job.key.program)
-                    | kdl::or_else([&](const auto& e) -> Result<ComputePipelineLookup> {
-                        return failed(e.msg)(ComputePipelineLookup{});
-                      })
-                    | kdl::value();
-      const auto lock = std::scoped_lock{m_mutex};
-      m_compute.insert_or_assign(job.key.program, std::move(lookup));
+      makeCompute(job.key.program) | kdl::transform([&](ComputePipelineLookup lookup) {
+        const auto lock = std::scoped_lock{m_mutex};
+        m_compute.insert_or_assign(job.key.program, std::move(lookup));
+      }) | kdl::transform_error([&](const auto& e) {
+        if (!stopped(e))
+        {
+          const auto lock = std::scoped_lock{m_mutex};
+          m_compute.insert_or_assign(
+            job.key.program, failed(e.msg)(ComputePipelineLookup{}));
+        }
+      });
     }
     else
     {
-      auto lookup = makeGraphics(job.key)
-                    | kdl::or_else([&](const auto& e) -> Result<GraphicsPipelineLookup> {
-                        return failed(e.msg)(GraphicsPipelineLookup{});
-                      })
-                    | kdl::value();
-      const auto lock = std::scoped_lock{m_mutex};
-      m_graphics.insert_or_assign(job.key, std::move(lookup));
+      makeGraphics(job.key) | kdl::transform([&](GraphicsPipelineLookup lookup) {
+        const auto lock = std::scoped_lock{m_mutex};
+        m_graphics.insert_or_assign(job.key, std::move(lookup));
+      }) | kdl::transform_error([&](const auto& e) {
+        if (!stopped(e))
+        {
+          const auto lock = std::scoped_lock{m_mutex};
+          m_graphics.insert_or_assign(job.key, failed(e.msg)(GraphicsPipelineLookup{}));
+        }
+      });
     }
   }
   catch (const std::exception& e)
@@ -370,6 +413,16 @@ void PipelineCompiler::run(const Job& job)
       m_graphics.insert_or_assign(job.key, failed(e.what())(GraphicsPipelineLookup{}));
     }
   }
+}
+
+Result<void> PipelineCompiler::unlessStopping() const
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  if (m_stopRequested)
+  {
+    return Error{std::string{StoppedText}};
+  }
+  return kdl::void_success;
 }
 
 Result<ExpectedShaderLayout> PipelineCompiler::expectedLayout(
@@ -445,15 +498,10 @@ Result<nvrhi::ShaderHandle> PipelineCompiler::shader(
       });
   timeShader(started);
 
+  // T0.6: the entry is set inside the chain
   auto entry = ShaderEntry{};
-  if (made.is_success())
-  {
-    entry.shader = made.value();
-  }
-  else
-  {
-    entry.error = errorText(made);
-  }
+  made | kdl::transform([&](const nvrhi::ShaderHandle& handle) { entry.shader = handle; })
+    | kdl::transform_error([&](const auto& e) { entry.error = e.msg; });
   m_shaders.emplace(std::move(cacheKey), entry);
   return made;
 }
@@ -500,7 +548,7 @@ Result<nvrhi::IFramebuffer*> PipelineCompiler::framebuffer(
   auto desc = nvrhi::FramebufferDesc{};
   if (formats.color != nvrhi::Format::UNKNOWN)
   {
-    made.color = formatOnlyTexture(device, formats.color, false);
+    made.color = formatOnlyTexture(device, formats.color, formats.sampleCount, false);
     if (!made.color)
     {
       return Error{"NVRHI cannot create a format-only colour target"};
@@ -509,7 +557,7 @@ Result<nvrhi::IFramebuffer*> PipelineCompiler::framebuffer(
   }
   if (formats.depth != nvrhi::Format::UNKNOWN)
   {
-    made.depth = formatOnlyTexture(device, formats.depth, true);
+    made.depth = formatOnlyTexture(device, formats.depth, formats.sampleCount, true);
     if (!made.depth)
     {
       return Error{"NVRHI cannot create a format-only depth target"};
@@ -548,57 +596,106 @@ Result<GraphicsPipelineLookup> PipelineCompiler::makeGraphics(const PipelineKey&
     return Error{disabledReason(reason)};
   }
 
+  // T0.6: one chain to the answer; T0.7: a stop is seen before each creation step
   auto lookup = GraphicsPipelineLookup{};
   auto desc = nvrhi::GraphicsPipelineDesc{};
-  const auto made =
-    expectedLayout(*builtin) | kdl::and_then([&](const ExpectedShaderLayout& expected) {
-      return shader(*vertexBuiltin, ShaderStage::Vertex, expected)
-             | kdl::and_then([&](nvrhi::ShaderHandle vs) {
-                 desc.VS = std::move(vs);
-                 return shader(*builtin, ShaderStage::Pixel, expected);
-               })
-             | kdl::and_then([&](nvrhi::ShaderHandle ps) {
-                 desc.PS = std::move(ps);
-                 return bindingLayouts(
-                   builtin->bindingLayout, expected.pushConstants, expected);
-               })
-             | kdl::transform([&](std::vector<nvrhi::BindingLayoutHandle> layouts) {
-                 lookup.bindingLayouts = std::move(layouts);
-               });
-    });
-  if (made.is_error())
-  {
-    // D9: the program is disabled for the session
-    reason = errorText(made);
-    disable(builtin->index, reason);
-    return Error{disabledReason(reason)};
-  }
+  return expectedLayout(*builtin)
+         | kdl::and_then([&](const ExpectedShaderLayout& expected) {
+             return unlessStopping() | kdl::and_then([&]() {
+                      return shader(*vertexBuiltin, ShaderStage::Vertex, expected);
+                    })
+                    | kdl::and_then([&](nvrhi::ShaderHandle vs) {
+                        desc.VS = std::move(vs);
+                        return unlessStopping();
+                      })
+                    | kdl::and_then(
+                      [&]() { return shader(*builtin, ShaderStage::Pixel, expected); })
+                    | kdl::and_then([&](nvrhi::ShaderHandle ps) {
+                        desc.PS = std::move(ps);
+                        return unlessStopping();
+                      })
+                    | kdl::and_then([&]() {
+                        return bindingLayouts(
+                          builtin->bindingLayout, expected.pushConstants, expected);
+                      });
+           })
+         | kdl::or_else(
+           [&](const Error& e) -> Result<std::vector<nvrhi::BindingLayoutHandle>> {
+             if (stopped(e))
+             {
+               return e;
+             }
+             // D9: the program is disabled for the session
+             disable(builtin->index, e.msg);
+             return Error{disabledReason(e.msg)};
+           })
+         | kdl::and_then([&](std::vector<nvrhi::BindingLayoutHandle> layouts) {
+             lookup.bindingLayouts = std::move(layouts);
+             for (const auto& layout : lookup.bindingLayouts)
+             {
+               desc.bindingLayouts.push_back(layout);
+             }
+             return unlessStopping();
+           })
+         | kdl::and_then([&]() -> Result<void> {
+             // RenderProgs_NVRHI.cpp:250-256: the input layout, made against the vertex
+             // shader
+             if (
+               vertexBuiltin->vertexLayout != EngineVertexLayout::DrawVert
+               || key.recipe != PipelineRecipe::Draw)
+             {
+               return kdl::void_success;
+             }
+             auto& inputLayout = m_inputLayouts[vertexBuiltin->index];
+             if (!inputLayout)
+             {
+               const auto attributes = engineDrawVertAttributes();
+               inputLayout = m_device.device().createInputLayout(
+                 attributes.data(), std::uint32_t(attributes.size()), desc.VS);
+               if (!inputLayout)
+               {
+                 m_inputLayouts.erase(vertexBuiltin->index);
+                 return Error{"NVRHI cannot create the input layout"};
+               }
+             }
+             desc.inputLayout = inputLayout;
+             return kdl::void_success;
+           })
+         | kdl::and_then([&]() {
+             recipeState(key, desc);
+             return unlessStopping();
+           })
+         | kdl::and_then([&]() { return framebuffer(key.framebuffer); })
+         | kdl::and_then([&](nvrhi::IFramebuffer* target) {
+             return unlessStopping() | kdl::transform([&]() { return target; });
+           })
+         | kdl::and_then([&](nvrhi::IFramebuffer* target) {
+             auto hook = std::function<void()>{};
+             {
+               const auto lock = std::scoped_lock{m_mutex};
+               hook = m_beforeCreateForTesting;
+             }
+             if (hook)
+             {
+               hook();
+             }
+             const auto started = std::chrono::steady_clock::now();
+             lookup.pipeline = m_device.device().createGraphicsPipeline(desc, target);
+             timePipeline(started);
+             if (!lookup.pipeline)
+             {
+               return Result<GraphicsPipelineLookup>{Error{fmt::format(
+                 "NVRHI cannot create a pipeline of {}", programName(*builtin))}};
+             }
+             lookup.state = GraphicsPipelineLookup::State::Ready;
+             enable(builtin->index);
+             return Result<GraphicsPipelineLookup>{std::move(lookup)};
+           });
+}
 
-  for (const auto& layout : lookup.bindingLayouts)
-  {
-    desc.bindingLayouts.push_back(layout);
-  }
-
-  // RenderProgs_NVRHI.cpp:250-256: the input layout, made against the vertex shader
-  if (
-    vertexBuiltin->vertexLayout == EngineVertexLayout::DrawVert
-    && key.recipe == PipelineRecipe::Draw)
-  {
-    auto& inputLayout = m_inputLayouts[vertexBuiltin->index];
-    if (!inputLayout)
-    {
-      const auto attributes = engineDrawVertAttributes();
-      inputLayout = m_device.device().createInputLayout(
-        attributes.data(), std::uint32_t(attributes.size()), desc.VS);
-      if (!inputLayout)
-      {
-        m_inputLayouts.erase(vertexBuiltin->index);
-        return Error{"NVRHI cannot create the input layout"};
-      }
-    }
-    desc.inputLayout = inputLayout;
-  }
-
+void PipelineCompiler::recipeState(
+  const PipelineKey& key, nvrhi::GraphicsPipelineDesc& desc) const
+{
   switch (key.recipe)
   {
   case PipelineRecipe::Draw:
@@ -628,29 +725,6 @@ Result<GraphicsPipelineLookup> PipelineCompiler::makeGraphics(const PipelineKey&
     desc.renderState.blendState.targets[0] = nvrhi::BlendState::RenderTarget{};
     break;
   }
-
-  return framebuffer(key.framebuffer) | kdl::and_then([&](nvrhi::IFramebuffer* target) {
-           auto hook = std::function<void()>{};
-           {
-             const auto lock = std::scoped_lock{m_mutex};
-             hook = m_beforeCreateForTesting;
-           }
-           if (hook)
-           {
-             hook();
-           }
-           const auto started = std::chrono::steady_clock::now();
-           lookup.pipeline = m_device.device().createGraphicsPipeline(desc, target);
-           timePipeline(started);
-           if (!lookup.pipeline)
-           {
-             return Result<GraphicsPipelineLookup>{Error{fmt::format(
-               "NVRHI cannot create a pipeline of {}", programName(*builtin))}};
-           }
-           lookup.state = GraphicsPipelineLookup::State::Ready;
-           enable(builtin->index);
-           return Result<GraphicsPipelineLookup>{std::move(lookup)};
-         });
 }
 
 Result<ComputePipelineLookup> PipelineCompiler::makeCompute(const int program)
@@ -666,42 +740,54 @@ Result<ComputePipelineLookup> PipelineCompiler::makeCompute(const int program)
     return Error{disabledReason(reason)};
   }
 
+  // T0.6, T0.7: as makeGraphics
   auto lookup = ComputePipelineLookup{};
   auto desc = nvrhi::ComputePipelineDesc{};
-  const auto made =
-    expectedLayout(*builtin) | kdl::and_then([&](const ExpectedShaderLayout& expected) {
-      return shader(*builtin, ShaderStage::Compute, expected)
-             | kdl::and_then([&](nvrhi::ShaderHandle cs) {
-                 desc.CS = std::move(cs);
-                 return bindingLayouts(
-                   builtin->bindingLayout, expected.pushConstants, expected);
-               })
-             | kdl::transform([&](std::vector<nvrhi::BindingLayoutHandle> layouts) {
-                 lookup.bindingLayouts = std::move(layouts);
-               });
-    });
-  if (made.is_error())
-  {
-    reason = errorText(made);
-    disable(builtin->index, reason);
-    return Error{disabledReason(reason)};
-  }
-  for (const auto& layout : lookup.bindingLayouts)
-  {
-    desc.bindingLayouts.push_back(layout);
-  }
-  // TonemapPass.cpp:144-147, 196-199
-  const auto started = std::chrono::steady_clock::now();
-  lookup.pipeline = m_device.device().createComputePipeline(desc);
-  timePipeline(started);
-  if (!lookup.pipeline)
-  {
-    return Error{
-      fmt::format("NVRHI cannot create a pipeline of {}", programName(*builtin))};
-  }
-  lookup.state = ComputePipelineLookup::State::Ready;
-  enable(builtin->index);
-  return lookup;
+  return expectedLayout(*builtin)
+         | kdl::and_then([&](const ExpectedShaderLayout& expected) {
+             return unlessStopping() | kdl::and_then([&]() {
+                      return shader(*builtin, ShaderStage::Compute, expected);
+                    })
+                    | kdl::and_then([&](nvrhi::ShaderHandle cs) {
+                        desc.CS = std::move(cs);
+                        return unlessStopping();
+                      })
+                    | kdl::and_then([&]() {
+                        return bindingLayouts(
+                          builtin->bindingLayout, expected.pushConstants, expected);
+                      });
+           })
+         | kdl::or_else(
+           [&](const Error& e) -> Result<std::vector<nvrhi::BindingLayoutHandle>> {
+             if (stopped(e))
+             {
+               return e;
+             }
+             disable(builtin->index, e.msg);
+             return Error{disabledReason(e.msg)};
+           })
+         | kdl::and_then([&](std::vector<nvrhi::BindingLayoutHandle> layouts) {
+             lookup.bindingLayouts = std::move(layouts);
+             for (const auto& layout : lookup.bindingLayouts)
+             {
+               desc.bindingLayouts.push_back(layout);
+             }
+             return unlessStopping();
+           })
+         | kdl::and_then([&]() -> Result<ComputePipelineLookup> {
+             // TonemapPass.cpp:144-147, 196-199
+             const auto started = std::chrono::steady_clock::now();
+             lookup.pipeline = m_device.device().createComputePipeline(desc);
+             timePipeline(started);
+             if (!lookup.pipeline)
+             {
+               return Error{fmt::format(
+                 "NVRHI cannot create a pipeline of {}", programName(*builtin))};
+             }
+             lookup.state = ComputePipelineLookup::State::Ready;
+             enable(builtin->index);
+             return std::move(lookup);
+           });
 }
 
 RenderPipelines::RenderPipelines()

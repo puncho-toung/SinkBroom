@@ -129,6 +129,30 @@ TEST_CASE("ShaderReflection")
       compareReflection(noPush, *engineExpectedLayout(row(EngineBuiltinDepth), true)));
   }
 
+  SECTION("T0.5: every item of the table declared by some stage")
+  {
+    // interaction.ps declares all of the table's items; depth.vs pushes its constants
+    const auto interaction = *engineExpectedLayout(row(EngineBuiltinInteraction), false);
+    CHECK_FALSE(compareLayoutCoverage({interactionPixelShader()}, interaction));
+    CHECK_FALSE(compareLayoutCoverage(
+      {depthVertexShader()}, *engineExpectedLayout(row(EngineBuiltinDepth), true)));
+    // a table item no stage declares: one stage leaves out a texture, then both
+    auto fewer = interactionPixelShader();
+    fewer.bindings.erase(fewer.bindings.begin() + 2);
+    CHECK_FALSE(compareLayoutCoverage({fewer, interactionPixelShader()}, interaction));
+    const auto missing = compareLayoutCoverage({fewer}, interaction);
+    REQUIRE(missing);
+    CHECK_THAT(
+      *missing, Catch::Matchers::ContainsSubstring("set 1 binding 1 (a sampled image)"));
+    // pushed constants no stage declares
+    auto noPush = depthVertexShader();
+    noPush.pushConstants = std::nullopt;
+    const auto unpushed = compareLayoutCoverage(
+      {noPush}, *engineExpectedLayout(row(EngineBuiltinDepth), true));
+    REQUIRE(unpushed);
+    CHECK_THAT(*unpushed, Catch::Matchers::ContainsSubstring("no stage declares"));
+  }
+
   SECTION("a swapped member in the table disables the pass")
   {
     auto expected = *engineExpectedLayout(row(EngineBuiltinInteraction), false);

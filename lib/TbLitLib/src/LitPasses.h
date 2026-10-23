@@ -163,6 +163,19 @@ struct LitDrawRecord
   nvrhi::Rect scissor;
 };
 
+// DX.5: the state bits of an interaction draw with this depth function (EQUAL, LESS for
+// the translucent list): additive RGB, alpha overwritten, no depth write, stencil
+// ALWAYS (D75)
+std::uint64_t interactionStateBits(std::uint64_t depthFunc);
+
+/**
+ * DX.5: the lit passes' pipelines that every lit scene draws with, as their first draws
+ * ask for them against the HDR target and this depth format: the depth prepass
+ * (builtin/depth, GLS_DEFAULT), a perforated surface's (texture_color, state 0) and the
+ * interaction programs' four (interaction and PBR interaction, EQUAL and LESS). Pure.
+ */
+std::vector<PipelineKey> litStartPipelineKeys(nvrhi::Format depthFormat);
+
 /**
  * LP2.2a (§3.8 passes 1 and 7, C14, C27, D74-D77): the frame's lit passes into hdrFBO,
  * as DrawViewInternal draws them up to the interactions (SC201): ZeroUniforms, the view's
@@ -288,6 +301,9 @@ public:
   bool lightTrianglesBusy() const;
   const LitFrameStats& lastStats() const;
   const RenderParms& parms() const;
+  // U2.6, render thread: the volatile constant buffers' bytes, every version (NVRHI's
+  // aligned size times maxVersions)
+  std::uint64_t volatileBufferBytes() const;
 
   // teardown step 2: every handle
   void releaseAll();

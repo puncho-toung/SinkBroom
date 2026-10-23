@@ -518,31 +518,43 @@ bool closeArea(const double a, const double b, const double relative)
 /**
  * Z.2: the work other threads of the process have pending is done first, so that what
  * they free or keep does not fall between two checkpoints: Qt's deferred deletes and
- * posted events on this thread, and the global thread pool's tasks.
+ * posted events on this thread, and the global thread pool's tasks (T0.13: within 5 s;
+ * false when the pool did not finish).
  */
-void settleOtherThreads()
+bool settleOtherThreads()
 {
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
   QCoreApplication::processEvents();
-  QThreadPool::globalInstance()->waitForDone();
+  const auto done = QThreadPool::globalInstance()->waitForDone(5000);
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  return done;
 }
 
 /**
  * Runs f between two settled checkpoints of the CRT's debug heap, which covers every
  * thread of the process, and returns how many more normal blocks it holds after than
- * before (fewer is negative), with the statistics dumped when it holds more.
+ * before (fewer is negative), with the statistics dumped when it holds more. T0.13: a
+ * second settle and count after the second checkpoint finds the same count, so that no
+ * other thread was still freeing or allocating between them (frees by another thread
+ * would hide a leak); nothing is asserted between the checkpoints.
  */
 template <typename F>
 long long heapBlockGrowth(F&& f)
 {
-  settleOtherThreads();
+  const auto settledBefore = settleOtherThreads();
   _CrtMemState before;
   _CrtMemCheckpoint(&before);
   f();
-  settleOtherThreads();
+  const auto settledAfter = settleOtherThreads();
   _CrtMemState after;
   _CrtMemCheckpoint(&after);
+  const auto settledAgain = settleOtherThreads();
+  _CrtMemState again;
+  _CrtMemCheckpoint(&again);
+  CHECK(settledBefore);
+  CHECK(settledAfter);
+  CHECK(settledAgain);
+  CHECK(again.lCounts[_NORMAL_BLOCK] == after.lCounts[_NORMAL_BLOCK]);
   const auto growth = static_cast<long long>(after.lCounts[_NORMAL_BLOCK])
                       - static_cast<long long>(before.lCounts[_NORMAL_BLOCK]);
   if (growth > 0)

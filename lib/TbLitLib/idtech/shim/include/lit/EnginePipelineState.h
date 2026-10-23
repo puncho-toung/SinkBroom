@@ -35,7 +35,7 @@
 
 // LP2.0 (C24, P2.25): two engine functions copied verbatim into TbLitIdLib, behind a
 // facade any thread may call, because they read nothing but their arguments (mirror.json
-// M-PIPE-PART-01, M-IMG-PART-04 with their pure-function entries): the GL state bits as
+// M-PIPE-PART-01, M-IMG-PART-02 with their pure-function entries): the GL state bits as
 // NVRHI render state, and an image level's row pitch. With GLState.h's bits that the
 // preview's passes compose, checked against the copied header where the copies compile.
 

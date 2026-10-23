@@ -59,6 +59,10 @@ struct SessionOptions
   // engine's shader blobs; empty or relative: no shader loads, every program is disabled
   // (D9, T0.4)
   std::filesystem::path gamePath;
+  // DX.5: the pipelines every lit scene draws with are asked for at Start (phase B), so
+  // that the compile thread makes them while the scene loads; tests that order the
+  // compile thread's jobs themselves turn it off
+  bool requestStartPipelines = true;
 };
 
 // D9: a program the compile thread was asked for, and whether the preview can draw with
@@ -575,6 +579,10 @@ public:
   // U2.3, any thread: the allocation limit the headroom (AllocationHeadroom) counts from
   // instead of the device's maxMemoryAllocationCount; 0 for the device's
   void setAllocationLimitForTesting(std::uint32_t limit);
+  // U2.6, any thread: the budget the session's GPU memory account is compared with, at
+  // the first frame and at every settled frame, instead of the device's
+  // (VK_EXT_memory_budget); 0 for the device's
+  void setVramBudgetForTesting(std::uint64_t bytes);
   /**
    * U2.3, any thread: while set, every device memory allocation in a type that is
    * host-visible and not device-local fails as a driver's out-of-memory would (NVRHI's

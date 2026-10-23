@@ -77,12 +77,12 @@
       "name": "SPIRV-Reflect",
       "sinkbroom": {
         "file": "cmake/dependencies/spirv-reflect.cmake",
-        "line": 14
+        "line": 17
       },
       "engine": null,
       "commit": "281b55edb67b1f2e61e1dc92fdc42a650da05d83",
       "version": "vulkan-sdk-1.4.304.0",
-      "note": "a SinkBroom pin (R5.23, P2.23): the engine reflects nothing; KhronosGroup/SPIRV-Reflect at the tag of the Vulkan SDK line of the Vulkan-Headers pin, download only; the SpirvReflect library is spirv_reflect.c with its own include/spirv/unified1/spirv.h"
+      "note": "a SinkBroom pin (R5.23, P2.23): the engine reflects nothing; KhronosGroup/SPIRV-Reflect at the tag of the Vulkan SDK line of the Vulkan-Headers pin, download only; the SpirvReflect library is spirv_reflect.c with its own include/spirv/unified1/spirv.h; T0.11: pinned by this commit, not the tag, with GIT_SUBMODULES \"\" (its third_party/googletest is not cloned)"
     }
   ],
   "entries": [
@@ -2591,11 +2591,11 @@
         },
         {
           "file": "lib/TbLitLib/CMakeLists.txt",
-          "symbol": "target_link_options(TbLitLib INTERFACE ...)"
+          "symbol": "target_link_options of TbLitLib: INTERFACE /OPT:REF"
         },
         {
           "file": "lib/TbLitLib/CMakeLists.txt",
-          "symbol": "target_compile_options(TbLitLib PRIVATE -ffp-contract=off ...) (V.4)"
+          "symbol": "target_compile_options of TbLitLib (V.4): PRIVATE -ffp-contract=off"
         }
       ],
       "cxxStandard": 17,
@@ -5837,7 +5837,7 @@
         },
         {
           "file": "lib/TbLitLib/src/GameFileSource.cpp",
-          "symbol": "GameFileSource::origin"
+          "symbol": "GameFileSource::probeFile"
         },
         {
           "file": "lib/TbLitLib/src/GameFileSource.cpp",
@@ -8815,6 +8815,89 @@
       "note": "C24: the six functions read only their arguments and the file's constant statics (M-LIGHT-STATIC-01..03), write only their outputs, allocate nothing and call no SIMDProcessor; any thread, the CPU pool included. Inverse, ProjectedBounds and GetFrustumCorners divide through _mm_rcp32_ps (two Newton steps on _mm_rcp_ps), whose 12-bit estimate is the CPU's own (Intel and AMD differ), so their last bits are the engine's on the same CPU only. Inverse leaves its output unwritten when it fails; the facade zeroes it first and returns null"
     },
     {
+      "id": "M-VIEW-PURE-01",
+      "kind": "pure-function",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            947,
+            990
+          ],
+          "anchor": "idRenderMatrix::Transpose",
+          "sha256": "bc3ded2416baed95030387c8705bacc906cd0c340c476a4fc9e98a15be2a27fc"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            1807,
+            1972
+          ],
+          "anchor": "idRenderMatrix::CullBoundsToMVPbits",
+          "sha256": "52aa0913483455978671265d2517bb26eaa4e749fb5458a1f0d77486a9b70ed6"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.h",
+          "lines": [
+            550,
+            554
+          ],
+          "anchor": "idRenderMatrix::CullBoundsToMVP",
+          "sha256": "a92946c33172ed649b8d951fd888b1696ed4632dbabf3b5e0a459d915e86ca6a"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            3173,
+            3190
+          ],
+          "anchor": "LocalNearClipCenterFromMVP",
+          "sha256": "9a3d9dadf1ce25c98edeca2da29e62695985f237e2827592850e2023224a59c4"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            3201,
+            3320
+          ],
+          "anchor": "ClipHomogeneousPolygonToSide_SSE2",
+          "sha256": "f3d6d8b513fc7a5a64714c141875975503074aa57e3f38578359335acac448dc"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            3329,
+            3345
+          ],
+          "anchor": "ClipHomogeneousPolygonToUnitCube_SSE2",
+          "sha256": "a08fc523c6d0ea1d7d9383fdab89a7db673af6ffee66c3e3ac71a45463443cd4"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            3455,
+            3708
+          ],
+          "anchor": "idRenderMatrix::ProjectedFullyClippedBounds",
+          "sha256": "6ec87038e915b17117c3ad21b003df85ded09c96eb9be28e5cbecf5e496372ee"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineMatrixTranspose, engineCullBoundsToMvp, engineProjectedFullyClippedBounds"
+        }
+      ],
+      "commonCalls": [
+        "none: the ranges and the file's helpers they call (LocalNearClipCenterFromMVP, the SSE2 clip of a homogeneous polygon) call neither common nor idLib::common"
+      ],
+      "asserts": [
+        "RenderMatrix.cpp:949 Transpose's &src != &out (the facade passes a copy and a new output)",
+        "RenderMatrix.cpp:3203 the clip's newPoints != points, :3331 numPoints < 10 (four points per box face)"
+      ],
+      "note": "LP2 fix round (U1.4, U2.10; A25: the entry names the thread): the render thread runs these copied members through EngineLight.cpp's facades: litViewOf's projection and mvp (LitView.cpp, Transpose), the frontend's light and surface culls (LitFrontend.cpp, CullBoundsToMVP and CullBoundsToMVPbits) and the light scissor (LitPasses.cpp, ProjectedFullyClippedBounds); the CPU pool runs none of them. C24's five conditions: (1) no common or idLib::common call; (2) no FatalError site; (3) no SIMDProcessor (the SSE2 intrinsics are inline); (4) they allocate nothing (fixed ALIGNTYPE16 arrays on the stack); (5) their only statics are RenderMatrix.cpp's constant ones (vector_float_*, boxPolygonVertices; M-LIGHT-STATIC-*). Pure: they read their arguments and write their outputs only"
+    },
+    {
       "id": "M-LIGHT-STATIC-01",
       "kind": "static",
       "engine": [
@@ -10103,11 +10186,11 @@
           "symbol": "engineBitsForFormat"
         },
         {
-          "file": "lib/TbLitLib/include/lit/ImageCache.h",
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineImageEnums.h",
           "symbol": "engine_image"
         }
       ],
-      "note": "LP1c.1 (SC99): DeriveOpts' format and colour format per usage, the engine as built (STANDALONE off: TD_LIGHT is RGB565, M-IMG-DIFF-02); an unnamed usage asserts in the engine and gets RGBA8. The mip count: 1 for a linear or nearest filter, else one per halving, stopping at a DXT1, DXT5, BC6H or ETC1 level whose size is not a multiple of 4 (the engine-written fixture caches agree). BitsForFormat as is (0 where the engine asserts)"
+      "note": "LP1c.1 (SC99): DeriveOpts' format and colour format per usage, the engine as built (STANDALONE off: TD_LIGHT is RGB565, M-IMG-DIFF-02); an unnamed usage asserts in the engine and gets RGBA8. The mip count: 1 for a linear or nearest filter, else one per halving, stopping at a DXT1, DXT5, BC6H or ETC1 level whose size is not a multiple of 4 (the engine-written fixture caches agree). BitsForFormat as is (0 where the engine asserts) U1.5: engine_image's constants live in TbLitIdLib's facade lit/EngineImageEnums.h, each static_asserted against the copied Image.h and Material.h enums in ShimPipelineState.cpp."
     },
     {
       "id": "M-IMG-05",
@@ -10148,7 +10231,7 @@
         },
         {
           "file": "lib/TbLitLib/src/ImageCache.cpp",
-          "symbol": "expandRgb565"
+          "symbol": "expandEngineRgb565"
         },
         {
           "file": "lib/TbLitLib/src/ImageCache.cpp",
@@ -11648,7 +11731,7 @@
         },
         {
           "file": "lib/TbLitLib/src/MaterialService.cpp",
-          "symbol": "MaterialService::Worker::resize"
+          "symbol": "MaterialService::Worker::measureStep"
         }
       ],
       "note": "LP1c.2 (C21): the engine loads an image once per level and again on reloadImages; the preview re-reads on its 1 s poll: the loose files each published editor-image size and each image slot was read from, or that the time call found, are probed (no body read), and one whose time, size or change stamp changed makes the slot read again (resolveImage) and the material's size measured again, its kept Ready size dropped so that the new size or the loss of the file is published under every name that shares the entry. Files in containers are not polled (their tables are read once). A Ready size that changes to another Ready size reaches the chunks only when they are rebuilt for another reason: SceneGeometry rebuilds provisional (Default) chunks when their size turns Ready (a follow-up) LP1c fix (S2.5, S2.7): SceneGeometry keeps the size each material's cells were built with and builds them again on any change of the table's size (Default to Ready, Ready to another Ready, Ready back to Default for a deleted texture); the poll re-probes a slice of at most 5 ms per poll, going on where it stopped, with stop checks; a measure that the poll asks for is queued (M-IMG-DIFF-08)"
@@ -12692,11 +12775,11 @@
           "symbol": "engineComponentMapping"
         },
         {
-          "file": "lib/TbLitLib/include/lit/ImageCache.h",
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineImageEnums.h",
           "symbol": "engine_image"
         }
       ],
-      "note": "LP2.0 (SC265, SC266): textureFormat_t to NVRHI formats (DEPTH_STENCIL D24S8 when the device has it, else D32S8; X16 and Y16_X16 keep the default RGBA8_UINT; BC7, ETC1 and unknown formats are the engine's idLib::Error, nullopt) and the swizzles (GREEN_ALPHA 111G, LUM8 RRR1, L8A8 RRRG, ALPHA 111R, INT8 RRRR, R11G11B10F RGB1). DeriveOpts' mip rule (SC270) is ImageCache.h's engineMipLevels (LP1c.1); the block-size round-up (:473-477) and the uploads are LP2.1's"
+      "note": "LP2.0 (SC265, SC266): textureFormat_t to NVRHI formats (DEPTH_STENCIL D24S8 when the device has it, else D32S8; X16 and Y16_X16 keep the default RGBA8_UINT; BC7, ETC1 and unknown formats are the engine's idLib::Error, nullopt) and the swizzles (GREEN_ALPHA 111G, LUM8 RRR1, L8A8 RRRG, ALPHA 111R, INT8 RRRR, R11G11B10F RGB1). DeriveOpts' mip rule (SC270) is ImageCache.h's engineMipLevels (LP1c.1); the block-size round-up (:473-477) and the uploads are LP2.1's U1.5: engine_image's constants live in TbLitIdLib's facade lit/EngineImageEnums.h, each static_asserted against the copied Image.h and Material.h enums in ShimPipelineState.cpp."
     },
     {
       "id": "M-TABLE-08",
@@ -13009,7 +13092,7 @@
           "symbol": "tb::lit::engineRowPitch"
         }
       ],
-      "note": "LP2.0: the copied code, called through the facade lit/EnginePipelineState.h, reads only its arguments and the copied GLState.h and Image.h constants, so any thread runs it (the compile thread). C24's five conditions: (1) it calls no common or idLib::common; (2) it has no FatalError site (its default branches are asserts); (3) no SIMDProcessor; (4) it allocates nothing; (5) it has no statics"
+      "note": "LP2.0: the copied code, called through the facade lit/EnginePipelineState.h, reads only its arguments and the copied GLState.h and Image.h constants, so any thread may run it; the render thread does (TextureUploads, through engineRowPitch; U2.10). C24's five conditions: (1) it calls no common or idLib::common; (2) it has no FatalError site (its default branches are asserts); (3) no SIMDProcessor; (4) it allocates nothing; (5) it has no statics"
     },
     {
       "id": "M-PIPE-02",
@@ -13325,9 +13408,25 @@
         {
           "file": "lib/TbLitLib/src/PipelineCompiler.cpp",
           "symbol": "PipelineCompiler::disable"
+        },
+        {
+          "file": "lib/TbLitLib/src/PipelineCompiler.cpp",
+          "symbol": "PipelineCompiler::request"
+        },
+        {
+          "file": "lib/TbLitLib/src/PipelineCompiler.cpp",
+          "symbol": "PipelineCompiler::unlessStopping"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "litStartPipelineKeys"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::startPipelineKeys"
         }
       ],
-      "note": "LP2.0 (D71, D42, D9, R4-2.21): the engine loads every builtin's shaders at start and makes a pipeline on its render thread at first use, against the live framebuffer the key points to. The preview makes shaders, layouts and pipelines lazily on its compile thread (a StackThread of 8 MB, P2.27), against 1x1 format-only framebuffers of its own, one per format set; a request returns Pending at once and the made pipeline triggers a frame (D77). No pipeline cache file is read or written (D42). A missing blob or permutation, or a reflection mismatch, disables the program for the session with the field named and one warning, where the engine calls FatalError"
+      "note": "LP2.0 (D71, D42, D9, R4-2.21): the engine loads every builtin's shaders at start and makes a pipeline on its render thread at first use, against the live framebuffer the key points to. The preview makes shaders, layouts and pipelines lazily on its compile thread (a StackThread of 8 MB, P2.27), against 1x1 format-only framebuffers of its own, one per format set; a request returns Pending at once and the made pipeline triggers a frame (D77). No pipeline cache file is read or written (D42). A missing blob or permutation, or a reflection mismatch, disables the program for the session with the field named and one warning, where the engine calls FatalError LP2 fix round: T0.8: an NVRHI Error raised on the compile thread (the validation wrapper's message, or a driver failure NVRHI reports) reaches the device's message callback and ends the session; a key is Failed only for a disabled program or a null pipeline without a message; in Debug a failing vkCreateGraphicsPipelines asserts inside NVRHI (ASSERT_VK_OK). T0.7: a Stop is seen before each creation step (a shader, the binding layouts, the input layout, the framebuffer, the pipeline), so it waits for at most one driver call; the stopped job's key stays Pending and disables nothing. DX.5: at Start (phase B) a session with an absolute game path asks for the ten pipelines every lit scene draws with (depth and texture_color at state 0, interaction and PBR interaction with EQUAL and LESS, tonemapping, the blit, histogram and exposure), where the engine makes each at its first draw."
     },
     {
       "id": "M-PIPE-DEFECT-01",
@@ -13491,7 +13590,7 @@
           "symbol": "RenderThread::createFrameResources (UploadChunkBytes)"
         }
       ],
-      "note": "LP2.1 step 3 (S8, D36, D78): the engine appends a level's static geometry to one fixed static vertex and index buffer (FatalError when full) and never frees a range until the level unloads; the preview edits the map live, so its chunks live in 64 MB vertex and index arenas with a range allocator whose freed ranges are reused only once the frame that freed them has finished, another arena of the kind added when none holds a chunk, and at most 32 MB uploaded per frame (the rest waits; the frame is unconverged, D77). The render thread's command list uses 32 MB upload chunks; the engine's r_vkUploadBufferSizeMB is 64. The vertex layout (idDrawVert, C4) and the 16-bit indexes are the engine's"
+      "note": "LP2.1 step 3 (S8, D36, D78): the engine appends a level's static geometry to one fixed static vertex and index buffer (FatalError when full) and never frees a range until the level unloads; the preview edits the map live, so its chunks live in 64 MB vertex and index arenas with a range allocator whose freed ranges are reused only once the frame that freed them has finished, another arena of the kind added when none holds a chunk, and at most 32 MB uploaded per frame (the rest waits; the frame is unconverged, D77). The render thread's command list uses 32 MB upload chunks; the engine's r_vkUploadBufferSizeMB is 64. The vertex layout (idDrawVert, C4) and the 16-bit indexes are the engine's U2.9 (LP2 fix round, deferred to LP6's compaction): arenas never shrink before teardown, and a rebuild of more than an arena's free space cannot reuse its own freed ranges in that frame (a material reload changes every appearanceVersion), so another arena of the kind is added and stays: up to twice the geometry plus 64 MB per kind (admin stayed at 2 x 64 MB); GpuMemoryAccount counts it in arenaBytes."
     },
     {
       "id": "M-IMG-DIFF-11",
@@ -14041,7 +14140,7 @@
           "symbol": "engineMatrixTranspose, engineModelMatrix, engineGlMatrixMultiply, engineCullBoundsToMvp, engineProjectedFullyClippedBounds"
         }
       ],
-      "note": "LP2.2a step 1 (SC227, A16): projectionRenderMatrix = Transpose( R_SetupProjectionMatrix ), the world mvp projectionRenderMatrix * Transpose( R_SetupViewMatrix ), an entity's modelMatrix R_AxisToModelMatrix of its axis and its pivot (origin + __brushOrigin, ChunkEntityState::modelOrigin), modelViewMatrix R_MatrixMultiply( modelMatrix, the world's ), mvp projectionRenderMatrix * Transpose( modelViewMatrix ), modelRenderMatrix CreateFromOriginAxis, all through the copied idRenderMatrix and the transcribed GL functions so the float order is the engine's; RB_SetMVP writes the rows; worldspawn and test chunks take the identity. The shim's Transpose, CullBoundsToMVP and ProjectedFullyClippedBounds call the copy (pure, any thread)"
+      "note": "LP2.2a step 1 (SC227, A16): projectionRenderMatrix = Transpose( R_SetupProjectionMatrix ), the world mvp projectionRenderMatrix * Transpose( R_SetupViewMatrix ), an entity's modelMatrix R_AxisToModelMatrix of its axis and its pivot (origin + __brushOrigin, ChunkEntityState::modelOrigin), modelViewMatrix R_MatrixMultiply( modelMatrix, the world's ), mvp projectionRenderMatrix * Transpose( modelViewMatrix ), modelRenderMatrix CreateFromOriginAxis, all through the copied idRenderMatrix and the transcribed GL functions so the float order is the engine's; RB_SetMVP writes the rows; worldspawn and test chunks take the identity. The shim's Transpose, CullBoundsToMVP and ProjectedFullyClippedBounds call the copy (pure, on the render thread: M-VIEW-PURE-01)"
     },
     {
       "id": "M-VIEW-03",
@@ -14440,7 +14539,7 @@
           "symbol": "buildFrontendLists"
         }
       ],
-      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet: the portal rects and the \"area not connected to the view\" cull (LP4), r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), material LODs, and the shadow LOD (K26, LP3). The static interactions' light triangles, which P2.26 counted here (\"its triangles outside the volume add nothing\"), are mirrored since the LP2 fix round (DX.2, M-INTER-01): LP2.3 found the volume boundary's LIGHT_CLIP_EPSILON dropping whole faces the preview lit"
+      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet: the portal rects and the \"area not connected to the view\" cull (LP4), r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), material LODs, and the shadow LOD (K26, LP3). The static interactions' light triangles, which P2.26 counted here (\"its triangles outside the volume add nothing\"), are mirrored since the LP2 fix round (DX.2, M-INTER-01): LP2.3 found the volume boundary's LIGHT_CLIP_EPSILON dropping whole faces the preview lit U3.9 (LP2 fix round, recorded; mirrored in LP4): a light whose scissor comes out empty is skipped (LitFrontend.cpp), where the engine keeps it and DrawElementsWithCounters draws it unscissored (RenderBackend_NVRHI.cpp:528-535); no pixel differs today (outside the volume the border sampler gives black), and only LP4's portal rects can make the scissor empty."
     },
     {
       "id": "M-FRONT-DIFF-03",
@@ -14852,7 +14951,7 @@
           "symbol": "EngineFrameDefaults::constantBufferVersions"
         }
       ],
-      "note": "LP2.2a step 4 (D76, SC241): a layout that pushes nothing (DRAW_INTERACTION on this device; CONSTANT_BUFFER_ONLY and TEXTURE on AMD, every one above the push-constant limit) gets CreateVolatileConstantBufferDesc( rpBufSize, \"RenderParams_<layout>\", 8192 ), made by the render thread at its first write (byteSize, isConstantBuffer, isVolatile, maxVersions, debugName, as nvrhi::utils makes it)"
+      "note": "LP2.2a step 4 (D76, SC241): a layout that pushes nothing (DRAW_INTERACTION on this device; CONSTANT_BUFFER_ONLY and TEXTURE on AMD, every one above the push-constant limit) gets CreateVolatileConstantBufferDesc( rpBufSize, \"RenderParams_<layout>\", 8192 ), made by the render thread at its first write (U1.10: through nvrhi::utils::CreateVolatileConstantBufferDesc itself, as is the tonemap passes' ToneMappingConstants buffer, TonemapPass.cpp)"
     },
     {
       "id": "M-PASS-DIFF-01",
@@ -15370,9 +15469,114 @@
         {
           "file": "lib/TbLitLib/src/Projection.cpp",
           "symbol": "parityCameraOfLine, trenchBroomFovOfGFov"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineAnglesToMat3"
         }
       ],
-      "note": "LP2.3 (C29, P2.6): a parity camera line read back as the engine's player view has it after setviewpos: direction and up are idAngles( pitch, yaw, 0 ).ToMat3()'s rows 0 and 2 in float (idMath::SinCos is sinf and cosf on x64); the fov is S39's inverse of the integer g_fov (the cvar keeps its integer part), a TrenchBroom fov whose gFovOf( verticalFovOf() ) is exactly that integer in float (g_fov 90: 73.739795; 122 of the 179 integers have one), so CalcFov and R_SetupProjectionMatrix get the engine's base_fov. The line's position is the engine's render-view origin: TOOLS/lit-preview/parity.py places the eye g_viewNodalX (3) behind it along the yaw (GetViewPos: -6 + 6 in z at pitch 0) and passes setviewpos z - 0.5 (Cmd_SetViewpos_f subtracts pm_normalviewheight - 0.25, Teleport adds CM_CLIP_EPSILON 0.25), with the eye 96 above the floor so that GetFloorPos's 16-unit trace finds no floor; getviewpos checks every row"
+      "note": "LP2.3 (C29, P2.6): a parity camera line read back as the engine's player view has it after setviewpos: direction and up are idAngles( pitch, yaw, 0 ).ToMat3()'s rows 0 and 2, from the copied code through the facade engineAnglesToMat3 (M-GEO-PURE-01; U1.6: Projection.cpp transcribes nothing of it); the fov is S39's inverse of the integer g_fov (the cvar keeps its integer part), a TrenchBroom fov whose gFovOf( verticalFovOf() ) is exactly that integer in float (g_fov 90: 73.739795; 122 of the 179 integers have one), so CalcFov and R_SetupProjectionMatrix get the engine's base_fov. The line's position is the engine's render-view origin: TOOLS/lit-preview/parity.py places the eye g_viewNodalX (3) behind it along the yaw (GetViewPos: -6 + 6 in z at pitch 0) and passes setviewpos z - 0.5 (Cmd_SetViewpos_f subtracts pm_normalviewheight - 0.25, Teleport adds CM_CLIP_EPSILON 0.25), with the eye 96 above the floor so that GetFloorPos's 16-unit trace finds no floor; getviewpos checks every row"
+    },
+    {
+      "id": "M-TEST-TONE-01",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/shaders/builtin/post/histogram.cs.hlsl",
+          "lines": [
+            46,
+            109
+          ],
+          "anchor": "Luminance, the fixed-point bins and main",
+          "sha256": "6c2b0a27ff11b5b191abe93ba7b1416fd0a6cce20521dbd13773a122d851af08"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/TonemapModel.cpp",
+          "symbol": "modelHistogram, modelHistogramOfImage"
+        }
+      ],
+      "note": "LP2 fix round (U1.7), test only: TbLitLibTest's CPU model of the histogram pass, against which the tonemap tests and the parity rows' exposure (U3.4) check the GPU's: Luminance's weights, log2 times the scale plus the bias saturated into HISTOGRAM_BINS - 1 bins, the two neighbours weighted in 1/64 fixed point (FIXED_POINT_FRAC_BITS 6). NVIDIA Donut code under the MIT licence (TonemapModel.h's notice). Never in the product"
+    },
+    {
+      "id": "M-TEST-TONE-02",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/shaders/builtin/post/exposure.cs.hlsl",
+          "lines": [
+            42,
+            101
+          ],
+          "anchor": "the fixed point and main",
+          "sha256": "3dde27ad4e6c1011a88f86629bf3356c44400b7456fbeaca522f1a7f15f25fb8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/TonemapModel.cpp",
+          "symbol": "modelExposure"
+        }
+      ],
+      "note": "LP2 fix round (U1.7), test only: the exposure pass's CPU model: the percentile window over the cumulative bins, the bins' luminances exp2( i / bins * scale + bias ) weighted by their counts, clamped to the adapted luminance bounds, then the adaptation toward it over the frame time. Never in the product"
+    },
+    {
+      "id": "M-TEST-TONE-03",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/shaders/builtin/post/tonemapping.ps.hlsl",
+          "lines": [
+            49,
+            83
+          ],
+          "anchor": "ACESFilm, the luminance and ConvertToLDR",
+          "sha256": "caa933a65765ab1d8589294df3442ff90806d5710931da3a69586433b1956bb2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/TonemapModel.cpp",
+          "symbol": "modelTonemap"
+        }
+      ],
+      "note": "LP2 fix round (U1.7), test only: the tonemapping pass without a colour LUT: ConvertToLDR (the exposure scale times the luminance over the adapted one, then ACESFilm), the value the tests compare the LDR readback with exactly (U3.10). Never in the product"
+    },
+    {
+      "id": "M-TEST-MEASURE-01",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            69,
+            97
+          ],
+          "anchor": "ComputeAxisBase",
+          "sha256": "8f9c48a07971a6896f6e880f24e2483a7eb30b4c09a72c6c8a0895cdc85a1cf6"
+        },
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            104,
+            131
+          ],
+          "anchor": "idMapBrushSide::GetTextureVectors",
+          "sha256": "c0436d67935fea679a7262d31e159bf1db51f1a6ead9459c76545982f2aec264"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbUiLib/test/src/tst_LitMeasure.cpp",
+          "symbol": "computeAxisBase, valveFace"
+        }
+      ],
+      "note": "LP2 fix round (DX.6), test only: the [.][measure] harness converts a retail map's brushDef3 sides to Valve 220 faces as the engine's ConvertToValve220Format would: ComputeAxisBase in the engine's float arithmetic and the brush primitives' texture vectors of GetTextureVectors; its entity axes come from the copied idAngles::ToMat3 through engineAnglesToMat3 (M-GEO-PURE-01), no longer a copy of its own. Never in the product"
     },
     {
       "id": "M-PARITY-DIFF-01",

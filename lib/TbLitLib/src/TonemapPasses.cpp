@@ -35,6 +35,8 @@
 
 #include "kd/result.h"
 
+#include <nvrhi/utils.h>
+
 #include <algorithm>
 #include <cmath>
 
@@ -229,20 +231,8 @@ TonemapFrameStats TonemapPasses::record(const TonemapFrameInputs& inputs)
   // the pipelines (D71) and what the passes bind (C14)
   const auto histogram = pipelines.compute(EngineBuiltinHistogram);
   const auto exposure = pipelines.compute(EngineBuiltinExposure);
-  const auto tonemap = pipelines.graphics(PipelineKey{
-    PipelineRecipe::Tonemap,
-    EngineBuiltinTonemapping,
-    0,
-    0,
-    0.0f,
-    FramebufferFormats{nvrhi::Format::RGBA8_UNORM, frame.depthFormat()}});
-  const auto blit = pipelines.graphics(PipelineKey{
-    PipelineRecipe::Blit,
-    EngineBuiltinBlit,
-    0,
-    0,
-    0.0f,
-    FramebufferFormats{inputs.target->getDesc().format, nvrhi::Format::UNKNOWN}});
+  const auto tonemap = pipelines.graphics(tonemapPipelineKey(frame.depthFormat()));
+  const auto blit = pipelines.graphics(blitPipelineKey(inputs.target->getDesc().format));
   const auto check = [&]<typename L>(const L& lookup) {
     if (lookup.state == L::State::Pending)
     {
@@ -530,6 +520,13 @@ const TonemapFrameStats& TonemapPasses::lastStats() const
   return m_stats;
 }
 
+std::uint64_t TonemapPasses::volatileBufferBytes() const
+{
+  return m_constantBuffer ? m_constantBuffer->getDesc().byteSize
+                              * m_constantBuffer->getDesc().maxVersions
+                          : 0;
+}
+
 void TonemapPasses::releaseAll()
 {
   m_constantBuffer = nullptr;
@@ -543,18 +540,38 @@ void TonemapPasses::clearTarget(const TonemapFrameInputs& inputs)
   m_stats.targetCleared = true;
 }
 
+PipelineKey tonemapPipelineKey(const nvrhi::Format depthFormat)
+{
+  return PipelineKey{
+    PipelineRecipe::Tonemap,
+    EngineBuiltinTonemapping,
+    0,
+    0,
+    0.0f,
+    FramebufferFormats{nvrhi::Format::RGBA8_UNORM, depthFormat}};
+}
+
+PipelineKey blitPipelineKey(const nvrhi::Format targetFormat)
+{
+  return PipelineKey{
+    PipelineRecipe::Blit,
+    EngineBuiltinBlit,
+    0,
+    0,
+    0.0f,
+    FramebufferFormats{targetFormat, nvrhi::Format::UNKNOWN}};
+}
+
 nvrhi::IBuffer* TonemapPasses::constantBuffer(nvrhi::IDevice& device)
 {
   // TonemapPass.cpp:68-74
   if (!m_constantBuffer)
   {
-    auto desc = nvrhi::BufferDesc{};
-    desc.byteSize = sizeof(EngineToneMappingConstants);
-    desc.debugName = "ToneMappingConstants";
-    desc.isConstantBuffer = true;
-    desc.isVolatile = true;
-    desc.maxVersions = TonemapConstantBufferVersions;
-    m_constantBuffer = device.createBuffer(desc);
+    // U1.10: CreateVolatileConstantBufferDesc, as TonemapPass.cpp calls it
+    m_constantBuffer = device.createBuffer(nvrhi::utils::CreateVolatileConstantBufferDesc(
+      sizeof(EngineToneMappingConstants),
+      "ToneMappingConstants",
+      TonemapConstantBufferVersions));
   }
   return m_constantBuffer.Get();
 }

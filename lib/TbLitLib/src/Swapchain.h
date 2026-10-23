@@ -31,6 +31,9 @@
 namespace tb::lit
 {
 
+// the format of the swapchain's images (B8G8R8A8_UNORM, the one the window must show)
+inline constexpr auto SwapchainImageFormat = nvrhi::Format::BGRA8_UNORM;
+
 /**
  * One swapchain generation (§3.1, S28): the swapchain, its image wrappers and its acquire
  * and present semaphores, created together and destroyed together. Destruction is split

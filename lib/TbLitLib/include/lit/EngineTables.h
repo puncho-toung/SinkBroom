@@ -474,11 +474,11 @@ struct EngineFrameDefaults
   // r_mathLightsEnabled "1" (:245): a light with math_enabled shades through the math
   // path (LP5)
   bool mathLightsEnabled = true;
-  // RenderInteractions' caps (RenderBackend.cpp:1758-1759): surfaces beyond them are
+  // RenderInteractions' caps (RenderBackend.cpp:1760-1761): surfaces beyond them are
   // dropped silently (idStaticList::Append)
   std::size_t maxInteractionsPerLight = 2048;
   std::size_t maxComplexInteractionsPerLight = 256;
-  // the volatile constant buffers' versions (RenderProgs.cpp:771)
+  // the volatile constant buffers' versions (RenderProgs.cpp:769)
   std::uint32_t constantBufferVersions = 8192;
 };
 inline constexpr auto EngineFrame = EngineFrameDefaults{};

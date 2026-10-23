@@ -36,6 +36,7 @@
 #include "precompiled.h"
 // clang-format on
 
+#include "lit/EngineImageEnums.h"
 #include "lit/EnginePipelineState.h"
 
 #include <nvrhi/nvrhi.h>
@@ -78,6 +79,64 @@ static_assert(engine_gls::CullTwoSided == GLS_CULL_TWOSIDED);
 static_assert(engine_gls::StencilFuncAlways == GLS_STENCIL_FUNC_ALWAYS);
 static_assert(engine_gls::MirrorView == GLS_MIRROR_VIEW);
 static_assert(engine_gls::Default == GLS_DEFAULT);
+
+// U1.5: engine_image's constants (lit/EngineImageEnums.h) are the copied Image.h's and
+// Material.h's enum values
+static_assert(engine_image::FormatNone == int(FMT_NONE));
+static_assert(engine_image::FormatRgba8 == int(FMT_RGBA8));
+static_assert(engine_image::FormatXrgb8 == int(FMT_XRGB8));
+static_assert(engine_image::FormatAlpha == int(FMT_ALPHA));
+static_assert(engine_image::FormatL8a8 == int(FMT_L8A8));
+static_assert(engine_image::FormatLum8 == int(FMT_LUM8));
+static_assert(engine_image::FormatInt8 == int(FMT_INT8));
+static_assert(engine_image::FormatDxt1 == int(FMT_DXT1));
+static_assert(engine_image::FormatDxt5 == int(FMT_DXT5));
+static_assert(engine_image::FormatDepth == int(FMT_DEPTH));
+static_assert(engine_image::FormatX16 == int(FMT_X16));
+static_assert(engine_image::FormatY16X16 == int(FMT_Y16_X16));
+static_assert(engine_image::FormatRgb565 == int(FMT_RGB565));
+static_assert(engine_image::FormatEtc1 == int(FMT_ETC1_RGB8_OES));
+static_assert(engine_image::FormatShadowArray == int(FMT_SHADOW_ARRAY));
+static_assert(engine_image::FormatRg16f == int(FMT_RG16F));
+static_assert(engine_image::FormatRgba16f == int(FMT_RGBA16F));
+static_assert(engine_image::FormatRgba32f == int(FMT_RGBA32F));
+static_assert(engine_image::FormatR32f == int(FMT_R32F));
+static_assert(engine_image::FormatR11g11b10f == int(FMT_R11G11B10F));
+static_assert(engine_image::FormatBc6h == int(FMT_BC6H));
+static_assert(engine_image::FormatBc7 == int(FMT_BC7));
+static_assert(engine_image::FormatR8f == int(FMT_R8F));
+static_assert(engine_image::FormatDepthStencil == int(FMT_DEPTH_STENCIL));
+static_assert(engine_image::FormatRgba16s == int(FMT_RGBA16S));
+static_assert(engine_image::ColorDefault == int(CFM_DEFAULT));
+static_assert(engine_image::ColorNormalDxt5 == int(CFM_NORMAL_DXT5));
+static_assert(engine_image::ColorYCoCgDxt5 == int(CFM_YCOCG_DXT5));
+static_assert(engine_image::ColorGreenAlpha == int(CFM_GREEN_ALPHA));
+static_assert(engine_image::Type2D == int(DTT_2D));
+static_assert(engine_image::TypeCubic == int(DTT_CUBIC));
+static_assert(engine_image::Type2DArray == int(DTT_2D_ARRAY));
+static_assert(engine_image::UsageSpecular == int(TD_SPECULAR));
+static_assert(engine_image::UsageDiffuse == int(TD_DIFFUSE));
+static_assert(engine_image::UsageDefault == int(TD_DEFAULT));
+static_assert(engine_image::UsageBump == int(TD_BUMP));
+static_assert(engine_image::UsageFont == int(TD_FONT));
+static_assert(engine_image::UsageLight == int(TD_LIGHT));
+static_assert(engine_image::UsageLookupTableMono == int(TD_LOOKUP_TABLE_MONO));
+static_assert(engine_image::UsageLookupTableRgb1 == int(TD_LOOKUP_TABLE_RGB1));
+static_assert(engine_image::UsageCoverage == int(TD_COVERAGE));
+static_assert(engine_image::UsageSpecularPbrRmao == int(TD_SPECULAR_PBR_RMAO));
+static_assert(engine_image::UsageHdrLightProbe == int(TD_HDR_LIGHTPROBE));
+static_assert(engine_image::UsageHdri == int(TD_HDRI));
+static_assert(engine_image::FilterLinear == int(TF_LINEAR));
+static_assert(engine_image::FilterNearest == int(TF_NEAREST));
+static_assert(engine_image::FilterNearestMipmap == int(TF_NEAREST_MIPMAP));
+static_assert(engine_image::FilterDefault == int(TF_DEFAULT));
+static_assert(engine_image::RepeatRepeat == int(TR_REPEAT));
+static_assert(engine_image::RepeatClamp == int(TR_CLAMP));
+static_assert(engine_image::RepeatClampToZero == int(TR_CLAMP_TO_ZERO));
+static_assert(engine_image::RepeatClampToZeroAlpha == int(TR_CLAMP_TO_ZERO_ALPHA));
+static_assert(engine_image::Cube2D == int(CF_2D));
+static_assert(engine_image::CubePackedMipChain == int(CF_2D_PACKED_MIPCHAIN));
+static_assert(engine_image::CubeNativeHdr == int(CF_NATIVE_HDR));
 
 void engineRenderState(
   const std::uint64_t stateBits,

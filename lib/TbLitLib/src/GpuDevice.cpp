@@ -29,6 +29,7 @@
 #include <nvrhi/validation.h>
 
 #include <algorithm>
+#include <array>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -54,6 +55,81 @@ constinit auto s_liveAllocations = std::atomic<std::int64_t>{0};
 constinit auto s_failHostAllocations = std::atomic<bool>{false};
 constinit auto s_hostOnlyMemoryTypes = std::atomic<std::uint32_t>{0};
 
+// U2.6: the host-visible allocations live now and their bytes (NVRHI's upload chunks, the
+// volatile constant buffers, a readback's staging), for the session's account; a table
+// under a spin lock, zero-initialised (C9). Past MaxHostAllocations an allocation is
+// counted apart and not in the bytes (never reached: a handful of chunks and buffers)
+struct HostAllocation
+{
+  VkDeviceMemory memory = VK_NULL_HANDLE;
+  VkDeviceSize bytes = 0;
+};
+constexpr auto MaxHostAllocations = std::size_t{1024};
+constinit auto s_hostVisibleMemoryTypes = std::atomic<std::uint32_t>{0};
+constinit auto s_hostAllocationsLock = std::atomic<bool>{false};
+constinit auto s_hostAllocations = std::array<HostAllocation, MaxHostAllocations>{};
+constinit auto s_hostAllocationsLive = std::atomic<std::uint32_t>{0};
+constinit auto s_hostVisibleBytes = std::atomic<std::uint64_t>{0};
+constinit auto s_hostAllocationsUntracked = std::atomic<std::uint64_t>{0};
+
+class HostAllocationsLock
+{
+public:
+  HostAllocationsLock()
+  {
+    while (s_hostAllocationsLock.exchange(true, std::memory_order_acquire))
+    {
+    }
+  }
+  ~HostAllocationsLock()
+  {
+    s_hostAllocationsLock.store(false, std::memory_order_release);
+  }
+
+  deleteCopyAndMove(HostAllocationsLock);
+};
+
+bool hostVisibleType(const std::uint32_t memoryTypeIndex)
+{
+  return memoryTypeIndex < 32
+         && ((s_hostVisibleMemoryTypes.load() >> memoryTypeIndex) & 1u) != 0;
+}
+
+void trackHostAllocation(const VkDeviceMemory memory, const VkDeviceSize bytes)
+{
+  const auto lock = HostAllocationsLock{};
+  for (auto& entry : s_hostAllocations)
+  {
+    if (entry.memory == VK_NULL_HANDLE)
+    {
+      entry = HostAllocation{memory, bytes};
+      ++s_hostAllocationsLive;
+      s_hostVisibleBytes += bytes;
+      return;
+    }
+  }
+  ++s_hostAllocationsUntracked;
+}
+
+void untrackHostAllocation(const VkDeviceMemory memory)
+{
+  if (s_hostAllocationsLive == 0)
+  {
+    return;
+  }
+  const auto lock = HostAllocationsLock{};
+  for (auto& entry : s_hostAllocations)
+  {
+    if (entry.memory == memory)
+    {
+      s_hostVisibleBytes -= entry.bytes;
+      --s_hostAllocationsLive;
+      entry = HostAllocation{};
+      return;
+    }
+  }
+}
+
 // Any thread that allocates through NVRHI: the render thread, the compile thread, the
 // GUI thread in teardown.
 VKAPI_ATTR VkResult VKAPI_CALL countingAllocateMemory(
@@ -72,6 +148,10 @@ VKAPI_ATTR VkResult VKAPI_CALL countingAllocateMemory(
   if (result == VK_SUCCESS)
   {
     ++s_liveAllocations;
+    if (info && memory && hostVisibleType(info->memoryTypeIndex))
+    {
+      trackHostAllocation(*memory, info->allocationSize);
+    }
   }
   return result;
 }
@@ -82,6 +162,7 @@ VKAPI_ATTR void VKAPI_CALL countingFreeMemory(
   if (memory != VK_NULL_HANDLE)
   {
     --s_liveAllocations;
+    untrackHostAllocation(memory);
   }
   s_freeMemory.load()(device, memory, allocator);
 }
@@ -96,18 +177,29 @@ void installAllocationCounter(const vk::PhysicalDevice physicalDevice)
     return;
   }
   auto hostOnly = std::uint32_t{0};
+  auto hostVisible = std::uint32_t{0};
   const auto properties = physicalDevice.getMemoryProperties();
   for (std::uint32_t i = 0; i < properties.memoryTypeCount && i < 32; ++i)
   {
     const auto flags = properties.memoryTypes[i].propertyFlags;
-    if (
-      (flags & vk::MemoryPropertyFlagBits::eHostVisible)
-      && !(flags & vk::MemoryPropertyFlagBits::eDeviceLocal))
+    if (flags & vk::MemoryPropertyFlagBits::eHostVisible)
     {
-      hostOnly |= 1u << i;
+      hostVisible |= 1u << i;
+      if (!(flags & vk::MemoryPropertyFlagBits::eDeviceLocal))
+      {
+        hostOnly |= 1u << i;
+      }
     }
   }
   s_hostOnlyMemoryTypes = hostOnly;
+  {
+    const auto lock = HostAllocationsLock{};
+    s_hostAllocations = {};
+    s_hostAllocationsLive = 0;
+    s_hostVisibleBytes = 0;
+    s_hostAllocationsUntracked = 0;
+  }
+  s_hostVisibleMemoryTypes = hostVisible;
   s_failHostAllocations = false;
   s_allocateMemory = dispatcher.vkAllocateMemory;
   s_freeMemory = dispatcher.vkFreeMemory;
@@ -352,6 +444,11 @@ std::int64_t GpuDevice::deviceMemoryAllocations() const
 std::int64_t liveDeviceMemoryAllocations()
 {
   return s_liveAllocations;
+}
+
+std::uint64_t liveHostVisibleBytes()
+{
+  return s_hostVisibleBytes;
 }
 
 void failHostAllocationsForTesting(const bool fail)

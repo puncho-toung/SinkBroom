@@ -53,6 +53,8 @@ struct FramebufferFormats
   nvrhi::Format color = nvrhi::Format::UNKNOWN;
   // UNKNOWN for none
   nvrhi::Format depth = nvrhi::Format::UNKNOWN;
+  // T0.10: 1 everywhere (R-A9); a colour list joins it before MSAA or a G-buffer
+  std::uint32_t sampleCount = 1;
 
   bool operator==(const FramebufferFormats&) const = default;
 };
@@ -103,7 +105,11 @@ struct PipelineLookup
   {
     Pending,
     Ready,
-    // the program is disabled (D9) or NVRHI could not make the pipeline; for the session
+    // the program is disabled (D9), or NVRHI returned no pipeline without a message; for
+    // the session. T0.8 (M-PIPE-DIFF-01): an NVRHI Error raised on the compile thread
+    // (the validation wrapper's, or a Release driver failure NVRHI reports) goes through
+    // the device's message callback and ends the session instead; in Debug a failing
+    // vkCreateGraphicsPipelines asserts inside NVRHI
     Failed,
   };
   State state = State::Pending;
@@ -213,7 +219,11 @@ public:
 
   // GUI thread, phase B: starts the thread; onReady is called on it after each pipeline
   Result<void> start(std::function<void()> onReady);
-  // any thread: the thread ends after the pipeline it is making; queued keys stay Pending
+  // DX.5, any thread: queues these keys and programs as their first lookups would, so
+  // that the thread makes them before a frame asks; not counted as lookups
+  void request(const std::vector<PipelineKey>& graphics, const std::vector<int>& compute);
+  // any thread: the thread ends before its job's next creation step (T0.7: at most one
+  // driver call later); queued keys and the stopped job's stay Pending
   void requestStop();
   // GUI thread, teardown step 1
   void join();
@@ -252,6 +262,9 @@ public:
 private:
   void main();
   void run(const Job& job);
+  // T0.7, compile thread: an error once a stop has come, checked before each creation
+  // step; such an error leaves the job's lookup Pending and disables nothing
+  Result<void> unlessStopping() const;
   // compile thread: adds a pipeline creation or a shader made since start to the timings
   void timePipeline(std::chrono::steady_clock::time_point start);
   void timeShader(std::chrono::steady_clock::time_point start);
@@ -265,6 +278,8 @@ private:
   Result<nvrhi::IFramebuffer*> framebuffer(const FramebufferFormats& formats);
   Result<ExpectedShaderLayout> expectedLayout(const EngineBuiltin& builtin);
   Result<GraphicsPipelineLookup> makeGraphics(const PipelineKey& key);
+  // a graphics recipe's primitive type and render state
+  void recipeState(const PipelineKey& key, nvrhi::GraphicsPipelineDesc& desc) const;
   Result<ComputePipelineLookup> makeCompute(int program);
   Result<BindingLayoutLookup> makeLayouts(EngineBindingLayout layout);
   // a program whose pipeline was made is enabled, unless it was disabled before

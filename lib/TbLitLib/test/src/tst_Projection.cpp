@@ -172,7 +172,8 @@ TEST_CASE("Projection: the integer g_fov's inverse (C29, P2.6)")
     }
   }
   INFO(exact << " of the 179 integer g_fov values have an exact inverse");
-  CHECK(exact >= 1);
+  // U3.17: pinned, so that a change to gFovOf or verticalFovOf is seen
+  CHECK(exact == 122);
   CHECK_FALSE(trenchBroomFovOfGFov(0));
   CHECK_FALSE(trenchBroomFovOfGFov(180));
 }
