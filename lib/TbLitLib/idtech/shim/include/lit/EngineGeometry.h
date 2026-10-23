@@ -131,6 +131,12 @@ EnginePlane engineFlippedPlane(const EnginePlane& plane);
 // idWinding::GetPlane of the points, or null for fewer than three
 std::optional<EnginePlane> engineWindingPlane(const std::vector<EngineVec3>& points);
 
+// idWinding::Reverse (Winding.cpp:562-574): the points in the opposite order, point i at
+// n - 1 - i (LP4.0: the negative area's side of an inter-area portal,
+// RenderWorld_load.cpp :466). Null for more than MaxWindingPoints points
+std::optional<std::vector<EngineVec3>> engineReverseWinding(
+  const std::vector<EngineVec3>& points);
+
 // what idWinding::Split returns: SIDE_FRONT, SIDE_BACK, SIDE_ON or SIDE_CROSS
 // (Plane.h:47-50)
 enum class EngineSplitSide

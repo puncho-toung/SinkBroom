@@ -353,4 +353,88 @@ TEST_CASE("AreaData, the bake read asks the registry for the deform (C31, C20)")
     == EngineBounds{EngineVec3{0, 0, 0}, EngineVec3{104, 108, 102}});
 }
 
+TEST_CASE("AreaData: the portal sides and the connected areas (C31, D82, K30, P4.17)")
+{
+  SECTION("the fixture: one portal, both sides, one component of two areas")
+  {
+    const auto proc = procOf(readTextFile(goldens() / "lp1b_geometry.proc"));
+    const auto data = buildAreaData(proc);
+    REQUIRE(data.areas.size() == 2u);
+    // iap 0: 4 points, positive area 0, negative area 1, the doorway's plane x = 8
+    REQUIRE(data.areas[0].portals.size() == 1u);
+    REQUIRE(data.areas[1].portals.size() == 1u);
+    const auto& front = data.areas[0].portals[0];
+    CHECK(front.portal == 0u);
+    CHECK(front.side == 0);
+    CHECK(front.intoArea == 1);
+    CHECK(
+      front.points
+      == std::vector<EngineVec3>{{8, -32, 0}, {8, -32, 96}, {8, 32, 96}, {8, 32, 0}});
+    // GetPlane: ( p1 - centre ) x ( p0 - centre ) normalised, through p0: the positive
+    // side is area 0's, x > 8
+    CHECK(front.plane.a == 1.0f);
+    CHECK(front.plane.b == 0.0f);
+    CHECK(front.plane.c == 0.0f);
+    CHECK(front.plane.d == -8.0f);
+    const auto& back = data.areas[1].portals[0];
+    CHECK(back.side == 1);
+    CHECK(back.intoArea == 0);
+    // Reverse(): point i at n - 1 - i
+    CHECK(
+      back.points
+      == std::vector<EngineVec3>{{8, 32, 0}, {8, 32, 96}, {8, -32, 96}, {8, -32, 0}});
+    CHECK(back.plane.a == -1.0f);
+    CHECK(back.plane.d == 8.0f);
+
+    CHECK(data.components == std::vector<int>{0, 0});
+    CHECK(connectedComponents(proc) == data.components);
+    CHECK(areasConnected(data.components, 0, 1));
+    CHECK(areasConnected(data.components, 1, 1));
+  }
+
+  SECTION("three areas and one portal: two components")
+  {
+    auto tree = ProcTree{};
+    tree.numAreas = 3;
+    tree.portals.push_back(
+      ProcPortal{0, 1, {{0, -32, 0}, {0, -32, 64}, {0, 32, 64}, {0, 32, 0}}});
+    const auto components = connectedComponents(tree);
+    CHECK(components == std::vector<int>{0, 0, 1});
+    CHECK(areasConnected(components, 0, 1));
+    CHECK_FALSE(areasConnected(components, 0, 2));
+    CHECK_FALSE(areasConnected(components, 1, 2));
+    CHECK(areasConnected(components, 2, 2));
+    // AreasAreConnected: -1 is connected to nothing, itself included
+    for (const auto other : {-1, 0, 1, 2})
+    {
+      CHECK_FALSE(areasConnected(components, -1, other));
+      CHECK_FALSE(areasConnected(components, other, -1));
+    }
+    // an area past the count (the engine's Error) is not connected either
+    CHECK_FALSE(areasConnected(components, 0, 3));
+  }
+
+  SECTION("an area's list holds its portals in the .proc's order reversed")
+  {
+    // area 1 between areas 0 and 2: portal 0 to area 0 (area 1 negative), portal 1 to
+    // area 2 (area 1 positive)
+    auto tree = ProcTree{};
+    tree.numAreas = 3;
+    tree.portals.push_back(
+      ProcPortal{0, 1, {{0, -32, 0}, {0, -32, 64}, {0, 32, 64}, {0, 32, 0}}});
+    tree.portals.push_back(
+      ProcPortal{1, 2, {{-64, 32, 0}, {-64, 32, 64}, {-64, -32, 64}, {-64, -32, 0}}});
+    const auto sides = areaPortalSides(tree);
+    REQUIRE(sides.size() == 3u);
+    REQUIRE(sides[1].size() == 2u);
+    CHECK(sides[1][0].portal == 1u);
+    CHECK(sides[1][0].side == 0);
+    CHECK(sides[1][0].intoArea == 2);
+    CHECK(sides[1][1].portal == 0u);
+    CHECK(sides[1][1].side == 1);
+    CHECK(sides[1][1].intoArea == 0);
+    CHECK(connectedComponents(tree) == std::vector<int>{0, 0, 0});
+  }
+}
+
 } // namespace tb::lit

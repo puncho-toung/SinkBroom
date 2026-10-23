@@ -145,9 +145,116 @@ AreaData buildAreaData(const ProcTree& tree, const AreaMaterialLookup& materials
     data.areas.push_back(area);
   }
 
+  // the portal sides and, with every portal open, the connected areas (D82)
+  auto sides = areaPortalSides(tree);
+  for (auto i = std::size_t{0}; i < numAreas && i < sides.size(); ++i)
+  {
+    data.areas[i].portals = std::move(sides[i]);
+  }
+  data.components = connectedComponents(tree);
+
   // RenderWorld_load.cpp:990 CommonChildrenArea_r( &areaNodes[0] )
   data.commonAreas = commonChildrenAreas(tree);
   return data;
+}
+
+std::vector<std::vector<AreaPortal>> areaPortalSides(const ProcTree& tree)
+{
+  const auto numAreas = std::size_t(std::max(tree.numAreas, 0));
+  auto lists = std::vector<std::vector<AreaPortal>>(numAreas);
+  const auto inRange = [&](const int area) {
+    return area >= 0 && std::size_t(area) < numAreas;
+  };
+  for (auto i = std::size_t{0}; i < tree.portals.size(); ++i)
+  {
+    const auto& portal = tree.portals[i];
+    const auto a1 = portal.positiveArea;
+    const auto a2 = portal.negativeArea;
+    if (!inRange(a1) || !inRange(a2))
+    {
+      continue;
+    }
+    auto winding = std::vector<EngineVec3>{};
+    winding.reserve(portal.points.size());
+    for (const auto& point : portal.points)
+    {
+      winding.push_back({point[0], point[1], point[2]});
+    }
+
+    // add the portal to a1
+    auto front = AreaPortal{};
+    front.portal = i;
+    front.side = 0;
+    front.intoArea = a2;
+    front.points = winding;
+    front.plane = engineWindingPlane(front.points).value_or(EnginePlane{});
+    lists[std::size_t(a1)].push_back(std::move(front));
+
+    // reverse it for a2
+    auto back = AreaPortal{};
+    back.portal = i;
+    back.side = 1;
+    back.intoArea = a1;
+    back.points = engineReverseWinding(winding).value_or(std::vector<EngineVec3>{});
+    back.plane = engineWindingPlane(back.points).value_or(EnginePlane{});
+    lists[std::size_t(a2)].push_back(std::move(back));
+  }
+  // p->next = portalAreas[a].portals: each side was prepended
+  for (auto& list : lists)
+  {
+    std::reverse(list.begin(), list.end());
+  }
+  return lists;
+}
+
+std::vector<int> connectedComponents(const ProcTree& tree)
+{
+  const auto numAreas = std::size_t(std::max(tree.numAreas, 0));
+  const auto sides = areaPortalSides(tree);
+  auto components = std::vector<int>(numAreas, -1);
+  auto next = 0;
+  auto stack = std::vector<std::size_t>{};
+  for (auto start = std::size_t{0}; start < numAreas; ++start)
+  {
+    if (components[start] >= 0)
+    {
+      continue;
+    }
+    // FloodConnectedAreas from start, through every portal (none blocks)
+    components[start] = next;
+    stack.push_back(start);
+    while (!stack.empty())
+    {
+      const auto area = stack.back();
+      stack.pop_back();
+      for (const auto& side : sides[area])
+      {
+        const auto into = std::size_t(side.intoArea);
+        if (components[into] < 0)
+        {
+          components[into] = next;
+          stack.push_back(into);
+        }
+      }
+    }
+    ++next;
+  }
+  return components;
+}
+
+bool areasConnected(const std::vector<int>& components, const int a, const int b)
+{
+  if (a == -1 || b == -1)
+  {
+    return false;
+  }
+  if (
+    a < 0 || b < 0 || std::size_t(a) >= components.size()
+    || std::size_t(b) >= components.size())
+  {
+    return false;
+  }
+  return components[std::size_t(a)] == components[std::size_t(b)];
 }
 
 } // namespace tb::lit

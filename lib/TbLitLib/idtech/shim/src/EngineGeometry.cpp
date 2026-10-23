@@ -285,6 +285,26 @@ std::optional<EnginePlane> engineWindingPlane(const std::vector<EngineVec3>& poi
   return fromId(plane);
 }
 
+std::optional<std::vector<EngineVec3>> engineReverseWinding(
+  const std::vector<EngineVec3>& points)
+{
+  if (points.size() > std::size_t(engineBounds::MaxWindingPoints))
+  {
+    return std::nullopt;
+  }
+  auto ids = std::vector<idVec3>{};
+  ids.reserve(points.size());
+  for (const auto& point : points)
+  {
+    ids.push_back(toId(point));
+  }
+  const auto winding = idWinding{ids.data(), int(ids.size())};
+  const auto* reversed = winding.Reverse();
+  auto result = pointsOf(reversed);
+  delete reversed;
+  return result;
+}
+
 std::optional<EngineSplit> engineSplitWinding(
   const std::vector<EngineVec3>& points, const EnginePlane& plane, const float epsilon)
 {
