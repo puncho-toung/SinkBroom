@@ -483,6 +483,21 @@ struct EngineFrameDefaults
   std::size_t maxComplexInteractionsPerLight = 256;
   // the volatile constant buffers' versions (RenderProgs.cpp:769)
   std::uint32_t constantBufferVersions = 8192;
+  // LP4.0 (C32, lit/ViewFlow.h): the view's portal flow at its defaults
+  // r_usePortals "1" (:179): the view's area is PointInArea( vieworg )
+  bool usePortals = true;
+  // r_singleArea "0" (:184): the flow goes through the portals
+  bool singleArea = false;
+  // r_useLightPortalCulling "1" (:153) and r_useEntityPortalCulling "1" (:156): the
+  // frustum corners against the chain's planes
+  int useLightPortalCulling = 1;
+  int useEntityPortalCulling = 1;
+  // r_useLightAreaCulling "1" (:154): a light that casts no shadows from an area the view
+  // is not connected to is dropped
+  bool useLightAreaCulling = true;
+  // r_useAreasConnectedForShadowCulling "2" (tr_frontend_addlights.cpp:48): a light
+  // reaches only the referenced areas connected to its own
+  int useAreasConnectedForShadowCulling = 2;
 };
 inline constexpr auto EngineFrame = EngineFrameDefaults{};
 
