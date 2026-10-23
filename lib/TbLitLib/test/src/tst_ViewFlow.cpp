@@ -24,6 +24,7 @@
 #include "LitTestUtils.h"
 #include "ViewFlow.h"
 #include "lit/AreaData.h"
+#include "lit/LightRecord.h"
 #include "lit/ProcFile.h"
 
 #include "kd/result.h"
@@ -429,6 +430,81 @@ TEST_CASE("ViewFlow: the corner cull and the connected areas")
   CHECK(
     engineBuildConnectedAreas(splitAreas, 2) == std::vector<bool>{false, false, true});
   CHECK(engineBuildConnectedAreas(splitAreas, 1) == std::vector<bool>{true, true, false});
+}
+
+TEST_CASE("ViewFlow: lightCastsShadows (RenderCommon.h:181-184, P4.21)")
+{
+  // materialFlags_t (Material.h:349-350)
+  constexpr auto NoShadows = 1 << 2;
+  constexpr auto ForceShadows = 1 << 3;
+  const auto recordWith = [](const int flags, const bool noShadows) {
+    auto material = std::make_shared<MaterialEntry>();
+    material->name = "lights/test";
+    material->materialFlags = flags;
+    auto record = LightRecord{};
+    record.light.parms.noShadows = noShadows;
+    record.derived.shader.name = material->name;
+    record.derived.shader.material = material;
+    return record;
+  };
+
+  SECTION("the shader's MF_FORCESHADOWS and MF_NOSHADOWS, the four combinations")
+  {
+    CHECK(lightCastsShadows(recordWith(0, false)) == true);
+    CHECK(lightCastsShadows(recordWith(NoShadows, false)) == false);
+    CHECK(lightCastsShadows(recordWith(ForceShadows, false)) == true);
+    CHECK(lightCastsShadows(recordWith(ForceShadows | NoShadows, false)) == true);
+  }
+
+  SECTION("a fog light casts none unless its shader forces it")
+  {
+    auto fog = recordWith(0, false);
+    auto material = std::make_shared<MaterialEntry>(*fog.derived.shader.material);
+    material->fogLight = true;
+    fog.derived.shader.material = material;
+    CHECK(lightCastsShadows(fog) == false);
+    material->materialFlags = ForceShadows;
+    CHECK(lightCastsShadows(fog) == true);
+  }
+
+  SECTION("noshadows 1 on the light wins over the shader (forceShadows is false)")
+  {
+    CHECK(lightCastsShadows(recordWith(0, true)) == false);
+    CHECK(lightCastsShadows(recordWith(ForceShadows, true)) == false);
+  }
+
+  SECTION("a pending or unknown shader: no answer")
+  {
+    auto pending = recordWith(0, false);
+    pending.derived.shader.pending = true;
+    CHECK_FALSE(lightCastsShadows(pending));
+    auto unknown = recordWith(0, false);
+    unknown.derived.shader.material.reset();
+    CHECK_FALSE(lightCastsShadows(unknown));
+  }
+
+  SECTION("the copied parser sets the flags from the keywords (Material.cpp:2658, :2685)")
+  {
+    auto source = MemoryDeclSource{std::vector<DeclFile>{DeclFile{
+      "materials/lp4_shadows.mtr",
+      "lights/lp4_plain\n{\n\t{\n\t\tmap _white\n\t}\n}\n"
+      "lights/lp4_none\n{\n\tnoShadows\n\t{\n\t\tmap _white\n\t}\n}\n"
+      "lights/lp4_forced\n{\n\tnoShadows\n\tforceShadows\n\t{\n\t\tmap _white\n\t}\n}\n",
+      0}}};
+    auto decls = MaterialDecls{source};
+    REQUIRE(decls.constructionError().empty());
+    const auto casts = [&](const std::string& name) {
+      auto found = decls.lookup(name);
+      REQUIRE(found);
+      auto record = recordWith(0, false);
+      record.derived.shader.material = *found.value;
+      return lightCastsShadows(record);
+    };
+    CHECK(casts("lights/lp4_plain") == true);
+    CHECK(casts("lights/lp4_none") == false);
+    CHECK(casts("lights/lp4_forced") == true);
+    static_cast<void>(decls.takeMessages());
+  }
 }
 
 #if defined(_MSC_VER) && defined(_DEBUG)

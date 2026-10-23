@@ -31,7 +31,9 @@
 
 #include "ViewFlow.h"
 
+#include "LitStages.h"
 #include "lit/EngineTables.h"
+#include "lit/LightRecord.h"
 #include "lit/ProcFile.h"
 
 #include <algorithm>
@@ -532,6 +534,18 @@ bool engineCullCornersByPortals(
     }
   }
   return false;
+}
+
+std::optional<bool> lightCastsShadows(const LightRecord& light)
+{
+  const auto& shader = light.derived.shader;
+  if (shader.pending || !shader.material)
+  {
+    return std::nullopt;
+  }
+  // parms.forceShadows || ( ... ): a map light's forceShadows is false
+  // (ParseSpawnArgsToRenderLight's memset), so the shader and noShadows decide
+  return !light.light.parms.noShadows && engineLightCastsShadows(*shader.material);
 }
 
 ViewFlowResult flowView(const ViewFlowInputs& inputs)

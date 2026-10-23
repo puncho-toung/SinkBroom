@@ -184,4 +184,18 @@ ScreenRect engineScreenRectFromWinding(
 bool engineCullCornersByPortals(
   const EngineFrustumCorners& corners, std::span<const EnginePlane> planes);
 
+/**
+ * idRenderLightLocal::LightCastsShadows (RenderCommon.h:181-184, C32, P4.21):
+ * parms.forceShadows || ( !parms.noShadows && lightShader->LightCastsShadows() ), the
+ * shader's through engineLightCastsShadows (Material.h:719-723: MF_FORCESHADOWS, which
+ * the material keyword "forceShadows" sets, Material.cpp:2684-2689, or neither a fog, an
+ * ambient nor a blend light and not MF_NOSHADOWS; MaterialEntry::materialFlags holds
+ * every materialFlags_t bit the copied parser set). forceShadows is never set for a map
+ * light: ParseSpawnArgsToRenderLight clears the renderLight_t (d3xp/Light.cpp:90) and
+ * only the projectiles' lights set it (d3xp/Projectile.cpp:262, :1186), so here it is a
+ * constant false (mirror.json M-LIGHT-DIFF-07). nullopt while the light's shader is
+ * pending or has no entry: the caller treats the light as pending, LP2's rule. Pure.
+ */
+std::optional<bool> lightCastsShadows(const LightRecord& light);
+
 } // namespace tb::lit
