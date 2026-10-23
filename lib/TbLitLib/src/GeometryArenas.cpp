@@ -89,6 +89,16 @@ bool GeometryArenas::sync(
   return !m_queued.empty();
 }
 
+void GeometryArenas::setAllocationRoom(std::function<bool()> room)
+{
+  m_allocationRoom = std::move(room);
+}
+
+std::uint64_t GeometryArenas::headroomRefusals() const
+{
+  return m_headroomRefusals;
+}
+
 void GeometryArenas::reclaim(const std::uint64_t completedFrames)
 {
   for (auto& arena : m_vertexArenas)
@@ -129,6 +139,7 @@ Result<std::uint64_t> GeometryArenas::recordUploads(
       break;
     }
 
+    m_refusedForHeadroom = false;
     const auto vertices = allocate(m_vertexArenas, vertexBytes, true);
     const auto indexes = vertices ? allocate(m_indexArenas, indexBytes, false)
                                   : std::optional<std::pair<std::size_t, ArenaRange>>{};
@@ -137,6 +148,11 @@ Result<std::uint64_t> GeometryArenas::recordUploads(
       if (vertices)
       {
         m_vertexArenas[vertices->first].ranges.free(vertices->second, 0);
+      }
+      if (m_refusedForHeadroom)
+      {
+        // U2.3: the rest wait, queued, until allocations are free again
+        break;
       }
       return Error{fmt::format(
         "Cannot create a geometry arena for {} bytes",
@@ -301,6 +317,13 @@ std::optional<std::pair<std::size_t, ArenaRange>> GeometryArenas::allocate(
   }
   if (!m_device)
   {
+    return std::nullopt;
+  }
+  // U2.3: no new arena within the allocation headroom
+  if (m_allocationRoom && !m_allocationRoom())
+  {
+    m_refusedForHeadroom = true;
+    ++m_headroomRefusals;
     return std::nullopt;
   }
   // S8: one more arena of the kind; a chunk larger than an arena gets one of its size

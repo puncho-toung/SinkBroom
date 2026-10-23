@@ -181,6 +181,7 @@ Result<void> RenderThread::createFrameResources(
   m_commandList = device.createCommandList(
     nvrhi::CommandListParameters{}.setUploadChunkSize(UploadChunkBytes));
   m_arenas.setDevice(device, ArenaBytes);
+  m_arenas.setAllocationRoom([this] { return allocationRoom(); });
   m_textureUploads.setD24s8Supported(m_device.gpu().d24s8Supported);
   for (auto& event : m_frameEvents)
   {
@@ -252,12 +253,12 @@ nvrhi::IFramebuffer* RenderThread::imageFramebuffer(
 
 void RenderThread::start(
   CpuPool* pool,
-  MaterialService* materials,
+  MaterialService* materials_,
   std::shared_ptr<LightTablePublication> lights,
   PipelineCompiler* compiler)
 {
   m_pool = pool;
-  m_materials = materials;
+  m_materials = materials_;
   m_compiler = compiler;
   m_pipelines.setCompiler(compiler);
   // C28: the slots ask the service (any thread may)
@@ -812,12 +813,50 @@ bool RenderThread::recordUploads(nvrhi::ICommandList& commandList)
     return false;
   }
   const auto texturesLeft = m_textureUploads.record(
-    m_device.device(), commandList, m_images, cap, m_frameUploadBytes);
+    m_device.device(), commandList, m_images, cap, m_frameUploadBytes, [this] {
+      return allocationRoom();
+    });
+  // U2.3: the headroom refused a texture or an arena; said once
+  if (
+    !m_headroomWarned
+    && m_arenas.headroomRefusals() + m_textureUploads.headroomRefusals() > 0)
+  {
+    m_headroomWarned = true;
+    m_events.post(
+      SessionEvent::Warning,
+      fmt::format(
+        "The lit preview's device memory allocations reached {} of the device's {}: no "
+        "more textures or geometry arenas are made, and the images left bind their "
+        "stand-ins",
+        m_device.deviceMemoryAllocations(),
+        m_allocationLimitForTesting.load() != 0
+          ? m_allocationLimitForTesting.load()
+          : m_device.gpu().maxMemoryAllocationCount));
+  }
   // D77: what is left for the next frame makes this one unconverged
   m_uploadsLeft = m_arenas.pending() || texturesLeft;
   // C28: the slots whose written range grew lose their sets before any pass binds them
   eraseChangedSets();
   return true;
+}
+
+bool RenderThread::allocationRoom() const
+{
+  const auto set = m_allocationLimitForTesting.load();
+  const auto limit =
+    std::uint64_t(set != 0 ? set : m_device.gpu().maxMemoryAllocationCount);
+  if (limit == 0)
+  {
+    return true;
+  }
+  const auto live =
+    std::uint64_t(std::max(m_device.deviceMemoryAllocations(), std::int64_t{0}));
+  return live + AllocationHeadroom < limit;
+}
+
+void RenderThread::setAllocationLimit(const std::uint32_t limit)
+{
+  m_allocationLimitForTesting = limit;
 }
 
 void RenderThread::applyHeadlessResize()
@@ -1603,6 +1642,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.bytesUploaded = m_frameUploadBytes;
       row.texturesResident = m_images.resident();
       row.arenaBytes = m_arenas.capacityBytes();
+      // U2.3: the textures and arenas the allocation headroom refused so far
+      row.allocRefused =
+        m_arenas.headroomRefusals() + m_textureUploads.headroomRefusals();
       // C16 (LP2.2b): the lit passes' counts (LitFrameStats) and the tonemap passes'
       const auto& tonemap = m_tonemap.lastStats();
       row.draws = litStats.prepassDraws + litStats.interactionDraws + tonemap.draws;

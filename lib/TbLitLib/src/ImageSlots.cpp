@@ -336,7 +336,12 @@ void ImageSlots::adopt(
 {
   auto& slot = m_slots[id];
   m_pending.erase(id);
-  slot.adopted = lookup.slot;
+  // U2.1: the facts, never the service's slot (it owns the image's bytes)
+  slot.adoptedUsage =
+    lookup.slot ? std::optional{lookup.slot->name.usage} : std::optional<int>{};
+  slot.adoptedFormat = lookup.slot && lookup.slot->image
+                         ? std::optional{lookup.slot->image->format}
+                         : std::optional<int>{};
   slot.adoptedChange = change;
   if (lookup.image)
   {
@@ -369,7 +374,8 @@ void ImageSlots::reRequest(const ImageSlotId id, const std::uint64_t frame)
   slot.firstWrittenMip = 0;
   slot.textureBytes = 0;
   slot.pixels.reset();
-  slot.adopted.reset();
+  slot.adoptedUsage.reset();
+  slot.adoptedFormat.reset();
   slot.reason.clear();
   slot.state = State::Pending;
   bump(id);

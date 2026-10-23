@@ -48,6 +48,11 @@ constexpr auto DeviceRemovedMessage = std::string_view{"Device Removed!"};
 constinit auto s_allocateMemory = std::atomic<PFN_vkAllocateMemory>{nullptr};
 constinit auto s_freeMemory = std::atomic<PFN_vkFreeMemory>{nullptr};
 constinit auto s_liveAllocations = std::atomic<std::int64_t>{0};
+// U2.3's test hook: while set, an allocation in a memory type that is host-visible and
+// not device-local fails as the driver's would (NVRHI's upload chunks, staging); the
+// types found when the counter was installed
+constinit auto s_failHostAllocations = std::atomic<bool>{false};
+constinit auto s_hostOnlyMemoryTypes = std::atomic<std::uint32_t>{0};
 
 // Any thread that allocates through NVRHI: the render thread, the compile thread, the
 // GUI thread in teardown.
@@ -57,6 +62,12 @@ VKAPI_ATTR VkResult VKAPI_CALL countingAllocateMemory(
   const VkAllocationCallbacks* allocator,
   VkDeviceMemory* memory)
 {
+  if (
+    s_failHostAllocations && info && info->memoryTypeIndex < 32
+    && ((s_hostOnlyMemoryTypes.load() >> info->memoryTypeIndex) & 1u) != 0)
+  {
+    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+  }
   const auto result = s_allocateMemory.load()(device, info, allocator, memory);
   if (result == VK_SUCCESS)
   {
@@ -77,13 +88,27 @@ VKAPI_ATTR void VKAPI_CALL countingFreeMemory(
 
 // GUI thread, phase B, right after createVkDevice loaded the device's functions and
 // before NVRHI makes its first allocation
-void installAllocationCounter()
+void installAllocationCounter(const vk::PhysicalDevice physicalDevice)
 {
   auto& dispatcher = VULKAN_HPP_DEFAULT_DISPATCHER;
   if (dispatcher.vkAllocateMemory == &countingAllocateMemory)
   {
     return;
   }
+  auto hostOnly = std::uint32_t{0};
+  const auto properties = physicalDevice.getMemoryProperties();
+  for (std::uint32_t i = 0; i < properties.memoryTypeCount && i < 32; ++i)
+  {
+    const auto flags = properties.memoryTypes[i].propertyFlags;
+    if (
+      (flags & vk::MemoryPropertyFlagBits::eHostVisible)
+      && !(flags & vk::MemoryPropertyFlagBits::eDeviceLocal))
+    {
+      hostOnly |= 1u << i;
+    }
+  }
+  s_hostOnlyMemoryTypes = hostOnly;
+  s_failHostAllocations = false;
   s_allocateMemory = dispatcher.vkAllocateMemory;
   s_freeMemory = dispatcher.vkFreeMemory;
   s_liveAllocations = 0;
@@ -185,7 +210,7 @@ Result<std::unique_ptr<GpuDevice>> GpuDevice::create(
              d.m_vkDevice = vkDevice;
              d.m_queue = vkDevice.getQueue(d.m_gpu.queueFamily, 0);
              // C30: every allocation NVRHI makes on this device is counted
-             installAllocationCounter();
+             installAllocationCounter(d.m_gpu.physicalDevice);
 
              // step 6, as the engine does it (DeviceManager_VK.cpp:1348-1375)
              auto instanceExtensions = std::vector<const char*>{};
@@ -327,6 +352,11 @@ std::int64_t GpuDevice::deviceMemoryAllocations() const
 std::int64_t liveDeviceMemoryAllocations()
 {
   return s_liveAllocations;
+}
+
+void failHostAllocationsForTesting(const bool fail)
+{
+  s_failHostAllocations = fail;
 }
 
 std::uint32_t GpuDevice::releaseNvrhiDevice()

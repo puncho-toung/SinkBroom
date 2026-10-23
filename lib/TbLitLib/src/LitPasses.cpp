@@ -816,7 +816,7 @@ int LitPasses::imageUsage(ImageSlots& images, const MaterialImageKey& key) const
 {
   // the record's usage once loaded (the PBR rename), the key's until then
   const auto* slot = images.slot(images.request(key));
-  return slot && slot->adopted ? slot->adopted->name.usage : key.usage;
+  return slot && slot->adoptedUsage ? *slot->adoptedUsage : key.usage;
 }
 
 nvrhi::IBuffer* LitPasses::constantBuffer(Frame& frame, const EngineBindingLayout layout)
@@ -957,9 +957,8 @@ bool LitPasses::bindingSets(
     }
     const auto& key = *m_units[0];
     const auto* slot = images.slot(images.request(key));
-    const auto format = slot && slot->adopted && slot->adopted->image
-                          ? slot->adopted->image->format
-                          : engine_image::FormatRgba8;
+    const auto format =
+      slot && slot->adoptedFormat ? *slot->adoptedFormat : engine_image::FormatRgba8;
     auto* sampler = inputs.samplers->imageSampler(device, format, key.filter, key.repeat)
                     | kdl::value_or(nullptr);
     if (!sampler)

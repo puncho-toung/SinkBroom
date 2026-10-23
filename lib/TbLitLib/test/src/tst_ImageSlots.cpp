@@ -22,6 +22,7 @@
 
 #include "BindingSetCache.h"
 #include "ImageSlots.h"
+#include "LitTestUtils.h"
 #include "lit/ImageCache.h"
 
 #include <nvrhi/nvrhi.h>
@@ -298,6 +299,65 @@ TEST_CASE("ImageSlots")
     CHECK(slots.slot(id)->texture);
   }
 
+  SECTION("U2.1: an adopted image's bytes go once written and the service let them go")
+  {
+    auto service = FakeService{};
+    const auto key = keyOf("textures/d", UsageSpecular);
+    service.publish(key, true);
+    // the record's usage after the PBR rename, and the image's format, as the service
+    // answers them
+    {
+      auto slot = std::make_shared<ImageCacheSlot>(*service.table.findImage(key));
+      slot->name.usage = UsageSpecularPbrRmao;
+      auto image = std::make_shared<CachedImage>(*slot->image);
+      image->format = FormatDxt5;
+      slot->image = image;
+      service.table.images = service.table.images.set(key, slot);
+      ++service.table.version;
+    }
+    auto slots = ImageSlots{};
+    slots.setRequest(service.request());
+    const auto id = slots.request(key);
+    REQUIRE(slots.slot(id)->state == ImageSlots::State::Loading);
+    CHECK(slots.slot(id)->adoptedUsage == UsageSpecularPbrRmao);
+    CHECK(slots.slot(id)->adoptedFormat == FormatDxt5);
+    const auto weak = std::weak_ptr<const CachedImage>{slots.slot(id)->pixels};
+
+    // the service's budget drops the taken image (S2.4): the slot still holds the bytes
+    // it has to write
+    service.table.images = service.table.images.erase(key);
+    ++service.table.version;
+    slots.refresh(service.table, 1);
+    CHECK_FALSE(weak.expired());
+
+    // written: nothing in the process holds the bytes any more; the facts stay
+    slots.attachTexture(id, fakeTexture(), 3, 84);
+    slots.levelsWritten(id, 0);
+    slots.dropPixels(id);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Resident);
+    CHECK(weak.expired());
+    CHECK(slots.slot(id)->adoptedUsage == UsageSpecularPbrRmao);
+    CHECK(slots.slot(id)->adoptedFormat == FormatDxt5);
+  }
+
+  SECTION("U2.2: a collect that keeps some retired textures subtracts the others' bytes")
+  {
+    auto slots = ImageSlots{};
+    const auto a = slots.provideForTesting(keyOf("textures/e", UsageDiffuse), {});
+    const auto b = slots.provideForTesting(keyOf("textures/f", UsageDiffuse), {});
+    slots.attachTexture(a, fakeTexture(), 1, 100);
+    slots.attachTexture(b, fakeTexture(), 1, 7);
+    // a retired in frame 4, b in frame 5
+    slots.dropTexture(a, 4);
+    slots.dropTexture(b, 5);
+    CHECK(slots.retiredBytes() == 107u);
+    // frame 4 has finished, frame 5 not: a's bytes go, b's stay
+    slots.collectRetired(5);
+    CHECK(slots.retiredBytes() == 7u);
+    slots.collectRetired(6);
+    CHECK(slots.retiredBytes() == 0u);
+  }
+
   SECTION("a dropped texture is asked for again and binds the intrinsic meanwhile")
   {
     auto service = FakeService{};
@@ -440,5 +500,98 @@ TEST_CASE("BindingSetCache")
     CHECK(busy.size() == 2u);
   }
 }
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+// U2.4: 100 cycles of what the render thread does to these tables per frame and per
+// change leave the CRT's debug heap as two warm-up cycles left it
+TEST_CASE("ImageSlots and BindingSetCache: 100 cycles on the debug heap (U2.4)")
+{
+  SECTION("the slot table: request, adopt, levels, re-request, collect")
+  {
+    auto service = FakeService{};
+    auto keys = std::vector<MaterialImageKey>{};
+    for (auto i = 0; i < 8; ++i)
+    {
+      keys.push_back(
+        keyOf("textures/heap" + std::to_string(i), i % 2 ? UsageBump : UsageDiffuse));
+      service.publish(keys.back(), true);
+    }
+    service.publish(intrinsicImageKey("_flat"), true);
+    service.publish(intrinsicImageKey("_default"), true);
+    auto slots = ImageSlots{};
+    slots.setRequest(service.request());
+    auto frame = std::uint64_t{0};
+    const auto cycle = [&] {
+      for (const auto& key : keys)
+      {
+        const auto id = slots.request(key);
+        if (slots.slot(id)->state == ImageSlots::State::Loading)
+        {
+          slots.attachTexture(id, fakeTexture(), 3, 84);
+          slots.levelsWritten(id, 2);
+          slots.levelsWritten(id, 0);
+          slots.dropPixels(id);
+        }
+      }
+      ++frame;
+      for (const auto& key : keys)
+      {
+        slots.dropTexture(*slots.find(key), frame);
+      }
+      static_cast<void>(slots.takeChangedSlots());
+      ++service.table.version;
+      slots.refresh(service.table, frame);
+      slots.collectRetired(frame + 1);
+    };
+    cycle();
+    cycle();
+    CHECK_FALSE(heapGrows([&] {
+      for (auto i = 0; i < 100; ++i)
+      {
+        cycle();
+      }
+    }));
+    CHECK(slots.size() == 10u);
+    CHECK(slots.retiredBytes() == 0u);
+  }
+
+  SECTION("the set cache and its reverse index: get, slotChanged, the generation, trim")
+  {
+    auto layout = int{0};
+    auto cache = BindingSetCache{8};
+    const auto make = [] { return fakeSet(); };
+    auto frame = std::uint64_t{0};
+    const auto cycle = [&] {
+      ++frame;
+      for (std::uint32_t slot = 0; slot < 12; ++slot)
+      {
+        auto key = BindingSetKey{};
+        key.layout = reinterpret_cast<nvrhi::IBindingLayout*>(&layout);
+        key.slots = {SlotVersion{slot, frame}, SlotVersion{slot + 12, 1}};
+        cache.get(key, frame, make);
+      }
+      auto target = BindingSetKey{};
+      target.layout = reinterpret_cast<nvrhi::IBindingLayout*>(&layout);
+      target.renderTargetGeneration = frame;
+      cache.get(target, frame, make);
+      for (std::uint32_t slot = 0; slot < 6; ++slot)
+      {
+        cache.slotChanged(slot);
+      }
+      cache.renderTargetsChanged(frame + 1);
+      cache.trim(frame + 1);
+    };
+    cycle();
+    cycle();
+    CHECK_FALSE(heapGrows([&] {
+      for (auto i = 0; i < 100; ++i)
+      {
+        cycle();
+      }
+    }));
+    CHECK(cache.size() <= cache.capacity());
+  }
+}
+#endif
 
 } // namespace tb::lit

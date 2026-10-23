@@ -1841,12 +1841,12 @@ namespace
 // gathers what the test checks
 template <typename Hook>
 bool inFrame(
-  LitSession& session, Hook hook, const std::chrono::milliseconds timeout = 10000ms)
+  LitSession& session, Hook hook_, const std::chrono::milliseconds timeout = 10000ms)
 {
   auto done = std::make_shared<std::promise<void>>();
   auto future = done->get_future();
   session.runInFrameForTesting(
-    [hook = std::move(hook), done](RenderFrameAccess& access) mutable {
+    [hook = std::move(hook_), done](RenderFrameAccess& access) mutable {
       hook(access);
       done->set_value();
     });
@@ -2197,6 +2197,13 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
                 << session->deviceMemoryAllocations() << ", VRAM " << baselineVram
                 << " MB -> " << vramAfter << " MB\n";
       CHECK(vramAfter <= baselineVram + 1.0);
+      // U2.2: what was retired is collected, and both users' accounts are back at 0
+      auto retired = std::array<std::uint64_t, 2>{1, 1};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        retired = {access.frame.retiredBytes(), access.images.retiredBytes()};
+      }));
+      CHECK(retired[0] == 0u);
+      CHECK(retired[1] == 0u);
 
       teardown(*session);
       CHECK(session->lastDeviceReleaseCount() == 0u);
@@ -2722,6 +2729,205 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     }
     CHECK(resetDispatcher());
     messages.print("200 textures, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+  SECTION("U2.4: a headless session's texture bumps between two debug-heap checkpoints")
+  {
+    namespace ei = engine_image;
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+
+      auto keys = std::vector<MaterialImageKey>{};
+      auto images = std::vector<std::shared_ptr<const CachedImage>>{};
+      for (auto i = 0; i < 8; ++i)
+      {
+        keys.push_back(testImageKey(fmt::format("textures/lp2/heap{}", i)));
+        images.push_back(syntheticImage(
+          i % 2 ? 32 : 16, i % 3 ? ei::FormatRgba8 : ei::FormatDxt5, std::uint8_t(i)));
+      }
+      auto ids = std::vector<ImageSlotId>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        for (std::size_t i = 0; i < keys.size(); ++i)
+        {
+          ids.push_back(access.images.provideForTesting(keys[i], images[i]));
+        }
+      }));
+      REQUIRE(waitForSlots(*session, ids));
+
+      // a round: every texture let go and given again (a re-probe's bump), written in
+      // the next frames, the old ones retired and collected
+      auto failures = 0;
+      const auto round = [&] {
+        failures += inFrame(
+                      *session,
+                      [&](RenderFrameAccess& access) {
+                        for (std::size_t i = 0; i < keys.size(); ++i)
+                        {
+                          access.images.dropTexture(ids[i], access.frameIndex);
+                          access.images.provideForTesting(keys[i], images[i]);
+                        }
+                      })
+                      ? 0
+                      : 1;
+        failures += waitForSlots(*session, ids) ? 0 : 1;
+      };
+      round();
+      round();
+      settle(*session);
+      // Z.2's pattern: settle before each checkpoint; the threads' few varying blocks
+      // (a frame log row, a pacer's wait) are allowed, a leak per round shows 20 times
+      const auto growth = heapGrowth([&] {
+        for (auto i = 0; i < 20; ++i)
+        {
+          round();
+        }
+        settle(*session);
+      });
+      CHECK(failures == 0);
+      CAPTURE(growth.blocks, growth.bytes);
+      std::cout << "U2.4: 20 rounds of 8 texture bumps: heap blocks " << growth.blocks
+                << ", bytes " << growth.bytes << "\n";
+      CHECK(growth.blocks <= 16);
+      CHECK(growth.bytes <= 16384);
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    messages.print("texture bumps on the debug heap, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+#endif
+
+  SECTION("U3.16, U2.3: a level past the cap, the allocation headroom, a failed chunk")
+  {
+    namespace ei = engine_image;
+    // the test hook is process-wide: it is off again whatever happens below
+    struct HostAllocationsAgain
+    {
+      ~HostAllocationsAgain() { LitSession::failHostAllocationsForTesting(false); }
+    };
+    const auto again = HostAllocationsAgain{};
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+
+      // U3.16: a 2900 x 2900 RGBA8 level is 33,640,000 bytes, more than a frame's 32 MB:
+      // refused, the slot Default with the reason, nothing written
+      auto large = NoImageSlot;
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        large = access.images.provideForTesting(
+          testImageKey("textures/lp2/large"), syntheticImage(2900, ei::FormatRgba8, 1));
+      }));
+      REQUIRE(waitForSlots(*session, {large}));
+      auto largeSeen = SlotSeen{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        largeSeen = slotSeen(access.images, large);
+      }));
+      CHECK(largeSeen.state == ImageSlots::State::Default);
+      CHECK(largeSeen.reason.find("M-TEX-DIFF-02") != std::string::npos);
+      CHECK(largeSeen.reason.find("33640000 bytes") != std::string::npos);
+
+      // U2.3: with the limit at the live allocations plus the headroom, no texture is
+      // made: each slot keeps its stand-in, the session says so once
+      settle(*session);
+      const auto live = session->deviceMemoryAllocations();
+      session->setAllocationLimitForTesting(
+        std::uint32_t(live) + std::uint32_t(AllocationHeadroom));
+      const auto warnings = events.count(SessionEvent::Warning);
+      auto ids = std::vector<ImageSlotId>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        for (auto i = 0; i < 4; ++i)
+        {
+          ids.push_back(access.images.provideForTesting(
+            testImageKey(fmt::format("textures/lp2/room{}", i)),
+            syntheticImage(16, ei::FormatRgba8, std::uint8_t(i))));
+        }
+      }));
+      REQUIRE(waitForSlots(*session, ids));
+      auto refused = std::size_t{0};
+      auto reason = std::string{};
+      auto headroomRefusals = std::uint64_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        for (const auto id : ids)
+        {
+          const auto seen = slotSeen(access.images, id);
+          refused += seen.state == ImageSlots::State::Default ? 1 : 0;
+          reason = seen.reason;
+        }
+        headroomRefusals = access.textures.headroomRefusals();
+      }));
+      CHECK(refused == ids.size());
+      CHECK(headroomRefusals == ids.size());
+      CHECK(reason.find("maxMemoryAllocationCount") != std::string::npos);
+      CHECK(waitFor(
+        [&] { return events.count(SessionEvent::Warning) == warnings + 1; },
+        5000ms,
+        false));
+      CHECK(session->deviceMemoryAllocations() <= live + 1);
+      session->setAllocationLimitForTesting(0);
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    {
+      // U2.3: an upload chunk that cannot be allocated ends the session with NVRHI's
+      // Error (M-NVRHI-DEFECT-01's patch) instead of a crash in a null buffer's map
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+      settle(*session);
+      // two 21 MB levels in one frame need a chunk of their own even if one was made
+      session->setUploadCapForTesting(std::uint64_t{64} * 1024 * 1024);
+      LitSession::failHostAllocationsForTesting(true);
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        for (auto i = 0; i < 2; ++i)
+        {
+          access.images.provideForTesting(
+            testImageKey(fmt::format("textures/lp2/chunk{}", i)),
+            syntheticImage(2304, ei::FormatRgba8, std::uint8_t(i)));
+        }
+      }));
+      CHECK(
+        waitFor([&] { return events.count(SessionEvent::Error) > 0u; }, 10000ms, false));
+      LitSession::failHostAllocationsForTesting(false);
+      events.print("a failed upload chunk");
+      CHECK(session->nvrhiErrorCount() >= 1u);
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+    }
+    CHECK(resetDispatcher());
+    messages.print("level past the cap, headroom, failed chunk, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }
@@ -3782,14 +3988,15 @@ std::optional<std::pair<HdrImage, SettledFrame>> settledHdr(
 }
 
 // a material service over a game root, its image budget off
-std::unique_ptr<MaterialService> rootService(const std::filesystem::path& root)
+std::unique_ptr<MaterialService> rootService(
+  const std::filesystem::path& root, const std::size_t imageBudgetBytes = 0)
 {
   auto options = MaterialServiceOptions{};
   options.makeSource = [root](const std::atomic<bool>& cancel) {
     return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(root, &cancel)};
   };
   options.pollInterval = 0ms;
-  options.imageBudgetBytes = 0;
+  options.imageBudgetBytes = imageBudgetBytes;
   return MaterialService::create(std::move(options))
          | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
 }
@@ -4133,6 +4340,111 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
     CHECK(
       messages.mirrored
       == (limitRaised ? implied : std::min(implied, ValidationDuplicateMessageLimit)));
+  }
+
+  SECTION("U2.1: a small image budget lets the uploaded images' bytes go")
+  {
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      // S2.4 at one byte: every image a consumer has taken is dropped from the table at
+      // the next publication
+      auto service = rootService(root, 1);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+
+      // every image a slot is handed, seen while it waits to be written: nothing is
+      // uploaded until every slot has its answer
+      session->setUploadCapForTesting(0);
+      auto mutex = std::mutex{};
+      auto seen = std::map<ImageSlotId, std::weak_ptr<const CachedImage>>{};
+      auto seenBytes = std::map<ImageSlotId, std::size_t>{};
+      session->setEveryFrameHookForTesting([&](RenderFrameAccess& access) {
+        const auto lock = std::scoped_lock{mutex};
+        for (ImageSlotId id = 0; id < access.images.size(); ++id)
+        {
+          const auto& pixels = access.images.slot(id)->pixels;
+          if (pixels && !seen.contains(id))
+          {
+            seen.emplace(id, pixels);
+            seenBytes.emplace(id, pixels->data.size());
+          }
+        }
+      });
+      auto ids = std::vector<ImageSlotId>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        for (const auto* name :
+             {"floor", "wall", "crate", "checker", "patch", "legacy", "pbr"})
+        {
+          ids.push_back(
+            access.images.request(testImageKey(fmt::format("textures/lp2/{}", name))));
+          auto bump = testImageKey(fmt::format("textures/lp2/{}_local", name));
+          bump.usage = engine_image::UsageBump;
+          if (std::string_view{name} != "checker" && std::string_view{name} != "legacy")
+          {
+            ids.push_back(access.images.request(bump));
+          }
+        }
+      }));
+      REQUIRE(waitFor(
+        [&] {
+          auto answered = false;
+          inFrame(*session, [&](RenderFrameAccess& access) {
+            answered = std::ranges::all_of(ids, [&](const ImageSlotId id) {
+              return access.images.slot(id)->state != ImageSlots::State::Pending;
+            });
+          });
+          return answered;
+        },
+        60000ms,
+        false));
+      session->setUploadCapForTesting(UploadBytesPerFrame);
+      REQUIRE(waitForSlots(*session, ids, 60000ms));
+      session->setEveryFrameHookForTesting({});
+      settle(*session);
+
+      auto alive = std::size_t{0};
+      auto aliveBytes = std::size_t{0};
+      auto totalBytes = std::size_t{0};
+      {
+        const auto lock = std::scoped_lock{mutex};
+        for (const auto& [id, weak] : seen)
+        {
+          totalBytes += seenBytes[id];
+          if (!weak.expired())
+          {
+            ++alive;
+            aliveBytes += seenBytes[id];
+          }
+        }
+      }
+      const auto stats = service->stats();
+      std::cout << "U2.1: " << seen.size() << " images handed to slots (" << totalBytes
+                << " bytes); alive after their upload " << alive << " (" << aliveBytes
+                << " bytes); the table holds " << stats.imageBytes << " bytes, "
+                << stats.evictedImages << " evicted\n";
+      CHECK(seen.size() >= ids.size());
+      CHECK(stats.evictedImages > 0u);
+      // only what the service's table still holds is alive: no slot keeps the bytes
+      CHECK(aliveBytes <= stats.imageBytes);
+      CHECK(alive < seen.size());
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      service->requestStop();
+    }
+    CHECK(resetDispatcher());
+    messages.print("U2.1 image budget, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
   }
 
   SECTION("a Stop in the middle of a frame")

@@ -83,6 +83,12 @@ std::string passFields(const FrameLogRow& row)
     settled);
 }
 
+// U2.3's column: the allocation headroom's refusals; empty in a start or stop row
+std::string refusalFields(const FrameLogRow& row)
+{
+  return optionalCount(row.allocRefused);
+}
+
 std::string_view eventName(const FrameLogEvent event)
 {
   switch (event)
@@ -107,7 +113,7 @@ std::string_view frameLogHeader()
          "interactions_ms,gpu_tonemap_ms,gpu_blit_ms,draws,prepass_draws,interaction_"
          "draws,skipped_draws,pending_pipelines,lights_visible,lights_drawn,lights_"
          "overflowed,constant_bytes,volatile_writes,volatile_write_budget,push_constant_"
-         "bytes,settled\n";
+         "bytes,settled,alloc_refused\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -119,14 +125,14 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   if (row.event != FrameLogEvent::Frame)
   {
     return fmt::format(
-      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,\n",
+      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,
       resourceFields(row));
   }
   return fmt::format(
-    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{}\n",
+    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{}\n",
     row.session,
     eventName(row.event),
     row.frameIndex,
@@ -141,7 +147,8 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     row.height,
     vram,
     resourceFields(row),
-    passFields(row));
+    passFields(row),
+    refusalFields(row));
 }
 
 std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& path)

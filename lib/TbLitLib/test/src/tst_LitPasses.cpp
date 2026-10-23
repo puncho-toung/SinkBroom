@@ -999,4 +999,58 @@ TEST_CASE("LitPasses: R_AddSingleLight's register snap and the math light test")
   CHECK(user[2] == Vec4{0, 0, 0, 1});
 }
 
+#if defined(_MSC_VER) && defined(_DEBUG)
+// U2.4: RegisterCache over 100 list builds, each asking for consumers of which half
+// change every build, leaves the CRT's debug heap as two warm-up builds left it
+// (consumers not asked for in a build are forgotten at its end)
+TEST_CASE("LitPasses: RegisterCache over 100 builds on the debug heap (U2.4)")
+{
+  auto table = MaterialTable{};
+  auto materials = std::vector<MaterialEntry>{};
+  for (auto i = 0; i < 6; ++i)
+  {
+    auto material = MaterialEntry{};
+    material.name = "textures/heap" + std::to_string(i);
+    material.registry = 1;
+    material.index = i;
+    material.numRegisters = 3;
+    materials.push_back(material);
+    auto registers = std::make_shared<EvaluatedRegisters>();
+    registers->registers = {1.0f, 0.5f, float(i)};
+    table.registers = table.registers.set(
+      RegisterKey{MaterialId::of(material), ShaderParms{}, 0.0f}, registers);
+  }
+  auto cache = RegisterCache{};
+  auto build = PreviewId{0};
+  const auto cycle = [&] {
+    ++build;
+    cache.beginBuild();
+    for (const auto& material : materials)
+    {
+      // a consumer kept for every build, and one that a build asks for once
+      cache.registers(PreviewId{1}, material, ShaderParms{}, table, nullptr);
+      cache.registers(PreviewId{1000 + build}, material, ShaderParms{}, table, nullptr);
+    }
+    cache.endBuild();
+    cache.beginBuild();
+    for (const auto& material : materials)
+    {
+      cache.registers(PreviewId{1}, material, ShaderParms{}, table, nullptr);
+    }
+    cache.endBuild();
+  };
+  cycle();
+  cycle();
+  CHECK_FALSE(heapGrows([&] {
+    for (auto i = 0; i < 100; ++i)
+    {
+      cycle();
+    }
+  }));
+  CHECK(cache.size() == materials.size());
+  CHECK(
+    cache.registers(PreviewId{1}, materials[0], ShaderParms{}, table, nullptr).current);
+}
+#endif
+
 } // namespace tb::lit

@@ -22,6 +22,7 @@
 // TbLitIdDxtTestLib): each level's constant blocks byte for byte against the encoder's
 // blocks of the same level.
 
+#include "LitTestUtils.h"
 #include "lit/DxtEncoderForTesting.h"
 #include "lit/EditorImageSize.h"
 #include "lit/ImageCache.h"
@@ -277,5 +278,39 @@ TEST_CASE("IntrinsicImages (D69)")
     }
   }
 }
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+// U2.4: the intrinsics made 100 times over leave the CRT's debug heap as two warm-up
+// rounds left it (the parse thread makes them at every request of a new session)
+TEST_CASE("IntrinsicImages: 100 rounds on the debug heap (U2.4)")
+{
+  auto source = MemoryDeclSource{{}};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+  auto failed = 0;
+  const auto round = [&] {
+    for (const auto* name :
+         {"_default",
+          "_white",
+          "_black",
+          "_blackDiffuse",
+          "_flat",
+          "_noFalloff",
+          "_quadratic"})
+    {
+      failed += intrinsicImage(decls, name).is_success() ? 0 : 1;
+    }
+  };
+  round();
+  round();
+  CHECK_FALSE(heapGrows([&] {
+    for (auto i = 0; i < 100; ++i)
+    {
+      round();
+    }
+  }));
+  CHECK(failed == 0);
+}
+#endif
 
 } // namespace tb::lit

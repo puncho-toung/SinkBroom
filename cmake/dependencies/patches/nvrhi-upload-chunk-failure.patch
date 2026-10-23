@@ -1,0 +1,70 @@
+diff --git a/src/vulkan/vulkan-buffer.cpp b/src/vulkan/vulkan-buffer.cpp
+--- a/src/vulkan/vulkan-buffer.cpp
++++ b/src/vulkan/vulkan-buffer.cpp
+@@ -134,7 +134,11 @@
+         if (!desc.isVirtual)
+         {
+             res = m_Allocator.allocateBufferMemory(buffer, (usageFlags & vk::BufferUsageFlagBits::eShaderDeviceAddress) != vk::BufferUsageFlags(0));
+-            CHECK_VK_FAIL(res)
++            if (res != vk::Result::eSuccess)
++            {
++                delete buffer;
++                return nullptr;
++            }
+ 
+             m_Context.nameVKObject(buffer->memory, vk::ObjectType::eDeviceMemory, vk::DebugReportObjectTypeEXT::eDeviceMemory, desc.debugName.c_str());
+ 
+@@ -459,7 +463,8 @@
+                 Buffer* uploadBuffer;
+                 uint64_t uploadOffset;
+                 void* uploadCpuVA;
+-                m_UploadManager->suballocateBuffer(dataSize, &uploadBuffer, &uploadOffset, &uploadCpuVA, MakeVersion(m_CurrentCmdBuf->recordingID, m_CommandListParameters.queueType, false));
++                if (!m_UploadManager->suballocateBuffer(dataSize, &uploadBuffer, &uploadOffset, &uploadCpuVA, MakeVersion(m_CurrentCmdBuf->recordingID, m_CommandListParameters.queueType, false)))
++                    return;
+ 
+                 memcpy(uploadCpuVA, data, dataSize);
+ 
+diff --git a/src/vulkan/vulkan-texture.cpp b/src/vulkan/vulkan-texture.cpp
+--- a/src/vulkan/vulkan-texture.cpp
++++ b/src/vulkan/vulkan-texture.cpp
+@@ -518,12 +518,13 @@
+         Buffer* uploadBuffer;
+         uint64_t uploadOffset;
+         void* uploadCpuVA;
+-        m_UploadManager->suballocateBuffer(
++        if (!m_UploadManager->suballocateBuffer(
+             deviceMemSize,
+             &uploadBuffer,
+             &uploadOffset,
+             &uploadCpuVA,
+-            MakeVersion(m_CurrentCmdBuf->recordingID, m_CommandListParameters.queueType, false));
++            MakeVersion(m_CurrentCmdBuf->recordingID, m_CommandListParameters.queueType, false)))
++            return;
+ 
+         size_t minRowPitch = std::min(size_t(deviceRowPitch), rowPitch);
+         uint8_t* mappedPtr = (uint8_t*)uploadCpuVA;
+diff --git a/src/vulkan/vulkan-upload.cpp b/src/vulkan/vulkan-upload.cpp
+--- a/src/vulkan/vulkan-upload.cpp
++++ b/src/vulkan/vulkan-upload.cpp
+@@ -54,6 +54,12 @@
+             desc.isShaderBindingTable = m_Device->queryFeatureSupport(Feature::RayTracingAccelStruct);
+ 
+             chunk->buffer = m_Device->createBuffer(desc);
++            if (!chunk->buffer)
++            {
++                if (IMessageCallback* callback = m_Device->getMessageCallback())
++                    callback->message(MessageSeverity::Error, "Failed to create an upload chunk buffer");
++                return nullptr;
++            }
+             chunk->mappedMemory = m_Device->mapBuffer(chunk->buffer, CpuAccessMode::Write);
+             chunk->bufferSize = size;
+         }
+@@ -121,6 +127,8 @@
+                 return false;
+ 
+             m_CurrentChunk = CreateChunk(sizeToAllocate);
++            if (!m_CurrentChunk)
++                return false;
+         }
+ 
+         m_CurrentChunk->version = currentVersion;

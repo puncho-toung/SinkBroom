@@ -572,6 +572,15 @@ public:
   // LP2.1, any thread: while held, no frame counts as finished on the GPU, so the ranges
   // freed in the arenas and the retired targets stay held (D35, D36)
   void holdFrameCompletionForTesting(bool hold);
+  // U2.3, any thread: the allocation limit the headroom (AllocationHeadroom) counts from
+  // instead of the device's maxMemoryAllocationCount; 0 for the device's
+  void setAllocationLimitForTesting(std::uint32_t limit);
+  /**
+   * U2.3, any thread: while set, every device memory allocation in a type that is
+   * host-visible and not device-local fails as a driver's out-of-memory would (NVRHI's
+   * upload chunks and staging). Process-wide, like the allocation counter; tests only.
+   */
+  static void failHostAllocationsForTesting(bool fail);
   /**
    * D9, any thread: every program the compile thread was asked for, enabled or disabled
    * with the field that disabled it; the session's report of its passes.

@@ -28,6 +28,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -91,6 +92,11 @@ private:
   std::uint64_t m_uploadedChunks = 0;
   // the scratch copy of an index range padded to whole 4-byte words
   std::vector<std::uint16_t> m_indexScratch;
+  // U2.3: whether one more device allocation leaves the headroom (none: always), and the
+  // arenas not made for it
+  std::function<bool()> m_allocationRoom;
+  std::uint64_t m_headroomRefusals = 0;
+  bool m_refusedForHeadroom = false;
 
 public:
   GeometryArenas() = default;
@@ -98,6 +104,11 @@ public:
   // GUI thread in phase B, or the render thread: the device the arenas are made on, and
   // their size (ArenaBytes; tests make smaller ones)
   void setDevice(nvrhi::IDevice& device, std::uint64_t arenaBytes);
+  // render thread (U2.3): asked before a new arena is made; when it says no, the chunk
+  // stays queued (its draws are skipped, the frame unconverged) and headroomRefusals
+  // counts it
+  void setAllocationRoom(std::function<bool()> room);
+  std::uint64_t headroomRefusals() const;
 
   /**
    * Render thread: compares chunks with what is placed and queued; the ranges of a chunk
@@ -114,7 +125,8 @@ public:
    * Render thread, inside the frame's command list before its first pass (D78): writes
    * queued chunks, in key order, while the bytes stay within budget (one chunk is written
    * whatever its size when nothing was written before it, so a chunk larger than the
-   * budget is not stuck); the bytes written, or an error when an arena cannot be made.
+   * budget is not stuck); the bytes written, or an error when an arena cannot be made
+   * (an arena refused for the allocation headroom is not an error: the rest wait).
    */
   Result<std::uint64_t> recordUploads(
     nvrhi::ICommandList& commandList,

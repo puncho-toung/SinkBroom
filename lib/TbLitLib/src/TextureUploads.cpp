@@ -33,6 +33,7 @@
 #include "lit/EnginePipelineState.h"
 #include "lit/EngineTables.h"
 #include "lit/ImageCache.h"
+#include "lit/LitConfig.h"
 
 #include "kd/result.h"
 
@@ -157,7 +158,8 @@ bool TextureUploads::record(
   nvrhi::ICommandList& commandList,
   ImageSlots& slots,
   const std::uint64_t cap,
-  std::uint64_t& frameBytes)
+  std::uint64_t& frameBytes,
+  const std::function<bool()>& allocationRoom)
 {
   for (const auto id : slots.loading())
   {
@@ -173,15 +175,47 @@ bool TextureUploads::record(
     {
       auto bytes = std::uint64_t{0};
       auto problem = std::string{};
+      // a level's bytes, all its sides together, as a frame writes them
+      auto perLevel = std::vector<std::uint64_t>(std::size_t(image->numLevels), 0);
       for (const auto& level : image->levels)
       {
         levelUploadBytes(*image, level)
-          | kdl::transform([&](const std::uint64_t levelBytes) { bytes += levelBytes; })
+          | kdl::transform([&](const std::uint64_t levelBytes) {
+              bytes += levelBytes;
+              if (level.level >= 0 && level.level < image->numLevels)
+              {
+                perLevel[std::size_t(level.level)] += levelBytes;
+              }
+            })
           | kdl::if_error([&](const auto& e) { problem = e.msg; }) | kdl::ignore();
         if (!problem.empty())
         {
           break;
         }
+      }
+      // U3.16: a level larger than a frame's cap would be one writeTexture through one
+      // upload chunk of its size (the engine writes it whole: mirror.json M-TEX-DIFF-02)
+      for (std::size_t level = 0; problem.empty() && level < perLevel.size(); ++level)
+      {
+        if (perLevel[level] > UploadBytesPerFrame)
+        {
+          problem = fmt::format(
+            "level {} is {} bytes, more than the {} MB a frame uploads (the engine "
+            "writes it whole; mirror.json M-TEX-DIFF-02)",
+            level,
+            perLevel[level],
+            UploadBytesPerFrame / (1024 * 1024));
+        }
+      }
+      // U2.3: no new texture within the allocation headroom; the slot keeps binding its
+      // intrinsic
+      if (problem.empty() && allocationRoom && !allocationRoom())
+      {
+        problem = fmt::format(
+          "the device's memory allocations are within {} of its limit "
+          "(maxMemoryAllocationCount)",
+          AllocationHeadroom);
+        ++m_headroomRefusals;
       }
       auto texture = nvrhi::TextureHandle{};
       if (problem.empty())
@@ -266,6 +300,11 @@ std::uint64_t TextureUploads::uploadedBytes() const
 std::uint64_t TextureUploads::texturesMade() const
 {
   return m_texturesMade;
+}
+
+std::uint64_t TextureUploads::headroomRefusals() const
+{
+  return m_headroomRefusals;
 }
 
 } // namespace tb::lit

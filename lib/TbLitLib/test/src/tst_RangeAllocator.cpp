@@ -17,6 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "LitTestUtils.h"
 #include "RangeAllocator.h"
 
 #include <cstdint>
@@ -175,5 +176,42 @@ TEST_CASE("RangeAllocator")
     CHECK(ranges.freeBytes() == ranges.capacity());
   }
 }
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+// U2.4: 100 cycles of allocate, free and reclaim leave the CRT's debug heap as two
+// warm-up cycles left it (the free list and the pending list keep their bound)
+TEST_CASE("RangeAllocator: 100 cycles on the debug heap (U2.4)")
+{
+  auto ranges = RangeAllocator{1u << 20, 32};
+  auto random = std::mt19937{7};
+  auto frame = std::uint64_t{0};
+  const auto cycle = [&] {
+    auto live = std::vector<ArenaRange>{};
+    for (auto i = 0; i < 24; ++i)
+    {
+      if (const auto range = ranges.allocate(1 + random() % 4096))
+      {
+        live.push_back(*range);
+      }
+    }
+    for (const auto& range : live)
+    {
+      ranges.free(range, frame);
+    }
+    ++frame;
+    ranges.reclaim(frame);
+  };
+  cycle();
+  cycle();
+  CHECK_FALSE(heapGrows([&] {
+    for (auto i = 0; i < 100; ++i)
+    {
+      cycle();
+    }
+  }));
+  CHECK(ranges.freeRanges() == 1u);
+  CHECK(ranges.pendingRanges() == 0u);
+}
+#endif
 
 } // namespace tb::lit

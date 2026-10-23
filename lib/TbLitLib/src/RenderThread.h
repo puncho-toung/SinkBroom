@@ -276,6 +276,11 @@ private:
   // LP2.1 test hook: while set, no frame counts as finished, so freed ranges and retired
   // resources stay held
   std::atomic<bool> m_holdCompletion = false;
+  // U2.3: the allocation limit a test set instead of the device's
+  // maxMemoryAllocationCount (0: the device's), and whether the session said once that
+  // the headroom refused a texture or an arena
+  std::atomic<std::uint32_t> m_allocationLimitForTesting = 0;
+  bool m_headroomWarned = false;
   // C28: m_frameResources' render-target generation, for any thread (tests)
   std::atomic<std::uint64_t> m_renderTargetGeneration = 0;
   std::array<nvrhi::EventQueryHandle, FramesInFlight> m_frameEvents;
@@ -466,6 +471,9 @@ public:
   // any thread: while held, no frame counts as finished (freed arena ranges and retired
   // resources stay held)
   void holdCompletion(bool hold);
+  // U2.3, any thread: the allocation limit the headroom counts from instead of the
+  // device's maxMemoryAllocationCount (0: the device's)
+  void setAllocationLimit(std::uint32_t limit);
 
 private:
   void main() noexcept;
@@ -526,6 +534,8 @@ private:
   const std::map<ChunkKey, Chunk>& arenaChunks() const;
   // D78: the frame's uploads, before its first pass; false: failed
   bool recordUploads(nvrhi::ICommandList& commandList);
+  // U2.3: one more device allocation keeps AllocationHeadroom free below the limit
+  bool allocationRoom() const;
   // whether the given fault was injected; it is taken
   bool takeFault(DebugFault fault);
   bool waitForFrameEvent(std::size_t slot);

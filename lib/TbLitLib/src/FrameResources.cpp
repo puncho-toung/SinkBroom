@@ -126,14 +126,16 @@ void RetiredResources::retire(
 
 void RetiredResources::collect(const std::uint64_t completedFrames)
 {
-  // frame f has finished once completedFrames > f
-  const auto done = std::ranges::remove_if(
-    m_entries, [&](const Entry& entry) { return entry.frame < completedFrames; });
-  for (auto it = done.begin(); it != done.end(); ++it)
-  {
-    m_bytes -= it->bytes;
-  }
-  m_entries.erase(done.begin(), done.end());
+  // frame f has finished once completedFrames > f; the removed entries' bytes are counted
+  // as they go (U2.2: after remove_if the tail holds moved-from copies of kept entries)
+  std::erase_if(m_entries, [&](const Entry& entry) {
+    if (entry.frame >= completedFrames)
+    {
+      return false;
+    }
+    m_bytes -= entry.bytes;
+    return true;
+  });
 }
 
 std::uint64_t RetiredResources::bytes() const

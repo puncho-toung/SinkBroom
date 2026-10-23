@@ -676,6 +676,16 @@ void LitSession::holdFrameCompletionForTesting(const bool hold)
   m_renderThread->holdCompletion(hold);
 }
 
+void LitSession::setAllocationLimitForTesting(const std::uint32_t limit)
+{
+  m_renderThread->setAllocationLimit(limit);
+}
+
+void LitSession::failHostAllocationsForTesting(const bool fail)
+{
+  tb::lit::failHostAllocationsForTesting(fail);
+}
+
 std::vector<ProgramReport> LitSession::programReport() const
 {
   return m_compiler ? m_compiler->programs() : std::vector<ProgramReport>{};

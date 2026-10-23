@@ -15,7 +15,12 @@ set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 CPMAddPackage(
   URI "gh:RobertBeckebans/nvrhi#3d81b755010ea27727a39eb53f8e945c358bb058"
   GIT_SUBMODULES "thirdparty/Vulkan-Headers"
-  PATCHES "patches/nvrhi-strip-msvc-flags.patch"
+  PATCHES
+    "patches/nvrhi-strip-msvc-flags.patch"
+    # M-NVRHI-DEFECT-01, the one deviation from the pin (31-LP2-FIXES.md U2.3): an upload
+    # chunk whose buffer cannot be made is reported as an Error and not mapped, and the
+    # writes that needed it return; the buffer whose memory failed is not leaked
+    "patches/nvrhi-upload-chunk-failure.patch"
   OPTIONS
     "NVRHI_BUILD_SHARED OFF"
     "NVRHI_INSTALL OFF"

@@ -304,7 +304,7 @@ std::vector<std::uint8_t> constantYCoCgBlock(const std::array<std::uint8_t, 4>& 
   static constexpr int RepShift[4] = {5, 6, 5, -1};
   auto minColor = std::array<int, 4>{};
   auto maxColor = std::array<int, 4>{};
-  for (auto lane = 0; lane < 4; ++lane)
+  for (auto lane = std::size_t{0}; lane < 4; ++lane)
   {
     const auto alpha = lane == 3;
     const auto shift = alpha ? 5 : 4;
@@ -347,7 +347,7 @@ std::vector<std::uint8_t> constantYCoCgBlock(const std::array<std::uint8_t, 4>& 
   // EmitCoCgIndices: the palette (colorMask2 keeps three bytes), the SAD of the texel's
   // four bytes to each colour, and the encoder's comparisons
   auto palette = std::array<std::array<int, 4>, 4>{};
-  for (auto lane = 0; lane < 3; ++lane)
+  for (auto lane = std::size_t{0}; lane < 3; ++lane)
   {
     palette[0][lane] = maxColor[lane];
     palette[1][lane] = minColor[lane];
@@ -355,12 +355,11 @@ std::vector<std::uint8_t> constantYCoCgBlock(const std::array<std::uint8_t, 4>& 
     palette[3][lane] = mulhi(maxColor[lane] + 2 * minColor[lane], DivBy3);
   }
   auto d = std::array<int, 4>{};
-  for (auto k = 0; k < 4; ++k)
+  for (auto k = std::size_t{0}; k < 4; ++k)
   {
-    for (auto lane = 0; lane < 4; ++lane)
+    for (auto lane = std::size_t{0}; lane < 4; ++lane)
     {
-      d[std::size_t(k)] +=
-        std::abs(texel[std::size_t(lane)] - palette[std::size_t(k)][std::size_t(lane)]);
+      d[k] += std::abs(texel[lane] - palette[k][lane]);
     }
   }
   const auto b0 = d[0] > d[3];

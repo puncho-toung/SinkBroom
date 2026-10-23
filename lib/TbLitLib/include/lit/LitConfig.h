@@ -45,6 +45,11 @@ constexpr auto ArenaBytes = std::uint64_t{64} * 1024 * 1024;
 constexpr auto UploadChunkBytes = std::size_t{32} * 1024 * 1024;
 constexpr auto UploadBytesPerFrame = std::uint64_t{32} * 1024 * 1024;
 
+// U2.3 (31-LP2-FIXES.md): the device memory allocations kept free below the device's
+// maxMemoryAllocationCount for NVRHI's upload chunks and staging: once the live count
+// passes the limit minus this, no new texture or geometry arena is made
+constexpr auto AllocationHeadroom = std::uint64_t{64};
+
 // D77 (LP2.1): texture arrivals trigger a frame at most this often (10 Hz)
 constexpr auto TextureArrivalInterval = std::chrono::milliseconds{100};
 

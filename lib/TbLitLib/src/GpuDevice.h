@@ -138,4 +138,8 @@ private:
 // session has gone: what that session's teardown left; tests and measurements only
 std::int64_t liveDeviceMemoryAllocations();
 
+// U2.3, any thread: while set, every device memory allocation in a type that is
+// host-visible and not device-local fails (NVRHI's upload chunks and staging); tests only
+void failHostAllocationsForTesting(bool fail);
+
 } // namespace tb::lit

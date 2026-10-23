@@ -107,6 +107,9 @@ struct FrameLogRow
   std::optional<std::uint64_t> pushConstantBytes;
   // D77: the frame is settled
   std::optional<bool> settled;
+  // U2.3 (31-LP2-FIXES.md), frame rows: the textures and geometry arenas not made so far
+  // because the device's allocations reached AllocationHeadroom below its limit
+  std::optional<std::uint64_t> allocRefused;
 };
 
 // the CSV header line, ending in a newline

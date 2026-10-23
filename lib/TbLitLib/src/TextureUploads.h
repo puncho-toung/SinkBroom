@@ -37,6 +37,7 @@
 #include <nvrhi/nvrhi.h>
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace tb::lit
@@ -73,7 +74,12 @@ Result<std::uint64_t> levelUploadBytes(
  * upload, so a level larger than the cap is not stuck. Once every level is written the
  * texture's state is made permanent (setPermanentTextureState(ShaderResource),
  * commitBarriers, as the engine) and the image's bytes are let go (P2.14a). An image the
- * engine would refuse makes its slot Default, with the reason. Render thread only.
+ * engine would refuse makes its slot Default, with the reason. Two refusals are the
+ * preview's own: U3.16, a level larger than UploadBytesPerFrame (the engine writes it
+ * whole, mirror.json M-TEX-DIFF-02: here it would be one writeTexture through one upload
+ * chunk of its size); U2.3, a new texture while allocationRoom says the device's
+ * allocations are within AllocationHeadroom of its limit (the slot keeps binding its
+ * intrinsic, headroomRefusals counts it). Render thread only.
  */
 class TextureUploads
 {
@@ -82,6 +88,7 @@ private:
   bool m_permanentState = true;
   std::uint64_t m_uploadedBytes = 0;
   std::uint64_t m_texturesMade = 0;
+  std::uint64_t m_headroomRefusals = 0;
 
 public:
   explicit TextureUploads(bool d24s8Supported = false);
@@ -90,14 +97,17 @@ public:
 
   /**
    * Writes what fits; frameBytes, the frame's uploads so far, grows by what is written.
-   * Whether a loading slot is left for a later frame.
+   * allocationRoom, asked before each new texture, says whether one more device
+   * allocation leaves the headroom (none: always). Whether a loading slot is left for a
+   * later frame.
    */
   bool record(
     nvrhi::IDevice& device,
     nvrhi::ICommandList& commandList,
     ImageSlots& slots,
     std::uint64_t cap,
-    std::uint64_t& frameBytes);
+    std::uint64_t& frameBytes,
+    const std::function<bool()>& allocationRoom = {});
 
   /**
    * Tests: whether a finished texture's state is made permanent (as the engine's, the
@@ -106,9 +116,11 @@ public:
    */
   void setPermanentStateForTesting(bool permanent);
 
-  // the session's texture bytes written, and textures made
+  // the session's texture bytes written, textures made, and textures not made for the
+  // allocation headroom (U2.3)
   std::uint64_t uploadedBytes() const;
   std::uint64_t texturesMade() const;
+  std::uint64_t headroomRefusals() const;
 };
 
 } // namespace tb::lit

@@ -1122,8 +1122,7 @@ constexpr auto LightsOverflowed = std::size_t{29};
 constexpr auto ConstantBytes = std::size_t{30};
 constexpr auto VolatileWrites = std::size_t{31};
 constexpr auto VolatileWriteBudget = std::size_t{32};
-constexpr auto Settled = std::size_t{34};
-constexpr auto Count = std::size_t{35};
+constexpr auto Count = std::size_t{36};
 } // namespace column
 
 std::vector<LogRow> readFrameLog(const std::filesystem::path& path)

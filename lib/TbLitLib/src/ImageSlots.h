@@ -127,8 +127,12 @@ public:
     std::uint64_t textureBytes = 0;
     // Loading: the bytes to write, let go once they are written
     std::shared_ptr<const CachedImage> pixels;
-    // the service's slot it was answered with, and the table's change count then
-    std::shared_ptr<const ImageCacheSlot> adopted;
+    // U2.1: the two facts the draws read of the service's slot it was answered with
+    // (the record's usage, which the PBR rename may change, and its image's format), held
+    // as values: a reference to that slot would keep the image's bytes past dropPixels
+    std::optional<int> adoptedUsage;
+    std::optional<int> adoptedFormat;
+    // the table's change count when it was answered
     std::uint64_t adoptedChange = 0;
     // why the service has no image (Default)
     std::string reason;

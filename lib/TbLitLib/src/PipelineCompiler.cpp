@@ -306,8 +306,8 @@ void PipelineCompiler::main()
 
 void PipelineCompiler::run(const Job& job)
 {
-  const auto failed = [](std::string error) {
-    return [error = std::move(error)]<typename L>(L lookup) {
+  const auto failed = [](std::string error_) {
+    return [error = std::move(error_)]<typename L>(L lookup) {
       lookup.state = L::State::Failed;
       lookup.error = error;
       return lookup;
