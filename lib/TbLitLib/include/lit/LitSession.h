@@ -101,6 +101,26 @@ struct SessionStatus
 };
 
 /**
+ * LP2.4 (Q14): the compile thread's own timings in one session, for the measurements:
+ * its jobs (a pipeline, a compute pipeline or a binding layout type's layouts) from the
+ * dequeue to the answer, and within them the driver's pipeline creations alone and the
+ * shaders made (the blob read, its reflection and createShader, once per permutation).
+ * Tests and measurements only.
+ */
+struct CompileTimings
+{
+  std::uint64_t jobs = 0;
+  std::uint64_t pipelines = 0;
+  std::uint64_t shaders = 0;
+  double jobMs = 0.0;
+  double pipelineMs = 0.0;
+  double shaderMs = 0.0;
+  // the first job's start and the last job's end; empty before the first job
+  std::optional<std::chrono::steady_clock::time_point> firstJobStart;
+  std::optional<std::chrono::steady_clock::time_point> lastJobEnd;
+};
+
+/**
  * D9 (LP2.3): the panel's status line: "starting" before the first frame, then "settled"
  * or "drawing", the lights drawn of those visible (and overflowed), the draws (skipped),
  * the pipelines pending and the VRAM; then every disabled program with its reason. Pure;
@@ -563,6 +583,24 @@ public:
    * step 1.
    */
   SessionStatus status() const;
+  // LP2.4 (Q14), any thread: the compile thread's timings so far; empty once teardown
+  // step 2 released the compiler
+  CompileTimings compileTimingsForTesting() const;
+  /**
+   * LP2.4, any thread: from the next snapshot that carries the document's path on, the
+   * scene asks for the bake of this game-relative map path instead
+   * ("maps/game/admin.map"), as for a document saved at <game>/base/<path>; null ends it.
+   * The caller keeps the string alive until it sets null. Process-wide, like the
+   * dispatcher; tests and measurements only, for a map loaded from a copy outside the
+   * game folder.
+   */
+  static void setMapPathOverrideForTesting(const char* gameRelativeMapPath);
+  /**
+   * LP2.4 (C30, D72), any thread: the device memory allocations the counter of the last
+   * session counts now; after a Stop, what that session's teardown left (0 expected).
+   * Process-wide; tests and measurements only.
+   */
+  static std::int64_t liveDeviceMemoryAllocationsForTesting();
   /**
    * LP2.2b (C29, P2.25), any thread but the render thread: asks the render thread for a
    * copy of the LDR target of the next settled frame (D77), triggers a frame and waits up

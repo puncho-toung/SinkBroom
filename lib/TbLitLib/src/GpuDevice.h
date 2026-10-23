@@ -134,4 +134,8 @@ private:
   deleteCopyAndMove(GpuDevice);
 };
 
+// LP2.4, any thread: the process-wide counter of deviceMemoryAllocations, also once its
+// session has gone: what that session's teardown left; tests and measurements only
+std::int64_t liveDeviceMemoryAllocations();
+
 } // namespace tb::lit

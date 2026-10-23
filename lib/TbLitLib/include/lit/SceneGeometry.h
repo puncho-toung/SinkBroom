@@ -200,4 +200,11 @@ private:
   PreviewId chunkEntityOf(const SceneNode& node) const;
 };
 
+/**
+ * LP2.4 (LitSession::setMapPathOverrideForTesting), any thread: the game-relative map
+ * path takeSnapshot uses instead of a snapshot's document path, until null; the caller
+ * keeps the string alive meanwhile. Tests and measurements only.
+ */
+void setSceneMapPathOverrideForTesting(const char* gameRelativeMapPath);
+
 } // namespace tb::lit

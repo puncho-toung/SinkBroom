@@ -324,6 +324,11 @@ std::int64_t GpuDevice::deviceMemoryAllocations() const
   return s_liveAllocations;
 }
 
+std::int64_t liveDeviceMemoryAllocations()
+{
+  return s_liveAllocations;
+}
+
 std::uint32_t GpuDevice::releaseNvrhiDevice()
 {
   m_device = nullptr;

@@ -27,6 +27,7 @@
 
 #include <fmt/format.h>
 
+#include <atomic>
 #include <chrono>
 #include <limits>
 #include <thread>
@@ -36,6 +37,10 @@ namespace tb::lit
 {
 namespace
 {
+
+// LP2.4: setSceneMapPathOverrideForTesting's path; constant-initialised and trivially
+// destructible (C9), the string the caller's
+constinit auto s_mapPathOverride = std::atomic<const char*>{nullptr};
 
 bool equalsNoCase(const std::string_view lhs, const std::string_view rhs)
 {
@@ -305,11 +310,17 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
     m_nodes[id] = std::move(node);
   }
 
-  if (snapshot.mapPath && snapshot.mapPath != m_mapPath)
+  // LP2.4: a measurement's map copy stands for the game's map of the override's path
+  auto mapPath = snapshot.mapPath;
+  if (const auto* overridePath = s_mapPathOverride.load(); overridePath && mapPath)
+  {
+    mapPath = std::string{overridePath};
+  }
+  if (mapPath && mapPath != m_mapPath)
   {
     // C10: the bake is asked for this path; a slot read before (a Save As back to it) is
     // never adopted, only the answer to this request
-    m_mapPath = snapshot.mapPath;
+    m_mapPath = std::move(mapPath);
     m_proc.reset();
     m_bakeSlot.reset();
     m_bakeTicket = m_materials ? m_materials->loadMapBake(*m_mapPath) : 0;
@@ -734,6 +745,11 @@ void SceneGeometry::finishForTesting()
     m_lights.finishForTesting();
     collect();
   }
+}
+
+void setSceneMapPathOverrideForTesting(const char* gameRelativeMapPath)
+{
+  s_mapPathOverride = gameRelativeMapPath;
 }
 
 } // namespace tb::lit

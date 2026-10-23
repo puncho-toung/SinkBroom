@@ -28,6 +28,7 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -201,6 +202,8 @@ private:
   std::uint64_t m_created = 0;
   // the graphicsPipeline and computePipeline calls so far (T0.9's test)
   std::uint64_t m_lookups = 0;
+  // LP2.4 (Q14): the thread's own timings
+  CompileTimings m_timings;
 
 public:
   PipelineCompiler(
@@ -243,10 +246,15 @@ public:
   std::uint64_t pipelinesCreatedForTesting() const;
   // the graphicsPipeline and computePipeline calls so far, from any thread
   std::uint64_t lookupsForTesting() const;
+  // LP2.4 (Q14), any thread: the jobs, pipeline creations and shaders timed so far
+  CompileTimings timingsForTesting() const;
 
 private:
   void main();
   void run(const Job& job);
+  // compile thread: adds a pipeline creation or a shader made since start to the timings
+  void timePipeline(std::chrono::steady_clock::time_point start);
+  void timeShader(std::chrono::steady_clock::time_point start);
   // compile thread
   Result<nvrhi::ShaderHandle> shader(
     const EngineBuiltin& builtin,

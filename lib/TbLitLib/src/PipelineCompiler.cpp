@@ -241,6 +241,32 @@ std::uint64_t PipelineCompiler::lookupsForTesting() const
   return m_lookups;
 }
 
+CompileTimings PipelineCompiler::timingsForTesting() const
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  return m_timings;
+}
+
+void PipelineCompiler::timePipeline(const std::chrono::steady_clock::time_point start)
+{
+  const auto ms =
+    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+      .count();
+  const auto lock = std::scoped_lock{m_mutex};
+  ++m_timings.pipelines;
+  m_timings.pipelineMs += ms;
+}
+
+void PipelineCompiler::timeShader(const std::chrono::steady_clock::time_point start)
+{
+  const auto ms =
+    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+      .count();
+  const auto lock = std::scoped_lock{m_mutex};
+  ++m_timings.shaders;
+  m_timings.shaderMs += ms;
+}
+
 void PipelineCompiler::main()
 {
   auto lock = std::unique_lock{m_mutex};
@@ -254,7 +280,21 @@ void PipelineCompiler::main()
     const auto job = m_queue.front();
     m_queue.pop_front();
     lock.unlock();
+    const auto started = std::chrono::steady_clock::now();
     run(job);
+    {
+      // LP2.4 (Q14): the job's time from its dequeue to its answer
+      const auto ended = std::chrono::steady_clock::now();
+      const auto timingLock = std::scoped_lock{m_mutex};
+      ++m_timings.jobs;
+      m_timings.jobMs +=
+        std::chrono::duration<double, std::milli>(ended - started).count();
+      if (!m_timings.firstJobStart)
+      {
+        m_timings.firstJobStart = started;
+      }
+      m_timings.lastJobEnd = ended;
+    }
     if (m_onReady)
     {
       // D77: "pipeline ready" is a frame trigger
@@ -376,6 +416,7 @@ Result<nvrhi::ShaderHandle> PipelineCompiler::shader(
 
   const auto file = shaderBlobPath(builtin.name, stage);
   auto& device = m_device.device();
+  const auto started = std::chrono::steady_clock::now();
   auto made =
     readShaderBlob(m_gamePath, builtin.name, stage)
     | kdl::and_then(
@@ -402,6 +443,7 @@ Result<nvrhi::ShaderHandle> PipelineCompiler::shader(
     | kdl::or_else([&](const auto& e) -> Result<nvrhi::ShaderHandle> {
         return Error{fmt::format("{}: {}", file, e.msg)};
       });
+  timeShader(started);
 
   auto entry = ShaderEntry{};
   if (made.is_success())
@@ -597,7 +639,9 @@ Result<GraphicsPipelineLookup> PipelineCompiler::makeGraphics(const PipelineKey&
            {
              hook();
            }
+           const auto started = std::chrono::steady_clock::now();
            lookup.pipeline = m_device.device().createGraphicsPipeline(desc, target);
+           timePipeline(started);
            if (!lookup.pipeline)
            {
              return Result<GraphicsPipelineLookup>{Error{fmt::format(
@@ -647,7 +691,9 @@ Result<ComputePipelineLookup> PipelineCompiler::makeCompute(const int program)
     desc.bindingLayouts.push_back(layout);
   }
   // TonemapPass.cpp:144-147, 196-199
+  const auto started = std::chrono::steady_clock::now();
   lookup.pipeline = m_device.device().createComputePipeline(desc);
+  timePipeline(started);
   if (!lookup.pipeline)
   {
     return Error{

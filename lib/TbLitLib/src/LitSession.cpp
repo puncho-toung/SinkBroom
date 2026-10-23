@@ -27,6 +27,7 @@
 #include "Swapchain.h"
 #include "lit/CpuPool.h"
 #include "lit/LightRecord.h"
+#include "lit/SceneGeometry.h"
 #include "lit/Snapshot.h"
 
 #include "kd/result.h"
@@ -683,6 +684,21 @@ std::vector<ProgramReport> LitSession::programReport() const
 SessionStatus LitSession::status() const
 {
   return m_renderThread ? m_renderThread->status() : SessionStatus{};
+}
+
+CompileTimings LitSession::compileTimingsForTesting() const
+{
+  return m_compiler ? m_compiler->timingsForTesting() : CompileTimings{};
+}
+
+void LitSession::setMapPathOverrideForTesting(const char* gameRelativeMapPath)
+{
+  setSceneMapPathOverrideForTesting(gameRelativeMapPath);
+}
+
+std::int64_t LitSession::liveDeviceMemoryAllocationsForTesting()
+{
+  return liveDeviceMemoryAllocations();
 }
 
 std::string sessionStatusLine(
