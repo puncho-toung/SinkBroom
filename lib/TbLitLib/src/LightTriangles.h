@@ -84,15 +84,14 @@ LightTriangles lightTrianglesOf(
  * DX.2: the light triangles of every (light, chunk) pair the frontend lights, as the
  * engine makes them once for its static interactions (GenerateAllInteractions: every
  * static-model entity, the world's areas, brush entities and patches alike), cached per
- * (light version, chunk caster version, the chunk's model matrix) and replaced when any of
- * them changes; a pair a camera move leaves out of the lists is kept for when it comes
+ * (light version, chunk caster version, the chunk's model matrix) and replaced when any
+ * of them changes; a pair a camera move leaves out of the lists is kept for when it comes
  * back, and once the cache holds more than LightTriangleCacheSize pairs the ones the last
  * build did not ask for go. A miss is answered Pending and queued; endBuild hands the
- * misses to the CPU pool
- * as one job (copies of the positions and indexes, the light's projection, the model
- * matrix), which runs the copied code (engineInteractionLightTris); collect takes a
- * finished job's answers and bumps version, which the lists' key holds. Without a pool
- * (tests) the misses are answered at endBuild. Render thread.
+ * misses to the CPU pool as one job (copies of the positions and indexes, the light's
+ * projection, the model matrix), which runs the copied code (engineInteractionLightTris);
+ * collect takes a finished job's answers and bumps version, which the lists' key holds.
+ * Without a pool (tests) the misses are answered at endBuild. Render thread.
  */
 class LightTriangleCache
 {
