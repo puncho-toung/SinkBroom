@@ -112,7 +112,7 @@ EngineBounds engineZeroBounds();
 // idBounds::IsCleared (Bounds.h:252-255): the minimum's x above the maximum's
 bool engineBoundsIsCleared(const EngineBounds& bounds);
 
-// idBounds::AddBounds (Bounds.h:264-298): bounds grown to hold other, per component
+// idBounds::AddBounds (Bounds.h:293-327): bounds grown to hold other, per component
 EngineBounds engineAddBounds(const EngineBounds& bounds, const EngineBounds& other);
 
 // bounds_unitCube (Bounds.cpp:34): (-1 -1 -1) to (1 1 1)
@@ -134,7 +134,7 @@ EngineVec3 engineTransformPoint(const EngineMat4& matrix, const EngineVec3& poin
 
 /**
  * idRenderModelStatic::FinishSurfaces' growth of the bounds of a surface whose material
- * has a deform (Model.cpp:1343-1360, transcribed on the copied idVec3): the cube
+ * has a deform (Model.cpp:1346-1360, transcribed on the copied idVec3): the cube
  * mid ± ( ( bounds[0] - mid ).Length() + 20 ), mid = ( bounds[1] + bounds[0] ) · 0.5,
  * Length through idMath::Sqrt (x · InvSqrt( x )).
  */

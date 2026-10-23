@@ -8648,9 +8648,17 @@
         {
           "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
           "symbol": "Builder::makeContext (context.area)"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::updateEntityReferences"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/ChunkBuilder.h",
+          "symbol": "ChunkKey::area, ChunkEntityState::areas"
         }
       ],
-      "note": "R3.8, for LP4: a brush entity's chunks take the area of its pivot (PointInArea of modelOrigin), where the engine references the entity in every area its bounds touch; a pivot in a wall (a door hinge, an origin brush in the frame) gives area -1, the no-.proc case. Before LP4 reads ChunkKey::area, entity chunks must take the engine's area set (the bounds pushed down the tree, as lights are, M-LIGHT-FN-06). Deferred from the LP1b fix round: the chunk key holds one area"
+      "note": "R3.8; closed in LP4.0 (C31, P4.9, M-REF-01): a brush entity's chunks keep the area of its pivot (PointInArea of modelOrigin; -1 for a pivot in a wall: a door hinge, an origin brush in the frame) in ChunkKey::area as a key only, where the engine references the entity in every area its bounds touch; that reference set, the bounds pushed down the tree as lights' are (M-LIGHT-FN-06), is ChunkEntityState::areas, which visibility, pairing and the grid area read from LP4.1 on, never the key's area. What remains is the key's own value, which nothing dispatches on"
     },
     {
       "id": "M-LIGHT-COPY-01",
@@ -14534,15 +14542,28 @@
           ],
           "anchor": "R_AddSingleLight, masked occlusion culling and the shadow LOD",
           "sha256": "274887e149a2e1a799b6b1d0b2d40b0f2ef6ed5b2353f6684a426ddcbf73ca59"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            362,
+            367
+          ],
+          "anchor": "R_AddSingleModel: a light with an empty scissor is skipped",
+          "sha256": "9028e6ea539dd668161a73baef64441a811fd88a359d8b18eef60a3e735128dc"
         }
       ],
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/src/LitFrontend.cpp",
           "symbol": "buildFrontendLists"
+        },
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "flowView (LP4.0; wired in LP4.1)"
         }
       ],
-      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet: the portal rects and the \"area not connected to the view\" cull (LP4), r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), material LODs, and the shadow LOD (K26, LP3). The static interactions' light triangles, which P2.26 counted here (\"its triangles outside the volume add nothing\"), are mirrored since the LP2 fix round (DX.2, M-INTER-01): LP2.3 found the volume boundary's LIGHT_CLIP_EPSILON dropping whole faces the preview lit. U3.9 (LP2 fix round, recorded; mirrored in LP4): a light whose scissor comes out empty is skipped (LitFrontend.cpp), where the engine keeps it and DrawElementsWithCounters draws it unscissored (RenderBackend_NVRHI.cpp:528-535); no pixel differs today (outside the volume the border sampler gives black), and only LP4's portal rects can make the scissor empty."
+      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet. The portal rects and the \"area not connected to the view\" cull are mirrored since LP4.0 (lit/ViewFlow.h flowView, M-FLOW-01 to M-FLOW-06) and wired into buildFrontendLists in LP4.1 (C33: the scissor is the flow's rect intersected with the projected bounds); r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), material LODs, and the shadow LOD (K26, LP3) remain. The static interactions' light triangles, which P2.26 counted here (\"its triangles outside the volume add nothing\"), are mirrored since the LP2 fix round (DX.2, M-INTER-01): LP2.3 found the volume boundary's LIGHT_CLIP_EPSILON dropping whole faces the preview lit. U3.9 corrected (SC371, LP4.0): a light whose scissor comes out empty is skipped (LitFrontend.cpp), and so it is in the engine: R_AddSingleModel takes no contacted light whose scissor is empty (tr_frontend_addmodels.cpp:362-367), so it gets no interaction and the backend never draws it; the skip is the engine's, not a difference, and LP4.1's portal rects are what can make it empty"
     },
     {
       "id": "M-FRONT-DIFF-03",
@@ -15696,6 +15717,1204 @@
         }
       ],
       "note": "K28 (31-LP2-FIXES.md, replacing DX.1; restated in round 2 from 32-LP2-VERIFY.md V2.1): dmap runs OptimizeEntity on every area by default, which throws away each coplanar group's side triangles and builds them again (BuildOptTriangles, RegenerateTriangles) from candidate edges sorted by an unstable qsort (equal lengths tie, as a rectangle's two diagonals do), so the .proc's triangles are not fans of the side windings (the parity .proc: 96 of 110 pairs of the (a b c)(d c b) shape); copying the optimizer would import the CRT's qsort tie order. The preview keeps its own triangulation (K9's family). The mechanism by which this changes pixels: the interaction vertex shader writes the normalised vector to the viewer per vertex in tangent space (interaction.vs.hlsl:193-200), the rasteriser interpolates it over the triangle, and the pixel shader normalises it again (interaction.ps.hlsl:98) and reads it in the view-dependent normal contrast before the Lambert term (:112-121) and in the half vector and the BRDF (:138-139, :181-183). A per-vertex normalised vector interpolated over a triangle depends on the triangle: the same face cut along the other diagonal gives another per-pixel view vector (4-17 degrees apart on large triangles near the camera, measured from the .proc's triangles). So bump-mapped and specular pixels differ wherever a triangle is large against its distance from the camera: |d| <= 4 on R05 (941 pixels beyond 1), <= 2 on R18 (28), masked <= 17 at texel edges on R08, R09 and R12's ceilings, |d| = 1 on 0.01-3 % of every bump-mapped row, and up to 12 where a triangle crosses the near plane (R05b: 2,568 unmasked pixels from 2 to 12, 9,950 at 1, masked max 7; the same on the LP2.3 run and the fix round's). A flat normal and no specular stage do not take the view vector out: the legacy path still adds the BRDF's specular term, and the engine's Fresnel_Schlick( 0, vdotH ) is ( 1 - vdotH )^5 (BRDF.inc.hlsl:60-63), so round 2's R19-R21 (R01-R03's lights on legacy diffuse with bumpmap _flat) differ by 1 on 1,677, 355 and 957 unmasked pixels, mostly on the large floor and ceiling triangles; only R14 (a parallel light head-on on a flat wall, vdotH near 1) is exact. Near-plane clipping only amplifies the effect (a vertex beside or behind the camera carries a view vector almost perpendicular to the view); the parity rows' room split 100 units ahead of the camera (parity.py room_split) stays, harmless. The parity method: R05, R18 and R19-R21 are K28 rows with recorded thresholds (max, mean, p99, the count beyond 1; the mean pins a row's |d| = 1 count), R14 the exact row, the other axial rows +-1 (K28's empirical bound there), R05b reported; the classes live in parity.py's row table. LP7 (a follow-up, not done): draw the .proc's triangles in the parity path, test-only first, then for the faces unchanged since the bake. Also seen on the fix round's run: dmap snaps brush vertices to its 1/32 grid and removes the faces that lie in slabs thinner than 0.1 between near-coplanar planes (a wall behind panels 0.05 in front of it), and an entity inside such a slab is linked to no area; the preview builds the editor's brushes as they are, so faces closer than 0.1 to another brush's parallel plane can differ in the same way (R13 is built without such faces since round 2)."
+    },
+    {
+      "id": "M-AREA-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1202,
+            1209
+          ],
+          "anchor": "idRenderModelStatic::FinishSurfaces: bounds.Zero(), and the return without surfaces",
+          "sha256": "d70b55595da917454ffea960893fe14eba920dd7cf5142624088e94d6bfa2bde"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1328,
+            1366
+          ],
+          "anchor": "FinishSurfaces: the model bounds, a deforming surface's grown to its cube",
+          "sha256": "c25be2c90c17fca8068ebcc4bef3ff11aaa75f3528e477b7a305eec0e0a246bd"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            606,
+            609
+          ],
+          "anchor": "R_BoundTriSurf",
+          "sha256": "ddb552e6776e29c6b3a9a596ebecf9a2dc0a9c2c27c2f093ef29c261249df9a6"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            607,
+            608
+          ],
+          "anchor": "idRenderModelStatic::LoadBinaryModel: the model's stored bounds",
+          "sha256": "1b61d8e96d31d34bb8fd239df741cd71f8304ae27810866d1dbd3a23f232695d"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            74,
+            74
+          ],
+          "anchor": "deform_t DFRM_NONE",
+          "sha256": "d8b9eaada8d6b32bdc115138f61cb9a2433b34b107193f5beb4f676fccb32440"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            182,
+            182
+          ],
+          "anchor": "ParseModel: declManager->FindMaterial( token ), makeDefault true",
+          "sha256": "3556da123801eb446b73c398f5dfef01f36f65f6fae22dff7669354e1f813ce5"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            1029,
+            1095
+          ],
+          "anchor": "idRenderWorldLocal::AddWorldModelEntities",
+          "sha256": "eb1623ce214b9fc34165909f93b9baa375d8f09063b791ab1130db765d662707"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            49,
+            60
+          ],
+          "anchor": "R_DeriveEntityData",
+          "sha256": "9dca18141e402f3f9e690ae379e5134ca1b41bf836d5115e0f95af261e0a1292"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            1220,
+            1230
+          ],
+          "anchor": "idRenderWorldLocal::AreaBounds",
+          "sha256": "9f7c52a8c7ffc411984f6e5fc9e7ef4321af82507bdf7aedb343048a5fa366e9"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/AreaData.cpp",
+          "symbol": "buildAreaData, procModelBounds"
+        },
+        {
+          "file": "lib/TbLitLib/src/ProcFile.cpp",
+          "symbol": "parseModel (ProcSurface::bounds)"
+        },
+        {
+          "file": "lib/TbLitLib/src/BprocModel.cpp",
+          "symbol": "readBinaryModel (BprocModel::bounds)"
+        },
+        {
+          "file": "lib/TbLitLib/src/BprocFile.cpp",
+          "symbol": "readBprocTree (ProcModel::bounds, boundsKnown)"
+        },
+        {
+          "file": "lib/TbLitLib/src/MapBake.cpp",
+          "symbol": "readMapBake (MapBake::areas)"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "loadMapBake's material lookup"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "scanTable, areaData"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineClearedBounds, engineZeroBounds, engineBoundsIsCleared, engineAddBounds, engineUnitCube, engineBoundsCenter, engineOffsetScaleForBounds, engineDeformSurfaceBounds"
+        }
+      ],
+      "note": "LP4.0 step 1 (C31, P4.10, P4.30): per area N the world entity AddWorldModelEntities makes: the _areaN model's FinishSurfaces bounds (a model without surfaces Zero(), a point at the origin, not cleared; otherwise Clear(), then AddBounds of each surface's R_BoundTriSurf bounds, the MinMax of every parsed position through the shim's scalar MinMax (M-GEO-FN-01, exact as the engine's SSE MinMax); a surface whose material's Deform() is not DFRM_NONE first grown to mid +- ( ( bounds[0] - mid ).Length() + 20 ), transcribed on the copied idVec3 so Length is idMath::Sqrt's x * InvSqrt( x )); a .bproc model keeps the bounds LoadBinaryModel reads, which the engine wrote already grown (the fixture's .proc and .bproc agree bit for bit: tst_AreaData.cpp). Then R_DeriveEntityData with the identity axis at the origin: inverseBaseModelProject = OffsetScaleForBounds( CreateFromOriginAxis( 0, identity ), modelBounds ) and area->globalBounds = ProjectedBounds( it, bounds_unitCube, false ) (an ulp from the model bounds at most, through _mm_rcp32_ps; none on the fixture). Built on the parse thread inside readMapBake once the tree is chosen: each surface's material is asked of the copied registry through MaterialDecls::lookup, the parse thread's lookup, which makes an implicit material for a name without a decl as FindMaterial( name ) with makeDefault true does (no deform); a lookup that reached an engine error counts as no deform. The scene adopts MapBake::areas with the tree (SceneGeometry::areaData). A material edit that adds or drops a deform without a new dmap keeps the bake (its files' probes are unchanged), and its AreaData with it, until the bake is read again"
+    },
+    {
+      "id": "M-AREA-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            1005,
+            1022
+          ],
+          "anchor": "idRenderWorldLocal::ClearPortalStates",
+          "sha256": "9ecda0cb739e51db52cc3db48bd25b1cf605836bed0ceb0b7cf8570f82fc1abf"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            1050,
+            1065
+          ],
+          "anchor": "idRenderWorldLocal::FloodConnectedAreas",
+          "sha256": "31bb2a6702dfb32b4c71a631b9789e6a199f807cbf93f082671a5edf6f5c41f1"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            1072,
+            1098
+          ],
+          "anchor": "idRenderWorldLocal::AreasAreConnected",
+          "sha256": "6a97472b86f57910bfeafef9af14404614afc8efb5cf600fdc4dff754e4264e6"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            694,
+            738
+          ],
+          "anchor": "BuildConnectedAreas_r, BuildConnectedAreas",
+          "sha256": "c9835f2fd58c61309af30e4e7b0f50a504d9c8dab6051974a6cf625b9adbf4ef"
+        },
+        {
+          "file": "neo/d3xp/Mover.cpp",
+          "lines": [
+            383,
+            383
+          ],
+          "anchor": "idMover: FindPortal of the door's bounds, whose portal SetPortalState closes",
+          "sha256": "8adc97a62946afb95b46306cde47ba53f13ed57d59c9c1468480d9b1739a09b7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/AreaData.cpp",
+          "symbol": "connectedComponents, areasConnected, areaPortalSides"
+        },
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "engineBuildConnectedAreas"
+        }
+      ],
+      "note": "LP4.0 step 2 (D82, K30): every portal is open, as ClearPortalStates leaves them at load, because the editor has no door states: the game's doors close their portals at spawn (PS_BLOCK_ALL), so lights, entities and areas behind a closed door are culled and disconnected there and visible here (K30). With every portal open FloodConnectedAreas makes the same groups for every portal attribute: AreaData::components holds one id per area, the same for the areas a flood reaches; the engine numbers a group by the counter of the last of its areas' floods, here by the order of each group's lowest area, and only equality is read. areasConnected is AreasAreConnected (false when either area is -1; an area past the count, the engine's Error, false); engineBuildConnectedAreas floods from the view's area through every portal of each area's list, all true outside the world"
+    },
+    {
+      "id": "M-REF-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            156,
+            197
+          ],
+          "anchor": "R_CreateEntityRefs",
+          "sha256": "0b35e9fab9b62f5da21ce0e4e00c2d7c161a73e1bf3694eeb5a6cb22d009bf03"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            49,
+            60
+          ],
+          "anchor": "R_DeriveEntityData",
+          "sha256": "9dca18141e402f3f9e690ae379e5134ca1b41bf836d5115e0f95af261e0a1292"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            1811,
+            1845
+          ],
+          "anchor": "idRenderWorldLocal::AddEntityRefToArea: prepended to the entity's chain, appended to the area's list",
+          "sha256": "523d77ccd4fc560a3e1569e6f4638123cf05f65b941b5d4223747fcf4cc7de37"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            814,
+            853
+          ],
+          "anchor": "R_AddSingleModel: the grid area from the model surface's tri->bounds",
+          "sha256": "bc46ede2370f73e68b680a096602ae402d4c3723946ed3059db67324ad38e047"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::updateEntityReferences, apply, collectChunks"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/ChunkBuilder.h",
+          "symbol": "ChunkEntityState::materialBounds, localReferenceBounds, inverseBaseModelProject, globalReferenceBounds, areas; ChunkKey::area"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightData.cpp",
+          "symbol": "pushFrustumIntoTree, commonChildrenAreas (M-LIGHT-FN-06)"
+        }
+      ],
+      "note": "LP4.0 step 4 (C31, D80, P4.9, P4.11): once every job of a batch has applied, each brush entity whose cells or state it touched gets, from all its chunks across cells and parts (no single job sees them all): per engine material the union of its chunks' bounds in model space, grown to FinishSurfaces' cube where the table's entry has a deform (the engine's per-model-surface tri->bounds, which the grid-area rule reads, FAM:814-853); the model bounds (localReferenceBounds) as their union; R_DeriveEntityData's inverseBaseModelProject = OffsetScaleForBounds( CreateFromOriginAxis( modelOrigin, parms.axis ), localReferenceBounds ) (litSpaceOf's matrix) and globalReferenceBounds = ProjectedBounds( it, bounds_unitCube, false ); and R_CreateEntityRefs' areas, PushFrustumIntoTree of the unit cube through it over the adopted tree (M-LIGHT-FN-06's walk, commonChildrenAreas from AreaData), kept in the engine's chain order: AddEntityRefToArea prepends each new reference to the entity's chain (RenderWorld.cpp:1836-1837), so the reverse of the push order, where a light's derived.areas keeps the push order. No references without a tree (D94) or for cleared bounds (an entity without chunks; the engine's Zero() bounds of an empty brush model would reference its pivot's area, with nothing to draw or light either way): the outside set (D81). ChunkKey::area of an entity chunk stays the pivot's area as a key only (P4.9). Render thread (SceneGeometry::apply), through the copied pure functions of M-FLOW-PURE-01"
+    },
+    {
+      "id": "M-FLOW-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            754,
+            822
+          ],
+          "anchor": "idRenderWorldLocal::FindViewLightsAndEntities",
+          "sha256": "fa78f364e1d62e0dfc43bd5b6f9515a1bc05c14bf673005c3873d2f2bd21bcc8"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            1076,
+            1083
+          ],
+          "anchor": "RenderScene: viewDef->scissor ( 0, 0, w - 1, h - 1 ) and initialViewAreaOrigin = vieworg",
+          "sha256": "26042d0bd3258de2467c3decefcf18547371b250c52a4c3eeafae7434f2d6b77"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            179,
+            179
+          ],
+          "anchor": "r_usePortals \"1\"",
+          "sha256": "94366b6aba3fb1be8dd59ec8dbe303cf559889ad8c0658da837129036da20701"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            184,
+            184
+          ],
+          "anchor": "r_singleArea \"0\"",
+          "sha256": "e1d16568382ea33be61a3c2729e052048d7eeace60967f684151b1b0658e1168"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "flowView"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineFrameDefaults::usePortals, singleArea"
+        }
+      ],
+      "note": "LP4.0 step 6 (C32, D79): the view's area PointInArea( vieworg ) (an area past the count, the engine's Error, is -1), BuildConnectedAreas (M-AREA-02), then FlowViewThroughPortals with the first five frustum planes (M-FLOW-08) and the view's scissor; r_singleArea's debug branch is not mirrored (r_singleArea 0, static_assert). Without a tree, or a tree without nodes or AreaData, nothing is flowed (M-FLOW-DIFF-03, D94). Results: viewArea, connectedAreas, the areas AddAreaToView marked, the chain and portal counts, and per world entity, brush entity and light the union of the rects of the chains it passed, kept only when not empty (an empty one is not directly visible, FAM:340, and an empty-scissor light lights nothing, FAM:362-367). The outside set (D81) is never in an area's lists, so never in the result: LP4.1 adds it. Pure; the render thread (LP4.1) or any thread"
+    },
+    {
+      "id": "M-FLOW-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            658,
+            687
+          ],
+          "anchor": "idRenderWorldLocal::FlowViewThroughPortals",
+          "sha256": "ec32f87ef5afe8e36be0791e1295dcf0bdc8d1a9e8a786f8e11a1c53ca7a1c41"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "Flow::flowViewThroughPortals"
+        }
+      ],
+      "note": "LP4.0 step 6: the view's stack holds the given planes and the view's scissor; outside the world every area is added once with it (areaScreenRect, which nothing reads (SC317), is not kept), else the flood starts in the view's area"
+    },
+    {
+      "id": "M-FLOW-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            37,
+            47
+          ],
+          "anchor": "MAX_PORTAL_PLANES, portalStack_t",
+          "sha256": "ec3cde8d38490697fc1b200dbea8e68638fec59d7c44cebb9cce516ef518f386"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            514,
+            647
+          ],
+          "anchor": "idRenderWorldLocal::FloodViewThroughArea_r",
+          "sha256": "881077d61da54020b296749a1cf55774e6c0e6e1eb3a916d39d629fe72d31c0f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "Flow::floodViewThroughArea, Flow::enter, PortalStack"
+        }
+      ],
+      "note": "LP4.0 step 6 (C32.3, P4.17, P4.23): AddAreaToView, then per portal of the area's list in its order (the .proc's reversed, M-FLOW-07): no portal blocks (PS_BLOCK_VIEW, K30); d = the side's plane's Distance( origin ) (the copied idPlane::Distance), skipped below -0.1; skipped when that side is on the stack (check->p == p compares the side's portal_t: the other side of a portal on the stack is not skipped by it, so with the eye within 0.1 of a portal's plane the flow may go back through its other side, as the engine's does, which repeats chains but changes no union); within 1.0 the stack is copied (planes and rect, no clip); else a copy of the side's winding is clipped by every -plane of the stack with epsilon 0 (idFixedWinding::ClipInPlace, M-FLOW-PURE-01; an empty result skips the portal), PortalIsFoggedOut is false (M-FLOW-DIFF-01), the rect is ScreenRectFromWinding (M-FLOW-06) intersected with the stack's, the planes are, for i below min( points, 20 ), the plane of normal Cross( origin - w[i+1], origin - w[i] ) through the origin (skipped when Normalize() gives less than 0.01), then the portal's own plane, and the flood goes on into the side's area. The recursion is an explicit stack (a vector of PortalStack frames, each with its 21 planes, and the clipped windings in vectors: all heap), entered in the recursion's order; each side enters a stack once, so its depth is at most twice the portal count (a 300-area corridor: tst_ViewFlow.cpp). The render thread is a plain std::thread (512 KB on macOS), which this keeps clear of the engine's per-level idFixedWinding and _alloca"
+    },
+    {
+      "id": "M-FLOW-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            412,
+            421
+          ],
+          "anchor": "idRenderWorldLocal::AddAreaToView",
+          "sha256": "9d6644942233faa2565f4b8587e125bc6a9ee5f1ae52d02362c862b51304a3a8"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            222,
+            267
+          ],
+          "anchor": "idRenderWorldLocal::AddAreaViewEntities",
+          "sha256": "54daa08c5f6637508f676982679efcde3fe0be04df58ff05655eb093ab596b0d"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            100,
+            122
+          ],
+          "anchor": "R_SetEntityDefViewEntity: a cleared scissor when first set up",
+          "sha256": "94465541d207423ee62b19dc9505b67851414ef406e773c9bc6b3c3645e60752"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            131,
+            146
+          ],
+          "anchor": "CullEntityByPortals, r_useEntityPortalCulling 1",
+          "sha256": "4a458478836bcc98ca705d7b179eee091b9f9379f836f1380356a3cb51883c73"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            156,
+            156
+          ],
+          "anchor": "r_useEntityPortalCulling \"1\"",
+          "sha256": "a8e882a0b4749852321517e35758d8719176c9a669c4eb8db9c6cf9ee5ac485a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "Flow::addAreaToView, Flow::addAreaViewEntities, engineCullCornersByPortals"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineFrameDefaults::useEntityPortalCulling"
+        }
+      ],
+      "note": "LP4.0 step 6 (C32.5): AddAreaToView marks the area, then its entities, then its lights; AddAreaViewEnvprobes is a debug list (its culls are #if 0, SC306) and is left out. The area's entity references: its world entity (AddWorldModelEntities references it in its own area alone; its corners from AreaData's inverseBaseModelProject; a model of cleared bounds, which no .proc area model has, is skipped as a guard) and every brush entity whose references hold the area (r_singleEntity -1; no faded decals; no suppressSurfaceInViewID or allowSurfaceInViewID in the editor). CullEntityByPortals mode 1: GetFrustumCorners( inverseBaseModelProject, bounds_unitCube ), culled when all eight are FRUSTUM_CULL_FRONT (the sign bit: -0 is behind) of any one of the chain's planes, the portal's own included; the corners are computed once per flow. Else the viewEntity's scissor (cleared when first set up) is united with the chain's rect. The order of an area's lists (entityRefs appended, lightRefs prepended) changes no union and is not kept"
+    },
+    {
+      "id": "M-FLOW-05",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            364,
+            402
+          ],
+          "anchor": "idRenderWorldLocal::AddAreaViewLights",
+          "sha256": "32e597a3c2b4a018f42f043804bfc2561806f9b98aea8632ab3760f0664d9efb"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            66,
+            90
+          ],
+          "anchor": "R_SetLightDefViewLight: a cleared scissor when first set up",
+          "sha256": "b40c655c9262ca94818ecab75f7a356866a01b98b4397c5fb5d21d2f9d572d31"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            276,
+            291
+          ],
+          "anchor": "CullLightByPortals, r_useLightPortalCulling 1",
+          "sha256": "2f4a3e226eec9095f598b132600c49829e43fe0679a214c3bfe779a6ecc0c8c9"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            153,
+            154
+          ],
+          "anchor": "r_useLightPortalCulling \"1\", r_useLightAreaCulling \"1\"",
+          "sha256": "1c77a7c2b0b2e434e0e01321b6415271a44417bf8bd345e1e6580626b39fd80f"
+        },
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            181,
+            184
+          ],
+          "anchor": "idRenderLightLocal::LightCastsShadows",
+          "sha256": "65990d70cbe7c89ddecca7b517f349e057e2993fddd3cdf1df5e00526f17ee90"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            719,
+            723
+          ],
+          "anchor": "idMaterial::LightCastsShadows",
+          "sha256": "d1e61996c61869b63cd80688b9af0d285df8144bd0b280a128264c16e2bdd136"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2657,
+            2661
+          ],
+          "anchor": "the noShadows keyword: MF_NOSHADOWS",
+          "sha256": "0ae5baafd571cab96f86c3ff4f254cc64bdf6c5ae0e7741bffec3bd445d944c3"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2684,
+            2689
+          ],
+          "anchor": "the forceShadows keyword: MF_FORCESHADOWS",
+          "sha256": "37a2fad4f802f6acb70daed3230e886878bdd27eceb7e117f4044e9d8b5facb3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "Flow::addAreaViewLights, lightCastsShadows"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineLightCastsShadows"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineFrameDefaults::useLightPortalCulling, useLightAreaCulling"
+        }
+      ],
+      "note": "LP4.0 steps 6, 7 (C32.5, P4.21): the area's light references (every light whose derived.areas hold it): r_useLightAreaCulling 1 drops a light that casts no shadows whose own area is not -1 and not connected to the view's (the engine's comment says the opposite of its code; an area past the count counts as not connected); CullLightByPortals mode 1: GetFrustumCorners( inverseBaseLightProject, bounds_zeroOneCube ) against every plane of the chain, culled when all eight corners are in front of one; else the viewLight's scissor (cleared when first set up) is united with the chain's rect. A light without references is never in an area's list, so never a view light here (the outside set is LP4.1's, D81). lightCastsShadows = forceShadows (false for a map light: M-LIGHT-DIFF-07) || ( !noShadows && the shader's LightCastsShadows: MF_FORCESHADOWS || ( !fogLight && !ambientLight && !blendLight && !MF_NOSHADOWS ) ), the flags the copied parser set (MaterialEntry::materialFlags holds every materialFlags_t bit); nullopt while the shader is pending or has no entry (LP2's pending rule)"
+    },
+    {
+      "id": "M-FLOW-06",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            428,
+            451
+          ],
+          "anchor": "idRenderWorldLocal::ScreenRectFromWinding",
+          "sha256": "52635a083883496dd5dd617a55b9ac622def8aff82a0ddcb69cec5f1b46909b1"
+        },
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            215,
+            243
+          ],
+          "anchor": "R_GlobalToNormalizedDeviceCoordinates",
+          "sha256": "8442f7a84a114de014d8e7e21ffac0ac3accc2200c79582a1d8bde2d05db6222"
+        },
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            253,
+            258
+          ],
+          "anchor": "R_LocalPointToGlobal (tr.identitySpace leaves the point as it is)",
+          "sha256": "99f2b71552d5fbb252d961b055711c5b302ecc737223863c5125b8d6e67e4d25"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "engineScreenRectFromWinding"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitView.cpp",
+          "symbol": "engineGlobalToNdc"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineGlobalToNormalizedDeviceCoordinates"
+        }
+      ],
+      "note": "LP4.0 steps 5, 6 (C32.4, P4.16): viewWidth = viewport.x2 - x1 (width - 1) and viewHeight = viewport.y2 - y1 (height - 1); each point (in world space: tr.identitySpace's R_LocalPointToGlobal is the identity) through R_GlobalToNormalizedDeviceCoordinates, transcribed on the view's float[16] modelViewMatrix and projectionMatrix (1 / clip w, then three products), then AddPoint( ( ndc.x * 0.5 + 0.5 ) * viewWidth, ( ndc.y * 0.5 + 0.5 ) * viewHeight ) (M-FLOW-RECT-01), then Expand. The rect is in GL's unflipped y-up space, the space of engineLightScissor's rect before engineScissorRect's flip. The projection is the view's one, unjittered (M-FLOW-DIFF-02)"
+    },
+    {
+      "id": "M-FLOW-07",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            450,
+            472
+          ],
+          "anchor": "ParseInterAreaPortals: each portal's two sides, prepended to both areas' lists",
+          "sha256": "12971a502aaaffd7cb09557f1405ed295c017658aa34ef57676abf5016067637"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            521,
+            543
+          ],
+          "anchor": "ReadBinaryAreaPortals: the same for a .bproc",
+          "sha256": "12971a502aaaffd7cb09557f1405ed295c017658aa34ef57676abf5016067637"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/AreaData.cpp",
+          "symbol": "areaPortalSides"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/AreaData.h",
+          "symbol": "AreaPortal, AreaInfo::portals"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineReverseWinding, engineWindingPlane"
+        }
+      ],
+      "note": "LP4.0 step 2 (P4.17): the positive area's side keeps the file's winding and leads into the negative area; the negative area's side is the winding's Reverse() (point i at n - 1 - i) and leads into the positive one; each side's plane is GetPlane of its own winding (so the two are each other's negation only up to GetPlane's centre's rounding), plane.Zero() below three points. Each side is prepended to its area's list, so each list holds the .proc's portals in reverse order. A portal naming an area past the count is skipped (the readers refuse such a file)"
+    },
+    {
+      "id": "M-FLOW-08",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            912,
+            921
+          ],
+          "anchor": "R_RenderView: frustums[FRUSTUM_PRIMARY], negated, the near plane's d less r_znear",
+          "sha256": "89f8fe6ee0c9fe7bf7c6d76aae1e36badd5a6a5c4e47283237cd66c2eaa22903"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            118,
+            118
+          ],
+          "anchor": "r_znear \"3\"",
+          "sha256": "a80ad6774b9fba67ababc664683377a7e9c877cb49f023c9f3ad662d7e7cd33f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitView.cpp",
+          "symbol": "engineViewFrustumPlanes"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineFrustumPlanes"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineFrameDefaults::znear"
+        }
+      ],
+      "note": "LP4.0 step 5 (C32.1): the copied GetFrustumPlanes( worldMvp, zeroToOne false, normalize true ) (M-FLOW-PURE-01): left, right, bottom, top, near, far; isZeroOneZ is false, so the near plane is row 3 + row 2, which for the projection's clip z of 0..1 lies zNear / 1.999 ahead of the eye, not at zNear; the far plane row 3 - row 2 of the infinite projection ([2][2] -0.999) lies 3000 behind the eye. Every plane negated (the positive side is outside), then the near plane's d less r_znear 3, which puts it 3 - zNear / 1.999 behind the eye so that no portal is near-clipped. The flow takes the first five"
+    },
+    {
+      "id": "M-FLOW-09",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            48,
+            48
+          ],
+          "anchor": "r_useAreasConnectedForShadowCulling \"2\"",
+          "sha256": "1634af842396eef23ceef3eeb7c1225dd541b7d6dc18b5d4cf889ac424aeddbb"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            488,
+            582
+          ],
+          "anchor": "R_AddSingleLight: the light's areas, their connectivity, the directly visible entities",
+          "sha256": "977a340b2f4ea82d40e2f4af8b01daa2924cfbbbce3705a101a3f421ec374f60"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            340,
+            381
+          ],
+          "anchor": "R_AddSingleModel: modelIsVisible, the contacted lights",
+          "sha256": "69036699da02164debfe87a2ac88e0b33e9070a327af33fc7cecbe5b121cc956"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.h",
+          "symbol": "AreaLight, AreaSurface, AreaSurfaceKind"
+        },
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "lightReachesSurface"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineFrameDefaults::useAreasConnectedForShadowCulling"
+        }
+      ],
+      "note": "LP4.0 step 8 (C33 a-c, D81, SC314): a surface is lit by a view light, subject to the caller's volume test (R_CullModelBoundsToLight) and LP2's other tests, when (a) a world chunk of area N: the world entity N is directly visible, N is one of the light's areas and the light's own area is -1 or connected to N (r_useAreasConnectedForShadowCulling 2, AreasAreConnected); (b) a brush entity's chunk: the entity is directly visible and some area of its references is one of the light's areas and passes the same test (the engine decides an entity once, at the first such area of the light's chain, by tests that do not depend on the area); (c) the outside set: a world chunk in area -1 or an entity without references is lit by every view light by volume, and a light without references lights only the outside set (D81, K14 extended). Only with a tree (D94). Not wired until LP4.1"
+    },
+    {
+      "id": "M-FLOW-10",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            814,
+            853
+          ],
+          "anchor": "R_AddSingleModel: the light grid area of a model surface",
+          "sha256": "bc46ede2370f73e68b680a096602ae402d4c3723946ed3059db67324ad38e047"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "surfaceGridArea"
+        }
+      ],
+      "note": "LP4.0 step 8 (C36, P4.11): for a material that receives lighting, surfaceArea = PointInArea( CreateFromOriginAxis( origin, axis ) . TransformPoint( tri->bounds.GetCenter() ) ) (the copied TransformPoint and GetCenter), with ChunkEntityState::materialBounds as tri->bounds (one union per entity and material, so one centre for a material spread over cells and parts); the first reference (in the entity's chain order; the world entity's [N]) equal to surfaceArea whose grid is valid, else the first with a valid grid, else none (the probe path). The validity (points, an atlas, not defaulted) is the caller's (LP4.3). Not wired until LP4.3"
+    },
+    {
+      "id": "M-FLOW-RECT-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/ScreenRect.h",
+          "lines": [
+            42,
+            83
+          ],
+          "anchor": "class idScreenRect: shorts, inclusive",
+          "sha256": "dba11e631794ca1f53e23c083bbe9a9a92b3c82ea380b238f35a90552d9b5e70"
+        },
+        {
+          "file": "neo/renderer/ScreenRect.cpp",
+          "lines": [
+            67,
+            184
+          ],
+          "anchor": "idScreenRect::Clear, AddPoint, Expand, Intersect, Union, Equals, IsEmpty",
+          "sha256": "a76f84b78fd6629384c05664f3f3fcee15e3686de10d116a6ad73a3e5c4ba7e9"
+        },
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            1331,
+            1338
+          ],
+          "anchor": "idMath::Ftoi, its SSE path",
+          "sha256": "8b1f8520ea478b11a3fbcf3ec2caf8db9583d87ee3a45e78a07d3e14b8fa26b1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitView.cpp",
+          "symbol": "ScreenRect::clear, addPoint, expand, intersect, unite, equals, isEmpty"
+        }
+      ],
+      "note": "LP4.0 step 3 (C32.4, P4.16): AddPoint truncates x and y toward zero through idMath::Ftoi (engineFtoi: _mm_cvttss_si32, INT_MIN beyond an int), compares them as ints and stores a new bound into the short field as the engine's int-to-short assignment does (modulo 2^16); Clear (32000, 32000, -32000, -32000, zmin 0, zmax 1), Expand, Intersect and Union leave z alone; IsEmpty is x1 > x2 || y1 > y2. Extends M-VIEW-03, which mirrors the members the scissor uses"
+    },
+    {
+      "id": "M-FLOW-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            458,
+            507
+          ],
+          "anchor": "idRenderWorldLocal::PortalIsFoggedOut",
+          "sha256": "503c8bd31e2f89eb3ffcebb28d64f786d5b87e4de827db6f93b9be0e175a1b9b"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            590,
+            594
+          ],
+          "anchor": "FloodViewThroughArea_r: a fogged-out portal is skipped",
+          "sha256": "2d270bab1f791fec5715078067678748dc781dc27d2c4851a688e783cbf100d4"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            647,
+            687
+          ],
+          "anchor": "R_CreateLightDefFogPortals",
+          "sha256": "75a4b7c544d25acfdf1e87bbdcdee8214d699fa97aa1dab428876c507314e1ef"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "Flow::floodViewThroughArea"
+        }
+      ],
+      "note": "LP4.0 (D83): PortalIsFoggedOut is false, as for every portal without a fog light: the fog lights' portals (R_CreateLightDefFogPortals) and the fog shader's registers come with LP5's fog lights; until then a portal a fog light would hide is flowed through"
+    },
+    {
+      "id": "M-FLOW-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            418,
+            435
+          ],
+          "anchor": "R_SetupProjectionMatrix: the TAA jitter of projectionMatrix",
+          "sha256": "feac8486dd91f56c1ae90f0edc798b3a8ec577b4ced92ca005ed7fc6c1e66da5"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            896,
+            897
+          ],
+          "anchor": "R_RenderView: the jittered and the unjittered projection",
+          "sha256": "6d96b1d540a9eef5a95d9989282c4a13fa386cbd848d00e9124240f43314b6f1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitView.cpp",
+          "symbol": "engineGlobalToNdc, engineViewFrustumPlanes"
+        },
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "engineScreenRectFromWinding"
+        }
+      ],
+      "note": "LP4.0 (C32.4): the engine's rects and frustum planes use the jittered projectionMatrix and worldSpace.mvp; the preview's view holds one projection, unjittered. With anti-aliasing off (the preview, every parity run: r_antiAliasing 0) the jitter is 0 and the two are the same; TAA, and with it a jitter of a fraction of a pixel in the rects, is LP6's"
+    },
+    {
+      "id": "M-FLOW-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            983,
+            987
+          ],
+          "anchor": "InitFromMap: a map without areas gets ClearWorld's single area",
+          "sha256": "18dd543d76d353f09cca26d70d58fc3f1695c071255ee69dec084dd8272dd547"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            2117,
+            2120
+          ],
+          "anchor": "PushFrustumIntoTree: no areaNodes, no reference",
+          "sha256": "7bc1b23613987dbd033965b32918a7c56783d90a4d82330c00de5172a8e63f3c"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            175,
+            178
+          ],
+          "anchor": "R_CreateEntityRefs: cleared bounds, no reference",
+          "sha256": "e37505fe740b24d361a117a85d3b621b5ffe231045415d88e70e5daf79d2278f"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            353,
+            378
+          ],
+          "anchor": "R_AddSingleModel: MAX_CONTACTED_LIGHTS 128",
+          "sha256": "dee62fc0ac8c1416f477f4ab04324f58308ba5dbc84779df2550885a44464395"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "flowView, lightReachesSurface"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::updateEntityReferences"
+        }
+      ],
+      "note": "LP4.0 (D94, D81, P4.4, P4.8, P4.22): without a tree (no .proc and no .bproc, or one without nodes) the flow is skipped (flowed false, viewArea -1): the engine cannot load such a map (InitFromMap fails), the preview keeps LP2's rules (every chunk frustum-tested, every light with a volume a view light with the projected scissor alone, lights through walls: K1, K15). With a tree, what lies outside the baked hull (world pieces in area -1, D47; brush entities and lights whose volume pushes into no area) has no references: the engine never draws or lights it (dmap drops such pieces; such a light is in no lightRefs), the preview treats it as the outside set, drawn whenever in the frustum and lit by volume by every light, a light of the set lighting only the set (K14 extended). MAX_CONTACTED_LIGHTS (128 lights per entity) is not kept in the pairing; unreachable on admin"
+    },
+    {
+      "id": "M-FLOW-PURE-01",
+      "kind": "pure-function",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            4436,
+            4515
+          ],
+          "anchor": "idRenderMatrix::GetFrustumPlanes",
+          "sha256": "d3f793bee56b1a01fcee3d0dcc6f550f7d6b528c59ad87f8f9174317fa373de2"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            4522,
+            4629
+          ],
+          "anchor": "idRenderMatrix::GetFrustumCorners",
+          "sha256": "9efc60fc942c98c9078479f20ab523efd5f6d11a24a59aa304808b5929dc1d7f"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            4636,
+            4702
+          ],
+          "anchor": "idRenderMatrix::CullFrustumCornersToPlane",
+          "sha256": "a700607ebc28f386ea6dcdd9e6d259bc22dbcf2b49f967fdc165e7ea9d90c1f1"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            793,
+            869
+          ],
+          "anchor": "idRenderMatrix::OffsetScaleForBounds",
+          "sha256": "8a080ab2345949435bff256d5b69fc46b428e736a76054b537ee64a045ee2f15"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            2311,
+            2525
+          ],
+          "anchor": "idRenderMatrix::ProjectedBounds",
+          "sha256": "67f6ef1f994ede16457302929dc2019c8a831156c0ce96d8ffb5fa95dc260430"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.h",
+          "lines": [
+            328,
+            336
+          ],
+          "anchor": "idRenderMatrix::TransformPoint( idVec3, idVec3 )",
+          "sha256": "de23ba47ff43d07a2ab6b5f1acde1e041bb24ff7c9659af24afaf797475e4de6"
+        },
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            527,
+            532
+          ],
+          "anchor": "idMath::InvSqrt",
+          "sha256": "f7e6dac2456dd14129160ed03834a551dfec117d8853e80aaf58f771acba6ca1"
+        },
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            549,
+            552
+          ],
+          "anchor": "idMath::Sqrt",
+          "sha256": "768cd452ff8548227d92a6ca9cffd8ec144b0f8211b745adbb80b5f82b7c7182"
+        },
+        {
+          "file": "neo/idlib/geometry/Winding.cpp",
+          "lines": [
+            409,
+            540
+          ],
+          "anchor": "idWinding::ClipInPlace",
+          "sha256": "fec5b67c2cf9b347534d041da8282feb710602aa79ce1c17375eadf0408eb588"
+        },
+        {
+          "file": "neo/idlib/geometry/Winding.cpp",
+          "lines": [
+            562,
+            574
+          ],
+          "anchor": "idWinding::Reverse",
+          "sha256": "f2b2bdaa983d83573aced32b6d8b0dba2f272054bfb1cdccdb12c7013e7c9a33"
+        },
+        {
+          "file": "neo/idlib/geometry/Winding.cpp",
+          "lines": [
+            792,
+            809
+          ],
+          "anchor": "idWinding::GetPlane( idPlane )",
+          "sha256": "846a7d9c3016eade243e6b243cb9e3bf5ec20831b19cb34170aa785247765a90"
+        },
+        {
+          "file": "neo/idlib/geometry/Winding.cpp",
+          "lines": [
+            1782,
+            1793
+          ],
+          "anchor": "idFixedWinding::ReAllocate",
+          "sha256": "a46e25357210826056c568ad30cbadd71b677439ec5e99dc663281efc0235427"
+        },
+        {
+          "file": "neo/idlib/geometry/Winding.h",
+          "lines": [
+            288,
+            295
+          ],
+          "anchor": "idWinding::EnsureAlloced",
+          "sha256": "a74bce690a6b605755e96ccaf536e73287ff626d241f8e8f120117e2a617170f"
+        },
+        {
+          "file": "neo/idlib/geometry/Winding.h",
+          "lines": [
+            353,
+            371
+          ],
+          "anchor": "idFixedWinding( const idVec3* verts, int n )",
+          "sha256": "a8bde98cb11ed2b1dba2297ea651feb10c1ee9fa87987c2ba073be0f40bb3058"
+        },
+        {
+          "file": "neo/idlib/geometry/Winding.h",
+          "lines": [
+            425,
+            428
+          ],
+          "anchor": "idFixedWinding::~idFixedWinding",
+          "sha256": "fbe2d11c1929f3826930e3dda5a160d687a490eb68ac52e74101179eec4ae301"
+        },
+        {
+          "file": "neo/idlib/math/Plane.h",
+          "lines": [
+            175,
+            178
+          ],
+          "anchor": "idPlane::operator-",
+          "sha256": "a53d28dea55a9a2199bf6e075d995fee602004fceb4f1f5ac87a779f6dc48b3f"
+        },
+        {
+          "file": "neo/idlib/math/Plane.h",
+          "lines": [
+            285,
+            299
+          ],
+          "anchor": "idPlane::Normalize, FixDegenerateNormal",
+          "sha256": "1166a7e422d2cc7b432d5d1da542ed8bc637d6be007b1b108f8d65f1226ef15c"
+        },
+        {
+          "file": "neo/idlib/math/Plane.h",
+          "lines": [
+            347,
+            350
+          ],
+          "anchor": "idPlane::FitThroughPoint",
+          "sha256": "073311b15a8cfc25170025da3ba8d96640f7bde210a283641bbff1f0eff335d1"
+        },
+        {
+          "file": "neo/idlib/math/Plane.h",
+          "lines": [
+            379,
+            382
+          ],
+          "anchor": "idPlane::Distance",
+          "sha256": "ed68c5f1189afe3c9b8f54e44261e34afa3735ab3b5959998b6448cf4cffd5b2"
+        },
+        {
+          "file": "neo/idlib/math/Vector.h",
+          "lines": [
+            768,
+            805
+          ],
+          "anchor": "idVec3::Cross( a, b ), Length, LengthSqr, LengthFast, Normalize",
+          "sha256": "15a1ba4c76a88faf668bb103ec22f336e031c8c28fe77eed6c4605445d13680c"
+        },
+        {
+          "file": "neo/idlib/bv/Bounds.h",
+          "lines": [
+            226,
+            327
+          ],
+          "anchor": "idBounds::Clear, Zero, GetCenter, GetVolume, IsCleared, AddPoint, AddBounds",
+          "sha256": "8d9ba01412425dffebae6725aea9e99f25f7052f02520613ee111dee412f49c5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineFrustumPlanes, engineFrustumCorners, engineCullFrustumCorners, engineOffsetScaleForBounds, engineProjectedBounds, engineTransformPoint, engineClearedBounds, engineZeroBounds, engineBoundsIsCleared, engineAddBounds, engineBoundsCenter, engineDeformSurfaceBounds"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineClipWindingInPlace, engineReverseWinding, engineWindingPlane, enginePlaneFromCrossThroughPoint, enginePlaneDistance"
+        },
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "flowView, lightReachesSurface, surfaceGridArea"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::updateEntityReferences"
+        },
+        {
+          "file": "lib/TbLitLib/src/AreaData.cpp",
+          "symbol": "buildAreaData, areaPortalSides"
+        }
+      ],
+      "commonCalls": [
+        "idFixedWinding::ReAllocate's idLib::common->Printf (Winding.cpp:1789), unreachable: engineClipWindingInPlace takes at most MaxClipWindingPoints 43 points, so ClipInPlace's EnsureAlloced asks for at most 47 of the fixed 64 (M-FLOW-GUARD-01); no other range calls common or idLib::common"
+      ],
+      "asserts": [
+        "Winding.cpp:1785 ReAllocate's n <= MAX_POINTS_ON_WINDING (unreachable likewise)",
+        "RenderMatrix.h:330, :335 TransformPoint's distinct in and out and w of 1 (CreateFromOriginAxis matrices)",
+        "RenderMatrix.cpp:795 OffsetScaleForBounds' &src != &out, :4524 and :4638 the corners' 16-byte alignment (the facades pass ALIGNTYPE16 copies)"
+      ],
+      "note": "LP4.0 (A25, C20, C24, P4.23): the copied functions the portal flow and the references run, recorded with their threads: the render thread (LP4.1's flowView inside buildFrontendLists; SceneGeometry::apply's entity references since LP4.0), the parse thread (buildAreaData inside readMapBake) and any test thread. GetFrustumCorners, CullFrustumCornersToPlane, OffsetScaleForBounds and ProjectedBounds are pool-safe already (M-LIGHT-POOL-01); GetFrustumPlanes' other caller is the light triangles' (M-INTER-POOL-01); the idRenderMatrix members on the render thread follow M-VIEW-PURE-01. C24's five conditions: (1) no common call reachable (above); (2) no FatalError site; (3) no SIMDProcessor (the SSE2 intrinsics are inline: GetFrustumCorners divides through _mm_rcp32_ps, a w below the smallest normal replaced by 1; CullFrustumCornersToPlane reads the distances' sign bits, so -0 is behind); (4) Reverse allocates its winding with the tagged new on the global allocator, which the facade deletes; ClipInPlace's _alloca blocks (n + 4 floats, bytes and idVec5s, about 1.2 KB at 43 points) and the facade's idFixedWinding (64 idVec5, 1.3 KB) are on the calling thread's stack, once per call, never nested; (5) the statics read are RenderMatrix.cpp's constant ones (M-LIGHT-STATIC-01..03), bounds_unitCube and bounds_zeroOneCube (M-GEO-STATIC-02) and idMath's constants. Pure: each reads its arguments and writes its result"
+    },
+    {
+      "id": "M-FLOW-GUARD-01",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Winding.h",
+          "lines": [
+            310,
+            310
+          ],
+          "anchor": "MAX_POINTS_ON_WINDING 64",
+          "sha256": "2a5473bc465edcf6286b5068495123bf33ab95d1bcc256b2a0040c8af82919b2"
+        },
+        {
+          "file": "neo/idlib/geometry/Winding.cpp",
+          "lines": [
+            1782,
+            1793
+          ],
+          "anchor": "idFixedWinding::ReAllocate: an overflow warns and cancels",
+          "sha256": "a46e25357210826056c568ad30cbadd71b677439ec5e99dc663281efc0235427"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            1266,
+            1273
+          ],
+          "anchor": "PointInArea: an area past the count is an Error",
+          "sha256": "565b153adc0c4b9aca4817e9fe8fb97dc0056d5623a97768cb0ab51966504b5d"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            1053,
+            1058
+          ],
+          "anchor": "AddWorldModelEntities: a missing _areaN model is an Error",
+          "sha256": "cd7071c2d2690ce0db0434e06f740f46709d14254e3a00ea56808b53e06e15a0"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineClipWindingInPlace"
+        },
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "flowView, Flow"
+        },
+        {
+          "file": "lib/TbLitLib/src/AreaData.cpp",
+          "symbol": "buildAreaData, areaPortalSides, areasConnected"
+        }
+      ],
+      "note": "LP4.0: engineClipWindingInPlace runs the copy only on windings of at most 43 points (MAX_POINTS_ON_WINDING 64 less the 21 planes of a stack), so that a chain of the flow's clips of a convex winding, each adding at most one point, never outgrows the fixed buffer and its warning and assert stay unreachable; a longer winding is returned unclipped, the copy's own fall-back when its buffer would overflow (the engine also drops a portal of more than 64 points as not visible). dmap's portals are convex and far smaller. Malformed trees the readers accept: an area past the count from PointInArea counts as -1 (the engine stops with an Error), a portal side or a light's or entity's reference past the count is skipped, a missing _areaN model gives Zero() bounds (the engine stops with an Error), areasConnected answers false for an area past the count (the engine's Error)"
+    },
+    {
+      "id": "M-LIGHT-DIFF-07",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            90,
+            90
+          ],
+          "anchor": "ParseSpawnArgsToRenderLight: memset( renderLight, 0 )",
+          "sha256": "39363fe7215f2add88693daa94b9897171faeeb26b0bfe6b8add2138bc759cf0"
+        },
+        {
+          "file": "neo/d3xp/Projectile.cpp",
+          "lines": [
+            260,
+            263
+          ],
+          "anchor": "idProjectile::Create: the projectile light's forceShadows (ID_PC)",
+          "sha256": "dfff5d9fdeedef37b6b99487477bd0ac94eae88f86e7bfee87132c4515d8b7e6"
+        },
+        {
+          "file": "neo/d3xp/Projectile.cpp",
+          "lines": [
+            1184,
+            1187
+          ],
+          "anchor": "idProjectile::Explode: the explosion light's forceShadows (ID_PC)",
+          "sha256": "b9c074aadeb7f0f0c32df09094c0b86b3faa5275b42796272ff70cfdd12fb465"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.h",
+          "lines": [
+            211,
+            211
+          ],
+          "anchor": "renderLight_t::forceShadows",
+          "sha256": "6475b757c388905c68213025e6676eff50b1cb72ec5c34b049af2c5c04871d4a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "lightCastsShadows"
+        }
+      ],
+      "note": "LP4.0 step 7 (P4.21): renderLight_t::forceShadows is never set for a map light (the parser clears the whole renderLight_t; only the projectiles' own lights set it), so lightCastsShadows takes it as a constant false; the parsed light has no such field. The material keyword forceShadows (MF_FORCESHADOWS) is the shader's half and is read (M-FLOW-05)"
     }
   ],
   "retired": [

@@ -286,7 +286,7 @@ MapBake readMapBake(
     return bake;
   }
   // C31: the areas' bounds with the materials ParseModel's FindMaterial would find, once
-  // the tree is chosen (RenderWorld_load.cpp:245, Model.cpp:1330-1363, :1029-1095)
+  // the tree is chosen (RenderWorld_load.cpp:182, :1029-1095; Model.cpp:1328-1366)
   bake.areas = std::make_shared<const AreaData>(buildAreaData(*bake.tree, materials));
   readLightGrid(source, bake);
   readShProbesFile(source, bake);

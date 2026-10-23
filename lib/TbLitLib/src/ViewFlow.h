@@ -55,8 +55,8 @@ namespace tb::lit
 struct LightRecord;
 struct ProcTree;
 
-// MAX_PORTAL_PLANES (RenderWorld_portals.cpp:37-38): a stack's edge planes; the portal's
-// own plane makes the 21st (portalStack_t::portalPlanes, :40-47)
+// MAX_PORTAL_PLANES (RenderWorld_portals.cpp:37): a stack's edge planes; the portal's
+// own plane makes the 21st (portalStack_t::portalPlanes, :39-47)
 constexpr auto MaxPortalPlanes = std::size_t{20};
 
 // a light as the flow reads it, from its record (LightRecord::derived, lightCastsShadows)
@@ -148,7 +148,7 @@ struct ViewFlowResult
  * 0), with every piece mirrored in ViewFlow.cpp under its own engine range:
  * FlowViewThroughPortals (:658-687), FloodViewThroughArea_r (:514-647), AddAreaToView
  * (:412-421, no probes: SC306), AddAreaViewEntities (:222-267), AddAreaViewLights
- * (:364-402), ScreenRectFromWinding (:428-451) and the corner culls (:131-143, :276-288).
+ * (:364-402), ScreenRectFromWinding (:428-451) and the corner culls (:131-146, :276-291).
  * PortalIsFoggedOut is false (D83, M-FLOW-DIFF-01) and no portal blocks (K30). The
  * recursion is an explicit stack on the heap, each frame's planes and clipped winding in
  * heap memory; each portal side enters a stack once, so its depth is at most twice the
@@ -175,7 +175,7 @@ ScreenRect engineScreenRectFromWinding(
 
 /**
  * CullEntityByPortals and CullLightByPortals with r_use*PortalCulling 1
- * (RenderWorld_portals.cpp:131-143, :276-288): culled when every one of the eight corners
+ * (RenderWorld_portals.cpp:131-146, :276-291): culled when every one of the eight corners
  * is in front (FRUSTUM_CULL_FRONT: the copied CullFrustumCornersToPlane's sign bits) of
  * any one of the chain's planes. The corners are GetFrustumCorners(
  * inverseBaseModelProject, bounds_unitCube ) for an entity, GetFrustumCorners(

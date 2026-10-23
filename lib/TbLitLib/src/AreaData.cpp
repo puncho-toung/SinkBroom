@@ -80,12 +80,12 @@ EngineBounds modelBoundsOf(const ProcModel& model, DeformCache& deforms)
   {
     return model.bounds;
   }
-  // Model.cpp:1203-1208, :1330-1333: without surfaces a point at the origin
+  // Model.cpp:1202-1209, :1328-1332: without surfaces a point at the origin
   if (model.surfaces.empty())
   {
     return engineZeroBounds();
   }
-  // :1334-1363
+  // :1333-1366
   auto bounds = engineClearedBounds();
   for (const auto& surface : model.surfaces)
   {

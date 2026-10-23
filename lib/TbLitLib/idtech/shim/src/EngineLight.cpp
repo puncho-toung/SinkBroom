@@ -452,7 +452,7 @@ EngineVec3 engineTransformPoint(const EngineMat4& matrix, const EngineVec3& poin
 
 EngineBounds engineDeformSurfaceBounds(const EngineBounds& bounds)
 {
-  // Model.cpp:1343-1360, FinishSurfaces' bounds of a surface whose shader has a deform
+  // Model.cpp:1346-1360, FinishSurfaces' bounds of a surface whose shader has a deform
   auto tri = toId(bounds);
   idVec3 mid = (tri[1] + tri[0]) * 0.5f;
   float radius = (tri[0] - mid).Length();

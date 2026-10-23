@@ -636,7 +636,7 @@ ViewFlowResult flowView(const ViewFlowInputs& inputs)
   result.flowed = true;
   result.areaFlowed.assign(numAreas, false);
 
-  // RenderWorld_portals.cpp:771-785: the area to start the portal flooding in
+  // RenderWorld_portals.cpp:775-784: the area to start the portal flooding in
   // (r_usePortals 1), the initialViewAreaOrigin being the vieworg (RenderWorld.cpp:1083)
   result.viewArea = pointInArea(*inputs.tree, inputs.view.viewOrigin);
   if (result.viewArea >= int(numAreas))

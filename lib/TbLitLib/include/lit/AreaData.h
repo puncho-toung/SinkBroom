@@ -36,7 +36,7 @@ struct ProcTree;
 /**
  * C31 (LP4.0): what the bake read asks of a surface's material: the entry
  * declManager->FindMaterial( name ) gives with makeDefault true, as ParseModel asks it
- * (RenderWorld_load.cpp:245; an unknown name is an implicit material, which has no
+ * (RenderWorld_load.cpp:182; an unknown name is an implicit material, which has no
  * deform); null when none is known, which counts as no deform. The material service
  * answers it on its parse thread from the copied registry (MaterialDecls::lookup).
  */
@@ -68,8 +68,8 @@ struct AreaPortal
 // one portal area as the engine's world holds it once the map is loaded
 struct AreaInfo
 {
-  // the _areaN model's bounds (idRenderModelStatic::FinishSurfaces, Model.cpp:1203-1208
-  // and :1330-1363; a .bproc's stored ones as they are): Zero() without a surface
+  // the _areaN model's bounds (idRenderModelStatic::FinishSurfaces, Model.cpp:1202-1209
+  // and :1328-1366; a .bproc's stored ones as they are): Zero() without a surface
   EngineBounds modelBounds = {};
   // area->globalBounds (RenderWorld_load.cpp:1081-1094 with RenderWorld_defs.cpp:49-60):
   // ProjectedBounds( inverseBaseModelProject, bounds_unitCube, false )
@@ -103,7 +103,7 @@ struct AreaData
 };
 
 /**
- * idRenderModelStatic::FinishSurfaces' model bounds (Model.cpp:1203-1208, :1330-1363) of
+ * idRenderModelStatic::FinishSurfaces' model bounds (Model.cpp:1202-1209, :1328-1366) of
  * a .proc model: a model without a surface has Zero() bounds (a point at the origin, not
  * cleared); otherwise Clear(), then per surface AddBounds of its bounds (ProcSurface::
  * bounds, R_BoundTriSurf's), a surface whose material has a deform (MaterialEntry::deform

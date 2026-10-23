@@ -186,7 +186,7 @@ struct ChunkEntityState
 
   // per engine material name, the union of the entity's chunks of that material in model
   // space, grown to FinishSurfaces' cube where the material has a deform (Model.cpp
-  // :1343-1360): the engine's per-model-surface tri->bounds, which the grid-area rule
+  // :1346-1360): the engine's per-model-surface tri->bounds, which the grid-area rule
   // reads (tr_frontend_addmodels.cpp:817-825, C36, P4.11)
   std::map<std::string, EngineBounds> materialBounds;
   // the model's bounds (FinishSurfaces: the union of materialBounds); cleared without a

@@ -679,7 +679,7 @@ void SceneGeometry::updateEntityReferences()
     }
   }
 
-  // FinishSurfaces' growth of a deforming material's surface (Model.cpp:1343-1360), from
+  // FinishSurfaces' growth of a deforming material's surface (Model.cpp:1346-1360), from
   // the table the batch was built with
   const auto deforms = [&](const std::string& material) {
     const auto slot = m_table ? m_table->find(material) : nullptr;
