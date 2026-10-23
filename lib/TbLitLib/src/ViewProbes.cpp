@@ -94,7 +94,7 @@ ViewProbes chooseViewProbes(
   // sort by distance (:538-542, idSort_CompareEnvprobe: ( vieworg - origin
   // ).LengthSqr()); K32: equal distances by id, where the engine's quicksort keeps no
   // order
-  std::sort(candidates.begin(), candidates.end(), [&](const auto* a, const auto* b) {
+  std::ranges::sort(candidates, [&](const auto* a, const auto* b) {
     const auto da = distanceSquared(viewOrigin, a->origin);
     const auto db = distanceSquared(viewOrigin, b->origin);
     return da != db ? da < db : a->id < b->id;

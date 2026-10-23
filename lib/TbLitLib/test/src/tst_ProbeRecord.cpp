@@ -492,7 +492,7 @@ TEST_CASE(
   {
     mapRead = true;
     const auto text = std::string_view{map->data(), map->size()};
-    constexpr auto key = std::string_view{"\"classname\" \""};
+    constexpr auto key = std::string_view{R"("classname" ")"};
     for (auto at = text.find(key); at != std::string_view::npos; at = text.find(key, at))
     {
       at += key.size();

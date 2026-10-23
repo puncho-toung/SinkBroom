@@ -804,7 +804,7 @@ ProbeJobInput SceneGeometry::probeInput()
       ids.push_back(id);
     }
   }
-  std::sort(ids.begin(), ids.end());
+  std::ranges::sort(ids);
   for (const auto id : ids)
   {
     const auto& entity = *m_entities.at(id);
