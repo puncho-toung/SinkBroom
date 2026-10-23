@@ -14064,6 +14064,33 @@
           ],
           "anchor": "STENCIL_SHADOW_TEST_VALUE",
           "sha256": "f4f6e9c7a2ad35fbda5e6565853a52549c3af9e0a54f97efee9a4b0bbc852f75"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            288,
+            288
+          ],
+          "anchor": "r_forceAmbient \"0.5\"",
+          "sha256": "86c0f491ca67876e9179f5c7d42c10395d1c16c1c2628faae6ddd089d260587d"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            290,
+            290
+          ],
+          "anchor": "r_useSSAO \"1\"",
+          "sha256": "adbaa0f0d052e7e98c390b04635244990fce37db24c6f976810a489e16f00242"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            299,
+            299
+          ],
+          "anchor": "r_useLightGrid \"1\"",
+          "sha256": "b793dcf456a0bee95190c9c82b3a61abed8d460fd4987a73d98429d7f3e0fd14"
         }
       ],
       "sinkbroom": [
@@ -14080,7 +14107,7 @@
           "symbol": "EngineFrameDefaults"
         }
       ],
-      "note": "LP2.2a step 1 (SC201, SC202, D21, T0.15): at the start of every frame ZeroUniforms (every parm 0, every layout due), then GLOBALEYEPOS (vieworg, 1), OVERBRIGHT r_lightScale 3 * 0.5 in all four, PROJMATRIX_X..W the rows of projectionRenderMatrix, PSX_DISTORTIONS 0 (r_renderMode 0), WINDOWCOORD (1 / w, 1 / h, w, h) with the viewport the whole target; the clears of r_clear 2 (hdrFBO and ldrFBO to (0, 0, 0, 1); SetBuffer also clears the active framebuffer, the presentation target, which LP0 clears itself until LP2.2b blits) and GL_Clear's depth 1 and stencil 128. GL_State( GLS_DEFAULT | GLS_CULL_FRONTSIDED ) at the start records bits no draw reads: every preview draw passes its own bits"
+      "note": "LP2.2a step 1 (SC201, SC202, D21, T0.15): at the start of every frame ZeroUniforms (every parm 0, every layout due), then GLOBALEYEPOS (vieworg, 1), OVERBRIGHT r_lightScale 3 * 0.5 in all four, PROJMATRIX_X..W the rows of projectionRenderMatrix, PSX_DISTORTIONS 0 (r_renderMode 0), WINDOWCOORD (1 / w, 1 / h, w, h) with the viewport the whole target; the clears of r_clear 2 (hdrFBO and ldrFBO to (0, 0, 0, 1); SetBuffer also clears the active framebuffer, the presentation target, which LP0 clears itself until LP2.2b blits) and GL_Clear's depth 1 and stencil 128. GL_State( GLS_DEFAULT | GLS_CULL_FRONTSIDED ) at the start records bits no draw reads: every preview draw passes its own bits. LP4.2a step 1 (C34): EngineFrameDefaults gains forceAmbient 0.5 (r_forceAmbient, ARCHIVE: the preview's constant), useLightGrid true (r_useLightGrid 1) and useSsao false, the preview's K31 behaviour where the engine's default is 1 (M-AMB-DIFF-01)"
     },
     {
       "id": "M-VIEW-02",
@@ -17103,6 +17130,1127 @@
         }
       ],
       "note": "LP4.0 step 7 (P4.21): renderLight_t::forceShadows is never set for a map light (the parser clears the whole renderLight_t; only the projectiles' own lights set it), so lightCastsShadows takes it as a constant false; the parsed light has no such field. The material keyword forceShadows (MF_FORCESHADOWS) is the shader's half and is read (M-FLOW-05)"
+    },
+    {
+      "id": "M-TABLE-09",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/shaders/renderParmSet9.inc.hlsl",
+          "lines": [
+            33,
+            85
+          ],
+          "anchor": "renderParmSet9_t",
+          "sha256": "b004fd84cf9a91ff97b5d456f364c2614ef5dcf9adf4c275bdab9bc0ca2013d8"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            291,
+            293
+          ],
+          "anchor": "rpMaximalSet9, rpMaximalSet9LayoutTypes",
+          "sha256": "1c1a000349c07bc5e248769f258a70590ad523759b7ea1816664d3da6145aa37"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            320,
+            330
+          ],
+          "anchor": "layoutTypeAttributes for rpMaximalSet9LayoutTypes: renderParmSet9, rpBufSize 45 * 16, cbStatic false",
+          "sha256": "bfcc9a1263c01909a4dd3bd4f1ec52e848ba192cb5049175c0826d0566fc1497"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineParmSet9"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineParmSetMembers (case 9), engineParmSetBlock, engineParmSetOfLayout"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderParms.h",
+          "symbol": "RenderParms::select"
+        },
+        {
+          "file": "lib/TbLitLib/src/ShaderReflection.cpp",
+          "symbol": "blockOf"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_RetailShaders.cpp"
+        }
+      ],
+      "note": "LP4.2a step 1 (C35): set 9 (AMBIENT_LIGHTING_IBL and its skinned twin), 45 float4 = 720 bytes, the members in renderParmSet9_t's order, each its renderparm and its HLSL name at 16 * i: ScreenCorrectionFactor 0 ... WobbleSkyX..Z 480-512, TexGen0S/T/Q 528-560, rpSHIrradiance[0..8] 576-704; rpMaximalSet9 (RenderProgs.h:291) names the same 45 parms in the same order (checked member for member) and :293 its two layouts. The SH array is one member in SPIR-V; the reflection names its elements rpSHIrradiance[k] at offset + k * stride (blockOf), so the comparison stays by name and offset. Set 9 has no MODELVIEWMATRIX: the ambient pass's space change still sets it (RenderBackend.cpp:2499-2501), which writes nothing of set 9. 720 > 256: pcEnabled is false on this desktop and set 0 is the volatile buffer (enginePushConstantsEnabled, M-TABLE-03); [.][retail] holds programs 4, 6, 8 and 10 to these 45 members"
+    },
+    {
+      "id": "M-TABLE-10",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            446,
+            483
+          ],
+          "anchor": "defaultMaterialLayout, ambientIblLayout, samplerTwoBindingLayout, bindingLayouts[AMBIENT_LIGHTING_IBL(_SKINNED)]",
+          "sha256": "07f2180e86be86c7a2896ec994c9a9cd8f1827172b88d7fb4e336edb3094e541"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            698,
+            788
+          ],
+          "anchor": "GetCurrentBindingLayout, AMBIENT_LIGHTING_IBL",
+          "sha256": "31624e2fb5f0f96e9a70f872be2314a1c5cbe5a71de995f71b582d41f2153ade"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1051,
+            1067
+          ],
+          "anchor": "INTERACTION_TEXUNIT_*",
+          "sha256": "7943425100fbe26963da79283688495d1f04ad9109ec92a7700c3f371ff6bcb1"
+        },
+        {
+          "file": "neo/shaders/shaders.cfg",
+          "lines": [
+            44,
+            47
+          ],
+          "anchor": "ambient_lighting_IBL and ambient_lightgrid_IBL, USE_GPU_SKINNING USE_PBR USE_PUSH_CONSTANTS",
+          "sha256": "c01f0abe2bb8f7167bcbc3c70e023c7c5b4fcb24b71926283ab8bec5b54b537e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineBindingLayoutDescs (AmbientLightingIbl, AmbientLightingIblSkinned)"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/ShaderReflection.h",
+          "symbol": "engineExpectedLayout"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "AmbientUnits, ambientUnitBindings, LitPasses::bindingSets"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
+          "symbol": "EngineBuiltinAmbientLightingIbl, EngineBuiltinAmbientLightingIblPbr, EngineBuiltinAmbientLightgridIbl, EngineBuiltinAmbientLightgridIblPbr"
+        }
+      ],
+      "note": "LP4.2a step 1 (C35, C34): the IBL layout's four sets: set 0 the uniforms item (the 720-byte volatile constant buffer, or PushConstants( 0, 720 ) where pcEnabled), visibility All; set 1 Texture_SRV 0, 1, 2 (normal, specular, base colour) Pixel; set 2 Texture_SRV 3, 4, 7, 8, 9, 10, 12, 13, 14 (BRDF LUT, SSAO, irradiance, three radiance cubes, three depth cubes) Pixel; set 3 Sampler 0 and 1 Pixel. The skinned layout adds StructuredBuffer_SRV( 11 ) to set 0 (tabled, never requested). The binding sets per draw: set 1 units 0-2 at t0-t2, set 2 units 3, 4, 7, 8, 9, 10, 12, 13, 14 at the same registers, set 3 anisotropicWrap and linearClamp (r_renderMode 0: R_UsePixelatedLook is false, so never PointWrap); m_units grows to 15 (INTERACTION_TEXUNIT_DEPTH_CUBE3 14). t7 is read only by the light-grid pixel shader: the reflection check accepts a layout item no stage reads (compareLayoutCoverage), as the TEXTURE layout's are. The programs and their keys (USE_GPU_SKINNING, USE_PBR, USE_PUSH_CONSTANTS) are rows 4-11 of the builtins table (M-TABLE-01)"
+    },
+    {
+      "id": "M-INTR-08",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_brdfLut.h",
+          "lines": [
+            1,
+            21862
+          ],
+          "anchor": "whole file",
+          "sha256": "9fa513db547b4855fae1d88ef906abe5b969ca98cffd2a2e4942e92798e51b54",
+          "gitBlob": "c7c59142ccff4251a76a178a47c98d3886629d71"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Image_brdfLut.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob. LP4.2a step 2 (D85): the BRDF LUT's texels, brfLutTexBytes, 256 x 256 RG16F texels (262,144 bytes); the header's BRDFLUT_TEX_PITCH and _SIZE macros are half that (131,072) and unused, so the facade sizes the image from the texel count (lit/EngineImageData.h, static_asserted). Only the shim's EngineImageData.cpp includes it (M-INTR-10)"
+    },
+    {
+      "id": "M-INTR-09",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            1031,
+            1041
+          ],
+          "anchor": "R_CreateDefaultRadianceCube",
+          "sha256": "d3126f12d3ca2f7d50042c572771c2eb80dd6ac81df58192601dbcb9448cb379"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            1139,
+            1139
+          ],
+          "anchor": "defaultUACRadianceCube = ImageFromFunction( \"_defaultUACRadiance\" )",
+          "sha256": "768ec70f7a74a797f874aa1a096be0d5e7f743885fdb7054cea6b89494026cb9"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            235,
+            238
+          ],
+          "anchor": "DeriveOpts: TD_HDRI is FMT_BC6H",
+          "sha256": "5c02f14db6ea87d0b45227110b88ebd9bb292b796b0e1edf4824830470434f4b"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            294,
+            301
+          ],
+          "anchor": "DeriveOpts: one level for TF_LINEAR",
+          "sha256": "aecd149d27e79820388b63b991114b03c19569ae5f8932f3dbe458083bdb4d4c"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            428,
+            441
+          ],
+          "anchor": "idImage::GenerateCubeImage: TR_CLAMP, CF_NATIVE, DTT_CUBIC",
+          "sha256": "7e2294c2644edd7c1e08c9ff228c79bdddd1c64b4f4e12480487627ab840060b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/IntrinsicImages.cpp",
+          "symbol": "rawIntrinsicImage(\"_defaultUACRadiance\")"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/IntrinsicImages.h",
+          "symbol": "rawIntrinsicImage"
+        }
+      ],
+      "note": "LP4.2a step 2 (D85, P4.13, P4.28): _defaultUACRadiance, an 8 x 8 cube of six zero faces, TF_LINEAR (one level), TD_HDRI (BC6H_UFLOAT): each face four all-zero 16-byte BC6H blocks, which decode to 0 as the engine's encoding of its zero faces does; the six records level-major as LP1c's cubes (destZ the side). A Generated CachedImage built on the parse thread by the raw intrinsic path, keyed as the engine's _name rule keys an intrinsic; the render thread uploads it as any other image. It is what the ambient pass binds at t8-t14 for every probe image that is not Ready (FM:492-500), never a slot's 2D stand-in"
+    },
+    {
+      "id": "M-INTR-10",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            1021,
+            1024
+          ],
+          "anchor": "R_CreateBrdfLutImage",
+          "sha256": "2ed2cff38b660922575e2df8968f37018d17ca423a9808ea97498991968730f4"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            1136,
+            1136
+          ],
+          "anchor": "brdfLutImage = ImageFromFunction( \"_brdfLut\" )",
+          "sha256": "99da8deb0603cf88b6919316bd4f7b36e33ccfaa12c81fb458db7b32220a891e"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            264,
+            265
+          ],
+          "anchor": "DeriveOpts: TD_RG16F is FMT_RG16F",
+          "sha256": "59f3ce9103fd1198de605e38219043e0258a996a0be666a9c0e8e31dd0ddc317"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/IntrinsicImages.cpp",
+          "symbol": "rawIntrinsicImage(\"_brdfLut\"), intrinsicImage"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineImageData.h",
+          "symbol": "engineBrdfLutData, engineBrdfLutSize, engineBrdfLutWidth, engineBrdfLutHeight"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineImageData.cpp"
+        }
+      ],
+      "note": "LP4.2a step 2 (D85): _brdfLut, the copied header's array (M-INTR-08) as one 256 x 256 level, TF_LINEAR, TR_CLAMP, TD_RG16F: FMT_RG16F, NVRHI RG16_FLOAT (engineTextureFormat, M-TABLE-07), 1024 bytes a row, 2D. A Generated CachedImage the service answers for its key ahead of the recipe path (intrinsicImage asks rawIntrinsicImage first); the test holds its bytes to the header's (FNV-1a of all 262,144) and its first and last texels by value. The ambient pass binds it at t3 (INTERACTION_TEXUNIT_FALLOFF, RenderBackend.cpp:1361-1362)"
+    },
+    {
+      "id": "M-INTR-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            1026,
+            1029
+          ],
+          "anchor": "R_CreateEnvprobeImage_UAC_lobby_irradiance",
+          "sha256": "fd65285ff3b9ff578ef7cbd804be263090bc2fd8197cc1c7f1dddb103df66472"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            1138,
+            1138
+          ],
+          "anchor": "defaultUACIrradianceCube = ImageFromFunction( \"_defaultUACIrradiance\" )",
+          "sha256": "6cc1fbe34297ad0535a4ca3fd7508d176994805a87137c61074f724e73e868be"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            853,
+            857
+          ],
+          "anchor": "R_DeriveEnvprobeData: the _amb image",
+          "sha256": "9d407edaefa6f60f05efb1555207f8375f9c01be7a8c347ebfb8b2ba1a6f1c36"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            547,
+            550
+          ],
+          "anchor": "R_FindClosestEnvironmentProbes: the nearest probe's irradianceImage",
+          "sha256": "9ee11932962c2570b1bddba84a030c6680a59b8b01741ce4b0b71a33d6fb8f7f"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1374,
+            1375
+          ],
+          "anchor": "DrawSingleInteraction: viewDef->irradianceImage at INTERACTION_TEXUNIT_AMBIENT_CUBE1",
+          "sha256": "a8b9164834ccf0d567c1eef8dbbadfa983d4e19081cf0afcd57b62120d153bc9"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordAmbient (UnitAmbientCube)"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::requestProbeImages"
+        },
+        {
+          "file": "lib/TbLitLib/src/ViewProbes.h",
+          "symbol": "ViewProbes"
+        }
+      ],
+      "note": "D85: _defaultUACIrradiance (the UAC lobby's packed irradiance, an embedded image) is not made and no probe's _amb is requested: t7 binds _default, a 2D image as the engine's packed-mipchain irradiance images are, because no probe-path shader reads t7 (ambient_lighting_IBL declares it, only ambient_lightgrid_IBL samples it: LP4.3). The render thread requests each probe's _spec and _depth when it adopts a table, never _amb, so the retail _amb caches are never read"
+    },
+    {
+      "id": "M-INTR-STATIC-01",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_brdfLut.h",
+          "lines": [
+            11,
+            11
+          ],
+          "anchor": "brfLutTexBytes",
+          "sha256": "8e4db77275275fe6a44ecdc5fc8eeb475564e422b800bc6573694ced145a6d91"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineImageData.cpp",
+          "symbol": "engineBrdfLutData"
+        }
+      ],
+      "staticKind": "idempotent table",
+      "reason": "LP4.2a (D85): a static const unsigned char array initialised from literals (constant initialisation, no dynamic initialiser), read-only; one copy in EngineImageData.obj, the only file that includes the header"
+    },
+    {
+      "id": "M-PROBE-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            1275,
+            1336
+          ],
+          "anchor": "idGameLocal::PopulateEnvironmentProbes",
+          "sha256": "2e2f1a18c341909514427aaf574b8450f6dac6bc2ce5779fcbead723c1e4ee09"
+        },
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            1374,
+            1377
+          ],
+          "anchor": "InitFromNewMap: MapPopulate, then PopulateEnvironmentProbes",
+          "sha256": "03072ce0482eb14857726bb51744508df70f36c6ce5d0a513d6132a8169f0612"
+        },
+        {
+          "file": "neo/d3xp/EnvironmentProbe.cpp",
+          "lines": [
+            79,
+            102
+          ],
+          "anchor": "idGameEdit::ParseSpawnArgsToRenderEnvprobe",
+          "sha256": "3166e82bbda715667f7fc2b46e6f673b3269d1f5a3c90c79322578682e3993e6"
+        },
+        {
+          "file": "neo/idlib/math/Vector.h",
+          "lines": [
+            860,
+            865
+          ],
+          "anchor": "idVec3::SnapInt",
+          "sha256": "133919269c6f7a638d8be4ff29949212076aa77443d6769f44cf6eb7e7655829"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ProbeRecord.cpp",
+          "symbol": "buildProbeRecords, envprobeShaderParms, engineSnapInt, automaticProbeId"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::probeInput"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/ProbeRecord.h",
+          "symbol": "ProbeJobInput, ProbeTable"
+        }
+      ],
+      "note": "LP4.2a step 3 (C37, D87, P4.10): the map's probes are its entities (worldspawn aside) whose merged spawn args name spawnclass EnvironmentProbe (IsType( EnvironmentProbe::Type ), the retail env_probe of base/def/_rbdoom_env_probe.def), each with its origin and shaderParms parsed as ParseSpawnArgsToRenderEnvprobe parses them at game time 0 (the colour and shaderParms are kept, unused by the pass). One placed probe switches every automatic probe off (:1279-1293). Without one, and with the env_probe entityDef found, one automatic probe per area i at SnapInt( GetCenter( AreaBounds( i ) ) ) (float( int( v ) ) per component, guarded for values past an int; an area of Zero() bounds gives the origin), skipped with the engine's Warning text when PointInArea of the point is negative (:1314-1318). Without the entityDef: no probe; the engine says so with a Printf (:1298), not a Warning, and the preview says nothing. An entityDef the table has not answered yet keeps the table provisional (C22); the automatic probe's id is AutomaticProbeIdBase + area (K32's tie key), a placed probe's its preview id. The spawned entity's name (env_probe_area_%i, GetUniqueEntityName) and its origin string round trip are not mirrored: the snapped point prints and parses back exactly"
+    },
+    {
+      "id": "M-PROBE-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            808,
+            924
+          ],
+          "anchor": "R_DeriveEnvprobeData",
+          "sha256": "9e60efabfb211acd1bdb7b63c2592aaec7859501e7bd3b4a9437e4614c98c3d8"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            926,
+            941
+          ],
+          "anchor": "R_CreateEnvprobeRefs",
+          "sha256": "90191805dd6a792390a4f744ed56df64fabcf8379ecd5e37b7a8fa9e23c774b0"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            626,
+            679
+          ],
+          "anchor": "idRenderWorldLocal::UpdateEnvprobeDef",
+          "sha256": "e2b9a7bda3d13276997925888d8f165ab0c8dc18aedc1420c8e5c44af9255429"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ProbeRecord.cpp",
+          "symbol": "deriveEnvprobe, ProbeRegistry::update, ProbeRegistry::collect"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/ProbeRecord.h",
+          "symbol": "ProbeRecord, ProbeRegistry, ProbeTablePublication"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::startBatch, SceneGeometry::collect"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/LitSession.h",
+          "symbol": "LitSession::probeTable"
+        }
+      ],
+      "note": "LP4.2a step 3 (C37, D87, P4.2, P4.18): per probe areaNum = PointInArea( origin ) (LP1b.2's pointInArea); globalProbeBounds = AreaBounds( areaNum ) (M-AREA-01), cleared at -1; the SnapInt point; shIrradiance[9] = the first .shprobes entry (MapBake::shProbes) of the same area and the same int() of x, y and z, else zero (:836-851); the three image keys through envProbeImageKeys (M-BAKE-04); inverseBaseProbeProject = OffsetScaleForBounds( CreateFromOriginAxis( origin 0, identity ), globalProbeBounds * 2 ) (:869-920, tabled for LP6, unused by the pass); areaNum again at R_CreateEnvprobeRefs (:933). The Inverse of the identity (:882-886), read only by the #if 0 branch, and PushEnvprobeIntoTree_r's area references (:937-940), which nothing in the view or the passes reads, are not mirrored. The engine derives a probe again only when its origin moved (UpdateEnvprobeDef :651-659); the registry rebuilds every probe as one pool job whenever the tree, AreaData, the .shprobes slot, the probe entities or the env_probe entityDef state differ from the last build's input, which gives the same records, and publishes a table whose version moves only when a record changed (the render thread's SceneGeometry; other threads read LitSession::probeTable, R2.9). The skipped areas' warnings are posted with the next batch's"
+    },
+    {
+      "id": "M-PROBE-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            458,
+            485
+          ],
+          "anchor": "idSort_CompareEnvprobe",
+          "sha256": "021be0e0f470c988c758d756357359cae7b4c2e6456cb2cb0d0d019f3b7546a5"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            487,
+            668
+          ],
+          "anchor": "R_FindClosestEnvironmentProbes",
+          "sha256": "153abebed41cc3cf9d3c1c1fc207d36e74a3903f499a7a7a105222fb9dfb2bb7"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            962,
+            963
+          ],
+          "anchor": "R_RenderView: R_FindClosestEnvironmentProbes after the subviews",
+          "sha256": "4605d875cb7e8a2b2096418e8564243443f5a2eb9fd6d03d19be2286fe8f634b"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            154,
+            154
+          ],
+          "anchor": "r_useLightAreaCulling \"1\"",
+          "sha256": "df1ffcd8004b8d5c5ab22198e3c026ae8e18ee85d091a66a1d5422c515399ddb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewProbes.cpp",
+          "symbol": "chooseViewProbes"
+        },
+        {
+          "file": "lib/TbLitLib/src/ViewProbes.h",
+          "symbol": "ViewProbes, ProbeImageState"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::record (m_viewProbes), LitPasses::viewProbes"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.h",
+          "symbol": "FrontendLists::connectedAreas"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::requestProbeImages, FrameConvergence::probeImagesPending"
+        }
+      ],
+      "note": "LP4.2a step 4 (C37, D79, D88, P4.6): every frame before the passes, outside the cached lists (connectedAreas is the flow's, kept in FrontendLists): the defaults (bounds cleared, the default cube for the three radiance and three depth images, blends ( 1, 0, 0, 0 ), positions and SH zero); the early out at view area -1 (and, D94, without a tree; no subviews here); the candidates every probe of areaNum -1 or of a connected area; sorted by the squared distance of the view origin to the origin (M-PROBE-DIFF-02 for ties); the nearest's bounds and depth cube; probePositions[i] the candidate's origin and its depth cube's validity below the count, else the nearest's origin and 0; the weights max( 0, 1 - d_i / dCut )^2 (d_i idVec3::Length, M-PROBE-PURE-01; dCut max( d_3, 1e-4 ) above three candidates, else max( 1.5 * d_last, 1e-4 )), times the reciprocal of their sum when above 1e-4, else ( 1, 0, 0 ); the SH blended with them in candidate order; radiance[i] candidate i's _spec, probeDepth[i - 1] candidate i's _depth (i = 1, 2); the bounds cleared when every radiance cube or the depth cube is the default. An image is taken only when its slot is Ready (M-PROBE-DIFF-03)"
+    },
+    {
+      "id": "M-PROBE-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/d3xp/EnvironmentProbe.cpp",
+          "lines": [
+            233,
+            235
+          ],
+          "anchor": "EnvironmentProbe::Spawn: localEnvprobeOrigin and axis from the physics pose",
+          "sha256": "2787c6679e5b65263296c5cf5dbcb6f9c2642c7a52068e5a147cb38caa9c1517"
+        },
+        {
+          "file": "neo/d3xp/EnvironmentProbe.cpp",
+          "lines": [
+            482,
+            495
+          ],
+          "anchor": "EnvironmentProbe::Present: renderEnvprobe.origin from the physics pose",
+          "sha256": "08949db7428e24b255987112a9a5d673c54a5a4e29778f81bd35f192485f4072"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ProbeRecord.cpp",
+          "symbol": "buildProbeRecords"
+        }
+      ],
+      "note": "LP4.2a (C37): the game presents a probe at physics origin + physics axis * localEnvprobeOrigin, a float round trip of the parsed origin through the entity's own pose; the preview keeps the parsed origin (the lights' M-LIGHT-DIFF-02 class). Equal for a probe without a bind or rotation, and in the last bits at most otherwise; an automatic probe's origin is a whole number, exact either way. The game's script events (On, Off, Fade, Hide) change only shaderParms or free the def at game time, which the editor never runs"
+    },
+    {
+      "id": "M-PROBE-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            458,
+            485
+          ],
+          "anchor": "idSort_CompareEnvprobe: 0 for equal distances",
+          "sha256": "021be0e0f470c988c758d756357359cae7b4c2e6456cb2cb0d0d019f3b7546a5"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            538,
+            542
+          ],
+          "anchor": "R_FindClosestEnvironmentProbes: SortWithTemplate (idSort_Quick)",
+          "sha256": "5bb0dc260dfdf516e8079890bef9c7b61a95a2b97438c53e82f678502b20554f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewProbes.cpp",
+          "symbol": "chooseViewProbes"
+        }
+      ],
+      "note": "K32: idSort_Quick keeps no order among probes at equal squared distances, so the engine's choice of the nearest, of the three and of their weights depends on the list order and the pivot path; the preview breaks a tie by the probe's id (a placed probe's preview id, an automatic one's AutomaticProbeIdBase + area), so the choice is the same every frame. Only exactly equal float distances differ"
+    },
+    {
+      "id": "M-PROBE-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            859,
+            867
+          ],
+          "anchor": "R_DeriveEnvprobeData: ImageFromFile of _spec and _depth",
+          "sha256": "aae19b3e8e9c47b6a3f42fdd2df9db1669d5b986197cb79c7f63a245270db2b9"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            552,
+            555
+          ],
+          "anchor": "the nearest depth cube: IsLoaded() && !IsDefaulted()",
+          "sha256": "53989f93eff3f79e7a2e0917da9690dfab78adefeb5e36ef7dab56141429bd8b"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            638,
+            653
+          ],
+          "anchor": "the radiance cubes (!IsDefaulted()) and the next two depth cubes",
+          "sha256": "8a0aaf98c17cba59b456c9b36f9194c575d89b59056c37acec5cb1f6e3ccef51"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewProbes.cpp",
+          "symbol": "chooseViewProbes"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::requestProbeImages, the ProbeImageState of a slot"
+        }
+      ],
+      "note": "D88: the engine loads every probe image with the map, so its radiance test (!IsDefaulted()) reads a loaded image; the preview's slots arrive later: a Ready slot (a written level of its own) is taken, a Pending one leaves the default cube and marks the frame unconverged (FrameConvergence::probeImagesPending, cleared by the slot's arrival as for every image), a Missing or Default one is the engine's defaulted image (final). Only the images the choice reads count"
+    },
+    {
+      "id": "M-PROBE-POOL-01",
+      "kind": "pool-safe",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            793,
+            869
+          ],
+          "anchor": "idRenderMatrix::OffsetScaleForBounds",
+          "sha256": "8a080ab2345949435bff256d5b69fc46b428e736a76054b537ee64a045ee2f15"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            808,
+            924
+          ],
+          "anchor": "R_DeriveEnvprobeData",
+          "sha256": "9e60efabfb211acd1bdb7b63c2592aaec7859501e7bd3b4a9437e4614c98c3d8"
+        },
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            1275,
+            1336
+          ],
+          "anchor": "idGameLocal::PopulateEnvironmentProbes",
+          "sha256": "2e2f1a18c341909514427aaf574b8450f6dac6bc2ce5779fcbead723c1e4ee09"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineOffsetScaleForBounds, engineMatrixFromOriginAxis, engineBoundsCenter, engineClearedBounds"
+        },
+        {
+          "file": "lib/TbLitLib/src/ProbeRecord.cpp",
+          "symbol": "buildProbeRecords, deriveEnvprobe"
+        }
+      ],
+      "commonCalls": [
+        "none: the transcription leaves out the Inverse of the identity and its idLib::Warning( \"lightMatrix invert failed\" ) (RenderWorld_defs.cpp:883-886), unreachable for the identity, and the game's Printf and Warning (Game_local.cpp:1298, :1316), whose text the job returns as warnings that the render thread posts; OffsetScaleForBounds, CreateFromOriginAxis (M-LIGHT-POOL-01) and idBounds' inline members call neither common nor idLib::common and hold no FatalError site"
+      ],
+      "asserts": [
+        "RenderMatrix.cpp:795 OffsetScaleForBounds' &src != &out (the facade passes a copy and a new output)"
+      ],
+      "note": "C24 (LP4.2a step 3, D87): the probe registry's job (buildProbeRecords) runs on the CPU pool: it reads its input (the tree, AreaData and .shprobes held by shared_ptr, immutable; the placed probes' merged spawn args, copies), the copied OffsetScaleForBounds and CreateFromOriginAxis through the facades and idBounds' GetCenter and Clear, allocates with the global allocator and calls no SIMDProcessor; (5) no static of its own. A cancelled pool's job returns early, its output dropped (R2.1)"
+    },
+    {
+      "id": "M-PROBE-PURE-01",
+      "kind": "pure-function",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Vector.h",
+          "lines": [
+            777,
+            780
+          ],
+          "anchor": "idVec3::Length",
+          "sha256": "a9bdad816536eb31b9f5ed49acabfee7c8195da6e9b5a8fae09cde14f35cb84a"
+        },
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            527,
+            532
+          ],
+          "anchor": "idMath::InvSqrt",
+          "sha256": "f7e6dac2456dd14129160ed03834a551dfec117d8853e80aaf58f771acba6ca1"
+        },
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            549,
+            552
+          ],
+          "anchor": "idMath::Sqrt",
+          "sha256": "768cd452ff8548227d92a6ca9cffd8ec144b0f8211b745adbb80b5f82b7c7182"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineVec3Length"
+        },
+        {
+          "file": "lib/TbLitLib/src/ViewProbes.cpp",
+          "symbol": "chooseViewProbes"
+        }
+      ],
+      "commonCalls": [
+        "none: the three inline functions call neither common nor idLib::common"
+      ],
+      "asserts": [
+        "none"
+      ],
+      "note": "LP4.2a step 4 (A25: the entry names the thread): the render thread runs idVec3::Length through engineVec3Length for the probe weights' distances (chooseViewProbes, inside LitPasses::record); the CPU pool runs it nowhere. Length is x * sqrtf( 1 / x ) of the squared length (idMath::Sqrt over InvSqrt), not sqrtf( x ), so the last bit is the engine's. C24's five conditions: (1) no common call; (2) no FatalError site; (3) no SIMDProcessor; (4) no allocation; (5) FLT_SMALLEST_NON_DENORMAL, a dynamically initialised idMath constant listed in M-ID-STATIC-39 (Debug), read only"
+    },
+    {
+      "id": "M-AMB-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            2264,
+            2304
+          ],
+          "anchor": "idRenderBackend::AmbientPass: the early outs and RENDERPARM_WINDOWCOORD",
+          "sha256": "a6eb2b52bd15d90040ddab2c702830360eec200eb7291257c89206a0ce09e4fb"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            2358,
+            2423
+          ],
+          "anchor": "AmbientPass: currentSpace, GL_State, GL_Color, the light and ambient colours, RB_SetupForFastPathInteractions",
+          "sha256": "18d1867adba7d8b2278f253091c05fcf05ff1968aeb8f91a38d129eaecd38165"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            2708,
+            2731
+          ],
+          "anchor": "AmbientPass: the end",
+          "sha256": "533193a2549e17249cda45e8bf8088e2d2c62144cde16f7aadc75d9ce585635d"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            6054,
+            6063
+          ],
+          "anchor": "DrawViewInternal: AmbientPass( drawSurfs, numDrawSurfs, false )",
+          "sha256": "2ad53eef1320f9e16f363f59cd66e049d9d7d1d5709de6c622d2827782b0ae24"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::record, LitPasses::recordAmbient, ambientPassDesc"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameTimers.h",
+          "symbol": "TimedPass::Ambient"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/FrameLog.h",
+          "symbol": "FrameLogRow::ambientDraws, gpuAmbientMs"
+        }
+      ],
+      "note": "LP4.2a step 5 (C34, D84, P4.27): the pass between the depth prepass and the interactions (the SSAO and shadow-atlas passes between them are not in the preview: K31, LP6), on HdrFramebuffer reading the prepass's depth, with its own timer (gpu_ambient_ms) and draw count (ambient_draws), the frame log's two columns after flow_ms (44). No surface: nothing. WINDOWCOORD ( 1 / w, 1 / h, w, h ) of the whole target; the MVP forced on the first surface; GL_State ONE / ZERO | DEPTHMASK | DEPTHFUNC_EQUAL, which every draw's pipeline key carries (ambientStateBits); GL_Color( white ); diffuse and specular colour white * r_lightScale; AMBIENT_COLOR ( r_forceAmbient, same, same, 1 ) (0.5, M-VIEW-01); the fast-path setup (M-AMB-05). At the end ALPHA_TEST 0; renderProgManager.Unbind has no NVRHI counterpart (the next draw's pipeline replaces the program). r_skipAmbient gates DrawShaderPasses only, not this pass; RDF_NOAMBIENT, RDF_IRRADIANCE, a view without entities and the SSAO debug branch never reach the preview's 3D view. The pass's pending pipelines and skipped draws join the frame's convergence terms"
+    },
+    {
+      "id": "M-AMB-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            2425,
+            2502
+          ],
+          "anchor": "AmbientPass: the surface loop, translucent and conditioned-off surfaces, the space change",
+          "sha256": "8c714a1d3f74f77172cfc1d77667e72ccc1713c684624ccbb9370b1d9a8bb1c9"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            2538,
+            2706
+          ],
+          "anchor": "AmbientPass: inter = {}, the fast path, the stage loop and the final draw",
+          "sha256": "72e57daba6e4444a19d4243062dbc707149f9f838a4e7957863de1a0484fbf7c"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            56,
+            56
+          ],
+          "anchor": "r_skipInteractionFastPath \"1\"",
+          "sha256": "5c3ea8208df476e71cb4059bb1ed44a5a68cdb17c61d88236e27d530b00ea3e6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordAmbient, LitPasses::setAmbientSpace, ambientStateBits"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineAmbientSurfaceInteractions, surfaceStageLoop"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitStages.h",
+          "symbol": "engineAmbientSurfaceInteractions"
+        }
+      ],
+      "note": "LP4.2a step 5 (C34, P4.19, P4.20): over m_lists.drawSurfs in the prepass's order: a translucent surface is skipped (:2432), and one whose every stage condition register is 0 (:2441-2454); on a space change MVP, LOCALVIEWORIGIN (the view origin in model space, w 1), MODELMATRIX_X..W and MODELVIEWMATRIX_X..W transposed. inter = {} per surface with diffuseColor ( 1, 1, 1, 1 ) and specularColor 0 (:2538-2542); the fast path is dead (r_skipInteractionFastPath 1). The stage loop is the interactions' (engineSurfaceInteractions' shared surfaceStageLoop, M-PASS-04) with the light colours white * 3 and noSpecular false: SL_COVERAGE and SL_AMBIENT ignored; SL_BUMP draws a pending interaction, then takes its image and matrix and clears diffuse and specular; SL_DIFFUSE and SL_SPECULAR draw a pending one of theirs, then take image, vertexColor, matrix and clamp01( register ) * 3; the final draw. Before each draw the state is ambientStateBits( inter.vertexColor ): ONE / ZERO for SVC_IGNORE, ONE / ONE otherwise (:2603-2611, :2636-2644, :2668-2676, :2692-2700), the vertexColor of the group's diffuse or specular stage, kept across a bump stage. The polygon offset of :2504-2536 is commented out in the engine: none"
+    },
+    {
+      "id": "M-AMB-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1131,
+            1193
+          ],
+          "anchor": "DrawSingleInteraction: the images, the skips, the matrices, the vertex colour and the modifiers, specUsage",
+          "sha256": "4ef9a581609efc6cf2425fe5a1f6cdf649404f3f7852d65b0dee388531486b46"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2490,
+            2503
+          ],
+          "anchor": "idMaterial::AddImplicitStages: none without a lit stage, else _flat for a missing bump",
+          "sha256": "834cc0334aebf63d17a49ec86f296b5aa80557eab0e260c8478d4a2b6e55bb86"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineSingleInteraction"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordAmbient (drawOne)"
+        }
+      ],
+      "note": "LP4.2a step 5 (C34): each ambient draw is DrawSingleInteraction( &inter, false, useIBL true, false ): engineSingleInteraction (M-PASS-04) gives no draw without a bump image, _blackDiffuse for a null diffuse and _black for a null specular, and no draw when both are black (diffuse _black or rgb <= 0, specular likewise: the ambient pass's specularColor stays 0 unless a specular stage sets it); a material without a lit stage has no implicit _flat, so draws nothing here. Then BUMPMATRIX, DIFFUSEMATRIX and SPECULARMATRIX S/T, RB_SetVertexColorParms( vertexColor ), DIFFUSEMODIFIER and SPECULARMODIFIER from the group's colours, and the program by the specular image's usage after the PBR rename (M-AMB-04)"
+    },
+    {
+      "id": "M-AMB-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1306,
+            1394
+          ],
+          "anchor": "DrawSingleInteraction: the useIBL branch (probes)",
+          "sha256": "770e8444f924b9e6981a9692a45418d117f3adc37a40f19ec10d5a1aef5c438d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordAmbient (probeParms, the units), litStartPipelineKeys"
+        },
+        {
+          "file": "lib/TbLitLib/src/ViewProbes.h",
+          "symbol": "ViewProbes"
+        }
+      ],
+      "note": "LP4.2a step 5 (C34, D85, P4.28): the probe path, the same parms for every draw of the view: WOBBLESKY_X ( bounds mins, cleared ? 0 : 1 ), WOBBLESKY_Y ( maxs, 0 ), WOBBLESKY_Z ( GetCenter, 1 ), TEXGEN_0_S/T/Q the three probe positions, LOCALLIGHTORIGIN the radiance blends, SH_IRRADIANCE_0..8 the blended SH (nine contiguous float4s); the program ambient_lighting_IBL_PBR (6) for a specular image of usage TD_SPECULAR_PBR_RMAO or _RMAOD, else ambient_lighting_IBL (4) (no skinned surfaces in the preview); the units 0-2 the interaction's bump, specular and diffuse images, 3 _brdfLut, 4 _white (M-AMB-DIFF-01), 7 _default (M-INTR-DIFF-02), 8-10 the radiance cubes, 12 the nearest's depth cube, 13-14 the next two's, the default cube (M-INTR-09) wherever a probe image is not Ready. The pipeline key { Draw, program, ambientStateBits, depth bias 0, slope 0, hdrFBO's formats }; DX.5's start list (litStartPipelineKeys) gains programs 4 and 6 times ONE / ZERO and ONE / ONE (11 keys). The grid branch before it (:1196-1305) is M-AMB-DIFF-03's"
+    },
+    {
+      "id": "M-AMB-05",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1673,
+            1694
+          ],
+          "anchor": "RB_SetupForFastPathInteractions",
+          "sha256": "c6c62ee23070605407d9cd56ed3d7b7268a6bebbf0d82d85d9a7a099ca27c54f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordAmbient"
+        }
+      ],
+      "note": "LP4.2a step 5: before the surface loop the identity rows ( 1, 0, 0, 0 ) and ( 0, 1, 0, 0 ) for the bump, diffuse and specular matrices, SVC_IGNORE's vertex colour parms and the light colours as the two modifiers, as the interactions set them (M-PASS-04); every draw sets its own again (DrawSingleInteraction :1175-1190)"
+    },
+    {
+      "id": "M-AMB-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1364,
+            1372
+          ],
+          "anchor": "DrawSingleInteraction: _white at INTERACTION_TEXUNIT_PROJECTION without r_useSSAO, else _ao0",
+          "sha256": "185e9a9fc74e30d622c6a269ffbd4a366b3f52e137e29876c22edce492546558"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            290,
+            290
+          ],
+          "anchor": "r_useSSAO \"1\"",
+          "sha256": "adbaa0f0d052e7e98c390b04635244990fce37db24c6f976810a489e16f00242"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineFrameDefaults::useSsao"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordAmbient (UnitSsao)"
+        }
+      ],
+      "note": "K31 (LP4.2a): the engine's default r_useSSAO 1 binds the SSAO target _ao0 at t4, which the SSAO pass writes before the ambient pass; the preview has no SSAO pass until LP6 and binds _white, the engine's r_useSSAO 0 answer (EngineFrameDefaults::useSsao false, static_asserted where the unit is set), so the ambient light is not darkened in corners. Parity rows of the ambient pass (LP4.2b) run the engine with r_useSSAO 0"
+    },
+    {
+      "id": "M-AMB-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            2425,
+            2454
+          ],
+          "anchor": "AmbientPass: every opaque surface with a stage on is drawn",
+          "sha256": "1ab1a50daad13cf7a2bfc5440fdd2fb8f1d9ffb5ec70492ce00189c8ea1c803a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordAmbient"
+        }
+      ],
+      "note": "LP4.2a (C34): a surface whose material or registers the table has not answered yet gets no ambient draw, where the interactions draw it with _default; the engine has every material at map load. The frame is unconverged already (FrontendLists::pending), so the draw comes with the table"
+    },
+    {
+      "id": "M-AMB-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1196,
+            1305
+          ],
+          "anchor": "DrawSingleInteraction: useIBL with a grid area and r_useLightGrid (the light grid)",
+          "sha256": "de7c91efd8592e299540d59c34b9b27dc3a8fb6bacf9c7522c67d20bcd583b2a"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            299,
+            299
+          ],
+          "anchor": "r_useLightGrid \"1\"",
+          "sha256": "b793dcf456a0bee95190c9c82b3a61abed8d460fd4987a73d98429d7f3e0fd14"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordAmbient (EngineFrame.useLightGrid && surface.gridArea)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.h",
+          "symbol": "LitSurface::gridArea"
+        }
+      ],
+      "note": "LP4.2a: the light-grid branch is LP4.3's: LitSurface::gridArea is never set, so every surface takes the probe path; a surface with a grid area would be counted (ambientGridSurfaces, 'grid: LP4.3') and not drawn. The engine draws a surface whose area has a valid grid with ambient_lightgrid_IBL (programs 8 and 10, t7 the area's atlas, GLOBALLIGHTORIGIN, JITTERTEXSCALE, JITTERTEXOFFSET, SCREENCORRECTIONFACTOR, CASCADEDISTANCES)"
+    },
+    {
+      "id": "M-AMB-DIFF-04",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            752,
+            774
+          ],
+          "anchor": "the volatile constant buffers, maxVersions 8192",
+          "sha256": "70ac30c260f7367d6711162ed17eb119bb7d7087323667e67f52709f8a6bf475"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::constantBuffer, LitPasses::recordAmbient (DrawOutcome::Overflowed)"
+        }
+      ],
+      "note": "D86 (LP4.2a): the ambient pass writes its own volatile buffer, RenderParams_13 (AMBIENT_LIGHTING_IBL, 720 bytes), which has its own writes per frame under the same budget as the others (maxVersions / ( FramesInFlight + 1 ), M-PASS-DIFF-04): a draw past it is not drawn and counts as overflowed (ambientOverflowed, U2.11's warning once), never NVRHI's maxVersions error. The engine relies on 8192 versions. GpuMemoryAccount counts the buffer with the others"
+    },
+    {
+      "id": "M-TEST-AMB-01",
+      "kind": "difference",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            130,
+            130
+          ],
+          "anchor": "r_skipInteractions \"0\"",
+          "sha256": "1ccfdaba96e82a20e5493d166c376bddb10209a635987829b66b891e851d03b0"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4179,
+            4184
+          ],
+          "anchor": "idRenderBackend::DrawInteractions: r_skipInteractions",
+          "sha256": "0d8aae487bb4757e0b2aa8be0c4142f4973fa06f0c0fc688219082657f1c1de6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/LitSession.h",
+          "symbol": "LitSession::skipInteractionsForTesting"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::setSkipInteractions"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::setSkipInteractionsForTesting, LitPasses::record"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "the [.][parity] case: a row's ambient_only flag"
+        }
+      ],
+      "note": "C38 (LP4.2a for LP4.2b), test only: skipInteractionsForTesting( true ) records no interactions, every other pass as is, as the engine's r_skipInteractions 1 does, for the parity rows LP4.2b marks ambient_only (rows.json; the read-back's json says ambient_only and ambient_draws). The product never sets it"
+    },
+    {
+      "id": "M-TEST-AMB-02",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/shaders/builtin/lighting/ambient_lighting_IBL.ps.hlsl",
+          "lines": [
+            184,
+            214
+          ],
+          "anchor": "shEvaluateL2, shEvaluateDiffuseL2RGB",
+          "sha256": "e7b959c29661db130d4a55246e84eb797f1e54f8be2d6f7a39a3541bfed156b3"
+        },
+        {
+          "file": "neo/shaders/builtin/lighting/ambient_lighting_IBL.ps.hlsl",
+          "lines": [
+            216,
+            491
+          ],
+          "anchor": "main: the probe path of one pixel",
+          "sha256": "97ee79c2060c8eee356e721390b574da9b937f68c02efe5a61481cd323b0e482"
+        },
+        {
+          "file": "neo/shaders/global_inc.hlsl",
+          "lines": [
+            177,
+            185
+          ],
+          "anchor": "Linear1, Linear3",
+          "sha256": "44c7105c214116800606e507fbb123250f51d7f6bbc380728113a82171cf21c0"
+        },
+        {
+          "file": "neo/shaders/global_inc.hlsl",
+          "lines": [
+            205,
+            214
+          ],
+          "anchor": "sRGBToLinearRGB",
+          "sha256": "a792da57fb9bb17e5df221f3fa27943bb2ebe5c24d52109c365866402cf2689f"
+        },
+        {
+          "file": "neo/shaders/global_inc.hlsl",
+          "lines": [
+            342,
+            361
+          ],
+          "anchor": "ConvertYCoCgToRGB",
+          "sha256": "60766b829224d23c128795eb8776db0c5a9bd90eda01f79c34198ddcee4f6513"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "modelDiffuseMap, modelEnvBrdf, modelSpecularScatter, ModelY00, modelLdr"
+        }
+      ],
+      "note": "LP4.2a step 5, test only: the CPU model of ambient_lighting_IBL.ps.hlsl for one flat-normal pixel that the hidden GPU case holds the read-back to (within 1 after the tonemap, LP2.2b's TonemapModel): irradiance = max( shEvaluateDiffuseL2RGB( sh, n ) / pi, 0 ), which for an L0-only SH is c0 * Y00 (1 / ( 2 sqrt( pi ) ) = 0.28209479; A0 = 3.1415927 and the divisor 3.14159265 are one float); envBRDF sampled bilinearly from the copied LUT's halves (M-INTR-08); specularScatter (Fdez-Aguera); diffuseLight = ( 1 - specularScatter ) * irradiance * diffuseColor * ao 1 * DIFFUSEMODIFIER; specularLight with specGate smoothstep( 0, 0.005, lum( irradiance ) ) and the radiance cube's constant colour; ( diffuseLight * forceAmbient + specularLight * horiz^2 ) * vertex colour; the diffuse texel through ConvertYCoCgToRGB and sRGBToLinearRGB. Never in the product"
     }
   ],
   "retired": [
