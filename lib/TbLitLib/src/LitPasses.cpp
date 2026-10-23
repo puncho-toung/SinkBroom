@@ -225,6 +225,8 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   key.entities = inputs.entities;
   key.lights = inputs.lights.get();
   key.lightsVersion = inputs.lights ? inputs.lights->version : 0;
+  key.tree = inputs.procTree.get();
+  key.areas = inputs.areas.get();
   key.registry = table ? table->registry : 0;
   key.lightTrianglesVersion = m_lightTriangles.version();
   key.lightTriangleCull = m_lightTriangleCull;
@@ -249,6 +251,8 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   frontend.chunks = inputs.chunks;
   frontend.entities = inputs.entities;
   frontend.lights = inputs.lights.get();
+  frontend.tree = inputs.procTree.get();
+  frontend.areas = inputs.areas.get();
   frontend.material = [&](const std::string& name) {
     if (const auto slot = table->find(name))
     {

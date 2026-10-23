@@ -20,8 +20,8 @@
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/tr_frontend_addlights.cpp,
-// renderer/tr_frontend_addmodels.cpp, renderer/RenderCommon.h and
-// renderer/RenderBackend.cpp):
+// renderer/tr_frontend_addmodels.cpp, renderer/RenderCommon.h,
+// renderer/RenderBackend.cpp and renderer/RenderWorld_portals.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2013-2025 Robert Beckebans
 // That code is also subject to the additional terms that follow the GNU General Public
@@ -31,9 +31,13 @@
 #include "LitFrontend.h"
 
 #include "LitStages.h"
+#include "ViewFlow.h"
+#include "lit/AreaData.h"
 #include "lit/EngineTables.h"
+#include "lit/ProcFile.h"
 
 #include <algorithm>
+#include <chrono>
 
 namespace tb::lit
 {
@@ -103,7 +107,9 @@ bool engineSnapLightRegisters(const MaterialEntry& shader, std::vector<float>& r
 }
 
 std::optional<ScreenRect> engineLightScissor(
-  const LitView& view, const EngineMat4& inverseBaseLightProject)
+  const LitView& view,
+  const EngineMat4& inverseBaseLightProject,
+  const ScreenRect& flowRect)
 {
   // Calculate the matrix that projects the zero-to-one cube to exactly cover the light
   // frustum in clip space.
@@ -130,9 +136,9 @@ std::optional<ScreenRect> engineLightScissor(
   lightScissorRect.y2 = short(engineFtoi(projected[1][1] * screenHeight));
   lightScissorRect.expand();
 
-  // D67: the portal flow's rect (at most the view's scissor) is LP4's; the view's
-  // scissor stands for it
-  auto scissor = viewScissor(view);
+  // vLight->scissorRect: the union of the portal chains' rects the light passed
+  // (RenderWorld_portals.cpp:400), here flowRect (LP4.1, C33)
+  auto scissor = flowRect;
   scissor.intersect(lightScissorRect);
   scissor.zmin = projected[0][2];
   scissor.zmax = projected[1][2];
@@ -202,6 +208,18 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   }
   const auto& view = inputs.view;
 
+  // the state of a chunk's entity; null: worldspawn's
+  const auto stateOf = [&](const PreviewId entity) -> const ChunkEntityState* {
+    if (inputs.entities)
+    {
+      if (const auto it = inputs.entities->find(entity); it != inputs.entities->end())
+      {
+        return &it->second;
+      }
+    }
+    return nullptr;
+  };
+
   // the spaces (viewEntity_t) of the chunks' entities, in the order first seen
   auto spaceOf = std::unordered_map<PreviewId, std::size_t>{};
   const auto space = [&](const PreviewId entity) -> std::optional<std::size_t> {
@@ -209,14 +227,7 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
     {
       return it->second;
     }
-    const ChunkEntityState* state = nullptr;
-    if (inputs.entities)
-    {
-      if (const auto it = inputs.entities->find(entity); it != inputs.entities->end())
-      {
-        state = &it->second;
-      }
-    }
+    const auto* state = stateOf(entity);
     if (state && !state->visible)
     {
       return std::nullopt;
@@ -232,13 +243,127 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
     return index;
   };
 
-  // R_AddModels: the surfaces directly visible, each with its material and registers
+  // the light records in id order (M-FRONT-DIFF-01)
+  auto records = std::vector<std::shared_ptr<const LightRecord>>{};
+  if (inputs.lights)
+  {
+    inputs.lights->records.forEach(
+      [&](const PreviewId&, const std::shared_ptr<const LightRecord>& record) {
+        if (record)
+        {
+          records.push_back(record);
+        }
+      });
+    std::ranges::sort(
+      records, [](const auto& lhs, const auto& rhs) { return lhs->id < rhs->id; });
+  }
+
+  // LP4.1 (C32, D79): FindViewLightsAndEntities first, over the lights and the brush
+  // entities that reference an area; without a tree nothing is flowed and LP2's rules
+  // stand (D94)
+  const auto hasTree = inputs.tree && !inputs.tree->nodes.empty() && inputs.areas
+                       && !inputs.areas->areas.empty();
+  auto flowLights = std::vector<ViewFlowLight>{};
+  auto flowEntities = std::vector<ViewFlowEntity>{};
+  if (hasTree)
+  {
+    for (const auto& record : records)
+    {
+      if (record->visible && record->derived.hasVolume && !record->derived.areas.empty())
+      {
+        flowLights.push_back(ViewFlowLight{
+          record->id,
+          record->derived.areaNum,
+          record->derived.areas,
+          record->derived.projection.inverseBaseLightProject,
+          lightCastsShadows(*record).value_or(false)});
+      }
+    }
+    if (inputs.entities)
+    {
+      for (const auto& [id, state] : *inputs.entities)
+      {
+        if (state.visible && !state.areas.empty())
+        {
+          flowEntities.push_back(
+            ViewFlowEntity{id, state.areas, state.inverseBaseModelProject});
+        }
+      }
+    }
+  }
+  auto flowInputs = ViewFlowInputs{};
+  flowInputs.view = view;
+  flowInputs.tree = hasTree ? inputs.tree : nullptr;
+  flowInputs.areas = hasTree ? inputs.areas : nullptr;
+  flowInputs.lights = flowLights;
+  flowInputs.entities = flowEntities;
+  const auto flowStart = std::chrono::steady_clock::now();
+  const auto flow = flowView(flowInputs);
+  lists.flowMs = std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - flowStart)
+                   .count();
+  lists.flowed = flow.flowed;
+  lists.viewArea = flow.viewArea;
+  lists.areasFlowed =
+    std::size_t(std::count(flow.areaFlowed.begin(), flow.areaFlowed.end(), true));
+  lists.portalChains = flow.chains;
+  const auto numAreas = flow.flowed ? inputs.areas->areas.size() : std::size_t{0};
+
+  // R_AddModels: the surfaces directly visible, each with its material and registers;
+  // with a tree, those of the entities the flow saw (C33) and of the outside set (D81)
   auto visible = std::vector<LitSurface>{};
+  // per visible surface, what the pairing reads of it (C33)
+  auto areaSurfaces = std::vector<AreaSurface>{};
   for (const auto& [key, chunk] : *inputs.chunks)
   {
     if (chunk.indexes.empty())
     {
       continue;
+    }
+    auto areaSurface = AreaSurface{};
+    if (flow.flowed)
+    {
+      const auto* state = stateOf(key.entity);
+      if (!state)
+      {
+        // a worldspawn chunk belongs to the world entity of its area, referenced in that
+        // area alone (RenderWorld_load.cpp:1029-1095), directly visible when its rect is
+        // not empty (tr_frontend_addmodels.cpp:340; P4.29); a piece in solid is the
+        // outside set (D47, K14, D81)
+        if (key.area >= 0 && std::size_t(key.area) < numAreas)
+        {
+          areaSurface.kind = AreaSurfaceKind::WorldArea;
+          areaSurface.area = key.area;
+          areaSurface.directlyVisible =
+            flow.worldRects[std::size_t(key.area)].has_value();
+          if (!areaSurface.directlyVisible)
+          {
+            continue;
+          }
+        }
+        else
+        {
+          areaSurface.kind = AreaSurfaceKind::WorldOutside;
+          areaSurface.directlyVisible = true;
+        }
+      }
+      else
+      {
+        // a brush entity: its references (C31), seen when the flow gave it a rect; one
+        // without references is the outside set (D81)
+        areaSurface.kind = AreaSurfaceKind::Entity;
+        areaSurface.refs = state->areas;
+        areaSurface.directlyVisible =
+          state->areas.empty() || flow.entityRects.contains(key.entity);
+        if (!areaSurface.directlyVisible)
+        {
+          if (state->visible)
+          {
+            ++lists.entitiesCulled;
+          }
+          continue;
+        }
+      }
     }
     const auto index = space(key.entity);
     if (!index)
@@ -278,6 +403,7 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       continue;
     }
     visible.push_back(surface);
+    areaSurfaces.push_back(areaSurface);
   }
 
   // the prepass list: the drawn surfaces, the leading SS_SUBVIEW ones first
@@ -298,19 +424,8 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   }
 
   // R_AddLights, then the light half of R_AddSingleModel, per light in id order
-  if (inputs.lights)
+  if (!records.empty())
   {
-    auto records = std::vector<std::shared_ptr<const LightRecord>>{};
-    inputs.lights->records.forEach(
-      [&](const PreviewId&, const std::shared_ptr<const LightRecord>& record) {
-        if (record)
-        {
-          records.push_back(record);
-        }
-      });
-    std::ranges::sort(
-      records, [](const auto& lhs, const auto& rhs) { return lhs->id < rhs->id; });
-
     for (const auto& record : records)
     {
       if (!record->visible || !record->derived.hasVolume)
@@ -327,6 +442,22 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       {
         continue;
       }
+
+      // LP4.1 (C33): a viewLight_t only when the flow gave the light a rect, its
+      // scissorRect (RenderWorld_portals.cpp:364-402); a light that pushed into no area
+      // is the outside set's, with the view's scissor (D81); without a tree the view's
+      // scissor stands (D94)
+      auto flowRect = viewScissor(view);
+      if (flow.flowed && !record->derived.areas.empty())
+      {
+        const auto rect = flow.lightRects.find(record->id);
+        if (rect == flow.lightRects.end())
+        {
+          continue;
+        }
+        flowRect = rect->second;
+      }
+
       const auto& material = *shader.material;
       if (material.fogLight || material.blendLight)
       {
@@ -373,18 +504,30 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
         continue;
       }
 
-      const auto scissor =
-        engineLightScissor(view, record->derived.projection.inverseBaseLightProject);
+      const auto scissor = engineLightScissor(
+        view, record->derived.projection.inverseBaseLightProject, flowRect);
       if (!scissor || scissor->isEmpty())
       {
+        // tr_frontend_addmodels.cpp:362-367: an empty scissor contacts no entity
         continue;
       }
       viewLight.scissor = *scissor;
+      ++lists.lightsInView;
 
-      // the interactions (tr_frontend_addmodels.cpp:920-1008)
+      // the interactions (tr_frontend_addmodels.cpp:920-1008), with a tree only through a
+      // shared, connected area or the outside set (C33 a-c, R_AddSingleLight's area walk,
+      // tr_frontend_addlights.cpp:488-582, and R_AddSingleModel's contacted lights,
+      // tr_frontend_addmodels.cpp:340-381)
       const auto& projection = record->derived.projection;
-      for (const auto& surface : visible)
+      const auto areaLight = AreaLight{record->derived.areaNum, record->derived.areas};
+      for (auto i = std::size_t{0}; i < visible.size(); ++i)
       {
+        const auto& surface = visible[i];
+        if (
+          flow.flowed && !lightReachesSurface(areaLight, areaSurfaces[i], *inputs.areas))
+        {
+          continue;
+        }
         const auto receives = !surface.material || surface.material->receivesLighting;
         if (!receives)
         {

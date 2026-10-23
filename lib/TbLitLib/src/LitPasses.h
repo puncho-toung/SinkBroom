@@ -77,6 +77,10 @@ struct LitFrameInputs
   std::uint64_t chunksVersion = 0;
   const std::unordered_map<PreviewId, ChunkEntityState>* entities = nullptr;
   std::shared_ptr<const LightTable> lights;
+  // LP4.1 (D79, D94): the scene's .proc tree and its AreaData (SceneGeometry::procTree,
+  // areaData), which the frontend's portal flow runs on; null: no flow, LP2's rules
+  std::shared_ptr<const ProcTree> procTree;
+  std::shared_ptr<const AreaData> areas;
   std::shared_ptr<const MaterialTable> materials;
   MaterialService* service = nullptr;
   // DX.2: the session's CPU pool, which makes the light triangles (none: at once)
@@ -190,8 +194,10 @@ std::vector<PipelineKey> litStartPipelineKeys(nvrhi::Format depthFormat);
  * it, then drawIndexed.
  *
  * The frontend lists (LitFrontend.h) are built again only when the camera, the extent,
- * the chunks or the light table changed, or when the last build was waiting for a
- * material or an evaluation and the material table has a new version (D52, D77).
+ * the chunks (an entity's area references with them: SceneGeometry builds them when a
+ * batch applies, which raises the chunks' version), the light table or the bake's tree
+ * and AreaData changed, or when the last build was waiting for a material or an
+ * evaluation and the material table has a new version (D52, D77).
  *
  * D76: DRAW_INTERACTION's renderparms are a volatile constant buffer (push constants
  * where the device's limit allows, the layout says which); its writes are counted while
@@ -216,6 +222,10 @@ private:
     const void* entities = nullptr;
     const LightTable* lights = nullptr;
     std::uint64_t lightsVersion = 0;
+    // LP4.1 (D79): a new bake brings a new tree and AreaData; an entity's references
+    // change only when a batch applies, which raises chunksVersion
+    const void* tree = nullptr;
+    const void* areas = nullptr;
     std::uint64_t registry = 0;
     // DX.2: the light triangles' answers, and whether the cull applies (a test's switch)
     std::uint64_t lightTrianglesVersion = 0;

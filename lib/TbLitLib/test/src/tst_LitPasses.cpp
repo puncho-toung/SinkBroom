@@ -23,19 +23,26 @@
 #include "LitTestUtils.h"
 #include "LitView.h"
 #include "RenderParms.h"
+#include "ViewFlow.h"
+#include "lit/AreaData.h"
 #include "lit/BprocModel.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/EngineBuiltins.h"
 #include "lit/EnginePipelineState.h"
 #include "lit/EngineTables.h"
 #include "lit/ImageCache.h"
+#include "lit/LightData.h"
 #include "lit/LightParse.h"
 #include "lit/LightRecord.h"
 #include "lit/ProcFile.h"
 
 #include "kd/result.h"
 
+#include <fmt/format.h>
+
 #include <algorithm>
+#include <cstdint>
+#include <iostream>
 #include <map>
 #include <memory>
 #include <set>
@@ -576,7 +583,8 @@ TEST_CASE("LitPasses: the light scissor, its sort and the caps (D67, SC206, SC22
   // in NDC, 0.4375..0.5625 in window space, ×100 is 43.75..56.25, Ftoi 43 and 56, and
   // the pixel each way: 42..57
   const auto ahead = lightAt("400 0 0", "100 50 50");
-  const auto scissor = engineLightScissor(view, ahead.inverseBaseLightProject);
+  const auto scissor =
+    engineLightScissor(view, ahead.inverseBaseLightProject, viewScissor(view));
   REQUIRE(scissor);
   CHECK(scissor->x1 == 42);
   CHECK(scissor->x2 == 57);
@@ -586,11 +594,13 @@ TEST_CASE("LitPasses: the light scissor, its sort and the caps (D67, SC206, SC22
 
   // behind the camera: culled to the view frustum
   const auto behind = lightAt("-400 0 0", "100 50 50");
-  CHECK_FALSE(engineLightScissor(view, behind.inverseBaseLightProject));
+  CHECK_FALSE(
+    engineLightScissor(view, behind.inverseBaseLightProject, viewScissor(view)));
 
   // enclosing the camera: the whole viewport (the expanded rect clipped to it)
   const auto around = lightAt("0 0 0", "100 100 100");
-  const auto whole = engineLightScissor(view, around.inverseBaseLightProject);
+  const auto whole =
+    engineLightScissor(view, around.inverseBaseLightProject, viewScissor(view));
   REQUIRE(whole);
   CHECK(*whole == [&] {
     auto rect = viewScissor(view);
@@ -867,7 +877,523 @@ std::set<std::string> materialsOf(const std::vector<LitSurface>& surfaces)
   return names;
 }
 
+// FNV-1a over a text, the same on every platform
+std::uint64_t textHash(const std::string& text)
+{
+  auto hash = std::uint64_t{14695981039346656037ull};
+  for (const auto c : text)
+  {
+    hash = (hash ^ std::uint64_t(std::uint8_t(c))) * 1099511628211ull;
+  }
+  return hash;
+}
+
+// the lists as text: the drawn surfaces' chunk keys in order, then per light its id, its
+// scissor and its three lists' chunk keys in order
+std::string listsText(const FrontendLists& lists)
+{
+  const auto keyText = [](const ChunkKey& key) {
+    return fmt::format(
+      "({} {} {} {} {} {} {})",
+      key.area,
+      key.entity,
+      key.material,
+      key.cell[0],
+      key.cell[1],
+      key.cell[2],
+      key.part);
+  };
+  auto text = std::string{"drawn"};
+  for (const auto& surface : lists.drawSurfs)
+  {
+    text += keyText(surface.chunk->key);
+  }
+  for (const auto& light : lists.lights)
+  {
+    text += fmt::format(
+      "\nlight {} [{} {} {} {}]",
+      light.record->id,
+      light.scissor.x1,
+      light.scissor.y1,
+      light.scissor.x2,
+      light.scissor.y2);
+    for (const auto* list :
+         {&light.localInteractions,
+          &light.globalInteractions,
+          &light.translucentInteractions})
+    {
+      text += " |";
+      for (const auto& surface : *list)
+      {
+        text += keyText(surface.chunk->key);
+      }
+    }
+  }
+  return text;
+}
+
+CameraState cameraAt(const EngineVec3& eye, const EngineVec3& direction)
+{
+  auto camera = fixtureCamera(eye[0], eye[1], eye[2]);
+  camera.direction = vm::vec3f{direction[0], direction[1], direction[2]};
+  return camera;
+}
+
+// LP4.1: a scene of synthetic chunks, entity states and light records over a tree, with
+// the fixture's materials and the light stand-ins
+struct FlowScene
+{
+  std::map<ChunkKey, Chunk> chunks;
+  std::unordered_map<PreviewId, ChunkEntityState> entities;
+  LightTable lights;
+  const ProcTree* tree = nullptr;
+  const AreaData* areas = nullptr;
+};
+
+// a chunk of one triangle whose bounds are mins..maxs (the frontend reads its key, its
+// indexes and its bounds); in its entity's model space
+void addChunk(
+  FlowScene& scene,
+  const int area,
+  const PreviewId entity,
+  const EngineVec3& mins,
+  const EngineVec3& maxs,
+  const std::string& material = "textures/lp1b/wall")
+{
+  auto chunk = Chunk{};
+  chunk.key = ChunkKey{area, entity, material, {0, 0, 0}, 0};
+  chunk.verts.resize(3);
+  chunk.verts[0].xyz = mins;
+  chunk.verts[1].xyz = maxs;
+  chunk.verts[2].xyz = EngineVec3{mins[0], maxs[1], mins[2]};
+  chunk.indexes = {0, 1, 2};
+  chunk.bounds = {mins, maxs};
+  scene.chunks.emplace(chunk.key, chunk);
+}
+
+// a brush entity's state at origin (identity axis) whose chunks span local bounds and
+// reference areas (in chain order), as SceneGeometry::updateEntityReferences leaves it
+void addEntity(
+  FlowScene& scene,
+  const PreviewId id,
+  const EngineVec3& origin,
+  const EngineBounds& local,
+  const std::vector<int>& areas)
+{
+  auto state = ChunkEntityState{};
+  state.id = id;
+  state.parms.axis = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  state.parms.shaderParms = engineWorldShaderParms();
+  state.modelOrigin = origin;
+  state.localReferenceBounds = local;
+  state.inverseBaseModelProject = engineOffsetScaleForBounds(
+    engineMatrixFromOriginAxis(origin, state.parms.axis), local);
+  state.globalReferenceBounds =
+    engineProjectedBounds(state.inverseBaseModelProject, engineUnitCube(), false);
+  state.areas = areas;
+  scene.entities.emplace(id, std::move(state));
+}
+
+// a light record of the map keys, derived over the scene's tree (its areaNum and area
+// references) with the fixture's table
+void addLight(
+  FlowScene& scene, const FrontendFixture& f, const PreviewId id, EntityKeys keys)
+{
+  auto record = LightRecord{};
+  record.id = id;
+  record.version = 1;
+  record.classname = "light";
+  record.spawnArgs = keys;
+  record.light = parseLight(mergeSpawnArgs(keys, nullptr));
+  record.derived = deriveLight(record.light, f.table.get(), scene.tree);
+  REQUIRE_FALSE(record.derived.shader.pending);
+  scene.lights.records =
+    scene.lights.records.set(id, std::make_shared<const LightRecord>(std::move(record)));
+  scene.lights.version += 1;
+}
+
+FrontendLists flowListsOf(
+  const FrontendFixture& f, const FlowScene& scene, const CameraState& camera)
+{
+  auto inputs = FrontendInputs{};
+  inputs.view = litViewOf(camera, 128, 96);
+  inputs.chunks = &scene.chunks;
+  inputs.entities = &scene.entities;
+  inputs.lights = &scene.lights;
+  inputs.tree = scene.tree;
+  inputs.areas = scene.areas;
+  inputs.material = [&](const std::string& name) {
+    const auto slot = f.table->find(name);
+    return MaterialAnswer{slot ? slot->entry : nullptr, !slot};
+  };
+  inputs.registers =
+    [&](const PreviewId, const MaterialEntry& material, const ShaderParms& parms) {
+      auto evaluated = f.decls->evaluate(material, parms, 0.0f);
+      REQUIRE(evaluated);
+      return RegisterAnswer{
+        std::make_shared<const EvaluatedRegisters>(std::move(*evaluated.value)), true};
+    };
+  return buildFrontendLists(inputs);
+}
+
+const ViewLight* viewLightOf(const FrontendLists& lists, const PreviewId id)
+{
+  const auto it = std::ranges::find_if(
+    lists.lights, [&](const ViewLight& light) { return light.record->id == id; });
+  return it != lists.lights.end() ? &*it : nullptr;
+}
+
+// the chunks' areas and entities a light lights, as (area, entity) pairs
+std::set<std::pair<int, PreviewId>> litOf(const ViewLight* light)
+{
+  auto lit = std::set<std::pair<int, PreviewId>>{};
+  if (light)
+  {
+    for (const auto* list :
+         {&light->localInteractions,
+          &light->globalInteractions,
+          &light->translucentInteractions})
+    {
+      for (const auto& surface : *list)
+      {
+        lit.emplace(surface.chunk->key.area, surface.chunk->key.entity);
+      }
+    }
+  }
+  return lit;
+}
+
+std::set<std::pair<int, PreviewId>> drawnOf(const FrontendLists& lists)
+{
+  auto drawn = std::set<std::pair<int, PreviewId>>{};
+  for (const auto& surface : lists.drawSurfs)
+  {
+    drawn.emplace(surface.chunk->key.area, surface.chunk->key.entity);
+  }
+  return drawn;
+}
+
+ScreenRect screenRect(const short x1, const short y1, const short x2, const short y2)
+{
+  auto rect = ScreenRect{};
+  rect.x1 = x1;
+  rect.y1 = y1;
+  rect.x2 = x2;
+  rect.y2 = y2;
+  return rect;
+}
+
 } // namespace
+
+TEST_CASE("LitPasses: the LP2.2a fixture's lists without a tree (LP4.1, D94)")
+{
+  // D94: without a tree the lists are LP2's; the drawn surfaces and the lights (their
+  // ids, scissors and three lists' chunks) of three cameras equal those before LP4.1
+  // (the counts and the FNV-1a hash of listsText, taken from ee09c988c's frontend)
+  auto f = frontendFixture();
+  struct Expected
+  {
+    CameraState camera;
+    std::size_t drawn = 0;
+    std::size_t lights = 0;
+    std::uint64_t hash = 0;
+  };
+  for (const auto& expected : {
+         Expected{fixtureCamera(-240, 0, 64), 17, 8, 0x80fa1976e119e7a7ull},
+         Expected{fixtureCamera(0, 0, 64), 11, 5, 0xe86f28e4f3cc3800ull},
+         Expected{cameraAt({200, 0, 64}, {-1, 0, 0}), 19, 6, 0xf2e82e63883146bbull},
+       })
+  {
+    const auto lists = listsOf(*f, expected.camera, 128, 96);
+    CHECK_FALSE(lists.flowed);
+    CHECK(lists.viewArea == -1);
+    CHECK(lists.areasFlowed == 0u);
+    CHECK(lists.portalChains == 0u);
+    CHECK(lists.entitiesCulled == 0u);
+    CHECK(lists.lightsInView >= lists.lights.size());
+    CHECK(lists.drawSurfs.size() == expected.drawn);
+    CHECK(lists.lights.size() == expected.lights);
+    CHECK(textHash(listsText(lists)) == expected.hash);
+  }
+}
+
+TEST_CASE("LitPasses: the frontend on the view's portal flow (LP4.1, C33, D81)")
+{
+  auto f = frontendFixture();
+  // the LP1b fixture's tree: area 0 the east room (x 8..256), area 1 the west room (x
+  // -256..8), one portal on x = 8 (y -32..32, z 0..96)
+  const auto tree =
+    readProcFile(readTextFile(
+      litFixtureFolder() / "goldens" / "lp1b_geometry" / "lp1b_geometry.proc"))
+    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  const auto areas = buildAreaData(tree);
+  REQUIRE(areas.areas.size() == 2u);
+  const auto point = [](const std::string& origin, const std::string& radius) {
+    return EntityKeys{{"origin", origin}, {"light_radius", radius}, {"noshadows", "1"}};
+  };
+  constexpr auto World = PreviewId{1};
+
+  SECTION("an area-1 light pairs with area 1's chunks, never area 0's")
+  {
+    auto scene = FlowScene{};
+    scene.tree = &tree;
+    scene.areas = &areas;
+    // area 1's chunk and one keyed area 0 at the same place, both inside the light's
+    // volume (x -210..-90) and ahead of the eye
+    addChunk(scene, 1, World, {-215, -50, 0}, {-205, 50, 96});
+    addChunk(scene, 0, World, {-215, -50, 0}, {-205, 50, 96}, "textures/lp1b/floor");
+    addLight(scene, *f, 10, point("-150 0 48", "60 60 60"));
+    REQUIRE(scene.lights.find(10)->derived.areas == std::vector<int>{1});
+
+    // in area 1 facing away from the portal: area 0 is not flowed, so its chunk is not
+    // drawn; the light lights area 1's chunk
+    const auto away = flowListsOf(*f, scene, cameraAt({-200, 0, 48}, {-1, 0, 0}));
+    CHECK(away.flowed);
+    CHECK(away.viewArea == 1);
+    CHECK(away.areasFlowed == 1u);
+    CHECK(away.portalChains == 1u);
+    CHECK(drawnOf(away) == std::set<std::pair<int, PreviewId>>{{1, World}});
+    CHECK(away.lightsInView == 1u);
+    CHECK(
+      litOf(viewLightOf(away, 10)) == std::set<std::pair<int, PreviewId>>{{1, World}});
+
+    // facing the portal from area 1, area 0 is flowed and its chunk drawn, but the light
+    // does not reference area 0, so it does not light it although its volume does (C33 a)
+    auto through = scene;
+    through.chunks.clear();
+    addChunk(through, 1, World, {-60, -10, 30}, {-50, 10, 60});
+    addChunk(through, 0, World, {-60, -10, 30}, {-50, 10, 60}, "textures/lp1b/floor");
+    through.lights = LightTable{};
+    addLight(through, *f, 11, point("-90 0 48", "60 60 60"));
+    REQUIRE(through.lights.find(11)->derived.areas == std::vector<int>{1});
+    const auto facing = flowListsOf(*f, through, cameraAt({-200, 0, 48}, {1, 0, 0}));
+    CHECK(facing.viewArea == 1);
+    CHECK(facing.areasFlowed == 2u);
+    CHECK(drawnOf(facing) == std::set<std::pair<int, PreviewId>>{{0, World}, {1, World}});
+    CHECK(
+      litOf(viewLightOf(facing, 11)) == std::set<std::pair<int, PreviewId>>{{1, World}});
+  }
+
+  SECTION("an area-0 light referencing both areas pairs with both")
+  {
+    auto scene = FlowScene{};
+    scene.tree = &tree;
+    scene.areas = &areas;
+    // the light's box x -40..80 crosses the portal's plane
+    addLight(scene, *f, 10, point("20 0 48", "60 60 60"));
+    const auto& record = *scene.lights.find(10);
+    REQUIRE(record.derived.areaNum == 0);
+    REQUIRE(
+      std::set<int>{record.derived.areas.begin(), record.derived.areas.end()}
+      == std::set<int>{0, 1});
+    // area 0's chunk, and area 1's seen through the portal
+    addChunk(scene, 0, World, {40, -20, 20}, {50, 20, 80});
+    addChunk(scene, 1, World, {-30, -20, 20}, {-20, 20, 60}, "textures/lp1b/floor");
+    const auto lists = flowListsOf(*f, scene, cameraAt({200, 0, 48}, {-1, 0, 0}));
+    CHECK(lists.viewArea == 0);
+    CHECK(lists.areasFlowed == 2u);
+    CHECK(lists.portalChains == 2u);
+    CHECK(
+      litOf(viewLightOf(lists, 10))
+      == std::set<std::pair<int, PreviewId>>{{0, World}, {1, World}});
+  }
+
+  SECTION("a brush entity referenced in both areas pairs through the shared one")
+  {
+    auto scene = FlowScene{};
+    scene.tree = &tree;
+    scene.areas = &areas;
+    // the entity straddles the doorway (world x -8..24); the light's box x -115..-5
+    // references area 1 alone and reaches the entity's west end
+    constexpr auto Door = PreviewId{20};
+    addEntity(
+      scene,
+      Door,
+      {8, 0, 48},
+      EngineBounds{EngineVec3{-16, -16, -16}, EngineVec3{16, 16, 16}},
+      {0, 1});
+    addChunk(scene, 0, Door, {-16, -16, -16}, {16, 16, 16});
+    addLight(scene, *f, 10, point("-60 0 48", "55 55 55"));
+    REQUIRE(scene.lights.find(10)->derived.areas == std::vector<int>{1});
+    // seen directly from area 0 (its chain), the light through the portal
+    const auto lists = flowListsOf(*f, scene, cameraAt({200, 0, 48}, {-1, 0, 0}));
+    CHECK(drawnOf(lists) == std::set<std::pair<int, PreviewId>>{{0, Door}});
+    CHECK(
+      litOf(viewLightOf(lists, 10)) == std::set<std::pair<int, PreviewId>>{{0, Door}});
+    CHECK(lists.entitiesCulled == 0u);
+
+    // from area 0 facing away the entity is behind the eye: culled by the chain's
+    // corners, and counted
+    const auto away = flowListsOf(*f, scene, cameraAt({60, 0, 48}, {1, 0, 0}));
+    CHECK(away.drawSurfs.empty());
+    CHECK(away.entitiesCulled == 1u);
+    CHECK(away.lights.empty());
+  }
+
+  SECTION("the outside set: drawn, lit by volume (D81)")
+  {
+    auto scene = FlowScene{};
+    scene.tree = &tree;
+    scene.areas = &areas;
+    // a world piece in solid (area -1) ahead of the eye, inside an area-0 light's volume
+    addChunk(scene, -1, World, {100, -10, 30}, {110, 10, 60});
+    addLight(scene, *f, 10, point("120 0 48", "40 40 40"));
+    REQUIRE(scene.lights.find(10)->derived.areas == std::vector<int>{0});
+    // a light in solid, east of the room (x > 256): no references; a piece in solid and
+    // a piece keyed area 0 in its volume
+    addLight(scene, *f, 11, point("400 0 48", "20 20 20"));
+    REQUIRE(scene.lights.find(11)->derived.areas.empty());
+    addChunk(scene, -1, World, {390, -10, 40}, {395, 10, 56}, "textures/lp1b/floor");
+    addChunk(scene, 0, World, {396, -10, 40}, {398, 10, 56}, "textures/lp1b/crate");
+    // an entity without references (cleared bounds would have none; here its state says
+    // so) ahead of the eye in the first light's volume
+    constexpr auto Loose = PreviewId{30};
+    addEntity(
+      scene,
+      Loose,
+      {130, 0, 48},
+      EngineBounds{EngineVec3{-4, -4, -4}, EngineVec3{4, 4, 4}},
+      {});
+    addChunk(scene, 0, Loose, {-4, -4, -4}, {4, 4, 4});
+
+    const auto west = flowListsOf(*f, scene, cameraAt({200, 0, 48}, {-1, 0, 0}));
+    CHECK(drawnOf(west).contains({-1, World}));
+    CHECK(drawnOf(west).contains({0, Loose}));
+    CHECK(
+      litOf(viewLightOf(west, 10))
+      == std::set<std::pair<int, PreviewId>>{{-1, World}, {0, Loose}});
+
+    // facing east: the light in solid has the view's scissor and lights the piece in
+    // solid alone, not the area-0 piece in its volume (C33 c)
+    const auto east = flowListsOf(*f, scene, cameraAt({200, 0, 48}, {1, 0, 0}));
+    CHECK(drawnOf(east).contains({0, World}));
+    const auto* outside = viewLightOf(east, 11);
+    REQUIRE(outside);
+    CHECK(litOf(outside) == std::set<std::pair<int, PreviewId>>{{-1, World}});
+  }
+
+  SECTION("a light through the portal: its scissor is the chain's rect ∩ its projection")
+  {
+    auto scene = FlowScene{};
+    scene.tree = &tree;
+    scene.areas = &areas;
+    // the box x -140..-60, y -120..120, z 8..88 lies in area 1
+    addLight(
+      scene,
+      *f,
+      10,
+      EntityKeys{
+        {"origin", "-100 0 48"}, {"light_radius", "40 120 40"}, {"noshadows", "1"}});
+    REQUIRE(scene.lights.find(10)->derived.areas == std::vector<int>{1});
+    addChunk(scene, 1, World, {-130, -30, 20}, {-120, 30, 60});
+    const auto lists = flowListsOf(*f, scene, cameraAt({200, 0, 64}, {-1, 0, 0}));
+    const auto* light = viewLightOf(lists, 10);
+    REQUIRE(light);
+    // the chain into area 1 is ( 51, 25, 75, 59 ) (tst_ViewFlow.cpp's hand rect). The
+    // light's near face x -60 is 260 ahead: y -+120 is ndc x -+0.46154, window ( ndc ·
+    // 0.5 + 0.5 ) · 127 = 34.19 .. 92.81; z 8 and 88 are -56 and +24 from the eye, ndc y
+    // -56 / 195 and 24 / 195 (tan 0.75), window · 95 = 33.86 .. 53.35; at the far face
+    // (340 ahead) both ranges are inside these. Ftoi and Expand: ( 33, 32, 93, 54 ),
+    // within the chain's x and outside its y: ( 51, 32, 75, 54 )
+    CHECK(light->scissor.x1 == 51);
+    CHECK(light->scissor.y1 == 32);
+    CHECK(light->scissor.x2 == 75);
+    CHECK(light->scissor.y2 == 54);
+    const auto view = viewScissor(litViewOf(cameraAt({200, 0, 64}, {-1, 0, 0}), 128, 96));
+    CHECK(light->scissor.x1 >= view.x1);
+    CHECK(light->scissor.y1 >= view.y1);
+    CHECK(light->scissor.x2 <= view.x2);
+    CHECK(light->scissor.y2 <= view.y2);
+    CHECK(light->scissor.area() < view.area());
+    // the projected rect alone (the view's scissor for the flow's) is wider
+    const auto projected = engineLightScissor(
+      litViewOf(cameraAt({200, 0, 64}, {-1, 0, 0}), 128, 96),
+      scene.lights.find(10)->derived.projection.inverseBaseLightProject,
+      view);
+    REQUIRE(projected);
+    CHECK(*projected == [&] {
+      auto rect = screenRect(33, 32, 93, 54);
+      rect.zmin = projected->zmin;
+      rect.zmax = projected->zmax;
+      return rect;
+    }());
+  }
+}
+
+TEST_CASE("LitPasses: the frontend on a tree of two components (LP4.1, C33 a)")
+{
+  auto f = frontendFixture();
+  // two areas split by x = 0 and no portal: area 0 east (x > 0), area 1 west, each its
+  // own component; the area models' bounds as a .bproc would store them
+  auto tree = ProcTree{};
+  tree.numAreas = 2;
+  tree.nodes.push_back(ProcNode{{1, 0, 0, 0}, {-1, -2}});
+  for (const auto area : {0, 1})
+  {
+    auto model = ProcModel{};
+    model.name = fmt::format("_area{}", area);
+    model.area = area;
+    model.bounds = area == 0
+                     ? std::array<EngineVec3, 2>{{{0, -128, 0}, {256, 128, 128}}}
+                     : std::array<EngineVec3, 2>{{{-256, -128, 0}, {0, 128, 128}}};
+    model.boundsKnown = true;
+    tree.models.push_back(model);
+  }
+  const auto areas = buildAreaData(tree);
+  REQUIRE(areas.components == std::vector<int>{0, 1});
+  constexpr auto World = PreviewId{1};
+
+  auto scene = FlowScene{};
+  scene.tree = &tree;
+  scene.areas = &areas;
+  addChunk(scene, 0, World, {20, -20, 20}, {30, 20, 60});
+  addChunk(scene, 1, World, {-30, -20, 20}, {-20, 20, 60}, "textures/lp1b/floor");
+  // both lights stand in area 1 and reach area 0 (x -250..150); one casts shadows (the
+  // stand-in shader has no noshadows, nor has the light)
+  addLight(
+    scene,
+    *f,
+    10,
+    {{"origin", "-50 0 48"}, {"light_radius", "200 200 200"}, {"noshadows", "1"}});
+  addLight(scene, *f, 11, {{"origin", "-50 0 48"}, {"light_radius", "200 200 200"}});
+  for (const auto id : {10, 11})
+  {
+    const auto& record = *scene.lights.find(PreviewId(id));
+    REQUIRE(record.derived.areaNum == 1);
+    REQUIRE(
+      std::set<int>{record.derived.areas.begin(), record.derived.areas.end()}
+      == std::set<int>{0, 1});
+  }
+  REQUIRE(lightCastsShadows(*scene.lights.find(11)).value_or(false));
+
+  // from area 0 looking west: the non-shadowing light is dropped (r_useLightAreaCulling),
+  // the shadowing one is in view but lights nothing of area 0 (not connected to its own
+  // area), so it has no surface and is dropped from the lists
+  const auto camera = cameraAt({100, 0, 48}, {-1, 0, 0});
+  const auto lists = flowListsOf(*f, scene, camera);
+  CHECK(lists.viewArea == 0);
+  CHECK(lists.areasFlowed == 1u);
+  CHECK(drawnOf(lists) == std::set<std::pair<int, PreviewId>>{{0, World}});
+  CHECK(lists.lightsInView == 1u);
+  CHECK(lists.lights.empty());
+
+  // a brush entity through the dividing plane, referenced in both areas, seen from area
+  // 0: the shadowing light lights it through area 1, its own (C33 b)
+  constexpr auto Panel = PreviewId{20};
+  addEntity(
+    scene,
+    Panel,
+    {0, 0, 48},
+    EngineBounds{EngineVec3{-16, -16, -16}, EngineVec3{16, 16, 16}},
+    {0, 1});
+  addChunk(scene, 0, Panel, {-16, -16, -16}, {16, 16, 16});
+  const auto withPanel = flowListsOf(*f, scene, camera);
+  CHECK(withPanel.lightsInView == 1u);
+  CHECK_FALSE(viewLightOf(withPanel, 10));
+  CHECK(
+    litOf(viewLightOf(withPanel, 11)) == std::set<std::pair<int, PreviewId>>{{0, Panel}});
+}
 
 TEST_CASE("LitPasses: the frontend lists of the LP1b fixture (C27, A1, D67)")
 {

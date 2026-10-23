@@ -1156,6 +1156,10 @@ bool RenderThread::recordLitPasses(
   if (m_geometry && !m_arenaTestChunks)
   {
     inputs.entities = &m_geometry->entityStates();
+    // LP4.1 (D79): the bake's tree and AreaData for the view's portal flow; a test's
+    // chunks are not the scene's, so they are drawn without it (D94)
+    inputs.procTree = m_geometry->procTree();
+    inputs.areas = m_geometry->areaData();
   }
   if (m_geometry)
   {

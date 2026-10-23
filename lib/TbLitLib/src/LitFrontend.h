@@ -49,6 +49,8 @@
 
 namespace tb::lit
 {
+struct AreaData;
+struct ProcTree;
 
 // a chunk's material as the frontend finds it: an entry, pending (not in the table yet),
 // or neither (the lookup failed: the chunk is not drawn)
@@ -124,10 +126,29 @@ struct FrontendLists
   std::size_t lightTriangleSurfaces = 0;
   std::size_t culledTriangles = 0;
   // lights skipped: math lights (LP5), fog and blend lights (LP5), ambient lights (no LP2
-  // program), and lights whose shader or falloff the table does not have
+  // program), and lights whose shader or falloff the table does not have; with a tree,
+  // only those the view's flow gave a rect are counted
   std::size_t mathLights = 0;
   std::size_t fogAndBlendLights = 0;
   std::size_t ambientLights = 0;
+
+  // ----- LP4.1 (C16, C32, D79, D94): the view's portal flow (lit/ViewFlow.h) -----
+
+  // the flow ran: the scene has a tree (false without one: LP2's rules, D94)
+  bool flowed = false;
+  // PointInArea( vieworg ): -1 outside the world, and without a tree
+  int viewArea = -1;
+  // the areas AddAreaToView marked (area.viewCount), and the chains it was called with
+  std::size_t areasFlowed = 0;
+  std::size_t portalChains = 0;
+  // the view lights that went on to the pairing: a flow rect (or the outside set's
+  // projected rect alone, D81), a texture light whose registers add light, and a scissor
+  // that is not empty (before R_OptimizeViewLightsList drops those without a surface)
+  std::size_t lightsInView = 0;
+  // brush-entity chunks left out because their entity got no flow rect
+  std::size_t entitiesCulled = 0;
+  // flowView's own time in this build (steady clock), in milliseconds
+  double flowMs = 0.0;
 };
 
 // what the frontend reads; the functions answer from the material table and the
@@ -140,6 +161,11 @@ struct FrontendInputs
   // is drawn as worldspawn (identity, engineWorldShaderParms)
   const std::unordered_map<PreviewId, ChunkEntityState>* entities = nullptr;
   const LightTable* lights = nullptr;
+  // LP4.1 (D79, D94): the scene's .proc tree and its AreaData (lit/SceneGeometry.h
+  // procTree(), areaData()), which the view's flow runs on; either null (or a tree
+  // without nodes): no flow, LP2's rules
+  const ProcTree* tree = nullptr;
+  const AreaData* areas = nullptr;
   std::function<MaterialAnswer(const std::string&)> material;
   std::function<RegisterAnswer(PreviewId, const MaterialEntry&, const ShaderParms&)>
     registers;
@@ -177,11 +203,15 @@ bool engineSnapLightRegisters(const MaterialEntry& shader, std::vector<float>& r
  * the zero-to-one cube through the world's mvp times inverseBaseLightProject, fully
  * clipped and projected; nullopt when its z range is empty (the light is outside the
  * view frustum). Else the projected bounds times ( viewport.x2 - x1, y2 - y1 ) through
- * idMath::Ftoi, expanded by a pixel, intersected with the view's scissor (the portal rect
- * is LP4's: K22), with zmin and zmax (no depth-bounds test, SC212).
+ * idMath::Ftoi, expanded by a pixel, intersected with flowRect, the viewLight's
+ * scissorRect the portal flow left (LP4.1, C33: the union of the rects of the chains the
+ * light passed, lit/ViewFlow.h; the view's scissor without a tree, D94, and for the
+ * outside set's lights, D81), with zmin and zmax (no depth-bounds test, SC212). Pure.
  */
 std::optional<ScreenRect> engineLightScissor(
-  const LitView& view, const EngineMat4& inverseBaseLightProject);
+  const LitView& view,
+  const EngineMat4& inverseBaseLightProject,
+  const ScreenRect& flowRect);
 
 // the interaction list a surface goes to (tr_frontend_addmodels.cpp:991-1006)
 enum class InteractionList
@@ -230,7 +260,27 @@ void engineSortViewLights(std::vector<ViewLight>& lights);
  * makes no interaction surface for it). A light with no surface in any list is dropped
  * (R_OptimizeViewLightsList); the rest are sorted (engineSortViewLights).
  * r_useShadowSurfaceScissor's shrink is the light's own rect here (every surface's rect
- * is the light's), so it changes nothing. Pure, given the inputs' functions.
+ * is the light's), so it changes nothing.
+ *
+ * LP4.1 (C32, C33, D79, D81, D94): with a tree, flowView runs first, over the visible
+ * light records that pushed into an area (areaNum, derived.areas,
+ * inverseBaseLightProject, lightCastsShadows; a pending shader counts as not casting
+ * shadows, the light is pending anyway) and the visible entity states that reference an
+ * area (their areas and inverseBaseModelProject). Then a world chunk (one of an entity
+ * without a state) of area N is a candidate only when the flow gave the world entity N a
+ * rect (P4.29), a brush entity's chunk only when its entity got one (else it counts in
+ * entitiesCulled), and the outside set always (D81: world chunks in area -1 or past the
+ * area count, entities without references); the frustum test follows as before
+ * (tr_frontend_addmodels.cpp :649). A light record is a view light only when the flow
+ * gave it a rect, which its scissor is intersected with (engineLightScissor), or when it
+ * pushed into no area (the outside set: the view's scissor, the projected rect alone); a
+ * light the flow left out asks for no registers. Each candidate surface of a view light
+ * must pass lightReachesSurface (C33 a-c: a shared, connected area; an outside light
+ * lights only the outside set, and every light the outside set's surfaces it meets)
+ * before LP2's tests. The lights stay in id order before the sort (M-FRONT-DIFF-01).
+ * Without a tree (D94) every rule is LP2's: no flow, every chunk a candidate, the view's
+ * scissor. Pure, given the inputs' functions; the render thread (the flow's copied
+ * functions are mirror.json M-FLOW-PURE-01's).
  */
 FrontendLists buildFrontendLists(const FrontendInputs& inputs);
 
