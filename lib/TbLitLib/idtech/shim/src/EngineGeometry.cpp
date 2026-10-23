@@ -285,6 +285,48 @@ std::optional<EnginePlane> engineWindingPlane(const std::vector<EngineVec3>& poi
   return fromId(plane);
 }
 
+float enginePlaneDistance(const EnginePlane& plane, const EngineVec3& point)
+{
+  return toId(plane).Distance(toId(point));
+}
+
+std::optional<EnginePlane> enginePlaneFromCrossThroughPoint(
+  const EngineVec3& v2, const EngineVec3& v1, const EngineVec3& point)
+{
+  // RenderWorld_portals.cpp:629-636
+  auto plane = idPlane{};
+  plane.Normal().Cross(toId(v2), toId(v1));
+
+  // if it is degenerate, skip the plane
+  if (plane.Normalize() < 0.01f)
+  {
+    return std::nullopt;
+  }
+  plane.FitThroughPoint(toId(point));
+  return fromId(plane);
+}
+
+std::optional<std::vector<EngineVec3>> engineClipWindingInPlace(
+  const std::vector<EngineVec3>& points, const EnginePlane& plane, const float epsilon)
+{
+  if (points.size() > std::size_t(engineBounds::MaxClipWindingPoints))
+  {
+    return points;
+  }
+  auto ids = std::vector<idVec3>{};
+  ids.reserve(points.size());
+  for (const auto& point : points)
+  {
+    ids.push_back(toId(point));
+  }
+  auto winding = idFixedWinding{ids.data(), int(ids.size())};
+  if (!winding.ClipInPlace(toId(plane), epsilon, false))
+  {
+    return std::nullopt;
+  }
+  return pointsOf(&winding);
+}
+
 std::optional<std::vector<EngineVec3>> engineReverseWinding(
   const std::vector<EngineVec3>& points)
 {

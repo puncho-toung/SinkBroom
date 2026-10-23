@@ -144,6 +144,28 @@ struct ScreenRect
 ScreenRect viewScissor(const LitView& view);
 
 /**
+ * LP4.0 (C32.1, FM = tr_frontend_main.cpp:912-921): frustums[FRUSTUM_PRIMARY], the copied
+ * GetFrustumPlanes( worldMvp, zeroToOne false, normalize true ) (left, right, bottom,
+ * top, near, far; the near plane row 3 + row 2, at zNear / 1.999 for this clip z of
+ * 0..1), every plane negated so that the positive side is outside, then the near plane's
+ * d less r_znear (3), which moves it from zNear / 1.999 ahead of the eye to 3 - zNear
+ * / 1.999 behind it, so that no portal is near-clipped. A point in view is on the
+ * negative side of every plane. Pure: the copied GetFrustumPlanes and idMath::InvSqrt
+ * read only their arguments (mirror.json M-FLOW-PURE-01); the render thread (LP4.1) or
+ * any thread.
+ */
+std::array<EnginePlane, 6> engineViewFrustumPlanes(const LitView& view);
+
+/**
+ * LP4.0 (C32.4): R_GlobalToNormalizedDeviceCoordinates (GLMatrix.cpp:215-243) of the
+ * view: the world's modelViewMatrix, then the view's one projectionMatrix, which is
+ * unjittered (the engine's rects take the jittered one, equal to it while AA is off;
+ * mirror.json M-FLOW-DIFF-02), divided by the clip w. x and y -1..1 across the view, z
+ * 0..1. Pure; the render thread (LP4.1) or any thread.
+ */
+EngineVec3 engineGlobalToNdc(const LitView& view, const EngineVec3& global);
+
+/**
  * GL_Scissor of a rect in GL's convention, with the callers' Y flip (SC211:
  * RenderBackend.cpp:684-687 for the view, :1715-1718 for a light): x = viewport.x1 +
  * x1, y = viewport.y2 - y2, w = x2 + 1 - x1, h = y2 + 1 - y1, stored as [x, x + w] × [y,

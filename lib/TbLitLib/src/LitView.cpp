@@ -194,6 +194,27 @@ ScreenRect viewScissor(const LitView& view)
   return rect;
 }
 
+std::array<EnginePlane, 6> engineViewFrustumPlanes(const LitView& view)
+{
+  // tr_frontend_main.cpp:913
+  auto planes = engineFrustumPlanes(view.worldMvp, false, true);
+
+  // the DOOM 3 frustum planes point outside the frustum
+  for (auto& plane : planes)
+  {
+    plane = EnginePlane{-plane.a, -plane.b, -plane.c, -plane.d};
+  }
+  // remove the Z-near to avoid portals from being near clipped
+  planes[4].d -= EngineFrame.znear;
+  return planes;
+}
+
+EngineVec3 engineGlobalToNdc(const LitView& view, const EngineVec3& global)
+{
+  return engineGlobalToNormalizedDeviceCoordinates(
+    view.worldModelViewMatrix, view.projectionMatrix, global);
+}
+
 nvrhi::Rect engineScissorRect(const LitView& view, const ScreenRect& rect)
 {
   if (rect.isEmpty())

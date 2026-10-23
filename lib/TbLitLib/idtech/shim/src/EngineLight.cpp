@@ -798,6 +798,53 @@ EngineBounds engineProjectedFullyClippedBounds(
   return fromId(projected);
 }
 
+std::array<EnginePlane, 6> engineFrustumPlanes(
+  const EngineMat4& frustum, const bool zeroToOne, const bool normalize)
+{
+  idPlane planes[6];
+  idRenderMatrix::GetFrustumPlanes(planes, toId(frustum), zeroToOne, normalize);
+  auto result = std::array<EnginePlane, 6>{};
+  for (std::size_t i = 0; i < 6; ++i)
+  {
+    result[i] = fromId(planes[i]);
+  }
+  return result;
+}
+
+EngineVec3 engineGlobalToNormalizedDeviceCoordinates(
+  const EngineGlMatrix& modelViewMatrix,
+  const EngineGlMatrix& projectionMatrix,
+  const EngineVec3& point)
+{
+  // GLMatrix.cpp:215-243 R_GlobalToNormalizedDeviceCoordinates, the view's matrices given
+  const idVec3 global = toId(point);
+  idPlane view;
+  idPlane clip;
+
+  for (int i = 0; i < 4; i++)
+  {
+    view[i] = modelViewMatrix[std::size_t(i + 0 * 4)] * global[0]
+              + modelViewMatrix[std::size_t(i + 1 * 4)] * global[1]
+              + modelViewMatrix[std::size_t(i + 2 * 4)] * global[2]
+              + modelViewMatrix[std::size_t(i + 3 * 4)];
+  }
+
+  for (int i = 0; i < 4; i++)
+  {
+    clip[i] = projectionMatrix[std::size_t(i + 0 * 4)] * view[0]
+              + projectionMatrix[std::size_t(i + 1 * 4)] * view[1]
+              + projectionMatrix[std::size_t(i + 2 * 4)] * view[2]
+              + projectionMatrix[std::size_t(i + 3 * 4)] * view[3];
+  }
+
+  idVec3 ndc;
+  const float invW = 1.0f / clip[3];
+  ndc[0] = clip[0] * invW;
+  ndc[1] = clip[1] * invW;
+  ndc[2] = clip[2] * invW; // NOTE: in D3D this is in the range [0,1]
+  return fromId(ndc);
+}
+
 EngineGlMatrix engineModelMatrix(const EngineVec3& origin, const EngineMat3& axis)
 {
   auto modelMatrix = EngineGlMatrix{};

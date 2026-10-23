@@ -78,6 +78,11 @@ namespace engineBounds
 {
 // the points of a winding idWinding::Split takes: its _alloca blocks stay below 32 KB
 inline constexpr int MaxWindingPoints = 1024;
+// LP4.0: the points of a winding engineClipWindingInPlace clips: the copied
+// idFixedWinding's MAX_POINTS_ON_WINDING 64 (Winding.h:310) less the 21 planes of a
+// portal stack (MAX_PORTAL_PLANES 20 and the portal's own), so that a chain of the flow's
+// clips of a convex winding never outgrows the fixed buffer
+inline constexpr int MaxClipWindingPoints = 64 - 21;
 // a patch's control points per side; the dmap and engine patch code allocates on the heap
 inline constexpr int MaxPatchSide = 99;
 // explicit patchDef3 subdivisions per side
@@ -130,6 +135,30 @@ EnginePlane engineFlippedPlane(const EnginePlane& plane);
 
 // idWinding::GetPlane of the points, or null for fewer than three
 std::optional<EnginePlane> engineWindingPlane(const std::vector<EngineVec3>& points);
+
+// idPlane::Distance (Plane.h:379-382): a·x + b·y + c·z + d
+float enginePlaneDistance(const EnginePlane& plane, const EngineVec3& point);
+
+/**
+ * LP4.0 (FloodViewThroughArea_r's edge planes, RenderWorld_portals.cpp:629-636): the
+ * plane whose normal is idVec3::Cross( v2, v1 ) normalised by idPlane::Normalize()
+ * (FixDegenerateNormal included), fitted through point (FitThroughPoint); null when the
+ * length Normalize returns is below 0.01, where the engine skips the plane as degenerate.
+ */
+std::optional<EnginePlane> enginePlaneFromCrossThroughPoint(
+  const EngineVec3& v2, const EngineVec3& v1, const EngineVec3& point);
+
+/**
+ * LP4.0 (C32.3): the copied idFixedWinding of points clipped in place by plane through
+ * idWinding::ClipInPlace( plane, epsilon, keepOn = false ) (Winding.h:79, Winding.cpp
+ * :409-540): the part in front of the plane (beyond epsilon), split points on it
+ * interpolated; null when nothing is in front (ClipInPlace returns false and empties the
+ * winding). A winding of more than MaxClipWindingPoints points is returned as it is, not
+ * clipped: the copy's own answer when its fixed buffer would overflow ("can't split --
+ * fall back to original"), and its overflow assert stays unreachable.
+ */
+std::optional<std::vector<EngineVec3>> engineClipWindingInPlace(
+  const std::vector<EngineVec3>& points, const EnginePlane& plane, float epsilon);
 
 // idWinding::Reverse (Winding.cpp:562-574): the points in the opposite order, point i at
 // n - 1 - i (LP4.0: the negative area's side of an inter-area portal,

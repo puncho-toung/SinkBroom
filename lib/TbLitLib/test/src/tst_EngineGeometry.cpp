@@ -409,4 +409,100 @@ TEST_CASE("EngineGeometry: triangle cleanup and tangents")
   }
 }
 
+TEST_CASE("EngineGeometry: the portal flow's winding and plane helpers (LP4.0, C32.3)")
+{
+  // a square in the plane z = 0, wound as GetPlane gives +z
+  const auto square =
+    std::vector<EngineVec3>{{0, 0, 0}, {0, 10, 0}, {10, 10, 0}, {10, 0, 0}};
+
+  SECTION("GetPlane of a square and of its Reverse()")
+  {
+    const auto plane = engineWindingPlane(square);
+    REQUIRE(plane);
+    // ( p1 - centre ) x ( p0 - centre ) = ( 0 0 50 ), normalised, through p0
+    CHECK(plane->a == 0.0f);
+    CHECK(plane->b == 0.0f);
+    CHECK(plane->c == 1.0f);
+    CHECK(plane->d == 0.0f);
+    const auto reversed = engineReverseWinding(square);
+    REQUIRE(reversed);
+    CHECK(
+      *reversed
+      == std::vector<EngineVec3>{{10, 0, 0}, {10, 10, 0}, {0, 10, 0}, {0, 0, 0}});
+    const auto back = engineWindingPlane(*reversed);
+    REQUIRE(back);
+    CHECK(back->a == 0.0f);
+    CHECK(back->b == 0.0f);
+    CHECK(back->c == -1.0f);
+    CHECK(back->d == 0.0f);
+  }
+
+  SECTION("ClipInPlace with epsilon 0 keeps the front")
+  {
+    // the plane x = 5 through the middle: two corners behind, two split points added
+    // (on the plane: the axial normal takes its distance exactly)
+    const auto half = engineClipWindingInPlace(square, EnginePlane{1, 0, 0, -5}, 0.0f);
+    REQUIRE(half);
+    CHECK(
+      *half == std::vector<EngineVec3>{{5, 10, 0}, {10, 10, 0}, {10, 0, 0}, {5, 0, 0}});
+    // a plane that misses it, every point in front: unchanged
+    const auto whole = engineClipWindingInPlace(square, EnginePlane{1, 0, 0, 5}, 0.0f);
+    REQUIRE(whole);
+    CHECK(*whole == square);
+    // points on the plane are on, not behind: nothing behind, unchanged
+    const auto touching = engineClipWindingInPlace(square, EnginePlane{1, 0, 0, 0}, 0.0f);
+    REQUIRE(touching);
+    CHECK(*touching == square);
+    // a plane the square lies behind: nothing in front, the winding is emptied
+    CHECK_FALSE(engineClipWindingInPlace(square, EnginePlane{-1, 0, 0, -20}, 0.0f));
+    // a skew plane cuts a corner off: one point more
+    const auto corner = engineClipWindingInPlace(
+      square, EnginePlane{-0.70710677f, -0.70710677f, 0, 12.0f}, 0.0f);
+    REQUIRE(corner);
+    CHECK(corner->size() == 5u);
+  }
+
+  SECTION("a winding beyond MaxClipWindingPoints is not clipped")
+  {
+    auto many = std::vector<EngineVec3>{};
+    for (auto i = 0; i <= engineBounds::MaxClipWindingPoints; ++i)
+    {
+      const auto angle =
+        6.2831853f * float(i) / float(engineBounds::MaxClipWindingPoints + 1);
+      many.push_back({std::cos(angle) * 10.0f, std::sin(angle) * 10.0f, 0.0f});
+    }
+    const auto kept = engineClipWindingInPlace(many, EnginePlane{-1, 0, 0, -20}, 0.0f);
+    REQUIRE(kept);
+    CHECK(*kept == many);
+    // at the bound itself the copy clips
+    many.pop_back();
+    CHECK_FALSE(engineClipWindingInPlace(many, EnginePlane{-1, 0, 0, -20}, 0.0f));
+  }
+
+  SECTION("an edge plane through the origin, and a degenerate one")
+  {
+    // Cross( origin - w[1], origin - w[0] ) for the edge (10 0 0) to (10 10 0) seen from
+    // the origin: ( 0 0 -100 ), normalised, through the origin
+    const auto origin = EngineVec3{0, 0, 0};
+    const auto plane =
+      enginePlaneFromCrossThroughPoint({-10, -10, 0}, {-10, 0, 0}, origin);
+    REQUIRE(plane);
+    CHECK(plane->a == 0.0f);
+    CHECK(plane->b == 0.0f);
+    CHECK(plane->c == -1.0f);
+    CHECK(plane->d == 0.0f);
+    // through another point: d = -( n · p )
+    const auto shifted =
+      enginePlaneFromCrossThroughPoint({-10, -10, 0}, {-10, 0, 0}, {0, 0, 4});
+    REQUIRE(shifted);
+    CHECK(shifted->d == 4.0f);
+    // parallel vectors: Normalize() gives a length below 0.01, the plane is skipped
+    CHECK_FALSE(enginePlaneFromCrossThroughPoint({2, 0, 0}, {1, 0, 0}, origin));
+    CHECK_FALSE(enginePlaneFromCrossThroughPoint({0.05f, 0, 0}, {0, 0.05f, 0}, origin));
+    CHECK(enginePlaneFromCrossThroughPoint({0.2f, 0, 0}, {0, 0.2f, 0}, origin));
+    // idPlane::Distance
+    CHECK(enginePlaneDistance(EnginePlane{0, 0, 1, -2}, {5, 5, 7}) == 5.0f);
+  }
+}
+
 } // namespace tb::lit

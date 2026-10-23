@@ -22,6 +22,8 @@
 
 #include "LitView.h"
 
+#include <cmath>
+
 #include <catch2/catch_test_macros.hpp>
 
 namespace tb::lit
@@ -122,6 +124,81 @@ TEST_CASE("LitView: idScreenRect's AddPoint and the rest (C32.4, P4.16)")
     line.addPoint(3.0f, 9.0f);
     CHECK_FALSE(line.isEmpty());
   }
+}
+
+namespace
+{
+
+// LP2.2a's fixture camera (tst_LitPasses.cpp): at the west room's end looking east,
+// 128 × 96, TrenchBroom's fov 90: fov_x 90, fov_y 2 · atan( 0.75 ) = 73.74
+LitView fixtureView()
+{
+  auto camera = CameraState{};
+  camera.position = vm::vec3f{-240, 0, 64};
+  camera.direction = vm::vec3f{1, 0, 0};
+  camera.up = vm::vec3f{0, 0, 1};
+  camera.fovDegrees = 90.0f;
+  return litViewOf(camera, 128, 96);
+}
+
+bool closeTo(const float a, const float b, const float tolerance)
+{
+  return std::abs(a - b) <= tolerance;
+}
+
+bool planeNear(const EnginePlane& p, const EnginePlane& q, const float dTolerance)
+{
+  return closeTo(p.a, q.a, 1e-5f) && closeTo(p.b, q.b, 1e-5f) && closeTo(p.c, q.c, 1e-5f)
+         && closeTo(p.d, q.d, dTolerance);
+}
+
+} // namespace
+
+TEST_CASE("LitView: the portal flow's frustum planes and NDC (C32.1, C32.4)")
+{
+  const auto view = fixtureView();
+  const auto planes = engineViewFrustumPlanes(view);
+  const auto h = 0.70710677f;
+  // left (screen left is +y) and right: through the eye (-240 0 64) at 45 degrees,
+  // pointing out; d = -( n · eye ) = -240 · h
+  CHECK(planeNear(planes[0], EnginePlane{-h, h, 0, -240.0f * h}, 1e-3f));
+  CHECK(planeNear(planes[1], EnginePlane{-h, -h, 0, -240.0f * h}, 1e-3f));
+  // bottom and top: tan( 73.74 / 2 ) = 0.75, so normals ( -0.6 0 -+0.8 ); d = -( n ·
+  // eye ): -( 144 - 51.2 ) and -( 144 + 51.2 )
+  CHECK(planeNear(planes[2], EnginePlane{-0.6f, 0, -0.8f, -92.8f}, 1e-3f));
+  CHECK(planeNear(planes[3], EnginePlane{-0.6f, 0, 0.8f, -195.2f}, 1e-3f));
+  // near: row 3 + row 2 of the mvp with [2][2] = -0.999 and [3][2] = -zNear is the
+  // plane zNear / 1.999 ahead of the eye (clip z > -w of a 0..1 range), x = -238.49925;
+  // negated, then d - 3: the eye plane's d (-240) + 1.50075 - 3, 1.49925 behind the eye
+  CHECK(
+    planeNear(planes[4], EnginePlane{-1, 0, 0, -240.0f + 3.0f / 1.999f - 3.0f}, 1e-3f));
+  // far: row 3 - row 2 = ( 0 0 -0.001 3 ) of the infinite projection: the plane z_eye =
+  // 3000, 3000 behind the eye (the flow takes the first five planes only)
+  CHECK(closeTo(planes[5].a, -1.0f, 1e-6f));
+  CHECK(closeTo(planes[5].d, -240.0f - 3000.0f, 0.1f));
+
+  // the sign convention: a point in view is on the negative side of every plane
+  const auto ahead = EngineVec3{-140, 0, 64};
+  for (const auto& plane : planes)
+  {
+    CHECK(enginePlaneDistance(plane, ahead) < 0.0f);
+  }
+  // one behind the eye is outside the near plane, one left of the frustum outside the
+  // left plane
+  CHECK(enginePlaneDistance(planes[4], EngineVec3{-245, 0, 64}) > 0.0f);
+  CHECK(enginePlaneDistance(planes[0], EngineVec3{-140, 150, 64}) > 0.0f);
+
+  // NDC: the point 100 ahead is the centre, z = ( 0.999 · 100 - 3 ) / 100
+  const auto centre = engineGlobalToNdc(view, ahead);
+  CHECK(closeTo(centre[0], 0.0f, 1e-6f));
+  CHECK(closeTo(centre[1], 0.0f, 1e-6f));
+  CHECK(closeTo(centre[2], 0.969f, 1e-6f));
+  // 25 to the left (+y) and 10 up, 100 ahead: x = -25 / 100 (P00 = 1 for fov_x 90),
+  // y = 10 / ( 100 · 0.75 )
+  const auto off = engineGlobalToNdc(view, EngineVec3{-140, 25, 74});
+  CHECK(closeTo(off[0], -0.25f, 1e-6f));
+  CHECK(closeTo(off[1], 10.0f / 75.0f, 1e-6f));
+  CHECK(closeTo(off[2], 0.969f, 1e-6f));
 }
 
 } // namespace tb::lit

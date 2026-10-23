@@ -264,6 +264,27 @@ bool engineCullBoundsToMvp(
 EngineBounds engineProjectedFullyClippedBounds(
   const EngineMat4& mvp, const EngineBounds& bounds);
 
+/**
+ * idRenderMatrix::GetFrustumPlanes( planes, frustum, zeroToOne, normalize )
+ * (RenderMatrix.cpp:4436-4515, the copy): left, right, bottom, top, near, far, each
+ * pointing inside; without zeroToOne the near plane is row 3 + row 2 (isZeroOneZ is
+ * false), so for a clip z of 0..1 it lies at zNear / 1.999 rather than at zNear; with
+ * normalize every plane times idMath::InvSqrt of its normal's squared length.
+ */
+std::array<EnginePlane, 6> engineFrustumPlanes(
+  const EngineMat4& frustum, bool zeroToOne, bool normalize);
+
+/**
+ * R_GlobalToNormalizedDeviceCoordinates (GLMatrix.cpp:215-243, transcribed): the global
+ * point through the world's modelViewMatrix, then the projectionMatrix, both float[16]s
+ * as the engine's view holds them, divided by the clip w (1 / w, then three products);
+ * clip z 0..1.
+ */
+EngineVec3 engineGlobalToNormalizedDeviceCoordinates(
+  const EngineGlMatrix& modelViewMatrix,
+  const EngineGlMatrix& projectionMatrix,
+  const EngineVec3& global);
+
 // R_AxisToModelMatrix (GLMatrix.cpp:49-70): an entity's float[16] model matrix
 EngineGlMatrix engineModelMatrix(const EngineVec3& origin, const EngineMat3& axis);
 

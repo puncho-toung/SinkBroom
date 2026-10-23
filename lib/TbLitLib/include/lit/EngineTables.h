@@ -468,6 +468,9 @@ struct EngineFrameDefaults
   std::uint8_t stencilClear = 128;
   // r_useLightScissors "3": the fully clipped projected bounds (:155)
   int useLightScissors = 3;
+  // r_znear "3" (:118): the projection's zNear, and what R_RenderView takes off the
+  // portal flow's near plane (tr_frontend_main.cpp:921)
+  float znear = 3.0f;
   // r_skipInteractionFastPath "1" (RenderBackend.cpp:56): every surface runs the stage
   // loop
   bool skipInteractionFastPath = true;
