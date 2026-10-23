@@ -6630,7 +6630,7 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
       for (const auto& [name, scissor] : settledRow->lists.lights)
       {
         viewLights.push_back(fmt::format(
-          "{{\"name\": \"{}\", \"scissor\": [{}, {}, {}, {}]}}",
+          R"({{"name": "{}", "scissor": [{}, {}, {}, {}]}})",
           name,
           scissor.x1,
           scissor.y1,
