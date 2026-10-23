@@ -14326,15 +14326,24 @@
           ],
           "anchor": "r_mathLightsEnabled \"1\"",
           "sha256": "9ed8fe0d9f8591c8a041cc8f289ad264a13840bae448bf8c51831838ac506a0d"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            364,
+            402
+          ],
+          "anchor": "idRenderWorldLocal::AddAreaViewLights: the viewLight's scissorRect, the union of the chains' rects (LP4.1)",
+          "sha256": "32e597a3c2b4a018f42f043804bfc2561806f9b98aea8632ab3760f0664d9efb"
         }
       ],
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/src/LitFrontend.cpp",
-          "symbol": "engineSnapLightRegisters, engineLightScissor, engineCullModelBoundsToLight, engineLightUsesMathPath, buildFrontendLists"
+          "symbol": "engineSnapLightRegisters, engineLightScissor (flowRect), engineCullModelBoundsToLight, engineLightUsesMathPath, buildFrontendLists"
         }
       ],
-      "note": "LP2.2a step 2 (C27, D67, A20, K22): per light record (visible, a volume, a texture light: not R_LightUsesMathPath, not a fog or blend light) the shader registers at the light's shaderParms (time 0, the global parms 0), each stage on has its colour registers below 0.001 snapped to 0 and a light none of whose stages adds light is skipped; the scissor is ProjectedFullyClippedBounds of the zero-to-one cube through the world mvp * inverseBaseLightProject (r_useLightScissors 3), culled when its z range is empty, x and y times ( viewport.x2 - x1 ) and ( y2 - y1 ) through idMath::Ftoi, expanded, intersected with the view's scissor (the portal flow's rect, at most that, is LP4's), zmin and zmax kept but used by nothing (SC212). R_CullModelBoundsToLight is CullBoundsToMVP( baseLightProject * modelRenderMatrix, bounds, true ), on each chunk's bounds"
+      "note": "LP2.2a step 2 (C27, D67, A20, K22): per light record (visible, a volume, a texture light: not R_LightUsesMathPath, not a fog or blend light) the shader registers at the light's shaderParms (time 0, the global parms 0), each stage on has its colour registers below 0.001 snapped to 0 and a light none of whose stages adds light is skipped; the scissor is ProjectedFullyClippedBounds of the zero-to-one cube through the world mvp * inverseBaseLightProject (r_useLightScissors 3), culled when its z range is empty, x and y times ( viewport.x2 - x1 ) and ( y2 - y1 ) through idMath::Ftoi, expanded, intersected with the viewLight's scissorRect, zmin and zmax kept but used by nothing (SC212). LP4.1 (C33, D81, D94): the scissorRect is the portal flow's, the union of the rects of the chains in which the light passed AddAreaViewLights (RenderWorld_portals.cpp:364-402, M-FLOW-05), so the scissor is that union intersected with the projected rect; a light record the flow gave no rect is no view light at all (and asks for no registers); a light whose volume pushed into no area (the outside set, D81) and every light of a map without a tree (D94) take the view's scissor, the projected rect alone. R_CullModelBoundsToLight is CullBoundsToMVP( baseLightProject * modelRenderMatrix, bounds, true ), on each chunk's bounds"
     },
     {
       "id": "M-FRONT-02",
@@ -14393,6 +14402,24 @@
           ],
           "anchor": "idMaterial::IsDrawn",
           "sha256": "c18398c6ff5e0fc9cbdcfd501fe89b20ff1123f006b2dfcc10a80a3431bf01bd"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            488,
+            582
+          ],
+          "anchor": "R_AddSingleLight: the light's areas, their connectivity, the entities of each (LP4.1's pairing)",
+          "sha256": "977a340b2f4ea82d40e2f4af8b01daa2924cfbbbce3705a101a3f421ec374f60"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            340,
+            381
+          ],
+          "anchor": "R_AddSingleModel: modelIsVisible and the contacted lights (LP4.1's pairing)",
+          "sha256": "69036699da02164debfe87a2ac88e0b33e9070a327af33fc7cecbe5b121cc956"
         }
       ],
       "sinkbroom": [
@@ -14401,11 +14428,15 @@
           "symbol": "buildFrontendLists, engineInteractionList, RegisterCache"
         },
         {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "flowView, lightReachesSurface (LP4.1)"
+        },
+        {
           "file": "lib/TbLitLib/src/LitStages.cpp",
           "symbol": "engineMaterialIsDrawn"
         }
       ],
-      "note": "LP2.2a step 2 (C27, A1, SC222): a chunk is a model surface: directly visible unless CullBoundsToMVP( its space's mvp, its bounds ) culls it; a prepass surface when its material IsDrawn and its deform is none or a particle one; an interaction of a light when its material ReceivesLighting, R_CullModelBoundsToLight keeps it and its spectrum is the light shader's; the list: MC_TRANSLUCENT translucent, a light that casts shadows (not noShadows) on an MF_NOSELFSHADOW material local, else global (the material's flag, not the entity's noSelfShadow); the registers of R_SetupDrawSurfShader with the entity's shaderParms (worldspawn's M-VIEW-04), evaluated on the parse thread through MaterialService::evaluate"
+      "note": "LP2.2a step 2 (C27, A1, SC222): a chunk is a model surface: directly visible unless CullBoundsToMVP( its space's mvp, its bounds ) culls it; a prepass surface when its material IsDrawn and its deform is none or a particle one; an interaction of a light when its material ReceivesLighting, R_CullModelBoundsToLight keeps it and its spectrum is the light shader's; the list: MC_TRANSLUCENT translucent, a light that casts shadows (not noShadows) on an MF_NOSELFSHADOW material local, else global (the material's flag, not the entity's noSelfShadow); the registers of R_SetupDrawSurfShader with the entity's shaderParms (worldspawn's M-VIEW-04), evaluated on the parse thread through MaterialService::evaluate. LP4.1 (C33, D81, D94, P4.29): with a tree the flow decides which chunks are candidates before the frustum test: a worldspawn chunk of area N when the world entity N got a rect (directly visible, FAM:340: an area entered with an empty chain rect is marked but not seen), a brush entity's chunk when its entity got one (else counted in FrontendLists::entitiesCulled), and the outside set always (world pieces in area -1, entities without references); a view light lights a candidate only when lightReachesSurface says so (M-FLOW-09: R_AddSingleLight's walk over the light's areas, skipping one not connected to the light's own area, FAL:488-582, and R_AddSingleModel's contacted lights, FAM:340-381: a world chunk through its own area, a brush entity through any shared, connected area, the outside set by volume for every light, an outside light the outside set alone), then the tests above. Without a tree every chunk is a candidate, as in LP2 (D94)"
     },
     {
       "id": "M-FRONT-03",
@@ -14427,7 +14458,7 @@
           "symbol": "engineSortViewLights, buildFrontendLists"
         }
       ],
-      "note": "LP2.2a step 2 (SC206): a light with no surface in any list is dropped; the rest are sorted by scissor area with qsort ascending and the list rebuilt by prepending, so the largest light comes first (ties: M-FRONT-DIFF-01). r_useShadowSurfaceScissor 1 shrinks a shadowing light's scissor to the union of its interaction surfaces' rects, which are the light's own (lightDrawSurf->scissorRect = vLight->scissorRect), so it changes nothing"
+      "note": "LP2.2a step 2 (SC206): a light with no surface in any list is dropped; the rest are sorted by scissor area with qsort ascending and the list rebuilt by prepending, so the largest light comes first (ties: M-FRONT-DIFF-01). r_useShadowSurfaceScissor 1 shrinks a shadowing light's scissor to the union of its interaction surfaces' rects, which are the light's own (lightDrawSurf->scissorRect = vLight->scissorRect), so it changes nothing. LP4.1: with the pairing through shared areas (M-FRONT-02) a light the flow kept but whose areas reach no candidate it may light (a light of an area not connected to the view's, kept because it casts shadows, C33 a) has no surface and is dropped here, as the engine's has no interaction; FrontendLists::lightsInView counts the view lights before this drop"
     },
     {
       "id": "M-FRONT-04",
@@ -14528,7 +14559,7 @@
           "symbol": "engineSortViewLights, buildFrontendLists"
         }
       ],
-      "note": "LP2.2a: orders the engine takes from its portal flow (LP4) and its qsort: the viewLights the sort starts from are in the flow's order, here the records' preview-id order, and qsort is not stable, here equal areas keep the reverse of that order; a light's chain holds the entities in reverse viewEntitys order and each entity's surfaces in model order, here the chunks in key order (area, entity, material, cell, part). Only the order of additive fp16 blends changes, which LP2.3's tolerance covers"
+      "note": "LP2.2a, restated in LP4.1 (the flow is wired: the view lights are the records the flow gave a rect, still in preview-id order): orders the engine takes from its portal flow and its qsort: the viewLights the sort starts from are in the flow's order (each prepended as AddAreaViewLights first meets it, R_SetLightDefViewLight), here the records' preview-id order, and qsort is not stable, here equal areas keep the reverse of that order; a light's chain holds the entities in reverse viewEntitys order and each entity's surfaces in model order, here the chunks in key order (area, entity, material, cell, part). Only the order of additive fp16 blends changes, which LP2.3's tolerance covers"
     },
     {
       "id": "M-FRONT-DIFF-02",
@@ -14560,10 +14591,10 @@
         },
         {
           "file": "lib/TbLitLib/src/ViewFlow.cpp",
-          "symbol": "flowView (LP4.0; wired in LP4.1)"
+          "symbol": "flowView (LP4.0; wired into buildFrontendLists in LP4.1)"
         }
       ],
-      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet. The portal rects and the \"area not connected to the view\" cull are mirrored since LP4.0 (lit/ViewFlow.h flowView, M-FLOW-01 to M-FLOW-06) and wired into buildFrontendLists in LP4.1 (C33: the scissor is the flow's rect intersected with the projected bounds); r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), material LODs, and the shadow LOD (K26, LP3) remain. The static interactions' light triangles, which P2.26 counted here (\"its triangles outside the volume add nothing\"), are mirrored since the LP2 fix round (DX.2, M-INTER-01): LP2.3 found the volume boundary's LIGHT_CLIP_EPSILON dropping whole faces the preview lit. U3.9 corrected (SC371, LP4.0): a light whose scissor comes out empty is skipped (LitFrontend.cpp), and so it is in the engine: R_AddSingleModel takes no contacted light whose scissor is empty (tr_frontend_addmodels.cpp:362-367), so it gets no interaction and the backend never draws it; the skip is the engine's, not a difference, and LP4.1's portal rects are what can make it empty"
+      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet. Closed for the LP4 items in LP4.1: the portal rects and the \"area not connected to the view\" cull, mirrored since LP4.0 (lit/ViewFlow.h flowView, M-FLOW-01 to M-FLOW-06), are wired into buildFrontendLists (C33: the scissor is the flow's rect intersected with the projected bounds, M-FRONT-01; the pairing through shared, connected areas, M-FRONT-02, M-FLOW-09), and K22's missing half is there. What remains: r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), material LODs, and the shadow LOD (K26, LP3) remain. The static interactions' light triangles, which P2.26 counted here (\"its triangles outside the volume add nothing\"), are mirrored since the LP2 fix round (DX.2, M-INTER-01): LP2.3 found the volume boundary's LIGHT_CLIP_EPSILON dropping whole faces the preview lit. U3.9 corrected (SC371, LP4.0): a light whose scissor comes out empty is skipped (LitFrontend.cpp), and so it is in the engine: R_AddSingleModel takes no contacted light whose scissor is empty (tr_frontend_addmodels.cpp:362-367), so it gets no interaction and the backend never draws it; the skip is the engine's, not a difference, and LP4.1's portal rects are what can make it empty"
     },
     {
       "id": "M-FRONT-DIFF-03",
@@ -15746,6 +15777,112 @@
       "note": "K28 (31-LP2-FIXES.md, replacing DX.1; restated in round 2 from 32-LP2-VERIFY.md V2.1): dmap runs OptimizeEntity on every area by default, which throws away each coplanar group's side triangles and builds them again (BuildOptTriangles, RegenerateTriangles) from candidate edges sorted by an unstable qsort (equal lengths tie, as a rectangle's two diagonals do), so the .proc's triangles are not fans of the side windings (the parity .proc: 96 of 110 pairs of the (a b c)(d c b) shape); copying the optimizer would import the CRT's qsort tie order. The preview keeps its own triangulation (K9's family). The mechanism by which this changes pixels: the interaction vertex shader writes the normalised vector to the viewer per vertex in tangent space (interaction.vs.hlsl:193-200), the rasteriser interpolates it over the triangle, and the pixel shader normalises it again (interaction.ps.hlsl:98) and reads it in the view-dependent normal contrast before the Lambert term (:112-121) and in the half vector and the BRDF (:138-139, :181-183). A per-vertex normalised vector interpolated over a triangle depends on the triangle: the same face cut along the other diagonal gives another per-pixel view vector (4-17 degrees apart on large triangles near the camera, measured from the .proc's triangles). So bump-mapped and specular pixels differ wherever a triangle is large against its distance from the camera: |d| <= 4 on R05 (941 pixels beyond 1), <= 2 on R18 (28), masked <= 17 at texel edges on R08, R09 and R12's ceilings, |d| = 1 on 0.01-3 % of every bump-mapped row, and up to 12 where a triangle crosses the near plane (R05b: 2,568 unmasked pixels from 2 to 12, 9,950 at 1, masked max 7; the same on the LP2.3 run and the fix round's). A flat normal and no specular stage do not take the view vector out (V3.1, 32-LP2-VERIFY.md, corrected in LP4.1): without a specular stage the engine zeroes the specular colour (RenderBackend.cpp:2151 clears inter.specularColor, :1156-1158 binds _black for a missing specular image, :1190 writes the zero SPECULARMODIFIER), so the BRDF's specular term and its Fresnel_Schlick( 0, vdotH ) contribute nothing; the view vector reaches these pixels through the view-dependent normal contrast (interaction.ps.hlsl:112-121), which scales the decoded normal's xy by 0.8-1.2 with the per-pixel view vector's z, and _flat does not decode to exactly (0, 0) (about (0.0020, 0.0033): DXT5 alpha 128 and green 128 1/3), so the tilt of the normal, and with it the Lambert term, follows the interpolated view vector. Round 2's R19-R21 (R01-R03's lights on legacy diffuse with bumpmap _flat) differ by 1 on 1,677, 355 and 957 unmasked pixels, mostly on the large floor and ceiling triangles; R14 is exact because its parallel light meets the wall head-on (L near N), where the Lambert term does not feel so small a tilt, not because the wall is uniform. Near-plane clipping only amplifies the effect (a vertex beside or behind the camera carries a view vector almost perpendicular to the view); the parity rows' room split 100 units ahead of the camera (parity.py room_split) stays, harmless. The parity method: R05, R18 and R19-R21 are K28 rows with recorded thresholds (max, mean, p99, the count beyond 1; the mean pins a row's |d| = 1 count), R14 the exact row, the other axial rows +-1 (K28's empirical bound there), R05b reported; the classes live in parity.py's row table. LP7 (a follow-up, not done): draw the .proc's triangles in the parity path, test-only first, then for the faces unchanged since the bake. Also seen on the fix round's run: dmap snaps brush vertices to its 1/32 grid and removes the faces that lie in slabs thinner than 0.1 between near-coplanar planes (a wall behind panels 0.05 in front of it), and an entity inside such a slab is linked to no area; the preview builds the editor's brushes as they are, so faces closer than 0.1 to another brush's parallel plane can differ in the same way (R13 is built without such faces since round 2)."
     },
     {
+      "id": "M-PARITY-02",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            43,
+            86
+          ],
+          "anchor": "R_ListRenderLightDefs_f: \"%4i: %3i intr %2i refs %s\", the shader's name",
+          "sha256": "05fa724f64367829ae9b40594ba674b2ea470308f4f3f23b93717b80d1431eff"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            93,
+            136
+          ],
+          "anchor": "R_ListRenderEntityDefs_f: the same line with the model's name",
+          "sha256": "b0bcc5afff84b064f40426121d8fc37d1cbd34b571ecba06adea98e5088f5ec3"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            338,
+            338
+          ],
+          "anchor": "the areaportal keyword: CONTENTS_AREAPORTAL",
+          "sha256": "838f4d35b6a40296a15a48892a9d2ad7b5bf9fa3d693e915c6ad3345a9626dc1"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            392,
+            392
+          ],
+          "anchor": "CONTENTS_AREAPORTAL = BIT( 20 )",
+          "sha256": "7f917a09a239b3eff1e838cc81b30e0bac3ea6945672dcd45a123614eb3f37f4"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/map.cpp",
+          "lines": [
+            185,
+            196
+          ],
+          "anchor": "areaportal brushes only in the world",
+          "sha256": "e043ad515c7af6e252dfa45d2630a08671c512c54b0487432a74e1ec710c3529"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "lines": [
+            191,
+            195
+          ],
+          "anchor": "TriListForSide: no face for a side neither drawn nor casting shadows",
+          "sha256": "78aae4c1f7c782cd3e59b6e73e1ed7aeb8c64eefb48584405ee12d21dbd7440b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "listed_defs, map_lights, pair_brushes, build_areas_map, AREAS_MTR, MAPS"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "the [.][parity] test's light references (parityTree)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "LitPasses: the areas parity map's portal brushes make no chunk"
+        }
+      ],
+      "note": "LP4.1 (C38, D91), test only: the parity harness reads the engine's light and entity listings, which print per def its index, its interactions, how many areas it references and its shader or model, never which areas; the lights are matched to the map's in spawn (map) order, their shaders checked, and the [.][parity] test holds each light's derived.areas to the engine's count and to the areas of the room centres the map builder records for its volume (PointInArea over the run's .proc): LP1b.3's golden (D58) per parity map. The areas map's doorways hold world brushes of lp4/portal (noshadows, areaportal, no stage, as the retail editor/visportal): dmap makes the inter-area portal of an areaportal brush (only in the world) and no surface of a side neither drawn nor casting shadows, which the chunk builder's addBrush mirrors already (TriListForSide, M-GEO-FN-10). Never in the product"
+    },
+    {
+      "id": "M-PARITY-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "lines": [
+            572,
+            640
+          ],
+          "anchor": "PutWindingIntoAreas_r: a piece reaching an opaque leaf is not kept",
+          "sha256": "29a5cc5ce093e28b00aca7d87a23a1bce7a96db440ae7b3ed54981546cba69c5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/AreaTree.cpp",
+          "symbol": "clipSideIntoAreas (SolidArea)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (the outside set, D81)"
+        },
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "ROWS: P06 (diagnostic), P08"
+        }
+      ],
+      "note": "K14 extended (D47, D81), seen in LP4.1's parity row P06: with a fresh .proc the faces dmap drops because their front lies in an opaque leaf (a sealed hull's outer faces, the faces between touching brushes) are pieces in solid here too (area -1, M-GEO-FN-08), and the outside set is drawn whenever it passes the frustum and lit by volume. From inside an area they are behind or facing away from every camera, so no gated row sees them; from outside the hull (or inside a brush that does not face away from the eye on every side) the preview shows them where the engine shows the rooms cut open. P06 (the camera in the void, view area -1) is reported, its flow statistics asserted; P08 tests the same view-area -1 flow from inside a world pillar, whose faces all face away from the eye, gated"
+    },
+    {
       "id": "M-AREA-01",
       "kind": "function",
       "engine": [
@@ -16029,6 +16166,10 @@
       ],
       "sinkbroom": [
         {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (LP4.1: flowView runs first, D79)"
+        },
+        {
           "file": "lib/TbLitLib/src/ViewFlow.cpp",
           "symbol": "flowView"
         },
@@ -16037,7 +16178,7 @@
           "symbol": "EngineFrameDefaults::usePortals, singleArea"
         }
       ],
-      "note": "LP4.0 step 6 (C32, D79): the view's area PointInArea( vieworg ) (an area past the count, the engine's Error, is -1), BuildConnectedAreas (M-AREA-02), then FlowViewThroughPortals with the first five frustum planes (M-FLOW-08) and the view's scissor; r_singleArea's debug branch is not mirrored (r_singleArea 0, static_assert). Without a tree, or a tree without nodes or AreaData, nothing is flowed (M-FLOW-DIFF-03, D94). Results: viewArea, connectedAreas, the areas AddAreaToView marked, the chain and portal counts, and per world entity, brush entity and light the union of the rects of the chains it passed, kept only when not empty (an empty one is not directly visible, FAM:340, and an empty-scissor light lights nothing, FAM:362-367). The outside set (D81) is never in an area's lists, so never in the result: LP4.1 adds it. Pure; the render thread (LP4.1) or any thread"
+      "note": "LP4.0 step 6 (C32, D79): the view's area PointInArea( vieworg ) (an area past the count, the engine's Error, is -1), BuildConnectedAreas (M-AREA-02), then FlowViewThroughPortals with the first five frustum planes (M-FLOW-08) and the view's scissor; r_singleArea's debug branch is not mirrored (r_singleArea 0, static_assert). Without a tree, or a tree without nodes or AreaData, nothing is flowed (M-FLOW-DIFF-03, D94). Results: viewArea, connectedAreas, the areas AddAreaToView marked, the chain and portal counts, and per world entity, brush entity and light the union of the rects of the chains it passed, kept only when not empty (an empty one is not directly visible, FAM:340, and an empty-scissor light lights nothing, FAM:362-367). The outside set (D81) is never in an area's lists, so never in the result: LP4.1 adds it. Pure; the render thread (LP4.1) or any thread LP4.1: wired, buildFrontendLists runs flowView first on the render thread (D79), over the visible light records that pushed into an area and the visible brush entities that reference one, and adds the outside set itself (D81); its time per build is FrontendLists::flowMs."
     },
     {
       "id": "M-FLOW-02",
@@ -16144,6 +16285,10 @@
       ],
       "sinkbroom": [
         {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (LP4.1: the drawn surfaces from the entity and world rects)"
+        },
+        {
           "file": "lib/TbLitLib/src/ViewFlow.cpp",
           "symbol": "Flow::addAreaToView, Flow::addAreaViewEntities, engineCullCornersByPortals"
         },
@@ -16152,7 +16297,7 @@
           "symbol": "EngineFrameDefaults::useEntityPortalCulling"
         }
       ],
-      "note": "LP4.0 step 6 (C32.5): AddAreaToView marks the area, then its entities, then its lights; AddAreaViewEnvprobes is a debug list (its culls are #if 0, SC306) and is left out. The area's entity references: its world entity (AddWorldModelEntities references it in its own area alone; its corners from AreaData's inverseBaseModelProject; a model of cleared bounds, which no .proc area model has, is skipped as a guard) and every brush entity whose references hold the area (r_singleEntity -1; no faded decals; no suppressSurfaceInViewID or allowSurfaceInViewID in the editor). CullEntityByPortals mode 1: GetFrustumCorners( inverseBaseModelProject, bounds_unitCube ), culled when all eight are FRUSTUM_CULL_FRONT (the sign bit: -0 is behind) of any one of the chain's planes, the portal's own included; the corners are computed once per flow. Else the viewEntity's scissor (cleared when first set up) is united with the chain's rect. The order of an area's lists (entityRefs appended, lightRefs prepended) changes no union and is not kept"
+      "note": "LP4.0 step 6 (C32.5): AddAreaToView marks the area, then its entities, then its lights; AddAreaViewEnvprobes is a debug list (its culls are #if 0, SC306) and is left out. The area's entity references: its world entity (AddWorldModelEntities references it in its own area alone; its corners from AreaData's inverseBaseModelProject; a model of cleared bounds, which no .proc area model has, is skipped as a guard) and every brush entity whose references hold the area (r_singleEntity -1; no faded decals; no suppressSurfaceInViewID or allowSurfaceInViewID in the editor). CullEntityByPortals mode 1: GetFrustumCorners( inverseBaseModelProject, bounds_unitCube ), culled when all eight are FRUSTUM_CULL_FRONT (the sign bit: -0 is behind) of any one of the chain's planes, the portal's own included; the corners are computed once per flow. Else the viewEntity's scissor (cleared when first set up) is united with the chain's rect. The order of an area's lists (entityRefs appended, lightRefs prepended) changes no union and is not kept LP4.1: wired, the world entities' and brush entities' rects decide which chunks are candidates (M-FRONT-02)."
     },
     {
       "id": "M-FLOW-05",
@@ -16233,6 +16378,10 @@
       ],
       "sinkbroom": [
         {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists, engineLightScissor (LP4.1: the light's rect is its scissorRect)"
+        },
+        {
           "file": "lib/TbLitLib/src/ViewFlow.cpp",
           "symbol": "Flow::addAreaViewLights, lightCastsShadows"
         },
@@ -16245,7 +16394,7 @@
           "symbol": "EngineFrameDefaults::useLightPortalCulling, useLightAreaCulling"
         }
       ],
-      "note": "LP4.0 steps 6, 7 (C32.5, P4.21): the area's light references (every light whose derived.areas hold it): r_useLightAreaCulling 1 drops a light that casts no shadows whose own area is not -1 and not connected to the view's (the engine's comment says the opposite of its code; an area past the count counts as not connected); CullLightByPortals mode 1: GetFrustumCorners( inverseBaseLightProject, bounds_zeroOneCube ) against every plane of the chain, culled when all eight corners are in front of one; else the viewLight's scissor (cleared when first set up) is united with the chain's rect. A light without references is never in an area's list, so never a view light here (the outside set is LP4.1's, D81). lightCastsShadows = forceShadows (false for a map light: M-LIGHT-DIFF-07) || ( !noShadows && the shader's LightCastsShadows: MF_FORCESHADOWS || ( !fogLight && !ambientLight && !blendLight && !MF_NOSHADOWS ) ), the flags the copied parser set (MaterialEntry::materialFlags holds every materialFlags_t bit); nullopt while the shader is pending or has no entry (LP2's pending rule)"
+      "note": "LP4.0 steps 6, 7 (C32.5, P4.21): the area's light references (every light whose derived.areas hold it): r_useLightAreaCulling 1 drops a light that casts no shadows whose own area is not -1 and not connected to the view's (the engine's comment says the opposite of its code; an area past the count counts as not connected); CullLightByPortals mode 1: GetFrustumCorners( inverseBaseLightProject, bounds_zeroOneCube ) against every plane of the chain, culled when all eight corners are in front of one; else the viewLight's scissor (cleared when first set up) is united with the chain's rect. A light without references is never in an area's list, so never a view light here (the outside set is LP4.1's, D81). lightCastsShadows = forceShadows (false for a map light: M-LIGHT-DIFF-07) || ( !noShadows && the shader's LightCastsShadows: MF_FORCESHADOWS || ( !fogLight && !ambientLight && !blendLight && !MF_NOSHADOWS ) ), the flags the copied parser set (MaterialEntry::materialFlags holds every materialFlags_t bit); nullopt while the shader is pending or has no entry (LP2's pending rule) LP4.1: wired, a light's rect is the scissorRect engineLightScissor intersects with the projected rect (M-FRONT-01); the outside set's lights take the view's scissor (D81)."
     },
     {
       "id": "M-FLOW-06",
@@ -16407,6 +16556,10 @@
       ],
       "sinkbroom": [
         {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (LP4.1: every view light and candidate surface)"
+        },
+        {
           "file": "lib/TbLitLib/src/ViewFlow.h",
           "symbol": "AreaLight, AreaSurface, AreaSurfaceKind"
         },
@@ -16419,7 +16572,7 @@
           "symbol": "EngineFrameDefaults::useAreasConnectedForShadowCulling"
         }
       ],
-      "note": "LP4.0 step 8 (C33 a-c, D81, SC314): a surface is lit by a view light, subject to the caller's volume test (R_CullModelBoundsToLight) and LP2's other tests, when (a) a world chunk of area N: the world entity N is directly visible, N is one of the light's areas and the light's own area is -1 or connected to N (r_useAreasConnectedForShadowCulling 2, AreasAreConnected); (b) a brush entity's chunk: the entity is directly visible and some area of its references is one of the light's areas and passes the same test (the engine decides an entity once, at the first such area of the light's chain, by tests that do not depend on the area); (c) the outside set: a world chunk in area -1 or an entity without references is lit by every view light by volume, and a light without references lights only the outside set (D81, K14 extended). Only with a tree (D94). Not wired until LP4.1"
+      "note": "LP4.0 step 8 (C33 a-c, D81, SC314): a surface is lit by a view light, subject to the caller's volume test (R_CullModelBoundsToLight) and LP2's other tests, when (a) a world chunk of area N: the world entity N is directly visible, N is one of the light's areas and the light's own area is -1 or connected to N (r_useAreasConnectedForShadowCulling 2, AreasAreConnected); (b) a brush entity's chunk: the entity is directly visible and some area of its references is one of the light's areas and passes the same test (the engine decides an entity once, at the first such area of the light's chain, by tests that do not depend on the area); (c) the outside set: a world chunk in area -1 or an entity without references is lit by every view light by volume, and a light without references lights only the outside set (D81, K14 extended). Only with a tree (D94). Not wired until LP4.1 LP4.1: wired, buildFrontendLists asks it for every (view light, candidate surface) before LP2's tests (M-FRONT-02)."
     },
     {
       "id": "M-FLOW-10",
@@ -16601,6 +16754,10 @@
       ],
       "sinkbroom": [
         {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (LP4.1: LP2's rules without a tree, the outside set with one)"
+        },
+        {
           "file": "lib/TbLitLib/src/ViewFlow.cpp",
           "symbol": "flowView, lightReachesSurface"
         },
@@ -16609,7 +16766,7 @@
           "symbol": "SceneGeometry::updateEntityReferences"
         }
       ],
-      "note": "LP4.0 (D94, D81, P4.4, P4.8, P4.22): without a tree (no .proc and no .bproc, or one without nodes) the flow is skipped (flowed false, viewArea -1): the engine cannot load such a map (InitFromMap fails), the preview keeps LP2's rules (every chunk frustum-tested, every light with a volume a view light with the projected scissor alone, lights through walls: K1, K15). With a tree, what lies outside the baked hull (world pieces in area -1, D47; brush entities and lights whose volume pushes into no area) has no references: the engine never draws or lights it (dmap drops such pieces; such a light is in no lightRefs), the preview treats it as the outside set, drawn whenever in the frustum and lit by volume by every light, a light of the set lighting only the set (K14 extended). MAX_CONTACTED_LIGHTS (128 lights per entity) is not kept in the pairing; unreachable on admin"
+      "note": "LP4.0 (D94, D81, P4.4, P4.8, P4.22): without a tree (no .proc and no .bproc, or one without nodes) the flow is skipped (flowed false, viewArea -1): the engine cannot load such a map (InitFromMap fails), the preview keeps LP2's rules (every chunk frustum-tested, every light with a volume a view light with the projected scissor alone, lights through walls: K1, K15). With a tree, what lies outside the baked hull (world pieces in area -1, D47; brush entities and lights whose volume pushes into no area) has no references: the engine never draws or lights it (dmap drops such pieces; such a light is in no lightRefs), the preview treats it as the outside set, drawn whenever in the frustum and lit by volume by every light, a light of the set lighting only the set (K14 extended). MAX_CONTACTED_LIGHTS (128 lights per entity) is not kept in the pairing; unreachable on admin LP4.1: wired, buildFrontendLists keeps LP2's lists without a tree (a regression test pins the LP1b fixture's lists of three cameras as they were before the flow) and draws and lights the outside set with one."
     },
     {
       "id": "M-FLOW-PURE-01",
@@ -16807,6 +16964,10 @@
       ],
       "sinkbroom": [
         {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (LP4.1: flowView and lightReachesSurface on the render thread)"
+        },
+        {
           "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
           "symbol": "engineFrustumPlanes, engineFrustumCorners, engineCullFrustumCorners, engineOffsetScaleForBounds, engineProjectedBounds, engineTransformPoint, engineClearedBounds, engineZeroBounds, engineBoundsIsCleared, engineAddBounds, engineBoundsCenter, engineDeformSurfaceBounds"
         },
@@ -16835,7 +16996,7 @@
         "RenderMatrix.h:330, :335 TransformPoint's distinct in and out and w of 1 (CreateFromOriginAxis matrices)",
         "RenderMatrix.cpp:795 OffsetScaleForBounds' &src != &out, :4524 and :4638 the corners' 16-byte alignment (the facades pass ALIGNTYPE16 copies)"
       ],
-      "note": "LP4.0 (A25, C20, C24, P4.23): the copied functions the portal flow and the references run, recorded with their threads: the render thread (LP4.1's flowView inside buildFrontendLists; SceneGeometry::apply's entity references since LP4.0), the parse thread (buildAreaData inside readMapBake) and any test thread. GetFrustumCorners, CullFrustumCornersToPlane, OffsetScaleForBounds and ProjectedBounds are pool-safe already (M-LIGHT-POOL-01); GetFrustumPlanes' other caller is the light triangles' (M-INTER-POOL-01); the idRenderMatrix members on the render thread follow M-VIEW-PURE-01. C24's five conditions: (1) no common call reachable (above); (2) no FatalError site; (3) no SIMDProcessor (the SSE2 intrinsics are inline: GetFrustumCorners divides through _mm_rcp32_ps, a w below the smallest normal replaced by 1; CullFrustumCornersToPlane reads the distances' sign bits, so -0 is behind); (4) Reverse allocates its winding with the tagged new on the global allocator, which the facade deletes; ClipInPlace's _alloca blocks (n + 4 floats, bytes and idVec5s, about 1.2 KB at 43 points) and the facade's idFixedWinding (64 idVec5, 1.3 KB) are on the calling thread's stack, once per call, never nested; (5) the statics read are RenderMatrix.cpp's constant ones (M-LIGHT-STATIC-01..03), bounds_unitCube and bounds_zeroOneCube (M-GEO-STATIC-02) and idMath's constants. Pure: each reads its arguments and writes its result"
+      "note": "LP4.0 (A25, C20, C24, P4.23): the copied functions the portal flow and the references run, recorded with their threads: the render thread (LP4.1's flowView inside buildFrontendLists; SceneGeometry::apply's entity references since LP4.0), the parse thread (buildAreaData inside readMapBake) and any test thread. GetFrustumCorners, CullFrustumCornersToPlane, OffsetScaleForBounds and ProjectedBounds are pool-safe already (M-LIGHT-POOL-01); GetFrustumPlanes' other caller is the light triangles' (M-INTER-POOL-01); the idRenderMatrix members on the render thread follow M-VIEW-PURE-01. C24's five conditions: (1) no common call reachable (above); (2) no FatalError site; (3) no SIMDProcessor (the SSE2 intrinsics are inline: GetFrustumCorners divides through _mm_rcp32_ps, a w below the smallest normal replaced by 1; CullFrustumCornersToPlane reads the distances' sign bits, so -0 is behind); (4) Reverse allocates its winding with the tagged new on the global allocator, which the facade deletes; ClipInPlace's _alloca blocks (n + 4 floats, bytes and idVec5s, about 1.2 KB at 43 points) and the facade's idFixedWinding (64 idVec5, 1.3 KB) are on the calling thread's stack, once per call, never nested; (5) the statics read are RenderMatrix.cpp's constant ones (M-LIGHT-STATIC-01..03), bounds_unitCube and bounds_zeroOneCube (M-GEO-STATIC-02) and idMath's constants. Pure: each reads its arguments and writes its result LP4.1: the render thread runs them inside buildFrontendLists (LitPasses::rebuildLists)."
     },
     {
       "id": "M-FLOW-GUARD-01",
