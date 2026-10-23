@@ -403,6 +403,34 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
         {
           continue;
         }
+        // DX.2: the static interaction's light triangles (GenerateAllInteractions makes
+        // one for every static-model entity at load: the world's areas, brush entities
+        // and patches)
+        auto lit = surface;
+        if (inputs.lightTriangles)
+        {
+          const auto triangles =
+            inputs.lightTriangles(*record, surface, lists.spaces[surface.space]);
+          if (triangles)
+          {
+            switch (triangles->state)
+            {
+            case LightTriangles::State::None:
+              lists.culledTriangles += triangles->culledTriangles;
+              continue;
+            case LightTriangles::State::Pending:
+              lists.lightTrianglesPending = true;
+              break;
+            case LightTriangles::State::Runs:
+              lit.lightTriangles = triangles;
+              ++lists.lightTriangleSurfaces;
+              lists.culledTriangles += triangles->culledTriangles;
+              break;
+            case LightTriangles::State::All:
+              break;
+            }
+          }
+        }
         const auto list =
           surface.material
             ? engineInteractionList(*surface.material, record->light.parms.noShadows)
@@ -410,13 +438,13 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
         switch (list)
         {
         case InteractionList::Local:
-          viewLight.localInteractions.push_back(surface);
+          viewLight.localInteractions.push_back(std::move(lit));
           break;
         case InteractionList::Global:
-          viewLight.globalInteractions.push_back(surface);
+          viewLight.globalInteractions.push_back(std::move(lit));
           break;
         case InteractionList::Translucent:
-          viewLight.translucentInteractions.push_back(surface);
+          viewLight.translucentInteractions.push_back(std::move(lit));
           break;
         }
       }

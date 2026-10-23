@@ -32,6 +32,7 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightGoldens.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightParse.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightRecord.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightTriangles.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitPasses.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitSession.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapBake.cpp

@@ -143,6 +143,11 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
   m_stats.lightsVisible = m_lists.lights.size();
   m_stats.unconverged = m_lists.pending;
   m_stats.waitsForTable = m_lists.pending;
+  // DX.2: a surface drawn whole until its light triangles are known
+  m_stats.lightTrianglesPending =
+    m_lists.lightTrianglesPending || m_lightTriangles.busy();
+  m_stats.unconverged = m_stats.unconverged || m_stats.lightTrianglesPending;
+  m_stats.culledTriangles = m_lists.culledTriangles;
 
   frame.framebuffer = inputs.frame->resolve(prepassDesc())
                       | kdl::transform([](const PassResources& resources) {
@@ -207,6 +212,8 @@ bool LitPasses::endTimer(Frame& frame, nvrhi::ITimerQuery* timer)
 
 void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
 {
+  // DX.2: a finished job's light triangles are part of this frame's lists
+  m_lightTriangles.collect();
   const auto* table = inputs.materials.get();
   auto key = ListsKey{};
   key.camera = inputs.camera;
@@ -218,6 +225,7 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   key.lights = inputs.lights.get();
   key.lightsVersion = inputs.lights ? inputs.lights->version : 0;
   key.registry = table ? table->registry : 0;
+  key.lightTrianglesVersion = m_lightTriangles.version();
   const auto tableVersion = table ? table->version : 0;
   if (m_listsKey == key && !(m_lists.pending && tableVersion != m_listsTableVersion))
   {
@@ -256,9 +264,30 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
                          const ShaderParms& shaderParms) {
     return m_registers.registers(consumer, material, shaderParms, *table, inputs.service);
   };
+  frontend.lightTriangles =
+    [&](const LightRecord& record, const LitSurface& surface, const LitSpace& space) {
+      return m_lightTriangles.triangles(
+        record.id,
+        record.version,
+        record.derived.projection.baseLightProject,
+        *surface.chunk,
+        space.modelMatrix);
+    };
   m_registers.beginBuild();
+  m_lightTriangles.beginBuild();
   m_lists = buildFrontendLists(frontend);
   m_registers.endBuild();
+  m_lightTriangles.endBuild(inputs.pool);
+}
+
+bool LitPasses::collectLightTriangles()
+{
+  return m_lightTriangles.collect();
+}
+
+bool LitPasses::lightTrianglesBusy() const
+{
+  return m_lightTriangles.busy();
 }
 
 void LitPasses::recordClears(Frame& frame)
@@ -743,7 +772,14 @@ bool LitPasses::renderInteractions(
         const auto program = interaction.program == InteractionProgram::PbrInteraction
                                ? EngineBuiltinPbrInteraction
                                : EngineBuiltinInteraction;
-        switch (draw(frame, program, *surface->chunk, stateBits, 0.0f, 0.0f))
+        switch (draw(
+          frame,
+          program,
+          *surface->chunk,
+          stateBits,
+          0.0f,
+          0.0f,
+          surface->lightTriangles.get()))
         {
         case DrawOutcome::Drawn:
           ++m_stats.interactionDraws;
@@ -1048,7 +1084,8 @@ LitPasses::DrawOutcome LitPasses::draw(
   const Chunk& chunk,
   const std::uint64_t stateBits,
   const float slopeBias,
-  const float depthBias)
+  const float depthBias,
+  const LightTriangles* lightTriangles)
 {
   // DrawElementsWithCounters (RenderBackend_NVRHI.cpp:315-565)
   const auto& inputs = *frame.inputs;
@@ -1206,7 +1243,24 @@ LitPasses::DrawOutcome LitPasses::draw(
   args.instanceCount = 1;
   args.startIndexLocation = std::uint32_t(placement->indexes.offset / 2);
   args.startVertexLocation = std::uint32_t(placement->vertices.offset / 32);
-  inputs.commandList->drawIndexed(args);
+  if (lightTriangles && lightTriangles->state == LightTriangles::State::Runs)
+  {
+    // DX.2: the engine draws its light triangles' index subset in one draw; the runs of
+    // that subset are the same triangles in the same order, a draw call each
+    const auto first = args.startIndexLocation;
+    for (const auto& run : lightTriangles->runs)
+    {
+      args.vertexCount = run.indexCount;
+      args.startIndexLocation = first + run.firstIndex;
+      inputs.commandList->drawIndexed(args);
+      ++m_stats.lightTriangleRuns;
+    }
+    ++m_stats.lightTriangleDraws;
+  }
+  else
+  {
+    inputs.commandList->drawIndexed(args);
+  }
 
   m_state.layout = layout;
   return DrawOutcome::Drawn;
@@ -1255,6 +1309,7 @@ void LitPasses::releaseAll()
   m_lists = FrontendLists{};
   m_listsKey.reset();
   m_registers.clear();
+  m_lightTriangles.clear();
   m_state = DrawState{};
   m_units = {};
   m_drawLog.clear();

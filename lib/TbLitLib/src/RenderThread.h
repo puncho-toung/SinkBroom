@@ -127,6 +127,9 @@ struct FrameConvergence
   // U2.11: a draw or a light was dropped for the volatile constant buffer's budget (D76);
   // it does not re-trigger (nothing the next frame does changes the budget)
   bool drawsOverflowed = false;
+  // DX.2: a lit surface's light triangles are being made on the CPU pool (it is drawn
+  // whole meanwhile); the job's end is the trigger (lightTrianglesTick)
+  bool lightTrianglesPending = false;
   // D9: a pass is disabled (counts as converged)
   bool passesDisabled = false;
 
@@ -549,6 +552,8 @@ private:
   void eraseChangedSets();
   // D77: an idle pass's look for texture arrivals in a new table; whether a frame is due
   void arrivalsTick();
+  // DX.2: an idle pass's look for the light triangles' job; its answers trigger a frame
+  void lightTrianglesTick();
   // D77, U2.5: a trigger at most every TextureArrivalInterval: now, or at the interval's
   // end; under m_mutex
   void arrivalTrigger(FrameClock::time_point now);

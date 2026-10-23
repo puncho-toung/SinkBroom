@@ -79,6 +79,8 @@ struct LitFrameInputs
   std::shared_ptr<const LightTable> lights;
   std::shared_ptr<const MaterialTable> materials;
   MaterialService* service = nullptr;
+  // DX.2: the session's CPU pool, which makes the light triangles (none: at once)
+  CpuPool* pool = nullptr;
   // a pass boundary: a stop or a park was asked for
   std::function<bool()> stopRequested;
   // a warning for the session's log (posted once per session)
@@ -105,6 +107,12 @@ struct LitFrameStats
   std::size_t overflowedDraws = 0;
   std::size_t prepassDraws = 0;
   std::size_t interactionDraws = 0;
+  // DX.2: interaction draws of light triangles in runs, their draw calls, the triangles
+  // the static interactions culled, and whether some are not known yet (unconverged)
+  std::size_t lightTriangleDraws = 0;
+  std::size_t lightTriangleRuns = 0;
+  std::size_t culledTriangles = 0;
+  bool lightTrianglesPending = false;
   // draws skipped: a pending pipeline, a texture with no written level, a chunk not
   // placed yet (D77)
   std::size_t skippedDraws = 0;
@@ -195,6 +203,8 @@ private:
     const LightTable* lights = nullptr;
     std::uint64_t lightsVersion = 0;
     std::uint64_t registry = 0;
+    // DX.2: the light triangles' answers
+    std::uint64_t lightTrianglesVersion = 0;
 
     bool operator==(const ListsKey&) const = default;
   };
@@ -237,6 +247,8 @@ private:
 
   RenderParms m_parms;
   RegisterCache m_registers;
+  // DX.2: the static interactions' light triangles
+  LightTriangleCache m_lightTriangles;
   FrontendLists m_lists;
   std::optional<ListsKey> m_listsKey;
   std::uint64_t m_listsTableVersion = 0;
@@ -270,6 +282,10 @@ public:
 
   // the lists of the last build (tests, on the render thread)
   const FrontendLists& lists() const;
+  // DX.2, render thread: a finished light triangles job is taken (whether one was), and
+  // whether one runs or waits
+  bool collectLightTriangles();
+  bool lightTrianglesBusy() const;
   const LitFrameStats& lastStats() const;
   const RenderParms& parms() const;
 
@@ -325,7 +341,8 @@ private:
     const Chunk& chunk,
     std::uint64_t stateBits,
     float slopeBias,
-    float depthBias);
+    float depthBias,
+    const LightTriangles* lightTriangles = nullptr);
   // the binding sets of a layout for the units; false when a texture has no level yet
   bool bindingSets(
     Frame& frame,

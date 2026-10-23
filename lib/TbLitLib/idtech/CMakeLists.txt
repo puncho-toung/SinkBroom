@@ -56,9 +56,14 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_load.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/PipelineCache.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/PipelineCache.h
+    # DX.2: R_CalcInteractionCullBits' and R_CreateInteractionLightTris' ranges, compiled
+    # inside a function of shim/src/EngineInteraction.cpp, which declares what they name
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Interaction.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Interaction.h
 
     ${TB_LIT_ID_SHIM_DIR}/src/DeclManagerShim.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineGeometry.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/EngineInteraction.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineLight.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineLexer.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineMessages.cpp
@@ -100,6 +105,7 @@ set_source_files_properties(
   ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_files.cpp
   ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_load.cpp
   ${TB_LIT_ID_ENGINE_DIR}/renderer/PipelineCache.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/renderer/Interaction.cpp
   PROPERTIES HEADER_FILE_ONLY ON)
 
 # the shim headers named precompiled.h and RenderCommon.h come first, so the copied files'

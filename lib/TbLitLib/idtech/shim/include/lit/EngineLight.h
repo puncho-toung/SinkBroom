@@ -33,6 +33,7 @@
 #include "lit/EngineGeometry.h"
 
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -245,5 +246,26 @@ EnginePlane engineGlobalPlaneToLocal(
  */
 void engineBakeTextureMatrixIntoTexgen(
   std::array<EnginePlane, 4>& lightProject, const EngineGlMatrix& textureMatrix);
+
+// ----- the static interactions' light triangles (DX.2; the copy, pure) -----
+
+/**
+ * R_CreateInteractionLightTris with R_CalcInteractionCullBits (Interaction.cpp, the
+ * copied ranges, r_lightAllBackFaces 1 so no facing cull): of a surface of entity-local
+ * positions with its local bounds and its 16-bit triangle indexes, the indexes of the
+ * triangles that are not culled to the light volume of baseLightProject in the space of
+ * modelMatrix, in their order. A triangle is culled when its three vertices are within
+ * LIGHT_CLIP_EPSILON (0.1) of one of the volume's six planes, or behind it:
+ * GetFrustumPlanes( baseLightProject, true, true ) taken into the surface's space by
+ * R_GlobalPlaneToLocal (not normalised again for a scaled entity). Empty: the engine
+ * makes no interaction surface. Pure; any thread, the CPU pool's included (mirror.json
+ * M-LIGHT-POOL-02).
+ */
+std::vector<std::uint16_t> engineInteractionLightTris(
+  const EngineMat4& baseLightProject,
+  const EngineGlMatrix& modelMatrix,
+  const EngineBounds& localBounds,
+  const std::vector<EngineVec3>& positions,
+  const std::vector<std::uint16_t>& indexes);
 
 } // namespace tb::lit

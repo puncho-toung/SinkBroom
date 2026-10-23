@@ -10,7 +10,13 @@ loads them (`renderer/Image_files.cpp`, the mip and cube functions of
 `renderer/Image_process.cpp`, `renderer/Color/ColorSpace.*`; LP1c.2). LP2.0 adds two pure
 functions its pipelines and uploads need (C24, P2.25): `PipelineCache::GetRenderState` with
 `GetStencilOpState` (`renderer/PipelineCache.*`) and `GetRowPitch` with what it calls
-(`renderer/Image_load.cpp`), compiled inside `../shim/src/ShimPipelineState.cpp`.
+(`renderer/Image_load.cpp`), compiled inside `../shim/src/ShimPipelineState.cpp`. The LP2
+fix round (`31-LP2-FIXES.md` DX.2) adds the static interactions' cull to the light volume:
+`R_CalcInteractionCullBits`' planes and cull bits and `R_CreateInteractionLightTris`'
+triangle cull (`renderer/Interaction.cpp`, three statement ranges) with
+`LIGHT_CLIP_EPSILON` and `srfCullInfo_t` (`renderer/Interaction.h`), compiled inside a
+function of `../shim/src/EngineInteraction.cpp` that declares, with the engine's names,
+what the ranges read and write.
 
 `renderer/DXT/` (`DXTCodec.h`, `DXTCodec_local.h`, `DXTEncoder_SSE2.cpp`) is **test only**
 (LP1c fix S3.2): the engine's fast DXT encoders, compiled into `TbLitIdDxtTestLib`, which

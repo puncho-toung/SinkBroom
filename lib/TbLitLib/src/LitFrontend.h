@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "LightTriangles.h"
 #include "LitView.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/LightRecord.h"
@@ -70,8 +71,8 @@ struct RegisterAnswer
  * FrontendLists::spaces), its material and registers. A surface whose material (null) or
  * registers (null) are pending (D77) is drawn with _default images until they arrive: in
  * the prepass solid (unless its known material is translucent), in the interactions the
- * bump _flat and the diffuse _default (pendingSurfaceInteraction); its pointer is into the
- * chunk map the lists were built from, which a new chunk version replaces.
+ * bump _flat and the diffuse _default (pendingSurfaceInteraction); its pointer is into
+ * the chunk map the lists were built from, which a new chunk version replaces.
  */
 struct LitSurface
 {
@@ -82,6 +83,9 @@ struct LitSurface
   // D77: the material or its registers are pending, or the registers are the
   // consumer's last (D52)
   bool provisional = false;
+  // DX.2: in a light's lists, the runs of the chunk's triangles the static interaction
+  // lights (R_CreateInteractionLightTris); null: all of them
+  std::shared_ptr<const LightTriangles> lightTriangles;
 };
 
 /**
@@ -114,6 +118,11 @@ struct FrontendLists
   std::vector<ViewLight> lights;
   // D77: a material, an evaluation or a light's registers is pending
   bool pending = false;
+  // DX.2: a lit surface's light triangles are not known yet (it is drawn whole); the
+  // surfaces drawn in runs, and the triangles culled from them
+  bool lightTrianglesPending = false;
+  std::size_t lightTriangleSurfaces = 0;
+  std::size_t culledTriangles = 0;
   // lights skipped: math lights (LP5), fog and blend lights (LP5), ambient lights (no LP2
   // program), and lights whose shader or falloff the table does not have
   std::size_t mathLights = 0;
@@ -134,6 +143,11 @@ struct FrontendInputs
   std::function<MaterialAnswer(const std::string&)> material;
   std::function<RegisterAnswer(PreviewId, const MaterialEntry&, const ShaderParms&)>
     registers;
+  // DX.2: the light triangles of a surface lit by a light, in the surface's space; none:
+  // every triangle
+  std::function<std::shared_ptr<const LightTriangles>(
+    const LightRecord&, const LitSurface&, const LitSpace&)>
+    lightTriangles;
 };
 
 /**
@@ -211,7 +225,9 @@ void engineSortViewLights(std::vector<ViewLight>& lights);
  * not empty, gets every directly visible surface that receives lighting (a pending one
  * does), is not culled to the light volume by its bounds through its space's model
  * matrix (R_CullModelBoundsToLight), and has the light shader's spectrum, in the list of
- * engineInteractionList, in chunk order. A light with no surface in any list is dropped
+ * engineInteractionList, in chunk order, with its light triangles (DX.2: the static
+ * interaction's cull to the light volume; a surface with none is left out, as the engine
+ * makes no interaction surface for it). A light with no surface in any list is dropped
  * (R_OptimizeViewLightsList); the rest are sorted (engineSortViewLights).
  * r_useShadowSurfaceScissor's shrink is the light's own rect here (every surface's rect
  * is the light's), so it changes nothing. Pure, given the inputs' functions.

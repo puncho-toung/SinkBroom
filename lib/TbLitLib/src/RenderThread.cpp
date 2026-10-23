@@ -124,7 +124,8 @@ bool FrameConvergence::settled() const
 {
   return !pipelinesPending && !materialsPending && !drawsSkipped && !uploadsLeft
          && !imagesPending && !provisionalChunks && !lutPending && !entityDefsPending
-         && !lightsProvisional && !geometryInFlight && !drawsOverflowed;
+         && !lightsProvisional && !geometryInFlight && !drawsOverflowed
+         && !lightTrianglesPending;
 }
 
 bool FrameConvergence::retriggers() const
@@ -584,6 +585,8 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
     });
   // U2.11
   convergence.drawsOverflowed = lit.lightsOverflowed > 0 || lit.overflowedDraws > 0;
+  // DX.2
+  convergence.lightTrianglesPending = lit.lightTrianglesPending;
   convergence.lutPending = tonemap.lutPending;
   convergence.passesDisabled =
     lit.prepassDisabled || lit.interactionsDisabled || tonemap.disabled;
@@ -1110,6 +1113,7 @@ bool RenderThread::recordLitPasses(
   }
   const auto tableVersion = inputs.materials ? inputs.materials->version : 0;
   inputs.service = m_materials;
+  inputs.pool = m_pool;
   inputs.stopRequested = [this] { return stopOrParkRequested(); };
   inputs.warn = [this](std::string message) {
     m_events.post(SessionEvent::Warning, std::move(message));
@@ -1151,6 +1155,16 @@ void RenderThread::litTableTick()
   const auto now = FrameClock::now();
   const auto lock = std::scoped_lock{m_mutex};
   arrivalTrigger(now);
+}
+
+void RenderThread::lightTrianglesTick()
+{
+  if (!m_passes.collectLightTriangles())
+  {
+    return;
+  }
+  const auto lock = std::scoped_lock{m_mutex};
+  m_pacer.trigger();
 }
 
 void RenderThread::arrivalTrigger(const FrameClock::time_point now)
@@ -1304,6 +1318,7 @@ void RenderThread::runLoop()
     const auto building = geometryTick();
     arrivalsTick();
     litTableTick();
+    lightTrianglesTick();
     lock.lock();
     // D77: a texture arrival that came within TextureArrivalInterval of the last one
     if (m_arrivalTriggerAt && *m_arrivalTriggerAt <= FrameClock::now())
@@ -1321,7 +1336,7 @@ void RenderThread::runLoop()
     {
       continue;
     }
-    if (building)
+    if (building || m_passes.lightTrianglesBusy())
     {
       deadline = std::min(deadline, now + GeometryPollInterval);
     }

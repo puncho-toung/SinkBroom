@@ -40,6 +40,8 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightGridFile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightParse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightRecord.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LightTriangles.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LightTriangles.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitFrontend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitFrontend.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitPasses.cpp
