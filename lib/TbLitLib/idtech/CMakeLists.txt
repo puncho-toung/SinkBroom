@@ -84,6 +84,7 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_SHIM_DIR}/private/shim/Registry.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimEngine.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimFramework.h
+    ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimInteraction.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimLib.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimSystem.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/TinyexrMinizNames.h

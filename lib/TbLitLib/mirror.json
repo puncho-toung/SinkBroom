@@ -9541,7 +9541,7 @@
             315,
             321
           ],
-          "anchor": "R_GlobalPlaneToLocal (transcribed)",
+          "anchor": "R_GlobalPlaneToLocal (engineGlobalPlaneToLocal's transcription)",
           "sha256": "c14a74d6fe3413d77383ec59871d9e15e06ca9afac56ff24e87512faac9f13e7"
         }
       ],
@@ -13046,9 +13046,12 @@
         },
         {
           "file": "lib/TbLitLib/idtech/shim/src/EngineInteraction.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimInteraction.h"
         }
       ],
-      "note": "DX.2: 43 lines in 3 ranges with their marker lines, included by EngineInteraction.cpp only"
+      "note": "DX.2: 43 lines in 3 ranges with their marker lines, included by EngineInteraction.cpp only; the copy keeps no include guard (the engine's :29-30 are not copied), so it is included once, by the shim's lib/TbLitLib/idtech/shim/private/shim/ShimInteraction.h, which has #pragma once (round 2's nit)"
     },
     {
       "id": "M-PIPE-PURE-01",
@@ -13426,7 +13429,7 @@
           "symbol": "RenderThread::startPipelineKeys"
         }
       ],
-      "note": "LP2.0 (D71, D42, D9, R4-2.21): the engine loads every builtin's shaders at start and makes a pipeline on its render thread at first use, against the live framebuffer the key points to. The preview makes shaders, layouts and pipelines lazily on its compile thread (a StackThread of 8 MB, P2.27), against 1x1 format-only framebuffers of its own, one per format set; a request returns Pending at once and the made pipeline triggers a frame (D77). No pipeline cache file is read or written (D42). A missing blob or permutation, or a reflection mismatch, disables the program for the session with the field named and one warning, where the engine calls FatalError LP2 fix round: T0.8: an NVRHI Error raised on the compile thread (the validation wrapper's message, or a driver failure NVRHI reports) reaches the device's message callback and ends the session; a key is Failed only for a disabled program or a null pipeline without a message; in Debug a failing vkCreateGraphicsPipelines asserts inside NVRHI (ASSERT_VK_OK). T0.7: a Stop is seen before each creation step (a shader, the binding layouts, the input layout, the framebuffer, the pipeline), so it waits for at most one driver call; the stopped job's key stays Pending and disables nothing. DX.5: at Start (phase B) a session with an absolute game path asks for the ten pipelines every lit scene draws with (depth and texture_color at state 0, interaction and PBR interaction with EQUAL and LESS, tonemapping, the blit, histogram and exposure), where the engine makes each at its first draw."
+      "note": "LP2.0 (D71, D42, D9, R4-2.21): the engine loads every builtin's shaders at start and makes a pipeline on its render thread at first use, against the live framebuffer the key points to. The preview makes shaders, layouts and pipelines lazily on its compile thread (a StackThread of 8 MB, P2.27), against 1x1 format-only framebuffers of its own, one per format set; a request returns Pending at once and the made pipeline triggers a frame (D77). No pipeline cache file is read or written (D42). A missing blob or permutation, or a reflection mismatch, disables the program for the session with the field named and one warning, where the engine calls FatalError LP2 fix round: T0.8: an NVRHI Error raised on the compile thread (the validation wrapper's message, or a driver failure NVRHI reports) reaches the device's message callback and ends the session; a key is Failed only for a disabled program or a null pipeline without a message; in Debug a failing vkCreateGraphicsPipelines asserts inside NVRHI (ASSERT_VK_OK). T0.7: a Stop is seen before each creation step (a shader, the binding layouts, the input layout, the framebuffer, the pipeline), so it waits for at most one driver call; the stopped job's key stays Pending and disables nothing. DX.5: at Start (phase B) a session with an absolute game path asks for the eleven pipelines every lit scene draws with (depth at state 0 and with GLS_ALPHAMASK, the solid draw of a surface whose registers are pending (round 2, V2.7), texture_color at state 0, interaction and PBR interaction with EQUAL and LESS, tonemapping, the blit, histogram and exposure), where the engine makes each at its first draw."
     },
     {
       "id": "M-PIPE-DEFECT-01",
@@ -14177,10 +14180,10 @@
           "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
           "lines": [
             518,
-            536
+            535
           ],
           "anchor": "DrawElementsWithCounters, the viewport and the scissor rect",
-          "sha256": "1b6b365a8c8b880af83611c39517be35cd011614fce3be388d16082fd5671e31"
+          "sha256": "edd40ba6eb415c1be24b64350cb30ba8596554d17e5e5f0b6f70507b42c56b59"
         },
         {
           "file": "neo/renderer/ScreenRect.cpp",
@@ -14539,7 +14542,7 @@
           "symbol": "buildFrontendLists"
         }
       ],
-      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet: the portal rects and the \"area not connected to the view\" cull (LP4), r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), material LODs, and the shadow LOD (K26, LP3). The static interactions' light triangles, which P2.26 counted here (\"its triangles outside the volume add nothing\"), are mirrored since the LP2 fix round (DX.2, M-INTER-01): LP2.3 found the volume boundary's LIGHT_CLIP_EPSILON dropping whole faces the preview lit U3.9 (LP2 fix round, recorded; mirrored in LP4): a light whose scissor comes out empty is skipped (LitFrontend.cpp), where the engine keeps it and DrawElementsWithCounters draws it unscissored (RenderBackend_NVRHI.cpp:528-535); no pixel differs today (outside the volume the border sampler gives black), and only LP4's portal rects can make the scissor empty."
+      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet: the portal rects and the \"area not connected to the view\" cull (LP4), r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), material LODs, and the shadow LOD (K26, LP3). The static interactions' light triangles, which P2.26 counted here (\"its triangles outside the volume add nothing\"), are mirrored since the LP2 fix round (DX.2, M-INTER-01): LP2.3 found the volume boundary's LIGHT_CLIP_EPSILON dropping whole faces the preview lit. U3.9 (LP2 fix round, recorded; mirrored in LP4): a light whose scissor comes out empty is skipped (LitFrontend.cpp), where the engine keeps it and DrawElementsWithCounters draws it unscissored (RenderBackend_NVRHI.cpp:528-535); no pixel differs today (outside the volume the border sampler gives black), and only LP4's portal rects can make the scissor empty."
     },
     {
       "id": "M-FRONT-DIFF-03",

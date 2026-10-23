@@ -54,7 +54,7 @@
 #include "lit/EngineLight.h"
 // clang-format on
 
-#include "renderer/Interaction.h"
+#include "shim/ShimInteraction.h"
 
 #include <cstring>
 #include <vector>
@@ -95,23 +95,19 @@ struct CullLightTris
   triIndex_t* indexes = nullptr;
 };
 
-/*
-======================
-R_GlobalPlaneToLocal (GLMatrix.cpp:315-321)
-
-NOTE: assumes no skewing or scaling transforms
-======================
-*/
+// R_GlobalPlaneToLocal as the copied range calls it: the facade's transcription
+// (engineGlobalPlaneToLocal, GLMatrix.cpp:315-321; no skew or scale assumed, as there),
+// not a second one
 void R_GlobalPlaneToLocal(const float modelMatrix[16], const idPlane& in, idPlane& out)
 {
-  out[0] = in[0] * modelMatrix[0 * 4 + 0] + in[1] * modelMatrix[0 * 4 + 1]
-           + in[2] * modelMatrix[0 * 4 + 2];
-  out[1] = in[0] * modelMatrix[1 * 4 + 0] + in[1] * modelMatrix[1 * 4 + 1]
-           + in[2] * modelMatrix[1 * 4 + 2];
-  out[2] = in[0] * modelMatrix[2 * 4 + 0] + in[1] * modelMatrix[2 * 4 + 1]
-           + in[2] * modelMatrix[2 * 4 + 2];
-  out[3] = in[0] * modelMatrix[3 * 4 + 0] + in[1] * modelMatrix[3 * 4 + 1]
-           + in[2] * modelMatrix[3 * 4 + 2] + in[3];
+  auto matrix = EngineGlMatrix{};
+  std::memcpy(matrix.data(), modelMatrix, sizeof(float) * matrix.size());
+  const auto local =
+    engineGlobalPlaneToLocal(matrix, EnginePlane{in[0], in[1], in[2], in[3]});
+  out[0] = local.a;
+  out[1] = local.b;
+  out[2] = local.c;
+  out[3] = local.d;
 }
 
 std::vector<triIndex_t> interactionLightTris(
