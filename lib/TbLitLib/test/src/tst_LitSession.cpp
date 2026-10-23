@@ -120,7 +120,7 @@ TEST_CASE("LitSession")
   }
 }
 
-TEST_CASE("FrameConvergence: what keeps a frame from being settled (D77 DX.4 U2.11)")
+TEST_CASE("FrameConvergence: what keeps a frame from being settled (D77 DX.2 DX.4 U2.11)")
 {
   CHECK(FrameConvergence{}.settled());
   CHECK_FALSE(FrameConvergence{}.retriggers());
@@ -136,7 +136,8 @@ TEST_CASE("FrameConvergence: what keeps a frame from being settled (D77 DX.4 U2.
          {&FrameConvergence::entityDefsPending, false},
          {&FrameConvergence::lightsProvisional, false},
          {&FrameConvergence::geometryInFlight, false},
-         {&FrameConvergence::drawsOverflowed, false}})
+         {&FrameConvergence::drawsOverflowed, false},
+         {&FrameConvergence::lightTrianglesPending, false}})
   {
     auto convergence = FrameConvergence{};
     convergence.*term = true;

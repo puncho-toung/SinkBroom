@@ -38,6 +38,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -272,6 +273,28 @@ EngineVec2 previewSt(
   return {procReadBack(stored[0]), procReadBack(stored[1])};
 }
 
+// U3.8: what the patch vertices' normal bytes may differ by where the two smoothings
+// differ (K9), measured on the fixture: 18 vertices at the same place, 15 byte-equal
+constexpr auto PatchNormalByteTolerance = 10;
+
+// U3.8: the preview's triangles per surface of the fixture (in parentheses the .proc's;
+// area -1: the pieces in solid, K14)
+const auto SurfaceTriangleGolden = std::string{
+  "_area-1 textures/lp1b/floor 50 (0)\n"
+  "_area-1 textures/lp1b/glass 4 (0)\n"
+  "_area-1 textures/lp1b/grate 8 (0)\n"
+  "_area-1 textures/lp1b/wall 200 (0)\n"
+  "_area0 textures/lp1b/floor 6 (4)\n"
+  "_area0 textures/lp1b/grate 44 (10)\n"
+  "_area0 textures/lp1b/patch 8 (8)\n"
+  "_area0 textures/lp1b/wall 24 (14)\n"
+  "_area1 textures/lp1b/floor 12 (6)\n"
+  "_area1 textures/lp1b/glass 16 (10)\n"
+  "_area1 textures/lp1b/patch 18 (18)\n"
+  "_area1 textures/lp1b/wall 36 (20)\n"
+  "lp1b_rotator textures/lp1b/crate 12 (12)\n"
+  "lp1b_scaled textures/lp1b/crate 12 (12)\n"};
+
 } // namespace
 
 TEST_CASE("Geometry goldens: the fixture's engine output reads back")
@@ -453,7 +476,11 @@ TEST_CASE("Geometry goldens: (a) the chunks' own st and normals at the .proc's v
 {
   // V.9: what the chunker made, not the rule recomposed: every brush vertex of a chunk
   // that is also a vertex of the .proc model of its entity (or of the world's areas),
-  // with the same material and normal, has the .proc's st modulo integers (P.18)
+  // with the same material and normal, has the .proc's st modulo integers (P.18). U3.8:
+  // every chunk vertex at a .proc vertex of the same material, place and face (each
+  // normal byte in the same eighth) has that vertex's normal bytes exactly: none is
+  // passed over; a chunk vertex whose face dmap left out there (in contact with another
+  // brush, merged away) is counted apart
   const auto& f = fixture();
   const auto input = fixtureInput(f);
   const auto output = buildChunks(input);
@@ -489,6 +516,7 @@ TEST_CASE("Geometry goldens: (a) the chunks' own st and normals at the .proc's v
 
   auto worldChecked = 0;
   auto entityChecked = 0;
+  auto faceAbsent = 0;
   for (const auto& chunk : output.chunks)
   {
     if (chunk.key.material == "textures/lp1b/patch")
@@ -511,28 +539,51 @@ TEST_CASE("Geometry goldens: (a) the chunks' own st and normals at the .proc's v
       // two coplanar faces of one material may meet there with different alignments:
       // the chunk's st agree with one of the .proc's vertices there
       const auto st = engineTexCoord(vert);
+      auto atPosition = 0;
       auto matches = 0;
       auto congruent = false;
       for (const auto& p : found->second)
       {
-        if (p.xyz == vert.xyz && p.normal == vert.normal)
+        const auto sameFace = vert.normal[0] / 32 == p.normal[0] / 32
+                              && vert.normal[1] / 32 == p.normal[1] / 32
+                              && vert.normal[2] / 32 == p.normal[2] / 32;
+        if (p.xyz != vert.xyz || !sameFace)
         {
-          ++matches;
+          continue;
+        }
+        ++atPosition;
+        // a brush entity's normals are compared with the .bproc in (e), the model as the
+        // engine holds it: there the fixture's -x, -y and -z faces carry 0 128 128 (and
+        // its likes), not what the .proc's text reads back as here
+        if (p.normal == vert.normal || !world)
+        {
+          matches += p.normal == vert.normal ? 1 : 0;
           const auto ds = st[0] - p.st[0];
           const auto dt = st[1] - p.st[1];
           congruent = congruent || (ds == std::round(ds) && dt == std::round(dt));
         }
       }
-      if (matches == 0)
+      if (atPosition == 0)
       {
+        ++faceAbsent;
         continue;
       }
       CAPTURE(
-        chunk.key.material, owner, vert.xyz[0], vert.xyz[1], vert.xyz[2], st[0], st[1]);
+        chunk.key.material,
+        owner,
+        vert.xyz[0],
+        vert.xyz[1],
+        vert.xyz[2],
+        st[0],
+        st[1],
+        bytes(vert.normal));
+      CHECK((matches > 0 || !world));
       CHECK(congruent);
       (world ? worldChecked : entityChecked) += 1;
     }
   }
+  std::cout << "goldens (a): world vertices " << worldChecked << ", brush entities' "
+            << entityChecked << "; where dmap left the face out " << faceAbsent << "\n";
   CHECK(worldChecked > 50);
   CHECK(entityChecked > 10);
 }
@@ -953,32 +1004,43 @@ TEST_CASE("Geometry goldens: (e) the chunks' normal and tangent bytes against th
   // LP2.3 (found by the parity rows): the engine's vertices of an axial brush face carry
   // the normal dmap wrote as text and ParseModel set again (a face facing -x, -y or -z:
   // 129 129 0, not 128 128 1); the preview's chunk vertices at the same place, with the
-  // same normal, carry the same normal and tangent bytes. Patches are K9's (dmap
-  // smooths their normals over its own triangles)
+  // same normal, carry the same normal and tangent bytes. U3.8: the world's areas and the
+  // brush entities' models alike (each model's chunks, in entity-local coordinates); the
+  // patches' normals go through the same read-back, and where dmap's smoothing over its
+  // own triangles and the preview's over the editor's agree they are byte-equal: K9 is
+  // the smoothing only
   const auto& f = fixture();
   const auto input = fixtureInput(f);
   const auto output = buildChunks(input);
   static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  auto ids = std::map<std::string, PreviewId>{};
+  for (const auto& [id, entity] : input.entities)
+  {
+    ids[std::string{spawnString(entity->keys, "name")}] = id;
+  }
   auto compared = 0;
+  auto entityCompared = 0;
+  auto patchAt = 0;
+  auto patchEqual = 0;
+  auto patchWorst = 0;
   for (const auto& model : f.bproc.models)
   {
-    if (model.name.rfind("_area", 0) != 0)
+    const auto world = model.name.rfind("_area", 0) == 0;
+    const auto entity = world                      ? input.worldspawn->id
+                        : ids.contains(model.name) ? ids.at(model.name)
+                                                   : NoPreviewId;
+    if (entity == NoPreviewId)
     {
       continue;
     }
     for (const auto& surface : model.surfaces)
     {
-      if (surface.material == "textures/lp1b/patch")
-      {
-        continue;
-      }
+      const auto patch = surface.material == "textures/lp1b/patch";
       for (const auto& engineVert : surface.verts)
       {
         for (const auto& chunk : output.chunks)
         {
-          if (
-            chunk.key.entity != input.worldspawn->id
-            || chunk.key.material != surface.material)
+          if (chunk.key.entity != entity || chunk.key.material != surface.material)
           {
             continue;
           }
@@ -991,23 +1053,87 @@ TEST_CASE("Geometry goldens: (e) the chunks' normal and tangent bytes against th
             const auto sameFace = vert.normal[0] / 32 == engineVert.normal[0] / 32
                                   && vert.normal[1] / 32 == engineVert.normal[1] / 32
                                   && vert.normal[2] / 32 == engineVert.normal[2] / 32;
-            if (samePlace && sameFace)
+            if (!samePlace || !sameFace)
             {
-              CAPTURE(
-                surface.material,
-                engineVert.xyz[0],
-                engineVert.xyz[1],
-                engineVert.xyz[2]);
-              CHECK(bytes(vert.normal) == bytes(engineVert.normal));
-              CHECK(bytes(vert.tangent) == bytes(engineVert.tangent));
-              ++compared;
+              continue;
             }
+            CAPTURE(
+              model.name,
+              surface.material,
+              engineVert.xyz[0],
+              engineVert.xyz[1],
+              engineVert.xyz[2],
+              bytes(vert.normal),
+              bytes(engineVert.normal));
+            if (patch)
+            {
+              // the smoothing of the two tessellations (K9): the bytes counted, the
+              // read-back's fourth byte and the largest difference bounded
+              ++patchAt;
+              patchEqual += vert.normal == engineVert.normal ? 1 : 0;
+              for (std::size_t k = 0; k < 3; ++k)
+              {
+                patchWorst = std::max(
+                  patchWorst, std::abs(int(vert.normal[k]) - int(engineVert.normal[k])));
+              }
+              CHECK(vert.normal[3] == engineVert.normal[3]);
+              continue;
+            }
+            CHECK(bytes(vert.normal) == bytes(engineVert.normal));
+            CHECK(bytes(vert.tangent) == bytes(engineVert.tangent));
+            (world ? compared : entityCompared) += 1;
           }
         }
       }
     }
   }
+  std::cout << "goldens (e): world vertices " << compared << ", brush entities' "
+            << entityCompared << "; patch vertices " << patchAt << ", byte-equal "
+            << patchEqual << ", the largest byte difference " << patchWorst << "\n";
   CHECK(compared > 100);
+  CHECK(entityCompared > 10);
+  CHECK(patchAt > 0);
+  CHECK(patchWorst <= PatchNormalByteTolerance);
+}
+
+TEST_CASE("Geometry goldens: the triangles of each surface (U3.8)")
+{
+  // the preview's triangle count per (area or brush entity, material), pinned; beside it
+  // the .proc's, which dmap's optimizer and its T-junction and light carving make other
+  // than the editor's two triangles a quad (their order and diagonals are K28's)
+  const auto& f = fixture();
+  const auto input = fixtureInput(f);
+  const auto output = buildChunks(input);
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  auto names = std::map<PreviewId, std::string>{};
+  for (const auto& [id, entity] : input.entities)
+  {
+    names[id] = std::string{spawnString(entity->keys, "name")};
+  }
+  auto preview = std::map<std::pair<std::string, std::string>, std::size_t>{};
+  for (const auto& chunk : output.chunks)
+  {
+    const auto owner = chunk.key.entity == input.worldspawn->id
+                         ? "_area" + std::to_string(chunk.key.area)
+                         : names.at(chunk.key.entity);
+    preview[{owner, chunk.key.material}] += chunk.indexes.size() / 3;
+  }
+  auto engine = std::map<std::pair<std::string, std::string>, std::size_t>{};
+  for (const auto& model : f.proc->models)
+  {
+    for (const auto& surface : model.surfaces)
+    {
+      engine[{model.name, surface.material}] += surface.indexes.size() / 3;
+    }
+  }
+  auto text = std::string{};
+  for (const auto& [key, count] : preview)
+  {
+    text += key.first + " " + key.second + " " + std::to_string(count) + " ("
+            + std::to_string(engine.contains(key) ? engine.at(key) : 0) + ")\n";
+  }
+  std::cout << "the preview's triangles per surface (the .proc's):\n" << text;
+  CHECK(text == SurfaceTriangleGolden);
 }
 
 } // namespace tb::lit
