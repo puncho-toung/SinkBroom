@@ -15626,6 +15626,51 @@
           ],
           "anchor": "WriteUTriangles: each vertex's xyz, st and GetNormal() as text",
           "sha256": "e42d0575f1986907d2d9571510f6a1708e04a741d919a10409906e71d1d4bfe8"
+        },
+        {
+          "file": "neo/shaders/builtin/lighting/interaction.vs.hlsl",
+          "lines": [
+            193,
+            200
+          ],
+          "anchor": "the normalised vector to the viewer per vertex, in tangent space (texcoord6)",
+          "sha256": "70253869d6c4bdaa261c5f6db50be774affe605fb9eac8c018bfcfc2e890e6e2"
+        },
+        {
+          "file": "neo/shaders/builtin/lighting/interaction.ps.hlsl",
+          "lines": [
+            98,
+            98
+          ],
+          "anchor": "viewVector: the interpolated texcoord6 normalised again",
+          "sha256": "d1044a698546e773ee92dd45077b6d76b75d092aef339dc5d0dcdf7249c21430"
+        },
+        {
+          "file": "neo/shaders/builtin/lighting/interaction.ps.hlsl",
+          "lines": [
+            112,
+            121
+          ],
+          "anchor": "the view-dependent normal contrast before the Lambert term",
+          "sha256": "62bab0d4e884eda27a3d8375eba80818d59facbc3beea350aff5ac088ce10a66"
+        },
+        {
+          "file": "neo/shaders/builtin/lighting/interaction.ps.hlsl",
+          "lines": [
+            138,
+            139
+          ],
+          "anchor": "the half vector",
+          "sha256": "371687ad5605a46a497d3afc6fb585948d291953aae3be2e216779b43745d8c8"
+        },
+        {
+          "file": "neo/shaders/builtin/lighting/interaction.ps.hlsl",
+          "lines": [
+            181,
+            183
+          ],
+          "anchor": "the BRDF's view terms",
+          "sha256": "6e75c468e73406495dc883eb6f72b242537bd2b4dc6a55cb8a52ff3041c05cf6"
         }
       ],
       "sinkbroom": [
@@ -15635,10 +15680,10 @@
         },
         {
           "file": "TOOLS/lit-preview/parity.py",
-          "symbol": "room_split, SPLIT_AHEAD"
+          "symbol": "ROWS, room_split, SPLIT_AHEAD"
         }
       ],
-      "note": "K28 (31-LP2-FIXES.md, replacing DX.1; 30-LP2-REVIEW-3.md U3.1): dmap runs OptimizeEntity on every area by default, which throws away each coplanar group's side triangles and builds them again (BuildOptTriangles, RegenerateTriangles) from candidate edges sorted by an unstable qsort (equal lengths tie, as a rectangle's two diagonals do), so the .proc's triangles are not fans of the side windings (the parity .proc: 96 of 110 pairs of the (a b c)(d c b) shape) and no mirror of CreateBrushWindings reproduces their vertex order; copying the optimizer would import the CRT's qsort tie order (glibc's differs). The preview keeps its own triangulation (K9's family). The vertex order of the preview's triangles is not dmap's optimizer's; pixels of triangles that cross the camera's near plane can differ from the engine by up to about 12 LDR levels (measured: LP2.3's R05, 2,568 pixels up to 12 at the left edge, and R03's 402 masked pixels up to 9). The parity rows cut their rooms' floor, ceiling and side walls 100 units ahead of the camera (parity.py room_split) so that no triangle in view crosses the near plane, in the engine's triangulation or the preview's; R05b keeps LP2.3's R05 room and camera as K28's reported envelope. LP7: adopt the .proc's triangles for the faces unchanged since the bake, where the dress geometry is drawn from the .proc anyway Measured on the LP2 fix round's engine run (2026-10-23): R05b reproduces LP2.3's R05 envelope exactly, 2,568 unmasked pixels with |d| from 2 to 12 (9,950 at 1), masked max 7 with 70 masked pixels beyond 1; the split rows show no near-plane effect. Also seen there (R13, reported, not gated): dmap snaps brush vertices to its 1/32 grid and removes the faces that lie in slabs thinner than 0.1 between near-coplanar planes (a wall behind panels 0.05 in front of it), and an entity inside such a slab is linked to no area; the preview builds the editor's brushes as they are, so faces closer than 0.1 to another brush's plane can differ in the same way."
+      "note": "K28 (31-LP2-FIXES.md, replacing DX.1; restated in round 2 from 32-LP2-VERIFY.md V2.1): dmap runs OptimizeEntity on every area by default, which throws away each coplanar group's side triangles and builds them again (BuildOptTriangles, RegenerateTriangles) from candidate edges sorted by an unstable qsort (equal lengths tie, as a rectangle's two diagonals do), so the .proc's triangles are not fans of the side windings (the parity .proc: 96 of 110 pairs of the (a b c)(d c b) shape); copying the optimizer would import the CRT's qsort tie order. The preview keeps its own triangulation (K9's family). The mechanism by which this changes pixels: the interaction vertex shader writes the normalised vector to the viewer per vertex in tangent space (interaction.vs.hlsl:193-200), the rasteriser interpolates it over the triangle, and the pixel shader normalises it again (interaction.ps.hlsl:98) and reads it in the view-dependent normal contrast before the Lambert term (:112-121) and in the half vector and the BRDF (:138-139, :181-183). A per-vertex normalised vector interpolated over a triangle depends on the triangle: the same face cut along the other diagonal gives another per-pixel view vector (4-17 degrees apart on large triangles near the camera, measured from the .proc's triangles). So bump-mapped and specular pixels differ wherever a triangle is large against its distance from the camera: |d| <= 4 on R05 (941 pixels beyond 1), <= 2 on R18 (28), masked <= 17 at texel edges on R08, R09 and R12's ceilings, |d| = 1 on 0.01-3 % of every bump-mapped row, and up to 12 where a triangle crosses the near plane (R05b: 2,568 unmasked pixels from 2 to 12, 9,950 at 1, masked max 7; the same on the LP2.3 run and the fix round's). Surfaces whose shading reads no view vector (a flat normal and no specular stage: R14, R19-R21) are exact. Near-plane clipping only amplifies the effect (a vertex beside or behind the camera carries a view vector almost perpendicular to the view); the parity rows' room split 100 units ahead of the camera (parity.py room_split) stays, harmless. The parity method: R05 and R18 are K28 rows with recorded thresholds (max, mean, p99, the count beyond 1), R14 and R19-R21 exact rows, the other axial rows +-1 (K28's empirical bound there), R05b reported. LP7 (a follow-up, not done): draw the .proc's triangles in the parity path, test-only first, then for the faces unchanged since the bake. Also seen on the fix round's run: dmap snaps brush vertices to its 1/32 grid and removes the faces that lie in slabs thinner than 0.1 between near-coplanar planes (a wall behind panels 0.05 in front of it), and an entity inside such a slab is linked to no area; the preview builds the editor's brushes as they are, so faces closer than 0.1 to another brush's parallel plane can differ in the same way (R13 is built without such faces since round 2)."
     }
   ],
   "retired": [

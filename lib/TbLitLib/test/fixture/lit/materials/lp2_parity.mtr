@@ -110,7 +110,16 @@ textures/lp2/near
 	bumpmap	textures/lp2/wall_local.tga
 }
 
-// R14: a white wall without a bump map (the implicit _flat)
+// R19, R20, R21 (V2.1): legacy diffuse on an explicit flat normal and no specular stage,
+// so the shading reads no view vector and the triangulation cannot change a pixel (K28)
+textures/lp2/flatwall
+{
+	qer_editorimage	textures/lp2/wall.tga
+	diffusemap	textures/lp2/wall.tga
+	bumpmap	_flat
+}
+
+// R13, R14: a white surface without a bump map (the implicit _flat)
 textures/lp2/white
 {
 	qer_editorimage	textures/lp2/white.tga
@@ -243,6 +252,25 @@ lights/lp2/twostage
 		red	0.25
 		green	0.5
 		blue	0.75
+		zeroClamp
+	}
+}
+
+// C17 (V2.8): the lights-off map's copy of lights/lp2/twostage: its constant stage at zero,
+// the colored stage dark through _color 0 0 0
+lights/lp2/twostage_dark
+{
+	lightFalloffImage	lights/lp2/falloff.tga
+	{
+		map	lights/lp2/round.tga
+		colored
+		zeroClamp
+	}
+	{
+		map	lights/lp2/square.tga
+		red	0
+		green	0
+		blue	0
 		zeroClamp
 	}
 }
