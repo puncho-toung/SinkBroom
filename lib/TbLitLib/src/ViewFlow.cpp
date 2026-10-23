@@ -58,7 +58,7 @@ static_assert(EngineFrame.useAreasConnectedForShadowCulling == 2);
 constexpr auto ViewSide = std::numeric_limits<std::size_t>::max();
 
 /**
- * portalStack_t (RenderWorld_portals.cpp:40-47): the portal side the stack went through
+ * portalStack_t (RenderWorld_portals.cpp:39-47): the portal side the stack went through
  * (portal index · 2 + side; ViewSide for the view's own), its planes, whose positive side
  * is outside the visible volume, and its rect. Held in a vector, so on the heap.
  */
@@ -569,7 +569,7 @@ bool lightReachesSurface(
   // outside the world, but otherwise areas not connected to the light center (behind a
   // closed door) are ignored
   const auto reaches = [&](const int area) {
-    if (std::find(light.areas.begin(), light.areas.end(), area) == light.areas.end())
+    if (std::ranges::find(light.areas, area) == light.areas.end())
     {
       return false;
     }
@@ -586,7 +586,7 @@ bool lightReachesSurface(
     return surface.area >= 0 && reaches(surface.area);
   }
   // the entity's references, in its chain order
-  return std::any_of(surface.refs.begin(), surface.refs.end(), reaches);
+  return std::ranges::any_of(surface.refs, reaches);
 }
 
 std::optional<int> surfaceGridArea(

@@ -106,9 +106,8 @@ ViewFlowInputs inputsOf(const LitView& view, const ProcTree& tree, const AreaDat
 
 const ViewFlowChain* chainInto(const ViewFlowResult& result, const int area)
 {
-  const auto it = std::find_if(
-    result.chainsForTesting.begin(),
-    result.chainsForTesting.end(),
+  const auto it = std::ranges::find_if(
+    result.chainsForTesting,
     [&](const ViewFlowChain& chain) { return chain.area == area; });
   return it != result.chainsForTesting.end() ? &*it : nullptr;
 }
@@ -331,10 +330,7 @@ TEST_CASE("ViewFlow: the flow's rules on synthetic trees (C32, P4.23)")
     // planes
     const auto result = flowView(inputsOf(viewFrom({2, 0, 32}, {1, 0, 0}), tree, areas));
     CHECK(result.viewArea == 0);
-    CHECK(
-      std::all_of(result.areaFlowed.begin(), result.areaFlowed.end(), [](const bool b) {
-        return b;
-      }));
+    CHECK(std::ranges::all_of(result.areaFlowed, [](const bool b) { return b; }));
     CHECK(result.chains == std::size_t(Areas));
     CHECK(result.portalsVisited == std::size_t(Areas - 1));
     // the depth bound: each portal side enters a stack once
@@ -578,9 +574,8 @@ TEST_CASE("ViewFlow: the grid area of a model surface (C36, P4.11)")
   const auto& f = fixture();
   const auto identity = engineIdentityMatrix();
   const auto valid = [](const std::vector<int>& areas) {
-    return [areas](const int area) {
-      return std::find(areas.begin(), areas.end(), area) != areas.end();
-    };
+    return
+      [areas](const int area) { return std::ranges::find(areas, area) != areas.end(); };
   };
   // a door's material bounds astride the doorway's plane, its centre (16 0 48) in area 0
   const auto door = EngineBounds{EngineVec3{-8, -16, 16}, EngineVec3{40, 16, 80}};

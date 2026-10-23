@@ -1601,7 +1601,7 @@ TEST_CASE("SceneGeometry, the entities' area references (LP4.0, C31, D80, P4.9, 
       scene.areaData()->commonAreas,
       d.inverseBaseModelProject,
       engineUnitCube());
-    std::reverse(pushed.begin(), pushed.end());
+    std::ranges::reverse(pushed);
     CHECK(d.areas == pushed);
     // P4.9: the door's chunks keep the pivot's area as a key only
     for (const auto& [key, chunk] : scene.chunks())

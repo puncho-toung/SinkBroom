@@ -202,7 +202,7 @@ std::vector<std::vector<AreaPortal>> areaPortalSides(const ProcTree& tree)
   // p->next = portalAreas[a].portals: each side was prepended
   for (auto& list : lists)
   {
-    std::reverse(list.begin(), list.end());
+    std::ranges::reverse(list);
   }
   return lists;
 }
