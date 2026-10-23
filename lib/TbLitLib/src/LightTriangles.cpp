@@ -175,21 +175,22 @@ void LightTriangleCache::endBuild(CpuPool* pool)
   {
     return;
   }
-  auto requests = std::exchange(m_requests, {});
+  // the captured source with a trailing underscore (U1.1, upstream's pattern)
+  auto requests_ = std::exchange(m_requests, {});
   if (!pool)
   {
-    store(answer(requests));
+    store(answer(requests_));
     return;
   }
   m_jobAsked.clear();
-  for (const auto& request : requests)
+  for (const auto& request : requests_)
   {
     m_jobAsked.emplace_back(request.key, request.stamp);
   }
   // C20, C24: the job holds copies only, never the cache or the session
   m_job = pool->run(
-    [requests =
-       std::move(requests)](const CpuJobContext& context) -> Result<std::vector<Answer>> {
+    [requests = std::move(requests_)](
+      const CpuJobContext& context) -> Result<std::vector<Answer>> {
       if (context.stale())
       {
         return Error{"The light triangles' job was abandoned"};

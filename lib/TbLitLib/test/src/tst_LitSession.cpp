@@ -6297,8 +6297,10 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           written,
           frameRanges.size() - 1));
 
-      // the lights-off control: black (every channel at most 1)
-      if (control)
+      // the lights-off control: black (every channel at most 1), except a control whose
+      // light keeps a stage that does not read _color (rows.json's control_lit: R17's
+      // constant-colour stage), which parity.py compares with the engine's as its row
+      if (control && !row.flag("control_lit"))
       {
         auto lightPixels = std::size_t{0};
         for (std::size_t i = 0; i < image->rgba.size(); i += 4)
