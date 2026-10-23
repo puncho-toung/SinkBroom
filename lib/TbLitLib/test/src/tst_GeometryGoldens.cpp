@@ -1095,9 +1095,9 @@ TEST_CASE("Geometry goldens: (e) the chunks' normal and tangent bytes against th
             << entityCompared << "; patch vertices " << patchAt << ", byte-equal "
             << patchEqual << ", the largest byte difference " << patchWorst << "\n";
   // V2.3: the counts pinned, so that no vertex leaves the comparison unseen; the patch
-  // vertices' last bits differ between the Debug and Release builds (18 of them at a .proc
-  // vertex of their face in Debug, 15 byte-equal; 20 and 17 in Release), so theirs are
-  // bounded below
+  // vertices' last bits differ between the Debug and Release builds (18 of them at a
+  // .proc vertex of their face in Debug, 15 byte-equal; 20 and 17 in Release), so theirs
+  // are bounded below
   CHECK(compared == 178);
   CHECK(entityCompared == 48);
   CHECK(patchAt >= 18);
