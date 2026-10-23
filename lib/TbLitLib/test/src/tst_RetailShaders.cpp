@@ -21,7 +21,8 @@
 // folder that TB_LIT_GAME_PATH names (read-only), and is skipped without it. Every blob
 // LP2 draws with is found, its permutation keys are the ones the engine's shader build
 // wrote (SC249), and every permutation the preview may load, pushed or not, reflects
-// equal to the mirrored tables (D9, C26).
+// equal to the mirrored tables (D9, C26). LP4.2a (C35) adds the ambient pass's four
+// programs (4 and 6 the probe path, 8 and 10 the light grid's) and set 9.
 
 #include "lit/EngineTables.h"
 #include "lit/ShaderBlobs.h"
@@ -122,6 +123,11 @@ TEST_CASE("Retail shaders: LP2's blobs, keys and reflection", "[.][retail]")
     EngineBuiltinTonemapping,
     EngineBuiltinHistogram,
     EngineBuiltinExposure,
+    // LP4.2a (C35): the ambient pass's (shaders.cfg:44-47)
+    EngineBuiltinAmbientLightingIbl,
+    EngineBuiltinAmbientLightingIblPbr,
+    EngineBuiltinAmbientLightgridIbl,
+    EngineBuiltinAmbientLightgridIblPbr,
   };
 
   // SC249: the keys each blob holds
@@ -153,6 +159,19 @@ TEST_CASE("Retail shaders: LP2's blobs, keys and reflection", "[.][retail]")
      "HISTOGRAM_BINS=256 SOURCE_ARRAY=0 USE_PUSH_CONSTANTS=0"},
     {"builtin/post/exposure.cs", 2, "HISTOGRAM_BINS=256 USE_PUSH_CONSTANTS=0"},
     {"builtin/blit.ps", 2, "TEXTURE_ARRAY=0"},
+    // LP4.2a: shaders.cfg:44-47, three defines of two values each
+    {"builtin/lighting/ambient_lighting_IBL.vs",
+     8,
+     "USE_GPU_SKINNING=0 USE_PBR=0 USE_PUSH_CONSTANTS=0"},
+    {"builtin/lighting/ambient_lighting_IBL.ps",
+     8,
+     "USE_GPU_SKINNING=0 USE_PBR=0 USE_PUSH_CONSTANTS=0"},
+    {"builtin/lighting/ambient_lightgrid_IBL.vs",
+     8,
+     "USE_GPU_SKINNING=0 USE_PBR=0 USE_PUSH_CONSTANTS=0"},
+    {"builtin/lighting/ambient_lightgrid_IBL.ps",
+     8,
+     "USE_GPU_SKINNING=0 USE_PBR=0 USE_PUSH_CONSTANTS=0"},
   };
   for (const auto& keys : expectedKeys)
   {
@@ -269,8 +288,36 @@ TEST_CASE("Retail shaders: LP2's blobs, keys and reflection", "[.][retail]")
       continue;
     }
     CAPTURE(builtin.name, builtin.nameOutSuffix, program.second);
-    const auto expected = engineExpectedLayout(builtin, program.second);
+    auto expected = engineExpectedLayout(builtin, program.second);
     REQUIRE(expected);
+    if (
+      program.first == EngineBuiltinAmbientLightingIbl
+      || program.first == EngineBuiltinAmbientLightingIblPbr)
+    {
+      // LP4.2a (D85): the probe path's shader declares no t7
+      // (ambient_lighting_IBL.ps.hlsl :44, "no longer used"); the shared layout has it
+      // (RenderProgs.cpp:458), which the light-grid path reads. The comparison accepts a
+      // layout item a shader leaves out (compareReflection); the coverage names exactly
+      // that item and covers the rest
+      const auto withT7 = compareLayoutCoverage(stages, *expected);
+      REQUIRE(withT7);
+      CHECK(
+        *withT7
+        == "the table's set 2 binding 7 (a sampled image) is declared by no stage");
+      auto withoutT7 = expected->sets[2];
+      withoutT7.bindings.resize(0);
+      for (const auto& item : expected->sets[2].bindings)
+      {
+        if (
+          nvrhi::ResourceType(item.type) != nvrhi::ResourceType::Texture_SRV
+          || item.slot != 7u)
+        {
+          withoutT7.bindings.push_back(item);
+        }
+      }
+      REQUIRE(withoutT7.bindings.size() + 1 == expected->sets[2].bindings.size());
+      expected->sets[2] = withoutT7;
+    }
     const auto uncovered = compareLayoutCoverage(stages, *expected);
     CHECK_FALSE(uncovered);
     if (uncovered)
@@ -309,10 +356,56 @@ TEST_CASE("Retail shaders: LP2's blobs, keys and reflection", "[.][retail]")
   }
   CHECK(set10->size == 400u);
 
+  // LP4.2a (C35): set 9's 45 members by name and offset in each ambient program's
+  // constant buffer (the probe and the grid shaders, both stages), the SH array element
+  // by element, 720 bytes
+  const auto table9 = engineParmSetBlock(9);
+  REQUIRE(table9.members.size() == 45u);
+  CHECK(table9.size == 720u);
+  for (const auto program :
+       {EngineBuiltinAmbientLightingIbl,
+        EngineBuiltinAmbientLightingIblPbr,
+        EngineBuiltinAmbientLightgridIbl,
+        EngineBuiltinAmbientLightgridIblPbr})
+  {
+    const auto& ambient = *engineBuiltin(program);
+    for (const auto stage : {ShaderStage::Vertex, ShaderStage::Pixel})
+    {
+      CAPTURE(ambient.name, ambient.nameOutSuffix, shaderStageSuffix(stage));
+      const auto ambientBlob = readShaderBlob(*gamePath, ambient.name, stage);
+      REQUIRE(ambientBlob.is_success());
+      const auto ambientCode =
+        findShaderPermutation(ambientBlob.value(), engineBuiltinDefines(ambient, false));
+      REQUIRE(ambientCode.is_success());
+      const auto ambientReflection = reflectSpirv(ambientCode.value());
+      REQUIRE(ambientReflection.is_success());
+      auto set9 = std::optional<ReflectedBlock>{};
+      for (const auto& binding : ambientReflection.value().bindings)
+      {
+        if (binding.set == 0 && binding.binding == 256)
+        {
+          set9 = binding.block;
+        }
+      }
+      REQUIRE(set9);
+      REQUIRE(set9->members.size() == 45u);
+      for (std::size_t i = 0; i < 45; ++i)
+      {
+        CHECK(set9->members[i].name == table9.members[i].name);
+        CHECK(set9->members[i].offset == table9.members[i].offset);
+      }
+      CHECK(set9->size == 720u);
+      CHECK(set9->members[0] == ReflectedMember{"rpScreenCorrectionFactor", 0});
+      CHECK(set9->members[36] == ReflectedMember{"rpSHIrradiance[0]", 576});
+      CHECK(set9->members[44] == ReflectedMember{"rpSHIrradiance[8]", 704});
+    }
+  }
+
   std::cout << "reflected and compared " << checked << " permutations, " << covered
             << " programs covered\n";
-  // T0.5: the ten programs' stages, each of their permutations
-  CHECK(checked == 30);
+  // T0.5: the fourteen programs' stages, each of their permutations (LP4.2a: the four
+  // ambient programs' two stages, pushed and not)
+  CHECK(checked == 46);
 }
 
 } // namespace tb::lit

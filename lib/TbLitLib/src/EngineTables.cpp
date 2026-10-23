@@ -277,6 +277,8 @@ std::span<const EngineParmSetMember> engineParmSetMembers(const int set)
     return EngineParmSet0;
   case 4:
     return EngineParmSet4;
+  case 9:
+    return EngineParmSet9;
   case 10:
     return EngineParmSet10;
   default:
@@ -363,6 +365,7 @@ std::optional<EngineConstantBlock> engineLayoutConstantBlock(
   }
   block.name = set == 0   ? "renderParmSet0_t"
                : set == 4 ? "renderParmSet4_t"
+               : set == 9 ? "renderParmSet9_t"
                           : "renderParmSet10_t";
   return block;
 }
@@ -468,6 +471,38 @@ std::optional<std::vector<nvrhi::BindingLayoutDesc>> engineBindingLayoutDescs(
       layoutDesc(S::Pixel, {Item::Texture_SRV(3), Item::Texture_SRV(4)}),
       layoutDesc(S::Pixel, {Item::Sampler(0), Item::Sampler(1)}),
     };
+  case L::AmbientLightingIbl:
+  case L::AmbientLightingIblSkinned: {
+    // LP4.2a (C35, SC329): RenderProgs.cpp:446-483: uniforms (with the joint buffer at
+    // t11 for the skinned form, uniformsLayout's skinning item :91-98, tabled and never
+    // requested); normal, specular, base colour (defaultMaterialLayout :446-452); the
+    // BRDF LUT, the SSAO image, the irradiance image, three radiance cubes and three
+    // depth cubes (ambientIblLayout :454-468); the material and the linear clamp
+    // samplers (samplerTwoBindingLayout :470-474)
+    auto uniforms = std::vector<Item>{
+      uniformsItem(pushConstants, parmSetBytes(engineParmSetOfLayout(layout)))};
+    if (layout == L::AmbientLightingIblSkinned)
+    {
+      uniforms.push_back(Item::StructuredBuffer_SRV(11));
+    }
+    return std::vector{
+      layoutDesc(S::All, std::move(uniforms)),
+      layoutDesc(
+        S::Pixel, {Item::Texture_SRV(0), Item::Texture_SRV(1), Item::Texture_SRV(2)}),
+      layoutDesc(
+        S::Pixel,
+        {Item::Texture_SRV(3),
+         Item::Texture_SRV(4),
+         Item::Texture_SRV(7),
+         Item::Texture_SRV(8),
+         Item::Texture_SRV(9),
+         Item::Texture_SRV(10),
+         Item::Texture_SRV(12),
+         Item::Texture_SRV(13),
+         Item::Texture_SRV(14)}),
+      layoutDesc(S::Pixel, {Item::Sampler(0), Item::Sampler(1)}),
+    };
+  }
   case L::Histogram:
     // TonemapPass.cpp:119-142
     return std::vector{layoutDesc(

@@ -218,6 +218,62 @@ inline constexpr auto EngineParmSet4 = std::array<EngineParmSetMember, 16>{{
   {RenderParm::PsxDistortions, "rpPSXDistortions"},
 }};
 
+/**
+ * LP4.2a (C35, SC330): rpMaximalSet9 (RenderProgs.h:291, its layouts :293
+ * AMBIENT_LIGHTING_IBL and its skinned form) and renderParmSet9_t
+ * (renderParmSet9.inc.hlsl:33-85), 45 float4 = 720 bytes, the two lists in the same
+ * order. The struct's last member is the array float4 rpSHIrradiance[9]; its elements are
+ * named here as reflection lists them (an array member expanded, lit/ShaderReflection.h),
+ * each 16 bytes on from the one before, so that member i sits at 16 · i as in every set.
+ */
+inline constexpr auto EngineParmSet9 = std::array<EngineParmSetMember, 45>{{
+  {RenderParm::ScreenCorrectionFactor, "rpScreenCorrectionFactor"},
+  {RenderParm::WindowCoord, "rpWindowCoord"},
+  {RenderParm::DiffuseModifier, "rpDiffuseModifier"},
+  {RenderParm::SpecularModifier, "rpSpecularModifier"},
+  {RenderParm::LocalLightOrigin, "rpLocalLightOrigin"},
+  {RenderParm::LocalViewOrigin, "rpLocalViewOrigin"},
+  {RenderParm::BumpMatrixS, "rpBumpMatrixS"},
+  {RenderParm::BumpMatrixT, "rpBumpMatrixT"},
+  {RenderParm::DiffuseMatrixS, "rpDiffuseMatrixS"},
+  {RenderParm::DiffuseMatrixT, "rpDiffuseMatrixT"},
+  {RenderParm::SpecularMatrixS, "rpSpecularMatrixS"},
+  {RenderParm::SpecularMatrixT, "rpSpecularMatrixT"},
+  {RenderParm::VertexColorModulate, "rpVertexColorModulate"},
+  {RenderParm::VertexColorAdd, "rpVertexColorAdd"},
+  {RenderParm::GlobalEyePos, "rpGlobalEyePos"},
+  {RenderParm::MvpMatrixX, "rpMVPmatrixX"},
+  {RenderParm::MvpMatrixY, "rpMVPmatrixY"},
+  {RenderParm::MvpMatrixZ, "rpMVPmatrixZ"},
+  {RenderParm::MvpMatrixW, "rpMVPmatrixW"},
+  {RenderParm::ModelMatrixX, "rpModelMatrixX"},
+  {RenderParm::ModelMatrixY, "rpModelMatrixY"},
+  {RenderParm::ModelMatrixZ, "rpModelMatrixZ"},
+  {RenderParm::ModelMatrixW, "rpModelMatrixW"},
+  {RenderParm::ProjMatrixW, "rpProjectionMatrixW"},
+  {RenderParm::AmbientColor, "rpAmbientColor"},
+  {RenderParm::GlobalLightOrigin, "rpGlobalLightOrigin"},
+  {RenderParm::JitterTexScale, "rpJitterTexScale"},
+  {RenderParm::JitterTexOffset, "rpJitterTexOffset"},
+  {RenderParm::PsxDistortions, "rpPSXDistortions"},
+  {RenderParm::CascadeDistances, "rpCascadeDistances"},
+  {RenderParm::WobbleSkyX, "rpWobbleSkyX"},
+  {RenderParm::WobbleSkyY, "rpWobbleSkyY"},
+  {RenderParm::WobbleSkyZ, "rpWobbleSkyZ"},
+  {RenderParm::TexGen0S, "rpTexGen0S"},
+  {RenderParm::TexGen0T, "rpTexGen0T"},
+  {RenderParm::TexGen0Q, "rpTexGen0Q"},
+  {RenderParm::ShIrradiance0, "rpSHIrradiance[0]"},
+  {RenderParm::ShIrradiance1, "rpSHIrradiance[1]"},
+  {RenderParm::ShIrradiance2, "rpSHIrradiance[2]"},
+  {RenderParm::ShIrradiance3, "rpSHIrradiance[3]"},
+  {RenderParm::ShIrradiance4, "rpSHIrradiance[4]"},
+  {RenderParm::ShIrradiance5, "rpSHIrradiance[5]"},
+  {RenderParm::ShIrradiance6, "rpSHIrradiance[6]"},
+  {RenderParm::ShIrradiance7, "rpSHIrradiance[7]"},
+  {RenderParm::ShIrradiance8, "rpSHIrradiance[8]"},
+}};
+
 // rpMaximalSet10 and renderParmSet10_t (SC232): DRAW_INTERACTION, 25 float4 = 400 bytes
 inline constexpr auto EngineParmSet10 = std::array<EngineParmSetMember, 25>{{
   {RenderParm::DiffuseModifier, "rpDiffuseModifier"},
@@ -255,7 +311,7 @@ inline constexpr auto EngineParmSetSizes = std::array<int, EngineParmSetCount>{
 // for renderParmNullSet
 int engineParmSetOfLayout(EngineBindingLayout layout);
 
-// the members of a mirrored set (0, 4, 10); empty for the others
+// the members of a mirrored set (0, 4, 9, 10); empty for the others
 std::span<const EngineParmSetMember> engineParmSetMembers(int set);
 
 // ----- the constant blocks of the layouts LP2 uses (C26, P2.19) -----
@@ -336,7 +392,9 @@ const EngineBuiltin* engineBuiltin(int index);
 /**
  * The binding layouts of a builtin's layout type, one per descriptor set in set order,
  * as the engine creates them: bindingLayouts[type] (RenderProgs.cpp:79-108, 415-750) for
- * CONSTANT_BUFFER_ONLY, TEXTURE and DRAW_INTERACTION; TonemapPass' one layout
+ * CONSTANT_BUFFER_ONLY, TEXTURE, DRAW_INTERACTION and (LP4.2a, C35) AMBIENT_LIGHTING_IBL
+ * with its skinned form (four sets: the uniforms, t0-t2, t3 t4 t7 t8 t9 t10 t12 t13 t14,
+ * s0 s1; the skinned uniforms set adds the joint buffer at t11); TonemapPass' one layout
  * (TonemapPass.cpp:119-227) for HISTOGRAM, EXPOSURE and TONEMAP; CommonPasses' blit
  * layout (CommonPasses.cpp:166-177) for BLIT, which the engine draws its blits with (the
  * builtin BLIT layout, one volatile constant buffer, is never used). The uniforms item is
@@ -498,6 +556,17 @@ struct EngineFrameDefaults
   // r_useAreasConnectedForShadowCulling "2" (tr_frontend_addlights.cpp:48): a light
   // reaches only the referenced areas connected to its own
   int useAreasConnectedForShadowCulling = 2;
+  // LP4.2a (C34, D84): the ambient pass's
+  // r_forceAmbient "0.5", ARCHIVE, 0..1 (RenderSystem_init.cpp:288): AMBIENT_COLOR's rgb,
+  // which scales the probe path's diffuse alone (Q25: mirrored until C11's overrides)
+  float forceAmbient = 0.5f;
+  // r_useLightGrid "1" (:299): a surface with a grid area takes the light-grid path
+  // (LP4.3; LP4.2a draws the probe path only)
+  bool useLightGrid = true;
+  // r_useSSAO: the engine's default is "1", ARCHIVE (:290), which binds _ao0 at t4; the
+  // preview has no SSAO pass before LP6 and binds _white at t4 as r_useSSAO 0 does (K31),
+  // so this is the preview's behaviour, not the engine's default
+  bool useSsao = false;
 };
 inline constexpr auto EngineFrame = EngineFrameDefaults{};
 

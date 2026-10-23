@@ -71,7 +71,9 @@ struct ReflectedMember
 };
 
 // a constant block; one whose only member is a struct (cbuffer pc { renderParmSet10_t
-// pc; }) is given as that struct, as a push-constant ConstantBuffer<T> is
+// pc; }) is given as that struct, as a push-constant ConstantBuffer<T> is; a member that
+// is a one-dimensional array is given element by element, "name[k]" at its offset plus k
+// times the array's stride (LP4.2a: set 9's rpSHIrradiance[9])
 struct ReflectedBlock
 {
   std::string name;

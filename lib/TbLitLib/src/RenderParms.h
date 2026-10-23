@@ -57,8 +57,11 @@ inline constexpr std::size_t MaxParmSetFloat4s = 68;
  *   order, 16 bytes each, as CommitConstantBuffer writes it and CommitPushConstants
  *   pushes it.
  *
- * Only the sets the preview mirrors (0, 4 and 10, lit/EngineTables.h) are selectable;
- * their layouts are the ones LP2 draws with. Plain data; the render thread.
+ * Only the sets the preview mirrors (0, 4, 9 and 10, lit/EngineTables.h) are
+ * selectable; their layouts are the ones LP2 draws with and (LP4.2a, C35) the ambient
+ * pass's AMBIENT_LIGHTING_IBL, whose set 9 select writes as SelectUniforms'
+ * renderParmSet9 case does (RenderProgs_NVRHI.cpp:471-478): rpMaximalSet9's 45 members in
+ * order. Plain data; the render thread.
  */
 class RenderParms
 {
@@ -90,7 +93,7 @@ public:
 };
 
 // the layouts whose renderparm set holds parm (renderParmLayoutTypes), as bits of
-// EngineBindingLayout; only the mirrored sets 0, 4 and 10 are known. Pure.
+// EngineBindingLayout; only the mirrored sets 0, 4, 9 and 10 are known. Pure.
 std::uint64_t engineLayoutsOfParm(RenderParm parm);
 
 } // namespace tb::lit

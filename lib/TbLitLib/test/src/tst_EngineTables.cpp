@@ -178,14 +178,17 @@ TEST_CASE("EngineTables")
     CHECK(engineParmSetMembers(0).size() == std::size_t(EngineParmSetSizes[0]));
     CHECK(engineParmSetMembers(4).size() == std::size_t(EngineParmSetSizes[4]));
     CHECK(engineParmSetMembers(10).size() == std::size_t(EngineParmSetSizes[10]));
+    CHECK(engineParmSetMembers(9).size() == std::size_t(EngineParmSetSizes[9]));
     CHECK(engineParmSetMembers(3).empty());
 
     CHECK(engineParmSetBlock(0).size == 128u);
     CHECK(engineParmSetBlock(4).size == 256u);
     CHECK(engineParmSetBlock(10).size == 400u);
     CHECK(engineParmSetBlock(11).size == 68u * 16u);
+    // LP4.2a (C35): 45 float4 = 720 bytes
+    CHECK(engineParmSetBlock(9).size == 720u);
 
-    for (const auto set : {0, 4, 10})
+    for (const auto set : {0, 4, 9, 10})
     {
       CAPTURE(set);
       const auto block = engineParmSetBlock(set);
@@ -214,7 +217,8 @@ TEST_CASE("EngineTables")
       auto result = std::string{};
       for (const auto c : text)
       {
-        if (c != '_')
+        // set 9's array elements, rpSHIrradiance[k], name RENDERPARM_SH_IRRADIANCE_k
+        if (c != '_' && c != '[' && c != ']')
         {
           result += char(std::tolower(static_cast<unsigned char>(c)));
         }
@@ -278,6 +282,54 @@ TEST_CASE("EngineTables")
         "RENDERPARM_USER0",
         "RENDERPARM_USER1",
         "RENDERPARM_USER2"}},
+      // LP4.2a (C35): RenderProgs.h:291 rpMaximalSet9, in renderParmSet9.inc.hlsl:33-85's
+      // order
+      {9,
+       {"RENDERPARM_SCREENCORRECTIONFACTOR",
+        "RENDERPARM_WINDOWCOORD",
+        "RENDERPARM_DIFFUSEMODIFIER",
+        "RENDERPARM_SPECULARMODIFIER",
+        "RENDERPARM_LOCALLIGHTORIGIN",
+        "RENDERPARM_LOCALVIEWORIGIN",
+        "RENDERPARM_BUMPMATRIX_S",
+        "RENDERPARM_BUMPMATRIX_T",
+        "RENDERPARM_DIFFUSEMATRIX_S",
+        "RENDERPARM_DIFFUSEMATRIX_T",
+        "RENDERPARM_SPECULARMATRIX_S",
+        "RENDERPARM_SPECULARMATRIX_T",
+        "RENDERPARM_VERTEXCOLOR_MODULATE",
+        "RENDERPARM_VERTEXCOLOR_ADD",
+        "RENDERPARM_GLOBALEYEPOS",
+        "RENDERPARM_MVPMATRIX_X",
+        "RENDERPARM_MVPMATRIX_Y",
+        "RENDERPARM_MVPMATRIX_Z",
+        "RENDERPARM_MVPMATRIX_W",
+        "RENDERPARM_MODELMATRIX_X",
+        "RENDERPARM_MODELMATRIX_Y",
+        "RENDERPARM_MODELMATRIX_Z",
+        "RENDERPARM_MODELMATRIX_W",
+        "RENDERPARM_PROJMATRIX_W",
+        "RENDERPARM_AMBIENT_COLOR",
+        "RENDERPARM_GLOBALLIGHTORIGIN",
+        "RENDERPARM_JITTERTEXSCALE",
+        "RENDERPARM_JITTERTEXOFFSET",
+        "RENDERPARM_PSX_DISTORTIONS",
+        "RENDERPARM_CASCADEDISTANCES",
+        "RENDERPARM_WOBBLESKY_X",
+        "RENDERPARM_WOBBLESKY_Y",
+        "RENDERPARM_WOBBLESKY_Z",
+        "RENDERPARM_TEXGEN_0_S",
+        "RENDERPARM_TEXGEN_0_T",
+        "RENDERPARM_TEXGEN_0_Q",
+        "RENDERPARM_SH_IRRADIANCE_0",
+        "RENDERPARM_SH_IRRADIANCE_1",
+        "RENDERPARM_SH_IRRADIANCE_2",
+        "RENDERPARM_SH_IRRADIANCE_3",
+        "RENDERPARM_SH_IRRADIANCE_4",
+        "RENDERPARM_SH_IRRADIANCE_5",
+        "RENDERPARM_SH_IRRADIANCE_6",
+        "RENDERPARM_SH_IRRADIANCE_7",
+        "RENDERPARM_SH_IRRADIANCE_8"}},
     };
     for (const auto& [set, list] : engineLists)
     {
@@ -300,6 +352,70 @@ TEST_CASE("EngineTables")
     CHECK(
       engineParmSetBlock(10).members[3] == EngineConstantMember{"rpLocalViewOrigin", 48});
     CHECK(engineParmSetBlock(10).members[24] == EngineConstantMember{"rpUser2", 384});
+
+    // LP4.2a (C35): set 9's byte offsets (SC330), the nine SH parms contiguous in the
+    // enum (SetVertexParms( RENDERPARM_SH_IRRADIANCE_0, ..., 9 ), RenderBackend.cpp:1335)
+    {
+      const auto block = engineParmSetBlock(9);
+      REQUIRE(block.members.size() == 45u);
+      const auto at = [&](const std::string_view name) {
+        for (const auto& member : block.members)
+        {
+          if (member.name == name)
+          {
+            return std::optional{member.offset};
+          }
+        }
+        return std::optional<std::uint32_t>{};
+      };
+      CHECK(at("rpScreenCorrectionFactor") == 0u);
+      CHECK(at("rpWindowCoord") == 16u);
+      CHECK(at("rpDiffuseModifier") == 32u);
+      CHECK(at("rpSpecularModifier") == 48u);
+      CHECK(at("rpLocalLightOrigin") == 64u);
+      CHECK(at("rpLocalViewOrigin") == 80u);
+      CHECK(at("rpBumpMatrixS") == 96u);
+      CHECK(at("rpBumpMatrixT") == 112u);
+      CHECK(at("rpDiffuseMatrixS") == 128u);
+      CHECK(at("rpDiffuseMatrixT") == 144u);
+      CHECK(at("rpSpecularMatrixS") == 160u);
+      CHECK(at("rpSpecularMatrixT") == 176u);
+      CHECK(at("rpVertexColorModulate") == 192u);
+      CHECK(at("rpVertexColorAdd") == 208u);
+      CHECK(at("rpGlobalEyePos") == 224u);
+      CHECK(at("rpMVPmatrixX") == 240u);
+      CHECK(at("rpMVPmatrixW") == 288u);
+      CHECK(at("rpModelMatrixX") == 304u);
+      CHECK(at("rpModelMatrixW") == 352u);
+      CHECK(at("rpProjectionMatrixW") == 368u);
+      CHECK(at("rpAmbientColor") == 384u);
+      CHECK(at("rpGlobalLightOrigin") == 400u);
+      CHECK(at("rpJitterTexScale") == 416u);
+      CHECK(at("rpJitterTexOffset") == 432u);
+      CHECK(at("rpPSXDistortions") == 448u);
+      CHECK(at("rpCascadeDistances") == 464u);
+      CHECK(at("rpWobbleSkyX") == 480u);
+      CHECK(at("rpWobbleSkyY") == 496u);
+      CHECK(at("rpWobbleSkyZ") == 512u);
+      CHECK(at("rpTexGen0S") == 528u);
+      CHECK(at("rpTexGen0T") == 544u);
+      CHECK(at("rpTexGen0Q") == 560u);
+      CHECK(at("rpSHIrradiance[0]") == 576u);
+      CHECK(at("rpSHIrradiance[8]") == 704u);
+      CHECK(block.members.back().offset + 16u == block.size);
+      for (int i = 0; i < 9; ++i)
+      {
+        CHECK(
+          engineParmSetMembers(9)[std::size_t(36 + i)].parm
+          == RenderParm(int(RenderParm::ShIrradiance0) + i));
+      }
+      CHECK(
+        engineLayoutConstantBlock(EngineBindingLayout::AmbientLightingIbl)->name
+        == "renderParmSet9_t");
+      CHECK(
+        engineLayoutConstantBlock(EngineBindingLayout::AmbientLightingIblSkinned)->size
+        == 720u);
+    }
 
     // every layout is in at most one set, and every set has a layout
     auto sets = std::set<int>{};
@@ -353,6 +469,8 @@ TEST_CASE("EngineTables")
     CHECK(setCount(engineBindingLayoutDescs(L::Histogram, true)) == 1u);
     CHECK(setCount(engineBindingLayoutDescs(L::Exposure, true)) == 1u);
     CHECK(setCount(engineBindingLayoutDescs(L::Blit, false)) == 1u);
+    CHECK(setCount(engineBindingLayoutDescs(L::AmbientLightingIbl, false)) == 4u);
+    CHECK(setCount(engineBindingLayoutDescs(L::AmbientLightingIblSkinned, true)) == 4u);
     CHECK_FALSE(engineBindingLayoutDescs(L::Fog, false));
 
     // the uniforms item: push constants of the set's size, or a volatile buffer at b0
@@ -371,6 +489,56 @@ TEST_CASE("EngineTables")
     CHECK(interaction[2].bindings[0].slot == 3u);
     CHECK(interaction[3].bindings.size() == 2u);
     CHECK(T(interaction[3].bindings[1].type) == T::Sampler);
+
+    // LP4.2a (C35, SC329): RenderProgs.cpp:446-483, the uniforms a volatile buffer of
+    // set 9's 720 bytes on desktop (or pushed where the limit allows), t0-t2, then t3 t4
+    // t7 t8 t9 t10 t12 t13 t14, then s0 s1, every set but the uniforms' pixel-only
+    for (const auto iblPushed : {false, true})
+    {
+      CAPTURE(iblPushed);
+      for (const auto layout : {L::AmbientLightingIbl, L::AmbientLightingIblSkinned})
+      {
+        CAPTURE(int(layout));
+        const auto ibl = *engineBindingLayoutDescs(layout, iblPushed);
+        REQUIRE(ibl.size() == 4u);
+        CHECK(ibl[0].visibility == nvrhi::ShaderType::All);
+        const auto skinned = layout == L::AmbientLightingIblSkinned;
+        REQUIRE(ibl[0].bindings.size() == (skinned ? 2u : 1u));
+        CHECK(
+          T(ibl[0].bindings[0].type)
+          == (iblPushed ? T::PushConstants : T::VolatileConstantBuffer));
+        CHECK(ibl[0].bindings[0].slot == 0u);
+        if (iblPushed)
+        {
+          CHECK(ibl[0].bindings[0].size == 720u);
+        }
+        if (skinned)
+        {
+          CHECK(T(ibl[0].bindings[1].type) == T::StructuredBuffer_SRV);
+          CHECK(ibl[0].bindings[1].slot == 11u);
+        }
+        const auto slots = [](const nvrhi::BindingLayoutDesc& desc) {
+          auto result = std::vector<std::uint32_t>{};
+          for (const auto& item : desc.bindings)
+          {
+            result.push_back(item.slot);
+          }
+          return result;
+        };
+        CHECK(ibl[1].visibility == nvrhi::ShaderType::Pixel);
+        CHECK(slots(ibl[1]) == std::vector<std::uint32_t>{0, 1, 2});
+        CHECK(ibl[2].visibility == nvrhi::ShaderType::Pixel);
+        CHECK(slots(ibl[2]) == std::vector<std::uint32_t>{3, 4, 7, 8, 9, 10, 12, 13, 14});
+        for (const auto& item : ibl[2].bindings)
+        {
+          CHECK(T(item.type) == T::Texture_SRV);
+        }
+        CHECK(ibl[3].visibility == nvrhi::ShaderType::Pixel);
+        CHECK(slots(ibl[3]) == std::vector<std::uint32_t>{0, 1});
+        CHECK(T(ibl[3].bindings[0].type) == T::Sampler);
+        CHECK(T(ibl[3].bindings[1].type) == T::Sampler);
+      }
+    }
 
     const auto tonemap = *engineBindingLayoutDescs(L::Tonemap, true);
     REQUIRE(tonemap[0].bindings.size() == 5u);

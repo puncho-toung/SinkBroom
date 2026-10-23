@@ -107,6 +107,24 @@ TEST_CASE("ShaderReflection")
     REQUIRE(tonemapping);
     CHECK(tonemapping->vertexInputs.empty());
 
+    // LP4.2a (C35): the ambient pass's layout, both paths' programs
+    for (const auto program :
+         {EngineBuiltinAmbientLightingIbl,
+          EngineBuiltinAmbientLightingIblPbr,
+          EngineBuiltinAmbientLightgridIbl,
+          EngineBuiltinAmbientLightgridIblPbr})
+    {
+      CAPTURE(program);
+      const auto ibl = engineExpectedLayout(row(program), false);
+      REQUIRE(ibl);
+      CHECK(ibl->sets.size() == 4u);
+      CHECK_FALSE(ibl->pushConstants);
+      CHECK(ibl->constants->name == "renderParmSet9_t");
+      CHECK(ibl->constants->size == 720u);
+      CHECK(ibl->constants->members.size() == 45u);
+      CHECK(ibl->vertexInputs.size() == 6u);
+    }
+
     // a layout the tables do not mirror
     CHECK_FALSE(engineExpectedLayout(row(2), false));
   }

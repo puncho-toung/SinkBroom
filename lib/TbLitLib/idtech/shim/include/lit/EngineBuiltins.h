@@ -1477,5 +1477,11 @@ inline constexpr int EngineBuiltinRect = 109;
 inline constexpr int EngineBuiltinTonemapping = 111;
 inline constexpr int EngineBuiltinHistogram = 113;
 inline constexpr int EngineBuiltinExposure = 115;
+// LP4.2a (C34, SC326): the ambient pass's programs (RenderProgs.h:404-412): the probe
+// path's BUILTIN_AMBIENT_LIGHTING_IBL and its PBR form, and the light-grid path's (LP4.3)
+inline constexpr int EngineBuiltinAmbientLightingIbl = 4;
+inline constexpr int EngineBuiltinAmbientLightingIblPbr = 6;
+inline constexpr int EngineBuiltinAmbientLightgridIbl = 8;
+inline constexpr int EngineBuiltinAmbientLightgridIblPbr = 10;
 
 } // namespace tb::lit

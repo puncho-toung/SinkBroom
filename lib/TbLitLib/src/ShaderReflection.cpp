@@ -102,6 +102,22 @@ ReflectedBlock blockOf(const SpvReflectBlockVariable& block)
   for (std::uint32_t i = 0; i < source->member_count; ++i)
   {
     const auto& member = source->members[i];
+    // LP4.2a (C35): a one-dimensional array of a known length (set 9's float4
+    // rpSHIrradiance[9]) is listed element by element, "name[k]" at offset + k · stride,
+    // as the parm-set tables list it
+    const auto& array = member.array;
+    if (
+      array.dims_count == 1 && array.dims[0] > 0 && array.dims[0] != 0xFFFFFFFFu
+      && array.stride > 0)
+    {
+      for (std::uint32_t k = 0; k < array.dims[0]; ++k)
+      {
+        result.members.push_back(
+          {fmt::format("{}[{}]", nameOf(member.name), k),
+           member.offset + k * array.stride});
+      }
+      continue;
+    }
     result.members.push_back({nameOf(member.name), member.offset});
   }
   return result;

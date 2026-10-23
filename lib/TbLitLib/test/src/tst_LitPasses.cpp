@@ -151,17 +151,27 @@ TEST_CASE("LitPasses: RenderParms mirror SetUniformValue and SelectUniforms (SC2
     CHECK(parms.changed(EngineBindingLayout::DrawInteraction));
     CHECK(parms.changed(EngineBindingLayout::ConstantBufferOnly));
     CHECK(parms.changed(EngineBindingLayout::Texture));
-    // GLOBALEYEPOS is in none of the mirrored sets
+    // LP4.2a (C35): GLOBALEYEPOS is in set 9 alone (AMBIENT_LIGHTING_IBL and its skinned
+    // form); OVERBRIGHT is in none of the mirrored sets
     for (const auto layout :
          {EngineBindingLayout::ConstantBufferOnly,
           EngineBindingLayout::Texture,
-          EngineBindingLayout::DrawInteraction})
+          EngineBindingLayout::DrawInteraction,
+          EngineBindingLayout::AmbientLightingIbl})
     {
       parms.clearChanged(layout);
     }
     parms.set(RenderParm::GlobalEyePos, {1, 2, 3, 1});
     CHECK_FALSE(parms.changed(EngineBindingLayout::DrawInteraction));
-    CHECK(engineLayoutsOfParm(RenderParm::GlobalEyePos) == 0u);
+    CHECK(parms.changed(EngineBindingLayout::AmbientLightingIbl));
+    CHECK(
+      engineLayoutsOfParm(RenderParm::GlobalEyePos)
+      == ((std::uint64_t{1} << int(EngineBindingLayout::AmbientLightingIbl)) | (std::uint64_t{1} << int(EngineBindingLayout::AmbientLightingIblSkinned))));
+    parms.clearChanged(EngineBindingLayout::AmbientLightingIbl);
+    parms.set(RenderParm::Overbright, {1, 1, 1, 1});
+    CHECK_FALSE(parms.changed(EngineBindingLayout::AmbientLightingIbl));
+    CHECK_FALSE(parms.changed(EngineBindingLayout::DrawInteraction));
+    CHECK(engineLayoutsOfParm(RenderParm::Overbright) == 0u);
   }
 
   SECTION("the subset order is the set's table order")
@@ -175,6 +185,7 @@ TEST_CASE("LitPasses: RenderParms mirror SetUniformValue and SelectUniforms (SC2
     for (const auto& [layout, set] : std::vector<std::pair<EngineBindingLayout, int>>{
            {EngineBindingLayout::ConstantBufferOnly, 0},
            {EngineBindingLayout::Texture, 4},
+           {EngineBindingLayout::AmbientLightingIbl, 9},
            {EngineBindingLayout::DrawInteraction, 10}})
     {
       CAPTURE(set);
@@ -194,6 +205,26 @@ TEST_CASE("LitPasses: RenderParms mirror SetUniformValue and SelectUniforms (SC2
     CHECK(parms.select(EngineBindingLayout::DrawInteraction, out) == 100u);
     CHECK(out[0] == float(int(RenderParm::DiffuseModifier)));
     CHECK(out[24 * 4] == float(int(RenderParm::User2)));
+    // LP4.2a (C35): set 9: ScreenCorrectionFactor first, the nine SH parms last, 720
+    // bytes; SetVertexParms( SH_IRRADIANCE_0, sh, 9 ) writes them in one call and they
+    // come back in order
+    CHECK(parms.select(EngineBindingLayout::AmbientLightingIbl, out) == 180u);
+    CHECK(out[0] == float(int(RenderParm::ScreenCorrectionFactor)));
+    CHECK(out[24 * 4] == float(int(RenderParm::AmbientColor)));
+    CHECK(out[36 * 4] == float(int(RenderParm::ShIrradiance0)));
+    CHECK(out[44 * 4] == float(int(RenderParm::ShIrradiance8)));
+    auto sh = std::array<float, 36>{};
+    for (std::size_t i = 0; i < sh.size(); ++i)
+    {
+      sh[i] = 1000.0f + float(i);
+    }
+    parms.set(RenderParm::ShIrradiance0, sh);
+    CHECK(parms.select(EngineBindingLayout::AmbientLightingIbl, out) == 180u);
+    for (std::size_t i = 0; i < sh.size(); ++i)
+    {
+      CHECK(out[36 * 4 + i] == sh[i]);
+    }
+    CHECK(parms.select(EngineBindingLayout::AmbientLightingIblSkinned, out) == 180u);
     // a layout whose set is not mirrored selects nothing
     CHECK(parms.select(EngineBindingLayout::Gbuffer, out) == 0u);
   }
