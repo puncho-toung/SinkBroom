@@ -41,7 +41,12 @@
       "engine": {
         "gitlink": "neo/extern/nvrhi"
       },
-      "commit": "3d81b755010ea27727a39eb53f8e945c358bb058"
+      "commit": "3d81b755010ea27727a39eb53f8e945c358bb058",
+      "patches": [
+        "cmake/dependencies/patches/nvrhi-strip-msvc-flags.patch",
+        "cmake/dependencies/patches/nvrhi-upload-chunk-failure.patch"
+      ],
+      "note": "the RobertBeckebans fork at the engine's gitlink; the build flags patch, and the first recorded deviation from the pinned code, the upload chunk's failure path (M-NVRHI-DEFECT-01)"
     },
     {
       "name": "Vulkan-Headers",
@@ -9408,6 +9413,71 @@
       "note": "C24: the record builder (LightRecord.h) runs parseLight and deriveLight as CPU pool jobs: they read their arguments, the immutable MaterialTable and ProcTree held by shared_ptr, and constant statics, and allocate with the global allocator; the copied asserts are the only messages possible (Debug)"
     },
     {
+      "id": "M-INTER-POOL-01",
+      "kind": "pool-safe",
+      "engine": [
+        {
+          "file": "neo/renderer/Interaction.cpp",
+          "lines": [
+            102,
+            117
+          ],
+          "anchor": "R_CalcInteractionCullBits: the planes and front bits",
+          "sha256": "67d46287c8e224438588d67905de7cb7c26115cdb2eb9cc1c84c555557b54383"
+        },
+        {
+          "file": "neo/renderer/Interaction.cpp",
+          "lines": [
+            129,
+            141
+          ],
+          "anchor": "R_CalcInteractionCullBits: the cull bits",
+          "sha256": "ca371129e420fe889cbbb01cb7bba1568c2630f18fb1b57e0b1b18067608def4"
+        },
+        {
+          "file": "neo/renderer/Interaction.cpp",
+          "lines": [
+            289,
+            325
+          ],
+          "anchor": "R_CreateInteractionLightTris: the triangle cull",
+          "sha256": "38c6c89b280b5458e3c8ea6dc8041dc344403146352d912e1ffff72ca3bc015f"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            4436,
+            4515
+          ],
+          "anchor": "idRenderMatrix::GetFrustumPlanes",
+          "sha256": "d3f793bee56b1a01fcee3d0dcc6f550f7d6b528c59ad87f8f9174317fa373de2"
+        },
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            315,
+            321
+          ],
+          "anchor": "R_GlobalPlaneToLocal (transcribed)",
+          "sha256": "c14a74d6fe3413d77383ec59871d9e15e06ca9afac56ff24e87512faac9f13e7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineInteraction.cpp",
+          "symbol": "engineInteractionLightTris"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightTriangles.cpp",
+          "symbol": "LightTriangleCache::answer"
+        }
+      ],
+      "commonCalls": [
+        "none: the ranges, GetFrustumPlanes, idPlane and idBounds call neither common nor idLib::common"
+      ],
+      "note": "C24: the CPU pool runs the copied cull (LightTriangleCache's job, A25's exception: the pool, or the render thread for a session without one, tests only). (1) no common or idLib::common call; (2) no FatalError site; (3) no SIMDProcessor (its MinMax, :328, is not copied); (4) it allocates only the glue's std::vectors; (5) no statics but RenderMatrix.cpp's constant ones (M-LIGHT-STATIC-*). The planes are GetFrustumPlanes( baseLightProject, true, true ) taken into the surface's space by R_GlobalPlaneToLocal, not normalised again for a scaled entity: LIGHT_CLIP_EPSILON stays 0.1 world units (tested)"
+    },
+    {
       "id": "M-LIGHT-GUARD-03",
       "kind": "guard",
       "engine": [
@@ -12805,6 +12875,99 @@
       "note": "LP2.0 (C24, P2.25, SC268): 136 lines, in 2 ranges, each preceded by one marker line, compiled inside ShimPipelineState.cpp; with Image.h's enums (M-ID-PART-02, 35-139). ImageCache.h's engineBitsForFormat stays the LP1c.1 mirror; a test holds the two equal for every uncompressed format"
     },
     {
+      "id": "M-INTER-PART-01",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/Interaction.cpp",
+          "lines": [
+            1,
+            27
+          ],
+          "anchor": "licence",
+          "sha256": "f5664afb667359f28051827a334c2163c689462c4246d10f36a5a7180f9960bc"
+        },
+        {
+          "file": "neo/renderer/Interaction.cpp",
+          "lines": [
+            102,
+            117
+          ],
+          "anchor": "R_CalcInteractionCullBits: the light frustum's planes in surface space, the bounds' front bits",
+          "sha256": "67d46287c8e224438588d67905de7cb7c26115cdb2eb9cc1c84c555557b54383"
+        },
+        {
+          "file": "neo/renderer/Interaction.cpp",
+          "lines": [
+            129,
+            141
+          ],
+          "anchor": "R_CalcInteractionCullBits: the vertices' cull bits",
+          "sha256": "ca371129e420fe889cbbb01cb7bba1568c2630f18fb1b57e0b1b18067608def4"
+        },
+        {
+          "file": "neo/renderer/Interaction.cpp",
+          "lines": [
+            289,
+            325
+          ],
+          "anchor": "R_CreateInteractionLightTris: the triangle cull",
+          "sha256": "38c6c89b280b5458e3c8ea6dc8041dc344403146352d912e1ffff72ca3bc015f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Interaction.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineInteraction.cpp"
+        }
+      ],
+      "note": "DX.2 (31-LP2-FIXES.md, U3.7): 93 lines in 4 ranges, each preceded by one marker line, statements included inside a function of EngineInteraction.cpp that declares what they name with the engine's names (ent->modelMatrix, light->baseLightProject, tri->bounds/numVerts/verts/numIndexes/indexes, cullInfo, newTri->indexes, i, faceNum, numIndexes, indexes, includeBackFaces, c_backfaced, c_distance). What the ranges leave out the glue stands for: the early returns (Interaction.cpp:97-100, 119-124) and the allocation (:126-127) are a zeroed cull byte per vertex before the ranges, so a surface with every front bit keeps every triangle, as the LIGHT_CULL_ALL_FRONT path with includeBackFaces does (:233-244); r_lightAllBackFaces 1 makes includeBackFaces true, so R_CalcInteractionFacing is not copied and facing never read; the bounds of the kept triangles (:328) are not needed"
+    },
+    {
+      "id": "M-INTER-PART-02",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/Interaction.h",
+          "lines": [
+            1,
+            27
+          ],
+          "anchor": "licence",
+          "sha256": "f5664afb667359f28051827a334c2163c689462c4246d10f36a5a7180f9960bc"
+        },
+        {
+          "file": "neo/renderer/Interaction.h",
+          "lines": [
+            44,
+            45
+          ],
+          "anchor": "LIGHT_CULL_ALL_FRONT, LIGHT_CLIP_EPSILON",
+          "sha256": "2701ed0d8c5d7f0202dbde8cfafb78110b48f9e80ffca4866038847a50b3256c"
+        },
+        {
+          "file": "neo/renderer/Interaction.h",
+          "lines": [
+            51,
+            64
+          ],
+          "anchor": "srfCullInfo_t",
+          "sha256": "e9c28d720cbddee42269bbc52961786ca52bb461cfa728309bf73f8c5e96ef32"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Interaction.h"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineInteraction.cpp"
+        }
+      ],
+      "note": "DX.2: 43 lines in 3 ranges with their marker lines, included by EngineInteraction.cpp only"
+    },
+    {
       "id": "M-PIPE-PURE-01",
       "kind": "pure-function",
       "engine": [
@@ -13198,6 +13361,20 @@
       "note": "LP2.0: every LAYOUT_DRAW_VERT program gets the full input layout (locations 0 to 5), while its vertex shader reads fewer (depth.vs and color.vs location 0; texture_color.vs 0, 1 and 4; interaction.vs 0 to 4, the retail test prints them). NVRHI numbers attribute locations densely, so no layout can leave out 2 and 3 for texture_color without changing NVRHI; the preview keeps the engine's layout, and Vulkan's validation layer reports a warning \"Vertex attribute at location N not consumed by vertex shader\" per attribute, as for the engine under r_useValidationLayers. The [litgpu] pipeline tests count these apart; every other validation message is 0"
     },
     {
+      "id": "M-NVRHI-DEFECT-01",
+      "kind": "known-defect",
+      "engine": [],
+      "sinkbroom": [
+        {
+          "file": "cmake/dependencies/patches/nvrhi-upload-chunk-failure.patch"
+        },
+        {
+          "file": "cmake/dependencies/nvrhi.cmake"
+        }
+      ],
+      "note": "U2.3 (31-LP2-FIXES.md), the first recorded deviation from the NVRHI pin (Q14's wording): at 3d81b755 UploadManager::CreateChunk maps the buffer createBuffer returned without looking at it, and createBuffer returns null when the buffer's memory cannot be allocated (CHECK_VK_FAIL) and leaks the Buffer and its VkBuffer; writeTexture ignores suballocateBuffer's result. A full device or host heap therefore crashed the process inside NVRHI. The CPM patch makes CreateChunk report an Error through the device's message callback (which ends a SinkBroom session) and return no chunk, suballocateBuffer return false, writeTexture and writeBuffer return when it does, and createBuffer destroy the Buffer whose memory failed. Tested with a hook that fails every host-only allocation (GpuDevice failHostAllocationsForTesting): the session ends with \"NVRHI error: Failed to create an upload chunk buffer\", every allocation freed"
+    },
+    {
       "id": "M-FRAME-01",
       "kind": "function",
       "engine": [
@@ -13394,6 +13571,58 @@
         }
       ],
       "note": "LP2.1 step 5 (§3.10, D78, P2.14c): the engine writes every level of an image in one command list before it draws; the preview writes the smallest levels first, a level (all six sides of a cube's) at a time, within the frame's 32 MB upload cap (a level larger than the cap goes alone as its frame's first upload), and binds the texture through an SRV subresource range of the written levels only, never an unwritten one; each extension of the range bumps the slot's version, so the binding sets that hold it are made again. A settled frame (D77) has every visible texture at its full mips"
+    },
+    {
+      "id": "M-TEX-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            878,
+            891
+          ],
+          "anchor": "idImage::ActuallyLoadImage, the upload",
+          "sha256": "34597061dda9e852b194e06ea93429461272e2ccfaa68bb4648f8207e8ed5220"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/TextureUploads.cpp",
+          "symbol": "TextureUploads::record"
+        }
+      ],
+      "note": "U3.16 (31-LP2-FIXES.md): the engine writes every level whole; a level (all its sides) larger than UploadBytesPerFrame (32 MB) would be one writeTexture through one upload chunk of its own size (a 16384 x 16384 RGBA8 level: 1 GiB), so the preview refuses the image: its slot is Default, with the reason, and binds its usage's intrinsic"
+    },
+    {
+      "id": "M-ALLOC-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/NVRHI/Image_NVRHI.cpp",
+          "lines": [
+            625,
+            629
+          ],
+          "anchor": "idImage::AllocImage, createTexture",
+          "sha256": "cfa71a7d9ece379cf69c2a56c92a5a1bb06194d38e5afb563681f9fc5d5cce67"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::allocationRoom"
+        },
+        {
+          "file": "lib/TbLitLib/src/TextureUploads.cpp",
+          "symbol": "TextureUploads::record"
+        },
+        {
+          "file": "lib/TbLitLib/src/GeometryArenas.cpp",
+          "symbol": "GeometryArenas::allocate"
+        }
+      ],
+      "note": "U2.3 (31-LP2-FIXES.md): the engine makes a texture whenever it loads an image; the preview makes no new texture or geometry arena once the live device allocations come within AllocationHeadroom (64) of maxMemoryAllocationCount, so that NVRHI's upload chunks and staging can still allocate (D72: about one allocation per texture): the slot stays at its intrinsic, an arena's chunk stays queued (its draws skipped, the frame unconverged), the session warns once and the frame log's alloc_refused column counts them"
     },
     {
       "id": "M-IMG-GUARD-05",
@@ -14113,6 +14342,54 @@
       "note": "LP2.2a step 2 (SC222): per list, the surfaces whose material has a fast-path bump image first in list order (at most MAX_INTERACTIONS_PER_LIGHT 2048), then the others (at most MAX_COMPLEX_INTERACTIONS_PER_LIGHT 256, appended while the 2048 last); idStaticList::Append drops the rest silently. The order stays although r_skipInteractionFastPath 1 runs the stage loop for every surface; a pending surface counts as complex"
     },
     {
+      "id": "M-INTER-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            1916,
+            2005
+          ],
+          "anchor": "idRenderWorldLocal::GenerateAllInteractions",
+          "sha256": "bda0e5bb84b289e315e5b781e5e77e93714f257c82cb5e0613b2c90534c3d3d3"
+        },
+        {
+          "file": "neo/renderer/Interaction.cpp",
+          "lines": [
+            600,
+            678
+          ],
+          "anchor": "idInteraction::CreateStaticInteraction",
+          "sha256": "831d092891c2d64d5a89f1050d0a652ee328e69da7a3bc2dc9223facd65cf714"
+        },
+        {
+          "file": "neo/renderer/Interaction.cpp",
+          "lines": [
+            177,
+            349
+          ],
+          "anchor": "R_CreateInteractionLightTris",
+          "sha256": "b0ee199c3c3e39164d6f2b633fbebc9014fe8105d5991ec2badf3cb390906312"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightTriangles.cpp",
+          "symbol": "LightTriangleCache, lightTrianglesOf"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::draw"
+        }
+      ],
+      "note": "DX.2 (U3.7): after a map loads the engine has a static interaction for every entity with a DM_STATIC model sharing an area with a light (the world's areas, func_statics and other brush entities, the patches in them), each surface's light triangles the subset R_CreateInteractionLightTris keeps; a dynamic interaction (an entity moved since) would draw the whole surface, which the editor's state never is. The preview asks the cull per (light, chunk) pair the frontend lights, keyed on the light record's version, the chunk's caster version and its model matrix (LightTriangleCache, at most LightTriangleCacheSize pairs), on the CPU pool; a chunk the cull empties is left out of the light's lists, a partly culled one is drawn as runs of its own index range (the engine's one draw of the subset: the same triangles in the same order), a pair not known yet is drawn whole and the frame is not settled (FrameConvergence::lightTrianglesPending; the job's end triggers the next frame). The chunk's triangles are the preview's (K28) and dmap carves the area surfaces at the light volumes' planes (Prelight, noLightCarve 0) where the preview does not: a face on a plane, or up to 0.1 inside it, goes in both; a face across a plane is kept whole here and its outside lit only where the light's images are not black past the volume (every parity light but R13's flat ones, which stop at room faces)"
+    },
+    {
       "id": "M-FRONT-DIFF-01",
       "kind": "difference",
       "engine": [
@@ -14155,15 +14432,6 @@
           ],
           "anchor": "R_AddSingleLight, masked occlusion culling and the shadow LOD",
           "sha256": "274887e149a2e1a799b6b1d0b2d40b0f2ef6ed5b2353f6684a426ddcbf73ca59"
-        },
-        {
-          "file": "neo/renderer/Interaction.cpp",
-          "lines": [
-            177,
-            349
-          ],
-          "anchor": "R_CreateInteractionLightTris",
-          "sha256": "b0ee199c3c3e39164d6f2b633fbebc9014fe8105d5991ec2badf3cb390906312"
         }
       ],
       "sinkbroom": [
@@ -14172,7 +14440,7 @@
           "symbol": "buildFrontendLists"
         }
       ],
-      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet: the portal rects and the \"area not connected to the view\" cull (LP4), r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), the static interactions' light triangles (with r_lightAllBackFaces 1 only their light-volume cull remains: a chunk is culled by its bounds, and its triangles outside the volume add nothing, the falloff and projection samplers bordering to black), a chunk culled where the engine's whole area surface would not be (the same: no light outside the volume), material LODs, and the shadow LOD (K26, LP3)"
+      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet: the portal rects and the \"area not connected to the view\" cull (LP4), r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), material LODs, and the shadow LOD (K26, LP3). The static interactions' light triangles, which P2.26 counted here (\"its triangles outside the volume add nothing\"), are mirrored since the LP2 fix round (DX.2, M-INTER-01): LP2.3 found the volume boundary's LIGHT_CLIP_EPSILON dropping whole faces the preview lit"
     },
     {
       "id": "M-FRONT-DIFF-03",
@@ -15111,13 +15379,40 @@
       "kind": "difference",
       "engine": [
         {
-          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "file": "neo/tools/compilers/dmap/dmap.cpp",
           "lines": [
-            180,
-            260
+            148,
+            151
           ],
-          "anchor": "TriListForSide",
-          "sha256": "4e8882df3380d8a99f16d01e0a15d503266e1ed64e02f79843cf345275721fbb"
+          "anchor": "ProcessModel: OptimizeEntity unless noOptimize",
+          "sha256": "1b77d8d1b6568abcee13f7de1789800fa7893b9257721666586bc8cd9186d983"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/optimize.cpp",
+          "lines": [
+            588,
+            603
+          ],
+          "anchor": "LengthSort, the candidate edges' qsort order",
+          "sha256": "1568eff1d22a1fcd95834b9d5be7ed00fe105be5571d1ccb35e6e0283cf8210d"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/optimize.cpp",
+          "lines": [
+            1241,
+            1393
+          ],
+          "anchor": "BuildOptTriangles",
+          "sha256": "cf939e715baea374873423d07461e87c86d538016e73035571e78381c86ac147"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/optimize.cpp",
+          "lines": [
+            1404,
+            1449
+          ],
+          "anchor": "RegenerateTriangles",
+          "sha256": "57126ec9dcb8719a47e576855803108df63a67869bdd0115288319367ab4b9b6"
         },
         {
           "file": "neo/tools/compilers/dmap/output.cpp",
@@ -15133,9 +15428,13 @@
         {
           "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
           "symbol": "buildChunks (addBrush)"
+        },
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "room_split, SPLIT_AHEAD"
         }
       ],
-      "note": "LP2.3, a candidate K (K9's family, for the director): the chunks' triangles of an axial face are the .proc's (the same two triangles, the same diagonal and winding) but each starts at another vertex (a cyclic rotation: the editor's polygon, reversed, against the winding dmap clipped from the brush's planes) and the triangles come in another order. Interpolation and near-plane clipping round differently on the GPU; on a steep PBR bump at a grazing angle near the camera the interaction's specular turns that into up to 12 levels: parity row R05, 2568 of 696,000 unmasked pixels beyond +-1 at the left edge, mean 0.029; every other axial row is within +-1"
+      "note": "K28 (31-LP2-FIXES.md, replacing DX.1; 30-LP2-REVIEW-3.md U3.1): dmap runs OptimizeEntity on every area by default, which throws away each coplanar group's side triangles and builds them again (BuildOptTriangles, RegenerateTriangles) from candidate edges sorted by an unstable qsort (equal lengths tie, as a rectangle's two diagonals do), so the .proc's triangles are not fans of the side windings (the parity .proc: 96 of 110 pairs of the (a b c)(d c b) shape) and no mirror of CreateBrushWindings reproduces their vertex order; copying the optimizer would import the CRT's qsort tie order (glibc's differs). The preview keeps its own triangulation (K9's family). The vertex order of the preview's triangles is not dmap's optimizer's; pixels of triangles that cross the camera's near plane can differ from the engine by up to about 12 LDR levels (measured: LP2.3's R05, 2,568 pixels up to 12 at the left edge, and R03's 402 masked pixels up to 9). The parity rows cut their rooms' floor, ceiling and side walls 100 units ahead of the camera (parity.py room_split) so that no triangle in view crosses the near plane, in the engine's triangulation or the preview's; R05b keeps LP2.3's R05 room and camera as K28's reported envelope. LP7: adopt the .proc's triangles for the faces unchanged since the bake, where the dress geometry is drawn from the .proc anyway"
     }
   ],
   "retired": [
