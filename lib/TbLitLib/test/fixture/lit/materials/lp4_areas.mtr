@@ -1,0 +1,13 @@
+// LP4.1 areas parity fixture (plans/lit-preview/34-LP4-PACKAGES.md C38, D91); written by
+// TOOLS/lit-preview/parity.py fixtures. The map's lit materials are lp2_parity.mtr's,
+// which is staged with it. Names under textures/lp4/ are reserved for fixtures (K20).
+
+// the doorways' portal brushes: like the retail editor/visportal (the LP1b fixture's
+// stand-in, lp1b_geometry.map), dmap makes the inter-area portal of an areaportal brush
+// and no surface of its sides (usurface.cpp:191-195: neither drawn nor casting shadows)
+textures/lp4/portal
+{
+	qer_editorimage	textures/lp4/portal.tga
+	noshadows
+	areaportal
+}

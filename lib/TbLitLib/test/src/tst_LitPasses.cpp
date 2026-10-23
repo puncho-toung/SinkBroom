@@ -1321,6 +1321,88 @@ TEST_CASE("LitPasses: the frontend on the view's portal flow (LP4.1, C33, D81)")
   }
 }
 
+TEST_CASE("LitPasses: the areas parity map's portal brushes make no chunk (LP4.1)")
+{
+  // TOOLS/lit-preview/parity.py's areas map: its doorways hold areaportal brushes of
+  // lp4/portal (noshadows, areaportal, no stage), whose sides dmap makes no surface of
+  // (usurface.cpp:191-195: neither drawn nor casting shadows), and neither does the chunk
+  // builder (addBrush's same rule); every other face is built
+  const auto root = litFixtureFolder();
+  const auto snapshot =
+    snapshotOfMapText(readTextFile(root / "maps" / "test" / "litpreview_areas.map"));
+  auto source = MemoryDeclSource{std::vector<DeclFile>{
+    DeclFile{
+      "materials/lp2_parity.mtr", readTextFile(root / "materials" / "lp2_parity.mtr"), 0},
+    DeclFile{
+      "materials/lp4_areas.mtr", readTextFile(root / "materials" / "lp4_areas.mtr"), 0}}};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+  auto table = std::make_shared<MaterialTable>();
+  table->registry = decls.id();
+  for (const auto* name :
+       {"textures/lp2/floor",
+        "textures/lp2/wall",
+        "textures/lp2/crate",
+        "textures/lp2/near",
+        "textures/lp4/portal"})
+  {
+    auto found = decls.lookup(name);
+    REQUIRE(found);
+    auto entry = std::make_shared<MaterialEntry>(**found.value);
+    entry->editorImageSize = EditorImageSize{64, 64, EditorImageSize::State::Ready, {}};
+    table->materials = table->materials.set(
+      name, std::make_shared<const MaterialSlot>(MaterialSlot{std::move(entry), {}}));
+  }
+  const auto portal = table->find("textures/lp4/portal");
+  REQUIRE(portal);
+  // CONTENTS_AREAPORTAL (renderer/Material.h:392)
+  CHECK((portal->entry->contentFlags & (1 << 20)) != 0);
+  CHECK_FALSE(engineMaterialIsDrawn(*portal->entry));
+
+  auto input = ChunkJobInput{};
+  for (const auto& entity : sceneEntitiesOf(snapshot))
+  {
+    input.entities[entity->id] = entity;
+    if (entity->classname == "worldspawn")
+    {
+      input.worldspawn = entity;
+    }
+  }
+  auto cells = std::set<CellRef>{};
+  auto portalFaces = std::size_t{0};
+  for (const auto& node : sceneNodesOf(snapshot))
+  {
+    input.nodes.push_back(node);
+    if (node->kind == SnapshotNodeKind::Brush)
+    {
+      cells.insert(CellRef{node->entity, cellOfNode(*node)});
+      portalFaces += std::size_t(std::ranges::count_if(node->faces, [](const auto& face) {
+        return face.material.ends_with("lp4/portal");
+      }));
+    }
+  }
+  input.cells.assign(cells.begin(), cells.end());
+  input.materials = table;
+  const auto output = buildChunks(input);
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  // four doorways, six sides each
+  CHECK(portalFaces == 24u);
+  CHECK_FALSE(output.chunks.empty());
+  auto materials = std::set<std::string>{};
+  for (const auto& chunk : output.chunks)
+  {
+    materials.insert(chunk.key.material);
+  }
+  CHECK_FALSE(materials.contains("textures/lp4/portal"));
+  CHECK(
+    materials
+    == std::set<std::string>{
+      "textures/lp2/crate",
+      "textures/lp2/floor",
+      "textures/lp2/near",
+      "textures/lp2/wall"});
+}
+
 TEST_CASE("LitPasses: the frontend on a tree of two components (LP4.1, C33 a)")
 {
   auto f = frontendFixture();
