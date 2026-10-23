@@ -77,12 +77,12 @@
       "name": "SPIRV-Reflect",
       "sinkbroom": {
         "file": "cmake/dependencies/spirv-reflect.cmake",
-        "line": 17
+        "line": 21
       },
       "engine": null,
       "commit": "281b55edb67b1f2e61e1dc92fdc42a650da05d83",
       "version": "vulkan-sdk-1.4.304.0",
-      "note": "a SinkBroom pin (R5.23, P2.23): the engine reflects nothing; KhronosGroup/SPIRV-Reflect at the tag of the Vulkan SDK line of the Vulkan-Headers pin, download only; the SpirvReflect library is spirv_reflect.c with its own include/spirv/unified1/spirv.h; T0.11: pinned by this commit, not the tag, with GIT_SUBMODULES \"\" (its third_party/googletest is not cloned)"
+      "note": "a SinkBroom pin (R5.23, P2.23): the engine reflects nothing; KhronosGroup/SPIRV-Reflect at the tag of the Vulkan SDK line of the Vulkan-Headers pin, download only; the SpirvReflect library is spirv_reflect.c with its own include/spirv/unified1/spirv.h; T0.11: pinned by this commit, not the tag; V2.9: CPM drops GIT_SUBMODULES \"\", so the list names the repository's include folder, which holds no submodule: a configure with an empty CPM cache leaves third_party/googletest uninitialised (checked 2026-10-23)"
     }
   ],
   "entries": [

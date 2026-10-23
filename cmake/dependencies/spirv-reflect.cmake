@@ -10,12 +10,16 @@
 # Vulkan header set (C13) and VK_NO_PROTOTYPES (C9) stand.
 #
 # T0.11: by the commit of the tag vulkan-sdk-1.4.304.0 (a tag can move), without its
-# third_party/googletest submodule (CMP0097: "" clones none)
+# third_party/googletest submodule. V2.9 (32-LP2-VERIFY.md): CPM drops the empty value
+# CMP0097 reads as "none" (ExternalProject gets GIT_SUBMODULES with no value and clones
+# every submodule), so the list names a folder of the repository that holds no
+# submodule: `git submodule update --init include` initialises none (checked with an
+# empty CPM cache)
 CPMAddPackage(
   NAME SPIRV-Reflect
   GITHUB_REPOSITORY KhronosGroup/SPIRV-Reflect
   GIT_TAG 281b55edb67b1f2e61e1dc92fdc42a650da05d83
-  GIT_SUBMODULES ""
+  GIT_SUBMODULES "include"
   DOWNLOAD_ONLY YES
 )
 
