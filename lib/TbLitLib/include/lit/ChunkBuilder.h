@@ -21,6 +21,7 @@
 
 #include "base/Result.h"
 #include "lit/EngineGeometry.h"
+#include "lit/EngineLight.h"
 #include "lit/EntityState.h"
 #include "lit/MaterialDecls.h"
 #include "lit/Snapshot.h"
@@ -29,6 +30,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -117,6 +119,10 @@ enum class CastClass : std::uint8_t
 // entity's chunks
 struct ChunkKey
 {
+  // a world piece's area (clipSideIntoAreas: -1 for a piece in solid, D47, K14); for a
+  // brush entity's chunk the area of its pivot (pointInArea( modelOrigin ),
+  // ChunkBuilder.cpp's makeContext) as a key only (P4.9): visibility, pairing and the
+  // grid area read the entity's references (ChunkEntityState::areas, C31), never this
   int area = 0;
   PreviewId entity = NoPreviewId;
   // the engine's material name ("textures/...")
@@ -173,6 +179,37 @@ struct ChunkEntityState
   // (dmap names it by name); dmapOnly entities and removeEntities drop the primitives
   bool visible = true;
   std::uint64_t hash = 0;
+
+  // ----- LP4.0 (C31, D80): the entity's reference set, which SceneGeometry::apply builds
+  // on the render thread from every chunk of the entity (across cells and parts) once a
+  // batch touched it; a chunk job leaves these empty -----
+
+  // per engine material name, the union of the entity's chunks of that material in model
+  // space, grown to FinishSurfaces' cube where the material has a deform (Model.cpp
+  // :1343-1360): the engine's per-model-surface tri->bounds, which the grid-area rule
+  // reads (tr_frontend_addmodels.cpp:817-825, C36, P4.11)
+  std::map<std::string, EngineBounds> materialBounds;
+  // the model's bounds (FinishSurfaces: the union of materialBounds); cleared without a
+  // chunk, where the engine's Zero() bounds of an empty model would reference the pivot's
+  // area: nothing is drawn either way
+  EngineBounds localReferenceBounds = {};
+  // R_DeriveEntityData (RenderWorld_defs.cpp:49-60): OffsetScaleForBounds(
+  // modelRenderMatrix, localReferenceBounds ) with modelRenderMatrix =
+  // CreateFromOriginAxis( modelOrigin, parms.axis ), litSpaceOf's; zero for cleared
+  // bounds (R_CreateEntityRefs returns before deriving them)
+  EngineMat4 inverseBaseModelProject = {};
+  // ProjectedBounds( inverseBaseModelProject, bounds_unitCube, false ); cleared for
+  // cleared bounds
+  EngineBounds globalReferenceBounds = {};
+  /**
+   * R_CreateEntityRefs (RenderWorld_defs.cpp:156-197): the areas pushFrustumIntoTree(
+   * tree, commonAreas, inverseBaseModelProject, bounds_unitCube ) reaches, in the
+   * engine's chain order: AddEntityRefToArea prepends each new reference to the entity's
+   * chain (RenderWorld.cpp:1836-1837), so the reverse of the push order (a light's
+   * derived.areas keeps the push order). Empty without a tree, and for cleared bounds
+   * (no references: the outside set, D81)
+   */
+  std::vector<int> areas;
 };
 
 // the brush primitives' cells of one entity to rebuild

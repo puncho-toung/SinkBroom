@@ -1507,6 +1507,177 @@ TEST_CASE("SceneGeometry, a Save As back to an earlier path reads its bake again
   pool->stop();
 }
 
+TEST_CASE("SceneGeometry, the entities' area references (LP4.0, C31, D80, P4.9, P4.11)")
+{
+  using namespace std::chrono_literals;
+  static_cast<void>(fixtureTable());
+  const auto game = BakeGame{};
+  auto gate = std::make_shared<ParseGate>();
+  auto service = game.service(gate);
+  const auto atExit = OpenAtExit{gate};
+  auto pool = CpuPool::create() | kdl::value();
+
+  // the entity whose name key is name
+  const auto idNamed = [](const Snapshot& snapshot, const std::string& name) {
+    for (const auto& entity : snapshot.entities)
+    {
+      for (auto k = entity.keys.first; k < entity.keys.first + entity.keys.count; ++k)
+      {
+        if (
+          snapshot.string(snapshot.keyValues[k].key) == "name"
+          && snapshot.string(snapshot.keyValues[k].value) == name)
+        {
+          return entity.id;
+        }
+      }
+    }
+    return NoPreviewId;
+  };
+  const auto setOf = [](const std::vector<int>& areas) {
+    return std::set<int>{areas.begin(), areas.end()};
+  };
+
+  // the fixture map and a door across the doorway's portal plane x = 8: world x -8..24,
+  // y -16..16, z 16..48, its origin (8 0 32) the pivot (model space -16..16 each way)
+  const auto fixture = readTextFile(litFixtureFolder() / "maps" / "lp1b_geometry.map");
+  const auto doorHead = std::string{
+    "{\n\"classname\" \"func_static\"\n\"name\" \"lp4_door\"\n\"model\" \"lp4_door\"\n"
+    "\"origin\" \"8 0 32\"\n"};
+  const auto doorBrush = box(-8, -16, 16, 24, 16, 48, "lp1b/crate");
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    auto snapshot = snapshotOfMapText(fixture + doorHead + doorBrush + "}\n");
+    snapshot.sequence = 1;
+    snapshot.mapPath = game.mapPath("lp1b_geometry");
+    const auto rotator = idNamed(snapshot, "lp1b_rotator");
+    const auto scaled = idNamed(snapshot, "lp1b_scaled");
+    const auto door = idNamed(snapshot, "lp4_door");
+    REQUIRE(rotator != NoPreviewId);
+    REQUIRE(scaled != NoPreviewId);
+    REQUIRE(door != NoPreviewId);
+    scene.takeSnapshot(snapshot);
+    const auto referenced = [&](const PreviewId id) {
+      const auto it = scene.entityStates().find(id);
+      return it != scene.entityStates().end() && !it->second.areas.empty();
+    };
+    REQUIRE(settle(scene, [&] {
+      return scene.procTree() && scene.areaData() && referenced(rotator)
+             && referenced(scaled) && referenced(door);
+    }));
+
+    // lp1b_rotator: its .proc model's bounds (-28 -28 -4)..(4 4 28) about the pivot
+    // (140 76 20) through the axis rows (0 1 0) (-1 0 0) (0 0 1): world x 140 - y_local
+    // 136..168, y 76 + x_local 48..80, z 16..48, inside the east room (x > 8): area 0
+    const auto& r = scene.entityStates().at(rotator);
+    CHECK(
+      r.localReferenceBounds
+      == EngineBounds{EngineVec3{-28, -28, -4}, EngineVec3{4, 4, 28}});
+    CHECK(
+      r.globalReferenceBounds
+      == EngineBounds{EngineVec3{136, 48, 16}, EngineVec3{168, 80, 48}});
+    CHECK(r.areas == std::vector<int>{0});
+    REQUIRE(r.materialBounds.size() == 1u);
+    CHECK(r.materialBounds.at("textures/lp1b/crate") == r.localReferenceBounds);
+    CHECK(
+      r.inverseBaseModelProject
+      == engineOffsetScaleForBounds(
+        engineMatrixFromOriginAxis(r.modelOrigin, r.parms.axis), r.localReferenceBounds));
+
+    // lp1b_scaled: (-16..16) scaled by 2 about (-128 -64 32): world x -160..-96, y
+    // -96..-32, z 0..64, in the west room (x < 8): area 1; its bottom face on the floor
+    // plane z = 0 pushes nothing into the solid below
+    const auto& s = scene.entityStates().at(scaled);
+    CHECK(
+      s.globalReferenceBounds
+      == EngineBounds{EngineVec3{-160, -96, 0}, EngineVec3{-96, -32, 64}});
+    CHECK(s.areas == std::vector<int>{1});
+
+    // the door straddles the portal: both areas, in the engine's chain order, the reverse
+    // of the push order (AddEntityRefToArea prepends)
+    const auto& d = scene.entityStates().at(door);
+    CHECK(setOf(d.areas) == std::set<int>{0, 1});
+    auto pushed = pushFrustumIntoTree(
+      *scene.procTree(),
+      scene.areaData()->commonAreas,
+      d.inverseBaseModelProject,
+      engineUnitCube());
+    std::reverse(pushed.begin(), pushed.end());
+    CHECK(d.areas == pushed);
+    // P4.9: the door's chunks keep the pivot's area as a key only
+    for (const auto& [key, chunk] : scene.chunks())
+    {
+      if (key.entity == door)
+      {
+        CHECK(key.area == pointInArea(*scene.procTree(), d.modelOrigin));
+      }
+    }
+
+    // a brush in another 1024 cell of another material: the union over every chunk of
+    // the entity grows, a second material bounds appears, the references stay (the new
+    // brush is in solid, outside the baked hull)
+    auto grown = snapshotOfMapText(
+      fixture + doorHead + doorBrush + box(1100, -16, 16, 1132, 16, 48, "lp1b/wall")
+      + "}\n");
+    grown.sequence = 2;
+    grown.mapPath = snapshot.mapPath;
+    scene.takeSnapshot(grown);
+    REQUIRE(settle(scene, [&] {
+      const auto it = scene.entityStates().find(door);
+      return it != scene.entityStates().end() && it->second.materialBounds.size() == 2u;
+    }));
+    const auto& g = scene.entityStates().at(door);
+    CHECK(
+      g.materialBounds.at("textures/lp1b/crate")
+      == EngineBounds{EngineVec3{-16, -16, -16}, EngineVec3{16, 16, 16}});
+    CHECK(
+      g.materialBounds.at("textures/lp1b/wall")
+      == EngineBounds{EngineVec3{1092, -16, -16}, EngineVec3{1124, 16, 16}});
+    CHECK(
+      g.localReferenceBounds
+      == EngineBounds{EngineVec3{-16, -16, -16}, EngineVec3{1124, 16, 16}});
+    CHECK(setOf(g.areas) == std::set<int>{0, 1});
+
+    // a removed entity's state goes
+    auto removed = Snapshot{};
+    removed.sequence = 3;
+    removed.removed.push_back(door);
+    for (const auto& node : grown.nodes)
+    {
+      if (node.entity == door)
+      {
+        removed.removed.push_back(node.id);
+      }
+    }
+    scene.takeSnapshot(removed);
+    scene.finishForTesting();
+    CHECK_FALSE(scene.entityStates().contains(door));
+    CHECK(scene.entityStates().contains(rotator));
+  }
+
+  // without a tree (no material service, no bake): the bounds, no references, the
+  // entity's chunks in area 0 (D94)
+  {
+    auto scene = SceneGeometry{pool.get(), nullptr};
+    auto snapshot = snapshotOfMapText(mapText("", doorHead + doorBrush + "}\n"));
+    snapshot.sequence = 1;
+    const auto door = idNamed(snapshot, "lp4_door");
+    scene.takeSnapshot(snapshot);
+    scene.finishForTesting();
+    REQUIRE(scene.entityStates().contains(door));
+    const auto& d = scene.entityStates().at(door);
+    CHECK(
+      d.localReferenceBounds
+      == EngineBounds{EngineVec3{-16, -16, -16}, EngineVec3{16, 16, 16}});
+    CHECK(d.areas.empty());
+    CHECK_FALSE(scene.areaData());
+    for (const auto& [key, chunk] : scene.chunks())
+    {
+      CHECK(key.area == 0);
+    }
+  }
+  pool->stop();
+}
+
 TEST_CASE(
   "ChunkBuilder: every patch triangle's corners through TriVertsFromOriginal (R3.5)")
 {

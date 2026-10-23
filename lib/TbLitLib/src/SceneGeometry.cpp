@@ -19,7 +19,10 @@
 
 #include "lit/SceneGeometry.h"
 
+#include "lit/AreaData.h"
+#include "lit/EngineLight.h"
 #include "lit/EntityState.h"
+#include "lit/LightData.h"
 #include "lit/MaterialService.h"
 #include "lit/ProcFile.h"
 
@@ -600,6 +603,7 @@ void SceneGeometry::apply(ChunkJobOutput output)
   forgetCells(m_pendingMaterials, output.cells);
   for (const auto& ref : output.cells)
   {
+    m_touchedEntities.insert(ref.entity);
     // the cell's old chunks go
     for (auto it = m_chunks.lower_bound(
            ChunkKey{std::numeric_limits<int>::min(), ref.entity, {}, ref.cell, 0});
@@ -639,11 +643,90 @@ void SceneGeometry::apply(ChunkJobOutput output)
   for (auto& state : output.entities)
   {
     const auto id = state.id;
+    m_touchedEntities.insert(id);
     m_entityStates.insert_or_assign(id, std::move(state));
   }
   for (auto& warning : output.warnings)
   {
     m_warnings.push_back(std::move(warning));
+  }
+}
+
+void SceneGeometry::updateEntityReferences()
+{
+  if (m_touchedEntities.empty())
+  {
+    return;
+  }
+  auto touched = std::exchange(m_touchedEntities, {});
+  std::erase_if(
+    touched, [&](const PreviewId id) { return !m_entityStates.contains(id); });
+  if (touched.empty())
+  {
+    return;
+  }
+
+  // the union of every chunk of each touched entity, per material (model space)
+  auto unions = std::unordered_map<PreviewId, std::map<std::string, EngineBounds>>{};
+  for (const auto& [key, chunk] : m_chunks)
+  {
+    if (touched.contains(key.entity))
+    {
+      auto& perMaterial = unions[key.entity];
+      const auto [it, added] =
+        perMaterial.try_emplace(key.material, engineClearedBounds());
+      it->second = engineAddBounds(it->second, chunk.bounds);
+    }
+  }
+
+  // FinishSurfaces' growth of a deforming material's surface (Model.cpp:1343-1360), from
+  // the table the batch was built with
+  const auto deforms = [&](const std::string& material) {
+    const auto slot = m_table ? m_table->find(material) : nullptr;
+    return slot && slot->entry && slot->entry->deform != 0;
+  };
+  const auto hasTree = m_proc && !m_proc->nodes.empty();
+  const auto commonAreas = !hasTree  ? std::vector<int>{}
+                           : m_areas ? m_areas->commonAreas
+                                     : commonChildrenAreas(*m_proc);
+
+  for (const auto id : touched)
+  {
+    auto& state = m_entityStates.at(id);
+    state.materialBounds.clear();
+    state.localReferenceBounds = engineClearedBounds();
+    if (const auto it = unions.find(id); it != unions.end())
+    {
+      for (auto& [material, bounds] : it->second)
+      {
+        auto surface = deforms(material) ? engineDeformSurfaceBounds(bounds) : bounds;
+        state.localReferenceBounds = engineAddBounds(state.localReferenceBounds, surface);
+        state.materialBounds.emplace(material, surface);
+      }
+    }
+    state.areas.clear();
+    // R_CreateEntityRefs: cleared bounds add no reference
+    if (engineBoundsIsCleared(state.localReferenceBounds))
+    {
+      state.inverseBaseModelProject = EngineMat4{};
+      state.globalReferenceBounds = engineClearedBounds();
+      continue;
+    }
+    // R_DeriveEntityData (RenderWorld_defs.cpp:49-60)
+    const auto modelRenderMatrix =
+      engineMatrixFromOriginAxis(state.modelOrigin, state.parms.axis);
+    state.inverseBaseModelProject =
+      engineOffsetScaleForBounds(modelRenderMatrix, state.localReferenceBounds);
+    state.globalReferenceBounds =
+      engineProjectedBounds(state.inverseBaseModelProject, engineUnitCube(), false);
+    if (hasTree)
+    {
+      // PushFrustumIntoTree( entity, NULL, inverseBaseModelProject, bounds_unitCube ),
+      // each new reference prepended to the entity's chain (RenderWorld.cpp:1836-1837)
+      auto pushed = pushFrustumIntoTree(
+        *m_proc, commonAreas, state.inverseBaseModelProject, engineUnitCube());
+      state.areas.assign(pushed.rbegin(), pushed.rend());
+    }
   }
 }
 
@@ -689,6 +772,8 @@ bool SceneGeometry::collectChunks()
         m_warnings.push_back(fmt::format("A chunk job failed: {}", e.what()));
       }
     }
+    // D80: the references of the entities the batch touched, over all their chunks
+    updateEntityReferences();
     m_appliedSequence = m_batchSequence;
     // V.1: a table published while the batch ran woke an idle pass that could not adopt
     // it; it is adopted now, and what the batch left waiting is built at once

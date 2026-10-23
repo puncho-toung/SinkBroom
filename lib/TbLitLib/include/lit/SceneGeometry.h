@@ -72,6 +72,14 @@ struct ProcTree;
  * material service every material takes the defaults, provisionally, and there is no
  * .proc: every piece is in area 0.
  *
+ * The entities' references (LP4.0, C31, D80): once every job of a batch has applied,
+ * each entity whose chunks or state the batch touched gets, from all its chunks across
+ * cells and parts, its per-material and model bounds, R_DeriveEntityData's
+ * inverseBaseModelProject and globalReferenceBounds and R_CreateEntityRefs' areas over
+ * the adopted tree (ChunkEntityState), on the render thread through the copied pure
+ * functions (mirror.json M-REF-01, M-FLOW-PURE-01); a new tree rebuilds every cell, so
+ * every entity's references with it. Immutable until the next batch applies.
+ *
  * The scene's lights are the LightRegistry's (LP1b.3, C15): it takes the same snapshots
  * and .proc tree, builds the light records as its own pool job, and publishes them in a
  * LightTable, into the session's LightTablePublication (R2.9: LitSession::lightTable is
@@ -125,6 +133,9 @@ private:
   std::map<std::string, SizedCells> m_sizedCells;
   std::map<std::string, std::set<PreviewId>> m_pendingEntityDefs;
   std::map<CellRef, std::size_t> m_solidPieces;
+  // D80: the entities whose chunks the applied jobs touched, whose references are built
+  // once the batch has applied
+  std::set<PreviewId> m_touchedEntities;
 
   // the batch in flight
   std::set<CellRef> m_dirty;
@@ -208,6 +219,8 @@ private:
   EditorImageSize tableSizeOf(const std::string& material) const;
   void forgetSizedCells(const std::vector<CellRef>& cells);
   void apply(ChunkJobOutput output);
+  // C31, D80: the touched entities' bounds and area references from their chunks
+  void updateEntityReferences();
   bool collectChunks();
   PreviewId chunkEntityOf(const SceneNode& node) const;
 };
