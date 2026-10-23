@@ -83,10 +83,12 @@ std::string passFields(const FrameLogRow& row)
     settled);
 }
 
-// U2.3's column: the allocation headroom's refusals; empty in a start or stop row
+// U2.3's column, the allocation headroom's refusals, and V2.2's, the triangles the static
+// interaction cull took out; empty in a start or stop row
 std::string refusalFields(const FrameLogRow& row)
 {
-  return optionalCount(row.allocRefused);
+  return fmt::format(
+    "{},{}", optionalCount(row.allocRefused), optionalCount(row.culledTriangles));
 }
 
 std::string_view eventName(const FrameLogEvent event)
@@ -113,7 +115,7 @@ std::string_view frameLogHeader()
          "interactions_ms,gpu_tonemap_ms,gpu_blit_ms,draws,prepass_draws,interaction_"
          "draws,skipped_draws,pending_pipelines,lights_visible,lights_drawn,lights_"
          "overflowed,constant_bytes,volatile_writes,volatile_write_budget,push_constant_"
-         "bytes,settled,alloc_refused\n";
+         "bytes,settled,alloc_refused,culled_triangles\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -125,7 +127,7 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   if (row.event != FrameLogEvent::Frame)
   {
     return fmt::format(
-      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,\n",
+      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,

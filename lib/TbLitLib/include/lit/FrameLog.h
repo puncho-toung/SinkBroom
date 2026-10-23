@@ -110,6 +110,10 @@ struct FrameLogRow
   // U2.3 (31-LP2-FIXES.md), frame rows: the textures and geometry arenas not made so far
   // because the device's allocations reached AllocationHeadroom below its limit
   std::optional<std::uint64_t> allocRefused;
+  // V2.2 (32-LP2-VERIFY.md), frame rows: the triangles the static interaction cull took
+  // out of the frame's interactions (surfaces left out whole and the culled part of the
+  // ones drawn as runs, M-INTER-01)
+  std::optional<std::uint64_t> culledTriangles;
 };
 
 // the CSV header line, ending in a newline

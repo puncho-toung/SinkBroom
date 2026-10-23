@@ -47,6 +47,7 @@
 #include "kd/result.h"
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <nvrhi/nvrhi.h>
 #include <vulkan/vulkan.hpp>
 
@@ -840,7 +841,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     CHECK(rows.back()[1] == "stop");
     for (std::size_t i = 2; i + 1 < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 36u);
+      REQUIRE(rows[i].size() == 37u);
       CHECK(rows[i][0] == "1");
       CHECK(rows[i][1] == "frame");
       CHECK(rows[i][2] == std::to_string(i - 2));
@@ -1610,7 +1611,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     auto longestPresentMs = 0.0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 36u);
+      REQUIRE(rows[i].size() == 37u);
       if (rows[i][1] != "frame")
       {
         continue;
@@ -2633,7 +2634,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     auto arenaBytes = std::string{};
     for (const auto& row : readCsv(logPath))
     {
-      if (row.size() == 36u && row[1] == "frame" && !row[15].empty() && row[15] != "0")
+      if (row.size() == 37u && row[1] == "frame" && !row[15].empty() && row[15] != "0")
       {
         fromLog.push_back(std::stoull(row[15]));
         arenaBytes = row[17];
@@ -3801,7 +3802,7 @@ TEST_CASE("LitSession GPU resources on the retail game (D72)", "[.][retail]")
   auto stopAllocations = std::string{};
   for (const auto& row : readCsv(logPath))
   {
-    if (row.size() == 36u && row[1] != "event" && !row[14].empty() && row[0] != "session")
+    if (row.size() == 37u && row[1] != "event" && !row[14].empty() && row[0] != "session")
     {
       loggedPeak = std::max(loggedPeak, std::int64_t(std::stoll(row[14])));
       if (row[1] == "stop")
@@ -3888,7 +3889,11 @@ const auto Lp22aMaterials = std::string{
   "lights/defaultProjectedLight\n{\n\tlightFalloffImage _noFalloff\n"
   "\t{\n\t\tmap _white\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"
   "textures/lp2/litglass\n{\n\ttranslucent\n\tqer_editorimage "
-  "textures/lp1b/glass.tga\n\tdiffusemap textures/lp1b/glass.tga\n}\n"};
+  "textures/lp1b/glass.tga\n\tdiffusemap textures/lp1b/glass.tga\n}\n"
+  // V2.2: white to the volume's planes and past them, so that the static interaction
+  // cull, not the image, is what darkens a face on a plane
+  "lights/lp22a/flatclamp\n{\n\tlightFalloffImage _noFalloff\n"
+  "\t{\n\t\tmap _white\n\t\tcolored\n\t\tclamp\n\t}\n}\n"};
 
 /**
  * LP2.2a (P2.18): a game root assembled by name in a temp folder: the LP1b fixture map,
@@ -5344,15 +5349,16 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     // that drew the scene says so
     const auto rows = readCsv(logPath);
     REQUIRE(rows.size() >= 3u);
-    REQUIRE(rows[0].size() == 36u);
+    REQUIRE(rows[0].size() == 37u);
     CHECK(rows[0][18] == "gpu_prepass_ms");
     CHECK(rows[0][34] == "settled");
     CHECK(rows[0][35] == "alloc_refused");
+    CHECK(rows[0][36] == "culled_triangles");
     auto lastLit = std::optional<std::vector<std::string>>{};
     auto settledRows = 0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 36u);
+      REQUIRE(rows[i].size() == 37u);
       if (rows[i][1] != "frame")
       {
         continue;
@@ -5603,6 +5609,185 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
               << maxHandles << ")" << (settled ? "" : " (not settled)") << "\n";
     CHECK(counts.threads <= baseline.threads);
     CHECK(counts.handles <= maxHandles);
+  }
+
+  SECTION(
+    "V2.2: the static interaction cull end to end and the fixture measured with and "
+    "without it")
+  {
+    // a light whose +x plane is x 64 and +y plane y 64.125: W1's -x face lies on the +x
+    // plane (culled: 0), W2's -y face 1/8 inside the +y plane (kept: lit); both walls are
+    // one chunk (worldspawn, lp1b/wall), drawn as index runs
+    auto text = std::string{"{\n\"classname\" \"worldspawn\"\n"};
+    text += boxBrush(64, -32, 32, 80, 32, 96, "lp1b/wall");
+    text += boxBrush(-32, 64, 32, 32, 80, 96, "lp1b/wall");
+    text +=
+      "}\n{\n\"classname\" \"light\"\n\"name\" \"v22_light\"\n\"origin\" \"0 0 64\"\n"
+      "\"light_radius\" \"64 64.125 64\"\n\"texture\" \"lights/lp22a/flatclamp\"\n"
+      "\"_color\" \"1 1 1\"\n\"noshadows\" \"1\"\n}\n";
+    auto snapshot = std::make_shared<Snapshot>(snapshotOfMapText(text));
+    snapshot->generation = 7;
+    snapshot->sequence = 1;
+
+    const auto logPath =
+      std::filesystem::temp_directory_path() / "TbLitLibTest-v22-frame-log.csv";
+    std::filesystem::remove(logPath);
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    struct Phase
+    {
+      std::uint64_t firstFrame = 0;
+      std::uint64_t lastFrame = 0;
+      LitFrameStats stats;
+    };
+    auto measured = std::array<Phase, 2>{};
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = loggedRootSession(instance, events, *service, root, logPath);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(snapshot));
+
+      const auto atW1 = litCamera({0, 0, 64}, {1, 0, 0}, {0, 0, 1});
+      const auto atW2 = litCamera({0, 0, 64}, {0, 1, 0}, {0, 0, 1});
+      const auto w1 = settledHdr(*session, atW1, 1);
+      REQUIRE(w1);
+      CHECK(w1->first.brightest(80, 60) == 0.0f);
+      CHECK(w1->second.stats.lightTriangleRuns > 0u);
+      CHECK(w1->second.stats.culledTriangles > 0u);
+      const auto w2 = settledHdr(*session, atW2, 1);
+      REQUIRE(w2);
+      CHECK(w2->first.brightest(80, 60) > 0.0f);
+      CHECK(w2->second.stats.lightTriangleRuns > 0u);
+
+      // without the cull W1's face is lit: the cull is what darkened it
+      REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+        access.passes.setLightTriangleCullForTesting(false);
+      }));
+      const auto w1Whole = settledHdr(*session, atW1, 1);
+      REQUIRE(w1Whole);
+      CHECK(w1Whole->first.brightest(80, 60) > 0.0f);
+      CHECK(w1Whole->second.stats.culledTriangles == 0u);
+      CHECK(w1Whole->second.stats.lightTriangleRuns == 0u);
+      std::cout << fmt::format(
+        "V2.2: W1 on the plane {} (whole {}), W2 1/8 inside {}; runs {}, culled "
+        "triangles "
+        "{}\n",
+        w1->first.brightest(80, 60),
+        w1Whole->first.brightest(80, 60),
+        w2->first.brightest(80, 60),
+        w1->second.stats.lightTriangleRuns,
+        w1->second.stats.culledTriangles);
+
+      // the fixture measured: the LP2.2a map from camera 1, 30 frames with the cull and
+      // 30 without (the frame log's GPU times, interaction draws, culled triangles)
+      REQUIRE(waitFor([&] { return session->snapshotSlotFree(); }, 10000ms, false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 2)));
+      const auto lit = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+      for (const auto cull : {true, false})
+      {
+        auto& phase = measured[cull ? 0 : 1];
+        REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+          access.passes.setLightTriangleCullForTesting(cull);
+        }));
+        const auto settledFrame = settledHdr(*session, lit, 1);
+        REQUIRE(settledFrame);
+        phase.stats = settledFrame->second.stats;
+        REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+          phase.firstFrame = access.frameIndex + 1;
+        }));
+        for (auto i = 0; i < 30; ++i)
+        {
+          const auto before = session->framesPresented();
+          session->requestFrame();
+          REQUIRE(
+            waitFor([&] { return session->framesPresented() > before; }, 5000ms, false));
+        }
+        REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+          phase.lastFrame = access.frameIndex;
+        }));
+      }
+      REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+        access.passes.setLightTriangleCullForTesting(true);
+      }));
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+
+    // the medians of each phase's rows
+    const auto rows = readCsv(logPath);
+    REQUIRE(rows.size() > 2u);
+    CHECK(rows[0][36] == "culled_triangles");
+    for (std::size_t p = 0; p < measured.size(); ++p)
+    {
+      auto frameMs = std::vector<double>{};
+      auto interactionsMs = std::vector<double>{};
+      auto culled = std::set<std::string>{};
+      auto draws = std::set<std::string>{};
+      for (std::size_t i = 1; i < rows.size(); ++i)
+      {
+        const auto& row = rows[i];
+        if (row.size() != 37u || row[1] != "frame")
+        {
+          continue;
+        }
+        const auto frame = std::stoull(row[2]);
+        if (frame < measured[p].firstFrame || frame > measured[p].lastFrame)
+        {
+          continue;
+        }
+        if (!row[6].empty())
+        {
+          frameMs.push_back(fieldValue(row, 6));
+        }
+        if (!row[19].empty())
+        {
+          interactionsMs.push_back(fieldValue(row, 19));
+        }
+        culled.insert(row[36]);
+        draws.insert(row[24]);
+      }
+      const auto median = [](std::vector<double> values) {
+        if (values.empty())
+        {
+          return 0.0;
+        }
+        std::ranges::sort(values);
+        return values[values.size() / 2];
+      };
+      CHECK(frameMs.size() >= 10u);
+      std::cout << fmt::format(
+        "V2.2 fixture measurement (LP2.2a map, camera 1), cull {}: interaction draws {} "
+        "(log {}), culled triangles {} (log {}), GPU frame median {:.4f} ms, "
+        "interactions median {:.4f} ms over {} frames\n",
+        p == 0 ? "on" : "off",
+        measured[p].stats.interactionDraws,
+        fmt::join(draws, "/"),
+        measured[p].stats.culledTriangles,
+        fmt::join(culled, "/"),
+        median(frameMs),
+        median(interactionsMs),
+        frameMs.size());
+    }
+    CHECK(measured[1].stats.culledTriangles == 0u);
+    std::filesystem::remove(logPath);
   }
 
   SECTION("the livelock guard: a frame that cannot progress stops re-triggering itself")

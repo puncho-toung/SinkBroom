@@ -216,8 +216,9 @@ private:
     const LightTable* lights = nullptr;
     std::uint64_t lightsVersion = 0;
     std::uint64_t registry = 0;
-    // DX.2: the light triangles' answers
+    // DX.2: the light triangles' answers, and whether the cull applies (a test's switch)
     std::uint64_t lightTrianglesVersion = 0;
+    bool lightTriangleCull = true;
 
     bool operator==(const ListsKey&) const = default;
   };
@@ -280,6 +281,8 @@ private:
   bool m_overflowWarned = false;
   bool m_drawOverflowWarned = false;
   bool m_logDraws = false;
+  // V2.2's measurement: the static interaction cull applies (the engine's behaviour)
+  bool m_lightTriangleCull = true;
   std::vector<LitDrawRecord> m_drawLog;
   // the pipeline keys asked for while the log is on, drawn or not
   std::set<PipelineKey, PipelineKeyLess> m_requestedKeys;
@@ -314,6 +317,9 @@ public:
   void setConstantBufferVersionsForTesting(std::uint32_t versions);
   // every draw of the following frames is recorded (on) and the log cleared
   void setDrawLogForTesting(bool on);
+  // V2.2: off, every surface is drawn whole as if no static interaction cull ran (the
+  // fixture measurement's comparison); the lists are built again
+  void setLightTriangleCullForTesting(bool on);
   const std::vector<LitDrawRecord>& drawLogForTesting() const;
   // the pipeline keys the draws asked for while the log was on, also those of skipped
   // draws (a pending pipeline)

@@ -1745,6 +1745,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       // U2.3: the textures and arenas the allocation headroom refused so far
       row.allocRefused =
         m_arenas.headroomRefusals() + m_textureUploads.headroomRefusals();
+      // V2.2: the static interaction cull's count for the frame (DX.2)
+      row.culledTriangles = litStats.culledTriangles;
       // C16 (LP2.2b): the lit passes' counts (LitFrameStats) and the tonemap passes'
       const auto& tonemap = m_tonemap.lastStats();
       row.draws = litStats.prepassDraws + litStats.interactionDraws + tonemap.draws;

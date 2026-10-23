@@ -227,6 +227,7 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   key.lightsVersion = inputs.lights ? inputs.lights->version : 0;
   key.registry = table ? table->registry : 0;
   key.lightTrianglesVersion = m_lightTriangles.version();
+  key.lightTriangleCull = m_lightTriangleCull;
   const auto tableVersion = table ? table->version : 0;
   if (m_listsKey == key && !(m_lists.pending && tableVersion != m_listsTableVersion))
   {
@@ -265,15 +266,18 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
                          const ShaderParms& shaderParms) {
     return m_registers.registers(consumer, material, shaderParms, *table, inputs.service);
   };
-  frontend.lightTriangles =
-    [&](const LightRecord& record, const LitSurface& surface, const LitSpace& space) {
-      return m_lightTriangles.triangles(
-        record.id,
-        record.version,
-        record.derived.projection.baseLightProject,
-        *surface.chunk,
-        space.modelMatrix);
-    };
+  if (m_lightTriangleCull)
+  {
+    frontend.lightTriangles =
+      [&](const LightRecord& record, const LitSurface& surface, const LitSpace& space) {
+        return m_lightTriangles.triangles(
+          record.id,
+          record.version,
+          record.derived.projection.baseLightProject,
+          *surface.chunk,
+          space.modelMatrix);
+      };
+  }
   m_registers.beginBuild();
   m_lightTriangles.beginBuild();
   m_lists = buildFrontendLists(frontend);
@@ -1352,6 +1356,11 @@ void LitPasses::releaseAll()
 void LitPasses::setConstantBufferVersionsForTesting(const std::uint32_t versions)
 {
   m_constantBufferVersions = std::max(versions, 1u);
+}
+
+void LitPasses::setLightTriangleCullForTesting(const bool on)
+{
+  m_lightTriangleCull = on;
 }
 
 void LitPasses::setDrawLogForTesting(const bool on)
