@@ -20,7 +20,8 @@
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/Image_intrinsic.cpp,
-// renderer/DXT/DXTCodec.h and renderer/DXT/DXTEncoder_SSE2.cpp):
+// renderer/Image_load.cpp, renderer/BinaryImage.cpp, renderer/DXT/DXTCodec.h and
+// renderer/DXT/DXTEncoder_SSE2.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2013-2024 Robert Beckebans
 // That code is also subject to the additional terms that follow the GNU General Public
@@ -29,6 +30,7 @@
 
 #include "lit/IntrinsicImages.h"
 
+#include "lit/EngineImageData.h"
 #include "lit/ImageCache.h"
 
 #include <fmt/format.h>
@@ -432,6 +434,55 @@ std::optional<IntrinsicRecipe> intrinsicRecipe(const std::string_view name)
   return std::nullopt;
 }
 
+std::optional<std::shared_ptr<const CachedImage>> rawIntrinsicImage(
+  const std::string_view name)
+{
+  if (name == "_brdfLut")
+  {
+    // R_CreateBrdfLutImage: GenerateImage( brfLutTexBytes, BRDFLUT_TEX_WIDTH,
+    // BRDFLUT_TEX_HEIGHT, TF_LINEAR, TR_CLAMP, TD_RG16F ): one level of the array as it
+    // is
+    auto image = CachedImage{};
+    image.file = std::string{name};
+    image.textureType = Type2D;
+    image.storedFormat = FormatRg16f;
+    image.format = FormatRg16f;
+    image.colorFormat = ColorDefault;
+    image.width = engineBrdfLutWidth();
+    image.height = engineBrdfLutHeight();
+    image.numLevels = 1;
+    const auto* bytes = engineBrdfLutData();
+    image.data.assign(bytes, bytes + engineBrdfLutSize());
+    image.levels.push_back(
+      CachedImageLevel{0, 0, image.width, image.height, 0, image.data.size()});
+    return std::make_shared<const CachedImage>(std::move(image));
+  }
+  if (name == "_defaultUACRadiance")
+  {
+    // R_CreateDefaultRadianceCube: GenerateCubeImage( six faces of zeros, 8, TF_LINEAR,
+    // TD_HDRI ): one level, BC6H, each 8 × 8 face four zero blocks
+    constexpr auto size = 8;
+    constexpr auto faceBytes = std::size_t{(size / 4) * (size / 4) * 16};
+    auto image = CachedImage{};
+    image.file = std::string{name};
+    image.textureType = TypeCubic;
+    image.storedFormat = FormatBc6h;
+    image.format = FormatBc6h;
+    image.colorFormat = ColorDefault;
+    image.width = size;
+    image.height = size;
+    image.numLevels = 1;
+    image.data.assign(faceBytes * 6, 0);
+    for (auto side = 0; side < 6; ++side)
+    {
+      image.levels.push_back(
+        CachedImageLevel{0, side, size, size, std::size_t(side) * faceBytes, faceBytes});
+    }
+    return std::make_shared<const CachedImage>(std::move(image));
+  }
+  return std::nullopt;
+}
+
 std::vector<std::uint8_t> constantDxt5Blocks(
   const std::array<std::uint8_t, 4>& rgba,
   const int colorFormat,
@@ -453,6 +504,11 @@ std::vector<std::uint8_t> constantDxt5Blocks(
 Result<std::shared_ptr<const CachedImage>> intrinsicImage(
   MaterialDecls& decls, const std::string_view name)
 {
+  // LP4.2a (D85): the raw path's images are ready as they are
+  if (auto raw = rawIntrinsicImage(name))
+  {
+    return std::move(*raw);
+  }
   auto recipe = intrinsicRecipe(name);
   if (!recipe)
   {

@@ -16,7 +16,9 @@ fix round (`31-LP2-FIXES.md` DX.2) adds the static interactions' cull to the lig
 triangle cull (`renderer/Interaction.cpp`, three statement ranges) with
 `LIGHT_CLIP_EPSILON` and `srfCullInfo_t` (`renderer/Interaction.h`), compiled inside a
 function of `../shim/src/EngineInteraction.cpp` that declares, with the engine's names,
-what the ranges read and write.
+what the ranges read and write. LP4.2a adds `renderer/Image_brdfLut.h` whole (D85), the
+BRDF lookup table's data, which `../shim/src/EngineImageData.cpp` includes behind the
+facade `lit/EngineImageData.h` for the raw intrinsic `_brdfLut`.
 
 `renderer/DXT/` (`DXTCodec.h`, `DXTCodec_local.h`, `DXTEncoder_SSE2.cpp`) is **test only**
 (LP1c fix S3.2): the engine's fast DXT encoders, compiled into `TbLitIdDxtTestLib`, which

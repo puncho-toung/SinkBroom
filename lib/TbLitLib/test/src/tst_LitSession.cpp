@@ -34,6 +34,7 @@
 #include "lit/GameDeclSource.h"
 #include "lit/GameFileSource.h"
 #include "lit/ImageCache.h"
+#include "lit/IntrinsicImages.h"
 #include "lit/LightRecord.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
@@ -2809,6 +2810,11 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
       // the HDR panoramas' BC6H caches are 8 MB and only their headers are fixtures: a
       // synthetic BC6H image of arbitrary blocks stands in
       caches.emplace_back("bc6h", syntheticImage(16, ei::FormatBc6h, 7));
+      // LP4.2a (D85): the raw intrinsic path's two images, the RG16F BRDF LUT and the
+      // 8 x 8 BC6H default radiance cube
+      caches.emplace_back("_brdfLut", *rawIntrinsicImage("_brdfLut"));
+      caches.emplace_back(
+        "_defaultUACRadiance", *rawIntrinsicImage("_defaultUACRadiance"));
       auto ids = std::vector<ImageSlotId>{};
       REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
         for (const auto& [name, image] : caches)

@@ -60,9 +60,13 @@ target_sources(TbLitIdLib
     # inside a function of shim/src/EngineInteraction.cpp, which declares what they name
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Interaction.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Interaction.h
+    # LP4.2a (D85): the BRDF lookup table's data header, copied whole, included by
+    # shim/src/EngineImageData.cpp behind the facade lit/EngineImageData.h
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_brdfLut.h
 
     ${TB_LIT_ID_SHIM_DIR}/src/DeclManagerShim.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineGeometry.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/EngineImageData.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineInteraction.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineLight.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineLexer.cpp
@@ -94,6 +98,7 @@ target_sources(TbLitIdLib
     FILES
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineBuiltins.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineGeometry.h
+      ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineImageData.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineImageEnums.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineLexer.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineLight.h
