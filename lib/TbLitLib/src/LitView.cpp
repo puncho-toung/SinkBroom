@@ -98,6 +98,29 @@ void ScreenRect::clear()
   zmax = 1.0f;
 }
 
+void ScreenRect::addPoint(const float x, const float y)
+{
+  const int ix = engineFtoi(x);
+  const int iy = engineFtoi(y);
+
+  if (ix < x1)
+  {
+    x1 = short(ix);
+  }
+  if (ix > x2)
+  {
+    x2 = short(ix);
+  }
+  if (iy < y1)
+  {
+    y1 = short(iy);
+  }
+  if (iy > y2)
+  {
+    y2 = short(iy);
+  }
+}
+
 bool ScreenRect::isEmpty() const
 {
   return x1 > x2 || y1 > y2;

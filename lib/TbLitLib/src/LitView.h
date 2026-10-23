@@ -103,9 +103,11 @@ LitSpace litSpaceOf(
 ShaderParms engineWorldShaderParms();
 
 /**
- * idScreenRect (ScreenRect.h, ScreenRect.cpp): inclusive pixel bounds in GL's convention
- * (y up), as shorts, with the depth bounds the engine computes and no NVRHI test uses
- * (D67, K22).
+ * idScreenRect (ScreenRect.h:42-83, ScreenRect.cpp:67-184): inclusive pixel bounds in
+ * GL's unflipped convention (y up, row 0 the bottom of the target), as shorts, with the
+ * depth bounds the engine computes and no NVRHI test uses (D67, K22). It is the space of
+ * the view's scissor, of engineLightScissor's rect before engineScissorRect's flip, and
+ * of the portal flow's rects (lit/ViewFlow.h, C32.4). Pure; any thread.
  */
 struct ScreenRect
 {
@@ -116,8 +118,16 @@ struct ScreenRect
   float zmin = 0.0f;
   float zmax = 1.0f;
 
-  // Clear: backwards values
+  // Clear: backwards values (32000, 32000, -32000, -32000), zmin 0, zmax 1
   void clear();
+  /**
+   * AddPoint (ScreenRect.cpp:81-104, LP4.0, P4.16): x and y through idMath::Ftoi
+   * (_mm_cvttss_si32: truncation toward zero, Math.h:1331-1338; INT_MIN for a value
+   * beyond an int) and compared as ints; a new bound is stored into the short field as
+   * the engine's int-to-short assignment stores it (modulo 2^16).
+   */
+  void addPoint(float x, float y);
+  // IsEmpty: x1 > x2 || y1 > y2
   bool isEmpty() const;
   // GetArea: ( x2 - x1 + 1 ) · ( y2 - y1 + 1 )
   int area() const;
