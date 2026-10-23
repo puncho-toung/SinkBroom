@@ -1581,7 +1581,8 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     REQUIRE(rows.size() >= 10u);
     CHECK(rows[0][0] == "session");
     // LP2.2b (C16): the frame's GPU time, the passes' and the frame's counts
-    REQUIRE(rows[0].size() == 37u);
+    // LP4.1 (C16, P4.27): the view's portal flow's five columns
+    REQUIRE(rows[0].size() == 42u);
     CHECK(rows[0][6] == "gpu_frame_ms");
     CHECK(rows[0][18] == "gpu_prepass_ms");
     CHECK(rows[0][21] == "gpu_blit_ms");
@@ -1590,6 +1591,11 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     CHECK(rows[0][34] == "settled");
     CHECK(rows[0][35] == "alloc_refused");
     CHECK(rows[0][36] == "culled_triangles");
+    CHECK(rows[0][37] == "view_area");
+    CHECK(rows[0][38] == "areas_flowed");
+    CHECK(rows[0][39] == "lights_in_view");
+    CHECK(rows[0][40] == "portal_chains");
+    CHECK(rows[0][41] == "flow_ms");
     auto sessions = std::set<std::string>{};
     auto starts = 0;
     auto stops = 0;
@@ -1597,7 +1603,7 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     auto presentMs = std::vector<double>{};
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 37u);
+      REQUIRE(rows[i].size() == 42u);
       sessions.insert(rows[i][0]);
       if (rows[i][1] == "start")
       {
@@ -1867,6 +1873,8 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     CHECK((text.startsWith("settled | ") || text.startsWith("drawing | ")));
     CHECK(text.contains(" draws"));
     CHECK(text.contains("VRAM "));
+    // LP4.1 (D90): the document has no .proc, so nothing of the portal flow
+    CHECK_FALSE(text.contains("| area "));
 
     panel.stop();
     CHECK(status->text().isEmpty());

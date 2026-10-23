@@ -88,14 +88,15 @@ TEST_CASE("FrameLog")
          "interactions_ms,gpu_tonemap_ms,gpu_blit_ms,draws,prepass_draws,interaction_"
          "draws,skipped_draws,pending_pipelines,lights_visible,lights_drawn,lights_"
          "overflowed,constant_bytes,volatile_writes,volatile_write_budget,push_constant_"
-         "bytes,settled,alloc_refused,culled_triangles\n");
+         "bytes,settled,alloc_refused,culled_triangles,view_area,areas_flowed,lights_in_"
+         "view,portal_chains,flow_ms\n");
   }
 
   SECTION("formatFrameLogRow")
   {
     CHECK(
       formatFrameLogRow(exampleRow())
-      == "7,frame,12,0.153,0.051,16.205,0.021,mailbox,2,3,800,600,,,,,,,,,,,,,,,,,,,,,,,,,\n");
+      == "7,frame,12,0.153,0.051,16.205,0.021,mailbox,2,3,800,600,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
 
     // LP2.1: the allocations, the frame's uploads, the textures and the arenas
     auto withResources = exampleRow();
@@ -106,7 +107,7 @@ TEST_CASE("FrameLog")
     CHECK(
       formatFrameLogRow(withResources)
       == "7,frame,12,0.153,0.051,16.205,0.021,mailbox,2,3,800,600,,,211,33554432,205,"
-         "134217728,,,,,,,,,,,,,,,,,,,\n");
+         "134217728,,,,,,,,,,,,,,,,,,,,,,,,\n");
 
     // LP2.2b: the passes' GPU times, the draws, the lights, the constant buffers' writes
     // and whether the frame is settled
@@ -131,14 +132,25 @@ TEST_CASE("FrameLog")
     CHECK(
       formatFrameLogRow(withPasses)
       == "7,frame,12,0.153,0.051,16.205,0.021,mailbox,2,3,800,600,,,,,,,0.012,0.250,0."
-         "046,0.008,30,11,17,0,0,2,2,0,800,2,2730,660,1,,\n");
+         "046,0.008,30,11,17,0,0,2,2,0,800,2,2730,660,1,,,,,,,\n");
     withPasses.settled = false;
-    CHECK(formatFrameLogRow(withPasses).ends_with(",660,0,,\n"));
+    CHECK(formatFrameLogRow(withPasses).ends_with(",660,0,,,,,,,\n"));
     // U2.3: the allocation headroom's refusals; V2.2: the triangles the cull took out
     withPasses.allocRefused = 3;
-    CHECK(formatFrameLogRow(withPasses).ends_with(",660,0,3,\n"));
+    CHECK(formatFrameLogRow(withPasses).ends_with(",660,0,3,,,,,,\n"));
     withPasses.culledTriangles = 12;
-    CHECK(formatFrameLogRow(withPasses).ends_with(",660,0,3,12\n"));
+    CHECK(formatFrameLogRow(withPasses).ends_with(",660,0,3,12,,,,,\n"));
+    // LP4.1: the view's portal flow: the view's area (-1 outside the world), the areas
+    // flowed, the lights in view, the chains and the flow's time
+    withPasses.viewArea = -1;
+    withPasses.areasFlowed = 8;
+    withPasses.lightsInView = 6;
+    withPasses.portalChains = 8;
+    withPasses.flowMs = 0.04271;
+    CHECK(formatFrameLogRow(withPasses).ends_with(",660,0,3,12,-1,8,6,8,0.043\n"));
+    withPasses.viewArea = 3;
+    withPasses.flowMs = 0.0;
+    CHECK(formatFrameLogRow(withPasses).ends_with(",12,3,8,6,8,0.000\n"));
 
     // a row without its GPU time has an empty field
     auto row = exampleRow();
@@ -149,21 +161,21 @@ TEST_CASE("FrameLog")
     row.swapchainGeneration = 0;
     CHECK(
       formatFrameLogRow(row)
-      == "7,frame,12,0.153,0.000,0.000,,headless,0,3,800,600,,,,,,,,,,,,,,,,,,,,,,,,,\n");
+      == "7,frame,12,0.153,0.000,0.000,,headless,0,3,800,600,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
 
     // a session's start and stop carry the VRAM in use, and nothing of a frame
     CHECK(
       formatFrameLogRow(sessionRow(FrameLogEvent::Start))
-      == "7,start,,,,,,,,,,,812.3,6912.0,,,,,,,,,,,,,,,,,,,,,,,\n");
+      == "7,start,,,,,,,,,,,812.3,6912.0,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
     auto stop = sessionRow(FrameLogEvent::Stop);
     stop.vramUsedMb.reset();
     stop.vramBudgetMb.reset();
     stop.allocCount = 9;
-    CHECK(formatFrameLogRow(stop) == "7,stop,,,,,,,,,,,,,9,,,,,,,,,,,,,,,,,,,,,,\n");
+    CHECK(formatFrameLogRow(stop) == "7,stop,,,,,,,,,,,,,9,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
 
     // as many fields as the header
     const auto header = fieldCount(frameLogHeader());
-    CHECK(header == 37u);
+    CHECK(header == 42u);
     CHECK(fieldCount(formatFrameLogRow(exampleRow())) == header);
     CHECK(fieldCount(formatFrameLogRow(withResources)) == header);
     CHECK(fieldCount(formatFrameLogRow(withPasses)) == header);

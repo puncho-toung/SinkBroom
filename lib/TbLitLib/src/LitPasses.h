@@ -147,6 +147,18 @@ struct LitFrameStats
   // C16 (LP2.2b): the passes' timer queries were begun and ended
   bool prepassTimed = false;
   bool interactionsTimed = false;
+  // LP4.1 (C16, C32, D90): the view's portal flow behind the lists the frame drew
+  // (FrontendLists): the view's area (-1 outside the world and without a tree), the areas
+  // flowed, the tree's area count (0 without a tree), the view lights that went on to the
+  // pairing, the chains (AddAreaToView calls), the brush-entity chunks the flow left out,
+  // and flowView's time when the lists were built this frame (0 when they were kept)
+  int viewArea = -1;
+  std::size_t areasFlowed = 0;
+  std::size_t areas = 0;
+  std::size_t lightsInView = 0;
+  std::size_t portalChains = 0;
+  std::size_t entitiesCulled = 0;
+  double flowMs = 0.0;
 };
 
 // a recorded draw (setDrawLogForTesting)

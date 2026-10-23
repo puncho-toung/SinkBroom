@@ -1759,6 +1759,16 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         m_arenas.headroomRefusals() + m_textureUploads.headroomRefusals();
       // V2.2: the static interaction cull's count for the frame (DX.2)
       row.culledTriangles = litStats.culledTriangles;
+      // LP4.1 (C16): the view's portal flow behind the frame's lists (the view's area
+      // only while a tree exists)
+      if (litStats.areas > 0)
+      {
+        row.viewArea = litStats.viewArea;
+      }
+      row.areasFlowed = litStats.areasFlowed;
+      row.lightsInView = litStats.lightsInView;
+      row.portalChains = litStats.portalChains;
+      row.flowMs = litStats.flowMs;
       // C16 (LP2.2b): the lit passes' counts (LitFrameStats) and the tonemap passes'
       const auto& tonemap = m_tonemap.lastStats();
       row.draws = litStats.prepassDraws + litStats.interactionDraws + tonemap.draws;
@@ -1790,6 +1800,11 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         status.vramBytes =
           accountGpuMemory(m_frameResources, m_arenas, m_images, m_passes, m_tonemap)
             .total();
+        // D90 (LP4.1): the view's portal flow
+        status.viewArea = litStats.viewArea;
+        status.areasFlowed = litStats.areasFlowed;
+        status.areas = litStats.areas;
+        status.lightsInView = litStats.lightsInView;
         const auto lock = std::scoped_lock{m_statusMutex};
         m_status = status;
       }

@@ -31,6 +31,7 @@
 
 #include "LitPasses.h"
 
+#include "lit/AreaData.h"
 #include "lit/EngineBuiltins.h"
 #include "lit/EnginePipelineState.h"
 #include "lit/ImageCache.h"
@@ -142,6 +143,14 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
 
   rebuildLists(inputs, frame.view);
   m_stats.lightsVisible = m_lists.lights.size();
+  // LP4.1 (C16): the flow behind the lists; its time only when it ran this frame
+  m_stats.viewArea = m_lists.viewArea;
+  m_stats.areasFlowed = m_lists.areasFlowed;
+  m_stats.areas = m_lists.flowed && inputs.areas ? inputs.areas->areas.size() : 0;
+  m_stats.lightsInView = m_lists.lightsInView;
+  m_stats.portalChains = m_lists.portalChains;
+  m_stats.entitiesCulled = m_lists.entitiesCulled;
+  m_stats.flowMs = m_stats.listsRebuilt ? m_lists.flowMs : 0.0;
   m_stats.unconverged = m_lists.pending;
   m_stats.waitsForTable = m_lists.pending;
   // DX.2: a surface drawn whole until its light triangles are known

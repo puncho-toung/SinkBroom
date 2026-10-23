@@ -757,6 +757,12 @@ std::string sessionStatusLine(
     }
     line +=
       fmt::format(" | VRAM {:.1f} MB", double(status.vramBytes) / (1024.0 * 1024.0));
+    // D90 (LP4.1): the view's portal flow while a tree exists
+    if (status.areas > 0)
+    {
+      line += fmt::format(
+        " | area {}, {} of {} areas", status.viewArea, status.areasFlowed, status.areas);
+    }
   }
   for (const auto& program : programs)
   {

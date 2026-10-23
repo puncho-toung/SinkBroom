@@ -191,6 +191,35 @@ TEST_CASE("LitSession: the panel's status line (D9, LP2.3)")
     sessionStatusLine({}, programs)
     == "starting | disabled: builtin/post/histogram (no shader blob "
        "builtin/post/histogram.cs.bin)");
+
+  // LP4.1 (D90): the view's portal flow while a tree exists, before the disabled
+  // programs; without one nothing of it
+  auto flowed = SessionStatus{};
+  flowed.frames = 3;
+  flowed.settled = true;
+  flowed.lightsVisible = 1;
+  flowed.lightsDrawn = 1;
+  flowed.draws = 9;
+  flowed.vramBytes = 1024 * 1024;
+  flowed.viewArea = 1;
+  flowed.areasFlowed = 2;
+  flowed.areas = 8;
+  flowed.lightsInView = 2;
+  CHECK(
+    sessionStatusLine(flowed, {})
+    == "settled | 1 of 1 light drawn | 9 draws | VRAM 1.0 MB | area 1, 2 of 8 areas");
+  flowed.viewArea = -1;
+  flowed.areasFlowed = 8;
+  CHECK(
+    sessionStatusLine(flowed, programs)
+    == "settled | 1 of 1 light drawn | 9 draws | VRAM 1.0 MB | area -1, 8 of 8 areas | "
+       "disabled: builtin/post/histogram (no shader blob builtin/post/histogram.cs.bin)");
+  auto noTree = flowed;
+  noTree.areas = 0;
+  CHECK(
+    sessionStatusLine(noTree, {})
+    == "settled | 1 of 1 light drawn | 9 draws | VRAM 1.0 MB");
+  CHECK(sessionStatusLine(noTree, {}).find("area") == std::string::npos);
 }
 
 } // namespace tb::lit
@@ -841,7 +870,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     CHECK(rows.back()[1] == "stop");
     for (std::size_t i = 2; i + 1 < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 37u);
+      REQUIRE(rows[i].size() == 42u);
       CHECK(rows[i][0] == "1");
       CHECK(rows[i][1] == "frame");
       CHECK(rows[i][2] == std::to_string(i - 2));
@@ -1611,7 +1640,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     auto longestPresentMs = 0.0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 37u);
+      REQUIRE(rows[i].size() == 42u);
       if (rows[i][1] != "frame")
       {
         continue;
@@ -2634,7 +2663,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     auto arenaBytes = std::string{};
     for (const auto& row : readCsv(logPath))
     {
-      if (row.size() == 37u && row[1] == "frame" && !row[15].empty() && row[15] != "0")
+      if (row.size() == 42u && row[1] == "frame" && !row[15].empty() && row[15] != "0")
       {
         fromLog.push_back(std::stoull(row[15]));
         arenaBytes = row[17];
@@ -3802,7 +3831,7 @@ TEST_CASE("LitSession GPU resources on the retail game (D72)", "[.][retail]")
   auto stopAllocations = std::string{};
   for (const auto& row : readCsv(logPath))
   {
-    if (row.size() == 37u && row[1] != "event" && !row[14].empty() && row[0] != "session")
+    if (row.size() == 42u && row[1] != "event" && !row[14].empty() && row[0] != "session")
     {
       loggedPeak = std::max(loggedPeak, std::int64_t(std::stoll(row[14])));
       if (row[1] == "stop")
@@ -4322,6 +4351,22 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
       const auto centre = litImage.brightest(80, 60);
       CHECK(centre > 0.0f);
       CHECK(litImage.at(80, 60)[3] == 1.0f);
+      // LP4.1: the frame was drawn through the view's portal flow over the fixture's
+      // .proc (two areas; the camera in area 0, the east room), and both of its lights
+      // reference both areas, so the pixels are LP2.2a's
+      CHECK(litFrame.stats.areas == 2u);
+      CHECK(litFrame.stats.viewArea == 0);
+      CHECK(litFrame.stats.areasFlowed >= 1u);
+      CHECK(litFrame.stats.lightsInView >= litFrame.stats.lightsVisible);
+      std::cout << fmt::format(
+        "LP4.1 flow of the lit frame: view area {}, {} of {} areas flowed, {} chains, {} "
+        "lights in view, {} with interactions\n",
+        litFrame.stats.viewArea,
+        litFrame.stats.areasFlowed,
+        litFrame.stats.areas,
+        litFrame.stats.portalChains,
+        litFrame.stats.lightsInView,
+        litFrame.stats.lightsVisible);
       std::cout << fmt::format(
         "LP2.2a lit probe (floor at 60 0 0): {:.4f} {:.4f} {:.4f}; lights {}, "
         "interaction draws {}, prepass draws {}, constant writes {} ({} bytes, the "
@@ -5408,16 +5453,19 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     // that drew the scene says so
     const auto rows = readCsv(logPath);
     REQUIRE(rows.size() >= 3u);
-    REQUIRE(rows[0].size() == 37u);
+    REQUIRE(rows[0].size() == 42u);
     CHECK(rows[0][18] == "gpu_prepass_ms");
     CHECK(rows[0][34] == "settled");
     CHECK(rows[0][35] == "alloc_refused");
     CHECK(rows[0][36] == "culled_triangles");
+    // LP4.1 (C16): the view's portal flow's five columns
+    CHECK(rows[0][37] == "view_area");
+    CHECK(rows[0][41] == "flow_ms");
     auto lastLit = std::optional<std::vector<std::string>>{};
     auto settledRows = 0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 37u);
+      REQUIRE(rows[i].size() == 42u);
       if (rows[i][1] != "frame")
       {
         continue;
@@ -5794,6 +5842,9 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     const auto rows = readCsv(logPath);
     REQUIRE(rows.size() > 2u);
     CHECK(rows[0][36] == "culled_triangles");
+    // LP4.1 (C16): the view's portal flow's five columns
+    CHECK(rows[0][37] == "view_area");
+    CHECK(rows[0][41] == "flow_ms");
     for (std::size_t p = 0; p < measured.size(); ++p)
     {
       auto frameMs = std::vector<double>{};
@@ -5803,7 +5854,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
       for (std::size_t i = 1; i < rows.size(); ++i)
       {
         const auto& row = rows[i];
-        if (row.size() != 37u || row[1] != "frame")
+        if (row.size() != 42u || row[1] != "frame")
         {
           continue;
         }

@@ -1120,7 +1120,13 @@ constexpr auto LightsOverflowed = std::size_t{29};
 constexpr auto ConstantBytes = std::size_t{30};
 constexpr auto VolatileWrites = std::size_t{31};
 constexpr auto VolatileWriteBudget = std::size_t{32};
-constexpr auto Count = std::size_t{37};
+// LP4.1 (C16, P4.27): the view's portal flow
+constexpr auto ViewArea = std::size_t{37};
+constexpr auto AreasFlowed = std::size_t{38};
+constexpr auto LightsInView = std::size_t{39};
+constexpr auto PortalChains = std::size_t{40};
+constexpr auto FlowMs = std::size_t{41};
+constexpr auto Count = std::size_t{42};
 } // namespace column
 
 std::vector<LogRow> readFrameLog(const std::filesystem::path& path)
@@ -2103,6 +2109,39 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     perFrameMs,
     perDrawUs,
     pass(cpu.p95 <= 10.0));
+  // LP4.1 (D92): the start view's portal flow, from the first Start's settled frame
+  if (first.settledFrame > 0 && first.settledFrame <= firstRows.size())
+  {
+    const auto& start = firstRows[first.settledFrame - 1];
+    const auto field = [&](const std::size_t c) {
+      const auto& text = start.at(c);
+      return text.empty() ? std::string{"-"} : text;
+    };
+    summary += fmt::format(
+      "| Start view: the portal flow (first Start, frame {}) | view area {}, {} areas "
+      "flowed, {} lights in view, {} with interactions, {} drawn, {} portal chains; "
+      "draws "
+      "{}, CPU record {} ms | — | — |\n",
+      first.settledFrame,
+      field(column::ViewArea),
+      field(column::AreasFlowed),
+      field(column::LightsInView),
+      field(column::LightsVisible),
+      field(column::LightsDrawn),
+      field(column::PortalChains),
+      field(column::Draws),
+      field(column::CpuRecordMs));
+  }
+  {
+    const auto flow = orbit(column::FlowMs);
+    summary += fmt::format(
+      "| Camera moving: the portal flow's time | median {:.3f} ms, p95 {:.3f} ms, max "
+      "{:.3f} ms ({} frames) | — | — |\n",
+      flow.median,
+      flow.p95,
+      flow.max,
+      flow.count);
+  }
   summary += fmt::format(
     "| Camera moving: GPU frame | median {:.2f} ms, p95 {:.2f} ms, max {:.2f} ms ({} "
     "timed) | ≤ 12 ms | {} |\n",
@@ -2173,6 +2212,11 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   line("pending pipelines", column::PendingPipelines);
   line("lights visible", column::LightsVisible);
   line("lights drawn", column::LightsDrawn);
+  // LP4.1: the view's portal flow
+  line("lights in view (the flow's)", column::LightsInView);
+  line("areas flowed", column::AreasFlowed);
+  line("portal chains", column::PortalChains);
+  line("flow ms", column::FlowMs);
   const auto overflowed = line("lights overflowed", column::LightsOverflowed);
   line("bytes uploaded", column::BytesUploaded);
   line("volatile writes (D76's basis)", column::VolatileWrites);

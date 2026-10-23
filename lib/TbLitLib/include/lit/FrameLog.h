@@ -114,6 +114,15 @@ struct FrameLogRow
   // out of the frame's interactions (surfaces left out whole and the culled part of the
   // ones drawn as runs, M-INTER-01)
   std::optional<std::uint64_t> culledTriangles;
+  // LP4.1 (C16, C32), frame rows: the view's portal flow behind the frame's lists: the
+  // view's area (-1 outside the world; empty without a tree), the areas flowed, the view
+  // lights that went on to the pairing, the chains (AddAreaToView calls) and flowView's
+  // time this frame (0 when the lists were kept)
+  std::optional<std::int64_t> viewArea;
+  std::optional<std::uint64_t> areasFlowed;
+  std::optional<std::uint64_t> lightsInView;
+  std::optional<std::uint64_t> portalChains;
+  std::optional<double> flowMs;
 };
 
 // the CSV header line, ending in a newline

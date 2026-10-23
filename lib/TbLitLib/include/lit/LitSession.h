@@ -100,6 +100,13 @@ struct SessionStatus
   std::size_t pendingPipelines = 0;
   // the session's arenas, textures and targets (GpuMemoryAccount::total)
   std::uint64_t vramBytes = 0;
+  // LP4.1 (D90's first half, C32): the view's portal flow: the view's area (-1 outside
+  // the world), the areas flowed, the tree's area count (0 without a tree: no flow) and
+  // the view lights that went on to the pairing
+  int viewArea = -1;
+  std::size_t areasFlowed = 0;
+  std::size_t areas = 0;
+  std::size_t lightsInView = 0;
 
   bool operator==(const SessionStatus&) const = default;
 };
@@ -127,8 +134,9 @@ struct CompileTimings
 /**
  * D9 (LP2.3): the panel's status line: "starting" before the first frame, then "settled"
  * or "drawing", the lights drawn of those visible (and overflowed), the draws (skipped),
- * the pipelines pending and the VRAM; then every disabled program with its reason. Pure;
- * any thread.
+ * the pipelines pending and the VRAM, and while a tree exists (D90, LP4.1) "area A, F of
+ * N areas" (the view's area, -1 outside the world, the areas flowed and the tree's); then
+ * every disabled program with its reason. Pure; any thread.
  */
 std::string sessionStatusLine(
   const SessionStatus& status, const std::vector<ProgramReport>& programs);
