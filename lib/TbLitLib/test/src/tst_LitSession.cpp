@@ -3941,10 +3941,12 @@ namespace
 
 // LP2.2a: the ten programs' blobs LP2 loads (C26), copied out of the game folder (read
 // only) into a test game root; LP4.2a: and the ambient pass's probe path
-constexpr auto Lp2Programs = std::array<int, 14>{
+constexpr auto Lp2Programs = std::array<int, 15>{
   EngineBuiltinColor,
   EngineBuiltinTextureVertexColor,
   EngineBuiltinInteraction,
+  // LP5.1 (C45, D114): an ambientLight light's
+  EngineBuiltinInteractionAmbient,
   EngineBuiltinPbrInteraction,
   EngineBuiltinDepth,
   EngineBuiltinBlit,
@@ -10132,6 +10134,739 @@ std::string feedBatchMapText(const int count)
 }
 
 } // namespace
+
+namespace
+{
+
+// LP5.1 (C45): the light shaders of the math, ambientLight and held-image lights, written
+// into the root beside LP2.2a's stand-ins
+const auto Lp51Materials = std::string{
+  "lights/lp51/ambient\n{\n\tambientLight\n\tlightFalloffImage _noFalloff\n"
+  "\t{\n\t\tmap _white\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"
+  "lights/lp51/held\n{\n\tlightFalloffImage _noFalloff\n"
+  "\t{\n\t\tmap lights/lp51/held.tga\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"};
+
+// LP4.2a's slabs (lp42aMapText) without the fixture's lights, and these light entities
+std::string lp51MapText(const std::vector<std::string>& lights)
+{
+  const auto map = lp42aMapText();
+  auto out = std::string{};
+  auto start = std::size_t{0};
+  auto index = 0;
+  while (start < map.size())
+  {
+    const auto next = map.find("// entity ", start + 1);
+    const auto block = map.substr(start, next == std::string::npos ? next : next - start);
+    if (block.find("\"classname\" \"light\"") == std::string::npos)
+    {
+      out += block;
+      ++index;
+    }
+    start = next == std::string::npos ? map.size() : next;
+  }
+  for (const auto& light : lights)
+  {
+    out +=
+      fmt::format("// entity {}\n{{\n\"classname\" \"light\"\n{}}}\n", index++, light);
+  }
+  return out;
+}
+
+// a light entity's keys at the slab's (60 0 2), 48 above it, radius 100
+std::string lp51Light(
+  const std::string& name, const std::string& keys, const float colour)
+{
+  return fmt::format(
+    "\"name\" \"{}\"\n\"origin\" \"60 0 50\"\n\"light_radius\" \"100 100 100\"\n"
+    "\"_color\" \"{} {} {}\"\n{}",
+    name,
+    colour,
+    colour,
+    colour,
+    keys);
+}
+
+// MLFalloffCurve( t, MLF_INVSQUARE_CLAMPED, k, inner ) (mathlight.inc.hlsl, the curves):
+// the Karis-windowed inverse square
+float modelInvSquareClamped(const float t, const float k, const float inner)
+{
+  const auto u = std::clamp((t - inner) / std::max(1.0f - inner, 1e-3f), 0.0f, 1.0f);
+  const auto w = std::clamp(1.0f - u * u * u * u, 0.0f, 1.0f);
+  const auto d = u * k + 1e-3f;
+  return (w * w) / (d * d + 1.0f);
+}
+
+// the HDR of a frame whose lists hold, after its passes, what holds says, read back
+// through a staging texture as settledHdr reads one; nullopt at the deadline
+std::optional<std::pair<HdrImage, SettledFrame>> hdrOfFrame(
+  LitSession& session,
+  const std::function<bool(const RenderFrameAccess&)>& holds,
+  const std::chrono::milliseconds timeout = 10000ms)
+{
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    session.tableChanged();
+    auto staging = nvrhi::StagingTextureHandle{};
+    auto frame = SettledFrame{};
+    auto taken = false;
+    auto done = std::make_shared<std::promise<void>>();
+    auto future = done->get_future();
+    session.runAfterPassesForTesting([&, done](RenderFrameAccess& access) {
+      frame.stats = access.passes.lastStats();
+      frame.drawSurfs = access.passes.lists().drawSurfs.size();
+      frame.lights = access.passes.lists().lights.size();
+      taken = holds(access);
+      if (taken)
+      {
+        auto* hdr = access.frame.find(frame_resource::CurrentRenderHdr)->texture;
+        const auto& desc = hdr->getDesc();
+        staging = access.device.createStagingTexture(
+          nvrhi::TextureDesc{}
+            .setWidth(desc.width)
+            .setHeight(desc.height)
+            .setFormat(desc.format),
+          nvrhi::CpuAccessMode::Read);
+        access.commandList.copyTexture(
+          staging, nvrhi::TextureSlice{}, hdr, nvrhi::TextureSlice{});
+      }
+      done->set_value();
+    });
+    if (future.wait_for(10000ms) != std::future_status::ready)
+    {
+      return std::nullopt;
+    }
+    if (!taken)
+    {
+      std::this_thread::sleep_for(20ms);
+      continue;
+    }
+    auto image = HdrImage{};
+    const auto read = inFrame(session, [&](RenderFrameAccess& access) {
+      const auto& desc = staging->getDesc();
+      image.width = desc.width;
+      image.height = desc.height;
+      image.rgba.resize(std::size_t(desc.width) * desc.height * 4);
+      auto pitch = std::size_t{0};
+      const auto* bytes =
+        static_cast<const std::uint8_t*>(access.device.mapStagingTexture(
+          staging, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch));
+      for (std::uint32_t y = 0; y < desc.height; ++y)
+      {
+        const auto* row = reinterpret_cast<const std::uint16_t*>(bytes + y * pitch);
+        for (std::uint32_t x = 0; x < desc.width * 4; ++x)
+        {
+          image.rgba[std::size_t(y) * desc.width * 4 + x] = halfToFloat(row[x]);
+        }
+      }
+      access.device.unmapStagingTexture(staging);
+      staging = nullptr;
+    });
+    if (!read)
+    {
+      return std::nullopt;
+    }
+    return std::pair{std::move(image), frame};
+  }
+  return std::nullopt;
+}
+
+/**
+ * The parse thread's gate for the sweep: MaterialService calls pass() before it waits for
+ * its next work item, so a thread that passed an open gate takes the next item whatever
+ * the gate says since; close() then park() gives it one item of work and returns once it
+ * waits at the gate, so that no item queued after park() is taken until open().
+ */
+struct ParkingGate
+{
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool closed = false;
+  bool parked = false;
+
+  void pass()
+  {
+    auto lock = std::unique_lock{mutex};
+    parked = closed;
+    changed.notify_all();
+    changed.wait(lock, [&] { return !closed; });
+    parked = false;
+  }
+
+  void close()
+  {
+    const auto lock = std::scoped_lock{mutex};
+    closed = true;
+  }
+
+  // work: a request that gives the parse thread one item (an evaluation not made yet)
+  bool park(const std::function<void()>& work)
+  {
+    work();
+    auto lock = std::unique_lock{mutex};
+    return changed.wait_for(lock, 10s, [&] { return parked; });
+  }
+
+  void open()
+  {
+    {
+      const auto lock = std::scoped_lock{mutex};
+      closed = false;
+    }
+    changed.notify_all();
+  }
+};
+
+// opens a parking gate when the test leaves
+struct OpenParkingAtExit
+{
+  std::shared_ptr<ParkingGate> gate;
+  ~OpenParkingAtExit() { gate->open(); }
+};
+
+// the 5 x 5 patch around (80, 60), its red channel
+std::vector<float> litPatch(const HdrImage& image)
+{
+  auto patch = std::vector<float>{};
+  for (std::uint32_t y = 58; y <= 62; ++y)
+  {
+    for (std::uint32_t x = 78; x <= 82; ++x)
+    {
+      patch.push_back(image.at(x, y)[0]);
+    }
+  }
+  return patch;
+}
+
+float meanOf(const std::vector<float>& values)
+{
+  auto sum = 0.0;
+  for (const auto value : values)
+  {
+    sum += double(value);
+  }
+  return values.empty() ? 0.0f : float(sum / double(values.size()));
+}
+
+} // namespace
+
+// LP5.1 (C45, D112, D114; C50, P6.7): the second interaction phase's math lights, an
+// ambientLight light through interactionAmbient, and the 60-step light-colour sweep with
+// lagging evaluations, over LP4.2a's slabs with the fixture's lights replaced by one
+// light of each kind in turn, against CPU models of the blobs (interaction.ps.hlsl with
+// mathlight.inc.hlsl's MLEvaluate, interactionAmbient.ps.hlsl), the exposure pinned as
+// the parity test pins it. Hidden: it needs a GPU and the game's blobs.
+TEST_CASE("LitSession math and ambientLight lights on a GPU (LP5.1)", "[.][litgpu2]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  const auto base = root / "base";
+  writeTextFile(base / "materials" / "zz_lp51.mtr", Lp51Materials);
+  writeTextFile(base / "materials" / "zz_lp42a.mtr", Lp42aMaterials);
+  std::filesystem::create_directories(base / "textures" / "lp42a");
+  std::filesystem::create_directories(base / "lights" / "lp51");
+  {
+    auto file = std::ofstream{base / "textures" / "lp42a" / "flat.tga", std::ios::binary};
+    const auto bytes = test::tgaFile(test::flat(4, 4, 200, 120, 60));
+    file.write(bytes.data(), std::streamsize(bytes.size()));
+  }
+  for (const auto* name : {"second.tga", "metal.tga", "metal_s.tga"})
+  {
+    auto file = std::ofstream{base / "textures" / "lp42a" / name, std::ios::binary};
+    const auto bytes = test::tgaFile(test::flat(4, 4, 128, 128, 128));
+    file.write(bytes.data(), std::streamsize(bytes.size()));
+  }
+  {
+    auto file = std::ofstream{base / "lights" / "lp51" / "held.tga", std::ios::binary};
+    const auto bytes = test::tgaFile(test::flat(4, 4, 255, 255, 255));
+    file.write(bytes.data(), std::streamsize(bytes.size()));
+  }
+  const auto camera = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+  const auto frameLog = root / "lp51.framelog.csv";
+  std::filesystem::remove(frameLog);
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  auto programsAsked = std::set<int>{};
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    // the parse thread's gate: the sweep withholds evaluations by holding it
+    auto gate = std::make_shared<ParkingGate>();
+    auto serviceOptions = MaterialServiceOptions{};
+    serviceOptions.makeSource = [root](const std::atomic<bool>& cancel) {
+      return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(root, &cancel)};
+    };
+    serviceOptions.pollInterval = 0ms;
+    serviceOptions.imageBudgetBytes = 0;
+    serviceOptions.beforeTakeWorkForTesting = [gate] { gate->pass(); };
+    auto service = MaterialService::create(std::move(serviceOptions))
+                   | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    const auto atExit = OpenParkingAtExit{gate};
+    auto events = Events{};
+    auto options = SessionOptions{};
+    options.validation = true;
+    options.gamePath = root;
+    options.frameLogPath = frameLog;
+    auto session = LitSession::create(
+                     instance.handles(),
+                     VK_NULL_HANDLE,
+                     160,
+                     120,
+                     options,
+                     events.sink(),
+                     7,
+                     service.get())
+                   | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    // the exposure pinned as the parity test pins it (Q21, parity.py --pinned)
+    auto tonemap = EngineTonemap;
+    tonemap.hdrMinLuminance = 0.1f;
+    tonemap.hdrMaxLuminance = 0.1001f;
+    session->setTonemapForTesting(tonemap);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(true);
+    }));
+
+    auto sequence = std::uint64_t{0};
+    const auto offer = [&](const std::vector<std::string>& lights) {
+      REQUIRE(waitFor([&] { return session->snapshotSlotFree(); }, 10000ms, false));
+      REQUIRE(
+        session->offerSnapshot(lp22aSnapshot(lp51MapText(lights), root, 7, ++sequence)));
+    };
+    // a settled frame of the camera after its tonemap passes (LP4.2a's readback)
+    const auto shoot = [&] {
+      auto readback = std::optional<AmbientReadback>{};
+      for (auto attempt = 0;
+           attempt < 20
+           && !(
+             readback && readback->frame.settled && readback->frame.lit.camera == camera);
+           ++attempt)
+      {
+        REQUIRE(settledHdr(*session, camera, 1));
+        readback = ambientReadback(*session);
+      }
+      REQUIRE(readback);
+      REQUIRE(readback->frame.settled);
+      return std::move(*readback);
+    };
+    // the programs the interaction draws of one more settled frame use
+    const auto drawnPrograms = [&] {
+      auto logged = std::size_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        logged = access.passes.drawLogForTesting().size();
+      }));
+      REQUIRE(settledHdr(*session, camera, 1));
+      auto programs = std::set<int>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        const auto& log = access.passes.drawLogForTesting();
+        for (auto i = logged; i < log.size(); ++i)
+        {
+          if (log[i].pass == LitDrawRecord::Pass::Interaction)
+          {
+            programs.insert(log[i].program);
+          }
+        }
+        access.passes.setDrawLogForTesting(false);
+        access.passes.setDrawLogForTesting(true);
+      }));
+      programsAsked.insert(programs.begin(), programs.end());
+      return programs;
+    };
+    // the Lambert term at a point of the slab's top (normal +z; _flat's xy within
+    // 1e-3): the tangent-space light vector to the one light's globalLightOrigin
+    const auto lambertAt = [&](const std::array<float, 3>& p) {
+      auto origin = EngineVec3{};
+      const auto table = session->lightTable();
+      REQUIRE(table);
+      table->records.forEach([&](const PreviewId&, const auto& record) {
+        if (record)
+        {
+          origin = record->derived.projection.globalLightOrigin;
+        }
+      });
+      const auto d =
+        std::array<float, 3>{origin[0] - p[0], origin[1] - p[1], origin[2] - p[2]};
+      return std::clamp(
+        d[2] / std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]), 0.0f, 1.0f);
+    };
+
+    // the model's inputs: the flat slab's albedo as the service holds its image
+    const auto flatKey = stageImage(*service, "textures/lp42a/flat", 2);
+    REQUIRE(flatKey);
+    const auto flatTexel = firstTexel(*service, *flatKey);
+    REQUIRE(flatTexel);
+    const auto albedo = modelDiffuseMap(*flatTexel);
+    // the gate closed with the parse thread waiting at it: an evaluation of the flat
+    // slab's material it has not made, its parm 11 counting, is its one item first
+    auto parkedEvaluations = 0;
+    const auto withhold = [&] {
+      gate->close();
+      const auto slot = service->table()->find("textures/lp42a/flat");
+      REQUIRE(slot);
+      REQUIRE(slot->entry);
+      auto parms = ShaderParms{};
+      parms[11] = float(++parkedEvaluations);
+      REQUIRE(gate->park([&] {
+        static_cast<void>(service->evaluate(MaterialId::of(*slot->entry), parms, 0.0f));
+      }));
+    };
+    const auto at =
+      [](const AmbientReadback& readback, const std::uint32_t x, const std::uint32_t y) {
+        return (std::size_t(y) * readback.hdr.width + x) * 4;
+      };
+    // the pixel (80, 60): its centre is 0.5 pixel right of and below the view's, so at
+    // the slab's top (z 2, 78 below the eye; fov 90 over 160: 80 pixels per 78 units) it
+    // is 0.4875 along -x (down) and -y (right) from (60 0 2)
+    const auto pixelPoint = [](const float px, const float py) {
+      const auto unit = 78.0f / 80.0f;
+      return std::array<float, 3>{
+        60.0f - (py + 0.5f - 60.0f) * unit, -(px + 0.5f - 80.0f) * unit, 2.0f};
+    };
+    // the CPU model of a pixel against its read-back: the HDR within 1 %, the LDR +-1
+    const auto compare = [&](
+                           const char* what,
+                           const AmbientReadback& readback,
+                           const std::uint32_t x,
+                           const std::uint32_t y,
+                           const std::array<float, 3>& model) {
+      CAPTURE(what, x, y);
+      const auto hdr = readback.hdr.at(x, y);
+      const auto expected = modelLdr(model, readback.exposure, readback.frame);
+      const auto i = at(readback, x, y);
+      for (std::size_t c = 0; c < 3; ++c)
+      {
+        CAPTURE(c);
+        CHECK(hdr[c] == Catch::Approx(model[c]).epsilon(0.01));
+        CHECK(std::abs(int(readback.ldr[i + c]) - expected[c]) <= 1);
+      }
+      std::cout << fmt::format(
+        "LP5.1 {} ({} {}): HDR model ({:.5f} {:.5f} {:.5f}) read-back ({:.5f} {:.5f} "
+        "{:.5f}); LDR model ({} {} {}) read-back ({} {} {}); exposure {:.6f}\n",
+        what,
+        x,
+        y,
+        model[0],
+        model[1],
+        model[2],
+        hdr[0],
+        hdr[1],
+        hdr[2],
+        expected[0],
+        expected[1],
+        expected[2],
+        int(readback.ldr[i]),
+        int(readback.ldr[i + 1]),
+        int(readback.ldr[i + 2]),
+        readback.exposure);
+    };
+    // a light's diffuse on the flat slab: albedo x lambert x r_lightScale x colour (1) x
+    // lightColor (interaction.ps.hlsl: no specular stage, so the specular modifier 0)
+    const auto lit = [&](const float lambert, const float lightColor) {
+      const auto k = lambert * 3.0f * lightColor;
+      return std::array<float, 3>{albedo[0] * k, albedo[1] * k, albedo[2] * k};
+    };
+
+    // 1. a math point light (invsquare_clamped, falloff_exp 2, inner 0, the energy clamp
+    // on): MLEvaluate's t = |( uv, axial )| = |P - O| / 100 for this axial light, the
+    // curve clamped to 0..1, then sRGBToLinearRGB( proj 1 x falloff ) (IPS:179)
+    offer({lp51Light("lp51_math_point", "\"math_enabled\" \"1\"\n", 1.0f)});
+    const auto point = shoot();
+    CHECK(point.frame.lit.mathLights == 1u);
+    CHECK(point.frame.lit.textureLights == 0u);
+    CHECK(point.frame.lit.ambientLights == 0u);
+    CHECK(point.frame.lit.interactionDraws > 0u);
+    CHECK(drawnPrograms() == std::set<int>{EngineBuiltinInteraction});
+    for (const auto& [x, y] : {std::pair{80u, 60u}, std::pair{85u, 65u}})
+    {
+      const auto p = pixelPoint(float(x), float(y));
+      const auto t = std::min(
+        std::sqrt(
+          (p[0] - 60.0f) * (p[0] - 60.0f) + p[1] * p[1] + (p[2] - 50.0f) * (p[2] - 50.0f))
+          / 100.0f,
+        1.0f);
+      const auto falloff = std::clamp(modelInvSquareClamped(t, 2.0f, 0.0f), 0.0f, 1.0f);
+      compare("math point light", point, x, y, lit(lambertAt(p), modelLinear1(falloff)));
+    }
+
+    // 2. a math sun: falloff and mask 1, the whole volume unattenuated: both pixels the
+    // same, albedo x 3 x sRGBToLinearRGB( 1 )
+    offer({lp51Light(
+      "lp51_math_sun",
+      "\"math_enabled\" \"1\"\n\"parallel\" \"1\"\n\"light_center\" \"0 0 64\"\n",
+      1.0f)});
+    const auto sun = shoot();
+    CHECK(sun.frame.lit.mathLights == 1u);
+    CHECK(sun.frame.lit.textureLights == 0u);
+    for (const auto& [x, y] :
+         {std::pair{80u, 60u}, std::pair{85u, 65u}, std::pair{74u, 54u}})
+    {
+      compare(
+        "math sun", sun, x, y, lit(lambertAt(pixelPoint(float(x), float(y))), 1.0f));
+    }
+
+    // 3. an ambientLight light (a texture light: _white through _noFalloff, 1 at the
+    // slab): interactionAmbient.ps.hlsl's output is ( diffuseMap x rpDiffuseModifier +
+    // specMap(_black) ... ) x lightColor x vertex colour: its Lambert term of the fixed
+    // tangent-space vector ( 0.5, 9.5 - 0.385, 0.8925 ) (the blob's typo of 0.5 - 0.385)
+    // is computed and never multiplied in, so the slab reads albedo x 3
+    offer({lp51Light("lp51_ambient", "\"texture\" \"lights/lp51/ambient\"\n", 1.0f)});
+    const auto ambient = shoot();
+    CHECK(ambient.frame.lit.ambientLights == 1u);
+    CHECK(ambient.frame.lit.textureLights == 1u);
+    CHECK(ambient.frame.lit.mathLights == 0u);
+    CHECK(drawnPrograms() == std::set<int>{EngineBuiltinInteractionAmbient});
+    compare("ambientLight light", ambient, 80, 60, lit(1.0f, 1.0f));
+    compare("ambientLight light", ambient, 85, 65, lit(1.0f, 1.0f));
+    {
+      // what the Lambert of the typo'd vector would have made of it, for the record
+      const auto v = std::array<float, 3>{0.5f, 9.5f - 0.385f, 0.8925f};
+      const auto length = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+      std::cout << fmt::format(
+        "LP5.1 ambientLight light: the fixed vector's ldotN on a flat normal {:.5f} "
+        "(with "
+        "0.5 - 0.385 it would be {:.5f}); the output does not multiply it in\n",
+        v[2] / length,
+        0.8925f
+          / std::sqrt(0.25f + (0.5f - 0.385f) * (0.5f - 0.385f) + 0.8925f * 0.8925f));
+    }
+    // and as a math light: both phases' counts (a math light, an ambient light)
+    offer({lp51Light(
+      "lp51_ambient_math",
+      "\"texture\" \"lights/lp51/ambient\"\n\"math_enabled\" \"1\"\n",
+      1.0f)});
+    const auto ambientMath = shoot();
+    CHECK(ambientMath.frame.lit.ambientLights == 1u);
+    CHECK(ambientMath.frame.lit.mathLights == 1u);
+    CHECK(ambientMath.frame.lit.textureLights == 0u);
+    CHECK(drawnPrograms() == std::set<int>{EngineBuiltinInteractionAmbient});
+
+    // 4. a math light whose stage image is never loaded: units 3 and 4 bind _white, its
+    // stage image is never asked for, the frame converges with it drawn (no _default);
+    // the same light as a texture light with the parse thread held asks for it: its slot
+    // Pending, the _white stand-in drawn and the frame unconverged until it arrives
+    offer({lp51Light(
+      "lp51_held", "\"texture\" \"lights/lp51/held\"\n\"math_enabled\" \"1\"\n", 1.0f)});
+    const auto held = shoot();
+    CHECK(held.frame.lit.mathLights == 1u);
+    auto heldKey = std::optional<MaterialImageKey>{};
+    {
+      const auto table = session->lightTable();
+      REQUIRE(table);
+      table->records.forEach([&](const PreviewId&, const auto& record) {
+        if (record && record->derived.shader.material)
+        {
+          heldKey = record->derived.shader.material->stages.front().image;
+        }
+      });
+    }
+    REQUIRE(heldKey);
+    auto heldAsked = true;
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      heldAsked = access.images.find(*heldKey).has_value();
+    }));
+    CHECK_FALSE(heldAsked);
+    compare("math light, its stage image never loaded", held, 80, 60, [&] {
+      const auto p = pixelPoint(80.0f, 60.0f);
+      const auto t =
+        std::sqrt((p[0] - 60.0f) * (p[0] - 60.0f) + p[1] * p[1] + 48.0f * 48.0f) / 100.0f;
+      return lit(
+        lambertAt(p),
+        modelLinear1(std::clamp(modelInvSquareClamped(t, 2.0f, 0.0f), 0.0f, 1.0f)));
+    }());
+    auto heldState = std::optional<ImageSlots::State>{};
+    offer({lp51Light("lp51_held", "\"texture\" \"lights/lp51/held\"\n", 1.0f)});
+    const auto pending = hdrOfFrame(*session, [&](const RenderFrameAccess& access) {
+      const auto& lights = access.passes.lists().lights;
+      if (
+        lights.size() != 1u || engineLightUsesMathPath(lights.front().record->light.parms)
+        || access.passes.lastStats().textureLights != 1u)
+      {
+        return false;
+      }
+      // the frame that first asked for the stage image: not written yet
+      if (const auto id = access.images.find(*heldKey))
+      {
+        heldState = access.images.slot(*id)->state;
+      }
+      return true;
+    });
+    REQUIRE(pending);
+    CHECK(
+      (heldState == std::optional{ImageSlots::State::Pending}
+       || heldState == std::optional{ImageSlots::State::Loading}));
+    CHECK(pending->second.stats.unconverged);
+    const auto arrived = shoot();
+    CHECK(arrived.frame.lit.textureLights == 1u);
+    std::cout << fmt::format(
+      "LP5.1 held stage image: the math light converged with it never asked for; as a "
+      "texture light its slot was Pending and the frame unconverged ({} {}), then "
+      "settled\n",
+      heldState ? int(*heldState) : -1,
+      pending->second.stats.unconverged);
+
+    // 5. the sweep (C50, P6.7): per kind 60 steps of _color, the parse thread held on
+    // every second step and for the run 40-49 (the evaluation withheld: the light drawn
+    // from its kept registers, provisional, the frame unconverged); the lit patch never
+    // decreases and is equal to the step before on the withheld ones
+    struct Kind
+    {
+      const char* name;
+      std::string keys;
+      // each kind's colours its own, so that no kind finds another's evaluations (the
+      // texture and the math light share their shader)
+      float offset = 0.0f;
+    };
+    for (const auto& kind : {
+           Kind{"texture", "", 0.0f},
+           Kind{"math", "\"math_enabled\" \"1\"\n", 0.001f},
+           Kind{"ambient", "\"texture\" \"lights/lp51/ambient\"\n", 0.002f},
+         })
+    {
+      CAPTURE(kind.name);
+      const auto sweepStart = std::chrono::steady_clock::now();
+      auto previous = std::optional<std::vector<float>>{};
+      auto kept = 0;
+      for (auto step = 0; step < 60; ++step)
+      {
+        CAPTURE(step);
+        const auto colourText =
+          fmt::format("{:.3f}", 0.30f + 0.01f * float(step) + kind.offset);
+        const auto colour = std::stof(colourText);
+        const auto withheld = step % 2 == 1 || (step >= 40 && step < 50);
+        if (withheld)
+        {
+          withhold();
+        }
+        else
+        {
+          gate->open();
+        }
+        offer({fmt::format(
+          "\"name\" \"lp51_sweep\"\n\"origin\" \"60 0 50\"\n\"light_radius\" \"100 100 "
+          "100\"\n\"_color\" \"{0} {0} {0}\"\n{1}",
+          colourText,
+          kind.keys)});
+        const auto frame = hdrOfFrame(*session, [&](const RenderFrameAccess& access) {
+          const auto& lights = access.passes.lists().lights;
+          if (lights.size() != 1u)
+          {
+            return false;
+          }
+          const auto& light = lights.front();
+          const auto stats = access.passes.lastStats();
+          if (
+            light.record->light.parms.shaderParms[0] != colour || stats.camera != camera)
+          {
+            return false;
+          }
+          // a withheld step: drawn from the kept registers; an answered one: settled
+          return withheld ? light.provisional
+                          : !stats.unconverged && access.images.pending() == 0
+                              && !access.images.hasLoading();
+        });
+        REQUIRE(frame);
+        const auto patch = litPatch(frame->first);
+        if (previous)
+        {
+          CHECK(meanOf(patch) >= meanOf(*previous));
+          if (withheld)
+          {
+            ++kept;
+            CHECK(patch == *previous);
+          }
+          else
+          {
+            CHECK(meanOf(patch) > meanOf(*previous));
+          }
+        }
+        previous = patch;
+      }
+      gate->open();
+      std::cout << fmt::format(
+        "LP5.1 sweep {}: 60 steps, {} kept frames, the patch's mean {:.5f} at the last "
+        "step, {:.1f} s\n",
+        kind.name,
+        kept,
+        previous ? meanOf(*previous) : 0.0f,
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - sweepStart)
+          .count());
+    }
+
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(false);
+    }));
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  messages.print("LP5.1 math and ambientLight lights, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+
+  // the frame log's two columns: a frame of each light kind
+  {
+    const auto text = readTextFile(frameLog);
+    auto lines = std::vector<std::string>{};
+    auto stream = std::istringstream{text};
+    auto line = std::string{};
+    while (std::getline(stream, line))
+    {
+      lines.push_back(line);
+    }
+    REQUIRE(lines.size() > 1u);
+    const auto split = [](const std::string& row) {
+      auto fields = std::vector<std::string>{};
+      auto field = std::string{};
+      for (const auto c : row)
+      {
+        if (c == ',')
+        {
+          fields.push_back(field);
+          field.clear();
+        }
+        else
+        {
+          field += c;
+        }
+      }
+      fields.push_back(field);
+      return fields;
+    };
+    const auto header = split(lines.front());
+    REQUIRE(header.size() == 51u);
+    CHECK(header[49] == "math_lights");
+    CHECK(header[50] == "ambient_lights");
+    auto seen = std::set<std::pair<std::string, std::string>>{};
+    for (std::size_t i = 1; i < lines.size(); ++i)
+    {
+      const auto fields = split(lines[i]);
+      REQUIRE(fields.size() == 51u);
+      if (fields[1] == "frame")
+      {
+        seen.emplace(fields[49], fields[50]);
+      }
+    }
+    // the math lights (1, 0), the ambient light (0, 1), the ambient math light (1, 1)
+    CHECK(seen.contains({"1", "0"}));
+    CHECK(seen.contains({"0", "1"}));
+    CHECK(seen.contains({"1", "1"}));
+  }
+}
 
 // LPF.1 (C40, C43, C44, D98, D100-D102, D106, D110): the live feed on the render side
 // over the LP2.2a fixture, headless, with the exposure pinned: a feed publication draws a
