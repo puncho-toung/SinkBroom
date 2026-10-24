@@ -4270,27 +4270,30 @@ std::unique_ptr<MaterialService> rootService(
 
 // a headless 160 × 120 session with validation over the root; startPipelines false for a
 // test that holds the compile thread from the start (DX.5)
+/**
+ * LP5.2a (D118, P6.9): the LP2.2a fixture's lp1b/glass is a blend-only SL_AMBIENT
+ * material, and the models of the cases on this root exclude pass 8: their sessions skip
+ * the shader passes (the parity test's switch, r_skipAmbient 1's stand-in) unless a case
+ * asks for them (shaderPasses).
+ */
 std::unique_ptr<LitSession> rootSession(
   const VulkanInstance& instance,
   Events& events,
   MaterialService& service,
   const std::filesystem::path& root,
-  const bool startPipelines = true)
+  const bool startPipelines = true,
+  const bool shaderPasses = false)
 {
   auto options = SessionOptions{};
   options.validation = true;
   options.gamePath = root;
   options.requestStartPipelines = startPipelines;
-  return LitSession::create(
-           instance.handles(),
-           VK_NULL_HANDLE,
-           160,
-           120,
-           options,
-           events.sink(),
-           7,
-           &service)
-         | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  auto session =
+    LitSession::create(
+      instance.handles(), VK_NULL_HANDLE, 160, 120, options, events.sink(), 7, &service)
+    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  session->skipShaderPassesForTesting(!shaderPasses);
+  return session;
 }
 
 // T0.2: the mirrored vertex-input warnings a pipeline of program implies (its vertex
@@ -5245,27 +5248,25 @@ std::optional<ChainFrame> settledChain(
 }
 
 // a headless 160 × 120 session with validation over the root, logging its frames
+// LP5.2a (D118): as rootSession, the shader passes skipped unless asked for
 std::unique_ptr<LitSession> loggedRootSession(
   const VulkanInstance& instance,
   Events& events,
   MaterialService& service,
   const std::filesystem::path& root,
-  const std::filesystem::path& frameLogPath)
+  const std::filesystem::path& frameLogPath,
+  const bool shaderPasses = false)
 {
   auto options = SessionOptions{};
   options.validation = true;
   options.gamePath = root;
   options.frameLogPath = frameLogPath;
-  return LitSession::create(
-           instance.handles(),
-           VK_NULL_HANDLE,
-           160,
-           120,
-           options,
-           events.sink(),
-           7,
-           &service)
-         | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  auto session =
+    LitSession::create(
+      instance.handles(), VK_NULL_HANDLE, 160, 120, options, events.sink(), 7, &service)
+    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  session->skipShaderPassesForTesting(!shaderPasses);
+  return session;
 }
 
 double fieldValue(const std::vector<std::string>& row, const std::size_t column)
@@ -5677,6 +5678,8 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
                          service.get())
                        | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
         REQUIRE(session->hasSwapchain());
+        // LP5.2a (D118): the case's draws and keys exclude pass 8 (the fixture's glass)
+        session->skipShaderPassesForTesting(true);
         session->setExposed(true);
         REQUIRE(waitFor(
           [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
@@ -7765,6 +7768,8 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu2]")
                        7,
                        service.get())
                      | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+      // LP5.2a (D118): the model excludes pass 8 (the fixture's glass)
+      session->skipShaderPassesForTesting(true);
       session->setExposed(true);
       REQUIRE(waitFor(
         [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
@@ -10424,6 +10429,8 @@ TEST_CASE("LitSession math and ambientLight lights on a GPU (LP5.1)", "[.][litgp
                      7,
                      service.get())
                    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    // LP5.2a (D118): the models exclude pass 8 (the fixture's glass)
+    session->skipShaderPassesForTesting(true);
     // the exposure pinned as the parity test pins it (Q21, parity.py --pinned)
     auto tonemap = EngineTonemap;
     tonemap.hdrMinLuminance = 0.1f;
