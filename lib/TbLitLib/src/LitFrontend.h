@@ -279,8 +279,10 @@ void engineSortViewLights(std::vector<ViewLight>& lights);
  * negative float, comes first), then the farthest first within one sort value (the
  * engine's "depth smallest first" comment is wrong, SC522), then creation order. Here
  * the same three levels are compared one by one, creation order being ChunkKey's order
- * (area, entity, material, cell, part), the order buildFrontendLists makes the surfaces
- * in. A surface whose material is pending sorts as SS_OPAQUE (the stage pass skips it).
+ * (its operator<: entity, cell, area, material, part; ChunkBuilder.cpp), the order
+ * buildFrontendLists makes the surfaces in (the leading SS_SUBVIEW ones first, which sort
+ * first anyway). A surface whose material is pending sorts as SS_OPAQUE (the stage pass
+ * skips it).
  *
  * K37: the engine sorts dmap's model surfaces, one per area and material, each drawn in
  * its triangle order; the preview sorts its chunks (a material's faces of one area may be

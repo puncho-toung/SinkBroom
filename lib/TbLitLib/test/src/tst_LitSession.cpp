@@ -6760,7 +6760,9 @@ TEST_CASE("LitSession parity rows: the ambient-only switch (LP4.2b)")
  * engine's listRenderLightDefs printed has as many area references in the preview as
  * there, and the areas of the room centres its volume is built to reach. LP5.1 (C45): the
  * .json and "expect" gain the interaction phases' counters (texture_lights, math_lights,
- * ambient_lights). Hidden: it needs a GPU and the root of a parity.py run.
+ * ambient_lights). LP5.2a (C46, C50): and the stage pass's (stage_draws, stage_skipped);
+ * a control of mode "row" is not black (its unlit stages draw). Hidden: it needs a GPU
+ * and the root of a parity.py run.
  */
 TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
 {
@@ -7029,7 +7031,8 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           "{}, \"ambient_only\": {}, \"ambient_draws\": {}, \"probe_candidates\": {}, "
           "\"grid_surfaces\": {}, \"ambient_grid_surfaces\": {}, \"entity_grid_areas\": "
           "{{{}}}, "
-          "\"entity_grid_area\": {}, \"view_lights\": [{}]}}\n",
+          "\"entity_grid_area\": {}, \"stage_draws\": {}, \"stage_skipped\": {}, "
+          "\"view_lights\": [{}]}}\n",
           width,
           height,
           settleMs,
@@ -7062,6 +7065,8 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           lit.ambientGridSurfaces,
           fmt::join(entityGrid, ", "),
           expectedEntityGrid,
+          lit.stageDraws,
+          lit.stageSkipped,
           fmt::join(viewLights, ", ")));
 
       // C38 (LP4.2b): an ambient-only frame drew no interaction and was lit by the
@@ -7124,6 +7129,16 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           else if (key == "ambient_lights")
           {
             CHECK(lit.ambientLights == std::size_t(value.number));
+          }
+          else if (key == "stage_draws")
+          {
+            // LP5.2a (C46): the stage pass's draws and its SL_AMBIENT stages that drew
+            // nothing
+            CHECK(lit.stageDraws == std::size_t(value.number));
+          }
+          else if (key == "stage_skipped")
+          {
+            CHECK(lit.stageSkipped == std::size_t(value.number));
           }
           else if (key == "scissor_smaller_than_view")
           {
@@ -7262,8 +7277,12 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
       }
 
       // the lights-off control: black (every channel at most 1); R17's light takes a dark
-      // copy of its material there (V2.8)
-      if (control)
+      // copy of its material there (V2.8). LP5.2a (C50, P6.1): a control of mode "row"
+      // draws the row's unlit stages, compared by parity.py under the row's own class
+      const auto* controlMode = row.find("control_mode");
+      const auto rowControl = controlMode && controlMode->kind == JsonValue::Kind::String
+                              && controlMode->string == "row";
+      if (control && !rowControl)
       {
         auto lightPixels = std::size_t{0};
         for (std::size_t i = 0; i < image->rgba.size(); i += 4)

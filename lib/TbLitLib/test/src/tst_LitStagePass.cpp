@@ -28,7 +28,9 @@
 // ---- end of engine notice ----
 
 #include "LitFrontend.h"
+#include "LitMapFixture.h"
 #include "LitStages.h"
+#include "LitTestUtils.h"
 #include "LitView.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/EngineLight.h"
@@ -614,6 +616,86 @@ TEST_CASE(
   }
 
   // the parse warned of nothing (a bad keyword would default the material)
+  for (const auto& message : decls.messages())
+  {
+    CAPTURE(message.text);
+    CHECK(message.kind != DeclMessageKind::Warning);
+  }
+}
+
+TEST_CASE("LitStagePass: the stages map's S materials (LP5.2a, C50)")
+{
+  // parity.py's lp5_stages.mtr, as fixtures wrote it: the S rooms' stage decisions are
+  // the rows' expect counts (one chunk per material in each room)
+  auto source = MemoryDeclSource{{DeclFile{
+    "materials/lp5_stages.mtr",
+    readTextFile(litFixtureFolder() / "materials" / "lp5_stages.mtr"),
+    0}}};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+  auto colored = WhiteParms;
+  colored[0] = 0.5f;
+  colored[1] = 0.25f;
+  colored[2] = 1.0f;
+  struct Expected
+  {
+    std::string name;
+    std::size_t draws = 0;
+    std::size_t skipped = 0;
+    StageProgram program = StageProgram::TextureColor;
+    float sort = 4.0f;
+    int coverage = em::CoverageTranslucent;
+  };
+  const auto expected = std::vector<Expected>{
+    {"textures/lp5/s01_add", 1, 1},
+    {"textures/lp5/s01_blend", 1, 0},
+    {"textures/lp5/s01_filter", 1, 0},
+    {"textures/lp5/s02_inverse", 1, 0},
+    {"textures/lp5/s02_plain", 1, 0},
+    {"textures/lp5/s02_colored", 1, 0},
+    {"textures/lp5/s03_grate",
+     1,
+     0,
+     StageProgram::TextureColor,
+     0.0f,
+     em::CoveragePerforated},
+    {"textures/lp5/s04_red", 1, 0},
+    {"textures/lp5/s04_blue", 1, 0},
+    {"textures/lp5/s05_decal", 1, 0, StageProgram::TextureColor, 2.0f},
+    {"textures/lp5/s05_far", 1, 0, StageProgram::TextureColor, 3.0f},
+    {"textures/lp5/s05_close", 1, 0, StageProgram::TextureColor, 5.0f},
+    {"textures/lp5/s06_implicit", 1, 0},
+    {"textures/lp5/s07_screen", 1, 0, StageProgram::TextureColorTexgen},
+    {"textures/lp5/s12_backbox", 1, 0},
+    {"textures/lp5/s13_voronoi", 1, 0, StageProgram::Material},
+    {"textures/lp5/s14_fogwithlights", 1, 0, StageProgram::Material},
+  };
+  for (const auto& want : expected)
+  {
+    CAPTURE(want.name);
+    const auto material = parsed(decls, want.name);
+    CHECK(material->sort == want.sort);
+    CHECK(material->coverage == want.coverage);
+    CHECK(material->hasAmbient);
+    const auto parms = want.name == "textures/lp5/s02_colored" ? colored : WhiteParms;
+    const auto result =
+      engineShaderPassDraws(*material, registersOf(decls, *material, parms));
+    REQUIRE(result.draws.size() == want.draws);
+    CHECK(result.skipped == want.skipped);
+    CHECK(result.draws[0].program == want.program);
+  }
+  CHECK(parsed(decls, "textures/lp5/s06_implicit")->implicit);
+  CHECK(parsed(decls, "textures/lp5/s12_backbox")->cullType == engine_cull::BackSided);
+  // the M and B rooms' materials have no SL_AMBIENT stage
+  for (const auto* name :
+       {"textures/lp5/bump",
+        "textures/lp5/flat",
+        "textures/lp5/pbr",
+        "textures/lp5/white_wall"})
+  {
+    CAPTURE(name);
+    CHECK_FALSE(parsed(decls, name)->hasAmbient);
+  }
   for (const auto& message : decls.messages())
   {
     CAPTURE(message.text);

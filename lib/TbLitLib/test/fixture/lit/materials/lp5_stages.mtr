@@ -1,8 +1,8 @@
 // LP5.1 stages parity fixture (plans/lit-preview/41-LP5-PACKAGES.md C50, section 4
 // "LP5.1"); written by TOOLS/lit-preview/parity.py fixtures. The lights' images are
 // lp2_parity.mtr's (staged with it). Names under textures/lp5/ and lights/lp5/ are
-// reserved for fixtures (K20). No stage names _white or _black; no SL_AMBIENT stage, no
-// time or sound register (D119).
+// reserved for fixtures (K20). No stage names _white or _black; no time or sound register
+// (D119). The M and B rooms' materials have no SL_AMBIENT stage; LP5.2a's S rooms' do.
 
 // M01-M05, B01's floor: legacy diffuse and bump, no specular stage
 textures/lp5/bump
@@ -58,5 +58,217 @@ lights/lp5/ambient
 		map	lights/lp2/round.tga
 		colored
 		zeroClamp
+	}
+}
+
+// ----- LP5.2a: the S rooms (pass 8). Their wall: white, no bump (the implicit _flat), lit
+// head-on by R14's parallel light; every stage below is SL_AMBIENT, unlit
+
+textures/lp5/white_wall
+{
+	qer_editorimage	textures/lp5/white.tga
+	diffusemap	textures/lp5/white.tga
+}
+
+// S01: blend add (its second stage gl_zero, gl_one: skipped by pass 8, RenderBackend.cpp
+// :4457), blend blend, blend filter
+textures/lp5/s01_add
+{
+	qer_editorimage	textures/lp5/s_red.tga
+	{
+		blend	add
+		map	textures/lp5/s_red.tga
+	}
+	{
+		blend	gl_zero, gl_one
+		map	textures/lp5/s_red.tga
+	}
+}
+
+textures/lp5/s01_blend
+{
+	qer_editorimage	textures/lp5/s_green_a.tga
+	{
+		blend	blend
+		map	textures/lp5/s_green_a.tga
+	}
+}
+
+textures/lp5/s01_filter
+{
+	qer_editorimage	textures/lp5/s_blue.tga
+	{
+		blend	filter
+		map	textures/lp5/s_blue.tga
+	}
+}
+
+// S02: inverseVertexColor (brush vertices are white: the stage adds 0), a plain stage, and
+// colored (the func_static's _color through parm0-2)
+textures/lp5/s02_inverse
+{
+	qer_editorimage	textures/lp5/s_red.tga
+	{
+		blend	add
+		map	textures/lp5/s_red.tga
+		inverseVertexColor
+	}
+}
+
+textures/lp5/s02_plain
+{
+	qer_editorimage	textures/lp5/s_red.tga
+	{
+		blend	add
+		map	textures/lp5/s_red.tga
+	}
+}
+
+textures/lp5/s02_colored
+{
+	qer_editorimage	textures/lp5/white.tga
+	{
+		blend	add
+		map	textures/lp5/white.tga
+		colored
+	}
+}
+
+// S03: an alpha-tested ambient stage, perforated: the prepass draws its holes, pass 8 draws
+// EQUAL against them (no ALPHA_TEST of its own)
+textures/lp5/s03_grate
+{
+	qer_editorimage	textures/lp5/s03_grate.tga
+	{
+		map	textures/lp5/s03_grate.tga
+		alphaTest	0.5
+	}
+}
+
+// S04: two materials at SS_MEDIUM, blend blend with unequal colours and alphas
+textures/lp5/s04_red
+{
+	qer_editorimage	textures/lp5/white.tga
+	{
+		blend	blend
+		map	textures/lp5/white.tga
+		red	0.8
+		green	0.2
+		blue	0.2
+		alpha	0.6
+	}
+}
+
+textures/lp5/s04_blue
+{
+	qer_editorimage	textures/lp5/white.tga
+	{
+		blend	blend
+		map	textures/lp5/white.tga
+		red	0.2
+		green	0.2
+		blue	0.8
+		alpha	0.6
+	}
+}
+
+// S05: three polygonOffset decals of sort decal (the default), far and close
+textures/lp5/s05_decal
+{
+	qer_editorimage	textures/lp5/white.tga
+	polygonOffset	1
+	{
+		blend	blend
+		map	textures/lp5/white.tga
+		red	0.9
+		green	0.3
+		blue	0.1
+		alpha	0.7
+	}
+}
+
+textures/lp5/s05_far
+{
+	qer_editorimage	textures/lp5/white.tga
+	sort	far
+	polygonOffset	1
+	{
+		blend	blend
+		map	textures/lp5/white.tga
+		red	0.1
+		green	0.8
+		blue	0.3
+		alpha	0.7
+	}
+}
+
+textures/lp5/s05_close
+{
+	qer_editorimage	textures/lp5/white.tga
+	sort	close
+	polygonOffset	1
+	{
+		blend	blend
+		map	textures/lp5/white.tga
+		red	0.2
+		green	0.3
+		blue	0.9
+		alpha	0.7
+	}
+}
+
+// S06: textures/lp5/s06_implicit has no decl: the engine's implicit material (Material.cpp
+// SetDefaultText: blend blend, colored, map, clamp) over its image of the same name
+
+// S07: TG_SCREEN (the stage keyword screen, Material.cpp:1750) on texture_color_texgen
+textures/lp5/s07_screen
+{
+	qer_editorimage	textures/lp5/s07_screen.tga
+	{
+		blend	add
+		map	textures/lp5/s07_screen.tga
+		screen
+	}
+}
+
+// S12: a translucent backSided box: CT_BACK_SIDED, which the engine's GetRenderState draws
+// as front-sided (GLS_CULL_BITS, D117)
+textures/lp5/s12_backbox
+{
+	qer_editorimage	textures/lp5/white.tga
+	translucent
+	backSided
+	{
+		blend	blend
+		map	textures/lp5/white.tga
+		red	0.3
+		green	0.7
+		blue	0.9
+		alpha	0.5
+	}
+}
+
+// S13: a newStage program, the fork's vornoipattern (no _currentRender): iTime = USER0.x,
+// iResolution = USER0.yz, constants (D119)
+textures/lp5/s13_voronoi
+{
+	qer_editorimage	textures/lp5/white.tga
+	{
+		blend	add
+		program	vornoipattern
+		vertexParm	0	0.5, 400, 400
+	}
+}
+
+// S14: the engine's fogwithlights, which samples no texture (its t_CurrentRender is declared,
+// never read) and names no _currentRender here: SS_MEDIUM, drawn by pass 8; iTime =
+// USER0.x, iResolution = USER0.yz, constants (D119)
+textures/lp5/s14_fogwithlights
+{
+	qer_editorimage	textures/lp5/white.tga
+	{
+		blend	add
+		program	fogwithlights
+		vertexParm	0	0.5, 1280, 720
 	}
 }
