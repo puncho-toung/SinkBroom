@@ -34,6 +34,7 @@
 #include "lit/EngineTables.h"
 #include "lit/FramePacer.h"
 #include "lit/GameDeclSource.h"
+#include "lit/GameFile.h"
 #include "lit/GameFileSource.h"
 #include "lit/GridTable.h"
 #include "lit/ImageCache.h"
@@ -8986,7 +8987,333 @@ TEST_CASE("LitSession light-grid path on a GPU (LP4.3)", "[.][litgpu]")
     CHECK(messages.warnings == 0);
   }
 
+  // LP4.3 step 5 (D93, K29, K16): a light grid with one entry too few. readMapBake drops
+  // the grid and the probes with the reason (the .shprobes would light the slab); the
+  // line says so, the pass is black, and the tree is still used
+  SECTION("the mismatched bake: the grid and the probes dropped, the pass black")
+  {
+    writeAtlas(0, Lp43TilesA);
+    writeAtlas(1, Lp43TilesB);
+    writeTextFile(base / "maps" / "lp1b_geometry.lightgrid", lp43GridText(1));
+    const auto c0 = 0.25f / ModelY00;
+    const auto sh = fmt::format(
+      "( {0:.9g} {0:.9g} {0:.9g} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 )", c0);
+    writeTextFile(
+      base / "maps" / "lp1b_geometry.shprobes",
+      fmt::format("SHPROBES \"1\"\n2\n0 ( 132 0 64 ) {0}\n1 ( -124 0 64 ) {0}\n", sh));
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp43MapText(), root, 7, 1)));
+      session->skipInteractionsForTesting(true);
+      const auto a = readbackOf(*session, cameraA);
+      // the tree is used (K16): the view flowed, area 0 of 2
+      CHECK(a.frame.lit.areas == 2u);
+      CHECK(a.frame.lit.viewArea == 0);
+      // no grid, no SH: the slab black
+      CHECK(session->gridTable()->areas.empty());
+      CHECK(a.frame.lit.gridSurfaces == 0u);
+      CHECK(a.frame.lit.ambientGridSurfaces == 0u);
+      CHECK(a.frame.lit.ambientDraws > 0u);
+      const auto centre = a.hdr.at(80, 60);
+      CHECK(centre[0] == 0.0f);
+      CHECK(centre[1] == 0.0f);
+      CHECK(centre[2] == 0.0f);
+      const auto probes = session->probeTable();
+      REQUIRE(probes->records.size() == 2u);
+      CHECK_FALSE(probes->records[0].shFound);
+      CHECK_FALSE(probes->records[1].shFound);
+      // the status line says why
+      const auto line = sessionStatusLine(session->status(), {});
+      CAPTURE(line);
+      CHECK(
+        line.find(
+          "| bake: dropped (the light grid has 1 entries for 1 distinct areas, the "
+          "map has 2 areas)")
+        != std::string::npos);
+      std::cout << "LP4.3 mismatched bake: " << line << "\n";
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    messages.print("LP4.3 mismatched bake, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  // LP4.3 step 5 (D94): the LP2.2a fixture without its .proc: no flow, the lists LP2's
+  // (every chunk a candidate, the lights through walls), the ambient pass black (no tree:
+  // no probes, no grid), and the line says "bake: none"
+  SECTION("the no-tree map: the flow skipped, the pass black, bake: none")
+  {
+    std::filesystem::remove(base / "maps" / "lp1b_geometry.proc");
+    writeAtlas(0, Lp43TilesA);
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp43MapText(), root, 7, 1)));
+      // lit: the interactions draw as in LP2, through the doorway's wall too (K1)
+      const auto lit = settledHdr(*session, cameraA, 1);
+      REQUIRE(lit);
+      CHECK(lit->second.stats.areas == 0u);
+      CHECK(lit->second.stats.viewArea == -1);
+      CHECK(lit->second.stats.areasFlowed == 0u);
+      CHECK(lit->second.stats.gridSurfaces == 0u);
+      CHECK(lit->second.stats.interactionDraws > 0u);
+      auto flowed = true;
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        flowed = access.passes.lists().flowed;
+      }));
+      CHECK_FALSE(flowed);
+      CHECK(session->gridTable()->areas.empty());
+      CHECK(session->probeTable()->records.empty());
+      // ambient only: black
+      session->skipInteractionsForTesting(true);
+      const auto a = readbackOf(*session, cameraA);
+      CHECK(a.frame.lit.ambientDraws > 0u);
+      const auto centre = a.hdr.at(80, 60);
+      CHECK(centre[0] == 0.0f);
+      CHECK(centre[1] == 0.0f);
+      CHECK(centre[2] == 0.0f);
+      const auto line = sessionStatusLine(session->status(), {});
+      CAPTURE(line);
+      CHECK(line.find("| bake: none") != std::string::npos);
+      CHECK(line.find("| area ") == std::string::npos);
+      std::cout << "LP4.3 no tree: " << line << "\n";
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    messages.print("LP4.3 no tree, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
   std::filesystem::remove_all(root);
+}
+
+// LP4.3 step 5 (D81, D93, P4.8, §6's exit test): the stale bake on the LP2 parity map and
+// its .proc (TB_LIT_PARITY_ROOT, read only): a world brush and a light added outside the
+// hull through a snapshot (the edit the saved file does not hold), and a light inside
+// room 1 whose volume reaches through the wall to the brush. The brush's faces are pieces
+// in solid (area -1, the outside set): drawn from the void (view area -1), lit by the new
+// light (no references: it lights the outside set alone, by volume) and by the inside one
+// (D81: a light with references lights the outside geometry its volume meets); the
+// status line says "stale" for the unsaved edit and counts the pieces outside the baked
+// hull. Hidden: it needs a GPU and the root of a parity.py run.
+TEST_CASE(
+  "LitSession: the stale bake on the parity map (LP4.3, D81, P4.8)", "[.][parity]")
+{
+  const auto* rootValue = std::getenv("TB_LIT_PARITY_ROOT");
+  if (!rootValue || !*rootValue)
+  {
+    SKIP(
+      "TB_LIT_PARITY_ROOT is not set: the test needs the preview root of a parity run");
+  }
+  const auto root = std::filesystem::path{rootValue};
+  const auto map = std::string{"maps/test/litpreview_parity.map"};
+  REQUIRE(std::filesystem::exists(root / "base" / map));
+  REQUIRE(std::filesystem::exists((root / "base" / map).replace_extension(".proc")));
+
+  // the parity map's text with the brush in the void east of room 1 (interior x 0..384,
+  // its wall x 384..400) and the two lights
+  auto edited = readTextFile(root / "base" / map);
+  {
+    const auto entity1 = edited.find("// entity 1");
+    REQUIRE(entity1 != std::string::npos);
+    edited.insert(
+      edited.rfind('}', entity1), boxBrush(420, 160, 64, 452, 224, 128, "lp2/white"));
+    edited +=
+      "// entity lp43\n{\n\"classname\" \"light\"\n\"name\" \"lp43_stale_outside\"\n"
+      "\"origin\" \"500 192 96\"\n\"light_radius\" \"60 60 60\"\n"
+      "\"texture\" \"lights/lp2/round\"\n\"_color\" \"1 1 1\"\n\"noshadows\" "
+      "\"1\"\n}\n";
+    edited +=
+      "// entity lp43b\n{\n\"classname\" \"light\"\n\"name\" \"lp43_stale_inside\"\n"
+      "\"origin\" \"360 192 96\"\n\"light_radius\" \"120 120 120\"\n"
+      "\"texture\" \"lights/lp2/round\"\n\"_color\" \"1 1 1\"\n\"noshadows\" "
+      "\"1\"\n}\n";
+  }
+  const auto inBrush = [](const Chunk& chunk) {
+    return chunk.bounds[0][0] >= 419.0f && chunk.bounds[1][0] <= 453.0f
+           && chunk.bounds[0][1] >= 159.0f && chunk.bounds[1][1] <= 225.0f
+           && chunk.bounds[0][2] >= 63.0f && chunk.bounds[1][2] <= 129.0f;
+  };
+
+  const auto library = VulkanLibrary{};
+  REQUIRE(library.getInstanceProcAddr != nullptr);
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  {
+    const auto instance = TestInstance{library, true, false, messages};
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto service = rootService(root);
+    auto events = Events{};
+    auto session = rootSession(instance, events, *service, root);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+    // from the void east of the brush, looking west at it
+    const auto camera = litCamera({600, 192, 96}, {-1, 0, 0}, {0, 0, 1});
+
+    // the saved map first: its own pieces in solid (the walls' outer faces, K14)
+    REQUIRE(session->offerSnapshot(paritySnapshot(root, map, 1)));
+    REQUIRE(settledHdr(*session, camera, 0));
+    const auto before = session->status();
+    REQUIRE(before.bake == SessionStatus::Bake::Proc);
+
+    // the edit
+    REQUIRE(waitFor([&] { return session->snapshotSlotFree(); }, 10000ms, false));
+    auto snapshot = snapshotOfMapText(edited);
+    const auto offset = PreviewId{2} << 32;
+    for (auto& entity : snapshot.entities)
+    {
+      entity.id += offset;
+    }
+    for (auto& node : snapshot.nodes)
+    {
+      node.id += offset;
+      node.entity += offset;
+    }
+    snapshot.removed = snapshotIds(*paritySnapshot(root, map, 1));
+    snapshot.generation = 7;
+    snapshot.sequence = 2;
+    snapshot.mapPath = (root / "base" / map).string();
+    REQUIRE(
+      session->offerSnapshot(std::make_shared<const Snapshot>(std::move(snapshot))));
+    const auto frame =
+      settledHdr(*session, litCamera({600, 192, 97}, {-1, 0, 0}, {0, 0, 1}), 2);
+    REQUIRE(frame);
+    CHECK(frame->second.stats.viewArea == -1);
+
+    auto brushDrawn = 0;
+    auto litBy = std::map<std::string, int>{};
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      const auto& lists = access.passes.lists();
+      for (const auto& surface : lists.drawSurfs)
+      {
+        if (inBrush(*surface.chunk))
+        {
+          CHECK(surface.chunk->key.area == -1);
+          CHECK_FALSE(surface.gridArea);
+          ++brushDrawn;
+        }
+      }
+      for (const auto& light : lists.lights)
+      {
+        const auto* name = findKey(light.record->spawnArgs, "name");
+        for (const auto* list :
+             {&light.localInteractions,
+              &light.globalInteractions,
+              &light.translucentInteractions})
+        {
+          for (const auto& surface : *list)
+          {
+            if (name && inBrush(*surface.chunk))
+            {
+              ++litBy[*name];
+            }
+          }
+        }
+      }
+    }));
+    const auto table = session->lightTable();
+    auto outsideAreas = std::optional<std::size_t>{};
+    auto insideAreas = std::optional<std::size_t>{};
+    table->records.forEach([&](const PreviewId&, const auto& record) {
+      const auto* name = record ? findKey(record->spawnArgs, "name") : nullptr;
+      if (name && *name == "lp43_stale_outside")
+      {
+        outsideAreas = record->derived.areas.size();
+      }
+      if (name && *name == "lp43_stale_inside")
+      {
+        insideAreas = record->derived.areas.size();
+      }
+    });
+    // the new light has no references (the outside set), the inside one references room 1
+    CHECK(outsideAreas == std::size_t{0});
+    REQUIRE(insideAreas);
+    CHECK(*insideAreas >= 1u);
+    CHECK(brushDrawn > 0);
+    CHECK(litBy["lp43_stale_outside"] > 0);
+    CHECK(litBy["lp43_stale_inside"] > 0);
+
+    // the status: more pieces in solid; stale for the unsaved edit (the host's flag), not
+    // without it (the .proc was written after the .map)
+    auto status = session->status();
+    CHECK(status.bake == SessionStatus::Bake::Proc);
+    CHECK(status.solidPieces > before.solidPieces);
+    if (const auto stat = statGameFile(root / "base" / map))
+    {
+      status.mapFileTime = stat->unixSeconds;
+    }
+    const auto saved = sessionStatusLine(status, {});
+    status.documentModified = true;
+    const auto line = sessionStatusLine(status, {});
+    CAPTURE(saved, line);
+    CHECK(saved.find("stale") == std::string::npos);
+    CHECK(line.find("| bake: proc, stale, ") != std::string::npos);
+    CHECK(line.find(" pieces outside the baked hull") != std::string::npos);
+    std::cout << fmt::format(
+      "LP4.3 stale bake: {} pieces in solid before the edit, {} after; the brush drawn "
+      "in "
+      "{} surfaces, lit by the outside light {} and the inside light {} times; {}\n",
+      before.solidPieces,
+      status.solidPieces,
+      brushDrawn,
+      litBy["lp43_stale_outside"],
+      litBy["lp43_stale_inside"],
+      line);
+
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  messages.print("LP4.3 stale bake, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
 }
 
 } // namespace tb::lit
