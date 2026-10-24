@@ -535,6 +535,8 @@ private:
   std::unordered_map<std::string, StoredOverride> m_overrides;
   std::size_t m_overrideBytes = 0;
   std::uint64_t m_overrideConversions = 0;
+  // LPF.1 (C44): while a Feed item runs, the image keys whose slots it drops (dropImage)
+  std::vector<MaterialImageKey>* m_feedTouched = nullptr;
   // D111 (P5.7): the materials whose editor-image chain holds an image name (its match
   // name), as they were measured, so that an override's editorSize remeasures them
   std::unordered_map<std::string, std::unordered_set<std::string>> m_sizeNames;
@@ -1539,6 +1541,8 @@ private:
     const auto feedApplied = m_working.feedApplied;
     const auto overrideBytes = m_working.overrideBytes;
     const auto materialsRevision = m_working.materialsRevision;
+    // LPF.1 (C44): nor the feed items' records
+    auto feedRecords = std::move(m_working.feedRecords);
     m_working = MaterialTable{};
     m_working.registry = registry;
     m_working.mapBakes = std::move(mapBakes);
@@ -1548,6 +1552,7 @@ private:
     m_working.feedApplied = feedApplied;
     m_working.overrideBytes = overrideBytes;
     m_working.materialsRevision = materialsRevision;
+    m_working.feedRecords = std::move(feedRecords);
     m_deltaOrder.clear();
     m_bulkMaterial = 0;
     m_bulkTable = 0;
@@ -1911,6 +1916,10 @@ private:
   // (P2.14b): a change, which a consumer holding its texture sees in changedImages
   void dropImage(const MaterialImageKey& key)
   {
+    if (m_feedTouched)
+    {
+      m_feedTouched->push_back(key);
+    }
     if (const auto* slot = m_working.images.find(key))
     {
       m_imageBytes -= std::min(m_imageBytes, imageBytes(**slot));
@@ -2197,6 +2206,9 @@ private:
    */
   void feedItem(const std::string& name, const FeedRequest& request)
   {
+    // LPF.1 (C44): the keys whose slots the item changes, for its record
+    auto touched = std::vector<MaterialImageKey>{};
+    m_feedTouched = &touched;
     if (!guarded("image override", [&] {
           if (request.image)
           {
@@ -2210,10 +2222,48 @@ private:
     {
       setStatus(name, ImageOverrideStatus::State::Refused, m_lastFailure);
     }
+    m_feedTouched = nullptr;
     m_working.feedApplied += request.requests;
     m_working.overrideBytes = m_overrideBytes;
+    recordFeed(
+      MaterialTable::FeedRecord::Kind::ImageOverride,
+      name,
+      request.handOver,
+      std::move(touched),
+      0);
     keepImageBudget();
     publish();
+  }
+
+  /**
+   * LPF.1 (C44, P5.13): the record of a Feed or Reparse item just applied into the
+   * working table, the newest MaterialTable::FeedRecordsKept kept (a new vector: the
+   * published tables share the old one). Parse thread.
+   */
+  void recordFeed(
+    const MaterialTable::FeedRecord::Kind kind,
+    const std::string& name,
+    const Clock::time_point handOver,
+    std::vector<MaterialImageKey> keys,
+    const std::uint64_t materialsRevision)
+  {
+    auto records = std::make_shared<std::vector<MaterialTable::FeedRecord>>();
+    if (m_working.feedRecords)
+    {
+      const auto& old = *m_working.feedRecords;
+      const auto keep = std::min(old.size(), MaterialTable::FeedRecordsKept - 1);
+      records->reserve(keep + 1);
+      records->assign(old.end() - std::ptrdiff_t(keep), old.end());
+    }
+    auto record = MaterialTable::FeedRecord{};
+    record.kind = kind;
+    record.name = name;
+    record.handOver = handOver;
+    record.feedApplied = m_working.feedApplied;
+    record.keys = std::move(keys);
+    record.materialsRevision = materialsRevision;
+    records->push_back(std::move(record));
+    m_working.feedRecords = std::move(records);
   }
 
   /**
@@ -2394,6 +2444,7 @@ private:
    */
   void reparseItem(const std::string& name, const ReparseRequest& request)
   {
+    const auto revision = m_working.materialsRevision;
     guarded("material re-parse", [&] {
       if (request.text)
       {
@@ -2405,6 +2456,13 @@ private:
       }
     });
     m_working.feedApplied += request.requests;
+    // LPF.1 (C44): the revision the item published, if it moved one
+    recordFeed(
+      MaterialTable::FeedRecord::Kind::Reparse,
+      name,
+      request.handOver,
+      {},
+      m_working.materialsRevision != revision ? m_working.materialsRevision : 0);
     publish();
   }
 

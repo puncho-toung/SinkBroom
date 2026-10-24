@@ -132,6 +132,16 @@ struct FrameLogRow
   // drawn surfaces with a grid area
   std::optional<std::uint64_t> ambientWrites;
   std::optional<std::uint64_t> gridSurfaces;
+  // LPF.1 (C44, P5.13), frame rows: the feed hand-overs the frame's table includes
+  // (MaterialTable::feedApplied); the time in ms from the newest hand-over of a feed item
+  // to this presented frame, the first whose table includes the item and in which its
+  // change has landed (its slots Resident with every level written; a re-parse: the lists
+  // built with its materialsRevision and its cells built), the largest when several land
+  // in one frame, empty on other frames; and the bytes the service's override store holds
+  // (MaterialTable::overrideBytes)
+  std::optional<std::uint64_t> feedApplied;
+  std::optional<double> feedMs;
+  std::optional<std::uint64_t> overrideBytes;
 };
 
 // the CSV header line, ending in a newline

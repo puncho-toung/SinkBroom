@@ -9917,17 +9917,26 @@ std::array<float, 3> checkProbe(
   return predicted;
 }
 
+// what checkReplacement found: the report's text, the swap's frame and the frames before
+struct Replacement
+{
+  std::string text;
+  std::uint64_t swap = 0;
+  std::vector<std::uint64_t> oldFrames;
+};
+
 /**
  * C40 (P5.4, P5.23): what the frames of a replacement bound for the floor's slot: every
  * frame the old texture or the new one (never the intrinsic, never a third), the old one
  * with its version until the swap, the new one after it with the next, one swap; the
- * frames as "old × n, new × m" for the report.
+ * frames as "old x n, new x m" for the report.
  */
-std::string checkReplacement(
+Replacement checkReplacement(
   const std::vector<FeedFrame>& frames,
   const FeedFrame& before,
   const std::string_view label)
 {
+  auto result = Replacement{};
   CAPTURE(label);
   REQUIRE_FALSE(frames.empty());
   const auto* replacement = frames.back().texture;
@@ -9948,10 +9957,15 @@ std::string checkReplacement(
       CHECK(frame.version == before.version);
       CHECK(newFrames == 0u);
       ++oldFrames;
+      result.oldFrames.push_back(frame.index);
     }
     else
     {
       CHECK(frame.version == before.version + 1);
+      if (newFrames == 0)
+      {
+        result.swap = frame.index;
+      }
       ++newFrames;
     }
     swaps += frame.texture != previous ? 1 : 0;
@@ -9959,7 +9973,45 @@ std::string checkReplacement(
   }
   CHECK(swaps == 1u);
   CHECK(frames.back().state == ImageSlots::State::Resident);
-  return fmt::format("{}: old x {}, new x {}", label, oldFrames, newFrames);
+  result.text = fmt::format("{}: old x {}, new x {}", label, oldFrames, newFrames);
+  return result;
+}
+
+// the frame log's columns of LPF.1 (FrameLog.cpp)
+constexpr auto FeedAppliedColumn = std::size_t{46};
+constexpr auto FeedMsColumn = std::size_t{47};
+constexpr auto OverrideBytesColumn = std::size_t{48};
+
+/**
+ * C44 (P5.13, P5.21): a frame log's frame rows by frame index; every row has the header's
+ * 49 fields, the last three the feed's, empty in a start or stop row.
+ */
+std::map<std::uint64_t, std::vector<std::string>> feedLogFrames(
+  const std::filesystem::path& path)
+{
+  const auto rows = readCsv(path);
+  REQUIRE(rows.size() >= 3u);
+  REQUIRE(rows[0].size() == 49u);
+  CHECK(rows[0][FeedAppliedColumn] == "feed_applied");
+  CHECK(rows[0][FeedMsColumn] == "feed_ms");
+  CHECK(rows[0][OverrideBytesColumn] == "override_bytes");
+  auto frames = std::map<std::uint64_t, std::vector<std::string>>{};
+  for (std::size_t i = 1; i < rows.size(); ++i)
+  {
+    REQUIRE(rows[i].size() == 49u);
+    if (rows[i][1] == "frame")
+    {
+      CHECK_FALSE(rows[i][FeedAppliedColumn].empty());
+      frames[std::stoull(rows[i][2])] = rows[i];
+    }
+    else
+    {
+      CHECK(rows[i][FeedAppliedColumn].empty());
+      CHECK(rows[i][FeedMsColumn].empty());
+      CHECK(rows[i][OverrideBytesColumn].empty());
+    }
+  }
+  return frames;
 }
 
 // the map text with count small wall boxes below the floor (hidden by it), for a chunk
@@ -10007,10 +10059,9 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
       const auto instance = TestInstance{library, true, false, messages};
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
-      auto rig = FeedRig{
-        instance,
-        root,
-        std::filesystem::temp_directory_path() / "TbLitLibTest-lpf1-trigger.csv"};
+      const auto logPath =
+        std::filesystem::temp_directory_path() / "TbLitLibTest-lpf1-trigger.csv";
+      auto rig = FeedRig{instance, root, logPath};
       auto& service = *rig.service;
       auto& session = *rig.session;
 
@@ -10057,6 +10108,11 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
         black.frames.size(),
         white.frames.size(),
         colour.frames.size());
+      // C44: the frames feed_ms is written on (outside the storm)
+      const auto landed = std::vector<std::uint64_t>{
+        black.frames.front().index,
+        white.frames.front().index,
+        colour.frames.front().index};
 
       // refusals: a "_" name is refused at the hand-over, nothing queued and no count
       // moved; a raw 4096² is refused on the parse thread (its level passes the 32 MB a
@@ -10130,6 +10186,7 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
       // pacer's 30 frames a second; an evaluation and a lookup are answered meanwhile;
       // one frame after the storm's last publication is settled
       REQUIRE(waitQuiet(session));
+      auto stormFrames = std::pair<std::uint64_t, std::uint64_t>{};
       {
         const auto lightEntry = service.table()->find("lights/defaultPointLight");
         REQUIRE(lightEntry);
@@ -10219,6 +10276,8 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
         const auto afterStorm = rig.frames->since(*lastPublication);
         CHECK_FALSE(afterStorm.empty());
         CHECK(afterStorm.size() <= 2u);
+        REQUIRE_FALSE(inStorm.empty());
+        stormFrames = {inStorm.front().index, rig.frames->last()->index};
         std::cout << fmt::format(
           "LPF.1 feed storm: {} hand-overs in {:.2f} s, {} frames ({:.1f} a second, "
           "closest starts {:.1f} ms apart), {} dropped; evaluation answered after {:.1f} "
@@ -10237,7 +10296,49 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
           afterStorm.size());
       }
 
+      const auto requested = service.feedRequested();
       rig.close("LPF.1 trigger");
+
+      // C44 (P5.13): feed_ms on exactly the frames an override landed on, outside the
+      // storm; feed_applied rising to every hand-over; override_bytes the store's (the
+      // storm's last 16 × 16 RGBA8: the 4096² refusals stored nothing)
+      const auto log = feedLogFrames(logPath);
+      auto timed = std::vector<std::uint64_t>{};
+      auto stormTimes = std::vector<double>{};
+      auto previous = std::uint64_t{0};
+      for (const auto& [index, row] : log)
+      {
+        const auto applied = std::stoull(row[FeedAppliedColumn]);
+        CHECK(applied >= previous);
+        previous = applied;
+        if (row[FeedMsColumn].empty())
+        {
+          continue;
+        }
+        if (index >= stormFrames.first && index <= stormFrames.second)
+        {
+          stormTimes.push_back(std::stod(row[FeedMsColumn]));
+          continue;
+        }
+        timed.push_back(index);
+        CHECK(std::stod(row[FeedMsColumn]) > 0.0);
+        CHECK(std::stod(row[FeedMsColumn]) < 1000.0);
+      }
+      CHECK(timed == landed);
+      CHECK_FALSE(stormTimes.empty());
+      REQUIRE_FALSE(log.empty());
+      CHECK(std::stoull(log.rbegin()->second[FeedAppliedColumn]) == requested);
+      CHECK(log.rbegin()->second[OverrideBytesColumn] == "1024");
+      std::ranges::sort(stormTimes);
+      std::cout << fmt::format(
+        "LPF.1 feed_ms (Debug, hand-over to the presented landing frame): black {}, "
+        "white {}, colour {}; the storm's {} landings median {:.2f} ms, max {:.2f} ms\n",
+        log.at(landed[0])[FeedMsColumn],
+        log.at(landed[1])[FeedMsColumn],
+        log.at(landed[2])[FeedMsColumn],
+        stormTimes.size(),
+        stormTimes[stormTimes.size() / 2],
+        stormTimes.back());
     }
     CHECK(resetDispatcher());
     messages.print("LPF.1 trigger, validation");
@@ -10251,19 +10352,21 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
       const auto instance = TestInstance{library, true, false, messages};
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
-      auto rig = FeedRig{
-        instance,
-        root,
-        std::filesystem::temp_directory_path() / "TbLitLibTest-lpf1-replacing.csv"};
+      const auto logPath =
+        std::filesystem::temp_directory_path() / "TbLitLibTest-lpf1-replacing.csv";
+      auto rig = FeedRig{instance, root, logPath};
       auto& service = *rig.service;
       auto& session = *rig.session;
       auto report = std::vector<std::string>{};
+      // the replacements whose landing frame the log is checked for
+      auto timedCases = std::vector<Replacement>{};
 
       // the model's two probes, the first two replacements of the fixture's floor image
       // (D110), and the first frame's replacement: the fixture's own texture was bound
       const auto beforeBlack = *rig.frames->last();
       const auto black = rig.feed({0, 0, 0});
-      report.push_back(checkReplacement(black.frames, beforeBlack, "the first override"));
+      report.push_back(
+        checkReplacement(black.frames, beforeBlack, "the first override").text);
       const auto blackProbe = rig.probe();
       rig.feed({255, 255, 255});
       const auto whiteProbe = rig.probe();
@@ -10294,7 +10397,7 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
             all.push_back(frame);
           }
         }
-        report.push_back(checkReplacement(all, before, "(a) chunk batch"));
+        report.push_back(checkReplacement(all, before, "(a) chunk batch").text);
         // the override's first frame was drawn while the batch was in flight (the frame
         // after it found it so)
         REQUIRE(all.size() >= 2u);
@@ -10309,7 +10412,8 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
         session.setUploadCapForTesting(64 * 1024);
         const auto before = *rig.frames->last();
         const auto landing = rig.feed({220, 40, 40}, 1024);
-        report.push_back(checkReplacement(landing.frames, before, "(b) 64 KB cap"));
+        timedCases.push_back(checkReplacement(landing.frames, before, "(b) 64 KB cap"));
+        report.push_back(timedCases.back().text);
         CHECK(landing.frames.size() >= 3u);
         CHECK(landing.settled);
         session.setUploadCapForTesting(UploadBytesPerFrame);
@@ -10353,7 +10457,8 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
         auto all = refused.frames;
         const auto after = rig.frames->since(from);
         all.insert(all.end(), after.begin(), after.end());
-        report.push_back(checkReplacement(all, before, "(c) headroom refusal"));
+        timedCases.push_back(checkReplacement(all, before, "(c) headroom refusal"));
+        report.push_back(timedCases.back().text);
         CHECK(
           rig.events.countContaining(SessionEvent::Warning, "allocations reached")
           == warnings + 1);
@@ -10387,7 +10492,9 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
         all.insert(all.end(), third.frames.begin(), third.frames.end());
         const auto after = rig.frames->since(from);
         all.insert(all.end(), after.begin(), after.end());
-        report.push_back(checkReplacement(all, before, "(d) a third before the second"));
+        timedCases.push_back(
+          checkReplacement(all, before, "(d) a third before the second"));
+        report.push_back(timedCases.back().text);
         // one pixel readback at the end against the model (D110)
         finalProbe = rig.probe();
         checkProbe(blackProbe, whiteProbe, finalProbe);
@@ -10435,7 +10542,9 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
             5000ms,
             false));
         };
-        for (auto i = 0; i < 10; ++i)
+        // the warm-up fills the service's feed records to their bound
+        // (MaterialTable::FeedRecordsKept)
+        for (auto i = 0; i < int(MaterialTable::FeedRecordsKept) + 4; ++i)
         {
           cycle(i);
         }
@@ -10456,6 +10565,27 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
 #endif
 
       rig.close("LPF.1 Replacing");
+
+      // C44 (P5.13): feed_ms is written on the frame of the swap, the first whose slot is
+      // Resident with every level written, and not on the frames that bound the old
+      // texture meanwhile (the superseded second image of (d) never lands)
+      const auto log = feedLogFrames(logPath);
+      auto times = std::vector<std::string>{};
+      for (const auto& replacement : timedCases)
+      {
+        CAPTURE(replacement.text);
+        REQUIRE(log.contains(replacement.swap));
+        CHECK_FALSE(log.at(replacement.swap)[FeedMsColumn].empty());
+        for (const auto index : replacement.oldFrames)
+        {
+          REQUIRE(log.contains(index));
+          CHECK(log.at(index)[FeedMsColumn].empty());
+        }
+        times.push_back(log.at(replacement.swap)[FeedMsColumn]);
+      }
+      std::cout << fmt::format(
+        "LPF.1 feed_ms at the swap frames (b), (c), (d): {} ms\n",
+        fmt::join(times, ", "));
     }
     CHECK(resetDispatcher());
     messages.print("LPF.1 Replacing, validation");

@@ -227,6 +227,9 @@ public:
   // K14: the pieces of world faces in solid
   std::size_t solidPieces() const;
   std::uint64_t appliedSequence() const;
+  // LPF.1 (C44): the material table's materialsRevision the scene last scanned (its
+  // cells of a re-parsed material are rebuilt by the batch it started then, C43)
+  std::uint64_t scannedMaterialsRevision() const;
   std::shared_ptr<const ProcTree> procTree() const;
   // C31 (LP4.0): the AreaData of procTree()'s bake (MapBake::areas), null without a tree;
   // immutable, so any thread may read what it points to

@@ -1018,6 +1018,11 @@ std::uint64_t SceneGeometry::appliedSequence() const
   return m_appliedSequence;
 }
 
+std::uint64_t SceneGeometry::scannedMaterialsRevision() const
+{
+  return m_materialsRevision;
+}
+
 std::shared_ptr<const ProcTree> SceneGeometry::procTree() const
 {
   return m_proc;

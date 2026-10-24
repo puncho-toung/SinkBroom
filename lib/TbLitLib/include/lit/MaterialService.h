@@ -207,6 +207,35 @@ struct MaterialTable
   // levels), not the converted slots' (those count in the image budget)
   std::size_t overrideBytes = 0;
 
+  /**
+   * LPF.1 (C44, P5.13): one Feed or Reparse item the table includes: the name it was
+   * handed over under, its newest hand-over time (steady_clock, the clock the render
+   * thread's frame log times with), the table's feedApplied once it was applied, the
+   * image keys whose slots it changed (an override's set or clear: the keys dropped and
+   * published again; none for a refusal or a name no key uses) and, for a re-parse, the
+   * materialsRevision it published (0 when it changed no material).
+   */
+  struct FeedRecord
+  {
+    enum class Kind
+    {
+      ImageOverride,
+      Reparse,
+    };
+
+    Kind kind = Kind::ImageOverride;
+    std::string name;
+    std::chrono::steady_clock::time_point handOver;
+    std::uint64_t feedApplied = 0;
+    std::vector<MaterialImageKey> keys;
+    std::uint64_t materialsRevision = 0;
+  };
+  // the newest items the records keep
+  static constexpr std::size_t FeedRecordsKept = 32;
+  // LPF.1: the newest FeedRecordsKept items, oldest first; shared by the tables that do
+  // not add one; kept across reloads (null before the first item)
+  std::shared_ptr<const std::vector<FeedRecord>> feedRecords;
+
   // the slot of a name, shared with the table, so that it outlives a table held only for
   // the call; null when the name is not looked up yet. Neither find allocates.
   std::shared_ptr<const MaterialSlot> find(std::string_view name) const;

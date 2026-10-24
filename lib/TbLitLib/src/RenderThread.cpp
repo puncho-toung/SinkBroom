@@ -1255,6 +1255,8 @@ bool RenderThread::recordLitPasses(
   // D77: what a table publication resolves waits for one (litTableTick)
   m_litWaitsForTable = stats.waitsForTable;
   m_litTableVersion = tableVersion;
+  // LPF.1 (C44): the lists are the ones of this table's materialsRevision (ListsTableKey)
+  m_frameListsRevision = inputs.materials ? inputs.materials->materialsRevision : 0;
   return stats.retrigger;
 }
 
@@ -1870,6 +1872,14 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       // LP4.3 (D86, C36): set 9's writes and the surfaces on the light-grid path
       row.ambientWrites = litStats.ambientConstantWrites;
       row.gridSurfaces = litStats.gridSurfaces;
+      // LPF.1 (C44): the frame's table's feed counter and override bytes, and the time
+      // of the feed items whose change landed in this presented frame
+      if (m_materials)
+      {
+        row.feedApplied = m_frameFeedApplied;
+        row.overrideBytes = m_frameOverrideBytes;
+      }
+      row.feedMs = landFeeds(FrameClock::now());
       // C16 (LP2.2b): the lit passes' counts (LitFrameStats) and the tonemap passes'
       const auto& tonemap = m_tonemap.lastStats();
       row.draws = litStats.prepassDraws + litStats.ambientDraws
@@ -1967,12 +1977,97 @@ void RenderThread::refreshImages()
   {
     const auto table = m_materials->table();
     m_images.refresh(*table, m_frameIndex);
-    // LPF.1 (C44): the feed counters of the table the frame refreshed with
+    // LPF.1 (C44): the feed counters of the table the frame refreshed with, and its
+    // feed items
     m_frameFeedApplied = table->feedApplied;
     m_frameImageChanges = table->imageChanges;
     m_frameMaterialsRevision = table->materialsRevision;
+    m_frameOverrideBytes = table->overrideBytes;
+    takeFeedRecords(*table);
   }
   eraseChangedSets();
+}
+
+void RenderThread::takeFeedRecords(const MaterialTable& table)
+{
+  if (!table.feedRecords || table.feedApplied <= m_feedRecordsTaken)
+  {
+    return;
+  }
+  for (const auto& record : *table.feedRecords)
+  {
+    if (record.feedApplied <= m_feedRecordsTaken)
+    {
+      continue;
+    }
+    // the slots this thread has for the keys the item changed (refresh asked them again)
+    auto feed = PendingFeed{record.handOver, {}, record.materialsRevision};
+    for (const auto& key : record.keys)
+    {
+      if (const auto id = m_images.find(key))
+      {
+        feed.slots.push_back(*id);
+      }
+    }
+    // a refusal, an override of a name no slot uses, a clear of nothing: nothing lands
+    if (feed.slots.empty() && feed.materialsRevision == 0)
+    {
+      continue;
+    }
+    // the newest item of a slot wins: the older one is never shown as itself
+    for (auto& pending : m_pendingFeeds)
+    {
+      std::erase_if(pending.slots, [&](const ImageSlotId id) {
+        return std::ranges::find(feed.slots, id) != feed.slots.end();
+      });
+    }
+    std::erase_if(m_pendingFeeds, [](const PendingFeed& pending) {
+      return pending.slots.empty() && pending.materialsRevision == 0;
+    });
+    m_pendingFeeds.push_back(std::move(feed));
+    // bounded as the service's records are: an item that never lands (no frame draws its
+    // lists) does not pile up
+    if (m_pendingFeeds.size() > MaterialTable::FeedRecordsKept)
+    {
+      m_pendingFeeds.erase(m_pendingFeeds.begin());
+    }
+  }
+  m_feedRecordsTaken = table.feedApplied;
+}
+
+std::optional<double> RenderThread::landFeeds(const FrameClock::time_point now)
+{
+  if (m_pendingFeeds.empty())
+  {
+    return std::nullopt;
+  }
+  // C43: the scene's cells of a re-parsed material are built once the scene scanned its
+  // revision and the batch it started then has applied (a test's chunks are no scene's)
+  const auto cellsAt = [&](const std::uint64_t revision) {
+    return !m_geometry || m_arenaTestChunks
+           || (m_geometry->scannedMaterialsRevision() >= revision && !m_geometry->busy()
+               && !m_geometry->waitsForMaterials());
+  };
+  auto largest = std::optional<double>{};
+  std::erase_if(m_pendingFeeds, [&](const PendingFeed& feed) {
+    const auto slotsLanded = std::ranges::all_of(feed.slots, [&](const ImageSlotId id) {
+      const auto* slot = m_images.slot(id);
+      return !slot || slot->state == ImageSlots::State::Resident
+             || slot->state == ImageSlots::State::Default;
+    });
+    const auto revisionLanded =
+      feed.materialsRevision == 0
+      || (m_frameListsRevision >= feed.materialsRevision && cellsAt(feed.materialsRevision));
+    if (!slotsLanded || !revisionLanded)
+    {
+      return false;
+    }
+    const auto ms =
+      std::chrono::duration<double, std::milli>(now - feed.handOver).count();
+    largest = std::max(largest.value_or(ms), ms);
+    return true;
+  });
+  return largest;
 }
 
 void RenderThread::requestProbeImages()

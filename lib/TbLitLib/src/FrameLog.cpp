@@ -108,6 +108,17 @@ std::string flowFields(const FrameLogRow& row)
     optionalCount(row.gridSurfaces));
 }
 
+// LPF.1's columns, the live feed's: the hand-overs the frame's table includes, the
+// landing frame's latency and the override store's bytes; empty in a start or stop row
+std::string feedFields(const FrameLogRow& row)
+{
+  return fmt::format(
+    "{},{},{}",
+    optionalCount(row.feedApplied),
+    optionalField(row.feedMs, "{:.3f}"),
+    optionalCount(row.overrideBytes));
+}
+
 std::string_view eventName(const FrameLogEvent event)
 {
   switch (event)
@@ -134,7 +145,7 @@ std::string_view frameLogHeader()
          "overflowed,constant_bytes,volatile_writes,volatile_write_budget,push_constant_"
          "bytes,settled,alloc_refused,culled_triangles,view_area,areas_flowed,lights_in_"
          "view,portal_chains,flow_ms,ambient_draws,gpu_ambient_ms,ambient_writes,grid_"
-         "surfaces\n";
+         "surfaces,feed_applied,feed_ms,override_bytes\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -146,14 +157,14 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   if (row.event != FrameLogEvent::Frame)
   {
     return fmt::format(
-      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,\n",
+      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,
       resourceFields(row));
   }
   return fmt::format(
-    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{}\n",
+    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{}\n",
     row.session,
     eventName(row.event),
     row.frameIndex,
@@ -170,7 +181,8 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     resourceFields(row),
     passFields(row),
     refusalFields(row),
-    flowFields(row));
+    flowFields(row),
+    feedFields(row));
 }
 
 std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& path)

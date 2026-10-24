@@ -348,6 +348,27 @@ private:
   std::uint64_t m_frameFeedApplied = 0;
   std::uint64_t m_frameImageChanges = 0;
   std::uint64_t m_frameMaterialsRevision = 0;
+  // and its override store's bytes (the frame log's override_bytes)
+  std::uint64_t m_frameOverrideBytes = 0;
+  /**
+   * LPF.1 (C44, P5.13): the feed items the frames' tables included whose change has not
+   * landed yet, for the frame log's feed_ms: an image override's newest hand-over time
+   * and the slots it changed (landed once each is Resident with every level written, or
+   * Default), a re-parse's and the materialsRevision it published (landed once the lists
+   * were built with it and the scene's cells of it are built). A newer item takes over
+   * the slots of an older one, which then never lands; the feedApplied of the newest
+   * record taken.
+   */
+  struct PendingFeed
+  {
+    FrameClock::time_point handOver;
+    std::vector<ImageSlotId> slots;
+    std::uint64_t materialsRevision = 0;
+  };
+  std::vector<PendingFeed> m_pendingFeeds;
+  std::uint64_t m_feedRecordsTaken = 0;
+  // the materialsRevision of the table the frame's lit passes built their lists with
+  std::uint64_t m_frameListsRevision = 0;
   // C11 (U2.6): the account is compared with the device's budget at the session's first
   // frame and at every settled frame; whether the session said once that it passed it,
   // and the budget a test set instead of the device's (0: the device's)
@@ -629,6 +650,11 @@ private:
   bool syncChunks();
   // C28: the slots look at the latest material table, and the sets of bumped slots go
   void refreshImages();
+  // LPF.1 (C44): the feed items of the frame's table not taken yet (m_pendingFeeds)
+  void takeFeedRecords(const MaterialTable& table);
+  // LPF.1 (C44): at a presented frame, the feed items whose change landed in it, and the
+  // largest of their times since their hand-overs in ms (the frame log's feed_ms)
+  std::optional<double> landFeeds(FrameClock::time_point now);
   // LP4.2a (D87, D85): a probe table not seen yet: every probe's _spec and _depth slots
   // are asked for (never _amb)
   void requestProbeImages();
