@@ -158,7 +158,7 @@ MaterialStage stageEntry(const shaderStage_t& stage)
 }
 
 std::shared_ptr<const MaterialEntry> materialEntry(
-  const idMaterial& material, const std::uint64_t registry)
+  const idMaterial& material, const std::uint64_t registry, const std::uint32_t revision)
 {
   auto entry = std::make_shared<MaterialEntry>();
   entry->registry = registry;
@@ -166,6 +166,7 @@ std::shared_ptr<const MaterialEntry> materialEntry(
   entry->sourceFile = material.GetFileName();
   entry->sourceLine = material.GetLineNum();
   entry->index = material.Index();
+  entry->revision = revision;
   entry->implicit = material.base->IsImplicit();
   // MakeDefault re-parses the default definition after CommonInit cleared MF_DEFAULTED;
   // the decl state keeps the fact
@@ -508,11 +509,7 @@ MaterialDecls::MaterialDecls(
   const auto refused = shim::refuseOversizedMaterials(m_registry->declManager());
   for (const auto index : refused)
   {
-    if (std::size_t(index) >= m_failures.size())
-    {
-      m_materials.resize(std::size_t(index) + 1);
-      m_failures.resize(std::size_t(index) + 1);
-    }
+    coverIndex(std::size_t(index));
     m_failures[std::size_t(index)] = fmt_material_refused(
       declManager->DeclByIndex(DECL_MATERIAL, index, false)->GetName());
   }
@@ -529,6 +526,7 @@ MaterialDecls::~MaterialDecls()
   // after the registry is destroyed
   m_materials.clear();
   m_failures.clear();
+  m_originals.clear();
   m_registry.reset();
 }
 
@@ -592,11 +590,7 @@ DeclResult<std::shared_ptr<const MaterialEntry>> MaterialDecls::lookup(
 
   const auto& material = static_cast<const idMaterial&>(*decl);
   const auto index = size_t(material.Index());
-  if (index >= m_materials.size())
-  {
-    m_materials.resize(index + 1);
-    m_failures.resize(index + 1);
-  }
+  coverIndex(index);
   if (failed)
   {
     m_failures[index] = lastError(m_registry->messages());
@@ -607,7 +601,7 @@ DeclResult<std::shared_ptr<const MaterialEntry>> MaterialDecls::lookup(
   }
   if (!m_materials[index])
   {
-    m_materials[index] = materialEntry(material, m_id);
+    m_materials[index] = materialEntry(material, m_id, m_revisions[index]);
   }
   return {m_materials[index], {}};
 }
@@ -634,6 +628,14 @@ DeclResult<EvaluatedRegisters> MaterialDecls::evaluate(
   if (!decl || entry.name != decl->GetName() || decl->GetState() == DS_UNPARSED)
   {
     return {std::nullopt, "material '" + entry.name + "' is not in this registry"};
+  }
+  // LPF.0b (D105, SC427): an entry of an earlier parse of the decl describes another
+  // material than the one EvaluateRegisters would run
+  if (entry.revision != revision(entry.index))
+  {
+    return {
+      std::nullopt,
+      "material '" + entry.name + "' was parsed again since the entry was made"};
   }
 
   const auto& material = static_cast<const idMaterial&>(*decl);
@@ -667,6 +669,242 @@ std::string MaterialDecls::canonicalName(const std::string_view name)
 {
   const auto text = std::string{name.substr(0, size_t(MAX_STRING_CHARS))};
   return shim::canonicalDeclName(text.c_str());
+}
+
+std::string MaterialDecls::reparseNameRefusal(const std::string_view name)
+{
+  if (name.empty())
+  {
+    return "a material re-parse needs a material name";
+  }
+  // lookup's guard (M-ID-GUARD-01)
+  if (name.size() >= size_t(MAX_STRING_CHARS))
+  {
+    return "material name too long";
+  }
+  return {};
+}
+
+std::optional<std::string> MaterialDecls::feedTextGuards(
+  const std::string& text, const std::string_view name)
+{
+  const auto nameText = std::string{name};
+  // M-ID-GUARD-06: what the file system's ReadFile refuses a decl file for
+  if (shim::holdsOverlongDeclToken(text, nameText))
+  {
+    return "the text of material '" + nameText
+           + "' holds a token of 1024 or more characters with no '.' among the first "
+             "1024, which the engine's MakeNameCanonical cannot take; it is not parsed";
+  }
+  // M-ID-GUARD-05: what refuseOversizedMaterials makes the default material
+  if (shim::materialStageBound(text, nameText.c_str()) > MAX_SHADER_STAGES)
+  {
+    return fmt_material_refused(nameText.c_str());
+  }
+  return std::nullopt;
+}
+
+void MaterialDecls::coverIndex(const std::size_t index)
+{
+  if (index >= m_materials.size())
+  {
+    m_materials.resize(index + 1);
+    m_failures.resize(index + 1);
+    m_revisions.resize(index + 1);
+    m_originals.resize(index + 1);
+  }
+}
+
+std::uint32_t MaterialDecls::revision(const int materialIndex) const
+{
+  return materialIndex >= 0 && std::size_t(materialIndex) < m_revisions.size()
+           ? m_revisions[std::size_t(materialIndex)]
+           : 0;
+}
+
+MaterialReparse MaterialDecls::reparseResult(
+  const int index, const std::string& name, const bool changed)
+{
+  auto result = MaterialReparse{};
+  result.name = name;
+  result.index = index;
+  result.changed = changed;
+  result.revision = revision(index);
+  // the entry made with the revision, or the failure the parse reached
+  auto found = lookup(name);
+  if (found)
+  {
+    result.state = MaterialReparse::State::Parsed;
+    result.entry = std::move(*found.value);
+  }
+  else
+  {
+    result.state = MaterialReparse::State::Failed;
+    result.error = std::move(found.error);
+  }
+  return result;
+}
+
+MaterialReparse MaterialDecls::parseText(
+  const int index, const std::string& name, const std::string& text)
+{
+  // DeclByIndex without a parse allocates the decl's self (AllocateSelf, as FindType
+  // would): the idDecl whose SetText and Invalidate the editors call (DeclManager.h:181,
+  // :224)
+  auto* decl = const_cast<idDecl*>(declManager->DeclByIndex(DECL_MATERIAL, index, false));
+  const auto errorsBefore = m_registry->errorCount();
+  // SetTextLocal frees the old text and keeps the new one (DeclManager.cpp:5098-5135);
+  // Invalidate sets DS_UNPARSED (:5011-5014); FindType's ParseLocal frees the material's
+  // data and parses the text into the same decl (:1325-1370, :5396-5441)
+  decl->SetText(text.c_str());
+  decl->Invalidate();
+  static_cast<void>(declManager->FindType(DECL_MATERIAL, name.c_str(), true));
+  const auto failed = m_registry->errorCount() != errorsBefore;
+
+  const auto at = std::size_t(index);
+  coverIndex(at);
+  ++m_revisions[at];
+  m_materials[at].reset();
+  m_failures[at] = failed ? lastError(m_registry->messages()) : std::string{};
+  return reparseResult(index, name, true);
+}
+
+MaterialReparse MaterialDecls::refusedText(
+  const std::string_view name, MaterialReparse result)
+{
+  // the decl the name has, if it passes reparseNameRefusal; nothing is made for a name
+  // without one
+  if (reparseNameRefusal(name).empty())
+  {
+    const auto nameText = std::string{name};
+    result.name = canonicalName(nameText);
+    result.index =
+      shim::materialDeclIndex(m_registry->declManager(), nameText.c_str(), false);
+    result.revision = revision(result.index);
+  }
+  return result;
+}
+
+MaterialReparse MaterialDecls::reparse(
+  const std::string_view name, const std::string& text)
+{
+  auto result = MaterialReparse{};
+  if (!m_registry)
+  {
+    result.error = m_constructionError;
+    return result;
+  }
+  // M-ID-GUARD-07: ParseLocal _alloca's the text on the parse thread's stack
+  if (text.size() > MaxReparseTextBytes)
+  {
+    result.error = "the text of material '" + std::string{name.substr(0, 256)} + "' is "
+                   + std::to_string(text.size()) + " bytes, more than the "
+                   + std::to_string(MaxReparseTextBytes)
+                   + " a re-parse takes (the engine's ParseLocal copies a decl's text "
+                     "onto the parse thread's stack)";
+    return refusedText(name, std::move(result));
+  }
+  if (auto refused = reparseNameRefusal(name); !refused.empty())
+  {
+    result.error = std::move(refused);
+    return result;
+  }
+  const auto nameText = std::string{name};
+  if (auto refused = feedTextGuards(text, nameText))
+  {
+    result.error = std::move(*refused);
+    return refusedText(name, std::move(result));
+  }
+
+  // FindDeclWithoutParsing( DECL_MATERIAL, name, true )'s decl (P5.18): an existing one,
+  // or a new implicit one, without the default parse's file probes
+  const auto index =
+    shim::materialDeclIndex(m_registry->declManager(), nameText.c_str(), true);
+  const auto at = std::size_t(index);
+  coverIndex(at);
+  const auto* decl = declManager->DeclByIndex(DECL_MATERIAL, index, false);
+  // P5.8: the text restore puts back, taken before the first SetText frees it; an
+  // implicit decl's generated text was freed at its parse (ParseLocal), and a new one
+  // has none
+  if (!m_originals[at])
+  {
+    auto original = OriginalText{};
+    if (!decl->IsImplicit())
+    {
+      auto kept = std::string(std::size_t(decl->GetTextLength()) + 1, '\0');
+      decl->GetText(kept.data());
+      kept.resize(std::size_t(decl->GetTextLength()));
+      original.text = std::move(kept);
+    }
+    m_originals[at] = std::move(original);
+  }
+  return parseText(index, decl->GetName(), text);
+}
+
+MaterialReparse MaterialDecls::restore(const std::string_view name)
+{
+  auto result = MaterialReparse{};
+  if (!m_registry)
+  {
+    result.error = m_constructionError;
+    return result;
+  }
+  if (auto refused = reparseNameRefusal(name); !refused.empty())
+  {
+    result.error = std::move(refused);
+    return result;
+  }
+  const auto nameText = std::string{name};
+  const auto index =
+    shim::materialDeclIndex(m_registry->declManager(), nameText.c_str(), false);
+  if (index < 0)
+  {
+    result.error = "no material '" + nameText + "'";
+    return result;
+  }
+  const auto at = std::size_t(index);
+  coverIndex(at);
+  auto* decl = const_cast<idDecl*>(declManager->DeclByIndex(DECL_MATERIAL, index, false));
+  const auto canonical = std::string{decl->GetName()};
+  if (!m_originals[at])
+  {
+    return reparseResult(index, canonical, false);
+  }
+  auto original = std::move(*m_originals[at]);
+  m_originals[at].reset();
+  if (original.text)
+  {
+    // the file's text, which passed the token guard when its file was read
+    if (auto refused = feedTextGuards(*original.text, canonical))
+    {
+      // as refuseOversizedMaterials left it: the text kept, the decl the default
+      // material, every lookup failing with the reason
+      decl->SetText(original.text->c_str());
+      decl->MakeDefault();
+      ++m_revisions[at];
+      m_materials[at].reset();
+      m_failures[at] = std::move(*refused);
+      return reparseResult(index, canonical, true);
+    }
+    return parseText(index, canonical, *original.text);
+  }
+
+  // an implicit decl: idDeclLocal::MakeDefault (DeclManager.cpp:5266-5300), the
+  // material's DefaultDefinition parsed in place
+  const auto errorsBefore = m_registry->errorCount();
+  decl->MakeDefault();
+  const auto failed = m_registry->errorCount() != errorsBefore;
+  ++m_revisions[at];
+  m_materials[at].reset();
+  m_failures[at] = failed ? lastError(m_registry->messages()) : std::string{};
+  return reparseResult(index, canonical, true);
+}
+
+int MaterialDecls::declsInFile(const std::string_view fileName) const
+{
+  return m_registry
+           ? shim::declsInFile(m_registry->declManager(), std::string{fileName}.c_str())
+           : 0;
 }
 
 DeclResult<std::shared_ptr<const MaterialEntry>> MaterialDecls::lookupIndex(

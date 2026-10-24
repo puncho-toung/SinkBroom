@@ -617,6 +617,11 @@ struct MaterialEntry
   int sourceLine = 0;
   // the decl's index among the registry's materials
   int index = -1;
+  // LPF.0b (D105, P5.9): how often MaterialDecls::reparse and restore parsed the decl
+  // again in this registry (a Failed parse included): 0 for a material never re-parsed.
+  // Kept per index by the registry, so that every entry made of the decl carries it,
+  // whichever spelling is looked up
+  std::uint32_t revision = 0;
   // the name had no decl; the engine generated the text (idMaterial::SetDefaultText)
   bool implicit = false;
   // DS_DEFAULTED: the parse failed and MakeDefault replaced the material with the default
@@ -740,6 +745,38 @@ struct DeclTypeCount
   int count = 0;
 };
 
+/**
+ * LPF.0b (C42, D104): what MaterialDecls::reparse or restore did with a material's decl.
+ */
+struct MaterialReparse
+{
+  enum class State
+  {
+    // the decl was parsed: entry is the material's entry now
+    Parsed,
+    // the parse reached an engine Error or FatalError, where the engine would not have
+    // returned: error says it, and every lookup of the material fails with it until it is
+    // parsed again (the half-parsed material is never handed out)
+    Failed,
+    // refused before the registry was touched (the text's size, a guard, the name):
+    // error says why; the decl and its entry are as they were
+    Refused,
+  };
+
+  State state = State::Refused;
+  std::shared_ptr<const MaterialEntry> entry;
+  std::string error;
+  // the decl's canonical name and index among the registry's materials; "" and -1 when
+  // the name was refused, or a refused text named no decl yet
+  std::string name;
+  int index = -1;
+  // the decl was parsed again or made the default (its revision moved); false for a
+  // refusal and for a restore of a material that was never parsed again
+  bool changed = false;
+  // the material's revision after the call
+  std::uint32_t revision = 0;
+};
+
 // The decl registry around the copied parser. Constructing it reads every decl folder the
 // engine reads, in the engine's order, through the source; parsing is lazy, as in the
 // engine. Unknown material names get the engine's implicit material.
@@ -790,6 +827,66 @@ public:
   // the engine's canonical decl name (DeclManager.cpp's MakeNameCanonical): lowercase,
   // backslashes to slashes, cut at the last dot
   static std::string canonicalName(std::string_view name);
+
+  // LPF.0b (C42, M-ID-GUARD-07): the largest decl text reparse takes, in bytes: the
+  // copied ParseLocal copies the text onto the parse thread's 8 MB stack (_alloca,
+  // DeclManager.cpp:5427)
+  static constexpr std::size_t MaxReparseTextBytes = std::size_t{1024} * 1024;
+
+  // LPF.0b (C42, P5.26): why reparse refuses a material name, "" when it takes it: an
+  // empty name (FindType would look up "_emptyName" while FindTypeWithoutParsing made a
+  // decl named ""), and lookup's length guard (M-ID-GUARD-01). A pure function; any
+  // thread
+  static std::string reparseNameRefusal(std::string_view name);
+
+  /**
+   * LPF.0b (C42, M-ID-GUARD-05, -06): the construction path's two guards over a decl text
+   * handed in later, in the construction's order: the token guard the file system's
+   * ReadFile applies to every decl file (a token of MAX_STRING_CHARS or more characters
+   * with no '.' among them, which MakeNameCanonical writes past its buffer for), then the
+   * stage bound refuseOversizedMaterials applies to every material (more than
+   * MAX_SHADER_STAGES stage slots, which ParseStage writes past its array for). The
+   * reason of the first that refuses, or nullopt. name is the lexer's file name in the
+   * scan and the material's in the reason. The copied lexer: parse thread (C20).
+   */
+  static std::optional<std::string> feedTextGuards(
+    const std::string& text, std::string_view name);
+
+  /**
+   * LPF.0b (C42, D104, D105; P5.8, P5.14, P5.18, P5.26): parses one material's decl again
+   * from text, in place, by the copied decl manager's editors' path. Refused first, with
+   * the registry untouched: a text over MaxReparseTextBytes (M-ID-GUARD-07), a name
+   * reparseNameRefusal refuses, and feedTextGuards' refusals. Then the decl of the name
+   * (FindTypeWithoutParsing with makeDefault, the function FindDeclWithoutParsing wraps:
+   * an existing decl, or a new implicit decl made without the default parse and its file
+   * probes, registered in the type's hash and list and nowhere else), its text before the
+   * first re-parse kept (GetText; an implicit decl has none), idDecl::SetText,
+   * Invalidate, then FindType, whose ParseLocal frees the material's data and parses the
+   * text into the same decl: the index, the decl file and the file's decl list stay. The
+   * text is the decl's body with or without the "material <name>" head (idMaterial::Parse
+   * skips to the first "{"). The material's revision moves (a Failed parse's too), its
+   * cached entry and failure go, and its entry is made again with the revision. A
+   * re-parsed implicit decl stays implicit. Parse thread (C20).
+   */
+  MaterialReparse reparse(std::string_view name, const std::string& text);
+
+  /**
+   * LPF.0b (C42, P5.8): undoes reparse: the decl's kept text is set and parsed again by
+   * the same path (made the default with the construction's reason when the stage bound
+   * refuses it, as refuseOversizedMaterials made it), or, for a decl that was implicit,
+   * the decl is made the default (idDeclLocal::MakeDefault): the engine's text for an
+   * implicit name was generated and freed at its parse. The revision moves. A material
+   * never parsed again is left as it is (changed false), its entry as lookup has it.
+   * Parse thread (C20).
+   */
+  MaterialReparse restore(std::string_view name);
+
+  // LPF.0b (D105): the revision of the material at this index (0 for none)
+  std::uint32_t revision(int materialIndex) const;
+
+  // LPF.0b: the decls a decl file defines (its idDeclFile decl list), 0 for a file the
+  // registry did not read; the implicit decls are in no file's list
+  int declsInFile(std::string_view fileName) const;
 
   // the material decl at this index among the registry's materials, parsed, as lookup
   // returns it (bulk parsing)
@@ -949,6 +1046,24 @@ private:
   // the engine error a material's parse reached, by material index; the half-parsed
   // material is never handed out
   std::vector<std::string> m_failures;
+  // LPF.0b (D105): each material's revision, by material index
+  std::vector<std::uint32_t> m_revisions;
+  // LPF.0b (P5.8): a re-parsed material's decl text before its first re-parse, by
+  // material index; nullopt text for a decl that was implicit
+  struct OriginalText
+  {
+    std::optional<std::string> text;
+  };
+  std::vector<std::optional<OriginalText>> m_originals;
+
+  // the per-index caches cover index
+  void coverIndex(std::size_t index);
+  // sets a material decl's text and parses it again (reparse and restore)
+  MaterialReparse parseText(int index, const std::string& name, const std::string& text);
+  // the result of a re-parse or restore of the decl at index: its entry as lookup has it
+  MaterialReparse reparseResult(int index, const std::string& name, bool changed);
+  // a refused text's result, with the decl the name has
+  MaterialReparse refusedText(std::string_view name, MaterialReparse result);
 };
 
 } // namespace tb::lit

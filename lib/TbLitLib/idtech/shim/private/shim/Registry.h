@@ -388,6 +388,28 @@ std::vector<int> refuseOversizedMaterials(idDeclManagerLocal& declManager);
 // of MAX_STRING_CHARS characters cannot write past it
 std::string canonicalDeclName(const char* name);
 
+// LPF.0b (C42, M-ID-GUARD-05): the bound refuseOversizedMaterials compares with
+// MAX_SHADER_STAGES, for a material text handed in later; name is the lexer's file name
+int materialStageBound(const std::string& text, const char* name);
+
+// LPF.0b (C42, M-ID-GUARD-06): the token ReadFile refuses a decl file for, in a decl text
+// handed in later (shim/src/ShimFramework.cpp); path is the lexer's file name
+bool holdsOverlongDeclToken(const std::string& text, const std::string& path);
+
+/**
+ * LPF.0b (C42, D104): the index of the material decl of a name: the copied
+ * FindTypeWithoutParsing (DeclManager.cpp:4682-4735, the function FindDeclWithoutParsing
+ * wraps at :1376-1384, which hands out the decl's self: null for a decl not allocated
+ * yet, a new implicit one or a file's unparsed one). With makeDefault a name without a
+ * decl gets a new implicit decl, unparsed, in the type's hash and list; without it -1.
+ * The name must pass MaterialDecls::reparseNameRefusal.
+ */
+int materialDeclIndex(
+  idDeclManagerLocal& declManager, const char* name, bool makeDefault);
+
+// LPF.0b: the decls of the decl file of this name (idDeclFile::decls), 0 for none
+int declsInFile(const idDeclManagerLocal& declManager, const char* fileName);
+
 // frees the GUI dummies (called by idDeclManagerLocal::Shutdown)
 void freeGuiDummies();
 

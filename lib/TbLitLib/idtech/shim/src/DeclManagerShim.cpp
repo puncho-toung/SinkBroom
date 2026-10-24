@@ -213,6 +213,13 @@ struct LoadedFilesTag
   friend type get(LoadedFilesTag);
 };
 
+// LPF.0b: idDeclLocal's private link to the next decl of its file
+struct NextInFileTag
+{
+  using type = idDeclLocal* idDeclLocal::*;
+  friend type get(NextInFileTag);
+};
+
 template <typename Tag, typename Tag::type Member>
 struct PrivateMember
 {
@@ -222,6 +229,7 @@ struct PrivateMember
 template struct PrivateMember<LinearListsTag, &idDeclManagerLocal::linearLists>;
 template struct PrivateMember<DeclFoldersTag, &idDeclManagerLocal::declFolders>;
 template struct PrivateMember<LoadedFilesTag, &idDeclManagerLocal::loadedFiles>;
+template struct PrivateMember<NextInFileTag, &idDeclLocal::nextInFile>;
 
 } // namespace
 
@@ -427,6 +435,36 @@ std::string canonicalDeclName(const char* name)
   char canonicalName[MAX_STRING_CHARS + 1];
   idDeclManagerLocal::MakeNameCanonical(name, canonicalName, MAX_STRING_CHARS);
   return canonicalName;
+}
+
+int materialStageBound(const std::string& text, const char* name)
+{
+  return stageBound(text, name);
+}
+
+int materialDeclIndex(
+  idDeclManagerLocal& manager, const char* name, const bool makeDefault)
+{
+  // FindDeclWithoutParsing's call (DeclManager.cpp:1379), keeping the idDeclLocal
+  const auto* decl = manager.FindTypeWithoutParsing(DECL_MATERIAL, name, makeDefault);
+  return decl ? decl->Index() : -1;
+}
+
+int declsInFile(const idDeclManagerLocal& manager, const char* fileName)
+{
+  const auto& files = manager.*get(LoadedFilesTag{});
+  auto count = 0;
+  for (int i = 0; i < files.Num(); ++i)
+  {
+    if (files[i]->fileName.Icmp(fileName) == 0)
+    {
+      for (const auto* decl = files[i]->decls; decl; decl = decl->*get(NextInFileTag{}))
+      {
+        ++count;
+      }
+    }
+  }
+  return count;
 }
 
 } // namespace tb::lit::shim

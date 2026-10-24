@@ -1424,6 +1424,280 @@ TEST_CASE("Engine messages (D63)")
   CHECK(pendingEngineMessagesForTesting() == pendingBefore);
 }
 
+namespace
+{
+
+// the image of a material's first diffuse stage, "" for none
+std::string diffuseImageOf(const MaterialEntry& material)
+{
+  for (const auto& stage : material.stages)
+  {
+    if (stage.lighting == LightingDiffuse && stage.image)
+    {
+      return stage.image->name;
+    }
+  }
+  return {};
+}
+
+} // namespace
+
+TEST_CASE("MaterialDecls re-parses one material in place (LPF.0b, C42, D104, D105)")
+{
+  auto source = MemoryDeclSource{fixtureFiles()};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+  const auto materials = decls.materialCount();
+  const auto fileDecls = decls.declsInFile("materials/lp1a.mtr");
+  REQUIRE(fileDecls > 0);
+
+  SECTION("a changed noshadows, twoSided, deform and a new stage")
+  {
+    const auto before = lookup(decls, "textures/lp1a/wall");
+    CHECK(before->revision == 0u);
+    CHECK((before->materialFlags & MfNoShadows) == 0);
+    CHECK_FALSE(before->createBackSides);
+    CHECK(before->deform == 0);
+    const auto stages = before->stages.size();
+
+    const auto text = std::string{
+      "textures/lp1a/wall\n{\n\tnoshadows\n\ttwoSided\n\tdeform flare 16\n"
+      "\tdiffusemap textures/lp1a/wall_d.tga\n\tbumpmap textures/lp1a/wall_local.tga\n"
+      "\tspecularmap textures/lp1a/wall_s.tga\n\t{\n\t\tblend add\n"
+      "\t\tmap textures/lp1a/glow\n\t}\n}\n"};
+    const auto result = decls.reparse("textures/lp1a/wall", text);
+    INFO(result.error);
+    REQUIRE(result.state == MaterialReparse::State::Parsed);
+    CHECK(result.changed);
+    CHECK(result.revision == 1u);
+    CHECK(result.name == "textures/lp1a/wall");
+    CHECK(result.index == before->index);
+    const auto& after = *result.entry;
+    CHECK(after.revision == 1u);
+    CHECK((after.materialFlags & MfNoShadows) != 0);
+    // a lit two-sided material is made front-sided with back sides (Parse)
+    CHECK(after.createBackSides);
+    CHECK(after.deform == DeformFlare);
+    CHECK(after.stages.size() == stages + 1);
+    // the same decl: its index, its file and the file's decl list stay
+    CHECK(after.index == before->index);
+    CHECK(after.sourceFile == before->sourceFile);
+    CHECK_FALSE(after.implicit);
+    CHECK(decls.materialCount() == materials);
+    CHECK(decls.declsInFile("materials/lp1a.mtr") == fileDecls);
+    CHECK(decls.revision(after.index) == 1u);
+
+    // every spelling finds the revision, also one looked up only now (D105, P5.9)
+    CHECK(lookup(decls, "textures/lp1a/wall") == result.entry);
+    CHECK(lookup(decls, "Textures\\LP1A\\Wall.tga")->revision == 1u);
+    // an entry of the earlier parse is refused by evaluate
+    CHECK_FALSE(decls.evaluate(*before, NoParms, 0.0f));
+    CHECK(decls.evaluate(after, NoParms, 0.0f));
+
+    // restore: the file's text again, the revision moved once more
+    const auto restored = decls.restore("textures/lp1a/wall");
+    REQUIRE(restored.state == MaterialReparse::State::Parsed);
+    CHECK(restored.changed);
+    CHECK(restored.revision == 2u);
+    CHECK(restored.entry->revision == 2u);
+    CHECK((restored.entry->materialFlags & MfNoShadows) == 0);
+    CHECK_FALSE(restored.entry->createBackSides);
+    CHECK(restored.entry->deform == 0);
+    CHECK(restored.entry->stages.size() == stages);
+    CHECK(restored.entry->index == before->index);
+    CHECK(decls.declsInFile("materials/lp1a.mtr") == fileDecls);
+    // nothing more to undo: the entry as it is
+    const auto again = decls.restore("textures/lp1a/wall");
+    CHECK(again.state == MaterialReparse::State::Parsed);
+    CHECK_FALSE(again.changed);
+    CHECK(again.revision == 2u);
+    CHECK(again.entry == restored.entry);
+  }
+
+  SECTION("a text with and without the material head")
+  {
+    const auto headed = decls.reparse(
+      "textures/lp1a/diffuseOnly",
+      "material textures/lp1a/diffuseOnly\n{\n\tdiffusemap textures/lp1a/headed\n}\n");
+    REQUIRE(headed.state == MaterialReparse::State::Parsed);
+    REQUIRE(headed.entry->stages.size() >= 1u);
+    CHECK(diffuseImageOf(*headed.entry) == "textures/lp1a/headed");
+
+    const auto bare =
+      decls.reparse("textures/lp1a/diffuseOnly", "{ diffusemap textures/lp1a/bare }");
+    REQUIRE(bare.state == MaterialReparse::State::Parsed);
+    CHECK(bare.revision == 2u);
+    CHECK(diffuseImageOf(*bare.entry) == "textures/lp1a/bare");
+  }
+
+  SECTION("refused texts leave the decl as it was")
+  {
+    const auto before = lookup(decls, "textures/lp1a/grate");
+    const auto check = [&](const MaterialReparse& result, const std::string& reason) {
+      CHECK(result.state == MaterialReparse::State::Refused);
+      CHECK_FALSE(result.changed);
+      CHECK_THAT(result.error, Catch::Matchers::ContainsSubstring(reason));
+      CHECK(result.index == before->index);
+      CHECK(result.revision == 0u);
+      CHECK(lookup(decls, "textures/lp1a/grate") == before);
+      CHECK(decls.revision(before->index) == 0u);
+    };
+    // M-ID-GUARD-07: ParseLocal _alloca's the text
+    check(
+      decls.reparse(
+        "textures/lp1a/grate",
+        "{" + std::string(MaterialDecls::MaxReparseTextBytes, ' ') + "}"),
+      "a re-parse takes");
+    // M-ID-GUARD-05: 129 alpha-tested shortcuts make 258 stage slots
+    check(
+      decls.reparse(
+        "textures/lp1a/grate",
+        "{\n" + stagesOf(129, "\tdiffusemap \"_white alphaTest 0.5\"\n") + "}\n"),
+      "exceeded 256 stages");
+    // M-ID-GUARD-06: a token of 1024 characters without a dot
+    check(
+      decls.reparse(
+        "textures/lp1a/grate", "{ qer_editorimage " + std::string(1024, 't') + " }"),
+      "MakeNameCanonical cannot take");
+    CHECK(decls.materialCount() == materials);
+
+    // a refused name, and a refused text of a name without a decl, make nothing
+    CHECK(decls.reparse("", "{ }").state == MaterialReparse::State::Refused);
+    CHECK(
+      decls.reparse(std::string(1024, 'a'), "{ }").state
+      == MaterialReparse::State::Refused);
+    const auto unknown = decls.reparse(
+      "textures/lpf/unknown", "{ qer_editorimage " + std::string(1024, 't') + " }");
+    CHECK(unknown.state == MaterialReparse::State::Refused);
+    CHECK(unknown.index == -1);
+    CHECK(decls.materialCount() == materials);
+  }
+
+  SECTION("evaluate on the re-parsed entry uses the new expressions")
+  {
+    const auto result = decls.reparse(
+      "textures/lp1a/expr",
+      "{\n\t{\n\t\tblend add\n\t\tmap textures/lp1a/glow\n\t\trgb 0.25 * "
+      "parm0\n\t}\n}\n");
+    REQUIRE(result.state == MaterialReparse::State::Parsed);
+    auto parms = NoParms;
+    parms[0] = 2.0f;
+    const auto registers = evaluate(decls, *result.entry, parms, 0.0f);
+    CHECK(registers[size_t(result.entry->stages[0].colorRegisters[0])] == 0.5f);
+  }
+
+  SECTION("a new name gets an implicit decl, re-parsed, without the default text")
+  {
+    const auto keysBefore = decls.imageKeys().size();
+    const auto result =
+      decls.reparse("textures/lpf/fresh", "{ diffusemap textures/lpf/fresh_d }");
+    INFO(result.error);
+    REQUIRE(result.state == MaterialReparse::State::Parsed);
+    CHECK(result.revision == 1u);
+    CHECK(decls.materialCount() == materials + 1);
+    // the hash and the list hold it: lookup finds it
+    const auto found = lookup(decls, "textures/lpf/fresh");
+    CHECK(found == result.entry);
+    // it stays implicit, so FindMaterial( name, false ) (findMaterialNoDefault) takes it
+    // for no decl (M-FEED-DIFF-01)
+    CHECK(found->implicit);
+    CHECK(found->sourceFile == "<implicit file>");
+    REQUIRE(found->stages.size() >= 1u);
+    CHECK(diffuseImageOf(*found) == "textures/lpf/fresh_d");
+    // no default parse ran: no image record of the material's own name
+    for (const auto& key : decls.imageKeys())
+    {
+      CHECK(key.name != "textures/lpf/fresh");
+    }
+    CHECK(decls.imageKeys().size() > keysBefore);
+    // it is in no file's decl list
+    CHECK(decls.declsInFile("materials/lp1a.mtr") == fileDecls);
+
+    // restore makes it the default (idDeclLocal::MakeDefault)
+    const auto restored = decls.restore("textures/lpf/fresh");
+    REQUIRE(restored.state == MaterialReparse::State::Parsed);
+    CHECK(restored.revision == 2u);
+    CHECK(restored.entry->implicit);
+    CHECK(restored.entry->defaulted);
+    REQUIRE(restored.entry->stages.size() == 1u);
+    REQUIRE(restored.entry->stages[0].image);
+    CHECK(restored.entry->stages[0].image->isDefault);
+    CHECK(decls.materialCount() == materials + 1);
+  }
+
+  SECTION("a name with an implicit decl already")
+  {
+    const auto implicit = lookup(decls, "textures/lp1a/nodecl");
+    REQUIRE(implicit->implicit);
+    const auto result =
+      decls.reparse("textures/lp1a/nodecl", "{ diffusemap textures/lp1a/plain }");
+    REQUIRE(result.state == MaterialReparse::State::Parsed);
+    CHECK(result.entry->implicit);
+    CHECK(result.entry->index == implicit->index);
+    CHECK(decls.restore("textures/lp1a/nodecl").entry->defaulted);
+  }
+}
+
+TEST_CASE("MaterialDecls re-parse: an engine Error and a refused file text (LPF.0b)")
+{
+  auto source = MemoryDeclSource{{
+    DeclFile{
+      "materials/reparse.mtr",
+      "textures/lpf/flat2d { { blend add map env/conflict } }\n"
+      "textures/lpf/target { { blend add map _white } }\n"
+      "textures/lpf/oversized\n{\n"
+        + stagesOf(129, "\tdiffusemap \"_white alphaTest 0.5\"\n") + "}\n",
+      0},
+  }};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+
+  SECTION("a parse that reaches common->Error answers Failed, and the revision moves")
+  {
+    lookup(decls, "textures/lpf/flat2d");
+    const auto before = lookup(decls, "textures/lpf/target");
+    // ImageManager.cpp:441: a 2D record of the name exists
+    const auto failed =
+      decls.reparse("textures/lpf/target", "{ { blend add cubeMap env/conflict } }");
+    CHECK(failed.state == MaterialReparse::State::Failed);
+    CHECK(failed.changed);
+    CHECK(failed.revision == 1u);
+    CHECK(
+      failed.error
+      == "Image 'env/conflict' has been referenced with conflicting cube map states");
+    CHECK(failed.index == before->index);
+    const auto lookedUp = decls.lookup("textures/lpf/target");
+    REQUIRE_FALSE(lookedUp);
+    CHECK(lookedUp.error == failed.error);
+
+    // a good text parses again
+    const auto fixed =
+      decls.reparse("textures/lpf/target", "{ { blend add map _black } }");
+    REQUIRE(fixed.state == MaterialReparse::State::Parsed);
+    CHECK(fixed.revision == 2u);
+    CHECK(fixed.entry->stages[0].image->name == "textures/black");
+    const auto restored = decls.restore("textures/lpf/target");
+    REQUIRE(restored.state == MaterialReparse::State::Parsed);
+    CHECK(restored.revision == 3u);
+    CHECK(restored.entry->stages[0].image->name == "guis/assets/white");
+  }
+
+  SECTION("a material the stage bound refused at construction")
+  {
+    REQUIRE_FALSE(decls.lookup("textures/lpf/oversized"));
+    const auto fixed =
+      decls.reparse("textures/lpf/oversized", "{ diffusemap textures/lpf/small }");
+    REQUIRE(fixed.state == MaterialReparse::State::Parsed);
+    CHECK_FALSE(fixed.entry->defaulted);
+    // restore: the file's text is refused again, as at construction
+    const auto restored = decls.restore("textures/lpf/oversized");
+    CHECK(restored.state == MaterialReparse::State::Failed);
+    CHECK(restored.revision == 2u);
+    CHECK_THAT(restored.error, Catch::Matchers::ContainsSubstring("exceeded 256 stages"));
+    CHECK_FALSE(decls.lookup("textures/lpf/oversized"));
+  }
+}
+
 #if defined(_MSC_VER) && defined(_DEBUG)
 TEST_CASE("MaterialDecls build and destroy leak nothing")
 {

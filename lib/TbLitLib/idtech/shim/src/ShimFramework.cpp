@@ -231,6 +231,12 @@ bool holdsOverlongToken(const std::string& text, const std::string& path)
 
 } // namespace
 
+bool tb::lit::shim::holdsOverlongDeclToken(
+  const std::string& text, const std::string& path)
+{
+  return holdsOverlongToken(text, path);
+}
+
 idFileSystemLocal::idFileSystemLocal(
   tb::lit::DeclSource& source, const std::atomic<bool>* cancel)
   : m_source{source}
