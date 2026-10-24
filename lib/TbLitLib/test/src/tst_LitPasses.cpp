@@ -42,6 +42,7 @@
 #include "kd/result.h"
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 
 #include <algorithm>
 #include <atomic>
@@ -2188,6 +2189,231 @@ TEST_CASE("LitPasses: RegisterCache keeps registers across a re-parse that fits 
   CHECK(landed.current);
   CHECK(landed.registers == eight);
   cache.endBuild();
+}
+
+namespace
+{
+
+// LP5.1 (C50, P6.7, R5.16): the light kinds the sweep steps
+enum class SweepKind
+{
+  Texture,
+  Math,
+  Ambient,
+};
+
+/**
+ * The 60-step light-colour sweep of one light kind over the fixture's lp1b_light: per
+ * step its _color is the step's (the record built again, as a drag rebuilds it), the
+ * lists are built with a RegisterCache over a fake service's table, which publishes the
+ * step's evaluation but on the withheld steps (every second one, and the run 40-49); a
+ * mutant (TB_LIT_SWEEP_MUTANT=1 in the environment: a test-only fake, off by default)
+ * answers a withheld step with the default registers (the light's colour 1 1 1) instead.
+ * What fails, step by step: the light missing from the lists or without registers, its
+ * provisional flag not the withheld one, its colour not a requested step or not the
+ * last answered one on a withheld step, a unit of its stages _default, a surface of its
+ * lists without its material or registers (pendingSurfaceInteraction's _default), the
+ * light not of its kind.
+ */
+std::vector<std::string> sweepProblems(
+  FrontendFixture& f, const SweepKind kind, const bool mutant)
+{
+  const auto name = std::string{"lp1b_light"};
+  const auto lightId = f.lightIds.at(name);
+  const auto camera = fixtureCamera(-240, 0, 64);
+  // the fake service's published evaluations, and the render thread's cache over them
+  auto published = MaterialTable{};
+  auto cache = RegisterCache{};
+  auto requested = std::vector<std::array<float, 3>>{};
+  auto answered = std::optional<std::array<float, 3>>{};
+  auto problems = std::vector<std::string>{};
+  for (auto step = 0; step < 60; ++step)
+  {
+    const auto colour = std::array<float, 3>{
+      0.20f + 0.01f * float(step),
+      0.15f + 0.01f * float(step),
+      0.10f + 0.01f * float(step)};
+    const auto withheld = step % 2 == 1 || (step >= 40 && step < 50);
+    auto changes = std::vector<std::pair<std::string, std::string>>{
+      {"_color", fmt::format("{} {} {}", colour[0], colour[1], colour[2])}};
+    if (kind == SweepKind::Math)
+    {
+      changes.emplace_back("math_enabled", "1");
+    }
+    if (kind == SweepKind::Ambient)
+    {
+      changes.emplace_back("texture", "lights/lp51/ambient");
+    }
+    const auto record = lightRecordWith(f, name, changes);
+    const auto& shader = record->derived.shader.material;
+    REQUIRE(shader);
+    const auto& parms = record->light.parms.shaderParms;
+    requested.push_back(colour);
+    if (!withheld)
+    {
+      // the service answers this step's evaluation
+      published.registers = published.registers.set(
+        RegisterKey{MaterialId::of(*shader), parms, 0.0f},
+        evaluatedRegisters(f, *shader, parms).registers);
+    }
+    const auto registers = [&](
+                             const PreviewId consumer,
+                             const MaterialEntry& material,
+                             const ShaderParms& asked) {
+      if (consumer != lightId)
+      {
+        return evaluatedRegisters(f, material, asked);
+      }
+      if (mutant && withheld)
+      {
+        // the mutant: the default registers where the kept ones belong
+        auto defaults = ShaderParms{};
+        defaults[0] = defaults[1] = defaults[2] = defaults[3] = 1.0f;
+        return evaluatedRegisters(f, material, defaults);
+      }
+      return cache.registers(consumer, material, asked, published, nullptr);
+    };
+    cache.beginBuild();
+    const auto lists = listsOfLights(
+      f, lightTableOf({record}, std::uint64_t(step) + 2), camera, 128, 96, registers);
+    cache.endBuild();
+
+    const auto at = fmt::format("step {} ({})", step, withheld ? "withheld" : "answered");
+    const auto* light = lightOf(lists, f, name);
+    if (!light)
+    {
+      problems.push_back(at + ": the light is not in the lists");
+      continue;
+    }
+    if (light->registers.empty())
+    {
+      problems.push_back(at + ": the light has no registers");
+      continue;
+    }
+    if (light->provisional != withheld)
+    {
+      problems.push_back(at + fmt::format(": provisional {}", light->provisional));
+    }
+    // the colour its first stage draws with (the stand-ins' stages read parm0-parm2)
+    const auto& stage = light->shader->stages.front();
+    const auto drawn = std::array<float, 3>{
+      engineRegister(light->registers, stage.colorRegisters[0]),
+      engineRegister(light->registers, stage.colorRegisters[1]),
+      engineRegister(light->registers, stage.colorRegisters[2])};
+    if (std::ranges::find(requested, drawn) == requested.end())
+    {
+      problems.push_back(
+        at
+        + fmt::format(
+          ": colour {} {} {} is no requested step", drawn[0], drawn[1], drawn[2]));
+    }
+    const auto expected = withheld ? answered : std::optional{colour};
+    if (!expected || drawn != *expected)
+    {
+      problems.push_back(
+        at
+        + fmt::format(
+          ": colour {} {} {}, not the last answered step's",
+          drawn[0],
+          drawn[1],
+          drawn[2]));
+    }
+    // no draw of its stages binds _default: its units 3 and 4, and every surface it
+    // lights with its material and registers
+    const auto mathPath = engineLightUsesMathPath(light->record->light.parms);
+    for (const auto& lightStage : light->shader->stages)
+    {
+      if (
+        const auto units = engineLightStageUnits(
+          mathPath, light->record->derived.shader.falloffImage, lightStage))
+      {
+        for (const auto& unit : *units)
+        {
+          if (unit == engineDefaultImageKey())
+          {
+            problems.push_back(at + ": a light stage binds _default");
+          }
+        }
+      }
+    }
+    for (const auto* list :
+         {&light->localInteractions,
+          &light->globalInteractions,
+          &light->translucentInteractions})
+    {
+      for (const auto& surface : *list)
+      {
+        if (!surface.material || !surface.registers)
+        {
+          problems.push_back(at + ": a surface drawn with _default");
+        }
+      }
+    }
+    if (mathPath != (kind == SweepKind::Math))
+    {
+      problems.push_back(at + ": the math path is not the kind's");
+    }
+    if (light->shader->ambientLight != (kind == SweepKind::Ambient))
+    {
+      problems.push_back(at + ": ambientLight is not the kind's");
+    }
+    if (!withheld)
+    {
+      answered = colour;
+    }
+  }
+  return problems;
+}
+
+} // namespace
+
+TEST_CASE(
+  "LitPasses: the 60-step light-colour sweep, evaluations lagging (LP5.1, C50, P6.7)")
+{
+  // R5.16 (00-PLAN.md section 6): no frame of a colour drag shows a default; the mutant
+  // (TB_LIT_SWEEP_MUTANT=1, a test-only fake answering withheld steps with the defaults)
+  // must fail every kind's section
+  const auto* mutantValue = std::getenv("TB_LIT_SWEEP_MUTANT");
+  const auto mutant = mutantValue && std::string_view{mutantValue} == "1";
+  auto f = frontendFixture();
+  const auto check = [&](const SweepKind kind) {
+    const auto problems = sweepProblems(*f, kind, mutant);
+    // the first problems, and how many there are
+    auto shown = std::vector<std::string>{
+      problems.begin(),
+      problems.begin() + std::ptrdiff_t(std::min(problems.size(), std::size_t{6}))};
+    INFO(fmt::format("{} problems: {}", problems.size(), fmt::join(shown, "; ")));
+    CHECK(problems.empty());
+  };
+
+  SECTION("a texture light")
+  {
+    check(SweepKind::Texture);
+  }
+
+  SECTION("a math light")
+  {
+    check(SweepKind::Math);
+  }
+
+  SECTION("an ambientLight light")
+  {
+    check(SweepKind::Ambient);
+  }
+}
+
+// the sweep's fog and blend kinds (C50): LP5.3's, which draws them (FogAllLights)
+TEST_CASE("LitPasses: the 60-step light-colour sweep of fog and blend lights (LP5.3)")
+{
+  SECTION("a fog light")
+  {
+    SKIP("LP5.3: fog lights are drawn by FogAllLights, which LP5.3 adds (C49)");
+  }
+
+  SECTION("a blend light")
+  {
+    SKIP("LP5.3: blend lights are drawn by FogAllLights, which LP5.3 adds (C49)");
+  }
 }
 
 #if defined(_MSC_VER) && defined(_DEBUG)
