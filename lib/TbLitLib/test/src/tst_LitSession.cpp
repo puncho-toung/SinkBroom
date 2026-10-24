@@ -37,6 +37,7 @@
 #include "lit/GameFileSource.h"
 #include "lit/ImageCache.h"
 #include "lit/IntrinsicImages.h"
+#include "lit/LightGridFile.h"
 #include "lit/LightRecord.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
@@ -65,6 +66,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -6323,13 +6325,15 @@ struct ParityFrame
  * and tonemapped, the scene's geometry drawn (prepass draws) and, for a lit row, a light
  * drawn (LP4.1: unless the row expects none). DX.4: "settled" waits for every batch, bake
  * read, entityDef and provisional light itself, so LP2.3's guard of 300 ms without a new
- * batch is gone. That frame's record with its lists' view lights, or nullopt at the
- * deadline.
+ * batch is gone. LP4.2b (C38): the frame's interactions skipped exactly when the row is
+ * ambient-only (a frame begun before the row's switch is not taken). That frame's record
+ * with its lists' view lights, or nullopt at the deadline.
  */
 std::optional<ParityFrame> settledParityFrame(
   LitSession& session,
   const CameraState& camera,
   const bool needsLight,
+  const bool interactionsSkipped,
   const std::chrono::milliseconds timeout)
 {
   session.setCamera(camera);
@@ -6358,7 +6362,8 @@ std::optional<ParityFrame> settledParityFrame(
     const auto& f = frame->frame;
     const auto ready = f.settled && f.lit.camera == camera && f.tonemap.tonemapped
                        && f.tonemap.blitted && f.lit.prepassDraws > 0
-                       && (!needsLight || f.lit.lightsDrawn > 0);
+                       && (!needsLight || f.lit.lightsDrawn > 0)
+                       && f.lit.interactionsSkipped == interactionsSkipped;
     if (ready)
     {
       return *frame;
@@ -6536,7 +6541,95 @@ std::shared_ptr<const Snapshot> paritySnapshot(
   return std::make_shared<const Snapshot>(std::move(snapshot));
 }
 
+/**
+ * LP4.2b (C38, P4.24): a parity row's switch for as long as the row is drawn: an
+ * ambient-only row ("ambient_only": true, the engine's shot with r_skipInteractions 1)
+ * skips the interactions, every other row draws them; reset to drawn when the row ends.
+ * set is the session's skipInteractionsForTesting.
+ */
+class ParityRowSwitch
+{
+private:
+  std::function<void(bool)> m_set;
+
+public:
+  ParityRowSwitch(const JsonValue& row, std::function<void(bool)> set)
+    : m_set{std::move(set)}
+  {
+    m_set(row.flag("ambient_only"));
+  }
+
+  ~ParityRowSwitch() { m_set(false); }
+
+  deleteCopyAndMove(ParityRowSwitch);
+};
+
+/**
+ * LP4.2b (C37, C38): the preview's probe table of a baked map against the engine's
+ * .shprobes of the parity run: every probe automatic, one per entry, each matched to the
+ * first entry of its area and snapped point (R_DeriveEnvprobeData's match,
+ * RenderWorld_defs.cpp:836-851) with its SH the entry's 27 floats bit for bit; the count
+ * the bake process reported (rows.json's bake record).
+ */
+void checkProbesAgainstShProbes(
+  const ProbeTable& table,
+  const std::vector<ShProbe>& entries,
+  const std::size_t bakeProbes)
+{
+  CHECK(table.records.size() == entries.size());
+  CHECK(entries.size() == bakeProbes);
+  CHECK(table.placed == 0u);
+  CHECK(table.envProbeDef == EnvProbeDefState::Found);
+  CHECK_FALSE(table.provisional);
+  for (const auto& record : table.records)
+  {
+    CAPTURE(record.areaNum, record.point[0], record.point[1], record.point[2]);
+    CHECK(record.automatic);
+    CHECK(record.shFound);
+    const auto entry = std::ranges::find_if(entries, [&](const ShProbe& e) {
+      return e.area == record.areaNum && int(e.origin[0]) == record.point[0]
+             && int(e.origin[1]) == record.point[1]
+             && int(e.origin[2]) == record.point[2];
+    });
+    REQUIRE(entry != entries.end());
+    auto differing = 0;
+    for (std::size_t i = 0; i < entry->sh.size(); ++i)
+    {
+      differing += std::bit_cast<std::uint32_t>(record.shIrradiance[i / 3][i % 3])
+                       != std::bit_cast<std::uint32_t>(entry->sh[i])
+                     ? 1
+                     : 0;
+    }
+    CHECK(differing == 0);
+  }
+}
+
 } // namespace
+
+// LP4.2b (C38, P4.24): the parity test's per-row switch over a synthetic rows.json: an
+// ambient-only row skips the interactions while it is drawn, every row ends with them on
+TEST_CASE("LitSession parity rows: the ambient-only switch (LP4.2b)")
+{
+  const auto record =
+    JsonReader{
+      R"({"rows": [{"id": "A01", "ambient_only": false}, {"id": "A01a", "ambient_only": true},)"
+      R"( {"id": "R01"}]})"}
+      .value();
+  REQUIRE(record);
+  const auto* rows = record->find("rows");
+  REQUIRE(rows);
+  REQUIRE(rows->array.size() == 3u);
+  auto calls = std::vector<bool>{};
+  auto during = std::vector<bool>{};
+  for (const auto& row : rows->array)
+  {
+    const auto rowSwitch =
+      ParityRowSwitch{row, [&](const bool skip) { calls.push_back(skip); }};
+    during.push_back(calls.back());
+  }
+  CHECK(during == std::vector<bool>{false, true, false});
+  CHECK(calls == std::vector<bool>{false, false, true, false, false, false});
+}
 
 /**
  * LP2.3 (C29): the parity rows that TOOLS/lit-preview/parity.py run shot in the engine,
@@ -6658,7 +6751,9 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
 
     auto currentMap = std::string{};
     auto sequence = std::uint64_t{0};
-    // LP4.2b: the ids of the map offered last, which the next map's snapshot removes
+    // LP4.2b: the baked maps whose probe table was held to their .shprobes; the ids of
+    // the map offered last, which the next map's snapshot removes
+    auto checkedBakes = std::set<std::string>{};
     auto previousIds = std::vector<PreviewId>{};
     for (const auto index : order)
     {
@@ -6693,9 +6788,11 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
 
       const auto control = row.flag("control");
       // C38 (LP4.2b): an ambient-only row draws no interactions, as the engine's shot
-      // with r_skipInteractions 1 (none of LP4.2a's rows has the flag)
+      // with r_skipInteractions 1, and the next row draws them again
       const auto ambientOnly = row.flag("ambient_only");
-      session->skipInteractionsForTesting(ambientOnly);
+      auto* const owner = session.get();
+      const auto rowSwitch = ParityRowSwitch{
+        row, [owner](const bool skip) { owner->skipInteractionsForTesting(skip); }};
       const auto framesBefore = session->framesPresented();
       const auto started = std::chrono::steady_clock::now();
       // U2.13: what is left of the row's bound, and of the test's
@@ -6714,7 +6811,11 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
         && expect->find("lights_drawn")->kind == JsonValue::Kind::Number
         && expect->find("lights_drawn")->number == 0.0;
       const auto settledRow = settledParityFrame(
-        *session, camera, !control && !expectsNoLight && !ambientOnly, left());
+        *session,
+        camera,
+        !control && !expectsNoLight && !ambientOnly,
+        ambientOnly,
+        left());
       REQUIRE(settledRow);
       const auto* settled = &settledRow->frame;
       const auto image = session->readbackLdrForTesting(left());
@@ -6763,7 +6864,7 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           "\"view_area\": {}, \"areas_flowed\": {}, \"areas\": {}, \"lights_in_view\": "
           "{}, "
           "\"portal_chains\": {}, \"flow_ms\": {:.4f}, \"scissor_smaller_than_view\": "
-          "{}, \"ambient_only\": {}, \"ambient_draws\": {}, "
+          "{}, \"ambient_only\": {}, \"ambient_draws\": {}, \"probe_candidates\": {}, "
           "\"view_lights\": [{}]}}\n",
           width,
           height,
@@ -6789,10 +6890,19 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           smallerScissor ? "true" : "false",
           ambientOnly ? "true" : "false",
           lit.ambientDraws,
+          lit.probeCandidates,
           fmt::join(viewLights, ", ")));
 
+      // C38 (LP4.2b): an ambient-only frame drew no interaction and was lit by the
+      // ambient pass alone
+      if (ambientOnly)
+      {
+        CHECK(lit.interactionsSkipped);
+        CHECK(lit.interactionDraws == 0u);
+      }
+
       // LP4.1 (C38): the row's expected flow statistics, as parity.py's row table records
-      // them (view_area "known": an area, not -1)
+      // them (view_area "known": an area, not -1); LP4.2b: the view's probe candidates
       if (expect)
       {
         for (const auto& [key, value] : expect->object)
@@ -6823,11 +6933,44 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           {
             CHECK(smallerScissor == value.boolean);
           }
+          else if (key == "probe_candidates")
+          {
+            CHECK(lit.probeCandidates == std::size_t(value.number));
+          }
           else
           {
             FAIL("an expectation this test does not know: " << key);
           }
         }
+      }
+
+      // LP4.2b (C37, C38): at a baked map's first settled frame, the preview's probe
+      // table against the engine's .shprobes of the run (beside the map in the preview
+      // root)
+      if (const auto shProbesPath = (root / "base" / map).replace_extension(".shprobes");
+          std::filesystem::exists(shProbesPath) && checkedBakes.insert(map).second)
+      {
+        auto entries = readShProbes(readTextFile(shProbesPath))
+                       | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+        static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+        const auto* bake = record->find("bake");
+        REQUIRE(bake);
+        const auto* bakeMaps = bake->find("maps");
+        REQUIRE(bakeMaps);
+        const auto bakeName =
+          std::filesystem::path{map}.replace_extension().generic_string().substr(
+            std::string_view{"maps/"}.size());
+        const auto* bakeMap = bakeMaps->find(bakeName);
+        REQUIRE(bakeMap);
+        const auto table = session->probeTable();
+        checkProbesAgainstShProbes(
+          *table, entries, std::size_t(bakeMap->numberOr("probes", -1.0)));
+        std::cout << fmt::format(
+          "LP4.2b parity {}: {} automatic probes, every one with its .shprobes entry and "
+          "SH (table version {})\n",
+          map,
+          table->records.size(),
+          table->version);
       }
 
       // LP4.1 (C38, LP1b.3's golden per parity map): the engine's listRenderLightDefs of
@@ -6912,23 +7055,11 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
         exposure->model);
     }
 
+    // LP4.2b (P4.24): the ambient pass's blobs are in the parity root: every program,
+    // the ambient pass's too, is enabled
     for (const auto& program : session->programReport())
     {
       CAPTURE(program.name, program.reason);
-      // LP4.2a: the ambient pass's blobs reach the parity root with LP4.2b's staging
-      // (P4.24); until then its programs are disabled there, which draws nothing over
-      // the prepass's black, as the engine's pass does without a bake
-      const auto* builtin = engineBuiltin(program.program);
-      const auto ambient = program.program == EngineBuiltinAmbientLightingIbl
-                           || program.program == EngineBuiltinAmbientLightingIblPbr;
-      if (
-        ambient && builtin
-        && !std::filesystem::exists(
-          root / "base" / shaderBlobPath(builtin->name, ShaderStage::Pixel)))
-      {
-        CHECK_FALSE(program.enabled);
-        continue;
-      }
       CHECK(program.enabled);
     }
     teardown(*session);
