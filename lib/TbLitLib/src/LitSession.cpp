@@ -734,6 +734,11 @@ void LitSession::setMapPathOverrideForTesting(const char* gameRelativeMapPath)
   setSceneMapPathOverrideForTesting(gameRelativeMapPath);
 }
 
+void LitSession::holdProbeBuildsForTesting(const bool hold)
+{
+  setProbeBuildsHeldForTesting(hold);
+}
+
 std::int64_t LitSession::liveDeviceMemoryAllocationsForTesting()
 {
   return liveDeviceMemoryAllocations();

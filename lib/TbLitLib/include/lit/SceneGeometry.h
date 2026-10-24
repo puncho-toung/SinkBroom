@@ -173,7 +173,17 @@ public:
 
   // B0.3: no batch is in flight
   bool readyForSnapshot() const;
+  // a batch or the light job is in flight (DX.4: FrameConvergence::geometryInFlight)
   bool busy() const;
+  // LP4.2b step 0: the probe build runs, or its inputs wait to be handed over or built
+  bool probesBuilding() const;
+  /**
+   * LP4.2b step 0 (FrameConvergence::probesInFlight): probesBuilding(), or the published
+   * probe table is provisional (an entityDef the probes depend on was pending) while a
+   * material service can still answer it; a frame drawn meanwhile may show the probes'
+   * defaults. The build's collection is the trigger (geometryTick), as the light job's.
+   */
+  bool probesInFlight() const;
 
   // merges the snapshot (B0.4's rules) and starts its batch; only when readyForSnapshot
   void takeSnapshot(const Snapshot& snapshot);
@@ -182,8 +192,8 @@ public:
    * Collects the finished jobs; once every job of the batch is done its results replace
    * the chunks of its cells, and true is returned; so too when the light job is done and
    * its records are published. LP4.2a: a finished probe build is published too, without
-   * counting as a batch (busy() says it ran). When nothing is in flight it starts a batch
-   * for what a new material table or .proc made stale.
+   * counting as a batch (probesInFlight() says it ran). When nothing is in flight it
+   * starts a batch for what a new material table or .proc made stale.
    */
   bool collect();
 

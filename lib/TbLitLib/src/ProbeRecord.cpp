@@ -38,6 +38,7 @@
 
 #include <fmt/format.h>
 
+#include <atomic>
 #include <chrono>
 #include <limits>
 #include <thread>
@@ -47,6 +48,9 @@ namespace tb::lit
 {
 namespace
 {
+
+// LP4.2b step 0 (setProbeBuildsHeldForTesting): tests only
+constinit auto s_buildsHeld = std::atomic<bool>{false};
 
 // SHADERPARM_RED .. SHADERPARM_BLUE, SHADERPARM_TIMESCALE, SHADERPARM_TIMEOFFSET and 5-7
 // (RenderWorld.h)
@@ -297,6 +301,13 @@ void ProbeRegistry::update(ProbeJobInput input)
   }
   if (m_started && *m_started == input)
   {
+    m_waiting.reset();
+    return;
+  }
+  if (s_buildsHeld.load())
+  {
+    // LP4.2b step 0: held for a test; collect() starts it once the hold ends
+    m_waiting = std::move(input);
     return;
   }
   start(std::move(input));
@@ -335,6 +346,13 @@ bool ProbeRegistry::collect()
 {
   if (!m_job)
   {
+    // LP4.2b step 0: an input held for a test is built once the hold ends
+    if (m_waiting && !s_buildsHeld.load())
+    {
+      auto waiting = std::move(*m_waiting);
+      m_waiting.reset();
+      start(std::move(waiting));
+    }
     return false;
   }
   if (m_job->wait_for(std::chrono::seconds{0}) != std::future_status::ready)
@@ -385,7 +403,7 @@ bool ProbeRegistry::collect()
     m_warnings.push_back(fmt::format("A probe job failed: {}", e.what()));
     m_started.reset();
   }
-  if (m_waiting)
+  if (m_waiting && !s_buildsHeld.load())
   {
     auto waiting = std::move(*m_waiting);
     m_waiting.reset();
@@ -414,6 +432,11 @@ void ProbeRegistry::finishForTesting()
     m_job->wait();
     collect();
   }
+}
+
+void setProbeBuildsHeldForTesting(const bool held)
+{
+  s_buildsHeld = held;
 }
 
 } // namespace tb::lit

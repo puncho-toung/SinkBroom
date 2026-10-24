@@ -642,6 +642,13 @@ public:
    */
   static void setMapPathOverrideForTesting(const char* gameRelativeMapPath);
   /**
+   * LP4.2b step 0, any thread: while held, the scene's probe builds wait (their inputs
+   * kept), so that the frames meanwhile are not settled (FrameConvergence::
+   * probesInFlight); released, the waiting build starts at the render thread's next
+   * geometry poll. Process-wide (setProbeBuildsHeldForTesting); tests only.
+   */
+  static void holdProbeBuildsForTesting(bool hold);
+  /**
    * LP2.4 (C30, D72), any thread: the device memory allocations the counter of the last
    * session counts now; after a Stop, what that session's teardown left (0 expected).
    * Process-wide; tests and measurements only.

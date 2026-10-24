@@ -130,7 +130,8 @@ TEST_CASE("LitSession")
   }
 }
 
-TEST_CASE("FrameConvergence: what keeps a frame from being settled (D77 DX.2 DX.4 U2.11)")
+TEST_CASE(
+  "FrameConvergence: what keeps a frame from being settled (D77 DX.2 DX.4 U2.11 LP4.2b)")
 {
   CHECK(FrameConvergence{}.settled());
   CHECK_FALSE(FrameConvergence{}.retriggers());
@@ -149,7 +150,9 @@ TEST_CASE("FrameConvergence: what keeps a frame from being settled (D77 DX.2 DX.
          {&FrameConvergence::drawsOverflowed, false},
          {&FrameConvergence::lightTrianglesPending, false},
          // LP4.2a (D88): the slot's arrival is the trigger
-         {&FrameConvergence::probeImagesPending, false}})
+         {&FrameConvergence::probeImagesPending, false},
+         // LP4.2b step 0: the probe build's collection is the trigger
+         {&FrameConvergence::probesInFlight, false}})
   {
     auto convergence = FrameConvergence{};
     convergence.*term = true;
@@ -2423,6 +2426,9 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
       REQUIRE(inFrame(
         *session, [&](RenderFrameAccess& access) { after = access.convergence; }));
       CHECK_FALSE(after.geometryInFlight);
+      // LP4.2b step 0: the probe build of a scene without a material service is final
+      // once it landed (no tree: no probe)
+      CHECK_FALSE(after.probesInFlight);
 
       teardown(*session);
       CHECK(session->lastDeviceReleaseCount() == 0u);
@@ -4714,6 +4720,9 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
           false));
         CHECK(seen.entityDefsPending == variant.entityDefs);
         CHECK((!variant.bake || seen.geometryInFlight));
+        // LP4.2b step 0: the env_probe entityDef the scene asked for at its start waits
+        // at the gate too: the probe table is provisional
+        CHECK(seen.probesInFlight);
         CHECK_FALSE(seen.settled());
         CHECK_FALSE(session->lastFrameSettledForTesting());
 
@@ -4749,10 +4758,19 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
         CHECK_FALSE(settledSeen.entityDefsPending);
         CHECK_FALSE(settledSeen.geometryInFlight);
         CHECK_FALSE(settledSeen.lightsProvisional);
+        // LP4.2b step 0: the probes too: built with the bake's tree (the fixture's two
+        // areas, one automatic probe each) and the answered env_probe entityDef
+        CHECK_FALSE(settledSeen.probesInFlight);
+        const auto probes = session->probeTable();
+        CHECK(probes->version > 0u);
+        CHECK_FALSE(probes->provisional);
+        CHECK(probes->records.size() == (variant.bake ? 2u : 0u));
         std::cout << fmt::format(
-          "V2.4 {}: settled by itself after {} frames\n",
+          "V2.4 {}: settled by itself after {} frames (the probes in flight while the "
+          "parse thread was held: {})\n",
           variant.label,
-          framesSettled - framesAtOpen);
+          framesSettled - framesAtOpen,
+          seen.probesInFlight);
 
         teardown(*session);
         CHECK(session->lastDeviceReleaseCount() == 0u);
@@ -7963,6 +7981,133 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu]")
     }
     CHECK(resetDispatcher());
     messages.print("LP4.2a 200 probes, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  // LP4.2b step 0 (the director's decision after LP4.2a): a probe build in flight holds
+  // "settled". With the builds held, every other term of the fixture's frames converges
+  // and none is settled; released, the build lands and a settled frame comes by itself
+  // (V2.4's shape: no frame asked for); no frame was settled before the probe table had a
+  // version
+  SECTION("LP4.2b: no frame is settled before the probe table has a version")
+  {
+    struct Hold
+    {
+      Hold() { LitSession::holdProbeBuildsForTesting(true); }
+      ~Hold() { LitSession::holdProbeBuildsForTesting(false); }
+
+      deleteCopyAndMove(Hold);
+    };
+    // per frame: the probe table's version it drew with and, from the next frame's
+    // hook, whether it ended settled
+    struct FrameSeen
+    {
+      std::uint64_t version = 0;
+      bool known = false;
+      bool settled = false;
+    };
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto frames = std::make_shared<std::vector<FrameSeen>>();
+    auto framesMutex = std::make_shared<std::mutex>();
+    {
+      auto hold = std::optional<Hold>{std::in_place};
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      auto* const owner = session.get();
+      session->setEveryFrameHookForTesting(
+        [frames, framesMutex, owner](RenderFrameAccess& access) {
+          // the hooks other than runAfterTonemap's see the last frame's convergence
+          const auto lock = std::scoped_lock{*framesMutex};
+          if (!frames->empty())
+          {
+            frames->back().known = true;
+            frames->back().settled = access.convergence.settled();
+          }
+          frames->push_back(FrameSeen{owner->probeTable()->version, false, false});
+        });
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+      session->setCamera(lit);
+
+      // held: the batch applies, the bake and the entityDefs are read, the images
+      // arrive; every term but the probes' converges, and no frame is settled
+      auto held = FrameConvergence{};
+      CHECK(waitFor(
+        [&] {
+          inFrame(
+            *session, [&](RenderFrameAccess& access) { held = access.convergence; });
+          auto others = held;
+          others.probesInFlight = false;
+          return session->geometryBatchesForTesting() >= 1u && others.settled();
+        },
+        30000ms,
+        false));
+      CHECK(held.probesInFlight);
+      CHECK_FALSE(held.geometryInFlight);
+      CHECK_FALSE(held.settled());
+      CHECK_FALSE(session->lastFrameSettledForTesting());
+      CHECK(session->probeTable()->version == 0u);
+
+      // released: the next geometry poll starts the build, its collection triggers the
+      // frames that settle
+      const auto framesAtRelease = session->framesPresented();
+      hold.reset();
+      CHECK(waitFor(
+        [&] {
+          return session->framesPresented() > framesAtRelease
+                 && session->lastFrameSettledForTesting();
+        },
+        30000ms,
+        false));
+      const auto probes = session->probeTable();
+      CHECK(probes->version > 0u);
+      CHECK_FALSE(probes->provisional);
+      CHECK(probes->records.size() == 2u);
+      // one frame more, whose hook records how the settled one ended
+      REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
+      session->setEveryFrameHookForTesting({});
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    {
+      const auto lock = std::scoped_lock{*framesMutex};
+      auto settledFrames = std::size_t{0};
+      auto heldFrames = std::size_t{0};
+      for (const auto& frame : *frames)
+      {
+        heldFrames += frame.version == 0u ? 1u : 0u;
+        if (frame.known && frame.settled)
+        {
+          ++settledFrames;
+          CHECK(frame.version > 0u);
+        }
+      }
+      CHECK(settledFrames > 0u);
+      std::cout << fmt::format(
+        "LP4.2b step 0: {} frames before the probe table had a version, none settled; "
+        "{} settled frames after\n",
+        heldFrames,
+        settledFrames);
+    }
+    messages.print("LP4.2b probes held, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }

@@ -129,7 +129,7 @@ bool FrameConvergence::settled() const
   return !pipelinesPending && !materialsPending && !drawsSkipped && !uploadsLeft
          && !imagesPending && !provisionalChunks && !lutPending && !entityDefsPending
          && !lightsProvisional && !geometryInFlight && !drawsOverflowed
-         && !lightTrianglesPending && !probeImagesPending;
+         && !lightTrianglesPending && !probeImagesPending && !probesInFlight;
 }
 
 bool FrameConvergence::retriggers() const
@@ -612,6 +612,8 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
   convergence.lightTrianglesPending = lit.lightTrianglesPending;
   // LP4.2a (D88)
   convergence.probeImagesPending = lit.probeImagesPending;
+  // LP4.2b step 0
+  convergence.probesInFlight = scene && m_geometry->probesInFlight();
   convergence.lutPending = tonemap.lutPending;
   convergence.passesDisabled =
     lit.prepassDisabled || lit.interactionsDisabled || tonemap.disabled;
@@ -2139,14 +2141,16 @@ void RenderThread::parkGpuWork()
   }
 }
 
-std::tuple<std::uint64_t, bool, bool, bool, bool> RenderThread::sceneWaitState() const
+SceneWaitState RenderThread::sceneWaitState() const
 {
   return {
     m_geometry->appliedSequence(),
     m_geometry->busy(),
     m_geometry->waitsForBake(),
     m_geometry->waitsForEntityDefs(),
-    m_geometry->waitsForMaterials()};
+    m_geometry->waitsForMaterials(),
+    m_geometry->probesInFlight(),
+    m_geometry->probeTable()->version};
 }
 
 bool RenderThread::geometryTick()
@@ -2157,10 +2161,12 @@ bool RenderThread::geometryTick()
   }
   const auto applied = m_geometry->collect();
   // DX.4: a frame that waited for the scene (a batch, the bake, an entityDef, a light
-  // rebuilt) is drawn again once the scene's state moves, also when nothing was uploaded
+  // rebuilt; LP4.2b: a probe build) is drawn again once the scene's state moves, also
+  // when nothing was uploaded
   if (
     (m_convergence.geometryInFlight || m_convergence.entityDefsPending
-     || m_convergence.lightsProvisional || m_convergence.provisionalChunks)
+     || m_convergence.lightsProvisional || m_convergence.provisionalChunks
+     || m_convergence.probesInFlight)
     && m_sceneWaitSeen && *m_sceneWaitSeen != sceneWaitState())
   {
     m_sceneWaitSeen = sceneWaitState();
@@ -2187,7 +2193,8 @@ bool RenderThread::geometryTick()
       m_pacer.trigger();
     }
   }
-  return m_geometry->busy();
+  // the probe build's end is polled for as a batch's is
+  return m_geometry->busy() || m_geometry->probesBuilding();
 }
 
 void RenderThread::finish() noexcept

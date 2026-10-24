@@ -113,6 +113,12 @@ GpuMemoryAccount accountGpuMemory(
  * every frame the exposure pass runs (D70). A pass that cannot draw (a program disabled
  * by D9) counts as converged, its state reported (passesDisabled, programReport).
  */
+// DX.4 (LP4.2b step 0): the scene's applied batches, busy(), waitsForBake(),
+// waitsForEntityDefs(), waitsForMaterials(), probesInFlight() and the probe table's
+// version
+using SceneWaitState =
+  std::tuple<std::uint64_t, bool, bool, bool, bool, bool, std::uint64_t>;
+
 struct FrameConvergence
 {
   // a pipeline of the lit or the tonemap passes is pending
@@ -150,6 +156,10 @@ struct FrameConvergence
   // LP4.2a (D88): an image the view's probe choice read is not loaded yet (the default
   // cube stands); its arrival is the trigger (arrivalsTick)
   bool probeImagesPending = false;
+  // LP4.2b step 0 (D87): the probe build runs, its inputs wait, or its table is
+  // provisional (SceneGeometry::probesInFlight): the view's probe choice may read the
+  // defaults; the build's collection is the trigger (geometryTick), as the light job's
+  bool probesInFlight = false;
   // D9: a pass is disabled (counts as converged)
   bool passesDisabled = false;
 
@@ -296,8 +306,9 @@ private:
   // frame's progress
   FrameConvergence m_convergence;
   // DX.4: what the scene waited for when the last frame looked (its applied batches,
-  // busy, bake, entityDefs, provisional chunks), for geometryTick's trigger
-  std::optional<std::tuple<std::uint64_t, bool, bool, bool, bool>> m_sceneWaitSeen;
+  // busy, bake, entityDefs, provisional chunks; LP4.2b: the probes in flight and their
+  // table's version), for geometryTick's trigger
+  std::optional<SceneWaitState> m_sceneWaitSeen;
   bool m_retrigger = false;
   std::size_t m_stalledFrames = 0;
   std::optional<FrameProgress> m_lastProgress;
@@ -615,10 +626,11 @@ private:
     SwapchainGeneration& generation, std::string_view reason, bool suboptimal = false);
 
   void idleTick();
-  // collects the chunk jobs and applies a finished batch; whether a batch is in flight
+  // collects the chunk jobs and applies a finished batch; whether a batch, the light
+  // job or a probe build is in flight
   bool geometryTick();
   // DX.4: the scene's state that a frame's geometry terms read
-  std::tuple<std::uint64_t, bool, bool, bool, bool> sceneWaitState() const;
+  SceneWaitState sceneWaitState() const;
   bool waitForIdle(std::string_view when);
   void parkGpuWork();
   void finish() noexcept;

@@ -49,6 +49,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -120,6 +121,16 @@ ShProbe shEntry(const int area, const EngineVec3& origin, const float first)
   }
   return entry;
 }
+
+// LP4.2b step 0: the process-wide hold of the probe builds, released whatever ends the
+// test
+struct ProbeBuildHold
+{
+  ProbeBuildHold() { setProbeBuildsHeldForTesting(true); }
+  ~ProbeBuildHold() { setProbeBuildsHeldForTesting(false); }
+
+  deleteCopyAndMove(ProbeBuildHold);
+};
 
 } // namespace
 
@@ -422,6 +433,85 @@ TEST_CASE("SceneGeometry: the placed probes by their merged spawnclass (C37, C22
     CHECK(table->records[0].id < table->records[1].id);
     CHECK(table->records[1].id < table->records[2].id);
     CHECK(scene.takeWarnings().empty());
+  }
+  pool->stop();
+}
+
+TEST_CASE("ProbeRegistry: a held build waits and starts at the next collect (LP4.2b)")
+{
+  auto publication = std::make_shared<ProbeTablePublication>();
+  auto registry = ProbeRegistry{nullptr, publication};
+  const auto input = inputOf(fixtureTree(), "maps/lp1b_geometry");
+  {
+    auto hold = std::optional<ProbeBuildHold>{std::in_place};
+    registry.update(input);
+    // the input waits: busy, nothing published, collect starts nothing
+    CHECK(registry.busy());
+    CHECK_FALSE(registry.collect());
+    CHECK(registry.busy());
+    CHECK(publication->table()->version == 0u);
+    hold.reset();
+    // released: the next collect starts the build (no pool: it runs there and then), the
+    // one after publishes it
+    CHECK_FALSE(registry.collect());
+    CHECK(registry.busy());
+    registry.finishForTesting();
+  }
+  CHECK_FALSE(registry.busy());
+  CHECK(publication->table()->version == 1u);
+  CHECK(publication->table()->records.size() == 2u);
+  // the same input again: no build, nothing waits
+  registry.update(input);
+  CHECK_FALSE(registry.busy());
+}
+
+TEST_CASE("SceneGeometry: the probes in flight hold the frame's settle (LP4.2b step 0)")
+{
+  using namespace std::chrono_literals;
+  auto options = MaterialServiceOptions{};
+  options.makeSource = [](const std::atomic<bool>&) {
+    return std::unique_ptr<DeclSource>{
+      std::make_unique<MemoryDeclSource>(std::vector<DeclFile>{DeclFile{
+        "def/_rbdoom_env_probe.def",
+        "entityDef env_probe\n{\n\t\"spawnclass\" \"EnvironmentProbe\"\n}\n",
+        0}})};
+  };
+  options.pollInterval = 0ms;
+  auto service = MaterialService::create(std::move(options)) | kdl::value();
+  auto pool = CpuPool::create() | kdl::value();
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    CHECK(scene.probesBuilding());
+    auto hold = std::optional<ProbeBuildHold>{std::in_place};
+    auto snapshot = snapshotOfMapText(
+      "{\n\"classname\" \"worldspawn\"\n}\n"
+      "{\n\"classname\" \"env_probe\"\n\"origin\" \"10 20 30\"\n}\n");
+    snapshot.sequence = 1;
+    scene.takeSnapshot(snapshot);
+    // the batch and the light job end; the probe build waits for the hold
+    const auto collectUntil = [&](const auto& done) {
+      const auto deadline = std::chrono::steady_clock::now() + 10s;
+      while (std::chrono::steady_clock::now() < deadline && !done())
+      {
+        scene.collect();
+        std::this_thread::sleep_for(5ms);
+      }
+      return done();
+    };
+    REQUIRE(collectUntil([&] { return !scene.busy(); }));
+    CHECK(scene.probesBuilding());
+    CHECK(scene.probesInFlight());
+    CHECK(scene.probeTable()->version == 0u);
+    hold.reset();
+    // released: built, published, and rebuilt once the table answers the entityDefs
+    REQUIRE(collectUntil([&] { return !scene.probesInFlight(); }));
+    CHECK_FALSE(scene.probesBuilding());
+    const auto table = scene.probeTable();
+    CHECK(table->version > 0u);
+    CHECK_FALSE(table->provisional);
+    CHECK(table->placed == 1u);
+    CHECK(table->records.size() == 1u);
+    scene.finishForTesting();
   }
   pool->stop();
 }

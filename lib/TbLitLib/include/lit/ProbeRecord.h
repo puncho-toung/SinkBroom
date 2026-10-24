@@ -248,7 +248,8 @@ ProbeJobOutput buildProbeRecords(
  * (inputs by shared_ptr, C24) when they differ from the last build's, and every probe is
  * built again. A collected build is published as a ProbeTable whose version moves only
  * when a record changed. Without a pool (or once it is stopped) the job runs on the
- * calling thread.
+ * calling thread. While setProbeBuildsHeldForTesting holds the builds, an input waits
+ * (busy() is true) and its build starts at the first collect() after the hold ends.
  *
  * Threads: the render thread (its owner, SceneGeometry) for everything except table(),
  * which any thread may call; the jobs see only their input.
@@ -301,5 +302,14 @@ public:
 private:
   void start(ProbeJobInput input);
 };
+
+/**
+ * LP4.2b step 0, any thread: while held, every ProbeRegistry keeps the input it is given
+ * waiting instead of building it (busy() stays true: a frame is not settled meanwhile,
+ * FrameConvergence::probesInFlight); once released, the waiting build starts at the
+ * registry's next collect(). Process-wide; tests only (LitSession::
+ * holdProbeBuildsForTesting).
+ */
+void setProbeBuildsHeldForTesting(bool held);
 
 } // namespace tb::lit

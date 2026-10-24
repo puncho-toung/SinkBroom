@@ -115,7 +115,19 @@ bool SceneGeometry::readyForSnapshot() const
 
 bool SceneGeometry::busy() const
 {
-  return !m_jobs.empty() || m_lights.busy() || m_probes.busy();
+  return !m_jobs.empty() || m_lights.busy();
+}
+
+bool SceneGeometry::probesBuilding() const
+{
+  return m_probesDirty || m_probes.busy();
+}
+
+bool SceneGeometry::probesInFlight() const
+{
+  // without a material service an entityDef is never answered: a provisional table is
+  // then final
+  return probesBuilding() || (m_materials && m_probes.table()->provisional);
 }
 
 PreviewId SceneGeometry::chunkEntityOf(const SceneNode& node) const
@@ -752,8 +764,8 @@ bool SceneGeometry::collect()
 {
   const auto lightsApplied = m_lights.collect();
   // C37: a finished probe build publishes its table; it is no batch of the scene's (a
-  // frame that waited for it sees busy() change, geometryTick's trigger), and its
-  // warnings are posted with the next batch
+  // frame that waited for it sees probesInFlight() change, geometryTick's trigger), and
+  // its warnings are posted with the next batch
   m_probes.collect();
   const auto chunksApplied = collectChunks();
   return chunksApplied || lightsApplied;
@@ -937,7 +949,7 @@ std::vector<std::string> SceneGeometry::takeWarnings()
 void SceneGeometry::finishForTesting()
 {
   // a batch that applies may start the next one (V.1), so until none is in flight
-  while (busy())
+  while (busy() || probesBuilding())
   {
     for (auto& job : m_jobs)
     {
