@@ -13659,7 +13659,7 @@
           "symbol": "pendingIntrinsicName, ImageSlots::binding"
         }
       ],
-      "note": "LP2.1 step 4 (C28, P2.14d): the engine loads every image of a level before it draws (ActuallyLoadImage writes the whole image in one command list), so it never binds a stand-in; the preview loads images while it draws, so a slot whose texture has not arrived, and one the service has no image for (Default), binds its usage's intrinsic: TD_BUMP _flat, TD_LIGHT (falloff and projection images) _white, every other usage _default. A settled frame (D77) has every visible texture at its full mips, so the stand-in never reaches a parity shot"
+      "note": "LP2.1 step 4 (C28, P2.14d): the engine loads every image of a level before it draws (ActuallyLoadImage writes the whole image in one command list), so it never binds a stand-in; the preview loads images while it draws, so a slot whose texture has not arrived, and one the service has no image for (Default), binds its usage's intrinsic: TD_BUMP _flat, TD_LIGHT (falloff and projection images) _white, every other usage _default. A settled frame (D77) has every visible texture at its full mips, so the stand-in never reaches a parity shot. LPF.1 (C40, D98): a slot asked again for a changed image while it holds a complete texture keeps binding that texture until the new one is complete (Replacing, M-FEED-DIFF-05), so a replacement shows no stand-in either"
     },
     {
       "id": "M-FEED-01",
@@ -13840,9 +13840,29 @@
         {
           "file": "lib/TbLitLib/src/LightData.cpp",
           "symbol": "findMaterialNoDefault"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::feedTick, refreshImages, converge (FrameConvergence::feedBehind)"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::takeFeedRecords, landFeeds (the frame log's feed_ms)"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::recordFeed (MaterialTable::feedRecords)"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameLog.cpp",
+          "symbol": "frameLogHeader, formatFrameLogRow (feed_applied, feed_ms, override_bytes)"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::scannedMaterialsRevision"
         }
       ],
-      "note": "LPF.0a (C39, C40, D96, D97, P5.1, P5.16): the engine reads an image's files at load (ActuallyLoadImage); the preview also takes an image from a host in memory, under a game image name, in place of its files, without writing one (C8): MaterialService::setImageOverride, one Feed work item per name, served after the evaluations and ahead of the lookups, the newest hand-over winning. The matching rule is ImageFromFile's: the override's name folded as the engine folds a name before it compares it with its records (every .tga, .jpg, .png, .exr and .hdr removed wherever it stands, case-sensitively as idStr::Replace compares, so an upper-case extension stays; backslashes made slashes), then compared without case with a key's whole name (a record's name, folded already). A program key (addnormals( ... ), heightmap( ... )) is the record of its whole program text, so it matches only by that text, never by a leaf: an override of textures/foo_local does not feed bumpmap addnormals( textures/foo_local, ... ). The default image (an empty name, \"default\") and the built-ins (a name that starts with '_', which match any options and are never read from files) are refused at hand-over. The usage the override converts with is the copied time call's for each key (M-FEED-02): a stage naming <x>_rmao is TD_SPECULAR_PBR_RMAO at parse (Material.cpp), and an <x>_s key becomes it only when the <x>_rmao sibling file exists, as in the engine, so a host without files reaches the RMAO path by naming _rmao. Two usages of one name are two keys, two slots and two conversions. A set publishes the keys' drops and their new slots in one table, a refusal and a clear one table too (the clear reads the files in the same item); MaterialTable::feedApplied counts the hand-overs a table includes against MaterialService::feedRequested (D100). imageItem's break test gains the Feed queue (LP4.3's batching, named for the end review: P5.21). LPF.0b (C42, D96, D99, P5.8, P5.18): the preview also takes a material's decl text from a host (MaterialService::reparseMaterial, one Reparse work item per name, served after the overrides and ahead of the lookups, the newest text winning, counted in feedApplied); the engine parses a decl again only through its editors' SetText and Invalidate, or reloadDecls (ReloadFile, which re-reads the files). The re-parse is the editors' path (M-ID-FN-28); the text is kept by the service and applied again after every registry build, since a build reads the decl files again, until clearMaterialReparse. A re-parsed name without a decl stays an implicit decl (IsImplicit: its sourceFile is the implicit file), so FindMaterial( name, false ), the preview's findMaterialNoDefault, takes it for none and a light whose texture names it gets the default light shader unless the texture was precached. The slot is set under the asked name, the canonical name and every name the material was published under (a Failed lookup's names recorded too); a refused text or an engine Error publishes it Failed, where the engine would have stopped. The material's register deltas are erased (they are evaluated again when asked), where the engine evaluates the registers every frame"
+      "note": "LPF.0a (C39, C40, D96, D97, P5.1, P5.16): the engine reads an image's files at load (ActuallyLoadImage); the preview also takes an image from a host in memory, under a game image name, in place of its files, without writing one (C8): MaterialService::setImageOverride, one Feed work item per name, served after the evaluations and ahead of the lookups, the newest hand-over winning. The matching rule is ImageFromFile's: the override's name folded as the engine folds a name before it compares it with its records (every .tga, .jpg, .png, .exr and .hdr removed wherever it stands, case-sensitively as idStr::Replace compares, so an upper-case extension stays; backslashes made slashes), then compared without case with a key's whole name (a record's name, folded already). A program key (addnormals( ... ), heightmap( ... )) is the record of its whole program text, so it matches only by that text, never by a leaf: an override of textures/foo_local does not feed bumpmap addnormals( textures/foo_local, ... ). The default image (an empty name, \"default\") and the built-ins (a name that starts with '_', which match any options and are never read from files) are refused at hand-over. The usage the override converts with is the copied time call's for each key (M-FEED-02): a stage naming <x>_rmao is TD_SPECULAR_PBR_RMAO at parse (Material.cpp), and an <x>_s key becomes it only when the <x>_rmao sibling file exists, as in the engine, so a host without files reaches the RMAO path by naming _rmao. Two usages of one name are two keys, two slots and two conversions. A set publishes the keys' drops and their new slots in one table, a refusal and a clear one table too (the clear reads the files in the same item); MaterialTable::feedApplied counts the hand-overs a table includes against MaterialService::feedRequested (D100). imageItem's break test gains the Feed queue (LP4.3's batching, named for the end review: P5.21). LPF.0b (C42, D96, D99, P5.8, P5.18): the preview also takes a material's decl text from a host (MaterialService::reparseMaterial, one Reparse work item per name, served after the overrides and ahead of the lookups, the newest text winning, counted in feedApplied); the engine parses a decl again only through its editors' SetText and Invalidate, or reloadDecls (ReloadFile, which re-reads the files). The re-parse is the editors' path (M-ID-FN-28); the text is kept by the service and applied again after every registry build, since a build reads the decl files again, until clearMaterialReparse. A re-parsed name without a decl stays an implicit decl (IsImplicit: its sourceFile is the implicit file), so FindMaterial( name, false ), the preview's findMaterialNoDefault, takes it for none and a light whose texture names it gets the default light shader unless the texture was precached. The slot is set under the asked name, the canonical name and every name the material was published under (a Failed lookup's names recorded too); a refused text or an engine Error publishes it Failed, where the engine would have stopped. The material's register deltas are erased (they are evaluated again when asked), where the engine evaluates the registers every frame. LPF.1 (C44, D100, D101; P5.2, P5.13, P5.20): the engine takes a file's change only at a load (the map's, reloadImages, reloadDecls), never while it draws, so nothing counts what a frame includes; the preview's frames follow the feed: a frame is settled only when the table it refreshed with at its start holds every hand-over the service had counted when it converged (feedApplied == feedRequested, FrameConvergence::feedBehind; not a re-trigger term) and the scene has scanned that table's materialsRevision (a re-parse's cells), so no read-back shows the state before a queued change; the idle pass's feedTick triggers a frame at once when a feed publication the last frame did not refresh with changed a slot or a material, or the last frame was behind the feed (no 100 ms arrival coalescing; the 30 Hz pacer stands, so a 10 ms feeder draws at most 30 frames a second); a refusal, an override of a name no slot uses or a clear of nothing changes nothing drawn and draws no frame in a settled session. Every publication's tableChanged wakes the loop for another idle pass, which reads the moved counter whatever the slots' states (19-LITGPU-HANG.md's rule). The frame log gains feed_applied (the frame's table's counter), feed_ms (from an item's newest hand-over, carried in the table's feed records, to the first presented frame whose table includes it and in which its slots are Resident with every level written, or for a re-parse its lists were built with its materialsRevision and its cells built; the largest of the items landing in one frame; empty on other frames; a newer item takes over an older one's slots, and an item with no slot and no revision, a refusal, lands nowhere) and override_bytes (the store's bytes): 49 columns; the engine's bytes to pixels has no counterpart"
     },
     {
       "id": "M-FEED-DIFF-02",
@@ -14013,9 +14033,13 @@
         {
           "file": "lib/TbLitLib/src/GeometryArenas.cpp",
           "symbol": "GeometryArenas::allocate"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageSlots.cpp",
+          "symbol": "ImageSlots::waitForRoom"
         }
       ],
-      "note": "U2.3 (31-LP2-FIXES.md): the engine makes a texture whenever it loads an image; the preview makes no new texture or geometry arena once the live device allocations come within AllocationHeadroom (64) of maxMemoryAllocationCount, so that NVRHI's upload chunks and staging can still allocate (D72: about one allocation per texture): the slot stays at its intrinsic, an arena's chunk stays queued (its draws skipped, the frame unconverged), the session warns once and the frame log's alloc_refused column counts them"
+      "note": "U2.3 (31-LP2-FIXES.md): the engine makes a texture whenever it loads an image; the preview makes no new texture or geometry arena once the live device allocations come within AllocationHeadroom (64) of maxMemoryAllocationCount, so that NVRHI's upload chunks and staging can still allocate (D72: about one allocation per texture): the slot stays at its intrinsic, an arena's chunk stays queued (its draws skipped, the frame unconverged), the session warns once and the frame log's alloc_refused column counts them. LPF.1 (D102): a Replacing slot whose new texture the headroom refuses keeps its complete texture bound and its image for a later frame, counted once until its texture is made (M-FEED-DIFF-05)"
     },
     {
       "id": "M-IMG-GUARD-05",
@@ -19216,6 +19240,111 @@
         }
       ],
       "note": "39-PATCH-NORMAL-FLAKE.md (F1), the loadSixFileCube precedent (M-IMG-DEFECT-03): the three functions transcribed as members of GatheredPatch, an idSurface_Patch subclass (the protected width, height, maxWidth, maxHeight, expanded and verts), with the private GenerateNormals, GenerateIndexes, Expand, RemoveLinearColumnsRows and Collapse reached through member pointers an explicit instantiation hands out, so the copied class and file stay as they are. engineSubdividePatch makes its patch a GatheredPatch: SetSize, the control points and Subdivide (patchDef2) are the copy's, SubdivideExplicit (patchDef3) the transcription's. The same arithmetic in the same order, the same idDrawVert writes and the same allocation (the tagged new idDrawVert[] of outWidth * outHeight, uninitialised, freed after the copy into verts); SampleSinglePatch's width parameter is named outWidth (it shadowed the member). The one difference: SampleSinglePatchPoint gathers the normal's three components in a local idVec3 and calls SetNormal once after the axis loop (M-GEO-DEFECT-01). The vertices' tangent, fourth normal byte and colours stay unwritten, as in the engine; ChunkBuilder writes them (M-GEO-DIFF-01). Pool-safe as the copy (C24, M-GEO-POOL-02). Tested: the fixture's patchDef3 subdivided with the heap poisoned three ways gives the same written bytes and chunk vertices"
+    },
+    {
+      "id": "M-FEED-DIFF-05",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            1170,
+            1204
+          ],
+          "anchor": "idImage::Reload: PurgeImage, then DeferredLoadImage",
+          "sha256": "10f8bd96ef034903c90588db02870c0df7f7c989851762f6713273652784ef1f"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            906,
+            912
+          ],
+          "anchor": "idImage::DeferredLoadImage: the image queued for LoadDeferredImages",
+          "sha256": "9108c8617a2150c5329e0d7e46852a0d88ff3174287f05a6d8f1c67e5775c204"
+        },
+        {
+          "file": "neo/renderer/ImageManager.cpp",
+          "lines": [
+            658,
+            666
+          ],
+          "anchor": "idImageManager::ReloadImages: every image reloaded, then LoadDeferredImages",
+          "sha256": "bf8f32ad6286120b7a3ec703ac3deb7622f09019379f8f90124a60d467c6dadc"
+        },
+        {
+          "file": "neo/renderer/ImageManager.cpp",
+          "lines": [
+            1081,
+            1090
+          ],
+          "anchor": "idImageManager::LoadDeferredImages: each queued image loaded whole",
+          "sha256": "7f0ee1807125f8b8c4841376b4892d0e015038cbe46141667396e2e8c5fb9e1d"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            878,
+            891
+          ],
+          "anchor": "idImage::ActuallyLoadImage, the whole upload and the permanent state",
+          "sha256": "34597061dda9e852b194e06ea93429461272e2ccfaa68bb4648f8207e8ed5220"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ImageSlots.cpp",
+          "symbol": "ImageSlots::reRequest, adopt, dropPixels, refuse, waitForRoom, endReplacing, binding (State::Replacing)"
+        },
+        {
+          "file": "lib/TbLitLib/src/TextureUploads.cpp",
+          "symbol": "TextureUploads::record (a Replacing slot written as a Loading one; the headroom refusal kept for a later frame)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::rebuildLists, the grid dispatch (a Replacing atlas valid)"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::recordUploads (the headroom warning)"
+        }
+      ],
+      "note": "LPF.1 (C40, D98, D102; P5.4, P5.23): the engine replaces a texture of a running world only through reloadImages (ReloadImages): each changed image is purged at once (PurgeImage lets its texture go) and queued, and LoadDeferredImages loads every queued image whole in the same call, through one command list, before the next frame draws; so no frame binds a stand-in (images the level load references are loaded whole too). The preview writes an image's levels within a frame's upload cap (32 MB, low mips first) behind the chunks, and makes no texture within the allocation headroom, so a slot asked again for a changed image (an override, a clear, a re-probed file) while it holds a complete texture is Replacing: the complete texture stays bound with the slot's version (its binding sets stay valid) while the new image is answered, made and written as a Loading slot's, and the frame that writes the new texture's last level swaps it in (its version bumped, the slot's binding sets erased, the old texture retired until the frames in flight have finished, D35; the new image's usage and format become the draws'). A third image before the second landed lets the unfinished texture go and starts again; a headroom refusal (M-ALLOC-DIFF-01) keeps the old texture bound and the image, counted once, the frame unconverged (the livelock guard then waits for another trigger); a format refusal binds the complete texture again (Default). A slot with no complete texture, and an eviction's or a test's drop (dropTexture), go Pending and bind the intrinsic as before (M-IMG-DIFF-11). In-place writeTexture into a non-permanent texture stays deferred (D102). Tested: tst_ImageSlots' state machine; the hidden [litgpu] case records the floor slot's binding every frame over a chunk batch, a 64 KB cap, a headroom refusal and a third override before the second landed: never the intrinsic, one swap per completed image"
+    },
+    {
+      "id": "M-TEST-FEED-01",
+      "kind": "difference",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            878,
+            891
+          ],
+          "anchor": "idImage::ActuallyLoadImage, the whole upload and the permanent state",
+          "sha256": "34597061dda9e852b194e06ea93429461272e2ccfaa68bb4648f8207e8ed5220"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/LitSession.h",
+          "symbol": "LitSession::setEveryFrameHookForTesting, runInFrameForTesting"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageSlots.cpp",
+          "symbol": "ImageSlots::binding, ImageSlots::replacing"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "recordFeedFrames, checkReplacement, FeedRig (the LPF.1 [.][litgpu] case)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ImageSlots.cpp",
+          "symbol": "the LPF.1 section of the ImageSlots case"
+        }
+      ],
+      "note": "LPF.1 (P5.23), test only: the engine keeps no record of what a frame bound; the LPF.1 case reads ImageSlots::binding( id ) of the floor's slot (the texture pointer, compared and never used; whether the intrinsic stands in; the slot's version; its state) and the last frame's lit-pass counts in an every-frame hook after the frame's uploads and before its first pass, without a copy or a GPU wait, so the frames are paced as the product paces them; one pixel read-back at the end against the model (D110). The product never sets the hook"
     }
   ],
   "retired": [
