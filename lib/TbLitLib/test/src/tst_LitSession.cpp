@@ -6490,11 +6490,46 @@ const ProcTree& parityTree(const std::filesystem::path& root, const std::string&
   return trees.emplace(key, std::move(tree)).first->second;
 }
 
-// the snapshot of a map of the parity root, its .proc beside it
+// LP4.2b: every preview id of a snapshot, its entities' and its nodes'
+std::vector<PreviewId> snapshotIds(const Snapshot& snapshot)
+{
+  auto ids = std::vector<PreviewId>{};
+  for (const auto& entity : snapshot.entities)
+  {
+    ids.push_back(entity.id);
+  }
+  for (const auto& node : snapshot.nodes)
+  {
+    ids.push_back(node.id);
+  }
+  return ids;
+}
+
+/**
+ * The snapshot of a map of the parity root, its .proc beside it. LP4.2b: it replaces the
+ * map offered before it whole: its ids are offset by the sequence (sequence << 32) so
+ * that none is one of the earlier map's, and it removes every id of that map (removed,
+ * B0.4); without it a node of an earlier map whose id the next map does not reach stays
+ * in the scene (LP2's rooms 5 and 7 in the ambient map's A05 and A06 views)
+ */
 std::shared_ptr<const Snapshot> paritySnapshot(
-  const std::filesystem::path& root, const std::string& map, const std::uint64_t sequence)
+  const std::filesystem::path& root,
+  const std::string& map,
+  const std::uint64_t sequence,
+  std::vector<PreviewId> removed = {})
 {
   auto snapshot = snapshotOfMapText(readTextFile(root / "base" / map));
+  const auto offset = PreviewId{sequence} << 32;
+  for (auto& entity : snapshot.entities)
+  {
+    entity.id += offset;
+  }
+  for (auto& node : snapshot.nodes)
+  {
+    node.id += offset;
+    node.entity += offset;
+  }
+  snapshot.removed = std::move(removed);
   snapshot.generation = 7;
   snapshot.sequence = sequence;
   snapshot.mapPath = (root / "base" / map).string();
@@ -6623,6 +6658,8 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
 
     auto currentMap = std::string{};
     auto sequence = std::uint64_t{0};
+    // LP4.2b: the ids of the map offered last, which the next map's snapshot removes
+    auto previousIds = std::vector<PreviewId>{};
     for (const auto index : order)
     {
       const auto& row = rows->array[index];
@@ -6632,7 +6669,9 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
       if (map != currentMap)
       {
         REQUIRE(waitFor([&] { return session->snapshotSlotFree(); }, 10000ms, false));
-        REQUIRE(session->offerSnapshot(paritySnapshot(root, map, ++sequence)));
+        auto snapshot = paritySnapshot(root, map, ++sequence, std::move(previousIds));
+        previousIds = snapshotIds(*snapshot);
+        REQUIRE(session->offerSnapshot(std::move(snapshot)));
         currentMap = map;
       }
       const auto parsed = parityCameraOfLine(row.text("camera"));
