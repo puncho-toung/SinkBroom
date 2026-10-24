@@ -85,7 +85,7 @@ std::string removeAll(const std::string& text, const std::string_view old)
 // idStr::Icmp's case folding: ASCII letters only
 std::string lowercased(std::string text)
 {
-  std::transform(text.begin(), text.end(), text.begin(), [](const char c) {
+  std::ranges::transform(text, text.begin(), [](const char c) {
     return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
   });
   return text;
@@ -359,7 +359,7 @@ std::string feedKeyName(const std::string& name)
   {
     folded = removeAll(folded, extension);
   }
-  std::replace(folded.begin(), folded.end(), '\\', '/');
+  std::ranges::replace(folded, '\\', '/');
   // :432: the records' names are compared without case
   return lowercased(std::move(folded));
 }

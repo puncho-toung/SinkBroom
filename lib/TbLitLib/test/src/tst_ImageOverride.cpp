@@ -329,7 +329,7 @@ TEST_CASE("MaterialService image overrides, the Feed work kind (D96, D100)")
     CHECK(table->feedApplied == service->feedRequested());
     CHECK(service->stats().droppedFeeds == 1u);
     const auto ran = kinds->taken();
-    CHECK(std::count(ran.begin(), ran.end(), "feed") == 1);
+    CHECK(std::ranges::count(ran, std::string{"feed"}) == 1);
   }
 
   SECTION("a running image batch yields after the image in hand when a feed arrives")
@@ -501,7 +501,7 @@ std::string refusalOf(const Result<std::shared_ptr<const CachedImage>>& result)
 
 double medianMs(std::vector<double> times)
 {
-  std::sort(times.begin(), times.end());
+  std::ranges::sort(times);
   return times[times.size() / 2];
 }
 
@@ -780,8 +780,8 @@ TEST_CASE("overrideImage's conversion time, 1024 x 1024 RGBA8 (P5.13, Q29)")
       build,
       label,
       medianMs(times),
-      *std::min_element(times.begin(), times.end()),
-      *std::max_element(times.begin(), times.end()));
+      *std::ranges::min_element(times),
+      *std::ranges::max_element(times));
   }
 }
 

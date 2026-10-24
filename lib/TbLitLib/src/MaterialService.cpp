@@ -1776,7 +1776,7 @@ private:
   void indexKey(const MaterialImageKey& key)
   {
     auto& keys = m_keysByName[feedMatchName(key)];
-    if (std::find(keys.begin(), keys.end(), key) == keys.end())
+    if (std::ranges::find(keys, key) == keys.end())
     {
       keys.push_back(key);
     }
@@ -1789,8 +1789,7 @@ private:
     {
       return;
     }
-    keys->second.erase(
-      std::remove(keys->second.begin(), keys->second.end(), key), keys->second.end());
+    std::erase(keys->second, key);
     if (keys->second.empty())
     {
       m_keysByName.erase(keys);
@@ -2016,7 +2015,7 @@ private:
     overrideSlot(key, *stored->second.image)
       | kdl::transform([&](std::shared_ptr<const ImageCacheSlot> made) {
           auto& keys = stored->second.keys;
-          if (std::find(keys.begin(), keys.end(), key) == keys.end())
+          if (std::ranges::find(keys, key) == keys.end())
           {
             keys.push_back(key);
           }
