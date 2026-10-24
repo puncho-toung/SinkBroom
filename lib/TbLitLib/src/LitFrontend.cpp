@@ -40,6 +40,8 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
+#include <cstring>
 #include <map>
 #include <string>
 #include <utility>
@@ -202,6 +204,54 @@ void engineSortViewLights(std::vector<ViewLight>& lights)
     return lhs.scissor.area() < rhs.scissor.area();
   });
   std::reverse(lights.begin(), lights.end());
+}
+
+std::vector<const LitSurface*> stagePassOrder(
+  const std::vector<LitSurface>& drawSurfs, const std::vector<LitSpace>& spaces)
+{
+  // SS_POST_PROCESS (Material.h:319)
+  constexpr auto SortPostProcess = 100.0f;
+  struct Keyed
+  {
+    const LitSurface* surface = nullptr;
+    std::uint32_t sortBits = 0;
+    std::uint16_t dist = 0;
+  };
+  auto keyed = std::vector<Keyed>{};
+  keyed.reserve(drawSurfs.size());
+  for (const auto& surface : drawSurfs)
+  {
+    // float sort = SS_POST_PROCESS - drawSurfs[i]->sort, its bits as the key's high dword
+    const auto sort =
+      SortPostProcess - (surface.material ? surface.material->sort : 0.0f);
+    auto sortBits = std::uint32_t{0};
+    std::memcpy(&sortBits, &sort, sizeof(sortBits));
+    // the near depth of the bounds through the space's mvp, as Ftoui16( min * 0xFFFF )
+    const auto depth =
+      engineDepthBoundsForBounds(spaces[surface.space].mvp, surface.chunk->bounds);
+    const auto dist = engineFtoui16(depth[0] * float(0xFFFF));
+    keyed.push_back(Keyed{&surface, sortBits, dist});
+  }
+  // the engine sorts its unique keys descending: the high dword's bits larger first, then
+  // the depth larger first, then the earlier surface first
+  std::sort(keyed.begin(), keyed.end(), [](const Keyed& lhs, const Keyed& rhs) {
+    if (lhs.sortBits != rhs.sortBits)
+    {
+      return lhs.sortBits > rhs.sortBits;
+    }
+    if (lhs.dist != rhs.dist)
+    {
+      return lhs.dist > rhs.dist;
+    }
+    return lhs.surface->chunk->key < rhs.surface->chunk->key;
+  });
+  auto order = std::vector<const LitSurface*>{};
+  order.reserve(keyed.size());
+  for (const auto& entry : keyed)
+  {
+    order.push_back(entry.surface);
+  }
+  return order;
 }
 
 FrontendLists buildFrontendLists(const FrontendInputs& inputs)

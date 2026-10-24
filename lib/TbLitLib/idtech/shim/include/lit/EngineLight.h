@@ -274,6 +274,22 @@ EngineBounds engineProjectedFullyClippedBounds(
   const EngineMat4& mvp, const EngineBounds& bounds);
 
 /**
+ * LP5.2a (C46, D115): idRenderMatrix::DepthBoundsForBounds( min, max, mvp, bounds,
+ * windowSpace true ) (RenderMatrix.cpp:3712-3830, the copy, its SSE path): the clip depth
+ * range of the bounds' eight corners, a corner behind the eye (w below the smallest
+ * normal float) at minus infinity, then moved to window space and clamped to 0..1;
+ * (min, max). Pure; any thread (M-STAGE-PURE-01).
+ */
+std::array<float, 2> engineDepthBoundsForBounds(
+  const EngineMat4& mvp, const EngineBounds& bounds);
+
+/**
+ * LP5.2a (C46, D115): idMath::Ftoui16 (Math.h:1407-1427, the copy): C_FLOAT_TO_INT's
+ * truncation, then 0 below 0 and 65535 above it. Pure; any thread.
+ */
+std::uint16_t engineFtoui16(float value);
+
+/**
  * idRenderMatrix::GetFrustumPlanes( planes, frustum, zeroToOne, normalize )
  * (RenderMatrix.cpp:4436-4515, the copy): left, right, bottom, top, near, far, each
  * pointing inside; without zeroToOne the near plane is row 3 + row 2 (isZeroOneZ is

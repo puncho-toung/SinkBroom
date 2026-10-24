@@ -264,6 +264,30 @@ std::vector<const LitSurface*> engineOrderInteractionSurfaces(
 void engineSortViewLights(std::vector<ViewLight>& lights);
 
 /**
+ * LP5.2a (C46, D115, K37): the stage pass's order of the view's drawn surfaces,
+ * R_SortDrawSurfs (tr_frontend_main.cpp:255-359): the engine packs a 64-bit key per
+ * surface, the bits of float( SS_POST_PROCESS - sort ) in its high dword, Ftoui16( min ·
+ * 0xFFFF ) of DepthBoundsForBounds( space->mvp, the surface's bounds ) above the low 16
+ * bits, and ( numDrawSurfs - i ) in them, and sorts the keys descending: the sort value
+ * ascending (as the float's bits order it: a sort above SS_POST_PROCESS, whose key is a
+ * negative float, comes first), then the farthest first within one sort value (the
+ * engine's "depth smallest first" comment is wrong, SC522), then creation order. Here
+ * the same three levels are compared one by one, creation order being ChunkKey's order
+ * (area, entity, material, cell, part), the order buildFrontendLists makes the surfaces
+ * in. A surface whose material is pending sorts as SS_OPAQUE (the stage pass skips it).
+ *
+ * K37: the engine sorts dmap's model surfaces, one per area and material, each drawn in
+ * its triangle order; the preview sorts its chunks (a material's faces of one area may be
+ * several chunks, in cells), so two overlapping translucent pieces of one material in one
+ * area may blend in another order than the engine's one surface draws them, and the
+ * depth key is the chunk's bounds', not the model surface's.
+ *
+ * Pure; the render thread, once per frame (the lists may be kept).
+ */
+std::vector<const LitSurface*> stagePassOrder(
+  const std::vector<LitSurface>& drawSurfs, const std::vector<LitSpace>& spaces);
+
+/**
  * LP2.2a (C27, A1, D67): the per-light lists of a view. Chunks of an invisible entity
  * state are left out. A surface is directly visible when its chunk's bounds are not
  * culled by its space's mvp (CullBoundsToMVP); a visible surface whose material is

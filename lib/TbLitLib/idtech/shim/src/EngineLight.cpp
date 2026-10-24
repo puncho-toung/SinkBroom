@@ -808,6 +808,20 @@ EngineBounds engineProjectedFullyClippedBounds(
   return fromId(projected);
 }
 
+std::array<float, 2> engineDepthBoundsForBounds(
+  const EngineMat4& mvp, const EngineBounds& bounds)
+{
+  auto min = 0.0f;
+  auto max = 1.0f;
+  idRenderMatrix::DepthBoundsForBounds(min, max, toId(mvp), toId(bounds), true);
+  return {min, max};
+}
+
+std::uint16_t engineFtoui16(const float value)
+{
+  return idMath::Ftoui16(value);
+}
+
 std::array<EnginePlane, 6> engineFrustumPlanes(
   const EngineMat4& frustum, const bool zeroToOne, const bool normalize)
 {
