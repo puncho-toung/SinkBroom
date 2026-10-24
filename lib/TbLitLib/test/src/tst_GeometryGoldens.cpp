@@ -36,14 +36,17 @@
 #include "kd/result.h"
 
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <new>
 #include <optional>
 #include <set>
 #include <thread>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -273,9 +276,10 @@ EngineVec2 previewSt(
   return {procReadBack(stored[0]), procReadBack(stored[1])};
 }
 
-// U3.8: what the patch vertices' normal bytes may differ by where the two smoothings
-// differ (K9), measured on the fixture: 18 vertices at the same place, 15 byte-equal
-constexpr auto PatchNormalByteTolerance = 10;
+// LPF.0b (39-PATCH-NORMAL-FLAKE.md): golden (d)'s welded vertices, all chunks and the
+// patches', measured in 20 Release and 10 Debug runs
+constexpr auto GoldenChunkVertices = std::size_t{648};
+constexpr auto GoldenPatchVertices = std::size_t{26};
 
 // U3.8: the preview's triangles per surface of the fixture (in parentheses the .proc's;
 // area -1: the pieces in solid, K14)
@@ -1001,6 +1005,21 @@ TEST_CASE("Geometry goldens: (d) the preview's chunks against the .proc")
   CHECK(scaled.modelOrigin == EngineVec3{-128, -64, 32});
   CHECK(scaled.parms.axis == EngineMat3{2, 0, 0, 0, 2, 0, 0, 0, 2});
   CHECK(scaled.parms.shaderParms[3] == 1.0f);
+
+  // LPF.0b (39-PATCH-NORMAL-FLAKE.md): the welded vertex count, the patches' included,
+  // the same on every run and in both builds since no unwritten byte enters the weld
+  // (M-GEO-DEFECT-01, M-GEO-DIFF-01)
+  auto vertices = std::size_t{0};
+  auto patchVertices = std::size_t{0};
+  for (const auto& chunk : output.chunks)
+  {
+    vertices += chunk.verts.size();
+    patchVertices += chunk.key.material == "textures/lp1b/patch" ? chunk.verts.size() : 0;
+  }
+  std::cout << "goldens (d): chunk vertices " << vertices << ", the patches' "
+            << patchVertices << "\n";
+  CHECK(vertices == GoldenChunkVertices);
+  CHECK(patchVertices == GoldenPatchVertices);
 }
 
 TEST_CASE("Geometry goldens: (e) the chunks' normal and tangent bytes against the .bproc")
@@ -1072,7 +1091,7 @@ TEST_CASE("Geometry goldens: (e) the chunks' normal and tangent bytes against th
             if (patch)
             {
               // the smoothing of the two tessellations (K9): the bytes counted, the
-              // read-back's fourth byte and the largest difference bounded
+              // read-back's fourth byte and the largest difference pinned
               ++patchAt;
               patchEqual += vert.normal == engineVert.normal ? 1 : 0;
               for (std::size_t k = 0; k < 3; ++k)
@@ -1094,15 +1113,116 @@ TEST_CASE("Geometry goldens: (e) the chunks' normal and tangent bytes against th
   std::cout << "goldens (e): world vertices " << compared << ", brush entities' "
             << entityCompared << "; patch vertices " << patchAt << ", byte-equal "
             << patchEqual << ", the largest byte difference " << patchWorst << "\n";
-  // V2.3: the counts pinned, so that no vertex leaves the comparison unseen; the patch
-  // vertices' last bits differ between the Debug and Release builds (18 of them at a
-  // .proc vertex of their face in Debug, 15 byte-equal; 20 and 17 in Release), so theirs
-  // are bounded below
+  // V2.3: the counts pinned, so that no vertex leaves the comparison unseen. LPF.0b
+  // (39-PATCH-NORMAL-FLAKE.md): the patches' too, exactly, the same in 20 Release and 10
+  // Debug runs: what V2.3 read as a Debug/Release difference was unwritten bytes, the
+  // patchDef3 normals made from heap residue (M-GEO-DEFECT-01, now gathered) and the
+  // corners' tangent bytes in the weld (M-GEO-DIFF-01, now cleared). The patchDef2's 10
+  // pairs are byte-equal; the patchDef3's 4 are compared with the engine's .bproc
+  // normals, which its dmap made from heap residue: one sample of the engine's defect, so
+  // the largest difference, 6, is pinned as measured, not a tolerance
   CHECK(compared == 178);
   CHECK(entityCompared == 48);
-  CHECK(patchAt >= 18);
-  CHECK(patchEqual >= 15);
-  CHECK(patchWorst <= PatchNormalByteTolerance);
+  CHECK(patchAt == 14);
+  CHECK(patchEqual == 10);
+  CHECK(patchWorst == 6);
+}
+
+TEST_CASE(
+  "EngineGeometry: the fixture's patchDef3 under a poisoned heap (M-GEO-DEFECT-01)")
+{
+  // 39-PATCH-NORMAL-FLAKE.md: the copied SubdivideExplicit's vertex block is never
+  // initialised, and the copied SampleSinglePatchPoint's normal read what it held; the
+  // transcription's must not. The heap is poisoned before each subdivision: blocks of
+  // the vertex block's size filled with 0xAB, then 0x11, and freed (the Debug CRT fills a
+  // new block with 0xCD whatever was there: the third sample)
+  const auto& f = fixture();
+  auto engine = std::optional<EnginePatch>{};
+  for (const auto& node : sceneNodesOf(f.snapshot))
+  {
+    if (!node->patch || !node->patch->explicitSubdivisions)
+    {
+      continue;
+    }
+    // ChunkBuilder's addPatch (MapFile.cpp:330-352), worldspawn's parse origin 0
+    const auto& patch = *node->patch;
+    engine = EnginePatch{};
+    engine->width = int(patch.rows);
+    engine->height = int(patch.columns);
+    engine->explicitSubdivisions = true;
+    engine->horizontalSubdivisions = int(patch.horizontalSubdivisions);
+    engine->verticalSubdivisions = int(patch.verticalSubdivisions);
+    engine->controlPoints.resize(patch.controlPoints.size());
+    for (auto row = std::size_t{0}; row < patch.rows; ++row)
+    {
+      for (auto column = std::size_t{0}; column < patch.columns; ++column)
+      {
+        const auto& p = patch.controlPoints[row * patch.columns + column];
+        auto vert = engineClearedVert();
+        vert.xyz = {float(p[0]), float(p[1]), float(p[2])};
+        engineSetTexCoord(vert, float(p[3]), float(p[4]));
+        engine->controlPoints[column * patch.rows + row] = vert;
+      }
+    }
+  }
+  REQUIRE(engine);
+  const auto blockBytes =
+    std::size_t((engine->width - 1) / 2 * engine->horizontalSubdivisions + 1)
+    * std::size_t((engine->height - 1) / 2 * engine->verticalSubdivisions + 1)
+    * sizeof(EngineDrawVert);
+
+  const auto poison = [&](const std::optional<std::uint8_t> fill) {
+    if (!fill)
+    {
+      return;
+    }
+    auto blocks = std::vector<void*>{};
+    for (auto i = 0; i < 64; ++i)
+    {
+      auto* block = ::operator new[](blockBytes);
+      std::memset(block, *fill, blockBytes);
+      blocks.push_back(block);
+    }
+    for (auto* block : blocks)
+    {
+      ::operator delete[](block);
+    }
+  };
+  // the bytes SubdivideExplicit writes: the position, st and the normal's three bytes
+  const auto written = [&](const std::optional<std::uint8_t> fill) {
+    poison(fill);
+    const auto surface = engineSubdividePatch(*engine);
+    REQUIRE(surface);
+    auto verts = surface->verts;
+    for (auto& vert : verts)
+    {
+      vert.normal[3] = 0;
+      vert.tangent = {};
+      vert.color = {};
+      vert.color2 = {};
+    }
+    return verts;
+  };
+  const auto plain = written(std::nullopt);
+  CHECK(plain.size() == blockBytes / sizeof(EngineDrawVert));
+  CHECK(written(std::uint8_t{0xAB}) == plain);
+  CHECK(written(std::uint8_t{0x11}) == plain);
+
+  // and every byte of the fixture's chunks
+  const auto chunks = [&](const std::optional<std::uint8_t> fill) {
+    poison(fill);
+    auto verts = std::vector<EngineDrawVert>{};
+    for (const auto& chunk : buildChunks(fixtureInput(f)).chunks)
+    {
+      verts.insert(verts.end(), chunk.verts.begin(), chunk.verts.end());
+    }
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    return verts;
+  };
+  const auto built = chunks(std::nullopt);
+  CHECK(built.size() == GoldenChunkVertices);
+  CHECK(chunks(std::uint8_t{0xAB}) == built);
+  CHECK(chunks(std::uint8_t{0x11}) == built);
 }
 
 TEST_CASE("Geometry goldens: the triangles of each surface (U3.8)")
