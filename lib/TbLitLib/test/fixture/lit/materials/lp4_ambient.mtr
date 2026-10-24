@@ -1,0 +1,80 @@
+// LP4.2b ambient parity fixture (plans/lit-preview/34-LP4-PACKAGES.md C38, D91, section 4
+// "LP4.2b"); written by TOOLS/lit-preview/parity.py fixtures. The lights' material is
+// lp2_parity.mtr's and the doorway's lp4_areas.mtr's, both staged with it. Names under
+// textures/lp4/ are reserved for fixtures (K20). No stage names _white or _black.
+
+// A01, A05, A06: legacy diffuse and bump, no specular stage (the ambient pass's
+// specular is _black: the SH diffuse alone)
+textures/lp4/amb_legacy
+{
+	qer_editorimage	textures/lp4/amb_legacy.tga
+	diffusemap	textures/lp4/amb_legacy.tga
+	bumpmap	textures/lp4/amb_legacy_local.tga
+}
+
+// K28: the near pieces of a lit room's floor, ceiling and side walls, cut 100 units ahead
+// of its camera; a material of their own, so that dmap keeps them apart; never in view
+textures/lp4/amb_near
+{
+	qer_editorimage	textures/lp4/amb_legacy.tga
+	diffusemap	textures/lp4/amb_legacy.tga
+	bumpmap	textures/lp4/amb_legacy_local.tga
+}
+
+// A02: PBR, an _s whose _rmao.png sibling the engine prefers (Image_files.cpp:1029-1043),
+// metal 0: dielectric specular IBL through specGate and the radiance cube
+textures/lp4/amb_pbr0
+{
+	qer_editorimage	textures/lp4/amb_pbr.tga
+	basecolormap	textures/lp4/amb_pbr.tga
+	bumpmap	textures/lp4/amb_pbr_local.tga
+	specularmap	textures/lp4/amb_pbr0_s.tga
+}
+
+// A03: the same with an _rmao.png of metal 1 (the radiance cube dominates)
+textures/lp4/amb_pbr1
+{
+	qer_editorimage	textures/lp4/amb_pbr.tga
+	basecolormap	textures/lp4/amb_pbr.tga
+	bumpmap	textures/lp4/amb_pbr_local.tga
+	specularmap	textures/lp4/amb_pbr1_s.tga
+}
+
+// A04: two bump/diffuse groups; the second group's diffuse stage has vertexColor, so the
+// ambient pass draws it ONE/ONE onto the first group's ONE/ZERO (RenderBackend.cpp:
+// 2600-2700; the brush vertices are white, C4)
+textures/lp4/amb_twogroup
+{
+	qer_editorimage	textures/lp4/amb_group1.tga
+	bumpmap	textures/lp4/amb_group1_local.tga
+	diffusemap	textures/lp4/amb_group1.tga
+	bumpmap	textures/lp4/amb_group2_local.tga
+	{
+		blend	diffusemap
+		map	textures/lp4/amb_group2.tga
+		vertexColor
+	}
+}
+
+// A07: no lit stage: one blend add stage (translucent, so not the room's shell: a
+// translucent material is not CONTENTS_OPAQUE, Material.cpp:3162-3170, and would not seal
+// it); no bump image, no ambient draw (Material.cpp:2491-2503), the stage DrawShaderPasses'
+// (r_skipAmbient 1 on the engine side, not drawn by the preview before LP5)
+textures/lp4/amb_unlit
+{
+	qer_editorimage	textures/lp4/amb_unlit.tga
+	{
+		blend	add
+		map	textures/lp4/amb_unlit.tga
+	}
+}
+
+// A07's shell: one opaque stage and no lit stage (the prepass draws it, nothing lights
+// it); the probe bake's captures draw its stage, so its room's probe is not black
+textures/lp4/amb_unlit_opaque
+{
+	qer_editorimage	textures/lp4/amb_unlit.tga
+	{
+		map	textures/lp4/amb_unlit.tga
+	}
+}
