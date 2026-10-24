@@ -214,6 +214,46 @@ void holdThread(MaterialService& service, Hold& hold, const MaterialEntry& entry
 
 } // namespace
 
+TEST_CASE("feedKeyName folds a name as ImageFromFile does (C39, P5.1)")
+{
+  // ImageManager.cpp:417-423 and :432: the extensions anywhere, backslashes, no case
+  CHECK(feedKeyName("TEXTURES/Foo.tga") == "textures/foo");
+  CHECK(feedKeyName("textures\\lp1c\\Foo.png") == "textures/lp1c/foo");
+  CHECK(feedKeyName("textures/foo.jpg.exr") == "textures/foo");
+  // idStr::Replace compares with case: an upper-case extension stays, as in the engine,
+  // whose record of "TEXTURES/Foo.TGA" is not the record of textures/foo
+  CHECK(feedKeyName("TEXTURES/Foo.TGA") == "textures/foo.tga");
+  // a program's leaves are folded inside its text, which stays whole
+  CHECK(
+    feedKeyName(
+      "addnormals ( textures/a_local.tga , heightmap ( textures/a_h.tga , 4 ) )")
+    == "addnormals ( textures/a_local , heightmap ( textures/a_h , 4 ) )");
+
+  auto key = MaterialImageKey{};
+  key.name = "Textures/LP1C/Foo";
+  CHECK(feedMatchName(key) == feedKeyName("TEXTURES/lp1c/foo.tga"));
+
+  CHECK(feedNameRefusal("textures/foo").empty());
+  CHECK_FALSE(feedNameRefusal("").empty());
+  CHECK_FALSE(feedNameRefusal("default").empty());
+  CHECK_FALSE(feedNameRefusal("_flat").empty());
+}
+
+TEST_CASE("MaterialService image overrides: the built-ins are refused at hand-over")
+{
+  auto service = start(options(fixtureSource));
+  for (const auto* name : {"_default", "_flat", "_white", "_FLAT.tga", "default"})
+  {
+    CAPTURE(name);
+    const auto handed = service->setImageOverride(name, overrideOf(rgba8(2, 2, 1, 2, 3)));
+    REQUIRE(handed.is_error());
+    CHECK_THAT(
+      std::get<Error>(handed.error()).msg, Catch::Matchers::ContainsSubstring("refused"));
+  }
+  CHECK(service->feedRequested() == 0u);
+  CHECK(service->imageOverrideStatus("_flat").state == ImageOverrideStatus::State::None);
+}
+
 TEST_CASE("MaterialService image overrides: the Feed work kind (D96, D100)")
 {
   auto hold = std::make_shared<Hold>();

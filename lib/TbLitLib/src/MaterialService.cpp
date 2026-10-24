@@ -444,6 +444,11 @@ private:
     m_imageFiles;
   // S2.4: the published images' bytes, the oldest publication first
   std::deque<PublishedImage> m_publishedImages;
+  // LPF.0a (C39, C40): the published image keys by their match name (feedMatchName), so
+  // that an override finds every key of its name; a key leaves at dropImage, and stays
+  // through the budget's drops (its consumer keeps the texture and asks again only on a
+  // change)
+  std::unordered_map<std::string, std::vector<MaterialImageKey>> m_keysByName;
   std::size_t m_imageBytes = 0;
   std::uint64_t m_evictedImages = 0;
   // S2 Low (S2.7): the poll's place in the files it re-probes, a slice per poll
@@ -1688,6 +1693,31 @@ private:
     return slot.image ? slot.image->data.size() : 0;
   }
 
+  // LPF.0a: a published key under its match name, once
+  void indexKey(const MaterialImageKey& key)
+  {
+    auto& keys = m_keysByName[feedMatchName(key)];
+    if (std::find(keys.begin(), keys.end(), key) == keys.end())
+    {
+      keys.push_back(key);
+    }
+  }
+
+  void unindexKey(const MaterialImageKey& key)
+  {
+    const auto keys = m_keysByName.find(feedMatchName(key));
+    if (keys == m_keysByName.end())
+    {
+      return;
+    }
+    keys->second.erase(
+      std::remove(keys->second.begin(), keys->second.end(), key), keys->second.end());
+    if (keys->second.empty())
+    {
+      m_keysByName.erase(keys);
+    }
+  }
+
   // S2.4: an image slot dropped from the table, its files no more polled; LP2.1
   // (P2.14b): a change, which a consumer holding its texture sees in changedImages
   void dropImage(const MaterialImageKey& key)
@@ -1700,6 +1730,7 @@ private:
     ++m_working.imageChanges;
     m_working.changedImages = m_working.changedImages.set(key, m_working.imageChanges);
     m_imageFiles.erase(key);
+    unindexKey(key);
     m_publishedImages.erase(
       std::remove_if(
         m_publishedImages.begin(),
@@ -1809,6 +1840,7 @@ private:
       m_working.images.set(key, std::shared_ptr<const ImageCacheSlot>{std::move(slot)});
     m_publishedImages.push_back(PublishedImage{key, bytes});
     m_imageBytes += bytes;
+    indexKey(key);
     return true;
   }
 
@@ -2324,8 +2356,15 @@ ImageLookup MaterialService::image(const MaterialImageKey& key)
 
 Result<void> MaterialService::setImageOverride(std::string imageName, ImageOverride image)
 {
+  // C39 (P5.1, P5.16): the name as ImageFromFile folds it; the default image and the
+  // built-ins are refused here, nothing queued and no count moved
+  auto name = feedKeyName(imageName);
+  if (auto refused = feedNameRefusal(name); !refused.empty())
+  {
+    return Error{std::move(refused)};
+  }
   auto handed = std::make_shared<const ImageOverride>(std::move(image));
-  if (!m_shared->queueFeed(std::move(imageName), std::move(handed)))
+  if (!m_shared->queueFeed(std::move(name), std::move(handed)))
   {
     return Error{"The material parse thread takes no image override: it has stopped"};
   }
@@ -2335,7 +2374,7 @@ Result<void> MaterialService::setImageOverride(std::string imageName, ImageOverr
 
 void MaterialService::clearImageOverride(std::string imageName)
 {
-  if (m_shared->queueFeed(std::move(imageName), nullptr))
+  if (m_shared->queueFeed(feedKeyName(imageName), nullptr))
   {
     m_shared->requested.notify_one();
   }
@@ -2349,8 +2388,9 @@ std::uint64_t MaterialService::feedRequested() const
 ImageOverrideStatus MaterialService::imageOverrideStatus(
   const std::string& imageName) const
 {
+  const auto name = feedKeyName(imageName);
   auto lock = std::scoped_lock{m_shared->mutex};
-  const auto status = m_shared->overrideStatus.find(imageName);
+  const auto status = m_shared->overrideStatus.find(name);
   return status != m_shared->overrideStatus.end() ? status->second
                                                   : ImageOverrideStatus{};
 }
