@@ -21,7 +21,13 @@
 // Feed work kind and its counters, the matching, the conversion and the store with its
 // one publication per hand-over. CPU only: the render side is LPF.1's.
 
+#include "ImageTestFiles.h"
 #include "LitTestUtils.h"
+#include "fs/TestEnvironment.h"
+#include "lit/EngineImageEnums.h"
+#include "lit/GameFileSource.h"
+#include "lit/ImageCache.h"
+#include "lit/ImageOverride.h"
 #include "lit/MaterialDecls.h"
 #include "lit/MaterialService.h"
 
@@ -30,10 +36,14 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -154,9 +164,15 @@ RawImagePixels rgba8(
   pixels.height = height;
   pixels.faces = faces;
   pixels.format = ImagePixelFormat::RGBA8;
-  for (auto i = 0; i < width * height * faces; ++i)
+  // one texel, then doubled: the large ones are tens of megabytes
+  const auto size = std::size_t(width) * std::size_t(height) * std::size_t(faces) * 4;
+  pixels.bytes.resize(size);
+  const auto texel = std::array<std::uint8_t, 4>{r, g, b, a};
+  std::memcpy(pixels.bytes.data(), texel.data(), std::min(size, texel.size()));
+  for (auto filled = std::min(size, texel.size()); filled < size; filled *= 2)
   {
-    pixels.bytes.insert(pixels.bytes.end(), {r, g, b, a});
+    std::memcpy(
+      pixels.bytes.data() + filled, pixels.bytes.data(), std::min(filled, size - filled));
   }
   return pixels;
 }
@@ -368,6 +384,401 @@ TEST_CASE("MaterialService image overrides: the Feed work kind (D96, D100)")
       CHECK(table->feedApplied == service->feedRequested());
     }
     CHECK(service->feedRequested() == 5u);
+  }
+}
+
+namespace
+{
+
+using namespace engine_image;
+
+constexpr int CubeNative = 1;
+
+MaterialImageKey keyOf(
+  const std::string& name,
+  const int usage,
+  const int cube = Cube2D,
+  const int filter = FilterDefault)
+{
+  auto key = MaterialImageKey{};
+  key.name = name;
+  key.usage = usage;
+  key.filter = filter;
+  key.cube = cube;
+  return key;
+}
+
+RawImagePixels rawOf(const test::Rgba& picture)
+{
+  auto pixels = RawImagePixels{};
+  pixels.width = picture.width;
+  pixels.height = picture.height;
+  pixels.bytes = picture.pixels;
+  return pixels;
+}
+
+std::vector<std::uint8_t> recordBytes(const CachedImage& image, const std::size_t record)
+{
+  const auto& level = image.levels.at(record);
+  return {
+    image.data.begin() + std::ptrdiff_t(level.offset),
+    image.data.begin() + std::ptrdiff_t(level.offset + level.size)};
+}
+
+// what the source fallback makes of the same pixels: sourceImageLevels with DeriveOpts
+// for the usage, called directly
+CachedImage directLevels(
+  MaterialDecls& decls,
+  const RawImagePixels& raw,
+  const int usage,
+  const int filter = FilterDefault)
+{
+  const auto opts = engineImageOpts(usage);
+  auto pixels = SourcePixels{};
+  pixels.width = raw.width;
+  pixels.height = raw.height;
+  pixels.faces = raw.faces;
+  pixels.usage = usage;
+  pixels.pixels = raw.bytes;
+  return decls.sourceImageLevels(
+    std::move(pixels),
+    opts.format,
+    opts.colorFormat,
+    engineMipLevels(opts.format, filter, raw.width, raw.height),
+    opts.gammaMips);
+}
+
+// a game folder with the LP1c fixture's _s + _rmao pair and a material whose stages name
+// an _rmao image and an image program
+class OverrideGame
+{
+private:
+  fs::TestEnvironment m_env;
+
+public:
+  OverrideGame()
+  {
+    file("textures/lp1c/metal_s.tga", test::tgaFile(test::flat(8, 8, 1, 2, 3), 32));
+    file("textures/lp1c/metal_rmao.png", test::pngFile(test::gradient(16, 8)));
+    file(
+      "materials/ovr.mtr",
+      "textures/ovr/pbr\n{\n\tdiffusemap\ttextures/ovr/base.tga\n\tspecularmap\t"
+      "textures/lp1c/metal_rmao\n\tbumpmap\taddnormals( textures/ovr/base_local.tga, "
+      "heightmap( textures/ovr/base_h.tga, 4 ) )\n}\n");
+  }
+
+  void file(const std::string& path, const std::string& bytes) const
+  {
+    writeTextFile(m_env.dir() / "base" / path, bytes);
+  }
+
+  const std::filesystem::path& path() const { return m_env.dir(); }
+};
+
+// the key of the stage whose lighting is this one (1 bump, 2 diffuse, 3 specular)
+MaterialImageKey stageKey(const MaterialEntry& entry, const int lighting)
+{
+  auto key = std::optional<MaterialImageKey>{};
+  for (const auto& stage : entry.stages)
+  {
+    if (stage.lighting == lighting && stage.image)
+    {
+      key = *stage.image;
+      break;
+    }
+  }
+  REQUIRE(key);
+  return *key;
+}
+
+std::string refusalOf(const Result<std::shared_ptr<const CachedImage>>& result)
+{
+  return result.is_error() ? std::get<Error>(result.error()).msg : std::string{};
+}
+
+double medianMs(std::vector<double> times)
+{
+  std::sort(times.begin(), times.end());
+  return times[times.size() / 2];
+}
+
+} // namespace
+
+TEST_CASE("overrideImage converts as the source fallback does (C39, D97, D103)")
+{
+  const auto game = OverrideGame{};
+  auto source = GameFileSource{game.path()};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+  const auto convert = [&](const MaterialImageKey& key, const ImageOverride& image) {
+    const auto name = decls.imageCacheName(key);
+    INFO(name.error);
+    REQUIRE(name);
+    return overrideImage(decls, *name.value, key, image);
+  };
+  const auto made = [&](const MaterialImageKey& key, const ImageOverride& image) {
+    auto result = convert(key, image);
+    INFO(refusalOf(result));
+    REQUIRE(result.is_success());
+    return std::move(result).value();
+  };
+  const auto picture = test::gradient(16, 8);
+
+  SECTION("a diffuse key: sourceImageLevels' YCoCg and gamma mips of the same pixels")
+  {
+    const auto key = keyOf("textures/ovr/a", UsageDiffuse);
+    const auto image = made(key, overrideOf(rawOf(picture)));
+    const auto expected = directLevels(decls, rawOf(picture), UsageDiffuse);
+    CHECK(image->colorFormat == ColorYCoCgDxt5);
+    CHECK(image->storedFormat == FormatDxt5);
+    CHECK(image->format == FormatRgba8);
+    CHECK(image->numLevels == expected.numLevels);
+    REQUIRE(image->levels.size() == expected.levels.size());
+    for (std::size_t i = 0; i < expected.levels.size(); ++i)
+    {
+      CAPTURE(i);
+      CHECK(recordBytes(*image, i) == recordBytes(expected, i));
+    }
+    CHECK(image->data == expected.data);
+  }
+
+  SECTION("a bump key: the normal swizzle (0, G, 0, R)")
+  {
+    const auto image =
+      made(keyOf("textures/ovr/a", UsageBump), overrideOf(rawOf(picture)));
+    CHECK(image->colorFormat == ColorNormalDxt5);
+    auto swizzled = std::vector<std::uint8_t>{};
+    for (std::size_t i = 0; i < picture.pixels.size(); i += 4)
+    {
+      swizzled.insert(swizzled.end(), {0, picture.pixels[i + 1], 0, picture.pixels[i]});
+    }
+    CHECK(recordBytes(*image, 0) == swizzled);
+  }
+
+  SECTION("a 6-face cube: six records a level, level-major, in R_LoadCubeImages' order")
+  {
+    auto raw = RawImagePixels{};
+    raw.width = 8;
+    raw.height = 8;
+    raw.faces = 6;
+    for (auto side = 0; side < 6; ++side)
+    {
+      const auto face = test::flat(8, 8, std::uint8_t(10 * side), 20, 30);
+      raw.bytes.insert(raw.bytes.end(), face.pixels.begin(), face.pixels.end());
+    }
+    const auto image =
+      made(keyOf("textures/ovr/sky", UsageDefault, CubeNative), overrideOf(raw));
+    CHECK(image->textureType == TypeCubic);
+    REQUIRE(image->levels.size() == std::size_t(image->numLevels) * 6);
+    for (std::size_t k = 0; k < image->levels.size(); ++k)
+    {
+      CAPTURE(k);
+      CHECK(image->levels[k].level == int(k / 6));
+      CHECK(image->levels[k].destZ == int(k % 6));
+    }
+    for (auto side = 0; side < 6; ++side)
+    {
+      CHECK(
+        recordBytes(*image, std::size_t(side))
+        == test::flat(8, 8, std::uint8_t(10 * side), 20, 30).pixels);
+    }
+    const auto expected = directLevels(decls, raw, UsageDefault);
+    CHECK(image->data == expected.data);
+  }
+
+  SECTION("RGBA32F into TD_HDRI: R11G11B10F packed as LoadEXR packs, the alpha dropped")
+  {
+    auto raw = RawImagePixels{};
+    raw.width = 4;
+    raw.height = 4;
+    raw.format = ImagePixelFormat::RGBA32F;
+    auto floats = std::vector<float>{};
+    for (auto i = 0; i < 16; ++i)
+    {
+      floats.insert(floats.end(), {1.0f, 1.0f, 1.0f, 0.25f});
+    }
+    floats[4] = 2.0f;
+    floats[5] = 0.5f;
+    raw.bytes.resize(floats.size() * sizeof(float));
+    std::memcpy(raw.bytes.data(), floats.data(), raw.bytes.size());
+    const auto image =
+      made(keyOf("textures/ovr/hdr", UsageHdri, Cube2D, FilterLinear), overrideOf(raw));
+    CHECK(image->format == FormatR11g11b10f);
+    CHECK(image->storedFormat == FormatBc6h);
+    REQUIRE(image->levels.size() == 1u);
+    CHECK(recordBytes(*image, 0) == packEngineR11G11B10F(raw.bytes));
+    // f32_to_uf11( 1.0f ) = 15 << 6, f32_to_uf10( 1.0f ) = 15 << 5
+    auto first = std::uint32_t{0};
+    std::memcpy(&first, image->data.data(), sizeof(first));
+    CHECK(first == 0x781E03C0u);
+  }
+
+  SECTION("the cross pairs of pixel format and usage are refused")
+  {
+    auto floats = RawImagePixels{};
+    floats.width = 2;
+    floats.height = 2;
+    floats.format = ImagePixelFormat::RGBA32F;
+    floats.bytes.assign(2 * 2 * 16, 0);
+    CHECK_THAT(
+      refusalOf(convert(keyOf("textures/ovr/a", UsageDiffuse), overrideOf(floats))),
+      Catch::Matchers::ContainsSubstring("RGBA32F")
+        && Catch::Matchers::ContainsSubstring("TD_HDRI"));
+    CHECK_THAT(
+      refusalOf(convert(
+        keyOf("textures/ovr/hdr", UsageHdri),
+        overrideOf(rawOf(test::flat(2, 2, 1, 2, 3))))),
+      Catch::Matchers::ContainsSubstring("RGBA8")
+        && Catch::Matchers::ContainsSubstring("8-bit"));
+  }
+
+  SECTION("GPU-ready levels: the usage's format, colour format and face count")
+  {
+    const auto dxt5 = [](const int colorFormat, const int textureType) {
+      auto image = CachedImage{};
+      image.textureType = textureType;
+      image.storedFormat = FormatDxt5;
+      image.format = FormatDxt5;
+      image.colorFormat = colorFormat;
+      image.width = 8;
+      image.height = 8;
+      image.numLevels = 2;
+      const auto faces = textureType == TypeCubic ? 6 : 1;
+      for (auto level = 0; level < 2; ++level)
+      {
+        for (auto side = 0; side < faces; ++side)
+        {
+          const auto size = std::size_t(level == 0 ? 64 : 16);
+          image.levels.push_back(CachedImageLevel{
+            level, side, 8 >> level, 8 >> level, image.data.size(), size});
+          image.data.resize(image.data.size() + size, std::uint8_t(level + side));
+        }
+      }
+      auto override = ImageOverride{};
+      override.image = std::make_shared<const CachedImage>(std::move(image));
+      return override;
+    };
+    const auto diffuse = keyOf("textures/ovr/a", UsageDiffuse);
+    const auto right = dxt5(ColorYCoCgDxt5, Type2D);
+    CHECK(
+      made(diffuse, right) == std::get<std::shared_ptr<const CachedImage>>(right.image));
+    CHECK_THAT(
+      refusalOf(convert(diffuse, dxt5(ColorDefault, Type2D))),
+      Catch::Matchers::ContainsSubstring("colour format"));
+    CHECK_THAT(
+      refusalOf(convert(diffuse, dxt5(ColorYCoCgDxt5, TypeCubic))),
+      Catch::Matchers::ContainsSubstring("texture type"));
+    CHECK_THAT(
+      refusalOf(convert(
+        keyOf("textures/ovr/sky", UsageDefault, CubeNative), dxt5(ColorDefault, Type2D))),
+      Catch::Matchers::ContainsSubstring("texture type"));
+    // a format that is neither the usage's nor its uncompressed twin
+    auto wrong = dxt5(ColorDefault, Type2D);
+    CHECK_THAT(
+      refusalOf(convert(keyOf("textures/ovr/s", UsageSpecular), wrong)),
+      Catch::Matchers::ContainsSubstring("format 8"));
+  }
+
+  SECTION("the cap: a level beyond UploadBytesPerFrame over all its faces (D103)")
+  {
+    // one level each (a linear filter), so that the accepted sizes convert quickly
+    const auto flat = keyOf("textures/ovr/big", UsageDefault, Cube2D, FilterLinear);
+    CHECK_THAT(
+      refusalOf(convert(flat, overrideOf(rgba8(4096, 4096, 1, 2, 3)))),
+      Catch::Matchers::ContainsSubstring("M-TEX-DIFF-02"));
+    CHECK(convert(flat, overrideOf(rgba8(2048, 2048, 1, 2, 3))).is_success());
+    CHECK(convert(flat, overrideOf(rgba8(2896, 2896, 1, 2, 3))).is_success());
+    CHECK_FALSE(convert(flat, overrideOf(rgba8(2897, 2897, 1, 2, 3))).is_success());
+
+    const auto cube =
+      keyOf("textures/ovr/bigsky", UsageDefault, CubeNative, FilterLinear);
+    const auto cubeOf = [](const int side) {
+      auto raw = rgba8(side, side, 1, 2, 3, 255, 6);
+      return overrideOf(std::move(raw));
+    };
+    CHECK_THAT(
+      refusalOf(convert(cube, cubeOf(2048))),
+      Catch::Matchers::ContainsSubstring("6 face(s)")
+        && Catch::Matchers::ContainsSubstring("M-TEX-DIFF-02"));
+    CHECK(convert(cube, cubeOf(1024)).is_success());
+    CHECK(convert(cube, cubeOf(1182)).is_success());
+    CHECK_FALSE(convert(cube, cubeOf(1183)).is_success());
+  }
+
+  SECTION("the cache name's usage: _rmao stages, _s with and without the sibling (P5.1)")
+  {
+    const auto entry = decls.lookup("textures/ovr/pbr");
+    INFO(entry.error);
+    REQUIRE(entry);
+    const auto raw = rawOf(picture);
+
+    // Material.cpp:2279-2285: a stage naming _rmao is TD_SPECULAR_PBR_RMAO at parse
+    const auto rmao = stageKey(**entry.value, 3);
+    CHECK(rmao.usage == UsageSpecularPbrRmao);
+    const auto stage = made(rmao, overrideOf(raw));
+    CHECK(stage->storedFormat == FormatDxt1);
+    CHECK(stage->data == directLevels(decls, raw, UsageSpecularPbrRmao).data);
+
+    // an _s whose _rmao file exists: the time call renames it, and the override converts
+    // with RMAO's options although its bytes replace the files'
+    const auto withSibling = keyOf("textures/lp1c/metal_s", UsageSpecular);
+    const auto name = decls.imageCacheName(withSibling);
+    REQUIRE(name);
+    CHECK(name.value->usage == UsageSpecularPbrRmao);
+    CHECK(name.value->imageName == "textures/lp1c/metal_rmao");
+    CHECK(
+      made(withSibling, overrideOf(raw))->data
+      == directLevels(decls, raw, UsageSpecularPbrRmao).data);
+
+    // an _s without the sibling stays TD_SPECULAR, with its gamma mips
+    const auto alone = keyOf("textures/lp1c/plain_s", UsageSpecular);
+    const auto plain = made(alone, overrideOf(raw));
+    CHECK(plain->data == directLevels(decls, raw, UsageSpecular).data);
+    CHECK(plain->data != directLevels(decls, raw, UsageSpecularPbrRmao).data);
+
+    // a program key converts with the program's usage (TD_BUMP)
+    const auto program = stageKey(**entry.value, 1);
+    CHECK_THAT(program.name, Catch::Matchers::ContainsSubstring("addnormals"));
+    CHECK(made(program, overrideOf(raw))->colorFormat == ColorNormalDxt5);
+  }
+}
+
+TEST_CASE("overrideImage's conversion time, 1024 x 1024 RGBA8 (P5.13, Q29)")
+{
+  auto source = MemoryDeclSource{std::vector<DeclFile>{}};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+  const auto image = overrideOf(rawOf(test::gradient(1024, 1024)));
+  for (const auto& [label, usage] :
+       {std::pair{"diffuse (YCoCg, gamma mips)", UsageDiffuse},
+        std::pair{"bump (normal swizzle, box mips)", UsageBump}})
+  {
+    const auto key = keyOf("textures/ovr/timed", usage);
+    const auto name = decls.imageCacheName(key);
+    REQUIRE(name);
+    auto times = std::vector<double>{};
+    for (auto i = 0; i < 10; ++i)
+    {
+      const auto started = std::chrono::steady_clock::now();
+      const auto made = overrideImage(decls, *name.value, key, image);
+      times.push_back(std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - started)
+                        .count());
+      REQUIRE(made.is_success());
+    }
+#ifdef NDEBUG
+    constexpr auto build = "Release";
+#else
+    constexpr auto build = "Debug";
+#endif
+    std::cout << fmt::format(
+      "LPF.0a conversion ({}): 1024 x 1024 RGBA8 {}: median {:.1f} ms, min {:.1f}, max "
+      "{:.1f} over 10\n",
+      build,
+      label,
+      medianMs(times),
+      *std::min_element(times.begin(), times.end()),
+      *std::max_element(times.begin(), times.end()));
   }
 }
 

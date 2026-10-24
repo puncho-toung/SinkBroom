@@ -75,13 +75,28 @@ Result<std::shared_ptr<const CachedImage>> sourceImage(
     return Error{std::move(load.error)};
   }
   auto& pixels = *load.pixels;
-  const auto opts = engineImageOpts(name.usage);
-  const auto numLevels =
-    engineMipLevels(opts.format, key.filter, pixels.width, pixels.height);
   // the files are kept before the pixels are taken (S2.4: moved, not copied)
   files.insert(files.end(), pixels.files.begin(), pixels.files.end());
   files.insert(files.end(), pixels.missing.begin(), pixels.missing.end());
   auto origin = pixels.files.empty() ? GameFileProbe{} : pixels.files.front().probe;
+  return sourceLevels(decls, name, key, std::move(pixels))
+         | kdl::transform([&](CachedImage image) {
+             image.origin = std::move(origin);
+             return std::make_shared<const CachedImage>(std::move(image));
+           });
+}
+
+Result<CachedImage> sourceLevels(
+  MaterialDecls& decls,
+  const ImageCacheName& name,
+  const MaterialImageKey& key,
+  SourcePixels pixels)
+{
+  // Image_load.cpp:716-865: DeriveOpts for the picture's size (the format, colour format
+  // and gamma mips are the ones the time call's usage gave)
+  const auto opts = engineImageOpts(name.usage);
+  const auto numLevels =
+    engineMipLevels(opts.format, key.filter, pixels.width, pixels.height);
   auto image = decls.sourceImageLevels(
     std::move(pixels), opts.format, opts.colorFormat, numLevels, opts.gammaMips);
   if (image.levels.empty())
@@ -107,8 +122,7 @@ Result<std::shared_ptr<const CachedImage>> sourceImage(
   }
 
   image.file = name.generatedName;
-  image.origin = std::move(origin);
-  return std::make_shared<const CachedImage>(std::move(image));
+  return image;
 }
 
 ImageCacheSlot resolveImage(

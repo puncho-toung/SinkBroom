@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "base/Result.h"
 #include "lit/MaterialDecls.h"
 
 #include <cstdint>
@@ -100,5 +101,30 @@ std::string feedMatchName(const MaterialImageKey& key);
  * name is feedKeyName's. Pure.
  */
 std::string feedNameRefusal(const std::string& name);
+
+/**
+ * LPF.0a (C39, D103, P5.5, P5.6, P5.25): an override's image for one key, as its slot
+ * holds it, given the key's cache name from the copied time call
+ * (MaterialDecls::imageCacheName: the usage after the _s -> _rmao rename and a program's
+ * usage, the texture type). (a) Raw pixels are converted by sourceLevels with name.usage,
+ * as the source fallback converts a loaded source (sourceImage): RGBA8 for every usage
+ * but TD_HDRI and TD_HDR_LIGHTPROBE, whose RGBA32F is packed by packEngineR11G11B10F
+ * first; the cross pairs are refused (the engine has no such source). (b) A GPU-ready
+ * image is taken as it is when it passes the cache's own test (engineCacheMatches,
+ * Image_load.cpp:674-680: the usage's colour format, its format or that format's
+ * uncompressed twin, the key's texture type), its records are the binarizer's (numLevels
+ * x faces, level-major, 6 faces exactly for a cube) and the upload takes them
+ * (engineTextureDesc, levelUploadBytes). Either is refused when a level, its bytes summed
+ * over its faces, passes UploadBytesPerFrame, the render side's constant (mirror.json
+ * M-TEX-DIFF-02): a raw RGBA8 2D side above 2896, a raw RGBA8 cube side above 1182. An
+ * image the engine generates or bakes (an intrinsic, an array, a packed mip chain) is
+ * refused. Every refusal names its rule. Parse thread (C20: sourceImageLevels and the
+ * packing are copied code).
+ */
+Result<std::shared_ptr<const CachedImage>> overrideImage(
+  MaterialDecls& decls,
+  const ImageCacheName& name,
+  const MaterialImageKey& key,
+  const ImageOverride& image);
 
 } // namespace tb::lit

@@ -32,7 +32,8 @@
 
 // LP1c.2: an image's source through the copied loaders (S14, D51), behind the facade's
 // MaterialDecls::loadImagePixels, and its levels as the engine's binarizer lays them out
-// before its encoder (D24), MaterialDecls::sourceImageLevels. Parse thread only (C20).
+// before its encoder (D24), MaterialDecls::sourceImageLevels; LPF.0a: LoadEXR's packing
+// of an override's floats, packEngineR11G11B10F. Parse thread only (C20).
 
 // clang-format off: the std-only facade, then precompiled.h, then the registry
 #include "lit/MaterialDecls.h"
@@ -40,7 +41,10 @@
 #include "shim/EngineMessages.h"
 #include "shim/Registry.h"
 #include "renderer/Color/ColorSpace.h"
+#include "libs/mesa/format_r11g11b10f.h"
 // clang-format on
+
+#include <cstring>
 
 namespace tb::lit
 {
@@ -688,6 +692,32 @@ bool loadSixFileCube(
 }
 
 } // namespace
+
+// LPF.0a: Image_files.cpp:604-621, LoadEXR's loop, over a caller's floats
+std::vector<std::uint8_t> packEngineR11G11B10F(const std::vector<std::uint8_t>& rgba32f)
+{
+  const auto pixelCount = rgba32f.size() / (4 * sizeof(float));
+  auto out = std::vector<std::uint8_t>(pixelCount * 4);
+
+  // convert to packed R11G11B10F as uint32 for each pixel
+
+  const std::uint8_t* src = rgba32f.data();
+  std::uint8_t* dst = out.data();
+  for (size_t i = 0; i < pixelCount; i++)
+  {
+    // read 3 floats and ignore the alpha channel
+    float p[3];
+    std::memcpy(p, src, sizeof(p));
+
+    // convert
+    uint32_t value = float3_to_r11g11b10f(p);
+    std::memcpy(dst, &value, sizeof(value));
+
+    src += 4 * sizeof(float);
+    dst += 4;
+  }
+  return out;
+}
 
 CachedImage MaterialDecls::sourceImageLevels(
   SourcePixels&& source,

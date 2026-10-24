@@ -51,6 +51,20 @@ Result<std::shared_ptr<const CachedImage>> sourceImage(
   std::vector<FoundGameFile>& files);
 
 /**
+ * LPF.0a (C39 (a)): sourceImage's conversion of a picture already in memory (a loaded
+ * source, or an override's pixels): DeriveOpts' format, colour format and gamma mips for
+ * name.usage (the time call's usage, never the key's: P5.1), the mip count for the
+ * picture's size and the key's filter, MaterialDecls::sourceImageLevels, and RGB565
+ * expanded to RGBA8 as the cache reader expands it; the image's file is name's generated
+ * name. An error when no level is made (a stop, a size of 0). Parse thread (C20).
+ */
+Result<CachedImage> sourceLevels(
+  MaterialDecls& decls,
+  const ImageCacheName& name,
+  const MaterialImageKey& key,
+  SourcePixels pixels);
+
+/**
  * LP1c.2: an image as the preview has it: the engine's cache when the engine would use it
  * (resolveImageCache), else, for a Missing or Stale cache, sourceImage. A name the copied
  * time call cannot make is Missing with its error. The editor's own image is never asked
