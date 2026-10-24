@@ -275,7 +275,7 @@ EngineBounds engineProjectedFullyClippedBounds(
 
 /**
  * LP5.2a (C46, D115): idRenderMatrix::DepthBoundsForBounds( min, max, mvp, bounds,
- * windowSpace true ) (RenderMatrix.cpp:3712-3830, the copy, its SSE path): the clip depth
+ * windowSpace true ) (RenderMatrix.cpp:3712-3837, the copy, its SSE path): the clip depth
  * range of the bounds' eight corners, a corner behind the eye (w below the smallest
  * normal float) at minus infinity, then moved to window space and clamped to 0..1;
  * (min, max). Pure; any thread (M-STAGE-PURE-01).

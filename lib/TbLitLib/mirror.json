@@ -15542,9 +15542,13 @@
         {
           "file": "lib/TbLitLib/src/LitFrontend.cpp",
           "symbol": "RegisterCache"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordStages, LitPasses::stageImage"
         }
       ],
-      "note": "LP2.2a (D52, D77): the engine has every material and its registers before it draws; the preview's arrive from the parse thread. A chunk whose material or registers are pending is drawn solid in the prepass (not when its known material is translucent) and lit through the bump _flat and the diffuse _default, and the frame is unconverged; until a new evaluation arrives a consumer (an entity or a light) keeps its last registers of the material, never the defaults, so a light-colour drag never flickers"
+      "note": "LP2.2a (D52, D77): the engine has every material and its registers before it draws; the preview's arrive from the parse thread. A chunk whose material or registers are pending is drawn solid in the prepass (not when its known material is translucent) and lit through the bump _flat and the diffuse _default, and the frame is unconverged; until a new evaluation arrives a consumer (an entity or a light) keeps its last registers of the material, never the defaults, so a light-colour drag never flickers LP5.2a (D124, P6.6): pass 8 never draws a surface whose material or registers are pending (the engine never draws one): it is skipped, counted in stagePending, and the frame stays unconverged; kept registers (D52) are drawn; a stage image Pending, or Loading without a written level, skips its draw (unconverged), a Default slot binds _default as the engine binds it for an image not loaded or defaulted (M-STAGE-05)"
     },
     {
       "id": "M-PASS-GUARD-01",
@@ -20022,7 +20026,7 @@
           "symbol": "LP5.0: the frame cvars of passes 7-9"
         }
       ],
-      "note": "LP5.0 step 3 (C46, C47, C49, D118): the cvars passes 7-9 read, at the engine's defaults, every one \"0\": r_skipFogLights and r_skipBlendLights (FogAllLights), r_skipTranslucent (the translucent interactions), r_skipShaderPasses and r_skipPostProcess (the two DrawShaderPasses calls of DrawViewInternal), r_skipNewAmbient (newStage stages), r_showMathLights (USER0.x = 1 + it). r_skipAmbient false is the preview's behaviour (the panel draws the stage pass), as useSsao's is, and also the engine's default; the parity maps set it per map and the [.][parity] test per row (D118, M-TEST-AMB-03). r_useLightDepthBounds and r_skipDynamicTextures are not added: the scout names neither as read by LP5's passes. Nothing reads these before LP5.1-LP5.3. LP5.1: recordInteractions reads skipTranslucent (M-INTER-02) and engineMathLightParms showMathLights (M-PASS-09)"
+      "note": "LP5.0 step 3 (C46, C47, C49, D118): the cvars passes 7-9 read, at the engine's defaults, every one \"0\": r_skipFogLights and r_skipBlendLights (FogAllLights), r_skipTranslucent (the translucent interactions), r_skipShaderPasses and r_skipPostProcess (the two DrawShaderPasses calls of DrawViewInternal), r_skipNewAmbient (newStage stages), r_showMathLights (USER0.x = 1 + it). r_skipAmbient false is the preview's behaviour (the panel draws the stage pass), as useSsao's is, and also the engine's default; the parity maps set it per map and the [.][parity] test per row (D118, M-TEST-AMB-03). r_useLightDepthBounds and r_skipDynamicTextures are not added: the scout names neither as read by LP5's passes. Nothing reads these before LP5.1-LP5.3. LP5.1: recordInteractions reads skipTranslucent (M-INTER-02) and engineMathLightParms showMathLights (M-PASS-09) LP5.2a: the stage pass reads skipShaderPasses and engineShaderPassDraws skipNewAmbient (M-STAGE-02, M-STAGE-07); r_skipAmbient's stand-in is the test switch"
     },
     {
       "id": "M-ID-FN-29",
@@ -20274,7 +20278,7 @@
         },
         {
           "file": "lib/TbLitLib/test/src/tst_FrameLog.cpp",
-          "symbol": "FrameLog: the 51 columns"
+          "symbol": "FrameLog: the 54 columns (LP5.2a's three after these two, M-STAGE-02)"
         },
         {
           "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
@@ -20585,6 +20589,758 @@
         }
       ],
       "note": "LP5.1 step 5 (C50, D118, D119, P6.1, P6.5, P6.10, P6.22), test only: a fourth parity map, shot after the ambient map with r_skipAmbient 0 (rows.json skip_ambient 0): M01-M05 math point, spot and sun lights over the five curves (M01 invsquare_clamped with math_inner_radius 0.25, M02 invsquare with math_falloff_exp 3 and math_energy_clamp 0, M03 a linear spot with math_shape_exp 4 and math_penumbra 0.3, M04 a smooth spot with a banded pattern, M05 a sun and an exponential point light), M06 math_type sun on a point light (POINT by the geometry), M07 a constant style string (num_styles 1, light_style0 m, math_style 0) beside math_style -1, B01 an ambientLight light over a legacy floor and PBR walls; every material lit, no SL_AMBIENT stage or implicit material in a view (no pass 8 before LP5.2a), every light noshadows 1, no time or sound register, no bake; every row's control black (_color 0 0 0); the bump-mapped rows and B01 k28, M06 and M07 on _flat axial. The rows' expect gains texture_lights, math_lights and ambient_lights, which the [.][parity] test writes into each read-back's .json and asserts; the preview root gains the interactionAmbient blobs. The one engine run (2026-10-24, run-a and run-b 312 s each, every shot repeated at 0): every M and B row within 1 LDR level (means 0.001-0.0142), the eight controls 0; thresholds recorded with --only (the k28 rows mean, p99, max 1 and over1 0; M06 and M07 lit_min alone)"
+    },
+    {
+      "id": "M-STAGE-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            255,
+            359
+          ],
+          "anchor": "R_SortDrawSurfs (its #if 1 path)",
+          "sha256": "37daf88108617e6eb0a80b1eae245db76b24f73eba0fc9d120478895f10464d9"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            300,
+            320
+          ],
+          "anchor": "materialSort_t",
+          "sha256": "0ddb6a709fa866053fc8572492514c61f204ccf8ced5f3531af77e9d04352c3c"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3182,
+            3230
+          ],
+          "anchor": "idMaterial::ParseMaterial: the sort defaults and _currentRender's SS_POST_PROCESS",
+          "sha256": "ad6f0955b6a13d6d6f5373c646ed0eac094635e23e40504eeb3190b94cdd332d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "stagePassOrder"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::rebuildLists (m_stageOrder)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitStagePass.cpp",
+          "symbol": "LitStagePass: the stage pass's sorted list (the 64-bit key transcribed)"
+        }
+      ],
+      "note": "LP5.2a step 1 (C46, D115, K37): pass 8 draws the view's drawn surfaces in R_SortDrawSurfs' order: the engine's key is the bits of float( SS_POST_PROCESS - sort ) in the high dword, Ftoui16( min * 0xFFFF ) of DepthBoundsForBounds( space->mvp, bounds ) above the low 16 bits and ( numDrawSurfs - i ) in them, sorted descending: the sort value ascending as the float bits order it (a sort above 100 is a negative float whose bits sort first, and the pass then stops at once: K38), the farthest first (the comment's \"depth smallest first\" is wrong, SC522), then creation order, which is ChunkKey's operator< here (entity, cell, area, material, part: the order buildFrontendLists makes the surfaces in, the leading SS_SUBVIEW ones first, which sort first anyway; the brief's (area, entity, material, cell, part) was the field order, not the comparison's). The preview compares the three levels one by one (no 16-bit index, so no limit at 65535 surfaces); a pending material sorts as SS_OPAQUE (pass 8 skips it). The order is made with the lists (rebuildLists), not every frame: kept lists keep it. K37: the engine sorts dmap's model surfaces (one per area and material, drawn in triangle order), the preview its chunks, so overlapping translucent pieces of one material in one area can blend in another order, and the depth key is a chunk's bounds', not the model surface's. Cost (Debug, 4096 surfaces): 10.9 ms a sort, made once per list build"
+    },
+    {
+      "id": "M-STAGE-PURE-01",
+      "kind": "pure-function",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            3712,
+            3837
+          ],
+          "anchor": "idRenderMatrix::DepthBoundsForBounds",
+          "sha256": "c3cd384eb6cb8d2c8572f170cfb3363b059191e2fa7d59b9f41c5da150c48450"
+        },
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            1407,
+            1427
+          ],
+          "anchor": "idMath::Ftoui16",
+          "sha256": "f2651148bee40c9a1a439566b56939f86feb04f7a89935265c666c69e34c2e21"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineDepthBoundsForBounds, engineFtoui16"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineLight.h",
+          "symbol": "engineDepthBoundsForBounds, engineFtoui16"
+        }
+      ],
+      "commonCalls": [
+        "none"
+      ],
+      "asserts": [
+        "none"
+      ],
+      "note": "LP5.2a step 1 (C24, A25: the render thread runs them in stagePassOrder, on the frontend's lists): both are in the copied files already (M-LIGHT-COPY-02 compiles RenderMatrix.cpp with USE_INTRINSICS_SSE; Math.h is copied whole), so no range was added. DepthBoundsForBounds reads its arguments and RenderMatrix.cpp's constant statics (vector_float_smallest_non_denorm, _neg_infinity, _half, _zero, _one: M-LIGHT-STATIC-*), divides through _mm_rcp32_ps (two Newton steps on the CPU's 12-bit estimate: the engine's last bits on the same CPU only, as M-LIGHT-PURE's note says), allocates nothing; a corner behind the eye gives minus infinity, so min clamps to 0 in window space. Ftoui16 truncates through C_FLOAT_TO_INT and clamps to 0..65535"
+    },
+    {
+      "id": "M-STAGE-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4271,
+            4296
+          ],
+          "anchor": "idRenderBackend::DrawShaderPasses: r_skipAmbient, currentSpace = 1",
+          "sha256": "633eed2b9b3951a7868358c7814dff941795919b0f38ca37e0378a0353e757fa"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4298,
+            4332
+          ],
+          "anchor": "DrawShaderPasses: the per-surface skips and the stop at SS_POST_PROCESS",
+          "sha256": "d62b5648c2601e9a88819b5ab42bc97536f4040d1a6ca726b87ca2f918654d92"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4352,
+            4382
+          ],
+          "anchor": "DrawShaderPasses: the space change (MVP, LOCALVIEWORIGIN, MODELMATRIX, MODELVIEWMATRIX)",
+          "sha256": "5fe307b7f5232313b74c7859c3fface8785a979ced4acabdd55fa8afe808ac0e"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4424,
+            4432
+          ],
+          "anchor": "DrawShaderPasses: surfGLState and MF_POLYGONOFFSET",
+          "sha256": "09e051ce37854838d5baa407f02bb31c374ec85a60e029a910d248fa3c1b9eb1"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4704,
+            4716
+          ],
+          "anchor": "DrawShaderPasses: GL_Color( 1 ) and GLS_DEFAULT at the end",
+          "sha256": "3bc48dc769e643c6ed4e3efb88e77843f1599cf5b8ef9360f8f5bee34123ad77"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            6103,
+            6125
+          ],
+          "anchor": "DrawViewInternal: the first DrawShaderPasses call unless r_skipShaderPasses",
+          "sha256": "22eb02f4f52de64cf070f5b4aecd125abacb0d4cb69fa3edba4c25f308711a01"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            159,
+            164
+          ],
+          "anchor": "r_offsetfactor \"0\", r_offsetunits \"-600\"",
+          "sha256": "e674a467fa800184b0bf1f9dce10a3e14500cdc91bc02f9e43ccb936a4163c24"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::record (the stage pass after the interactions), LitPasses::recordStages, stagePassDesc"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.h",
+          "symbol": "LitFrameStats::stageDraws, stageSkipped, stagePending, stagePostProcess, stageTexgenDeferred, stageCinematic, stageProgramMissing, stagesSkipped, stagesTimed, stagesDisabled; LitFrameInputs::stageTimer, gamePath; LitDrawRecord::Pass::Stage"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameTimers.h",
+          "symbol": "TimedPass::Stages"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/FrameLog.h",
+          "symbol": "FrameLogRow::stageDraws, stageSkipped, gpuStagesMs"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameLog.cpp",
+          "symbol": "frameLogHeader, formatFrameLogRow (stage_draws, stage_skipped, gpu_stages_ms)"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::recordLitPasses (the stage timer, the game path), drawFrame (the frame log's three columns; hdrDrawn and the draws count the stage draws)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_FrameLog.cpp",
+          "symbol": "FrameLog: the 54 columns"
+        }
+      ],
+      "note": "LP5.2a step 2 (C46, D116, D118): DrawShaderPasses' first call, recorded after DrawInteractions' two phases (the preview has no SSR copy, r_useSSR 0, D19) into hdrFBO with the prepass's depth, unless r_skipShaderPasses (EngineFrame.skipShaderPasses) or the test switch that stands in for r_skipAmbient (skipShaderPassesForTesting, D118: the panel never sets it); r_skipInteractions skips the interactions alone (M-TEST-AMB-01). Per surface of the sorted list (M-STAGE-01): a surface whose material or registers are pending is skipped and counted (stagePending, D124, M-PASS-DIFF-05), one without an SL_AMBIENT stage, a portal sky, an empty one and a suppressInSubview one are passed over (the preview's view is no xray subview and every stereo eye is 0), and the pass stops at the first sort of SS_POST_PROCESS or more (K38, M-STAGE-DIFF-01; stagePostProcess counts the surfaces with an SL_AMBIENT stage left there); on a space change MVP, LOCALVIEWORIGIN, MODELMATRIX_X..W and MODELVIEWMATRIX_X..W transposed (AmbientPass' four, setAmbientSpace), the scissor of the surface (M-STAGE-03), the cull (M-STAGE-DEFECT-01), MF_POLYGONOFFSET's GL_PolygonOffset( r_offsetFactor 0, r_offsetUnits -600 * polygonOffset ) in the pipeline key with GLS_POLYGON_OFFSET; at the end GL_Color( 1, 1, 1 ) (alpha 1) and GLS_DEFAULT, which changes no draw (every key carries its whole state, D75). r_skipTranslucent is read by DrawInteractionsPass alone (RB:4145): DrawShaderPasses has no translucent switch, so pass 8 reads none (the brief's \"sibling\" does not exist). The pass has its own timer (gpu_stages_ms) and the frame log three columns after ambient_lights (stage_draws, stage_skipped, gpu_stages_ms: 54); stage_skipped counts the SL_AMBIENT stages of the surfaces the pass reached that drew nothing, every reason summed (a condition of 0, ZERO / ONE, a black add, a transparent blend, r_skipNewAmbient, a cinematic, a cube or sky texgen, a missing program, a stage without an image or with a cube image, an image not written yet, a pending pipeline, the budget). A failed pipeline of 15 or 18 disables the pass (D9); a material program's disables its stages alone"
+    },
+    {
+      "id": "M-STAGE-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            262,
+            265
+          ],
+          "anchor": "AddAreaViewEntities: vEnt->scissorRect.Union( ps->rect )",
+          "sha256": "53ded7e100c177680bcf630fb5ca9965a17ca56add0c17a2826418d88ff0028b"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4384,
+            4394
+          ],
+          "anchor": "DrawShaderPasses: the scissor with the Y flip",
+          "sha256": "f3f344199b9e07da97b49605eb1f4b7fcb8792d991d50066d329877164b91963"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.h",
+          "symbol": "LitSurface::scissor"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (the surface's scissor)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordStages (engineScissorRect when it changes)"
+        }
+      ],
+      "note": "LP5.2a step 2 (C46, P6.14): drawSurf->scissorRect is its view entity's: a world chunk of area N the world entity N's rect, the union of the rects of the portal chains that reached the area (ViewFlow's worldRects), a brush entity's chunk its entity's (entityRects); the outside set (D81) and a map without a tree (D94) take the view's scissor. The pass changes the scissor only when it differs from the current one (r_useScissor 1), with GL_Scissor's Y flip (engineScissorRect), starting from what the interactions left. Pixel-equivalent in a sealed map (beyond the rect lies the near room's depth), mirrored anyway"
+    },
+    {
+      "id": "M-STAGE-DEFECT-01",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4396,
+            4422
+          ],
+          "anchor": "DrawShaderPasses: the cull from the material's cullType",
+          "sha256": "11f906bce51e006853b5c4f678d4b67f79e9f717a34ab007eb6790e96d9888e3"
+        },
+        {
+          "file": "neo/renderer/GLState.h",
+          "lines": [
+            74,
+            78
+          ],
+          "anchor": "GLS_CULL_*: GLS_CULL_BITS is 2 << 15",
+          "sha256": "9762eef02d02bb7c5a49bf2c162703715317fde56e536be455ab345f05372a23"
+        },
+        {
+          "file": "neo/renderer/PipelineCache.cpp",
+          "lines": [
+            117,
+            145
+          ],
+          "anchor": "PipelineCache::GetRenderState: the cull switch on stateBits & GLS_CULL_BITS",
+          "sha256": "5fc3f73130ebcf0234eb26b2b679d66ebb31d49278646ef3e436789b583f4646"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineShaderPassDraws (cullMode)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EnginePipelineState.h",
+          "symbol": "engine_gls::CullBackSided, CullBits"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitStagePass.cpp",
+          "symbol": "LitStagePass: DrawShaderPasses' stage decisions (the cull)"
+        }
+      ],
+      "note": "LP5.2a step 2 (D117, D20: mirrored, not fixed; Q32, E-LIT-2 for the user's checklist): pass 8 is the only pass that honours a material's cull: CT_TWO_SIDED gives GLS_CULL_TWOSIDED (no cull), CT_FRONT_SIDED GLS_CULL_FRONTSIDED, CT_BACK_SIDED GLS_CULL_BACKSIDED (1 << 15), which GetRenderState masks with GLS_CULL_BITS (2 << 15) to 0, the front-sided case: a back-sided material draws its front faces. The preview passes the bits into the pipeline key and the copied GetRenderState decodes them, so the defect is mirrored per key: LP5.3's fog cube (its BACKSIDED request) needs nothing more from pass 8. A two-sided material with a lit or texgen stage is front-sided with back sides already in the copied parser (MAT:3018-3035, M-GEO-*). The [litgpu2] case shows it: a translucent back-sided box straddling a wall blends its front face before the wall once, where a correct decode would draw only its back face, behind the wall's depth"
+    },
+    {
+      "id": "M-STAGE-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4434,
+            4460
+          ],
+          "anchor": "DrawShaderPasses: the condition, SL_AMBIENT only, stageGLState, the ZERO / ONE skip",
+          "sha256": "d937508614195ee11ca86bdb05c8fb96d71f06004933ca080b6213dfdfc3809a"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4462,
+            4506
+          ],
+          "anchor": "DrawShaderPasses: the stencil stage's bits",
+          "sha256": "bfff8c08b02dae241a5e9d43a0ff5c1d9f678291e7c9a4f1ca16965242ce4bbe"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4572,
+            4596
+          ],
+          "anchor": "DrawShaderPasses: the colour, the black-add and the transparent-blend skips",
+          "sha256": "b45f525d9679953231c83fd82220875c1b1804b5deaeb3931dd5c41a147aebcb"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4598,
+            4671
+          ],
+          "anchor": "DrawShaderPasses: GL_Color and the program by GUI, texgen and cinematic",
+          "sha256": "93f4d78221c352e194a61f32cc0de006e628001fb571d380dad8d17b1537d2cb"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4673,
+            4703
+          ],
+          "anchor": "DrawShaderPasses: RB_SetVertexColorParms, the image, privatePolygonOffset, GL_State, the draw",
+          "sha256": "f5c8bd922c8f7c3f5abecb7a76d669df2b96c3f26555abe067c6912dbf7082d6"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            129,
+            146
+          ],
+          "anchor": "RB_SetVertexColorParms",
+          "sha256": "7116163379efdf65d97f5b53cf7ecc2a55bd30eb1f0e07599291082741321e61"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            194,
+            216
+          ],
+          "anchor": "RB_LoadShaderTextureMatrix",
+          "sha256": "e12d704dd6e3ff174e0bc2ede6dab9518a617148879297ac6cc7dcd98d227a7f"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            352,
+            358
+          ],
+          "anchor": "PrepareStageTexturing: the texture matrix always",
+          "sha256": "61582303edce0563305ef9b6801f626a50f58f548d65b74aaaace13b54fd0e46"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            587,
+            624
+          ],
+          "anchor": "PrepareStageTexturing: TG_SCREEN / TG_SCREEN2's planes, rows 0, 1 and 3",
+          "sha256": "889d8503bfd97154e4ae8ad322bbb3db5aab14f8991df10e7a7bfa837b3953e0"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            637,
+            638
+          ],
+          "anchor": "PrepareStageTexturing: TEXGEN_0_ENABLED",
+          "sha256": "1220d16edc6a79a0a020226c5f9692439c7bc0d1a600505c3c2ca87bc694dc40"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            1750,
+            1759
+          ],
+          "anchor": "ParseStage: the screen and screen2 keywords (TG_SCREEN)",
+          "sha256": "0573b39bc03b63668750c88b55f9768d0bbe9f8d79528a0d7d602ec46b85e45a"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3232,
+            3253
+          ],
+          "anchor": "ParseMaterial: the drawStateBits depth flags",
+          "sha256": "022d4667e1b6108df51d76b7d5c7f6e168d915dcab70df7876ffc9066f087437"
+        },
+        {
+          "file": "neo/shaders/builtin/texture_color.ps.hlsl",
+          "lines": [
+            48,
+            61
+          ],
+          "anchor": "texture_color: sRGBAToLinearRGBA( tex · vertex colour · rpColor ), alpha too",
+          "sha256": "39ed3c67fccf412a4afe0f6f8f5fd876116aef215b261ce069ab3fb8cc01b5dc"
+        },
+        {
+          "file": "neo/shaders/builtin/texture_color_texgen.ps.hlsl",
+          "lines": [
+            48,
+            58
+          ],
+          "anchor": "texture_color_texgen: the projective lookup, sRGBAToLinearRGBA( tex ) · colour",
+          "sha256": "b40ba4ecb6b4971c5af3914efcb3bde340c54f37b0db3fbd623fa9936881eef7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineShaderPassDraws"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitStages.h",
+          "symbol": "StageProgram, StagePassDraw, StagePassSurface, EngineSortPostProcess, engine_cull"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordStages (the parms, the units, the draw), LitPasses::bindingSets (TEXGEN as TEXTURE)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EnginePipelineState.h",
+          "symbol": "engine_gls (LP5.2a's bits)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
+          "symbol": "EngineBuiltinTextureTexgenVertexColor"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitStagePass.cpp",
+          "symbol": "LitStagePass: DrawShaderPasses' stage decisions; the stages map's S materials"
+        }
+      ],
+      "note": "LP5.2a step 2 (C46, SC520, SC521): per stage, skipped when its condition register is 0 (counted only for an SL_AMBIENT stage), not the pass's when it is not SL_AMBIENT; stageGLState = the surface's (cull, polygon offset; extraGLState 0) | drawStateBits (no GLS_OVERRIDE: no GUI); ZERO / ONE skipped; the stencil stage's comp ALWAYS or EQUAL, pass REPLACE, KEEP or DECRWRAP, zFail DECRWRAP or KEEP, fail KEEP and GLS_STENCIL_MAKE_REF( ref ) | GLS_STENCIL_MAKE_MASK( writeMask ), the other values adding no bits as the engine's switches; the colour registers, ONE / ONE with rgb at most 0 and SRC_ALPHA / ONE_MINUS_SRC_ALPHA with alpha at most 0 skipped, GL_Color's clamp to 0..1; the program by texgen: TG_SCREEN and TG_SCREEN2 on 18 (texture_color_texgen, TEXGEN, set 12: TEXGEN_0_S/T/Q the rows 0, 1 and 3 of the space's modelViewMatrix x projectionMatrix, TEXGEN_0_ENABLED 1), TG_EXPLICIT on 15 (texture_color, TEXTURE, set 4, TEXGEN_0_ENABLED 0), the cube and sky texgens and TG_DIFFUSE_CUBE and TG_GLASSWARP LP5.2b's (M-STAGE-TEMP-01); RB_SetVertexColorParms (SVC_IGNORE (0, 1), SVC_MODULATE (1, 0), SVC_INVERSE_MODULATE (-1, 1)); the texture matrix (RB_LoadShaderTextureMatrix); privatePolygonOffset in the key; no ALPHA_TEST (it is 0 from the interactions: an alpha-tested SL_AMBIENT stage relies on DEPTHFUNC_EQUAL against the prepass's alpha-tested depth). The depth and blend bits come from drawStateBits alone (SS_POST_PROCESS LESS with depth writes, translucent or ignoreAlphaTest LESS | DEPTHMASK, else EQUAL | DEPTHMASK; the masks of MAT:2096-2108; alpha factors One / Zero and blendOp ignored by GetRenderState). The S07 keyword is screen (MAT:1750): \"texgen screen\" is a bad texGen that defaults the material. texture_color linearises tex · colour (its alpha too), texture_color_texgen the texel alone, then multiplies by the colour"
+    },
+    {
+      "id": "M-STAGE-05",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            333,
+            345
+          ],
+          "anchor": "BindVariableStageImage: the image if loaded and not defaulted, else _default",
+          "sha256": "b2cfb3874a39a0f944c8238f3bdeae828f3d5e12d00b2962f565f4b7f9c97ba2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::stageImage"
+        }
+      ],
+      "note": "LP5.2a step 2 (C46, D124, P6.17): a stage image is bound by its slot's state: Default (the service has no image: the engine's image not loaded or defaulted) binds _default, BindVariableStageImage's rule and the one place where the preview's _default is the engine's (zeros at com_developer 0, M-INTR-01: blend blend and add draw nothing visible, blend filter blackens); Pending (not answered) and Loading without a written level skip the draw and leave the frame unconverged (M-PASS-DIFF-05); Loading with written levels and Resident bind the slot; Replacing (LPF.1) binds its complete texture. A newStage block's fragment images take the same rule at units 0-2"
+    },
+    {
+      "id": "M-STAGE-06",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3727,
+            3772
+          ],
+          "anchor": "idMaterial::SetDefaultText: the implicit material",
+          "sha256": "20e7a6078f1eab521fcfe53fa78e43bd3f606bb8181d7dbdbd14eedb933321cd"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3129,
+            3159
+          ],
+          "anchor": "ParseMaterial: the coverage defaults",
+          "sha256": "64fabd226ec8054af5363fd0e4503566a23f2f822dfc338c12df45bd146e1bea"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineShaderPassDraws"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitStagePass.cpp",
+          "symbol": "LitStagePass: DrawShaderPasses' stage decisions (an implicit material)"
+        }
+      ],
+      "note": "LP5.2a step 2 (SC523): a face whose material has no decl gets the copied parser's implicit text, \"blend blend / colored / map <name> / clamp\": one SL_AMBIENT stage, blended with the destination, so MC_TRANSLUCENT, SS_MEDIUM, no lit stage (ReceivesLighting false, MF_NOSHADOWS): it draws nothing in the prepass, the ambient pass or the interactions and only in pass 8, its image at the entity's parm0-3 (worldspawn's 1, 1, 1, 1). The plan's S06 assumption holds: an implicit material draws one blend blend stage in pass 8; with no image of its name the stage binds _default (zeros) and shows nothing"
+    },
+    {
+      "id": "M-STAGE-07",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4508,
+            4570
+          ],
+          "anchor": "DrawShaderPasses: the newStage branch",
+          "sha256": "1698193abb3556bb6e1ddd1c487162cb2546bddabc6598c19190b8c94dee8339"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2184,
+            2215
+          ],
+          "anchor": "ParseStage: program, fragmentProgram, vertexProgram (FindShader with USE_GPU_SKINNING 0 and pcEnabled)",
+          "sha256": "57da22580e29ff19b149906f51681ac8a2800abcaccf6268f93e4bb1a25e0c91"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2254,
+            2262
+          ],
+          "anchor": "ParseStage: FindProgram( name, vertex, fragment, POST_PROCESS_INGAME )",
+          "sha256": "480f4f4470e4a4fdf1d8c94156712b4e6690b3f436e4cfd6e87d46c9af6ac90b"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            1140,
+            1188
+          ],
+          "anchor": "idMaterial::ParseVertexParm: one expression for all four, two for xy (z 0, w 1), three (w 1), four",
+          "sha256": "6275af7db36edfa5e3e5aac32f5fdb85c3ef7be574bff9c63fcf0f4b20a2778d"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            137,
+            137
+          ],
+          "anchor": "r_skipNewAmbient \"0\", ARCHIVE",
+          "sha256": "b75bb9f95ab74aaca87507993c605e445531d6b1937b858cb28e3922a3230134"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::materialProgram, LitPasses::recordStages (USER0 + j, units 0-2), LitPasses::bindingSets (POST_PROCESS_INGAME: set 0 with t0-t2, s0 LinearClamp)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineShaderPassDraws (StageProgram::Material, userParms)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession pass 8, the material stage pass, on a GPU (LP5.2a): vornoipattern, fogwithlights, heathaze"
+        }
+      ],
+      "note": "LP5.2a steps 2-3 (C47, D9, D121): a stage with a newStage block (unless r_skipNewAmbient) draws once on the material-program table's row of its fragmentProgram (the vertex program's when it names only one; a \"program\" keyword names both with one name, Material.cpp:2184-2193), looked up once per name with both blobs (engineMaterialProgram): a name not in the table or with a blob missing disables the stage, warned once per name, counted in stageProgramMissing; its layout POST_PROCESS_INGAME holds the uniforms and t0-t2 in set 0 and LinearClamp in s0. vertexParm j sets USER0 + j to the four registers (a single expression for all four, two give z 0 and w 1, three w 1); no colour, vertex colour or texture matrix is set; GL_State( stageGLState ) without privatePolygonOffset (the engine applies it after the newStage branch only). Set 8's other members are what the preview's parms hold, as the engine's: WINDOWCOORD the view's (the ambient pass writes the same value), PROJMATRIX_Y the view's, MODELVIEWMATRIX_Z the space's (the space change), ALPHA_TEST 0 (the interactions'), ENABLE_SKINNING 0 (no joints). The fragment images at units 0-2 where not null (M-STAGE-DIFF-03). A material whose stage image or fragment map is _currentRender is SS_POST_PROCESS and translucent by the copied parser (MAT:3199-3230, the CPU test with a heathaze material) and never reaches the pass (K38), whatever program it names; fogwithlights samples no texture, so a material of it without _currentRender is SS_MEDIUM and drawn (the S14 row)"
+    },
+    {
+      "id": "M-STAGE-DEFECT-02",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/shaders/vornoipattern.vs.hlsl",
+          "lines": [
+            48,
+            53
+          ],
+          "anchor": "vornoipattern VS_OUT: position : POSITION, not SV_Position",
+          "sha256": "4f55fb7a51564cac00744b28ce18e604aeab82a4a751630bd4adc26ba768d7e8"
+        },
+        {
+          "file": "neo/shaders/fogwithlights.ps.hlsl",
+          "lines": [
+            35,
+            36
+          ],
+          "anchor": "fogwithlights: t_CurrentRender and t_NormalMap declared, never sampled",
+          "sha256": "68e268c7bd3597ea7331f02c261488e9b83f5fe3fef7d0aef26b3ec98f96387b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordStages (the material program drawn as the engine draws it)"
+        },
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "the S13 and S14 rows"
+        }
+      ],
+      "note": "LP5.2a (C47, engine facts against the plan): the fork's vornoipattern vertex shader writes its clip position to a POSITION output (vornoipattern.vs.hlsl:50) where every other program writes SV_Position, so its blob gives the rasterizer no clip position and draws nothing (the [litgpu2] case: 0 pixels differ; the draw is made and counted); the preview binds the same blob and mirrors it. S13 keeps vornoipattern (both sides draw nothing over an unlit wall); S14 adds fogwithlights, which samples no texture, so a material naming it without a _currentRender fragment map is not SS_POST_PROCESS and draws its clouds from SV_Position and USER0 (iTime, iResolution)"
+    },
+    {
+      "id": "M-STAGE-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            6136,
+            6198
+          ],
+          "anchor": "DrawViewInternal: FogAllLights, the _currentRender copy and the second DrawShaderPasses call",
+          "sha256": "891f282e979b2ea56b989e096c8e48c7b6444956ebff1cb3ed02881e073040bc"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordStages (the stop at SS_POST_PROCESS)"
+        }
+      ],
+      "note": "LP5.2a (K38, K12 restated, D116, Q30): the first call stops at the first SS_POST_PROCESS surface (currentRenderCopied is false there) and the engine draws the rest after the fog lights over a copy of the HDR target with LESS and depth writes; the preview has no _currentRender copy in LP5 and draws nothing from the stop on: the surface behind shows where the engine draws the post-process stage. Every retail newStage program but vornoipattern and fogwithlights reads _currentRender (LP5.0); a material is in this class by its stage image or fragment map _currentRender, whatever its program"
+    },
+    {
+      "id": "M-STAGE-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4604,
+            4660
+          ],
+          "anchor": "DrawShaderPasses: a GUI surface's SVC_MODULATE and its gui / bink programs",
+          "sha256": "1aecf34dba90a0144e47f3e44f8f03ad390d1ef5a3e1c9cea8c5b662fae539df"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            270,
+            331
+          ],
+          "anchor": "BindVariableStageImage: a cinematic's frame",
+          "sha256": "04366ee9f267bed7d33786e1c35cae45fa72440fea0b88e4b83f15bef08ab0be"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineShaderPassDraws (a cinematic stage skipped, StagePassSurface::cinematic)"
+        }
+      ],
+      "note": "LP5.2a (D120): the preview has no idCinematic and no idUserInterface: a stage whose texture is a cinematic (videomap or soundmap: the copied parser records its file in MaterialStage::cinematic, soundMap for a sound window) is skipped and counted (stageCinematic, in stageSkipped); GUI surfaces (a guisurf material's entity or global GUI, drawn by the engine as surfaces of an isGuiSurface space) never enter the preview's lists, so no stage is a GUI stage; the material's own stages are drawn as any"
+    },
+    {
+      "id": "M-STAGE-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4545,
+            4553
+          ],
+          "anchor": "DrawShaderPasses: a newStage's fragment images bound only where not null",
+          "sha256": "9b16933c6636009449a9957fdce43edaf0d3fdd4457da73026bfba8ddf51de88"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordStages (the units 0-2 of a Material draw)"
+        }
+      ],
+      "note": "LP5.2a (C47): the engine binds a newStage block's fragment images at units 0..n-1 only where not null and leaves a null unit's image as the last pass left it (stale); the preview binds _default at a null unit of 0-2 (its layout's t0-t2; units past 2 are not in the layout). No retail or fixture program that reaches pass 8 samples a null unit"
+    },
+    {
+      "id": "M-STAGE-TEMP-01",
+      "kind": "temporary",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            360,
+            586
+          ],
+          "anchor": "PrepareStageTexturing: TG_REFLECT_CUBE, TG_REFLECT_CUBE2, TG_SKYBOX_CUBE, TG_WOBBLESKY_CUBE",
+          "sha256": "04bc5f3524c7e9fa8636f5fc1544e83acf8ce019ff00ef03e4771289ba2954f1"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            625,
+            635
+          ],
+          "anchor": "PrepareStageTexturing: TG_DIFFUSE_CUBE and TG_GLASSWARP warn",
+          "sha256": "52b1116f2901239036c3e2fe4471e64d269e9fe746048ec36209ab39d1163c47"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineShaderPassDraws (texgenDeferred)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordStages (warned once)"
+        }
+      ],
+      "note": "LP5.2a, until LP5.2b (C48): a stage of TG_DIFFUSE_CUBE, TG_REFLECT_CUBE, TG_REFLECT_CUBE2, TG_SKYBOX_CUBE, TG_WOBBLESKY_CUBE or TG_GLASSWARP is skipped and counted (stageTexgenDeferred, in stageSkipped) with one warning naming LP5.2b; the engine draws them (programs 55/57/69/70, and texture_color for the two that only warn). LP5.2b replaces the default branch of engineShaderPassDraws' texgen switch"
+    },
+    {
+      "id": "M-STAGE-GUARD-01",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            333,
+            344
+          ],
+          "anchor": "BindVariableStageImage: a stage without an image binds nothing",
+          "sha256": "e8a8ca921294123f850a1e1c2279ee79fb48796174e9c28327c53432561b0be4"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordStages (a stage without an image or with a cube image)"
+        }
+      ],
+      "note": "LP5.2a: an old-style stage without an image (a dynamic image's, K25) binds nothing in the engine, which then samples the unit's stale image, and a cube image in texture_color's Texture2D slot is undefined there and a validation message here (P6.18's case): neither is drawn, counted in stageSkipped, with one warning"
+    },
+    {
+      "id": "M-TEST-STAGE-01",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4271,
+            4279
+          ],
+          "anchor": "DrawShaderPasses: r_skipAmbient returns at once",
+          "sha256": "57584d4dc9afba31ffa1c2a8f87630c4f50895ef134b8b0fee0ecf6db4d809ef"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "rootSession, loggedRootSession (shaderPasses false by default); the LP4.2a no-bake, LP5.1 and LP2.2b window sessions; LitSession pass 8, the material stage pass, on a GPU (LP5.2a)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitStagePass.cpp",
+          "symbol": "the stage pass's CPU tests"
+        }
+      ],
+      "note": "LP5.2a step 4 (D118, P6.9), test only: the GPU cases whose models exclude pass 8 skip it with the parity test's switch (skipShaderPassesForTesting, r_skipAmbient 1's stand-in): every case on the LP2.2a root (its lp1b/glass is a blend-only SL_AMBIENT material: the LP2.2a, LP2.2b, LP4.2a, LP4.3 and LPF.1 cases and the stale-bake parity case through rootSession and loggedRootSession, and the sessions LP4.2a's no-bake case, LP5.1's case and LP2.2b's window case make themselves); the feed host's lp5_feed.mtr and the synthetic maps of lp1b/wall, lp1b/grate and lp42a have no SL_AMBIENT stage and are unchanged; the TbUiLib panel draws pass 8 (the product). The step-8 case draws pass 8 over a synthetic map and checks every rule against a pixel model of the background frame"
     }
   ],
   "retired": [
