@@ -22,8 +22,13 @@
 // the lit sections, the game folder's shader blobs and light entityDef (TB_LIT_GAME_PATH,
 // read only). Windows only, as every GPU case.
 
+#include "FrameResources.h"
+#include "ImageSlots.h"
+#include "ImageTestFiles.h"
 #include "LitMapFixture.h"
 #include "LitTestUtils.h"
+#include "RenderThread.h"
+#include "TonemapModel.h"
 #include "lit/EngineTables.h"
 #include "lit/FeedHost.h"
 #include "lit/FeedScene.h"
@@ -35,6 +40,8 @@
 #include "kd/result.h"
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
+#include <nvrhi/nvrhi.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -46,21 +53,28 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <iostream>
+#include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <tuple>
 #include <vector>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
@@ -241,6 +255,8 @@ struct HostOptions
   bool validation = true;
   std::filesystem::path frameLogPath;
   std::function<void(std::string_view)> beforeWorkItem;
+  // the host's own handler of the service's events, after the guarded listener's
+  MaterialListener listenerNext;
 };
 
 /**
@@ -252,8 +268,7 @@ struct Host
 {
   ValidationCount validation;
   HostEvents events;
-  std::shared_ptr<feed::GuardedListener> listener =
-    std::make_shared<feed::GuardedListener>();
+  std::shared_ptr<feed::GuardedListener> listener;
   std::optional<VulkanInstance> instance;
   std::unique_ptr<MaterialService> service;
   std::unique_ptr<LitSession> session;
@@ -263,6 +278,7 @@ struct Host
     const std::filesystem::path& gamePath,
     const HostOptions& options = {})
   {
+    listener = std::make_shared<feed::GuardedListener>(options.listenerNext);
     auto instanceOptions = VulkanInstanceOptions{};
     instanceOptions.validation = options.validation;
     instanceOptions.messages = validation.sink();
@@ -724,6 +740,1084 @@ TEST_CASE(
               << " -> " << counts.threads << ", handles " << baseline.handles << " -> "
               << counts.handles << " (allowed " << maxHandles << ")\n";
   }
+}
+
+// ----- LPF.2 step 5 (D110, P5.10, P5.13): the fidelity of a fed image and a re-parse,
+// the latency, a stop mid-feed -----
+
+namespace
+{
+
+// the feed scene's materials and image names (test/fixture/lit/materials/lp5_feed.mtr)
+constexpr auto QuadMaterial = "textures/lp5/feed_pbr";
+constexpr auto SphereMaterial = "textures/lp5/feed_sphere";
+constexpr auto QuadDiffuse = "textures/lp5/feed_pbr";
+constexpr auto QuadBump = "textures/lp5/feed_pbr_local";
+constexpr auto QuadRmao = "textures/lp5/feed_rmao";
+constexpr auto SphereRmao = "textures/lp5/feed_sphere_rmao";
+
+// stageLighting_t (Material.h): the stage kinds of the quad's three images
+constexpr auto LightingBump = 1;
+constexpr auto LightingDiffuse = 2;
+constexpr auto LightingSpecular = 3;
+
+constexpr auto FeedSide = 1024;
+// the screen (160 × 120) and its centre pixel, where the quad's centre is (D110's probe)
+constexpr auto ProbeX = std::uint32_t{80};
+constexpr auto ProbeY = std::uint32_t{60};
+
+/**
+ * The scene of the [.][feed] fidelity sections: worldspawn, the 1024-unit quad facing -y
+ * (its texture's centre on the quad's, the editor size 1024 giving one texel a unit), the
+ * sphere before it, one white point light; the camera on a 3/4 view of the quad's
+ * centre.
+ */
+Snapshot feedScene(const std::uint64_t generation)
+{
+  auto snapshot = Snapshot{};
+  snapshot.generation = generation;
+  snapshot.sequence = 1;
+  feed::worldspawn(snapshot, 1);
+  REQUIRE(feed::quadBrush(
+            snapshot,
+            1,
+            2,
+            {0, 0, 0},
+            {0, -1, 0},
+            512,
+            "lp5/feed_pbr",
+            "lp5/feed_side",
+            1.0,
+            {512, 512})
+            .is_success());
+  REQUIRE(feed::patchDef3Sphere(snapshot, 1, 3, {300, -300, -200}, 128, "lp5/feed_sphere")
+            .is_success());
+  feed::pointLight(snapshot, 4, {0, -500, 0}, 1200, {1, 1, 1});
+  return snapshot;
+}
+
+CameraState feedCamera()
+{
+  return feed::cameraLookingAt({-600, -900, 400}, {0, 0, 0});
+}
+
+// RGBA8 pixels, rows top first (C39)
+struct Pixels
+{
+  int width = 0;
+  int height = 0;
+  std::vector<std::uint8_t> rgba;
+
+  std::array<std::uint8_t, 4> at(const int x, const int y) const
+  {
+    const auto i = (std::size_t(y) * std::size_t(width) + std::size_t(x)) * 4;
+    return {rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]};
+  }
+};
+
+template <typename F>
+Pixels generated(const int side, const F& texel)
+{
+  auto pixels =
+    Pixels{side, side, std::vector<std::uint8_t>(std::size_t(side) * side * 4)};
+  for (auto y = 0; y < side; ++y)
+  {
+    for (auto x = 0; x < side; ++x)
+    {
+      const auto t = texel(x, y);
+      std::copy(
+        t.begin(), t.end(), pixels.rgba.begin() + (std::ptrdiff_t(y) * side + x) * 4);
+    }
+  }
+  return pixels;
+}
+
+// the inner half of the picture, which every pixel near the screen's centre samples
+bool onPlateau(const int x, const int y)
+{
+  return std::abs(x - FeedSide / 2) < FeedSide / 4
+         && std::abs(y - FeedSide / 2) < FeedSide / 4;
+}
+
+// a colour whose stored YCoCg texel every mip level shares (200 120 40 does not: its Co
+// 208 becomes 207 below level 0, see centreTexels)
+constexpr auto PlateauColour = std::array<std::uint8_t, 4>{200, 120, 60, 255};
+
+// the diffuse: a plateau of PlateauColour; around it a red top half and a blue bottom
+// half with a horizontal green gradient (so that the rows' order shows on the screen)
+Pixels diffusePixels()
+{
+  return generated(FeedSide, [](const int x, const int y) {
+    if (onPlateau(x, y))
+    {
+      return PlateauColour;
+    }
+    const auto green = std::uint8_t(60 + x / 8);
+    return y < FeedSide / 2 ? std::array<std::uint8_t, 4>{230, green, 30, 255}
+                            : std::array<std::uint8_t, 4>{30, green, 230, 255};
+  });
+}
+
+// the bump: a tangent-space normal tilted by (0.25, 0) on the plateau, waving around it
+Pixels bumpPixels()
+{
+  return generated(FeedSide, [](const int x, const int y) {
+    auto sx = 0.25;
+    auto sy = 0.0;
+    if (!onPlateau(x, y))
+    {
+      sx += 0.15 * std::sin(double(x) / 40.0);
+      sy = 0.15 * std::cos(double(y) / 40.0);
+    }
+    const auto length = std::sqrt(sx * sx + sy * sy + 1.0);
+    const auto encode = [](const double v) {
+      return std::uint8_t(std::lround((v * 0.5 + 0.5) * 255.0));
+    };
+    return std::array<std::uint8_t, 4>{
+      encode(sx / length), encode(sy / length), encode(1.0 / length), 255};
+  });
+}
+
+// the RMAO: roughness 0.6, metal 0, occlusion 1 (R, G, B)
+Pixels rmaoPixels(const std::uint8_t metal = 0, const int side = FeedSide)
+{
+  return generated(side, [metal](int, int) {
+    return std::array<std::uint8_t, 4>{153, metal, 255, 255};
+  });
+}
+
+Pixels constantPixels(const std::array<std::uint8_t, 3>& rgb, const int side = FeedSide)
+{
+  return generated(side, [rgb](int, int) {
+    return std::array<std::uint8_t, 4>{rgb[0], rgb[1], rgb[2], 255};
+  });
+}
+
+ImageOverride overrideOf(const Pixels& pixels, const bool editorSize = true)
+{
+  auto raw = RawImagePixels{};
+  raw.width = pixels.width;
+  raw.height = pixels.height;
+  raw.format = ImagePixelFormat::RGBA8;
+  raw.bytes = pixels.rgba;
+  auto image = ImageOverride{};
+  image.image = std::move(raw);
+  if (editorSize)
+  {
+    image.editorSize =
+      EditorImageSize{pixels.width, pixels.height, EditorImageSize::State::Ready, {}};
+  }
+  return image;
+}
+
+/**
+ * D110 (P5.10): the same pixels as a loose TGA: type 2, 32 bits, no flip bit (attribute
+ * bit 5 clear), rows bottom first and each texel B, G, R, A. The copied LoadTGA
+ * (Image_files.cpp:258-296) fills its picture from its last row up (row = rows - 1 down
+ * to 0) and turns BGRA into RGBA, and flips only when bit 5 is set (:410-416), so it
+ * returns exactly the caller's top-first RGBA rows.
+ */
+std::string tgaBytes(const Pixels& pixels)
+{
+  auto out = std::string(18, '\0');
+  out[2] = 2;
+  out[12] = char(pixels.width & 0xff);
+  out[13] = char(pixels.width >> 8);
+  out[14] = char(pixels.height & 0xff);
+  out[15] = char(pixels.height >> 8);
+  out[16] = 32;
+  out[17] = 0;
+  out.reserve(out.size() + pixels.rgba.size());
+  for (auto y = pixels.height - 1; y >= 0; --y)
+  {
+    for (auto x = 0; x < pixels.width; ++x)
+    {
+      const auto t = pixels.at(x, y);
+      out += char(t[2]);
+      out += char(t[1]);
+      out += char(t[0]);
+      out += char(t[3]);
+    }
+  }
+  return out;
+}
+
+// the image a material's stage of the given lighting binds, from the table
+std::optional<MaterialImageKey> stageImage(
+  MaterialService& service, const std::string& material, const int lighting)
+{
+  const auto deadline = std::chrono::steady_clock::now() + 10s;
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    if (const auto slot = service.table()->find(material); slot && slot->entry)
+    {
+      for (const auto& stage : slot->entry->stages)
+      {
+        if (stage.lighting == lighting && stage.image)
+        {
+          return stage.image;
+        }
+      }
+      return std::nullopt;
+    }
+    static_cast<void>(service.lookup(material));
+    std::this_thread::sleep_for(5ms);
+  }
+  return std::nullopt;
+}
+
+/**
+ * The centre texel of every level of key's image as the service converted it, down to
+ * the levels the plateau still covers (8 texels a side): the GPU samples one of them, and
+ * the engine's gamma mips (R_MipMapWithGamma) may move a constant colour's stored chroma
+ * by one step below level 0 (an LPF.2 finding), so the model holds only for a colour
+ * whose texel all of them share.
+ */
+std::vector<std::array<std::uint8_t, 4>> centreTexels(
+  MaterialService& service, const MaterialImageKey& key)
+{
+  auto texels = std::vector<std::array<std::uint8_t, 4>>{};
+  const auto lookup = service.image(key);
+  if (!lookup.image)
+  {
+    return texels;
+  }
+  for (const auto& level : lookup.image->levels)
+  {
+    if (level.width < 8 || level.height < 8)
+    {
+      break;
+    }
+    const auto* t = lookup.image->data.data() + level.offset
+                    + (std::size_t(level.height / 2) * std::size_t(level.width)
+                       + std::size_t(level.width / 2))
+                        * 4;
+    texels.push_back({t[0], t[1], t[2], t[3]});
+  }
+  return texels;
+}
+
+// ----- the CPU model of the probe pixel (D110), as LPF.1's -----
+
+// global_inc.hlsl:177-185 Linear1, :205-214 sRGBToLinearRGB (clamped first)
+float modelLinear1(const float c)
+{
+  const auto v = std::clamp(c, 0.0f, 1.0f);
+  return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f);
+}
+
+// global_inc.hlsl:344-361 ConvertYCoCgToRGB of a stored texel (Co, Cg, scale, Y) as the
+// UNORM8 sample returns it, then sRGBToLinearRGB: the shaders' diffuse map
+std::array<float, 3> modelDiffuseMap(const std::array<std::uint8_t, 4>& texel)
+{
+  auto x = float(texel[0]) / 255.0f;
+  auto y = float(texel[1]) / 255.0f;
+  auto z = float(texel[2]) / 255.0f;
+  const auto w = float(texel[3]) / 255.0f;
+  z = z * 31.875f + 1.0f;
+  z = 1.0f / z;
+  x *= z;
+  y *= z;
+  const auto r = x * 1.0f + y * -1.0f + z * 0.0f + w * 1.0f;
+  const auto g = x * 0.0f + y * 1.0f + z * -0.50196078f + w * 1.0f;
+  const auto b = x * -1.0f + y * -1.0f + z * 1.00392156f + w * 1.0f;
+  return {modelLinear1(r), modelLinear1(g), modelLinear1(b)};
+}
+
+float halfToFloat(const std::uint16_t half)
+{
+  const auto sign = (half >> 15) & 1;
+  const auto exponent = (half >> 10) & 0x1f;
+  const auto mantissa = half & 0x3ff;
+  auto value = 0.0f;
+  if (exponent == 0)
+  {
+    value = std::ldexp(float(mantissa), -24);
+  }
+  else if (exponent == 31)
+  {
+    value = mantissa ? std::numeric_limits<float>::quiet_NaN()
+                     : std::numeric_limits<float>::infinity();
+  }
+  else
+  {
+    value = std::ldexp(float(mantissa | 0x400), exponent - 25);
+  }
+  return sign ? -value : value;
+}
+
+template <typename Hook>
+bool inFrame(
+  LitSession& session, Hook hook_, const std::chrono::milliseconds timeout = 10s)
+{
+  auto done = std::make_shared<std::promise<void>>();
+  auto future = done->get_future();
+  session.runInFrameForTesting(
+    [hook = std::move(hook_), done](RenderFrameAccess& access) mutable {
+      hook(access);
+      done->set_value();
+    });
+  return future.wait_for(timeout) == std::future_status::ready;
+}
+
+// one pixel of a settled frame's HDR target, its exposure and the tonemap's constants
+struct HdrProbe
+{
+  float exposure = 0.0f;
+  std::array<float, 3> hdr = {};
+  EngineToneMappingConstants constants;
+};
+
+std::optional<HdrProbe> hdrProbe(
+  LitSession& session, const std::uint32_t x, const std::uint32_t y)
+{
+  const auto deadline = std::chrono::steady_clock::now() + 30s;
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    struct State
+    {
+      bool copied = false;
+      EngineToneMappingConstants constants;
+      nvrhi::BufferHandle exposure;
+      nvrhi::StagingTextureHandle hdr;
+    };
+    auto state = std::make_shared<State>();
+    auto done = std::make_shared<std::promise<void>>();
+    auto future = done->get_future();
+    session.runAfterTonemapForTesting([state, done](RenderFrameAccess& access) {
+      const auto& tonemap = access.tonemap.lastStats();
+      if (access.convergence.settled() && tonemap.tonemapped)
+      {
+        namespace fr = frame_resource;
+        auto bufferDesc = nvrhi::BufferDesc{};
+        bufferDesc.byteSize = 4;
+        bufferDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
+        bufferDesc.debugName = "LPF.2 exposure readback";
+        bufferDesc.initialState = nvrhi::ResourceStates::CopyDest;
+        bufferDesc.keepInitialState = true;
+        state->exposure = access.device.createBuffer(bufferDesc);
+        access.commandList.copyBuffer(
+          state->exposure, 0, access.frame.find(fr::ExposureBuffer)->buffer, 0, 4);
+        auto* texture = access.frame.find(fr::CurrentRenderHdr)->texture;
+        const auto& desc = texture->getDesc();
+        state->hdr = access.device.createStagingTexture(
+          nvrhi::TextureDesc{}
+            .setWidth(desc.width)
+            .setHeight(desc.height)
+            .setFormat(desc.format),
+          nvrhi::CpuAccessMode::Read);
+        access.commandList.copyTexture(
+          state->hdr, nvrhi::TextureSlice{}, texture, nvrhi::TextureSlice{});
+        state->constants = tonemap.tonemapConstants;
+        state->copied = true;
+      }
+      done->set_value();
+    });
+    if (future.wait_for(10s) != std::future_status::ready)
+    {
+      return std::nullopt;
+    }
+    if (!state->copied)
+    {
+      std::this_thread::sleep_for(20ms);
+      continue;
+    }
+    auto probe = HdrProbe{};
+    probe.constants = state->constants;
+    const auto read = inFrame(session, [&](RenderFrameAccess& access) {
+      if (
+        const auto* bits = static_cast<const std::uint32_t*>(
+          access.device.mapBuffer(state->exposure, nvrhi::CpuAccessMode::Read)))
+      {
+        std::memcpy(&probe.exposure, bits, sizeof(float));
+        access.device.unmapBuffer(state->exposure);
+      }
+      auto pitch = std::size_t{0};
+      if (
+        const auto* bytes =
+          static_cast<const std::uint8_t*>(access.device.mapStagingTexture(
+            state->hdr, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch)))
+      {
+        const auto* row = reinterpret_cast<const std::uint16_t*>(bytes + y * pitch);
+        for (std::size_t c = 0; c < 3; ++c)
+        {
+          probe.hdr[c] = halfToFloat(row[std::size_t(x) * 4 + c]);
+        }
+        access.device.unmapStagingTexture(state->hdr);
+      }
+      state->exposure = nullptr;
+      state->hdr = nullptr;
+    });
+    if (!read)
+    {
+      return std::nullopt;
+    }
+    return probe;
+  }
+  return std::nullopt;
+}
+
+// the model's HDR value through the RGBA16F target and the tonemap passes, as LDR bytes
+std::array<int, 3> modelLdr(
+  const std::array<float, 3>& hdr,
+  const float exposure,
+  const EngineToneMappingConstants& constants)
+{
+  const auto stored =
+    std::array<float, 3>{modelHalf(hdr[0]), modelHalf(hdr[1]), modelHalf(hdr[2])};
+  const auto ldr = modelTonemap(stored, exposure, constants);
+  return {int(modelUnorm8(ldr[0])), int(modelUnorm8(ldr[1])), int(modelUnorm8(ldr[2]))};
+}
+
+// the first differing pixel of two pictures, and how many differ
+std::string pictureDifference(const LdrImage& a, const LdrImage& b)
+{
+  if (a.width != b.width || a.height != b.height)
+  {
+    return fmt::format("sizes {}x{} and {}x{}", a.width, a.height, b.width, b.height);
+  }
+  auto first = std::optional<std::size_t>{};
+  auto count = std::size_t{0};
+  for (std::size_t i = 0; i < a.rgba.size(); i += 4)
+  {
+    if (!std::equal(
+          a.rgba.begin() + std::ptrdiff_t(i),
+          a.rgba.begin() + std::ptrdiff_t(i) + 4,
+          b.rgba.begin() + std::ptrdiff_t(i)))
+    {
+      first = first.value_or(i / 4);
+      ++count;
+    }
+  }
+  if (!first)
+  {
+    return "equal";
+  }
+  const auto i = *first * 4;
+  return fmt::format(
+    "{} pixels differ, the first at ({} {}): ({} {} {} {}) and ({} {} {} {})",
+    count,
+    *first % a.width,
+    *first / a.width,
+    a.rgba[i],
+    a.rgba[i + 1],
+    a.rgba[i + 2],
+    a.rgba[i + 3],
+    b.rgba[i],
+    b.rgba[i + 1],
+    b.rgba[i + 2],
+    b.rgba[i + 3]);
+}
+
+// a picture into the temp folder as a PNG, for a look by eye
+void savePicture(const LdrImage& image, const std::string& name)
+{
+  auto rgba = test::Rgba{int(image.width), int(image.height), image.rgba};
+  for (std::size_t i = 3; i < rgba.pixels.size(); i += 4)
+  {
+    rgba.pixels[i] = 255;
+  }
+  writeBinaryFile(
+    std::filesystem::temp_directory_path() / "TbLitLibTest-feed-pictures"
+      / (name + ".png"),
+    test::pngFile(rgba));
+}
+
+std::array<int, 3> ldrAt(
+  const LdrImage& image, const std::uint32_t x, const std::uint32_t y)
+{
+  const auto i = (std::size_t(y) * image.width + x) * 4;
+  return {int(image.rgba[i]), int(image.rgba[i + 1]), int(image.rgba[i + 2])};
+}
+
+// waits until the latest table holds every hand-over made so far
+bool waitForFeed(MaterialService& service)
+{
+  const auto requested = service.feedRequested();
+  return service.waitForTableForTesting(
+           [&](const MaterialTable& table) { return table.feedApplied >= requested; },
+           20s)
+         != nullptr;
+}
+
+// the parse thread's work items as they start and its publications, in order
+struct ParseLog
+{
+  std::mutex mutex;
+  // "feed", "reparse", "lookup", ..., or "published"
+  std::vector<std::string> entries;
+
+  void add(std::string entry)
+  {
+    const auto lock = std::scoped_lock{mutex};
+    entries.push_back(std::move(entry));
+  }
+
+  std::size_t size()
+  {
+    const auto lock = std::scoped_lock{mutex};
+    return entries.size();
+  }
+
+  // the publications of the first item of kind at or after from, until the next item
+  std::optional<std::size_t> publicationsOfItem(
+    const std::size_t from, const std::string& kind)
+  {
+    const auto lock = std::scoped_lock{mutex};
+    for (auto i = from; i < entries.size(); ++i)
+    {
+      if (entries[i] == kind)
+      {
+        auto count = std::size_t{0};
+        for (auto j = i + 1; j < entries.size() && entries[j] == "published"; ++j)
+        {
+          ++count;
+        }
+        return count;
+      }
+    }
+    return std::nullopt;
+  }
+};
+
+// what a frame's start bound for a key's slot (LPF.1's binding record, P5.23)
+struct BoundFrame
+{
+  std::uint64_t index = 0;
+  std::chrono::steady_clock::time_point start;
+  bool slotted = false;
+  bool intrinsic = false;
+  ImageSlots::State state = ImageSlots::State::Pending;
+};
+
+struct BoundFrames
+{
+  std::mutex mutex;
+  std::map<std::string, std::vector<BoundFrame>> frames;
+
+  std::vector<BoundFrame> of(const std::string& name)
+  {
+    const auto lock = std::scoped_lock{mutex};
+    return frames[name];
+  }
+};
+
+void recordBindings(
+  LitSession& session,
+  const std::shared_ptr<BoundFrames>& record,
+  const std::vector<MaterialImageKey>& keys)
+{
+  session.setEveryFrameHookForTesting([record, keys](RenderFrameAccess& access) {
+    const auto start = std::chrono::steady_clock::now();
+    const auto lock = std::scoped_lock{record->mutex};
+    for (const auto& key : keys)
+    {
+      auto frame = BoundFrame{};
+      frame.index = access.frameIndex;
+      frame.start = start;
+      if (const auto id = access.images.find(key))
+      {
+        frame.slotted = true;
+        frame.intrinsic = access.images.binding(*id).intrinsic;
+        frame.state = access.images.slot(*id)->state;
+      }
+      record->frames[key.name].push_back(frame);
+    }
+  });
+}
+
+/**
+ * The feed's own temp roots: assembleFeedRoot's, and with the quad's three images as
+ * loose TGAs (D110's control: the same pixels the overrides hand over); sphereText, when
+ * given, replaces lp5/feed_sphere's decl in the copy of lp5_feed.mtr.
+ */
+std::filesystem::path assembleFileRoot(
+  const std::string& name,
+  const std::filesystem::path& gamePath,
+  const std::optional<std::string>& sphereText = std::nullopt)
+{
+  const auto root = assembleFeedRoot(name, gamePath);
+  const auto textures = root / "base" / "textures" / "lp5";
+  writeBinaryFile(textures / "feed_pbr.tga", tgaBytes(diffusePixels()));
+  writeBinaryFile(textures / "feed_pbr_local.tga", tgaBytes(bumpPixels()));
+  writeBinaryFile(textures / "feed_rmao.tga", tgaBytes(rmaoPixels()));
+  if (sphereText)
+  {
+    const auto mtr = root / "base" / "materials" / "lp5_feed.mtr";
+    auto text = readTextFile(mtr);
+    const auto start = text.find("textures/lp5/feed_sphere\n");
+    REQUIRE(start != std::string::npos);
+    const auto end = text.find("\n}\n", start);
+    REQUIRE(end != std::string::npos);
+    text.replace(start, end + 3 - start, *sphereText);
+    writeTextFile(mtr, text);
+  }
+  return root;
+}
+
+// (b): the sphere's text with twoSided, every stage as the fixture's
+const auto TwoSidedSphereText = std::string{
+  "textures/lp5/feed_sphere\n{\n\ttwoSided\n\tqer_editorimage\ttextures/lp5/feed_sphere\n"
+  "\tbasecolormap\ttextures/lp5/feed_sphere\n\tbumpmap\ttextures/lp5/feed_sphere_local\n"
+  "\tspecularmap\ttextures/lp5/feed_sphere_rmao\n}\n"};
+
+// a session's picture of the feed scene from its files (the control sessions of D110)
+LdrImage controlPicture(
+  const std::filesystem::path& root,
+  const std::filesystem::path& gamePath,
+  const std::uint64_t generation,
+  const std::function<void(Host&)>& feedFirst = {})
+{
+  auto host = Host{root, gamePath, HostOptions{160, 120, generation}};
+  if (feedFirst)
+  {
+    feedFirst(host);
+  }
+  host.offer(feedScene(generation));
+  host.session->setCamera(feedCamera());
+  auto picture = host.session->readbackLdr(60s);
+  REQUIRE(picture.is_success());
+  const auto report = host.close();
+  CHECK(report.deviceReleaseCount == 0u);
+  CHECK(report.nvrhiErrors == 0u);
+  CHECK(host.validation.errors == 0);
+  CHECK(host.validation.warnings == 0);
+  return std::move(picture).value();
+}
+
+} // namespace
+
+/**
+ * D110, P5.10 (LPF.2 step 5 (a), (b), (d)): a headless host with no document feeds the
+ * quad's three images and re-parses the sphere's material, under a pinned exposure; every
+ * picture is compared with a control: the intrinsics before, the same pixels as loose
+ * TGAs in a fresh session, a CPU model of the probe pixel, the re-parse's text in a fresh
+ * session's .mtr; then every feed is cleared back to the first picture.
+ */
+TEST_CASE(
+  "Feed host: a fed image and a re-parse against their files (LPF.2, D110)", "[.][feed]")
+{
+  const auto gamePath = feedGamePath();
+  if (!gamePath)
+  {
+    SKIP("TB_LIT_GAME_PATH does not name a game folder with blobs and def/misc.def");
+  }
+  const auto rootA = assembleFeedRoot("TbLitLibTest-feed-a", *gamePath);
+  auto log = std::make_shared<ParseLog>();
+  auto pictureA = LdrImage{};
+  auto pictureC = LdrImage{};
+
+  {
+    auto host = Host{
+      rootA,
+      *gamePath,
+      HostOptions{
+        160,
+        120,
+        1,
+        true,
+        {},
+        [log](const std::string_view kind) { log->add(std::string{kind}); },
+        [log](const MaterialServiceEvent& event) {
+          if (event.kind == MaterialServiceEvent::Kind::Published)
+          {
+            log->add("published");
+          }
+        }}};
+    auto& service = *host.service;
+    auto& session = *host.session;
+    host.offer(feedScene(1));
+    session.setCamera(feedCamera());
+
+    // the first picture: every feed image is missing, so its intrinsic stands in
+    const auto first = session.readbackLdr(60s);
+    REQUIRE(first.is_success());
+    const auto& picture0 = first.value();
+    savePicture(picture0, "0-intrinsics");
+    const auto diffuseKey = stageImage(service, QuadMaterial, LightingDiffuse);
+    const auto bumpKey = stageImage(service, QuadMaterial, LightingBump);
+    const auto rmaoKey = stageImage(service, QuadMaterial, LightingSpecular);
+    const auto sphereRmaoKey = stageImage(service, SphereMaterial, LightingSpecular);
+    REQUIRE(diffuseKey);
+    REQUIRE(bumpKey);
+    REQUIRE(rmaoKey);
+    REQUIRE(sphereRmaoKey);
+    CHECK(diffuseKey->name == QuadDiffuse);
+    CHECK(bumpKey->name == QuadBump);
+    CHECK(rmaoKey->name == QuadRmao);
+    // the _rmao name gives the PBR RMAO usage without a sibling file (C39)
+    CHECK(rmaoKey->usage == 12);
+    CHECK(sphereRmaoKey->name == SphereRmao);
+    auto bound = std::make_shared<BoundFrames>();
+    recordBindings(session, bound, {*diffuseKey, *bumpKey, *rmaoKey});
+    session.requestFrame();
+    REQUIRE(waitFor([&] { return !bound->of(QuadDiffuse).empty(); }, 10000ms));
+    for (const auto* name : {QuadDiffuse, QuadBump, QuadRmao})
+    {
+      CAPTURE(name);
+      const auto frames = bound->of(name);
+      REQUIRE_FALSE(frames.empty());
+      CHECK(frames.back().slotted);
+      CHECK(frames.back().intrinsic);
+      CHECK(frames.back().state == ImageSlots::State::Default);
+      CHECK(service.imageOverrideStatus(name).state == ImageOverrideStatus::State::None);
+    }
+
+    // (a) the quad's bump and RMAO, then three diffuse pictures: black and white for the
+    // model's two terms, then the generated picture
+    REQUIRE(service.setImageOverride(QuadBump, overrideOf(bumpPixels())).is_success());
+    REQUIRE(service.setImageOverride(QuadRmao, overrideOf(rmaoPixels())).is_success());
+    const auto probeWith = [&](const Pixels& diffuse) {
+      REQUIRE(service.setImageOverride(QuadDiffuse, overrideOf(diffuse)).is_success());
+      REQUIRE(waitForFeed(service));
+      auto picture = session.readbackLdr(60s);
+      REQUIRE(picture.is_success());
+      const auto probe = hdrProbe(session, ProbeX, ProbeY);
+      REQUIRE(probe);
+      const auto texels = centreTexels(service, *diffuseKey);
+      REQUIRE(texels.size() >= 7u);
+      for (const auto& texel : texels)
+      {
+        CHECK(texel == texels.front());
+      }
+      return std::tuple{
+        std::move(picture).value(), *probe, modelDiffuseMap(texels.front())};
+    };
+    const auto [blackPicture, black, blackLinear] = probeWith(constantPixels({0, 0, 0}));
+    const auto [whitePicture, white, whiteLinear] =
+      probeWith(constantPixels({255, 255, 255}));
+    const auto [fedPicture, fed, fedLinear] = probeWith(diffusePixels());
+    pictureA = fedPicture;
+    savePicture(pictureA, "a-fed");
+    for (const auto* name : {QuadDiffuse, QuadBump, QuadRmao})
+    {
+      CAPTURE(name);
+      CHECK(
+        service.imageOverrideStatus(name).state == ImageOverrideStatus::State::Applied);
+    }
+
+    // A differs from the first picture
+    CHECK(pictureA.rgba != picture0.rgba);
+    std::cout << "LPF.2 (a): A against the intrinsics: "
+              << pictureDifference(pictureA, picture0) << "\n";
+
+    // the probe pixel's model: with the exposure pinned the HDR value is linear in the
+    // diffuse map's linear colour (the light's terms do not depend on it): the black and
+    // white overrides measure the two terms, and the plateau's colour is predicted
+    // through the texel the service converted (the engine's YCoCg layout, decoded as the
+    // shader decodes it), then through the tonemap model to the LDR bytes
+    CHECK(fed.exposure == Catch::Approx(FeedPinnedLuminance).epsilon(1e-5));
+    auto predicted = std::array<float, 3>{};
+    for (std::size_t c = 0; c < 3; ++c)
+    {
+      CAPTURE(c);
+      const auto span = whiteLinear[c] - blackLinear[c];
+      REQUIRE(span > 0.5f);
+      const auto term = (white.hdr[c] - black.hdr[c]) / span;
+      predicted[c] = black.hdr[c] + term * (fedLinear[c] - blackLinear[c]);
+      CHECK(fed.hdr[c] == Catch::Approx(predicted[c]).epsilon(0.01).margin(2e-4));
+    }
+    // the converted texel is the fed colour's within the YCoCg layout's rounding
+    for (std::size_t c = 0; c < 3; ++c)
+    {
+      CHECK(
+        fedLinear[c]
+        == Catch::Approx(modelLinear1(float(PlateauColour[c]) / 255.0f)).margin(0.01));
+    }
+    const auto expected = modelLdr(predicted, fed.exposure, fed.constants);
+    const auto centre = ldrAt(pictureA, ProbeX, ProbeY);
+    for (std::size_t c = 0; c < 3; ++c)
+    {
+      CAPTURE(c);
+      CHECK(std::abs(centre[c] - expected[c]) <= 1);
+    }
+    std::cout << fmt::format(
+      "LPF.2 (a) probe: fed ({} {} {}) linear ({:.5f} {:.5f} {:.5f}); HDR ({:.5f} {:.5f} "
+      "{:.5f}) model ({:.5f} {:.5f} {:.5f}); LDR ({} {} {}) model ({} {} {})\n",
+      PlateauColour[0],
+      PlateauColour[1],
+      PlateauColour[2],
+      fedLinear[0],
+      fedLinear[1],
+      fedLinear[2],
+      fed.hdr[0],
+      fed.hdr[1],
+      fed.hdr[2],
+      predicted[0],
+      predicted[1],
+      predicted[2],
+      centre[0],
+      centre[1],
+      centre[2],
+      expected[0],
+      expected[1],
+      expected[2]);
+    // the rows' order on the screen: the picture's top half (red) above the centre, its
+    // bottom half (blue) below
+    const auto above = ldrAt(pictureA, ProbeX, ProbeY - 25);
+    const auto below = ldrAt(pictureA, ProbeX, ProbeY + 22);
+    CHECK(above[0] > above[2]);
+    CHECK(below[2] > below[0]);
+    std::cout << fmt::format(
+      "LPF.2 (a) rows: above ({} {} {}), below ({} {} {})\n",
+      above[0],
+      above[1],
+      above[2],
+      below[0],
+      below[1],
+      below[2]);
+
+    // (b) the sphere's material re-parsed (an existing name) with twoSided, and its RMAO
+    // fed at metal 1
+    REQUIRE(service.reparseMaterial(SphereMaterial, TwoSidedSphereText).is_success());
+    REQUIRE(service.setImageOverride(SphereRmao, overrideOf(rmaoPixels(255, 64), false))
+              .is_success());
+    REQUIRE(waitForFeed(service));
+    auto c = session.readbackLdr(60s);
+    REQUIRE(c.is_success());
+    pictureC = std::move(c).value();
+    savePicture(pictureC, "c-reparsed");
+    CHECK(pictureC.rgba != pictureA.rgba);
+    std::cout << "LPF.2 (b): C against A: " << pictureDifference(pictureC, pictureA)
+              << "\n";
+
+    // (d) the three quad overrides cleared one by one: one publication each (the drop and
+    // the files' answer in one table, C40), and no frame binds a Pending slot of the name
+    for (const auto* name : {QuadDiffuse, QuadBump, QuadRmao})
+    {
+      CAPTURE(name);
+      REQUIRE(service.waitForStatsForTesting([](const auto& s) { return s.idle; }, 20s));
+      const auto from = log->size();
+      const auto clearedAt = std::chrono::steady_clock::now();
+      service.clearImageOverride(name);
+      REQUIRE(waitForFeed(service));
+      REQUIRE(session.readbackLdr(60s).is_success());
+      REQUIRE(service.waitForStatsForTesting([](const auto& s) { return s.idle; }, 20s));
+      CHECK(log->publicationsOfItem(from, "feed") == std::optional<std::size_t>{1});
+      auto frames = bound->of(name);
+      std::erase_if(frames, [&](const auto& f) { return f.start < clearedAt; });
+      CHECK_FALSE(frames.empty());
+      CHECK(std::ranges::none_of(
+        frames, [](const auto& f) { return f.state == ImageSlots::State::Pending; }));
+      CHECK(frames.back().intrinsic);
+      CHECK(service.imageOverrideStatus(name).state == ImageOverrideStatus::State::None);
+    }
+    // the sphere's RMAO cleared and its text restored: the first picture again
+    service.clearImageOverride(SphereRmao);
+    service.clearMaterialReparse(SphereMaterial);
+    REQUIRE(waitForFeed(service));
+    const auto restored = session.readbackLdr(60s);
+    REQUIRE(restored.is_success());
+    savePicture(restored.value(), "d-restored");
+    CHECK(restored.value().rgba == picture0.rgba);
+    std::cout << "LPF.2 (d): the cleared picture against the intrinsics: "
+              << pictureDifference(restored.value(), picture0) << "\n";
+
+    session.setEveryFrameHookForTesting({});
+    const auto report = host.close();
+    CHECK(report.deviceReleaseCount == 0u);
+    CHECK(report.nvrhiErrors == 0u);
+    CHECK(report.messages.empty());
+    host.events.print("LPF.2 fidelity");
+    host.validation.print("LPF.2 fidelity");
+    CHECK(host.validation.errors == 0);
+    CHECK(host.validation.warnings == 0);
+    CHECK(host.events.count(SessionEvent::Error) == 0u);
+  }
+
+  // (a)'s control: the same pixels as loose TGAs in a fresh session's game root
+  const auto pictureB =
+    controlPicture(assembleFileRoot("TbLitLibTest-feed-b", *gamePath), *gamePath, 2);
+  savePicture(pictureB, "b-files");
+  std::cout << "LPF.2 (a): A against B (the files): "
+            << pictureDifference(pictureA, pictureB) << "\n";
+  CHECK(pictureA.rgba == pictureB.rgba);
+
+  // (b)'s control: the re-parse's text in the fresh session's .mtr, the same RMAO fed
+  const auto pictureD = controlPicture(
+    assembleFileRoot("TbLitLibTest-feed-d", *gamePath, TwoSidedSphereText),
+    *gamePath,
+    3,
+    [](Host& host) {
+      REQUIRE(
+        host.service->setImageOverride(SphereRmao, overrideOf(rmaoPixels(255, 64), false))
+          .is_success());
+    });
+  savePicture(pictureD, "d-files");
+  std::cout << "LPF.2 (b): C against D (the .mtr): "
+            << pictureDifference(pictureC, pictureD) << "\n";
+  CHECK(pictureC.rgba == pictureD.rgba);
+  CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+}
+
+// LPF.2 step 5 (e): a stop while overrides and a re-parse are queued and converting
+TEST_CASE("Feed host: a stop mid-feed (LPF.2)", "[.][feed]")
+{
+  const auto gamePath = feedGamePath();
+  if (!gamePath)
+  {
+    SKIP("TB_LIT_GAME_PATH does not name a game folder with blobs and def/misc.def");
+  }
+  const auto root = assembleFeedRoot("TbLitLibTest-feed-e", *gamePath);
+  auto host = Host{root, *gamePath, HostOptions{160, 120, 5}};
+  host.offer(feedScene(5));
+  host.session->setCamera(feedCamera());
+  REQUIRE(host.session->readbackLdr(60s).is_success());
+
+  const auto diffuse = diffusePixels();
+  auto stop = std::atomic<bool>{false};
+  auto feeder = std::thread{[&] {
+    for (auto i = 0; !stop; ++i)
+    {
+      auto pixels = diffuse;
+      pixels.rgba[0] = std::uint8_t(i);
+      static_cast<void>(host.service->setImageOverride(QuadDiffuse, overrideOf(pixels)));
+      static_cast<void>(
+        host.service->setImageOverride(QuadBump, overrideOf(bumpPixels())));
+      std::this_thread::sleep_for(5ms);
+    }
+  }};
+  std::this_thread::sleep_for(300ms);
+  stop = true;
+  feeder.join();
+  // the last hand-overs right before the stop: a 1024² conversion each, and a re-parse
+  static_cast<void>(host.service->setImageOverride(QuadDiffuse, overrideOf(diffuse)));
+  static_cast<void>(host.service->setImageOverride(QuadRmao, overrideOf(rmaoPixels(90))));
+  static_cast<void>(host.service->reparseMaterial(SphereMaterial, TwoSidedSphereText));
+  const auto requested = host.service->feedRequested();
+  const auto applied = host.service->table()->feedApplied;
+  const auto report = host.close();
+  std::cout << "LPF.2 (e): stopped with " << requested - applied
+            << " hand-overs not yet in a table\n";
+  CHECK(report.deviceReleaseCount == 0u);
+  CHECK(report.nvrhiErrors == 0u);
+  CHECK_FALSE(report.deviceLost);
+  CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+  CHECK(host.validation.errors == 0);
+  CHECK(host.validation.warnings == 0);
+}
+
+/**
+ * LPF.2 step 5 (c) (C44, Q29, P5.13): feed_ms from the frame log over 100 overrides of
+ * the quad's 1024² diffuse at 100 ms intervals, each of a colour of its own, after three
+ * to warm up; then five with a 1024² PNG source decode queued just before (the item in
+ * flight: printed, not asserted). Release only: the exe runs alone on the machine.
+ */
+TEST_CASE("Feed host: the latency of a fed image (LPF.2, Q29)", "[.][feed]")
+{
+#ifndef NDEBUG
+  SKIP("the latency is measured in Release only (Q29)");
+#else
+  const auto gamePath = feedGamePath();
+  if (!gamePath)
+  {
+    SKIP("TB_LIT_GAME_PATH does not name a game folder with blobs and def/misc.def");
+  }
+  constexpr auto Warm = 3;
+  constexpr auto Samples = 100;
+  constexpr auto Decodes = 5;
+  const auto root = assembleFeedRoot("TbLitLibTest-feed-latency", *gamePath);
+  for (auto i = 0; i < Decodes; ++i)
+  {
+    auto source = test::gradient(FeedSide, FeedSide);
+    source.pixels[0] = std::uint8_t(i);
+    writeBinaryFile(
+      root / "base" / "textures" / "lp5" / fmt::format("feed_decode_{}.png", i),
+      test::pngFile(source));
+  }
+  const auto logPath =
+    std::filesystem::temp_directory_path() / "TbLitLibTest-feed-latency.csv";
+  std::filesystem::remove(logPath);
+  {
+    auto host = Host{root, *gamePath, HostOptions{160, 120, 6, false, logPath}};
+    host.offer(feedScene(6));
+    host.session->setCamera(feedCamera());
+    REQUIRE(host.session->readbackLdr(60s).is_success());
+    const auto diffuseKey = stageImage(*host.service, QuadMaterial, LightingDiffuse);
+    REQUIRE(diffuseKey);
+
+    const auto colourOf = [](const int i) {
+      return std::array<std::uint8_t, 3>{
+        std::uint8_t(i * 37), std::uint8_t(i * 91 + 17), std::uint8_t(i * 53 + 101)};
+    };
+    auto next = std::chrono::steady_clock::now();
+    for (auto i = 0; i < Warm + Samples; ++i)
+    {
+      std::this_thread::sleep_until(next);
+      REQUIRE(host.service
+                ->setImageOverride(QuadDiffuse, overrideOf(constantPixels(colourOf(i))))
+                .is_success());
+      next += 100ms;
+    }
+    std::this_thread::sleep_until(next);
+    REQUIRE(host.session->readbackLdr(10s).is_success());
+
+    // the worst case: a source decode queued just before the hand-over
+    for (auto i = 0; i < Decodes; ++i)
+    {
+      auto key = *diffuseKey;
+      key.name = fmt::format("textures/lp5/feed_decode_{}", i);
+      static_cast<void>(host.service->image(key));
+      std::this_thread::sleep_for(1ms);
+      REQUIRE(host.service
+                ->setImageOverride(
+                  QuadDiffuse, overrideOf(constantPixels(colourOf(Warm + Samples + i))))
+                .is_success());
+      std::this_thread::sleep_for(300ms);
+    }
+    REQUIRE(host.session->readbackLdr(10s).is_success());
+    const auto report = host.close();
+    CHECK(report.deviceReleaseCount == 0u);
+    CHECK_FALSE(report.frameLogError);
+  }
+
+  // feed_ms (column 47) of every frame row that has one, in order
+  auto values = std::vector<double>{};
+  {
+    auto stream = std::ifstream{logPath};
+    auto line = std::string{};
+    while (std::getline(stream, line))
+    {
+      auto fields = std::vector<std::string>{};
+      auto field = std::string{};
+      auto lineStream = std::stringstream{line};
+      while (std::getline(lineStream, field, ','))
+      {
+        fields.push_back(field);
+      }
+      if (fields.size() > 47 && fields[1] == "frame" && !fields[47].empty())
+      {
+        values.push_back(std::stod(fields[47]));
+      }
+    }
+  }
+  REQUIRE(values.size() >= std::size_t(Warm + Samples + Decodes));
+  const auto steady =
+    std::vector<double>{values.begin() + Warm, values.begin() + Warm + Samples};
+  const auto decodes = std::vector<double>{values.end() - Decodes, values.end()};
+  auto sorted = steady;
+  std::ranges::sort(sorted);
+  const auto median = (sorted[Samples / 2 - 1] + sorted[Samples / 2]) / 2.0;
+  // nearest rank
+  const auto p95 = sorted[std::size_t(std::ceil(0.95 * Samples)) - 1];
+  const auto worst = sorted.back();
+  std::cout << fmt::format(
+    "LPF.2 latency (Release, headless, 1024x1024 RGBA8 diffuse, {} samples at 100 ms): "
+    "median {:.3f} ms, p95 {:.3f} ms, max {:.3f} ms, min {:.3f} ms; warm-up {}; with a "
+    "1024x1024 PNG decode queued first: {}; frame rows with feed_ms {}\n",
+    Samples,
+    median,
+    p95,
+    worst,
+    sorted.front(),
+    fmt::join(std::vector<double>{values.begin(), values.begin() + Warm}, " "),
+    fmt::join(decodes, " "),
+    values.size());
+  // Q29 as recorded (37-LPF-PACKAGES.md revision 2, moved after LPF.0a's 27.7 ms
+  // conversion): a median of at most 50 ms, a p95 of at most 80 ms
+  CHECK(median <= 50.0);
+  CHECK(p95 <= 80.0);
+#endif
 }
 
 // ----- FEED.md's examples, verbatim (lib/TbLitLib/FEED.md section 9) -----
