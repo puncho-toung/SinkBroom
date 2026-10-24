@@ -10637,9 +10637,13 @@
         {
           "file": "lib/TbLitLib/src/MaterialService.cpp",
           "symbol": "MaterialService::Worker::pollMapBakes"
+        },
+        {
+          "file": "lib/TbLitLib/src/GridTable.cpp",
+          "symbol": "gridAreasOf (none for a dropped bake)"
         }
       ],
-      "note": "§3.7 (LP1c.1), not in the engine: the area counts of the files that exist must agree: the grid names each area once and as many areas as the tree has, every SH probe's area is -1 or below the count; a mismatch drops the grid and the probes (no-bake behaviour) with the reason, and keeps the tree (the newest dmap's). A file that does not parse (dmap or a bake writing it) counts as no file, where the engine stops the map load at its Error; the parse thread probes the files of every bake it holds each poll and reads a changed bake again, so it is retried on the next change. A binary grid that does not parse falls back to the text LP1c fix (S3.12): an SH probe outside the area range drops the probes alone (shProbesError), not the grid; LP1c fix (S3 Low): a text grid's points are appended as they parse, so a count the text cannot hold allocates nothing; LP1c fix (S3.13): a bake read that throws answers its ticket with a slot that says why"
+      "note": "§3.7 (LP1c.1), not in the engine: the area counts of the files that exist must agree: the grid names each area once and as many areas as the tree has, every SH probe's area is -1 or below the count; a mismatch drops the grid and the probes (no-bake behaviour) with the reason, and keeps the tree (the newest dmap's). A file that does not parse (dmap or a bake writing it) counts as no file, where the engine stops the map load at its Error; the parse thread probes the files of every bake it holds each poll and reads a changed bake again, so it is retried on the next change. A binary grid that does not parse falls back to the text LP1c fix (S3.12): an SH probe outside the area range drops the probes alone (shProbesError), not the grid; LP1c fix (S3 Low): a text grid's points are appended as they parse, so a count the text cannot hold allocates nothing; LP1c fix (S3.13): a bake read that throws answers its ticket with a slot that says why; K29 (LP4.3): SinkBroom's own rule, the engine cross-checks nothing: it keeps what matches by index and defaults the rest silently, and a grid area at or past the area count is a fatal load error; the preview drops the grid and the probes with the reason on the status line (bake: dropped (<reason>), D90), and the tree stays in use (K16); the grid table is then empty and every surface takes the probe path (black without probes)"
     },
     {
       "id": "M-BAKE-DIFF-03",
@@ -15989,6 +15993,42 @@
           ],
           "anchor": "a translucent coverage is not CONTENTS_OPAQUE",
           "sha256": "a4aa9377b0fca06cfb5e2fe10ff81a3f7fc1e0583778996568d76c1ec00d04a8"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            1045,
+            1110
+          ],
+          "anchor": "bakeLightGrids: its switches (-grid skips a token, reads three)",
+          "sha256": "a5c5bf52c8f5a4e25bb66be83c25d980ada11a6f6dfc80d2259dbcaf2528d6ee"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            1110,
+            1215
+          ],
+          "anchor": "bakeLightGrids: the size it prints, per area SetupLightGrid's shape and the points it shoots",
+          "sha256": "e6abadd1062defd5c56b89f274d1a2231fb5f6c7d698705bc549c25b182ca98e"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            68,
+            121
+          ],
+          "anchor": "LightGrid::SetupLightGrid: origin, maxs, bounds, its Printf",
+          "sha256": "342a8933edda933143c93dfd8b46602ab497c148cee0d14e8cad414223850ed5"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            578,
+            600
+          ],
+          "anchor": "LoadLightGridFile: the text parse writes the .blightgrid with the .lightgrid's time",
+          "sha256": "2db8e7dd45f26461e6037f6d9c0af93f3c37dc87663dca3d96a7df2b174d3341"
         }
       ],
       "sinkbroom": [
@@ -16001,7 +16041,7 @@
           "symbol": "ParityRowSwitch, checkProbesAgainstShProbes, settledParityFrame (interactionsSkipped), the [.][parity] case"
         }
       ],
-      "note": "LP4.2b (C38, D91, D95, P4.1, P4.24), test only: the parity run's bake is the engine's own, in an engine process of its own before the shot processes, because LoadSHProbesFile caches the SH list per map name and process (a reload after the bake would keep the empty list of the first load). The bake process (bake.cfg, at most 32 '+' commands, fs_game, fs_savepath and fs_basepath on the command line, FS_GAME asserted before any launch: RemoveFile and OpenFileWrite act under <fs_basepath>/<gameFolder>, the sandbox's tb_parity, never the game/base junction) dmaps and loads the ambient map, waits 120 frames so that the first RenderScene sets tr.primaryWorld and tr.primaryView, sets r_skipInteractions 0 and r_skipAmbient 0 (the captures render full lit views with their shader passes: RDF_NOAMBIENT skips the ambient pass alone) and ui_showGun 0, runs bakeEnvironmentProbes and quits. parity.py checks the .shprobes' entries against the automatic probes of the .proc's areas (PopulateEnvironmentProbes, M-PROBE-01) and every probe's _amb .exr and _amb #__2105, _spec #__2108 and _depth #__2208 caches; the shot processes keep every output of the bake, load the ambient map fresh without a dmap, and their log's LoadSHProbesFile line must report the bake's count. The ambient-only shots: r_skipInteractions 1 (DrawInteractions' only use) around them, printed and checked, and the preview's skipInteractionsForTesting through the row's ambient_only flag (ParityRowSwitch), the frame taken only when its interactions were skipped. The preview root gets the .shprobes, every .bimage, the env_probe entityDef copied out of the game folder and the IBL blobs, never an .exr. A room no entity's origin is in is filled as outside by dmap's flood (the A07 room's func_static block); a translucent material does not seal a room (A07's shell is opaque and unlit, its translucent panel inside). Never in the product"
+      "note": "LP4.2b (C38, D91, D95, P4.1, P4.24), test only: the parity run's bake is the engine's own, in an engine process of its own before the shot processes, because LoadSHProbesFile caches the SH list per map name and process (a reload after the bake would keep the empty list of the first load). The bake process (bake.cfg, at most 32 '+' commands, fs_game, fs_savepath and fs_basepath on the command line, FS_GAME asserted before any launch: RemoveFile and OpenFileWrite act under <fs_basepath>/<gameFolder>, the sandbox's tb_parity, never the game/base junction) dmaps and loads the ambient map, waits 120 frames so that the first RenderScene sets tr.primaryWorld and tr.primaryView, sets r_skipInteractions 0 and r_skipAmbient 0 (the captures render full lit views with their shader passes: RDF_NOAMBIENT skips the ambient pass alone) and ui_showGun 0, runs bakeEnvironmentProbes and quits. parity.py checks the .shprobes' entries against the automatic probes of the .proc's areas (PopulateEnvironmentProbes, M-PROBE-01) and every probe's _amb .exr and _amb #__2105, _spec #__2108 and _depth #__2208 caches; the shot processes keep every output of the bake, load the ambient map fresh without a dmap, and their log's LoadSHProbesFile line must report the bake's count. The ambient-only shots: r_skipInteractions 1 (DrawInteractions' only use) around them, printed and checked, and the preview's skipInteractionsForTesting through the row's ambient_only flag (ParityRowSwitch), the frame taken only when its interactions were skipped. The preview root gets the .shprobes, every .bimage, the env_probe entityDef copied out of the game folder and the IBL blobs, never an .exr. A room no entity's origin is in is filled as outside by dmap's flood (the A07 room's func_static block); a translucent material does not seal a room (A07's shell is opaque and unlit, its translucent panel inside). Never in the product; LP4.3 (D91, D95, P4.3, P4.24): the bake process also runs bakeLightGrids -grid ( 128 128 256 ) in a block of its own after the probes: its log's size and per-area shapes are held to SetupLightGrid's of the .proc's area bounds (the probe rooms, z 32..224, have none and no atlas file; the grid rooms, z 0..192 and 0..448, have points and an atlas each); each shot process deletes the .blightgrid by name before its launch and writes its own from the .lightgrid; the preview root takes the .lightgrid with its time and the last shot process's .blightgrid (A2)"
     },
     {
       "id": "M-AREA-01",
@@ -18195,41 +18235,6 @@
       "note": "LP4.2a (C34): a surface whose material or registers the table has not answered yet gets no ambient draw, where the interactions draw it with _default; the engine has every material at map load. The frame is unconverged already (FrontendLists::pending), so the draw comes with the table"
     },
     {
-      "id": "M-AMB-DIFF-03",
-      "kind": "difference",
-      "engine": [
-        {
-          "file": "neo/renderer/RenderBackend.cpp",
-          "lines": [
-            1196,
-            1305
-          ],
-          "anchor": "DrawSingleInteraction: useIBL with a grid area and r_useLightGrid (the light grid)",
-          "sha256": "de7c91efd8592e299540d59c34b9b27dc3a8fb6bacf9c7522c67d20bcd583b2a"
-        },
-        {
-          "file": "neo/renderer/RenderSystem_init.cpp",
-          "lines": [
-            299,
-            299
-          ],
-          "anchor": "r_useLightGrid \"1\"",
-          "sha256": "b793dcf456a0bee95190c9c82b3a61abed8d460fd4987a73d98429d7f3e0fd14"
-        }
-      ],
-      "sinkbroom": [
-        {
-          "file": "lib/TbLitLib/src/LitPasses.cpp",
-          "symbol": "LitPasses::recordAmbient (EngineFrame.useLightGrid && surface.gridArea)"
-        },
-        {
-          "file": "lib/TbLitLib/src/LitFrontend.h",
-          "symbol": "LitSurface::gridArea"
-        }
-      ],
-      "note": "LP4.2a: the light-grid branch is LP4.3's: LitSurface::gridArea is never set, so every surface takes the probe path; a surface with a grid area would be counted (ambientGridSurfaces, 'grid: LP4.3') and not drawn. The engine draws a surface whose area has a valid grid with ambient_lightgrid_IBL (programs 8 and 10, t7 the area's atlas, GLOBALLIGHTORIGIN, JITTERTEXSCALE, JITTERTEXOFFSET, SCREENCORRECTIONFACTOR, CASCADEDISTANCES)"
-    },
-    {
       "id": "M-AMB-DIFF-04",
       "kind": "difference",
       "engine": [
@@ -18353,6 +18358,282 @@
         }
       ],
       "note": "LP4.2a step 5, test only: the CPU model of ambient_lighting_IBL.ps.hlsl for one flat-normal pixel that the hidden GPU case holds the read-back to (within 1 after the tonemap, LP2.2b's TonemapModel): irradiance = max( shEvaluateDiffuseL2RGB( sh, n ) / pi, 0 ), which for an L0-only SH is c0 * Y00 (1 / ( 2 sqrt( pi ) ) = 0.28209479; A0 = 3.1415927 and the divisor 3.14159265 are one float); envBRDF sampled bilinearly from the copied LUT's halves (M-INTR-08); specularScatter (Fdez-Aguera); diffuseLight = ( 1 - specularScatter ) * irradiance * diffuseColor * ao 1 * DIFFUSEMODIFIER; specularLight with specGate smoothstep( 0, 0.005, lum( irradiance ) ) and the radiance cube's constant colour; ( diffuseLight * forceAmbient + specularLight * horiz^2 ) * vertex colour; the diffuse texel through ConvertYCoCgToRGB and sRGBToLinearRGB. Never in the product"
+    },
+    {
+      "id": "M-GRID-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            814,
+            853
+          ],
+          "anchor": "R_AddSingleModel: baseDrawSurf->area, the surface's grid area (ReceivesLighting, the model surface's tri->bounds centre, the first valid reference of its own area, else the first valid one)",
+          "sha256": "bc46ede2370f73e68b680a096602ae402d4c3723946ed3059db67324ad38e047"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_local.h",
+          "lines": [
+            71,
+            110
+          ],
+          "anchor": "LightGrid: lightGridPoints, irradianceImage, GetIrradianceImage",
+          "sha256": "48b35eef5c515365e6a6347fc774c6fc898ba3993ccb7b181ae5e1eb5fc97f03"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (gridAreaOf, worldMaterialBounds; FrontendLists::gridSurfaces)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::rebuildLists (gridValid; the lists' key: grid, gridVersion, gridValidity)"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageSlots.cpp",
+          "symbol": "ImageSlots::stateVersion"
+        }
+      ],
+      "note": "LP4.3 step 2 (C36, D79, P4.6, P4.11): every visible surface whose material receives lighting gets LitSurface::gridArea from surfaceGridArea (M-FLOW-10) when the lists are built with a tree and a grid: a world chunk of area N with refs [N] and the union of the area's world chunks of its material (the _areaN model's surface), a brush entity's chunk with its entity's materialBounds of the material and its areas (chain order) through the space's modelRenderMatrix; the outside set (D81) and a pending material have none. lightGridPoints.Num() && image && !image->IsDefaulted() is the grid table's hasPoints and the atlas slot Resident or Loading (Pending: not loaded yet, D88; Default: defaulted). The lists' key carries the grid table and its version and, with a grid, a hash of which areas' grids are valid, worked out again when the slots' state version (bumped on every slot state change) or the table moves, so an arriving or Missing atlas rebuilds the dispatch and other slots' churn does not (LP4.3 step 9: on admin the raw state version rebuilt the lists every other frame). MAX_CONTACTED_LIGHTS and the #if 0 debug draw (:855-) are not mirrored"
+    },
+    {
+      "id": "M-GRID-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1193,
+            1305
+          ],
+          "anchor": "DrawSingleInteraction: specUsage, the useIBL branch with a grid area and r_useLightGrid: the probe parms, the grid parms, the programs, the units, CASCADEDISTANCES",
+          "sha256": "72759b4904dc153b0420bec4d823622666515b9e3c75513adadace6099174901"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordAmbient (grid, the light-grid path), LitFrameStats::ambientGridSurfaces"
+        },
+        {
+          "file": "lib/TbLitLib/src/GridTable.cpp",
+          "symbol": "engineGridParms"
+        }
+      ],
+      "note": "LP4.3 step 3 (C34, C36, D86): a surface with a grid area takes the light-grid path when r_useLightGrid is 1: WOBBLESKY_X/Y/Z, TEXGEN_0_S/T/Q and LOCALLIGHTORIGIN as the probe path sets them (no SH: the grid shader reads none; the SH of an earlier probe-path draw stays in the parms as in the engine), GLOBALLIGHTORIGIN ( origin, 1 ), JITTERTEXSCALE ( size, 1 ), JITTERTEXOFFSET ( bounds, 1 ), SCREENCORRECTIONFACTOR ( single - border, single, border, ( single - border ) / single ), CASCADEDISTANCES ( w, h, 1 / w, 1 / h ) of the atlas texture (the slot's texture desc, the .bimage's size: GetUploadResolution); builtins 8 / 10 by the specular usage (skinning never: no GPU-skinned surface in the editor); t3 _brdfLut, t4 _white (K31), t7 the area's atlas slot, t8-t14 as the probe path. An atlas that binds no level of its own (Loading, nothing written) skips the draw and keeps the frame unconverged; the grid pipeline keys are asked for by the first grid draw, not at Start (litStartPipelineKeys has no grid then)"
+    },
+    {
+      "id": "M-GRID-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            383,
+            413
+          ],
+          "anchor": "idRenderWorldLocal::SetupLightGrid: LoadLightGridFile, then LoadLightGridImages",
+          "sha256": "6b07cb3caffcd3a65c8555dbf2b71e83a16d7c4bf2c26f8396da88c3f049d8fc"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            415,
+            447
+          ],
+          "anchor": "idRenderWorldLocal::LoadLightGridImages: every area's env/<base>/area%i_lightgrid_amb, TF_LINEAR, TR_CLAMP, TD_HDR_LIGHTPROBE, CF_2D",
+          "sha256": "49d780379388baec6c7b8526825681f15b2c5bd3b16aeea505a60dcc9a061d51"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_local.h",
+          "lines": [
+            63,
+            69
+          ],
+          "anchor": "lightGridPoint_t",
+          "sha256": "d84e33ada84fdb55d2305ba54791911d2493a2fe4a48b05091813fe5d1e2443c"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            56,
+            66
+          ],
+          "anchor": "LightGrid::LightGrid: defaultLightGridSize, the sizes 16 and 2",
+          "sha256": "146963c6b45d85d37340714fd261d3a3533f14770b45d5db1013695eab8d02dc"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GridTable.cpp",
+          "symbol": "gridAreasOf, GridTable::find, hasPoints, GridTablePublication"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::publishGridTable, gridTable"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::requestGridImages"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::record (gridImagesPending)"
+        }
+      ],
+      "note": "LP4.3 step 1 (C36, D88, SC336): the scene publishes a GridTable when it adopts a bake whose grid was read and not dropped (K29): per area of the tree its file entry's origin, size, bounds, imageSingleProbeSize and imageBorderSize, whether it has points, and its atlas key; an area the file does not name keeps LightGrid's constructor values and no points (a validated grid names every area). The render thread asks for every area's atlas when it adopts a table (also the areas without points, as LoadLightGridImages does); an area with points whose atlas is Pending keeps the frame unconverged (FrameConvergence::gridImagesPending: the engine loads them at map load). The points themselves are read (M-BAKE-03) and only counted"
+    },
+    {
+      "id": "M-GRID-04",
+      "kind": "constant",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            1387,
+            1441
+          ],
+          "anchor": "bakeLightGrids: the atlas of an area, its tile column gx + gz bx and row gy, 16 x 16 texels each, the .exr",
+          "sha256": "9b7e4c4d7ff5bb69527a7abde78f7e8a0579489aeae65f72ad97274a2f4bc354"
+        },
+        {
+          "file": "neo/shaders/builtin/lighting/ambient_lightgrid_IBL.ps.hlsl",
+          "lines": [
+            342,
+            478
+          ],
+          "anchor": "the light-grid atlas's sampling: the grid coordinate and fraction, the 8 corners, the texel offsets, the skipped black samples and the renormalisation",
+          "sha256": "0fbea3f8611c5bca45c7fceeeb3b3c0271667a64f8d99f34e19d5c30da05ed39"
+        },
+        {
+          "file": "neo/shaders/global_inc.hlsl",
+          "lines": [
+            306,
+            315
+          ],
+          "anchor": "octEncode",
+          "sha256": "c5dd9d5dad9f6a55bc754db98a19e3ff3a1e941184d38401fc12323d0d9ee587"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            674,
+            680
+          ],
+          "anchor": "R11G11B10F accepted for BC6H",
+          "sha256": "a708121a9ab3f33a9a12a724b4998f0163ae7549d8ec1b4ce8420775a0f972f3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "lp43AtlasCache, modelGridIrradiance, LitSession light-grid path on a GPU (LP4.3)"
+        }
+      ],
+      "note": "LP4.3 step 3's test (P4.20): a synthetic atlas per area laid out as the bake lays it out, its tiles constant (the octahedral lookup moot), as R11G11B10F; the CPU model of the shader's trilinear blend for the floor pixel, then the probe path's diffuse formula (1 - specularScatter) E albedo ao (stage colour x 3) x r_forceAmbient"
+    },
+    {
+      "id": "M-GRID-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            397,
+            412
+          ],
+          "anchor": "SetupLightGrid without a loaded file: each area's points computed from its globalBounds, no image",
+          "sha256": "6e6fc2d040af34c22a9c209f8e2960051606fe0df6a38706899b66b6a8fec919"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            260,
+            381
+          ],
+          "anchor": "LightGrid::CalculateLightGridPointPositions",
+          "sha256": "0bd9e942a36c295a6bebd7faa683eb3941f511240a26e05c80587a004b9cd7b8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/GridTable.cpp",
+          "symbol": "gridAreasOf (none without a grid)"
+        }
+      ],
+      "note": "D89 (SC336, SC338): without a loaded .lightgrid (and no accepted binary) the engine computes every area's points but loads no atlas, so every surface takes the probe path; the preview computes no points: nothing visible depends on them"
+    },
+    {
+      "id": "M-GRID-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            817,
+            825
+          ],
+          "anchor": "the model surface's tri->bounds centre through CreateFromOriginAxis",
+          "sha256": "76cecb4d54b8edc11460184b385213c0f51c0aaa2abd42fc2bfa04bd77a7ca81"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (gridAreaOf, worldMaterialBounds)"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::updateEntityReferences (materialBounds)"
+        }
+      ],
+      "note": "P4.11: the engine's tri->bounds is the bounds of one model surface (dmap's per-material surface of an area model, or of a brush entity's model); the preview's is the union of the editor's chunks of that (area, material) or (entity, material), across cells and parts, grown by FinishSurfaces' deform cube (which keeps the centre). The two agree but where dmap's surface differs from the editor's faces (K9, K10: a face dmap dropped in solid, K14: pieces the preview keeps in area -1 are not in an area's union)"
+    },
+    {
+      "id": "M-STATUS-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_lightgrid.cpp",
+          "lines": [
+            548,
+            577
+          ],
+          "anchor": "LoadLightGridFile: the .blightgrid's stored time against the .lightgrid's, the engine's only staleness test",
+          "sha256": "49ba968760f26547314c94335e476a1024331ab7e49fbe0f6e2f432dacf46298"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            806,
+            879
+          ],
+          "anchor": "InitFromMap: the .bproc read without a time test against the .proc",
+          "sha256": "671e3870621e0f2b904305651ee674f1e5f368b17e46e89ff6561ad3efcb92b6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitSession.cpp",
+          "symbol": "sessionStatusLine (bake: none / proc / bproc / dropped, stale, pieces outside the baked hull)"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "fillBakeStatus"
+        },
+        {
+          "file": "lib/TbLitLib/src/MapBake.cpp",
+          "symbol": "mapBakeGeometryTime"
+        },
+        {
+          "file": "lib/TbUiLib/src/LitSessionHost.cpp",
+          "symbol": "LitSessionHost::status"
+        }
+      ],
+      "note": "D90, K8 (LP4.3 step 4): the engine has no staleness concept beyond the binary grid's time and says nothing on the screen; SinkBroom's status line names the bake once known (bake: none, proc, bproc, dropped (<reason>)), ', stale' with a tree when the document holds unsaved changes or the map file was written after the tree's file (a positive probe time: a container's 0 never), and ', <n> pieces outside the baked hull' when world faces reach solid (K14, D81)"
     }
   ],
   "retired": [
@@ -18375,6 +18656,11 @@
       "id": "M-IMG-02",
       "commit": "f6148614b",
       "reason": "R_LoadCubeImages' transcribed time-only path: the copied R_LoadCubeImages (M-IMG-PART-01) replaces it, its pixel path included"
+    },
+    {
+      "id": "M-AMB-DIFF-03",
+      "commit": "76474969f",
+      "reason": "the light-grid branch is drawn since LP4.3 (M-GRID-01 the dispatch, M-GRID-02 the pass's grid path); no difference remains"
     }
   ]
 }
