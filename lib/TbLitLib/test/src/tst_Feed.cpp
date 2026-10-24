@@ -55,6 +55,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -723,6 +724,237 @@ TEST_CASE(
               << " -> " << counts.threads << ", handles " << baseline.handles << " -> "
               << counts.handles << " (allowed " << maxHandles << ")\n";
   }
+}
+
+// ----- FEED.md's examples, verbatim (lib/TbLitLib/FEED.md section 9) -----
+
+namespace
+{
+
+// the examples' error handling, kept short: a refused step throws
+void must(const Result<void>& result)
+{
+  if (result.is_error())
+  {
+    throw std::runtime_error{std::get<Error>(result.error()).msg};
+  }
+}
+
+// FEED.md example 1: a quad, a sphere and a light from the record builders; one image
+// fed; the picture read back. gamePath holds the engine's shader blobs (C1); declPath
+// is the game folder the materials, images and entityDefs are read from (for a host the
+// same folder; the test's temp root, which holds the fixture's lp5_feed.mtr).
+Result<LdrImage> feedExampleRecords(
+  const std::filesystem::path& gamePath, const std::filesystem::path& declPath)
+{
+  using namespace std::chrono_literals;
+
+  // 1. the instance and the dispatcher
+  auto instance = VulkanInstance::create({}) | kdl::value();
+  initInstanceDispatcher(instance.handles());
+
+  // 2. the listener, then the material service over the game folder
+  auto listener = std::make_shared<feed::GuardedListener>();
+  auto serviceOptions = MaterialServiceOptions{};
+  serviceOptions.makeSource = [declPath](const std::atomic<bool>& cancel) {
+    return std::unique_ptr<DeclSource>{
+      std::make_unique<GameDeclSource>(declPath, &cancel)};
+  };
+  serviceOptions.parseAll = true;
+  serviceOptions.listener = feed::GuardedListener::listener(listener);
+  auto service = MaterialService::create(std::move(serviceOptions)) | kdl::value();
+
+  // 3. the session: headless (a null surface), the blobs from the game path
+  auto sessionOptions = SessionOptions{};
+  sessionOptions.gamePath = gamePath;
+  const auto generation = std::uint64_t{1};
+  auto session = LitSession::create(
+                   instance.handles(),
+                   VK_NULL_HANDLE,
+                   320,
+                   240,
+                   sessionOptions,
+                   [](SessionEvent, std::string, std::uint64_t) {},
+                   generation,
+                   service.get())
+                 | kdl::value();
+  listener->attach(session.get());
+  session->setExposed(true);
+
+  // 4. the first snapshot: worldspawn first, then its geometry and the light
+  auto snapshot = Snapshot{};
+  snapshot.generation = generation;
+  snapshot.sequence = 1;
+  feed::worldspawn(snapshot, 1);
+  must(feed::quadBrush(
+    snapshot,
+    1,
+    2,
+    {0, 0, 0},
+    {0, -1, 0},
+    512,
+    "lp5/feed_pbr",
+    "lp5/feed_side",
+    1.0,
+    {512, 512}));
+  must(feed::patchDef3Sphere(snapshot, 1, 3, {300, -300, -200}, 128, "lp5/feed_sphere"));
+  feed::pointLight(snapshot, 4, {0, -500, 0}, 1200, {1, 1, 1});
+  const auto shared = std::make_shared<const Snapshot>(std::move(snapshot));
+  while (!session->offerSnapshot(shared))
+  {
+    std::this_thread::sleep_for(1ms);
+  }
+
+  // 5. the camera
+  session->setCamera(feed::cameraLookingAt({-600, -900, 400}, {0, 0, 0}));
+
+  // 6. an image under its game image name: 1024², rows top first, RGBA8
+  auto pixels = RawImagePixels{};
+  pixels.width = 1024;
+  pixels.height = 1024;
+  pixels.bytes.resize(std::size_t{1024} * 1024 * 4);
+  for (std::size_t i = 0; i < pixels.bytes.size(); i += 4)
+  {
+    pixels.bytes[i] = 200;
+    pixels.bytes[i + 1] = 120;
+    pixels.bytes[i + 2] = 40;
+    pixels.bytes[i + 3] = 255;
+  }
+  auto image = ImageOverride{};
+  image.image = std::move(pixels);
+  image.editorSize = EditorImageSize{1024, 1024, EditorImageSize::State::Ready, {}};
+  must(service->setImageOverride("textures/lp5/feed_pbr", std::move(image)));
+
+  // 7. the picture of the first settled frame that holds the override
+  auto picture = session->readbackLdr(60s);
+
+  // 8. the teardown, in the editor's order
+  feed::teardown(
+    std::move(session), std::move(service), std::move(instance), listener.get());
+  return picture;
+}
+
+// FEED.md example 2: the same kind of scene from a map text (a quad brush, a patch, a
+// light), read by snapshotOfMapText; the session made as in example 1.
+Result<LdrImage> feedExampleMapText(
+  const std::filesystem::path& gamePath, const std::filesystem::path& declPath)
+{
+  using namespace std::chrono_literals;
+
+  const auto mapText = std::string{R"({
+"classname" "worldspawn"
+{
+( -512 0 -512 ) ( -512 0 -511 ) ( -511 0 -512 ) lp5/feed_pbr [ 1 0 0 512 ] [ 0 0 -1 512 ] 0 1 1
+( 512 16 512 ) ( 513 16 512 ) ( 512 16 513 ) lp5/feed_side [ 1 0 0 0 ] [ 0 0 -1 0 ] 0 1 1
+( -512 0 -512 ) ( -512 1 -512 ) ( -512 0 -511 ) lp5/feed_side [ 0 1 0 0 ] [ 0 0 -1 0 ] 0 1 1
+( 512 16 512 ) ( 512 16 513 ) ( 512 17 512 ) lp5/feed_side [ 0 1 0 0 ] [ 0 0 -1 0 ] 0 1 1
+( -512 0 -512 ) ( -511 0 -512 ) ( -512 1 -512 ) lp5/feed_side [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 1 1
+( 512 16 512 ) ( 512 17 512 ) ( 513 16 512 ) lp5/feed_side [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 1 1
+}
+{
+patchDef3
+{
+lp5/feed_sphere
+( 3 3 4 4 0 0 0 )
+(
+( ( 200 -300 -300 0 0 ) ( 300 -400 -300 0.5 0 ) ( 400 -300 -300 1 0 ) )
+( ( 200 -300 -200 0 0.5 ) ( 300 -400 -200 0.5 0.5 ) ( 400 -300 -200 1 0.5 ) )
+( ( 200 -300 -100 0 1 ) ( 300 -400 -100 0.5 1 ) ( 400 -300 -100 1 1 ) )
+)
+}
+}
+}
+{
+"classname" "light"
+"origin" "0 -500 0"
+"light_radius" "1200 1200 1200"
+"_color" "1 1 1"
+}
+)"};
+  const auto generation = std::uint64_t{1};
+  auto snapshot = snapshotOfMapText(mapText, generation, 1);
+  if (snapshot.is_error())
+  {
+    return std::get<Error>(snapshot.error());
+  }
+
+  auto instance = VulkanInstance::create({}) | kdl::value();
+  initInstanceDispatcher(instance.handles());
+  auto listener = std::make_shared<feed::GuardedListener>();
+  auto serviceOptions = MaterialServiceOptions{};
+  serviceOptions.makeSource = [declPath](const std::atomic<bool>& cancel) {
+    return std::unique_ptr<DeclSource>{
+      std::make_unique<GameDeclSource>(declPath, &cancel)};
+  };
+  serviceOptions.parseAll = true;
+  serviceOptions.listener = feed::GuardedListener::listener(listener);
+  auto service = MaterialService::create(std::move(serviceOptions)) | kdl::value();
+  auto sessionOptions = SessionOptions{};
+  sessionOptions.gamePath = gamePath;
+  auto session = LitSession::create(
+                   instance.handles(),
+                   VK_NULL_HANDLE,
+                   320,
+                   240,
+                   sessionOptions,
+                   [](SessionEvent, std::string, std::uint64_t) {},
+                   generation,
+                   service.get())
+                 | kdl::value();
+  listener->attach(session.get());
+  session->setExposed(true);
+
+  const auto shared = std::make_shared<const Snapshot>(std::move(snapshot.value()));
+  while (!session->offerSnapshot(shared))
+  {
+    std::this_thread::sleep_for(1ms);
+  }
+  session->setCamera(feed::cameraLookingAt({-600, -900, 400}, {0, 0, 0}));
+
+  // the patch's material re-parsed in place: its text, as an .mtr file would hold it
+  must(service->reparseMaterial(
+    "textures/lp5/feed_sphere",
+    "{\n\ttwoSided\n\tbasecolormap\ttextures/lp5/feed_sphere\n}\n"));
+
+  auto picture = session->readbackLdr(60s);
+  feed::teardown(
+    std::move(session), std::move(service), std::move(instance), listener.get());
+  return picture;
+}
+
+} // namespace
+
+TEST_CASE("Feed host: FEED.md's examples (LPF.2, D108)", "[.][feed]")
+{
+  const auto gamePath = feedGamePath();
+  if (!gamePath)
+  {
+    SKIP("TB_LIT_GAME_PATH does not name a game folder with blobs and def/misc.def");
+  }
+  const auto root = assembleFeedRoot("TbLitLibTest-feed-examples", *gamePath);
+  // a picture of something: the lit quad covers the centre
+  const auto lit = [](const LdrImage& image) {
+    const auto at = (std::size_t(image.height / 2) * image.width + image.width / 2) * 4;
+    return image.rgba.size() == std::size_t(image.width) * image.height * 4
+           && int(image.rgba[at]) + image.rgba[at + 1] + image.rgba[at + 2] > 0;
+  };
+
+  SECTION("example 1: the record builders")
+  {
+    const auto picture = feedExampleRecords(*gamePath, root);
+    REQUIRE(picture.is_success());
+    CHECK(picture.value().width == 320u);
+    CHECK(lit(picture.value()));
+  }
+
+  SECTION("example 2: a map text")
+  {
+    const auto picture = feedExampleMapText(*gamePath, root);
+    REQUIRE(picture.is_success());
+    CHECK(picture.value().height == 240u);
+    CHECK(lit(picture.value()));
+  }
+  CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
 }
 
 } // namespace tb::lit
