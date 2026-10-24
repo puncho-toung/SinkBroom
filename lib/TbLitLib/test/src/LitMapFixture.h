@@ -38,12 +38,8 @@ std::filesystem::path litFixtureFolder();
 
 /**
  * A snapshot of a map file in TrenchBroom's Doom3 Valve format, as LP1b.1's builder would
- * make it from the document (C23): every entity with its keys in map order; per brush its
- * faces with TrenchBroom's polygon (counter-clockwise seen from outside, the least vertex
- * first, as vm::polygon keeps it), the three points, the plane and the Valve values
- * round-tripped to float; per patch its control points; point entities and lights as
- * nodes. Brush polygons are made by intersecting the brush's planes (exact for axial
- * integer brushes). Preview ids count from 1 in file order, entities first.
+ * make it from the document (C23): lit::snapshotOfMapText (lit/FeedScene.h, LPF.2) with
+ * generation and sequence 1 and no map path; throws its error.
  */
 Snapshot snapshotOfMapText(const std::string& text);
 

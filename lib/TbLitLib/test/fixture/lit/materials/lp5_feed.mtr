@@ -1,0 +1,32 @@
+// LPF.2 feed fixtures (plans/lit-preview/37-LPF-PACKAGES.md D110, briefs/LPF.2.md step 5):
+// the materials of the [.][feed] host test (tst_Feed.cpp) and of the record builders' test
+// (tst_FeedScene.cpp). None of their images exists as a file: the host test feeds them
+// (MaterialService::setImageOverride) and, for D110's control, writes loose TGAs of the
+// same pixels into its own temp game root. The specular stages name <x>_rmao directly, so
+// the PBR RMAO usage needs no sibling file (Material.cpp:2278-2290, C39). Names under
+// textures/lp5/ are reserved for fixtures (K20).
+
+// the quad's front face: base colour, bump and RMAO, all fed
+textures/lp5/feed_pbr
+{
+	qer_editorimage	textures/lp5/feed_pbr
+	basecolormap	textures/lp5/feed_pbr
+	bumpmap	textures/lp5/feed_pbr_local
+	specularmap	textures/lp5/feed_rmao
+}
+
+// the sphere: the same stage shape; its RMAO is fed in (b), with a re-parse
+textures/lp5/feed_sphere
+{
+	qer_editorimage	textures/lp5/feed_sphere
+	basecolormap	textures/lp5/feed_sphere
+	bumpmap	textures/lp5/feed_sphere_local
+	specularmap	textures/lp5/feed_sphere_rmao
+}
+
+// the quad's five other faces
+textures/lp5/feed_side
+{
+	qer_editorimage	textures/lp5/feed_side
+	diffusemap	textures/lp5/feed_side
+}
