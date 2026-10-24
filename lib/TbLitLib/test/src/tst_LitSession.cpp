@@ -771,7 +771,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     CHECK(rows.back()[1] == "stop");
     for (std::size_t i = 2; i + 1 < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 49u);
+      REQUIRE(rows[i].size() == 51u);
       CHECK(rows[i][0] == "1");
       CHECK(rows[i][1] == "frame");
       CHECK(rows[i][2] == std::to_string(i - 2));
@@ -1541,7 +1541,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     auto longestPresentMs = 0.0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 49u);
+      REQUIRE(rows[i].size() == 51u);
       if (rows[i][1] != "frame")
       {
         continue;
@@ -2705,7 +2705,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     auto arenaBytes = std::string{};
     for (const auto& row : readCsv(logPath))
     {
-      if (row.size() == 49u && row[1] == "frame" && !row[15].empty() && row[15] != "0")
+      if (row.size() == 51u && row[1] == "frame" && !row[15].empty() && row[15] != "0")
       {
         fromLog.push_back(std::stoull(row[15]));
         arenaBytes = row[17];
@@ -3876,7 +3876,7 @@ TEST_CASE("LitSession GPU resources on the retail game (D72)", "[.][retail]")
   auto stopAllocations = std::string{};
   for (const auto& row : readCsv(logPath))
   {
-    if (row.size() == 49u && row[1] != "event" && !row[14].empty() && row[0] != "session")
+    if (row.size() == 51u && row[1] != "event" && !row[14].empty() && row[0] != "session")
     {
       loggedPeak = std::max(loggedPeak, std::int64_t(std::stoll(row[14])));
       if (row[1] == "stop")
@@ -5570,7 +5570,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     // that drew the scene says so
     const auto rows = readCsv(logPath);
     REQUIRE(rows.size() >= 3u);
-    REQUIRE(rows[0].size() == 49u);
+    REQUIRE(rows[0].size() == 51u);
     CHECK(rows[0][18] == "gpu_prepass_ms");
     CHECK(rows[0][34] == "settled");
     CHECK(rows[0][35] == "alloc_refused");
@@ -5585,7 +5585,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     auto settledRows = 0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 49u);
+      REQUIRE(rows[i].size() == 51u);
       if (rows[i][1] != "frame")
       {
         continue;
@@ -5974,7 +5974,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
       for (std::size_t i = 1; i < rows.size(); ++i)
       {
         const auto& row = rows[i];
-        if (row.size() != 49u || row[1] != "frame")
+        if (row.size() != 51u || row[1] != "frame")
         {
           continue;
         }
@@ -7936,14 +7936,14 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu2]")
     // C16: the frame log's two columns: a frame that drew the pass has its time
     const auto rows = readCsv(logPath);
     REQUIRE(rows.size() >= 2u);
-    REQUIRE(rows[0].size() == 49u);
+    REQUIRE(rows[0].size() == 51u);
     CHECK(rows[0][42] == "ambient_draws");
     CHECK(rows[0][43] == "gpu_ambient_ms");
     auto timed = 0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
       if (
-        rows[i].size() == 49u && rows[i][1] == "frame" && !rows[i][42].empty()
+        rows[i].size() == 51u && rows[i][1] == "frame" && !rows[i][42].empty()
         && rows[i][42] != "0" && !rows[i][43].empty() && std::stod(rows[i][43]) > 0.0)
       {
         ++timed;
@@ -10093,14 +10093,14 @@ std::map<std::uint64_t, std::vector<std::string>> feedLogFrames(
 {
   const auto rows = readCsv(path);
   REQUIRE(rows.size() >= 3u);
-  REQUIRE(rows[0].size() == 49u);
+  REQUIRE(rows[0].size() == 51u);
   CHECK(rows[0][FeedAppliedColumn] == "feed_applied");
   CHECK(rows[0][FeedMsColumn] == "feed_ms");
   CHECK(rows[0][OverrideBytesColumn] == "override_bytes");
   auto frames = std::map<std::uint64_t, std::vector<std::string>>{};
   for (std::size_t i = 1; i < rows.size(); ++i)
   {
-    REQUIRE(rows[i].size() == 49u);
+    REQUIRE(rows[i].size() == 51u);
     if (rows[i][1] == "frame")
     {
       CHECK_FALSE(rows[i][FeedAppliedColumn].empty());
