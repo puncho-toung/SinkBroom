@@ -6377,6 +6377,9 @@ struct ParityLists
 {
   std::vector<std::pair<std::string, ScreenRect>> lights;
   double flowMs = 0.0;
+  // LP4.3 (C36): per chunk entity, the grid areas of its drawn surfaces (-1: none, the
+  // probe path)
+  std::map<PreviewId, std::vector<int>> gridAreas;
 };
 
 struct ParityFrame
@@ -6413,6 +6416,11 @@ std::optional<ParityFrame> settledParityFrame(
       frame->frame = chainFrameOf(access);
       const auto& lists = access.passes.lists();
       frame->lists.flowMs = lists.flowMs;
+      for (const auto& surface : lists.drawSurfs)
+      {
+        frame->lists.gridAreas[surface.chunk->key.entity].push_back(
+          surface.gridArea.value_or(-1));
+      }
       for (const auto& light : lists.lights)
       {
         const auto* name = findKey(light.record->spawnArgs, "name");
@@ -6561,6 +6569,35 @@ const ProcTree& parityTree(const std::filesystem::path& root, const std::string&
 }
 
 // LP4.2b: every preview id of a snapshot, its entities' and its nodes'
+// LP4.3: a snapshot's entities by their "name" key (the last one, as findKey reads it)
+std::map<std::string, PreviewId> snapshotEntityNames(const Snapshot& snapshot)
+{
+  auto names = std::map<std::string, PreviewId>{};
+  for (const auto& entity : snapshot.entities)
+  {
+    for (auto i = entity.keys.first; i < entity.keys.first + entity.keys.count; ++i)
+    {
+      const auto& keyValue = snapshot.keyValues[i];
+      if (snapshot.string(keyValue.key) == "name")
+      {
+        names[std::string{snapshot.string(keyValue.value)}] = entity.id;
+      }
+    }
+  }
+  return names;
+}
+
+// LP4.3: an expectation held by a count: a number is its equal, {"min": n} at least n
+bool parityCountHolds(const JsonValue& expected, const std::size_t actual)
+{
+  if (expected.kind == JsonValue::Kind::Object)
+  {
+    const auto* min = expected.find("min");
+    return min && double(actual) >= min->number;
+  }
+  return actual == std::size_t(expected.number);
+}
+
 std::vector<PreviewId> snapshotIds(const Snapshot& snapshot)
 {
   auto ids = std::vector<PreviewId>{};
@@ -6820,6 +6857,8 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
     // the map offered last, which the next map's snapshot removes
     auto checkedBakes = std::set<std::string>{};
     auto previousIds = std::vector<PreviewId>{};
+    // LP4.3: the current map's brush entities by name
+    auto entityNames = std::map<std::string, PreviewId>{};
     for (const auto index : order)
     {
       const auto& row = rows->array[index];
@@ -6831,6 +6870,7 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
         REQUIRE(waitFor([&] { return session->snapshotSlotFree(); }, 10000ms, false));
         auto snapshot = paritySnapshot(root, map, ++sequence, std::move(previousIds));
         previousIds = snapshotIds(*snapshot);
+        entityNames = snapshotEntityNames(*snapshot);
         REQUIRE(session->offerSnapshot(std::move(snapshot)));
         currentMap = map;
       }
@@ -6919,6 +6959,48 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
         smallerScissor = smallerScissor || scissor.x1 > 0 || scissor.y1 > 0
                          || scissor.x2 < int(width) - 1 || scissor.y2 < int(height) - 1;
       }
+      // LP4.3 (C36): the named entities' grid areas, and the row's expected one (the area
+      // of a point, over the map's .proc)
+      auto entityGrid = std::vector<std::string>{};
+      for (const auto& [name, entityId] : entityNames)
+      {
+        if (const auto it = settledRow->lists.gridAreas.find(entityId);
+            it != settledRow->lists.gridAreas.end())
+        {
+          entityGrid.push_back(
+            fmt::format("\"{}\": [{}]", name, fmt::join(it->second, ", ")));
+        }
+      }
+      auto expectedEntityGrid = std::string{"null"};
+      auto entityGridHolds = true;
+      if (const auto* entityExpect = expect ? expect->find("entity_grid_area") : nullptr)
+      {
+        REQUIRE(entityExpect->array.size() == 4u);
+        const auto& name = entityExpect->array[0].string;
+        const auto expectedArea = pointInArea(
+          parityTree(root, map),
+          EngineVec3{
+            float(entityExpect->array[1].number),
+            float(entityExpect->array[2].number),
+            float(entityExpect->array[3].number)});
+        auto areas = std::vector<int>{};
+        if (const auto named = entityNames.find(name); named != entityNames.end())
+        {
+          if (const auto it = settledRow->lists.gridAreas.find(named->second);
+              it != settledRow->lists.gridAreas.end())
+          {
+            areas = it->second;
+          }
+        }
+        entityGridHolds = !areas.empty() && expectedArea >= 0
+                          && std::ranges::all_of(
+                            areas, [&](const int area) { return area == expectedArea; });
+        expectedEntityGrid = fmt::format(
+          "{{\"name\": \"{}\", \"expected\": {}, \"areas\": [{}]}}",
+          name,
+          expectedArea,
+          fmt::join(areas, ", "));
+      }
       writeTextFile(
         out / (id + ".json"),
         fmt::format(
@@ -6930,7 +7012,9 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           "{}, "
           "\"portal_chains\": {}, \"flow_ms\": {:.4f}, \"scissor_smaller_than_view\": "
           "{}, \"ambient_only\": {}, \"ambient_draws\": {}, \"probe_candidates\": {}, "
-          "\"view_lights\": [{}]}}\n",
+          "\"grid_surfaces\": {}, \"ambient_grid_surfaces\": {}, \"entity_grid_areas\": "
+          "{{{}}}, "
+          "\"entity_grid_area\": {}, \"view_lights\": [{}]}}\n",
           width,
           height,
           settleMs,
@@ -6956,6 +7040,10 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           ambientOnly ? "true" : "false",
           lit.ambientDraws,
           lit.probeCandidates,
+          lit.gridSurfaces,
+          lit.ambientGridSurfaces,
+          fmt::join(entityGrid, ", "),
+          expectedEntityGrid,
           fmt::join(viewLights, ", ")));
 
       // C38 (LP4.2b): an ambient-only frame drew no interaction and was lit by the
@@ -6988,7 +7076,18 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           }
           else if (key == "lights_in_view")
           {
-            CHECK(lit.lightsInView == std::size_t(value.number));
+            CHECK(parityCountHolds(value, lit.lightsInView));
+          }
+          else if (key == "grid_surfaces")
+          {
+            // LP4.3 (C36): the drawn surfaces with a grid area
+            CAPTURE(lit.gridSurfaces);
+            CHECK(parityCountHolds(value, lit.gridSurfaces));
+          }
+          else if (key == "entity_grid_area")
+          {
+            CAPTURE(expectedEntityGrid);
+            CHECK(entityGridHolds);
           }
           else if (key == "lights_drawn")
           {
@@ -7030,6 +7129,44 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
         const auto table = session->probeTable();
         checkProbesAgainstShProbes(
           *table, entries, std::size_t(bakeMap->numberOr("probes", -1.0)));
+        // LP4.3 (C36): the grid table of the .lightgrid against the bake's per-area
+        // shapes: the same areas with points and the same bounds
+        const auto* gridRecord = bakeMap->find("grid");
+        REQUIRE(gridRecord);
+        const auto* gridAreas = gridRecord->find("areas");
+        REQUIRE(gridAreas);
+        const auto grid = session->gridTable();
+        REQUIRE(grid->areas.size() == gridAreas->array.size());
+        auto withPoints = std::size_t{0};
+        for (const auto& area : gridAreas->array)
+        {
+          const auto areaIndex = int(area.numberOr("area", -1.0));
+          CAPTURE(areaIndex);
+          const auto points = area.numberOr("points", 0.0) > 0.0;
+          const auto* entry = grid->find(areaIndex);
+          REQUIRE(entry);
+          CHECK(entry->hasPoints == points);
+          if (points)
+          {
+            ++withPoints;
+            const auto* bounds = area.find("bounds");
+            REQUIRE(bounds);
+            REQUIRE(bounds->array.size() == 3u);
+            for (std::size_t c = 0; c < 3; ++c)
+            {
+              CHECK(entry->bounds[c] == int(bounds->array[c].number));
+            }
+            CHECK(entry->probeSize == 16);
+            CHECK(entry->borderSize == 2);
+          }
+        }
+        std::cout << fmt::format(
+          "LP4.3 parity {}: grid table of {} areas, {} with points, as the bake's record "
+          "(version {})\n",
+          map,
+          grid->areas.size(),
+          withPoints,
+          grid->version);
         std::cout << fmt::format(
           "LP4.2b parity {}: {} automatic probes, every one with its .shprobes entry and "
           "SH (table version {})\n",
