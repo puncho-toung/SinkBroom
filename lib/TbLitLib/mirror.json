@@ -5509,9 +5509,17 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
           "symbol": "MaterialDecls::MaterialDecls"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "tb::lit::shim::materialStageBound"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::feedTextGuards"
         }
       ],
-      "note": "ParseStage warns at the 257th stage but does not return, and writes past pd->parseStages[256] on the parse thread's stack (A2.4; the engine at the pinned commit has the same defect). After numStages++ it also writes a coverage stage at parseStages[numStages] with no limit check when the stage is diffuse and alpha-tested (engine Material.cpp:2298-2302, the copy's 2299-2303), so one call can write two slots. Before anything can parse it, every material decl whose text can make more than 256 slots is made the default material, with the engine's warning, and its lookup fails with that reason. The bound comes from the copied idLexer's tokens with DECL_LEXER_FLAGS (forEachDeclToken, the tokens idMaterial::Parse reads): after the first \"{\" (SkipUntilString), every token equal to \"{\" counts 1 and every stage shortcut keyword 2, whatever its type and wherever it stands. ParseMaterial calls ParseStage only for such a token, once per token. A stage is diffuse only through ParseBlend's diffusemap or basecolormap: in a \"{\" block that is a token of the material's text, counted 2, which pays for the block's coverage slot; a shortcut's stage is parsed from synthesised text holding its image name without the quotes (AppendToken), so diffusemap \"_white alphaTest 0.5\" makes two slots that its second count pays for. AddImplicitStages adds at most one stage, below the limit, without an alpha test. So the bound is never below the slots the engine writes; it is above them where such a token is an argument, a block's own keyword or text after a parse error (M-ID-DIFF-03). W.1 (round 2) replaced a character scan of brace depth that crafted text got past ('diffusemap {', 'qer_editorimage {', the lexer's '/*/' comment, '.5diffusemap'); X.1 (round 3) counts shortcuts twice for the coverage stage"
+      "note": "ParseStage warns at the 257th stage but does not return, and writes past pd->parseStages[256] on the parse thread's stack (A2.4; the engine at the pinned commit has the same defect). After numStages++ it also writes a coverage stage at parseStages[numStages] with no limit check when the stage is diffuse and alpha-tested (engine Material.cpp:2298-2302, the copy's 2299-2303), so one call can write two slots. Before anything can parse it, every material decl whose text can make more than 256 slots is made the default material, with the engine's warning, and its lookup fails with that reason. The bound comes from the copied idLexer's tokens with DECL_LEXER_FLAGS (forEachDeclToken, the tokens idMaterial::Parse reads): after the first \"{\" (SkipUntilString), every token equal to \"{\" counts 1 and every stage shortcut keyword 2, whatever its type and wherever it stands. ParseMaterial calls ParseStage only for such a token, once per token. A stage is diffuse only through ParseBlend's diffusemap or basecolormap: in a \"{\" block that is a token of the material's text, counted 2, which pays for the block's coverage slot; a shortcut's stage is parsed from synthesised text holding its image name without the quotes (AppendToken), so diffusemap \"_white alphaTest 0.5\" makes two slots that its second count pays for. AddImplicitStages adds at most one stage, below the limit, without an alpha test. So the bound is never below the slots the engine writes; it is above them where such a token is an argument, a block's own keyword or text after a parse error (M-ID-DIFF-03). W.1 (round 2) replaced a character scan of brace depth that crafted text got past ('diffusemap {', 'qer_editorimage {', the lexer's '/*/' comment, '.5diffusemap'); X.1 (round 3) counts shortcuts twice for the coverage stage. LPF.0b (C42): re-applied to a text handed in for a re-parse (MaterialDecls::feedTextGuards, after the token guard, as at construction), which refuses it with the engine's reason and leaves the decl as it was; a kept file text restore sets back is checked again, and one it refuses is made the default as at construction"
     },
     {
       "id": "M-ID-GUARD-06",
@@ -5584,9 +5592,17 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
           "symbol": "tb::lit::shim::forEachDeclToken"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "tb::lit::shim::holdsOverlongDeclToken"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::feedTextGuards"
         }
       ],
-      "note": "a decl file holding a token of MAX_STRING_CHARS or more characters with no '.' among the first MAX_STRING_CHARS is refused with a warning and read as unreadable (the copied LoadAndParse then reports 'couldn't load'), because any token can reach MakeNameCanonical and overflow its buffer. The tokens are the copied idLexer's with DECL_LEXER_FLAGS over the whole file (forEachDeclToken, which silences only the lexer's printing with LEXFL_NOERRORS and LEXFL_NOWARNINGS and goes on after a token it cannot read wherever the lexer moved forward; the decl parsers go on there too, while LoadAndParse stops at a failed top-level read, so the scan reads a superset of the tokens the engine reads), so strings joined across a backslash, '...' literals with spaces, a name after a number and the lexer's comment rules are read exactly as the engine reads them; tokens inside comments are not tokens. A dot ends the canonical name first, so the retail PDAs' long texts are read (newpdas/enpro_hammer.pda: a 1075-character string whose first dot is its fifth character). A known difference: the engine reads such a file and overruns. W.1 (round 2) replaced a character scan of names and quoted strings that crafted text got past. LP1c.2 (LP1c.1's follow-up 3): the scan runs on decl reads only; the copied image loaders' reads (between beginImageReads and endImageReads) go through readGameFile and the loader pre-validation instead (M-IMG-GUARD-01)"
+      "note": "a decl file holding a token of MAX_STRING_CHARS or more characters with no '.' among the first MAX_STRING_CHARS is refused with a warning and read as unreadable (the copied LoadAndParse then reports 'couldn't load'), because any token can reach MakeNameCanonical and overflow its buffer. The tokens are the copied idLexer's with DECL_LEXER_FLAGS over the whole file (forEachDeclToken, which silences only the lexer's printing with LEXFL_NOERRORS and LEXFL_NOWARNINGS and goes on after a token it cannot read wherever the lexer moved forward; the decl parsers go on there too, while LoadAndParse stops at a failed top-level read, so the scan reads a superset of the tokens the engine reads), so strings joined across a backslash, '...' literals with spaces, a name after a number and the lexer's comment rules are read exactly as the engine reads them; tokens inside comments are not tokens. A dot ends the canonical name first, so the retail PDAs' long texts are read (newpdas/enpro_hammer.pda: a 1075-character string whose first dot is its fifth character). A known difference: the engine reads such a file and overruns. W.1 (round 2) replaced a character scan of names and quoted strings that crafted text got past. LP1c.2 (LP1c.1's follow-up 3): the scan runs on decl reads only; the copied image loaders' reads (between beginImageReads and endImageReads) go through readGameFile and the loader pre-validation instead (M-IMG-GUARD-01). LPF.0b (C42): the same scan over a text handed in for a re-parse (MaterialDecls::feedTextGuards, first of the two guards), which refuses the text, not a file, with the reason, before any decl is found or made"
     },
     {
       "id": "M-ID-GUARD-03",
@@ -13750,6 +13766,42 @@
           ],
           "anchor": "ParseStage, a specular stage naming _rmao or _rmaod",
           "sha256": "bc2c13a9fb61d5b86ee71c25ee4ecf35376b8c6000492025def8491c156da4f0"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1392,
+            1403
+          ],
+          "anchor": "idDeclManagerLocal::ReloadFile",
+          "sha256": "58b6db3a04e52ba8a0609fc1a73dca7e19f4ce69c4458ba8ebe110c75e422305"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1973,
+            1989
+          ],
+          "anchor": "idDeclManagerLocal::ReloadDecls_f",
+          "sha256": "d86635f6d30b23a75cef3963905d11b7f7efebc2687a9c9f7f72fbb715fc92ee"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            4991,
+            4994
+          ],
+          "anchor": "idDeclLocal::IsImplicit",
+          "sha256": "b2a11199043d418aaaef6efc979aebdff0bbb4528a110517c60d4072831b316f"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3727,
+            3731
+          ],
+          "anchor": "idMaterial::SetDefaultText, if( 1 ) without the file probe",
+          "sha256": "1efb69570bda57210be7ab4c07855511d890eda9896992773cf013a71c760355"
         }
       ],
       "sinkbroom": [
@@ -13764,9 +13816,25 @@
         {
           "file": "lib/TbLitLib/src/MaterialService.cpp",
           "symbol": "MaterialService::Worker::feedItem, setOverride, clearOverride"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::reparseMaterial, MaterialService::clearMaterialReparse"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::reparseItem, reparseOne, clearReparse, publishReparse"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::buildRegistry (the text store applied again)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightData.cpp",
+          "symbol": "findMaterialNoDefault"
         }
       ],
-      "note": "LPF.0a (C39, C40, D96, D97, P5.1, P5.16): the engine reads an image's files at load (ActuallyLoadImage); the preview also takes an image from a host in memory, under a game image name, in place of its files, without writing one (C8): MaterialService::setImageOverride, one Feed work item per name, served after the evaluations and ahead of the lookups, the newest hand-over winning. The matching rule is ImageFromFile's: the override's name folded as the engine folds a name before it compares it with its records (every .tga, .jpg, .png, .exr and .hdr removed wherever it stands, case-sensitively as idStr::Replace compares, so an upper-case extension stays; backslashes made slashes), then compared without case with a key's whole name (a record's name, folded already). A program key (addnormals( ... ), heightmap( ... )) is the record of its whole program text, so it matches only by that text, never by a leaf: an override of textures/foo_local does not feed bumpmap addnormals( textures/foo_local, ... ). The default image (an empty name, \"default\") and the built-ins (a name that starts with '_', which match any options and are never read from files) are refused at hand-over. The usage the override converts with is the copied time call's for each key (M-FEED-02): a stage naming <x>_rmao is TD_SPECULAR_PBR_RMAO at parse (Material.cpp), and an <x>_s key becomes it only when the <x>_rmao sibling file exists, as in the engine, so a host without files reaches the RMAO path by naming _rmao. Two usages of one name are two keys, two slots and two conversions. A set publishes the keys' drops and their new slots in one table, a refusal and a clear one table too (the clear reads the files in the same item); MaterialTable::feedApplied counts the hand-overs a table includes against MaterialService::feedRequested (D100). imageItem's break test gains the Feed queue (LP4.3's batching, named for the end review: P5.21)"
+      "note": "LPF.0a (C39, C40, D96, D97, P5.1, P5.16): the engine reads an image's files at load (ActuallyLoadImage); the preview also takes an image from a host in memory, under a game image name, in place of its files, without writing one (C8): MaterialService::setImageOverride, one Feed work item per name, served after the evaluations and ahead of the lookups, the newest hand-over winning. The matching rule is ImageFromFile's: the override's name folded as the engine folds a name before it compares it with its records (every .tga, .jpg, .png, .exr and .hdr removed wherever it stands, case-sensitively as idStr::Replace compares, so an upper-case extension stays; backslashes made slashes), then compared without case with a key's whole name (a record's name, folded already). A program key (addnormals( ... ), heightmap( ... )) is the record of its whole program text, so it matches only by that text, never by a leaf: an override of textures/foo_local does not feed bumpmap addnormals( textures/foo_local, ... ). The default image (an empty name, \"default\") and the built-ins (a name that starts with '_', which match any options and are never read from files) are refused at hand-over. The usage the override converts with is the copied time call's for each key (M-FEED-02): a stage naming <x>_rmao is TD_SPECULAR_PBR_RMAO at parse (Material.cpp), and an <x>_s key becomes it only when the <x>_rmao sibling file exists, as in the engine, so a host without files reaches the RMAO path by naming _rmao. Two usages of one name are two keys, two slots and two conversions. A set publishes the keys' drops and their new slots in one table, a refusal and a clear one table too (the clear reads the files in the same item); MaterialTable::feedApplied counts the hand-overs a table includes against MaterialService::feedRequested (D100). imageItem's break test gains the Feed queue (LP4.3's batching, named for the end review: P5.21). LPF.0b (C42, D96, D99, P5.8, P5.18): the preview also takes a material's decl text from a host (MaterialService::reparseMaterial, one Reparse work item per name, served after the overrides and ahead of the lookups, the newest text winning, counted in feedApplied); the engine parses a decl again only through its editors' SetText and Invalidate, or reloadDecls (ReloadFile, which re-reads the files). The re-parse is the editors' path (M-ID-FN-28); the text is kept by the service and applied again after every registry build, since a build reads the decl files again, until clearMaterialReparse. A re-parsed name without a decl stays an implicit decl (IsImplicit: its sourceFile is the implicit file), so FindMaterial( name, false ), the preview's findMaterialNoDefault, takes it for none and a light whose texture names it gets the default light shader unless the texture was precached. The slot is set under the asked name, the canonical name and every name the material was published under (a Failed lookup's names recorded too); a refused text or an engine Error publishes it Failed, where the engine would have stopped. The material's register deltas are erased (they are evaluated again when asked), where the engine evaluates the registers every frame"
     },
     {
       "id": "M-FEED-DIFF-02",
@@ -18837,6 +18905,212 @@
         }
       ],
       "note": "D90, K8 (LP4.3 step 4): the engine has no staleness concept beyond the binary grid's time and says nothing on the screen; SinkBroom's status line names the bake once known (bake: none, proc, bproc, dropped (<reason>)), ', stale' with a tree when the document holds unsaved changes or the map file was written after the tree's file (a positive probe time: a container's 0 never), and ', <n> pieces outside the baked hull' when world faces reach solid (K14, D81)"
+    },
+    {
+      "id": "M-ID-FN-28",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1325,
+            1369
+          ],
+          "anchor": "idDeclManagerLocal::FindType",
+          "sha256": "0dc17e47fb16f5b3a89aff12e026212b00f7549bc8d04879ce8b7cb4642970f8"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1376,
+            1385
+          ],
+          "anchor": "idDeclManagerLocal::FindDeclWithoutParsing (hands out decl->self)",
+          "sha256": "5038e47ed4f6ffb56bcef8df68a9f681a369f7ac024efbf8c3f1cd0924d9332d"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            1427,
+            1450
+          ],
+          "anchor": "idDeclManagerLocal::DeclByIndex (AllocateSelf without a parse)",
+          "sha256": "31030dbfd949094b561a0a24f40fdcfc96bf25bb1856d10e5a6e22dd4dfb80ce"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            4682,
+            4735
+          ],
+          "anchor": "idDeclManagerLocal::FindTypeWithoutParsing, the implicit decl's creation",
+          "sha256": "3b92730045298d8feb09024054494562a51912802ea223dccb09e48614ed0066"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            4991,
+            4994
+          ],
+          "anchor": "idDeclLocal::IsImplicit",
+          "sha256": "b2a11199043d418aaaef6efc979aebdff0bbb4528a110517c60d4072831b316f"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            5011,
+            5014
+          ],
+          "anchor": "idDeclLocal::Invalidate",
+          "sha256": "f66746ae9efdb5fb6a7f4556e5003cc9a06cacc5382d371242a266ac6f6201ee"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            5074,
+            5081
+          ],
+          "anchor": "idDeclLocal::GetText",
+          "sha256": "a13011f29bf84b71b4b60ea3a79614f580c70f66f5544fc670e5d1d0c8c0125d"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            5098,
+            5135
+          ],
+          "anchor": "idDeclLocal::SetText, SetTextLocal",
+          "sha256": "69854fefe60bf9ddf42d2b3037f0a25fc888dc114db3b68af242ebf1a3b9065a"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            5272,
+            5301
+          ],
+          "anchor": "idDeclLocal::MakeDefault",
+          "sha256": "f9991829837156dd13afcb27adadca69ff3cb76cc59f07e6a2d95aef2df0b374"
+        },
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            5396,
+            5440
+          ],
+          "anchor": "idDeclLocal::ParseLocal",
+          "sha256": "1dd4e0769a6395c5dc5e0e11ba6f8034ad852329bf7bf731cadc0902ce1731ee"
+        },
+        {
+          "file": "neo/framework/DeclManager.h",
+          "lines": [
+            179,
+            184
+          ],
+          "anchor": "idDecl::Invalidate (\"Used by decl editors\")",
+          "sha256": "f8f4f775270bee15d8082d1e53ebd706fc2e717a50638669216a7f9cccc6b424"
+        },
+        {
+          "file": "neo/framework/DeclManager.h",
+          "lines": [
+            223,
+            227
+          ],
+          "anchor": "idDecl::SetText",
+          "sha256": "aa4197c5f39359635e65aa16583a9e4a830ba03df43cc66551071611b1edb41f"
+        },
+        {
+          "file": "neo/framework/DeclManager.h",
+          "lines": [
+            242,
+            246
+          ],
+          "anchor": "idDecl::MakeDefault",
+          "sha256": "65153552fb0a4d8d027777bd2980d8620b6a285e83073562b2bcc8540dc61c87"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::reparse, restore, parseText, reparseResult, refusedText"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::revision, declsInFile, evaluate (the revision refusal)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/DeclManagerShim.cpp",
+          "symbol": "tb::lit::shim::materialDeclIndex, declsInFile"
+        }
+      ],
+      "note": "LPF.0b (C42, D104, D105; P5.8, P5.14, P5.18, P5.26): the single-material re-parse is the copied decl manager's editors' path, called by the facade on the parse thread: the decl of the name through FindTypeWithoutParsing with makeDefault (the function FindDeclWithoutParsing wraps; FindDeclWithoutParsing itself hands out decl->self, which is NULL for a decl not allocated yet: a new implicit decl (FindTypeWithoutParsing sets self = NULL) and a decl file's decl never parsed (LoadAndParse makes them without AllocateSelf), so the plan's FindDeclWithoutParsing( ... )->SetText would dereference NULL; the shim keeps the idDeclLocal for its index and takes the idDecl from DeclByIndex( index, false ), whose AllocateSelf is FindType's own). A new name gets an idDeclLocal named canonically, DS_UNPARSED, without text, sourceFile = the implicit file, appended to the type's linear list and added to its hash: in no file's decl list, and without the default parse (idMaterial::SetDefaultText probes no file at this commit, its ReadFile commented out behind if( 1 ), but its parse makes the image record of the material's own name: a re-parse of a new name makes none). Then idDecl::SetText (SetTextLocal frees the old text and keeps the new one), idDecl::Invalidate (DS_UNPARSED) and FindType, whose ParseLocal frees the material's data and parses the text into the same idMaterial: the index, the decl file, the source line and the file's decl list stay. The differences: the construction path's guards are re-applied to the text first (M-ID-GUARD-05, -06) with the 1 MB bound (M-ID-GUARD-07), the registry untouched when one refuses; the decl's text before its first re-parse is kept by GetText (an implicit decl's generated text was freed at its parse: none), so restore sets it back by the same path, or, for a decl that was implicit, calls MakeDefault (the default material; a fresh registry would give the name SetDefaultText's material again, which the next build does), and a kept text the stage bound refuses is set and made the default with the construction's reason, as refuseOversizedMaterials left it; a parse that reaches an engine Error (ImageFromFile's conflicting cube states, tested) answers Failed and every lookup of the material fails with it until it is parsed again, where the engine would have stopped; every re-parse and restore moves the material's revision (MaterialEntry::revision, kept per index, D105), and evaluate refuses an entry of an earlier parse. Nothing writes a file: ReplaceSourceFileText stays the refusing stub (C8)"
+    },
+    {
+      "id": "M-ID-GUARD-07",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            5427,
+            5429
+          ],
+          "anchor": "idDeclLocal::ParseLocal, the text _alloca'd",
+          "sha256": "b2150a870894f74be871135f71a23ddcb545fb6bc9168a4f2fa72d5024075722"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "MaterialDecls::reparse (MaxReparseTextBytes)"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "ParseThreadStackBytes"
+        }
+      ],
+      "note": "LPF.0b (C42, P5.14): ParseLocal copies a decl's whole text onto the stack (_alloca( GetTextLength() + 1 )) before idMaterial::Parse, whose own data is about 120 KB, twice when MakeDefault parses inside it; the parse thread has 8 MB. A file's decl is bounded only by the 2 GB read refusal (the same latent fault, unchanged); a handed-in text is a programmatic input, so MaterialDecls::reparse refuses a text over 1 MB (1,048,576 bytes) with a reason before the registry is touched. Tested: a text of exactly 1 MB parses on the parse thread, one byte more is refused"
+    },
+    {
+      "id": "M-FEED-DIFF-04",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/framework/DeclManager.cpp",
+          "lines": [
+            5396,
+            5440
+          ],
+          "anchor": "idDeclLocal::ParseLocal: the same idMaterial, parsed again in place",
+          "sha256": "1dd4e0769a6395c5dc5e0e11ba6f8034ad852329bf7bf731cadc0902ce1731ee"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialTable::revisionStamp"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::scanTable, apply, forgetMaterialCells"
+        },
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "buildChunks (ChunkJobOutput::materials)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightRecord.cpp",
+          "symbol": "LightRegistry::refreshTable, lightMaterialStamp"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "ListsTableKey::of, RegisterCache::registers"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::rebuildLists (ListsKey::table)"
+        }
+      ],
+      "note": "LPF.0b (C43, D106; P5.7, P5.9, P5.27): the engine has no per-material cache to invalidate: dmap bakes a material's flags into the map's surfaces once, and the renderer reads the idMaterial pointer every frame, so an editor's re-parse of the same idMaterial is seen at once (and a geometry flag only after dmap). The preview caches per material, so a re-parse moves MaterialTable::materialsRevision once and each consumer compares a revision stamp (absent, Failed, or 2 + the entry's revision): SceneGeometry builds again the cells of every material whose stamp moved, from a material -> cells map of what each chunk job read (drawn or not, so a stage-less material given a stage builds its cells; its faces were skipped by usurface.cpp's rule), and the whole entity of a material that gained or lost CONTENTS_ORIGIN (its origin brushes' pivot, MapFile's CalculateBrushOrigin); LightRegistry builds again the lights whose shader or default light material's stamp moved; LitPasses' lists key holds materialsRevision, so the lists are built once per re-parse; RegisterCache keeps D52's last registers across a re-parse while they cover the material's numRegisters and drops them otherwise. An image override moves no revision (only its slots, and through editorSize the C21 size, M-FEED-DIFF-03). AreaData's bake-time deform bounds are not built again (the bake is read again only when its files change: K8)"
     }
   ],
   "retired": [
