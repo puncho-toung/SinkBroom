@@ -576,6 +576,34 @@ struct MaterialStage
   std::vector<std::optional<MaterialImageKey>> fragmentImages;
 
   bool hasStencil = false;
+  /**
+   * LP5.0 (C46): the stage's stencilStage_t (Material.h:229-256) as ParseStencil filled
+   * it (Material.cpp:1483-1561; the "stencil" block, :2238-2245): ref 0-255, comp a
+   * stencilComp_t (0 GREATER, 1 GEQUAL, 2 LESS, 3 LEQUAL, 4 EQUAL, 5 NOTEQUAL, 6 ALWAYS,
+   * 7 NEVER), pass, fail and zFail a stencilOperation_t (0 KEEP, 1 ZERO, 2 REPLACE,
+   * 3 INCRSAT, 4 DECRSAT, 5 INVERT, 6 INCRWRAP, 7 DECRWRAP); readMask and writeMask stay
+   * 255, which no keyword sets. The struct's defaults where hasStencil is false.
+   */
+  struct Stencil
+  {
+    int ref = 0;
+    int readMask = 255;
+    int writeMask = 255;
+    int comp = 6;
+    int pass = 0;
+    int fail = 0;
+    int zFail = 0;
+
+    // the shim is C++17 (no defaulted comparison)
+    bool operator==(const Stencil& other) const
+    {
+      return ref == other.ref && readMask == other.readMask
+             && writeMask == other.writeMask && comp == other.comp && pass == other.pass
+             && fail == other.fail && zFail == other.zFail;
+    }
+    bool operator!=(const Stencil& other) const { return !(*this == other); }
+  };
+  Stencil stencil;
 };
 
 /**
@@ -652,6 +680,18 @@ struct MaterialEntry
   bool hasSubview = false;
   bool receivesLighting = false;
   bool surfaceCastsShadow = false;
+  // LP5.0 (C46): the "suppressInSubview" keyword (Material.cpp:2662-2666): the stage pass
+  // skips the surface in a subview (RenderBackend.cpp:4315)
+  bool suppressInSubview = false;
+  /**
+   * LP5.0 (C48): the material's texGenRegisters (Material.h:1038, GetTexGenRegisters
+   * :840-843), the three register indices "texGen wobbleSky" parses (Material.cpp:
+   * 1960-1966: the tilt in degrees, the wobble rate and the rotate rate per minute) for
+   * the wobblesky program's transform (RenderBackend.cpp:530-565). The engine keeps them
+   * on the material, not the stage, and sets them only for a wobbleSky stage (CommonInit
+   * leaves them unset): 0, 0, 0 here for a material without one.
+   */
+  std::array<int, 3> texGenRegisters{};
   int entityGui = 0;
   std::string gui;
   // qer_editorimage as the decl spells it, "" for none; the engine makes the image only

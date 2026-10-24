@@ -1221,6 +1221,106 @@ TEST_CASE("MaterialDecls geometry flags and entityDefs (C22, C25)")
   }
 }
 
+TEST_CASE("MaterialDecls: LP5.0's stencil, texGen registers and suppressInSubview")
+{
+  // LP5.0 (C46, C48, D113): the copied parser's fields the stage pass reads, exposed on
+  // the entries, each from a .mtr text
+  auto source = MemoryDeclSource{{
+    DeclFile{
+      "materials/lp5.mtr",
+      "textures/lp5/wobble\n"
+      "{\n"
+      "  {\n"
+      "    blend add\n"
+      "    map textures/lp5/sky\n"
+      "    texGen wobbleSky 30 parm0 2\n"
+      "  }\n"
+      "}\n"
+      "textures/lp5/stencilled\n"
+      "{\n"
+      "  {\n"
+      "    blend blend\n"
+      "    map textures/lp5/glass\n"
+      "    stencil\n"
+      "    {\n"
+      "      Ref 3\n"
+      "      Comp NotEqual\n"
+      "      Pass Replace\n"
+      "      Fail IncrSat\n"
+      "      ZFail DecrWrap\n"
+      "    }\n"
+      "  }\n"
+      "  {\n"
+      "    blend add\n"
+      "    map textures/lp5/glow\n"
+      "  }\n"
+      "}\n"
+      "textures/lp5/subview\n"
+      "{\n"
+      "  suppressInSubview\n"
+      "  {\n"
+      "    blend add\n"
+      "    map textures/lp5/glow\n"
+      "  }\n"
+      "}\n"
+      "textures/lp5/plain { { blend add map textures/lp5/glow } }\n",
+      0},
+  }};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+
+  SECTION("texGen wobbleSky's three expressions, the material's registers (C48)")
+  {
+    const auto wobble = lookup(decls, "textures/lp5/wobble");
+    REQUIRE(wobble->stages.size() == 1u);
+    CHECK(wobble->stages[0].texgen == 5); // TG_WOBBLESKY_CUBE
+    auto parms = NoParms;
+    parms[0] = 0.25f;
+    const auto registers = evaluate(decls, *wobble, parms, 0.0f);
+    CHECK(registers[std::size_t(wobble->texGenRegisters[0])] == 30.0f);
+    CHECK(registers[std::size_t(wobble->texGenRegisters[1])] == 0.25f);
+    CHECK(registers[std::size_t(wobble->texGenRegisters[2])] == 2.0f);
+    // the parm is a register of its own, the constants the expression registers'
+    CHECK(wobble->texGenRegisters[1] == 1); // EXP_REG_PARM0
+    CHECK(wobble->texGenRegisters[0] != wobble->texGenRegisters[2]);
+
+    // a material without a wobbleSky stage has none
+    const auto plain = lookup(decls, "textures/lp5/plain");
+    CHECK(plain->texGenRegisters == std::array<int, 3>{0, 0, 0});
+  }
+
+  SECTION("a stencil block (C46)")
+  {
+    const auto stencilled = lookup(decls, "textures/lp5/stencilled");
+    REQUIRE(stencilled->stages.size() == 2u);
+    const auto& stage = stencilled->stages[0];
+    CHECK(stage.hasStencil);
+    CHECK(stage.stencil.ref == 3);
+    CHECK(stage.stencil.comp == 5);  // STENCIL_COMP_NOTEQUAL
+    CHECK(stage.stencil.pass == 2);  // STENCIL_OP_REPLACE
+    CHECK(stage.stencil.fail == 3);  // STENCIL_OP_INCRSAT
+    CHECK(stage.stencil.zFail == 7); // STENCIL_OP_DECRWRAP
+    // no keyword sets the masks
+    CHECK(stage.stencil.readMask == 255);
+    CHECK(stage.stencil.writeMask == 255);
+    // the second stage has none: stencilStage_t's defaults (ALWAYS, KEEP)
+    CHECK_FALSE(stencilled->stages[1].hasStencil);
+    CHECK(stencilled->stages[1].stencil == MaterialStage::Stencil{});
+    CHECK(stencilled->stages[1].stencil.comp == 6); // STENCIL_COMP_ALWAYS
+    CHECK(stencilled->stages[1].stencil.pass == 0); // STENCIL_OP_KEEP
+  }
+
+  SECTION("suppressInSubview (C46)")
+  {
+    CHECK(lookup(decls, "textures/lp5/subview")->suppressInSubview);
+    CHECK_FALSE(lookup(decls, "textures/lp5/plain")->suppressInSubview);
+    CHECK_FALSE(lookup(decls, "textures/lp5/stencilled")->suppressInSubview);
+  }
+
+  // the parse warned of nothing
+  CHECK(messagesOf(decls, DeclMessageKind::Warning).empty());
+}
+
 TEST_CASE("findKey")
 {
   const auto keys = EntityKeys{

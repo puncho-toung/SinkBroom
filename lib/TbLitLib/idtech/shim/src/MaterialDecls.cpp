@@ -153,6 +153,16 @@ MaterialStage stageEntry(const shaderStage_t& stage)
     }
   }
   entry.hasStencil = stage.stencilStage != nullptr;
+  if (const auto* stencil = stage.stencilStage)
+  {
+    entry.stencil.ref = int(stencil->ref);
+    entry.stencil.readMask = int(stencil->readMask);
+    entry.stencil.writeMask = int(stencil->writeMask);
+    entry.stencil.comp = int(stencil->comp);
+    entry.stencil.pass = int(stencil->pass);
+    entry.stencil.fail = int(stencil->fail);
+    entry.stencil.zFail = int(stencil->zFail);
+  }
 
   return entry;
 }
@@ -203,6 +213,7 @@ std::shared_ptr<const MaterialEntry> materialEntry(
   entry->hasSubview = material.HasSubview();
   entry->receivesLighting = material.ReceivesLighting();
   entry->surfaceCastsShadow = material.SurfaceCastsShadow();
+  entry->suppressInSubview = material.SuppressInSubview();
   entry->entityGui = material.GetEntityGui();
   entry->editorImageName = (material.*get(EditorImageNameTag{})).c_str();
   entry->mikktspace = material.UseMikkTSpace();
@@ -223,6 +234,15 @@ std::shared_ptr<const MaterialEntry> materialEntry(
   for (int i = 0; i < material.GetNumStages(); ++i)
   {
     entry->stages.push_back(stageEntry(*material.GetStage(i)));
+    // the registers are the material's, set by a wobbleSky stage alone
+    if (material.GetStage(i)->texture.texgen == TG_WOBBLESKY_CUBE)
+    {
+      const auto* registers = material.GetTexGenRegisters();
+      for (std::size_t r = 0; r < entry->texGenRegisters.size(); ++r)
+      {
+        entry->texGenRegisters[r] = registers[r];
+      }
+    }
   }
 
   return entry;

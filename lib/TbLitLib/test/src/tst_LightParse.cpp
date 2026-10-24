@@ -132,6 +132,24 @@ TEST_CASE("LightParse: projected and parallel lights and the math type")
   CHECK(
     sun.warnings[0]
     == "math_type '?' not recognized; falling back to inferred light type");
+
+  // LP5.0 (D113, P6.12; Light.cpp:207-216): math_type is read and then ignored, the
+  // geometry decides: "sun" on a point light (no light_target, no parallel) is a point
+  // light, and "point" on a spot light is a spot light, with no warning either way
+  const auto point = parseLight(
+    {{"light_radius", "64 64 64"}, {"math_enabled", "1"}, {"math_type", "sun"}});
+  CHECK(point.parms.pointLight);
+  CHECK_FALSE(point.parms.parallel);
+  CHECK(point.parms.mathLight.enabled);
+  CHECK(point.parms.mathLight.type == int(MathLightType::Point));
+  CHECK(point.warnings.empty());
+  CHECK(spot.parms.mathLight.type == int(MathLightType::Spot));
+  CHECK(spot.warnings.empty());
+  // "spot" on a parallel light is a sun
+  const auto parallel =
+    parseLight({{"parallel", "1"}, {"math_enabled", "1"}, {"math_type", "spot"}});
+  CHECK(parallel.parms.pointLight);
+  CHECK(parallel.parms.mathLight.type == int(MathLightType::Sun));
 }
 
 TEST_CASE("LightParse: the axis keys in their order")
