@@ -9087,7 +9087,7 @@
           "symbol": "parseLight, parseGoodTarget, parseLightAxis"
         }
       ],
-      "note": "C5, SC54-SC56, A15: over the merged dictionary (mergeSpawnArgs, findKey: case-insensitive, the last duplicate wins, A10). Differences: the light's material is not looked up here; texture keeps the name FindMaterial( texture, false ) is asked for, which LightData resolves; gameLocal.Printf's bad target info becomes a warning of the parse; shaderParm4's -MS2SEC( gameLocal.time ) is -0 (K5)"
+      "note": "C5, SC54-SC56, A15: over the merged dictionary (mergeSpawnArgs, findKey: case-insensitive, the last duplicate wins, A10). Differences: the light's material is not looked up here; texture keeps the name FindMaterial( texture, false ) is asked for, which LightData resolves; gameLocal.Printf's bad target info becomes a warning of the parse; shaderParm4's -MS2SEC( gameLocal.time ) is -0 (K5). LP5.0 (D113, P6.12): the math type the geometry forces (Light.cpp:207-216) is tested for math_type sun on a point light (POINT), point on a spot light (SPOT) and spot on a parallel light (SUN), each without a warning; no product change"
     },
     {
       "id": "M-LIGHT-FN-02",
@@ -13365,7 +13365,7 @@
           "symbol": "descriptorKindOf"
         }
       ],
-      "note": "LP2.0 (D9, C3, C26, P2.19): the engine creates its programs from the blobs without looking into them; the preview reflects every shader it loads with SPIRV-Reflect (the pin SPIRV-Reflect) and compares it with the mirrored tables: every descriptor (set, Vulkan binding = slot + NVRHI's offset, type) is in the program's binding layouts; a push-constant block only where the layout pushes, and of the table's size; the constant block's members (a cbuffer holding one struct is taken as that struct) by name and offset, their count and the block's size against the renderparm set or the pass's struct; a vertex shader's inputs (built-ins left out) at the vertex layout's locations with the component counts of the engine's VS_IN. A shader may leave out what the layout has. A mismatch disables the program with a message naming the field (D9); the hidden retail test reflects all 30 permutations of LP2's ten programs (pushed and not) equal to the tables. Code shorter than SPIR-V's header is refused before SPIRV-Reflect reads it (it reads the generator word unchecked)"
+      "note": "LP2.0 (D9, C3, C26, P2.19): the engine creates its programs from the blobs without looking into them; the preview reflects every shader it loads with SPIRV-Reflect (the pin SPIRV-Reflect) and compares it with the mirrored tables: every descriptor (set, Vulkan binding = slot + NVRHI's offset, type) is in the program's binding layouts; a push-constant block only where the layout pushes, and of the table's size; the constant block's members (a cbuffer holding one struct is taken as that struct) by name and offset, their count and the block's size against the renderparm set or the pass's struct; a vertex shader's inputs (built-ins left out) at the vertex layout's locations with the component counts of the engine's VS_IN. A shader may leave out what the layout has. A mismatch disables the program with a message naming the field (D9); the hidden retail test reflects all 30 permutations of LP2's ten programs (pushed and not) equal to the tables. Code shorter than SPIR-V's header is refused before SPIRV-Reflect reads it (it reads the generator word unchecked). LP5.0: the hidden retail cases also reflect rows 15, 17, 18, 21, 22, 55, 57, 65, 67, 69 and 70 (44 permutations) and the twelve material programs (48) equal to the tables, the sets member by member"
     },
     {
       "id": "M-PIPE-01",
@@ -18367,7 +18367,7 @@
       "asserts": [
         "none"
       ],
-      "note": "LP4.2a step 4 (A25: the entry names the thread): the render thread runs idVec3::Length through engineVec3Length for the probe weights' distances (chooseViewProbes, inside LitPasses::record); the CPU pool runs it nowhere. Length is x * sqrtf( 1 / x ) of the squared length (idMath::Sqrt over InvSqrt), not sqrtf( x ), so the last bit is the engine's. C24's five conditions: (1) no common call; (2) no FatalError site; (3) no SIMDProcessor; (4) no allocation; (5) FLT_SMALLEST_NON_DENORMAL, a dynamically initialised idMath constant listed in M-ID-STATIC-39 (Debug), read only"
+      "note": "LP4.2a step 4 (A25: the entry names the thread): the render thread runs idVec3::Length through engineVec3Length for the probe weights' distances (chooseViewProbes, inside LitPasses::record); the CPU pool runs it nowhere. Length is x * sqrtf( 1 / x ) of the squared length (idMath::Sqrt over InvSqrt), not sqrtf( x ), so the last bit is the engine's. C24's five conditions: (1) no common call; (2) no FatalError site; (3) no SIMDProcessor; (4) no allocation; (5) FLT_SMALLEST_NON_DENORMAL, a dynamically initialised idMath constant listed in M-ID-STATIC-39 (Debug), read only. LP5.0 (M-INTR-11): engineMathSqrt runs idMath::Sqrt alone, the same inline code, on the parse thread for _fog's distances (intrinsicImage); C24's conditions as above"
     },
     {
       "id": "M-AMB-01",
@@ -18678,7 +18678,7 @@
           "symbol": "the [.][parity] case: a row's ambient_only flag"
         }
       ],
-      "note": "C38 (LP4.2a for LP4.2b), test only: skipInteractionsForTesting( true ) records no interactions, every other pass as is, as the engine's r_skipInteractions 1 does, for the parity rows LP4.2b marks ambient_only (rows.json; the read-back's json says ambient_only and ambient_draws). The product never sets it"
+      "note": "C38 (LP4.2a for LP4.2b), test only: skipInteractionsForTesting( true ) records no interactions, every other pass as is, as the engine's r_skipInteractions 1 does, for the parity rows LP4.2b marks ambient_only (rows.json; the read-back's json says ambient_only and ambient_draws). The product never sets it. LP5.0 (P6.16): r_skipInteractions gates DrawInteractions alone, so LitPasses::record's skip is a branch now, not a return: the passes recorded after the interactions (LP5.2a's stage pass, LP5.3's fog and blend lights) still run; no frame changed (the interactions were the last pass), and the [.][litgpu] LP2.2a case finds the ambient pass drawn with them skipped (11 draws, as with them) and the probe pixel (0, 0, 0, 1)"
     },
     {
       "id": "M-TEST-AMB-02",
@@ -19447,7 +19447,763 @@
           "symbol": "tgaBytes, hdrProbe, centreTexels, recordBindings, ParseLog"
         }
       ],
-      "note": "LPF.1 (P5.23), test only: the engine keeps no record of what a frame bound; the LPF.1 case reads ImageSlots::binding( id ) of the floor's slot (the texture pointer, compared and never used; whether the intrinsic stands in; the slot's version; its state) and the last frame's lit-pass counts in an every-frame hook after the frame's uploads and before its first pass, without a copy or a GPU wait, so the frames are paced as the product paces them; one pixel read-back at the end against the model (D110). The product never sets the hook. LPF.2 (D110, P5.10, P5.13): the hidden [.][feed] cases are a host with no document (tst_Feed.cpp, its own tag, never [.][litgpu]): the fed picture equals byte for byte a fresh session's on the same pixels as loose TGAs (rows bottom first, BGRA, no flip bit, which LoadTGA turns into the caller's top-first RGBA rows), and the re-parse's picture a fresh session's whose .mtr holds the text, both under a pinned exposure; the probe pixel's model reads the texel every mip level shares (the engine's gamma mips, R_MipMapWithGamma, move some colours' stored chroma by one step below level 0); feed_ms is read from the frame log in Release; the binding record and the HDR probe are test hooks the product never sets"
+      "note": "LPF.1 (P5.23), test only: the engine keeps no record of what a frame bound; the LPF.1 case reads ImageSlots::binding( id ) of the floor's slot (the texture pointer, compared and never used; whether the intrinsic stands in; the slot's version; its state) and the last frame's lit-pass counts in an every-frame hook after the frame's uploads and before its first pass, without a copy or a GPU wait, so the frames are paced as the product paces them; one pixel read-back at the end against the model (D110). The product never sets the hook. LPF.2 (D110, P5.10, P5.13): the hidden [.][feed] cases are a host with no document (tst_Feed.cpp, its own tag, never [.][litgpu]): the fed picture equals byte for byte a fresh session's on the same pixels as loose TGAs (rows bottom first, BGRA, no flip bit, which LoadTGA turns into the caller's top-first RGBA rows), and the re-parse's picture a fresh session's whose .mtr holds the text, both under a pinned exposure; the probe pixel's model reads the texel every mip level shares (the engine's gamma mips, R_MipMapWithGamma, move some colours' stored chroma by one step below level 0); feed_ms is read from the frame log in Release; the binding record and the HDR probe are test hooks the product never sets. LP5.0: the LPF.1 case is [.][litgpu2] now (M-TEST-TAGS-01), the [.][feed] cases in neither GPU suite. The gamma mips' chroma shift is a mirrored engine fact, not a K: the preview runs the engine's own R_MipMapWithGamma on an override's levels (K34's conversion), so both sides draw a flat (200 120 40) as Co 208 at level 0 and 207 below; the probe model's colour (200 120 60), whose texel is the same at every level, is a test rule (RUN.md, the director's decisions after LPF.2 (4))"
+    },
+    {
+      "id": "M-TABLE-11",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            271,
+            273
+          ],
+          "anchor": "rpNominalSet5, rpNominalSet5LayoutTypes (LEGACY, NORMAL_CUBE, NORMAL_CUBE_SKINNED)",
+          "sha256": "910ca29a95d91b8e95f017f50d5cba96dc6cd51b6205811d9f8ef0a03a02f670"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            281,
+            283
+          ],
+          "anchor": "rpNominalSet7, rpNominalSet7LayoutTypes (FOG, BLENDLIGHT and their skinned forms)",
+          "sha256": "a7039d4c062e0bf72c433e05732b61e8c1d8ff06ff6810c8b03b2038b73c2c69"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            286,
+            288
+          ],
+          "anchor": "rpNominalSet8, rpNominalSet8LayoutTypes (POST_PROCESS_INGAME)",
+          "sha256": "976c6b8b6a9833ba3c767eed96c2f4ba8341ffdd63e275183847e6351947d784"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            306,
+            308
+          ],
+          "anchor": "rpNominalSet12, rpNominalSet12LayoutTypes (TEXGEN)",
+          "sha256": "5af7ecd9440585761b47248ca9322d42e74320f88fa88c1257789f132c001067"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            276,
+            286
+          ],
+          "anchor": "layoutTypeAttributes for rpNominalSet5LayoutTypes: renderParmSet5, rpBufSize 16 * 16, cbStatic false",
+          "sha256": "38efa86585a1523e8692e8a597a6aa71985cc7ddefd1bf5385c51d1dcd3d9191"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            298,
+            319
+          ],
+          "anchor": "layoutTypeAttributes for rpNominalSet7LayoutTypes and rpNominalSet8LayoutTypes",
+          "sha256": "bb5264c8db66977eb590e9b9e00ea54dde095db49c5d6fc5324eaec0f82e92b2"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            353,
+            363
+          ],
+          "anchor": "layoutTypeAttributes for rpNominalSet12LayoutTypes",
+          "sha256": "30a788976c117ffeb11ea1ff59046d4c46a3dc3d5fb0913570000220178ecf32"
+        },
+        {
+          "file": "neo/shaders/renderParmSet5.inc.hlsl",
+          "lines": [
+            32,
+            57
+          ],
+          "anchor": "renderParmSet5_t",
+          "sha256": "d17c4e1d24587bce1cb7222b4311cece125bf9281b42921b7177c0283cb260b9"
+        },
+        {
+          "file": "neo/shaders/renderParmSet7.inc.hlsl",
+          "lines": [
+            32,
+            51
+          ],
+          "anchor": "renderParmSet7_t",
+          "sha256": "bcaed8b1301a97df568afb0f35addbe2a6871b0fc85ec3175454535bbb674d41"
+        },
+        {
+          "file": "neo/shaders/renderParmSet8.inc.hlsl",
+          "lines": [
+            32,
+            52
+          ],
+          "anchor": "renderParmSet8_t",
+          "sha256": "5f6e53aa739a704afa3e3a528ba0399cc73179449bbcda5ee53932a0d70f12dd"
+        },
+        {
+          "file": "neo/shaders/renderParmSet12.inc.hlsl",
+          "lines": [
+            32,
+            57
+          ],
+          "anchor": "renderParmSet12_t",
+          "sha256": "83df9767d6d97febc1a9fc376e4cf9ca0294e62ae7f751691bd52ee7a7c363cb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineParmSet5, EngineParmSet7, EngineParmSet8, EngineParmSet12"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineParmSetMembers (cases 5, 7, 8, 12), ParmSetStructNames, engineLayoutConstantBlock"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderParms.cpp",
+          "symbol": "layoutsOfParms, RenderParms::select"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_EngineTables.cpp",
+          "symbol": "the renderparm sets section"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_RetailShaders.cpp",
+          "symbol": "Retail shaders: LP5's blobs, sets 5, 7, 8 and 12; the material programs and set 8"
+        }
+      ],
+      "note": "LP5.0 step 1 (C45-C49, SC550): sets 5 (16 float4 = 256 bytes: the skybox, wobblesky and bumpyenvironment programs), 7 (12 = 192: fog and blendlight), 8 (13 = 208: the newStage material programs) and 12 (16 = 256: texture_color_texgen), each member its renderparm and its float4's name in the set's HLSL struct at 16 * i, the engine's lists and the structs in the same order (checked member for member against the lists as the engine spells them); the blocks are named renderParmSet<N>_t. 192, 208 and 256 are within this device's 256-byte push-constant limit, so FOG, BLENDLIGHT, POST_PROCESS_INGAME, LEGACY, NORMAL_CUBE and TEXGEN push their constants here (pcEnabled, enginePushConstantsEnabled, M-TABLE-03). Set 7 has no TEXTUREMATRIX: BlendLight's texture matrix is loaded and never read (a mirrored fact). [.][retail] holds rows 15, 17, 18, 21, 22, 55, 57, 65, 67, 69, 70 (pushed and not, both stages) to their sets member by member and size, and the twelve material programs to set 8; set 0 met in 2 stage blocks, 4 in 8, 5 in 6, 7 in 8, 10 in 8, 12 in 2, 8 in 30"
+    },
+    {
+      "id": "M-TABLE-12",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            79,
+            108
+          ],
+          "anchor": "idRenderProgManager::uniformsLayout, the joint buffer at t11 for a skinned type",
+          "sha256": "4cb4ecf7a8a757d3407a884b62091a5b7e7525c0523347e7153a0e9fb70aaa06"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            415,
+            436
+          ],
+          "anchor": "defaultLayout, samplerOneBindingLayout; DEFAULT(_SKINNED), TEXTURE(_SKINNED), TEXGEN, LEGACY",
+          "sha256": "9e2952e8426fd4defef23faae2012445a522b66261ec1b05b5406683554952cd"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            521,
+            528
+          ],
+          "anchor": "DRAW_INTERACTION and DRAW_INTERACTION_SKINNED",
+          "sha256": "e4fa655dd5ee3df69e4f857426ba91084eed2a52019bad2cf5d404f350d7792a"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            556,
+            570
+          ],
+          "anchor": "fogBindingLayout, FOG(_SKINNED)",
+          "sha256": "bfe9b15d7d198e9d1e5c004ea94a15121b20a0881a0d4352f94ea1d3662a1533"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            572,
+            586
+          ],
+          "anchor": "blendLightBindingLayout, BLENDLIGHT(_SKINNED)",
+          "sha256": "62c8273fe013057c10b0761f83fcf2092884e21960e5bcfbb42d057cc8b7b746"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            588,
+            602
+          ],
+          "anchor": "pp3DLayoutItem, POST_PROCESS_INGAME",
+          "sha256": "9d4661d6dd61c29080f54eeb4d32d34871a62ea7a8e1a7199f27517cf6997779"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            651,
+            665
+          ],
+          "anchor": "normalCubeBindingLayout, NORMAL_CUBE(_SKINNED)",
+          "sha256": "12465680d50d7687f6e3eb7cc21dff73003736a33a2e02c25ac7e7f7c4037b84"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineBindingLayoutDescs (Default, DefaultSkinned, TextureSkinned, Texgen, Legacy, NormalCube, Fog, Blendlight, PostProcessIngame, DrawInteractionSkinned)"
+        },
+        {
+          "file": "lib/TbLitLib/src/ShaderReflection.cpp",
+          "symbol": "engineExpectedLayout"
+        },
+        {
+          "file": "lib/TbLitLib/src/PipelineCompiler.cpp",
+          "symbol": "PipelineCompiler::makeLayouts, bindingLayouts"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_EngineTables.cpp",
+          "symbol": "LP5.0's binding layouts and binding sets"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession LP5's programs and layouts on a GPU (LP5.0)"
+        }
+      ],
+      "note": "LP5.0 step 1 (C45-C49, SC550): the binding layouts of LP5's programs, one desc per descriptor set in set order, the uniforms item PushConstants( 0, the set's bytes ) where pcEnabled, else VolatileConstantBuffer( 0 ) (cbStatic is false everywhere), visibility All for the uniforms' set and Pixel for the others: DEFAULT (set 0), TEXTURE, TEXGEN (set 12) and LEGACY (set 5) {uniforms}, {t0}, {s0}; the skinned DEFAULT and TEXTURE {uniforms, StructuredBuffer_SRV 11}, {t0}, {s0}; NORMAL_CUBE (set 5) {uniforms}, {t0 the cube, t1 the normal map}, {s0}; FOG (set 7) {uniforms}, {t0, t1}, {s0, s1}; BLENDLIGHT (set 7) {uniforms}, {t0, t1}, {s0}; POST_PROCESS_INGAME (set 8) one set {uniforms, t0, t1, t2} visibility All, then {s0}; DRAW_INTERACTION_SKINNED (set 10, for row 22's reflection) DRAW_INTERACTION with the joint buffer. New in LP5.0, all ten (none of the nine the brief names existed: LP2.0 had CONSTANT_BUFFER_ONLY, TEXTURE and DRAW_INTERACTION, LP4.2a the IBL pair). The [.][litgpu2] programs case makes every one of them and the pipelines of rows 18, 21, 55, 57, 65, 67, 69, 70, vornoipattern and heathaze with validation on: 0 errors, 0 warnings beyond M-PIPE-DEFECT-01's (38)"
+    },
+    {
+      "id": "M-TABLE-13",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            567,
+            665
+          ],
+          "anchor": "GetCurrentBindingLayout: the uniforms item; DEFAULT, GBUFFER, TEXTURE, TEXGEN, LEGACY, DEBUG, POST_PROCESS and the skinned DEFAULT, GBUFFER, TEXTURE, DEBUG: unit 0 at t0 and its own sampler",
+          "sha256": "fd9f774869b9e971e3b39e19559ed4396a9b35616172a3a44d550a309b64ac8f"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            666,
+            697
+          ],
+          "anchor": "CONSTANT_BUFFER_ONLY(_SKINNED)",
+          "sha256": "060929c328b9df002cf695c8713b7097596b9a7fb2433e0846518552be93a54d"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            916,
+            1081
+          ],
+          "anchor": "DRAW_INTERACTION(_SKINNED): AnisotropicWrap, LinearBorder",
+          "sha256": "2b601e1835b2449f595cf3e56a15e9dd90b077bc71873ef3a308202c34a864ec"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            1286,
+            1329
+          ],
+          "anchor": "FOG: units 0 and 1, LinearClamp at s0 and s1",
+          "sha256": "f5195ad4a8563de3637d5601b42447d39393d9b22e68a09b9fa9ba36cd84c1d3"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            1378,
+            1418
+          ],
+          "anchor": "BLENDLIGHT: units 0 and 1, LinearBorder",
+          "sha256": "f01c02b98a2172a06d67c41f4ba345e42a273f2563fa75c1ebf7cb0f83a0abe0"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            1464,
+            1512
+          ],
+          "anchor": "POST_PROCESS_INGAME: units 0-2 beside the uniforms, LinearClamp (PointClamp under R_UsePixelatedLook)",
+          "sha256": "ede4bb2fbacf2624c039f6f94f6904520e054359f9ff8aac6a1c114a75614acf"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            1677,
+            1734
+          ],
+          "anchor": "NORMAL_CUBE: units 0 and 1, LinearWrap (PointWrap under R_UsePixelatedLook)",
+          "sha256": "fc376821b006758d243fb4935bc5515421e18b6c5bb8a3d05bf6c47b38ebb912"
+        },
+        {
+          "file": "neo/renderer/Passes/CommonPasses.cpp",
+          "lines": [
+            71,
+            97
+          ],
+          "anchor": "CommonRenderPasses::Init, the samplers made from one desc",
+          "sha256": "6595578278b5c9b48c2c8f485cfbb82ffc7799eeb9ffcb10bc41f1e401618b64"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineCommonSampler, EngineBindingSetItem"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineBindingSetShape, engineCommonSamplerDesc"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_EngineTables.cpp",
+          "symbol": "LP5.0's binding layouts and binding sets"
+        }
+      ],
+      "note": "LP5.0 step 1 (C45-C49, P6.19): what GetCurrentBindingLayout puts in each item of each binding set, with r_renderMode 0 (R_UsePixelatedLook false): the uniforms, the joint buffer, the texture at a unit (GetImageAt( unit )), that texture's own sampler (GetSampler, the per-image sampler of M-TABLE-06) or a CommonPasses sampler by name. The DEFAULT, TEXTURE, TEXGEN and LEGACY layouts bind unit 0 and its own sampler; DRAW_INTERACTION(_SKINNED) units 0-4, AnisotropicWrap and LinearBorder; the IBL pair (M-TABLE-10) AnisotropicWrap and LinearClamp; FOG LinearClamp twice; BLENDLIGHT LinearBorder; POST_PROCESS_INGAME LinearClamp; NORMAL_CUBE LinearWrap, made after the leaked Comparison reduction (D68), so the bumpyenvironment program samples its colour cube with a compare-enabled sampler, as the engine creates it. The preview binds no NORMAL_CUBE set in LP5.0 (no draw), so what the validation layer says of a compare sampler on a colour cube is LP5.2b's to measure (P6.19); the interactions already sample their 2D colour images with the compare-enabled AnisotropicWrap at s0 and the [litgpu] runs report no validation message for it. The shapes are a table for LP5.1-LP5.3's passes, checked against a transcription of the engine's sets and against the layouts item for item"
+    },
+    {
+      "id": "M-TABLE-14",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2180,
+            2217
+          ],
+          "anchor": "idMaterial::ParseStage: program, fragmentProgram, vertexProgram: FindShader with USE_GPU_SKINNING 0 and USE_PUSH_CONSTANTS pcEnabled( POST_PROCESS_INGAME )",
+          "sha256": "6f87feef573ea6f80b357cb41b2aa1ccc127a956d6554715f1bd91f34045c4ab"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2254,
+            2259
+          ],
+          "anchor": "the newStage's FindProgram( ..., BINDING_LAYOUT_POST_PROCESS_INGAME )",
+          "sha256": "124d707e2e449018019835ac21f6ccf466a5c2e8053e7ea86fee39c360c23aad"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            1157,
+            1185
+          ],
+          "anchor": "idRenderProgManager::FindShader: the extension stripped, Icmp on the name",
+          "sha256": "c487c89aa9a307f1e109b941e81c470f45e4357ee04c6376ca99091ac656eaae"
+        },
+        {
+          "file": "neo/shaders/shaders.cfg",
+          "lines": [
+            130,
+            154
+          ],
+          "anchor": "the User shaders",
+          "sha256": "1a6913b49a7ca8a35f1fd192f45c51ef91526f437cbecc31a452f8ea38ff383a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineMaterialProgram, EngineMaterialProgramBase, EngineMaterialPrograms"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "findEngineMaterialProgram, engineMaterialProgram, engineProgram"
+        },
+        {
+          "file": "lib/TbLitLib/src/ShaderBlobs.cpp",
+          "symbol": "shaderNameWithoutExtension, shaderBlobExists"
+        },
+        {
+          "file": "lib/TbLitLib/src/PipelineCompiler.cpp",
+          "symbol": "makeGraphics, makeCompute, enable, disable (engineProgram)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "the draw call's program row (engineProgram)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_EngineTables.cpp",
+          "symbol": "LP5.0: the material programs"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ShaderBlobs.cpp",
+          "symbol": "shaderBlobExists and the material programs' lookup"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_RetailShaders.cpp",
+          "symbol": "Retail shaders: the material programs and set 8"
+        }
+      ],
+      "note": "LP5.0 step 3 (C47, D121, P6.21, SC527): the programs a material's newStage block names are found by name, as FindShader finds a shader (the file extension stripped, the case ignored), in a table of the preview's own, not in the 116-row builtins table: the twelve User shaders of shaders.cfg, in its order, each a builtins-shaped row (index EngineMaterialProgramBase 1000 + its place; the cfg's name, no suffix; the defines USE_GPU_SKINNING \"0\" and USE_PUSH_CONSTANTS, made \"1\" or \"0\" by POST_PROCESS_INGAME's pcEnabled as Material.cpp:2181 makes it; vertex and pixel; LAYOUT_DRAW_VERT; POST_PROCESS_INGAME), so that the reflection check and the compile thread take it as they take a builtin (engineProgram resolves both). A name not in the table, or one whose .vs.bin or .ps.bin is not a loose file of the game folder, gives nullopt (the stage is disabled, D9, LP5.2a). All twelve have both blobs on this machine. readsCurrentRender is the blobs' fact, checked by [.][retail]: ten programs bind t_CurrentRender (bloodorb_draw, bloodorb1-3_capture, colorProcess, enviroSuit, heathaze, heatHazeWithMask, heatHazeWithMaskAndVertex, mattiascrt); vornoipattern binds no texture, and fogwithlights declares t_CurrentRender (fogwithlights.ps.hlsl:35) but never samples it, so its compiled blobs bind none (C47 said every one but vornoipattern). Whether a material is SS_POST_PROCESS is the copied parser's (its _currentRender images), not this flag. No difference: the engine's own table is the blob files the cfg built"
+    },
+    {
+      "id": "M-INTR-11",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            442,
+            491
+          ],
+          "anchor": "FOG_SIZE, R_FogImage",
+          "sha256": "dc9e4254f2044d14fda75b22bd37f1f866467adbd5683d6e54966e9b8ea411b0"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            1071,
+            1071
+          ],
+          "anchor": "ImageFromFunction( \"_fog\", R_FogImage )",
+          "sha256": "8699a825acab2809c2adf69989cb72990031ee54638ba019f1dac422b49e9c12"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            222,
+            223
+          ],
+          "anchor": "DeriveOpts: TD_LOOKUP_TABLE_ALPHA is FMT_ALPHA",
+          "sha256": "d747b9f6103b10734c34b38c9d228e005c182c48b09720773df1bd163876e2e5"
+        },
+        {
+          "file": "neo/renderer/BinaryImage.cpp",
+          "lines": [
+            245,
+            252
+          ],
+          "anchor": "Load2DFromMemory: FMT_ALPHA reads the alpha channel",
+          "sha256": "a4b28627607bd69fbc851e535433229c834a02051660ef0d81d680273a78245c"
+        },
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            549,
+            552
+          ],
+          "anchor": "idMath::Sqrt",
+          "sha256": "768cd452ff8548227d92a6ca9cffd8ec144b0f8211b745adbb80b5f82b7c7182"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/IntrinsicImages.cpp",
+          "symbol": "intrinsicRecipe(\"_fog\"), fog, msvcByte, setAlphaTexel; intrinsicImage (FormatAlpha)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineMathSqrt"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineImageEnums.h",
+          "symbol": "UsageLookupTableAlpha"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_IntrinsicImages.cpp",
+          "symbol": "LP5.0 (C49): _fog and _fogEnter, FMT_ALPHA, against a transcription"
+        }
+      ],
+      "note": "LP5.0 step 2 (C49, D69's deferral, P6.20): _fog, 128 x 128 white with the table in alpha: a step table of 0.982 per step (float) over d = idMath::Sqrt of the int sum of squares (x * sqrtf( 1 / x ), the copy's, through engineMathSqrt on the parse thread: intrinsicImage) divided by 63, b = ( byte )( d * 255 ) clamped, then ( byte )( 255 * ( 1.0 - step[b] ) ) (double), 255 on the border; TF_LINEAR (one level), TR_CLAMP, TD_LOOKUP_TABLE_ALPHA, which DeriveOpts stores as FMT_ALPHA: the recipe path now accepts it, and the stored level is the alpha bytes alone (R8_UNORM sampled as (1, 1, 1, R), M-TABLE-07). A function mirror, not a copied range: the range calls idImage::GenerateImage with an nvrhi command list, which the recipe path replaces. The cast of a float past 255 is undefined in C++; it is transcribed as MSVC's x64 code makes it (cvttss2si to a 32-bit int, the low byte kept, msvcByte): 3,803 texels toward the corners take it, d * 255 at (1, 1) is 360.6, cast to 104 (not 255), and the alpha there is 216 where a clamp would give 252; (0, 0) is 110 before the border's 255. The fog shader samples _fog at T = 0.5 (between rows 63 and 64, the planes p1 and p3 of C49), where d stays below 256 / 255, so those texels are never sampled: the engine's behaviour is mirrored (D20), not fixed. The test holds every texel to a transcription written in the test and the sampled rows texel by texel"
+    },
+    {
+      "id": "M-INTR-12",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            494,
+            577
+          ],
+          "anchor": "RAMP_RANGE, DEEP_RANGE, FogFraction",
+          "sha256": "83e55a98ab7648a77e937f8b764817a1c167aaa69ef56c1e46e2a068a8f541d5"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            579,
+            619
+          ],
+          "anchor": "R_FogEnterImage",
+          "sha256": "bbf4881f52e06327671f9cc6bfc55f4ea04f58318fb5396a5f5826b751dcfd70"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            1072,
+            1072
+          ],
+          "anchor": "ImageFromFunction( \"_fogEnter\", R_FogEnterImage )",
+          "sha256": "29cec9662655c1d86dc88940e5e818bbc6026397f22a461e27a958eb2e11502d"
+        },
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            54,
+            55
+          ],
+          "anchor": "FOG_ENTER_SIZE, FOG_ENTER",
+          "sha256": "afab69f9d5d34636634f152cbb6765a34156d6cdd53b03a9a95182124c890c1f"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            222,
+            223
+          ],
+          "anchor": "DeriveOpts: TD_LOOKUP_TABLE_ALPHA is FMT_ALPHA",
+          "sha256": "d747b9f6103b10734c34b38c9d228e005c182c48b09720773df1bd163876e2e5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/IntrinsicImages.cpp",
+          "symbol": "intrinsicRecipe(\"_fogEnter\"), fogEnter, fogFraction, msvcByte"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_IntrinsicImages.cpp",
+          "symbol": "LP5.0 (C49): _fog and _fogEnter, FMT_ALPHA, against a transcription"
+        }
+      ],
+      "note": "LP5.0 step 2 (C49, P6.20): _fogEnter, 64 x 64 white with FogFraction( x - 32, y - 32 ) * 255 in alpha, clamped to 0..255, its float and double arithmetic kept as the engine's (the ramp and the deep fraction in double, the rest in float); TF_LINEAR, TR_CLAMP, TD_LOOKUP_TABLE_ALPHA: FMT_ALPHA as _fog (M-INTR-11). FogFraction stays in 0..1 over the table, so no texel takes the MSVC truncation the cast has for a value past 255 (the test counts 0); the cast is still made through msvcByte. The fog shader reads the sampled rows 31 and 32 at T = 0.5; the test holds every texel to a transcription written in the test"
+    },
+    {
+      "id": "M-FRAME-02",
+      "kind": "constant",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            128,
+            128
+          ],
+          "anchor": "r_skipPostProcess \"0\"",
+          "sha256": "350ea7a1f999d9c297e5e3a8388e0473c93ced0d1dd31a3d5677188de5cf807c"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            135,
+            139
+          ],
+          "anchor": "r_skipTranslucent, r_skipAmbient, r_skipNewAmbient (ARCHIVE), r_skipBlendLights, r_skipFogLights, each \"0\"",
+          "sha256": "97c2402f76934834573897253a195b594b762096c0e01fb48a2ec63e3bfa8231"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            246,
+            246
+          ],
+          "anchor": "r_showMathLights \"0\", 0..3",
+          "sha256": "5ed2f2f509cf525b2bf1c80cb673ab1c84d4ff3023282ca0ddd52e4b93e403c7"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            55,
+            55
+          ],
+          "anchor": "r_skipShaderPasses \"0\"",
+          "sha256": "b44eb9a152103e6fa97134029fdd4eae0324dbcd4c59f52d2dcf0dd8806367ff"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineFrameDefaults::skipFogLights, skipBlendLights, skipTranslucent, skipAmbient, skipShaderPasses, skipPostProcess, skipNewAmbient, showMathLights"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_EngineTables.cpp",
+          "symbol": "LP5.0: the frame cvars of passes 7-9"
+        }
+      ],
+      "note": "LP5.0 step 3 (C46, C47, C49, D118): the cvars passes 7-9 read, at the engine's defaults, every one \"0\": r_skipFogLights and r_skipBlendLights (FogAllLights), r_skipTranslucent (the translucent interactions), r_skipShaderPasses and r_skipPostProcess (the two DrawShaderPasses calls of DrawViewInternal), r_skipNewAmbient (newStage stages), r_showMathLights (USER0.x = 1 + it). r_skipAmbient false is the preview's behaviour (the panel draws the stage pass), as useSsao's is, and also the engine's default; the parity maps set it per map and the [.][parity] test per row (D118, M-TEST-AMB-03). r_useLightDepthBounds and r_skipDynamicTextures are not added: the scout names neither as read by LP5's passes. Nothing reads these before LP5.1-LP5.3"
+    },
+    {
+      "id": "M-ID-FN-29",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            229,
+            256
+          ],
+          "anchor": "stencilStage_t",
+          "sha256": "830765a9f12ced9cef589b404cec1ac758e7f8058cab2707fdad2f0ccf2fd64e"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            838,
+            843
+          ],
+          "anchor": "idMaterial::GetTexGenRegisters",
+          "sha256": "5eee15746ee63b19358be994aeb7e2c968912a18e7016289c1b1884a560120ce"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            941,
+            944
+          ],
+          "anchor": "idMaterial::SuppressInSubview",
+          "sha256": "70c16275df808a77033daee616291fa2f13843ccc1649928a4ec8fcb7f4798d1"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            1483,
+            1561
+          ],
+          "anchor": "idMaterial::ParseStencil",
+          "sha256": "dfc7316990cff43df5c31acb8166bcee11ac241a3171a4215d374f2876b2bb58"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            1960,
+            1966
+          ],
+          "anchor": "texGen wobbleSky: texGenRegisters[0..2]",
+          "sha256": "4b6e80e8d30496f4b8ab458464e2eea5810830f5580010d6cfd2d1c30f635454"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2238,
+            2245
+          ],
+          "anchor": "ParseStage: the stencil block",
+          "sha256": "240edfac032597cda8afcbad023b94d343c797ae2e76543f904848ab13787e71"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2662,
+            2666
+          ],
+          "anchor": "the suppressInSubview keyword",
+          "sha256": "0d7018a06ccf24758d4d13976cc311aa01771527dd11f14d8b6ac1e5f3aa6a37"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/MaterialDecls.h",
+          "symbol": "MaterialStage::Stencil, MaterialStage::stencil, MaterialEntry::suppressInSubview, MaterialEntry::texGenRegisters"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "stageEntry, materialEntry"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_MaterialDecls.cpp",
+          "symbol": "MaterialDecls: LP5.0's stencil, texGen registers and suppressInSubview"
+        }
+      ],
+      "note": "LP5.0 step 4 (C46, C48, SC548): the facade exposes what the copied parser already holds, re-parsing nothing (parse thread, C20): each stage's stencilStage_t (ref, readMask, writeMask, comp, pass, fail, zFail, the enums as ints; ParseStencil sets no mask, so both stay 255; a stage without a stencil block has the struct's defaults, ALWAYS and KEEP), the material's suppressInSubview, and the material's texGenRegisters: the engine keeps the three wobbleSky registers on the idMaterial, not on the stage (Material.h:1038), and sets them only for a wobbleSky stage (CommonInit leaves them unset), so the entry carries them (0, 0, 0 for a material without one) rather than each stage as the brief had it"
+    },
+    {
+      "id": "M-TEST-AMB-03",
+      "kind": "difference",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            136,
+            136
+          ],
+          "anchor": "r_skipAmbient \"0\"",
+          "sha256": "8f7a25b58ffd3744868b0457cc64838e72a6e3755e16ce1dba8c166dff1ddd4c"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4274,
+            4278
+          ],
+          "anchor": "DrawShaderPasses: r_skipAmbient returns for a view",
+          "sha256": "6ab989e8ed37c73c98b0ce90c6d7b083163cb4a2bd24f3ce1fbdb073119021ff"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/LitSession.h",
+          "symbol": "LitSession::skipShaderPassesForTesting, shaderPassesSkippedForTesting"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::setSkipShaderPasses, skipShaderPasses"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::setSkipShaderPassesForTesting, skipShaderPassesForTesting"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "ParityRowSwitch (skip_ambient), the [.][parity] case"
+        }
+      ],
+      "note": "LP5.0 step 7 (D118, C50, P6.9), test only: r_skipAmbient 1 skips both DrawShaderPasses calls and nothing else (SC563: not the ambient pass, not FogAllLights); the parity rows carry their map's value as skip_ambient (rows.json, M-TEST-PARITY-03) and the [.][parity] test sets skipShaderPassesForTesting( skip_ambient == 1 ) beside skipInteractionsForTesting (a rows.json without the field reads as 1, the three maps' value). The switch is stored and handed to LitPasses each frame; nothing reads it until LP5.2a's stage pass. The product never sets it"
+    },
+    {
+      "id": "M-TEST-PARITY-03",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            136,
+            136
+          ],
+          "anchor": "r_skipAmbient \"0\"",
+          "sha256": "8f7a25b58ffd3744868b0457cc64838e72a6e3755e16ce1dba8c166dff1ddd4c"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            246,
+            246
+          ],
+          "anchor": "r_showMathLights \"0\"",
+          "sha256": "5ed2f2f509cf525b2bf1c80cb673ab1c84d4ff3023282ca0ddd52e4b93e403c7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "CONTROL_MODES, map_of, row_control, map_has_controls, map_variants, stage (the lights-off variants), shot_rows, map_skip_ambient, cmd_run (control_mode, skip_ambient), judge_shot, cmd_compare (--out, the row mode), cmd_selftest (--out, the control modes), MIRRORED (r_showMathLights)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "ParityRowSwitch"
+        }
+      ],
+      "note": "LP5.0 step 7 (C50, D118, P6.1, P6.9, A40), test only: parity.py's control mode is per row: the row table's \"control\" (\"black\": the lights-off shot black on both sides, C38; \"row\": the lights-off shot compared under the row's own class with the row's thresholds entry and the same mask, for a row whose unlit stages draw without a light), else \"black\" on a map with \"dark\": True (the LP2 and areas maps) and none elsewhere (the ambient map); a map has its lights-off variant when a row of it has a control. rows.json rows gain control_mode (control stays the shot's own flag, a lights-off shot) and skip_ambient (the map's printed r_skipAmbient, 1 on the three maps); r_showMathLights moves from PRINTED to MIRRORED (0, RenderSystem_init.cpp:246), r_skipAmbient stays in SWITCHES. compare --out <folder> writes report.md, compare.json and the difference images there (default preview-game/parity). The three maps' verdicts are unchanged: compare on the existing parity-preview read-backs gives a byte-identical compare.json before and after (80 of 80 gated rows pass, 2 reported); selftest covers black, row and none"
+    },
+    {
+      "id": "M-TEST-TAGS-01",
+      "kind": "difference",
+      "testOnly": true,
+      "engine": [],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "the hidden GPU cases' tags and the comment above them"
+        },
+        {
+          "file": "lib/TbLitLib/test/README.md",
+          "symbol": "Hidden tests"
+        }
+      ],
+      "note": "LP5.0 step 6 (RUN.md, the director's decisions after LPF.1 (5); P6.24), test only, no engine counterpart: the hidden GPU cases run in two suites, each under the 180 s wall clock in Debug: [.][litgpu] LP0-LP2's (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit; 5 cases, 95.5 / 97.8 / 99.1 s at LP5.0) and [.][litgpu2] LP4's and later ones (ambient pass, light-grid path, live feed, LP5's programs; 4 cases, 59.7 / 59.8 / 60.4 s); LPF.2's host cases stay [.][feed]. Each case makes its own instance, device and session, bounds its waits (H.1) and resets the dispatcher, so either suite runs alone and in any order. The gate measures both and a third tag comes once one passes 150 s. TbUiLib's [.][litgpu] cases are not split"
     }
   ],
   "retired": [
