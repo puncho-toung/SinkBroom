@@ -682,7 +682,7 @@ public:
     idDrawVert sample[3][3];
     const int outWidth = ((width - 1) / 2 * horzSubdivisions) + 1;
     const int outHeight = ((height - 1) / 2 * vertSubdivisions) + 1;
-    idDrawVert* dv = new (TAG_IDLIB_SURFACE) idDrawVert[outWidth * outHeight];
+    auto* dv = new (TAG_IDLIB_SURFACE) idDrawVert[outWidth * outHeight];
 
     // generate normals for the control mesh
     if (genNormals)

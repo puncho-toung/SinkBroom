@@ -1520,7 +1520,7 @@ TEST_CASE("MaterialDecls re-parses one material in place (LPF.0b, C42, D104, D10
       "textures/lp1a/diffuseOnly",
       "material textures/lp1a/diffuseOnly\n{\n\tdiffusemap textures/lp1a/headed\n}\n");
     REQUIRE(headed.state == MaterialReparse::State::Parsed);
-    REQUIRE(headed.entry->stages.size() >= 1u);
+    REQUIRE_FALSE(headed.entry->stages.empty());
     CHECK(diffuseImageOf(*headed.entry) == "textures/lp1a/headed");
 
     const auto bare =
@@ -1602,7 +1602,7 @@ TEST_CASE("MaterialDecls re-parses one material in place (LPF.0b, C42, D104, D10
     // for no decl (M-FEED-DIFF-01)
     CHECK(found->implicit);
     CHECK(found->sourceFile == "<implicit file>");
-    REQUIRE(found->stages.size() >= 1u);
+    REQUIRE_FALSE(found->stages.empty());
     CHECK(diffuseImageOf(*found) == "textures/lpf/fresh_d");
     // no default parse ran: no image record of the material's own name
     for (const auto& key : decls.imageKeys())

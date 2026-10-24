@@ -889,7 +889,7 @@ MaterialReparse MaterialDecls::restore(const std::string_view name)
     return parseText(index, canonical, *original.text);
   }
 
-  // an implicit decl: idDeclLocal::MakeDefault (DeclManager.cpp:5266-5300), the
+  // an implicit decl: idDeclLocal::MakeDefault (DeclManager.cpp:5272-5301), the
   // material's DefaultDefinition parsed in place
   const auto errorsBefore = m_registry->errorCount();
   decl->MakeDefault();
