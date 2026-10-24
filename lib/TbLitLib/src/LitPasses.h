@@ -185,9 +185,9 @@ struct LitFrameStats
   bool gridImagesPending = false;
   // LP4.2a (C34, D86): the ambient pass: its draws, those dropped for set 9's volatile
   // buffer budget (also in overflowedDraws), those skipped (also in skippedDraws) and of
-  // them for a pending pipeline (also in pendingPipelines), the surfaces left to the
-  // light-grid path (LP4.3: none, gridArea is never set), whether its timer ran, and
-  // whether a failed pipeline disabled it (D9, disabledReason says why)
+  // them for a pending pipeline (also in pendingPipelines), the surfaces that took the
+  // light-grid path (LP4.3, C36), whether its timer ran, and whether a failed pipeline
+  // disabled it (D9, disabledReason says why)
   std::size_t ambientDraws = 0;
   std::size_t ambientOverflowed = 0;
   std::size_t ambientSkipped = 0;
@@ -442,7 +442,8 @@ private:
   // FillDepthBufferGeneric over surfaces
   bool genericDepth(Frame& frame, const std::vector<const LitSurface*>& surfaces);
   void recordInteractions(Frame& frame);
-  // LP4.2a (C34): AmbientPass( fillGbuffer false ) on the probe path
+  // LP4.2a (C34): AmbientPass( fillGbuffer false ) on the probe path; LP4.3 (C36): and
+  // on the light-grid path for a surface with a grid area (RenderBackend.cpp:1196-1305)
   void recordAmbient(Frame& frame);
   // AmbientPass' space change (RenderBackend.cpp:2480-2502)
   void setAmbientSpace(Frame& frame, std::size_t space);

@@ -35,6 +35,7 @@
 #include "lit/FramePacer.h"
 #include "lit/GameDeclSource.h"
 #include "lit/GameFileSource.h"
+#include "lit/GridTable.h"
 #include "lit/ImageCache.h"
 #include "lit/IntrinsicImages.h"
 #include "lit/LightGridFile.h"
@@ -3933,7 +3934,7 @@ namespace
 
 // LP2.2a: the ten programs' blobs LP2 loads (C26), copied out of the game folder (read
 // only) into a test game root; LP4.2a: and the ambient pass's probe path
-constexpr auto Lp2Programs = std::array<int, 12>{
+constexpr auto Lp2Programs = std::array<int, 14>{
   EngineBuiltinColor,
   EngineBuiltinTextureVertexColor,
   EngineBuiltinInteraction,
@@ -3945,7 +3946,10 @@ constexpr auto Lp2Programs = std::array<int, 12>{
   EngineBuiltinHistogram,
   EngineBuiltinExposure,
   EngineBuiltinAmbientLightingIbl,
-  EngineBuiltinAmbientLightingIblPbr};
+  EngineBuiltinAmbientLightingIblPbr,
+  // LP4.3 (C36): the light-grid path's
+  EngineBuiltinAmbientLightgridIbl,
+  EngineBuiltinAmbientLightgridIblPbr};
 
 // the light stand-ins (a white light of no falloff: the default light shaders the
 // fixture map's lights reach) and a lit translucent material, written into the root
@@ -4309,6 +4313,9 @@ int unreadLocations(const int program)
   // LP4.2a: the ambient pass's vertex shader reads locations 0-4, not COLOR1
   case EngineBuiltinAmbientLightingIbl:
   case EngineBuiltinAmbientLightingIblPbr:
+  // LP4.3: the light-grid path's vertex shader likewise
+  case EngineBuiltinAmbientLightgridIbl:
+  case EngineBuiltinAmbientLightgridIblPbr:
     return 1;
   default:
     return 0;
@@ -8401,6 +8408,526 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu]")
     CHECK(messages.warnings == 0);
   }
 #endif
+
+  std::filesystem::remove_all(root);
+}
+
+
+namespace
+{
+
+// ----- LP4.3: the light-grid path's synthetic bake (C36, P4.20) -----
+
+// the two areas' grids, 2 x 2 x 1 each (probe size 16, border 2): area 0's cell spans
+// x 80..176 and y -100..100 at z 2 (the slabs' top: the z blend's fraction is 0), area
+// 1's the same 256 units west
+constexpr auto Lp43GridOrigins =
+  std::array<std::array<float, 3>, 2>{{{80, -100, 2}, {-176, -100, 2}}};
+constexpr auto Lp43GridSize = std::array<float, 3>{96, 200, 256};
+
+std::string lp43GridText(const int areas = 2)
+{
+  auto out = std::string{"LGRID \"4\"\n\n"};
+  for (auto a = 0; a < areas; ++a)
+  {
+    const auto& o = Lp43GridOrigins[std::size_t(a)];
+    const auto& s = Lp43GridSize;
+    out += fmt::format(
+      "lightGridPoints {{ /* area = */ {} /* numLightGridPoints = */ 4 "
+      "/* imageSingleProbeSize = */ 16 /* imageBorderSize = */ 2 \n"
+      "/* gridMins */ ( {} {} {} )\n/* gridSize */ ( {} {} {} )\n"
+      "/* gridBounds */ 2 2 1\n\n",
+      a,
+      o[0],
+      o[1],
+      o[2],
+      s[0],
+      s[1],
+      s[2]);
+    for (auto gy = 0; gy < 2; ++gy)
+    {
+      for (auto gx = 0; gx < 2; ++gx)
+      {
+        out += fmt::format(
+          " 1 ( {} {} {} )", o[0] + float(gx) * s[0], o[1] + float(gy) * s[1], o[2]);
+      }
+    }
+    out += "}\n\n";
+  }
+  return out;
+}
+
+// an area's irradiance atlas as the bake lays it out (RenderWorld_lightgrid.cpp:
+// 1387-1441): 16 x 16 tiles, the tile of grid point ( gx, gy, gz ) at column gx + gz bx,
+// row gy, here one constant irradiance per tile (border included), as R11G11B10F (A3:
+// accepted for BC6H, Image_load.cpp:674-680); a 2 x 2 x 1 grid's atlas is 32 x 32
+std::string lp43AtlasCache(const std::array<std::array<float, 3>, 2>& columns)
+{
+  auto level = std::string{};
+  for (auto y = 0; y < 32; ++y)
+  {
+    for (auto x = 0; x < 32; ++x)
+    {
+      const auto& e = columns[std::size_t(x / 16)];
+      level += r11g11b10Texel(e[0], e[1], e[2]);
+    }
+  }
+  return bimageFile(
+    -1,
+    engine_image::Type2D,
+    engine_image::FormatR11g11b10f,
+    32,
+    32,
+    1,
+    {BimageRecord{0, 0, 32, 32, level}});
+}
+
+// the tiles: area 0's vary with gx alone (column 0 the smaller), area 1's all one colour
+constexpr auto Lp43TilesA =
+  std::array<std::array<float, 3>, 2>{{{0.25f, 0.25f, 0.125f}, {0.75f, 0.5f, 0.375f}}};
+constexpr auto Lp43TilesB =
+  std::array<std::array<float, 3>, 2>{{{0.5f, 0.5f, 0.5f}, {0.5f, 0.5f, 0.5f}}};
+
+// the fixture map with a wide legacy slab (top at z 2) in each room, under the cameras
+std::string lp43MapText()
+{
+  auto map = lp22aMapText();
+  const auto entity1 = map.find("// entity 1");
+  const auto close = map.rfind('}', entity1);
+  map.insert(
+    close,
+    boxBrush(40, -60, 0, 216, 60, 2, "lp42a/flat")
+      + boxBrush(-216, -60, 0, -40, 60, 2, "lp42a/flat"));
+  return map;
+}
+
+/**
+ * The CPU model of ambient_lightgrid_IBL.ps.hlsl's irradiance (AGP:342-478) at a world
+ * position for constant tiles: g = floor( max( 0, ( p - origin ) / size ) ) clamped to
+ * bounds - 1 with the fraction before the clamp, the 8 corners' trilinear weights, a
+ * corner past the atlas's columns reading the last column (the clamp sampler at a
+ * constant tile's edge), samples with an rgb sum below 1e-4 skipped and the sum
+ * renormalised below 0.9999; every octahedral direction of a constant tile reads its
+ * constant.
+ */
+std::array<float, 3> modelGridIrradiance(
+  const std::array<float, 3>& origin,
+  const std::array<float, 3>& size,
+  const std::array<int, 3>& bounds,
+  const std::array<std::array<float, 3>, 2>& columns,
+  const std::array<float, 3>& position)
+{
+  auto g = std::array<int, 3>{};
+  auto frac = std::array<float, 3>{};
+  for (std::size_t j = 0; j < 3; ++j)
+  {
+    const auto v = std::max(0.0f, (position[j] - origin[j]) * (1.0f / size[j]));
+    g[j] = int(std::floor(v));
+    frac[j] = v - float(g[j]);
+    g[j] = std::clamp(g[j], 0, bounds[j] - 1);
+  }
+  auto irradiance = std::array<float, 3>{};
+  auto total = 0.0f;
+  for (auto i = 0; i < 8; ++i)
+  {
+    auto factor = 1.0f;
+    auto c = g;
+    for (std::size_t j = 0; j < 3; ++j)
+    {
+      if (i & (1 << j))
+      {
+        factor *= frac[j];
+        c[j] += 1;
+      }
+      else
+      {
+        factor *= 1.0f - frac[j];
+      }
+    }
+    const auto column = std::min(c[0] + c[2] * bounds[0], bounds[0] * bounds[2] - 1);
+    const auto& e = columns[std::size_t(std::clamp(column, 0, 1))];
+    if (e[0] + e[1] + e[2] < 0.0001f)
+    {
+      continue;
+    }
+    for (std::size_t k = 0; k < 3; ++k)
+    {
+      irradiance[k] += e[k] * factor;
+    }
+    total += factor;
+  }
+  if (total > 0.0f && total < 0.9999f)
+  {
+    for (auto& v : irradiance)
+    {
+      v *= 1.0f / total;
+    }
+  }
+  return irradiance;
+}
+
+// the drawn slab surface of an area in the last lists (its grid area), if drawn
+std::optional<std::optional<int>> slabGridArea(const FrontendLists& lists, const int area)
+{
+  for (const auto& surface : lists.drawSurfs)
+  {
+    if (
+      surface.chunk->key.material == "textures/lp42a/flat"
+      && surface.chunk->key.area == area)
+    {
+      return surface.gridArea;
+    }
+  }
+  return std::nullopt;
+}
+
+} // namespace
+
+// LP4.3 (C34, C36, D86, D88, P4.20): the ambient pass's light-grid path over the LP2.2a
+// fixture with a synthetic .lightgrid (two areas, a 2 x 2 x 1 grid each) and a synthetic
+// R11G11B10F atlas per area whose tiles hold constant irradiance: the floor slab's pixel
+// against a CPU model of the grid path, the trilinear blend monotone across the cell (the
+// ratio of area 0's varying grid to area 1's constant one at the same relative view), a
+// Pending atlas (held through the slot table's request) keeping the frame unconverged, a
+// Missing atlas sending its area to the probe path (black: no probe images), and the
+// ambient draws the same on both paths. Hidden: it needs a GPU and the game's blobs.
+TEST_CASE("LitSession light-grid path on a GPU (LP4.3)", "[.][litgpu]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the pass needs the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  const auto library = VulkanLibrary{};
+  REQUIRE(library.getInstanceProcAddr != nullptr);
+  const auto base = root / "base";
+  writeTextFile(base / "materials" / "zz_lp42a.mtr", Lp42aMaterials);
+  std::filesystem::create_directories(base / "textures" / "lp42a");
+  {
+    auto file = std::ofstream{base / "textures" / "lp42a" / "flat.tga", std::ios::binary};
+    const auto bytes = test::tgaFile(test::flat(4, 4, 200, 120, 60));
+    file.write(bytes.data(), std::streamsize(bytes.size()));
+  }
+  const auto atlases = base / "generated" / "images" / "env" / "maps" / "lp1b_geometry";
+  std::filesystem::create_directories(atlases);
+  const auto atlasPath = [&](const int area) {
+    return atlases / fmt::format("area{}_lightgrid_amb#__2100.bimage", area);
+  };
+  const auto writeAtlas = [&](const int area, const auto& tiles) {
+    auto file = std::ofstream{atlasPath(area), std::ios::binary};
+    const auto bytes = lp43AtlasCache(tiles);
+    file.write(bytes.data(), std::streamsize(bytes.size()));
+  };
+  writeTextFile(base / "maps" / "lp1b_geometry.lightgrid", lp43GridText());
+  // the cameras 48 above the slabs' top, each over its cell's middle in x
+  const auto cameraA = litCamera({128, 0, 50}, {0, 0, -1}, {1, 0, 0});
+  const auto cameraB = litCamera({-128, 0, 50}, {0, 0, -1}, {1, 0, 0});
+  const auto atlas0 = lightGridImageKey("maps/lp1b_geometry", 0);
+  const auto atlas1 = lightGridImageKey("maps/lp1b_geometry", 1);
+
+  // camera B's ambient draws on the grid path (the first section), which the second's on
+  // the probe path equal (the sections run in order in one process)
+  static auto gridDrawsB = std::size_t{0};
+
+  // a settled ambient-only readback of a camera (taken again until the frame is its own)
+  const auto readbackOf = [](LitSession& session, const CameraState& camera) {
+    auto readback = std::optional<AmbientReadback>{};
+    for (auto attempt = 0;
+         attempt < 20
+         && !(
+           readback && readback->frame.settled && readback->frame.lit.camera == camera);
+         ++attempt)
+    {
+      REQUIRE(settledHdr(session, camera, 0));
+      readback = ambientReadback(session);
+    }
+    REQUIRE(readback);
+    REQUIRE(readback->frame.settled);
+    REQUIRE(readback->frame.lit.camera == camera);
+    return std::move(*readback);
+  };
+
+  SECTION("both atlases: the model, the blend, a Pending atlas")
+  {
+    writeAtlas(0, Lp43TilesA);
+    writeAtlas(1, Lp43TilesB);
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      // D88: area 0's atlas held Pending through the slot table's request until released
+      auto held = std::make_shared<std::atomic<bool>>(true);
+      auto* const materials = service.get();
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        access.images.setRequest([materials, held, atlas0](const MaterialImageKey& key) {
+          return held->load() && key == atlas0 ? ImageLookup{} : materials->image(key);
+        });
+      }));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp43MapText(), root, 7, 1)));
+      session->skipInteractionsForTesting(true);
+      session->setCamera(cameraA);
+
+      // the table is adopted, area 1's atlas arrives, area 0's stays Pending: the frame
+      // is not settled, and the slab of area 0 takes the probe path meanwhile
+      auto pending = FrameConvergence{};
+      auto heldArea = std::optional<std::optional<int>>{};
+      CHECK(waitFor(
+        [&] {
+          inFrame(*session, [&](RenderFrameAccess& access) {
+            pending = access.convergence;
+            heldArea = slabGridArea(access.passes.lists(), 0);
+          });
+          return session->gridTable()->areas.size() == 2u && pending.gridImagesPending
+                 && heldArea.has_value();
+        },
+        30000ms,
+        false));
+      CHECK(pending.gridImagesPending);
+      CHECK_FALSE(pending.settled());
+      CHECK_FALSE(session->lastFrameSettledForTesting());
+      REQUIRE(heldArea);
+      CHECK(*heldArea == std::nullopt);
+
+      // released: the slot asked again, its image arrives, the frames settle
+      held->store(false);
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        const auto id = access.images.find(atlas0);
+        REQUIRE(id);
+        access.images.dropTexture(*id, access.frameIndex);
+      }));
+
+      const auto a = readbackOf(*session, cameraA);
+      const auto b = readbackOf(*session, cameraB);
+      gridDrawsB = b.frame.lit.ambientDraws;
+
+      // the grid table and the slots: both atlases Resident, 32 x 32
+      const auto grid = session->gridTable();
+      REQUIRE(grid->areas.size() == 2u);
+      CHECK(grid->hasPoints(0));
+      CHECK(grid->hasPoints(1));
+      auto slabArea = std::optional<std::optional<int>>{};
+      auto sizes = std::array<std::pair<std::uint32_t, std::uint32_t>, 2>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        for (const auto area : {0, 1})
+        {
+          const auto id = access.images.find(area == 0 ? atlas0 : atlas1);
+          REQUIRE(id);
+          const auto* slot = access.images.slot(*id);
+          CHECK(slot->state == ImageSlots::State::Resident);
+          REQUIRE(slot->texture);
+          sizes[std::size_t(area)] = {
+            slot->texture->getDesc().width, slot->texture->getDesc().height};
+        }
+        // the lists are camera B's
+        slabArea = slabGridArea(access.passes.lists(), 1);
+      }));
+      CHECK(sizes[0] == std::pair{32u, 32u});
+      CHECK(sizes[1] == std::pair{32u, 32u});
+      REQUIRE(slabArea);
+      CHECK(*slabArea == 1);
+      for (const auto* readback : {&a, &b})
+      {
+        CHECK(readback->frame.lit.ambientGridSurfaces > 0u);
+        CHECK(readback->frame.lit.gridSurfaces > 0u);
+        CHECK(readback->frame.lit.interactionDraws == 0u);
+        CHECK_FALSE(readback->frame.lit.gridImagesPending);
+      }
+
+      // the model at camera A's centre pixel: its world point ~( 127.7, -0.3, 2 ) (the
+      // pixel centre's offset at 48 units, right = -y, down = -x)
+      const auto flatKey = stageImage(*service, "textures/lp42a/flat", 2);
+      REQUIRE(flatKey);
+      const auto flatTexel = firstTexel(*service, *flatKey);
+      REQUIRE(flatTexel);
+      const auto albedo = modelDiffuseMap(*flatTexel);
+      const auto brdf = modelEnvBrdf(0.99995f, 1.0f);
+      const auto scatter = modelSpecularScatter(0.0f, brdf);
+      const auto pointA = std::array<float, 3>{128.0f - 0.3f, -0.3f, 2.0f};
+      const auto e = modelGridIrradiance(
+        Lp43GridOrigins[0], Lp43GridSize, {2, 2, 1}, Lp43TilesA, pointA);
+      auto modelHdr = std::array<float, 3>{};
+      for (std::size_t c = 0; c < 3; ++c)
+      {
+        // (1 - specularScatter) E albedo ao (stage colour x 3), times r_forceAmbient; the
+        // specular term is the default cube's black
+        modelHdr[c] =
+          (1.0f - scatter) * e[c] * albedo[c] * 1.0f * 3.0f * EngineFrame.forceAmbient;
+      }
+      const auto hdr = a.hdr.at(80, 60);
+      const auto at = (std::size_t(60) * a.hdr.width + 80) * 4;
+      const auto expected = modelLdr(modelHdr, a.exposure, a.frame);
+      for (std::size_t c = 0; c < 3; ++c)
+      {
+        CAPTURE(c);
+        CHECK(hdr[c] == Catch::Approx(modelHdr[c]).epsilon(0.01));
+        CHECK(std::abs(int(a.ldr[at + c]) - expected[c]) <= 1);
+      }
+      std::cout << fmt::format(
+        "LP4.3 grid path A: E ({:.5f} {:.5f} {:.5f}); HDR model ({:.5f} {:.5f} {:.5f}) "
+        "read-back ({:.5f} {:.5f} {:.5f}); LDR model ({} {} {}) read-back ({} {} {}); "
+        "exposure {:.6f}\n",
+        e[0],
+        e[1],
+        e[2],
+        modelHdr[0],
+        modelHdr[1],
+        modelHdr[2],
+        hdr[0],
+        hdr[1],
+        hdr[2],
+        expected[0],
+        expected[1],
+        expected[2],
+        int(a.ldr[at]),
+        int(a.ldr[at + 1]),
+        int(a.ldr[at + 2]),
+        a.exposure);
+
+      // the blend down the centre column (rows top to bottom: world x from ~164 down,
+      // inside the cell x 80..176; rows 2 to 88, x ~111 and more, short of the fixture's
+      // grate at x 100..104): the ratio to area 1's constant grid at the same relative
+      // view is area 0's irradiance over 0.5, decreasing with the row, strictly between
+      // the two columns' values
+      auto ratios = std::vector<float>{};
+      auto worst = 0.0f;
+      for (std::uint32_t row = 2; row <= 88; ++row)
+      {
+        const auto pa = a.hdr.at(80, row);
+        const auto pb = b.hdr.at(80, row);
+        REQUIRE(pb[0] > 0.0f);
+        const auto ratio = pa[0] / pb[0];
+        if (!ratios.empty())
+        {
+          worst = std::max(worst, ratio - ratios.back());
+        }
+        ratios.push_back(ratio);
+      }
+      const auto lo = Lp43TilesA[0][0] / Lp43TilesB[0][0];
+      const auto hi = Lp43TilesA[1][0] / Lp43TilesB[0][0];
+      CHECK(worst <= 0.002f);
+      CHECK(ratios.front() > ratios.back() + 0.3f);
+      CHECK(*std::ranges::min_element(ratios) > lo);
+      CHECK(*std::ranges::max_element(ratios) < hi);
+      std::cout << fmt::format(
+        "LP4.3 grid blend down the column: ratio {:.4f} (top) to {:.4f} (bottom), "
+        "between {:.2f} and {:.2f}; the largest rise {:.5f}; B's centre HDR ({:.5f} "
+        "{:.5f} {:.5f}), {} ambient draws; atlases {}x{}\n",
+        ratios.front(),
+        ratios.back(),
+        lo,
+        hi,
+        worst,
+        b.hdr.at(80, 60)[0],
+        b.hdr.at(80, 60)[1],
+        b.hdr.at(80, 60)[2],
+        b.frame.lit.ambientDraws,
+        sizes[0].first,
+        sizes[0].second);
+
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        access.images.setRequest(
+          [materials](const MaterialImageKey& key) { return materials->image(key); });
+      }));
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    messages.print("LP4.3 grid path, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("area 1's atlas Missing: its slab on the probe path, black; the draws the same")
+  {
+    writeAtlas(0, Lp43TilesA);
+    std::filesystem::remove(atlasPath(1));
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp43MapText(), root, 7, 1)));
+      session->skipInteractionsForTesting(true);
+      const auto b = readbackOf(*session, cameraB);
+      const auto a = readbackOf(*session, cameraA);
+      auto state = std::optional<ImageSlots::State>{};
+      auto slabArea = std::optional<std::optional<int>>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        if (const auto id = access.images.find(atlas1))
+        {
+          state = access.images.slot(*id)->state;
+        }
+        slabArea = slabGridArea(access.passes.lists(), 0);
+      }));
+      CHECK(state == ImageSlots::State::Default);
+      // camera B: the slab black (no SH, the default cube), drawn all the same, the same
+      // number of ambient draws as on the grid path (the draws do not depend on the path)
+      const auto centre = b.hdr.at(80, 60);
+      CHECK(centre[0] == 0.0f);
+      CHECK(centre[1] == 0.0f);
+      CHECK(centre[2] == 0.0f);
+      CHECK(b.frame.lit.ambientDraws > 0u);
+      if (gridDrawsB > 0u)
+      {
+        CHECK(b.frame.lit.ambientDraws == gridDrawsB);
+      }
+      CHECK_FALSE(b.frame.lit.gridImagesPending);
+      // camera A on its own grid as before
+      CHECK(a.hdr.at(80, 60)[0] > 0.0f);
+      CHECK(a.frame.lit.ambientGridSurfaces > 0u);
+      REQUIRE(slabArea);
+      CHECK(*slabArea == 0);
+      std::cout << fmt::format(
+        "LP4.3 Missing atlas: area 1's slab ({} {} {}), {} ambient draws, {} on the "
+        "grid; "
+        "area 0's slab {:.5f}\n",
+        centre[0],
+        centre[1],
+        centre[2],
+        b.frame.lit.ambientDraws,
+        b.frame.lit.ambientGridSurfaces,
+        a.hdr.at(80, 60)[0]);
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    messages.print("LP4.3 Missing atlas, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
 
   std::filesystem::remove_all(root);
 }

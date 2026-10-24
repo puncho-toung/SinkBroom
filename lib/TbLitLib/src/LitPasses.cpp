@@ -1072,7 +1072,8 @@ void LitPasses::setAmbientSpace(Frame& frame, const std::size_t index)
 void LitPasses::recordAmbient(Frame& frame)
 {
   // AmbientPass( drawSurfs, numDrawSurfs, fillGbuffer false ) (RenderBackend.cpp:
-  // 2264-2731) on the probe path (DrawSingleInteraction's useIBL branch, :1306-1394).
+  // 2264-2731) on the light-grid path (DrawSingleInteraction's useIBL branch with a grid
+  // area, :1196-1305, LP4.3) or the probe path (:1306-1394).
   // The early outs (:2268-2287): no surface; a view without entities and RDF_NOAMBIENT
   // never reach the preview's 3D view
   const auto& surfaces = m_lists.drawSurfs;
@@ -1193,12 +1194,15 @@ void LitPasses::recordAmbient(Frame& frame)
       setAmbientSpace(frame, surface.space);
     }
 
-    // LP4.3: a surface with a grid area takes the light-grid path when r_useLightGrid is
-    // 1 (:1196-1305); gridArea is never set in LP4.2a (M-AMB-DIFF-03: "grid: LP4.3")
-    if (EngineFrame.useLightGrid && surface.gridArea)
+    // LP4.3 (C36): a surface with a grid area takes the light-grid path when
+    // r_useLightGrid is 1 (:1196, useIBL && din->surf->area && r_useLightGrid), else the
+    // probe path (:1306)
+    const auto* grid = EngineFrame.useLightGrid && surface.gridArea && frame.inputs->grid
+                         ? frame.inputs->grid->find(*surface.gridArea)
+                         : nullptr;
+    if (grid)
     {
       ++m_stats.ambientGridSurfaces;
-      continue;
     }
 
     // :2538-2703: inter = {} (diffuse 1, specular 0), the fast path dead
@@ -1227,17 +1231,47 @@ void LitPasses::recordAmbient(Frame& frame)
       m_parms.set(RenderParm::DiffuseModifier, interaction.diffuseColor);
       m_parms.set(RenderParm::SpecularModifier, interaction.specularColor);
 
-      // the probe path (:1306-1335)
+      // both paths' probe parms (:1198-1222, :1308-1331), the radiance blends among
+      // them (:1246, :1333)
       for (const auto& [parm, value] : probeParms)
       {
         m_parms.set(parm, value);
       }
-      m_parms.set(RenderParm::ShIrradiance0, sh);
-
-      // :1337-1359: the PBR program by the specular image's usage (no skinning)
-      const auto program = interaction.program == InteractionProgram::PbrInteraction
-                             ? EngineBuiltinAmbientLightingIblPbr
-                             : EngineBuiltinAmbientLightingIbl;
+      auto program = 0;
+      if (grid)
+      {
+        // the light-grid path (:1224-1276): the area's grid parms, the atlas texture's
+        // size (GetUploadResolution); no SH (the grid shader reads none). The atlas
+        // binds only its own written levels: Loading without one is not drawn yet
+        const auto binding = images.binding(images.request(grid->atlas));
+        if (!binding.texture || binding.intrinsic)
+        {
+          ++m_stats.skippedDraws;
+          m_stats.unconverged = true;
+          m_stats.retrigger = true;
+          return;
+        }
+        const auto& desc = binding.texture->getDesc();
+        const auto gridParms = engineGridParms(*grid, int(desc.width), int(desc.height));
+        m_parms.set(RenderParm::GlobalLightOrigin, gridParms.globalLightOrigin);
+        m_parms.set(RenderParm::JitterTexScale, gridParms.jitterTexScale);
+        m_parms.set(RenderParm::JitterTexOffset, gridParms.jitterTexOffset);
+        m_parms.set(RenderParm::ScreenCorrectionFactor, gridParms.screenCorrectionFactor);
+        m_parms.set(RenderParm::CascadeDistances, gridParms.cascadeDistances);
+        // :1248-1264: the PBR program by the specular image's usage (no skinning)
+        program = interaction.program == InteractionProgram::PbrInteraction
+                    ? EngineBuiltinAmbientLightgridIblPbr
+                    : EngineBuiltinAmbientLightgridIbl;
+      }
+      else
+      {
+        // the probe path (:1306-1335): the view's SH
+        m_parms.set(RenderParm::ShIrradiance0, sh);
+        // :1337-1359: the PBR program by the specular image's usage (no skinning)
+        program = interaction.program == InteractionProgram::PbrInteraction
+                    ? EngineBuiltinAmbientLightingIblPbr
+                    : EngineBuiltinAmbientLightingIbl;
+      }
 
       // the units: the interaction's three, then the view's (:1361-1393)
       m_units[UnitBump] = interaction.bumpImage;
@@ -1246,7 +1280,9 @@ void LitPasses::recordAmbient(Frame& frame)
       m_units[UnitBrdfLut] = intrinsicImageKey("_brdfLut");
       static_assert(!EngineFrame.useSsao, "K31: _ao0 is LP6's");
       m_units[UnitSsao] = engineWhiteImageKey();
-      m_units[UnitAmbientCube] = engineDefaultImageKey();
+      // t7: the area's irradiance atlas on the grid path (:1270-1271), _default on the
+      // probe path (D85)
+      m_units[UnitAmbientCube] = grid ? grid->atlas : engineDefaultImageKey();
       for (std::size_t i = 0; i < 3; ++i)
       {
         m_units[UnitSpecularCube1 + i] = cubeOr(probes.radiance[i]);
