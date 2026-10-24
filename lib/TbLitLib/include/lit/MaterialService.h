@@ -33,8 +33,10 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace tb::lit
@@ -186,6 +188,16 @@ struct MaterialTable
    */
   std::uint64_t imageChanges = 0;
   ImageChanges changedImages;
+  /**
+   * LPF.0a (D100, C40): the image override hand-overs (setImageOverride,
+   * clearImageOverride) this table includes, applied or refused: every Feed work item
+   * publishes once, and a table whose feedApplied equals MaterialService::feedRequested()
+   * holds every hand-over made before that was read. Kept across reloads.
+   */
+  std::uint64_t feedApplied = 0;
+  // LPF.0a (C41): the bytes the override store holds (the callers' pixels or ready
+  // levels), not the converted slots' (those count in the image budget)
+  std::size_t overrideBytes = 0;
 
   // the slot of a name, shared with the table, so that it outlives a table held only for
   // the call; null when the name is not looked up yet. Neither find allocates.
@@ -250,6 +262,85 @@ struct ImageLookup
   std::shared_ptr<const ImageCacheSlot> slot;
 };
 
+// LPF.0a (C39 (a)): the texel format of an override's raw pixels
+enum class ImagePixelFormat
+{
+  // 4 bytes a texel, for every usage but the HDR ones
+  RGBA8,
+  // four floats a texel, for TD_HDRI and TD_HDR_LIGHTPROBE only: packed to R11G11B10F
+  // by the copied float3_to_r11g11b10f, the alpha dropped, as LoadEXR packs
+  // (Image_files.cpp:604-621)
+  RGBA32F,
+};
+
+/**
+ * LPF.0a (C39 (a)): an override's raw pixels, as the engine's loaders hand a picture to
+ * the binarizer: width × height texels a face, rows top first (the picture LoadTGA
+ * returns after its flip), alpha 255 where the source has none; 1 face, or 6 for a cube
+ * key in R_LoadCubeImages' side order and orientation (Image_files.cpp:1156-1201, the
+ * six-file loop :1317-1403: _px, _nx, _py, _ny, _pz, _nz, CF_CAMERA's sides already
+ * turned into those), the order LoadCubeFromMemory takes them in. bytes holds faces ×
+ * height × width texels.
+ */
+struct RawImagePixels
+{
+  int width = 0;
+  int height = 0;
+  int faces = 1;
+  ImagePixelFormat format = ImagePixelFormat::RGBA8;
+  std::vector<std::uint8_t> bytes;
+};
+
+/**
+ * LPF.0a (C39): an image handed to the material service under a game image name, in
+ * place of its files: (a) raw pixels, converted on the parse thread as the source
+ * fallback converts a source (the engine's layouts and mip rule for the usage the copied
+ * time call gives the key, no encoder: K34, M-IMG-DIFF-05), or (b) GPU-ready levels in
+ * the shape a .bimage reads into (CachedImage, as rawIntrinsicImage hands them: the
+ * usage's format or its uncompressed twin, its colour format, 6 faces exactly for a cube
+ * key; D24: a compressed image is compressed by the caller). editorSize (D111) stands for
+ * the files' size as C21's editor-image size of the name.
+ */
+struct ImageOverride
+{
+  std::variant<RawImagePixels, std::shared_ptr<const CachedImage>> image;
+  std::optional<EditorImageSize> editorSize;
+};
+
+// LPF.0a (C39, C40): what became of the last hand-over of an override's name
+struct ImageOverrideStatus
+{
+  enum class State
+  {
+    // no override of the name
+    None,
+    // handed over and stored, not converted yet: queued, no key uses the name yet, or no
+    // registry (a failed build) can convert it
+    Pending,
+    // converted for every key the table held under the name
+    Applied,
+    // refused, with the reason; the slots stand as they were (a refused replacement
+    // leaves the earlier override applied)
+    Refused,
+  };
+
+  State state = State::None;
+  std::string reason;
+};
+
+/**
+ * LPF.0a (C39, D97): the name an image override is stored and matched under: as
+ * idImageManager::ImageFromFile folds a name before it compares it with its records'
+ * (ImageManager.cpp:417-423: every ".tga", ".jpg", ".png", ".exr" and ".hdr" removed
+ * wherever it stands, case-sensitively as idStr::Replace compares, then backslashes made
+ * slashes), then lowercased, since the records' names are compared without case
+ * (ImageManager.cpp:432, idStr::Icmp). An image key matches when its own name (a record's
+ * name, folded already) lowercased equals it: the whole name, so a program key
+ * (addnormals( … ), heightmap( … )) matches only by its whole program text, never by one
+ * of its leaves. Pure; any thread.
+ */
+std::string feedKeyName(const std::string& name);
+
 // what the parse thread reports to its owner
 struct MaterialServiceEvent
 {
@@ -304,8 +395,11 @@ struct MaterialServiceOptions
   // LP1c fix (S2.4): the bytes of the published images' data the table keeps: beyond it
   // the images a consumer has taken (image() returned their data) are dropped from the
   // table, the least recently published first, and read again when asked for; 0 keeps
-  // every image
+  // every image. LPF.0a (D99): an override's slots too, converted again from the store
   std::size_t imageBudgetBytes = std::size_t{512} * 1024 * 1024;
+  // LPF.0a: runs on the parse thread before each work item with its kind ("evaluate",
+  // "feed", "lookup", "bake", "poll", "measure", "image", "bulk", "reload")
+  std::function<void(std::string_view kind)> beforeWorkItemForTesting;
 };
 
 struct MaterialServiceStats
@@ -347,6 +441,10 @@ struct MaterialServiceStats
   // dropped for the budget so far
   std::size_t imageBytes = 0;
   std::uint64_t evictedImages = 0;
+  // LPF.0a (D96): override hand-overs replaced by a newer one of the name before their
+  // work item ran (their bytes dropped), and the slots converted from the override store
+  std::uint64_t droppedFeeds = 0;
+  std::uint64_t overrideConversions = 0;
   // the thread waits for a request, and its last work item is done and freed
   bool idle = false;
   // the thread ended without a stop (X.2): set first, without allocating (Y.1)
@@ -358,12 +456,15 @@ struct MaterialServiceStats
 /**
  * The parse thread (D32, C20, §3.5 Threading): it alone constructs, uses and destroys the
  * MaterialDecls, and every other thread sees only the published MaterialTable. Requests
- * queue in priority order: stop, reload, evaluations, lookups (materials and entityDefs),
- * a bake, the poll, the editor-image measures, an image, then the bulk parse. LP1c fix
- * (S2.3): every work item is short, so that an evaluation (a light drag) waits for one
- * step at most: a lookup or measure item takes names until about 20 ms have passed (or
- * 256 names) and publishes what it did, leaving the rest queued; a bake and an image are
- * one item each; the bulk parse works in 20 ms steps (D52).
+ * queue in priority order: stop, reload, evaluations, the image overrides (LPF.0a, D96:
+ * one item per name), lookups (materials and entityDefs), a bake, the poll, the
+ * editor-image measures, the images, then the bulk parse. LP1c fix (S2.3): every work
+ * item is short, so that an evaluation (a light drag) waits for one step at most: a
+ * lookup or measure item takes names until about 20 ms have passed (or 256 names) and
+ * publishes what it did, leaving the rest queued; a bake is one item; an image item
+ * (LP4.3) takes queued images for up to 100 ms (or 256), and ends after the image in
+ * hand once more urgent work is queued, an override included; the bulk parse works in
+ * 20 ms steps (D52).
  *
  * LP1c fix (S2.2): an entry is published at once with the last Ready editor-image size
  * of its material (D52) or the registry's Default, unmeasured; its measure (C21, by
@@ -467,12 +568,55 @@ public:
    * copied timestamp call names the cache (MaterialDecls::imageCacheName), the image
    * cache reader reads it through the game-file search (resolveImageCache), and where the
    * engine would binarize, the source fallback makes the image from its source
-   * (resolveImage); the slot is published once, one image per work item (S2.3). LP1c fix:
-   * a reload drops every slot (S2.5), and the image budget drops a slot whose data a
-   * consumer has taken through this call once the table's image data is beyond
+   * (resolveImage); the slot is published once, in a batch of up to 100 ms of queued
+   * images (LP4.3), which ends after the image in hand when more urgent work arrives (an
+   * override among it, LPF.0a). LP1c fix: a reload drops the slots whose files changed
+   * (S2.5, X.3), and the image budget drops a slot whose data a consumer has taken
+   * through this call once the table's image data is beyond
    * MaterialServiceOptions::imageBudgetBytes (S2.4); asked for again, it is read again.
+   * LPF.0a: a key whose name has a stored override (setImageOverride) is answered Ready
+   * from the override, converted on the parse thread, never from its files.
    */
   ImageLookup image(const MaterialImageKey& key);
+
+  /**
+   * LPF.0a (C39, C40, C41, D96): hands the service an image under a game image name, in
+   * place of its files; any thread. The name is folded (feedKeyName) and matched against
+   * the whole name of every image key, so a program key (bumpmap addnormals( … )) takes
+   * an override only of its whole program text, and the time call's _s → _rmao rename
+   * needs the sibling file as in the engine (M-FEED-DIFF-01). Refused at once, with
+   * nothing queued and no count moved: an empty name, "default", and a name that starts
+   * with "_" (the engine's built-ins, ImageManager.cpp:403, :436-439). Otherwise one Feed
+   * work item per name is queued, the newest hand-over of a name replacing an older one
+   * not taken yet (its bytes dropped, stats().droppedFeeds), and feedRequested() counts
+   * it. On the parse thread the item converts the image for every key the table holds
+   * under the name, each with its own cache name and usage (the copied time call, the one
+   * file probe an override makes) and publishes the keys' drops and the new slots in ONE
+   * table with feedApplied advanced; a refusal (a cross pair of pixel format and usage,
+   * a GPU-ready image of another format, colour format or face count, a level beyond
+   * UploadBytesPerFrame over all its faces) publishes once too, the slots unchanged, and
+   * imageOverrideStatus says why. A name no key uses yet is stored and converted at the
+   * key's first lookup. The store is the truth: an override slot stays across builds,
+   * the budget may drop it and a later request converts it again; the poll never probes
+   * an overridden key's files. editorSize, when it changes a material's editor-image
+   * size, remeasures every material whose image chain holds the name (D111).
+   */
+  Result<void> setImageOverride(std::string imageName, ImageOverride image);
+
+  /**
+   * LPF.0a (C40, P5.17): ends the override of a name; any thread. One Feed work item, as
+   * setImageOverride's: the keys converted from the override are dropped and read from
+   * their files again in the same item, then published once, so no table between shows
+   * them pending; a name with no override publishes once, nothing else changed.
+   */
+  void clearImageOverride(std::string imageName);
+
+  // LPF.0a (D100): the override hand-overs made so far; any thread (LPF.1's render thread
+  // compares it with a table's feedApplied)
+  std::uint64_t feedRequested() const;
+
+  // LPF.0a: what became of a name's last hand-over (folded as feedKeyName); any thread
+  ImageOverrideStatus imageOverrideStatus(const std::string& imageName) const;
 
   // bulk-parses every material and table of the current registry and of every later one
   void parseAll();

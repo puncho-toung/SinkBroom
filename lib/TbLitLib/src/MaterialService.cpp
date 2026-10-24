@@ -116,6 +116,16 @@ std::shared_ptr<const EvaluatedRegisters> refusal(std::string reason)
 // could be made
 constexpr auto ThreadEndedText = "The material parse thread stopped by itself";
 
+// LPF.0a (D96): the queued override hand-over of one name: the newest image (null for a
+// clear), when it was handed over, and how many hand-overs of the name it stands for
+// (the older ones' bytes are dropped)
+struct FeedRequest
+{
+  std::shared_ptr<const ImageOverride> image;
+  Clock::time_point handOver;
+  std::uint64_t requests = 0;
+};
+
 } // namespace
 
 MaterialId MaterialId::of(const MaterialEntry& entry)
@@ -249,6 +259,15 @@ struct MaterialService::Shared
   std::unordered_set<MaterialImageKey, MaterialImageKeyHash> queuedImages;
   // LP1c fix (S2.4): the images whose data a consumer has taken (image() returned it)
   std::unordered_set<MaterialImageKey, MaterialImageKeyHash> takenImages;
+  // LPF.0a (D96, P5.3): the override hand-overs, one per name in the order the names
+  // first came, the newest hand-over of a name winning
+  std::deque<std::string> feeds;
+  std::unordered_map<std::string, FeedRequest> queuedFeeds;
+  // D100: every hand-over, bumped with the mutex held; atomic, so that the render thread
+  // reads it without the mutex
+  std::atomic<std::uint64_t> feedRequested = 0;
+  // C40: what became of each name's last hand-over
+  std::unordered_map<std::string, ImageOverrideStatus> overrideStatus;
 
   std::shared_ptr<const MaterialTable> table = std::make_shared<const MaterialTable>();
   MaterialServiceStats stats;
@@ -274,6 +293,41 @@ struct MaterialService::Shared
     measures.push_back(name);
     return true;
   }
+
+  /**
+   * LPF.0a (D96, D100): queues an override hand-over of a name (a null image clears it),
+   * taking the mutex: one queued item per name, a newer hand-over replacing the bytes of
+   * one not taken yet and keeping the newest hand-over time; feedRequested counts every
+   * hand-over. False when no thread will take it.
+   */
+  bool queueFeed(std::string name, std::shared_ptr<const ImageOverride> image)
+  {
+    const auto now = Clock::now();
+    auto lock = std::scoped_lock{mutex};
+    if (stop || stats.threadEnded)
+    {
+      return false;
+    }
+    if (image)
+    {
+      overrideStatus.insert_or_assign(
+        name, ImageOverrideStatus{ImageOverrideStatus::State::Pending, {}});
+    }
+    auto [queued, inserted] = queuedFeeds.try_emplace(name);
+    if (inserted)
+    {
+      feeds.push_back(std::move(name));
+    }
+    else
+    {
+      ++stats.droppedFeeds;
+    }
+    queued->second.image = std::move(image);
+    queued->second.handOver = now;
+    ++queued->second.requests;
+    ++feedRequested;
+    return true;
+  }
 };
 
 // The parse thread and everything only it touches.
@@ -286,6 +340,7 @@ private:
     Reload,
     AutoReload,
     Evaluate,
+    Feed,
     Lookup,
     Bake,
     Poll,
@@ -294,12 +349,45 @@ private:
     Bulk,
   };
 
+  // the kind's name for MaterialServiceOptions::beforeWorkItemForTesting
+  static std::string_view kindName(const WorkKind kind)
+  {
+    switch (kind)
+    {
+    case WorkKind::Stop:
+      return "stop";
+    case WorkKind::Reload:
+    case WorkKind::AutoReload:
+      return "reload";
+    case WorkKind::Evaluate:
+      return "evaluate";
+    case WorkKind::Feed:
+      return "feed";
+    case WorkKind::Lookup:
+      return "lookup";
+    case WorkKind::Bake:
+      return "bake";
+    case WorkKind::Poll:
+      return "poll";
+    case WorkKind::Measure:
+      return "measure";
+    case WorkKind::Image:
+      return "image";
+    case WorkKind::Bulk:
+      return "bulk";
+    }
+    return "";
+  }
+
   struct Work
   {
     WorkKind kind = WorkKind::Stop;
     std::vector<RegisterKey> evaluations;
     std::pair<std::string, std::uint64_t> mapBake;
     MaterialImageKey image;
+    // LPF.0a: the override hand-over of a name
+    std::string feedName;
+    FeedRequest feed;
   };
 
   // R1.2: default-constructed, then the kind, so that a new member needs no initialiser
@@ -475,6 +563,8 @@ private:
         m_shared.queuedMeasures.clear();
         m_shared.images.clear();
         m_shared.queuedImages.clear();
+        m_shared.feeds.clear();
+        m_shared.queuedFeeds.clear();
       }
       m_shared.changed.notify_all();
     }
@@ -539,6 +629,12 @@ private:
       {
         break;
       }
+      if (m_shared.options.beforeWorkItemForTesting)
+      {
+        guarded("test hook", [&] {
+          m_shared.options.beforeWorkItemForTesting(kindName(work.kind));
+        });
+      }
 
       switch (work.kind)
       {
@@ -554,6 +650,9 @@ private:
         break;
       case WorkKind::Evaluate:
         guarded("evaluation", [&] { evaluate(work.evaluations); });
+        break;
+      case WorkKind::Feed:
+        guarded("image override", [&] { feedItem(work.feedName, work.feed); });
         break;
       case WorkKind::Lookup:
         guarded("lookup", [&] { lookUpStep(); });
@@ -666,6 +765,22 @@ private:
       work.evaluations.assign(m_shared.evaluations.begin(), m_shared.evaluations.end());
       m_shared.evaluations.clear();
       m_shared.queuedEvaluations.clear();
+      return work;
+    }
+    // LPF.0a (D96, P5.3): an override after the evaluations, which are short (a light
+    // drag waits for one conversion at most), and ahead of the lookups, so a painting
+    // host starves neither; one name per item
+    if (!m_shared.feeds.empty())
+    {
+      auto work = workOf(WorkKind::Feed);
+      work.feedName = std::move(m_shared.feeds.front());
+      m_shared.feeds.pop_front();
+      const auto queued = m_shared.queuedFeeds.find(work.feedName);
+      if (queued != m_shared.queuedFeeds.end())
+      {
+        work.feed = std::move(queued->second);
+        m_shared.queuedFeeds.erase(queued);
+      }
       return work;
     }
     // S2.3: the lookup step takes its names from the queues itself, a step at a time
@@ -1238,12 +1353,17 @@ private:
     auto images = std::move(m_working.images);
     const auto imageChanges = m_working.imageChanges;
     auto changedImages = std::move(m_working.changedImages);
+    // LPF.0a (D100, C41): the hand-overs counted and the store's bytes do not either
+    const auto feedApplied = m_working.feedApplied;
+    const auto overrideBytes = m_working.overrideBytes;
     m_working = MaterialTable{};
     m_working.registry = registry;
     m_working.mapBakes = std::move(mapBakes);
     m_working.images = std::move(images);
     m_working.imageChanges = imageChanges;
     m_working.changedImages = std::move(changedImages);
+    m_working.feedApplied = feedApplied;
+    m_working.overrideBytes = overrideBytes;
     m_deltaOrder.clear();
     m_bulkMaterial = 0;
     m_bulkTable = 0;
@@ -1717,12 +1837,13 @@ private:
       auto next = std::optional<MaterialImageKey>{};
       {
         auto lock = std::scoped_lock{m_shared.mutex};
-        // S2.3: more urgent work (nextWork's order) ends the step at once
+        // S2.3: more urgent work (nextWork's order) ends the step at once; LPF.0a (D96):
+        // an override hand-over too
         if (
           m_shared.images.empty() || m_shared.reloadRequested
-          || !m_shared.evaluations.empty() || !m_shared.lookups.empty()
-          || !m_shared.entityDefLookups.empty() || !m_shared.mapBakes.empty()
-          || !m_shared.measures.empty())
+          || !m_shared.evaluations.empty() || !m_shared.feeds.empty()
+          || !m_shared.lookups.empty() || !m_shared.entityDefLookups.empty()
+          || !m_shared.mapBakes.empty() || !m_shared.measures.empty())
         {
           break;
         }
@@ -1737,6 +1858,19 @@ private:
       keepImageBudget();
       publish();
     }
+  }
+
+  /**
+   * LPF.0a (D96, D100, C40): one override hand-over of a name (the newest of those queued
+   * for it), then one publication whose feedApplied counts every hand-over the item
+   * stands for, whatever became of it, so that a table with feedApplied equal to
+   * feedRequested holds them all (P5.2). Parse thread.
+   */
+  void feedItem(const std::string& name, const FeedRequest& request)
+  {
+    static_cast<void>(name);
+    m_working.feedApplied += request.requests;
+    publish();
   }
 
   /**
@@ -2186,6 +2320,39 @@ ImageLookup MaterialService::image(const MaterialImageKey& key)
     m_shared->requested.notify_one();
   }
   return ImageLookup{};
+}
+
+Result<void> MaterialService::setImageOverride(std::string imageName, ImageOverride image)
+{
+  auto handed = std::make_shared<const ImageOverride>(std::move(image));
+  if (!m_shared->queueFeed(std::move(imageName), std::move(handed)))
+  {
+    return Error{"The material parse thread takes no image override: it has stopped"};
+  }
+  m_shared->requested.notify_one();
+  return kdl::void_success;
+}
+
+void MaterialService::clearImageOverride(std::string imageName)
+{
+  if (m_shared->queueFeed(std::move(imageName), nullptr))
+  {
+    m_shared->requested.notify_one();
+  }
+}
+
+std::uint64_t MaterialService::feedRequested() const
+{
+  return m_shared->feedRequested.load();
+}
+
+ImageOverrideStatus MaterialService::imageOverrideStatus(
+  const std::string& imageName) const
+{
+  auto lock = std::scoped_lock{m_shared->mutex};
+  const auto status = m_shared->overrideStatus.find(imageName);
+  return status != m_shared->overrideStatus.end() ? status->second
+                                                  : ImageOverrideStatus{};
 }
 
 void MaterialService::parseAll()

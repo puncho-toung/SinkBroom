@@ -29,6 +29,7 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ImageFallback.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ImageFiles.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ImageGoldens.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ImageOverride.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ImageSlots.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_IntrinsicImages.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LightData.cpp
