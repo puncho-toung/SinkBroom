@@ -31,6 +31,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GeometryArenas.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GeometryArenas.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/GridTable.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GpuDevice.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ImageFallback.cpp

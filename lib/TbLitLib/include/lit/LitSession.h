@@ -291,6 +291,7 @@ constexpr auto ParkTimeout = std::chrono::milliseconds{500};
 class CpuPool;
 class GpuDevice;
 struct EngineTonemapDefaults;
+class GridTablePublication;
 class LightTablePublication;
 class ProbeTablePublication;
 class MaterialService;
@@ -299,6 +300,7 @@ class RenderThread;
 class SessionEvents;
 struct Chunk;
 struct ChunkKey;
+struct GridTable;
 struct LightTable;
 struct ProbeTable;
 struct RenderFrameAccess;
@@ -344,6 +346,8 @@ private:
   std::shared_ptr<LightTablePublication> m_lightTables;
   // LP4.2a (D87): and its probe registry here, alike
   std::shared_ptr<ProbeTablePublication> m_probeTables;
+  // LP4.3 (C36): and its scene's grid tables here, alike
+  std::shared_ptr<GridTablePublication> m_gridTables;
   std::uint64_t m_swapchainCount = 0;
 
   bool m_renderThreadStopped = false;
@@ -431,6 +435,12 @@ public:
    * published (never null; empty before the first build), also after teardown step 1.
    */
   std::shared_ptr<const ProbeTable> probeTable() const;
+  /**
+   * LP4.3 (C36, D88, R2.9), any thread: the latest light grid of the scene's bake the
+   * render thread published (never null; empty without a grid), also after teardown step
+   * 1.
+   */
+  std::shared_ptr<const GridTable> gridTable() const;
 
   // S3: the CPU pool from phase B until teardown step 1, else null; GUI thread, tests
   // only (B0.10, R1.11: the render thread gets the pool and the service at its start)

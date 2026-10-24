@@ -22,6 +22,7 @@
 #include "base/Macros.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/CpuPool.h"
+#include "lit/GridTable.h"
 #include "lit/LightRecord.h"
 #include "lit/ProbeRecord.h"
 #include "lit/Snapshot.h"
@@ -40,6 +41,7 @@ namespace tb::lit
 {
 class MaterialService;
 struct AreaData;
+struct MapBake;
 struct MapBakeSlot;
 struct MaterialTable;
 struct ProcTree;
@@ -123,6 +125,8 @@ private:
   std::shared_ptr<const AreaData> m_areas;
   // the table the last batch was built with; every table adopted is scanned once
   std::shared_ptr<const MaterialTable> m_table;
+  // LP4.3 (C36, D88): where the grid table of the adopted bake is published
+  std::shared_ptr<GridTablePublication> m_grids;
 
   // the cells of each material and the editor-image size they were built with (LP1c fix
   // S2.5: a cell is built again when the table's size of its material changes, Default to
@@ -162,13 +166,14 @@ private:
   LightRegistry m_lights;
 
 public:
-  // lights and probes may be null: the registries then publish into publications of
-  // their own
+  // lights, probes and grids may be null: the registries (and the scene's grid tables)
+  // then publish into publications of their own
   SceneGeometry(
     CpuPool* pool,
     MaterialService* materials,
     std::shared_ptr<LightTablePublication> lights = nullptr,
-    std::shared_ptr<ProbeTablePublication> probes = nullptr);
+    std::shared_ptr<ProbeTablePublication> probes = nullptr,
+    std::shared_ptr<GridTablePublication> grids = nullptr);
   ~SceneGeometry();
 
   // B0.3: no batch is in flight
@@ -212,6 +217,21 @@ public:
   // LP4.2a (C37, D87): the latest published probe records (never null); the render
   // thread (other threads read LitSession::probeTable)
   std::shared_ptr<const ProbeTable> probeTable() const;
+  /**
+   * LP4.3 (C36, D88): the light grid of the adopted bake (gridAreasOf: empty without a
+   * tree, a grid, or with a dropped bake), published when the scene adopts a bake slot or
+   * forgets one (a new map path); its version moves only when its areas change. Never
+   * null; the render thread (other threads read LitSession::gridTable)
+   */
+  std::shared_ptr<const GridTable> gridTable() const;
+  /**
+   * LP4.3 (C38, D90): the bake the scene adopted for its map path (MapBakeSlot::bake):
+   * null before the path's request is answered, for a path outside the game folder, and
+   * without a map path; immutable. answered tells the first case from the others: the
+   * scene has a map path and its bake request was answered. The render thread
+   */
+  std::shared_ptr<const MapBake> adoptedBake() const;
+  bool bakeAnswered() const;
   // what the jobs and the copied code reported, oldest first
   std::vector<std::string> takeWarnings();
   /**
@@ -255,6 +275,8 @@ private:
   PreviewId chunkEntityOf(const SceneNode& node) const;
   // LP4.2a (C37): the probe registry's inputs now, its entityDefs asked for
   ProbeJobInput probeInput();
+  // LP4.3 (C36): the grid table of the bake adopted now, published when its areas changed
+  void publishGridTable();
 };
 
 /**

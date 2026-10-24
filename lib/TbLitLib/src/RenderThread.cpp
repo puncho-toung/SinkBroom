@@ -129,7 +129,8 @@ bool FrameConvergence::settled() const
   return !pipelinesPending && !materialsPending && !drawsSkipped && !uploadsLeft
          && !imagesPending && !provisionalChunks && !lutPending && !entityDefsPending
          && !lightsProvisional && !geometryInFlight && !drawsOverflowed
-         && !lightTrianglesPending && !probeImagesPending && !probesInFlight;
+         && !lightTrianglesPending && !probeImagesPending && !gridImagesPending
+         && !probesInFlight;
 }
 
 bool FrameConvergence::retriggers() const
@@ -279,7 +280,8 @@ void RenderThread::start(
   MaterialService* materials_,
   std::shared_ptr<LightTablePublication> lights,
   PipelineCompiler* compiler,
-  std::shared_ptr<ProbeTablePublication> probes)
+  std::shared_ptr<ProbeTablePublication> probes,
+  std::shared_ptr<GridTablePublication> grids)
 {
   m_pool = pool;
   m_materials = materials_;
@@ -293,7 +295,7 @@ void RenderThread::start(
     });
   }
   m_geometry = std::make_unique<SceneGeometry>(
-    m_pool, m_materials, std::move(lights), std::move(probes));
+    m_pool, m_materials, std::move(lights), std::move(probes), std::move(grids));
   m_thread = std::thread{[this] { main(); }};
 }
 
@@ -612,6 +614,8 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
   convergence.lightTrianglesPending = lit.lightTrianglesPending;
   // LP4.2a (D88)
   convergence.probeImagesPending = lit.probeImagesPending;
+  // LP4.3 (D88)
+  convergence.gridImagesPending = lit.gridImagesPending;
   // LP4.2b step 0
   convergence.probesInFlight = scene && m_geometry->probesInFlight();
   convergence.lutPending = tonemap.lutPending;
@@ -1176,6 +1180,8 @@ bool RenderThread::recordLitPasses(
     // chunks are not the scene's, so they are drawn without it (D94)
     inputs.procTree = m_geometry->procTree();
     inputs.areas = m_geometry->areaData();
+    // LP4.3 (C36): the bake's light grid, read with its tree
+    inputs.grid = m_geometry->gridTable();
   }
   if (m_geometry)
   {
@@ -1604,6 +1610,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     syncChunks();
     refreshImages();
     requestProbeImages();
+    requestGridImages();
     // LP2.2b: the blit's target, the frame's presentation target alone
     auto* const targetFramebuffer =
       target ? imageFramebuffer(*target, imageIndex) : m_headlessFramebuffer.Get();
@@ -1912,6 +1919,26 @@ void RenderThread::requestProbeImages()
     m_images.request(probe.images[2]);
   }
   m_probeImagesTable = std::move(table);
+}
+
+void RenderThread::requestGridImages()
+{
+  if (!m_geometry || !m_materials)
+  {
+    return;
+  }
+  auto table = m_geometry->gridTable();
+  if (table == m_gridImagesTable)
+  {
+    return;
+  }
+  // LoadLightGridImages (RenderWorld_lightgrid.cpp:415-447): every area's atlas, also an
+  // area without points; before the frame's uploads (D78)
+  for (const auto& area : table->areas)
+  {
+    m_images.request(area.atlas);
+  }
+  m_gridImagesTable = std::move(table);
 }
 
 void RenderThread::eraseChangedSets()

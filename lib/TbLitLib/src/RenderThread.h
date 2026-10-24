@@ -58,6 +58,7 @@ namespace tb::lit
 class CpuPool;
 class GpuDevice;
 class LightTablePublication;
+class GridTablePublication;
 class ProbeTablePublication;
 class MaterialService;
 class PipelineCompiler;
@@ -160,6 +161,10 @@ struct FrameConvergence
   // provisional (SceneGeometry::probesInFlight): the view's probe choice may read the
   // defaults; the build's collection is the trigger (geometryTick), as the light job's
   bool probesInFlight = false;
+  // LP4.3 (D88): the atlas of an area with grid points is not loaded yet (a surface that
+  // would take that grid takes the probe path meanwhile); its arrival is the trigger
+  // (arrivalsTick)
+  bool gridImagesPending = false;
   // D9: a pass is disabled (counts as converged)
   bool passesDisabled = false;
 
@@ -296,6 +301,8 @@ private:
   std::uint64_t m_arrivalsCheckedVersion = 0;
   // LP4.2a (D87): the probe table whose _spec and _depth slots were asked for
   std::shared_ptr<const ProbeTable> m_probeImagesTable;
+  // LP4.3 (C36, SC336): the grid table whose atlases were asked for last
+  std::shared_ptr<const GridTable> m_gridImagesTable;
   // D77: a texture arrival triggers a frame at most every TextureArrivalInterval
   FrameClock::time_point m_lastArrivalTrigger;
   std::optional<FrameClock::time_point> m_arrivalTriggerAt;
@@ -436,13 +443,15 @@ public:
   // light table publication, which the thread's light registry publishes into. LP2.1:
   // compiler, the session's compile thread (may be null), whose pipelines and binding
   // layouts the passes draw with; it outlives the thread too. LP4.2a: probes, the
-  // session's probe table publication (null: the registry's own)
+  // session's probe table publication (null: the registry's own). LP4.3: grids, the
+  // session's grid table publication (null: the scene's own)
   void start(
     CpuPool* pool,
     MaterialService* materials,
     std::shared_ptr<LightTablePublication> lights,
     PipelineCompiler* compiler,
-    std::shared_ptr<ProbeTablePublication> probes = nullptr);
+    std::shared_ptr<ProbeTablePublication> probes = nullptr,
+    std::shared_ptr<GridTablePublication> grids = nullptr);
 
   // Any thread.
 
@@ -603,6 +612,8 @@ private:
   // LP4.2a (D87, D85): a probe table not seen yet: every probe's _spec and _depth slots
   // are asked for (never _amb)
   void requestProbeImages();
+  // LP4.3 (C36, SC336): every area's atlas of a grid table not asked for yet
+  void requestGridImages();
   void eraseChangedSets();
   // D77: an idle pass's look for texture arrivals in a new table; whether a frame is due
   void arrivalsTick();

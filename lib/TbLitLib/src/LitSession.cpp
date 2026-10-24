@@ -27,6 +27,7 @@
 #include "Swapchain.h"
 #include "lit/CpuPool.h"
 #include "lit/EngineBuiltins.h"
+#include "lit/GridTable.h"
 #include "lit/LightRecord.h"
 #include "lit/ProbeRecord.h"
 #include "lit/SceneGeometry.h"
@@ -55,6 +56,7 @@ LitSession::LitSession(
   , m_materials{materials}
   , m_lightTables{std::make_shared<LightTablePublication>()}
   , m_probeTables{std::make_shared<ProbeTablePublication>()}
+  , m_gridTables{std::make_shared<GridTablePublication>()}
 {
 }
 
@@ -167,7 +169,12 @@ Result<void> LitSession::start(
              // B0.10: the render thread gets the pool, the service and (LP2.1) the
              // compile thread at start; each outlives it
              m_renderThread->start(
-               m_pool.get(), m_materials, m_lightTables, m_compiler.get(), m_probeTables);
+               m_pool.get(),
+               m_materials,
+               m_lightTables,
+               m_compiler.get(),
+               m_probeTables,
+               m_gridTables);
            });
 }
 
@@ -255,6 +262,11 @@ std::shared_ptr<const LightTable> LitSession::lightTable() const
 std::shared_ptr<const ProbeTable> LitSession::probeTable() const
 {
   return m_probeTables->table();
+}
+
+std::shared_ptr<const GridTable> LitSession::gridTable() const
+{
+  return m_gridTables->table();
 }
 
 void LitSession::tableChanged()

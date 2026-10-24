@@ -226,6 +226,24 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
   m_stats.probeImagesPending = m_viewProbes.imagesPending;
   m_stats.unconverged = m_stats.unconverged || m_stats.probeImagesPending;
 
+  // LP4.3 (C36, D88): an area with grid points whose atlas the table has not answered
+  // yet is "not loaded" (the engine's LoadLightGridImages loads them all at map load,
+  // RenderWorld_lightgrid.cpp:415-447): the frame is unconverged until it is Ready or
+  // Default (final)
+  if (inputs.grid)
+  {
+    for (const auto& area : inputs.grid->areas)
+    {
+      if (area.hasPoints)
+      {
+        const auto* slot = images.slot(images.request(area.atlas));
+        m_stats.gridImagesPending =
+          m_stats.gridImagesPending || !slot || slot->state == ImageSlots::State::Pending;
+      }
+    }
+  }
+  m_stats.unconverged = m_stats.unconverged || m_stats.gridImagesPending;
+
   frame.framebuffer = inputs.frame->resolve(prepassDesc())
                       | kdl::transform([](const PassResources& resources) {
                           return resources.writes.front().framebuffer;

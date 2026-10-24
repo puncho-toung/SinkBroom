@@ -83,9 +83,11 @@ SceneGeometry::SceneGeometry(
   CpuPool* pool,
   MaterialService* materials,
   std::shared_ptr<LightTablePublication> lights,
-  std::shared_ptr<ProbeTablePublication> probes)
+  std::shared_ptr<ProbeTablePublication> probes,
+  std::shared_ptr<GridTablePublication> grids)
   : m_pool{pool}
   , m_materials{materials}
+  , m_grids{grids ? std::move(grids) : std::make_shared<GridTablePublication>()}
   , m_probes{pool, std::move(probes)}
   , m_lights{pool, materials, std::move(lights)}
 {
@@ -349,6 +351,8 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
     m_proc.reset();
     m_areas.reset();
     m_bakeSlot.reset();
+    // LP4.3 (C36): the old path's grid goes with its bake
+    publishGridTable();
     m_bakeTicket = m_materials ? m_materials->loadMapBake(*m_mapPath) : 0;
     markAll();
   }
@@ -446,6 +450,8 @@ void SceneGeometry::scanTable()
       m_bakeSlot = slot;
       // C31: the bake's AreaData comes with its tree
       m_areas = slot->tree && slot->bake ? slot->bake->areas : nullptr;
+      // LP4.3 (C36): and its light grid
+      publishGridTable();
       if (slot->tree != m_proc)
       {
         m_proc = slot->tree;
@@ -930,6 +936,38 @@ std::shared_ptr<const LightTable> SceneGeometry::lightTable() const
 std::shared_ptr<const ProbeTable> SceneGeometry::probeTable() const
 {
   return m_probes.table();
+}
+
+std::shared_ptr<const GridTable> SceneGeometry::gridTable() const
+{
+  return m_grids->table();
+}
+
+std::shared_ptr<const MapBake> SceneGeometry::adoptedBake() const
+{
+  return m_bakeSlot ? m_bakeSlot->bake : nullptr;
+}
+
+bool SceneGeometry::bakeAnswered() const
+{
+  return m_mapPath && m_bakeSlot && !waitsForBake();
+}
+
+void SceneGeometry::publishGridTable()
+{
+  // SetupLightGrid runs with the world it belongs to (InitFromMap): the slot's tree
+  const auto* bake = m_bakeSlot && m_bakeSlot->tree ? m_bakeSlot->bake.get() : nullptr;
+  auto areas = bake ? gridAreasOf(*bake) : std::vector<GridArea>{};
+  const auto current = m_grids->table();
+  if (current && current->areas == areas)
+  {
+    return;
+  }
+  auto table = std::make_shared<GridTable>();
+  // the publication outlives a render thread: a new scene's table follows its last one
+  table->version = (current ? current->version : 0) + 1;
+  table->areas = std::move(areas);
+  m_grids->publish(std::move(table));
 }
 
 std::vector<std::string> SceneGeometry::takeWarnings()

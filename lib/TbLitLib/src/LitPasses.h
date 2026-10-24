@@ -42,6 +42,7 @@
 #include "SamplerSet.h"
 #include "ViewProbes.h"
 #include "base/Macros.h"
+#include "lit/GridTable.h"
 
 #include <nvrhi/nvrhi.h>
 
@@ -87,6 +88,9 @@ struct LitFrameInputs
   // LP4.2a (C37, D87): the scene's probe records (SceneGeometry::probeTable), which the
   // view's probe choice reads every frame; null: none
   std::shared_ptr<const ProbeTable> probes;
+  // LP4.3 (C36, D79): the bake's light grid (SceneGeometry::gridTable), with the tree;
+  // null or empty: every surface on the probe path
+  std::shared_ptr<const GridTable> grid;
   std::shared_ptr<const MaterialTable> materials;
   MaterialService* service = nullptr;
   // DX.2: the session's CPU pool, which makes the light triangles (none: at once)
@@ -174,6 +178,9 @@ struct LitFrameStats
   // image it read was not loaded yet (the default stood; the frame is unconverged)
   std::size_t probeCandidates = 0;
   bool probeImagesPending = false;
+  // LP4.3 (C36, D88): the atlas of an area with grid points is Pending (not loaded yet:
+  // its surfaces take the probe path meanwhile; the frame is unconverged)
+  bool gridImagesPending = false;
   // LP4.2a (C34, D86): the ambient pass: its draws, those dropped for set 9's volatile
   // buffer budget (also in overflowedDraws), those skipped (also in skippedDraws) and of
   // them for a pending pipeline (also in pendingPipelines), the surfaces left to the
