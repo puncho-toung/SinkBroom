@@ -9795,7 +9795,7 @@ struct FeedRig
    * quiet, so that the pacer's slot is free), its publication, the frames after it until
    * the session is quiet again; the first of them is drawn without a camera move.
    */
-  FeedLanding feed(const ImageOverride& image, const bool quietFirst = true)
+  FeedLanding feed(const ImageOverride& image, const bool quietFirst = true) const
   {
     if (quietFirst)
     {
@@ -9827,13 +9827,13 @@ struct FeedRig
     return landing;
   }
 
-  FeedLanding feed(const std::array<std::uint8_t, 3>& rgb, const int size = 64)
+  FeedLanding feed(const std::array<std::uint8_t, 3>& rgb, const int size = 64) const
   {
     return feed(constantOverride(size, size, rgb));
   }
 
   // the probe pixel of a settled frame (D110), and the converted texel under it
-  FeedProbe probe(const bool constant = true)
+  FeedProbe probe(const bool constant = true) const
   {
     const auto texels = levelTexels(*service, floorKey);
     REQUIRE_FALSE(texels.empty());
@@ -9889,7 +9889,7 @@ struct FeedRig
    * frames from the publication on.
    */
   std::vector<FeedFrame> reparse(
-    const std::string& name, const std::optional<std::string>& text)
+    const std::string& name, const std::optional<std::string>& text) const
   {
     REQUIRE(waitQuiet(*session));
     const auto item = listener->items();
@@ -10434,7 +10434,6 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
       const auto logPath =
         std::filesystem::temp_directory_path() / "TbLitLibTest-lpf1-replacing.csv";
       auto rig = FeedRig{instance, root, logPath};
-      auto& service = *rig.service;
       auto& session = *rig.session;
       auto report = std::vector<std::string>{};
       // the replacements whose landing frame the log is checked for
@@ -10602,6 +10601,7 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
       // 100 overrides, each drawn and settled, on the debug heap (the recording off: its
       // vectors would grow)
       {
+        auto& service = *rig.service;
         session.setEveryFrameHookForTesting({});
         rig.listener->record(false);
         const auto cycle = [&](const int i) {
