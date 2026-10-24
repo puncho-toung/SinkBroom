@@ -10157,7 +10157,7 @@ std::string lp51MapText(const std::vector<std::string>& lights)
   {
     const auto next = map.find("// entity ", start + 1);
     const auto block = map.substr(start, next == std::string::npos ? next : next - start);
-    if (block.find("\"classname\" \"light\"") == std::string::npos)
+    if (block.find(R"("classname" "light")") == std::string::npos)
     {
       out += block;
       ++index;
