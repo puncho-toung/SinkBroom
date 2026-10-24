@@ -693,7 +693,7 @@ bool loadSixFileCube(
 
 } // namespace
 
-// LPF.0a: Image_files.cpp:604-621, LoadEXR's loop, over a caller's floats
+// LPF.0a: Image_files.cpp:604-623, LoadEXR's loop, over a caller's floats
 std::vector<std::uint8_t> packEngineR11G11B10F(const std::vector<std::uint8_t>& rgba32f)
 {
   const auto pixelCount = rgba32f.size() / (4 * sizeof(float));

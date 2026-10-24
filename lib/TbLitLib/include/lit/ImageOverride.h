@@ -39,7 +39,7 @@ enum class ImagePixelFormat
   RGBA8,
   // four floats a texel, for TD_HDRI and TD_HDR_LIGHTPROBE only: packed to R11G11B10F
   // by the copied float3_to_r11g11b10f, the alpha dropped, as LoadEXR packs
-  // (Image_files.cpp:604-621)
+  // (Image_files.cpp:604-623)
   RGBA32F,
 };
 
@@ -80,10 +80,10 @@ struct ImageOverride
 /**
  * LPF.0a (C39, D97): the name an image override is stored and matched under: as
  * idImageManager::ImageFromFile folds a name before it compares it with its records'
- * (ImageManager.cpp:417-423: every ".tga", ".jpg", ".png", ".exr" and ".hdr" removed
- * wherever it stands, case-sensitively as idStr::Replace compares, Str.cpp:937-981, then
+ * (ImageManager.cpp:418-425: every ".tga", ".jpg", ".png", ".exr" and ".hdr" removed
+ * wherever it stands, case-sensitively as idStr::Replace compares, Str.cpp:937-984, then
  * backslashes made slashes), then lowercased, since the records' names are compared
- * without case (ImageManager.cpp:432, idStr::Icmp). An image key matches an override
+ * without case (ImageManager.cpp:435, idStr::Icmp). An image key matches an override
  * when its own name lowercased (feedMatchName: a record's name is folded already) equals
  * this: the whole name, so a program key (addnormals( … ), heightmap( … )) matches only
  * by its whole program text, never by one of its leaves. Pure; any thread.
@@ -95,7 +95,7 @@ std::string feedMatchName(const MaterialImageKey& key);
 
 /**
  * LPF.0a (P5.16): why an override of this name is refused at hand-over, or "" when it is
- * not: an empty name and "default" are the default image (ImageManager.cpp:403-407), and
+ * not: an empty name and "default" are the default image (ImageManager.cpp:404-408), and
  * a name that starts with '_' is one of the engine's built-ins, which match any options
  * and are never read from files (:436-439), the preview's intrinsic stand-ins among them.
  * name is feedKeyName's. Pure.

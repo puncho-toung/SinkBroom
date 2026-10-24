@@ -10735,7 +10735,7 @@
           "file": "lib/TbLitLib/idtech/engine/libs/mesa/format_r11g11b10f.h"
         }
       ],
-      "note": "D27's recorded exception (R5.6): Mesa's R11G11B10F packing, which LoadEXR, LoadHDR and R_MipMapR11G11B10F call; the fallback's HDR usages are R11G11B10F (D24, SC99). MIT (LICENSE_EXCEPTIONS.md, \"Mesa R11G11B10 utility functions\"); credited in the About dialog"
+      "note": "D27's recorded exception (R5.6): Mesa's R11G11B10F packing, which LoadEXR, LoadHDR and R_MipMapR11G11B10F call; the fallback's HDR usages are R11G11B10F (D24, SC99). MIT (LICENSE_EXCEPTIONS.md, \"Mesa R11G11B10 utility functions\"); credited in the About dialog; LPF.0a: packEngineR11G11B10F calls it for an RGBA32F image override, as LoadEXR does (M-FEED-01)"
     },
     {
       "id": "M-IMG-COPY-04",
@@ -11628,9 +11628,13 @@
         {
           "file": "lib/TbLitLib/src/ImageFallback.cpp",
           "symbol": "sourceImage"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageOverride.cpp",
+          "symbol": "overrideImage (raw pixels)"
         }
       ],
-      "note": "LP1c.2 (D24, D11): the fallback stops before the encoder: no BC1, BC3 or BC6H on the CPU, so its levels are RGBA8 where the cache holds DXT1 or DXT5 blocks and R11G11B10F where it holds BC6H (the engine accepts R11G11B10F for BC6H, SC99); its 2D levels are unpadded, where the engine pads a DXT level with zeros to whole 4 x 4 blocks, and a cube level below 4 x 4 keeps its size, where the engine replicates it into one block and records 4 x 4. It writes no cache file (the engine binarizes and writes one): the image is made again per session and on a source change. Image arrays and packed mip chains (engine-made bakes) and the editor's own image are never made from a source"
+      "note": "LP1c.2 (D24, D11): the fallback stops before the encoder: no BC1, BC3 or BC6H on the CPU, so its levels are RGBA8 where the cache holds DXT1 or DXT5 blocks and R11G11B10F where it holds BC6H (the engine accepts R11G11B10F for BC6H, SC99); its 2D levels are unpadded, where the engine pads a DXT level with zeros to whole 4 x 4 blocks, and a cube level below 4 x 4 keeps its size, where the engine replicates it into one block and records 4 x 4. It writes no cache file (the engine binarizes and writes one): the image is made again per session and on a source change. Image arrays and packed mip chains (engine-made bakes) and the editor's own image are never made from a source. LPF.0a (K34): an image override's raw pixels go through the same conversion (sourceLevels, M-FEED-02) and are drawn uncompressed the same way, the feed's normal case, until the file is saved, the engine binarizes it and the override is cleared"
     },
     {
       "id": "M-IMG-09",
@@ -11922,9 +11926,13 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
           "symbol": "MaterialDecls::sourceImageLevels"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::imageItem"
         }
       ],
-      "note": "LP1c fix (S2.3, S2.4, S2.5): the engine keeps an image in VRAM once loaded; the preview's parse thread reads one image per work item, below the lookups, the measures and the evaluations, and keeps the published images' data within MaterialServiceOptions::imageBudgetBytes (512 MB): beyond it, the least recently published image whose data a consumer has taken (image() returned it) leaves the table and is read again when asked for (about 0.5 ms a cache). A reload drops the image slots whose files changed (LP1c fix round 2, below), so new containers and caches the engine wrote are seen then (materialCollectionsDidChange, or a new session). The source fallback takes the loader's pixels as its working buffer and writes its levels into one buffer reserved for them all (about 1.3 GB less for an 8192 x 8192 source); it stops between levels once the session stops. LP2's upload-and-drop policy and the VRAM budget are LP2's LP1c fix round 2 (X.3): a reload drops only the image slots whose files the new source finds otherwise (a file found or missed, the cache's name included, a container entry's kind and container) and slots with no file; an unchanged slot keeps its pointer, so an .mtr save reads no image again. (X.11) A slot the poll drops is no longer counted as taken. (X.4, recorded) An evaluation waits at most for the work item in flight, which is one image or one bake: a source decode costs about 39 ms per 1024 x 1024 PNG in Release (the retail materialorb sources), so up to about 2.5 s at the 8192 x 8192 cap (D51), more in Debug; LP2's requests should ask small images first or bound a decode per item"
+      "note": "LP1c fix (S2.3, S2.4, S2.5): the engine keeps an image in VRAM once loaded; the preview's parse thread reads images in work items of up to 100 ms (or 256 images; LP4.3: a read batch's containers are reopened per item), each ending after the image in hand once more urgent work is queued (a reload, an evaluation, an image override (LPF.0a), a lookup, a bake, a measure), below the lookups, the measures and the evaluations, and keeps the published images' data within MaterialServiceOptions::imageBudgetBytes (512 MB): beyond it, the least recently published image whose data a consumer has taken (image() returned it) leaves the table and is read again when asked for (about 0.5 ms a cache). A reload drops the image slots whose files changed (LP1c fix round 2, below), so new containers and caches the engine wrote are seen then (materialCollectionsDidChange, or a new session). The source fallback takes the loader's pixels as its working buffer and writes its levels into one buffer reserved for them all (about 1.3 GB less for an 8192 x 8192 source); it stops between levels once the session stops. LP2's upload-and-drop policy and the VRAM budget are LP2's LP1c fix round 2 (X.3): a reload drops only the image slots whose files the new source finds otherwise (a file found or missed, the cache's name included, a container entry's kind and container) and slots with no file; an unchanged slot keeps its pointer, so an .mtr save reads no image again. (X.11) A slot the poll drops is no longer counted as taken. (X.4, recorded) An evaluation waits at most for the work item in flight, which is one image (the batch ends after it) or one bake: a source decode costs about 39 ms per 1024 x 1024 PNG in Release (the retail materialorb sources), so up to about 2.5 s at the 8192 x 8192 cap (D51), more in Debug; LP2's requests should ask small images first or bound a decode per item"
     },
     {
       "id": "M-FS-DIFF-10",
@@ -13630,6 +13638,197 @@
       "note": "LP2.1 step 4 (C28, P2.14d): the engine loads every image of a level before it draws (ActuallyLoadImage writes the whole image in one command list), so it never binds a stand-in; the preview loads images while it draws, so a slot whose texture has not arrived, and one the service has no image for (Default), binds its usage's intrinsic: TD_BUMP _flat, TD_LIGHT (falloff and projection images) _white, every other usage _default. A settled frame (D77) has every visible texture at its full mips, so the stand-in never reaches a parity shot"
     },
     {
+      "id": "M-FEED-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            604,
+            623
+          ],
+          "anchor": "LoadEXR, the packing of the float picture to R11G11B10F",
+          "sha256": "a1c0ee2f78b862dd4f8f43e81f85a8ed0a443bd17ac9ee70ada0d61d45422b1c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimImageSource.cpp",
+          "symbol": "packEngineR11G11B10F"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageOverride.cpp",
+          "symbol": "rawOverride"
+        }
+      ],
+      "note": "LPF.0a (C39 (a), P5.5): an RGBA32F override (TD_HDRI and TD_HDR_LIGHTPROBE only) is packed as LoadEXR packs its picture: each texel's first three floats through the copied float3_to_r11g11b10f (M-IMG-COPY-03) into one uint32_t in the machine's byte order, the alpha dropped; the loop is transcribed in the shim (a memcpy for the engine's pointer casts) and runs on the parse thread inside the Feed work item (C20). The packed picture then goes through the source fallback's conversion as a loaded EXR does (M-FEED-02)"
+    },
+    {
+      "id": "M-FEED-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            568,
+            611
+          ],
+          "anchor": "ActuallyLoadImage, the time call and the PBR rename",
+          "sha256": "fc385075c9b05dadc681e98a9c49d98327a6789ee4219c5abd00fad9ed50aeb9"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            674,
+            680
+          ],
+          "anchor": "ActuallyLoadImage, the test a cache must pass for the usage",
+          "sha256": "a708121a9ab3f33a9a12a724b4998f0163ae7549d8ec1b4ce8420775a0f972f3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ImageOverride.cpp",
+          "symbol": "overrideImage, rawOverride, readyOverride, levelCapProblem"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageFallback.cpp",
+          "symbol": "sourceLevels"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::overrideSlot"
+        }
+      ],
+      "note": "LPF.0a (C39, D97, P5.1, P5.6): an override's slot for one key: the copied time call (MaterialDecls::imageCacheName, M-IMG-03) names the cache and gives the usage and texture type, the one file probe an override makes; then (a) raw pixels convert through sourceLevels, the source fallback's conversion shared with sourceImage (sourceImageLevels with DeriveOpts for name.usage, never key.usage, the mip count for the picture's size and the key's filter, RGB565 expanded: M-IMG-DIFF-05), RGBA8 for every usage but TD_HDRI and TD_HDR_LIGHTPROBE, RGBA32F for those only (M-FEED-01), the cross pairs refused; (b) GPU-ready levels are taken as they are when they pass the test a .bimage passes (engineCacheMatches: the usage's colour format, its format or that format's uncompressed twin, RGBA8 for RGB565 and R11G11B10F for BC6H, the key's texture type, so 6 faces exactly for a cube key), have the binarizer's records (numLevels x faces, level-major, each record's level, side and halved size) and pass the upload's engineTextureDesc and levelUploadBytes; D24: their compression is the caller's. A level beyond UploadBytesPerFrame over all its faces is refused (M-TEX-DIFF-02). The slot is Ready, marked override, with the time call's name (its usage is what the draws read) and no files"
+    },
+    {
+      "id": "M-FEED-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/ImageManager.cpp",
+          "lines": [
+            404,
+            408
+          ],
+          "anchor": "ImageFromFile, the default image",
+          "sha256": "80b0ed20969852f38e8982dbcac9900154c1297367354c3ab0fa1d4510ef3c24"
+        },
+        {
+          "file": "neo/renderer/ImageManager.cpp",
+          "lines": [
+            418,
+            425
+          ],
+          "anchor": "ImageFromFile, the extensions stripped and the backslashes",
+          "sha256": "d2c187c65061b07a5c7e38908f2b1828fed4dfa6400376b2f8d19511064661b3"
+        },
+        {
+          "file": "neo/renderer/ImageManager.cpp",
+          "lines": [
+            431,
+            441
+          ],
+          "anchor": "ImageFromFile, the records compared without case, the built-ins",
+          "sha256": "7476d66560f16a2077b3c5979297c18a8804ad19127acd7386e7a301df9d2e89"
+        },
+        {
+          "file": "neo/idlib/Str.cpp",
+          "lines": [
+            937,
+            984
+          ],
+          "anchor": "idStr::Replace",
+          "sha256": "82458b7a79bca28635f2c6f07c1f4c13de25758233395f27abc2c59aad1392ee"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2278,
+            2290
+          ],
+          "anchor": "ParseStage, a specular stage naming _rmao or _rmaod",
+          "sha256": "bc2c13a9fb61d5b86ee71c25ee4ecf35376b8c6000492025def8491c156da4f0"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ImageOverride.cpp",
+          "symbol": "feedKeyName, feedMatchName, feedNameRefusal"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::setImageOverride, MaterialService::clearImageOverride"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::feedItem, setOverride, clearOverride"
+        }
+      ],
+      "note": "LPF.0a (C39, C40, D96, D97, P5.1, P5.16): the engine reads an image's files at load (ActuallyLoadImage); the preview also takes an image from a host in memory, under a game image name, in place of its files, without writing one (C8): MaterialService::setImageOverride, one Feed work item per name, served after the evaluations and ahead of the lookups, the newest hand-over winning. The matching rule is ImageFromFile's: the override's name folded as the engine folds a name before it compares it with its records (every .tga, .jpg, .png, .exr and .hdr removed wherever it stands, case-sensitively as idStr::Replace compares, so an upper-case extension stays; backslashes made slashes), then compared without case with a key's whole name (a record's name, folded already). A program key (addnormals( ... ), heightmap( ... )) is the record of its whole program text, so it matches only by that text, never by a leaf: an override of textures/foo_local does not feed bumpmap addnormals( textures/foo_local, ... ). The default image (an empty name, \"default\") and the built-ins (a name that starts with '_', which match any options and are never read from files) are refused at hand-over. The usage the override converts with is the copied time call's for each key (M-FEED-02): a stage naming <x>_rmao is TD_SPECULAR_PBR_RMAO at parse (Material.cpp), and an <x>_s key becomes it only when the <x>_rmao sibling file exists, as in the engine, so a host without files reaches the RMAO path by naming _rmao. Two usages of one name are two keys, two slots and two conversions. A set publishes the keys' drops and their new slots in one table, a refusal and a clear one table too (the clear reads the files in the same item); MaterialTable::feedApplied counts the hand-overs a table includes against MaterialService::feedRequested (D100). imageItem's break test gains the Feed queue (LP4.3's batching, named for the end review: P5.21)"
+    },
+    {
+      "id": "M-FEED-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            547,
+            904
+          ],
+          "anchor": "idImage::ActuallyLoadImage",
+          "sha256": "7c34911f5dc7ffa2c95f3c8cca395e3f30b85a129b04945e2866e15ad6819468"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::storedSlot, lookUpImage"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::dropChangedImages"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::pollImageFiles"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::keepImageBudget"
+        }
+      ],
+      "note": "LPF.0a (C41, D99, P5.7, P5.19): the override store in the material service's parse thread (never the shim: C17) is the truth, a published slot its derivative: override slots stay across builds through dropChangedImages' skip alone (no re-apply, no conversion at a build); they are not exempt from the image budget (S2.4, M-IMG-DIFF-09): a taken one may be dropped and is converted from the store again when asked for; lookUpImage consults the store before C8's search, so a key first asked for after the hand-over is converted at its first lookup. The poll never probes an overridden key's files (its slot has none); the copied time call that names an override's cache and gives its usage (its probes of the _rmao sibling and of a program's leaves) is the one probe an override makes. A key the store's image is refused for at its first lookup (a usage the pixels do not fit) is read from its files, its status Refused. Without a registry (a failed build) nothing converts: the override waits Pending, its keys answer the build's failure, and the next build's dropChangedImages drops those slots, so the consumers' lookups convert it. MaterialTable::overrideBytes is the store's bytes, the converted slots counting in the budget's"
+    },
+    {
+      "id": "M-FEED-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            223,
+            292
+          ],
+          "anchor": "idMaterial::GetEditorImage",
+          "sha256": "5ff0f5eca5eb847c51a795b86ce8c22d2bee5e3085ce55b858aea7bf76dd8d7a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EditorImageSize.cpp",
+          "symbol": "editorImageSize (sizeOverride)"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::measure, remeasureNamed, chainNames"
+        }
+      ],
+      "note": "LPF.0a (D111, K36, P5.7): the engine sizes an editor image from its files alone; an override may carry an editorSize, which stands for its image's files in C21's size chain (editorImageSize's sizeOverride: Ready, not defaulted, nothing probed), so a host without files does not tile its material by the 8 x 8 default. A set or clear whose editorSize changes remeasures every published material whose image chain holds the name (a name -> materials index filled as materials are measured, beside the size files), whose kept Ready size goes first, so a clear brings the files' size back; SceneGeometry::scanTable's size rule rebuilds their cells as for any size change"
+    },
+    {
       "id": "M-TEX-01",
       "kind": "function",
       "engine": [
@@ -13704,9 +13903,13 @@
         {
           "file": "lib/TbLitLib/src/TextureUploads.cpp",
           "symbol": "TextureUploads::record"
+        },
+        {
+          "file": "lib/TbLitLib/src/ImageOverride.cpp",
+          "symbol": "levelCapProblem, rawOverride"
         }
       ],
-      "note": "U3.16 (31-LP2-FIXES.md): the engine writes every level whole; a level (all its sides) larger than UploadBytesPerFrame (32 MB) would be one writeTexture through one upload chunk of its own size (a 16384 x 16384 RGBA8 level: 1 GiB), so the preview refuses the image: its slot is Default, with the reason, and binds its usage's intrinsic"
+      "note": "U3.16 (31-LP2-FIXES.md): the engine writes every level whole; a level (all its sides) larger than UploadBytesPerFrame (32 MB) would be one writeTexture through one upload chunk of its own size (a 16384 x 16384 RGBA8 level: 1 GiB), so the preview refuses the image: its slot is Default, with the reason, and binds its usage's intrinsic. LPF.0a (D103, P5.6, P5.25): the material service refuses an image override with such a level when its Feed item converts it, with the same UploadBytesPerFrame (the render side's constant; setUploadCapForTesting does not move it) and the level's bytes summed over all its faces (levelUploadBytes): a raw RGBA8 2D side above 2896, a raw RGBA8 cube side above 1182; the reason names this entry, the slots stand (Q27: larger images come as GPU-ready levels or downsampled)"
     },
     {
       "id": "M-ALLOC-DIFF-01",

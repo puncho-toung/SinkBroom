@@ -235,7 +235,7 @@ void holdThread(MaterialService& service, Hold& hold, const MaterialEntry& entry
 
 TEST_CASE("feedKeyName folds a name as ImageFromFile does (C39, P5.1)")
 {
-  // ImageManager.cpp:417-423 and :432: the extensions anywhere, backslashes, no case
+  // ImageManager.cpp:418-425 and :435: the extensions anywhere, backslashes, no case
   CHECK(feedKeyName("TEXTURES/Foo.tga") == "textures/foo");
   CHECK(feedKeyName("textures\\lp1c\\Foo.png") == "textures/lp1c/foo");
   CHECK(feedKeyName("textures/foo.jpg.exr") == "textures/foo");

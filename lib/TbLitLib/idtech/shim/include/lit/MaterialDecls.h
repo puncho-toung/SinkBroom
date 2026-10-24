@@ -506,7 +506,7 @@ struct SourcePixels
 
 /**
  * LPF.0a (C39 (a), P5.5): LoadEXR's packing of its float picture
- * (Image_files.cpp:604-621): each texel's first three floats through the copied
+ * (Image_files.cpp:604-623): each texel's first three floats through the copied
  * float3_to_r11g11b10f into one uint32_t, stored in the machine's byte order as the
  * engine stores it, the alpha dropped; rgba32f holds four floats a texel (its size a
  * multiple of 16 bytes). The result is SourcePixels' packed R11G11B10F. Copied code:

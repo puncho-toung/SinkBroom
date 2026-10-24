@@ -527,20 +527,20 @@ public:
    * an override only of its whole program text, and the time call's _s → _rmao rename
    * needs the sibling file as in the engine (M-FEED-DIFF-01). Refused at once, with
    * nothing queued and no count moved: an empty name, "default", and a name that starts
-   * with "_" (the engine's built-ins, ImageManager.cpp:403, :436-439). Otherwise one Feed
-   * work item per name is queued, the newest hand-over of a name replacing an older one
-   * not taken yet (its bytes dropped, stats().droppedFeeds), and feedRequested() counts
-   * it. On the parse thread the item converts the image for every key the table holds
-   * under the name, each with its own cache name and usage (the copied time call, the one
-   * file probe an override makes) and publishes the keys' drops and the new slots in ONE
-   * table with feedApplied advanced; a refusal (a cross pair of pixel format and usage,
-   * a GPU-ready image of another format, colour format or face count, a level beyond
-   * UploadBytesPerFrame over all its faces) publishes once too, the slots unchanged, and
-   * imageOverrideStatus says why. A name no key uses yet is stored and converted at the
-   * key's first lookup. The store is the truth: an override slot stays across builds,
-   * the budget may drop it and a later request converts it again; the poll never probes
-   * an overridden key's files. editorSize, when it changes a material's editor-image
-   * size, remeasures every material whose image chain holds the name (D111).
+   * with "_" (the engine's built-ins, ImageManager.cpp:404-408, :437-441). Otherwise one
+   * Feed work item per name is queued, the newest hand-over of a name replacing an older
+   * one not taken yet (its bytes dropped, stats().droppedFeeds), and feedRequested()
+   * counts it. On the parse thread the item converts the image for every key the table
+   * holds under the name, each with its own cache name and usage (the copied time call,
+   * the one file probe an override makes) and publishes the keys' drops and the new slots
+   * in ONE table with feedApplied advanced; a refusal (a cross pair of pixel format and
+   * usage, a GPU-ready image of another format, colour format or face count, a level
+   * beyond UploadBytesPerFrame over all its faces) publishes once too, the slots
+   * unchanged, and imageOverrideStatus says why. A name no key uses yet is stored and
+   * converted at the key's first lookup. The store is the truth: an override slot stays
+   * across builds, the budget may drop it and a later request converts it again; the poll
+   * never probes an overridden key's files. editorSize, when it changes a material's
+   * editor-image size, remeasures every material whose image chain holds the name (D111).
    */
   Result<void> setImageOverride(std::string imageName, ImageOverride image);
 

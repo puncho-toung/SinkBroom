@@ -61,7 +61,7 @@ constexpr int Cube2DArray = 4;
 // ImageManager.cpp:420 (and the shim's ShimRenderer.cpp ImageFormats)
 constexpr std::string_view ImageFormats[] = {".tga", ".jpg", ".png", ".exr", ".hdr"};
 
-// Str.cpp:937-981 idStr::Replace( old, "" ): every occurrence, left to right, without
+// Str.cpp:937-984 idStr::Replace( old, "" ): every occurrence, left to right, without
 // overlap, compared with case (idStr::Cmpn)
 std::string removeAll(const std::string& text, const std::string_view old)
 {
@@ -352,7 +352,7 @@ Result<std::shared_ptr<const CachedImage>> readyOverride(
 
 std::string feedKeyName(const std::string& name)
 {
-  // ImageManager.cpp:417-423: strip any .tga file extensions from anywhere in the _name,
+  // ImageManager.cpp:418-425: strip any .tga file extensions from anywhere in the _name,
   // including image program parameters
   auto folded = name;
   for (const auto extension : ImageFormats)
@@ -375,7 +375,7 @@ std::string feedNameRefusal(const std::string& name)
   {
     return fmt::format(
       "an override of \"{}\" is refused: the name is the engine's default image "
-      "(ImageManager.cpp:403-407)",
+      "(ImageManager.cpp:404-408)",
       name);
   }
   if (name.front() == '_')
@@ -383,7 +383,7 @@ std::string feedNameRefusal(const std::string& name)
     return fmt::format(
       "an override of \"{}\" is refused: a name that starts with '_' is one of the "
       "engine's built-in images, which match any options and are never read from files "
-      "(ImageManager.cpp:436-439)",
+      "(ImageManager.cpp:437-441)",
       name);
   }
   return {};
