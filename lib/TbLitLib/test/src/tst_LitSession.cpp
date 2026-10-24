@@ -6996,7 +6996,7 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
                           && std::ranges::all_of(
                             areas, [&](const int area) { return area == expectedArea; });
         expectedEntityGrid = fmt::format(
-          "{{\"name\": \"{}\", \"expected\": {}, \"areas\": [{}]}}",
+          R"({{"name": "{}", "expected": {}, "areas": [{}]}})",
           name,
           expectedArea,
           fmt::join(areas, ", "));

@@ -321,10 +321,8 @@ std::int64_t mapBakeGeometryTime(const MapBake& bake)
   const auto path = bake.geometry == MapBake::Geometry::Proc
                       ? withExtension(bake.mapName, "proc")
                       : "generated/" + withExtension(bake.mapName, "bproc");
-  const auto file =
-    std::find_if(bake.files.begin(), bake.files.end(), [&](const MapBakeFile& f) {
-      return f.path == path;
-    });
+  const auto file = std::ranges::find_if(
+    bake.files, [&](const MapBakeFile& f) { return f.path == path; });
   return file != bake.files.end() ? file->probe.time : -1;
 }
 
