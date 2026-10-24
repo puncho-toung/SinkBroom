@@ -325,32 +325,6 @@ namespace
 
 using namespace std::chrono_literals;
 
-struct VulkanLibrary
-{
-  HMODULE module = LoadLibraryW(L"vulkan-1.dll");
-  PFN_vkGetInstanceProcAddr getInstanceProcAddr =
-    module ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(
-               reinterpret_cast<void*>(GetProcAddress(module, "vkGetInstanceProcAddr")))
-           : nullptr;
-
-  VulkanLibrary() = default;
-  VulkanLibrary(const VulkanLibrary&) = delete;
-  VulkanLibrary& operator=(const VulkanLibrary&) = delete;
-  ~VulkanLibrary()
-  {
-    if (module)
-    {
-      FreeLibrary(module);
-    }
-  }
-
-  template <typename F>
-  F get(VkInstance instance, const char* name) const
-  {
-    return reinterpret_cast<F>(getInstanceProcAddr(instance, name));
-  }
-};
-
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
 constexpr auto OutputNotConsumedId = std::string_view{"WARNING-Shader-OutputNotConsumed"};
@@ -378,33 +352,24 @@ struct ValidationMessages
   std::string_view mirroredMessageId;
   std::atomic<int> mirrored = 0;
 
-  static VKAPI_ATTR VkBool32 VKAPI_CALL callback(
-    const VkDebugUtilsMessageSeverityFlagBitsEXT severity,
-    VkDebugUtilsMessageTypeFlagsEXT,
-    const VkDebugUtilsMessengerCallbackDataEXT* data,
-    void* user)
+  // LPF.2: the product instance's message sink (VulkanInstanceOptions::messages)
+  void receive(const VulkanMessage& message)
   {
-    auto& self = *static_cast<ValidationMessages*>(user);
-    const auto id =
-      std::string_view{data && data->pMessageIdName ? data->pMessageIdName : ""};
-    if (
-      !(severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
-      && !self.mirroredMessageId.empty() && id == self.mirroredMessageId)
+    if (!message.error && !mirroredMessageId.empty() && message.id == mirroredMessageId)
     {
-      ++self.mirrored;
-      return VK_FALSE;
+      ++mirrored;
+      return;
     }
-    if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+    if (message.error)
     {
-      ++self.errors;
+      ++errors;
     }
     else
     {
-      ++self.warnings;
+      ++warnings;
     }
-    const auto lock = std::scoped_lock{self.mutex};
-    self.texts.emplace_back(data && data->pMessage ? data->pMessage : "");
-    return VK_FALSE;
+    const auto lock = std::scoped_lock{mutex};
+    texts.push_back(message.text);
   }
 
   void print(const std::string_view label)
@@ -419,181 +384,24 @@ struct ValidationMessages
   }
 };
 
-// The test's own Vulkan instance, created as QVulkanInstance creates one: API 1.2, the
-// requested extensions that the loader supports, the validation layer if present.
-class TestInstance
+// The test's Vulkan instance (LPF.2: lit::VulkanInstance, D107), as QVulkanInstance
+// creates one: API 1.2, the platform's surface extensions when asked for, the validation
+// layer if present with every message of one id reported (T0.2), each message counted
+// in messages through the product's message sink.
+VulkanInstance testInstance(
+  const bool validation, const bool surfaceExtensions, ValidationMessages& messages)
 {
-public:
-  TestInstance(
-    const VulkanLibrary& library,
-    const bool validation,
-    const bool surfaceExtensions,
-    ValidationMessages& messages)
-    : m_library{library}
-  {
-    const auto createInstance =
-      m_library.get<PFN_vkCreateInstance>(nullptr, "vkCreateInstance");
-    const auto enumerateExtensions =
-      m_library.get<PFN_vkEnumerateInstanceExtensionProperties>(
-        nullptr, "vkEnumerateInstanceExtensionProperties");
-    const auto enumerateLayers = m_library.get<PFN_vkEnumerateInstanceLayerProperties>(
-      nullptr, "vkEnumerateInstanceLayerProperties");
-
-    auto count = std::uint32_t{0};
-    enumerateExtensions(nullptr, &count, nullptr);
-    auto supported = std::vector<VkExtensionProperties>(count);
-    enumerateExtensions(nullptr, &count, supported.data());
-
-    // what the session needs beyond the surface: the debug messenger with validation; the
-    // engine also asks for VK_KHR_get_physical_device_properties2 (core since 1.1),
-    // VK_EXT_sampler_filter_minmax (a device extension) and VK_EXT_debug_report (replaced
-    // by debug utils), see mirror.json
-    auto wanted = std::vector<const char*>{};
-    if (validation)
-    {
-      wanted.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-    }
-    if (surfaceExtensions)
-    {
-      wanted.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
-      wanted.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
-    }
-    auto enabled = std::vector<const char*>{};
-    for (const auto* name : wanted)
-    {
-      if (std::ranges::any_of(supported, [&](const auto& e) {
-            return std::string_view{e.extensionName} == name;
-          }))
-      {
-        enabled.push_back(name);
-        m_extensions.emplace_back(name);
-      }
-    }
-
-    auto layers = std::vector<const char*>{};
-    if (validation)
-    {
-      enumerateLayers(&count, nullptr);
-      auto available = std::vector<VkLayerProperties>(count);
-      enumerateLayers(&count, available.data());
-      if (std::ranges::any_of(available, [](const auto& l) {
-            return std::string_view{l.layerName} == "VK_LAYER_KHRONOS_validation";
-          }))
-      {
-        layers.push_back("VK_LAYER_KHRONOS_validation");
-      }
-      m_validationLayer = !layers.empty();
-    }
-
-    // T0.2: every message of one id is reported (the layer's own VK_EXT_layer_settings)
-    auto limit = RaisedDuplicateMessageLimit;
-    auto setting = VkLayerSettingEXT{};
-    setting.pLayerName = "VK_LAYER_KHRONOS_validation";
-    setting.pSettingName = "duplicate_message_limit";
-    setting.type = VK_LAYER_SETTING_TYPE_UINT32_EXT;
-    setting.valueCount = 1;
-    setting.pValues = &limit;
-    auto layerSettings = VkLayerSettingsCreateInfoEXT{};
-    layerSettings.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
-    layerSettings.settingCount = 1;
-    layerSettings.pSettings = &setting;
-    if (m_validationLayer)
-    {
-      enumerateExtensions("VK_LAYER_KHRONOS_validation", &count, nullptr);
-      auto layerExtensions = std::vector<VkExtensionProperties>(count);
-      enumerateExtensions("VK_LAYER_KHRONOS_validation", &count, layerExtensions.data());
-      m_messageLimitRaised = std::ranges::any_of(layerExtensions, [](const auto& e) {
-        return std::string_view{e.extensionName} == VK_EXT_LAYER_SETTINGS_EXTENSION_NAME;
-      });
-      if (m_messageLimitRaised)
-      {
-        enabled.push_back(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
-      }
-    }
-
-    auto messengerInfo = VkDebugUtilsMessengerCreateInfoEXT{};
-    messengerInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-    messengerInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
-                                    | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-    messengerInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT
-                                | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
-                                | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-    messengerInfo.pfnUserCallback = &ValidationMessages::callback;
-    messengerInfo.pUserData = &messages;
-    const auto useMessenger =
-      validation
-      && std::ranges::find(m_extensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)
-           != m_extensions.end();
-
-    auto application = VkApplicationInfo{};
-    application.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    application.pApplicationName = "TbLitLibTest";
-    application.apiVersion = VK_API_VERSION_1_2;
-
-    auto info = VkInstanceCreateInfo{};
-    info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    info.pNext = useMessenger ? &messengerInfo : nullptr;
-    if (m_messageLimitRaised)
-    {
-      layerSettings.pNext = info.pNext;
-      info.pNext = &layerSettings;
-    }
-    info.pApplicationInfo = &application;
-    info.enabledLayerCount = std::uint32_t(layers.size());
-    info.ppEnabledLayerNames = layers.data();
-    info.enabledExtensionCount = std::uint32_t(enabled.size());
-    info.ppEnabledExtensionNames = enabled.data();
-    if (createInstance(&info, nullptr, &m_instance) != VK_SUCCESS)
-    {
-      m_instance = VK_NULL_HANDLE;
-      return;
-    }
-
-    if (useMessenger)
-    {
-      const auto createMessenger = m_library.get<PFN_vkCreateDebugUtilsMessengerEXT>(
-        m_instance, "vkCreateDebugUtilsMessengerEXT");
-      createMessenger(m_instance, &messengerInfo, nullptr, &m_messenger);
-    }
-  }
-
-  TestInstance(const TestInstance&) = delete;
-  TestInstance& operator=(const TestInstance&) = delete;
-
-  ~TestInstance()
-  {
-    if (m_messenger != VK_NULL_HANDLE)
-    {
-      m_library.get<PFN_vkDestroyDebugUtilsMessengerEXT>(
-        m_instance, "vkDestroyDebugUtilsMessengerEXT")(m_instance, m_messenger, nullptr);
-    }
-    if (m_instance != VK_NULL_HANDLE)
-    {
-      m_library.get<PFN_vkDestroyInstance>(m_instance, "vkDestroyInstance")(
-        m_instance, nullptr);
-    }
-  }
-
-  bool valid() const { return m_instance != VK_NULL_HANDLE; }
-  bool validationLayer() const { return m_validationLayer; }
-  // T0.2: the layer reports every message of an id, not ValidationDuplicateMessageLimit
-  bool messageLimitRaised() const { return m_messageLimitRaised; }
-
-  InstanceHandles handles() const
-  {
-    return {m_instance, m_library.getInstanceProcAddr, m_extensions};
-  }
-
-  VkInstance instance() const { return m_instance; }
-
-private:
-  const VulkanLibrary& m_library;
-  VkInstance m_instance = VK_NULL_HANDLE;
-  VkDebugUtilsMessengerEXT m_messenger = VK_NULL_HANDLE;
-  std::vector<std::string> m_extensions;
-  bool m_validationLayer = false;
-  bool m_messageLimitRaised = false;
-};
+  auto options = VulkanInstanceOptions{};
+  options.validation = validation;
+  options.surface = surfaceExtensions;
+  options.duplicateMessageLimit = RaisedDuplicateMessageLimit;
+  options.messages = [&messages](const VulkanMessage& message) {
+    messages.receive(message);
+  };
+  options.applicationName = "TbLitLibTest";
+  return VulkanInstance::create(std::move(options))
+         | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+}
 
 struct Events
 {
@@ -857,8 +665,6 @@ Result<void> replaceSwapchain(
 // no NVRHI reference, no NVRHI error and no validation error behind.
 TEST_CASE("LitSession on a GPU", "[.][litgpu]")
 {
-  const auto library = VulkanLibrary{};
-  REQUIRE(library.getInstanceProcAddr != nullptr);
 
   SECTION("headless: 20 cycles of create, clear with a timer query, teardown")
   {
@@ -870,7 +676,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     auto deviceName = std::string{};
 
     {
-      const auto instance = TestInstance{library, validation, false, messages};
+      const auto instance = testInstance(validation, false, messages);
       REQUIRE(instance.valid());
       if (validation)
       {
@@ -994,7 +800,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
   {
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
 
@@ -1068,7 +874,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
   {
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
 
@@ -1122,7 +928,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
 
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
 
@@ -1176,7 +982,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     // and the pass must still see it instead of waiting without a deadline
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
 
@@ -1238,7 +1044,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     // that a later thread with a recycled id is never the one waited for
     auto poolHandles = std::make_shared<std::vector<HANDLE>>();
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
 
@@ -1383,7 +1189,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
 
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -1423,7 +1229,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
   {
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
 
@@ -1551,12 +1357,12 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       auto window = TestWindow{320, 240};
       REQUIRE(window.handle() != nullptr);
 
-      const auto instance = TestInstance{library, true, true, messages};
+      const auto instance = testInstance(true, true, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
 
-      const auto createSurface = library.get<PFN_vkCreateWin32SurfaceKHR>(
-        instance.instance(), "vkCreateWin32SurfaceKHR");
+      const auto createSurface =
+        instance.get<PFN_vkCreateWin32SurfaceKHR>("vkCreateWin32SurfaceKHR");
       REQUIRE(createSurface != nullptr);
       auto surfaceInfo = VkWin32SurfaceCreateInfoKHR{};
       surfaceInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
@@ -1598,8 +1404,8 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
         REQUIRE(session->physicalDevice() != VK_NULL_HANDLE);
         auto presents = VkBool32{VK_FALSE};
         CHECK(
-          library.get<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(
-            instance.instance(), "vkGetPhysicalDeviceSurfaceSupportKHR")(
+          instance.get<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(
+            "vkGetPhysicalDeviceSurfaceSupportKHR")(
             session->physicalDevice(), session->queueFamily(), surface, &presents)
           == VK_SUCCESS);
         CHECK(presents == VK_TRUE);
@@ -1711,7 +1517,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       }
 
       // step 6: the surface goes after the swapchains and before the instance
-      library.get<PFN_vkDestroySurfaceKHR>(instance.instance(), "vkDestroySurfaceKHR")(
+      instance.get<PFN_vkDestroySurfaceKHR>("vkDestroySurfaceKHR")(
         instance.instance(), surface, nullptr);
     }
     CHECK(resetDispatcher());
@@ -1769,8 +1575,6 @@ TEST_CASE("LitSession pipelines on a GPU (D71)", "[.][litgpu]")
   {
     SKIP("TB_LIT_GAME_PATH is not set: the pipelines need the engine's shader blobs");
   }
-  const auto library = VulkanLibrary{};
-  REQUIRE(library.getInstanceProcAddr != nullptr);
 
   SECTION("D71: pipelines made on the compile thread while the render thread draws")
   {
@@ -1778,7 +1582,7 @@ TEST_CASE("LitSession pipelines on a GPU (D71)", "[.][litgpu]")
     messages.mirroredMessageId = OutputNotConsumedId;
     auto limitRaised = false;
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       limitRaised = instance.messageLimitRaised();
       REQUIRE(initInstanceDispatcher(instance.handles()));
@@ -1965,7 +1769,7 @@ TEST_CASE("LitSession pipelines on a GPU (D71)", "[.][litgpu]")
     messages.mirroredMessageId = OutputNotConsumedId;
     auto limitRaised = false;
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       limitRaised = instance.messageLimitRaised();
       REQUIRE(initInstanceDispatcher(instance.handles()));
@@ -2067,7 +1871,7 @@ double vramMb(const LitSession& session)
 
 // a headless session with validation on this machine's GPU
 std::unique_ptr<LitSession> gpuSession(
-  const TestInstance& instance,
+  const VulkanInstance& instance,
   Events& events,
   const std::uint64_t generation,
   MaterialService* materials = nullptr,
@@ -2284,14 +2088,12 @@ bool waitForSlots(
 // reference, no NVRHI error, no validation message and every device allocation freed.
 TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
 {
-  const auto library = VulkanLibrary{};
-  REQUIRE(library.getInstanceProcAddr != nullptr);
 
   SECTION("C14, C28: the frame resources, and 100 resizes back at the baseline")
   {
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -2445,7 +2247,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
 
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -2504,7 +2306,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
   {
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -2563,7 +2365,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
   {
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       for (const auto& [gamePath, reason] :
@@ -2621,7 +2423,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
   {
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -2697,7 +2499,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     std::filesystem::remove(logPath);
     auto logged = std::vector<std::uint64_t>{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -2773,7 +2575,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
   {
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -2844,7 +2646,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
   {
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -2885,7 +2687,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     namespace ei = engine_image;
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -2963,7 +2765,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     namespace ei = engine_image;
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -3025,7 +2827,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     namespace ei = engine_image;
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -3110,7 +2912,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     const auto again = HostAllocationsAgain{};
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -3183,7 +2985,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     {
       // U2.3: an upload chunk that cannot be allocated ends the session with NVRHI's
       // Error (M-NVRHI-DEFECT-01's patch) instead of a crash in a null buffer's map
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -3224,7 +3026,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     namespace ei = engine_image;
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -3294,7 +3096,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     namespace ei = engine_image;
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -3413,7 +3215,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     auto service = MaterialService::create(std::move(serviceOptions))
                    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -3571,7 +3373,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     namespace ei = engine_image;
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -3755,8 +3557,6 @@ TEST_CASE("LitSession GPU resources on the retail game (D72)", "[.][retail]")
   // within the 180 s wall-clock bound of a hidden GPU run, with room for its start and
   // stop
   const auto deadline = started + 150s;
-  const auto library = VulkanLibrary{};
-  REQUIRE(library.getInstanceProcAddr != nullptr);
 
   // the map's materials: its .bproc's surfaces (BprocModel's reader records each
   // surface's material); its lights' shaders: the .map's "texture" keys, when the game
@@ -3864,7 +3664,7 @@ TEST_CASE("LitSession GPU resources on the retail game (D72)", "[.][retail]")
   auto allocationsAfterStop = std::int64_t{-1};
   auto loadSeconds = 0.0;
   {
-    const auto instance = TestInstance{library, true, false, messages};
+    const auto instance = testInstance(true, false, messages);
     REQUIRE(instance.valid());
     REQUIRE(initInstanceDispatcher(instance.handles()));
     auto events = Events{};
@@ -4320,7 +4120,7 @@ std::unique_ptr<MaterialService> rootService(
 // a headless 160 × 120 session with validation over the root; startPipelines false for a
 // test that holds the compile thread from the start (DX.5)
 std::unique_ptr<LitSession> rootSession(
-  const TestInstance& instance,
+  const VulkanInstance& instance,
   Events& events,
   MaterialService& service,
   const std::filesystem::path& root,
@@ -4395,8 +4195,6 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
   }
   const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
   REQUIRE_FALSE(root.empty());
-  const auto library = VulkanLibrary{};
-  REQUIRE(library.getInstanceProcAddr != nullptr);
 
   SECTION("the fixture map lit: probes, D76, the perforated prepass, the lists' order")
   {
@@ -4405,7 +4203,7 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
     auto limitRaised = false;
     auto programsAsked = std::vector<int>{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       limitRaised = instance.messageLimitRaised();
       REQUIRE(initInstanceDispatcher(instance.handles()));
@@ -4740,7 +4538,7 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
       auto messages = ValidationMessages{};
       messages.mirroredMessageId = OutputNotConsumedId;
       {
-        const auto instance = TestInstance{library, true, false, messages};
+        const auto instance = testInstance(true, false, messages);
         REQUIRE(instance.valid());
         REQUIRE(initInstanceDispatcher(instance.handles()));
         // the parse thread waits at the gate after its first build: the snapshot's
@@ -4857,7 +4655,7 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       // S2.4 at one byte: every image a consumer has taken is dropped from the table at
@@ -4963,7 +4761,7 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
     messages.mirroredMessageId = OutputNotConsumedId;
     auto stoppedEarly = std::make_shared<std::atomic<bool>>(false);
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
@@ -5264,7 +5062,7 @@ std::optional<ChainFrame> settledChain(
 
 // a headless 160 × 120 session with validation over the root, logging its frames
 std::unique_ptr<LitSession> loggedRootSession(
-  const TestInstance& instance,
+  const VulkanInstance& instance,
   Events& events,
   MaterialService& service,
   const std::filesystem::path& root,
@@ -5305,8 +5103,6 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
   }
   const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
   REQUIRE_FALSE(root.empty());
-  const auto library = VulkanLibrary{};
-  REQUIRE(library.getInstanceProcAddr != nullptr);
 
   SECTION(
     "three HDR values tonemap as the shaders compute them, the exposure is its clamped "
@@ -5316,7 +5112,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     messages.mirroredMessageId = OutputNotConsumedId;
     auto limitRaised = false;
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       limitRaised = instance.messageLimitRaised();
       REQUIRE(initInstanceDispatcher(instance.handles()));
@@ -5443,7 +5239,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     auto limitRaised = false;
     auto programsAsked = std::vector<int>{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       limitRaised = instance.messageLimitRaised();
       REQUIRE(initInstanceDispatcher(instance.handles()));
@@ -5664,12 +5460,12 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     {
       auto window = TestWindow{320, 240};
       REQUIRE(window.handle() != nullptr);
-      const auto instance = TestInstance{library, true, true, messages};
+      const auto instance = testInstance(true, true, messages);
       REQUIRE(instance.valid());
       limitRaised = instance.messageLimitRaised();
       REQUIRE(initInstanceDispatcher(instance.handles()));
-      const auto createSurface = library.get<PFN_vkCreateWin32SurfaceKHR>(
-        instance.instance(), "vkCreateWin32SurfaceKHR");
+      const auto createSurface =
+        instance.get<PFN_vkCreateWin32SurfaceKHR>("vkCreateWin32SurfaceKHR");
       REQUIRE(createSurface != nullptr);
       auto surfaceInfo = VkWin32SurfaceCreateInfoKHR{};
       surfaceInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
@@ -5777,7 +5573,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
         service->requestStop();
         service->join();
       }
-      library.get<PFN_vkDestroySurfaceKHR>(instance.instance(), "vkDestroySurfaceKHR")(
+      instance.get<PFN_vkDestroySurfaceKHR>("vkDestroySurfaceKHR")(
         instance.instance(), surface, nullptr);
     }
     CHECK(resetDispatcher());
@@ -5803,7 +5599,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
       auto messages = ValidationMessages{};
       messages.mirroredMessageId = OutputNotConsumedId;
       {
-        const auto instance = TestInstance{library, true, false, messages};
+        const auto instance = testInstance(true, false, messages);
         REQUIRE(instance.valid());
         REQUIRE(initInstanceDispatcher(instance.handles()));
         auto service = rootService(root);
@@ -5889,7 +5685,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     };
     auto measured = std::array<Phase, 2>{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
@@ -6047,7 +5843,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     // for another trigger
     auto messages = ValidationMessages{};
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto events = Events{};
@@ -6097,7 +5893,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     auto stoppedEarly = std::make_shared<std::atomic<bool>>(false);
     auto blittedAfterStop = std::make_shared<std::atomic<bool>>(true);
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
@@ -6804,14 +6600,12 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
     }
   }
 
-  const auto library = VulkanLibrary{};
-  REQUIRE(library.getInstanceProcAddr != nullptr);
   auto messages = ValidationMessages{};
   messages.mirroredMessageId = OutputNotConsumedId;
   // per row: the frames it presented, from and to
   auto frameRanges = std::vector<std::pair<std::uint64_t, std::uint64_t>>{};
   {
-    const auto instance = TestInstance{library, true, false, messages};
+    const auto instance = testInstance(true, false, messages);
     REQUIRE(instance.valid());
     REQUIRE(initInstanceDispatcher(instance.handles()));
     auto service = rootService(root);
@@ -7707,8 +7501,6 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu]")
   }
   const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
   REQUIRE_FALSE(root.empty());
-  const auto library = VulkanLibrary{};
-  REQUIRE(library.getInstanceProcAddr != nullptr);
   const auto lit = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
 
   SECTION("no bake: every probe defaulted, the pass black over the prepass's black")
@@ -7719,7 +7511,7 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu]")
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
@@ -7977,7 +7769,7 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu]")
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
@@ -8192,7 +7984,7 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu]")
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
@@ -8288,7 +8080,7 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu]")
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
@@ -8385,7 +8177,7 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu]")
     auto framesMutex = std::make_shared<std::mutex>();
     {
       auto hold = std::optional<Hold>{std::in_place};
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
@@ -8490,7 +8282,7 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu]")
     messages.mirroredMessageId = OutputNotConsumedId;
     auto stopped = std::make_shared<LitFrameStats>();
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
@@ -8553,7 +8345,7 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu]")
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
@@ -8795,8 +8587,6 @@ TEST_CASE("LitSession light-grid path on a GPU (LP4.3)", "[.][litgpu]")
   }
   const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
   REQUIRE_FALSE(root.empty());
-  const auto library = VulkanLibrary{};
-  REQUIRE(library.getInstanceProcAddr != nullptr);
   const auto base = root / "base";
   writeTextFile(base / "materials" / "zz_lp42a.mtr", Lp42aMaterials);
   std::filesystem::create_directories(base / "textures" / "lp42a");
@@ -8851,7 +8641,7 @@ TEST_CASE("LitSession light-grid path on a GPU (LP4.3)", "[.][litgpu]")
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
@@ -9057,7 +8847,7 @@ TEST_CASE("LitSession light-grid path on a GPU (LP4.3)", "[.][litgpu]")
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
@@ -9141,7 +8931,7 @@ TEST_CASE("LitSession light-grid path on a GPU (LP4.3)", "[.][litgpu]")
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
@@ -9205,7 +8995,7 @@ TEST_CASE("LitSession light-grid path on a GPU (LP4.3)", "[.][litgpu]")
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
@@ -9311,12 +9101,10 @@ TEST_CASE(
            && chunk.bounds[0][2] >= 63.0f && chunk.bounds[1][2] <= 129.0f;
   };
 
-  const auto library = VulkanLibrary{};
-  REQUIRE(library.getInstanceProcAddr != nullptr);
   auto messages = ValidationMessages{};
   messages.mirroredMessageId = OutputNotConsumedId;
   {
-    const auto instance = TestInstance{library, true, false, messages};
+    const auto instance = testInstance(true, false, messages);
     REQUIRE(instance.valid());
     REQUIRE(initInstanceDispatcher(instance.handles()));
     auto service = rootService(root);
@@ -9766,7 +9554,7 @@ struct FeedRig
   HdrImage firstHdr;
 
   FeedRig(
-    const TestInstance& instance,
+    const VulkanInstance& instance,
     const std::filesystem::path& root,
     const std::filesystem::path& logPath)
   {
@@ -10127,15 +9915,13 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
   }
   const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
   REQUIRE_FALSE(root.empty());
-  const auto library = VulkanLibrary{};
-  REQUIRE(library.getInstanceProcAddr != nullptr);
   auto messages = ValidationMessages{};
   messages.mirroredMessageId = OutputNotConsumedId;
 
   SECTION("step 1: a feed draws at once, the counters in settled, refusals, the storm")
   {
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       const auto logPath =
@@ -10428,7 +10214,7 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
   SECTION("step 2: Replacing: no frame between two overrides binds the intrinsic")
   {
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       const auto logPath =
@@ -10674,7 +10460,7 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
   SECTION("step 4: the re-parse through the render side; Stop with a feed queued")
   {
     {
-      const auto instance = TestInstance{library, true, false, messages};
+      const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
       const auto logPath =

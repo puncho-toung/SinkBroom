@@ -22,6 +22,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 namespace tb::lit
 {
@@ -41,6 +42,20 @@ TEST_CASE("VulkanInstance")
     CHECK(resetDispatcher());
     CHECK(VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr == nullptr);
     CHECK(VULKAN_HPP_DEFAULT_DISPATCHER.vkCreateDevice == nullptr);
+  }
+
+  SECTION("create: a loader that cannot be loaded (LPF.2, D107)")
+  {
+    // nothing of that name exists: the reason names the loader (no GPU needed)
+    auto options = VulkanInstanceOptions{};
+    options.loaderName = "tb-lit-no-such-vulkan-loader.dll";
+    options.validation = true;
+    auto result = VulkanInstance::create(std::move(options));
+    REQUIRE(result.is_error());
+    CHECK_THAT(
+      std::get<Error>(result.error()).msg,
+      Catch::Matchers::StartsWith(
+        "Cannot load the Vulkan loader tb-lit-no-such-vulkan-loader.dll"));
   }
 }
 

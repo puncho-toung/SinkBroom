@@ -112,6 +112,9 @@ target_link_libraries(TbLitLib
     # reflection (D9, cmake/dependencies/spirv-reflect.cmake)
     ShaderBlob
     SpirvReflect
+    # LPF.2 (D107): lit::VulkanInstance dlopens the Vulkan loader outside Windows; the
+    # loader itself is never linked (C9)
+    $<$<NOT:$<PLATFORM_ID:Windows>>:${CMAKE_DL_LIBS}>
   PUBLIC
     TbBaseLib
     TbLitIdLib
