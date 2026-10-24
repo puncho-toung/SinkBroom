@@ -130,9 +130,10 @@ struct FrontendLists
   bool lightTrianglesPending = false;
   std::size_t lightTriangleSurfaces = 0;
   std::size_t culledTriangles = 0;
-  // lights skipped: math lights (LP5), fog and blend lights (LP5), ambient lights (no LP2
-  // program), and lights whose shader or falloff the table does not have; with a tree,
-  // only those the view's flow gave a rect are counted
+  // LP5.1 (C45): the math lights with surfaces in the lists (tr.pc.c_mathViewLights,
+  // tr_frontend_addlights.cpp:740-746), and the ambientLight lights with surfaces (the
+  // preview's own count); the fog and blend lights skipped (until LP5.3, C49): with a
+  // tree, only those the view's flow gave a rect are counted
   std::size_t mathLights = 0;
   std::size_t fogAndBlendLights = 0;
   std::size_t ambientLights = 0;
@@ -150,8 +151,9 @@ struct FrontendLists
   std::size_t areasFlowed = 0;
   std::size_t portalChains = 0;
   // the view lights that went on to the pairing: a flow rect (or the outside set's
-  // projected rect alone, D81), a texture light whose registers add light, and a scissor
-  // that is not empty (before R_OptimizeViewLightsList drops those without a surface)
+  // projected rect alone, D81), a light (LP5.1: a texture, math or ambientLight light,
+  // not a fog or blend light) whose registers add light, and a scissor that is not empty
+  // (before R_OptimizeViewLightsList drops those without a surface)
   std::size_t lightsInView = 0;
   // brush-entity chunks left out because their entity got no flow rect
   std::size_t entitiesCulled = 0;
@@ -266,9 +268,11 @@ void engineSortViewLights(std::vector<ViewLight>& lights);
  * state are left out. A surface is directly visible when its chunk's bounds are not
  * culled by its space's mvp (CullBoundsToMVP); a visible surface whose material is
  * drawn (IsDrawn, a deform of none or a particle one) or pending is a prepass surface.
- * Each light record that is visible, has a volume, is a texture light (not math, fog,
- * blend or ambient) with its shader and falloff known, whose registers are known (its
- * last ones while a new evaluation is pending, D52) and add light, and whose scissor is
+ * Each light record that is visible, has a volume, is not a fog or blend light (LP5.3's,
+ * skipped and counted; LP5.1: a math or ambientLight light is a light as any, C45) with
+ * its shader and falloff known, whose registers are known (its last ones while a new
+ * evaluation is pending, D52; a light seen first without registers is skipped) and add
+ * light, and whose scissor is
  * not empty, gets every directly visible surface that receives lighting (a pending one
  * does), is not culled to the light volume by its bounds through its space's model
  * matrix (R_CullModelBoundsToLight), and has the light shader's spectrum, in the list of

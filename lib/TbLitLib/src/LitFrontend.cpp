@@ -530,23 +530,19 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       }
 
       const auto& material = *shader.material;
+      // fog and blend lights: no snap, kept without a surface or with an empty scissor
+      // (tr_frontend_addlights.cpp:155, 727-735), drawn by FogAllLights; skipped and
+      // counted until LP5.3 lifts this (C49). LP5.1 (C45, SC510, SC512): math and
+      // ambientLight lights take the normal path below (the snap, the scissor, the
+      // lists) as the engine's frontend gives them
       if (material.fogLight || material.blendLight)
       {
         ++lists.fogAndBlendLights;
         continue;
       }
-      if (engineLightUsesMathPath(record->light.parms))
-      {
-        ++lists.mathLights;
-        continue;
-      }
-      if (material.ambientLight)
-      {
-        ++lists.ambientLights;
-        continue;
-      }
 
-      // evaluate the light shader registers
+      // evaluate the light shader registers; D52 (P6.6): a light seen for the first time
+      // without registers is skipped (the frame unconverged), kept ones are drawn
       auto viewLight = ViewLight{};
       viewLight.record = record;
       viewLight.shader = shader.material;
@@ -669,6 +665,17 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
         && viewLight.translucentInteractions.empty())
       {
         continue;
+      }
+      // LP5.1 (C45): tr.pc.c_mathViewLights, the math lights with surfaces
+      // (tr_frontend_addlights.cpp:740-746), and the ambientLight lights with surfaces
+      // (the preview's own count)
+      if (engineLightUsesMathPath(record->light.parms))
+      {
+        ++lists.mathLights;
+      }
+      if (material.ambientLight)
+      {
+        ++lists.ambientLights;
       }
       lists.lights.push_back(std::move(viewLight));
     }

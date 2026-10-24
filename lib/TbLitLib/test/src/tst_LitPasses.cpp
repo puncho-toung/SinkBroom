@@ -749,6 +749,8 @@ struct FrontendFixture
   std::unordered_map<PreviewId, ChunkEntityState> entities;
   LightTable lights;
   std::map<std::string, PreviewId> lightIds;
+  // LP5.1: what the light records were built from, for a test's own records
+  LightJobInput lightInput;
 };
 
 const auto LightStandIns = std::string{
@@ -757,7 +759,14 @@ const auto LightStandIns = std::string{
   "lights/defaultPointLight\n{\n\tlightFalloffImage _noFalloff\n"
   "\t{\n\t\tmap _white\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"
   "lights/defaultProjectedLight\n{\n\tlightFalloffImage _noFalloff\n"
-  "\t{\n\t\tmap _white\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"};
+  "\t{\n\t\tmap _white\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"
+  // LP5.1 (C45): an ambientLight light's shader, and a fog and a blend light's (LP5.3's)
+  "lights/lp51/ambient\n{\n\tambientLight\n\tlightFalloffImage _noFalloff\n"
+  "\t{\n\t\tmap _white\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"
+  "lights/lp51/fog\n{\n\tfogLight\n\tnoshadows\n"
+  "\t{\n\t\tmap _fog\n\t\tcolored\n\t}\n}\n"
+  "lights/lp51/blend\n{\n\tblendLight\n\tlightFalloffImage _noFalloff\n"
+  "\t{\n\t\tblend filter\n\t\tmap _white\n\t}\n}\n"};
 
 // a lit translucent material (the fixture's glass has only a blend stage, which receives
 // no light), and a box of it in front of the pillars, inside lp1b_light
@@ -808,7 +817,10 @@ std::unique_ptr<FrontendFixture> frontendFixture()
         "lights/squarelight1",
         "lights/defaultPointLight",
         "lights/defaultProjectedLight",
-        "lights/lp1b_missing"})
+        "lights/lp1b_missing",
+        "lights/lp51/ambient",
+        "lights/lp51/fog",
+        "lights/lp51/blend"})
   {
     auto found = f->decls->lookup(name);
     REQUIRE(found);
@@ -894,30 +906,98 @@ std::unique_ptr<FrontendFixture> frontendFixture()
       f->lights.records.set(id, std::make_shared<const LightRecord>(std::move(record)));
   }
   f->lights.version = 1;
+  f->lightInput = std::move(lightInput);
   static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
   return f;
 }
 
-FrontendLists listsOf(
-  FrontendFixture& f, const CameraState& camera, int width, int height)
+// the registers of a material for shader parms, evaluated at once (current)
+RegisterAnswer evaluatedRegisters(
+  const FrontendFixture& f, const MaterialEntry& material, const ShaderParms& parms)
+{
+  auto evaluated = f.decls->evaluate(material, parms, 0.0f);
+  REQUIRE(evaluated);
+  return RegisterAnswer{
+    std::make_shared<const EvaluatedRegisters>(std::move(*evaluated.value)), true};
+}
+
+// the fixture's lists over a light table, with the registers of registers (evaluated at
+// once when none is given)
+FrontendLists listsOfLights(
+  FrontendFixture& f,
+  const LightTable& lights,
+  const CameraState& camera,
+  const int width,
+  const int height,
+  std::function<RegisterAnswer(PreviewId, const MaterialEntry&, const ShaderParms&)>
+    registers = {})
 {
   auto inputs = FrontendInputs{};
   inputs.view = litViewOf(camera, std::uint32_t(width), std::uint32_t(height));
   inputs.chunks = &f.chunkMap;
   inputs.entities = &f.entities;
-  inputs.lights = &f.lights;
+  inputs.lights = &lights;
   inputs.material = [&](const std::string& name) {
     const auto slot = f.table->find(name);
     return MaterialAnswer{slot ? slot->entry : nullptr, !slot};
   };
   inputs.registers =
-    [&](const PreviewId, const MaterialEntry& material, const ShaderParms& parms) {
-      auto evaluated = f.decls->evaluate(material, parms, 0.0f);
-      REQUIRE(evaluated);
-      return RegisterAnswer{
-        std::make_shared<const EvaluatedRegisters>(std::move(*evaluated.value)), true};
-    };
+    registers
+      ? std::move(registers)
+      : [&](const PreviewId, const MaterialEntry& material, const ShaderParms& parms) {
+          return evaluatedRegisters(f, material, parms);
+        };
   return buildFrontendLists(inputs);
+}
+
+FrontendLists listsOf(
+  FrontendFixture& f, const CameraState& camera, int width, int height)
+{
+  return listsOfLights(f, f.lights, camera, width, height);
+}
+
+// LP5.1: the record of one of the fixture's lights with its keys changed (a key set to a
+// value, or added), built as the fixture's records are
+std::shared_ptr<const LightRecord> lightRecordWith(
+  const FrontendFixture& f,
+  const std::string& name,
+  const std::vector<std::pair<std::string, std::string>>& changes)
+{
+  auto input = f.lightInput;
+  const auto id = f.lightIds.at(name);
+  std::erase_if(input.lights, [&](const auto& light) { return light.id != id; });
+  REQUIRE(input.lights.size() == 1u);
+  auto& keys = input.lights.front().mapKeys;
+  for (const auto& [key, value] : changes)
+  {
+    const auto it =
+      std::ranges::find_if(keys, [&](const auto& pair) { return pair.first == key; });
+    if (it != keys.end())
+    {
+      it->second = value;
+    }
+    else
+    {
+      keys.emplace_back(key, value);
+    }
+  }
+  auto records = buildLightRecords(input).records;
+  REQUIRE(records.size() == 1u);
+  return std::make_shared<const LightRecord>(std::move(records.front()));
+}
+
+// a light table of records (LP5.1)
+LightTable lightTableOf(
+  const std::vector<std::shared_ptr<const LightRecord>>& records,
+  const std::uint64_t version)
+{
+  auto table = LightTable{};
+  for (const auto& record : records)
+  {
+    table.records = table.records.set(record->id, record);
+  }
+  table.version = version;
+  return table;
 }
 
 CameraState fixtureCamera(const float x, const float y, const float z)
@@ -1815,6 +1895,135 @@ TEST_CASE("LitPasses: the frontend lists of the LP1b fixture (C27, A1, D67)")
   CHECK(around->scissor.x2 == 127);
   CHECK(around->scissor.y1 == 0);
   CHECK(around->scissor.y2 == 95);
+}
+
+TEST_CASE("LitPasses: math, ambientLight, fog and blend lights in the lists (LP5.1, C45)")
+{
+  auto f = frontendFixture();
+  const auto camera = fixtureCamera(-240, 0, 64);
+  const auto lightId = f->lightIds.at("lp1b_light");
+  const auto otherLights = [&](const std::shared_ptr<const LightRecord>& record) {
+    auto records = std::vector<std::shared_ptr<const LightRecord>>{};
+    f->lights.records.forEach([&](const PreviewId& id, const auto& other) {
+      if (other)
+      {
+        records.push_back(id == record->id ? record : other);
+      }
+    });
+    return records;
+  };
+  const auto texture = listsOf(*f, camera, 128, 96);
+  const auto* textureLight = lightOf(texture, *f, "lp1b_light");
+  REQUIRE(textureLight);
+  CHECK(texture.mathLights == 0u);
+  CHECK(texture.ambientLights == 0u);
+
+  SECTION("a math light takes the normal path: the snap, the scissor, the lists")
+  {
+    // SC510, SC512: R_AddSingleLight treats it as any light; its lists are the texture
+    // light's, its scissor too; c_mathViewLights counts it (tr_frontend_addlights.cpp:
+    // 740-746)
+    const auto record = lightRecordWith(*f, "lp1b_light", {{"math_enabled", "1"}});
+    REQUIRE(engineLightUsesMathPath(record->light.parms));
+    const auto lights = lightTableOf(otherLights(record), 2);
+    const auto lists = listsOfLights(*f, lights, camera, 128, 96);
+    const auto* math = lightOf(lists, *f, "lp1b_light");
+    REQUIRE(math);
+    CHECK(math->scissor.equals(textureLight->scissor));
+    CHECK(
+      materialsOf(math->globalInteractions)
+      == materialsOf(textureLight->globalInteractions));
+    CHECK(
+      materialsOf(math->translucentInteractions)
+      == materialsOf(textureLight->translucentInteractions));
+    CHECK(lists.mathLights == 1u);
+    CHECK(lists.ambientLights == 0u);
+    CHECK(lists.lightsInView == texture.lightsInView);
+    // a math light whose colour is black is snapped out as any light
+    const auto black = lightRecordWith(
+      *f, "lp1b_light", {{"math_enabled", "1"}, {"_color", "0.0005 0 0"}});
+    const auto blackLists =
+      listsOfLights(*f, lightTableOf(otherLights(black), 3), camera, 128, 96);
+    CHECK_FALSE(lightOf(blackLists, *f, "lp1b_light"));
+    CHECK(blackLists.mathLights == 0u);
+  }
+
+  SECTION("an ambientLight light takes the normal path; it casts no shadows")
+  {
+    const auto record =
+      lightRecordWith(*f, "lp1b_light", {{"texture", "lights/lp51/ambient"}});
+    REQUIRE(record->derived.shader.material);
+    REQUIRE(record->derived.shader.material->ambientLight);
+    CHECK(lightCastsShadows(*record) == std::optional<bool>{false});
+    const auto lists =
+      listsOfLights(*f, lightTableOf(otherLights(record), 2), camera, 128, 96);
+    const auto* ambient = lightOf(lists, *f, "lp1b_light");
+    REQUIRE(ambient);
+    CHECK(ambient->scissor.equals(textureLight->scissor));
+    CHECK(
+      materialsOf(ambient->globalInteractions)
+      == materialsOf(textureLight->globalInteractions));
+    CHECK(lists.ambientLights == 1u);
+    CHECK(lists.mathLights == 0u);
+    // and as a math light: both counts
+    const auto both = lightRecordWith(
+      *f, "lp1b_light", {{"texture", "lights/lp51/ambient"}, {"math_enabled", "1"}});
+    const auto bothLists =
+      listsOfLights(*f, lightTableOf(otherLights(both), 3), camera, 128, 96);
+    CHECK(lightOf(bothLists, *f, "lp1b_light"));
+    CHECK(bothLists.ambientLights == 1u);
+    CHECK(bothLists.mathLights == 1u);
+  }
+
+  SECTION("fog and blend lights stay skipped and counted until LP5.3 (C49)")
+  {
+    for (const auto* shader : {"lights/lp51/fog", "lights/lp51/blend"})
+    {
+      CAPTURE(shader);
+      const auto record = lightRecordWith(*f, "lp1b_light", {{"texture", shader}});
+      REQUIRE(record->derived.shader.material);
+      const auto lists =
+        listsOfLights(*f, lightTableOf(otherLights(record), 2), camera, 128, 96);
+      CHECK_FALSE(lightOf(lists, *f, "lp1b_light"));
+      CHECK(lists.fogAndBlendLights == 1u);
+      // the interaction phases never meet a fog or blend light (RenderBackend.cpp:
+      // 3999-4007): the lists hold none
+      for (const auto& light : lists.lights)
+      {
+        CHECK_FALSE(light.shader->fogLight);
+        CHECK_FALSE(light.shader->blendLight);
+      }
+    }
+  }
+
+  SECTION("a first-seen light without registers is skipped, a kept one drawn (D52)")
+  {
+    const auto record = lightRecordWith(*f, "lp1b_light", {{"math_enabled", "1"}});
+    const auto lights = lightTableOf(otherLights(record), 2);
+    const auto none = [&](
+                        const PreviewId consumer,
+                        const MaterialEntry& material,
+                        const ShaderParms& parms) {
+      return consumer == lightId ? RegisterAnswer{}
+                                 : evaluatedRegisters(*f, material, parms);
+    };
+    const auto skipped = listsOfLights(*f, lights, camera, 128, 96, none);
+    CHECK_FALSE(lightOf(skipped, *f, "lp1b_light"));
+    CHECK(skipped.pending);
+    const auto kept = [&](
+                        const PreviewId consumer,
+                        const MaterialEntry& material,
+                        const ShaderParms& parms) {
+      auto answer = evaluatedRegisters(*f, material, parms);
+      answer.current = consumer != lightId;
+      return answer;
+    };
+    const auto drawn = listsOfLights(*f, lights, camera, 128, 96, kept);
+    const auto* light = lightOf(drawn, *f, "lp1b_light");
+    REQUIRE(light);
+    CHECK(light->provisional);
+    CHECK(drawn.pending);
+  }
 }
 
 TEST_CASE("LitPasses: R_AddSingleLight's register snap and the math light test")
