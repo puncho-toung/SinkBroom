@@ -738,6 +738,16 @@ void LitSession::skipInteractionsForTesting(const bool skip)
   m_renderThread->setSkipInteractions(skip);
 }
 
+void LitSession::skipShaderPassesForTesting(const bool skip)
+{
+  m_renderThread->setSkipShaderPasses(skip);
+}
+
+bool LitSession::shaderPassesSkippedForTesting() const
+{
+  return m_renderThread->skipShaderPasses();
+}
+
 void LitSession::failHostAllocationsForTesting(const bool fail)
 {
   tb::lit::failHostAllocationsForTesting(fail);

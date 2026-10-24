@@ -1921,6 +1921,16 @@ void LitPasses::setSkipInteractionsForTesting(const bool on)
   m_skipInteractions = on;
 }
 
+void LitPasses::setSkipShaderPassesForTesting(const bool on)
+{
+  m_skipShaderPasses = on;
+}
+
+bool LitPasses::skipShaderPassesForTesting() const
+{
+  return m_skipShaderPasses;
+}
+
 void LitPasses::setDrawLogForTesting(const bool on)
 {
   m_logDraws = on;

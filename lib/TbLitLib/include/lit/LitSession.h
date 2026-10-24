@@ -669,6 +669,17 @@ public:
    */
   void skipInteractionsForTesting(bool skip);
   /**
+   * LP5.0 (D118, C50), any thread: r_skipAmbient's stand-in for the parity rows
+   * (rows.json's skip_ambient, set by the [.][parity] test beside
+   * skipInteractionsForTesting). Stored and handed to the frames, which do not read it
+   * yet: LP5.2a's stage pass (pass 8) will not be recorded while it is on, as
+   * r_skipAmbient 1 skips both DrawShaderPasses calls (RenderBackend.cpp:4275) and
+   * nothing else (the ambient pass is not pass 8). Tests only.
+   */
+  void skipShaderPassesForTesting(bool skip);
+  // LP5.0, any thread: the switch as skipShaderPassesForTesting last set it
+  bool shaderPassesSkippedForTesting() const;
+  /**
    * U2.3, any thread: while set, every device memory allocation in a type that is
    * host-visible and not device-local fails as a driver's out-of-memory would (NVRHI's
    * upload chunks and staging). Process-wide, like the allocation counter; tests only.

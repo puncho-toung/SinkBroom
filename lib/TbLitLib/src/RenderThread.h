@@ -377,6 +377,8 @@ private:
   std::atomic<std::uint64_t> m_vramBudgetForTesting = 0;
   // C38 (LP4.2b): the interactions are not recorded (setSkipInteractions)
   std::atomic<bool> m_skipInteractionsForTesting = false;
+  // LP5.0 (D118): r_skipAmbient's stand-in (setSkipShaderPasses), not read by a pass yet
+  std::atomic<bool> m_skipShaderPassesForTesting = false;
   // the bytes the frame being recorded has uploaded
   std::uint64_t m_frameUploadBytes = 0;
   // §3.10: what a frame uploads at most (UploadBytesPerFrame; tests set less)
@@ -600,6 +602,11 @@ public:
   // C38 (LP4.2b), any thread: while set, the frames record no interactions
   // (LitPasses::setSkipInteractionsForTesting); a frame is triggered
   void setSkipInteractions(bool skip);
+  // LP5.0 (D118), any thread: r_skipAmbient's stand-in, stored and handed to the lit
+  // passes each frame (LitPasses::setSkipShaderPassesForTesting), which LP5.2a's stage
+  // pass will read; no frame is triggered while nothing reads it
+  void setSkipShaderPasses(bool skip);
+  bool skipShaderPasses() const;
   // DX.5, GUI thread, phase B, once the frame resources exist and before start: the
   // pipelines the first lit frames ask for (litStartPipelineKeys, the tonemap pass's and
   // the blit's against this session's targets)

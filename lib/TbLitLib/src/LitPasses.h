@@ -394,6 +394,8 @@ private:
   bool m_lightTriangleCull = true;
   // C38 (LP4.2b): the interactions are not recorded (r_skipInteractions 1)
   bool m_skipInteractions = false;
+  // LP5.0 (D118): r_skipAmbient 1's stand-in, for LP5.2a's stage pass
+  bool m_skipShaderPasses = false;
   std::vector<LitDrawRecord> m_drawLog;
   // the pipeline keys asked for while the log is on, drawn or not
   std::set<PipelineKey, PipelineKeyLess> m_requestedKeys;
@@ -437,6 +439,10 @@ public:
   // interactions pass is not recorded, as r_skipInteractions 1 skips DrawInteractions
   // (RenderBackend.cpp:4181); every other pass as it is
   void setSkipInteractionsForTesting(bool on);
+  // LP5.0 (D118, C46): r_skipAmbient 1's stand-in: stored for LP5.2a's stage pass, which
+  // will not be recorded while it is on (RenderBackend.cpp:4275); no pass reads it yet
+  void setSkipShaderPassesForTesting(bool on);
+  bool skipShaderPassesForTesting() const;
   const std::vector<LitDrawRecord>& drawLogForTesting() const;
   // the pipeline keys the draws asked for while the log was on, also those of skipped
   // draws (a pending pipeline)

@@ -967,6 +967,16 @@ void RenderThread::setAllocationLimit(const std::uint32_t limit)
   m_allocationLimitForTesting = limit;
 }
 
+void RenderThread::setSkipShaderPasses(const bool skip)
+{
+  m_skipShaderPassesForTesting = skip;
+}
+
+bool RenderThread::skipShaderPasses() const
+{
+  return m_skipShaderPassesForTesting.load();
+}
+
 void RenderThread::setSkipInteractions(const bool skip)
 {
   m_skipInteractionsForTesting = skip;
@@ -1262,6 +1272,8 @@ bool RenderThread::recordLitPasses(
   inputs.afterPrepass = [this] { runDebugHook(DebugHook::AfterPrepass); };
   // C38 (LP4.2b): r_skipInteractions 1's stand-in, a test's switch
   m_passes.setSkipInteractionsForTesting(m_skipInteractionsForTesting.load());
+  // LP5.0 (D118): r_skipAmbient's stand-in, which LP5.2a's stage pass will read
+  m_passes.setSkipShaderPassesForTesting(m_skipShaderPassesForTesting.load());
   const auto stats = m_passes.record(inputs);
   if (stats.prepassTimed)
   {

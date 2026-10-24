@@ -6622,24 +6622,37 @@ std::shared_ptr<const Snapshot> paritySnapshot(
 }
 
 /**
- * LP4.2b (C38, P4.24): a parity row's switch for as long as the row is drawn: an
+ * LP4.2b (C38, P4.24): a parity row's switches for as long as the row is drawn: an
  * ambient-only row ("ambient_only": true, the engine's shot with r_skipInteractions 1)
- * skips the interactions, every other row draws them; reset to drawn when the row ends.
- * set is the session's skipInteractionsForTesting.
+ * skips the interactions, every other row draws them. LP5.0 (D118, P6.9): a row's
+ * "skip_ambient" (its map's r_skipAmbient as the cvar block printed it) skips the shader
+ * passes when 1; a rows.json written before the field (the three maps shot with
+ * r_skipAmbient 1, SWITCHES) is read as 1. Both reset to drawn when the row ends.
+ * skipInteractions and skipShaderPasses are the session's ...ForTesting.
  */
 class ParityRowSwitch
 {
 private:
-  std::function<void(bool)> m_set;
+  std::function<void(bool)> m_skipInteractions;
+  std::function<void(bool)> m_skipShaderPasses;
 
 public:
-  ParityRowSwitch(const JsonValue& row, std::function<void(bool)> set)
-    : m_set{std::move(set)}
+  ParityRowSwitch(
+    const JsonValue& row,
+    std::function<void(bool)> skipInteractions,
+    std::function<void(bool)> skipShaderPasses)
+    : m_skipInteractions{std::move(skipInteractions)}
+    , m_skipShaderPasses{std::move(skipShaderPasses)}
   {
-    m_set(row.flag("ambient_only"));
+    m_skipInteractions(row.flag("ambient_only"));
+    m_skipShaderPasses(row.numberOr("skip_ambient", 1.0) == 1.0);
   }
 
-  ~ParityRowSwitch() { m_set(false); }
+  ~ParityRowSwitch()
+  {
+    m_skipInteractions(false);
+    m_skipShaderPasses(false);
+  }
 
   deleteCopyAndMove(ParityRowSwitch);
 };
@@ -6687,28 +6700,41 @@ void checkProbesAgainstShProbes(
 } // namespace
 
 // LP4.2b (C38, P4.24): the parity test's per-row switch over a synthetic rows.json: an
-// ambient-only row skips the interactions while it is drawn, every row ends with them on
+// ambient-only row skips the interactions while it is drawn, every row ends with them on.
+// LP5.0 (D118, P6.9): skip_ambient 1 skips the shader passes, 0 draws them, a row
+// without it (a rows.json of the maps shot before LP5.0) skips them
 TEST_CASE("LitSession parity rows: the ambient-only switch (LP4.2b)")
 {
   const auto record =
     JsonReader{
-      R"({"rows": [{"id": "A01", "ambient_only": false}, {"id": "A01a", "ambient_only": true},)"
-      R"( {"id": "R01"}]})"}
+      R"({"rows": [{"id": "A01", "ambient_only": false, "skip_ambient": 1},)"
+      R"( {"id": "A01a", "ambient_only": true, "skip_ambient": 1},)"
+      R"( {"id": "S01", "ambient_only": false, "skip_ambient": 0}, {"id": "R01"}]})"}
       .value();
   REQUIRE(record);
   const auto* rows = record->find("rows");
   REQUIRE(rows);
-  REQUIRE(rows->array.size() == 3u);
+  REQUIRE(rows->array.size() == 4u);
   auto calls = std::vector<bool>{};
   auto during = std::vector<bool>{};
+  auto shaderCalls = std::vector<bool>{};
+  auto shaderDuring = std::vector<bool>{};
   for (const auto& row : rows->array)
   {
-    const auto rowSwitch =
-      ParityRowSwitch{row, [&](const bool skip) { calls.push_back(skip); }};
+    const auto rowSwitch = ParityRowSwitch{
+      row,
+      [&](const bool skip) { calls.push_back(skip); },
+      [&](const bool skip) { shaderCalls.push_back(skip); }};
     during.push_back(calls.back());
+    shaderDuring.push_back(shaderCalls.back());
   }
-  CHECK(during == std::vector<bool>{false, true, false});
-  CHECK(calls == std::vector<bool>{false, false, true, false, false, false});
+  CHECK(during == std::vector<bool>{false, true, false, false});
+  CHECK(
+    calls == std::vector<bool>{false, false, true, false, false, false, false, false});
+  CHECK(shaderDuring == std::vector<bool>{true, true, false, true});
+  CHECK(
+    shaderCalls
+    == std::vector<bool>{true, false, true, false, false, false, true, false});
 }
 
 /**
@@ -6872,8 +6898,14 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
       // with r_skipInteractions 1, and the next row draws them again
       const auto ambientOnly = row.flag("ambient_only");
       auto* const owner = session.get();
+      // LP5.0 (D118): and the shader passes as the row's skip_ambient says
       const auto rowSwitch = ParityRowSwitch{
-        row, [owner](const bool skip) { owner->skipInteractionsForTesting(skip); }};
+        row,
+        [owner](const bool skip) { owner->skipInteractionsForTesting(skip); },
+        [owner](const bool skip) { owner->skipShaderPassesForTesting(skip); }};
+      CHECK(
+        session->shaderPassesSkippedForTesting()
+        == (row.numberOr("skip_ambient", 1.0) == 1.0));
       const auto framesBefore = session->framesPresented();
       const auto started = std::chrono::steady_clock::now();
       // U2.13: what is left of the row's bound, and of the test's
