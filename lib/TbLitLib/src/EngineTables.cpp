@@ -35,6 +35,7 @@
 #include "lit/EngineTables.h"
 
 #include "lit/EngineGeometry.h"
+#include "lit/GameFile.h"
 #include "lit/ImageCache.h"
 
 #include <algorithm>
@@ -464,6 +465,45 @@ const EngineBuiltin* engineBuiltin(const int index)
 {
   return index >= 0 && std::size_t(index) < EngineBuiltins.size()
            ? &EngineBuiltins[std::size_t(index)]
+           : nullptr;
+}
+
+const EngineMaterialProgram* findEngineMaterialProgram(const std::string_view name)
+{
+  // FindShader (RenderProgs.cpp:1159-1166): shaderName.StripFileExtension(), then Icmp
+  const auto wanted = toLowerAscii(shaderNameWithoutExtension(name));
+  for (const auto& program : EngineMaterialPrograms)
+  {
+    if (toLowerAscii(program.row.name) == wanted)
+    {
+      return &program;
+    }
+  }
+  return nullptr;
+}
+
+std::optional<EngineMaterialProgram> engineMaterialProgram(
+  const std::filesystem::path& gamePath, const std::string_view name)
+{
+  const auto* program = findEngineMaterialProgram(name);
+  if (
+    !program || !shaderBlobExists(gamePath, program->row.name, ShaderStage::Vertex)
+    || !shaderBlobExists(gamePath, program->row.name, ShaderStage::Pixel))
+  {
+    return std::nullopt;
+  }
+  return *program;
+}
+
+const EngineBuiltin* engineProgram(const int index)
+{
+  if (const auto* builtin = engineBuiltin(index))
+  {
+    return builtin;
+  }
+  const auto place = index - EngineMaterialProgramBase;
+  return place >= 0 && std::size_t(place) < EngineMaterialPrograms.size()
+           ? &EngineMaterialPrograms[std::size_t(place)].row
            : nullptr;
 }
 

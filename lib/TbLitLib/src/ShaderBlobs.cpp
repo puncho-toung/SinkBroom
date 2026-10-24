@@ -128,6 +128,24 @@ std::string shaderBlobPath(const std::string_view name, const ShaderStage stage)
     "renderprogs2/spirv/{}.{}.bin", stripExtension(name), shaderStageSuffix(stage));
 }
 
+std::string_view shaderNameWithoutExtension(const std::string_view name)
+{
+  return stripExtension(name);
+}
+
+bool shaderBlobExists(
+  const std::filesystem::path& gamePath,
+  const std::string_view name,
+  const ShaderStage stage)
+{
+  if (gamePath.empty() || gamePath.is_relative())
+  {
+    return false;
+  }
+  const auto relativePath = pathFromUtf8(shaderBlobPath(name, stage));
+  return relativePath && findLooseFile(gamePath / "base" / *relativePath).has_value();
+}
+
 Result<std::string> readShaderBlob(
   const std::filesystem::path& gamePath,
   const std::string_view name,

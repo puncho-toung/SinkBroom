@@ -575,10 +575,10 @@ Result<nvrhi::IFramebuffer*> PipelineCompiler::framebuffer(
 
 Result<GraphicsPipelineLookup> PipelineCompiler::makeGraphics(const PipelineKey& key)
 {
-  const auto* builtin = engineBuiltin(key.program);
+  const auto* builtin = engineProgram(key.program);
   if (!builtin)
   {
-    return Error{fmt::format("{} is no builtin program", key.program)};
+    return Error{fmt::format("{} is no builtin or material program", key.program)};
   }
   // CommonPasses' blit draws rect.vs with blit.ps (CommonPasses.cpp:59-65)
   const auto* vertexBuiltin =
@@ -729,7 +729,7 @@ void PipelineCompiler::recipeState(
 
 Result<ComputePipelineLookup> PipelineCompiler::makeCompute(const int program)
 {
-  const auto* builtin = engineBuiltin(program);
+  const auto* builtin = engineProgram(program);
   if (!builtin || !(builtin->stages & EngineStageCompute))
   {
     return Error{fmt::format("{} is no compute program", program)};
@@ -904,7 +904,7 @@ Result<BindingLayoutLookup> PipelineCompiler::makeLayouts(
 
 void PipelineCompiler::enable(const int program)
 {
-  const auto* builtin = engineBuiltin(program);
+  const auto* builtin = engineProgram(program);
   const auto lock = std::scoped_lock{m_mutex};
   ++m_created;
   m_programs.try_emplace(
@@ -913,7 +913,7 @@ void PipelineCompiler::enable(const int program)
 
 void PipelineCompiler::disable(const int program, const std::string& reason)
 {
-  const auto* builtin = engineBuiltin(program);
+  const auto* builtin = engineProgram(program);
   const auto name = builtin ? programName(*builtin) : std::to_string(program);
   {
     const auto lock = std::scoped_lock{m_mutex};

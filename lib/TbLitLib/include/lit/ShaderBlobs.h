@@ -85,6 +85,16 @@ std::string shaderBlobPath(std::string_view name, ShaderStage stage);
 Result<std::string> readShaderBlob(
   const std::filesystem::path& gamePath, std::string_view name, ShaderStage stage);
 
+// LP5.0 (C47): a shader's name as the blob path takes it, its extension stripped as
+// idStr::StripFileExtension strips it (the text from the last '.' after the last
+// separator)
+std::string_view shaderNameWithoutExtension(std::string_view name);
+
+// LP5.0 (C47): whether readShaderBlob would find the blob's loose file (the same game
+// path rules and case-insensitive lookup; the file is not read)
+bool shaderBlobExists(
+  const std::filesystem::path& gamePath, std::string_view name, ShaderStage stage);
+
 // whether a blob is a ShaderMake permutation container ("NVSP"), not raw SPIR-V
 bool isPermutationBlob(std::string_view blob);
 

@@ -901,6 +901,133 @@ TEST_CASE("EngineTables")
     CHECK_FALSE(enginePushConstantsEnabled(L::DrawInteractionSkinned, limit, 0x10DE));
   }
 
+  SECTION("LP5.0: the material programs (C47, D121)")
+  {
+    // shaders.cfg:130-154 at 285ea4d1 (neo/shaders/shaders.cfg), the "User shaders",
+    // transcribed line for line
+    const auto cfg = std::vector<std::string>{
+      "bloodorb_draw.vs.hlsl -T vs -D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}",
+      "bloodorb_draw.ps.hlsl -T ps -D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}",
+      "bloodorb1_capture.vs.hlsl -T vs -D USE_GPU_SKINNING={0,1} -D "
+      "USE_PUSH_CONSTANTS={0,1}",
+      "bloodorb1_capture.ps.hlsl -T ps -D USE_GPU_SKINNING={0,1} -D "
+      "USE_PUSH_CONSTANTS={0,1}",
+      "bloodorb2_capture.vs.hlsl -T vs -D USE_GPU_SKINNING={0,1} -D "
+      "USE_PUSH_CONSTANTS={0,1}",
+      "bloodorb2_capture.ps.hlsl -T ps -D USE_GPU_SKINNING={0,1} -D "
+      "USE_PUSH_CONSTANTS={0,1}",
+      "bloodorb3_capture.vs.hlsl -T vs -D USE_GPU_SKINNING={0,1} -D "
+      "USE_PUSH_CONSTANTS={0,1}",
+      "bloodorb3_capture.ps.hlsl -T ps -D USE_GPU_SKINNING={0,1} -D "
+      "USE_PUSH_CONSTANTS={0,1}",
+      "colorProcess.vs.hlsl  -T vs -D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}",
+      "colorProcess.ps.hlsl -T ps -D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}",
+      "enviroSuit.vs.hlsl -T vs -D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}",
+      "enviroSuit.ps.hlsl -T ps -D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}",
+      "fogwithlights.vs.hlsl -T vs -D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}",
+      "fogwithlights.ps.hlsl -T ps -D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}",
+      "heathaze.vs.hlsl -T vs -D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}",
+      "heathaze.ps.hlsl -T ps -D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}",
+      "heatHazeWithMask.vs.hlsl -T vs -D USE_GPU_SKINNING={0,1} -D "
+      "USE_PUSH_CONSTANTS={0,1}",
+      "heatHazeWithMask.ps.hlsl -T ps -D USE_GPU_SKINNING={0,1} -D "
+      "USE_PUSH_CONSTANTS={0,1}",
+      "heatHazeWithMaskAndVertex.vs.hlsl -T vs -D USE_GPU_SKINNING={0,1} -D "
+      "USE_PUSH_CONSTANTS={0,1}",
+      "heatHazeWithMaskAndVertex.ps.hlsl -T ps -D USE_GPU_SKINNING={0,1} -D "
+      "USE_PUSH_CONSTANTS={0,1}",
+      "mattiascrt.vs.hlsl -T vs -D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}",
+      "mattiascrt.ps.hlsl -T ps -D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}",
+      "vornoipattern.vs.hlsl -T vs -D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}",
+      "vornoipattern.ps.hlsl -T ps -D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}",
+    };
+    REQUIRE(cfg.size() == 24u);
+    REQUIRE(EngineMaterialPrograms.size() == cfg.size() / 2);
+    for (std::size_t i = 0; i < EngineMaterialPrograms.size(); ++i)
+    {
+      const auto& program = EngineMaterialPrograms[i];
+      const auto& row = program.row;
+      CAPTURE(i, row.name);
+      const auto& vs = cfg[2 * i];
+      const auto& ps = cfg[2 * i + 1];
+      // the name, a vertex then a pixel line, the two defines in the cfg's order
+      CHECK(vs.starts_with(std::string{row.name} + ".vs.hlsl "));
+      CHECK(ps.starts_with(std::string{row.name} + ".ps.hlsl "));
+      CHECK(vs.find("-T vs") != std::string::npos);
+      CHECK(ps.find("-T ps") != std::string::npos);
+      REQUIRE(row.defineCount == 2u);
+      CHECK(std::string_view{row.defines[0].name} == "USE_GPU_SKINNING");
+      CHECK(std::string_view{row.defines[0].value} == "0");
+      CHECK(std::string_view{row.defines[1].name} == "USE_PUSH_CONSTANTS");
+      CHECK(row.defines[1].value == nullptr);
+      CHECK(
+        vs.find("-D USE_GPU_SKINNING={0,1} -D USE_PUSH_CONSTANTS={0,1}")
+        != std::string::npos);
+      CHECK(row.index == EngineMaterialProgramBase + int(i));
+      CHECK(std::string_view{row.nameOutSuffix}.empty());
+      CHECK(row.stages == EngineStageDefault);
+      CHECK(row.vertexLayout == EngineVertexLayout::DrawVert);
+      CHECK(row.bindingLayout == EngineBindingLayout::PostProcessIngame);
+      CHECK_FALSE(row.requireGPUSkinningSupport);
+      // C47: every one but vornoipattern and fogwithlights reads _currentRender (the
+      // blobs' reflection, [retail]: fogwithlights declares t_CurrentRender in its HLSL
+      // and never samples it)
+      CHECK(
+        program.readsCurrentRender
+        == (row.name != std::string_view{"vornoipattern"} && row.name != std::string_view{"fogwithlights"}));
+      // engineProgram reaches it by its index, and the builtins as before
+      CHECK(engineProgram(row.index) == &row);
+      // MAT:2180-2189: USE_PUSH_CONSTANTS is POST_PROCESS_INGAME's pcEnabled, "1" here
+      const auto defines = engineBuiltinDefines(row, true);
+      REQUIRE(defines.size() == 2u);
+      CHECK(defines[0] == ShaderDefine{"USE_GPU_SKINNING", "0"});
+      CHECK(defines[1] == ShaderDefine{"USE_PUSH_CONSTANTS", "1"});
+      CHECK(
+        engineBuiltinDefines(row, false)[1] == ShaderDefine{"USE_PUSH_CONSTANTS", "0"});
+    }
+    CHECK(
+      enginePushConstantsEnabled(EngineBindingLayout::PostProcessIngame, 256, 0x10DE));
+    CHECK(engineProgram(0) == engineBuiltin(0));
+    CHECK(engineProgram(115) == engineBuiltin(115));
+    CHECK(engineProgram(116) == nullptr);
+    CHECK(engineProgram(EngineMaterialProgramBase - 1) == nullptr);
+    CHECK(engineProgram(EngineMaterialProgramBase + 12) == nullptr);
+    CHECK(engineProgram(-1) == nullptr);
+    CHECK(engineBuiltin(EngineMaterialProgramBase) == nullptr);
+
+    // FindShader's name rule (RenderProgs.cpp:1159-1166): the extension stripped, the
+    // case ignored (C1's)
+    const auto* voronoi = findEngineMaterialProgram("vornoipattern");
+    REQUIRE(voronoi);
+    CHECK(voronoi == &EngineMaterialPrograms[11]);
+    CHECK(findEngineMaterialProgram("VornoiPattern") == voronoi);
+    CHECK(findEngineMaterialProgram("vornoipattern.vfp") == voronoi);
+    CHECK(findEngineMaterialProgram("VORNOIPATTERN.VFP") == voronoi);
+    CHECK(findEngineMaterialProgram("heatHaze.vfp") == &EngineMaterialPrograms[7]);
+    CHECK(findEngineMaterialProgram("HEATHAZEWITHMASK") == &EngineMaterialPrograms[8]);
+    CHECK(findEngineMaterialProgram("heatHazeWithMask.v") == &EngineMaterialPrograms[8]);
+    CHECK(findEngineMaterialProgram("heatHazeWith") == nullptr);
+    CHECK(findEngineMaterialProgram("progs/heathaze.vfp") == nullptr);
+    CHECK(findEngineMaterialProgram("interaction") == nullptr);
+    CHECK(findEngineMaterialProgram("") == nullptr);
+  }
+
+  SECTION("LP5.0: the frame cvars of passes 7-9 (C46, C49)")
+  {
+    // RenderSystem_init.cpp:128, 135-139, 246 and RenderBackend.cpp:55 at 285ea4d1: every
+    // one "0"; r_skipAmbient is the preview's choice (the stage pass drawn), which is
+    // also the engine's default
+    CHECK_FALSE(EngineFrame.skipFogLights);
+    CHECK_FALSE(EngineFrame.skipBlendLights);
+    CHECK_FALSE(EngineFrame.skipTranslucent);
+    CHECK_FALSE(EngineFrame.skipAmbient);
+    CHECK_FALSE(EngineFrame.skipShaderPasses);
+    CHECK_FALSE(EngineFrame.skipPostProcess);
+    CHECK_FALSE(EngineFrame.skipNewAmbient);
+    CHECK(EngineFrame.showMathLights == 0);
+    CHECK(EngineFrame.mathLightsEnabled);
+  }
+
   SECTION("the vertex input")
   {
     const auto attributes = engineDrawVertAttributes();

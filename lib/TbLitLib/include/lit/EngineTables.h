@@ -43,6 +43,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
@@ -480,6 +481,96 @@ std::vector<ShaderDefine> engineBuiltinDefines(
 // the row of a BUILTIN_ index, or null outside the table
 const EngineBuiltin* engineBuiltin(int index);
 
+// ----- the material programs (LP5.0, C47, D121, SC527) -----
+
+/**
+ * A program a material's newStage block names (program, vertexProgram, fragmentProgram;
+ * Material.cpp:2180-2217): the engine finds its shaders by name with FindShader( name,
+ * stage, "", { USE_GPU_SKINNING "0", USE_PUSH_CONSTANTS pcEnabled( POST_PROCESS_INGAME )
+ * } ) (RenderProgs.cpp:1157-1185) and makes the program with FindProgram( ...,
+ * BINDING_LAYOUT_POST_PROCESS_INGAME ) (Material.cpp:2258). The preview keeps them in a
+ * table of its own, not in the fixed builtins table (P6.21): each row a builtins-shaped
+ * row (index EngineMaterialProgramBase + its place, the shaders.cfg name, no suffix, the
+ * two defines, vertex and pixel, LAYOUT_DRAW_VERT, POST_PROCESS_INGAME) that the
+ * reflection check and the compile thread take as they take a builtin, and whether its
+ * pixel shader declares t_CurrentRender: such a program draws over _currentRender, so its
+ * material is SS_POST_PROCESS and the stage pass stops before it (K38).
+ */
+struct EngineMaterialProgram
+{
+  EngineBuiltin row;
+  bool readsCurrentRender = false;
+};
+
+// the first index of the material programs, above the 116 builtins
+inline constexpr int EngineMaterialProgramBase = 1000;
+
+namespace detail
+{
+constexpr EngineMaterialProgram materialProgram(
+  const int place, const char* name, const bool readsCurrentRender)
+{
+  return EngineMaterialProgram{
+    EngineBuiltin{
+      EngineMaterialProgramBase + place,
+      name,
+      "",
+      {{{"USE_GPU_SKINNING", "0"}, {"USE_PUSH_CONSTANTS", nullptr}}},
+      2,
+      false,
+      EngineStageDefault,
+      EngineVertexLayout::DrawVert,
+      EngineBindingLayout::PostProcessIngame},
+    readsCurrentRender};
+}
+} // namespace detail
+
+/**
+ * The "User shaders" of shaders.cfg:130-154 at 285ea4d1 (the engine's shader build lists
+ * each name's .vs and .ps with USE_GPU_SKINNING={0,1} USE_PUSH_CONSTANTS={0,1}), in its
+ * order; all twelve have both blobs in the game folder of this machine
+ * (NecroGameBuild/base/renderprogs2/spirv). Ten read _currentRender (C47, P6.3); the
+ * fork's vornoipattern declares no texture, and fogwithlights declares t_CurrentRender
+ * (fogwithlights.ps.hlsl:35) but never samples it, so its compiled blobs bind no
+ * t_CurrentRender (the [retail] reflection decides the flags, as the blobs are the
+ * truth).
+ */
+inline constexpr auto EngineMaterialPrograms = std::array<EngineMaterialProgram, 12>{{
+  detail::materialProgram(0, "bloodorb_draw", true),
+  detail::materialProgram(1, "bloodorb1_capture", true),
+  detail::materialProgram(2, "bloodorb2_capture", true),
+  detail::materialProgram(3, "bloodorb3_capture", true),
+  detail::materialProgram(4, "colorProcess", true),
+  detail::materialProgram(5, "enviroSuit", true),
+  detail::materialProgram(6, "fogwithlights", false),
+  detail::materialProgram(7, "heathaze", true),
+  detail::materialProgram(8, "heatHazeWithMask", true),
+  detail::materialProgram(9, "heatHazeWithMaskAndVertex", true),
+  detail::materialProgram(10, "mattiascrt", true),
+  detail::materialProgram(11, "vornoipattern", false),
+}};
+
+/**
+ * The table's row of a name as a stage gives it, as FindShader matches it
+ * (RenderProgs.cpp:1159-1166): the file extension stripped (idStr::StripFileExtension,
+ * as the blob path strips it, lit/ShaderBlobs.h), the case ignored (Icmp, C1's rule);
+ * null for a name not in the table.
+ */
+const EngineMaterialProgram* findEngineMaterialProgram(std::string_view name);
+
+/**
+ * C47, D9: the row of a name whose two blobs (renderprogs2/spirv/<name>.vs.bin and
+ * .ps.bin) are loose files of the game folder; nullopt for a name not in the table or a
+ * program with a blob missing (the stage pass then disables the stage with one warning,
+ * LP5.2a). A plain file lookup; any thread.
+ */
+std::optional<EngineMaterialProgram> engineMaterialProgram(
+  const std::filesystem::path& gamePath, std::string_view name);
+
+// the row of a program index: a builtin's (engineBuiltin) or a material program's
+// (EngineMaterialProgramBase + its place); null for any other index
+const EngineBuiltin* engineProgram(int index);
+
 // ----- binding layouts (C3, SC236-SC237, SC262) -----
 
 /**
@@ -729,6 +820,32 @@ struct EngineFrameDefaults
   // preview has no SSAO pass before LP6 and binds _white at t4 as r_useSSAO 0 does (K31),
   // so this is the preview's behaviour, not the engine's default
   bool useSsao = false;
+  // LP5.0 (C46, C47, C49, D118): the cvars of passes 7-9, each at the engine's default
+  // (RenderSystem_init.cpp and RenderBackend.cpp at 285ea4d1)
+  // r_skipFogLights "0" (RenderSystem_init.cpp:139): FogAllLights draws the fog lights
+  bool skipFogLights = false;
+  // r_skipBlendLights "0" (:138): FogAllLights draws the blend lights
+  bool skipBlendLights = false;
+  // r_skipTranslucent "0" (:135): the translucent interactions draw with DEPTHFUNC_LESS
+  // (RenderBackend.cpp:4145-4167)
+  bool skipTranslucent = false;
+  // r_skipAmbient: the stage pass drawn (both DrawShaderPasses calls,
+  // RenderBackend.cpp:4275); this is the preview's behaviour, as useSsao's is, not taken
+  // from the engine's default, which is also "0" (RenderSystem_init.cpp:136); the parity
+  // maps set 1 or 0 per row (D118: rows.json's skip_ambient and
+  // LitSession::skipShaderPassesForTesting)
+  bool skipAmbient = false;
+  // r_skipShaderPasses "0" (RenderBackend.cpp:55): the first DrawShaderPasses call runs
+  // (:6108)
+  bool skipShaderPasses = false;
+  // r_skipPostProcess "0" (RenderSystem_init.cpp:128): the post-process stages would draw
+  // after the copy (RenderBackend.cpp:6141); the preview stops before them (K38)
+  bool skipPostProcess = false;
+  // r_skipNewAmbient "0", ARCHIVE (:137): newStage stages draw (RenderBackend.cpp:4517)
+  bool skipNewAmbient = false;
+  // r_showMathLights "0", 0..3 (:246): USER0.x of a math light is 1 + this
+  // (RenderBackend.cpp:1941)
+  int showMathLights = 0;
 };
 inline constexpr auto EngineFrame = EngineFrameDefaults{};
 

@@ -19,6 +19,7 @@
 
 #include "LitTestUtils.h"
 #include "fs/TestEnvironment.h"
+#include "lit/EngineTables.h"
 #include "lit/ShaderBlobs.h"
 
 #include "kd/result.h"
@@ -285,6 +286,53 @@ TEST_CASE("readShaderBlob")
     CHECK_THAT(
       errorMessage(relative),
       Catch::Matchers::EndsWith("is relative, so no shader blob is read (C1)"));
+  }
+}
+
+TEST_CASE("shaderBlobExists and the material programs' lookup (LP5.0, C47)")
+{
+  const auto env = fs::TestEnvironment{};
+  const auto spirv = env.dir() / "base" / "renderprogs2" / "spirv";
+  const auto blob =
+    nvspBlob({{"USE_GPU_SKINNING=0 USE_PUSH_CONSTANTS=1", fakeCode(4, 4)}});
+  // vornoipattern has both blobs, heathaze its vertex blob alone, colorProcess none
+  writeBinaryFile(spirv / "vornoipattern.vs.bin", blob);
+  writeBinaryFile(spirv / "VornoiPattern.PS.bin", blob);
+  writeBinaryFile(spirv / "heathaze.vs.bin", blob);
+
+  SECTION("shaderBlobExists finds what readShaderBlob reads, without reading it")
+  {
+    CHECK(shaderBlobExists(env.dir(), "vornoipattern", ShaderStage::Vertex));
+    CHECK(shaderBlobExists(env.dir(), "vornoipattern.vfp", ShaderStage::Vertex));
+#if defined(_WIN32)
+    CHECK(shaderBlobExists(env.dir(), "vornoipattern", ShaderStage::Pixel));
+#endif
+    CHECK(shaderBlobExists(env.dir(), "VornoiPattern", ShaderStage::Pixel));
+    CHECK_FALSE(shaderBlobExists(env.dir(), "heathaze", ShaderStage::Pixel));
+    CHECK_FALSE(shaderBlobExists(env.dir(), "vornoipattern", ShaderStage::Compute));
+    // T0.4's rule: no empty or relative game path
+    CHECK_FALSE(shaderBlobExists({}, "vornoipattern", ShaderStage::Vertex));
+    CHECK_FALSE(
+      shaderBlobExists(env.dir().filename(), "vornoipattern", ShaderStage::Vertex));
+    CHECK(shaderNameWithoutExtension("heatHaze.vfp") == "heatHaze");
+    CHECK(shaderNameWithoutExtension("a.b/c") == "a.b/c");
+  }
+
+  SECTION("a program named, in the table, with both blobs (D9)")
+  {
+    const auto voronoi = engineMaterialProgram(env.dir(), "VORNOIPATTERN.vfp");
+    REQUIRE(voronoi);
+    CHECK(std::string_view{voronoi->row.name} == "vornoipattern");
+    CHECK(voronoi->row.index == EngineMaterialProgramBase + 11);
+    CHECK_FALSE(voronoi->readsCurrentRender);
+    // a blob missing, no blob, not in the table
+    CHECK_FALSE(engineMaterialProgram(env.dir(), "heathaze"));
+    CHECK_FALSE(engineMaterialProgram(env.dir(), "colorProcess"));
+    CHECK_FALSE(engineMaterialProgram(env.dir(), "myOwnProgram"));
+    writeBinaryFile(spirv / "myOwnProgram.vs.bin", blob);
+    writeBinaryFile(spirv / "myOwnProgram.ps.bin", blob);
+    CHECK_FALSE(engineMaterialProgram(env.dir(), "myOwnProgram"));
+    CHECK_FALSE(engineMaterialProgram({}, "vornoipattern"));
   }
 }
 

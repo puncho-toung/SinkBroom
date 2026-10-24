@@ -1655,7 +1655,7 @@ LitPasses::DrawOutcome LitPasses::draw(
 {
   // DrawElementsWithCounters (RenderBackend_NVRHI.cpp:315-565)
   const auto& inputs = *frame.inputs;
-  const auto* builtin = engineBuiltin(program);
+  const auto* builtin = engineProgram(program);
   if (!builtin)
   {
     return DrawOutcome::Disabled;

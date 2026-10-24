@@ -81,7 +81,8 @@ enum class PipelineRecipe
 struct PipelineKey
 {
   PipelineRecipe recipe = PipelineRecipe::Draw;
-  // a BUILTIN_ index (lit/EngineBuiltins.h)
+  // a BUILTIN_ index (lit/EngineBuiltins.h), or LP5.0 a material program's
+  // (EngineMaterialProgramBase + its place, lit/EngineTables.h)
   int program = 0;
   std::uint64_t state = 0;
   int depthBias = 0;

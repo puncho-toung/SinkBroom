@@ -2086,6 +2086,148 @@ bool waitForSlots(
 // LP2.1: the render thread's GPU resources (FrameResources, the arenas, the image slots
 // and textures, the binding sets, the samplers). Each section tears down with no NVRHI
 // reference, no NVRHI error, no validation message and every device allocation freed.
+TEST_CASE("LitSession LP5's programs and layouts on a GPU (LP5.0)", "[.][litgpu2]")
+{
+  const auto* gamePath = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePath || !*gamePath)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the pipelines need the engine's shader blobs");
+  }
+
+  // LP5.0 (C45-C49, D121): the compile thread makes the pipelines of the programs LP5
+  // binds, a material program's among them (EngineMaterialProgramBase + its place), and
+  // the binding layouts of the nine new layout types, on the device with validation on;
+  // nothing is drawn with them yet (the picture is LP5.1's and later)
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+
+    auto events = Events{};
+    auto options = SessionOptions{};
+    options.validation = true;
+    options.gamePath = gamePath;
+    options.requestStartPipelines = false;
+    auto session =
+      LitSession::create(
+        instance.handles(), VK_NULL_HANDLE, 64, 48, options, events.sink(), 1)
+      | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    auto* compiler = session->pipelineCompilerForTesting();
+    REQUIRE(compiler);
+
+    const auto depth =
+      session->deviceFacts().d24s8Supported ? nvrhi::Format::D24S8 : nvrhi::Format::D32S8;
+    const auto hdr = FramebufferFormats{nvrhi::Format::RGBA16_FLOAT, depth};
+    const auto* voronoi = findEngineMaterialProgram("vornoipattern");
+    const auto* heathaze = findEngineMaterialProgram("heatHaze.vfp");
+    REQUIRE(voronoi);
+    REQUIRE(heathaze);
+    // the programs and the number of binding layouts of their layout type
+    const auto programs = std::vector<std::pair<int, std::size_t>>{
+      {18, 3},                  // TEXGEN
+      {21, 4},                  // DRAW_INTERACTION
+      {55, 3},                  // DEFAULT
+      {57, 3},                  // NORMAL_CUBE
+      {65, 3},                  // BLENDLIGHT
+      {67, 3},                  // FOG
+      {69, 3},                  // LEGACY
+      {70, 3},                  // LEGACY
+      {voronoi->row.index, 2},  // POST_PROCESS_INGAME
+      {heathaze->row.index, 2}, // POST_PROCESS_INGAME
+    };
+    auto keys = std::vector<PipelineKey>{};
+    for (const auto& [program, layouts] : programs)
+    {
+      keys.push_back(
+        PipelineKey{PipelineRecipe::Draw, program, engine_gls::Default, 0, 0.0f, hdr});
+    }
+    using L = EngineBindingLayout;
+    const auto layoutTypes = std::vector<L>{
+      L::Default,
+      L::DefaultSkinned,
+      L::TextureSkinned,
+      L::Texgen,
+      L::Legacy,
+      L::NormalCube,
+      L::Fog,
+      L::Blendlight,
+      L::PostProcessIngame,
+      L::DrawInteractionSkinned,
+    };
+    for (const auto& key : keys)
+    {
+      compiler->graphicsPipeline(key);
+    }
+    for (const auto layout : layoutTypes)
+    {
+      compiler->layoutsOf(layout);
+    }
+    CHECK(waitFor(
+      [&] {
+        for (const auto& key : keys)
+        {
+          if (
+            compiler->graphicsPipeline(key).state
+            == GraphicsPipelineLookup::State::Pending)
+          {
+            return false;
+          }
+        }
+        for (const auto layout : layoutTypes)
+        {
+          if (compiler->layoutsOf(layout).state == BindingLayoutLookup::State::Pending)
+          {
+            return false;
+          }
+        }
+        return true;
+      },
+      30000ms,
+      false));
+
+    for (std::size_t i = 0; i < keys.size(); ++i)
+    {
+      const auto lookup = compiler->graphicsPipeline(keys[i]);
+      CAPTURE(keys[i].program, lookup.error);
+      CHECK(lookup.state == GraphicsPipelineLookup::State::Ready);
+      CHECK(lookup.pipeline);
+      CHECK(lookup.bindingLayouts.size() == programs[i].second);
+    }
+    for (const auto layout : layoutTypes)
+    {
+      const auto lookup = compiler->layoutsOf(layout);
+      CAPTURE(int(layout), lookup.error);
+      CHECK(lookup.state == BindingLayoutLookup::State::Ready);
+      CHECK(lookup.layouts.size() == engineBindingLayoutDescs(layout, false)->size());
+    }
+    auto voronoiReported = false;
+    for (const auto& program : session->programReport())
+    {
+      CAPTURE(program.name, program.reason);
+      CHECK(program.enabled);
+      voronoiReported = voronoiReported || program.name == "vornoipattern";
+    }
+    CHECK(voronoiReported);
+
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    CHECK(events.count(SessionEvent::Warning) == 0u);
+    events.print("LP5 programs");
+  }
+  CHECK(resetDispatcher());
+  messages.print("LP5 programs, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+  // M-PIPE-DEFECT-01: the vertex attributes a vertex shader does not read are the one
+  // mirrored warning id, counted apart
+  std::cout << "LP5 programs: mirrored warnings " << messages.mirrored << std::endl;
+}
+
 TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
 {
 

@@ -547,4 +547,112 @@ TEST_CASE("Retail shaders: LP5's blobs, sets 5, 7, 8 and 12", "[.][retail]")
   CHECK(checked == 44);
 }
 
+TEST_CASE("Retail shaders: the material programs and set 8 (LP5.0)", "[.][retail]")
+{
+  const auto gamePath = retailGamePath();
+  if (!gamePath)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the shader test needs the game folder");
+  }
+
+  // C47, D121: every program of shaders.cfg:130-154 has both blobs here, reflects equal
+  // to POST_PROCESS_INGAME (set 8's 13 members by name and offset where a stage declares
+  // the uniforms), and binds t_CurrentRender exactly where the table says it reads
+  // _currentRender
+  const auto table8 = engineParmSetBlock(8);
+  REQUIRE(table8.members.size() == 13u);
+  CHECK(table8.size == 208u);
+  auto checked = 0;
+  auto blocks = 0;
+  auto readers = std::vector<std::string>{};
+  for (const auto& entry : EngineMaterialPrograms)
+  {
+    const auto& row = entry.row;
+    CAPTURE(row.name);
+    const auto program = engineMaterialProgram(*gamePath, row.name);
+    REQUIRE(program);
+    CHECK(program->row.index == row.index);
+
+    auto readsCurrentRender = false;
+    for (const auto pushed : {false, true})
+    {
+      CAPTURE(pushed);
+      for (const auto stage : {ShaderStage::Vertex, ShaderStage::Pixel})
+      {
+        CAPTURE(shaderStageSuffix(stage));
+        const auto blob = readShaderBlob(*gamePath, row.name, stage);
+        REQUIRE(blob.is_success());
+        for (const auto& key : shaderBlobKeys(blob.value()))
+        {
+          CHECK(
+            keyNames(key)
+            == std::vector<std::string>{"USE_GPU_SKINNING", "USE_PUSH_CONSTANTS"});
+        }
+        const auto code =
+          findShaderPermutation(blob.value(), engineBuiltinDefines(row, pushed));
+        REQUIRE(code.is_success());
+        const auto reflection = reflectSpirv(code.value());
+        REQUIRE(reflection.is_success());
+        const auto expected = engineExpectedLayout(row, pushed);
+        REQUIRE(expected);
+        const auto difference = compareReflection(reflection.value(), *expected);
+        CHECK_FALSE(difference);
+        if (difference)
+        {
+          std::cout << row.name << "." << shaderStageSuffix(stage) << " pushed " << pushed
+                    << ": " << *difference << "\n";
+        }
+
+        auto uniforms = std::optional<ReflectedBlock>{};
+        if (pushed)
+        {
+          uniforms = reflection.value().pushConstants;
+        }
+        for (const auto& binding : reflection.value().bindings)
+        {
+          if (!pushed && binding.set == 0 && binding.binding == 256 && binding.block)
+          {
+            uniforms = binding.block;
+          }
+          if (binding.name == "t_CurrentRender")
+          {
+            readsCurrentRender = true;
+            CHECK(stage == ShaderStage::Pixel);
+          }
+        }
+        if (uniforms)
+        {
+          REQUIRE(uniforms->members.size() == table8.members.size());
+          for (std::size_t i = 0; i < table8.members.size(); ++i)
+          {
+            CHECK(uniforms->members[i].name == table8.members[i].name);
+            CHECK(uniforms->members[i].offset == table8.members[i].offset);
+          }
+          CHECK(uniforms->size == 208u);
+          ++blocks;
+        }
+        ++checked;
+      }
+    }
+    CHECK(readsCurrentRender == entry.readsCurrentRender);
+    if (readsCurrentRender)
+    {
+      readers.push_back(row.name);
+    }
+  }
+  std::cout << "material programs: " << checked << " permutations, " << blocks
+            << " set 8 blocks; reading _currentRender:";
+  for (const auto& name : readers)
+  {
+    std::cout << " " << name;
+  }
+  std::cout << "\n";
+  // twelve programs, two stages, pushed and not
+  CHECK(checked == 48);
+  CHECK(blocks > 0);
+  // C47 said every one but vornoipattern; fogwithlights' HLSL declares t_CurrentRender
+  // (fogwithlights.ps.hlsl:35) and never samples it, so its blobs do not bind it
+  CHECK(readers.size() == 10u);
+}
+
 } // namespace tb::lit
