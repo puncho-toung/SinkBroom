@@ -312,9 +312,16 @@ TEST_CASE("LitSession: the panel's status line (D9, LP2.3)")
 
 } // namespace tb::lit
 
-// Hidden GPU tests ("[.][litgpu]"): they need a Vulkan driver and, for the window
-// section, a desktop. The Vulkan loader is loaded at runtime here, as Qt does in the
-// editor (C9); the test executable never links it.
+// Hidden GPU tests: they need a Vulkan driver and, for the window section, a desktop. The
+// Vulkan loader is loaded at runtime here, as Qt does in the editor (C9); the test
+// executable never links it. LP5.0 (RUN.md, the director's decisions after LPF.1 (5);
+// P6.24): two tags, each suite under 180 s of wall clock in Debug (the gate measures both
+// and adds a third tag once one passes 150 s): "[.][litgpu]" holds LP0-LP2's cases (on a
+// GPU, pipelines, GPU resources, lit passes, tonemap and blit); "[.][litgpu2]" LP4's and
+// later ones (ambient pass, light-grid path, live feed, LP5's programs). LPF.2's host
+// cases are "[.][feed]" (tst_Feed.cpp). Every case makes its own instance, device and
+// session, bounds every wait (H.1, 19-LITGPU-HANG.md) and leaves the dispatcher reset:
+// none depends on another having run, in either suite or in any order.
 
 #ifdef _WIN32
 
@@ -7667,7 +7674,7 @@ std::array<int, 3> modelLdr(
 // read only), first without a bake (black: the default cube, zero SH), then with a
 // synthetic .shprobes and radiance cubes against a CPU model of the shader for three
 // pixels. Hidden: it needs a GPU and the game's blobs.
-TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu]")
+TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu2]")
 {
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePathValue || !*gamePathValue)
@@ -8753,7 +8760,7 @@ std::optional<std::optional<int>> slabGridArea(const FrontendLists& lists, const
 // Pending atlas (held through the slot table's request) keeping the frame unconverged, a
 // Missing atlas sending its area to the probe path (black: no probe images), and the
 // ambient draws the same on both paths. Hidden: it needs a GPU and the game's blobs.
-TEST_CASE("LitSession light-grid path on a GPU (LP4.3)", "[.][litgpu]")
+TEST_CASE("LitSession light-grid path on a GPU (LP4.3)", "[.][litgpu2]")
 {
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePathValue || !*gamePathValue)
@@ -10081,7 +10088,7 @@ std::string feedBatchMapText(const int count)
 // replaced image never shows the intrinsic, the re-parse reaches the cells, the lights
 // and the lists, and the frame log times the feed. Hidden: it needs a GPU and the game's
 // blobs.
-TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
+TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu2]")
 {
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePathValue || !*gamePathValue)
