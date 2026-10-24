@@ -14754,7 +14754,7 @@
           "symbol": "engineSnapLightRegisters, engineLightScissor (flowRect), engineCullModelBoundsToLight, engineLightUsesMathPath, buildFrontendLists"
         }
       ],
-      "note": "LP2.2a step 2 (C27, D67, A20, K22): per light record (visible, a volume, a texture light: not R_LightUsesMathPath, not a fog or blend light) the shader registers at the light's shaderParms (time 0, the global parms 0), each stage on has its colour registers below 0.001 snapped to 0 and a light none of whose stages adds light is skipped; the scissor is ProjectedFullyClippedBounds of the zero-to-one cube through the world mvp * inverseBaseLightProject (r_useLightScissors 3), culled when its z range is empty, x and y times ( viewport.x2 - x1 ) and ( y2 - y1 ) through idMath::Ftoi, expanded, intersected with the viewLight's scissorRect, zmin and zmax kept but used by nothing (SC212). LP4.1 (C33, D81, D94): the scissorRect is the portal flow's, the union of the rects of the chains in which the light passed AddAreaViewLights (RenderWorld_portals.cpp:364-402, M-FLOW-05), so the scissor is that union intersected with the projected rect; a light record the flow gave no rect is no view light at all (and asks for no registers); a light whose volume pushed into no area (the outside set, D81) and every light of a map without a tree (D94) take the view's scissor, the projected rect alone. R_CullModelBoundsToLight is CullBoundsToMVP( baseLightProject * modelRenderMatrix, bounds, true ), on each chunk's bounds"
+      "note": "LP2.2a step 2 (C27, D67, A20, K22): per light record (visible, a volume, a texture light: not R_LightUsesMathPath, not a fog or blend light) the shader registers at the light's shaderParms (time 0, the global parms 0), each stage on has its colour registers below 0.001 snapped to 0 and a light none of whose stages adds light is skipped; the scissor is ProjectedFullyClippedBounds of the zero-to-one cube through the world mvp * inverseBaseLightProject (r_useLightScissors 3), culled when its z range is empty, x and y times ( viewport.x2 - x1 ) and ( y2 - y1 ) through idMath::Ftoi, expanded, intersected with the viewLight's scissorRect, zmin and zmax kept but used by nothing (SC212). LP4.1 (C33, D81, D94): the scissorRect is the portal flow's, the union of the rects of the chains in which the light passed AddAreaViewLights (RenderWorld_portals.cpp:364-402, M-FLOW-05), so the scissor is that union intersected with the projected rect; a light record the flow gave no rect is no view light at all (and asks for no registers); a light whose volume pushed into no area (the outside set, D81) and every light of a map without a tree (D94) take the view's scissor, the projected rect alone. R_CullModelBoundsToLight is CullBoundsToMVP( baseLightProject * modelRenderMatrix, bounds, true ), on each chunk's bounds. LP5.1 (C45): math and ambientLight lights take this path as any light (M-FRONT-05)"
     },
     {
       "id": "M-FRONT-02",
@@ -15164,7 +15164,7 @@
           "symbol": "LitPasses::recordInteractions, LitPasses::renderInteractions, LitPasses::setInteractionSpace"
         }
       ],
-      "note": "LP2.2a step 4 (SC221-SC228, D75, K26): per light, largest first: GL_State( GLS_DEFAULT ), ALPHA_TEST 0, the view's viewport and scissor, then RenderInteractions for the local and global lists with DEPTHFUNC_EQUAL and the translucent list with DEPTHFUNC_LESS: the light's scissor when it differs; SRCBLEND_ONE | DSTBLEND_ONE | DEPTHMASK | depthFunc | STENCIL_FUNC_ALWAYS through GetRenderState (additive RGB, alpha One / Zero, no depth write, cull front, stencil ALWAYS, no polygon offset: a perforated MF_POLYGONOFFSET surface fails EQUAL and stays unlit, mirrored); per light stage on: lightColor ( r_lightScale * regs[ color 0..2 ], regs[ color 3 ] ), specular zeroed for noSpecular, the light texture matrix, units 3 and 4 the falloff and the stage's image, USER0-2 (mlMode 0), RB_SetupForFastPathInteractions, currentSpace reset; per surface on a space change MVP, MODELMATRIX and MODELVIEWMATRIX transposed, GLOBALLIGHTORIGIN, LOCALLIGHTORIGIN (w 0), LOCALVIEWORIGIN (w 1), the projection planes to local and baked, LIGHTFALLOFF_S; then the surface stage loop (M-PASS-04). Shadow parms are not set (K26: the unshadowed program)"
+      "note": "LP2.2a step 4 (SC221-SC228, D75, K26): per light, largest first: GL_State( GLS_DEFAULT ), ALPHA_TEST 0, the view's viewport and scissor, then RenderInteractions for the local and global lists with DEPTHFUNC_EQUAL and the translucent list with DEPTHFUNC_LESS: the light's scissor when it differs; SRCBLEND_ONE | DSTBLEND_ONE | DEPTHMASK | depthFunc | STENCIL_FUNC_ALWAYS through GetRenderState (additive RGB, alpha One / Zero, no depth write, cull front, stencil ALWAYS, no polygon offset: a perforated MF_POLYGONOFFSET surface fails EQUAL and stays unlit, mirrored); per light stage on: lightColor ( r_lightScale * regs[ color 0..2 ], regs[ color 3 ] ), specular zeroed for noSpecular, the light texture matrix, units 3 and 4 the falloff and the stage's image, USER0-2 (mlMode 0), RB_SetupForFastPathInteractions, currentSpace reset; per surface on a space change MVP, MODELMATRIX and MODELVIEWMATRIX transposed, GLOBALLIGHTORIGIN, LOCALLIGHTORIGIN (w 0), LOCALVIEWORIGIN (w 1), the projection planes to local and baked, LIGHTFALLOFF_S; then the surface stage loop (M-PASS-04). Shadow parms are not set (K26: the unshadowed program). LP5.1 (C45): DrawInteractions' two phases over this walk, the per-light reset before the lists and r_skipTranslucent are M-INTER-02's"
     },
     {
       "id": "M-PASS-04",
@@ -15222,7 +15222,7 @@
           "symbol": "engineSetupInteractionStage, engineSingleInteraction, engineSurfaceInteractions, pendingSurfaceInteraction, engineVertexColorParms, engineClampedColor, engineMathLightParms"
         }
       ],
-      "note": "LP2.2a step 4 (SC229, SC230): SL_COVERAGE and SL_AMBIENT ignored; SL_BUMP (on) draws a pending interaction, takes its image and matrix and clears diffuse and specular; SL_DIFFUSE draws a pending diffuse, takes image, vertexColor, matrix and clamp01( register ) * the light's diffuse colour; SL_SPECULAR likewise, and not for noSpecular lights; a final draw. DrawSingleInteraction: no bump, nothing; a null diffuse becomes _blackDiffuse and a null specular _black, written into the carried drawInteraction_t as the engine writes them into din; no draw when both are black (_black, or rgb <= 0); the program by the specular image's usage after the PBR rename (TD_SPECULAR_PBR_RMAO, _RMAOD: interaction_PBR 23, else interaction 19; K26 the unshadowed one). The vertex colour and the matrices carry from surface to surface within one RenderInteractions call"
+      "note": "LP2.2a step 4 (SC229, SC230): SL_COVERAGE and SL_AMBIENT ignored; SL_BUMP (on) draws a pending interaction, takes its image and matrix and clears diffuse and specular; SL_DIFFUSE draws a pending diffuse, takes image, vertexColor, matrix and clamp01( register ) * the light's diffuse colour; SL_SPECULAR likewise, and not for noSpecular lights; a final draw. DrawSingleInteraction: no bump, nothing; a null diffuse becomes _blackDiffuse and a null specular _black, written into the carried drawInteraction_t as the engine writes them into din; no draw when both are black (_black, or rgb <= 0); the program by the specular image's usage after the PBR rename (TD_SPECULAR_PBR_RMAO, _RMAOD: interaction_PBR 23, else interaction 19; K26 the unshadowed one). The vertex colour and the matrices carry from surface to surface within one RenderInteractions call. LP5.1 (C45, D114): an ambientLight light's _black specular and its program 21 are M-PASS-10's"
     },
     {
       "id": "M-PASS-05",
@@ -15579,7 +15579,7 @@
           "symbol": "LitPasses::renderInteractions"
         }
       ],
-      "note": "LP2.2a: a register index outside the evaluated registers reads 0 (the engine reads its frame-allocated array unchecked; the parser keeps every index below numRegisters), and a light stage without an image (a cinematic) is skipped (the engine would bind a null image, which GetImageAt does not check)"
+      "note": "LP2.2a: a register index outside the evaluated registers reads 0 (the engine reads its frame-allocated array unchecked; the parser keeps every index below numRegisters), and a light stage without an image (a cinematic) is skipped (the engine would bind a null image, which GetImageAt does not check). LP5.1 (C45, P6.13), restated: the skip of a light stage without an image holds for a texture light alone; a math light binds _white at units 3 and 4 and never reads its stage image (RenderBackend.cpp:1906-1931), so its stage is drawn with or without one (engineLightStageUnits, M-PASS-09)"
     },
     {
       "id": "M-PASS-GUARD-02",
@@ -17759,7 +17759,7 @@
           "symbol": "EngineBuiltinAmbientLightingIbl, EngineBuiltinAmbientLightingIblPbr, EngineBuiltinAmbientLightgridIbl, EngineBuiltinAmbientLightgridIblPbr"
         }
       ],
-      "note": "LP4.2a step 1 (C35, C34): the IBL layout's four sets: set 0 the uniforms item (the 720-byte volatile constant buffer, or PushConstants( 0, 720 ) where pcEnabled), visibility All; set 1 Texture_SRV 0, 1, 2 (normal, specular, base colour) Pixel; set 2 Texture_SRV 3, 4, 7, 8, 9, 10, 12, 13, 14 (BRDF LUT, SSAO, irradiance, three radiance cubes, three depth cubes) Pixel; set 3 Sampler 0 and 1 Pixel. The skinned layout adds StructuredBuffer_SRV( 11 ) to set 0 (tabled, never requested). The binding sets per draw: set 1 units 0-2 at t0-t2, set 2 units 3, 4, 7, 8, 9, 10, 12, 13, 14 at the same registers, set 3 anisotropicWrap and linearClamp (r_renderMode 0: R_UsePixelatedLook is false, so never PointWrap); m_units grows to 15 (INTERACTION_TEXUNIT_DEPTH_CUBE3 14). t7 is read only by the light-grid pixel shader: the reflection check accepts a layout item no stage reads (compareLayoutCoverage), as the TEXTURE layout's are. The programs and their keys (USE_GPU_SKINNING, USE_PBR, USE_PUSH_CONSTANTS) are rows 4-11 of the builtins table (M-TABLE-01)"
+      "note": "LP4.2a step 1 (C35, C34): the IBL layout's four sets: set 0 the uniforms item (the 720-byte volatile constant buffer, or PushConstants( 0, 720 ) where pcEnabled), visibility All; set 1 Texture_SRV 0, 1, 2 (normal, specular, base colour) Pixel; set 2 Texture_SRV 3, 4, 7, 8, 9, 10, 12, 13, 14 (BRDF LUT, SSAO, irradiance, three radiance cubes, three depth cubes) Pixel; set 3 Sampler 0 and 1 Pixel. The skinned layout adds StructuredBuffer_SRV( 11 ) to set 0 (tabled, never requested). The binding sets per draw: set 1 units 0-2 at t0-t2, set 2 units 3, 4, 7, 8, 9, 10, 12, 13, 14 at the same registers, set 3 anisotropicWrap and linearClamp (r_renderMode 0: R_UsePixelatedLook is false, so never PointWrap); m_units grows to 15 (INTERACTION_TEXUNIT_DEPTH_CUBE3 14). t7 is read only by the light-grid pixel shader: the reflection check accepts a layout item no stage reads (compareLayoutCoverage), as the TEXTURE layout's are. The programs and their keys (USE_GPU_SKINNING, USE_PBR, USE_PUSH_CONSTANTS) are rows 4-11 of the builtins table (M-TABLE-01). LP5.1: EngineBuiltinInteractionAmbient (21) beside them in EngineBuiltins.h (M-PASS-10)"
     },
     {
       "id": "M-INTR-08",
@@ -20022,7 +20022,7 @@
           "symbol": "LP5.0: the frame cvars of passes 7-9"
         }
       ],
-      "note": "LP5.0 step 3 (C46, C47, C49, D118): the cvars passes 7-9 read, at the engine's defaults, every one \"0\": r_skipFogLights and r_skipBlendLights (FogAllLights), r_skipTranslucent (the translucent interactions), r_skipShaderPasses and r_skipPostProcess (the two DrawShaderPasses calls of DrawViewInternal), r_skipNewAmbient (newStage stages), r_showMathLights (USER0.x = 1 + it). r_skipAmbient false is the preview's behaviour (the panel draws the stage pass), as useSsao's is, and also the engine's default; the parity maps set it per map and the [.][parity] test per row (D118, M-TEST-AMB-03). r_useLightDepthBounds and r_skipDynamicTextures are not added: the scout names neither as read by LP5's passes. Nothing reads these before LP5.1-LP5.3"
+      "note": "LP5.0 step 3 (C46, C47, C49, D118): the cvars passes 7-9 read, at the engine's defaults, every one \"0\": r_skipFogLights and r_skipBlendLights (FogAllLights), r_skipTranslucent (the translucent interactions), r_skipShaderPasses and r_skipPostProcess (the two DrawShaderPasses calls of DrawViewInternal), r_skipNewAmbient (newStage stages), r_showMathLights (USER0.x = 1 + it). r_skipAmbient false is the preview's behaviour (the panel draws the stage pass), as useSsao's is, and also the engine's default; the parity maps set it per map and the [.][parity] test per row (D118, M-TEST-AMB-03). r_useLightDepthBounds and r_skipDynamicTextures are not added: the scout names neither as read by LP5's passes. Nothing reads these before LP5.1-LP5.3. LP5.1: recordInteractions reads skipTranslucent (M-INTER-02) and engineMathLightParms showMathLights (M-PASS-09)"
     },
     {
       "id": "M-ID-FN-29",
@@ -20204,6 +20204,387 @@
         }
       ],
       "note": "LP5.0 step 6 (RUN.md, the director's decisions after LPF.1 (5); P6.24), test only, no engine counterpart: the hidden GPU cases run in two suites, each under the 180 s wall clock in Debug: [.][litgpu] LP0-LP2's (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit; 5 cases, 95.5 / 97.8 / 99.1 s at LP5.0) and [.][litgpu2] LP4's and later ones (ambient pass, light-grid path, live feed, LP5's programs; 4 cases, 59.7 / 59.8 / 60.4 s); LPF.2's host cases stay [.][feed]. Each case makes its own instance, device and session, bounds its waits (H.1) and resets the dispatcher, so either suite runs alone and in any order. The gate measures both and a third tag comes once one passes 150 s. TbUiLib's [.][litgpu] cases are not split"
+    },
+    {
+      "id": "M-INTER-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4179,
+            4251
+          ],
+          "anchor": "idRenderBackend::DrawInteractions: the texture phase, then the math phase, GLS_DEFAULT after both",
+          "sha256": "d024ce77883d58c492783a0b4eeb395742270e8b1517a394b3fc988ff0330b4f"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3997,
+            4029
+          ],
+          "anchor": "DrawInteractionsPass: the fog, blend and no-list skips, the phase filter, c_mathLights and c_textureLights",
+          "sha256": "befa7d66d4ac3a3711f908a31ded1ffc5287da0a6c9242c0205c36e8e2260240"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4122,
+            4127
+          ],
+          "anchor": "DrawInteractionsPass: per light GL_State( GLS_DEFAULT ), ALPHA_TEST 0, the default camera's scissor",
+          "sha256": "7e37555bc4f8f35f889cca163e9366c961989c8de755cce1e08aedf8106e2c75"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4145,
+            4145
+          ],
+          "anchor": "DrawInteractionsPass: the translucent list unless r_skipTranslucent",
+          "sha256": "da78db3d338f7bc98fdb29de029d06c6f1579b9556012b8c55771f653965935b"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            135,
+            135
+          ],
+          "anchor": "r_skipTranslucent \"0\"",
+          "sha256": "a192b123f3730079458b2392077175a52a0ebb1a0c12d455994680fe702470d6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordInteractions"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.h",
+          "symbol": "LitFrameStats::textureLights, mathLights, ambientLights"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameLog.cpp",
+          "symbol": "frameLogHeader, formatFrameLogRow (math_lights, ambient_lights)"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::drawFrame (the frame log's two columns)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_FrameLog.cpp",
+          "symbol": "FrameLog: the 51 columns"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession math and ambientLight lights on a GPU (LP5.1): the counters per phase, the frame log's columns"
+        }
+      ],
+      "note": "LP5.1 step 1 (C45, P6.13): the sorted view lights are walked twice, the texture phase (R_LightUsesMathPath false) then the math phase (true), each keeping the largest-first order (the engine's comment: the reordering is safe, the interactions are additive with depth writes off). Fog and blend lights are skipped by both phases (their own pass, LP5.3; the frontend lists none before then: asserted, and skipped as the engine skips them, by the shader's fogLight and blendLight); a light without lists is skipped; per light before its lists ALPHA_TEST 0 and the view's scissor (GL_State( GLS_DEFAULT ) changes no draw: each draw's pipeline key carries its whole state, D75); r_skipTranslucent 1 skips the translucent list. pc.c_textureLights and pc.c_mathLights count the lights with interactions that entered each phase (overflowed ones too); ambientLights, the ambientLight lights among them, is the preview's own count (no engine counter), and the frame log's math_lights and ambient_lights are the two. D76's budget is one over both phases in the new draw order: one counter of the DRAW_INTERACTION writes (m_frameWrites) and one overflow flag span the two walks, so a light that overflows stops every later light of its phase and the whole math phase after a texture-phase overflow. The phases' Optick scopes, log blocks and r_profileLights have no preview counterpart (no pixels)"
+    },
+    {
+      "id": "M-PASS-09",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1906,
+            1931
+          ],
+          "anchor": "RenderInteractions: a math light binds _white at units 3 and 4, a texture light its falloff and stage image",
+          "sha256": "93a500cf17ed14dbb0ee2dcc4d970ec24df1c7658d16f8e144450d7cbe6b84a4"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1933,
+            1966
+          ],
+          "anchor": "RenderInteractions: USER0 ( mlMode, type, falloff, pattern ), USER1, USER2",
+          "sha256": "3609828a433e321d5d137cdd1692f8b9d8b3ed7016fe762f2ea079a7b602814b"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            246,
+            246
+          ],
+          "anchor": "r_showMathLights \"0\"",
+          "sha256": "5ed2f2f509cf525b2bf1c80cb673ab1c84d4ff3023282ca0ddd52e4b93e403c7"
+        },
+        {
+          "file": "neo/shaders/mathlight.inc.hlsl",
+          "lines": [
+            197,
+            231
+          ],
+          "anchor": "MLFalloffCurve",
+          "sha256": "0db64ae5cfcc021e3f2be611a30522c16438ce8f007223973ad4cd30d0b6df6d"
+        },
+        {
+          "file": "neo/shaders/mathlight.inc.hlsl",
+          "lines": [
+            316,
+            325
+          ],
+          "anchor": "MLEnergyClamp",
+          "sha256": "d9295f45ea9c294bfff4caa5a28bc42ce9d942b20d6cbee9c8cdc20c495ab5c5"
+        },
+        {
+          "file": "neo/shaders/mathlight.inc.hlsl",
+          "lines": [
+            333,
+            440
+          ],
+          "anchor": "MLEvaluate",
+          "sha256": "f89fc5f084be9d2161c84be336c9f283ff9023c9455fb53af0874f2ae3dc2cc6"
+        },
+        {
+          "file": "neo/shaders/builtin/lighting/interaction.ps.hlsl",
+          "lines": [
+            84,
+            92
+          ],
+          "anchor": "main: MLEvaluate replaces the falloff and projection taps",
+          "sha256": "d21745cc4c2b3fa01103b446a17a3d4369591bf701287b1d4d889365626c2b20"
+        },
+        {
+          "file": "neo/shaders/builtin/lighting/interaction.ps.hlsl",
+          "lines": [
+            179,
+            179
+          ],
+          "anchor": "main: lightColor = sRGBToLinearRGB( lightProjRGB * lightFalloffRGB )",
+          "sha256": "6c106715ccca2d1ac94615bccf07b98c48183e29afc1d3a21c4f1ca726ed3104"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineLightStageUnits, engineMathLightParms"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::renderInteractions (the light stage's units and USER0-2)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "LitPasses: R_AddSingleLight's register snap and the math light test (the units, mlMode)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession math and ambientLight lights on a GPU (LP5.1): the math point light, the math sun, the held stage image"
+        }
+      ],
+      "note": "LP5.1 step 1 (C45, D112, SC507, SC508): a math light is a shader branch of the same programs (19, 20, 23, 24 by the surface's material, as a texture light's), layout, state, scissor, register evaluation and snap: per light stage _white at units 3 and 4 instead of the falloff and the stage image, USER0.x = 1 + r_showMathLights (EngineFrame.showMathLights, 0), the other USER members the parsed math data (a texture light's mlMode 0 as before). Mirrored engine facts, the blob's: MLEvaluate's curve, mask and pattern clamp to 0..1 with math_energy_clamp 1 (MLEnergyClamp: saturate) and to ML_HDR_CEIL without it, then the shader's sRGBToLinearRGB clamps to 0..1 and linearises (IPS:179, against MLI's own comment that the result is linear and must not be), so the analytic light never exceeds 1 and is gamma-linearised in the target: the preview inherits it by binding the blob, nothing of it is SinkBroom's. A math sun is unattenuated (falloff and mask 1). The [.][litgpu2] case models invsquare_clamped (Karis window, k 2) through the clamp and Linear1 within 1 % of HDR and +-1 LDR at two pixels, and the sun's three pixels equal"
+    },
+    {
+      "id": "M-PASS-10",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1156,
+            1159
+          ],
+          "anchor": "DrawSingleInteraction: an ambientLight light's specular image _black",
+          "sha256": "4f14945dc7497171990085052a129f99dd046901270ce0c77e81f03fbe82d378"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1163,
+            1173
+          ],
+          "anchor": "DrawSingleInteraction: no draw when diffuse and specular are black",
+          "sha256": "594e251a7f048fba310dbc0f8635b92dfa408de92e37c367d80dfbd650255bf7"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1398,
+            1414
+          ],
+          "anchor": "DrawSingleInteraction: the PBR branch's BindShader_PBR_InteractionAmbient (rows 25, 26), never reached",
+          "sha256": "0fca9b2ca9048db3eb4626ff9bceaf88e7c881efafaeaff7983edb2795bc51cf"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1524,
+            1538
+          ],
+          "anchor": "DrawSingleInteraction: the legacy branch's BindShader_InteractionAmbient (rows 21, 22)",
+          "sha256": "480e955d84fbbfff62a9a47a01d0dec162adb5a1cc42174f0bb055d1e8305111"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2757,
+            2761
+          ],
+          "anchor": "the ambientLight keyword",
+          "sha256": "b7d8ef781067e13c0df474b5fde3c80999f1fcfab19a45d3032be73ea14e33c0"
+        },
+        {
+          "file": "neo/shaders/builtin/lighting/interactionAmbient.ps.hlsl",
+          "lines": [
+            98,
+            134
+          ],
+          "anchor": "main: the fixed tangent-space light vector and its Lambert term",
+          "sha256": "8dc33a377e61cab9dcdef4b915afe84a46c3a468a7acd5768d6353baadcd63a5"
+        },
+        {
+          "file": "neo/shaders/builtin/lighting/interactionAmbient.ps.hlsl",
+          "lines": [
+            161,
+            164
+          ],
+          "anchor": "main: the output",
+          "sha256": "71e6a4a28c72d0b23201ff7ee91d5a0162267adeca0cb616f3c894c7eddf8f77"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineSingleInteraction (InteractionState::ambientLight), pendingSurfaceInteraction"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitStages.h",
+          "symbol": "InteractionProgram::InteractionAmbient, InteractionState::ambientLight"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::renderInteractions (inter.ambientLight, EngineBuiltinInteractionAmbient)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
+          "symbol": "EngineBuiltinInteractionAmbient"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "LitPasses: the surface stage loop's decisions (LP5.1: an ambientLight light)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession math and ambientLight lights on a GPU (LP5.1): the ambientLight light"
+        }
+      ],
+      "note": "LP5.1 step 2 (C45, D114, SC511-SC515): an ambientLight light is a plain light in either phase's walk (lightCastsShadows false, LP4.0); DrawSingleInteraction makes its specular image _black whatever its surface's stage (din->vLight->lightShader->IsAmbientLight()), so specularIsBlack holds and it draws only where the diffuse is not black; its program is BUILTIN_INTERACTION_AMBIENT (21; 22 skinned, LP7), the DRAW_INTERACTION layout, set 10 and binding set of a texture light's. Mirrored engine facts: _black is TD_DEFAULT, so the program choice by the specular's usage always takes the legacy branch and rows 25 and 26 (PBR interactionAmbient) are never reached, a PBR material included; the shader's fixed light vector is normalize( 0.5, 9.5 - 0.385, 0.8925 ) (the C++ ambientLightVector, RenderSystem_init.cpp:2371-2374, has 0.5 - 0.385: a typo in the blob), and its Lambert term is computed and never multiplied into the output, which is ( diffuseMap * rpDiffuseModifier + specMap(_black) * ... ) * lightColor * vertex colour: the typo reaches no pixel (the scout's SC515 and the brief name a fixed-vector Lambert term; the source and the [.][litgpu2] case, albedo x 3 within 1 % with the vector's ldotN 0.097, show none)"
+    },
+    {
+      "id": "M-FRONT-05",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            738,
+            746
+          ],
+          "anchor": "R_OptimizeViewLightsList: c_viewLights and c_mathViewLights, the lights with surfaces",
+          "sha256": "931832f4709216cc4bee527b0ecb27afdc706fcbbfd1663f4e93df7e6fedba67"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            711,
+            715
+          ],
+          "anchor": "idMaterial::IsAmbientLight",
+          "sha256": "c9f2998b070edda2be2f04a4fd1a33a4332a625a9dfe9a5e5dd2d8ac73a310fd"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (the lifted skips, FrontendLists::mathLights, ambientLights)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.h",
+          "symbol": "FrontendLists::mathLights, fogAndBlendLights, ambientLights"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "LitPasses: math, ambientLight, fog and blend lights in the lists (LP5.1, C45)"
+        }
+      ],
+      "note": "LP5.1 step 3 (C45, SC510, SC512, SC547, P6.6): the LP2 skips of math and ambientLight lights are gone: R_AddSingleLight treats every kind alike (M-FRONT-01: the registers, the snap, the scissor; M-FRONT-02: the lists), so they are snapped, given a scissor and lists, and sorted with the texture lights. Fog and blend lights stay skipped and counted (fogAndBlendLights) until LP5.3 lifts it (C49: their lists, no snap, kept without a surface). A light seen for the first time without registers is skipped as before, kept registers drawn (D52). FrontendLists::mathLights is c_mathViewLights, the math lights with surfaces in the lists; ambientLights the ambientLight lights with surfaces, the preview's own; lightsInView counts lights of every drawn kind"
+    },
+    {
+      "id": "M-TEST-SWEEP-01",
+      "kind": "difference",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            148,
+            151
+          ],
+          "anchor": "R_AddSingleLight: the light shader's registers evaluated every frame",
+          "sha256": "c5289d467aef3dcb9cea0ff509cd6ebab9849c1bbf750c2dccd1bdfec281555b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "sweepProblems; LitPasses: the 60-step light-colour sweep, evaluations lagging; the sweep of fog and blend lights (LP5.3)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession math and ambientLight lights on a GPU (LP5.1): the sweep, ParkingGate"
+        }
+      ],
+      "note": "LP5.1 step 4 (C50, P6.7, R5.16), test only: the engine evaluates every light's registers every frame; the preview's arrive from the parse thread and the last ones are kept meanwhile (D52, RegisterCache), so a colour drag must never show a default frame. The CPU sweep steps lp1b_light's _color 60 times for a texture, a math and an ambientLight light through the render thread's RegisterCache over a fake service that withholds the evaluation on every second step and for the run 40-49: per frame the light is listed with registers, provisional exactly on the withheld steps, its colour a requested step and on a withheld one the last answered one, no unit of its stages _default and no surface of its lists pending; a test-only mutant (TB_LIT_SWEEP_MUTANT=1) answering withheld steps with the default registers (colour 1 1 1) fails every kind with 105 problems (35 withheld steps x provisional, a colour not requested, not the last answered). Fog and blend lights are LP5.3's (skipped sections). The GPU sweep withholds by parking the parse thread at its gate (ParkingGate: MaterialService calls the hook before it waits for work, so the gate is closed and the thread given one evaluation first) and reads the lit 5 x 5 patch per step: non-decreasing, equal to the step before on the 35 kept frames, rising on the answered ones"
+    },
+    {
+      "id": "M-TEST-PARITY-04",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            136,
+            136
+          ],
+          "anchor": "r_skipAmbient \"0\"",
+          "sha256": "8f7a25b58ffd3744868b0457cc64838e72a6e3755e16ce1dba8c166dff1ddd4c"
+        },
+        {
+          "file": "neo/renderer/MathLight.cpp",
+          "lines": [
+            45,
+            118
+          ],
+          "anchor": "ML_ParseFromDict: the math_* keys the M rows set",
+          "sha256": "fc16f88363dcfeaeac29ff57d7aff69a96cc94672fb203564c96d84f947676b3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "STAGES_MAP, STAGES_MTR, stages_textures, ST_ROOMS, st_room_brushes, stages_lights, build_stages_map, the M and B rows, MAPS (the stages map, r_skipAmbient 0), fixture_files, BLOBS (interactionAmbient)"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/maps/test/litpreview_stages.map",
+          "symbol": "the M and B rooms"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/materials/lp5_stages.mtr",
+          "symbol": "lp5/bump, near, near_flat, flat, pbr; lights/lp5/ambient"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession parity rows (LP2.3): texture_lights, math_lights, ambient_lights"
+        }
+      ],
+      "note": "LP5.1 step 5 (C50, D118, D119, P6.1, P6.5, P6.10, P6.22), test only: a fourth parity map, shot after the ambient map with r_skipAmbient 0 (rows.json skip_ambient 0): M01-M05 math point, spot and sun lights over the five curves (M01 invsquare_clamped with math_inner_radius 0.25, M02 invsquare with math_falloff_exp 3 and math_energy_clamp 0, M03 a linear spot with math_shape_exp 4 and math_penumbra 0.3, M04 a smooth spot with a banded pattern, M05 a sun and an exponential point light), M06 math_type sun on a point light (POINT by the geometry), M07 a constant style string (num_styles 1, light_style0 m, math_style 0) beside math_style -1, B01 an ambientLight light over a legacy floor and PBR walls; every material lit, no SL_AMBIENT stage or implicit material in a view (no pass 8 before LP5.2a), every light noshadows 1, no time or sound register, no bake; every row's control black (_color 0 0 0); the bump-mapped rows and B01 k28, M06 and M07 on _flat axial. The rows' expect gains texture_lights, math_lights and ambient_lights, which the [.][parity] test writes into each read-back's .json and asserts; the preview root gains the interactionAmbient blobs. The one engine run (2026-10-24, run-a and run-b 312 s each, every shot repeated at 0): every M and B row within 1 LDR level (means 0.001-0.0142), the eight controls 0; thresholds recorded with --only (the k28 rows mean, p99, max 1 and over1 0; M06 and M07 lit_min alone)"
     }
   ],
   "retired": [
