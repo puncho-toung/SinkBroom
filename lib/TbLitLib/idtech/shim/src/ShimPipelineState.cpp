@@ -121,6 +121,7 @@ static_assert(engine_image::UsageBump == int(TD_BUMP));
 static_assert(engine_image::UsageFont == int(TD_FONT));
 static_assert(engine_image::UsageLight == int(TD_LIGHT));
 static_assert(engine_image::UsageLookupTableMono == int(TD_LOOKUP_TABLE_MONO));
+static_assert(engine_image::UsageLookupTableAlpha == int(TD_LOOKUP_TABLE_ALPHA));
 static_assert(engine_image::UsageLookupTableRgb1 == int(TD_LOOKUP_TABLE_RGB1));
 static_assert(engine_image::UsageCoverage == int(TD_COVERAGE));
 static_assert(engine_image::UsageSpecularPbrRmao == int(TD_SPECULAR_PBR_RMAO));

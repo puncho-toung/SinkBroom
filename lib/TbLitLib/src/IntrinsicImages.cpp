@@ -31,6 +31,7 @@
 #include "lit/IntrinsicImages.h"
 
 #include "lit/EngineImageData.h"
+#include "lit/EngineLight.h"
 #include "lit/ImageCache.h"
 
 #include <fmt/format.h>
@@ -145,6 +146,209 @@ IntrinsicRecipe quadratic()
       auto* texel = &recipe.rgba[(std::size_t(y) * QuadraticWidth + std::size_t(x)) * 4];
       texel[0] = texel[1] = texel[2] = std::uint8_t(b);
       texel[3] = 255;
+    }
+  }
+  return recipe;
+}
+
+// Image_intrinsic.cpp:442 FOG_SIZE; RenderCommon.h:54 FOG_ENTER_SIZE
+constexpr int FogSize = 128;
+constexpr int FogEnterSize = 64;
+
+/**
+ * LP5.0 (C49, P6.20): the engine's ( byte )( f ) of a float or double the C++ standard
+ * leaves undefined above 255 (and below 0), as MSVC compiles it for x64, the engine's
+ * build: cvttss2si (cvttsd2si for a double) truncates to a 32-bit int and the low byte of
+ * the int is kept, so 366.4 becomes 110 (366 - 256), not 255. Only R_FogImage's texels
+ * toward the corners, whose distance d reaches 256 / 255 of the radius (3,803 of them),
+ * take that path; the fog shader samples _fog at T = 0.5 (between rows 63 and 64, the
+ * planes p1 and p3 of C49), where d stays below it, so those texels are never sampled.
+ * FogFraction stays in 0..1, so no texel of _fogEnter takes it.
+ */
+template <typename F>
+std::uint8_t msvcByte(const F value)
+{
+  return std::uint8_t(std::uint32_t(std::int32_t(value)) & 0xffu);
+}
+
+// one texel (255, 255, 255, alpha) of a lookup table at x, y
+void setAlphaTexel(
+  IntrinsicRecipe& recipe, const int x, const int y, const std::uint8_t alpha)
+{
+  auto* texel =
+    &recipe.rgba[(std::size_t(y) * std::size_t(recipe.width) + std::size_t(x)) * 4];
+  texel[0] = texel[1] = texel[2] = 255;
+  texel[3] = alpha;
+}
+
+/**
+ * LP5.0 (C49): R_FogImage (Image_intrinsic.cpp:442-491): 128 × 128, the alpha a step
+ * table of 0.982 per step over the distance from the centre in radii of 63, the border
+ * 255; TF_LINEAR, TR_CLAMP, TD_LOOKUP_TABLE_ALPHA. The distance is idMath::Sqrt of the
+ * int sum (x · InvSqrt( x ), the copy's), each type as the engine's (float steps, a
+ * double 1.0 - step).
+ */
+IntrinsicRecipe fog()
+{
+  auto recipe = IntrinsicRecipe{};
+  recipe.width = FogSize;
+  recipe.height = FogSize;
+  recipe.filter = FilterLinear;
+  recipe.repeat = RepeatClamp;
+  recipe.usage = UsageLookupTableAlpha;
+  recipe.rgba.assign(std::size_t(FogSize) * FogSize * 4, 0);
+
+  auto step = std::array<float, 256>{};
+  float remaining = 1.0;
+  for (std::size_t i = 0; i < step.size(); i++)
+  {
+    step[i] = remaining;
+    remaining *= 0.982f;
+  }
+
+  for (int x = 0; x < FogSize; x++)
+  {
+    for (int y = 0; y < FogSize; y++)
+    {
+      float d;
+
+      d = engineMathSqrt(float(
+        (x - FogSize / 2) * (x - FogSize / 2) + (y - FogSize / 2) * (y - FogSize / 2)));
+      d /= FogSize / 2 - 1;
+
+      int b = msvcByte(d * 255);
+      if (b <= 0)
+      {
+        b = 0;
+      }
+      else if (b > 255)
+      {
+        b = 255;
+      }
+      b = msvcByte(255 * (1.0 - step[std::size_t(b)]));
+      if (x == 0 || x == FogSize - 1 || y == 0 || y == FogSize - 1)
+      {
+        b = 255; // avoid clamping issues
+      }
+      setAlphaTexel(recipe, x, y, std::uint8_t(b));
+    }
+  }
+  return recipe;
+}
+
+// FogFraction (Image_intrinsic.cpp:501-577): RAMP_RANGE 8, DEEP_RANGE -30, the float and
+// double arithmetic kept as it is
+constexpr float RampRange = 8;
+constexpr float DeepRange = -30;
+
+float fogFraction(const float viewHeight, const float targetHeight)
+{
+  float total = std::fabs(targetHeight - viewHeight);
+
+  // only ranges that cross the ramp range are special
+  if (targetHeight > 0 && viewHeight > 0)
+  {
+    return 0.0;
+  }
+  if (targetHeight < -RampRange && viewHeight < -RampRange)
+  {
+    return 1.0;
+  }
+
+  float above;
+  if (targetHeight > 0)
+  {
+    above = targetHeight;
+  }
+  else if (viewHeight > 0)
+  {
+    above = viewHeight;
+  }
+  else
+  {
+    above = 0;
+  }
+
+  float rampTop, rampBottom;
+
+  if (viewHeight > targetHeight)
+  {
+    rampTop = viewHeight;
+    rampBottom = targetHeight;
+  }
+  else
+  {
+    rampTop = targetHeight;
+    rampBottom = viewHeight;
+  }
+  if (rampTop > 0)
+  {
+    rampTop = 0;
+  }
+  if (rampBottom < -RampRange)
+  {
+    rampBottom = -RampRange;
+  }
+
+  float rampSlope = float(1.0 / RampRange);
+
+  if (!total)
+  {
+    return -viewHeight * rampSlope;
+  }
+
+  float ramp = float(
+    (1.0 - (rampTop * rampSlope + rampBottom * rampSlope) * -0.5)
+    * (rampTop - rampBottom));
+
+  float frac = (total - above - ramp) / total;
+
+  // after it gets moderately deep, always use full value
+  float deepest = viewHeight < targetHeight ? viewHeight : targetHeight;
+
+  float deepFrac = deepest / DeepRange;
+  if (deepFrac >= 1.0)
+  {
+    return 1.0;
+  }
+
+  frac = float(frac * (1.0 - deepFrac) + deepFrac);
+
+  return frac;
+}
+
+/**
+ * LP5.0 (C49): R_FogEnterImage (Image_intrinsic.cpp:587-619): 64 × 64, the alpha
+ * FogFraction( x - 32, y - 32 ) · 255 clamped to 0..255 (through msvcByte as the engine's
+ * cast); TF_LINEAR, TR_CLAMP, TD_LOOKUP_TABLE_ALPHA.
+ */
+IntrinsicRecipe fogEnter()
+{
+  auto recipe = IntrinsicRecipe{};
+  recipe.width = FogEnterSize;
+  recipe.height = FogEnterSize;
+  recipe.filter = FilterLinear;
+  recipe.repeat = RepeatClamp;
+  recipe.usage = UsageLookupTableAlpha;
+  recipe.rgba.assign(std::size_t(FogEnterSize) * FogEnterSize * 4, 0);
+  for (int x = 0; x < FogEnterSize; x++)
+  {
+    for (int y = 0; y < FogEnterSize; y++)
+    {
+      float d;
+
+      d = fogFraction(float(x - (FogEnterSize / 2)), float(y - (FogEnterSize / 2)));
+
+      int b = msvcByte(d * 255);
+      if (b <= 0)
+      {
+        b = 0;
+      }
+      else if (b > 255)
+      {
+        b = 255;
+      }
+      setAlphaTexel(recipe, x, y, std::uint8_t(b));
     }
   }
   return recipe;
@@ -431,6 +635,15 @@ std::optional<IntrinsicRecipe> intrinsicRecipe(const std::string_view name)
   {
     return quadratic();
   }
+  // LP5.0 (C49, D69's deferral): the fog tables (Image_intrinsic.cpp:1071-1072 key them)
+  if (name == "_fog")
+  {
+    return fog();
+  }
+  if (name == "_fogEnter")
+  {
+    return fogEnter();
+  }
   return std::nullopt;
 }
 
@@ -567,7 +780,8 @@ Result<std::shared_ptr<const CachedImage>> intrinsicImage(
     image.data = std::move(data);
     image.format = FormatDxt5;
   }
-  else if (opts.format != FormatInt8 && opts.format != FormatRgba8)
+  else if (
+    opts.format != FormatInt8 && opts.format != FormatRgba8 && opts.format != FormatAlpha)
   {
     return Error{fmt::format(
       "the intrinsic image {} has the format {}, which the preview does not make",

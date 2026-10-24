@@ -49,8 +49,12 @@ namespace tb::lit
  * Image_intrinsic.cpp at 285ea4d1 (mirror.json M-INTR-*): R_DefaultImage with developer 0
  * (zeros; the grey with a white border is com_developer's), R_WhiteImage, R_BlackImage,
  * R_BlackDiffuseImage, R_FlatNormalImage, R_CreateNoFalloffImage and R_QuadraticImage,
- * the images LP2 draws with. nullopt for every other name: the preview does not make it
- * yet (LP3-LP5 add theirs). Pure; any thread.
+ * the images LP2 draws with; LP5.0 (C49) R_FogImage and R_FogEnterImage, _fog (128²) and
+ * _fogEnter (64²), white with the table in alpha, TF_LINEAR, TR_CLAMP and
+ * TD_LOOKUP_TABLE_ALPHA, which DeriveOpts stores as FMT_ALPHA (the alpha bytes alone, R8
+ * sampled as (1, 1, 1, R)), with the engine's ( byte ) casts as MSVC compiles them where
+ * the value passes 255. nullopt for every other name: the preview does not make it yet
+ * (LP3-LP5 add theirs). Pure; any thread.
  */
 struct IntrinsicRecipe
 {
@@ -108,9 +112,9 @@ std::optional<std::shared_ptr<const CachedImage>> rawIntrinsicImage(
  * its usage, the layout conversion and mips of Load2DFromMemory (decls'
  * sourceImageLevels, LP1c.2), then the bytes the engine's encoder would write: constant
  * DXT5 blocks for a DXT usage (every level of these images is one colour), the stored
- * bytes for INT8 and RGBA8. LP4.2a: a name of the raw path (rawIntrinsicImage) is
- * answered by it. An error for a name with no recipe or a level that is not of one
- * colour. Parse thread (decls belongs to it, C20).
+ * bytes for INT8, ALPHA (LP5.0) and RGBA8. LP4.2a: a name of the raw path
+ * (rawIntrinsicImage) is answered by it. An error for a name with no recipe or a level
+ * that is not of one colour. Parse thread (decls belongs to it, C20).
  */
 Result<std::shared_ptr<const CachedImage>> intrinsicImage(
   MaterialDecls& decls, std::string_view name);

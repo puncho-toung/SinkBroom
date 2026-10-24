@@ -77,6 +77,7 @@ constexpr int UsageFont = 4;
 constexpr int UsageLight = 5;
 // U1.5: the lookup tables, which only the intrinsic images use
 constexpr int UsageLookupTableMono = 6;
+constexpr int UsageLookupTableAlpha = 7;
 constexpr int UsageLookupTableRgb1 = 8;
 constexpr int UsageCoverage = 10;
 constexpr int UsageSpecularPbrRmao = 12;

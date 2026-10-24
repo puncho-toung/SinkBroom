@@ -662,15 +662,24 @@ TEST_CASE("ImageFallback, the fallback runs only where the engine would binarize
     CHECK(slot.image->width == 16);
     CHECK(slot.sourceReason.empty());
 
-    // one LP2 does not draw with: no image, a reason that names it
+    // LP5.0 (C49): _fog is made now, as FMT_ALPHA
     auto fog = keyOf("_fog", UsageDefault);
     fog.intrinsic = true;
-    const auto none = resolveImage(decls, source, fog);
+    const auto fogSlot = resolveImage(decls, source, fog);
+    CHECK(fogSlot.name.generated);
+    REQUIRE(fogSlot.image);
+    CHECK(fogSlot.image->format == FormatAlpha);
+    CHECK(fogSlot.image->width == 128);
+
+    // one the preview does not make: no image, a reason that names it
+    auto cyan = keyOf("_cyan", UsageDefault);
+    cyan.intrinsic = true;
+    const auto none = resolveImage(decls, source, cyan);
     CHECK(none.name.generated);
     CHECK_FALSE(none.image);
     CHECK(
       none.sourceReason
-      == "the preview does not make the engine's intrinsic image _fog yet");
+      == "the preview does not make the engine's intrinsic image _cyan yet");
   }
 
   static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));

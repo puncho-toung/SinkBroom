@@ -126,6 +126,10 @@ EngineVec3 engineBoundsCenter(const EngineBounds& bounds);
 // (Math.h:527-552), not sqrtf( x ): its last bit may differ from a plain square root
 float engineVec3Length(const EngineVec3& v);
 
+// LP5.0 (C49): idMath::Sqrt( x ) itself (Math.h:549-552), x · InvSqrt( x ) through the
+// copy, for R_FogImage's distances (src/IntrinsicImages.cpp, Image_intrinsic.cpp:465-466)
+float engineMathSqrt(float x);
+
 /**
  * idRenderMatrix::OffsetScaleForBounds( src, bounds, out ) (RenderMatrix.cpp:793-869, its
  * SSE path): the matrix that takes the unit cube onto bounds in src's space, as

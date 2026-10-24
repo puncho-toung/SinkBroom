@@ -20,7 +20,7 @@
 // LP2.1 step 6 (D69, SC271, K23): the intrinsic images LP2 draws with, as the engine's
 // cache would hold them, against the engine's own fast DXT encoders (the test-only copy,
 // TbLitIdDxtTestLib): each level's constant blocks byte for byte against the encoder's
-// blocks of the same level.
+// blocks of the same level. LP5.0 (C49) adds the fog tables against a transcription.
 
 #include "LitTestUtils.h"
 #include "lit/DxtEncoderForTesting.h"
@@ -28,6 +28,7 @@
 #include "lit/EngineGeometry.h"
 #include "lit/EngineImageData.h"
 #include "lit/EnginePipelineState.h"
+#include "lit/EngineTables.h"
 #include "lit/ImageCache.h"
 #include "lit/ImageFallback.h"
 #include "lit/IntrinsicImages.h"
@@ -258,12 +259,252 @@ TEST_CASE("IntrinsicImages (D69)")
       flat.texel[1]);
   }
 
+  SECTION("LP5.0 (C49): _fog and _fogEnter, FMT_ALPHA, against a transcription")
+  {
+    // An independent transcription of R_FogImage, FogFraction and R_FogEnterImage
+    // (Image_intrinsic.cpp:442-619 at 285ea4d1), written here apart from the product's:
+    // idMath::Sqrt as x · sqrtf( 1 / x ) (Math.h:527-552), and the engine's ( byte )
+    // casts as MSVC's x64 code makes them: truncate to an int, keep its low byte.
+    const auto castByte = [](const double value) {
+      const auto truncated = static_cast<long long>(std::trunc(value));
+      return int(((truncated % 256) + 256) % 256);
+    };
+    const auto idSqrt = [](const float x) {
+      return x >= 0.0f ? x * (x > 1.1754944e-38f ? sqrtf(1.0f / x) : 1e30f) : 0.0f;
+    };
+    auto steps = std::array<float, 256>{};
+    {
+      float r = 1.0f;
+      for (auto& s : steps)
+      {
+        s = r;
+        r *= 0.982f;
+      }
+    }
+    auto truncatedFog = std::vector<std::array<int, 3>>{};
+    const auto fogAlpha = [&](const int x, const int y) {
+      float d = idSqrt(float((x - 64) * (x - 64) + (y - 64) * (y - 64)));
+      d /= 63;
+      const float scaled = d * 255;
+      auto b = castByte(double(scaled));
+      if (scaled >= 256.0f)
+      {
+        truncatedFog.push_back({x, y, b});
+      }
+      b = std::clamp(b, 0, 255);
+      b = castByte(255 * (1.0 - double(steps[std::size_t(b)])));
+      if (x == 0 || x == 127 || y == 0 || y == 127)
+      {
+        b = 255;
+      }
+      return b;
+    };
+    const auto fraction = [](const float view, const float target) -> float {
+      const float total = std::fabs(target - view);
+      if (target > 0 && view > 0)
+      {
+        return 0.0f;
+      }
+      if (target < -8.0f && view < -8.0f)
+      {
+        return 1.0f;
+      }
+      const float above = target > 0 ? target : view > 0 ? view : 0.0f;
+      float top = view > target ? view : target;
+      float bottom = view > target ? target : view;
+      top = top > 0 ? 0.0f : top;
+      bottom = bottom < -8.0f ? -8.0f : bottom;
+      const float slope = 0.125f;
+      if (total == 0.0f)
+      {
+        return -view * slope;
+      }
+      const float ramp =
+        float((1.0 - double(top * slope + bottom * slope) * -0.5) * double(top - bottom));
+      float frac = (total - above - ramp) / total;
+      const float deepest = view < target ? view : target;
+      const float deep = deepest / -30.0f;
+      if (deep >= 1.0f)
+      {
+        return 1.0f;
+      }
+      frac = float(double(frac) * (1.0 - double(deep)) + double(deep));
+      return frac;
+    };
+    auto outsideFogEnter = std::vector<std::array<int, 3>>{};
+    const auto fogEnterAlpha = [&](const int x, const int y) {
+      const float d = fraction(float(x - 32), float(y - 32));
+      const float scaled = d * 255;
+      auto b = castByte(double(scaled));
+      if (scaled >= 256.0f || scaled < 0.0f)
+      {
+        outsideFogEnter.push_back({x, y, b});
+      }
+      return std::clamp(b, 0, 255);
+    };
+
+    for (const auto& [name, size] :
+         std::vector<std::pair<std::string, int>>{{"_fog", 128}, {"_fogEnter", 64}})
+    {
+      CAPTURE(name);
+      const auto recipe = intrinsicRecipe(name);
+      REQUIRE(recipe);
+      CHECK(recipe->width == size);
+      CHECK(recipe->height == size);
+      CHECK(recipe->filter == FilterLinear);
+      CHECK(recipe->repeat == RepeatClamp);
+      CHECK(recipe->usage == 7); // TD_LOOKUP_TABLE_ALPHA
+      CHECK(recipe->usage == UsageLookupTableAlpha);
+      CHECK(intrinsicImageSize(name) == std::pair{size, size});
+      REQUIRE(recipe->rgba.size() == std::size_t(size * size * 4));
+
+      // every texel white with the table's alpha, top row first
+      auto mismatches = 0;
+      for (auto y = 0; y < size; ++y)
+      {
+        for (auto x = 0; x < size; ++x)
+        {
+          const auto* texel = &recipe->rgba[std::size_t((y * size + x) * 4)];
+          const auto want = size == 128 ? fogAlpha(x, y) : fogEnterAlpha(x, y);
+          mismatches +=
+            texel[0] == 255 && texel[1] == 255 && texel[2] == 255 && int(texel[3]) == want
+              ? 0
+              : 1;
+        }
+      }
+      CHECK(mismatches == 0);
+
+      // DeriveOpts (Image_load.cpp:222-223, :294-301): FMT_ALPHA, one level (TF_LINEAR);
+      // Load2DFromMemory stores the alpha bytes alone (BinaryImage.cpp:245-252)
+      const auto opts = engineImageOpts(recipe->usage);
+      CHECK(opts.format == FormatAlpha);
+      CHECK(opts.colorFormat == ColorDefault);
+      CHECK(engineMipLevels(opts.format, recipe->filter, size, size) == 1);
+      const auto made = intrinsicImage(decls, name);
+      REQUIRE(made.is_success());
+      const auto& image = *made.value();
+      CHECK(image.format == FormatAlpha);
+      CHECK(image.colorFormat == ColorDefault);
+      CHECK(image.textureType == Type2D);
+      CHECK(image.width == size);
+      CHECK(image.height == size);
+      REQUIRE(image.levels.size() == 1u);
+      REQUIRE(image.levels[0].size == std::size_t(size * size));
+      REQUIRE(image.data.size() == std::size_t(size * size));
+      auto alphaMismatches = 0;
+      for (std::size_t i = 0; i < image.data.size(); ++i)
+      {
+        alphaMismatches += image.data[i] == recipe->rgba[i * 4 + 3] ? 0 : 1;
+      }
+      CHECK(alphaMismatches == 0);
+      // R8, sampled as (1, 1, 1, R) (Image_NVRHI.cpp:538-541), with the image's sampler:
+      // linear, clamped to the edge (Image_NVRHI.cpp:173-243)
+      CHECK(engineTextureFormat(FormatAlpha, true) == nvrhi::Format::R8_UNORM);
+      const auto mapping = engineComponentMapping(FormatAlpha, ColorDefault);
+      CHECK(mapping.r == nvrhi::ComponentSwizzle::One);
+      CHECK(mapping.g == nvrhi::ComponentSwizzle::One);
+      CHECK(mapping.b == nvrhi::ComponentSwizzle::One);
+      CHECK(mapping.a == nvrhi::ComponentSwizzle::Red);
+      const auto sampler = engineImageSamplerDesc(FormatAlpha, FilterLinear, RepeatClamp);
+      REQUIRE(sampler);
+      CHECK(sampler->minFilter);
+      CHECK(sampler->addressU == nvrhi::SamplerAddressMode::ClampToEdge);
+      CHECK(sampler->addressV == nvrhi::SamplerAddressMode::ClampToEdge);
+    }
+
+    // the rows the fog shader samples at T = 0.5 (between rows 63 and 64 of _fog, 31 and
+    // 32 of _fogEnter), texel by texel
+    const auto fogRecipe = *intrinsicRecipe("_fog");
+    const auto fogEnterRecipe = *intrinsicRecipe("_fogEnter");
+    const auto alphaAt = [](const IntrinsicRecipe& recipe, const int x, const int y) {
+      return int(recipe.rgba[std::size_t((y * recipe.width + x) * 4 + 3)]);
+    };
+    for (const auto row : {63, 64})
+    {
+      for (auto x = 0; x < 128; ++x)
+      {
+        CAPTURE(row, x);
+        CHECK(alphaAt(fogRecipe, x, row) == fogAlpha(x, row));
+      }
+    }
+    for (const auto row : {31, 32})
+    {
+      for (auto x = 0; x < 64; ++x)
+      {
+        CAPTURE(row, x);
+        CHECK(alphaAt(fogEnterRecipe, x, row) == fogEnterAlpha(x, row));
+      }
+    }
+    // a few of them by value: _fog's row 64 rises from 0 at the centre to 255 at the
+    // border; _fogEnter's row 32 is 0 from the centre on (the view above the plane)
+    CHECK(alphaAt(fogRecipe, 64, 64) == 0);
+    CHECK(alphaAt(fogRecipe, 8, 64) == 250);
+    CHECK(alphaAt(fogRecipe, 56, 64) == 112);
+    CHECK(alphaAt(fogRecipe, 72, 64) == 112);
+    CHECK(alphaAt(fogRecipe, 0, 64) == 255);
+    CHECK(alphaAt(fogEnterRecipe, 0, 32) == 255);
+    CHECK(alphaAt(fogEnterRecipe, 4, 32) == 252);
+    CHECK(alphaAt(fogEnterRecipe, 28, 32) == 89);
+    CHECK(alphaAt(fogEnterRecipe, 32, 32) == 0);
+    CHECK(alphaAt(fogEnterRecipe, 63, 32) == 0);
+
+    // the texels whose ( byte ) cast took MSVC's truncation: in _fog the 3,803 texels
+    // outside the circle where d · 255 reaches 256 (d past 256 / 255 radii), toward the
+    // corners, none of them on the sampled rows; at (1, 1) d · 255 = 360.6 is cast to
+    // 104, not clamped to 255, and the alpha is 216 where a clamp would give 252; the
+    // border's 255 overwrites row and column 0 and 127. In _fogEnter FogFraction stays in
+    // 0..1: no texel takes it
+    truncatedFog.clear();
+    outsideFogEnter.clear();
+    for (auto y = 0; y < 128; ++y)
+    {
+      for (auto x = 0; x < 128; ++x)
+      {
+        fogAlpha(x, y);
+      }
+    }
+    for (auto y = 0; y < 64; ++y)
+    {
+      for (auto x = 0; x < 64; ++x)
+      {
+        fogEnterAlpha(x, y);
+      }
+    }
+    CHECK(truncatedFog.size() == 3803u);
+    CHECK(outsideFogEnter.empty());
+    const auto truncatedAt = [&](const int x, const int y) {
+      for (const auto& [tx, ty, b] : truncatedFog)
+      {
+        if (tx == x && ty == y)
+        {
+          return b;
+        }
+      }
+      return -1;
+    };
+    CHECK(truncatedAt(0, 0) == 110);
+    CHECK(alphaAt(fogRecipe, 0, 0) == 255);
+    CHECK(truncatedAt(1, 1) == 104);
+    CHECK(alphaAt(fogRecipe, 1, 1) == 216);
+    CHECK(truncatedAt(2, 2) == 98);
+    CHECK(alphaAt(fogRecipe, 2, 2) == 212);
+    CHECK(truncatedAt(3, 3) == 93);
+    CHECK(alphaAt(fogRecipe, 3, 3) == 207);
+    // the centre is texel 64, so (126, 126) mirrors (2, 2)
+    CHECK(truncatedAt(126, 126) == 98);
+    CHECK(alphaAt(fogRecipe, 126, 126) == alphaAt(fogRecipe, 2, 2));
+    for (const auto& [x, y, b] : truncatedFog)
+    {
+      CHECK_FALSE(((y == 63 || y == 64) && x > 0 && x < 127));
+    }
+    // a clamp in place of the cast would differ there
+    CHECK(castByte(255 * (1.0 - double(steps[255]))) == 252);
+  }
+
   SECTION("every other intrinsic answers Default with its name")
   {
     for (const auto* name :
-         {"_fog",
-          "_fogEnter",
-          "_cyan",
+         {"_cyan",
           "_redClay",
           "_alphaNotch",
           "_defaultUACIrradiance",
@@ -388,7 +629,9 @@ TEST_CASE("IntrinsicImages: 100 rounds on the debug heap (U2.4)")
           "_blackDiffuse",
           "_flat",
           "_noFalloff",
-          "_quadratic"})
+          "_quadratic",
+          "_fog",
+          "_fogEnter"})
     {
       failed += intrinsicImage(decls, name).is_success() ? 0 : 1;
     }
