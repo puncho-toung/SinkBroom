@@ -1998,7 +1998,7 @@ lp5/feed_sphere
   listener->attach(session.get());
   session->setExposed(true);
 
-  const auto shared = std::make_shared<const Snapshot>(std::move(snapshot.value()));
+  const auto shared = std::make_shared<const Snapshot>(std::move(snapshot).value());
   while (!session->offerSnapshot(shared))
   {
     std::this_thread::sleep_for(1ms);

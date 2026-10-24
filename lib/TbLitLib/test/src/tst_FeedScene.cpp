@@ -89,7 +89,7 @@ bool settled(MaterialService& service, SceneGeometry& scene)
     scene.collect();
     if (
       !scene.busy() && !scene.waitsForMaterials() && !scene.waitsForEntityDefs()
-      && scene.lightTable()->records.size() > 0)
+      && !scene.lightTable()->records.empty())
     {
       return true;
     }
