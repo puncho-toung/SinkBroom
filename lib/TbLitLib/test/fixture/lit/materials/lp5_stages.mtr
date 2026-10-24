@@ -1,0 +1,62 @@
+// LP5.1 stages parity fixture (plans/lit-preview/41-LP5-PACKAGES.md C50, section 4
+// "LP5.1"); written by TOOLS/lit-preview/parity.py fixtures. The lights' images are
+// lp2_parity.mtr's (staged with it). Names under textures/lp5/ and lights/lp5/ are
+// reserved for fixtures (K20). No stage names _white or _black; no SL_AMBIENT stage, no
+// time or sound register (D119).
+
+// M01-M05, B01's floor: legacy diffuse and bump, no specular stage
+textures/lp5/bump
+{
+	qer_editorimage	textures/lp5/bump.tga
+	diffusemap	textures/lp5/bump.tga
+	bumpmap	textures/lp5/bump_local.tga
+}
+
+// K28: the near pieces of a room's floor, ceiling and side walls, cut 100 units ahead of
+// its camera; a material of their own, so that dmap keeps them apart
+textures/lp5/near
+{
+	qer_editorimage	textures/lp5/bump.tga
+	diffusemap	textures/lp5/bump.tga
+	bumpmap	textures/lp5/bump_local.tga
+}
+
+// the same for the flat rooms (M06, M07)
+textures/lp5/near_flat
+{
+	qer_editorimage	textures/lp5/flat.tga
+	diffusemap	textures/lp5/flat.tga
+	bumpmap	_flat
+}
+
+// M06, M07: legacy diffuse on an explicit flat normal, no specular stage
+textures/lp5/flat
+{
+	qer_editorimage	textures/lp5/flat.tga
+	diffusemap	textures/lp5/flat.tga
+	bumpmap	_flat
+}
+
+// B01's walls: PBR, base colour, bump and an _s whose _rmao.png sibling the engine prefers
+// (metal 0); under an ambientLight light its specular is _black, so it draws through
+// interactionAmbient's legacy row 21 as the floor does
+textures/lp5/pbr
+{
+	qer_editorimage	textures/lp5/pbr.tga
+	basecolormap	textures/lp5/pbr.tga
+	bumpmap	textures/lp5/pbr_local.tga
+	specularmap	textures/lp5/pbr_s.tga
+}
+
+// B01: an ambientLight light (Material.cpp:2758-2760): no shadows, its specular _black,
+// interactionAmbient's fixed tangent-space light vector
+lights/lp5/ambient
+{
+	ambientLight
+	lightFalloffImage	lights/lp2/falloff.tga
+	{
+		map	lights/lp2/round.tga
+		colored
+		zeroClamp
+	}
+}

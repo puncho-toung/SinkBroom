@@ -6753,8 +6753,9 @@ TEST_CASE("LitSession parity rows: the ambient-only switch (LP4.2b)")
  * also holds the frame's portal-flow statistics and its view lights' scissors; a row's
  * "expect" (parity.py's row table) is asserted, and every light of the row's map that the
  * engine's listRenderLightDefs printed has as many area references in the preview as
- * there, and the areas of the room centres its volume is built to reach. Hidden: it needs
- * a GPU and the root of a parity.py run.
+ * there, and the areas of the room centres its volume is built to reach. LP5.1 (C45): the
+ * .json and "expect" gain the interaction phases' counters (texture_lights, math_lights,
+ * ambient_lights). Hidden: it needs a GPU and the root of a parity.py run.
  */
 TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
 {
@@ -7013,7 +7014,8 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
         out / (id + ".json"),
         fmt::format(
           "{{\"width\": {}, \"height\": {}, \"settle_ms\": {:.1f}, \"frames\": {}, "
-          "\"lights_visible\": {}, \"lights_drawn\": {}, \"prepass_draws\": {}, "
+          "\"lights_visible\": {}, \"lights_drawn\": {}, \"texture_lights\": {}, "
+          "\"math_lights\": {}, \"ambient_lights\": {}, \"prepass_draws\": {}, "
           "\"interaction_draws\": {}, \"session_ms\": {:.1f}, \"exposure\": {:.9g}, "
           "\"exposure_model\": {:.9g}, \"rows_written\": \"{}\", \"order\": {}, "
           "\"view_area\": {}, \"areas_flowed\": {}, \"areas\": {}, \"lights_in_view\": "
@@ -7029,6 +7031,9 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           session->framesPresented() - framesBefore,
           lit.lightsVisible,
           lit.lightsDrawn,
+          lit.textureLights,
+          lit.mathLights,
+          lit.ambientLights,
           lit.prepassDraws,
           lit.interactionDraws,
           std::chrono::duration<double, std::milli>(
@@ -7100,6 +7105,20 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           else if (key == "lights_drawn")
           {
             CHECK(lit.lightsDrawn == std::size_t(value.number));
+          }
+          else if (key == "texture_lights")
+          {
+            // LP5.1 (C45): pc.c_textureLights, pc.c_mathLights and the preview's own
+            // count of the ambientLight lights
+            CHECK(lit.textureLights == std::size_t(value.number));
+          }
+          else if (key == "math_lights")
+          {
+            CHECK(lit.mathLights == std::size_t(value.number));
+          }
+          else if (key == "ambient_lights")
+          {
+            CHECK(lit.ambientLights == std::size_t(value.number));
           }
           else if (key == "scissor_smaller_than_view")
           {
