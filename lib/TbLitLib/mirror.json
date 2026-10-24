@@ -7427,6 +7427,10 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
           "symbol": "engineSubdividePatch, patchSubdivisionBound"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "GatheredPatch (M-GEO-FN-17)"
         }
       ],
       "commonCalls": [
@@ -8620,9 +8624,13 @@
         {
           "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
           "symbol": "Builder::finishBucket"
+        },
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "Builder::addPatch (the corner lambda)"
         }
       ],
-      "note": "K9: a chunk welds vertices that are equal byte for byte, where dmap merges within its epsilons, optimises coplanar triangles and fixes T-junctions; golden (d) compares with a tolerance"
+      "note": "K9: a chunk welds vertices that are equal byte for byte, where dmap merges within its epsilons, optimises coplanar triangles and fixes T-junctions; golden (d) compares with a tolerance. 39-PATCH-NORMAL-FLAKE.md (F2): a patch triangle's corners start from its original's first vertex (TriVertsFromOriginal, engineVertFromOriginal), whose tangent and fourth normal byte nobody wrote (Subdivide's stack vertices, SubdivideExplicit's heap block); since the weld compares all 32 bytes, the corner takes the cleared vertex's tangent and fourth normal byte, so the weld compares written bytes only, as dmap's MatchVert, which ignores them, does in effect. Before, the residue split vertices the weld should join, build by build (the patchDef2 pair counts of golden (e): 14 Debug, 16 Release; now 10 in both), and so the islands and the tangent smoothing"
     },
     {
       "id": "M-GEO-DIFF-02",
@@ -19111,6 +19119,103 @@
         }
       ],
       "note": "LPF.0b (C43, D106; P5.7, P5.9, P5.27): the engine has no per-material cache to invalidate: dmap bakes a material's flags into the map's surfaces once, and the renderer reads the idMaterial pointer every frame, so an editor's re-parse of the same idMaterial is seen at once (and a geometry flag only after dmap). The preview caches per material, so a re-parse moves MaterialTable::materialsRevision once and each consumer compares a revision stamp (absent, Failed, or 2 + the entry's revision): SceneGeometry builds again the cells of every material whose stamp moved, from a material -> cells map of what each chunk job read (drawn or not, so a stage-less material given a stage builds its cells; its faces were skipped by usurface.cpp's rule), and the whole entity of a material that gained or lost CONTENTS_ORIGIN (its origin brushes' pivot, MapFile's CalculateBrushOrigin); LightRegistry builds again the lights whose shader or default light material's stamp moved; LitPasses' lists key holds materialsRevision, so the lists are built once per re-parse; RegisterCache keeps D52's last registers across a re-parse while they cover the material's numRegisters and drops them otherwise. An image override moves no revision (only its slots, and through editorSize the C21 size, M-FEED-DIFF-03). AreaData's bake-time deform bounds are not built again (the bake is read again only when its files change: K8)"
+    },
+    {
+      "id": "M-GEO-DEFECT-01",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            549,
+            552
+          ],
+          "anchor": "SampleSinglePatchPoint, the normal written a component at a time (and the GPL line commented out)",
+          "sha256": "451ca185ccf2106aa78aeffeb011b650c35ef9bc327a9105e9fe61f76bc54816"
+        },
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            597,
+            597
+          ],
+          "anchor": "SubdivideExplicit, new idDrawVert[] never initialised",
+          "sha256": "4c606ca80df090d5b7d7e119f62d023204199a101fabe1689b237a6cd8ae6516"
+        },
+        {
+          "file": "neo/idlib/geometry/DrawVert.h",
+          "lines": [
+            295,
+            302
+          ],
+          "anchor": "idDrawVert::GetNormal, which normalises",
+          "sha256": "72ca86b94a09ea93c879de1612e9e3290a8225843b1e7447de39b54b84725308"
+        },
+        {
+          "file": "neo/idlib/geometry/DrawVert.h",
+          "lines": [
+            324,
+            327
+          ],
+          "anchor": "idDrawVert::SetNormal (\"must be normalized\")",
+          "sha256": "b431ab8a58ad90655933a8f0184578d259872b20ab988df704d26207bef9b040"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "GatheredPatch::SampleSinglePatchPoint"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineSubdividePatch"
+        }
+      ],
+      "note": "39-PATCH-NORMAL-FLAKE.md (F1): a patchDef3's normals are made from uninitialised memory. SubdivideExplicit allocates its vertices with new idDrawVert[] (idDrawVert has no constructor: the block's earlier contents stay), and SampleSinglePatchPoint writes the normal one component at a time, tempNormal = out->GetNormal(), tempNormal[axis - 3] = ..., out->SetNormal( tempNormal ): GetNormal decodes and normalises the bytes already there, so each pass moves the components written before it, and the vertex normal is a function of the heap block's old bytes (up to 62 of 255 a component away from the intended normal, by the investigator's simulation). The GPL Doom 3 original wrote the float components directly (the line commented out after them); the BFG port to byte normals made the dependence. patchDef2 (Subdivide) never reaches it. The engine at 285ea4d1 has it: every dmap of a patchDef3 bakes heap residue into the .proc and .bproc normals, so the fixture's lp1b_geometry.bproc patchDef3 normals are one sample of dmap's heap on the day it was baked. The copy is kept verbatim (C7); the preview subdivides a patchDef3 through the shim's transcription (M-GEO-FN-17), which gathers the three components and calls SetNormal once: the GPL-correct normal, the same on every run and in both builds. An engine defect for the user to file (engine-fixes-plan.md); golden (e) pins the preview's patchDef3 bytes against that one engine sample"
+    },
+    {
+      "id": "M-GEO-FN-17",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            487,
+            561
+          ],
+          "anchor": "idSurface_Patch::SampleSinglePatchPoint",
+          "sha256": "ffc19f789f7b1c03de3c5aa21bc7517fa84b4e7cea6d6e68a826f1715a9b4610"
+        },
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            563,
+            584
+          ],
+          "anchor": "idSurface_Patch::SampleSinglePatch",
+          "sha256": "7cb0922a2f92045a2bb42326af16014c79245f3c9e6be3cc09f0203b2ce1ecb7"
+        },
+        {
+          "file": "neo/idlib/geometry/Surface_Patch.cpp",
+          "lines": [
+            586,
+            655
+          ],
+          "anchor": "idSurface_Patch::SubdivideExplicit",
+          "sha256": "40923e1b27a020d0f3edecf0b16eb77cab20ed25c716f2a78e614b56026c8b34"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "GatheredPatch::SubdivideExplicit, SampleSinglePatch, SampleSinglePatchPoint"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineSubdividePatch"
+        }
+      ],
+      "note": "39-PATCH-NORMAL-FLAKE.md (F1), the loadSixFileCube precedent (M-IMG-DEFECT-03): the three functions transcribed as members of GatheredPatch, an idSurface_Patch subclass (the protected width, height, maxWidth, maxHeight, expanded and verts), with the private GenerateNormals, GenerateIndexes, Expand, RemoveLinearColumnsRows and Collapse reached through member pointers an explicit instantiation hands out, so the copied class and file stay as they are. engineSubdividePatch makes its patch a GatheredPatch: SetSize, the control points and Subdivide (patchDef2) are the copy's, SubdivideExplicit (patchDef3) the transcription's. The same arithmetic in the same order, the same idDrawVert writes and the same allocation (the tagged new idDrawVert[] of outWidth * outHeight, uninitialised, freed after the copy into verts); SampleSinglePatch's width parameter is named outWidth (it shadowed the member). The one difference: SampleSinglePatchPoint gathers the normal's three components in a local idVec3 and calls SetNormal once after the axis loop (M-GEO-DEFECT-01). The vertices' tangent, fourth normal byte and colours stay unwritten, as in the engine; ChunkBuilder writes them (M-GEO-DIFF-01). Pool-safe as the copy (C24, M-GEO-POOL-02). Tested: the fixture's patchDef3 subdivided with the heap poisoned three ways gives the same written bytes and chunk vertices"
     }
   ],
   "retired": [

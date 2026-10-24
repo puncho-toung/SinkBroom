@@ -617,6 +617,13 @@ private:
             vert.xyz = readBack(sub(xyz, context.originOffset));
             vert.color = {255, 255, 255, 255};
             vert.color2 = {0, 0, 0, 0};
+            // 39-PATCH-NORMAL-FLAKE.md F2 (M-GEO-DIFF-01): the original's tangent and
+            // fourth normal byte were never written (Subdivide's stack vertices,
+            // SubdivideExplicit's heap block); the weld compares all 32 bytes, so they
+            // are the cleared vertex's, as dmap's MatchVert ignores them
+            const auto cleared = engineClearedVert();
+            vert.tangent = cleared.tangent;
+            vert.normal[3] = cleared.normal[3];
             return vert;
           };
           tri.verts = {corner(w[0]), corner(w[k - 1]), corner(w[k])};

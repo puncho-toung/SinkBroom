@@ -601,6 +601,243 @@ void subdivideSpan(
 
 } // namespace
 
+namespace
+{
+
+// M-GEO-FN-17: idSurface_Patch's private members the transcription below calls, read
+// without changing the copied class: an explicit instantiation may name a private member
+// ([temp.explicit]), and the friend function it defines hands the member pointer out
+struct GenerateNormalsTag
+{
+  using type = void (idSurface_Patch::*)();
+  friend type get(GenerateNormalsTag);
+};
+
+struct GenerateIndexesTag
+{
+  using type = void (idSurface_Patch::*)();
+  friend type get(GenerateIndexesTag);
+};
+
+struct ExpandTag
+{
+  using type = void (idSurface_Patch::*)();
+  friend type get(ExpandTag);
+};
+
+struct RemoveLinearColumnsRowsTag
+{
+  using type = void (idSurface_Patch::*)();
+  friend type get(RemoveLinearColumnsRowsTag);
+};
+
+struct CollapseTag
+{
+  using type = void (idSurface_Patch::*)();
+  friend type get(CollapseTag);
+};
+
+template <typename Tag, typename Tag::type Member>
+struct PrivateMember
+{
+  friend typename Tag::type get(Tag) { return Member; }
+};
+
+template struct PrivateMember<GenerateNormalsTag, &idSurface_Patch::GenerateNormals>;
+template struct PrivateMember<GenerateIndexesTag, &idSurface_Patch::GenerateIndexes>;
+template struct PrivateMember<ExpandTag, &idSurface_Patch::Expand>;
+template struct PrivateMember<
+  RemoveLinearColumnsRowsTag,
+  &idSurface_Patch::RemoveLinearColumnsRows>;
+template struct PrivateMember<CollapseTag, &idSurface_Patch::Collapse>;
+
+/**
+ * M-GEO-DEFECT-01, M-GEO-FN-17 (39-PATCH-NORMAL-FLAKE.md F1): idSurface_Patch with the
+ * engine's SubdivideExplicit, SampleSinglePatch and SampleSinglePatchPoint
+ * (idlib/geometry/Surface_Patch.cpp:487-655) transcribed, the copy left as it is. The one
+ * difference: SampleSinglePatchPoint gathers the normal's three components in a local
+ * idVec3 and calls SetNormal once, as the GPL Doom 3 line commented out at :552 wrote the
+ * float components. The engine's per-component GetNormal/SetNormal (:549-551)
+ * renormalises the bytes the vertex already holds, and SubdivideExplicit's new
+ * idDrawVert[] (:597) never initialised them: the copied code's normals are a function of
+ * the heap block's earlier contents. Everything else is the copied functions' logic: the
+ * same arithmetic, the same writes, the same allocation. Pool-safe as the copy is (C24,
+ * M-GEO-POOL-02).
+ */
+class GatheredPatch : public idSurface_Patch
+{
+public:
+  GatheredPatch(const int maxPatchWidth, const int maxPatchHeight)
+    : idSurface_Patch{maxPatchWidth, maxPatchHeight}
+  {
+  }
+
+  // Surface_Patch.cpp:586-655
+  void SubdivideExplicit(
+    const int horzSubdivisions,
+    const int vertSubdivisions,
+    const bool genNormals,
+    const bool removeLinear = false)
+  {
+    idDrawVert sample[3][3];
+    const int outWidth = ((width - 1) / 2 * horzSubdivisions) + 1;
+    const int outHeight = ((height - 1) / 2 * vertSubdivisions) + 1;
+    idDrawVert* dv = new (TAG_IDLIB_SURFACE) idDrawVert[outWidth * outHeight];
+
+    // generate normals for the control mesh
+    if (genNormals)
+    {
+      (this->*get(GenerateNormalsTag{}))();
+    }
+
+    int baseCol = 0;
+    for (int i = 0; i + 2 < width; i += 2)
+    {
+      int baseRow = 0;
+      for (int j = 0; j + 2 < height; j += 2)
+      {
+        for (int k = 0; k < 3; k++)
+        {
+          for (int l = 0; l < 3; l++)
+          {
+            sample[k][l] = verts[((j + l) * width) + i + k];
+          }
+        }
+        SampleSinglePatch(
+          sample, baseCol, baseRow, outWidth, horzSubdivisions, vertSubdivisions, dv);
+        baseRow += vertSubdivisions;
+      }
+      baseCol += horzSubdivisions;
+    }
+    verts.SetNum(outWidth * outHeight);
+    for (int i = 0; i < outWidth * outHeight; i++)
+    {
+      verts[i] = dv[i];
+    }
+
+    delete[] dv;
+
+    width = maxWidth = outWidth;
+    height = maxHeight = outHeight;
+    expanded = false;
+
+    if (removeLinear)
+    {
+      (this->*get(ExpandTag{}))();
+      (this->*get(RemoveLinearColumnsRowsTag{}))();
+      (this->*get(CollapseTag{}))();
+    }
+
+    // normalize all the lerped normals
+    if (genNormals)
+    {
+      idVec3 tempNormal;
+      for (int i = 0; i < width * height; i++)
+      {
+        tempNormal = verts[i].GetNormal();
+        tempNormal.Normalize();
+        verts[i].SetNormal(tempNormal);
+      }
+    }
+
+    (this->*get(GenerateIndexesTag{}))();
+  }
+
+private:
+  // Surface_Patch.cpp:487-561, the normal gathered (the one difference)
+  void SampleSinglePatchPoint(
+    const idDrawVert ctrl[3][3], const float u, const float v, idDrawVert* out) const
+  {
+    float vCtrl[3][8];
+
+    // find the control points for the v coordinate
+    for (int vPoint = 0; vPoint < 3; vPoint++)
+    {
+      for (int axis = 0; axis < 8; axis++)
+      {
+        float a, b, c;
+        if (axis < 3)
+        {
+          a = ctrl[0][vPoint].xyz[axis];
+          b = ctrl[1][vPoint].xyz[axis];
+          c = ctrl[2][vPoint].xyz[axis];
+        }
+        else if (axis < 6)
+        {
+          a = ctrl[0][vPoint].GetNormal()[axis - 3];
+          b = ctrl[1][vPoint].GetNormal()[axis - 3];
+          c = ctrl[2][vPoint].GetNormal()[axis - 3];
+        }
+        else
+        {
+          a = ctrl[0][vPoint].GetTexCoord()[axis - 6];
+          b = ctrl[1][vPoint].GetTexCoord()[axis - 6];
+          c = ctrl[2][vPoint].GetTexCoord()[axis - 6];
+        }
+        const float qA = a - 2.0f * b + c;
+        const float qB = 2.0f * b - 2.0f * a;
+        const float qC = a;
+        vCtrl[vPoint][axis] = qA * u * u + qB * u + qC;
+      }
+    }
+
+    // interpolate the v value
+    idVec3 normal;
+    for (int axis = 0; axis < 8; axis++)
+    {
+      const float a = vCtrl[0][axis];
+      const float b = vCtrl[1][axis];
+      const float c = vCtrl[2][axis];
+      const float qA = a - 2.0f * b + c;
+      const float qB = 2.0f * b - 2.0f * a;
+      const float qC = a;
+
+      if (axis < 3)
+      {
+        out->xyz[axis] = qA * v * v + qB * v + qC;
+      }
+      else if (axis < 6)
+      {
+        // the GPL original: out->normal[axis-3] = qA * v * v + qB * v + qC;
+        normal[axis - 3] = qA * v * v + qB * v + qC;
+      }
+      else
+      {
+        idVec2 tempST = out->GetTexCoord();
+        tempST[axis - 6] = qA * v * v + qB * v + qC;
+        out->SetTexCoord(tempST);
+      }
+    }
+    out->SetNormal(normal);
+  }
+
+  // Surface_Patch.cpp:563-584
+  void SampleSinglePatch(
+    const idDrawVert ctrl[3][3],
+    const int baseCol,
+    const int baseRow,
+    const int outWidth,
+    int horzSub,
+    int vertSub,
+    idDrawVert* outVerts) const
+  {
+    horzSub++;
+    vertSub++;
+    for (int i = 0; i < horzSub; i++)
+    {
+      for (int j = 0; j < vertSub; j++)
+      {
+        const float u = float(i) / float(horzSub - 1);
+        const float v = float(j) / float(vertSub - 1);
+        SampleSinglePatchPoint(
+          ctrl, u, v, &outVerts[((baseRow + j) * outWidth) + i + baseCol]);
+      }
+    }
+  }
+};
+
+} // namespace
+
 std::array<std::int64_t, 2> patchSubdivisionBound(
   const EnginePatch& patch, const std::int64_t maxVertices)
 {
@@ -743,7 +980,8 @@ std::optional<EngineSurface> engineSubdividePatch(
 
   // dmap/map.cpp:443-469 ParsePatch: idMapPatch( info[0], info[1] ), SetSize, the
   // control points (MapFile.cpp:330-352), then the copy of the patch subdivided
-  auto cp = idSurface_Patch{patch.width, patch.height};
+  // M-GEO-DEFECT-01: the patchDef3 path through the transcription that gathers the normal
+  auto cp = GatheredPatch{patch.width, patch.height};
   cp.SetSize(patch.width, patch.height);
   for (auto i = 0; i < patch.width * patch.height; ++i)
   {
