@@ -193,6 +193,9 @@ struct LitFrameStats
   std::size_t ambientSkipped = 0;
   std::size_t ambientPendingPipelines = 0;
   std::size_t ambientGridSurfaces = 0;
+  // LP4.3 (D86): the pass's writes of set 9's volatile constant buffer this frame (its
+  // own buffer, against constantWriteBudget)
+  std::uint64_t ambientConstantWrites = 0;
   bool ambientTimed = false;
   bool ambientDisabled = false;
   // C38 (LP4.2b's ambient-only rows): the interactions were not recorded
@@ -306,11 +309,11 @@ private:
     // change only when a batch applies, which raises chunksVersion
     const void* tree = nullptr;
     const void* areas = nullptr;
-    // LP4.3 (D79, P4.6): the grid table, and with a grid the slots' state version (a
-    // Ready or Missing atlas changes the grid-area dispatch)
+    // LP4.3 (D79, P4.6): the grid table, and with a grid which of its areas' grids are
+    // valid now (a Ready or Missing atlas changes the grid-area dispatch)
     const void* grid = nullptr;
     std::uint64_t gridVersion = 0;
-    std::uint64_t slotStates = 0;
+    std::uint64_t gridValidity = 0;
     std::uint64_t registry = 0;
     // DX.2: the light triangles' answers, and whether the cull applies (a test's switch)
     std::uint64_t lightTrianglesVersion = 0;
@@ -363,6 +366,11 @@ private:
   // LP4.2a (C37, D79): the view's probes, chosen every frame outside the cached lists
   ViewProbes m_viewProbes;
   std::optional<ListsKey> m_listsKey;
+  // LP4.3 (D79): the grid validity the lists' key holds, worked out again only when the
+  // slots' state version or the grid table moved (ImageSlots::stateVersion)
+  std::uint64_t m_gridValidity = 0;
+  std::uint64_t m_gridValiditySlotStates = ~std::uint64_t{0};
+  const void* m_gridValidityTable = nullptr;
   std::uint64_t m_listsTableVersion = 0;
   DrawState m_state;
   // GL_SelectTexture's units: 0-4 of the interactions, 0 of texture_color, 0-14 of the

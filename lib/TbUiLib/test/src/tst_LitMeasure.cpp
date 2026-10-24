@@ -920,6 +920,9 @@ public:
   std::optional<Clock::time_point> tableSeen;
   std::optional<Clock::time_point> snapshotSeen;
   std::optional<Clock::time_point> batchSeen;
+  // LP4.3: the material table's version as last sampled, and when it last changed
+  std::uint64_t tableNow = 0;
+  Clock::time_point tableChangedAt = Clock::now();
   std::uint64_t vramPeak = 0;
   std::uint64_t accountPeak = 0;
   // the gaps between two samples, for the resolution the times are known to
@@ -945,6 +948,8 @@ public:
     tableSeen.reset();
     snapshotSeen.reset();
     batchSeen.reset();
+    tableNow = 0;
+    tableChangedAt = Clock::now();
     vramPeak = 0;
     accountPeak = 0;
   }
@@ -957,6 +962,11 @@ public:
     if (!tableSeen && panel.materialsVersionForTesting() > 0)
     {
       tableSeen = now;
+    }
+    if (const auto table = panel.materialsVersionForTesting(); table != tableNow)
+    {
+      tableNow = table;
+      tableChangedAt = now;
     }
     auto* session = panel.sessionForTesting();
     if (!session)
@@ -1036,8 +1046,11 @@ public:
   /**
    * D77, settled for good: the last frame is settled (and lit, when asked), no frame
    * came for QuietTime or twice the longest gap between two frames so far (a Debug
-   * build's frames may take seconds), and the scene's batches and the table did not
-   * change meanwhile.
+   * build's frames may take seconds), and the scene's batches did not change meanwhile.
+   * LP4.3: the table is stable for as long (its last change at least that long ago);
+   * a table published after the last frame that drew none (the service's bulk parse,
+   * which LP4.2a's and LP4.3's light-grid and probe images now let finish after the
+   * first settled frame: nothing waited for it) does not hold the measure back.
    */
   bool quietlySettled(const bool requireLit = true) const
   {
@@ -1052,10 +1065,11 @@ public:
     }
     const auto& last = frames.back();
     auto* session = panel.sessionForTesting();
+    const auto now = Clock::now();
     return session && last.status.settled && (!requireLit || isLit(last))
-           && Clock::now() - last.at >= quiet
+           && now - last.at >= quiet && now - tableChangedAt >= quiet
            && session->geometryBatchesForTesting() == last.geometryBatches
-           && panel.materialsVersionForTesting() == last.tableVersion;
+           && panel.materialsVersionForTesting() == tableNow;
   }
 };
 
@@ -1129,7 +1143,10 @@ constexpr auto FlowMs = std::size_t{41};
 // LP4.2a (C34, P4.27): the ambient pass's
 constexpr auto AmbientDraws = std::size_t{42};
 constexpr auto GpuAmbientMs = std::size_t{43};
-constexpr auto Count = std::size_t{44};
+// LP4.3 (D86, D92): set 9's writes and the surfaces on the light-grid path
+constexpr auto AmbientWrites = std::size_t{44};
+constexpr auto GridSurfaces = std::size_t{45};
+constexpr auto Count = std::size_t{46};
 } // namespace column
 
 std::vector<LogRow> readFrameLog(const std::filesystem::path& path)
@@ -2124,7 +2141,8 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       "| Start view: the portal flow (first Start, frame {}) | view area {}, {} areas "
       "flowed, {} lights in view, {} with interactions, {} drawn, {} portal chains; "
       "draws "
-      "{}, CPU record {} ms | — | — |\n",
+      "{}, CPU record {} ms; LP4.3: {} ambient draws ({} set-9 writes), {} surfaces on "
+      "the light grid, {} textures resident | — | — |\n",
       first.settledFrame,
       field(column::ViewArea),
       field(column::AreasFlowed),
@@ -2133,7 +2151,11 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       field(column::LightsDrawn),
       field(column::PortalChains),
       field(column::Draws),
-      field(column::CpuRecordMs));
+      field(column::CpuRecordMs),
+      field(column::AmbientDraws),
+      field(column::AmbientWrites),
+      field(column::GridSurfaces),
+      field(column::TexturesResident));
   }
   {
     const auto flow = orbit(column::FlowMs);
@@ -2224,7 +2246,26 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   line("bytes uploaded", column::BytesUploaded);
   line("volatile writes (D76's basis)", column::VolatileWrites);
   line("constant bytes", column::ConstantBytes);
+  // LP4.3 (D86, D92): the ambient pass's draws, GPU time and set-9 writes, and the
+  // surfaces on the light grid
+  line("ambient draws", column::AmbientDraws);
+  line("GPU ambient ms", column::GpuAmbientMs);
+  const auto ambientWrites = line("set-9 volatile writes (D86)", column::AmbientWrites);
+  line("surfaces on the light grid", column::GridSurfaces);
+  line("textures resident", column::TexturesResident);
   const auto writeBudget = firstRows[orbitBegin].number(column::VolatileWriteBudget);
+  // D86 with D76's rule: set 9's own buffer keeps maxVersions 8192 while the most writes
+  // a frame made, doubled with a margin of 64, stay within the frame's budget
+  summary += fmt::format(
+    "- set 9's writes per frame: max {:.0f}, p95 {:.0f} against the frame's budget {}: "
+    "D76's rule (max x 2 + 64) {} -> {}\n",
+    ambientWrites.max,
+    ambientWrites.p95,
+    writeBudget ? fmt::format("{:.0f}", *writeBudget) : std::string{"-"},
+    ambientWrites.max * 2.0 + 64.0,
+    writeBudget && ambientWrites.max * 2.0 + 64.0 <= *writeBudget
+      ? "maxVersions 8192 stays"
+      : "raise maxVersions");
   summary += fmt::format(
     "- lights overflowed over the orbit: {:.0f}; the volatile writes a frame may make: "
     "{}\n",

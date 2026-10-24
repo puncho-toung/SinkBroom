@@ -127,6 +127,11 @@ struct FrameLogRow
   // it did not run or its time never arrived)
   std::optional<std::uint64_t> ambientDraws;
   std::optional<double> gpuAmbientMs;
+  // LP4.3 (D86, D92, C36), frame rows: the ambient pass's writes of set 9's volatile
+  // constant buffer (against volatile_write_budget, the per-layout frame budget) and the
+  // drawn surfaces with a grid area
+  std::optional<std::uint64_t> ambientWrites;
+  std::optional<std::uint64_t> gridSurfaces;
 };
 
 // the CSV header line, ending in a newline

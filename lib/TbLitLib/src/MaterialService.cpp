@@ -57,6 +57,10 @@ constexpr auto ParseThreadStackBytes = std::size_t{8} * 1024 * 1024;
 // does a lookup or measure step, which also stops after StepNames names
 constexpr auto StepTime = std::chrono::milliseconds{20};
 constexpr auto StepNames = 256;
+// LP4.3: an image step takes queued images for this long after its first one: the read
+// batch's container reopening (R4-3.26) costs about 145 ms on the retail game, an
+// image's resolution about 2 ms
+constexpr auto ImageStepTime = std::chrono::milliseconds{100};
 // S2.7: the poll re-probes loose image files for at most this long, then goes on at the
 // next poll
 constexpr auto PollSliceTime = std::chrono::milliseconds{5};
@@ -1688,14 +1692,47 @@ private:
     return true;
   }
 
-  // S2.3: one image per work item, then the budget (S2.4)
+  /**
+   * S2.3: images per work item, then the budget (S2.4) and one publication. LP4.3: the
+   * first image, then more from the queue until ImageStepTime has passed since the first
+   * was done or StepNames were taken: every work item is one read batch whose end closes
+   * the containers (R4-3.26), and reopening them costs far more than an image's
+   * resolution (admin's 72 light-grid atlases and 138 probe images, asked for at once,
+   * took about 145 ms each one per item, 2 ms each in a batch), so a burst no longer
+   * holds the queue for seconds. More urgent work queued meanwhile (an evaluation, a
+   * lookup, a bake, a measure, a reload) ends the step after the image in hand, and a
+   * stop waits for one image of it.
+   */
   void imageItem(const MaterialImageKey& key)
   {
     if (stopping())
     {
       return;
     }
-    if (lookUpImage(key))
+    auto changed = lookUpImage(key);
+    const auto deadline = Clock::now() + ImageStepTime;
+    for (auto taken = 1; taken < StepNames && !stopping() && Clock::now() < deadline;
+         ++taken)
+    {
+      auto next = std::optional<MaterialImageKey>{};
+      {
+        auto lock = std::scoped_lock{m_shared.mutex};
+        // S2.3: more urgent work (nextWork's order) ends the step at once
+        if (
+          m_shared.images.empty() || m_shared.reloadRequested
+          || !m_shared.evaluations.empty() || !m_shared.lookups.empty()
+          || !m_shared.entityDefLookups.empty() || !m_shared.mapBakes.empty()
+          || !m_shared.measures.empty())
+        {
+          break;
+        }
+        next = std::move(m_shared.images.front());
+        m_shared.images.pop_front();
+        m_shared.queuedImages.erase(*next);
+      }
+      changed = lookUpImage(*next) || changed;
+    }
+    if (changed)
     {
       keepImageBudget();
       publish();

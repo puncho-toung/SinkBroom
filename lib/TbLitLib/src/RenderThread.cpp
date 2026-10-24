@@ -1831,6 +1831,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.flowMs = litStats.flowMs;
       // LP4.2a (C34): the ambient pass's draws (its GPU time from the timers)
       row.ambientDraws = litStats.ambientDraws;
+      // LP4.3 (D86, C36): set 9's writes and the surfaces on the light-grid path
+      row.ambientWrites = litStats.ambientConstantWrites;
+      row.gridSurfaces = litStats.gridSurfaces;
       // C16 (LP2.2b): the lit passes' counts (LitFrameStats) and the tonemap passes'
       const auto& tonemap = m_tonemap.lastStats();
       row.draws = litStats.prepassDraws + litStats.ambientDraws

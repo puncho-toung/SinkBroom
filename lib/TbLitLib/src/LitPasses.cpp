@@ -287,6 +287,11 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
     beginTimer(frame, inputs.ambientTimer);
     recordAmbient(frame);
     m_stats.ambientTimed = endTimer(frame, inputs.ambientTimer);
+    if (const auto it = m_frameWrites.find(EngineBindingLayout::AmbientLightingIbl);
+        it != m_frameWrites.end())
+    {
+      m_stats.ambientConstantWrites = it->second;
+    }
   }
 
   if (inputs.stopRequested && inputs.stopRequested())
@@ -356,7 +361,30 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   const auto hasGrid = inputs.grid && !inputs.grid->areas.empty();
   key.grid = inputs.grid.get();
   key.gridVersion = inputs.grid ? inputs.grid->version : 0;
-  key.slotStates = hasGrid && inputs.images ? inputs.images->stateVersion() : 0;
+  // the areas whose grid is valid (points, an atlas Ready or Loading), as an FNV-1a hash
+  // of their flags, worked out again only when a slot's state or the table moved: any
+  // other slot's churn (a texture arriving, a re-request) leaves the lists alone
+  if (hasGrid && inputs.images)
+  {
+    const auto states = inputs.images->stateVersion();
+    if (states != m_gridValiditySlotStates || inputs.grid.get() != m_gridValidityTable)
+    {
+      m_gridValiditySlotStates = states;
+      m_gridValidityTable = inputs.grid.get();
+      auto hash = std::uint64_t{14695981039346656037ull};
+      for (const auto& area : inputs.grid->areas)
+      {
+        const auto id = area.hasPoints ? inputs.images->find(area.atlas) : std::nullopt;
+        const auto* slot = id ? inputs.images->slot(*id) : nullptr;
+        const auto valid =
+          slot
+          && (slot->state == ImageSlots::State::Resident || slot->state == ImageSlots::State::Loading);
+        hash = (hash ^ (valid ? 2u : 1u)) * 1099511628211ull;
+      }
+      m_gridValidity = hash;
+    }
+    key.gridValidity = m_gridValidity;
+  }
   key.registry = table ? table->registry : 0;
   key.lightTrianglesVersion = m_lightTriangles.version();
   key.lightTriangleCull = m_lightTriangleCull;

@@ -1583,7 +1583,7 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     // LP2.2b (C16): the frame's GPU time, the passes' and the frame's counts
     // LP4.1 (C16, P4.27): the view's portal flow's five columns; LP4.2a (C34, P4.27): the
     // ambient pass's two
-    REQUIRE(rows[0].size() == 44u);
+    REQUIRE(rows[0].size() == 46u);
     CHECK(rows[0][6] == "gpu_frame_ms");
     CHECK(rows[0][18] == "gpu_prepass_ms");
     CHECK(rows[0][21] == "gpu_blit_ms");
@@ -1606,7 +1606,7 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     auto presentMs = std::vector<double>{};
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 44u);
+      REQUIRE(rows[i].size() == 46u);
       sessions.insert(rows[i][0]);
       if (rows[i][1] == "start")
       {
