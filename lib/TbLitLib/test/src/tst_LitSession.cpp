@@ -958,7 +958,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     CHECK(rows.back()[1] == "stop");
     for (std::size_t i = 2; i + 1 < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 46u);
+      REQUIRE(rows[i].size() == 49u);
       CHECK(rows[i][0] == "1");
       CHECK(rows[i][1] == "frame");
       CHECK(rows[i][2] == std::to_string(i - 2));
@@ -1728,7 +1728,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     auto longestPresentMs = 0.0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 46u);
+      REQUIRE(rows[i].size() == 49u);
       if (rows[i][1] != "frame")
       {
         continue;
@@ -2754,7 +2754,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     auto arenaBytes = std::string{};
     for (const auto& row : readCsv(logPath))
     {
-      if (row.size() == 46u && row[1] == "frame" && !row[15].empty() && row[15] != "0")
+      if (row.size() == 49u && row[1] == "frame" && !row[15].empty() && row[15] != "0")
       {
         fromLog.push_back(std::stoull(row[15]));
         arenaBytes = row[17];
@@ -3927,7 +3927,7 @@ TEST_CASE("LitSession GPU resources on the retail game (D72)", "[.][retail]")
   auto stopAllocations = std::string{};
   for (const auto& row : readCsv(logPath))
   {
-    if (row.size() == 46u && row[1] != "event" && !row[14].empty() && row[0] != "session")
+    if (row.size() == 49u && row[1] != "event" && !row[14].empty() && row[0] != "session")
     {
       loggedPeak = std::max(loggedPeak, std::int64_t(std::stoll(row[14])));
       if (row[1] == "stop")
@@ -5590,7 +5590,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     // that drew the scene says so
     const auto rows = readCsv(logPath);
     REQUIRE(rows.size() >= 3u);
-    REQUIRE(rows[0].size() == 46u);
+    REQUIRE(rows[0].size() == 49u);
     CHECK(rows[0][18] == "gpu_prepass_ms");
     CHECK(rows[0][34] == "settled");
     CHECK(rows[0][35] == "alloc_refused");
@@ -5605,7 +5605,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     auto settledRows = 0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 46u);
+      REQUIRE(rows[i].size() == 49u);
       if (rows[i][1] != "frame")
       {
         continue;
@@ -5994,7 +5994,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
       for (std::size_t i = 1; i < rows.size(); ++i)
       {
         const auto& row = rows[i];
-        if (row.size() != 46u || row[1] != "frame")
+        if (row.size() != 49u || row[1] != "frame")
         {
           continue;
         }
@@ -7909,14 +7909,14 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu]")
     // C16: the frame log's two columns: a frame that drew the pass has its time
     const auto rows = readCsv(logPath);
     REQUIRE(rows.size() >= 2u);
-    REQUIRE(rows[0].size() == 46u);
+    REQUIRE(rows[0].size() == 49u);
     CHECK(rows[0][42] == "ambient_draws");
     CHECK(rows[0][43] == "gpu_ambient_ms");
     auto timed = 0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
       if (
-        rows[i].size() == 46u && rows[i][1] == "frame" && !rows[i][42].empty()
+        rows[i].size() == 49u && rows[i][1] == "frame" && !rows[i][42].empty()
         && rows[i][42] != "0" && !rows[i][43].empty() && std::stod(rows[i][43]) > 0.0)
       {
         ++timed;
@@ -9566,6 +9566,12 @@ struct FeedFrame
   ImageSlots::State state = ImageSlots::State::Pending;
   // the last frame's convergence: a geometry batch was in flight
   bool lastGeometryInFlight = false;
+  // the last frame's lit passes: its skipped and interaction draws, whether it built its
+  // lists again
+  std::size_t lastSkippedDraws = 0;
+  std::size_t lastInteractionDraws = 0;
+  bool lastListsRebuilt = false;
+  bool lastListsTableChanged = false;
 };
 
 struct FeedFrames
@@ -9601,6 +9607,11 @@ void recordFeedFrames(
     frame.index = access.frameIndex;
     frame.start = std::chrono::steady_clock::now();
     frame.lastGeometryInFlight = access.convergence.geometryInFlight;
+    const auto& stats = access.passes.lastStats();
+    frame.lastSkippedDraws = stats.skippedDraws;
+    frame.lastInteractionDraws = stats.interactionDraws;
+    frame.lastListsRebuilt = stats.listsRebuilt;
+    frame.lastListsTableChanged = stats.listsTableChanged;
     if (const auto id = access.images.find(key))
     {
       const auto binding = access.images.binding(*id);
@@ -9822,7 +9833,7 @@ struct FeedRig
   }
 
   // the probe pixel of a settled frame (D110), and the converted texel under it
-  FeedProbe probe()
+  FeedProbe probe(const bool constant = true)
   {
     const auto texels = levelTexels(*service, floorKey);
     REQUIRE_FALSE(texels.empty());
@@ -9830,7 +9841,7 @@ struct FeedRig
     // colour), so the sampled mip does not matter
     for (const auto& texel : texels)
     {
-      CHECK(texel == texels.front());
+      CHECK((!constant || texel == texels.front()));
     }
     auto readback = std::optional<AmbientReadback>{};
     REQUIRE(waitFor(
@@ -9866,10 +9877,78 @@ struct FeedRig
     CHECK(events.count(SessionEvent::Error) == 0u);
     events.print(label);
     session.reset();
+    // a feed held at the gate runs, with no session to tell
+    gate->open();
     service->requestStop();
     service->join();
   }
+
+  /**
+   * A re-parse of a material (C42) and its publication; then the frames until the
+   * session is settled and quiet again, the scene's batches it started applied. The
+   * frames from the publication on.
+   */
+  std::vector<FeedFrame> reparse(
+    const std::string& name, const std::optional<std::string>& text)
+  {
+    REQUIRE(waitQuiet(*session));
+    const auto item = listener->items();
+    const auto batches = session->geometryBatchesForTesting();
+    if (text)
+    {
+      REQUIRE(service->reparseMaterial(name, *text).is_success());
+    }
+    else
+    {
+      service->clearMaterialReparse(name);
+    }
+    REQUIRE(waitForFeed(*service));
+    auto published = std::optional<std::chrono::steady_clock::time_point>{};
+    REQUIRE(waitFor(
+      [&] {
+        published = listener->itemPublication(item);
+        return published.has_value();
+      },
+      5000ms,
+      false));
+    REQUIRE(waitFor([&] { return !frames->since(*published).empty(); }, 5000ms, false));
+    REQUIRE(waitFor(
+      [&] {
+        return session->lastFrameSettledForTesting()
+               && session->geometryBatchesForTesting() >= batches;
+      },
+      60000ms,
+      false));
+    REQUIRE(waitQuiet(*session));
+    CHECK(session->lastFrameSettledForTesting());
+    return frames->since(*published);
+  }
 };
+
+// the light record of a light by its name key, null when there is none
+std::shared_ptr<const LightRecord> namedLight(
+  const LightTable& table, const std::string_view name)
+{
+  auto found = std::shared_ptr<const LightRecord>{};
+  table.records.forEach([&](const PreviewId&, const auto& record) {
+    const auto* key = record ? findKey(record->spawnArgs, "name") : nullptr;
+    if (key && *key == name)
+    {
+      found = record;
+    }
+  });
+  return found;
+}
+
+// lp1bc.mtr's floor, two-sided (C43: its cells built again with back sides)
+const auto FloorTwoSided = std::string{
+  "{\n\ttwoSided\n\tqer_editorimage\ttextures/lp1b/floor.tga\n"
+  "\tdiffusemap\ttextures/lp1b/floor.tga\n}\n"};
+// zz_lp22a.mtr's lights/squarelight1, the default light texture (idLight::Spawn), at half
+// its colour (the stage's rgb after colored)
+const auto HalfSquareLight = std::string{
+  "{\n\tlightFalloffImage _noFalloff\n\t{\n\t\tmap _white\n\t\tcolored\n"
+  "\t\trgb 0.5\n\t\tzeroClamp\n\t}\n}\n"};
 
 /**
  * D110, the probe pixel's model: with the exposure pinned, the floor's HDR value is
@@ -10526,7 +10605,6 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
         session.setEveryFrameHookForTesting({});
         rig.listener->record(false);
         const auto cycle = [&](const int i) {
-          REQUIRE(waitQuiet(session, 60ms));
           const auto presented = session.framesPresented();
           const auto v = std::uint8_t(20 + (i * 53) % 220);
           REQUIRE(
@@ -10589,6 +10667,199 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
     }
     CHECK(resetDispatcher());
     messages.print("LPF.1 Replacing, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("step 4: the re-parse through the render side; Stop with a feed queued")
+  {
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      const auto logPath =
+        std::filesystem::temp_directory_path() / "TbLitLibTest-lpf1-reparse.csv";
+      auto rig = FeedRig{instance, root, logPath};
+      auto& service = *rig.service;
+      auto& session = *rig.session;
+      // inside the floor's brush, looking down at its bottom face (z -16) from behind
+      const auto inside = litCamera({60, 0, -8}, {0, 0, -1}, {1, 0, 0});
+      const auto insideBefore = settledHdr(session, inside, 0);
+      REQUIRE(insideBefore);
+      // one-sided: the face is culled, nothing behind it
+      CHECK(insideBefore->first.brightest(80, 60) == 0.0f);
+      REQUIRE(settledHdr(session, feedCamera(), 1));
+      const auto baseline = rig.probe(false);
+
+      // (i) the floor's material two-sided: its cells built again with back sides, the
+      // lists once more for the revision (and once per batch that applies), the registers
+      // kept through it (D52: no frame skips the floor's draws), the picture above the
+      // floor unchanged, the back face below it lit
+      const auto batches = session.geometryBatchesForTesting();
+      const auto twoSided = rig.reparse("textures/lp1b/floor", FloorTwoSided);
+      const auto batchesApplied = session.geometryBatchesForTesting() - batches;
+      const auto afterTwoSided = rig.probe(false);
+      auto rebuilds = std::size_t{0};
+      auto tableRebuilds = std::size_t{0};
+      {
+        // the stats a frame's hook saw are its predecessor's; the probe's frames follow
+        const auto all = rig.frames->since(twoSided.front().start);
+        for (std::size_t k = 1; k < all.size(); ++k)
+        {
+          CAPTURE(all[k].index);
+          CHECK(all[k].lastSkippedDraws == 0u);
+          CHECK(all[k].lastInteractionDraws > 0u);
+          CHECK_FALSE(all[k].intrinsic);
+          rebuilds += all[k].lastListsRebuilt ? 1 : 0;
+          tableRebuilds += all[k].lastListsTableChanged ? 1 : 0;
+        }
+      }
+      // the lists' key moved once for the re-parse (ListsTableKey); the other rebuilds
+      // are the batch's chunks, its light triangles and lights
+      CHECK(tableRebuilds == 1u);
+      CHECK(rebuilds >= 2u);
+      CHECK(batchesApplied >= 1u);
+      for (std::size_t c = 0; c < 3; ++c)
+      {
+        CHECK(afterTwoSided.hdr[c] == Catch::Approx(baseline.hdr[c]).epsilon(1e-3));
+      }
+      const auto insideAfter = settledHdr(session, inside, 0);
+      REQUIRE(insideAfter);
+      CHECK(insideAfter->first.brightest(80, 60) > 0.0f);
+      std::cout << fmt::format(
+        "LPF.1 re-parse twoSided: {} frames, lists built {} times ({} for the table's "
+        "key) with {} batches applied; inside the floor brush: brightest {} -> {:.4f}, "
+        "interaction draws {} -> {}, prepass draws {} -> {}\n",
+        twoSided.size(),
+        rebuilds,
+        tableRebuilds,
+        batchesApplied,
+        insideBefore->first.brightest(80, 60),
+        insideAfter->first.brightest(80, 60),
+        insideBefore->second.stats.interactionDraws,
+        insideAfter->second.stats.interactionDraws,
+        insideBefore->second.stats.prepassDraws,
+        insideAfter->second.stats.prepassDraws);
+      REQUIRE(settledHdr(session, feedCamera(), 1));
+
+      // (ii) the light's texture material (lp1b_light has none: idLight::Spawn's default,
+      // lights/squarelight1) at half its colour: the light derived again (a new record
+      // version), the floor darker; the re-parse cleared: the light as before, the
+      // picture back
+      const auto lightBefore = namedLight(*session.lightTable(), "lp1b_light");
+      REQUIRE(lightBefore);
+      const auto half = rig.reparse("lights/squarelight1", HalfSquareLight);
+      const auto lightAfter = namedLight(*session.lightTable(), "lp1b_light");
+      REQUIRE(lightAfter);
+      CHECK(lightAfter->version > lightBefore->version);
+      const auto halfProbe = rig.probe(false);
+      // the floor's probe is lp1b_light's alone: half
+      for (std::size_t c = 0; c < 3; ++c)
+      {
+        CHECK(halfProbe.hdr[c] == Catch::Approx(0.5f * baseline.hdr[c]).epsilon(1e-3));
+      }
+      const auto restored = rig.reparse("lights/squarelight1", std::nullopt);
+      const auto restoredProbe = rig.probe(false);
+      for (std::size_t c = 0; c < 3; ++c)
+      {
+        CHECK(restoredProbe.hdr[c] == Catch::Approx(baseline.hdr[c]).epsilon(1e-3));
+      }
+      CHECK(
+        namedLight(*session.lightTable(), "lp1b_light")->version > lightAfter->version);
+      std::cout << fmt::format(
+        "LPF.1 re-parse of the light's material: record version {} -> {}, the floor's "
+        "HDR green {:.5f} -> {:.5f} -> {:.5f} (cleared)\n",
+        lightBefore->version,
+        lightAfter->version,
+        baseline.hdr[1],
+        halfProbe.hdr[1],
+        restoredProbe.hdr[1]);
+
+      // (iii) a re-parse the stage bound refuses (M-ID-GUARD-05: 129 alpha-tested
+      // shortcuts) of a material out of the view (the patches'): published Failed, the
+      // picture unchanged, the session settled again (feedBehind cleared)
+      {
+        auto refused = std::string{"{\n"};
+        for (auto i = 0; i < 129; ++i)
+        {
+          refused += "\tdiffusemap \"_white alphaTest 0.5\"\n";
+        }
+        refused += "}\n";
+        const auto frames = rig.reparse("textures/lp1b/patch", refused);
+        CHECK_FALSE(frames.empty());
+        const auto slot = service.table()->find("textures/lp1b/patch");
+        REQUIRE(slot);
+        CHECK_FALSE(slot->entry);
+        const auto probe = rig.probe(false);
+        CHECK_FALSE(probe.frame.convergence.feedBehind);
+        CHECK(probe.frame.settled);
+        CHECK(probe.hdr == restoredProbe.hdr);
+      }
+
+      // (iv) Stop with a feed queued and a slot Replacing: no level is written (cap 0)
+      // and the next hand-over is held at the gate; the teardown is clean
+      session.setUploadCapForTesting(0);
+      const auto replacing = rig.feed(constantOverride(1024, 1024, {10, 20, 30}), true);
+      CHECK_FALSE(replacing.settled);
+      CHECK(replacing.frames.back().state == ImageSlots::State::Replacing);
+      rig.gate->close();
+      REQUIRE(
+        service.setImageOverride(rig.floorKey.name, constantOverride(64, 64, {1, 2, 3}))
+          .is_success());
+      REQUIRE(waitFor(
+        [&] { return service.feedRequested() > service.table()->feedApplied; },
+        5000ms,
+        false));
+      // the re-parses' landing frames, for the log
+      const auto twoSidedFrames =
+        std::vector<std::uint64_t>{twoSided.front().index, twoSided.back().index};
+      const auto halfFrames =
+        std::vector<std::uint64_t>{half.front().index, half.back().index};
+      const auto restoredFrames =
+        std::vector<std::uint64_t>{restored.front().index, restored.back().index};
+      const auto stopStart = std::chrono::steady_clock::now();
+      rig.close("LPF.1 re-parse");
+      std::cout << fmt::format(
+        "LPF.1 Stop with a feed queued and a slot Replacing: {:.1f} ms\n",
+        std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - stopStart)
+          .count());
+
+      // C44 (P5.13): feed_ms once per re-parse, on the frame its lists and cells landed:
+      // after the frame that found the twoSided batch in flight
+      const auto log = feedLogFrames(logPath);
+      const auto timedIn = [&](const std::vector<std::uint64_t>& range) {
+        auto timed = std::vector<std::pair<std::uint64_t, double>>{};
+        for (const auto& [index, row] : log)
+        {
+          if (index >= range[0] && index <= range[1] && !row[FeedMsColumn].empty())
+          {
+            timed.emplace_back(index, std::stod(row[FeedMsColumn]));
+          }
+        }
+        return timed;
+      };
+      const auto twoSidedTimed = timedIn(twoSidedFrames);
+      REQUIRE(twoSidedTimed.size() == 1u);
+      if (twoSided.size() >= 2 && twoSided[1].lastGeometryInFlight)
+      {
+        CHECK(twoSidedTimed.front().first > twoSided.front().index);
+      }
+      const auto halfTimed = timedIn(halfFrames);
+      const auto restoredTimed = timedIn(restoredFrames);
+      CHECK(halfTimed.size() == 1u);
+      CHECK(restoredTimed.size() == 1u);
+      std::cout << fmt::format(
+        "LPF.1 feed_ms of the re-parses (Debug): twoSided {:.3f} ms at frame {} (the "
+        "publication's first frame {}), the light's {:.3f} ms, cleared {:.3f} ms\n",
+        twoSidedTimed.front().second,
+        twoSidedTimed.front().first,
+        twoSided.front().index,
+        halfTimed.empty() ? -1.0 : halfTimed.front().second,
+        restoredTimed.empty() ? -1.0 : restoredTimed.front().second);
+    }
+    CHECK(resetDispatcher());
+    messages.print("LPF.1 re-parse, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }

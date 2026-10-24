@@ -114,8 +114,10 @@ struct LitFrameStats
 {
   // the camera the frame was drawn with
   CameraState camera;
-  // the lists were built again this frame (they are kept otherwise)
+  // the lists were built again this frame (they are kept otherwise); LPF.1 (C43): for a
+  // new registry or a re-parse (ListsTableKey moved)
   bool listsRebuilt = false;
+  bool listsTableChanged = false;
   // lights with interactions in the lists, drawn, and overflowed (D76)
   std::size_t lightsVisible = 0;
   std::size_t lightsDrawn = 0;

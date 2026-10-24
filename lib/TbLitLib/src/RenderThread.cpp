@@ -625,8 +625,14 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
   convergence.provisionalChunks = scene && m_geometry->waitsForMaterials();
   // DX.4: what the scene still waits for, and the snapshot not taken yet
   convergence.entityDefsPending = scene && m_geometry->waitsForEntityDefs();
+  // LPF.1 (C43, C44): also while the scene has not scanned the materialsRevision of the
+  // frame's table (a re-parse published after the idle pass's geometryTick and before
+  // its feedTick): its cells are built from the table before it; the scan, at the next
+  // geometryTick, moves sceneWaitState and so triggers the frame that settles
   convergence.geometryInFlight =
-    scene && (m_geometry->busy() || m_geometry->waitsForBake() || m_snapshotInboxFull);
+    scene
+    && (m_geometry->busy() || m_geometry->waitsForBake() || m_snapshotInboxFull
+        || m_geometry->scannedMaterialsRevision() < m_frameMaterialsRevision);
   convergence.lightsProvisional =
     std::ranges::any_of(m_passes.lists().lights, [](const ViewLight& light) {
       return light.record
@@ -2346,7 +2352,8 @@ SceneWaitState RenderThread::sceneWaitState() const
     m_geometry->waitsForEntityDefs(),
     m_geometry->waitsForMaterials(),
     m_geometry->probesInFlight(),
-    m_geometry->probeTable()->version};
+    m_geometry->probeTable()->version,
+    m_geometry->scannedMaterialsRevision()};
 }
 
 bool RenderThread::geometryTick()

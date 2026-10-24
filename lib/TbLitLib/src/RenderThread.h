@@ -117,9 +117,9 @@ GpuMemoryAccount accountGpuMemory(
  */
 // DX.4 (LP4.2b step 0): the scene's applied batches, busy(), waitsForBake(),
 // waitsForEntityDefs(), waitsForMaterials(), probesInFlight() and the probe table's
-// version
+// version; LPF.1 (C43, C44): the materialsRevision it scanned last
 using SceneWaitState =
-  std::tuple<std::uint64_t, bool, bool, bool, bool, bool, std::uint64_t>;
+  std::tuple<std::uint64_t, bool, bool, bool, bool, bool, std::uint64_t, std::uint64_t>;
 
 /**
  * LP4.3 (C38, D90): the status line's bake fields of a scene: its adopted bake's state,

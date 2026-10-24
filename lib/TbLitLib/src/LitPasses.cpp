@@ -376,9 +376,10 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
       {
         const auto id = area.hasPoints ? inputs.images->find(area.atlas) : std::nullopt;
         const auto* slot = id ? inputs.images->slot(*id) : nullptr;
+        // LPF.1 (C40): a Replacing atlas binds its complete texture
         const auto valid =
           slot
-          && (slot->state == ImageSlots::State::Resident || slot->state == ImageSlots::State::Loading);
+          && (slot->state == ImageSlots::State::Resident || slot->state == ImageSlots::State::Loading || slot->state == ImageSlots::State::Replacing);
         hash = (hash ^ (valid ? 2u : 1u)) * 1099511628211ull;
       }
       m_gridValidity = hash;
@@ -393,6 +394,8 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   {
     return;
   }
+  // LPF.1 (C43): built again for a new registry or a re-parse (the key's table part)
+  m_stats.listsTableChanged = !m_listsKey || m_listsKey->table != key.table;
   m_listsKey = key;
   m_listsTableVersion = tableVersion;
   m_stats.listsRebuilt = true;
@@ -426,7 +429,7 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
       const auto id = inputs.images->find(grid->atlas);
       const auto* slot = id ? inputs.images->slot(*id) : nullptr;
       return slot
-             && (slot->state == ImageSlots::State::Resident || slot->state == ImageSlots::State::Loading);
+             && (slot->state == ImageSlots::State::Resident || slot->state == ImageSlots::State::Loading || slot->state == ImageSlots::State::Replacing);
     };
   }
   frontend.material = [&](const std::string& name) {
