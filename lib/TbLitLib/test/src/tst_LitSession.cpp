@@ -11645,6 +11645,629 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu2]")
   }
 }
 
+
+namespace
+{
+
+// LP5.2a: the stage pass's materials over a white wall lit head-on; the images are pure
+// colours (0 or 255 per channel, exact through any block compression) and the stages'
+// colour registers set the values between
+const auto Lp52aMaterials = std::string{
+  "textures/lp52a/white\n{\n\tqer_editorimage textures/lp52a/white.tga\n"
+  "\tdiffusemap textures/lp52a/white.tga\n}\n"
+  "textures/lp52a/add\n{\n\t{\n\t\tblend add\n\t\tmap textures/lp52a/white.tga\n"
+  "\t\tred 0.5\n\t\tgreen 0.25\n\t\tblue 0\n\t}\n}\n"
+  "textures/lp52a/add_late\n{\n\t{\n\t\tblend add\n\t\tmap textures/lp52a/white.tga\n"
+  "\t\tred 0.5\n\t\tgreen 0.25\n\t\tblue 0\n\t}\n}\n"
+  "textures/lp52a/blend\n{\n\t{\n\t\tblend blend\n\t\tmap textures/lp52a/white.tga\n"
+  "\t\tred 0.2\n\t\tgreen 0.6\n\t\tblue 1\n\t\talpha 0.5\n\t}\n}\n"
+  "textures/lp52a/inverse\n{\n\t{\n\t\tblend add\n\t\tmap textures/lp52a/white.tga\n"
+  "\t\tinverseVertexColor\n\t}\n}\n"
+  "textures/lp52a/colored\n{\n\t{\n\t\tblend add\n\t\tmap textures/lp52a/white.tga\n"
+  "\t\tcolored\n\t}\n}\n"
+  "textures/lp52a/grate\n{\n\t{\n\t\tmap textures/lp52a/holes.tga\n\t\talphaTest 0.5\n"
+  "\t}\n}\n"
+  "textures/lp52a/far\n{\n\t{\n\t\tblend blend\n\t\tmap textures/lp52a/white.tga\n"
+  "\t\tred 0.8\n\t\tgreen 0.2\n\t\tblue 0.2\n\t\talpha 0.6\n\t}\n}\n"
+  "textures/lp52a/near\n{\n\t{\n\t\tblend blend\n\t\tmap textures/lp52a/white.tga\n"
+  "\t\tred 0.2\n\t\tgreen 0.2\n\t\tblue 0.8\n\t\talpha 0.6\n\t}\n}\n"
+  "textures/lp52a/screen\n{\n\t{\n\t\tblend add\n\t\tmap textures/lp52a/quadrants.tga\n"
+  "\t\tscreen\n\t}\n}\n"
+  "textures/lp52a/voronoi\n{\n\t{\n\t\tblend add\n\t\tprogram vornoipattern\n"
+  "\t\tvertexParm 0 0.5, 40, 40\n\t}\n}\n"
+  "textures/lp52a/fogwl\n{\n\t{\n\t\tblend add\n\t\tprogram fogwithlights\n"
+  "\t\tvertexParm 0 0.5, 160, 120\n\t}\n}\n"
+  "textures/lp52a/haze\n{\n\t{\n\t\tprogram heathaze\n\t\tvertexParm 0 0.1, 0.2\n"
+  "\t\tfragmentMap 0 _currentRender\n\t\tfragmentMap 1 textures/lp52a/white.tga\n\t}\n}\n"
+  "textures/lp52a/movie\n{\n\t{\n\t\tblend add\n\t\tvideomap video/lp52a.roq\n\t}\n}\n"
+  "textures/lp52a/backbox\n{\n\ttranslucent\n\tbackSided\n\t{\n\t\tblend blend\n"
+  "\t\tmap textures/lp52a/white.tga\n\t\tred 0.3\n\t\tgreen 0.7\n\t\tblue 0.9\n"
+  "\t\talpha 0.5\n\t}\n}\n"};
+
+// the wall at x 200 lit head-on by a parallel light from -x; the stage surfaces 2 units
+// thick in front of it (a camera at the origin's height 64 looking down +x); the
+// back-sided box straddles the wall's face: its front faces before it, its back face
+// behind it
+std::string lp52aMapText(const std::string& addMaterial = "lp52a/add")
+{
+  auto text = std::string{"{\n\"classname\" \"worldspawn\"\n"};
+  text += boxBrush(200, -400, -200, 216, 400, 400, "lp52a/white");
+  text += boxBrush(150, -120, 100, 152, -100, 120, addMaterial);
+  text += boxBrush(150, -80, 100, 152, -60, 120, "lp52a/blend");
+  text += boxBrush(150, -40, 100, 152, -20, 120, "lp52a/inverse");
+  text += boxBrush(150, 40, 100, 152, 60, 120, "lp52a/implicit");
+  text += boxBrush(150, 80, 100, 152, 100, 120, "lp52a/haze");
+  text += boxBrush(150, 120, 100, 152, 140, 120, "lp52a/movie");
+  text += boxBrush(150, -120, 10, 152, -60, 70, "lp52a/grate");
+  text += boxBrush(170, -30, 20, 172, 10, 50, "lp52a/far");
+  text += boxBrush(140, -10, 30, 142, 30, 60, "lp52a/near");
+  text += boxBrush(150, 50, 10, 152, 90, 60, "lp52a/screen");
+  text += boxBrush(150, 100, 10, 152, 140, 60, "lp52a/voronoi");
+  text += boxBrush(150, 100, 65, 152, 140, 95, "lp52a/fogwl");
+  text += boxBrush(190, -40, -60, 230, 0, -20, "lp52a/backbox");
+  text += "}\n";
+  text +=
+    "{\n\"classname\" \"func_static\"\n\"name\" \"lp52a_colored\"\n\"model\" "
+    "\"lp52a_colored\"\n\"_color\" \"0.5 0.25 1\"\n"
+    + boxBrush(150, 0, 100, 152, 20, 120, "lp52a/colored") + "}\n";
+  text +=
+    "{\n\"classname\" \"light\"\n\"name\" \"lp52a_parallel\"\n\"origin\" \"100 0 64\"\n"
+    "\"light_radius\" \"300 300 300\"\n\"light_center\" \"-1 0 0\"\n\"parallel\" \"1\"\n"
+    "\"texture\" \"lights/lp22a/flatclamp\"\n\"_color\" \"0.3 0.3 0.3\"\n"
+    "\"noshadows\" \"1\"\n}\n";
+  return text;
+}
+
+// Linear1 (global_inc.hlsl:177-180)
+float linearOf(const float c)
+{
+  return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+}
+
+using Rgb = std::array<float, 3>;
+
+Rgb rgbOf(const std::array<float, 4>& pixel)
+{
+  return {pixel[0], pixel[1], pixel[2]};
+}
+
+// texture_color's sRGBAToLinearRGBA( tex · rpColor ) of a white texel
+Rgb linearRgb(const Rgb& colour)
+{
+  return {linearOf(colour[0]), linearOf(colour[1]), linearOf(colour[2])};
+}
+
+Rgb plus(const Rgb& a, const Rgb& b)
+{
+  return {a[0] + b[0], a[1] + b[1], a[2] + b[2]};
+}
+
+// SRC_ALPHA, ONE_MINUS_SRC_ALPHA of a linearised source and alpha over dst
+Rgb blendOver(const Rgb& colour, const float alpha, const Rgb& dst)
+{
+  const auto src = linearRgb(colour);
+  const auto a = linearOf(alpha);
+  return {
+    src[0] * a + dst[0] * (1.0f - a),
+    src[1] * a + dst[1] * (1.0f - a),
+    src[2] * a + dst[2] * (1.0f - a)};
+}
+
+bool near3(const Rgb& a, const Rgb& b, const float tolerance = 4e-3f)
+{
+  for (std::size_t i = 0; i < 3; ++i)
+  {
+    if (std::abs(a[i] - b[i]) > tolerance * std::max(1.0f, std::abs(b[i])))
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string rgbText(const Rgb& c)
+{
+  return fmt::format("({:.5f} {:.5f} {:.5f})", c[0], c[1], c[2]);
+}
+
+// the pixel (rows top-down) a world point projects to, through the view's matrices
+std::pair<std::uint32_t, std::uint32_t> pixelOf(
+  const LitView& view, const EngineVec3& point)
+{
+  const auto ndc = engineGlobalToNormalizedDeviceCoordinates(
+    view.worldModelViewMatrix, view.projectionMatrix, point);
+  return {
+    std::uint32_t((ndc[0] * 0.5f + 0.5f) * float(view.width)),
+    std::uint32_t((0.5f - ndc[1] * 0.5f) * float(view.height))};
+}
+
+// the frame's stats after its passes, once its camera is the one asked for and pred holds
+std::optional<LitFrameStats> framesUntil(
+  LitSession& session,
+  const CameraState& camera,
+  const std::function<bool(const LitFrameStats&)>& pred,
+  const std::chrono::milliseconds timeout = 20000ms)
+{
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    session.setCamera(camera);
+    session.tableChanged();
+    auto stats = LitFrameStats{};
+    auto done = std::make_shared<std::promise<void>>();
+    auto future = done->get_future();
+    session.runAfterPassesForTesting([&, done](RenderFrameAccess& access) {
+      stats = access.passes.lastStats();
+      done->set_value();
+    });
+    if (future.wait_for(10000ms) != std::future_status::ready)
+    {
+      return std::nullopt;
+    }
+    if (stats.camera == camera && pred(stats))
+    {
+      return stats;
+    }
+    std::this_thread::sleep_for(20ms);
+  }
+  return std::nullopt;
+}
+
+} // namespace
+
+// LP5.2a (C46, C47, D115-D121, D124): pass 8 over a synthetic map of stage materials in
+// front of a wall lit head-on, each pixel against a CPU model over the frame drawn with
+// the shader passes skipped (the background); the draw order, the counters, the pending
+// rule and the frame log's columns. Hidden: it needs a GPU and the game's blobs.
+TEST_CASE("LitSession pass 8, the material stage pass, on a GPU (LP5.2a)", "[.][litgpu2]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto gamePath = std::filesystem::path{gamePathValue};
+  const auto root = assembleLitRoot(gamePath);
+  REQUIRE_FALSE(root.empty());
+  const auto base = root / "base";
+  writeTextFile(base / "materials" / "zz_lp52a.mtr", Lp52aMaterials);
+  std::filesystem::create_directories(base / "textures" / "lp52a");
+  const auto writeTga = [&](const std::string& name, const test::Rgba& image) {
+    auto file = std::ofstream{base / "textures" / "lp52a" / name, std::ios::binary};
+    const auto bytes = test::tgaFile(image);
+    file.write(bytes.data(), std::streamsize(bytes.size()));
+  };
+  writeTga("white.tga", test::flat(4, 4, 255, 255, 255));
+  // the implicit material's image: magenta, opaque
+  writeTga("implicit.tga", test::flat(4, 4, 255, 0, 255));
+  // red with 16 × 16 holes of alpha 0 in a checker
+  {
+    auto holes = test::flat(64, 64, 255, 0, 0);
+    for (int y = 0; y < 64; ++y)
+    {
+      for (int x = 0; x < 64; ++x)
+      {
+        if ((x / 16 + y / 16) % 2)
+        {
+          holes.pixels[std::size_t((y * 64 + x) * 4 + 3)] = 0;
+        }
+      }
+    }
+    writeTga("holes.tga", holes);
+  }
+  // four quadrants (top row first): red, green / blue, yellow
+  {
+    auto quadrants = test::flat(64, 64, 0, 0, 0);
+    for (int y = 0; y < 64; ++y)
+    {
+      for (int x = 0; x < 64; ++x)
+      {
+        const auto i = std::size_t((y * 64 + x) * 4);
+        const auto right = x >= 32;
+        const auto bottom = y >= 32;
+        quadrants.pixels[i + 0] = std::uint8_t(right == bottom ? 255 : 0);
+        quadrants.pixels[i + 1] = std::uint8_t(right ? 255 : 0);
+        quadrants.pixels[i + 2] = std::uint8_t(!right && bottom ? 255 : 0);
+      }
+    }
+    writeTga("quadrants.tga", quadrants);
+  }
+  // the stage pass's programs beyond LP2's: texture_color_texgen (18) and the material
+  // programs vornoipattern and heathaze
+  for (const auto& [name, stage] :
+       {std::pair{std::string{"builtin/texture_color_texgen"}, ShaderStage::Vertex},
+        std::pair{std::string{"builtin/texture_color_texgen"}, ShaderStage::Pixel},
+        std::pair{std::string{"vornoipattern"}, ShaderStage::Vertex},
+        std::pair{std::string{"vornoipattern"}, ShaderStage::Pixel},
+        std::pair{std::string{"fogwithlights"}, ShaderStage::Vertex},
+        std::pair{std::string{"fogwithlights"}, ShaderStage::Pixel},
+        std::pair{std::string{"heathaze"}, ShaderStage::Vertex},
+        std::pair{std::string{"heathaze"}, ShaderStage::Pixel}})
+  {
+    const auto relative = shaderBlobPath(name, stage);
+    REQUIRE(std::filesystem::exists(gamePath / "base" / relative));
+    std::filesystem::create_directories((base / relative).parent_path());
+    std::filesystem::copy_file(
+      gamePath / "base" / relative,
+      base / relative,
+      std::filesystem::copy_options::overwrite_existing);
+  }
+  writeTextFile(base / "maps" / "lp52a.map", lp52aMapText());
+  const auto snapshotOf = [&](const std::string& text, const std::uint64_t sequence) {
+    auto snapshot = snapshotOfMapText(text);
+    snapshot.generation = 7;
+    snapshot.sequence = sequence;
+    snapshot.mapPath = (base / "maps" / "lp52a.map").string();
+    return std::make_shared<const Snapshot>(std::move(snapshot));
+  };
+  const auto camera = litCamera({0, 0, 64}, {1, 0, 0}, {0, 0, 1});
+  const auto view = litViewOf(camera, 160, 120);
+  const auto frameLog = root / "lp52a.framelog.csv";
+  std::filesystem::remove(frameLog);
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto gate = std::make_shared<ParkingGate>();
+    auto serviceOptions = MaterialServiceOptions{};
+    serviceOptions.makeSource = [root](const std::atomic<bool>& cancel) {
+      return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(root, &cancel)};
+    };
+    serviceOptions.pollInterval = 0ms;
+    serviceOptions.imageBudgetBytes = 0;
+    serviceOptions.beforeTakeWorkForTesting = [gate] { gate->pass(); };
+    auto service = MaterialService::create(std::move(serviceOptions))
+                   | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    const auto atExit = OpenParkingAtExit{gate};
+    auto events = Events{};
+    auto session = loggedRootSession(instance, events, *service, root, frameLog, true);
+    auto tonemap = EngineTonemap;
+    tonemap.hdrMinLuminance = 0.1f;
+    tonemap.hdrMaxLuminance = 0.1001f;
+    session->setTonemapForTesting(tonemap);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(true);
+    }));
+    REQUIRE(session->offerSnapshot(snapshotOf(lp52aMapText(), 1)));
+
+    // the background: the shader passes skipped (D118), the pass's counters 0
+    session->skipShaderPassesForTesting(true);
+    auto background = settledHdr(*session, camera, 1);
+    for (auto attempt = 0;
+         attempt < 20 && background && !background->second.stats.stagesSkipped;
+         ++attempt)
+    {
+      background = settledHdr(*session, camera, 1);
+    }
+    REQUIRE(background);
+    {
+      const auto& stats = background->second.stats;
+      CHECK(stats.stagesSkipped);
+      CHECK(stats.stageDraws == 0u);
+      CHECK(stats.stageSkipped == 0u);
+      CHECK(stats.stagePostProcess == 0u);
+    }
+    const auto& bg = background->first;
+
+    // pass 8 drawn
+    session->skipShaderPassesForTesting(false);
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(true);
+    }));
+    auto drawn = settledHdr(*session, camera, 1);
+    for (auto attempt = 0; attempt < 20 && drawn && drawn->second.stats.stagesSkipped;
+         ++attempt)
+    {
+      drawn = settledHdr(*session, camera, 1);
+    }
+    REQUIRE(drawn);
+    auto log = std::vector<LitDrawRecord>{};
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      log = access.passes.drawLogForTesting();
+    }));
+    const auto& stats = drawn->second.stats;
+    const auto& image = drawn->first;
+    CHECK_FALSE(stats.stagesSkipped);
+    CHECK(stats.stagesTimed);
+    CHECK_FALSE(stats.stagesDisabled);
+    // twelve stage draws; the haze stopped at (K38), the movie skipped (D120)
+    CHECK(stats.stageDraws == 12u);
+    CHECK(stats.stagePostProcess == 1u);
+    CHECK(stats.stageCinematic == 1u);
+    CHECK(stats.stageSkipped == 1u);
+    CHECK(stats.stageTexgenDeferred == 0u);
+    CHECK(stats.stageProgramMissing == 0u);
+    CHECK(stats.stagePending == 0u);
+
+    const auto at = [&](const HdrImage& hdr, const EngineVec3& point) {
+      const auto [x, y] = pixelOf(view, point);
+      return rgbOf(hdr.at(x, y));
+    };
+    const auto check = [&](const char* what, const EngineVec3& point, const Rgb& model) {
+      const auto got = at(image, point);
+      std::cout << fmt::format(
+        "LP5.2a {}: background {} drawn {} model {}\n",
+        what,
+        rgbText(at(bg, point)),
+        rgbText(got),
+        rgbText(model));
+      CAPTURE(what, rgbText(got), rgbText(model));
+      CHECK(near3(got, model));
+    };
+    // blend add: the lit value plus the stage's colour (texture_color's linearised
+    // tex · rpColor)
+    const auto addPoint = EngineVec3{150, -110, 110};
+    check("blend add", addPoint, plus(at(bg, addPoint), linearRgb({0.5f, 0.25f, 0.0f})));
+    // blend blend: SRC_ALPHA over the lit value, the alpha linearised as well
+    const auto blendPoint = EngineVec3{150, -70, 110};
+    check(
+      "blend blend", blendPoint, blendOver({0.2f, 0.6f, 1.0f}, 0.5f, at(bg, blendPoint)));
+    // inverseVertexColor on white brush vertices: ( -1 · 1 + 1 ) = 0, the stage adds
+    // nothing
+    const auto inversePoint = EngineVec3{150, -30, 110};
+    check("inverseVertexColor", inversePoint, at(bg, inversePoint));
+    // colored on the func_static: its _color through parm0-2
+    const auto coloredPoint = EngineVec3{150, 10, 110};
+    check(
+      "colored",
+      coloredPoint,
+      plus(at(bg, coloredPoint), linearRgb({0.5f, 0.25f, 1.0f})));
+    // the implicit material: blend blend colored map clamp, its image magenta, alpha 1
+    const auto implicitPoint = EngineVec3{150, 50, 110};
+    check("implicit material", implicitPoint, Rgb{1.0f, 0.0f, 1.0f});
+    // K38: the _currentRender material draws nothing; the wall behind shows
+    const auto hazePoint = EngineVec3{150, 90, 110};
+    check("SS_POST_PROCESS stop", hazePoint, at(bg, hazePoint));
+    // D120: the cinematic stage is not drawn
+    const auto moviePoint = EngineVec3{150, 130, 110};
+    check("cinematic", moviePoint, at(bg, moviePoint));
+
+    // the alpha-tested stage, EQUAL against the prepass's alpha-tested depth: the stage
+    // where the grate is solid, the lit wall in its holes
+    {
+      const auto [x0, y0] = pixelOf(view, EngineVec3{150, -118, 68});
+      const auto [x1, y1] = pixelOf(view, EngineVec3{150, -62, 12});
+      auto stage = 0;
+      auto wall = 0;
+      auto other = 0;
+      for (auto y = y0; y <= y1; ++y)
+      {
+        for (auto x = std::min(x0, x1); x <= std::max(x0, x1); ++x)
+        {
+          const auto got = rgbOf(image.at(x, y));
+          if (near3(got, Rgb{1.0f, 0.0f, 0.0f}))
+          {
+            ++stage;
+          }
+          else if (near3(got, rgbOf(bg.at(x, y))))
+          {
+            ++wall;
+          }
+          else
+          {
+            ++other;
+          }
+        }
+      }
+      std::cout << fmt::format(
+        "LP5.2a alpha-tested stage: {} stage pixels, {} wall pixels, {} others\n",
+        stage,
+        wall,
+        other);
+      CHECK(stage > 20);
+      CHECK(wall > 20);
+      CHECK(other == 0);
+    }
+
+    // two translucent materials at one sort value: the farther drawn first (the log), the
+    // overlap the near one's blend over the far one's
+    {
+      auto farIndex = std::optional<std::size_t>{};
+      auto nearIndex = std::optional<std::size_t>{};
+      for (std::size_t i = 0; i < log.size(); ++i)
+      {
+        if (log[i].pass != LitDrawRecord::Pass::Stage)
+        {
+          continue;
+        }
+        if (log[i].chunk.material == "textures/lp52a/far")
+        {
+          farIndex = i;
+        }
+        if (log[i].chunk.material == "textures/lp52a/near")
+        {
+          nearIndex = i;
+        }
+      }
+      REQUIRE(farIndex);
+      REQUIRE(nearIndex);
+      CHECK(*farIndex < *nearIndex);
+      const auto overlap = EngineVec3{140, -5, 40};
+      const auto farColour = Rgb{0.8f, 0.2f, 0.2f};
+      const auto nearColour = Rgb{0.2f, 0.2f, 0.8f};
+      const auto farFirst =
+        blendOver(nearColour, 0.6f, blendOver(farColour, 0.6f, at(bg, overlap)));
+      const auto nearFirst =
+        blendOver(farColour, 0.6f, blendOver(nearColour, 0.6f, at(bg, overlap)));
+      check("far first (the engine's order)", overlap, farFirst);
+      CHECK_FALSE(near3(at(image, overlap), nearFirst));
+      const auto nearOnly = EngineVec3{140, 25, 55};
+      check("near alone", nearOnly, blendOver(nearColour, 0.6f, at(bg, nearOnly)));
+    }
+
+    // TG_SCREEN: the texcoords are rows 0, 1 and 3 of modelViewMatrix × projectionMatrix
+    // (the world's) at the point, the image's quadrant there added
+    {
+      const auto mat =
+        engineGlMatrixMultiply(view.worldModelViewMatrix, view.projectionMatrix);
+      const auto plane = [&](const int row, const EngineVec3& p) {
+        return mat[0 * 4 + std::size_t(row)] * p[0] + mat[1 * 4 + std::size_t(row)] * p[1]
+               + mat[2 * 4 + std::size_t(row)] * p[2] + mat[3 * 4 + std::size_t(row)];
+      };
+      auto checked = 0;
+      for (const auto& point :
+           {EngineVec3{150, 60, 20}, EngineVec3{150, 80, 50}, EngineVec3{150, 70, 35}})
+      {
+        const auto q = plane(3, point);
+        const auto s = plane(0, point) / q;
+        const auto t = plane(1, point) / q;
+        const auto u = s - std::floor(s);
+        const auto v = t - std::floor(t);
+        // away from a quadrant's edges (bilinear, mip 0)
+        if (
+          std::abs(u - 0.5f) < 0.08f || u < 0.04f || u > 0.96f
+          || std::abs(v - 0.5f) < 0.08f || v < 0.04f || v > 0.96f)
+        {
+          continue;
+        }
+        const auto right = u >= 0.5f;
+        const auto bottom = v >= 0.5f;
+        const auto quadrant = Rgb{
+          right == bottom ? 1.0f : 0.0f,
+          right ? 1.0f : 0.0f,
+          !right && bottom ? 1.0f : 0.0f};
+        check("TG_SCREEN", point, plus(at(bg, point), quadrant));
+        ++checked;
+      }
+      CHECK(checked > 0);
+    }
+
+    // newStage programs with a constant USER0 (C47): the pixels of a panel that differ
+    // from the background
+    const auto differing = [&](const EngineVec3& corner0, const EngineVec3& corner1) {
+      const auto [x0, y0] = pixelOf(view, corner0);
+      const auto [x1, y1] = pixelOf(view, corner1);
+      auto differs = 0;
+      for (auto y = std::min(y0, y1); y <= std::max(y0, y1); ++y)
+      {
+        for (auto x = std::min(x0, x1); x <= std::max(x0, x1); ++x)
+        {
+          differs += near3(rgbOf(image.at(x, y)), rgbOf(bg.at(x, y))) ? 0 : 1;
+        }
+      }
+      return differs;
+    };
+    // vornoipattern's vertex shader writes its clip position to a POSITION output, not
+    // SV_Position (vornoipattern.vs.hlsl:50), so no clip position reaches the rasterizer
+    // and its blob draws nothing: an engine fact, mirrored (the draw is made, counted
+    // above)
+    std::cout << fmt::format(
+      "LP5.2a vornoipattern: {} pixels differ\n",
+      differing(EngineVec3{150, 102, 58}, EngineVec3{150, 138, 12}));
+    // fogwithlights (no _currentRender fragment map, so not SS_POST_PROCESS) draws its
+    // clouds from SV_Position and USER0
+    {
+      const auto differs = differing(EngineVec3{150, 102, 93}, EngineVec3{150, 138, 67});
+      std::cout << fmt::format("LP5.2a fogwithlights: {} pixels differ\n", differs);
+      CHECK(differs > 0);
+    }
+
+    // CT_BACK_SIDED drawn as front-sided (D117): the front face before the wall is
+    // blended once; a correct back-sided cull would draw the back face alone, behind the
+    // wall's depth, and show nothing
+    check(
+      "backSided box",
+      EngineVec3{190, -20, -40},
+      blendOver({0.3f, 0.7f, 0.9f}, 0.5f, at(bg, EngineVec3{190, -20, -40})));
+
+    // the draw log: the programs and the back-sided cull bit
+    {
+      auto programs = std::map<std::string, int>{};
+      for (const auto& record : log)
+      {
+        if (record.pass != LitDrawRecord::Pass::Stage)
+        {
+          continue;
+        }
+        programs[record.chunk.material] = record.program;
+        if (record.chunk.material == "textures/lp52a/backbox")
+        {
+          CHECK((record.state & (3ull << 15)) == engine_gls::CullBackSided);
+        }
+      }
+      CHECK(programs["textures/lp52a/add"] == EngineBuiltinTextureVertexColor);
+      CHECK(programs["textures/lp52a/screen"] == EngineBuiltinTextureTexgenVertexColor);
+      CHECK(
+        programs["textures/lp52a/voronoi"]
+        == findEngineMaterialProgram("vornoipattern")->row.index);
+      CHECK_FALSE(programs.contains("textures/lp52a/haze"));
+      CHECK_FALSE(programs.contains("textures/lp52a/movie"));
+    }
+
+    // D124: a material not answered yet: its surface is skipped, the frame unconverged,
+    // the other stages drawn; then it lands and is drawn
+    {
+      gate->close();
+      REQUIRE(gate->park([&] { service->lookup("textures/lp52a/park"); }));
+      REQUIRE(waitFor([&] { return session->snapshotSlotFree(); }, 10000ms, false));
+      REQUIRE(session->offerSnapshot(snapshotOf(lp52aMapText("lp52a/add_late"), 2)));
+      const auto pending = framesUntil(
+        *session, camera, [](const LitFrameStats& s) { return s.stagePending > 0; });
+      REQUIRE(pending);
+      CHECK(pending->stagePending == 1u);
+      CHECK(pending->unconverged);
+      CHECK(pending->stageDraws == 11u);
+      gate->open();
+      auto landed = settledHdr(*session, camera, 1);
+      for (auto attempt = 0;
+           attempt < 20 && landed && landed->second.stats.stageDraws != 12u;
+           ++attempt)
+      {
+        landed = settledHdr(*session, camera, 1);
+      }
+      REQUIRE(landed);
+      CHECK(landed->second.stats.stagePending == 0u);
+      CHECK(landed->second.stats.stageDraws == 12u);
+      const auto got = rgbOf(
+        landed->first.at(pixelOf(view, addPoint).first, pixelOf(view, addPoint).second));
+      CHECK(near3(got, plus(at(bg, addPoint), linearRgb({0.5f, 0.25f, 0.0f}))));
+    }
+
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(false);
+    }));
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  messages.print("LP5.2a stage pass, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+
+  // the frame log's three columns: a frame with stage draws and their GPU time
+  {
+    const auto rows = readCsv(frameLog);
+    REQUIRE(rows.size() > 1u);
+    REQUIRE(rows[0].size() == 54u);
+    CHECK(rows[0][51] == "stage_draws");
+    CHECK(rows[0][52] == "stage_skipped");
+    CHECK(rows[0][53] == "gpu_stages_ms");
+    auto timedWithDraws = false;
+    for (std::size_t i = 1; i < rows.size(); ++i)
+    {
+      if (
+        rows[i].size() == 54u && rows[i][1] == "frame" && !rows[i][51].empty()
+        && rows[i][51] != "0" && !rows[i][53].empty())
+      {
+        timedWithDraws = true;
+      }
+    }
+    CHECK(timedWithDraws);
+  }
+}
+
 } // namespace tb::lit
 
 #endif
