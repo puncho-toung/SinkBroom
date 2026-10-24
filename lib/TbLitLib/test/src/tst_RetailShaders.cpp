@@ -22,7 +22,8 @@
 // LP2 draws with is found, its permutation keys are the ones the engine's shader build
 // wrote (SC249), and every permutation the preview may load, pushed or not, reflects
 // equal to the mirrored tables (D9, C26). LP4.2a (C35) adds the ambient pass's four
-// programs (4 and 6 the probe path, 8 and 10 the light grid's) and set 9.
+// programs (4 and 6 the probe path, 8 and 10 the light grid's) and set 9; LP5.0 the
+// programs of passes 7-9 and the cube and sky texgens, with sets 5, 7, 8 and 12.
 
 #include "lit/EngineTables.h"
 #include "lit/ShaderBlobs.h"
@@ -406,6 +407,144 @@ TEST_CASE("Retail shaders: LP2's blobs, keys and reflection", "[.][retail]")
   // T0.5: the fourteen programs' stages, each of their permutations (LP4.2a: the four
   // ambient programs' two stages, pushed and not)
   CHECK(checked == 46);
+}
+
+TEST_CASE("Retail shaders: LP5's blobs, sets 5, 7, 8 and 12", "[.][retail]")
+{
+  const auto gamePath = retailGamePath();
+  if (!gamePath)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the shader test needs the game folder");
+  }
+
+  // LP5.0 (C45-C49): every builtin LP5 binds (rows 15, 18, 21, 55, 57, 65, 67, 69, 70)
+  // and the skinned rows 17 and 22, reflected only (LP7 binds them), with the layouts and
+  // sets the tables give them
+  struct Program
+  {
+    int index;
+    EngineBindingLayout layout;
+    int set;
+  };
+  using L = EngineBindingLayout;
+  const auto programs = std::vector<Program>{
+    {15, L::Texture, 4},
+    {17, L::TextureSkinned, 4},
+    {18, L::Texgen, 12},
+    {21, L::DrawInteraction, 10},
+    {22, L::DrawInteractionSkinned, 10},
+    {55, L::Default, 0},
+    {57, L::NormalCube, 5},
+    {65, L::Blendlight, 7},
+    {67, L::Fog, 7},
+    {69, L::Legacy, 5},
+    {70, L::Legacy, 5},
+  };
+
+  auto checked = 0;
+  auto setsChecked = std::map<int, int>{};
+  for (const auto& program : programs)
+  {
+    const auto& builtin = *engineBuiltin(program.index);
+    CAPTURE(builtin.name, builtin.nameOutSuffix);
+    REQUIRE(builtin.bindingLayout == program.layout);
+    REQUIRE(engineParmSetOfLayout(program.layout) == program.set);
+    const auto table = engineParmSetBlock(program.set);
+    REQUIRE(
+      table.members.size() == std::size_t(EngineParmSetSizes[std::size_t(program.set)]));
+
+    for (const auto pushed : {false, true})
+    {
+      CAPTURE(pushed);
+      auto stages = std::vector<ShaderReflection>{};
+      for (const auto stage : stagesOf(builtin))
+      {
+        CAPTURE(shaderStageSuffix(stage));
+        const auto blob = readShaderBlob(*gamePath, builtin.name, stage);
+        REQUIRE(blob.is_success());
+
+        // C2: the keys on disk name the row's defines in its order
+        auto names = std::vector<std::string>{};
+        for (const auto& define : engineBuiltinDefines(builtin, false))
+        {
+          names.push_back(define.name);
+        }
+        for (const auto& key : shaderBlobKeys(blob.value()))
+        {
+          CHECK(keyNames(key) == names);
+        }
+
+        const auto code =
+          findShaderPermutation(blob.value(), engineBuiltinDefines(builtin, pushed));
+        REQUIRE(code.is_success());
+        const auto reflection = reflectSpirv(code.value());
+        REQUIRE(reflection.is_success());
+        const auto expected = engineExpectedLayout(builtin, pushed);
+        REQUIRE(expected);
+        const auto difference = compareReflection(reflection.value(), *expected);
+        CHECK_FALSE(difference);
+        if (difference)
+        {
+          std::cout << builtin.name << builtin.nameOutSuffix << "."
+                    << shaderStageSuffix(stage) << " pushed " << pushed << ": "
+                    << *difference << "\n";
+        }
+
+        // every member of the set by name and offset, and the set's size, in the
+        // stage's uniforms (the push-constant block, or the constant buffer at b0 of
+        // set 0 = binding 256), where the stage declares them
+        auto uniforms = std::optional<ReflectedBlock>{};
+        if (pushed)
+        {
+          uniforms = reflection.value().pushConstants;
+        }
+        else
+        {
+          for (const auto& binding : reflection.value().bindings)
+          {
+            if (binding.set == 0 && binding.binding == 256 && binding.block)
+            {
+              uniforms = binding.block;
+            }
+          }
+        }
+        if (uniforms)
+        {
+          REQUIRE(uniforms->members.size() == table.members.size());
+          for (std::size_t i = 0; i < table.members.size(); ++i)
+          {
+            CHECK(uniforms->members[i].name == table.members[i].name);
+            CHECK(uniforms->members[i].offset == table.members[i].offset);
+          }
+          CHECK(uniforms->size == table.size);
+          ++setsChecked[program.set];
+        }
+        stages.push_back(reflection.value());
+        ++checked;
+      }
+      // T0.5: every item of the table's layout declared by a stage
+      const auto expected = engineExpectedLayout(builtin, pushed);
+      REQUIRE(expected);
+      const auto uncovered = compareLayoutCoverage(stages, *expected);
+      CHECK_FALSE(uncovered);
+      if (uncovered)
+      {
+        std::cout << builtin.name << builtin.nameOutSuffix << " pushed " << pushed << ": "
+                  << *uncovered << "\n";
+      }
+    }
+  }
+
+  // the four new sets were each met in some stage of every variant
+  CHECK(setsChecked[5] > 0);
+  CHECK(setsChecked[7] > 0);
+  CHECK(setsChecked[12] > 0);
+  std::cout << "LP5: reflected and compared " << checked << " permutations; set 0 "
+            << setsChecked[0] << ", 4 " << setsChecked[4] << ", 5 " << setsChecked[5]
+            << ", 7 " << setsChecked[7] << ", 10 " << setsChecked[10] << ", 12 "
+            << setsChecked[12] << " blocks\n";
+  // eleven programs of two stages, pushed and not
+  CHECK(checked == 44);
 }
 
 } // namespace tb::lit

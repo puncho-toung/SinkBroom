@@ -21,8 +21,8 @@
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderProgs.h, RenderProgs.cpp,
 // Passes/CommonPasses.h, Passes/CommonPasses.cpp, Passes/TonemapPass.cpp,
-// Passes/TonemapPass_cb.h, NVRHI/Image_NVRHI.cpp, sys/DeviceManager.cpp,
-// sys/DeviceManager_VK.cpp and neo/shaders/blit.cb.h):
+// Passes/TonemapPass_cb.h, NVRHI/Image_NVRHI.cpp, NVRHI/RenderBackend_NVRHI.cpp,
+// sys/DeviceManager.cpp, sys/DeviceManager_VK.cpp and neo/shaders/blit.cb.h):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2013-2025 Robert Beckebans
 //   Copyright (C) 2022 Stephen Pridham
@@ -167,6 +167,25 @@ constexpr auto ToneMappingConstantsSize = std::uint32_t{80};
 // BlitConstants (CommonPasses.h:63-72)
 constexpr auto BlitConstantsSize = std::uint32_t{36};
 
+// the HLSL structs of the sets (renderParmSet<N>.inc.hlsl)
+constexpr auto ParmSetStructNames = std::array<std::string_view, EngineParmSetCount>{
+  "renderParmSet0_t",
+  "renderParmSet1_t",
+  "renderParmSet2_t",
+  "renderParmSet3_t",
+  "renderParmSet4_t",
+  "renderParmSet5_t",
+  "renderParmSet6_t",
+  "renderParmSet7_t",
+  "renderParmSet8_t",
+  "renderParmSet9_t",
+  "renderParmSet10_t",
+  "renderParmSet11_t",
+  "renderParmSet12_t",
+  "renderParmSet13_t",
+  "renderParmSet14_t",
+};
+
 nvrhi::BindingLayoutDesc layoutDesc(
   const nvrhi::ShaderType visibility, std::vector<nvrhi::BindingLayoutItem> items)
 {
@@ -277,10 +296,18 @@ std::span<const EngineParmSetMember> engineParmSetMembers(const int set)
     return EngineParmSet0;
   case 4:
     return EngineParmSet4;
+  case 5:
+    return EngineParmSet5;
+  case 7:
+    return EngineParmSet7;
+  case 8:
+    return EngineParmSet8;
   case 9:
     return EngineParmSet9;
   case 10:
     return EngineParmSet10;
+  case 12:
+    return EngineParmSet12;
   default:
     return {};
   }
@@ -363,10 +390,7 @@ std::optional<EngineConstantBlock> engineLayoutConstantBlock(
   {
     return std::nullopt;
   }
-  block.name = set == 0   ? "renderParmSet0_t"
-               : set == 4 ? "renderParmSet4_t"
-               : set == 9 ? "renderParmSet9_t"
-                          : "renderParmSet10_t";
+  block.name = ParmSetStructNames[std::size_t(set)];
   return block;
 }
 
@@ -448,28 +472,83 @@ std::optional<std::vector<nvrhi::BindingLayoutDesc>> engineBindingLayoutDescs(
 {
   using Item = nvrhi::BindingLayoutItem;
   using S = nvrhi::ShaderType;
+  // uniformsLayout( type, skinning ) (RenderProgs.cpp:79-108): the uniforms item of the
+  // layout's set, with the joint buffer at t11 for a skinned type
+  const auto uniforms = [&](const bool skinned) {
+    auto items = std::vector<Item>{
+      uniformsItem(pushConstants, parmSetBytes(engineParmSetOfLayout(layout)))};
+    if (skinned)
+    {
+      items.push_back(Item::StructuredBuffer_SRV(11));
+    }
+    return layoutDesc(S::All, std::move(items));
+  };
   switch (layout)
   {
   case L::ConstantBufferOnly:
     // RenderProgs.cpp:443
     return std::vector{
       layoutDesc(S::All, {uniformsItem(pushConstants, parmSetBytes(0))})};
+  case L::Default:
+  case L::DefaultSkinned:
   case L::Texture:
-    // :415-432: uniforms, the image, its own sampler
+  case L::TextureSkinned:
+  case L::Texgen:
+  case L::Legacy:
+    // :415-436: uniforms, the image (defaultLayout), its own sampler
+    // (samplerOneBindingLayout); LP5.0: DEFAULT and its skinned form :426-427, TEXTURE's
+    // skinned form :433, TEXGEN :434, LEGACY :436
     return std::vector{
-      layoutDesc(S::All, {uniformsItem(pushConstants, parmSetBytes(4))}),
+      uniforms(layout == L::DefaultSkinned || layout == L::TextureSkinned),
       layoutDesc(S::Pixel, {Item::Texture_SRV(0)}),
       layoutDesc(S::Pixel, {Item::Sampler(0)}),
     };
   case L::DrawInteraction:
+  case L::DrawInteractionSkinned:
     // :446-452, 470-474, 514-524: uniforms; normal, specular, base colour; light
-    // falloff and projection; the material and lighting samplers
+    // falloff and projection; the material and lighting samplers. LP5.0: the skinned
+    // form :525-528 (interactionAmbient_skinned, row 22)
     return std::vector{
-      layoutDesc(S::All, {uniformsItem(pushConstants, parmSetBytes(10))}),
+      uniforms(layout == L::DrawInteractionSkinned),
       layoutDesc(
         S::Pixel, {Item::Texture_SRV(0), Item::Texture_SRV(1), Item::Texture_SRV(2)}),
       layoutDesc(S::Pixel, {Item::Texture_SRV(3), Item::Texture_SRV(4)}),
       layoutDesc(S::Pixel, {Item::Sampler(0), Item::Sampler(1)}),
+    };
+  case L::Fog:
+    // LP5.0 (C49): :556-570: uniforms; t0 t1 (fogBindingLayout); s0 s1
+    // (samplerTwoBindingLayout)
+    return std::vector{
+      uniforms(false),
+      layoutDesc(S::Pixel, {Item::Texture_SRV(0), Item::Texture_SRV(1)}),
+      layoutDesc(S::Pixel, {Item::Sampler(0), Item::Sampler(1)}),
+    };
+  case L::Blendlight:
+    // LP5.0 (C49): :572-586: uniforms; t0 t1 (blendLightBindingLayout); s0
+    return std::vector{
+      uniforms(false),
+      layoutDesc(S::Pixel, {Item::Texture_SRV(0), Item::Texture_SRV(1)}),
+      layoutDesc(S::Pixel, {Item::Sampler(0)}),
+    };
+  case L::NormalCube:
+    // LP5.0 (C48): :651-665: uniforms; the cube at t0 and the normal map at t1
+    // (normalCubeBindingLayout); s0
+    return std::vector{
+      uniforms(false),
+      layoutDesc(S::Pixel, {Item::Texture_SRV(0), Item::Texture_SRV(1)}),
+      layoutDesc(S::Pixel, {Item::Sampler(0)}),
+    };
+  case L::PostProcessIngame:
+    // LP5.0 (C47): :588-602: one set of the uniforms and t0 t1 t2 (_currentRender, the
+    // normal map, the mask), visibility All; s0
+    return std::vector{
+      layoutDesc(
+        S::All,
+        {uniformsItem(pushConstants, parmSetBytes(8)),
+         Item::Texture_SRV(0),
+         Item::Texture_SRV(1),
+         Item::Texture_SRV(2)}),
+      layoutDesc(S::Pixel, {Item::Sampler(0)}),
     };
   case L::AmbientLightingIbl:
   case L::AmbientLightingIblSkinned: {
@@ -479,14 +558,8 @@ std::optional<std::vector<nvrhi::BindingLayoutDesc>> engineBindingLayoutDescs(
     // BRDF LUT, the SSAO image, the irradiance image, three radiance cubes and three
     // depth cubes (ambientIblLayout :454-468); the material and the linear clamp
     // samplers (samplerTwoBindingLayout :470-474)
-    auto uniforms = std::vector<Item>{
-      uniformsItem(pushConstants, parmSetBytes(engineParmSetOfLayout(layout)))};
-    if (layout == L::AmbientLightingIblSkinned)
-    {
-      uniforms.push_back(Item::StructuredBuffer_SRV(11));
-    }
     return std::vector{
-      layoutDesc(S::All, std::move(uniforms)),
+      uniforms(layout == L::AmbientLightingIblSkinned),
       layoutDesc(
         S::Pixel, {Item::Texture_SRV(0), Item::Texture_SRV(1), Item::Texture_SRV(2)}),
       layoutDesc(
@@ -533,6 +606,121 @@ std::optional<std::vector<nvrhi::BindingLayoutDesc>> engineBindingLayoutDescs(
       {Item::PushConstants(0, BlitConstantsSize),
        Item::Texture_SRV(0),
        Item::Sampler(0)})};
+  default:
+    return std::nullopt;
+  }
+}
+
+nvrhi::SamplerDesc engineCommonSamplerDesc(const EngineCommonSampler sampler)
+{
+  const auto samplers = engineCommonSamplers();
+  using C = EngineCommonSampler;
+  switch (sampler)
+  {
+  case C::PointClamp:
+    return samplers.pointClamp;
+  case C::PointWrap:
+    return samplers.pointWrap;
+  case C::LinearClamp:
+    return samplers.linearClamp;
+  case C::LinearBorder:
+    return samplers.linearBorder;
+  case C::LinearClampCompare:
+    return samplers.linearClampCompare;
+  case C::LinearWrap:
+    return samplers.linearWrap;
+  case C::AnisotropicWrap:
+    return samplers.anisotropicWrap;
+  case C::AnisotropicClampEdge:
+    return samplers.anisotropicClampEdge;
+  }
+  return samplers.pointClamp;
+}
+
+std::optional<std::vector<std::vector<EngineBindingSetItem>>> engineBindingSetShape(
+  const EngineBindingLayout layout)
+{
+  // GetCurrentBindingLayout (RenderBackend_NVRHI.cpp:566-1990), R_UsePixelatedLook false
+  using Item = EngineBindingSetItem;
+  using Source = EngineBindingSetItem::Source;
+  using C = EngineCommonSampler;
+  const auto uniforms = Item{Source::Uniforms, 0, 0, C::PointClamp};
+  const auto joints = Item{Source::JointBuffer, 11, 0, C::PointClamp};
+  const auto unit = [](const std::uint32_t slot) {
+    return Item{Source::ImageUnit, slot, slot, C::PointClamp};
+  };
+  const auto common = [](const std::uint32_t slot, const C sampler) {
+    return Item{Source::CommonSampler, slot, 0, sampler};
+  };
+  using Sets = std::vector<std::vector<Item>>;
+  switch (layout)
+  {
+  case L::ConstantBufferOnly:
+    // :666-679
+    return Sets{{uniforms}};
+  case L::Default:
+  case L::Texture:
+  case L::Texgen:
+  case L::Legacy:
+    // :586-623: unit 0 and its own sampler
+    return Sets{{uniforms}, {unit(0)}, {Item{Source::ImageSampler, 0, 0, C::PointClamp}}};
+  case L::DefaultSkinned:
+  case L::TextureSkinned:
+    // :624-665
+    return Sets{
+      {uniforms, joints}, {unit(0)}, {Item{Source::ImageSampler, 0, 0, C::PointClamp}}};
+  case L::DrawInteraction:
+  case L::DrawInteractionSkinned: {
+    // :916-996 and :997-1081
+    auto first = std::vector<Item>{uniforms};
+    if (layout == L::DrawInteractionSkinned)
+    {
+      first.push_back(joints);
+    }
+    return Sets{
+      std::move(first),
+      {unit(0), unit(1), unit(2)},
+      {unit(3), unit(4)},
+      {common(0, C::AnisotropicWrap), common(1, C::LinearBorder)}};
+  }
+  case L::AmbientLightingIbl:
+  case L::AmbientLightingIblSkinned: {
+    // :698-788 and :789-883
+    auto first = std::vector<Item>{uniforms};
+    if (layout == L::AmbientLightingIblSkinned)
+    {
+      first.push_back(joints);
+    }
+    return Sets{
+      std::move(first),
+      {unit(0), unit(1), unit(2)},
+      {unit(3),
+       unit(4),
+       unit(7),
+       unit(8),
+       unit(9),
+       unit(10),
+       unit(12),
+       unit(13),
+       unit(14)},
+      {common(0, C::AnisotropicWrap), common(1, C::LinearClamp)}};
+  }
+  case L::Fog:
+    // :1286-1329: LinearClamp at both samplers
+    return Sets{
+      {uniforms},
+      {unit(0), unit(1)},
+      {common(0, C::LinearClamp), common(1, C::LinearClamp)}};
+  case L::Blendlight:
+    // :1378-1418
+    return Sets{{uniforms}, {unit(0), unit(1)}, {common(0, C::LinearBorder)}};
+  case L::PostProcessIngame:
+    // :1464-1512 (PointClamp only under R_UsePixelatedLook)
+    return Sets{{uniforms, unit(0), unit(1), unit(2)}, {common(0, C::LinearClamp)}};
+  case L::NormalCube:
+    // :1677-1734 (PointWrap only under R_UsePixelatedLook): m_LinearWrapSampler, made
+    // after the leaked Comparison reduction (CommonPasses.cpp:87-91, D68)
+    return Sets{{uniforms}, {unit(0), unit(1)}, {common(0, C::LinearWrap)}};
   default:
     return std::nullopt;
   }

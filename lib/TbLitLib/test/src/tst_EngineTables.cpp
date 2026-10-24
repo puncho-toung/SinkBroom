@@ -22,6 +22,7 @@
 #include "lit/ImageCache.h"
 
 #include <cctype>
+#include <map>
 #include <set>
 #include <string>
 #include <string_view>
@@ -180,6 +181,16 @@ TEST_CASE("EngineTables")
     CHECK(engineParmSetMembers(10).size() == std::size_t(EngineParmSetSizes[10]));
     CHECK(engineParmSetMembers(9).size() == std::size_t(EngineParmSetSizes[9]));
     CHECK(engineParmSetMembers(3).empty());
+    // LP5.0 (C45-C49): sets 5, 7, 8 and 12
+    for (const auto set : {5, 7, 8, 12})
+    {
+      CAPTURE(set);
+      CHECK(
+        engineParmSetMembers(set).size()
+        == std::size_t(EngineParmSetSizes[std::size_t(set)]));
+    }
+    CHECK(engineParmSetMembers(6).empty());
+    CHECK(engineParmSetMembers(14).empty());
 
     CHECK(engineParmSetBlock(0).size == 128u);
     CHECK(engineParmSetBlock(4).size == 256u);
@@ -187,8 +198,13 @@ TEST_CASE("EngineTables")
     CHECK(engineParmSetBlock(11).size == 68u * 16u);
     // LP4.2a (C35): 45 float4 = 720 bytes
     CHECK(engineParmSetBlock(9).size == 720u);
+    // LP5.0: 16, 12, 13 and 16 float4
+    CHECK(engineParmSetBlock(5).size == 256u);
+    CHECK(engineParmSetBlock(7).size == 192u);
+    CHECK(engineParmSetBlock(8).size == 208u);
+    CHECK(engineParmSetBlock(12).size == 256u);
 
-    for (const auto set : {0, 4, 9, 10})
+    for (const auto set : {0, 4, 5, 7, 8, 9, 10, 12})
     {
       CAPTURE(set);
       const auto block = engineParmSetBlock(set);
@@ -330,6 +346,69 @@ TEST_CASE("EngineTables")
         "RENDERPARM_SH_IRRADIANCE_6",
         "RENDERPARM_SH_IRRADIANCE_7",
         "RENDERPARM_SH_IRRADIANCE_8"}},
+      // LP5.0: RenderProgs.h:271 rpNominalSet5, :281 rpNominalSet7, :286 rpNominalSet8,
+      // :306 rpNominalSet12, as the engine spells them
+      {5,
+       {"RENDERPARM_LOCALVIEWORIGIN",
+        "RENDERPARM_VERTEXCOLOR_MODULATE",
+        "RENDERPARM_VERTEXCOLOR_ADD",
+        "RENDERPARM_COLOR",
+        "RENDERPARM_MVPMATRIX_X",
+        "RENDERPARM_MVPMATRIX_Y",
+        "RENDERPARM_MVPMATRIX_Z",
+        "RENDERPARM_MVPMATRIX_W",
+        "RENDERPARM_MODELMATRIX_X",
+        "RENDERPARM_MODELMATRIX_Y",
+        "RENDERPARM_MODELMATRIX_Z",
+        "RENDERPARM_PROJMATRIX_W",
+        "RENDERPARM_WOBBLESKY_X",
+        "RENDERPARM_WOBBLESKY_Y",
+        "RENDERPARM_WOBBLESKY_Z",
+        "RENDERPARM_PSX_DISTORTIONS"}},
+      {7,
+       {"RENDERPARM_COLOR",
+        "RENDERPARM_MVPMATRIX_X",
+        "RENDERPARM_MVPMATRIX_Y",
+        "RENDERPARM_MVPMATRIX_Z",
+        "RENDERPARM_MVPMATRIX_W",
+        "RENDERPARM_PROJMATRIX_W",
+        "RENDERPARM_TEXGEN_0_S",
+        "RENDERPARM_TEXGEN_0_T",
+        "RENDERPARM_TEXGEN_0_Q",
+        "RENDERPARM_TEXGEN_1_S",
+        "RENDERPARM_TEXGEN_1_T",
+        "RENDERPARM_PSX_DISTORTIONS"}},
+      {8,
+       {"RENDERPARM_WINDOWCOORD",
+        "RENDERPARM_MVPMATRIX_X",
+        "RENDERPARM_MVPMATRIX_Y",
+        "RENDERPARM_MVPMATRIX_Z",
+        "RENDERPARM_MVPMATRIX_W",
+        "RENDERPARM_PROJMATRIX_Y",
+        "RENDERPARM_PROJMATRIX_W",
+        "RENDERPARM_MODELVIEWMATRIX_Z",
+        "RENDERPARM_ENABLE_SKINNING",
+        "RENDERPARM_ALPHA_TEST",
+        "RENDERPARM_USER0",
+        "RENDERPARM_USER1",
+        "RENDERPARM_USER2"}},
+      {12,
+       {"RENDERPARM_SCREENCORRECTIONFACTOR",
+        "RENDERPARM_VERTEXCOLOR_MODULATE",
+        "RENDERPARM_VERTEXCOLOR_ADD",
+        "RENDERPARM_COLOR",
+        "RENDERPARM_MVPMATRIX_X",
+        "RENDERPARM_MVPMATRIX_Y",
+        "RENDERPARM_MVPMATRIX_Z",
+        "RENDERPARM_MVPMATRIX_W",
+        "RENDERPARM_PROJMATRIX_W",
+        "RENDERPARM_TEXTUREMATRIX_S",
+        "RENDERPARM_TEXTUREMATRIX_T",
+        "RENDERPARM_TEXGEN_0_S",
+        "RENDERPARM_TEXGEN_0_T",
+        "RENDERPARM_TEXGEN_0_Q",
+        "RENDERPARM_TEXGEN_0_ENABLED",
+        "RENDERPARM_PSX_DISTORTIONS"}},
     };
     for (const auto& [set, list] : engineLists)
     {
@@ -444,8 +523,30 @@ TEST_CASE("EngineTables")
       engineLayoutConstantBlock(EngineBindingLayout::Histogram)->name
       == "ToneMappingConstants");
     CHECK(engineLayoutConstantBlock(EngineBindingLayout::Blit)->size == 36u);
-    CHECK_FALSE(engineLayoutConstantBlock(EngineBindingLayout::Fog));
     CHECK_FALSE(engineLayoutConstantBlock(EngineBindingLayout::Mipmapgen));
+    CHECK_FALSE(engineLayoutConstantBlock(EngineBindingLayout::Debug));
+    // LP5.0: the four sets' blocks, named as their HLSL structs
+    CHECK(engineLayoutConstantBlock(EngineBindingLayout::Fog)->size == 192u);
+    CHECK(
+      engineLayoutConstantBlock(EngineBindingLayout::Blendlight)->name
+      == "renderParmSet7_t");
+    CHECK(
+      engineLayoutConstantBlock(EngineBindingLayout::PostProcessIngame)->size == 208u);
+    CHECK(
+      engineLayoutConstantBlock(EngineBindingLayout::PostProcessIngame)->name
+      == "renderParmSet8_t");
+    CHECK(
+      engineLayoutConstantBlock(EngineBindingLayout::Legacy)->name == "renderParmSet5_t");
+    CHECK(
+      engineLayoutConstantBlock(EngineBindingLayout::NormalCube)->name
+      == "renderParmSet5_t");
+    CHECK(
+      engineLayoutConstantBlock(EngineBindingLayout::Texgen)->name
+      == "renderParmSet12_t");
+    CHECK(engineLayoutConstantBlock(EngineBindingLayout::Default)->size == 128u);
+    CHECK(
+      engineLayoutConstantBlock(EngineBindingLayout::TextureSkinned)->name
+      == "renderParmSet4_t");
 
     for (const auto& block : {engineToneMappingBlock(), engineBlitBlock()})
     {
@@ -471,7 +572,8 @@ TEST_CASE("EngineTables")
     CHECK(setCount(engineBindingLayoutDescs(L::Blit, false)) == 1u);
     CHECK(setCount(engineBindingLayoutDescs(L::AmbientLightingIbl, false)) == 4u);
     CHECK(setCount(engineBindingLayoutDescs(L::AmbientLightingIblSkinned, true)) == 4u);
-    CHECK_FALSE(engineBindingLayoutDescs(L::Fog, false));
+    CHECK_FALSE(engineBindingLayoutDescs(L::Debug, false));
+    CHECK_FALSE(engineBindingLayoutDescs(L::OctahedronCube, false));
 
     // the uniforms item: push constants of the set's size, or a volatile buffer at b0
     const auto pushed = *engineBindingLayoutDescs(L::Texture, true);
@@ -557,6 +659,246 @@ TEST_CASE("EngineTables")
       engineVulkanBinding(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0)) == 256u);
     CHECK(engineVulkanBinding(nvrhi::BindingLayoutItem::TypedBuffer_UAV(0)) == 384u);
     CHECK(engineVulkanBinding(nvrhi::BindingLayoutItem::TypedBuffer_SRV(1)) == 1u);
+  }
+
+  SECTION("LP5.0's binding layouts and binding sets")
+  {
+    using L = EngineBindingLayout;
+    using T = nvrhi::ResourceType;
+    using V = nvrhi::ShaderType;
+    using Source = EngineBindingSetItem::Source;
+    using C = EngineCommonSampler;
+
+    // A transcription of RenderProgs.cpp:415-665 (the layouts) and
+    // RenderBackend_NVRHI.cpp:586-1734 (the binding sets) at 285ea4d1, written out by
+    // hand: per descriptor set its visibility and items (type, register), and per item
+    // what the backend binds there. 'U' is the uniforms item, pushed or a volatile
+    // constant buffer; 'J' the joint buffer; 't' a texture; 's' a sampler.
+    struct WantItem
+    {
+      char type = 'U';
+      std::uint32_t slot = 0;
+      Source source = Source::Uniforms;
+      std::uint32_t unit = 0;
+      C sampler = C::PointClamp;
+    };
+    struct WantSet
+    {
+      V visibility = V::All;
+      std::vector<WantItem> items;
+    };
+    const auto U = WantItem{'U', 0, Source::Uniforms, 0, C::PointClamp};
+    const auto J = WantItem{'J', 11, Source::JointBuffer, 0, C::PointClamp};
+    const auto t = [](const std::uint32_t slot) {
+      return WantItem{'t', slot, Source::ImageUnit, slot, C::PointClamp};
+    };
+    const auto own = WantItem{'s', 0, Source::ImageSampler, 0, C::PointClamp};
+    const auto s = [](const std::uint32_t slot, const C sampler) {
+      return WantItem{'s', slot, Source::CommonSampler, 0, sampler};
+    };
+    const auto transcription = std::vector<std::pair<L, std::vector<WantSet>>>{
+      // :426, :586-623
+      {L::Default, {{V::All, {U}}, {V::Pixel, {t(0)}}, {V::Pixel, {own}}}},
+      // :427, :624-665
+      {L::DefaultSkinned, {{V::All, {U, J}}, {V::Pixel, {t(0)}}, {V::Pixel, {own}}}},
+      // :433, :624-665
+      {L::TextureSkinned, {{V::All, {U, J}}, {V::Pixel, {t(0)}}, {V::Pixel, {own}}}},
+      // :434, :586-623
+      {L::Texgen, {{V::All, {U}}, {V::Pixel, {t(0)}}, {V::Pixel, {own}}}},
+      // :436, :586-623
+      {L::Legacy, {{V::All, {U}}, {V::Pixel, {t(0)}}, {V::Pixel, {own}}}},
+      // :651-665, :1677-1734
+      {L::NormalCube,
+       {{V::All, {U}}, {V::Pixel, {t(0), t(1)}}, {V::Pixel, {s(0, C::LinearWrap)}}}},
+      // :556-570, :1286-1329
+      {L::Fog,
+       {{V::All, {U}},
+        {V::Pixel, {t(0), t(1)}},
+        {V::Pixel, {s(0, C::LinearClamp), s(1, C::LinearClamp)}}}},
+      // :572-586, :1378-1418
+      {L::Blendlight,
+       {{V::All, {U}}, {V::Pixel, {t(0), t(1)}}, {V::Pixel, {s(0, C::LinearBorder)}}}},
+      // :588-602, :1464-1512
+      {L::PostProcessIngame,
+       {{V::All, {U, t(0), t(1), t(2)}}, {V::Pixel, {s(0, C::LinearClamp)}}}},
+      // :525-528, :997-1081 (row 22, interactionAmbient_skinned)
+      {L::DrawInteractionSkinned,
+       {{V::All, {U, J}},
+        {V::Pixel, {t(0), t(1), t(2)}},
+        {V::Pixel, {t(3), t(4)}},
+        {V::Pixel, {s(0, C::AnisotropicWrap), s(1, C::LinearBorder)}}}},
+      // the earlier ones, for their binding sets: :432 and :586-623, :521 and :916-996
+      {L::Texture, {{V::All, {U}}, {V::Pixel, {t(0)}}, {V::Pixel, {own}}}},
+      {L::DrawInteraction,
+       {{V::All, {U}},
+        {V::Pixel, {t(0), t(1), t(2)}},
+        {V::Pixel, {t(3), t(4)}},
+        {V::Pixel, {s(0, C::AnisotropicWrap), s(1, C::LinearBorder)}}}},
+    };
+    // the sets' sizes (RenderProgs.cpp:217-391: rpBufSize = the list's length · 16)
+    const auto setBytes = std::map<L, std::uint32_t>{
+      {L::Default, 128},
+      {L::DefaultSkinned, 128},
+      {L::TextureSkinned, 256},
+      {L::Texgen, 256},
+      {L::Legacy, 256},
+      {L::NormalCube, 256},
+      {L::Fog, 192},
+      {L::Blendlight, 192},
+      {L::PostProcessIngame, 208},
+      {L::DrawInteractionSkinned, 400},
+      {L::Texture, 256},
+      {L::DrawInteraction, 400},
+    };
+
+    for (const auto& [layout, wantSets] : transcription)
+    {
+      CAPTURE(int(layout));
+      const auto shape = engineBindingSetShape(layout);
+      REQUIRE(shape);
+      REQUIRE(shape->size() == wantSets.size());
+      for (const auto pushed : {false, true})
+      {
+        CAPTURE(pushed);
+        const auto descs = engineBindingLayoutDescs(layout, pushed);
+        REQUIRE(descs);
+        REQUIRE(descs->size() == wantSets.size());
+        for (std::size_t set = 0; set < wantSets.size(); ++set)
+        {
+          CAPTURE(set);
+          const auto& want = wantSets[set];
+          const auto& desc = (*descs)[set];
+          CHECK(desc.visibility == want.visibility);
+          REQUIRE(desc.bindings.size() == want.items.size());
+          REQUIRE((*shape)[set].size() == want.items.size());
+          for (std::size_t i = 0; i < want.items.size(); ++i)
+          {
+            CAPTURE(i);
+            const auto& item = desc.bindings[i];
+            const auto& wantItem = want.items[i];
+            CHECK(item.slot == wantItem.slot);
+            switch (wantItem.type)
+            {
+            case 'U':
+              CHECK(
+                T(item.type) == (pushed ? T::PushConstants : T::VolatileConstantBuffer));
+              if (pushed)
+              {
+                CHECK(item.size == setBytes.at(layout));
+              }
+              break;
+            case 'J':
+              CHECK(T(item.type) == T::StructuredBuffer_SRV);
+              break;
+            case 't':
+              CHECK(T(item.type) == T::Texture_SRV);
+              break;
+            default:
+              CHECK(T(item.type) == T::Sampler);
+              break;
+            }
+            const auto& made = (*shape)[set][i];
+            CHECK(made.source == wantItem.source);
+            CHECK(made.slot == wantItem.slot);
+            if (made.source == Source::ImageUnit || made.source == Source::ImageSampler)
+            {
+              CHECK(made.unit == wantItem.unit);
+            }
+            if (made.source == Source::CommonSampler)
+            {
+              CHECK(made.sampler == wantItem.sampler);
+            }
+          }
+        }
+      }
+      // the constant block of the layout's set, its size the uniforms' push size
+      const auto block = engineLayoutConstantBlock(layout);
+      REQUIRE(block);
+      CHECK(block->size == setBytes.at(layout));
+    }
+
+    // every layout with a binding-set shape has layouts of the same shape, and the
+    // passes' own layouts have none
+    for (auto index = 0; index < int(L::Num); ++index)
+    {
+      const auto layout = L(index);
+      CAPTURE(index);
+      const auto shape = engineBindingSetShape(layout);
+      if (!shape)
+      {
+        continue;
+      }
+      const auto descs = engineBindingLayoutDescs(layout, false);
+      REQUIRE(descs);
+      REQUIRE(descs->size() == shape->size());
+      for (std::size_t set = 0; set < shape->size(); ++set)
+      {
+        REQUIRE((*descs)[set].bindings.size() == (*shape)[set].size());
+        for (std::size_t i = 0; i < (*shape)[set].size(); ++i)
+        {
+          CHECK((*descs)[set].bindings[i].slot == (*shape)[set][i].slot);
+        }
+      }
+    }
+    CHECK_FALSE(engineBindingSetShape(L::Tonemap));
+    CHECK_FALSE(engineBindingSetShape(L::Blit));
+    CHECK_FALSE(engineBindingSetShape(L::OctahedronCube));
+
+    // the samplers as the engine creates them (CommonPasses.cpp:71-97): FOG's LinearClamp
+    // and BLENDLIGHT's LinearBorder before the leaked Comparison, NORMAL_CUBE's
+    // LinearWrap after it (D68; P6.19: its first use on a colour cube is LP5.2b's to
+    // measure)
+    using A = nvrhi::SamplerAddressMode;
+    using R = nvrhi::SamplerReductionType;
+    const auto linearClamp = engineCommonSamplerDesc(C::LinearClamp);
+    CHECK(linearClamp.minFilter);
+    CHECK(linearClamp.magFilter);
+    CHECK(linearClamp.mipFilter);
+    CHECK(linearClamp.addressU == A::Clamp);
+    CHECK(linearClamp.addressW == A::Clamp);
+    CHECK(linearClamp.reductionType == R::Standard);
+    const auto linearBorder = engineCommonSamplerDesc(C::LinearBorder);
+    CHECK(linearBorder.addressV == A::Border);
+    CHECK(linearBorder.borderColor == nvrhi::Color{0.0f, 0.0f, 0.0f, 1.0f});
+    CHECK(linearBorder.reductionType == R::Standard);
+    const auto linearWrap = engineCommonSamplerDesc(C::LinearWrap);
+    CHECK(linearWrap.minFilter);
+    CHECK(linearWrap.addressU == A::Wrap);
+    CHECK(linearWrap.addressV == A::Wrap);
+    CHECK(linearWrap.addressW == A::Wrap);
+    CHECK(linearWrap.reductionType == R::Comparison);
+    CHECK(linearWrap.borderColor == nvrhi::Color{0.0f, 0.0f, 0.0f, 1.0f});
+    CHECK(linearWrap.maxAnisotropy == 1.0f);
+    CHECK(engineCommonSamplerDesc(C::AnisotropicWrap).maxAnisotropy == 16.0f);
+    CHECK(engineCommonSamplerDesc(C::PointClamp).reductionType == R::Standard);
+    CHECK_FALSE(engineCommonSamplerDesc(C::PointWrap).minFilter);
+
+    // the push-constant limit (C47, C49): sets 7 (192 bytes) and 8 (208) fit this
+    // machine's 256-byte maxPushConstantsSize, so FOG, BLENDLIGHT and POST_PROCESS_INGAME
+    // push (pcEnabled, RenderProgs.cpp:393); sets 5 and 12 are exactly 256 and push too;
+    // under a set's size a layout is a volatile constant buffer
+    const auto limit = enginePushConstantLimit(256);
+    CHECK(limit == 256u);
+    for (const auto layout :
+         {L::Fog,
+          L::Blendlight,
+          L::PostProcessIngame,
+          L::Legacy,
+          L::NormalCube,
+          L::Texgen,
+          L::Default})
+    {
+      CAPTURE(int(layout));
+      CHECK(enginePushConstantsEnabled(layout, limit, 0x10DE));
+      CHECK(enginePushConstantsEnabled(layout, limit, EngineVendorAmd));
+      CHECK(enginePushConstantsEnabled(layout, setBytes.at(layout), 0x10DE));
+      CHECK_FALSE(enginePushConstantsEnabled(layout, setBytes.at(layout) - 1, 0x10DE));
+    }
+    // TEXTURE_SKINNED is AMD's workaround (RenderProgs.cpp:403-413)
+    CHECK_FALSE(enginePushConstantsEnabled(L::TextureSkinned, limit, EngineVendorAmd));
+    CHECK(enginePushConstantsEnabled(L::TextureSkinned, limit, 0x10DE));
+    // DRAW_INTERACTION_SKINNED's 400 bytes never push here
+    CHECK_FALSE(enginePushConstantsEnabled(L::DrawInteractionSkinned, limit, 0x10DE));
   }
 
   SECTION("the vertex input")

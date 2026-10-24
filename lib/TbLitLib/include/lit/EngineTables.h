@@ -21,7 +21,8 @@
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderProgs.h, RenderProgs.cpp,
 // Passes/CommonPasses.cpp, Passes/TonemapPass.cpp, Passes/TonemapPass_cb.h,
-// NVRHI/Image_NVRHI.cpp, RenderSystem_init.cpp, RenderBackend.cpp, GLState.h,
+// NVRHI/Image_NVRHI.cpp, NVRHI/RenderBackend_NVRHI.cpp, RenderSystem_init.cpp,
+// RenderBackend.cpp, GLState.h,
 // sys/DeviceManager.cpp, sys/DeviceManager_VK.cpp and shaders/renderParmSet*.inc.hlsl):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2013-2025 Robert Beckebans
@@ -303,6 +304,98 @@ inline constexpr auto EngineParmSet10 = std::array<EngineParmSetMember, 25>{{
   {RenderParm::User2, "rpUser2"},
 }};
 
+/**
+ * LP5.0 (C48, SC524-SC526): rpNominalSet5 (RenderProgs.h:271, its layouts :273 LEGACY,
+ * NORMAL_CUBE and its skinned form) and renderParmSet5_t (renderParmSet5.inc.hlsl:32-57),
+ * 16 float4 = 256 bytes, the two lists in the same order: the skybox, wobblesky and
+ * bumpyenvironment programs (69, 70, 57)
+ */
+inline constexpr auto EngineParmSet5 = std::array<EngineParmSetMember, 16>{{
+  {RenderParm::LocalViewOrigin, "rpLocalViewOrigin"},
+  {RenderParm::VertexColorModulate, "rpVertexColorModulate"},
+  {RenderParm::VertexColorAdd, "rpVertexColorAdd"},
+  {RenderParm::Color, "rpColor"},
+  {RenderParm::MvpMatrixX, "rpMVPmatrixX"},
+  {RenderParm::MvpMatrixY, "rpMVPmatrixY"},
+  {RenderParm::MvpMatrixZ, "rpMVPmatrixZ"},
+  {RenderParm::MvpMatrixW, "rpMVPmatrixW"},
+  {RenderParm::ModelMatrixX, "rpModelMatrixX"},
+  {RenderParm::ModelMatrixY, "rpModelMatrixY"},
+  {RenderParm::ModelMatrixZ, "rpModelMatrixZ"},
+  {RenderParm::ProjMatrixW, "rpProjectionMatrixW"},
+  {RenderParm::WobbleSkyX, "rpWobbleSkyX"},
+  {RenderParm::WobbleSkyY, "rpWobbleSkyY"},
+  {RenderParm::WobbleSkyZ, "rpWobbleSkyZ"},
+  {RenderParm::PsxDistortions, "rpPSXDistortions"},
+}};
+
+/**
+ * LP5.0 (C49, SC533-SC537): rpNominalSet7 (RenderProgs.h:281, its layouts :283 FOG,
+ * BLENDLIGHT and their skinned forms) and renderParmSet7_t
+ * (renderParmSet7.inc.hlsl:32-51), 12 float4 = 192 bytes: the fog and blendlight programs
+ * (67, 65). The set has no TEXTUREMATRIX: BlendLight's texture matrix is loaded and never
+ * read (a mirrored fact)
+ */
+inline constexpr auto EngineParmSet7 = std::array<EngineParmSetMember, 12>{{
+  {RenderParm::Color, "rpColor"},
+  {RenderParm::MvpMatrixX, "rpMVPmatrixX"},
+  {RenderParm::MvpMatrixY, "rpMVPmatrixY"},
+  {RenderParm::MvpMatrixZ, "rpMVPmatrixZ"},
+  {RenderParm::MvpMatrixW, "rpMVPmatrixW"},
+  {RenderParm::ProjMatrixW, "rpProjectionMatrixW"},
+  {RenderParm::TexGen0S, "rpTexGen0S"},
+  {RenderParm::TexGen0T, "rpTexGen0T"},
+  {RenderParm::TexGen0Q, "rpTexGen0Q"},
+  {RenderParm::TexGen1S, "rpTexGen1S"},
+  {RenderParm::TexGen1T, "rpTexGen1T"},
+  {RenderParm::PsxDistortions, "rpPSXDistortions"},
+}};
+
+/**
+ * LP5.0 (C47, SC527): rpNominalSet8 (RenderProgs.h:286, its layout :288
+ * POST_PROCESS_INGAME) and renderParmSet8_t (renderParmSet8.inc.hlsl:32-52), 13 float4 =
+ * 208 bytes: the material programs of newStage blocks (MAT:2180-2217)
+ */
+inline constexpr auto EngineParmSet8 = std::array<EngineParmSetMember, 13>{{
+  {RenderParm::WindowCoord, "rpWindowCoord"},
+  {RenderParm::MvpMatrixX, "rpMVPmatrixX"},
+  {RenderParm::MvpMatrixY, "rpMVPmatrixY"},
+  {RenderParm::MvpMatrixZ, "rpMVPmatrixZ"},
+  {RenderParm::MvpMatrixW, "rpMVPmatrixW"},
+  {RenderParm::ProjMatrixY, "rpProjectionMatrixY"},
+  {RenderParm::ProjMatrixW, "rpProjectionMatrixW"},
+  {RenderParm::ModelViewMatrixZ, "rpModelViewMatrixZ"},
+  {RenderParm::EnableSkinning, "rpEnableSkinning"},
+  {RenderParm::AlphaTest, "rpAlphaTest"},
+  {RenderParm::User0, "rpUser0"},
+  {RenderParm::User1, "rpUser1"},
+  {RenderParm::User2, "rpUser2"},
+}};
+
+/**
+ * LP5.0 (C48): rpNominalSet12 (RenderProgs.h:306, its layout :308 TEXGEN) and
+ * renderParmSet12_t (renderParmSet12.inc.hlsl:32-57), 16 float4 = 256 bytes: the
+ * texture_color_texgen program (18) of TG_SCREEN and TG_SCREEN2 stages
+ */
+inline constexpr auto EngineParmSet12 = std::array<EngineParmSetMember, 16>{{
+  {RenderParm::ScreenCorrectionFactor, "rpScreenCorrectionFactor"},
+  {RenderParm::VertexColorModulate, "rpVertexColorModulate"},
+  {RenderParm::VertexColorAdd, "rpVertexColorAdd"},
+  {RenderParm::Color, "rpColor"},
+  {RenderParm::MvpMatrixX, "rpMVPmatrixX"},
+  {RenderParm::MvpMatrixY, "rpMVPmatrixY"},
+  {RenderParm::MvpMatrixZ, "rpMVPmatrixZ"},
+  {RenderParm::MvpMatrixW, "rpMVPmatrixW"},
+  {RenderParm::ProjMatrixW, "rpProjectionMatrixW"},
+  {RenderParm::TextureMatrixS, "rpTextureMatrixS"},
+  {RenderParm::TextureMatrixT, "rpTextureMatrixT"},
+  {RenderParm::TexGen0S, "rpTexGen0S"},
+  {RenderParm::TexGen0T, "rpTexGen0T"},
+  {RenderParm::TexGen0Q, "rpTexGen0Q"},
+  {RenderParm::TexGen0Enabled, "rpTexGen0Enabled"},
+  {RenderParm::PsxDistortions, "rpPSXDistortions"},
+}};
+
 // the number of float4s of each set (the rp*Set<N> lists' lengths), for rpBufSize
 inline constexpr auto EngineParmSetSizes = std::array<int, EngineParmSetCount>{
   8, 7, 5, 16, 16, 16, 14, 12, 13, 45, 25, 68, 16, 12, 32};
@@ -311,7 +404,7 @@ inline constexpr auto EngineParmSetSizes = std::array<int, EngineParmSetCount>{
 // for renderParmNullSet
 int engineParmSetOfLayout(EngineBindingLayout layout);
 
-// the members of a mirrored set (0, 4, 9, 10); empty for the others
+// the members of a mirrored set (0, 4, 9, 10; LP5.0: 5, 7, 8, 12); empty for the others
 std::span<const EngineParmSetMember> engineParmSetMembers(int set);
 
 // ----- the constant blocks of the layouts LP2 uses (C26, P2.19) -----
@@ -399,10 +492,79 @@ const EngineBuiltin* engineBuiltin(int index);
  * layout (CommonPasses.cpp:166-177) for BLIT, which the engine draws its blits with (the
  * builtin BLIT layout, one volatile constant buffer, is never used). The uniforms item is
  * PushConstants(0, size) when pushConstants, else VolatileConstantBuffer(0) (cbStatic is
- * always false). nullopt for a type LP2 does not mirror.
+ * always false). LP5.0 (C45-C49, RenderProgs.cpp:415-750): DEFAULT, TEXTURE, TEXGEN and
+ * LEGACY are { uniforms }, { t0 }, { s0 } of their sets 0, 4, 12 and 5, the skinned
+ * DEFAULT and TEXTURE forms adding the joint buffer at t11 to the uniforms' set;
+ * NORMAL_CUBE { uniforms }, { t0 t1 }, { s0 }; FOG { uniforms }, { t0 t1 }, { s0 s1 };
+ * BLENDLIGHT { uniforms }, { t0 t1 }, { s0 }; POST_PROCESS_INGAME { uniforms t0 t1 t2 },
+ * { s0 } (the uniforms set's visibility All); DRAW_INTERACTION_SKINNED is
+ * DRAW_INTERACTION with the joint buffer. nullopt for a type the tables do not mirror.
  */
 std::optional<std::vector<nvrhi::BindingLayoutDesc>> engineBindingLayoutDescs(
   EngineBindingLayout layout, bool pushConstants);
+
+// ----- binding sets (LP5.0, C45-C49) -----
+
+// CommonPasses' samplers by name (CommonPasses.cpp:71-97, engineCommonSamplers)
+enum class EngineCommonSampler
+{
+  PointClamp,
+  PointWrap,
+  LinearClamp,
+  LinearBorder,
+  LinearClampCompare,
+  LinearWrap,
+  AnisotropicWrap,
+  AnisotropicClampEdge,
+};
+
+// the desc of a common sampler, as engineCommonSamplers builds it
+nvrhi::SamplerDesc engineCommonSamplerDesc(EngineCommonSampler sampler);
+
+/**
+ * What one item of a binding set holds, as idRenderBackend::GetCurrentBindingLayout
+ * fills it (RenderBackend_NVRHI.cpp:566-1990): the uniforms (the constant buffer or the
+ * push constants of the layout's set), the joint buffer, the texture bound at a unit
+ * (GetImageAt( unit )), that texture's own sampler (GetImageAt( unit )->GetSampler, the
+ * per-image sampler of engineImageSamplerDesc) or one of CommonPasses' samplers.
+ */
+struct EngineBindingSetItem
+{
+  enum class Source
+  {
+    Uniforms,
+    JointBuffer,
+    ImageUnit,
+    ImageSampler,
+    CommonSampler,
+  };
+  Source source = Source::Uniforms;
+  // the register the item binds (t, s or b)
+  std::uint32_t slot = 0;
+  // ImageUnit, ImageSampler: the texture unit
+  std::uint32_t unit = 0;
+  // CommonSampler
+  EngineCommonSampler sampler = EngineCommonSampler::PointClamp;
+
+  bool operator==(const EngineBindingSetItem&) const = default;
+};
+
+/**
+ * The binding sets of a layout type in set order, item for item as the layout's
+ * engineBindingLayoutDescs, with r_renderMode "0" (R_UsePixelatedLook false: never the
+ * point samplers the pixelated look picks): CONSTANT_BUFFER_ONLY (:666-679); DEFAULT,
+ * TEXTURE, TEXGEN, LEGACY (:586-623) and the skinned DEFAULT and TEXTURE (:624-665): unit
+ * 0 at t0, its own sampler at s0; DRAW_INTERACTION and its skinned form (:916-1081):
+ * units 0-2 at t0-t2, 3-4 at t3-t4, AnisotropicWrap and LinearBorder;
+ * AMBIENT_LIGHTING_IBL and its skinned form (:698-883): AnisotropicWrap and LinearClamp;
+ * FOG (:1286-1329): units 0-1, LinearClamp at s0 and s1; BLENDLIGHT (:1378-1418): units
+ * 0-1, LinearBorder; POST_PROCESS_INGAME (:1464-1512): units 0-2 beside the uniforms,
+ * LinearClamp; NORMAL_CUBE (:1677-1734): units 0-1, LinearWrap, which carries the
+ * Comparison reduction of the leaked desc (D68) as the engine creates it. nullopt for the
+ * passes' own layouts and the types the tables do not mirror.
+ */
+std::optional<std::vector<std::vector<EngineBindingSetItem>>> engineBindingSetShape(
+  EngineBindingLayout layout);
 
 // NVRHI's default Vulkan binding offsets, equal to the engine's -fvk-*-shift options
 // (cmake/compileshaders.cmake:120-122, SC251); never changed (C2)
