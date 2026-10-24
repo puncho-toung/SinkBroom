@@ -142,6 +142,11 @@ struct FrameLogRow
   std::optional<std::uint64_t> feedApplied;
   std::optional<double> feedMs;
   std::optional<std::uint64_t> overrideBytes;
+  // LP5.1 (C45, C46), frame rows: the lights with interactions that entered the math
+  // phase (pc.c_mathLights, RenderBackend.cpp:4022-4029) and the ambientLight lights
+  // among the lights of both phases (the preview's own count)
+  std::optional<std::uint64_t> mathLights;
+  std::optional<std::uint64_t> ambientLights;
 };
 
 // the CSV header line, ending in a newline

@@ -122,6 +122,13 @@ struct LitFrameStats
   std::size_t lightsVisible = 0;
   std::size_t lightsDrawn = 0;
   std::size_t lightsOverflowed = 0;
+  // LP5.1 (C45): pc.c_textureLights and pc.c_mathLights, the lights with interactions
+  // that entered the texture and the math phase (RenderBackend.cpp:4022-4029, overflowed
+  // ones too), and the preview's own count of the ambientLight lights among them (no
+  // engine counter, P6.13)
+  std::size_t textureLights = 0;
+  std::size_t mathLights = 0;
+  std::size_t ambientLights = 0;
   // U2.11: draws dropped for the volatile constant buffer's budget (D76), the prepass's
   // (a perforated surface on a device whose TEXTURE layout is a volatile buffer) and any
   // interaction's
@@ -288,8 +295,9 @@ inline constexpr std::size_t LitTextureUnits = 15;
  * where the device's limit allows, the layout says which); its writes are counted while
  * recording and a frame writes at most maxVersions / (FramesInFlight + 1), since the
  * versions of the frames before it are recycled only once NVRHI knows they finished: a
- * light whose worst case would pass that is not drawn, nor any light after it, and they
- * count as overflowed.
+ * light whose worst case would pass that is not drawn, nor any light after it in the
+ * draw order (LP5.1, P6.13: the rest of its phase and the whole math phase after the
+ * texture phase), and they count as overflowed.
  *
  * Threads: the render thread; releaseAll in teardown step 2.
  */

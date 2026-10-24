@@ -1928,6 +1928,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.lightsVisible = litStats.lightsVisible;
       row.lightsDrawn = litStats.lightsDrawn;
       row.lightsOverflowed = litStats.lightsOverflowed;
+      // LP5.1 (C45): the math phase's lights and the ambientLight lights
+      row.mathLights = litStats.mathLights;
+      row.ambientLights = litStats.ambientLights;
       row.constantBytes = litStats.constantBytes + tonemap.constantBytes;
       row.volatileWrites = litStats.constantWrites + tonemap.constantWrites;
       row.volatileWriteBudget = litStats.constantWriteBudget;

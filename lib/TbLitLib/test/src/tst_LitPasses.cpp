@@ -1809,6 +1809,34 @@ TEST_CASE("LitPasses: R_AddSingleLight's register snap and the math light test")
   CHECK(user[0] == Vec4{0, 1, 0, 0});
   CHECK(user[1] == Vec4{2, 0, 0, 0});
   CHECK(user[2] == Vec4{0, 0, 0, 1});
+  // LP5.1 (C45): a math light's mlMode is 1 + r_showMathLights (0), its fields as
+  // parsed (RenderBackend.cpp:1934-1965)
+  const auto mathUser = engineMathLightParms(math, true);
+  CHECK(mathUser[0] == Vec4{1, 1, 0, 0});
+  CHECK(mathUser[1] == user[1]);
+  CHECK(mathUser[2] == user[2]);
+
+  // LP5.1 (C45, D112): units 3 and 4 of a math light and a texture light
+  {
+    const auto falloff = imageKey("falloff", engine_image::UsageLight);
+    const auto projection = imageKey("projection", engine_image::UsageLight);
+    auto lightStage = stageOf(em::LightingDiffuse, projection);
+    // a texture light: its falloff and its stage's image
+    const auto textureUnits = engineLightStageUnits(false, falloff, lightStage);
+    REQUIRE(textureUnits);
+    CHECK((*textureUnits)[0] == falloff);
+    CHECK((*textureUnits)[1] == projection);
+    // a math light: _white at both (RenderBackend.cpp:1914-1921)
+    const auto mathUnits = engineLightStageUnits(true, falloff, lightStage);
+    REQUIRE(mathUnits);
+    CHECK((*mathUnits)[0] == engineWhiteImageKey());
+    CHECK((*mathUnits)[1] == engineWhiteImageKey());
+    // M-PASS-GUARD-01: a stage without an image (a cinematic's) is not drawn for a
+    // texture light, and is for a math light, which never reads it
+    lightStage.image.reset();
+    CHECK_FALSE(engineLightStageUnits(false, falloff, lightStage));
+    CHECK(engineLightStageUnits(true, falloff, lightStage));
+  }
 }
 
 TEST_CASE("LitPasses: the lists' table key moves once per re-parse (LPF.0b, C43, D106)")

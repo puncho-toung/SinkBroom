@@ -313,8 +313,23 @@ std::optional<InteractionDraw> pendingSurfaceInteraction(
  * USER0, USER1 and USER2 of a light stage (RenderBackend.cpp:1934-1965): (mlMode, type,
  * falloff, pattern), (falloffExp, innerRadius, shapeExp, penumbra), (patternStrength,
  * patternScale, patternPhase, energyClamp); mlMode 0 for a texture light, 1 +
- * r_showMathLights (0) for a math light.
+ * r_showMathLights (EngineFrame.showMathLights, 0) for a math light (mathPath: LP5.1,
+ * engineLightUsesMathPath, :1937). The blob evaluates the curve, mask and pattern from
+ * them and clamps and linearises the result (mathlight.inc.hlsl MLEvaluate, then
+ * sRGBToLinearRGB at interaction.ps.hlsl:179): nothing of it is the preview's. Pure.
  */
 std::array<Vec4, 3> engineMathLightParms(const MathLightParms& light, bool mathPath);
+
+/**
+ * LP5.1 (C45, D112): what a light stage binds at the falloff and projection units 3 and 4
+ * (RenderBackend.cpp:1914-1931): _white at both for a math light (it samples neither, and
+ * its stage image is never read, so a stage without one is drawn), else the light's
+ * falloff image and the stage's image (none for a stage without one: a cinematic's, which
+ * the preview does not draw, mirror.json M-PASS-GUARD-01). Pure.
+ */
+std::optional<std::array<MaterialImageKey, 2>> engineLightStageUnits(
+  bool mathPath,
+  const std::optional<MaterialImageKey>& falloffImage,
+  const MaterialStage& lightStage);
 
 } // namespace tb::lit

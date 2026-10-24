@@ -43,6 +43,7 @@
 #include <nvrhi/utils.h>
 
 #include <algorithm>
+#include <cassert>
 
 namespace tb::lit
 {
@@ -759,7 +760,10 @@ std::uint64_t LitPasses::worstCaseWrites(const ViewLight& light) const
 
 void LitPasses::recordInteractions(Frame& frame)
 {
-  // DrawInteractionsPass (RenderBackend.cpp:3984-4171) for the texture lights
+  // DrawInteractions (RenderBackend.cpp:4179-4251): r_skipInteractions and no view lights
+  // return (the caller's test and this one), then two ordered phases over the one sorted
+  // list, DrawInteractionsPass( false ) for the texture lights and DrawInteractionsPass(
+  // true ) for the math lights (LP5.1, C45), each keeping the largest-first order
   if (m_lists.lights.empty())
   {
     return;
@@ -770,62 +774,104 @@ void LitPasses::recordInteractions(Frame& frame)
     frame.inputs->pipelines->layouts(EngineBindingLayout::DrawInteraction);
   const auto counted = interactionLayouts.state != BindingLayoutLookup::State::Ready
                        || !pushesConstants(interactionLayouts.layouts);
+  // D76 (P6.13): one budget and one overflow over both phases, in their draw order: once
+  // a light overflows, no light after it is drawn, the rest of its phase and every light
+  // of the later phase
   auto overflowing = false;
-  for (const auto& light : m_lists.lights)
+  for (const auto mathPass : {false, true})
   {
-    if (overflowing)
+    // DrawInteractionsPass (RenderBackend.cpp:3984-4171)
+    for (const auto& light : m_lists.lights)
     {
-      ++m_stats.lightsOverflowed;
-      continue;
-    }
-    // a pass boundary between lights
-    if (frame.inputs->stopRequested && frame.inputs->stopRequested())
-    {
-      m_stats.stoppedEarly = true;
-      return;
-    }
-    // D76: no light whose worst case would pass the frame's writes is added, nor any
-    // after it
-    const auto writes = m_frameWrites[EngineBindingLayout::DrawInteraction];
-    if (counted && writes + worstCaseWrites(light) > budget)
-    {
-      overflowing = true;
-      ++m_stats.lightsOverflowed;
-      if (!m_overflowWarned && frame.inputs->warn)
+      // do fogging later (:3999-4007); LP5.1: the frontend lists no fog or blend light
+      // yet (LP5.3 lifts its skip), so neither phase meets one
+      assert(!light.shader->fogLight && !light.shader->blendLight);
+      if (light.shader->fogLight || light.shader->blendLight)
       {
-        m_overflowWarned = true;
-        frame.inputs->warn(fmt::format(
-          "The lit preview's interactions overflowed its constant buffer ({} writes a "
-          "frame): some lights are not drawn",
-          budget));
+        continue;
       }
-      continue;
-    }
-
-    // GL_State( GLS_DEFAULT ), ALPHA_TEST 0, ResetViewportAndScissorToDefaultCamera
-    m_parms.set(RenderParm::AlphaTest, ZeroVec4);
-    m_currentScissor = viewScissor(frame.view);
-    m_scissor = engineScissorRect(frame.view, m_currentScissor);
-    m_logLight = light.record->id;
-
-    for (const auto& [surfaces, list, depthFunc] :
-         {std::tuple{
-            &light.localInteractions, InteractionList::Local, gls::DepthFuncEqual},
-          std::tuple{
-            &light.globalInteractions, InteractionList::Global, gls::DepthFuncEqual},
-          std::tuple{
-            &light.translucentInteractions,
-            InteractionList::Translucent,
-            gls::DepthFuncLess}})
-    {
-      if (!renderInteractions(frame, light, *surfaces, list, depthFunc))
+      if (
+        light.localInteractions.empty() && light.globalInteractions.empty()
+        && light.translucentInteractions.empty())
       {
-        m_stats.interactionsDisabled = true;
+        continue;
+      }
+      // filter to this phase (:4014-4021) and count (:4022-4029): the lights with
+      // interactions that entered the phase; ambientLights is the preview's own count
+      const auto isMathLight = engineLightUsesMathPath(light.record->light.parms);
+      if (isMathLight != mathPass)
+      {
+        continue;
+      }
+      ++(isMathLight ? m_stats.mathLights : m_stats.textureLights);
+      if (light.shader->ambientLight)
+      {
+        ++m_stats.ambientLights;
+      }
+
+      if (overflowing)
+      {
+        ++m_stats.lightsOverflowed;
+        continue;
+      }
+      // a pass boundary between lights
+      if (frame.inputs->stopRequested && frame.inputs->stopRequested())
+      {
+        m_stats.stoppedEarly = true;
         return;
       }
+      // D76: no light whose worst case would pass the frame's writes is added, nor any
+      // after it
+      const auto writes = m_frameWrites[EngineBindingLayout::DrawInteraction];
+      if (counted && writes + worstCaseWrites(light) > budget)
+      {
+        overflowing = true;
+        ++m_stats.lightsOverflowed;
+        if (!m_overflowWarned && frame.inputs->warn)
+        {
+          m_overflowWarned = true;
+          frame.inputs->warn(fmt::format(
+            "The lit preview's interactions overflowed its constant buffer ({} writes a "
+            "frame): some lights are not drawn",
+            budget));
+        }
+        continue;
+      }
+
+      // per light, before its lists (:4122-4127): GL_State( GLS_DEFAULT ) (each draw's
+      // pipeline key carries its whole state, D75, so it changes no draw), ALPHA_TEST 0,
+      // ResetViewportAndScissorToDefaultCamera
+      m_parms.set(RenderParm::AlphaTest, ZeroVec4);
+      m_currentScissor = viewScissor(frame.view);
+      m_scissor = engineScissorRect(frame.view, m_currentScissor);
+      m_logLight = light.record->id;
+
+      for (const auto& [surfaces, list, depthFunc] :
+           {std::tuple{
+              &light.localInteractions, InteractionList::Local, gls::DepthFuncEqual},
+            std::tuple{
+              &light.globalInteractions, InteractionList::Global, gls::DepthFuncEqual},
+            std::tuple{
+              &light.translucentInteractions,
+              InteractionList::Translucent,
+              gls::DepthFuncLess}})
+      {
+        // r_skipTranslucent (:4145)
+        if (list == InteractionList::Translucent && EngineFrame.skipTranslucent)
+        {
+          continue;
+        }
+        if (!renderInteractions(frame, light, *surfaces, list, depthFunc))
+        {
+          m_stats.interactionsDisabled = true;
+          return;
+        }
+      }
+      ++m_stats.lightsDrawn;
     }
-    ++m_stats.lightsDrawn;
   }
+  // disable stencil shadow test: GL_State( GLS_DEFAULT ) after both phases (:4237), which
+  // the next pass's draws replace by their own pipelines
 }
 
 bool LitPasses::renderInteractions(
@@ -857,6 +903,8 @@ bool LitPasses::renderInteractions(
   const auto& record = *light.record;
   const auto& lightRegs = light.registers;
   const auto noSpecular = record.light.parms.noSpecular;
+  // LP5.1 (C45): R_LightUsesMathPath( vLight ) (RenderBackend.cpp:1914, 1937)
+  const auto mathPath = engineLightUsesMathPath(record.light.parms);
   const auto ordered = engineOrderInteractionSurfaces(surfaces);
   auto& images = *frame.inputs->images;
   const auto usage =
@@ -898,17 +946,21 @@ bool LitPasses::renderInteractions(
       lightTextureMatrix = engineShaderTextureMatrix(lightRegs, lightStage);
     }
 
-    // texture 3 the light falloff, texture 4 the light projection (a texture light)
-    if (!lightStage.image)
+    // texture 3 the light falloff, texture 4 the light projection; LP5.1 (C45, D112):
+    // _white at both for a math light, which never reads its stage image, so a stage
+    // without one is drawn there (RenderBackend.cpp:1906-1931)
+    const auto lightUnits =
+      engineLightStageUnits(mathPath, record.derived.shader.falloffImage, lightStage);
+    if (!lightUnits)
     {
-      // a cinematic stage: no image to bind (mirror.json M-PASS-GUARD-01)
+      // a texture light's cinematic stage: no image to bind (mirror.json M-PASS-GUARD-01)
       continue;
     }
-    m_units[3] = record.derived.shader.falloffImage;
-    m_units[4] = *lightStage.image;
+    m_units[3] = (*lightUnits)[0];
+    m_units[4] = (*lightUnits)[1];
 
-    // USER0-2
-    const auto user = engineMathLightParms(record.light.parms.mathLight, false);
+    // USER0-2 (:1934-1965)
+    const auto user = engineMathLightParms(record.light.parms.mathLight, mathPath);
     m_parms.set(RenderParm::User0, user[0]);
     m_parms.set(RenderParm::User1, user[1]);
     m_parms.set(RenderParm::User2, user[2]);

@@ -581,12 +581,31 @@ std::optional<InteractionDraw> pendingSurfaceInteraction(
 
 std::array<Vec4, 3> engineMathLightParms(const MathLightParms& m, const bool mathPath)
 {
-  // flags.x: 0 = legacy path, 1 = math on (r_showMathLights 0)
-  const auto mlMode = mathPath ? 1.0f : 0.0f;
+  // flags.x: 0 = legacy path, 1 = math on, 2-4 = debug views
+  const auto mlMode = mathPath ? 1.0f + float(EngineFrame.showMathLights) : 0.0f;
   return {
     Vec4{mlMode, float(m.type), float(m.falloff), float(m.pattern)},
     Vec4{m.falloffExp, m.innerRadius, m.shapeExp, m.penumbra},
     Vec4{m.patternStrength, m.patternScale, m.patternPhase, m.energyClamp ? 1.0f : 0.0f}};
+}
+
+std::optional<std::array<MaterialImageKey, 2>> engineLightStageUnits(
+  const bool mathPath,
+  const std::optional<MaterialImageKey>& falloffImage,
+  const MaterialStage& lightStage)
+{
+  // a math light samples neither of these: the shared neutral image instead of the
+  // light's own (RenderBackend.cpp:1906-1921)
+  if (mathPath)
+  {
+    return std::array{engineWhiteImageKey(), engineWhiteImageKey()};
+  }
+  // texture 1 will be the light falloff texture, texture 2 the light projection texture
+  if (!falloffImage || !lightStage.image)
+  {
+    return std::nullopt;
+  }
+  return std::array{*falloffImage, *lightStage.image};
 }
 
 } // namespace tb::lit

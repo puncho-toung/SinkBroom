@@ -119,6 +119,14 @@ std::string feedFields(const FrameLogRow& row)
     optionalCount(row.overrideBytes));
 }
 
+// LP5.1's columns, the interaction phases': the math lights and the ambientLight lights;
+// empty in a start or stop row
+std::string phaseFields(const FrameLogRow& row)
+{
+  return fmt::format(
+    "{},{}", optionalCount(row.mathLights), optionalCount(row.ambientLights));
+}
+
 std::string_view eventName(const FrameLogEvent event)
 {
   switch (event)
@@ -145,7 +153,7 @@ std::string_view frameLogHeader()
          "overflowed,constant_bytes,volatile_writes,volatile_write_budget,push_constant_"
          "bytes,settled,alloc_refused,culled_triangles,view_area,areas_flowed,lights_in_"
          "view,portal_chains,flow_ms,ambient_draws,gpu_ambient_ms,ambient_writes,grid_"
-         "surfaces,feed_applied,feed_ms,override_bytes\n";
+         "surfaces,feed_applied,feed_ms,override_bytes,math_lights,ambient_lights\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -157,14 +165,14 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   if (row.event != FrameLogEvent::Frame)
   {
     return fmt::format(
-      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n",
+      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,
       resourceFields(row));
   }
   return fmt::format(
-    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
     row.session,
     eventName(row.event),
     row.frameIndex,
@@ -182,7 +190,8 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     passFields(row),
     refusalFields(row),
     flowFields(row),
-    feedFields(row));
+    feedFields(row),
+    phaseFields(row));
 }
 
 std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& path)
