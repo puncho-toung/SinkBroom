@@ -30,6 +30,7 @@
 #include "lit/EngineBuiltins.h"
 #include "lit/EnginePipelineState.h"
 #include "lit/EngineTables.h"
+#include "lit/GridTable.h"
 #include "lit/ImageCache.h"
 #include "lit/LightData.h"
 #include "lit/LightParse.h"
@@ -979,6 +980,9 @@ struct FlowScene
   LightTable lights;
   const ProcTree* tree = nullptr;
   const AreaData* areas = nullptr;
+  // LP4.3 (C36): the light grid and the areas whose grid is valid
+  const GridTable* grid = nullptr;
+  std::set<int> validGrids;
 };
 
 // a chunk of one triangle whose bounds are mins..maxs (the frontend reads its key, its
@@ -1053,6 +1057,11 @@ FrontendLists flowListsOf(
   inputs.lights = &scene.lights;
   inputs.tree = scene.tree;
   inputs.areas = scene.areas;
+  if (scene.grid)
+  {
+    inputs.grid = scene.grid;
+    inputs.gridValid = [&](const int area) { return scene.validGrids.contains(area); };
+  }
   inputs.material = [&](const std::string& name) {
     const auto slot = f.table->find(name);
     return MaterialAnswer{slot ? slot->entry : nullptr, !slot};
@@ -1349,6 +1358,166 @@ TEST_CASE("LitPasses: the frontend on the view's portal flow (LP4.1, C33, D81)")
       rect.zmax = projected->zmax;
       return rect;
     }());
+  }
+}
+
+// LP4.3 (C36, P4.11, D81): the grid area of each drawn surface, on the LP1b fixture's
+// tree and a synthetic grid of both areas, the valid ones the test's
+TEST_CASE("LitPasses: the grid area of the drawn surfaces (LP4.3, C36, P4.11)")
+{
+  auto f = frontendFixture();
+  const auto tree =
+    readProcFile(readTextFile(
+      litFixtureFolder() / "goldens" / "lp1b_geometry" / "lp1b_geometry.proc"))
+    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  const auto areas = buildAreaData(tree);
+  REQUIRE(areas.areas.size() == 2u);
+  auto grid = GridTable{};
+  grid.version = 1;
+  for (auto i = 0; i < 2; ++i)
+  {
+    auto area = GridArea{};
+    area.area = i;
+    area.hasPoints = true;
+    area.atlas = lightGridImageKey("maps/lp1b_geometry", i);
+    grid.areas.push_back(area);
+  }
+  constexpr auto World = PreviewId{1};
+  constexpr auto Crate = PreviewId{20};
+  constexpr auto Long = PreviewId{21};
+  constexpr auto Stray = PreviewId{22};
+  // from area 0 looking west through the portal: area 0 and area 1 flowed
+  const auto camera = cameraAt({200, 0, 48}, {-1, 0, 0});
+
+  auto scene = FlowScene{};
+  scene.tree = &tree;
+  scene.areas = &areas;
+  scene.grid = &grid;
+  // a world chunk in each room, in front of the eye, and one in solid (the outside set)
+  addChunk(scene, 0, World, {40, -20, 20}, {50, 20, 80});
+  addChunk(scene, 1, World, {-30, -20, 20}, {-20, 20, 60}, "textures/lp1b/floor");
+  addChunk(scene, -1, World, {100, -10, 30}, {110, 10, 60}, "textures/lp1b/crate");
+  // a crate whose centre (120 0 48) lies in its own area 0
+  addEntity(
+    scene,
+    Crate,
+    {120, 0, 48},
+    EngineBounds{EngineVec3{-8, -8, -8}, EngineVec3{8, 8, 8}},
+    {0});
+  scene.entities.at(Crate).materialBounds.emplace(
+    "textures/lp1b/crate", EngineBounds{EngineVec3{-8, -8, -8}, EngineVec3{8, 8, 8}});
+  addChunk(scene, 0, Crate, {-8, -8, -8}, {8, 8, 8}, "textures/lp1b/crate");
+  // a long entity spread over two cells, one material: its union's centre (world x 0)
+  // lies in area 1 though one of its chunks is in area 0's room
+  addEntity(
+    scene,
+    Long,
+    {-200, 0, 48},
+    EngineBounds{EngineVec3{0, -4, -4}, EngineVec3{400, 4, 4}},
+    {0, 1});
+  scene.entities.at(Long).materialBounds.emplace(
+    "textures/lp1b/wall", EngineBounds{EngineVec3{0, -4, -4}, EngineVec3{400, 4, 4}});
+  {
+    auto chunk = Chunk{};
+    chunk.key = ChunkKey{0, Long, "textures/lp1b/wall", {0, 0, 0}, 0};
+    chunk.verts.resize(3);
+    chunk.verts[0].xyz = {0, -4, -4};
+    chunk.verts[1].xyz = {150, 4, 4};
+    chunk.verts[2].xyz = {0, 4, -4};
+    chunk.indexes = {0, 1, 2};
+    chunk.bounds = {EngineVec3{0, -4, -4}, EngineVec3{150, 4, 4}};
+    scene.chunks.emplace(chunk.key, chunk);
+    chunk.key.cell = {1, 0, 0};
+    chunk.verts[0].xyz = {250, -4, -4};
+    chunk.verts[1].xyz = {360, 4, 4};
+    chunk.verts[2].xyz = {250, 4, -4};
+    chunk.bounds = {EngineVec3{250, -4, -4}, EngineVec3{360, 4, 4}};
+    scene.chunks.emplace(chunk.key, chunk);
+  }
+  // an entity whose material's centre (300 0 48, east of the room) is in solid,
+  // referenced in both areas in the chain order { 1, 0 }: the first valid reference
+  addEntity(
+    scene,
+    Stray,
+    {100, 0, 48},
+    EngineBounds{EngineVec3{-4, -4, -4}, EngineVec3{4, 4, 4}},
+    {1, 0});
+  scene.entities.at(Stray).materialBounds.emplace(
+    "textures/lp1b/crate", EngineBounds{EngineVec3{190, -4, -4}, EngineVec3{210, 4, 4}});
+  addChunk(scene, 0, Stray, {-4, -4, -4}, {4, 4, 4}, "textures/lp1b/crate");
+
+  const auto gridAreas = [](const FrontendLists& lists) {
+    auto out = std::map<std::pair<PreviewId, int>, std::optional<int>>{};
+    for (const auto& surface : lists.drawSurfs)
+    {
+      out[{
+        surface.chunk->key.entity,
+        surface.chunk->key.cell[0] * 10 + surface.chunk->key.area}] = surface.gridArea;
+    }
+    return out;
+  };
+
+  SECTION("both grids valid")
+  {
+    scene.validGrids = {0, 1};
+    const auto lists = flowListsOf(*f, scene, camera);
+    REQUIRE(lists.flowed);
+    REQUIRE(lists.areasFlowed == 2u);
+    const auto got = gridAreas(lists);
+    using Key = std::pair<PreviewId, int>;
+    // the world: refs [N], its own area
+    CHECK(got.at(Key{World, 0}) == 0);
+    CHECK(got.at(Key{World, 1}) == 1);
+    // the outside set: none (the probe path, D81)
+    CHECK(got.at(Key{World, -1}) == std::nullopt);
+    // the centre's own area
+    CHECK(got.at(Key{Crate, 0}) == 0);
+    // one centre for both cells: area 1, the first loop
+    CHECK(got.at(Key{Long, 0}) == 1);
+    CHECK(got.at(Key{Long, 10}) == 1);
+    // the centre in solid: the first reference with a valid grid in chain order
+    CHECK(got.at(Key{Stray, 0}) == 1);
+    CHECK(lists.gridSurfaces == 6u);
+  }
+
+  SECTION("area 1's grid not valid: the first valid reference")
+  {
+    scene.validGrids = {0};
+    const auto got = gridAreas(flowListsOf(*f, scene, camera));
+    using Key = std::pair<PreviewId, int>;
+    CHECK(got.at(Key{World, 0}) == 0);
+    CHECK(got.at(Key{World, 1}) == std::nullopt);
+    CHECK(got.at(Key{Crate, 0}) == 0);
+    // the centre's area 1 has no valid grid: the first loop finds none, the second area 0
+    CHECK(got.at(Key{Long, 0}) == 0);
+    CHECK(got.at(Key{Long, 10}) == 0);
+    CHECK(got.at(Key{Stray, 0}) == 0);
+  }
+
+  SECTION("no valid grid anywhere: every surface on the probe path")
+  {
+    scene.validGrids = {};
+    const auto lists = flowListsOf(*f, scene, camera);
+    for (const auto& surface : lists.drawSurfs)
+    {
+      CHECK_FALSE(surface.gridArea);
+    }
+    CHECK(lists.gridSurfaces == 0u);
+  }
+
+  SECTION("no grid table, or no tree: none")
+  {
+    scene.validGrids = {0, 1};
+    auto noGrid = scene;
+    noGrid.grid = nullptr;
+    CHECK(flowListsOf(*f, noGrid, camera).gridSurfaces == 0u);
+    auto noTree = scene;
+    noTree.tree = nullptr;
+    noTree.areas = nullptr;
+    const auto lists = flowListsOf(*f, noTree, camera);
+    CHECK_FALSE(lists.flowed);
+    CHECK(lists.gridSurfaces == 0u);
   }
 }
 

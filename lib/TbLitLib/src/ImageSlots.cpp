@@ -179,6 +179,7 @@ void ImageSlots::dropPixels(const ImageSlotId id)
   if (slot.state == State::Loading)
   {
     slot.state = State::Resident;
+    ++m_stateVersion;
   }
 }
 
@@ -190,6 +191,7 @@ void ImageSlots::refuse(const ImageSlotId id, std::string reason)
   slot.pixels.reset();
   slot.state = State::Default;
   slot.reason = std::move(reason);
+  ++m_stateVersion;
 }
 
 ImageSlotId ImageSlots::provideForTesting(
@@ -331,11 +333,17 @@ void ImageSlots::releaseAll()
   m_changed.clear();
 }
 
+std::uint64_t ImageSlots::stateVersion() const
+{
+  return m_stateVersion;
+}
+
 void ImageSlots::adopt(
   const ImageSlotId id, const ImageLookup& lookup, const std::uint64_t change)
 {
   auto& slot = m_slots[id];
   m_pending.erase(id);
+  ++m_stateVersion;
   // U2.1: the facts, never the service's slot (it owns the image's bytes)
   slot.adoptedUsage =
     lookup.slot ? std::optional{lookup.slot->name.usage} : std::optional<int>{};
@@ -378,6 +386,7 @@ void ImageSlots::reRequest(const ImageSlotId id, const std::uint64_t frame)
   slot.adoptedFormat.reset();
   slot.reason.clear();
   slot.state = State::Pending;
+  ++m_stateVersion;
   bump(id);
   m_pending.insert(id);
   if (m_request)

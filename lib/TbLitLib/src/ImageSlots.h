@@ -157,6 +157,8 @@ private:
   std::vector<ImageSlotId> m_changed;
   std::uint64_t m_tableVersion = 0;
   std::uint64_t m_seenChanges = 0;
+  // LP4.3 (D79, P4.6): bumped on every change of a slot's state
+  std::uint64_t m_stateVersion = 0;
   // textures let go, until the frames that used them have finished (D35)
   RetiredResources m_retired;
 
@@ -212,6 +214,14 @@ public:
 
   // the slots whose version changed since the last call, each once
   std::vector<ImageSlotId> takeChangedSlots();
+
+  /**
+   * LP4.3 (D79, P4.6): a counter bumped whenever a slot's state changes (an answer:
+   * Pending to Loading or Default; every level written: Loading to Resident; a refusal; a
+   * re-request back to Pending), so that what depends on the states (the light grid's
+   * dispatch, C36) knows when to look again. A new slot is Pending and bumps nothing.
+   */
+  std::uint64_t stateVersion() const;
 
   // D35: the textures let go in frames that have finished are released
   void collectRetired(std::uint64_t completedFrames);

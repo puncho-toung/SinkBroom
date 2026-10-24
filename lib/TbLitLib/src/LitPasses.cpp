@@ -179,6 +179,7 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
 
   rebuildLists(inputs, frame.view);
   m_stats.lightsVisible = m_lists.lights.size();
+  m_stats.gridSurfaces = m_lists.gridSurfaces;
   // LP4.1 (C16): the flow behind the lists; its time only when it ran this frame
   m_stats.viewArea = m_lists.viewArea;
   m_stats.areasFlowed = m_lists.areasFlowed;
@@ -351,6 +352,11 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   key.lightsVersion = inputs.lights ? inputs.lights->version : 0;
   key.tree = inputs.procTree.get();
   key.areas = inputs.areas.get();
+  // LP4.3 (D79): the grid's dispatch reads the atlas slots' states, only with a grid
+  const auto hasGrid = inputs.grid && !inputs.grid->areas.empty();
+  key.grid = inputs.grid.get();
+  key.gridVersion = inputs.grid ? inputs.grid->version : 0;
+  key.slotStates = hasGrid && inputs.images ? inputs.images->stateVersion() : 0;
   key.registry = table ? table->registry : 0;
   key.lightTrianglesVersion = m_lightTriangles.version();
   key.lightTriangleCull = m_lightTriangleCull;
@@ -377,6 +383,24 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   frontend.lights = inputs.lights.get();
   frontend.tree = inputs.procTree.get();
   frontend.areas = inputs.areas.get();
+  // LP4.3 (C36): an area's grid is valid when it has points and its atlas slot holds an
+  // image (Resident, or Loading: its texture is made and written as the frame uploads);
+  // Pending is not loaded yet, Default the engine's defaulted image (D88)
+  if (hasGrid && inputs.images)
+  {
+    frontend.grid = inputs.grid.get();
+    frontend.gridValid = [&](const int area) {
+      const auto* grid = inputs.grid->find(area);
+      if (!grid || !grid->hasPoints)
+      {
+        return false;
+      }
+      const auto id = inputs.images->find(grid->atlas);
+      const auto* slot = id ? inputs.images->slot(*id) : nullptr;
+      return slot
+             && (slot->state == ImageSlots::State::Resident || slot->state == ImageSlots::State::Loading);
+    };
+  }
   frontend.material = [&](const std::string& name) {
     if (const auto slot = table->find(name))
     {

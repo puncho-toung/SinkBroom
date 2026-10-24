@@ -34,10 +34,15 @@
 #include "ViewFlow.h"
 #include "lit/AreaData.h"
 #include "lit/EngineTables.h"
+#include "lit/GridTable.h"
 #include "lit/ProcFile.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <map>
+#include <string>
+#include <utility>
 
 namespace tb::lit
 {
@@ -310,6 +315,68 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   lists.connectedAreas = flow.connectedAreas;
   const auto numAreas = flow.flowed ? inputs.areas->areas.size() : std::size_t{0};
 
+  // LP4.3 (C36, P4.11): the grid areas need a tree and a grid; a world area's model
+  // surface of a material is the union of the area's world chunks of it (the _areaN
+  // model's surface, RenderWorld_load.cpp:1029-1095), as an entity's materialBounds are
+  const auto hasGrid =
+    flow.flowed && inputs.grid && !inputs.grid->areas.empty() && inputs.gridValid;
+  auto worldMaterialBounds = std::map<std::pair<int, std::string>, EngineBounds>{};
+  if (hasGrid)
+  {
+    for (const auto& [key, chunk] : *inputs.chunks)
+    {
+      if (
+        !chunk.indexes.empty() && !stateOf(key.entity) && key.area >= 0
+        && std::size_t(key.area) < numAreas)
+      {
+        const auto [it, added] = worldMaterialBounds.try_emplace(
+          std::pair{key.area, key.material}, engineClearedBounds());
+        it->second = engineAddBounds(it->second, chunk.bounds);
+      }
+    }
+  }
+  const auto gridAreaOf = [&](
+                            const ChunkKey& key,
+                            const LitSurface& surface,
+                            const AreaSurface& areaSurface) -> std::optional<int> {
+    if (!hasGrid || !surface.material || !surface.material->receivesLighting)
+    {
+      return std::nullopt;
+    }
+    const auto& modelRenderMatrix = lists.spaces[surface.space].modelRenderMatrix;
+    if (areaSurface.kind == AreaSurfaceKind::WorldArea)
+    {
+      const auto it = worldMaterialBounds.find(std::pair{key.area, key.material});
+      if (it == worldMaterialBounds.end())
+      {
+        return std::nullopt;
+      }
+      const auto bounds = surface.material->deform != em::DeformNone
+                            ? engineDeformSurfaceBounds(it->second)
+                            : it->second;
+      const auto refs = std::array<int, 1>{key.area};
+      return surfaceGridArea(
+        *inputs.tree, modelRenderMatrix, bounds, refs, inputs.gridValid);
+    }
+    if (areaSurface.kind == AreaSurfaceKind::Entity)
+    {
+      const auto* state = stateOf(key.entity);
+      if (!state)
+      {
+        return std::nullopt;
+      }
+      const auto it = state->materialBounds.find(key.material);
+      if (it == state->materialBounds.end() || state->areas.empty())
+      {
+        return std::nullopt;
+      }
+      return surfaceGridArea(
+        *inputs.tree, modelRenderMatrix, it->second, state->areas, inputs.gridValid);
+    }
+    // D81: the outside set takes the probe path
+    return std::nullopt;
+  };
+
   // R_AddModels: the surfaces directly visible, each with its material and registers;
   // with a tree, those of the entities the flow saw (C33) and of the outside set (D81)
   auto visible = std::vector<LitSurface>{};
@@ -403,6 +470,8 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
     {
       continue;
     }
+    // LP4.3 (C36): R_AddSingleModel's grid area of the surface's model surface
+    surface.gridArea = gridAreaOf(key, surface, areaSurface);
     visible.push_back(surface);
     areaSurfaces.push_back(areaSurface);
   }
@@ -420,6 +489,7 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       if (drawn && isSubview == subview)
       {
         lists.drawSurfs.push_back(surface);
+        lists.gridSurfaces += surface.gridArea ? 1 : 0;
       }
     }
   }

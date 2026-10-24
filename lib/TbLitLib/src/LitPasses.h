@@ -162,6 +162,8 @@ struct LitFrameStats
   // C16 (LP2.2b): the passes' timer queries were begun and ended
   bool prepassTimed = false;
   bool interactionsTimed = false;
+  // LP4.3 (C36): the drawn surfaces with a grid area (FrontendLists::gridSurfaces)
+  std::size_t gridSurfaces = 0;
   // LP4.1 (C16, C32, D90): the view's portal flow behind the lists the frame drew
   // (FrontendLists): the view's area (-1 outside the world and without a tree), the areas
   // flowed, the tree's area count (0 without a tree), the view lights that went on to the
@@ -304,6 +306,11 @@ private:
     // change only when a batch applies, which raises chunksVersion
     const void* tree = nullptr;
     const void* areas = nullptr;
+    // LP4.3 (D79, P4.6): the grid table, and with a grid the slots' state version (a
+    // Ready or Missing atlas changes the grid-area dispatch)
+    const void* grid = nullptr;
+    std::uint64_t gridVersion = 0;
+    std::uint64_t slotStates = 0;
     std::uint64_t registry = 0;
     // DX.2: the light triangles' answers, and whether the cull applies (a test's switch)
     std::uint64_t lightTrianglesVersion = 0;

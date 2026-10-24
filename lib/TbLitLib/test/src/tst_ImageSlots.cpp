@@ -378,6 +378,46 @@ TEST_CASE("ImageSlots")
     CHECK(slots.binding(id).intrinsic);
     CHECK(slots.takeChangedSlots() == std::vector<ImageSlotId>{id});
   }
+
+  SECTION("LP4.3 (D79, P4.6): the state version moves on every state change, only then")
+  {
+    auto service = FakeService{};
+    auto slots = ImageSlots{};
+    slots.setRequest(service.request());
+    const auto key = keyOf("env/maps/m/area0_lightgrid_amb", UsageDiffuse);
+    const auto start = slots.stateVersion();
+    // a new slot (and its intrinsic's) is Pending: no change
+    const auto id = slots.request(key);
+    CHECK(slots.stateVersion() == start);
+    // an answer: Pending to Loading
+    service.publish(key, true);
+    slots.refresh(service.table, 1);
+    REQUIRE(slots.slot(id)->state == ImageSlots::State::Loading);
+    const auto loading = slots.stateVersion();
+    CHECK(loading > start);
+    // a written level bumps the slot's version, not its state's
+    slots.attachTexture(id, fakeTexture(), 1, 16);
+    slots.levelsWritten(id, 0);
+    CHECK(slots.stateVersion() == loading);
+    // every level written: Resident
+    slots.dropPixels(id);
+    const auto resident = slots.stateVersion();
+    CHECK(resident > loading);
+    // a re-request: Pending again, then the service's answer at once
+    slots.dropTexture(id, 2);
+    CHECK(slots.stateVersion() > resident);
+    // a refusal: Default
+    const auto beforeRefusal = slots.stateVersion();
+    slots.refuse(id, "a format the engine refuses");
+    CHECK(slots.slot(id)->state == ImageSlots::State::Default);
+    CHECK(slots.stateVersion() > beforeRefusal);
+    // a Default answer of a new slot
+    const auto missing = keyOf("env/maps/m/area1_lightgrid_amb", UsageDiffuse);
+    service.publish(missing, false, "no image");
+    const auto beforeMissing = slots.stateVersion();
+    static_cast<void>(slots.request(missing));
+    CHECK(slots.stateVersion() > beforeMissing);
+  }
 }
 
 TEST_CASE("BindingSetCache")

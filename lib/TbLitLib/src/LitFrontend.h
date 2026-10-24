@@ -50,6 +50,7 @@
 namespace tb::lit
 {
 struct AreaData;
+struct GridTable;
 struct ProcTree;
 
 // a chunk's material as the frontend finds it: an entry, pending (not in the table yet),
@@ -88,9 +89,9 @@ struct LitSurface
   // DX.2: in a light's lists, the runs of the chunk's triangles the static interaction
   // lights (R_CreateInteractionLightTris); null: all of them
   std::shared_ptr<const LightTriangles> lightTriangles;
-  // LP4.3 (C36): drawSurf->area, the area whose light grid lights the surface in the
-  // ambient pass (RenderBackend.cpp:1196); never set in LP4.2a, so every surface takes
-  // the probe path (mirror.json M-AMB-DIFF-03)
+  // LP4.3 (C36, P4.11): drawSurf->area, the area whose light grid lights the surface in
+  // the ambient pass (RenderBackend.cpp:1196), from surfaceGridArea when the lists are
+  // built (tr_frontend_addmodels.cpp:814-853); none: the probe path
   std::optional<int> gridArea;
 };
 
@@ -156,6 +157,9 @@ struct FrontendLists
   std::size_t entitiesCulled = 0;
   // flowView's own time in this build (steady clock), in milliseconds
   double flowMs = 0.0;
+
+  // LP4.3 (C36): the drawn surfaces (drawSurfs) that have a grid area
+  std::size_t gridSurfaces = 0;
 };
 
 // what the frontend reads; the functions answer from the material table and the
@@ -173,6 +177,12 @@ struct FrontendInputs
   // without nodes): no flow, LP2's rules
   const ProcTree* tree = nullptr;
   const AreaData* areas = nullptr;
+  // LP4.3 (C36, D79, P4.11): the bake's light grid (null or empty: none) and whether an
+  // area's grid is valid now: it has points and its atlas is Ready or Loading (the
+  // engine's lightGridPoints.Num() && image && !image->IsDefaulted(),
+  // tr_frontend_addmodels.cpp:826-852); the caller answers it from the slots' states
+  const GridTable* grid = nullptr;
+  std::function<bool(int area)> gridValid;
   std::function<MaterialAnswer(const std::string&)> material;
   std::function<RegisterAnswer(PreviewId, const MaterialEntry&, const ShaderParms&)>
     registers;
@@ -286,8 +296,16 @@ void engineSortViewLights(std::vector<ViewLight>& lights);
  * lights only the outside set, and every light the outside set's surfaces it meets)
  * before LP2's tests. The lights stay in id order before the sort (M-FRONT-DIFF-01).
  * Without a tree (D94) every rule is LP2's: no flow, every chunk a candidate, the view's
- * scissor. Pure, given the inputs' functions; the render thread (the flow's copied
- * functions are mirror.json M-FLOW-PURE-01's).
+ * scissor.
+ *
+ * LP4.3 (C36, P4.11, D81): with a tree and a grid, every visible surface whose material
+ * receives lighting gets its grid area from surfaceGridArea (lit/ViewFlow.h): a world
+ * chunk of area N with refs [N] and the union of the area's world chunks of its material
+ * (FinishSurfaces' deform growth applied, Model.cpp:1346-1360: the centre is the same),
+ * a brush entity's chunk with its entity's materialBounds of the material and areas
+ * (C31) through its space's modelRenderMatrix; the outside set and a pending material
+ * have none (the probe path). Pure, given the inputs' functions; the render thread (the
+ * flow's copied functions are mirror.json M-FLOW-PURE-01's).
  */
 FrontendLists buildFrontendLists(const FrontendInputs& inputs);
 
