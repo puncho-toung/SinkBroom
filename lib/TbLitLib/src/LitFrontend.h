@@ -93,6 +93,12 @@ struct LitSurface
   // the ambient pass (RenderBackend.cpp:1196), from surfaceGridArea when the lists are
   // built (tr_frontend_addmodels.cpp:814-853); none: the probe path
   std::optional<int> gridArea;
+  // LP5.2a (C46, P6.14): drawSurf->scissorRect, the stage pass's scissor: a world chunk's
+  // the rect of its area's world entity (the union of the rects of the portal chains
+  // that reached the area, RenderWorld_portals.cpp:262-265: the flow's worldRects), a
+  // brush entity's its entity's (entityRects); the view's scissor for the outside set
+  // (D81) and without a tree (D94)
+  ScreenRect scissor;
 };
 
 /**

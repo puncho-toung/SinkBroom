@@ -1147,8 +1147,9 @@ constexpr auto GpuAmbientMs = std::size_t{43};
 constexpr auto AmbientWrites = std::size_t{44};
 constexpr auto GridSurfaces = std::size_t{45};
 // LPF.1 (C44, P5.21): and the live feed's three (feed_applied, feed_ms, override_bytes);
-// LP5.1 (C45): and the interaction phases' two (math_lights, ambient_lights)
-constexpr auto Count = std::size_t{51};
+// LP5.1 (C45): and the interaction phases' two (math_lights, ambient_lights); LP5.2a
+// (C46): and the stage pass's three (stage_draws, stage_skipped, gpu_stages_ms)
+constexpr auto Count = std::size_t{54};
 } // namespace column
 
 std::vector<LogRow> readFrameLog(const std::filesystem::path& path)

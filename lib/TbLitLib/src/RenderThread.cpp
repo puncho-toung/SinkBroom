@@ -1269,10 +1269,14 @@ bool RenderThread::recordLitPasses(
   inputs.prepassTimer = m_timers.query(slot, TimedPass::Prepass);
   inputs.interactionTimer = m_timers.query(slot, TimedPass::Interactions);
   inputs.ambientTimer = m_timers.query(slot, TimedPass::Ambient);
+  // LP5.2a (C46, C47): the stage pass's timer, and the game folder of its material
+  // programs' blobs
+  inputs.stageTimer = m_timers.query(slot, TimedPass::Stages);
+  inputs.gamePath = m_options.gamePath;
   inputs.afterPrepass = [this] { runDebugHook(DebugHook::AfterPrepass); };
   // C38 (LP4.2b): r_skipInteractions 1's stand-in, a test's switch
   m_passes.setSkipInteractionsForTesting(m_skipInteractionsForTesting.load());
-  // LP5.0 (D118): r_skipAmbient's stand-in, which LP5.2a's stage pass will read
+  // LP5.0 (D118): r_skipAmbient's stand-in, which the stage pass reads (LP5.2a)
   m_passes.setSkipShaderPassesForTesting(m_skipShaderPassesForTesting.load());
   const auto stats = m_passes.record(inputs);
   if (stats.prepassTimed)
@@ -1286,6 +1290,10 @@ bool RenderThread::recordLitPasses(
   if (stats.interactionsTimed)
   {
     m_timers.passTimed(slot, TimedPass::Interactions);
+  }
+  if (stats.stagesTimed)
+  {
+    m_timers.passTimed(slot, TimedPass::Stages);
   }
   // C28: the slots asked for by the passes' draws lose no set they made
   eraseChangedSets();
@@ -1766,8 +1774,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       {
         recordLitPasses(commandList, camera);
         litStats = m_passes.lastStats();
-        hdrDrawn =
-          litStats.prepassDraws + litStats.ambientDraws + litStats.interactionDraws > 0;
+        hdrDrawn = litStats.prepassDraws + litStats.ambientDraws
+                     + litStats.interactionDraws + litStats.stageDraws
+                   > 0;
       }
       runAfterPassHooks(commandList);
       // LP2.2b: the tonemap passes into the LDR target and its blit into the frame's
@@ -1920,7 +1929,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       // C16 (LP2.2b): the lit passes' counts (LitFrameStats) and the tonemap passes'
       const auto& tonemap = m_tonemap.lastStats();
       row.draws = litStats.prepassDraws + litStats.ambientDraws
-                  + litStats.interactionDraws + tonemap.draws;
+                  + litStats.interactionDraws + litStats.stageDraws + tonemap.draws;
       row.prepassDraws = litStats.prepassDraws;
       row.interactionDraws = litStats.interactionDraws;
       row.skippedDraws = litStats.skippedDraws;
@@ -1931,6 +1940,10 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       // LP5.1 (C45): the math phase's lights and the ambientLight lights
       row.mathLights = litStats.mathLights;
       row.ambientLights = litStats.ambientLights;
+      // LP5.2a (C46): the stage pass's draws and skipped stages (its GPU time from the
+      // timers)
+      row.stageDraws = litStats.stageDraws;
+      row.stageSkipped = litStats.stageSkipped;
       row.constantBytes = litStats.constantBytes + tonemap.constantBytes;
       row.volatileWrites = litStats.constantWrites + tonemap.constantWrites;
       row.volatileWriteBudget = litStats.constantWriteBudget;
@@ -1947,7 +1960,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         status.lightsDrawn = litStats.lightsDrawn;
         status.lightsOverflowed = litStats.lightsOverflowed;
         status.draws = litStats.prepassDraws + litStats.ambientDraws
-                       + litStats.interactionDraws + tonemap.draws;
+                       + litStats.interactionDraws + litStats.stageDraws + tonemap.draws;
         status.skippedDraws = litStats.skippedDraws;
         status.pendingPipelines = litStats.pendingPipelines + tonemap.pendingPipelines;
         status.vramBytes =

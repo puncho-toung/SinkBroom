@@ -147,6 +147,11 @@ struct FrameLogRow
   // among the lights of both phases (the preview's own count)
   std::optional<std::uint64_t> mathLights;
   std::optional<std::uint64_t> ambientLights;
+  // LP5.2a (C46), frame rows: the stage pass's draws and its SL_AMBIENT stages that drew
+  // nothing (LitFrameStats::stageDraws, stageSkipped), and its GPU time
+  std::optional<std::uint64_t> stageDraws;
+  std::optional<std::uint64_t> stageSkipped;
+  std::optional<double> gpuStagesMs;
 };
 
 // the CSV header line, ending in a newline

@@ -491,6 +491,20 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
     auto surface = LitSurface{};
     surface.chunk = &chunk;
     surface.space = *index;
+    // LP5.2a (P6.14): the surface's scissorRect, its view entity's
+    surface.scissor = viewScissor(view);
+    if (flow.flowed && areaSurface.kind == AreaSurfaceKind::WorldArea)
+    {
+      surface.scissor = *flow.worldRects[std::size_t(areaSurface.area)];
+    }
+    else if (flow.flowed && areaSurface.kind == AreaSurfaceKind::Entity)
+    {
+      if (const auto rect = flow.entityRects.find(key.entity);
+          rect != flow.entityRects.end())
+      {
+        surface.scissor = rect->second;
+      }
+    }
     const auto answer =
       inputs.material ? inputs.material(key.material) : MaterialAnswer{nullptr, true};
     if (!answer.entry && !answer.pending)

@@ -32,7 +32,11 @@
 #include "LitView.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/EngineLight.h"
+#include "lit/EnginePipelineState.h"
 #include "lit/LitSession.h"
+#include "lit/MaterialDecls.h"
+
+#include <nvrhi/nvrhi.h>
 
 #include <algorithm>
 #include <chrono>
@@ -286,4 +290,334 @@ TEST_CASE("LitStagePass: the sort's cost over a few thousand chunks", "[.][stage
             << " ms\n";
 }
 
+
+namespace
+{
+
+namespace em = engine_material;
+namespace gls = engine_gls;
+
+// the stage-pass materials of the S rooms and of the [litgpu2] cases, through the copied
+// parser
+const char* const StageMaterials =
+  "textures/lp5t/add { { blend add map textures/lp5t/glow rgb 2 } }\n"
+  "textures/lp5t/blend { { blend blend map textures/lp5t/glow colored } }\n"
+  "textures/lp5t/filter { { blend filter map textures/lp5t/glow } }\n"
+  "textures/lp5t/black_add { { blend add map textures/lp5t/glow rgb 0 } }\n"
+  "textures/lp5t/clear_blend { { blend blend map textures/lp5t/glow alpha 0 } }\n"
+  "textures/lp5t/mask { { blend gl_zero, gl_one map textures/lp5t/glow } }\n"
+  "textures/lp5t/inverse { { blend add map textures/lp5t/glow inverseVertexColor } }\n"
+  "textures/lp5t/lit_and_add\n"
+  "{\n"
+  "  diffusemap textures/lp5t/wall\n"
+  "  { blend add map textures/lp5t/glow }\n"
+  "}\n"
+  "textures/lp5t/alpha_ambient\n"
+  "{\n"
+  "  { map textures/lp5t/grate alphaTest 0.5 }\n"
+  "}\n"
+  "textures/lp5t/decal { polygonOffset 1 { blend blend map textures/lp5t/glow } }\n"
+  "textures/lp5t/far { sort far { blend blend map textures/lp5t/glow "
+  "privatePolygonOffset "
+  "2 } }\n"
+  "textures/lp5t/screen { { blend add map textures/lp5t/glow screen } }\n"
+  "textures/lp5t/reflect { { blend add cubeMap env/lp5t texgen reflect } }\n"
+  "textures/lp5t/movie { { blend add videomap video/lp5t.roq } }\n"
+  "textures/lp5t/backbox { translucent backSided { blend blend map textures/lp5t/glow } "
+  "}\n"
+  "textures/lp5t/twobox { twoSided { blend blend map textures/lp5t/glow } }\n"
+  "textures/lp5t/voronoi\n"
+  "{\n"
+  "  {\n"
+  "    blend add\n"
+  "    program vornoipattern\n"
+  "    vertexParm 0 0.5, 400, 400\n"
+  "  }\n"
+  "}\n"
+  "textures/lp5t/haze\n"
+  "{\n"
+  "  {\n"
+  "    program heathaze\n"
+  "    vertexParm 0 0.1, 0.2\n"
+  "    fragmentMap 0 _currentRender\n"
+  "    fragmentMap 1 textures/lp5t/haze_local\n"
+  "  }\n"
+  "}\n"
+  "textures/lp5t/stencil\n"
+  "{\n"
+  "  {\n"
+  "    blend blend\n"
+  "    map textures/lp5t/glow\n"
+  "    stencil { Ref 7 Comp Equal Pass Replace Fail Keep ZFail DecrWrap }\n"
+  "  }\n"
+  "}\n"
+  "textures/lp5t/cond { { if parm4 blend add map textures/lp5t/glow } }\n";
+
+std::shared_ptr<const MaterialEntry> parsed(MaterialDecls& decls, const std::string& name)
+{
+  auto result = decls.lookup(name);
+  INFO(result.error);
+  REQUIRE(result);
+  return *result.value;
+}
+
+std::vector<float> registersOf(
+  MaterialDecls& decls,
+  const MaterialEntry& material,
+  const std::array<float, MaterialDecls::ShaderParmCount>& parms)
+{
+  auto result = decls.evaluate(material, parms, 0.0f);
+  INFO(result.error);
+  REQUIRE(result);
+  return result.value->registers;
+}
+
+constexpr auto WhiteParms = std::array<float, MaterialDecls::ShaderParmCount>{
+  1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+std::uint64_t blendOf(const std::uint64_t state)
+{
+  return state & (gls::SrcBlendBits | gls::DstBlendBits);
+}
+
+} // namespace
+
+TEST_CASE(
+  "LitStagePass: DrawShaderPasses' stage decisions (LP5.2a, C46, C47, SC519-SC523)")
+{
+  auto source = MemoryDeclSource{{DeclFile{"materials/lp5t.mtr", StageMaterials, 0}}};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+  const auto drawsOf = [&](const std::string& name, const auto& parms) {
+    const auto material = parsed(decls, name);
+    return engineShaderPassDraws(*material, registersOf(decls, *material, parms));
+  };
+
+  SECTION("blend add, blend and filter: one draw on texture_color, LESS | DEPTHMASK")
+  {
+    for (const auto* name :
+         {"textures/lp5t/add", "textures/lp5t/blend", "textures/lp5t/filter"})
+    {
+      CAPTURE(name);
+      const auto material = parsed(decls, name);
+      // MAT:3129-3159: the first stage blended with the destination: translucent,
+      // SS_MEDIUM (MAT:3183-3197)
+      CHECK(material->coverage == em::CoverageTranslucent);
+      CHECK(material->sort == 4.0f);
+      const auto result = drawsOf(name, WhiteParms);
+      REQUIRE(result.draws.size() == 1u);
+      CHECK(result.skipped == 0u);
+      const auto& draw = result.draws[0];
+      CHECK(draw.program == StageProgram::TextureColor);
+      // MAT:3232-3253: translucent: LESS | DEPTHMASK (no depth write)
+      CHECK((draw.state & gls::DepthFuncBits) == gls::DepthFuncLess);
+      CHECK((draw.state & gls::DepthMask) != 0);
+      CHECK((draw.state & gls::CullBits) == gls::CullFrontSided);
+      CHECK_FALSE(draw.screenTexgen);
+    }
+    CHECK(
+      blendOf(drawsOf("textures/lp5t/add", WhiteParms).draws[0].state)
+      == (gls::SrcBlendOne | gls::DstBlendOne));
+    CHECK(
+      blendOf(drawsOf("textures/lp5t/blend", WhiteParms).draws[0].state)
+      == (gls::SrcBlendSrcAlpha | gls::DstBlendOneMinusSrcAlpha));
+    // blend filter: DST_COLOR, ZERO
+    CHECK(
+      blendOf(drawsOf("textures/lp5t/filter", WhiteParms).draws[0].state)
+      == (gls::SrcBlendDstColor | gls::DstBlendZero));
+  }
+
+  SECTION("GL_Color clamps the colour; colored reads the entity's parms 0-3")
+  {
+    // rgb 2: clamped to 1
+    CHECK(
+      drawsOf("textures/lp5t/add", WhiteParms).draws[0].color
+      == Vec4{1.0f, 1.0f, 1.0f, 1.0f});
+    auto parms = WhiteParms;
+    parms[0] = 0.5f;
+    parms[1] = 0.25f;
+    parms[2] = 1.0f;
+    parms[3] = 0.75f;
+    CHECK(
+      drawsOf("textures/lp5t/blend", parms).draws[0].color
+      == Vec4{0.5f, 0.25f, 1.0f, 0.75f});
+  }
+
+  SECTION("RB_SetVertexColorParms: inverseVertexColor is ( -1, 1 ), the default ( 0, 1 )")
+  {
+    const auto inverse = drawsOf("textures/lp5t/inverse", WhiteParms).draws[0];
+    CHECK(inverse.vertexColor[0] == Vec4{-1.0f, -1.0f, -1.0f, -1.0f});
+    CHECK(inverse.vertexColor[1] == Vec4{1.0f, 1.0f, 1.0f, 1.0f});
+    const auto plain = drawsOf("textures/lp5t/add", WhiteParms).draws[0];
+    CHECK(plain.vertexColor[0] == Vec4{0.0f, 0.0f, 0.0f, 0.0f});
+    CHECK(plain.vertexColor[1] == Vec4{1.0f, 1.0f, 1.0f, 1.0f});
+  }
+
+  SECTION("the skips: black add, transparent blend, ZERO / ONE, the condition")
+  {
+    for (const auto* name :
+         {"textures/lp5t/black_add",
+          "textures/lp5t/clear_blend",
+          "textures/lp5t/mask",
+          "textures/lp5t/cond"})
+    {
+      CAPTURE(name);
+      const auto result = drawsOf(name, WhiteParms);
+      CHECK(result.draws.empty());
+      CHECK(result.skipped == 1u);
+    }
+    // the condition register on: drawn
+    auto parms = WhiteParms;
+    parms[4] = 1.0f;
+    CHECK(drawsOf("textures/lp5t/cond", parms).draws.size() == 1u);
+  }
+
+  SECTION(
+    "an opaque material's ambient stage: EQUAL | DEPTHMASK; its lit stages are not "
+    "the pass's")
+  {
+    const auto material = parsed(decls, "textures/lp5t/lit_and_add");
+    CHECK(material->coverage == em::CoverageOpaque);
+    CHECK(material->hasAmbient);
+    const auto result = drawsOf("textures/lp5t/lit_and_add", WhiteParms);
+    REQUIRE(result.draws.size() == 1u);
+    CHECK(result.skipped == 0u);
+    CHECK((result.draws[0].state & gls::DepthFuncBits) == gls::DepthFuncEqual);
+    CHECK(
+      material->stages[std::size_t(result.draws[0].stage)].lighting
+      == em::LightingAmbient);
+  }
+
+  SECTION("an alpha-tested SL_AMBIENT stage: perforated, EQUAL, no ALPHA_TEST of its own")
+  {
+    const auto material = parsed(decls, "textures/lp5t/alpha_ambient");
+    // one stage, not blended with the destination: opaque by MAT:3129-3159, yet
+    // perforated by its alpha test (the prepass draws it alpha-tested)
+    CHECK(material->coverage == em::CoveragePerforated);
+    const auto result = drawsOf("textures/lp5t/alpha_ambient", WhiteParms);
+    REQUIRE(result.draws.size() == 1u);
+    CHECK((result.draws[0].state & gls::DepthFuncBits) == gls::DepthFuncEqual);
+  }
+
+  SECTION("polygonOffset and privatePolygonOffset")
+  {
+    const auto decal = drawsOf("textures/lp5t/decal", WhiteParms).draws[0];
+    CHECK(parsed(decls, "textures/lp5t/decal")->sort == 2.0f);
+    CHECK((decal.state & gls::PolygonOffset) != 0);
+    CHECK(decal.slopeBias == 0.0f);
+    CHECK(decal.depthBias == -600.0f);
+    const auto far = drawsOf("textures/lp5t/far", WhiteParms).draws[0];
+    CHECK(parsed(decls, "textures/lp5t/far")->sort == 3.0f);
+    CHECK((far.state & gls::PolygonOffset) != 0);
+    CHECK(far.depthBias == -1200.0f);
+  }
+
+  SECTION("the texgens: screen on 18, a cube texgen LP5.2b's, a cinematic not drawn")
+  {
+    const auto screen = drawsOf("textures/lp5t/screen", WhiteParms);
+    REQUIRE(screen.draws.size() == 1u);
+    CHECK(screen.draws[0].program == StageProgram::TextureColorTexgen);
+    CHECK(screen.draws[0].screenTexgen);
+
+    const auto reflect = drawsOf("textures/lp5t/reflect", WhiteParms);
+    CHECK(reflect.draws.empty());
+    CHECK(reflect.texgenDeferred == 1u);
+    CHECK(reflect.skipped == 1u);
+
+    const auto movie = drawsOf("textures/lp5t/movie", WhiteParms);
+    CHECK(movie.draws.empty());
+    CHECK(movie.cinematic == 1u);
+    CHECK(movie.skipped == 1u);
+  }
+
+  SECTION("the cull: two-sided none, back-sided the engine's front-sided decode (D117)")
+  {
+    const auto back = drawsOf("textures/lp5t/backbox", WhiteParms).draws[0];
+    CHECK((back.state & (3ull << 15)) == gls::CullBackSided);
+    const auto two = drawsOf("textures/lp5t/twobox", WhiteParms).draws[0];
+    CHECK((two.state & gls::CullBits) == gls::CullTwoSided);
+    const auto front = drawsOf("textures/lp5t/blend", WhiteParms).draws[0];
+
+    // M-STAGE-DEFECT-01: GetRenderState masks GLS_CULL_BACKSIDED away with GLS_CULL_BITS,
+    // so the back-sided draw culls as the front-sided one
+    const auto rasterOf = [](const std::uint64_t state) {
+      auto renderState = nvrhi::RenderState{};
+      engineRenderState(state, 0, 0.0f, renderState);
+      return renderState.rasterState.cullMode;
+    };
+    CHECK(rasterOf(back.state) == rasterOf(front.state));
+    CHECK(rasterOf(two.state) == nvrhi::RasterCullMode::None);
+    CHECK(rasterOf(front.state) != nvrhi::RasterCullMode::None);
+  }
+
+  SECTION("a stencil block's bits (:4462-4506)")
+  {
+    const auto draw = drawsOf("textures/lp5t/stencil", WhiteParms).draws[0];
+    CHECK((draw.state & (7ull << 36)) == gls::StencilFuncEqual);
+    CHECK((draw.state & (7ull << 45)) == gls::StencilOpPassReplace);
+    CHECK((draw.state & (7ull << 42)) == gls::StencilOpZFailDecrWrap);
+    CHECK((draw.state & (7ull << 39)) == gls::StencilOpFailKeep);
+    CHECK(((draw.state & gls::StencilFuncRefBits) >> gls::StencilFuncRefShift) == 7u);
+    // GLS_STENCIL_MAKE_MASK of the write mask (255: no keyword sets it)
+    CHECK(((draw.state & gls::StencilFuncMaskBits) >> gls::StencilFuncMaskShift) == 255u);
+  }
+
+  SECTION("a newStage block: its table program, USER0 from vertexParm 0 (C47)")
+  {
+    const auto material = parsed(decls, "textures/lp5t/voronoi");
+    REQUIRE(material->stages.size() == 1u);
+    CHECK(material->stages[0].newStage);
+    CHECK(material->stages[0].fragmentProgram == "vornoipattern");
+    CHECK(material->stages[0].vertexProgram == "vornoipattern");
+    // no _currentRender: blended with the destination, SS_MEDIUM
+    CHECK(material->sort == 4.0f);
+    const auto result = drawsOf("textures/lp5t/voronoi", WhiteParms);
+    REQUIRE(result.draws.size() == 1u);
+    CHECK(result.draws[0].program == StageProgram::Material);
+    REQUIRE(result.draws[0].userParms.size() == 1u);
+    CHECK(result.draws[0].userParms[0] == Vec4{0.5f, 400.0f, 400.0f, 1.0f});
+    CHECK(blendOf(result.draws[0].state) == (gls::SrcBlendOne | gls::DstBlendOne));
+  }
+
+  SECTION("a fragmentMap of _currentRender: SS_POST_PROCESS and translucent (K38)")
+  {
+    const auto haze = parsed(decls, "textures/lp5t/haze");
+    // MAT:3199-3230
+    CHECK(haze->sort == EngineSortPostProcess);
+    CHECK(haze->coverage == em::CoverageTranslucent);
+    // post-process effects fill the depth buffer as they draw: LESS with depth writes
+    CHECK((haze->stages[0].drawStateBits & gls::DepthFuncBits) == gls::DepthFuncLess);
+    CHECK((haze->stages[0].drawStateBits & gls::DepthMask) == 0);
+  }
+
+  SECTION("an implicit material: blend blend, colored, its image clamped (SC523)")
+  {
+    // Material.cpp SetDefaultText: a name with no decl
+    const auto implicit = parsed(decls, "textures/lp5t/no_decl");
+    CHECK(implicit->implicit);
+    REQUIRE(implicit->stages.size() == 1u);
+    CHECK(implicit->stages[0].lighting == em::LightingAmbient);
+    REQUIRE(implicit->stages[0].image);
+    CHECK(implicit->stages[0].image->name == "textures/lp5t/no_decl");
+    CHECK(implicit->coverage == em::CoverageTranslucent);
+    CHECK(implicit->sort == 4.0f);
+    CHECK_FALSE(implicit->receivesLighting);
+    auto parms = WhiteParms;
+    parms[0] = 0.5f;
+    const auto result = drawsOf("textures/lp5t/no_decl", parms);
+    REQUIRE(result.draws.size() == 1u);
+    CHECK(result.draws[0].program == StageProgram::TextureColor);
+    CHECK(
+      blendOf(result.draws[0].state)
+      == (gls::SrcBlendSrcAlpha | gls::DstBlendOneMinusSrcAlpha));
+    CHECK(result.draws[0].color == Vec4{0.5f, 1.0f, 1.0f, 1.0f});
+  }
+
+  // the parse warned of nothing (a bad keyword would default the material)
+  for (const auto& message : decls.messages())
+  {
+    CAPTURE(message.text);
+    CHECK(message.kind != DeclMessageKind::Warning);
+  }
+}
 } // namespace tb::lit

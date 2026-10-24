@@ -62,6 +62,26 @@ constexpr std::uint64_t CullTwoSided = 2ull << 15;
 constexpr std::uint64_t StencilFuncAlways = 0ull << 36;
 constexpr std::uint64_t MirrorView = 1ull << 62;
 constexpr std::uint64_t Default = 0;
+// LP5.2a (C46, SC520): the bits the stage pass reads and composes
+constexpr std::uint64_t SrcBlendSrcAlpha = 4ull << 0;
+constexpr std::uint64_t SrcBlendBits = 7ull << 0;
+constexpr std::uint64_t DstBlendOneMinusSrcAlpha = 5ull << 3;
+constexpr std::uint64_t DstBlendBits = 7ull << 3;
+constexpr std::uint64_t DepthFuncBits = 3ull << 13;
+constexpr std::uint64_t CullBackSided = 1ull << 15;
+constexpr std::uint64_t CullBits = 2ull << 15;
+constexpr std::uint64_t StencilFuncRefShift = 20;
+constexpr std::uint64_t StencilFuncRefBits = 0xFFull << StencilFuncRefShift;
+constexpr std::uint64_t StencilFuncMaskShift = 28;
+constexpr std::uint64_t StencilFuncMaskBits = 0xFFull << StencilFuncMaskShift;
+constexpr std::uint64_t StencilFuncEqual = 5ull << 36;
+constexpr std::uint64_t StencilOpFailKeep = 0ull << 39;
+constexpr std::uint64_t StencilOpZFailKeep = 0ull << 42;
+constexpr std::uint64_t StencilOpZFailDecrWrap = 7ull << 42;
+constexpr std::uint64_t StencilOpPassKeep = 0ull << 45;
+constexpr std::uint64_t StencilOpPassReplace = 2ull << 45;
+constexpr std::uint64_t StencilOpPassDecrWrap = 7ull << 45;
+constexpr std::uint64_t Override = 1ull << 63;
 } // namespace engine_gls
 
 /**

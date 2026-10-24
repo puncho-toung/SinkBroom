@@ -79,6 +79,25 @@ static_assert(engine_gls::CullTwoSided == GLS_CULL_TWOSIDED);
 static_assert(engine_gls::StencilFuncAlways == GLS_STENCIL_FUNC_ALWAYS);
 static_assert(engine_gls::MirrorView == GLS_MIRROR_VIEW);
 static_assert(engine_gls::Default == GLS_DEFAULT);
+static_assert(engine_gls::SrcBlendSrcAlpha == GLS_SRCBLEND_SRC_ALPHA);
+static_assert(engine_gls::SrcBlendBits == GLS_SRCBLEND_BITS);
+static_assert(engine_gls::DstBlendOneMinusSrcAlpha == GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA);
+static_assert(engine_gls::DstBlendBits == GLS_DSTBLEND_BITS);
+static_assert(engine_gls::DepthFuncBits == GLS_DEPTHFUNC_BITS);
+static_assert(engine_gls::CullBackSided == GLS_CULL_BACKSIDED);
+static_assert(engine_gls::CullBits == GLS_CULL_BITS);
+static_assert(engine_gls::StencilFuncRefShift == GLS_STENCIL_FUNC_REF_SHIFT);
+static_assert(engine_gls::StencilFuncRefBits == GLS_STENCIL_FUNC_REF_BITS);
+static_assert(engine_gls::StencilFuncMaskShift == GLS_STENCIL_FUNC_MASK_SHIFT);
+static_assert(engine_gls::StencilFuncMaskBits == GLS_STENCIL_FUNC_MASK_BITS);
+static_assert(engine_gls::StencilFuncEqual == GLS_STENCIL_FUNC_EQUAL);
+static_assert(engine_gls::StencilOpFailKeep == GLS_STENCIL_OP_FAIL_KEEP);
+static_assert(engine_gls::StencilOpZFailKeep == GLS_STENCIL_OP_ZFAIL_KEEP);
+static_assert(engine_gls::StencilOpZFailDecrWrap == GLS_STENCIL_OP_ZFAIL_DECR_WRAP);
+static_assert(engine_gls::StencilOpPassKeep == GLS_STENCIL_OP_PASS_KEEP);
+static_assert(engine_gls::StencilOpPassReplace == GLS_STENCIL_OP_PASS_REPLACE);
+static_assert(engine_gls::StencilOpPassDecrWrap == GLS_STENCIL_OP_PASS_DECR_WRAP);
+static_assert(engine_gls::Override == GLS_OVERRIDE);
 
 // U1.5: engine_image's constants (lit/EngineImageEnums.h) are the copied Image.h's and
 // Material.h's enum values

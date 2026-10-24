@@ -136,6 +136,16 @@ constexpr auto UnitAmbientCube = std::size_t{7};
 constexpr auto UnitSpecularCube1 = std::size_t{8};
 constexpr auto UnitDepthCube = std::size_t{12};
 
+// LP5.2a (C46): DrawShaderPasses into hdrFBO, testing the prepass's depth
+PassDesc stagePassDesc()
+{
+  auto pass = PassDesc{};
+  pass.name = "stages";
+  pass.reads = {std::string{frame_resource::CurrentDepth}};
+  pass.writes = {std::string{frame_resource::HdrFramebuffer}};
+  return pass;
+}
+
 PassDesc interactionPassDesc()
 {
   auto pass = PassDesc{};
@@ -322,6 +332,35 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
       m_stats.interactionsTimed = endTimer(frame, inputs.interactionTimer);
     }
   }
+
+  if (m_stats.stoppedEarly || (inputs.stopRequested && inputs.stopRequested()))
+  {
+    m_stats.stoppedEarly = true;
+    return m_stats;
+  }
+  // LP5.2a (C46): after DrawInteractions, no SSR copy (r_useSSR 0, D19), the first
+  // DrawShaderPasses call unless r_skipShaderPasses (RenderBackend.cpp:6107-6125); its
+  // r_skipAmbient test is the test switch (D118: the panel never sets it); the second
+  // call, after the fog lights and the _currentRender copy, draws the SS_POST_PROCESS
+  // surfaces this one stops at (K38), which the preview does not draw
+  if (m_skipShaderPasses || EngineFrame.skipShaderPasses)
+  {
+    m_stats.stagesSkipped = true;
+  }
+  else
+  {
+    const auto stageTarget = inputs.frame->resolve(stagePassDesc())
+                             | kdl::transform([](const PassResources& resources) {
+                                 return resources.writes.front().framebuffer;
+                               })
+                             | kdl::value_or(nullptr);
+    if (stageTarget == frame.framebuffer)
+    {
+      beginTimer(frame, inputs.stageTimer);
+      recordStages(frame);
+      m_stats.stagesTimed = endTimer(frame, inputs.stageTimer);
+    }
+  }
   return m_stats;
 }
 
@@ -410,6 +449,7 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   {
     // no material service: nothing to draw, and nothing to wait for
     m_lists = FrontendLists{};
+    m_stageOrder.clear();
     return;
   }
 
@@ -472,6 +512,8 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   m_lists = buildFrontendLists(frontend);
   m_registers.endBuild();
   m_lightTriangles.endBuild(inputs.pool);
+  // LP5.2a (D115): R_SortDrawSurfs' order of the new lists, kept with them
+  m_stageOrder = stagePassOrder(m_lists.drawSurfs, m_lists.spaces);
 }
 
 bool LitPasses::collectLightTriangles()
@@ -1425,6 +1467,287 @@ void LitPasses::recordAmbient(Frame& frame)
   m_stats.ambientPendingPipelines = m_stats.pendingPipelines - pendingBefore;
 }
 
+std::optional<MaterialImageKey> LitPasses::stageImage(
+  ImageSlots& images, const MaterialImageKey& key)
+{
+  const auto* slot = images.slot(images.request(key));
+  if (!slot)
+  {
+    return std::nullopt;
+  }
+  switch (slot->state)
+  {
+  case ImageSlots::State::Default:
+    // the engine's image is not loaded or is defaulted: globalImages->defaultImage
+    return engineDefaultImageKey();
+  case ImageSlots::State::Pending:
+    // not answered yet: the engine has its image loaded before it draws
+    return std::nullopt;
+  case ImageSlots::State::Loading: {
+    // its written levels, or none yet (the intrinsic would stand in)
+    const auto binding = images.binding(images.request(key));
+    return binding.texture && !binding.intrinsic ? std::optional{key} : std::nullopt;
+  }
+  case ImageSlots::State::Resident:
+  case ImageSlots::State::Replacing:
+    // Replacing binds its complete texture while the new one is written (LPF.1, C40)
+    return key;
+  }
+  return std::nullopt;
+}
+
+const EngineMaterialProgram* LitPasses::materialProgram(
+  Frame& frame, const MaterialStage& stage)
+{
+  // FindProgram( name, vertexProgram, fragmentProgram, POST_PROCESS_INGAME )
+  // (Material.cpp:2252-2262): a "program" keyword names both shaders; the table's row is
+  // the fragment program's (the vertex program's when only it is named)
+  const auto& name =
+    !stage.fragmentProgram.empty() ? stage.fragmentProgram : stage.vertexProgram;
+  auto [it, added] = m_materialPrograms.try_emplace(name);
+  if (added)
+  {
+    it->second = engineMaterialProgram(frame.inputs->gamePath, name);
+  }
+  if (!it->second && m_programWarnings.insert(name).second && frame.inputs->warn)
+  {
+    // D9: the stage is disabled, said once per program
+    frame.inputs->warn(fmt::format(
+      "The lit preview has no material program '{}' (not in its table, or a blob "
+      "missing): its newStage stages are not drawn",
+      name));
+  }
+  return it->second ? &*it->second : nullptr;
+}
+
+void LitPasses::recordStages(Frame& frame)
+{
+  // DrawShaderPasses (RenderBackend.cpp:4271-4716): r_skipAmbient is the caller's test
+  // (the test switch, D118); targetRender is null for the 3D view; GL_SelectTexture( 0 );
+  // currentSpace = 1 forces the first surface's space
+  const auto& inputs = *frame.inputs;
+  auto& images = *inputs.images;
+  m_currentSpace.reset();
+  auto disabledPrograms = std::set<int>{};
+
+  for (std::size_t i = 0; i < m_stageOrder.size(); ++i)
+  {
+    const auto& surface = *m_stageOrder[i];
+    // D124 (P6.6): a material or registers pending: the engine never draws one; kept
+    // registers (D52) are drawn
+    if (!surface.material || !surface.registers)
+    {
+      ++m_stats.stagePending;
+      m_stats.unconverged = true;
+      m_stats.waitsForTable = true;
+      continue;
+    }
+    const auto& material = *surface.material;
+
+    if (!material.hasAmbient)
+    {
+      continue;
+    }
+    if (material.portalSky)
+    {
+      continue;
+    }
+    // some deforms may disable themselves by setting numIndexes = 0
+    if (surface.chunk->indexes.empty())
+    {
+      continue;
+    }
+    if (material.suppressInSubview)
+    {
+      continue;
+    }
+    // the preview's view is no xray subview, and every surface's stereo eye is 0
+
+    // we need to draw the post process shaders after we have drawn the fog lights (:4329,
+    // currentRenderCopied false at the first call): K38, the pass stops here
+    if (material.sort >= EngineSortPostProcess)
+    {
+      for (std::size_t j = i; j < m_stageOrder.size(); ++j)
+      {
+        const auto* left = m_stageOrder[j];
+        m_stats.stagePostProcess += left->material && left->material->hasAmbient ? 1 : 0;
+      }
+      break;
+    }
+
+    // change the matrix and other space related vars if needed (:4352-4382): MVP,
+    // LOCALVIEWORIGIN, MODELMATRIX_X..W and MODELVIEWMATRIX_X..W transposed
+    if (m_currentSpace != surface.space)
+    {
+      setAmbientSpace(frame, surface.space);
+    }
+
+    // change the scissor if needed (:4385-4394, r_useScissor 1): the surface's engine
+    // scissor (P6.14), with GL_Scissor's Y flip
+    if (!m_currentScissor.equals(surface.scissor))
+    {
+      m_scissor = engineScissorRect(frame.view, surface.scissor);
+      m_currentScissor = surface.scissor;
+    }
+
+    const auto& registers = surface.registers->registers;
+    const auto surfaceDraws = engineShaderPassDraws(material, registers);
+    m_stats.stageSkipped += surfaceDraws.skipped;
+    m_stats.stageTexgenDeferred += surfaceDraws.texgenDeferred;
+    m_stats.stageCinematic += surfaceDraws.cinematic;
+    if (surfaceDraws.texgenDeferred > 0 && !m_texgenDeferredWarned && inputs.warn)
+    {
+      m_texgenDeferredWarned = true;
+      inputs.warn(
+        "The lit preview does not draw cube and sky texgen stages yet (LP5.2b): some "
+        "material stages are not drawn");
+    }
+
+    for (const auto& stageDraw : surfaceDraws.draws)
+    {
+      const auto& stage = material.stages[std::size_t(stageDraw.stage)];
+      auto program = EngineBuiltinTextureVertexColor;
+      auto drawable = true;
+      if (stageDraw.program == StageProgram::Material)
+      {
+        // C47 (:4509-4570): BindProgram( glslProgram ), USER0 + j, the fragment images at
+        // units 0-2 where not null (C47: a null unit binds _default where the engine's is
+        // stale, mirror.json M-STAGE-DIFF-03); rpEnableSkinning stays 0 (no joints);
+        // WINDOWCOORD, PROJMATRIX_Y, MODELVIEWMATRIX_Z and ALPHA_TEST are what the engine
+        // leaves in them: the view's, the space's and 0
+        const auto* row = materialProgram(frame, stage);
+        if (!row || disabledPrograms.contains(row->row.index))
+        {
+          ++m_stats.stageProgramMissing;
+          ++m_stats.stageSkipped;
+          continue;
+        }
+        program = row->row.index;
+        for (std::size_t j = 0; j < stageDraw.userParms.size() && j < 8; ++j)
+        {
+          m_parms.set(
+            RenderParm(int(RenderParm::User0) + int(j)), stageDraw.userParms[j]);
+        }
+        for (std::size_t unit = 0; unit < 3; ++unit)
+        {
+          const auto& fragment = unit < stage.fragmentImages.size()
+                                   ? stage.fragmentImages[unit]
+                                   : std::optional<MaterialImageKey>{};
+          if (!fragment)
+          {
+            m_units[unit] = engineDefaultImageKey();
+            continue;
+          }
+          m_units[unit] = stageImage(images, *fragment);
+          drawable = drawable && m_units[unit].has_value();
+        }
+      }
+      else
+      {
+        // GL_Color, the program, RB_SetVertexColorParms (:4598-4673)
+        m_parms.set(RenderParm::Color, stageDraw.color);
+        program = stageDraw.program == StageProgram::TextureColorTexgen
+                    ? EngineBuiltinTextureTexgenVertexColor
+                    : EngineBuiltinTextureVertexColor;
+        m_parms.set(RenderParm::VertexColorModulate, stageDraw.vertexColor[0]);
+        m_parms.set(RenderParm::VertexColorAdd, stageDraw.vertexColor[1]);
+
+        // BindVariableStageImage (:268-345): a stage without an image binds none in the
+        // engine (a dynamic image's stage, K25), and a cube image in texture_color's
+        // Texture2D is undefined there (LP5.2b's): neither is drawn (M-STAGE-GUARD-01)
+        if (!stage.image || stage.image->cube != 0)
+        {
+          ++m_stats.stageSkipped;
+          if (!m_stageImageWarned && inputs.warn)
+          {
+            m_stageImageWarned = true;
+            inputs.warn(
+              "The lit preview does not draw material stages without an image or with a "
+              "cube image on texture_color yet: some material stages are not drawn");
+          }
+          continue;
+        }
+        m_units[0] = stageImage(images, *stage.image);
+        drawable = m_units[0].has_value();
+
+        // PrepareStageTexturing (:352-638): the texture matrix, TG_SCREEN's planes from
+        // modelViewMatrix × projectionMatrix (rows 0, 1 and 3), TEXGEN_0_ENABLED
+        m_parms.set(RenderParm::TextureMatrixS, stageDraw.textureMatrix[0]);
+        m_parms.set(RenderParm::TextureMatrixT, stageDraw.textureMatrix[1]);
+        if (stageDraw.screenTexgen)
+        {
+          const auto& space = m_lists.spaces[surface.space];
+          const auto mat =
+            engineGlMatrixMultiply(space.modelViewMatrix, frame.view.projectionMatrix);
+          m_parms.set(
+            RenderParm::TexGen0S,
+            Vec4{mat[0 * 4 + 0], mat[1 * 4 + 0], mat[2 * 4 + 0], mat[3 * 4 + 0]});
+          m_parms.set(
+            RenderParm::TexGen0T,
+            Vec4{mat[0 * 4 + 1], mat[1 * 4 + 1], mat[2 * 4 + 1], mat[3 * 4 + 1]});
+          m_parms.set(
+            RenderParm::TexGen0Q,
+            Vec4{mat[0 * 4 + 3], mat[1 * 4 + 3], mat[2 * 4 + 3], mat[3 * 4 + 3]});
+        }
+        const auto enabled = stageDraw.screenTexgen ? 1.0f : 0.0f;
+        m_parms.set(RenderParm::TexGen0Enabled, Vec4{enabled, enabled, enabled, enabled});
+      }
+
+      if (!drawable)
+      {
+        // D124: an image not answered or not written yet: no draw, the frame unconverged
+        ++m_stats.stageSkipped;
+        ++m_stats.skippedDraws;
+        m_stats.unconverged = true;
+        m_stats.retrigger = true;
+        continue;
+      }
+
+      // GL_State( stageGLState ), the draw, FinishStageTexturing (nothing for these
+      // texgens) and the restored offset, which the next draw's key carries
+      switch (draw(
+        frame,
+        program,
+        *surface.chunk,
+        stageDraw.state,
+        stageDraw.slopeBias,
+        stageDraw.depthBias))
+      {
+      case DrawOutcome::Drawn:
+        ++m_stats.stageDraws;
+        log(frame, LitDrawRecord::Pass::Stage, *surface.chunk, program, stageDraw.state);
+        break;
+      case DrawOutcome::Disabled:
+        ++m_stats.stageSkipped;
+        if (stageDraw.program == StageProgram::Material)
+        {
+          // D9: a material program whose pipeline failed disables its stages alone
+          disabledPrograms.insert(program);
+        }
+        else
+        {
+          // D9: the pass is disabled; programReport() says why
+          m_stats.stagesDisabled = true;
+          m_parms.set(RenderParm::Color, Vec4{1.0f, 1.0f, 1.0f, 1.0f});
+          return;
+        }
+        break;
+      case DrawOutcome::Overflowed:
+        ++m_stats.stageSkipped;
+        drawOverflowed(frame);
+        break;
+      case DrawOutcome::Skipped:
+        ++m_stats.stageSkipped;
+        break;
+      }
+    }
+  }
+
+  // :4707-4712: GL_Color( 1, 1, 1 ) (alpha 1); GL_State( GLS_DEFAULT ) disables the
+  // stencil test, which the next pass's pipeline keys carry as their own state
+  m_parms.set(RenderParm::Color, Vec4{1.0f, 1.0f, 1.0f, 1.0f});
+}
+
 std::vector<PipelineKey> litStartPipelineKeys(const nvrhi::Format depthFormat)
 {
   const auto formats = FramebufferFormats{nvrhi::Format::RGBA16_FLOAT, depthFormat};
@@ -1488,46 +1811,14 @@ bool LitPasses::bindingSets(
   const auto expected = layout == EngineBindingLayout::DrawInteraction      ? 4u
                         : layout == EngineBindingLayout::AmbientLightingIbl ? 4u
                         : layout == EngineBindingLayout::Texture            ? 3u
+                        : layout == EngineBindingLayout::Texgen             ? 3u
+                        : layout == EngineBindingLayout::PostProcessIngame  ? 2u
                                                                             : 1u;
   if (layouts.size() != expected)
   {
     return false;
   }
   count = layouts.size();
-
-  // set 0: the renderparms, pushed or a volatile constant buffer
-  // (GetCurrentBindingLayout, RenderBackend_NVRHI.cpp:576-584)
-  {
-    auto key = BindingSetKey{};
-    key.layout = layouts[0].Get();
-    nvrhi::IBuffer* buffer = nullptr;
-    if (!pushConstants)
-    {
-      buffer = constantBuffer(frame, layout);
-      if (!buffer)
-      {
-        return false;
-      }
-      key.resources = {buffer};
-    }
-    const auto bytes = parmSetBytes(layout);
-    sets[0] = cache
-                .get(
-                  key,
-                  frameIndex,
-                  [&] {
-                    auto desc = nvrhi::BindingSetDesc{};
-                    desc.addItem(
-                      pushConstants ? Item::PushConstants(0, bytes)
-                                    : Item::ConstantBuffer(0, buffer));
-                    return device.createBindingSet(desc, layouts[0]);
-                  })
-                .Get();
-    if (!sets[0])
-    {
-      return false;
-    }
-  }
 
   // a unit's binding: its slot's written levels or its intrinsic's (C28)
   auto& images = *inputs.images;
@@ -1595,10 +1886,70 @@ bool LitPasses::bindingSets(
     return slottedSet(set, unitSlots);
   };
 
+  // set 0: the renderparms, pushed or a volatile constant buffer
+  // (GetCurrentBindingLayout, RenderBackend_NVRHI.cpp:576-584); LP5.2a (C47):
+  // POST_PROCESS_INGAME's also holds the units 0-2 at t0-t2 (:1464-1512)
+  {
+    auto key = BindingSetKey{};
+    key.layout = layouts[0].Get();
+    nvrhi::IBuffer* buffer = nullptr;
+    if (!pushConstants)
+    {
+      buffer = constantBuffer(frame, layout);
+      if (!buffer)
+      {
+        return false;
+      }
+      key.resources = {buffer};
+    }
+    auto units = std::vector<ImageSlots::Binding>{};
+    if (layout == EngineBindingLayout::PostProcessIngame)
+    {
+      for (std::size_t unit = 0; unit < 3; ++unit)
+      {
+        auto binding = unitBinding(unit);
+        if (!binding)
+        {
+          return false;
+        }
+        key.slots.insert(
+          key.slots.end(), binding->versions.begin(), binding->versions.end());
+        units.push_back(std::move(*binding));
+      }
+    }
+    const auto bytes = parmSetBytes(layout);
+    sets[0] = cache
+                .get(
+                  key,
+                  frameIndex,
+                  [&] {
+                    auto desc = nvrhi::BindingSetDesc{};
+                    desc.addItem(
+                      pushConstants ? Item::PushConstants(0, bytes)
+                                    : Item::ConstantBuffer(0, buffer));
+                    for (std::size_t unit = 0; unit < units.size(); ++unit)
+                    {
+                      desc.addItem(Item::Texture_SRV(
+                        std::uint32_t(unit),
+                        units[unit].texture,
+                        nvrhi::Format::UNKNOWN,
+                        units[unit].subresources));
+                    }
+                    return device.createBindingSet(desc, layouts[0]);
+                  })
+                .Get();
+    if (!sets[0])
+    {
+      return false;
+    }
+  }
+
   switch (layout)
   {
-  case EngineBindingLayout::Texture: {
-    // TEXTURE: t0 the unit 0 image, s0 its own sampler (SC238, SC269)
+  case EngineBindingLayout::Texture:
+  case EngineBindingLayout::Texgen: {
+    // TEXTURE: t0 the unit 0 image, s0 its own sampler (SC238, SC269); LP5.2a: TEXGEN
+    // the same (RenderBackend_NVRHI.cpp:586-623)
     if (!textureSet(1, {0}, 0))
     {
       return false;
@@ -1702,6 +2053,32 @@ bool LitPasses::bindingSets(
                   })
                 .Get();
     return sets[3] != nullptr;
+  }
+  case EngineBindingLayout::PostProcessIngame: {
+    // LP5.2a (C47): s0 LinearClamp (RenderBackend_NVRHI.cpp:1464-1512; PointClamp only
+    // under R_UsePixelatedLook)
+    const auto* common = inputs.samplers->common(device)
+                         | kdl::value_or(static_cast<const SamplerSet::Common*>(nullptr));
+    if (!common)
+    {
+      return false;
+    }
+    auto samplerKey = BindingSetKey{};
+    samplerKey.layout = layouts[1].Get();
+    samplerKey.samplers = 4;
+    samplerKey.resources = {common->linearClamp.Get()};
+    sets[1] =
+      cache
+        .get(
+          samplerKey,
+          frameIndex,
+          [&] {
+            return device.createBindingSet(
+              nvrhi::BindingSetDesc{}.addItem(Item::Sampler(0, common->linearClamp)),
+              layouts[1]);
+          })
+        .Get();
+    return sets[1] != nullptr;
   }
   default:
     return true;
@@ -1955,6 +2332,8 @@ void LitPasses::releaseAll()
 {
   m_constantBuffers.clear();
   m_lists = FrontendLists{};
+  m_stageOrder.clear();
+  m_materialPrograms.clear();
   m_viewProbes = ViewProbes{};
   m_listsKey.reset();
   m_registers.clear();

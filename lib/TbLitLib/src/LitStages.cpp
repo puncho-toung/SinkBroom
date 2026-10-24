@@ -613,4 +613,223 @@ std::optional<std::array<MaterialImageKey, 2>> engineLightStageUnits(
   return std::array{*falloffImage, *lightStage.image};
 }
 
+StagePassSurface engineShaderPassDraws(
+  const MaterialEntry& material, const std::span<const float> registers)
+{
+  namespace gls = engine_gls;
+  auto result = StagePassSurface{};
+
+  // set face culling appropriately (RenderBackend.cpp:4396-4422): not a GUI surface
+  auto cullMode = gls::CullFrontSided;
+  switch (material.cullType)
+  {
+  case engine_cull::TwoSided:
+    cullMode = gls::CullTwoSided;
+    break;
+  case engine_cull::BackSided:
+    // M-STAGE-DEFECT-01 (D117): GLS_CULL_BITS (2 << 15) masks this bit away, so the
+    // copied GetRenderState draws it as the front-sided case
+    cullMode = gls::CullBackSided;
+    break;
+  case engine_cull::FrontSided:
+  default:
+    cullMode = gls::CullFrontSided;
+    break;
+  }
+  // surf->extraGLState is 0 for every preview surface
+  auto surfState = cullMode;
+
+  // set polygon offset if necessary (:4426-4432)
+  auto surfSlope = 0.0f;
+  auto surfBias = 0.0f;
+  if (material.materialFlags & em::FlagPolygonOffset)
+  {
+    surfSlope = EngineFrame.offsetFactor;
+    surfBias = EngineFrame.offsetUnits * material.polygonOffset;
+    surfState |= gls::PolygonOffset;
+  }
+
+  for (std::size_t s = 0; s < material.stages.size(); ++s)
+  {
+    const auto& stage = material.stages[s];
+    const auto ambient = stage.lighting == em::LightingAmbient;
+
+    // check the enable condition
+    if (engineRegister(registers, stage.conditionRegister) == 0.0f)
+    {
+      result.skipped += ambient ? 1 : 0;
+      continue;
+    }
+    // skip the stages involved in lighting
+    if (!ambient)
+    {
+      continue;
+    }
+
+    auto stageState = surfState;
+    if ((surfState & gls::Override) == 0)
+    {
+      stageState |= stage.drawStateBits;
+    }
+
+    // skip if the stage is ( GL_ZERO, GL_ONE ), which is used for some alpha masks
+    if (
+      (stageState & (gls::SrcBlendBits | gls::DstBlendBits))
+      == (gls::SrcBlendZero | gls::DstBlendOne))
+    {
+      ++result.skipped;
+      continue;
+    }
+
+    // the stencil stage (:4462-4506): only these values add bits
+    if (stage.hasStencil)
+    {
+      const auto& stencil = stage.stencil;
+      // stencilComp_t 4 EQUAL, 6 ALWAYS; stencilOperation_t 0 KEEP, 2 REPLACE, 7
+      // DECRWRAP
+      switch (stencil.comp)
+      {
+      case 6:
+        stageState |= gls::StencilFuncAlways;
+        break;
+      case 4:
+        stageState |= gls::StencilFuncEqual;
+        break;
+      default:
+        break;
+      }
+      switch (stencil.pass)
+      {
+      case 2:
+        stageState |= gls::StencilOpPassReplace;
+        break;
+      case 0:
+        stageState |= gls::StencilOpPassKeep;
+        break;
+      case 7:
+        stageState |= gls::StencilOpPassDecrWrap;
+        break;
+      default:
+        break;
+      }
+      switch (stencil.zFail)
+      {
+      case 7:
+        stageState |= gls::StencilOpZFailDecrWrap;
+        break;
+      case 0:
+        stageState |= gls::StencilOpZFailKeep;
+        break;
+      default:
+        break;
+      }
+      if (stencil.fail == 0)
+      {
+        stageState |= gls::StencilOpFailKeep;
+      }
+      stageState |=
+        ((std::uint64_t(stencil.ref) << gls::StencilFuncRefShift)
+         & gls::StencilFuncRefBits)
+        | ((std::uint64_t(stencil.writeMask) << gls::StencilFuncMaskShift) & gls::StencilFuncMaskBits);
+    }
+
+    auto draw = StagePassDraw{};
+    draw.stage = int(s);
+    draw.state = stageState;
+    draw.slopeBias = surfSlope;
+    draw.depthBias = surfBias;
+
+    // see if we are a new-style stage (:4509-4570)
+    if (stage.newStage)
+    {
+      if (EngineFrame.skipNewAmbient)
+      {
+        ++result.skipped;
+        continue;
+      }
+      draw.program = StageProgram::Material;
+      for (const auto& parm : stage.vertexParms)
+      {
+        draw.userParms.push_back(Vec4{
+          engineRegister(registers, parm[0]),
+          engineRegister(registers, parm[1]),
+          engineRegister(registers, parm[2]),
+          engineRegister(registers, parm[3])});
+      }
+      result.draws.push_back(std::move(draw));
+      continue;
+    }
+
+    // old style stages: set the color (:4577-4581)
+    const auto& c = stage.colorRegisters;
+    const auto color = Vec4{
+      engineRegister(registers, c[0]),
+      engineRegister(registers, c[1]),
+      engineRegister(registers, c[2]),
+      engineRegister(registers, c[3])};
+
+    const auto blend = stageState & (gls::SrcBlendBits | gls::DstBlendBits);
+    // skip the entire stage if an add would be black
+    if (
+      blend == (gls::SrcBlendOne | gls::DstBlendOne) && color[0] <= 0.0f
+      && color[1] <= 0.0f && color[2] <= 0.0f)
+    {
+      ++result.skipped;
+      continue;
+    }
+    // skip the entire stage if a blend would be completely transparent
+    if (
+      blend == (gls::SrcBlendSrcAlpha | gls::DstBlendOneMinusSrcAlpha)
+      && color[3] <= 0.0f)
+    {
+      ++result.skipped;
+      continue;
+    }
+
+    // D120: a cinematic's bink or RoQ frame is not drawn (mirror.json M-STAGE-DIFF-02)
+    if (!stage.cinematic.empty() || stage.soundMap)
+    {
+      ++result.skipped;
+      ++result.cinematic;
+      continue;
+    }
+
+    // the program by the texgen (:4604-4671); the cube and sky texgens rebind it in
+    // PrepareStageTexturing, and TG_DIFFUSE_CUBE and TG_GLASSWARP warn there: LP5.2b's
+    switch (stage.texgen)
+    {
+    case em::TexgenScreen:
+    case em::TexgenScreen2:
+      draw.program = StageProgram::TextureColorTexgen;
+      draw.screenTexgen = true;
+      break;
+    case em::TexgenExplicit:
+      draw.program = StageProgram::TextureColor;
+      break;
+    default:
+      ++result.skipped;
+      ++result.texgenDeferred;
+      continue;
+    }
+
+    // GL_Color clamps (RenderBackend_NVRHI.cpp:2238-2246)
+    draw.color = engineClampedColor(color);
+    draw.vertexColor = engineVertexColorParms(stage.vertexColor);
+
+    // set privatePolygonOffset if necessary (:4679-4683)
+    if (stage.privatePolygonOffset != 0.0f)
+    {
+      draw.slopeBias = EngineFrame.offsetFactor;
+      draw.depthBias = EngineFrame.offsetUnits * stage.privatePolygonOffset;
+      draw.state |= gls::PolygonOffset;
+    }
+
+    // PrepareStageTexturing (:352-638): the texture matrix always; TG_SCREEN's planes
+    // are the pass's (the space's modelView × projection)
+    draw.textureMatrix = engineLoadShaderTextureMatrix(registers, stage);
+    result.draws.push_back(std::move(draw));
+  }
+  return result;
+}
+
 } // namespace tb::lit

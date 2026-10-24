@@ -1469,6 +1469,9 @@ inline constexpr auto EngineBuiltins = std::array<EngineBuiltin, 116>{{
 // The BUILTIN_ indices of the programs LP2 draws with (RenderProgs.h:396-545, SC245)
 inline constexpr int EngineBuiltinColor = 1;
 inline constexpr int EngineBuiltinTextureVertexColor = 15;
+// LP5.2a (C46): BUILTIN_TEXTURE_TEXGEN_VERTEXCOLOR, a TG_SCREEN stage's
+// (RenderProgs.h:421)
+inline constexpr int EngineBuiltinTextureTexgenVertexColor = 18;
 inline constexpr int EngineBuiltinInteraction = 19;
 // LP5.1 (C45, D114): an ambientLight light's (RenderProgs.h:399-400)
 inline constexpr int EngineBuiltinInteractionAmbient = 21;

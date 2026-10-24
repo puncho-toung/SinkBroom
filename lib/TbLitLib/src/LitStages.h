@@ -36,6 +36,7 @@
 #include "lit/MaterialDecls.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -342,5 +343,91 @@ std::optional<std::array<MaterialImageKey, 2>> engineLightStageUnits(
   bool mathPath,
   const std::optional<MaterialImageKey>& falloffImage,
   const MaterialStage& lightStage);
+
+// ----- the stage pass (LP5.2a, C46, C47, SC519-SC523) -----
+
+// materialSort_t SS_POST_PROCESS (Material.h:319): the stage pass stops at it (K38)
+inline constexpr float EngineSortPostProcess = 100.0f;
+
+// cullType_t (Material.h:329-334)
+namespace engine_cull
+{
+constexpr int FrontSided = 0;
+constexpr int BackSided = 1;
+constexpr int TwoSided = 2;
+} // namespace engine_cull
+
+// what a stage-pass draw binds
+enum class StageProgram
+{
+  // BUILTIN_TEXTURE_VERTEXCOLOR (15), TEXTURE
+  TextureColor,
+  // BUILTIN_TEXTURE_TEXGEN_VERTEXCOLOR (18), TEXGEN: TG_SCREEN and TG_SCREEN2
+  TextureColorTexgen,
+  // a newStage block's program (C47, D121), POST_PROCESS_INGAME: the material-program
+  // table's row of its fragmentProgram
+  Material,
+};
+
+/**
+ * One draw DrawShaderPasses makes of a surface's stage (RenderBackend.cpp:4434-4702): the
+ * stage, the program, the GL state bits (the surface's cull and polygon offset, the
+ * stage's drawStateBits and its stencil bits), GL_PolygonOffset's (slope, bias) when
+ * POLYGON_OFFSET is set (the material's, or the stage's privatePolygonOffset), and for an
+ * old-style stage GL_Color's clamped colour, RB_SetVertexColorParms' MODULATE and ADD,
+ * PrepareStageTexturing's texture matrix and whether TG_SCREEN's planes are loaded
+ * (TEXGEN_0_ENABLED 1); for a newStage block USER0 + j of each vertexParm j through the
+ * registers (no colour, vertex colour or texture matrix is set for it, :4509-4570).
+ */
+struct StagePassDraw
+{
+  int stage = -1;
+  StageProgram program = StageProgram::TextureColor;
+  std::uint64_t state = 0;
+  float slopeBias = 0.0f;
+  float depthBias = 0.0f;
+  Vec4 color = {0.0f, 0.0f, 0.0f, 0.0f};
+  std::array<Vec4, 2> vertexColor = {};
+  std::array<Vec4, 2> textureMatrix = {};
+  bool screenTexgen = false;
+  std::vector<Vec4> userParms;
+};
+
+/**
+ * What the stage loop of one surface leaves: its draws in stage order and the
+ * SL_AMBIENT stages it did not draw (skipped: every reason summed; of them those of a
+ * cube or sky texgen, LP5.2b's, and those of a cinematic, D120).
+ */
+struct StagePassSurface
+{
+  std::vector<StagePassDraw> draws;
+  std::size_t skipped = 0;
+  std::size_t texgenDeferred = 0;
+  std::size_t cinematic = 0;
+};
+
+/**
+ * DrawShaderPasses for one surface (RenderBackend.cpp:4396-4702) of a material whose
+ * registers are given, the surface not a GUI surface (the preview has none: D120) and
+ * extraGLState 0: the cull of cullType (CT_TWO_SIDED none, CT_BACK_SIDED
+ * GLS_CULL_BACKSIDED, which the copied GetRenderState decodes as the front-sided case,
+ * GLState.h:74-77 and PipelineCache.cpp's switch: M-STAGE-DEFECT-01, mirrored, not fixed,
+ * D117; else front-sided), MF_POLYGONOFFSET's GL_PolygonOffset( r_offsetFactor,
+ * r_offsetUnits · polygonOffset ); per stage: skipped when its condition register is 0
+ * (counted only for an SL_AMBIENT stage), not drawn at all when it is not SL_AMBIENT,
+ * stageGLState = the surface's | drawStateBits (no GLS_OVERRIDE here), skipped for ZERO
+ * / ONE, the stencil stage's comp ALWAYS or EQUAL, pass REPLACE, KEEP or DECRWRAP, zFail
+ * DECRWRAP or KEEP, fail KEEP and GLS_STENCIL_MAKE_REF( ref ) | GLS_STENCIL_MAKE_MASK(
+ * writeMask ) as the engine maps them (the other values add no bits); a newStage block
+ * (unless r_skipNewAmbient) one Material draw with its vertexParms; an old-style stage
+ * skipped for ONE / ONE with rgb at most 0 and SRC_ALPHA / ONE_MINUS_SRC_ALPHA with
+ * alpha at most 0, a cinematic (D120) and a cube or sky texgen (TG_DIFFUSE_CUBE,
+ * TG_REFLECT_CUBE, TG_REFLECT_CUBE2, TG_SKYBOX_CUBE, TG_WOBBLESKY_CUBE, TG_GLASSWARP:
+ * LP5.2b's, counted in texgenDeferred), else one draw, TG_SCREEN and TG_SCREEN2 on 18,
+ * the rest on 15, with the stage's privatePolygonOffset. No ALPHA_TEST is set (SC520).
+ * Pure.
+ */
+StagePassSurface engineShaderPassDraws(
+  const MaterialEntry& material, std::span<const float> registers);
 
 } // namespace tb::lit

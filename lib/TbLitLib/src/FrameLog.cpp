@@ -127,6 +127,17 @@ std::string phaseFields(const FrameLogRow& row)
     "{},{}", optionalCount(row.mathLights), optionalCount(row.ambientLights));
 }
 
+// LP5.2a's columns, the stage pass's: its draws, its skipped stages and its GPU time;
+// empty in a start or stop row
+std::string stageFields(const FrameLogRow& row)
+{
+  return fmt::format(
+    "{},{},{}",
+    optionalCount(row.stageDraws),
+    optionalCount(row.stageSkipped),
+    optionalField(row.gpuStagesMs, "{:.3f}"));
+}
+
 std::string_view eventName(const FrameLogEvent event)
 {
   switch (event)
@@ -153,7 +164,8 @@ std::string_view frameLogHeader()
          "overflowed,constant_bytes,volatile_writes,volatile_write_budget,push_constant_"
          "bytes,settled,alloc_refused,culled_triangles,view_area,areas_flowed,lights_in_"
          "view,portal_chains,flow_ms,ambient_draws,gpu_ambient_ms,ambient_writes,grid_"
-         "surfaces,feed_applied,feed_ms,override_bytes,math_lights,ambient_lights\n";
+         "surfaces,feed_applied,feed_ms,override_bytes,math_lights,ambient_lights,stage_"
+         "draws,stage_skipped,gpu_stages_ms\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -165,14 +177,14 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   if (row.event != FrameLogEvent::Frame)
   {
     return fmt::format(
-      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n",
+      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,
       resourceFields(row));
   }
   return fmt::format(
-    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
     row.session,
     eventName(row.event),
     row.frameIndex,
@@ -191,7 +203,8 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     refusalFields(row),
     flowFields(row),
     feedFields(row),
-    phaseFields(row));
+    phaseFields(row),
+    stageFields(row));
 }
 
 std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& path)

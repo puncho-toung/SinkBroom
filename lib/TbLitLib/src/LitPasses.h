@@ -42,6 +42,7 @@
 #include "SamplerSet.h"
 #include "ViewProbes.h"
 #include "base/Macros.h"
+#include "lit/EngineTables.h"
 #include "lit/GridTable.h"
 
 #include <nvrhi/nvrhi.h>
@@ -49,6 +50,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
@@ -107,6 +109,11 @@ struct LitFrameInputs
   nvrhi::ITimerQuery* interactionTimer = nullptr;
   // LP4.2a (C34, C16): the ambient pass's, or null
   nvrhi::ITimerQuery* ambientTimer = nullptr;
+  // LP5.2a (C46, C16): the stage pass's, or null
+  nvrhi::ITimerQuery* stageTimer = nullptr;
+  // LP5.2a (C47, D9): the game folder whose renderprogs2/spirv holds a newStage
+  // program's blobs (SessionOptions::gamePath)
+  std::filesystem::path gamePath;
 };
 
 // C16's columns of the lit passes, per frame (LP2.2b logs them)
@@ -210,6 +217,28 @@ struct LitFrameStats
   // C38 (LP4.2b's ambient-only rows): the interactions were not recorded
   // (skipInteractionsForTesting, r_skipInteractions 1)
   bool interactionsSkipped = false;
+  // ----- LP5.2a (C46, C47, D124): the stage pass (DrawShaderPasses' first call) -----
+  // its draws; the SL_AMBIENT stages of the surfaces it reached that drew nothing, every
+  // reason summed (a condition of 0, ZERO / ONE, a black add, a transparent blend,
+  // r_skipNewAmbient, a cinematic, a cube or sky texgen, a missing program, a stage
+  // without an image, an image not written yet, a pending pipeline, the budget)
+  std::size_t stageDraws = 0;
+  std::size_t stageSkipped = 0;
+  // the surfaces skipped because their material or registers are pending (D124: the
+  // frame is unconverged); the surfaces with an SL_AMBIENT stage left at the stop at
+  // SS_POST_PROCESS (K38)
+  std::size_t stagePending = 0;
+  std::size_t stagePostProcess = 0;
+  // of stageSkipped: the stages of a cube or sky texgen (LP5.2b's), of a cinematic
+  // (D120), of a newStage program absent from the table or its blobs (D9)
+  std::size_t stageTexgenDeferred = 0;
+  std::size_t stageCinematic = 0;
+  std::size_t stageProgramMissing = 0;
+  // the pass was not recorded (skipShaderPassesForTesting, r_skipAmbient 1's stand-in,
+  // D118, or r_skipShaderPasses 1), its timer ran, a failed pipeline disabled it (D9)
+  bool stagesSkipped = false;
+  bool stagesTimed = false;
+  bool stagesDisabled = false;
 };
 
 // a recorded draw (setDrawLogForTesting)
@@ -221,6 +250,8 @@ struct LitDrawRecord
     Interaction,
     // LP4.2a: the ambient pass
     Ambient,
+    // LP5.2a: the stage pass
+    Stage,
   };
 
   Pass pass = Pass::Prepass;
@@ -403,8 +434,17 @@ private:
   bool m_lightTriangleCull = true;
   // C38 (LP4.2b): the interactions are not recorded (r_skipInteractions 1)
   bool m_skipInteractions = false;
-  // LP5.0 (D118): r_skipAmbient 1's stand-in, for LP5.2a's stage pass
+  // LP5.0 (D118): r_skipAmbient 1's stand-in, which the stage pass reads (LP5.2a)
   bool m_skipShaderPasses = false;
+  // LP5.2a (C46, D115): the drawn surfaces in the stage pass's order (stagePassOrder),
+  // made when the lists are built; pointers into m_lists.drawSurfs
+  std::vector<const LitSurface*> m_stageOrder;
+  // LP5.2a (C47, D9): a newStage program's row by its name, or none (not in the table, or
+  // a blob missing), looked up once; the names already warned about
+  std::map<std::string, std::optional<EngineMaterialProgram>> m_materialPrograms;
+  std::set<std::string> m_programWarnings;
+  bool m_texgenDeferredWarned = false;
+  bool m_stageImageWarned = false;
   std::vector<LitDrawRecord> m_drawLog;
   // the pipeline keys asked for while the log is on, drawn or not
   std::set<PipelineKey, PipelineKeyLess> m_requestedKeys;
@@ -448,8 +488,8 @@ public:
   // interactions pass is not recorded, as r_skipInteractions 1 skips DrawInteractions
   // (RenderBackend.cpp:4181); every other pass as it is
   void setSkipInteractionsForTesting(bool on);
-  // LP5.0 (D118, C46): r_skipAmbient 1's stand-in: stored for LP5.2a's stage pass, which
-  // will not be recorded while it is on (RenderBackend.cpp:4275); no pass reads it yet
+  // LP5.0 (D118, C46): r_skipAmbient 1's stand-in: while on, the stage pass is not
+  // recorded (RenderBackend.cpp:4275 returns at once; LP5.2a); every other pass as it is
   void setSkipShaderPassesForTesting(bool on);
   bool skipShaderPassesForTesting() const;
   const std::vector<LitDrawRecord>& drawLogForTesting() const;
@@ -470,8 +510,37 @@ private:
   // LP4.2a (C34): AmbientPass( fillGbuffer false ) on the probe path; LP4.3 (C36): and
   // on the light-grid path for a surface with a grid area (RenderBackend.cpp:1196-1305)
   void recordAmbient(Frame& frame);
-  // AmbientPass' space change (RenderBackend.cpp:2480-2502)
+  // AmbientPass' space change (RenderBackend.cpp:2480-2502); DrawShaderPasses' sets the
+  // same four (:4352-4382)
   void setAmbientSpace(Frame& frame, std::size_t space);
+  /**
+   * LP5.2a (C46, C47, D115-D121, D124): DrawShaderPasses( drawSurfs, numDrawSurfs )'s
+   * first call (RenderBackend.cpp:4271-4716 from :6107-6125, r_skipShaderPasses 0) into
+   * hdrFBO with the prepass's depth, over m_stageOrder: a surface whose material or
+   * registers are pending is skipped (counted, the frame unconverged, D124); one without
+   * an SL_AMBIENT stage, a portal sky, an empty one and a suppressInSubview one are
+   * passed over; the pass stops at the first surface of sort SS_POST_PROCESS or more
+   * (K38, no _currentRender copy); per surface the space's matrices on a space change,
+   * its engine scissor (LitSurface::scissor) with the Y flip, and each draw of
+   * engineShaderPassDraws: an old-style stage with its colour, vertex colour, texture
+   * matrix (and TG_SCREEN's planes) and its image at unit 0 by the slot's state
+   * (stageImage), a newStage block on its table program (C47) with USER0 + j and its
+   * fragment images at units 0-2 (a null one _default); at the end GL_Color( 1 ) and
+   * GLS_DEFAULT (no draw).
+   */
+  void recordStages(Frame& frame);
+  /**
+   * LP5.2a (D124, P6.17): the image a stage binds at a unit, by its slot's state:
+   * Default (the service has no image: the engine's image not loaded or defaulted) binds
+   * _default, as BindVariableStageImage does (RenderBackend.cpp:333-342); Pending (not
+   * answered yet) and Loading without a written level bind nothing yet (nullopt: the
+   * draw is skipped, the frame unconverged); Loading with written levels, Resident and
+   * Replacing (its complete texture, LPF.1) bind the slot.
+   */
+  std::optional<MaterialImageKey> stageImage(
+    ImageSlots& images, const MaterialImageKey& key);
+  // C47, D9: a newStage stage's program row, looked up once per name (null: missing)
+  const EngineMaterialProgram* materialProgram(Frame& frame, const MaterialStage& stage);
   // RenderInteractions for one list; false when the pass is disabled
   bool renderInteractions(
     Frame& frame,
