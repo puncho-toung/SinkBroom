@@ -37,9 +37,11 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 
 namespace tb::lit
 {
@@ -415,6 +417,17 @@ private:
     std::size_t bytes = 0;
   };
 
+  // LPF.0a (C41, D99): an override of one name, the truth its slots are converted from
+  struct StoredOverride
+  {
+    // the newest hand-over accepted (a refused one leaves the earlier one standing)
+    std::shared_ptr<const ImageOverride> image;
+    Clock::time_point handOver;
+    // the keys whose last published slot was converted from it, those the budget dropped
+    // since among them (their consumers keep the texture): a clear reads them again
+    std::vector<MaterialImageKey> keys;
+  };
+
   Shared& m_shared;
   StackThread m_thread;
 
@@ -449,6 +462,14 @@ private:
   // through the budget's drops (its consumer keeps the texture and asks again only on a
   // change)
   std::unordered_map<std::string, std::vector<MaterialImageKey>> m_keysByName;
+  // LPF.0a (C41): the override store by match name, its bytes, and the slots converted
+  // from it so far
+  std::unordered_map<std::string, StoredOverride> m_overrides;
+  std::size_t m_overrideBytes = 0;
+  std::uint64_t m_overrideConversions = 0;
+  // D111 (P5.7): the materials whose editor-image chain holds an image name (its match
+  // name), as they were measured, so that an override's editorSize remeasures them
+  std::unordered_map<std::string, std::unordered_set<std::string>> m_sizeNames;
   std::size_t m_imageBytes = 0;
   std::uint64_t m_evictedImages = 0;
   // S2 Low (S2.7): the poll's place in the files it re-probes, a slice per poll
@@ -880,11 +901,13 @@ private:
     auto table = std::make_shared<const MaterialTable>(m_working);
     const auto imageBytes = m_imageBytes;
     const auto evicted = m_evictedImages;
+    const auto conversions = m_overrideConversions;
     {
       auto lock = std::scoped_lock{m_shared.mutex};
       m_shared.table = std::move(table);
       m_shared.stats.imageBytes = imageBytes;
       m_shared.stats.evictedImages = evicted;
+      m_shared.stats.overrideConversions = conversions;
     }
     m_shared.changed.notify_all();
 
@@ -988,6 +1011,35 @@ private:
     return chain;
   }
 
+  // LPF.0a (D111, P5.7): the match names of the images imageChain holds
+  static std::vector<std::string> chainNames(const MaterialEntry& entry)
+  {
+    auto names = std::vector<std::string>{};
+    if (!entry.editorImageName.empty())
+    {
+      names.push_back(feedKeyName(entry.editorImageName));
+    }
+    for (const auto& stage : entry.stages)
+    {
+      if (stage.lighting == StageDiffuse && stage.image)
+      {
+        names.push_back(feedMatchName(*stage.image));
+        break;
+      }
+    }
+    if (!entry.stages.empty() && entry.stages.front().image)
+    {
+      names.push_back(feedMatchName(*entry.stages.front().image));
+    }
+    return names;
+  }
+
+  // D111: an override's editorSize as C21's size of a loaded image
+  static EditorImageSize readySize(const EditorImageSize& size)
+  {
+    return EditorImageSize{size.width, size.height, EditorImageSize::State::Ready, {}};
+  }
+
   // an entry with this editor-image size, the entry itself when it has it
   static std::shared_ptr<const MaterialEntry> withSize(
     std::shared_ptr<const MaterialEntry> entry, const EditorImageSize& size)
@@ -1054,8 +1106,27 @@ private:
       return entry.editorImageSize;
     }
     const auto messages = m_decls->messages().size();
-    auto sizing = editorImageSize(*m_decls, *m_source, entry);
+    // LPF.0a (D111): an override's editorSize stands for its image's files
+    auto sizing = editorImageSize(
+      *m_decls,
+      *m_source,
+      entry,
+      [&](const MaterialImageKey& image) -> std::optional<EditorImageSize> {
+        const auto stored = m_overrides.find(feedMatchName(image));
+        if (
+          stored == m_overrides.end() || !stored->second.image
+          || !stored->second.image->editorSize)
+        {
+          return std::nullopt;
+        }
+        return readySize(*stored->second.image->editorSize);
+      });
     static_cast<void>(m_decls->takeMessagesFrom(messages));
+    // P5.7: the names its chain holds, so that an override of one remeasures it
+    for (const auto& name : chainNames(entry))
+    {
+      m_sizeNames[name].insert(entry.name);
+    }
     // X.5: every file, a container's too, so that a loose file over it is seen
     auto files = std::move(sizing.files);
     const auto chain = imageChain(entry);
@@ -1212,6 +1283,13 @@ private:
       {
         const auto& key = m_pollImageKeys[at];
         const auto files = m_imageFiles.find(key);
+        // LPF.0a (C41, D99): an override's slot has no files, and none is probed while
+        // the store holds its name
+        const auto* published = m_working.images.find(key);
+        if (published && (*published)->override)
+        {
+          continue;
+        }
         if (files != m_imageFiles.end() && changedOnDisk(files->second))
         {
           dropImage(key);
@@ -1349,6 +1427,7 @@ private:
   {
     // every entry is measured again when it is asked for
     m_sizeFiles.clear();
+    m_sizeNames.clear();
     m_spellings.clear();
     m_pollImageKeys = {};
     m_pollMaterials = {};
@@ -1747,12 +1826,18 @@ private:
    * missed, the cache's name included) the new source finds otherwise are dropped, and so
    * are slots with no file (one a failed build made); an unchanged slot stays, the same
    * pointer. So a new container or a cache the engine wrote is seen, and an .mtr save
-   * reads no image again.
+   * reads no image again. LPF.0a (D99, P5.7): an override's slot stays, converted once
+   * from the store; the slots a build without a registry made for an override's keys
+   * have no file and go, so the next build's lookups convert them (C41).
    */
   void dropChangedImages()
   {
     auto changed = std::vector<MaterialImageKey>{};
     m_working.images.forEach([&](const MaterialImageKey& key, const auto& slot) {
+      if (slot->override)
+      {
+        return;
+      }
       const auto files = m_imageFiles.find(key);
       if (
         files == m_imageFiles.end() ? !slot->name.generated
@@ -1816,7 +1901,9 @@ private:
    * where the engine would binarize (Missing, Stale) the source fallback loads the source
    * with the copied loaders (resolveImage), one image's files per call, so a stop waits
    * for one image (R5.20). Without a registry (a build failed) the image is Missing with
-   * the build's failure, and the default.
+   * the build's failure, and the default. LPF.0a (D96, D99): a key whose name the
+   * override store holds is converted from the store, before C8's search (its files are
+   * not read); one the store's image is refused for is read from its files.
    */
   bool lookUpImage(const MaterialImageKey& key)
   {
@@ -1824,24 +1911,123 @@ private:
     {
       return false;
     }
-    auto slot = std::make_shared<ImageCacheSlot>();
     if (!m_decls || !m_source)
     {
+      auto slot = std::make_shared<ImageCacheSlot>();
       slot->reason = buildFailure();
       slot->sourceReason = slot->reason;
+      publishSlot(key, std::move(slot));
+      return true;
     }
-    else
+    if (auto stored = storedSlot(key))
     {
-      *slot = resolveImage(*m_decls, *m_source, key);
-      keepFiles(m_imageFiles, key, slot->files);
+      publishSlot(key, std::move(*stored));
+      return true;
     }
+    auto slot = std::make_shared<ImageCacheSlot>(resolveImage(*m_decls, *m_source, key));
+    keepFiles(m_imageFiles, key, slot->files);
+    publishSlot(key, std::move(slot));
+    return true;
+  }
+
+  // a slot into the working table, its bytes counted for the budget (S2.4)
+  void publishSlot(
+    const MaterialImageKey& key, std::shared_ptr<const ImageCacheSlot> slot)
+  {
     const auto bytes = imageBytes(*slot);
-    m_working.images =
-      m_working.images.set(key, std::shared_ptr<const ImageCacheSlot>{std::move(slot)});
+    m_working.images = m_working.images.set(key, std::move(slot));
     m_publishedImages.push_back(PublishedImage{key, bytes});
     m_imageBytes += bytes;
     indexKey(key);
-    return true;
+  }
+
+  // LPF.0a (C40): what imageOverrideStatus answers for a name
+  void setStatus(
+    const std::string& name, const ImageOverrideStatus::State state, std::string reason)
+  {
+    auto lock = std::scoped_lock{m_shared.mutex};
+    if (state == ImageOverrideStatus::State::None)
+    {
+      m_shared.overrideStatus.erase(name);
+      return;
+    }
+    m_shared.overrideStatus.insert_or_assign(
+      name, ImageOverrideStatus{state, std::move(reason)});
+  }
+
+  static std::size_t overrideBytesOf(const ImageOverride& image)
+  {
+    return std::visit(
+      [](const auto& form) -> std::size_t {
+        if constexpr (std::is_same_v<std::decay_t<decltype(form)>, RawImagePixels>)
+        {
+          return form.bytes.size();
+        }
+        else
+        {
+          return form ? form->data.size() : 0;
+        }
+      },
+      image.image);
+  }
+
+  /**
+   * C39, D97 (P5.1): an override's slot for one key: the copied time call names its
+   * cache and gives its usage and texture type (the one file probe an override makes:
+   * C41's exception), then overrideImage converts with that usage. Ready, no files,
+   * marked override. Parse thread.
+   */
+  Result<std::shared_ptr<const ImageCacheSlot>> overrideSlot(
+    const MaterialImageKey& key, const ImageOverride& image)
+  {
+    auto name = m_decls->imageCacheName(key);
+    if (!name)
+    {
+      return Error{fmt::format("an override is refused: {}", name.error)};
+    }
+    return overrideImage(*m_decls, *name.value, key, image)
+           | kdl::transform([&](std::shared_ptr<const CachedImage> converted) {
+               auto slot = std::make_shared<ImageCacheSlot>();
+               slot->state = ImageCacheSlot::State::Ready;
+               slot->image = std::move(converted);
+               slot->name = std::move(*name.value);
+               slot->override = true;
+               ++m_overrideConversions;
+               return std::shared_ptr<const ImageCacheSlot>{std::move(slot)};
+             });
+  }
+
+  /**
+   * D99 (P5.19): the slot of a key the store holds an override of, converted from the
+   * store (its first lookup, or again after the budget dropped it); nullopt when the
+   * store holds none, or (its status then says why) refuses it for this key, which is
+   * then read from its files.
+   */
+  std::optional<std::shared_ptr<const ImageCacheSlot>> storedSlot(
+    const MaterialImageKey& key)
+  {
+    const auto name = feedMatchName(key);
+    const auto stored = m_overrides.find(name);
+    if (stored == m_overrides.end() || !stored->second.image)
+    {
+      return std::nullopt;
+    }
+    auto slot = std::optional<std::shared_ptr<const ImageCacheSlot>>{};
+    overrideSlot(key, *stored->second.image)
+      | kdl::transform([&](std::shared_ptr<const ImageCacheSlot> made) {
+          auto& keys = stored->second.keys;
+          if (std::find(keys.begin(), keys.end(), key) == keys.end())
+          {
+            keys.push_back(key);
+          }
+          setStatus(name, ImageOverrideStatus::State::Applied, {});
+          slot = std::move(made);
+        })
+      | kdl::if_error([&](const auto& e) {
+          setStatus(name, ImageOverrideStatus::State::Refused, e.msg);
+        })
+      | kdl::ignore();
+    return slot;
   }
 
   /**
@@ -1900,9 +2086,171 @@ private:
    */
   void feedItem(const std::string& name, const FeedRequest& request)
   {
-    static_cast<void>(name);
+    if (!guarded("image override", [&] {
+          if (request.image)
+          {
+            setOverride(name, request);
+          }
+          else
+          {
+            clearOverride(name);
+          }
+        }))
+    {
+      setStatus(name, ImageOverrideStatus::State::Refused, m_lastFailure);
+    }
     m_working.feedApplied += request.requests;
+    m_working.overrideBytes = m_overrideBytes;
+    keepImageBudget();
     publish();
+  }
+
+  /**
+   * C39, C40, C41 (P5.2, P5.19): a set. The override is converted for every key the
+   * table holds under the name (m_keysByName, each key with its own cache name and
+   * usage: two usages of a name are two slots and two conversions), all before any slot
+   * changes: one refusal refuses the hand-over, every slot stands and an earlier
+   * override stays the store's truth. Accepted, the store takes it, and each key's old
+   * slot is dropped (a change: changedImages, imageChanges) and its new one set, all in
+   * the one table feedItem publishes. A name no key uses yet waits in the store for its
+   * first lookup (Pending). Without a registry (a failed build) nothing converts: the
+   * store takes it Pending and the keys are dropped and answered with the build's
+   * failure, which the next build's dropChangedImages drops, so the consumers' lookups
+   * then convert it (W.4). An editorSize that changes remeasures the materials whose
+   * chain holds the name (D111).
+   */
+  void setOverride(const std::string& name, const FeedRequest& request)
+  {
+    const auto keys = [&] {
+      const auto found = m_keysByName.find(name);
+      return found != m_keysByName.end() ? found->second
+                                         : std::vector<MaterialImageKey>{};
+    }();
+    auto& stored = m_overrides[name];
+    const auto before =
+      stored.image ? stored.image->editorSize : std::optional<EditorImageSize>{};
+    const auto take = [&] {
+      m_overrideBytes -=
+        std::min(m_overrideBytes, stored.image ? overrideBytesOf(*stored.image) : 0);
+      stored.image = request.image;
+      stored.handOver = request.handOver;
+      stored.keys.clear();
+      m_overrideBytes += overrideBytesOf(*stored.image);
+    };
+
+    if (!m_decls || !m_source)
+    {
+      take();
+      for (const auto& key : keys)
+      {
+        dropImage(key);
+        lookUpImage(key);
+      }
+      setStatus(name, ImageOverrideStatus::State::Pending, buildFailure());
+      remeasureNamed(name, before, request.image->editorSize);
+      return;
+    }
+
+    auto converted =
+      std::vector<std::pair<MaterialImageKey, std::shared_ptr<const ImageCacheSlot>>>{};
+    auto refusal = std::string{};
+    for (const auto& key : keys)
+    {
+      overrideSlot(key, *request.image)
+        | kdl::transform([&](std::shared_ptr<const ImageCacheSlot> slot) {
+            converted.emplace_back(key, std::move(slot));
+          })
+        | kdl::if_error([&](const auto& e) { refusal = e.msg; }) | kdl::ignore();
+      if (!refusal.empty() || stopping())
+      {
+        break;
+      }
+    }
+    if (!refusal.empty())
+    {
+      if (!stored.image)
+      {
+        m_overrides.erase(name);
+      }
+      setStatus(name, ImageOverrideStatus::State::Refused, std::move(refusal));
+      return;
+    }
+
+    take();
+    for (auto& [key, slot] : converted)
+    {
+      dropImage(key);
+      publishSlot(key, std::move(slot));
+      stored.keys.push_back(key);
+    }
+    setStatus(
+      name,
+      converted.empty() ? ImageOverrideStatus::State::Pending
+                        : ImageOverrideStatus::State::Applied,
+      {});
+    remeasureNamed(name, before, request.image->editorSize);
+  }
+
+  /**
+   * C40 (P5.17): a clear. The keys converted from the override are dropped and read from
+   * their files in the same item, so the one table feedItem publishes holds their file
+   * slots and no table shows them pending; the store lets the name go. A name the store
+   * does not hold changes nothing.
+   */
+  void clearOverride(const std::string& name)
+  {
+    const auto stored = m_overrides.find(name);
+    if (stored == m_overrides.end())
+    {
+      setStatus(name, ImageOverrideStatus::State::None, {});
+      return;
+    }
+    const auto keys = std::move(stored->second.keys);
+    const auto before = stored->second.image ? stored->second.image->editorSize
+                                             : std::optional<EditorImageSize>{};
+    m_overrideBytes -= std::min(
+      m_overrideBytes, stored->second.image ? overrideBytesOf(*stored->second.image) : 0);
+    m_overrides.erase(stored);
+    for (const auto& key : keys)
+    {
+      dropImage(key);
+      lookUpImage(key);
+    }
+    setStatus(name, ImageOverrideStatus::State::None, {});
+    remeasureNamed(name, before, std::nullopt);
+  }
+
+  /**
+   * D111 (P5.7): an override's editorSize went from before to after: every published
+   * material whose image chain holds the name is measured again, unless its size is
+   * already the new one (its kept Ready size goes, so the measure takes the files' size
+   * again after a clear).
+   */
+  void remeasureNamed(
+    const std::string& name,
+    const std::optional<EditorImageSize>& before,
+    const std::optional<EditorImageSize>& after)
+  {
+    const auto same = before && after
+                        ? before->width == after->width && before->height == after->height
+                        : !before && !after;
+    const auto materials = m_sizeNames.find(name);
+    if (same || materials == m_sizeNames.end())
+    {
+      return;
+    }
+    for (const auto& material : materials->second)
+    {
+      const auto* published = m_working.materials.find(material);
+      if (
+        !published || !(*published)->entry
+        || (after && (*published)->entry->editorImageSize == readySize(*after)))
+      {
+        continue;
+      }
+      m_readySizes.erase(material);
+      remeasure(material);
+    }
   }
 
   /**

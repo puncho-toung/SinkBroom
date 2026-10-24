@@ -351,9 +351,28 @@ ImageUploadSize imageUploadSize(
 }
 
 EditorImageSizing editorImageSize(
-  MaterialDecls& decls, DeclSource& source, const MaterialEntry& material)
+  MaterialDecls& decls,
+  DeclSource& source,
+  const MaterialEntry& material,
+  const EditorSizeOverride& sizeOverride)
 {
   auto sizing = EditorImageSizing{};
+  // D111: an override's size stands for the files' of its image
+  const auto upload = [&](const MaterialImageKey& image) {
+    if (sizeOverride)
+    {
+      if (const auto size = sizeOverride(image))
+      {
+        auto made = ImageUploadSize{};
+        made.width = size->width;
+        made.height = size->height;
+        made.state = EditorImageSize::State::Ready;
+        made.defaulted = false;
+        return made;
+      }
+    }
+    return imageUploadSize(decls, source, image);
+  };
   const auto use = [&](ImageUploadSize size, std::string image) {
     sizing.size = EditorImageSize{size.width, size.height, size.state, size.reason};
     sizing.image = std::move(image);
@@ -362,7 +381,7 @@ EditorImageSizing editorImageSize(
   const auto sizeOf = [&](const std::optional<MaterialImageKey>& image) {
     if (image)
     {
-      use(imageUploadSize(decls, source, *image), image->name);
+      use(upload(*image), image->name);
     }
     else
     {
@@ -391,7 +410,7 @@ EditorImageSizing editorImageSize(
   if (const auto key = decls.editorImageKey(material))
   {
     // look for an explicit one, as TD_DIFFUSE
-    auto editor = imageUploadSize(decls, source, *key);
+    auto editor = upload(*key);
     if (!editor.defaulted || material.stages.empty())
     {
       use(std::move(editor), key->name);

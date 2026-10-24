@@ -133,6 +133,10 @@ struct ImageCacheSlot
   // files read, the sources the fallback read; the service re-reads the slot when a
   // loose one changes
   std::vector<FoundGameFile> files;
+  // LPF.0a (C39, C41): the image is an override's, converted from the material service's
+  // store (MaterialService::setImageOverride): Ready, no files, never polled nor dropped
+  // at a build; the store is its truth
+  bool override = false;
 };
 
 /**

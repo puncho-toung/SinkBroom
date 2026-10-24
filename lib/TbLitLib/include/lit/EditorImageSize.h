@@ -21,6 +21,7 @@
 
 #include "lit/MaterialDecls.h"
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -87,10 +88,18 @@ struct EditorImageSizing
  * defaulted, the first SL_DIFFUSE stage's image, or stage 0's when that stage has none,
  * or still the defaulted editor image when no stage is diffuse; without qer_editorimage,
  * the first SL_DIFFUSE stage's image, else stage 0's; no stage or no image: the default
- * image (16 × 16). Each image is sized by imageUploadSize. Parse thread (C20).
+ * image (16 × 16). Each image is sized by imageUploadSize, unless sizeOverride gives it a
+ * size (LPF.0a, D111: an image override's editorSize, which stands for its files' as a
+ * loaded image's size: Ready, not defaulted, and no file probed). Parse thread (C20).
  */
+using EditorSizeOverride =
+  std::function<std::optional<EditorImageSize>(const MaterialImageKey& image)>;
+
 EditorImageSizing editorImageSize(
-  MaterialDecls& decls, DeclSource& source, const MaterialEntry& material);
+  MaterialDecls& decls,
+  DeclSource& source,
+  const MaterialEntry& material,
+  const EditorSizeOverride& sizeOverride = {});
 
 /**
  * Image_intrinsic.cpp's generators: the size an intrinsic image of this name is made at,

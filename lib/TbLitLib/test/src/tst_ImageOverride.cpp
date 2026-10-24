@@ -43,11 +43,14 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -255,7 +258,7 @@ TEST_CASE("feedKeyName folds a name as ImageFromFile does (C39, P5.1)")
   CHECK_FALSE(feedNameRefusal("_flat").empty());
 }
 
-TEST_CASE("MaterialService image overrides: the built-ins are refused at hand-over")
+TEST_CASE("MaterialService image overrides, the built-ins are refused at hand-over")
 {
   auto service = start(options(fixtureSource));
   for (const auto* name : {"_default", "_flat", "_white", "_FLAT.tga", "default"})
@@ -270,7 +273,7 @@ TEST_CASE("MaterialService image overrides: the built-ins are refused at hand-ov
   CHECK(service->imageOverrideStatus("_flat").state == ImageOverrideStatus::State::None);
 }
 
-TEST_CASE("MaterialService image overrides: the Feed work kind (D96, D100)")
+TEST_CASE("MaterialService image overrides, the Feed work kind (D96, D100)")
 {
   auto hold = std::make_shared<Hold>();
   auto kinds = std::make_shared<Kinds>();
@@ -781,5 +784,496 @@ TEST_CASE("overrideImage's conversion time, 1024 x 1024 RGBA8 (P5.13, Q29)")
       *std::max_element(times.begin(), times.end()));
   }
 }
+
+namespace
+{
+
+// counts the tables published
+struct Publications
+{
+  std::atomic<std::uint64_t> count = 0;
+
+  MaterialListener listener()
+  {
+    return [this](const MaterialServiceEvent& event) {
+      if (event.kind == MaterialServiceEvent::Kind::Published)
+      {
+        ++count;
+      }
+    };
+  }
+};
+
+// a game folder of materials whose images the overrides replace
+class FeedGame
+{
+private:
+  fs::TestEnvironment m_env;
+
+public:
+  FeedGame()
+  {
+    auto text = materialText("textures/feed/wall", "textures/feed/wall");
+    text += materialText("textures/feed/sized", "textures/feed/sized");
+    text +=
+      "textures/feed/prog\n{\n\tbumpmap\taddnormals( textures/feed/wall_local.tga, "
+      "heightmap( textures/feed/wall_h.tga, 4 ) "
+      ")\n\tdiffusemap\ttextures/feed/wall.tga\n}"
+      "\n";
+    writeTextFile(base() / "materials" / "feed.mtr", text);
+    image("wall", 16, 16);
+    image("sized", 32, 16);
+  }
+
+  void image(const std::string& name, const int width, const int height) const
+  {
+    writeTextFile(
+      base() / "textures" / "feed" / (name + ".tga"),
+      test::tgaFile(test::gradient(width, height), 32));
+  }
+
+  std::filesystem::path base() const { return m_env.dir() / "base"; }
+
+  MaterialServiceOptions options(
+    MaterialListener listener = {},
+    const std::chrono::milliseconds pollInterval = std::chrono::milliseconds{0}) const
+  {
+    auto result = MaterialServiceOptions{};
+    result.makeSource = [path = m_env.dir()](const std::atomic<bool>& cancel) {
+      return std::unique_ptr<DeclSource>{std::make_unique<GameFileSource>(path, &cancel)};
+    };
+    result.listener = std::move(listener);
+    result.pollInterval = pollInterval;
+    return result;
+  }
+};
+
+MaterialImageKey feedKey(const std::string& name, const int usage = UsageDiffuse)
+{
+  return keyOf("textures/feed/" + name, usage);
+}
+
+// the slot of a key once a table has it
+std::shared_ptr<const ImageCacheSlot> waitForImage(
+  MaterialService& service, const MaterialImageKey& key)
+{
+  static_cast<void>(service.image(key));
+  const auto table = service.waitForTableForTesting(
+    [&](const MaterialTable& t) { return t.findImage(key) != nullptr; }, Timeout);
+  auto slot = table->findImage(key);
+  REQUIRE(slot);
+  return slot;
+}
+
+// hands an override over and waits for the table that includes it, the thread idle
+std::shared_ptr<const MaterialTable> handOver(
+  MaterialService& service, const std::string& name, ImageOverride image)
+{
+  REQUIRE(service.setImageOverride(name, std::move(image)).is_success());
+  auto table = waitForFeeds(service);
+  REQUIRE(waitUntilIdle(service));
+  return table;
+}
+
+std::shared_ptr<const MaterialTable> clearAndWait(
+  MaterialService& service, const std::string& name)
+{
+  service.clearImageOverride(name);
+  auto table = waitForFeeds(service);
+  REQUIRE(waitUntilIdle(service));
+  return table;
+}
+
+std::uint64_t changeOf(const MaterialTable& table, const MaterialImageKey& key)
+{
+  const auto* change = table.changedImages.find(key);
+  return change ? *change : 0;
+}
+
+// the measured editor-image size of a material, once it satisfies predicate
+EditorImageSize waitForMeasure(
+  MaterialService& service,
+  const std::string& name,
+  const std::function<bool(const EditorImageSize&)>& predicate)
+{
+  static_cast<void>(service.lookup(name));
+  const auto table = service.waitForTableForTesting(
+    [&](const MaterialTable& t) {
+      const auto slot = t.find(name);
+      return slot && slot->entry && slot->sizeMeasured
+             && predicate(slot->entry->editorImageSize);
+    },
+    Timeout);
+  const auto slot = table->find(name);
+  REQUIRE(slot);
+  REQUIRE(slot->entry);
+  return slot->entry->editorImageSize;
+}
+
+using State = ImageOverrideStatus::State;
+
+} // namespace
+
+TEST_CASE("MaterialService image overrides, the store and its publications (C40, C41)")
+{
+  const auto game = FeedGame{};
+  auto publications = std::make_shared<Publications>();
+  auto hold = std::make_shared<Hold>();
+  auto serviceOptions = game.options(publications->listener());
+  serviceOptions.beforeTakeWorkForTesting = [hold] { hold->pass(); };
+  auto service = start(std::move(serviceOptions));
+  const auto openAtExit = OpenHoldAtExit{hold};
+  const auto wall = feedKey("wall");
+  const auto fromFile = waitForImage(*service, wall);
+  REQUIRE(fromFile->image);
+  CHECK_FALSE(fromFile->override);
+  CHECK(fromFile->image->width == 16);
+  REQUIRE(waitUntilIdle(*service));
+
+  SECTION("the whole name under ImageFromFile's folding matches; one publication")
+  {
+    const auto before = service->table();
+    const auto published = publications->count.load();
+    const auto table =
+      handOver(*service, "TEXTURES/Feed/Wall.tga", overrideOf(rgba8(8, 8, 200, 100, 50)));
+    // the drop and the new slot in one table, with the hand-over counted
+    CHECK(publications->count.load() == published + 1);
+    CHECK(table->feedApplied == before->feedApplied + 1);
+    CHECK(table->imageChanges > before->imageChanges);
+    CHECK(changeOf(*table, wall) > changeOf(*before, wall));
+    const auto slot = table->findImage(wall);
+    REQUIRE(slot);
+    CHECK(slot->override);
+    CHECK(slot->state == ImageCacheSlot::State::Ready);
+    CHECK(slot->files.empty());
+    REQUIRE(slot->image);
+    CHECK(slot->image->width == 8);
+    CHECK(slot->image->colorFormat == ColorYCoCgDxt5);
+    CHECK(slot->name.usage == UsageDiffuse);
+    CHECK(service->image(wall).state == ImageLookup::State::Ready);
+    CHECK(service->imageOverrideStatus("textures/feed/wall").state == State::Applied);
+    CHECK(table->overrideBytes == 8u * 8u * 4u);
+
+    // an upper-case extension is not removed (idStr::Replace compares with case)
+    const auto other =
+      handOver(*service, "TEXTURES/Feed/Wall.TGA", overrideOf(rgba8(4, 4, 1, 2, 3)));
+    CHECK(other->findImage(wall) == slot);
+    CHECK(service->imageOverrideStatus("TEXTURES/Feed/Wall.TGA").state == State::Pending);
+  }
+
+  SECTION("a second override: one table holds the drop and the new slot")
+  {
+    handOver(*service, "textures/feed/wall", overrideOf(rgba8(8, 8, 1, 2, 3)));
+    const auto before = service->table();
+    const auto published = publications->count.load();
+    const auto conversions = service->stats().overrideConversions;
+    const auto table =
+      handOver(*service, "textures/feed/wall", overrideOf(rgba8(4, 4, 9, 8, 7)));
+    CHECK(publications->count.load() == published + 1);
+    CHECK(table->feedApplied == before->feedApplied + 1);
+    CHECK(changeOf(*table, wall) > changeOf(*before, wall));
+    CHECK(table->imageChanges > before->imageChanges);
+    REQUIRE(table->findImage(wall)->image);
+    CHECK(table->findImage(wall)->image->width == 4);
+    CHECK(service->stats().overrideConversions == conversions + 1);
+    CHECK(table->overrideBytes == 4u * 4u * 4u);
+  }
+
+  SECTION("two hand-overs before the item runs: one conversion, the newest bytes")
+  {
+    const auto entry = waitForEntry(*service, "textures/feed/wall");
+    holdThread(*service, *hold, *entry);
+    const auto conversions = service->stats().overrideConversions;
+    REQUIRE(
+      service->setImageOverride("textures/feed/wall", overrideOf(rgba8(8, 8, 1, 2, 3)))
+        .is_success());
+    REQUIRE(
+      service->setImageOverride("textures/feed/wall", overrideOf(rgba8(2, 2, 4, 5, 6)))
+        .is_success());
+    hold->open();
+    const auto table = waitForFeeds(*service);
+    REQUIRE(waitUntilIdle(*service));
+    CHECK(table->feedApplied == service->feedRequested());
+    CHECK(service->stats().droppedFeeds == 1u);
+    CHECK(service->stats().overrideConversions == conversions + 1);
+    REQUIRE(table->findImage(wall)->image);
+    CHECK(table->findImage(wall)->image->width == 2);
+  }
+
+  SECTION("a refused override: one publication, the reason, the old slot standing")
+  {
+    auto floats = RawImagePixels{};
+    floats.width = 2;
+    floats.height = 2;
+    floats.format = ImagePixelFormat::RGBA32F;
+    floats.bytes.assign(2 * 2 * 16, 0);
+    const auto before = service->table();
+    const auto published = publications->count.load();
+    const auto table = handOver(*service, "textures/feed/wall", overrideOf(floats));
+    CHECK(publications->count.load() == published + 1);
+    CHECK(table->feedApplied == before->feedApplied + 1);
+    CHECK(table->feedApplied == service->feedRequested());
+    CHECK(table->findImage(wall) == fromFile);
+    CHECK(table->imageChanges == before->imageChanges);
+    const auto status = service->imageOverrideStatus("textures/feed/wall");
+    CHECK(status.state == State::Refused);
+    CHECK_THAT(status.reason, Catch::Matchers::ContainsSubstring("RGBA32F"));
+    CHECK(table->overrideBytes == 0u);
+
+    // a refused replacement leaves the earlier override applied
+    const auto applied =
+      handOver(*service, "textures/feed/wall", overrideOf(rgba8(8, 8, 1, 2, 3)));
+    const auto kept = handOver(*service, "textures/feed/wall", overrideOf(floats));
+    CHECK(kept->findImage(wall) == applied->findImage(wall));
+    CHECK(kept->overrideBytes == 8u * 8u * 4u);
+  }
+
+  SECTION("a clear: one publication with the file's slot, never a pending one")
+  {
+    handOver(*service, "textures/feed/wall", overrideOf(rgba8(8, 8, 1, 2, 3)));
+    const auto before = service->table();
+    const auto published = publications->count.load();
+    const auto table = clearAndWait(*service, "textures/feed/wall");
+    CHECK(publications->count.load() == published + 1);
+    CHECK(table->feedApplied == before->feedApplied + 1);
+    CHECK(changeOf(*table, wall) > changeOf(*before, wall));
+    const auto slot = table->findImage(wall);
+    REQUIRE(slot);
+    CHECK_FALSE(slot->override);
+    REQUIRE(slot->image);
+    CHECK(slot->image->width == 16);
+    CHECK(service->image(wall).state == ImageLookup::State::Source);
+    CHECK(service->imageOverrideStatus("textures/feed/wall").state == State::None);
+    CHECK(table->overrideBytes == 0u);
+  }
+
+  SECTION("a clear of a name with no override publishes once, nothing else changed")
+  {
+    const auto before = service->table();
+    const auto published = publications->count.load();
+    const auto table = clearAndWait(*service, "textures/feed/nothing");
+    CHECK(publications->count.load() == published + 1);
+    CHECK(table->feedApplied == before->feedApplied + 1);
+    CHECK(table->imageChanges == before->imageChanges);
+    CHECK(table->findImage(wall) == fromFile);
+  }
+
+  SECTION("an override no key uses yet is converted at the key's first lookup")
+  {
+    handOver(*service, "textures/feed/later", overrideOf(rgba8(4, 4, 1, 2, 3)));
+    CHECK(service->imageOverrideStatus("textures/feed/later").state == State::Pending);
+    const auto later = feedKey("later");
+    CHECK_FALSE(service->table()->findImage(later));
+    const auto slot = waitForImage(*service, later);
+    CHECK(slot->override);
+    REQUIRE(slot->image);
+    CHECK(slot->image->width == 4);
+    CHECK(service->imageOverrideStatus("textures/feed/later").state == State::Applied);
+  }
+
+  SECTION("a program key takes only an override of its whole text (P5.1)")
+  {
+    const auto entry = waitForEntry(*service, "textures/feed/prog");
+    const auto program = stageKey(*entry, 1);
+    const auto programSlot = waitForImage(*service, program);
+    REQUIRE(waitUntilIdle(*service));
+    CHECK_FALSE(programSlot->override);
+    // the program's leaf is another name
+    const auto leaf =
+      handOver(*service, "textures/feed/wall_local", overrideOf(rgba8(4, 4, 1, 2, 3)));
+    CHECK(leaf->findImage(program) == programSlot);
+    // the whole text, its extensions folded as ImageFromFile folds them
+    CAPTURE(program.name);
+    const auto whole = handOver(*service, program.name, overrideOf(rgba8(4, 4, 1, 2, 3)));
+    const auto slot = whole->findImage(program);
+    REQUIRE(slot);
+    CHECK(slot->override);
+    REQUIRE(slot->image);
+    CHECK(slot->image->colorFormat == ColorNormalDxt5);
+  }
+
+  SECTION("reload(): the override slot stays, not converted again (D99, P5.7)")
+  {
+    const auto applied =
+      handOver(*service, "textures/feed/wall", overrideOf(rgba8(8, 8, 1, 2, 3)));
+    const auto conversions = service->stats().overrideConversions;
+    service->reload();
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.builds == 2u && s.idle; }, Timeout));
+    const auto reloaded = service->table();
+    CHECK(reloaded->findImage(wall) == applied->findImage(wall));
+    CHECK(service->stats().overrideConversions == conversions);
+    CHECK(reloaded->feedApplied == applied->feedApplied);
+    CHECK(reloaded->overrideBytes == applied->overrideBytes);
+  }
+}
+
+TEST_CASE(
+  "MaterialService image overrides, the budget, the poll and the sizes (D99, D111)")
+{
+  using SizeState = EditorImageSize::State;
+  const auto game = FeedGame{};
+
+  SECTION("the budget drops a taken override slot; the next request converts it again")
+  {
+    auto serviceOptions = game.options();
+    serviceOptions.imageBudgetBytes = std::size_t{1024} * 1024;
+    auto service = start(std::move(serviceOptions));
+    const auto wall = feedKey("wall");
+    static_cast<void>(waitForImage(*service, wall));
+    // 512 x 512 RGBA8 with its mips, about 1.4 MB: beyond the budget alone
+    handOver(*service, "textures/feed/wall", overrideOf(rgba8(512, 512, 1, 2, 3)));
+    REQUIRE(service->table()->findImage(wall)->override);
+    REQUIRE(service->image(wall).image);
+    const auto conversions = service->stats().overrideConversions;
+    // another image's batch runs the budget, which drops the taken override slot
+    static_cast<void>(waitForImage(*service, feedKey("sized")));
+    REQUIRE(waitUntilIdle(*service));
+    CHECK_FALSE(service->table()->findImage(wall));
+    CHECK(service->stats().evictedImages >= 1u);
+    // the store is the truth: asked again, it is converted from the store
+    CHECK(service->image(wall).state == ImageLookup::State::Pending);
+    const auto again = waitForImage(*service, wall);
+    CHECK(again->override);
+    REQUIRE(again->image);
+    CHECK(again->image->width == 512);
+    CHECK(service->stats().overrideConversions == conversions + 1);
+  }
+
+  SECTION("the poll never probes an overridden key's files (C41)")
+  {
+    auto service = start(game.options({}, std::chrono::milliseconds{20}));
+    const auto wall = feedKey("wall");
+    const auto sized = feedKey("sized");
+    static_cast<void>(waitForImage(*service, wall));
+    const auto control = waitForImage(*service, sized);
+    const auto applied =
+      handOver(*service, "textures/feed/wall", overrideOf(rgba8(8, 8, 1, 2, 3)));
+    const auto slot = applied->findImage(wall);
+    REQUIRE(slot->override);
+    // both files change; the poll reads the control again, never the override's
+    game.image("wall", 64, 64);
+    game.image("sized", 64, 16);
+    bumpModificationTime(game.base() / "textures" / "feed" / "wall.tga");
+    bumpModificationTime(game.base() / "textures" / "feed" / "sized.tga");
+    REQUIRE(service->waitForTableForTesting(
+      [&](const MaterialTable& t) {
+        const auto read = t.findImage(sized);
+        return read && read != control && read->image && read->image->width == 64;
+      },
+      Timeout));
+    // and some more polls
+    std::this_thread::sleep_for(std::chrono::milliseconds{200});
+    CHECK(service->table()->findImage(wall) == slot);
+  }
+
+  SECTION("editorSize: C21's size of the name, the materials that hold it remeasured")
+  {
+    auto service = start(game.options());
+    CHECK(
+      waitForMeasure(*service, "textures/feed/sized", [](const auto&) { return true; })
+      == EditorImageSize{32, 16, SizeState::Ready, {}});
+    auto image = overrideOf(rgba8(4, 4, 1, 2, 3));
+    image.editorSize = EditorImageSize{1024, 1024, SizeState::Ready, {}};
+    REQUIRE(
+      service->setImageOverride("textures/feed/sized", std::move(image)).is_success());
+    CHECK(
+      waitForMeasure(
+        *service,
+        "textures/feed/sized",
+        [](const auto& size) { return size.width == 1024; })
+      == EditorImageSize{1024, 1024, SizeState::Ready, {}});
+    // another material's size is untouched
+    CHECK(
+      waitForMeasure(*service, "textures/feed/wall", [](const auto&) { return true; })
+      == EditorImageSize{16, 16, SizeState::Ready, {}});
+    // a clear: the file's size again
+    service->clearImageOverride("textures/feed/sized");
+    CHECK(
+      waitForMeasure(
+        *service,
+        "textures/feed/sized",
+        [](const auto& size) { return size.width == 32; })
+      == EditorImageSize{32, 16, SizeState::Ready, {}});
+  }
+
+  SECTION("without a registry an override waits, Pending; the next build applies it")
+  {
+    // a source that throws when the first build ends its read batch (W.4)
+    class FailOnceSource : public GameFileSource
+    {
+    private:
+      std::shared_ptr<std::atomic<bool>> m_throws;
+
+    public:
+      FailOnceSource(
+        const std::filesystem::path& path, std::shared_ptr<std::atomic<bool>> throws)
+        : GameFileSource{path}
+        , m_throws{std::move(throws)}
+      {
+      }
+
+      void closeFiles() override
+      {
+        GameFileSource::closeFiles();
+        if (m_throws->exchange(false))
+        {
+          throw std::runtime_error{"an injected build failure"};
+        }
+      }
+    };
+    auto throws = std::make_shared<std::atomic<bool>>(true);
+    auto serviceOptions = game.options();
+    serviceOptions.makeSource = [path = game.base().parent_path(),
+                                 throws](const std::atomic<bool>&) {
+      return std::unique_ptr<DeclSource>{std::make_unique<FailOnceSource>(path, throws)};
+    };
+    auto service = start(std::move(serviceOptions));
+    const auto wall = feedKey("wall");
+    const auto failed = waitForImage(*service, wall);
+    CHECK_FALSE(failed->image);
+    REQUIRE(waitUntilIdle(*service));
+    handOver(*service, "textures/feed/wall", overrideOf(rgba8(8, 8, 1, 2, 3)));
+    CHECK(service->imageOverrideStatus("textures/feed/wall").state == State::Pending);
+    CHECK_FALSE(service->table()->findImage(wall)->override);
+
+    service->reload();
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.builds == 1u && s.idle; }, Timeout));
+    // the build dropped the failed slot: the consumer's lookup converts the override
+    const auto applied = waitForImage(*service, wall);
+    CHECK(applied->override);
+    CHECK(service->imageOverrideStatus("textures/feed/wall").state == State::Applied);
+  }
+}
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+TEST_CASE("MaterialService image overrides leak nothing")
+{
+  const auto game = FeedGame{};
+  auto service = start(game.options());
+  const auto wall = feedKey("wall");
+  static_cast<void>(waitForImage(*service, wall));
+  const auto cycle = [&](const int i) {
+    handOver(
+      *service, "textures/feed/wall", overrideOf(rgba8(8, 8, std::uint8_t(i), 2, 3)));
+    static_cast<void>(service->image(wall));
+    clearAndWait(*service, "textures/feed/wall");
+    static_cast<void>(service->image(wall));
+    handOver(*service, "textures/feed/wall", overrideOf(rgba8(8, 8, 4, 5, 6)));
+    static_cast<void>(service->image(wall));
+    REQUIRE(waitUntilIdle(*service));
+  };
+  cycle(0);
+  cycle(1);
+  const auto grew = heapGrows([&] {
+    for (auto i = 0; i < 100; ++i)
+    {
+      cycle(i);
+    }
+  });
+  CHECK_FALSE(grew);
+}
+#endif
 
 } // namespace tb::lit
