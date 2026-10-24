@@ -678,6 +678,12 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   return lists;
 }
 
+ListsTableKey ListsTableKey::of(const MaterialTable* table)
+{
+  return table ? ListsTableKey{table->registry, table->materialsRevision}
+               : ListsTableKey{};
+}
+
 RegisterAnswer RegisterCache::registers(
   const PreviewId consumer,
   const MaterialEntry& material,
@@ -701,7 +707,15 @@ RegisterAnswer RegisterCache::registers(
     kept.registers = found;
     return RegisterAnswer{std::move(found), true};
   }
-  // D52: the last registers until the new ones arrive, never the defaults
+  // D52: the last registers until the new ones arrive, never the defaults; LPF.0b (C43,
+  // P5.27): across a re-parse only while they cover the material's registers now, so a
+  // keystroke does not blink the surface and a grown expression set is never read past
+  if (
+    kept.registers
+    && kept.registers->registers.size() < std::size_t(std::max(material.numRegisters, 0)))
+  {
+    kept.registers.reset();
+  }
   return RegisterAnswer{kept.registers, false};
 }
 

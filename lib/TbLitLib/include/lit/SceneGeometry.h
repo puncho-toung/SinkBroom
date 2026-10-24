@@ -59,8 +59,10 @@ struct ProcTree;
  * Every batch first adopts the latest material table, and each table it adopts is
  * scanned for what the scene waits for (R3.1, R3.2): a material that was pending when a
  * cell was built, an editor-image size that was Default (C21) and is Ready now, an
- * entityDef that was pending when an entity was built (C22), and the bake of the map
- * path. The cells concerned are built again in that batch. Between snapshots, collect
+ * entityDef that was pending when an entity was built (C22), the bake of the map path,
+ * and (LPF.0b, C43) a re-parsed material's revision: its cells, drawn or not, and the
+ * whole entity when its CONTENTS_ORIGIN changed. The cells concerned are built again in
+ * that batch. Between snapshots, collect
  * starts such a batch when a newer table has arrived; the owner wakes the render thread
  * for it (LitSession::tableChanged, R2.2).
  *
@@ -147,6 +149,24 @@ private:
   std::map<std::string, SizedCells> m_sizedCells;
   std::map<std::string, std::set<PreviewId>> m_pendingEntityDefs;
   std::map<CellRef, std::size_t> m_solidPieces;
+  /**
+   * LPF.0b (C43, D106, P5.9): the cells of each material their chunk jobs read (drawn or
+   * not, so that a stage-less material given its first stage builds its cells), with the
+   * material's revision stamp (MaterialTable::revisionStamp) and its CONTENTS_ORIGIN when
+   * they were built, and each cell's materials; scanned when a table's
+   * materialsRevision moves (the last scanned one)
+   */
+  struct MaterialCells
+  {
+    std::uint64_t stamp = 0;
+    bool origin = false;
+    std::set<CellRef> cells;
+  };
+  std::map<std::string, MaterialCells> m_materialCells;
+  std::map<CellRef, std::vector<std::string>> m_cellMaterials;
+  std::uint64_t m_materialsRevision = 0;
+  // the cells of the last batch started (tests)
+  std::set<CellRef> m_lastBatchCells;
   // D80: the entities whose chunks the applied jobs touched, whose references are built
   // once the batch has applied
   std::set<PreviewId> m_touchedEntities;
@@ -250,6 +270,8 @@ public:
 
   // waits for the batches in flight and applies them, until none is in flight (tests)
   void finishForTesting();
+  // LPF.0b: the cells the last batch started builds (tests)
+  const std::set<CellRef>& lastBatchCellsForTesting() const;
 
   deleteCopyAndMove(SceneGeometry);
 
@@ -268,6 +290,7 @@ private:
   // has none)
   EditorImageSize tableSizeOf(const std::string& material) const;
   void forgetSizedCells(const std::vector<CellRef>& cells);
+  void forgetMaterialCells(const std::vector<CellRef>& cells);
   void apply(ChunkJobOutput output);
   // C31, D80: the touched entities' bounds and area references from their chunks
   void updateEntityReferences();

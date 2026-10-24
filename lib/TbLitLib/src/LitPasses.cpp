@@ -385,7 +385,7 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
     }
     key.gridValidity = m_gridValidity;
   }
-  key.registry = table ? table->registry : 0;
+  key.table = ListsTableKey::of(table);
   key.lightTrianglesVersion = m_lightTriangles.version();
   key.lightTriangleCull = m_lightTriangleCull;
   const auto tableVersion = table ? table->version : 0;

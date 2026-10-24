@@ -260,6 +260,10 @@ public:
     }
     m_output.pendingMaterials.assign(
       m_materials.pending.begin(), m_materials.pending.end());
+    for (const auto& [name, material] : m_materials.cache)
+    {
+      m_output.materials.push_back(name);
+    }
     return std::move(m_output);
   }
 

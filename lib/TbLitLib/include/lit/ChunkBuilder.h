@@ -250,6 +250,10 @@ struct ChunkJobOutput
   std::size_t solidPieces = 0;
   // materials the table did not have yet; the chunks using them are provisional
   std::vector<std::string> pendingMaterials;
+  // LPF.0b (C43, P5.9): every material the job read from the table, drawn or not: its
+  // faces' and patches' (worldspawn's overrideMaterial in their place) and those its
+  // brush entities' origin test read, so that a re-parse builds their cells again
+  std::vector<std::string> materials;
   std::vector<std::string> warnings;
 };
 

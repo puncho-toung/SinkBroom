@@ -26,6 +26,7 @@
 #include "lit/CpuPool.h"
 #include "lit/EntityState.h"
 #include "lit/GameFileSource.h"
+#include "lit/ImageOverride.h"
 #include "lit/LightData.h"
 #include "lit/LightRecord.h"
 #include "lit/MaterialService.h"
@@ -1761,6 +1762,225 @@ TEST_CASE(
   // the test would fail with corners kept whole
   CHECK(onlyBarycentric > 0);
 }
+
+namespace
+{
+
+// LPF.0b: a service over the fixture decls and one stage-less material of the test's
+std::unique_ptr<MaterialService> reparseSceneService()
+{
+  auto options = MaterialServiceOptions{};
+  options.makeSource = [](const std::atomic<bool>&) {
+    auto decls = fixtureDecls();
+    decls.push_back(DeclFile{
+      "materials/zz_lpf_test.mtr", "textures/lpf/plain\n{\n\tnoshadows\n}\n", 0});
+    return std::unique_ptr<DeclSource>{
+      std::make_unique<MemoryDeclSource>(std::move(decls))};
+  };
+  options.pollInterval = std::chrono::milliseconds{0};
+  return MaterialService::create(std::move(options))
+         | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+}
+
+// the service idle and the scene's batches applied with its latest table
+bool quiet(MaterialService& service, SceneGeometry& scene)
+{
+  return service.waitForStatsForTesting(
+           [](const auto& s) { return s.idle; }, std::chrono::seconds{10})
+         && settle(scene, [&] { return !scene.waitsForMaterials(); });
+}
+
+// a re-parse, its table published and the scene quiet again
+bool reparsed(
+  MaterialService& service,
+  SceneGeometry& scene,
+  const std::string& name,
+  const std::string& text)
+{
+  if (!service.reparseMaterial(name, text).is_success())
+  {
+    return false;
+  }
+  const auto requested = service.feedRequested();
+  service.waitForTableForTesting(
+    [&](const MaterialTable& t) { return t.feedApplied >= requested; },
+    std::chrono::seconds{10});
+  return quiet(service, scene);
+}
+
+const Chunk* chunkOf(const SceneGeometry& scene, const std::string& material)
+{
+  for (const auto& [key, chunk] : scene.chunks())
+  {
+    if (key.material == material)
+    {
+      return &chunk;
+    }
+  }
+  return nullptr;
+}
+
+std::string reparseSceneMap()
+{
+  return "{\n\"classname\" \"worldspawn\"\n" + box(0, 0, 0, 64, 64, 64, "lp1b/wall")
+         + box(1100, 0, 0, 1132, 32, 32, "lp1b/crate")
+         + box(2100, 0, 0, 2132, 32, 32, "lp1b/test_nodraw") + "}\n"
+         + "{\n\"classname\" \"func_static\"\n\"name\" \"a\"\n\"model\" \"a\"\n"
+         + box(3100, 0, 0, 3132, 32, 32, "lp1b/floor")
+         + box(4100, 0, 0, 4132, 32, 32, "lp1b/floor")
+         + box(5200, 0, 0, 5216, 16, 16, "lpf/plain") + "}\n";
+}
+
+const auto CrateText = std::string{
+  "textures/lp1b/crate\n{\n\tunsmoothedTangents\n\tqer_editorimage\ttextures/lp1b/"
+  "crate.tga\n\tdiffusemap\ttextures/lp1b/crate.tga\n}\n"};
+const auto TwoSidedCrateText = std::string{
+  "textures/lp1b/crate\n{\n\tunsmoothedTangents\n\ttwoSided\n\tqer_editorimage\t"
+  "textures/lp1b/crate.tga\n\tdiffusemap\ttextures/lp1b/crate.tga\n}\n"};
+
+} // namespace
+
+TEST_CASE(
+  "SceneGeometry: a re-parsed material builds its cells again (LPF.0b, C43, D106)")
+{
+  using namespace std::chrono_literals;
+  static_cast<void>(fixtureTable());
+  auto service = reparseSceneService();
+  auto pool = CpuPool::create() | kdl::value();
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    auto snapshot = snapshotOfMapText(reparseSceneMap());
+    snapshot.sequence = 1;
+    const auto world = snapshot.entities[0].id;
+    const auto funcId = snapshot.entities[1].id;
+    scene.takeSnapshot(snapshot);
+    REQUIRE(quiet(*service, scene));
+
+    const auto* crate = chunkOf(scene, "textures/lp1b/crate");
+    const auto* wall = chunkOf(scene, "textures/lp1b/wall");
+    REQUIRE(crate);
+    REQUIRE(wall);
+    const auto crateCell = CellRef{crate->key.entity, crate->key.cell};
+    const auto crateIndexes = crate->indexes.size();
+    const auto* wallVerts = wall->verts.data();
+    CHECK_FALSE(chunkOf(scene, "textures/lp1b/test_nodraw"));
+    REQUIRE(scene.entityStates().contains(funcId));
+    CHECK(scene.entityStates().at(funcId).originOffset == EngineVec3{0, 0, 0});
+
+    SECTION("twoSided: its cells built again with back faces, nothing else")
+    {
+      REQUIRE(reparsed(*service, scene, "textures/lp1b/crate", TwoSidedCrateText));
+      const auto* rebuilt = chunkOf(scene, "textures/lp1b/crate");
+      REQUIRE(rebuilt);
+      // createBackSides: a reversed copy of every triangle
+      CHECK(rebuilt->indexes.size() == 2 * crateIndexes);
+      CHECK(scene.lastBatchCellsForTesting() == std::set<CellRef>{crateCell});
+      // the wall's chunk is the one built before
+      CHECK(chunkOf(scene, "textures/lp1b/wall")->verts.data() == wallVerts);
+
+      // an image override changes no revision: nothing is built again
+      auto image = ImageOverride{};
+      auto pixels = RawImagePixels{};
+      pixels.width = 2;
+      pixels.height = 2;
+      pixels.bytes.assign(16, 200);
+      image.image = std::move(pixels);
+      const auto before = service->table()->materialsRevision;
+      const auto* crateVerts = rebuilt->verts.data();
+      REQUIRE(
+        service->setImageOverride("textures/lp1b/crate", std::move(image)).is_success());
+      const auto requested = service->feedRequested();
+      const auto table = service->waitForTableForTesting(
+        [&](const MaterialTable& t) { return t.feedApplied >= requested; }, 10s);
+      CHECK(table->materialsRevision == before);
+      REQUIRE(quiet(*service, scene));
+      CHECK(chunkOf(scene, "textures/lp1b/crate")->verts.data() == crateVerts);
+    }
+
+    SECTION("a stage-less material given a stage: its cells built, a chunk appears")
+    {
+      REQUIRE(reparsed(
+        *service,
+        scene,
+        "textures/lp1b/test_nodraw",
+        "{\n\tnoshadows\n\tdiffusemap textures/lp1b/crate.tga\n}\n"));
+      const auto* appeared = chunkOf(scene, "textures/lp1b/test_nodraw");
+      REQUIRE(appeared);
+      CHECK(
+        scene.lastBatchCellsForTesting()
+        == std::set<CellRef>{CellRef{appeared->key.entity, appeared->key.cell}});
+      CHECK(chunkOf(scene, "textures/lp1b/wall")->verts.data() == wallVerts);
+    }
+
+    SECTION("a material gaining CONTENTS_ORIGIN: its entity built again whole")
+    {
+      REQUIRE(
+        reparsed(*service, scene, "textures/lpf/plain", "{\n\torigin\n\tnoshadows\n}\n"));
+      // the pivot is the origin brush's centre now
+      CHECK(scene.entityStates().at(funcId).originOffset == EngineVec3{5208, 8, 8});
+      auto entityCells = std::set<CellRef>{};
+      for (const auto& ref : scene.lastBatchCellsForTesting())
+      {
+        CHECK(ref.entity == funcId);
+        entityCells.insert(ref);
+      }
+      // its three cells, the floor's two and the origin brush's
+      CHECK(entityCells.size() == 3u);
+      CHECK(chunkOf(scene, "textures/lp1b/wall")->verts.data() == wallVerts);
+      static_cast<void>(world);
+
+      // and back
+      REQUIRE(reparsed(*service, scene, "textures/lpf/plain", "{\n\tnoshadows\n}\n"));
+      CHECK(scene.entityStates().at(funcId).originOffset == EngineVec3{0, 0, 0});
+    }
+    scene.finishForTesting();
+    static_cast<void>(scene.takeWarnings());
+  }
+  pool->stop();
+  service->requestStop();
+  service->join();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+}
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+TEST_CASE("SceneGeometry: 100 re-parses with the scene leave the heap (LPF.0b)")
+{
+  static_cast<void>(fixtureTable());
+  auto service = reparseSceneService();
+  auto pool = CpuPool::create() | kdl::value();
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    auto snapshot = snapshotOfMapText(reparseSceneMap());
+    snapshot.sequence = 1;
+    scene.takeSnapshot(snapshot);
+    REQUIRE(quiet(*service, scene));
+    const auto cycle = [&] {
+      REQUIRE(reparsed(*service, scene, "textures/lp1b/crate", TwoSidedCrateText));
+      REQUIRE(reparsed(*service, scene, "textures/lp1b/crate", CrateText));
+      static_cast<void>(scene.takeWarnings());
+      static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    };
+    cycle();
+    cycle();
+    // the pool's and the service's queues may hold a few blocks more or less at either
+    // checkpoint; a leak in any of the 100 re-parses shows 50 times or more
+    const auto growth = heapGrowth([&] {
+      for (auto i = 0; i < 50; ++i)
+      {
+        cycle();
+      }
+    });
+    CAPTURE(growth.blocks, growth.bytes);
+    CHECK(growth.blocks <= 64);
+    CHECK(growth.bytes <= 16384);
+    scene.finishForTesting();
+  }
+  pool->stop();
+  service->requestStop();
+  service->join();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+}
+#endif
 
 #if defined(_MSC_VER) && defined(_DEBUG)
 TEST_CASE(

@@ -32,9 +32,11 @@
 #include "lit/EngineTables.h"
 #include "lit/GridTable.h"
 #include "lit/ImageCache.h"
+#include "lit/ImageOverride.h"
 #include "lit/LightData.h"
 #include "lit/LightParse.h"
 #include "lit/LightRecord.h"
+#include "lit/MaterialService.h"
 #include "lit/ProcFile.h"
 
 #include "kd/result.h"
@@ -42,6 +44,8 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <map>
@@ -1805,6 +1809,107 @@ TEST_CASE("LitPasses: R_AddSingleLight's register snap and the math light test")
   CHECK(user[0] == Vec4{0, 1, 0, 0});
   CHECK(user[1] == Vec4{2, 0, 0, 0});
   CHECK(user[2] == Vec4{0, 0, 0, 1});
+}
+
+TEST_CASE("LitPasses: the lists' table key moves once per re-parse (LPF.0b, C43, D106)")
+{
+  using namespace std::chrono_literals;
+  auto options = MaterialServiceOptions{};
+  options.makeSource = [](const std::atomic<bool>&) {
+    return std::unique_ptr<DeclSource>{
+      std::make_unique<MemoryDeclSource>(materialDeclsFixture())};
+  };
+  options.pollInterval = 0ms;
+  auto service = MaterialService::create(std::move(options)) | kdl::value();
+  const auto handedOver = [&] {
+    const auto requested = service->feedRequested();
+    service->waitForTableForTesting(
+      [&](const MaterialTable& t) { return t.feedApplied >= requested; }, 10s);
+    REQUIRE(service->waitForStatsForTesting([](const auto& s) { return s.idle; }, 10s));
+    return service->table();
+  };
+  static_cast<void>(service->lookup("textures/lp1a/wall"));
+  REQUIRE(service->waitForTableForTesting(
+    [](const MaterialTable& t) {
+      const auto slot = t.find("textures/lp1a/wall");
+      return slot && slot->sizeMeasured;
+    },
+    10s));
+  REQUIRE(service->waitForStatsForTesting([](const auto& s) { return s.idle; }, 10s));
+  const auto before = ListsTableKey::of(service->table().get());
+
+  // a re-parse moves it once: its publication and the measure after it share one key
+  REQUIRE(service->reparseMaterial("textures/lp1a/wall", "{ diffusemap textures/lp1a/x }")
+            .is_success());
+  const auto after = ListsTableKey::of(handedOver().get());
+  CHECK(after.registry == before.registry);
+  CHECK(after.materialsRevision == before.materialsRevision + 1);
+
+  // an image override moves it not
+  auto image = ImageOverride{};
+  auto pixels = RawImagePixels{};
+  pixels.width = 2;
+  pixels.height = 2;
+  pixels.bytes.assign(16, 100);
+  image.image = std::move(pixels);
+  REQUIRE(service->setImageOverride("textures/lp1a/x", std::move(image)).is_success());
+  const auto overridden = handedOver();
+  CHECK(ListsTableKey::of(overridden.get()) == after);
+  CHECK(ListsTableKey::of(nullptr) == ListsTableKey{});
+  service->requestStop();
+  service->join();
+}
+
+TEST_CASE("LitPasses: RegisterCache keeps registers across a re-parse that fits (D52)")
+{
+  // LPF.0b (C43, P5.27): the service erases a re-parsed material's register deltas; the
+  // cache answers with the kept registers while they cover the material's count
+  auto material = MaterialEntry{};
+  material.name = "textures/reparsed";
+  material.registry = 1;
+  material.index = 0;
+  material.numRegisters = 3;
+  auto table = MaterialTable{};
+  auto registers = std::make_shared<EvaluatedRegisters>();
+  registers->registers = {1.0f, 0.5f, 0.25f};
+  table.registers = table.registers.set(
+    RegisterKey{MaterialId::of(material), ShaderParms{}, 0.0f}, registers);
+  auto cache = RegisterCache{};
+  cache.beginBuild();
+  const auto first =
+    cache.registers(PreviewId{1}, material, ShaderParms{}, table, nullptr);
+  CHECK(first.current);
+  CHECK(first.registers == registers);
+  cache.endBuild();
+
+  // re-parse 1: the same count, no evaluation yet: the kept registers, no blink
+  const auto erased = MaterialTable{};
+  material.revision = 1;
+  cache.beginBuild();
+  const auto kept =
+    cache.registers(PreviewId{1}, material, ShaderParms{}, erased, nullptr);
+  CHECK_FALSE(kept.current);
+  CHECK(kept.registers == registers);
+  cache.endBuild();
+
+  // re-parse 2: more registers than the kept ones cover: none until the evaluation lands
+  material.revision = 2;
+  material.numRegisters = 8;
+  cache.beginBuild();
+  const auto dropped =
+    cache.registers(PreviewId{1}, material, ShaderParms{}, erased, nullptr);
+  CHECK_FALSE(dropped.current);
+  CHECK_FALSE(dropped.registers);
+  auto grown = MaterialTable{};
+  auto eight = std::make_shared<EvaluatedRegisters>();
+  eight->registers = std::vector<float>(8, 1.0f);
+  grown.registers = grown.registers.set(
+    RegisterKey{MaterialId::of(material), ShaderParms{}, 0.0f}, eight);
+  const auto landed =
+    cache.registers(PreviewId{1}, material, ShaderParms{}, grown, nullptr);
+  CHECK(landed.current);
+  CHECK(landed.registers == eight);
+  cache.endBuild();
 }
 
 #if defined(_MSC_VER) && defined(_DEBUG)

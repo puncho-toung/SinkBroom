@@ -63,6 +63,18 @@ bool isWorldspawn(const std::string_view classname)
            });
 }
 
+// LPF.0b (C43, D106): the revision stamps of the materials a light is derived with
+// (lightMaterialNames), combined; reads the table only, so any thread
+std::uint64_t lightMaterialStamp(const ParsedLight& light, const MaterialTable* table)
+{
+  auto stamp = std::uint64_t{14695981039346656037ull};
+  for (const auto& name : lightMaterialNames(light))
+  {
+    stamp = (stamp ^ (table ? table->revisionStamp(name) : 0)) * 1099511628211ull;
+  }
+  return stamp;
+}
+
 void eraseFromAll(std::map<std::string, std::set<PreviewId>>& waiting, const PreviewId id)
 {
   for (auto it = waiting.begin(); it != waiting.end();)
@@ -115,6 +127,7 @@ LightJobOutput buildLightRecords(const LightJobInput& input, const CpuJobContext
 
     record.light = parseLight(record.spawnArgs);
     record.derived = deriveLight(record.light, table, tree, tree ? &common : nullptr);
+    record.materialStamp = lightMaterialStamp(record.light, table);
     if (record.derived.shader.material)
     {
       record.material = MaterialId::of(*record.derived.shader.material);
@@ -416,6 +429,19 @@ void LightRegistry::refreshTable()
     {
       m_dirty.insert(id);
     }
+    m_materialsRevision = m_table->materialsRevision;
+  }
+  // LPF.0b (C43, D106): a re-parse moved the table's materialsRevision: the lights whose
+  // shader or default light material's revision stamp moved are built again
+  if (m_table->materialsRevision != m_materialsRevision)
+  {
+    m_materialsRevision = m_table->materialsRevision;
+    m_records.forEach([&](const PreviewId id, const auto& record) {
+      if (lightMaterialStamp(record->light, m_table.get()) != record->materialStamp)
+      {
+        m_dirty.insert(id);
+      }
+    });
   }
   // R3.1: what the lights wait for is looked for in every table the registry adopts
   for (auto it = m_waitingMaterials.begin(); it != m_waitingMaterials.end();)

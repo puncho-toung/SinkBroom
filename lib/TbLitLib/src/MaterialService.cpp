@@ -237,6 +237,16 @@ std::shared_ptr<const EvaluatedRegisters> MaterialTable::findRegisters(
   return found ? *found : nullptr;
 }
 
+std::uint64_t MaterialTable::revisionStamp(const std::string_view name) const
+{
+  const auto* slot = materials.find(name);
+  if (!slot)
+  {
+    return 0;
+  }
+  return (*slot)->entry ? 2 + std::uint64_t((*slot)->entry->revision) : 1;
+}
+
 // What every thread shares: the requests, the published table and the stats, under one
 // mutex; the stop flag is also the registry's and the source's cancel flag.
 struct MaterialService::Shared

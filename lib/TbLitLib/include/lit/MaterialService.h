@@ -216,6 +216,10 @@ struct MaterialTable
   // the registers of a key; an EvaluatedRegisters with an error when the evaluation was
   // refused, null when it is not done yet
   std::shared_ptr<const EvaluatedRegisters> findRegisters(const RegisterKey& key) const;
+  // LPF.0b (C43, D106): what a consumer keeps of a material to see a re-parse: 0 when the
+  // name is not looked up, 1 for a Failed slot, else 2 + the entry's revision. It does
+  // not allocate
+  std::uint64_t revisionStamp(std::string_view name) const;
 };
 
 // what lookup returns

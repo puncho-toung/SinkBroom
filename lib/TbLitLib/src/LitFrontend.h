@@ -310,12 +310,29 @@ void engineSortViewLights(std::vector<ViewLight>& lights);
 FrontendLists buildFrontendLists(const FrontendInputs& inputs);
 
 /**
+ * LPF.0b (C43, D106): what of the material table the frontend lists depend on beyond its
+ * version: the registry, and materialsRevision, which a re-parse moves once (an image
+ * override moves neither), so that LitPasses builds its lists again once per re-parse.
+ * Any thread.
+ */
+struct ListsTableKey
+{
+  std::uint64_t registry = 0;
+  std::uint64_t materialsRevision = 0;
+
+  static ListsTableKey of(const MaterialTable* table);
+  bool operator==(const ListsTableKey&) const = default;
+};
+
+/**
  * D52 (§3.5 Registers, C27's last sentence): the render thread's registers per consumer
  * (an entity's or a light's preview id) and material. An answer is the latest table's
  * evaluation of (material, shaderParms, time 0), else the service's (evaluate queues it
  * ahead of the lookups), else the consumer's last registers of that material, never the
- * defaults: a light-colour drag never flickers. Consumers not asked for in a build are
- * forgotten at its end. Render thread.
+ * defaults: a light-colour drag never flickers. LPF.0b (C43, P5.27): after a re-parse
+ * (whose register deltas the service erased) the last registers stand only while they
+ * cover the material's numRegisters, and are dropped otherwise. Consumers not asked for
+ * in a build are forgotten at its end. Render thread.
  */
 class RegisterCache
 {

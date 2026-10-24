@@ -70,6 +70,10 @@ struct LightRecord
   ParsedLight light;
   DerivedLight derived;
   std::optional<MaterialId> material;
+  // LPF.0b (C43, D106): the revision stamps (MaterialTable::revisionStamp) of the
+  // materials the light was derived with (lightMaterialNames: its texture's and the
+  // default light material's), combined; a re-parse of either builds it again
+  std::uint64_t materialStamp = 0;
   // built while its entityDef or a material was pending (C22, A15): built again once a
   // later material table has them
   bool provisional = false;
@@ -196,6 +200,8 @@ private:
   EntityKeys m_worldspawnKeys;
   // the table the last job was built with; every table adopted is scanned once
   std::shared_ptr<const MaterialTable> m_table;
+  // LPF.0b (C43): the materialsRevision of the last table scanned for re-parses
+  std::uint64_t m_materialsRevision = 0;
   std::set<PreviewId> m_dirty;
   std::set<PreviewId> m_removed;
   // the provisional lights by the material or classname they wait for

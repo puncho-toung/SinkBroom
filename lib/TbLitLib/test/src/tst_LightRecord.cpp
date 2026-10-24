@@ -278,4 +278,83 @@ TEST_CASE("LightRecord: entityDefs and materials from the service")
   pool->stop();
 }
 
+TEST_CASE("LightRecord: a re-parsed light shader builds its lights again (LPF.0b, C43)")
+{
+  auto options = MaterialServiceOptions{};
+  options.makeSource = [](const std::atomic<bool>&) {
+    return std::unique_ptr<DeclSource>{
+      std::make_unique<MemoryDeclSource>(std::vector<DeclFile>{DeclFile{
+        "materials/lights.mtr",
+        "lights/defaultPointLight\n{\n\t{\n\t\tmap lights/squarelight1.tga\n\t}\n}\n"
+        "lights/defaultProjectedLight\n{\n\t{\n\t\tmap lights/squarelight1.tga\n\t}\n}\n"
+        "lights/lpf_a\n{\n\t{\n\t\tmap lights/lpf_a.tga\n\t}\n}\n"
+        "lights/lpf_b\n{\n\t{\n\t\tmap lights/lpf_b.tga\n\t}\n}\n",
+        0}})};
+  };
+  options.pollInterval = 0ms;
+  auto service = MaterialService::create(std::move(options)) | kdl::value();
+  auto pool = CpuPool::create() | kdl::value();
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    auto snapshot = snapshotOfMapText(
+      World
+      + lightText("\"name\" \"a\"\n\"origin\" \"0 0 0\"\n\"light_radius\" \"8 8 8\"\n"
+                  "\"texture\" \"lights/lpf_a\"\n")
+      + lightText("\"name\" \"b\"\n\"origin\" \"64 0 0\"\n\"light_radius\" \"8 8 8\"\n"
+                  "\"texture\" \"lights/lpf_b\"\n"));
+    snapshot.sequence = 1;
+    auto ids = std::vector<PreviewId>{};
+    for (const auto& node : snapshot.nodes)
+    {
+      if (node.kind == SnapshotNodeKind::Light)
+      {
+        ids.push_back(node.entity);
+      }
+    }
+    REQUIRE(ids.size() == 2u);
+    scene.takeSnapshot(snapshot);
+
+    // both lights built with their shaders, the service idle
+    const auto settled = [&](const auto& done) {
+      const auto deadline = std::chrono::steady_clock::now() + 10s;
+      while (std::chrono::steady_clock::now() < deadline)
+      {
+        scene.collect();
+        if (
+          !scene.busy() && service->stats().idle && done(scene.lightTable()->find(ids[0]))
+          && scene.lightTable()->find(ids[1]))
+        {
+          scene.finishForTesting();
+          return true;
+        }
+        std::this_thread::sleep_for(5ms);
+      }
+      return false;
+    };
+    REQUIRE(settled([](const auto& record) {
+      return record && !record->provisional
+             && record->derived.shader.name == "lights/lpf_a";
+    }));
+    const auto a = scene.lightTable()->find(ids[0]);
+    const auto b = scene.lightTable()->find(ids[1]);
+    REQUIRE_FALSE(b->provisional);
+    CHECK(b->derived.shader.name == "lights/lpf_b");
+
+    REQUIRE(
+      service
+        ->reparseMaterial("lights/lpf_a", "{\n\t{\n\t\tmap lights/lpf_new.tga\n\t}\n}\n")
+        .is_success());
+    REQUIRE(settled(
+      [&](const auto& record) { return record && record->version > a->version; }));
+    const auto rebuilt = scene.lightTable()->find(ids[0]);
+    REQUIRE(rebuilt->derived.shader.material);
+    CHECK(rebuilt->derived.shader.material->revision == 1u);
+    REQUIRE_FALSE(rebuilt->derived.shader.material->stages.empty());
+    CHECK(rebuilt->derived.shader.material->stages[0].image->name == "lights/lpf_new");
+    // the other light's record is the one built before
+    CHECK(scene.lightTable()->find(ids[1]) == b);
+  }
+  pool->stop();
+}
+
 } // namespace tb::lit

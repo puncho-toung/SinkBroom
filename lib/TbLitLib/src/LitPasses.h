@@ -314,7 +314,7 @@ private:
     const void* grid = nullptr;
     std::uint64_t gridVersion = 0;
     std::uint64_t gridValidity = 0;
-    std::uint64_t registry = 0;
+    ListsTableKey table;
     // DX.2: the light triangles' answers, and whether the cull applies (a test's switch)
     std::uint64_t lightTrianglesVersion = 0;
     bool lightTriangleCull = true;

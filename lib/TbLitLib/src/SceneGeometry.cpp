@@ -63,6 +63,16 @@ bool isPrimitive(const SceneNode& node)
   return node.kind == SnapshotNodeKind::Brush || node.kind == SnapshotNodeKind::Patch;
 }
 
+// CONTENTS_ORIGIN (renderer/Material.h), which ChunkBuilder's IsOriginBrush reads
+constexpr auto ContentsOrigin = 1 << 22;
+
+// LPF.0b (C43): the material has CONTENTS_ORIGIN in a table
+bool originIn(const MaterialTable* table, const std::string& material)
+{
+  const auto slot = table ? table->find(material) : nullptr;
+  return slot && slot->entry && (slot->entry->contentFlags & ContentsOrigin) != 0;
+}
+
 // removes refs from every set of waiting, and the sets that are empty then
 void forgetCells(
   std::map<std::string, std::set<CellRef>>& waiting, const std::vector<CellRef>& refs)
@@ -395,6 +405,10 @@ void SceneGeometry::refreshTable()
     m_pendingMaterials.clear();
     m_sizedCells.clear();
     m_pendingEntityDefs.clear();
+    // LPF.0b: every cell is built again with the new registry's entries
+    m_materialCells.clear();
+    m_cellMaterials.clear();
+    m_materialsRevision = m_table->materialsRevision;
     markAll();
   }
   scanTable();
@@ -420,6 +434,30 @@ EditorImageSize SceneGeometry::tableSizeOf(const std::string& material) const
 {
   const auto slot = m_table ? m_table->find(material) : nullptr;
   return slot && slot->entry ? slot->entry->editorImageSize : EditorImageSize{};
+}
+
+void SceneGeometry::forgetMaterialCells(const std::vector<CellRef>& cells)
+{
+  for (const auto& ref : cells)
+  {
+    const auto materials = m_cellMaterials.find(ref);
+    if (materials == m_cellMaterials.end())
+    {
+      continue;
+    }
+    for (const auto& material : materials->second)
+    {
+      if (const auto it = m_materialCells.find(material); it != m_materialCells.end())
+      {
+        it->second.cells.erase(ref);
+        if (it->second.cells.empty())
+        {
+          m_materialCells.erase(it);
+        }
+      }
+    }
+    m_cellMaterials.erase(materials);
+  }
 }
 
 void SceneGeometry::forgetSizedCells(const std::vector<CellRef>& cells)
@@ -486,6 +524,38 @@ void SceneGeometry::scanTable()
       ++it;
     }
   }
+  // LPF.0b (C43, D106, P5.9): a re-parse moved the table's materialsRevision: the cells
+  // of every material whose revision stamp is no more the one they were built with are
+  // built again (whether the material made a chunk or not), and an entity whose material
+  // gained or lost CONTENTS_ORIGIN is built again whole, since its origin brushes' pivot
+  // moves (ChunkBuilder's IsOriginBrush). An image override moves no revision
+  if (m_table->materialsRevision != m_materialsRevision)
+  {
+    m_materialsRevision = m_table->materialsRevision;
+    for (auto& [material, built] : m_materialCells)
+    {
+      const auto stamp = m_table->revisionStamp(material);
+      if (stamp == built.stamp)
+      {
+        continue;
+      }
+      m_dirty.insert(built.cells.begin(), built.cells.end());
+      const auto origin = originIn(m_table.get(), material);
+      if (origin != built.origin)
+      {
+        for (const auto& ref : built.cells)
+        {
+          // worldspawn's own and a func_group's primitives have no pivot
+          if (ref.entity != m_worldspawn)
+          {
+            markEntity(ref.entity);
+          }
+        }
+      }
+      built.stamp = stamp;
+      built.origin = origin;
+    }
+  }
   // R3.2: an entityDef that arrives after the entity's first batch rebuilds its chunks
   for (auto it = m_pendingEntityDefs.begin(); it != m_pendingEntityDefs.end();)
   {
@@ -540,6 +610,11 @@ void SceneGeometry::startBatch()
     }
   }
   m_dirty.clear();
+  m_lastBatchCells.clear();
+  for (const auto& job : jobs)
+  {
+    m_lastBatchCells.insert(job.begin(), job.end());
+  }
   for (auto& [entity, refs] : entityJobs)
   {
     if (const auto nodes = m_entityNodes.find(entity); nodes != m_entityNodes.end())
@@ -554,6 +629,7 @@ void SceneGeometry::startBatch()
       }
     }
     jobs.emplace_back(refs.begin(), refs.end());
+    m_lastBatchCells.insert(refs.begin(), refs.end());
   }
 
   const auto worldspawn = m_entities.find(m_worldspawn);
@@ -637,6 +713,25 @@ void SceneGeometry::apply(ChunkJobOutput output)
   // what the rebuilt cells waited for is replaced by what they wait for now
   forgetSizedCells(output.cells);
   forgetCells(m_pendingMaterials, output.cells);
+  forgetMaterialCells(output.cells);
+  // LPF.0b (C43, D106): every material the job read, drawn or not, with the revision
+  // stamp and the CONTENTS_ORIGIN of the table the batch was built with (still the
+  // scene's); a material whose other cells were built with an older stamp keeps it, so
+  // that the next scan builds them all
+  for (const auto& material : output.materials)
+  {
+    auto& built = m_materialCells[material];
+    if (built.cells.empty())
+    {
+      built.stamp = m_table ? m_table->revisionStamp(material) : 0;
+      built.origin = originIn(m_table.get(), material);
+    }
+    for (const auto& ref : output.cells)
+    {
+      built.cells.insert(ref);
+      m_cellMaterials[ref].push_back(material);
+    }
+  }
   for (const auto& ref : output.cells)
   {
     m_touchedEntities.insert(ref.entity);
@@ -911,6 +1006,11 @@ std::size_t SceneGeometry::solidPieces() const
     total += count;
   }
   return total;
+}
+
+const std::set<CellRef>& SceneGeometry::lastBatchCellsForTesting() const
+{
+  return m_lastBatchCells;
 }
 
 std::uint64_t SceneGeometry::appliedSequence() const
