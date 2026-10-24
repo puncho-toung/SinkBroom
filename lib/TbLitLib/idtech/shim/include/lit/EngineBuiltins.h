@@ -1470,6 +1470,8 @@ inline constexpr auto EngineBuiltins = std::array<EngineBuiltin, 116>{{
 inline constexpr int EngineBuiltinColor = 1;
 inline constexpr int EngineBuiltinTextureVertexColor = 15;
 inline constexpr int EngineBuiltinInteraction = 19;
+// LP5.1 (C45, D114): an ambientLight light's (RenderProgs.h:399-400)
+inline constexpr int EngineBuiltinInteractionAmbient = 21;
 inline constexpr int EngineBuiltinPbrInteraction = 23;
 inline constexpr int EngineBuiltinDepth = 63;
 inline constexpr int EngineBuiltinBlit = 108;

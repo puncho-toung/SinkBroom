@@ -201,6 +201,9 @@ enum class InteractionProgram
   Interaction,
   // BUILTIN_PBR_INTERACTION
   PbrInteraction,
+  // LP5.1 (C45, D114): BUILTIN_INTERACTION_AMBIENT, an ambientLight light's (its PBR
+  // form, rows 25 and 26, is never reached: the specular is _black, TD_DEFAULT)
+  InteractionAmbient,
 };
 
 // the textureUsage_t an image has once loaded (the PBR rename of LP1c, SC230's program
@@ -225,6 +228,9 @@ struct InteractionState
   Vec4 diffuseColor = {0.0f, 0.0f, 0.0f, 0.0f};
   Vec4 specularColor = {0.0f, 0.0f, 0.0f, 0.0f};
   int vertexColor = engine_material::VertexColorIgnore;
+  // LP5.1 (C45, SC513): din->vLight->lightShader->IsAmbientLight(); false in the ambient
+  // pass (no vLight); the caller sets it for the light, the stage loop never changes it
+  bool ambientLight = false;
 };
 
 // one draw of DrawSingleInteraction: the units 0-2 images and the parms it sets
@@ -244,12 +250,16 @@ struct InteractionDraw
 
 /**
  * DrawSingleInteraction (RenderBackend.cpp:1131-1191, the program at :1395-1648) with
- * r_skipDiffuse, r_skipSpecular and r_skipBump 0 and a light that is not ambient: no
- * bump image, nothing (the state untouched); a null diffuse becomes _blackDiffuse and a
- * null specular _black, written into the state as the engine writes them into din; no
- * draw when both are black (the image _black, or every rgb component of the colour at
- * most 0); else the draw, its program by the specular image's usage
- * (TD_SPECULAR_PBR_RMAO or _RMAOD: PbrInteraction).
+ * r_skipDiffuse, r_skipSpecular and r_skipBump 0: no bump image, nothing (the state
+ * untouched); a null diffuse becomes _blackDiffuse and a null specular _black, and LP5.1
+ * (C45, SC513, RenderBackend.cpp:1156-1159) the specular of an ambientLight light
+ * (state.ambientLight) _black whatever its stage, written into the state as the engine
+ * writes them into din; no draw when both are black (the image _black, or every rgb
+ * component of the colour at most 0: for an ambient light the draw happens only when the
+ * diffuse is not black, :1166-1173); else the draw, its program by the specular image's
+ * usage (TD_SPECULAR_PBR_RMAO or _RMAOD: PbrInteraction), an ambient light's
+ * InteractionAmbient (:1528-1537: its _black is TD_DEFAULT, so the PBR branch's rows 25
+ * and 26, :1404-1413, are never reached; D114). Pure.
  */
 std::optional<InteractionDraw> engineSingleInteraction(
   InteractionState& state, const ImageUsage& usage);
@@ -304,10 +314,11 @@ MaterialImageKey engineWhiteImageKey();
 /**
  * D77, D52: the interaction of a surface whose material or registers are pending: the
  * bump _flat and the diffuse _default with identity matrices and the light's colours,
- * through DrawSingleInteraction (no specular: _black).
+ * through DrawSingleInteraction (no specular: _black; LP5.1: ambientLight for an
+ * ambientLight light's, so its program is InteractionAmbient).
  */
 std::optional<InteractionDraw> pendingSurfaceInteraction(
-  const Vec4& diffuseColor, const ImageUsage& usage);
+  const Vec4& diffuseColor, const ImageUsage& usage, bool ambientLight = false);
 
 /**
  * USER0, USER1 and USER2 of a light stage (RenderBackend.cpp:1934-1965): (mlMode, type,

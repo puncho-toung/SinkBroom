@@ -594,6 +594,47 @@ TEST_CASE("LitPasses: the surface stage loop's decisions (SC229, SC230)")
     CHECK(pending->specularImage == engineBlackImageKey());
     CHECK(pending->diffuseColor == LightWhite);
   }
+
+  SECTION(
+    "LP5.1: an ambientLight light's specular is _black, its program interactionAmbient")
+  {
+    // RenderBackend.cpp:1156-1159: the specular image _black whatever the stage, so
+    // specularIsBlack holds and only the diffuse draws (:1166-1173); the program is the
+    // legacy branch's interactionAmbient (:1528-1537) even over a PBR specular, whose
+    // usage the _black image does not have (rows 25/26, :1404-1413, never reached)
+    auto withSpecular = material;
+    withSpecular.stages.push_back(stageOf(em::LightingSpecular, specular));
+    const auto pbrUsage = ImageUsage{[&](const MaterialImageKey& key) {
+      return key == specular ? engine_image::UsageSpecularPbrRmao : key.usage;
+    }};
+    auto state = InteractionState{};
+    state.ambientLight = true;
+    const auto draws = drawsOf(withSpecular, registers, false, pbrUsage, &state);
+    REQUIRE(draws.size() == 1u);
+    CHECK(draws[0].specularImage == engineBlackImageKey());
+    CHECK(draws[0].diffuseImage == diffuse);
+    CHECK(draws[0].program == InteractionProgram::InteractionAmbient);
+    CHECK(state.specularImage == engineBlackImageKey());
+    // the stage loop never changes it
+    CHECK(state.ambientLight);
+    // a black diffuse draws nothing, though its specular stage has colour
+    auto blackDiffuse = withSpecular;
+    blackDiffuse.stages[1].colorRegisters = {0, 0, 0, 1};
+    CHECK(drawsOf(blackDiffuse, registers, false, pbrUsage, &state).empty());
+    // the same surface under a texture light keeps its specular and takes PBR
+    const auto texture = drawsOf(withSpecular, registers, false, pbrUsage);
+    REQUIRE(texture.size() == 1u);
+    CHECK(texture[0].specularImage == specular);
+    CHECK(texture[0].program == InteractionProgram::PbrInteraction);
+    // a pending surface under an ambient light
+    const auto pending = pendingSurfaceInteraction(LightWhite, {}, true);
+    REQUIRE(pending);
+    CHECK(pending->specularImage == engineBlackImageKey());
+    CHECK(pending->program == InteractionProgram::InteractionAmbient);
+    CHECK(
+      pendingSurfaceInteraction(LightWhite, {})->program
+      == InteractionProgram::Interaction);
+  }
 }
 
 TEST_CASE("LitPasses: the light scissor, its sort and the caps (D67, SC206, SC222)")

@@ -401,8 +401,8 @@ std::optional<InteractionDraw> engineSingleInteraction(
   {
     state.diffuseImage = engineBlackDiffuseImageKey();
   }
-  // the light is not an ambient light (LP2 draws none)
-  if (!state.specularImage)
+  // LP5.1 (C45, SC513): an ambientLight light's specular is _black whatever its stage
+  if (!state.specularImage || state.ambientLight)
   {
     state.specularImage = engineBlackImageKey();
   }
@@ -430,12 +430,16 @@ std::optional<InteractionDraw> engineSingleInteraction(
   draw.specularColor = state.specularColor;
   draw.vertexColor = state.vertexColor;
 
-  // the program by the specular image's usage; K26: the unshadowed one
+  // the program by the specular image's usage; K26: the unshadowed one. LP5.1 (D114):
+  // an ambient light's specular is _black, TD_DEFAULT, so it takes the legacy branch's
+  // BindShader_InteractionAmbient (RenderBackend.cpp:1528-1537); the PBR branch's
+  // BindShader_PBR_InteractionAmbient (:1404-1413) is never reached
   const auto specUsage = usage ? usage(draw.specularImage) : draw.specularImage.usage;
-  draw.program = specUsage == engine_image::UsageSpecularPbrRmao
-                     || specUsage == engine_image::UsageSpecularPbrRmao + 1
-                   ? InteractionProgram::PbrInteraction
-                   : InteractionProgram::Interaction;
+  const auto pbr = specUsage == engine_image::UsageSpecularPbrRmao
+                   || specUsage == engine_image::UsageSpecularPbrRmao + 1;
+  draw.program = state.ambientLight ? InteractionProgram::InteractionAmbient
+                 : pbr              ? InteractionProgram::PbrInteraction
+                                    : InteractionProgram::Interaction;
   return draw;
 }
 
@@ -567,9 +571,10 @@ void engineAmbientSurfaceInteractions(
 }
 
 std::optional<InteractionDraw> pendingSurfaceInteraction(
-  const Vec4& diffuseColor, const ImageUsage& usage)
+  const Vec4& diffuseColor, const ImageUsage& usage, const bool ambientLight)
 {
   auto state = InteractionState{};
+  state.ambientLight = ambientLight;
   state.bumpImage = engineFlatImageKey();
   state.diffuseImage = engineDefaultImageKey();
   state.bumpMatrix = {Vec4{1.0f, 0.0f, 0.0f, 0.0f}, Vec4{0.0f, 1.0f, 0.0f, 0.0f}};

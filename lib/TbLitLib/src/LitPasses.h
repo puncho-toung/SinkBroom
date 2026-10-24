@@ -278,12 +278,13 @@ inline constexpr std::size_t LitTextureUnits = 15;
  * as DrawViewInternal draws them up to the interactions (SC201): ZeroUniforms, the view's
  * parms, the clears (r_clear 2: HDR and LDR to (0, 0, 0, 1); depth 1, stencil 128), the
  * depth prepass (FillDepthBufferFast with the generic path for the leading subview and
- * the perforated surfaces) and the texture lights' interactions (DrawInteractionsPass,
- * RenderInteractions, DrawSingleInteraction), every draw through
- * DrawElementsWithCounters' order: the binding sets of the layout, the pipeline of the
- * key, the constant buffer committed (written only when the layout's uniforms changed)
- * before setGraphicsState, which runs only when something changed, push constants after
- * it, then drawIndexed.
+ * the perforated surfaces), the ambient pass (LP4.2a) and the interactions
+ * (DrawInteractions: LP5.1, C45, the texture phase then the math phase,
+ * DrawInteractionsPass, RenderInteractions, DrawSingleInteraction; ambientLight lights in
+ * either phase through interactionAmbient), every draw through DrawElementsWithCounters'
+ * order: the binding sets of the layout, the pipeline of the key, the constant buffer
+ * committed (written only when the layout's uniforms changed) before setGraphicsState,
+ * which runs only when something changed, push constants after it, then drawIndexed.
  *
  * The frontend lists (LitFrontend.h) are built again only when the camera, the extent,
  * the chunks (an entity's area references with them: SceneGeometry builds them when a

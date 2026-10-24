@@ -911,8 +911,10 @@ bool LitPasses::renderInteractions(
     ImageUsage{[&](const MaterialImageKey& key) { return imageUsage(images, key); }};
 
   // drawInteraction_t inter = {}: the images null; the matrices, which the engine leaves
-  // indeterminate, zero (mirror.json M-PASS-DIFF-02)
+  // indeterminate, zero (mirror.json M-PASS-DIFF-02); din->vLight's ambientLight (LP5.1,
+  // SC513: its specular _black, its program interactionAmbient)
   auto inter = InteractionState{};
+  inter.ambientLight = shader.ambientLight;
   const auto lightScale = EngineFrame.lightScale;
 
   for (const auto& lightStage : shader.stages)
@@ -1013,9 +1015,12 @@ bool LitPasses::renderInteractions(
         m_units[1] = interaction.specularImage;
         m_units[2] = interaction.diffuseImage;
 
-        const auto program = interaction.program == InteractionProgram::PbrInteraction
-                               ? EngineBuiltinPbrInteraction
-                               : EngineBuiltinInteraction;
+        const auto program =
+          interaction.program == InteractionProgram::PbrInteraction
+            ? EngineBuiltinPbrInteraction
+          : interaction.program == InteractionProgram::InteractionAmbient
+            ? EngineBuiltinInteractionAmbient
+            : EngineBuiltinInteraction;
         switch (draw(
           frame,
           program,
@@ -1053,7 +1058,9 @@ bool LitPasses::renderInteractions(
           usage,
           drawOne);
       }
-      else if (const auto pending = pendingSurfaceInteraction(diffuseColor, usage))
+      else if (
+        const auto pending =
+          pendingSurfaceInteraction(diffuseColor, usage, shader.ambientLight))
       {
         drawOne(*pending);
       }
