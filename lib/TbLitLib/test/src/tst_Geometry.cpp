@@ -1960,8 +1960,12 @@ TEST_CASE("SceneGeometry: 100 re-parses with the scene leave the heap (LPF.0b)")
       static_cast<void>(scene.takeWarnings());
       static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
     };
-    cycle();
-    cycle();
+    // LPF.1 (C44): the warm-up fills the tables' feed records to their bound
+    // (MaterialTable::FeedRecordsKept), two items a cycle
+    for (auto i = 0; i < int(MaterialTable::FeedRecordsKept / 2) + 2; ++i)
+    {
+      cycle();
+    }
     // the pool's and the service's queues may hold a few blocks more or less at either
     // checkpoint; a leak in any of the 100 re-parses shows 50 times or more
     const auto growth = heapGrowth([&] {

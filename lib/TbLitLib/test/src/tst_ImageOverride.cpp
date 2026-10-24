@@ -1264,8 +1264,12 @@ TEST_CASE("MaterialService image overrides leak nothing")
     static_cast<void>(service->image(wall));
     REQUIRE(waitUntilIdle(*service));
   };
-  cycle(0);
-  cycle(1);
+  // LPF.1 (C44): the warm-up fills the tables' feed records to their bound
+  // (MaterialTable::FeedRecordsKept), three items a cycle
+  for (auto i = 0; i < int(MaterialTable::FeedRecordsKept / 3) + 2; ++i)
+  {
+    cycle(i);
+  }
   const auto grew = heapGrows([&] {
     for (auto i = 0; i < 100; ++i)
     {

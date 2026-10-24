@@ -2226,7 +2226,9 @@ TEST_CASE("MaterialService re-parses leak nothing (LPF.0b)")
     static_cast<void>(waitForHandOvers(*service));
     REQUIRE(waitUntilServiceIdle(*service));
   };
-  for (auto i = 0; i < 3; ++i)
+  // LPF.1 (C44): the warm-up fills the tables' feed records to their bound
+  // (MaterialTable::FeedRecordsKept), three items a cycle
+  for (auto i = 0; i < int(MaterialTable::FeedRecordsKept / 3) + 2; ++i)
   {
     cycle(i);
   }
