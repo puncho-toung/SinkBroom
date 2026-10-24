@@ -793,6 +793,30 @@ std::string sessionStatusLine(
       line += fmt::format(
         " | area {}, {} of {} areas", status.viewArea, status.areasFlowed, status.areas);
     }
+    // D90 (LP4.3, K8, K29): the bake, once known
+    using Bake = SessionStatus::Bake;
+    if (status.bake != Bake::Unknown)
+    {
+      line += status.bake == Bake::None   ? " | bake: none"
+              : status.bake == Bake::Proc ? " | bake: proc"
+              : status.bake == Bake::Bproc
+                ? " | bake: bproc"
+                : fmt::format(" | bake: dropped ({})", status.bakeDropReason);
+      const auto stale =
+        status.bake != Bake::None
+        && (status.documentModified || (status.bakeTime > 0 && status.mapFileTime > status.bakeTime));
+      if (stale)
+      {
+        line += ", stale";
+      }
+      if (status.solidPieces > 0)
+      {
+        line += fmt::format(
+          ", {} {} outside the baked hull",
+          status.solidPieces,
+          status.solidPieces == 1 ? "piece" : "pieces");
+      }
+    }
   }
   for (const auto& program : programs)
   {

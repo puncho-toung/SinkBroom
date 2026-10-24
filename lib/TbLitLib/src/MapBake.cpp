@@ -312,6 +312,22 @@ bool sameBakeFile(const GameFileProbe& then, const GameFileProbe& now)
 
 } // namespace
 
+std::int64_t mapBakeGeometryTime(const MapBake& bake)
+{
+  if (bake.geometry == MapBake::Geometry::None)
+  {
+    return -1;
+  }
+  const auto path = bake.geometry == MapBake::Geometry::Proc
+                      ? withExtension(bake.mapName, "proc")
+                      : "generated/" + withExtension(bake.mapName, "bproc");
+  const auto file =
+    std::find_if(bake.files.begin(), bake.files.end(), [&](const MapBakeFile& f) {
+      return f.path == path;
+    });
+  return file != bake.files.end() ? file->probe.time : -1;
+}
+
 bool mapBakeChanged(DeclSource& source, const MapBake& bake)
 {
   for (const auto& file : bake.files)

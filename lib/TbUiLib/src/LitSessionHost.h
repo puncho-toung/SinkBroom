@@ -227,6 +227,14 @@ public:
   bool drawing() const;
   // the session after phase B, else null
   lit::LitSession* session() const;
+  /**
+   * LP4.3 (D90, K8): the session's status (lit::LitSession::status) with what the host
+   * knows of the document: whether it holds unsaved changes (mdl::Map::modified) and its
+   * file's last write in Unix seconds (lit::statGameFile; -1 for a document never saved
+   * or a file that cannot be read), which the status line's stale notice compares with
+   * the tree file's time. A default status without a session. GUI thread.
+   */
+  lit::SessionStatus status() const;
   // the parse thread from phase A until the teardown's last step, else null
   lit::MaterialService* materials() const;
   // C1 (LP2.1): the options phase B creates the session with: the owner's, with the

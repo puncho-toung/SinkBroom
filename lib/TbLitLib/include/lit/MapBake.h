@@ -128,4 +128,10 @@ MapBake readMapBake(
 // run, a bake, a saved file). Parse thread
 bool mapBakeChanged(DeclSource& source, const MapBake& bake);
 
+/**
+ * LP4.3 (D90, K8): the probe time of the file the bake's tree came from (the .proc, or
+ * generated/<map>.bproc): Unix seconds, 0 in a container, -1 without a tree. Pure.
+ */
+std::int64_t mapBakeGeometryTime(const MapBake& bake);
+
 } // namespace tb::lit

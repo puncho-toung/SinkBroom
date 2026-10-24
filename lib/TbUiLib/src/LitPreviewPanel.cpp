@@ -422,8 +422,10 @@ void LitPreviewPanel::createGui()
   statusTimer->setInterval(StatusInterval);
   connect(statusTimer, &QTimer::timeout, this, [this, statusLabel] {
     auto* session = m_host ? m_host->session() : nullptr;
+    // LP4.3 (D90, K8): the host's status adds the document's unsaved changes and its
+    // file's time, which the bake's stale notice reads
     const auto text = session  ? QString::fromStdString(lit::sessionStatusLine(
-                                  session->status(), session->programReport()))
+                                  m_host->status(), session->programReport()))
                       : m_host ? tr("starting")
                                : QString{};
     if (text != statusLabel->text())

@@ -57,8 +57,8 @@ namespace tb::lit
 {
 class CpuPool;
 class GpuDevice;
-class LightTablePublication;
 class GridTablePublication;
+class LightTablePublication;
 class ProbeTablePublication;
 class MaterialService;
 class PipelineCompiler;
@@ -119,6 +119,13 @@ GpuMemoryAccount accountGpuMemory(
 // version
 using SceneWaitState =
   std::tuple<std::uint64_t, bool, bool, bool, bool, bool, std::uint64_t>;
+
+/**
+ * LP4.3 (C38, D90): the status line's bake fields of a scene: its adopted bake's state,
+ * drop reason and tree file time once the map path's request is answered, and its pieces
+ * in solid. Render thread.
+ */
+void fillBakeStatus(SessionStatus& status, const SceneGeometry& geometry);
 
 struct FrameConvergence
 {

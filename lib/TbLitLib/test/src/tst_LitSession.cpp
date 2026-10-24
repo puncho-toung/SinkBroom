@@ -250,6 +250,63 @@ TEST_CASE("LitSession: the panel's status line (D9, LP2.3)")
     sessionStatusLine(noTree, {})
     == "settled | 1 of 1 light drawn | 9 draws | VRAM 1.0 MB");
   CHECK(sessionStatusLine(noTree, {}).find("area") == std::string::npos);
+
+  // LP4.3 (D90, K8, K29): the bake, once known, after the flow and before the programs
+  using Bake = SessionStatus::Bake;
+  auto baked = flowed;
+  baked.viewArea = 1;
+  baked.areasFlowed = 2;
+  const auto head = std::string{
+    "settled | 1 of 1 light drawn | 9 draws | VRAM 1.0 MB | area 1, 2 of 8 areas"};
+  CHECK(sessionStatusLine(baked, {}) == head);
+  baked.bake = Bake::Proc;
+  baked.bakeTime = 1000;
+  baked.mapFileTime = 1000;
+  CHECK(sessionStatusLine(baked, {}) == head + " | bake: proc");
+  baked.bake = Bake::Bproc;
+  CHECK(sessionStatusLine(baked, {}) == head + " | bake: bproc");
+  // stale: the map file written after the tree's file, or unsaved changes
+  baked.mapFileTime = 1001;
+  CHECK(sessionStatusLine(baked, {}) == head + " | bake: bproc, stale");
+  baked.mapFileTime = 999;
+  baked.documentModified = true;
+  CHECK(sessionStatusLine(baked, {}) == head + " | bake: bproc, stale");
+  // a container's time 0 says nothing of the map file's
+  baked.documentModified = false;
+  baked.bakeTime = 0;
+  baked.mapFileTime = 5000;
+  CHECK(sessionStatusLine(baked, {}) == head + " | bake: bproc");
+  // the pieces in solid, one and more
+  baked.solidPieces = 1;
+  CHECK(
+    sessionStatusLine(baked, {})
+    == head + " | bake: bproc, 1 piece outside the baked hull");
+  baked.bake = Bake::Proc;
+  baked.bakeTime = 10;
+  baked.solidPieces = 6;
+  CHECK(
+    sessionStatusLine(baked, programs)
+    == head
+         + " | bake: proc, stale, 6 pieces outside the baked hull | disabled: "
+           "builtin/post/histogram (no shader blob builtin/post/histogram.cs.bin)");
+  // dropped: the reason; the tree is kept, so it may be stale too
+  baked.bake = Bake::Dropped;
+  baked.bakeDropReason =
+    "the light grid has 1 entries for 1 distinct areas, the map has 2 areas";
+  baked.solidPieces = 0;
+  baked.mapFileTime = 5;
+  CHECK(
+    sessionStatusLine(baked, {})
+    == head
+         + " | bake: dropped (the light grid has 1 entries for 1 distinct areas, the map "
+           "has 2 areas)");
+  // none: no tree, nothing to be stale
+  auto none = noTree;
+  none.bake = Bake::None;
+  none.documentModified = true;
+  CHECK(
+    sessionStatusLine(none, {})
+    == "settled | 1 of 1 light drawn | 9 draws | VRAM 1.0 MB | bake: none");
 }
 
 } // namespace tb::lit

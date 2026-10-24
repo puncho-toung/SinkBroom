@@ -1885,6 +1885,99 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     checkCounts("status line");
   }
 
+  SECTION("the status line's bake notices (LP4.3, D90, K8, K29)")
+  {
+    // a saved document in a game folder with a .proc of two areas (x > 0, y > 0 area 0,
+    // y <= 0 area 1) whose half x <= 0 is solid, so that half of the cube at the origin
+    // reaches solid (K14: pieces outside the baked hull)
+    const auto game = std::filesystem::temp_directory_path() / "TbUiLibTest-lp43-bake";
+    std::filesystem::remove_all(game);
+    const auto removeGame = kdl::invoke_later{[&] { std::filesystem::remove_all(game); }};
+    std::filesystem::create_directories(game / "base" / "materials");
+    std::filesystem::create_directories(game / "base" / "maps");
+    {
+      auto file = std::ofstream{game / "base" / "materials" / "lp43_bake.mtr"};
+      file << "textures/lp43/bake\n{\n\tdiffusemap\ttextures/lp43/bake.tga\n}\n";
+    }
+    auto& map = harness.fixture.document().map();
+    map.setGamePath(game);
+    auto* brushNode = mdl::createBrushNode(map, "lp43/bake");
+    mdl::addNodes(map, {{map.editorContext().currentLayer(), {brushNode}}});
+    const auto mapPath = game / "base" / "maps" / "lp43_bake.map";
+    REQUIRE(map.saveAs(mapPath).is_success());
+    REQUIRE_FALSE(map.modified());
+    const auto procPath = game / "base" / "maps" / "lp43_bake.proc";
+    {
+      auto file = std::ofstream{procPath};
+      file << "mapProcFile004\n\ninterAreaPortals { 2 0 }\n\nnodes { 2\n( 1 0 0 0 ) 1 "
+              "0\n( 0 1 0 0 ) -1 -2\n}\n";
+    }
+    auto* status = panel.findChild<QLabel*>("LitPreviewPanel_Status");
+    REQUIRE(status != nullptr);
+    const auto waitForText = [&](const std::function<bool(const QString&)>& wanted) {
+      return QTest::qWaitFor(
+        [&] {
+          harness.moveCamera();
+          return wanted(status->text());
+        },
+        15000);
+    };
+    using namespace std::chrono_literals;
+
+    // the .proc newer than the map file, nothing unsaved: "bake: proc" and the pieces in
+    // solid, not stale
+    std::filesystem::last_write_time(
+      procPath, std::filesystem::last_write_time(mapPath) + 100s);
+    REQUIRE(harness.startAndWaitForFrame());
+    CHECK(waitForText([](const QString& text) {
+      return text.contains("| bake: proc, ") && text.contains(" outside the baked hull");
+    }));
+    auto text = status->text();
+    CAPTURE(text.toStdString());
+    CHECK_FALSE(text.contains("stale"));
+    CHECK(text.contains("| area "));
+    // an edit: unsaved changes make the bake stale
+    auto* second = mdl::createBrushNode(map, "lp43/bake");
+    mdl::addNodes(map, {{map.editorContext().currentLayer(), {second}}});
+    REQUIRE(map.modified());
+    CHECK(
+      waitForText([](const QString& t) { return t.contains("| bake: proc, stale, "); }));
+    panel.stop();
+    reports.checkLast();
+
+    // saved again, the .proc now older than the map file: stale by the time
+    REQUIRE(map.saveAs(mapPath).is_success());
+    REQUIRE_FALSE(map.modified());
+    std::filesystem::last_write_time(
+      procPath, std::filesystem::last_write_time(mapPath) - 100s);
+    REQUIRE(harness.startAndWaitForFrame());
+    CHECK(
+      waitForText([](const QString& t) { return t.contains("| bake: proc, stale, "); }));
+    panel.stop();
+    reports.checkLast();
+
+    // a light grid with one entry too few: the bake dropped with the reason (K29)
+    {
+      auto file = std::ofstream{game / "base" / "maps" / "lp43_bake.lightgrid"};
+      file << "LGRID \"4\"\n\nlightGridPoints { 0 1 16 2 ( 32 32 0 ) ( 64 64 128 ) 1 1 1 "
+              "1 ( 32 32 0 ) }\n";
+    }
+    REQUIRE(harness.startAndWaitForFrame());
+    CHECK(waitForText([](const QString& t) {
+      return t.contains(
+        "| bake: dropped (the light grid has 1 entries for 1 distinct areas, the map has "
+        "2 "
+        "areas)");
+    }));
+    text = status->text();
+    CAPTURE(text.toStdString());
+    panel.stop();
+    CHECK(status->text().isEmpty());
+    reports.checkLast();
+    mdl::removeNodes(map, {brushNode, second});
+    checkCounts("bake notices");
+  }
+
   SECTION("the material service reads the game and logs to the document")
   {
     auto logger = CapturingLogger{};

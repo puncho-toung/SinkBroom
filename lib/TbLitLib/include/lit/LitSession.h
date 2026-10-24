@@ -108,6 +108,29 @@ struct SessionStatus
   std::size_t areas = 0;
   std::size_t lightsInView = 0;
 
+  // LP4.3 (C38, D90, K8, K29): the scene's bake (SceneGeometry::adoptedBake): Unknown
+  // before its map path's request is answered (or without a map path: nothing is said),
+  // None without a .proc or .bproc, Proc or Bproc for the tree's file, Dropped when the
+  // area counts disagree (MapBake::dropReason, the tree kept); the tree file's probe time
+  // (Unix seconds; 0 in a container, -1 none); the pieces of world faces in solid
+  // (SceneGeometry::solidPieces, K14)
+  enum class Bake
+  {
+    Unknown,
+    None,
+    Proc,
+    Bproc,
+    Dropped,
+  };
+  Bake bake = Bake::Unknown;
+  std::string bakeDropReason;
+  std::int64_t bakeTime = -1;
+  std::size_t solidPieces = 0;
+  // the host's (LitSessionHost::status, D90): the map file's last write in Unix seconds
+  // (-1 unknown) and whether the document holds unsaved changes
+  std::int64_t mapFileTime = -1;
+  bool documentModified = false;
+
   bool operator==(const SessionStatus&) const = default;
 };
 
@@ -135,9 +158,13 @@ struct CompileTimings
  * D9 (LP2.3): the panel's status line: "starting" before the first frame, then "settled"
  * or "drawing", the lights drawn of those visible (and overflowed), the draws (skipped),
  * the pipelines pending and the VRAM, and while a tree exists (D90, LP4.1) "area A, F of
- * N areas" (the view's area, -1 outside the world, the areas flowed and the tree's); then
- * every disabled program with its reason, "ambient disabled: ..." for one of the ambient
- * pass's (LP4.2a: the pass draws nothing without it). Pure; any thread.
+ * N areas" (the view's area, -1 outside the world, the areas flowed and the tree's);
+ * LP4.3 (D90, K8, K29) once the bake is known "bake: none", "proc", "bproc" or
+ * "dropped (<reason>)", with a tree ", stale" when the document holds unsaved changes or
+ * the map file was written after the tree's file (a positive probe time: a container's
+ * time 0 says nothing), and ", <n> pieces outside the baked hull" when world faces reach
+ * solid; then every disabled program with its reason, "ambient disabled: ..." for one of
+ * the ambient pass's (LP4.2a: the pass draws nothing without it). Pure; any thread.
  */
 std::string sessionStatusLine(
   const SessionStatus& status, const std::vector<ProgramReport>& programs);

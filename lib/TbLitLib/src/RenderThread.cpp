@@ -23,6 +23,7 @@
 #include "SessionEvents.h"
 #include "Swapchain.h"
 #include "lit/EngineTables.h"
+#include "lit/MapBake.h"
 #include "lit/SceneGeometry.h"
 #include "lit/Snapshot.h"
 #include "lit/SwapchainRules.h"
@@ -123,6 +124,30 @@ public:
 };
 
 } // namespace
+
+void fillBakeStatus(SessionStatus& status, const SceneGeometry& geometry)
+{
+  using Bake = SessionStatus::Bake;
+  status.solidPieces = geometry.solidPieces();
+  if (!geometry.bakeAnswered())
+  {
+    return;
+  }
+  const auto bake = geometry.adoptedBake();
+  if (!bake || bake->geometry == MapBake::Geometry::None)
+  {
+    status.bake = Bake::None;
+    return;
+  }
+  status.bakeTime = mapBakeGeometryTime(*bake);
+  if (!bake->dropReason.empty())
+  {
+    status.bake = Bake::Dropped;
+    status.bakeDropReason = bake->dropReason;
+    return;
+  }
+  status.bake = bake->geometry == MapBake::Geometry::Proc ? Bake::Proc : Bake::Bproc;
+}
 
 bool FrameConvergence::settled() const
 {
@@ -1844,6 +1869,11 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         status.areasFlowed = litStats.areasFlowed;
         status.areas = litStats.areas;
         status.lightsInView = litStats.lightsInView;
+        // D90 (LP4.3, K8, K29): the scene's bake
+        if (m_geometry)
+        {
+          fillBakeStatus(status, *m_geometry);
+        }
         const auto lock = std::scoped_lock{m_statusMutex};
         m_status = status;
       }

@@ -28,6 +28,7 @@
 
 #include "ServiceSentMessages.h"
 #include "lit/GameDeclSource.h"
+#include "lit/GameFile.h"
 #include "lit/MaterialService.h"
 #include "mdl/Map.h"
 #include "ui/LitDocumentObserver.h"
@@ -337,6 +338,22 @@ bool LitSessionHost::drawing() const
 lit::LitSession* LitSessionHost::session() const
 {
   return drawing() ? m_session.get() : nullptr;
+}
+
+lit::SessionStatus LitSessionHost::status() const
+{
+  auto* session = this->session();
+  auto status = session ? session->status() : lit::SessionStatus{};
+  const auto& map = m_document.map();
+  status.documentModified = map.modified();
+  if (map.persistent())
+  {
+    if (const auto stat = lit::statGameFile(map.path()))
+    {
+      status.mapFileTime = stat->unixSeconds;
+    }
+  }
+  return status;
 }
 
 lit::MaterialService* LitSessionHost::materials() const
