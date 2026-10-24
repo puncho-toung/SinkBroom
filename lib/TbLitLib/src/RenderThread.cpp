@@ -910,7 +910,7 @@ bool RenderThread::recordUploads(nvrhi::ICommandList& commandList)
       fmt::format(
         "The lit preview's device memory allocations reached {} of the device's {}: no "
         "more textures or geometry arenas are made, and the images left bind their "
-        "stand-ins",
+        "stand-ins (a replaced image its old texture)",
         m_device.deviceMemoryAllocations(),
         m_allocationLimitForTesting.load() != 0
           ? m_allocationLimitForTesting.load()

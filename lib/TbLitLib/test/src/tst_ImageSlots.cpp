@@ -271,32 +271,196 @@ TEST_CASE("ImageSlots")
     CHECK(slots.slot(id)->texture);
     CHECK(slots.slot(id)->version == version);
 
-    // its file changes (a re-probe): asked again, the texture let go, the version bumped,
-    // the intrinsic bound until the new one is written
+    // its file changes (a re-probe): asked again; LPF.1 (C40, D98): the complete texture
+    // stays bound, with the slot's version, while the service has no answer (Replacing)
+    const auto* old = slots.slot(id)->texture.Get();
     service.change(key);
     slots.refresh(service.table, 6);
-    CHECK(slots.slot(id)->state == ImageSlots::State::Pending);
-    CHECK_FALSE(slots.slot(id)->texture);
-    CHECK(slots.slot(id)->version == version + 1);
-    CHECK(slots.takeChangedSlots() == std::vector<ImageSlotId>{id});
-    CHECK(slots.binding(id).intrinsic);
-    CHECK(slots.retiredBytes() == 84u);
-    // the texture is held until frame 6 has finished
-    slots.collectRetired(6);
-    CHECK(slots.retiredBytes() == 84u);
-    slots.collectRetired(7);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Replacing);
+    // asked for, as its intrinsic (_default, never published here) is
+    CHECK(slots.pending() == 2u);
+    CHECK(slots.binding(id).texture == old);
+    CHECK_FALSE(slots.binding(id).intrinsic);
+    CHECK(slots.slot(id)->version == version);
+    CHECK(slots.takeChangedSlots().empty());
     CHECK(slots.retiredBytes() == 0u);
 
-    // the service reads it again
+    // the service reads it again: written, then swapped in, the old texture held until
+    // frame 7 has finished
     service.publish(key, true);
     slots.refresh(service.table, 7);
-    CHECK(slots.slot(id)->state == ImageSlots::State::Loading);
-    // an old change is not seen again
+    CHECK(slots.slot(id)->state == ImageSlots::State::Replacing);
+    CHECK(slots.loading() == std::vector<ImageSlotId>{id});
     slots.attachTexture(id, fakeTexture(), 3, 84);
     slots.levelsWritten(id, 0);
+    slots.dropPixels(id);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Resident);
+    CHECK(slots.slot(id)->version == version + 1);
+    CHECK(slots.takeChangedSlots() == std::vector<ImageSlotId>{id});
+    CHECK(slots.binding(id).texture != old);
+    CHECK(slots.retiredBytes() == 84u);
+    slots.collectRetired(7);
+    CHECK(slots.retiredBytes() == 84u);
+    slots.collectRetired(8);
+    CHECK(slots.retiredBytes() == 0u);
+    // an old change is not seen again
     ++service.table.version;
     slots.refresh(service.table, 8);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Resident);
     CHECK(slots.slot(id)->texture);
+
+    // a file that is gone: the replaced texture goes too, the intrinsic stands in
+    service.change(key);
+    service.publish(key, false, "gone");
+    slots.refresh(service.table, 9);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Default);
+    CHECK(slots.binding(id).intrinsic);
+    CHECK(slots.takeChangedSlots() == std::vector<ImageSlotId>{id});
+    CHECK(slots.retiredBytes() == 84u);
+  }
+
+  SECTION("LPF.1 (C40, D98, D102): Replacing keeps the complete texture bound")
+  {
+    auto service = FakeService{};
+    const auto key = keyOf("textures/override", UsageDiffuse);
+    service.publish(intrinsicImageKey("_default"), true);
+    service.publish(key, true);
+    auto slots = ImageSlots{};
+    slots.setRequest(service.request());
+    const auto id = slots.request(key);
+    const auto intrinsic = slots.slot(id)->intrinsic;
+    for (const auto slot : {intrinsic, id})
+    {
+      REQUIRE(slots.slot(slot)->state == ImageSlots::State::Loading);
+      slots.attachTexture(slot, fakeTexture(), 3, 84);
+      slots.levelsWritten(slot, 0);
+      slots.dropPixels(slot);
+    }
+    // Loading to Resident
+    REQUIRE(slots.slot(id)->state == ImageSlots::State::Resident);
+    static_cast<void>(slots.takeChangedSlots());
+    const auto first = slots.slot(id)->texture;
+    const auto version = slots.slot(id)->version;
+    const auto bound = [&](const nvrhi::ITexture* texture) {
+      const auto binding = slots.binding(id);
+      return binding.texture == texture && !binding.intrinsic
+             && binding.versions == std::vector<SlotVersion>{SlotVersion{id, version}}
+             && binding.subresources.baseMipLevel == 0u
+             && binding.subresources.numMipLevels == 3u;
+    };
+
+    // Resident to Replacing: a second image in the table that drops the first (one
+    // publication): the first stays bound while the second is made and written
+    service.change(key);
+    service.publish(key, true);
+    slots.refresh(service.table, 4);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Replacing);
+    CHECK(slots.replacing() == 1u);
+    CHECK(slots.pending() == 0u);
+    CHECK(slots.hasLoading());
+    CHECK(slots.loading() == std::vector<ImageSlotId>{id});
+    CHECK(bound(first.Get()));
+    CHECK(slots.takeChangedSlots().empty());
+    const auto second = fakeTexture();
+    slots.attachTexture(id, second, 3, 84);
+    slots.levelsWritten(id, 2);
+    slots.levelsWritten(id, 1);
+    CHECK(bound(first.Get()));
+    CHECK(slots.takeChangedSlots().empty());
+    // both textures are held, and the slot counts once
+    CHECK(slots.textureBytes() == 3u * 84u);
+    CHECK(slots.resident() == 2u);
+
+    // Replacing to Replacing: a third image before the second landed: the unfinished
+    // second goes (held for its frames), the first still bound
+    service.change(key);
+    service.publish(key, true);
+    slots.refresh(service.table, 5);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Replacing);
+    CHECK(bound(first.Get()));
+    CHECK_FALSE(slots.slot(id)->texture);
+    CHECK(slots.slot(id)->pixels);
+    CHECK(slots.retiredBytes() == 84u);
+    CHECK(slots.takeChangedSlots().empty());
+
+    // D102: the headroom refuses the third image's texture: the first stays bound, the
+    // image kept, said once until a texture is made
+    CHECK(slots.waitForRoom(id));
+    CHECK_FALSE(slots.waitForRoom(id));
+    CHECK(slots.slot(id)->pixels);
+    CHECK(bound(first.Get()));
+
+    // the frame that writes its last level swaps it in: Replacing to Resident
+    const auto third = fakeTexture();
+    slots.attachTexture(id, third, 3, 84);
+    CHECK_FALSE(slots.slot(id)->waitsForRoom);
+    slots.levelsWritten(id, 0);
+    CHECK(bound(first.Get()));
+    const auto states = slots.stateVersion();
+    slots.dropPixels(id);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Resident);
+    CHECK(slots.stateVersion() > states);
+    CHECK(slots.replacing() == 0u);
+    CHECK(slots.slot(id)->version == version + 1);
+    CHECK(slots.takeChangedSlots() == std::vector<ImageSlotId>{id});
+    CHECK(slots.binding(id).texture == third.Get());
+    CHECK_FALSE(slots.slot(id)->replaced);
+    // the first is held until frame 5 has finished, as the second
+    CHECK(slots.retiredBytes() == 2u * 84u);
+    slots.collectRetired(6);
+    CHECK(slots.retiredBytes() == 0u);
+    CHECK(slots.textureBytes() == 2u * 84u);
+
+    // a refusal while Replacing binds the complete texture again
+    service.change(key);
+    service.publish(key, true);
+    slots.refresh(service.table, 7);
+    REQUIRE(slots.slot(id)->state == ImageSlots::State::Replacing);
+    slots.attachTexture(id, fakeTexture(), 3, 84);
+    slots.levelsWritten(id, 2);
+    slots.refuse(id, "a format the engine refuses");
+    CHECK(slots.slot(id)->state == ImageSlots::State::Default);
+    CHECK(slots.binding(id).texture == third.Get());
+    CHECK_FALSE(slots.binding(id).intrinsic);
+    CHECK(slots.retiredBytes() == 84u);
+    CHECK_FALSE(slots.slot(id)->replaced);
+
+    // a Default slot is not complete: asked again as before (Pending)
+    service.change(key);
+    slots.refresh(service.table, 8);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Pending);
+    service.publish(key, true);
+    slots.refresh(service.table, 9);
+    slots.attachTexture(id, fakeTexture(), 3, 84);
+    slots.levelsWritten(id, 0);
+    slots.dropPixels(id);
+
+    // the holder is released on a drop: both textures let go, the intrinsic stands in
+    service.change(key);
+    service.publish(key, true);
+    slots.refresh(service.table, 10);
+    REQUIRE(slots.slot(id)->state == ImageSlots::State::Replacing);
+    slots.attachTexture(id, fakeTexture(), 3, 84);
+    slots.collectRetired(20);
+    slots.dropTexture(id, 10);
+    CHECK_FALSE(slots.slot(id)->replaced);
+    CHECK_FALSE(slots.slot(id)->texture);
+    CHECK(slots.binding(id).intrinsic);
+    CHECK(slots.retiredBytes() == 2u * 84u);
+
+    // and on teardown
+    slots.refresh(service.table, 11);
+    slots.attachTexture(id, fakeTexture(), 3, 84);
+    slots.levelsWritten(id, 0);
+    slots.dropPixels(id);
+    service.change(key);
+    service.publish(key, true);
+    slots.refresh(service.table, 12);
+    REQUIRE(slots.slot(id)->state == ImageSlots::State::Replacing);
+    slots.releaseAll();
+    CHECK(slots.size() == 0u);
+    CHECK(slots.retiredBytes() == 0u);
+    CHECK(slots.textureBytes() == 0u);
   }
 
   SECTION("U2.1: an adopted image's bytes go once written and the service let them go")

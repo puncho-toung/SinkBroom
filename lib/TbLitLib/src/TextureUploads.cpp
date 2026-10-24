@@ -161,6 +161,7 @@ bool TextureUploads::record(
   std::uint64_t& frameBytes,
   const std::function<bool()>& allocationRoom)
 {
+  auto left = false;
   for (const auto id : slots.loading())
   {
     const auto* slot = slots.slot(id);
@@ -208,7 +209,20 @@ bool TextureUploads::record(
         }
       }
       // U2.3: no new texture within the allocation headroom; the slot keeps binding its
-      // intrinsic
+      // intrinsic. LPF.1 (D102): a Replacing slot keeps binding its complete texture and
+      // keeps its image, so that a later frame tries again (the frame is left
+      // unconverged); counted once until its texture is made
+      if (
+        problem.empty() && allocationRoom && slot->state == ImageSlots::State::Replacing
+        && !allocationRoom())
+      {
+        if (slots.waitForRoom(id))
+        {
+          ++m_headroomRefusals;
+        }
+        left = true;
+        continue;
+      }
       if (problem.empty() && allocationRoom && !allocationRoom())
       {
         problem = fmt::format(
@@ -275,7 +289,8 @@ bool TextureUploads::record(
       slots.levelsWritten(id, level);
     }
 
-    // Image_load.cpp:890-891, as the engine ends its upload
+    // Image_load.cpp:890-891, as the engine ends its upload; LPF.1 (D98): a Replacing
+    // slot swaps its new texture in here, in the frame that wrote its last level
     if (m_permanentState)
     {
       commandList.setPermanentTextureState(
@@ -284,7 +299,7 @@ bool TextureUploads::record(
     }
     slots.dropPixels(id);
   }
-  return false;
+  return left;
 }
 
 void TextureUploads::setPermanentStateForTesting(const bool permanent)

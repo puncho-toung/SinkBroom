@@ -88,7 +88,16 @@ using ImageRequest = std::function<ImageLookup(const MaterialImageKey&)>;
  * that a slot's files changed (MaterialTable::changedImages, a reload or the poll's
  * re-probe), the slot is asked again, its texture let go and its version bumped: Pending,
  * the intrinsic, then the new texture. The budget's own drops are not changes: a slot
- * that holds its texture keeps it.
+ * that holds its texture keeps it. LPF.1 (C40, D98, D102): a slot asked again while it
+ * holds a complete texture (Resident) is Replacing instead: the complete texture stays
+ * bound, with the slot's version, while the new image is answered, made and written, and
+ * at the frame in which the new texture's last level is written the slot swaps (the new
+ * texture bound, the version bumped, the old one retired for the frames in flight), so no
+ * frame between binds the intrinsic; asked again while Replacing (a third image before
+ * the second landed), the unfinished new texture is retired and the newest image starts
+ * again, the complete one still bound. A slot with no complete texture is asked again as
+ * before (Pending, its intrinsic). An eviction's or a test's drop (dropTexture) lets the
+ * textures go as before.
  *
  * Every change of what a slot binds bumps its version (an arrival, each extension of the
  * written mip range, a re-request, a drop), and the bumped slots are reported once
@@ -111,6 +120,10 @@ public:
     Loading,
     // every level is written; the bytes are let go
     Resident,
+    // LPF.1 (C40, D98): asked again while Resident: the complete texture (replaced) stays
+    // bound while the new image is answered and written (pixels, texture); Resident again
+    // at the swap
+    Replacing,
   };
 
   struct Slot
@@ -134,6 +147,16 @@ public:
     std::optional<int> adoptedFormat;
     // the table's change count when it was answered
     std::uint64_t adoptedChange = 0;
+    // LPF.1 (C40, D98): Replacing: the complete texture the slot binds while its new one
+    // is written, its levels and bytes; retired at the swap
+    nvrhi::TextureHandle replaced;
+    int replacedMipLevels = 0;
+    std::uint64_t replacedBytes = 0;
+    // the new image's facts (adoptedUsage, adoptedFormat), the draws' from the swap on
+    std::optional<int> replacingUsage;
+    std::optional<int> replacingFormat;
+    // D102: Replacing, the new texture waits for the allocation headroom (said once)
+    bool waitsForRoom = false;
     // why the service has no image (Default)
     std::string reason;
   };
@@ -161,6 +184,9 @@ private:
   std::uint64_t m_stateVersion = 0;
   // textures let go, until the frames that used them have finished (D35)
   RetiredResources m_retired;
+  // the frame being recorded (refresh, dropTexture), which a swap retires the replaced
+  // texture at
+  std::uint64_t m_frame = 0;
 
 public:
   ImageSlots() = default;
@@ -186,10 +212,19 @@ public:
     ImageSlotId slot, nvrhi::TextureHandle texture, int mipLevels, std::uint64_t bytes);
   // the levels from firstMip on are written: the binding's range grows, the version bumps
   void levelsWritten(ImageSlotId slot, int firstMip);
-  // every level is written: the bytes are let go (P2.14a)
+  // every level is written: the bytes are let go (P2.14a); a Replacing slot swaps (its
+  // new texture bound, its version bumped, the replaced one retired: LPF.1, D98)
   void dropPixels(ImageSlotId slot);
-  // the uploader cannot make the image (a format the engine refuses): Default, with why
+  // the uploader cannot make the image (a format the engine refuses): Default, with why;
+  // a Replacing slot keeps its complete texture bound and lets the new one go
   void refuse(ImageSlotId slot, std::string reason);
+  /**
+   * LPF.1 (D102): a Replacing slot's new texture is not made for the allocation headroom
+   * (U2.3): the complete texture stays bound and the slot stays Replacing, its image
+   * kept, so a later frame tries again; true the first time since the slot's last texture
+   * was made (the uploader counts it once).
+   */
+  bool waitForRoom(ImageSlotId slot);
   // tests: the slot of key holds image, as if the service had answered it (Loading)
   ImageSlotId provideForTesting(
     const MaterialImageKey& key, std::shared_ptr<const CachedImage> image);
@@ -204,9 +239,12 @@ public:
   std::optional<ImageSlotId> find(const MaterialImageKey& key) const;
   std::size_t size() const;
   std::size_t pending() const;
-  // the slots whose images wait to be written (Loading), in id order
+  // the slots whose images wait to be written (Loading, and Replacing with its image), in
+  // id order
   std::vector<ImageSlotId> loading() const;
   bool hasLoading() const;
+  // LPF.1 (C40): the slots Replacing (tests, the frame log)
+  std::size_t replacing() const;
   // slots with at least one written level, and their textures' bytes (C16, C11)
   std::size_t resident() const;
   std::uint64_t textureBytes() const;
@@ -231,7 +269,12 @@ public:
 private:
   void adopt(ImageSlotId id, const ImageLookup& lookup, std::uint64_t change);
   void bump(ImageSlotId id);
-  void reRequest(ImageSlotId id, std::uint64_t frame);
+  // asks for a slot's image again; keepComplete (a change, LPF.1): a slot holding a
+  // complete texture keeps it bound and is Replacing
+  void reRequest(ImageSlotId id, std::uint64_t frame, bool keepComplete);
+  // a Replacing slot's replaced texture is retired and its new one bound (the swap), or
+  // (restore) the replaced one bound again and the new one retired
+  void endReplacing(ImageSlotId id, bool restore);
 
   deleteCopyAndMove(ImageSlots);
 };

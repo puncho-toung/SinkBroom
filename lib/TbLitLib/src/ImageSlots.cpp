@@ -72,6 +72,18 @@ std::vector<MaterialImageKey> lp2IntrinsicKeys()
   return keys;
 }
 
+namespace
+{
+
+// the slots the uploader writes: Loading, and Replacing once its new image is here
+bool writes(const ImageSlots::Slot& slot)
+{
+  return slot.pixels
+         && (slot.state == ImageSlots::State::Loading || slot.state == ImageSlots::State::Replacing);
+}
+
+} // namespace
+
 void ImageSlots::setRequest(ImageRequest request)
 {
   m_request = std::move(request);
@@ -106,7 +118,9 @@ ImageSlotId ImageSlots::request(const MaterialImageKey& key)
 
 void ImageSlots::refresh(const MaterialTable& table, const std::uint64_t frame)
 {
-  // P2.14b: a slot whose files changed since it was answered is asked again
+  m_frame = frame;
+  // P2.14b: a slot whose files changed since it was answered is asked again; LPF.1 (C40,
+  // D98): one holding a complete texture keeps it bound meanwhile (Replacing)
   if (table.imageChanges != m_seenChanges)
   {
     m_seenChanges = table.imageChanges;
@@ -120,7 +134,7 @@ void ImageSlots::refresh(const MaterialTable& table, const std::uint64_t frame)
       if (const auto* change = table.changedImages.find(slot.key);
           change && *change > slot.adoptedChange)
       {
-        reRequest(id, frame);
+        reRequest(id, frame, true);
       }
     }
   }
@@ -159,6 +173,7 @@ void ImageSlots::attachTexture(
   slot.mipLevels = mipLevels;
   slot.firstWrittenMip = mipLevels;
   slot.textureBytes = bytes;
+  slot.waitsForRoom = false;
 }
 
 void ImageSlots::levelsWritten(const ImageSlotId id, const int firstMip)
@@ -166,9 +181,14 @@ void ImageSlots::levelsWritten(const ImageSlotId id, const int firstMip)
   auto& slot = m_slots[id];
   if (slot.texture && firstMip < slot.firstWrittenMip)
   {
-    // P2.14c: the binding's range covers the written levels only, and grows
+    // P2.14c: the binding's range covers the written levels only, and grows; LPF.1
+    // (D98): a Replacing slot binds its complete texture until the swap, so what it binds
+    // has not changed
     slot.firstWrittenMip = std::max(firstMip, 0);
-    bump(id);
+    if (slot.state != State::Replacing)
+    {
+      bump(id);
+    }
   }
 }
 
@@ -181,17 +201,36 @@ void ImageSlots::dropPixels(const ImageSlotId id)
     slot.state = State::Resident;
     ++m_stateVersion;
   }
+  else if (
+    slot.state == State::Replacing && slot.texture
+    && slot.firstWrittenMip < slot.mipLevels)
+  {
+    // LPF.1 (C40, D98): the frame that wrote the new texture's last level swaps it in
+    endReplacing(id, false);
+    slot.state = State::Resident;
+  }
 }
 
 void ImageSlots::refuse(const ImageSlotId id, std::string reason)
 {
   auto& slot = m_slots[id];
   m_pending.erase(id);
-  // what was written stays bound until the slot is asked again; nothing more is written
+  // what was written stays bound until the slot is asked again; nothing more is written.
+  // LPF.1: a Replacing slot binds its complete texture again, the new one let go
   slot.pixels.reset();
+  if (slot.state == State::Replacing)
+  {
+    endReplacing(id, true);
+  }
   slot.state = State::Default;
   slot.reason = std::move(reason);
   ++m_stateVersion;
+}
+
+bool ImageSlots::waitForRoom(const ImageSlotId id)
+{
+  auto& slot = m_slots[id];
+  return slot.state == State::Replacing && !std::exchange(slot.waitsForRoom, true);
 }
 
 ImageSlotId ImageSlots::provideForTesting(
@@ -207,7 +246,8 @@ ImageSlotId ImageSlots::provideForTesting(
 
 void ImageSlots::dropTexture(const ImageSlotId id, const std::uint64_t frame)
 {
-  reRequest(id, frame);
+  m_frame = std::max(m_frame, frame);
+  reRequest(id, frame, false);
 }
 
 ImageSlots::Binding ImageSlots::binding(const ImageSlotId id) const
@@ -226,6 +266,17 @@ ImageSlots::Binding ImageSlots::binding(const ImageSlotId id) const
   const auto& slot = m_slots[id];
   auto result = Binding{};
   result.versions.push_back(SlotVersion{id, slot.version});
+  if (slot.state == State::Replacing && slot.replaced)
+  {
+    // LPF.1 (C40, D98): the complete texture, every level, until the new one is written
+    result.texture = slot.replaced.Get();
+    result.subresources = nvrhi::TextureSubresourceSet{
+      0,
+      nvrhi::MipLevel(slot.replacedMipLevels),
+      0,
+      nvrhi::TextureSubresourceSet::AllArraySlices};
+    return result;
+  }
   if (written(slot))
   {
     result.texture = slot.texture.Get();
@@ -274,7 +325,7 @@ std::vector<ImageSlotId> ImageSlots::loading() const
   auto ids = std::vector<ImageSlotId>{};
   for (ImageSlotId id = 0; id < ImageSlotId(m_slots.size()); ++id)
   {
-    if (m_slots[id].state == State::Loading)
+    if (writes(m_slots[id]))
     {
       ids.push_back(id);
     }
@@ -284,23 +335,32 @@ std::vector<ImageSlotId> ImageSlots::loading() const
 
 bool ImageSlots::hasLoading() const
 {
-  return std::ranges::any_of(
-    m_slots, [](const Slot& slot) { return slot.state == State::Loading; });
+  return std::ranges::any_of(m_slots, writes);
+}
+
+std::size_t ImageSlots::replacing() const
+{
+  return std::size_t(std::ranges::count_if(
+    m_slots, [](const Slot& slot) { return slot.state == State::Replacing; }));
 }
 
 std::size_t ImageSlots::resident() const
 {
   return std::size_t(std::ranges::count_if(m_slots, [](const Slot& slot) {
-    return slot.texture && slot.firstWrittenMip < slot.mipLevels;
+    return (slot.state == State::Replacing && slot.replaced)
+           || (slot.state != State::Replacing && slot.texture
+               && slot.firstWrittenMip < slot.mipLevels);
   }));
 }
 
 std::uint64_t ImageSlots::textureBytes() const
 {
+  // a Replacing slot holds both textures
   auto bytes = std::uint64_t{0};
   for (const auto& slot : m_slots)
   {
-    bytes += slot.texture ? slot.textureBytes : 0;
+    bytes +=
+      (slot.texture ? slot.textureBytes : 0) + (slot.replaced ? slot.replacedBytes : 0);
   }
   return bytes;
 }
@@ -345,19 +405,46 @@ void ImageSlots::adopt(
   m_pending.erase(id);
   ++m_stateVersion;
   // U2.1: the facts, never the service's slot (it owns the image's bytes)
-  slot.adoptedUsage =
+  const auto usage =
     lookup.slot ? std::optional{lookup.slot->name.usage} : std::optional<int>{};
-  slot.adoptedFormat = lookup.slot && lookup.slot->image
-                         ? std::optional{lookup.slot->image->format}
-                         : std::optional<int>{};
+  const auto format = lookup.slot && lookup.slot->image
+                        ? std::optional{lookup.slot->image->format}
+                        : std::optional<int>{};
   slot.adoptedChange = change;
   if (lookup.image)
   {
-    // Ready, Source or Generated: the uploader makes the texture
+    // Ready, Source or Generated: the uploader makes the texture; LPF.1 (D98): a
+    // Replacing slot's complete texture stays bound meanwhile, with its own facts until
+    // the swap
     slot.pixels = lookup.image;
-    slot.state = State::Loading;
+    if (slot.state == State::Replacing)
+    {
+      slot.replacingUsage = usage;
+      slot.replacingFormat = format;
+    }
+    else
+    {
+      slot.adoptedUsage = usage;
+      slot.adoptedFormat = format;
+      slot.state = State::Loading;
+    }
     slot.reason.clear();
     return;
+  }
+  slot.adoptedUsage = usage;
+  slot.adoptedFormat = format;
+  if (slot.state == State::Replacing)
+  {
+    // the image has gone (no file, a refusal): the replaced texture goes too, as when the
+    // slot is asked again without one (the intrinsic stands in)
+    m_retired.retire(slot.replaced.Get(), slot.replacedBytes, m_frame);
+    slot.replaced = nullptr;
+    slot.replacedMipLevels = 0;
+    slot.replacedBytes = 0;
+    slot.replacingUsage.reset();
+    slot.replacingFormat.reset();
+    slot.waitsForRoom = false;
+    bump(id);
   }
   // Default (and an intrinsic the service does not make): the intrinsic stands in
   slot.state = State::Default;
@@ -372,15 +459,60 @@ void ImageSlots::bump(const ImageSlotId id)
   m_changed.push_back(id);
 }
 
-void ImageSlots::reRequest(const ImageSlotId id, const std::uint64_t frame)
+void ImageSlots::reRequest(
+  const ImageSlotId id, const std::uint64_t frame, const bool keepComplete)
 {
   auto& slot = m_slots[id];
-  // D35: the texture is held until the frames that may bind it have finished
+  const auto complete = slot.state == State::Resident && slot.texture
+                        && slot.firstWrittenMip == 0 && slot.mipLevels > 0;
+  if (keepComplete && (complete || slot.state == State::Replacing))
+  {
+    // LPF.1 (C40, D98): the complete texture stays bound, with the slot's version, until
+    // the new image is written; a third image before the second landed lets the
+    // unfinished new texture go (D35: held for the frames that wrote it)
+    if (complete)
+    {
+      slot.replaced = std::move(slot.texture);
+      slot.replacedMipLevels = slot.mipLevels;
+      slot.replacedBytes = slot.textureBytes;
+    }
+    m_retired.retire(slot.texture.Get(), slot.textureBytes, frame);
+    slot.texture = nullptr;
+    slot.mipLevels = 0;
+    slot.firstWrittenMip = 0;
+    slot.textureBytes = 0;
+    slot.pixels.reset();
+    slot.waitsForRoom = false;
+    slot.reason.clear();
+    if (slot.state != State::Replacing)
+    {
+      slot.state = State::Replacing;
+      ++m_stateVersion;
+    }
+    m_pending.insert(id);
+    if (m_request)
+    {
+      if (const auto lookup = m_request(slot.key);
+          lookup.state != ImageLookup::State::Pending)
+      {
+        adopt(id, lookup, m_seenChanges);
+      }
+    }
+    return;
+  }
+  // D35: the textures are held until the frames that may bind them have finished
   m_retired.retire(slot.texture.Get(), slot.textureBytes, frame);
+  m_retired.retire(slot.replaced.Get(), slot.replacedBytes, frame);
   slot.texture = nullptr;
   slot.mipLevels = 0;
   slot.firstWrittenMip = 0;
   slot.textureBytes = 0;
+  slot.replaced = nullptr;
+  slot.replacedMipLevels = 0;
+  slot.replacedBytes = 0;
+  slot.replacingUsage.reset();
+  slot.replacingFormat.reset();
+  slot.waitsForRoom = false;
   slot.pixels.reset();
   slot.adoptedUsage.reset();
   slot.adoptedFormat.reset();
@@ -397,6 +529,36 @@ void ImageSlots::reRequest(const ImageSlotId id, const std::uint64_t frame)
       adopt(id, lookup, m_seenChanges);
     }
   }
+}
+
+void ImageSlots::endReplacing(const ImageSlotId id, const bool restore)
+{
+  auto& slot = m_slots[id];
+  if (restore)
+  {
+    // the new texture goes, the complete one is the slot's again (its binding unchanged)
+    m_retired.retire(slot.texture.Get(), slot.textureBytes, m_frame);
+    slot.texture = std::move(slot.replaced);
+    slot.mipLevels = slot.replacedMipLevels;
+    slot.firstWrittenMip = 0;
+    slot.textureBytes = slot.replacedBytes;
+  }
+  else
+  {
+    // D35: the replaced texture is held until the frames that bound it have finished;
+    // the bump erases the slot's binding sets (C28); the new image's facts are the draws'
+    m_retired.retire(slot.replaced.Get(), slot.replacedBytes, m_frame);
+    slot.adoptedUsage = slot.replacingUsage;
+    slot.adoptedFormat = slot.replacingFormat;
+    bump(id);
+  }
+  slot.replacingUsage.reset();
+  slot.replacingFormat.reset();
+  slot.replaced = nullptr;
+  slot.replacedMipLevels = 0;
+  slot.replacedBytes = 0;
+  slot.waitsForRoom = false;
+  ++m_stateVersion;
 }
 
 } // namespace tb::lit

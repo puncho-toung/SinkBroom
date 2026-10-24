@@ -79,7 +79,11 @@ Result<std::uint64_t> levelUploadBytes(
  * whole, mirror.json M-TEX-DIFF-02: here it would be one writeTexture through one upload
  * chunk of its size); U2.3, a new texture while allocationRoom says the device's
  * allocations are within AllocationHeadroom of its limit (the slot keeps binding its
- * intrinsic, headroomRefusals counts it). Render thread only.
+ * intrinsic, headroomRefusals counts it). LPF.1 (C40, D98, D102): a Replacing slot's new
+ * texture is made and written as a Loading slot's while its complete texture stays bound;
+ * the frame that writes its last level swaps it in (dropPixels); refused for the headroom
+ * it keeps the complete texture bound and its image, counts once, and is left for a later
+ * frame (the frame unconverged). Render thread only.
  */
 class TextureUploads
 {
