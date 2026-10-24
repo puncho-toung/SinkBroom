@@ -4451,6 +4451,39 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
         std::cout << std::endl;
       }
 
+      // LP5.0 (P6.16, C46): r_skipInteractions gates the interactions alone
+      // (RenderBackend.cpp:4181): with them skipped the frame records the other passes,
+      // the ambient pass with as many draws as with them, and the probe pixel is the
+      // ambient-only picture of LP4.2a's model without a bake: black, alpha 1 (a camera
+      // of its own: a frame that began before the switch cannot be taken)
+      session->skipInteractionsForTesting(true);
+      const auto ambientOnly =
+        settledHdr(*session, litCamera({60, 0, 79}, {0, 0, -1}, {1, 0, 0}), 1);
+      REQUIRE(ambientOnly);
+      CHECK(ambientOnly->second.stats.interactionsSkipped);
+      CHECK(ambientOnly->second.stats.interactionDraws == 0u);
+      CHECK_FALSE(ambientOnly->second.stats.interactionsTimed);
+      CHECK(ambientOnly->second.stats.prepassDraws == litFrame.stats.prepassDraws);
+      CHECK(ambientOnly->second.stats.ambientDraws == litFrame.stats.ambientDraws);
+      CHECK(ambientOnly->second.stats.ambientDraws > 0u);
+      CHECK(ambientOnly->second.stats.ambientTimed);
+      const auto ambientProbe = ambientOnly->first.at(80, 60);
+      CHECK(ambientProbe[0] == 0.0f);
+      CHECK(ambientProbe[1] == 0.0f);
+      CHECK(ambientProbe[2] == 0.0f);
+      CHECK(ambientProbe[3] == 1.0f);
+      CHECK(ambientOnly->first.brightest(80, 60) == 0.0f);
+      session->skipInteractionsForTesting(false);
+      std::cout << fmt::format(
+        "LP5.0 (P6.16) interactions skipped: {} ambient draws ({} with them), probe "
+        "{} {} {} {}\n",
+        ambientOnly->second.stats.ambientDraws,
+        litFrame.stats.ambientDraws,
+        ambientProbe[0],
+        ambientProbe[1],
+        ambientProbe[2],
+        ambientProbe[3]);
+
       // camera 2: from x -100 looking west at the west wall, outside every light
       const auto dark =
         settledHdr(*session, litCamera({-100, 0, 64}, {-1, 0, 0}, {0, 0, 1}), 0);

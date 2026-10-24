@@ -299,22 +299,27 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
     m_stats.stoppedEarly = true;
     return m_stats;
   }
-  // C38 (LP4.2b): r_skipInteractions 1 records no interactions (RenderBackend.cpp:4181)
+  // C38 (LP4.2b): r_skipInteractions 1 records no interactions (RenderBackend.cpp:4181).
+  // LP5.0 (P6.16, C46): it gates DrawInteractions alone, so it skips this pass and no
+  // other: the passes recorded after it (LP5.2a's stage pass, LP5.3's fog and blend
+  // lights) still run, as the ambient pass before it does
   if (m_skipInteractions)
   {
     m_stats.interactionsSkipped = true;
-    return m_stats;
   }
-  const auto interactionTarget = inputs.frame->resolve(interactionPassDesc())
-                                 | kdl::transform([](const PassResources& resources) {
-                                     return resources.writes.front().framebuffer;
-                                   })
-                                 | kdl::value_or(nullptr);
-  if (interactionTarget == frame.framebuffer)
+  else
   {
-    beginTimer(frame, inputs.interactionTimer);
-    recordInteractions(frame);
-    m_stats.interactionsTimed = endTimer(frame, inputs.interactionTimer);
+    const auto interactionTarget = inputs.frame->resolve(interactionPassDesc())
+                                   | kdl::transform([](const PassResources& resources) {
+                                       return resources.writes.front().framebuffer;
+                                     })
+                                   | kdl::value_or(nullptr);
+    if (interactionTarget == frame.framebuffer)
+    {
+      beginTimer(frame, inputs.interactionTimer);
+      recordInteractions(frame);
+      m_stats.interactionsTimed = endTimer(frame, inputs.interactionTimer);
+    }
   }
   return m_stats;
 }
