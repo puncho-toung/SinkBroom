@@ -15555,9 +15555,13 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
           "symbol": "engineAnglesToMat3"
+        },
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "row_camera (floor-relative EYE), MAPS, AMB_ROOMS"
         }
       ],
-      "note": "LP2.3 (C29, P2.6): a parity camera line read back as the engine's player view has it after setviewpos: direction and up are idAngles( pitch, yaw, 0 ).ToMat3()'s rows 0 and 2, from the copied code through the facade engineAnglesToMat3 (M-GEO-PURE-01; U1.6: Projection.cpp transcribes nothing of it); the fov is S39's inverse of the integer g_fov (the cvar keeps its integer part), a TrenchBroom fov whose gFovOf( verticalFovOf() ) is exactly that integer in float (g_fov 90: 73.739795; 122 of the 179 integers have one), so CalcFov and R_SetupProjectionMatrix get the engine's base_fov. The line's position is the engine's render-view origin: TOOLS/lit-preview/parity.py places the eye g_viewNodalX (3) behind it along the yaw (GetViewPos: -6 + 6 in z at pitch 0) and passes setviewpos z - 0.5 (Cmd_SetViewpos_f subtracts pm_normalviewheight - 0.25, Teleport adds CM_CLIP_EPSILON 0.25), with the eye 96 above the floor so that GetFloorPos's 16-unit trace finds no floor; getviewpos checks every row"
+      "note": "LP2.3 (C29, P2.6): a parity camera line read back as the engine's player view has it after setviewpos: direction and up are idAngles( pitch, yaw, 0 ).ToMat3()'s rows 0 and 2, from the copied code through the facade engineAnglesToMat3 (M-GEO-PURE-01; U1.6: Projection.cpp transcribes nothing of it); the fov is S39's inverse of the integer g_fov (the cvar keeps its integer part), a TrenchBroom fov whose gFovOf( verticalFovOf() ) is exactly that integer in float (g_fov 90: 73.739795; 122 of the 179 integers have one), so CalcFov and R_SetupProjectionMatrix get the engine's base_fov. The line's position is the engine's render-view origin: TOOLS/lit-preview/parity.py places the eye g_viewNodalX (3) behind it along the yaw (GetViewPos: -6 + 6 in z at pitch 0) and passes setviewpos z - 0.5 (Cmd_SetViewpos_f subtracts pm_normalviewheight - 0.25, Teleport adds CM_CLIP_EPSILON 0.25), with the eye 96 above the floor so that GetFloorPos's 16-unit trace finds no floor; getviewpos checks every row. LP4.1 and LP4.2b (C38, D91): three maps, the LP2 map (its camera at EYE above floor 0), maps/test/litpreview_areas (portals and areas, a lights-off variant, its cameras at EYE above floor 0) and maps/test/litpreview_ambient (baked, no variant: its rooms' floor top face at z 32, so its cameras' eye at 128; row_camera makes EYE floor-relative through the row's \"floor\"); the same setviewpos and getviewpos arithmetic for every map"
     },
     {
       "id": "M-TEST-TONE-01",
@@ -15908,6 +15912,96 @@
         }
       ],
       "note": "K14 extended (D47, D81), seen in LP4.1's parity row P06: with a fresh .proc the faces dmap drops because their front lies in an opaque leaf (a sealed hull's outer faces, the faces between touching brushes) are pieces in solid here too (area -1, M-GEO-FN-08), and the outside set is drawn whenever it passes the frustum and lit by volume. From inside an area they are behind or facing away from every camera, so no gated row sees them; from outside the hull (or inside a brush that does not face away from the eye on every side) the preview shows them where the engine shows the rooms cut open. P06 (the camera in the void, view area -1) is reported, its flow statistics asserted; P08 tests the same view-area -1 flow from inside a world pillar, whose faces all face away from the eye, gated"
+    },
+    {
+      "id": "M-TEST-PARITY-02",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_envprobes.cpp",
+          "lines": [
+            1041,
+            1542
+          ],
+          "anchor": "bakeEnvironmentProbes: tr.primaryWorld and tr.primaryView, the deleted env/<map>/envprobe*.exr, the captures, the _amb .exr, the _spec and _depth caches (stored time -1), the .shprobes",
+          "sha256": "36f3aee4717803890b49c19dcbc82fc05da9455308ee8ab80c48549042034a60"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            743,
+            798
+          ],
+          "anchor": "idRenderWorldLocal::LoadSHProbesFile: once per map name and process, its Printf",
+          "sha256": "bfe5d04bf384f99ed22c2a1bc8e3ee37871a611dd9ab7015dedb763734fac14c"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            1099,
+            1102
+          ],
+          "anchor": "RenderScene: tr.primaryWorld, tr.primaryView",
+          "sha256": "881b79ac1137ed549e16a9ece37a7630a09694eb7794451366a2b00e20b7ecb0"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            1941,
+            1977
+          ],
+          "anchor": "idFileSystemLocal::RemoveFile: fs_basepath and fs_savepath, each with gameFolder",
+          "sha256": "8d539004936becf114164fcec92c606d2d6cbcd75061f9424209008758a3fec4"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            3965,
+            4007
+          ],
+          "anchor": "idFileSystemLocal::OpenFileWrite: the base path's cvar, gameFolder",
+          "sha256": "53b57b49b3a077a256d4c30b814d618d2130f3a9efaae4c71be89b1865b2972b"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            2284,
+            2287
+          ],
+          "anchor": "AmbientPass: RDF_NOAMBIENT returns",
+          "sha256": "ca27cbba24833887688e34f15a01dbe20707b3a426c6205637ad9f8a52e1e6f9"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4179,
+            4184
+          ],
+          "anchor": "idRenderBackend::DrawInteractions: r_skipInteractions",
+          "sha256": "0d8aae487bb4757e0b2aa8be0c4142f4973fa06f0c0fc688219082657f1c1de6"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3161,
+            3170
+          ],
+          "anchor": "a translucent coverage is not CONTENTS_OPAQUE",
+          "sha256": "a4aa9377b0fca06cfb5e2fe10ff81a3f7fc1e0583778996568d76c1ec00d04a8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "run_bake, bake_cfg, BAKE_CVARS, bake_outputs, stage (keep_bake), check_bake_outputs, automatic_probe_points, read_shprobes, one_engine_run (the LoadSHProbesFile line), parity_cfg (r_skipInteractions around the ambient-only shots), assemble_preview (.shprobes, the env_probe def, the IBL blobs, no .exr), class_problems (black), build_ambient_map, AMB_ROOMS, AMBIENT_MTR"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "ParityRowSwitch, checkProbesAgainstShProbes, settledParityFrame (interactionsSkipped), the [.][parity] case"
+        }
+      ],
+      "note": "LP4.2b (C38, D91, D95, P4.1, P4.24), test only: the parity run's bake is the engine's own, in an engine process of its own before the shot processes, because LoadSHProbesFile caches the SH list per map name and process (a reload after the bake would keep the empty list of the first load). The bake process (bake.cfg, at most 32 '+' commands, fs_game, fs_savepath and fs_basepath on the command line, FS_GAME asserted before any launch: RemoveFile and OpenFileWrite act under <fs_basepath>/<gameFolder>, the sandbox's tb_parity, never the game/base junction) dmaps and loads the ambient map, waits 120 frames so that the first RenderScene sets tr.primaryWorld and tr.primaryView, sets r_skipInteractions 0 and r_skipAmbient 0 (the captures render full lit views with their shader passes: RDF_NOAMBIENT skips the ambient pass alone) and ui_showGun 0, runs bakeEnvironmentProbes and quits. parity.py checks the .shprobes' entries against the automatic probes of the .proc's areas (PopulateEnvironmentProbes, M-PROBE-01) and every probe's _amb .exr and _amb #__2105, _spec #__2108 and _depth #__2208 caches; the shot processes keep every output of the bake, load the ambient map fresh without a dmap, and their log's LoadSHProbesFile line must report the bake's count. The ambient-only shots: r_skipInteractions 1 (DrawInteractions' only use) around them, printed and checked, and the preview's skipInteractionsForTesting through the row's ambient_only flag (ParityRowSwitch), the frame taken only when its interactions were skipped. The preview root gets the .shprobes, every .bimage, the env_probe entityDef copied out of the game folder and the IBL blobs, never an .exr. A room no entity's origin is in is filled as outside by dmap's flood (the A07 room's func_static block); a translucent material does not seal a room (A07's shell is opaque and unlit, its translucent panel inside). Never in the product"
     },
     {
       "id": "M-AREA-01",
@@ -17743,9 +17837,17 @@
         {
           "file": "lib/TbLitLib/src/RenderThread.cpp",
           "symbol": "RenderThread::requestProbeImages, the ProbeImageState of a slot"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::probesInFlight, probesBuilding"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::converge (probesInFlight), geometryTick, sceneWaitState"
         }
       ],
-      "note": "D88: the engine loads every probe image with the map, so its radiance test (!IsDefaulted()) reads a loaded image; the preview's slots arrive later: a Ready slot (a written level of its own) is taken, a Pending one leaves the default cube and marks the frame unconverged (FrameConvergence::probeImagesPending, cleared by the slot's arrival as for every image), a Missing or Default one is the engine's defaulted image (final). Only the images the choice reads count"
+      "note": "D88: the engine loads every probe image with the map, so its radiance test (!IsDefaulted()) reads a loaded image; the preview's slots arrive later: a Ready slot (a written level of its own) is taken, a Pending one leaves the default cube and marks the frame unconverged (FrameConvergence::probeImagesPending, cleared by the slot's arrival as for every image), a Missing or Default one is the engine's defaulted image (final). Only the images the choice reads count. LP4.2b step 0: the engine builds its probes inside the map load as well, so no frame of its ever sees a probe table on its way: the preview's frame is not settled while the probe build runs, its inputs wait or its table is provisional (FrameConvergence::probesInFlight, SceneGeometry::probesInFlight), and the build's collection triggers the frame that waited"
     },
     {
       "id": "M-PROBE-POOL-01",
