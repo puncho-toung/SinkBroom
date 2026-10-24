@@ -24,9 +24,11 @@
 
 #include "LitMapFixture.h"
 #include "LitTestUtils.h"
+#include "ViewFlow.h"
 #include "lit/AreaData.h"
 #include "lit/CpuPool.h"
 #include "lit/GameDeclSource.h"
+#include "lit/GridTable.h"
 #include "lit/ImageCache.h"
 #include "lit/ImageFallback.h"
 #include "lit/LightGridFile.h"
@@ -39,6 +41,7 @@
 #include "kd/result.h"
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 
 #include <algorithm>
 #include <array>
@@ -663,6 +666,129 @@ TEST_CASE(
           : 0;
     }
   }
+  // LP4.3 (C36, SC336, SC339, SC340): the light grid of the same bake. The grid table has
+  // the 72 areas, 69 with points; LoadLightGridImages asks for every area's atlas: the GI
+  // .pk4 holds the 69 of the areas with points as ready #__2100 caches (2D, bx bz 16 by
+  // by 16 texels: the bake's layout) and none for areas 46, 63 and 64, whose surfaces
+  // take the probe path (black on retail: every probe defaulted, above); area 0's grid
+  // parms against its file entry
+  const auto grid = gridAreasOf(bake);
+  REQUIRE(grid.size() == 72u);
+  REQUIRE(bake.lightGrid);
+  auto withPoints = 0;
+  auto atlasReady = 0;
+  auto atlasMissing = std::vector<int>{};
+  auto sizesMatch = 0;
+  auto atlasSize = std::map<int, std::pair<int, int>>{};
+  for (const auto& area : grid)
+  {
+    withPoints += area.hasPoints ? 1 : 0;
+    const auto name = decls.imageCacheName(area.atlas);
+    REQUIRE(name);
+    const auto cache = resolveImageCache(source, *name.value);
+    if (cache.state == ImageCacheSlot::State::Ready)
+    {
+      ++atlasReady;
+      REQUIRE(cache.image);
+      CHECK(cache.image->textureType == engine_image::Type2D);
+      atlasSize[area.area] = {cache.image->width, cache.image->height};
+      sizesMatch += cache.image->width == area.bounds[0] * area.bounds[2] * 16
+                        && cache.image->height == area.bounds[1] * 16
+                      ? 1
+                      : 0;
+    }
+    else
+    {
+      atlasMissing.push_back(area.area);
+      CHECK(cache.state == ImageCacheSlot::State::Missing);
+      CHECK_FALSE(area.hasPoints);
+    }
+  }
+  drain();
+  CHECK(withPoints == 69);
+  CHECK(atlasReady == 69);
+  CHECK(sizesMatch == 69);
+  CHECK(atlasMissing == std::vector<int>{46, 63, 64});
+  // the grid-area rule on a world surface of each area (its model's bounds, refs [N]):
+  // the area's own grid where it has points and a Ready atlas, else none (the probe path)
+  const auto gridValid = [&](const int area) {
+    return area >= 0 && std::size_t(area) < grid.size()
+           && grid[std::size_t(area)].hasPoints && atlasSize.contains(area);
+  };
+  auto onGrid = 0;
+  auto onProbes = std::vector<int>{};
+  for (std::size_t i = 0; i < grid.size(); ++i)
+  {
+    const auto area = int(i);
+    const auto refs = std::array<int, 1>{area};
+    const auto chosen = surfaceGridArea(
+      *bake.tree,
+      engineIdentityMatrix(),
+      bake.areas->areas[i].modelBounds,
+      refs,
+      gridValid);
+    if (chosen)
+    {
+      CHECK(*chosen == area);
+      ++onGrid;
+    }
+    else
+    {
+      onProbes.push_back(area);
+    }
+  }
+  CHECK(onGrid == 69);
+  CHECK(onProbes == std::vector<int>{46, 63, 64});
+  // area 0's parms: the file entry's origin, size and bounds, 14 16 2 0.875, the atlas
+  const auto entry = std::ranges::find_if(
+    bake.lightGrid->areas, [](const LightGridArea& a) { return a.area == 0; });
+  REQUIRE(entry != bake.lightGrid->areas.end());
+  REQUIRE(atlasSize.contains(0));
+  const auto parms = engineGridParms(grid[0], atlasSize[0].first, atlasSize[0].second);
+  CHECK(
+    parms.globalLightOrigin
+    == std::array<float, 4>{entry->origin[0], entry->origin[1], entry->origin[2], 1.0f});
+  CHECK(
+    parms.jitterTexScale
+    == std::array<float, 4>{entry->size[0], entry->size[1], entry->size[2], 1.0f});
+  CHECK(
+    parms.jitterTexOffset
+    == std::array<float, 4>{
+      float(entry->bounds[0]), float(entry->bounds[1]), float(entry->bounds[2]), 1.0f});
+  CHECK(parms.screenCorrectionFactor == std::array<float, 4>{14, 16, 2, 0.875f});
+  CHECK(parms.cascadeDistances[0] == float(atlasSize[0].first));
+  CHECK(parms.cascadeDistances[1] == float(atlasSize[0].second));
+  std::cout << fmt::format(
+    "LP4.3 retail grid of {}: {} areas, {} with points, {} atlases Ready (sizes as the "
+    "bake's layout: {}), none for {}; {} areas on the grid, {} on the probe path; area "
+    "0: "
+    "origin ({} {} {}) size ({} {} {}) bounds ({} {} {}), SCREENCORRECTIONFACTOR ({} {} "
+    "{} "
+    "{}), atlas {} x {}\n",
+    mapName,
+    grid.size(),
+    withPoints,
+    atlasReady,
+    sizesMatch,
+    fmt::join(atlasMissing, ", "),
+    onGrid,
+    onProbes.size(),
+    entry->origin[0],
+    entry->origin[1],
+    entry->origin[2],
+    entry->size[0],
+    entry->size[1],
+    entry->size[2],
+    entry->bounds[0],
+    entry->bounds[1],
+    entry->bounds[2],
+    parms.screenCorrectionFactor[0],
+    parms.screenCorrectionFactor[1],
+    parms.screenCorrectionFactor[2],
+    parms.screenCorrectionFactor[3],
+    atlasSize[0].first,
+    atlasSize[0].second);
+
   drain();
   source.closeFiles();
   std::cout << fmt::format(
