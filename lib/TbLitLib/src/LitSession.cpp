@@ -664,12 +664,11 @@ void LitSession::setTonemapForTesting(const EngineTonemapDefaults& tonemap)
   m_renderThread->setTonemapDefaults(tonemap);
 }
 
-std::optional<LdrImage> LitSession::readbackLdrForTesting(
-  const std::chrono::milliseconds timeout)
+Result<LdrImage> LitSession::readbackLdr(const std::chrono::milliseconds timeout)
 {
   if (!m_renderThread || m_renderThreadStopped)
   {
-    return std::nullopt;
+    return Error{"The lit preview session has stopped; there is no frame to read back."};
   }
   auto promise = std::make_shared<std::promise<LdrImage>>();
   auto future = promise->get_future();
@@ -677,7 +676,11 @@ std::optional<LdrImage> LitSession::readbackLdrForTesting(
     [promise](LdrImage image) { promise->set_value(std::move(image)); });
   if (future.wait_for(timeout) != std::future_status::ready)
   {
-    return std::nullopt;
+    return Error{fmt::format(
+      "No settled frame within {} ms (a session that is fed continuously, or not "
+      "exposed, "
+      "never settles).",
+      timeout.count())};
   }
   try
   {
@@ -686,8 +689,22 @@ std::optional<LdrImage> LitSession::readbackLdrForTesting(
   catch (const std::future_error&)
   {
     // the render thread ended with the request
-    return std::nullopt;
+    return Error{"The lit preview session stopped before a settled frame."};
   }
+}
+
+std::optional<LdrImage> LitSession::readbackLdrForTesting(
+  const std::chrono::milliseconds timeout)
+{
+  return readbackLdr(timeout) | kdl::transform([](LdrImage image) {
+           return std::optional<LdrImage>{std::move(image)};
+         })
+         | kdl::value_or(std::optional<LdrImage>{});
+}
+
+std::uint64_t LitSession::ldrStagingCreationsForTesting() const
+{
+  return m_renderThread ? m_renderThread->ldrStagingCreations() : 0;
 }
 
 void LitSession::setChunksForTesting(

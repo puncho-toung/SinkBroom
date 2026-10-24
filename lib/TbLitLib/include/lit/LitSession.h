@@ -469,6 +469,25 @@ public:
    */
   std::shared_ptr<const GridTable> gridTable() const;
 
+  /**
+   * LPF.2 (D107, C29, P5.24; lib/TbLitLib/FEED.md), any thread but the render thread: a
+   * copy of the LDR target (_currentRenderLDR, RGBA8_UNORM after the tonemap and before
+   * the blit, at the session's target extent: LdrImage, rows top first, four bytes a
+   * pixel, alpha as the tonemap pass writes it) of the first settled frame (D77) recorded
+   * after the call. Blocks the caller until that frame has finished on the GPU, never the
+   * render thread: the request triggers a frame, and the render thread copies the target
+   * inside the frame's command list into one staging texture it keeps per extent (not one
+   * per call), waits for the frame and maps the copy. "Settled" includes LPF.1's feed
+   * counters (FrameConvergence::feedBehind): a frame is settled only when its table holds
+   * every image override and re-parse handed over before its convergence, and the scene
+   * scanned it, so a readback after setImageOverride shows the override (or its refusal)
+   * without the caller waiting for anything else. A host that keeps feeding never gets a
+   * settled frame, by design: it gets the timeout's error. An error also when the session
+   * stops first, or when a headless session was never exposed (setExposed: no frame is
+   * drawn).
+   */
+  Result<LdrImage> readbackLdr(std::chrono::milliseconds timeout);
+
   // S3: the CPU pool from phase B until teardown step 1, else null; GUI thread, tests
   // only (B0.10, R1.11: the render thread gets the pool and the service at its start)
   CpuPool* cpuPoolForTesting() const;
@@ -692,15 +711,14 @@ public:
    */
   static std::int64_t liveDeviceMemoryAllocationsForTesting();
   /**
-   * LP2.2b (C29, P2.25), any thread but the render thread: asks the render thread for a
-   * copy of the LDR target of the next settled frame (D77), triggers a frame and waits up
-   * to timeout. The render thread copies the target into a staging texture inside that
-   * frame's command list, after its tonemap passes, waits for the frame on the GPU and
-   * maps the copy. nullopt at the timeout, or when the session stops first. Size the
-   * session first (create, resizeHeadlessForTesting): the target has the frame's extent.
+   * LP2.2b (C29, P2.25), any thread but the render thread: readbackLdr (LPF.2), nullopt
+   * for its error. Size the session first (create, resizeHeadlessForTesting): the target
+   * has the frame's extent.
    */
   std::optional<LdrImage> readbackLdrForTesting(
     std::chrono::milliseconds timeout = std::chrono::milliseconds{60000});
+  // LPF.2 (P5.24), any thread: the readbacks' staging textures made so far
+  std::uint64_t ldrStagingCreationsForTesting() const;
 
 private:
   LitSession(

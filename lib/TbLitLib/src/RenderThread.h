@@ -454,7 +454,12 @@ private:
   // into its staging texture
   std::vector<std::function<void(LdrImage)>> m_ldrReadbacks;
   std::vector<std::function<void(LdrImage)>> m_ldrReadbacksInFrame;
+  // LPF.2 (P5.24): the readbacks' one staging texture, kept while the target's extent
+  // and format stay (released in teardown step 2), and whether this frame copied into it
   nvrhi::StagingTextureHandle m_ldrStaging;
+  bool m_ldrCopied = false;
+  // the staging textures made so far; any thread (tests)
+  std::atomic<std::uint64_t> m_ldrStagingCreations = 0;
   // LP2.1 test hook: the chunks the arenas hold instead of the scene's
   std::shared_ptr<const std::map<ChunkKey, Chunk>> m_testChunks;
   // the render thread's copy of m_testChunks, and the chunks of a thread without a scene
@@ -575,6 +580,9 @@ public:
   // on the render thread once that frame has finished on the GPU; a frame is triggered.
   // A request the thread never serves (it stops first) is dropped
   void readbackLdr(std::function<void(LdrImage)> done);
+  // LPF.2 (P5.24), any thread: the readbacks' staging textures made so far (one per
+  // extent, not one per readback)
+  std::uint64_t ldrStagingCreations() const;
   // any thread: the arenas hold these chunks instead of the scene's until null replaces
   // them; a frame is triggered
   void setTestChunks(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks);

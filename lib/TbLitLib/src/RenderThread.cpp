@@ -532,6 +532,7 @@ void RenderThread::releaseFrameResources()
   m_passes.releaseAll();
   m_tonemap.releaseAll();
   m_ldrStaging = nullptr;
+  m_ldrCopied = false;
   m_ldrReadbacksInFrame.clear();
   m_frameResources.releaseAll();
   m_arenas.releaseAll();
@@ -752,9 +753,15 @@ void RenderThread::readbackLdr(std::function<void(LdrImage)> done)
   m_wake.notify_all();
 }
 
+std::uint64_t RenderThread::ldrStagingCreations() const
+{
+  return m_ldrStagingCreations;
+}
+
 void RenderThread::recordLdrReadback(nvrhi::ICommandList& commandList)
 {
-  // C29, P2.25: only a settled frame whose tonemap passes ran is copied
+  // C29, P2.25: only a settled frame whose tonemap passes ran is copied; LPF.1's settled
+  // includes the feed's counters, so a hand-over made before the request is in it
   const auto& tonemap = m_tonemap.lastStats();
   if (!m_convergence.settled() || !tonemap.tonemapped)
   {
@@ -774,14 +781,25 @@ void RenderThread::recordLdrReadback(nvrhi::ICommandList& commandList)
     m_ldrReadbacksInFrame.clear();
     return;
   }
+  // LPF.2 (P5.24): one staging texture per extent and format, not one per readback; the
+  // last readback has mapped and unmapped it after its frame finished on the GPU
+  // (finishLdrReadback), so this frame's copy writes it with nothing else reading it
+  // (nvrhi rule 17's CPU side)
   const auto& desc = ldr->texture->getDesc();
-  m_ldrStaging = m_device.device().createStagingTexture(
-    nvrhi::TextureDesc{}
-      .setWidth(desc.width)
-      .setHeight(desc.height)
-      .setFormat(desc.format)
-      .setDebugName("Lit preview LDR readback"),
-    nvrhi::CpuAccessMode::Read);
+  if (
+    !m_ldrStaging || m_ldrStaging->getDesc().width != desc.width
+    || m_ldrStaging->getDesc().height != desc.height
+    || m_ldrStaging->getDesc().format != desc.format)
+  {
+    m_ldrStaging = m_device.device().createStagingTexture(
+      nvrhi::TextureDesc{}
+        .setWidth(desc.width)
+        .setHeight(desc.height)
+        .setFormat(desc.format)
+        .setDebugName("Lit preview LDR readback"),
+      nvrhi::CpuAccessMode::Read);
+    ++m_ldrStagingCreations;
+  }
   if (!m_ldrStaging)
   {
     m_ldrReadbacksInFrame.clear();
@@ -789,15 +807,15 @@ void RenderThread::recordLdrReadback(nvrhi::ICommandList& commandList)
   }
   commandList.copyTexture(
     m_ldrStaging, nvrhi::TextureSlice{}, ldr->texture, nvrhi::TextureSlice{});
+  m_ldrCopied = true;
 }
 
 void RenderThread::finishLdrReadback(const std::size_t slot)
 {
-  if (!m_ldrStaging)
+  if (!std::exchange(m_ldrCopied, false) || !m_ldrStaging)
   {
     return;
   }
-  auto staging = std::exchange(m_ldrStaging, nullptr);
   auto requests = std::exchange(m_ldrReadbacksInFrame, {});
   // the frame's copy is read once the frame has finished; a stop or a park drops it
   if (!waitForFrameEvent(slot))
@@ -805,24 +823,25 @@ void RenderThread::finishLdrReadback(const std::size_t slot)
     return;
   }
   auto& device = m_device.device();
-  const auto& desc = staging->getDesc();
+  const auto& desc = m_ldrStaging->getDesc();
   auto image = LdrImage{};
   image.width = desc.width;
   image.height = desc.height;
   auto pitch = std::size_t{0};
   const auto* bytes = static_cast<const std::uint8_t*>(device.mapStagingTexture(
-    staging, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch));
+    m_ldrStaging, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch));
   if (!bytes)
   {
     return;
   }
+  // rows top first, as the target holds them
   const auto rowBytes = std::size_t(desc.width) * 4;
   image.rgba.resize(rowBytes * desc.height);
   for (std::uint32_t y = 0; y < desc.height; ++y)
   {
     std::copy_n(bytes + y * pitch, rowBytes, image.rgba.data() + y * rowBytes);
   }
-  device.unmapStagingTexture(staging);
+  device.unmapStagingTexture(m_ldrStaging);
   for (auto& done : requests)
   {
     done(image);
