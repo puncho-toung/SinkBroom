@@ -2,7 +2,7 @@
 
 TbLitLib is the lit preview's renderer: the RBDOOM-3-BFG engine's material, image and
 lighting code, driven through NVRHI on Vulkan 1.2. SinkBroom (the TrenchBroom editor) is
-one host; this file is the contract for any other host — the Mixar material editor in
+one host; this file is the contract for any other host — a material editor outside SinkBroom in
 particular — that links TbLitLib without Qt and without a map document (plan
 `plans/lit-preview/37-LPF-PACKAGES.md`, D107, D108). The two examples at the end are
 compiled and run as the hidden test case `Feed host: FEED.md's examples` in
