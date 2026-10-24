@@ -189,11 +189,20 @@ struct MaterialTable
   ImageChanges changedImages;
   /**
    * LPF.0a (D100, C40): the image override hand-overs (setImageOverride,
-   * clearImageOverride) this table includes, applied or refused: every Feed work item
-   * publishes once, and a table whose feedApplied equals MaterialService::feedRequested()
-   * holds every hand-over made before that was read. Kept across reloads.
+   * clearImageOverride) and, LPF.0b, the material re-parse hand-overs (reparseMaterial,
+   * clearMaterialReparse) this table includes, applied or refused: every Feed and Reparse
+   * work item publishes once, and a table whose feedApplied equals
+   * MaterialService::feedRequested() holds every hand-over made before that was read.
+   * Kept across reloads.
    */
   std::uint64_t feedApplied = 0;
+  /**
+   * LPF.0b (D105, C43): moves once with every material re-parse, its restore and its
+   * re-application after a build: a consumer that caches per material compares it to see
+   * whether any entry's revision (MaterialEntry::revision) moved. An image override
+   * moves it not. Kept across reloads.
+   */
+  std::uint64_t materialsRevision = 0;
   // LPF.0a (C41): the bytes the override store holds (the callers' pixels or ready
   // levels), not the converted slots' (those count in the image budget)
   std::size_t overrideBytes = 0;
@@ -339,7 +348,7 @@ struct MaterialServiceOptions
   // every image. LPF.0a (D99): an override's slots too, converted again from the store
   std::size_t imageBudgetBytes = std::size_t{512} * 1024 * 1024;
   // LPF.0a: runs on the parse thread before each work item with its kind ("evaluate",
-  // "feed", "lookup", "bake", "poll", "measure", "image", "bulk", "reload")
+  // "feed", "reparse", "lookup", "bake", "poll", "measure", "image", "bulk", "reload")
   std::function<void(std::string_view kind)> beforeWorkItemForTesting;
 };
 
@@ -386,6 +395,9 @@ struct MaterialServiceStats
   // work item ran (their bytes dropped), and the slots converted from the override store
   std::uint64_t droppedFeeds = 0;
   std::uint64_t overrideConversions = 0;
+  // LPF.0b (D96): re-parse hand-overs replaced by a newer one of the name before their
+  // work item ran
+  std::uint64_t droppedReparses = 0;
   // the thread waits for a request, and its last work item is done and freed
   bool idle = false;
   // the thread ended without a stop (X.2): set first, without allocating (Y.1)
@@ -398,7 +410,8 @@ struct MaterialServiceStats
  * The parse thread (D32, C20, §3.5 Threading): it alone constructs, uses and destroys the
  * MaterialDecls, and every other thread sees only the published MaterialTable. Requests
  * queue in priority order: stop, reload, evaluations, the image overrides (LPF.0a, D96:
- * one item per name), lookups (materials and entityDefs), a bake, the poll, the
+ * one item per name), the material re-parses (LPF.0b, D96: one item per name), lookups
+ * (materials and entityDefs), a bake, the poll, the
  * editor-image measures, the images, then the bulk parse. LP1c fix (S2.3): every work
  * item is short, so that an evaluation (a light drag) waits for one step at most: a
  * lookup or measure item takes names until about 20 ms have passed (or 256 names) and
@@ -552,8 +565,37 @@ public:
    */
   void clearImageOverride(std::string imageName);
 
-  // LPF.0a (D100): the override hand-overs made so far; any thread (LPF.1's render thread
-  // compares it with a table's feedApplied)
+  /**
+   * LPF.0b (C42, D96, D99, D104): hands the service a material's decl text in place of
+   * its decl file's; any thread. name is the material's name (any spelling; the parse
+   * thread canonicalises it), declText the decl's body with or without the "material
+   * <name>" head. One Reparse work item per name is queued, served after the image
+   * overrides and ahead of the lookups, the newest text of a name replacing an older one
+   * not taken yet (stats().droppedReparses), and feedRequested() counts it. On the parse
+   * thread MaterialDecls::reparse parses the material's decl again in place, and ONE
+   * table is published with feedApplied advanced and materialsRevision moved: the slot
+   * replaced under the asked name, the canonical name and every name it was published
+   * under, its register deltas gone (they are evaluated again when asked), its
+   * editor-image size measured again; a refused text (over 1 MB, a guard, the name) or a
+   * parse that reached an engine Error publishes the slot Failed with the reason, so its
+   * consumers drop the material. The text is kept and applied again after every registry
+   * build (a build reads the decl files again) until clearMaterialReparse. A re-parsed
+   * name without a decl stays implicit (FindMaterial( name, false ) takes it for none:
+   * M-FEED-DIFF-01). Fails only when no thread will take it.
+   */
+  Result<void> reparseMaterial(std::string name, std::string declText);
+
+  /**
+   * LPF.0b (C42, P5.8): ends a name's re-parse; any thread. One Reparse work item, as
+   * reparseMaterial's: the decl's file text is parsed again (an implicit name is made the
+   * default material: the engine's generated text is gone), the slot replaced as a
+   * re-parse replaces it, and the kept text forgotten; ONE table is published. A name
+   * with no re-parse publishes once, nothing else changed.
+   */
+  void clearMaterialReparse(std::string name);
+
+  // LPF.0a (D100): the override hand-overs and, LPF.0b, the re-parse hand-overs made so
+  // far; any thread (LPF.1's render thread compares it with a table's feedApplied)
   std::uint64_t feedRequested() const;
 
   // LPF.0a: what became of a name's last hand-over (folded as feedKeyName); any thread

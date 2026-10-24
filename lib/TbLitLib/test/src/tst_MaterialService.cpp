@@ -34,6 +34,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -1372,6 +1373,419 @@ TEST_CASE("MaterialService, the LP1c fix round's work items (S2.2-S2.5, S3.13)")
   }
 }
 
+namespace
+{
+
+// LPF.0b: holds the parse thread before it takes its next request, and tells when it is
+// held (beforeTakeWorkForTesting calls pass)
+struct ReparseHold
+{
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool closed = false;
+  bool held = false;
+
+  void pass()
+  {
+    auto lock = std::unique_lock{mutex};
+    held = true;
+    changed.notify_all();
+    changed.wait(lock, [&] { return !closed; });
+    held = false;
+  }
+
+  void close()
+  {
+    const auto lock = std::scoped_lock{mutex};
+    closed = true;
+  }
+
+  bool waitUntilHeld()
+  {
+    auto lock = std::unique_lock{mutex};
+    return changed.wait_for(lock, Timeout, [&] { return held; });
+  }
+
+  void open()
+  {
+    {
+      const auto lock = std::scoped_lock{mutex};
+      closed = false;
+    }
+    changed.notify_all();
+  }
+};
+
+struct OpenReparseHoldAtExit
+{
+  std::shared_ptr<ReparseHold> hold;
+  ~OpenReparseHoldAtExit() { hold->open(); }
+};
+
+// the work items the parse thread ran, and the publications each made
+struct ReparseItems
+{
+  std::mutex mutex;
+  std::vector<std::string> kinds;
+  std::string current;
+  std::map<std::string, int> publications;
+
+  void begin(const std::string_view kind)
+  {
+    const auto lock = std::scoped_lock{mutex};
+    kinds.emplace_back(kind);
+    current = std::string{kind};
+  }
+
+  void published()
+  {
+    const auto lock = std::scoped_lock{mutex};
+    ++publications[current];
+  }
+
+  // the kinds run and the publications made since the last call
+  std::pair<std::vector<std::string>, std::map<std::string, int>> taken()
+  {
+    const auto lock = std::scoped_lock{mutex};
+    return {std::exchange(kinds, {}), std::exchange(publications, {})};
+  }
+};
+
+// a service over the fixture whose thread passes the hold and reports its items
+std::unique_ptr<MaterialService> reparseService(
+  const std::shared_ptr<ReparseHold>& hold,
+  const std::shared_ptr<ReparseItems>& items,
+  SourceFactory makeSource = fixtureSource)
+{
+  auto serviceOptions = options(std::move(makeSource), [items](const auto& event) {
+    if (event.kind == MaterialServiceEvent::Kind::Published)
+    {
+      items->published();
+    }
+  });
+  serviceOptions.beforeTakeWorkForTesting = [hold] { hold->pass(); };
+  serviceOptions.beforeWorkItemForTesting = [items](const std::string_view kind) {
+    items->begin(kind);
+  };
+  return start(std::move(serviceOptions));
+}
+
+std::shared_ptr<const MaterialTable> waitForHandOvers(MaterialService& service)
+{
+  const auto requested = service.feedRequested();
+  return service.waitForTableForTesting(
+    [&](const MaterialTable& t) { return t.feedApplied >= requested; }, Timeout);
+}
+
+bool waitUntilServiceIdle(MaterialService& service)
+{
+  return service.waitForStatsForTesting([](const auto& s) { return s.idle; }, Timeout);
+}
+
+// holds the thread: an evaluation the table lacks wakes it, and it is held when it comes
+// back for its next request
+void holdAfterEvaluation(
+  MaterialService& service, ReparseHold& hold, const MaterialEntry& entry)
+{
+  static auto parm = 100.0f;
+  hold.close();
+  auto parms = NoParms;
+  parm += 1.0f;
+  parms[5] = parm;
+  static_cast<void>(service.evaluate(MaterialId::of(entry), parms, 0.0f));
+  REQUIRE(hold.waitUntilHeld());
+}
+
+const auto ReparsedWall = std::string{
+  "textures/lp1a/wall\n{\n\tnoshadows\n\tqer_editorimage textures/lp1a/wall_ed.tga\n"
+  "\tdiffusemap textures/lp1a/wall_d.tga\n\tbumpmap textures/lp1a/wall_local.tga\n"
+  "\tspecularmap textures/lp1a/wall_s.tga\n}\n"};
+
+constexpr int NoShadows = 1 << 2;
+
+} // namespace
+
+TEST_CASE("MaterialService re-parses one material (LPF.0b, C42, D96, D99, D105)")
+{
+  auto hold = std::make_shared<ReparseHold>();
+  auto items = std::make_shared<ReparseItems>();
+  auto service = reparseService(hold, items);
+  const auto openAtExit = OpenReparseHoldAtExit{hold};
+  const auto wall = waitForEntry(*service, "textures/lp1a/wall");
+  const auto otherSpelling = waitForEntry(*service, "Textures/LP1A/Wall");
+  REQUIRE(otherSpelling == wall);
+  REQUIRE(waitUntilServiceIdle(*service));
+  static_cast<void>(items->taken());
+
+  SECTION("one publication: every spelling, the registers gone, the measure, the counts")
+  {
+    auto parms = NoParms;
+    parms[0] = 1.0f;
+    REQUIRE(waitForRegisters(*service, *wall, parms, 0.0f));
+    REQUIRE(waitUntilServiceIdle(*service));
+    static_cast<void>(items->taken());
+    const auto before = service->table();
+    const auto key = RegisterKey{MaterialId::of(*wall), parms, 0.0f};
+    REQUIRE(before->findRegisters(key));
+
+    REQUIRE(service->reparseMaterial("textures/lp1a/wall", ReparsedWall).is_success());
+    CHECK(service->feedRequested() == before->feedApplied + 1);
+    const auto after = waitForHandOvers(*service);
+    REQUIRE(waitUntilServiceIdle(*service));
+    const auto [kinds, publications] = items->taken();
+    REQUIRE_FALSE(kinds.empty());
+    CHECK(kinds.front() == "reparse");
+    CHECK(publications.at("reparse") == 1);
+    // C21: the text may name other images, so the size is measured again
+    CHECK(std::ranges::find(kinds, "measure") != kinds.end());
+
+    CHECK(after->feedApplied == before->feedApplied + 1);
+    CHECK(after->materialsRevision == before->materialsRevision + 1);
+    // the registers of the material's id are gone (and from the FIFO: an evaluation is
+    // made again)
+    CHECK_FALSE(after->findRegisters(key));
+    for (const auto* name : {"textures/lp1a/wall", "Textures/LP1A/Wall"})
+    {
+      CAPTURE(name);
+      const auto slot = after->find(name);
+      REQUIRE(slot);
+      REQUIRE(slot->entry);
+      CHECK(slot->entry->revision == 1u);
+      CHECK((slot->entry->materialFlags & NoShadows) != 0);
+      CHECK(slot->entry->index == wall->index);
+    }
+    // a spelling looked up only now carries the revision (the per-index store)
+    const auto later = waitForEntry(*service, "TEXTURES/lp1a/wall.tga");
+    CHECK(later->revision == 1u);
+    CHECK((later->materialFlags & NoShadows) != 0);
+    // the measure published it measured, its size kept
+    const auto measured = service->table()->find("textures/lp1a/wall");
+    CHECK(measured->sizeMeasured);
+    // an evaluation of the new parse
+    CHECK(waitForRegisters(*service, *later, parms, 0.0f)->error.empty());
+
+    SECTION("clear: the file's text again, one publication")
+    {
+      REQUIRE(waitUntilServiceIdle(*service));
+      static_cast<void>(items->taken());
+      const auto cleared = service->table();
+      service->clearMaterialReparse("Textures/LP1A/Wall");
+      const auto restored = waitForHandOvers(*service);
+      REQUIRE(waitUntilServiceIdle(*service));
+      CHECK(items->taken().second.at("reparse") == 1);
+      CHECK(restored->materialsRevision == cleared->materialsRevision + 1);
+      for (const auto* name : {"textures/lp1a/wall", "Textures/LP1A/Wall"})
+      {
+        const auto slot = restored->find(name);
+        REQUIRE(slot);
+        REQUIRE(slot->entry);
+        CHECK(slot->entry->revision == 2u);
+        CHECK((slot->entry->materialFlags & NoShadows) == 0);
+      }
+
+      // a clear of a name with no re-parse: one publication, nothing else
+      const auto unchanged = service->table();
+      service->clearMaterialReparse("textures/lp1a/grate");
+      const auto same = waitForHandOvers(*service);
+      CHECK(same->feedApplied == unchanged->feedApplied + 1);
+      CHECK(same->materialsRevision == unchanged->materialsRevision);
+      CHECK(same->find("textures/lp1a/wall") == unchanged->find("textures/lp1a/wall"));
+    }
+
+    SECTION("reload: the text applied again in the first table of the new registry")
+    {
+      REQUIRE(waitUntilServiceIdle(*service));
+      hold->close();
+      service->reload();
+      // the build publishes once, then the thread is held before its next request
+      REQUIRE(hold->waitUntilHeld());
+      const auto first = service->table();
+      CHECK(first->registry != after->registry);
+      const auto slot = first->find("textures/lp1a/wall");
+      REQUIRE(slot);
+      REQUIRE(slot->entry);
+      // counted from the new registry's 0
+      CHECK(slot->entry->revision == 1u);
+      CHECK((slot->entry->materialFlags & NoShadows) != 0);
+      CHECK(first->find("Textures/LP1A/Wall")->entry == slot->entry);
+      hold->open();
+    }
+  }
+
+  SECTION("a refused text publishes once, Failed with the reason")
+  {
+    const auto before = service->table();
+    REQUIRE(service
+              ->reparseMaterial(
+                "textures/lp1a/wall",
+                "{" + std::string(MaterialDecls::MaxReparseTextBytes, ' ') + "}")
+              .is_success());
+    const auto after = waitForHandOvers(*service);
+    REQUIRE(waitUntilServiceIdle(*service));
+    CHECK(items->taken().second.at("reparse") == 1);
+    CHECK(after->feedApplied == before->feedApplied + 1);
+    CHECK(after->materialsRevision == before->materialsRevision + 1);
+    for (const auto* name : {"textures/lp1a/wall", "Textures/LP1A/Wall"})
+    {
+      const auto slot = after->find(name);
+      REQUIRE(slot);
+      CHECK_FALSE(slot->entry);
+      CHECK_THAT(slot->error, Catch::Matchers::ContainsSubstring("a re-parse takes"));
+    }
+
+    // a text of exactly the bound parses on the parse thread's 8 MB stack, and the
+    // material is published again under the asked name
+    const auto head = std::string{"{ diffusemap textures/lp1a/big "};
+    auto text =
+      head + std::string(MaterialDecls::MaxReparseTextBytes - head.size() - 1, ' ');
+    text += "}";
+    REQUIRE(text.size() == MaterialDecls::MaxReparseTextBytes);
+    REQUIRE(service->reparseMaterial("Textures/LP1A/Wall", text).is_success());
+    const auto parsed = waitForHandOvers(*service);
+    const auto slot = parsed->find("Textures/LP1A/Wall");
+    REQUIRE(slot);
+    REQUIRE(slot->entry);
+    CHECK(diffuseImage(*slot->entry) == "textures/lp1a/big");
+    CHECK(parsed->find("textures/lp1a/wall")->entry == slot->entry);
+  }
+
+  SECTION("two texts of a name before the item runs: one re-parse, the newest")
+  {
+    holdAfterEvaluation(*service, *hold, *wall);
+    static_cast<void>(items->taken());
+    REQUIRE(
+      service->reparseMaterial(
+               "textures/lp1a/grate", "{ diffusemap textures/lp1a/first }")
+        .is_success());
+    REQUIRE(
+      service
+        ->reparseMaterial("textures/lp1a/grate", "{ diffusemap textures/lp1a/second }")
+        .is_success());
+    hold->open();
+    const auto after = waitForHandOvers(*service);
+    REQUIRE(waitUntilServiceIdle(*service));
+    CHECK(after->feedApplied == service->feedRequested());
+    CHECK(service->stats().droppedReparses == 1u);
+    const auto kinds = items->taken().first;
+    CHECK(std::ranges::count(kinds, "reparse") == 1);
+    const auto slot = after->find("textures/lp1a/grate");
+    REQUIRE(slot);
+    REQUIRE(slot->entry);
+    CHECK(diffuseImage(*slot->entry) == "textures/lp1a/second");
+    CHECK(slot->entry->revision == 1u);
+  }
+
+  SECTION("served after the evaluations and ahead of the lookups")
+  {
+    holdAfterEvaluation(*service, *hold, *wall);
+    static_cast<void>(items->taken());
+    static_cast<void>(service->lookup("textures/lp1a/expr"));
+    REQUIRE(service->reparseMaterial("textures/lp1a/wall", ReparsedWall).is_success());
+    auto parms = NoParms;
+    parms[1] = 0.5f;
+    static_cast<void>(service->evaluate(MaterialId::of(*wall), parms, 0.0f));
+    hold->open();
+    waitForHandOvers(*service);
+    REQUIRE(waitUntilServiceIdle(*service));
+    const auto kinds = items->taken().first;
+    REQUIRE(kinds.size() >= 3u);
+    CHECK(kinds[0] == "evaluate");
+    CHECK(kinds[1] == "reparse");
+    CHECK(kinds[2] == "lookup");
+  }
+
+  SECTION("an evaluation after a re-parse uses the new expressions")
+  {
+    REQUIRE(service
+              ->reparseMaterial(
+                "textures/lp1a/expr",
+                "{\n\t{\n\t\tblend add\n\t\tmap textures/lp1a/glow\n"
+                "\t\trgb 0.25 * parm0\n\t}\n}\n")
+              .is_success());
+    waitForHandOvers(*service);
+    const auto expr = waitForEntry(*service, "textures/lp1a/expr");
+    CHECK(expr->revision == 1u);
+    auto parms = NoParms;
+    parms[0] = 2.0f;
+    const auto registers = waitForRegisters(*service, *expr, parms, 0.0f);
+    REQUIRE(registers->error.empty());
+    CHECK(registers->registers[std::size_t(expr->stages[0].colorRegisters[0])] == 0.5f);
+  }
+
+  SECTION("a name without a decl: an implicit decl re-parsed, then the default")
+  {
+    REQUIRE(
+      service->reparseMaterial(
+               "textures/lpf/fresh", "{ diffusemap textures/lpf/fresh_d }")
+        .is_success());
+    waitForHandOvers(*service);
+    const auto fresh = waitForEntry(*service, "textures/lpf/fresh");
+    CHECK(fresh->implicit);
+    CHECK(diffuseImage(*fresh) == "textures/lpf/fresh_d");
+    service->clearMaterialReparse("textures/lpf/fresh");
+    const auto cleared = waitForHandOvers(*service);
+    const auto slot = cleared->find("textures/lpf/fresh");
+    REQUIRE(slot);
+    REQUIRE(slot->entry);
+    CHECK(slot->entry->defaulted);
+    CHECK(slot->entry->revision == 2u);
+  }
+}
+
+TEST_CASE("MaterialService re-parses a Failed material (LPF.0b, P5.8)")
+{
+  auto hold = std::make_shared<ReparseHold>();
+  auto items = std::make_shared<ReparseItems>();
+  auto service = reparseService(hold, items, [](const std::atomic<bool>&) {
+    return std::unique_ptr<DeclSource>{
+      std::make_unique<MemoryDeclSource>(std::vector<DeclFile>{DeclFile{
+        "materials/conflict.mtr",
+        "textures/lpf/flat2d { { blend add map env/conflict } }\n"
+        "textures/lpf/cube { { blend add cubeMap env/conflict } }\n",
+        0}})};
+  });
+  const auto openAtExit = OpenReparseHoldAtExit{hold};
+  static_cast<void>(waitForEntry(*service, "textures/lpf/flat2d"));
+  // the engine Error of ImageManager.cpp:441: Failed under both spellings
+  for (const auto* name : {"textures/lpf/cube", "Textures/LPF/Cube"})
+  {
+    static_cast<void>(service->lookup(name));
+    const auto table = service->waitForTableForTesting(
+      [&](const MaterialTable& t) { return t.find(name) != nullptr; }, Timeout);
+    REQUIRE_FALSE(table->find(name)->entry);
+  }
+
+  REQUIRE(service->reparseMaterial("textures/lpf/cube", "{ { blend add map env/other } }")
+            .is_success());
+  const auto after = waitForHandOvers(*service);
+  for (const auto* name : {"textures/lpf/cube", "Textures/LPF/Cube"})
+  {
+    CAPTURE(name);
+    const auto slot = after->find(name);
+    REQUIRE(slot);
+    REQUIRE(slot->entry);
+    CHECK(slot->entry->revision == 1u);
+    CHECK(slot->entry->stages.size() == 1u);
+  }
+
+  // a text that reaches the Error again: Failed with the reason, the revision moved
+  REQUIRE(
+    service->reparseMaterial(
+             "Textures/LPF/Cube", "{ { blend add cubeMap env/conflict } }")
+      .is_success());
+  const auto failed = waitForHandOvers(*service);
+  CHECK(failed->materialsRevision == after->materialsRevision + 1);
+  for (const auto* name : {"textures/lpf/cube", "Textures/LPF/Cube"})
+  {
+    const auto slot = failed->find(name);
+    REQUIRE(slot);
+    CHECK_FALSE(slot->entry);
+    CHECK(
+      slot->error
+      == "Image 'env/conflict' has been referenced with conflicting cube map states");
+  }
+}
+
 #if defined(_MSC_VER) && defined(_DEBUG)
 namespace
 {
@@ -1795,6 +2209,41 @@ TEST_CASE("MaterialTable's finds allocate nothing")
 // The control (G16): a source that leaks on every build must make the check fail, so that
 // a passing leak test means the checkpoint sees the parse thread's heap. Catch2's
 // [!shouldfail] reports it as passed when its check fails.
+TEST_CASE("MaterialService re-parses leak nothing (LPF.0b)")
+{
+  auto service = start(options(fixtureSource));
+  static_cast<void>(waitForEntry(*service, "textures/lp1a/wall"));
+  const auto cycle = [&](const int i) {
+    REQUIRE(service
+              ->reparseMaterial(
+                "textures/lp1a/wall",
+                fmt::format("{{ diffusemap textures/lp1a/wall_{} }}", i % 3))
+              .is_success());
+    static_cast<void>(waitForHandOvers(*service));
+    service->clearMaterialReparse("textures/lp1a/wall");
+    static_cast<void>(waitForHandOvers(*service));
+    REQUIRE(service->reparseMaterial("textures/lp1a/wall", ReparsedWall).is_success());
+    static_cast<void>(waitForHandOvers(*service));
+    REQUIRE(waitUntilServiceIdle(*service));
+  };
+  for (auto i = 0; i < 3; ++i)
+  {
+    cycle(i);
+  }
+  // the tables' tries, the queues' deques and the kept slots may hold a few dozen blocks
+  // more or less at either checkpoint (seen: up to 39 blocks, 1984 bytes); a leak in any
+  // of the 300 re-parses or clears shows 100 times or more
+  const auto growth = heapGrowth([&] {
+    for (auto i = 0; i < 100; ++i)
+    {
+      cycle(i);
+    }
+  });
+  CAPTURE(growth.blocks, growth.bytes);
+  CHECK(growth.blocks <= 64);
+  CHECK(growth.bytes <= 8192);
+}
+
 TEST_CASE("MaterialService leak check sees an injected leak", "[!shouldfail]")
 {
   auto service = start(options([](const std::atomic<bool>&) {

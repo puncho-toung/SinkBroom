@@ -128,6 +128,16 @@ struct FeedRequest
   std::uint64_t requests = 0;
 };
 
+// LPF.0b (D96): the queued re-parse hand-over of one name: the newest decl text (nullopt
+// for a clear), when it was handed over, and how many hand-overs of the name it stands
+// for (the older texts are dropped)
+struct ReparseRequest
+{
+  std::optional<std::string> text;
+  Clock::time_point handOver;
+  std::uint64_t requests = 0;
+};
+
 } // namespace
 
 MaterialId MaterialId::of(const MaterialEntry& entry)
@@ -270,6 +280,10 @@ struct MaterialService::Shared
   std::atomic<std::uint64_t> feedRequested = 0;
   // C40: what became of each name's last hand-over
   std::unordered_map<std::string, ImageOverrideStatus> overrideStatus;
+  // LPF.0b (D96): the re-parse hand-overs, one per name as asked, in the order the names
+  // first came, the newest text of a name winning; counted in feedRequested
+  std::deque<std::string> reparses;
+  std::unordered_map<std::string, ReparseRequest> queuedReparses;
 
   std::shared_ptr<const MaterialTable> table = std::make_shared<const MaterialTable>();
   MaterialServiceStats stats;
@@ -330,6 +344,35 @@ struct MaterialService::Shared
     ++feedRequested;
     return true;
   }
+
+  /**
+   * LPF.0b (D96, D100): queues a re-parse hand-over of a name (nullopt clears it), taking
+   * the mutex: one queued item per name, a newer text replacing one not taken yet;
+   * feedRequested counts every hand-over. False when no thread will take it.
+   */
+  bool queueReparse(std::string name, std::optional<std::string> text)
+  {
+    const auto now = Clock::now();
+    auto lock = std::scoped_lock{mutex};
+    if (stop || stats.threadEnded)
+    {
+      return false;
+    }
+    auto [queued, inserted] = queuedReparses.try_emplace(name);
+    if (inserted)
+    {
+      reparses.push_back(std::move(name));
+    }
+    else
+    {
+      ++stats.droppedReparses;
+    }
+    queued->second.text = std::move(text);
+    queued->second.handOver = now;
+    ++queued->second.requests;
+    ++feedRequested;
+    return true;
+  }
 };
 
 // The parse thread and everything only it touches.
@@ -343,6 +386,7 @@ private:
     AutoReload,
     Evaluate,
     Feed,
+    Reparse,
     Lookup,
     Bake,
     Poll,
@@ -365,6 +409,8 @@ private:
       return "evaluate";
     case WorkKind::Feed:
       return "feed";
+    case WorkKind::Reparse:
+      return "reparse";
     case WorkKind::Lookup:
       return "lookup";
     case WorkKind::Bake:
@@ -390,6 +436,9 @@ private:
     // LPF.0a: the override hand-over of a name
     std::string feedName;
     FeedRequest feed;
+    // LPF.0b: the re-parse hand-over of a name
+    std::string reparseName;
+    ReparseRequest reparse;
   };
 
   // R1.2: default-constructed, then the kind, so that a new member needs no initialiser
@@ -426,6 +475,15 @@ private:
     // the keys whose last published slot was converted from it, those the budget dropped
     // since among them (their consumers keep the texture): a clear reads them again
     std::vector<MaterialImageKey> keys;
+  };
+
+  // LPF.0b (C42, D99): a material's re-parse text, the truth its slot is parsed from,
+  // applied again after every build until it is cleared
+  struct StoredReparse
+  {
+    // the name it was last asked under
+    std::string askedName;
+    std::string text;
   };
 
   Shared& m_shared;
@@ -470,6 +528,8 @@ private:
   // D111 (P5.7): the materials whose editor-image chain holds an image name (its match
   // name), as they were measured, so that an override's editorSize remeasures them
   std::unordered_map<std::string, std::unordered_set<std::string>> m_sizeNames;
+  // LPF.0b (C42, D99, SC427): the re-parse store, by the material's canonical name
+  std::unordered_map<std::string, StoredReparse> m_reparses;
   std::size_t m_imageBytes = 0;
   std::uint64_t m_evictedImages = 0;
   // S2 Low (S2.7): the poll's place in the files it re-probes, a slice per poll
@@ -591,6 +651,8 @@ private:
         m_shared.queuedImages.clear();
         m_shared.feeds.clear();
         m_shared.queuedFeeds.clear();
+        m_shared.reparses.clear();
+        m_shared.queuedReparses.clear();
       }
       m_shared.changed.notify_all();
     }
@@ -679,6 +741,10 @@ private:
         break;
       case WorkKind::Feed:
         guarded("image override", [&] { feedItem(work.feedName, work.feed); });
+        break;
+      case WorkKind::Reparse:
+        guarded(
+          "material re-parse", [&] { reparseItem(work.reparseName, work.reparse); });
         break;
       case WorkKind::Lookup:
         guarded("lookup", [&] { lookUpStep(); });
@@ -806,6 +872,21 @@ private:
       {
         work.feed = std::move(queued->second);
         m_shared.queuedFeeds.erase(queued);
+      }
+      return work;
+    }
+    // LPF.0b (C42, D96): a re-parse beside the overrides, ahead of the lookups, so that a
+    // lookup or a measure queued after it reads the new parse; one name per item
+    if (!m_shared.reparses.empty())
+    {
+      auto work = workOf(WorkKind::Reparse);
+      work.reparseName = std::move(m_shared.reparses.front());
+      m_shared.reparses.pop_front();
+      const auto queued = m_shared.queuedReparses.find(work.reparseName);
+      if (queued != m_shared.queuedReparses.end())
+      {
+        work.reparse = std::move(queued->second);
+        m_shared.queuedReparses.erase(queued);
       }
       return work;
     }
@@ -1357,6 +1438,12 @@ private:
       auto made = std::make_shared<MaterialSlot>();
       made->error = result.error;
       slot = std::move(made);
+      // LPF.0b (P5.8): a Failed slot's names, so that a re-parse that fixes the
+      // material replaces it under each
+      if (MaterialDecls::reparseNameRefusal(name).empty())
+      {
+        recordSpelling(MaterialDecls::canonicalName(name), name);
+      }
     }
     const auto canonical = slot->entry ? slot->entry->name : std::string{};
     const auto measured = slot->sizeMeasured;
@@ -1437,9 +1524,11 @@ private:
     auto images = std::move(m_working.images);
     const auto imageChanges = m_working.imageChanges;
     auto changedImages = std::move(m_working.changedImages);
-    // LPF.0a (D100, C41): the hand-overs counted and the store's bytes do not either
+    // LPF.0a (D100, C41): the hand-overs counted and the store's bytes do not either, nor
+    // (LPF.0b, D105) the re-parses counted
     const auto feedApplied = m_working.feedApplied;
     const auto overrideBytes = m_working.overrideBytes;
+    const auto materialsRevision = m_working.materialsRevision;
     m_working = MaterialTable{};
     m_working.registry = registry;
     m_working.mapBakes = std::move(mapBakes);
@@ -1448,6 +1537,7 @@ private:
     m_working.changedImages = std::move(changedImages);
     m_working.feedApplied = feedApplied;
     m_working.overrideBytes = overrideBytes;
+    m_working.materialsRevision = materialsRevision;
     m_deltaOrder.clear();
     m_bulkMaterial = 0;
     m_bulkTable = 0;
@@ -1576,6 +1666,17 @@ private:
 
     // a new table for the new registry
     resetWorkingTable(m_decls->id());
+
+    // LPF.0b (C42, D99, SC427): the build read the decl files again; the kept re-parse
+    // texts are applied before anything is looked up, so the first table holds them
+    for (const auto& [material, stored] : m_reparses)
+    {
+      if (stopping())
+      {
+        break;
+      }
+      publishReparse({stored.askedName}, m_decls->reparse(stored.askedName, stored.text));
+    }
 
     // what the consumers asked for before is there at the switch, with its kept sizes
     // (D52); the measures are queued (S2.2)
@@ -2059,8 +2160,9 @@ private:
         if (
           m_shared.images.empty() || m_shared.reloadRequested
           || !m_shared.evaluations.empty() || !m_shared.feeds.empty()
-          || !m_shared.lookups.empty() || !m_shared.entityDefLookups.empty()
-          || !m_shared.mapBakes.empty() || !m_shared.measures.empty())
+          || !m_shared.reparses.empty() || !m_shared.lookups.empty()
+          || !m_shared.entityDefLookups.empty() || !m_shared.mapBakes.empty()
+          || !m_shared.measures.empty())
         {
           break;
         }
@@ -2250,6 +2352,145 @@ private:
       m_readySizes.erase(material);
       remeasure(material);
     }
+  }
+
+  // LPF.0b (P5.8): a name a material's slot is published under, once
+  void recordSpelling(const std::string& material, const std::string& name)
+  {
+    auto& names = m_spellings[material];
+    if (std::ranges::find(names, name) == names.end())
+    {
+      names.push_back(name);
+    }
+  }
+
+  // LPF.0b (C42, SC421): a material's register deltas, gone from the table and the FIFO
+  void eraseRegisters(const MaterialId& material)
+  {
+    std::erase_if(m_deltaOrder, [&](const RegisterKey& key) {
+      if (!(key.material == material))
+      {
+        return false;
+      }
+      m_working.registers = m_working.registers.erase(key);
+      return true;
+    });
+  }
+
+  /**
+   * LPF.0b (C42, D100): one re-parse hand-over of a name (the newest of those queued for
+   * it), then one publication whose feedApplied counts every hand-over the item stands
+   * for, whatever became of it (P5.2). Parse thread.
+   */
+  void reparseItem(const std::string& name, const ReparseRequest& request)
+  {
+    guarded("material re-parse", [&] {
+      if (request.text)
+      {
+        reparseOne(name, *request.text);
+      }
+      else
+      {
+        clearReparse(name);
+      }
+    });
+    m_working.feedApplied += request.requests;
+    publish();
+  }
+
+  /**
+   * C42 (D99): a re-parse: the store takes the text of a name a re-parse takes (applied
+   * again after every build), and the registry parses the material again. Without a
+   * registry (a failed build) the asked name answers the build's failure, and the next
+   * build applies the text.
+   */
+  void reparseOne(const std::string& name, const std::string& text)
+  {
+    if (MaterialDecls::reparseNameRefusal(name).empty())
+    {
+      m_reparses.insert_or_assign(
+        MaterialDecls::canonicalName(name), StoredReparse{name, text});
+    }
+    if (!m_decls)
+    {
+      m_working.materials = m_working.materials.set(name, failedSlot());
+      ++m_working.materialsRevision;
+      return;
+    }
+    publishReparse({name}, m_decls->reparse(name, text));
+  }
+
+  /**
+   * C42 (P5.8): a clear: the store lets the name go, and the registry parses the decl's
+   * file text again (or makes an implicit name the default), published as a re-parse is.
+   * A name the store does not hold changes nothing.
+   */
+  void clearReparse(const std::string& name)
+  {
+    if (!MaterialDecls::reparseNameRefusal(name).empty())
+    {
+      return;
+    }
+    const auto stored = m_reparses.find(MaterialDecls::canonicalName(name));
+    if (stored == m_reparses.end())
+    {
+      return;
+    }
+    const auto asked = std::move(stored->second.askedName);
+    m_reparses.erase(stored);
+    if (m_decls)
+    {
+      publishReparse({name, asked}, m_decls->restore(name));
+    }
+  }
+
+  /**
+   * C42 (P5.8, P5.9, C21, SC421): a re-parse's or a restore's result into the working
+   * table: the slot (the fresh entry, unmeasured with its kept Ready size, or Failed with
+   * the reason) under the names asked, the canonical name and every name the material is
+   * published under (a set that may overwrite: a Failed material's names are recorded
+   * too), the material's register deltas gone, its measure queued, materialsRevision
+   * moved.
+   */
+  void publishReparse(std::vector<std::string> names, const MaterialReparse& result)
+  {
+    auto slot = std::shared_ptr<const MaterialSlot>{};
+    if (result.state == MaterialReparse::State::Parsed && result.entry)
+    {
+      slot = firstSlot(result.entry);
+    }
+    else
+    {
+      auto failed = std::make_shared<MaterialSlot>();
+      failed->error = result.error;
+      slot = std::move(failed);
+    }
+    if (!result.name.empty())
+    {
+      names.push_back(result.name);
+      if (const auto spellings = m_spellings.find(result.name);
+          spellings != m_spellings.end())
+      {
+        names.insert(names.end(), spellings->second.begin(), spellings->second.end());
+      }
+    }
+    for (const auto& name : names)
+    {
+      m_working.materials = m_working.materials.set(name, slot);
+      if (!result.name.empty())
+      {
+        recordSpelling(result.name, name);
+      }
+    }
+    if (result.index >= 0 && m_decls)
+    {
+      eraseRegisters(MaterialId{m_decls->id(), result.index});
+    }
+    if (slot->entry && !slot->sizeMeasured)
+    {
+      queueMeasure(slot->entry->name);
+    }
+    ++m_working.materialsRevision;
   }
 
   /**
@@ -2722,6 +2963,24 @@ Result<void> MaterialService::setImageOverride(std::string imageName, ImageOverr
 void MaterialService::clearImageOverride(std::string imageName)
 {
   if (m_shared->queueFeed(feedKeyName(imageName), nullptr))
+  {
+    m_shared->requested.notify_one();
+  }
+}
+
+Result<void> MaterialService::reparseMaterial(std::string name, std::string declText)
+{
+  if (!m_shared->queueReparse(std::move(name), std::move(declText)))
+  {
+    return Error{"The material parse thread takes no re-parse: it has stopped"};
+  }
+  m_shared->requested.notify_one();
+  return kdl::void_success;
+}
+
+void MaterialService::clearMaterialReparse(std::string name)
+{
+  if (m_shared->queueReparse(std::move(name), std::nullopt))
   {
     m_shared->requested.notify_one();
   }
