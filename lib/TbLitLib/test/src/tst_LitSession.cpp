@@ -9453,6 +9453,662 @@ TEST_CASE(
   CHECK(messages.warnings == 0);
 }
 
+namespace
+{
+
+// ----- LPF.1: the live feed on the render side -----
+
+/**
+ * LPF.1 (P5.12's pattern): what a host's guarded listener does: every publication of the
+ * service tells the attached session (tableChanged) and is timed; the parse thread's Feed
+ * and Reparse items are counted as they start, so the publication each one made (the next
+ * one: an item publishes exactly once) is known.
+ */
+struct FeedListener
+{
+  std::mutex mutex;
+  LitSession* session = nullptr;
+  std::vector<std::chrono::steady_clock::time_point> publications;
+  // per Feed or Reparse item, the publications made before it started
+  std::vector<std::size_t> itemStarts;
+
+  void attach(LitSession* attached)
+  {
+    const auto lock = std::scoped_lock{mutex};
+    session = attached;
+  }
+
+  std::size_t items()
+  {
+    const auto lock = std::scoped_lock{mutex};
+    return itemStarts.size();
+  }
+
+  // the time of the nth Feed or Reparse item's publication (0 the first), once it is made
+  std::optional<std::chrono::steady_clock::time_point> itemPublication(
+    const std::size_t nth)
+  {
+    const auto lock = std::scoped_lock{mutex};
+    if (nth >= itemStarts.size() || itemStarts[nth] >= publications.size())
+    {
+      return std::nullopt;
+    }
+    return publications[itemStarts[nth]];
+  }
+};
+
+// a material service over a game root as rootService's, whose listener is listener's; a
+// closed feedGate holds every Feed and Reparse item before it runs
+std::unique_ptr<MaterialService> feedService(
+  const std::filesystem::path& root,
+  const std::shared_ptr<FeedListener>& listener,
+  const std::shared_ptr<ParseGate>& feedGate = nullptr)
+{
+  auto options = MaterialServiceOptions{};
+  options.makeSource = [root](const std::atomic<bool>& cancel) {
+    return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(root, &cancel)};
+  };
+  options.pollInterval = 0ms;
+  options.imageBudgetBytes = 0;
+  options.listener = [listener](const MaterialServiceEvent& event) {
+    if (event.kind != MaterialServiceEvent::Kind::Published)
+    {
+      return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const auto lock = std::scoped_lock{listener->mutex};
+    listener->publications.push_back(now);
+    if (listener->session)
+    {
+      listener->session->tableChanged();
+    }
+  };
+  options.beforeWorkItemForTesting = [listener, feedGate](const std::string_view kind) {
+    if (kind != "feed" && kind != "reparse")
+    {
+      return;
+    }
+    if (feedGate)
+    {
+      feedGate->pass();
+    }
+    const auto lock = std::scoped_lock{listener->mutex};
+    listener->itemStarts.push_back(listener->publications.size());
+  };
+  return MaterialService::create(std::move(options))
+         | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+}
+
+// LPF.1 (P5.23): what a frame's start bound for one key's slot, recorded by an
+// every-frame hook without a copy or a GPU wait
+struct FeedFrame
+{
+  std::uint64_t index = 0;
+  std::chrono::steady_clock::time_point start;
+  // the key has a slot
+  bool slotted = false;
+  // its binding: the texture (compared, never used), whether the intrinsic stands in, the
+  // slot's version in it, and the slot's state
+  const nvrhi::ITexture* texture = nullptr;
+  bool intrinsic = false;
+  std::uint64_t version = 0;
+  ImageSlots::State state = ImageSlots::State::Pending;
+};
+
+struct FeedFrames
+{
+  std::mutex mutex;
+  std::vector<FeedFrame> frames;
+
+  std::vector<FeedFrame> all()
+  {
+    const auto lock = std::scoped_lock{mutex};
+    return frames;
+  }
+
+  // the frames whose start is at or after from
+  std::vector<FeedFrame> since(const std::chrono::steady_clock::time_point from)
+  {
+    const auto lock = std::scoped_lock{mutex};
+    auto out = std::vector<FeedFrame>{};
+    std::ranges::copy_if(frames, std::back_inserter(out), [&](const FeedFrame& f) {
+      return f.start >= from;
+    });
+    return out;
+  }
+};
+
+void recordFeedFrames(
+  LitSession& session,
+  const std::shared_ptr<FeedFrames>& frames,
+  const MaterialImageKey& key)
+{
+  session.setEveryFrameHookForTesting([frames, key](RenderFrameAccess& access) {
+    auto frame = FeedFrame{};
+    frame.index = access.frameIndex;
+    frame.start = std::chrono::steady_clock::now();
+    if (const auto id = access.images.find(key))
+    {
+      const auto binding = access.images.binding(*id);
+      frame.slotted = true;
+      frame.texture = binding.texture;
+      frame.intrinsic = binding.intrinsic;
+      frame.version = binding.versions.front().version;
+      frame.state = access.images.slot(*id)->state;
+    }
+    const auto lock = std::scoped_lock{frames->mutex};
+    frames->frames.push_back(frame);
+  });
+}
+
+// waits until the session has presented no frame for quiet; false at the deadline
+bool waitQuiet(
+  LitSession& session,
+  const std::chrono::milliseconds quiet = 400ms,
+  const std::chrono::milliseconds timeout = 30000ms)
+{
+  auto last = session.framesPresented();
+  auto since = std::chrono::steady_clock::now();
+  const auto deadline = since + timeout;
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    std::this_thread::sleep_for(20ms);
+    const auto presented = session.framesPresented();
+    const auto now = std::chrono::steady_clock::now();
+    if (presented != last)
+    {
+      last = presented;
+      since = now;
+    }
+    else if (now - since >= quiet)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+// a w × h RGBA8 picture of one colour, alpha 255
+ImageOverride constantOverride(
+  const int width, const int height, const std::array<std::uint8_t, 3>& rgb)
+{
+  auto pixels = RawImagePixels{};
+  pixels.width = width;
+  pixels.height = height;
+  pixels.format = ImagePixelFormat::RGBA8;
+  pixels.bytes.resize(std::size_t(width) * std::size_t(height) * 4);
+  for (std::size_t i = 0; i < pixels.bytes.size(); i += 4)
+  {
+    pixels.bytes[i] = rgb[0];
+    pixels.bytes[i + 1] = rgb[1];
+    pixels.bytes[i + 2] = rgb[2];
+    pixels.bytes[i + 3] = 255;
+  }
+  auto image = ImageOverride{};
+  image.image = std::move(pixels);
+  return image;
+}
+
+// waits until the latest table holds every hand-over made so far
+std::shared_ptr<const MaterialTable> waitForFeed(
+  MaterialService& service, const std::chrono::milliseconds timeout = 20000ms)
+{
+  const auto requested = service.feedRequested();
+  return service.waitForTableForTesting(
+    [&](const MaterialTable& table) { return table.feedApplied >= requested; }, timeout);
+}
+
+// the first texel of every level of key's image as the service holds it
+std::vector<std::array<std::uint8_t, 4>> levelTexels(
+  MaterialService& service, const MaterialImageKey& key)
+{
+  auto texels = std::vector<std::array<std::uint8_t, 4>>{};
+  const auto lookup = service.image(key);
+  if (lookup.image)
+  {
+    for (const auto& level : lookup.image->levels)
+    {
+      const auto* t = lookup.image->data.data() + level.offset;
+      texels.push_back({t[0], t[1], t[2], t[3]});
+    }
+  }
+  return texels;
+}
+
+// the exposure the feed tests pin (D110, as the parity rows pin it)
+constexpr auto FeedPinnedLuminance = 1.0f;
+
+EngineTonemapDefaults feedTonemap()
+{
+  auto tonemap = EngineTonemap;
+  tonemap.hdrMinLuminance = FeedPinnedLuminance;
+  tonemap.hdrMaxLuminance = FeedPinnedLuminance;
+  return tonemap;
+}
+
+// what one override cost on the render side
+struct FeedLanding
+{
+  // from the item's publication to the start of the first frame after it
+  double latencyMs = 0.0;
+  // the frames started after the publication until the session was quiet again
+  std::size_t frames = 0;
+  bool settled = false;
+};
+
+} // namespace
+
+// LPF.1 (C40, C43, C44, D98, D100-D102, D106, D110): the live feed on the render side
+// over the LP2.2a fixture, headless, with the exposure pinned: a feed publication draws a
+// frame at once, the counters keep a frame behind a hand-over from being settled, a
+// replaced image never shows the intrinsic, the re-parse reaches the cells, the lights
+// and the lists, and the frame log times the feed. Hidden: it needs a GPU and the game's
+// blobs.
+TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  const auto library = VulkanLibrary{};
+  REQUIRE(library.getInstanceProcAddr != nullptr);
+  // above the floor at (60 0 0), looking down, inside lp1b_light (LP2.2a's camera 1)
+  const auto lit = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+
+  SECTION("step 1: a feed draws at once, the counters in settled, refusals, the storm")
+  {
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    {
+      const auto instance = TestInstance{library, true, false, messages};
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto listener = std::make_shared<FeedListener>();
+      auto gate = std::make_shared<ParseGate>();
+      const auto openGate = OpenAtExit{gate};
+      auto service = feedService(root, listener, gate);
+      auto events = Events{};
+      const auto logPath =
+        std::filesystem::temp_directory_path() / "TbLitLibTest-lpf1-trigger.csv";
+      std::filesystem::remove(logPath);
+      auto session = loggedRootSession(instance, events, *service, root, logPath);
+      listener->attach(session.get());
+      session->setTonemapForTesting(feedTonemap());
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+      const auto first = settledHdr(*session, lit, 1);
+      REQUIRE(first);
+      const auto floorKey = stageImage(*service, "textures/lp1b/floor", 2);
+      REQUIRE(floorKey);
+      auto frames = std::make_shared<FeedFrames>();
+      recordFeedFrames(*session, frames, *floorKey);
+      REQUIRE(waitQuiet(*session));
+      REQUIRE(session->lastFrameSettledForTesting());
+
+      // today's rule, unchanged: a publication without a feed (a plain lookup's) draws no
+      // frame in a settled session
+      {
+        const auto presented = session->framesPresented();
+        static_cast<void>(service->lookup("textures/lpf1/plain_lookup"));
+        REQUIRE(service->waitForTableForTesting(
+          [](const MaterialTable& table) {
+            return table.find("textures/lpf1/plain_lookup") != nullptr;
+          },
+          10000ms));
+        std::this_thread::sleep_for(300ms);
+        CHECK(session->framesPresented() == presented);
+      }
+
+      // an override of the lit floor's diffuse: a frame at once, without a camera move,
+      // then settled; returns what the render side spent on it
+      const auto feed = [&](const std::array<std::uint8_t, 3>& rgb) {
+        // the camera still and the session quiet, so the pacer's slot is free
+        REQUIRE(waitQuiet(*session));
+        const auto item = listener->items();
+        REQUIRE(service->setImageOverride(floorKey->name, constantOverride(64, 64, rgb))
+                  .is_success());
+        REQUIRE(waitForFeed(*service));
+        auto published = std::optional<std::chrono::steady_clock::time_point>{};
+        REQUIRE(waitFor(
+          [&] {
+            published = listener->itemPublication(item);
+            return published.has_value();
+          },
+          5000ms,
+          false));
+        REQUIRE(
+          waitFor([&] { return !frames->since(*published).empty(); }, 5000ms, false));
+        REQUIRE(waitQuiet(*session));
+        const auto after = frames->since(*published);
+        auto landing = FeedLanding{};
+        landing.latencyMs =
+          std::chrono::duration<double, std::milli>(after.front().start - *published)
+            .count();
+        landing.frames = after.size();
+        landing.settled = session->lastFrameSettledForTesting();
+        return landing;
+      };
+
+      // the probe pixel's model (D110): with the exposure pinned, the floor's HDR value
+      // is linear in its diffuse map's linear colour (the interactions and the ambient
+      // pass multiply it by what does not depend on it); a black and a white override
+      // measure the two terms per channel, and a third colour is predicted through the
+      // texel the service converted (the engine's YCoCg layout, decoded as the shader
+      // decodes it), then through the tonemap model
+      struct Probe
+      {
+        std::array<float, 3> linear = {};
+        std::array<float, 3> hdr = {};
+        std::array<int, 3> ldr = {};
+        float exposure = 0.0f;
+        ChainFrame frame;
+      };
+      const auto probe = [&]() {
+        const auto texels = levelTexels(*service, *floorKey);
+        REQUIRE_FALSE(texels.empty());
+        // a constant picture: every level holds the same texel (the gamma mips of one
+        // colour), so the sampled mip does not matter
+        for (const auto& texel : texels)
+        {
+          CHECK(texel == texels.front());
+        }
+        auto readback = std::optional<AmbientReadback>{};
+        REQUIRE(waitFor(
+          [&] {
+            readback = ambientReadback(*session);
+            return readback && readback->frame.settled;
+          },
+          10000ms,
+          false));
+        auto result = Probe{};
+        result.linear = modelDiffuseMap(texels.front());
+        const auto hdr = readback->hdr.at(80, 60);
+        const auto at = (std::size_t(60) * readback->hdr.width + 80) * 4;
+        for (std::size_t c = 0; c < 3; ++c)
+        {
+          result.hdr[c] = hdr[c];
+          result.ldr[c] = int(readback->ldr[at + c]);
+        }
+        result.exposure = readback->exposure;
+        result.frame = readback->frame;
+        return result;
+      };
+
+      const auto black = feed({0, 0, 0});
+      const auto blackProbe = probe();
+      const auto white = feed({255, 255, 255});
+      const auto whiteProbe = probe();
+      const auto colour = feed({200, 120, 60});
+      const auto colourProbe = probe();
+      for (const auto& landing : {black, white, colour})
+      {
+        // a frame is drawn without a camera move within one pacer slot of the
+        // publication, and the session settles again
+        CHECK(landing.latencyMs < 50.0);
+        CHECK(landing.frames >= 1u);
+        CHECK(landing.settled);
+      }
+      CHECK(colourProbe.exposure == Catch::Approx(FeedPinnedLuminance).epsilon(1e-5));
+      auto predicted = std::array<float, 3>{};
+      for (std::size_t c = 0; c < 3; ++c)
+      {
+        CAPTURE(c);
+        const auto span = whiteProbe.linear[c] - blackProbe.linear[c];
+        REQUIRE(span > 0.5f);
+        const auto term = (whiteProbe.hdr[c] - blackProbe.hdr[c]) / span;
+        predicted[c] =
+          blackProbe.hdr[c] + term * (colourProbe.linear[c] - blackProbe.linear[c]);
+        CHECK(
+          colourProbe.hdr[c] == Catch::Approx(predicted[c]).epsilon(0.01).margin(2e-4));
+      }
+      // the probe pixel changed to the override's colour: it differs from the
+      // fixture's own floor and from the white override wherever the light reaches
+      CHECK(colourProbe.hdr != whiteProbe.hdr);
+      CHECK(colourProbe.hdr[1] != first->first.at(80, 60)[1]);
+      const auto expectedLdr =
+        modelLdr(predicted, colourProbe.exposure, colourProbe.frame);
+      for (std::size_t c = 0; c < 3; ++c)
+      {
+        CAPTURE(c);
+        CHECK(std::abs(colourProbe.ldr[c] - expectedLdr[c]) <= 1);
+      }
+      std::cout << fmt::format(
+        "LPF.1 feed latency (Debug: publication to the frame's start): black {:.2f} ms, "
+        "white {:.2f} ms, colour {:.2f} ms; frames {} {} {}\n",
+        black.latencyMs,
+        white.latencyMs,
+        colour.latencyMs,
+        black.frames,
+        white.frames,
+        colour.frames);
+      std::cout << fmt::format(
+        "LPF.1 floor probe: black HDR ({:.5f} {:.5f} {:.5f}), white ({:.5f} {:.5f} "
+        "{:.5f}), colour ({:.5f} {:.5f} {:.5f}) model ({:.5f} {:.5f} {:.5f}); LDR "
+        "({} {} {}) model ({} {} {})\n",
+        blackProbe.hdr[0],
+        blackProbe.hdr[1],
+        blackProbe.hdr[2],
+        whiteProbe.hdr[0],
+        whiteProbe.hdr[1],
+        whiteProbe.hdr[2],
+        colourProbe.hdr[0],
+        colourProbe.hdr[1],
+        colourProbe.hdr[2],
+        predicted[0],
+        predicted[1],
+        predicted[2],
+        colourProbe.ldr[0],
+        colourProbe.ldr[1],
+        colourProbe.ldr[2],
+        expectedLdr[0],
+        expectedLdr[1],
+        expectedLdr[2]);
+
+      // refusals: a "_" name is refused at the hand-over, nothing queued and no count
+      // moved; a raw 4096² is refused on the parse thread (its level passes the 32 MB a
+      // frame uploads) and publishes once, the slots unchanged: a settled session draws
+      // no frame for either
+      REQUIRE(waitQuiet(*session));
+      {
+        const auto presented = session->framesPresented();
+        const auto requested = service->feedRequested();
+        CHECK(service->setImageOverride("_default", constantOverride(4, 4, {1, 2, 3}))
+                .is_error());
+        CHECK(service->feedRequested() == requested);
+        REQUIRE(
+          service
+            ->setImageOverride(floorKey->name, constantOverride(4096, 4096, {9, 9, 9}))
+            .is_success());
+        REQUIRE(waitForFeed(*service));
+        std::this_thread::sleep_for(300ms);
+        CHECK(
+          service->imageOverrideStatus(floorKey->name).state
+          == ImageOverrideStatus::State::Refused);
+        CHECK(session->framesPresented() == presented);
+        CHECK(session->lastFrameSettledForTesting());
+      }
+      // a frame drawn while a hand-over is queued is not settled (feedBehind), and the
+      // refusal's publication, the slots unchanged, draws the frame that settles
+      {
+        gate->close();
+        REQUIRE(
+          service
+            ->setImageOverride(floorKey->name, constantOverride(4096, 4096, {8, 8, 8}))
+            .is_success());
+        auto behind = std::optional<ChainFrame>{};
+        REQUIRE(waitFor(
+          [&] {
+            auto frame = std::make_shared<ChainFrame>();
+            auto done = std::make_shared<std::promise<void>>();
+            auto future = done->get_future();
+            session->runAfterTonemapForTesting([frame, done](RenderFrameAccess& access) {
+              *frame = chainFrameOf(access);
+              done->set_value();
+            });
+            if (future.wait_for(5000ms) != std::future_status::ready)
+            {
+              return false;
+            }
+            behind = *frame;
+            return true;
+          },
+          10000ms,
+          false));
+        CHECK(behind->convergence.feedBehind);
+        CHECK_FALSE(behind->settled);
+        REQUIRE(waitQuiet(*session));
+        CHECK_FALSE(session->lastFrameSettledForTesting());
+        const auto presented = session->framesPresented();
+        const auto item = listener->items();
+        gate->open();
+        REQUIRE(waitForFeed(*service));
+        REQUIRE(waitFor(
+          [&] { return listener->itemPublication(item).has_value(); }, 5000ms, false));
+        REQUIRE(waitQuiet(*session));
+        CHECK(session->lastFrameSettledForTesting());
+        CHECK(session->framesPresented() >= presented + 1);
+        CHECK(session->framesPresented() <= presented + 2);
+      }
+
+      // the feed storm (D96, P5.3): an override every 10 ms for 2 s draws at most the
+      // pacer's 30 frames a second; an evaluation and a lookup are answered meanwhile;
+      // one frame after the storm's last publication is settled
+      REQUIRE(waitQuiet(*session));
+      {
+        const auto lightEntry = service->table()->find("lights/defaultPointLight");
+        REQUIRE(lightEntry);
+        REQUIRE(lightEntry->entry);
+        const auto lightId = MaterialId::of(*lightEntry->entry);
+        auto running = std::atomic<bool>{true};
+        auto handed = std::atomic<int>{0};
+        const auto stormStart = std::chrono::steady_clock::now();
+        auto feeder = std::thread{[&] {
+          auto i = 0;
+          while (std::chrono::steady_clock::now() - stormStart < 2s)
+          {
+            const auto v = std::uint8_t(40 + (i * 37) % 200);
+            if (service
+                  ->setImageOverride(floorKey->name, constantOverride(16, 16, {v, v, 64}))
+                  .is_success())
+            {
+              ++handed;
+            }
+            ++i;
+            std::this_thread::sleep_for(10ms);
+          }
+          running = false;
+        }};
+        std::this_thread::sleep_for(300ms);
+        // an evaluation of the light's registers at a new _color, and a new name's lookup
+        auto parms = ShaderParms{};
+        parms[0] = 0.25f;
+        parms[1] = 0.5f;
+        parms[2] = 0.75f;
+        parms[3] = 1.0f;
+        const auto asked = std::chrono::steady_clock::now();
+        auto evaluated = std::optional<std::chrono::steady_clock::time_point>{};
+        auto looked = std::optional<std::chrono::steady_clock::time_point>{};
+        while (running && (!evaluated || !looked))
+        {
+          if (!evaluated && service->evaluate(lightId, parms, 0.0f))
+          {
+            evaluated = std::chrono::steady_clock::now();
+          }
+          if (
+            !looked
+            && service->lookup("textures/lpf1/storm_lookup").state
+                 != MaterialLookup::State::Pending)
+          {
+            looked = std::chrono::steady_clock::now();
+          }
+          std::this_thread::sleep_for(2ms);
+        }
+        feeder.join();
+        const auto stormEnd = std::chrono::steady_clock::now();
+        CHECK(evaluated);
+        CHECK(looked);
+        REQUIRE(waitForFeed(*service));
+        const auto lastItem = listener->items() - 1;
+        auto lastPublication = std::optional<std::chrono::steady_clock::time_point>{};
+        REQUIRE(waitFor(
+          [&] {
+            lastPublication = listener->itemPublication(lastItem);
+            return lastPublication.has_value();
+          },
+          5000ms,
+          false));
+        REQUIRE(waitQuiet(*session));
+        CHECK(session->lastFrameSettledForTesting());
+        const auto inStorm = [&] {
+          auto out = std::vector<FeedFrame>{};
+          for (const auto& frame : frames->since(stormStart))
+          {
+            if (frame.start <= stormEnd)
+            {
+              out.push_back(frame);
+            }
+          }
+          return out;
+        }();
+        const auto stormSeconds =
+          std::chrono::duration<double>(stormEnd - stormStart).count();
+        auto closest = std::chrono::steady_clock::duration::max();
+        for (std::size_t i = 1; i < inStorm.size(); ++i)
+        {
+          closest = std::min(closest, inStorm[i].start - inStorm[i - 1].start);
+        }
+        // the pacer's floor: 30 frame starts a second at most (the hook's time follows
+        // each start by the frame's uploads, so a little jitter)
+        CHECK(double(inStorm.size()) <= stormSeconds * 30.0 + 2.0);
+        CHECK(inStorm.size() >= 10u);
+        CHECK(closest >= 25ms);
+        const auto afterStorm = frames->since(*lastPublication);
+        CHECK(afterStorm.size() >= 1u);
+        CHECK(afterStorm.size() <= 2u);
+        std::cout << fmt::format(
+          "LPF.1 feed storm: {} hand-overs in {:.2f} s, {} frames ({:.1f} a second, "
+          "closest starts {:.1f} ms apart), {} dropped; evaluation answered after {:.1f} "
+          "ms, lookup after {:.1f} ms; {} frames after the last publication\n",
+          handed.load(),
+          stormSeconds,
+          inStorm.size(),
+          double(inStorm.size()) / stormSeconds,
+          std::chrono::duration<double, std::milli>(closest).count(),
+          service->stats().droppedFeeds,
+          evaluated
+            ? std::chrono::duration<double, std::milli>(*evaluated - asked).count()
+            : -1.0,
+          looked ? std::chrono::duration<double, std::milli>(*looked - asked).count()
+                 : -1.0,
+          afterStorm.size());
+      }
+
+      session->setEveryFrameHookForTesting({});
+      listener->attach(nullptr);
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      events.print("LPF.1 trigger");
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    messages.print("LPF.1 trigger, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+}
+
 } // namespace tb::lit
 
 #endif

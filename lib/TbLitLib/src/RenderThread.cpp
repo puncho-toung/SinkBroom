@@ -155,7 +155,7 @@ bool FrameConvergence::settled() const
          && !imagesPending && !provisionalChunks && !lutPending && !entityDefsPending
          && !lightsProvisional && !geometryInFlight && !drawsOverflowed
          && !lightTrianglesPending && !probeImagesPending && !gridImagesPending
-         && !probesInFlight;
+         && !probesInFlight && !feedBehind;
 }
 
 bool FrameConvergence::retriggers() const
@@ -644,6 +644,11 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
   // LP4.2b step 0
   convergence.probesInFlight = scene && m_geometry->probesInFlight();
   convergence.lutPending = tonemap.lutPending;
+  // LPF.1 (C44, D100, P5.2): the counters, not a flag: a hand-over the frame's table does
+  // not hold yet keeps it from being settled, whatever the slots say; feedRequested is
+  // read after feedApplied was, so a table published between them only makes this true
+  convergence.feedBehind =
+    m_materials && m_frameFeedApplied < m_materials->feedRequested();
   convergence.passesDisabled =
     lit.prepassDisabled || lit.interactionsDisabled || tonemap.disabled;
   m_convergence = convergence;
@@ -1282,6 +1287,36 @@ void RenderThread::lightTrianglesTick()
   m_pacer.trigger();
 }
 
+void RenderThread::feedTick()
+{
+  if (!m_materials)
+  {
+    return;
+  }
+  const auto table = m_materials->table();
+  if (table->feedApplied == m_frameFeedApplied)
+  {
+    return;
+  }
+  // C44, D101: a feed publication the last frame did not refresh with is a frame trigger
+  // at once, not through the arrival clock (the pacer still spaces frame starts by
+  // MinFrameInterval), when it brings the render side something to draw (a slot changed:
+  // imageChanges; a re-parse: materialsRevision) or when the last frame was behind the
+  // feed (feedBehind) and must settle. A refusal, or an override of a name no slot uses,
+  // changes nothing drawn: a settled session draws no frame for it. H.1
+  // (19-LITGPU-HANG.md): every publication's tableChanged wakes the loop for another
+  // idle pass, which reads the moved counter here whatever the slots' states, so no
+  // publication is waited past
+  const auto changes = table->imageChanges != m_frameImageChanges
+                       || table->materialsRevision != m_frameMaterialsRevision;
+  if (!changes && !m_convergence.feedBehind)
+  {
+    return;
+  }
+  const auto lock = std::scoped_lock{m_mutex};
+  m_pacer.trigger();
+}
+
 void RenderThread::arrivalTrigger(const FrameClock::time_point now)
 {
   const auto at = m_lastArrivalTrigger + TextureArrivalInterval;
@@ -1434,6 +1469,7 @@ void RenderThread::runLoop()
     arrivalsTick();
     litTableTick();
     lightTrianglesTick();
+    feedTick();
     lock.lock();
     // D77: a texture arrival that came within TextureArrivalInterval of the last one
     if (m_arrivalTriggerAt && *m_arrivalTriggerAt <= FrameClock::now())
@@ -1929,7 +1965,12 @@ void RenderThread::refreshImages()
 {
   if (m_materials)
   {
-    m_images.refresh(*m_materials->table(), m_frameIndex);
+    const auto table = m_materials->table();
+    m_images.refresh(*table, m_frameIndex);
+    // LPF.1 (C44): the feed counters of the table the frame refreshed with
+    m_frameFeedApplied = table->feedApplied;
+    m_frameImageChanges = table->imageChanges;
+    m_frameMaterialsRevision = table->materialsRevision;
   }
   eraseChangedSets();
 }

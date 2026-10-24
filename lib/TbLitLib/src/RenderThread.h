@@ -110,7 +110,8 @@ GpuMemoryAccount accountGpuMemory(
  * (litTableTick), a pending image for its arrival (arrivalsTick, at most 10 Hz), a
  * provisional chunk for its rebuild (geometryTick), a pending entityDef, a provisional
  * light, a batch, the bake or a snapshot for the scene's next change (geometryTick, the
- * snapshot's offer). The exposure is at its target in
+ * snapshot's offer), a feed hand-over the frame's table does not hold for its
+ * publication (LPF.1: feedTick, at once). The exposure is at its target in
  * every frame the exposure pass runs (D70). A pass that cannot draw (a program disabled
  * by D9) counts as converged, its state reported (passesDisabled, programReport).
  */
@@ -172,6 +173,11 @@ struct FrameConvergence
   // would take that grid takes the probe path meanwhile); its arrival is the trigger
   // (arrivalsTick)
   bool gridImagesPending = false;
+  // LPF.1 (C44, D100, P5.2): the table the frame refreshed with at its start holds fewer
+  // feed hand-overs (image overrides, re-parses) than the service had counted when the
+  // frame converged (MaterialTable::feedApplied < MaterialService::feedRequested); not a
+  // re-trigger term: the publication that advances feedApplied is the trigger (feedTick)
+  bool feedBehind = false;
   // D9: a pass is disabled (counts as converged)
   bool passesDisabled = false;
 
@@ -335,6 +341,13 @@ private:
   // version (a pending material or evaluation); a newer one triggers a frame
   bool m_litWaitsForTable = false;
   std::uint64_t m_litTableVersion = 0;
+  // LPF.1 (C44, D100, D101): the feed counters of the table the last frame refreshed with
+  // at its start (refreshImages): its feedApplied (converge's feedBehind), and its
+  // imageChanges and materialsRevision (feedTick: whether a feed publication brings the
+  // render side anything to draw)
+  std::uint64_t m_frameFeedApplied = 0;
+  std::uint64_t m_frameImageChanges = 0;
+  std::uint64_t m_frameMaterialsRevision = 0;
   // C11 (U2.6): the account is compared with the device's budget at the session's first
   // frame and at every settled frame; whether the session said once that it passed it,
   // and the budget a test set instead of the device's (0: the device's)
@@ -626,6 +639,9 @@ private:
   void arrivalsTick();
   // DX.2: an idle pass's look for the light triangles' job; its answers trigger a frame
   void lightTrianglesTick();
+  // LPF.1 (C44, D101, P5.20): an idle pass's look for a feed publication the last frame
+  // did not refresh with; a frame at once (no arrival clock), the pacer's interval kept
+  void feedTick();
   // D77, U2.5: a trigger at most every TextureArrivalInterval: now, or at the interval's
   // end; under m_mutex
   void arrivalTrigger(FrameClock::time_point now);
