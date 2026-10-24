@@ -131,8 +131,8 @@ game image's files; `clearImageOverride( imageName )` ends it.
   pair is refused. **The TGA equivalence (D110):** the same pixels written as a loose
   32-bit uncompressed TGA (type 2, no flip bit), rows bottom first and each texel B, G,
   R, A, load into exactly these rows (`LoadTGA` reads the file's rows from the last
-  row up, Image_files.cpp:258-296, and flips only for bit 5 of the attributes,
-  :410-416); the `[.][feed]` test shows the two give byte-identical pictures.
+  row up, Image_files.cpp:259-302, and flips only for bit 5 of the attributes,
+  :414-420); the `[.][feed]` test shows the two give byte-identical pictures.
 - **GPU-ready levels** (a `CachedImage`, as a `.bimage` reads into): the usage's format or
   its uncompressed twin, the usage's colour format, six faces exactly for a cube.
 - **The cap (D103, Q27):** a level whose bytes over all its faces exceed 32 MB (the render

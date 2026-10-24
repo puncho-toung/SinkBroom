@@ -913,8 +913,8 @@ ImageOverride overrideOf(const Pixels& pixels, const bool editorSize = true)
 /**
  * D110 (P5.10): the same pixels as a loose TGA: type 2, 32 bits, no flip bit (attribute
  * bit 5 clear), rows bottom first and each texel B, G, R, A. The copied LoadTGA
- * (Image_files.cpp:258-296) fills its picture from its last row up (row = rows - 1 down
- * to 0) and turns BGRA into RGBA, and flips only when bit 5 is set (:410-416), so it
+ * (Image_files.cpp:259-302) fills its picture from its last row up (row = rows - 1 down
+ * to 0) and turns BGRA into RGBA, and flips only when bit 5 is set (:414-420), so it
  * returns exactly the caller's top-first RGBA rows.
  */
 std::string tgaBytes(const Pixels& pixels)

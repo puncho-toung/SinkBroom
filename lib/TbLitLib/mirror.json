@@ -145,7 +145,7 @@
           "symbol": "createVkDevice"
         }
       ],
-      "note": "vulkan.hpp's default dynamic dispatcher: storage defined once, initialised from vkGetInstanceProcAddr and the instance (initInstanceDispatcher, on every Start) and from the device (createVkDevice). The engine loads the library itself; SinkBroom takes vkGetInstanceProcAddr from Qt (C9)."
+      "note": "vulkan.hpp's default dynamic dispatcher: storage defined once, initialised from vkGetInstanceProcAddr and the instance (initInstanceDispatcher, on every Start) and from the device (createVkDevice). The engine loads the library itself; SinkBroom takes vkGetInstanceProcAddr from Qt (C9), a host outside SinkBroom from lit::VulkanInstance (LPF.2, M-INST-02)."
     },
     {
       "id": "M-INST-01",
@@ -168,6 +168,63 @@
         }
       ],
       "note": "Vulkan 1.2 instance (S12), through QVulkanInstance::setApiVersion."
+    },
+    {
+      "id": "M-INST-02",
+      "kind": "instance",
+      "engine": [
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            430,
+            442
+          ],
+          "anchor": "DeviceManager_VK::createInstance, the platform surface extensions",
+          "sha256": "aab73ae762f5fe67682f206b46df2e82feeec0fda7cccd63db3f6f2373dd3b95"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            530,
+            550
+          ],
+          "anchor": "DeviceManager_VK::createInstance, API 1.2 and the portability flag",
+          "sha256": "3a1c057b23b9b9aa5a29e2cf87675dd5000f904db31461520cd2ade0ecb9fd08"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            618,
+            623
+          ],
+          "anchor": "DeviceManager_VK::createInstance, vk::createInstance",
+          "sha256": "33336c61819bc01d33eb8a5d9cdd279831fdacc10b596357a3045db595c7e4c1"
+        },
+        {
+          "file": "neo/sys/DeviceManager_VK.cpp",
+          "lines": [
+            1252,
+            1292
+          ],
+          "anchor": "DeviceManager_VK::CreateDeviceAndSwapChain, the loader, the validation layer",
+          "sha256": "104a31076946bdcbbbbfe7db4fbbb09b0f668f7cdc8186040041975922d93e78"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/VulkanInstance.h",
+          "symbol": "VulkanInstance, VulkanInstanceOptions, VulkanMessage"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanInstance.cpp",
+          "symbol": "VulkanInstance::create, VulkanInstance::State::destroy, State::callback"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "testInstance (the tests' instance, LPF.2)"
+        }
+      ],
+      "note": "LPF.2 (D107, P5.11, C9, P5.29): a host's instance outside SinkBroom (the Mixar side's, and the tests'); the engine's DeviceManager_VK makes its own with a static vk::DynamicLoader. Both ask for Vulkan 1.2 and the platform's surface extensions (the engine: VK_KHR_surface and VK_KHR_win32_surface, or SDL's list; the host: win32, or xcb, xlib and wayland as the loader offers them, or VK_EXT_metal_surface, only when it presents) and on macOS VK_KHR_portability_enumeration with VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR. Differences: the loader is loaded by create (LoadLibraryW, dlopen) and unloaded at destroy, never at static initialisation (C9); vkEnumerateInstanceVersion is asked first and a loader below 1.2 is an error with the reason (the engine's FatalError on a failed createInstance becomes a Result); the validation layer is enabled only when listed (R-B16) and reports through VK_EXT_debug_utils to the host's sink (the engine: VK_EXT_debug_report and installDebugCallback, M-NC-06), whose duplicate_message_limit the host may raise through VK_EXT_layer_settings; the engine's VK_LAYER_MESSAGE_ID_FILTER (OutputNotConsumed and MipMapGen's by-design messages) is not set: a host sees M-PIPE-DEFECT-01's warnings; MoltenVK's layer settings are not passed. No SinkBroom path constructs it: the editor's instance is QVulkanInstance (M-INST-01), and the panel's C9 test is unchanged. Built and run on Windows only; the Linux and macOS paths are the user's checklist (LPF-CHECKLIST)"
     },
     {
       "id": "M-DEV-01",
@@ -873,11 +930,11 @@
           "symbol": "LitSessionHost::start"
         },
         {
-          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
-          "symbol": "TestInstance::TestInstance"
+          "file": "lib/TbLitLib/src/VulkanInstance.cpp",
+          "symbol": "VulkanInstance::create"
         }
       ],
-      "note": "Instance extensions: VK_KHR_get_physical_device_properties2 (core since 1.1; the instance is 1.2), VK_EXT_sampler_filter_minmax (listed by the engine as an instance extension, but it is a device extension and its feature is never enabled), VK_EXT_debug_report and its callback (replaced by VK_EXT_debug_utils, which Qt adds for its debug output redirect when the session validates; the tests' own instance asks for it itself). Qt adds the surface extensions."
+      "note": "Instance extensions: VK_KHR_get_physical_device_properties2 (core since 1.1; the instance is 1.2), VK_EXT_sampler_filter_minmax (listed by the engine as an instance extension, but it is a device extension and its feature is never enabled), VK_EXT_debug_report and its callback (replaced by VK_EXT_debug_utils, which Qt adds for its debug output redirect when the session validates; lit::VulkanInstance, a host's and the tests' instance, asks for it itself, M-INST-02). Qt adds the surface extensions."
     },
     {
       "id": "M-NC-07",
@@ -13860,9 +13917,29 @@
         {
           "file": "lib/TbLitLib/src/SceneGeometry.cpp",
           "symbol": "SceneGeometry::scannedMaterialsRevision"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/FeedHost.h",
+          "symbol": "feed::GuardedListener, feed::teardown, feed::vulkanMessagesAsWarnings"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/FeedScene.h",
+          "symbol": "snapshotOfMapText, feed::worldspawn, quadBrush, patchDef3Sphere, pointLight, cameraLookingAt"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitSession.cpp",
+          "symbol": "LitSession::readbackLdr"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::recordLdrReadback, finishLdrReadback (one staging texture per extent)"
+        },
+        {
+          "file": "lib/TbLitLib/FEED.md",
+          "symbol": "the host contract"
         }
       ],
-      "note": "LPF.0a (C39, C40, D96, D97, P5.1, P5.16): the engine reads an image's files at load (ActuallyLoadImage); the preview also takes an image from a host in memory, under a game image name, in place of its files, without writing one (C8): MaterialService::setImageOverride, one Feed work item per name, served after the evaluations and ahead of the lookups, the newest hand-over winning. The matching rule is ImageFromFile's: the override's name folded as the engine folds a name before it compares it with its records (every .tga, .jpg, .png, .exr and .hdr removed wherever it stands, case-sensitively as idStr::Replace compares, so an upper-case extension stays; backslashes made slashes), then compared without case with a key's whole name (a record's name, folded already). A program key (addnormals( ... ), heightmap( ... )) is the record of its whole program text, so it matches only by that text, never by a leaf: an override of textures/foo_local does not feed bumpmap addnormals( textures/foo_local, ... ). The default image (an empty name, \"default\") and the built-ins (a name that starts with '_', which match any options and are never read from files) are refused at hand-over. The usage the override converts with is the copied time call's for each key (M-FEED-02): a stage naming <x>_rmao is TD_SPECULAR_PBR_RMAO at parse (Material.cpp), and an <x>_s key becomes it only when the <x>_rmao sibling file exists, as in the engine, so a host without files reaches the RMAO path by naming _rmao. Two usages of one name are two keys, two slots and two conversions. A set publishes the keys' drops and their new slots in one table, a refusal and a clear one table too (the clear reads the files in the same item); MaterialTable::feedApplied counts the hand-overs a table includes against MaterialService::feedRequested (D100). imageItem's break test gains the Feed queue (LP4.3's batching, named for the end review: P5.21). LPF.0b (C42, D96, D99, P5.8, P5.18): the preview also takes a material's decl text from a host (MaterialService::reparseMaterial, one Reparse work item per name, served after the overrides and ahead of the lookups, the newest text winning, counted in feedApplied); the engine parses a decl again only through its editors' SetText and Invalidate, or reloadDecls (ReloadFile, which re-reads the files). The re-parse is the editors' path (M-ID-FN-28); the text is kept by the service and applied again after every registry build, since a build reads the decl files again, until clearMaterialReparse. A re-parsed name without a decl stays an implicit decl (IsImplicit: its sourceFile is the implicit file), so FindMaterial( name, false ), the preview's findMaterialNoDefault, takes it for none and a light whose texture names it gets the default light shader unless the texture was precached. The slot is set under the asked name, the canonical name and every name the material was published under (a Failed lookup's names recorded too); a refused text or an engine Error publishes it Failed, where the engine would have stopped. The material's register deltas are erased (they are evaluated again when asked), where the engine evaluates the registers every frame. LPF.1 (C44, D100, D101; P5.2, P5.13, P5.20): the engine takes a file's change only at a load (the map's, reloadImages, reloadDecls), never while it draws, so nothing counts what a frame includes; the preview's frames follow the feed: a frame is settled only when the table it refreshed with at its start holds every hand-over the service had counted when it converged (feedApplied == feedRequested, FrameConvergence::feedBehind; not a re-trigger term) and the scene has scanned that table's materialsRevision (a re-parse's cells), so no read-back shows the state before a queued change; the idle pass's feedTick triggers a frame at once when a feed publication the last frame did not refresh with changed a slot or a material, or the last frame was behind the feed (no 100 ms arrival coalescing; the 30 Hz pacer stands, so a 10 ms feeder draws at most 30 frames a second); a refusal, an override of a name no slot uses or a clear of nothing changes nothing drawn and draws no frame in a settled session. Every publication's tableChanged wakes the loop for another idle pass, which reads the moved counter whatever the slots' states (19-LITGPU-HANG.md's rule). The frame log gains feed_applied (the frame's table's counter), feed_ms (from an item's newest hand-over, carried in the table's feed records, to the first presented frame whose table includes it and in which its slots are Resident with every level written, or for a re-parse its lists were built with its materialsRevision and its cells built; the largest of the items landing in one frame; empty on other frames; a newer item takes over an older one's slots, and an item with no slot and no revision, a refusal, lands nowhere) and override_bytes (the store's bytes): 49 columns; the engine's bytes to pixels has no counterpart"
+      "note": "LPF.0a (C39, C40, D96, D97, P5.1, P5.16): the engine reads an image's files at load (ActuallyLoadImage); the preview also takes an image from a host in memory, under a game image name, in place of its files, without writing one (C8): MaterialService::setImageOverride, one Feed work item per name, served after the evaluations and ahead of the lookups, the newest hand-over winning. The matching rule is ImageFromFile's: the override's name folded as the engine folds a name before it compares it with its records (every .tga, .jpg, .png, .exr and .hdr removed wherever it stands, case-sensitively as idStr::Replace compares, so an upper-case extension stays; backslashes made slashes), then compared without case with a key's whole name (a record's name, folded already). A program key (addnormals( ... ), heightmap( ... )) is the record of its whole program text, so it matches only by that text, never by a leaf: an override of textures/foo_local does not feed bumpmap addnormals( textures/foo_local, ... ). The default image (an empty name, \"default\") and the built-ins (a name that starts with '_', which match any options and are never read from files) are refused at hand-over. The usage the override converts with is the copied time call's for each key (M-FEED-02): a stage naming <x>_rmao is TD_SPECULAR_PBR_RMAO at parse (Material.cpp), and an <x>_s key becomes it only when the <x>_rmao sibling file exists, as in the engine, so a host without files reaches the RMAO path by naming _rmao. Two usages of one name are two keys, two slots and two conversions. A set publishes the keys' drops and their new slots in one table, a refusal and a clear one table too (the clear reads the files in the same item); MaterialTable::feedApplied counts the hand-overs a table includes against MaterialService::feedRequested (D100). imageItem's break test gains the Feed queue (LP4.3's batching, named for the end review: P5.21). LPF.0b (C42, D96, D99, P5.8, P5.18): the preview also takes a material's decl text from a host (MaterialService::reparseMaterial, one Reparse work item per name, served after the overrides and ahead of the lookups, the newest text winning, counted in feedApplied); the engine parses a decl again only through its editors' SetText and Invalidate, or reloadDecls (ReloadFile, which re-reads the files). The re-parse is the editors' path (M-ID-FN-28); the text is kept by the service and applied again after every registry build, since a build reads the decl files again, until clearMaterialReparse. A re-parsed name without a decl stays an implicit decl (IsImplicit: its sourceFile is the implicit file), so FindMaterial( name, false ), the preview's findMaterialNoDefault, takes it for none and a light whose texture names it gets the default light shader unless the texture was precached. The slot is set under the asked name, the canonical name and every name the material was published under (a Failed lookup's names recorded too); a refused text or an engine Error publishes it Failed, where the engine would have stopped. The material's register deltas are erased (they are evaluated again when asked), where the engine evaluates the registers every frame. LPF.1 (C44, D100, D101; P5.2, P5.13, P5.20): the engine takes a file's change only at a load (the map's, reloadImages, reloadDecls), never while it draws, so nothing counts what a frame includes; the preview's frames follow the feed: a frame is settled only when the table it refreshed with at its start holds every hand-over the service had counted when it converged (feedApplied == feedRequested, FrameConvergence::feedBehind; not a re-trigger term) and the scene has scanned that table's materialsRevision (a re-parse's cells), so no read-back shows the state before a queued change; the idle pass's feedTick triggers a frame at once when a feed publication the last frame did not refresh with changed a slot or a material, or the last frame was behind the feed (no 100 ms arrival coalescing; the 30 Hz pacer stands, so a 10 ms feeder draws at most 30 frames a second); a refusal, an override of a name no slot uses or a clear of nothing changes nothing drawn and draws no frame in a settled session. Every publication's tableChanged wakes the loop for another idle pass, which reads the moved counter whatever the slots' states (19-LITGPU-HANG.md's rule). The frame log gains feed_applied (the frame's table's counter), feed_ms (from an item's newest hand-over, carried in the table's feed records, to the first presented frame whose table includes it and in which its slots are Resident with every level written, or for a re-parse its lists were built with its materialsRevision and its cells built; the largest of the items landing in one frame; empty on other frames; a newer item takes over an older one's slots, and an item with no slot and no revision, a refusal, lands nowhere) and override_bytes (the store's bytes): 49 columns; the engine's bytes to pixels has no counterpart. LPF.2 (D107, D108): the host API has no engine counterpart (the engine reads its map and files at load and draws into its own window): a Qt-free host makes the instance (M-INST-02), the material service with a guarded listener that calls tableChanged on the parse thread and is detached before the render thread stops, the session (headless or on its surface), snapshot records from the builders or a map text (lexerFloat reads, the brush polygons by a double-precision plane solve, exact for axial float-exact brushes), and reads the LDR target of the first settled frame back (settled includes the feed's counters, so a host that keeps feeding gets the timeout's reason); the teardown helper runs LitSessionHost's order; FEED.md is the contract"
     },
     {
       "id": "M-FEED-DIFF-02",
@@ -19324,6 +19401,24 @@
           ],
           "anchor": "idImage::ActuallyLoadImage, the whole upload and the permanent state",
           "sha256": "34597061dda9e852b194e06ea93429461272e2ccfaa68bb4648f8207e8ed5220"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            259,
+            302
+          ],
+          "anchor": "LoadTGA, the rows read bottom up into RGBA",
+          "sha256": "9b8b9423e161109ea94a90dcae9e0ca3f8dcde387dc513293fa6f5794aacec91"
+        },
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            414,
+            420
+          ],
+          "anchor": "LoadTGA, the flip bit",
+          "sha256": "26a7c7e11ccb2a68e17f2d65b8c76ecda496f6096732aef2763fefa1cf84b53b"
         }
       ],
       "sinkbroom": [
@@ -19342,9 +19437,17 @@
         {
           "file": "lib/TbLitLib/test/src/tst_ImageSlots.cpp",
           "symbol": "the LPF.1 section of the ImageSlots case"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_Feed.cpp",
+          "symbol": "the [.][feed] cases: the instance, readbackLdr, the guarded listener and the teardown, the fidelity against files, a stop mid-feed, the latency, FEED.md's examples"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_Feed.cpp",
+          "symbol": "tgaBytes, hdrProbe, centreTexels, recordBindings, ParseLog"
         }
       ],
-      "note": "LPF.1 (P5.23), test only: the engine keeps no record of what a frame bound; the LPF.1 case reads ImageSlots::binding( id ) of the floor's slot (the texture pointer, compared and never used; whether the intrinsic stands in; the slot's version; its state) and the last frame's lit-pass counts in an every-frame hook after the frame's uploads and before its first pass, without a copy or a GPU wait, so the frames are paced as the product paces them; one pixel read-back at the end against the model (D110). The product never sets the hook"
+      "note": "LPF.1 (P5.23), test only: the engine keeps no record of what a frame bound; the LPF.1 case reads ImageSlots::binding( id ) of the floor's slot (the texture pointer, compared and never used; whether the intrinsic stands in; the slot's version; its state) and the last frame's lit-pass counts in an every-frame hook after the frame's uploads and before its first pass, without a copy or a GPU wait, so the frames are paced as the product paces them; one pixel read-back at the end against the model (D110). The product never sets the hook. LPF.2 (D110, P5.10, P5.13): the hidden [.][feed] cases are a host with no document (tst_Feed.cpp, its own tag, never [.][litgpu]): the fed picture equals byte for byte a fresh session's on the same pixels as loose TGAs (rows bottom first, BGRA, no flip bit, which LoadTGA turns into the caller's top-first RGBA rows), and the re-parse's picture a fresh session's whose .mtr holds the text, both under a pinned exposure; the probe pixel's model reads the texel every mip level shares (the engine's gamma mips, R_MipMapWithGamma, move some colours' stored chroma by one step below level 0); feed_ms is read from the frame log in Release; the binding record and the HDR probe are test hooks the product never sets"
     }
   ],
   "retired": [
