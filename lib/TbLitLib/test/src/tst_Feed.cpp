@@ -353,7 +353,7 @@ struct Host
 };
 
 // the process's threads and OS handles: U2.12's measure, LitTestUtils' processCounts; a
-// check fails on a new thread whose start is not inside ntdll (LP5.3 step 0)
+// check fails on a new thread whose start is not an OS worker's (LP5.3 step 0)
 constexpr auto HandleTolerance = 8L;
 constexpr auto DriverHandlesPerSession = 1L;
 
@@ -841,7 +841,7 @@ TEST_CASE(
       },
       3000ms));
     std::cout << "LPF.2 detach: threads " << baseline.threads << " -> " << counts.threads
-              << " (new outside ntdll: "
+              << " (new outside the OS workers: "
               << describeThreads(newForeignThreads(baseline, counts))
               << "; new in all: " << describeThreads(newThreads(baseline, counts))
               << "), handles " << baseline.handles << " -> " << counts.handles
@@ -894,7 +894,7 @@ TEST_CASE(
       },
       3000ms));
     std::cout << "LPF.2 teardown x" << cycles << ": threads " << baseline.threads
-              << " -> " << counts.threads << " (new outside ntdll: "
+              << " -> " << counts.threads << " (new outside the OS workers: "
               << describeThreads(newForeignThreads(baseline, counts))
               << "; new in all: " << describeThreads(newThreads(baseline, counts))
               << "), handles " << baseline.handles << " -> " << counts.handles

@@ -472,7 +472,8 @@ struct ProcessThread
   unsigned long id = 0;
   std::uintptr_t start = 0;
   std::string where;
-  bool inNtdll = false;
+  // its start inside an OS worker's module: ntdll (the thread pool) or crypt32
+  bool osWorker = false;
 };
 
 /**
@@ -480,8 +481,9 @@ struct ProcessThread
  * the OS's own thread-pool workers, which a session's create or teardown may add (start
  * inside ntdll) and which live until the process exits, or retire on their own (the
  * "14 -> 13" readings); so the set is recorded with each thread's start, and a check
- * fails only on a new thread whose start is not inside ntdll. TbLitLibTest's LitTestUtils
- * holds the same measure.
+ * fails only on a new thread whose start is not inside ntdll or crypt32 (its chain
+ * engine's worker, which the OS starts on its own). TbLitLibTest's LitTestUtils holds the
+ * same measure.
  */
 struct ProcessCounts
 {
@@ -509,6 +511,9 @@ ProcessCounts processCounts()
 
   using QueryThread = LONG(WINAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
   const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+  // LP5.3 step 11: crypt32's chain-engine worker (CRYPT32.dll+0x1BF50), which the OS
+  // starts on its own (2 of 3 [litgpu] runs of the float/redock section)
+  const auto crypt32 = GetModuleHandleW(L"crypt32.dll");
   const auto query = ntdll ? reinterpret_cast<QueryThread>(reinterpret_cast<void*>(
                                GetProcAddress(ntdll, "NtQueryInformationThread")))
                            : nullptr;
@@ -562,7 +567,7 @@ ProcessCounts processCounts()
               << std::hex << std::uppercase
               << (thread.start - reinterpret_cast<std::uintptr_t>(module));
         thread.where = where.str();
-        thread.inNtdll = module == ntdll;
+        thread.osWorker = module == ntdll || (crypt32 && module == crypt32);
       }
       else if (thread.start != 0)
       {
@@ -596,12 +601,12 @@ std::vector<ProcessThread> newThreads(
   return result;
 }
 
-// those of newThreads whose start is not inside ntdll: what the check fails on
+// those of newThreads whose start is not an OS worker's: what the check fails on
 std::vector<ProcessThread> newForeignThreads(
   const ProcessCounts& baseline, const ProcessCounts& now)
 {
   auto result = newThreads(baseline, now);
-  std::erase_if(result, [](const auto& thread) { return thread.inNtdll; });
+  std::erase_if(result, [](const auto& thread) { return thread.osWorker; });
   return result;
 }
 
@@ -849,7 +854,8 @@ void checkProcessCounts(
     },
     3000);
   std::cout << label << " (" << sessionsWithDevice << " sessions with a device): threads "
-            << baseline.threads << " -> " << counts.threads << " (new outside ntdll: "
+            << baseline.threads << " -> " << counts.threads
+            << " (new outside the OS workers: "
             << describeThreads(newForeignThreads(baseline, counts))
             << "; new in all: " << describeThreads(newThreads(baseline, counts))
             << "), handles " << baseline.handles << " -> " << counts.handles

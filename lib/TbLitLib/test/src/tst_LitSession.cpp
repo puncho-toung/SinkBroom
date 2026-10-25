@@ -467,7 +467,7 @@ struct Events
 // U2.12: the process's threads and OS handles, as TbUiLibTest's checkCounts counts them
 // (tst_LitPreviewPanel.cpp), with its tolerance and the driver's measured cost of one
 // device (one handle); LitTestUtils' processCounts, a new thread failing only when its
-// start is not inside ntdll (LP5.3 step 0)
+// start is not an OS worker's (LP5.3 step 0)
 constexpr auto HandleTolerance = 8L;
 constexpr auto DriverHandlesPerSession = 1L;
 
@@ -5829,7 +5829,8 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
       3000ms,
       false);
     std::cout << "U2.12: " << cycles << " blob-backed sessions: threads "
-              << baseline.threads << " -> " << counts.threads << " (new outside ntdll: "
+              << baseline.threads << " -> " << counts.threads
+              << " (new outside the OS workers: "
               << describeThreads(newForeignThreads(baseline, counts))
               << "; new in all: " << describeThreads(newThreads(baseline, counts))
               << "), handles " << baseline.handles << " -> " << counts.handles

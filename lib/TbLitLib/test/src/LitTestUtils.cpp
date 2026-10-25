@@ -218,6 +218,9 @@ ProcessCounts processCounts()
 
   using QueryThread = LONG(WINAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
   const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+  // LP5.3 step 11: crypt32's chain-engine worker (CRYPT32.dll+0x1BF50), which the OS
+  // starts on its own (2 of 3 [litgpu] runs of the float/redock section)
+  const auto crypt32 = GetModuleHandleW(L"crypt32.dll");
   const auto query = ntdll ? reinterpret_cast<QueryThread>(reinterpret_cast<void*>(
                                GetProcAddress(ntdll, "NtQueryInformationThread")))
                            : nullptr;
@@ -270,7 +273,7 @@ ProcessCounts processCounts()
           "{}+0x{:X}",
           std::filesystem::path{name.data()}.filename().string(),
           thread.start - reinterpret_cast<std::uintptr_t>(module));
-        thread.inNtdll = module == ntdll;
+        thread.osWorker = module == ntdll || (crypt32 && module == crypt32);
       }
       else if (thread.start != 0)
       {
@@ -306,7 +309,7 @@ std::vector<ProcessThread> newForeignThreads(
   const ProcessCounts& baseline, const ProcessCounts& now)
 {
   auto result = newThreads(baseline, now);
-  std::erase_if(result, [](const auto& thread) { return thread.inNtdll; });
+  std::erase_if(result, [](const auto& thread) { return thread.osWorker; });
   return result;
 }
 
