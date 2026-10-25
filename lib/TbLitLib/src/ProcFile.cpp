@@ -32,15 +32,18 @@
 #include "lit/EngineGeometry.h"
 #include "lit/EngineLexer.h"
 #include "lit/NumberText.h"
+#include "lit/ProcIslands.h"
 
 #include "kd/result.h"
 
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <limits>
+#include <unordered_map>
 
 namespace tb::lit
 {
@@ -436,6 +439,24 @@ void recentre(
   }
 }
 
+// :300-321 for one vertex whose st are recentred already: SetTexCoord, SetNormal and the
+// colour on a cleared vertex
+EngineDrawVert loadVertex(const float* v, const int vertexFormat)
+{
+  auto vert = engineClearedVert();
+  vert.xyz = {v[0], v[1], v[2]};
+  engineSetTexCoord(vert, v[3], v[4]);
+  engineSetNormal(vert, {v[5], v[6], v[7]});
+  // :300-321: the basic format opaque white (engineClearedVert); the colour format
+  // "rounded: dmap wrote byte / 255 with six decimals, which can parse a hair below
+  // the byte" (PackColorRound, LP7.0, C4 extended); color2 stays zero (Clear)
+  if (vertexFormat == 1)
+  {
+    engineSetColor(vert, enginePackColorRound({v[8], v[9], v[10], v[11]}));
+  }
+  return vert;
+}
+
 } // namespace
 
 std::size_t procTreeBytes(const ProcTree& tree)
@@ -482,21 +503,61 @@ std::vector<EngineDrawVert> loadProcSurface(const ProcSurface& surface)
   verts.reserve(numVerts);
   for (auto j = std::size_t{0}; j < numVerts; ++j)
   {
-    const auto* v = raw.data() + j * floats;
-    auto vert = engineClearedVert();
-    vert.xyz = {v[0], v[1], v[2]};
-    engineSetTexCoord(vert, v[3], v[4]);
-    engineSetNormal(vert, {v[5], v[6], v[7]});
-    // :300-321: the basic format opaque white (engineClearedVert); the colour format
-    // "rounded: dmap wrote byte / 255 with six decimals, which can parse a hair below
-    // the byte" (PackColorRound, LP7.0, C4 extended); color2 stays zero (Clear)
-    if (surface.vertexFormat == 1)
-    {
-      engineSetColor(vert, enginePackColorRound({v[8], v[9], v[10], v[11]}));
-    }
-    verts.push_back(vert);
+    verts.push_back(loadVertex(raw.data() + j * floats, surface.vertexFormat));
   }
   return verts;
+}
+
+ProcIslandGeometry loadProcIsland(const ProcSurface& surface, const ProcIsland& island)
+{
+  const auto floats = std::size_t(surface.vertexFormat == 1 ? FloatsColor : FloatsBasic);
+  const auto numVerts = std::size_t(std::max(surface.numVerts, 0));
+  if (
+    surface.verts.size() != numVerts * floats
+    || island.verts.size() > std::size_t(engineBounds::MaxSurfaceVertices))
+  {
+    return {};
+  }
+  // :269-297 for the island alone: a vertex belongs to one island, so its range is the
+  // one ParseModel finds over the whole surface
+  auto minS = std::numeric_limits<float>::infinity();
+  auto minT = std::numeric_limits<float>::infinity();
+  auto maxS = -std::numeric_limits<float>::infinity();
+  auto maxT = -std::numeric_limits<float>::infinity();
+  for (const auto k : island.verts)
+  {
+    const auto* v = surface.verts.data() + std::size_t(k) * floats;
+    minS = std::min(minS, v[3]);
+    maxS = std::max(maxS, v[3]);
+    minT = std::min(minT, v[4]);
+    maxT = std::max(maxT, v[4]);
+  }
+  const auto averageS = float(engineFtoi((minS + maxS) * 0.5f));
+  const auto averageT = float(engineFtoi((minT + maxT) * 0.5f));
+
+  auto geometry = ProcIslandGeometry{};
+  geometry.verts.reserve(island.verts.size());
+  auto local = std::unordered_map<int, std::uint16_t>{};
+  for (const auto k : island.verts)
+  {
+    auto v = std::array<float, FloatsColor>{};
+    std::copy_n(surface.verts.data() + std::size_t(k) * floats, floats, v.data());
+    v[3] = v[3] - averageS;
+    v[4] = v[4] - averageT;
+    local.emplace(k, std::uint16_t(geometry.verts.size()));
+    geometry.verts.push_back(loadVertex(v.data(), surface.vertexFormat));
+  }
+  geometry.indexes.reserve(island.indexes.size());
+  for (const auto index : island.indexes)
+  {
+    const auto it = local.find(index);
+    if (it == local.end())
+    {
+      return {};
+    }
+    geometry.indexes.push_back(it->second);
+  }
+  return geometry;
 }
 
 void recentreTexCoords(

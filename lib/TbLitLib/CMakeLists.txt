@@ -66,6 +66,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PipelineCompiler.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ProbeRecord.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ProcFile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ProcIslands.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Projection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RangeAllocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RangeAllocator.h
