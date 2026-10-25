@@ -106,7 +106,7 @@ std::vector<const LitSurface*> engineOrderModel(
     indices[i] =
       ((std::uint64_t(n - i)) & 0xFFFF) | (dist << 16) | (std::uint64_t(bits) << 32);
   }
-  std::sort(indices.begin(), indices.end(), std::greater<std::uint64_t>{});
+  std::ranges::sort(indices, std::greater<std::uint64_t>{});
   auto order = std::vector<const LitSurface*>{};
   for (const auto key : indices)
   {

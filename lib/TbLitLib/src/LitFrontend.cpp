@@ -234,7 +234,7 @@ std::vector<const LitSurface*> stagePassOrder(
   }
   // the engine sorts its unique keys descending: the high dword's bits larger first, then
   // the depth larger first, then the earlier surface first
-  std::sort(keyed.begin(), keyed.end(), [](const Keyed& lhs, const Keyed& rhs) {
+  std::ranges::sort(keyed, [](const Keyed& lhs, const Keyed& rhs) {
     if (lhs.sortBits != rhs.sortBits)
     {
       return lhs.sortBits > rhs.sortBits;
