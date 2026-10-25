@@ -12268,6 +12268,481 @@ TEST_CASE("LitSession pass 8, the material stage pass, on a GPU (LP5.2a)", "[.][
   }
 }
 
+namespace
+{
+
+// LP5.2b: the cube and sky texgens' materials over a white wall lit head-on; the cube's
+// six faces pure colours (0 or 255 per channel: exact through any block compression)
+const auto Lp52bMaterials = std::string{
+  "textures/lp52b/white\n{\n\tqer_editorimage textures/lp52b/white.tga\n"
+  "\tdiffusemap textures/lp52b/white.tga\n}\n"
+  // TG_SKYBOX_CUBE on an opaque panel: skybox (69), EQUAL against its prepass depth
+  "textures/lp52b/sky\n{\n\t{\n\t\tcubeMap textures/lp52b/cube\n\t\ttexgen skybox\n"
+  "\t}\n}\n"
+  // TG_REFLECT_CUBE without and with a bump stage, translucent, added over the wall
+  "textures/lp52b/env\n{\n\t{\n\t\tblend add\n\t\tcubeMap textures/lp52b/cube\n"
+  "\t\ttexgen reflect\n\t}\n}\n"
+  "textures/lp52b/bumpy_env\n{\n\ttranslucent\n\tbumpmap _flat\n\t{\n\t\tblend add\n"
+  "\t\tcubeMap textures/lp52b/cube\n\t\ttexgen reflect\n\t}\n}\n"
+  // TG_REFLECT_CUBE2: not drawn (LP6's inputs)
+  "textures/lp52b/reflect2\n{\n\t{\n\t\tblend add\n\t\tcubeMap textures/lp52b/cube\n"
+  "\t\ttexgen reflect2\n\t}\n}\n"
+  // the prepass's alpha-tested skybox stage: drawn by pass 8 too, or skipped there as
+  // gl_zero, gl_one (its prepass black alone)
+  "textures/lp52b/sky_tested\n{\n\t{\n\t\tcubeMap textures/lp52b/cube\n"
+  "\t\ttexgen skybox\n\t\talphaTest 0.5\n\t}\n}\n"
+  "textures/lp52b/sky_mask\n{\n\t{\n\t\tblend gl_zero, gl_one\n"
+  "\t\tcubeMap textures/lp52b/cube\n\t\ttexgen skybox\n\t\talphaTest 0.5\n\t}\n}\n"
+  // the prepass's alpha-tested wobbleSky stage (rates 0): the sky alone, or the sky plus
+  // pass 8's
+  "textures/lp52b/wobble_mask\n{\n\t{\n\t\tblend gl_zero, gl_one\n"
+  "\t\tcubeMap textures/lp52b/cube\n\t\ttexgen wobbleSky 0 0 0\n\t\talphaTest 0.5\n"
+  "\t}\n}\n"
+  "textures/lp52b/wobble_add\n{\n\t{\n\t\tblend add\n\t\tcubeMap textures/lp52b/cube\n"
+  "\t\ttexgen wobbleSky 0 0 0\n\t\talphaTest 0.5\n\t}\n}\n"
+  // a cube asked for only once its surface is in the view
+  "textures/lp52b/sky_late\n{\n\t{\n\t\tcubeMap textures/lp52b/late\n"
+  "\t\ttexgen skybox\n\t}\n}\n"};
+
+// the wall at x 200; the panels 2 units thick facing the camera at ( 0, 0, 64 ) that
+// looks down +x; the wobbleSky panels high and near (x 120, z 124-150), where the
+// direction from the world's origin (the prepass's LOCALVIEWORIGIN 0) is +z's and the one
+// from the eye +x's
+std::string lp52bMapText(const bool late = false)
+{
+  auto text = std::string{"{\n\"classname\" \"worldspawn\"\n"};
+  text += boxBrush(200, -400, -200, 216, 400, 400, "lp52b/white");
+  text += boxBrush(150, -120, 90, 152, -80, 120, "lp52b/sky");
+  text += boxBrush(150, -60, 90, 152, -20, 120, "lp52b/env");
+  text += boxBrush(150, 0, 90, 152, 40, 120, "lp52b/bumpy_env");
+  text += boxBrush(150, 60, 90, 152, 100, 120, "lp52b/reflect2");
+  text += boxBrush(150, -120, 20, 152, -80, 60, "lp52b/sky_tested");
+  text += boxBrush(150, -60, 20, 152, -20, 60, "lp52b/sky_mask");
+  text += boxBrush(120, 10, 124, 122, 40, 150, "lp52b/wobble_mask");
+  text += boxBrush(120, 50, 124, 122, 80, 150, "lp52b/wobble_add");
+  if (late)
+  {
+    text += boxBrush(150, 0, 20, 152, 40, 60, "lp52b/sky_late");
+  }
+  text += "}\n";
+  text +=
+    "{\n\"classname\" \"light\"\n\"name\" \"lp52b_parallel\"\n\"origin\" \"100 0 64\"\n"
+    "\"light_radius\" \"300 300 300\"\n\"light_center\" \"-1 0 0\"\n\"parallel\" \"1\"\n"
+    "\"texture\" \"lights/lp22a/flatclamp\"\n\"_color\" \"0.3 0.3 0.3\"\n"
+    "\"noshadows\" \"1\"\n}\n";
+  return text;
+}
+
+// the cube's faces in the engine's R_LoadCubeImages order (_px _nx _py _ny _pz _nz) and
+// colours
+constexpr auto Lp52bFaces = std::array<std::pair<const char*, std::array<int, 3>>, 6>{{
+  {"_px", {255, 0, 0}},
+  {"_nx", {0, 255, 0}},
+  {"_py", {0, 0, 255}},
+  {"_ny", {255, 255, 0}},
+  {"_pz", {0, 255, 255}},
+  {"_nz", {255, 0, 255}},
+}};
+
+/**
+ * A CPU model of a TextureCube's face choice (the major axis of the direction, D3D's and
+ * Vulkan's), returning the face's colour as the shaders read it: sRGBToLinear of a 0 or
+ * 255 channel is that channel's 0 or 1.
+ */
+Rgb lp52bFaceColour(const EngineVec3& direction)
+{
+  const auto ax = std::abs(direction[0]);
+  const auto ay = std::abs(direction[1]);
+  const auto az = std::abs(direction[2]);
+  auto face = std::size_t{0};
+  if (ax >= ay && ax >= az)
+  {
+    face = direction[0] >= 0.0f ? 0u : 1u;
+  }
+  else if (ay >= az)
+  {
+    face = direction[1] >= 0.0f ? 2u : 3u;
+  }
+  else
+  {
+    face = direction[2] >= 0.0f ? 4u : 5u;
+  }
+  const auto& c = Lp52bFaces[face].second;
+  return {float(c[0]) / 255.0f, float(c[1]) / 255.0f, float(c[2]) / 255.0f};
+}
+
+// environment.ps / bumpyenvironment.ps's reflection of the eye vector about a normal:
+// 2 ( E · N ) N - E of the normalised E = localViewOrigin - position
+EngineVec3 lp52bReflect(
+  const EngineVec3& eye, const EngineVec3& position, const EngineVec3& normal)
+{
+  auto e = EngineVec3{eye[0] - position[0], eye[1] - position[1], eye[2] - position[2]};
+  const auto length = std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
+  for (auto& c : e)
+  {
+    c /= length;
+  }
+  const auto d = e[0] * normal[0] + e[1] * normal[1] + e[2] * normal[2];
+  return {
+    2.0f * d * normal[0] - e[0],
+    2.0f * d * normal[1] - e[1],
+    2.0f * d * normal[2] - e[2]};
+}
+
+} // namespace
+
+// LP5.2b (C48, D124, P6.17-P6.19): the cube and sky texgens in pass 8 and the prepass
+// over a synthetic map, each pixel against a CPU model of the shader's texcoord and the
+// cube's face choice: skybox, reflect with and without a bump, the prepass's alpha-tested
+// skybox and wobbleSky stages, reflect2 skipped, a cube not written yet drawn as the zero
+// cube with the frame unconverged; the validation layer's answer on 57's compare-enabled
+// sampler. Hidden: it needs a GPU and the game's blobs.
+TEST_CASE("LitSession cube and sky texgens on a GPU (LP5.2b)", "[.][litgpu2]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto gamePath = std::filesystem::path{gamePathValue};
+  const auto root = assembleLitRoot(gamePath);
+  REQUIRE_FALSE(root.empty());
+  const auto base = root / "base";
+  writeTextFile(base / "materials" / "zz_lp52b.mtr", Lp52bMaterials);
+  std::filesystem::create_directories(base / "textures" / "lp52b");
+  const auto writeTga = [&](const std::string& name, const test::Rgba& image) {
+    auto file = std::ofstream{base / "textures" / "lp52b" / name, std::ios::binary};
+    const auto bytes = test::tgaFile(image);
+    file.write(bytes.data(), std::streamsize(bytes.size()));
+  };
+  writeTga("white.tga", test::flat(4, 4, 255, 255, 255));
+  for (const auto& [suffix, colour] : Lp52bFaces)
+  {
+    writeTga(
+      std::string{"cube"} + suffix + ".tga",
+      test::flat(
+        8, 8, std::uint8_t(colour[0]), std::uint8_t(colour[1]), std::uint8_t(colour[2])));
+    // the late cube: white faces
+    writeTga(std::string{"late"} + suffix + ".tga", test::flat(8, 8, 255, 255, 255));
+  }
+  // the cube programs' blobs beyond LP2's
+  for (const auto* name :
+       {"builtin/legacy/environment",
+        "builtin/legacy/bumpyenvironment",
+        "builtin/legacy/skybox",
+        "builtin/legacy/wobblesky"})
+  {
+    for (const auto stage : {ShaderStage::Vertex, ShaderStage::Pixel})
+    {
+      const auto relative = shaderBlobPath(name, stage);
+      REQUIRE(std::filesystem::exists(gamePath / "base" / relative));
+      std::filesystem::create_directories((base / relative).parent_path());
+      std::filesystem::copy_file(
+        gamePath / "base" / relative,
+        base / relative,
+        std::filesystem::copy_options::overwrite_existing);
+    }
+  }
+  writeTextFile(base / "maps" / "lp52b.map", lp52bMapText());
+  const auto snapshotOf = [&](const std::string& text, const std::uint64_t sequence) {
+    auto snapshot = snapshotOfMapText(text);
+    snapshot.generation = 7;
+    snapshot.sequence = sequence;
+    snapshot.mapPath = (base / "maps" / "lp52b.map").string();
+    return std::make_shared<const Snapshot>(std::move(snapshot));
+  };
+  const auto eye = EngineVec3{0, 0, 64};
+  const auto camera = litCamera({0, 0, 64}, {1, 0, 0}, {0, 0, 1});
+  const auto view = litViewOf(camera, 160, 120);
+  const auto frameLog = root / "lp52b.framelog.csv";
+  std::filesystem::remove(frameLog);
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  auto firstBumpyMessages = std::optional<std::pair<int, int>>{};
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto serviceOptions = MaterialServiceOptions{};
+    serviceOptions.makeSource = [root](const std::atomic<bool>& cancel) {
+      return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(root, &cancel)};
+    };
+    serviceOptions.pollInterval = 0ms;
+    serviceOptions.imageBudgetBytes = 0;
+    // the image work items held while the gate is closed (the late cube's), the
+    // evaluations and lookups going on
+    auto gate = std::make_shared<ParkingGate>();
+    serviceOptions.beforeWorkItemForTesting = [gate](const std::string_view kind) {
+      if (kind == "image")
+      {
+        gate->pass();
+      }
+    };
+    auto service = MaterialService::create(std::move(serviceOptions))
+                   | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    const auto atExit = OpenParkingAtExit{gate};
+    auto events = Events{};
+    auto session = loggedRootSession(instance, events, *service, root, frameLog, true);
+    auto tonemap = EngineTonemap;
+    tonemap.hdrMinLuminance = 0.1f;
+    tonemap.hdrMaxLuminance = 0.1001f;
+    session->setTonemapForTesting(tonemap);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+    REQUIRE(session->offerSnapshot(snapshotOf(lp52bMapText(), 1)));
+
+    // the background: the shader passes skipped (D118)
+    session->skipShaderPassesForTesting(true);
+    auto background = settledHdr(*session, camera, 1);
+    for (auto attempt = 0;
+         attempt < 20 && background && !background->second.stats.stagesSkipped;
+         ++attempt)
+    {
+      background = settledHdr(*session, camera, 1);
+    }
+    REQUIRE(background);
+    const auto& bg = background->first;
+    const auto messagesBefore = std::pair{int(messages.errors), int(messages.warnings)};
+
+    // pass 8 drawn
+    session->skipShaderPassesForTesting(false);
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(true);
+    }));
+    auto drawn = settledHdr(*session, camera, 1);
+    for (auto attempt = 0; attempt < 20 && drawn && drawn->second.stats.stagesSkipped;
+         ++attempt)
+    {
+      drawn = settledHdr(*session, camera, 1);
+    }
+    REQUIRE(drawn);
+    // P6.19: what the validation layer said from the first frames that drew 57 (its s0
+    // the leaked compare-enabled LinearWrap over a colour cube and a normal map) on
+    firstBumpyMessages = std::pair{
+      int(messages.errors) - messagesBefore.first,
+      int(messages.warnings) - messagesBefore.second};
+    auto log = std::vector<LitDrawRecord>{};
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      log = access.passes.drawLogForTesting();
+    }));
+    const auto& stats = drawn->second.stats;
+    const auto& image = drawn->first;
+    CHECK_FALSE(stats.stagesSkipped);
+    CHECK_FALSE(stats.stagesDisabled);
+    // sky, env, bumpy_env, sky_tested, wobble_add; reflect2 (LP6), the two gl_zero,
+    // gl_one stages skipped
+    CHECK(stats.stageDraws == 5u);
+    CHECK(stats.stageSkipped == 3u);
+    CHECK(stats.stageTexgenLp6 == 1u);
+    CHECK(stats.stagePending == 0u);
+
+    const auto at = [&](const HdrImage& hdr, const EngineVec3& point) {
+      const auto [x, y] = pixelOf(view, point);
+      return rgbOf(hdr.at(x, y));
+    };
+    const auto check = [&](const char* what, const EngineVec3& point, const Rgb& model) {
+      const auto got = at(image, point);
+      std::cout << fmt::format(
+        "LP5.2b {}: background {} drawn {} model {}\n",
+        what,
+        rgbText(at(bg, point)),
+        rgbText(got),
+        rgbText(model));
+      CAPTURE(what, rgbText(got), rgbText(model));
+      CHECK(near3(got, model));
+    };
+    const auto minus = [](const EngineVec3& a, const EngineVec3& b) {
+      return EngineVec3{a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+    };
+    const auto faceNormal = EngineVec3{-1, 0, 0};
+
+    // skybox: texcoord = position - LOCALVIEWORIGIN (the eye), colour rpColor 1: the face
+    // at the view direction, over an opaque panel (its prepass black)
+    for (const auto& point :
+         {EngineVec3{150, -100, 105},
+          EngineVec3{150, -85, 95},
+          EngineVec3{150, -115, 116}})
+    {
+      check("skybox", point, lp52bFaceColour(minus(point, eye)));
+    }
+    // reflect without a bump (55): the reflected eye vector's face, sRGBAToLinear(
+    // rpColor 1 ), added over the lit wall
+    {
+      const auto point = EngineVec3{150, -40, 105};
+      const auto r = lp52bReflect(eye, point, faceNormal);
+      CHECK(lp52bFaceColour(r) == Rgb{0.0f, 1.0f, 0.0f});
+      check("reflect (55)", point, plus(at(bg, point), lp52bFaceColour(r)));
+    }
+    // with a bump stage (57): _flat raw at unit 1, a flat normal; rpColor 1
+    {
+      const auto point = EngineVec3{150, 20, 105};
+      const auto r = lp52bReflect(eye, point, faceNormal);
+      check("reflect with a bump (57)", point, plus(at(bg, point), lp52bFaceColour(r)));
+    }
+    // reflect2: not drawn, the wall behind shows
+    check("reflect2 skipped", EngineVec3{150, 80, 105}, at(bg, EngineVec3{150, 80, 105}));
+    // the prepass's alpha-tested skybox: its whole surface's depth hides the lit wall
+    // behind, pass 8 then draws the sky EQUAL; the gl_zero, gl_one twin shows the
+    // prepass's black (rpColor 0) alone
+    {
+      const auto point = EngineVec3{150, -100, 40};
+      check("alpha-tested skybox", point, lp52bFaceColour(minus(point, eye)));
+      check("alpha-tested skybox, prepass alone", EngineVec3{150, -40, 40}, Rgb{0, 0, 0});
+      // the background frame (pass 8 skipped) shows the prepass's black too: the wall
+      // behind is hidden by the depth alone
+      CHECK(near3(at(bg, point), Rgb{0, 0, 0}));
+    }
+    // the prepass's alpha-tested wobbleSky stage: its colour the sky's texel at position
+    // - 0 (LOCALVIEWORIGIN 0 in the prepass, SC528) through the identity transform (rates
+    // 0), the vertex colour 1 (SVC_IGNORE): +z's face here; the blend add twin adds pass
+    // 8's sky at position - the eye: +x's face (the points away from a face's edge, where
+    // the cube's seamless bilinear filter reads the next face)
+    {
+      const auto origin = EngineVec3{0, 0, 0};
+      const auto maskPoint = EngineVec3{120, 25, 148};
+      CHECK(lp52bFaceColour(minus(maskPoint, origin)) == Rgb{0.0f, 1.0f, 1.0f});
+      check(
+        "wobbleSky, prepass alone", maskPoint, lp52bFaceColour(minus(maskPoint, origin)));
+      const auto addPoint = EngineVec3{120, 65, 148};
+      CHECK(lp52bFaceColour(minus(addPoint, eye)) == Rgb{1.0f, 0.0f, 0.0f});
+      check(
+        "wobbleSky, prepass plus pass 8",
+        addPoint,
+        plus(
+          lp52bFaceColour(minus(addPoint, origin)),
+          lp52bFaceColour(minus(addPoint, eye))));
+    }
+
+    // the draw log: the programs by texgen
+    {
+      auto programs = std::map<std::string, std::set<int>>{};
+      auto prepassPrograms = std::map<std::string, std::set<int>>{};
+      for (const auto& record : log)
+      {
+        if (record.pass == LitDrawRecord::Pass::Stage)
+        {
+          programs[record.chunk.material].insert(record.program);
+        }
+        if (record.pass == LitDrawRecord::Pass::Prepass)
+        {
+          prepassPrograms[record.chunk.material].insert(record.program);
+        }
+      }
+      CHECK(programs["textures/lp52b/sky"] == std::set{EngineBuiltinSkyBox});
+      CHECK(programs["textures/lp52b/env"] == std::set{EngineBuiltinEnvironment});
+      CHECK(
+        programs["textures/lp52b/bumpy_env"] == std::set{EngineBuiltinBumpyEnvironment});
+      CHECK(programs["textures/lp52b/wobble_add"] == std::set{EngineBuiltinWobbleSky});
+      CHECK_FALSE(programs.contains("textures/lp52b/reflect2"));
+      CHECK_FALSE(programs.contains("textures/lp52b/sky_mask"));
+      CHECK(
+        prepassPrograms["textures/lp52b/sky_tested"] == std::set{EngineBuiltinSkyBox});
+      CHECK(prepassPrograms["textures/lp52b/sky_mask"] == std::set{EngineBuiltinSkyBox});
+      CHECK(
+        prepassPrograms["textures/lp52b/wobble_mask"]
+        == std::set{EngineBuiltinWobbleSky});
+      // the opaque sky panel: the prepass's fast-path depth draw
+      CHECK(prepassPrograms["textures/lp52b/sky"] == std::set{EngineBuiltinDepth});
+    }
+
+    // D124, P6.17: a cube not written yet: the stage drawn with the zero cube (black),
+    // the frame unconverged and counted; then it lands and is drawn
+    {
+      // the image work items held: the late cube stays Pending
+      gate->close();
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        access.passes.setDrawLogForTesting(true);
+      }));
+      REQUIRE(waitFor([&] { return session->snapshotSlotFree(); }, 10000ms, false));
+      REQUIRE(session->offerSnapshot(snapshotOf(lp52bMapText(true), 2)));
+      const auto latePoint = EngineVec3{150, 20, 40};
+      auto lateState = std::optional<ImageSlots::State>{};
+      const auto pending = hdrOfFrame(*session, [&](const RenderFrameAccess& access) {
+        if (access.arenas.pending())
+        {
+          return false;
+        }
+        // the late panel drawn by pass 8 in this frame
+        const auto& frameLog = access.passes.drawLogForTesting();
+        if (std::ranges::none_of(frameLog, [](const LitDrawRecord& record) {
+              return record.pass == LitDrawRecord::Pass::Stage
+                     && record.chunk.material == "textures/lp52b/sky_late";
+            }))
+        {
+          return false;
+        }
+        for (const auto& surface : access.passes.lists().drawSurfs)
+        {
+          if (
+            surface.chunk && surface.chunk->key.material == "textures/lp52b/sky_late"
+            && surface.material && !surface.material->stages.empty()
+            && surface.material->stages[0].image)
+          {
+            if (const auto id = access.images.find(*surface.material->stages[0].image))
+            {
+              const auto* slot = access.images.slot(*id);
+              const auto binding = access.images.binding(*id);
+              if (
+                slot
+                && (slot->state == ImageSlots::State::Pending || !binding.texture || binding.intrinsic)
+                && access.passes.lastStats().stagePending > 0)
+              {
+                lateState = slot->state;
+                return true;
+              }
+            }
+          }
+        }
+        return false;
+      });
+      REQUIRE(pending);
+      CHECK(pending->second.stats.unconverged);
+      CHECK(pending->second.stats.stagePending == 1u);
+      CHECK(pending->second.stats.stageDraws == 6u);
+      // the zero cube, black (the prepass's black under it), not a slot's 2D stand-in
+      CHECK(near3(at(pending->first, latePoint), Rgb{0, 0, 0}));
+      std::cout << fmt::format(
+        "LP5.2b late cube: drawn with the zero cube while its slot was {}: {}\n",
+        lateState ? int(*lateState) : -1,
+        rgbText(at(pending->first, latePoint)));
+      gate->open();
+      auto landed = settledHdr(*session, camera, 1);
+      for (auto attempt = 0;
+           attempt < 20 && landed && landed->second.stats.stageDraws != 6u;
+           ++attempt)
+      {
+        landed = settledHdr(*session, camera, 1);
+      }
+      REQUIRE(landed);
+      CHECK(landed->second.stats.stagePending == 0u);
+      CHECK(near3(at(landed->first, latePoint), Rgb{1, 1, 1}));
+    }
+
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(false);
+    }));
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  REQUIRE(firstBumpyMessages);
+  std::cout << fmt::format(
+    "LP5.2b validation from the first frames with 57 on: {} errors, {} warnings\n",
+    firstBumpyMessages->first,
+    firstBumpyMessages->second);
+  messages.print("LP5.2b cube and sky texgens, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+}
+
 } // namespace tb::lit
 
 #endif
