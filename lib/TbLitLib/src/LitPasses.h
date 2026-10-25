@@ -220,18 +220,23 @@ struct LitFrameStats
   // ----- LP5.2a (C46, C47, D124): the stage pass (DrawShaderPasses' first call) -----
   // its draws; the SL_AMBIENT stages of the surfaces it reached that drew nothing, every
   // reason summed (a condition of 0, ZERO / ONE, a black add, a transparent blend,
-  // r_skipNewAmbient, a cinematic, a cube or sky texgen, a missing program, a stage
-  // without an image, an image not written yet, a pending pipeline, the budget)
+  // r_skipNewAmbient, a cinematic, TG_REFLECT_CUBE2, a missing program, a stage without
+  // an image, a cube image on texture_color, an image not written yet, a pending
+  // pipeline, the budget)
   std::size_t stageDraws = 0;
   std::size_t stageSkipped = 0;
   // the surfaces skipped because their material or registers are pending (D124: the
-  // frame is unconverged); the surfaces with an SL_AMBIENT stage left at the stop at
+  // frame is unconverged) and (LP5.2b, C48) the cube-program draws made with the zero
+  // cube because their cube image was not written yet (Pending, or Loading without a
+  // level: unconverged); the surfaces with an SL_AMBIENT stage left at the stop at
   // SS_POST_PROCESS (K38)
   std::size_t stagePending = 0;
   std::size_t stagePostProcess = 0;
-  // of stageSkipped: the stages of a cube or sky texgen (LP5.2b's), of a cinematic
-  // (D120), of a newStage program absent from the table or its blobs (D9)
-  std::size_t stageTexgenDeferred = 0;
+  // of stageSkipped: the TG_REFLECT_CUBE2 stages (LP5.2b, C48: programs 59-62 need LP6's
+  // inputs, and without a bump stage texture_color would sample the cube as a Texture2D,
+  // mirror.json M-STAGE-DIFF-05), the stages of a cinematic (D120), of a newStage program
+  // absent from the table or its blobs (D9)
+  std::size_t stageTexgenLp6 = 0;
   std::size_t stageCinematic = 0;
   std::size_t stageProgramMissing = 0;
   // the pass was not recorded (skipShaderPassesForTesting, r_skipAmbient 1's stand-in,
@@ -443,7 +448,10 @@ private:
   // a blob missing), looked up once; the names already warned about
   std::map<std::string, std::optional<EngineMaterialProgram>> m_materialPrograms;
   std::set<std::string> m_programWarnings;
-  bool m_texgenDeferredWarned = false;
+  // LP5.2b: said once each: TG_REFLECT_CUBE2 not drawn, TG_DIFFUSE_CUBE or TG_GLASSWARP
+  // (the engine's own warning), a stage without an image or a cube on texture_color
+  bool m_texgenLp6Warned = false;
+  bool m_texgenWarned = false;
   bool m_stageImageWarned = false;
   std::vector<LitDrawRecord> m_drawLog;
   // the pipeline keys asked for while the log is on, drawn or not
@@ -525,10 +533,32 @@ private:
    * engineShaderPassDraws: an old-style stage with its colour, vertex colour, texture
    * matrix (and TG_SCREEN's planes) and its image at unit 0 by the slot's state
    * (stageImage), a newStage block on its table program (C47) with USER0 + j and its
-   * fragment images at units 0-2 (a null one _default); at the end GL_Color( 1 ) and
+   * fragment images at units 0-2 (a null one _default); LP5.2b (C48): a cube or sky
+   * texgen's program (55, 57, 69, 70) with its cube at unit 0 (cubeImage), 57's bump
+   * image at unit 1 (bumpImage) and 70's WOBBLESKY_X..Z; at the end GL_Color( 1 ) and
    * GLS_DEFAULT (no draw).
    */
   void recordStages(Frame& frame);
+  /**
+   * LP5.2b (C48, D124, P6.17): the image a cube program binds at unit 0, and whether it
+   * stands in for a cube not written yet. Resident, Replacing (its complete texture) and
+   * Loading with written levels bind the cube; Pending and Loading without a level bind
+   * the zero cube (_defaultUACRadiance, LP4.2a's black 8 × 8) and are pending (the frame
+   * unconverged); Default (the engine's image not loaded or defaulted), a 2D image named
+   * by the stage and a stage without an image bind the zero cube too, where the engine
+   * binds its 2D _default (or a stale image) into the TextureCube slot (undefined):
+   * mirror.json M-STAGE-DIFF-04.
+   */
+  std::pair<MaterialImageKey, bool> cubeImage(
+    ImageSlots& images, const std::optional<MaterialImageKey>& key);
+  /**
+   * LP5.2b (C48, P6.17): the bump image 57 binds raw at unit 1 (RenderBackend.cpp:
+   * 366-368), by its slot's state as stageImage, but Default binds _flat where the engine
+   * binds its defaulted image (mirror.json M-STAGE-DIFF-06); a bump stage without an
+   * image binds _flat too.
+   */
+  std::optional<MaterialImageKey> bumpImage(
+    ImageSlots& images, const std::optional<MaterialImageKey>& key);
   /**
    * LP5.2a (D124, P6.17): the image a stage binds at a unit, by its slot's state:
    * Default (the service has no image: the engine's image not loaded or defaulted) binds

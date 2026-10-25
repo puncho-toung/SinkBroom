@@ -921,6 +921,65 @@ EnginePlane engineGlobalPlaneToLocal(
   return fromId(out);
 }
 
+std::array<std::array<float, 4>, 3> engineWobbleSkyTransform(
+  const float wobbleDegrees,
+  const float wobbleRate,
+  const float rotateRate,
+  const float timeMs)
+{
+  // RenderBackend.cpp:530-565, the three texGenRegisters' values read by the caller
+  const float wobbleRadians = wobbleDegrees * (idMath::PI / 180.0f);
+  const float wobbleSpeed = wobbleRate * (2.0f * idMath::PI / 60.0f);
+  const float rotateSpeed = rotateRate * (2.0f * idMath::PI / 60.0f);
+
+  idVec3 axis[3];
+  {
+    // very ad-hoc "wobble" transform
+    float s, c;
+    idMath::SinCos(wobbleSpeed * timeMs * 0.001f, s, c);
+
+    float ws, wc;
+    idMath::SinCos(wobbleRadians, ws, wc);
+
+    axis[2][0] = ws * c;
+    axis[2][1] = ws * s;
+    axis[2][2] = wc;
+
+    axis[1][0] = -s * s * ws;
+    axis[1][2] = -s * ws * ws;
+    axis[1][1] = idMath::Sqrt(
+      idMath::Fabs(1.0f - (axis[1][0] * axis[1][0] + axis[1][2] * axis[1][2])));
+
+    // make the second vector exactly perpendicular to the first
+    axis[1] -= (axis[2] * axis[1]) * axis[2];
+    axis[1].Normalize();
+
+    // construct the third with a cross
+    axis[0].Cross(axis[1], axis[2]);
+  }
+
+  // add the rotate
+  float rs, rc;
+  idMath::SinCos(rotateSpeed * timeMs * 0.001f, rs, rc);
+
+  auto transform = std::array<std::array<float, 4>, 3>{};
+  transform[0][0] = axis[0][0] * rc + axis[1][0] * rs;
+  transform[0][1] = axis[0][1] * rc + axis[1][1] * rs;
+  transform[0][2] = axis[0][2] * rc + axis[1][2] * rs;
+  transform[0][3] = 0.0f;
+
+  transform[1][0] = axis[1][0] * rc - axis[0][0] * rs;
+  transform[1][1] = axis[1][1] * rc - axis[0][1] * rs;
+  transform[1][2] = axis[1][2] * rc - axis[0][2] * rs;
+  transform[1][3] = 0.0f;
+
+  transform[2][0] = axis[2][0];
+  transform[2][1] = axis[2][1];
+  transform[2][2] = axis[2][2];
+  transform[2][3] = 0.0f;
+  return transform;
+}
+
 void engineBakeTextureMatrixIntoTexgen(
   std::array<EnginePlane, 4>& planes, const EngineGlMatrix& textureMatrix)
 {

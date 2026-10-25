@@ -209,6 +209,53 @@ std::array<Vec4, 2> engineVertexColorParms(const int vertexColor)
   }
 }
 
+int engineBumpStage(const MaterialEntry& material)
+{
+  for (std::size_t i = 0; i < material.stages.size(); ++i)
+  {
+    if (material.stages[i].lighting == em::LightingBump)
+    {
+      return int(i);
+    }
+  }
+  return -1;
+}
+
+std::array<Vec4, 3> engineStageWobbleSky(
+  const MaterialEntry& material,
+  const std::span<const float> registers,
+  const float timeMs)
+{
+  // const int* parms = surf->material->GetTexGenRegisters(); shaderRegisters[ parms[i] ]
+  const auto& parms = material.texGenRegisters;
+  const auto rows = engineWobbleSkyTransform(
+    engineRegister(registers, parms[0]),
+    engineRegister(registers, parms[1]),
+    engineRegister(registers, parms[2]),
+    timeMs);
+  return {
+    Vec4{rows[0][0], rows[0][1], rows[0][2], rows[0][3]},
+    Vec4{rows[1][0], rows[1][1], rows[1][2], rows[1][3]},
+    Vec4{rows[2][0], rows[2][1], rows[2][2], rows[2][3]}};
+}
+
+bool engineStageProgramSamplesCube(const StageProgram program)
+{
+  switch (program)
+  {
+  case StageProgram::Environment:
+  case StageProgram::BumpyEnvironment:
+  case StageProgram::SkyBox:
+  case StageProgram::WobbleSky:
+    return true;
+  case StageProgram::TextureColor:
+  case StageProgram::TextureColorTexgen:
+  case StageProgram::Material:
+    return false;
+  }
+  return false;
+}
+
 std::vector<PrepassDraw> engineGenericDepthDraws(
   const MaterialEntry& material, const std::span<const float> registers)
 {
@@ -794,8 +841,8 @@ StagePassSurface engineShaderPassDraws(
       continue;
     }
 
-    // the program by the texgen (:4604-4671); the cube and sky texgens rebind it in
-    // PrepareStageTexturing, and TG_DIFFUSE_CUBE and TG_GLASSWARP warn there: LP5.2b's
+    // the program by the texgen (:4604-4671), then PrepareStageTexturing's (:352-638),
+    // which binds another program over texture_color for the cube and sky texgens
     switch (stage.texgen)
     {
     case em::TexgenScreen:
@@ -803,13 +850,39 @@ StagePassSurface engineShaderPassDraws(
       draw.program = StageProgram::TextureColorTexgen;
       draw.screenTexgen = true;
       break;
+    case em::TexgenReflectCube:
+      // see if there is also a bump map specified (:360-392): its image raw at unit 1
+      draw.bumpStage = engineBumpStage(material);
+      draw.program =
+        draw.bumpStage >= 0 ? StageProgram::BumpyEnvironment : StageProgram::Environment;
+      break;
+    case em::TexgenReflectCube2:
+      // :393-525: with a bump stage BUMPY_ENVIRONMENT2 (59-62) on _currentRender, the
+      // G-buffer normals, Hi-Z and the view's radiance probes (LP6's inputs); without one
+      // texture_color stays and samples the cube as a Texture2D: neither is drawn
+      // (mirror.json M-STAGE-DIFF-05)
+      ++result.skipped;
+      ++result.texgenLp6;
+      continue;
+    case em::TexgenSkyboxCube:
+      // :526-529
+      draw.program = StageProgram::SkyBox;
+      break;
+    case em::TexgenWobbleskyCube:
+      // :530-586: the transform at the preview's material time 0 (K5, D119)
+      draw.program = StageProgram::WobbleSky;
+      draw.wobbleSky = engineStageWobbleSky(material, registers);
+      break;
+    case em::TexgenDiffuseCube:
+    case em::TexgenGlasswarp:
+      // :625-635: "Please contact Brian!" and nothing else: texture_color stays
+      draw.program = StageProgram::TextureColor;
+      draw.texgenWarning = true;
+      break;
     case em::TexgenExplicit:
+    default:
       draw.program = StageProgram::TextureColor;
       break;
-    default:
-      ++result.skipped;
-      ++result.texgenDeferred;
-      continue;
     }
 
     // GL_Color clamps (RenderBackend_NVRHI.cpp:2238-2246)

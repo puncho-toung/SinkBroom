@@ -1496,6 +1496,54 @@ std::optional<MaterialImageKey> LitPasses::stageImage(
   return std::nullopt;
 }
 
+std::pair<MaterialImageKey, bool> LitPasses::cubeImage(
+  ImageSlots& images, const std::optional<MaterialImageKey>& key)
+{
+  // the preview's zero cube (M-STAGE-DIFF-04): never a slot's 2D stand-in (P4.28)
+  const auto zeroCube = intrinsicImageKey("_defaultUACRadiance");
+  if (!key || key->cube == 0)
+  {
+    return {zeroCube, false};
+  }
+  const auto id = images.request(*key);
+  const auto* slot = images.slot(id);
+  if (!slot)
+  {
+    return {zeroCube, true};
+  }
+  switch (slot->state)
+  {
+  case ImageSlots::State::Default:
+    return {zeroCube, false};
+  case ImageSlots::State::Pending:
+    return {zeroCube, true};
+  case ImageSlots::State::Loading: {
+    const auto binding = images.binding(id);
+    return binding.texture && !binding.intrinsic ? std::pair{*key, false}
+                                                 : std::pair{zeroCube, true};
+  }
+  case ImageSlots::State::Resident:
+  case ImageSlots::State::Replacing:
+    return {*key, false};
+  }
+  return {zeroCube, true};
+}
+
+std::optional<MaterialImageKey> LitPasses::bumpImage(
+  ImageSlots& images, const std::optional<MaterialImageKey>& key)
+{
+  if (!key)
+  {
+    return engineFlatImageKey();
+  }
+  const auto* slot = images.slot(images.request(*key));
+  if (slot && slot->state == ImageSlots::State::Default)
+  {
+    return engineFlatImageKey();
+  }
+  return stageImage(images, *key);
+}
+
 const EngineMaterialProgram* LitPasses::materialProgram(
   Frame& frame, const MaterialStage& stage)
 {
@@ -1593,14 +1641,16 @@ void LitPasses::recordStages(Frame& frame)
     const auto& registers = surface.registers->registers;
     const auto surfaceDraws = engineShaderPassDraws(material, registers);
     m_stats.stageSkipped += surfaceDraws.skipped;
-    m_stats.stageTexgenDeferred += surfaceDraws.texgenDeferred;
+    m_stats.stageTexgenLp6 += surfaceDraws.texgenLp6;
     m_stats.stageCinematic += surfaceDraws.cinematic;
-    if (surfaceDraws.texgenDeferred > 0 && !m_texgenDeferredWarned && inputs.warn)
+    if (surfaceDraws.texgenLp6 > 0 && !m_texgenLp6Warned && inputs.warn)
     {
-      m_texgenDeferredWarned = true;
+      // C48, P6.18 (mirror.json M-STAGE-DIFF-05)
+      m_texgenLp6Warned = true;
       inputs.warn(
-        "The lit preview does not draw cube and sky texgen stages yet (LP5.2b): some "
-        "material stages are not drawn");
+        "The lit preview does not draw texGen reflect2 stages (their programs need the "
+        "G-buffer, Hi-Z and probe inputs of a later package): some material stages are "
+        "not drawn");
     }
 
     for (const auto& stageDraw : surfaceDraws.draws)
@@ -1646,32 +1696,93 @@ void LitPasses::recordStages(Frame& frame)
       {
         // GL_Color, the program, RB_SetVertexColorParms (:4598-4673)
         m_parms.set(RenderParm::Color, stageDraw.color);
-        program = stageDraw.program == StageProgram::TextureColorTexgen
-                    ? EngineBuiltinTextureTexgenVertexColor
-                    : EngineBuiltinTextureVertexColor;
+        switch (stageDraw.program)
+        {
+        case StageProgram::TextureColorTexgen:
+          program = EngineBuiltinTextureTexgenVertexColor;
+          break;
+        case StageProgram::Environment:
+          program = EngineBuiltinEnvironment;
+          break;
+        case StageProgram::BumpyEnvironment:
+          program = EngineBuiltinBumpyEnvironment;
+          break;
+        case StageProgram::SkyBox:
+          program = EngineBuiltinSkyBox;
+          break;
+        case StageProgram::WobbleSky:
+          program = EngineBuiltinWobbleSky;
+          break;
+        case StageProgram::TextureColor:
+        case StageProgram::Material:
+          program = EngineBuiltinTextureVertexColor;
+          break;
+        }
         m_parms.set(RenderParm::VertexColorModulate, stageDraw.vertexColor[0]);
         m_parms.set(RenderParm::VertexColorAdd, stageDraw.vertexColor[1]);
 
-        // BindVariableStageImage (:268-345): a stage without an image binds none in the
-        // engine (a dynamic image's stage, K25), and a cube image in texture_color's
-        // Texture2D is undefined there (LP5.2b's): neither is drawn (M-STAGE-GUARD-01)
-        if (!stage.image || stage.image->cube != 0)
+        if (stageDraw.texgenWarning && !m_texgenWarned && inputs.warn)
         {
-          ++m_stats.stageSkipped;
-          if (!m_stageImageWarned && inputs.warn)
-          {
-            m_stageImageWarned = true;
-            inputs.warn(
-              "The lit preview does not draw material stages without an image or with a "
-              "cube image on texture_color yet: some material stages are not drawn");
-          }
-          continue;
+          // PrepareStageTexturing (:625-635): the engine's own warning, nothing else
+          m_texgenWarned = true;
+          inputs.warn(
+            "A material stage uses texGen normal or glassWarp, which the engine warns "
+            "about and draws as a plain stage (\"Please contact Brian!\")");
         }
-        m_units[0] = stageImage(images, *stage.image);
-        drawable = m_units[0].has_value();
 
-        // PrepareStageTexturing (:352-638): the texture matrix, TG_SCREEN's planes from
-        // modelViewMatrix × projectionMatrix (rows 0, 1 and 3), TEXGEN_0_ENABLED
+        if (engineStageProgramSamplesCube(stageDraw.program))
+        {
+          // LP5.2b (C48): BindVariableStageImage binds the stage's cube image at unit 0
+          // (its _default when not loaded or defaulted, a 2D image in the TextureCube
+          // slot); the preview's zero cube stands in for an unwritten, defaulted or 2D
+          // one, a cube not written yet keeping the frame unconverged (M-STAGE-DIFF-04)
+          const auto [cube, pendingCube] = cubeImage(images, stage.image);
+          m_units[0] = cube;
+          if (pendingCube)
+          {
+            ++m_stats.stagePending;
+            m_stats.unconverged = true;
+            m_stats.retrigger = true;
+          }
+          if (stageDraw.program == StageProgram::BumpyEnvironment)
+          {
+            // :366-368: GL_SelectTexture( 1 ); bumpStage->texture.image->Bind()
+            const auto& bump = material.stages[std::size_t(stageDraw.bumpStage)];
+            m_units[1] = bumpImage(images, bump.image);
+            drawable = m_units[1].has_value();
+          }
+          if (stageDraw.program == StageProgram::WobbleSky)
+          {
+            // :561: SetVertexParms( RENDERPARM_WOBBLESKY_X, transform, 3 )
+            m_parms.set(RenderParm::WobbleSkyX, stageDraw.wobbleSky[0]);
+            m_parms.set(RenderParm::WobbleSkyY, stageDraw.wobbleSky[1]);
+            m_parms.set(RenderParm::WobbleSkyZ, stageDraw.wobbleSky[2]);
+          }
+        }
+        else
+        {
+          // BindVariableStageImage (:268-345): a stage without an image binds none in the
+          // engine (a dynamic image's stage, K25), and a cube image in texture_color's
+          // Texture2D (a cubeMap stage of TG_EXPLICIT, TG_SCREEN, TG_DIFFUSE_CUBE or
+          // TG_GLASSWARP) is undefined there: neither is drawn (M-STAGE-GUARD-01)
+          if (!stage.image || stage.image->cube != 0)
+          {
+            ++m_stats.stageSkipped;
+            if (!m_stageImageWarned && inputs.warn)
+            {
+              m_stageImageWarned = true;
+              inputs.warn(
+                "The lit preview does not draw material stages without an image, or with "
+                "a cube image on texture_color: some material stages are not drawn");
+            }
+            continue;
+          }
+          m_units[0] = stageImage(images, *stage.image);
+          drawable = m_units[0].has_value();
+        }
+
+        // PrepareStageTexturing (:352-638): the texture matrix always, TG_SCREEN's planes
+        // from modelViewMatrix × projectionMatrix (rows 0, 1 and 3), TEXGEN_0_ENABLED
         m_parms.set(RenderParm::TextureMatrixS, stageDraw.textureMatrix[0]);
         m_parms.set(RenderParm::TextureMatrixT, stageDraw.textureMatrix[1]);
         if (stageDraw.screenTexgen)
@@ -1703,8 +1814,10 @@ void LitPasses::recordStages(Frame& frame)
         continue;
       }
 
-      // GL_State( stageGLState ), the draw, FinishStageTexturing (nothing for these
-      // texgens) and the restored offset, which the next draw's key carries
+      // GL_State( stageGLState ), the draw, FinishStageTexturing (for the reflect cubes
+      // renderProgManager.Unbind(), :645-669, which has no NVRHI counterpart: the next
+      // draw's pipeline replaces the program) and the restored offset, which the next
+      // draw's key carries
       switch (draw(
         frame,
         program,
@@ -1812,6 +1925,9 @@ bool LitPasses::bindingSets(
                         : layout == EngineBindingLayout::AmbientLightingIbl ? 4u
                         : layout == EngineBindingLayout::Texture            ? 3u
                         : layout == EngineBindingLayout::Texgen             ? 3u
+                        : layout == EngineBindingLayout::Default            ? 3u
+                        : layout == EngineBindingLayout::Legacy             ? 3u
+                        : layout == EngineBindingLayout::NormalCube         ? 3u
                         : layout == EngineBindingLayout::PostProcessIngame  ? 2u
                                                                             : 1u;
   if (layouts.size() != expected)
@@ -1947,9 +2063,13 @@ bool LitPasses::bindingSets(
   switch (layout)
   {
   case EngineBindingLayout::Texture:
-  case EngineBindingLayout::Texgen: {
+  case EngineBindingLayout::Texgen:
+  case EngineBindingLayout::Default:
+  case EngineBindingLayout::Legacy: {
     // TEXTURE: t0 the unit 0 image, s0 its own sampler (SC238, SC269); LP5.2a: TEXGEN
-    // the same (RenderBackend_NVRHI.cpp:586-623)
+    // the same, LP5.2b: DEFAULT and LEGACY too (RenderBackend_NVRHI.cpp:586-623), whose
+    // unit 0 is a cube: a cube image's repeat is TR_CLAMP from its load on
+    // (Image_load.cpp:587-591)
     if (!textureSet(1, {0}, 0))
     {
       return false;
@@ -1958,7 +2078,9 @@ bool LitPasses::bindingSets(
     const auto* slot = images.slot(images.request(key));
     const auto format =
       slot && slot->adoptedFormat ? *slot->adoptedFormat : engine_image::FormatRgba8;
-    auto* sampler = inputs.samplers->imageSampler(device, format, key.filter, key.repeat)
+    const auto repeat =
+      key.cube != engine_image::Cube2D ? engine_image::RepeatClamp : key.repeat;
+    auto* sampler = inputs.samplers->imageSampler(device, format, key.filter, repeat)
                     | kdl::value_or(nullptr);
     if (!sampler)
     {
@@ -2053,6 +2175,38 @@ bool LitPasses::bindingSets(
                   })
                 .Get();
     return sets[3] != nullptr;
+  }
+  case EngineBindingLayout::NormalCube: {
+    // LP5.2b (C48): NORMAL_CUBE (RenderBackend_NVRHI.cpp:1677-1734): t0 the unit 0 cube,
+    // t1 the unit 1 bump image, s0 LinearWrap, which carries the Comparison reduction of
+    // CommonPasses' leaked desc (D68, mirrored: P6.19's validation answer is recorded on
+    // mirror.json M-STAGE-08); PointWrap only under R_UsePixelatedLook
+    if (!textureSet(1, {0, 1}, 0))
+    {
+      return false;
+    }
+    const auto* common = inputs.samplers->common(device)
+                         | kdl::value_or(static_cast<const SamplerSet::Common*>(nullptr));
+    if (!common)
+    {
+      return false;
+    }
+    auto samplerKey = BindingSetKey{};
+    samplerKey.layout = layouts[2].Get();
+    samplerKey.samplers = 5;
+    samplerKey.resources = {common->linearWrap.Get()};
+    sets[2] =
+      cache
+        .get(
+          samplerKey,
+          frameIndex,
+          [&] {
+            return device.createBindingSet(
+              nvrhi::BindingSetDesc{}.addItem(Item::Sampler(0, common->linearWrap)),
+              layouts[2]);
+          })
+        .Get();
+    return sets[2] != nullptr;
   }
   case EngineBindingLayout::PostProcessIngame: {
     // LP5.2a (C47): s0 LinearClamp (RenderBackend_NVRHI.cpp:1464-1512; PointClamp only

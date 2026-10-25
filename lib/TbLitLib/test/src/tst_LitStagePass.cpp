@@ -42,6 +42,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -324,6 +325,24 @@ const char* const StageMaterials =
   "2 } }\n"
   "textures/lp5t/screen { { blend add map textures/lp5t/glow screen } }\n"
   "textures/lp5t/reflect { { blend add cubeMap env/lp5t texgen reflect } }\n"
+  "textures/lp5t/bumpy_reflect\n"
+  "{\n"
+  "  translucent\n"
+  "  bumpmap textures/lp5t/local\n"
+  "  { blend add cubeMap env/lp5t texgen reflect }\n"
+  "}\n"
+  "textures/lp5t/reflect2 { { blend add cubeMap env/lp5t texgen reflect2 } }\n"
+  "textures/lp5t/bumpy_reflect2\n"
+  "{\n"
+  "  translucent\n"
+  "  bumpmap textures/lp5t/local\n"
+  "  { blend add cubeMap env/lp5t texgen reflect2 }\n"
+  "}\n"
+  "textures/lp5t/skybox { { cubeMap env/lp5t texgen skybox } }\n"
+  "textures/lp5t/wobble { { cubeMap env/lp5t texgen wobbleSky 0 0 0 } }\n"
+  "textures/lp5t/wobble_tilted { { cubeMap env/lp5t texgen wobbleSky 30 2 + 1 6 } }\n"
+  "textures/lp5t/normal_cube { { blend add map textures/lp5t/glow texgen normal } }\n"
+  "textures/lp5t/glasswarp { { blend add map textures/lp5t/glow glassWarp } }\n"
   "textures/lp5t/movie { { blend add videomap video/lp5t.roq } }\n"
   "textures/lp5t/backbox { translucent backSided { blend blend map textures/lp5t/glow } "
   "}\n"
@@ -514,22 +533,135 @@ TEST_CASE(
     CHECK(far.depthBias == -1200.0f);
   }
 
-  SECTION("the texgens: screen on 18, a cube texgen LP5.2b's, a cinematic not drawn")
+  SECTION("the texgens: screen on 18, a cinematic not drawn")
   {
     const auto screen = drawsOf("textures/lp5t/screen", WhiteParms);
     REQUIRE(screen.draws.size() == 1u);
     CHECK(screen.draws[0].program == StageProgram::TextureColorTexgen);
     CHECK(screen.draws[0].screenTexgen);
-
-    const auto reflect = drawsOf("textures/lp5t/reflect", WhiteParms);
-    CHECK(reflect.draws.empty());
-    CHECK(reflect.texgenDeferred == 1u);
-    CHECK(reflect.skipped == 1u);
+    CHECK_FALSE(engineStageProgramSamplesCube(screen.draws[0].program));
 
     const auto movie = drawsOf("textures/lp5t/movie", WhiteParms);
     CHECK(movie.draws.empty());
     CHECK(movie.cinematic == 1u);
     CHECK(movie.skipped == 1u);
+  }
+
+  SECTION(
+    "LP5.2b (C48): the cube and sky texgens on 55, 57, 69 and 70; reflect2 skipped; "
+    "normal and glassWarp on 15 with a warning")
+  {
+    // TG_REFLECT_CUBE without a bump stage: environment (55)
+    const auto reflect = drawsOf("textures/lp5t/reflect", WhiteParms);
+    REQUIRE(reflect.draws.size() == 1u);
+    CHECK(reflect.skipped == 0u);
+    CHECK(reflect.draws[0].program == StageProgram::Environment);
+    CHECK(reflect.draws[0].bumpStage == -1);
+    CHECK(engineStageProgramSamplesCube(reflect.draws[0].program));
+    CHECK(reflect.draws[0].color == Vec4{1.0f, 1.0f, 1.0f, 1.0f});
+    CHECK(blendOf(reflect.draws[0].state) == (gls::SrcBlendOne | gls::DstBlendOne));
+    {
+      const auto material = parsed(decls, "textures/lp5t/reflect");
+      REQUIRE(material->stages[0].image);
+      // cubeMap: CF_NATIVE (Material.cpp:1270-1273)
+      CHECK(material->stages[0].image->cube == 1);
+      CHECK(material->stages[0].texgen == em::TexgenReflectCube);
+      CHECK(engineBumpStage(*material) == -1);
+    }
+
+    // with a bump stage (GetBumpStage, Material.cpp:3796-3806): bumpyenvironment (57),
+    // the bump stage's index carried for unit 1
+    {
+      const auto material = parsed(decls, "textures/lp5t/bumpy_reflect");
+      const auto bump = engineBumpStage(*material);
+      REQUIRE(bump >= 0);
+      CHECK(material->stages[std::size_t(bump)].lighting == em::LightingBump);
+      const auto bumpy = drawsOf("textures/lp5t/bumpy_reflect", WhiteParms);
+      REQUIRE(bumpy.draws.size() == 1u);
+      CHECK(bumpy.draws[0].program == StageProgram::BumpyEnvironment);
+      CHECK(bumpy.draws[0].bumpStage == bump);
+      CHECK(
+        material->stages[std::size_t(bumpy.draws[0].stage)].lighting
+        == em::LightingAmbient);
+    }
+
+    // TG_REFLECT_CUBE2, with or without a bump stage: not drawn (LP6's inputs; a cube in
+    // texture_color's Texture2D), counted
+    for (const auto* name : {"textures/lp5t/reflect2", "textures/lp5t/bumpy_reflect2"})
+    {
+      CAPTURE(name);
+      const auto result = drawsOf(name, WhiteParms);
+      CHECK(result.draws.empty());
+      CHECK(result.skipped == 1u);
+      CHECK(result.texgenLp6 == 1u);
+    }
+
+    // TG_SKYBOX_CUBE: skybox (69); one stage, not blended: opaque, EQUAL
+    const auto skybox = drawsOf("textures/lp5t/skybox", WhiteParms);
+    REQUIRE(skybox.draws.size() == 1u);
+    CHECK(skybox.draws[0].program == StageProgram::SkyBox);
+    CHECK((skybox.draws[0].state & gls::DepthFuncBits) == gls::DepthFuncEqual);
+    // the texture matrix is loaded for every stage (RB_LoadShaderTextureMatrix): identity
+    CHECK(skybox.draws[0].textureMatrix[0] == Vec4{1.0f, 0.0f, 0.0f, 0.0f});
+    CHECK(skybox.draws[0].textureMatrix[1] == Vec4{0.0f, 1.0f, 0.0f, 0.0f});
+
+    // TG_WOBBLESKY_CUBE: wobblesky (70), its transform at time 0; rates 0: the identity
+    const auto wobble = drawsOf("textures/lp5t/wobble", WhiteParms);
+    REQUIRE(wobble.draws.size() == 1u);
+    CHECK(wobble.draws[0].program == StageProgram::WobbleSky);
+    CHECK(wobble.draws[0].wobbleSky[0] == Vec4{1.0f, 0.0f, 0.0f, 0.0f});
+    CHECK(wobble.draws[0].wobbleSky[1] == Vec4{0.0f, 1.0f, 0.0f, 0.0f});
+    CHECK(wobble.draws[0].wobbleSky[2] == Vec4{0.0f, 0.0f, 1.0f, 0.0f});
+    // SVC_IGNORE: modulate 0, add 1 (the colour the shader takes, not rpColor)
+    CHECK(wobble.draws[0].vertexColor[0] == Vec4{0.0f, 0.0f, 0.0f, 0.0f});
+    CHECK(wobble.draws[0].vertexColor[1] == Vec4{1.0f, 1.0f, 1.0f, 1.0f});
+
+    // the texGenRegisters through the registers (a tilt of 30 degrees, rates 2 + 1 and 6
+    // per minute): at time 0 by hand (RenderBackend.cpp:530-565): s 0, c 1, rs 0, rc 1,
+    // ws sin 30° 0.5, wc cos 30°; axis[2] = ( ws, 0, wc ), axis[1] = ( 0, 1, 0 ),
+    // axis[0] = axis[1] × axis[2] = ( wc, 0, -ws ); the rows axis[0], axis[1], axis[2]
+    {
+      const auto material = parsed(decls, "textures/lp5t/wobble_tilted");
+      const auto registers = registersOf(decls, *material, WhiteParms);
+      CHECK(engineRegister(registers, material->texGenRegisters[0]) == 30.0f);
+      CHECK(engineRegister(registers, material->texGenRegisters[1]) == 3.0f);
+      CHECK(engineRegister(registers, material->texGenRegisters[2]) == 6.0f);
+      const auto result = engineShaderPassDraws(*material, registers);
+      REQUIRE(result.draws.size() == 1u);
+      const auto& rows = result.draws[0].wobbleSky;
+      const auto ws = 0.5f;
+      const auto wc = std::sqrt(3.0f) * 0.5f;
+      const auto want = std::array<Vec4, 3>{
+        Vec4{wc, 0.0f, -ws, 0.0f},
+        Vec4{0.0f, 1.0f, 0.0f, 0.0f},
+        Vec4{ws, 0.0f, wc, 0.0f}};
+      for (std::size_t r = 0; r < 3; ++r)
+      {
+        for (std::size_t i = 0; i < 4; ++i)
+        {
+          CAPTURE(r, i, rows[r][i], want[r][i]);
+          CHECK(std::abs(rows[r][i] - want[r][i]) < 1e-6f);
+        }
+      }
+      CHECK(engineStageWobbleSky(*material, registers) == rows);
+      // the time moves it (the engine's renderView.time[0]; the preview's is 0, K5): at
+      // 5 s the wobble has turned a quarter (3 per minute: 2 PI · 3 / 60 · 5 = PI / 2)
+      const auto later = engineStageWobbleSky(*material, registers, 5000.0f);
+      CHECK(std::abs(later[2][0]) < 1e-5f);
+      CHECK(std::abs(later[2][1] - ws) < 1e-5f);
+    }
+
+    // TG_DIFFUSE_CUBE and TG_GLASSWARP: the engine warns and changes nothing (:625-635)
+    for (const auto* name : {"textures/lp5t/normal_cube", "textures/lp5t/glasswarp"})
+    {
+      CAPTURE(name);
+      const auto result = drawsOf(name, WhiteParms);
+      REQUIRE(result.draws.size() == 1u);
+      CHECK(result.draws[0].program == StageProgram::TextureColor);
+      CHECK(result.draws[0].texgenWarning);
+      CHECK_FALSE(result.draws[0].screenTexgen);
+    }
+    CHECK_FALSE(drawsOf("textures/lp5t/add", WhiteParms).draws[0].texgenWarning);
   }
 
   SECTION("the cull: two-sided none, back-sided the engine's front-sided decode (D117)")

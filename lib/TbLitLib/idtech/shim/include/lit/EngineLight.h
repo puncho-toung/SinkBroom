@@ -333,6 +333,19 @@ EnginePlane engineGlobalPlaneToLocal(
 void engineBakeTextureMatrixIntoTexgen(
   std::array<EnginePlane, 4>& lightProject, const EngineGlMatrix& textureMatrix);
 
+/**
+ * LP5.2b (C48, K5, D119): PrepareStageTexturing's TG_WOBBLESKY_CUBE transform
+ * (RenderBackend.cpp:530-565) on the copied idMath and idVec3: the tilt wobbleDegrees ·
+ * PI / 180, the wobble and rotate speeds · 2 PI / 60 (rates per minute), the "very ad-hoc
+ * wobble" axes at the time timeMs · 0.001 (renderView.time[0], milliseconds: the
+ * preview's material time is 0, K5), then the rotate: the three rows of the 3 × 4
+ * transform SetVertexParms( RENDERPARM_WOBBLESKY_X, transform, 3 ) loads, w 0 each. The
+ * engine reads the three values as shaderRegisters[ GetTexGenRegisters()[i] ]; the caller
+ * passes them read. Pure; any thread.
+ */
+std::array<std::array<float, 4>, 3> engineWobbleSkyTransform(
+  float wobbleDegrees, float wobbleRate, float rotateRate, float timeMs);
+
 // ----- the static interactions' light triangles (DX.2; the copy, pure) -----
 
 /**

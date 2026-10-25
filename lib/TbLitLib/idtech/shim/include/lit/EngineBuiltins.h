@@ -1476,6 +1476,14 @@ inline constexpr int EngineBuiltinInteraction = 19;
 // LP5.1 (C45, D114): an ambientLight light's (RenderProgs.h:399-400)
 inline constexpr int EngineBuiltinInteractionAmbient = 21;
 inline constexpr int EngineBuiltinPbrInteraction = 23;
+// LP5.2b (C48): the cube and sky texgens' programs, which PrepareStageTexturing binds
+// over texture_color (RenderProgs.h:469, 471, 485-486): BUILTIN_ENVIRONMENT
+// (TG_REFLECT_CUBE), BUILTIN_BUMPY_ENVIRONMENT (TG_REFLECT_CUBE with a bump stage),
+// BUILTIN_SKYBOX and BUILTIN_WOBBLESKY
+inline constexpr int EngineBuiltinEnvironment = 55;
+inline constexpr int EngineBuiltinBumpyEnvironment = 57;
+inline constexpr int EngineBuiltinSkyBox = 69;
+inline constexpr int EngineBuiltinWobbleSky = 70;
 inline constexpr int EngineBuiltinDepth = 63;
 inline constexpr int EngineBuiltinBlit = 108;
 inline constexpr int EngineBuiltinRect = 109;

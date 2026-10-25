@@ -180,6 +180,23 @@ struct PrepassDraw
 };
 
 /**
+ * idMaterial::GetBumpStage (Material.cpp:3796-3806): the first SL_BUMP stage, -1 when
+ * there is none. Pure.
+ */
+int engineBumpStage(const MaterialEntry& material);
+
+/**
+ * LP5.2b (C48, K5, D119): a TG_WOBBLESKY_CUBE stage's WOBBLESKY_X..Z
+ * (RenderBackend.cpp:530-565): engineWobbleSkyTransform of the registers at the
+ * material's three texGenRegisters (the tilt in degrees, the wobble and rotate rates per
+ * minute) at the time timeMs: the preview's material time is 0 (K5), and the engine's
+ * renderView.time[0] has no renderparm of its own (it reaches the shader only through
+ * this transform), so the stage pass and the prepass pass 0. Pure.
+ */
+std::array<Vec4, 3> engineStageWobbleSky(
+  const MaterialEntry& material, std::span<const float> registers, float timeMs = 0.0f);
+
+/**
  * FillDepthBufferGeneric for one surface of a material whose registers are given:
  * nothing for a translucent material or one whose every stage is conditioned off; for a
  * perforated material one TextureColor draw per alpha-tested stage whose condition is on
@@ -367,7 +384,21 @@ enum class StageProgram
   // a newStage block's program (C47, D121), POST_PROCESS_INGAME: the material-program
   // table's row of its fragmentProgram
   Material,
+  // LP5.2b (C48): PrepareStageTexturing's programs over texture_color (RenderBackend.cpp:
+  // 360-392, 526-586): BUILTIN_ENVIRONMENT (55), DEFAULT: TG_REFLECT_CUBE without a bump
+  // stage
+  Environment,
+  // BUILTIN_BUMPY_ENVIRONMENT (57), NORMAL_CUBE: TG_REFLECT_CUBE with one, its image raw
+  // at unit 1
+  BumpyEnvironment,
+  // BUILTIN_SKYBOX (69), LEGACY: TG_SKYBOX_CUBE
+  SkyBox,
+  // BUILTIN_WOBBLESKY (70), LEGACY: TG_WOBBLESKY_CUBE, WOBBLESKY_X..Z
+  WobbleSky,
 };
+
+// whether a stage-pass or prepass program samples a TextureCube at t0 (55, 57, 69, 70)
+bool engineStageProgramSamplesCube(StageProgram program);
 
 /**
  * One draw DrawShaderPasses makes of a surface's stage (RenderBackend.cpp:4434-4702): the
@@ -378,6 +409,9 @@ enum class StageProgram
  * PrepareStageTexturing's texture matrix and whether TG_SCREEN's planes are loaded
  * (TEXGEN_0_ENABLED 1); for a newStage block USER0 + j of each vertexParm j through the
  * registers (no colour, vertex colour or texture matrix is set for it, :4509-4570).
+ * LP5.2b (C48): for BumpyEnvironment the bump stage whose image unit 1 binds, for
+ * WobbleSky its WOBBLESKY_X..Z at time 0 (K5), and whether PrepareStageTexturing warned
+ * for the stage (TG_DIFFUSE_CUBE, TG_GLASSWARP, :625-635: drawn on texture_color).
  */
 struct StagePassDraw
 {
@@ -391,18 +425,21 @@ struct StagePassDraw
   std::array<Vec4, 2> textureMatrix = {};
   bool screenTexgen = false;
   std::vector<Vec4> userParms;
+  int bumpStage = -1;
+  std::array<Vec4, 3> wobbleSky = {};
+  bool texgenWarning = false;
 };
 
 /**
  * What the stage loop of one surface leaves: its draws in stage order and the
- * SL_AMBIENT stages it did not draw (skipped: every reason summed; of them those of a
- * cube or sky texgen, LP5.2b's, and those of a cinematic, D120).
+ * SL_AMBIENT stages it did not draw (skipped: every reason summed; of them those of
+ * TG_REFLECT_CUBE2, LP6's (texgenLp6), and those of a cinematic, D120).
  */
 struct StagePassSurface
 {
   std::vector<StagePassDraw> draws;
   std::size_t skipped = 0;
-  std::size_t texgenDeferred = 0;
+  std::size_t texgenLp6 = 0;
   std::size_t cinematic = 0;
 };
 
@@ -421,11 +458,15 @@ struct StagePassSurface
  * writeMask ) as the engine maps them (the other values add no bits); a newStage block
  * (unless r_skipNewAmbient) one Material draw with its vertexParms; an old-style stage
  * skipped for ONE / ONE with rgb at most 0 and SRC_ALPHA / ONE_MINUS_SRC_ALPHA with
- * alpha at most 0, a cinematic (D120) and a cube or sky texgen (TG_DIFFUSE_CUBE,
- * TG_REFLECT_CUBE, TG_REFLECT_CUBE2, TG_SKYBOX_CUBE, TG_WOBBLESKY_CUBE, TG_GLASSWARP:
- * LP5.2b's, counted in texgenDeferred), else one draw, TG_SCREEN and TG_SCREEN2 on 18,
- * the rest on 15, with the stage's privatePolygonOffset. No ALPHA_TEST is set (SC520).
- * Pure.
+ * alpha at most 0 and a cinematic (D120), else one draw with the stage's
+ * privatePolygonOffset, its program by the texgen (LP5.2b, C48, PrepareStageTexturing
+ * :352-638 after the program choice of :4604-4671): TG_SCREEN and TG_SCREEN2 on 18,
+ * TG_REFLECT_CUBE on 55 or, with a bump stage (GetBumpStage), on 57, TG_SKYBOX_CUBE on
+ * 69, TG_WOBBLESKY_CUBE on 70 with its transform at time 0 (K5); TG_REFLECT_CUBE2 not
+ * drawn (with a bump stage programs 59-62 need LP6's inputs, without one texture_color
+ * would sample a cube as a Texture2D: counted in texgenLp6, mirror.json M-STAGE-DIFF-05);
+ * TG_DIFFUSE_CUBE and TG_GLASSWARP, which only warn there, on 15 as TG_EXPLICIT is,
+ * texgenWarning set. No ALPHA_TEST is set (SC520). Pure.
  */
 StagePassSurface engineShaderPassDraws(
   const MaterialEntry& material, std::span<const float> registers);

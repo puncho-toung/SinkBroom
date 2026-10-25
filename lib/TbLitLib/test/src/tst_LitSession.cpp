@@ -11981,7 +11981,7 @@ TEST_CASE("LitSession pass 8, the material stage pass, on a GPU (LP5.2a)", "[.][
     CHECK(stats.stagePostProcess == 1u);
     CHECK(stats.stageCinematic == 1u);
     CHECK(stats.stageSkipped == 1u);
-    CHECK(stats.stageTexgenDeferred == 0u);
+    CHECK(stats.stageTexgenLp6 == 0u);
     CHECK(stats.stageProgramMissing == 0u);
     CHECK(stats.stagePending == 0u);
 
