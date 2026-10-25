@@ -579,8 +579,9 @@ public:
   std::uint64_t framesPresented() const;
   /**
    * LP2.2b (D77), any thread: the last frame drawn was settled: no pending pipeline,
-   * material, evaluation or image, no provisional chunk, every texture's levels written,
-   * no draw skipped; a settled session draws nothing until a trigger.
+   * material, evaluation or image, no provisional chunk (LP5.F: none built at a Default
+   * size whose measure is still to come), every texture's levels written, no draw
+   * skipped; a settled session draws nothing until a trigger.
    */
   bool lastFrameSettledForTesting() const;
   // the swapchain generations made so far; GUI thread

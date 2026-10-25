@@ -31,6 +31,7 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <limits>
@@ -71,6 +72,14 @@ bool originIn(const MaterialTable* table, const std::string& material)
 {
   const auto slot = table ? table->find(material) : nullptr;
   return slot && slot->entry && (slot->entry->contentFlags & ContentsOrigin) != 0;
+}
+
+// LP5.F (S2.2): the material's editor-image size in a table is final: its slot is
+// measured, or Failed (no entry, no image)
+bool sizeMeasuredIn(const MaterialTable* table, const std::string& material)
+{
+  const auto slot = table ? table->find(material) : nullptr;
+  return slot && (!slot->entry || slot->sizeMeasured);
 }
 
 // removes refs from every set of waiting, and the sets that are empty then
@@ -416,7 +425,7 @@ void SceneGeometry::refreshTable()
 
 bool SceneGeometry::waitsForMaterials() const
 {
-  return !m_pendingMaterials.empty();
+  return !m_pendingMaterials.empty() || m_waitsForMeasure;
 }
 
 bool SceneGeometry::waitsForEntityDefs() const
@@ -472,6 +481,12 @@ void SceneGeometry::forgetSizedCells(const std::vector<CellRef>& cells)
   }
 }
 
+void SceneGeometry::updateMeasureWait()
+{
+  m_waitsForMeasure = std::ranges::any_of(
+    m_sizedCells, [](const auto& sized) { return !sized.second.measured; });
+}
+
 void SceneGeometry::scanTable()
 {
   // C37: a new table may answer an entityDef the probes wait for, or bring a bake
@@ -521,9 +536,13 @@ void SceneGeometry::scanTable()
     }
     else
     {
+      // LP5.F: a measure that found the size the cells were built with ends their wait
+      it->second.measured =
+        it->second.measured || sizeMeasuredIn(m_table.get(), it->first);
       ++it;
     }
   }
+  updateMeasureWait();
   // LPF.0b (C43, D106, P5.9): a re-parse moved the table's materialsRevision: the cells
   // of every material whose revision stamp is no more the one they were built with are
   // built again (whether the material made a chunk or not), and an entity whose material
@@ -753,6 +772,15 @@ void SceneGeometry::apply(ChunkJobOutput output)
     if (sized.cells.empty())
     {
       sized.size = tableSizeOf(chunk.key.material);
+      // LP5.F (D77, A41): a chunk built at a Default size while its slot is unmeasured
+      // waits for the measure (waitsForMaterials); a measured Default is final
+      sized.measured =
+        !chunk.provisional || sizeMeasuredIn(m_table.get(), chunk.key.material);
+      if (!sized.measured && m_materials)
+      {
+        // a slot the bulk parse published is measured once looked up (S2.2)
+        static_cast<void>(m_materials->lookup(chunk.key.material));
+      }
     }
     sized.cells.insert(ref);
     auto key = chunk.key;
@@ -767,6 +795,7 @@ void SceneGeometry::apply(ChunkJobOutput output)
       static_cast<void>(m_materials->lookup(material));
     }
   }
+  updateMeasureWait();
   if (!output.cells.empty())
   {
     m_solidPieces[output.cells.front()] += output.solidPieces;

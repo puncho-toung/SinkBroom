@@ -141,9 +141,10 @@ struct FrameConvergence
   bool uploadsLeft = false;
   // slots the material table has not answered yet
   bool imagesPending = false;
-  // chunks built with the defaults of a material the table does not have yet (D77's
-  // provisional chunks; one of a C21 Default size whose material the table has is
-  // final: the engine's 8 × 8 for an image it cannot load)
+  // chunks built with the defaults of a material the table does not have yet, or (LP5.F,
+  // A41) at a C21 Default size while the material's size was not measured (D77's
+  // provisional chunks, SceneGeometry::waitsForMaterials); one of a Default size whose
+  // slot is measured is final: the engine's 8 × 8 for an image it cannot load
   bool provisionalChunks = false;
   // the tonemap passes' colour LUT has no written level yet
   bool lutPending = false;

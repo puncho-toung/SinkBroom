@@ -132,10 +132,13 @@ private:
 
   // the cells of each material and the editor-image size they were built with (LP1c fix
   // S2.5: a cell is built again when the table's size of its material changes, Default to
-  // Ready, Ready to another Ready, or back to Default)
+  // Ready, Ready to another Ready, or back to Default); LP5.F (D77, A41): measured is
+  // false while that size is a Default (Chunk::provisional) whose slot is not measured
+  // yet, until a scanned table's slot is measured at the same size
   struct SizedCells
   {
     EditorImageSize size;
+    bool measured = true;
     std::set<CellRef> cells;
   };
 
@@ -147,6 +150,8 @@ private:
   std::unordered_map<PreviewId, ChunkEntityState> m_entityStates;
   std::map<std::string, std::set<CellRef>> m_pendingMaterials;
   std::map<std::string, SizedCells> m_sizedCells;
+  // LP5.F: a sized cell's measured is false (updated with m_sizedCells)
+  bool m_waitsForMeasure = false;
   std::map<std::string, std::set<PreviewId>> m_pendingEntityDefs;
   std::map<CellRef, std::size_t> m_solidPieces;
   /**
@@ -259,9 +264,12 @@ public:
   std::vector<std::string> takeWarnings();
   /**
    * LP2.2b (D77): chunks were built with the defaults of a material the table does not
-   * have yet; they are built again when it has it. A chunk of a Default editor-image size
-   * (Chunk::provisional) whose material the table has is the engine's own answer for an
-   * image it cannot load (C21's 8 × 8), rebuilt only when a file changes (S2.5).
+   * have yet; they are built again when it has it. LP5.F (A41): or a chunk of a Default
+   * editor-image size (Chunk::provisional) was built while its material's size was not
+   * measured yet (MaterialSlot::sizeMeasured); the wait ends when a table the scene scans
+   * has the slot measured, and the cells are built again when its size differs (S2.5).
+   * One built from a measured Default slot is the engine's own answer for an image it
+   * cannot load (C21's 8 × 8), rebuilt only when a file changes (S2.5).
    */
   bool waitsForMaterials() const;
   // DX.4: entities were built with default parms while their classname's entityDef was
@@ -293,6 +301,8 @@ private:
   // has none)
   EditorImageSize tableSizeOf(const std::string& material) const;
   void forgetSizedCells(const std::vector<CellRef>& cells);
+  // LP5.F: m_waitsForMeasure from m_sizedCells
+  void updateMeasureWait();
   void forgetMaterialCells(const std::vector<CellRef>& cells);
   void apply(ChunkJobOutput output);
   // C31, D80: the touched entities' bounds and area references from their chunks
