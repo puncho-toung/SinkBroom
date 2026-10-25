@@ -2270,7 +2270,7 @@ TEST_CASE("MaterialService, map bakes on the parse thread (C10, D64)")
   // LP7.0 (C54): the tree keeps the .proc's geometry, and its bytes are the stats' (the
   // two slots without a tree count nothing)
   CHECK(found->bake->procBytes == procTreeBytes(*found->tree));
-  CHECK(found->tree->models.front().surfaces.front().verts.size() > 0u);
+  CHECK_FALSE(found->tree->models.front().surfaces.front().verts.empty());
   CHECK(service->waitForStatsForTesting(
     [&](const MaterialServiceStats& s) { return s.procBytes == found->bake->procBytes; },
     10s));
