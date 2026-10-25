@@ -1671,6 +1671,18 @@
 // entity 21
 {
 "classname" "light"
+"name" "lp5_s13_parallel"
+"origin" "16576 192 96"
+"light_radius" "300 300 200"
+"light_center" "-1 0 0"
+"parallel" "1"
+"texture" "lights/lp2/flat"
+"_color" "0 0 0"
+"noshadows" "1"
+}
+// entity 22
+{
+"classname" "light"
 "name" "lp5_s14_parallel"
 "origin" "17600 192 96"
 "light_radius" "300 300 200"
