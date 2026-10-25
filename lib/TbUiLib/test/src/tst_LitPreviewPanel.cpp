@@ -589,10 +589,9 @@ std::vector<ProcessThread> newThreads(
   auto result = std::vector<ProcessThread>{};
   for (const auto& thread : now.threadSet)
   {
-    const auto had = std::any_of(
-      baseline.threadSet.begin(), baseline.threadSet.end(), [&](const auto& old) {
-        return old.id == thread.id && old.start == thread.start;
-      });
+    const auto had = std::ranges::any_of(baseline.threadSet, [&](const auto& old) {
+      return old.id == thread.id && old.start == thread.start;
+    });
     if (!had)
     {
       result.push_back(thread);
