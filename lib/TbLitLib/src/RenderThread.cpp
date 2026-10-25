@@ -21,6 +21,7 @@
 
 #include "GpuDevice.h"
 #include "SessionEvents.h"
+#include "StackThread.h"
 #include "Swapchain.h"
 #include "lit/EngineTables.h"
 #include "lit/MapBake.h"
@@ -322,6 +323,7 @@ void RenderThread::start(
   m_geometry = std::make_unique<SceneGeometry>(
     m_pool, m_materials, std::move(lights), std::move(probes), std::move(grids));
   m_thread = std::thread{[this] { main(); }};
+  libraryThreadStarted();
 }
 
 void RenderThread::setCamera(const CameraState& camera)
@@ -523,6 +525,7 @@ void RenderThread::join()
   if (m_thread.joinable())
   {
     m_thread.join();
+    libraryThreadJoined();
   }
 }
 

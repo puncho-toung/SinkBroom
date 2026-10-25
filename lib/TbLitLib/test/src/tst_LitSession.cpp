@@ -466,37 +466,10 @@ struct Events
 
 // U2.12: the process's threads and OS handles, as TbUiLibTest's checkCounts counts them
 // (tst_LitPreviewPanel.cpp), with its tolerance and the driver's measured cost of one
-// device (one handle)
-struct ProcessCounts
-{
-  long threads = 0;
-  long handles = 0;
-};
-
+// device (one handle); LitTestUtils' processCounts, a new thread failing only when its
+// start is not inside ntdll (LP5.3 step 0)
 constexpr auto HandleTolerance = 8L;
 constexpr auto DriverHandlesPerSession = 1L;
-
-ProcessCounts processCounts()
-{
-  auto counts = ProcessCounts{};
-  auto handles = DWORD{0};
-  GetProcessHandleCount(GetCurrentProcess(), &handles);
-  counts.handles = long(handles);
-  const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-  if (snapshot != INVALID_HANDLE_VALUE)
-  {
-    auto entry = THREADENTRY32{};
-    entry.dwSize = sizeof(entry);
-    const auto processId = GetCurrentProcessId();
-    for (auto found = Thread32First(snapshot, &entry); found;
-         found = Thread32Next(snapshot, &entry))
-    {
-      counts.threads += entry.th32OwnerProcessID == processId ? 1 : 0;
-    }
-    CloseHandle(snapshot);
-  }
-  return counts;
-}
 
 void pumpMessages()
 {
@@ -5841,6 +5814,8 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     for (auto i = 0L; i < cycles; ++i)
     {
       cycle();
+      // LP5.3 step 0: the library's own threads, exactly (none outlives the teardown)
+      CHECK(LitSession::liveThreadsForTesting() == 0);
     }
     const auto maxHandles =
       baseline.handles + HandleTolerance + cycles * DriverHandlesPerSession;
@@ -5848,15 +5823,19 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     const auto settled = waitFor(
       [&] {
         counts = processCounts();
-        return counts.threads <= baseline.threads && counts.handles <= maxHandles;
+        return newForeignThreads(baseline, counts).empty()
+               && counts.handles <= maxHandles;
       },
       3000ms,
       false);
     std::cout << "U2.12: " << cycles << " blob-backed sessions: threads "
-              << baseline.threads << " -> " << counts.threads << ", handles "
-              << baseline.handles << " -> " << counts.handles << " (allowed "
-              << maxHandles << ")" << (settled ? "" : " (not settled)") << "\n";
-    CHECK(counts.threads <= baseline.threads);
+              << baseline.threads << " -> " << counts.threads << " (new outside ntdll: "
+              << describeThreads(newForeignThreads(baseline, counts))
+              << "; new in all: " << describeThreads(newThreads(baseline, counts))
+              << "), handles " << baseline.handles << " -> " << counts.handles
+              << " (allowed " << maxHandles << ")" << (settled ? "" : " (not settled)")
+              << "\n";
+    CHECK(newForeignThreads(baseline, counts).empty());
     CHECK(counts.handles <= maxHandles);
   }
 

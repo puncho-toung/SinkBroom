@@ -22,6 +22,7 @@
 #include "base/Result.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 
 #if !defined(_WIN32)
@@ -67,5 +68,18 @@ public:
   bool joinable() const;
   void join();
 };
+
+/**
+ * LP5.3 step 0, any thread: the threads of this library started and not yet joined
+ * (every StackThread and the render thread's std::thread), process-wide. After a
+ * session's teardown and its service's join nothing is left (the user's "no thread
+ * outlives Stop", exact where a process-wide thread count is not: the OS adds pool
+ * workers of its own, 44-FEED-THREAD-FLAKE.md). Tests read it through
+ * LitSession::liveThreadsForTesting.
+ */
+std::int64_t liveLibraryThreads();
+// called once by an owner whose thread started and once when it was joined
+void libraryThreadStarted();
+void libraryThreadJoined();
 
 } // namespace tb::lit

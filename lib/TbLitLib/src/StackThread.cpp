@@ -31,6 +31,7 @@
 
 #include <fmt/format.h>
 
+#include <atomic>
 #include <cassert>
 #include <cerrno>
 #include <exception>
@@ -42,6 +43,9 @@ namespace tb::lit
 {
 namespace
 {
+
+// LP5.3 step 0: started and not yet joined
+std::atomic<std::int64_t> s_liveThreads = 0;
 
 using Body = std::function<void()>;
 using Escaped = std::function<void(const char* reason)>;
@@ -148,6 +152,7 @@ Result<void> StackThread::start(Body body, const std::size_t stackBytes, Escaped
 
   // the thread owns it now
   static_cast<void>(argument.release());
+  libraryThreadStarted();
   return kdl::void_success;
 }
 
@@ -168,14 +173,31 @@ void StackThread::join()
     WaitForSingleObject(m_handle, INFINITE);
     CloseHandle(m_handle);
     m_handle = nullptr;
+    libraryThreadJoined();
   }
 #else
   if (m_started)
   {
     pthread_join(m_thread, nullptr);
     m_started = false;
+    libraryThreadJoined();
   }
 #endif
+}
+
+std::int64_t liveLibraryThreads()
+{
+  return s_liveThreads.load();
+}
+
+void libraryThreadStarted()
+{
+  ++s_liveThreads;
+}
+
+void libraryThreadJoined()
+{
+  --s_liveThreads;
 }
 
 } // namespace tb::lit

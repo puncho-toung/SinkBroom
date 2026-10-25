@@ -723,6 +723,12 @@ public:
    */
   static std::int64_t liveDeviceMemoryAllocationsForTesting();
   /**
+   * LP5.3 step 0, any thread: the library's threads started and not yet joined (every
+   * StackThread and the render thread), process-wide; 0 after a session's teardown and
+   * its service's join. Tests only.
+   */
+  static std::int64_t liveThreadsForTesting();
+  /**
    * LP2.2b (C29, P2.25), any thread but the render thread: readbackLdr (LPF.2), nullopt
    * for its error. Size the session first (create, resizeHeadlessForTesting): the target
    * has the frame's extent.

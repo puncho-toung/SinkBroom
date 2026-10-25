@@ -352,37 +352,10 @@ struct Host
   }
 };
 
-// the process's threads and OS handles (U2.12's measure, tst_LitSession's processCounts)
-struct ProcessCounts
-{
-  long threads = 0;
-  long handles = 0;
-};
-
+// the process's threads and OS handles: U2.12's measure, LitTestUtils' processCounts; a
+// check fails on a new thread whose start is not inside ntdll (LP5.3 step 0)
 constexpr auto HandleTolerance = 8L;
 constexpr auto DriverHandlesPerSession = 1L;
-
-ProcessCounts processCounts()
-{
-  auto counts = ProcessCounts{};
-  auto handles = DWORD{0};
-  GetProcessHandleCount(GetCurrentProcess(), &handles);
-  counts.handles = long(handles);
-  const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-  if (snapshot != INVALID_HANDLE_VALUE)
-  {
-    auto entry = THREADENTRY32{};
-    entry.dwSize = sizeof(entry);
-    const auto processId = GetCurrentProcessId();
-    for (auto found = Thread32First(snapshot, &entry); found;
-         found = Thread32Next(snapshot, &entry))
-    {
-      counts.threads += entry.th32OwnerProcessID == processId ? 1 : 0;
-    }
-    CloseHandle(snapshot);
-  }
-  return counts;
-}
 
 template <typename Predicate>
 bool waitFor(Predicate predicate, const std::chrono::milliseconds timeout)
@@ -856,16 +829,23 @@ TEST_CASE(
 #endif
     CHECK(host.validation.errors == 0);
     CHECK(host.validation.warnings == 0);
+    // LP5.3 step 0: the library's own threads, exactly (none outlives the teardown)
+    CHECK(LitSession::liveThreadsForTesting() == 0);
     auto counts = processCounts();
     const auto maxHandles = baseline.handles + HandleTolerance + DriverHandlesPerSession;
     CHECK(waitFor(
       [&] {
         counts = processCounts();
-        return counts.threads <= baseline.threads && counts.handles <= maxHandles;
+        return newForeignThreads(baseline, counts).empty()
+               && counts.handles <= maxHandles;
       },
       3000ms));
     std::cout << "LPF.2 detach: threads " << baseline.threads << " -> " << counts.threads
-              << ", handles " << baseline.handles << " -> " << counts.handles << "\n";
+              << " (new outside ntdll: "
+              << describeThreads(newForeignThreads(baseline, counts))
+              << "; new in all: " << describeThreads(newThreads(baseline, counts))
+              << "), handles " << baseline.handles << " -> " << counts.handles
+              << ", library threads " << LitSession::liveThreadsForTesting() << "\n";
   }
 
   SECTION("the teardown helper, 20 hosts")
@@ -900,6 +880,8 @@ TEST_CASE(
       CHECK(host.validation.errors == 0);
       CHECK(host.validation.warnings == 0);
       CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+      // LP5.3 step 0: the library's own threads, exactly (none outlives the teardown)
+      CHECK(LitSession::liveThreadsForTesting() == 0);
     }
     const auto maxHandles =
       baseline.handles + HandleTolerance + cycles * DriverHandlesPerSession;
@@ -907,12 +889,17 @@ TEST_CASE(
     CHECK(waitFor(
       [&] {
         counts = processCounts();
-        return counts.threads <= baseline.threads && counts.handles <= maxHandles;
+        return newForeignThreads(baseline, counts).empty()
+               && counts.handles <= maxHandles;
       },
       3000ms));
     std::cout << "LPF.2 teardown x" << cycles << ": threads " << baseline.threads
-              << " -> " << counts.threads << ", handles " << baseline.handles << " -> "
-              << counts.handles << " (allowed " << maxHandles << ")\n";
+              << " -> " << counts.threads << " (new outside ntdll: "
+              << describeThreads(newForeignThreads(baseline, counts))
+              << "; new in all: " << describeThreads(newThreads(baseline, counts))
+              << "), handles " << baseline.handles << " -> " << counts.handles
+              << " (allowed " << maxHandles << "), library threads "
+              << LitSession::liveThreadsForTesting() << "\n";
   }
 }
 

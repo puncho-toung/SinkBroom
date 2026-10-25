@@ -26,6 +26,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+// after windows.h
+#include <tlhelp32.h>
 #else
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -35,6 +37,7 @@
 #include <miniz.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <fstream>
 #include <sstream>
@@ -201,6 +204,125 @@ bool setUnixModificationTime(
   times[1].tv_sec = time_t(seconds);
   return utimensat(AT_FDCWD, path.c_str(), times, 0) == 0;
 #endif
+}
+
+ProcessCounts processCounts()
+{
+  auto counts = ProcessCounts{};
+#if defined(_WIN32)
+  // the handles first: the thread handles opened below are closed again, but not before
+  // the count
+  auto handles = DWORD{0};
+  GetProcessHandleCount(GetCurrentProcess(), &handles);
+  counts.handles = long(handles);
+
+  using QueryThread = LONG(WINAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
+  const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+  const auto query = ntdll ? reinterpret_cast<QueryThread>(reinterpret_cast<void*>(
+                               GetProcAddress(ntdll, "NtQueryInformationThread")))
+                           : nullptr;
+  constexpr auto ThreadQuerySetWin32StartAddress = 9;
+
+  const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+  if (snapshot != INVALID_HANDLE_VALUE)
+  {
+    auto entry = THREADENTRY32{};
+    entry.dwSize = sizeof(entry);
+    const auto processId = GetCurrentProcessId();
+    for (auto found = Thread32First(snapshot, &entry); found;
+         found = Thread32Next(snapshot, &entry))
+    {
+      if (entry.th32OwnerProcessID != processId)
+      {
+        continue;
+      }
+      ++counts.threads;
+      auto thread = ProcessThread{entry.th32ThreadID, 0, "?", false};
+      if (const auto handle = OpenThread(THREAD_QUERY_INFORMATION, FALSE, thread.id))
+      {
+        auto start = static_cast<void*>(nullptr);
+        if (
+          query
+          && query(
+               handle,
+               ThreadQuerySetWin32StartAddress,
+               &start,
+               ULONG(sizeof(start)),
+               nullptr)
+               >= 0)
+        {
+          thread.start = reinterpret_cast<std::uintptr_t>(start);
+        }
+        CloseHandle(handle);
+      }
+      auto module = HMODULE{nullptr};
+      if (
+        thread.start != 0
+        && GetModuleHandleExW(
+          GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+            | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+          reinterpret_cast<LPCWSTR>(thread.start),
+          &module))
+      {
+        auto name = std::array<wchar_t, MAX_PATH>{};
+        GetModuleFileNameW(module, name.data(), DWORD(name.size()));
+        thread.where = fmt::format(
+          "{}+0x{:X}",
+          std::filesystem::path{name.data()}.filename().string(),
+          thread.start - reinterpret_cast<std::uintptr_t>(module));
+        thread.inNtdll = module == ntdll;
+      }
+      else if (thread.start != 0)
+      {
+        thread.where = fmt::format("0x{:X}", thread.start);
+      }
+      counts.threadSet.push_back(std::move(thread));
+    }
+    CloseHandle(snapshot);
+  }
+#endif
+  return counts;
+}
+
+std::vector<ProcessThread> newThreads(
+  const ProcessCounts& baseline, const ProcessCounts& now)
+{
+  auto result = std::vector<ProcessThread>{};
+  for (const auto& thread : now.threadSet)
+  {
+    const auto had = std::any_of(
+      baseline.threadSet.begin(), baseline.threadSet.end(), [&](const auto& old) {
+        return old.id == thread.id && old.start == thread.start;
+      });
+    if (!had)
+    {
+      result.push_back(thread);
+    }
+  }
+  return result;
+}
+
+std::vector<ProcessThread> newForeignThreads(
+  const ProcessCounts& baseline, const ProcessCounts& now)
+{
+  auto result = newThreads(baseline, now);
+  std::erase_if(result, [](const auto& thread) { return thread.inNtdll; });
+  return result;
+}
+
+std::string describeThreads(const std::vector<ProcessThread>& threads)
+{
+  if (threads.empty())
+  {
+    return "none";
+  }
+  auto text = std::string{};
+  for (const auto& thread : threads)
+  {
+    text +=
+      fmt::format("{}{} (id {})", text.empty() ? "" : ", ", thread.where, thread.id);
+  }
+  return text;
 }
 
 #if defined(_MSC_VER) && defined(_DEBUG)

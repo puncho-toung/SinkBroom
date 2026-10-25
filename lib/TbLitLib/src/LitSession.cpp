@@ -24,6 +24,7 @@
 #include "PipelineCompiler.h"
 #include "RenderThread.h"
 #include "SessionEvents.h"
+#include "StackThread.h"
 #include "Swapchain.h"
 #include "lit/CpuPool.h"
 #include "lit/EngineBuiltins.h"
@@ -781,6 +782,11 @@ void LitSession::holdProbeBuildsForTesting(const bool hold)
 std::int64_t LitSession::liveDeviceMemoryAllocationsForTesting()
 {
   return liveDeviceMemoryAllocations();
+}
+
+std::int64_t LitSession::liveThreadsForTesting()
+{
+  return liveLibraryThreads();
 }
 
 std::string sessionStatusLine(

@@ -78,6 +78,7 @@
 #include "vm/vec.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -461,12 +462,34 @@ std::chrono::milliseconds millisecondsSince(
     std::chrono::steady_clock::now() - start);
 }
 
+/**
+ * One thread of this process: its id and its Win32 start address
+ * (NtQueryInformationThread class 9, ThreadQuerySetWin32StartAddress), resolved against
+ * the loaded modules as "module+0xOFFSET" ("?" when it cannot be read).
+ */
+struct ProcessThread
+{
+  unsigned long id = 0;
+  std::uintptr_t start = 0;
+  std::string where;
+  bool inNtdll = false;
+};
+
+/**
+ * LP5.3 step 0 (44-FEED-THREAD-FLAKE.md): the thread count alone cannot tell a leak from
+ * the OS's own thread-pool workers, which a session's create or teardown may add (start
+ * inside ntdll) and which live until the process exits, or retire on their own (the
+ * "14 -> 13" readings); so the set is recorded with each thread's start, and a check
+ * fails only on a new thread whose start is not inside ntdll. TbLitLibTest's LitTestUtils
+ * holds the same measure.
+ */
 struct ProcessCounts
 {
   long threads = 0;
   long handles = 0;
   long userObjects = 0;
   long gdiObjects = 0;
+  std::vector<ProcessThread> threadSet;
 };
 
 long handleCount()
@@ -484,6 +507,13 @@ ProcessCounts processCounts()
   counts.userObjects = long(GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS));
   counts.gdiObjects = long(GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS));
 
+  using QueryThread = LONG(WINAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
+  const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+  const auto query = ntdll ? reinterpret_cast<QueryThread>(reinterpret_cast<void*>(
+                               GetProcAddress(ntdll, "NtQueryInformationThread")))
+                           : nullptr;
+  constexpr auto ThreadQuerySetWin32StartAddress = 9;
+
   const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
   if (snapshot != INVALID_HANDLE_VALUE)
   {
@@ -493,14 +523,101 @@ ProcessCounts processCounts()
     for (auto found = Thread32First(snapshot, &entry); found;
          found = Thread32Next(snapshot, &entry))
     {
-      if (entry.th32OwnerProcessID == processId)
+      if (entry.th32OwnerProcessID != processId)
       {
-        ++counts.threads;
+        continue;
       }
+      ++counts.threads;
+      auto thread = ProcessThread{entry.th32ThreadID, 0, "?", false};
+      if (const auto handle = OpenThread(THREAD_QUERY_INFORMATION, FALSE, thread.id))
+      {
+        auto start = static_cast<void*>(nullptr);
+        if (
+          query
+          && query(
+               handle,
+               ThreadQuerySetWin32StartAddress,
+               &start,
+               ULONG(sizeof(start)),
+               nullptr)
+               >= 0)
+        {
+          thread.start = reinterpret_cast<std::uintptr_t>(start);
+        }
+        CloseHandle(handle);
+      }
+      auto module = HMODULE{nullptr};
+      if (
+        thread.start != 0
+        && GetModuleHandleExW(
+          GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+            | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+          reinterpret_cast<LPCWSTR>(thread.start),
+          &module))
+      {
+        auto name = std::array<wchar_t, MAX_PATH>{};
+        GetModuleFileNameW(module, name.data(), DWORD(name.size()));
+        auto where = std::ostringstream{};
+        where << std::filesystem::path{name.data()}.filename().string() << "+0x"
+              << std::hex << std::uppercase
+              << (thread.start - reinterpret_cast<std::uintptr_t>(module));
+        thread.where = where.str();
+        thread.inNtdll = module == ntdll;
+      }
+      else if (thread.start != 0)
+      {
+        auto where = std::ostringstream{};
+        where << "0x" << std::hex << std::uppercase << thread.start;
+        thread.where = where.str();
+      }
+      counts.threadSet.push_back(std::move(thread));
     }
     CloseHandle(snapshot);
   }
   return counts;
+}
+
+// the threads of now that baseline did not have (the same id and start counts as had)
+std::vector<ProcessThread> newThreads(
+  const ProcessCounts& baseline, const ProcessCounts& now)
+{
+  auto result = std::vector<ProcessThread>{};
+  for (const auto& thread : now.threadSet)
+  {
+    const auto had = std::any_of(
+      baseline.threadSet.begin(), baseline.threadSet.end(), [&](const auto& old) {
+        return old.id == thread.id && old.start == thread.start;
+      });
+    if (!had)
+    {
+      result.push_back(thread);
+    }
+  }
+  return result;
+}
+
+// those of newThreads whose start is not inside ntdll: what the check fails on
+std::vector<ProcessThread> newForeignThreads(
+  const ProcessCounts& baseline, const ProcessCounts& now)
+{
+  auto result = newThreads(baseline, now);
+  std::erase_if(result, [](const auto& thread) { return thread.inNtdll; });
+  return result;
+}
+
+std::string describeThreads(const std::vector<ProcessThread>& threads)
+{
+  if (threads.empty())
+  {
+    return "none";
+  }
+  auto text = std::string{};
+  for (const auto& thread : threads)
+  {
+    text += (text.empty() ? "" : ", ") + thread.where + " (id "
+            + std::to_string(thread.id) + ")";
+  }
+  return text;
 }
 
 /**
@@ -719,7 +836,6 @@ void checkProcessCounts(
   const auto& cost = driverCostPerSession();
   const auto driverHandles = driverAllowance(cost.handles, sessionsWithDevice);
   const auto driverGdiObjects = driverAllowance(cost.gdiObjects, sessionsWithDevice);
-  const auto maxThreads = baseline.threads + ThreadTolerance;
   const auto maxHandles = baseline.handles + HandleTolerance + driverHandles;
   const auto maxUserObjects = baseline.userObjects + GuiObjectTolerance;
   const auto maxGdiObjects = baseline.gdiObjects + GuiObjectTolerance + driverGdiObjects;
@@ -727,19 +843,21 @@ void checkProcessCounts(
   const auto settled = QTest::qWaitFor(
     [&] {
       counts = processCounts();
-      return counts.threads <= maxThreads && counts.handles <= maxHandles
-             && counts.userObjects <= maxUserObjects
+      return newForeignThreads(baseline, counts).size() <= std::size_t(ThreadTolerance)
+             && counts.handles <= maxHandles && counts.userObjects <= maxUserObjects
              && counts.gdiObjects <= maxGdiObjects;
     },
     3000);
   std::cout << label << " (" << sessionsWithDevice << " sessions with a device): threads "
-            << baseline.threads << " -> " << counts.threads << ", handles "
-            << baseline.handles << " -> " << counts.handles << " (driver allowance "
-            << driverHandles << "), USER " << baseline.userObjects << " -> "
-            << counts.userObjects << ", GDI " << baseline.gdiObjects << " -> "
-            << counts.gdiObjects << " (driver allowance " << driverGdiObjects << ")"
-            << (settled ? "" : " (not settled)") << "\n";
-  CHECK(counts.threads <= maxThreads);
+            << baseline.threads << " -> " << counts.threads << " (new outside ntdll: "
+            << describeThreads(newForeignThreads(baseline, counts))
+            << "; new in all: " << describeThreads(newThreads(baseline, counts))
+            << "), handles " << baseline.handles << " -> " << counts.handles
+            << " (driver allowance " << driverHandles << "), USER "
+            << baseline.userObjects << " -> " << counts.userObjects << ", GDI "
+            << baseline.gdiObjects << " -> " << counts.gdiObjects << " (driver allowance "
+            << driverGdiObjects << ")" << (settled ? "" : " (not settled)") << "\n";
+  CHECK(newForeignThreads(baseline, counts).size() <= std::size_t(ThreadTolerance));
   CHECK(counts.handles <= maxHandles);
   CHECK(counts.userObjects <= maxUserObjects);
   CHECK(counts.gdiObjects <= maxGdiObjects);

@@ -102,6 +102,45 @@ struct OpenAtExit
   ~OpenAtExit() { gate->open(); }
 };
 
+/**
+ * One thread of this process: its id and its Win32 start address
+ * (NtQueryInformationThread class 9, ThreadQuerySetWin32StartAddress), resolved against
+ * the loaded modules as "module+0xOFFSET" ("?" when it cannot be read).
+ */
+struct ProcessThread
+{
+  unsigned long id = 0;
+  std::uintptr_t start = 0;
+  std::string where;
+  bool inNtdll = false;
+};
+
+/**
+ * The process's OS handles and threads (U2.12's measure). LP5.3 step 0
+ * (44-FEED-THREAD-FLAKE.md): the thread count alone cannot tell a leak from the OS's own
+ * thread-pool workers, which a session's create or teardown may add (start inside ntdll,
+ * ntdll.dll+0x52B20 on the investigator's machine) and which live until the process
+ * exits; so the set is recorded with each thread's start and the checks compare sets.
+ * Windows only; elsewhere every field is empty.
+ */
+struct ProcessCounts
+{
+  long threads = 0;
+  long handles = 0;
+  std::vector<ProcessThread> threadSet;
+};
+
+ProcessCounts processCounts();
+
+// the threads of now that baseline did not have (the same id and start counts as had)
+std::vector<ProcessThread> newThreads(
+  const ProcessCounts& baseline, const ProcessCounts& now);
+// those of newThreads whose start is not inside ntdll: what a count check fails on
+std::vector<ProcessThread> newForeignThreads(
+  const ProcessCounts& baseline, const ProcessCounts& now);
+// "none", or each thread as "where (id N)", comma-separated
+std::string describeThreads(const std::vector<ProcessThread>& threads);
+
 #if defined(_MSC_VER) && defined(_DEBUG)
 // runs f between two checkpoints of the CRT's debug heap; true when the heap grew, with
 // its statistics dumped
