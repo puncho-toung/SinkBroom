@@ -15124,7 +15124,7 @@
           "symbol": "LitPasses::genericDepth"
         }
       ],
-      "note": "LP2.2a step 3: the texture matrix rows from the stage's registers with the offsets wrapped at +-40 by the (int) cast (the engine's first test reads matrix[12] for matrix[3 * 4 + 0], the same element), TEXTUREMATRIX_S and _T the identity rows without a matrix; TEXGEN_0_ENABLED 0, or 1 with TG_SCREEN's planes from R_MatrixMultiply( modelViewMatrix, projectionMatrix ); the cube and sky texgens bind other programs (M-PASS-DIFF-03)"
+      "note": "LP2.2a step 3: the texture matrix rows from the stage's registers with the offsets wrapped at +-40 by the (int) cast (the engine's first test reads matrix[12] for matrix[3 * 4 + 0], the same element), TEXTUREMATRIX_S and _T the identity rows without a matrix; TEXGEN_0_ENABLED 0, or 1 with TG_SCREEN's planes from R_MatrixMultiply( modelViewMatrix, projectionMatrix ); the cube and sky texgens bind other programs (LP5.2b: M-PASS-11, M-STAGE-08)"
     },
     {
       "id": "M-PASS-03",
@@ -15471,28 +15471,6 @@
         }
       ],
       "note": "LP2.2a: idVec4's default constructor does nothing, so `inter = {}` leaves the bump, diffuse and specular matrices and the colours indeterminate until a stage of their kind sets them; the preview zeroes them. A draw never reads an unset matrix but for an image that is _black or _blackDiffuse with colour 0 (a constant texture): no visible difference"
-    },
-    {
-      "id": "M-PASS-DIFF-03",
-      "kind": "difference",
-      "engine": [
-        {
-          "file": "neo/renderer/RenderBackend.cpp",
-          "lines": [
-            352,
-            638
-          ],
-          "anchor": "idRenderBackend::PrepareStageTexturing, the cube and sky texgens",
-          "sha256": "33282bb24d375f2dbb9e61064c771ef6187fe09f308f4710cd74d3d6a85a1d92"
-        }
-      ],
-      "sinkbroom": [
-        {
-          "file": "lib/TbLitLib/src/LitStages.cpp",
-          "symbol": "engineGenericDepthDraws"
-        }
-      ],
-      "note": "LP2.2a: an alpha-tested stage of TG_REFLECT_CUBE, TG_REFLECT_CUBE2, TG_SKYBOX_CUBE or TG_WOBBLESKY_CUBE gets another program from PrepareStageTexturing over texture_color, which LP2 does not load; the preview does not draw that stage in the prepass (the surface is then not drawn solid either, as the stage was tried). LP5 adds the programs"
     },
     {
       "id": "M-PASS-DIFF-04",
@@ -20754,7 +20732,7 @@
         },
         {
           "file": "lib/TbLitLib/src/LitPasses.h",
-          "symbol": "LitFrameStats::stageDraws, stageSkipped, stagePending, stagePostProcess, stageTexgenDeferred, stageCinematic, stageProgramMissing, stagesSkipped, stagesTimed, stagesDisabled; LitFrameInputs::stageTimer, gamePath; LitDrawRecord::Pass::Stage"
+          "symbol": "LitFrameStats::stageDraws, stageSkipped, stagePending, stagePostProcess, stageTexgenLp6, stageCinematic, stageProgramMissing, stagesSkipped, stagesTimed, stagesDisabled; LitFrameInputs::stageTimer, gamePath; LitDrawRecord::Pass::Stage"
         },
         {
           "file": "lib/TbLitLib/src/FrameTimers.h",
@@ -21023,7 +21001,7 @@
           "symbol": "LitStagePass: DrawShaderPasses' stage decisions; the stages map's S materials"
         }
       ],
-      "note": "LP5.2a step 2 (C46, SC520, SC521): per stage, skipped when its condition register is 0 (counted only for an SL_AMBIENT stage), not the pass's when it is not SL_AMBIENT; stageGLState = the surface's (cull, polygon offset; extraGLState 0) | drawStateBits (no GLS_OVERRIDE: no GUI); ZERO / ONE skipped; the stencil stage's comp ALWAYS or EQUAL, pass REPLACE, KEEP or DECRWRAP, zFail DECRWRAP or KEEP, fail KEEP and GLS_STENCIL_MAKE_REF( ref ) | GLS_STENCIL_MAKE_MASK( writeMask ), the other values adding no bits as the engine's switches; the colour registers, ONE / ONE with rgb at most 0 and SRC_ALPHA / ONE_MINUS_SRC_ALPHA with alpha at most 0 skipped, GL_Color's clamp to 0..1; the program by texgen: TG_SCREEN and TG_SCREEN2 on 18 (texture_color_texgen, TEXGEN, set 12: TEXGEN_0_S/T/Q the rows 0, 1 and 3 of the space's modelViewMatrix x projectionMatrix, TEXGEN_0_ENABLED 1), TG_EXPLICIT on 15 (texture_color, TEXTURE, set 4, TEXGEN_0_ENABLED 0), the cube and sky texgens and TG_DIFFUSE_CUBE and TG_GLASSWARP LP5.2b's (M-STAGE-TEMP-01); RB_SetVertexColorParms (SVC_IGNORE (0, 1), SVC_MODULATE (1, 0), SVC_INVERSE_MODULATE (-1, 1)); the texture matrix (RB_LoadShaderTextureMatrix); privatePolygonOffset in the key; no ALPHA_TEST (it is 0 from the interactions: an alpha-tested SL_AMBIENT stage relies on DEPTHFUNC_EQUAL against the prepass's alpha-tested depth). The depth and blend bits come from drawStateBits alone (SS_POST_PROCESS LESS with depth writes, translucent or ignoreAlphaTest LESS | DEPTHMASK, else EQUAL | DEPTHMASK; the masks of MAT:2096-2108; alpha factors One / Zero and blendOp ignored by GetRenderState). The S07 keyword is screen (MAT:1750): \"texgen screen\" is a bad texGen that defaults the material. texture_color linearises tex · colour (its alpha too), texture_color_texgen the texel alone, then multiplies by the colour"
+      "note": "LP5.2a step 2 (C46, SC520, SC521): per stage, skipped when its condition register is 0 (counted only for an SL_AMBIENT stage), not the pass's when it is not SL_AMBIENT; stageGLState = the surface's (cull, polygon offset; extraGLState 0) | drawStateBits (no GLS_OVERRIDE: no GUI); ZERO / ONE skipped; the stencil stage's comp ALWAYS or EQUAL, pass REPLACE, KEEP or DECRWRAP, zFail DECRWRAP or KEEP, fail KEEP and GLS_STENCIL_MAKE_REF( ref ) | GLS_STENCIL_MAKE_MASK( writeMask ), the other values adding no bits as the engine's switches; the colour registers, ONE / ONE with rgb at most 0 and SRC_ALPHA / ONE_MINUS_SRC_ALPHA with alpha at most 0 skipped, GL_Color's clamp to 0..1; the program by texgen: TG_SCREEN and TG_SCREEN2 on 18 (texture_color_texgen, TEXGEN, set 12: TEXGEN_0_S/T/Q the rows 0, 1 and 3 of the space's modelViewMatrix x projectionMatrix, TEXGEN_0_ENABLED 1), TG_EXPLICIT on 15 (texture_color, TEXTURE, set 4, TEXGEN_0_ENABLED 0), the cube and sky texgens on 55, 57, 69 and 70, TG_DIFFUSE_CUBE and TG_GLASSWARP on 15 with a warning, TG_REFLECT_CUBE2 skipped (LP5.2b: M-STAGE-08, M-STAGE-DIFF-05); RB_SetVertexColorParms (SVC_IGNORE (0, 1), SVC_MODULATE (1, 0), SVC_INVERSE_MODULATE (-1, 1)); the texture matrix (RB_LoadShaderTextureMatrix); privatePolygonOffset in the key; no ALPHA_TEST (it is 0 from the interactions: an alpha-tested SL_AMBIENT stage relies on DEPTHFUNC_EQUAL against the prepass's alpha-tested depth). The depth and blend bits come from drawStateBits alone (SS_POST_PROCESS LESS with depth writes, translucent or ignoreAlphaTest LESS | DEPTHMASK, else EQUAL | DEPTHMASK; the masks of MAT:2096-2108; alpha factors One / Zero and blendOp ignored by GetRenderState). The S07 keyword is screen (MAT:1750): \"texgen screen\" is a bad texGen that defaults the material. texture_color linearises tex · colour (its alpha too), texture_color_texgen the texel alone, then multiplies by the colour"
     },
     {
       "id": "M-STAGE-05",
@@ -21259,41 +21237,6 @@
       "note": "LP5.2a (C47): the engine binds a newStage block's fragment images at units 0..n-1 only where not null and leaves a null unit's image as the last pass left it (stale); the preview binds _default at a null unit of 0-2 (its layout's t0-t2; units past 2 are not in the layout). No retail or fixture program that reaches pass 8 samples a null unit"
     },
     {
-      "id": "M-STAGE-TEMP-01",
-      "kind": "temporary",
-      "engine": [
-        {
-          "file": "neo/renderer/RenderBackend.cpp",
-          "lines": [
-            360,
-            586
-          ],
-          "anchor": "PrepareStageTexturing: TG_REFLECT_CUBE, TG_REFLECT_CUBE2, TG_SKYBOX_CUBE, TG_WOBBLESKY_CUBE",
-          "sha256": "04bc5f3524c7e9fa8636f5fc1544e83acf8ce019ff00ef03e4771289ba2954f1"
-        },
-        {
-          "file": "neo/renderer/RenderBackend.cpp",
-          "lines": [
-            625,
-            635
-          ],
-          "anchor": "PrepareStageTexturing: TG_DIFFUSE_CUBE and TG_GLASSWARP warn",
-          "sha256": "52b1116f2901239036c3e2fe4471e64d269e9fe746048ec36209ab39d1163c47"
-        }
-      ],
-      "sinkbroom": [
-        {
-          "file": "lib/TbLitLib/src/LitStages.cpp",
-          "symbol": "engineShaderPassDraws (texgenDeferred)"
-        },
-        {
-          "file": "lib/TbLitLib/src/LitPasses.cpp",
-          "symbol": "LitPasses::recordStages (warned once)"
-        }
-      ],
-      "note": "LP5.2a, until LP5.2b (C48): a stage of TG_DIFFUSE_CUBE, TG_REFLECT_CUBE, TG_REFLECT_CUBE2, TG_SKYBOX_CUBE, TG_WOBBLESKY_CUBE or TG_GLASSWARP is skipped and counted (stageTexgenDeferred, in stageSkipped) with one warning naming LP5.2b; the engine draws them (programs 55/57/69/70, and texture_color for the two that only warn). LP5.2b replaces the default branch of engineShaderPassDraws' texgen switch"
-    },
-    {
       "id": "M-STAGE-GUARD-01",
       "kind": "guard",
       "engine": [
@@ -21310,10 +21253,10 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/src/LitPasses.cpp",
-          "symbol": "LitPasses::recordStages (a stage without an image or with a cube image)"
+          "symbol": "LitPasses::recordStages (a stage without an image, or a cube image on texture_color or texture_color_texgen)"
         }
       ],
-      "note": "LP5.2a: an old-style stage without an image (a dynamic image's, K25) binds nothing in the engine, which then samples the unit's stale image, and a cube image in texture_color's Texture2D slot is undefined there and a validation message here (P6.18's case): neither is drawn, counted in stageSkipped, with one warning"
+      "note": "LP5.2a, restated by LP5.2b: an old-style stage on texture_color or texture_color_texgen without an image (a dynamic image's, K25) binds nothing in the engine, which then samples the unit's stale image, and a cube image in their Texture2D slot (a cubeMap stage of TG_EXPLICIT, TG_SCREEN, TG_DIFFUSE_CUBE or TG_GLASSWARP) is undefined there and a validation message here: neither is drawn, counted in stageSkipped, with one warning. The cube and sky texgens' programs bind their cube by M-STAGE-DIFF-04 and are not guarded here"
     },
     {
       "id": "M-TEST-STAGE-01",
@@ -21389,6 +21332,359 @@
         }
       ],
       "note": "LP5.2a steps 6-7 (C50, P6.1, P6.2, P6.5), test only: the stages map's S rooms from ox 8192 every 1024, each camera 120 from the east wall (which fills the view), lit head-on by R14's parallel light and colour, the stage surfaces 80 from the camera, every row exact with a control of mode row: S01 blend add (and a gl_zero, gl_one stage), blend blend, blend filter; S02 inverseVertexColor, a plain stage, colored on a func_static of _color 0.5 0.25 1; S03 an alpha-tested ambient stage; S04 two translucent materials at SS_MEDIUM overlapping; S05 sort decal, far and close; S06 an implicit material over its image; S07 the screen keyword; S12 a translucent backSided box; S13 vornoipattern over an unlit wall; S14 fogwithlights. The one engine run (2026-10-24 19:44-20:01: bake 127.4 s, run-a 329.8 s, run-b 338.4 s, every shot repeated at 0, the game folder 21,260 entries before and after each process, the junction gone): the 98 earlier rows identical to the gate's at 868e1a9e6; S01-S07, S12, S14 and their controls max 0 everywhere; lit_min recorded for those nine (--record-thresholds --only, axial-max 1). Two fixture faults found: S13's room holds no entity, so dmap's flood fill takes it as outside (no area): the engine shot sees the void and the preview draws the room as the outside set (D81), so S13 and CS13 fail, and S13's outside-set chunks are in the frustum of S01-S12 (all looking +x), each one more stage draw (its voronoi panel, behind their walls: no pixel) than their expect; the next stages-map run gives S13's room an entity. compare's row-mode control rule required the row's lit_min (half the lit shot's pixels) of a lights-off shot that draws the unlit stages alone: a row control must now only not be black The fix (2026-10-24 21:40): S13's room gets the S rooms' parallel light at _color 0 0 0 and noshadows 1, an entity for the flood fill that adds no light; the second engine run (bake 127.2 s, run-a 336.4 s, run-b 335.5 s, every shot's repeat 0, the game folder 21,260 entries before and after each process): the 98 earlier rows identical again, S13 and CS13 black on both sides (vornoipattern's stage is issued and draws nothing, its wall unlit), every S row's stage_draws its expect, S13's lit_min 0 recorded; a row control must be lit only when its row was (lit_min min(1, the row's)); 116 of 116 gated rows pass, 2 reported"
+    },
+    {
+      "id": "M-STAGE-08",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            352,
+            392
+          ],
+          "anchor": "idRenderBackend::PrepareStageTexturing: the texture matrix always; TG_REFLECT_CUBE with or without a bump stage",
+          "sha256": "8986f44ec96842ab9b11007651caae64187857151b2e08f251a7ca24ef578c92"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            526,
+            586
+          ],
+          "anchor": "PrepareStageTexturing: TG_SKYBOX_CUBE, TG_WOBBLESKY_CUBE and its transform",
+          "sha256": "9fc3e2f3498fda679d87a23d59b5f417276107c0c8a3269ab4fbcc990f1e7689"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            625,
+            637
+          ],
+          "anchor": "PrepareStageTexturing: TG_DIFFUSE_CUBE and TG_GLASSWARP warn; TEXGEN_0_ENABLED",
+          "sha256": "6eb6318e0f81d351765ba7463bdb1305ec54ea43a7e7af30bbe4273ea6ad8766"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            645,
+            669
+          ],
+          "anchor": "idRenderBackend::FinishStageTexturing",
+          "sha256": "db12cada2558b333443c8a6f189fb669ce40311d56b5f007c50d9cc4735486d0"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4673,
+            4693
+          ],
+          "anchor": "DrawShaderPasses: RB_SetVertexColorParms, BindVariableStageImage, GL_State, PrepareStageTexturing, the draw",
+          "sha256": "e192ab9e03bf3d720eec29dbf036c9bb164f59676b3311a09971c5e2ba5370c0"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            1941,
+            1970
+          ],
+          "anchor": "idMaterial::ParseStage: texGen normal, reflect, reflect2, skybox, wobbleSky and its three expressions",
+          "sha256": "3ad90deca0015feb2dd43178a7da562e99f18beec135904acd2f2f1177496d98"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            1270,
+            1278
+          ],
+          "anchor": "ParseStage: cubeMap (CF_NATIVE), cameraCubeMap (CF_CAMERA)",
+          "sha256": "802aa3f8ec73cd6f4ef117fd8504989807550d5d289f40c53cf763d3307173c4"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3796,
+            3806
+          ],
+          "anchor": "idMaterial::GetBumpStage",
+          "sha256": "f92d994a1b59b9308cb2e6f28f3e858dee5002b69ec7fee857060a0a34cbb6b0"
+        },
+        {
+          "file": "neo/renderer/Image_load.cpp",
+          "lines": [
+            587,
+            591
+          ],
+          "anchor": "idImage::ActuallyLoadImage: a cube image's repeat TR_CLAMP",
+          "sha256": "6ca86c7515367239be1c0b678746998b625ae0c4a9b2d0553200390d7c069bb7"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            248,
+            248
+          ],
+          "anchor": "rpMinimalSet0 (BINDING_LAYOUT_DEFAULT's set)",
+          "sha256": "73eef024a2b001bc7fc1fc556fcb6e67a88d3debb41a29b4e6d3159681bd2ddd"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            271,
+            273
+          ],
+          "anchor": "rpNominalSet5 and its layouts (LEGACY, NORMAL_CUBE)",
+          "sha256": "910ca29a95d91b8e95f017f50d5cba96dc6cd51b6205811d9f8ef0a03a02f670"
+        },
+        {
+          "file": "neo/shaders/builtin/legacy/environment.vs.hlsl",
+          "lines": [
+            119,
+            127
+          ],
+          "anchor": "main: toEye = LOCALVIEWORIGIN - position; colour sRGBAToLinearRGBA( rpColor )",
+          "sha256": "637bd4d1eb505bec11d99beab4344eb37861fb06fdf2fa85befd0094121ea004"
+        },
+        {
+          "file": "neo/shaders/builtin/legacy/environment.ps.hlsl",
+          "lines": [
+            51,
+            63
+          ],
+          "anchor": "main: the reflection of the eye vector",
+          "sha256": "194ae85fd12192e55dcb76029c395954acc60757b6ad5226287739cf7d323c78"
+        },
+        {
+          "file": "neo/shaders/builtin/legacy/bumpyenvironment.ps.hlsl",
+          "lines": [
+            55,
+            81
+          ],
+          "anchor": "main: the normal map at t1, the reflection",
+          "sha256": "f35664101331029b37d82061a49e049672b204c765651ac5ba4d0248dae16d33"
+        },
+        {
+          "file": "neo/shaders/builtin/legacy/bumpyenvironment.vs.hlsl",
+          "lines": [
+            156,
+            180
+          ],
+          "anchor": "main: the texcoords through MODELMATRIX_X..Z, colour rpColor",
+          "sha256": "8c26ddf4443cbfa8dce880ca3dda5dbd5fcc75239a678029403ff6b8fd7cb39f"
+        },
+        {
+          "file": "neo/shaders/builtin/legacy/skybox.vs.hlsl",
+          "lines": [
+            51,
+            64
+          ],
+          "anchor": "main: texcoord = position - LOCALVIEWORIGIN, colour rpColor",
+          "sha256": "e8105f8f419eaf6abae2dd7ad42c178de386bc5ca7fbb9724525f5947935682c"
+        },
+        {
+          "file": "neo/shaders/builtin/legacy/wobblesky.vs.hlsl",
+          "lines": [
+            52,
+            66
+          ],
+          "anchor": "main: texcoord = ( position - LOCALVIEWORIGIN ) through WOBBLESKY_X..Z, colour the vertex colour",
+          "sha256": "39dcac65aa849d99e8ae3061938f2cc04755cf09838fce84dc13289033e57e62"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineShaderPassDraws (the texgen switch), engineBumpStage, engineStageWobbleSky, engineStageProgramSamplesCube"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitStages.h",
+          "symbol": "StageProgram::Environment, BumpyEnvironment, SkyBox, WobbleSky; StagePassDraw::bumpStage, wobbleSky, texgenWarning"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineWobbleSkyTransform"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
+          "symbol": "EngineBuiltinEnvironment, EngineBuiltinBumpyEnvironment, EngineBuiltinSkyBox, EngineBuiltinWobbleSky"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordStages (the cube programs' units and parms), LitPasses::bindingSets (DEFAULT, LEGACY, NORMAL_CUBE)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitStagePass.cpp",
+          "symbol": "LitStagePass: DrawShaderPasses' stage decisions (LP5.2b: the cube and sky texgens)"
+        }
+      ],
+      "note": "LP5.2b step 1 (C48, P6.5, P6.19): pass 8 binds PrepareStageTexturing's program over texture_color: TG_REFLECT_CUBE environment (55, DEFAULT, set 0: LOCALVIEWORIGIN, COLOR, MVP), or with a bump stage (GetBumpStage: the material's first SL_BUMP stage, the implicit _flat of a lit material included) bumpyenvironment (57, NORMAL_CUBE, set 5: MODELMATRIX_X..Z too) with the bump stage's image raw at unit 1; TG_SKYBOX_CUBE skybox (69, LEGACY, set 5); TG_WOBBLESKY_CUBE wobblesky (70, LEGACY, set 5) with WOBBLESKY_X..Z from the three texGenRegisters (tilt degrees, wobble and rotate rates per minute) through the registers, transcribed on the copied idMath and idVec3 (engineWobbleSkyTransform); TG_DIFFUSE_CUBE and TG_GLASSWARP keep texture_color with the engine's warning, said once. K5, D119: the transform's time is renderView.time[0] (milliseconds, times 0.001), which no renderparm carries (it reaches the shader only through the three rows): the preview passes 0, so a wobbleSky stage with a rate is drawn at time 0. The shaders: environment's colour is sRGBAToLinearRGBA( rpColor ) and its output sRGBToLinear( cube ) times it; bumpyenvironment's colour rpColor (not linearised) and its normal map sampled through s0; skybox's texcoord position - LOCALVIEWORIGIN and colour rpColor; wobblesky's texcoord ( position - LOCALVIEWORIGIN ) through the three rows and colour the vertex colour times modulate plus add (RB_SetVertexColorParms of the stage), not rpColor; every texcoord is affine per vertex, so the rows are exact, not K28 (P6.5). The texture matrix is loaded for every stage (RB_LoadShaderTextureMatrix) and TEXGEN_0_ENABLED written 0; FinishStageTexturing's Unbind has no NVRHI counterpart (the next draw's pipeline replaces the program). DEFAULT and LEGACY bind the cube with its own sampler, a cube image's repeat being TR_CLAMP from its load on (Image_load.cpp:587-591); NORMAL_CUBE's s0 is CommonPasses' LinearWrap with the leaked Comparison reduction (D68, D20: mirrored). P6.19, the validation layer's answer on the first frames that drew 57 (the LP5.2b [.][litgpu2] case: a colour cube at t0 and _flat at t1 sampled with Sample() through the compare-enabled s0): 0 messages (0 errors, 0 warnings beyond M-PIPE-DEFECT-01's mirrored ones), a mirrored engine fact; the sampler is the engine's"
+    },
+    {
+      "id": "M-STAGE-DIFF-04",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            333,
+            342
+          ],
+          "anchor": "BindVariableStageImage: an image not loaded or defaulted binds globalImages->defaultImage",
+          "sha256": "585053d4fa28270d1f39d2f32b73ac8902dee8d11b6464952e50308d4cb6c09e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::cubeImage, LitPasses::recordStages, LitPasses::genericDepth"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.h",
+          "symbol": "LitPasses::cubeImage"
+        }
+      ],
+      "note": "LP5.2b (C48, D124, P6.17): the engine binds its 2D _default into the TextureCube slot of 55, 57, 69 and 70 for a cube image that is not loaded or defaulted (and whatever 2D image a cube texgen stage names, or the unit's stale image for a stage without one): undefined. The preview binds its zero cube, _defaultUACRadiance (LP4.2a's black 8 x 8 BC6H cube) for a Default slot, a 2D image and a stage without an image, and for a cube not written yet (Pending, or Loading without a level), which also counts in stagePending and keeps the frame unconverged until the cube lands; Loading with levels, Resident and Replacing (its complete texture, LPF.1) bind the cube. A slot's 2D stand-in is never bound into a cube slot (P4.28's rule). The prepass binds by the same rule (unconverged, not counted)"
+    },
+    {
+      "id": "M-STAGE-DIFF-05",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            393,
+            525
+          ],
+          "anchor": "PrepareStageTexturing: TG_REFLECT_CUBE2: the probes, the SSR parms and, with a bump stage, BUMPY_ENVIRONMENT2 (59-62)",
+          "sha256": "c4d1d51e07d2d66c800b0281d0fd2988d61bdd054cd17d319f636df022ee5366"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineShaderPassDraws (TexgenReflectCube2), engineGenericDepthDraws (TexgenReflectCube2)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordStages (stageTexgenLp6, warned once)"
+        }
+      ],
+      "note": "LP5.2b (C48, P6.18): a TG_REFLECT_CUBE2 stage with a bump stage binds bumpyenvironment2 (59-62) on _currentRender, the G-buffer normals, Hi-Z and the view's three radiance probes, LP6's inputs; without one PrepareStageTexturing changes no program and texture_color samples the cube as a Texture2D (undefined, and a validation message against the 0-messages exit). The preview draws neither: pass 8 skips the stage (counted in stageTexgenLp6, in stageSkipped, with one warning), and the prepass does not draw such an alpha-tested stage (the stage tried, so the surface is not drawn solid either), where the engine writes the surface's depth through 59/61, or an alpha-tested texture_color draw of the cube"
+    },
+    {
+      "id": "M-STAGE-DIFF-06",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            360,
+            372
+          ],
+          "anchor": "PrepareStageTexturing: the bump stage's image raw at unit 1 for bumpyenvironment",
+          "sha256": "3de15388556b1562253294b245edd88681d8522c234233146ce40795877d5a76"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::bumpImage"
+        }
+      ],
+      "note": "LP5.2b (C48, P6.17): 57 binds the bump stage's image raw at unit 1 (Bind(), no defaulted test): a defaulted bump image samples the engine's default image there. The preview binds _flat for a Default bump slot (and for a bump stage without an image), the stand-in a pending interaction's bump has (M-IMG-DIFF-11); a Pending bump slot, or one Loading without a level, skips the draw and keeps the frame unconverged as a 2D stage image does (M-STAGE-05)"
+    },
+    {
+      "id": "M-PASS-11",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            783,
+            866
+          ],
+          "anchor": "FillDepthBufferGeneric: the alpha-tested stages: texture_color, GL_Color( 0, 0, 0, a ), ALPHA_TEST, then PrepareStageTexturing",
+          "sha256": "9c0546e30e6a8ea0bd2710b99b4e0c4465a6263d983bbf789e99c0aaa8c14285"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            352,
+            392
+          ],
+          "anchor": "PrepareStageTexturing: TG_REFLECT_CUBE",
+          "sha256": "8986f44ec96842ab9b11007651caae64187857151b2e08f251a7ca24ef578c92"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            526,
+            586
+          ],
+          "anchor": "PrepareStageTexturing: TG_SKYBOX_CUBE, TG_WOBBLESKY_CUBE",
+          "sha256": "9fc3e2f3498fda679d87a23d59b5f417276107c0c8a3269ab4fbcc990f1e7689"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineGenericDepthDraws (the cube and sky texgens)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitStages.h",
+          "symbol": "PrepassProgram::Environment, BumpyEnvironment, SkyBox, WobbleSky; PrepassDraw::bumpStage, wobbleSky"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::genericDepth"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "LitPasses: the prepass's alpha-tested cube and sky stages"
+        }
+      ],
+      "note": "LP5.2b step 2 (C48, SC528, A39; closes M-PASS-DIFF-03, retired): for an alpha-tested stage FillDepthBufferGeneric binds texture_color, sets GL_Color( 0, 0, 0, a ), ALPHA_TEST and SVC_IGNORE, binds the stage's image at unit 0, and PrepareStageTexturing then replaces the program for TG_REFLECT_CUBE (environment, or bumpyenvironment with the bump stage at unit 1), TG_SKYBOX_CUBE (skybox) and TG_WOBBLESKY_CUBE (wobblesky with its transform at time 0, K5). None of those shaders clips, so the stage writes the whole surface's depth: black through rpColor ( 0, 0, 0, a ) for the first three, the sky's texel for wobblesky (its colour the vertex colour, ( 1, 1, 1 ) under SVC_IGNORE's modulate 0 and add 1); didDraw keeps the surface from the solid draw. LOCALVIEWORIGIN and MODELMATRIX are 0 in the prepass (SC528: ZeroUniforms, and only RB_SetMVP runs before it), so skybox and wobblesky read the sky at position - 0 there; the preview's prepass sets neither (its RenderParms are zeroed at the frame's start). The preview keeps the order (ALPHA_TEST written, then the program replaced) and the order is not observable: the pipeline key names the replacing program, and no renderparm set of DEFAULT, LEGACY or NORMAL_CUBE holds ALPHA_TEST (rpMinimalSet0, rpNominalSet5), so the write marks none of their constants changed (a CPU test checks the sets). TG_REFLECT_CUBE2 stays undrawn (M-STAGE-DIFF-05); the cube's binding follows M-STAGE-DIFF-04"
+    },
+    {
+      "id": "M-TEST-STAGE-02",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            352,
+            392
+          ],
+          "anchor": "PrepareStageTexturing: TG_REFLECT_CUBE",
+          "sha256": "8986f44ec96842ab9b11007651caae64187857151b2e08f251a7ca24ef578c92"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            526,
+            586
+          ],
+          "anchor": "PrepareStageTexturing: TG_SKYBOX_CUBE, TG_WOBBLESKY_CUBE",
+          "sha256": "9fc3e2f3498fda679d87a23d59b5f417276107c0c8a3269ab4fbcc990f1e7689"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            783,
+            866
+          ],
+          "anchor": "FillDepthBufferGeneric: the alpha-tested stages",
+          "sha256": "9c0546e30e6a8ea0bd2710b99b4e0c4465a6263d983bbf789e99c0aaa8c14285"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession cube and sky texgens on a GPU (LP5.2b)"
+        }
+      ],
+      "note": "LP5.2b step 6, test only: a [.][litgpu2] case over a synthetic map whose cube's six faces are pure colours (the engine's _px _nx _py _ny _pz _nz files): each pixel against a CPU model of the shader's texcoord and the cube's face choice (the major axis): skybox at position - the eye, reflect without and with a bump stage (55 and 57: the reflected eye vector about the face normal, _flat at unit 1), the prepass's alpha-tested skybox hiding the lit wall behind it (and black alone under a gl_zero, gl_one twin), the prepass's alpha-tested wobbleSky reading the sky at position - 0 (+z there) and its blend add twin adding pass 8's at position - the eye (+x), reflect2 skipped and counted, a cube held Pending (the service's image work items parked) drawn as the zero cube with the frame unconverged and counted, then landed; the points away from a face's edge (the cube's seamless bilinear filter reads the next face there); 0 validation messages"
     }
   ],
   "retired": [
@@ -21416,6 +21712,16 @@
       "id": "M-AMB-DIFF-03",
       "commit": "76474969f",
       "reason": "the light-grid branch is drawn since LP4.3 (M-GRID-01 the dispatch, M-GRID-02 the pass's grid path); no difference remains"
+    },
+    {
+      "id": "M-PASS-DIFF-03",
+      "commit": "b238e5381",
+      "reason": "the prepass draws the alpha-tested cube and sky stages since LP5.2b: restated as the mirrored fact M-PASS-11 (TG_REFLECT_CUBE2's stage stays undrawn: M-STAGE-DIFF-05)"
+    },
+    {
+      "id": "M-STAGE-TEMP-01",
+      "commit": "35e24cc80",
+      "reason": "the cube and sky texgens are drawn since LP5.2b (M-STAGE-08); nothing is deferred"
     }
   ]
 }
