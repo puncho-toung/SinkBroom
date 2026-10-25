@@ -8657,7 +8657,7 @@
           "symbol": "MapBake, the C10 search: the .proc's geometry, the .bproc's finished surfaces"
         }
       ],
-      "note": "LP7.0 (C4 extended, C54, D132, P7.18, SC649, SC636): the colour is the file's. ParseModel clears each vertex (Clear: color and color2 zero), sets xyz, st and the normal, then the colour: PROC_VERTEX_FORMAT_COLOR's four floats through PackColorRound, which rounds where PackColor truncates (\"dmap wrote byte / 255 with six decimals, which can parse a hair below the byte\": 0.498039 packs 127, PackColor would give 126) and clamps through Ftob (each component Ftob( x * 255 + 0.5 ), packed ( dx << 0 ) | ( dy << 8 ) | ( dz << 16 ) | ( dw << 24 ), stored by SetColor in native order, so color[0] is red on little-endian machines); the basic format PackColor( colorWhite ), opaque white; color2 stays zero. PackColorRound is transcribed in the geometry facade (enginePackColorRound) with the copied idMath::Ftob, Lib.cpp not being copied; SetColor is the copied DrawVert.h's. The product's bake read (MapBake readGeometry) asks readProcFile for the geometry, so the published tree holds every surface's vertex floats and indexes; the parse is the same (ParseModel tokenises every vertex and index either way), the cost is memory: procTreeBytes counts the arrays (4 B per float, 32 B per finished draw vertex, 4 B per index, 12 B per portal point, 24 B per node), about 38 B per vertex: lp1b_geometry.proc 8,368 B (984 B without the geometry, 188 vertices), its .bproc tree 9,128 B (208 finished vertices); the sandbox's parity .procs 23,648 (areas), 34,120 (ambient), 52,504 (parity), 72,344 (stages) B. MaterialServiceStats::procBytes sums the bakes' trees, each once; the frame log's stop row carries the adopted bake's as proc_bytes (empty in frame rows). Nothing draws from the geometry in LP7.0: LP7.3 (the dress decals) and LP7.4 (the adopted islands) read it"
+      "note": "LP7.0 (C4 extended, C54, D132, P7.18, SC649, SC636): the colour is the file's. ParseModel clears each vertex (Clear: color and color2 zero), sets xyz, st and the normal, then the colour: PROC_VERTEX_FORMAT_COLOR's four floats through PackColorRound, which rounds where PackColor truncates (\"dmap wrote byte / 255 with six decimals, which can parse a hair below the byte\": 0.498039 packs 127, PackColor would give 126) and clamps through Ftob (each component Ftob( x * 255 + 0.5 ), packed ( dx << 0 ) | ( dy << 8 ) | ( dz << 16 ) | ( dw << 24 ), stored by SetColor in native order, so color[0] is red on little-endian machines); the basic format PackColor( colorWhite ), opaque white; color2 stays zero. PackColorRound is transcribed in the geometry facade (enginePackColorRound) with the copied idMath::Ftob, Lib.cpp not being copied; SetColor is the copied DrawVert.h's. The product's bake read (MapBake readGeometry) asks readProcFile for the geometry, so the published tree holds every surface's vertex floats and indexes; the parse is the same (ParseModel tokenises every vertex and index either way), the cost is memory: procTreeBytes counts the arrays (4 B per float, 32 B per finished draw vertex, 4 B per index, 12 B per portal point, 24 B per node), about 38 B per vertex: lp1b_geometry.proc 8,368 B (984 B without the geometry, 188 vertices), its .bproc tree 9,128 B (208 finished vertices); the sandbox's parity .procs 23,648 (areas), 34,120 (ambient), 52,504 (parity), 72,344 (stages) B. MaterialServiceStats::procBytes sums the bakes' trees, each once; the frame log's stop row carries the adopted bake's as proc_bytes (empty in frame rows). Nothing draws from the geometry in LP7.0: LP7.3 (the dress decals) and LP7.4 (the adopted islands) read it. LP7.4 draws the adopted islands from it (loadProcIsland, loadProcSurface's per-vertex code; M-GEO-DIFF-04), and the bake's read builds the tree's islands with it on the parse thread (MapBake::islands, not counted in proc_bytes)"
     },
     {
       "id": "M-PROC-02",
@@ -16492,14 +16492,22 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
-          "symbol": "buildChunks (addBrush)"
+          "symbol": "buildChunks (addBrush; LP7.4: addAdoptedIslands, finishAdopted)"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::updateAdoption (LP7.4)"
+        },
+        {
+          "file": "lib/TbLitLib/src/ProcIslands.cpp",
+          "symbol": "procSurfaceIslands, matchProcIsland (LP7.4)"
         },
         {
           "file": "TOOLS/lit-preview/parity.py",
-          "symbol": "ROWS, room_split, SPLIT_AHEAD"
+          "symbol": "ROWS (LP7.4: the 30 K28/K33 rows and R11 exact), room_split, SPLIT_AHEAD"
         }
       ],
-      "note": "K28 (31-LP2-FIXES.md, replacing DX.1; restated in round 2 from 32-LP2-VERIFY.md V2.1): dmap runs OptimizeEntity on every area by default, which throws away each coplanar group's side triangles and builds them again (BuildOptTriangles, RegenerateTriangles) from candidate edges sorted by an unstable qsort (equal lengths tie, as a rectangle's two diagonals do), so the .proc's triangles are not fans of the side windings (the parity .proc: 96 of 110 pairs of the (a b c)(d c b) shape); copying the optimizer would import the CRT's qsort tie order. The preview keeps its own triangulation (K9's family). The mechanism by which this changes pixels: the interaction vertex shader writes the normalised vector to the viewer per vertex in tangent space (interaction.vs.hlsl:193-200), the rasteriser interpolates it over the triangle, and the pixel shader normalises it again (interaction.ps.hlsl:98) and reads it in the view-dependent normal contrast before the Lambert term (:112-121) and in the half vector and the BRDF (:138-139, :181-183). A per-vertex normalised vector interpolated over a triangle depends on the triangle: the same face cut along the other diagonal gives another per-pixel view vector (4-17 degrees apart on large triangles near the camera, measured from the .proc's triangles). So bump-mapped and specular pixels differ wherever a triangle is large against its distance from the camera: |d| <= 4 on R05 (941 pixels beyond 1), <= 2 on R18 (28), masked <= 17 at texel edges on R08, R09 and R12's ceilings, |d| = 1 on 0.01-3 % of every bump-mapped row, and up to 12 where a triangle crosses the near plane (R05b: 2,568 unmasked pixels from 2 to 12, 9,950 at 1, masked max 7; the same on the LP2.3 run and the fix round's). A flat normal and no specular stage do not take the view vector out (V3.1, 32-LP2-VERIFY.md, corrected in LP4.1): without a specular stage the engine zeroes the specular colour (RenderBackend.cpp:2151 clears inter.specularColor, :1156-1158 binds _black for a missing specular image, :1190 writes the zero SPECULARMODIFIER), so the BRDF's specular term and its Fresnel_Schlick( 0, vdotH ) contribute nothing; the view vector reaches these pixels through the view-dependent normal contrast (interaction.ps.hlsl:112-121), which scales the decoded normal's xy by 0.8-1.2 with the per-pixel view vector's z, and _flat does not decode to exactly (0, 0) (about (0.0020, 0.0033): DXT5 alpha 128 and green 128 1/3), so the tilt of the normal, and with it the Lambert term, follows the interpolated view vector. Round 2's R19-R21 (R01-R03's lights on legacy diffuse with bumpmap _flat) differ by 1 on 1,677, 355 and 957 unmasked pixels, mostly on the large floor and ceiling triangles; R14 is exact because its parallel light meets the wall head-on (L near N), where the Lambert term does not feel so small a tilt, not because the wall is uniform. Near-plane clipping only amplifies the effect (a vertex beside or behind the camera carries a view vector almost perpendicular to the view); the parity rows' room split 100 units ahead of the camera (parity.py room_split) stays, harmless. The parity method: R05, R18 and R19-R21 are K28 rows with recorded thresholds (max, mean, p99, the count beyond 1; the mean pins a row's |d| = 1 count), R14 the exact row, the other axial rows +-1 (K28's empirical bound there), R05b reported; the classes live in parity.py's row table. LP7 (a follow-up, not done): draw the .proc's triangles in the parity path, test-only first, then for the faces unchanged since the bake. Also seen on the fix round's run: dmap snaps brush vertices to its 1/32 grid and removes the faces that lie in slabs thinner than 0.1 between near-coplanar planes (a wall behind panels 0.05 in front of it), and an entity inside such a slab is linked to no area; the preview builds the editor's brushes as they are, so faces closer than 0.1 to another brush's parallel plane can differ in the same way (R13 is built without such faces since round 2)."
+      "note": "K28 (31-LP2-FIXES.md, replacing DX.1; restated in round 2 from 32-LP2-VERIFY.md V2.1): dmap runs OptimizeEntity on every area by default, which throws away each coplanar group's side triangles and builds them again (BuildOptTriangles, RegenerateTriangles) from candidate edges sorted by an unstable qsort (equal lengths tie, as a rectangle's two diagonals do), so the .proc's triangles are not fans of the side windings (the parity .proc: 96 of 110 pairs of the (a b c)(d c b) shape); copying the optimizer would import the CRT's qsort tie order. The preview keeps its own triangulation (K9's family). The mechanism by which this changes pixels: the interaction vertex shader writes the normalised vector to the viewer per vertex in tangent space (interaction.vs.hlsl:193-200), the rasteriser interpolates it over the triangle, and the pixel shader normalises it again (interaction.ps.hlsl:98) and reads it in the view-dependent normal contrast before the Lambert term (:112-121) and in the half vector and the BRDF (:138-139, :181-183). A per-vertex normalised vector interpolated over a triangle depends on the triangle: the same face cut along the other diagonal gives another per-pixel view vector (4-17 degrees apart on large triangles near the camera, measured from the .proc's triangles). So bump-mapped and specular pixels differ wherever a triangle is large against its distance from the camera: |d| <= 4 on R05 (941 pixels beyond 1), <= 2 on R18 (28), masked <= 17 at texel edges on R08, R09 and R12's ceilings, |d| = 1 on 0.01-3 % of every bump-mapped row, and up to 12 where a triangle crosses the near plane (R05b: 2,568 unmasked pixels from 2 to 12, 9,950 at 1, masked max 7; the same on the LP2.3 run and the fix round's). A flat normal and no specular stage do not take the view vector out (V3.1, 32-LP2-VERIFY.md, corrected in LP4.1): without a specular stage the engine zeroes the specular colour (RenderBackend.cpp:2151 clears inter.specularColor, :1156-1158 binds _black for a missing specular image, :1190 writes the zero SPECULARMODIFIER), so the BRDF's specular term and its Fresnel_Schlick( 0, vdotH ) contribute nothing; the view vector reaches these pixels through the view-dependent normal contrast (interaction.ps.hlsl:112-121), which scales the decoded normal's xy by 0.8-1.2 with the per-pixel view vector's z, and _flat does not decode to exactly (0, 0) (about (0.0020, 0.0033): DXT5 alpha 128 and green 128 1/3), so the tilt of the normal, and with it the Lambert term, follows the interpolated view vector. Round 2's R19-R21 (R01-R03's lights on legacy diffuse with bumpmap _flat) differ by 1 on 1,677, 355 and 957 unmasked pixels, mostly on the large floor and ceiling triangles; R14 is exact because its parallel light meets the wall head-on (L near N), where the Lambert term does not feel so small a tilt, not because the wall is uniform. Near-plane clipping only amplifies the effect (a vertex beside or behind the camera carries a view vector almost perpendicular to the view); the parity rows' room split 100 units ahead of the camera (parity.py room_split) stays, harmless. The parity method: R05, R18 and R19-R21 are K28 rows with recorded thresholds (max, mean, p99, the count beyond 1; the mean pins a row's |d| = 1 count), R14 the exact row, the other axial rows +-1 (K28's empirical bound there), R05b reported; the classes live in parity.py's row table. LP7.4 restates it (K44, C55, M-GEO-DIFF-04): the preview draws the .proc's own triangles where its planar islands match the editor's faces (every planar island of the sandbox's four parity .procs and of the fixture's), so the view vector is interpolated over dmap's triangles there and this difference is gone where every face in view is adopted: the 22 k28 rows (R05, R18-R21, A01-A06, G01-G05, M01-M05, B01), the 8 isolated ambient-only shots (K33: A01a, A02a, A06a, G01a-G05a) and the rotated R11 compare max 0 and are exact from LP7.4 on, R05b's envelope is 0, and every axial row but R06 (8 pixels at 1) went from max 1 to 0. K28 is kept for edited faces (an edit on a candidate face returns its island to the editor's triangulation until the next dmap), for unmatched islands and for curved ones (a patch, R10, which stays the patch row; faces within 2.6 degrees that MatchVert welds). Also seen on the fix round's run: dmap snaps brush vertices to its 1/32 grid and removes the faces that lie in slabs thinner than 0.1 between near-coplanar planes (a wall behind panels 0.05 in front of it), and an entity inside such a slab is linked to no area; the preview builds the editor's brushes as they are, so faces closer than 0.1 to another brush's parallel plane can differ in the same way (R13 is built without such faces since round 2)."
     },
     {
       "id": "M-PARITY-02",
@@ -19633,6 +19641,193 @@
       "note": "39-PATCH-NORMAL-FLAKE.md (F1), the loadSixFileCube precedent (M-IMG-DEFECT-03): the three functions transcribed as members of GatheredPatch, an idSurface_Patch subclass (the protected width, height, maxWidth, maxHeight, expanded and verts), with the private GenerateNormals, GenerateIndexes, Expand, RemoveLinearColumnsRows and Collapse reached through member pointers an explicit instantiation hands out, so the copied class and file stay as they are. engineSubdividePatch makes its patch a GatheredPatch: SetSize, the control points and Subdivide (patchDef2) are the copy's, SubdivideExplicit (patchDef3) the transcription's. The same arithmetic in the same order, the same idDrawVert writes and the same allocation (the tagged new idDrawVert[] of outWidth * outHeight, uninitialised, freed after the copy into verts); SampleSinglePatch's width parameter is named outWidth (it shadowed the member). The one difference: SampleSinglePatchPoint gathers the normal's three components in a local idVec3 and calls SetNormal once after the axis loop (M-GEO-DEFECT-01). The vertices' tangent, fourth normal byte and colours stay unwritten, as in the engine; ChunkBuilder writes them (M-GEO-DIFF-01). Pool-safe as the copy (C24, M-GEO-POOL-02). Tested: the fixture's patchDef3 subdivided with the heap poisoned three ways gives the same written bytes and chunk vertices"
     },
     {
+      "id": "M-GEO-FN-18",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/tools/compilers/dmap/map.cpp",
+          "lines": [
+            350,
+            375
+          ],
+          "anchor": "ParseBrush: s->texVec from GetTextureVectors, texValve220, texSize from the editor image's upload size, no integral shift removed for a Valve 220 side",
+          "sha256": "a817bfa7c2284f1ab2a4192317c7bd88b1d3861a69c23b17fdda4dd9a54f6303"
+        },
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            104,
+            117
+          ],
+          "anchor": "idMapBrushSide::GetTextureVectors (Valve 220)",
+          "sha256": "8d755e367b6d3b5c6664af589c59f497dcf2db792aa372ac90af7abd7b578efb"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "lines": [
+            236,
+            248
+          ],
+          "anchor": "TriListForSide: st = xyz * texVec + offset, divided by texSize for Valve 220, through SetTexCoord",
+          "sha256": "efd8bc89add83826e10268063e45b6f3b8da3060a4f991c72ee7947ada990f06"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/dmap.h",
+          "lines": [
+            226,
+            250
+          ],
+          "anchor": "optimizeGroup_t: planeNum, material, mergeGroup and texVec must match",
+          "sha256": "a8189a990333bf2d4b5fb55bea6ab40ca461eabb6529b7a6a72b341deaf849e4"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineValveTextureVectors"
+        },
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "Builder::addPiece (AdoptionPiece::texVec, textureWidth, textureHeight, stOrigin)"
+        },
+        {
+          "file": "lib/TbLitLib/src/ProcIslands.cpp",
+          "symbol": "texVecMatches"
+        }
+      ],
+      "note": "LP7.4 (C55, P7.1 (c)): how dmap derives a side's texture vectors from the map's Valve 220 axes, the key AddTriListToArea's optimize groups compare (M-GEO-DIFF-04): ParseBrush takes ms->GetTextureVectors( s->texVec.v ) (map.cpp:350), which for PROJECTION_VALVE220 is each axis component times ( 1.0f / scale ) and the offset as it is (MapFile.cpp:104-117), in texels; texSize is the material's editor image's upload size (map.cpp:357-366, the preview's C21 editor-image size); the integral shift is removed only for a brush-primitive side (map.cpp:370-375), so two Valve 220 sides whose offsets differ by a whole texture are two groups. TriListForSide then gives a vertex st = ( xyz * texVec[i] + texVec[i][3] ) / texSize[i] through SetTexCoord (usurface.cpp:236-248: half floats). Transcribed as engineValveTextureVectors in the engine's float arithmetic (the same expressions engineValveTexCoord has inlined since LP1b); the chunk builder records it per face piece with the size and the origin offset the piece's .proc-frame positions are less (output.cpp:589). The comparison with an island is at the island's vertices (ProcIslands.cpp texVecMatches, M-GEO-DIFF-04): the piece's st through this rule against the .proc's, within the two half-float units dmap's idDrawVert leaves, WriteFloat's integer snap and the T-junction snap's movement under the st, rather than as the island's own texVec against the face's under TEXTURE_VECTOR_EQUAL_EPSILON and TEXTURE_OFFSET_EQUAL_EPSILON (usurface.cpp:36-37): an island's st are half floats of the unrecentred values, so a texVec derived from them carries errors of a texel and more, far beyond those epsilons. Pure; any thread"
+    },
+    {
+      "id": "M-GEO-DIFF-04",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "lines": [
+            36,
+            37
+          ],
+          "anchor": "TEXTURE_OFFSET_EQUAL_EPSILON, TEXTURE_VECTOR_EQUAL_EPSILON",
+          "sha256": "1a5ae7a571843b68402a4cff03aa279c6571a5b65a716526d7dd2afd21e1b849"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "lines": [
+            48,
+            106
+          ],
+          "anchor": "AddTriListToArea: the optimize group of (area, material, plane, mergeGroup, texVec)",
+          "sha256": "80010ffeba5d99e3ff2ec23418b93d5fddd6b5ac15060d096f009c69e8d721cc"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/optimize.cpp",
+          "lines": [
+            1967,
+            2000
+          ],
+          "anchor": "OptimizeIsland: interior and colinear vertices removed, a new triangulation",
+          "sha256": "6efe58cfd5686e942f885fa8baa568ee5e28468f6c42de1b34687b03e32f5ee4"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/tritjunction.cpp",
+          "lines": [
+            80,
+            80
+          ],
+          "anchor": "SNAP_FRACTIONS 32",
+          "sha256": "56a09afe882bdf9828eca3c85290e39d4af83aa77ca39ecd04d7f658bf5bdac3"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/tritjunction.cpp",
+          "lines": [
+            122,
+            151
+          ],
+          "anchor": "GetHashVert: the snap to 1/32 and the merge into a hash vertex within one snap unit",
+          "sha256": "bb3554e3fc665e5b919248deda4f6c059bbac57c2686baa706a87c2c79c2fcb8"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/output.cpp",
+          "lines": [
+            127,
+            177
+          ],
+          "anchor": "MatchVert: xyz 0.01, st 0.001, normal cosine 0.999",
+          "sha256": "afdd221b998431080d0a5b16a67e49d7febbe43c1633d50ae62dbfccf1fb995b"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            224,
+            268
+          ],
+          "anchor": "ParseModel: the island of each vertex (triangles sharing a vertex index)",
+          "sha256": "722a031a4082e2312dfbb11d510cb357aedc2d10aa77636d1959e76f1ac12f14"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1184,
+            1325
+          ],
+          "anchor": "R_DeriveTangentsWithoutNormals",
+          "sha256": "00e6633724c6f85079570d056007e66a2d5b186ac4402ef6e36c56358f227abb"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1255,
+            1288
+          ],
+          "anchor": "FinishSurfaces: the back-side copies, then R_CleanupTriangles per surface with the material's tangent path",
+          "sha256": "756a817215e020901190588b899862432b2903aa689751035fb991599f21d0be"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/ProcIslands.h",
+          "symbol": "ProcIsland, procSurfaceIslands, buildProcIslands, loadProcIsland, AdoptionPiece, matchProcIsland"
+        },
+        {
+          "file": "lib/TbLitLib/src/ProcIslands.cpp",
+          "symbol": "procSurfaceIslands, matchProcIsland"
+        },
+        {
+          "file": "lib/TbLitLib/src/ProcFile.cpp",
+          "symbol": "loadProcIsland (loadProcSurface's per-vertex code)"
+        },
+        {
+          "file": "lib/TbLitLib/src/MapBake.cpp",
+          "symbol": "readGeometry (MapBake::islands)"
+        },
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "Builder::addPiece, replaced, addAdoptedIslands, finishAdopted"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::adoptTree, storePieces, updateAdoption, dropAdoption, updateAdoptionCounts"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "the frame rows' adopted_islands, adopted_tris, unmatched_islands, curved_islands"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ProcIslands.cpp",
+          "symbol": "the fixture's islands; the test on the fixture pair and hand-made dmap surfaces; [.][parity] the sandbox's four pairs"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_Geometry.cpp",
+          "symbol": "SceneGeometry, the .proc's islands adopted at chunk build (LP7.4, C55); no tree, no adoption"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession the .proc's triangles adopted on a GPU (LP7.4)"
+        }
+      ],
+      "note": "LP7.4 (C55, D133, D138, P7.1, P7.11, K44, SC638-SC644): the engine always draws dmap's triangles; the preview takes them where they match the editor's faces and keeps its own triangulation elsewhere. dmap groups a side's triangles by (area, material, plane, mergeGroup, texVec within TEXTURE_VECTOR_EQUAL_EPSILON 0.001 and TEXTURE_OFFSET_EQUAL_EPSILON 0.005; usurface.cpp:36-37, 48-106; the texVec M-GEO-FN-18), optimizes each group (OptimizeIsland drops every interior and colinear vertex, optimize.cpp:1967-2000), snaps every vertex to 1/32 and merges it into a hash vertex within one snap unit (up to 3/64 per axis, tritjunction.cpp:80, 122-151), and welds the surface's vertices (MatchVert: xyz 0.01, st 0.001, normal 0.999, output.cpp:127-177); ParseModel recentres the st per island of triangles sharing a vertex (RenderWorld_load.cpp:224-268). The preview partitions each .proc surface into those islands (a union-find makes the walk's partition); an island is planar when every triangle's normal is within 0.999 of its largest triangle's and every vertex within 1/32 of that plane (a patch is one curved island, faces within 2.6 degrees that MatchVert welds too: never adopted). A planar island's candidates are the face pieces (not patches) of its model (a world piece's area, a brush entity's own model, K17) and material (before any remap) whose plane is its own (0.999, the centroid within epsilon = 3/64 + 0.01), whose texture vectors give its st at its vertices (M-GEO-FN-18), and whose polygon overlaps it by more than a sliver; the test: every island vertex within epsilon times the square root of 3 of the candidates' union in the plane, every candidate vertex within it of the island's triangles, no two candidates overlapping beyond a sliver (an addition to C55's test: so that a face moved within its plane, which leaves a strip bare and overlaps its neighbour, cannot pay for the hole with the overlap), and the summed areas within the candidates' perimeter times epsilon; positions as ParseModel reads back what dmap wrote. An adopted island's vertices are loadProcSurface's (loadProcIsland: the same per-vertex code, so the same bytes), its triangles dmap's in their vertex order, tangents by the material's path over it (R_DeriveTangentsWithoutNormals for most, tr_trisurf.cpp:1184-1325, as FinishSurfaces runs it on the area model, Model.cpp:1255-1288; a vertex belongs to one island, so the island's tangents are the whole surface's), back sides from its material, the caster version its chunk's own; the pieces it replaces build no triangles and keep their other roles (references through the island's chunk, the solid count). The evaluation runs after a batch applies, per (entity, model, material) group whose pieces changed, beside the references (M-REF-01), synchronously on the render thread; the islands are built with the bake's read on the parse thread. Measured: the fixture's 37 planar islands of 39 adopted, its 182 adopted vertices byte-equal to the engine's own finished vertices in its .bproc; the sandbox's four parity pairs every planar island adopted (areas 112, stages 420, parity 304 with its patch curved, ambient 182). The differences: an island whose candidate face was edited, or whose faces no longer match for any other reason (a material, an alignment, an overlap), keeps the editor's triangulation until the next dmap (K44), and so does every curved island; a .bproc's finished surfaces are never adopted (D138, M-PROC-02); an island of more than MaxChunkWeldedVerts vertices is not adopted (a chunk holds an island whole); dress fragments (C54) and inlined models' triangles match no face and are counted unmatched until LP7.3 identifies the dress"
+    },
+    {
       "id": "M-FEED-DIFF-05",
       "kind": "difference",
       "engine": [
@@ -20529,7 +20724,7 @@
           "symbol": "the [.][feed] tag comment (in none of the [.][litgpu*] suites)"
         }
       ],
-      "note": "LP5.0 step 6 (RUN.md, the director's decisions after LPF.1 (5); P6.24), test only, no engine counterpart: the hidden GPU cases run in two suites, each under the 180 s wall clock in Debug: [.][litgpu] LP0-LP2's (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit; 5 cases, 95.5 / 97.8 / 99.1 s at LP5.0) and [.][litgpu2] LP4's and later ones (ambient pass, light-grid path, live feed, LP5's programs; 4 cases, 59.7 / 59.8 / 60.4 s); LPF.2's host cases stay [.][feed]. Each case makes its own instance, device and session, bounds its waits (H.1) and resets the dispatcher, so either suite runs alone and in any order. The gate measures both and a third tag comes once one passes 150 s. TbUiLib's [.][litgpu] cases are not split LP7.0 step 1 (D134, C56): a third tag, [.][litgpu3], takes LP5's seven cases (LP5.0 programs, LP5.1 math, LP5.2a pass 8, LP5.2b texgens, LP5.F sizes, LP5.3 fog, LP5.G reload); [.][litgpu2] keeps LP4.2a, LP4.3 and LPF.1; [.][litgpu] is unchanged. Debug wall clocks at the split: [litgpu] 92.3 / 95.5 / 92.7 s (5 cases), [litgpu2] 59.1 / 59.4 / 59.0 s (3), [litgpu3] 77.9 / 78.5 / 77.7 s (7). LP7's cases join [litgpu3] until it passes 150 s, then a fourth. The GPU cases' frame-log field count is one constant, FrameLogFields (69 since LP7.0)"
+      "note": "LP5.0 step 6 (RUN.md, the director's decisions after LPF.1 (5); P6.24), test only, no engine counterpart: the hidden GPU cases run in two suites, each under the 180 s wall clock in Debug: [.][litgpu] LP0-LP2's (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit; 5 cases, 95.5 / 97.8 / 99.1 s at LP5.0) and [.][litgpu2] LP4's and later ones (ambient pass, light-grid path, live feed, LP5's programs; 4 cases, 59.7 / 59.8 / 60.4 s); LPF.2's host cases stay [.][feed]. Each case makes its own instance, device and session, bounds its waits (H.1) and resets the dispatcher, so either suite runs alone and in any order. The gate measures both and a third tag comes once one passes 150 s. TbUiLib's [.][litgpu] cases are not split LP7.0 step 1 (D134, C56): a third tag, [.][litgpu3], takes LP5's seven cases (LP5.0 programs, LP5.1 math, LP5.2a pass 8, LP5.2b texgens, LP5.F sizes, LP5.3 fog, LP5.G reload); [.][litgpu2] keeps LP4.2a, LP4.3 and LPF.1; [.][litgpu] is unchanged. Debug wall clocks at the split: [litgpu] 92.3 / 95.5 / 92.7 s (5 cases), [litgpu2] 59.1 / 59.4 / 59.0 s (3), [litgpu3] 77.9 / 78.5 / 77.7 s (7). LP7's cases join [litgpu3] until it passes 150 s, then a fourth. The GPU cases' frame-log field count is one constant, FrameLogFields (69 since LP7.0). LP7.4: the first of LP7's, LitSession the .proc's triangles adopted on a GPU, joins [litgpu3] (8 cases, 78.8 s at its first run); LPF.1's frame-log check reads the four adoption counts as numbers, the model and dress counts still 0"
     },
     {
       "id": "M-INTER-02",
