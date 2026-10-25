@@ -90,15 +90,22 @@ Result<BprocTree> readBprocTree(
              // C31: the stored bounds are FinishSurfaces' own (deforming surfaces grown)
              procModel.bounds = model.bounds;
              procModel.boundsKnown = true;
-             for (const auto& surface : model.surfaces)
+             // LP7.0 (D138, P7.12): finished surfaces, kept as readBinaryModel read them
+             procModel.finished = true;
+             for (auto& surface : model.surfaces)
              {
                auto procSurface = ProcSurface{};
-               procSurface.material = surface.material;
+               procSurface.material = std::move(surface.material);
                procSurface.numVerts = surface.numVerts;
                procSurface.numIndexes = int(surface.indexes.size());
+               // the binary keeps no vertex format
+               procSurface.vertexFormat = -1;
                // a surface without geometry stores no bounds
                procSurface.bounds =
                  surface.geometry ? surface.bounds : engineClearedBounds();
+               procSurface.finishedVerts = std::move(surface.verts);
+               procSurface.indexes.assign(surface.indexes.begin(), surface.indexes.end());
+               procSurface.tangentsCalculated = surface.tangentsCalculated;
                procModel.surfaces.push_back(std::move(procSurface));
              }
              procModel.name = std::move(model.name);

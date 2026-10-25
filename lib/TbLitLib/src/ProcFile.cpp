@@ -438,11 +438,35 @@ void recentre(
 
 } // namespace
 
+std::size_t procTreeBytes(const ProcTree& tree)
+{
+  auto bytes = std::size_t{0};
+  for (const auto& model : tree.models)
+  {
+    for (const auto& surface : model.surfaces)
+    {
+      bytes += surface.verts.size() * sizeof(float)
+               + surface.finishedVerts.size() * sizeof(EngineDrawVert)
+               + surface.indexes.size() * sizeof(int);
+    }
+  }
+  for (const auto& portal : tree.portals)
+  {
+    bytes += portal.points.size() * sizeof(std::array<float, 3>);
+  }
+  return bytes + tree.nodes.size() * sizeof(ProcNode);
+}
+
 std::vector<EngineDrawVert> loadProcSurface(const ProcSurface& surface)
 {
   const auto floats = std::size_t(surface.vertexFormat == 1 ? FloatsColor : FloatsBasic);
-  auto raw = surface.verts;
   const auto numVerts = std::size_t(surface.numVerts);
+  // a surface read without its geometry, or a .bproc's finished one (no floats)
+  if (surface.verts.size() != numVerts * floats)
+  {
+    return {};
+  }
+  auto raw = surface.verts;
   recentre(
     numVerts,
     surface.indexes,
@@ -463,7 +487,13 @@ std::vector<EngineDrawVert> loadProcSurface(const ProcSurface& surface)
     vert.xyz = {v[0], v[1], v[2]};
     engineSetTexCoord(vert, v[3], v[4]);
     engineSetNormal(vert, {v[5], v[6], v[7]});
-    // the colour format's colours are LP7's (PackColorRound); the fixtures have none
+    // :300-321: the basic format opaque white (engineClearedVert); the colour format
+    // "rounded: dmap wrote byte / 255 with six decimals, which can parse a hair below
+    // the byte" (PackColorRound, LP7.0, C4 extended); color2 stays zero (Clear)
+    if (surface.vertexFormat == 1)
+    {
+      engineSetColor(vert, enginePackColorRound({v[8], v[9], v[10], v[11]}));
+    }
     verts.push_back(vert);
   }
   return verts;

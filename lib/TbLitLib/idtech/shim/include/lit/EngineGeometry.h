@@ -116,6 +116,18 @@ float engineBiTangentSign(const EngineDrawVert& vert);
 // idDrawVert::Clear with C4's colours: white, color2 zero
 EngineDrawVert engineClearedVert();
 
+/**
+ * LP7.0 (C4 extended, C54): Lib.cpp:175-182 PackColorRound, transcribed: each of r, g, b
+ * and a through the copied idMath::Ftob( x * 255 + 0.5 ) (Ftob truncates the value
+ * clamped to 0..255: the nearest byte, 0 below 0, 255 above 1), packed as
+ * ( dx << 0 ) | ( dy << 8 ) | ( dz << 16 ) | ( dw << 24 ). ParseModel packs a
+ * PROC_VERTEX_FORMAT_COLOR vertex's rgba with it (RenderWorld_load.cpp:313-317).
+ */
+std::uint32_t enginePackColorRound(const std::array<float, 4>& rgba);
+// idDrawVert::SetColor (DrawVert.h:535-538): the dword stored as it lies in memory, so on
+// a little-endian machine color[0] is its low byte (PackColorRound's red)
+void engineSetColor(EngineDrawVert& vert, std::uint32_t color);
+
 // ----- planes and windings (pure) -----
 
 /**

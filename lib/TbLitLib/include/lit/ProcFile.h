@@ -23,6 +23,7 @@
 #include "lit/EngineGeometry.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -47,18 +48,26 @@ struct ProcPortal
   std::vector<std::array<float, 3>> points;
 };
 
-// one surface of a .proc model; the geometry only when the reader was asked for it (the
-// goldens; the dress geometry of LP7)
+// one surface of a .proc model; the geometry only when the reader was asked for it
+// (LP7.0, C54, D138: the product's bake read asks for it, MapBake; the goldens)
 struct ProcSurface
 {
   std::string material;
   int numVerts = 0;
   int numIndexes = 0;
-  // 0 PROC_VERTEX_FORMAT_BASIC, 1 PROC_VERTEX_FORMAT_COLOR (mapProcFile004)
+  // 0 PROC_VERTEX_FORMAT_BASIC, 1 PROC_VERTEX_FORMAT_COLOR (mapProcFile004); -1 none: a
+  // .bproc's finished surface (ProcModel::finished), whose binary keeps no format
   int vertexFormat = 0;
-  // 8 or 12 floats per vertex (xyz st normal [rgba]), as the lexer parsed them
+  // a .proc's: 8 or 12 floats per vertex (xyz st normal [rgba]), as the lexer parsed them
   std::vector<float> verts;
+  // the triangles' vertex indexes: a .proc's as parsed, a .bproc's as readBinaryModel
+  // read them
   std::vector<int> indexes;
+  // LP7.0 (D138, P7.12): a .bproc's finished surface as readBinaryModel reads it
+  // (lit/BprocModel.h): the stored draw vertices, tangents and packed colour included;
+  // empty for a .proc's surface. tangentsCalculated is the stored flag
+  std::vector<EngineDrawVert> finishedVerts;
+  bool tangentsCalculated = false;
   // C31 (LP4.0): the bounds R_BoundTriSurf gives the surface (tr_trisurf.cpp:606-609,
   // SIMDProcessor->MinMax over every vertex: the shim's scalar MinMax, mirror.json
   // M-GEO-FN-01), recorded from the parsed positions whether or not the reader keeps the
@@ -79,6 +88,12 @@ struct ProcModel
   // for every model the .proc reader makes
   std::array<EngineVec3, 2> bounds = {};
   bool boundsKnown = false;
+  // LP7.0 (D138, P7.12): the model's surfaces are finished: a .bproc's (FinishSurfaces'
+  // back-side copies, mirrored duplicates, tangents, the colour packed, no vertex format:
+  // ProcSurface::finishedVerts); false for a .proc's, whose surfaces are ParseModel's
+  // input (ProcSurface::verts). Nothing draws from either in LP7.0; C54 and C55 read a
+  // .proc's only
+  bool finished = false;
 };
 
 /**
@@ -104,6 +119,15 @@ struct ProcTree
  * lexer's messages go to the calling thread's sink (D63).
  */
 Result<ProcTree> readProcFile(std::string_view text, bool geometry = false);
+
+/**
+ * LP7.0 (C54): the bytes a tree's arrays hold: per surface its vertex floats (4 B each),
+ * its finished draw vertices (32 B each) and its indexes (4 B each), the portals' points
+ * (12 B each) and the nodes (24 B each); the strings and the containers' own sizes are
+ * not counted. The service's stats and the frame log's stop row report it as proc_bytes.
+ * Pure; any thread.
+ */
+std::size_t procTreeBytes(const ProcTree& tree);
 
 // a model's area: N for "_areaN", -1 for any other name (InitFromMap's area models).
 // Pure; any thread.
@@ -136,8 +160,11 @@ float procReadBack(float value);
 /**
  * RenderWorld_load.cpp:224-321, the ParseModel mirror of one surface: st recentred per
  * island of triangles sharing a vertex by Ftoi((min + max) / 2) per component, then
- * SetTexCoord (half floats) and SetNormal (bytes), white colour and color2 zero for the
- * basic format (C4). The surface must hold its geometry. Pure; any thread.
+ * SetTexCoord (half floats) and SetNormal (bytes); the colour (LP7.0, C4 extended: the
+ * file's) opaque white for the basic format and, for PROC_VERTEX_FORMAT_COLOR, the rgba
+ * floats through PackColorRound (enginePackColorRound), color2 zero (idDrawVert::Clear).
+ * Empty for a surface without its .proc geometry (read without it, or a .bproc's finished
+ * surface). Pure; any thread.
  */
 std::vector<EngineDrawVert> loadProcSurface(const ProcSurface& surface);
 

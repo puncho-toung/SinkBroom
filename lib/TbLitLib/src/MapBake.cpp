@@ -103,8 +103,12 @@ void readGeometry(DeclSource& source, MapBake& bake)
   {
     if (const auto text = readFile(source, bake, procPath))
     {
-      readProcFile(*text) | kdl::transform([&](ProcTree tree) {
+      // LP7.0 (C54, D132): with the geometry, which the dress decals (LP7.3) and the
+      // adoption of the .proc's triangles (LP7.4) read; the parse is the same, the cost
+      // is the tree's memory (procBytes)
+      readProcFile(*text, true) | kdl::transform([&](ProcTree tree) {
         bake.geometry = MapBake::Geometry::Proc;
+        bake.procBytes = procTreeBytes(tree);
         bake.tree = std::make_shared<const ProcTree>(std::move(tree));
       }) | kdl::transform_error([&](auto e) { bake.geometryError = std::move(e.msg); });
     }
@@ -133,6 +137,7 @@ void readGeometry(DeclSource& source, MapBake& bake)
   readBprocTree(bytesOf(*bytes), procProbe.exists())
     | kdl::transform([&](BprocTree bproc) {
         bake.geometry = MapBake::Geometry::Bproc;
+        bake.procBytes = procTreeBytes(bproc.tree);
         bake.tree = std::make_shared<const ProcTree>(std::move(bproc.tree));
         // the world's mapName is the stored one, which names the bake files
         bake.bakeBase = stripExtension(bproc.mapName);

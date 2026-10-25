@@ -38,10 +38,12 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <future>
 #include <iostream>
 #include <latch>
@@ -433,6 +435,79 @@ TEST_CASE("ProcFile: what the reader refuses")
   CHECK(pointInArea(t, {1, 0, 0}) == 0);
   CHECK(pointInArea(t, {0, 0, 0}) == 1);
   static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+}
+
+// LP7.0 (C4 extended, C54): RenderWorld_load.cpp:300-321, a PROC_VERTEX_FORMAT_COLOR
+// surface's rgba through PackColorRound (Lib.cpp:175-182) into color, color2 zero; the
+// basic format opaque white
+TEST_CASE("ProcFile: the colour format's colours (LP7.0, C4, C54)")
+{
+  const auto text = std::string{
+    "mapProcFile004\n"
+    "model { \"_area0\" 3\n"
+    "{ \"textures/a\" 4 6 1\n"
+    "( 0 0 0 0 0 0 0 1 1 1 1 0.5 ) ( 64 0 0 1 0 0 0 1 1 1 1 0.5 )\n"
+    "( 64 64 0 1 1 0 0 1 1 1 1 1 ) ( 0 64 0 0 1 0 0 1 1 1 1 1 )\n"
+    "0 1 2 0 2 3 }\n"
+    "{ \"textures/b\" 3 3 0\n"
+    "( 0 0 0 0 0 0 0 1 ) ( 64 0 0 1 0 0 0 1 ) ( 0 64 0 0 1 0 0 1 )\n"
+    "0 1 2 }\n"
+    "{ \"textures/c\" 3 3 1\n"
+    "( 0 0 0 0 0 0 0 1 0.498039 0 1.5 -0.25 )\n"
+    "( 64 0 0 1 0 0 0 1 0.501961 0.003922 0 1 )\n"
+    "( 0 64 0 0 1 0 0 1 0 0 0 0 )\n"
+    "0 1 2 }\n"
+    "}\n"};
+  const auto tree = readProcFile(text, true)
+                    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  REQUIRE(tree.models.size() == 1u);
+  CHECK_FALSE(tree.models[0].finished);
+  const auto& surfaces = tree.models[0].surfaces;
+  REQUIRE(surfaces.size() == 3u);
+  using Bytes = std::array<std::uint8_t, 4>;
+  constexpr auto Zero = Bytes{0, 0, 0, 0};
+
+  // four vertices with rgba (1, 1, 1, 0.5) and (1, 1, 1, 1)
+  CHECK(surfaces[0].vertexFormat == 1);
+  const auto colour = loadProcSurface(surfaces[0]);
+  REQUIRE(colour.size() == 4u);
+  CHECK(colour[0].color == Bytes{255, 255, 255, 128});
+  CHECK(colour[1].color == Bytes{255, 255, 255, 128});
+  CHECK(colour[2].color == Bytes{255, 255, 255, 255});
+  CHECK(colour[3].color == Bytes{255, 255, 255, 255});
+  for (const auto& vert : colour)
+  {
+    CHECK(vert.color2 == Zero);
+  }
+
+  // the basic format: opaque white (PackColor( colorWhite ))
+  const auto basic = loadProcSurface(surfaces[1]);
+  REQUIRE(basic.size() == 3u);
+  for (const auto& vert : basic)
+  {
+    CHECK(vert.color == Bytes{255, 255, 255, 255});
+    CHECK(vert.color2 == Zero);
+  }
+
+  // rounded, not truncated: dmap's byte / 255 with six decimals parses a hair below the
+  // byte (127 / 255 = 0.498039..., PackColor would give 126); Ftob clamps 1.5 to 255 and
+  // -0.25 to 0
+  const auto rounded = loadProcSurface(surfaces[2]);
+  REQUIRE(rounded.size() == 3u);
+  CHECK(rounded[0].color == Bytes{127, 0, 255, 0});
+  CHECK(rounded[1].color == Bytes{128, 1, 0, 255});
+  CHECK(rounded[2].color == Zero);
+  CHECK(enginePackColorRound({0.498039f, 0.0f, 1.5f, -0.25f}) == 0x00FF007Fu);
+
+  // read without the geometry, a surface has nothing to load
+  const auto bare =
+    readProcFile(text) | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  CHECK(loadProcSurface(bare.models[0].surfaces[0]).empty());
+  // the tree's bytes: 4 * 12 + 3 * 8 + 3 * 12 floats and 12 indexes, 4 B each
+  CHECK(procTreeBytes(tree) == (48u + 24u + 36u + 12u) * 4u);
+  CHECK(procTreeBytes(bare) == 0u);
 }
 
 TEST_CASE("ChunkBuilder: worldspawn's rules and K17")
@@ -2087,6 +2162,13 @@ TEST_CASE("MaterialService, map bakes on the parse thread (C10, D64)")
   REQUIRE(found->bake);
   CHECK(found->bake->geometry == MapBake::Geometry::Proc);
   CHECK(found->bake->mapName == "maps/lp1b_geometry");
+  // LP7.0 (C54): the tree keeps the .proc's geometry, and its bytes are the stats' (the
+  // two slots without a tree count nothing)
+  CHECK(found->bake->procBytes == procTreeBytes(*found->tree));
+  CHECK(found->tree->models.front().surfaces.front().verts.size() > 0u);
+  CHECK(service->waitForStatsForTesting(
+    [&](const MaterialServiceStats& s) { return s.procBytes == found->bake->procBytes; },
+    10s));
   const auto none = table->findMapBake(missing);
   REQUIRE(none);
   CHECK_FALSE(none->tree);
@@ -2125,6 +2207,9 @@ TEST_CASE("MaterialService, map bakes on the parse thread (C10, D64)")
     },
     10s);
   CHECK(polled->findMapBake(path)->ticket == again);
+  // the new tree's bytes replace the old one's: one node, 24 B
+  CHECK(service->waitForStatsForTesting(
+    [&](const MaterialServiceStats& s) { return s.procBytes == 24u; }, 10s));
   service->requestStop();
   service->join();
   static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));

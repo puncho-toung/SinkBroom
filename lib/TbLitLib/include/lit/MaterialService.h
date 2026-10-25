@@ -432,6 +432,9 @@ struct MaterialServiceStats
   // dropped for the budget so far
   std::size_t imageBytes = 0;
   std::uint64_t evictedImages = 0;
+  // LP7.0 (C54): the bytes of the area trees the latest table's bakes hold, each tree
+  // once (MapBake::procBytes, their geometry included)
+  std::size_t procBytes = 0;
   // LPF.0a (D96): override hand-overs replaced by a newer one of the name before their
   // work item ran (their bytes dropped), and the slots converted from the override store
   std::uint64_t droppedFeeds = 0;

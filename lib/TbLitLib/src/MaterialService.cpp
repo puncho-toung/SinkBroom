@@ -546,6 +546,8 @@ private:
   std::unordered_map<std::string, StoredReparse> m_reparses;
   std::size_t m_imageBytes = 0;
   std::uint64_t m_evictedImages = 0;
+  // LP7.0 (C54): the bytes of the bakes' trees (stats().procBytes)
+  std::size_t m_procBytes = 0;
   // S2 Low (S2.7): the poll's place in the files it re-probes, a slice per poll
   std::vector<MaterialImageKey> m_pollImageKeys;
   std::vector<std::string> m_pollMaterials;
@@ -997,10 +999,12 @@ private:
     const auto imageBytes = m_imageBytes;
     const auto evicted = m_evictedImages;
     const auto conversions = m_overrideConversions;
+    const auto procBytes = m_procBytes;
     {
       auto lock = std::scoped_lock{m_shared.mutex};
       m_shared.table = std::move(table);
       m_shared.stats.imageBytes = imageBytes;
+      m_shared.stats.procBytes = procBytes;
       m_shared.stats.evictedImages = evicted;
       m_shared.stats.overrideConversions = conversions;
     }
@@ -1851,6 +1855,16 @@ private:
     slot->ticket = ticket;
     m_working.mapBakes =
       m_working.mapBakes.set(path, std::shared_ptr<const MapBakeSlot>{std::move(slot)});
+
+    // LP7.0 (C54): the trees' bytes, a tree two paths share once
+    auto trees = std::unordered_set<const ProcTree*>{};
+    m_procBytes = 0;
+    m_working.mapBakes.forEach([&](const std::string&, const auto& held) {
+      if (held->bake && held->tree && trees.insert(held->tree.get()).second)
+      {
+        m_procBytes += held->bake->procBytes;
+      }
+    });
   }
 
   // S2.3: one bake per work item

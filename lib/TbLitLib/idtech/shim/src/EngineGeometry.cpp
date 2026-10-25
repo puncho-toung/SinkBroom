@@ -20,7 +20,8 @@
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/framework/File.cpp, renderer/Model.cpp,
-// renderer/tr_trisurf.cpp, idlib/MapFile.cpp, idlib/geometry/Surface_Patch.cpp,
+// renderer/tr_trisurf.cpp, idlib/Lib.cpp, idlib/MapFile.cpp,
+// idlib/geometry/Surface_Patch.cpp,
 // tools/compilers/dmap/map.cpp, dmap/output.cpp, dmap/tritools.cpp and
 // dmap/usurface.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
@@ -238,6 +239,25 @@ EngineDrawVert engineClearedVert()
   // RenderWorld_load.cpp ParseModel's opaque white (C4); color2 stays zero
   v.color[0] = v.color[1] = v.color[2] = v.color[3] = 255;
   return fromId(v);
+}
+
+std::uint32_t enginePackColorRound(const std::array<float, 4>& rgba)
+{
+  // Lib.cpp:175-182 PackColorRound: "Rounds to the nearest byte; Ftob clamps, so values
+  // outside 0..1 pack as 0 or 255"
+  const auto dx = idMath::Ftob(rgba[0] * 255.0f + 0.5f);
+  const auto dy = idMath::Ftob(rgba[1] * 255.0f + 0.5f);
+  const auto dz = idMath::Ftob(rgba[2] * 255.0f + 0.5f);
+  const auto dw = idMath::Ftob(rgba[3] * 255.0f + 0.5f);
+  return (std::uint32_t(dx) << 0) | (std::uint32_t(dy) << 8) | (std::uint32_t(dz) << 16)
+         | (std::uint32_t(dw) << 24);
+}
+
+void engineSetColor(EngineDrawVert& vert, const std::uint32_t color)
+{
+  auto v = toId(vert);
+  v.SetColor(dword(color));
+  vert = fromId(v);
 }
 
 std::optional<EnginePlane> engineSidePlane(

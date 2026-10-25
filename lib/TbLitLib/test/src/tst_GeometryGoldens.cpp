@@ -27,6 +27,7 @@
 #include "LitMapFixture.h"
 #include "LitTestUtils.h"
 #include "lit/AreaTree.h"
+#include "lit/BprocFile.h"
 #include "lit/BprocModel.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/EngineGeometry.h"
@@ -62,6 +63,8 @@ struct Fixture
   std::shared_ptr<const MaterialTable> materials;
   std::shared_ptr<const ProcTree> proc;
   BprocFile bproc;
+  // LP7.0 (D138): the same .bproc as the bake's read makes its tree (readBprocTree)
+  BprocTree bprocTree;
 };
 
 std::vector<std::byte> readBytes(const std::filesystem::path& path)
@@ -89,6 +92,8 @@ const Fixture& fixture()
     const auto bytes = readBytes(goldens / "lp1b_geometry.bproc");
     f.bproc = readBprocFile(bytes) | kdl::if_error([](const auto& e) { FAIL(e.msg); })
               | kdl::value();
+    f.bprocTree = readBprocTree(bytes, true)
+                  | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
     static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
     return f;
   }();
@@ -733,6 +738,13 @@ TEST_CASE("Geometry goldens: (b) the copied tangent code against the .bproc")
         ++vertsChecked;
       }
       CHECK(cleaned->mirroredVerts == expected.mirroredVerts);
+      // LP7.0 (D138): the bake's .bproc tree keeps these finished surfaces as they are
+      const auto& kept = f.bprocTree.tree.models[m].surfaces[s];
+      CHECK(f.bprocTree.tree.models[m].finished);
+      CHECK(kept.finishedVerts == cleaned->verts);
+      CHECK(
+        kept.indexes
+        == std::vector<int>(cleaned->indexes.begin(), cleaned->indexes.end()));
       ++surfacesChecked;
     }
   }

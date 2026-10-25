@@ -25,6 +25,7 @@
 #include "LitTestUtils.h"
 #include "fs/TestEnvironment.h"
 #include "lit/BprocFile.h"
+#include "lit/BprocModel.h"
 #include "lit/GameFileSource.h"
 #include "lit/LightGridFile.h"
 #include "lit/MapBake.h"
@@ -38,6 +39,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <iostream>
 #include <span>
 #include <string>
 #include <thread>
@@ -353,6 +355,76 @@ TEST_CASE("MapBake, the C10 search through the game files")
     CHECK(bake.bakeBase == "maps/sub/m");
     CHECK(bake.files.front().path == "maps/sub/m.proc");
     CHECK(bake.files.front().probe.kind == GameFileProbe::Kind::Loose);
+  }
+
+  SECTION("LP7.0: the .proc's geometry is kept, and its bytes counted (C54, D132)")
+  {
+    const auto text = readTextFile(goldens() / "lp1b_geometry.proc");
+    writeTextFile(procPath, text);
+    const auto bake = readBake();
+    REQUIRE(bake.geometry == MapBake::Geometry::Proc);
+    REQUIRE(bake.tree);
+    const auto withGeometry = readProcFile(text, true) | kdl::value();
+    const auto without = readProcFile(text) | kdl::value();
+    drain();
+    REQUIRE(bake.tree->models.size() == withGeometry.models.size());
+    auto vertices = std::size_t{0};
+    for (auto m = std::size_t{0}; m < withGeometry.models.size(); ++m)
+    {
+      const auto& model = bake.tree->models[m];
+      CHECK_FALSE(model.finished);
+      REQUIRE(model.surfaces.size() == withGeometry.models[m].surfaces.size());
+      for (auto s = std::size_t{0}; s < model.surfaces.size(); ++s)
+      {
+        const auto& surface = model.surfaces[s];
+        const auto& expected = withGeometry.models[m].surfaces[s];
+        CHECK(surface.verts == expected.verts);
+        CHECK(surface.indexes == expected.indexes);
+        CHECK(surface.finishedVerts.empty());
+        CHECK(loadProcSurface(surface).size() == std::size_t(surface.numVerts));
+        vertices += std::size_t(surface.numVerts);
+      }
+    }
+    CHECK(bake.procBytes == procTreeBytes(*bake.tree));
+    CHECK(bake.procBytes > procTreeBytes(without));
+    std::cout << "proc_bytes lp1b_geometry.proc: " << bake.procBytes << " (without the "
+              << "geometry " << procTreeBytes(without) << "; " << vertices
+              << " vertices)\n";
+  }
+
+  SECTION("LP7.0: the .bproc's surfaces are kept finished, without a format (D138)")
+  {
+    const auto bytes = readTextFile(goldens() / "lp1b_geometry.bproc");
+    const auto file = readBprocFile(bytesOf(bytes)) | kdl::value();
+    const auto bake = readBake();
+    REQUIRE(bake.geometry == MapBake::Geometry::Bproc);
+    REQUIRE(bake.tree);
+    REQUIRE(bake.tree->models.size() == file.models.size());
+    auto vertices = std::size_t{0};
+    for (auto m = std::size_t{0}; m < file.models.size(); ++m)
+    {
+      const auto& model = bake.tree->models[m];
+      CHECK(model.finished);
+      REQUIRE(model.surfaces.size() == file.models[m].surfaces.size());
+      for (auto s = std::size_t{0}; s < model.surfaces.size(); ++s)
+      {
+        const auto& surface = model.surfaces[s];
+        const auto& stored = file.models[m].surfaces[s];
+        CHECK(surface.vertexFormat == -1);
+        CHECK(surface.verts.empty());
+        CHECK(surface.finishedVerts == stored.verts);
+        CHECK(
+          surface.indexes
+          == std::vector<int>(stored.indexes.begin(), stored.indexes.end()));
+        CHECK(surface.tangentsCalculated == stored.tangentsCalculated);
+        // nothing to load: the surface is not ParseModel's input
+        CHECK(loadProcSurface(surface).empty());
+        vertices += surface.finishedVerts.size();
+      }
+    }
+    CHECK(bake.procBytes == procTreeBytes(*bake.tree));
+    std::cout << "proc_bytes lp1b_geometry.bproc: " << bake.procBytes << " (" << vertices
+              << " finished vertices)\n";
   }
 
   SECTION("else the .bproc, whose stored map name names the bake files")

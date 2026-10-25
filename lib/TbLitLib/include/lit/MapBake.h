@@ -24,6 +24,7 @@
 #include "lit/MaterialDecls.h"
 #include "lit/ProcFile.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -74,6 +75,8 @@ struct MapBake
   std::shared_ptr<const ProcTree> tree;
   // why there is no tree, or why the .proc was passed over for the .bproc
   std::string geometryError;
+  // LP7.0 (C54): the tree's bytes (procTreeBytes), its geometry included; 0 without one
+  std::size_t procBytes = 0;
   // C31 (LP4.0): the areas' bounds and what the portal flow reads of the tree, built with
   // it on the parse thread (buildAreaData); null without a tree
   std::shared_ptr<const AreaData> areas;
