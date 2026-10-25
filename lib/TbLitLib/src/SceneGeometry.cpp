@@ -74,12 +74,15 @@ bool originIn(const MaterialTable* table, const std::string& material)
   return slot && slot->entry && (slot->entry->contentFlags & ContentsOrigin) != 0;
 }
 
-// LP5.F (S2.2): the material's editor-image size in a table is final: its slot is
-// measured, or Failed (no entry, no image)
-bool sizeMeasuredIn(const MaterialTable* table, const std::string& material)
+// LP5.F (S2.2): the material's editor-image size in a table is final for cells built at
+// a Default size or not (Chunk::provisional): its slot is measured, or Failed (no entry,
+// no image), or (D52) a Ready size kept for it not published again unmeasured (D111)
+bool sizeFinalIn(
+  const MaterialTable* table, const std::string& material, const bool defaultSize)
 {
   const auto slot = table ? table->find(material) : nullptr;
-  return slot && (!slot->entry || slot->sizeMeasured);
+  return slot
+         && (!slot->entry || slot->sizeMeasured || (!defaultSize && !slot->remeasured));
 }
 
 // removes refs from every set of waiting, and the sets that are empty then
@@ -536,13 +539,17 @@ void SceneGeometry::scanTable()
     }
     else
     {
-      // LP5.F: a measure that found the size the cells were built with ends their wait
-      it->second.measured =
-        it->second.measured || sizeMeasuredIn(m_table.get(), it->first);
+      // LP5.F: a measure that found the size the cells were built with ends their wait;
+      // a slot published again unmeasured (D111) starts one
+      it->second.measured = sizeFinalIn(
+        m_table.get(),
+        it->first,
+        it->second.size.state == EditorImageSize::State::Default);
       ++it;
     }
   }
   updateMeasureWait();
+  m_sizesRevision = m_table->sizesRevision;
   // LPF.0b (C43, D106, P5.9): a re-parse moved the table's materialsRevision: the cells
   // of every material whose revision stamp is no more the one they were built with are
   // built again (whether the material made a chunk or not), and an entity whose material
@@ -774,8 +781,7 @@ void SceneGeometry::apply(ChunkJobOutput output)
       sized.size = tableSizeOf(chunk.key.material);
       // LP5.F (D77, A41): a chunk built at a Default size while its slot is unmeasured
       // waits for the measure (waitsForMaterials); a measured Default is final
-      sized.measured =
-        !chunk.provisional || sizeMeasuredIn(m_table.get(), chunk.key.material);
+      sized.measured = sizeFinalIn(m_table.get(), chunk.key.material, chunk.provisional);
       if (!sized.measured && m_materials)
       {
         // a slot the bulk parse published is measured once looked up (S2.2)
@@ -1050,6 +1056,11 @@ std::uint64_t SceneGeometry::appliedSequence() const
 std::uint64_t SceneGeometry::scannedMaterialsRevision() const
 {
   return m_materialsRevision;
+}
+
+std::uint64_t SceneGeometry::scannedSizesRevision() const
+{
+  return m_sizesRevision;
 }
 
 std::shared_ptr<const ProcTree> SceneGeometry::procTree() const

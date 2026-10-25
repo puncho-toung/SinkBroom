@@ -64,6 +64,10 @@ struct MaterialSlot
   // the last Ready size of the material (D52) or the registry's Default, and a lookup of
   // the name queues the measure
   bool sizeMeasured = false;
+  // LP5.F (D111, S2.5): published again unmeasured over a measured size (remeasure: an
+  // override's new editorSize, a changed file the poll found): until it is measured, its
+  // size is not final, whatever its state
+  bool remeasured = false;
 };
 
 // C22: what an entityDef query has found for a classname: an entry, or why there is none
@@ -203,6 +207,10 @@ struct MaterialTable
    * moves it not. Kept across reloads.
    */
   std::uint64_t materialsRevision = 0;
+  // LP5.F (D111): moves with every slot published again unmeasured (MaterialSlot::
+  // remeasured), so that a consumer of the sizes sees a table it has not scanned. Kept
+  // across reloads
+  std::uint64_t sizesRevision = 0;
   // LPF.0a (C41): the bytes the override store holds (the callers' pixels or ready
   // levels), not the converted slots' (those count in the image budget)
   std::size_t overrideBytes = 0;

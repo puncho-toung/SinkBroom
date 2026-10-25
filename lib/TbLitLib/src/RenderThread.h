@@ -117,9 +117,18 @@ GpuMemoryAccount accountGpuMemory(
  */
 // DX.4 (LP4.2b step 0): the scene's applied batches, busy(), waitsForBake(),
 // waitsForEntityDefs(), waitsForMaterials(), probesInFlight() and the probe table's
-// version; LPF.1 (C43, C44): the materialsRevision it scanned last
-using SceneWaitState =
-  std::tuple<std::uint64_t, bool, bool, bool, bool, bool, std::uint64_t, std::uint64_t>;
+// version; LPF.1 (C43, C44): the materialsRevision it scanned last; LP5.F (D111): the
+// sizesRevision it scanned last
+using SceneWaitState = std::tuple<
+  std::uint64_t,
+  bool,
+  bool,
+  bool,
+  bool,
+  bool,
+  std::uint64_t,
+  std::uint64_t,
+  std::uint64_t>;
 
 /**
  * LP4.3 (C38, D90): the status line's bake fields of a scene: its adopted bake's state,
@@ -351,6 +360,8 @@ private:
   std::uint64_t m_frameFeedApplied = 0;
   std::uint64_t m_frameImageChanges = 0;
   std::uint64_t m_frameMaterialsRevision = 0;
+  // LP5.F (D111): its sizesRevision (converge's geometryInFlight)
+  std::uint64_t m_frameSizesRevision = 0;
   // and its override store's bytes (the frame log's override_bytes)
   std::uint64_t m_frameOverrideBytes = 0;
   /**

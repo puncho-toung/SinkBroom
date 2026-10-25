@@ -629,11 +629,14 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
   // LPF.1 (C43, C44): also while the scene has not scanned the materialsRevision of the
   // frame's table (a re-parse published after the idle pass's geometryTick and before
   // its feedTick): its cells are built from the table before it; the scan, at the next
-  // geometryTick, moves sceneWaitState and so triggers the frame that settles
+  // geometryTick, moves sceneWaitState and so triggers the frame that settles; LP5.F
+  // (D111): likewise a slot published again unmeasured (an override's new editorSize)
+  // the scene has not scanned yet
   convergence.geometryInFlight =
     scene
     && (m_geometry->busy() || m_geometry->waitsForBake() || m_snapshotInboxFull
-        || m_geometry->scannedMaterialsRevision() < m_frameMaterialsRevision);
+        || m_geometry->scannedMaterialsRevision() < m_frameMaterialsRevision
+        || m_geometry->scannedSizesRevision() < m_frameSizesRevision);
   convergence.lightsProvisional =
     std::ranges::any_of(m_passes.lists().lights, [](const ViewLight& light) {
       return light.record
@@ -2036,6 +2039,7 @@ void RenderThread::refreshImages()
     m_frameFeedApplied = table->feedApplied;
     m_frameImageChanges = table->imageChanges;
     m_frameMaterialsRevision = table->materialsRevision;
+    m_frameSizesRevision = table->sizesRevision;
     m_frameOverrideBytes = table->overrideBytes;
     takeFeedRecords(*table);
   }
@@ -2401,7 +2405,8 @@ SceneWaitState RenderThread::sceneWaitState() const
     m_geometry->waitsForMaterials(),
     m_geometry->probesInFlight(),
     m_geometry->probeTable()->version,
-    m_geometry->scannedMaterialsRevision()};
+    m_geometry->scannedMaterialsRevision(),
+    m_geometry->scannedSizesRevision()};
 }
 
 bool RenderThread::geometryTick()

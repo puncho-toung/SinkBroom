@@ -1333,8 +1333,11 @@ private:
       return;
     }
     auto slot = std::make_shared<MaterialSlot>(**published);
+    // LP5.F: the size the slot carries is no more final until measured
+    slot->remeasured = slot->sizeMeasured || slot->remeasured;
     slot->sizeMeasured = false;
     replaceSlot(material, std::move(slot));
+    ++m_working.sizesRevision;
     queueMeasure(material);
   }
 
@@ -1543,6 +1546,7 @@ private:
     const auto feedApplied = m_working.feedApplied;
     const auto overrideBytes = m_working.overrideBytes;
     const auto materialsRevision = m_working.materialsRevision;
+    const auto sizesRevision = m_working.sizesRevision;
     // LPF.1 (C44): nor the feed items' records
     auto feedRecords = std::move(m_working.feedRecords);
     m_working = MaterialTable{};
@@ -1554,6 +1558,7 @@ private:
     m_working.feedApplied = feedApplied;
     m_working.overrideBytes = overrideBytes;
     m_working.materialsRevision = materialsRevision;
+    m_working.sizesRevision = sizesRevision;
     m_working.feedRecords = std::move(feedRecords);
     m_deltaOrder.clear();
     m_bulkMaterial = 0;

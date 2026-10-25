@@ -134,7 +134,8 @@ private:
   // S2.5: a cell is built again when the table's size of its material changes, Default to
   // Ready, Ready to another Ready, or back to Default); LP5.F (D77, A41): measured is
   // false while that size is a Default (Chunk::provisional) whose slot is not measured
-  // yet, until a scanned table's slot is measured at the same size
+  // yet, or (D111) one whose slot is published again unmeasured (remeasured), until a
+  // scanned table's slot is measured at the same size
   struct SizedCells
   {
     EditorImageSize size;
@@ -170,6 +171,8 @@ private:
   std::map<std::string, MaterialCells> m_materialCells;
   std::map<CellRef, std::vector<std::string>> m_cellMaterials;
   std::uint64_t m_materialsRevision = 0;
+  // LP5.F (D111): the table's sizesRevision the scene last scanned
+  std::uint64_t m_sizesRevision = 0;
   // the cells of the last batch started (tests)
   std::set<CellRef> m_lastBatchCells;
   // D80: the entities whose chunks the applied jobs touched, whose references are built
@@ -235,6 +238,8 @@ public:
   // LPF.1 (C44): the material table's materialsRevision the scene last scanned (its
   // cells of a re-parsed material are rebuilt by the batch it started then, C43)
   std::uint64_t scannedMaterialsRevision() const;
+  // LP5.F (D111): the material table's sizesRevision the scene last scanned
+  std::uint64_t scannedSizesRevision() const;
   std::shared_ptr<const ProcTree> procTree() const;
   // C31 (LP4.0): the AreaData of procTree()'s bake (MapBake::areas), null without a tree;
   // immutable, so any thread may read what it points to
@@ -269,7 +274,9 @@ public:
    * measured yet (MaterialSlot::sizeMeasured); the wait ends when a table the scene scans
    * has the slot measured, and the cells are built again when its size differs (S2.5).
    * One built from a measured Default slot is the engine's own answer for an image it
-   * cannot load (C21's 8 × 8), rebuilt only when a file changes (S2.5).
+   * cannot load (C21's 8 × 8), rebuilt only when a file changes (S2.5). LP5.F (D111): a
+   * slot published again unmeasured (remeasured) makes its cells wait so too, whatever
+   * their size; a kept Ready size (D52) does not.
    */
   bool waitsForMaterials() const;
   // DX.4: entities were built with default parms while their classname's entityDef was
