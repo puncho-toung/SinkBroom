@@ -10174,7 +10174,12 @@ const auto Lp51Materials = std::string{
   "lights/lp51/ambient\n{\n\tambientLight\n\tlightFalloffImage _noFalloff\n"
   "\t{\n\t\tmap _white\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"
   "lights/lp51/held\n{\n\tlightFalloffImage _noFalloff\n"
-  "\t{\n\t\tmap lights/lp51/held.tga\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"};
+  "\t{\n\t\tmap lights/lp51/held.tga\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"
+  // LP5.3 (C50): the sweep's fog light, as fogs/basicFog (fogs.mtr:14-22), and a blend
+  // light adding its colour
+  "lights/lp51/fog\n{\n\tfogLight\n\tnoShadows\n\t{\n\t\tmap _fog\n\t\tcolored\n\t}\n}\n"
+  "lights/lp51/blend\n{\n\tblendLight\n\tnoShadows\n\tlightFalloffImage _noFalloff\n"
+  "\t{\n\t\tblend add\n\t\tmap _white\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"};
 
 // LP4.2a's slabs (lp42aMapText) without the fixture's lights, and these light entities
 std::string lp51MapText(const std::vector<std::string>& lights)
@@ -10397,6 +10402,21 @@ TEST_CASE("LitSession math and ambientLight lights on a GPU (LP5.1)", "[.][litgp
   REQUIRE_FALSE(root.empty());
   const auto base = root / "base";
   writeTextFile(base / "materials" / "zz_lp51.mtr", Lp51Materials);
+  // LP5.3 (C50): the sweep's fog and blend lights' programs beyond LP2's
+  for (const auto* name : {"builtin/fog/fog", "builtin/fog/blendlight"})
+  {
+    for (const auto stage : {ShaderStage::Vertex, ShaderStage::Pixel})
+    {
+      const auto gamePath = std::filesystem::path{gamePathValue};
+      const auto relative = shaderBlobPath(name, stage);
+      REQUIRE(std::filesystem::exists(gamePath / "base" / relative));
+      std::filesystem::create_directories((base / relative).parent_path());
+      std::filesystem::copy_file(
+        gamePath / "base" / relative,
+        base / relative,
+        std::filesystem::copy_options::overwrite_existing);
+    }
+  }
   writeTextFile(base / "materials" / "zz_lp42a.mtr", Lp42aMaterials);
   std::filesystem::create_directories(base / "textures" / "lp42a");
   std::filesystem::create_directories(base / "lights" / "lp51");
@@ -10761,6 +10781,9 @@ TEST_CASE("LitSession math and ambientLight lights on a GPU (LP5.1)", "[.][litgp
            Kind{"texture", "", 0.0f},
            Kind{"math", "\"math_enabled\" \"1\"\n", 0.001f},
            Kind{"ambient", "\"texture\" \"lights/lp51/ambient\"\n", 0.002f},
+           // LP5.3 (C50): a fog light's fogged pixel and a blend light's blended pixel
+           Kind{"fog", "\"texture\" \"lights/lp51/fog\"\n", 0.003f},
+           Kind{"blend", "\"texture\" \"lights/lp51/blend\"\n", 0.004f},
          })
     {
       CAPTURE(kind.name);

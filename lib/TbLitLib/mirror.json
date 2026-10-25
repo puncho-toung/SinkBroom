@@ -14990,7 +14990,7 @@
           "symbol": "engineSortViewLights, buildFrontendLists"
         }
       ],
-      "note": "LP2.2a, restated in LP4.1 (the flow is wired: the view lights are the records the flow gave a rect, still in preview-id order): orders the engine takes from its portal flow and its qsort: the viewLights the sort starts from are in the flow's order (each prepended as AddAreaViewLights first meets it, R_SetLightDefViewLight), here the records' preview-id order, and qsort is not stable, here equal areas keep the reverse of that order; a light's chain holds the entities in reverse viewEntitys order and each entity's surfaces in model order, here the chunks in key order (area, entity, material, cell, part). Only the order of additive fp16 blends changes, which LP2.3's tolerance covers"
+      "note": "LP2.2a, restated in LP4.1 (the flow is wired: the view lights are the records the flow gave a rect, still in preview-id order): orders the engine takes from its portal flow and its qsort: the viewLights the sort starts from are in the flow's order (each prepended as AddAreaViewLights first meets it, R_SetLightDefViewLight), here the records' preview-id order, and qsort is not stable, here equal areas keep the reverse of that order; a light's chain holds the entities in reverse viewEntitys order and each entity's surfaces in model order, here the chunks in key order (area, entity, material, cell, part). Only the order of additive fp16 blends changes, which LP2.3's tolerance covers LP5.3 (C49, K39, P6.23): the tie order is visible where fog or blend lights overlap (their SRC_ALPHA and stage blends do not commute), the K39 class; the sort's area is GetArea's arithmetic, an empty rect's too (M-FOG-01)"
     },
     {
       "id": "M-FRONT-DIFF-02",
@@ -15546,7 +15546,7 @@
           "symbol": "LitPasses::recordStages, LitPasses::stageImage"
         }
       ],
-      "note": "LP2.2a (D52, D77): the engine has every material and its registers before it draws; the preview's arrive from the parse thread. A chunk whose material or registers are pending is drawn solid in the prepass (not when its known material is translucent) and lit through the bump _flat and the diffuse _default, and the frame is unconverged; until a new evaluation arrives a consumer (an entity or a light) keeps its last registers of the material, never the defaults, so a light-colour drag never flickers LP5.2a (D124, P6.6): pass 8 never draws a surface whose material or registers are pending (the engine never draws one): it is skipped, counted in stagePending, and the frame stays unconverged; kept registers (D52) are drawn; a stage image Pending, or Loading without a written level, skips its draw (unconverged), a Default slot binds _default as the engine binds it for an image not loaded or defaulted (M-STAGE-05)"
+      "note": "LP2.2a (D52, D77): the engine has every material and its registers before it draws; the preview's arrive from the parse thread. A chunk whose material or registers are pending is drawn solid in the prepass (not when its known material is translucent) and lit through the bump _flat and the diffuse _default, and the frame is unconverged; until a new evaluation arrives a consumer (an entity or a light) keeps its last registers of the material, never the defaults, so a light-colour drag never flickers LP5.2a (D124, P6.6): pass 8 never draws a surface whose material or registers are pending (the engine never draws one): it is skipped, counted in stagePending, and the frame stays unconverged; kept registers (D52) are drawn; a stage image Pending, or Loading without a written level, skips its draw (unconverged), a Default slot binds _default as the engine binds it for an image not loaded or defaulted (M-STAGE-05) LP5.3 (D124, P6.6): pass 9 draws a fog or blend light from its kept registers (provisional, the frame unconverged) and never a first-seen one (the frontend skips it, D52); a blend light's stage or falloff image Pending, or Loading without a level, skips its draws (unconverged), Default binds _default; the fog intrinsics _fog and _fogEnter are asked for at the first fog light, and their draws skip (unconverged) until both are written; a fog portal whose light's registers are first-seen stays open (the frame unconverged, M-FOG-07)"
     },
     {
       "id": "M-PASS-GUARD-01",
@@ -17215,9 +17215,13 @@
         {
           "file": "lib/TbLitLib/src/ViewFlow.cpp",
           "symbol": "Flow::floodViewThroughArea"
+        },
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "buildPortalFogTable (preview-id order)"
         }
       ],
-      "note": "LP4.0 (D83): PortalIsFoggedOut is false, as for every portal without a fog light: the fog lights' portals (R_CreateLightDefFogPortals) and the fog shader's registers come with LP5's fog lights; until then a portal a fog light would hide is flowed through"
+      "note": "LP4.0 (D83): PortalIsFoggedOut is false, as for every portal without a fog light: the fog lights' portals (R_CreateLightDefFogPortals) and the fog shader's registers come with LP5's fog lights; until then a portal a fog light would hide is flowed through LP5.3 (D123, D83 closed; restated, not closed, P6.25): PortalIsFoggedOut and the fog portals are mirrored (M-FOG-07); the difference left is the assignment's order: a portal two fog volumes hold takes the first fog light by preview id, where the engine's R_CreateLightDefFogPortals gives it to the first one created (the map's spawn order, and a light moved later frees its portals and takes only those still free), and the registers the test reads are at time 0 (K5)"
     },
     {
       "id": "M-FLOW-DIFF-02",
@@ -20550,7 +20554,7 @@
           "symbol": "LitSession math and ambientLight lights on a GPU (LP5.1): the sweep, ParkingGate"
         }
       ],
-      "note": "LP5.1 step 4 (C50, P6.7, R5.16), test only: the engine evaluates every light's registers every frame; the preview's arrive from the parse thread and the last ones are kept meanwhile (D52, RegisterCache), so a colour drag must never show a default frame. The CPU sweep steps lp1b_light's _color 60 times for a texture, a math and an ambientLight light through the render thread's RegisterCache over a fake service that withholds the evaluation on every second step and for the run 40-49: per frame the light is listed with registers, provisional exactly on the withheld steps, its colour a requested step and on a withheld one the last answered one, no unit of its stages _default and no surface of its lists pending; a test-only mutant (TB_LIT_SWEEP_MUTANT=1) answering withheld steps with the default registers (colour 1 1 1) fails every kind with 105 problems (35 withheld steps x provisional, a colour not requested, not the last answered). Fog and blend lights are LP5.3's (skipped sections). The GPU sweep withholds by parking the parse thread at its gate (ParkingGate: MaterialService calls the hook before it waits for work, so the gate is closed and the thread given one evaluation first) and reads the lit 5 x 5 patch per step: non-decreasing, equal to the step before on the 35 kept frames, rising on the answered ones"
+      "note": "LP5.1 step 4 (C50, P6.7, R5.16), test only: the engine evaluates every light's registers every frame; the preview's arrive from the parse thread and the last ones are kept meanwhile (D52, RegisterCache), so a colour drag must never show a default frame. The CPU sweep steps lp1b_light's _color 60 times for a texture, a math and an ambientLight light through the render thread's RegisterCache over a fake service that withholds the evaluation on every second step and for the run 40-49: per frame the light is listed with registers, provisional exactly on the withheld steps, its colour a requested step and on a withheld one the last answered one, no unit of its stages _default and no surface of its lists pending; a test-only mutant (TB_LIT_SWEEP_MUTANT=1) answering withheld steps with the default registers (colour 1 1 1) fails every kind with 105 problems (35 withheld steps x provisional, a colour not requested, not the last answered). Fog and blend lights are LP5.3's (skipped sections). The GPU sweep withholds by parking the parse thread at its gate (ParkingGate: MaterialService calls the hook before it waits for work, so the gate is closed and the thread given one evaluation first) and reads the lit 5 x 5 patch per step: non-decreasing, equal to the step before on the 35 kept frames, rising on the answered ones LP5.3: the fog and blend sections are filled (M-TEST-FOG-01)"
     },
     {
       "id": "M-TEST-PARITY-04",
@@ -21822,6 +21826,536 @@
         }
       ],
       "note": "LP5.F (D77 as A41 restates it, A6, D18), test only: the engine sizes an editor image before dmap writes a st, so it never draws a face at an unmeasured size; the preview publishes a material unmeasured at the registry's Default (M-IMG-DIFF-08). The hidden [.][litgpu2] case holds the material service's measures (holdMeasuresForTesting: the parse thread takes no queued measure and goes on with every other item, the images among them) over LP2.2a's fixture: the floor's slot stays unmeasured, its three chunks are provisional, the floor probe reads (2.2441, 2.2773, 0.0608) (the 8 x 8 UVs on texel ~ (225, 226, 40) of floor.tga, the LP4.2a flake's state), the frame is unconverged (provisionalChunks) and settledHdr takes no frame; released, the first settled frame reads (0.0309, 1.4531, 0). Its second section prints the start-up's frames to the settled frame (the frame log's settled column) on the fixture and with 2000 boxes more. settledHdr requires the frame's own FrameConvergence settled (read after its tonemap passes), so no test accepts a frame the product does not. The [.][feed] section: an image fed and served while the slab's measure is held gives no readback (\"No settled frame within 3000 ms\"), then one once the override's 64 x 64 is measured (D111). The product never holds the measures. The addendum's [.][feed] section: the slab fed as 8 x 1 stripes with editorSize 512 (x 192 red, x -192 blue by the model s = x / 512), then 256 with the measures held: no settled frame within 3 s, the slot unmeasured at 512; released, x 192 blue and x -192 red (s = x / 256)"
+    },
+    {
+      "id": "M-FOG-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            148,
+            200
+          ],
+          "anchor": "R_AddSingleLight: the light's registers, the snap of a purely additive light skipped for a fog or blend light (:155)",
+          "sha256": "cd68355480a41a47f2d3f6d8e911a4294b2f9fd9488677b1e82e54a52e75c68b"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            266,
+            270
+          ],
+          "anchor": "R_AddSingleLight: a light culled to the view frustum leaves the list, whatever its kind",
+          "sha256": "6a2c1a4014afa636217f88b807585b0b58aba267c606359eb9e3399fab46fc64"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            706,
+            746
+          ],
+          "anchor": "R_OptimizeViewLightsList: a light without lit surfaces is not counted, a fog or blend light is; c_viewLights, c_mathViewLights",
+          "sha256": "5480bd8b118b26cda8c564313d2ac6f26b6276724a24543fbcb38a8100d63296"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            362,
+            367
+          ],
+          "anchor": "R_AddSingleModel: a light with an empty scissor contacts no entity",
+          "sha256": "9028e6ea539dd668161a73baef64441a811fd88a359d8b18eef60a3e735128dc"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            949,
+            1008
+          ],
+          "anchor": "R_AddSingleModel: the light's interaction surfaces (ReceivesLighting; the local list for !noShadows && MF_NOSELFSHADOW)",
+          "sha256": "ccc4527041f6200fcb273a38cf5959efa2ff15bffd53cdc0fb03f2d8a759fe1b"
+        },
+        {
+          "file": "neo/renderer/ScreenRect.h",
+          "lines": [
+            69,
+            72
+          ],
+          "anchor": "idScreenRect::GetArea",
+          "sha256": "541b9377b74e40f66cc2146a8483ffbf438023f69bbc163612b0c6ef6d1cf130"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2746,
+            2755
+          ],
+          "anchor": "idMaterial::ParseMaterial: fogLight, blendLight",
+          "sha256": "b68118041430e59c3354d8ca081e28f0dd3e077efeef1060258a1bf03d2839f8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (the light loop), engineViewLightKind, engineSortViewLights"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.h",
+          "symbol": "ViewLightKind, ViewLight::kind, FrontendLists::lightsInView, mathLights, fogAndBlendLights"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::record (lightsVisible), LitPasses::recordInteractions (the phases skip by kind)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "LitPasses: math, ambientLight, fog and blend lights in the lists (LP5.1, C45): the LP5.3 sections"
+        }
+      ],
+      "note": "LP5.3 step 1 (C45, C49, P6.23): a fog or blend light takes the lists as any light: every directly visible surface that receives lighting (ReceivesLighting: a bump, diffuse or specular stage) in its volume, of its spectrum, not culled; the dead noFog keyword and ReceivesFog (no caller in neo/renderer) are not asked, so an unlit surface (a material without a lit stage, drawn by pass 8 alone) is never in a fog light's lists and FogPass never fogs it (a mirrored fact); its local list holds the noSelfShadow surfaces of a light without noShadows, its translucent list the translucent ones (FogAllLights never draws that one). Its registers are not snapped (:155: a black fog or blend light stays); a light culled to the view frustum leaves as every kind does; an empty scissor is kept for these two kinds alone (the preview drops a texture, math or ambient light so at once: it contacts no entity, so it would have no surface and no counter), and with it no surface is paired; a fog or blend light without a surface stays in the lists (R_OptimizeViewLightsList keeps every light, and counts these two kinds with or without surfaces). The two-phase loop skips them by ViewLight::kind (fog and blend from the shader's flags, else math by R_LightUsesMathPath, else ambient by the ambientLight flag, else texture; no behaviour change). The counters: LitFrameStats::lightsVisible (lights_visible) is m_lists.lights.size(), tr.pc.c_viewLights: the lights with lit surfaces and every kept fog or blend light; lights_drawn the lights the two interaction phases drew (no engine counter; never a fog or blend light: DrawInteractionsPass skips them); lights_in_view the viewLights R_AddLights keeps (removeFromList false, no engine counter), less the empty-scissor lights of the other kinds; math_lights (the lists' mathLights) is c_mathViewLights, R_LightUsesMathPath of every light c_viewLights counts (a fog or blend light with math keys too); the parity expect keys read lights_in_view, lights_drawn, math_lights and texture_lights so; fog_draws and blend_draws are pass 9's (M-FOG-06). The sort keeps idScreenRect::GetArea's arithmetic (shorts promoted to int): an empty rect inverted on both axes has a positive area, possibly above a real light's, so a kept empty-scissor fog light may sort before it; inverted on one axis, a negative area, after every light (P6.23; the tie rule M-FRONT-DIFF-01, K39)"
+    },
+    {
+      "id": "M-FOG-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            212,
+            221
+          ],
+          "anchor": "R_AddSingleLight: vLight->fogPlane, the light far clip plane",
+          "sha256": "fb9cba6c2e53a207015d4ebced5623a74b0d19ac0bb0766b6b8f47a5fc8e15f0"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineFogPlane"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists: ViewLight::fogPlane"
+        }
+      ],
+      "note": "LP5.3 step 1 (C49, SC532): every view light's fogPlane: baseLightProject's row 2 less its row 3 (all four floats), times idMath::InvSqrt (the copy's sqrtf( 1 / x )) of its normal's squared length, on the copied idPlane; for a point light at o of radius r it is ( 0, 0, 1, -( o.z + r.z ) ), the volume's top. FogPass reads it for p2 and s (M-FOG-03). Render thread (buildFrontendLists; the copied InvSqrt: M-FLOW-PURE-01)"
+    },
+    {
+      "id": "M-FOG-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4868,
+            4933
+          ],
+          "anchor": "idRenderBackend::T_BasicFog: the scissor, the space change (R_GlobalPlaneToLocal, or the cube's InverseTransformPlane), the texgen swap",
+          "sha256": "8e27ee42916f5d9a9a8ff17cfdd4f0b8d114dd7de7da19d5a756bdd3ceacb7ab"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4940,
+            5015
+          ],
+          "anchor": "idRenderBackend::FogPass: the colour, the density, the units, the four planes, state A over the lists",
+          "sha256": "220d9acbc07c63206b878c62f3161d695e1d5640867b858bcf009fb8061e2e6f"
+        },
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            50,
+            55
+          ],
+          "anchor": "DEFAULT_FOG_DISTANCE, FOG_ENTER_SIZE, FOG_ENTER",
+          "sha256": "ffea3f4f4ae5c2ec81ae75220471b43d66630556ac686f935131c27b4944fe09"
+        },
+        {
+          "file": "neo/shaders/builtin/fog/fog.vs.hlsl",
+          "lines": [
+            114,
+            118
+          ],
+          "anchor": "main: texcoord0 = pos · ( TexGen0S, TexGen0T ), texcoord1 = pos · ( TexGen1S, TexGen1T )",
+          "sha256": "b45499896e521b7f05bd5ab74216a684a5c7ebe8548696e635d62c8f6d78ecbd"
+        },
+        {
+          "file": "neo/shaders/builtin/fog/fog.ps.hlsl",
+          "lines": [
+            56,
+            58
+          ],
+          "anchor": "main: _fog · _fogEnter · rpColor, then sRGBAToLinearRGBA (alpha too)",
+          "sha256": "bae67f10e588d8b8778f1435f2bf10db646ec50e5eb734dd62c26dff93f80545"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineFogDensity, engineFogParms, EngineDefaultFogDistance, EngineFogEnter"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::fogPass, LitPasses::basicFog, LitPasses::setFogPlanes"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitStagePass.cpp",
+          "symbol": "LitStagePass: FogPass' colour, density and planes (LP5.3, C49, SC533)"
+        }
+      ],
+      "note": "LP5.3 step 2 (C49, D124, SC533, SC534, P6.4): stage 0 only (the engine reads it unchecked; a fog shader without a stage is not drawn here, a guard); lightColor = its four colour registers without r_lightScale; GL_Color clamps it into rpColor, so the alpha, the light's shaderParm3 through the fog material's colored parm3 (fogs/basicFog, fogs.mtr:14-22), is 1 for a distance of 2000 and stays 0.5 for 0.5; a = -0.5 / DEFAULT_FOG_DISTANCE (500) for an unclamped alpha up to 1, else -0.5 / alpha; units 0 _fog and 1 _fogEnter (the LP5.0 intrinsics, M-INTR-11/12, asked for through the slot table at the first fog light: not resident from the start, so the first fog frames skip their draws and stay unconverged until both are written); s = fogPlane.Distance( vieworg ); p0 = a · the world's modelViewMatrix column 2 with w + 0.5, p1 = ( 0, 0, 0, 0.5 ), p2 = 0.001 · fogPlane with w + FOG_ENTER (65 / 128), p3 = ( 0, 0, 0, 0.001 · s + FOG_ENTER ); T_BasicFog sets TEXGEN_0_S = p0, TEXGEN_0_T = p1, TEXGEN_1_T = p2, TEXGEN_1_S = p3 (the swap), so _fog reads ( p0 · pos, 0.5 ) and _fogEnter ( p3 · pos, p2 · pos ). State A: DEPTHMASK, SRC_ALPHA / ONE_MINUS_SRC_ALPHA, DEPTHFUNC_EQUAL, cull front, over the global then the local list, each surface with its light's scissor (the interaction surface's scissorRect is vLight->scissorRect; an empty one skipped) and its light triangles (the static interaction's), on a space change MVP and the planes through R_GlobalPlaneToLocal (the shim's transcription, GLMatrix.cpp:315-321, not copied); program 67 (68 never: no joints). FOG's set: t0 t1, s0 = s1 LinearClamp. A kept (provisional) fog light is drawn from its kept registers; a first-seen one is not in the lists (D52, D124)"
+    },
+    {
+      "id": "M-FOG-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            2035,
+            2121
+          ],
+          "anchor": "R_MakeZeroOneCubeTris: 8 corners, 36 indexes, the first four vertices white",
+          "sha256": "5a543e5e7e50cea6cce720d33f6947d364f016a86b393265942cfbed4fca5790"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            2443,
+            2447
+          ],
+          "anchor": "R_InitFrameData's tr.zeroOneCubeTriangles (R_DeriveTangents: normals for debugging only)",
+          "sha256": "2cf55992f97f5465d4716c19bcffd493f1780b18035932033290c448c136f4c7"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            5016,
+            5024
+          ],
+          "anchor": "FogPass: state B (DEPTHFUNC_LESS, GLS_CULL_BACKSIDED) over zeroOneCubeSurface in world space with the view's scissor, through inverseBaseLightProject",
+          "sha256": "dd392c4b84a6733c21acd453822b42d91df811155c76de547a04968402ae6bdb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineZeroOneCubeVertices, engineZeroOneCubeIndexes"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::fogCube, LitPasses::fogCubeGeometry, LitPasses::drawGeometry"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitStagePass.cpp",
+          "symbol": "LitStagePass: the fog cube is R_MakeZeroOneCubeTris (LP5.3, C49, D122)"
+        }
+      ],
+      "note": "LP5.3 step 2 (C49, D122, SC533-SC535): the engine's unit cube as two buffers of the session's own (D122), made and written once through the frame's command list at the first fog light's draw (keepInitialState VertexBuffer and IndexBuffer; the writes end the render pass, so the next draw sets its state again: nvrhi rules 3, 6, 7) and released in teardown step 2 with the passes: the eight corners as idDrawVerts (the first four's colour 0xffffffff, the rest 0, normals and tangents 0: R_DeriveTangents' are read by no fog shader) and the 36 indexes in the engine's winding, every face's id normal outward. Drawn after the lists with MVP = worldSpace.mvp × inverseBaseLightProject and the planes through the copied InverseTransformPlane( normalize false ), currentSpace cleared, the view's scissor (not the light's), state B = DEPTHMASK, SRC_ALPHA / ONE_MINUS_SRC_ALPHA, DEPTHFUNC_LESS, GLS_CULL_BACKSIDED (M-FOG-DEFECT-01). A fog light without a surface or with an empty scissor still draws its cube (SC531). fog_draws counts the cube's draw with the surfaces' (LitFrameStats::fogCubeDraws, fogSurfaceDraws apart)"
+    },
+    {
+      "id": "M-FOG-DEFECT-01",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            5016,
+            5018
+          ],
+          "anchor": "FogPass: GL_State( ... | GLS_DEPTHFUNC_LESS | GLS_CULL_BACKSIDED ) for the cube",
+          "sha256": "bde04179eb7b8cb8571f4051e01f206ff30bf73045654eb2a8be77a68cc8a22c"
+        },
+        {
+          "file": "neo/renderer/GLState.h",
+          "lines": [
+            74,
+            78
+          ],
+          "anchor": "GLS_CULL_*: GLS_CULL_BITS is 2 << 15",
+          "sha256": "9762eef02d02bb7c5a49bf2c162703715317fde56e536be455ab345f05372a23"
+        },
+        {
+          "file": "neo/renderer/PipelineCache.cpp",
+          "lines": [
+            117,
+            145
+          ],
+          "anchor": "PipelineCache::GetRenderState: the cull switch on stateBits & GLS_CULL_BITS",
+          "sha256": "5fc3f73130ebcf0234eb26b2b679d66ebb31d49278646ef3e436789b583f4646"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::fogPass (state B's key)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EnginePipelineState.h",
+          "symbol": "engine_gls::CullBackSided, CullBits"
+        }
+      ],
+      "note": "LP5.3 step 2 (D20: mirrored, not fixed; C49, SC535; M-STAGE-DEFECT-01's decode): FogPass asks for GLS_CULL_BACKSIDED (1 << 15) for the cube, which GetRenderState masks with GLS_CULL_BITS (2 << 15) to 0, the front-sided case: the cube's faces a FRONTSIDED surface keeps are drawn. The cube winds its id normals outward, so from outside the volume its near faces draw with DEPTHFUNC_LESS over whatever lies behind them (the lit room, or the clear through a doorway the flow did not enter), and from inside nothing of the cube draws (its faces are seen from behind); a correct BACKSIDED decode would draw the far faces from inside and outside alike, where they pass LESS. The preview passes the bits into the pipeline key and the copied GetRenderState decodes them, so the defect is mirrored per key. Whether inverseBaseLightProject keeps the cube's handedness for every light type is not checked here (a point light's is a positive scale: it does)"
+    },
+    {
+      "id": "M-FOG-05",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4731,
+            4786
+          ],
+          "anchor": "idRenderBackend::T_BlendLight: the scissor, MVP and the local lightProject (TEXGEN_0_S/T/Q rows 0-2, TEXGEN_1_S row 3), program 65",
+          "sha256": "08f81fc8464adb1f45597a0e822f681c2f5fcd0b0f9ecdb8ebe14ab5948c611d"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4796,
+            4853
+          ],
+          "anchor": "idRenderBackend::BlendLight: the global list NULL returns, r_skipBlendLights, the falloff at unit 1, per stage the state, the stage image, the texture matrix, GL_Color",
+          "sha256": "7263cbebfc675df2124435be3863c42f3ecaa0bb6379df5f32c6f9b5391daa93"
+        },
+        {
+          "file": "neo/shaders/builtin/fog/blendLight.vs.hlsl",
+          "lines": [
+            116,
+            122
+          ],
+          "anchor": "main: texcoord0 = ( S, T, 0, Q ), texcoord1 = ( falloff, 0.5 )",
+          "sha256": "377aa0de7c66a731f63bdecdc63eb7cfb7ea460dcad9b6c4f439ab9af413287b"
+        },
+        {
+          "file": "neo/shaders/builtin/fog/blendLight.ps.hlsl",
+          "lines": [
+            54,
+            56
+          ],
+          "anchor": "main: idtex2Dproj( t0 ) · t1 · rpColor, sRGBAToLinearRGBA",
+          "sha256": "d79e3cd6ccd36e5d7745eab11852e775ccec3f87da253e167f9466657c275f8b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::blendLight, LitPasses::tBlendLight"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::bindingSets (BLENDLIGHT: s0 LinearBorder)"
+        }
+      ],
+      "note": "LP5.3 step 3 (C49, SC537, D124): BlendLight returns when the global list is NULL, so a blend light whose surfaces are all local (a light without noShadows over noSelfShadow surfaces) never draws, a mirrored fact, and under r_skipBlendLights; unit 1 the light's falloff image; per stage whose condition register is on: GL_State( DEPTHMASK | drawStateBits | DEPTHFUNC_EQUAL ) (EQUAL is 3 << 13 and covers any depth function in drawStateBits), unit 0 the stage's image, RB_LoadShaderTextureMatrix when the stage has a matrix, whose TEXTUREMATRIX_S/T set 7 does not hold, so it is never read (a mirrored fact: a scrolled blend light draws unscrolled), GL_Color of the stage's four colour registers clamped, without r_lightScale; T_BlendLight on the global then the local list, each surface with its light's scissor and its light triangles. Both images by the slot's state as pass 8's (stageImage): Default binds _default, Pending or Loading without a level skips the stage's draws (the frame unconverged, D124); a stage without an image is not drawn (the engine's NULL image). BLENDLIGHT's set: t0 the stage image, t1 the falloff, s0 LinearBorder (border ( 0, 0, 0, 1 )) for both"
+    },
+    {
+      "id": "M-FOG-06",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            5038,
+            5076
+          ],
+          "anchor": "idRenderBackend::FogAllLights: r_skipFogLights, no view lights; FogPass or BlendLight per view light in the sorted order",
+          "sha256": "12785403395805e49a608f3e7ee9841b24ee2f6ff824b777842a9a68b2c9a401"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            6131,
+            6136
+          ],
+          "anchor": "DrawViewInternal: fog and blend lights after the first DrawShaderPasses",
+          "sha256": "b3893ae6b2fd66cfc9d0e32b536bdbf6e162e7293d1d0ae855f73189de3fc2a6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::record (pass 9 after the stage pass), LitPasses::recordFogLights, LitPasses::countFogDraw"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.h",
+          "symbol": "LitFrameStats: fogLights, blendLights, fogDraws, fogSurfaceDraws, fogCubeDraws, blendDraws, fogSkipped, fogLightsSkipped, fogTimed, fogDisabled"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameLog.cpp",
+          "symbol": "fogFields; frameLogHeader (fog_draws, blend_draws, gpu_fog_ms)"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameTimers.h",
+          "symbol": "TimedPass::Fog"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::recordLitPasses (the fog timer), the frame row"
+        }
+      ],
+      "note": "LP5.3 steps 2-3 (C49, C16): FogAllLights recorded after the stage pass (and after a stop's boundary) into hdrFBO with the prepass's depth, before the tonemap; r_skipAmbient does not gate it (SC530), nor any test switch (the parity test shoots its fog rows lit: skipInteractionsForTesting and skipShaderPassesForTesting leave it); r_skipFogLights (EngineFrame.skipFogLights) returns before the walk, its blend lights too, as the engine's return is; r_showOverDraw 0 and no xray subview here. The view lights in the sorted order (largest scissor first; K39 for overlapping ones): a fog light to FogPass, a blend light to BlendLight; between lights a pass boundary for a stop. One timer pair (gpu_fog_ms); the frame log three columns after gpu_stages_ms (fog_draws: the surfaces' and the cubes' draws, blend_draws, gpu_fog_ms: 57); the frame's draws, the status line's and hdrDrawn count them. A failed pipeline of 65 or 67 (a blob missing) disables the pass (D9, disabledReason)"
+    },
+    {
+      "id": "M-FOG-07",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            621,
+            637
+          ],
+          "anchor": "WindingCompletelyInsideLight: !CullPointToMVP( baseLightProject, p, true ) for every point",
+          "sha256": "38ff5173735ddd1e431f75c4e25a8e02eec3c2ec8b70a6659ac90200705fdbde"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            647,
+            687
+          ],
+          "anchor": "R_CreateLightDefFogPortals: fog lights without MF_NOPORTALFOG, per referenced area and portal, the first fog light wins",
+          "sha256": "75a4b7c544d25acfdf1e87bbdcdee8214d699fa97aa1dab428876c507314e1ef"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            729,
+            729
+          ],
+          "anchor": "R_CreateLightRefs calls it after the light's references",
+          "sha256": "9537c9a93bd82559af154f9869211dda1bb061e31c7c4bc0be2ab5d2d0a35ff0"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            458,
+            507
+          ],
+          "anchor": "idRenderWorldLocal::PortalIsFoggedOut",
+          "sha256": "503c8bd31e2f89eb3ffcebb28d64f786d5b87e4de827db6f93b9be0e175a1b9b"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            590,
+            594
+          ],
+          "anchor": "FloodViewThroughArea_r: a fogged-out portal is skipped, on the clipped branch",
+          "sha256": "2d270bab1f791fec5715078067678748dc781dc27d2c4851a688e783cbf100d4"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2678,
+            2682
+          ],
+          "anchor": "idMaterial::ParseMaterial: noPortalFog sets MF_NOPORTALFOG",
+          "sha256": "d540b7773b2c2cd854e864db881ad46bfabc210b5b4e35790a1d49a2022e943f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "buildPortalFogTable, enginePortalIsFoggedOut, Flow::floodViewThroughArea"
+        },
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.h",
+          "symbol": "PortalFogTable, ViewFlowPortalFog, ViewFlowInputs::portalFog, ViewFlowResult::portalsFogged"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::portalFogTable"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists: the fog portals' densities before flowView"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ViewFlow.cpp",
+          "symbol": "ViewFlow: the fog portals (LP5.3, C49, D123, D83 closed)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "LitPasses: the fog portals in the frontend's flow (LP5.3, C49, D123, P6.6)"
+        }
+      ],
+      "note": "LP5.3 step 4 (D123, D83 closed, P6.6, P6.8): the portal -> fog light assignment is a scene-level table (SceneGeometry::portalFogTable, built on the render thread whenever the light table's version or the AreaData changes, immutable once made): over the light records in preview-id order (M-FLOW-DIFF-01), a visible record with a volume and a known fogLight shader without MF_NOPORTALFOG takes, per area of its references and per portal side of the area's list, every portal no fog light has yet whose side's winding lies wholly inside its volume (WindingCompletelyInsideLight: CullPointToMVP is strict, so a point on the volume's boundary is outside: a volume must reach past the portal's plane, so it also references the area beyond the portal, where it is a view light). Before flowView the frontend asks for each assigned fog light's registers (its record's shader and shaderParms, the consumer its preview id: the answer its view light gets) and hands the flow per portal the density a of stage 0's alpha register (engineFogDensity, as FogPass: -0.5 / 500 up to 1, else -0.5 / alpha); kept registers (D52) are used with the lists pending; first-seen registers leave the portal open and the lists pending (P6.6, M-PASS-DIFF-05). flowView tests PortalIsFoggedOut on the clipped branch alone (after the winding's clip, not within 1.0 of the plane) over the side's unclipped winding: forward = a · the world's modelViewMatrix column 2 without FogPass' + 0.5, fogged out when every point has forward.Distance( point ) >= 0.5, that is lies at least the fog distance ahead in view depth; a fogged portal gets no rect, no planes, no recursion (portalsFogged counts it). The registers are at time 0 (K5), the engine's at the view's time"
+    },
+    {
+      "id": "M-FOG-PURE-01",
+      "kind": "pure-function",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.cpp",
+          "lines": [
+            1742,
+            1790
+          ],
+          "anchor": "idRenderMatrix::CullPointToMVPbits",
+          "sha256": "bc56f56fd59094ca21e2b3ca69fa54eebe2e0df22e014026ea72616aacd9d623"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.h",
+          "lines": [
+            539,
+            543
+          ],
+          "anchor": "idRenderMatrix::CullPointToMVP",
+          "sha256": "39effcc59aa4b432c1f641c01203a358953cf5e73f3c12b8b72c1065b7675f11"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.h",
+          "lines": [
+            448,
+            470
+          ],
+          "anchor": "idRenderMatrix::InverseTransformPlane",
+          "sha256": "54848cb0b4bf212eede946c6fb57cae8448d0286c8dbef5b998110b7424f6463"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineCullPointToMvp, engineInverseTransformPlane, engineFogPlane"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineLight.h",
+          "symbol": "engineCullPointToMvp, engineInverseTransformPlane, engineFogPlane"
+        }
+      ],
+      "note": "LP5.3 (C24, A25, C20): the copied functions pass 9 and the fog portals run on the render thread: CullPointToMVP in buildPortalFogTable (SceneGeometry::portalFogTable), InverseTransformPlane in LitPasses::fogCube, and engineFogPlane's idPlane arithmetic with the copied idMath::InvSqrt (M-FLOW-PURE-01) in buildFrontendLists. All three are in the copied files already (RenderMatrix.cpp and .h copied whole, M-LIGHT-COPY-*), so no range was added; each reads its arguments alone (CullPointToMVPbits a 4 x 4 product and six strict compares, InverseTransformPlane a transpose product with no normalize here), touches no static and allocates nothing"
+    },
+    {
+      "id": "M-TEST-FOG-01",
+      "kind": "difference",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4940,
+            4969
+          ],
+          "anchor": "FogPass: the colour and the density the tests model",
+          "sha256": "b87be442784476df3a66896a8e614c47d8c6d98ee27ed59f14346d02f30331b2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "LitPasses: the 60-step light-colour sweep of fog and blend lights (LP5.3); sweepProblems (SweepKind::Fog, Blend)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession math and ambientLight lights on a GPU (LP5.1): the sweep's fog and blend kinds"
+        }
+      ],
+      "note": "LP5.3 step 5 (C50, P6.7), test only: the sweep's fog and blend sections, LP5.1's SKIPs filled: 60 _color steps of lp1b_light as the fog stand-in (shaderParm3 150) over the fixture's tree with its portal -> fog light table (the camera in the west room, 248 from the doorway: fogged out) and as the blend stand-in (colored), the fake service withholding every second step and the run 40-49: per step the light listed with registers, provisional exactly on the withheld steps, its colour the last answered step's, no _default unit, of its kind; the fog light's flow use never pending and the doorway fogged on every step (the kept registers decide the portal as the answered ones would). The mutant (TB_LIT_SWEEP_MUTANT=1) fails all five kinds (fog 140 problems, the flow's among them). The GPU variant (the LP5.1 [.][litgpu2] case) adds a fog light (fogs/basicFog's shape) and a blend light (blend add, colored) over LP4.2a's slabs: the fogged and the blended patch never decrease, equal on the kept frames, rise on the answered ones; the case copies the fog and blendlight blobs into its root"
     }
   ],
   "retired": [

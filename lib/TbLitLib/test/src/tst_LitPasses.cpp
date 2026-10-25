@@ -871,7 +871,7 @@ const auto LightStandIns = std::string{
   "lights/lp51/fog\n{\n\tfogLight\n\tnoshadows\n"
   "\t{\n\t\tmap _fog\n\t\tcolored\n\t}\n}\n"
   "lights/lp51/blend\n{\n\tblendLight\n\tlightFalloffImage _noFalloff\n"
-  "\t{\n\t\tblend filter\n\t\tmap _white\n\t}\n}\n"};
+  "\t{\n\t\tblend filter\n\t\tmap _white\n\t\tcolored\n\t}\n}\n"};
 
 // a lit translucent material (the fixture's glass has only a blend stage, which receives
 // no light), and a box of it in front of the pillars, inside lp1b_light
@@ -2526,12 +2526,14 @@ TEST_CASE("LitPasses: RegisterCache keeps registers across a re-parse that fits 
 namespace
 {
 
-// LP5.1 (C50, P6.7, R5.16): the light kinds the sweep steps
+// LP5.1 (C50, P6.7, R5.16): the light kinds the sweep steps; LP5.3: fog and blend
 enum class SweepKind
 {
   Texture,
   Math,
   Ambient,
+  Fog,
+  Blend,
 };
 
 /**
@@ -2545,7 +2547,12 @@ enum class SweepKind
  * provisional flag not the withheld one, its colour not a requested step or not the
  * last answered one on a withheld step, a unit of its stages _default, a surface of its
  * lists without its material or registers (pendingSurfaceInteraction's _default), the
- * light not of its kind.
+ * light not of its kind. LP5.3 (C49, C50): a fog light (the fog stand-in, shaderParm3
+ * 150) is swept over the fixture's tree with the portal -> fog light table, the camera in
+ * the west room 248 from the doorway: the flow's use of its registers (P6.7) fails a step
+ * whose portal is left pending or whose areas flowed differ from step 0's (the kept
+ * registers decide the portal as the answered ones do); a blend light (the blend
+ * stand-in, colored) as a texture light is.
  */
 std::vector<std::string> sweepProblems(
   FrontendFixture& f, const SweepKind kind, const bool mutant)
@@ -2553,6 +2560,10 @@ std::vector<std::string> sweepProblems(
   const auto name = std::string{"lp1b_light"};
   const auto lightId = f.lightIds.at(name);
   const auto camera = fixtureCamera(-240, 0, 64);
+  // LP5.3: the fog kind's tree and areas (the fixture's .proc)
+  const auto sweepAreas =
+    std::make_shared<const AreaData>(buildAreaData(*f.lightInput.proc));
+  auto flowedAtStart = std::optional<std::size_t>{};
   // the fake service's published evaluations, and the render thread's cache over them
   auto published = MaterialTable{};
   auto cache = RegisterCache{};
@@ -2575,6 +2586,15 @@ std::vector<std::string> sweepProblems(
     if (kind == SweepKind::Ambient)
     {
       changes.emplace_back("texture", "lights/lp51/ambient");
+    }
+    if (kind == SweepKind::Fog)
+    {
+      changes.emplace_back("texture", "lights/lp51/fog");
+      changes.emplace_back("shaderParm3", "150");
+    }
+    if (kind == SweepKind::Blend)
+    {
+      changes.emplace_back("texture", "lights/lp51/blend");
     }
     const auto record = lightRecordWith(f, name, changes);
     const auto& shader = record->derived.shader.material;
@@ -2606,8 +2626,31 @@ std::vector<std::string> sweepProblems(
       return cache.registers(consumer, material, asked, published, nullptr);
     };
     cache.beginBuild();
-    const auto lists = listsOfLights(
-      f, lightTableOf({record}, std::uint64_t(step) + 2), camera, 128, 96, registers);
+    const auto lights = lightTableOf({record}, std::uint64_t(step) + 2);
+    auto lists = FrontendLists{};
+    if (kind == SweepKind::Fog)
+    {
+      // LP5.3: over the tree, its fog portals from the table
+      const auto portalFog = buildPortalFogTable(lights, *sweepAreas, lights.version);
+      auto inputs = FrontendInputs{};
+      inputs.view = litViewOf(camera, 128, 96);
+      inputs.chunks = &f.chunkMap;
+      inputs.entities = &f.entities;
+      inputs.lights = &lights;
+      inputs.tree = f.lightInput.proc.get();
+      inputs.areas = sweepAreas.get();
+      inputs.portalFog = &portalFog;
+      inputs.material = [&](const std::string& materialName) {
+        const auto slot = f.table->find(materialName);
+        return MaterialAnswer{slot ? slot->entry : nullptr, !slot};
+      };
+      inputs.registers = registers;
+      lists = buildFrontendLists(inputs);
+    }
+    else
+    {
+      lists = listsOfLights(f, lights, camera, 128, 96, registers);
+    }
     cache.endBuild();
 
     const auto at = fmt::format("step {} ({})", step, withheld ? "withheld" : "answered");
@@ -2689,6 +2732,38 @@ std::vector<std::string> sweepProblems(
     {
       problems.push_back(at + ": ambientLight is not the kind's");
     }
+    // LP5.3: the view light's kind
+    const auto kindOf = kind == SweepKind::Fog       ? ViewLightKind::Fog
+                        : kind == SweepKind::Blend   ? ViewLightKind::Blend
+                        : kind == SweepKind::Math    ? ViewLightKind::Math
+                        : kind == SweepKind::Ambient ? ViewLightKind::Ambient
+                                                     : ViewLightKind::Texture;
+    if (light->kind != kindOf)
+    {
+      problems.push_back(at + ": the view light is not of the kind");
+    }
+    if (kind == SweepKind::Fog)
+    {
+      // the flow's use of the fog light's registers: never pending, the same areas
+      // flowed as at the first step, the doorway fogged out
+      if (lists.portalFogPending != 0)
+      {
+        problems.push_back(at + ": the fog portal was left pending");
+      }
+      if (!flowedAtStart)
+      {
+        flowedAtStart = lists.areasFlowed;
+      }
+      if (lists.areasFlowed != *flowedAtStart || lists.portalsFogged == 0)
+      {
+        problems.push_back(
+          at
+          + fmt::format(
+            ": {} areas flowed, {} portals fogged",
+            lists.areasFlowed,
+            lists.portalsFogged));
+      }
+    }
     if (!withheld)
     {
       answered = colour;
@@ -2737,14 +2812,26 @@ TEST_CASE(
 // the sweep's fog and blend kinds (C50): LP5.3's, which draws them (FogAllLights)
 TEST_CASE("LitPasses: the 60-step light-colour sweep of fog and blend lights (LP5.3)")
 {
+  const auto* mutantValue = std::getenv("TB_LIT_SWEEP_MUTANT");
+  const auto mutant = mutantValue && std::string_view{mutantValue} == "1";
+  auto f = frontendFixture();
+  const auto check = [&](const SweepKind kind) {
+    const auto problems = sweepProblems(*f, kind, mutant);
+    auto shown = std::vector<std::string>{
+      problems.begin(),
+      problems.begin() + std::ptrdiff_t(std::min(problems.size(), std::size_t{6}))};
+    INFO(fmt::format("{} problems: {}", problems.size(), fmt::join(shown, "; ")));
+    CHECK(problems.empty());
+  };
+
   SECTION("a fog light")
   {
-    SKIP("LP5.3: fog lights are drawn by FogAllLights, which LP5.3 adds (C49)");
+    check(SweepKind::Fog);
   }
 
   SECTION("a blend light")
   {
-    SKIP("LP5.3: blend lights are drawn by FogAllLights, which LP5.3 adds (C49)");
+    check(SweepKind::Blend);
   }
 }
 

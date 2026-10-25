@@ -706,7 +706,7 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
         view, record->derived.projection.inverseBaseLightProject, flowRect);
       if (!scissor)
       {
-        // the light was culled to the view frustum (:263-267): every kind
+        // the light was culled to the view frustum (:266-270): every kind
         continue;
       }
       if (scissor->isEmpty() && !fogOrBlend)

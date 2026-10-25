@@ -366,7 +366,7 @@ std::vector<const LitSurface*> stagePassOrder(
  * is kept with an empty scissor (no surface: an empty-scissor light contacts no entity,
  * tr_frontend_addmodels.cpp:362-367) and without a surface (R_OptimizeViewLightsList
  * keeps it, :727-735: FogAllLights draws its cube); a light culled to the view frustum
- * (the projected z range empty) is dropped as every kind is (:263-267). Each view light
+ * (the projected z range empty) is dropped as every kind is (:266-270). Each view light
  * carries its kind and fogPlane.
  * r_useShadowSurfaceScissor's shrink is the light's own rect here (every surface's rect
  * is the light's), so it changes nothing.
