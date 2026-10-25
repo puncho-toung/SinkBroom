@@ -9551,6 +9551,8 @@ struct FeedListener
   std::vector<std::chrono::steady_clock::time_point> publications;
   // per Feed or Reparse item, the publications made before it started
   std::vector<std::size_t> itemStarts;
+  // LP5.G: per registry build (a reload, the poll's changed decl file), likewise
+  std::vector<std::size_t> reloadStarts;
 
   void attach(LitSession* attached)
   {
@@ -9581,20 +9583,44 @@ struct FeedListener
     }
     return publications[itemStarts[nth]];
   }
+
+  std::size_t reloads()
+  {
+    const auto lock = std::scoped_lock{mutex};
+    return reloadStarts.size();
+  }
+
+  // LP5.G: the time of the nth build's publication (a build publishes once), once made
+  std::optional<std::chrono::steady_clock::time_point> reloadPublication(
+    const std::size_t nth)
+  {
+    const auto lock = std::scoped_lock{mutex};
+    if (nth >= reloadStarts.size() || reloadStarts[nth] >= publications.size())
+    {
+      return std::nullopt;
+    }
+    return publications[reloadStarts[nth]];
+  }
 };
 
 // a material service over a game root as rootService's, whose listener is listener's; a
-// closed feedGate holds every Feed and Reparse item before it runs
+// closed feedGate holds every Feed and Reparse item before it runs. LP5.G: pollInterval
+// on, the poll's changed decl file builds the registry again after autoReloadInterval
 std::unique_ptr<MaterialService> feedService(
   const std::filesystem::path& root,
   const std::shared_ptr<FeedListener>& listener,
-  const std::shared_ptr<ParseGate>& feedGate)
+  const std::shared_ptr<ParseGate>& feedGate,
+  const std::chrono::milliseconds pollInterval = 0ms)
 {
   auto options = MaterialServiceOptions{};
   options.makeSource = [root](const std::atomic<bool>& cancel) {
     return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(root, &cancel)};
   };
-  options.pollInterval = 0ms;
+  options.pollInterval = pollInterval;
+  if (pollInterval > 0ms)
+  {
+    options.autoReloadInterval = 100ms;
+  }
   options.imageBudgetBytes = 0;
   options.listener = [listener](const MaterialServiceEvent& event) {
     if (event.kind != MaterialServiceEvent::Kind::Published)
@@ -9613,6 +9639,15 @@ std::unique_ptr<MaterialService> feedService(
     }
   };
   options.beforeWorkItemForTesting = [listener, feedGate](const std::string_view kind) {
+    if (kind == "reload")
+    {
+      const auto lock = std::scoped_lock{listener->mutex};
+      if (listener->recording)
+      {
+        listener->reloadStarts.push_back(listener->publications.size());
+      }
+      return;
+    }
     if (kind != "feed" && kind != "reparse")
     {
       return;
@@ -9846,9 +9881,10 @@ struct FeedRig
   FeedRig(
     const VulkanInstance& instance,
     const std::filesystem::path& root,
-    const std::filesystem::path& logPath)
+    const std::filesystem::path& logPath,
+    const std::chrono::milliseconds pollInterval = 0ms)
   {
-    service = feedService(root, listener, gate);
+    service = feedService(root, listener, gate, pollInterval);
     std::filesystem::remove(logPath);
     session = loggedRootSession(instance, events, *service, root, logPath);
     listener->attach(session.get());
@@ -13542,6 +13578,211 @@ TEST_CASE("LitSession fog and blend lights on a GPU (LP5.3)", "[.][litgpu2]")
     CHECK(fogRow);
     CHECK(blendRow);
   }
+}
+
+namespace
+{
+
+// LP5.G: the root's zz_lp22a.mtr with lights/squarelight1, the default light texture
+// (idLight::Spawn), at half its colour, as an editor's save of the file leaves it (the
+// stage of HalfSquareLight's re-parse)
+std::string lp5gHalfLightMaterials()
+{
+  auto text = Lp22aMaterials;
+  const auto stage = std::string{
+    "lights/squarelight1\n{\n\tlightFalloffImage _noFalloff\n\t{\n\t\tmap _white\n"
+    "\t\tcolored\n"};
+  REQUIRE(text.starts_with(stage));
+  text.insert(stage.size(), "\t\trgb 0.5\n");
+  return text;
+}
+
+// LP5.G: what a reload's publication cost on the render side: whether a frame was drawn
+// for it, from the publication to that frame's start, the frames until the session was
+// quiet again, and whether the last of them was settled
+struct ReloadLanding
+{
+  bool drawn = false;
+  double latencyMs = -1.0;
+  std::vector<FeedFrame> frames;
+  bool settled = false;
+};
+
+double millisecondsSince(
+  const std::chrono::steady_clock::time_point from,
+  const std::chrono::steady_clock::time_point to)
+{
+  return std::chrono::duration<double, std::milli>(to - from).count();
+}
+
+} // namespace
+
+// LP5.G (D18, D77, C44 generalised; plans/lit-preview/briefs/RELOAD-TRIGGER-FIX.md): a
+// material reload on a settled session draws a frame without a camera move, through the
+// poll's changed-file path (the editor saves the .mtr, the parse thread builds its
+// registry again) and through the explicit re-parse (LPF.0b): the first frame within one
+// pacer slot of the publication, the probe pixel at the new colour (the exposure pinned,
+// the floor's HDR value is linear in its light's colour: half), settled again. The poll
+// with no file changed and a publication that changes nothing drawn (a lookup) draw no
+// frame. Hidden: it needs a GPU and the game's blobs.
+TEST_CASE(
+  "LitSession a material reload on a settled session on a GPU (LP5.G)", "[.][litgpu2]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  const auto materialFile = root / "base" / "materials" / "zz_lp22a.mtr";
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    const auto logPath =
+      std::filesystem::temp_directory_path() / "TbLitLibTest-lp5g-reload.csv";
+    // the poll on, as the editor's material service runs it
+    auto rig = FeedRig{instance, root, logPath, 100ms};
+    auto& service = *rig.service;
+    auto& session = *rig.session;
+    const auto baseline = rig.probe(false);
+    REQUIRE(baseline.frame.settled);
+
+    // the poll with no file changed: nothing published moves what is drawn, no frame
+    {
+      REQUIRE(waitQuiet(session));
+      const auto presented = session.framesPresented();
+      std::this_thread::sleep_for(2000ms);
+      CHECK(session.framesPresented() == presented);
+      CHECK(service.stats().pollReloads == 0u);
+    }
+    // today's rule, kept: a lookup's publication draws no frame
+    {
+      const auto presented = session.framesPresented();
+      static_cast<void>(service.lookup("textures/lp5g/plain_lookup"));
+      REQUIRE(service.waitForTableForTesting(
+        [](const MaterialTable& table) {
+          return table.find("textures/lp5g/plain_lookup") != nullptr;
+        },
+        10000ms));
+      std::this_thread::sleep_for(500ms);
+      CHECK(session.framesPresented() == presented);
+    }
+
+    // the poll's path: the file written, the registry built again (one publication), the
+    // frames from that publication until the session is quiet again; no camera move
+    const auto reloadThroughPoll = [&](const std::string& text) {
+      REQUIRE(waitQuiet(session));
+      const auto nth = rig.listener->reloads();
+      const auto registry = service.table()->registry;
+      const auto reloads = service.stats().pollReloads;
+      writeTextFile(materialFile, text);
+      auto published = std::optional<std::chrono::steady_clock::time_point>{};
+      REQUIRE(waitFor(
+        [&] {
+          published = rig.listener->reloadPublication(nth);
+          return published.has_value();
+        },
+        10000ms,
+        false));
+      CHECK(service.stats().pollReloads == reloads + 1);
+      CHECK(service.table()->registry != registry);
+      auto landing = ReloadLanding{};
+      // before LP5.G: no frame within 2 s (none until the camera moved)
+      landing.drawn =
+        waitFor([&] { return !rig.frames->since(*published).empty(); }, 2000ms, false);
+      CHECK(landing.drawn);
+      if (landing.drawn)
+      {
+        REQUIRE(waitQuiet(session));
+        landing.frames = rig.frames->since(*published);
+        landing.latencyMs = millisecondsSince(*published, landing.frames.front().start);
+        landing.settled = session.lastFrameSettledForTesting();
+      }
+      return landing;
+    };
+
+    const auto lightBefore = namedLight(*session.lightTable(), "lp1b_light");
+    REQUIRE(lightBefore);
+    const auto half = reloadThroughPoll(lp5gHalfLightMaterials());
+    CHECK(half.latencyMs < 50.0);
+    CHECK(half.settled);
+    const auto halfProbe = rig.probe(false);
+    CHECK(halfProbe.frame.settled);
+    // the floor's probe is lp1b_light's alone: half
+    for (std::size_t c = 0; c < 3; ++c)
+    {
+      CHECK(halfProbe.hdr[c] == Catch::Approx(0.5f * baseline.hdr[c]).epsilon(1e-3));
+    }
+    const auto lightHalf = namedLight(*session.lightTable(), "lp1b_light");
+    REQUIRE(lightHalf);
+    CHECK(lightHalf->version > lightBefore->version);
+    // the file as it was: the picture back
+    const auto restored = reloadThroughPoll(Lp22aMaterials);
+    CHECK(restored.latencyMs < 50.0);
+    CHECK(restored.settled);
+    const auto restoredProbe = rig.probe(false);
+    for (std::size_t c = 0; c < 3; ++c)
+    {
+      CHECK(restoredProbe.hdr[c] == Catch::Approx(baseline.hdr[c]).epsilon(1e-3));
+    }
+
+    // the explicit re-parse (LPF.0b), the same stage: the feed trigger (LPF.1), kept
+    const auto item = rig.listener->items();
+    const auto reparsed = rig.reparse("lights/squarelight1", HalfSquareLight);
+    const auto reparsePublished = rig.listener->itemPublication(item);
+    REQUIRE(reparsePublished);
+    REQUIRE_FALSE(reparsed.empty());
+    const auto reparseMs = millisecondsSince(*reparsePublished, reparsed.front().start);
+    CHECK(reparseMs < 50.0);
+    const auto reparseProbe = rig.probe(false);
+    CHECK(reparseProbe.frame.settled);
+    for (std::size_t c = 0; c < 3; ++c)
+    {
+      CHECK(reparseProbe.hdr[c] == Catch::Approx(0.5f * baseline.hdr[c]).epsilon(1e-3));
+    }
+    const auto cleared = rig.reparse("lights/squarelight1", std::nullopt);
+    REQUIRE_FALSE(cleared.empty());
+    const auto clearedProbe = rig.probe(false);
+    for (std::size_t c = 0; c < 3; ++c)
+    {
+      CHECK(clearedProbe.hdr[c] == Catch::Approx(baseline.hdr[c]).epsilon(1e-3));
+    }
+
+    std::cout << fmt::format(
+      "LP5.G the poll's reload: drawn {} after {:.2f} ms, {} frames, settled {}; "
+      "restored: drawn {} after {:.2f} ms, {} frames, settled {}; the re-parse: "
+      "{:.2f} ms, {} frames; the floor's HDR green {:.5f} -> {:.5f} (poll) -> {:.5f} -> "
+      "{:.5f} (re-parse) -> {:.5f}; light record version {} -> {}\n",
+      half.drawn,
+      half.latencyMs,
+      half.frames.size(),
+      half.settled,
+      restored.drawn,
+      restored.latencyMs,
+      restored.frames.size(),
+      restored.settled,
+      reparseMs,
+      reparsed.size(),
+      baseline.hdr[1],
+      halfProbe.hdr[1],
+      restoredProbe.hdr[1],
+      reparseProbe.hdr[1],
+      clearedProbe.hdr[1],
+      lightBefore->version,
+      lightHalf->version);
+
+    rig.close("LP5.G reload");
+    std::filesystem::remove(logPath);
+  }
+  CHECK(resetDispatcher());
+  messages.print("LP5.G reload, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
 }
 
 } // namespace tb::lit
