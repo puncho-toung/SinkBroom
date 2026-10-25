@@ -610,6 +610,28 @@ private:
     const ViewLight& light,
     const std::array<EnginePlane, 4>& planes,
     std::uint64_t stateBits);
+  /**
+   * LP5.3 (C49, SC537): BlendLight( global, local, vLight ) (RenderBackend.cpp:
+   * 4796-4853): it returns when the global list is NULL (a blend light whose surfaces
+   * are all local, a light without noShadows over noSelfShadow surfaces, never draws:
+   * mirrored) and under r_skipBlendLights; unit 1 the light's falloff image, then per
+   * stage whose condition is on GL_State( DEPTHMASK | drawStateBits | DEPTHFUNC_EQUAL )
+   * (EQUAL is 3 << 13 and covers any depth function of drawStateBits), unit 0 the
+   * stage's image (both by the slot's state as stageImage: Pending, or Loading without a
+   * level, skips the stage's draws, the frame unconverged), the texture matrix loaded and
+   * never read (set 7 has no TEXTUREMATRIX: mirrored), GL_Color( the stage's colour
+   * registers ) clamped without r_lightScale, and T_BlendLight on the global then the
+   * local list (tBlendLight). False when the pass is disabled.
+   */
+  bool blendLight(Frame& frame, const ViewLight& light);
+  // T_BlendLight (RenderBackend.cpp:4731-4786) over a list: MVP and the light's
+  // lightProject through R_GlobalPlaneToLocal on a space change, TEXGEN_0_S/T/Q its rows
+  // 0-2, TEXGEN_1_S row 3 (the falloff)
+  bool tBlendLight(
+    Frame& frame,
+    const ViewLight& light,
+    const std::vector<LitSurface>& surfaces,
+    std::uint64_t stateBits);
   // T_BasicFog's TEXGEN_0_S = p0, TEXGEN_0_T = p1, TEXGEN_1_T = p2, TEXGEN_1_S = p3
   void setFogPlanes(const std::array<EnginePlane, 4>& planes);
   // the fog cube's geometry, its buffers made and written into the frame's command list

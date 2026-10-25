@@ -152,6 +152,12 @@ struct FrameLogRow
   std::optional<std::uint64_t> stageDraws;
   std::optional<std::uint64_t> stageSkipped;
   std::optional<double> gpuStagesMs;
+  // LP5.3 (C49, C16), frame rows: pass 9's fog draws (its lists' surfaces and its cubes,
+  // LitFrameStats::fogDraws) and blend draws, and its GPU time (FogAllLights' one timer
+  // pair)
+  std::optional<std::uint64_t> fogDraws;
+  std::optional<std::uint64_t> blendDraws;
+  std::optional<double> gpuFogMs;
 };
 
 // the CSV header line, ending in a newline

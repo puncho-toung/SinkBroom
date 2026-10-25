@@ -1974,7 +1974,146 @@ void LitPasses::recordFogLights(Frame& frame)
         return;
       }
     }
+    else if (light.kind == ViewLightKind::Blend)
+    {
+      if (!blendLight(frame, light))
+      {
+        m_stats.fogDisabled = true;
+        return;
+      }
+    }
   }
+}
+
+bool LitPasses::blendLight(Frame& frame, const ViewLight& light)
+{
+  if (light.globalInteractions.empty())
+  {
+    return true;
+  }
+  if (EngineFrame.skipBlendLights)
+  {
+    return true;
+  }
+  ++m_stats.blendLights;
+  m_logLight = light.record->id;
+  auto& images = *frame.inputs->images;
+  const auto& shader = *light.shader;
+  const auto& regs = light.registers;
+
+  // texture 1 will get the falloff texture
+  const auto& falloff = light.record->derived.shader.falloffImage;
+  const auto falloffUnit =
+    falloff ? stageImage(images, *falloff) : std::optional<MaterialImageKey>{};
+
+  // texture 0 will get the projected texture
+  for (const auto& stage : shader.stages)
+  {
+    if (engineRegister(regs, stage.conditionRegister) == 0.0f)
+    {
+      continue;
+    }
+    const auto stateBits = gls::DepthMask | stage.drawStateBits | gls::DepthFuncEqual;
+    if (!stage.image)
+    {
+      // a stage without an image (a cinematic's): the engine binds nothing there
+      // (stage->texture.image is NULL); the preview draws nothing for it
+      ++m_stats.fogSkipped;
+      continue;
+    }
+    const auto stageUnit = stageImage(images, *stage.image);
+    if (!stageUnit || !falloffUnit)
+    {
+      // D124: an image not answered or not written yet: no draw, the frame unconverged
+      ++m_stats.fogSkipped;
+      ++m_stats.skippedDraws;
+      m_stats.unconverged = true;
+      m_stats.retrigger = true;
+      continue;
+    }
+    m_units[0] = *stageUnit;
+    m_units[1] = *falloffUnit;
+
+    // RB_LoadShaderTextureMatrix: set 7 has no TEXTUREMATRIX, so it is never read
+    if (stage.hasTextureMatrix)
+    {
+      const auto matrix = engineLoadShaderTextureMatrix(regs, stage);
+      m_parms.set(RenderParm::TextureMatrixS, matrix[0]);
+      m_parms.set(RenderParm::TextureMatrixT, matrix[1]);
+    }
+
+    // get the modulate values from the light, including alpha, unlike normal lights
+    auto lightColor = Vec4{};
+    for (std::size_t i = 0; i < 4; ++i)
+    {
+      lightColor[i] = engineRegister(regs, stage.colorRegisters[i]);
+    }
+    m_parms.set(RenderParm::Color, engineClampedColor(lightColor));
+
+    if (
+      !tBlendLight(frame, light, light.globalInteractions, stateBits)
+      || !tBlendLight(frame, light, light.localInteractions, stateBits))
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool LitPasses::tBlendLight(
+  Frame& frame,
+  const ViewLight& light,
+  const std::vector<LitSurface>& surfaces,
+  const std::uint64_t stateBits)
+{
+  m_currentSpace.reset();
+  const auto& projection = light.record->derived.projection;
+  for (const auto& surface : surfaces)
+  {
+    // the interaction surface's scissorRect is its light's: an empty one is skipped
+    const auto& scissor = light.scissor;
+    if (scissor.isEmpty())
+    {
+      continue;
+    }
+    if (!m_currentScissor.equals(scissor))
+    {
+      m_scissor = engineScissorRect(frame.view, scissor);
+      m_currentScissor = scissor;
+    }
+    if (m_currentSpace != surface.space)
+    {
+      // change the matrix, and the light projection matrix
+      const auto& space = m_lists.spaces[surface.space];
+      setMvp(m_parms, space.mvp);
+      auto lightProjectInCurrentSpace = std::array<EnginePlane, 4>{};
+      for (std::size_t i = 0; i < 4; ++i)
+      {
+        lightProjectInCurrentSpace[i] =
+          engineGlobalPlaneToLocal(space.modelMatrix, projection.lightProject[i]);
+      }
+      m_parms.set(RenderParm::TexGen0S, vec4Of(lightProjectInCurrentSpace[0]));
+      m_parms.set(RenderParm::TexGen0T, vec4Of(lightProjectInCurrentSpace[1]));
+      m_parms.set(RenderParm::TexGen0Q, vec4Of(lightProjectInCurrentSpace[2]));
+      // falloff
+      m_parms.set(RenderParm::TexGen1S, vec4Of(lightProjectInCurrentSpace[3]));
+      m_currentSpace = surface.space;
+    }
+    // BindShader_BlendLight (the skinned form never: no joints, LP7)
+    const auto outcome = draw(
+      frame,
+      EngineBuiltinBlendLight,
+      *surface.chunk,
+      stateBits,
+      0.0f,
+      0.0f,
+      surface.lightTriangles.get());
+    if (!countFogDraw(frame, outcome, surface.chunk, EngineBuiltinBlendLight, stateBits))
+    {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool LitPasses::fogPass(Frame& frame, const ViewLight& light)

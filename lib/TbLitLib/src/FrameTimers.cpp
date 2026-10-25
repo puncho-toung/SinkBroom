@@ -43,6 +43,8 @@ std::optional<double>& rowTime(FrameLogRow& row, const TimedPass pass)
     return row.gpuAmbientMs;
   case TimedPass::Stages:
     return row.gpuStagesMs;
+  case TimedPass::Fog:
+    return row.gpuFogMs;
   case TimedPass::Frame:
     break;
   }

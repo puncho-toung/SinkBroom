@@ -138,6 +138,17 @@ std::string stageFields(const FrameLogRow& row)
     optionalField(row.gpuStagesMs, "{:.3f}"));
 }
 
+// LP5.3's columns, pass 9's: its fog draws, its blend draws and its GPU time; empty in a
+// start or stop row
+std::string fogFields(const FrameLogRow& row)
+{
+  return fmt::format(
+    "{},{},{}",
+    optionalCount(row.fogDraws),
+    optionalCount(row.blendDraws),
+    optionalField(row.gpuFogMs, "{:.3f}"));
+}
+
 std::string_view eventName(const FrameLogEvent event)
 {
   switch (event)
@@ -165,7 +176,7 @@ std::string_view frameLogHeader()
          "bytes,settled,alloc_refused,culled_triangles,view_area,areas_flowed,lights_in_"
          "view,portal_chains,flow_ms,ambient_draws,gpu_ambient_ms,ambient_writes,grid_"
          "surfaces,feed_applied,feed_ms,override_bytes,math_lights,ambient_lights,stage_"
-         "draws,stage_skipped,gpu_stages_ms\n";
+         "draws,stage_skipped,gpu_stages_ms,fog_draws,blend_draws,gpu_fog_ms\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -177,14 +188,14 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   if (row.event != FrameLogEvent::Frame)
   {
     return fmt::format(
-      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n",
+      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,
       resourceFields(row));
   }
   return fmt::format(
-    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
     row.session,
     eventName(row.event),
     row.frameIndex,
@@ -204,7 +215,8 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     flowFields(row),
     feedFields(row),
     phaseFields(row),
-    stageFields(row));
+    stageFields(row),
+    fogFields(row));
 }
 
 std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& path)
