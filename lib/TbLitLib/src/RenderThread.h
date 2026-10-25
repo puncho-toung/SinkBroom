@@ -240,6 +240,8 @@ struct RenderFrameAccess
   // LP2.2b test hook: the colour the frame clears the HDR target to instead of its lit
   // passes (setHdrClear), if any
   std::optional<std::array<float, 4>> hdrClear;
+  // LP5.F: the chunks the frame's lists are made from (the scene's or a test's)
+  const std::map<ChunkKey, Chunk>& chunks;
 };
 
 /**

@@ -276,6 +276,8 @@ struct MaterialService::Shared
   // LP1c fix (S2.2): the materials whose editor-image size to measure, by canonical name
   std::deque<std::string> measures;
   std::unordered_set<std::string> queuedMeasures;
+  // LP5.F: the queued measures are not taken (holdMeasuresForTesting)
+  bool measuresHeld = false;
   // LP1c.1: image caches to read, one per work item (S2.3)
   std::deque<MaterialImageKey> images;
   std::unordered_set<MaterialImageKey, MaterialImageKeyHash> queuedImages;
@@ -923,7 +925,7 @@ private:
     {
       return workOf(WorkKind::Poll);
     }
-    if (!m_shared.measures.empty())
+    if (!m_shared.measures.empty() && !m_shared.measuresHeld)
     {
       return workOf(WorkKind::Measure);
     }
@@ -3129,6 +3131,16 @@ bool MaterialService::waitForStatsForTesting(
   auto lock = std::unique_lock{m_shared->mutex};
   return m_shared->changed.wait_for(
     lock, timeout, [&] { return predicate(m_shared->stats); });
+}
+
+void MaterialService::holdMeasuresForTesting(const bool hold)
+{
+  {
+    auto lock = std::scoped_lock{m_shared->mutex};
+    m_shared->measuresHeld = hold;
+  }
+  // a release wakes the thread for the measures queued meanwhile
+  m_shared->requested.notify_one();
 }
 
 } // namespace tb::lit

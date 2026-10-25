@@ -4166,19 +4166,24 @@ struct SettledFrame
   LitFrameStats stats;
   std::size_t drawSurfs = 0;
   std::size_t lights = 0;
+  // LP5.F: the frame's own convergence (D77), as its tonemap passes left it
+  FrameConvergence convergence;
 };
 
 /**
- * Waits until a frame of camera is settled (no pending pipeline, image, chunk, material
- * or evaluation; every slot answered and written; the lists hold drawSurfs) and reads
- * its HDR target back through a staging texture copied after the passes; nullopt at the
- * deadline.
+ * Waits until a frame of camera has nothing pending in its own lists (no pending
+ * pipeline, image, chunk upload, material or evaluation; every slot answered and
+ * written; the lists hold drawSurfs) and, with productSettled, is settled by the
+ * product's rule too (its FrameConvergence, D77); reads its HDR target back through a
+ * staging texture copied after the tonemap passes (LP5.F: the frame's own convergence
+ * is at hand there); nullopt at the deadline.
  */
-std::optional<std::pair<HdrImage, SettledFrame>> settledHdr(
+std::optional<std::pair<HdrImage, SettledFrame>> frameHdr(
   LitSession& session,
   const CameraState& camera,
   const std::size_t minLights,
-  const std::chrono::milliseconds timeout = 60000ms)
+  const std::chrono::milliseconds timeout,
+  const bool productSettled)
 {
   session.setCamera(camera);
   const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -4190,16 +4195,18 @@ std::optional<std::pair<HdrImage, SettledFrame>> settledHdr(
     auto settled = false;
     auto done = std::make_shared<std::promise<void>>();
     auto future = done->get_future();
-    session.runAfterPassesForTesting([&, done](RenderFrameAccess& access) {
+    session.runAfterTonemapForTesting([&, done](RenderFrameAccess& access) {
       const auto& stats = access.passes.lastStats();
       const auto& lists = access.passes.lists();
       frame.stats = stats;
       frame.drawSurfs = lists.drawSurfs.size();
       frame.lights = lists.lights.size();
+      frame.convergence = access.convergence;
       settled = stats.camera == camera && !stats.unconverged
                 && access.images.pending() == 0 && !access.images.hasLoading()
                 && !lists.drawSurfs.empty() && lists.lights.size() >= minLights
-                && !access.arenas.pending();
+                && !access.arenas.pending()
+                && (!productSettled || access.convergence.settled());
       if (settled)
       {
         auto* hdr = access.frame.find(frame_resource::CurrentRenderHdr)->texture;
@@ -4252,6 +4259,16 @@ std::optional<std::pair<HdrImage, SettledFrame>> settledHdr(
     return std::pair{std::move(image), frame};
   }
   return std::nullopt;
+}
+
+// the HDR target of the first settled frame of camera (frameHdr)
+std::optional<std::pair<HdrImage, SettledFrame>> settledHdr(
+  LitSession& session,
+  const CameraState& camera,
+  const std::size_t minLights,
+  const std::chrono::milliseconds timeout = 60000ms)
+{
+  return frameHdr(session, camera, minLights, timeout, false);
 }
 
 // a material service over a game root, its image budget off
@@ -12749,6 +12766,297 @@ TEST_CASE("LitSession cube and sky texgens on a GPU (LP5.2b)", "[.][litgpu2]")
   messages.print("LP5.2b cube and sky texgens, validation");
   CHECK(messages.errors == 0);
   CHECK(messages.warnings == 0);
+}
+
+namespace
+{
+
+// LP5.F: the scene's chunks of a material in the next frame: how many there are, and how
+// many of them are provisional (Chunk::provisional: built at a C21 Default size)
+std::optional<std::pair<std::size_t, std::size_t>> chunksOf(
+  LitSession& session, const std::string& material)
+{
+  auto counts = std::make_shared<std::pair<std::size_t, std::size_t>>(0, 0);
+  if (!inFrame(session, [counts, material](RenderFrameAccess& access) {
+        for (const auto& [key, chunk] : access.chunks)
+        {
+          if (key.material == material)
+          {
+            ++counts->first;
+            counts->second += chunk.provisional ? 1 : 0;
+          }
+        }
+      }))
+  {
+    return std::nullopt;
+  }
+  return *counts;
+}
+
+// LP5.F: a session's start-up on a map: the frames it drew from the offer up to the first
+// frame the product called settled and up to the frame from which it stayed settled (the
+// frame log's settled column), every frame it drew, and the milliseconds from the offer
+// to that last turn to settled
+struct StartUp
+{
+  std::size_t firstSettledFrame = 0;
+  std::size_t settledFrame = 0;
+  std::size_t frames = 0;
+  double milliseconds = 0.0;
+};
+
+std::optional<StartUp> startUp(
+  const VulkanInstance& instance,
+  const std::filesystem::path& root,
+  const std::string& mapText,
+  const std::filesystem::path& logPath)
+{
+  std::filesystem::remove(logPath);
+  auto result = StartUp{};
+  auto quiet = false;
+  auto framesBefore = std::uint64_t{0};
+  {
+    auto service = rootService(root);
+    auto events = Events{};
+    auto session = loggedRootSession(instance, events, *service, root, logPath);
+    session->setCamera(litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0}));
+    session->setExposed(true);
+    if (waitFor(
+          [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+          5000ms,
+          false))
+    {
+      // the frames of the empty scene before the offer are not the start-up's
+      std::this_thread::sleep_for(200ms);
+      framesBefore = session->framesPresented();
+      const auto start = std::chrono::steady_clock::now();
+      if (session->offerSnapshot(lp22aSnapshot(mapText, root, 7, 1)))
+      {
+        // settled, and no frame drawn for 500 ms since
+        auto frames = session->framesPresented();
+        auto changedAt = std::chrono::steady_clock::now();
+        auto wasSettled = false;
+        auto settledAt = start;
+        const auto deadline = start + 60s;
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+          const auto now = std::chrono::steady_clock::now();
+          const auto settled = session->lastFrameSettledForTesting();
+          if (const auto drawn = session->framesPresented(); drawn != frames)
+          {
+            frames = drawn;
+            changedAt = now;
+          }
+          if (settled && !wasSettled)
+          {
+            settledAt = now;
+          }
+          wasSettled = settled;
+          if (settled && frames > framesBefore && now - changedAt >= 500ms)
+          {
+            quiet = true;
+            break;
+          }
+          std::this_thread::sleep_for(1ms);
+        }
+        result.milliseconds =
+          std::chrono::duration<double, std::milli>{settledAt - start}.count();
+      }
+    }
+    teardown(*session);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  if (!quiet)
+  {
+    return std::nullopt;
+  }
+
+  const auto rows = readCsv(logPath);
+  if (rows.empty())
+  {
+    return std::nullopt;
+  }
+  const auto column = [&](const std::string& name) {
+    const auto it = std::ranges::find(rows[0], name);
+    return std::size_t(it - rows[0].begin());
+  };
+  const auto eventColumn = column("event");
+  const auto frameColumn = column("frame");
+  const auto settledColumn = column("settled");
+  auto previous = false;
+  for (std::size_t i = 1; i < rows.size(); ++i)
+  {
+    const auto& row = rows[i];
+    if (
+      row.size() <= settledColumn || row[eventColumn] != "frame"
+      || std::stoull(row[frameColumn]) < framesBefore)
+    {
+      continue;
+    }
+    ++result.frames;
+    const auto settled = row[settledColumn] == "1";
+    if (settled && result.firstSettledFrame == 0)
+    {
+      result.firstSettledFrame = result.frames;
+    }
+    if (settled && !previous)
+    {
+      result.settledFrame = result.frames;
+    }
+    previous = settled;
+  }
+  return result;
+}
+
+} // namespace
+
+// LP5.F (D77 as A41 restates it, A6, D18; plans/lit-preview/43-FLOOR-PROBE-FLAKE.md): a
+// chunk built at the C21 Default size while its material's measure is still queued
+// (Chunk::provisional) is drawn provisionally, at the 8 x 8 default, and no frame that
+// draws it is settled. The measures held (MaterialService::holdMeasuresForTesting) while
+// every image is served give that picture on demand: LP2.2a's floor probe through the
+// 8 x 8 UVs (texel ~ (225, 226, 40) of floor.tga). Then the start-up's frames to the
+// settled frame, on the LP2.2a fixture and with 2000 boxes more. Hidden: it needs a GPU
+// and the game's blobs.
+TEST_CASE("LitSession provisional editor-image sizes on a GPU (LP5.F)", "[.][litgpu2]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  const auto lit = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+  const auto floor = std::string{"textures/lp1b/floor"};
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+
+  SECTION("the measures held: the floor drawn at 8 x 8, never settled; then measured")
+  {
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      service->holdMeasuresForTesting(true);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+
+      // every slot answered and written, nothing pending in the frame's lists: the
+      // floor's slot unmeasured at the registry's Default, its chunks provisional
+      const auto held = frameHdr(*session, lit, 1, 60000ms, false);
+      REQUIRE(held);
+      const auto slot = service->table()->find(floor);
+      REQUIRE(slot);
+      REQUIRE(slot->entry);
+      CHECK_FALSE(slot->sizeMeasured);
+      CHECK(slot->entry->editorImageSize.state == EditorImageSize::State::Default);
+      const auto heldChunks = chunksOf(*session, floor);
+      REQUIRE(heldChunks);
+      CHECK(heldChunks->first > 0u);
+      CHECK(heldChunks->second == heldChunks->first);
+      // the 8 x 8 UVs' picture (43-FLOOR-PROBE-FLAKE.md section 2)
+      const auto heldCentre = held->first.at(80, 60);
+      CHECK(heldCentre[0] == Catch::Approx(2.2441f).margin(0.01f));
+      CHECK(heldCentre[1] == Catch::Approx(2.2773f).margin(0.01f));
+      CHECK(heldCentre[2] == Catch::Approx(0.0608f).margin(0.01f));
+      // D77 (A41): no frame that draws a chunk built against an unmeasured size is
+      // settled
+      CHECK_FALSE(held->second.convergence.settled());
+      CHECK(held->second.convergence.provisionalChunks);
+      CHECK_FALSE(session->lastFrameSettledForTesting());
+
+      // released: the measure lands and the floor's cells are built again at 64 x 32
+      service->holdMeasuresForTesting(false);
+      REQUIRE(waitFor(
+        [&] {
+          const auto counts = chunksOf(*session, floor);
+          return counts && counts->first > 0u && counts->second == 0u;
+        },
+        20000ms,
+        false));
+      const auto measured = settledHdr(*session, lit, 1);
+      REQUIRE(measured);
+      const auto measuredSlot = service->table()->find(floor);
+      REQUIRE(measuredSlot);
+      CHECK(measuredSlot->sizeMeasured);
+      const auto centre = measured->first.at(80, 60);
+      CHECK(centre[0] == Catch::Approx(0.0309f).margin(0.001f));
+      CHECK(centre[1] == Catch::Approx(1.4531f).margin(0.001f));
+      CHECK(centre[2] == 0.0f);
+      CHECK(measured->second.convergence.settled());
+      std::cout << fmt::format(
+        "LP5.F the measures held: the floor ({:.4f} {:.4f} {:.4f}), {} of {} floor "
+        "chunks provisional, settled {}; measured: ({:.4f} {:.4f} {:.4f})\n",
+        heldCentre[0],
+        heldCentre[1],
+        heldCentre[2],
+        heldChunks->second,
+        heldChunks->first,
+        held->second.convergence.settled(),
+        centre[0],
+        centre[1],
+        centre[2]);
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    messages.print("LP5.F measures held, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("the start-up's frames to the settled frame: the fixture, and 2000 boxes more")
+  {
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      const auto logPath =
+        std::filesystem::temp_directory_path() / "TbLitLibTest-lp5f-startup.csv";
+      const auto maps = std::vector<std::pair<std::string, std::string>>{
+        {"the LP2.2a fixture", lp22aMapText()},
+        {"the fixture with 2000 boxes", feedBatchMapText(2000)},
+      };
+      for (const auto& [name, text] : maps)
+      {
+        CAPTURE(name);
+        const auto measured = startUp(instance, root, text, logPath);
+        REQUIRE(measured);
+        CHECK(measured->settledFrame > 0u);
+        std::cout << fmt::format(
+          "LP5.F start-up, {}: settled from frame {} on (the first settled frame {}), "
+          "{} frames, {:.0f} ms\n",
+          name,
+          measured->settledFrame,
+          measured->firstSettledFrame,
+          measured->frames,
+          measured->milliseconds);
+      }
+      std::filesystem::remove(logPath);
+    }
+    CHECK(resetDispatcher());
+    messages.print("LP5.F start-up, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
 }
 
 } // namespace tb::lit

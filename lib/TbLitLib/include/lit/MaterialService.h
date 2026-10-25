@@ -655,6 +655,13 @@ public:
   bool waitForStatsForTesting(
     const std::function<bool(const MaterialServiceStats&)>& predicate,
     std::chrono::milliseconds timeout) const;
+  /**
+   * LP5.F, any thread: while held, the parse thread takes none of the queued measures
+   * (S2.2) and goes on with every other work item, the images among them, so that a
+   * material published unmeasured keeps its Default or kept size meanwhile; a release
+   * wakes the thread for the measures queued. Tests only.
+   */
+  void holdMeasuresForTesting(bool hold);
 
   deleteCopyAndMove(MaterialService);
 };

@@ -1122,7 +1122,8 @@ RenderFrameAccess RenderThread::frameAccess(nvrhi::ICommandList& commandList)
     m_passes,
     m_tonemap,
     m_convergence,
-    m_frameHdrClear};
+    m_frameHdrClear,
+    arenaChunks()};
 }
 
 void RenderThread::runAfterPassHooks(nvrhi::ICommandList& commandList)
