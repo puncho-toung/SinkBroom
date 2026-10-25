@@ -301,7 +301,7 @@ namespace
 namespace em = engine_material;
 namespace gls = engine_gls;
 
-// the stage-pass materials of the S rooms and of the [litgpu2] cases, through the copied
+// the stage-pass materials of the S rooms and of the [litgpu3] cases, through the copied
 // parser
 const char* const StageMaterials =
   "textures/lp5t/add { { blend add map textures/lp5t/glow rgb 2 } }\n"

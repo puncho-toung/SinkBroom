@@ -314,14 +314,16 @@ TEST_CASE("LitSession: the panel's status line (D9, LP2.3)")
 
 // Hidden GPU tests: they need a Vulkan driver and, for the window section, a desktop. The
 // Vulkan loader is loaded at runtime here, as Qt does in the editor (C9); the test
-// executable never links it. LP5.0 (RUN.md, the director's decisions after LPF.1 (5);
-// P6.24): two tags, each suite under 180 s of wall clock in Debug (the gate measures both
-// and adds a third tag once one passes 150 s): "[.][litgpu]" holds LP0-LP2's cases (on a
-// GPU, pipelines, GPU resources, lit passes, tonemap and blit); "[.][litgpu2]" LP4's and
-// later ones (ambient pass, light-grid path, live feed, LP5's programs). LPF.2's host
-// cases are "[.][feed]" (tst_Feed.cpp). Every case makes its own instance, device and
-// session, bounds every wait (H.1, 19-LITGPU-HANG.md) and leaves the dispatcher reset:
-// none depends on another having run, in either suite or in any order.
+// executable never links it. Three tags, each suite under 180 s of wall clock in Debug
+// (LP5.0's split, P6.24; LP7.0's third tag, D134, C56): "[.][litgpu]" holds LP0-LP2's
+// cases (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit);
+// "[.][litgpu2]" LP4's and LPF's (ambient pass, light-grid path, live feed);
+// "[.][litgpu3]" LP5's (the programs and layouts, math and ambientLight lights, pass 8,
+// the cube and sky texgens, the provisional sizes, fog and blend lights, the material
+// reload) and LP7's until it passes 150 s, then a fourth. LPF.2's host cases are
+// "[.][feed]" (tst_Feed.cpp). Every case makes its own instance, device and session,
+// bounds every wait (H.1, 19-LITGPU-HANG.md) and leaves the dispatcher reset: none
+// depends on another having run, in any suite or in any order.
 
 #ifdef _WIN32
 
@@ -2066,7 +2068,7 @@ bool waitForSlots(
 // LP2.1: the render thread's GPU resources (FrameResources, the arenas, the image slots
 // and textures, the binding sets, the samplers). Each section tears down with no NVRHI
 // reference, no NVRHI error, no validation message and every device allocation freed.
-TEST_CASE("LitSession LP5's programs and layouts on a GPU (LP5.0)", "[.][litgpu2]")
+TEST_CASE("LitSession LP5's programs and layouts on a GPU (LP5.0)", "[.][litgpu3]")
 {
   const auto* gamePath = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePath || !*gamePath)
@@ -10465,7 +10467,7 @@ float meanOf(const std::vector<float>& values)
 // light of each kind in turn, against CPU models of the blobs (interaction.ps.hlsl with
 // mathlight.inc.hlsl's MLEvaluate, interactionAmbient.ps.hlsl), the exposure pinned as
 // the parity test pins it. Hidden: it needs a GPU and the game's blobs.
-TEST_CASE("LitSession math and ambientLight lights on a GPU (LP5.1)", "[.][litgpu2]")
+TEST_CASE("LitSession math and ambientLight lights on a GPU (LP5.1)", "[.][litgpu3]")
 {
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePathValue || !*gamePathValue)
@@ -11922,7 +11924,7 @@ std::optional<LitFrameStats> framesUntil(
 // front of a wall lit head-on, each pixel against a CPU model over the frame drawn with
 // the shader passes skipped (the background); the draw order, the counters, the pending
 // rule and the frame log's columns. Hidden: it needs a GPU and the game's blobs.
-TEST_CASE("LitSession pass 8, the material stage pass, on a GPU (LP5.2a)", "[.][litgpu2]")
+TEST_CASE("LitSession pass 8, the material stage pass, on a GPU (LP5.2a)", "[.][litgpu3]")
 {
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePathValue || !*gamePathValue)
@@ -12500,7 +12502,7 @@ EngineVec3 lp52bReflect(
 // skybox and wobbleSky stages, reflect2 skipped, a cube not written yet drawn as the zero
 // cube with the frame unconverged; the validation layer's answer on 57's compare-enabled
 // sampler. Hidden: it needs a GPU and the game's blobs.
-TEST_CASE("LitSession cube and sky texgens on a GPU (LP5.2b)", "[.][litgpu2]")
+TEST_CASE("LitSession cube and sky texgens on a GPU (LP5.2b)", "[.][litgpu3]")
 {
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePathValue || !*gamePathValue)
@@ -12999,7 +13001,7 @@ std::optional<StartUp> startUp(
 // 8 x 8 UVs (texel ~ (225, 226, 40) of floor.tga). Then the start-up's frames to the
 // settled frame, on the LP2.2a fixture and with 2000 boxes more. Hidden: it needs a GPU
 // and the game's blobs.
-TEST_CASE("LitSession provisional editor-image sizes on a GPU (LP5.F)", "[.][litgpu2]")
+TEST_CASE("LitSession provisional editor-image sizes on a GPU (LP5.F)", "[.][litgpu3]")
 {
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePathValue || !*gamePathValue)
@@ -13213,7 +13215,7 @@ float modelAlphaSample(const IntrinsicRecipe& recipe, const float s, const float
 // whose surfaces are all local beside a twin with a global surface; the fogged-out portal
 // on the LP1b fixture's tree, open while its fog light's registers are first-seen; the
 // frame log's columns. Hidden: it needs a GPU and the game's blobs.
-TEST_CASE("LitSession fog and blend lights on a GPU (LP5.3)", "[.][litgpu2]")
+TEST_CASE("LitSession fog and blend lights on a GPU (LP5.3)", "[.][litgpu3]")
 {
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePathValue || !*gamePathValue)
@@ -13678,7 +13680,7 @@ struct ImageLanding
 // with no file changed and a publication that changes nothing drawn (a lookup) draw no
 // frame. Hidden: it needs a GPU and the game's blobs.
 TEST_CASE(
-  "LitSession a material reload on a settled session on a GPU (LP5.G)", "[.][litgpu2]")
+  "LitSession a material reload on a settled session on a GPU (LP5.G)", "[.][litgpu3]")
 {
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePathValue || !*gamePathValue)

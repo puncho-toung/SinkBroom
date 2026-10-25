@@ -18,7 +18,7 @@
  */
 
 // LPF.2 (D107, D108, D110): the Qt-free host API on this machine's GPU. Hidden
-// ("[.][feed]", its own tag, in neither "[.][litgpu]" nor "[.][litgpu2]"): it needs a
+// ("[.][feed]", its own tag, in none of the "[.][litgpu*]" suites): it needs a
 // Vulkan driver and, for the lit sections, the game folder's shader blobs and light
 // entityDef (TB_LIT_GAME_PATH, read only). Windows only, as every GPU case.
 

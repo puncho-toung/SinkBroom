@@ -11,8 +11,8 @@ read as missing, as the engine's `fopen` reads them too. Keep the build folder s
 checkout's `build-lit`), or run from an 8.3 path.
 
 Hidden tests: `"[.][retail]"` reads the game folder `TB_LIT_GAME_PATH` names (read only);
-`"[.][litgpu]"` (LP0-LP2's cases) and `"[.][litgpu2]"` (LP4's and later ones) need a Vulkan
-device and `TB_LIT_GAME_PATH`, each run on its own and under 180 s (LP5.0's split; a third
-tag once one passes 150 s); `"[.][feed]"` the host API's cases (LPF.2); `"[.][parity]"` the
+`"[.][litgpu]"` (LP0-LP2's cases), `"[.][litgpu2]"` (LP4's and LPF's) and `"[.][litgpu3]"`
+(LP5's, and LP7's until it passes 150 s) need a Vulkan device and `TB_LIT_GAME_PATH`, each run
+on its own and under 180 s (LP5.0's split, LP7.0's third tag; a fourth once one passes 150 s); `"[.][feed]"` the host API's cases (LPF.2); `"[.][parity]"` the
 parity rows (`TB_LIT_PARITY_ROOT`, `TB_LIT_PARITY_OUT`); `"[.][retail-dump]"` writes the
 engine-capture dump.
