@@ -674,6 +674,120 @@ TEST_CASE(
     CHECK(host.events.count(SessionEvent::Error) == 0u);
   }
 
+  // LP5.F addendum (D111): an override of another editorSize remeasures the material
+  // (Ready, then unmeasured): no readback shows the old UVs under the new image
+  SECTION("readbackLdr: an override's new editorSize, its remeasure held, then new UVs")
+  {
+    // 8 x 1 texels, 0-3 red and 4-7 blue: pure red for s in [1/16, 7/16], pure blue for
+    // s in [9/16, 15/16] (bilinear, wrapped); the slab's -y face has s = x / width
+    const auto stripes = [](const int editorWidth) {
+      auto image = ImageOverride{};
+      auto pixels = RawImagePixels{};
+      pixels.width = 8;
+      pixels.height = 1;
+      pixels.format = ImagePixelFormat::RGBA8;
+      for (auto i = 0; i < 8; ++i)
+      {
+        const auto red = i < 4;
+        pixels.bytes.insert(
+          pixels.bytes.end(),
+          {std::uint8_t(red ? 255 : 0), 0, std::uint8_t(red ? 0 : 255), 255});
+      }
+      image.image = std::move(pixels);
+      image.editorSize =
+        EditorImageSize{editorWidth, editorWidth, EditorImageSize::State::Ready, {}};
+      return image;
+    };
+    // the centre row's probe at world x: the slab spans x -256..256 over its lit columns
+    const auto probe = [](const LdrImage& image, const float x) {
+      const auto row = std::size_t(image.height / 2);
+      auto first = -1;
+      auto last = -1;
+      for (auto c = 0; c < int(image.width); ++c)
+      {
+        const auto* p = &image.rgba[(row * image.width + std::size_t(c)) * 4];
+        if (int(p[0]) + p[1] + p[2] > 0)
+        {
+          first = first < 0 ? c : first;
+          last = c;
+        }
+      }
+      const auto column = first + int((x + 256.0f) / 512.0f * float(last + 1 - first));
+      const auto* p = &image.rgba[(row * image.width + std::size_t(column)) * 4];
+      return std::array<int, 3>{int(p[0]), int(p[1]), int(p[2])};
+    };
+    const auto isRed = [](const std::array<int, 3>& p) { return p[0] > 4 * p[2] + 8; };
+    const auto isBlue = [](const std::array<int, 3>& p) { return p[2] > 4 * p[0] + 8; };
+
+    auto host = Host{root, *gamePath};
+    REQUIRE(waitFor(
+      [&] { return host.events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms));
+    REQUIRE(host.service->setImageOverride("textures/lp5/feed_side", stripes(512))
+              .is_success());
+    host.offer(snapshotOfMapText(slabMapText(), 1, 1) | kdl::value());
+    host.session->setCamera(camera);
+    const auto wide = host.session->readbackLdr(60000ms);
+    REQUIRE(wide.is_success());
+    const auto wideSlot = host.service->table()->find("textures/lp5/feed_side");
+    REQUIRE(wideSlot);
+    REQUIRE(wideSlot->entry);
+    CHECK(wideSlot->sizeMeasured);
+    CHECK(wideSlot->entry->editorImageSize.width == 512);
+    // the model at 512: x 192 at s 0.375 (red), x -192 at s 0.625 (blue)
+    CHECK(isRed(probe(wide.value(), 192.0f)));
+    CHECK(isBlue(probe(wide.value(), -192.0f)));
+
+    // 256 with the measures held: the slot is published again unmeasured at 512
+    host.service->holdMeasuresForTesting(true);
+    REQUIRE(host.service->setImageOverride("textures/lp5/feed_side", stripes(256))
+              .is_success());
+    const auto held = host.session->readbackLdr(3000ms);
+    CHECK(held.is_error());
+    const auto heldSlot = host.service->table()->find("textures/lp5/feed_side");
+    REQUIRE(heldSlot);
+    REQUIRE(heldSlot->entry);
+    CHECK_FALSE(heldSlot->sizeMeasured);
+    CHECK(heldSlot->entry->editorImageSize.width == 512);
+    CHECK_FALSE(host.session->lastFrameSettledForTesting());
+    if (held.is_success())
+    {
+      const auto p = probe(held.value(), 192.0f);
+      std::cout << "LP5.F remeasure held: a settled frame at x 192 (" << p[0] << " "
+                << p[1] << " " << p[2] << "), the old UVs\n";
+    }
+
+    // released: measured at 256, built again: x 192 at s 0.75 (blue), x -192 at s 0.25
+    // (red)
+    host.service->holdMeasuresForTesting(false);
+    const auto narrow = host.session->readbackLdr(60000ms);
+    REQUIRE(narrow.is_success());
+    const auto slot = host.service->table()->find("textures/lp5/feed_side");
+    REQUIRE(slot);
+    REQUIRE(slot->entry);
+    CHECK(slot->sizeMeasured);
+    CHECK(slot->entry->editorImageSize.width == 256);
+    const auto right = probe(narrow.value(), 192.0f);
+    const auto left = probe(narrow.value(), -192.0f);
+    CHECK(isBlue(right));
+    CHECK(isRed(left));
+    std::cout << "LP5.F remeasure: at 512 x 192 "
+              << fmt::format("{}", probe(wide.value(), 192.0f)) << ", x -192 "
+              << fmt::format("{}", probe(wide.value(), -192.0f))
+              << "; held: " << (held.is_error() ? "no settled frame" : "settled")
+              << "; at 256 x 192 " << fmt::format("{}", right) << ", x -192 "
+              << fmt::format("{}", left) << "\n";
+
+    const auto report = host.close();
+    CHECK(report.deviceReleaseCount == 0u);
+    CHECK(report.nvrhiErrors == 0u);
+    CHECK_FALSE(report.deviceLost);
+    CHECK(report.messages.empty());
+    host.validation.print("LP5.F remeasure");
+    CHECK(host.validation.errors == 0);
+    CHECK(host.validation.warnings == 0);
+    CHECK(host.events.count(SessionEvent::Error) == 0u);
+  }
+
   SECTION("detach, then a stop while the parse thread publishes 100 tables")
   {
     // the first host pays the process's one-time costs; the baseline is taken after it
