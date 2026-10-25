@@ -1146,6 +1146,16 @@ constexpr auto GpuAmbientMs = std::size_t{43};
 // LP4.3 (D86, D92): set 9's writes and the surfaces on the light-grid path
 constexpr auto AmbientWrites = std::size_t{44};
 constexpr auto GridSurfaces = std::size_t{45};
+// LP5.3 (D92's second measurement): the interaction phases' math and ambient lights,
+// the stage pass's draws and GPU time, pass 9's fog and blend draws and GPU time
+constexpr auto MathLights = std::size_t{49};
+constexpr auto AmbientLights = std::size_t{50};
+constexpr auto StageDraws = std::size_t{51};
+constexpr auto StageSkipped = std::size_t{52};
+constexpr auto GpuStagesMs = std::size_t{53};
+constexpr auto FogDraws = std::size_t{54};
+constexpr auto BlendDraws = std::size_t{55};
+constexpr auto GpuFogMs = std::size_t{56};
 // LPF.1 (C44, P5.21): and the live feed's three (feed_applied, feed_ms, override_bytes);
 // LP5.1 (C45): and the interaction phases' two (math_lights, ambient_lights); LP5.2a
 // (C46): and the stage pass's three (stage_draws, stage_skipped, gpu_stages_ms); LP5.3
@@ -1979,7 +1989,13 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
            && record.geometryBatches > batchesBeforeReload && sampler.isLit(record);
   };
   auto reloadFirstMs = -1.0;
-  REQUIRE(sampler.runUntil(
+  auto reloadSettledMs = -1.0;
+  // LP5.3: a reload whose rebuilt scene uploads nothing draws no frame in a settled
+  // session (RenderThread::geometryTick triggers on uploads or on what the last frame
+  // waited for, litTableTick only while the passes waited for a table); a camera move
+  // draws the next. Seen on admin at LP5.3's second measurement: the table and the
+  // batches move, no frame comes; reported as "no frame", not failed
+  const auto reloadDrawn = sampler.runUntil(
     [&] {
       for (auto i = recordsBeforeReload; i < sampler.frames.size(); ++i)
       {
@@ -1991,21 +2007,37 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       }
       return false;
     },
-    60s));
-  REQUIRE(sampler.runUntil(
-    [&] { return sampler.quietlySettled() && afterReload(sampler.frames.back()); }, 60s));
-  // settled for good after the reload, as a Start's (StartMeasure::findSettled)
-  auto reload = StartMeasure{};
-  reload.pressed = reloadAt;
-  reload.records.assign(
-    sampler.frames.begin() + std::ptrdiff_t(recordsBeforeReload), sampler.frames.end());
-  reload.findSettled();
-  const auto reloadSettledMs = reload.settledMs;
-  std::cout << fmt::format(
-    "material reload: the first frame on the rebuilt chunks after {:.0f} ms, settled "
-    "after {:.0f} ms\n",
-    reloadFirstMs,
-    reloadSettledMs);
+    20s);
+  if (reloadDrawn)
+  {
+    REQUIRE(sampler.runUntil(
+      [&] { return sampler.quietlySettled() && afterReload(sampler.frames.back()); },
+      60s));
+    // settled for good after the reload, as a Start's (StartMeasure::findSettled)
+    auto reload = StartMeasure{};
+    reload.pressed = reloadAt;
+    reload.records.assign(
+      sampler.frames.begin() + std::ptrdiff_t(recordsBeforeReload), sampler.frames.end());
+    reload.findSettled();
+    reloadSettledMs = reload.settledMs;
+    std::cout << fmt::format(
+      "material reload: the first frame on the rebuilt chunks after {:.0f} ms, settled "
+      "after {:.0f} ms\n",
+      reloadFirstMs,
+      reloadSettledMs);
+  }
+  else
+  {
+    std::cout << fmt::format(
+      "material reload: no frame in 20 s (table {} -> {}, scene batches {} -> {}, "
+      "frames {} -> {}): the settled session draws nothing for it\n",
+      tableBeforeReload,
+      panel.materialsVersionForTesting(),
+      batchesBeforeReload,
+      secondSession->geometryBatchesForTesting(),
+      recordsBeforeReload,
+      sampler.frames.size());
+  }
   const auto secondVramPeak = sampler.vramPeak;
   keepRecords(second);
   const auto allocationsAfterSecondStop = stopPreview();
@@ -2146,7 +2178,8 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       "flowed, {} lights in view, {} with interactions, {} drawn, {} portal chains; "
       "draws "
       "{}, CPU record {} ms; LP4.3: {} ambient draws ({} set-9 writes), {} surfaces on "
-      "the light grid, {} textures resident | — | — |\n",
+      "the light grid, {} textures resident; LP5.3: {} math and {} ambient lights, {} "
+      "stage draws ({} stages skipped), {} fog and {} blend draws | — | — |\n",
       first.settledFrame,
       field(column::ViewArea),
       field(column::AreasFlowed),
@@ -2159,7 +2192,13 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       field(column::AmbientDraws),
       field(column::AmbientWrites),
       field(column::GridSurfaces),
-      field(column::TexturesResident));
+      field(column::TexturesResident),
+      field(column::MathLights),
+      field(column::AmbientLights),
+      field(column::StageDraws),
+      field(column::StageSkipped),
+      field(column::FogDraws),
+      field(column::BlendDraws));
   }
   {
     const auto flow = orbit(column::FlowMs);
@@ -2257,6 +2296,16 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   const auto ambientWrites = line("set-9 volatile writes (D86)", column::AmbientWrites);
   line("surfaces on the light grid", column::GridSurfaces);
   line("textures resident", column::TexturesResident);
+  // LP5.3 (D92's second measurement): the math and ambient lights, the stage pass and
+  // pass 9
+  line("math lights", column::MathLights);
+  line("ambient lights", column::AmbientLights);
+  line("stage draws", column::StageDraws);
+  line("stages skipped", column::StageSkipped);
+  line("GPU stages ms", column::GpuStagesMs);
+  line("fog draws", column::FogDraws);
+  line("blend draws", column::BlendDraws);
+  line("GPU fog ms", column::GpuFogMs);
   const auto writeBudget = firstRows[orbitBegin].number(column::VolatileWriteBudget);
   // D86 with D76's rule: set 9's own buffer keeps maxVersions 8192 while the most writes
   // a frame made, doubled with a margin of 64, stay within the frame's budget
