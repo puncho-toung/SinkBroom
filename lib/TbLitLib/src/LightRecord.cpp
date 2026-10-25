@@ -124,6 +124,15 @@ LightJobOutput buildLightRecords(const LightJobInput& input, const CpuJobContext
     record.pendingEntityDef = !slot;
     const auto* defKeys = slot && slot->entry ? &slot->entry->keys : nullptr;
     record.spawnArgs = mergeSpawnArgs(in.mapKeys, defKeys);
+    // LP7.0 (D128, P7.17): idEntity::Spawn's hide (Entity.cpp:651-656, GetBool( "hide",
+    // "0" ) on the merged keys) posts EV_Hide, and idLight::Event_Hide turns the light
+    // Off (Light.cpp:1381-1393): no light, as if the light's keys were absent; a change
+    // of the key builds the light again, so its record comes back with it
+    if (spawnBool(record.spawnArgs, "hide", "0"))
+    {
+      output.removed.emplace_back(in.id, in.version);
+      continue;
+    }
 
     record.light = parseLight(record.spawnArgs);
     record.derived = deriveLight(record.light, table, tree, tree ? &common : nullptr);

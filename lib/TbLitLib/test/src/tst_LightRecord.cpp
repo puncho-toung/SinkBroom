@@ -206,6 +206,31 @@ TEST_CASE("LightRecord: the registry's records and versions (C15)")
     CHECK(registry.table()->find(id)->light.parms.origin == EngineVec3{64, 0, 96});
   }
 
+  SECTION("LP7.0 (D128, P7.17): hide 1 turns the light off; the key goes, it is back")
+  {
+    const auto keys = std::vector<std::pair<std::string, std::string>>{
+      {"name", "a"}, {"origin", "64 0 96"}, {"light_radius", "200 200 200"}};
+    auto hidden = keys;
+    hidden.emplace_back("hide", "1");
+    registry.takeSnapshot(keysOnly(id, "light", hidden, 2), nullptr);
+    registry.finishForTesting();
+    CHECK_FALSE(registry.table()->find(id));
+    // a value atoi reads as 0 shows it, as the key's absence does
+    auto zero = keys;
+    zero.emplace_back("hide", "0");
+    registry.takeSnapshot(keysOnly(id, "light", zero, 3), nullptr);
+    registry.finishForTesting();
+    REQUIRE(registry.table()->find(id));
+    CHECK(registry.table()->find(id)->version == 3u);
+    registry.takeSnapshot(keysOnly(id, "light", hidden, 4), nullptr);
+    registry.finishForTesting();
+    CHECK_FALSE(registry.table()->find(id));
+    registry.takeSnapshot(keysOnly(id, "light", keys, 5), nullptr);
+    registry.finishForTesting();
+    REQUIRE(registry.table()->find(id));
+    CHECK(registry.table()->find(id)->light.parms.origin == EngineVec3{64, 0, 96});
+  }
+
   SECTION("bad target info: a warning, a record without a volume")
   {
     registry.takeSnapshot(

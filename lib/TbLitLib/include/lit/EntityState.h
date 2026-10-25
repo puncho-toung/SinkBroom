@@ -96,7 +96,7 @@ EntityKeys mergeSpawnArgs(const EntityKeys& mapKeys, const EntityKeys* defKeys);
  * What the engine's idGameEdit::ParseSpawnArgsToRenderEntity (d3xp/Entity.cpp:232-408,
  * SC51-SC53) makes of an entity's merged spawn args, as far as the preview's chunks need
  * it (S34): the origin, the axis, the shaderParms, the skin and shader remaps and the
- * three flags. Plain data.
+ * three flags; and (LP7.0) idEntity::Spawn's hide flag. Plain data.
  */
 struct RenderEntityParms
 {
@@ -109,6 +109,14 @@ struct RenderEntityParms
   bool noShadows = false;
   bool noSelfShadows = false;
   bool noDynamicInteractions = false;
+  /**
+   * LP7.0 (D128, C52, P7.17): idEntity::Spawn's fl.hidden = spawnArgs.GetBool( "hide",
+   * "0" ) (d3xp/Entity.cpp:651-656, atoi of the value != 0), whose EV_Hide removes the
+   * render entity: nothing of the entity is drawn. A brush entity's chunks are not built
+   * (ChunkBuilder), C52's model instances read it; a light's hide is LightRecord's (no
+   * record: Light.cpp Event_Hide turns it Off)
+   */
+  bool hidden = false;
 
   bool operator==(const RenderEntityParms& other) const;
   bool operator!=(const RenderEntityParms& other) const;
@@ -119,7 +127,7 @@ struct RenderEntityParms
  * "angles" (all zero is the identity) or "angle" (yaw), times the scale from
  * "modelscale_vec" (each component above 0.01, not all 1) or else "modelscale" (above
  * 0.01, not 1); "_color" fills shaderParms 0-2 ("1 1 1"), "shaderParm3" defaults to 1,
- * "shaderParm4" to "shaderParm11" to 0. Pure; any thread.
+ * "shaderParm4" to "shaderParm11" to 0; "hide" ("0") the hidden flag. Pure; any thread.
  */
 RenderEntityParms parseSpawnArgsToRenderEntity(const EntityKeys& spawnArgs);
 

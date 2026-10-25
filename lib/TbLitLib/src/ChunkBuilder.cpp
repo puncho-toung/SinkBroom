@@ -351,6 +351,12 @@ private:
     context.state.visible = !name.empty() && !model.empty() && equalsNoCase(name, model);
 
     context.state.parms = parseSpawnArgsToRenderEntity(spawnArgs);
+    // LP7.0 (D128, P7.17): Entity.cpp:651-656, a hidden entity's EV_Hide removes its
+    // render entity: its pieces are skipped here, as a noshadows or _color key is read
+    if (context.state.parms.hidden)
+    {
+      context.state.visible = false;
+    }
     context.parseOrigin = parseOriginOf(entity);
     context.originOffset = originOffsetOf(entity.id);
     context.state.originOffset = context.originOffset;

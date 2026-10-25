@@ -287,7 +287,8 @@ bool RenderEntityParms::operator==(const RenderEntityParms& other) const
   return origin == other.origin && axis == other.axis && shaderParms == other.shaderParms
          && skin == other.skin && shader == other.shader && noShadows == other.noShadows
          && noSelfShadows == other.noSelfShadows
-         && noDynamicInteractions == other.noDynamicInteractions;
+         && noDynamicInteractions == other.noDynamicInteractions
+         && hidden == other.hidden;
 }
 
 bool RenderEntityParms::operator!=(const RenderEntityParms& other) const
@@ -406,6 +407,9 @@ RenderEntityParms parseSpawnArgsToRenderEntity(const EntityKeys& args)
   parms.noDynamicInteractions = spawnBool(args, "noDynamicInteractions");
   parms.noShadows = spawnBool(args, "noshadows");
   parms.noSelfShadows = spawnBool(args, "noselfshadows");
+
+  // LP7.0 (D128): Entity.cpp:651 fl.hidden = spawnArgs.GetBool( "hide", "0" )
+  parms.hidden = spawnBool(args, "hide", "0");
   return parms;
 }
 
@@ -418,8 +422,8 @@ std::uint64_t renderEntityHash(const RenderEntityParms& parms)
   h = hashBytes(h, parms.skin.data(), parms.skin.size());
   h = hashBytes(h, "\0", 1);
   h = hashBytes(h, parms.shader.data(), parms.shader.size());
-  const auto flags = std::array<bool, 3>{
-    parms.noShadows, parms.noSelfShadows, parms.noDynamicInteractions};
+  const auto flags = std::array<bool, 4>{
+    parms.noShadows, parms.noSelfShadows, parms.noDynamicInteractions, parms.hidden};
   return hashBytes(h, flags.data(), sizeof(flags));
 }
 

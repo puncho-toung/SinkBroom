@@ -145,7 +145,8 @@ struct LightJobOutput
 {
   std::vector<LightRecord> records;
   // R3.12: the lights (id, version) of a class worldspawn's removeEntities* names: the
-  // engine's map loader deletes them, so they have no record
+  // engine's map loader deletes them, so they have no record; LP7.0 (D128): so too the
+  // lights whose merged keys hold a non-zero hide (Event_Hide turns them Off)
   std::vector<std::pair<PreviewId, std::uint64_t>> removed;
   // what the records' warnings said, with the light they are about
   std::vector<std::string> warnings;
@@ -156,8 +157,9 @@ struct LightJobOutput
  * (findEntityDef: pending while the table has no answer, none when there is no such
  * def), mergeSpawnArgs, parseLight, deriveLight over the tree with its
  * commonChildrenArea computed once; a light whose class worldspawn's removeEntities*
- * names is removed instead (R3.12). Pure: it reads the immutable input and calls only
- * the light code, so any thread, the CPU pool included (C24, mirror.json
+ * names is removed instead (R3.12), and (LP7.0, D128) one whose merged keys hold a
+ * non-zero "hide" (idLight::Event_Hide: Off). Pure: it reads the immutable input and
+ * calls only the light code, so any thread, the CPU pool included (C24, mirror.json
  * M-LIGHT-POOL-02); the copied code's messages go to the calling thread's sink. With a
  * job context it stops at the first light after the pool was cancelled (R2.1).
  */

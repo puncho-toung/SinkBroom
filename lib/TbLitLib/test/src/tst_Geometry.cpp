@@ -420,6 +420,25 @@ TEST_CASE("EntityState: the spawn args as the engine reads them")
     CHECK(parms.noShadows);
     CHECK_FALSE(parms.noSelfShadows);
   }
+
+  SECTION("LP7.0 (D128): hide is GetBool( \"hide\", \"0\" ), and it moves the hash")
+  {
+    const auto shown = parseSpawnArgsToRenderEntity({{"origin", "1 2 3"}});
+    const auto hidden =
+      parseSpawnArgsToRenderEntity({{"origin", "1 2 3"}, {"hide", "1"}});
+    CHECK_FALSE(shown.hidden);
+    CHECK(hidden.hidden);
+    // atoi: any non-zero number hides, a word or "0" does not
+    CHECK(parseSpawnArgsToRenderEntity({{"hide", "2"}}).hidden);
+    CHECK(parseSpawnArgsToRenderEntity({{"HIDE", "1"}}).hidden);
+    CHECK_FALSE(parseSpawnArgsToRenderEntity({{"hide", "0"}}).hidden);
+    CHECK_FALSE(parseSpawnArgsToRenderEntity({{"hide", "yes"}}).hidden);
+    CHECK(shown != hidden);
+    CHECK(renderEntityHash(shown) != renderEntityHash(hidden));
+    CHECK(
+      renderEntityHash(parseSpawnArgsToRenderEntity({{"origin", "1 2 3"}, {"hide", "0"}}))
+      == renderEntityHash(shown));
+  }
 }
 
 TEST_CASE("ProcFile: what the reader refuses")
@@ -532,6 +551,32 @@ TEST_CASE("ChunkBuilder: worldspawn's rules and K17")
     CHECK_FALSE(materialsOf(removed).contains("textures/lp1b/crate"));
   }
 
+  SECTION("LP7.0 (D128): a brush entity whose merged keys hide it builds no chunks")
+  {
+    const auto entity = [](const std::string& keys) {
+      return "{\n\"classname\" \"func_static\"\n\"name\" \"a\"\n\"model\" \"a\"\n" + keys
+             + box(100, 0, 0, 132, 32, 32, "lp1b/crate") + "}\n";
+    };
+    const auto build = [&](const std::string& keys, const EntityKeys* defKeys) {
+      auto input = inputOf(snapshotOfMapText(mapText("", entity(keys))));
+      if (defKeys)
+      {
+        auto def = std::make_shared<EntityDefEntry>();
+        def->name = "func_static";
+        def->keys = *defKeys;
+        input.entityDefs["func_static"] = std::move(def);
+      }
+      return materialsOf(buildChunks(input)).contains("textures/lp1b/crate");
+    };
+    CHECK(build("", nullptr));
+    CHECK(build("\"hide\" \"0\"\n", nullptr));
+    CHECK_FALSE(build("\"hide\" \"1\"\n", nullptr));
+    // the merged keys (C22, A10): the entityDef's default, the map's key over it
+    const auto defHides = EntityKeys{{"hide", "1"}};
+    CHECK_FALSE(build("", &defHides));
+    CHECK(build("\"hide\" \"0\"\n", &defHides));
+  }
+
   SECTION("K17: a brush entity without model and name is invisible")
   {
     const auto nameless = "{\n\"classname\" \"func_static\"\n"
@@ -631,6 +676,66 @@ TEST_CASE("SceneGeometry: batches on the pool, entity records and removals (B0.3
   CHECK(std::none_of(scene.chunks().begin(), scene.chunks().end(), [&](const auto& c) {
     return c.first.entity == func.id;
   }));
+  pool->stop();
+}
+
+// LP7.0 (D128, P7.17): a hidden brush entity's chunks go when the key is set and come
+// back when it goes (the key change rebuilds the entity's cells)
+TEST_CASE("SceneGeometry: hide on a brush entity, set and cleared (LP7.0)")
+{
+  auto pool = CpuPool::create() | kdl::value();
+  auto scene = SceneGeometry{pool.get(), nullptr};
+  const auto entity =
+    "{\n\"classname\" \"func_static\"\n\"name\" \"a\"\n\"model\" \"a\"\n\"hide\" \"1\"\n"
+    + box(100, 0, 0, 132, 32, 32, "lp1b/crate") + "}\n";
+  auto snapshot = snapshotOfMapText(mapText("", entity));
+  snapshot.sequence = 1;
+  const auto func = snapshot.entities[1];
+  const auto chunksOf = [&] {
+    return std::count_if(
+      scene.chunks().begin(), scene.chunks().end(), [&](const auto& c) {
+        return c.first.entity == func.id;
+      });
+  };
+  scene.takeSnapshot(snapshot);
+  scene.finishForTesting();
+  CHECK(chunksOf() == 0);
+
+  // the entity's keys again, without hide or with another value (B0.4: a record alone)
+  const auto keysOnly = [&](const std::string& hide, const std::uint64_t sequence) {
+    auto keys = Snapshot{};
+    keys.sequence = sequence;
+    const auto add = [&](const std::string& text) {
+      const auto offset = std::uint32_t(keys.strings.size());
+      keys.strings += text;
+      return SnapshotString{offset, std::uint32_t(text.size())};
+    };
+    auto record = func;
+    record.classname = add("func_static");
+    record.keys.first = 0;
+    for (const auto& [key, value] :
+         std::vector<std::pair<std::string, std::string>>{{"name", "a"}, {"model", "a"}})
+    {
+      keys.keyValues.push_back(SnapshotKeyValue{add(key), add(value)});
+    }
+    if (!hide.empty())
+    {
+      keys.keyValues.push_back(SnapshotKeyValue{add("hide"), add(hide)});
+    }
+    record.keys.count = std::uint32_t(keys.keyValues.size());
+    keys.entities.push_back(record);
+    return keys;
+  };
+  scene.takeSnapshot(keysOnly("", 2));
+  scene.finishForTesting();
+  const auto shown = chunksOf();
+  CHECK(shown >= 1);
+  scene.takeSnapshot(keysOnly("1", 3));
+  scene.finishForTesting();
+  CHECK(chunksOf() == 0);
+  scene.takeSnapshot(keysOnly("0", 4));
+  scene.finishForTesting();
+  CHECK(chunksOf() == shown);
   pool->stop();
 }
 
