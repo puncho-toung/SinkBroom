@@ -111,7 +111,9 @@ GpuMemoryAccount accountGpuMemory(
  * provisional chunk for its rebuild (geometryTick), a pending entityDef, a provisional
  * light, a batch, the bake or a snapshot for the scene's next change (geometryTick, the
  * snapshot's offer), a feed hand-over the frame's table does not hold for its
- * publication (LPF.1: feedTick, at once). The exposure is at its target in
+ * publication (LPF.1: feedTick, at once). A settled frame is drawn again for a table
+ * publication that gives the scene work (LP5.G: tableTick, at once). The exposure is at
+ * its target in
  * every frame the exposure pass runs (D70). A pass that cannot draw (a program disabled
  * by D9) counts as converged, its state reported (passesDisabled, programReport).
  */
@@ -362,6 +364,8 @@ private:
   std::uint64_t m_frameMaterialsRevision = 0;
   // LP5.F (D111): its sizesRevision (converge's geometryInFlight)
   std::uint64_t m_frameSizesRevision = 0;
+  // LP5.G: its registry (tableTick: a build since the last frame)
+  std::uint64_t m_frameRegistry = 0;
   // and its override store's bytes (the frame log's override_bytes)
   std::uint64_t m_frameOverrideBytes = 0;
   /**
@@ -697,6 +701,9 @@ private:
   // LPF.1 (C44, D101, P5.20): an idle pass's look for a feed publication the last frame
   // did not refresh with; a frame at once (no arrival clock), the pacer's interval kept
   void feedTick();
+  // LP5.G: an idle pass's look for a table with another registry or revision than the
+  // last frame's, whose scan gave the scene work; a frame at once, as feedTick's
+  void tableTick();
   // D77, U2.5: a trigger at most every TextureArrivalInterval: now, or at the interval's
   // end; under m_mutex
   void arrivalTrigger(FrameClock::time_point now);

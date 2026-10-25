@@ -1379,6 +1379,52 @@ void RenderThread::feedTick()
   m_pacer.trigger();
 }
 
+void RenderThread::tableTick()
+{
+  // the scene's chunks, not a test's, and a last frame to compare with
+  if (!m_materials || !m_geometry || m_arenaTestChunks || !m_sceneWaitSeen)
+  {
+    return;
+  }
+  const auto table = m_materials->table();
+  if (
+    table->registry == m_frameRegistry
+    && table->materialsRevision == m_frameMaterialsRevision
+    && table->sizesRevision == m_frameSizesRevision)
+  {
+    return;
+  }
+  // LP5.G (D18; C44's rule generalised): a table with another registry (a build: reload,
+  // the poll's changed decl file) or materialsRevision or sizesRevision than the last
+  // frame's is a frame trigger at once (the pacer still spaces frame starts) when the
+  // scene's scan of it gave the scene work: a batch, a wait for a measure, an entityDef
+  // or the probes (the wait state's terms before the scanned revisions; a scan that
+  // only took the revisions changes nothing drawn), whose frame is unconverged until the
+  // work lands (geometryTick's trigger then). A build's chunks are byte-identical when
+  // nothing moved them, so no upload triggers it; a lookup or the poll moves no key and
+  // draws none. H.1 (19-LITGPU-HANG.md): each publication's tableChanged wakes the loop;
+  // the idle pass cleared m_tableChanged before geometryTick adopted and scanned the
+  // newest table (or a batch in flight adopts it at its end, polled while building),
+  // this reads the newest table after it, and a publication meanwhile makes the pass
+  // run again before any wait: none is waited past
+  const auto work = [](const SceneWaitState& state) {
+    return std::tuple{
+      std::get<0>(state),
+      std::get<1>(state),
+      std::get<2>(state),
+      std::get<3>(state),
+      std::get<4>(state),
+      std::get<5>(state),
+      std::get<6>(state)};
+  };
+  if (work(sceneWaitState()) == work(*m_sceneWaitSeen))
+  {
+    return;
+  }
+  const auto lock = std::scoped_lock{m_mutex};
+  m_pacer.trigger();
+}
+
 void RenderThread::arrivalTrigger(const FrameClock::time_point now)
 {
   const auto at = m_lastArrivalTrigger + TextureArrivalInterval;
@@ -1532,6 +1578,7 @@ void RenderThread::runLoop()
     litTableTick();
     lightTrianglesTick();
     feedTick();
+    tableTick();
     lock.lock();
     // D77: a texture arrival that came within TextureArrivalInterval of the last one
     if (m_arrivalTriggerAt && *m_arrivalTriggerAt <= FrameClock::now())
@@ -2057,6 +2104,7 @@ void RenderThread::refreshImages()
     m_frameImageChanges = table->imageChanges;
     m_frameMaterialsRevision = table->materialsRevision;
     m_frameSizesRevision = table->sizesRevision;
+    m_frameRegistry = table->registry;
     m_frameOverrideBytes = table->overrideBytes;
     takeFeedRecords(*table);
   }
