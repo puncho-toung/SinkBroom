@@ -1161,8 +1161,9 @@ constexpr auto GpuFogMs = std::size_t{56};
 // LPF.1 (C44, P5.21): and the live feed's three (feed_applied, feed_ms, override_bytes);
 // LP5.1 (C45): and the interaction phases' two (math_lights, ambient_lights); LP5.2a
 // (C46): and the stage pass's three (stage_draws, stage_skipped, gpu_stages_ms); LP5.3
-// (C49): and pass 9's three (fog_draws, blend_draws, gpu_fog_ms)
-constexpr auto Count = std::size_t{57};
+// (C49): and pass 9's three (fog_draws, blend_draws, gpu_fog_ms); LP7.0 (C52, C54,
+// P7.20): and proc_bytes and LP7's eleven counts after them, the columns above unmoved
+constexpr auto Count = std::size_t{69};
 } // namespace column
 
 std::vector<LogRow> readFrameLog(const std::filesystem::path& path)
