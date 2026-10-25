@@ -13841,18 +13841,23 @@ TEST_CASE(
   }
 
   // the LP5.G addendum: the floor's texture re-saved by a paint program while the
-  // session is settled, the poll on: the same size (a constant black, white, then a
-  // pure colour: 0 or 255 per channel, every mip level the same texel, checked through
-  // the CPU model of checkProbe), then another size (32 x 16);
-  // (a) the floor's editor image is that file (the poll also remeasures the material:
-  // sizesRevision), (b) the editor image is another file of the same size (wall.tga,
-  // 64 x 32): the image alone changes (imageChanges)
+  // session is settled, the poll on: the same size (64 x 32: a constant black, white,
+  // then red), then another size (32 x 16, green), the probe checked through the CPU
+  // model of checkProbe; (a) the floor's editor image is that file (the poll also
+  // remeasures the material: sizesRevision), (b) the editor image is wall.tga (the
+  // fixture's, 32 x 64), which no re-save touches: the diffuse alone changes
+  // (imageChanges). Pure colours (0 or 255 per channel) are immune to sRGB and
+  // compression, and red and green are the ones whose YCoCg bytes, the layout the engine
+  // stores a diffuse map in, are fixed points of its gamma mips (R_MipMapWithGamma), so
+  // every level holds the same texel and the model holds whichever level the sampler
+  // takes (the editor image's size scales the floor's texture coordinates: level 1 in
+  // (a), level 0 in (b)); magenta's, cyan's and blue's Co or Cg of 1 and cyan's and
+  // yellow's Y of 191 lose one per level
   SECTION("the floor texture re-saved, the same size and another")
   {
     const auto floorFile = root / "base" / "textures" / "lp1b" / "floor.tga";
     const auto declFile = root / "base" / "materials" / "lp1bc.mtr";
     const auto declText = readTextFile(declFile);
-    auto stamp = std::filesystem::last_write_time(floorFile);
     for (const auto editorOther : {false, true})
     {
       CAPTURE(editorOther);
@@ -13871,6 +13876,9 @@ TEST_CASE(
           floorFile,
           std::filesystem::copy_options::overwrite_existing);
       }
+      // read after the copy, which may give the file another time than the last loop's
+      // stamps (MSVC's copy keeps the fixture's, libstdc++'s takes the clock's)
+      auto stamp = std::filesystem::last_write_time(floorFile);
       {
         const auto instance = testInstance(true, false, messages);
         REQUIRE(instance.valid());
@@ -13880,10 +13888,13 @@ TEST_CASE(
         auto rig = FeedRig{instance, root, logPath, 100ms};
         auto& session = *rig.session;
 
-        // the file written (its time moved on, so the poll sees it whatever the clock's
-        // grain), the poll's publication (the first after the write: the session is
-        // quiet and the poll publishes nothing else), the frames from it until the
-        // session is quiet again; no camera move
+        // the file written, its time set 2 s after the last one: the poll's probe
+        // compares the file's seconds and its clock's ticks by inequality (sameFile,
+        // probeFile), and 2 s is a whole tick of every file-system clock (FAT's, the
+        // coarsest), so every re-save is seen, also two within one tick and the 64 x 32
+        // ones of an unchanged size; then the poll's publication (the first after the
+        // write: the session is quiet and the poll publishes nothing else), the frames
+        // from it until the session is quiet again; no camera move
         const auto resave = [&](
                               const int width,
                               const int height,
@@ -13951,12 +13962,12 @@ TEST_CASE(
         const auto blackProbe = rig.probe(true);
         const auto white = resave(64, 32, {255, 255, 255}, "white");
         const auto whiteProbe = rig.probe(true);
-        const auto colour = resave(64, 32, {255, 0, 255}, "colour");
+        const auto colour = resave(64, 32, {255, 0, 0}, "colour");
         const auto colourProbe = rig.probe(true);
         CHECK(colourProbe.frame.settled);
         checkProbe(blackProbe, whiteProbe, colourProbe);
         // the control: another size
-        const auto resized = resave(32, 16, {0, 255, 255}, "32 x 16");
+        const auto resized = resave(32, 16, {0, 255, 0}, "32 x 16");
         const auto resizedProbe = rig.probe(true);
         CHECK(resizedProbe.frame.settled);
         checkProbe(blackProbe, whiteProbe, resizedProbe);
