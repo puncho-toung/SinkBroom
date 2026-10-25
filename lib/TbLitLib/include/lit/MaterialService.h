@@ -25,6 +25,7 @@
 #include "lit/ImageOverride.h"
 #include "lit/MapBake.h"
 #include "lit/MaterialDecls.h"
+#include "lit/ModelRecord.h"
 #include "lit/PersistentMap.h"
 
 #include <array>
@@ -133,7 +134,12 @@ struct MaterialImageKeyHash
  *   last registers until new ones arrive;
  * - images (LP1c.1, C8): what the image cache reader found for each image key asked for,
  *   published as deltas and kept across reloads (an image's cache does not depend on the
- *   decls).
+ *   decls);
+ * - models (LP7.0, C51, D126): the model records by canonical name, kept across reloads
+ *   as the images are, with modelChanges and changedModels for the poll; nothing requests
+ *   a model in LP7.0, so the map is empty (LP7.1a's loader fills it);
+ * - skins (LP7.0, C53): the skin decls by name, per registry as the entityDefs are;
+ *   empty in LP7.0 (lit/ModelRecord.h, SkinRecord).
  *
  * A new version shares every material, entityDef and delta that did not change.
  */
@@ -164,6 +170,18 @@ struct MaterialTable
     MaterialImageKeyHash>;
   using ImageChanges =
     PersistentMap<MaterialImageKey, std::uint64_t, MaterialImageKeyHash>;
+  using Models = PersistentMap<
+    std::string,
+    std::shared_ptr<const ModelRecord>,
+    StringHash,
+    std::equal_to<>>;
+  using ModelChanges =
+    PersistentMap<std::string, std::uint64_t, StringHash, std::equal_to<>>;
+  using Skins = PersistentMap<
+    std::string,
+    std::shared_ptr<const SkinSlot>,
+    StringHash,
+    std::equal_to<>>;
 
   static constexpr std::size_t MaxRegisterDeltas = 16384;
 
@@ -191,6 +209,19 @@ struct MaterialTable
    */
   std::uint64_t imageChanges = 0;
   ImageChanges changedImages;
+  /**
+   * LP7.0 (C51, D126): the model records by canonical name (canonicalModelName), kept
+   * across reloads; modelChanges counts the records dropped because their files changed
+   * and changedModels holds each name with the count at its last drop, as imageChanges
+   * and changedImages do for the images (a consumer holding a model's geometry asks
+   * again when its name's count is newer than the one it took it at). Empty in LP7.0.
+   */
+  Models models;
+  std::uint64_t modelChanges = 0;
+  ModelChanges changedModels;
+  // LP7.0 (C53): the skins by name, published per registry as the entityDefs are (a
+  // reload drops them); empty in LP7.0
+  Skins skins;
   /**
    * LPF.0a (D100, C40): the image override hand-overs (setImageOverride,
    * clearImageOverride) and, LPF.0b, the material re-parse hand-overs (reparseMaterial,
@@ -250,6 +281,11 @@ struct MaterialTable
   std::shared_ptr<const EntityDefSlot> findEntityDef(std::string_view classname) const;
   std::shared_ptr<const MapBakeSlot> findMapBake(std::string_view path) const;
   std::shared_ptr<const ImageCacheSlot> findImage(const MaterialImageKey& key) const;
+  // LP7.0 (C51): the record of a canonical model name (canonicalModelName), null when it
+  // was never requested (in LP7.0 always); it does not allocate
+  std::shared_ptr<const ModelRecord> findModel(std::string_view canonicalName) const;
+  // LP7.0 (C53): a skin's slot, null when it is not published (in LP7.0 always)
+  std::shared_ptr<const SkinSlot> findSkin(std::string_view name) const;
   // the registers of a key; an EvaluatedRegisters with an error when the evaluation was
   // refused, null when it is not done yet
   std::shared_ptr<const EvaluatedRegisters> findRegisters(const RegisterKey& key) const;
@@ -391,6 +427,10 @@ struct MaterialServiceOptions
   // LPF.0a: runs on the parse thread before each work item with its kind ("evaluate",
   // "feed", "reparse", "lookup", "bake", "poll", "measure", "image", "bulk", "reload")
   std::function<void(std::string_view kind)> beforeWorkItemForTesting;
+  // LP7.0: runs on the parse thread on every registry build, with the build's new working
+  // table before anything is looked up in it, so a test can publish the model records and
+  // skins that no request path makes yet (C51, C53)
+  std::function<void(MaterialTable& table)> registryBuiltForTesting;
 };
 
 struct MaterialServiceStats

@@ -223,6 +223,19 @@ std::shared_ptr<const MapBakeSlot> MaterialTable::findMapBake(
   return slot ? *slot : nullptr;
 }
 
+std::shared_ptr<const ModelRecord> MaterialTable::findModel(
+  const std::string_view canonicalName) const
+{
+  const auto* record = models.find(canonicalName);
+  return record ? *record : nullptr;
+}
+
+std::shared_ptr<const SkinSlot> MaterialTable::findSkin(const std::string_view name) const
+{
+  const auto* slot = skins.find(name);
+  return slot ? *slot : nullptr;
+}
+
 std::shared_ptr<const EntityDefSlot> MaterialTable::findEntityDef(
   const std::string_view classname) const
 {
@@ -1540,11 +1553,15 @@ private:
     m_pollImageKeys = {};
     m_pollMaterials = {};
     m_pollCursor = 0;
-    // the bakes and the image caches do not depend on the registry
+    // the bakes and the image caches do not depend on the registry, nor (LP7.0, C51) the
+    // model records; the skins do (C53: like the entityDefs, a build makes them again)
     auto mapBakes = std::move(m_working.mapBakes);
     auto images = std::move(m_working.images);
     const auto imageChanges = m_working.imageChanges;
     auto changedImages = std::move(m_working.changedImages);
+    auto models = std::move(m_working.models);
+    const auto modelChanges = m_working.modelChanges;
+    auto changedModels = std::move(m_working.changedModels);
     // LPF.0a (D100, C41): the hand-overs counted and the store's bytes do not either, nor
     // (LPF.0b, D105) the re-parses counted
     const auto feedApplied = m_working.feedApplied;
@@ -1559,6 +1576,9 @@ private:
     m_working.images = std::move(images);
     m_working.imageChanges = imageChanges;
     m_working.changedImages = std::move(changedImages);
+    m_working.models = std::move(models);
+    m_working.modelChanges = modelChanges;
+    m_working.changedModels = std::move(changedModels);
     m_working.feedApplied = feedApplied;
     m_working.overrideBytes = overrideBytes;
     m_working.materialsRevision = materialsRevision;
@@ -1692,6 +1712,12 @@ private:
 
     // a new table for the new registry
     resetWorkingTable(m_decls->id());
+    // LP7.0 (C53): the skins would be published here from the registry, which reaches
+    // them only through the copied idDeclSkin (no facade call yet: LP7.2)
+    if (m_shared.options.registryBuiltForTesting)
+    {
+      m_shared.options.registryBuiltForTesting(m_working);
+    }
 
     // LPF.0b (C42, D99, SC427): the build read the decl files again; the kept re-parse
     // texts are applied before anything is looked up, so the first table holds them

@@ -23,6 +23,7 @@
 #include "lit/GameFileSource.h"
 #include "lit/MaterialDecls.h"
 #include "lit/MaterialService.h"
+#include "lit/ModelRecord.h"
 
 #include "kd/result.h"
 
@@ -2192,6 +2193,10 @@ TEST_CASE("MaterialTable's finds allocate nothing")
     Timeout);
 
   const auto view = std::string_view{name};
+  // LP7.0 (C51, C53): the model and skin finds, of names no table holds
+  const auto model =
+    std::string{"models/mapobjects/a_model_name_well_beyond_the_small_string_buffer.lwo"};
+  const auto modelView = std::string_view{model};
   auto found = true;
   countedThread = GetCurrentThreadId();
   allocations = 0;
@@ -2199,11 +2204,88 @@ TEST_CASE("MaterialTable's finds allocate nothing")
   for (auto i = 0; i < 100; ++i)
   {
     found = found && table->find(view) != nullptr
-            && table->findEntityDef("lp1a_lamp") != nullptr;
+            && table->findEntityDef("lp1a_lamp") != nullptr
+            && table->findModel(modelView) == nullptr
+            && table->findSkin(modelView) == nullptr;
   }
   _CrtSetAllocHook(previous);
   CHECK(found);
   CHECK(allocations.load() == 0);
+}
+
+// LP7.0 (C51, C53, D126): the model table's types with no loader: the canonical name, the
+// empty maps, and a reload keeping the records and their change counts (the images'
+// rule) while the skins, per registry as the entityDefs, go
+TEST_CASE("MaterialTable: the model records and the skins (LP7.0, C51, C53)")
+{
+  SECTION("the canonical name (ModelManager.cpp:313-329)")
+  {
+    CHECK(canonicalModelName("").empty());
+    CHECK(
+      canonicalModelName("Models/MapObjects/Chairs/Office.LWO")
+      == "models/mapobjects/chairs/office.lwo");
+    // the separators and the extension stay; only 'A'-'Z' are lowered
+    CHECK(canonicalModelName("MODELS\\A.Obj") == "models\\a.obj");
+    CHECK(canonicalModelName("\xC0\xDF.ASE") == "\xC0\xDF.ase");
+    // MAX_OSPATH does not cut it
+    CHECK(
+      canonicalModelName(std::string(300, 'Q') + ".obj")
+      == std::string(300, 'q') + ".obj");
+  }
+
+  SECTION("nothing requests a model: the maps are empty")
+  {
+    auto service = start(options(fixtureSource));
+    const auto table = service->waitForTableForTesting(
+      [](const MaterialTable& t) { return t.registry != 0; }, Timeout);
+    CHECK(table->models.empty());
+    CHECK(table->modelChanges == 0u);
+    CHECK(table->changedModels.empty());
+    CHECK(table->skins.empty());
+    CHECK_FALSE(table->findModel("models/a.obj"));
+    CHECK_FALSE(table->findSkin("skins/a"));
+  }
+
+  SECTION("a reload keeps the model records and their changes; the skins go")
+  {
+    auto record = std::make_shared<ModelRecord>();
+    record->name = canonicalModelName("Models/A.obj");
+    record->state = ModelRecord::State::Ready;
+    record->source = ModelRecord::SourceKind::Source;
+    record->surfaces.push_back(
+      ModelSurface{"textures/a", {}, {0, 1, 2}, true, false, {}});
+    auto skin = std::make_shared<SkinSlot>();
+    skin->entry = std::make_shared<SkinRecord>(
+      SkinRecord{"skins/a", {{"textures/a", "textures/b"}, {"", "textures/c"}}});
+    auto builds = std::make_shared<std::atomic<int>>(0);
+    auto serviceOptions = options(fixtureSource);
+    serviceOptions.registryBuiltForTesting = [=](MaterialTable& t) {
+      if (++*builds == 1)
+      {
+        t.models = t.models.set(record->name, record);
+        t.modelChanges = 1;
+        t.changedModels = t.changedModels.set(record->name, 1u);
+        t.skins = t.skins.set("skins/a", skin);
+      }
+    };
+    auto service = start(std::move(serviceOptions));
+    const auto first = service->waitForTableForTesting(
+      [](const MaterialTable& t) { return t.registry != 0; }, Timeout);
+    CHECK(first->findModel("models/a.obj") == record);
+    CHECK(first->findSkin("skins/a") == skin);
+
+    service->reload();
+    const auto reloaded = service->waitForTableForTesting(
+      [&](const MaterialTable& t) { return t.registry != first->registry; }, Timeout);
+    CHECK(builds->load() == 2);
+    CHECK(reloaded->findModel("models/a.obj") == record);
+    CHECK(reloaded->modelChanges == 1u);
+    const auto* change = reloaded->changedModels.find(std::string_view{"models/a.obj"});
+    REQUIRE(change);
+    CHECK(*change == 1u);
+    CHECK_FALSE(reloaded->findSkin("skins/a"));
+    CHECK(reloaded->skins.empty());
+  }
 }
 
 // The control (G16): a source that leaks on every build must make the check fail, so that
