@@ -7165,7 +7165,10 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           }
           else if (key == "blend_draws")
           {
-            CHECK(lit.blendDraws == std::size_t(value.number));
+            // a count or a minimum (F05: the preview draws two surfaces where the
+            // picture, the gate, matches the engine's)
+            CAPTURE(lit.blendDraws);
+            CHECK(parityCountHolds(value, lit.blendDraws));
           }
           else if (key == "scissor_smaller_than_view")
           {
