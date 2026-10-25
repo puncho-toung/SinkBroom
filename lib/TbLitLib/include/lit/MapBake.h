@@ -23,6 +23,7 @@
 #include "lit/LightGridFile.h"
 #include "lit/MaterialDecls.h"
 #include "lit/ProcFile.h"
+#include "lit/ProcIslands.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -77,6 +78,9 @@ struct MapBake
   std::string geometryError;
   // LP7.0 (C54): the tree's bytes (procTreeBytes), its geometry included; 0 without one
   std::size_t procBytes = 0;
+  // LP7.4 (C55, D138): the islands of the tree's surfaces (buildProcIslands), built with
+  // the read on the parse thread for a .proc's tree; null for a .bproc's (no adoption)
+  std::shared_ptr<const ProcIslands> islands;
   // C31 (LP4.0): the areas' bounds and what the portal flow reads of the tree, built with
   // it on the parse thread (buildAreaData); null without a tree
   std::shared_ptr<const AreaData> areas;

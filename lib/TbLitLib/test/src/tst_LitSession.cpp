@@ -10199,13 +10199,15 @@ constexpr auto FeedMsColumn = std::size_t{47};
 constexpr auto OverrideBytesColumn = std::size_t{48};
 constexpr auto ProcBytesColumn = std::size_t{57};
 constexpr auto ModelEntitiesColumn = std::size_t{58};
+// LP7.4 (C55): the adoption's four counts are drawn from the scene from here on
+constexpr auto AdoptedIslandsColumn = std::size_t{65};
 constexpr auto CurvedIslandsColumn = std::size_t{68};
 
 /**
  * C44 (P5.13, P5.21): a frame log's frame rows by frame index; every row has the header's
  * FrameLogFields fields, the feed's three empty in a start or stop row; LP7.0: LP7's
- * eleven counts 0 in a frame row and empty in a start or stop row, proc_bytes empty in a
- * frame row.
+ * eleven counts empty in a start or stop row and, in a frame row, the model and dress
+ * counts 0 and (LP7.4) the adoption counts numbers, proc_bytes empty in a frame row.
  */
 std::map<std::uint64_t, std::vector<std::string>> feedLogFrames(
   const std::filesystem::path& path)
@@ -10227,9 +10229,14 @@ std::map<std::uint64_t, std::vector<std::string>> feedLogFrames(
     {
       CHECK_FALSE(rows[i][FeedAppliedColumn].empty());
       CHECK(rows[i][ProcBytesColumn].empty());
-      for (auto k = ModelEntitiesColumn; k <= CurvedIslandsColumn; ++k)
+      for (auto k = ModelEntitiesColumn; k < AdoptedIslandsColumn; ++k)
       {
         CHECK(rows[i][k] == "0");
+      }
+      for (auto k = AdoptedIslandsColumn; k <= CurvedIslandsColumn; ++k)
+      {
+        CHECK_FALSE(rows[i][k].empty());
+        CHECK(rows[i][k].find_first_not_of("0123456789") == std::string::npos);
       }
       frames[std::stoull(rows[i][2])] = rows[i];
     }
@@ -14029,6 +14036,298 @@ TEST_CASE(
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }
+}
+
+namespace
+{
+
+// LP7.4: one presented frame's HDR pixel, whether the product called the frame settled,
+// and whether it was drawn from camera
+struct FramePixel
+{
+  std::array<float, 4> rgba = {};
+  bool settled = false;
+  bool ofCamera = false;
+  // the adopted chunks' triangles the frame drew from
+  std::size_t adoptedTriangles = 0;
+};
+
+std::optional<FramePixel> nextFramePixel(
+  LitSession& session,
+  const CameraState& camera,
+  const std::uint32_t x,
+  const std::uint32_t y)
+{
+  session.tableChanged();
+  auto staging = nvrhi::StagingTextureHandle{};
+  auto pixel = FramePixel{};
+  auto done = std::make_shared<std::promise<void>>();
+  auto future = done->get_future();
+  session.runAfterTonemapForTesting([&, done](RenderFrameAccess& access) {
+    pixel.settled = access.convergence.settled();
+    pixel.ofCamera = access.passes.lastStats().camera == camera;
+    for (const auto& [key, chunk] : access.chunks)
+    {
+      pixel.adoptedTriangles += chunk.adopted ? chunk.indexes.size() / 3 : 0;
+    }
+    auto* hdr = access.frame.find(frame_resource::CurrentRenderHdr)->texture;
+    const auto& desc = hdr->getDesc();
+    staging = access.device.createStagingTexture(
+      nvrhi::TextureDesc{}
+        .setWidth(desc.width)
+        .setHeight(desc.height)
+        .setFormat(desc.format),
+      nvrhi::CpuAccessMode::Read);
+    access.commandList.copyTexture(
+      staging, nvrhi::TextureSlice{}, hdr, nvrhi::TextureSlice{});
+    done->set_value();
+  });
+  if (future.wait_for(10000ms) != std::future_status::ready)
+  {
+    return std::nullopt;
+  }
+  const auto read = inFrame(session, [&](RenderFrameAccess& access) {
+    auto pitch = std::size_t{0};
+    const auto* bytes = static_cast<const std::uint8_t*>(access.device.mapStagingTexture(
+      staging, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch));
+    const auto* row = reinterpret_cast<const std::uint16_t*>(bytes + y * pitch);
+    for (auto c = std::size_t{0}; c < 4; ++c)
+    {
+      pixel.rgba[c] = halfToFloat(row[x * 4 + c]);
+    }
+    access.device.unmapStagingTexture(staging);
+    staging = nullptr;
+  });
+  if (!read)
+  {
+    return std::nullopt;
+  }
+  return pixel;
+}
+
+// the LP2.2a fixture's snapshot with the east wall's face (brush 3 at x 256, facing -x)
+// moved by dx, its polygon and plane points alone
+std::shared_ptr<const Snapshot> lp74Snapshot(
+  const std::filesystem::path& root, const std::uint64_t sequence, const double dx)
+{
+  auto snapshot = snapshotOfMapText(lp22aMapText());
+  snapshot.generation = 7;
+  snapshot.sequence = sequence;
+  snapshot.mapPath = (root / "base" / "maps" / "lp1b_geometry.map").string();
+  for (auto& face : snapshot.faces)
+  {
+    auto corners = 0;
+    for (auto v = face.polygon.first; v < face.polygon.first + face.polygon.count; ++v)
+    {
+      const auto& p = snapshot.vertices[v];
+      corners += (p == vm::vec3d{256, -144, 0} || p == vm::vec3d{256, 144, 128}) ? 1 : 0;
+    }
+    if (corners == 2 && face.polygon.count == 4)
+    {
+      for (auto v = face.polygon.first; v < face.polygon.first + face.polygon.count; ++v)
+      {
+        snapshot.vertices[v] = snapshot.vertices[v] + vm::vec3d{dx, 0, 0};
+      }
+      for (auto& point : face.points)
+      {
+        point = point + vm::vec3d{dx, 0, 0};
+      }
+    }
+  }
+  return std::make_shared<const Snapshot>(std::move(snapshot));
+}
+
+} // namespace
+
+// LP7.4 (C55, D77, K44): the LP2.2a fixture on a GPU with its .proc: a settled frame
+// draws the adopted islands (the frame log's adopted_islands, the frame settled, no
+// validation message); then the lit east wall's face moved by one unit through a
+// snapshot: the next settled frame has one island fewer adopted, the wall's probe pixel
+// differs from the adopted frame's by no more than K28's envelope, and no frame drawn
+// meanwhile flashes a default (an unlit wall from a chunk gone, or a doubled one from the
+// island and the edited face both drawn). Hidden: it needs a GPU and the game's blobs.
+TEST_CASE("LitSession the .proc's triangles adopted on a GPU (LP7.4)", "[.][litgpu3]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  // from inside lp1b_light (64 0 96, radius 200) at the east wall, x 256
+  const auto camera = litCamera({60, 0, 64}, {1, 0, 0}, {0, 0, 1});
+  const auto logPath = std::filesystem::temp_directory_path() / "TbLitLibTest-lp74.csv";
+  std::filesystem::remove(logPath);
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  auto editFrame = std::uint64_t{0};
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto service = rootService(root);
+    auto events = Events{};
+    auto session = loggedRootSession(instance, events, *service, root, logPath);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+
+    REQUIRE(session->offerSnapshot(lp74Snapshot(root, 1, 0)));
+    const auto adopted = settledHdr(*session, camera, 1);
+    REQUIRE(adopted);
+    CHECK(adopted->second.convergence.settled());
+    const auto adoptedLdr = session->readbackLdrForTesting(10000ms);
+    REQUIRE(adoptedLdr);
+    const auto adoptedChunks = chunksOf(*session, "textures/lp1b/wall");
+    REQUIRE(adoptedChunks);
+    const auto start = nextFramePixel(*session, camera, 80, 60);
+    REQUIRE(start);
+    CHECK(start->adoptedTriangles > 0u);
+
+    // the face moved: every frame until the next settled one keeps the wall lit, never
+    // black and never doubled
+    editFrame = session->framesPresented();
+    REQUIRE(waitFor([&] { return session->snapshotSlotFree(); }, 10000ms, false));
+    REQUIRE(session->offerSnapshot(lp74Snapshot(root, 2, -1)));
+    auto between = std::vector<FramePixel>{};
+    const auto deadline = std::chrono::steady_clock::now() + 30s;
+    auto settledAgain = false;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      session->setCamera(camera);
+      const auto pixel = nextFramePixel(*session, camera, 80, 60);
+      REQUIRE(pixel);
+      between.push_back(*pixel);
+      // the edit's batch drawn: the east wall's island (two triangles) no more adopted
+      if (
+        pixel->settled && pixel->ofCamera
+        && pixel->adoptedTriangles + 2u == start->adoptedTriangles)
+      {
+        settledAgain = true;
+        break;
+      }
+    }
+    REQUIRE(settledAgain);
+    const auto moved = settledHdr(*session, camera, 1);
+    REQUIRE(moved);
+    const auto movedLdr = session->readbackLdrForTesting(10000ms);
+    REQUIRE(movedLdr);
+
+    const auto a = adopted->first.at(80, 60);
+    const auto b = moved->first.at(80, 60);
+    // the wall is lit (its texture's red and green)
+    CHECK(std::max({a[0], a[1], a[2]}) > 0.25f);
+    auto flashes = 0;
+    for (const auto& pixel : between)
+    {
+      if (!pixel.ofCamera)
+      {
+        continue;
+      }
+      for (auto c = std::size_t{0}; c < 3; ++c)
+      {
+        const auto low = std::min(a[c], b[c]);
+        const auto high = std::max(a[c], b[c]);
+        if (pixel.rgba[c] < low * 0.8f - 0.01f || pixel.rgba[c] > high * 1.2f + 0.01f)
+        {
+          ++flashes;
+        }
+      }
+    }
+    CHECK(flashes == 0);
+    // K28's envelope: up to about twelve LDR levels
+    const auto at =
+      [](const LdrImage& image, const std::uint32_t x, const std::uint32_t y) {
+        const auto i = (std::size_t(y) * image.width + x) * 4;
+        return std::array<int, 3>{image.rgba[i], image.rgba[i + 1], image.rgba[i + 2]};
+      };
+    const auto la = at(*adoptedLdr, 80, 60);
+    const auto lb = at(*movedLdr, 80, 60);
+    auto worst = 0;
+    for (auto c = std::size_t{0}; c < 3; ++c)
+    {
+      worst = std::max(worst, std::abs(la[c] - lb[c]));
+    }
+    CHECK(worst <= 12);
+    std::cout << fmt::format(
+      "LP7.4 on a GPU: the east wall's probe adopted ({:.4f} {:.4f} {:.4f}), the face "
+      "moved by one unit ({:.4f} {:.4f} {:.4f}), LDR difference {}; {} frames between, "
+      "{} flashes; wall chunks {} -> {}\n",
+      a[0],
+      a[1],
+      a[2],
+      b[0],
+      b[1],
+      b[2],
+      worst,
+      between.size(),
+      flashes,
+      adoptedChunks->first,
+      chunksOf(*session, "textures/lp1b/wall")->first);
+
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  messages.print("LP7.4 adoption, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+
+  // the frame log: the settled frames before the edit adopt every planar island, the
+  // last settled one after it one fewer
+  const auto rows = readCsv(logPath);
+  REQUIRE_FALSE(rows.empty());
+  const auto column = [&](const std::string& name) {
+    const auto it = std::ranges::find(rows[0], name);
+    REQUIRE(it != rows[0].end());
+    return std::size_t(it - rows[0].begin());
+  };
+  const auto eventColumn = column("event");
+  const auto frameColumn = column("frame");
+  const auto settledColumn = column("settled");
+  const auto adoptedColumn = column("adopted_islands");
+  const auto unmatchedColumn = column("unmatched_islands");
+  auto before = std::optional<std::uint64_t>{};
+  auto after = std::optional<std::uint64_t>{};
+  auto unmatchedAfter = std::optional<std::uint64_t>{};
+  for (auto i = std::size_t{1}; i < rows.size(); ++i)
+  {
+    const auto& row = rows[i];
+    if (
+      row.size() <= adoptedColumn || row[eventColumn] != "frame"
+      || row[settledColumn] != "1")
+    {
+      continue;
+    }
+    const auto frame = std::stoull(row[frameColumn]);
+    const auto count = std::stoull(row[adoptedColumn]);
+    if (frame < editFrame)
+    {
+      before = count;
+    }
+    else
+    {
+      after = count;
+      unmatchedAfter = std::stoull(row[unmatchedColumn]);
+    }
+  }
+  REQUIRE(before);
+  REQUIRE(after);
+  CHECK(*before > 0u);
+  CHECK(*after + 1u == *before);
+  CHECK(unmatchedAfter == 1u);
+  std::cout << fmt::format(
+    "LP7.4 frame log: adopted_islands {} settled before the edit, {} after\n",
+    *before,
+    *after);
+  std::filesystem::remove(logPath);
 }
 
 } // namespace tb::lit

@@ -2011,7 +2011,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       // LP5.3 (C49): pass 9's fog and blend draws (its GPU time from the timers)
       row.fogDraws = litStats.fogDraws;
       row.blendDraws = litStats.blendDraws;
-      // LP7.0 (C52, C54, C55): no model, dress decal or adopted island is drawn yet
+      // LP7.0 (C52, C54): no model or dress decal is drawn yet
       row.modelEntities = 0u;
       row.modelInstances = 0u;
       row.modelDraws = 0u;
@@ -2019,10 +2019,15 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.modelsSkinned = 0u;
       row.dressSurfaces = 0u;
       row.dressUnmatched = 0u;
-      row.adoptedIslands = 0u;
-      row.adoptedTris = 0u;
-      row.unmatchedIslands = 0u;
-      row.curvedIslands = 0u;
+      // LP7.4 (C55): the scene's adoption totals when the frame was drawn
+      {
+        const auto adoption =
+          m_geometry ? m_geometry->adoptionCounts() : SceneGeometry::AdoptionCounts{};
+        row.adoptedIslands = adoption.adoptedIslands;
+        row.adoptedTris = adoption.adoptedTris;
+        row.unmatchedIslands = adoption.unmatchedIslands;
+        row.curvedIslands = adoption.curvedIslands;
+      }
       row.constantBytes = litStats.constantBytes + tonemap.constantBytes;
       row.volatileWrites = litStats.constantWrites + tonemap.constantWrites;
       row.volatileWriteBudget = litStats.constantWriteBudget;

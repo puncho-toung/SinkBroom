@@ -109,6 +109,9 @@ void readGeometry(DeclSource& source, MapBake& bake)
       readProcFile(*text, true) | kdl::transform([&](ProcTree tree) {
         bake.geometry = MapBake::Geometry::Proc;
         bake.procBytes = procTreeBytes(tree);
+        // LP7.4 (C55): the islands the adoption of the .proc's triangles reads, here on
+        // the parse thread rather than on the render thread that adopts the tree
+        bake.islands = std::make_shared<const ProcIslands>(buildProcIslands(tree));
         bake.tree = std::make_shared<const ProcTree>(std::move(tree));
       }) | kdl::transform_error([&](auto e) { bake.geometryError = std::move(e.msg); });
     }

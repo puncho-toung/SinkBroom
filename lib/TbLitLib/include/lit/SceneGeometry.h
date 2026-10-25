@@ -27,6 +27,7 @@
 #include "lit/ProbeRecord.h"
 #include "lit/Snapshot.h"
 
+#include <compare>
 #include <cstdint>
 #include <future>
 #include <map>
@@ -85,6 +86,20 @@ struct ProcTree;
  * the adopted tree (ChunkEntityState), on the render thread through the copied pure
  * functions (mirror.json M-REF-01, M-FLOW-PURE-01); a new tree rebuilds every cell, so
  * every entity's references with it. Immutable until the next batch applies.
+ *
+ * The .proc's triangles (LP7.4, C55, D133, P7.11, K44): with a .proc's tree, every job
+ * returns its face pieces; once a batch has applied, a whole-entity pass beside the
+ * references evaluates, per (entity, model, material) group whose pieces changed (every
+ * group when a tree arrives), the islands of the model's surfaces of the material against
+ * the entity's pieces (matchProcIsland), synchronously on the render thread (the pieces
+ * are here, and the test is a few comparisons per island), and keeps an adoption table
+ * per entity. Where it changed, the island's cell (its bounds' centre's) and its
+ * candidates' cells are marked, and the batch the pass starts builds them with the table
+ * as an input: so the tree's arrival, which marks every cell, makes two batches, the
+ * second drawing the adopted islands. Before a snapshot's batch, an island one of whose
+ * candidate faces changed (or whose entity's keys did, or whose material was parsed or
+ * measured again) leaves the table with its cells marked (K44), so no batch draws it over
+ * an edited face; the pass after that batch tries it again.
  *
  * The scene's lights are the LightRegistry's (LP1b.3, C15): it takes the same snapshots
  * and .proc tree, builds the light records as its own pool job, and publishes them in a
@@ -199,6 +214,48 @@ private:
   mutable std::shared_ptr<const AreaData> m_portalFogAreas;
 
 public:
+  // LP7.4 (C55): the scene's current adoption totals (the frame log's adopted_islands,
+  // adopted_tris, unmatched_islands, curved_islands)
+  struct AdoptionCounts
+  {
+    std::uint64_t adoptedIslands = 0;
+    std::uint64_t adoptedTris = 0;
+    std::uint64_t unmatchedIslands = 0;
+    std::uint64_t curvedIslands = 0;
+
+    bool operator==(const AdoptionCounts&) const = default;
+  };
+
+private:
+  // ----- LP7.4 (C55, D133, P7.11, K44): the adoption of the .proc's triangles -----
+
+  // a model, a material and an entity: the islands of the model's surfaces of the
+  // material against the entity's face pieces of the model (area: a world piece's;
+  // -1: a brush entity's own model), the material in lower case
+  struct AdoptionGroup
+  {
+    PreviewId entity = NoPreviewId;
+    int area = 0;
+    std::string material;
+
+    auto operator<=>(const AdoptionGroup&) const = default;
+  };
+  // the adopted tree's islands (MapBake::islands; null without a tree, none for a
+  // .bproc: D138) and its models by area and by lower-case name
+  std::shared_ptr<const ProcIslands> m_islands;
+  std::map<int, std::size_t> m_areaModels;
+  std::map<std::string, std::size_t> m_namedModels;
+  // the face pieces of each cell's last build, and the cells that hold each group's
+  std::map<CellRef, std::vector<AdoptionPiece>> m_cellPieces;
+  std::map<AdoptionGroup, std::set<CellRef>> m_groupCells;
+  // the groups whose pieces the applied jobs changed; all of them once a tree arrives
+  std::set<AdoptionGroup> m_dirtyGroups;
+  bool m_adoptionAll = false;
+  // the entities' adoption tables (the jobs' input), immutable once published
+  std::unordered_map<PreviewId, std::shared_ptr<const EntityAdoption>> m_adoptions;
+  AdoptionCounts m_adoptionCounts;
+
+public:
   // lights, probes and grids may be null: the registries (and the scene's grid tables)
   // then publish into publications of their own
   SceneGeometry(
@@ -299,6 +356,20 @@ public:
   // that request yet
   bool waitsForBake() const;
 
+  /**
+   * LP7.4 (C55): the scene's adoption totals: the adopted islands and their triangles,
+   * and over the models the scene draws from (every _areaN model with a worldspawn,
+   * each brush entity's own model while the entity has face pieces) the planar islands
+   * no editor face matched and the curved ones. The render thread
+   */
+  AdoptionCounts adoptionCounts() const;
+  /**
+   * LP7.4 (C55): an entity's adoption table, or null (none adopted): the islands that
+   * match its editor faces, which LP7.3's dress identification asks of a surface (C54's
+   * "matches no editor face"); immutable. The render thread
+   */
+  std::shared_ptr<const EntityAdoption> adoptionOf(PreviewId entity) const;
+
   // waits for the batches in flight and applies them, until none is in flight (tests)
   void finishForTesting();
   // LPF.0b: the cells the last batch started builds (tests)
@@ -327,6 +398,20 @@ private:
   void apply(ChunkJobOutput output);
   // C31, D80: the touched entities' bounds and area references from their chunks
   void updateEntityReferences();
+  // LP7.4 (C55): a new tree's islands and models, the old adoption forgotten
+  void adoptTree();
+  // LP7.4: the face pieces of the cells an applied job rebuilt, and the groups they
+  // changed
+  void storePieces(const ChunkJobOutput& output);
+  // LP7.4 (C55, P7.11): the whole-entity pass after the batch applied: the changed
+  // groups evaluated, the cells of every island whose adoption changed marked
+  void updateAdoption();
+  // LP7.4 (K44): the adopted islands drop( entity, island ) selects leave the tables,
+  // their cells marked
+  template <typename Drop>
+  void dropAdoption(const Drop& drop);
+  void markAdoptedIsland(const AdoptedIsland& island);
+  void updateAdoptionCounts();
   bool collectChunks();
   PreviewId chunkEntityOf(const SceneNode& node) const;
   // LP4.2a (C37): the probe registry's inputs now, its entityDefs asked for

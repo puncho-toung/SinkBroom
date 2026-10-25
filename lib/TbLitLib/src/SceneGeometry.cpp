@@ -86,6 +86,61 @@ bool sizeFinalIn(
          && (!slot->entry || slot->sizeMeasured || (!defaultSize && !slot->remeasured));
 }
 
+// LP7.4: a name in lower case (the adoption groups' materials, the models' names)
+std::string lowerCase(std::string_view text)
+{
+  auto lower = std::string{text};
+  for (auto& c : lower)
+  {
+    c = c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
+  }
+  return lower;
+}
+
+// LP7.4 (K44): a face that is the same for the chunk builder (its polygon, plane points,
+// material and Valve values)
+bool sameFace(const SceneFace& lhs, const SceneFace& rhs)
+{
+  const auto& a = lhs.texture;
+  const auto& b = rhs.texture;
+  return lhs.polygon == rhs.polygon && lhs.points == rhs.points
+         && lhs.material == rhs.material && a.uAxis == b.uAxis && a.uOffset == b.uOffset
+         && a.vAxis == b.vAxis && a.vOffset == b.vOffset && a.uScale == b.uScale
+         && a.vScale == b.vScale;
+}
+
+// LP7.4: FNV-1a over a piece's fields, for the groups a rebuilt cell changed
+std::uint64_t pieceHash(std::uint64_t h, const AdoptionPiece& piece)
+{
+  const auto add = [&](const void* data, const std::size_t size) {
+    const auto* bytes = static_cast<const unsigned char*>(data);
+    for (auto i = std::size_t{0}; i < size; ++i)
+    {
+      h ^= bytes[i];
+      h *= 0x100000001B3ull;
+    }
+  };
+  add(&piece.key.node, sizeof(piece.key.node));
+  add(&piece.key.face, sizeof(piece.key.face));
+  add(&piece.key.piece, sizeof(piece.key.piece));
+  add(&piece.area, sizeof(piece.area));
+  add(piece.material.data(), piece.material.size());
+  add(&piece.plane, sizeof(piece.plane));
+  add(piece.texVec.data(), sizeof(piece.texVec));
+  add(&piece.textureWidth, sizeof(piece.textureWidth));
+  add(&piece.textureHeight, sizeof(piece.textureHeight));
+  add(piece.stOrigin.data(), sizeof(piece.stOrigin));
+  add(piece.points.data(), piece.points.size() * sizeof(EngineVec3));
+  return h;
+}
+
+bool sameAdoptedIsland(const AdoptedIsland& lhs, const AdoptedIsland& rhs)
+{
+  return lhs.model == rhs.model && lhs.surface == rhs.surface && lhs.island == rhs.island
+         && lhs.cell == rhs.cell && lhs.area == rhs.area && lhs.material == rhs.material
+         && lhs.candidates == rhs.candidates;
+}
+
 // removes refs from every set of waiting, and the sets that are empty then
 void forgetCells(
   std::map<std::string, std::set<CellRef>>& waiting, const std::vector<CellRef>& refs)
@@ -275,9 +330,28 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
   // C37: the entities, and with them the placed probes, may have changed
   m_probesDirty = true;
 
+  // LP7.4 (K44): the nodes and faces this snapshot changes, whose adopted islands leave
+  // the tables before the batch, so that no batch draws an island over an edited face
+  auto changedNodes = std::set<PreviewId>{};
+  auto changedFaces = std::map<PreviewId, std::set<std::uint32_t>>{};
+  const auto nodeChanged = [&](const PreviewId id) { changedNodes.insert(id); };
+  const auto entityChanged = [&](const PreviewId entity) {
+    if (const auto nodes = m_entityNodes.find(entity); nodes != m_entityNodes.end())
+    {
+      for (const auto id : nodes->second)
+      {
+        nodeChanged(id);
+      }
+    }
+  };
+  auto changedEntities = std::set<PreviewId>{};
+
   // B0.4: removed holds node and entity ids
   for (const auto id : snapshot.removed)
   {
+    nodeChanged(id);
+    entityChanged(id);
+    changedEntities.insert(id);
     removeNode(id);
     m_nodes.erase(id);
     if (m_entities.erase(id) > 0)
@@ -332,6 +406,9 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
       {
         markEntity(id);
       }
+      // LP7.4 (K44): its state, its pivot or its primitives' entity may have changed
+      changedEntities.insert(id);
+      entityChanged(id);
     }
   }
 
@@ -339,6 +416,27 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
   for (auto& node : sceneNodesOf(snapshot))
   {
     const auto id = node->id;
+    // LP7.4 (K44): the faces that differ from the node's last record
+    if (const auto old = m_nodes.find(id); old != m_nodes.end())
+    {
+      const auto& before = *old->second;
+      if (
+        before.kind != node->kind || before.entity != node->entity
+        || before.visible != node->visible || before.faces.size() != node->faces.size())
+      {
+        nodeChanged(id);
+      }
+      else
+      {
+        for (auto f = std::size_t{0}; f < node->faces.size(); ++f)
+        {
+          if (!sameFace(before.faces[f], node->faces[f]))
+          {
+            changedFaces[id].insert(std::uint32_t(f));
+          }
+        }
+      }
+    }
     removeNode(id);
     if (isPrimitive(*node))
     {
@@ -378,6 +476,25 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
     publishGridTable();
     m_bakeTicket = m_materials ? m_materials->loadMapBake(*m_mapPath) : 0;
     markAll();
+    // LP7.4: and the adoption with its tree
+    adoptTree();
+  }
+
+  // LP7.4 (K44): an island one of whose candidates changed, or whose entity did, leaves
+  // its table, its cells marked; the pass after the batch tries it again
+  if (!changedNodes.empty() || !changedFaces.empty() || !changedEntities.empty())
+  {
+    dropAdoption([&](const PreviewId entity, const AdoptedIsland& island) {
+      return changedEntities.contains(entity)
+             || std::ranges::any_of(island.candidates, [&](const AdoptionPieceKey& key) {
+                  if (changedNodes.contains(key.node))
+                  {
+                    return true;
+                  }
+                  const auto faces = changedFaces.find(key.node);
+                  return faces != changedFaces.end() && faces->second.contains(key.face);
+                });
+    });
   }
 
   // V.8: a tree the table holds is adopted before the lights take the snapshot, so that
@@ -423,6 +540,9 @@ void SceneGeometry::refreshTable()
     m_cellMaterials.clear();
     m_materialsRevision = m_table->materialsRevision;
     markAll();
+    // LP7.4 (K44): every island is tried again with the new registry's materials
+    dropAdoption([](PreviewId, const AdoptedIsland&) { return true; });
+    m_adoptionAll = true;
   }
   scanTable();
 }
@@ -513,9 +633,16 @@ void SceneGeometry::scanTable()
       {
         m_proc = slot->tree;
         markAll();
+        // LP7.4 (C55): its islands; every group is evaluated once the batch built with
+        // the tree applies, and the cells of the islands adopted are built again then
+        adoptTree();
       }
     }
   }
+  // LP7.4 (K44): the materials whose cells are built again for their size or revision,
+  // and the entities whose pivot moves: their islands leave the tables for the batch
+  auto rescanned = std::set<std::string>{};
+  auto repivoted = std::set<PreviewId>{};
   for (auto it = m_pendingMaterials.begin(); it != m_pendingMaterials.end();)
   {
     if (m_table->find(it->first))
@@ -536,6 +663,7 @@ void SceneGeometry::scanTable()
     if (tableSizeOf(it->first) != it->second.size)
     {
       m_dirty.insert(it->second.cells.begin(), it->second.cells.end());
+      rescanned.insert(lowerCase(it->first));
       it = m_sizedCells.erase(it);
     }
     else
@@ -567,6 +695,7 @@ void SceneGeometry::scanTable()
         continue;
       }
       m_dirty.insert(built.cells.begin(), built.cells.end());
+      rescanned.insert(lowerCase(material));
       const auto origin = originIn(m_table.get(), material);
       if (origin != built.origin)
       {
@@ -576,6 +705,7 @@ void SceneGeometry::scanTable()
           if (ref.entity != m_worldspawn)
           {
             markEntity(ref.entity);
+            repivoted.insert(ref.entity);
           }
         }
       }
@@ -591,6 +721,7 @@ void SceneGeometry::scanTable()
       for (const auto entity : it->second)
       {
         markEntity(entity);
+        repivoted.insert(entity);
       }
       it = m_pendingEntityDefs.erase(it);
     }
@@ -598,6 +729,12 @@ void SceneGeometry::scanTable()
     {
       ++it;
     }
+  }
+  if (!rescanned.empty() || !repivoted.empty())
+  {
+    dropAdoption([&](const PreviewId entity, const AdoptedIsland& island) {
+      return repivoted.contains(entity) || rescanned.contains(lowerCase(island.material));
+    });
   }
 }
 
@@ -655,17 +792,34 @@ void SceneGeometry::startBatch()
         }
       }
     }
+    // LP7.4 (C55): and the cells of its adopted islands
+    if (const auto adoption = m_adoptions.find(entity); adoption != m_adoptions.end())
+    {
+      for (const auto& island : adoption->second->adopted)
+      {
+        refs.insert(island.cell);
+      }
+    }
     jobs.emplace_back(refs.begin(), refs.end());
     m_lastBatchCells.insert(refs.begin(), refs.end());
   }
 
   const auto worldspawn = m_entities.find(m_worldspawn);
+  // LP7.4 (C55): with a .proc's islands the jobs return their pieces
+  const auto collectPieces = m_proc && m_islands;
   for (auto& refs : jobs)
   {
     auto input = std::make_shared<ChunkJobInput>();
     input->cells = refs;
     input->proc = m_proc;
     input->materials = m_table;
+    input->collectPieces = collectPieces;
+    // a job's cells are of one chunk entity (a world cell, or every cell of an entity)
+    if (const auto adoption = m_adoptions.find(refs.front().entity);
+        adoption != m_adoptions.end())
+    {
+      input->adoptions.emplace(adoption->first, adoption->second);
+    }
     const auto addEntity = [&](const PreviewId id) {
       const auto it = m_entities.find(id);
       if (it == m_entities.end() || input->entities.contains(id))
@@ -737,6 +891,8 @@ void SceneGeometry::startBatch()
 
 void SceneGeometry::apply(ChunkJobOutput output)
 {
+  // LP7.4 (C55): the cells' face pieces, for the pass once the batch has applied
+  storePieces(output);
   // what the rebuilt cells waited for is replaced by what they wait for now
   forgetSizedCells(output.cells);
   forgetCells(m_pendingMaterials, output.cells);
@@ -897,6 +1053,418 @@ void SceneGeometry::updateEntityReferences()
   }
 }
 
+void SceneGeometry::adoptTree()
+{
+  // the old tree's tables, pieces and groups go (markAll marks the cells of its islands,
+  // which hold chunks)
+  m_adoptions.clear();
+  m_cellPieces.clear();
+  m_groupCells.clear();
+  m_dirtyGroups.clear();
+  m_areaModels.clear();
+  m_namedModels.clear();
+  // D138: a .bproc's bake has no islands
+  m_islands = m_proc && m_bakeSlot && m_bakeSlot->bake && m_bakeSlot->tree == m_proc
+                ? m_bakeSlot->bake->islands
+                : nullptr;
+  if (m_islands && m_islands->models.size() != m_proc->models.size())
+  {
+    m_islands.reset();
+  }
+  if (m_islands)
+  {
+    for (auto m = std::size_t{0}; m < m_proc->models.size(); ++m)
+    {
+      const auto& model = m_proc->models[m];
+      if (model.area >= 0)
+      {
+        m_areaModels.try_emplace(model.area, m);
+      }
+      else
+      {
+        m_namedModels.try_emplace(lowerCase(model.name), m);
+      }
+    }
+  }
+  m_adoptionAll = m_islands != nullptr;
+  updateAdoptionCounts();
+}
+
+void SceneGeometry::storePieces(const ChunkJobOutput& output)
+{
+  // per (cell, group) the pieces' hash before the job and after it: a group whose pieces
+  // in a rebuilt cell differ is evaluated again
+  using Key = std::pair<CellRef, AdoptionGroup>;
+  auto hashes = std::map<Key, std::array<std::uint64_t, 2>>{};
+  constexpr auto Basis = 0xCBF29CE484222325ull;
+  for (const auto& ref : output.cells)
+  {
+    const auto it = m_cellPieces.find(ref);
+    if (it == m_cellPieces.end())
+    {
+      continue;
+    }
+    for (const auto& piece : it->second)
+    {
+      auto group = AdoptionGroup{ref.entity, piece.area, lowerCase(piece.material)};
+      auto& hash =
+        hashes.try_emplace(Key{ref, group}, std::array{Basis, Basis}).first->second[0];
+      hash = pieceHash(hash, piece);
+      if (const auto cells = m_groupCells.find(group); cells != m_groupCells.end())
+      {
+        cells->second.erase(ref);
+        if (cells->second.empty())
+        {
+          m_groupCells.erase(cells);
+        }
+      }
+    }
+    m_cellPieces.erase(it);
+  }
+  if (!m_islands)
+  {
+    return;
+  }
+  for (const auto& record : output.pieces)
+  {
+    const auto& ref = record.cell;
+    auto group =
+      AdoptionGroup{ref.entity, record.piece.area, lowerCase(record.piece.material)};
+    auto& hash =
+      hashes.try_emplace(Key{ref, group}, std::array{Basis, Basis}).first->second[1];
+    hash = pieceHash(hash, record.piece);
+    m_groupCells[std::move(group)].insert(ref);
+    m_cellPieces[ref].push_back(record.piece);
+  }
+  for (const auto& [key, hash] : hashes)
+  {
+    if (hash[0] != hash[1])
+    {
+      m_dirtyGroups.insert(key.second);
+    }
+  }
+}
+
+void SceneGeometry::markAdoptedIsland(const AdoptedIsland& island)
+{
+  m_dirty.insert(island.cell);
+  for (const auto& key : island.candidates)
+  {
+    if (const auto cell = m_nodeCells.find(key.node); cell != m_nodeCells.end())
+    {
+      m_dirty.insert(cell->second);
+    }
+  }
+}
+
+namespace
+{
+
+// LP7.4: an adoption table as the jobs read it
+std::shared_ptr<const EntityAdoption> publishAdoption(
+  std::shared_ptr<const ProcTree> tree,
+  std::shared_ptr<const ProcIslands> islands,
+  std::vector<AdoptedIsland> adopted)
+{
+  auto adoption = std::make_shared<EntityAdoption>();
+  adoption->tree = std::move(tree);
+  adoption->islands = std::move(islands);
+  for (const auto& island : adopted)
+  {
+    adoption->replaced.insert(island.candidates.begin(), island.candidates.end());
+  }
+  adoption->adopted = std::move(adopted);
+  return adoption;
+}
+
+} // namespace
+
+template <typename Drop>
+void SceneGeometry::dropAdoption(const Drop& drop)
+{
+  for (auto it = m_adoptions.begin(); it != m_adoptions.end();)
+  {
+    const auto entity = it->first;
+    auto kept = std::vector<AdoptedIsland>{};
+    auto dropped = false;
+    for (const auto& island : it->second->adopted)
+    {
+      if (drop(entity, island))
+      {
+        // its cells are built without it; the pass after that batch tries it again
+        markAdoptedIsland(island);
+        m_dirtyGroups.insert(
+          AdoptionGroup{entity, island.area, lowerCase(island.material)});
+        dropped = true;
+      }
+      else
+      {
+        kept.push_back(island);
+      }
+    }
+    if (!dropped)
+    {
+      ++it;
+    }
+    else if (kept.empty())
+    {
+      it = m_adoptions.erase(it);
+    }
+    else
+    {
+      it->second = publishAdoption(m_proc, m_islands, std::move(kept));
+      ++it;
+    }
+  }
+  updateAdoptionCounts();
+}
+
+void SceneGeometry::updateAdoption()
+{
+  if (!m_islands || !m_proc)
+  {
+    m_dirtyGroups.clear();
+    m_adoptionAll = false;
+    return;
+  }
+  auto groups = std::exchange(m_dirtyGroups, {});
+  if (std::exchange(m_adoptionAll, false))
+  {
+    for (const auto& [group, cells] : m_groupCells)
+    {
+      groups.insert(group);
+    }
+    for (const auto& [entity, adoption] : m_adoptions)
+    {
+      for (const auto& island : adoption->adopted)
+      {
+        groups.insert(AdoptionGroup{entity, island.area, lowerCase(island.material)});
+      }
+    }
+  }
+  if (groups.empty())
+  {
+    return;
+  }
+
+  // the model of a group: a world group's area model, a brush entity's own (K17: dmap
+  // names it by the entity's name)
+  const auto modelOf = [&](const AdoptionGroup& group) -> std::optional<std::size_t> {
+    if (group.area >= 0)
+    {
+      const auto it =
+        group.entity == m_worldspawn ? m_areaModels.find(group.area) : m_areaModels.end();
+      return it != m_areaModels.end() ? std::optional{it->second} : std::nullopt;
+    }
+    const auto entity = m_entities.find(group.entity);
+    const auto* name =
+      entity != m_entities.end() ? findKey(entity->second->keys, "name") : nullptr;
+    const auto it = name ? m_namedModels.find(lowerCase(*name)) : m_namedModels.end();
+    return it != m_namedModels.end() ? std::optional{it->second} : std::nullopt;
+  };
+  // an island's cell: its bounds' centre in the entity's editor space (a brush entity's
+  // .proc positions are relative to its origin and origin offset, unrotated)
+  const auto cellOf = [&](const PreviewId entity, const ProcIsland& island) {
+    auto offset = EngineVec3{0, 0, 0};
+    if (entity != m_worldspawn)
+    {
+      if (const auto state = m_entityStates.find(entity); state != m_entityStates.end())
+      {
+        offset = state->second.modelOrigin;
+      }
+    }
+    auto cell = CellCoord{};
+    for (auto c = std::size_t{0}; c < 3; ++c)
+    {
+      const auto centre =
+        (double(island.bounds[0][c]) + double(island.bounds[1][c])) * 0.5 + offset[c];
+      cell[c] = int(std::floor(centre / CellSize));
+    }
+    return CellRef{entity, cell};
+  };
+  // the islands a group adopts now
+  const auto evaluate = [&](const AdoptionGroup& group) {
+    auto adopted = std::vector<AdoptedIsland>{};
+    const auto model = modelOf(group);
+    const auto cells = m_groupCells.find(group);
+    if (!model || cells == m_groupCells.end())
+    {
+      return adopted;
+    }
+    auto pieces = std::vector<const AdoptionPiece*>{};
+    for (const auto& ref : cells->second)
+    {
+      if (const auto it = m_cellPieces.find(ref); it != m_cellPieces.end())
+      {
+        for (const auto& piece : it->second)
+        {
+          if (piece.area == group.area && lowerCase(piece.material) == group.material)
+          {
+            pieces.push_back(&piece);
+          }
+        }
+      }
+    }
+    const auto& surfaces = m_proc->models[*model].surfaces;
+    const auto& islands = m_islands->models[*model].surfaces;
+    for (auto s = std::size_t{0}; s < surfaces.size() && s < islands.size(); ++s)
+    {
+      if (lowerCase(surfaces[s].material) != group.material)
+      {
+        continue;
+      }
+      for (auto i = std::size_t{0}; i < islands[s].size(); ++i)
+      {
+        const auto& island = islands[s][i];
+        // a chunk holds an island whole (C55: islands merged under MaxChunkWeldedVerts)
+        if (!island.planar || island.verts.size() > MaxChunkWeldedVerts)
+        {
+          continue;
+        }
+        const auto match = matchProcIsland(surfaces[s], island, pieces);
+        if (match.verdict != IslandVerdict::Adopted)
+        {
+          continue;
+        }
+        auto entry = AdoptedIsland{};
+        entry.model = *model;
+        entry.surface = s;
+        entry.island = i;
+        entry.cell = cellOf(group.entity, island);
+        entry.area = group.area;
+        entry.material = pieces[match.candidates.front()]->material;
+        entry.triangles = island.indexes.size() / 3;
+        for (const auto c : match.candidates)
+        {
+          entry.candidates.push_back(pieces[c]->key);
+        }
+        std::ranges::sort(entry.candidates);
+        adopted.push_back(std::move(entry));
+      }
+    }
+    return adopted;
+  };
+
+  auto entries = std::map<PreviewId, std::vector<AdoptedIsland>>{};
+  for (const auto& group : groups)
+  {
+    if (!entries.contains(group.entity))
+    {
+      const auto it = m_adoptions.find(group.entity);
+      entries[group.entity] =
+        it != m_adoptions.end() ? it->second->adopted : std::vector<AdoptedIsland>{};
+    }
+  }
+  auto changed = std::set<PreviewId>{};
+  for (const auto& group : groups)
+  {
+    auto& list = entries.at(group.entity);
+    auto before = std::vector<AdoptedIsland>{};
+    auto others = std::vector<AdoptedIsland>{};
+    for (auto& island : list)
+    {
+      const auto inGroup =
+        island.area == group.area && lowerCase(island.material) == group.material;
+      (inGroup ? before : others).push_back(std::move(island));
+    }
+    auto after = evaluate(group);
+    const auto same = std::ranges::equal(before, after, sameAdoptedIsland);
+    if (!same)
+    {
+      for (const auto& island : before)
+      {
+        markAdoptedIsland(island);
+      }
+      for (const auto& island : after)
+      {
+        markAdoptedIsland(island);
+      }
+      changed.insert(group.entity);
+    }
+    list = std::move(others);
+    list.insert(
+      list.end(),
+      std::make_move_iterator(after.begin()),
+      std::make_move_iterator(after.end()));
+  }
+  for (const auto entity : changed)
+  {
+    auto& list = entries.at(entity);
+    if (list.empty())
+    {
+      m_adoptions.erase(entity);
+    }
+    else
+    {
+      m_adoptions[entity] = publishAdoption(m_proc, m_islands, std::move(list));
+    }
+  }
+  updateAdoptionCounts();
+}
+
+void SceneGeometry::updateAdoptionCounts()
+{
+  auto counts = AdoptionCounts{};
+  if (m_islands && m_proc)
+  {
+    for (const auto& [entity, adoption] : m_adoptions)
+    {
+      counts.adoptedIslands += adoption->adopted.size();
+      for (const auto& island : adoption->adopted)
+      {
+        counts.adoptedTris += island.triangles;
+      }
+    }
+    // the models the scene draws from: every area model with a worldspawn, each brush
+    // entity's own while it has pieces
+    auto models = std::set<std::size_t>{};
+    if (m_worldspawn != NoPreviewId)
+    {
+      for (const auto& [area, m] : m_areaModels)
+      {
+        models.insert(m);
+      }
+    }
+    for (const auto& [group, cells] : m_groupCells)
+    {
+      if (group.area >= 0)
+      {
+        continue;
+      }
+      const auto entity = m_entities.find(group.entity);
+      const auto* name =
+        entity != m_entities.end() ? findKey(entity->second->keys, "name") : nullptr;
+      if (const auto it =
+            name ? m_namedModels.find(lowerCase(*name)) : m_namedModels.end();
+          it != m_namedModels.end())
+      {
+        models.insert(it->second);
+      }
+    }
+    auto planar = std::uint64_t{0};
+    for (const auto m : models)
+    {
+      planar += m_islands->models[m].planarIslands;
+      counts.curvedIslands += m_islands->models[m].curvedIslands;
+    }
+    counts.unmatchedIslands =
+      planar > counts.adoptedIslands ? planar - counts.adoptedIslands : 0;
+  }
+  m_adoptionCounts = counts;
+}
+
+SceneGeometry::AdoptionCounts SceneGeometry::adoptionCounts() const
+{
+  return m_adoptionCounts;
+}
+
+std::shared_ptr<const EntityAdoption> SceneGeometry::adoptionOf(
+  const PreviewId entity) const
+{
+  const auto it = m_adoptions.find(entity);
+  return it != m_adoptions.end() ? it->second : nullptr;
+}
+
 bool SceneGeometry::collect()
 {
   const auto lightsApplied = m_lights.collect();
@@ -1011,6 +1579,9 @@ bool SceneGeometry::collectChunks()
     }
     // D80: the references of the entities the batch touched, over all their chunks
     updateEntityReferences();
+    // LP7.4 (C55, P7.11): beside them, the adoption of the groups the batch changed; the
+    // cells of an island whose adoption changed are built by the batch started below
+    updateAdoption();
     m_appliedSequence = m_batchSequence;
     // V.1: a table published while the batch ran woke an idle pass that could not adopt
     // it; it is adopted now, and what the batch left waiting is built at once

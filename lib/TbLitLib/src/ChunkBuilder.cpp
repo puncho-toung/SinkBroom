@@ -183,6 +183,16 @@ struct Bucket
   std::vector<Triangle> triangles;
 };
 
+// LP7.4 (C55): the adopted islands of one (area, entity, material, cell)
+struct AdoptedBucket
+{
+  ChunkKey key;
+  const FaceMaterial* material = nullptr;
+  const EntityContext* entity = nullptr;
+  const EntityAdoption* adoption = nullptr;
+  std::vector<const AdoptedIsland*> islands;
+};
+
 // MapFile.cpp:1171-1181: the origin key applies to the primitives after it (the last one
 // given, as TrenchBroom writes the keys first)
 EngineVec3 parseOriginOf(const SceneEntity& entity)
@@ -203,6 +213,10 @@ private:
   std::unordered_map<PreviewId, EntityContext> m_contexts;
   std::map<ChunkKey, Bucket> m_buckets;
   std::set<CellRef> m_cells;
+  // LP7.4 (C55): the adopted islands of the job's cells per (area, entity, material,
+  // cell), and the first part after the editor triangulation's of each key
+  std::map<ChunkKey, AdoptedBucket> m_adopted;
+  std::map<ChunkKey, int> m_nextPart;
 
 public:
   Builder(const ChunkJobInput& input, const CpuJobContext* context)
@@ -247,9 +261,14 @@ public:
         addPatch(*node->patch, *context, ref.cell);
       }
     }
+    addAdoptedIslands();
     for (auto& [key, bucket] : m_buckets)
     {
       finishBucket(bucket);
+    }
+    for (auto& [key, adopted] : m_adopted)
+    {
+      finishAdopted(adopted);
     }
     for (const auto& [id, context] : m_contexts)
     {
@@ -579,6 +598,15 @@ private:
           addPiece(
             node, faceIndex, pieceIndex, piece, face, material, *plane, context, cell);
         }
+        // LP7.4 (C55): an adopted island draws this piece's part of the face; its other
+        // roles (the references through the island's chunk, the solid count) stay
+        if (replaced(
+              context.chunkEntity,
+              AdoptionPieceKey{
+                node.id, std::uint32_t(faceIndex), std::uint32_t(pieceIndex)}))
+        {
+          continue;
+        }
         auto& target = bucket(piece.area, context, material, cell);
         // TriListForSide's fan: w[0], w[i - 1], w[i]
         const auto& w = piece.points;
@@ -723,7 +751,13 @@ private:
       {
         auto key = bucket.key;
         key.part = part++;
-        finishChunk(key, bucket, std::move(verts), std::move(indexes));
+        finishChunk(
+          key,
+          *bucket.material,
+          *bucket.entity,
+          std::move(verts),
+          std::move(indexes),
+          true);
       }
       verts.clear();
       indexes.clear();
@@ -761,20 +795,134 @@ private:
       }
     }
     flush();
+    m_nextPart[bucket.key] = part;
+  }
+
+  // LP7.4 (C55): whether an adopted island of the entity replaces the face piece
+  bool replaced(const PreviewId entity, const AdoptionPieceKey& key) const
+  {
+    const auto it = m_input.adoptions.find(entity);
+    return it != m_input.adoptions.end() && it->second
+           && it->second->replaced.contains(key);
+  }
+
+  // LP7.4 (C55, P7.11): the adopted islands whose cell is one of the job's, per key
+  void addAdoptedIslands()
+  {
+    for (const auto& [entity, adoption] : m_input.adoptions)
+    {
+      if (!adoption || !adoption->tree || !adoption->islands)
+      {
+        continue;
+      }
+      const auto* context = contextOf(entity);
+      if (!context || !context->state.visible)
+      {
+        continue;
+      }
+      for (const auto& island : adoption->adopted)
+      {
+        if (!m_cells.contains(island.cell))
+        {
+          continue;
+        }
+        const auto& material = m_materials.get(island.material);
+        // a world island's chunk is of its model's area; a brush entity's of its pivot's
+        // area, as every chunk of the entity (P4.9)
+        const auto area = context->world ? island.area : context->area;
+        auto key =
+          ChunkKey{area, context->chunkEntity, material.name, island.cell.cell, 0};
+        auto [it, inserted] = m_adopted.try_emplace(key);
+        if (inserted)
+        {
+          it->second.key = key;
+          it->second.material = &material;
+          it->second.entity = context;
+          it->second.adoption = adoption.get();
+        }
+        it->second.islands.push_back(&island);
+      }
+    }
+  }
+
+  /**
+   * LP7.4 (C55, SC642): the adopted islands of one key as chunks, islands merged while
+   * they stay within MaxChunkWeldedVerts, their parts after the editor triangulation's:
+   * each island's vertices and triangles as ParseModel loads them (loadProcIsland), then
+   * finishChunk without the weld and the recentring (they are the engine's already)
+   */
+  void finishAdopted(const AdoptedBucket& adopted)
+  {
+    auto part = m_nextPart[adopted.key];
+    auto verts = std::vector<EngineDrawVert>{};
+    auto indexes = std::vector<std::uint16_t>{};
+    const auto flush = [&]() {
+      if (!indexes.empty())
+      {
+        auto key = adopted.key;
+        key.part = part++;
+        finishChunk(
+          key,
+          *adopted.material,
+          *adopted.entity,
+          std::move(verts),
+          std::move(indexes),
+          false);
+      }
+      verts.clear();
+      indexes.clear();
+    };
+    const auto& tree = *adopted.adoption->tree;
+    const auto& islands = *adopted.adoption->islands;
+    for (const auto* island : adopted.islands)
+    {
+      if (
+        island->model >= tree.models.size() || island->model >= islands.models.size()
+        || island->surface >= tree.models[island->model].surfaces.size()
+        || island->surface >= islands.models[island->model].surfaces.size()
+        || island->island
+             >= islands.models[island->model].surfaces[island->surface].size())
+      {
+        warnOnce("an adopted island is not in its tree");
+        continue;
+      }
+      const auto geometry = loadProcIsland(
+        tree.models[island->model].surfaces[island->surface],
+        islands.models[island->model].surfaces[island->surface][island->island]);
+      if (geometry.verts.empty() || geometry.verts.size() > MaxChunkWeldedVerts)
+      {
+        warnOnce(fmt::format("an adopted island of {} is not drawn", island->material));
+        continue;
+      }
+      if (verts.size() + geometry.verts.size() > MaxChunkWeldedVerts)
+      {
+        flush();
+      }
+      const auto offset = verts.size();
+      verts.insert(verts.end(), geometry.verts.begin(), geometry.verts.end());
+      for (const auto index : geometry.indexes)
+      {
+        indexes.push_back(std::uint16_t(offset + index));
+      }
+    }
+    flush();
   }
 
   void finishChunk(
     ChunkKey key,
-    const Bucket& bucket,
+    const FaceMaterial& material,
+    const EntityContext& context,
     std::vector<EngineDrawVert> verts,
-    std::vector<std::uint16_t> indexes)
+    std::vector<std::uint16_t> indexes,
+    const bool editorTriangles)
   {
-    const auto& material = *bucket.material;
-    const auto& context = *bucket.entity;
-
     // D59: st read back as ParseModel reads them (R3.9) and recentred per island,
-    // through SetTexCoord again (RenderWorld_load.cpp ParseModel)
-    recentreTexCoords(verts, indexes);
+    // through SetTexCoord again (RenderWorld_load.cpp ParseModel); an adopted island's
+    // are the .proc's, recentred already
+    if (editorTriangles)
+    {
+      recentreTexCoords(verts, indexes);
+    }
 
     // Model.cpp:1252-1283 FinishSurfaces: a reversed copy for back sides, then each
     // surface through R_CleanupTriangles' steps
@@ -846,6 +994,7 @@ private:
                           : CastClass::None;
     }
     chunk.provisional = material.provisional;
+    chunk.adopted = !editorTriangles;
 
     auto caster = fnv(FnvBasis, &chunk.castClass, sizeof(chunk.castClass));
     const auto flags = std::array<bool, 2>{parms.noShadows, parms.noSelfShadows};

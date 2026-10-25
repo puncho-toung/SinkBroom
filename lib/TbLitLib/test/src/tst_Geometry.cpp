@@ -22,6 +22,7 @@
 #include "LitTestUtils.h"
 #include "fs/TestEnvironment.h"
 #include "lit/AreaData.h"
+#include "lit/BprocFile.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/CpuPool.h"
 #include "lit/EntityState.h"
@@ -44,8 +45,12 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <iostream>
+#include <iterator>
 #include <latch>
 #include <map>
 #include <mutex>
@@ -2318,6 +2323,351 @@ TEST_CASE("MaterialService, map bakes on the parse thread (C10, D64)")
   service->requestStop();
   service->join();
   static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+}
+
+
+namespace
+{
+
+// LP7.4: the scene's adopted chunks
+std::vector<const Chunk*> adoptedChunks(const SceneGeometry& scene)
+{
+  auto chunks = std::vector<const Chunk*>{};
+  for (const auto& [key, chunk] : scene.chunks())
+  {
+    if (chunk.adopted)
+    {
+      chunks.push_back(&chunk);
+    }
+  }
+  return chunks;
+}
+
+// a triangle as its three positions, in its vertex order
+using PlacedTriangle = std::array<EngineVec3, 3>;
+
+std::multiset<PlacedTriangle> trianglesOf(
+  const std::vector<EngineDrawVert>& verts,
+  const std::vector<std::uint16_t>& indexes,
+  const std::size_t count)
+{
+  auto triangles = std::multiset<PlacedTriangle>{};
+  for (auto i = std::size_t{0}; i + 2 < count; i += 3)
+  {
+    triangles.insert(
+      {verts[indexes[i]].xyz, verts[indexes[i + 1]].xyz, verts[indexes[i + 2]].xyz});
+  }
+  return triangles;
+}
+
+} // namespace
+
+/**
+ * LP7.4 (C55, P7.11, K44): the fixture map with its .proc and its images (so that the
+ * editor-image sizes are the bake's, dmap's texSize): the first batches are built before
+ * the tree arrives (no adoption); then every planar island is adopted and drawn from the
+ * .proc: each adopted chunk is its islands as loadProcSurface loads them through the
+ * material's tangent path (byte for byte, front part) with their triangles in dmap's
+ * vertex order, and every vertex is the engine's own finished one in the .bproc; the
+ * counters are step 3's. A face moved by one unit returns its island's part to the
+ * editor's triangulation, and moving it back adopts it again.
+ */
+TEST_CASE("SceneGeometry, the .proc's islands adopted at chunk build (LP7.4, C55)")
+{
+  static_cast<void>(fixtureTable());
+  const auto game = BakeGame{};
+  std::filesystem::create_directories(game.base() / "textures" / "lp1b");
+  std::filesystem::copy(
+    litFixtureFolder() / "textures" / "lp1b",
+    game.base() / "textures" / "lp1b",
+    std::filesystem::copy_options::recursive);
+  auto gate = std::make_shared<ParseGate>();
+  auto service = game.service(gate);
+  const auto atExit = OpenAtExit{gate};
+  auto pool = CpuPool::create() | kdl::value();
+  const auto proc =
+    readProcFile(readTextFile(BakeGame::goldenProc()), true) | kdl::value();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  const auto islands = buildProcIslands(proc);
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    auto snapshot =
+      snapshotOfMapText(readTextFile(litFixtureFolder() / "maps" / "lp1b_geometry.map"));
+    snapshot.sequence = 1;
+    snapshot.mapPath = game.mapPath("lp1b_geometry");
+    PreviewId worldspawn = NoPreviewId;
+    for (const auto& entity : snapshot.entities)
+    {
+      if (snapshot.string(entity.classname) == "worldspawn")
+      {
+        worldspawn = entity.id;
+      }
+    }
+
+    // the tree held back: the batches run without it, and adopt nothing
+    closeGateWhenIdle(*service, *gate, "textures/lp74/gate");
+    scene.takeSnapshot(snapshot);
+    scene.finishForTesting();
+    CHECK_FALSE(scene.procTree());
+    CHECK(scene.adoptionCounts() == SceneGeometry::AdoptionCounts{});
+    CHECK(adoptedChunks(scene).empty());
+
+    // the tree arrives: every cell is built again with it, then the islands' cells
+    gate->open();
+    REQUIRE(settle(scene, [&] {
+      return scene.procTree() && !scene.waitsForMaterials()
+             && scene.adoptionCounts().adoptedIslands == 37u;
+    }));
+    scene.finishForTesting();
+    auto planarTriangles = std::uint64_t{0};
+    for (auto m = std::size_t{0}; m < proc.models.size(); ++m)
+    {
+      for (const auto& list : islands.models[m].surfaces)
+      {
+        for (const auto& island : list)
+        {
+          planarTriangles += island.planar ? island.indexes.size() / 3 : 0;
+        }
+      }
+    }
+    const auto counts = scene.adoptionCounts();
+    CHECK(counts.adoptedIslands == 37u);
+    CHECK(counts.adoptedTris == planarTriangles);
+    CHECK(counts.unmatchedIslands == 0u);
+    CHECK(counts.curvedIslands == 2u);
+    std::cout << fmt::format(
+      "LP7.4 scene: {} islands adopted ({} triangles), {} unmatched, {} curved, {} "
+      "adopted chunks\n",
+      counts.adoptedIslands,
+      counts.adoptedTris,
+      counts.unmatchedIslands,
+      counts.curvedIslands,
+      adoptedChunks(scene).size());
+
+    // each adopted chunk: its islands in the table's order, loaded and cleaned as the
+    // engine's FinishSurfaces cleans the area model
+    const auto table = service->table();
+    auto checkedChunks = std::size_t{0};
+    for (const auto* chunk : adoptedChunks(scene))
+    {
+      CAPTURE(chunk->key.material, chunk->key.area, chunk->key.part);
+      const auto adoption = scene.adoptionOf(chunk->key.entity);
+      REQUIRE(adoption);
+      auto verts = std::vector<EngineDrawVert>{};
+      auto indexes = std::vector<std::uint16_t>{};
+      for (const auto& island : adoption->adopted)
+      {
+        if (
+          island.cell != CellRef{chunk->key.entity, chunk->key.cell}
+          || island.material != chunk->key.material
+          || (chunk->key.entity == worldspawn && island.area != chunk->key.area))
+        {
+          continue;
+        }
+        const auto& surface = proc.models[island.model].surfaces[island.surface];
+        const auto geometry = loadProcIsland(
+          surface, islands.models[island.model].surfaces[island.surface][island.island]);
+        // byte-equal to the whole surface's load
+        const auto whole = loadProcSurface(surface);
+        const auto& procIsland =
+          islands.models[island.model].surfaces[island.surface][island.island];
+        for (auto i = std::size_t{0}; i < procIsland.verts.size(); ++i)
+        {
+          CHECK(geometry.verts[i] == whole[std::size_t(procIsland.verts[i])]);
+        }
+        const auto offset = verts.size();
+        verts.insert(verts.end(), geometry.verts.begin(), geometry.verts.end());
+        for (const auto index : geometry.indexes)
+        {
+          indexes.push_back(std::uint16_t(offset + index));
+        }
+      }
+      REQUIRE_FALSE(verts.empty());
+      const auto slot = table->find(chunk->key.material);
+      REQUIRE(slot);
+      const auto cleaned =
+        engineCleanupTriangles(verts, indexes, tangentPath(slot->entry.get()));
+      REQUIRE(cleaned);
+      // the front part is the cleaned islands' (back sides follow, as finishChunk adds
+      // them from the material), every triangle reordered by sub-cell only
+      REQUIRE(chunk->verts.size() >= cleaned->verts.size());
+      for (auto i = std::size_t{0}; i < cleaned->verts.size(); ++i)
+      {
+        CHECK(chunk->verts[i] == cleaned->verts[i]);
+      }
+      auto expected =
+        trianglesOf(cleaned->verts, cleaned->indexes, cleaned->indexes.size());
+      if (slot->entry && slot->entry->createBackSides)
+      {
+        const auto reversed = engineReverseTriangles(verts, indexes);
+        const auto back = engineCleanupTriangles(
+          reversed.verts, reversed.indexes, tangentPath(slot->entry.get()));
+        REQUIRE(back);
+        expected.merge(trianglesOf(back->verts, back->indexes, back->indexes.size()));
+      }
+      CHECK(trianglesOf(chunk->verts, chunk->indexes, chunk->indexes.size()) == expected);
+      ++checkedChunks;
+    }
+    CHECK(checkedChunks > 0u);
+
+    // and every adopted vertex is the engine's own: the .bproc's finished vertex at the
+    // place and of the face, all 32 bytes
+    {
+      auto in = std::ifstream{
+        litFixtureFolder() / "goldens" / "lp1b_geometry" / "lp1b_geometry.bproc",
+        std::ios::binary};
+      const auto chars = std::vector<char>{
+        std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+      auto bytes = std::vector<std::byte>(chars.size());
+      std::memcpy(bytes.data(), chars.data(), chars.size());
+      const auto bproc = readBprocTree(bytes, true) | kdl::value();
+      auto names = std::map<PreviewId, std::string>{};
+      for (const auto& entity : snapshot.entities)
+      {
+        for (auto k = entity.keys.first; k < entity.keys.first + entity.keys.count; ++k)
+        {
+          if (snapshot.string(snapshot.keyValues[k].key) == "name")
+          {
+            names[entity.id] = std::string{snapshot.string(snapshot.keyValues[k].value)};
+          }
+        }
+      }
+      auto equal = std::size_t{0};
+      auto compared = std::size_t{0};
+      for (const auto* chunk : adoptedChunks(scene))
+      {
+        for (const auto& model : bproc.tree.models)
+        {
+          const auto ofChunk = chunk->key.entity == worldspawn
+                                 ? model.name == fmt::format("_area{}", chunk->key.area)
+                                 : names.contains(chunk->key.entity)
+                                     && names.at(chunk->key.entity) == model.name;
+          if (!ofChunk)
+          {
+            continue;
+          }
+          for (const auto& surface : model.surfaces)
+          {
+            if (surface.material != chunk->key.material)
+            {
+              continue;
+            }
+            for (const auto& vert : chunk->verts)
+            {
+              for (const auto& engine : surface.finishedVerts)
+              {
+                if (
+                  vert.xyz == engine.xyz && vert.normal == engine.normal
+                  && vert.st == engine.st)
+                {
+                  ++compared;
+                  equal += vert == engine ? 1u : 0u;
+                }
+              }
+            }
+          }
+        }
+      }
+      std::cout << fmt::format(
+        "LP7.4 scene: adopted vertices against the .bproc's: {} of {} byte-equal\n",
+        equal,
+        compared);
+      CHECK(compared > 0u);
+      CHECK(equal == compared);
+    }
+
+    // a face moved by one unit (the grate's top, z 64 -> 65): its island leaves the
+    // table, its part of the grate is the editor's triangulation again
+    const auto grateTop = [&](const Snapshot& s) -> std::optional<std::size_t> {
+      for (auto f = std::size_t{0}; f < s.faces.size(); ++f)
+      {
+        auto corners = 0;
+        for (auto v = s.faces[f].polygon.first;
+             v < s.faces[f].polygon.first + s.faces[f].polygon.count;
+             ++v)
+        {
+          const auto& p = s.vertices[v];
+          corners +=
+            (p == vm::vec3d{100, -64, 64} || p == vm::vec3d{104, 64, 64}) ? 1 : 0;
+        }
+        if (corners == 2)
+        {
+          return f;
+        }
+      }
+      return std::nullopt;
+    };
+    const auto moved = [&](const double dz) {
+      auto next = snapshot;
+      const auto f = grateTop(next);
+      REQUIRE(f);
+      auto& face = next.faces[*f];
+      for (auto v = face.polygon.first; v < face.polygon.first + face.polygon.count; ++v)
+      {
+        next.vertices[v] = next.vertices[v] + vm::vec3d{0, 0, dz};
+      }
+      for (auto& point : face.points)
+      {
+        point = point + vm::vec3d{0, 0, dz};
+      }
+      return next;
+    };
+    const auto grateEditorTriangles = [&] {
+      auto count = std::size_t{0};
+      for (const auto& [key, chunk] : scene.chunks())
+      {
+        if (key.material == "textures/lp1b/grate" && key.area == 0 && !chunk.adopted)
+        {
+          count += chunk.indexes.size() / 3;
+        }
+      }
+      return count;
+    };
+    CHECK(grateEditorTriangles() == 0u);
+    auto edit = moved(1);
+    edit.sequence = 2;
+    scene.takeSnapshot(edit);
+    scene.finishForTesting();
+    const auto after = scene.adoptionCounts();
+    CHECK(after.adoptedIslands == 36u);
+    CHECK(after.unmatchedIslands == 1u);
+    CHECK(after.adoptedTris == planarTriangles - 2u);
+    // the moved face's two triangles, and its back sides (twoSided)
+    CHECK(grateEditorTriangles() > 0u);
+    std::cout << "LP7.4 scene: the moved grate top drawn by " << grateEditorTriangles()
+              << " editor triangles\n";
+
+    // moved back: adopted again
+    auto back = moved(0);
+    back.sequence = 3;
+    scene.takeSnapshot(back);
+    scene.finishForTesting();
+    CHECK(scene.adoptionCounts() == counts);
+    CHECK(grateEditorTriangles() == 0u);
+  }
+  pool->stop();
+}
+
+/**
+ * LP7.4 (C55): a snapshot without a tree (no map path): the scene adopts nothing, its
+ * counters are zero and its chunks are the editor's
+ */
+TEST_CASE("SceneGeometry: no tree, no adoption (LP7.4, C55)")
+{
+  static_cast<void>(fixtureTable());
+  auto gate = std::make_shared<ParseGate>();
+  auto service = gatedService(gate);
+  const auto atExit = OpenAtExit{gate};
+  auto scene = SceneGeometry{nullptr, service.get()};
+  auto snapshot =
+    snapshotOfMapText(readTextFile(litFixtureFolder() / "maps" / "lp1b_geometry.map"));
+  snapshot.sequence = 1;
+  scene.takeSnapshot(snapshot);
+  scene.finishForTesting();
+  CHECK_FALSE(scene.procTree());
+  CHECK(scene.adoptionCounts() == SceneGeometry::AdoptionCounts{});
+  CHECK(adoptedChunks(scene).empty());
+  CHECK_FALSE(scene.chunks().empty());
 }
 
 } // namespace tb::lit

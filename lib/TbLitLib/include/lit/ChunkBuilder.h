@@ -34,6 +34,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -160,6 +161,9 @@ struct Chunk
   std::array<EngineVec3, 2> bounds = {};
   CastClass castClass = CastClass::Opaque;
   bool provisional = false;
+  // LP7.4 (C55): built from adopted .proc islands (their parts follow the editor
+  // triangulation's parts of the key)
+  bool adopted = false;
   std::uint64_t casterVersion = 0;
   std::uint64_t appearanceVersion = 0;
 };
@@ -223,6 +227,40 @@ struct CellRef
   bool operator<(const CellRef& other) const;
 };
 
+// LP7.4 (C55): one adopted island of a .proc model
+struct AdoptedIsland
+{
+  // where it is: the tree's model, its surface, the island's index in the surface's
+  // islands (ProcIslands)
+  std::size_t model = 0;
+  std::size_t surface = 0;
+  std::size_t island = 0;
+  // the cell whose job draws it: its bounds' centre's, in the entity's editor space
+  CellRef cell;
+  // the chunk key's area: a world island's model's (_areaN); a brush entity's chunks
+  // take its pivot's area in the job
+  int area = 0;
+  // the material it is drawn with: its first candidate's (the face's engine name)
+  std::string material;
+  // its triangles (the counters)
+  std::size_t triangles = 0;
+  // the face pieces it replaces
+  std::vector<AdoptionPieceKey> candidates;
+};
+
+/**
+ * LP7.4 (C55, P7.11): an entity's adoption table, immutable once published: the islands
+ * its whole-entity pass adopted (SceneGeometry, after apply), with the tree and its
+ * islands they are read from, and the face pieces they replace.
+ */
+struct EntityAdoption
+{
+  std::shared_ptr<const ProcTree> tree;
+  std::shared_ptr<const ProcIslands> islands;
+  std::vector<AdoptedIsland> adopted;
+  std::set<AdoptionPieceKey> replaced;
+};
+
 /**
  * One job's input (D59, held by shared_ptr, immutable): the cells to rebuild, every node
  * of those cells, every node of each brush entity among them (for its origin brushes),
@@ -242,6 +280,14 @@ struct ChunkJobInput
   // LP7.4 (C55): the job returns its face pieces (ChunkJobOutput::pieces) for the
   // adoption pass
   bool collectPieces = false;
+  /**
+   * LP7.4 (C55): the adoption tables of the job's chunk entities: an adopted island in
+   * one of the job's cells is drawn from the .proc (loadProcIsland: positions, st
+   * recentred per island, normals), its triangles as dmap wrote them, tangents by the
+   * material's path over the island (WithoutNormals for most: the engine's on the area
+   * model), back sides from its material; the pieces it replaces make no triangles
+   */
+  std::unordered_map<PreviewId, std::shared_ptr<const EntityAdoption>> adoptions;
 };
 
 // LP7.4 (C55, P7.11): a face piece a job built, with the cell (and the chunk entity) it
