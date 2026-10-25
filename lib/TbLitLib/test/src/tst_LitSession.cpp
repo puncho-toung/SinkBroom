@@ -4261,14 +4261,16 @@ std::optional<std::pair<HdrImage, SettledFrame>> frameHdr(
   return std::nullopt;
 }
 
-// the HDR target of the first settled frame of camera (frameHdr)
+// the HDR target of the first frame of camera with nothing pending in its lists that
+// the product calls settled too (frameHdr; LP5.F: a test accepts no frame the product
+// does not)
 std::optional<std::pair<HdrImage, SettledFrame>> settledHdr(
   LitSession& session,
   const CameraState& camera,
   const std::size_t minLights,
   const std::chrono::milliseconds timeout = 60000ms)
 {
-  return frameHdr(session, camera, minLights, timeout, false);
+  return frameHdr(session, camera, minLights, timeout, true);
 }
 
 // a material service over a game root, its image budget off
@@ -12975,21 +12977,22 @@ TEST_CASE("LitSession provisional editor-image sizes on a GPU (LP5.F)", "[.][lit
       CHECK_FALSE(held->second.convergence.settled());
       CHECK(held->second.convergence.provisionalChunks);
       CHECK_FALSE(session->lastFrameSettledForTesting());
+      // and the test's predicate takes none of these frames: the probe is not read
+      CHECK_FALSE(settledHdr(*session, lit, 1, 3000ms));
+      CHECK_FALSE(session->lastFrameSettledForTesting());
 
-      // released: the measure lands and the floor's cells are built again at 64 x 32
+      // released: the measure lands, the floor's cells are built again at 64 x 32, and
+      // the first settled frame is the measured floor's
       service->holdMeasuresForTesting(false);
-      REQUIRE(waitFor(
-        [&] {
-          const auto counts = chunksOf(*session, floor);
-          return counts && counts->first > 0u && counts->second == 0u;
-        },
-        20000ms,
-        false));
       const auto measured = settledHdr(*session, lit, 1);
       REQUIRE(measured);
       const auto measuredSlot = service->table()->find(floor);
       REQUIRE(measuredSlot);
       CHECK(measuredSlot->sizeMeasured);
+      const auto measuredChunks = chunksOf(*session, floor);
+      REQUIRE(measuredChunks);
+      CHECK(measuredChunks->first > 0u);
+      CHECK(measuredChunks->second == 0u);
       const auto centre = measured->first.at(80, 60);
       CHECK(centre[0] == Catch::Approx(0.0309f).margin(0.001f));
       CHECK(centre[1] == Catch::Approx(1.4531f).margin(0.001f));
