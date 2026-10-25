@@ -366,8 +366,54 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       }
     }
   }
+  // LP5.3 (C49, D123, P6.6): the fog portals' densities, from the assigned fog lights'
+  // registers, evaluated before the flow as PortalIsFoggedOut evaluates them in it
+  auto portalFog = std::vector<ViewFlowPortalFog>{};
+  if (hasTree && inputs.portalFog && inputs.portalFog->areas == inputs.areas)
+  {
+    const auto& fogLights = inputs.portalFog->fogLights;
+    portalFog.resize(fogLights.size());
+    for (std::size_t portal = 0; portal < fogLights.size(); ++portal)
+    {
+      if (fogLights[portal] == NoPreviewId || !inputs.lights || !inputs.registers)
+      {
+        continue;
+      }
+      const auto record = inputs.lights->find(fogLights[portal]);
+      if (!record || !record->derived.shader.material)
+      {
+        continue;
+      }
+      const auto& shader = *record->derived.shader.material;
+      const auto answer =
+        inputs.registers(record->id, shader, record->light.parms.shaderParms);
+      if (!answer.registers)
+      {
+        // first-seen: the portal is left open, the frame unconverged
+        portalFog[portal].pending = true;
+        ++lists.portalFogPending;
+        lists.pending = true;
+        continue;
+      }
+      if (!answer.current)
+      {
+        lists.pending = true;
+      }
+      if (shader.stages.empty())
+      {
+        continue;
+      }
+      // find the current density of the fog: stage 0's alpha
+      const auto alpha = engineRegister(
+        answer.registers->registers, shader.stages.front().colorRegisters[3]);
+      portalFog[portal].assigned = true;
+      portalFog[portal].a = engineFogDensity(alpha);
+    }
+  }
+
   auto flowInputs = ViewFlowInputs{};
   flowInputs.view = view;
+  flowInputs.portalFog = portalFog;
   flowInputs.tree = hasTree ? inputs.tree : nullptr;
   flowInputs.areas = hasTree ? inputs.areas : nullptr;
   flowInputs.lights = flowLights;
@@ -383,6 +429,7 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   lists.areasFlowed =
     std::size_t(std::count(flow.areaFlowed.begin(), flow.areaFlowed.end(), true));
   lists.portalChains = flow.chains;
+  lists.portalsFogged = flow.portalsFogged;
   lists.connectedAreas = flow.connectedAreas;
   const auto numAreas = flow.flowed ? inputs.areas->areas.size() : std::size_t{0};
 

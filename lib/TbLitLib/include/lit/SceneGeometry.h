@@ -44,6 +44,7 @@ struct AreaData;
 struct MapBake;
 struct MapBakeSlot;
 struct MaterialTable;
+struct PortalFogTable;
 struct ProcTree;
 
 /**
@@ -192,6 +193,10 @@ private:
   ProbeRegistry m_probes;
   // the light records (declared last: its job is waited for first)
   LightRegistry m_lights;
+  // LP5.3 (C49, D123): the portal -> fog light table of the last light table and
+  // AreaData asked for (portalFogTable)
+  mutable std::shared_ptr<const PortalFogTable> m_portalFog;
+  mutable std::shared_ptr<const AreaData> m_portalFogAreas;
 
 public:
   // lights, probes and grids may be null: the registries (and the scene's grid tables)
@@ -247,6 +252,14 @@ public:
   // C15: the latest published light records (never null); the render thread, which owns
   // the scene (other threads read LitSession::lightTable, R2.9)
   std::shared_ptr<const LightTable> lightTable() const;
+  /**
+   * LP5.3 (C49, D123, P6.8): the portal -> fog light table (buildPortalFogTable,
+   * src/ViewFlow.h) of lightTable() over areaData(), built again when either changed
+   * since the last call (a fog light, its shader's fogLight or MF_NOPORTALFOG through a
+   * re-parse that builds its record again, a new tree); null without a tree. Immutable
+   * once made; the render thread
+   */
+  std::shared_ptr<const PortalFogTable> portalFogTable() const;
   // LP4.2a (C37, D87): the latest published probe records (never null); the render
   // thread (other threads read LitSession::probeTable)
   std::shared_ptr<const ProbeTable> probeTable() const;

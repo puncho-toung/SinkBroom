@@ -406,7 +406,18 @@ private:
         continue; // portal not visible
       }
 
-      // see if it is fogged out: PortalIsFoggedOut is false until LP5 (D83)
+      // see if it is fogged out (LP5.3, D123: a pending fog light's portal stays open)
+      if (p.portal < m_inputs.portalFog.size())
+      {
+        const auto& fog = m_inputs.portalFog[p.portal];
+        if (
+          fog.assigned && !fog.pending
+          && enginePortalIsFoggedOut(m_inputs.view, fog.a, p.points))
+        {
+          ++m_result.portalsFogged;
+          continue;
+        }
+      }
 
       // go through this portal
       auto newStack = PortalStack{};
@@ -619,6 +630,98 @@ std::optional<int> surfaceGridArea(
     }
   }
   return std::nullopt;
+}
+
+PortalFogTable buildPortalFogTable(
+  const LightTable& lights, const AreaData& areas, const std::uint64_t lightsVersion)
+{
+  auto table = PortalFogTable{};
+  table.lightsVersion = lightsVersion;
+  table.areas = &areas;
+  auto portals = std::size_t{0};
+  for (const auto& area : areas.areas)
+  {
+    for (const auto& side : area.portals)
+    {
+      portals = std::max(portals, side.portal + 1);
+    }
+  }
+  table.fogLights.assign(portals, NoPreviewId);
+
+  // the lights in preview-id order, the engine's creation order's stand-in
+  // (M-FLOW-DIFF-01)
+  auto records = std::vector<std::shared_ptr<const LightRecord>>{};
+  lights.records.forEach(
+    [&](const PreviewId&, const std::shared_ptr<const LightRecord>& record) {
+      if (record)
+      {
+        records.push_back(record);
+      }
+    });
+  std::ranges::sort(
+    records, [](const auto& lhs, const auto& rhs) { return lhs->id < rhs->id; });
+
+  for (const auto& record : records)
+  {
+    const auto& shader = record->derived.shader;
+    if (
+      !record->visible || !record->derived.hasVolume || shader.pending
+      || !shader.material)
+    {
+      continue;
+    }
+    // R_CreateLightDefFogPortals: only fog lights, and some fog lights will explicitly
+    // disallow portal fogging
+    if (
+      !shader.material->fogLight
+      || (shader.material->materialFlags & engine_material::FlagNoPortalFog) != 0)
+    {
+      continue;
+    }
+    const auto& baseLightProject = record->derived.projection.baseLightProject;
+    for (const auto areaNum : record->derived.areas)
+    {
+      if (areaNum < 0 || std::size_t(areaNum) >= areas.areas.size())
+      {
+        continue;
+      }
+      for (const auto& prt : areas.areas[std::size_t(areaNum)].portals)
+      {
+        // we only handle a single fog volume covering a portal; this will never cause
+        // incorrect drawing, but it may fail to cull a portal
+        if (table.fogLights[prt.portal] != NoPreviewId)
+        {
+          continue;
+        }
+        // WindingCompletelyInsideLight
+        const auto inside = std::ranges::none_of(prt.points, [&](const EngineVec3& p) {
+          return engineCullPointToMvp(baseLightProject, p, true);
+        });
+        if (inside)
+        {
+          table.fogLights[prt.portal] = record->id;
+        }
+      }
+    }
+  }
+  return table;
+}
+
+bool enginePortalIsFoggedOut(
+  const LitView& view, const float a, const std::span<const EngineVec3> winding)
+{
+  const auto& mv = view.worldModelViewMatrix;
+  const auto forward = EnginePlane{
+    a * mv[0 * 4 + 2], a * mv[1 * 4 + 2], a * mv[2 * 4 + 2], a * mv[3 * 4 + 2]};
+  for (const auto& point : winding)
+  {
+    const float d = enginePlaneDistance(forward, point);
+    if (d < 0.5f)
+    {
+      return false; // a point not clipped off
+    }
+  }
+  return true;
 }
 
 ViewFlowResult flowView(const ViewFlowInputs& inputs)

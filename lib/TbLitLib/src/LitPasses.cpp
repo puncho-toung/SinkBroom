@@ -432,6 +432,7 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   key.lightsVersion = inputs.lights ? inputs.lights->version : 0;
   key.tree = inputs.procTree.get();
   key.areas = inputs.areas.get();
+  key.portalFog = inputs.portalFog.get();
   // LP4.3 (D79): the grid's dispatch reads the atlas slots' states, only with a grid
   const auto hasGrid = inputs.grid && !inputs.grid->areas.empty();
   key.grid = inputs.grid.get();
@@ -490,6 +491,7 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   frontend.lights = inputs.lights.get();
   frontend.tree = inputs.procTree.get();
   frontend.areas = inputs.areas.get();
+  frontend.portalFog = inputs.portalFog.get();
   // LP4.3 (C36): an area's grid is valid when it has points and its atlas slot holds an
   // image (Resident, or Loading: its texture is made and written as the frame uploads);
   // Pending is not loaded yet, Default the engine's defaulted image (D88)

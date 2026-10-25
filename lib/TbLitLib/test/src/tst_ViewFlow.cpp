@@ -21,6 +21,7 @@
 // on synthetic trees, and the area predicates.
 
 #include "LitMapFixture.h"
+#include "LitStages.h"
 #include "LitTestUtils.h"
 #include "ViewFlow.h"
 #include "lit/AreaData.h"
@@ -613,6 +614,136 @@ TEST_CASE("ViewFlow: the grid area of a model surface (C36, P4.11)")
     engineMatrixFromOriginAxis({-180, 0, 48}, {1, 0, 0, 0, 1, 0, 0, 0, 1});
   CHECK(
     surfaceGridArea(f.tree, east, spread, std::vector<int>{1, 0}, valid({0, 1})) == 0);
+}
+
+TEST_CASE("ViewFlow: the fog portals (LP5.3, C49, D123, D83 closed)")
+{
+  const auto& f = fixture();
+  // the fixture's one portal: x = 8, y -32..32, z 0..96 (portal 0); the eye in area 0 at
+  // x 200 looking west sees it 192 ahead, every winding point at view depth 192
+  REQUIRE(f.areas.areas.size() == 2u);
+  const auto fogged = [&](const LitView& view, const ViewFlowPortalFog& fog) {
+    const auto portalFog = std::vector<ViewFlowPortalFog>{fog};
+    auto inputs = inputsOf(view, f.tree, f.areas);
+    inputs.portalFog = portalFog;
+    return flowView(inputs);
+  };
+  const auto far = viewFrom({200, 0, 64}, {-1, 0, 0});
+
+  SECTION("PortalIsFoggedOut: every point at d = 0.5 · depth / distance >= 0.5")
+  {
+    // a fog distance of 150: d = 0.5 · 192 / 150 = 0.64 at every point: fogged out, no
+    // chain into area 1
+    const auto out =
+      fogged(far, ViewFlowPortalFog{true, false, engineFogDensity(150.0f)});
+    CHECK(out.areaFlowed == std::vector<bool>{true, false});
+    CHECK(out.portalsFogged == 1u);
+    CHECK(out.portalsVisited == 0u);
+    CHECK_FALSE(out.worldRects[1]);
+    CHECK(enginePortalIsFoggedOut(
+      far, engineFogDensity(150.0f), f.areas.areas[0].portals.front().points));
+    // a distance of 300: d = 0.32, flowed
+    const auto open =
+      fogged(far, ViewFlowPortalFog{true, false, engineFogDensity(300.0f)});
+    CHECK(open.areaFlowed == std::vector<bool>{true, true});
+    CHECK(open.portalsFogged == 0u);
+    // the default distance (alpha <= 1): 500, flowed
+    CHECK(
+      fogged(far, ViewFlowPortalFog{true, false, engineFogDensity(1.0f)}).areaFlowed
+      == std::vector<bool>{true, true});
+  }
+
+  SECTION("a closer camera: the doorway within the fog distance, flowed")
+  {
+    // 92 ahead: d = 0.5 · 92 / 150 = 0.31
+    const auto result = fogged(
+      viewFrom({100, 0, 64}, {-1, 0, 0}),
+      ViewFlowPortalFog{true, false, engineFogDensity(150.0f)});
+    CHECK(result.areaFlowed == std::vector<bool>{true, true});
+    CHECK(result.portalsFogged == 0u);
+  }
+
+  SECTION("a pending fog light leaves its portal open; none assigned is open")
+  {
+    CHECK(
+      fogged(far, ViewFlowPortalFog{true, true, engineFogDensity(150.0f)}).areaFlowed
+      == std::vector<bool>{true, true});
+    CHECK(
+      fogged(far, ViewFlowPortalFog{false, false, engineFogDensity(150.0f)}).areaFlowed
+      == std::vector<bool>{true, true});
+  }
+
+  SECTION("the clipped branch only: within 1.0 of the portal's plane it is not tested")
+  {
+    const auto result = fogged(
+      viewFrom({8.5f, 0, 48}, {-1, 0, 0}),
+      ViewFlowPortalFog{true, false, engineFogDensity(1.5f)});
+    CHECK(result.areaFlowed == std::vector<bool>{true, true});
+    CHECK(result.portalsFogged == 0u);
+  }
+
+  SECTION("the portal -> fog light table: the first fog light by preview id, whole")
+  {
+    const auto fogRecord = [&](
+                             const PreviewId id,
+                             const float radius,
+                             const int flags,
+                             const bool fog,
+                             const float yRadius = 0.0f) {
+      auto material = std::make_shared<MaterialEntry>();
+      material->name = "lights/test_fog";
+      material->fogLight = fog;
+      material->materialFlags = flags;
+      auto geometry = EngineLightGeometry{};
+      geometry.origin = {-20, 0, 48};
+      geometry.lightRadius = {radius, yRadius > 0.0f ? yRadius : radius, radius};
+      geometry.pointLight = true;
+      auto record = LightRecord{};
+      record.id = id;
+      record.derived.shader.name = material->name;
+      record.derived.shader.material = material;
+      record.derived.projection = engineDeriveLightProjection(geometry);
+      record.derived.areas = {1, 0};
+      return std::make_shared<const LightRecord>(std::move(record));
+    };
+    const auto tableOf =
+      [&](const std::vector<std::shared_ptr<const LightRecord>>& lights) {
+        auto table = LightTable{};
+        table.version = 9;
+        for (const auto& record : lights)
+        {
+          table.records = table.records.set(record->id, record);
+        }
+        return buildPortalFogTable(table, f.areas, table.version);
+      };
+    // radius 60 about ( -20 0 48 ): x -80..40, y -60..60, z -12..108 holds the winding
+    const auto one = tableOf({fogRecord(5, 60.0f, 0, true)});
+    REQUIRE(one.fogLights.size() == 1u);
+    CHECK(one.fogLights[0] == 5u);
+    CHECK(one.lightsVersion == 9u);
+    CHECK(one.areas == &f.areas);
+    // two fog lights holding it: the first by preview id wins (M-FLOW-DIFF-01)
+    CHECK(
+      tableOf({fogRecord(5, 60.0f, 0, true), fogRecord(3, 70.0f, 0, true)}).fogLights[0]
+      == 3u);
+    // MF_NOPORTALFOG: never assigned, the next fog light takes it
+    CHECK(
+      tableOf({fogRecord(3, 70.0f, engine_material::FlagNoPortalFog, true)}).fogLights[0]
+      == NoPreviewId);
+    CHECK(
+      tableOf({fogRecord(3, 70.0f, engine_material::FlagNoPortalFog, true),
+               fogRecord(5, 60.0f, 0, true)})
+        .fogLights[0]
+      == 5u);
+    // a volume that does not hold every point (z 0..96 needs a radius over 48: 40 gives z
+    // 8..88), and a light that is not a fog light
+    CHECK(tableOf({fogRecord(5, 40.0f, 0, true)}).fogLights[0] == NoPreviewId);
+    CHECK(tableOf({fogRecord(5, 60.0f, 0, false)}).fogLights[0] == NoPreviewId);
+    // a point on the volume's boundary is outside (CullPointToMVP is strict): a y radius
+    // of 32 puts y -+32 exactly on its planes (clip y 0 and w)
+    CHECK(tableOf({fogRecord(5, 60.0f, 0, true, 32.0f)}).fogLights[0] == NoPreviewId);
+    CHECK(tableOf({fogRecord(5, 60.0f, 0, true, 33.0f)}).fogLights[0] == 5u);
+  }
 }
 
 #if defined(_MSC_VER) && defined(_DEBUG)

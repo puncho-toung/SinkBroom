@@ -1252,6 +1252,8 @@ bool RenderThread::recordLitPasses(
     // chunks are not the scene's, so they are drawn without it (D94)
     inputs.procTree = m_geometry->procTree();
     inputs.areas = m_geometry->areaData();
+    // LP5.3 (C49, D123): the fog portals of that tree's areas
+    inputs.portalFog = m_geometry->portalFogTable();
     // LP4.3 (C36): the bake's light grid, read with its tree
     inputs.grid = m_geometry->gridTable();
   }

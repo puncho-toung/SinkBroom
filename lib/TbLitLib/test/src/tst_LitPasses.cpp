@@ -2029,6 +2029,112 @@ TEST_CASE("LitPasses: the frontend lists of the LP1b fixture (C27, A1, D67)")
   CHECK(around->scissor.y2 == 95);
 }
 
+TEST_CASE("LitPasses: the fog portals in the frontend's flow (LP5.3, C49, D123, P6.6)")
+{
+  // the LP1b fixture's tree: area 0 the east room (x 8..256), area 1 the west room, one
+  // portal on x = 8 (y -32..32, z 0..96); lp1b_light (64 0 96, radius 200) holds it
+  auto f = frontendFixture();
+  const auto proc = f->lightInput.proc;
+  REQUIRE(proc);
+  const auto areas = buildAreaData(*proc);
+  REQUIRE(areas.areas.size() == 2u);
+  const auto westFrom = [](const float x) {
+    auto camera = CameraState{};
+    camera.position = vm::vec3f{x, 0, 64};
+    camera.direction = vm::vec3f{-1, 0, 0};
+    camera.up = vm::vec3f{0, 0, 1};
+    camera.fovDegrees = 90.0f;
+    return camera;
+  };
+  const auto withRecord = [&](const std::shared_ptr<const LightRecord>& record) {
+    auto table = LightTable{};
+    table.version = 2;
+    f->lights.records.forEach([&](const PreviewId& id, const auto& other) {
+      if (other)
+      {
+        table.records = table.records.set(id, id == record->id ? record : other);
+      }
+    });
+    return table;
+  };
+  const auto listsWith = [&](
+                           const LightTable& lights,
+                           const PortalFogTable& portalFog,
+                           const CameraState& camera,
+                           const PreviewId withheld = NoPreviewId) {
+    auto inputs = FrontendInputs{};
+    inputs.view = litViewOf(camera, 128, 96);
+    inputs.chunks = &f->chunkMap;
+    inputs.entities = &f->entities;
+    inputs.lights = &lights;
+    inputs.tree = proc.get();
+    inputs.areas = &areas;
+    inputs.portalFog = &portalFog;
+    inputs.material = [&](const std::string& name) {
+      const auto slot = f->table->find(name);
+      return MaterialAnswer{slot ? slot->entry : nullptr, !slot};
+    };
+    inputs.registers = [&](
+                         const PreviewId consumer,
+                         const MaterialEntry& material,
+                         const ShaderParms& parms) {
+      return consumer == withheld ? RegisterAnswer{}
+                                  : evaluatedRegisters(*f, material, parms);
+    };
+    return buildFrontendLists(inputs);
+  };
+
+  // a fog distance of 150 (shaderParm3 through the fog material's colored parm3)
+  const auto fog = lightRecordWith(
+    *f, "lp1b_light", {{"texture", "lights/lp51/fog"}, {"shaderParm3", "150"}});
+  REQUIRE(fog->derived.shader.material);
+  REQUIRE(fog->derived.shader.material->fogLight);
+  const auto lights = withRecord(fog);
+  const auto portalFog = buildPortalFogTable(lights, areas, lights.version);
+  REQUIRE(portalFog.fogLights.size() == 1u);
+  CHECK(portalFog.fogLights[0] == fog->id);
+
+  SECTION("from 192 ahead the doorway is beyond the fog distance: area 1 is not flowed")
+  {
+    const auto lists = listsWith(lights, portalFog, westFrom(200));
+    CHECK(lists.viewArea == 0);
+    CHECK(lists.areasFlowed == 1u);
+    CHECK(lists.portalsFogged >= 1u);
+    CHECK_FALSE(lists.pending);
+    // without the table the doorway is flowed
+    const auto none = PortalFogTable{};
+    CHECK(listsWith(lights, none, westFrom(200)).areasFlowed == 2u);
+  }
+
+  SECTION("a closer camera: flowed")
+  {
+    const auto lists = listsWith(lights, portalFog, westFrom(100));
+    CHECK(lists.areasFlowed == 2u);
+    CHECK(lists.portalsFogged == 0u);
+  }
+
+  SECTION("noPortalFog: the light assigns no portal, flowed")
+  {
+    auto noPortal = *fog;
+    auto material = std::make_shared<MaterialEntry>(*fog->derived.shader.material);
+    material->materialFlags |= engine_material::FlagNoPortalFog;
+    noPortal.derived.shader.material = material;
+    const auto noPortalLights =
+      withRecord(std::make_shared<const LightRecord>(std::move(noPortal)));
+    const auto table = buildPortalFogTable(noPortalLights, areas, noPortalLights.version);
+    CHECK(table.fogLights[0] == NoPreviewId);
+    CHECK(listsWith(noPortalLights, table, westFrom(200)).areasFlowed == 2u);
+  }
+
+  SECTION("the fog light's registers first-seen: the portal open, the frame unconverged")
+  {
+    const auto lists = listsWith(lights, portalFog, westFrom(200), fog->id);
+    CHECK(lists.areasFlowed == 2u);
+    CHECK(lists.portalFogPending == 1u);
+    CHECK(lists.pending);
+  }
+}
+
 TEST_CASE("LitPasses: math, ambientLight, fog and blend lights in the lists (LP5.1, C45)")
 {
   auto f = frontendFixture();

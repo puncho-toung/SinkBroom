@@ -19,6 +19,7 @@
 
 #include "lit/SceneGeometry.h"
 
+#include "ViewFlow.h"
 #include "lit/AreaData.h"
 #include "lit/EngineLight.h"
 #include "lit/EntityState.h"
@@ -1076,6 +1077,26 @@ std::shared_ptr<const AreaData> SceneGeometry::areaData() const
 std::shared_ptr<const LightTable> SceneGeometry::lightTable() const
 {
   return m_lights.table();
+}
+
+std::shared_ptr<const PortalFogTable> SceneGeometry::portalFogTable() const
+{
+  if (!m_areas)
+  {
+    m_portalFog.reset();
+    m_portalFogAreas.reset();
+    return m_portalFog;
+  }
+  const auto lights = m_lights.table();
+  if (
+    !m_portalFog || m_portalFogAreas != m_areas
+    || m_portalFog->lightsVersion != lights->version)
+  {
+    m_portalFogAreas = m_areas;
+    m_portalFog = std::make_shared<const PortalFogTable>(
+      buildPortalFogTable(*lights, *m_areas, lights->version));
+  }
+  return m_portalFog;
 }
 
 std::shared_ptr<const ProbeTable> SceneGeometry::probeTable() const

@@ -51,6 +51,7 @@ namespace tb::lit
 {
 struct AreaData;
 struct GridTable;
+struct PortalFogTable;
 struct ProcTree;
 
 // a chunk's material as the frontend finds it: an entry, pending (not in the table yet),
@@ -183,6 +184,10 @@ struct FrontendLists
   // the areas AddAreaToView marked (area.viewCount), and the chains it was called with
   std::size_t areasFlowed = 0;
   std::size_t portalChains = 0;
+  // LP5.3 (C49, D123): the portal sides the flow found fogged out, and the portals whose
+  // fog light's registers were first-seen (left open; the lists pending)
+  std::size_t portalsFogged = 0;
+  std::size_t portalFogPending = 0;
   // the view lights that went on to the pairing: a flow rect (or the outside set's
   // projected rect alone, D81), registers that add light, and a scissor that is not
   // empty (before R_OptimizeViewLightsList drops those without a surface): the viewLights
@@ -216,6 +221,9 @@ struct FrontendInputs
   // without nodes): no flow, LP2's rules
   const ProcTree* tree = nullptr;
   const AreaData* areas = nullptr;
+  // LP5.3 (C49, D123): the scene's portal -> fog light table (SceneGeometry::
+  // portalFogTable) of these areas; null, or another AreaData's: no portal is fogged
+  const PortalFogTable* portalFog = nullptr;
   // LP4.3 (C36, D79, P4.11): the bake's light grid (null or empty: none) and whether an
   // area's grid is valid now: it has points and its atlas is Ready or Loading (the
   // engine's lightGridPoints.Num() && image && !image->IsDefaulted(),
@@ -381,6 +389,13 @@ std::vector<const LitSurface*> stagePassOrder(
  * before LP2's tests. The lights stay in id order before the sort (M-FRONT-DIFF-01).
  * Without a tree (D94) every rule is LP2's: no flow, every chunk a candidate, the view's
  * scissor.
+ *
+ * LP5.3 (C49, D123, P6.6, P6.8): with a tree and a portal -> fog light table of its
+ * AreaData, before flowView the registers of each assigned fog light are asked for (its
+ * record's shader and shaderParms, the consumer its preview id: the same answer its view
+ * light gets) and the flow gets per portal the density of stage 0's alpha
+ * (engineFogDensity), or pending when they are first-seen: the portal stays open and the
+ * lists are pending; kept registers (D52) are used, the lists pending as for any light.
  *
  * LP4.3 (C36, P4.11, D81): with a tree and a grid, every visible surface whose material
  * receives lighting gets its grid area from surfaceGridArea (lit/ViewFlow.h): a world

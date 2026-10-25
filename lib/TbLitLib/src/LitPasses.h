@@ -87,6 +87,9 @@ struct LitFrameInputs
   // areaData), which the frontend's portal flow runs on; null: no flow, LP2's rules
   std::shared_ptr<const ProcTree> procTree;
   std::shared_ptr<const AreaData> areas;
+  // LP5.3 (C49, D123): the scene's portal -> fog light table (SceneGeometry::
+  // portalFogTable), with the tree; null: no portal is fogged
+  std::shared_ptr<const PortalFogTable> portalFog;
   // LP4.2a (C37, D87): the scene's probe records (SceneGeometry::probeTable), which the
   // view's probe choice reads every frame; null: none
   std::shared_ptr<const ProbeTable> probes;
@@ -380,6 +383,8 @@ private:
     // change only when a batch applies, which raises chunksVersion
     const void* tree = nullptr;
     const void* areas = nullptr;
+    // LP5.3 (D123): a new table comes with a new light table or AreaData
+    const void* portalFog = nullptr;
     // LP4.3 (D79, P4.6): the grid table, and with a grid which of its areas' grids are
     // valid now (a Ready or Missing atlas changes the grid-area dispatch)
     const void* grid = nullptr;

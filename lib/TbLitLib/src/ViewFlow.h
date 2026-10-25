@@ -53,6 +53,7 @@
 namespace tb::lit
 {
 struct LightRecord;
+struct LightTable;
 struct ProcTree;
 
 // MAX_PORTAL_PLANES (RenderWorld_portals.cpp:37): a stack's edge planes; the portal's
@@ -84,6 +85,58 @@ struct ViewFlowEntity
   EngineMat4 inverseBaseModelProject = {};
 };
 
+/**
+ * LP5.3 (C49, D123, P6.8; D83 closed): the scene's portal -> fog light table,
+ * R_CreateLightDefFogPortals (RenderWorld_defs.cpp:647-687, called by R_CreateLightRefs
+ * at :729 after the light's references) over every light record: per portal (its
+ * doublePortal_t, AreaPortal::portal) the first fog light that assigned itself, the
+ * records taken in preview-id order where the engine takes its lights in their creation
+ * order (mirror.json M-FLOW-DIFF-01, restated: a portal two fog volumes hold may take
+ * another one's). A record assigns itself when it is visible, has a volume, its shader
+ * known, a fogLight shader without MF_NOPORTALFOG; then per area of its references and
+ * per portal side of the area (the area's list) whose portal has no fog light yet, when
+ * every point of the side's winding is inside the light's volume
+ * (WindingCompletelyInsideLight, :627-637: !CullPointToMVP( baseLightProject, p, true ),
+ * strict: a point on the volume's boundary is outside). Built by the scene
+ * (SceneGeometry::portalFogTable) whenever its light table or its AreaData changes (a
+ * fog light, its shader's fogLight or MF_NOPORTALFOG through a re-parse, which builds the
+ * light's record again, C43/D106, or a new tree); immutable once published. Pure.
+ */
+struct PortalFogTable
+{
+  // per portal index, the fog light's preview id; NoPreviewId: none
+  std::vector<PreviewId> fogLights;
+  // what it was built from
+  std::uint64_t lightsVersion = 0;
+  const AreaData* areas = nullptr;
+};
+
+PortalFogTable buildPortalFogTable(
+  const LightTable& lights, const AreaData& areas, std::uint64_t lightsVersion);
+
+/**
+ * LP5.3 (C49, D123, P6.6): a portal's fog as the view's flow tests it: its fog light's
+ * density a from the registers the frontend evaluated before the flow (engineFogDensity
+ * of stage 0's alpha register, as FogPass computes it), or pending (the light's
+ * registers first-seen: the portal stays open and the frame unconverged).
+ */
+struct ViewFlowPortalFog
+{
+  bool assigned = false;
+  bool pending = false;
+  float a = 0.0f;
+};
+
+/**
+ * idRenderWorldLocal::PortalIsFoggedOut (RenderWorld_portals.cpp:458-507) for a portal
+ * whose fog light's density is a: forward = a · the world's modelViewMatrix column 2,
+ * without FogPass' + 0.5; the portal is fogged out when every point of the winding (the
+ * side's unclipped p->w) has forward.Distance( point ) >= 0.5, that is lies at least the
+ * fog distance ahead in view depth. Pure.
+ */
+bool enginePortalIsFoggedOut(
+  const LitView& view, float a, std::span<const EngineVec3> winding);
+
 // a portal chain entered into an area (AddAreaToView), for the tests and the log
 struct ViewFlowChain
 {
@@ -103,6 +156,8 @@ struct ViewFlowInputs
   const AreaData* areas = nullptr;
   std::span<const ViewFlowLight> lights;
   std::span<const ViewFlowEntity> entities;
+  // LP5.3 (C49, D123): per portal index its fog (none past the span's end)
+  std::span<const ViewFlowPortalFog> portalFog;
   // tests: the view's scissor (viewDef->scissor) to use instead of viewScissor( view )
   std::optional<ScreenRect> scissorForTesting;
   // tests: every chain entered, in order, in ViewFlowResult::chainsForTesting
@@ -134,6 +189,8 @@ struct ViewFlowResult
   // AddAreaToView calls, and the portal sides gone through
   std::size_t chains = 0;
   std::size_t portalsVisited = 0;
+  // LP5.3: the portal sides PortalIsFoggedOut closed (each time it did)
+  std::size_t portalsFogged = 0;
   // false without a tree (D94)
   bool flowed = false;
   std::vector<ViewFlowChain> chainsForTesting;
@@ -149,7 +206,9 @@ struct ViewFlowResult
  * FlowViewThroughPortals (:658-687), FloodViewThroughArea_r (:514-647), AddAreaToView
  * (:412-421, no probes: SC306), AddAreaViewEntities (:222-267), AddAreaViewLights
  * (:364-402), ScreenRectFromWinding (:428-451) and the corner culls (:131-146, :276-291).
- * PortalIsFoggedOut is false (D83, M-FLOW-DIFF-01) and no portal blocks (K30). The
+ * LP5.3 (D123, D83 closed): PortalIsFoggedOut on the clipped branch alone (:590-594),
+ * after the winding's clip, over the side's unclipped winding, from portalFog (a pending
+ * fog light's portal stays open); no portal blocks (K30). The
  * recursion is an explicit stack on the heap, each frame's planes and clipped winding in
  * heap memory; each portal side enters a stack once, so its depth is at most twice the
  * portal count (P4.23: the render thread is a plain std::thread). Pure.

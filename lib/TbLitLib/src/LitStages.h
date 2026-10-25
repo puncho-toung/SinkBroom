@@ -77,6 +77,8 @@ constexpr int FlagPolygonOffset = 1 << 1;
 constexpr int FlagNoShadows = 1 << 2;
 constexpr int FlagForceShadows = 1 << 3;
 constexpr int FlagNoSelfShadow = 1 << 4;
+// LP5.3 (C49, D123): MF_NOPORTALFOG (:352), the material keyword noPortalFog
+constexpr int FlagNoPortalFog = 1 << 5;
 // texgen_t (:158-169)
 constexpr int TexgenExplicit = 0;
 constexpr int TexgenDiffuseCube = 1;
