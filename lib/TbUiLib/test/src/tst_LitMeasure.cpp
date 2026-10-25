@@ -152,6 +152,8 @@ constexpr auto OrbitRadius = 64.0f;
 // no frame for this long after a settled one: the frame is the last of its trigger
 constexpr auto QuietTime = 2000ms;
 constexpr auto IdleTime = 5s;
+// LP5.G: after the reload, with the material service's poll on
+constexpr auto ReloadIdleTime = 20s;
 
 std::filesystem::path outputFolder()
 {
@@ -1990,11 +1992,9 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   };
   auto reloadFirstMs = -1.0;
   auto reloadSettledMs = -1.0;
-  // LP5.3: a reload whose rebuilt scene uploads nothing draws no frame in a settled
-  // session (RenderThread::geometryTick triggers on uploads or on what the last frame
-  // waited for, litTableTick only while the passes waited for a table); a camera move
-  // draws the next. Seen on admin at LP5.3's second measurement: the table and the
-  // batches move, no frame comes; reported as "no frame", not failed
+  // LP5.G: the reload's build gives the scene work (every cell built again), which
+  // RenderThread::tableTick draws a frame for at once; LP5.3 saw none on admin (the
+  // rebuilt chunks byte-identical, so no upload triggered one): "no frame" fails
   const auto reloadDrawn = sampler.runUntil(
     [&] {
       for (auto i = recordsBeforeReload; i < sampler.frames.size(); ++i)
@@ -2008,36 +2008,40 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       return false;
     },
     20s);
-  if (reloadDrawn)
+  if (!reloadDrawn)
   {
-    REQUIRE(sampler.runUntil(
-      [&] { return sampler.quietlySettled() && afterReload(sampler.frames.back()); },
-      60s));
-    // settled for good after the reload, as a Start's (StartMeasure::findSettled)
-    auto reload = StartMeasure{};
-    reload.pressed = reloadAt;
-    reload.records.assign(
-      sampler.frames.begin() + std::ptrdiff_t(recordsBeforeReload), sampler.frames.end());
-    reload.findSettled();
-    reloadSettledMs = reload.settledMs;
-    std::cout << fmt::format(
-      "material reload: the first frame on the rebuilt chunks after {:.0f} ms, settled "
-      "after {:.0f} ms\n",
-      reloadFirstMs,
-      reloadSettledMs);
-  }
-  else
-  {
-    std::cout << fmt::format(
+    FAIL(fmt::format(
       "material reload: no frame in 20 s (table {} -> {}, scene batches {} -> {}, "
-      "frames {} -> {}): the settled session draws nothing for it\n",
+      "frames {} -> {}): the settled session draws nothing for it",
       tableBeforeReload,
       panel.materialsVersionForTesting(),
       batchesBeforeReload,
       secondSession->geometryBatchesForTesting(),
       recordsBeforeReload,
-      sampler.frames.size());
+      sampler.frames.size()));
   }
+  REQUIRE(sampler.runUntil(
+    [&] { return sampler.quietlySettled() && afterReload(sampler.frames.back()); }, 60s));
+  // settled for good after the reload, as a Start's (StartMeasure::findSettled)
+  auto reload = StartMeasure{};
+  reload.pressed = reloadAt;
+  reload.records.assign(
+    sampler.frames.begin() + std::ptrdiff_t(recordsBeforeReload), sampler.frames.end());
+  reload.findSettled();
+  reloadSettledMs = reload.settledMs;
+  std::cout << fmt::format(
+    "material reload: the first frame on the rebuilt chunks after {:.0f} ms, settled "
+    "after {:.0f} ms\n",
+    reloadFirstMs,
+    reloadSettledMs);
+  // LP5.G: then idle with the panel's poll on and no file changed: no frame
+  const auto framesBeforeReloadIdle = sampler.lastFrames;
+  sampler.runFor(ReloadIdleTime);
+  const auto reloadIdleFrames = sampler.lastFrames - framesBeforeReloadIdle;
+  std::cout << fmt::format(
+    "idle after the reload, the poll on: {} frames in {} s\n",
+    reloadIdleFrames,
+    std::chrono::duration_cast<std::chrono::seconds>(ReloadIdleTime).count());
   const auto secondVramPeak = sampler.vramPeak;
   keepRecords(second);
   const auto allocationsAfterSecondStop = stopPreview();
@@ -2130,6 +2134,12 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     "|\n",
     msText(reloadFirstMs),
     msText(reloadSettledMs));
+  summary += fmt::format(
+    "| Idle after the reload, the poll on, no file changed | {} frames in {} s | zero "
+    "frames | {} |\n",
+    reloadIdleFrames,
+    std::chrono::duration_cast<std::chrono::seconds>(ReloadIdleTime).count(),
+    pass(reloadIdleFrames == 0));
   for (const auto* measure : {&first, &second, &third})
   {
     const auto loaded = loadedBy(log, *measure);
@@ -2383,6 +2393,7 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
             << frameLogPath.string() << "\n";
 
   CHECK(idleFrames == 0u);
+  CHECK(reloadIdleFrames == 0u);
   CHECK(allocationsAfterFirstStop == 0);
   CHECK(allocationsAfterSecondStop == 0);
   CHECK(allocationsAfterThirdStop == 0);
