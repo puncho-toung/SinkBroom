@@ -8440,7 +8440,7 @@
           "symbol": "buildChunks"
         }
       ],
-      "note": "D59, C4: the material name with textures/ (a patch's only when missing), overrideMaterial; neither drawn nor shadow-casting sides skipped; plane from the origin-relative points with FixDegeneracies; st from the origin-relative position (TriListForSide runs before WriteUTriangles subtracts originOffset); SetNormal twice as ShareMapTriVerts stores it (golden (a) found the -1 component's byte moving 0 -> 1); patches through the copied subdivision with ParseSurface's rotation, degenerate pinched triangles skipped, every triangle's corners by TriVertsFromOriginal (R3.5, M-GEO-FN-16); LP2.3 (found by the parity rows, golden (e)): each welded vertex is then loaded as ParseModel loads what dmap wrote: a cleared vertex with the xyz, st and SetNormal( the text round trip of GetNormal() ), so a face facing -x, -y or -z carries 129 129 0 (not 128 128 1) and the normal's fourth byte is 0"
+      "note": "D59, C4: the material name with textures/ (a patch's only when missing), overrideMaterial; neither drawn nor shadow-casting sides skipped; plane from the origin-relative points with FixDegeneracies; st from the origin-relative position (TriListForSide runs before WriteUTriangles subtracts originOffset); SetNormal twice as ShareMapTriVerts stores it (golden (a) found the -1 component's byte moving 0 -> 1); patches through the copied subdivision with ParseSurface's rotation, degenerate pinched triangles skipped, every triangle's corners by TriVertsFromOriginal (R3.5, M-GEO-FN-16); LP2.3 (found by the parity rows, golden (e)): each welded vertex is then loaded as ParseModel loads what dmap wrote: a cleared vertex with the xyz, st and SetNormal( the text round trip of GetNormal() ), so a face facing -x, -y or -z carries 129 129 0 (not 128 128 1) and the normal's fourth byte is 0; the st divide by the material's C21 editor-image size, 8 x 8 while it is Default, and such a chunk is Chunk::provisional, which SceneGeometry::apply reads (LP5.F, M-IMG-DIFF-08: no settled frame while its slot's measure is to come)"
     },
     {
       "id": "M-GEO-FN-11",
@@ -11977,9 +11977,17 @@
         {
           "file": "lib/TbLitLib/src/EditorImageSize.cpp",
           "symbol": "imageUploadSize"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "SceneGeometry::apply, scanTable, updateMeasureWait, waitsForMaterials (SizedCells::measured)"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::converge (FrameConvergence::provisionalChunks), geometryTick, sceneWaitState"
         }
       ],
-      "note": "LP1c fix (S2.2): the engine sizes an editor image when dmap loads it; the preview publishes a material at once with its last Ready size for the same image chain (D52, S3.15) or the registry's Default, unmeasured, and measures it on a low-priority queue (steps of 20 ms) only once a consumer looked it up (the bulk parse measures nothing; a lookup of a bulk-parsed name queues it). The measure never decodes: a usable cache's 36-byte header; else a 2D image or program by its first leaf's header, once the time call found every leaf (a missing leaf ends the copied time call, so its last probe is a miss); a six-file cube by side 0 after M-IMG-GUARD-03; a CF_SINGLE cube by its cube size once the picture's header holds the 4 x 3 sides; a panorama 1024. Headers come through small bounded reads (4 KB, 64 KB, 1 MB; readImageFileHeader), with the header rules and the lengths a header tells; the body of a file (RLE packets, PNG chunks, JPEG scans, EXR blocks) is not walked, so a file the pre-validation refuses by its body has a Ready size here (M-IMG-DIFF-07). A kept Ready size stands for a Default measure only while the files it was measured from are unchanged; a deleted texture returns to Default"
+      "note": "LP1c fix (S2.2): the engine sizes an editor image when dmap loads it; the preview publishes a material at once with its last Ready size for the same image chain (D52, S3.15) or the registry's Default, unmeasured, and measures it on a low-priority queue (steps of 20 ms) only once a consumer looked it up (the bulk parse measures nothing; a lookup of a bulk-parsed name queues it). The measure never decodes: a usable cache's 36-byte header; else a 2D image or program by its first leaf's header, once the time call found every leaf (a missing leaf ends the copied time call, so its last probe is a miss); a six-file cube by side 0 after M-IMG-GUARD-03; a CF_SINGLE cube by its cube size once the picture's header holds the 4 x 3 sides; a panorama 1024. Headers come through small bounded reads (4 KB, 64 KB, 1 MB; readImageFileHeader), with the header rules and the lengths a header tells; the body of a file (RLE packets, PNG chunks, JPEG scans, EXR blocks) is not walked, so a file the pre-validation refuses by its body has a Ready size here (M-IMG-DIFF-07). A kept Ready size stands for a Default measure only while the files it was measured from are unchanged; a deleted texture returns to Default. LP5.F (D77 as A41 restates it, A6, D18; 43-FLOOR-PROBE-FLAKE.md): a chunk built at the Default size while its slot is unmeasured (Chunk::provisional) is drawn provisionally at 8 x 8 as before, and no frame that draws it is settled: SceneGeometry's sized cells record at apply whether that size is final (a non-provisional chunk, or a measured or Failed slot), waitsForMaterials holds while one is not, and so FrameConvergence::provisionalChunks; a scanned table whose slot is measured at the same size ends the wait without a rebuild (a measured Default is the engine's 8 x 8 for an image it cannot load), another size rebuilds the cells (S2.5). The scan moves the scene's wait state, which triggers the next frame (geometryTick); a bulk-parsed slot is looked up once its wait starts, so its measure is queued. The engine has no such frame: dmap sized every editor image before the map was drawn. A kept Ready size (D52) and a remeasure after an override (D111) leave the chunk non-provisional and are not this wait"
     },
     {
       "id": "M-IMG-DIFF-09",
@@ -21755,6 +21763,41 @@
         }
       ],
       "note": "LP5.2b steps 4-5 (C48, C50, P6.2, P6.5, D119), test only: the stages map's texgen rooms from ox 18432 every 1024, each with the S rooms' parallel light (S08's _color 0 0 0: an entity for dmap's flood fill), every row exact with a control of mode row: S08 a skybox stage on a panel before the far wall of an unlit room (the +x face and its structure texel at position - the eye), S09 reflect stages on two opaque panels before the head-on lit wall, without a bump stage (55: colour sRGBAToLinear( 0.5 )) and with _flat (57: colour 0.5), both the -x face, S10 an alpha-tested skybox stage whose prepass hides the lit wall behind (pass 8 then draws the sky EQUAL) beside a gl_zero, gl_one twin (the prepass's black alone), S11 an alpha-tested wobbleSky stage (rates 0) alone under gl_zero, gl_one (the sky at position - 0: the +x face's centre, uniform, where a LOCALVIEWORIGIN other than 0 would show the face's structure texel) beside a blend add twin (plus pass 8's at position - the eye). The cubes: CF_NATIVE files, 16 x 16 faces of a flat colour (channels 0 or 255) with one texel of structure at (4, 6); the preview binds the engine's own .bimage caches of the run. The preview-alone shots before the run showed the faces in the D3D/Vulkan cube convention (+x: s = -z, t = -y) and the prepass's uniform wobbleSky. The engine runs (2026-10-24 23:33-23:50 and 2026-10-25 00:01-00:18; bake 124.8 / 123.3 s, run-a 344.9 / 341.4 s, run-b 345.1 / 343.3 s, every shot's repeat 0, the game folder 21,260 entries before and after each process, the junction gone): the first run's pictures were all exact (the 8 new shots max 0) but S08's sky panel, flush against the walls, the ceiling and the floor, had faces in solid that the preview chunks as the outside set (D81), drawn in every +x S camera's frustum behind its walls: one stage draw over expect on S01-S07, S12-S14 and S08 (a fixture fault, as LP5.2a's S13); the panel was made free-standing (x 376-380, 1 inside the walls) and the engine run once more: 124 of 124 gated rows pass, 2 reported; the 118 earlier rows identical to the gate's at e9fe14247 (pass, max, mean, p99, over1, masked_over_span); S08-S11 and CS08-CS11 max 0 mean 0; lit_min recorded with --only S08,S09,S10,S11 --axial-max 1 (S08 460,800, S09 460,800, S10 335,820, S11 460,800); [.][parity] Debug 47.6 s, 14,808 assertions"
+    },
+    {
+      "id": "M-TEST-SIZE-01",
+      "kind": "difference",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            223,
+            292
+          ],
+          "anchor": "idMaterial::GetEditorImage",
+          "sha256": "5ff0f5eca5eb847c51a795b86ce8c22d2bee5e3085ce55b858aea7bf76dd8d7a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/MaterialService.h",
+          "symbol": "MaterialService::holdMeasuresForTesting"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.h",
+          "symbol": "RenderFrameAccess::chunks"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession provisional editor-image sizes on a GPU (LP5.F); chunksOf, startUp; frameHdr, settledHdr"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_Feed.cpp",
+          "symbol": "Feed host: readbackLdr, ...: no settled frame while a fed image's measure is held, then one"
+        }
+      ],
+      "note": "LP5.F (D77 as A41 restates it, A6, D18), test only: the engine sizes an editor image before dmap writes a st, so it never draws a face at an unmeasured size; the preview publishes a material unmeasured at the registry's Default (M-IMG-DIFF-08). The hidden [.][litgpu2] case holds the material service's measures (holdMeasuresForTesting: the parse thread takes no queued measure and goes on with every other item, the images among them) over LP2.2a's fixture: the floor's slot stays unmeasured, its three chunks are provisional, the floor probe reads (2.2441, 2.2773, 0.0608) (the 8 x 8 UVs on texel ~ (225, 226, 40) of floor.tga, the LP4.2a flake's state), the frame is unconverged (provisionalChunks) and settledHdr takes no frame; released, the first settled frame reads (0.0309, 1.4531, 0). Its second section prints the start-up's frames to the settled frame (the frame log's settled column) on the fixture and with 2000 boxes more. settledHdr requires the frame's own FrameConvergence settled (read after its tonemap passes), so no test accepts a frame the product does not. The [.][feed] section: an image fed and served while the slab's measure is held gives no readback (\"No settled frame within 3000 ms\"), then one once the override's 64 x 64 is measured (D111). The product never holds the measures"
     }
   ],
   "retired": [
