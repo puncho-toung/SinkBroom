@@ -146,6 +146,16 @@ PassDesc stagePassDesc()
   return pass;
 }
 
+// LP5.3 (C49): FogAllLights into hdrFBO, testing the prepass's depth
+PassDesc fogPassDesc()
+{
+  auto pass = PassDesc{};
+  pass.name = "fogLights";
+  pass.reads = {std::string{frame_resource::CurrentDepth}};
+  pass.writes = {std::string{frame_resource::HdrFramebuffer}};
+  return pass;
+}
+
 PassDesc interactionPassDesc()
 {
   auto pass = PassDesc{};
@@ -360,6 +370,26 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
       recordStages(frame);
       m_stats.stagesTimed = endTimer(frame, inputs.stageTimer);
     }
+  }
+
+  if (m_stats.stoppedEarly || (inputs.stopRequested && inputs.stopRequested()))
+  {
+    m_stats.stoppedEarly = true;
+    return m_stats;
+  }
+  // LP5.3 (C49): fog and blend lights, drawn after emissive surfaces so they are properly
+  // dimmed down (RenderBackend.cpp:6131-6136); r_skipAmbient does not gate them (SC530),
+  // nor any test switch (the parity test shoots its fog rows lit)
+  const auto fogTarget = inputs.frame->resolve(fogPassDesc())
+                         | kdl::transform([](const PassResources& resources) {
+                             return resources.writes.front().framebuffer;
+                           })
+                         | kdl::value_or(nullptr);
+  if (fogTarget == frame.framebuffer)
+  {
+    beginTimer(frame, inputs.fogTimer);
+    recordFogLights(frame);
+    m_stats.fogTimed = endTimer(frame, inputs.fogTimer);
   }
   return m_stats;
 }
@@ -1913,6 +1943,281 @@ void LitPasses::recordStages(Frame& frame)
   m_parms.set(RenderParm::Color, Vec4{1.0f, 1.0f, 1.0f, 1.0f});
 }
 
+void LitPasses::recordFogLights(Frame& frame)
+{
+  // FogAllLights (RenderBackend.cpp:5038-5076): r_skipFogLights, r_showOverDraw (0), no
+  // view lights, an xray subview (none here)
+  if (EngineFrame.skipFogLights)
+  {
+    m_stats.fogLightsSkipped = true;
+    return;
+  }
+  if (m_lists.lights.empty())
+  {
+    return;
+  }
+  // force fog plane to recalculate
+  m_currentSpace.reset();
+  for (const auto& light : m_lists.lights)
+  {
+    // a pass boundary between lights
+    if (frame.inputs->stopRequested && frame.inputs->stopRequested())
+    {
+      m_stats.stoppedEarly = true;
+      return;
+    }
+    if (light.kind == ViewLightKind::Fog)
+    {
+      if (!fogPass(frame, light))
+      {
+        m_stats.fogDisabled = true;
+        return;
+      }
+    }
+  }
+}
+
+bool LitPasses::fogPass(Frame& frame, const ViewLight& light)
+{
+  // find the current color and density of the fog (stage 0, no r_lightScale), and the
+  // falloff planes
+  const auto parms = engineFogParms(
+    *light.shader,
+    light.registers,
+    light.fogPlane,
+    frame.view.worldModelViewMatrix,
+    frame.view.viewOrigin);
+  if (!parms)
+  {
+    // a fog shader without a stage: the engine would read past its stage list
+    return true;
+  }
+  ++m_stats.fogLights;
+  m_logLight = light.record->id;
+  m_parms.set(RenderParm::Color, parms->color);
+
+  // texture 0 is the falloff image, texture 1 the entering plane fade correction
+  m_units[0] = intrinsicImageKey("_fog");
+  m_units[1] = intrinsicImageKey("_fogEnter");
+
+  // draw it
+  const auto blend =
+    gls::DepthMask | gls::SrcBlendSrcAlpha | gls::DstBlendOneMinusSrcAlpha;
+  if (
+    !basicFog(
+      frame, light, light.globalInteractions, parms->planes, blend | gls::DepthFuncEqual)
+    || !basicFog(
+      frame, light, light.localInteractions, parms->planes, blend | gls::DepthFuncEqual))
+  {
+    return false;
+  }
+
+  // the light frustum bounding planes aren't in the depth buffer, so use depthfunc_less
+  // instead of depthfunc_equal
+  if (!fogCube(
+        frame, light, parms->planes, blend | gls::DepthFuncLess | gls::CullBackSided))
+  {
+    return false;
+  }
+
+  // GL_State( ( glStateBits & ~GLS_CULL_MASK ) | GLS_CULL_FRONTSIDED ): the next draw's
+  // key carries its own cull
+  return true;
+}
+
+void LitPasses::setFogPlanes(const std::array<EnginePlane, 4>& planes)
+{
+  m_parms.set(RenderParm::TexGen0S, vec4Of(planes[0]));
+  m_parms.set(RenderParm::TexGen0T, vec4Of(planes[1]));
+  m_parms.set(RenderParm::TexGen1T, vec4Of(planes[2]));
+  m_parms.set(RenderParm::TexGen1S, vec4Of(planes[3]));
+}
+
+bool LitPasses::basicFog(
+  Frame& frame,
+  const ViewLight& light,
+  const std::vector<LitSurface>& surfaces,
+  const std::array<EnginePlane, 4>& planes,
+  const std::uint64_t stateBits)
+{
+  // T_BasicFog (RenderBackend.cpp:4868-4933) with inverseBaseLightProject NULL
+  m_currentSpace.reset();
+  for (const auto& surface : surfaces)
+  {
+    // the interaction surface's scissorRect is its light's (tr_frontend_addmodels.cpp:
+    // 981): an empty one is skipped
+    const auto& scissor = light.scissor;
+    if (scissor.isEmpty())
+    {
+      continue;
+    }
+    if (!m_currentScissor.equals(scissor))
+    {
+      m_scissor = engineScissorRect(frame.view, scissor);
+      m_currentScissor = scissor;
+    }
+    if (m_currentSpace != surface.space)
+    {
+      const auto& space = m_lists.spaces[surface.space];
+      setMvp(m_parms, space.mvp);
+      auto localFogPlanes = std::array<EnginePlane, 4>{};
+      for (std::size_t i = 0; i < 4; ++i)
+      {
+        localFogPlanes[i] = engineGlobalPlaneToLocal(space.modelMatrix, planes[i]);
+      }
+      setFogPlanes(localFogPlanes);
+      m_currentSpace = surface.space;
+    }
+    // BindShader_Fog (the skinned form never: the preview has no joints, LP7)
+    const auto outcome = draw(
+      frame,
+      EngineBuiltinFog,
+      *surface.chunk,
+      stateBits,
+      0.0f,
+      0.0f,
+      surface.lightTriangles.get());
+    if (outcome == DrawOutcome::Drawn)
+    {
+      ++m_stats.fogSurfaceDraws;
+    }
+    if (!countFogDraw(frame, outcome, surface.chunk, EngineBuiltinFog, stateBits))
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool LitPasses::fogCube(
+  Frame& frame,
+  const ViewLight& light,
+  const std::array<EnginePlane, 4>& planes,
+  const std::uint64_t stateBits)
+{
+  // zeroOneCubeSurface: space worldSpace, scissorRect the view's scissor
+  const auto geometry = fogCubeGeometry(frame);
+  if (!geometry)
+  {
+    ++m_stats.fogSkipped;
+    ++m_stats.skippedDraws;
+    m_stats.unconverged = true;
+    return true;
+  }
+  const auto scissor = viewScissor(frame.view);
+  if (!m_currentScissor.equals(scissor))
+  {
+    m_scissor = engineScissorRect(frame.view, scissor);
+    m_currentScissor = scissor;
+  }
+  // T_BasicFog with inverseBaseLightProject: MVP = worldSpace.mvp ×
+  // inverseBaseLightProject, the planes InverseTransformPlane( normalize false )
+  const auto& inverseBaseLightProject =
+    light.record->derived.projection.inverseBaseLightProject;
+  setMvp(m_parms, engineMatrixMultiply(frame.view.worldMvp, inverseBaseLightProject));
+  auto localFogPlanes = std::array<EnginePlane, 4>{};
+  for (std::size_t i = 0; i < 4; ++i)
+  {
+    localFogPlanes[i] =
+      engineInverseTransformPlane(inverseBaseLightProject, planes[i], false);
+  }
+  setFogPlanes(localFogPlanes);
+  m_currentSpace.reset();
+  const auto outcome =
+    drawGeometry(frame, EngineBuiltinFog, *geometry, stateBits, 0.0f, 0.0f, nullptr);
+  if (outcome == DrawOutcome::Drawn)
+  {
+    ++m_stats.fogCubeDraws;
+  }
+  return countFogDraw(frame, outcome, nullptr, EngineBuiltinFog, stateBits);
+}
+
+std::optional<LitPasses::DrawGeometry> LitPasses::fogCubeGeometry(Frame& frame)
+{
+  if (!m_fogCubeVertices || !m_fogCubeIndexes)
+  {
+    // R_MakeZeroOneCubeTris (RenderSystem_init.cpp:2035-2120) as idDrawVerts: the
+    // corners, the first four's colour 0xffffffff
+    auto verts = std::array<EngineDrawVert, 8>{};
+    const auto corners = engineZeroOneCubeVertices();
+    for (std::size_t i = 0; i < verts.size(); ++i)
+    {
+      verts[i].xyz = corners[i];
+      verts[i].color = i < 4 ? std::array<std::uint8_t, 4>{255, 255, 255, 255}
+                             : std::array<std::uint8_t, 4>{0, 0, 0, 0};
+    }
+    const auto indexes = engineZeroOneCubeIndexes();
+    // nvrhi rule 3: a known entry state kept; written once through the frame's list
+    auto vertexDesc = nvrhi::BufferDesc{};
+    vertexDesc.byteSize = sizeof(verts);
+    vertexDesc.debugName = "Lit preview fog cube vertices";
+    vertexDesc.isVertexBuffer = true;
+    vertexDesc.initialState = nvrhi::ResourceStates::VertexBuffer;
+    vertexDesc.keepInitialState = true;
+    auto indexDesc = nvrhi::BufferDesc{};
+    indexDesc.byteSize = sizeof(indexes);
+    indexDesc.debugName = "Lit preview fog cube indexes";
+    indexDesc.isIndexBuffer = true;
+    indexDesc.initialState = nvrhi::ResourceStates::IndexBuffer;
+    indexDesc.keepInitialState = true;
+    auto& device = *frame.inputs->device;
+    auto vertices = device.createBuffer(vertexDesc);
+    auto indexBuffer = device.createBuffer(indexDesc);
+    if (!vertices || !indexBuffer)
+    {
+      return std::nullopt;
+    }
+    auto& commandList = *frame.inputs->commandList;
+    commandList.writeBuffer(vertices, verts.data(), sizeof(verts));
+    commandList.writeBuffer(indexBuffer, indexes.data(), sizeof(indexes));
+    // nvrhi rules 6 and 7: the writes end the render pass, so the next draw sets its
+    // state again
+    m_state.valid = false;
+    m_fogCubeVertices = std::move(vertices);
+    m_fogCubeIndexes = std::move(indexBuffer);
+  }
+  return DrawGeometry{m_fogCubeVertices.Get(), m_fogCubeIndexes.Get(), 36, 0, 0};
+}
+
+bool LitPasses::countFogDraw(
+  Frame& frame,
+  const DrawOutcome outcome,
+  const Chunk* chunk,
+  const int program,
+  const std::uint64_t state)
+{
+  const auto fog = program == EngineBuiltinFog;
+  switch (outcome)
+  {
+  case DrawOutcome::Drawn:
+    ++(fog ? m_stats.fogDraws : m_stats.blendDraws);
+    if (m_logDraws)
+    {
+      auto record = LitDrawRecord{};
+      record.pass = fog ? LitDrawRecord::Pass::Fog : LitDrawRecord::Pass::Blend;
+      record.light = m_logLight;
+      record.chunk = chunk ? chunk->key : ChunkKey{};
+      record.program = program;
+      record.state = state;
+      record.scissor = m_scissor;
+      m_drawLog.push_back(std::move(record));
+    }
+    return true;
+  case DrawOutcome::Disabled:
+    // D9: the pass is disabled; programReport() says why
+    m_parms.set(RenderParm::Color, Vec4{1.0f, 1.0f, 1.0f, 1.0f});
+    return false;
+  case DrawOutcome::Overflowed:
+    ++m_stats.fogSkipped;
+    drawOverflowed(frame);
+    return true;
+  case DrawOutcome::Skipped:
+    ++m_stats.fogSkipped;
+    return true;
+  }
+  return true;
+}
+
 std::vector<PipelineKey> litStartPipelineKeys(const nvrhi::Format depthFormat)
 {
   const auto formats = FramebufferFormats{nvrhi::Format::RGBA16_FLOAT, depthFormat};
@@ -1980,6 +2285,8 @@ bool LitPasses::bindingSets(
                         : layout == EngineBindingLayout::Default            ? 3u
                         : layout == EngineBindingLayout::Legacy             ? 3u
                         : layout == EngineBindingLayout::NormalCube         ? 3u
+                        : layout == EngineBindingLayout::Fog                ? 3u
+                        : layout == EngineBindingLayout::Blendlight         ? 3u
                         : layout == EngineBindingLayout::PostProcessIngame  ? 2u
                                                                             : 1u;
   if (layouts.size() != expected)
@@ -2260,6 +2567,46 @@ bool LitPasses::bindingSets(
         .Get();
     return sets[2] != nullptr;
   }
+  case EngineBindingLayout::Fog:
+  case EngineBindingLayout::Blendlight: {
+    // LP5.3 (C49): FOG (RenderBackend_NVRHI.cpp:1286-1329): t0 t1 the units 0 and 1 (_fog
+    // and _fogEnter), s0 = s1 = LinearClamp; BLENDLIGHT (:1378-1418): t0 the stage image,
+    // t1 the falloff image, s0 LinearBorder (border ( 0, 0, 0, 1 ), no compare)
+    if (!textureSet(1, {0, 1}, 0))
+    {
+      return false;
+    }
+    const auto* common = inputs.samplers->common(device)
+                         | kdl::value_or(static_cast<const SamplerSet::Common*>(nullptr));
+    if (!common)
+    {
+      return false;
+    }
+    const auto fog = layout == EngineBindingLayout::Fog;
+    auto samplerKey = BindingSetKey{};
+    samplerKey.layout = layouts[2].Get();
+    samplerKey.samplers = fog ? 6 : 7;
+    samplerKey.resources = {fog ? common->linearClamp.Get() : common->linearBorder.Get()};
+    sets[2] = cache
+                .get(
+                  samplerKey,
+                  frameIndex,
+                  [&] {
+                    auto desc = nvrhi::BindingSetDesc{};
+                    if (fog)
+                    {
+                      desc.addItem(Item::Sampler(0, common->linearClamp))
+                        .addItem(Item::Sampler(1, common->linearClamp));
+                    }
+                    else
+                    {
+                      desc.addItem(Item::Sampler(0, common->linearBorder));
+                    }
+                    return device.createBindingSet(desc, layouts[2]);
+                  })
+                .Get();
+    return sets[2] != nullptr;
+  }
   case EngineBindingLayout::PostProcessIngame: {
     // LP5.2a (C47): s0 LinearClamp (RenderBackend_NVRHI.cpp:1464-1512; PointClamp only
     // under R_UsePixelatedLook)
@@ -2302,12 +2649,10 @@ LitPasses::DrawOutcome LitPasses::draw(
 {
   // DrawElementsWithCounters (RenderBackend_NVRHI.cpp:315-565)
   const auto& inputs = *frame.inputs;
-  const auto* builtin = engineProgram(program);
-  if (!builtin)
+  if (!engineProgram(program))
   {
     return DrawOutcome::Disabled;
   }
-  const auto layout = builtin->bindingLayout;
 
   // the vertex and index buffers: the chunk's arena ranges (SC220)
   const auto placement = inputs.arenas->placement(chunk.key);
@@ -2322,6 +2667,39 @@ LitPasses::DrawOutcome LitPasses::draw(
     m_stats.retrigger = true;
     return DrawOutcome::Skipped;
   }
+  return drawGeometry(
+    frame,
+    program,
+    DrawGeometry{
+      vertexBuffer,
+      indexBuffer,
+      placement->indexCount,
+      std::uint32_t(placement->indexes.offset / 2),
+      std::uint32_t(placement->vertices.offset / 32)},
+    stateBits,
+    slopeBias,
+    depthBias,
+    lightTriangles);
+}
+
+LitPasses::DrawOutcome LitPasses::drawGeometry(
+  Frame& frame,
+  const int program,
+  const DrawGeometry& geometry,
+  const std::uint64_t stateBits,
+  const float slopeBias,
+  const float depthBias,
+  const LightTriangles* lightTriangles)
+{
+  const auto& inputs = *frame.inputs;
+  const auto* builtin = engineProgram(program);
+  if (!builtin)
+  {
+    return DrawOutcome::Disabled;
+  }
+  const auto layout = builtin->bindingLayout;
+  auto* vertexBuffer = geometry.vertexBuffer;
+  auto* indexBuffer = geometry.indexBuffer;
 
   // the pipeline (RenderBackend_NVRHI.cpp:459-461): the key's bias only with
   // GLS_POLYGON_OFFSET, the only state GetRenderState reads it in (M-PASS-DIFF-01)
@@ -2452,10 +2830,10 @@ LitPasses::DrawOutcome LitPasses::draw(
 
   // the draw command: the chunk's indexes, its first vertex the base
   auto args = nvrhi::DrawArguments{};
-  args.vertexCount = placement->indexCount;
+  args.vertexCount = geometry.indexCount;
   args.instanceCount = 1;
-  args.startIndexLocation = std::uint32_t(placement->indexes.offset / 2);
-  args.startVertexLocation = std::uint32_t(placement->vertices.offset / 32);
+  args.startIndexLocation = geometry.firstIndex;
+  args.startVertexLocation = geometry.baseVertex;
   if (lightTriangles && lightTriangles->state == LightTriangles::State::Runs)
   {
     // DX.2: the engine draws its light triangles' index subset in one draw; the runs of
@@ -2546,6 +2924,8 @@ void LitPasses::releaseAll()
   m_lightTriangles.clear();
   m_state = DrawState{};
   m_units = {};
+  m_fogCubeVertices = nullptr;
+  m_fogCubeIndexes = nullptr;
   m_drawLog.clear();
   m_requestedKeys.clear();
 }

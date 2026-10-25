@@ -111,6 +111,8 @@ struct LitFrameInputs
   nvrhi::ITimerQuery* ambientTimer = nullptr;
   // LP5.2a (C46, C16): the stage pass's, or null
   nvrhi::ITimerQuery* stageTimer = nullptr;
+  // LP5.3 (C49, C16): pass 9's (FogAllLights), or null
+  nvrhi::ITimerQuery* fogTimer = nullptr;
   // LP5.2a (C47, D9): the game folder whose renderprogs2/spirv holds a newStage
   // program's blobs (SessionOptions::gamePath)
   std::filesystem::path gamePath;
@@ -244,6 +246,25 @@ struct LitFrameStats
   bool stagesSkipped = false;
   bool stagesTimed = false;
   bool stagesDisabled = false;
+  // ----- LP5.3 (C49, D122, D124): pass 9, FogAllLights -----
+  // the fog lights FogPass drew and the blend lights BlendLight went past its returns
+  // for; the fog draws, the surfaces' (T_BasicFog on the lists) and the cubes' apart
+  // (fogDraws is their sum: the frame log's fog_draws), and the blend draws
+  std::size_t fogLights = 0;
+  std::size_t blendLights = 0;
+  std::size_t fogDraws = 0;
+  std::size_t fogSurfaceDraws = 0;
+  std::size_t fogCubeDraws = 0;
+  std::size_t blendDraws = 0;
+  // the pass's draws not made: a pending pipeline, an image not written yet (a blend
+  // light's stage or falloff image Pending, or Loading without a level: the frame
+  // unconverged), the budget
+  std::size_t fogSkipped = 0;
+  // r_skipFogLights 1 (EngineFrame.skipFogLights): FogAllLights returned at once; the
+  // timer ran; a failed pipeline of 65 or 67 disabled it (D9)
+  bool fogLightsSkipped = false;
+  bool fogTimed = false;
+  bool fogDisabled = false;
 };
 
 // a recorded draw (setDrawLogForTesting)
@@ -257,6 +278,9 @@ struct LitDrawRecord
     Ambient,
     // LP5.2a: the stage pass
     Stage,
+    // LP5.3: FogAllLights' fog draws (a surface or the cube) and blend draws
+    Fog,
+    Blend,
   };
 
   Pass pass = Pass::Prepass;
@@ -385,6 +409,17 @@ private:
     bool valid = false;
   };
 
+  // what a draw reads its vertices and indexes from: a chunk's arena ranges, or (LP5.3)
+  // the fog cube's buffers
+  struct DrawGeometry
+  {
+    nvrhi::IBuffer* vertexBuffer = nullptr;
+    nvrhi::IBuffer* indexBuffer = nullptr;
+    std::uint32_t indexCount = 0;
+    std::uint32_t firstIndex = 0;
+    std::uint32_t baseVertex = 0;
+  };
+
   enum class DrawOutcome
   {
     Drawn,
@@ -453,6 +488,10 @@ private:
   bool m_texgenLp6Warned = false;
   bool m_texgenWarned = false;
   bool m_stageImageWarned = false;
+  // LP5.3 (C49, D122): the fog cube (R_MakeZeroOneCubeTris) as a vertex and an index
+  // buffer of this session's, made and written at the first fog light's draw
+  nvrhi::BufferHandle m_fogCubeVertices;
+  nvrhi::BufferHandle m_fogCubeIndexes;
   std::vector<LitDrawRecord> m_drawLog;
   // the pipeline keys asked for while the log is on, drawn or not
   std::set<PipelineKey, PipelineKeyLess> m_requestedKeys;
@@ -540,6 +579,50 @@ private:
    */
   void recordStages(Frame& frame);
   /**
+   * LP5.3 (C49, D122-D124): FogAllLights (RenderBackend.cpp:5038-5076, from :6136) into
+   * hdrFBO with the prepass's depth: nothing under r_skipFogLights (EngineFrame, its
+   * blend lights too, as the engine's return is before the walk) or without view
+   * lights; then over the view lights in the sorted order, FogPass for a fog light
+   * (fogPass), BlendLight for a blend light (blendLight, LP5.3 step 3).
+   */
+  void recordFogLights(Frame& frame);
+  /**
+   * LP5.3 (C49, SC533-SC535): FogPass( global, local, vLight ) (RenderBackend.cpp:
+   * 4940-5031): engineFogParms' colour (GL_Color) and planes; units 0 _fog and 1
+   * _fogEnter (intrinsics through the slot table); DEPTHMASK | SRC_ALPHA /
+   * ONE_MINUS_SRC_ALPHA | DEPTHFUNC_EQUAL over the global then the local list
+   * (basicFog), then the same with DEPTHFUNC_LESS | GLS_CULL_BACKSIDED over the fog cube
+   * (the zero-to-one cube in world space through inverseBaseLightProject, with the view's
+   * scissor), whose BACKSIDED request the copied GetRenderState decodes as the
+   * front-sided case (mirror.json M-FOG-DEFECT-01). False when the pass is disabled.
+   */
+  bool fogPass(Frame& frame, const ViewLight& light);
+  // T_BasicFog( drawSurfs, fogPlanes, NULL ) (RenderBackend.cpp:4868-4933) over a list
+  bool basicFog(
+    Frame& frame,
+    const ViewLight& light,
+    const std::vector<LitSurface>& surfaces,
+    const std::array<EnginePlane, 4>& planes,
+    std::uint64_t stateBits);
+  // T_BasicFog( &zeroOneCubeSurface, fogPlanes, &inverseBaseLightProject )
+  bool fogCube(
+    Frame& frame,
+    const ViewLight& light,
+    const std::array<EnginePlane, 4>& planes,
+    std::uint64_t stateBits);
+  // T_BasicFog's TEXGEN_0_S = p0, TEXGEN_0_T = p1, TEXGEN_1_T = p2, TEXGEN_1_S = p3
+  void setFogPlanes(const std::array<EnginePlane, 4>& planes);
+  // the fog cube's geometry, its buffers made and written into the frame's command list
+  // the first time; nullopt when a buffer cannot be made
+  std::optional<DrawGeometry> fogCubeGeometry(Frame& frame);
+  // a fog or blend draw's outcome counted; false when the pass is disabled (D9)
+  bool countFogDraw(
+    Frame& frame,
+    DrawOutcome outcome,
+    const Chunk* chunk,
+    int program,
+    std::uint64_t state);
+  /**
    * LP5.2b (C48, D124, P6.17): the image a cube program binds at unit 0, and whether it
    * stands in for a cube not written yet. Resident, Replacing (its complete texture) and
    * Loading with written levels bind the cube; Pending and Loading without a level bind
@@ -601,6 +684,15 @@ private:
     float slopeBias,
     float depthBias,
     const LightTriangles* lightTriangles = nullptr);
+  // DrawElementsWithCounters on the given buffers (draw's body; LP5.3: the fog cube's)
+  DrawOutcome drawGeometry(
+    Frame& frame,
+    int program,
+    const DrawGeometry& geometry,
+    std::uint64_t stateBits,
+    float slopeBias,
+    float depthBias,
+    const LightTriangles* lightTriangles);
   // the binding sets of a layout for the units; false when a texture has no level yet
   bool bindingSets(
     Frame& frame,

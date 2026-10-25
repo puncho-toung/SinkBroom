@@ -52,6 +52,7 @@
 #include <string>
 #include <vector>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 namespace tb::lit
@@ -878,6 +879,119 @@ TEST_CASE("LitStagePass: the stages map's S materials (LP5.2a, C50)")
   {
     CAPTURE(message.text);
     CHECK(message.kind != DeclMessageKind::Warning);
+  }
+}
+
+TEST_CASE("LitStagePass: FogPass' colour, density and planes (LP5.3, C49, SC533)")
+{
+  // a camera at ( 100, 50, 80 ) looking down +x; the light's far plane z = 296
+  auto camera = CameraState{};
+  camera.position = vm::vec3f{100, 50, 80};
+  camera.direction = vm::vec3f{1, 0, 0};
+  camera.up = vm::vec3f{0, 0, 1};
+  camera.fovDegrees = 90.0f;
+  const auto view = litViewOf(camera, 64, 48);
+  const auto fogPlane = EnginePlane{0.0f, 0.0f, 1.0f, -296.0f};
+  auto shader = MaterialEntry{};
+  shader.fogLight = true;
+  shader.stages.resize(1);
+  shader.stages[0].colorRegisters = {4, 5, 6, 7};
+  const auto dot = [](const EnginePlane& p, const EngineVec3& v) {
+    return p.a * v[0] + p.b * v[1] + p.c * v[2] + p.d;
+  };
+  // a point 300 ahead of the eye, and one 300 ahead and 40 up
+  const auto ahead = EngineVec3{400, 50, 80};
+  const auto up = EngineVec3{400, 50, 120};
+
+  SECTION("a distance of 2000: rpColor.a clamped to 1, a = -0.5 / 2000")
+  {
+    const auto registers = std::vector<float>{1, 1, 0, 0, 0.5f, 0.6f, 0.7f, 2000.0f};
+    const auto parms = engineFogParms(
+      shader, registers, fogPlane, view.worldModelViewMatrix, view.viewOrigin);
+    REQUIRE(parms);
+    CHECK(parms->lightColor[3] == 2000.0f);
+    CHECK(parms->color == Vec4{0.5f, 0.6f, 0.7f, 1.0f});
+    CHECK(parms->a == -0.5f / 2000.0f);
+    // p0 · position = a · eye z + 0.5 = 0.5 + 0.5 · depth / 2000 (eye z = -depth)
+    CHECK(dot(parms->planes[0], ahead) == Catch::Approx(0.5 + 0.5 * 300.0 / 2000.0));
+    CHECK(dot(parms->planes[0], up) == Catch::Approx(0.5 + 0.5 * 300.0 / 2000.0));
+    CHECK(parms->planes[1].a == 0.0f);
+    CHECK(parms->planes[1].b == 0.0f);
+    CHECK(parms->planes[1].c == 0.0f);
+    CHECK(parms->planes[1].d == 0.5f);
+    // p2 = 0.001 · fogPlane + FOG_ENTER, p3 = 0.001 · s + FOG_ENTER, s = 80 - 296
+    CHECK(EngineFogEnter == 65.0f / 128.0f);
+    CHECK(parms->planes[2].c == 0.001f);
+    CHECK(parms->planes[2].d == 0.001f * -296.0f + 65.0f / 128.0f);
+    CHECK(
+      dot(parms->planes[2], up) == Catch::Approx(0.001 * (120.0 - 296.0) + 65.0 / 128.0));
+    CHECK(parms->planes[3].a == 0.0f);
+    CHECK(parms->planes[3].b == 0.0f);
+    CHECK(parms->planes[3].c == 0.0f);
+    CHECK(parms->planes[3].d == 0.001f * (80.0f - 296.0f) + 65.0f / 128.0f);
+  }
+
+  SECTION("a distance of 0.5: rpColor.a 0.5, a = -0.5 / DEFAULT_FOG_DISTANCE")
+  {
+    const auto registers = std::vector<float>{1, 1, 0, 0, 0.5f, 0.6f, 0.7f, 0.5f};
+    const auto parms = engineFogParms(
+      shader, registers, fogPlane, view.worldModelViewMatrix, view.viewOrigin);
+    REQUIRE(parms);
+    CHECK(parms->color[3] == 0.5f);
+    CHECK(parms->a == -0.5f / 500.0f);
+    CHECK(dot(parms->planes[0], ahead) == Catch::Approx(0.5 + 0.5 * 300.0 / 500.0));
+    // an alpha of 1 is the default's too
+    CHECK(engineFogDensity(1.0f) == -0.5f / 500.0f);
+    CHECK(engineFogDensity(1.5f) == -0.5f / 1.5f);
+  }
+
+  SECTION("no stage: nothing")
+  {
+    shader.stages.clear();
+    CHECK_FALSE(engineFogParms(
+      shader,
+      std::vector<float>(8, 1.0f),
+      fogPlane,
+      view.worldModelViewMatrix,
+      view.viewOrigin));
+  }
+}
+
+TEST_CASE("LitStagePass: the fog cube is R_MakeZeroOneCubeTris (LP5.3, C49, D122)")
+{
+  const auto vertices = engineZeroOneCubeVertices();
+  const auto indexes = engineZeroOneCubeIndexes();
+  // vertex i: x of bits 1 and 2 of i % 4, y of 2 and 3, z of i >= 4
+  for (std::size_t i = 0; i < vertices.size(); ++i)
+  {
+    CAPTURE(i);
+    const auto corner = i % 4;
+    CHECK(vertices[i][0] == (corner == 1 || corner == 2 ? 1.0f : 0.0f));
+    CHECK(vertices[i][1] == (corner >= 2 ? 1.0f : 0.0f));
+    CHECK(vertices[i][2] == (i >= 4 ? 1.0f : 0.0f));
+  }
+  // the engine's 36 indexes; every face's id normal, ( c - a ) × ( b - a ) as
+  // R_DeriveFacePlanes takes it, points away from the centre (so ( b - a ) × ( c - a )
+  // towards it): the faces a FRONTSIDED draw keeps are the ones seen from outside, so
+  // the cube's near faces draw from outside and nothing draws from inside (SC535)
+  CHECK(indexes == std::array<std::uint16_t, 36>{2, 3, 0, 1, 2, 0, 5, 1, 0, 4, 5, 0,
+                                                 7, 4, 0, 3, 7, 0, 1, 5, 6, 2, 1, 6,
+                                                 3, 2, 6, 7, 3, 6, 4, 7, 6, 5, 4, 6});
+  for (std::size_t t = 0; t < 12; ++t)
+  {
+    CAPTURE(t);
+    const auto& a = vertices[indexes[t * 3 + 0]];
+    const auto& b = vertices[indexes[t * 3 + 1]];
+    const auto& c = vertices[indexes[t * 3 + 2]];
+    const auto u = EngineVec3{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+    const auto v = EngineVec3{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+    const auto n = EngineVec3{
+      u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+    const auto centre = EngineVec3{
+      (a[0] + b[0] + c[0]) / 3.0f - 0.5f,
+      (a[1] + b[1] + c[1]) / 3.0f - 0.5f,
+      (a[2] + b[2] + c[2]) / 3.0f - 0.5f};
+    CHECK(n[0] * centre[0] + n[1] * centre[1] + n[2] * centre[2] < 0.0f);
   }
 }
 } // namespace tb::lit

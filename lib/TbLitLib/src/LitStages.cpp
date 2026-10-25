@@ -181,6 +181,124 @@ void engineSetupInteractionStage(
   }
 }
 
+float engineFogDensity(const float alpha)
+{
+  // if they left the default value on, set a fog distance of 500; otherwise, distance =
+  // alpha color
+  return alpha <= 1.0f ? -0.5f / EngineDefaultFogDistance : -0.5f / alpha;
+}
+
+std::optional<EngineFogParms> engineFogParms(
+  const MaterialEntry& shader,
+  const std::span<const float> registers,
+  const EnginePlane& fogPlane,
+  const EngineGlMatrix& worldModelViewMatrix,
+  const EngineVec3& viewOrigin)
+{
+  // assume fog shaders have only a single stage
+  if (shader.stages.empty())
+  {
+    return std::nullopt;
+  }
+  const auto& stage = shader.stages.front();
+  auto parms = EngineFogParms{};
+  for (std::size_t i = 0; i < 4; ++i)
+  {
+    parms.lightColor[i] = engineRegister(registers, stage.colorRegisters[i]);
+  }
+  parms.color = engineClampedColor(parms.lightColor);
+
+  // calculate the falloff planes
+  const auto a = engineFogDensity(parms.lightColor[3]);
+  parms.a = a;
+
+  // S is based on the view origin
+  const float s = enginePlaneDistance(fogPlane, viewOrigin);
+
+  const float FOG_SCALE = 0.001f;
+  const auto& mv = worldModelViewMatrix;
+
+  // S-0
+  parms.planes[0] = EnginePlane{
+    a * mv[0 * 4 + 2], a * mv[1 * 4 + 2], a * mv[2 * 4 + 2], a * mv[3 * 4 + 2] + 0.5f};
+  // T-0
+  parms.planes[1] = EnginePlane{0.0f, 0.0f, 0.0f, 0.5f};
+  // T-1 will get a texgen for the fade plane, which is always the "top" plane on
+  // unrotated lights
+  parms.planes[2] = EnginePlane{
+    FOG_SCALE * fogPlane.a,
+    FOG_SCALE * fogPlane.b,
+    FOG_SCALE * fogPlane.c,
+    FOG_SCALE * fogPlane.d + EngineFogEnter};
+  // S-1
+  parms.planes[3] = EnginePlane{0.0f, 0.0f, 0.0f, FOG_SCALE * s + EngineFogEnter};
+  return parms;
+}
+
+std::array<EngineVec3, 8> engineZeroOneCubeVertices()
+{
+  const float low = 0.0f;
+  const float high = 1.0f;
+  return {{
+    {low, low, low},
+    {high, low, low},
+    {high, high, low},
+    {low, high, low},
+    {low, low, high},
+    {high, low, high},
+    {high, high, high},
+    {low, high, high},
+  }};
+}
+
+std::array<std::uint16_t, 36> engineZeroOneCubeIndexes()
+{
+  return {{
+    // bottom
+    2,
+    3,
+    0,
+    1,
+    2,
+    0,
+    // back
+    5,
+    1,
+    0,
+    4,
+    5,
+    0,
+    // left
+    7,
+    4,
+    0,
+    3,
+    7,
+    0,
+    // right
+    1,
+    5,
+    6,
+    2,
+    1,
+    6,
+    // front
+    3,
+    2,
+    6,
+    7,
+    3,
+    6,
+    // top
+    4,
+    7,
+    6,
+    5,
+    4,
+    6,
+  }};
+}
+
 Vec4 engineClampedColor(const Vec4& color)
 {
   return Vec4{

@@ -1485,6 +1485,10 @@ inline constexpr int EngineBuiltinBumpyEnvironment = 57;
 inline constexpr int EngineBuiltinSkyBox = 69;
 inline constexpr int EngineBuiltinWobbleSky = 70;
 inline constexpr int EngineBuiltinDepth = 63;
+// LP5.3 (C49): FogAllLights' programs (RenderProgs.h:481-484): BUILTIN_BLENDLIGHT,
+// "builtin/fog/blendlight" (BLENDLIGHT), and BUILTIN_FOG, "builtin/fog/fog" (FOG)
+inline constexpr int EngineBuiltinBlendLight = 65;
+inline constexpr int EngineBuiltinFog = 67;
 inline constexpr int EngineBuiltinBlit = 108;
 inline constexpr int EngineBuiltinRect = 109;
 inline constexpr int EngineBuiltinTonemapping = 111;

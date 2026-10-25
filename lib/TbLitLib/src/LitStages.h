@@ -494,4 +494,56 @@ struct StagePassSurface
 StagePassSurface engineShaderPassDraws(
   const MaterialEntry& material, std::span<const float> registers);
 
+// ----- pass 9, the fog and blend lights (LP5.3, C49, D122, SC530-SC538) -----
+
+// DEFAULT_FOG_DISTANCE and FOG_ENTER (RenderCommon.h:50-55): 500, and ( 64 + 1 ) / 128
+inline constexpr float EngineDefaultFogDistance = 500.0f;
+inline constexpr float EngineFogEnter = (64.0f + 1.0f) / (64 * 2);
+
+/**
+ * FogPass' density (RenderBackend.cpp:4959-4969) as PortalIsFoggedOut computes it too
+ * (RenderWorld_portals.cpp:476-486): -0.5 / DEFAULT_FOG_DISTANCE when the stage's alpha
+ * (the light's shaderParm3 through the fog material's parm3, LT:177-181) is at most 1,
+ * else -0.5 / alpha. Pure.
+ */
+float engineFogDensity(float alpha);
+
+/**
+ * What FogPass sets before its draws (RenderBackend.cpp:4940-5008): stage 0's colour
+ * registers without r_lightScale (the alpha unclamped for the density, GL_Color's clamp
+ * in color: an alpha of 2000 becomes 1, 0.5 stays 0.5), the density a, and the four
+ * planes: p0 = a · the world's modelViewMatrix column 2 with w + 0.5 (the fade by view
+ * depth, read at S of _fog), p1 = ( 0, 0, 0, 0.5 ) (T of _fog), p2 = 0.001 · fogPlane
+ * with w + FOG_ENTER (T of _fogEnter: the light's far plane), p3 = ( 0, 0, 0, 0.001 · s +
+ * FOG_ENTER ) with s = fogPlane.Distance( vieworg ) (S of _fogEnter); T_BasicFog sets
+ * them as TEXGEN_0_S = p0, TEXGEN_0_T = p1, TEXGEN_1_T = p2, TEXGEN_1_S = p3 (the swap of
+ * SC534). nullopt for a fog shader without a stage, whose stage 0 the engine reads
+ * anyway (out of its list: a guard). Pure.
+ */
+struct EngineFogParms
+{
+  Vec4 lightColor = {};
+  Vec4 color = {};
+  float a = 0.0f;
+  std::array<EnginePlane, 4> planes = {};
+};
+std::optional<EngineFogParms> engineFogParms(
+  const MaterialEntry& shader,
+  std::span<const float> registers,
+  const EnginePlane& fogPlane,
+  const EngineGlMatrix& worldModelViewMatrix,
+  const EngineVec3& viewOrigin);
+
+/**
+ * R_MakeZeroOneCubeTris (RenderSystem_init.cpp:2035-2120, transcribed): the zero-to-one
+ * cube FogPass draws through inverseBaseLightProject (zeroOneCubeSurface, :2443-2447):
+ * eight corners (x, y, z each 0 or 1; vertex i has x of bit i % 4 in 1, 2 and y of 2, 3,
+ * z of i >= 4) and 36 indexes, two triangles per face in the engine's winding (bottom,
+ * back, left, right, front, top), the first four vertices' colour 0xffffffff, the
+ * others 0 (R_DeriveTangents' normals and tangents, which the fog shaders never read,
+ * are left 0). Pure.
+ */
+std::array<EngineVec3, 8> engineZeroOneCubeVertices();
+std::array<std::uint16_t, 36> engineZeroOneCubeIndexes();
+
 } // namespace tb::lit
