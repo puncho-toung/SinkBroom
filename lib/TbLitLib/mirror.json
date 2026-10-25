@@ -21685,6 +21685,76 @@
         }
       ],
       "note": "LP5.2b step 6, test only: a [.][litgpu2] case over a synthetic map whose cube's six faces are pure colours (the engine's _px _nx _py _ny _pz _nz files): each pixel against a CPU model of the shader's texcoord and the cube's face choice (the major axis): skybox at position - the eye, reflect without and with a bump stage (55 and 57: the reflected eye vector about the face normal, _flat at unit 1), the prepass's alpha-tested skybox hiding the lit wall behind it (and black alone under a gl_zero, gl_one twin), the prepass's alpha-tested wobbleSky reading the sky at position - 0 (+z there) and its blend add twin adding pass 8's at position - the eye (+x), reflect2 skipped and counted, a cube held Pending (the service's image work items parked) drawn as the zero cube with the frame unconverged and counted, then landed; the points away from a face's edge (the cube's seamless bilinear filter reads the next face there); 0 validation messages"
+    },
+    {
+      "id": "M-TEST-PARITY-06",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/Image_files.cpp",
+          "lines": [
+            1156,
+            1170
+          ],
+          "anchor": "R_LoadCubeImages: the CF_NATIVE suffixes _px _nx _py _ny _pz _nz",
+          "sha256": "034b02a7bdb9bc7500ad5a42789f1adf9b4ea02852ee8002784be3b6ec4c39ef"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            352,
+            392
+          ],
+          "anchor": "PrepareStageTexturing: TG_REFLECT_CUBE",
+          "sha256": "8986f44ec96842ab9b11007651caae64187857151b2e08f251a7ca24ef578c92"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            526,
+            586
+          ],
+          "anchor": "PrepareStageTexturing: TG_SKYBOX_CUBE, TG_WOBBLESKY_CUBE",
+          "sha256": "9fc3e2f3498fda679d87a23d59b5f417276107c0c8a3269ab4fbcc990f1e7689"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            783,
+            866
+          ],
+          "anchor": "FillDepthBufferGeneric: the alpha-tested stages",
+          "sha256": "9c0546e30e6a8ea0bd2710b99b4e0c4465a6263d983bbf789e99c0aaa8c14285"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "STAGES_MTR (s08_sky ... s11_wobble_add), st_cube_faces, ST_CUBE_SIDES, ST_SKY_FACES, ST_ENV_FACES, stages_textures (the two cubes), st_s_room_extras (S08-S11), ST_ROOMS (the texgen rooms from ox 18432), the S08-S11 rows (expect stage_pending), BLOBS (the four legacy programs)"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/maps/test/litpreview_stages.map",
+          "symbol": "the S08-S11 rooms"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/materials/lp5_stages.mtr",
+          "symbol": "s08_sky, s09_env, s09_bumpy_env, s10_sky_tested, s10_sky_mask, s11_wobble_mask, s11_wobble_add"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/textures/lp5",
+          "symbol": "sky_px ... sky_nz, env_px ... env_nz (16 x 16, 24 bits)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession parity rows (LP2.3): stage_pending"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitStagePass.cpp",
+          "symbol": "LitStagePass: the stages map's S materials (the texgen rooms)"
+        }
+      ],
+      "note": "LP5.2b steps 4-5 (C48, C50, P6.2, P6.5, D119), test only: the stages map's texgen rooms from ox 18432 every 1024, each with the S rooms' parallel light (S08's _color 0 0 0: an entity for dmap's flood fill), every row exact with a control of mode row: S08 a skybox stage on a panel before the far wall of an unlit room (the +x face and its structure texel at position - the eye), S09 reflect stages on two opaque panels before the head-on lit wall, without a bump stage (55: colour sRGBAToLinear( 0.5 )) and with _flat (57: colour 0.5), both the -x face, S10 an alpha-tested skybox stage whose prepass hides the lit wall behind (pass 8 then draws the sky EQUAL) beside a gl_zero, gl_one twin (the prepass's black alone), S11 an alpha-tested wobbleSky stage (rates 0) alone under gl_zero, gl_one (the sky at position - 0: the +x face's centre, uniform, where a LOCALVIEWORIGIN other than 0 would show the face's structure texel) beside a blend add twin (plus pass 8's at position - the eye). The cubes: CF_NATIVE files, 16 x 16 faces of a flat colour (channels 0 or 255) with one texel of structure at (4, 6); the preview binds the engine's own .bimage caches of the run. The preview-alone shots before the run showed the faces in the D3D/Vulkan cube convention (+x: s = -z, t = -y) and the prepass's uniform wobbleSky. The engine runs (2026-10-24 23:33-23:50 and 2026-10-25 00:01-00:18; bake 124.8 / 123.3 s, run-a 344.9 / 341.4 s, run-b 345.1 / 343.3 s, every shot's repeat 0, the game folder 21,260 entries before and after each process, the junction gone): the first run's pictures were all exact (the 8 new shots max 0) but S08's sky panel, flush against the walls, the ceiling and the floor, had faces in solid that the preview chunks as the outside set (D81), drawn in every +x S camera's frustum behind its walls: one stage draw over expect on S01-S07, S12-S14 and S08 (a fixture fault, as LP5.2a's S13); the panel was made free-standing (x 376-380, 1 inside the walls) and the engine run once more: 124 of 124 gated rows pass, 2 reported; the 118 earlier rows identical to the gate's at e9fe14247 (pass, max, mean, p99, over1, masked_over_span); S08-S11 and CS08-CS11 max 0 mean 0; lit_min recorded with --only S08,S09,S10,S11 --axial-max 1 (S08 460,800, S09 460,800, S10 335,820, S11 460,800); [.][parity] Debug 47.6 s, 14,808 assertions"
     }
   ],
   "retired": [
