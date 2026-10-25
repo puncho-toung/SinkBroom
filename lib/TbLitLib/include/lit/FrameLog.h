@@ -158,6 +158,26 @@ struct FrameLogRow
   std::optional<std::uint64_t> fogDraws;
   std::optional<std::uint64_t> blendDraws;
   std::optional<double> gpuFogMs;
+  // LP7.0 (C54), the stop row: the bytes of the area tree the session's bake held
+  // (MapBake::procBytes, the .proc's geometry included); empty in frame rows
+  std::optional<std::uint64_t> procBytes;
+  // LP7.0 (C52, C54, C55, P7.20), frame rows: LP7's counts, added before they are
+  // filled so that its sub-packages change no header: the model entities, their
+  // instances and draws, the instances whose record is pending, the entities drawn as
+  // nothing for a skinned model (LP7.2); the dress surfaces drawn and the projectors
+  // with none (LP7.3); the adopted islands and their triangles, the planar islands no
+  // editor face matched and the curved ones (LP7.4). 0 in LP7.0
+  std::optional<std::uint64_t> modelEntities;
+  std::optional<std::uint64_t> modelInstances;
+  std::optional<std::uint64_t> modelDraws;
+  std::optional<std::uint64_t> modelsPending;
+  std::optional<std::uint64_t> modelsSkinned;
+  std::optional<std::uint64_t> dressSurfaces;
+  std::optional<std::uint64_t> dressUnmatched;
+  std::optional<std::uint64_t> adoptedIslands;
+  std::optional<std::uint64_t> adoptedTris;
+  std::optional<std::uint64_t> unmatchedIslands;
+  std::optional<std::uint64_t> curvedIslands;
 };
 
 // the CSV header line, ending in a newline

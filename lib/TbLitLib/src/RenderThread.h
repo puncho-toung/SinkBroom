@@ -368,6 +368,9 @@ private:
   std::uint64_t m_frameRegistry = 0;
   // and its override store's bytes (the frame log's override_bytes)
   std::uint64_t m_frameOverrideBytes = 0;
+  // LP7.0 (C54): the bytes of the scene's bake's tree when the session stopped (the stop
+  // row's proc_bytes); none without a scene
+  std::optional<std::uint64_t> m_stopProcBytes;
   /**
    * LPF.1 (C44, P5.13): the feed items the frames' tables included whose change has not
    * landed yet, for the frame log's feed_ms: an image override's newest hand-over time

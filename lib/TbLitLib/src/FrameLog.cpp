@@ -149,6 +149,25 @@ std::string fogFields(const FrameLogRow& row)
     optionalField(row.gpuFogMs, "{:.3f}"));
 }
 
+// LP7.0's columns (C52, C54, C55): the models', the dress decals' and the adopted
+// triangles' counts; empty in a start or stop row
+std::string lp7Fields(const FrameLogRow& row)
+{
+  return fmt::format(
+    "{},{},{},{},{},{},{},{},{},{},{}",
+    optionalCount(row.modelEntities),
+    optionalCount(row.modelInstances),
+    optionalCount(row.modelDraws),
+    optionalCount(row.modelsPending),
+    optionalCount(row.modelsSkinned),
+    optionalCount(row.dressSurfaces),
+    optionalCount(row.dressUnmatched),
+    optionalCount(row.adoptedIslands),
+    optionalCount(row.adoptedTris),
+    optionalCount(row.unmatchedIslands),
+    optionalCount(row.curvedIslands));
+}
+
 std::string_view eventName(const FrameLogEvent event)
 {
   switch (event)
@@ -176,7 +195,10 @@ std::string_view frameLogHeader()
          "bytes,settled,alloc_refused,culled_triangles,view_area,areas_flowed,lights_in_"
          "view,portal_chains,flow_ms,ambient_draws,gpu_ambient_ms,ambient_writes,grid_"
          "surfaces,feed_applied,feed_ms,override_bytes,math_lights,ambient_lights,stage_"
-         "draws,stage_skipped,gpu_stages_ms,fog_draws,blend_draws,gpu_fog_ms\n";
+         "draws,stage_skipped,gpu_stages_ms,fog_draws,blend_draws,gpu_fog_ms,proc_bytes,"
+         "model_entities,model_instances,model_draws,models_pending,models_skinned,dress_"
+         "surfaces,dress_unmatched,adopted_islands,adopted_tris,unmatched_islands,curved_"
+         "islands\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -187,15 +209,18 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     optionalField(row.vramBudgetMb, "{:.1f}"));
   if (row.event != FrameLogEvent::Frame)
   {
+    // the frame's columns empty (gpu_prepass_ms ... gpu_fog_ms), then proc_bytes, then
+    // LP7's eleven counts empty
     return fmt::format(
-      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n",
+      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,
-      resourceFields(row));
+      resourceFields(row),
+      optionalCount(row.procBytes));
   }
   return fmt::format(
-    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
     row.session,
     eventName(row.event),
     row.frameIndex,
@@ -216,7 +241,9 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     feedFields(row),
     phaseFields(row),
     stageFields(row),
-    fogFields(row));
+    fogFields(row),
+    optionalCount(row.procBytes),
+    lp7Fields(row));
 }
 
 std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& path)

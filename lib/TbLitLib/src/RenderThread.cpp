@@ -2011,6 +2011,18 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       // LP5.3 (C49): pass 9's fog and blend draws (its GPU time from the timers)
       row.fogDraws = litStats.fogDraws;
       row.blendDraws = litStats.blendDraws;
+      // LP7.0 (C52, C54, C55): no model, dress decal or adopted island is drawn yet
+      row.modelEntities = 0u;
+      row.modelInstances = 0u;
+      row.modelDraws = 0u;
+      row.modelsPending = 0u;
+      row.modelsSkinned = 0u;
+      row.dressSurfaces = 0u;
+      row.dressUnmatched = 0u;
+      row.adoptedIslands = 0u;
+      row.adoptedTris = 0u;
+      row.unmatchedIslands = 0u;
+      row.curvedIslands = 0u;
       row.constantBytes = litStats.constantBytes + tonemap.constantBytes;
       row.volatileWrites = litStats.constantWrites + tonemap.constantWrites;
       row.volatileWriteBudget = litStats.constantWriteBudget;
@@ -2432,6 +2444,8 @@ void RenderThread::appendSessionRow(const FrameLogEvent event)
   {
     row.texturesResident = m_images.resident();
     row.arenaBytes = m_arenas.capacityBytes();
+    // LP7.0 (C54): the adopted bake's tree, taken before the scene went
+    row.procBytes = m_stopProcBytes;
   }
   m_timers.append(row);
 }
@@ -2566,6 +2580,12 @@ void RenderThread::finish() noexcept
 
   try
   {
+    // LP7.0 (C54): the stop row's proc_bytes, while the scene still holds its bake
+    if (m_geometry)
+    {
+      const auto bake = m_geometry->adoptedBake();
+      m_stopProcBytes = bake ? bake->procBytes : 0u;
+    }
     // the chunk jobs in flight are waited for (R5.22) before the pool stops
     m_geometry.reset();
 

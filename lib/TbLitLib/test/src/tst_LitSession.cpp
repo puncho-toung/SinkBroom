@@ -334,6 +334,10 @@ namespace
 
 using namespace std::chrono_literals;
 
+// the frame log's fields (lit/FrameLog.cpp, frameLogHeader): LP5.3's 57, LP7.0's
+// proc_bytes and the eleven model, dress and adoption counts (C52, P7.20)
+constexpr auto FrameLogFields = std::size_t{69};
+
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
 constexpr auto OutputNotConsumedId = std::string_view{"WARNING-Shader-OutputNotConsumed"};
@@ -746,7 +750,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     CHECK(rows.back()[1] == "stop");
     for (std::size_t i = 2; i + 1 < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 57u);
+      REQUIRE(rows[i].size() == FrameLogFields);
       CHECK(rows[i][0] == "1");
       CHECK(rows[i][1] == "frame");
       CHECK(rows[i][2] == std::to_string(i - 2));
@@ -1516,7 +1520,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
     auto longestPresentMs = 0.0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 57u);
+      REQUIRE(rows[i].size() == FrameLogFields);
       if (rows[i][1] != "frame")
       {
         continue;
@@ -2680,7 +2684,9 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     auto arenaBytes = std::string{};
     for (const auto& row : readCsv(logPath))
     {
-      if (row.size() == 57u && row[1] == "frame" && !row[15].empty() && row[15] != "0")
+      if (
+        row.size() == FrameLogFields && row[1] == "frame" && !row[15].empty()
+        && row[15] != "0")
       {
         fromLog.push_back(std::stoull(row[15]));
         arenaBytes = row[17];
@@ -3851,7 +3857,9 @@ TEST_CASE("LitSession GPU resources on the retail game (D72)", "[.][retail]")
   auto stopAllocations = std::string{};
   for (const auto& row : readCsv(logPath))
   {
-    if (row.size() == 57u && row[1] != "event" && !row[14].empty() && row[0] != "session")
+    if (
+      row.size() == FrameLogFields && row[1] != "event" && !row[14].empty()
+      && row[0] != "session")
     {
       loggedPeak = std::max(loggedPeak, std::int64_t(std::stoll(row[14])));
       if (row[1] == "stop")
@@ -5565,7 +5573,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     // that drew the scene says so
     const auto rows = readCsv(logPath);
     REQUIRE(rows.size() >= 3u);
-    REQUIRE(rows[0].size() == 57u);
+    REQUIRE(rows[0].size() == FrameLogFields);
     CHECK(rows[0][18] == "gpu_prepass_ms");
     CHECK(rows[0][34] == "settled");
     CHECK(rows[0][35] == "alloc_refused");
@@ -5580,7 +5588,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     auto settledRows = 0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 57u);
+      REQUIRE(rows[i].size() == FrameLogFields);
       if (rows[i][1] != "frame")
       {
         continue;
@@ -5978,7 +5986,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
       for (std::size_t i = 1; i < rows.size(); ++i)
       {
         const auto& row = rows[i];
-        if (row.size() != 57u || row[1] != "frame")
+        if (row.size() != FrameLogFields || row[1] != "frame")
         {
           continue;
         }
@@ -7993,14 +8001,14 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu2]")
     // C16: the frame log's two columns: a frame that drew the pass has its time
     const auto rows = readCsv(logPath);
     REQUIRE(rows.size() >= 2u);
-    REQUIRE(rows[0].size() == 57u);
+    REQUIRE(rows[0].size() == FrameLogFields);
     CHECK(rows[0][42] == "ambient_draws");
     CHECK(rows[0][43] == "gpu_ambient_ms");
     auto timed = 0;
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
       if (
-        rows[i].size() == 57u && rows[i][1] == "frame" && !rows[i][42].empty()
+        rows[i].size() == FrameLogFields && rows[i][1] == "frame" && !rows[i][42].empty()
         && rows[i][42] != "0" && !rows[i][43].empty() && std::stod(rows[i][43]) > 0.0)
       {
         ++timed;
@@ -10185,31 +10193,44 @@ Replacement checkReplacement(
   return result;
 }
 
-// the frame log's columns of LPF.1 (FrameLog.cpp)
+// the frame log's columns of LPF.1 (FrameLog.cpp), and LP7.0's last ones
 constexpr auto FeedAppliedColumn = std::size_t{46};
 constexpr auto FeedMsColumn = std::size_t{47};
 constexpr auto OverrideBytesColumn = std::size_t{48};
+constexpr auto ProcBytesColumn = std::size_t{57};
+constexpr auto ModelEntitiesColumn = std::size_t{58};
+constexpr auto CurvedIslandsColumn = std::size_t{68};
 
 /**
  * C44 (P5.13, P5.21): a frame log's frame rows by frame index; every row has the header's
- * 49 fields, the last three the feed's, empty in a start or stop row.
+ * FrameLogFields fields, the feed's three empty in a start or stop row; LP7.0: LP7's
+ * eleven counts 0 in a frame row and empty in a start or stop row, proc_bytes empty in a
+ * frame row.
  */
 std::map<std::uint64_t, std::vector<std::string>> feedLogFrames(
   const std::filesystem::path& path)
 {
   const auto rows = readCsv(path);
   REQUIRE(rows.size() >= 3u);
-  REQUIRE(rows[0].size() == 57u);
+  REQUIRE(rows[0].size() == FrameLogFields);
   CHECK(rows[0][FeedAppliedColumn] == "feed_applied");
   CHECK(rows[0][FeedMsColumn] == "feed_ms");
   CHECK(rows[0][OverrideBytesColumn] == "override_bytes");
+  CHECK(rows[0][ProcBytesColumn] == "proc_bytes");
+  CHECK(rows[0][ModelEntitiesColumn] == "model_entities");
+  CHECK(rows[0][CurvedIslandsColumn] == "curved_islands");
   auto frames = std::map<std::uint64_t, std::vector<std::string>>{};
   for (std::size_t i = 1; i < rows.size(); ++i)
   {
-    REQUIRE(rows[i].size() == 57u);
+    REQUIRE(rows[i].size() == FrameLogFields);
     if (rows[i][1] == "frame")
     {
       CHECK_FALSE(rows[i][FeedAppliedColumn].empty());
+      CHECK(rows[i][ProcBytesColumn].empty());
+      for (auto k = ModelEntitiesColumn; k <= CurvedIslandsColumn; ++k)
+      {
+        CHECK(rows[i][k] == "0");
+      }
       frames[std::stoull(rows[i][2])] = rows[i];
     }
     else
@@ -10217,6 +10238,10 @@ std::map<std::uint64_t, std::vector<std::string>> feedLogFrames(
       CHECK(rows[i][FeedAppliedColumn].empty());
       CHECK(rows[i][FeedMsColumn].empty());
       CHECK(rows[i][OverrideBytesColumn].empty());
+      for (auto k = ModelEntitiesColumn; k <= CurvedIslandsColumn; ++k)
+      {
+        CHECK(rows[i][k].empty());
+      }
     }
   }
   return frames;
@@ -10979,14 +11004,14 @@ TEST_CASE("LitSession math and ambientLight lights on a GPU (LP5.1)", "[.][litgp
       return fields;
     };
     const auto header = split(lines.front());
-    REQUIRE(header.size() == 57u);
+    REQUIRE(header.size() == FrameLogFields);
     CHECK(header[49] == "math_lights");
     CHECK(header[50] == "ambient_lights");
     auto seen = std::set<std::pair<std::string, std::string>>{};
     for (std::size_t i = 1; i < lines.size(); ++i)
     {
       const auto fields = split(lines[i]);
-      REQUIRE(fields.size() == 57u);
+      REQUIRE(fields.size() == FrameLogFields);
       if (fields[1] == "frame")
       {
         seen.emplace(fields[49], fields[50]);
@@ -12355,7 +12380,7 @@ TEST_CASE("LitSession pass 8, the material stage pass, on a GPU (LP5.2a)", "[.][
   {
     const auto rows = readCsv(frameLog);
     REQUIRE(rows.size() > 1u);
-    REQUIRE(rows[0].size() == 57u);
+    REQUIRE(rows[0].size() == FrameLogFields);
     CHECK(rows[0][51] == "stage_draws");
     CHECK(rows[0][52] == "stage_skipped");
     CHECK(rows[0][53] == "gpu_stages_ms");
@@ -12363,7 +12388,7 @@ TEST_CASE("LitSession pass 8, the material stage pass, on a GPU (LP5.2a)", "[.][
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
       if (
-        rows[i].size() == 57u && rows[i][1] == "frame" && !rows[i][51].empty()
+        rows[i].size() == FrameLogFields && rows[i][1] == "frame" && !rows[i][51].empty()
         && rows[i][51] != "0" && !rows[i][53].empty())
       {
         timedWithDraws = true;
@@ -13577,13 +13602,13 @@ TEST_CASE("LitSession fog and blend lights on a GPU (LP5.3)", "[.][litgpu3]")
       if (header.empty())
       {
         header = fields;
-        REQUIRE(header.size() == 57u);
+        REQUIRE(header.size() == FrameLogFields);
         CHECK(header[54] == "fog_draws");
         CHECK(header[55] == "blend_draws");
         CHECK(header[56] == "gpu_fog_ms");
         continue;
       }
-      if (fields.size() == 57u && fields[1] == "frame")
+      if (fields.size() == FrameLogFields && fields[1] == "frame")
       {
         fogRow =
           fogRow || (!fields[54].empty() && fields[54] != "0" && !fields[56].empty());
