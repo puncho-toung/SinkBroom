@@ -2244,11 +2244,35 @@ void RenderThread::eraseChangedSets()
 
 void RenderThread::arrivalsTick()
 {
-  if (!m_materials || m_images.pending() == 0)
+  if (!m_materials)
   {
     return;
   }
   const auto table = m_materials->table();
+  // LP5.G addendum (D18): a slot's file changed since the table the last frame refreshed
+  // with (the poll's re-probe: a texture saved again, imageChanges) is a frame trigger at
+  // once, whatever the scene: that frame's refreshImages asks the slot again, which keeps
+  // its texture bound (Replacing, pending: unconverged), and the new image's publication
+  // is an arrival below. Only a key the render side has a slot for, so a change of an
+  // image nothing draws draws nothing. H.1: the drop's tableChanged wakes the loop, and
+  // this reads the newest table on every idle pass until a frame has refreshed with it
+  if (table->imageChanges != m_frameImageChanges)
+  {
+    auto changed = false;
+    table->changedImages.forEach(
+      [&](const MaterialImageKey& key, const std::uint64_t change) {
+        changed = changed || (change > m_frameImageChanges && m_images.find(key));
+      });
+    if (changed)
+    {
+      const auto lock = std::scoped_lock{m_mutex};
+      m_pacer.trigger();
+    }
+  }
+  if (m_images.pending() == 0)
+  {
+    return;
+  }
   if (table->version == m_arrivalsCheckedVersion)
   {
     return;

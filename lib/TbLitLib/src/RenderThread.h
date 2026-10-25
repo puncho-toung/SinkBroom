@@ -694,7 +694,8 @@ private:
   // LP4.3 (C36, SC336): every area's atlas of a grid table not asked for yet
   void requestGridImages();
   void eraseChangedSets();
-  // D77: an idle pass's look for texture arrivals in a new table; whether a frame is due
+  // D77: an idle pass's look for texture arrivals in a new table; whether a frame is due;
+  // LP5.G addendum: and for a changed file of a slot the render side holds
   void arrivalsTick();
   // DX.2: an idle pass's look for the light triangles' job; its answers trigger a frame
   void lightTrianglesTick();
