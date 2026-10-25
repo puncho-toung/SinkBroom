@@ -614,6 +614,66 @@ TEST_CASE(
     CHECK(host.events.count(SessionEvent::Error) == 0u);
   }
 
+  // LP5.F (D77 as A41 restates it): a chunk built at the Default size while its
+  // material's measure is to come is provisional, and no readback shows it
+  SECTION("readbackLdr: no settled frame while a fed image's measure is held, then one")
+  {
+    auto host = Host{root, *gamePath};
+    host.service->holdMeasuresForTesting(true);
+    REQUIRE(waitFor(
+      [&] { return host.events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms));
+    // the override stands for a 64 x 64 file (D111)
+    auto fed = constantOverride(64, 64, {40, 160, 220});
+    fed.editorSize = EditorImageSize{64, 64, EditorImageSize::State::Ready, {}};
+    REQUIRE(host.service->setImageOverride("textures/lp5/feed_side", std::move(fed))
+              .is_success());
+    host.offer(snapshotOfMapText(slabMapText(), 1, 1) | kdl::value());
+    host.session->setCamera(camera);
+
+    // the image is fed and served, the slab's size measure held: no frame settles
+    const auto held = host.session->readbackLdr(3000ms);
+    REQUIRE(held.is_error());
+    CHECK_THAT(
+      std::get<Error>(held.error()).msg,
+      Catch::Matchers::StartsWith("No settled frame within 3000 ms"));
+    const auto heldSlot = host.service->table()->find("textures/lp5/feed_side");
+    REQUIRE(heldSlot);
+    REQUIRE(heldSlot->entry);
+    CHECK_FALSE(heldSlot->sizeMeasured);
+    CHECK(heldSlot->entry->editorImageSize.state == EditorImageSize::State::Default);
+    CHECK_FALSE(host.session->lastFrameSettledForTesting());
+
+    // released: the override's 64 x 64 is measured (D111), the slab built again, and
+    // the readback has its settled frame
+    host.service->holdMeasuresForTesting(false);
+    const auto measured = host.session->readbackLdr(60000ms);
+    REQUIRE(measured.is_success());
+    const auto slot = host.service->table()->find("textures/lp5/feed_side");
+    REQUIRE(slot);
+    REQUIRE(slot->entry);
+    CHECK(slot->sizeMeasured);
+    CHECK(slot->entry->editorImageSize.state == EditorImageSize::State::Ready);
+    CHECK(slot->entry->editorImageSize.width == 64);
+    const auto centre = (std::size_t(60) * 160 + 80) * 4;
+    const auto& image = measured.value();
+    CHECK(int(image.rgba[centre]) + image.rgba[centre + 1] + image.rgba[centre + 2] > 0);
+    std::cout << "LP5.F held measure: readback " << std::get<Error>(held.error()).msg
+              << "; released: the centre " << int(image.rgba[centre]) << " "
+              << int(image.rgba[centre + 1]) << " " << int(image.rgba[centre + 2])
+              << "\n";
+
+    const auto report = host.close();
+    CHECK(report.deviceReleaseCount == 0u);
+    CHECK(report.nvrhiErrors == 0u);
+    CHECK_FALSE(report.deviceLost);
+    CHECK(report.messages.empty());
+    host.events.print("LP5.F held measure");
+    host.validation.print("LP5.F held measure");
+    CHECK(host.validation.errors == 0);
+    CHECK(host.validation.warnings == 0);
+    CHECK(host.events.count(SessionEvent::Error) == 0u);
+  }
+
   SECTION("detach, then a stop while the parse thread publishes 100 tables")
   {
     // the first host pays the process's one-time costs; the baseline is taken after it

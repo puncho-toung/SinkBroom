@@ -172,7 +172,8 @@ pending: pipelines, materials, images and their levels, chunks, lights, **and ev
 override and re-parse handed over before the frame's convergence is in its table**. So a
 readback after `setImageOverride` shows the override (or its refusal) without waiting for
 anything else — and **a host that never stops feeding never gets a settled frame**: the
-readback returns the timeout's error. The render thread keeps one staging texture per
+readback returns the timeout's error. A chunk drawn at an image's 8 × 8 default while
+that image's size is still being measured is pending too. The render thread keeps one staging texture per
 extent. A presenting host gets frames on its surface; on `SessionEvent::SwapchainOutOfDate`
 its window thread parks the render thread, destroys and creates the swapchain, and
 unparks it (`LitSession.h`, "Surface handshake").
