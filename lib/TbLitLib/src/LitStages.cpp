@@ -370,11 +370,25 @@ std::vector<PrepassDraw> engineGenericDepthDraws(
         draw.screenTexgen = true;
         break;
       case em::TexgenReflectCube:
+        // LP5.2b (C48, SC528): the program replaced after ALPHA_TEST was set (:360-392):
+        // environment, or bumpyenvironment with the bump stage's image at unit 1
+        draw.bumpStage = engineBumpStage(material);
+        draw.program = draw.bumpStage >= 0 ? PrepassProgram::BumpyEnvironment
+                                           : PrepassProgram::Environment;
+        break;
       case em::TexgenReflectCube2:
-      case em::TexgenSkyboxCube:
-      case em::TexgenWobbleskyCube:
-        // these bind another program over texture_color, which LP2 does not load
+        // :393-525: BUMPY_ENVIRONMENT2 (LP6's inputs) with a bump stage, texture_color
+        // sampling the cube as a Texture2D without one: not drawn (M-STAGE-DIFF-05)
         continue;
+      case em::TexgenSkyboxCube:
+        // :526-529
+        draw.program = PrepassProgram::SkyBox;
+        break;
+      case em::TexgenWobbleskyCube:
+        // :530-586, at the preview's material time 0 (K5)
+        draw.program = PrepassProgram::WobbleSky;
+        draw.wobbleSky = engineStageWobbleSky(material, registers);
+        break;
       default:
         break;
       }

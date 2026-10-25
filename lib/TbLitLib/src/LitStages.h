@@ -152,14 +152,25 @@ enum class PrepassProgram
   Color,
   // BUILTIN_TEXTURE_VERTEXCOLOR, TEXTURE
   TextureColor,
+  // LP5.2b (C48, SC528): the program PrepareStageTexturing binds over texture_color for
+  // an alpha-tested stage of a cube or sky texgen (none of them clips):
+  // BUILTIN_ENVIRONMENT (55), DEFAULT: TG_REFLECT_CUBE without a bump stage
+  Environment,
+  // BUILTIN_BUMPY_ENVIRONMENT (57), NORMAL_CUBE: TG_REFLECT_CUBE with one
+  BumpyEnvironment,
+  // BUILTIN_SKYBOX (69), LEGACY: TG_SKYBOX_CUBE
+  SkyBox,
+  // BUILTIN_WOBBLESKY (70), LEGACY: TG_WOBBLESKY_CUBE
+  WobbleSky,
 };
 
 /**
  * One draw FillDepthBufferGeneric (RenderBackend.cpp:706-914) makes of a surface: the
  * program, the GL state bits, GL_PolygonOffset's (slope, bias) when POLYGON_OFFSET is
- * set, the colour after GL_Color's clamp, ALPHA_TEST, and for TextureColor the stage
- * whose image unit 0 binds, its texture matrix and TEXGEN_0_ENABLED, and whether its
- * texgen needs TG_SCREEN's planes.
+ * set, the colour after GL_Color's clamp, ALPHA_TEST, and for an alpha-tested stage's
+ * draw the stage whose image unit 0 binds, its texture matrix and TEXGEN_0_ENABLED,
+ * whether its texgen needs TG_SCREEN's planes, and (LP5.2b) BumpyEnvironment's bump stage
+ * (unit 1) and WobbleSky's WOBBLESKY_X..Z.
  */
 struct PrepassDraw
 {
@@ -172,11 +183,15 @@ struct PrepassDraw
   std::optional<Vec4> color;
   // ALPHA_TEST, for the alpha-tested stages
   std::optional<Vec4> alphaTest;
-  // TextureColor: the stage index
+  // an alpha-tested stage's draw: the stage index
   int stage = -1;
   std::array<Vec4, 2> textureMatrix = {};
   Vec4 texGenEnabled = {0.0f, 0.0f, 0.0f, 0.0f};
   bool screenTexgen = false;
+  // LP5.2b: BumpyEnvironment's bump stage (GetBumpStage), -1 otherwise
+  int bumpStage = -1;
+  // LP5.2b: WobbleSky's WOBBLESKY_X..Z
+  std::array<Vec4, 3> wobbleSky = {};
 };
 
 /**
@@ -203,9 +218,17 @@ std::array<Vec4, 3> engineStageWobbleSky(
  * and whose alpha register is above 0 (privatePolygonOffset per stage), and when no
  * alpha-tested stage was tried the solid draw: Color for SS_SUBVIEW (DST_COLOR / ZERO,
  * LESS, colour 1), Depth with GLS_ALPHAMASK otherwise; MF_POLYGONOFFSET adds
- * GLS_POLYGON_OFFSET with r_offsetFactor and r_offsetUnits · polygonOffset. A stage of a
- * texgen that binds another program in PrepareStageTexturing (the cube and sky texgens)
- * is not drawn (mirror.json M-PASS-DIFF-03).
+ * GLS_POLYGON_OFFSET with r_offsetFactor and r_offsetUnits · polygonOffset. LP5.2b (C48,
+ * SC528, :783-866): an alpha-tested stage's draw takes texture_color, GL_Color( 0, 0, 0,
+ * a ) and ALPHA_TEST first, then PrepareStageTexturing replaces the program for the cube
+ * and sky texgens: TG_REFLECT_CUBE Environment, or BumpyEnvironment with the material's
+ * bump stage at unit 1; TG_SKYBOX_CUBE SkyBox; TG_WOBBLESKY_CUBE WobbleSky with its
+ * transform at time 0 (K5). None of them clips (ALPHA_TEST is written and never read), so
+ * the stage writes the whole surface's depth, and its colour: (0, 0, 0) through rpColor
+ * for the first three, the sky's texel for WobbleSky (its colour the vertex colour, (1,
+ * 1, 1) under SVC_IGNORE). A TG_REFLECT_CUBE2 stage is not drawn, its stage tried
+ * (programs 59-62 with a bump stage, LP6's inputs; texture_color sampling a cube as a
+ * Texture2D without one: mirror.json M-STAGE-DIFF-05).
  */
 std::vector<PrepassDraw> engineGenericDepthDraws(
   const MaterialEntry& material, std::span<const float> registers);

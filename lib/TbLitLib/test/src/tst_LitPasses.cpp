@@ -47,6 +47,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <map>
@@ -448,6 +449,108 @@ TEST_CASE("LitPasses: the state bits of the prepass and the interaction lists (D
   CHECK(engineInteractionList(noSelf, true) == InteractionList::Global);
   CHECK(engineInteractionList(translucent, false) == InteractionList::Translucent);
   CHECK(engineInteractionList(translucent, true) == InteractionList::Translucent);
+}
+
+TEST_CASE(
+  "LitPasses: the prepass's alpha-tested cube and sky stages (LP5.2b, C48, SC528, "
+  "M-PASS-11)")
+{
+  const auto registers = testRegisters();
+  auto cube = imageKey("env/sky", engine_image::UsageDefault);
+  cube.cube = 1;
+  // a perforated material whose one alpha-tested SL_AMBIENT stage has the texgen
+  const auto materialOf = [&](const int texgen, const bool bump) {
+    auto material = MaterialEntry{};
+    material.coverage = em::CoveragePerforated;
+    auto stage = stageOf(em::LightingAmbient, cube);
+    stage.hasAlphaTest = true;
+    stage.alphaTestRegister = 2;
+    stage.texgen = texgen;
+    if (bump)
+    {
+      material.stages.push_back(
+        stageOf(em::LightingBump, imageKey("local", engine_image::UsageBump)));
+    }
+    material.stages.push_back(stage);
+    // wobbleSky 0.5 2 45.5 (registers 2, 3, 4)
+    material.texGenRegisters = {2, 3, 4};
+    return material;
+  };
+
+  SECTION("an alpha-tested skybox stage: skybox (69), ALPHA_TEST written, no solid draw")
+  {
+    const auto draws =
+      engineGenericDepthDraws(materialOf(em::TexgenSkyboxCube, false), registers);
+    REQUIRE(draws.size() == 1u);
+    // the program replaced after ALPHA_TEST was set (:832-850): the draw is skybox's,
+    // whose shader never clips, so the whole surface's depth is written
+    CHECK(draws[0].program == PrepassProgram::SkyBox);
+    CHECK(draws[0].alphaTest == Vec4{0.5f, 0.5f, 0.5f, 0.5f});
+    // GL_Color( 0, 0, 0, a ): rpColor, the skybox colour, is black
+    CHECK(draws[0].color == Vec4{0, 0, 0, 1});
+    CHECK(draws[0].stage == 0);
+    // GLS_DEFAULT's depth (LESS, write) and blend (ONE / ZERO): the colour is written
+    CHECK(draws[0].state == 0u);
+    CHECK(draws[0].texGenEnabled == Vec4{0, 0, 0, 0});
+    CHECK_FALSE(draws[0].screenTexgen);
+    // "ALPHA_TEST set, then ignored" is not observable here: no renderparm set of the
+    // replacing programs' layouts (DEFAULT set 0, NORMAL_CUBE and LEGACY set 5) holds
+    // ALPHA_TEST, and the pipeline key names the replacing program alone
+    const auto alphaLayouts = engineLayoutsOfParm(RenderParm::AlphaTest);
+    for (const auto layout :
+         {EngineBindingLayout::Default,
+          EngineBindingLayout::NormalCube,
+          EngineBindingLayout::Legacy})
+    {
+      CHECK((alphaLayouts & (std::uint64_t{1} << std::size_t(layout))) == 0u);
+    }
+    CHECK(
+      (alphaLayouts & (std::uint64_t{1} << std::size_t(EngineBindingLayout::Texture)))
+      != 0u);
+  }
+
+  SECTION("reflect: environment (55), or bumpyenvironment (57) with the bump stage")
+  {
+    const auto plain =
+      engineGenericDepthDraws(materialOf(em::TexgenReflectCube, false), registers);
+    REQUIRE(plain.size() == 1u);
+    CHECK(plain[0].program == PrepassProgram::Environment);
+    CHECK(plain[0].bumpStage == -1);
+    const auto bumpy =
+      engineGenericDepthDraws(materialOf(em::TexgenReflectCube, true), registers);
+    REQUIRE(bumpy.size() == 1u);
+    CHECK(bumpy[0].program == PrepassProgram::BumpyEnvironment);
+    CHECK(bumpy[0].bumpStage == 0);
+    CHECK(bumpy[0].stage == 1);
+  }
+
+  SECTION("wobbleSky: wobblesky (70) with its transform at time 0")
+  {
+    const auto material = materialOf(em::TexgenWobbleskyCube, false);
+    const auto draws = engineGenericDepthDraws(material, registers);
+    REQUIRE(draws.size() == 1u);
+    CHECK(draws[0].program == PrepassProgram::WobbleSky);
+    CHECK(draws[0].wobbleSky == engineStageWobbleSky(material, registers, 0.0f));
+    // the tilt of 0.5 degrees at time 0: the third row ( sin, 0, cos )
+    CHECK(
+      std::abs(draws[0].wobbleSky[2][0] - std::sin(0.5f * 3.14159265f / 180.0f)) < 1e-6f);
+  }
+
+  SECTION("reflect2: not drawn (LP6's inputs, M-STAGE-DIFF-05), and no solid draw")
+  {
+    CHECK(engineGenericDepthDraws(materialOf(em::TexgenReflectCube2, false), registers)
+            .empty());
+    CHECK(engineGenericDepthDraws(materialOf(em::TexgenReflectCube2, true), registers)
+            .empty());
+  }
+
+  SECTION("an explicit alpha-tested stage stays on texture_color")
+  {
+    const auto draws =
+      engineGenericDepthDraws(materialOf(em::TexgenExplicit, false), registers);
+    REQUIRE(draws.size() == 1u);
+    CHECK(draws[0].program == PrepassProgram::TextureColor);
+  }
 }
 
 TEST_CASE("LitPasses: the surface stage loop's decisions (SC229, SC230)")

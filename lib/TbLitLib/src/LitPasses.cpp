@@ -664,18 +664,71 @@ bool LitPasses::genericDepth(Frame& frame, const std::vector<const LitSurface*>&
       auto program = EngineBuiltinDepth;
       switch (prepassDraw.program)
       {
-      case PrepassProgram::TextureColor: {
+      case PrepassProgram::TextureColor:
+      case PrepassProgram::Environment:
+      case PrepassProgram::BumpyEnvironment:
+      case PrepassProgram::SkyBox:
+      case PrepassProgram::WobbleSky: {
+        // :832-850: BindShader_TextureVertexColor, SVC_IGNORE, unit 0 the stage's image;
+        // LP5.2b (C48, SC528): PrepareStageTexturing then replaces the program for the
+        // cube and sky texgens (ALPHA_TEST stays written and unread: the key names the
+        // replacing program, which never clips), so their stage writes the whole
+        // surface's depth; LOCALVIEWORIGIN and MODELMATRIX are what the frame's
+        // ZeroUniforms left (0: no space set them before the prepass), as the engine's
         program = EngineBuiltinTextureVertexColor;
         const auto vertexColor = engineVertexColorParms(em::VertexColorIgnore);
         m_parms.set(RenderParm::VertexColorModulate, vertexColor[0]);
         m_parms.set(RenderParm::VertexColorAdd, vertexColor[1]);
         // bind the texture: unit 0 is the stage's image
         const auto& stage = surface->material->stages[std::size_t(prepassDraw.stage)];
-        if (!stage.image)
+        if (prepassDraw.program == PrepassProgram::TextureColor)
         {
-          continue;
+          if (!stage.image)
+          {
+            continue;
+          }
+          m_units[0] = *stage.image;
         }
-        m_units[0] = *stage.image;
+        else
+        {
+          program =
+            prepassDraw.program == PrepassProgram::Environment ? EngineBuiltinEnvironment
+            : prepassDraw.program == PrepassProgram::BumpyEnvironment
+              ? EngineBuiltinBumpyEnvironment
+            : prepassDraw.program == PrepassProgram::SkyBox ? EngineBuiltinSkyBox
+                                                            : EngineBuiltinWobbleSky;
+          // the cube by its slot's state (the zero cube while not written:
+          // M-STAGE-DIFF-04); the frame unconverged until it is
+          auto& images = *frame.inputs->images;
+          const auto [cube, pendingCube] = cubeImage(images, stage.image);
+          m_units[0] = cube;
+          if (pendingCube)
+          {
+            m_stats.unconverged = true;
+            m_stats.retrigger = true;
+          }
+          if (prepassDraw.program == PrepassProgram::BumpyEnvironment)
+          {
+            // :366-368: the bump stage's image raw at unit 1 (_flat for a Default one,
+            // M-STAGE-DIFF-06)
+            const auto& bump =
+              surface->material->stages[std::size_t(prepassDraw.bumpStage)];
+            m_units[1] = bumpImage(images, bump.image);
+            if (!m_units[1])
+            {
+              ++m_stats.skippedDraws;
+              m_stats.unconverged = true;
+              m_stats.retrigger = true;
+              continue;
+            }
+          }
+          if (prepassDraw.program == PrepassProgram::WobbleSky)
+          {
+            m_parms.set(RenderParm::WobbleSkyX, prepassDraw.wobbleSky[0]);
+            m_parms.set(RenderParm::WobbleSkyY, prepassDraw.wobbleSky[1]);
+            m_parms.set(RenderParm::WobbleSkyZ, prepassDraw.wobbleSky[2]);
+          }
+        }
         // PrepareStageTexturing: the texture matrix and TEXGEN_0_ENABLED
         m_parms.set(RenderParm::TextureMatrixS, prepassDraw.textureMatrix[0]);
         m_parms.set(RenderParm::TextureMatrixT, prepassDraw.textureMatrix[1]);
