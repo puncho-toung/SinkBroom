@@ -8164,7 +8164,7 @@
           "symbol": "readGeometry"
         }
       ],
-      "note": "D64: tokenised with the copied idLexer (InitFromMap's LEXFL_NOSTRINGCONCAT | LEXFL_NODOLLARPRECOMPILE) on the parse thread; shadowModel skipped; the engine's bounds checks, and a node child that names no node is refused; model geometry kept only on request (the goldens, LP7). LP1c.1: maps/<map>.proc through the C8 search (C10, D55), from the map document's engine name, not beside the .map file (M-BAKE-02)"
+      "note": "D64: tokenised with the copied idLexer (InitFromMap's LEXFL_NOSTRINGCONCAT | LEXFL_NODOLLARPRECOMPILE) on the parse thread; shadowModel skipped; the engine's bounds checks, and a node child that names no node is refused; model geometry kept only on request (the goldens, LP7). LP1c.1: maps/<map>.proc through the C8 search (C10, D55), from the map document's engine name, not beside the .map file (M-BAKE-02) LP7.0: the product's bake read keeps the geometry (MapBake, M-PROC-01)."
     },
     {
       "id": "M-GEO-FN-06",
@@ -8212,7 +8212,7 @@
           "symbol": "readBack (vertex positions)"
         }
       ],
-      "note": "A17, D59: the islands as a union-find, which makes ParseModel's partition; Ftoi((min + max) * 0.5f) per island, then SetTexCoord; the colour format's PackColorRound is LP7's. R3.9: the chunker reads its st and vertex positions back as ParseModel reads what dmap wrote: WriteFloat's text (its snap to an integer within 0.001 included), then lit/NumberText.h's lexerFloat (M-ID-FN-26), before the recentring and SetTexCoord"
+      "note": "A17, D59: the islands as a union-find, which makes ParseModel's partition; Ftoi((min + max) * 0.5f) per island, then SetTexCoord; the colour format's PackColorRound is LP7's. R3.9: the chunker reads its st and vertex positions back as ParseModel reads what dmap wrote: WriteFloat's text (its snap to an integer within 0.001 included), then lit/NumberText.h's lexerFloat (M-ID-FN-26), before the recentring and SetTexCoord LP7.0: the colour format's PackColorRound is M-PROC-01's."
     },
     {
       "id": "M-GEO-FN-08",
@@ -8301,7 +8301,67 @@
           "symbol": "parseSpawnArgsToRenderEntity, mergeSpawnArgs, spawnVector, mapOrigin"
         }
       ],
-      "note": "A7, A10, SC51-SC53: the model, the genmodel_ branch and the guis are LP7's; the getters parse as the C library does in the C locale, whatever the process locale (R1.1: lit/NumberText.h's parseFloatChars, std::from_chars, fast_float's on Apple): sscanf's %f straight to a float, atof (GetFloat) and the map loader's %lf origin to a double, then a float, atoi through from_chars"
+      "note": "A7, A10, SC51-SC53: the model, the genmodel_ branch and the guis are LP7's; the getters parse as the C library does in the C locale, whatever the process locale (R1.1: lit/NumberText.h's parseFloatChars, std::from_chars, fast_float's on Apple): sscanf's %f straight to a float, atof (GetFloat) and the map loader's %lf origin to a double, then a float, atoi through from_chars LP7.0: idEntity::Spawn's hide is M-ENT-01's (RenderEntityParms::hidden)."
+    },
+    {
+      "id": "M-ENT-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/d3xp/Entity.cpp",
+          "lines": [
+            651,
+            656
+          ],
+          "anchor": "idEntity::Spawn: fl.hidden = spawnArgs.GetBool( \"hide\", \"0\" ), EV_Hide",
+          "sha256": "fd9d02ad1f2692e4867a1652a7f04c2505feb38f78b36276ca11249674bea41e"
+        },
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            1381,
+            1393
+          ],
+          "anchor": "idLight::Event_Hide: Hide() (or the modelTarget's), Off()",
+          "sha256": "1446f2581fb7af2e478ce5933ca46672291455d2a4e77c7b261726f467e88b0d"
+        },
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            838,
+            850
+          ],
+          "anchor": "idLight::Off",
+          "sha256": "86aabd883f9bcc3def154bd85c18d8758543cc72b06e59e48cebb87e94541ca2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/EntityState.h",
+          "symbol": "RenderEntityParms::hidden"
+        },
+        {
+          "file": "lib/TbLitLib/src/EntityState.cpp",
+          "symbol": "parseSpawnArgsToRenderEntity, RenderEntityParms::operator==, renderEntityHash"
+        },
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "Builder::makeContext (a hidden entity is invisible)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightRecord.cpp",
+          "symbol": "buildLightRecords (a hidden light is removed)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_Geometry.cpp",
+          "symbol": "EntityState: hide; ChunkBuilder: a hidden brush entity; SceneGeometry: hide on a brush entity, set and cleared (LP7.0)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LightRecord.cpp",
+          "symbol": "LightRecord: hide 1 turns the light off"
+        }
+      ],
+      "note": "LP7.0 (C52, D128, P7.17, SC652): idEntity::Spawn reads hide with GetBool( \"hide\", \"0\" ) (atoi( GetString ) != 0) on its spawnArgs, the map keys with the entityDef's defaults (SetDefaults: the merged keys of C22/A10, mergeSpawnArgs), and posts EV_Hide, whose Hide() frees the render entity: nothing of the entity is drawn. RenderEntityParms::hidden is read where the preview reads noshadows and _color (parseSpawnArgsToRenderEntity) and is in its equality and its hash; a brush entity with it is invisible in the chunk builder (no chunk, its pieces skipped), a key change rebuilds the entity's cells; C52's model instances will read it. A light: idLight::Event_Hide hides the light's model (or its modelTarget's) and calls Off(), which sets currentLevel 0 and SetLightLevel: no light; buildLightRecords drops the record (as a removed class, R3.12), and a change of the key builds the light again, so the record comes back. worldspawn and a func_group are world geometry and never hidden. The parity maps and their defs hold no hide key (grep, LP7.0)"
     },
     {
       "id": "M-GEO-FN-10",
@@ -8516,7 +8576,127 @@
           "symbol": "readBinaryModel, readBprocFile"
         }
       ],
-      "note": "A9, SC72: big-endian ReadBig, little-endian ReadVec3/ReadFloat/strings; every count checked against the bytes left; LP1c.1 reuses readBinaryModel. LP1c.1: the BFG's version-1 and version-2 files are read too, the version-1 \"shadowmodel\" entries as models (InitFromMap :854-865); when they are used is lit/BprocFile.h's (M-BAKE-01). A .pk4 or .resources .bproc is read through the C8 search"
+      "note": "A9, SC72: big-endian ReadBig, little-endian ReadVec3/ReadFloat/strings; every count checked against the bytes left; LP1c.1 reuses readBinaryModel. LP1c.1: the BFG's version-1 and version-2 files are read too, the version-1 \"shadowmodel\" entries as models (InitFromMap :854-865); when they are used is lit/BprocFile.h's (M-BAKE-01). A .pk4 or .resources .bproc is read through the C8 search LP7.0: the .bproc tree keeps the finished surfaces readBinaryModel reads (M-PROC-02)."
+    },
+    {
+      "id": "M-PROC-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            300,
+            321
+          ],
+          "anchor": "ParseModel: each vertex Clear()ed, its colour PackColorRound of the rgba for PROC_VERTEX_FORMAT_COLOR, opaque white for the basic format",
+          "sha256": "07bd9adb20ff7754b670aca91a51b0269d26a73d765515a9b2b707cf79e6b62c"
+        },
+        {
+          "file": "neo/idlib/Lib.cpp",
+          "lines": [
+            175,
+            182
+          ],
+          "anchor": "PackColorRound",
+          "sha256": "f3f8504a235d53987f7e60caa09c25d428045e49b85dd0dc7a652e3dec793f11"
+        },
+        {
+          "file": "neo/idlib/geometry/DrawVert.h",
+          "lines": [
+            535,
+            538
+          ],
+          "anchor": "idDrawVert::SetColor",
+          "sha256": "615110a96878a5f9baf90305f6e7521e68b45adadc7b641142ffa60bab90bd5d"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            202,
+            222
+          ],
+          "anchor": "ParseModel: every vertex and index parsed, whatever is kept",
+          "sha256": "b5914b2c7ec897feaacb24098cff4baeca2932a03dca24b030abac17dc9124b7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ProcFile.cpp",
+          "symbol": "loadProcSurface (the colour), procTreeBytes"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "enginePackColorRound, engineSetColor"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/ProcFile.h",
+          "symbol": "ProcSurface, ProcModel::finished, procTreeBytes"
+        },
+        {
+          "file": "lib/TbLitLib/src/MapBake.cpp",
+          "symbol": "readGeometry (readProcFile with the geometry, MapBake::procBytes)"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::loadMapBake, publish (MaterialServiceStats::procBytes)"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameLog.cpp",
+          "symbol": "frameLogHeader, formatFrameLogRow (proc_bytes)"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::main, appendSessionRow (the stop row's proc_bytes)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_Geometry.cpp",
+          "symbol": "ProcFile: the colour format's colours (LP7.0, C4, C54); MaterialService, map bakes on the parse thread"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_MapBake.cpp",
+          "symbol": "MapBake, the C10 search: the .proc's geometry, the .bproc's finished surfaces"
+        }
+      ],
+      "note": "LP7.0 (C4 extended, C54, D132, P7.18, SC649, SC636): the colour is the file's. ParseModel clears each vertex (Clear: color and color2 zero), sets xyz, st and the normal, then the colour: PROC_VERTEX_FORMAT_COLOR's four floats through PackColorRound, which rounds where PackColor truncates (\"dmap wrote byte / 255 with six decimals, which can parse a hair below the byte\": 0.498039 packs 127, PackColor would give 126) and clamps through Ftob (each component Ftob( x * 255 + 0.5 ), packed ( dx << 0 ) | ( dy << 8 ) | ( dz << 16 ) | ( dw << 24 ), stored by SetColor in native order, so color[0] is red on little-endian machines); the basic format PackColor( colorWhite ), opaque white; color2 stays zero. PackColorRound is transcribed in the geometry facade (enginePackColorRound) with the copied idMath::Ftob, Lib.cpp not being copied; SetColor is the copied DrawVert.h's. The product's bake read (MapBake readGeometry) asks readProcFile for the geometry, so the published tree holds every surface's vertex floats and indexes; the parse is the same (ParseModel tokenises every vertex and index either way), the cost is memory: procTreeBytes counts the arrays (4 B per float, 32 B per finished draw vertex, 4 B per index, 12 B per portal point, 24 B per node), about 38 B per vertex: lp1b_geometry.proc 8,368 B (984 B without the geometry, 188 vertices), its .bproc tree 9,128 B (208 finished vertices); the sandbox's parity .procs 23,648 (areas), 34,120 (ambient), 52,504 (parity), 72,344 (stages) B. MaterialServiceStats::procBytes sums the bakes' trees, each once; the frame log's stop row carries the adopted bake's as proc_bytes (empty in frame rows). Nothing draws from the geometry in LP7.0: LP7.3 (the dress decals) and LP7.4 (the adopted islands) read it"
+    },
+    {
+      "id": "M-PROC-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            386,
+            623
+          ],
+          "anchor": "idRenderModelStatic::LoadBinaryModel",
+          "sha256": "8c42dfb90b84006a9ffbd6f19bc812066924f516628f4164edf5f11987e9b7a3"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            128,
+            141
+          ],
+          "anchor": "ReadBinaryModel",
+          "sha256": "d0761dad01664b6b36ec0739705f0d953d87aee9d108aa2a4c60305273fa44d8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/BprocFile.cpp",
+          "symbol": "readBprocTree (the finished surfaces kept)"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/ProcFile.h",
+          "symbol": "ProcModel::finished, ProcSurface::finishedVerts, tangentsCalculated, vertexFormat -1"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_GeometryGoldens.cpp",
+          "symbol": "Geometry goldens: (b) the copied tangent code against the .bproc (the bake's .bproc tree)"
+        }
+      ],
+      "note": "LP7.0 (D138, P7.12, SC636): a .bproc's models are the engine's finished surfaces (WriteBinaryModel after FinishSurfaces: back-side copies as extra surfaces, mirrored duplicates, tangents, recentred st, the colour packed) and BRM stores no vertex format. The preview keeps them as readBinaryModel reads them (draw vertices, indexes, tangentsCalculated) with vertexFormat -1 and ProcModel::finished true (false for a .proc), so loadProcSurface loads nothing from them. The difference: C54 (the dress fragments) and C55 (the adoption of the .proc's triangles) are defined for a .proc only; a map baked as a .bproc alone (admin: maps/admin.resources) identifies no dress surface and adopts nothing (dress_surfaces and adopted_tris 0), Q37 decides whether a later package reads finished surfaces by a rule of their own. The engine itself draws the .bproc's surfaces as they are"
     },
     {
       "id": "M-GEO-FN-12",
@@ -10686,6 +10866,126 @@
         }
       ],
       "note": "K16: the engine reads generated/<map>.bproc first and the .proc only when there is no usable .bproc; the preview reads the .proc first, because dmap deletes the .bproc on every run (SC74), so in an editing session the text is the newer file. A .proc that does not parse counts as none and the .bproc stands in, with the version gate the engine applies (a version-1 or 2 file only without any .proc)"
+    },
+    {
+      "id": "M-MODEL-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/ModelManager.cpp",
+          "lines": [
+            313,
+            329
+          ],
+          "anchor": "idRenderModelManagerLocal::GetModel: no name, no model; canonical = _modelName; canonical.ToLower(); the extension",
+          "sha256": "2c9f2fd93dd3609baf1b55fea1158726bcffccd415cbea47f93e977ee348ee2d"
+        },
+        {
+          "file": "neo/idlib/Str.h",
+          "lines": [
+            1101,
+            1110
+          ],
+          "anchor": "idStr::ToLower",
+          "sha256": "f63cca5b7d6b087aa59ccdd3bbe5f6e34c1410e4648545367637e80cba1fea98"
+        },
+        {
+          "file": "neo/idlib/Str.h",
+          "lines": [
+            1404,
+            1408
+          ],
+          "anchor": "idStr::CharIsUpper",
+          "sha256": "966da2fda06176a186964192132f2447f4915d23464f1450fee306eb94d87c73"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/ModelRecord.h",
+          "symbol": "canonicalModelName"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelRecord.cpp",
+          "symbol": "canonicalModelName"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialTable::findModel"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_MaterialService.cpp",
+          "symbol": "MaterialTable: the model records and the skins (LP7.0, C51, C53): the canonical name"
+        }
+      ],
+      "note": "LP7.0 (C51, D126): the model table's key. GetModel returns NULL for a null or empty name; otherwise the name is copied into an idStrStatic< MAX_OSPATH >, which grows on the heap past its buffer (idStr::ReAllocate), so nothing is cut, and lowered by idStr::ToLower: CharIsUpper takes 'A'-'Z' and 0xC0-0xDF, but ToLower passes data[i], a char, which is signed on the engine's compilers (MSVC, GCC and Clang on x86), so a byte of 0x80 or more is negative and only 'A'-'Z' change; the separators and the extension stay. canonicalModelName is that rule (empty for an empty name); MaterialTable::findModel takes the canonical name and allocates nothing"
+    },
+    {
+      "id": "M-MODEL-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/ModelManager.cpp",
+          "lines": [
+            331,
+            336
+          ],
+          "anchor": "GetModel: a model already present, found by its canonical name",
+          "sha256": "825f201bc1d9ec0bf9a1d6244c7ceee01c4d72bca201d50b1ae092a3223c2435"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            400,
+            406
+          ],
+          "anchor": "LoadBinaryModel: the stored time and the time test",
+          "sha256": "b6c1ce885ef6e7a5ff96e680f3cc02695527bcd5756c0ab925e2bb6708e59309"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            772,
+            794
+          ],
+          "anchor": "the GLMB tail: declTimeStamp, model_state, the animation count",
+          "sha256": "df4d8e37eda7d94e423d046a981b169ee7e593628143bba9a405a9401e86c937"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/ModelRecord.h",
+          "symbol": "ModelRecord, ModelSurface, SkinRecord, SkinSlot"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/MaterialService.h",
+          "symbol": "MaterialTable::models, modelChanges, changedModels, skins, findModel, findSkin; MaterialServiceOptions::registryBuiltForTesting"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::resetWorkingTable (models kept, skins per registry), buildRegistry"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/FrameLog.h",
+          "symbol": "FrameLogRow: modelEntities ... curvedIslands"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameLog.cpp",
+          "symbol": "lp7Fields, frameLogHeader"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::drawFrame (LP7's eleven counts, 0)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_MaterialService.cpp",
+          "symbol": "MaterialTable: the model records and the skins (LP7.0, C51, C53); MaterialTable's finds allocate nothing"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_FrameLog.cpp",
+          "symbol": "FrameLog: LP7.0's columns"
+        }
+      ],
+      "note": "LP7.0 (C51, C52, C53, D126, P7.19, P7.20): the engine loads a model synchronously on the calling thread (GetModel) and keeps it in its model list by canonical name; the preview's model table is the material service's, published with the materials (C20), so a record has states of its own: Pending (requested, read or finishing: its entities draw nothing and keep the frame unconverged, D124), Ready, Missing (no file: the default cube, flagged) and Default (an unknown type, a validator or loader failure, a modelDef name on an idEntity spawnclass: the cube, flagged). A record carries per surface the material, EngineDrawVert vertices, 16-bit indexes, generateNormals, tangentsCalculated and bounds; the model bounds, the three has-surfaces flags, the source kind (binary, source, default), the source time (A4, the file source's), the binary's stored time (LoadBinaryModel's test is LP7.1a's), a .bglb's model_state and animation count (P7.19), a version and the notice's reason. MaterialTable::models is kept across reloads with modelChanges and changedModels, as the images' slots are (a model does not depend on the decls; LP7.1a's source path re-finishes records whose materials change, P7.22); MaterialTable::skins is per registry, as the entityDefs. LP7.0 has no loader and no request path: the maps are empty, so every model name finds no record. The skins are not reachable from the parse thread through the facade today: the shim registers DECL_SKIN with the copied idDeclSkin (DeclManagerShim.cpp Init, Init2: the skins folder) and the registry parses a skin when FindSkin asks, but MaterialDecls has no skin call and idDeclSkin's mappings are private (RemapShaderBySkin is its only lookup), so the map stays empty until LP7.2 adds a facade call. The frame log carries LP7's eleven counts (model_entities, model_instances, model_draws, models_pending, models_skinned, dress_surfaces, dress_unmatched, adopted_islands, adopted_tris, unmatched_islands, curved_islands) after proc_bytes at the end of the header, 0 in every frame row until LP7.2-LP7.4 fill them, empty in start and stop rows: 69 fields"
     },
     {
       "id": "M-BAKE-DIFF-02",
@@ -20223,9 +20523,13 @@
         {
           "file": "lib/TbLitLib/test/README.md",
           "symbol": "Hidden tests"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_Feed.cpp",
+          "symbol": "the [.][feed] tag comment (in none of the [.][litgpu*] suites)"
         }
       ],
-      "note": "LP5.0 step 6 (RUN.md, the director's decisions after LPF.1 (5); P6.24), test only, no engine counterpart: the hidden GPU cases run in two suites, each under the 180 s wall clock in Debug: [.][litgpu] LP0-LP2's (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit; 5 cases, 95.5 / 97.8 / 99.1 s at LP5.0) and [.][litgpu2] LP4's and later ones (ambient pass, light-grid path, live feed, LP5's programs; 4 cases, 59.7 / 59.8 / 60.4 s); LPF.2's host cases stay [.][feed]. Each case makes its own instance, device and session, bounds its waits (H.1) and resets the dispatcher, so either suite runs alone and in any order. The gate measures both and a third tag comes once one passes 150 s. TbUiLib's [.][litgpu] cases are not split"
+      "note": "LP5.0 step 6 (RUN.md, the director's decisions after LPF.1 (5); P6.24), test only, no engine counterpart: the hidden GPU cases run in two suites, each under the 180 s wall clock in Debug: [.][litgpu] LP0-LP2's (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit; 5 cases, 95.5 / 97.8 / 99.1 s at LP5.0) and [.][litgpu2] LP4's and later ones (ambient pass, light-grid path, live feed, LP5's programs; 4 cases, 59.7 / 59.8 / 60.4 s); LPF.2's host cases stay [.][feed]. Each case makes its own instance, device and session, bounds its waits (H.1) and resets the dispatcher, so either suite runs alone and in any order. The gate measures both and a third tag comes once one passes 150 s. TbUiLib's [.][litgpu] cases are not split LP7.0 step 1 (D134, C56): a third tag, [.][litgpu3], takes LP5's seven cases (LP5.0 programs, LP5.1 math, LP5.2a pass 8, LP5.2b texgens, LP5.F sizes, LP5.3 fog, LP5.G reload); [.][litgpu2] keeps LP4.2a, LP4.3 and LPF.1; [.][litgpu] is unchanged. Debug wall clocks at the split: [litgpu] 92.3 / 95.5 / 92.7 s (5 cases), [litgpu2] 59.1 / 59.4 / 59.0 s (3), [litgpu3] 77.9 / 78.5 / 77.7 s (7). LP7's cases join [litgpu3] until it passes 150 s, then a fourth. The GPU cases' frame-log field count is one constant, FrameLogFields (69 since LP7.0)"
     },
     {
       "id": "M-INTER-02",
