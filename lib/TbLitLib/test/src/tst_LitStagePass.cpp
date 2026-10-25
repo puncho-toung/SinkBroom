@@ -801,6 +801,27 @@ TEST_CASE("LitStagePass: the stages map's S materials (LP5.2a, C50)")
     {"textures/lp5/s12_backbox", 1, 0},
     {"textures/lp5/s13_voronoi", 1, 0, StageProgram::Material},
     {"textures/lp5/s14_fogwithlights", 1, 0, StageProgram::Material},
+    // LP5.2b: the texgen rooms
+    {"textures/lp5/s08_sky", 1, 0, StageProgram::SkyBox, 0.0f, em::CoverageOpaque},
+    {"textures/lp5/s09_env", 1, 0, StageProgram::Environment, 0.0f, em::CoverageOpaque},
+    {"textures/lp5/s09_bumpy_env",
+     1,
+     0,
+     StageProgram::BumpyEnvironment,
+     0.0f,
+     em::CoverageOpaque},
+    {"textures/lp5/s10_sky_tested",
+     1,
+     0,
+     StageProgram::SkyBox,
+     0.0f,
+     em::CoveragePerforated},
+    {"textures/lp5/s11_wobble_add",
+     1,
+     0,
+     StageProgram::WobbleSky,
+     0.0f,
+     em::CoveragePerforated},
   };
   for (const auto& want : expected)
   {
@@ -816,6 +837,31 @@ TEST_CASE("LitStagePass: the stages map's S materials (LP5.2a, C50)")
     CHECK(result.skipped == want.skipped);
     CHECK(result.draws[0].program == want.program);
   }
+  // LP5.2b: the gl_zero, gl_one twins: perforated, skipped by pass 8, drawn by the
+  // prepass on their texgen's program (the whole surface's depth)
+  for (const auto& [name, program] :
+       {std::pair{"textures/lp5/s10_sky_mask", PrepassProgram::SkyBox},
+        std::pair{"textures/lp5/s11_wobble_mask", PrepassProgram::WobbleSky},
+        std::pair{"textures/lp5/s10_sky_tested", PrepassProgram::SkyBox},
+        std::pair{"textures/lp5/s11_wobble_add", PrepassProgram::WobbleSky}})
+  {
+    CAPTURE(name);
+    const auto material = parsed(decls, name);
+    CHECK(material->coverage == em::CoveragePerforated);
+    const auto registers = registersOf(decls, *material, WhiteParms);
+    const auto result = engineShaderPassDraws(*material, registers);
+    const auto mask = std::string{name}.find("mask") != std::string::npos;
+    CHECK(result.draws.size() == (mask ? 0u : 1u));
+    CHECK(result.skipped == (mask ? 1u : 0u));
+    const auto prepass = engineGenericDepthDraws(*material, registers);
+    REQUIRE(prepass.size() == 1u);
+    CHECK(prepass[0].program == program);
+  }
+  // the cube images: CF_NATIVE
+  REQUIRE(parsed(decls, "textures/lp5/s08_sky")->stages[0].image);
+  CHECK(parsed(decls, "textures/lp5/s08_sky")->stages[0].image->cube == 1);
+  CHECK(
+    parsed(decls, "textures/lp5/s08_sky")->stages[0].image->name == "textures/lp5/sky");
   CHECK(parsed(decls, "textures/lp5/s06_implicit")->implicit);
   CHECK(parsed(decls, "textures/lp5/s12_backbox")->cullType == engine_cull::BackSided);
   // the M and B rooms' materials have no SL_AMBIENT stage

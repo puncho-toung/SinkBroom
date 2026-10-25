@@ -6761,7 +6761,8 @@ TEST_CASE("LitSession parity rows: the ambient-only switch (LP4.2b)")
  * there, and the areas of the room centres its volume is built to reach. LP5.1 (C45): the
  * .json and "expect" gain the interaction phases' counters (texture_lights, math_lights,
  * ambient_lights). LP5.2a (C46, C50): and the stage pass's (stage_draws, stage_skipped);
- * a control of mode "row" is not black (its unlit stages draw). Hidden: it needs a GPU
+ * a control of mode "row" is not black (its unlit stages draw); LP5.2b (C48): and
+ * stage_pending. Hidden: it needs a GPU
  * and the root of a parity.py run.
  */
 TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
@@ -7032,7 +7033,7 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           "\"grid_surfaces\": {}, \"ambient_grid_surfaces\": {}, \"entity_grid_areas\": "
           "{{{}}}, "
           "\"entity_grid_area\": {}, \"stage_draws\": {}, \"stage_skipped\": {}, "
-          "\"view_lights\": [{}]}}\n",
+          "\"stage_pending\": {}, \"view_lights\": [{}]}}\n",
           width,
           height,
           settleMs,
@@ -7067,6 +7068,7 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           expectedEntityGrid,
           lit.stageDraws,
           lit.stageSkipped,
+          lit.stagePending,
           fmt::join(viewLights, ", ")));
 
       // C38 (LP4.2b): an ambient-only frame drew no interaction and was lit by the
@@ -7139,6 +7141,12 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           else if (key == "stage_skipped")
           {
             CHECK(lit.stageSkipped == std::size_t(value.number));
+          }
+          else if (key == "stage_pending")
+          {
+            // LP5.2b (C48, D124): the surfaces skipped as pending and the cube draws made
+            // with the zero cube (0 on a settled frame)
+            CHECK(lit.stagePending == std::size_t(value.number));
           }
           else if (key == "scissor_smaller_than_view")
           {

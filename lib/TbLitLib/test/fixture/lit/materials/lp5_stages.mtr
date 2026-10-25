@@ -272,3 +272,92 @@ textures/lp5/s14_fogwithlights
 		vertexParm	0	0.5, 1280, 720
 	}
 }
+
+// ----- LP5.2b: the texgen rooms (C48). The cubes are CF_NATIVE (cubeMap: _px _nx _py _ny
+// _pz _nz, Image_files.cpp R_LoadCubeImages); every texcoord is affine per vertex (P6.5)
+
+// S08: TG_SKYBOX_CUBE (skybox, 69) on the far wall of an unlit room: the cube's texel at
+// position - the eye, colour rpColor (1)
+textures/lp5/s08_sky
+{
+	qer_editorimage	textures/lp5/sky_px.tga
+	{
+		cubeMap	textures/lp5/sky
+		texGen	skybox
+	}
+}
+
+// S09: TG_REFLECT_CUBE without a bump stage (environment, 55: colour sRGBAToLinear( rpColor
+// )) and with one (bumpyenvironment, 57: _flat raw at unit 1, colour rpColor), two opaque
+// panels before the head-on lit wall (their prepass depth, pass 8 EQUAL; no interaction
+// draws on them: the bump stage alone has a black diffuse), the reflection their colour
+textures/lp5/s09_env
+{
+	qer_editorimage	textures/lp5/env_nx.tga
+	{
+		cubeMap	textures/lp5/env
+		texGen	reflect
+		rgb	0.5
+	}
+}
+
+textures/lp5/s09_bumpy_env
+{
+	qer_editorimage	textures/lp5/env_nx.tga
+	bumpmap	_flat
+	{
+		cubeMap	textures/lp5/env
+		texGen	reflect
+		rgb	0.5
+	}
+}
+
+// S10: an alpha-tested TG_SKYBOX_CUBE stage: the prepass replaces texture_color by skybox
+// (no clip: the whole surface's depth, black through rpColor 0), pass 8 draws the sky EQUAL;
+// the gl_zero, gl_one twin is skipped by pass 8 (RenderBackend.cpp:4457): its prepass black
+textures/lp5/s10_sky_tested
+{
+	qer_editorimage	textures/lp5/sky_px.tga
+	{
+		cubeMap	textures/lp5/sky
+		texGen	skybox
+		alphaTest	0.5
+	}
+}
+
+textures/lp5/s10_sky_mask
+{
+	qer_editorimage	textures/lp5/sky_px.tga
+	{
+		blend	gl_zero, gl_one
+		cubeMap	textures/lp5/sky
+		texGen	skybox
+		alphaTest	0.5
+	}
+}
+
+// S11: an alpha-tested TG_WOBBLESKY_CUBE stage, rates 0 (D119): the prepass draws wobblesky
+// with LOCALVIEWORIGIN 0 (the sky at position - 0) and the vertex colour 1 (SVC_IGNORE);
+// pass 8 skips the gl_zero, gl_one stage (the prepass's sky alone) and adds the blend add
+// twin's at position - the eye
+textures/lp5/s11_wobble_mask
+{
+	qer_editorimage	textures/lp5/sky_px.tga
+	{
+		blend	gl_zero, gl_one
+		cubeMap	textures/lp5/sky
+		texGen	wobbleSky 0 0 0
+		alphaTest	0.5
+	}
+}
+
+textures/lp5/s11_wobble_add
+{
+	qer_editorimage	textures/lp5/sky_px.tga
+	{
+		blend	add
+		cubeMap	textures/lp5/sky
+		texGen	wobbleSky 0 0 0
+		alphaTest	0.5
+	}
+}
