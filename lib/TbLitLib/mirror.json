@@ -21341,6 +21341,54 @@
         }
       ],
       "note": "LP5.2a step 4 (D118, P6.9), test only: the GPU cases whose models exclude pass 8 skip it with the parity test's switch (skipShaderPassesForTesting, r_skipAmbient 1's stand-in): every case on the LP2.2a root (its lp1b/glass is a blend-only SL_AMBIENT material: the LP2.2a, LP2.2b, LP4.2a, LP4.3 and LPF.1 cases and the stale-bake parity case through rootSession and loggedRootSession, and the sessions LP4.2a's no-bake case, LP5.1's case and LP2.2b's window case make themselves); the feed host's lp5_feed.mtr and the synthetic maps of lp1b/wall, lp1b/grate and lp42a have no SL_AMBIENT stage and are unchanged; the TbUiLib panel draws pass 8 (the product). The step-8 case draws pass 8 over a synthetic map and checks every rule against a pixel model of the background frame"
+    },
+    {
+      "id": "M-TEST-PARITY-05",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4271,
+            4279
+          ],
+          "anchor": "DrawShaderPasses: r_skipAmbient (0 on the stages map)",
+          "sha256": "57584d4dc9afba31ffa1c2a8f87630c4f50895ef134b8b0fee0ecf6db4d809ef"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3727,
+            3772
+          ],
+          "anchor": "idMaterial::SetDefaultText (S06's implicit material)",
+          "sha256": "20e7a6078f1eab521fcfe53fa78e43bd3f606bb8181d7dbdbd14eedb933321cd"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "ST_LIT_EXPECT, the S rows, ST_PARALLEL, st_panel, st_s_room_extras, ST_ROOMS (the S rooms), build_stages_map (cut, colour, extras), STAGES_MTR (the S materials), stages_textures (the S images), BLOBS (texture_color_texgen, vornoipattern, fogwithlights), judge_shot (a row control's lit_min 1), the selftest's control-mode and skip_ambient checks"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/maps/test/litpreview_stages.map",
+          "symbol": "the S rooms"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/materials/lp5_stages.mtr",
+          "symbol": "lp5/white_wall, s01_* ... s14_fogwithlights"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession parity rows (LP2.3): stage_draws, stage_skipped; a control of mode row not required black"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitStagePass.cpp",
+          "symbol": "LitStagePass: the stages map's S materials"
+        }
+      ],
+      "note": "LP5.2a steps 6-7 (C50, P6.1, P6.2, P6.5), test only: the stages map's S rooms from ox 8192 every 1024, each camera 120 from the east wall (which fills the view), lit head-on by R14's parallel light and colour, the stage surfaces 80 from the camera, every row exact with a control of mode row: S01 blend add (and a gl_zero, gl_one stage), blend blend, blend filter; S02 inverseVertexColor, a plain stage, colored on a func_static of _color 0.5 0.25 1; S03 an alpha-tested ambient stage; S04 two translucent materials at SS_MEDIUM overlapping; S05 sort decal, far and close; S06 an implicit material over its image; S07 the screen keyword; S12 a translucent backSided box; S13 vornoipattern over an unlit wall; S14 fogwithlights. The one engine run (2026-10-24 19:44-20:01: bake 127.4 s, run-a 329.8 s, run-b 338.4 s, every shot repeated at 0, the game folder 21,260 entries before and after each process, the junction gone): the 98 earlier rows identical to the gate's at 868e1a9e6; S01-S07, S12, S14 and their controls max 0 everywhere; lit_min recorded for those nine (--record-thresholds --only, axial-max 1). Two fixture faults found: S13's room holds no entity, so dmap's flood fill takes it as outside (no area): the engine shot sees the void and the preview draws the room as the outside set (D81), so S13 and CS13 fail, and S13's outside-set chunks are in the frustum of S01-S12 (all looking +x), each one more stage draw (its voronoi panel, behind their walls: no pixel) than their expect; the next stages-map run gives S13's room an entity. compare's row-mode control rule required the row's lit_min (half the lit shot's pixels) of a lights-off shot that draws the unlit stages alone: a row control must now only not be black"
     }
   ],
   "retired": [
