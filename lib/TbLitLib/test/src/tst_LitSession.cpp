@@ -13088,6 +13088,461 @@ TEST_CASE("LitSession provisional editor-image sizes on a GPU (LP5.F)", "[.][lit
   }
 }
 
+namespace
+{
+
+// LP5.3: the fog and blend materials of the GPU case: fogs/basicFog's shape
+// (fogs.mtr:14-22) and a blend light adding its colour over the intrinsic no-falloff
+// table; a white wall and a noSelfShadow twin of it
+const auto Lp53Materials = std::string{
+  "textures/lp53/white\n{\n\tqer_editorimage textures/lp1b/wall.tga\n"
+  "\tdiffusemap guis/assets/white.tga\n}\n"
+  "textures/lp53/noself\n{\n\tnoSelfShadow\n\tqer_editorimage textures/lp1b/wall.tga\n"
+  "\tdiffusemap guis/assets/white.tga\n}\n"
+  "lights/lp53/fog\n{\n\tfogLight\n\tnoShadows\n\t{\n\t\tmap _fog\n\t\tcolored\n\t}\n}\n"
+  "lights/lp53/blend\n{\n\tblendLight\n\tnoShadows\n\tlightFalloffImage _noFalloff\n"
+  "\t{\n\t\tblend add\n\t\tmap _white\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n"};
+
+// a fog light's axis with its z along world +x: the fog plane faces away from a camera
+// looking +x
+constexpr auto Lp53FogAxis = "\"rotation\" \"0 0 -1 0 1 0 1 0 0\"\n";
+
+/**
+ * LP5.3: a wall at x 500 lit head-on by a parallel light from -x (lp52a's light), and the
+ * extra brushes and entities of a scenario
+ */
+std::string lp53MapText(const std::string& brushes, const std::string& entities)
+{
+  auto text = std::string{"{\n\"classname\" \"worldspawn\"\n"};
+  text += boxBrush(500, -600, -300, 516, 600, 500, "lp53/white");
+  text += brushes;
+  text += "}\n";
+  text +=
+    "{\n\"classname\" \"light\"\n\"name\" \"lp53_parallel\"\n\"origin\" \"250 0 64\"\n"
+    "\"light_radius\" \"400 400 400\"\n\"light_center\" \"-1 0 0\"\n\"parallel\" \"1\"\n"
+    "\"texture\" \"lights/lp22a/flatclamp\"\n\"_color\" \"0.3 0.3 0.3\"\n"
+    "\"noshadows\" \"1\"\n}\n";
+  text += entities;
+  return text;
+}
+
+std::string lp53Light(const std::string& name, const std::string& keys)
+{
+  return fmt::format("{{\n\"classname\" \"light\"\n\"name\" \"{}\"\n{}}}\n", name, keys);
+}
+
+// a bilinear sample (linearClamp: texel centres at ( i + 0.5 ) / size, clamped) of an
+// intrinsic recipe's alpha, 0..1
+float modelAlphaSample(const IntrinsicRecipe& recipe, const float s, const float t)
+{
+  const auto texel = [&](int x, int y) {
+    x = std::clamp(x, 0, recipe.width - 1);
+    y = std::clamp(y, 0, recipe.height - 1);
+    return float(
+             recipe.rgba
+               [(std::size_t(y) * std::size_t(recipe.width) + std::size_t(x)) * 4 + 3])
+           / 255.0f;
+  };
+  const auto u = s * float(recipe.width) - 0.5f;
+  const auto v = t * float(recipe.height) - 0.5f;
+  const auto x0 = int(std::floor(u));
+  const auto y0 = int(std::floor(v));
+  const auto fx = u - float(x0);
+  const auto fy = v - float(y0);
+  const auto top = texel(x0, y0) * (1.0f - fx) + texel(x0 + 1, y0) * fx;
+  const auto bottom = texel(x0, y0 + 1) * (1.0f - fx) + texel(x0 + 1, y0 + 1) * fx;
+  return top * (1.0f - fy) + bottom * fy;
+}
+
+} // namespace
+
+// LP5.3 (C49, C50, D122-D124): pass 9 on a GPU: FogPass over a lit surface inside a fog
+// volume and the cube from outside, each pixel against a CPU model of _fog( p0 · pos, 0.5
+// ) · _fogEnter( p3, p2 · pos ) · rpColor (fog.ps.hlsl: sRGBAToLinearRGBA, the alpha
+// too) blended SRC_ALPHA over the frame without the fog (the background); a blend light
+// whose surfaces are all local beside a twin with a global surface; the fogged-out portal
+// on the LP1b fixture's tree, open while its fog light's registers are first-seen; the
+// frame log's columns. Hidden: it needs a GPU and the game's blobs.
+TEST_CASE("LitSession fog and blend lights on a GPU (LP5.3)", "[.][litgpu2]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto gamePath = std::filesystem::path{gamePathValue};
+  const auto root = assembleLitRoot(gamePath);
+  REQUIRE_FALSE(root.empty());
+  const auto base = root / "base";
+  writeTextFile(base / "materials" / "zz_lp53.mtr", Lp53Materials);
+  // FogAllLights' programs beyond LP2's
+  for (const auto* name : {"builtin/fog/fog", "builtin/fog/blendlight"})
+  {
+    for (const auto stage : {ShaderStage::Vertex, ShaderStage::Pixel})
+    {
+      const auto relative = shaderBlobPath(name, stage);
+      REQUIRE(std::filesystem::exists(gamePath / "base" / relative));
+      std::filesystem::create_directories((base / relative).parent_path());
+      std::filesystem::copy_file(
+        gamePath / "base" / relative,
+        base / relative,
+        std::filesystem::copy_options::overwrite_existing);
+    }
+  }
+  writeTextFile(base / "maps" / "lp53.map", lp53MapText("", ""));
+  auto sequence = std::uint64_t{0};
+  // each snapshot replaces the one before it whole (paritySnapshot's rule): its ids
+  // offset by its sequence, every id of the one before removed (B0.4), so that a light
+  // or brush the next map lacks leaves the scene
+  auto previousIds = std::vector<PreviewId>{};
+  const auto replacing = [&](Snapshot snapshot) {
+    const auto offset = PreviewId{snapshot.sequence} << 32;
+    for (auto& entity : snapshot.entities)
+    {
+      entity.id += offset;
+    }
+    for (auto& node : snapshot.nodes)
+    {
+      node.id += offset;
+      node.entity += offset;
+    }
+    snapshot.removed = std::exchange(previousIds, snapshotIds(snapshot));
+    return std::make_shared<const Snapshot>(std::move(snapshot));
+  };
+  const auto snapshotOf = [&](const std::string& text) {
+    auto snapshot = snapshotOfMapText(text);
+    snapshot.generation = 7;
+    snapshot.sequence = ++sequence;
+    snapshot.mapPath = (base / "maps" / "lp53.map").string();
+    return replacing(std::move(snapshot));
+  };
+  const auto camera = litCamera({0, 0, 64}, {1, 0, 0}, {0, 0, 1});
+  const auto view = litViewOf(camera, 160, 120);
+  const auto frameLog = root / "lp53.framelog.csv";
+  std::filesystem::remove(frameLog);
+  const auto fogRecipe = intrinsicRecipe("_fog");
+  const auto fogEnterRecipe = intrinsicRecipe("_fogEnter");
+  REQUIRE(fogRecipe);
+  REQUIRE(fogEnterRecipe);
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto gate = std::make_shared<ParkingGate>();
+    auto serviceOptions = MaterialServiceOptions{};
+    serviceOptions.makeSource = [root](const std::atomic<bool>& cancel) {
+      return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(root, &cancel)};
+    };
+    serviceOptions.pollInterval = 0ms;
+    serviceOptions.imageBudgetBytes = 0;
+    serviceOptions.beforeTakeWorkForTesting = [gate] { gate->pass(); };
+    auto service = MaterialService::create(std::move(serviceOptions))
+                   | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    const auto atExit = OpenParkingAtExit{gate};
+    auto events = Events{};
+    auto session = loggedRootSession(instance, events, *service, root, frameLog);
+    auto tonemap = EngineTonemap;
+    tonemap.hdrMinLuminance = 0.1f;
+    tonemap.hdrMaxLuminance = 0.1001f;
+    session->setTonemapForTesting(tonemap);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+
+    // a settled frame of a map text, its stats meeting pred
+    const auto settledOf = [&](
+                             const std::string& text,
+                             const std::function<bool(const LitFrameStats&)>& pred) {
+      REQUIRE(waitFor([&] { return session->snapshotSlotFree(); }, 10000ms, false));
+      REQUIRE(session->offerSnapshot(snapshotOf(text)));
+      // the snapshot applied (a settled frame of the last one may come first)
+      REQUIRE(framesUntil(*session, camera, pred));
+      auto frame = settledHdr(*session, camera, 1);
+      for (auto attempt = 0; attempt < 40 && frame && !pred(frame->second.stats);
+           ++attempt)
+      {
+        frame = settledHdr(*session, camera, 1);
+      }
+      REQUIRE(frame);
+      CAPTURE(
+        frame->second.stats.fogLights,
+        frame->second.stats.blendLights,
+        frame->second.stats.lightsVisible,
+        frame->second.stats.lightsInView,
+        frame->second.stats.fogDraws);
+      REQUIRE(pred(frame->second.stats));
+      return std::move(*frame);
+    };
+    const auto at = [&](const HdrImage& hdr, const EngineVec3& point) {
+      const auto [x, y] = pixelOf(view, point);
+      return rgbOf(hdr.at(x, y));
+    };
+    const auto check = [&](
+                         const char* what,
+                         const HdrImage& image,
+                         const EngineVec3& point,
+                         const Rgb& model) {
+      const auto got = at(image, point);
+      std::cout << fmt::format(
+        "LP5.3 {}: drawn {} model {}\n", what, rgbText(got), rgbText(model));
+      CAPTURE(what, rgbText(got), rgbText(model));
+      CHECK(near3(got, model));
+    };
+    // FogPass' alpha at a point (the CPU model): _fog at ( 0.5 + 0.5 · depth / distance,
+    // 0.5 ), _fogEnter at ( 0.001 · s + FOG_ENTER, 0.001 · d + FOG_ENTER ) with s the
+    // eye's and d the point's distance to the fog plane x = plane (normal +x), rpColor.a
+    // clamp( distance ) (1 here)
+    const auto fogAlpha =
+      [&](const float depth, const float distance, const float plane, const float x) {
+        const auto s0 = 0.5f + (0.5f / distance) * depth;
+        const auto fog = modelAlphaSample(*fogRecipe, s0, 0.5f);
+        const auto enter = modelAlphaSample(
+          *fogEnterRecipe,
+          0.001f * (camera.position.x() - plane) + 65.0f / 128.0f,
+          0.001f * (x - plane) + 65.0f / 128.0f);
+        std::cout << fmt::format(
+          "LP5.3 fog alpha at depth {}: _fog({:.5f}) {:.5f}, _fogEnter {:.5f}\n",
+          depth,
+          s0,
+          fog,
+          enter);
+        return fog * enter;
+      };
+
+    // 1. a lit panel inside a fog volume that holds the camera (x -100..450, its fog
+    // plane x 450 facing +x, every point 125 or more below it), the wall beyond it
+    const auto panel = boxBrush(300, -40, 24, 302, 40, 104, "lp53/white");
+    const auto inside = lp53Light(
+      "lp53_inside",
+      std::string{"\"origin\" \"175 0 64\"\n\"light_radius\" \"250 300 275\"\n"}
+        + Lp53FogAxis
+        + "\"texture\" \"lights/lp53/fog\"\n\"_color\" \"0.2 0.5 0.9\"\n"
+          "\"shaderParm3\" \"400\"\n\"noshadows\" \"1\"\n");
+    const auto panelBackground = settledOf(
+      lp53MapText(panel, ""), [](const auto& stats) { return stats.fogLights == 0u; });
+    const auto fogged = settledOf(lp53MapText(panel, inside), [](const auto& stats) {
+      return stats.fogLights == 1u;
+    });
+    {
+      const auto& stats = fogged.second.stats;
+      CHECK(stats.fogTimed);
+      CHECK_FALSE(stats.fogDisabled);
+      CHECK(stats.fogSurfaceDraws >= 1u);
+      CHECK(stats.fogCubeDraws == 1u);
+      CHECK(stats.fogDraws == stats.fogSurfaceDraws + stats.fogCubeDraws);
+      CHECK(stats.lightsVisible == 2u);
+      CHECK(stats.lightsDrawn == 1u);
+      const auto point = EngineVec3{300, 10, 70};
+      check(
+        "a lit panel inside the fog",
+        fogged.first,
+        point,
+        blendOver(
+          {0.2f, 0.5f, 0.9f},
+          fogAlpha(300.0f, 400.0f, 450.0f, 300.0f),
+          at(panelBackground.first, point)));
+      // the wall beyond the volume is not fogged, and nothing of the cube draws from
+      // inside it
+      const auto wall = EngineVec3{500, 150, 64};
+      check(
+        "the wall beyond the fog", fogged.first, wall, at(panelBackground.first, wall));
+    }
+
+    // 2. a surfaceless fog volume seen from outside (x 150..330, its fog plane x 330):
+    // the cube's near face over the lit wall
+    const auto outside = lp53Light(
+      "lp53_outside",
+      std::string{"\"origin\" \"240 0 64\"\n\"light_radius\" \"50 50 90\"\n"} + Lp53FogAxis
+        + "\"texture\" \"lights/lp53/fog\"\n\"_color\" \"0.9 0.4 0.1\"\n"
+          "\"shaderParm3\" \"400\"\n\"noshadows\" \"1\"\n");
+    const auto wallBackground = settledOf(
+      lp53MapText("", ""), [](const auto& stats) { return stats.fogLights == 0u; });
+    const auto cube = settledOf(
+      lp53MapText("", outside), [](const auto& stats) { return stats.fogLights == 1u; });
+    {
+      const auto& stats = cube.second.stats;
+      CHECK(stats.fogSurfaceDraws == 0u);
+      CHECK(stats.fogCubeDraws == 1u);
+      CHECK(stats.fogDraws == 1u);
+      const auto face = EngineVec3{150, 10, 70};
+      check(
+        "the cube's near face from outside",
+        cube.first,
+        face,
+        blendOver(
+          {0.9f, 0.4f, 0.1f},
+          fogAlpha(150.0f, 400.0f, 330.0f, 150.0f),
+          at(wallBackground.first, face)));
+      // beside the volume, the wall as it was
+      const auto beside = EngineVec3{500, 200, 64};
+      check(
+        "the wall beside the cube", cube.first, beside, at(wallBackground.first, beside));
+    }
+
+    // 3. two blend lights without noshadows 1, each holding one panel: a noSelfShadow one
+    // (every surface local: BlendLight returns) and a plain one (drawn: blend add of
+    // _white x _noFalloff x rpColor)
+    const auto panels = boxBrush(300, -100, 24, 302, -20, 104, "lp53/noself")
+                        + boxBrush(300, 20, 24, 302, 100, 104, "lp53/white");
+    const auto blends =
+      lp53Light(
+        "lp53_blend_local",
+        "\"origin\" \"301 -60 64\"\n\"light_radius\" \"10 45 45\"\n"
+        "\"texture\" \"lights/lp53/blend\"\n\"_color\" \"0.4 0.3 0.2\"\n")
+      + lp53Light(
+        "lp53_blend_global",
+        "\"origin\" \"301 60 64\"\n\"light_radius\" \"10 45 45\"\n"
+        "\"texture\" \"lights/lp53/blend\"\n\"_color\" \"0.4 0.3 0.2\"\n");
+    const auto panelsBackground =
+      settledOf(lp53MapText(panels, ""), [](const auto& stats) {
+        return stats.blendLights == 0u && stats.lightsVisible == 1u;
+      });
+    const auto blended = settledOf(lp53MapText(panels, blends), [](const auto& stats) {
+      return stats.lightsVisible == 3u;
+    });
+    {
+      const auto& stats = blended.second.stats;
+      CHECK(stats.blendLights == 1u);
+      CHECK(stats.blendDraws == 1u);
+      const auto local = EngineVec3{300, -60, 64};
+      const auto global = EngineVec3{300, 60, 64};
+      check(
+        "a blend light whose surfaces are all local",
+        blended.first,
+        local,
+        at(panelsBackground.first, local));
+      check(
+        "its twin over a plain panel",
+        blended.first,
+        global,
+        plus(at(panelsBackground.first, global), linearRgb({0.4f, 0.3f, 0.2f})));
+    }
+
+    // 4. the fogged-out portal on the LP1b fixture's tree: from area 0 at x 200 looking
+    // west, the doorway (x 8) 192 ahead; lp1b_light's volume (64 0 96, radius 200) holds
+    // it; a fog distance of 150 closes it, its registers first-seen leave it open
+    const auto west = litCamera({200, 0, 64}, {-1, 0, 0}, {0, 0, 1});
+    const auto treeOf = [&](const std::vector<std::string>& lights) {
+      REQUIRE(waitFor([&] { return session->snapshotSlotFree(); }, 10000ms, false));
+      REQUIRE(session->offerSnapshot(
+        replacing(*lp22aSnapshot(lp51MapText(lights), root, 7, ++sequence))));
+    };
+    const auto fogKeys = [](const char* parm) {
+      return fmt::format(
+        "\"name\" \"lp53_portal_fog\"\n\"origin\" \"64 0 96\"\n\"light_radius\" \"200 "
+        "200 "
+        "200\"\n\"texture\" \"lights/lp53/fog\"\n\"_color\" \"0.5 0.5 0.5\"\n"
+        "\"shaderParm3\" \"{}\"\n",
+        parm);
+    };
+    treeOf({lp51Light("lp53_tree_light", "", 1.0f)});
+    const auto open = framesUntil(*session, west, [](const LitFrameStats& stats) {
+      return stats.areasFlowed == 2u && !stats.unconverged;
+    });
+    REQUIRE(open);
+    CHECK(open->portalsFogged == 0u);
+    // the fog material in the table before the parse thread is held
+    service->lookup("lights/lp53/fog");
+    REQUIRE(waitFor(
+      [&] { return service->table()->find("lights/lp53/fog") != nullptr; },
+      10000ms,
+      false));
+    // held: the fog light's evaluation is first-seen, so its portal stays open
+    gate->close();
+    REQUIRE(gate->park([&] { service->lookup("textures/lp53/lp53_park_lookup"); }));
+    treeOf({lp51Light("lp53_tree_light", "", 1.0f), fogKeys("150")});
+    const auto pending = framesUntil(*session, west, [](const LitFrameStats& stats) {
+      return stats.portalFogPending == 1u;
+    });
+    REQUIRE(pending);
+    CHECK(pending->areasFlowed == 2u);
+    CHECK(pending->unconverged);
+    gate->open();
+    const auto closed = framesUntil(*session, west, [](const LitFrameStats& stats) {
+      return stats.portalsFogged >= 1u && !stats.unconverged;
+    });
+    REQUIRE(closed);
+    CHECK(closed->areasFlowed == 1u);
+    CHECK(closed->portalFogPending == 0u);
+    std::cout << fmt::format(
+      "LP5.3 fog portal: open {} areas flowed; first-seen registers {} areas flowed, "
+      "unconverged; fogged out {} areas flowed ({} sides)\n",
+      open->areasFlowed,
+      pending->areasFlowed,
+      closed->areasFlowed,
+      closed->portalsFogged);
+    // a fog distance of 300: the doorway within it, flowed
+    treeOf({lp51Light("lp53_tree_light", "", 1.0f), fogKeys("300")});
+    const auto within = framesUntil(*session, west, [](const LitFrameStats& stats) {
+      return stats.portalsFogged == 0u && stats.fogLights == 1u && !stats.unconverged;
+    });
+    REQUIRE(within);
+    CHECK(within->areasFlowed == 2u);
+
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  messages.print("LP5.3 fog and blend lights, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+
+  // the frame log's three columns: a frame with fog draws and pass 9's time, one with a
+  // blend draw
+  {
+    const auto text = readTextFile(frameLog);
+    auto stream = std::istringstream{text};
+    auto line = std::string{};
+    auto header = std::vector<std::string>{};
+    auto fogRow = false;
+    auto blendRow = false;
+    while (std::getline(stream, line))
+    {
+      auto fields = std::vector<std::string>{};
+      auto field = std::string{};
+      for (const auto c : line)
+      {
+        if (c == ',')
+        {
+          fields.push_back(field);
+          field.clear();
+        }
+        else
+        {
+          field += c;
+        }
+      }
+      fields.push_back(field);
+      if (header.empty())
+      {
+        header = fields;
+        REQUIRE(header.size() == 57u);
+        CHECK(header[54] == "fog_draws");
+        CHECK(header[55] == "blend_draws");
+        CHECK(header[56] == "gpu_fog_ms");
+        continue;
+      }
+      if (fields.size() == 57u && fields[1] == "frame")
+      {
+        fogRow =
+          fogRow || (!fields[54].empty() && fields[54] != "0" && !fields[56].empty());
+        blendRow = blendRow || (!fields[55].empty() && fields[55] != "0");
+      }
+    }
+    CHECK(fogRow);
+    CHECK(blendRow);
+  }
+}
+
 } // namespace tb::lit
 
 #endif

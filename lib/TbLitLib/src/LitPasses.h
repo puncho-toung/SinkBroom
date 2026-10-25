@@ -197,6 +197,10 @@ struct LitFrameStats
   std::size_t portalChains = 0;
   std::size_t entitiesCulled = 0;
   double flowMs = 0.0;
+  // LP5.3 (C49, D123): the portal sides the flow found fogged out, and the fog portals
+  // left open because their fog light's registers were first-seen (FrontendLists)
+  std::size_t portalsFogged = 0;
+  std::size_t portalFogPending = 0;
   // LP4.2a (C37, D88): the view's probe choice: the connected probes, and whether an
   // image it read was not loaded yet (the default stood; the frame is unconverged)
   std::size_t probeCandidates = 0;

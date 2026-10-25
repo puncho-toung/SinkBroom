@@ -208,6 +208,8 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
   m_stats.lightsInView = m_lists.lightsInView;
   m_stats.portalChains = m_lists.portalChains;
   m_stats.entitiesCulled = m_lists.entitiesCulled;
+  m_stats.portalsFogged = m_lists.portalsFogged;
+  m_stats.portalFogPending = m_lists.portalFogPending;
   m_stats.flowMs = m_stats.listsRebuilt ? m_lists.flowMs : 0.0;
   m_stats.unconverged = m_lists.pending;
   m_stats.waitsForTable = m_lists.pending;
