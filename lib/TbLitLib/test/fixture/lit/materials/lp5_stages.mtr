@@ -361,3 +361,91 @@ textures/lp5/s11_wobble_add
 		alphaTest	0.5
 	}
 }
+
+// ----- LP5.3: the F rooms (pass 9, C49). The fog lights as fogs/basicFog (fogs.mtr:14-22):
+// the internal _fog image, rgba from the light's shaderparms (the distance its
+// shaderParm3, LT:177-181: 1 or less means 500)
+lights/lp5/fog
+{
+	fogLight
+	noShadows
+	{
+		map	_fog
+		colored
+	}
+}
+
+// F07b: the same, never fogging a portal out (Material.cpp:2679-2681)
+lights/lp5/fog_noportal
+{
+	fogLight
+	noShadows
+	noPortalFog
+	{
+		map	_fog
+		colored
+	}
+}
+
+// F05: a blend light adding a pattern, scrolled by a constant (no time, D119), which
+// BlendLight loads and set 7 never reads (RenderBackend.cpp:4829-4832)
+lights/lp5/f05_blend
+{
+	blendLight
+	noShadows
+	lightFalloffImage	lights/lp2/falloff.tga
+	{
+		blend	add
+		map	textures/lp5/s07_screen.tga
+		colored
+		zeroClamp
+		scroll	0.3, 0.2
+	}
+}
+
+// F06, F06b: a blend light adding its colour (the light entity without noshadows 1)
+lights/lp5/f06_blend
+{
+	blendLight
+	noShadows
+	lightFalloffImage	lights/lp2/falloff.tga
+	{
+		blend	add
+		map	textures/lp5/white.tga
+		colored
+		zeroClamp
+	}
+}
+
+// F06: a panel whose material says noSelfShadow: a light without noShadows puts it in its
+// local list (tr_frontend_addmodels.cpp:996-1002); F06b's twin without it
+textures/lp5/f06_noself
+{
+	noSelfShadow
+	qer_editorimage	textures/lp5/white.tga
+	diffusemap	textures/lp5/white.tga
+}
+
+textures/lp5/f06_plain
+{
+	qer_editorimage	textures/lp5/white.tga
+	diffusemap	textures/lp5/white.tga
+}
+
+// F04: an unlit panel (an SL_AMBIENT stage alone: no interaction, so no fog light's list
+// holds it, tr_frontend_addmodels.cpp:949-1008)
+textures/lp5/f04_unlit
+{
+	qer_editorimage	textures/lp5/s_red.tga
+	{
+		map	textures/lp5/s_red.tga
+	}
+}
+
+// F07: the doorway's areaportal brush, as lp4/portal: no surface (usurface.cpp:191-195)
+textures/lp5/f_portal
+{
+	qer_editorimage	textures/lp5/white.tga
+	noshadows
+	areaportal
+}

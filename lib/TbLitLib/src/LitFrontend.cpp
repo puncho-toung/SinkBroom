@@ -641,7 +641,11 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
         lists.pending = true;
         continue;
       }
-      if (!shader.material || !shader.falloffImage)
+      // LP5.3 (C49): a fog light needs no falloff image (FogPass binds _fog and
+      // _fogEnter, never vLight->falloffImage): it is drawn whether or not its shader or
+      // the default light's names one (a game root without the engine's lights.mtr has no
+      // default)
+      if (!shader.material || (!shader.falloffImage && !shader.material->fogLight))
       {
         continue;
       }

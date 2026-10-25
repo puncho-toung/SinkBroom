@@ -2258,6 +2258,37 @@ TEST_CASE("LitPasses: math, ambientLight, fog and blend lights in the lists (LP5
       REQUIRE(blackLight);
       CHECK(blackLists.fogAndBlendLights == 1u);
 
+      // LP5.3: a fog light without a falloff image (its shader and the default light's
+      // name none) is drawn all the same; a blend light (BlendLight binds it) is not
+      if (kind == ViewLightKind::Fog)
+      {
+        auto withoutFalloff = *record;
+        withoutFalloff.derived.shader.falloffImage.reset();
+        const auto bare = listsOfLights(
+          *f,
+          lightTableOf(
+            otherLights(std::make_shared<const LightRecord>(std::move(withoutFalloff))),
+            5),
+          camera,
+          128,
+          96);
+        CHECK(lightOf(bare, *f, "lp1b_light"));
+      }
+      else
+      {
+        auto withoutFalloff = *record;
+        withoutFalloff.derived.shader.falloffImage.reset();
+        const auto bare = listsOfLights(
+          *f,
+          lightTableOf(
+            otherLights(std::make_shared<const LightRecord>(std::move(withoutFalloff))),
+            5),
+          camera,
+          128,
+          96);
+        CHECK_FALSE(lightOf(bare, *f, "lp1b_light"));
+      }
+
       // the view's scissor away from the light's rect: an empty scissor, no surface, and
       // the light kept (FAL:727-735, FAM:362-367: it contacts no entity); a texture
       // light is dropped so

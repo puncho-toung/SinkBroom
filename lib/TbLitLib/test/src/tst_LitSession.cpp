@@ -6361,6 +6361,8 @@ struct ParityLists
   // LP4.3 (C36): per chunk entity, the grid areas of its drawn surfaces (-1: none, the
   // probe path)
   std::map<PreviewId, std::vector<int>> gridAreas;
+  // LP5.3 (C49, D123): the portal sides the flow found fogged out
+  std::size_t portalsFogged = 0;
 };
 
 struct ParityFrame
@@ -6397,6 +6399,7 @@ std::optional<ParityFrame> settledParityFrame(
       frame->frame = chainFrameOf(access);
       const auto& lists = access.passes.lists();
       frame->lists.flowMs = lists.flowMs;
+      frame->lists.portalsFogged = lists.portalsFogged;
       for (const auto& surface : lists.drawSurfs)
       {
         frame->lists.gridAreas[surface.chunk->key.entity].push_back(
@@ -7031,7 +7034,9 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           "\"grid_surfaces\": {}, \"ambient_grid_surfaces\": {}, \"entity_grid_areas\": "
           "{{{}}}, "
           "\"entity_grid_area\": {}, \"stage_draws\": {}, \"stage_skipped\": {}, "
-          "\"stage_pending\": {}, \"view_lights\": [{}]}}\n",
+          "\"stage_pending\": {}, \"fog_draws\": {}, \"blend_draws\": {}, "
+          "\"fog_lights\": {}, "
+          "\"blend_lights\": {}, \"portals_fogged\": {}, \"view_lights\": [{}]}}\n",
           width,
           height,
           settleMs,
@@ -7067,6 +7072,11 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           lit.stageDraws,
           lit.stageSkipped,
           lit.stagePending,
+          lit.fogDraws,
+          lit.blendDraws,
+          lit.fogLights,
+          lit.blendLights,
+          settledRow->lists.portalsFogged,
           fmt::join(viewLights, ", ")));
 
       // C38 (LP4.2b): an ambient-only frame drew no interaction and was lit by the
@@ -7145,6 +7155,17 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
             // LP5.2b (C48, D124): the surfaces skipped as pending and the cube draws made
             // with the zero cube (0 on a settled frame)
             CHECK(lit.stagePending == std::size_t(value.number));
+          }
+          else if (key == "fog_draws")
+          {
+            // LP5.3 (C49): pass 9's fog draws (the lists' surfaces and the cubes) and
+            // blend draws
+            CAPTURE(lit.fogDraws);
+            CHECK(parityCountHolds(value, lit.fogDraws));
+          }
+          else if (key == "blend_draws")
+          {
+            CHECK(lit.blendDraws == std::size_t(value.number));
           }
           else if (key == "scissor_smaller_than_view")
           {
