@@ -31,7 +31,10 @@
 
 #include "lit/ProcFile.h"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
+#include <string_view>
 #include <unordered_map>
 
 namespace tb::lit
@@ -202,6 +205,198 @@ void finishIsland(const SurfaceView& view, ProcIsland& island)
   island.stMap[1] = affineMap(a, b, c, sa[1], sb[1], sc[1]);
 }
 
+// ----- the test (LP7.4, C55, P7.1) -----
+
+using Vec2d = std::array<double, 2>;
+
+double cross2(const Vec2d& a, const Vec2d& b)
+{
+  return a[0] * b[1] - a[1] * b[0];
+}
+
+Vec2d sub2(const Vec2d& a, const Vec2d& b)
+{
+  return {a[0] - b[0], a[1] - b[1]};
+}
+
+// an orthonormal frame of a plane: positions as ( p · u, p · v ), u x v the normal
+struct PlaneFrame
+{
+  Vec3d u = {1, 0, 0};
+  Vec3d v = {0, 1, 0};
+
+  explicit PlaneFrame(const Vec3d& n)
+  {
+    const auto axis = std::abs(n[0]) < 0.9 ? Vec3d{1, 0, 0} : Vec3d{0, 1, 0};
+    const auto c = cross(axis, n);
+    const auto l = length(c);
+    u = {c[0] / l, c[1] / l, c[2] / l};
+    v = cross(n, u);
+  }
+
+  Vec2d project(const EngineVec3& p) const
+  {
+    const auto q = Vec3d{double(p[0]), double(p[1]), double(p[2])};
+    return {dot(q, u), dot(q, v)};
+  }
+};
+
+double signedArea(const std::vector<Vec2d>& polygon)
+{
+  auto area = 0.0;
+  for (auto i = std::size_t{0}; i < polygon.size(); ++i)
+  {
+    area += cross2(polygon[i], polygon[(i + 1) % polygon.size()]);
+  }
+  return area * 0.5;
+}
+
+// counter-clockwise in the frame
+void makeCounterClockwise(std::vector<Vec2d>& polygon)
+{
+  if (signedArea(polygon) < 0)
+  {
+    std::reverse(polygon.begin(), polygon.end());
+  }
+}
+
+double perimeter(const std::vector<Vec2d>& polygon)
+{
+  auto sum = 0.0;
+  for (auto i = std::size_t{0}; i < polygon.size(); ++i)
+  {
+    const auto d = sub2(polygon[(i + 1) % polygon.size()], polygon[i]);
+    sum += std::sqrt(d[0] * d[0] + d[1] * d[1]);
+  }
+  return sum;
+}
+
+// a convex counter-clockwise polygon less what lies right of the line a -> b
+std::vector<Vec2d> clipLeft(
+  const std::vector<Vec2d>& polygon, const Vec2d& a, const Vec2d& b)
+{
+  auto out = std::vector<Vec2d>{};
+  const auto edge = sub2(b, a);
+  for (auto i = std::size_t{0}; i < polygon.size(); ++i)
+  {
+    const auto& p = polygon[i];
+    const auto& q = polygon[(i + 1) % polygon.size()];
+    const auto dp = cross2(edge, sub2(p, a));
+    const auto dq = cross2(edge, sub2(q, a));
+    if (dp >= 0)
+    {
+      out.push_back(p);
+    }
+    if ((dp >= 0) != (dq >= 0))
+    {
+      const auto t = dp / (dp - dq);
+      out.push_back({p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t});
+    }
+  }
+  return out;
+}
+
+// the area two convex counter-clockwise polygons share
+double sharedArea(const std::vector<Vec2d>& polygon, const std::vector<Vec2d>& clip)
+{
+  auto inside = polygon;
+  for (auto i = std::size_t{0}; i < clip.size() && inside.size() >= 3; ++i)
+  {
+    inside = clipLeft(inside, clip[i], clip[(i + 1) % clip.size()]);
+  }
+  return inside.size() >= 3 ? std::max(signedArea(inside), 0.0) : 0.0;
+}
+
+double segmentDistance(const Vec2d& p, const Vec2d& a, const Vec2d& b)
+{
+  const auto ab = sub2(b, a);
+  const auto ap = sub2(p, a);
+  const auto ll = ab[0] * ab[0] + ab[1] * ab[1];
+  const auto t =
+    ll > 0 ? std::clamp((ap[0] * ab[0] + ap[1] * ab[1]) / ll, 0.0, 1.0) : 0.0;
+  const auto d = Vec2d{ap[0] - ab[0] * t, ap[1] - ab[1] * t};
+  return std::sqrt(d[0] * d[0] + d[1] * d[1]);
+}
+
+// p inside the convex counter-clockwise polygon, or within tolerance of its boundary
+bool nearConvex(const Vec2d& p, const std::vector<Vec2d>& polygon, const double tolerance)
+{
+  auto inside = true;
+  auto nearest = std::numeric_limits<double>::infinity();
+  for (auto i = std::size_t{0}; i < polygon.size(); ++i)
+  {
+    const auto& a = polygon[i];
+    const auto& b = polygon[(i + 1) % polygon.size()];
+    inside = inside && cross2(sub2(b, a), sub2(p, a)) >= 0;
+    nearest = std::min(nearest, segmentDistance(p, a, b));
+  }
+  return inside || nearest <= tolerance;
+}
+
+bool nearAny(
+  const Vec2d& p, const std::vector<std::vector<Vec2d>>& polygons, const double tolerance)
+{
+  return std::ranges::any_of(
+    polygons, [&](const auto& polygon) { return nearConvex(p, polygon, tolerance); });
+}
+
+bool equalsNoCase(const std::string_view lhs, const std::string_view rhs)
+{
+  return lhs.size() == rhs.size()
+         && std::equal(
+           lhs.begin(), lhs.end(), rhs.begin(), [](const char a, const char b) {
+             const auto lower = [](const char c) {
+               return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
+             };
+             return lower(a) == lower(b);
+           });
+}
+
+// the unit of the last place of a half float of magnitude x (F32toF16 truncates, and
+// flushes below 2^-14 to zero)
+double halfUlp(const double x)
+{
+  constexpr auto Smallest = 1.0 / 16384.0;
+  if (x < Smallest)
+  {
+    return Smallest;
+  }
+  auto exponent = 0;
+  static_cast<void>(std::frexp(x, &exponent));
+  return std::ldexp(1.0, exponent - 11);
+}
+
+// the piece's st through dmap's rule at every island vertex, against the vertex's
+bool texVecMatches(
+  const SurfaceView& view, const ProcIsland& island, const AdoptionPiece& piece)
+{
+  const auto sizes = std::array<float, 2>{piece.textureWidth, piece.textureHeight};
+  for (const auto k : island.verts)
+  {
+    const auto p = view.position(k);
+    const auto st = view.st(k);
+    const auto q = EngineVec3{
+      p[0] + piece.stOrigin[0], p[1] + piece.stOrigin[1], p[2] + piece.stOrigin[2]};
+    for (auto i = std::size_t{0}; i < 2; ++i)
+    {
+      const auto& v = piece.texVec[i];
+      // dmap/usurface.cpp:233-242 TriListForSide
+      const auto value = (q[0] * v[0] + q[1] * v[1] + q[2] * v[2] + v[3]) / sizes[i];
+      const auto snap =
+        (std::abs(double(v[0])) + std::abs(double(v[1])) + std::abs(double(v[2])))
+        * double(AdoptionEpsilon) / double(sizes[i]);
+      const auto tolerance =
+        2.0 * halfUlp(std::max(std::abs(double(value)), std::abs(double(st[i])))) + 0.001
+        + snap;
+      if (std::abs(double(value) - double(st[i])) > tolerance)
+      {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 std::vector<ProcIsland> procSurfaceIslands(const ProcSurface& surface)
@@ -307,6 +502,177 @@ ProcIslands buildProcIslands(const ProcTree& tree)
     }
   }
   return islands;
+}
+
+IslandMatch matchProcIsland(
+  const ProcSurface& surface,
+  const ProcIsland& island,
+  const std::vector<const AdoptionPiece*>& pieces)
+{
+  auto match = IslandMatch{};
+  if (!island.planar)
+  {
+    match.verdict = IslandVerdict::Curved;
+    return match;
+  }
+  const auto view = SurfaceView{surface};
+  if (!view.hasGeometry())
+  {
+    return match;
+  }
+  const auto n = Vec3d{island.plane.a, island.plane.b, island.plane.c};
+  const auto frame = PlaneFrame{n};
+  const auto epsilon = double(AdoptionEpsilon);
+  const auto distance = double(AdoptionDistance);
+
+  // the island in its plane: its vertices and its triangles
+  auto centroid = Vec3d{0, 0, 0};
+  auto islandPoints = std::vector<Vec2d>{};
+  islandPoints.reserve(island.verts.size());
+  for (const auto k : island.verts)
+  {
+    const auto p = view.position(k);
+    for (auto c = std::size_t{0}; c < 3; ++c)
+    {
+      centroid[c] += double(p[c]);
+    }
+    islandPoints.push_back(frame.project(p));
+  }
+  for (auto& c : centroid)
+  {
+    c /= double(island.verts.size());
+  }
+  auto triangles = std::vector<std::vector<Vec2d>>{};
+  triangles.reserve(island.indexes.size() / 3);
+  for (auto i = std::size_t{0}; i + 2 < island.indexes.size(); i += 3)
+  {
+    auto triangle = std::vector<Vec2d>{
+      frame.project(view.position(island.indexes[i])),
+      frame.project(view.position(island.indexes[i + 1])),
+      frame.project(view.position(island.indexes[i + 2]))};
+    makeCounterClockwise(triangle);
+    triangles.push_back(std::move(triangle));
+  }
+
+  // the candidates: material, plane, texture vectors, overlap
+  auto polygons = std::vector<std::vector<Vec2d>>{};
+  auto candidateArea = 0.0;
+  auto candidatePerimeter = 0.0;
+  for (auto i = std::size_t{0}; i < pieces.size(); ++i)
+  {
+    const auto& piece = *pieces[i];
+    if (piece.points.size() < 3 || !equalsNoCase(piece.material, surface.material))
+    {
+      continue;
+    }
+    const auto pn = Vec3d{piece.plane.a, piece.plane.b, piece.plane.c};
+    if (
+      dot(pn, n) < double(PlanarCosine)
+      || std::abs(dot(pn, centroid) + double(piece.plane.d)) > epsilon)
+    {
+      continue;
+    }
+    auto points = std::vector<EngineVec3>{piece.points};
+    const auto bounds = engineBoundsOfPoints(points);
+    auto apart = false;
+    for (auto c = std::size_t{0}; c < 3; ++c)
+    {
+      apart = apart || bounds[0][c] > island.bounds[1][c] + AdoptionEpsilon
+              || bounds[1][c] < island.bounds[0][c] - AdoptionEpsilon;
+    }
+    if (apart || !texVecMatches(view, island, piece))
+    {
+      continue;
+    }
+    auto polygon = std::vector<Vec2d>{};
+    polygon.reserve(piece.points.size());
+    for (const auto& p : piece.points)
+    {
+      polygon.push_back(frame.project(p));
+    }
+    makeCounterClockwise(polygon);
+    auto shared = 0.0;
+    for (const auto& triangle : triangles)
+    {
+      shared += sharedArea(polygon, triangle);
+    }
+    const auto edge = perimeter(polygon);
+    if (shared <= epsilon * edge)
+    {
+      continue;
+    }
+    match.candidates.push_back(i);
+    candidateArea += signedArea(polygon);
+    candidatePerimeter += edge;
+    polygons.push_back(std::move(polygon));
+  }
+  if (match.candidates.empty())
+  {
+    return match;
+  }
+
+  // two-way containment in the plane, then the areas
+  for (const auto& p : islandPoints)
+  {
+    if (!nearAny(p, polygons, distance))
+    {
+      match.verdict = IslandVerdict::IslandOutside;
+      return match;
+    }
+  }
+  for (const auto& polygon : polygons)
+  {
+    for (const auto& p : polygon)
+    {
+      if (!nearAny(p, triangles, distance))
+      {
+        match.verdict = IslandVerdict::PieceOutside;
+        return match;
+      }
+    }
+  }
+  // no overlap beyond a sliver, so that the summed area is the union's
+  auto boxes = std::vector<std::array<Vec2d, 2>>{};
+  boxes.reserve(polygons.size());
+  for (const auto& polygon : polygons)
+  {
+    auto box = std::array<Vec2d, 2>{polygon.front(), polygon.front()};
+    for (const auto& p : polygon)
+    {
+      for (auto c = std::size_t{0}; c < 2; ++c)
+      {
+        box[0][c] = std::min(box[0][c], p[c]);
+        box[1][c] = std::max(box[1][c], p[c]);
+      }
+    }
+    boxes.push_back(box);
+  }
+  for (auto i = std::size_t{0}; i < polygons.size(); ++i)
+  {
+    for (auto j = i + 1; j < polygons.size(); ++j)
+    {
+      if (
+        boxes[i][0][0] >= boxes[j][1][0] || boxes[j][0][0] >= boxes[i][1][0]
+        || boxes[i][0][1] >= boxes[j][1][1] || boxes[j][0][1] >= boxes[i][1][1])
+      {
+        continue;
+      }
+      const auto sliver =
+        epsilon * std::min(perimeter(polygons[i]), perimeter(polygons[j]));
+      if (sharedArea(polygons[i], polygons[j]) > sliver)
+      {
+        match.verdict = IslandVerdict::Overlap;
+        return match;
+      }
+    }
+  }
+  if (std::abs(candidateArea - double(island.area)) > candidatePerimeter * epsilon)
+  {
+    match.verdict = IslandVerdict::Area;
+    return match;
+  }
+  match.verdict = IslandVerdict::Adopted;
+  return match;
 }
 
 } // namespace tb::lit

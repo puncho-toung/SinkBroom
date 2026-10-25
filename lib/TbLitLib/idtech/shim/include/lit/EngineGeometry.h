@@ -238,6 +238,20 @@ struct EngineValveTexture
   float vScale = 1;
 };
 
+// dmap's textureVectors_t (dmap.h): s = v[0] · ( x y z ) + v[0][3], t likewise
+using EngineTextureVectors = std::array<std::array<float, 4>, 2>;
+
+/**
+ * LP7.4 (C55): a Valve 220 side's texture vectors as dmap's ParseBrush takes them
+ * (dmap/map.cpp:350, ms->GetTextureVectors( s->texVec.v ); MapFile.cpp:104-117
+ * idMapBrushSide::GetTextureVectors, PROJECTION_VALVE220: each axis component times
+ * ( 1.0f / scale ), the offset as it is), in the engine's float arithmetic: the side's
+ * texVec that AddTriListToArea's optimize-group key compares (dmap/usurface.cpp:48-106)
+ * and that TriListForSide divides by the editor image's size. No integral shift is
+ * removed for a Valve 220 side (map.cpp:370-375).
+ */
+EngineTextureVectors engineValveTextureVectors(const EngineValveTexture& texture);
+
 /**
  * dmap's texture coordinate of a side's vertex: idMapBrushSide::GetTextureVectors
  * (MapFile.cpp:104-117, axis·(1/scale)) and TriListForSide (dmap/usurface.cpp:233-242,

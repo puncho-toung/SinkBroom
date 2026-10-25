@@ -24,6 +24,7 @@
 #include "lit/EngineLight.h"
 #include "lit/EntityState.h"
 #include "lit/MaterialDecls.h"
+#include "lit/ProcIslands.h"
 #include "lit/Snapshot.h"
 
 #include "vm/vec.h"
@@ -238,6 +239,17 @@ struct ChunkJobInput
   std::unordered_map<std::string, std::shared_ptr<const EntityDefEntry>> entityDefs;
   std::shared_ptr<const ProcTree> proc;
   std::shared_ptr<const MaterialTable> materials;
+  // LP7.4 (C55): the job returns its face pieces (ChunkJobOutput::pieces) for the
+  // adoption pass
+  bool collectPieces = false;
+};
+
+// LP7.4 (C55, P7.11): a face piece a job built, with the cell (and the chunk entity) it
+// is chunked in, for the whole-entity adoption pass after apply (SceneGeometry)
+struct ChunkPiece
+{
+  CellRef cell;
+  AdoptionPiece piece;
 };
 
 struct ChunkJobOutput
@@ -255,6 +267,9 @@ struct ChunkJobOutput
   // brush entities' origin test read, so that a re-parse builds their cells again
   std::vector<std::string> materials;
   std::vector<std::string> warnings;
+  // LP7.4 (C55): with ChunkJobInput::collectPieces, every brush face piece that makes
+  // triangles (world and brush entity faces; patches never), in the nodes' order
+  std::vector<ChunkPiece> pieces;
 };
 
 /**

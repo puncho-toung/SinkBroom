@@ -20,10 +20,13 @@
 #pragma once
 
 #include "lit/EngineGeometry.h"
+#include "lit/Snapshot.h"
 
 #include <array>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace tb::lit
@@ -115,5 +118,110 @@ struct ProcIslandGeometry
  * engineBounds::MaxSurfaceVertices vertices. Pure; any thread.
  */
 ProcIslandGeometry loadProcIsland(const ProcSurface& surface, const ProcIsland& island);
+
+// ----- LP7.4 (C55, D133, P7.1): the candidates of a planar island and the test -----
+
+/**
+ * The per-axis tolerance of the test: the T-junction fix snaps a vertex to 1/32 and
+ * merges it into a hash vertex within one snap unit (tritjunction.cpp:122-151, up to 3/64
+ * per axis), and MatchVert welds within 0.01 (output.cpp:127-180). In the plane a point
+ * may so move by up to AdoptionEpsilon times the square root of 3 (AdoptionDistance).
+ */
+inline constexpr auto AdoptionEpsilon = 3.0f / 64.0f + 0.01f;
+inline constexpr auto AdoptionDistance = AdoptionEpsilon * 1.7320508f;
+
+// a face piece: the node, the face's index in it, the piece's index in the face's clip
+// into the areas
+struct AdoptionPieceKey
+{
+  PreviewId node = NoPreviewId;
+  std::uint32_t face = 0;
+  std::uint32_t piece = 0;
+
+  auto operator<=>(const AdoptionPieceKey&) const = default;
+};
+
+/**
+ * What the test reads of one face piece the chunk builder makes (ChunkJobOutput::pieces):
+ * its model (a world piece's area, the .proc's _areaN; -1 for a brush entity's piece,
+ * whose model is the entity's own, K17), the material it is built with (worldspawn's
+ * overrideMaterial in its place, before any remap), dmap's side plane, the side's texture
+ * vectors (engineValveTextureVectors) and editor-image size, and the winding in the
+ * frame the .proc's positions are in (the parse frame less the entity's origin offset,
+ * read back as ParseModel reads what dmap wrote, procReadBack).
+ */
+struct AdoptionPiece
+{
+  AdoptionPieceKey key;
+  int area = 0;
+  std::string material;
+  // the side plane in the piece's frame
+  EnginePlane plane;
+  EngineTextureVectors texVec = {};
+  float textureWidth = 8;
+  float textureHeight = 8;
+  // the side's st at a point p of the frame are its texVec's at p + stOrigin (the origin
+  // offset dmap subtracts after TriListForSide, output.cpp:589)
+  EngineVec3 stOrigin = {0, 0, 0};
+  std::vector<EngineVec3> points;
+};
+
+enum class IslandVerdict
+{
+  Adopted,
+  // not planar: never adopted
+  Curved,
+  // no face piece of its material, plane and texture vectors overlaps it
+  NoCandidate,
+  // an island vertex lies outside the candidates' union
+  IslandOutside,
+  // a candidate's vertex lies outside the island's triangles
+  PieceOutside,
+  // two candidates overlap by more than a sliver
+  Overlap,
+  // the summed areas differ by more than the candidates' perimeter times AdoptionEpsilon
+  Area,
+};
+
+struct IslandMatch
+{
+  IslandVerdict verdict = IslandVerdict::NoCandidate;
+  // the candidates, as indexes into the pieces given
+  std::vector<std::size_t> candidates;
+};
+
+/**
+ * LP7.4 (C55, P7.1): the test of one planar island of surface against the face pieces of
+ * its model. The candidates are the pieces whose material equals the surface's (case
+ * aside), whose plane equals the island's (normals within PlanarCosine, the island's
+ * centroid within AdoptionEpsilon of the piece's plane), whose texture vectors equal the
+ * island's st map, and whose polygon overlaps the island's triangles by more than a
+ * sliver (an intersection area above the piece's perimeter times AdoptionEpsilon), so
+ * that disjoint coplanar islands of one material never fail each other.
+ *
+ * The texture vectors are compared where dmap's st are: at every island vertex, the
+ * piece's st through dmap's rule ((texVec · ( p + stOrigin ) + offset) / size,
+ * TriListForSide) against the vertex's st within what dmap's own writing leaves of the
+ * equality AddTriListToArea's epsilons stand for (TEXTURE_VECTOR_EQUAL_EPSILON 0.001,
+ * TEXTURE_OFFSET_EQUAL_EPSILON 0.005, usurface.cpp:36-37, in texels): dmap's idDrawVert
+ * stores st as half floats (two half-float units of the larger value), WriteFloat writes
+ * a value within 0.001 of an integer as the integer (output.cpp:95-105), and the
+ * T-junction snap moves the position under its st (the gradient times AdoptionEpsilon
+ * per axis).
+ *
+ * Adopted when there is a candidate and, in the island's plane, every island vertex lies
+ * within AdoptionDistance of the candidates' union, every candidate vertex within
+ * AdoptionDistance of the island's triangles (a colinear or interior vertex the optimizer
+ * dropped lies on an edge or inside, optimize.cpp:1967-2000), no two candidates overlap
+ * by more than a sliver (the smaller perimeter times AdoptionEpsilon: so that the summed
+ * area is the union's, and a hole the candidates leave is not paid for by an overlap
+ * elsewhere, as a face moved within its plane would leave both), and the candidates'
+ * summed area is the island's within their summed perimeter times AdoptionEpsilon. Pure;
+ * any thread.
+ */
+IslandMatch matchProcIsland(
+  const ProcSurface& surface,
+  const ProcIsland& island,
+  const std::vector<const AdoptionPiece*>& pieces);
 
 } // namespace tb::lit

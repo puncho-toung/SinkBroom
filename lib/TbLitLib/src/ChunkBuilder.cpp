@@ -488,11 +488,52 @@ private:
     return vert;
   }
 
+  // LP7.4 (C55): the record of a face piece for the adoption pass, in the frame the
+  // .proc's positions are in (sideVert's: the parse frame less the origin offset, read
+  // back), the side plane moved with it and st from the parse frame (stOrigin)
+  void addPiece(
+    const SceneNode& node,
+    const std::size_t faceIndex,
+    const std::size_t pieceIndex,
+    const AreaPiece& piece,
+    const SceneFace& face,
+    const FaceMaterial& material,
+    const EnginePlane& plane,
+    const EntityContext& context,
+    const CellCoord& cell)
+  {
+    auto record = ChunkPiece{};
+    record.cell = CellRef{context.chunkEntity, cell};
+    auto& adoption = record.piece;
+    adoption.key =
+      AdoptionPieceKey{node.id, std::uint32_t(faceIndex), std::uint32_t(pieceIndex)};
+    // a world piece's model is its area's; a brush entity's its own (K17)
+    adoption.area = context.world ? piece.area : -1;
+    adoption.material = material.name;
+    const auto& o = context.originOffset;
+    adoption.plane = EnginePlane{
+      plane.a,
+      plane.b,
+      plane.c,
+      plane.d + plane.a * o[0] + plane.b * o[1] + plane.c * o[2]};
+    adoption.texVec = engineValveTextureVectors(face.texture);
+    adoption.textureWidth = material.width;
+    adoption.textureHeight = material.height;
+    adoption.stOrigin = o;
+    adoption.points.reserve(piece.points.size());
+    for (const auto& p : piece.points)
+    {
+      adoption.points.push_back(readBack(sub(p, o)));
+    }
+    m_output.pieces.push_back(std::move(record));
+  }
+
   void addBrush(
     const SceneNode& node, const EntityContext& context, const CellCoord& cell)
   {
-    for (const auto& face : node.faces)
+    for (auto faceIndex = std::size_t{0}; faceIndex < node.faces.size(); ++faceIndex)
     {
+      const auto& face = node.faces[faceIndex];
       const auto& material = materialOf(engineSideMaterial(face.material));
       // usurface.cpp:192: no faces for sides neither drawn nor casting shadows
       if (!material.drawn && !material.castsShadow)
@@ -525,11 +566,18 @@ private:
       auto pieces = context.world
                       ? clipSideIntoAreas(m_input.proc.get(), winding, *plane)
                       : std::vector<AreaPiece>{AreaPiece{context.area, winding}};
-      for (auto& piece : pieces)
+      for (auto pieceIndex = std::size_t{0}; pieceIndex < pieces.size(); ++pieceIndex)
       {
+        const auto& piece = pieces[pieceIndex];
         if (piece.area == SolidArea && m_input.proc && context.world)
         {
           ++m_output.solidPieces;
+        }
+        // a piece in solid is in no area model: never a candidate (K14)
+        if (m_input.collectPieces && !(context.world && piece.area == SolidArea))
+        {
+          addPiece(
+            node, faceIndex, pieceIndex, piece, face, material, *plane, context, cell);
         }
         auto& target = bucket(piece.area, context, material, cell);
         // TriListForSide's fan: w[0], w[i - 1], w[i]

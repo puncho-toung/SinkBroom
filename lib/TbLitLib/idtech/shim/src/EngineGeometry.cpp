@@ -438,6 +438,22 @@ std::array<EngineVec3, 2> engineBoundsOfPoints(const std::vector<EngineVec3>& po
   return {fromId(bounds[0]), fromId(bounds[1])};
 }
 
+EngineTextureVectors engineValveTextureVectors(const EngineValveTexture& texture)
+{
+  // MapFile.cpp:104-117 GetTextureVectors (PROJECTION_VALVE220), as dmap/map.cpp:350
+  // takes them into s->texVec
+  idVec4 v[2];
+  v[0][0] = texture.uAxis[0] * (1.0f / texture.uScale);
+  v[0][1] = texture.uAxis[1] * (1.0f / texture.uScale);
+  v[0][2] = texture.uAxis[2] * (1.0f / texture.uScale);
+  v[0][3] = texture.uOffset;
+  v[1][0] = texture.vAxis[0] * (1.0f / texture.vScale);
+  v[1][1] = texture.vAxis[1] * (1.0f / texture.vScale);
+  v[1][2] = texture.vAxis[2] * (1.0f / texture.vScale);
+  v[1][3] = texture.vOffset;
+  return {{{v[0][0], v[0][1], v[0][2], v[0][3]}, {v[1][0], v[1][1], v[1][2], v[1][3]}}};
+}
+
 EngineVec2 engineValveTexCoord(
   const EngineVec3& xyz,
   const EngineValveTexture& texture,
