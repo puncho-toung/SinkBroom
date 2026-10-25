@@ -290,6 +290,33 @@ std::array<float, 2> engineDepthBoundsForBounds(
 std::uint16_t engineFtoui16(float value);
 
 /**
+ * LP5.3 (C49, SC532): R_AddSingleLight's fog plane (tr_frontend_addlights.cpp:212-221,
+ * transcribed on the copied idPlane and idMath): baseLightProject's row 2 less its row 3,
+ * the light volume's far clip plane, all four floats times idMath::InvSqrt of its
+ * normal's squared length (the copy's sqrtf( 1 / x )). Every light gets it; FogPass and
+ * the fog portals read it. Pure; any thread.
+ */
+EnginePlane engineFogPlane(const EngineMat4& baseLightProject);
+
+/**
+ * LP5.3 (C49, SC534): idRenderMatrix::InverseTransformPlane( in, out, normalize )
+ * (RenderMatrix.h:445-470, the copy): the plane through the matrix's transpose, as
+ * T_BasicFog takes the fog planes into the zero-to-one cube's space (normalize false).
+ * Pure; any thread.
+ */
+EnginePlane engineInverseTransformPlane(
+  const EngineMat4& matrix, const EnginePlane& plane, bool normalize);
+
+/**
+ * LP5.3 (C49, SC539): idRenderMatrix::CullPointToMVP( mvp, point, zeroToOne )
+ * (RenderMatrix.h:539-543 over CullPointToMVPbits, RenderMatrix.cpp:1742-1790, the copy):
+ * the point outside the clip space; zeroToOne takes 0..w on every axis, a light
+ * projection's; the comparisons are strict, so a point on the volume's boundary is
+ * outside. Pure; any thread.
+ */
+bool engineCullPointToMvp(const EngineMat4& mvp, const EngineVec3& point, bool zeroToOne);
+
+/**
  * idRenderMatrix::GetFrustumPlanes( planes, frustum, zeroToOne, normalize )
  * (RenderMatrix.cpp:4436-4515, the copy): left, right, bottom, top, near, far, each
  * pointing inside; without zeroToOne the near plane is row 3 + row 2 (isZeroOneZ is

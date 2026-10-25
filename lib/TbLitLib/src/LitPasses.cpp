@@ -878,10 +878,9 @@ void LitPasses::recordInteractions(Frame& frame)
     // DrawInteractionsPass (RenderBackend.cpp:3984-4171)
     for (const auto& light : m_lists.lights)
     {
-      // do fogging later (:3999-4007); LP5.1: the frontend lists no fog or blend light
-      // yet (LP5.3 lifts its skip), so neither phase meets one
-      assert(!light.shader->fogLight && !light.shader->blendLight);
-      if (light.shader->fogLight || light.shader->blendLight)
+      // do fogging later (:3999-4007): FogAllLights draws the fog and blend lights
+      // (LP5.3, recordFogLights)
+      if (light.kind == ViewLightKind::Fog || light.kind == ViewLightKind::Blend)
       {
         continue;
       }

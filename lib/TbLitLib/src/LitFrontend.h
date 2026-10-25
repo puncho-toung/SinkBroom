@@ -102,9 +102,29 @@ struct LitSurface
 };
 
 /**
+ * LP5.3 (C45, C49): what a view light is to the passes. Fog and blend come from the
+ * shader's fogLight and blendLight flags (Material.h IsFogLight, IsBlendLight), which
+ * FogAllLights draws and both DrawInteractionsPass phases skip (RenderBackend.cpp:
+ * 3999-4007); of the others a light on R_LightUsesMathPath is a math light, then an
+ * ambientLight shader's an ambient light (a math light whose shader is an ambientLight
+ * one is Math here and still counted among the ambient lights by its flag), else a
+ * texture light.
+ */
+enum class ViewLightKind
+{
+  Texture,
+  Math,
+  Ambient,
+  Fog,
+  Blend,
+};
+
+/**
  * LP2.2a (SC207): a viewLight_t: the record, its shader and registers (snapped as
- * R_AddSingleLight snaps them), the scissor, and the three interaction lists in their
- * chain order.
+ * R_AddSingleLight snaps them; LP5.3: a fog or blend light's never, :155), the scissor,
+ * and the three interaction lists in their chain order. LP5.3 (C49): its kind and
+ * fogPlane (:212-221, engineFogPlane: normalize( baseLightProject row 2 - row 3 ), the
+ * volume's far plane), which FogPass reads.
  */
 struct ViewLight
 {
@@ -117,7 +137,13 @@ struct ViewLight
   std::vector<LitSurface> translucentInteractions;
   // the registers are the light's last (D52)
   bool provisional = false;
+  ViewLightKind kind = ViewLightKind::Texture;
+  EnginePlane fogPlane = {};
 };
+
+// LP5.3 (C45, C49): the kind of a light of this shader (ViewLightKind's rule). Pure.
+ViewLightKind engineViewLightKind(
+  const MaterialEntry& shader, const RenderLightParms& light);
 
 /**
  * LP2.2a (C27, A1, D67): what R_AddLights, R_AddModels and R_OptimizeViewLightsList
@@ -136,10 +162,11 @@ struct FrontendLists
   bool lightTrianglesPending = false;
   std::size_t lightTriangleSurfaces = 0;
   std::size_t culledTriangles = 0;
-  // LP5.1 (C45): the math lights with surfaces in the lists (tr.pc.c_mathViewLights,
-  // tr_frontend_addlights.cpp:740-746), and the ambientLight lights with surfaces (the
-  // preview's own count); the fog and blend lights skipped (until LP5.3, C49): with a
-  // tree, only those the view's flow gave a rect are counted
+  // LP5.1 (C45): the math lights in the lists (tr.pc.c_mathViewLights,
+  // tr_frontend_addlights.cpp:738-745: R_LightUsesMathPath of every light it counts in
+  // c_viewLights, a fog or blend light's too), and the ambientLight lights with surfaces
+  // (the preview's own count); LP5.3 (C49): the fog and blend lights in the lists, every
+  // one kept with or without a surface (:727-735)
   std::size_t mathLights = 0;
   std::size_t fogAndBlendLights = 0;
   std::size_t ambientLights = 0;
@@ -157,9 +184,13 @@ struct FrontendLists
   std::size_t areasFlowed = 0;
   std::size_t portalChains = 0;
   // the view lights that went on to the pairing: a flow rect (or the outside set's
-  // projected rect alone, D81), a light (LP5.1: a texture, math or ambientLight light,
-  // not a fog or blend light) whose registers add light, and a scissor that is not empty
-  // (before R_OptimizeViewLightsList drops those without a surface)
+  // projected rect alone, D81), registers that add light, and a scissor that is not
+  // empty (before R_OptimizeViewLightsList drops those without a surface): the viewLights
+  // R_AddLights keeps (removeFromList false, tr_frontend_addlights.cpp:474), no engine
+  // counter, less a texture, math or ambient light whose scissor is empty (it contacts no
+  // entity, tr_frontend_addmodels.cpp:362-367, so it has no surface and no counter counts
+  // it). LP5.3 (C49): a fog or blend light counts with an empty scissor too and without
+  // the snap's test (:155): R_AddLights keeps it, and its cube draws
   std::size_t lightsInView = 0;
   // brush-entity chunks left out because their entity got no flow rect
   std::size_t entitiesCulled = 0;
@@ -199,6 +230,9 @@ struct FrontendInputs
   std::function<std::shared_ptr<const LightTriangles>(
     const LightRecord&, const LitSurface&, const LitSpace&)>
     lightTriangles;
+  // LP5.3, tests: the view's scissor (viewDef->scissor) to use instead of viewScissor(
+  // view ), as ViewFlowInputs::scissorForTesting (a subview's would be smaller)
+  std::optional<ScreenRect> scissorForTesting;
 };
 
 /**
@@ -265,7 +299,12 @@ std::vector<const LitSurface*> engineOrderInteractionSurfaces(
  * R_OptimizeViewLightsList's sort (tr_frontend_addlights.cpp:794-822): qsort ascending
  * by scissor area, then the list rebuilt by prepending, so the largest light is first.
  * The engine's qsort is not stable; here equal areas keep the reverse of their input
- * order (mirror.json M-FRONT-DIFF-01).
+ * order (mirror.json M-FRONT-DIFF-01, K39). LP5.3 (C49, P6.23): the area is
+ * idScreenRect::GetArea's arithmetic (ScreenRect::area), ( x2 - x1 + 1 ) · ( y2 - y1 + 1
+ * ) on the shorts promoted to int, also for the empty scissor a kept fog or blend light
+ * may have: an empty rect inverted on both axes has a positive area, possibly larger than
+ * a real light's, so such a light can sort before it (and with one axis inverted a
+ * negative area, after every light).
  */
 void engineSortViewLights(std::vector<ViewLight>& lights);
 
@@ -300,11 +339,10 @@ std::vector<const LitSurface*> stagePassOrder(
  * state are left out. A surface is directly visible when its chunk's bounds are not
  * culled by its space's mvp (CullBoundsToMVP); a visible surface whose material is
  * drawn (IsDrawn, a deform of none or a particle one) or pending is a prepass surface.
- * Each light record that is visible, has a volume, is not a fog or blend light (LP5.3's,
- * skipped and counted; LP5.1: a math or ambientLight light is a light as any, C45) with
- * its shader and falloff known, whose registers are known (its last ones while a new
- * evaluation is pending, D52; a light seen first without registers is skipped) and add
- * light, and whose scissor is
+ * Each light record that is visible, has a volume (LP5.1: a math or ambientLight light is
+ * a light as any, C45) with its shader and falloff known, whose registers are known (its
+ * last ones while a new evaluation is pending, D52; a light seen first without registers
+ * is skipped) and add light, and whose scissor is
  * not empty, gets every directly visible surface that receives lighting (a pending one
  * does), is not culled to the light volume by its bounds through its space's model
  * matrix (R_CullModelBoundsToLight), and has the light shader's spectrum, in the list of
@@ -312,6 +350,16 @@ std::vector<const LitSurface*> stagePassOrder(
  * interaction's cull to the light volume; a surface with none is left out, as the engine
  * makes no interaction surface for it). A light with no surface in any list is dropped
  * (R_OptimizeViewLightsList); the rest are sorted (engineSortViewLights).
+ *
+ * LP5.3 (C45, C49): a fog or blend light takes the same lists by the same rules (the
+ * dead noFog and ReceivesFog are not consulted: tr_frontend_addmodels.cpp:949-1008 asks
+ * ReceivesLighting alone; its local list holds the noSelfShadow surfaces of a light
+ * without noShadows), with no snap of its registers (tr_frontend_addlights.cpp:155), and
+ * is kept with an empty scissor (no surface: an empty-scissor light contacts no entity,
+ * tr_frontend_addmodels.cpp:362-367) and without a surface (R_OptimizeViewLightsList
+ * keeps it, :727-735: FogAllLights draws its cube); a light culled to the view frustum
+ * (the projected z range empty) is dropped as every kind is (:263-267). Each view light
+ * carries its kind and fogPlane.
  * r_useShadowSurfaceScissor's shrink is the light's own rect here (every surface's rect
  * is the light's), so it changes nothing.
  *

@@ -20,8 +20,8 @@
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderWorld_defs.cpp,
-// renderer/GLMatrix.cpp, renderer/RenderBackend.cpp, renderer/Model.cpp and
-// d3xp/Game_local.cpp):
+// renderer/GLMatrix.cpp, renderer/RenderBackend.cpp, renderer/Model.cpp,
+// renderer/tr_frontend_addlights.cpp and d3xp/Game_local.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2012-2024 Robert Beckebans
 // That code is also subject to the additional terms that follow the GNU General
@@ -820,6 +820,39 @@ std::array<float, 2> engineDepthBoundsForBounds(
 std::uint16_t engineFtoui16(const float value)
 {
   return idMath::Ftoui16(value);
+}
+
+EnginePlane engineFogPlane(const EngineMat4& baseLightProject)
+{
+  // tr_frontend_addlights.cpp:212-221: the fog plane is the light far clip plane
+  const auto project = toId(baseLightProject);
+  idPlane fogPlane(
+    project[2][0] - project[3][0],
+    project[2][1] - project[3][1],
+    project[2][2] - project[3][2],
+    project[2][3] - project[3][3]);
+  const float planeScale = idMath::InvSqrt(fogPlane.Normal().LengthSqr());
+  idPlane out;
+  out[0] = fogPlane[0] * planeScale;
+  out[1] = fogPlane[1] * planeScale;
+  out[2] = fogPlane[2] * planeScale;
+  out[3] = fogPlane[3] * planeScale;
+  return fromId(out);
+}
+
+EnginePlane engineInverseTransformPlane(
+  const EngineMat4& matrix, const EnginePlane& plane, const bool normalize)
+{
+  const idPlane in{plane.a, plane.b, plane.c, plane.d};
+  idPlane out;
+  toId(matrix).InverseTransformPlane(in, out, normalize);
+  return fromId(out);
+}
+
+bool engineCullPointToMvp(
+  const EngineMat4& mvp, const EngineVec3& point, const bool zeroToOne)
+{
+  return idRenderMatrix::CullPointToMVP(toId(mvp), toId(point), zeroToOne);
 }
 
 std::array<EnginePlane, 6> engineFrustumPlanes(

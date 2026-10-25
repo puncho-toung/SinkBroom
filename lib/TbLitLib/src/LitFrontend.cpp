@@ -69,6 +69,24 @@ bool engineLightUsesMathPath(const RenderLightParms& light)
   return light.mathLight.enabled && EngineFrame.mathLightsEnabled;
 }
 
+ViewLightKind engineViewLightKind(
+  const MaterialEntry& shader, const RenderLightParms& light)
+{
+  if (shader.fogLight)
+  {
+    return ViewLightKind::Fog;
+  }
+  if (shader.blendLight)
+  {
+    return ViewLightKind::Blend;
+  }
+  if (engineLightUsesMathPath(light))
+  {
+    return ViewLightKind::Math;
+  }
+  return shader.ambientLight ? ViewLightKind::Ambient : ViewLightKind::Texture;
+}
+
 bool engineCullModelBoundsToLight(
   const EngineMat4& baseLightProject,
   const EngineBounds& localBounds,
@@ -262,6 +280,8 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
     return lists;
   }
   const auto& view = inputs.view;
+  // viewDef->scissor
+  const auto viewRect = inputs.scissorForTesting.value_or(viewScissor(view));
 
   // the state of a chunk's entity; null: worldspawn's
   const auto stateOf = [&](const PreviewId entity) -> const ChunkEntityState* {
@@ -352,6 +372,7 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   flowInputs.areas = hasTree ? inputs.areas : nullptr;
   flowInputs.lights = flowLights;
   flowInputs.entities = flowEntities;
+  flowInputs.scissorForTesting = inputs.scissorForTesting;
   const auto flowStart = std::chrono::steady_clock::now();
   const auto flow = flowView(flowInputs);
   lists.flowMs = std::chrono::duration<double, std::milli>(
@@ -492,7 +513,7 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
     surface.chunk = &chunk;
     surface.space = *index;
     // LP5.2a (P6.14): the surface's scissorRect, its view entity's
-    surface.scissor = viewScissor(view);
+    surface.scissor = viewRect;
     if (flow.flowed && areaSurface.kind == AreaSurfaceKind::WorldArea)
     {
       surface.scissor = *flow.worldRects[std::size_t(areaSurface.area)];
@@ -582,7 +603,7 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       // scissorRect (RenderWorld_portals.cpp:364-402); a light that pushed into no area
       // is the outside set's, with the view's scissor (D81); without a tree the view's
       // scissor stands (D94)
-      auto flowRect = viewScissor(view);
+      auto flowRect = viewRect;
       if (flow.flowed && !record->derived.areas.empty())
       {
         const auto rect = flow.lightRects.find(record->id);
@@ -594,22 +615,20 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       }
 
       const auto& material = *shader.material;
-      // fog and blend lights: no snap, kept without a surface or with an empty scissor
-      // (tr_frontend_addlights.cpp:155, 727-735), drawn by FogAllLights; skipped and
-      // counted until LP5.3 lifts this (C49). LP5.1 (C45, SC510, SC512): math and
-      // ambientLight lights take the normal path below (the snap, the scissor, the
-      // lists) as the engine's frontend gives them
-      if (material.fogLight || material.blendLight)
-      {
-        ++lists.fogAndBlendLights;
-        continue;
-      }
+      // LP5.3 (C49): fog and blend lights take the path below with no snap, kept without
+      // a surface or with an empty scissor (tr_frontend_addlights.cpp:155, 727-735),
+      // drawn by FogAllLights. LP5.1 (C45, SC510, SC512): math and ambientLight lights
+      // take it with the snap and the scissor's test, as the engine's frontend gives them
+      const auto fogOrBlend = material.fogLight || material.blendLight;
 
       // evaluate the light shader registers; D52 (P6.6): a light seen for the first time
       // without registers is skipped (the frame unconverged), kept ones are drawn
       auto viewLight = ViewLight{};
       viewLight.record = record;
       viewLight.shader = shader.material;
+      viewLight.kind = engineViewLightKind(material, record->light.parms);
+      // the fog plane is the light far clip plane (:212-221)
+      viewLight.fogPlane = engineFogPlane(record->derived.projection.baseLightProject);
       if (!inputs.registers)
       {
         continue;
@@ -629,17 +648,24 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       viewLight.registers = registers.registers->registers;
 
       // if this is a purely additive light and no stage in the light shader evaluates
-      // to a positive light value, we can completely skip the light
-      if (!engineSnapLightRegisters(material, viewLight.registers))
+      // to a positive light value, we can completely skip the light (not a fog or blend
+      // light, :155)
+      if (!fogOrBlend && !engineSnapLightRegisters(material, viewLight.registers))
       {
         continue;
       }
 
       const auto scissor = engineLightScissor(
         view, record->derived.projection.inverseBaseLightProject, flowRect);
-      if (!scissor || scissor->isEmpty())
+      if (!scissor)
       {
-        // tr_frontend_addmodels.cpp:362-367: an empty scissor contacts no entity
+        // the light was culled to the view frustum (:263-267): every kind
+        continue;
+      }
+      if (scissor->isEmpty() && !fogOrBlend)
+      {
+        // tr_frontend_addmodels.cpp:362-367: an empty scissor contacts no entity, so the
+        // light has no surface; LP5.3: a fog or blend light is kept so (its cube draws)
         continue;
       }
       viewLight.scissor = *scissor;
@@ -651,7 +677,10 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       // tr_frontend_addmodels.cpp:340-381)
       const auto& projection = record->derived.projection;
       const auto areaLight = AreaLight{record->derived.areaNum, record->derived.areas};
-      for (auto i = std::size_t{0}; i < visible.size(); ++i)
+      // an empty-scissor light (a fog or blend light here) contacts no entity
+      // (tr_frontend_addmodels.cpp:362-367)
+      const auto contacts = !viewLight.scissor.isEmpty();
+      for (auto i = std::size_t{0}; i < visible.size() && contacts; ++i)
       {
         const auto& surface = visible[i];
         if (
@@ -723,23 +752,29 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
         }
       }
 
-      // R_OptimizeViewLightsList: no lit surface, nothing to draw
+      // R_OptimizeViewLightsList: no lit surface, nothing to draw (:727-735); LP5.3: a
+      // fog or blend light still draws its volume in FogAllLights, and stays
       if (
         viewLight.localInteractions.empty() && viewLight.globalInteractions.empty()
-        && viewLight.translucentInteractions.empty())
+        && viewLight.translucentInteractions.empty() && !fogOrBlend)
       {
         continue;
       }
-      // LP5.1 (C45): tr.pc.c_mathViewLights, the math lights with surfaces
-      // (tr_frontend_addlights.cpp:740-746), and the ambientLight lights with surfaces
-      // (the preview's own count)
+      // LP5.1 (C45): tr.pc.c_mathViewLights, R_LightUsesMathPath of the lights it counts
+      // in c_viewLights (tr_frontend_addlights.cpp:738-745: a fog or blend light's too),
+      // and the ambientLight lights with surfaces (the preview's own count); LP5.3: the
+      // fog and blend lights kept
       if (engineLightUsesMathPath(record->light.parms))
       {
         ++lists.mathLights;
       }
-      if (material.ambientLight)
+      if (material.ambientLight && !fogOrBlend)
       {
         ++lists.ambientLights;
+      }
+      if (fogOrBlend)
+      {
+        ++lists.fogAndBlendLights;
       }
       lists.lights.push_back(std::move(viewLight));
     }

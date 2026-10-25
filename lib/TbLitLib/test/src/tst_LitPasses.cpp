@@ -57,6 +57,7 @@
 #include <thread>
 #include <vector>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 namespace tb::lit
@@ -1051,6 +1052,33 @@ FrontendLists listsOfLights(
       : [&](const PreviewId, const MaterialEntry& material, const ShaderParms& parms) {
           return evaluatedRegisters(f, material, parms);
         };
+  return buildFrontendLists(inputs);
+}
+
+// LP5.3: listsOfLights with the view's scissor of a test (FrontendInputs::
+// scissorForTesting)
+FrontendLists listsWithScissor(
+  FrontendFixture& f,
+  const LightTable& lights,
+  const CameraState& camera,
+  const int width,
+  const int height,
+  const ScreenRect& scissor)
+{
+  auto inputs = FrontendInputs{};
+  inputs.view = litViewOf(camera, std::uint32_t(width), std::uint32_t(height));
+  inputs.chunks = &f.chunkMap;
+  inputs.entities = &f.entities;
+  inputs.lights = &lights;
+  inputs.material = [&](const std::string& name) {
+    const auto slot = f.table->find(name);
+    return MaterialAnswer{slot ? slot->entry : nullptr, !slot};
+  };
+  inputs.registers =
+    [&](const PreviewId, const MaterialEntry& material, const ShaderParms& parms) {
+      return evaluatedRegisters(f, material, parms);
+    };
+  inputs.scissorForTesting = scissor;
   return buildFrontendLists(inputs);
 }
 
@@ -2079,25 +2107,120 @@ TEST_CASE("LitPasses: math, ambientLight, fog and blend lights in the lists (LP5
     CHECK(bothLists.mathLights == 1u);
   }
 
-  SECTION("fog and blend lights stay skipped and counted until LP5.3 (C49)")
+  SECTION("fog and blend lights take the lists as any light, unsnapped (LP5.3, C49)")
   {
-    for (const auto* shader : {"lights/lp51/fog", "lights/lp51/blend"})
+    for (const auto& [shader, kind] :
+         {std::pair{"lights/lp51/fog", ViewLightKind::Fog},
+          std::pair{"lights/lp51/blend", ViewLightKind::Blend}})
     {
       CAPTURE(shader);
       const auto record = lightRecordWith(*f, "lp1b_light", {{"texture", shader}});
       REQUIRE(record->derived.shader.material);
       const auto lists =
         listsOfLights(*f, lightTableOf(otherLights(record), 2), camera, 128, 96);
-      CHECK_FALSE(lightOf(lists, *f, "lp1b_light"));
+      const auto* light = lightOf(lists, *f, "lp1b_light");
+      REQUIRE(light);
+      CHECK(light->kind == kind);
+      // FAM:949-1008: the surfaces that receive lighting, as the texture light's (the
+      // dead noFog / ReceivesFog not asked), the same scissor
+      CHECK(light->scissor.equals(textureLight->scissor));
+      CHECK(
+        materialsOf(light->globalInteractions)
+        == materialsOf(textureLight->globalInteractions));
+      CHECK(
+        materialsOf(light->translucentInteractions)
+        == materialsOf(textureLight->translucentInteractions));
       CHECK(lists.fogAndBlendLights == 1u);
-      // the interaction phases never meet a fog or blend light (RenderBackend.cpp:
-      // 3999-4007): the lists hold none
-      for (const auto& light : lists.lights)
-      {
-        CHECK_FALSE(light.shader->fogLight);
-        CHECK_FALSE(light.shader->blendLight);
-      }
+      CHECK(lists.lightsInView == texture.lightsInView);
+      // the fog plane (FAL:212-221): the point light's far plane z = 96 + 200, from
+      // baseLightProject row 2 ( 0, 0, 0.5 / 200, 0.5 - 0.5 · 96 / 200 ) less row 3 ( 0,
+      // 0, 0, 1 ), normalised: ( 0, 0, 1, -296 )
+      CHECK(light->fogPlane.a == Catch::Approx(0.0f).margin(1e-6));
+      CHECK(light->fogPlane.b == Catch::Approx(0.0f).margin(1e-6));
+      CHECK(light->fogPlane.c == Catch::Approx(1.0f).margin(1e-6));
+      CHECK(light->fogPlane.d == Catch::Approx(-296.0f).epsilon(1e-6));
+      // a texture light's kind and plane (every light gets the plane)
+      CHECK(textureLight->kind == ViewLightKind::Texture);
+      CHECK(textureLight->fogPlane.d == Catch::Approx(-296.0f).epsilon(1e-6));
+
+      // no snap (FAL:155): a black fog or blend light stays, where a texture light goes
+      const auto black =
+        lightRecordWith(*f, "lp1b_light", {{"texture", shader}, {"_color", "0 0 0"}});
+      const auto blackLists =
+        listsOfLights(*f, lightTableOf(otherLights(black), 3), camera, 128, 96);
+      const auto* blackLight = lightOf(blackLists, *f, "lp1b_light");
+      REQUIRE(blackLight);
+      CHECK(blackLists.fogAndBlendLights == 1u);
+
+      // the view's scissor away from the light's rect: an empty scissor, no surface, and
+      // the light kept (FAL:727-735, FAM:362-367: it contacts no entity); a texture
+      // light is dropped so
+      auto inputsCorner = ScreenRect{};
+      inputsCorner.x1 = 120;
+      inputsCorner.y1 = 0;
+      inputsCorner.x2 = 127;
+      inputsCorner.y2 = 3;
+      // lp1b_small's rect is x 48..58, y 42..52 (the fixture's light test)
+      const auto small = lightRecordWith(*f, "lp1b_small", {{"texture", shader}});
+      const auto cornerLists = listsWithScissor(
+        *f, lightTableOf(otherLights(small), 4), camera, 128, 96, inputsCorner);
+      const auto* corner = lightOf(cornerLists, *f, "lp1b_small");
+      REQUIRE(corner);
+      CHECK(corner->scissor.isEmpty());
+      CHECK(corner->localInteractions.empty());
+      CHECK(corner->globalInteractions.empty());
+      CHECK(corner->translucentInteractions.empty());
+      CHECK(cornerLists.fogAndBlendLights == 1u);
+      const auto textureCorner =
+        listsWithScissor(*f, f->lights, camera, 128, 96, inputsCorner);
+      CHECK_FALSE(lightOf(textureCorner, *f, "lp1b_small"));
     }
+  }
+
+  SECTION("the light sort's area is GetArea's arithmetic, an empty rect's too (P6.23)")
+  {
+    // idScreenRect::GetArea ( x2 - x1 + 1 ) · ( y2 - y1 + 1 ): an empty rect inverted on
+    // both axes is positive, on one axis negative
+    const auto rect = [](const short x1, const short y1, const short x2, const short y2) {
+      auto r = ScreenRect{};
+      r.x1 = x1;
+      r.y1 = y1;
+      r.x2 = x2;
+      r.y2 = y2;
+      return r;
+    };
+    auto lights = std::vector<ViewLight>(3);
+    lights[0].scissor = rect(0, 0, 9, 9);
+    lights[1].scissor = rect(50, 60, 20, 30);
+    lights[2].scissor = rect(50, 0, 20, 9);
+    CHECK(lights[0].scissor.area() == 100);
+    CHECK(lights[1].scissor.isEmpty());
+    CHECK(lights[1].scissor.area() == (20 - 50 + 1) * (30 - 60 + 1));
+    CHECK(lights[1].scissor.area() == 841);
+    CHECK(lights[2].scissor.area() == -290);
+    lights[0].fogPlane.d = 0.0f;
+    lights[1].fogPlane.d = 1.0f;
+    lights[2].fogPlane.d = 2.0f;
+    engineSortViewLights(lights);
+    // largest first: the doubly inverted empty rect before the real one, the singly
+    // inverted after every light
+    CHECK(lights[0].fogPlane.d == 1.0f);
+    CHECK(lights[1].fogPlane.d == 0.0f);
+    CHECK(lights[2].fogPlane.d == 2.0f);
+  }
+
+  SECTION("the local list of a light without noShadows (FAM:996-1002, LP5.3)")
+  {
+    // MC_TRANSLUCENT first; then !noShadows && MF_NOSELFSHADOW: local; else global, a fog
+    // or blend light's list as any light's
+    auto material = MaterialEntry{};
+    material.materialFlags = engine_material::FlagNoSelfShadow;
+    CHECK(engineInteractionList(material, false) == InteractionList::Local);
+    CHECK(engineInteractionList(material, true) == InteractionList::Global);
+    material.coverage = engine_material::CoverageTranslucent;
+    CHECK(engineInteractionList(material, false) == InteractionList::Translucent);
+    material = MaterialEntry{};
+    CHECK(engineInteractionList(material, false) == InteractionList::Global);
   }
 
   SECTION("a first-seen light without registers is skipped, a kept one drawn (D52)")
