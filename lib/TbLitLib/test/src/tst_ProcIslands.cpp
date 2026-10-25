@@ -183,9 +183,8 @@ Evaluation evaluate(
       if (snapshot.string(snapshot.keyValues[k].key) == "name")
       {
         auto name = std::string{snapshot.string(snapshot.keyValues[k].value)};
-        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
-          return char(std::tolower(c));
-        });
+        std::ranges::transform(
+          name, name.begin(), [](unsigned char c) { return char(std::tolower(c)); });
         byName[name] = entity.id;
       }
     }
@@ -202,9 +201,8 @@ Evaluation evaluate(
     if (model.area < 0)
     {
       auto name = model.name;
-      std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
-        return char(std::tolower(c));
-      });
+      std::ranges::transform(
+        name, name.begin(), [](unsigned char c) { return char(std::tolower(c)); });
       const auto it = byName.find(name);
       entity = it != byName.end() ? it->second : NoPreviewId;
     }
@@ -968,17 +966,24 @@ TEST_CASE("ProcIslands: the sandbox's parity pairs adopted (LP7.4, P7.1)", "[.][
     {
       patches += node.kind == SnapshotNodeKind::Patch ? 1u : 0u;
     }
-    auto evaluation =
-      evaluate(*tree, snapshot, piecesOf(allCells(snapshot, tree, table)));
+    auto pieces = piecesOf(allCells(snapshot, tree, table));
+    // H.1: the test of every island of the map, the work of the pass at a tree's arrival
+    const auto started = std::chrono::steady_clock::now();
+    auto evaluation = evaluate(*tree, snapshot, std::move(pieces));
+    const auto milliseconds = std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - started)
+                                .count();
     std::cout << fmt::format(
       "LP7.4 parity pair {}: {} islands, {} adopted, {} unmatched, {} curved ({} "
-      "patches)\n",
+      "patches), {} pieces tested in {:.1f} ms\n",
       map,
       evaluation.islands,
       evaluation.adopted,
       evaluation.unmatched,
       evaluation.curved,
-      patches);
+      patches,
+      evaluation.pieces->size(),
+      milliseconds);
     for (const auto& result : evaluation.results)
     {
       if (

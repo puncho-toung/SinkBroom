@@ -256,7 +256,7 @@ void makeCounterClockwise(std::vector<Vec2d>& polygon)
 {
   if (signedArea(polygon) < 0)
   {
-    std::reverse(polygon.begin(), polygon.end());
+    std::ranges::reverse(polygon);
   }
 }
 
