@@ -23,6 +23,8 @@
 
 #include "kd/result.h"
 
+#include <algorithm>
+
 namespace tb::lit
 {
 
@@ -50,10 +52,11 @@ CpuPool::CpuPool()
 {
 }
 
-Result<void> CpuPool::startThreads()
+Result<void> CpuPool::startThreads(const std::size_t threads)
 {
   auto result = Result<void>{kdl::void_success};
-  for (auto i = std::size_t{0}; i < ThreadCount; ++i)
+  const auto count = std::clamp(threads, std::size_t{1}, ThreadCount);
+  for (auto i = std::size_t{0}; i < count; ++i)
   {
     result =
       std::move(result) | kdl::and_then([&]() {
@@ -69,10 +72,10 @@ Result<void> CpuPool::startThreads()
   return result;
 }
 
-Result<std::unique_ptr<CpuPool>> CpuPool::create()
+Result<std::unique_ptr<CpuPool>> CpuPool::create(const std::size_t threads)
 {
   auto pool = std::unique_ptr<CpuPool>{new CpuPool{}};
-  return pool->startThreads() | kdl::transform([&]() { return std::move(pool); })
+  return pool->startThreads(threads) | kdl::transform([&]() { return std::move(pool); })
          | kdl::or_else([&](Error e) -> Result<std::unique_ptr<CpuPool>> {
              // the threads made so far are stopped and joined; nothing terminates
              pool->stop();

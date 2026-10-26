@@ -1132,7 +1132,10 @@ TEST_CASE("Retail materials: the mikktspace keyword (Q18)", "[.][retail]")
 
   // Q18 (15-LP1BC-PACKAGES.md): every decl file the registry reads, from the containers
   // and the user's loose files alike (GameDeclSource's search, read-only), is searched
-  // for the keyword; MikkTSpace is copied only if one is found (M-ID-DIFF-04)
+  // for the keyword. LP7.1a (D135, P7.16): MikkTSpace is copied now (every model newer
+  // than 2016 takes it), so a material with the keyword takes the real path, on a model
+  // and on a brush face alike (M-ID-DIFF-04 restated); the sweep reports where the
+  // keyword is, and every material that has it is parsed with the flag set
   auto source = GameDeclSource{*gamePath};
   auto files = std::size_t{0};
   auto occurrences = std::size_t{0};
@@ -1161,7 +1164,22 @@ TEST_CASE("Retail materials: the mikktspace keyword (Q18)", "[.][retail]")
     occurrences,
     withKeyword.empty() ? "" : " in " + fmt::format("{}", fmt::join(withKeyword, ", ")));
   CHECK(files > 900);
-  CHECK(occurrences == 0);
+  // the keyword parses into the flag that takes the copied MikkTSpace: each material of
+  // those files that names it has mikktspace set (none in the retail files at 285ea4d1)
+  if (!withKeyword.empty())
+  {
+    auto decls = MaterialDecls{source};
+    auto flagged = 0;
+    for (const auto& name : decls.declNames("material"))
+    {
+      if (const auto entry = decls.lookup(name); entry && (*entry.value)->mikktspace)
+      {
+        ++flagged;
+      }
+    }
+    std::cout << fmt::format("Q18: {} materials with the mikktspace flag\n", flagged);
+    CHECK(flagged > 0);
+  }
 }
 
 TEST_CASE(

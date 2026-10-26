@@ -33,6 +33,7 @@
 #include "LitTestUtils.h"
 #include "fs/TestEnvironment.h"
 #include "lit/BprocModel.h"
+#include "lit/CpuPool.h"
 #include "lit/EngineModels.h"
 #include "lit/GameFileSource.h"
 #include "lit/MaterialDecls.h"
@@ -41,10 +42,14 @@
 
 #include "kd/result.h"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <future>
 #include <span>
 #include <string>
 #include <thread>
@@ -501,8 +506,8 @@ TEST_CASE(
 TEST_CASE("ModelLoading: the default cube (LP7.1a, C51, Model.cpp:226-296)")
 {
   // against a transcription only: the engine never writes its default model as a
-  // binary ("default models shouldn't be cached", ModelManager.cpp:489-499), so no capture
-  // holds a golden of it
+  // binary ("default models shouldn't be cached", ModelManager.cpp:489-499), so no
+  // capture holds a golden of it
   const auto cube =
     engineDefaultModel("models/test/missing.obj", plainMaterial("_default", 7));
   CHECK(cube.defaulted);
@@ -579,6 +584,379 @@ TEST_CASE("ModelLoading: the default cube (LP7.1a, C51, Model.cpp:226-296)")
   SECTION("an _area name is a static world model (InitEmpty, Model.cpp:915-934)")
   {
     CHECK(engineDefaultModel("_area3", plainMaterial("_default", 7)).isStaticWorldModel);
+  }
+}
+
+namespace
+{
+
+EngineDrawVert stVert(
+  const float x,
+  const float y,
+  const float z,
+  const float s,
+  const float t,
+  const EngineVec3& normal = {0, 0, 1})
+{
+  auto v = engineClearedVert();
+  v.xyz = {x, y, z};
+  engineSetTexCoord(v, s, t);
+  engineSetNormal(v, normal);
+  return v;
+}
+
+EngineVec3 normalized(const EngineVec3& v)
+{
+  const auto length = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+  return {v[0] / length, v[1] / length, v[2] / length};
+}
+
+bool near(const EngineVec3& a, const EngineVec3& b, const float tolerance)
+{
+  return std::abs(a[0] - b[0]) <= tolerance && std::abs(a[1] - b[1]) <= tolerance
+         && std::abs(a[2] - b[2]) <= tolerance;
+}
+
+// a quad of two triangles with v/vt/vn corners on one material
+const auto QuadObj = std::string{
+  "# a quad\n"
+  "v 0 0 0\nv 32 0 0\nv 32 32 0\nv 0 32 0\n"
+  "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\n"
+  "vn 0 0 1\n"
+  "usemtl lp7/test\n"
+  "f 1/1/1 2/2/1 3/3/1\n"
+  "f 1/1/1 3/3/1 4/4/1\n"};
+
+std::vector<DeclFile> modelDeclFiles()
+{
+  return {DeclFile{
+    "materials/lp7_models.mtr",
+    materialText("lp7/test", "textures/lp7/test") + "\n"
+      + materialText("lp7/other", "textures/lp7/other"),
+    0}};
+}
+
+// the parse thread's half: OBJ_Load and the materials' capture
+struct ParsedObj
+{
+  std::shared_ptr<const EngineObjModel> model;
+  EngineModelMaterials materials;
+};
+
+ParsedObj parseObj(MaterialDecls& decls, const std::string& text, const std::int64_t time)
+{
+  auto parsed = ParsedObj{};
+  auto read = decls.parseObjModel("models/test/quad.obj", text, time);
+  REQUIRE(read.error.empty());
+  REQUIRE(read.model);
+  parsed.model = read.model;
+  for (const auto& name : read.model->materialNames())
+  {
+    auto material = decls.modelMaterial(name);
+    REQUIRE(material);
+    parsed.materials.names.emplace_back(name, parsed.materials.materials.size());
+    parsed.materials.materials.push_back(*material.value);
+  }
+  auto fallback = decls.defaultModelMaterial();
+  REQUIRE(fallback);
+  parsed.materials.defaultMaterial = *fallback.value;
+  static_cast<void>(decls.takeMessages());
+  return parsed;
+}
+
+} // namespace
+
+TEST_CASE(
+  "ModelLoading: R_CleanupTriangles whole (LP7.1a, C51 (3), tr_trisurf.cpp:1810-1847)")
+{
+  SECTION("the 2016 rule (Model.cpp:366-375): strictly after 1451638800")
+  {
+    CHECK_FALSE(engineUseMikktspace(1451520000));
+    CHECK_FALSE(engineUseMikktspace(1451638800));
+    CHECK(engineUseMikktspace(1451638801));
+    CHECK(engineUseMikktspace(1483228800));
+    CHECK_FALSE(engineUseMikktspace(0));
+    CHECK_FALSE(engineUseMikktspace(-1));
+  }
+
+  SECTION("R_CreateDupVerts: the later vertices of a position point at its first")
+  {
+    // 3 and 4 repeat 2's and 1's positions with other texture coordinates
+    const auto verts = std::vector<EngineDrawVert>{
+      stVert(0, 0, 0, 0, 0),
+      stVert(16, 0, 0, 1, 0),
+      stVert(16, 16, 0, 1, 1),
+      stVert(16, 16, 0, 0.5f, 0.5f),
+      stVert(16, 0, 0, 0.5f, 0),
+      stVert(0, 16, 0, 0, 1),
+    };
+    const auto result = engineCleanupModelTriangles(
+      verts, std::vector<std::uint16_t>{0, 1, 2, 4, 3, 5}, true, false, false);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    REQUIRE(result);
+    CHECK(result->dupVerts == std::vector<int>{3, 2, 4, 1});
+    CHECK(result->tangentsCalculated);
+    CHECK(
+      result->bounds
+      == std::array<EngineVec3, 2>{EngineVec3{0, 0, 0}, EngineVec3{16, 16, 0}});
+  }
+
+  SECTION("generated normals sum over the dupVerts (tr_trisurf.cpp:984-994): the cube")
+  {
+    auto verts = std::vector<EngineDrawVert>{};
+    for (const auto& c : cubeTranscription())
+    {
+      verts.push_back(stVert(c[0], c[1], c[2], c[3], c[4]));
+    }
+    auto indexes = std::vector<std::uint16_t>{};
+    for (std::uint16_t f = 0; f < 6; ++f)
+    {
+      const auto b = std::uint16_t(f * 4);
+      for (const auto i : {0, 1, 2, 0, 2, 3})
+      {
+        indexes.push_back(std::uint16_t(b + i));
+      }
+    }
+    const auto result = engineCleanupModelTriangles(verts, indexes, true, false, false);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    REQUIRE(result);
+    REQUIRE(result->dupVerts.size() == 32u);
+    REQUIRE(result->triangles.indexes == indexes);
+
+    // a transcription of R_DeriveNormalsAndTangents' normals (:904-1012): the triangles'
+    // unit normals summed per vertex, a duplicate given its first vertex's sum, the first
+    // the last duplicate's, normalised
+    auto sums = std::vector<EngineVec3>(verts.size(), EngineVec3{0, 0, 0});
+    for (std::size_t i = 0; i < indexes.size(); i += 3)
+    {
+      const auto& a = verts[indexes[i]].xyz;
+      const auto& b = verts[indexes[i + 1]].xyz;
+      const auto& c = verts[indexes[i + 2]].xyz;
+      const auto d0 = EngineVec3{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+      const auto d1 = EngineVec3{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+      const auto n = normalized(
+        {d1[1] * d0[2] - d1[2] * d0[1],
+         d1[2] * d0[0] - d1[0] * d0[2],
+         d1[0] * d0[1] - d1[1] * d0[0]});
+      for (auto k = 0; k < 3; ++k)
+      {
+        for (auto j = 0; j < 3; ++j)
+        {
+          sums[indexes[i + std::size_t(k)]][std::size_t(j)] += n[std::size_t(j)];
+        }
+      }
+    }
+    const auto& dup = result->dupVerts;
+    for (std::size_t i = 0; i < dup.size(); i += 2)
+    {
+      for (auto j = 0; j < 3; ++j)
+      {
+        sums[std::size_t(dup[i])][std::size_t(j)] +=
+          sums[std::size_t(dup[i + 1])][std::size_t(j)];
+      }
+    }
+    for (std::size_t i = 0; i < dup.size(); i += 2)
+    {
+      sums[std::size_t(dup[i + 1])] = sums[std::size_t(dup[i])];
+    }
+    for (std::size_t i = 0; i < verts.size(); ++i)
+    {
+      INFO(i);
+      const auto expected = normalized(sums[i]);
+      const auto n = engineNormal(result->triangles.verts[i]);
+      CHECK(near(n, expected, 0.02f));
+      // smoothed: no corner keeps its face's axis normal
+      const auto axes = int(std::abs(n[0]) > 0.1f) + int(std::abs(n[1]) > 0.1f)
+                        + int(std::abs(n[2]) > 0.1f);
+      CHECK(axes >= 2);
+    }
+  }
+
+  SECTION(
+    "MikkTSpace through the copied library: a flat quad with sheared texture coordinates")
+  {
+    // s = x / 32, t = y / 32 + x / 64: dP/ds is (32, -16, 0), the tangent MikkTSpace
+    // makes on a flat surface, its sign positive
+    const auto st = [](const float x, const float y) {
+      return std::array<float, 2>{x / 32, y / 32 + x / 64};
+    };
+    auto verts = std::vector<EngineDrawVert>{};
+    for (const auto& p : {std::array<float, 2>{0, 0}, {32, 0}, {32, 32}, {0, 32}})
+    {
+      const auto uv = st(p[0], p[1]);
+      verts.push_back(stVert(p[0], p[1], 0, uv[0], uv[1]));
+    }
+    const auto indexes = std::vector<std::uint16_t>{0, 1, 2, 0, 2, 3};
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    const auto mikk = engineCleanupModelTriangles(verts, indexes, false, false, true);
+    const auto messages = drainEngineMessagesForThread(std::this_thread::get_id());
+    REQUIRE(mikk);
+    CHECK(mikk->tangentsCalculated);
+    CHECK(std::none_of(messages.begin(), messages.end(), [](const DeclMessage& m) {
+      return m.text.find("Mikkelsen") != std::string::npos;
+    }));
+    const auto expected = normalized({32, -16, 0});
+    for (const auto& v : mikk->triangles.verts)
+    {
+      CHECK(near(engineTangent(v), expected, 0.02f));
+      CHECK(engineBiTangentSign(v) > 0.0f);
+    }
+  }
+
+  SECTION(
+    "the mutant: on smooth, folded, mirrored geometry the WithoutNormals path differs")
+  {
+    // a roof of two triangles folded along x = 16 with averaged normals, its right half
+    // mirrored in s: MikkTSpace weights each face by its corner angle and keeps the
+    // mirror's sign per face; R_DeriveTangentsWithoutNormals sums and splits mirrored
+    // vertices (R_DuplicateMirroredVertexes)
+    const auto up = normalized({0, 0, 1});
+    const auto left = normalized({-1, 0, 1});
+    const auto right = normalized({1, 0, 1});
+    const auto verts = std::vector<EngineDrawVert>{
+      stVert(0, 0, 0, 0, 0, left),
+      stVert(16, 0, 12, 0.5f, 0.1f, up),
+      stVert(16, 32, 12, 0.6f, 1, up),
+      stVert(32, 0, 0, 0, 0.3f, right),
+      stVert(0, 40, 0, 0.1f, 1.2f, left),
+    };
+    const auto indexes = std::vector<std::uint16_t>{0, 1, 2, 1, 3, 2, 0, 2, 4};
+    const auto mikk = engineCleanupModelTriangles(verts, indexes, false, false, true);
+    const auto plain = engineCleanupModelTriangles(verts, indexes, false, false, false);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    REQUIRE(mikk);
+    REQUIRE(plain);
+    REQUIRE(mikk->triangles.verts.size() == plain->triangles.verts.size());
+    auto differing = 0;
+    for (std::size_t i = 0; i < mikk->triangles.verts.size(); ++i)
+    {
+      if (mikk->triangles.verts[i].tangent != plain->triangles.verts[i].tangent)
+      {
+        ++differing;
+      }
+    }
+    CHECK(differing > 0);
+  }
+}
+
+TEST_CASE("ModelLoading, FinishSurfaces on an OBJ through the copies (LP7.1a, D137)")
+{
+  auto source = MemoryDeclSource{modelDeclFiles()};
+
+  SECTION("the source path: the corners reversed, merged by the slop, white, finished")
+  {
+    auto decls = MaterialDecls{source};
+    const auto parsed = parseObj(decls, QuadObj, 1451520000);
+    CHECK(parsed.model->timeStamp() == 1451520000);
+    CHECK(parsed.model->materialNames() == std::vector<std::string>{"lp7/test"});
+    const auto model = engineFinishObjModel(
+      *parsed.model, parsed.materials, "models/test/quad.obj", false);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    CHECK_FALSE(model.defaulted);
+    CHECK(model.timeStamp == 1451520000);
+    CHECK(model.materialMisses == 0);
+    REQUIRE(model.surfaces.size() == 1u);
+    const auto& surface = model.surfaces[0];
+    CHECK(surface.material == "lp7/test");
+    CHECK(surface.materialIndex == 0);
+    CHECK_FALSE(surface.generateNormals);
+    CHECK(surface.tangentsCalculated);
+    // 4 positions of 6 corners
+    CHECK(surface.verts.size() == 4u);
+    CHECK(surface.indexes.size() == 6u);
+    // the first triangle's corners in reverse: 3, 2, 1 (Model.cpp:1594)
+    CHECK(surface.verts[surface.indexes[0]].xyz == EngineVec3{32, 32, 0});
+    CHECK(surface.verts[surface.indexes[2]].xyz == EngineVec3{0, 0, 0});
+    for (const auto& v : surface.verts)
+    {
+      CHECK(v.color == std::array<std::uint8_t, 4>{255, 255, 255, 255});
+    }
+    CHECK(
+      model.bounds
+      == std::array<EngineVec3, 2>{EngineVec3{0, 0, 0}, EngineVec3{32, 32, 0}});
+  }
+
+  SECTION(
+    "a material with back sides: a reversed copy as a surface of its own (:1252-1276)")
+  {
+    auto decls = MaterialDecls{source};
+    auto parsed = parseObj(decls, QuadObj, 1451520000);
+    parsed.materials.materials[0].createBackSides = true;
+    const auto model = engineFinishObjModel(
+      *parsed.model, parsed.materials, "models/test/quad.obj", false);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    REQUIRE(model.surfaces.size() == 2u);
+    const auto& front = model.surfaces[0];
+    const auto& back = model.surfaces[1];
+    CHECK(back.material == front.material);
+    REQUIRE(back.indexes.size() == front.indexes.size());
+    CHECK(back.indexes[0] == front.indexes[1]);
+    CHECK(back.indexes[1] == front.indexes[0]);
+    // R_CopyStaticTriSurf copies vertices and indexes only: the copy does not generate
+    // its normals, R_ReverseTriangles' negated ones stand
+    CHECK_FALSE(back.generateNormals);
+    CHECK(engineNormal(back.verts[0])[2] < -0.99f);
+    CHECK(engineNormal(front.verts[0])[2] > 0.99f);
+  }
+
+  SECTION("a deforming material grows the bounds (:1346-1360)")
+  {
+    auto decls = MaterialDecls{source};
+    auto parsed = parseObj(decls, QuadObj, 1451520000);
+    // DFRM_SPRITE
+    parsed.materials.materials[0].deform = 1;
+    const auto model = engineFinishObjModel(
+      *parsed.model, parsed.materials, "models/test/quad.obj", false);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    const auto radius = std::sqrt(16.0f * 16.0f + 16.0f * 16.0f) + 20.0f;
+    CHECK(std::abs(model.bounds[0][0] - (16 - radius)) < 0.001f);
+    CHECK(std::abs(model.bounds[1][1] - (16 + radius)) < 0.001f);
+    CHECK(std::abs(model.bounds[0][2] + radius) < 0.001f);
+  }
+
+  SECTION("the pool job reads nothing of the registry: it is gone when the job runs")
+  {
+    auto parsed = ParsedObj{};
+    auto reference = EngineModel{};
+    {
+      auto decls = MaterialDecls{source};
+      parsed = parseObj(decls, QuadObj, 1483228800);
+      reference = engineFinishObjModel(
+        *parsed.model, parsed.materials, "models/test/quad.obj", true);
+      static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    }
+    auto pool = CpuPool::create(1);
+    REQUIRE(pool.is_success());
+    auto future =
+      pool.value()->run([parsed](const CpuJobContext&) -> Result<EngineModel> {
+        return engineFinishObjModel(
+          *parsed.model, parsed.materials, "models/test/quad.obj", true);
+      });
+    REQUIRE(future.wait_for(std::chrono::seconds{10}) == std::future_status::ready);
+    auto output = future.get();
+    REQUIRE(output.result.is_success());
+    const auto& model = output.result.value();
+    REQUIRE(model.surfaces.size() == reference.surfaces.size());
+    for (std::size_t i = 0; i < model.surfaces.size(); ++i)
+    {
+      CHECK(model.surfaces[i].verts == reference.surfaces[i].verts);
+      CHECK(model.surfaces[i].indexes == reference.surfaces[i].indexes);
+      CHECK(model.surfaces[i].dupVerts == reference.surfaces[i].dupVerts);
+    }
+    CHECK(model.bounds == reference.bounds);
+    CHECK(model.hasDrawingSurfaces == reference.hasDrawingSurfaces);
+
+    // and again while another registry holds the globals
+    auto other = MaterialDecls{source};
+    auto again = pool.value()->run([parsed](const CpuJobContext&) -> Result<EngineModel> {
+      return engineFinishObjModel(
+        *parsed.model, parsed.materials, "models/test/quad.obj", true);
+    });
+    REQUIRE(again.wait_for(std::chrono::seconds{10}) == std::future_status::ready);
+    auto againOutput = again.get();
+    REQUIRE(againOutput.result.is_success());
+    CHECK(againOutput.result.value().surfaces[0].verts == reference.surfaces[0].verts);
+    pool.value()->stop();
   }
 }
 

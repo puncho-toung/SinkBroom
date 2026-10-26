@@ -109,6 +109,10 @@ struct CpuJobValue<Result<T>>
  *
  * Threads: run on any thread; it can throw std::bad_alloc. stop on the thread that owns
  * the pool, never from a job, since it joins the pool's threads.
+ *
+ * LP7.1a (D137): a pool may have fewer workers than ThreadCount (create's threads): the
+ * material service's model finishes take one, so that the copied FinishSurfaces, which
+ * writes a function-local static (Model.cpp:1323-1324), never runs twice at once.
  */
 class CpuPool
 {
@@ -222,14 +226,15 @@ private:
 
   CpuPool();
 
-  Result<void> startThreads();
+  Result<void> startThreads(std::size_t threads);
   void work(std::size_t index) noexcept;
   // queues the task; false once the pool is cancelled or stopped
   bool post(std::unique_ptr<Task> task);
 
 public:
-  // starts the threads; fails when they cannot be made
-  static Result<std::unique_ptr<CpuPool>> create();
+  // starts threads workers (1 to ThreadCount; the session's pool takes ThreadCount);
+  // fails when they cannot be made
+  static Result<std::unique_ptr<CpuPool>> create(std::size_t threads = ThreadCount);
 
   // stop
   ~CpuPool();
@@ -271,7 +276,7 @@ public:
   void stop();
   bool stopped() const;
   std::uint64_t generation() const;
-  // the ids of the pool's threads while they run
+  // the ids of the pool's threads while they run (a slot without a worker stays empty)
   std::array<std::thread::id, ThreadCount> threadIdsForTesting() const;
 
   deleteCopyAndMove(CpuPool);
