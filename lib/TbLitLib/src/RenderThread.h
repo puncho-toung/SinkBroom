@@ -262,6 +262,9 @@ struct RenderFrameAccess
   const std::map<ChunkKey, Chunk>& chunks;
   // LP7.2 (C52, D129): and the model instances (the scene's; none for a test's chunks)
   const std::map<ChunkKey, ModelInstance>& instances;
+  // LP7.2 (C52): the scene's models when the frame was drawn (ModelTotals; the counts
+  // 0 for a test's chunks)
+  ModelTotals models;
 };
 
 /**
@@ -497,6 +500,12 @@ private:
   std::shared_ptr<const std::map<ChunkKey, Chunk>> m_arenaTestChunks;
   std::map<ChunkKey, Chunk> m_noChunks;
   std::map<ChunkKey, ModelInstance> m_noInstances;
+  // LP7.2 (P7.14): the scene's models as last synced and placed (under m_mutex), made
+  // again when the instances were synced or a shared surface was written
+  ModelTotals m_modelTotals;
+  std::uint64_t m_modelTotalsUploads = 0;
+  ModelTotals currentModelTotals() const;
+  void updateModelTotals();
   // the number of the last generation whose replacement was requested; GUI thread reads
   std::atomic<std::uint64_t> m_recreateRequestedFor = 0;
   // the extent of the last generation replaced because it was SUBOPTIMAL
@@ -550,6 +559,8 @@ public:
   // see LitSession::tableChanged
   void tableChanged();
   std::uint64_t batchesApplied() const;
+  // LP7.2 (P7.14): see LitSession::modelTotalsForTesting
+  ModelTotals modelTotals() const;
 
   // GUI thread: the surface handshake.
 

@@ -46,3 +46,25 @@ textures/lp7/n05
 		vertexColor
 	}
 }
+
+// LP7.2 N06 (C53): the skin twin's material (skins/lp7_models.skin maps textures/lp7/model
+// to it) and the shader twin's, each visibly other than the model's
+textures/lp7/n06_skin
+{
+	qer_editorimage	textures/lp7/floor.tga
+	diffusemap	textures/lp7/floor.tga
+}
+
+textures/lp7/n06_shader
+{
+	qer_editorimage	textures/lp7/wall.tga
+	diffusemap	textures/lp7/wall.tga
+}
+
+// LP7.2 N10 (P7.9): the inline box's material, flat (no bump map: the implicit _flat), so
+// that dmap's carved and re-triangulated copy differs from the file's model by K28 alone
+textures/lp7/n10_flat
+{
+	qer_editorimage	textures/lp7/model.tga
+	diffusemap	textures/lp7/model.tga
+}

@@ -1,0 +1,7 @@
+// LP7.2 models parity fixture (plans/lit-preview/47-LP7-PACKAGES.md C53, C56); written
+// by TOOLS/lit-preview/parity.py fixtures. N06's skin twin: the box's material to another
+skin skins/lp7/n06
+{
+	model	models/test/n01.obj
+	textures/lp7/model	textures/lp7/n06_skin
+}

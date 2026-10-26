@@ -609,6 +609,11 @@ std::uint64_t LitSession::geometryBatchesForTesting() const
   return m_renderThread ? m_renderThread->batchesApplied() : 0u;
 }
 
+ModelTotals LitSession::modelTotalsForTesting() const
+{
+  return m_renderThread ? m_renderThread->modelTotals() : ModelTotals{};
+}
+
 PipelineCompiler* LitSession::pipelineCompilerForTesting() const
 {
   return m_gpuReleased ? nullptr : m_compiler.get();

@@ -6376,6 +6376,12 @@ struct ParityLists
   std::map<PreviewId, std::vector<int>> gridAreas;
   // LP5.3 (C49, D123): the portal sides the flow found fogged out
   std::size_t portalsFogged = 0;
+  // LP7.2 (C52): the scene's model entities, instances, Pending records and skinned
+  // entities when the frame was drawn
+  std::uint64_t modelEntities = 0;
+  std::size_t modelInstances = 0;
+  std::uint64_t modelsPending = 0;
+  std::uint64_t modelsSkinned = 0;
 };
 
 struct ParityFrame
@@ -6413,6 +6419,10 @@ std::optional<ParityFrame> settledParityFrame(
       const auto& lists = access.passes.lists();
       frame->lists.flowMs = lists.flowMs;
       frame->lists.portalsFogged = lists.portalsFogged;
+      frame->lists.modelEntities = access.models.entities;
+      frame->lists.modelInstances = access.instances.size();
+      frame->lists.modelsPending = access.models.pending;
+      frame->lists.modelsSkinned = access.models.skinned;
       for (const auto& surface : lists.drawSurfs)
       {
         frame->lists.gridAreas[surface.chunk->key.entity].push_back(
@@ -6776,8 +6786,8 @@ TEST_CASE("LitSession parity rows: the ambient-only switch (LP4.2b)")
  * .json and "expect" gain the interaction phases' counters (texture_lights, math_lights,
  * ambient_lights). LP5.2a (C46, C50): and the stage pass's (stage_draws, stage_skipped);
  * a control of mode "row" is not black (its unlit stages draw); LP5.2b (C48): and
- * stage_pending. Hidden: it needs a GPU
- * and the root of a parity.py run.
+ * stage_pending; LP7.2 (C52): and the models' (model_draws, models_pending,
+ * models_skinned). Hidden: it needs a GPU and the root of a parity.py run.
  */
 TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
 {
@@ -7049,7 +7059,9 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           "\"entity_grid_area\": {}, \"stage_draws\": {}, \"stage_skipped\": {}, "
           "\"stage_pending\": {}, \"fog_draws\": {}, \"blend_draws\": {}, "
           "\"fog_lights\": {}, "
-          "\"blend_lights\": {}, \"portals_fogged\": {}, \"view_lights\": [{}]}}\n",
+          "\"blend_lights\": {}, \"portals_fogged\": {}, \"model_entities\": {}, "
+          "\"model_instances\": {}, \"model_draws\": {}, \"models_pending\": {}, "
+          "\"models_skinned\": {}, \"view_lights\": [{}]}}\n",
           width,
           height,
           settleMs,
@@ -7090,6 +7102,11 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           lit.fogLights,
           lit.blendLights,
           settledRow->lists.portalsFogged,
+          settledRow->lists.modelEntities,
+          settledRow->lists.modelInstances,
+          lit.modelDraws,
+          settledRow->lists.modelsPending,
+          settledRow->lists.modelsSkinned,
           fmt::join(viewLights, ", ")));
 
       // C38 (LP4.2b): an ambient-only frame drew no interaction and was lit by the
@@ -7190,6 +7207,22 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           else if (key == "probe_candidates")
           {
             CHECK(lit.probeCandidates == std::size_t(value.number));
+          }
+          else if (key == "model_draws")
+          {
+            // LP7.2 (C52): the frame's draws of model instances (a count or a minimum),
+            // no model entity Pending at the settled frame, the skinned entities drawn
+            // as nothing (K41)
+            CAPTURE(lit.modelDraws);
+            CHECK(parityCountHolds(value, lit.modelDraws));
+          }
+          else if (key == "models_pending")
+          {
+            CHECK(settledRow->lists.modelsPending == std::uint64_t(value.number));
+          }
+          else if (key == "models_skinned")
+          {
+            CHECK(settledRow->lists.modelsSkinned == std::uint64_t(value.number));
           }
           else
           {

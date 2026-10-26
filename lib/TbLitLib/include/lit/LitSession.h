@@ -135,6 +135,27 @@ struct SessionStatus
 };
 
 /**
+ * LP7.2 (C52, P7.14): the scene's models in one session, for the measurements and the
+ * parity rows: the model entities, their instances, those whose record is Pending and
+ * those drawn as nothing for a skinned model (SceneGeometry::ModelCounts), the distinct
+ * records the arenas' shared surfaces come from, those surfaces placed and their bytes
+ * (vertices and indexes, each placement once however many instances draw it). Tests and
+ * measurements only.
+ */
+struct ModelTotals
+{
+  std::uint64_t entities = 0;
+  std::uint64_t instances = 0;
+  std::uint64_t pending = 0;
+  std::uint64_t skinned = 0;
+  std::uint64_t records = 0;
+  std::uint64_t placements = 0;
+  std::uint64_t placementBytes = 0;
+
+  bool operator==(const ModelTotals&) const = default;
+};
+
+/**
  * LP2.4 (Q14): the compile thread's own timings in one session, for the measurements:
  * its jobs (a pipeline, a compute pipeline or a binding layout type's layouts) from the
  * dequeue to the answer, and within them the driver's pipeline creations alone and the
@@ -594,6 +615,9 @@ public:
   std::shared_ptr<const Snapshot> lastSnapshotForTesting() const;
   // the batches of chunk or light jobs the render thread has applied; any thread
   std::uint64_t geometryBatchesForTesting() const;
+  // LP7.2 (P7.14), any thread: the scene's models as the render thread last synced and
+  // placed them (ModelTotals)
+  ModelTotals modelTotalsForTesting() const;
   // the device to make resources with, from create until teardown step 5; tests only
   nvrhi::IDevice* nvrhiDeviceForTesting() const;
   // the compile thread, from create until teardown step 2; tests only (the render thread

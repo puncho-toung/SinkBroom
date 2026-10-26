@@ -437,6 +437,37 @@ std::uint64_t RenderThread::batchesApplied() const
   return m_batchesApplied;
 }
 
+ModelTotals RenderThread::modelTotals() const
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  return m_modelTotals;
+}
+
+ModelTotals RenderThread::currentModelTotals() const
+{
+  auto totals = ModelTotals{};
+  if (m_geometry && !m_arenaTestChunks)
+  {
+    const auto counts = m_geometry->modelCounts();
+    totals.entities = counts.entities;
+    totals.instances = counts.instances;
+    totals.pending = counts.pending;
+    totals.skinned = counts.skinned;
+  }
+  totals.records = m_arenas.sharedRecords();
+  totals.placements = m_arenas.placedShared();
+  totals.placementBytes = m_arenas.placedSharedBytes();
+  return totals;
+}
+
+void RenderThread::updateModelTotals()
+{
+  const auto totals = currentModelTotals();
+  m_modelTotalsUploads = m_arenas.uploadedShared();
+  const auto lock = std::scoped_lock{m_mutex};
+  m_modelTotals = totals;
+}
+
 bool RenderThread::park(const std::chrono::milliseconds timeout)
 {
   auto lock = std::unique_lock{m_mutex};
@@ -915,6 +946,7 @@ bool RenderThread::syncChunks()
     m_arenas.sync(arenaChunks(), m_frameIndex);
     // LP7.2 (D129, D35): the shared model surfaces, freed so when no instance names them
     m_arenas.syncInstances(arenaInstances(), m_frameIndex);
+    updateModelTotals();
   }
   return m_arenas.pending();
 }
@@ -936,6 +968,11 @@ bool RenderThread::recordUploads(nvrhi::ICommandList& commandList)
   if (!recorded)
   {
     return false;
+  }
+  // LP7.2 (P7.14): a shared surface placed
+  if (m_arenas.uploadedShared() != m_modelTotalsUploads)
+  {
+    updateModelTotals();
   }
   const auto texturesLeft = m_textureUploads.record(
     m_device.device(), commandList, m_images, cap, m_frameUploadBytes, [this] {
@@ -1124,6 +1161,7 @@ void RenderThread::runFrameHooks(nvrhi::ICommandList& commandList)
 
 RenderFrameAccess RenderThread::frameAccess(nvrhi::ICommandList& commandList)
 {
+  const auto models = currentModelTotals();
   return RenderFrameAccess{
     m_device.device(),
     commandList,
@@ -1141,7 +1179,8 @@ RenderFrameAccess RenderThread::frameAccess(nvrhi::ICommandList& commandList)
     m_convergence,
     m_frameHdrClear,
     arenaChunks(),
-    arenaInstances()};
+    arenaInstances(),
+    models};
 }
 
 void RenderThread::runAfterPassHooks(nvrhi::ICommandList& commandList)

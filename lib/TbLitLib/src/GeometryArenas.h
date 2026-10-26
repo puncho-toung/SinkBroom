@@ -188,6 +188,10 @@ public:
   std::size_t placedShared() const;
   std::size_t sharedInstances(const SharedGeometryKey& key) const;
   std::uint64_t uploadedShared() const;
+  // LP7.2 (P7.14): the distinct records of the shared surfaces, and the bytes of those
+  // placed (vertices and indexes)
+  std::size_t sharedRecords() const;
+  std::uint64_t placedSharedBytes() const;
 
   // the arena buffers, for the passes' vertex and index buffer bindings
   nvrhi::IBuffer* vertexBuffer(std::size_t arena) const;

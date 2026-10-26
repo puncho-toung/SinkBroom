@@ -22,6 +22,7 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <string_view>
 
 namespace tb::lit
 {
@@ -375,6 +376,29 @@ std::size_t GeometryArenas::sharedInstances(const SharedGeometryKey& key) const
 std::uint64_t GeometryArenas::uploadedShared() const
 {
   return m_uploadedShared;
+}
+
+std::size_t GeometryArenas::sharedRecords() const
+{
+  auto records = std::set<std::string_view>{};
+  for (const auto& [key, shared] : m_shared)
+  {
+    records.insert(key.record);
+  }
+  return records.size();
+}
+
+std::uint64_t GeometryArenas::placedSharedBytes() const
+{
+  auto bytes = std::uint64_t{0};
+  for (const auto& [key, shared] : m_shared)
+  {
+    if (shared.placement)
+    {
+      bytes += shared.placement->vertices.size + shared.placement->indexes.size;
+    }
+  }
+  return bytes;
 }
 
 nvrhi::IBuffer* GeometryArenas::vertexBuffer(const std::size_t arena) const

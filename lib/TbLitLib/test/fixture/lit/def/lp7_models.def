@@ -1,3 +1,18 @@
 // LP7.1a models parity fixture (plans/lit-preview/47-LP7-PACKAGES.md C56); written by
-// TOOLS/lit-preview/parity.py fixtures. LP7.2 adds the modelDefs of N11 (an idEntity
-// spawnclass and an idAnimatedEntity one); LP7.1a's rooms N01-N05 name their files.
+// TOOLS/lit-preview/parity.py fixtures. LP7.1a's rooms N01-N05 name their files; LP7.2's
+// N11 (C52, D139) names the modelDef below on a func_static (idStaticEntity: idEntity's
+// SetModel finds the default cube) and on lp7_n11_animated, an idAnimatedEntity
+// spawnclass (its SetModel draws the modelDef's animated mesh in the engine, K41: nothing
+// in the preview); idAnimatedEntity itself rather than an idAI class, whose spawn needs a
+// script object, animations and an AAS the fixture has none of
+
+model lp7_n11_def
+{
+	mesh	models/test/n11.md5mesh
+}
+
+entityDef lp7_n11_animated
+{
+	"spawnclass"	"idAnimatedEntity"
+	"model"	"lp7_n11_def"
+}
