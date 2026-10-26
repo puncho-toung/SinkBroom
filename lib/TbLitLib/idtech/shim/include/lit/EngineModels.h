@@ -47,6 +47,7 @@
 #include <vector>
 
 struct objModel_t;
+class idFile;
 
 namespace tb::lit
 {
@@ -254,5 +255,40 @@ std::optional<EngineModelTriangles> engineCleanupModelTriangles(
   bool generateNormals,
   bool unsmoothedTangents,
   bool mikktspace);
+
+/**
+ * LP7.1b (P7.13): the shim's OSPathToRelativePath (FileSystem.cpp:1841-1917 transcribed,
+ * the preview's base names: base, d3xp, d3le; fs_game and fs_game_base empty, C8), which
+ * the copied ASE reader calls on a *BITMAP path. Its warning goes to the calling
+ * thread's engine messages. Any thread.
+ */
+std::string engineOSPathToRelativePath(std::string_view osPath);
+
+/**
+ * LP7.1b (P7.13): the shim's memory-backed idFile, the one a model read's OpenFileRead
+ * opens (Read, Tell, Seek as framework/File.cpp's idFile_Memory; Timestamp the time
+ * handed in), for its tests. Seek's origin is fsOrigin_t's value: 0 FS_SEEK_CUR, 1
+ * FS_SEEK_END, 2 FS_SEEK_SET.
+ */
+class EngineMemoryFileForTesting
+{
+public:
+  EngineMemoryFileForTesting(std::string name, std::string bytes, std::int64_t time);
+  ~EngineMemoryFileForTesting();
+
+  EngineMemoryFileForTesting(const EngineMemoryFileForTesting&) = delete;
+  EngineMemoryFileForTesting& operator=(const EngineMemoryFileForTesting&) = delete;
+
+  // idFile::Read of length bytes; what it read is in bytes, its count returned
+  int read(std::string& bytes, int length);
+  int seek(long offset, int origin);
+  int tell() const;
+  int length() const;
+  std::int64_t timestamp() const;
+  std::string fullPath() const;
+
+private:
+  std::unique_ptr<idFile> m_file;
+};
 
 } // namespace tb::lit

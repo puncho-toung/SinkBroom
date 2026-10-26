@@ -882,6 +882,17 @@ public:
     const std::string& name, const std::string& bytes, std::int64_t time);
 
   /**
+   * LP7.1b (P7.13): inside a model read of name over bytes and time, what the copied
+   * code's fileSystem->OpenFileRead( opened ) opens: its length and timestamp, or nullopt
+   * when nothing opens (another name). For the shim's tests. Parse thread.
+   */
+  std::optional<std::pair<int, std::int64_t>> openModelFileForTesting(
+    const std::string& name,
+    const std::string& bytes,
+    std::int64_t time,
+    const std::string& opened);
+
+  /**
    * LP7.1a (D137): the material ConvertOBJToModelSurfaces' declManager->FindMaterial(
    * name ) finds (Model.cpp:1458, makeDefault true), its ten accessor values for the
    * stand-in material of the pool's conversion; an error when its parse reached an

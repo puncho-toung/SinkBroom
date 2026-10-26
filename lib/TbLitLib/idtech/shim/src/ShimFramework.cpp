@@ -19,7 +19,7 @@
 
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
-// GPL Source Code and RBDOOM-3-BFG (neo/framework/FileSystem.cpp and
+// GPL Source Code and RBDOOM-3-BFG (neo/framework/FileSystem.cpp, framework/File.cpp and
 // framework/CVarSystem.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2012-2024 Robert Beckebans
@@ -625,9 +625,19 @@ int idFileSystemLocal::readImageFileUnguarded(
 
 // LP1c fix (S1.7): no copied code that runs opens a file (the loaders call ReadFile, and
 // idLexer::LoadFile, the copy's only caller, is never reached), so nothing is opened, as
-// LP1a's stub did (M-ID-FN-27)
-idFile* idFileSystemLocal::OpenFileRead(const char*, bool, const char*)
+// LP1a's stub did (M-ID-FN-27). LP7.1b (P7.13): except the model read's one file, which
+// the copied LWO reader opens (Model_lwo.cpp:1784): a memory file over the bytes and the
+// time handed in; a file the engine's int lengths cannot hold opens nothing, as ReadFile
+// reads it missing
+idFile* idFileSystemLocal::OpenFileRead(const char* relativePath, bool, const char*)
 {
+  if (
+    m_modelRead && relativePath && m_modelRead->path == relativePath
+    && m_modelRead->bytes.size() < std::size_t(INT_MAX))
+  {
+    return new tb::lit::shim::MemoryFile{
+      m_modelRead->path, m_modelRead->bytes, m_modelRead->time};
+  }
   return nullptr;
 }
 
@@ -640,3 +650,156 @@ void idFileSystemLocal::CloseFile(idFile* f)
 {
   delete f;
 }
+
+const char* idFileSystemLocal::OSPathToRelativePath(const char* OSPath)
+{
+  return tb::lit::shim::osPathToRelativePath(OSPath);
+}
+
+namespace tb::lit::shim
+{
+
+MemoryFile::MemoryFile(std::string name, std::string bytes, const std::int64_t time)
+  : m_name{std::move(name)}
+  , m_bytes{std::move(bytes)}
+  , m_time{time}
+{
+}
+
+const char* MemoryFile::GetFullPath() const
+{
+  return m_name.c_str();
+}
+
+int MemoryFile::Read(void* buffer, int len)
+{
+  // File.cpp:780-796: what is left when asked for more
+  if (len <= 0)
+  {
+    return 0;
+  }
+  const auto left = m_bytes.size() - m_at;
+  const auto count = std::min(std::size_t(len), left);
+  memcpy(buffer, m_bytes.data() + m_at, count);
+  m_at += count;
+  return int(count);
+}
+
+int MemoryFile::Length() const
+{
+  return int(m_bytes.size());
+}
+
+ID_TIME_T MemoryFile::Timestamp() const
+{
+  return ID_TIME_T(m_time);
+}
+
+int MemoryFile::Tell() const
+{
+  return int(m_at);
+}
+
+int MemoryFile::Seek(const long offset, const fsOrigin_t origin)
+{
+  // File.cpp:1000-1036: from the current place, the end or the start; clamped to the
+  // file, -1 when it had to be
+  const auto size = static_cast<long long>(m_bytes.size());
+  auto at = static_cast<long long>(m_at);
+  switch (origin)
+  {
+  case FS_SEEK_CUR:
+    at += offset;
+    break;
+  case FS_SEEK_END:
+    at = size - offset;
+    break;
+  case FS_SEEK_SET:
+    at = offset;
+    break;
+  default:
+    common->FatalError("idFile_Memory::Seek: bad origin for %s\n", m_name.c_str());
+    return -1;
+  }
+  if (at < 0)
+  {
+    m_at = 0;
+    return -1;
+  }
+  if (at > size)
+  {
+    m_at = m_bytes.size();
+    return -1;
+  }
+  m_at = std::size_t(at);
+  return 0;
+}
+
+const char* osPathToRelativePath(const char* OSPath)
+{
+  // FileSystem.cpp:1843-1847: no colon and no leading slash: already relative
+  if ((OSPath[0] != '/') && (OSPath[0] != '\\') && (idStr::FindChar(OSPath, ':') < 0))
+  {
+    return OSPath;
+  }
+  // :1849-1860: the base names; fs_game and fs_game_base are empty in the preview (C8)
+  static constexpr const char* basePaths[] = {"base", "d3xp", "d3le"};
+  const auto baseLength = [](const char* base) { return int(strlen(base)); };
+
+  // :1861-1868: the slashes, as many as an idStaticList< int, MAX_OSPATH > keeps
+  auto slashes = std::vector<int>{};
+  for (const char* s = OSPath; *s != 0; s++)
+  {
+    if ((*s == '/' || *s == '\\') && slashes.size() < std::size_t(MAX_OSPATH))
+    {
+      slashes.push_back(int(s - OSPath));
+    }
+  }
+  const auto count = int(slashes.size());
+  for (int n = 0; n < count - 1; n++)
+  {
+    const char* start = OSPath + slashes[std::size_t(n)] + 1;
+    const char* end = OSPath + slashes[std::size_t(n + 1)];
+    const int componentLength = int(end - start);
+    if (componentLength == 0)
+    {
+      continue;
+    }
+    for (const auto* base : basePaths)
+    {
+      if (componentLength != baseLength(base))
+      {
+        continue;
+      }
+      if (idStr::Icmpn(base, start, componentLength) == 0)
+      {
+        // :1884-1906: two base names in a row: after the second
+        if (n < count - 2)
+        {
+          const char* start2 = OSPath + slashes[std::size_t(n + 1)] + 1;
+          const char* end2 = OSPath + slashes[std::size_t(n + 2)];
+          const int componentLength2 = int(end2 - start2);
+          if (componentLength2 > 0)
+          {
+            for (const auto* base2 : basePaths)
+            {
+              if (componentLength2 != baseLength(base2))
+              {
+                continue;
+              }
+              if (idStr::Icmpn(base2, start2, baseLength(base2)) == 0)
+              {
+                return end2 + 1;
+              }
+            }
+          }
+        }
+        return end + 1;
+      }
+    }
+  }
+  idLib::Warning("OSPathToRelativePath failed on %s", OSPath);
+  return OSPath;
+}
+
+} // namespace tb::lit::shim

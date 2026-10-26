@@ -510,6 +510,74 @@ EngineObjParse MaterialDecls::parseObjModel(
   return {std::move(model), {}};
 }
 
+std::optional<std::pair<int, std::int64_t>> MaterialDecls::openModelFileForTesting(
+  const std::string& name,
+  const std::string& bytes,
+  const std::int64_t time,
+  const std::string& opened)
+{
+  if (!m_registry)
+  {
+    return std::nullopt;
+  }
+  const auto read = shim::ModelRead{m_registry->files(), name, bytes, time};
+  auto* file = fileSystem->OpenFileRead(opened.c_str());
+  if (!file)
+  {
+    return std::nullopt;
+  }
+  const auto result = std::pair{file->Length(), std::int64_t(file->Timestamp())};
+  fileSystem->CloseFile(file);
+  return result;
+}
+
+std::string engineOSPathToRelativePath(const std::string_view osPath)
+{
+  const auto text = std::string{osPath};
+  return shim::osPathToRelativePath(text.c_str());
+}
+
+EngineMemoryFileForTesting::EngineMemoryFileForTesting(
+  std::string name, std::string bytes, const std::int64_t time)
+  : m_file{std::make_unique<shim::MemoryFile>(std::move(name), std::move(bytes), time)}
+{
+}
+
+EngineMemoryFileForTesting::~EngineMemoryFileForTesting() = default;
+
+int EngineMemoryFileForTesting::read(std::string& bytes, const int length)
+{
+  bytes.assign(std::size_t(std::max(length, 0)), '\0');
+  const auto count = m_file->Read(bytes.data(), length);
+  bytes.resize(std::size_t(std::max(count, 0)));
+  return count;
+}
+
+int EngineMemoryFileForTesting::seek(const long offset, const int origin)
+{
+  return m_file->Seek(offset, fsOrigin_t(origin));
+}
+
+int EngineMemoryFileForTesting::tell() const
+{
+  return m_file->Tell();
+}
+
+int EngineMemoryFileForTesting::length() const
+{
+  return m_file->Length();
+}
+
+std::int64_t EngineMemoryFileForTesting::timestamp() const
+{
+  return std::int64_t(m_file->Timestamp());
+}
+
+std::string EngineMemoryFileForTesting::fullPath() const
+{
+  return m_file->GetFullPath();
+}
+
 DeclResult<EngineModelMaterial> MaterialDecls::modelMaterial(const std::string_view name)
 {
   if (!m_registry)

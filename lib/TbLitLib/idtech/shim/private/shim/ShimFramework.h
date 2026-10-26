@@ -173,7 +173,11 @@ extern idCommon* common;
 // file system (framework/FileSystem.h)
 #include "framework/FileSystem.h"
 
-// the members of framework/File.h's idFile that the copied code calls
+// LP7.1b: Seek's origins (framework/File.h:40-46, the partial copy)
+#include "framework/File.h"
+
+// the members of framework/File.h's idFile that the copied code calls (LP7.1b: Tell and
+// Seek, File.h:68, :74, which the copied LWO reader calls)
 class idFile
 {
 public:
@@ -183,6 +187,8 @@ public:
   virtual int Read(void* buffer, int len) = 0;
   virtual int Length() const = 0;
   virtual ID_TIME_T Timestamp() const = 0;
+  virtual int Tell() const = 0;
+  virtual int Seek(long offset, fsOrigin_t origin) = 0;
 };
 
 // the members of framework/FileSystem.h's idFileSystem that the copied code calls
@@ -205,6 +211,8 @@ public:
     const char* relativePath, bool allowCopyFiles = true, const char* gamedir = NULL) = 0;
   virtual idFile* OpenExplicitFileRead(const char* OSPath) = 0;
   virtual void CloseFile(idFile* f) = 0;
+  // LP7.1b: FileSystem.h:138, which the copied ASE reader calls on a *BITMAP path
+  virtual const char* OSPathToRelativePath(const char* OSPath) = 0;
 };
 
 extern idFileSystem* fileSystem;

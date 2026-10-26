@@ -70,7 +70,11 @@ extern idDeclManagerLocal* tbLitDeclManagerLocal;
 // LP7.1a (C51, P7.4, P7.13): between beginModelRead and endModelRead, where the copied
 // OBJ_Load reads, ReadFile serves the one file it was handed: its bytes and the time the
 // caller gives (the file source's, A4), never a read of the disk or the checkout's time;
-// any other name reads as missing.
+// any other name reads as missing. LP7.1b (P7.13): there OpenFileRead of that one name
+// opens a tb::lit::shim::MemoryFile over its bytes and time (the copied LWO reader opens
+// the file and reads it in pieces); any other name, and any name outside a model read,
+// opens nothing, as before. OSPathToRelativePath is the transcription of
+// tb::lit::shim::osPathToRelativePath.
 class idFileSystemLocal : public idFileSystem
 {
 public:
@@ -129,6 +133,7 @@ public:
     const char* gamedir = NULL) override;
   idFile* OpenExplicitFileRead(const char* OSPath) override;
   void CloseFile(idFile* f) override;
+  const char* OSPathToRelativePath(const char* OSPath) override;
 
 private:
   int readImageFile(const std::string& path, void** buffer, ID_TIME_T* timestamp);
@@ -156,6 +161,51 @@ private:
 
 namespace tb::lit::shim
 {
+
+/**
+ * LP7.1b (P7.13): the memory-backed idFile the model read's OpenFileRead returns.
+ * Written, not framework/File.cpp's idFile_Memory copied: that class's file range carries
+ * a global idHashTableT with a dynamic initialiser, two console commands and a cvar
+ * (File.cpp:798-831), and its Timestamp() is 0 (:960-963) where the engine's OpenFileRead
+ * of a loose file returns the file's time, which the copied lwGetObject stores
+ * (Model_lwo.cpp:1846). Its reads and seeks are idFile_Memory's (File.cpp:780-796,
+ * :970-973, :1000-1036): Read takes what is left when asked for more, Seek clamps to the
+ * file and answers -1 when it had to; Timestamp is the time handed in. A negative Read
+ * length reads nothing (idFile_Memory would memcpy it). It owns a copy of the bytes.
+ * Parse thread (the one reader that opens it).
+ */
+class MemoryFile : public idFile
+{
+public:
+  MemoryFile(std::string name, std::string bytes, std::int64_t time);
+
+  const char* GetFullPath() const override;
+  int Read(void* buffer, int len) override;
+  int Length() const override;
+  ID_TIME_T Timestamp() const override;
+  int Tell() const override;
+  int Seek(long offset, fsOrigin_t origin) override;
+
+private:
+  std::string m_name;
+  std::string m_bytes;
+  std::int64_t m_time = 0;
+  std::size_t m_at = 0;
+};
+
+/**
+ * LP7.1b (P7.13): idFileSystemLocal::OSPathToRelativePath (FileSystem.cpp:1841-1917)
+ * transcribed: a path that does not start with a slash or a backslash and holds no ':'
+ * is returned as it is; else the first directory component that equals (Icmpn) one of
+ * the base names is cut away with everything before it, the second of two such
+ * components in a row when they follow each other (the engine's W:/d3xp/base/ example);
+ * with none, the Warning "OSPathToRelativePath failed on %s" and the path. The base names
+ * are the engine's base, d3xp and d3le, then fs_game and fs_game_base when set: the
+ * preview's are empty (C8 reads base/ only; the parity engine runs with fs_game
+ * tb_parity: a difference, M-MODEL-DIFF-*). The answer points into OSPath, as the
+ * engine's does. Pure but for the warning; any thread.
+ */
+const char* osPathToRelativePath(const char* OSPath);
 
 /**
  * LP1c fix (S2.8): the file system's image reads and recording for one load, begun when

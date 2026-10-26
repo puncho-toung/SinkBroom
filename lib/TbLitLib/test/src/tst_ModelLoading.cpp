@@ -1467,4 +1467,122 @@ TEST_CASE(
   }
 }
 
+TEST_CASE("ModelLoading: the model read's memory file (LP7.1b, P7.13)")
+{
+  SECTION("read, tell, seek and length, as idFile_Memory (File.cpp:780-1036)")
+  {
+    auto file = EngineMemoryFileForTesting{"models/test/x.lwo", "0123456789", 1451520000};
+    CHECK(file.length() == 10);
+    CHECK(file.timestamp() == 1451520000);
+    CHECK(file.fullPath() == "models/test/x.lwo");
+    auto bytes = std::string{};
+    CHECK(file.read(bytes, 4) == 4);
+    CHECK(bytes == "0123");
+    CHECK(file.tell() == 4);
+    // FS_SEEK_CUR, FS_SEEK_END, FS_SEEK_SET
+    CHECK(file.seek(2, 0) == 0);
+    CHECK(file.tell() == 6);
+    CHECK(file.seek(3, 1) == 0);
+    CHECK(file.tell() == 7);
+    CHECK(file.seek(1, 2) == 0);
+    CHECK(file.tell() == 1);
+  }
+
+  SECTION("a read past the end takes what is left, then nothing; a seek outside clamps")
+  {
+    auto file = EngineMemoryFileForTesting{"x", "abcdef", 0};
+    CHECK(file.seek(4, 2) == 0);
+    auto bytes = std::string{};
+    CHECK(file.read(bytes, 10) == 2);
+    CHECK(bytes == "ef");
+    CHECK(file.tell() == 6);
+    CHECK(file.read(bytes, 1) == 0);
+    CHECK(bytes.empty());
+    CHECK(file.read(bytes, -3) == 0);
+    CHECK(file.seek(-1, 2) == -1);
+    CHECK(file.tell() == 0);
+    CHECK(file.seek(20, 0) == -1);
+    CHECK(file.tell() == 6);
+    CHECK(file.seek(-2, 1) == -1);
+    CHECK(file.tell() == 6);
+  }
+
+  SECTION("OpenFileRead in a model read opens its one name, with its length and time")
+  {
+    auto source = MemoryDeclSource{{}};
+    auto decls = MaterialDecls{source};
+    const auto opened = decls.openModelFileForTesting(
+      "models/test/x.lwo", "FORM", 1451520000, "models/test/x.lwo");
+    REQUIRE(opened);
+    CHECK(opened->first == 4);
+    CHECK(opened->second == 1451520000);
+    CHECK_FALSE(decls.openModelFileForTesting(
+      "models/test/x.lwo", "FORM", 1451520000, "models/test/y.lwo"));
+  }
+}
+
+TEST_CASE(
+  "ModelLoading: OSPathToRelativePath transcribed (LP7.1b, FileSystem.cpp:1841-1917)")
+{
+  const auto warned = [] {
+    const auto messages = drainEngineMessagesForThread(std::this_thread::get_id());
+    return std::ranges::any_of(messages, [](const DeclMessage& m) {
+      return m.kind == DeclMessageKind::Warning
+             && m.text.find("OSPathToRelativePath failed on") != std::string::npos;
+    });
+  };
+  static_cast<void>(warned());
+
+  SECTION("N04's *BITMAP, a path under the game folder, base/ in any case")
+  {
+    CHECK(
+      engineOSPathToRelativePath("//lp7/base/textures/lp7/n04.tga")
+      == "textures/lp7/n04.tga");
+    CHECK(
+      engineOSPathToRelativePath("D:/Games/NecroGameBuild/base/models/test/a.tga")
+      == "models/test/a.tga");
+    CHECK(engineOSPathToRelativePath("D:/Doom3/BASE/textures/a.tga") == "textures/a.tga");
+    CHECK(engineOSPathToRelativePath("C:/x/d3xp/textures/a.tga") == "textures/a.tga");
+    CHECK_FALSE(warned());
+  }
+
+  SECTION("a relative path is returned as it is")
+  {
+    CHECK(engineOSPathToRelativePath("textures/lp7/n04.tga") == "textures/lp7/n04.tga");
+    CHECK(engineOSPathToRelativePath("base/textures/a.tga") == "base/textures/a.tga");
+    CHECK_FALSE(warned());
+  }
+
+  SECTION("backslashes are slashes to it; the rest of the path keeps them")
+  {
+    CHECK(
+      engineOSPathToRelativePath("C:\\Doom3\\base\\models\\a.tga") == "models\\a.tga");
+    CHECK(engineOSPathToRelativePath("\\\\server\\base\\a.tga") == "a.tga");
+    CHECK_FALSE(warned());
+  }
+
+  SECTION("two base names in a row: after the second; one deeper down stays")
+  {
+    CHECK(engineOSPathToRelativePath("W:/d3xp/base/models/a.tga") == "models/a.tga");
+    CHECK(
+      engineOSPathToRelativePath("W:/doom3/base/models/mapobjects/base/a.tga")
+      == "models/mapobjects/base/a.tga");
+    CHECK_FALSE(warned());
+  }
+
+  SECTION("an unknown root: the path, and the engine's warning")
+  {
+    CHECK(engineOSPathToRelativePath("D:/art/textures/a.tga") == "D:/art/textures/a.tga");
+    CHECK(warned());
+    // a base name that is the file, not a folder, is no root
+    CHECK(engineOSPathToRelativePath("/x/base") == "/x/base");
+    CHECK(warned());
+    // fs_game is empty in the preview (C8): the parity engine's tb_parity is no root here
+    CHECK(
+      engineOSPathToRelativePath("D:/sandbox/tb_parity/textures/a.tga")
+      == "D:/sandbox/tb_parity/textures/a.tga");
+    CHECK(warned());
+  }
+}
+
 } // namespace tb::lit
