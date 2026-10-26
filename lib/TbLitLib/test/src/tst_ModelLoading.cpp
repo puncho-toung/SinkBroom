@@ -55,6 +55,7 @@
 #include <cstring>
 #include <filesystem>
 #include <future>
+#include <initializer_list>
 #include <iostream>
 #include <optional>
 #include <span>
@@ -2454,6 +2455,315 @@ TEST_CASE(
     const auto [input, model, messages] = finished(w.file(), 1451520000);
     CHECK(model.surfaces.empty());
     CHECK_FALSE(model.defaulted);
+  }
+}
+
+
+namespace
+{
+
+// ----- LP7.5 (C51 (3), D136): glTF -----
+
+/**
+ * A hand .glb (the specification's layout, as gltfParser.cpp:1929-2011 reads it): the
+ * 12-byte header, the JSON chunk padded with spaces, the BIN chunk padded with zeros.
+ * The default is a quad of four vertices on glTF's ground plane (Y up), its normals +Y,
+ * POSITION, NORMAL, TEXCOORD_0, COLOR_0 and WEIGHTS_0 floats in their own views, six
+ * unsigned short indices (two triangles counter-clockwise seen from +Y), one material.
+ */
+struct HandGlb
+{
+  std::string json;
+  std::string bin;
+
+  std::string bytes() const
+  {
+    auto jsonChunk = json;
+    while (jsonChunk.size() % 4 != 0)
+    {
+      jsonChunk.push_back(' ');
+    }
+    auto binChunk = bin;
+    while (binChunk.size() % 4 != 0)
+    {
+      binChunk.push_back('\0');
+    }
+    auto out = std::string{"glTF"};
+    const auto put = [&](const std::uint32_t value) {
+      out.append(reinterpret_cast<const char*>(&value), 4);
+    };
+    put(2);
+    put(std::uint32_t(
+      12 + 8 + jsonChunk.size() + (binChunk.empty() ? 0 : 8 + binChunk.size())));
+    put(std::uint32_t(jsonChunk.size()));
+    put(0x4E4F534A);
+    out += jsonChunk;
+    if (!binChunk.empty())
+    {
+      put(std::uint32_t(binChunk.size()));
+      put(0x004E4942);
+      out += binChunk;
+    }
+    return out;
+  }
+
+  // the JSON with one text replaced (it must be there once)
+  HandGlb with(const std::string& from, const std::string& to) const
+  {
+    auto copy = *this;
+    const auto at = copy.json.find(from);
+    REQUIRE(at != std::string::npos);
+    REQUIRE(copy.json.find(from, at + 1) == std::string::npos);
+    copy.json.replace(at, from.size(), to);
+    return copy;
+  }
+};
+
+void putFloats(std::string& bin, const std::initializer_list<float> values)
+{
+  for (const auto v : values)
+  {
+    bin.append(reinterpret_cast<const char*>(&v), 4);
+  }
+}
+
+HandGlb handQuadGlb(const std::string& material = "textures/lp7/model")
+{
+  auto glb = HandGlb{};
+  // POSITION 0..47, NORMAL 48..95, TEXCOORD_0 96..127, COLOR_0 128..191, WEIGHTS_0
+  // 192..255, the indices 256..267
+  putFloats(glb.bin, {0, 0, 0, 32, 0, 0, 32, 0, -32, 0, 0, -32});
+  putFloats(glb.bin, {0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0});
+  putFloats(glb.bin, {0, 0, 1, 0, 1, 1, 0, 1});
+  putFloats(glb.bin, {1, 0.5f, 0.25f, 1, 0.5f, 1, 0, 1, 0, 0.5f, 1, 1, 1, 1, 1, 1});
+  putFloats(glb.bin, {1, 0, 0, 0, 0.5f, 0.5f, 0, 0, 0.25f, 0.25f, 0.5f, 0, 0, 0, 0, 1});
+  for (const auto index : std::array<std::uint16_t, 6>{0, 1, 2, 0, 2, 3})
+  {
+    glb.bin.append(reinterpret_cast<const char*>(&index), 2);
+  }
+  glb.json =
+    R"({"asset":{"version":"2.0","generator":"tst_ModelLoading"},"scene":0,)"
+    R"("scenes":[{"nodes":[0]}],"nodes":[{"mesh":0,"name":"quad"}],)"
+    R"("meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2,)"
+    R"("COLOR_0":3,"WEIGHTS_0":4},"indices":5,"material":0}]}],)"
+    R"("materials":[{"name":")"
+    + material
+    + R"("}],"buffers":[{"byteLength":268}],"bufferViews":[)"
+      R"({"buffer":0,"byteOffset":0,"byteLength":48},)"
+      R"({"buffer":0,"byteOffset":48,"byteLength":48},)"
+      R"({"buffer":0,"byteOffset":96,"byteLength":32},)"
+      R"({"buffer":0,"byteOffset":128,"byteLength":64},)"
+      R"({"buffer":0,"byteOffset":192,"byteLength":64},)"
+      R"({"buffer":0,"byteOffset":256,"byteLength":12}],"accessors":[)"
+      R"({"bufferView":0,"componentType":5126,"count":4,"type":"VEC3",)"
+      R"("min":[0,0,-32],"max":[32,0,0]},)"
+      R"({"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"},)"
+      R"({"bufferView":2,"componentType":5126,"count":4,"type":"VEC2"},)"
+      R"({"bufferView":3,"componentType":5126,"count":4,"type":"VEC4"},)"
+      R"({"bufferView":4,"componentType":5126,"count":4,"type":"VEC4"},)"
+      R"({"bufferView":5,"componentType":5123,"count":6,"type":"SCALAR"}]})";
+  return glb;
+}
+
+std::string glbProblem(const HandGlb& glb)
+{
+  return gltfFileProblem(glb.bytes(), true).value_or("");
+}
+
+} // namespace
+
+TEST_CASE("ModelLoading: the glTF validator (LP7.5, D136, P7.2)")
+{
+  using Catch::Matchers::ContainsSubstring;
+  using Catch::Matchers::StartsWith;
+
+  SECTION("the hand quad passes, with its counts")
+  {
+    auto facts = GltfFileFacts{};
+    const auto problem = gltfFileProblem(handQuadGlb().bytes(), true, &facts);
+    INFO(problem.value_or(""));
+    CHECK_FALSE(problem);
+    CHECK(facts.binLength == 268u);
+    CHECK(facts.nodes == 1u);
+    CHECK(facts.meshes == 1u);
+    CHECK(facts.primitives == 1u);
+    CHECK(facts.vertices == 4u);
+    CHECK(facts.materials == 1u);
+  }
+
+  SECTION("the container: each refusal names the loader's site")
+  {
+    const auto quad = handQuadGlb().bytes();
+    CHECK_THAT(
+      gltfFileProblem(quad.substr(0, 16), true).value_or(""),
+      ContainsSubstring("under the 20"));
+    auto magic = quad;
+    magic[0] = 'x';
+    CHECK_THAT(gltfFileProblem(magic, true).value_or(""), ContainsSubstring("magic"));
+    auto version = quad;
+    version[4] = 1;
+    CHECK_THAT(
+      gltfFileProblem(version, true).value_or(""), ContainsSubstring("version 1"));
+    // a truncated file: the header's length is the whole file's
+    CHECK_THAT(
+      gltfFileProblem(quad.substr(0, quad.size() - 8), true).value_or(""),
+      ContainsSubstring("the header's length"));
+    // a chunk past the file: the BIN chunk's length grown by 4, the header kept honest
+    auto jsonLength = std::uint32_t{0};
+    std::memcpy(&jsonLength, quad.data() + 12, 4);
+    auto past = quad;
+    auto binLength = std::uint32_t{0};
+    std::memcpy(&binLength, past.data() + 20 + jsonLength, 4);
+    binLength += 4;
+    std::memcpy(past.data() + 20 + jsonLength, &binLength, 4);
+    CHECK_THAT(
+      gltfFileProblem(past, true).value_or(""), ContainsSubstring("past the file"));
+    // a third chunk
+    auto third = quad + std::string{"\4\0\0\0BIN\0\0\0\0\0", 12};
+    const auto length = std::uint32_t(third.size());
+    std::memcpy(third.data() + 8, &length, 4);
+    CHECK_THAT(
+      gltfFileProblem(third, true).value_or(""), ContainsSubstring("a third chunk"));
+  }
+
+  SECTION("the JSON as the copied lexer reads it")
+  {
+    const auto quad = handQuadGlb();
+    CHECK_THAT(
+      glbProblem(quad.with(R"("name":"quad")", R"("name":"qu\ad")")),
+      ContainsSubstring("backslash"));
+    CHECK_THAT(
+      glbProblem(quad.with(R"("min":[0,0,-32])", R"("min":[0,0,-3.2E1])")),
+      ContainsSubstring("upper-case exponent"));
+    CHECK_THAT(
+      glbProblem(quad.with(R"("scene":0,)", R"("scene":0,"scene":0,)")),
+      ContainsSubstring("twice"));
+    CHECK_THAT(
+      glbProblem(quad.with(R"("scene":0,)", R"("scene":0,"extras":{},)")),
+      ContainsSubstring("an unknown property"));
+    CHECK_THAT(
+      glbProblem(quad.with(R"("nodes":[0]})", R"("nodes":[00]})")),
+      ContainsSubstring("leading zero"));
+  }
+
+  SECTION("external buffers, data: URIs and image files are refused with the notice")
+  {
+    const auto quad = handQuadGlb();
+    for (const auto* uri :
+         {R"("uri":"quad.bin",)", R"("uri":"data:application/gltf-buffer;base64,AAAA",)"})
+    {
+      CHECK_THAT(
+        glbProblem(quad.with(
+          R"({"byteLength":268})", std::string{"{"} + uri + R"("byteLength":268})")),
+        StartsWith("glTF with external buffers is not read by the preview"));
+    }
+    CHECK_THAT(
+      glbProblem(
+        quad.with(R"("buffers":)", R"("images":[{"uri":"quad.png"}],"buffers":)")),
+      StartsWith("glTF with external buffers is not read by the preview"));
+    // a .gltf: its buffers have a uri, or no data
+    CHECK_THAT(
+      gltfFileProblem(quad.json, false).value_or(""),
+      ContainsSubstring("no uri, so no data"));
+  }
+
+  SECTION("the indexes the copies read unchecked")
+  {
+    const auto quad = handQuadGlb();
+    CHECK_THAT(
+      glbProblem(quad.with(R"("scene":0,)", "")), ContainsSubstring("no \"scene\""));
+    CHECK_THAT(
+      glbProblem(quad.with(R"("indices":5,)", "")), ContainsSubstring("no \"indices\""));
+    CHECK_THAT(
+      glbProblem(quad.with(R"("material":0)", R"("material":1)")),
+      ContainsSubstring("names none of the 1"));
+    CHECK_THAT(
+      glbProblem(quad.with(R"("NORMAL":1,)", R"("NORMAL":9,)")),
+      ContainsSubstring("names no accessor"));
+    CHECK_THAT(
+      glbProblem(quad.with(
+        R"("mesh":0,"name":"quad"})",
+        R"("mesh":0,"name":"quad","children":[1]},{"children":[0]})")),
+      ContainsSubstring("cycle"));
+    CHECK_THAT(
+      glbProblem(quad.with(
+        R"("mesh":0,"name":"quad"})", R"("mesh":0,"name":"quad","children":[0]})")),
+      ContainsSubstring("cycle"));
+    CHECK_THAT(
+      glbProblem(quad.with(
+        R"("nodes":[{"mesh":0,"name":"quad"}])",
+        R"("nodes":[{"mesh":0,"name":"quad","children":[2]},{"children":[2]},{}])")),
+      ContainsSubstring("not a tree"));
+  }
+
+  SECTION("the accessors' windows and types as the conversion reads them")
+  {
+    const auto quad = handQuadGlb();
+    // an accessor past its view
+    CHECK_THAT(
+      glbProblem(quad.with(
+        R"("bufferView":2,"componentType":5126,"count":4)",
+        R"("bufferView":2,"componentType":5126,"byteOffset":8,"count":4)")),
+      ContainsSubstring("past it"));
+    // an index type the conversion does not take
+    CHECK_THAT(
+      glbProblem(quad.with(
+        R"("componentType":5123,"count":6)", R"("componentType":5122,"count":6)")),
+      ContainsSubstring("not an unsigned byte, short or int"));
+    CHECK_THAT(
+      glbProblem(quad.with(
+        R"("componentType":5123,"count":6)", R"("componentType":5126,"count":3)")),
+      ContainsSubstring("not an unsigned byte, short or int"));
+    // an unknown component type
+    CHECK_THAT(
+      glbProblem(quad.with(
+        R"("componentType":5123,"count":6)", R"("componentType":5124,"count":6)")),
+      ContainsSubstring("typeSize uninitialised"));
+    // indices not a multiple of 3
+    CHECK_THAT(
+      glbProblem(quad.with(
+        R"("componentType":5123,"count":6)", R"("componentType":5123,"count":5)")),
+      ContainsSubstring("not a multiple of 3"));
+    // a count that differs from the first attribute's
+    CHECK_THAT(
+      glbProblem(quad.with(
+        R"("bufferView":2,"componentType":5126,"count":4)",
+        R"("bufferView":2,"componentType":5126,"count":3)")),
+      ContainsSubstring("sized by the first"));
+    // quantized positions, a VEC3 colour, points
+    CHECK_THAT(
+      glbProblem(quad.with(
+        R"("bufferView":0,"componentType":5126)",
+        R"("bufferView":0,"componentType":5123)")),
+      ContainsSubstring("misreads"));
+    CHECK_THAT(
+      glbProblem(quad.with(
+        R"("bufferView":3,"componentType":5126,"count":4,"type":"VEC4")",
+        R"("bufferView":3,"componentType":5126,"count":4,"type":"VEC3")")),
+      ContainsSubstring("misreads"));
+    CHECK_THAT(
+      glbProblem(quad.with(R"("indices":5,)", R"("indices":5,"mode":0,)")),
+      ContainsSubstring("not triangles"));
+    // an index past the vertices
+    auto bad = quad;
+    bad.bin[256 + 4] = 7;
+    CHECK_THAT(glbProblem(bad), ContainsSubstring("past its 4 vertices"));
+    // a vec field of another count
+    CHECK_THAT(
+      glbProblem(quad.with(
+        R"("mesh":0,"name":"quad"})", R"("mesh":0,"name":"quad","translation":[1,2]})")),
+      ContainsSubstring("is not 3 numbers"));
+    // a sparse accessor
+    CHECK_THAT(
+      glbProblem(quad.with(
+        R"({"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"})",
+        R"({"bufferView":1,"componentType":5126,"count":4,"type":"VEC3","sparse":{"count":1}})")),
+      ContainsSubstring("sparse"));
+    // a skin without a skeleton named ""
+    CHECK_THAT(
+      glbProblem(
+        quad.with(R"("buffers":)", R"("skins":[{"joints":[0],"name":""}],"buffers":)")),
+      ContainsSubstring("GetNode's assert"));
   }
 }
 

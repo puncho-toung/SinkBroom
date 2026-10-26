@@ -164,4 +164,102 @@ std::optional<std::string> aseFileProblem(std::string_view bytes);
  */
 std::optional<std::string> lwoFileProblem(std::string_view bytes);
 
+// LP7.5: gltfFileProblem's bounds (the preview's own, far above any model the engine
+// draws): the counts of nodes, meshes, materials, animations and skins, of accessors
+// and views, of primitives in the file; a primitive's vertices (a surface's 16-bit
+// triIndex_t, Model_gltf.cpp:99-108); a material name's characters (FindMaterial's)
+inline constexpr std::size_t MaxGltfNodes = 65536;
+inline constexpr std::size_t MaxGltfMeshes = 65536;
+inline constexpr std::size_t MaxGltfMaterials = 65536;
+inline constexpr std::size_t MaxGltfAccessors = std::size_t{1} << 20;
+inline constexpr std::size_t MaxGltfPrimitives = 65536;
+inline constexpr std::size_t MaxGltfPrimitiveVerts = 65535;
+inline constexpr std::size_t MaxGltfMaterialName = 256;
+
+// what gltfFileProblem counted in a file that passes: the BIN chunk's bytes (0 for none,
+// and for a .gltf), and the file's nodes, meshes, primitives, the primitives' vertices,
+// materials, animations and skins
+struct GltfFileFacts
+{
+  std::size_t binLength = 0;
+  std::size_t nodes = 0;
+  std::size_t meshes = 0;
+  std::size_t primitives = 0;
+  std::size_t vertices = 0;
+  std::size_t materials = 0;
+  std::size_t animations = 0;
+  std::size_t skins = 0;
+};
+
+/**
+ * LP7.5 (C51 (3), D136, P7.2): the preview's own check of a glTF file before the copied
+ * GLTF_Parser (idlib/gltfParser.cpp), MapPolygonMesh::ConvertFromMeshGltf
+ * (idlib/MapFile_gltf.cpp) and idRenderModelGLTF's static path (renderer/Model_gltf.cpp)
+ * see it, which continue past their FatalError and Error sites (the shim's return; the
+ * engine's own Errors there are drops that end its map load). A read-only pre-pass over
+ * the bytes with the preview's own small JSON reader, writing nothing: binary is a .glb
+ * (the 12-byte header and its chunks), else a .gltf (the JSON alone). It accepts a subset
+ * of what the copies read without a read or write out of range, an uninitialised value,
+ * a NULL dereference or a recursion without end:
+ *
+ * - a .glb: at least 20 bytes (gltfParser.cpp:1939), the magic "glTF" (:1945-1956,
+ *   whose Icmp the validator narrows to the specification's case), version 2 (the parser
+ *   reads it and goes on), the header's length the file's (the chunk loop's unsigned
+ *   arithmetic, :1964-2005), the JSON chunk first (:1994-1997) and at most one BIN chunk
+ *   after it, nothing after that (:2002-2005: past it the chunk table's 32 entries,
+ *   :400), every chunk within the file (:1984-1987) and padded to 4;
+ * - the JSON in RFC 8259's grammar as the copied idLexer tokenises it the same way:
+ *   strings without a backslash (LEXFL_NOSTRINGESCAPECHARS keeps no escape) or a control
+ *   character, numbers without a leading zero (octal to the lexer) or an upper-case
+ *   exponent (Lexer.cpp:881-910 reads 'e' only), no NUL (the script's end), no byte
+ *   order mark, no key twice in an object, nested at most 64 deep, the root an object;
+ * - the root's keys ResolveProp's names (:1851-1928; another is :1846's FatalError, the
+ *   parse ending early), each list an array of objects;
+ * - no buffer or image with a uri, a data: URI included: "glTF with external buffers is
+ *   not read by the preview" (gltfItem_uri::Convert, :414-455, reads it through the file
+ *   system relative to the game's search path during the parse, and dereferences NULL
+ *   when it cannot open it, :432); a .glb's one buffer within its BIN chunk, no second
+ *   one (GetData of an index past the chunks, :388-411); a .gltf buffer without a uri
+ *   (no data at all) refused;
+ * - every index the copied code reads unchecked within its list: a view's buffer, an
+ *   accessor's view, a node's mesh, skin and camera, its children (one parent each, no
+ *   cycle, at most 128 deep: SetNodeParent :2188-2195, ProcessNode_r, GetAllMeshes and
+ *   GetAnimationIds recurse), a scene's nodes, "scene" present (InitFromFile reads
+ *   SceneList()[ DefaultScene() ], uninitialised without it, Model_gltf.cpp:523-527), a
+ *   primitive's material, attributes and indices (present: AccessorList()[ -1 ],
+ *   MapFile_gltf.cpp:39), a skin's joints, skeleton and matrices, an animation's
+ *   samplers' accessors and channels' samplers and target nodes, an image's view;
+ * - every accessor of a component type the parser maps (else its typeSize is
+ *   uninitialised, :144-158, :1472), a type, a count; every view within its buffer, its
+ *   stride a multiple of 4 in 4..252;
+ * - every primitive: mode absent or 4 (the conversion reads every three indices as a
+ *   triangle, MapFile_gltf.cpp:66-82); POSITION present; every attribute's count the
+ *   first's (the vertices are sized by the first, :103-107); POSITION, NORMAL, TANGENT,
+ *   TEXCOORD_0 and WEIGHTS_0 floats, COLOR_0 float, unsigned short or unsigned byte and
+ *   JOINTS_0 unsigned short or byte, each of its count of components (the conversion
+ *   reads others as raw bytes); no sparse accessor (its base values alone are read);
+ *   every element the conversion reads within its view by its read pattern (:93-358,
+ *   TANGENT's stride seek three components back for four read), so within the BIN chunk;
+ *   indices of unsigned byte, short or int, a multiple of 3 (:66-82 reads indices[ i + 2
+ *   ] and writes polygons[] past their ends), each below the vertex count
+ *   (R_RangeCheckIndexes' Errors, tr_trisurf.cpp:572-589); at most MaxGltfPrimitiveVerts
+ *   vertices;
+ * - every vec2, vec3, vec4, quat and mat4 field the parser reads (a node's matrix,
+ *   rotation, scale, translation; a material's emissiveFactor and baseColorFactor, the
+ *   specular-glossiness extension's factors, a KHR_texture_transform's offset and scale,
+ * a KHR_lights_punctual light's colour) of exactly its count of numbers (after the
+ *   FatalError for another count the parser reads past the list, :692-776);
+ * - a skin without a skeleton named, not "" (GetNode's assert, gltfProperties.h:925); a
+ *   material name under MaxGltfMaterialName characters; the counts under the Max*
+ *   bounds above.
+ *
+ * The copied parse itself runs in a scope that counts the engine's Errors and
+ * FatalErrors (MaterialDecls::parseGltfModel): any one is a Default record with the
+ * message, so the lexer's error paths (any JSON the parser does not expect), which a
+ * pre-pass cannot enumerate, never reach the conversion. nullopt when the file passes,
+ * else the reason (facts holds the counts of a file that passes). Pure; any thread.
+ */
+std::optional<std::string> gltfFileProblem(
+  std::string_view bytes, bool binary, GltfFileFacts* facts = nullptr);
+
 } // namespace tb::lit
