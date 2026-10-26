@@ -102,6 +102,10 @@ inline void operator delete[](void* p, memTag_t) noexcept
 class idVec2;
 class idDrawVert;
 
+// math/Simd.h, copied in part: VPCALL, which the copied idSIMD_Generic ranges are
+// declared with
+#include "idlib/math/Simd.h"
+
 /**
  * math/Simd.h's SIMDProcessor, the scalar stand-in of C24 (3): exactly the methods the
  * copied code calls, without virtuals, each a transcription of idSIMD_Generic's
@@ -109,11 +113,17 @@ class idDrawVert;
  * thread may call it. The one object is constant-initialised and never written.
  *
  * - MinMax (idVec3 points): idBounds::FromPoints (Bounds.cpp).
+ * - LP7.1a: MinMax (idVec2 points: ConvertOBJToModelSurfaces' texture coordinates,
+ *   Model.cpp:1554) and MinMax (idDrawVert positions: R_BoundTriSurf,
+ * tr_trisurf.cpp:608), which call idSIMD_Generic's own, copied
+ * (engine/idlib/math/Simd_Generic.cpp, compiled in ShimLib.cpp).
  */
 class idSIMDProcessor
 {
 public:
   void MinMax(idVec3& min, idVec3& max, const idVec3* src, const int count) const;
+  void MinMax(idVec2& min, idVec2& max, const idVec2* src, const int count) const;
+  void MinMax(idVec3& min, idVec3& max, const idDrawVert* src, const int count) const;
 };
 
 extern const idSIMDProcessor* const SIMDProcessor;

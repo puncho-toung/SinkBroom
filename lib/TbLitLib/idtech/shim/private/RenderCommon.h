@@ -20,7 +20,7 @@
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/RenderProgs.h,
-// renderer/tr_frontend_main.cpp, renderer/Model.h and renderer/RenderCommon.h):
+// renderer/tr_frontend_main.cpp, renderer/VertexCache.h and renderer/RenderCommon.h):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2013-2023 Robert Beckebans
 //   Copyright (C) 2016-2017 Dustin Land
@@ -248,51 +248,50 @@ struct viewDef_t
   renderView_t renderView;
 };
 
-// ----- the geometry copies (LP1b.2, C24) -----
+// ----- the geometry copies (LP1b.2, C24; LP7.1a) -----
 
-// renderer/Model.h, copied in part: dominantTri_t
+// renderer/VertexCache.h's handle type, which srfTriangles_t's cache fields have; nothing
+// here allocates a cache, so they stay 0
+typedef uint64 vertCacheHandle_t;
+
+// renderer/Model.h, copied in part: dominantTri_t and, LP7.1a, srfTriangles_t itself
+// (Model.h:61-115): R_AllocStaticTriSurf clears it with Mem_ClearedAlloc, as in the
+// engine, and the copied R_FreeStaticTriSurf frees its Mem_Alloc16 arrays
 #include "renderer/Model.h"
 
-/**
- * renderer/Model.h's srfTriangles_t, reduced to exactly the fields the copied ranges of
- * tr_trisurf.cpp read and write (D57): R_AllocStaticTriSurf clears it with memset, as in
- * the engine, so every member is plain data. The arrays are Mem_Alloc16 blocks, freed by
- * the facade (lit/EngineGeometry.h) with Mem_Free.
- */
-struct srfTriangles_t
-{
-  bool tangentsCalculated;
-
-  int numVerts;
-  idDrawVert* verts;
-
-  int numIndexes;
-  triIndex_t* indexes;
-  triIndex_t* silIndexes;
-
-  int numMirroredVerts;
-  int* mirroredVerts;
-
-  // R_CreateDupVerts is not copied (D57): always 0 and null
-  int numDupVerts;
-  int* dupVerts;
-
-  dominantTri_t* dominantTris;
-};
-
-// RenderCommon.h:1676-1720, the copied ranges' prototypes
+// the copied ranges' prototypes, which the engine declares in RenderCommon.h
 srfTriangles_t* R_AllocStaticTriSurf();
 void R_AllocStaticTriSurfVerts(srfTriangles_t* tri, int numVerts);
 void R_AllocStaticTriSurfIndexes(srfTriangles_t* tri, int numIndexes);
 void R_AllocStaticTriSurfSilIndexes(srfTriangles_t* tri, int numIndexes);
 void R_AllocStaticTriSurfDominantTris(srfTriangles_t* tri, int numVerts);
 void R_AllocStaticTriSurfMirroredVerts(srfTriangles_t* tri, int numMirroredVerts);
+void R_AllocStaticTriSurfDupVerts(srfTriangles_t* tri, int numDupVerts);
+void R_AllocStaticTriSurfMocIndexes(srfTriangles_t* tri, int numIndexes);
+void R_AllocStaticTriSurfMocVerts(srfTriangles_t* tri, int numVerts);
 srfTriangles_t* R_CopyStaticTriSurf(const srfTriangles_t* tri);
+void R_FreeStaticTriSurfVertexCaches(srfTriangles_t* tri);
+void R_FreeStaticTriSurf(srfTriangles_t* tri);
 void R_ResizeStaticTriSurfVerts(srfTriangles_t* tri, int numVerts);
+void R_RangeCheckIndexes(const srfTriangles_t* tri);
+void R_BoundTriSurf(srfTriangles_t* tri);
 void R_CreateSilIndexes(srfTriangles_t* tri);
+void R_CreateDupVerts(srfTriangles_t* tri);
 void R_RemoveDegenerateTriangles(srfTriangles_t* tri);
+void R_TestDegenerateTextureSpace(srfTriangles_t* tri);
 void R_ReverseTriangles(srfTriangles_t* tri);
+srfTriangles_t* R_MergeSurfaceList(const srfTriangles_t** surfaces, int numSurfaces);
+srfTriangles_t* R_MergeTriangles(const srfTriangles_t* tri1, const srfTriangles_t* tri2);
 void R_DeriveTangents(srfTriangles_t* tri);
+void R_DeriveTangentsWithoutNormals(srfTriangles_t* tri, bool useMikktspace);
+void R_BuildDominantTris(srfTriangles_t* tri);
+void R_CleanupTriangles(
+  srfTriangles_t* tri,
+  bool createNormals,
+  bool identifySilEdges,
+  bool useUnsmoothedTangents,
+  bool useMikktspace);
+void R_CreateMaskedOcclusionCullingTris(srfTriangles_t* tri);
 
 /**
  * RenderCommon.h's idRenderSystemLocal tr, reduced to the one counter the copied

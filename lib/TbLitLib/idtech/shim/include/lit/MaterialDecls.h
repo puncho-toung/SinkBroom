@@ -31,6 +31,8 @@
 // compareEnginePaths and findKey touch no registry state, and the engine-message
 // functions of D63 may be called from any thread.
 
+#include "lit/EngineModels.h"
+
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -867,6 +869,32 @@ public:
   // the engine's canonical decl name (DeclManager.cpp's MakeNameCanonical): lowercase,
   // backslashes to slashes, cut at the last dot
   static std::string canonicalName(std::string_view name);
+
+  /**
+   * LP7.1a (C51, D137, P7.4): the copied OBJ_Load (Model_obj.cpp:243-260) of a model
+   * file's bytes, its ReadFile served the bytes and the time handed in (the file
+   * source's, A4), never a read of the disk; name is the game-relative path, the lexer's
+   * file name. The model is null where OBJ_Load returns NULL (no bytes); the error is the
+   * engine error the parse reached (the validator keeps every one unreachable,
+   * lit/ModelValidators in TbLitLib). Parse thread (the copied lexer, C20).
+   */
+  EngineObjParse parseObjModel(
+    const std::string& name, const std::string& bytes, std::int64_t time);
+
+  /**
+   * LP7.1a (D137): the material ConvertOBJToModelSurfaces' declManager->FindMaterial(
+   * name ) finds (Model.cpp:1458, makeDefault true), its ten accessor values for the
+   * stand-in material of the pool's conversion; an error when its parse reached an
+   * engine Error, as lookup's. Parse thread.
+   */
+  DeclResult<EngineModelMaterial> modelMaterial(std::string_view name);
+
+  /**
+   * LP7.1a: tr.defaultMaterial's values (MakeDefaultModel, Model.cpp:273-277; the decl
+   * named _default as the DMAP branch finds it, else the implicit material of that name).
+   * Parse thread.
+   */
+  DeclResult<EngineModelMaterial> defaultModelMaterial();
 
   // LPF.0b (C42, M-ID-GUARD-07): the largest decl text reparse takes, in bytes: the
   // copied ParseLocal copies the text onto the parse thread's 8 MB stack (_alloca,

@@ -202,6 +202,33 @@ void R_StaticFree(void* data)
   Mem_Free(data);
 }
 
+/**
+ * LP7.1a: math/Simd_Generic.h's idSIMD_Generic, reduced to the two MinMax overloads the
+ * copied ranges below define (Simd_Generic.cpp:81-88, :109-116), without the virtual
+ * base; idSIMDProcessor calls them. Stateless, so any thread may call them (C24 (3)).
+ */
+class idSIMD_Generic
+{
+public:
+  void VPCALL MinMax(idVec2& min, idVec2& max, const idVec2* src, const int count);
+  void VPCALL MinMax(idVec3& min, idVec3& max, const idDrawVert* src, const int count);
+};
+
+// the copied ranges (engine/idlib/math/Simd_Generic.cpp is HEADER_FILE_ONLY in the build)
+#include "idlib/math/Simd_Generic.cpp"
+
+void idSIMDProcessor::MinMax(
+  idVec2& min, idVec2& max, const idVec2* src, const int count) const
+{
+  idSIMD_Generic{}.MinMax(min, max, src, count);
+}
+
+void idSIMDProcessor::MinMax(
+  idVec3& min, idVec3& max, const idDrawVert* src, const int count) const
+{
+  idSIMD_Generic{}.MinMax(min, max, src, count);
+}
+
 // Simd_Generic.cpp:95-102 idSIMD_Generic::MinMax (idVec3 points), with UNROLL1 written
 // out
 void idSIMDProcessor::MinMax(

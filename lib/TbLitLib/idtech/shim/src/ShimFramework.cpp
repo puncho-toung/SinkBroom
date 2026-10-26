@@ -321,6 +321,12 @@ int idFileSystemLocal::ReadFile(
     *buffer = nullptr;
   }
 
+  // LP7.1a: a model read serves the bytes it was handed, and nothing else
+  if (m_modelRead)
+  {
+    return readModelFile(relativePath ? relativePath : "", buffer, timestamp);
+  }
+
   if (m_cancel && m_cancel->load() && m_imageReads && buffer)
   {
     // the registry is stopping: an image file reads as missing, never as an empty buffer,
@@ -455,6 +461,46 @@ int idFileSystemLocal::ReadFile(
 void idFileSystemLocal::FreeFile(void* buffer)
 {
   Mem_Free(buffer);
+}
+
+void idFileSystemLocal::beginModelRead(
+  std::string path, std::string bytes, const std::int64_t time)
+{
+  m_modelRead = ModelFile{std::move(path), std::move(bytes), time};
+}
+
+void idFileSystemLocal::endModelRead()
+{
+  m_modelRead.reset();
+}
+
+// LP7.1a: ReadFile during a model read: the handed file as FileSystem.cpp's ReadFile
+// returns one (a Mem_Alloc'ed, NUL-terminated buffer of length + 1 bytes) with the handed
+// time; another name, and a file the engine's int lengths cannot hold, are missing
+int idFileSystemLocal::readModelFile(
+  const std::string& path, void** buffer, ID_TIME_T* timestamp) const
+{
+  if (timestamp)
+  {
+    *timestamp = FILE_NOT_FOUND_TIMESTAMP;
+  }
+  if (path != m_modelRead->path || m_modelRead->bytes.size() >= std::size_t(INT_MAX))
+  {
+    return -1;
+  }
+  const auto length = int(m_modelRead->bytes.size());
+  if (timestamp)
+  {
+    *timestamp = ID_TIME_T(m_modelRead->time);
+  }
+  if (buffer)
+  {
+    auto* bytes = static_cast<char*>(Mem_Alloc(size_t(length) + 1, TAG_IDFILE));
+    memcpy(bytes, m_modelRead->bytes.data(), size_t(length));
+    bytes[length] = '\0';
+    *buffer = bytes;
+  }
+  return length;
 }
 
 void idFileSystemLocal::beginImageReads()

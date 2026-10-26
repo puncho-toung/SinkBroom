@@ -354,7 +354,7 @@ TEST_CASE("EngineGeometry: triangle cleanup and tangents")
     static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
   }
 
-  SECTION("R3.11: mikktspace takes the engine's failure path, with its warning")
+  SECTION("LP7.1a (D135, P7.16): mikktspace runs the copied MikkTSpace, no failure")
   {
     static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
     const auto mikk =
@@ -365,12 +365,18 @@ TEST_CASE("EngineGeometry: triangle cleanup and tangents")
     static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
     REQUIRE(mikk);
     REQUIRE(plain);
-    CHECK(mikk->verts == plain->verts);
     CHECK(mikk->indexes == plain->indexes);
-    CHECK(std::any_of(messages.begin(), messages.end(), [](const DeclMessage& m) {
-      return m.kind == DeclMessageKind::Warning
-             && m.text.find("Mikkelsen tangent space calculation failed")
-                  != std::string::npos;
+    REQUIRE(mikk->verts.size() == plain->verts.size());
+    for (std::size_t i = 0; i < mikk->verts.size(); ++i)
+    {
+      // MikkTSpace writes the tangent and its sign only
+      CHECK(mikk->verts[i].xyz == plain->verts[i].xyz);
+      CHECK(mikk->verts[i].st == plain->verts[i].st);
+      CHECK(mikk->verts[i].normal == plain->verts[i].normal);
+    }
+    CHECK(std::none_of(messages.begin(), messages.end(), [](const DeclMessage& m) {
+      return m.text.find("Mikkelsen tangent space calculation failed")
+             != std::string::npos;
     }));
   }
 

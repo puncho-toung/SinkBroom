@@ -18,7 +18,19 @@ triangle cull (`renderer/Interaction.cpp`, three statement ranges) with
 function of `../shim/src/EngineInteraction.cpp` that declares, with the engine's names,
 what the ranges read and write. LP4.2a adds `renderer/Image_brdfLut.h` whole (D85), the
 BRDF lookup table's data, which `../shim/src/EngineImageData.cpp` includes behind the
-facade `lit/EngineImageData.h` for the raw intrinsic `_brdfLut`.
+facade `lit/EngineImageData.h` for the raw intrinsic `_brdfLut`. LP7.1a (C51, D135,
+D137) adds the static model code: `renderer/Model_obj.cpp` and `Model_obj.h` whole (the
+OBJ loader); `renderer/Model.cpp`'s ranges (the four slop and merge cvars, the
+constructor, the default cube, `InitEmpty`, `AddSurface`, `NumSurfaces`,
+`FinishSurfaces`, `ConvertOBJToModelSurfaces`, `PurgeModel`), compiled inside
+`../shim/src/ShimModels.cpp`, which declares the reduced `idRenderModelStatic` they
+belong to and, at its class scope, the stand-ins that keep them off the registry;
+`renderer/Model.h`'s `srfTriangles_t`; twelve more ranges of `renderer/tr_trisurf.cpp`
+(`R_CleanupTriangles` whole: `R_CreateDupVerts`, the bounds, `R_MergeTriangles`,
+`R_FreeStaticTriSurf`, the masked occlusion copies, `R_DeriveMikktspaceTangents` and the
+MikkTSpace callbacks); `idlib/containers/VectorSet.h` whole (the conversion's slop
+merge); and `idSIMD_Generic`'s two `MinMax` ranges (`idlib/math/Simd_Generic.cpp`, with
+`Simd.h`'s `VPCALL`), compiled inside `../shim/src/ShimLib.cpp`.
 
 `renderer/DXT/` (`DXTCodec.h`, `DXTCodec_local.h`, `DXTEncoder_SSE2.cpp`) is **test only**
 (LP1c fix S3.2): the engine's fast DXT encoders, compiled into `TbLitIdDxtTestLib`, which
@@ -29,8 +41,12 @@ on the CPU (D24). `mirror.json` marks these entries `testOnly`.
 `libs/` holds the libraries the engine itself vendors and the copied loaders call:
 `stb/stb_image.h`, `tinyexr/tinyexr.h` and `mesa/format_r11g11b10f.h`, whole and at the
 engine's versions, so that a source image decodes to the same bytes (D27's recorded
-exception, R5.6). Their terms are in `LICENSE_EXCEPTIONS.md`, the engine's file, copied
-whole next to `LICENSE.md`.
+exception, R5.6), and, LP7.1a (D135), `mikktspace/mikktspace.c` and `mikktspace.h`
+(Morten S. Mikkelsen's MikkTSpace, version 1.0 as the engine vendors it, with its
+`m_alloc`/`m_free` interface members), whole, compiled as C in TbLitIdLib with its flags,
+so that a model's MikkTSpace tangents are the engine's. Their terms are in
+`LICENSE_EXCEPTIONS.md`, the engine's file, copied whole next to `LICENSE.md` (MikkTSpace's
+zlib-style licence is its "Mikkelsen Tangent Space library" entry, `neo/libs/mikktspace/*`).
 
 **Never edit these files.** A change the copied code needs goes into the shim
 (`../shim/`). The shim headers `precompiled.h` and `RenderCommon.h` stand in for the

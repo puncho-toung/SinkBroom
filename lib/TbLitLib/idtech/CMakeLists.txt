@@ -63,6 +63,22 @@ target_sources(TbLitIdLib
     # LP4.2a (D85): the BRDF lookup table's data header, copied whole, included by
     # shim/src/EngineImageData.cpp behind the facade lit/EngineImageData.h
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_brdfLut.h
+    # LP7.1a (C51, D135, D137): the OBJ loader, copied whole; renderer/Model.cpp's ranges,
+    # compiled inside shim/src/ShimModels.cpp, which declares the reduced
+    # idRenderModelStatic they belong to; the conversion's slop merge (VectorSet.h);
+    # idSIMD_Generic's two MinMax ranges, compiled inside shim/src/ShimLib.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Model_obj.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Model_obj.h
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Model.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Model.h
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/containers/VectorSet.h
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Simd.h
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Simd_Generic.cpp
+    # LP7.1a (D135): the engine-vendored MikkTSpace, copied whole as a pinned library
+    # (zlib-style licence, LICENSE_EXCEPTIONS.md), compiled as C with this target's flags;
+    # tr_trisurf.cpp's R_DeriveMikktspaceTangents calls it
+    ${TB_LIT_ID_ENGINE_DIR}/libs/mikktspace/mikktspace.c
+    ${TB_LIT_ID_ENGINE_DIR}/libs/mikktspace/mikktspace.h
 
     ${TB_LIT_ID_SHIM_DIR}/src/DeclManagerShim.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineGeometry.cpp
@@ -79,6 +95,7 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_SHIM_DIR}/src/ShimFramework.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimImages.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimLib.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/ShimModels.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimPipelineState.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimRenderer.cpp
     ${TB_LIT_ID_SHIM_DIR}/ParallelJobList_JobHeaders.h
@@ -102,6 +119,7 @@ target_sources(TbLitIdLib
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineImageEnums.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineLexer.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineLight.h
+      ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineModels.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EnginePipelineState.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/MaterialDecls.h
 )
@@ -113,6 +131,8 @@ set_source_files_properties(
   ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_load.cpp
   ${TB_LIT_ID_ENGINE_DIR}/renderer/PipelineCache.cpp
   ${TB_LIT_ID_ENGINE_DIR}/renderer/Interaction.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/renderer/Model.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Simd_Generic.cpp
   PROPERTIES HEADER_FILE_ONLY ON)
 
 # the shim headers named precompiled.h and RenderCommon.h come first, so the copied files'
@@ -121,6 +141,8 @@ target_include_directories(TbLitIdLib
   PRIVATE
     ${TB_LIT_ID_SHIM_DIR}/private
     ${TB_LIT_ID_ENGINE_DIR}
+    # LP7.1a: tr_trisurf.cpp includes <mikktspace.h>, as the engine's build finds it
+    ${TB_LIT_ID_ENGINE_DIR}/libs/mikktspace
 )
 
 # LP2.0: the facade lit/EnginePipelineState.h speaks NVRHI's render-state types, and the

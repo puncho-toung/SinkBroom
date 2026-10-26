@@ -33,26 +33,16 @@
 
 // The geometry facade (lit/EngineGeometry.h). The copied ranges of
 // renderer/tr_trisurf.cpp are compiled here, because R_DuplicateMirroredVertexes,
-// R_CreateSilRemap and R_FaceNegativePolarity are static in that file; before them the
-// shim defines the one static the copy calls but the copy leaves out,
-// R_DeriveMikktspaceTangents (Q18).
+// R_CreateSilRemap, R_FaceNegativePolarity and, LP7.1a, R_DeriveMikktspaceTangents and
+// the MikkTSpace callbacks are static in that file. LP7.1a (D135): MikkTSpace is the
+// copied library (engine/libs/mikktspace), so R_DeriveMikktspaceTangents is the engine's
+// own (the stub of Q18 is gone, M-GEO-FN-04).
 
 // clang-format off: precompiled.h comes first in every shim file
 #include "precompiled.h"
 #include "lit/EngineGeometry.h"
+#include "lit/EngineModels.h"
 // clang-format on
-
-/**
- * tr_trisurf.cpp:876-883's R_DeriveMikktspaceTangents, not copied (Q18: no retail or user
- * material uses the mikktspace keyword, so MikkTSpace itself is not copied). A material
- * with the keyword asks for it (EngineTangentPath::Mikktspace, mirror.json M-ID-DIFF-04):
- * it fails, and the copied R_DeriveTangentsWithoutNormals warns and falls back to its own
- * derivation, as the engine does when MikkTSpace fails.
- */
-static bool R_DeriveMikktspaceTangents(srfTriangles_t*)
-{
-  return false;
-}
 
 // the copied ranges (renderer/tr_trisurf.cpp is HEADER_FILE_ONLY in the build)
 #include "renderer/tr_trisurf.cpp"
@@ -116,19 +106,11 @@ std::vector<EngineVec3> pointsOf(const idWinding* winding)
   return points;
 }
 
-// the stand-in's arrays are Mem_Alloc16 blocks (R_AllocStaticTriSurf*)
+// LP7.1a: the copied R_FreeStaticTriSurf frees every array (Mem_Free), the masked
+// occlusion copies R_CleanupTriangles makes included, then the struct
 void freeTriSurf(srfTriangles_t* tri)
 {
-  if (tri)
-  {
-    Mem_Free(tri->verts);
-    Mem_Free(tri->indexes);
-    Mem_Free(tri->silIndexes);
-    Mem_Free(tri->mirroredVerts);
-    Mem_Free(tri->dupVerts);
-    Mem_Free(tri->dominantTris);
-    Mem_Free(tri);
-  }
+  R_FreeStaticTriSurf(tri);
 }
 
 struct TriSurfDeleter
@@ -1083,7 +1065,11 @@ std::optional<EngineTriangles> engineCleanupTriangles(
     return result;
   }
 
-  // tr_trisurf.cpp:1810-1847 R_CleanupTriangles( tri, false, true, unsmoothed, false )
+  // tr_trisurf.cpp:1810-1847 R_CleanupTriangles( tri, false, true, unsmoothed, mikktspace
+  // ) in its steps, without R_TestDegenerateTextureSpace (no effect), R_CreateDupVerts (a
+  // brush face never generates normals, so nothing reads the dupVerts: D57) and the
+  // bounds and masked occlusion copies (the chunk builder's own, or unused); LP7.1a:
+  // the Mikktspace path is the copied MikkTSpace (P7.16)
   auto tri = makeTriSurf(verts, indexes);
   R_CreateSilIndexes(tri.get());
   R_RemoveDegenerateTriangles(tri.get());
@@ -1098,6 +1084,46 @@ std::optional<EngineTriangles> engineCleanupTriangles(
     R_DeriveTangentsWithoutNormals(tri.get(), path == EngineTangentPath::Mikktspace);
   }
   return trianglesOf(*tri);
+}
+
+std::optional<EngineModelTriangles> engineCleanupModelTriangles(
+  std::vector<EngineDrawVert> verts,
+  std::vector<std::uint16_t> indexes,
+  const bool generateNormals,
+  const bool unsmoothedTangents,
+  const bool mikktspace)
+{
+  // C24 (2): R_RangeCheckIndexes' Errors as pre-validation (engineCleanupTriangles'
+  // checks); R_BuildDominantTris' Error is reached only when an allocation fails
+  if (
+    verts.size() > std::size_t(engineBounds::MaxSurfaceVertices)
+    || indexes.size() % 3 != 0
+    || indexes.size() > std::size_t(std::numeric_limits<int>::max() / 4))
+  {
+    return std::nullopt;
+  }
+  for (const auto index : indexes)
+  {
+    if (index >= verts.size())
+    {
+      return std::nullopt;
+    }
+  }
+
+  // tr_trisurf.cpp:1810-1847, whole, as FinishSurfaces calls it (Model.cpp:1283)
+  auto tri = makeTriSurf(verts, indexes);
+  tri->generateNormals = generateNormals;
+  R_CleanupTriangles(tri.get(), generateNormals, true, unsmoothedTangents, mikktspace);
+
+  auto result = EngineModelTriangles{};
+  result.triangles = trianglesOf(*tri);
+  if (tri->numDupVerts > 0)
+  {
+    result.dupVerts.assign(tri->dupVerts, tri->dupVerts + tri->numDupVerts * 2);
+  }
+  result.tangentsCalculated = tri->tangentsCalculated;
+  result.bounds = {fromId(tri->bounds[0]), fromId(tri->bounds[1])};
+  return result;
 }
 
 EngineTriangles engineReverseTriangles(

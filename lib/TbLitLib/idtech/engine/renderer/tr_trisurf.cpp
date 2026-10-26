@@ -33,6 +33,8 @@ If you have questions concerning this license or the applicable additional terms
 #pragma hdrstop
 
 #include "RenderCommon.h"
+// ==== engine neo/renderer/tr_trisurf.cpp lines 36-36 (#include <mikktspace.h> (LP7.1a, D135)) ====
+#include <mikktspace.h>
 // ==== engine neo/renderer/tr_trisurf.cpp lines 38-38 (r_useSilRemap) ====
 idCVar r_useSilRemap( "r_useSilRemap", "1", CVAR_RENDERER | CVAR_BOOL, "consider verts with the same XYZ, but different ST the same for shadows" );
 // ==== engine neo/renderer/tr_trisurf.cpp lines 170-174 (USE_INVA, DERIVE_UNSMOOTHED_BITANGENT) ====
@@ -41,6 +43,124 @@ idCVar r_useSilRemap( "r_useSilRemap", "1", CVAR_RENDERER | CVAR_BOOL, "consider
 
 // instead of using the texture T vector, cross the normal and S vector for an orthogonal axis
 #define DERIVE_UNSMOOTHED_BITANGENT
+// ==== engine neo/renderer/tr_trisurf.cpp lines 176-206 (the MikkTSpace callbacks' prototypes, idMikkTSpaceInterface, its static object, SetUpMikkTSpaceContext) ====
+// SP Begin
+
+// Mikktspace is a standard that should be used for new assets. If you'd like to use the original
+// method of calculating tangent spaces for the original game's normal maps, disable mikktspace before
+// loading in the model.
+// see http://www.mikktspace.com/
+//idCVar r_useMikktspace( "r_useMikktspace", "1", CVAR_RENDERER | CVAR_BOOL, "Use the mikktspace standard to derive tangents" );
+
+static void* mkAlloc( int bytes );
+static void mkFree( void* mem );
+static int mkGetNumFaces( const SMikkTSpaceContext* pContext );
+static int mkGetNumVerticesOfFace( const SMikkTSpaceContext* pContext, const int iFace );
+static void mkGetPosition( const SMikkTSpaceContext* pContext, float fvPosOut[], const int iFace, const int iVert );
+static void mkGetNormal( const SMikkTSpaceContext* pContext, float fvNormOut[], const int iFace, const int iVert );
+static void mkGetTexCoord( const SMikkTSpaceContext* pContext, float fvTexcOut[], const int iFace, const int iVert );
+static void mkSetTSpaceBasic( const SMikkTSpaceContext* pContext, const float fvTangent[], const float fSign, const int iFace, const int iVert );
+
+// Helper class for loading in the interface functions for mikktspace.
+class idMikkTSpaceInterface
+{
+public:
+	idMikkTSpaceInterface();
+
+	SMikkTSpaceInterface mkInterface;
+};
+
+static idMikkTSpaceInterface mikkTSpaceInterface;
+
+static void SetUpMikkTSpaceContext( SMikkTSpaceContext* context );
+
+// SP end
+// ==== engine neo/renderer/tr_trisurf.cpp lines 267-351 (R_FreeStaticTriSurfVertexCaches, R_FreeStaticTriSurf) ====
+/*
+==============
+R_FreeStaticTriSurfVertexCaches
+==============
+*/
+void R_FreeStaticTriSurfVertexCaches( srfTriangles_t* tri )
+{
+	// we don't support reclaiming static geometry memory
+	// without a level change
+	tri->ambientCache = 0;
+	tri->indexCache = 0;
+}
+
+/*
+==============
+R_FreeStaticTriSurf
+==============
+*/
+void R_FreeStaticTriSurf( srfTriangles_t* tri )
+{
+	if( !tri )
+	{
+		return;
+	}
+
+	R_FreeStaticTriSurfVertexCaches( tri );
+
+	if( !tri->referencedVerts )
+	{
+		if( tri->verts != NULL )
+		{
+			// R_CreateLightTris points tri->verts at the verts of the ambient surface
+			if( tri->ambientSurface == NULL || tri->verts != tri->ambientSurface->verts )
+			{
+				Mem_Free( tri->verts );
+			}
+		}
+
+		// RB begin
+		if( tri->mocVerts != NULL )
+		{
+			Mem_Free( tri->mocVerts );
+		}
+		// RB end
+	}
+
+	if( !tri->referencedIndexes )
+	{
+		if( tri->indexes != NULL )
+		{
+			// if a surface is completely inside a light volume R_CreateLightTris points tri->indexes at the indexes of the ambient surface
+			if( tri->ambientSurface == NULL || tri->indexes != tri->ambientSurface->indexes )
+			{
+				Mem_Free( tri->indexes );
+			}
+		}
+		if( tri->silIndexes != NULL )
+		{
+			Mem_Free( tri->silIndexes );
+		}
+		// RB begin
+		if( tri->mocIndexes != NULL )
+		{
+			Mem_Free( tri->mocIndexes );
+		}
+		// RB end
+		if( tri->dominantTris != NULL )
+		{
+			Mem_Free( tri->dominantTris );
+		}
+		if( tri->mirroredVerts != NULL )
+		{
+			Mem_Free( tri->mirroredVerts );
+		}
+		if( tri->dupVerts != NULL )
+		{
+			Mem_Free( tri->dupVerts );
+		}
+	}
+
+	// clear the tri out so we don't retain stale data
+	memset( tri, 0, sizeof( srfTriangles_t ) );
+
+	Mem_Free( tri );
+}
 // ==== engine neo/renderer/tr_trisurf.cpp lines 374-405 (R_AllocStaticTriSurf, R_CopyStaticTriSurf) ====
 /*
 ==============
@@ -129,6 +249,39 @@ void R_AllocStaticTriSurfMirroredVerts( srfTriangles_t* tri, int numMirroredVert
 	assert( tri->mirroredVerts == NULL );
 	tri->mirroredVerts = ( int* )Mem_Alloc16( numMirroredVerts * sizeof( *tri->mirroredVerts ), TAG_TRI_MIR_VERT );
 }
+// ==== engine neo/renderer/tr_trisurf.cpp lines 462-493 (R_AllocStaticTriSurfDupVerts, MocIndexes, MocVerts) ====
+/*
+=================
+R_AllocStaticTriSurfDupVerts
+=================
+*/
+void R_AllocStaticTriSurfDupVerts( srfTriangles_t* tri, int numDupVerts )
+{
+	assert( tri->dupVerts == NULL );
+	tri->dupVerts = ( int* )Mem_Alloc16( numDupVerts * 2 * sizeof( *tri->dupVerts ), TAG_TRI_DUP_VERT );
+}
+
+/*
+=================
+R_AllocStaticTriSurfMocIndexes
+=================
+*/
+void R_AllocStaticTriSurfMocIndexes( srfTriangles_t* tri, int numIndexes )
+{
+	assert( tri->mocIndexes == NULL );
+	tri->mocIndexes = ( unsigned int* )Mem_Alloc16( numIndexes * sizeof( unsigned int ), TAG_TRI_MOC_VERT );
+}
+
+/*
+=================
+R_AllocStaticTriSurfMocVerts
+=================
+*/
+void R_AllocStaticTriSurfMocVerts( srfTriangles_t* tri, int numVerts )
+{
+	assert( tri->mocVerts == NULL );
+	tri->mocVerts = ( idVec4* )Mem_Alloc16( numVerts * sizeof( idVec4 ), TAG_TRI_MOC_VERT );
+}
 // ==== engine neo/renderer/tr_trisurf.cpp lines 495-507 (R_ResizeStaticTriSurfVerts) ====
 /*
 =================
@@ -142,6 +295,63 @@ void R_ResizeStaticTriSurfVerts( srfTriangles_t* tri, int numVerts )
 	memcpy( newVerts, tri->verts, copy * sizeof( idDrawVert ) );
 	Mem_Free( tri->verts );
 	tri->verts = newVerts;
+}
+// ==== engine neo/renderer/tr_trisurf.cpp lines 554-609 (R_RangeCheckIndexes, R_BoundTriSurf) ====
+/*
+===============
+R_RangeCheckIndexes
+
+Check for syntactically incorrect indexes, like out of range values.
+Does not check for semantics, like degenerate triangles.
+
+No vertexes is acceptable if no indexes.
+No indexes is acceptable.
+More vertexes than are referenced by indexes are acceptable.
+===============
+*/
+void R_RangeCheckIndexes( const srfTriangles_t* tri )
+{
+	int		i;
+
+	if( tri->numIndexes < 0 )
+	{
+		common->Error( "R_RangeCheckIndexes: numIndexes < 0" );
+	}
+	if( tri->numVerts < 0 )
+	{
+		common->Error( "R_RangeCheckIndexes: numVerts < 0" );
+	}
+
+	// must specify an integral number of triangles
+	if( tri->numIndexes % 3 != 0 )
+	{
+		common->Error( "R_RangeCheckIndexes: numIndexes %% 3" );
+	}
+
+	for( i = 0; i < tri->numIndexes; i++ )
+	{
+		if( tri->indexes[i] >= tri->numVerts )
+		{
+			common->Error( "R_RangeCheckIndexes: index out of range" );
+		}
+	}
+
+	// this should not be possible unless there are unused verts
+	if( tri->numVerts > tri->numIndexes )
+	{
+		// FIXME: find the causes of these
+		// common->Printf( "R_RangeCheckIndexes: tri->numVerts > tri->numIndexes\n" );
+	}
+}
+
+/*
+=================
+R_BoundTriSurf
+=================
+*/
+void R_BoundTriSurf( srfTriangles_t* tri )
+{
+	SIMDProcessor->MinMax( tri->bounds[0], tri->bounds[1], tri->verts, tri->numVerts );
 }
 // ==== engine neo/renderer/tr_trisurf.cpp lines 611-697 (R_CreateSilRemap, R_CreateSilIndexes) ====
 /*
@@ -230,6 +440,46 @@ void R_CreateSilIndexes( srfTriangles_t* tri )
 	}
 
 	R_StaticFree( remap );
+}
+// ==== engine neo/renderer/tr_trisurf.cpp lines 699-737 (R_CreateDupVerts) ====
+/*
+=====================
+R_CreateDupVerts
+=====================
+*/
+void R_CreateDupVerts( srfTriangles_t* tri )
+{
+	int i;
+
+	idTempArray<int> remap( tri->numVerts );
+
+	// initialize vertex remap in case there are unused verts
+	for( i = 0; i < tri->numVerts; i++ )
+	{
+		remap[i] = i;
+	}
+
+	// set the remap based on how the silhouette indexes are remapped
+	for( i = 0; i < tri->numIndexes; i++ )
+	{
+		remap[tri->indexes[i]] = tri->silIndexes[i];
+	}
+
+	// create duplicate vertex index based on the vertex remap
+	idTempArray<int> tempDupVerts( tri->numVerts * 2 );
+	tri->numDupVerts = 0;
+	for( i = 0; i < tri->numVerts; i++ )
+	{
+		if( remap[i] != i )
+		{
+			tempDupVerts[tri->numDupVerts * 2 + 0] = i;
+			tempDupVerts[tri->numDupVerts * 2 + 1] = remap[i];
+			tri->numDupVerts++;
+		}
+	}
+
+	R_AllocStaticTriSurfDupVerts( tri, tri->numDupVerts );
+	memcpy( tri->dupVerts, tempDupVerts.Ptr(), tri->numDupVerts * 2 * sizeof( tri->dupVerts[0] ) );
 }
 // ==== engine neo/renderer/tr_trisurf.cpp lines 742-866 (R_FaceNegativePolarity, tangentVert_t, R_DuplicateMirroredVertexes) ====
 /*
@@ -356,6 +606,23 @@ static void	R_DuplicateMirroredVertexes( srfTriangles_t* tri )
 			tri->indexes[i] = tverts[tri->indexes[i]].negativeRemap;
 		}
 	}
+}
+// ==== engine neo/renderer/tr_trisurf.cpp lines 868-883 (R_DeriveMikktspaceTangents) ====
+/*
+============
+R_DeriveMikktspaceTangents
+
+Derives the tangent space for the given triangles using the Mikktspace standard.
+Normals must be calculated beforehand.
+============
+*/
+static bool R_DeriveMikktspaceTangents( srfTriangles_t* tri )
+{
+	SMikkTSpaceContext context;
+	SetUpMikkTSpaceContext( &context );
+	context.m_pUserData = tri;
+
+	return ( genTangSpaceDefault( &context ) != 0 );
 }
 // ==== engine neo/renderer/tr_trisurf.cpp lines 885-1093 (R_DeriveNormalsAndTangents, R_DeriveUnsmoothedNormalsAndTangents) ====
 /*
@@ -968,6 +1235,103 @@ void R_RemoveDegenerateTriangles( srfTriangles_t* tri )
 		common->Printf( "removed %i degenerate triangles\n", c_removed );
 	}
 }
+// ==== engine neo/renderer/tr_trisurf.cpp lines 1599-1629 (R_TestDegenerateTextureSpace) ====
+/*
+=================
+R_TestDegenerateTextureSpace
+=================
+*/
+void R_TestDegenerateTextureSpace( srfTriangles_t* tri )
+{
+	int		c_degenerate;
+	int		i;
+
+	// check for triangles with a degenerate texture space
+	c_degenerate = 0;
+	for( i = 0; i < tri->numIndexes; i += 3 )
+	{
+		const idDrawVert& a = tri->verts[tri->indexes[i + 0]];
+		const idDrawVert& b = tri->verts[tri->indexes[i + 1]];
+		const idDrawVert& c = tri->verts[tri->indexes[i + 2]];
+
+		// RB: compare texcoords instead of pointers
+		if( a.GetTexCoord() == b.GetTexCoord() || b.GetTexCoord() == c.GetTexCoord() || c.GetTexCoord() == a.GetTexCoord() )
+		{
+			c_degenerate++;
+		}
+		// RB end
+	}
+
+	if( c_degenerate )
+	{
+//		common->Printf( "%d triangles with a degenerate texture space\n", c_degenerate );
+	}
+}
+// ==== engine neo/renderer/tr_trisurf.cpp lines 1704-1767 (R_MergeSurfaceList, R_MergeTriangles) ====
+/*
+=================
+R_MergeSurfaceList
+
+Only deals with vertexes and indexes, not silhouettes, planes, etc.
+Does NOT perform a cleanup triangles, so there may be duplicated verts in the result.
+=================
+*/
+srfTriangles_t* R_MergeSurfaceList( const srfTriangles_t** surfaces, int numSurfaces )
+{
+	srfTriangles_t*	newTri;
+	const srfTriangles_t*	tri;
+	int				i, j;
+	int				totalVerts;
+	int				totalIndexes;
+
+	totalVerts = 0;
+	totalIndexes = 0;
+	for( i = 0; i < numSurfaces; i++ )
+	{
+		totalVerts += surfaces[i]->numVerts;
+		totalIndexes += surfaces[i]->numIndexes;
+	}
+
+	newTri = R_AllocStaticTriSurf();
+	newTri->numVerts = totalVerts;
+	newTri->numIndexes = totalIndexes;
+	R_AllocStaticTriSurfVerts( newTri, newTri->numVerts );
+	R_AllocStaticTriSurfIndexes( newTri, newTri->numIndexes );
+
+	totalVerts = 0;
+	totalIndexes = 0;
+	for( i = 0; i < numSurfaces; i++ )
+	{
+		tri = surfaces[i];
+		memcpy( newTri->verts + totalVerts, tri->verts, tri->numVerts * sizeof( *tri->verts ) );
+		for( j = 0; j < tri->numIndexes; j++ )
+		{
+			newTri->indexes[ totalIndexes + j ] = totalVerts + tri->indexes[j];
+		}
+		totalVerts += tri->numVerts;
+		totalIndexes += tri->numIndexes;
+	}
+
+	return newTri;
+}
+
+/*
+=================
+R_MergeTriangles
+
+Only deals with vertexes and indexes, not silhouettes, planes, etc.
+Does NOT perform a cleanup triangles, so there may be duplicated verts in the result.
+=================
+*/
+srfTriangles_t* R_MergeTriangles( const srfTriangles_t* tri1, const srfTriangles_t* tri2 )
+{
+	const srfTriangles_t*	tris[2];
+
+	tris[0] = tri1;
+	tris[1] = tri2;
+
+	return R_MergeSurfaceList( tris, 2 );
+}
 // ==== engine neo/renderer/tr_trisurf.cpp lines 1769-1801 (R_ReverseTriangles) ====
 /*
 =================
@@ -1000,5 +1364,170 @@ void R_ReverseTriangles( srfTriangles_t* tri )
 		temp = tri->indexes[ i + 0 ];
 		tri->indexes[ i + 0 ] = tri->indexes[ i + 1 ];
 		tri->indexes[ i + 1 ] = temp;
+	}
+}
+// ==== engine neo/renderer/tr_trisurf.cpp lines 1803-1847 (R_CleanupTriangles) ====
+/*
+=================
+R_CleanupTriangles
+
+FIXME: allow createFlat and createSmooth normals, as well as explicit
+=================
+*/
+void R_CleanupTriangles( srfTriangles_t* tri, bool createNormals, bool identifySilEdges, bool useUnsmoothedTangents, bool useMikktspace )
+{
+	R_RangeCheckIndexes( tri );
+
+	R_CreateSilIndexes( tri );
+
+//	R_RemoveDuplicatedTriangles( tri );	// this may remove valid overlapped transparent triangles
+
+	R_RemoveDegenerateTriangles( tri );
+
+	R_TestDegenerateTextureSpace( tri );
+
+//	R_RemoveUnusedVerts( tri );
+
+	// bust vertexes that share a mirrored edge into separate vertexes
+	R_DuplicateMirroredVertexes( tri );
+
+	R_CreateDupVerts( tri );
+
+	R_BoundTriSurf( tri );
+
+	if( useUnsmoothedTangents )
+	{
+		R_BuildDominantTris( tri );
+		R_DeriveTangents( tri );
+	}
+	else if( !createNormals )
+	{
+		R_DeriveTangentsWithoutNormals( tri, useMikktspace );
+	}
+	else
+	{
+		R_DeriveTangents( tri );
+	}
+
+	// RB: duplicate data appropiate for MOC SIMD fetches
+	R_CreateMaskedOcclusionCullingTris( tri );
+}
+// ==== engine neo/renderer/tr_trisurf.cpp lines 2073-2165 (the MikkTSpace callbacks, idMikkTSpaceInterface's constructor, SetUpMikkTSpaceContext) ====
+// SP begin
+static void* mkAlloc( int bytes )
+{
+	return R_StaticAlloc( bytes );
+}
+
+static void mkFree( void* mem )
+{
+	R_StaticFree( mem );
+}
+
+static int mkGetNumFaces( const SMikkTSpaceContext* pContext )
+{
+	srfTriangles_t* tris = reinterpret_cast<srfTriangles_t*>( pContext->m_pUserData );
+	return tris->numIndexes / 3;
+}
+
+static int mkGetNumVerticesOfFace( const SMikkTSpaceContext* pContext, const int iFace )
+{
+	return 3;
+}
+
+static void mkGetPosition( const SMikkTSpaceContext* pContext, float fvPosOut[], const int iFace, const int iVert )
+{
+	srfTriangles_t* tris = reinterpret_cast<srfTriangles_t*>( pContext->m_pUserData );
+
+	const int vertIndex = iFace * 3;
+	const int index = tris->indexes[vertIndex + iVert];
+	const idDrawVert& vert = tris->verts[index];
+
+	fvPosOut[0] = vert.xyz[0];
+	fvPosOut[1] = vert.xyz[1];
+	fvPosOut[2] = vert.xyz[2];
+}
+
+static void mkGetNormal( const SMikkTSpaceContext* pContext, float fvNormOut[], const int iFace, const int iVert )
+{
+	srfTriangles_t* tris = reinterpret_cast<srfTriangles_t*>( pContext->m_pUserData );
+
+	const int vertIndex = iFace * 3;
+	const int index = tris->indexes[vertIndex + iVert];
+	const idDrawVert& vert = tris->verts[index];
+
+	const idVec3 norm = vert.GetNormal();
+	fvNormOut[0] = norm.x;
+	fvNormOut[1] = norm.y;
+	fvNormOut[2] = norm.z;
+}
+
+static void mkGetTexCoord( const SMikkTSpaceContext* pContext, float fvTexcOut[], const int iFace, const int iVert )
+{
+	srfTriangles_t* tris = reinterpret_cast<srfTriangles_t*>( pContext->m_pUserData );
+
+	const int vertIndex = iFace * 3;
+	const int index = tris->indexes[vertIndex + iVert];
+	const idDrawVert& vert = tris->verts[index];
+
+	const idVec2 texCoord = vert.GetTexCoord();
+	fvTexcOut[0] = texCoord.x;
+	fvTexcOut[1] = texCoord.y;
+}
+
+static void mkSetTSpaceBasic( const SMikkTSpaceContext* pContext, const float fvTangent[], const float fSign, const int iFace, const int iVert )
+{
+	srfTriangles_t* tris = reinterpret_cast<srfTriangles_t*>( pContext->m_pUserData );
+
+	const int vertIndex = iFace * 3;
+	const int index = tris->indexes[vertIndex + iVert];
+
+	const idVec3 tangent( fvTangent[0], fvTangent[1], fvTangent[2] );
+	tris->verts[index].SetTangent( tangent );
+	tris->verts[index].SetBiTangentSign( fSign );
+}
+
+idMikkTSpaceInterface::idMikkTSpaceInterface()
+	: mkInterface()
+{
+	mkInterface.m_alloc = mkAlloc;
+	mkInterface.m_free = mkFree;
+	mkInterface.m_getNumFaces = mkGetNumFaces;
+	mkInterface.m_getNumVerticesOfFace = mkGetNumVerticesOfFace;
+	mkInterface.m_getPosition = mkGetPosition;
+	mkInterface.m_getNormal = mkGetNormal;
+	mkInterface.m_getTexCoord = mkGetTexCoord;
+	mkInterface.m_setTSpaceBasic = mkSetTSpaceBasic;
+}
+
+static void SetUpMikkTSpaceContext( SMikkTSpaceContext* context )
+{
+	context->m_pInterface = &mikkTSpaceInterface.mkInterface;
+}
+
+// SP end
+// ==== engine neo/renderer/tr_trisurf.cpp lines 2267-2290 (R_CreateMaskedOcclusionCullingTris) ====
+void R_CreateMaskedOcclusionCullingTris( srfTriangles_t* tri )
+{
+	//assert( tri->mocVerts == NULL );
+	if( tri->mocVerts == NULL )
+	{
+		R_AllocStaticTriSurfMocVerts( tri, tri->numVerts );
+
+		for( int i = 0; i < tri->numVerts; i++ )
+		{
+			tri->mocVerts[i].ToVec3() = tri->verts[i].xyz;
+			tri->mocVerts[i].w = 1.0f;
+		}
+	}
+
+	if( tri->mocIndexes == NULL )
+	{
+		R_AllocStaticTriSurfMocIndexes( tri, tri->numIndexes );
+
+		for( int i = 0; i < tri->numIndexes; i++ )
+		{
+			tri->mocIndexes[i] = tri->indexes[i];
+		}
 	}
 }

@@ -66,6 +66,11 @@ extern idDeclManagerLocal* tbLitDeclManagerLocal;
 // the game file through the source's readGameFile (no decl bookkeeping, no token scan)
 // and validates it with imageFileProblem before the loader sees it (D51). A file that
 // fails is read as missing, and kept, once per path, for endImageReads.
+//
+// LP7.1a (C51, P7.4, P7.13): between beginModelRead and endModelRead, where the copied
+// OBJ_Load reads, ReadFile serves the one file it was handed: its bytes and the time the
+// caller gives (the file source's, A4), never a read of the disk or the checkout's time;
+// any other name reads as missing.
 class idFileSystemLocal : public idFileSystem
 {
 public:
@@ -97,6 +102,11 @@ public:
   // ImageReads begins them and ends them however its scope is left
   void beginImageReads();
   std::vector<ImageRejection> endImageReads();
+
+  // LP7.1a: the model file the copied loaders read between these (parse thread); not
+  // nested. tb::lit::shim::ModelRead begins and ends them
+  void beginModelRead(std::string path, std::string bytes, std::int64_t time);
+  void endModelRead();
 
   // every file a probe or an image read looks for between these, in order, found or not
   // (LP1c fix S2.5: a missing one has a Missing probe) (parse thread); not nested
@@ -133,6 +143,15 @@ private:
   std::vector<ImageRejection> m_rejections;
   bool m_recording = false;
   std::vector<FoundFile> m_found;
+  // LP7.1a: the model file handed in (beginModelRead)
+  struct ModelFile
+  {
+    std::string path;
+    std::string bytes;
+    std::int64_t time = 0;
+  };
+  std::optional<ModelFile> m_modelRead;
+  int readModelFile(const std::string& path, void** buffer, ID_TIME_T* timestamp) const;
 };
 
 namespace tb::lit::shim
@@ -178,6 +197,30 @@ public:
 private:
   idFileSystemLocal& m_files;
   bool m_taken = false;
+};
+
+/**
+ * LP7.1a: a model read (idFileSystemLocal::beginModelRead), begun when it is made and
+ * ended however its scope is left, so that a later decl read never takes the model's
+ * bytes.
+ */
+class ModelRead
+{
+public:
+  ModelRead(
+    idFileSystemLocal& files, std::string path, std::string bytes, std::int64_t time)
+    : m_files{files}
+  {
+    m_files.beginModelRead(std::move(path), std::move(bytes), time);
+  }
+
+  ~ModelRead() { m_files.endModelRead(); }
+
+  ModelRead(const ModelRead&) = delete;
+  ModelRead& operator=(const ModelRead&) = delete;
+
+private:
+  idFileSystemLocal& m_files;
 };
 
 // LP1c fix (S2.5): what a recording (idFileSystemLocal::endRecording) looked for: the

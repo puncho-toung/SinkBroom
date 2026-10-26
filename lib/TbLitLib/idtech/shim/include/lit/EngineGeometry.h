@@ -330,10 +330,10 @@ enum class EngineTangentPath
   // unsmoothedTangents: R_BuildDominantTris, then R_DeriveTangents, which derives the
   // normals too
   Unsmoothed,
-  // mikktspace: R_DeriveTangentsWithoutNormals( tri, true ), whose MikkTSpace call fails
-  // here (it is not copied, Q18), so the copy warns "Mikkelsen tangent space calculation
-  // failed" and derives without normals, as the engine does when MikkTSpace fails
-  // (mirror.json M-ID-DIFF-04)
+  // mikktspace: R_DeriveTangentsWithoutNormals( tri, true ), LP7.1a (D135, P7.16): the
+  // copied MikkTSpace (engine/libs/mikktspace) through the engine's callbacks; where the
+  // library fails, the copy warns "Mikkelsen tangent space calculation failed" and
+  // derives without normals, as the engine does (mirror.json M-ID-DIFF-04)
   Mikktspace,
 };
 
@@ -347,11 +347,13 @@ struct EngineTriangles
 };
 
 /**
- * R_CleanupTriangles' steps on a surface without generated normals, in its order: the
- * index range check (as pre-validation), R_CreateSilIndexes, R_RemoveDegenerateTriangles,
- * R_DuplicateMirroredVertexes, then the tangents of path (R_CreateDupVerts changes
- * nothing drawn and is left out, D57). Null when an index is out of range, the index
- * count is no multiple of three, or there are more than MaxSurfaceVertices vertices.
+ * R_CleanupTriangles' steps on a surface without generated normals (a brush face or a
+ * patch), in its order: the index range check (as pre-validation), R_CreateSilIndexes,
+ * R_RemoveDegenerateTriangles, R_DuplicateMirroredVertexes, then the tangents of path
+ * (R_CreateDupVerts changes nothing drawn without generated normals and is not called,
+ * D57; a model's surfaces take the whole R_CleanupTriangles, lit/EngineModels.h). Null
+ * when an index is out of range, the index count is no multiple of three, or there are
+ * more than MaxSurfaceVertices vertices.
  */
 std::optional<EngineTriangles> engineCleanupTriangles(
   std::vector<EngineDrawVert> verts,
