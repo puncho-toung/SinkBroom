@@ -1158,6 +1158,15 @@ constexpr auto GpuStagesMs = std::size_t{53};
 constexpr auto FogDraws = std::size_t{54};
 constexpr auto BlendDraws = std::size_t{55};
 constexpr auto GpuFogMs = std::size_t{56};
+// LP7.2 (C52, C56, P7.14): the models' counts (LP7.0's columns), the dress decals' and
+// the adoption's triangles
+constexpr auto ModelEntities = std::size_t{58};
+constexpr auto ModelInstances = std::size_t{59};
+constexpr auto ModelDraws = std::size_t{60};
+constexpr auto ModelsPending = std::size_t{61};
+constexpr auto ModelsSkinned = std::size_t{62};
+constexpr auto DressSurfaces = std::size_t{63};
+constexpr auto AdoptedTris = std::size_t{66};
 // LPF.1 (C44, P5.21): and the live feed's three (feed_applied, feed_ms, override_bytes);
 // LP5.1 (C45): and the interaction phases' two (math_lights, ambient_lights); LP5.2a
 // (C46): and the stage pass's three (stage_draws, stage_skipped, gpu_stages_ms); LP5.3
@@ -1304,6 +1313,16 @@ struct StartMeasure
   double firstSettledMs = -1;
   std::uint64_t settledFrame = 0;
   double settledMs = -1;
+  // LP7.2 (C52, P7.14): from the frame log, the first lit frame that drew a model
+  // instance, and the first frame with model entities none of which waits for its
+  // record (the model set loaded); when settled for good, the scene's models and the
+  // parse thread's model work
+  std::uint64_t modelLitFrame = 0;
+  double modelLitMs = -1;
+  std::uint64_t modelsLoadedFrame = 0;
+  double modelsLoadedMs = -1;
+  lit::ModelTotals models;
+  lit::MaterialServiceStats service;
   // the compile thread by the first lit frame and by the end
   lit::CompileTimings compileAtFirstLit;
   lit::CompileTimings compileAtSettled;
@@ -1366,9 +1385,25 @@ struct StartMeasure
       {
         completeLitFrame = i + 1;
       }
+      // LP7.2 (P7.14)
+      if (
+        interactions > 0 && rows[i].number(column::ModelDraws).value_or(0) > 0
+        && modelLitFrame == 0)
+      {
+        modelLitFrame = i + 1;
+      }
+      if (
+        rows[i].number(column::ModelEntities).value_or(0) > 0
+        && rows[i].number(column::ModelsPending).value_or(1) == 0
+        && modelsLoadedFrame == 0)
+      {
+        modelsLoadedFrame = i + 1;
+      }
     }
     firstLitMs = msOf(firstLitFrame);
     completeLitMs = msOf(completeLitFrame);
+    modelLitMs = msOf(modelLitFrame);
+    modelsLoadedMs = msOf(modelsLoadedFrame);
     if (const auto* r = record(firstLitFrame))
     {
       compileAtFirstLit = r->compile;
@@ -1863,6 +1898,12 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     measure.findSettled();
     REQUIRE(measure.settledFrame > 0);
     measure.compileAtSettled = session->compileTimingsForTesting();
+    // LP7.2 (P7.14): the scene's models and the parse thread's model work, settled
+    measure.models = session->modelTotalsForTesting();
+    if (const auto* service = session->materialServiceForTesting())
+    {
+      measure.service = service->stats();
+    }
     if (measure.compileAtSettled.lastJobEnd)
     {
       measure.lastCompileEndMs =
@@ -2130,6 +2171,60 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       measure->completeLitFrame,
       pass(measure->firstLitMs <= 1000.0));
   }
+  // LP7.2 (C52, C56, P7.14): the models, against LP5.3's first lit frames (1.33-1.41 s)
+  for (const auto* measure : {&first, &second, &third})
+  {
+    summary += fmt::format(
+      "| Start → first lit frame with a model drawn, {} Start; → the model set loaded "
+      "(no record pending) | {} (frame {}); {} (frame {}) | LP5.3's first lit frame "
+      "1.33–1.41 s | — |\n",
+      measure->label,
+      msText(measure->modelLitMs),
+      measure->modelLitFrame,
+      msText(measure->modelsLoadedMs),
+      measure->modelsLoadedFrame);
+  }
+  {
+    const auto& models = first.models;
+    const auto& service = first.service;
+    summary += fmt::format(
+      "| The models (first Start, settled) | {} model entities, {} instances; the "
+      "arenas' {} shared surfaces of {} records placed, {}; the table's {} records, {} "
+      "(model_bytes {} in all); {} finishes on the pool, the longest parse-thread item "
+      "{:.1f} ms, the longest pool job {:.1f} ms | — | — |\n",
+      models.entities,
+      models.instances,
+      models.placements,
+      models.records,
+      mb(double(models.placementBytes)),
+      service.models,
+      mb(double(service.modelBytes)),
+      mb(double(service.modelBytes + models.placementBytes)),
+      service.modelFinishes,
+      service.longestModelItemMs,
+      service.longestModelFinishMs);
+  }
+  if (first.settledFrame > 0 && first.settledFrame <= firstRows.size())
+  {
+    const auto& start = firstRows[first.settledFrame - 1];
+    const auto field = [&](const std::size_t c) {
+      const auto& text = start.at(c);
+      return text.empty() ? std::string{"-"} : text;
+    };
+    summary += fmt::format(
+      "| The models at the first Start's settled frame (frame {}) | {} model entities, "
+      "{} instances, {} model draws, {} pending, {} skinned; {} adopted triangles "
+      "(D138: admin's tree is a .bproc, nothing adopted), {} dress surfaces | — | — "
+      "|\n",
+      first.settledFrame,
+      field(column::ModelEntities),
+      field(column::ModelInstances),
+      field(column::ModelDraws),
+      field(column::ModelsPending),
+      field(column::ModelsSkinned),
+      field(column::AdoptedTris),
+      field(column::DressSurfaces));
+  }
   summary += fmt::format(
     "| material reload → first frame on the rebuilt chunks; → settled | {}; {} | — | — "
     "|\n",
@@ -2317,6 +2412,8 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   line("fog draws", column::FogDraws);
   line("blend draws", column::BlendDraws);
   line("GPU fog ms", column::GpuFogMs);
+  // LP7.2 (C52): the models' draws
+  line("model draws", column::ModelDraws);
   const auto writeBudget = firstRows[orbitBegin].number(column::VolatileWriteBudget);
   // D86 with D76's rule: set 9's own buffer keeps maxVersions 8192 while the most writes
   // a frame made, doubled with a margin of 64, stay within the frame's budget
