@@ -61,10 +61,6 @@
 #include <thread>
 #include <vector>
 
-#if defined(_MSC_VER) && defined(_DEBUG)
-#include <crtdbg.h>
-#endif
-
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
@@ -2175,20 +2171,7 @@ TEST_CASE("SceneGeometry: 100 re-parses with the scene leave the heap (LPF.0b)")
 TEST_CASE(
   "SceneGeometry: 50 snapshots, chunk batches and light jobs leave the heap (R2.14)")
 {
-  const auto heapGrows = [](const auto& f) {
-    _CrtMemState before;
-    _CrtMemCheckpoint(&before);
-    f();
-    _CrtMemState after;
-    _CrtMemCheckpoint(&after);
-    _CrtMemState difference;
-    const auto grew = _CrtMemDifference(&difference, &before, &after) != 0;
-    if (grew)
-    {
-      _CrtMemDumpStatistics(&difference);
-    }
-    return grew;
-  };
+  // LP7.1b step 0: the shared measure (LitTestUtils.h), neutral to threads
   const auto mapWith = [](const int x) {
     return mapText(
       "",

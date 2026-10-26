@@ -2620,6 +2620,44 @@ TEST_CASE("MaterialService leak check sees an injected leak", "[!shouldfail]")
   });
   CHECK_FALSE(grew);
 }
+
+// LP7.1b step 0: the control's source in a window that also starts and stops its service,
+// so that nothing of the service is alive at the dump: the dump lists the five builds'
+// planted blocks (a 256-character string each: its object, its proxy, its buffer) and no
+// other (the control's own dump lists these among the last build's live tables). No
+// INFO or CAPTURE in the window: each re-makes the buffer of Catch2's pooled message
+// stream (catch_reusable_string_stream.cpp:55, a 17-byte block that nets to 0, the
+// one 49-START-STOP-HEAP-FLAKE.md §2 left unidentified), which the dump would list too
+TEST_CASE("MaterialService leak check's dump lists the injected leak's blocks")
+{
+  const auto run = [&] {
+    auto service = start(options([](const std::atomic<bool>&) {
+      return std::unique_ptr<DeclSource>{std::make_unique<LeakingSource>()};
+    }));
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.builds == 1u && s.idle; }, Timeout));
+    for (std::uint64_t i = 0; i < 4; ++i)
+    {
+      service->reload();
+      REQUIRE(service->waitForStatsForTesting(
+        [&](const auto& s) { return s.builds == i + 2 && s.idle; }, Timeout));
+    }
+    service->requestStop();
+    service->join();
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  };
+  // what the first run makes for good
+  run();
+
+  const auto dumped = DumpCounter{};
+  const auto measure = measureHeap(run, true);
+  CHECK(measure.threads() == 0);
+  CHECK_FALSE(measure.threadLeak());
+  CHECK(measure.blocks == 15);
+  CHECK(measure.bytes == 1640);
+  INFO(dumped.text());
+  CHECK(dumped.blocks() == 15);
+}
 #endif
 
 } // namespace tb::lit

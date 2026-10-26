@@ -19,6 +19,7 @@
 
 #include "LitTestUtils.h"
 
+#include "StackThread.h"
 #include "TestEnvironment.h"
 
 #if defined(_WIN32)
@@ -38,7 +39,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 
@@ -46,6 +50,7 @@
 #include <crtdbg.h>
 #endif
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 namespace tb::lit
@@ -328,26 +333,304 @@ std::string describeThreads(const std::vector<ProcessThread>& threads)
 }
 
 #if defined(_MSC_VER) && defined(_DEBUG)
-bool heapGrows(const std::function<void()>& f)
+namespace
 {
-  _CrtMemState before;
-  _CrtMemCheckpoint(&before);
-  f();
-  _CrtMemState after;
-  _CrtMemCheckpoint(&after);
-  _CrtMemState difference;
-  const auto grew = _CrtMemDifference(&difference, &before, &after) != 0;
-  if (grew)
+
+/**
+ * LP7.1b step 0: the threads that carry Catch2's pair (CatchThreadBlocks). A thread_local
+ * of this executable is made, like Catch2's g_messages and g_messageScopes, by the
+ * executable's TLS callback when a thread starts (MSVC initialises namespace-scope
+ * thread_locals there, 49-START-STOP-HEAP-FLAKE.md §2) and destroyed when the thread
+ * ends; a thread that never gets the callback (the loader's workers, which live about 60
+ * s, the investigation's ten-second trios) carries neither. Each live witness holds its
+ * thread's id in a constinit slot: nothing is allocated, so the witness costs the heap
+ * nothing.
+ */
+constexpr auto CarrierSlots = std::size_t{1024};
+constinit std::array<std::atomic<unsigned long>, CarrierSlots> s_carriers{};
+using Carriers = std::array<unsigned long, CarrierSlots>;
+
+struct CarrierWitness
+{
+  CarrierWitness() noexcept
   {
-    // the statistics and the blocks still allocated since, on stderr
-    const auto mode = _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
-    const auto file = _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
+    const auto id = static_cast<unsigned long>(GetCurrentThreadId());
+    for (auto& slot : s_carriers)
+    {
+      auto expected = 0ul;
+      if (slot.compare_exchange_strong(expected, id))
+      {
+        return;
+      }
+    }
+  }
+
+  ~CarrierWitness()
+  {
+    const auto id = static_cast<unsigned long>(GetCurrentThreadId());
+    for (auto& slot : s_carriers)
+    {
+      auto expected = id;
+      if (slot.compare_exchange_strong(expected, 0ul))
+      {
+        return;
+      }
+    }
+  }
+
+  CarrierWitness(const CarrierWitness&) = delete;
+  CarrierWitness& operator=(const CarrierWitness&) = delete;
+
+  bool alive = true;
+};
+
+thread_local CarrierWitness t_carrier;
+
+void takeCarriers(Carriers& carriers)
+{
+  for (std::size_t i = 0; i < CarrierSlots; ++i)
+  {
+    carriers[i] = s_carriers[i].load();
+  }
+}
+
+// the ids in `of` that `in` does not hold
+long long carriersMissing(const Carriers& of, const Carriers& in)
+{
+  auto missing = 0LL;
+  for (const auto id : of)
+  {
+    if (id != 0 && std::ranges::find(in, id) == in.end())
+    {
+      ++missing;
+    }
+  }
+  return missing;
+}
+
+bool carries(const Carriers& carriers, const unsigned long id)
+{
+  return std::ranges::find(carriers, id) != carriers.end();
+}
+
+// a checkpoint and the carriers at it, taken again while a thread starts or ends between
+// the two (nothing is allocated here: the sentinel stays the newest block)
+void checkpointWithCarriers(_CrtMemState& state, Carriers& carriers)
+{
+  auto first = Carriers{};
+  do
+  {
+    takeCarriers(first);
+    _CrtMemCheckpoint(&state);
+    takeCarriers(carriers);
+  } while (first != carriers);
+}
+
+struct SentinelFree
+{
+  void operator()(void* block) const { _free_dbg(block, _NORMAL_BLOCK); }
+};
+
+void report(const char* text)
+{
+  _CrtDbgReport(_CRT_WARN, nullptr, 0, nullptr, "%s", text);
+}
+
+std::string describeWithCarriers(
+  const std::vector<ProcessThread>& threads, const Carriers& carriers)
+{
+  if (threads.empty())
+  {
+    return "none";
+  }
+  auto text = std::string{};
+  for (const auto& thread : threads)
+  {
+    text += fmt::format(
+      "{}{} (id {}{})",
+      text.empty() ? "" : ", ",
+      thread.where,
+      thread.id,
+      carries(carriers, thread.id) ? ", Catch2's pair" : "");
+  }
+  return text;
+}
+
+} // namespace
+
+HeapMeasure measureHeap(const std::function<void()>& f, const bool dump)
+{
+  // this thread's witness, made at its start
+  static_cast<void>(t_carrier.alive);
+  // allocated before the sentinel: older than the checkpoint, freed after the second one
+  const auto threadsBefore = processCounts();
+  auto carriersBefore = Carriers{};
+  auto carriersAfter = Carriers{};
+
+  const auto sentinel = std::unique_ptr<void, SentinelFree>{
+    _malloc_dbg(1, _NORMAL_BLOCK, __FILE__, __LINE__)};
+  _CrtMemState before;
+  checkpointWithCarriers(before, carriersBefore);
+  const auto libraryBefore = liveLibraryThreads();
+  f();
+  const auto libraryAfter = liveLibraryThreads();
+  _CrtMemState after;
+  checkpointWithCarriers(after, carriersAfter);
+
+  const auto measure = HeapMeasure{
+    static_cast<long long>(after.lCounts[_NORMAL_BLOCK])
+      - static_cast<long long>(before.lCounts[_NORMAL_BLOCK]),
+    static_cast<long long>(after.lSizes[_NORMAL_BLOCK])
+      - static_cast<long long>(before.lSizes[_NORMAL_BLOCK]),
+    static_cast<long long>(after.lSizes[_CLIENT_BLOCK])
+      - static_cast<long long>(before.lSizes[_CLIENT_BLOCK]),
+    carriersMissing(carriersAfter, carriersBefore),
+    carriersMissing(carriersBefore, carriersAfter),
+    libraryBefore,
+    libraryAfter};
+
+  const auto dumped = dump && (measure.grew() || measure.threadLeak());
+  auto mode = 0;
+  auto file = _HFILE{};
+  if (dumped)
+  {
+    mode = _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
+    file = _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
+    // the measure, the statistics and the blocks since the checkpoint first, before
+    // anything is allocated after it (no heap here: the walk lists only the window's)
+    auto sentinelRequest = 0L;
+    _CrtIsMemoryBlock(sentinel.get(), 1, &sentinelRequest, nullptr, nullptr);
+    auto header = std::array<char, 512>{};
+    std::snprintf(
+      header.data(),
+      header.size(),
+      "heap measure: %lld normal blocks, %lld bytes, %lld client bytes since the "
+      "checkpoint (the sentinel {%ld}: the walk stops there); threads with Catch2's "
+      "pair born %lld, gone %lld (theirs: %lld blocks, %lld bytes); library threads "
+      "%lld before, %lld after\n",
+      measure.blocks,
+      measure.bytes,
+      measure.clientBytes,
+      sentinelRequest,
+      measure.threadsBorn,
+      measure.threadsGone,
+      CatchThreadBlocks * measure.threads(),
+      CatchThreadBytes * measure.threads(),
+      static_cast<long long>(libraryBefore),
+      static_cast<long long>(libraryAfter));
+    report(header.data());
+    _CrtMemState difference;
+    _CrtMemDifference(&difference, &before, &after);
     _CrtMemDumpStatistics(&difference);
     _CrtMemDumpAllObjectsSince(&before);
+  }
+
+  const auto threadsAfter = processCounts();
+  if (dumped)
+  {
+    const auto text = fmt::format(
+      "threads born: {}\nthreads gone: {}\n",
+      describeWithCarriers(newThreads(threadsBefore, threadsAfter), carriersAfter),
+      describeWithCarriers(newThreads(threadsAfter, threadsBefore), carriersBefore));
+    report(text.c_str());
     _CrtSetReportFile(_CRT_WARN, file);
     _CrtSetReportMode(_CRT_WARN, mode);
   }
-  return grew;
+  return measure;
+}
+
+bool heapGrows(const std::function<void()>& f)
+{
+  const auto measure = measureHeap(f, true);
+  if (measure.grew())
+  {
+    UNSCOPED_INFO(fmt::format(
+      "the heap grew: {} normal blocks, {} bytes, {} client bytes, where the threads "
+      "born ({}) and gone ({}) account for {} blocks, {} bytes",
+      measure.blocks,
+      measure.bytes,
+      measure.clientBytes,
+      measure.threadsBorn,
+      measure.threadsGone,
+      CatchThreadBlocks * measure.threads(),
+      CatchThreadBytes * measure.threads()));
+  }
+  if (measure.threadLeak())
+  {
+    UNSCOPED_INFO(fmt::format(
+      "a thread leak: {} library thread(s) before the window, {} after it",
+      measure.libraryThreadsBefore,
+      measure.libraryThreadsAfter));
+  }
+  return measure.grew() || measure.threadLeak();
+}
+
+namespace
+{
+
+std::atomic<int> s_dumpedBlocks{0};
+// the report's text, its first DumpTextBytes kept (a constinit buffer: no heap)
+constexpr auto DumpTextBytes = std::size_t{64} * 1024;
+constinit std::array<char, DumpTextBytes> s_dumpText{};
+std::atomic<std::size_t> s_dumpTextSize{0};
+
+int countDumpedBlocks(const int reportType, char* message, int* returnValue)
+{
+  if (reportType != _CRT_WARN)
+  {
+    return FALSE;
+  }
+  if (message != nullptr)
+  {
+    if (std::strstr(message, "normal block at") != nullptr)
+    {
+      ++s_dumpedBlocks;
+    }
+    const auto length = std::strlen(message);
+    const auto at = s_dumpTextSize.fetch_add(length);
+    if (at < DumpTextBytes)
+    {
+      std::memcpy(s_dumpText.data() + at, message, std::min(length, DumpTextBytes - at));
+    }
+  }
+  if (returnValue != nullptr)
+  {
+    *returnValue = 0;
+  }
+  return TRUE;
+}
+
+} // namespace
+
+DumpCounter::DumpCounter()
+{
+  s_dumpedBlocks = 0;
+  s_dumpTextSize = 0;
+  _CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, &countDumpedBlocks);
+}
+
+DumpCounter::~DumpCounter()
+{
+  _CrtSetReportHook2(_CRT_RPTHOOK_REMOVE, &countDumpedBlocks);
+}
+
+int DumpCounter::blocks() const
+{
+  return s_dumpedBlocks.load();
+}
+
+std::string DumpCounter::text() const
+{
+  return {s_dumpText.data(), std::min(s_dumpTextSize.load(), DumpTextBytes)};
+}
+
+std::size_t carrierThreadsForTesting()
+{
+  static_cast<void>(t_carrier.alive);
+  auto carriers = Carriers{};
+  takeCarriers(carriers);
+  return std::size_t(
+    std::ranges::count_if(carriers, [](const auto id) { return id != 0; }));
 }
 
 HeapGrowth heapGrowth(const std::function<void()>& f)

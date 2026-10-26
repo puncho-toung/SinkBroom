@@ -22,6 +22,7 @@
 #include "lit/MaterialDecls.h"
 
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -152,9 +153,85 @@ std::vector<ProcessThread> newForeignThreads(
 std::string describeThreads(const std::vector<ProcessThread>& threads);
 
 #if defined(_MSC_VER) && defined(_DEBUG)
-// runs f between two checkpoints of the CRT's debug heap; true when the heap grew, with
-// its statistics dumped
+/**
+ * LP7.1b step 0 (49-START-STOP-HEAP-FLAKE.md): what a thread costs the debug heap that is
+ * not the product's. Catch2 v3.10 gives every thread of the executable two thread_local
+ * vectors (catch_run_context.cpp:197 g_messages, :200 g_messageScopes), and under
+ * _ITERATOR_DEBUG_LEVEL 2 each owns one 16-byte _Container_proxy from the thread's start
+ * to its end: a thread born inside a measured window and alive at its end (an OS thread
+ * included) shows as 2 normal blocks and 32 bytes, one alive at its start and gone at its
+ * end as minus that. The CRT's per-thread data are CRT blocks, which the measure ignores.
+ */
+constexpr auto CatchThreadBlocks = 2LL;
+constexpr auto CatchThreadBytes = 32LL;
+
+/**
+ * One measured window: the normal blocks and bytes the heap holds more at its end than at
+ * its start, the client-block bytes likewise, the threads carrying Catch2's pair born and
+ * gone in between (k = born - gone; the executable's own thread_local witness tells them
+ * apart from threads that never get the executable's TLS callback, the loader's workers,
+ * which carry no pair), and this library's live threads (liveLibraryThreads) at both
+ * ends.
+ */
+struct HeapMeasure
+{
+  long long blocks = 0;
+  long long bytes = 0;
+  long long clientBytes = 0;
+  long long threadsBorn = 0;
+  long long threadsGone = 0;
+  std::int64_t libraryThreadsBefore = 0;
+  std::int64_t libraryThreadsAfter = 0;
+
+  long long threads() const { return threadsBorn - threadsGone; }
+  // the heap holds more (or less) than the threads' pairs: not exactly 2·k blocks and
+  // 32·k bytes, or any client bytes
+  bool grew() const
+  {
+    return blocks != CatchThreadBlocks * threads()
+           || bytes != CatchThreadBytes * threads() || clientBytes != 0;
+  }
+  // a thread of this library started inside the window and not joined by its end
+  bool threadLeak() const { return libraryThreadsAfter != libraryThreadsBefore; }
+};
+
+/**
+ * Runs f between two checkpoints of the CRT's debug heap and measures it (any thread).
+ * processCounts() is taken before the first checkpoint and after the second; a sentinel
+ * block, allocated just before the first checkpoint and freed after the dump, is the
+ * checkpoint's newest block, so that _CrtMemDumpAllObjectsSince stops there instead of
+ * walking the whole heap when the newest block of the moment is freed inside f. With
+ * dump, a window that grew or leaked a thread writes its measure, the statistics, the
+ * blocks still allocated since the checkpoint and the threads born and gone to the CRT's
+ * warning report (stderr).
+ */
+HeapMeasure measureHeap(const std::function<void()>& f, bool dump);
+
+// measureHeap with its dump: true when the heap grew or a library thread outlived f, the
+// reason (or both) as an unscoped Catch2 message on the caller's next assertion
 bool heapGrows(const std::function<void()>& f);
+
+// the live threads that carry the executable's thread_local witness (and so Catch2's
+// pair)
+std::size_t carrierThreadsForTesting();
+
+/**
+ * For the measure's proofs, on the test's thread, one at a time: while it lives, counts
+ * the blocks a dump lists (its "normal block at" lines in the CRT's warning report) and
+ * keeps that report off stderr, its text at hand.
+ */
+class DumpCounter
+{
+public:
+  DumpCounter();
+  ~DumpCounter();
+  DumpCounter(const DumpCounter&) = delete;
+  DumpCounter& operator=(const DumpCounter&) = delete;
+
+  int blocks() const;
+  // the report's text (its first 64 KiB)
+  std::string text() const;
+};
 
 // the normal blocks and bytes the heap holds more after f than before it (negative for
 // fewer), for a check whose subject keeps a state of a few blocks that varies (a polling
