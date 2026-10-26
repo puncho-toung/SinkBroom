@@ -2696,8 +2696,6 @@ TEST_CASE("MaterialService leak check's dump lists the injected leak's blocks")
   INFO(dumped.text());
   CHECK(dumped.blocks() == 15);
 }
-#endif
-
 
 namespace
 {
@@ -2814,5 +2812,7 @@ TEST_CASE("MaterialService loads glTF models (LP7.5, C51, K40 closes, K41)")
     CHECK(missing->state == ModelRecord::State::Missing);
   }
 }
+
+#endif
 
 } // namespace tb::lit

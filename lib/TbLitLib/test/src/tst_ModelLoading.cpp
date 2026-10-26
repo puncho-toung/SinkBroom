@@ -2909,6 +2909,8 @@ TEST_CASE("ModelLoading, the glTF source path through the copies (LP7.5, C51 (3)
     }
   }
 
+#if defined(_MSC_VER) && defined(_DEBUG)
+  // the CRT debug heap's measure (LitTestUtils.h)
   SECTION(
     "S4: the parse and the finish free what they made (E-LIT-8: the engine leaks "
     "the parsed elements)")
@@ -2921,6 +2923,7 @@ TEST_CASE("ModelLoading, the glTF source path through the copies (LP7.5, C51 (3)
       static_cast<void>(loadGlb(decls, handQuadGlb()));
     }));
   }
+#endif
 
   SECTION("ExtractIdentifier transcribed (gltfParser.cpp:2378-2427)")
   {
