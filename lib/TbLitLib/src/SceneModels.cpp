@@ -55,10 +55,12 @@ namespace
 
 /**
  * D139: the spawnclasses of d3xp/*.cpp's CLASS_DECLARATIONs at 285ea4d1 that derive from
- * idAnimatedEntity (Entity.cpp:6283) and whose SetModel is idAnimatedEntity's
- * (Entity.cpp:6459-6482: animator.SetModel( modelname ), which a modelDef name answers
- * with its animated mesh; idEntity::SetModel otherwise), in the grep's order; mirror.json
- * M-ENT-TABLE-01 holds each declaration's line
+ * idAnimatedEntity (Entity.cpp:6283), whose SetModel is idAnimatedEntity's
+ * (Entity.cpp:6459-6481: animator.SetModel( modelname ), which a modelDef name answers
+ * with its animated mesh; idEntity::SetModel otherwise) or, for idWeapon, its own
+ * (Weapon.cpp:1690-1715, M-ENT-DIFF-01): idAnimatedEntity, then the others in the grep's
+ * order but idAI before idAI_Vagary; mirror.json M-ENT-TABLE-01 holds each declaration's
+ * line
  */
 constexpr auto AnimatedSpawnclasses = std::array<std::string_view, 21>{
   "idAnimatedEntity",

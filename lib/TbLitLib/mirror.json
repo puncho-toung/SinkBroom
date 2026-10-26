@@ -11108,7 +11108,7 @@
         },
         {
           "file": "lib/TbLitLib/src/RenderThread.cpp",
-          "symbol": "RenderThread::drawFrame (LP7's eleven counts, 0)"
+          "symbol": "RenderThread::drawFrame (LP7's eleven counts: LP7.2's model_entities, model_instances, model_draws, models_pending and models_skinned; the others 0)"
         },
         {
           "file": "lib/TbLitLib/test/src/tst_MaterialService.cpp",
@@ -17112,9 +17112,17 @@
         {
           "file": "lib/TbLitLib/src/LightData.cpp",
           "symbol": "pushFrustumIntoTree, commonChildrenAreas (M-LIGHT-FN-06)"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneModels.cpp",
+          "symbol": "SceneGeometry::buildModelEntity (a model entity's references)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelEntities.cpp",
+          "symbol": "SceneGeometry, a model's references, never clipped (LP7.2, C52, D130, D140)"
         }
       ],
-      "note": "LP4.0 step 4 (C31, D80, P4.9, P4.11): once every job of a batch has applied, each brush entity whose cells or state it touched gets, from all its chunks across cells and parts (no single job sees them all): per engine material the union of its chunks' bounds in model space, grown to FinishSurfaces' cube where the table's entry has a deform (the engine's per-model-surface tri->bounds, which the grid-area rule reads, FAM:814-853); the model bounds (localReferenceBounds) as their union; R_DeriveEntityData's inverseBaseModelProject = OffsetScaleForBounds( CreateFromOriginAxis( modelOrigin, parms.axis ), localReferenceBounds ) (litSpaceOf's matrix) and globalReferenceBounds = ProjectedBounds( it, bounds_unitCube, false ); and R_CreateEntityRefs' areas, PushFrustumIntoTree of the unit cube through it over the adopted tree (M-LIGHT-FN-06's walk, commonChildrenAreas from AreaData), kept in the engine's chain order: AddEntityRefToArea prepends each new reference to the entity's chain (RenderWorld.cpp:1836-1837), so the reverse of the push order, where a light's derived.areas keeps the push order. No references without a tree (D94) or for cleared bounds (an entity without chunks; the engine's Zero() bounds of an empty brush model would reference its pivot's area, with nothing to draw or light either way): the outside set (D81). ChunkKey::area of an entity chunk stays the pivot's area as a key only (P4.9). Render thread (SceneGeometry::apply), through the copied pure functions of M-FLOW-PURE-01"
+      "note": "LP4.0 step 4 (C31, D80, P4.9, P4.11): once every job of a batch has applied, each brush entity whose cells or state it touched gets, from all its chunks across cells and parts (no single job sees them all): per engine material the union of its chunks' bounds in model space, grown to FinishSurfaces' cube where the table's entry has a deform (the engine's per-model-surface tri->bounds, which the grid-area rule reads, FAM:814-853); the model bounds (localReferenceBounds) as their union; R_DeriveEntityData's inverseBaseModelProject = OffsetScaleForBounds( CreateFromOriginAxis( modelOrigin, parms.axis ), localReferenceBounds ) (litSpaceOf's matrix) and globalReferenceBounds = ProjectedBounds( it, bounds_unitCube, false ); and R_CreateEntityRefs' areas, PushFrustumIntoTree of the unit cube through it over the adopted tree (M-LIGHT-FN-06's walk, commonChildrenAreas from AreaData), kept in the engine's chain order: AddEntityRefToArea prepends each new reference to the entity's chain (RenderWorld.cpp:1836-1837), so the reverse of the push order, where a light's derived.areas keeps the push order. No references without a tree (D94) or for cleared bounds (an entity without chunks; the engine's Zero() bounds of an empty brush model would reference its pivot's area, with nothing to draw or light either way): the outside set (D81). ChunkKey::area of an entity chunk stays the pivot's area as a key only (P4.9). Render thread (SceneGeometry::apply), through the copied pure functions of M-FLOW-PURE-01 LP7.2 (C52, D130, D140): a model entity takes the same derivation, its localReferenceBounds the record's bounds (hModel->Bounds( &parms ): FinishSurfaces' or the binary's, deforms grown), its materialBounds per own material of its surfaces (C53), through its axis with the scale (M-ENT-03); never clipped into areas (SC625): every instance of the entity carries its areas; cleared bounds or no area reached: no reference (M-REF-DIFF-01)"
     },
     {
       "id": "M-FLOW-01",
@@ -19230,6 +19238,10 @@
         {
           "file": "lib/TbLitLib/src/ImageSlots.cpp",
           "symbol": "ImageSlots::stateVersion"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists: a model instance's grid area (LP7.2, M-MODEL-12)"
         }
       ],
       "note": "LP4.3 step 2 (C36, D79, P4.6, P4.11): every visible surface whose material receives lighting gets LitSurface::gridArea from surfaceGridArea (M-FLOW-10) when the lists are built with a tree and a grid: a world chunk of area N with refs [N] and the union of the area's world chunks of its material (the _areaN model's surface), a brush entity's chunk with its entity's materialBounds of the material and its areas (chain order) through the space's modelRenderMatrix; the outside set (D81) and a pending material have none. lightGridPoints.Num() && image && !image->IsDefaulted() is the grid table's hasPoints and the atlas slot Resident or Loading (Pending: not loaded yet, D88; Default: defaulted). The lists' key carries the grid table and its version and, with a grid, a hash of which areas' grids are valid, worked out again when the slots' state version (bumped on every slot state change) or the table moves, so an arriving or Missing atlas rebuilds the dispatch and other slots' churn does not (LP4.3 step 9: on admin the raw state version rebuilt the lists every other frame). MAX_CONTACTED_LIGHTS and the #if 0 debug draw (:855-) are not mirrored"
@@ -24020,7 +24032,7 @@
           "symbol": "ModelLoading: the OBJ validator"
         }
       ],
-      "note": "LP7.1a (D136, P7.2, R5.3's rule): every OBJ passes the preview's own validator before the copies see it, and a failing one is drawn as the default cube with the reason (the copies never read it): no NUL, not empty, under 2 GB; each line's first token one of v vt vn f usemtl o g mtllib s l, a single #, or blank (covers M-MODEL-FATAL-02); v and vn three numbers, vt two, each in the copied lexer's decimal grammar (a '-', no leading 0 before a digit, which ReadNumber reads as octal, at most one '.', a lowercase exponent) (covers M-ID-FATAL-10's OBJ path); f exactly three a/b/c corners of positive indexes within the lists read before (covers M-MODEL-FATAL-01); usemtl under 256 characters (FindMaterial's canonicalisation, M-ID-GUARD-01); at most 32767 corners, so the 16-bit indexes hold a merged surface and its mirrored duplicates (Model.cpp:1676, tr_trisurf.cpp:1742) and the conversion's _alloca of one int per object stays small. M-MODEL-FATAL-03..08 and M-GEO-FATAL-06 are unreachable by construction once a file passes"
+      "note": "LP7.1a (D136, P7.2, R5.3's rule): every OBJ passes the preview's own validator before the copies see it, and a failing one is drawn as the default cube with the reason (the copies never read it): no NUL, not empty, under 2 GB; each line's first token one of v vt vn f usemtl o g mtllib s l, a single #, or blank (covers M-MODEL-FATAL-02); v and vn three numbers, vt two, each in the copied lexer's decimal grammar (a '-', no leading 0 before a digit, which ReadNumber reads as octal, at most one '.', a lowercase exponent) (covers M-ID-FATAL-10's OBJ path); f exactly three a/b/c corners of positive indexes within the lists read before (covers M-MODEL-FATAL-01); usemtl under 256 characters (FindMaterial's canonicalisation, M-ID-GUARD-01); LP7.2 (step 1, aligned with the engine): at most 4,194,304 corners and 65,536 objects with faces, the preview's memory guards (the conversion's _alloca of one int per object, its per-corner tables), where LP7.1a's 32767 corners per file refused retail models the engine loads; the engine's own bound, 65,536 vertices in a finished surface (the 16-bit triIndex_t, Model.cpp:1676), is checked after the finish (M-MODEL-GUARD-04). M-MODEL-FATAL-03..08 and M-GEO-FATAL-06 are unreachable by construction once a file passes"
     },
     {
       "id": "M-MODEL-02",
@@ -24501,7 +24513,7 @@
           "symbol": "MODELS_MAP, MODEL_SOURCES, build_models_map, the fixture generators, stage, remove_rendermodels, staged_digest, assemble_preview, cmd_capture_models (outside the repository)"
         }
       ],
-      "note": "LP7.1a (C56, P7.4, P7.10, P7.21), test only: the parity tool's fifth map, litpreview_models (rooms N01-N05, a func_static naming a generated fixture model and a point light each, no row before LP7.2), its generated models (OBJ, ASE and md5mesh as text, LWO2 by a struct writer), the staging table's per-file stamps (2015-12-31, N03 2017-01-01) applied after the copy, the rendermodels folder of game/tb_parity emptied by name before every run, model sources copied into the preview root with their stamps but the withheld ones (N02), and only the binaries a row's \"binary\" list names; capture-models runs the engine once as run does (the junction, the proof listing, the timeout) to write the goldens"
+      "note": "LP7.1a (C56, P7.4, P7.10, P7.21), test only: the parity tool's fifth map, litpreview_models (rooms N01-N05, a func_static naming a generated fixture model and a point light each, no row before LP7.2), its generated models (OBJ, ASE and md5mesh as text, LWO2 by a struct writer), the staging table's per-file stamps (2015-12-31, N03 2017-01-01) applied after the copy, the rendermodels folder of game/tb_parity emptied by name before every run, model sources copied into the preview root with their stamps but the withheld ones (N02), and only the binaries a row's \"binary\" list names; capture-models runs the engine once as run does (the junction, the proof listing, the timeout) to write the goldens; LP7.2: the rows N01-N11 and N07b (M-TEST-PARITY-08)"
     },
     {
       "id": "M-MODEL-COPY-04",
@@ -26549,7 +26561,936 @@
           "symbol": "Retail models: the loose sources through the source path"
         }
       ],
-      "note": "LP7.1b (C51), test only, [.][retail]: every loose models/** source of a model extension the C8 listing finds, an .obj, .ase or .lwo through readModelSource and finishModel, then against the engine's binary of it when the binary-first path accepts one; counted by extension with bytes, time, loads, refusals with their reasons (a refused retail file is a finding) and the binaries equal, different, stale or absent. The retail game at LP7.1b: .obj 5 (3 loaded, 1 equal to its binary, 2 without one; refused: material-orb.obj for more than 32,767 corners, sponza_original.obj for a 'vt' of 3 numbers), .glb 10 (binary only until LP7.5), .fbx 1 (the cube); no loose .ase or .lwo"
+      "note": "LP7.1b (C51), test only, [.][retail]: every loose models/** source of a model extension the C8 listing finds, an .obj, .ase or .lwo through readModelSource and finishModel, then against the engine's binary of it when the binary-first path accepts one; counted by extension with bytes, time, loads, refusals with their reasons (a refused retail file is a finding) and the binaries equal, different, stale or absent. The retail game at LP7.1b: .obj 5 (3 loaded, 1 equal to its binary, 2 without one; refused: material-orb.obj for more than 32,767 corners, sponza_original.obj for a 'vt' of 3 numbers), .glb 10 (binary only until LP7.5), .fbx 1 (the cube); no loose .ase or .lwo. LP7.2 (step 1, M-MODEL-GUARD-04): .obj 5, 4 loaded (1 equal to its binary, 3 without one; material-orb.obj loads, its surfaces within 65,536 vertices); refused: sponza_original.obj line 5989, a 'vt' of 3 numbers, which is OBJ_Parse's FatalError in the engine (M-MODEL-FATAL-02)"
+    },
+    {
+      "id": "M-ENT-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/d3xp/Entity.cpp",
+          "lines": [
+            242,
+            299
+          ],
+          "anchor": "idGameEdit::ParseSpawnArgsToRenderEntity: the model key (a modelDef's ModelHandle, else FindModel), RB's genmodel_ interop, the bounds",
+          "sha256": "b331d4aae1cd410278d3361a266e12529e86e3e30dd5f0467fecf69f60d85736"
+        },
+        {
+          "file": "neo/d3xp/Entity.cpp",
+          "lines": [
+            701,
+            729
+          ],
+          "anchor": "idEntity::Spawn: SetModel( model ) and the origin brushes' offset; a genmodel_ entity without a model key takes its def's",
+          "sha256": "4684231c48077443232be00e065c3d465de88bfc50bf0b8ba0b7f8cd42f14d88"
+        },
+        {
+          "file": "neo/d3xp/Entity.cpp",
+          "lines": [
+            1354,
+            1392
+          ],
+          "anchor": "idEntity::SetModel: FindModel (the default cube for an extensionless name it cannot find, warned)",
+          "sha256": "8810e84568c48b5328d8694fecb2f9c21b299edb561810181a839c6b52121d73"
+        },
+        {
+          "file": "neo/d3xp/Entity.cpp",
+          "lines": [
+            6459,
+            6481
+          ],
+          "anchor": "idAnimatedEntity::SetModel: animator.SetModel( modelname ), else idEntity::SetModel",
+          "sha256": "d46b7062d32473a00d85b57362d49de02628d3b347134111dbb23fddf0430c90"
+        },
+        {
+          "file": "neo/renderer/ModelManager.cpp",
+          "lines": [
+            507,
+            525
+          ],
+          "anchor": "GetModel: not one of the known formats: the default model (unknown model type warned for an extension)",
+          "sha256": "a3218ee0178106c61ddbf1a5e1361f245a92944b07f6a917370e1da354a7e5d4"
+        },
+        {
+          "file": "neo/d3xp/Misc.cpp",
+          "lines": [
+            1672,
+            1689
+          ],
+          "anchor": "idStaticEntity::Spawn: an inline static hides itself (dmap drew it into the world)",
+          "sha256": "e8bdc34db436e25cd2b7c514a8f18611d249cc5e736c99f47f6e0a6f53551494"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "lines": [
+            779,
+            782
+          ],
+          "anchor": "dmap: a func_static or misc_model is inlined with inline 1 (or inlineAllStatics)",
+          "sha256": "6f9b20976487c2756f850e8bdbe28aabaa59de4cb19189bd2c7798b23670b806"
+        },
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            2270,
+            2282
+          ],
+          "anchor": "idMapFile::RemoveEntities",
+          "sha256": "bc6fc1e89060f46a4568d11d6b1be03036209b9aea6eb12be9b2255163b6c3d8"
+        },
+        {
+          "file": "neo/framework/DeclEntityDef.cpp",
+          "lines": [
+            183,
+            198
+          ],
+          "anchor": "idDeclEntityDef::IsMapOnlyClass: dmapOnly on the plain def, never spawned",
+          "sha256": "165ec72fab145832853ccbf26ce543f8305b800081d5bebfcbf5526882f0bb1e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/SceneModels.cpp",
+          "symbol": "SceneGeometry::buildModelEntity, scanModelEntities, updateModelEntities, markModelEntity, markAllModelEntities, removeModelInstances, modelNotice, isAnimatedSpawnclass"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/SceneGeometry.h",
+          "symbol": "SceneGeometry::ModelEntity (None, Nothing, Pending, Ready, Cube, Skinned), ModelCounts, modelCounts, waitsForModels, instances"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "the model entities marked: removed, changed entities and nodes, the map path, a new tree, a reload, R3.2's entityDefs, collectChunks' touched entities; updateModelEntities after takeSnapshot and collect"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelEntities.cpp",
+          "symbol": "SceneGeometry: model entities, the dispatch of each kind (LP7.2, C52, D139); a model entity's keys rebuild its instances; an entity id taken by another kind"
+        }
+      ],
+      "note": "LP7.2 (C52, D127, D128, D139, K17, K41, K47): every entity of the snapshot but worldspawn and func_group is dispatched once its spawnArgs are merged (C22, A10; a pending entityDef is asked for and the entity built again, R3.2): no model key (and no genmodel_ def's) draws nothing of a model; K17: a brush entity whose model is its own name draws its brushes (its chunks); D128 (M-ENT-01 restated): hide 1, a dmapOnly class, a classname that worldspawn's removeEntities names and a hidden node draw nothing; K47: an extensionless name that a .proc model has (an _area, another entity's name) draws nothing, with a notice, where the engine draws that model; D139: an extensionless name on an animated spawnclass (M-ENT-TABLE-01) is Skinned: nothing, with a notice (K41: the engine draws the modelDef's animated mesh); every other name is the model table's (C51, requestModel): Pending (nothing, the frame unconverged, D124), Ready (its instances, M-MODEL-10), Missing or Default (the default cube with the record's reason as a notice: an unknown type, a validator refusal, an extensionless modelDef name on idStaticEntity, whose idEntity::SetModel finds the default cube, ModelManager.cpp:507-525), Skinned (an .md5mesh: nothing, K41, as the engine's InstantiateDynamicModel without joints draws nothing). inline 1 restated: the game hides an inline static and dmap draws its copy into the world (K42); the preview draws the file's model at the entity's place (LP7.4's adoption will match dmap's copy). A brush entity's state is its chunk job's (the origin brushes' offset, Entity.cpp:701-707; Pending until its batch applied), a point entity's and a light's the scene's (a light that starts off gives its model RGB 0: SetLightLevel at spawn). A change of an entity's keys, nodes or entityDef, of a skin or of a model record rebuilds its instances; the scene's ModelCounts (entities, instances, pending, skinned) fill the frame log's model_entities, model_instances, models_pending and models_skinned"
+    },
+    {
+      "id": "M-ENT-TABLE-01",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/d3xp/Entity.cpp",
+          "lines": [
+            6283,
+            6283
+          ],
+          "anchor": "CLASS_DECLARATION( idEntity, idAnimatedEntity )",
+          "sha256": "b47c61e923e057dfa32901e78edc3c287c20bebb24da945dfc1f02f2f649a9ce"
+        },
+        {
+          "file": "neo/d3xp/AFEntity.cpp",
+          "lines": [
+            265,
+            265
+          ],
+          "anchor": "CLASS_DECLARATION( idAnimatedEntity, idAFAttachment )",
+          "sha256": "bdf0ee80b23dbcbecccc27c345fca4e6074303006fe3281820ea72ba668db779"
+        },
+        {
+          "file": "neo/d3xp/AFEntity.cpp",
+          "lines": [
+            579,
+            579
+          ],
+          "anchor": "CLASS_DECLARATION( idAnimatedEntity, idAFEntity_Base )",
+          "sha256": "8cdc63399d01b14b298163303cc0ec0939d8e68519b818909532ee9a351f20a2"
+        },
+        {
+          "file": "neo/d3xp/AFEntity.cpp",
+          "lines": [
+            1083,
+            1083
+          ],
+          "anchor": "CLASS_DECLARATION( idAFEntity_Base, idAFEntity_Gibbable )",
+          "sha256": "aabcb10f51cddb80104f3a097ee411970b3733f07e15edd3ae65d73b048b2d9a"
+        },
+        {
+          "file": "neo/d3xp/AFEntity.cpp",
+          "lines": [
+            1446,
+            1446
+          ],
+          "anchor": "CLASS_DECLARATION( idAFEntity_Gibbable, idAFEntity_Generic )",
+          "sha256": "a748bbb6a0f8e0b3cf001b51869bebf45f66d99c5ed31eda513d7cbdea667919"
+        },
+        {
+          "file": "neo/d3xp/AFEntity.cpp",
+          "lines": [
+            1577,
+            1577
+          ],
+          "anchor": "CLASS_DECLARATION( idAFEntity_Gibbable, idAFEntity_WithAttachedHead )",
+          "sha256": "997926f81797f7ff20728a6abf7406c03e3393e049e2d39fd9cbda83ed2905fe"
+        },
+        {
+          "file": "neo/d3xp/AFEntity.cpp",
+          "lines": [
+            1882,
+            1882
+          ],
+          "anchor": "CLASS_DECLARATION( idAFEntity_Base, idAFEntity_Vehicle )",
+          "sha256": "82ae67790ef6375a90d74bebec8395e0431dc504cb7bfb60cc1c9a37870ee274"
+        },
+        {
+          "file": "neo/d3xp/AFEntity.cpp",
+          "lines": [
+            2013,
+            2013
+          ],
+          "anchor": "CLASS_DECLARATION( idAFEntity_Vehicle, idAFEntity_VehicleSimple )",
+          "sha256": "ab30bc509418c25355678fe62dc2fa6b1dba19d443b706377a3375ffe099e7b0"
+        },
+        {
+          "file": "neo/d3xp/AFEntity.cpp",
+          "lines": [
+            2231,
+            2231
+          ],
+          "anchor": "CLASS_DECLARATION( idAFEntity_Vehicle, idAFEntity_VehicleFourWheels )",
+          "sha256": "2a07b3d796221d12a34458af2b20e08bcf4f768b837ee729cb1223ed5e5dac94"
+        },
+        {
+          "file": "neo/d3xp/AFEntity.cpp",
+          "lines": [
+            2436,
+            2436
+          ],
+          "anchor": "CLASS_DECLARATION( idAFEntity_Vehicle, idAFEntity_VehicleSixWheels )",
+          "sha256": "2eeca008e1aba7d7f0212e787b1b97fbd8c820cd9ae4ebf82db133bd9735d84d"
+        },
+        {
+          "file": "neo/d3xp/AFEntity.cpp",
+          "lines": [
+            2658,
+            2658
+          ],
+          "anchor": "CLASS_DECLARATION( idAFEntity_VehicleSixWheels, idAFEntity_VehicleAutomated )",
+          "sha256": "8ddcfaea2df82ae3bc3326f400499db01a58d7ff141d06e43f3460e736243542"
+        },
+        {
+          "file": "neo/d3xp/AFEntity.cpp",
+          "lines": [
+            2873,
+            2873
+          ],
+          "anchor": "CLASS_DECLARATION( idAFEntity_Base, idAFEntity_SteamPipe )",
+          "sha256": "ffd0082416b4ff2dcf69245cb11d731de26d849d3f0ed90ca70236a91c0b0f0c"
+        },
+        {
+          "file": "neo/d3xp/AFEntity.cpp",
+          "lines": [
+            3041,
+            3041
+          ],
+          "anchor": "CLASS_DECLARATION( idAFEntity_Base, idAFEntity_ClawFourFingers )",
+          "sha256": "271b5cf1bcf5dd1f8f7f4137f688adae5b0ac16890e2aad3d7f9ab8903cdb649"
+        },
+        {
+          "file": "neo/d3xp/AFEntity.cpp",
+          "lines": [
+            4080,
+            4080
+          ],
+          "anchor": "CLASS_DECLARATION( idAFEntity_WithAttachedHead, idAFEntity_Harvest )",
+          "sha256": "452091a52698363a2119cc345e3630fe3dca9ad38f46c168a7523401558a181a"
+        },
+        {
+          "file": "neo/d3xp/Actor.cpp",
+          "lines": [
+            406,
+            406
+          ],
+          "anchor": "CLASS_DECLARATION( idAFEntity_Gibbable, idActor )",
+          "sha256": "1907e21656ed552fd0053753bc8463815575a1f311fd27d85702c03c01650d49"
+        },
+        {
+          "file": "neo/d3xp/Misc.cpp",
+          "lines": [
+            1046,
+            1046
+          ],
+          "anchor": "CLASS_DECLARATION( idAFEntity_Gibbable, idAnimated )",
+          "sha256": "6a00c8ada56357915605ce21f9ec5d5a550514c2c71927a38605e504e7ca3d85"
+        },
+        {
+          "file": "neo/d3xp/Player.cpp",
+          "lines": [
+            123,
+            123
+          ],
+          "anchor": "CLASS_DECLARATION( idActor, idPlayer )",
+          "sha256": "8f8add1ca9cd71000ad79bf6646db2c2a0073547144d0d9791a40fc1bdd5b8fd"
+        },
+        {
+          "file": "neo/d3xp/Weapon.cpp",
+          "lines": [
+            86,
+            86
+          ],
+          "anchor": "CLASS_DECLARATION( idAnimatedEntity, idWeapon )",
+          "sha256": "f2a191f8d751b65b8d60f4d2b3815779a97ae743a729c2ff34558a68b259d846"
+        },
+        {
+          "file": "neo/d3xp/ai/AI_events.cpp",
+          "lines": [
+            177,
+            177
+          ],
+          "anchor": "CLASS_DECLARATION( idActor, idAI )",
+          "sha256": "d27e9c9fd8e55e9104a32b1b2e8b3bd68a8e3002e85e19b43b4ef9950f8c105f"
+        },
+        {
+          "file": "neo/d3xp/ai/AI_Vagary.cpp",
+          "lines": [
+            55,
+            55
+          ],
+          "anchor": "CLASS_DECLARATION( idAI, idAI_Vagary )",
+          "sha256": "e9b548a7d306ef39e8e9d784c998e0f056a922b4bd850529ae6c75adc9dd4939"
+        },
+        {
+          "file": "neo/d3xp/anim/Anim_Testmodel.cpp",
+          "lines": [
+            57,
+            57
+          ],
+          "anchor": "CLASS_DECLARATION( idAnimatedEntity, idTestModel )",
+          "sha256": "b6d628ea72d1f965172a8bf1b3d7549aac41dcc82fd117d6a647d16c7dd0e525"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/SceneModels.cpp",
+          "symbol": "AnimatedSpawnclasses, isAnimatedSpawnclass"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelEntities.cpp",
+          "symbol": "SceneGeometry: model entities, the dispatch of each kind (LP7.2, C52, D139)"
+        }
+      ],
+      "note": "D139, row for row: the spawnclasses of the 159 CLASS_DECLARATIONs that git grep -n CLASS_DECLARATION 285ea4d1 -- neo/d3xp finds whose class is idAnimatedEntity or derives from it (through idAFEntity_Base, idAFEntity_Gibbable, idAFEntity_Vehicle, idAFEntity_WithAttachedHead, idActor, idAI), idAnimatedEntity first, the others as the grep lists them but idAI before idAI_Vagary. Their SetModel is idAnimatedEntity's (Entity.cpp:6459-6481: animator.SetModel, which a modelDef name answers with its animated mesh), idWeapon's its own (Weapon.cpp:1690-1715, M-ENT-DIFF-01); every other class's is idEntity's (Entity.cpp:1354-1392). An entity's spawnclass is its merged spawnArgs' (the entityDef's, C22); a class missing from the table takes idEntity's path"
+    },
+    {
+      "id": "M-ENT-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/d3xp/Entity.cpp",
+          "lines": [
+            317,
+            371
+          ],
+          "anchor": "ParseSpawnArgsToRenderEntity: the origin, then rotation in full, else angles or angle with modelscale_vec or modelscale (RB's TrenchBroom interop): axis = scaleMat * rotMat",
+          "sha256": "eeb642971f7fa65a57ab6ac0ed4b07517c17dea5e3de10e4ec55d149e0d58ce0"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EntityState.cpp",
+          "symbol": "parseSpawnArgsToRenderEntity (the axis; read by the model instances unchanged)"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneModels.cpp",
+          "symbol": "SceneGeometry::buildModelEntity (ModelInstance::modelOrigin and axis; the references through the scaled axis)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (an instance's space from its origin and axis)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession model entities on a GPU (LP7.2): the rotated and scaled scenarios"
+        }
+      ],
+      "note": "LP7.2 (C52, P7.10) restated for the model instances: the scale is a part of the axis and is read only when the entity has no rotation key: a rotation matrix is taken as written (nine numbers, no scale); without one, angles (ToMat3) or else angle (a yaw), and modelscale_vec (each component above 0.01, not all 1) or else modelscale (above 0.01, not 1): axis = scaleMat * rotMat, the rows of the rotation scaled. An instance's model matrix is R_AxisToModelMatrix of that axis and the origin, so its vertices, normals and tangents go through the scaled axis as the engine's do, and its reference bounds are the record's bounds through it (M-REF-01). N06's boxes are angles 0 30 0 with modelscale_vec 1.5 0.75 1"
+    },
+    {
+      "id": "M-ENT-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/d3xp/Entity.cpp",
+          "lines": [
+            6459,
+            6481
+          ],
+          "anchor": "idAnimatedEntity::SetModel: no modelDef of the name: idEntity::SetModel, the default cube for an extensionless name",
+          "sha256": "d46b7062d32473a00d85b57362d49de02628d3b347134111dbb23fddf0430c90"
+        },
+        {
+          "file": "neo/d3xp/Weapon.cpp",
+          "lines": [
+            1690,
+            1715
+          ],
+          "anchor": "idWeapon::SetModel: animator.SetModel alone, no fallback; Hide() until an animation plays",
+          "sha256": "927450f916f2e858d0948bcdd7a2865946c13ed438833252ae27d966210d9621"
+        },
+        {
+          "file": "neo/d3xp/Entity.cpp",
+          "lines": [
+            306,
+            309
+          ],
+          "anchor": "ParseSpawnArgsToRenderEntity: no skin key: the modelDef's default skin",
+          "sha256": "827c0e0858ba4c1d796667fa62b92a40e2bb8a75dd2b2d8de35e79685b7fd219"
+        },
+        {
+          "file": "neo/d3xp/Entity.cpp",
+          "lines": [
+            6470,
+            6473
+          ],
+          "anchor": "idAnimatedEntity::SetModel: no customSkin: the modelDef's default skin",
+          "sha256": "deb572cc3accff75a0d332b472f7308720e4550cb2394e937abb91d4b175273b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/SceneModels.cpp",
+          "symbol": "SceneGeometry::buildModelEntity (D139's branch)"
+        }
+      ],
+      "note": "LP7.2 (D139): the dispatch reads the spawnclass and the name's extension, never the modelDefs: an extensionless name on an animated spawnclass is Skinned (nothing) even when no modelDef has it, where the engine's animator.SetModel fails and idEntity::SetModel draws the default cube; an entity of spawnclass idWeapon draws a file model where the engine's SetModel takes modelDefs alone and hides the weapon. A modelDef's default skin is not read (the shim's modelDef decl is a plain idDecl, M-MODEL-DIFF-01): an extensionless modelDef name on idStaticEntity draws the default cube without it, where the engine's customSkin is the modelDef's default skin (Entity.cpp:306-309), which changes the cube only if the skin maps _default or has a wildcard"
+    },
+    {
+      "id": "M-MODEL-10",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/ModelManager.cpp",
+          "lines": [
+            981,
+            992
+          ],
+          "anchor": "EndLevelLoad: static vertex and index buffers for every loaded model's surfaces",
+          "sha256": "9c67b8c669adad877f0b525fa83d991ac90e1dbf648fc565641a4e537db87b4b"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            2053,
+            2069
+          ],
+          "anchor": "R_CreateStaticBuffersForTri: the surface's indexCache and ambientCache",
+          "sha256": "0973d47e89383cd6d64359416b27748334b28fb733f5c9e412d240c760c7b6c6"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            738,
+            756
+          ],
+          "anchor": "R_AddSingleModel: every entity of the model draws the surface's own caches",
+          "sha256": "72adc6e355fa482a83690f4bc42c188647c068757e876866adacab5e4f20d4f2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/ModelInstance.h",
+          "symbol": "SharedGeometryKey, SharedSurface, makeSharedSurface, ModelInstance"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelInstance.cpp",
+          "symbol": "makeSharedSurface, ModelInstance::key, placement"
+        },
+        {
+          "file": "lib/TbLitLib/src/GeometryArenas.cpp",
+          "symbol": "GeometryArenas::syncInstances, recordUploads (the shared surfaces after the chunks), placement (an instance's key), placedShared, sharedRecords, placedSharedBytes"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::syncChunks (syncInstances), arenaInstances, currentModelTotals, updateModelTotals"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (the instances after the chunks, each through its header), surfaceIndexCount"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::draw (LitFrameStats::modelDraws), the stage pass's index check"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightTriangles.cpp",
+          "symbol": "LightTriangleCache::triangles (an instance's: its shared surface through the model matrix)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelEntities.cpp",
+          "symbol": "GeometryArenas: model instances share their placements (LP7.2, D129); Frontend: model instances in the lists, with their shared indexes; LightTriangleCache: an instance's triangles from its shared surface"
+        }
+      ],
+      "note": "LP7.2 (C52, D129, D35, D36): the engine gives each surface of a loaded model one static vertex and index buffer at level load, which every entity of that model draws (its tri's ambientCache and indexCache); the preview places each surface once per key (the record's canonical name, the surface's index, the record's version) in the chunk arenas, written after the chunks in the frame's upload budget, and every instance naming the key draws that placement (ChunkPlacement::shared). A key no instance names any more is freed as a chunk is, after the frames in flight (D36); a reloaded record's version is a new key, placed while the old one serves until its instances are rebuilt. An instance is a header Chunk (its key: the area of its origin, its cell, the surface's index as its part; its own material and the draw material, its caster and appearance versions) beside the shared geometry; the frontend lists it as a chunk of an entity with its own space, the light triangles are its shared surface's through its model matrix"
+    },
+    {
+      "id": "M-MODEL-11",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            579,
+            582
+          ],
+          "anchor": "R_AddSingleModel: the own material neither drawn nor casting shadows (collision hulls): skipped",
+          "sha256": "b6be38da58f360d83ba71e846166cc2b2d6ef24dafa6d77b9ca83a2f3f37af9c"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            585,
+            607
+          ],
+          "anchor": "RemapShaderBySkin: customShader replaces (a deform surface skipped), else customSkin remaps (NULL skipped, a remapped neither-drawn-nor-shadowing one skipped)",
+          "sha256": "252f6f1953c6bf903de1a54248db0c94af1d06395b139590e3b723e805ae165a"
+        },
+        {
+          "file": "neo/framework/DeclSkin.cpp",
+          "lines": [
+            181,
+            209
+          ],
+          "anchor": "idDeclSkin::RemapShaderBySkin: a nodraw surface never remapped; the first mapping of the material or the wildcard",
+          "sha256": "5725f34a35b0a596b549bd380b07af21e2515d21e1db74b3470230bc915649f6"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1260,
+            1260
+          ],
+          "anchor": "FinishSurfaces: the own material's ShouldCreateBackSides",
+          "sha256": "3a6e96e739eb83557e4a7944bd3e84f3d24896034ced6e1dc21c0e840c248d42"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1281,
+            1281
+          ],
+          "anchor": "FinishSurfaces: the own material's UseMikkTSpace for the tangents",
+          "sha256": "4ed5dd15ca0f1523e898d229fbd668a3eb0eea4b99be10ccb34a5992a6faee95"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/ChunkBuilder.h",
+          "symbol": "engineMaterialDrawn, engineDrawMaterial, Chunk::sourceMaterial, chunkSourceMaterial, ChunkJobInput::skins"
+        },
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "engineMaterialDrawn, engineDrawMaterial, drawMaterialOf, finishChunk (the buckets by own material, the cast class from the draw material, provisional while a skin is pending)"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneModels.cpp",
+          "symbol": "SceneGeometry::buildModelEntity (a model surface's own and draw material)"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "m_pendingSkins, waitsForMaterials, materialBounds and the sized cells by own material"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "the grid area's material bounds by chunkSourceMaterial"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelEntities.cpp",
+          "symbol": "ChunkBuilder: a brush entity's shader and skin, the roles split (LP7.2, C53); SceneGeometry: a brush entity's skin, pending and then published (LP7.2, A41)"
+        }
+      ],
+      "note": "LP7.2 (C53): the two roles of a surface's material split as the engine splits them. The own material (the file's or the brush face's) decides the geometry and whether the surface exists: FinishSurfaces' back sides and tangents (Model.cpp:1260, 1281; the model records'), the skip of a surface whose own material is neither drawn nor casting shadows (:579-582), the bucket a brush entity's faces fall in and the bounds the grid area reads (M-MODEL-12). The draw material is the entity's shader key, which replaces every surface's but a deform surface's (skipped), else the skin's remap (RemapShaderBySkin's rule: a nodraw own material is never remapped, the first mapping from the own material or the * wildcard wins, a NULL to skips), and a remapped material neither drawn nor casting shadows is skipped; it decides the pipelines, the stages and the shadows (the cast class, by its coverage). A skin not in the table yet is asked for and the surfaces are drawn unremapped and provisional (the frame unconverged) until it is published (A41)"
+    },
+    {
+      "id": "M-MODEL-12",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            814,
+            853
+          ],
+          "anchor": "R_AddSingleModel: the grid area from the model surface's tri->bounds",
+          "sha256": "bc46ede2370f73e68b680a096602ae402d4c3723946ed3059db67324ad38e047"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (an instance's grid area from its own surface's bounds, LitSurface::instance)"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneModels.cpp",
+          "symbol": "SceneGeometry::buildModelEntity (the instance header's bounds: the record surface's)"
+        }
+      ],
+      "note": "LP7.2 (C36, C52, M-GRID-01 extended): an instance's surface is one model surface, as the engine's tri is: its grid area is surfaceGridArea of that surface's own bounds (the record's, FinishSurfaces' deform cube included) through the instance's space and its entity's areas in chain order, not the union over the entity's surfaces of one material that a brush entity's chunks take (M-GRID-DIFF-02); an instance without areas (the outside set, M-REF-DIFF-01) has none and takes the probe path"
+    },
+    {
+      "id": "M-MODEL-SHIM-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/DeclSkin.h",
+          "lines": [
+            62,
+            62
+          ],
+          "anchor": "idDeclSkin::mappings (private)",
+          "sha256": "74b5d2fc3a76b7962b685559ea54f79031dde3fa0d149a250a65986dc8bac23f"
+        },
+        {
+          "file": "neo/framework/DeclSkin.cpp",
+          "lines": [
+            58,
+            111
+          ],
+          "anchor": "idDeclSkin::Parse: the model names, the from/to pairs, * as NULL",
+          "sha256": "46b751903db5c5e36ee331b0f71ea53a0f794026557eef0fe1dbe1fd6f959d71"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/MaterialDecls.h",
+          "symbol": "EngineSkin, MaterialDecls::skin"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/MaterialDecls.cpp",
+          "symbol": "SkinMappingsTag, PrivateMember (explicit instantiation for idDeclSkin::mappings), MaterialDecls::skin"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/MaterialService.h",
+          "symbol": "SkinLookup, MaterialService::skin"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "the skin lookups' queue, m_requestedSkins asked again at a build, lookUpSkin, setSkinSlot, failedSkinSlot"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelEntities.cpp",
+          "symbol": "MaterialDecls: a skin's mappings from its decl (LP7.2, C53); MaterialService: skins asked, published and asked again (LP7.2, C53)"
+        }
+      ],
+      "note": "LP7.2 (C53): the parse thread finds a skin with declManager->FindSkin on the copied DeclSkin (M-ID-COPY-06, -07) and reads its mappings, a private member, through the explicit instantiation of a member-pointer template (the access rule does not apply to an explicit instantiation's arguments), the copied file unchanged: each pair's from and to by their materials' names, a NULL from (the * wildcard) and a NULL to as empty names; FindSkin makes a missing skin a default decl without mappings (it remaps nothing), and an error the parse reports is a failed slot. The pairs are published in the table as the skin's SkinRecord (C20: the render thread reads the table, never the decl); every skin asked is asked again after a reload's build"
+    },
+    {
+      "id": "M-MODEL-DIFF-09",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/d3xp/Light.cpp",
+          "lines": [
+            503,
+            505
+          ],
+          "anchor": "idLight::Spawn: the light's shader as its model's referenceShader",
+          "sha256": "5d531690a2af88bf4f561451a44bd2bbc07144c83a77964047e0df903794504c"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            242,
+            263
+          ],
+          "anchor": "R_SetupDrawSurfShader: a referenceShader's stage colour as parm0-parm2",
+          "sha256": "3232ea734bb0757c5093623948a6e7e9adfc034e09f904a8eedfff0bae04bda6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/SceneModels.cpp",
+          "symbol": "SceneGeometry::buildModelEntity (a light's model takes the light's _color, 0 when it starts off)"
+        }
+      ],
+      "note": "LP7.2 (C52): a light's model takes the light's colour as its shaderParms (_color, 0 for a light that starts off) and no reference shader: the engine evaluates the light's shader and gives the model's surfaces its first stage's colour registers as parm0-parm2, so a light model's flare or glow follows a flashing or pulsing light's table in the engine and the light's static colour in the preview (equal for a light whose shader's first stage colour is the light's parms)"
+    },
+    {
+      "id": "M-REF-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            156,
+            197
+          ],
+          "anchor": "R_CreateEntityRefs: no area reached, no reference",
+          "sha256": "0b35e9fab9b62f5da21ce0e4e00c2d7c161a73e1bf3694eeb5a6cb22d009bf03"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            222,
+            227
+          ],
+          "anchor": "idRenderWorldLocal::AddAreaViewEntities: the entities of a visible area's references alone",
+          "sha256": "3b8e91d1fe23d3e5958dfdbaf82cf909cc6b8ba9f0982d27e5fc8eac82ff703e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/SceneModels.cpp",
+          "symbol": "SceneGeometry::buildModelEntity (cleared bounds or no area reached: no reference)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (an entity without references is the outside set, D81)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelEntities.cpp",
+          "symbol": "SceneGeometry, a model's references, never clipped (LP7.2, C52, D130, D140)"
+        }
+      ],
+      "note": "LP7.2 (D81, D140, K14 extended to models): the engine draws an entity only through the references of the areas the view reaches, so a model whose bounds reach no area (wholly outside the hull, or in solid) is never drawn; the preview draws it as D81's outside set (directly visible, no grid area), as it draws a brush entity without references, so that a model placed outside the sealed map stays visible in the editor"
+    },
+    {
+      "id": "M-MODEL-GUARD-04",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/idlib/sys/sys_types.h",
+          "lines": [
+            145,
+            145
+          ],
+          "anchor": "triIndex_t: 16 bits",
+          "sha256": "999aeaf95d4d3594ac810c6132dbb75eea41147d25d26edb03139eecd7fced9f"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1676,
+            1676
+          ],
+          "anchor": "ConvertOBJToModelSurfaces: a welded vertex's number stored in a triIndex_t",
+          "sha256": "6e50ecfde1571658c596f0ac25bd98d2e78a1d2f2c80bd35d7521b795642444b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/ModelLoading.h",
+          "symbol": "modelSurfaceProblem"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "modelSurfaceProblem"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.h",
+          "symbol": "MaxModelSurfaceVerts, MaxObjSourceCorners, MaxObjObjects"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "takeFinishedModel (a source finish with a surface past the bound: the Default record with the reason)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "the LP7.2 sections: a surface over 65,536 vertices, the corner and object guards"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_RetailModels.cpp",
+          "symbol": "the sweep's post-finish check"
+        }
+      ],
+      "note": "LP7.2 step 1 (D136, the retail sweep's finding): the engine's bound on an OBJ is not a corner count: each welded vertex's number goes into a 16-bit triIndex_t, so a finished surface of more than 65,536 vertices (after R_MergeTriangles and R_DuplicateMirroredVertexes) has wrapped indexes. The preview finishes a source model and then refuses one whose surface passes the bound (modelSurfaceProblem): the Default record, drawn as the default cube with the reason; LP7.1a's 32,767 corners per file, which refused material-orb.obj, is gone for OBJ (MaxObjSourceCorners and MaxObjObjects are the preview's memory guards, M-MODEL-GUARD-01); the ASE and LWO validators keep MaxObjCorners"
+    },
+    {
+      "id": "M-TEST-MODEL-05",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            585,
+            607
+          ],
+          "anchor": "RemapShaderBySkin (the roles split's tests)",
+          "sha256": "252f6f1953c6bf903de1a54248db0c94af1d06395b139590e3b723e805ae165a"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            156,
+            197
+          ],
+          "anchor": "R_CreateEntityRefs (the references' test)",
+          "sha256": "0b35e9fab9b62f5da21ce0e4e00c2d7c161a73e1bf3694eeb5a6cb22d009bf03"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelEntities.cpp",
+          "symbol": "the twelve LP7.2 cases: the skin decls, the roles split, a pending skin, the service's skins and reload, the arenas' sharing, the frontend's instances, the light triangles, the dispatch, the keys' rebuild, a Pending model, the references in LP2.2a's bake, an entity id reused"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/skins/lp7_test.skin",
+          "symbol": "skins/lp7s/to_grate, to_wall, wild"
+        }
+      ],
+      "note": "LP7.2 (C52, C53, D124, D129, D130, D139, D140), CPU only, in the normal run: a skin's mappings from the copied decl (named materials, the * wildcard); a brush entity's shader and skin over its faces (the own material keeps the bucket, the bounds and a nodraw face, the draw material the cast class); a skin pending then published (provisional, then remapped); two instances of one record share one placement, freed once neither names it; the frontend lists an instance with its shared indexes; an instance's light triangles are its shared surface's through its matrix; every kind of the dispatch (K17, hide, dmapOnly, inline, K47, D139 on an idAI def and idItem, a Missing file, an .md5mesh) with its notices; a key change rebuilds the instances; a Pending model draws nothing and keeps the scene waiting; a model's references in LP2.2a's bake: a box spanning two areas referenced in both, never clipped, one outside the hull without references (D140); an entity id a light's model had taken by an .md5mesh func_static (its instance goes)"
+    },
+    {
+      "id": "M-TEST-MODEL-06",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            738,
+            756
+          ],
+          "anchor": "R_AddSingleModel: one surface's caches for every entity",
+          "sha256": "72adc6e355fa482a83690f4bc42c188647c068757e876866adacab5e4f20d4f2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession model entities on a GPU (LP7.2) [.][litgpu3]; FrameConvergence: modelsPending"
+        }
+      ],
+      "note": "LP7.2 (C52, C53, D124), hidden [.][litgpu3]: one headless session over the LP1b room with N01's binary under three names: a bare model; one model whose read-back pixel equals the CPU model of its HDR and LDR colour; two instances of one record (one placement, two draws); a model through a wall seen from both sides; a skin and a shader twin (the remapped colours); a skinned crate; a hidden one (nothing); a Pending record held at the parse thread's gate (nothing drawn, the frame unconverged, then drawn); a Missing file (the default cube, shader passes on); a light's model; an .md5mesh (nothing, counted as skinned). Each scenario's frame-log rows are held to its model_entities, model_instances, model_draws, models_pending and models_skinned; validation 0"
+    },
+    {
+      "id": "M-TEST-PARITY-08",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/d3xp/Entity.cpp",
+          "lines": [
+            317,
+            371
+          ],
+          "anchor": "ParseSpawnArgsToRenderEntity: N06's angles and modelscale_vec",
+          "sha256": "eeb642971f7fa65a57ab6ac0ed4b07517c17dea5e3de10e4ec55d149e0d58ce0"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            585,
+            607
+          ],
+          "anchor": "RemapShaderBySkin: N06's skin and shader twins",
+          "sha256": "252f6f1953c6bf903de1a54248db0c94af1d06395b139590e3b723e805ae165a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "MODEL_ROOMS_2, N07B_OX, N07B_LIGHT, models_light_specs, models_lights, MODELS_SKIN, MODELS_DEF, MODELS_MTR, the rows N01-N11 and N07b with N_EXPECT, PRINTED (r_mergeModelSurfaces, the r_slop cvars, binaryLoadRenderModels), stage (the collision outputs removed), cmd_compare's --thresholds (outside the repository)"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/maps/test/litpreview_models.map",
+          "symbol": "the rooms N06-N11 (parity.py fixtures)"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/def/lp7_models.def",
+          "symbol": "lp7_n11_def, lp7_n11_animated"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/materials/lp7_models.mtr",
+          "symbol": "textures/lp7/n06_skin, n06_shader, n10_flat"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/skins/lp7_models.skin",
+          "symbol": "skins/lp7/n06"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/models/test/n10.obj",
+          "symbol": "N10's box on the flat material"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession parity rows (LP2.3): model_draws, models_pending, models_skinned (ParityLists' model totals from RenderFrameAccess::models)"
+        }
+      ],
+      "note": "LP7.2 (C56, P7.4, P7.9, P7.10), test only: the models map's rows, a camera 40 from each room's west wall looking east (N07b from its second room looking west), exact (N10 K28), every control black, \"expect\" model_draws (a minimum), models_pending 0 and N11's models_skinned 2, which the [.][parity] test asserts and writes into each row's .json with model_entities and model_instances. N06 a box rotated and scaled with _color and a skin and a shader twin; N07 and N07b a box through a shared wall; N08 an .fbx name and a missing .obj (the default cube, M-TEST-PARITY-09); N09 a light with a model key; N10 hide 1 and inline 1 on a flat material; N11 an .md5mesh func_static (nothing), a modelDef name on idStaticEntity (the cube) and an idAnimatedEntity def behind the camera (K41). The engine run of 2026-10-26: 170 rows, every repeat 0, the proof listing 21,261 entries; N01-N07b and N09 every |d| 0, N10 within its K28 record (max 2), the controls black; the thresholds of the twelve rows recorded into a copy outside the sandbox (--thresholds), the sandbox's thresholds.json unchanged. lp7_n07b_point's reach names both rooms of the pair (150 from the shared wall with a radius of 190: the engine's 2 references)"
+    },
+    {
+      "id": "M-TEST-PARITY-09",
+      "kind": "difference",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            1777,
+            1783
+          ],
+          "anchor": "R_InitMaterials: the game's _default decl or FatalError",
+          "sha256": "6972ed1fa589f4b9a307b9185f4ef3f1aa71b91399395601ab358be8384221f6"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            273,
+            277
+          ],
+          "anchor": "MakeDefaultModel: the cube's surface takes tr.defaultMaterial (dmap: FindMaterial( _default, false ))",
+          "sha256": "be826da73c88a2428ff9b8a28920457f72324b6f9b7d938016138f554a03955b"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3779,
+            3788
+          ],
+          "anchor": "idMaterial::DefaultDefinition: a blend blend stage of the _default image",
+          "sha256": "b7e88a193183efd66cea02af5ac31fd1714dda24ed8c0190018b13ce33ad78cc"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            56,
+            118
+          ],
+          "anchor": "idImage::MakeDefault: black with alpha 0 at developer 0",
+          "sha256": "ece727c165b4322d20481d7b3b246c8ee9328cff5b2280d784c2ca16413c2d3b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "MaterialDecls::defaultModelMaterial (the _default decl, else the implicit material of the name)"
+        },
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "assemble_preview (the preview root: the fixture's decls, no game material file; outside the repository)"
+        }
+      ],
+      "note": "LP7.2's finding, test only (N08, N11): the engine's default cube draws the game's _default decl, which R_InitMaterials requires: opaque black in the engine's shots (N08 [893,602] and N11 [374,605] 0 0 0); the parity preview root holds the fixture's decls alone, so the preview's cube takes the implicit DefaultDefinition, a blend blend stage of the _default image, black with alpha 0 at developer 0: drawn (model_draws counts it) but invisible, the wall behind it showing (127 146 162, 107 99 77). Over the game folder the preview finds the game's decl as the engine does; the two rows fail until parity.py stages the game's _default decl into the preview root (or the fixture defines the cube's material on both sides)"
+    },
+    {
+      "id": "M-TEST-MEASURE-02",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [],
+      "sinkbroom": [
+        {
+          "file": "lib/TbUiLib/test/src/tst_LitMeasure.cpp",
+          "symbol": "StartMeasure::modelLitFrame, modelsLoadedFrame, models, service; findLit; the summary's model rows; column::ModelEntities ... AdoptedTris"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/LitSession.h",
+          "symbol": "ModelTotals, LitSession::modelTotalsForTesting"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::currentModelTotals, updateModelTotals, modelTotals"
+        },
+        {
+          "file": "lib/TbLitLib/src/GeometryArenas.cpp",
+          "symbol": "GeometryArenas::sharedRecords, placedSharedBytes"
+        }
+      ],
+      "note": "LP7.2 (C56, P7.14), test only: the measurement's model columns: per Start the first lit frame with a model drawn and the model set loaded (no record pending), the session's ModelTotals and the material service's model stats at the first Start's settle, the settled frame's model counters with adopted_tris and dress_surfaces, the orbit's model draws. On admin (2026-10-26, Release, twice): 399 model entities, 606 instances, 178 shared surfaces of 95 records (0.6 MB placed, the table's 0.7 MB), 62 skinned, 226 model draws at the start view, 0 adopted triangles (D138: a .bproc), 0 dress surfaces"
     }
   ],
   "retired": [
