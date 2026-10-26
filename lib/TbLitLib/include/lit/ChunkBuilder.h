@@ -32,6 +32,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -368,6 +369,29 @@ ChunkJobOutput buildChunks(
 
 // the tangent path of a material (C25, M-ID-DIFF-04)
 EngineTangentPath tangentPath(const MaterialEntry* material);
+
+// Material.h IsDrawn: stages, an entity gui or a gui
+bool engineMaterialDrawn(const MaterialEntry& material);
+
+/**
+ * LP7.2 (C53, D131, P7.6): the draw material of a surface whose own material is own
+ * (ownEntry its entry, null while the table lacks it) under an entity's customShader
+ * (shader, "" for none) or else customSkin (skin, null for none), in R_AddSingleModel's
+ * order (tr_frontend_addmodels.cpp:579-607; the caller skipped a surface whose own
+ * material is neither drawn nor casting shadows, :579): the shader replaces it and a
+ * surface whose own material deforms maps to nothing (:588-594); else RemapShaderBySkin
+ * (DeclSkin.cpp): an own material that is not drawn is never remapped, the first mapping
+ * of the own material's canonical name or the "*" wildcard wins, and a remapped material
+ * neither drawn nor casting shadows is skipped (:601-605). entryOf answers a name's entry
+ * (null: not in the table). nullopt: the surface is skipped. Without ownEntry no skin
+ * remaps (its IsDrawn is not known): the caller builds it provisionally. Pure.
+ */
+std::optional<std::string> engineDrawMaterial(
+  const std::string& own,
+  const MaterialEntry* ownEntry,
+  const std::string& shader,
+  const SkinRecord* skin,
+  const std::function<const MaterialEntry*(const std::string&)>& entryOf);
 
 // the engine's name of a brush side's and a patch's material (MapFile.cpp:788-796,
 // :296-304)

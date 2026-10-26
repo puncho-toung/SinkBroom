@@ -780,4 +780,319 @@ TEST_CASE("LightTriangleCache: an instance's triangles from its shared surface (
   cache.endBuild(nullptr);
 }
 
+namespace
+{
+
+// LP7.2 step 4: a quad on lp1b/floor (2015-stamped), as the service's model tests' OBJ
+const auto SceneQuadObj = std::string{
+  "v 0 0 0\nv 32 0 0\nv 32 32 0\nv 0 32 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 0 1\n"
+  "usemtl textures/lp1b/floor\nf 1/1/1 2/2/1 3/3/1\nf 1/1/1 3/3/1 4/4/1\n"};
+
+// the model scenes' decls: the test materials, the skins, the entityDefs of the dispatch
+// (D139's spawnclasses, a dmapOnly class) and the quad
+std::vector<DeclFile> modelSceneDecls()
+{
+  auto files = skinDecls();
+  files.push_back(DeclFile{
+    "def/lp7s_test.def",
+    "entityDef func_static\n{\n\t\"spawnclass\" \"idStaticEntity\"\n}\n"
+    "entityDef lp7s_monster\n{\n\t\"spawnclass\" \"idAI\"\n\t\"model\" "
+    "\"lp7s_monster_def\"\n}\n"
+    "entityDef lp7s_item\n{\n\t\"spawnclass\" \"idItem\"\n}\n"
+    "entityDef func_decal\n{\n\t\"spawnclass\" \"idEntity\"\n\t\"dmapOnly\" \"1\"\n}\n"
+    "entityDef light\n{\n\t\"spawnclass\" \"idLight\"\n}\n",
+    0});
+  files.push_back(DeclFile{"models/test/quad.obj", SceneQuadObj, 1451520000});
+  return files;
+}
+
+// a scene over a material service of modelSceneDecls, settled after each snapshot
+class ModelScene
+{
+public:
+  std::unique_ptr<MaterialService> service;
+  std::unique_ptr<CpuPool> pool;
+  std::unique_ptr<SceneGeometry> scene;
+  std::uint64_t sequence = 0;
+
+  ModelScene()
+  {
+    static_cast<void>(skinTestTable());
+    auto options = MaterialServiceOptions{};
+    options.makeSource = [](const std::atomic<bool>&) {
+      return std::unique_ptr<DeclSource>{
+        std::make_unique<MemoryDeclSource>(modelSceneDecls())};
+    };
+    options.pollInterval = 0ms;
+    service = MaterialService::create(std::move(options))
+              | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    REQUIRE(service->waitForTableForTesting(
+      [](const MaterialTable& t) { return t.registry != 0; }, 10s));
+    pool = CpuPool::create() | kdl::value();
+    scene = std::make_unique<SceneGeometry>(pool.get(), service.get());
+  }
+
+  ~ModelScene()
+  {
+    scene.reset();
+    pool->stop();
+  }
+
+  // the snapshot taken, then until nothing waits (or the timeout)
+  Snapshot take(const std::string& mapText)
+  {
+    auto snapshot = snapshotOfMapText(mapText);
+    snapshot.sequence = ++sequence;
+    scene->takeSnapshot(snapshot);
+    settle();
+    return snapshot;
+  }
+
+  void settle()
+  {
+    const auto settled = waitUntil(
+      [&] {
+        scene->collect();
+        scene->finishForTesting();
+        return !scene->waitsForModels() && !scene->waitsForEntityDefs()
+               && !scene->waitsForMaterials();
+      },
+      10000ms);
+    CHECK(settled);
+  }
+
+  std::vector<const ModelInstance*> instancesOf(const PreviewId entity) const
+  {
+    auto found = std::vector<const ModelInstance*>{};
+    for (const auto& [key, instance] : scene->instances())
+    {
+      if (key.entity == entity)
+      {
+        found.push_back(&instance);
+      }
+    }
+    return found;
+  }
+
+  std::size_t chunksOf(const PreviewId entity) const
+  {
+    return std::size_t(std::ranges::count_if(
+      scene->chunks(), [&](const auto& entry) { return entry.first.entity == entity; }));
+  }
+};
+
+std::string pointEntity(const std::string& classname, const std::string& keys)
+{
+  return "{\n\"classname\" \"" + classname + "\"\n" + keys + "}\n";
+}
+
+const auto WorldBox = std::string{"{\n\"classname\" \"worldspawn\"\n"}
+                      + boxBrush(0, 0, 0, 64, 64, 64, "lp1b/wall") + "}\n";
+
+} // namespace
+
+TEST_CASE("SceneGeometry: model entities, the dispatch of each kind (LP7.2, C52, D139)")
+{
+  auto model = ModelScene{};
+  const auto quad = std::string{"\"model\" \"models/test/quad.obj\"\n"};
+  const auto map =
+    WorldBox
+    + pointEntity("func_static", "\"name\" \"obj\"\n\"origin\" \"100 0 0\"\n" + quad)
+    + "{\n\"classname\" \"func_static\"\n\"name\" \"own\"\n\"model\" \"own\"\n"
+    + boxBrush(200, 0, 0, 232, 32, 32, "lp1b/crate") + "}\n"
+    + "{\n\"classname\" \"func_static\"\n\"name\" \"brushfile\"\n" + quad
+    + boxBrush(300, 0, 0, 332, 32, 32, "lp1b/crate") + "}\n"
+    + pointEntity(
+      "func_static", "\"name\" \"modeldef\"\n\"model\" \"lp7s_monster_def\"\n")
+    + pointEntity("lp7s_monster", "\"name\" \"monster\"\n")
+    + pointEntity("lp7s_item", "\"name\" \"item\"\n\"model\" \"lp7s_monster_def\"\n")
+    + pointEntity("func_decal", "\"name\" \"decal\"\n" + quad)
+    + pointEntity("func_static", "\"name\" \"hidden\"\n\"hide\" \"1\"\n" + quad)
+    + pointEntity("func_static", "\"name\" \"inlined\"\n\"inline\" \"1\"\n" + quad)
+    + pointEntity("light", "\"name\" \"lamp\"\n\"_color\" \"1 0.5 0.25\"\n" + quad)
+    + pointEntity("light", "\"name\" \"lamp_off\"\n\"start_off\" \"1\"\n" + quad)
+    + pointEntity(
+      "func_static", "\"name\" \"skinned\"\n\"model\" \"models/test/n11.md5mesh\"\n")
+    + pointEntity("func_static", "\"name\" \"proc\"\n\"model\" \"own\"\n");
+  const auto snapshot = model.take(map);
+  const auto id = [&](const std::string& name) { return entityNamed(snapshot, name); };
+
+  // an .obj on a point entity: its record's surfaces, the entity's state at its origin
+  const auto obj = model.instancesOf(id("obj"));
+  REQUIRE(obj.size() == 1);
+  CHECK(obj[0]->header.key.material == "textures/lp1b/floor");
+  CHECK(obj[0]->geometry->record->state == ModelRecord::State::Ready);
+  CHECK(obj[0]->geometry->record->name == "models/test/quad.obj");
+  REQUIRE(model.scene->entityStates().contains(id("obj")));
+  CHECK(model.scene->entityStates().at(id("obj")).modelOrigin == EngineVec3{100, 0, 0});
+  // a brush entity of its own name draws its brushes, no instance (K17)
+  CHECK(model.instancesOf(id("own")).empty());
+  CHECK(model.chunksOf(id("own")) > 0);
+  // a brush entity whose model names a file draws the file, not its brushes
+  CHECK(model.instancesOf(id("brushfile")).size() == 1);
+  CHECK(model.chunksOf(id("brushfile")) == 0);
+  // a modelDef name on idStaticEntity: the default cube (Default, 24 vertices)
+  const auto cube = model.instancesOf(id("modeldef"));
+  REQUIRE(cube.size() == 1);
+  CHECK(cube[0]->geometry->record->state == ModelRecord::State::Default);
+  CHECK(cube[0]->geometry->vertexCount() == 24);
+  // on idAI (its def's model) and on idItem
+  CHECK(model.instancesOf(id("monster")).empty());
+  CHECK(model.instancesOf(id("item")).size() == 1);
+  // dmapOnly, hide 1: nothing; inline 1: drawn from its file at its place (K42)
+  CHECK(model.instancesOf(id("decal")).empty());
+  CHECK(model.instancesOf(id("hidden")).empty());
+  CHECK(model.instancesOf(id("inlined")).size() == 1);
+  // a light's model under its id, its colour the light's, 0 when it starts off
+  const auto lamp = model.instancesOf(id("lamp"));
+  REQUIRE(lamp.size() == 1);
+  CHECK(lamp[0]->shaderParms[0] == 1.0f);
+  CHECK(lamp[0]->shaderParms[1] == 0.5f);
+  CHECK(lamp[0]->shaderParms[2] == 0.25f);
+  const auto off = model.instancesOf(id("lamp_off"));
+  REQUIRE(off.size() == 1);
+  CHECK(off[0]->shaderParms[0] == 0.0f);
+  // an .md5mesh: nothing (Skinned); another entity's .proc model name: nothing (K47)
+  CHECK(model.instancesOf(id("skinned")).empty());
+  CHECK(model.instancesOf(id("proc")).empty());
+
+  const auto counts = model.scene->modelCounts();
+  // obj, brushfile, modeldef, monster, item, inlined, lamp, lamp_off, skinned
+  CHECK(counts.entities == 9);
+  CHECK(counts.instances == 7);
+  CHECK(counts.pending == 0);
+  CHECK(counts.skinned == 2);
+  CHECK_FALSE(model.scene->waitsForModels());
+  // one shared surface for the five quad instances, the cube's for two
+  auto placements = std::set<SharedGeometryKey>{};
+  for (const auto& [key, instance] : model.scene->instances())
+  {
+    placements.insert(instance.placement());
+  }
+  CHECK(placements.size() == 2);
+  // the once-notices: the cube's reason, the skinned and the .proc names
+  const auto warnings = model.scene->takeWarnings();
+  const auto said = [&](const std::string& part) {
+    return std::ranges::any_of(warnings, [&](const std::string& warning) {
+      return warning.find(part) != std::string::npos;
+    });
+  };
+  CHECK(said("'modeldef' (func_static): 'lp7s_monster_def' draws the default cube"));
+  CHECK(said("idAI spawnclass"));
+  CHECK(said("K47"));
+}
+
+TEST_CASE("SceneGeometry: a model entity's keys rebuild its instances (LP7.2, C52)")
+{
+  auto model = ModelScene{};
+  const auto entity = [](const std::string& keys) {
+    return WorldBox
+           + pointEntity(
+             "func_static",
+             "\"name\" \"obj\"\n\"model\" \"models/test/quad.obj\"\n\"origin\" \"100 0 "
+             "0\"\n"
+               + keys);
+  };
+  const auto snapshot = model.take(entity(""));
+  const auto obj = entityNamed(snapshot, "obj");
+  REQUIRE(model.instancesOf(obj).size() == 1);
+  const auto base = *model.instancesOf(obj)[0];
+  const auto versions = [&](const std::string& keys) {
+    model.take(entity(keys));
+    REQUIRE(model.instancesOf(obj).size() == 1);
+    const auto& instance = *model.instancesOf(obj)[0];
+    return std::pair{instance.header.casterVersion, instance.header.appearanceVersion};
+  };
+  for (const auto& keys : std::vector<std::string>{
+         "\"_color\" \"1 0 0\"\n",
+         "\"shaderParm5\" \"2\"\n",
+         "\"angles\" \"0 90 0\"\n",
+         "\"modelscale_vec\" \"2 1 1\"\n",
+         "\"skin\" \"skins/lp7s/wild\"\n",
+         "\"shader\" \"textures/lp1b/wall\"\n",
+         "\"noshadows\" \"1\"\n"})
+  {
+    CAPTURE(keys);
+    CHECK(versions(keys).second != base.header.appearanceVersion);
+  }
+  // the shadow flags move the caster version too
+  CHECK(versions("\"noshadows\" \"1\"\n").first != base.header.casterVersion);
+  // a skin and a shader: the draw material (C53)
+  model.take(entity("\"skin\" \"skins/lp7s/wild\"\n"));
+  CHECK(model.instancesOf(obj)[0]->header.key.material == "textures/lp1b/patch");
+  CHECK(model.instancesOf(obj)[0]->header.sourceMaterial == "textures/lp1b/floor");
+  model.take(entity("\"shader\" \"textures/lp1b/wall\"\n"));
+  CHECK(model.instancesOf(obj)[0]->header.key.material == "textures/lp1b/wall");
+  // hide 1 takes them away, and back
+  model.take(entity("\"hide\" \"1\"\n"));
+  CHECK(model.instancesOf(obj).empty());
+  model.take(entity(""));
+  CHECK(model.instancesOf(obj).size() == 1);
+  // the model key gone: no instance, no state of the scene's
+  model.take(
+    WorldBox + pointEntity("func_static", "\"name\" \"obj\"\n\"origin\" \"100 0 0\"\n"));
+  CHECK(model.instancesOf(obj).empty());
+  CHECK_FALSE(model.scene->entityStates().contains(obj));
+}
+
+TEST_CASE("SceneGeometry: a Pending model draws nothing and waits (LP7.2, D124)")
+{
+  static_cast<void>(skinTestTable());
+  auto gate = std::make_shared<ParseGate>();
+  auto options = MaterialServiceOptions{};
+  options.makeSource = [](const std::atomic<bool>&) {
+    return std::unique_ptr<DeclSource>{
+      std::make_unique<MemoryDeclSource>(modelSceneDecls())};
+  };
+  options.pollInterval = 0ms;
+  options.beforeTakeWorkForTesting = [gate] { gate->pass(); };
+  auto service = MaterialService::create(std::move(options))
+                 | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  const auto atExit = OpenAtExit{gate};
+  REQUIRE(service->waitForTableForTesting(
+    [](const MaterialTable& t) { return t.registry != 0; }, 10s));
+  auto pool = CpuPool::create() | kdl::value();
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    // the gate holds the thread at its next take: one lookup brings it there
+    gate->close();
+    static_cast<void>(service->lookup("textures/lp7s/gate"));
+    REQUIRE(service->waitForTableForTesting(
+      [](const MaterialTable& t) { return t.find("textures/lp7s/gate") != nullptr; },
+      10s));
+    auto snapshot = snapshotOfMapText(
+      WorldBox
+      + pointEntity(
+        "func_static", "\"name\" \"obj\"\n\"model\" \"models/test/quad.obj\"\n")
+      + pointEntity(
+        "func_static", "\"name\" \"none\"\n\"model\" \"models/test/none.obj\"\n"));
+    snapshot.sequence = 1;
+    scene.takeSnapshot(snapshot);
+    scene.finishForTesting();
+    CHECK(scene.instances().empty());
+    CHECK(scene.waitsForModels());
+    CHECK(scene.modelCounts().pending == 2);
+
+    gate->open();
+    const auto settled = waitUntil(
+      [&] {
+        scene.collect();
+        scene.finishForTesting();
+        return !scene.waitsForModels() && !scene.waitsForEntityDefs();
+      },
+      10000ms);
+    CHECK(settled);
+    CHECK(scene.modelCounts().pending == 0);
+    auto states = std::map<std::string, ModelRecord::State>{};
+    for (const auto& [key, instance] : scene.instances())
+    {
+      states[instance.geometry->record->name] = instance.geometry->record->state;
+    }
+    // Ready, and a missing file's cube (converged)
+    CHECK(states["models/test/quad.obj"] == ModelRecord::State::Ready);
+    CHECK(states["models/test/none.obj"] == ModelRecord::State::Missing);
+  }
+  pool->stop();
+}
+
 } // namespace tb::lit

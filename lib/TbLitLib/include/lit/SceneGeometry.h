@@ -169,6 +169,52 @@ private:
   // LP7.2 (C52, D129, P7.7): the model entities' instances, by chunk key, apart from the
   // chunks
   std::map<ChunkKey, ModelInstance> m_instances;
+
+  // ----- LP7.2 (C52, C53, D124, D127, D128, D139, D140): the model entities -----
+
+  /**
+   * What an entity's model became when the scene last built it, and what it waits for:
+   * None (not a model entity), Nothing (hidden, dmapOnly, removed, a .proc model's name
+   * on another entity: K47), Pending (its record is not Ready yet: D124), Ready (its
+   * record's surfaces), Cube (a Missing or Default record: the default cube, converged),
+   * Skinned (an .md5mesh, or a modelDef name on an idAnimatedEntity spawnclass: nothing,
+   * models_skinned, K41)
+   */
+  struct ModelEntity
+  {
+    enum class Kind
+    {
+      None,
+      Nothing,
+      Pending,
+      Ready,
+      Cube,
+      Skinned,
+    };
+
+    Kind kind = Kind::None;
+    // the canonical model name asked for, and the record the build read
+    std::string model;
+    std::shared_ptr<const ModelRecord> record;
+    // the skin key and its slot when built (null: none, or pending)
+    std::string skinName;
+    std::shared_ptr<const SkinSlot> skin;
+    // the materials the build's table lacked (the instances provisional)
+    std::vector<std::string> pendingMaterials;
+    // the instances' chunk keys
+    std::vector<ChunkKey> instances;
+    // the scene made its ChunkEntityState (a point entity or a light); a brush entity's
+    // is its chunk job's
+    bool ownsState = false;
+  };
+  std::unordered_map<PreviewId, ModelEntity> m_modelEntities;
+  std::set<PreviewId> m_dirtyModels;
+  // the shared surfaces the instances hold, one per placement key
+  std::map<SharedGeometryKey, std::shared_ptr<const SharedSurface>> m_sharedSurfaces;
+  // the once-notices said, by entity and text
+  std::set<std::pair<PreviewId, std::string>> m_modelNotices;
+  // an instance was added or removed since collect last said so
+  bool m_modelsChanged = false;
   std::map<std::string, std::set<CellRef>> m_pendingMaterials;
   std::map<std::string, SizedCells> m_sizedCells;
   // LP5.F: a sized cell's measured is false (updated with m_sizedCells)
@@ -221,6 +267,20 @@ private:
   mutable std::shared_ptr<const AreaData> m_portalFogAreas;
 
 public:
+  // LP7.2 (C52): the scene's model totals (the frame log's model_entities,
+  // model_instances, models_pending, models_skinned): the entities that take C51's
+  // dispatch (Pending, Ready, Cube, Skinned), the instances, the entities whose record is
+  // Pending, and the entities drawn as nothing for a skinned model
+  struct ModelCounts
+  {
+    std::uint64_t entities = 0;
+    std::uint64_t instances = 0;
+    std::uint64_t pending = 0;
+    std::uint64_t skinned = 0;
+
+    bool operator==(const ModelCounts&) const = default;
+  };
+
   // LP7.4 (C55): the scene's current adoption totals (the frame log's adopted_islands,
   // adopted_tris, unmatched_islands, curved_islands)
   struct AdoptionCounts
@@ -261,6 +321,8 @@ private:
   // the entities' adoption tables (the jobs' input), immutable once published
   std::unordered_map<PreviewId, std::shared_ptr<const EntityAdoption>> m_adoptions;
   AdoptionCounts m_adoptionCounts;
+  // LP7.2 (C52): updated with every model pass
+  ModelCounts m_modelCounts;
 
 public:
   // lights, probes and grids may be null: the registries (and the scene's grid tables)
@@ -367,6 +429,14 @@ public:
   // DX.4 (C10): the bake of the map's path was asked for and the table has not answered
   // that request yet
   bool waitsForBake() const;
+  /**
+   * LP7.2 (C52, D124): a model entity's record is Pending, or its instances were built
+   * while a material or its skin was not in the table (their decisions are built again
+   * when it is); never without a material service, which nothing could answer
+   */
+  bool waitsForModels() const;
+  // LP7.2 (C52): the scene's model totals; the render thread
+  ModelCounts modelCounts() const;
 
   /**
    * LP7.4 (C55): the scene's adoption totals: the adopted islands and their triangles,
@@ -428,6 +498,16 @@ private:
   PreviewId chunkEntityOf(const SceneNode& node) const;
   // LP4.2a (C37): the probe registry's inputs now, its entityDefs asked for
   ProbeJobInput probeInput();
+  // LP7.2 (C52): the model entities marked, built again (lit/SceneGeometry:
+  // SceneModels.cpp)
+  void markModelEntity(PreviewId entity);
+  void markAllModelEntities();
+  void updateModelEntities();
+  void buildModelEntity(PreviewId entity);
+  void removeModelInstances(PreviewId entity);
+  // LP7.2: a table the scene scans marks the model entities whose answers moved
+  void scanModelEntities(bool materialsMoved);
+  void modelNotice(PreviewId entity, const std::string& text);
   // LP4.3 (C36): the grid table of the bake adopted now, published when its areas changed
   void publishGridTable();
 };

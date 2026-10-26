@@ -518,31 +518,17 @@ private:
     {
       return &original;
     }
-    if (!context.shader.empty())
+    const auto name = engineDrawMaterial(
+      original.name,
+      original.entry,
+      context.shader,
+      context.skin,
+      [&](const std::string& material) { return m_materials.get(material).entry; });
+    if (!name)
     {
-      if (original.entry && original.entry->deform != 0)
-      {
-        return nullptr;
-      }
-      return &m_materials.get(context.shader);
+      return nullptr;
     }
-    if (!context.skin || !original.entry || !original.drawn)
-    {
-      return &original;
-    }
-    for (const auto& mapping : context.skin->mappings)
-    {
-      if (mapping.from.empty() || mapping.from == original.entry->name)
-      {
-        const auto& remapped = m_materials.get(mapping.to);
-        if (remapped.entry && !remapped.drawn && !remapped.castsShadow)
-        {
-          return nullptr;
-        }
-        return &remapped;
-      }
-    }
-    return &original;
+    return *name == original.name ? &original : &m_materials.get(*name);
   }
 
   Bucket& bucket(
@@ -1348,6 +1334,49 @@ CellCoord cellOfNode(const SceneNode& node)
     int(std::floor(c.x() / CellSize)),
     int(std::floor(c.y() / CellSize)),
     int(std::floor(c.z() / CellSize))};
+}
+
+bool engineMaterialDrawn(const MaterialEntry& material)
+{
+  return isDrawn(material);
+}
+
+std::optional<std::string> engineDrawMaterial(
+  const std::string& own,
+  const MaterialEntry* ownEntry,
+  const std::string& shader,
+  const SkinRecord* skin,
+  const std::function<const MaterialEntry*(const std::string&)>& entryOf)
+{
+  if (!shader.empty())
+  {
+    // :588-594: a deforming surface maps to nothing under a customShader
+    if (ownEntry && ownEntry->deform != 0)
+    {
+      return std::nullopt;
+    }
+    return shader;
+  }
+  // DeclSkin.cpp RemapShaderBySkin: "never remap surfaces that were originally nodraw"
+  if (!skin || !ownEntry || !isDrawn(*ownEntry))
+  {
+    return own;
+  }
+  for (const auto& mapping : skin->mappings)
+  {
+    // NULL = wildcard match; else the decl itself (its canonical name)
+    if (mapping.from.empty() || mapping.from == ownEntry->name)
+    {
+      // :601-605: a remapped surface neither drawn nor casting shadows is skipped
+      if (const auto* remapped = entryOf(mapping.to);
+          remapped && !isDrawn(*remapped) && !remapped->surfaceCastsShadow)
+      {
+        return std::nullopt;
+      }
+      return mapping.to;
+    }
+  }
+  return own;
 }
 
 EngineTangentPath tangentPath(const MaterialEntry* material)

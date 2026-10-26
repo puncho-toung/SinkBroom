@@ -352,6 +352,9 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
     nodeChanged(id);
     entityChanged(id);
     changedEntities.insert(id);
+    // LP7.2 (C52): a removed entity's model goes, its notices with it
+    markModelEntity(id);
+    std::erase_if(m_modelNotices, [&](const auto& notice) { return notice.first == id; });
     removeNode(id);
     m_nodes.erase(id);
     if (m_entities.erase(id) > 0)
@@ -409,6 +412,8 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
       // LP7.4 (K44): its state, its pivot or its primitives' entity may have changed
       changedEntities.insert(id);
       entityChanged(id);
+      // LP7.2 (C52): and its model
+      markModelEntity(id);
     }
   }
 
@@ -438,6 +443,9 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
       }
     }
     removeNode(id);
+    // LP7.2 (C52): a node's entity may be a model entity (a point entity's or a light's
+    // own node: its visibility; a brush entity's primitives: its pivot)
+    markModelEntity(node->entity);
     if (isPrimitive(*node))
     {
       addNode(id, CellRef{chunkEntityOf(*node), cellOfNode(*node)}, node->entity);
@@ -478,6 +486,8 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
     markAll();
     // LP7.4: and the adoption with its tree
     adoptTree();
+    // LP7.2 (C52): the model entities' areas
+    markAllModelEntities();
   }
 
   // LP7.4 (K44): an island one of whose candidates changed, or whose entity did, leaves
@@ -511,6 +521,9 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
   }
   m_lights.takeSnapshot(snapshot, m_proc);
   startBatch();
+  // LP7.2 (C52): the model entities the snapshot changed, at once (no job: a few lookups
+  // per surface); a brush entity's again once its batch applies
+  updateModelEntities();
 }
 
 void SceneGeometry::refreshTable()
@@ -544,6 +557,8 @@ void SceneGeometry::refreshTable()
     // LP7.4 (K44): every island is tried again with the new registry's materials
     dropAdoption([](PreviewId, const AdoptedIsland&) { return true; });
     m_adoptionAll = true;
+    // LP7.2 (C52): every model entity with the new registry's answers
+    markAllModelEntities();
   }
   scanTable();
 }
@@ -637,6 +652,8 @@ void SceneGeometry::scanTable()
         // LP7.4 (C55): its islands; every group is evaluated once the batch built with
         // the tree applies, and the cells of the islands adopted are built again then
         adoptTree();
+        // LP7.2 (C52): the model entities' areas and keys
+        markAllModelEntities();
       }
     }
   }
@@ -685,7 +702,8 @@ void SceneGeometry::scanTable()
   // built again (whether the material made a chunk or not), and an entity whose material
   // gained or lost CONTENTS_ORIGIN is built again whole, since its origin brushes' pivot
   // moves (ChunkBuilder's IsOriginBrush). An image override moves no revision
-  if (m_table->materialsRevision != m_materialsRevision)
+  const auto materialsMoved = m_table->materialsRevision != m_materialsRevision;
+  if (materialsMoved)
   {
     m_materialsRevision = m_table->materialsRevision;
     for (auto& [material, built] : m_materialCells)
@@ -723,6 +741,8 @@ void SceneGeometry::scanTable()
       {
         markEntity(entity);
         repivoted.insert(entity);
+        // LP7.2 (C52): a model entity's merged keys
+        markModelEntity(entity);
       }
       it = m_pendingEntityDefs.erase(it);
     }
@@ -753,6 +773,8 @@ void SceneGeometry::scanTable()
       return repivoted.contains(entity) || rescanned.contains(lowerCase(island.material));
     });
   }
+  // LP7.2 (C52, D124): the model entities whose record, skin or materials moved
+  scanModelEntities(materialsMoved);
 }
 
 void SceneGeometry::startBatch()
@@ -1519,7 +1541,11 @@ bool SceneGeometry::collect()
   // its warnings are posted with the next batch
   m_probes.collect();
   const auto chunksApplied = collectChunks();
-  return chunksApplied || lightsApplied;
+  // LP7.2 (C52): the model entities a batch, a table or a snapshot marked; a changed
+  // instance counts as an applied batch (the arenas sync, a frame is drawn)
+  updateModelEntities();
+  const auto modelsChanged = std::exchange(m_modelsChanged, false);
+  return chunksApplied || lightsApplied || modelsChanged;
 }
 
 ProbeJobInput SceneGeometry::probeInput()
@@ -1622,6 +1648,12 @@ bool SceneGeometry::collectChunks()
       {
         m_warnings.push_back(fmt::format("A chunk job failed: {}", e.what()));
       }
+    }
+    // LP7.2 (C52): a brush entity whose model names a file is built from its batch's
+    // state
+    for (const auto id : m_touchedEntities)
+    {
+      markModelEntity(id);
     }
     // D80: the references of the entities the batch touched, over all their chunks
     updateEntityReferences();
