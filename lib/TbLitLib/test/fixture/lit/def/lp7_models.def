@@ -1,0 +1,3 @@
+// LP7.1a models parity fixture (plans/lit-preview/47-LP7-PACKAGES.md C56); written by
+// TOOLS/lit-preview/parity.py fixtures. LP7.2 adds the modelDefs of N11 (an idEntity
+// spawnclass and an idAnimatedEntity one); LP7.1a's rooms N01-N05 name their files.

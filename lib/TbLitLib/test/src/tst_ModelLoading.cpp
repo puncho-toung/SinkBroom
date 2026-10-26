@@ -30,6 +30,7 @@
 // LP7.1a (C51): model loading on the CPU: the binary path with the engine's time test
 // (D125), the GLMB tail (P7.19).
 
+#include "LitMapFixture.h"
 #include "LitTestUtils.h"
 #include "ModelValidators.h"
 #include "fs/TestEnvironment.h"
@@ -44,6 +45,8 @@
 
 #include "kd/result.h"
 
+#include <fmt/format.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -52,6 +55,7 @@
 #include <cstring>
 #include <filesystem>
 #include <future>
+#include <iostream>
 #include <span>
 #include <string>
 #include <thread>
@@ -1163,6 +1167,90 @@ TEST_CASE(
     CHECK(input.materials.names.size() == 2u);
     CHECK(input.materials.materials.size() == 1u);
     CHECK(model.surfaces.size() == 1u);
+  }
+}
+
+namespace
+{
+
+std::filesystem::path modelsFixture()
+{
+  return litFixtureFolder() / "models";
+}
+
+// the fixture's model materials, as the engine's registry parses them
+std::vector<DeclFile> fixtureModelDecls()
+{
+  return {DeclFile{
+    "materials/lp7_models.mtr",
+    readTextFile(litFixtureFolder() / "materials" / "lp7_models.mtr"),
+    0}};
+}
+
+// the preview's source load of a fixture model (the parse thread's half and the pool's)
+// with the time handed in, as MaterialService's Model item makes it
+EngineModel sourceLoad(
+  MaterialDecls& decls,
+  const std::string& name,
+  const std::int64_t time,
+  const bool* mikktspace = nullptr)
+{
+  const auto bytes = readTextFile(litFixtureFolder() / name);
+  auto read = readObjSource(decls, name, bytes, time);
+  static_cast<void>(decls.takeMessages());
+  INFO(read.reason);
+  REQUIRE(read.reason.empty());
+  REQUIRE(read.input);
+  if (mikktspace)
+  {
+    read.input->useMikktspace = *mikktspace;
+  }
+  auto model = finishModel(*read.input);
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  return model;
+}
+
+} // namespace
+
+TEST_CASE("ModelLoading, the fixture models before the capture (LP7.1a, C56, P7.10)")
+{
+  auto source = MemoryDeclSource{fixtureModelDecls()};
+  auto decls = MaterialDecls{source};
+
+  SECTION("every fixture OBJ passes the validator")
+  {
+    for (const auto* name :
+         {"models/test/n01.obj", "models/test/n02.obj", "models/test/n03.obj"})
+    {
+      INFO(name);
+      CHECK_FALSE(objFileProblem(readTextFile(litFixtureFolder() / name)));
+    }
+  }
+
+  SECTION("N03's MikkTSpace tangents are not the WithoutNormals path's (P7.10)")
+  {
+    const auto mikk = true;
+    const auto without = false;
+    const auto withMikk = sourceLoad(decls, "models/test/n03.obj", 1483228800, &mikk);
+    const auto withoutMikk =
+      sourceLoad(decls, "models/test/n03.obj", 1483228800, &without);
+    REQUIRE(withMikk.surfaces.size() == 1u);
+    REQUIRE(withoutMikk.surfaces.size() == 1u);
+    const auto& a = withMikk.surfaces[0].verts;
+    const auto& b = withoutMikk.surfaces[0].verts;
+    REQUIRE(a.size() == b.size());
+    auto differing = std::size_t{0};
+    for (std::size_t i = 0; i < a.size(); ++i)
+    {
+      differing += a[i].tangent != b[i].tangent ? 1 : 0;
+    }
+    std::cout << fmt::format(
+      "N03: {} vertices ({} mirrored), {} with other tangents under MikkTSpace\n",
+      a.size(),
+      withMikk.surfaces[0].numMirroredVerts,
+      differing);
+    CHECK(differing > 0);
+    CHECK(withMikk.surfaces[0].numMirroredVerts > 0);
   }
 }
 

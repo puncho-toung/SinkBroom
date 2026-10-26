@@ -1,0 +1,48 @@
+// LP7.1a models parity fixture (plans/lit-preview/47-LP7-PACKAGES.md C56); written by
+// TOOLS/lit-preview/parity.py fixtures. The lights' images are lp2_parity.mtr's (staged
+// with it). Names under textures/lp7/ are reserved for fixtures (K20). Every material is
+// lit, one-sided and without a deform, so FinishSurfaces adds no back side and keeps the
+// bounds (Model.cpp:1252-1276, 1346-1360).
+
+// the rooms' floors and walls
+textures/lp7/floor
+{
+	qer_editorimage	textures/lp7/floor.tga
+	diffusemap	textures/lp7/floor.tga
+	bumpmap	textures/lp7/floor_local.tga
+}
+
+textures/lp7/wall
+{
+	qer_editorimage	textures/lp7/wall.tga
+	diffusemap	textures/lp7/wall.tga
+	bumpmap	textures/lp7/wall_local.tga
+}
+
+// N01, N02, N03: the OBJ models' usemtl, bump-mapped (P7.10: N03's tangents show)
+textures/lp7/model
+{
+	qer_editorimage	textures/lp7/model.tga
+	diffusemap	textures/lp7/model.tga
+	bumpmap	textures/lp7/model_local.tga
+}
+
+// N04: the ASE's material, named by its *BITMAP through OSPathToRelativePath
+textures/lp7/n04
+{
+	qer_editorimage	textures/lp7/model.tga
+	diffusemap	textures/lp7/model.tga
+	bumpmap	textures/lp7/model_local.tga
+}
+
+// N05: the LWO's surface; a vertexColor stage shows the surface colour (alpha 255)
+textures/lp7/n05
+{
+	qer_editorimage	textures/lp7/model.tga
+	bumpmap	textures/lp7/model_local.tga
+	{
+		blend	diffusemap
+		map	textures/lp7/model.tga
+		vertexColor
+	}
+}

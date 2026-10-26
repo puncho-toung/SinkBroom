@@ -1,0 +1,69 @@
+{
+ "comment": "LP7.1a (C56, P7.4 (d)): each fixture model source's stamp (git keeps no modification time; a test hands it in as the source's time) and the binary the engine wrote from it in TOOLS/lit-preview/parity.py capture-models",
+ "engine_commit": "285ea4d18a0aaedf46b0803ea656e4850eba5a01",
+ "exe": {
+  "size": 12770816,
+  "mtime": "2026-10-18T21:36:27"
+ },
+ "digest": "47210fd420d07ddd52c3ba78787b8bdf377b02bbea124aca067b9472dc794c2a",
+ "status": "exited with 0 after 16.2 s",
+ "duration_s": 16.2,
+ "entries": 21261,
+ "stamps": {
+  "models/test/n01.obj": 1451520000,
+  "models/test/n02.obj": 1451520000,
+  "models/test/n03.obj": 1483228800,
+  "models/test/n04.ase": 1451520000,
+  "models/test/n05.lwo": 1451520000,
+  "models/test/n11.md5mesh": 1451520000
+ },
+ "goldens": {
+  "models/test/n01.bobj": {
+   "source": "models/test/n01.obj",
+   "engine_path": "generated/rendermodels/models/test/n01.bobj",
+   "bytes": 1740,
+   "sha256": "c613d03b96ffd787472790486f364e24515c11c14c1c4e4c11efae9bf6e1bfba"
+  },
+  "models/test/n02.bobj": {
+   "source": "models/test/n02.obj",
+   "engine_path": "generated/rendermodels/models/test/n02.bobj",
+   "bytes": 1740,
+   "sha256": "410c1a1b1de3f4b998456ceef95ee07a9cda4233509c2676bfbfb05d3ac2cf6d"
+  },
+  "models/test/n03.bobj": {
+   "source": "models/test/n03.obj",
+   "engine_path": "generated/rendermodels/models/test/n03.bobj",
+   "bytes": 1456,
+   "sha256": "a663ccaf50a3bf5e6d7c1386ab7680181e747b5865e0c07b90f75fa240a64c5c"
+  },
+  "models/test/n04.base": {
+   "source": "models/test/n04.ase",
+   "engine_path": "generated/rendermodels/models/test/n04.base",
+   "bytes": 1514,
+   "sha256": "17adf81cdc80957cd1b4f9cd3aabc36d6df0b03811abf6b323c9630052274391"
+  },
+  "models/test/n05.blwo": {
+   "source": "models/test/n05.lwo",
+   "engine_path": "generated/rendermodels/models/test/n05.blwo",
+   "bytes": 1738,
+   "sha256": "8fd764b1cbf63f434cc922d74715cc8b814b8d86f7699b4ce68b0347a1128d87"
+  }
+ },
+ "engine_printed": [
+  "Writing generated/rendermodels/models/test/n01.bobj",
+  "Writing generated/rendermodels/models/test/n02.bobj",
+  "Writing generated/rendermodels/models/test/n03.bobj",
+  "Writing generated/rendermodels/models/test/n04.base",
+  "Writing generated/rendermodels/models/test/n05.blwo",
+  "Writing generated/collision/models/test/n01.bcmodel",
+  "Writing generated/collision/models/test/n02.bcmodel",
+  "Writing generated/collision/models/test/n03.bcmodel",
+  "Writing generated/collision/models/test/n04.bcmodel",
+  "Writing generated/collision/models/test/n05.bcmodel",
+  "1k   1   24   12 'models/test/n01.obj'",
+  "1k   1   24   12 'models/test/n02.obj'",
+  "1k   1   18   16 'models/test/n03.obj'",
+  "1k   1   20   12 'models/test/n04.ase'",
+  "1k   1   24   12 'models/test/n05.lwo'"
+ ]
+}

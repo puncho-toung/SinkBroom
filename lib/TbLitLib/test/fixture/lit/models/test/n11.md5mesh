@@ -1,0 +1,26 @@
+MD5Version 10
+commandline "written by TOOLS/lit-preview/parity.py fixtures (LP7.1a)"
+
+numJoints 1
+numMeshes 1
+
+joints {
+	"origin"	-1 ( 0.000000 0.000000 0.000000 ) ( 0.000000 0.000000 0.000000 )
+}
+
+mesh {
+	shader "textures/lp7/model"
+
+	numverts 3
+	vert 0 ( 0.000000 0.000000 ) 0 1
+	vert 1 ( 1.000000 0.000000 ) 1 1
+	vert 2 ( 1.000000 1.000000 ) 2 1
+
+	numtris 1
+	tri 0 0 2 1
+
+	numweights 3
+	weight 0 0 1.000000 ( 0.000000 0.000000 0.000000 )
+	weight 1 0 1.000000 ( 32.000000 0.000000 0.000000 )
+	weight 2 0 1.000000 ( 32.000000 32.000000 0.000000 )
+}
