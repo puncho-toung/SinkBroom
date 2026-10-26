@@ -165,7 +165,7 @@ public:
   void Error(const char* fmt, ...);
   void FatalError(const char* fmt, ...);
   // LP7.5: the console's refresh on each print while GLTF_Parser::Load runs
-  // (gltfParser.cpp:2111, :2152): the shim has no console, so nothing
+  // (gltfParser.cpp:2113, :2156): the shim has no console, so nothing
   void SetRefreshOnPrint(bool) {}
 
   // LP1c fix (S3.2): the binarizer's progress, which the copied DXT encoders report;

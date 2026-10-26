@@ -2660,6 +2660,12 @@ TEST_CASE("ModelLoading: the glTF validator (LP7.5, D136, P7.2)")
         R"({"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"})",
         R"({"bufferView":1,"componentType":5126,"count":4,"type":"VEC3","sparse":{"count":1}})")),
       ContainsSubstring("sparse"));
+    // a mapped semantic the conversion ignores passes; one in another case is refused
+    CHECK(glbProblem(quad.with(R"("WEIGHTS_0":4})", R"("WEIGHTS_0":4,"TEXCOORD_1":2})"))
+            .empty());
+    CHECK_THAT(
+      glbProblem(quad.with(R"("NORMAL":1,)", R"("normal":1,)")),
+      ContainsSubstring("another case"));
     // a skin without a skeleton named ""
     CHECK_THAT(
       glbProblem(
@@ -2794,7 +2800,7 @@ TEST_CASE("ModelLoading, the glTF source path through the copies (LP7.5, C51 (3)
       {
         CHECK(std::abs(surface.verts[i].xyz[k] - expected[i][k]) < 0.001f);
       }
-      // TEXCOORD_0 as stored (MapFile_gltf.cpp:158: no t flip)
+      // TEXCOORD_0 as stored (MapFile_gltf.cpp:181: no t flip)
       CHECK(halfToFloat(surface.verts[i].st[0]) == st[i][0]);
       CHECK(halfToFloat(surface.verts[i].st[1]) == st[i][1]);
       // the normal +Y to +Z, as bytes (VertexFloatToByte)
@@ -2807,7 +2813,7 @@ TEST_CASE("ModelLoading, the glTF source path through the copies (LP7.5, C51 (3)
     CHECK(surface.verts[0].color[0] == 255);
     CHECK(surface.verts[0].color2 == std::array<std::uint8_t, 4>{255, 0, 0, 0});
     CHECK(surface.verts[3].color2 == std::array<std::uint8_t, 4>{0, 0, 0, 255});
-    // each triangle's corners reversed (MapFile_gltf.cpp:79-81)
+    // each triangle's corners reversed (MapFile_gltf.cpp:84-86)
     CHECK(surface.indexes == std::vector<std::uint16_t>{2, 1, 0, 3, 2, 0});
     CHECK(model.hasDrawingSurfaces);
   }
@@ -2839,7 +2845,7 @@ TEST_CASE("ModelLoading, the glTF source path through the copies (LP7.5, C51 (3)
 
   SECTION(
     "a mesh node under a mesh node is added twice, its parent's transform ignored "
-    "the second time (Model_gltf.cpp:563-565, :702-709)")
+    "the second time (Model_gltf.cpp:560, :675-688)")
   {
     const auto glb = handQuadGlb().with(
       R"("nodes":[{"mesh":0,"name":"quad"}])",
@@ -2873,7 +2879,7 @@ TEST_CASE("ModelLoading, the glTF source path through the copies (LP7.5, C51 (3)
     CHECK_FALSE(skinned.input);
     CHECK_THAT(skinned.reason, ContainsSubstring("K41"));
 
-    // Model_gltf.cpp:571: an unskinned mesh node's animations are never counted
+    // Model_gltf.cpp:583: an unskinned mesh node's animations are never counted
     const auto object = readGlb(decls, handAnimatedGlb(false));
     CHECK_FALSE(object.skinned);
     REQUIRE(object.input);
@@ -2881,7 +2887,7 @@ TEST_CASE("ModelLoading, the glTF source path through the copies (LP7.5, C51 (3)
 
     const auto rest = loadGlb(decls, handAnimatedGlb(true, false));
     REQUIRE(rest.surfaces.size() == 1u);
-    // JOINTS_0 into the colour (MapFile_gltf.cpp:349-383)
+    // JOINTS_0 into the colour (MapFile_gltf.cpp:310-358)
     CHECK(rest.surfaces[0].verts[0].color == std::array<std::uint8_t, 4>{1, 2, 3, 4});
   }
 
@@ -2966,6 +2972,167 @@ TEST_CASE("ModelLoading: a glTF's finish reads nothing of the registry (LP7.5, S
   CHECK(model.surfaces[0].verts == reference.surfaces[0].verts);
   CHECK(model.surfaces[0].indexes == reference.surfaces[0].indexes);
   pool.value()->stop();
+}
+
+
+TEST_CASE("ModelLoading, the glTF fixture before the engine run (LP7.5, C56, P7.10)")
+{
+  auto source = MemoryDeclSource{fixtureModelDecls()};
+  auto decls = MaterialDecls{source};
+  const auto n13 = readTextFile(modelsFixture() / "test" / "n13.glb");
+  const auto n14 = readTextFile(modelsFixture() / "test" / "n14.glb");
+
+  SECTION("N13 and N14 pass the validator, the same bytes")
+  {
+    auto facts = GltfFileFacts{};
+    const auto problem = gltfFileProblem(n13, true, &facts);
+    INFO(problem.value_or(""));
+    CHECK_FALSE(problem);
+    CHECK(facts.primitives == 1u);
+    CHECK(facts.vertices == 15u);
+    CHECK(n13 == n14);
+  }
+
+  SECTION("N13's MikkTSpace tangents are not the WithoutNormals path's (P7.10)")
+  {
+    auto read = readModelSource(decls, "models/test/n13.glb", n13, 1483228800);
+    static_cast<void>(decls.takeMessages());
+    INFO(read.reason);
+    REQUIRE(read.input);
+    REQUIRE(read.input->gltf);
+    CHECK(read.input->useMikktspace);
+    CHECK(read.input->note.empty());
+    const auto withMikk = finishModel(*read.input);
+    auto mutant = *read.input;
+    mutant.useMikktspace = false;
+    const auto withoutMikk = finishModel(mutant);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    REQUIRE(withMikk.surfaces.size() == 1u);
+    REQUIRE(withoutMikk.surfaces.size() == 1u);
+    const auto& a = withMikk.surfaces[0].verts;
+    const auto& b = withoutMikk.surfaces[0].verts;
+    REQUIRE(a.size() == b.size());
+    auto differing = std::size_t{0};
+    for (std::size_t i = 0; i < a.size(); ++i)
+    {
+      differing += a[i].tangent != b[i].tangent ? 1 : 0;
+    }
+    std::cout << fmt::format(
+      "N13: {} vertices ({} mirrored), {} with other tangents under MikkTSpace\n",
+      a.size(),
+      withMikk.surfaces[0].numMirroredVerts,
+      differing);
+    CHECK(differing > 0);
+    CHECK(withMikk.surfaces[0].numMirroredVerts > 0);
+    CHECK(withMikk.surfaces[0].material == "textures/lp7/model");
+  }
+}
+
+namespace
+{
+
+/**
+ * LP7.5: the engine's .bglb of a fixture glTF as the preview reads it: its BRM stream
+ * (readBinaryModel), then its GLMB tail (Model_gltf.cpp:1643-1700: a static model's
+ * model_state DM_STATIC, no animation), then the four empty lists a static model writes
+ * last (md5joints, bones, defaultPose, invertedDefaultPose: four zero counts).
+ */
+ModelRecord glbGoldenRecord(const std::string& golden, const std::int64_t sourceTime)
+{
+  const auto bytes = readTextFile(litFixtureFolder() / golden);
+  const auto data = std::span<const std::byte>{
+    reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
+  auto offset = std::size_t{0};
+  const auto read = readBinaryModel(data, offset);
+  REQUIRE(read.is_success());
+  const auto tail = readGlmbTail(data, offset);
+  REQUIRE(tail.is_success());
+  CHECK(tail.value().modelState == 0);
+  CHECK(tail.value().animationCount == 0);
+  CHECK(bytes.size() - offset == 16u);
+  CHECK(
+    std::all_of(bytes.begin() + std::ptrdiff_t(offset), bytes.end(), [](const char c) {
+      return c == 0;
+    }));
+  return modelRecordFromBinary(golden, read.value(), tail.value(), sourceTime);
+}
+
+} // namespace
+
+TEST_CASE(
+  "ModelLoading, the glTF source path against the engine's binary (LP7.5, C56, the "
+  "golden)")
+{
+  auto source = MemoryDeclSource{fixtureModelDecls()};
+  auto decls = MaterialDecls{source};
+  const auto stamp = fixtureStamp("models/test/n13.glb");
+  // the 2017 stamp: the time the engine stored (Model.cpp:400, ModelManager.cpp:496); it
+  // decides no tangent path for a glTF (Model_gltf.cpp:645)
+  CHECK(stamp == 1483228800);
+  const auto engine = glbGoldenRecord("models/test/n13.bglb", stamp);
+  CHECK(engine.binaryTime == stamp);
+  CHECK(binaryModelTimeAccepted(stamp, engine.binaryTime));
+  const auto bytes = readTextFile(litFixtureFolder() / "models/test/n13.glb");
+  auto read = readModelSource(decls, "models/test/n13.glb", bytes, stamp);
+  static_cast<void>(decls.takeMessages());
+  INFO(read.reason);
+  REQUIRE(read.reason.empty());
+  REQUIRE(read.input);
+  REQUIRE(read.input->gltf);
+
+  SECTION("N13: the source load equals n13.bglb byte for byte, every field")
+  {
+    const auto model = finishModel(*read.input);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    const auto preview = modelRecordFromEngine(
+      "models/test/n13.glb",
+      model,
+      ModelRecord::State::Ready,
+      ModelRecord::SourceKind::Source,
+      stamp,
+      {});
+    const auto differences = recordDifferences(preview, engine);
+    for (const auto& difference : differences)
+    {
+      UNSCOPED_INFO(difference);
+    }
+    CHECK(differences.empty());
+    REQUIRE(engine.surfaces.size() == 1u);
+    std::cout << fmt::format(
+      "N13 against n13.bglb: {} vertices ({} mirrored), {} indexes, {} differences\n",
+      engine.surfaces[0].verts.size(),
+      engine.surfaces[0].mirroredVerts.size(),
+      engine.surfaces[0].indexes.size(),
+      differences.size());
+  }
+
+  SECTION("the mutant: N13 through the WithoutNormals path fails its golden (P7.10)")
+  {
+    auto mutant = *read.input;
+    mutant.useMikktspace = false;
+    const auto model = finishModel(mutant);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    const auto preview = modelRecordFromEngine(
+      "models/test/n13.glb",
+      model,
+      ModelRecord::State::Ready,
+      ModelRecord::SourceKind::Source,
+      stamp,
+      {});
+    const auto differences = recordDifferences(preview, engine);
+    CHECK_FALSE(differences.empty());
+    CHECK(std::ranges::all_of(
+      differences, [](const auto& d) { return d.find("tangent") != std::string::npos; }));
+  }
+
+  SECTION("N14's .bglb holds N13's geometry; the binary reader on it, the golden twice")
+  {
+    const auto n14 =
+      glbGoldenRecord("models/test/n14.bglb", fixtureStamp("models/test/n14.glb"));
+    CHECK(recordDifferences(n14, engine).empty());
+    CHECK(
+      recordDifferences(glbGoldenRecord("models/test/n13.bglb", stamp), engine).empty());
+  }
 }
 
 } // namespace tb::lit

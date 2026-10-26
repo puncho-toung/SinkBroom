@@ -206,7 +206,7 @@ short LittleShort(const short l)
   return short(std::uint16_t((bits << 8) | (bits >> 8)));
 }
 
-// LP7.5: Lib.cpp:369-372 LittleLong, through the function Swap_Init picks: LongNoSwap on
+// LP7.5: Lib.cpp:372-375 LittleLong, through the function Swap_Init picks: LongNoSwap on
 // a little-endian host, LongSwap on a big-endian one (the host test LittleShort's). Pure;
 // any thread.
 int LittleLong(const int l)

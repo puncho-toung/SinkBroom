@@ -15,7 +15,9 @@
   "models/test/n03.obj": 1483228800,
   "models/test/n04.ase": 1451520000,
   "models/test/n05.lwo": 1451520000,
-  "models/test/n11.md5mesh": 1451520000
+  "models/test/n11.md5mesh": 1451520000,
+  "models/test/n13.glb": 1483228800,
+  "models/test/n14.glb": 1483228800
  },
  "goldens": {
   "models/test/n01.bobj": {
@@ -47,6 +49,22 @@
    "engine_path": "generated/rendermodels/models/test/n05.blwo",
    "bytes": 1738,
    "sha256": "8fd764b1cbf63f434cc922d74715cc8b814b8d86f7699b4ce68b0347a1128d87"
+  },
+  "models/test/n13.bglb": {
+   "source": "models/test/n13.glb",
+   "engine_path": "generated/rendermodels/models/test/n13.bglb",
+   "bytes": 1551,
+   "sha256": "4592eee93d908ec5e63dd7f222a7a91f5ca60c8d46877701814091e650a33d15",
+   "run": "run-b",
+   "run_digest": null
+  },
+  "models/test/n14.bglb": {
+   "source": "models/test/n14.glb",
+   "engine_path": "generated/rendermodels/models/test/n14.bglb",
+   "bytes": 1551,
+   "sha256": "f1f58a03c30bb4750bdd66c8b85162293286e1161188fb15a2fb60a87e61aade",
+   "run": "run-b",
+   "run_digest": null
   }
  },
  "engine_printed": [

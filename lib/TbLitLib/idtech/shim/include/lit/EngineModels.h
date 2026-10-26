@@ -350,7 +350,7 @@ struct EngineGltfParse
 };
 
 /**
- * LP7.5: gltfManager::ExtractIdentifier (gltfParser.cpp:2377-2427) transcribed with the
+ * LP7.5: gltfManager::ExtractIdentifier (gltfParser.cpp:2378-2427) transcribed with the
  * copied idLexer in place of idParser (one token of a short text: the same token): a
  * name of the form [file].[node name or mesh id].[glb or gltf] names its file and the
  * node or id; any other name its file alone. Pure; any thread.
@@ -368,7 +368,7 @@ EngineGltfIdentifier engineGltfIdentifier(std::string_view name);
 
 /**
  * LP7.5 (C51 (3), D137): idRenderModelGLTF::InitFromFile's decisions without import
- * options (Model_gltf.cpp:472-628, transcribed; a plain func_static's .glb has none,
+ * options (Model_gltf.cpp:472-643, transcribed; a plain func_static's .glb has none,
  * D139), made on the parse thread over the parsed asset: FindModelRoot (copied, its
  * prints the parse thread's), the mesh nodes (MeshNodeIds), the animations that make the
  * model DM_CACHED, and the names ProcessNode_r and MapPolygonMesh::SetContents will ask
@@ -381,14 +381,14 @@ struct EngineGltfPlan
 {
   // the second check's refusal ("" when it passes)
   std::string problem;
-  // the engine's own default model: "Can't find meshes in static glTF2 model" (:551-562)
+  // the engine's own default model: "Can't find meshes in static glTF2 model" (:557-571)
   // or a NULL skin the engine would dereference; "" when it converts
   std::string defaultReason;
-  // the nodes ProcessNode_r starts from (MeshNodeIds, :534-560)
+  // the nodes ProcessNode_r starts from (MeshNodeIds, :539-572)
   std::vector<int> meshNodes;
-  // hasAnimations (:564-628): an animation of a skinned mesh node's subtree or of its
-  // skin's first joint's, which makes the model DM_CACHED (:628): nothing drawn on a
-  // static entity (K41); an unskinned mesh node's animations are never counted (:571)
+  // hasAnimations (:576-643): an animation of a skinned mesh node's subtree or of its
+  // skin's first joint's, which makes the model DM_CACHED (:643): nothing drawn on a
+  // static entity (K41); an unskinned mesh node's animations are never counted (:583)
   bool animated = false;
   int animations = 0;
   // a mesh node with a skin among the meshNodes (its JOINTS_0 in the vertex colours)
@@ -400,7 +400,7 @@ struct EngineGltfPlan
   std::vector<std::size_t> surfaceVertices;
   // a surface's primitive lacks NORMAL, TEXCOORD_0, COLOR_0 (or JOINTS_0) or WEIGHTS_0:
   // the engine leaves those fields of its vertices uninitialised heap (E-LIT-7,
-  // MapFile_gltf.cpp:103-107)
+  // MapFile_gltf.cpp:107-111)
   bool heapVertexFields = false;
 };
 
@@ -411,15 +411,15 @@ EngineGltfPlan engineGltfPlan(
 
 /**
  * LP7.5: InitFromFile's conversion and finish without import options (Model_gltf.cpp:
- * 629-747, transcribed): globalTransform = blenderToDoomTransform (Y up to Z up,
+ * 645-748, transcribed): globalTransform = blenderToDoomTransform (Y up to Z up,
  * idAngles( 0, 0, 90 ), :55), useMikktspace as given (true for every glTF, :645), each
  * of plan.meshNodes through the copied ProcessNode_r from the identity (one surface per
  * primitive through the copied MapPolygonMesh::ConvertFromMeshGltf, the material
  * FindMaterial of the glTF material's name, else textures/base_wall/snpanel2rust), then
- * no surface: "Couldn't load model" and MakeDefaultModel (:713-722); then the copied
+ * no surface: "Couldn't load model" and MakeDefaultModel (:690-699); then the copied
  * FinishSurfaces( useMikktspace ). LoadModel (:1727-1801), which changes no surface of a
  * static model, is not run. Its allocations cleared (E-LIT-7: the engine's vertices hold
- * heap where no attribute writes, MapFile_gltf.cpp:103-107; the preview's 0). Pool-safe
+ * heap where no attribute writes, MapFile_gltf.cpp:107-111; the preview's 0). Pool-safe
  * (D137): materials are the parse thread's captures (ProcessNode_r's through the reduced
  * idRenderModelStatic's class-scope declManager, SetContents' through the stand-in of
  * the namespace its MapFile ranges compile in); one call at a time.

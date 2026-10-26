@@ -34,15 +34,15 @@
 //
 // - S1: idFile_Memory, a stand-in of framework/File.cpp's class under its name, read only
 //   and over memory it does not own, which the copied parser and conversion construct by
-//   value over an accessor's bytes (gltfParser.cpp:2205-2213, MapFile_gltf.cpp:51-52,
-//   :98-99);
+//   value over an accessor's bytes (gltfParser.cpp:2208-2209, MapFile_gltf.cpp:53-54,
+//   :104-105);
 // - the copied idlib/gltfProperties.h and gltfParser.h whole and gltfParser.cpp's range
 //   (HEADER_FILE_ONLY in the build), and gltfManager::ExtractIdentifier transcribed
 //   (the copy's needs idParser, which is not copied: S2);
 // - S3: idlib/MapFile.h's, MapFile.cpp's and MapFile_gltf.cpp's ranges inside the
 //   namespace tbLitGltfMesh, which declares a stand-in idMaterial (GetContentFlags,
 //   Coverage) and declManager before them: MapPolygonMesh::SetContents' unqualified
-//   declManager->FindMaterial (MapFile.cpp:2981, :2993) finds the namespace's before the
+//   declManager->FindMaterial (MapFile.cpp:2980, :2993) finds the namespace's before the
 //   global one, so it reads the parse thread's captures, never the registry, and no
 //   copied line changes (C7, the LP7.1a pattern);
 // - S7: idRenderModelGLTF reduced to what renderer/Model_gltf.cpp's ranges touch, derived
@@ -521,7 +521,7 @@ std::string lastErrorOf(const std::vector<DeclMessage>& messages)
   return "the engine reported an error";
 }
 
-// the engine's read of an accessor in the BIN chunk (MapFile_gltf.cpp:51-61, :93-358) for
+// the engine's read of an accessor in the BIN chunk (MapFile_gltf.cpp:53-63, :95-361) for
 // the plan's second check: read bytes an element, stepping by the view's stride - back +
 // read (back the conversion's seek: s_meshAttributeMap's elementSize times the
 // component's bytes); within the view and the chunk
@@ -688,7 +688,7 @@ EngineGltfPlan engineGltfPlan(
   }
   for (const auto* node : nodes)
   {
-    // FindModelRoot indexes nodes[ skin->skeleton ] (Model_gltf.cpp:409-411)
+    // FindModelRoot indexes nodes[ skin->skeleton ] (Model_gltf.cpp:378, :425)
     if (node->skin >= 0)
     {
       const auto skeleton = data->SkinList()[node->skin]->skeleton;
@@ -824,7 +824,7 @@ EngineGltfPlan engineGltfPlan(
     return plan;
   }
 
-  // InitFromFile (Model_gltf.cpp:472-628), options NULL: the root, the mesh nodes and the
+  // InitFromFile (Model_gltf.cpp:472-643), options NULL: the root, the mesh nodes and the
   // animations
   auto rootName = idStr{identifier.name.c_str()};
   auto rootID = -1;
@@ -850,12 +850,12 @@ EngineGltfPlan engineGltfPlan(
     data->GetAllMeshes(meshNodeIds);
     if (meshNodeIds.Num() == 0)
     {
-      plan.defaultReason = "Can't find meshes in static glTF2 model (Model_gltf.cpp:555)";
+      plan.defaultReason = "Can't find meshes in static glTF2 model (Model_gltf.cpp:564)";
       return plan;
     }
   }
 
-  // :564-626: the animations of the first skinned mesh node and of its skin's first joint
+  // :576-640: the animations of the first skinned mesh node and of its skin's first joint
   auto totalAnims = 0;
   auto lastSkin = -1;
   auto animIds = idList<int>{};
@@ -872,11 +872,11 @@ EngineGltfPlan engineGltfPlan(
         lastSkin = meshNode->skin;
         if (!currentSkin)
         {
-          // :584: currentSkin->joints with no skin FindModelRoot found (a named root
+          // :595: currentSkin->joints with no skin FindModelRoot found (a named root
           // without one): the engine dereferences NULL
           plan.defaultReason =
             "a skinned mesh under a root without a skin: the engine dereferences a "
-            "NULL skin (Model_gltf.cpp:584)";
+            "NULL skin (Model_gltf.cpp:595)";
           return plan;
         }
         if (currentSkin->joints.Num())
@@ -911,7 +911,7 @@ EngineGltfPlan engineGltfPlan(
             ? std::size_t(
                 data->AccessorList()[primitive->attributes[0]->accessorIndex]->count)
             : 0);
-        // MapFile_gltf.cpp:103-358: the fields no attribute of it writes
+        // MapFile_gltf.cpp:107-361: the fields no attribute of it writes
         using Type = gltfMesh_Primitive_Attribute::Type;
         auto written = std::array<bool, 4>{};
         for (const auto* attribute : primitive->attributes)
@@ -956,7 +956,7 @@ EngineModel engineFinishGltfModel(
   glTF.declManager = &decls;
   glTF.tr.defaultMaterial = decls.defaultMaterial();
 
-  // Model_gltf.cpp:472-747 InitFromFile without options, transcribed: the name, the
+  // Model_gltf.cpp:472-748 InitFromFile without options, transcribed: the name, the
   // bounds cleared, globalTransform = blenderToDoomTransform, useMikktspace as given,
   // ProcessNode_r over the mesh nodes from the identity
   const auto fileName = std::string{name};
@@ -973,7 +973,7 @@ EngineModel engineFinishGltfModel(
   }
   if (glTF.surfaces.Num() <= 0)
   {
-    // :713-722
+    // :690-699
     common->Warning("Couldn't load model: '%s'", glTF.name.c_str());
     glTF.MakeDefaultModel();
     return shim::modelOf(glTF, decls);

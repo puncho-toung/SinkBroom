@@ -70,7 +70,7 @@ constexpr auto MaxNodeDepth = std::size_t{128};
  * lower-case exponent only (Lexer.cpp:881-910 reads no 'E'), no byte order mark, no NUL
  * (the script's end). An object keeps its members in the file's order (the parser
  * appends what it reads in that order: a primitive's first attribute sizes its vertices,
- * MapFile_gltf.cpp:103-107).
+ * MapFile_gltf.cpp:107-111).
  */
 struct Json
 {
@@ -411,7 +411,7 @@ private:
   }
 };
 
-// gltfParser.cpp:133-142: a component type's bytes (GetComponentTypeEnum's sizeInBytes)
+// gltfParser.cpp:132-142: a component type's bytes (GetComponentTypeEnum's sizeInBytes)
 std::size_t componentBytes(const long long componentType)
 {
   switch (componentType)
@@ -445,10 +445,10 @@ std::size_t componentCount(const std::string_view type)
 }
 
 /**
- * How ConvertFromMeshGltf reads one attribute (MapFile_gltf.cpp:93-358): the bytes it
+ * How ConvertFromMeshGltf reads one attribute (MapFile_gltf.cpp:95-361): the bytes it
  * reads per element (read), and its seek after each one when the view has a byteStride
  * (stride - seekBack): s_meshAttributeMap's elementSize times the component's bytes
- * (gltfParser.cpp:81-101), which is TANGENT's 3 against its 4 read; the indices read one
+ * (gltfParser.cpp:82-101), which is TANGENT's 3 against its 4 read; the indices read one
  * component and seek stride - typeSize (:52-61).
  */
 struct AttributeRead
@@ -487,12 +487,12 @@ std::optional<AttributeRead> attributeRead(const std::string_view name)
   }
   if (name == "COLOR_0")
   {
-    // :285-346: typeSize 4 (float), 2 (unsigned short) or else 1 (unsigned byte, raw)
+    // :234-308: typeSize 4 (float), 2 (unsigned short) or else 1 (unsigned byte, raw)
     return AttributeRead{"COLOR_0", 4, 4, {5126, 5123, 5121}};
   }
   if (name == "JOINTS_0")
   {
-    // :349-383: typeSize 2 or else 1
+    // :310-358: typeSize 2 or else 1
     return AttributeRead{"JOINTS_0", 4, 4, {5123, 5121}};
   }
   return std::nullopt;
@@ -510,8 +510,10 @@ bool sameIgnoringCase(const std::string_view a, const std::string_view b)
             });
 }
 
-// gltfParser.cpp:81-101: s_meshAttributeMap's names, compared with Icmp
-bool mappedSemantic(const std::string_view name)
+// gltfParser.cpp:82-101: s_meshAttributeMap's names, compared with Icmp: true for a name
+// the parser maps that is not in the specification's case (the validator takes that case
+// only)
+bool semanticInOtherCase(const std::string_view name)
 {
   static constexpr auto names = std::array<std::string_view, 17>{
     "POSITION",
@@ -531,8 +533,9 @@ bool mappedSemantic(const std::string_view name)
     "COLOR_3",
     "WEIGHTS_0",
     "JOINTS_0"};
-  return std::ranges::any_of(
-    names, [&](const std::string_view known) { return sameIgnoringCase(known, name); });
+  return std::ranges::any_of(names, [&](const std::string_view known) {
+    return known != name && sameIgnoringCase(known, name);
+  });
 }
 
 class GltfCheck
@@ -689,7 +692,7 @@ private:
     return std::nullopt;
   }
 
-  // gltfParser.cpp:692-776: a vec2/3/4, quat or mat4 field, its count of numbers exact
+  // gltfParser.cpp:692-775: a vec2/3/4, quat or mat4 field, its count of numbers exact
   // (after the FatalError for another count the parser reads val[0..n-1] past the list)
   static std::optional<std::string> numbers(
     const Json& object,
@@ -709,7 +712,7 @@ private:
     {
       return fmt::format(
         "{}: \"{}\" is not {} numbers (the parser reads {} values past what it got, "
-        "gltfParser.cpp:692-776)",
+        "gltfParser.cpp:692-775)",
         what,
         key,
         n,
@@ -838,7 +841,7 @@ private:
       if (!m_binary)
       {
         // a .gltf buffer without a uri has no chunk: GetData( index ) reads a NULL
-        // chunk table (gltfParser.cpp:388-411, MapFile_gltf.cpp:51)
+        // chunk table (gltfParser.cpp:388-411, MapFile_gltf.cpp:53)
         return fmt::format("{} of a .gltf has no uri, so no data", what);
       }
       if (i > 0)
@@ -969,7 +972,7 @@ private:
           0,
           what,
           componentType,
-          "GetComponentTypeEnum leaves typeSize uninitialised, gltfParser.cpp:1472"))
+          "GetComponentTypeEnum leaves typeSize uninitialised, gltfParser.cpp:1477"))
       {
         return problem;
       }
@@ -977,7 +980,7 @@ private:
       {
         return fmt::format(
           "{}: componentType {} is none the parser maps (typeSize uninitialised, "
-          "gltfParser.cpp:144-158, :1472)",
+          "gltfParser.cpp:144-158, :1477)",
           what,
           componentType);
       }
@@ -1117,26 +1120,26 @@ private:
         return problem;
       }
     }
-    // Model_gltf.cpp:523-527: InitFromFile reads SceneList()[ DefaultScene() ], whose
+    // Model_gltf.cpp:524-527: InitFromFile reads SceneList()[ DefaultScene() ], whose
     // value gltfData's constructor leaves uninitialised when the file has no "scene"
     const auto* scene = m_root.member("scene");
     if (!scene)
     {
       return "no \"scene\" (InitFromFile reads SceneList()[ DefaultScene() ] "
-             "uninitialised, Model_gltf.cpp:523-527)";
+             "uninitialised, Model_gltf.cpp:524-527)";
     }
     if (
       scene->type != Json::Type::Number || !scene->integer || scene->integerValue < 0
       || std::size_t(scene->integerValue) >= all.size())
     {
       return fmt::format(
-        "\"scene\" names none of the {} scenes (Model_gltf.cpp:526)", all.size());
+        "\"scene\" names none of the {} scenes (Model_gltf.cpp:527)", all.size());
     }
     return std::nullopt;
   }
 
-  // the engine's read of one accessor's elements inside its view (MapFile_gltf.cpp:51-61,
-  // :103-358): the reads stay within the view, and so within the BIN chunk
+  // the engine's read of one accessor's elements inside its view (MapFile_gltf.cpp:53-63,
+  // :104-361): the reads stay within the view, and so within the BIN chunk
   std::optional<std::string> window(
     const std::size_t accessorIndex,
     const std::size_t read,
@@ -1158,7 +1161,7 @@ private:
     {
       return fmt::format(
         "{}: accessor {} has no bufferView (BufferViewList()[ -1 ], "
-        "MapFile_gltf.cpp:39, :99)",
+        "MapFile_gltf.cpp:40, :100)",
         what,
         accessorIndex);
     }
@@ -1249,7 +1252,7 @@ private:
       // ConvertFromMeshGltf ignores the mode and reads every three indices as a triangle
       return fmt::format(
         "{}: mode {} is not triangles (the conversion reads every primitive as "
-        "triangles, MapFile_gltf.cpp:66-82)",
+        "triangles, MapFile_gltf.cpp:65-90)",
         what,
         *mode);
     }
@@ -1269,7 +1272,8 @@ private:
         || std::size_t(value.integerValue) >= accessors.size())
       {
         return fmt::format(
-          "{}: attribute {} names no accessor (indexed unchecked, MapFile_gltf.cpp:96)",
+          "{}: attribute {} names no accessor (indexed unchecked, "
+          "MapFile_gltf.cpp:99-100)",
           what,
           name);
       }
@@ -1282,7 +1286,7 @@ private:
       {
         return fmt::format(
           "{}: attribute {} has {} elements, the first attribute {} (verts sized by the "
-          "first, MapFile_gltf.cpp:103-107)",
+          "first, MapFile_gltf.cpp:107-111)",
           what,
           name,
           elements,
@@ -1294,13 +1298,13 @@ private:
       {
         return fmt::format(
           "{}: attribute {}'s accessor {} has no bufferView (BufferViewList()[ -1 ], "
-          "MapFile_gltf.cpp:99)",
+          "MapFile_gltf.cpp:100)",
           what,
           name,
           accessorIndex);
       }
       const auto read = attributeRead(name);
-      if (!read && mappedSemantic(name))
+      if (semanticInOtherCase(name))
       {
         // GetAttributeEnum maps any case (Icmp, gltfParser.cpp:104-117): the validator
         // takes the specification's upper case only
@@ -1324,7 +1328,7 @@ private:
       {
         return fmt::format(
           "{}: attribute {} is {} of component type {}, which the conversion misreads "
-          "(MapFile_gltf.cpp:93-358 reads it as {} components of the types {})",
+          "(MapFile_gltf.cpp:95-361 reads it as {} components of the types {})",
           what,
           name,
           type,
@@ -1351,21 +1355,21 @@ private:
     {
       return fmt::format(
         "{}: no POSITION (the vertices' positions would be uninitialised heap, "
-        "MapFile_gltf.cpp:103-107)",
+        "MapFile_gltf.cpp:107-111)",
         what);
     }
     if (*vertices > MaxGltfPrimitiveVerts)
     {
       return fmt::format(
         "{}: {} vertices, more than the {} the preview takes (16-bit triIndex_t, "
-        "Model_gltf.cpp:99-108)",
+        "Model_gltf.cpp:99-115)",
         what,
         *vertices,
         MaxGltfPrimitiveVerts);
     }
     m_facts.vertices += *vertices;
 
-    // the indices (MapFile_gltf.cpp:37-82)
+    // the indices (MapFile_gltf.cpp:39-90)
     auto indicesIndex = std::size_t{0};
     if (
       auto problem = requiredIndex(
@@ -1387,7 +1391,7 @@ private:
     {
       return fmt::format(
         "{}: the indices are {} of component type {}, not an unsigned byte, short or int "
-        "scalar (the conversion reads their bytes into a uint, MapFile_gltf.cpp:53-60)",
+        "scalar (the conversion reads their bytes into a uint, MapFile_gltf.cpp:53-63)",
         what,
         indices.member("type")->text,
         componentType);
@@ -1397,7 +1401,7 @@ private:
     {
       return fmt::format(
         "{}: {} indices, not a multiple of 3 (the conversion reads indices[ i + 2 ] and "
-        "writes polygons[] past their ends, MapFile_gltf.cpp:66-82)",
+        "writes polygons[] past their ends, MapFile_gltf.cpp:65-90)",
         what,
         count);
     }
@@ -1554,7 +1558,7 @@ private:
       }
       if (const auto* name = skin.member("name"))
       {
-        // gltfParser.cpp:2160-2167: a skin without a skeleton looks its name up, and
+        // gltfParser.cpp:2170-2175: a skin without a skeleton looks its name up, and
         // GetNode asserts the name's first character (gltfProperties.h:925)
         if (name->type != Json::Type::String || (!skeleton && name->text.empty()))
         {
@@ -1566,9 +1570,9 @@ private:
       }
       if (!skeleton)
       {
-        // gltfParser.cpp:2160-2167: a skin without a skeleton takes the node of its name
+        // gltfParser.cpp:2170-2175: a skin without a skeleton takes the node of its name
         // (Icmp), else -1, which FindModelRoot indexes nodes[] with (Model_gltf.cpp:
-        // 409-411, :376-378)
+        // 378, :425)
         const auto* name = skin.member("name");
         const auto skinName =
           name ? std::string_view{name->text} : std::string_view{"unnamedSkin"};
@@ -1580,7 +1584,7 @@ private:
         {
           return fmt::format(
             "{}: no skeleton, and its name names no node (FindModelRoot reads nodes[ -1 "
-            "], Model_gltf.cpp:409-410)",
+            "], Model_gltf.cpp:425)",
             what);
         }
       }
@@ -1714,7 +1718,7 @@ std::optional<std::string> gltfFileProblem(
     if (bytes.size() < 20)
     {
       return fmt::format(
-        "{} bytes, under the 20 of a .glb (gltfParser.cpp:1939's FatalError)",
+        "{} bytes, under the 20 of a .glb (gltfParser.cpp:1941's FatalError)",
         bytes.size());
     }
     // :1945-1956: the magic, compared with Icmp; the validator takes "glTF" only

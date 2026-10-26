@@ -23,8 +23,12 @@
 // .bmd5mesh is MD5B, another format, counted apart (P7.19). LP7.1b: the source half,
 // every loose base/models/** source of a model extension through the source path (the
 // validators and the copied loaders), each loaded record against the engine's binary of
-// it when the binary-first path would take one.
+// it when the binary-first path would take one. LP7.5: the .glb and .gltf sources too
+// (K40 closed), each reported on its own line: the outcome, its nodes, primitives and
+// vertices, its binary's match and its load time; the longest parse-thread item (the
+// read, the validator, the parse and the plan) and pool job (the finish) of the sweep.
 
+#include "ModelValidators.h"
 #include "lit/BprocModel.h"
 #include "lit/GameFileSource.h"
 #include "lit/MaterialDecls.h"
@@ -36,12 +40,14 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <span>
 #include <string>
@@ -222,6 +228,58 @@ namespace
 
 // LP7.1b: the first field in which a source-path record differs from the engine's binary
 // of it, or "" when every field is equal (the goldens' comparison, tst_ModelLoading)
+// LP7.5: when the two records have the same surfaces and vertex counts, the vertices
+// whose fields differ, counted per field (xyz, st, normal, tangent, color, color2), and
+// the surfaces whose indexes differ; "" otherwise
+std::string fieldCounts(const ModelRecord& source, const ModelRecord& binary)
+{
+  if (source.surfaces.size() != binary.surfaces.size())
+  {
+    return {};
+  }
+  auto counts = std::array<std::size_t, 7>{};
+  auto vertices = std::size_t{0};
+  auto indexes = std::size_t{0};
+  for (std::size_t s = 0; s < source.surfaces.size(); ++s)
+  {
+    const auto& a = source.surfaces[s];
+    const auto& b = binary.surfaces[s];
+    if (a.verts.size() != b.verts.size())
+    {
+      return {};
+    }
+    vertices += a.verts.size();
+    indexes += a.indexes != b.indexes ? 1 : 0;
+    for (std::size_t v = 0; v < a.verts.size(); ++v)
+    {
+      const auto& p = a.verts[v];
+      const auto& q = b.verts[v];
+      counts[0] += p.xyz != q.xyz ? 1 : 0;
+      counts[1] += p.st != q.st ? 1 : 0;
+      // the normal's x, y, z bytes, and its fourth, which SetNormal never writes
+      // (DrawVert.h:221-246)
+      counts[2] +=
+        std::equal(p.normal.begin(), p.normal.begin() + 3, q.normal.begin()) ? 0 : 1;
+      counts[6] += p.normal[3] != q.normal[3] ? 1 : 0;
+      counts[3] += p.tangent != q.tangent ? 1 : 0;
+      counts[4] += p.color != q.color ? 1 : 0;
+      counts[5] += p.color2 != q.color2 ? 1 : 0;
+    }
+  }
+  return fmt::format(
+    "of {} vertices, differing: xyz {}, st {}, normal x-z {}, normal[3] {}, tangent {}, "
+    "color {}, color2 {}; {} surfaces' indexes differ",
+    vertices,
+    counts[0],
+    counts[1],
+    counts[2],
+    counts[6],
+    counts[3],
+    counts[4],
+    counts[5],
+    indexes);
+}
+
 std::string firstDifference(const ModelRecord& source, const ModelRecord& binary)
 {
   if (source.surfaces.size() != binary.surfaces.size())
@@ -298,6 +356,9 @@ struct SourceCount
   std::vector<std::string> binaryDifferent;
   std::size_t binaryStale = 0;
   std::size_t noBinary = 0;
+  // LP7.5: the records drawn as nothing (K41), and each glTF file's line
+  std::size_t skinned = 0;
+  std::vector<std::string> lines;
 };
 
 } // namespace
@@ -328,6 +389,11 @@ TEST_CASE(
   auto counts = std::map<std::string, SourceCount>{};
   auto longest = 0.0;
   auto longestName = std::string{};
+  // LP7.5 (C51, P7.14): the longest parse-thread item and pool job
+  auto longestParse = 0.0;
+  auto longestParseName = std::string{};
+  auto longestFinish = 0.0;
+  auto longestFinishName = std::string{};
   for (const auto& extension : extensions)
   {
     for (const auto& listed : source.listFiles("models", extension))
@@ -351,28 +417,75 @@ TEST_CASE(
       count.bytes += bytes->size();
       const auto canonical = canonicalModelName(name);
       const auto dispatch = modelDispatch(canonical);
+      const auto gltf = extension == ".glb" || extension == ".gltf";
+      auto facts = GltfFileFacts{};
+      if (gltf)
+      {
+        static_cast<void>(gltfFileProblem(*bytes, extension == ".glb", &facts));
+      }
+      auto outcome = std::string{};
+      auto binaryMatch = std::string{"no binary"};
+      auto parseMs = 0.0;
+      auto finishMs = 0.0;
       if (dispatch.path == ModelPath::Source)
       {
+        const auto parseStarted = std::chrono::steady_clock::now();
         auto read = readModelSource(decls, canonical, *bytes, found.time);
         static_cast<void>(decls.takeMessages());
-        if (!read.reason.empty())
+        parseMs = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - parseStarted)
+                    .count();
+        if (parseMs > longestParse)
+        {
+          longestParse = parseMs;
+          longestParseName = name;
+        }
+        if (read.skinned)
+        {
+          // LP7.5 (K41): an animated glTF, nothing drawn
+          ++count.skinned;
+          outcome = "Skinned (K41): " + read.reason;
+        }
+        else if (!read.reason.empty())
         {
           // a refused retail file is a finding: reported, the validator kept
           count.refused.push_back(read.reason);
+          outcome = "refused: " + read.reason;
         }
         else
         {
           REQUIRE(read.input);
+          const auto finishStarted = std::chrono::steady_clock::now();
           const auto model = finishModel(*read.input);
           static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+          finishMs = std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - finishStarted)
+                       .count();
+          if (finishMs > longestFinish)
+          {
+            longestFinish = finishMs;
+            longestFinishName = name;
+          }
           // LP7.2 (step 1): the engine's 16-bit limit, after the finish
           if (const auto problem = modelSurfaceProblem(model))
           {
             count.refused.push_back(canonical + ": " + *problem);
+            outcome = "refused after the finish: " + *problem;
           }
           else
           {
             ++count.loaded;
+            outcome = fmt::format(
+              "loaded: {} surfaces, {} vertices after the finish{}",
+              model.surfaces.size(),
+              std::accumulate(
+                model.surfaces.begin(),
+                model.surfaces.end(),
+                std::size_t{0},
+                [](const std::size_t n, const EngineModelSurface& s) {
+                  return n + s.verts.size();
+                }),
+              read.input->note.empty() ? "" : "; " + read.input->note);
             const auto record = modelRecordFromEngine(
               canonical,
               model,
@@ -390,15 +503,22 @@ TEST_CASE(
               if (difference.empty())
               {
                 ++count.binaryEqual;
+                binaryMatch = "equal to its binary";
               }
               else
               {
-                count.binaryDifferent.push_back(canonical + ": " + difference);
+                const auto fields = fieldCounts(record, stored);
+                count.binaryDifferent.push_back(
+                  canonical + ": " + difference
+                  + (fields.empty() ? "" : " (" + fields + ")"));
+                binaryMatch = "differs from its binary: " + difference
+                              + (fields.empty() ? "" : " (" + fields + ")");
               }
             }
             else if (binary.result == ModelBinaryLookup::Result::Stale)
             {
               ++count.binaryStale;
+              binaryMatch = "its binary stale";
             }
             else
             {
@@ -411,6 +531,22 @@ TEST_CASE(
                         std::chrono::steady_clock::now() - itemStarted)
                         .count();
       count.milliseconds += ms;
+      if (gltf)
+      {
+        count.lines.push_back(fmt::format(
+          "{} ({:.2f} MB): {}; {} nodes, {} primitives, {} vertices; {}; {:.1f} ms (the "
+          "parse thread's {:.1f}, the finish {:.1f})",
+          name,
+          double(bytes->size()) / (1024.0 * 1024.0),
+          outcome,
+          facts.nodes,
+          facts.primitives,
+          facts.vertices,
+          binaryMatch,
+          ms,
+          parseMs,
+          finishMs));
+      }
       if (ms > longest)
       {
         longest = ms;
@@ -425,17 +561,22 @@ TEST_CASE(
 
   std::cout << fmt::format(
     "retail model sources: {:.0f} ms in all ({:.0f} ms the decls), the longest item "
-    "{:.2f} ms ({})\n",
+    "{:.2f} ms ({}); the longest parse-thread item {:.2f} ms ({}), pool job {:.2f} ms "
+    "({})\n",
     total,
     declsMs,
     longest,
-    longestName);
+    longestName,
+    longestParse,
+    longestParseName,
+    longestFinish,
+    longestFinishName);
   auto loaded = std::size_t{0};
   for (const auto& [extension, count] : counts)
   {
-    const auto supported =
-      extension == ".obj" || extension == ".ase" || extension == ".lwo";
-    const auto gltf = extension == ".glb" || extension == ".gltf";
+    const auto supported = extension == ".obj" || extension == ".ase"
+                           || extension == ".lwo" || extension == ".glb"
+                           || extension == ".gltf";
     std::cout << fmt::format(
       "  {}: {} files, {:.2f} MB, {:.0f} ms{}\n",
       extension,
@@ -444,16 +585,16 @@ TEST_CASE(
       count.milliseconds,
       supported
         ? fmt::format(
-            ", {} loaded, {} refused; binaries: {} equal, {} different, {} stale, "
-            "{} none",
+            ", {} loaded, {} refused, {} skinned; binaries: {} equal, {} different, "
+            "{} stale, {} none",
             count.loaded,
             count.refused.size(),
+            count.skinned,
             count.binaryEqual,
             count.binaryDifferent.size(),
             count.binaryStale,
             count.noBinary)
-      : gltf ? std::string{" (source not loadable yet: binary only until LP7.5, K40)"}
-             : std::string{" (the default cube)"});
+        : std::string{" (the default cube)"});
     for (const auto& refusal : count.refused)
     {
       std::cout << "    refused: " << refusal << "\n";
@@ -461,6 +602,10 @@ TEST_CASE(
     for (const auto& difference : count.binaryDifferent)
     {
       std::cout << "    differs from its binary: " << difference << "\n";
+    }
+    for (const auto& line : count.lines)
+    {
+      std::cout << "    " << line << "\n";
     }
     loaded += count.loaded;
   }

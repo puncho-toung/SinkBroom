@@ -167,7 +167,7 @@ std::optional<std::string> lwoFileProblem(std::string_view bytes);
 // LP7.5: gltfFileProblem's bounds (the preview's own, far above any model the engine
 // draws): the counts of nodes, meshes, materials, animations and skins, of accessors
 // and views, of primitives in the file; a primitive's vertices (a surface's 16-bit
-// triIndex_t, Model_gltf.cpp:99-108); a material name's characters (FindMaterial's)
+// triIndex_t, Model_gltf.cpp:98-114); a material name's characters (FindMaterial's)
 inline constexpr std::size_t MaxGltfNodes = 65536;
 inline constexpr std::size_t MaxGltfMeshes = 65536;
 inline constexpr std::size_t MaxGltfMaterials = 65536;
@@ -202,7 +202,7 @@ struct GltfFileFacts
  * of what the copies read without a read or write out of range, an uninitialised value,
  * a NULL dereference or a recursion without end:
  *
- * - a .glb: at least 20 bytes (gltfParser.cpp:1939), the magic "glTF" (:1945-1956,
+ * - a .glb: at least 20 bytes (gltfParser.cpp:1941), the magic "glTF" (:1945-1956,
  *   whose Icmp the validator narrows to the specification's case), version 2 (the parser
  *   reads it and goes on), the header's length the file's (the chunk loop's unsigned
  *   arithmetic, :1964-2005), the JSON chunk first (:1994-1997) and at most one BIN chunk
@@ -225,20 +225,20 @@ struct GltfFileFacts
  *   accessor's view, a node's mesh, skin and camera, its children (one parent each, no
  *   cycle, at most 128 deep: SetNodeParent :2188-2195, ProcessNode_r, GetAllMeshes and
  *   GetAnimationIds recurse), a scene's nodes, "scene" present (InitFromFile reads
- *   SceneList()[ DefaultScene() ], uninitialised without it, Model_gltf.cpp:523-527), a
+ *   SceneList()[ DefaultScene() ], uninitialised without it, Model_gltf.cpp:524-527), a
  *   primitive's material, attributes and indices (present: AccessorList()[ -1 ],
  *   MapFile_gltf.cpp:39), a skin's joints, skeleton and matrices, an animation's
  *   samplers' accessors and channels' samplers and target nodes, an image's view;
  * - every accessor of a component type the parser maps (else its typeSize is
- *   uninitialised, :144-158, :1472), a type, a count; every view within its buffer, its
+ *   uninitialised, :144-158, :1477), a type, a count; every view within its buffer, its
  *   stride a multiple of 4 in 4..252;
  * - every primitive: mode absent or 4 (the conversion reads every three indices as a
- *   triangle, MapFile_gltf.cpp:66-82); POSITION present; every attribute's count the
+ *   triangle, MapFile_gltf.cpp:65-90); POSITION present; every attribute's count the
  *   first's (the vertices are sized by the first, :103-107); POSITION, NORMAL, TANGENT,
  *   TEXCOORD_0 and WEIGHTS_0 floats, COLOR_0 float, unsigned short or unsigned byte and
  *   JOINTS_0 unsigned short or byte, each of its count of components (the conversion
  *   reads others as raw bytes); no sparse accessor (its base values alone are read);
- *   every element the conversion reads within its view by its read pattern (:93-358,
+ *   every element the conversion reads within its view by its read pattern (:95-361,
  *   TANGENT's stride seek three components back for four read), so within the BIN chunk;
  *   indices of unsigned byte, short or int, a multiple of 3 (:66-82 reads indices[ i + 2
  *   ] and writes polygons[] past their ends), each below the vertex count

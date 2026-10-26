@@ -557,7 +557,7 @@ ModelSourceRead readGltfSource(
     return refuse(fmt::format("{}: {}", canonical, parsed.error));
   }
 
-  // InitFromFile's decisions (Model_gltf.cpp:472-628) and the second check
+  // InitFromFile's decisions (Model_gltf.cpp:472-643) and the second check
   auto plan = engineGltfPlan(*parsed.model, identifier, facts.binLength);
   if (!plan.problem.empty())
   {
@@ -572,14 +572,14 @@ ModelSourceRead readGltfSource(
   }
   if (plan.materialNames.empty())
   {
-    // :713-722: no surface: "Couldn't load model", MakeDefaultModel
+    // :690-699: no surface: "Couldn't load model", MakeDefaultModel
     return refuse(fmt::format(
-      "{}: Couldn't load model (no primitive under its mesh nodes, Model_gltf.cpp:715)",
+      "{}: Couldn't load model (no primitive under its mesh nodes, Model_gltf.cpp:692)",
       canonical));
   }
   if (plan.animated)
   {
-    // :628: DM_CACHED; a static entity's NULL joints instantiate nothing (:2101-2106)
+    // :643: DM_CACHED; a static entity's NULL joints instantiate nothing (:2101-2106)
     read.skinned = true;
     read.reason = fmt::format(
       "{}: an animated glTF ({} animations of its skinned mesh) draws nothing on a "
@@ -600,7 +600,7 @@ ModelSourceRead readGltfSource(
     input.note = fmt::format(
       "{}: a primitive without NORMAL, TEXCOORD_0, COLOR_0 or WEIGHTS_0 has those vertex "
       "fields 0: the engine leaves them uninitialised heap (E-LIT-7, "
-      "MapFile_gltf.cpp:103-107)",
+      "MapFile_gltf.cpp:107-111)",
       canonical);
   }
   if (
