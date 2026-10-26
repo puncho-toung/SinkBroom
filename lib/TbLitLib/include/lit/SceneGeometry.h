@@ -102,6 +102,24 @@ struct ProcTree;
  * measured again) leaves the table with its cells marked (K44), so no batch draws it over
  * an edited face; the pass after that batch tries it again.
  *
+ * The dress decals (LP7.3, C54, D132, D138, K43): once a batch has applied (beside the
+ * adoption pass), and whenever a snapshot, a table or a model entity changed what it
+ * reads, a pass on the render thread identifies the .proc's dress surfaces: every
+ * snapshot entity whose classname is func_decal is a projector (parseDecalProjector over
+ * its merged keys, its target's raw origin key by name, the copied idDecalProjection),
+ * and an _areaN surface (a .bproc has none, D138) is a projector's fragment surface when
+ * its material is the projector's, every vertex lies within the projector's
+ * projectionBounds grown by DressBoundsGrowth, and no island of it matches an editor face
+ * (worldspawn's adoption table has none of it, and matchProcIsland finds no candidate for
+ * any of its islands; a curved one no editor patch of its material), the first projector
+ * by preview id taking a surface two claim. Before that test a surface whose material is
+ * an inlined model entity's own material and whose vertices lie within the instance's
+ * world bounds grown by InlineBoundsGrowth is dmap's inlined copy (K42), never a
+ * fragment. The identified surfaces are drawn as world chunks of their area, one per
+ * surface, by the jobs of their cells (ChunkJobInput::dress); where the table changed,
+ * their cells are marked. A projector with no fragment surface is counted
+ * (dress_unmatched) and named once in the notices; nothing is projected live (Q34).
+ *
  * The scene's lights are the LightRegistry's (LP1b.3, C15): it takes the same snapshots
  * and .proc tree, builds the light records as its own pool job, and publishes them in a
  * LightTable, into the session's LightTablePublication (R2.9: LitSession::lightTable is
@@ -281,6 +299,23 @@ public:
     bool operator==(const ModelCounts&) const = default;
   };
 
+  /**
+   * LP7.3 (C54): the scene's dress totals: the identified dress surfaces, the func_decal
+   * entities without a fragment surface (no projector, or one that claims none: the frame
+   * log's dress_unmatched), the .proc surfaces identified as dmap's inlined model copies
+   * (inlined_surfaces, K42) and the claims a second projector made on a surface the first
+   * by preview id took (P7.18)
+   */
+  struct DressCounts
+  {
+    std::uint64_t surfaces = 0;
+    std::uint64_t unmatched = 0;
+    std::uint64_t inlined = 0;
+    std::uint64_t ties = 0;
+
+    bool operator==(const DressCounts&) const = default;
+  };
+
   // LP7.4 (C55): the scene's current adoption totals (the frame log's adopted_islands,
   // adopted_tris, unmatched_islands, curved_islands)
   struct AdoptionCounts
@@ -323,6 +358,21 @@ private:
   AdoptionCounts m_adoptionCounts;
   // LP7.2 (C52): updated with every model pass
   ModelCounts m_modelCounts;
+
+  // ----- LP7.3 (C54, D132, D138, K43): the dress decals -----
+
+  // what the pass reads changed since it last ran (a snapshot, a table, a batch applied,
+  // a model entity)
+  bool m_dressDirty = false;
+  // the identified surfaces (the jobs' input; null: none, or a tree not evaluated yet)
+  std::shared_ptr<const DressTable> m_dress;
+  DressCounts m_dressCounts;
+  // the planar islands of the identified surfaces, which unmatched_islands leaves out
+  std::uint64_t m_dressPlanarIslands = 0;
+  // a projector's material is not in the table yet
+  bool m_dressWaits = false;
+  // the once-notices said, by entity and text
+  std::set<std::pair<PreviewId, std::string>> m_dressNotices;
 
 public:
   // lights, probes and grids may be null: the registries (and the scene's grid tables)
@@ -452,6 +502,14 @@ public:
    */
   std::shared_ptr<const EntityAdoption> adoptionOf(PreviewId entity) const;
 
+  // LP7.3 (C54): the scene's dress totals; the render thread
+  DressCounts dressCounts() const;
+  /**
+   * LP7.3 (C54): the identified dress surfaces (null: none), immutable; the render thread
+   * (tests)
+   */
+  std::shared_ptr<const DressTable> dressTable() const;
+
   // waits for the batches in flight and applies them, until none is in flight (tests)
   void finishForTesting();
   // LPF.0b: the cells the last batch started builds (tests)
@@ -494,6 +552,15 @@ private:
   void dropAdoption(const Drop& drop);
   void markAdoptedIsland(const AdoptedIsland& island);
   void updateAdoptionCounts();
+  /**
+   * LP7.3 (C54, lit/SceneGeometry: SceneDress.cpp): the dress pass when what it reads
+   * changed and no batch is in flight (a batch built for a new tree has not returned its
+   * pieces yet): the projectors, the identification, the counters and the notices; the
+   * cells of every surface that entered or left the table are marked. Whether it marked
+   * any
+   */
+  bool updateDress();
+  void dressNotice(PreviewId entity, const std::string& text);
   bool collectChunks();
   PreviewId chunkEntityOf(const SceneNode& node) const;
   // LP4.2a (C37): the probe registry's inputs now, its entityDefs asked for

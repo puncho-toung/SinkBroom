@@ -192,6 +192,8 @@ struct FrontendLists
   // fog light's registers were first-seen (left open; the lists pending)
   std::size_t portalsFogged = 0;
   std::size_t portalFogPending = 0;
+  // LP7.3 (C54): the dress surfaces in drawSurfs (a chunk each, Chunk::dress)
+  std::size_t dressSurfaces = 0;
   // the view lights that went on to the pairing: a flow rect (or the outside set's
   // projected rect alone, D81), registers that add light, and a scissor that is not
   // empty (before R_OptimizeViewLightsList drops those without a surface): the viewLights

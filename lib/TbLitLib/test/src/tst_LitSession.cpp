@@ -337,8 +337,9 @@ namespace
 using namespace std::chrono_literals;
 
 // the frame log's fields (lit/FrameLog.cpp, frameLogHeader): LP5.3's 57, LP7.0's
-// proc_bytes and the eleven model, dress and adoption counts (C52, P7.20)
-constexpr auto FrameLogFields = std::size_t{69};
+// proc_bytes and the eleven model, dress and adoption counts (C52, P7.20), LP7.3's
+// inlined_surfaces (C54)
+constexpr auto FrameLogFields = std::size_t{70};
 
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it

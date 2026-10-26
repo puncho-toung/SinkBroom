@@ -657,6 +657,7 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       {
         lists.drawSurfs.push_back(surface);
         lists.gridSurfaces += surface.gridArea ? 1 : 0;
+        lists.dressSurfaces += surface.chunk->dress ? 1 : 0;
       }
     }
   }

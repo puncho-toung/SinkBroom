@@ -1162,6 +1162,12 @@ void RenderThread::runFrameHooks(nvrhi::ICommandList& commandList)
 RenderFrameAccess RenderThread::frameAccess(nvrhi::ICommandList& commandList)
 {
   const auto models = currentModelTotals();
+  auto dress = DressTotals{};
+  if (m_geometry && !m_arenaTestChunks)
+  {
+    const auto counts = m_geometry->dressCounts();
+    dress = DressTotals{counts.surfaces, counts.unmatched, counts.inlined, counts.ties};
+  }
   return RenderFrameAccess{
     m_device.device(),
     commandList,
@@ -1180,7 +1186,8 @@ RenderFrameAccess RenderThread::frameAccess(nvrhi::ICommandList& commandList)
     m_frameHdrClear,
     arenaChunks(),
     arenaInstances(),
-    models};
+    models,
+    dress};
 }
 
 void RenderThread::runAfterPassHooks(nvrhi::ICommandList& commandList)
@@ -2066,7 +2073,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.fogDraws = litStats.fogDraws;
       row.blendDraws = litStats.blendDraws;
       // LP7.2 (C52): the scene's model totals when the frame was drawn, and its draws of
-      // instances; LP7.0 (C54): no dress decal is drawn yet
+      // instances
       {
         const auto models = m_geometry && !m_arenaTestChunks
                               ? m_geometry->modelCounts()
@@ -2077,8 +2084,16 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         row.modelsPending = models.pending;
         row.modelsSkinned = models.skinned;
       }
-      row.dressSurfaces = 0u;
-      row.dressUnmatched = 0u;
+      // LP7.3 (C54): the dress surfaces the frame drew, and the scene's func_decals
+      // without a fragment surface and inlined copies when the frame was drawn
+      {
+        const auto dress = m_geometry && !m_arenaTestChunks
+                             ? m_geometry->dressCounts()
+                             : SceneGeometry::DressCounts{};
+        row.dressSurfaces = std::uint64_t(litStats.dressSurfaces);
+        row.dressUnmatched = dress.unmatched;
+        row.inlinedSurfaces = dress.inlined;
+      }
       // LP7.4 (C55): the scene's adoption totals when the frame was drawn
       {
         const auto adoption =

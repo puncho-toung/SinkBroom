@@ -178,6 +178,9 @@ struct FrameLogRow
   std::optional<std::uint64_t> adoptedTris;
   std::optional<std::uint64_t> unmatchedIslands;
   std::optional<std::uint64_t> curvedIslands;
+  // LP7.3 (C54, K42), frame rows: the .proc surfaces the dress pass identified as dmap's
+  // inlined model copies (never dress fragments); a column at the end (LP7.0's rule)
+  std::optional<std::uint64_t> inlinedSurfaces;
 };
 
 // the CSV header line, ending in a newline

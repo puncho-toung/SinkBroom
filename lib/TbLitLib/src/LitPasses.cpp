@@ -201,6 +201,7 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
   rebuildLists(inputs, frame.view);
   m_stats.lightsVisible = m_lists.lights.size();
   m_stats.gridSurfaces = m_lists.gridSurfaces;
+  m_stats.dressSurfaces = m_lists.dressSurfaces;
   // LP4.1 (C16): the flow behind the lists; its time only when it ran this frame
   m_stats.viewArea = m_lists.viewArea;
   m_stats.areasFlowed = m_lists.areasFlowed;

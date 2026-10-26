@@ -168,6 +168,9 @@ struct Chunk
   // LP7.4 (C55): built from adopted .proc islands (their parts follow the editor
   // triangulation's parts of the key)
   bool adopted = false;
+  // LP7.3 (C54): built from one .proc surface identified as a func_decal's fragments
+  // (its part after the adopted islands' parts of the key)
+  bool dress = false;
   std::uint64_t casterVersion = 0;
   std::uint64_t appearanceVersion = 0;
   /**
@@ -277,6 +280,33 @@ struct EntityAdoption
 };
 
 /**
+ * LP7.3 (C54, D132): one .proc _areaN surface the dress pass identified as a func_decal
+ * projector's fragment surface (SceneGeometry, after apply): where it is (the tree's
+ * model and its surface), the cell whose job draws it (its bounds' centre's,
+ * worldspawn's), its model's area, its material as the .proc names it, and the projector
+ * it was identified by (the first by preview id that claims it).
+ */
+struct DressSurface
+{
+  std::size_t model = 0;
+  std::size_t surface = 0;
+  CellRef cell;
+  int area = 0;
+  std::string material;
+  PreviewId projector = NoPreviewId;
+
+  bool operator==(const DressSurface& other) const;
+};
+
+// LP7.3 (C54): the scene's identified dress surfaces, in (model, surface) order, with the
+// tree they are read from; immutable once published
+struct DressTable
+{
+  std::shared_ptr<const ProcTree> tree;
+  std::vector<DressSurface> surfaces;
+};
+
+/**
  * One job's input (D59, held by shared_ptr, immutable): the cells to rebuild, every node
  * of those cells, every node of each brush entity among them (for its origin brushes),
  * the entities, worldspawn (whose overrideMaterial and removeEntities apply to all, A11),
@@ -310,6 +340,14 @@ struct ChunkJobInput
    * model), back sides from its material; the pieces it replaces make no triangles
    */
   std::unordered_map<PreviewId, std::shared_ptr<const EntityAdoption>> adoptions;
+  /**
+   * LP7.3 (C54, D132): a world job's dress surfaces (null: none): one in one of the job's
+   * cells is drawn as a world chunk of its area from the .proc (loadProcSurface:
+   * positions, st recentred per island, normals, the colour), its triangles as dmap wrote
+   * them, tangents by the material's path over it (the engine's FinishSurfaces on the
+   * area model), back sides from its material, one chunk (part) per surface
+   */
+  std::shared_ptr<const DressTable> dress;
 };
 
 // LP7.4 (C55, P7.11): a face piece a job built, with the cell (and the chunk entity) it

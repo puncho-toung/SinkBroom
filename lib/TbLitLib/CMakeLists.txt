@@ -82,6 +82,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ResourceContainer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SamplerSet.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SamplerSet.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/SceneDress.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SceneGeometry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SceneModels.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SessionEvents.cpp

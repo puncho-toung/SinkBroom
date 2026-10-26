@@ -329,6 +329,8 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
   m_batchSequence = snapshot.sequence;
   // C37: the entities, and with them the placed probes, may have changed
   m_probesDirty = true;
+  // LP7.3 (C54): and the projectors, their targets and the inlined models
+  m_dressDirty = true;
 
   // LP7.4 (K44): the nodes and faces this snapshot changes, whose adopted islands leave
   // the tables before the batch, so that no batch draws an island over an edited face
@@ -355,6 +357,8 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
     // LP7.2 (C52): a removed entity's model goes, its notices with it
     markModelEntity(id);
     std::erase_if(m_modelNotices, [&](const auto& notice) { return notice.first == id; });
+    // LP7.3 (C54): and its dress notices
+    std::erase_if(m_dressNotices, [&](const auto& notice) { return notice.first == id; });
     removeNode(id);
     m_nodes.erase(id);
     if (m_entities.erase(id) > 0)
@@ -565,7 +569,9 @@ void SceneGeometry::refreshTable()
 
 bool SceneGeometry::waitsForMaterials() const
 {
-  return !m_pendingMaterials.empty() || m_waitsForMeasure || !m_pendingSkins.empty();
+  // LP7.3 (C54): or a projector's material
+  return !m_pendingMaterials.empty() || m_waitsForMeasure || !m_pendingSkins.empty()
+         || m_dressWaits;
 }
 
 bool SceneGeometry::waitsForEntityDefs() const
@@ -631,6 +637,8 @@ void SceneGeometry::scanTable()
 {
   // C37: a new table may answer an entityDef the probes wait for, or bring a bake
   m_probesDirty = true;
+  // LP7.3 (C54): a projector's material or entityDef, or a bake
+  m_dressDirty = true;
   // R3.1: what the cells wait for is looked for in every table the scene adopts, also
   // one that a batch for other cells adopts first. C10: the bake that answers the map
   // path's request, or a later read of it; the lights take its tree with the next
@@ -858,6 +866,12 @@ void SceneGeometry::startBatch()
         adoption != m_adoptions.end())
     {
       input->adoptions.emplace(adoption->first, adoption->second);
+    }
+    // LP7.3 (C54): a world job draws the dress surfaces of its cells, from this tree's
+    // table alone
+    if (refs.front().entity == m_worldspawn && m_dress && m_dress->tree == m_proc)
+    {
+      input->dress = m_dress;
     }
     const auto addEntity = [&](const PreviewId id) {
       const auto it = m_entities.find(id);
@@ -1155,6 +1169,10 @@ void SceneGeometry::adoptTree()
     }
   }
   m_adoptionAll = m_islands != nullptr;
+  // LP7.3 (C54): the old tree's dress surfaces go (markAll marks their cells, which hold
+  // chunks); the pass identifies the new tree's once its batch has applied
+  m_dress.reset();
+  m_dressDirty = true;
   updateAdoptionCounts();
 }
 
@@ -1515,8 +1533,9 @@ void SceneGeometry::updateAdoptionCounts()
       planar += m_islands->models[m].planarIslands;
       counts.curvedIslands += m_islands->models[m].curvedIslands;
     }
-    counts.unmatchedIslands =
-      planar > counts.adoptedIslands ? planar - counts.adoptedIslands : 0;
+    // LP7.3 (C54): the identified dress surfaces' planar islands are counted apart
+    const auto matched = counts.adoptedIslands + m_dressPlanarIslands;
+    counts.unmatchedIslands = planar > matched ? planar - matched : 0;
   }
   m_adoptionCounts = counts;
 }
@@ -1545,6 +1564,16 @@ bool SceneGeometry::collect()
   // instance counts as an applied batch (the arenas sync, a frame is drawn)
   updateModelEntities();
   const auto modelsChanged = std::exchange(m_modelsChanged, false);
+  // LP7.3 (C54): the dress pass when a snapshot, a table or a model entity changed what
+  // it reads; the cells it marks are built at once
+  if (modelsChanged)
+  {
+    m_dressDirty = true;
+  }
+  if (updateDress())
+  {
+    startBatch();
+  }
   return chunksApplied || lightsApplied || modelsChanged;
 }
 
@@ -1660,6 +1689,9 @@ bool SceneGeometry::collectChunks()
     // LP7.4 (C55, P7.11): beside them, the adoption of the groups the batch changed; the
     // cells of an island whose adoption changed are built by the batch started below
     updateAdoption();
+    // LP7.3 (C54): and the dress surfaces over the pieces and the adoption the batch left
+    m_dressDirty = true;
+    updateDress();
     m_appliedSequence = m_batchSequence;
     // V.1: a table published while the batch ran woke an idle pass that could not adopt
     // it; it is adopted now, and what the batch left waiting is built at once

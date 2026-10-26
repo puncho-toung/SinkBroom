@@ -226,6 +226,16 @@ struct FrameProgress
 // D77: the frames a session re-triggers without progress before it waits for a trigger
 inline constexpr auto MaxStalledFrames = std::size_t{3};
 
+// LP7.3 (C54): the scene's dress totals when a frame was drawn
+// (SceneGeometry::DressCounts; 0 for a test's chunks)
+struct DressTotals
+{
+  std::uint64_t surfaces = 0;
+  std::uint64_t unmatched = 0;
+  std::uint64_t inlined = 0;
+  std::uint64_t ties = 0;
+};
+
 /**
  * Test hooks (LP2.1): what a frame's hook may use, on the render thread, inside the
  * frame's open command list once its uploads are recorded and before its first pass.
@@ -265,6 +275,8 @@ struct RenderFrameAccess
   // LP7.2 (C52): the scene's models when the frame was drawn (ModelTotals; the counts
   // 0 for a test's chunks)
   ModelTotals models;
+  // LP7.3 (C54): and its dress decals
+  DressTotals dress;
 };
 
 /**

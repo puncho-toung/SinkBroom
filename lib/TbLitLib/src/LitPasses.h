@@ -188,6 +188,9 @@ struct LitFrameStats
   bool interactionsTimed = false;
   // LP4.3 (C36): the drawn surfaces with a grid area (FrontendLists::gridSurfaces)
   std::size_t gridSurfaces = 0;
+  // LP7.3 (C54): the dress surfaces the frame draws (FrontendLists::dressSurfaces: the
+  // frame log's dress_surfaces)
+  std::size_t dressSurfaces = 0;
   // LP4.1 (C16, C32, D90): the view's portal flow behind the lists the frame drew
   // (FrontendLists): the view's area (-1 outside the world and without a tree), the areas
   // flowed, the tree's area count (0 without a tree), the view lights that went on to the

@@ -150,11 +150,12 @@ std::string fogFields(const FrameLogRow& row)
 }
 
 // LP7.0's columns (C52, C54, C55): the models', the dress decals' and the adopted
-// triangles' counts; empty in a start or stop row
+// triangles' counts; LP7.3 (C54, K42): and the inlined copies'; empty in a start or stop
+// row
 std::string lp7Fields(const FrameLogRow& row)
 {
   return fmt::format(
-    "{},{},{},{},{},{},{},{},{},{},{}",
+    "{},{},{},{},{},{},{},{},{},{},{},{}",
     optionalCount(row.modelEntities),
     optionalCount(row.modelInstances),
     optionalCount(row.modelDraws),
@@ -165,7 +166,8 @@ std::string lp7Fields(const FrameLogRow& row)
     optionalCount(row.adoptedIslands),
     optionalCount(row.adoptedTris),
     optionalCount(row.unmatchedIslands),
-    optionalCount(row.curvedIslands));
+    optionalCount(row.curvedIslands),
+    optionalCount(row.inlinedSurfaces));
 }
 
 std::string_view eventName(const FrameLogEvent event)
@@ -198,7 +200,7 @@ std::string_view frameLogHeader()
          "draws,stage_skipped,gpu_stages_ms,fog_draws,blend_draws,gpu_fog_ms,proc_bytes,"
          "model_entities,model_instances,model_draws,models_pending,models_skinned,dress_"
          "surfaces,dress_unmatched,adopted_islands,adopted_tris,unmatched_islands,curved_"
-         "islands\n";
+         "islands,inlined_surfaces\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -210,9 +212,9 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   if (row.event != FrameLogEvent::Frame)
   {
     // the frame's columns empty (gpu_prepass_ms ... gpu_fog_ms), then proc_bytes, then
-    // LP7's eleven counts empty
+    // LP7's twelve counts empty
     return fmt::format(
-      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},,,,,,,,,,,\n",
+      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},,,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,

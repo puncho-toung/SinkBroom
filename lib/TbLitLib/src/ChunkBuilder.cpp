@@ -190,6 +190,16 @@ struct Bucket
   std::vector<Triangle> triangles;
 };
 
+// LP7.3 (C54): one dress surface of the job's cells, as its chunk is built
+struct DressEntry
+{
+  ChunkKey key;
+  const FaceMaterial* material = nullptr;
+  const FaceMaterial* drawMaterial = nullptr;
+  const EntityContext* entity = nullptr;
+  const DressSurface* surface = nullptr;
+};
+
 // LP7.4 (C55): the adopted islands of one (area, entity, material, cell)
 struct AdoptedBucket
 {
@@ -227,6 +237,8 @@ private:
   // cell), and the first part after the editor triangulation's of each key
   std::map<ChunkKey, AdoptedBucket> m_adopted;
   std::map<ChunkKey, int> m_nextPart;
+  // LP7.3 (C54): the dress surfaces of the job's cells, in the table's order
+  std::vector<DressEntry> m_dress;
 
 public:
   Builder(const ChunkJobInput& input, const CpuJobContext* context)
@@ -272,6 +284,7 @@ public:
       }
     }
     addAdoptedIslands();
+    addDressSurfaces();
     for (auto& [key, bucket] : m_buckets)
     {
       finishBucket(bucket);
@@ -279,6 +292,10 @@ public:
     for (auto& [key, adopted] : m_adopted)
     {
       finishAdopted(adopted);
+    }
+    for (const auto& entry : m_dress)
+    {
+      finishDress(entry);
     }
     for (const auto& [id, context] : m_contexts)
     {
@@ -992,6 +1009,95 @@ private:
       }
     }
     flush();
+    // LP7.3: the dress surfaces of the key follow
+    m_nextPart[adopted.key] = part;
+  }
+
+  // LP7.3 (C54, D132): the dress surfaces whose cell is one of the job's (a world job's)
+  void addDressSurfaces()
+  {
+    const auto& dress = m_input.dress;
+    if (!dress || !dress->tree || !m_input.worldspawn)
+    {
+      return;
+    }
+    const auto* context = contextOf(m_input.worldspawn->id);
+    if (!context || !context->state.visible || !context->world)
+    {
+      return;
+    }
+    for (const auto& surface : dress->surfaces)
+    {
+      if (!m_cells.contains(surface.cell))
+      {
+        continue;
+      }
+      const auto& material = m_materials.get(surface.material);
+      // a world surface: its own material draws it (dmap's skip rule: neither drawn nor
+      // casting shadows makes no surface)
+      const auto* drawMaterial = drawMaterialOf(material, *context);
+      if (!drawMaterial || (!material.drawn && !material.castsShadow))
+      {
+        continue;
+      }
+      m_dress.push_back(DressEntry{
+        ChunkKey{
+          surface.area, context->chunkEntity, drawMaterial->name, surface.cell.cell, 0},
+        &material,
+        drawMaterial,
+        context,
+        &surface});
+    }
+  }
+
+  /**
+   * LP7.3 (C54, SC634, SC638): one dress surface as one chunk, its part after the editor
+   * triangulation's and the adopted islands' parts of its key: the surface's vertices as
+   * ParseModel loads them (loadProcSurface: st recentred per island, SetTexCoord,
+   * SetNormal, the colour, RenderWorld_load.cpp:224-321) and its triangles as dmap wrote
+   * them, then finishChunk without the weld and the recentring (they are the engine's
+   * already); a surface over MaxChunkWeldedVerts is not drawn
+   */
+  void finishDress(const DressEntry& entry)
+  {
+    const auto& tree = *m_input.dress->tree;
+    const auto& surface = *entry.surface;
+    if (
+      surface.model >= tree.models.size()
+      || surface.surface >= tree.models[surface.model].surfaces.size())
+    {
+      warnOnce("a dress surface is not in its tree");
+      return;
+    }
+    const auto& procSurface = tree.models[surface.model].surfaces[surface.surface];
+    auto verts = loadProcSurface(procSurface);
+    if (verts.empty() || verts.size() > MaxChunkWeldedVerts)
+    {
+      warnOnce(fmt::format("a dress surface of {} is not drawn", surface.material));
+      return;
+    }
+    auto indexes = std::vector<std::uint16_t>{};
+    indexes.reserve(procSurface.indexes.size());
+    for (const auto index : procSurface.indexes)
+    {
+      if (index < 0 || std::size_t(index) >= verts.size())
+      {
+        warnOnce(fmt::format("a dress surface of {} is not drawn", surface.material));
+        return;
+      }
+      indexes.push_back(std::uint16_t(index));
+    }
+    auto key = entry.key;
+    key.part = m_nextPart[entry.key]++;
+    finishChunk(
+      std::move(key),
+      *entry.material,
+      *entry.drawMaterial,
+      *entry.entity,
+      std::move(verts),
+      std::move(indexes),
+      false,
+      true);
   }
 
   // LP7.2 (C53, D131): material is the faces' own (the back sides, the tangent path;
@@ -1003,7 +1109,8 @@ private:
     const EntityContext& context,
     std::vector<EngineDrawVert> verts,
     std::vector<std::uint16_t> indexes,
-    const bool editorTriangles)
+    const bool editorTriangles,
+    const bool dress = false)
   {
     // D59: st read back as ParseModel reads them (R3.9) and recentred per island,
     // through SetTexCoord again (RenderWorld_load.cpp ParseModel); an adopted island's
@@ -1084,7 +1191,8 @@ private:
     }
     // C21: the faces' own editor-image size; LP7.2 (A41): a skin not in the table yet
     chunk.provisional = material.provisional || (!context.world && context.skinPending);
-    chunk.adopted = !editorTriangles;
+    chunk.adopted = !editorTriangles && !dress;
+    chunk.dress = dress;
     chunk.sourceMaterial = material.name;
 
     auto caster = fnv(FnvBasis, &chunk.castClass, sizeof(chunk.castClass));
@@ -1203,6 +1311,13 @@ bool ChunkKey::operator<(const ChunkKey& other) const
 {
   return std::tie(entity, cell, area, material, part)
          < std::tie(other.entity, other.cell, other.area, other.material, other.part);
+}
+
+bool DressSurface::operator==(const DressSurface& other) const
+{
+  return model == other.model && surface == other.surface && cell == other.cell
+         && area == other.area && material == other.material
+         && projector == other.projector;
 }
 
 bool CellRef::operator==(const CellRef& other) const

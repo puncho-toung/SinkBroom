@@ -25,6 +25,7 @@
 #include "lit/BprocFile.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/CpuPool.h"
+#include "lit/DecalProjectors.h"
 #include "lit/EntityState.h"
 #include "lit/GameFileSource.h"
 #include "lit/ImageOverride.h"
@@ -2651,6 +2652,494 @@ TEST_CASE("SceneGeometry: no tree, no adoption (LP7.4, C55)")
   CHECK(scene.adoptionCounts() == SceneGeometry::AdoptionCounts{});
   CHECK(adoptedChunks(scene).empty());
   CHECK_FALSE(scene.chunks().empty());
+}
+
+namespace
+{
+
+// LP7.3 (C54): the dress scenes' decls: a DECAL_MACRO material whose blend stage reads
+// the vertex colour, a second one, a non-discrete one, and the hand-placed face's twin of
+// lp1b/floor (its editor image the floor's, so that dmap's st and the face's agree)
+const auto DressDecls = std::string{
+  "textures/lp73/decal\n{\n\tqer_editorimage\ttextures/lp1b/floor.tga\n\tDECAL_MACRO\n"
+  "\t{\n\t\tblend\tblend\n\t\tmap\ttextures/lp1b/floor.tga\n\t\tvertexColor\n\t}\n}\n"
+  "textures/lp73/decal2\n{\n\tqer_editorimage\ttextures/lp1b/floor.tga\n\tDECAL_MACRO\n"
+  "\t{\n\t\tblend\tblend\n\t\tmap\ttextures/lp1b/floor.tga\n\t}\n}\n"
+  "textures/lp73/floor_decal\n{\n\tqer_editorimage\ttextures/lp1b/floor.tga\n\t"
+  "DECAL_MACRO\n\t{\n\t\tblend\tblend\n\t\tmap\ttextures/lp1b/floor.tga\n\t}\n}\n"};
+
+// a .proc vertex: xyz st normal and, for the colour format, rgba
+std::string procVertex(
+  const EngineVec3& p, const EngineVec2& st, const std::optional<float> alpha)
+{
+  return alpha ? fmt::format(
+                   "( {} {} {} {} {} 0 0 1 1 1 1 {} ) ",
+                   p[0],
+                   p[1],
+                   p[2],
+                   st[0],
+                   st[1],
+                   *alpha)
+               : fmt::format("( {} {} {} {} {} 0 0 1 ) ", p[0], p[1], p[2], st[0], st[1]);
+}
+
+/**
+ * The fixture's golden .proc with surfaces added to _area0 (numSurfaces raised, each
+ * written before the model's closing brace), and every name from replaced by to
+ */
+std::string procWithSurfaces(
+  const std::vector<std::string>& surfaces,
+  const std::string& from = "",
+  const std::string& to = "")
+{
+  auto text = readTextFile(BakeGame::goldenProc());
+  const auto header =
+    std::string{"model { /* name = */ \"_area0\" /* numSurfaces = */ 4"};
+  const auto at = text.find(header);
+  REQUIRE(at != std::string::npos);
+  text.replace(
+    at,
+    header.size(),
+    fmt::format(
+      "model {{ /* name = */ \"_area0\" /* numSurfaces = */ {}", 4 + surfaces.size()));
+  const auto next = text.find("\nmodel {", at + header.size());
+  REQUIRE(next != std::string::npos);
+  const auto close = text.rfind('}', next);
+  REQUIRE(close != std::string::npos);
+  auto added = std::string{};
+  for (auto i = std::size_t{0}; i < surfaces.size(); ++i)
+  {
+    added += fmt::format("/* surface {} */ {}\n", 4 + i, surfaces[i]);
+  }
+  text.insert(close, added);
+  if (!from.empty())
+  {
+    for (auto pos = text.find(from); pos != std::string::npos; pos = text.find(from, pos))
+    {
+      text.replace(pos, from.size(), to);
+      pos += to.size();
+    }
+  }
+  return text;
+}
+
+/**
+ * LP7.3's hand-written dress surface: four vertices on the floor of _area0 (x 100 .. 132,
+ * y -2 .. 2 by default, z 0), vertex format 1 with rgba ( 1, 1, 1, 0.5 ) on the first two
+ * and ( 1, 1, 1, 1 ) on the others, two triangles
+ */
+std::string dressSurface(
+  const std::string& material,
+  const std::array<EngineVec3, 4>& corners = {
+    EngineVec3{100, -2, 0},
+    EngineVec3{132, -2, 0},
+    EngineVec3{132, 2, 0},
+    EngineVec3{100, 2, 0}})
+{
+  return fmt::format(
+    "{{ \"{}\" /* numVerts = */ 4 /* numIndexes = */ 6 /* vertexFormat = */ 1\n{}{}{}{}\n"
+    "0 1 2 0 2 3\n}}",
+    material,
+    procVertex(corners[0], {0, 0}, 0.5f),
+    procVertex(corners[1], {1, 0}, 0.5f),
+    procVertex(corners[2], {1, 1}, 1.0f),
+    procVertex(corners[3], {0, 1}, 1.0f));
+}
+
+// a point entity of the fixture map's text
+std::string dressEntity(const std::string& classname, const std::string& keys)
+{
+  return "{\n\"classname\" \"" + classname + "\"\n" + keys + "}\n";
+}
+
+/**
+ * The default projector: aimed up from 100 below the floor, 1 off in y (axis[1] along +x:
+ * NormalVectors' left, roll 0), decalSize 64 8 (x 116 +- 64, y +- 8 on the far cap)
+ */
+std::string decalEntities(
+  const std::string& name = "d1",
+  const std::string& material = "textures/lp73/decal",
+  const std::string& extra = "",
+  const std::string& aim = "116 1 -100")
+{
+  return dressEntity(
+           "func_decal",
+           fmt::format(
+             "\"name\" \"{}\"\n\"origin\" \"116 0 0\"\n\"material\" "
+             "\"{}\"\n\"decalSize\" "
+             "\"64 8\"\n\"target\" \"aim\"\n{}",
+             name,
+             material,
+             extra))
+         + dressEntity(
+           "target_null", fmt::format("\"name\" \"aim\"\n\"origin\" \"{}\"\n", aim));
+}
+
+// a dress scene: the fixture game with its images, the dress decls, a .proc of text
+class DressScene
+{
+public:
+  BakeGame game;
+  std::shared_ptr<ParseGate> gate = std::make_shared<ParseGate>();
+  std::unique_ptr<MaterialService> service;
+  std::unique_ptr<CpuPool> pool;
+  std::unique_ptr<SceneGeometry> scene;
+  PreviewId worldspawn = NoPreviewId;
+  std::uint64_t sequence = 0;
+  std::string mapText;
+
+  explicit DressScene(
+    const std::optional<std::string>& proc,
+    const std::string& from = "",
+    const std::string& to = "")
+  {
+    static_cast<void>(fixtureTable());
+    std::filesystem::create_directories(game.base() / "textures" / "lp1b");
+    std::filesystem::copy(
+      litFixtureFolder() / "textures" / "lp1b",
+      game.base() / "textures" / "lp1b",
+      std::filesystem::copy_options::recursive);
+    writeTextFile(game.base() / "materials" / "zz_lp73_dress.mtr", DressDecls);
+    if (proc)
+    {
+      game.writeProc("lp1b_geometry", *proc);
+    }
+    else
+    {
+      // D138: the .bproc alone, where the engine writes it
+      std::filesystem::remove(game.base() / "maps" / "lp1b_geometry.proc");
+      std::filesystem::create_directories(game.base() / "generated" / "maps");
+      std::filesystem::copy_file(
+        litFixtureFolder() / "goldens" / "lp1b_geometry" / "lp1b_geometry.bproc",
+        game.base() / "generated" / "maps" / "lp1b_geometry.bproc");
+    }
+    mapText = readTextFile(litFixtureFolder() / "maps" / "lp1b_geometry.map");
+    if (!from.empty())
+    {
+      for (auto pos = mapText.find(from); pos != std::string::npos;
+           pos = mapText.find(from, pos))
+      {
+        mapText.replace(pos, from.size(), to);
+        pos += to.size();
+      }
+    }
+    service = game.service(gate);
+    pool = CpuPool::create() | kdl::value();
+    scene = std::make_unique<SceneGeometry>(pool.get(), service.get());
+  }
+
+  ~DressScene()
+  {
+    gate->open();
+    scene.reset();
+    pool->stop();
+  }
+
+  // the fixture map with entities appended, settled
+  Snapshot take(const std::string& entities)
+  {
+    auto snapshot = snapshotOfMapText(mapText + entities);
+    snapshot.sequence = ++sequence;
+    if (sequence == 1)
+    {
+      snapshot.mapPath = game.mapPath("lp1b_geometry");
+    }
+    for (const auto& entity : snapshot.entities)
+    {
+      if (snapshot.string(entity.classname) == "worldspawn")
+      {
+        worldspawn = entity.id;
+      }
+    }
+    scene->takeSnapshot(snapshot);
+    const auto settled = settle(*scene, [&] {
+      return scene->procTree() && !scene->waitsForMaterials() && !scene->waitsForModels()
+             && !scene->waitsForEntityDefs() && !scene->waitsForBake();
+    });
+    CHECK(settled);
+    scene->finishForTesting();
+    return snapshot;
+  }
+
+  std::vector<const Chunk*> dressChunks() const
+  {
+    auto found = std::vector<const Chunk*>{};
+    for (const auto& [key, chunk] : scene->chunks())
+    {
+      if (chunk.dress)
+      {
+        found.push_back(&chunk);
+      }
+    }
+    return found;
+  }
+
+  std::vector<std::string> warnings() const { return scene->takeWarnings(); }
+};
+
+// the id of the snapshot's entity of a name
+PreviewId dressEntityId(const Snapshot& snapshot, const std::string& name)
+{
+  for (const auto& entity : snapshot.entities)
+  {
+    for (auto k = entity.keys.first; k < entity.keys.first + entity.keys.count; ++k)
+    {
+      const auto& keyValue = snapshot.keyValues[k];
+      if (
+        snapshot.string(keyValue.key) == "name"
+        && snapshot.string(keyValue.value) == name)
+      {
+        return entity.id;
+      }
+    }
+  }
+  return NoPreviewId;
+}
+
+bool hasWarning(const std::vector<std::string>& warnings, const std::string& text)
+{
+  return std::ranges::find(warnings, text) != warnings.end();
+}
+
+} // namespace
+
+/**
+ * LP7.3 (C54, D132, D138, K42, K43, P7.18): the dress decals identified on the fixture
+ * scene (the LP2.2a fixture's map and its golden .proc, a hand-written format-1 surface
+ * added to _area0): a matching func_decal makes one world chunk of area 0 with the file's
+ * colours; the projector's material changed, or its bounds 0.3 short, leave it unmatched
+ * and named once, 0.1 short (the 0.2 growth) matched; a hand-placed DECAL_MACRO face of
+ * the projector's material inside its bounds (the fixture's floor on a decal material in
+ * the map and the .proc) is adopted by LP7.4 and never a fragment; two projectors over
+ * one surface: the first by id, the second counted; a moved target re-identifies; a
+ * .bproc yields none; an inline 1 model's dmap copy (hand-written) is neither adopted nor
+ * identified
+ */
+TEST_CASE("SceneGeometry, the dress decals from the .proc (LP7.3, C54)")
+{
+  const auto identifiedArea0 = [](const SceneGeometry& scene) {
+    auto found = std::vector<DressSurface>{};
+    if (const auto table = scene.dressTable())
+    {
+      found = table->surfaces;
+    }
+    return found;
+  };
+
+  SECTION("a matching func_decal: one world chunk of its area with the file's colours")
+  {
+    auto dress = DressScene{procWithSurfaces({dressSurface("textures/lp73/decal")})};
+    const auto snapshot = dress.take(decalEntities());
+    const auto surfaces = identifiedArea0(*dress.scene);
+    REQUIRE(surfaces.size() == 1u);
+    CHECK(surfaces[0].surface == 4u);
+    CHECK(surfaces[0].area == 0);
+    CHECK(surfaces[0].material == "textures/lp73/decal");
+    CHECK(surfaces[0].cell == CellRef{dress.worldspawn, {0, 0, 0}});
+    CHECK(surfaces[0].projector == dressEntityId(snapshot, "d1"));
+    CHECK(dress.scene->dressCounts() == SceneGeometry::DressCounts{1u, 0u, 0u, 0u});
+    const auto chunks = dress.dressChunks();
+    REQUIRE(chunks.size() == 1u);
+    const auto& chunk = *chunks[0];
+    CHECK(chunk.key.entity == dress.worldspawn);
+    CHECK(chunk.key.area == 0);
+    CHECK(chunk.key.material == "textures/lp73/decal");
+    CHECK_FALSE(chunk.adopted);
+    CHECK(chunk.castClass == CastClass::None);
+    auto alphas = std::multiset<int>{};
+    for (const auto& vert : chunk.verts)
+    {
+      alphas.insert(vert.color[3]);
+      CHECK(vert.color[0] == 255);
+      CHECK(vert.color[1] == 255);
+      CHECK(vert.color[2] == 255);
+      CHECK(vert.color2 == std::array<std::uint8_t, 4>{0, 0, 0, 0});
+    }
+    CHECK(alphas == std::multiset<int>{128, 128, 255, 255});
+    // loadProcSurface's vertices, byte for byte but the tangents
+    const auto proc = dress.scene->procTree();
+    const auto loaded = loadProcSurface(proc->models[surfaces[0].model].surfaces[4]);
+    REQUIRE(loaded.size() == chunk.verts.size());
+    for (auto i = std::size_t{0}; i < loaded.size(); ++i)
+    {
+      CHECK(chunk.verts[i].xyz == loaded[i].xyz);
+      CHECK(chunk.verts[i].st == loaded[i].st);
+      CHECK(chunk.verts[i].color == loaded[i].color);
+    }
+    // its planar island counted apart from unmatched_islands (LP7.4's follow-up)
+    CHECK(dress.scene->adoptionCounts().unmatchedIslands == 0u);
+  }
+
+  SECTION("the projector's material changed: unmatched, named once")
+  {
+    auto dress = DressScene{procWithSurfaces({dressSurface("textures/lp73/decal")})};
+    dress.take(decalEntities("d1", "textures/lp73/decal2"));
+    CHECK_FALSE(dress.scene->dressTable());
+    CHECK(dress.dressChunks().empty());
+    CHECK(dress.scene->dressCounts() == SceneGeometry::DressCounts{0u, 1u, 0u, 0u});
+    const auto warnings = dress.warnings();
+    CHECK(hasWarning(warnings, "func_decal d1 has no baked fragments: dmap the map"));
+    // an unidentified fragment surface's island is an unmatched one, as LP7.4 counted it
+    CHECK(dress.scene->adoptionCounts().unmatchedIslands == 1u);
+    // named once
+    dress.take(decalEntities("d1", "textures/lp73/decal2", "\"_unused\" \"1\"\n"));
+    CHECK_FALSE(
+      hasWarning(dress.warnings(), "func_decal d1 has no baked fragments: dmap the map"));
+  }
+
+  SECTION("bounds 0.3 short: unmatched; 0.1 short: matched (the 0.2 growth)")
+  {
+    // the default projector's bounds, as the scene parses it
+    auto targets =
+      std::map<std::string, EntityKeys>{{"aim", EntityKeys{{"origin", "116 1 -100"}}}};
+    auto decal = MaterialEntry{};
+    decal.name = "textures/lp73/decal";
+    decal.surfaceFlags = 1 << 10;
+    const auto parse = parseDecalProjector(
+      "d1",
+      EntityKeys{
+        {"origin", "116 0 0"},
+        {"material", "textures/lp73/decal"},
+        {"decalSize", "64 8"},
+        {"target", "aim"}},
+      DecalProjectorInputs{
+        [&](const std::string&) -> std::optional<const MaterialEntry*> { return &decal; },
+        [&](const std::string_view name) -> const EntityKeys* {
+          return &targets.at(std::string{name});
+        }});
+    REQUIRE(parse.outcome == DecalProjectorOutcome::Ready);
+    const auto high = parse.projector.parms.projectionBounds[1][1];
+    for (const auto& [beyond, matched] : {std::pair{0.1f, true}, std::pair{0.3f, false}})
+    {
+      CAPTURE(beyond);
+      auto dress = DressScene{procWithSurfaces({dressSurface(
+        "textures/lp73/decal",
+        {EngineVec3{100, -2, 0},
+         EngineVec3{132, -2, 0},
+         EngineVec3{132, high + beyond, 0},
+         EngineVec3{100, 2, 0}})})};
+      dress.take(decalEntities());
+      CHECK(bool(dress.scene->dressTable()) == matched);
+      CHECK(dress.scene->dressCounts().unmatched == (matched ? 0u : 1u));
+    }
+  }
+
+  SECTION("a hand-placed DECAL_MACRO face inside the bounds: adopted, never a fragment")
+  {
+    auto dress = DressScene{
+      procWithSurfaces(
+        {dressSurface("textures/lp73/floor_decal")},
+        "textures/lp1b/floor",
+        "textures/lp73/floor_decal"),
+      "lp1b/floor",
+      "lp73/floor_decal"};
+    dress.take(
+      decalEntities("d1", "textures/lp73/floor_decal", "\"decalSize\" \"600 600\"\n"));
+    // the floor's surface of _area0 (surface 0) lies within the projector's bounds and
+    // is LP7.4's: adopted as a face
+    const auto adoption = dress.scene->adoptionOf(dress.worldspawn);
+    REQUIRE(adoption);
+    const auto proc = dress.scene->procTree();
+    auto area0 = std::size_t{0};
+    for (auto m = std::size_t{0}; m < proc->models.size(); ++m)
+    {
+      area0 = proc->models[m].area == 0 ? m : area0;
+    }
+    CHECK(std::ranges::any_of(adoption->adopted, [&](const AdoptedIsland& island) {
+      return island.model == area0 && island.surface == 0u;
+    }));
+    // the hand-written surface alone is the projector's
+    const auto surfaces = identifiedArea0(*dress.scene);
+    REQUIRE(surfaces.size() == 1u);
+    CHECK(surfaces[0].model == area0);
+    CHECK(surfaces[0].surface == 4u);
+    CHECK(dress.dressChunks().size() == 1u);
+  }
+
+  SECTION("two projectors over one surface: the first by id, the second counted")
+  {
+    auto dress = DressScene{procWithSurfaces({dressSurface("textures/lp73/decal")})};
+    const auto snapshot = dress.take(
+      decalEntities()
+      + dressEntity(
+        "func_decal",
+        "\"name\" \"d2\"\n\"origin\" \"116 0 0\"\n\"material\" \"textures/lp73/decal\"\n"
+        "\"decalSize\" \"64 8\"\n\"target\" \"aim\"\n"));
+    const auto surfaces = identifiedArea0(*dress.scene);
+    REQUIRE(surfaces.size() == 1u);
+    CHECK(surfaces[0].projector == dressEntityId(snapshot, "d1"));
+    CHECK(dressEntityId(snapshot, "d1") < dressEntityId(snapshot, "d2"));
+    CHECK(dress.scene->dressCounts() == SceneGeometry::DressCounts{1u, 0u, 0u, 1u});
+    CHECK(dress.dressChunks().size() == 1u);
+    CHECK(hasWarning(
+      dress.warnings(),
+      "func_decal 'd2': a fragment surface within its projection is drawn as func_decal "
+      "'d1''s, the first by id"));
+  }
+
+  SECTION("a moved target re-identifies")
+  {
+    auto dress = DressScene{procWithSurfaces({dressSurface("textures/lp73/decal")})};
+    dress.take(decalEntities());
+    CHECK(dress.dressChunks().size() == 1u);
+    // 1 off in x instead of y: NormalVectors turns axis[1] to -y, the 64 along y
+    dress.take(decalEntities("d1", "textures/lp73/decal", "", "117 0 -100"));
+    CHECK_FALSE(dress.scene->dressTable());
+    CHECK(dress.dressChunks().empty());
+    CHECK(dress.scene->dressCounts().unmatched == 1u);
+    dress.take(decalEntities());
+    CHECK(dress.dressChunks().size() == 1u);
+    CHECK(dress.scene->dressCounts() == SceneGeometry::DressCounts{1u, 0u, 0u, 0u});
+  }
+
+  SECTION("D138: a .bproc yields no dress surface")
+  {
+    auto dress = DressScene{std::nullopt};
+    dress.take(decalEntities());
+    REQUIRE(dress.scene->procTree());
+    CHECK(dress.scene->procTree()->version == 0);
+    CHECK_FALSE(dress.scene->dressTable());
+    CHECK(dress.dressChunks().empty());
+    CHECK(dress.scene->dressCounts() == SceneGeometry::DressCounts{0u, 1u, 0u, 0u});
+  }
+
+  SECTION("K42: an inline 1 model's dmap copy is neither adopted nor identified")
+  {
+    // the quad on the decal's material, its copy in _area0 at the instance's place
+    auto dress = DressScene{procWithSurfaces(
+      {dressSurface("textures/lp73/decal"),
+       fmt::format(
+         "{{ \"textures/lp73/decal\" /* numVerts = */ 4 /* numIndexes = */ 6 /* "
+         "vertexFormat = */ 0\n{}{}{}{}\n0 1 2 0 2 3\n}}",
+         procVertex({116, 0, 40}, {0, 0}, std::nullopt),
+         procVertex({148, 0, 40}, {1, 0}, std::nullopt),
+         procVertex({148, 32, 40}, {1, 1}, std::nullopt),
+         procVertex({116, 32, 40}, {0, 1}, std::nullopt))})};
+    writeTextFile(
+      dress.game.base() / "models" / "test" / "lp73_inline.obj",
+      "v 0 0 0\nv 32 0 0\nv 32 32 0\nv 0 32 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 0 1\n"
+      "usemtl textures/lp73/decal\nf 1/1/1 2/2/1 3/3/1\nf 1/1/1 3/3/1 4/4/1\n");
+    const auto snapshot = dress.take(
+      decalEntities(
+        "d1", "textures/lp73/decal", "\"depth\" \"100\"\n\"decalSize\" \"600 600\"\n")
+      + dressEntity(
+        "func_static",
+        "\"name\" \"inl\"\n\"origin\" \"116 0 40\"\n\"model\" "
+        "\"models/test/lp73_inline.obj\"\n\"inline\" \"1\"\n"));
+    REQUIRE(std::ranges::any_of(dress.scene->instances(), [&](const auto& entry) {
+      return entry.second.entity == dressEntityId(snapshot, "inl");
+    }));
+    const auto surfaces = identifiedArea0(*dress.scene);
+    REQUIRE(surfaces.size() == 1u);
+    CHECK(surfaces[0].surface == 4u);
+    CHECK(dress.scene->dressCounts() == SceneGeometry::DressCounts{1u, 0u, 1u, 0u});
+    const auto adoption = dress.scene->adoptionOf(dress.worldspawn);
+    const auto inlineAdopted =
+      adoption && std::ranges::any_of(adoption->adopted, [](const AdoptedIsland& island) {
+        return island.surface == 5u;
+      });
+    CHECK_FALSE(inlineAdopted);
+  }
 }
 
 } // namespace tb::lit
