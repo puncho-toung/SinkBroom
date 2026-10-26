@@ -26,14 +26,21 @@
 #include "LitMapFixture.h"
 #include "LitTestUtils.h"
 #include "LitView.h"
+#include "fs/TestEnvironment.h"
+#include "lit/AreaData.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/CpuPool.h"
 #include "lit/EntityState.h"
+#include "lit/GameFileSource.h"
+#include "lit/GridTable.h"
+#include "lit/LightData.h"
 #include "lit/MaterialService.h"
 #include "lit/ModelInstance.h"
 #include "lit/SceneGeometry.h"
 
 #include "kd/result.h"
+
+#include <fmt/format.h>
 
 #include <algorithm>
 #include <chrono>
@@ -1091,6 +1098,202 @@ TEST_CASE("SceneGeometry: a Pending model draws nothing and waits (LP7.2, D124)"
     // Ready, and a missing file's cube (converged)
     CHECK(states["models/test/quad.obj"] == ModelRecord::State::Ready);
     CHECK(states["models/test/none.obj"] == ModelRecord::State::Missing);
+  }
+  pool->stop();
+}
+
+namespace
+{
+
+// LP7.2 step 5: a box OBJ of local x -60..-10, y -8..8, z 24..40 (its centre at x -35)
+std::string spanBoxObj()
+{
+  auto text = std::string{"# LP7.2 step 5: a box left of its origin\n"};
+  for (const auto x : {-60, -10})
+  {
+    for (const auto y : {-8, 8})
+    {
+      for (const auto z : {24, 40})
+      {
+        text += fmt::format("v {} {} {}\n", x, y, z);
+      }
+    }
+  }
+  text += "vt 0 0\nvn 0 0 1\nusemtl textures/lp1b/floor\n";
+  // the six faces, two triangles each (the vertex index: 1 + 4 x + 2 y + z)
+  const auto faces = std::vector<std::array<int, 4>>{
+    {1, 2, 4, 3}, {5, 7, 8, 6}, {1, 5, 6, 2}, {3, 4, 8, 7}, {1, 3, 7, 5}, {2, 6, 8, 4}};
+  for (const auto& f : faces)
+  {
+    text += fmt::format("f {0}/1/1 {1}/1/1 {2}/1/1\n", f[0], f[1], f[2]);
+    text += fmt::format("f {0}/1/1 {1}/1/1 {2}/1/1\n", f[0], f[2], f[3]);
+  }
+  return text;
+}
+
+/**
+ * A game folder of the LP2.2a fixture's bake (the LP1b geometry map's .proc: area 0 east
+ * of the doorway's portal plane x = 8, area 1 west of it), the test decls and the span
+ * box, served by a GameFileSource, as BakeGame (tst_Geometry.cpp) is
+ */
+class ModelBakeGame
+{
+private:
+  fs::TestEnvironment m_env;
+
+public:
+  ModelBakeGame()
+  {
+    for (const auto& file : modelSceneDecls())
+    {
+      writeTextFile(base() / file.path, *file.text);
+    }
+    writeTextFile(base() / "models" / "test" / "span.obj", spanBoxObj());
+    writeTextFile(
+      base() / "maps" / "lp1b_geometry.proc",
+      readTextFile(
+        litFixtureFolder() / "goldens" / "lp1b_geometry" / "lp1b_geometry.proc"));
+  }
+
+  std::filesystem::path base() const { return m_env.dir() / "base"; }
+  std::string mapPath() const { return (base() / "maps" / "lp1b_geometry.map").string(); }
+
+  std::unique_ptr<MaterialService> service() const
+  {
+    auto options = MaterialServiceOptions{};
+    options.makeSource = [path = m_env.dir()](const std::atomic<bool>& cancel) {
+      return std::unique_ptr<DeclSource>{std::make_unique<GameFileSource>(path, &cancel)};
+    };
+    options.pollInterval = 0ms;
+    return MaterialService::create(std::move(options))
+           | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  }
+};
+
+} // namespace
+
+TEST_CASE("SceneGeometry, a model's references, never clipped (LP7.2, C52, D130, D140)")
+{
+  static_cast<void>(skinTestTable());
+  const auto game = ModelBakeGame{};
+  auto service = game.service();
+  auto pool = CpuPool::create() | kdl::value();
+  {
+    auto scene = SceneGeometry{pool.get(), service.get()};
+    const auto span = [](const std::string& name, const std::string& origin) {
+      return "{\n\"classname\" \"func_static\"\n\"name\" \"" + name
+             + "\"\n\"model\" \"models/test/span.obj\"\n\"origin\" \"" + origin
+             + "\"\n}\n";
+    };
+    // the fixture map and three span boxes: through the doorway (its pivot east, its
+    // centre west), through the wall beside the doorway, and far outside the hull
+    auto snapshot = snapshotOfMapText(
+      readTextFile(litFixtureFolder() / "maps" / "lp1b_geometry.map")
+      + span("doorway", "20 0 8") + span("wall", "20 56 8")
+      + span("outside", "5000 0 8"));
+    snapshot.sequence = 1;
+    snapshot.mapPath = game.mapPath();
+    scene.takeSnapshot(snapshot);
+    const auto doorway = entityNamed(snapshot, "doorway");
+    const auto wall = entityNamed(snapshot, "wall");
+    const auto outside = entityNamed(snapshot, "outside");
+    const auto has = [&](const PreviewId id) {
+      return std::ranges::any_of(scene.instances(), [&](const auto& entry) {
+        return entry.first.entity == id
+               && entry.second.geometry->record->state == ModelRecord::State::Ready;
+      });
+    };
+    const auto settled = waitUntil(
+      [&] {
+        scene.collect();
+        scene.finishForTesting();
+        return scene.procTree() && scene.areaData() && has(doorway) && has(wall)
+               && has(outside) && !scene.waitsForModels();
+      },
+      10000ms);
+    REQUIRE(settled);
+    const auto setOf = [](const std::vector<int>& areas) {
+      return std::set<int>{areas.begin(), areas.end()};
+    };
+
+    // the doorway box: world x -40..10 across the portal plane, both areas; its
+    // references from the record's bounds (R_CreateEntityRefs), in the chain order
+    const auto& d = scene.entityStates().at(doorway);
+    CHECK(
+      d.localReferenceBounds
+      == EngineBounds{EngineVec3{-60, -8, 24}, EngineVec3{-10, 8, 40}});
+    CHECK(
+      d.globalReferenceBounds
+      == EngineBounds{EngineVec3{-40, -8, 32}, EngineVec3{10, 8, 48}});
+    CHECK(setOf(d.areas) == std::set<int>{0, 1});
+    auto pushed = pushFrustumIntoTree(
+      *scene.procTree(),
+      scene.areaData()->commonAreas,
+      d.inverseBaseModelProject,
+      engineUnitCube());
+    std::ranges::reverse(pushed);
+    CHECK(d.areas == pushed);
+    // the chunk key keeps the pivot's area as a key only (east: 0)
+    const auto instance = std::ranges::find_if(scene.instances(), [&](const auto& entry) {
+      return entry.first.entity == doorway;
+    });
+    REQUIRE(instance != scene.instances().end());
+    CHECK(instance->first.area == 0);
+    CHECK(instance->second.areas == d.areas);
+
+    // through the wall beside the doorway: never clipped, both areas (SC625)
+    CHECK(setOf(scene.entityStates().at(wall).areas) == std::set<int>{0, 1});
+
+    // outside the hull: no reference, the outside set (D81, K14 extended; the engine
+    // draws nothing of an entity without a reference: the recorded difference, D140)
+    const auto& o = scene.entityStates().at(outside);
+    CHECK(o.areas.empty());
+    CHECK_FALSE(engineBoundsIsCleared(o.globalReferenceBounds));
+
+    // the frontend: the grid area per surface is the area of its centre among the
+    // entity's references (tr_frontend_addmodels.cpp:812-853), the second area here;
+    // the outside box is drawn when in the frustum
+    const auto& table = *skinTestTable();
+    auto grid = GridTable{};
+    for (const auto area : {0, 1})
+    {
+      auto entry = GridArea{};
+      entry.area = area;
+      entry.hasPoints = true;
+      grid.areas.push_back(entry);
+    }
+    auto camera = CameraState{};
+    camera.position = vm::vec3f{-150, 0, 32};
+    camera.viewportWidth = 160;
+    camera.viewportHeight = 120;
+    auto inputs = FrontendInputs{};
+    inputs.view = litViewOf(camera, 160, 120);
+    inputs.chunks = &scene.chunks();
+    inputs.instances = &scene.instances();
+    inputs.entities = &scene.entityStates();
+    inputs.tree = scene.procTree().get();
+    inputs.areas = scene.areaData().get();
+    inputs.grid = &grid;
+    inputs.gridValid = [](int) { return true; };
+    inputs.material = [&](const std::string& name) {
+      const auto slot = table.find(name);
+      return MaterialAnswer{slot ? slot->entry : nullptr, !slot};
+    };
+    const auto lists = buildFrontendLists(inputs);
+    const auto surface = std::ranges::find_if(lists.drawSurfs, [&](const LitSurface& s) {
+      return s.instance && s.instance->entity == doorway;
+    });
+    REQUIRE(surface != lists.drawSurfs.end());
+    REQUIRE(surface->gridArea);
+    CHECK(*surface->gridArea == 1);
+    // the outside box at x 4940..4990 is behind no portal: seen down the view's x axis
+    auto far = camera;
+    far.position = vm::vec3f{4900, 0, 32};
+    inputs.view = litViewOf(far, 160, 120);
+    const auto farLists = buildFrontendLists(inputs);
+    CHECK(std::ranges::any_of(farLists.drawSurfs, [&](const LitSurface& s) {
+      return s.instance && s.instance->entity == outside && !s.gridArea;
+    }));
   }
   pool->stop();
 }

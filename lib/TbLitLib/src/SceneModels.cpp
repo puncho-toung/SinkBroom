@@ -31,6 +31,7 @@
 // LP7.2 (C52, C53, D124, D127, D128, D129, D139, D140): the scene's model entities,
 // SceneGeometry's members of that part
 
+#include "lit/AreaData.h"
 #include "lit/EngineModels.h"
 #include "lit/EntityState.h"
 #include "lit/LightData.h"
@@ -521,6 +522,42 @@ void SceneGeometry::buildModelEntity(const PreviewId id)
   }
   state.visible = true;
 
+  // C52, D130 (M-REF-01 extended): R_CreateEntityRefs from the model's bounds
+  // (RenderWorld_defs.cpp:156-197: hModel->Bounds( &parms ), FinishSurfaces' or the
+  // binary's, deforms grown), never clipped into areas (SC625): R_DeriveEntityData, then
+  // PushFrustumIntoTree's areas in the engine's chain order; cleared bounds or no area
+  // reached: no reference, D81's outside set (K14 extended, D140)
+  state.localReferenceBounds = record.bounds;
+  state.materialBounds.clear();
+  for (const auto& surface : record.surfaces)
+  {
+    const auto [it, added] =
+      state.materialBounds.try_emplace(surface.material, engineClearedBounds());
+    it->second = engineAddBounds(it->second, surface.bounds);
+  }
+  state.areas.clear();
+  if (engineBoundsIsCleared(state.localReferenceBounds))
+  {
+    state.inverseBaseModelProject = EngineMat4{};
+    state.globalReferenceBounds = engineClearedBounds();
+  }
+  else
+  {
+    state.inverseBaseModelProject = engineOffsetScaleForBounds(
+      engineMatrixFromOriginAxis(state.modelOrigin, state.parms.axis),
+      state.localReferenceBounds);
+    state.globalReferenceBounds =
+      engineProjectedBounds(state.inverseBaseModelProject, engineUnitCube(), false);
+    if (m_proc && !m_proc->nodes.empty())
+    {
+      const auto commonAreas =
+        m_areas ? m_areas->commonAreas : commonChildrenAreas(*m_proc);
+      auto pushed = pushFrustumIntoTree(
+        *m_proc, commonAreas, state.inverseBaseModelProject, engineUnitCube());
+      state.areas.assign(pushed.rbegin(), pushed.rend());
+    }
+  }
+
   // C53: the shader, else the skin (a pending skin: no remap, provisional, asked)
   const auto* skin = static_cast<const SkinRecord*>(nullptr);
   if (parms.shader.empty() && !parms.skin.empty())
@@ -604,6 +641,7 @@ void SceneGeometry::buildModelEntity(const PreviewId id)
     instance.shaderParms = state.parms.shaderParms;
     instance.worldBounds =
       worldBoundsOf(surface.bounds, state.modelOrigin, state.parms.axis);
+    instance.areas = state.areas;
     auto& header = instance.header;
     header.key = ChunkKey{area, id, *drawName, cell, int(s)};
     header.bounds = surface.bounds;
