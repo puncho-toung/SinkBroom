@@ -3210,6 +3210,20 @@ private:
       }
       return true;
     }
+    // LP7.2 (step 1): a surface past the engine's 16-bit indexes is not the engine's
+    // picture of the file (its indexes wrapped): the cube, Default, with the reason
+    if (finish.input.hasSource())
+    {
+      if (auto problem = modelSurfaceProblem(*model))
+      {
+        queueCube(
+          name,
+          finish.input.sourceTime,
+          ModelRecord::State::Default,
+          fmt::format("{} cannot be drawn: {}", name, *problem));
+        return true;
+      }
+    }
     if (model->materialMisses > 0)
     {
       message(

@@ -186,6 +186,16 @@ struct ModelFinishInput
 EngineModel finishModel(const ModelFinishInput& input);
 
 /**
+ * LP7.2 (step 1, the engine's limit): a finished source model whose surface has more
+ * vertices than a 16-bit triIndex_t numbers (MaxModelSurfaceVerts, 65536): the copied
+ * conversions store each welded vertex's number in one (Model.cpp:1676, :2033, :2477) and
+ * R_MergeTriangles and R_DuplicateMirroredVertexes add to them, so the engine's indexes
+ * of that surface have wrapped (in range, the wrong triangles): its reason, for a
+ * Default record; nullopt for a model the engine draws as it reads it. Pure.
+ */
+std::optional<std::string> modelSurfaceProblem(const EngineModel& model);
+
+/**
  * The parse thread's half of an OBJ source (C51 (3), D136, D137): the validator
  * (objFileProblem), the copied OBJ_Load of the bytes with the source's time
  * (MaterialDecls::parseObjModel), each usemtl name resolved by the registry's

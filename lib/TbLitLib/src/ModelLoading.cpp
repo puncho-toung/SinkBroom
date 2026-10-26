@@ -303,6 +303,25 @@ EngineModel finishModel(const ModelFinishInput& input)
   return engineDefaultModel(input.name, input.materials.defaultMaterial);
 }
 
+std::optional<std::string> modelSurfaceProblem(const EngineModel& model)
+{
+  for (auto s = std::size_t{0}; s < model.surfaces.size(); ++s)
+  {
+    const auto& surface = model.surfaces[s];
+    if (surface.verts.size() > MaxModelSurfaceVerts)
+    {
+      return fmt::format(
+        "surface {} ({}) has {} vertices, more than the {} a 16-bit triIndex_t numbers "
+        "(sys_types.h:145): the engine's indexes wrap",
+        s,
+        surface.material,
+        surface.verts.size(),
+        MaxModelSurfaceVerts);
+    }
+  }
+  return std::nullopt;
+}
+
 std::optional<ModelFinishInput> defaultModelInput(
   MaterialDecls& decls, const std::string_view canonical, const std::int64_t sourceTime)
 {

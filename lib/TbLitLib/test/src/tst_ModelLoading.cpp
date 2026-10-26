@@ -1041,16 +1041,45 @@ TEST_CASE("ModelLoading: the OBJ validator (LP7.1a, D136, P7.2)")
     CHECK_THAT(*objFileProblem(ObjHead + "vp\n"), Catch::Matchers::StartsWith("line 6:"));
   }
 
-  SECTION("the corner bound")
+  SECTION("the corner and object bounds (LP7.2, step 1: aligned with the engine)")
   {
+    // LP7.1a's 32767 corners per file are no bound of the engine's (material-orb.obj
+    // has 123072): a file passes with more, its finished surfaces are what the engine's
+    // 16-bit indexes bound (modelSurfaceProblem)
     auto text = ObjHead;
-    for (auto i = std::size_t{0}; i < MaxObjCorners / 3; ++i)
+    for (auto i = std::size_t{0}; i < MaxObjCorners / 3 + 100; ++i)
     {
       text += "f 1/1/1 2/1/1 3/1/1\n";
     }
     CHECK_FALSE(objFileProblem(text));
-    text += "f 1/1/1 2/1/1 3/1/1\n";
-    refused(text, "face corners");
+    // a vt of three numbers: the engine reads the third as the next keyword and stops
+    CHECK_THAT(
+      *objFileProblem("vt 0 0 0\n"),
+      Catch::Matchers::ContainsSubstring("Model_obj.cpp:211"));
+    // one object per o or g after a face, and one at the end: MaxObjObjects pass, one
+    // more is refused (the conversion's _alloca of an int per object)
+    auto objects = ObjHead;
+    for (auto i = std::size_t{0}; i < MaxObjObjects; ++i)
+    {
+      objects += "g x\nf 1/1/1 2/1/1 3/1/1\n";
+    }
+    CHECK_FALSE(objFileProblem(objects + "g y\ng z\n"));
+    refused(objects + "g y\nf 1/1/1 2/1/1 3/1/1\n", "objects");
+  }
+
+  SECTION("the engine's 16-bit surfaces (LP7.2, step 1)")
+  {
+    auto model = EngineModel{};
+    model.surfaces.resize(2);
+    model.surfaces[1].material = "textures/lp7/x";
+    model.surfaces[1].verts.resize(MaxModelSurfaceVerts);
+    CHECK_FALSE(modelSurfaceProblem(model));
+    model.surfaces[1].verts.resize(MaxModelSurfaceVerts + 1);
+    const auto problem = modelSurfaceProblem(model);
+    REQUIRE(problem);
+    CHECK_THAT(
+      *problem, Catch::Matchers::ContainsSubstring("surface 1 (textures/lp7/x)"));
+    CHECK_THAT(*problem, Catch::Matchers::ContainsSubstring("65537 vertices"));
   }
 }
 

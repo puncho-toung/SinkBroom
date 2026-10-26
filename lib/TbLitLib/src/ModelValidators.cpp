@@ -210,6 +210,10 @@ std::optional<std::string> objFileProblem(const std::string_view bytes)
 
   auto counts = std::array<std::size_t, 3>{0, 0, 0}; // v, vt, vn
   auto corners = std::size_t{0};
+  // LP7.2: OBJ_Parse's objects (Model_obj.cpp:136-158, :215-228): one at each o or g that
+  // follows a face of the current object, one at the end
+  auto objects = std::size_t{0};
+  auto objectHasFaces = false;
   auto lineNumber = 0;
   auto at = std::size_t{0};
   while (at < bytes.size())
@@ -245,7 +249,11 @@ std::optional<std::string> objFileProblem(const std::string_view bytes)
     }
     if (first == "mtllib" || first == "s" || first == "l" || first == "o" || first == "g")
     {
-      // :114-158: the rest of the line is read and dropped
+      // :114-158: the rest of the line is read and dropped; o and g close the object
+      if ((first == "o" || first == "g") && std::exchange(objectHasFaces, false))
+      {
+        ++objects;
+      }
       continue;
     }
     if (first == "usemtl")
@@ -263,8 +271,20 @@ std::optional<std::string> objFileProblem(const std::string_view bytes)
       const auto wanted = first == "vt" ? std::size_t{2} : std::size_t{3};
       if (tokens.size() != wanted + 1)
       {
-        return problem(
-          fmt::format("'{}' takes {} numbers, not {}", first, wanted, tokens.size() - 1));
+        // LP7.2 (step 1): what the engine does with another count. A number past the
+        // ones ParseFloat takes is the next ReadToken's, which no keyword matches: :211's
+        // FatalError "Unknown or unexpected token" (a "vt u v w" line, sponza's); one too
+        // few reads the next line's keyword as a number (ParseFloat's Error)
+        return problem(fmt::format(
+          "'{}' takes {} numbers, not {}: {}",
+          first,
+          wanted,
+          tokens.size() - 1,
+          tokens.size() > wanted + 1
+            ? "the engine reads the extra number as the next keyword and stops "
+              "(Model_obj.cpp:211, FatalError \"Unknown or unexpected token\")"
+            : "the engine reads the next line's keyword as a number and stops "
+              "(Lexer.cpp ParseFloat's Error)"));
       }
       for (auto i = std::size_t{1}; i < tokens.size(); ++i)
       {
@@ -326,14 +346,24 @@ std::optional<std::string> objFileProblem(const std::string_view bytes)
         }
       }
       corners += 3;
-      if (corners > MaxObjCorners)
+      objectHasFaces = true;
+      if (corners > MaxObjSourceCorners)
       {
         return problem(fmt::format(
-          "more than {} face corners (the engine's 16-bit indexes)", MaxObjCorners));
+          "more than {} face corners (the preview's memory guard; the engine's limit is "
+          "65536 vertices per finished surface)",
+          MaxObjSourceCorners));
       }
       continue;
     }
     return problem(fmt::format("an unexpected token '{}'", std::string{first}));
+  }
+  if (objects + (objectHasFaces ? 1 : 0) > MaxObjObjects)
+  {
+    return fmt::format(
+      "more than {} objects (the conversion's _alloca of one int per object, "
+      "Model.cpp:1417; the preview's guard)",
+      MaxObjObjects);
   }
   return std::nullopt;
 }

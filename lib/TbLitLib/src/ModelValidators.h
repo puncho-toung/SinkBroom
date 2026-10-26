@@ -51,18 +51,31 @@ namespace tb::lit
  *   range;
  * - usemtl's text (ReadRestOfLine's, stripped) is under MAX_OSPATH (256) characters, so
  *   FindMaterial's canonicalisation stays in its buffer;
- * - at most 32767 face corners in the file: the conversion's 16-bit indexes
- *   (triIndex_t) hold every vertex of a merged surface and the mirrored duplicates
- *   R_DuplicateMirroredVertexes may add (at most as many again) only below that
- * (Model.cpp:1676, tr_trisurf.cpp:1742), and the conversion's _alloca of one int per
- * object stays small on the pool's stack.
+ * - LP7.2 (step 1, aligned with the engine): at most MaxObjSourceCorners face corners in
+ *   the file and MaxObjObjects objects with faces (OBJ_Parse makes one at each o or g
+ *   after a face, and one at the end): the conversion's _alloca of one int per object
+ *   stays small on the pool's 8 MB stack, and its per-corner tables stay within memory;
+ *   both guards are the preview's own, far above any model the engine can draw. The
+ *   engine's own limit is not a corner count: ConvertOBJToModelSurfaces stores each
+ *   welded vertex's number in a 16-bit triIndex_t (Model.cpp:1676, sys_types.h:145) and
+ *   R_MergeTriangles and R_DuplicateMirroredVertexes add to them, so a finished surface
+ *   of more than MaxModelSurfaceVerts vertices has wrapped indexes; that is
+ *   modelSurfaceProblem's test after the finish (lit/ModelLoading.h), where the
+ *   counts are known (LP7.1a's 32767 corners per file refused retail models the engine
+ *   loads, material-orb.obj among them).
  *
  * nullopt when the file passes, else the reason with its line. Pure; any thread.
  */
 std::optional<std::string> objFileProblem(std::string_view bytes);
 
-// the corner bound objFileProblem applies
+// the corner bound the ASE and LWO validators apply (LP7.1b; their conversions' 16-bit
+// indexes, Model.cpp:2033, :2477)
 inline constexpr std::size_t MaxObjCorners = 32767;
+// LP7.2: objFileProblem's memory guards (the preview's own)
+inline constexpr std::size_t MaxObjSourceCorners = std::size_t{1} << 22;
+inline constexpr std::size_t MaxObjObjects = 65536;
+// LP7.2: a finished surface's vertices that a 16-bit triIndex_t can number (0-65535)
+inline constexpr std::size_t MaxModelSurfaceVerts = 65536;
 
 /**
  * LP7.1b (C51 (3), D136, P7.2): the preview's own check of an ASE file before the copied

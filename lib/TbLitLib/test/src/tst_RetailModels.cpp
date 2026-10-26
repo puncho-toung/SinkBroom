@@ -365,37 +365,45 @@ TEST_CASE(
           REQUIRE(read.input);
           const auto model = finishModel(*read.input);
           static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
-          ++count.loaded;
-          const auto record = modelRecordFromEngine(
-            canonical,
-            model,
-            ModelRecord::State::Ready,
-            ModelRecord::SourceKind::Source,
-            found.time,
-            {});
-          // the binary-first path's own check on real data
-          const auto binary = lookUpModelBinary(source, canonical, found.time);
-          if (binary.result == ModelBinaryLookup::Result::Accepted && binary.model)
+          // LP7.2 (step 1): the engine's 16-bit limit, after the finish
+          if (const auto problem = modelSurfaceProblem(model))
           {
-            const auto stored =
-              modelRecordFromBinary(canonical, *binary.model, binary.glmb, found.time);
-            const auto difference = firstDifference(record, stored);
-            if (difference.empty())
-            {
-              ++count.binaryEqual;
-            }
-            else
-            {
-              count.binaryDifferent.push_back(canonical + ": " + difference);
-            }
-          }
-          else if (binary.result == ModelBinaryLookup::Result::Stale)
-          {
-            ++count.binaryStale;
+            count.refused.push_back(canonical + ": " + *problem);
           }
           else
           {
-            ++count.noBinary;
+            ++count.loaded;
+            const auto record = modelRecordFromEngine(
+              canonical,
+              model,
+              ModelRecord::State::Ready,
+              ModelRecord::SourceKind::Source,
+              found.time,
+              {});
+            // the binary-first path's own check on real data
+            const auto binary = lookUpModelBinary(source, canonical, found.time);
+            if (binary.result == ModelBinaryLookup::Result::Accepted && binary.model)
+            {
+              const auto stored =
+                modelRecordFromBinary(canonical, *binary.model, binary.glmb, found.time);
+              const auto difference = firstDifference(record, stored);
+              if (difference.empty())
+              {
+                ++count.binaryEqual;
+              }
+              else
+              {
+                count.binaryDifferent.push_back(canonical + ": " + difference);
+              }
+            }
+            else if (binary.result == ModelBinaryLookup::Result::Stale)
+            {
+              ++count.binaryStale;
+            }
+            else
+            {
+              ++count.noBinary;
+            }
           }
         }
       }
