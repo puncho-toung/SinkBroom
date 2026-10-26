@@ -86,16 +86,9 @@ ModelDispatch modelDispatch(const std::string_view canonical)
 
   dispatch.extension = engineFileExtension(canonical);
   const auto& ext = dispatch.extension;
-  if (ext == "obj" || ext == "ase")
+  if (ext == "obj" || ext == "ase" || ext == "lwo")
   {
     dispatch.path = ModelPath::Source;
-  }
-  else if (ext == "lwo")
-  {
-    dispatch.path = ModelPath::PendingLoader;
-    dispatch.reason = fmt::format(
-      "the .{} loader is not in the preview yet (LP7.1b): the default cube stands in",
-      ext);
   }
   else if (ext == "ma")
   {
@@ -302,6 +295,11 @@ EngineModel finishModel(const ModelFinishInput& input)
     return engineFinishAseModel(
       *input.ase, input.materials, input.name, input.useMikktspace);
   }
+  if (input.lwo)
+  {
+    return engineFinishLwoModel(
+      *input.lwo, input.materials, input.name, input.useMikktspace);
+  }
   return engineDefaultModel(input.name, input.materials.defaultMaterial);
 }
 
@@ -467,6 +465,48 @@ ModelSourceRead readAseSource(
   return read;
 }
 
+ModelSourceRead readLwoSource(
+  MaterialDecls& decls,
+  const std::string_view canonical,
+  const std::string& bytes,
+  const std::int64_t sourceTime)
+{
+  auto read = ModelSourceRead{};
+  const auto refuse = [&](std::string reason) {
+    read.reason = std::move(reason);
+    read.input = defaultModelInput(decls, canonical, sourceTime);
+    return std::move(read);
+  };
+
+  // D136: the copies never see a file the validator refuses
+  if (const auto problem = lwoFileProblem(bytes))
+  {
+    return refuse(fmt::format("{} cannot be read: {}", canonical, *problem));
+  }
+
+  auto parsed = decls.parseLwoModel(std::string{canonical}, bytes, sourceTime);
+  if (!parsed.model)
+  {
+    // Model.cpp:356-361 (LoadLWO: lwGetObject's NULL): "Couldn't load model"
+    return refuse(fmt::format("{} could not be loaded: {}", canonical, parsed.error));
+  }
+
+  auto input = ModelFinishInput{};
+  input.name = std::string{canonical};
+  input.lwo = parsed.model;
+  input.sourceTime = sourceTime;
+  // Model.cpp:366-375 on the time the caller hands in (LoadLWO's GetTimestamp, :3172)
+  input.useMikktspace = engineUseMikktspace(sourceTime);
+  if (
+    auto problem =
+      captureMaterials(decls, canonical, parsed.model->materialNames(), input.materials))
+  {
+    return refuse(std::move(*problem));
+  }
+  read.input = std::move(input);
+  return read;
+}
+
 ModelSourceRead readModelSource(
   MaterialDecls& decls,
   const std::string_view canonical,
@@ -481,6 +521,10 @@ ModelSourceRead readModelSource(
   if (extension == "ase")
   {
     return readAseSource(decls, canonical, bytes, sourceTime);
+  }
+  if (extension == "lwo")
+  {
+    return readLwoSource(decls, canonical, bytes, sourceTime);
   }
   auto read = ModelSourceRead{};
   read.reason = fmt::format("{}: no source loader for .{}", canonical, extension);

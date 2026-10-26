@@ -141,9 +141,6 @@ struct ModelRecord
   // *MESH_CFACE colours: alpha 0 where the engine's is uninitialised, E-LIT-4); "" for
   // none
   std::string note;
-  // LP7.1a: a Default record whose source has a loader still to come (ASE and LWO until
-  // LP7.1b): the cube stands in, and the notice names the gap
-  bool pendingLoader = false;
   // LP7.1a (P7.22): a Source record's materials as its finish read them (the ten values
   // the copies call, lit/EngineModels.h) and the names its objects asked for them by
   std::vector<std::string> sourceMaterialNames;

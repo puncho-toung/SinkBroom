@@ -19,8 +19,8 @@
 
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
-// GPL Source Code and RBDOOM-3-BFG (neo/idlib/Heap.cpp, idlib/math/Simd_Generic.cpp and
-// renderer/tr_frontend_main.cpp):
+// GPL Source Code and RBDOOM-3-BFG (neo/idlib/Heap.cpp, idlib/Lib.cpp,
+// idlib/math/Simd_Generic.cpp and renderer/tr_frontend_main.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2012-2014 Robert Beckebans
 //   Copyright (C) 2012 Daniel Gibson
@@ -204,6 +204,27 @@ short LittleShort(const short l)
   }
   const auto bits = std::uint16_t(l);
   return short(std::uint16_t((bits << 8) | (bits >> 8)));
+}
+
+// LP7.1b: the copied byte swaps (engine/idlib/Lib.cpp is HEADER_FILE_ONLY in the build)
+#include "idlib/Lib.cpp"
+
+// Lib.cpp:384-387 BigRevBytes, through the function Swap_Init picks (:662-694):
+// RevBytesSwap on a little-endian host, RevBytesNoSwap on a big-endian one (both copied
+// above); the host test is Swap_Init's. Pure; any thread.
+void BigRevBytes(void* bp, const int elsize, const int elcount)
+{
+  const byte swaptest[2] = {1, 0};
+  short value = 0;
+  memcpy(&value, swaptest, sizeof(value));
+  if (value == 1)
+  {
+    RevBytesSwap(bp, elsize, elcount);
+  }
+  else
+  {
+    RevBytesNoSwap(bp, elsize, elcount);
+  }
 }
 
 // RenderCommon.h's static allocators (tr_frontend_main.cpp:205-240)

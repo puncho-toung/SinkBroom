@@ -894,6 +894,18 @@ public:
     const std::string& name, const std::string& bytes, std::int64_t time);
 
   /**
+   * LP7.1b (C51, D137, P7.13): the copied lwGetObject (Model_lwo.cpp:1775-2067) of a
+   * model file's bytes: its OpenFileRead opens a memory file over the bytes and the time
+   * handed in (shim::MemoryFile), which it reads in pieces; its allocations cleared as
+   * the ASE's are. Null with the reason where lwGetObject returns NULL (its failID and
+   * failpos); the error is the engine error the parse reached (the validator keeps every
+   * one unreachable, lwoFileProblem in TbLitLib). Parse thread (C20: the copied reader's
+   * static flen).
+   */
+  EngineLwoParse parseLwoModel(
+    const std::string& name, const std::string& bytes, std::int64_t time);
+
+  /**
    * LP7.1b (P7.13): inside a model read of name over bytes and time, what the copied
    * code's fileSystem->OpenFileRead( opened ) opens: its length and timestamp, or nullopt
    * when nothing opens (another name). For the shim's tests. Parse thread.

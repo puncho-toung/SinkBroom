@@ -56,9 +56,11 @@
 #include <filesystem>
 #include <future>
 #include <iostream>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -482,7 +484,7 @@ TEST_CASE(
   CHECK(pathOf("") == ModelPath::None);
   CHECK(pathOf("models/test/n01.obj") == ModelPath::Source);
   CHECK(pathOf("models/test/n04.ase") == ModelPath::Source);
-  CHECK(pathOf("models/test/n05.lwo") == ModelPath::PendingLoader);
+  CHECK(pathOf("models/test/n05.lwo") == ModelPath::Source);
   CHECK(pathOf("models/test/a.ma") == ModelPath::MayaBinaryOnly);
   CHECK(pathOf("models/test/a.glb") == ModelPath::GltfBinaryOnly);
   CHECK(pathOf("models/test/a.gltf") == ModelPath::GltfBinaryOnly);
@@ -503,9 +505,7 @@ TEST_CASE(
     CHECK(dispatch.path == ModelPath::Default);
     CHECK_FALSE(dispatch.reason.empty());
   }
-  CHECK_THAT(
-    modelDispatch("models/test/n05.lwo").reason,
-    Catch::Matchers::ContainsSubstring("LP7.1b"));
+  CHECK(modelDispatch("models/test/n05.lwo").reason.empty());
   CHECK(modelDispatch("models/a.fbx").extension == "fbx");
 }
 
@@ -1396,12 +1396,14 @@ TEST_CASE(
 
   // N01 (2015, WithoutNormals), N02 (the same OBJ under a second name), N03 (2017,
   // MikkTSpace on smooth normals with sheared, mirrored coordinates); LP7.1b: N04 (an ASE
-  // without *MESH_CFACE and *MESH_NORMALS: generated normals over the dupVerts)
+  // without *MESH_CFACE and *MESH_NORMALS: generated normals over the dupVerts), N05 (an
+  // LWO2: the surface colour x 255 with alpha 255, (x, z, y), t inverted)
   for (const auto& [name, golden] : std::vector<std::pair<std::string, std::string>>{
          {"models/test/n01.obj", "models/test/n01.bobj"},
          {"models/test/n02.obj", "models/test/n02.bobj"},
          {"models/test/n03.obj", "models/test/n03.bobj"},
-         {"models/test/n04.ase", "models/test/n04.base"}})
+         {"models/test/n04.ase", "models/test/n04.base"},
+         {"models/test/n05.lwo", "models/test/n05.blwo"}})
   {
     DYNAMIC_SECTION(name)
     {
@@ -1990,6 +1992,439 @@ TEST_CASE(
     CHECK(input.ase->objectCount() == 2u);
     REQUIRE(model.surfaces.size() == 1u);
     CHECK(model.surfaces[0].indexes.size() == 6u);
+  }
+}
+
+namespace
+{
+
+// LP7.1b: an LWO2 file as LightWave writes one (big-endian IFF, chunks padded to even)
+class LwoWriter
+{
+public:
+  static void be2(std::string& out, const std::uint32_t v)
+  {
+    out.push_back(char((v >> 8) & 0xFF));
+    out.push_back(char(v & 0xFF));
+  }
+
+  static void be4(std::string& out, const std::uint32_t v)
+  {
+    be2(out, v >> 16);
+    be2(out, v & 0xFFFF);
+  }
+
+  static void f4(std::string& out, const float f)
+  {
+    auto bits = std::uint32_t{0};
+    std::memcpy(&bits, &f, 4);
+    be4(out, bits);
+  }
+
+  // an S0: the text, a NUL, a pad byte to even
+  static std::string s0(const std::string& text)
+  {
+    auto out = text + '\0';
+    if (out.size() & 1)
+    {
+      out.push_back('\0');
+    }
+    return out;
+  }
+
+  static std::string sub(const std::string& id, const std::string& data)
+  {
+    auto out = id;
+    be2(out, std::uint32_t(data.size()));
+    out += data;
+    if (data.size() & 1)
+    {
+      out.push_back('\0');
+    }
+    return out;
+  }
+
+  void chunk(const std::string& id, const std::string& data)
+  {
+    m_chunks += id;
+    be4(m_chunks, std::uint32_t(data.size()));
+    m_chunks += data;
+    if (data.size() & 1)
+    {
+      m_chunks.push_back('\0');
+    }
+  }
+
+  std::string file(const std::string& type = "LWO2") const
+  {
+    auto out = std::string{"FORM"};
+    be4(out, std::uint32_t(4 + m_chunks.size()));
+    return out + type + m_chunks;
+  }
+
+private:
+  std::string m_chunks;
+};
+
+struct LwoPoint
+{
+  float x, y, z, u, v;
+};
+
+/**
+ * A hand LWO2: the tag lp7/test, one layer, its points with a TXUV vmap, the polygons (a
+ * list of point indexes each, any count), all tagged to the one surface, whose colour is
+ * colour; with rgba, an RGBA vmap of these values on every point.
+ */
+std::string handLwo(
+  const std::vector<LwoPoint>& points,
+  const std::vector<std::vector<std::uint32_t>>& polygons,
+  const std::array<float, 3>& colour = {0.75f, 0.5f, 0.25f},
+  const std::optional<std::array<float, 4>>& rgba = std::nullopt)
+{
+  auto w = LwoWriter{};
+  w.chunk("TAGS", LwoWriter::s0("lp7/test"));
+  auto layr = std::string{};
+  LwoWriter::be2(layr, 0);
+  LwoWriter::be2(layr, 0);
+  for (auto i = 0; i < 3; ++i)
+  {
+    LwoWriter::f4(layr, 0.0f);
+  }
+  layr += LwoWriter::s0("layer");
+  w.chunk("LAYR", layr);
+  auto pnts = std::string{};
+  for (const auto& p : points)
+  {
+    LwoWriter::f4(pnts, p.x);
+    LwoWriter::f4(pnts, p.y);
+    LwoWriter::f4(pnts, p.z);
+  }
+  w.chunk("PNTS", pnts);
+  auto txuv = std::string{"TXUV"};
+  LwoWriter::be2(txuv, 2);
+  txuv += LwoWriter::s0("uv");
+  for (std::size_t i = 0; i < points.size(); ++i)
+  {
+    LwoWriter::be2(txuv, std::uint32_t(i));
+    LwoWriter::f4(txuv, points[i].u);
+    LwoWriter::f4(txuv, points[i].v);
+  }
+  w.chunk("VMAP", txuv);
+  if (rgba)
+  {
+    auto map = std::string{"RGBA"};
+    LwoWriter::be2(map, 4);
+    map += LwoWriter::s0("colour");
+    for (std::size_t i = 0; i < points.size(); ++i)
+    {
+      LwoWriter::be2(map, std::uint32_t(i));
+      for (const auto c : *rgba)
+      {
+        LwoWriter::f4(map, c);
+      }
+    }
+    w.chunk("VMAP", map);
+  }
+  auto pols = std::string{"FACE"};
+  for (const auto& polygon : polygons)
+  {
+    LwoWriter::be2(pols, std::uint32_t(polygon.size()));
+    for (const auto index : polygon)
+    {
+      LwoWriter::be2(pols, index);
+    }
+  }
+  w.chunk("POLS", pols);
+  auto ptag = std::string{"SURF"};
+  for (std::size_t i = 0; i < polygons.size(); ++i)
+  {
+    LwoWriter::be2(ptag, std::uint32_t(i));
+    LwoWriter::be2(ptag, 0);
+  }
+  w.chunk("PTAG", ptag);
+  auto colr = std::string{};
+  for (const auto c : colour)
+  {
+    LwoWriter::f4(colr, c);
+  }
+  LwoWriter::be2(colr, 0);
+  w.chunk(
+    "SURF", LwoWriter::s0("lp7/test") + LwoWriter::s0("") + LwoWriter::sub("COLR", colr));
+  return w.file();
+}
+
+const auto HandQuadPoints = std::vector<LwoPoint>{
+  {0, 0, 0, 0, 0}, {32, 0, 0, 1, 0}, {32, 0, 32, 1, 1}, {0, 0, 32, 0, 1}};
+
+// the byte where a chunk's id first appears after the FORM header
+std::size_t chunkAt(const std::string& file, const std::string& id)
+{
+  const auto at = file.find(id, 12);
+  REQUIRE(at != std::string::npos);
+  return at;
+}
+
+void putBe(
+  std::string& file, const std::size_t at, const std::uint32_t value, const int bytes)
+{
+  for (auto i = 0; i < bytes; ++i)
+  {
+    file[at + std::size_t(i)] = char((value >> (8 * (bytes - 1 - i))) & 0xFF);
+  }
+}
+
+} // namespace
+
+TEST_CASE("ModelLoading: the LWO validator (LP7.1b, D136, P7.2)")
+{
+  const auto n05 = readTextFile(modelsFixture() / "test" / "n05.lwo");
+
+  SECTION("what the copies read without a fatal site passes: N05, the hand files")
+  {
+    CHECK_FALSE(lwoFileProblem(n05));
+    CHECK_FALSE(lwoFileProblem(handLwo(HandQuadPoints, {{0, 1, 2}, {0, 2, 3}})));
+    // a quad passes: the conversion skips it (Model.cpp:2372-2376)
+    CHECK_FALSE(lwoFileProblem(handLwo(HandQuadPoints, {{0, 1, 2, 3}, {0, 1, 2}})));
+    CHECK_FALSE(lwoFileProblem(handLwo(
+      HandQuadPoints,
+      {{0, 1, 2}},
+      {0.75f, 0.5f, 0.25f},
+      std::array{1.0f, 0.5f, 0.0f, 0.25f})));
+  }
+
+  SECTION("each refusal names its byte and the site it keeps away")
+  {
+    const auto refused = [](const std::string& file, const std::string& part) {
+      const auto problem = lwoFileProblem(file);
+      INFO(part);
+      REQUIRE(problem);
+      INFO(*problem);
+      CHECK_THAT(*problem, Catch::Matchers::ContainsSubstring(part));
+    };
+    // a chunk length past the file
+    auto longChunk = n05;
+    putBe(longChunk, chunkAt(n05, "PNTS") + 4, 0x7FFFFFF0, 4);
+    refused(longChunk, "passes the FORM's end");
+    // a polygon index past the points: POLS FACE, then 3 and the first index
+    auto farIndex = n05;
+    putBe(farIndex, chunkAt(n05, "POLS") + 8 + 4 + 2, 80, 2);
+    refused(farIndex, "past the layer's 8 points");
+    // a truncated file
+    refused(n05.substr(0, 300), "passes the file's 300 bytes");
+    refused(n05.substr(0, 8), "shorter than an IFF FORM header");
+    // a non-LWO2 form, and LWOB (the director's decision)
+    refused(n05.substr(0, 8) + "LWOX" + n05.substr(12), "not an LWO2 object");
+    refused(
+      n05.substr(0, 8) + "LWOB" + n05.substr(12),
+      "LightWave 5 objects (LWOB) are not read by the preview");
+    refused("RIFF" + n05.substr(4), "not an IFF FORM");
+    // the polygons' tags and surfaces
+    {
+      auto w = LwoWriter{};
+      auto pnts = std::string{};
+      for (auto i = 0; i < 9; ++i)
+      {
+        LwoWriter::f4(pnts, float(i));
+      }
+      w.chunk("PNTS", pnts);
+      auto pols = std::string{"FACE"};
+      LwoWriter::be2(pols, 3);
+      for (const auto i : {0u, 1u, 2u})
+      {
+        LwoWriter::be2(pols, i);
+      }
+      w.chunk("POLS", pols);
+      refused(w.file(), "polygons without a TAGS chunk");
+    }
+    auto tagPast = handLwo(HandQuadPoints, {{0, 1, 2}});
+    putBe(tagPast, chunkAt(tagPast, "PTAG") + 8 + 4 + 2, 1, 2);
+    refused(tagPast, "past the 1 tags");
+    auto polygonPast = handLwo(HandQuadPoints, {{0, 1, 2}});
+    putBe(polygonPast, chunkAt(polygonPast, "PTAG") + 8 + 4, 5, 2);
+    refused(polygonPast, "a PTAG polygon 5 past the layer's 1 polygons");
+    auto emptyTag = handLwo(HandQuadPoints, {{0, 1, 2}});
+    emptyTag[chunkAt(emptyTag, "TAGS") + 8] = '\0';
+    refused(emptyTag, "an empty tag");
+    // the vmaps
+    auto oneDimension = handLwo(HandQuadPoints, {{0, 1, 2}});
+    putBe(oneDimension, chunkAt(oneDimension, "TXUV") + 4, 1, 2);
+    refused(oneDimension, "dimension 1");
+    refused(
+      handLwo(
+        HandQuadPoints,
+        {{0, 1, 2}},
+        {0.75f, 0.5f, 0.25f},
+        std::array{2.0f, 0.0f, 0.0f, 1.0f}),
+      "an RGBA vmap value outside 0..1");
+    auto vmapPast = handLwo(HandQuadPoints, {{0, 1, 2}});
+    putBe(vmapPast, chunkAt(vmapPast, "TXUV") + 6 + 4, 9, 2);
+    refused(vmapPast, "a VMAP point 9 past its 4 points");
+    // the surface
+    refused(
+      handLwo(HandQuadPoints, {{0, 1, 2}}, {1.5f, 0.0f, 0.0f}),
+      "a surface colour outside 0..1");
+    auto emptySurface = handLwo(HandQuadPoints, {{0, 1, 2}});
+    // the SURF chunk is the file's last (PTAG's type is its first "SURF")
+    emptySurface[emptySurface.rfind("SURF") + 8] = '\0';
+    refused(emptySurface, "a SURF chunk without a terminated name");
+    // odd and inconsistent chunks
+    auto oddPolygons = n05;
+    putBe(oddPolygons, chunkAt(n05, "POLS") + 4, 99, 4);
+    refused(oddPolygons, "odd size 99");
+    auto shortPoints = n05;
+    putBe(shortPoints, chunkAt(n05, "PNTS") + 4, 94, 4);
+    refused(shortPoints, "not points of 12 bytes");
+  }
+
+  SECTION("a shader block whose header loop never ends, an allocating sub-chunk twice")
+  {
+    const auto withBlock = [](const std::string& block) {
+      auto w = LwoWriter{};
+      w.chunk("TAGS", LwoWriter::s0("lp7/test"));
+      auto pnts = std::string{};
+      for (auto i = 0; i < 9; ++i)
+      {
+        LwoWriter::f4(pnts, float(i));
+      }
+      w.chunk("PNTS", pnts);
+      w.chunk(
+        "SURF",
+        LwoWriter::s0("lp7/test") + LwoWriter::s0("") + LwoWriter::sub("BLOK", block));
+      return w.file();
+    };
+    // SHDR: the header size, the ordinal, a sub-chunk of size 0 that is not ENAB
+    auto shader = std::string{"SHDR"};
+    LwoWriter::be2(shader, 8);
+    shader += LwoWriter::s0("x");
+    shader += LwoWriter::sub("AAAA", "");
+    shader += LwoWriter::sub("FUNC", LwoWriter::s0("f"));
+    const auto problem = lwoFileProblem(withBlock(shader));
+    REQUIRE(problem);
+    CHECK_THAT(*problem, Catch::Matchers::ContainsSubstring(":4447"));
+    // with ENAB it passes
+    auto enabled = std::string{"SHDR"};
+    LwoWriter::be2(enabled, 8);
+    enabled += LwoWriter::s0("x");
+    enabled += LwoWriter::sub("ENAB", std::string(2, '\0'));
+    enabled += LwoWriter::sub("FUNC", LwoWriter::s0("f"));
+    CHECK_FALSE(lwoFileProblem(withBlock(enabled)));
+    // an IMAP with two VMAP names: the first would leak
+    auto header = LwoWriter::s0("x") + LwoWriter::sub("CHAN", "COLR");
+    auto imap = std::string{"IMAP"};
+    LwoWriter::be2(imap, std::uint32_t(header.size()));
+    imap += header + LwoWriter::sub("VMAP", LwoWriter::s0("uv"))
+            + LwoWriter::sub("VMAP", LwoWriter::s0("uv"));
+    const auto twice = lwoFileProblem(withBlock(imap));
+    REQUIRE(twice);
+    CHECK_THAT(*twice, Catch::Matchers::ContainsSubstring("a second 'VMAP'"));
+  }
+}
+
+TEST_CASE(
+  "ModelLoading, the LWO source path through the validator and the copies (LP7.1b)")
+{
+  auto source = MemoryDeclSource{modelDeclFiles()};
+  auto decls = MaterialDecls{source};
+  const auto finished = [&](const std::string& bytes, const std::int64_t time) {
+    auto read = readLwoSource(decls, "models/test/x.lwo", bytes, time);
+    static_cast<void>(decls.takeMessages());
+    INFO(read.reason);
+    REQUIRE(read.reason.empty());
+    REQUIRE(read.input);
+    REQUIRE(read.input->lwo);
+    auto model = finishModel(*read.input);
+    auto messages = drainEngineMessagesForThread(std::this_thread::get_id());
+    return std::tuple{std::move(*read.input), std::move(model), std::move(messages)};
+  };
+
+  SECTION("a refused file, LWOB among them: Default with the reason")
+  {
+    const auto n05 = readTextFile(modelsFixture() / "test" / "n05.lwo");
+    const auto read = readLwoSource(
+      decls, "models/test/x.lwo", n05.substr(0, 8) + "LWOB" + n05.substr(12), 1451520000);
+    CHECK(
+      read.reason
+      == "models/test/x.lwo cannot be read: LightWave 5 objects (LWOB) are not read by the "
+         "preview");
+    REQUIRE(read.input);
+    CHECK_FALSE(read.input->hasSource());
+    CHECK(finishModel(*read.input).defaulted);
+  }
+
+  SECTION("(x, z, y), t inverted, the surface colour x 255 with alpha 255, the time")
+  {
+    const auto [input, model, messages] = finished(
+      handLwo(
+        {{1, 2, 3, 0.25f, 0.75f}, {32, 2, 3, 1, 0.75f}, {32, 2, 30, 1, 0}}, {{0, 1, 2}}),
+      1451520000);
+    CHECK(input.lwo->materialNames() == std::vector<std::string>{"lp7/test"});
+    CHECK(input.lwo->timeStamp() == 1451520000);
+    CHECK(model.timeStamp == 1451520000);
+    REQUIRE(model.surfaces.size() == 1u);
+    const auto& surface = model.surfaces[0];
+    CHECK(surface.material == "lp7/test");
+    CHECK(surface.indexes.size() == 3u);
+    // LWO's normals are parsed (Model.cpp:2328): not generated
+    CHECK_FALSE(surface.generateNormals);
+    auto found = false;
+    for (const auto& v : surface.verts)
+    {
+      // the surface colour 0.75, 0.5, 0.25 x 255 (Model.cpp:2392-2395)
+      CHECK(v.color == std::array<std::uint8_t, 4>{191, 127, 63, 255});
+      if (v.xyz == EngineVec3{1, 3, 2})
+      {
+        found = true;
+        const auto st = engineTexCoord(v);
+        CHECK(st[0] == 0.25f);
+        CHECK(st[1] == 0.25f);
+      }
+    }
+    CHECK(found);
+  }
+
+  SECTION("a quad polygon is skipped as the engine skips it, with its warning")
+  {
+    const auto [input, model, messages] =
+      finished(handLwo(HandQuadPoints, {{0, 1, 2, 3}, {0, 1, 2}}), 1451520000);
+    CHECK(input.lwo->polygonCount() == 2u);
+    CHECK(input.lwo->triangleCount() == 1u);
+    REQUIRE(model.surfaces.size() == 1u);
+    CHECK(model.surfaces[0].indexes.size() == 3u);
+    CHECK(std::ranges::any_of(messages, [](const DeclMessage& m) {
+      return m.kind == DeclMessageKind::Warning
+             && m.text.find("too many verts for a poly") != std::string::npos;
+    }));
+  }
+
+  SECTION("an RGBA vmap overrides the surface colour (Model.cpp:2402-2433)")
+  {
+    const auto [input, model, messages] = finished(
+      handLwo(
+        HandQuadPoints,
+        {{0, 1, 2}},
+        {0.75f, 0.5f, 0.25f},
+        std::array{1.0f, 0.5f, 0.0f, 0.25f}),
+      1451520000);
+    REQUIRE(model.surfaces.size() == 1u);
+    for (const auto& v : model.surfaces[0].verts)
+    {
+      CHECK(v.color == std::array<std::uint8_t, 4>{255, 127, 0, 63});
+    }
+  }
+
+  SECTION("no SURF and no polygons: a model without surfaces")
+  {
+    auto w = LwoWriter{};
+    auto pnts = std::string{};
+    for (auto i = 0; i < 3; ++i)
+    {
+      LwoWriter::f4(pnts, 1.0f);
+    }
+    w.chunk("PNTS", pnts);
+    const auto [input, model, messages] = finished(w.file(), 1451520000);
+    CHECK(model.surfaces.empty());
+    CHECK_FALSE(model.defaulted);
   }
 }
 

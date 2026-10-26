@@ -46,11 +46,9 @@ enum class ModelPath
 {
   // an empty name: no model (GetModel returns NULL, :313-316)
   None,
-  // obj, ase (LP7.1b): the binary, then the source through the validator and the copied
-  // loader
+  // obj, ase, lwo (LP7.1b): the binary, then the source through the validator and the
+  // copied loader
   Source,
-  // lwo: the binary, then the default cube with a notice until LP7.1b's step 4
-  PendingLoader,
   // ma: the binary, then the default cube with a notice (K46)
   MayaBinaryOnly,
   // glb, gltf: the binary (.bglb) only, else the default cube with a notice (K40)
@@ -169,19 +167,21 @@ struct ModelFinishInput
   std::string name;
   std::shared_ptr<const EngineObjModel> obj;
   std::shared_ptr<const EngineAseModel> ase;
+  std::shared_ptr<const EngineLwoModel> lwo;
   EngineModelMaterials materials;
   bool useMikktspace = false;
   std::int64_t sourceTime = -1;
   std::string note;
 
   // a source to convert (else the finish is the default cube)
-  bool hasSource() const { return obj || ase; }
+  bool hasSource() const { return obj || ase || lwo; }
 };
 
 /**
  * The finish (D137): engineFinishObjModel for an OBJ, engineFinishAseModel for an ASE,
- * else engineDefaultModel. It reads nothing but its input, so it runs on the service's
- * one-worker pool; one at a time (FinishSurfaces' static, M-ID-STATIC-*).
+ * engineFinishLwoModel for an LWO, else engineDefaultModel. It reads nothing but its
+ * input, so it runs on the service's one-worker pool; one at a time (FinishSurfaces'
+ * static, M-ID-STATIC-*).
  */
 EngineModel finishModel(const ModelFinishInput& input);
 
@@ -224,7 +224,20 @@ ModelSourceRead readAseSource(
   const std::string& bytes,
   std::int64_t sourceTime);
 
-// LP7.1b: the reader of a Source path's extension (obj, ase); another gives the
+/**
+ * LP7.1b (C51 (3), D136, D137, P7.13): the parse thread's half of an LWO source, as
+ * readObjSource's: the validator (lwoFileProblem), the copied lwGetObject over a memory
+ * file of the bytes and the source's time (MaterialDecls::parseLwoModel), each surface's
+ * name resolved and its values captured, tr.defaultMaterial captured, the 2016 rule on
+ * the source's time (LoadLWO's GetTimestamp, Model.cpp:3172). Parse thread.
+ */
+ModelSourceRead readLwoSource(
+  MaterialDecls& decls,
+  std::string_view canonical,
+  const std::string& bytes,
+  std::int64_t sourceTime);
+
+// LP7.1b: the reader of a Source path's extension (obj, ase, lwo); another gives the
 // default cube's input with its reason. Parse thread
 ModelSourceRead readModelSource(
   MaterialDecls& decls,

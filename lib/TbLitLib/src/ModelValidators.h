@@ -108,4 +108,47 @@ inline constexpr std::size_t MaxObjCorners = 32767;
  */
 std::optional<std::string> aseFileProblem(std::string_view bytes);
 
+/**
+ * LP7.1b (C51 (3), D136, P7.2): the preview's own check of an LWO file before the copied
+ * lwGetObject (Model_lwo.cpp:1775-2067) and ConvertLWOToModelSurfaces
+ * (Model.cpp:2109-2529) see it. It walks the IFF chunks by the sizes the file declares,
+ * as the reader walks them, and accepts a subset of what the copies read without a read
+ * or write out of range, a NULL dereference, a loop that never ends or a leak (the
+ * reader's own failure returns, each a NULL object freed by lwFreeObject and the engine's
+ * default cube, are safe; the validator refuses most of them too):
+ *
+ * - a FORM of type LWO2 within the file, its chunks exactly filling it (:1854-2010);
+ *   LWOB (LightWave 5, lwGetObject5) refused: "LightWave 5 objects (LWOB) are not read
+ *   by the preview" (the director's decision of 2026-10-26);
+ * - the chunks the reader parses of even size: PNTS points of 12 bytes, finite and at
+ *   most 1e30 (:3031-3078); POLS polygons exactly filling it, at least one (:3153 writes
+ *   pol[0] of an empty list), every vertex index within the layer's points (:3214-3253
+ *   read past the chunk; :3295, :3330, :3353 and Model.cpp:2381 index unchecked);
+ *   non-triangles pass (the conversion skips them, Model.cpp:2372-2376);
+ * - VMAP and VMAD: a terminated name, records exactly filling the chunk (:5017-5074),
+ *   at least one (:4957), the point and polygon indexes within the layer's at the end
+ *   (:5110, :5133, :5174, :5207), a TXUV of two values or more, finite, an RGBA of four
+ *   or more in 0..1 (Model.cpp:2252, :2412, :2430);
+ * - PTAG: records exactly filling the chunk, each polygon within the layer's (:3647), a
+ *   SURF tag below the tag count (lwResolvePolySurfaces' off-by-one at :3411); TAGS:
+ *   strings terminated in the chunk (:3565, :1689), none empty (NULL: :3397, :3422),
+ *   under 256 characters; polygons only with a TAGS chunk (else a NULL surface in
+ *   lwGetVertNormals, :3468);
+ * - LAYR with its fields and a terminated name; BBOX of six floats; ENVL and CLIP their
+ *   sub-chunks exactly filling them (ENVL's NAME once); SURF a non-empty name under 256
+ *   characters (strcmp at :3397, FindMaterial), its sub-chunks exactly filling it, COLR
+ *   in 0..1 (Model.cpp:2392-2394); a texture BLOK's header and body sub-chunks exactly
+ *   filling them, its ordinal non-empty (compare_textures' strcmp, :4538), its
+ *   allocating sub-chunks once (VMAP, FUNC, PNAM, INAM, FKEY, IKEY, TMAP's OREF: a second
+ *   leaks the first); a shader BLOK's header loop reaching ENAB without a zero-size
+ *   sub-chunk (:4444-4458 never end on one), its ordinal non-empty (:4544), FUNC once;
+ * - what the conversion reads: points in the first layer when there are surfaces
+ *   (Model.cpp:2212-2216 return after adding them, FinishSurfaces' NULL geometry, :1241),
+ *   at most 32,767 polygons and 32,767 triangle corners in the first layer (the 16-bit
+ *   indexes, :2477), 256 SURF chunks and 256 tags (the _alloca of :2155), 256 layers.
+ *
+ * nullopt when the file passes, else the reason with its byte offset. Pure; any thread.
+ */
+std::optional<std::string> lwoFileProblem(std::string_view bytes);
+
 } // namespace tb::lit

@@ -174,6 +174,10 @@ unsigned int MD5_BlockChecksum(const void* data, size_t length);
 // header's 16-bit fields with it); parse thread, like every image loader (C20)
 short LittleShort(short l);
 
+// LP7.1b: idlib/Lib.h:170, the copied LWO reader's big-endian reads (Model_lwo.cpp:
+// getI2 ... getF4, sgetI2 ... sgetF4, lwGetPoints); parse thread
+void BigRevBytes(void* bp, int elsize, int elcount);
+
 // misc
 class idRandom;
 class idSerializer;

@@ -1928,7 +1928,8 @@ TEST_CASE("MaterialService loads models (LP7.1a, C51, D125, D126, D137)")
     CHECK(record->surfaces[0].verts.size() == 24u);
   }
 
-  SECTION("the dispatch: an .md5mesh Skinned, an .fbx and a missing .lwo the cube")
+  SECTION(
+    "the dispatch: an .md5mesh Skinned, an .fbx and a missing .ase or .lwo the cube")
   {
     auto service = start(options(modelSource));
     const auto skinned = waitForModel(*service, "models/test/a.md5mesh");
@@ -1939,15 +1940,14 @@ TEST_CASE("MaterialService loads models (LP7.1a, C51, D125, D126, D137)")
     REQUIRE(fbx);
     CHECK(fbx->state == ModelRecord::State::Default);
     CHECK(fbx->surfaces.size() == 1u);
-    const auto lwo = waitForModel(*service, "models/test/a.lwo");
-    REQUIRE(lwo);
-    CHECK(lwo->state == ModelRecord::State::Missing);
-    CHECK(lwo->pendingLoader);
-    // LP7.1b: a missing .ase is Missing, its loader there
-    const auto ase = waitForModel(*service, "models/test/a.ase");
-    REQUIRE(ase);
-    CHECK(ase->state == ModelRecord::State::Missing);
-    CHECK_FALSE(ase->pendingLoader);
+    // LP7.1b: a missing .ase or .lwo is Missing, their loaders there
+    for (const auto* name : {"models/test/a.ase", "models/test/a.lwo"})
+    {
+      const auto record = waitForModel(*service, name);
+      REQUIRE(record);
+      CHECK(record->state == ModelRecord::State::Missing);
+      CHECK_THAT(record->reason, Catch::Matchers::ContainsSubstring("no file"));
+    }
   }
 
   SECTION("LP7.1b: an ASE source, Ready through the copies, its CFACE colours noted")

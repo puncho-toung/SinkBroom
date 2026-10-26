@@ -48,6 +48,7 @@
 
 struct objModel_t;
 struct aseModel_s;
+struct st_lwObject;
 class idFile;
 
 namespace tb::lit
@@ -251,6 +252,59 @@ EngineModel engineConvertAseModelForTesting(
   const EngineAseModel& ase,
   const EngineModelMaterials& materials,
   std::string_view name);
+
+/**
+ * LP7.1b (C51 (3), D137): a parsed LWO2, the copied lwGetObject's lwObject
+ * (Model_lwo.cpp:1775-2067), owned; lwFreeObject (:1740-1751) frees it. The conversion
+ * writes each texture vmap's offset into it (Model.cpp:2248), which only the one
+ * finish that holds it reads: one finish at a time.
+ */
+class EngineLwoModel
+{
+private:
+  st_lwObject* m_model = nullptr;
+
+public:
+  explicit EngineLwoModel(st_lwObject* model);
+  ~EngineLwoModel();
+
+  EngineLwoModel(const EngineLwoModel&) = delete;
+  EngineLwoModel& operator=(const EngineLwoModel&) = delete;
+
+  const st_lwObject* model() const { return m_model; }
+  // the names ConvertLWOToModelSurfaces asks the decl manager for: each surface's, in
+  // the object's list order (Model.cpp:2164, :2174, :2326)
+  std::vector<std::string> materialNames() const;
+  // the object's surfaces, and the first layer's points, polygons and triangles (the
+  // conversion reads that layer only; it skips a polygon of other than three
+  // vertices, :2372-2376; the layer, :2209)
+  std::size_t surfaceCount() const;
+  std::size_t pointCount() const;
+  std::size_t polygonCount() const;
+  std::size_t triangleCount() const;
+  // lwo->timeStamp: what the opened file's Timestamp() gave (:1846)
+  std::int64_t timeStamp() const;
+};
+
+// what MaterialDecls::parseLwoModel read: the model, or (null) the engine error it
+// reached or why lwGetObject returned NULL (the IFF chunk and offset it failed at)
+struct EngineLwoParse
+{
+  std::shared_ptr<const EngineLwoModel> model;
+  std::string error;
+};
+
+/**
+ * InitFromFile for an LWO (Model.cpp:314-379) from LoadLWO on (:3159-3179): InitEmpty,
+ * ConvertLWOToModelSurfaces (its result ignored, as LoadLWO ignores it; it takes the
+ * model's timeStamp from the object), purged false, then FinishSurfaces( useMikktspace ).
+ * Pool-safe (D137); one call at a time.
+ */
+EngineModel engineFinishLwoModel(
+  const EngineLwoModel& lwo,
+  const EngineModelMaterials& materials,
+  std::string_view name,
+  bool useMikktspace);
 
 /**
  * GetModel's default model (ModelManager.cpp:520-523, Model.cpp:356-361): InitEmpty, then

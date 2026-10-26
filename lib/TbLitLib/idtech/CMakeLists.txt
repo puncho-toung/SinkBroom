@@ -72,6 +72,11 @@ target_sources(TbLitIdLib
     # LP7.1b (C51, P7.13): the ASE loader, copied whole; renderer/Model.cpp's ASE range
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Model_ase.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Model_ase.h
+    # LP7.1b: the LWO loader, copied whole; renderer/Model.cpp's LWO range; the byte swap
+    # its BigRevBytes picks (idlib/Lib.cpp's ranges), compiled inside shim/src/ShimLib.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Model_lwo.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Model_lwo.h
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/Lib.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Model.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Model.h
     ${TB_LIT_ID_ENGINE_DIR}/idlib/containers/VectorSet.h
@@ -136,6 +141,7 @@ set_source_files_properties(
   ${TB_LIT_ID_ENGINE_DIR}/renderer/Interaction.cpp
   ${TB_LIT_ID_ENGINE_DIR}/renderer/Model.cpp
   ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Simd_Generic.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/idlib/Lib.cpp
   PROPERTIES HEADER_FILE_ONLY ON)
 
 # the shim headers named precompiled.h and RenderCommon.h come first, so the copied files'

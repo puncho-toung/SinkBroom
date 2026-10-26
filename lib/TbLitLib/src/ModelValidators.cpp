@@ -20,7 +20,7 @@
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
 // GPL Source Code and RBDOOM-3-BFG (neo/renderer/Model_obj.cpp, renderer/Model_ase.cpp,
-// renderer/Model.cpp and idlib/Lexer.cpp):
+// renderer/Model_lwo.cpp, renderer/Model.cpp and idlib/Lexer.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2012-2024 Robert Beckebans
 // That code is also subject to the additional terms that follow the GNU General
@@ -37,6 +37,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <vector>
 
@@ -1421,6 +1422,957 @@ std::optional<std::string> aseFileProblem(const std::string_view bytes)
     }
   }
   return AseShadow{bytes}.run();
+}
+
+namespace
+{
+
+constexpr std::uint32_t lwid(const char a, const char b, const char c, const char d)
+{
+  return (std::uint32_t(std::uint8_t(a)) << 24) | (std::uint32_t(std::uint8_t(b)) << 16)
+         | (std::uint32_t(std::uint8_t(c)) << 8) | std::uint32_t(std::uint8_t(d));
+}
+
+std::string lwidText(const std::uint32_t id)
+{
+  auto text = std::string{};
+  for (const auto shift : {24, 16, 8, 0})
+  {
+    const auto c = char((id >> shift) & 0xFF);
+    text.push_back(c >= ' ' && c <= '~' ? c : '?');
+  }
+  return text;
+}
+
+/**
+ * The copied LWO2 reader walked without allocating (lwoFileProblem): lwGetObject's chunk
+ * loop (Model_lwo.cpp:1775-2067) and the chunk readers it calls, by the sizes the file
+ * declares, with the counts and indexes their post-processing (:2019-2045) and the
+ * conversion (Model.cpp:2109-2529) depend on.
+ */
+class LwoWalk
+{
+public:
+  explicit LwoWalk(const std::string_view file)
+    : m_file{file}
+  {
+  }
+
+  std::optional<std::string> run()
+  {
+    if (m_file.size() < 12)
+    {
+      return "shorter than an IFF FORM header (12 bytes)";
+    }
+    if (u4(0) != lwid('F', 'O', 'R', 'M'))
+    {
+      return "not an IFF FORM";
+    }
+    const auto type = u4(8);
+    if (type == lwid('L', 'W', 'O', 'B'))
+    {
+      return "LightWave 5 objects (LWOB) are not read by the preview";
+    }
+    if (type != lwid('L', 'W', 'O', '2'))
+    {
+      return fmt::format("not an LWO2 object (FORM type '{}')", lwidText(type));
+    }
+    const auto formSize = std::size_t(u4(4));
+    if (formSize < 4 || formSize > m_file.size() - 8)
+    {
+      return fmt::format(
+        "the FORM's size {} passes the file's {} bytes", formSize, m_file.size());
+    }
+    const auto end = formSize + 8;
+    if (end == 12)
+    {
+      return "an LWO2 FORM without chunks";
+    }
+    m_layers.emplace_back();
+
+    // :1849-2010: chunk after chunk until the FORM's end, each its padded size
+    auto at = std::size_t{12};
+    while (ok() && at < end)
+    {
+      if (end - at < 8)
+      {
+        fail(at, "a chunk header past the FORM's end");
+        break;
+      }
+      const auto id = u4(at);
+      const auto size = std::size_t(u4(at + 4));
+      const auto padded = size + (size & 1);
+      if (padded > end - at - 8)
+      {
+        fail(
+          at,
+          fmt::format(
+            "chunk '{}': its size {} passes the FORM's end (:1854 reads past it)",
+            lwidText(id),
+            size));
+        break;
+      }
+      chunk(id, at + 8, size);
+      at += 8 + padded;
+    }
+    if (ok())
+    {
+      finish();
+    }
+    return m_problem;
+  }
+
+private:
+  struct Layer
+  {
+    std::size_t points = 0;
+    std::size_t pointOffset = 0;
+    std::size_t polygons = 0;
+    std::size_t polygonOffset = 0;
+    std::size_t triangles = 0;
+    // the largest VMAP point index and VMAD polygon index, for the end
+    std::optional<std::size_t> vmapPoint;
+    std::optional<std::size_t> vmadPolygon;
+  };
+
+  static constexpr auto MaxLayers = std::size_t{256};
+  static constexpr auto MaxPoints = std::size_t{1} << 20;
+  static constexpr auto MaxPolygons = std::size_t{1} << 20;
+  static constexpr auto MaxFirstLayerPolygons = std::size_t{32767};
+  static constexpr auto MaxTags = std::size_t{256};
+  static constexpr auto MaxSurfaces = std::size_t{256};
+  static constexpr auto MaxVmapDimension = std::size_t{16};
+
+  bool ok() const { return !m_problem; }
+
+  void fail(const std::size_t at, const std::string& what)
+  {
+    if (!m_problem)
+    {
+      m_problem = fmt::format("byte {}: {}", at, what);
+    }
+  }
+
+  std::uint32_t u1(const std::size_t at) const { return std::uint8_t(m_file[at]); }
+  std::uint32_t u2(const std::size_t at) const { return (u1(at) << 8) | u1(at + 1); }
+  std::uint32_t u4(const std::size_t at) const { return (u2(at) << 16) | u2(at + 2); }
+
+  float f4(const std::size_t at) const
+  {
+    const auto bits = u4(at);
+    auto value = 0.0f;
+    std::memcpy(&value, &bits, 4);
+    return value;
+  }
+
+  // a VX index (:1390-1442): 2 bytes, or 4 when the first is 0xFF; its size in size
+  std::optional<std::size_t> vx(
+    const std::size_t at, const std::size_t end, std::size_t& size) const
+  {
+    if (at + 2 > end)
+    {
+      return std::nullopt;
+    }
+    if (u1(at) != 0xFF)
+    {
+      size = 2;
+      return std::size_t(u2(at));
+    }
+    if (at + 4 > end)
+    {
+      return std::nullopt;
+    }
+    size = 4;
+    return std::size_t((u1(at + 1) << 16) | (u1(at + 2) << 8) | u1(at + 3));
+  }
+
+  // an S0 string (:1468-1525, :1678-1705) terminated before end: what it takes, padded to
+  // even (2 for an empty one), and its length; nullopt when its NUL is not before end
+  std::optional<std::size_t> s0(
+    const std::size_t at, const std::size_t end, std::size_t& length) const
+  {
+    const auto nul = m_file.find('\0', at);
+    if (nul == std::string_view::npos || nul >= end)
+    {
+      return std::nullopt;
+    }
+    length = nul - at;
+    const auto taken = length + 1;
+    const auto padded = length == 0 ? std::size_t{2} : taken + (taken & 1);
+    if (at + padded > end)
+    {
+      return std::nullopt;
+    }
+    return padded;
+  }
+
+  bool finite(const float value, const float bound = 1e30f) const
+  {
+    return std::isfinite(value) && std::abs(value) <= bound;
+  }
+
+  Layer& layer() { return m_layers.back(); }
+
+  void chunk(const std::uint32_t id, const std::size_t data, const std::size_t size)
+  {
+    const auto end = data + size;
+    const auto name = lwidText(id);
+    // the readers that parse a chunk's body take its padded size: refused odd (no pad
+    // inside what they parse)
+    const auto even = [&] {
+      if (size & 1)
+      {
+        fail(data, fmt::format("chunk '{}' of odd size {}", name, size));
+        return false;
+      }
+      return true;
+    };
+    if (id == lwid('L', 'A', 'Y', 'R'))
+    {
+      // :1862-1897: a new layer after the first LAYR
+      if (m_nlayers > 0)
+      {
+        if (m_layers.size() >= MaxLayers)
+        {
+          fail(data, fmt::format("more than {} layers", MaxLayers));
+          return;
+        }
+        m_layers.emplace_back();
+      }
+      ++m_nlayers;
+      auto length = std::size_t{0};
+      if (!even() || size < 18 || !s0(data + 16, end, length))
+      {
+        fail(data, "a LAYR chunk without its index, flags, pivot and a terminated name");
+      }
+    }
+    else if (id == lwid('P', 'N', 'T', 'S'))
+    {
+      points(data, size);
+    }
+    else if (id == lwid('P', 'O', 'L', 'S'))
+    {
+      if (even())
+      {
+        polygons(data, size);
+      }
+    }
+    else if (id == lwid('V', 'M', 'A', 'P') || id == lwid('V', 'M', 'A', 'D'))
+    {
+      if (even())
+      {
+        vmap(data, size, id == lwid('V', 'M', 'A', 'D'));
+      }
+    }
+    else if (id == lwid('P', 'T', 'A', 'G'))
+    {
+      if (even())
+      {
+        polygonTags(data, size);
+      }
+    }
+    else if (id == lwid('T', 'A', 'G', 'S'))
+    {
+      if (even())
+      {
+        tags(data, size);
+      }
+    }
+    else if (id == lwid('B', 'B', 'O', 'X'))
+    {
+      if (size < 24)
+      {
+        fail(data, "a BBOX chunk shorter than its six floats");
+      }
+    }
+    else if (id == lwid('E', 'N', 'V', 'L'))
+    {
+      if (even())
+      {
+        envelope(data, size);
+      }
+    }
+    else if (id == lwid('C', 'L', 'I', 'P'))
+    {
+      if (even())
+      {
+        clip(data, size);
+      }
+    }
+    else if (id == lwid('S', 'U', 'R', 'F'))
+    {
+      if (even())
+      {
+        surface(data, size);
+      }
+    }
+  }
+
+  // lwGetPoints (:3031-3078): twelve bytes a point, appended to the layer's
+  void points(const std::size_t data, const std::size_t size)
+  {
+    if (size < 12 || size % 12 != 0)
+    {
+      fail(data, fmt::format("a PNTS chunk of {} bytes: not points of 12 bytes", size));
+      return;
+    }
+    for (auto at = data; at < data + size; at += 4)
+    {
+      if (!finite(f4(at)))
+      {
+        fail(at, "a point coordinate that is not finite or larger than 1e30");
+        return;
+      }
+    }
+    auto& l = layer();
+    l.pointOffset = l.points;
+    l.points += size / 12;
+    if (l.points > MaxPoints)
+    {
+      fail(data, fmt::format("more than {} points in a layer", MaxPoints));
+    }
+  }
+
+  // lwGetPolygons (:3184-3270): the polygons exactly fill the chunk (:3214-3253 read past
+  // it otherwise), each vertex index within the points (:3295 "FIXME", :3330, :3353 and
+  // Model.cpp:2381 index unchecked); at least one (:3153's pol[0] of a zero-polygon
+  // chunk)
+  void polygons(const std::size_t data, const std::size_t size)
+  {
+    if (size < 6)
+    {
+      fail(data, "a POLS chunk without a polygon (:3153 writes pol[0] of an empty list)");
+      return;
+    }
+    const auto end = data + size;
+    auto& l = layer();
+    auto at = data + 4;
+    auto count = std::size_t{0};
+    while (at < end)
+    {
+      if (at + 2 > end)
+      {
+        fail(at, "a polygon record past the POLS chunk (:3216 reads past it)");
+        return;
+      }
+      const auto nv = u2(at) & 0x03FF;
+      at += 2;
+      for (auto j = 0u; j < nv; ++j)
+      {
+        auto taken = std::size_t{0};
+        const auto index = vx(at, end, taken);
+        if (!index)
+        {
+          fail(at, "a polygon's vertex index past the POLS chunk (:3220, :3248)");
+          return;
+        }
+        if (*index + l.pointOffset >= l.points)
+        {
+          fail(
+            at,
+            fmt::format(
+              "a polygon's vertex {} past the layer's {} points (:3295, :3330, "
+              "Model.cpp:2381)",
+              *index + l.pointOffset,
+              l.points));
+          return;
+        }
+        at += taken;
+      }
+      ++count;
+      l.triangles += nv == 3 ? 1 : 0;
+    }
+    l.polygonOffset = l.polygons;
+    l.polygons += count;
+    m_anyPolygons = true;
+    if (l.polygons > MaxPolygons)
+    {
+      fail(data, fmt::format("more than {} polygons in a layer", MaxPolygons));
+    }
+  }
+
+  // lwGetVMap (:4975-5085): the type, dimension and name, then the records exactly
+  // filling the chunk (:5017-5074 read past it otherwise), at least one (lwFreeVMap's
+  // val[0], :4957); the indexes checked at the end (lwGetPointVMaps :5110, :5133;
+  // lwGetPolyVMaps :5174, :5207)
+  void vmap(const std::size_t data, const std::size_t size, const bool perpoly)
+  {
+    const auto end = data + size;
+    auto length = std::size_t{0};
+    const auto header = size >= 8 ? s0(data + 6, end, length) : std::nullopt;
+    if (!header)
+    {
+      fail(data, "a VMAP/VMAD chunk without its type, dimension and a terminated name");
+      return;
+    }
+    const auto type = u4(data);
+    const auto dim = std::size_t(u2(data + 4));
+    if (dim > MaxVmapDimension)
+    {
+      fail(data, fmt::format("a vmap of dimension {}", dim));
+      return;
+    }
+    // Model.cpp:2252 reads a TXUV's val[k][1], :2412 and :2430 an RGBA's val[i][0..3]
+    const auto txuv = type == lwid('T', 'X', 'U', 'V');
+    const auto rgba = type == lwid('R', 'G', 'B', 'A');
+    if ((txuv && dim < 2) || (rgba && dim < 4))
+    {
+      fail(
+        data,
+        fmt::format(
+          "a {} vmap of dimension {} (the conversion reads past its values)",
+          lwidText(type),
+          dim));
+      return;
+    }
+    auto& l = layer();
+    auto at = data + 6 + *header;
+    auto records = std::size_t{0};
+    while (at < end)
+    {
+      auto taken = std::size_t{0};
+      const auto point = vx(at, end, taken);
+      if (!point)
+      {
+        fail(at, "a vmap record past its chunk (:5017-5022 read past it)");
+        return;
+      }
+      at += taken;
+      if (perpoly)
+      {
+        const auto polygon = vx(at, end, taken);
+        if (!polygon)
+        {
+          fail(at, "a vmad record past its chunk");
+          return;
+        }
+        at += taken;
+        l.vmadPolygon = std::max(l.vmadPolygon.value_or(0), *polygon);
+      }
+      else
+      {
+        l.vmapPoint = std::max(l.vmapPoint.value_or(0), *point);
+      }
+      if (end - at < 4 * dim)
+      {
+        fail(at, "a vmap record's values past its chunk (:5072 reads past it)");
+        return;
+      }
+      for (std::size_t j = 0; j < dim; ++j, at += 4)
+      {
+        const auto value = f4(at);
+        if (
+          (txuv && !finite(value))
+          || (rgba && j < 4 && !(value >= 0.0f && value <= 1.0f)))
+        {
+          fail(
+            at,
+            rgba ? "an RGBA vmap value outside 0..1 (Model.cpp:2412: x 255 into a byte)"
+                 : "a TXUV value that is not finite or larger than 1e30");
+          return;
+        }
+      }
+      ++records;
+    }
+    if (records == 0)
+    {
+      fail(data, "a vmap without records (:4957 reads val[0] of an empty list)");
+    }
+  }
+
+  // lwGetPolygonTags (:3615-3660): SURF, PART and SMGP pairs exactly filling the chunk,
+  // each polygon within the layer's (:3640-3656 write pol[i] unchecked); a SURF tag
+  // index is checked at the end (lwResolvePolySurfaces, :3411)
+  void polygonTags(const std::size_t data, const std::size_t size)
+  {
+    if (size < 4)
+    {
+      fail(data, "a PTAG chunk without its type");
+      return;
+    }
+    const auto type = u4(data);
+    const auto surfaces = type == lwid('S', 'U', 'R', 'F');
+    if (!surfaces && type != lwid('P', 'A', 'R', 'T') && type != lwid('S', 'M', 'G', 'P'))
+    {
+      // :3630-3634: skipped
+      return;
+    }
+    const auto end = data + size;
+    const auto& l = layer();
+    auto at = data + 4;
+    while (at < end)
+    {
+      auto taken = std::size_t{0};
+      const auto polygon = vx(at, end, taken);
+      if (!polygon)
+      {
+        fail(at, "a PTAG record past its chunk");
+        return;
+      }
+      at += taken;
+      const auto tag = vx(at, end, taken);
+      if (!tag)
+      {
+        fail(at, "a PTAG record past its chunk");
+        return;
+      }
+      at += taken;
+      if (*polygon + l.polygonOffset >= l.polygons)
+      {
+        fail(
+          at,
+          fmt::format(
+            "a PTAG polygon {} past the layer's {} polygons (:3647 writes pol[i])",
+            *polygon + l.polygonOffset,
+            l.polygons));
+        return;
+      }
+      if (surfaces)
+      {
+        m_surfaceTag = std::max(m_surfaceTag.value_or(0), *tag + m_tagOffset);
+      }
+    }
+  }
+
+  // lwGetTags (:3540-3605): strings exactly filling the chunk, each terminated in it
+  // (:3565 and sgetS0's strlen, :1689, read past it otherwise), none empty (NULL: then
+  // strcmp and strlen of NULL, :3397, :3422)
+  void tags(const std::size_t data, const std::size_t size)
+  {
+    const auto end = data + size;
+    auto at = data;
+    auto count = std::size_t{0};
+    while (at < end)
+    {
+      auto length = std::size_t{0};
+      const auto taken = s0(at, end, length);
+      if (!taken)
+      {
+        fail(at, "a tag not terminated in its TAGS chunk (:3565 reads past it)");
+        return;
+      }
+      if (length == 0)
+      {
+        fail(at, "an empty tag (sgetS0's NULL, then strcmp of NULL at :3397)");
+        return;
+      }
+      if (length >= 256)
+      {
+        fail(at, "a tag of 256 or more characters");
+        return;
+      }
+      at += *taken;
+      ++count;
+    }
+    m_tagOffset = m_tags;
+    m_tags += count;
+    if (m_tags > MaxTags)
+    {
+      fail(data, fmt::format("more than {} tags", MaxTags));
+    }
+  }
+
+  // sub-chunks (an ID and a U2 size, padded) exactly filling [at, end); each passed to
+  // visit; false when one passes the end
+  template <typename Visit>
+  bool subChunks(std::size_t at, const std::size_t end, const char* what, Visit visit)
+  {
+    if (end - at < 6)
+    {
+      fail(
+        at, fmt::format("{} without a sub-chunk (its reader reads one past it)", what));
+      return false;
+    }
+    while (ok() && at < end)
+    {
+      if (end - at < 6)
+      {
+        fail(at, fmt::format("a sub-chunk header past the end of {}", what));
+        return false;
+      }
+      const auto id = u4(at);
+      const auto size = std::size_t(u2(at + 4));
+      const auto padded = size + (size & 1);
+      if (padded > end - at - 6)
+      {
+        fail(at, fmt::format("{}'s sub-chunk '{}' passes its end", what, lwidText(id)));
+        return false;
+      }
+      visit(id, at + 6, size);
+      at += 6 + padded;
+    }
+    return ok();
+  }
+
+  // a sub-chunk that allocates seen twice in one block: the first allocation leaks
+  bool once(
+    std::vector<std::uint32_t>& seen, const std::uint32_t id, const std::size_t at)
+  {
+    if (std::ranges::find(seen, id) != seen.end())
+    {
+      fail(
+        at,
+        fmt::format(
+          "a second '{}' sub-chunk in one block (the first's string leaks)",
+          lwidText(id)));
+      return false;
+    }
+    seen.push_back(id);
+    return true;
+  }
+
+  // lwGetEnvelope (:417-591): the index, then sub-chunks to the chunk's end; NAME once
+  void envelope(const std::size_t data, const std::size_t size)
+  {
+    const auto end = data + size;
+    auto taken = std::size_t{0};
+    if (!vx(data, end, taken))
+    {
+      fail(data, "an ENVL chunk without its index");
+      return;
+    }
+    auto seen = std::vector<std::uint32_t>{};
+    subChunks(
+      data + taken,
+      end,
+      "an ENVL chunk",
+      [&](const std::uint32_t id, const std::size_t at, std::size_t) {
+        if (id == lwid('N', 'A', 'M', 'E'))
+        {
+          once(seen, id, at);
+        }
+      });
+  }
+
+  // lwGetClip (:119-352): the index, then the source sub-chunk and the rest to the end
+  void clip(const std::size_t data, const std::size_t size)
+  {
+    if (size < 4)
+    {
+      fail(data, "a CLIP chunk without its index");
+      return;
+    }
+    subChunks(
+      data + 4, data + size, "a CLIP chunk", [](std::uint32_t, std::size_t, std::size_t) {
+      });
+  }
+
+  // lwGetSurface (:4638-4901): the name (non-empty: strcmp at :3397, FindMaterial) and
+  // the source name, then sub-chunks to the chunk's end
+  void surface(const std::size_t data, const std::size_t size)
+  {
+    if (++m_surfaces > MaxSurfaces)
+    {
+      fail(data, fmt::format("more than {} SURF chunks", MaxSurfaces));
+      return;
+    }
+    const auto end = data + size;
+    auto length = std::size_t{0};
+    const auto name = s0(data, end, length);
+    if (!name || length == 0 || length >= 256)
+    {
+      fail(
+        data,
+        "a SURF chunk without a terminated name of 1 to 255 characters (getS0's NULL, "
+        "then "
+        "strcmp of NULL at :3397)");
+      return;
+    }
+    const auto source = s0(data + *name, end, length);
+    if (!source)
+    {
+      fail(data, "a SURF chunk without a terminated source name");
+      return;
+    }
+    subChunks(
+      data + *name + *source,
+      end,
+      "a SURF chunk",
+      [&](const std::uint32_t id, const std::size_t at, const std::size_t sz) {
+        if (id == lwid('C', 'O', 'L', 'R'))
+        {
+          // Model.cpp:2392-2395: the colour x 255 into bytes
+          if (sz < 12)
+          {
+            fail(at, "a COLR sub-chunk shorter than its three floats");
+            return;
+          }
+          for (auto i = 0; i < 3; ++i)
+          {
+            const auto c = f4(at + 4 * std::size_t(i));
+            if (!(c >= 0.0f && c <= 1.0f))
+            {
+              fail(
+                at,
+                "a surface colour outside 0..1 (Model.cpp:2392-2394: x 255 into a byte)");
+              return;
+            }
+          }
+        }
+        else if (id == lwid('B', 'L', 'O', 'K'))
+        {
+          block(at, sz);
+        }
+      });
+  }
+
+  // a SURF's BLOK (:4785-4818): a texture (lwGetTexture :4360-4410) or a shader
+  // (lwGetShader :4420-4524); any other kind is skipped by its size
+  void block(const std::size_t data, const std::size_t size)
+  {
+    const auto end = data + size;
+    if (size < 4)
+    {
+      fail(data, "a BLOK without its type");
+      return;
+    }
+    const auto type = u4(data);
+    if (
+      type == lwid('I', 'M', 'A', 'P') || type == lwid('P', 'R', 'O', 'C')
+      || type == lwid('G', 'R', 'A', 'D'))
+    {
+      if (size < 6)
+      {
+        fail(data, "a texture BLOK without its header size");
+        return;
+      }
+      // lwGetTHeader (:3790-3884): the ordinal (non-empty: compare_textures' strcmp,
+      // :4538), then sub-chunks to the header's end
+      const auto headerSize = std::size_t(u2(data + 4));
+      const auto header = data + 6;
+      if (headerSize > end - header)
+      {
+        fail(data, "a texture BLOK's header passes the block");
+        return;
+      }
+      auto length = std::size_t{0};
+      const auto ordinal = s0(header, header + headerSize, length);
+      if (!ordinal || length == 0)
+      {
+        fail(
+          data,
+          "a texture BLOK without a terminated, non-empty ordinal (:4538's strcmp)");
+        return;
+      }
+      if (!subChunks(
+            header + *ordinal,
+            header + headerSize,
+            "a texture header",
+            [](std::uint32_t, std::size_t, std::size_t) {}))
+      {
+        return;
+      }
+      // the image map, procedural or gradient to the block's end; TMAP's own sub-chunks
+      auto seen = std::vector<std::uint32_t>{};
+      subChunks(
+        header + headerSize,
+        end,
+        "a texture BLOK",
+        [&](const std::uint32_t id, const std::size_t at, const std::size_t sz) {
+          if (id == lwid('T', 'M', 'A', 'P'))
+          {
+            auto tmapSeen = std::vector<std::uint32_t>{};
+            subChunks(
+              at,
+              at + sz,
+              "a TMAP",
+              [&](const std::uint32_t tid, const std::size_t tat, std::size_t) {
+                if (tid == lwid('O', 'R', 'E', 'F'))
+                {
+                  once(tmapSeen, tid, tat);
+                }
+              });
+          }
+          else if (
+            (type == lwid('I', 'M', 'A', 'P') && id == lwid('V', 'M', 'A', 'P'))
+            || (type == lwid('P', 'R', 'O', 'C') && id == lwid('F', 'U', 'N', 'C'))
+            || (type == lwid('G', 'R', 'A', 'D') && (id == lwid('P', 'N', 'A', 'M') || id == lwid('I', 'N', 'A', 'M') || id == lwid('F', 'K', 'E', 'Y') || id == lwid('I', 'K', 'E', 'Y'))))
+          {
+            once(seen, id, at);
+          }
+        });
+    }
+    else if (type == lwid('S', 'H', 'D', 'R'))
+    {
+      shader(data + 4, end);
+    }
+  }
+
+  // lwGetShader (:4420-4524) as it reads: the header size and the ordinal (non-empty:
+  // compare_shaders' strcmp, :4544), then its header loop, which never ends on a
+  // zero-size sub-chunk that is not ENAB (:4444-4458: hsz -= 0); refused unless it
+  // reaches ENAB (of 2 bytes); then sub-chunks to the block's end, FUNC once
+  void shader(const std::size_t data, const std::size_t end)
+  {
+    if (end - data < 2)
+    {
+      fail(data, "a shader BLOK without its header size");
+      return;
+    }
+    auto remaining = static_cast<long long>(u2(data));
+    auto length = std::size_t{0};
+    const auto ordinal = s0(data + 2, end, length);
+    if (!ordinal || length == 0)
+    {
+      fail(
+        data, "a shader BLOK without a terminated, non-empty ordinal (:4544's strcmp)");
+      return;
+    }
+    // :4439-4458: the first header, then while hsz > 0 its size off hsz, ENAB ends it,
+    // another is skipped and the next header read
+    auto at = data + 2 + *ordinal;
+    if (end - at < 6)
+    {
+      fail(at, "a shader BLOK's header sub-chunk past the block");
+      return;
+    }
+    auto id = u4(at);
+    auto size = std::size_t(u2(at + 4));
+    at += 6;
+    auto enabled = false;
+    while (remaining > 0)
+    {
+      const auto padded = size + (size & 1);
+      remaining -= static_cast<long long>(padded);
+      if (id == lwid('E', 'N', 'A', 'B'))
+      {
+        if (size != 2 || end - at < 2)
+        {
+          fail(at, "a shader BLOK's ENAB of other than 2 bytes");
+          return;
+        }
+        at += 2;
+        enabled = true;
+        break;
+      }
+      if (padded == 0)
+      {
+        fail(
+          at,
+          "a zero-size sub-chunk in a shader BLOK's header (:4447: the loop never ends)");
+        return;
+      }
+      if (padded > end - at || end - at - padded < 6)
+      {
+        fail(at, "a shader BLOK's header sub-chunk passes the block");
+        return;
+      }
+      at += padded;
+      id = u4(at);
+      size = std::size_t(u2(at + 4));
+      at += 6;
+    }
+    if (!enabled)
+    {
+      fail(at, "a shader BLOK's header without ENAB (lwGetShader reads on misaligned)");
+      return;
+    }
+    auto seen = std::vector<std::uint32_t>{};
+    subChunks(
+      at,
+      end,
+      "a shader BLOK",
+      [&](const std::uint32_t id, const std::size_t sat, std::size_t) {
+        if (id == lwid('F', 'U', 'N', 'C'))
+        {
+          once(seen, id, sat);
+        }
+      });
+  }
+
+  // the post-processing (:2019-2045) and the conversion's reads (Model.cpp:2109-2529)
+  void finish()
+  {
+    const auto first = m_layers.front();
+    if (m_anyPolygons && m_tags == 0)
+    {
+      fail(
+        0,
+        "polygons without a TAGS chunk (lwGetVertNormals reads a NULL surface, :3468)");
+      return;
+    }
+    if (m_surfaceTag && *m_surfaceTag >= m_tags)
+    {
+      fail(
+        0,
+        fmt::format(
+          "a PTAG surface tag {} past the {} tags (lwResolvePolySurfaces' off-by-one, "
+          ":3411)",
+          *m_surfaceTag,
+          m_tags));
+      return;
+    }
+    for (std::size_t i = 0; i < m_layers.size(); ++i)
+    {
+      const auto& l = m_layers[i];
+      if (l.vmapPoint && *l.vmapPoint >= l.points)
+      {
+        fail(
+          0,
+          fmt::format(
+            "layer {}: a VMAP point {} past its {} points (:5110, :5133)",
+            i,
+            *l.vmapPoint,
+            l.points));
+        return;
+      }
+      if (l.vmadPolygon && *l.vmadPolygon >= l.polygons)
+      {
+        fail(
+          0,
+          fmt::format(
+            "layer {}: a VMAD polygon {} past its {} polygons (:5174, :5207)",
+            i,
+            *l.vmadPolygon,
+            l.polygons));
+        return;
+      }
+    }
+    // Model.cpp:2212-2216: without points it returns after adding the surfaces, which
+    // FinishSurfaces then finds without geometry (:1241, UNSAFE after the Error)
+    if ((m_surfaces > 0 || m_anyPolygons) && first.points == 0)
+    {
+      fail(0, "surfaces without points in the first layer (Model.cpp:2212-2216)");
+      return;
+    }
+    if (first.polygons > MaxFirstLayerPolygons)
+    {
+      fail(
+        0,
+        fmt::format("more than {} polygons in the first layer", MaxFirstLayerPolygons));
+      return;
+    }
+    if (3 * first.triangles > MaxObjCorners)
+    {
+      fail(
+        0,
+        fmt::format(
+          "more than {} triangle corners (the conversion's 16-bit indexes, "
+          "Model.cpp:2477)",
+          MaxObjCorners));
+    }
+  }
+
+  std::string_view m_file;
+  std::optional<std::string> m_problem;
+  std::vector<Layer> m_layers;
+  std::size_t m_nlayers = 0;
+  std::size_t m_tags = 0;
+  std::size_t m_tagOffset = 0;
+  std::size_t m_surfaces = 0;
+  bool m_anyPolygons = false;
+  std::optional<std::size_t> m_surfaceTag;
+};
+
+} // namespace
+
+std::optional<std::string> lwoFileProblem(const std::string_view bytes)
+{
+  if (bytes.size() >= std::size_t(INT_MAX))
+  {
+    return "the file is 2 GB or larger";
+  }
+  return LwoWalk{bytes}.run();
 }
 
 } // namespace tb::lit

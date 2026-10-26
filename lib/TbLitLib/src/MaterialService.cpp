@@ -584,7 +584,6 @@ private:
     ModelRecord::State state = ModelRecord::State::Pending;
     ModelRecord::SourceKind kind = ModelRecord::SourceKind::None;
     std::string reason;
-    bool pendingLoader = false;
     std::uint64_t generation = 0;
   };
 
@@ -2899,8 +2898,7 @@ private:
     ModelFinishInput input,
     const ModelRecord::State state,
     const ModelRecord::SourceKind kind,
-    std::string reason,
-    const bool pendingLoader)
+    std::string reason)
   {
     publishModel(
       bareRecord(input.name, ModelRecord::State::Pending, kind, input.sourceTime, {}));
@@ -2910,7 +2908,6 @@ private:
     finish.state = state;
     finish.kind = kind;
     finish.reason = std::move(reason);
-    finish.pendingLoader = pendingLoader;
     m_modelFinishes.push_back(std::move(finish));
   }
 
@@ -2920,8 +2917,7 @@ private:
     const std::string& name,
     const std::int64_t sourceTime,
     const ModelRecord::State state,
-    std::string reason,
-    const bool pendingLoader)
+    std::string reason)
   {
     auto input = m_decls ? defaultModelInput(*m_decls, name, sourceTime) : std::nullopt;
     if (!input)
@@ -2932,16 +2928,11 @@ private:
         ModelRecord::SourceKind::Default,
         sourceTime,
         reason + (m_decls ? "; no default material" : "; " + buildFailure()));
-      record.pendingLoader = pendingLoader;
       publishModel(std::move(record));
       return;
     }
     queueFinish(
-      std::move(*input),
-      state,
-      ModelRecord::SourceKind::Default,
-      std::move(reason),
-      pendingLoader);
+      std::move(*input), state, ModelRecord::SourceKind::Default, std::move(reason));
   }
 
   /**
@@ -2971,13 +2962,12 @@ private:
         dispatch.reason));
       return;
     }
-    const auto pendingLoader = dispatch.path == ModelPath::PendingLoader;
-    const auto fileBased = dispatch.path == ModelPath::Source || pendingLoader
+    const auto fileBased = dispatch.path == ModelPath::Source
                            || dispatch.path == ModelPath::MayaBinaryOnly
                            || dispatch.path == ModelPath::GltfBinaryOnly;
     if (!m_source || !fileBased)
     {
-      queueCube(name, -1, ModelRecord::State::Default, dispatch.reason, false);
+      queueCube(name, -1, ModelRecord::State::Default, dispatch.reason);
       return;
     }
 
@@ -3002,8 +2992,7 @@ private:
         name,
         -1,
         ModelRecord::State::Missing,
-        fmt::format("no file {}{}", name, binaryNote),
-        pendingLoader);
+        fmt::format("no file {}{}", name, binaryNote));
       return;
     }
     if (dispatch.path != ModelPath::Source)
@@ -3012,8 +3001,7 @@ private:
         name,
         sourceProbe.time,
         ModelRecord::State::Default,
-        dispatch.reason + binaryNote,
-        pendingLoader);
+        dispatch.reason + binaryNote);
       return;
     }
 
@@ -3025,8 +3013,7 @@ private:
         name,
         -1,
         ModelRecord::State::Missing,
-        fmt::format("{} cannot be read{}", name, binaryNote),
-        false);
+        fmt::format("{} cannot be read{}", name, binaryNote));
       return;
     }
     // what the read found is what the poll compares
@@ -3058,16 +3045,14 @@ private:
         std::move(*read.input),
         ModelRecord::State::Default,
         ModelRecord::SourceKind::Default,
-        std::move(read.reason),
-        false);
+        std::move(read.reason));
       return;
     }
     queueFinish(
       std::move(*read.input),
       ModelRecord::State::Ready,
       ModelRecord::SourceKind::Source,
-      {},
-      false);
+      {});
   }
 
   /**
@@ -3212,8 +3197,7 @@ private:
           name,
           finish.input.sourceTime,
           ModelRecord::State::Default,
-          fmt::format("{} could not be finished: {}", name, error),
-          false);
+          fmt::format("{} could not be finished: {}", name, error));
       }
       else
       {
@@ -3237,7 +3221,6 @@ private:
     }
     auto record = modelRecordFromEngine(
       name, *model, finish.state, finish.kind, finish.input.sourceTime, finish.reason);
-    record.pendingLoader = finish.pendingLoader;
     record.note = finish.input.note;
     if (finish.kind == ModelRecord::SourceKind::Source)
     {

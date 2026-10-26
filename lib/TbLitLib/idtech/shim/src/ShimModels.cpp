@@ -203,8 +203,9 @@ public:
 
   void MakeDefaultModel();
   bool ConvertOBJToModelSurfaces(const objModel_t* obj);
-  // LP7.1b: Model_local.h:127
+  // LP7.1b: Model_local.h:127-128
   bool ConvertASEToModelSurfaces(const struct aseModel_s* ase);
+  bool ConvertLWOToModelSurfaces(const struct st_lwObject* lwo);
 
   idRenderModelStatic(const idRenderModelStatic&) = delete;
   idRenderModelStatic& operator=(const idRenderModelStatic&) = delete;
@@ -540,6 +541,97 @@ EngineModel engineConvertAseModelForTesting(
   return modelOf(model, decls);
 }
 
+EngineLwoModel::EngineLwoModel(st_lwObject* model)
+  : m_model{model}
+{
+}
+
+EngineLwoModel::~EngineLwoModel()
+{
+  // Model_lwo.cpp:1740-1751
+  lwFreeObject(m_model);
+}
+
+std::vector<std::string> EngineLwoModel::materialNames() const
+{
+  auto names = std::vector<std::string>{};
+  if (m_model)
+  {
+    for (const auto* surf = m_model->surf; surf; surf = surf->next)
+    {
+      names.emplace_back(surf->name ? surf->name : "");
+    }
+  }
+  return names;
+}
+
+std::size_t EngineLwoModel::surfaceCount() const
+{
+  auto count = std::size_t{0};
+  if (m_model)
+  {
+    for (const auto* surf = m_model->surf; surf; surf = surf->next)
+    {
+      ++count;
+    }
+  }
+  return count;
+}
+
+std::size_t EngineLwoModel::pointCount() const
+{
+  return m_model && m_model->layer ? std::size_t(m_model->layer->point.count) : 0;
+}
+
+std::size_t EngineLwoModel::polygonCount() const
+{
+  return m_model && m_model->layer ? std::size_t(m_model->layer->polygon.count) : 0;
+}
+
+std::size_t EngineLwoModel::triangleCount() const
+{
+  auto count = std::size_t{0};
+  if (m_model && m_model->layer)
+  {
+    const auto& polygons = m_model->layer->polygon;
+    for (auto i = 0; i < polygons.count; ++i)
+    {
+      count += polygons.pol[i].nverts == 3 ? 1 : 0;
+    }
+  }
+  return count;
+}
+
+std::int64_t EngineLwoModel::timeStamp() const
+{
+  return m_model ? std::int64_t(m_model->timeStamp) : 0;
+}
+
+EngineModel engineFinishLwoModel(
+  const EngineLwoModel& lwo,
+  const EngineModelMaterials& materials,
+  const std::string_view name,
+  const bool useMikktspace)
+{
+  const auto decls = idRenderModelStatic::ModelDecls{materials};
+  auto model = idRenderModelStatic{};
+  model.declManager = &decls;
+  model.tr.defaultMaterial = decls.defaultMaterial();
+
+  // Model.cpp:314-379 InitFromFile with LoadLWO (:3159-3179) for an object lwGetObject
+  // read
+  const auto fileName = std::string{name};
+  model.InitEmpty(fileName.c_str());
+  model.reloadable = true;
+  // LoadLWO: *sourceTimeStamp = fileSystem->GetTimestamp( fileName ) (the time handed
+  // in); ConvertLWOToModelSurfaces( lwo ), whose result it ignores (the conversion takes
+  // the model's timeStamp from the object)
+  static_cast<void>(model.ConvertLWOToModelSurfaces(lwo.model()));
+  model.purged = false;
+  model.FinishSurfaces(useMikktspace);
+  return modelOf(model, decls);
+}
+
 EngineModel engineDefaultModel(
   const std::string_view name, const EngineModelMaterial& defaultMaterial)
 {
@@ -646,6 +738,46 @@ EngineAseParse MaterialDecls::parseAseModel(
     return {nullptr, lastErrorOf(m_registry->messages())};
   }
   return {std::move(model), {}};
+}
+
+EngineLwoParse MaterialDecls::parseLwoModel(
+  const std::string& name, const std::string& bytes, const std::int64_t time)
+{
+  if (!m_registry)
+  {
+    return {nullptr, m_constructionError};
+  }
+  const auto errorsBefore = m_registry->errorCount();
+  auto* lwo = static_cast<lwObject*>(nullptr);
+  auto failID = 0u;
+  auto failPos = 0;
+  {
+    // Model_lwo.cpp:1775-2067: lwGetObject opens the file by name (a memory file over the
+    // bytes and the time handed in) and reads it in pieces
+    const auto read = shim::ModelRead{m_registry->files(), name, bytes, time};
+    const auto cleared = shim::ClearedAllocations{};
+    lwo = lwGetObject(name.c_str(), &failID, &failPos);
+  }
+  if (m_registry->errorCount() != errorsBefore)
+  {
+    lwFreeObject(lwo);
+    return {nullptr, lastErrorOf(m_registry->messages())};
+  }
+  if (!lwo)
+  {
+    // :1756-1772: failID the IFF chunk read last, failpos where it failed
+    const auto id = std::string{
+      char((failID >> 24) & 0xFF),
+      char((failID >> 16) & 0xFF),
+      char((failID >> 8) & 0xFF),
+      char(failID & 0xFF)};
+    return {
+      nullptr,
+      failID == 0
+        ? "lwGetObject failed at byte " + std::to_string(failPos)
+        : "lwGetObject failed in chunk '" + id + "' at byte " + std::to_string(failPos)};
+  }
+  return {std::make_shared<const EngineLwoModel>(lwo), {}};
 }
 
 std::optional<std::pair<int, std::int64_t>> MaterialDecls::openModelFileForTesting(
