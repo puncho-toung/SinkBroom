@@ -35,6 +35,7 @@
 #include "lit/ChunkBuilder.h"
 #include "lit/LightRecord.h"
 #include "lit/MaterialService.h"
+#include "lit/ModelInstance.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -81,6 +82,9 @@ struct RegisterAnswer
 struct LitSurface
 {
   const Chunk* chunk = nullptr;
+  // LP7.2 (C52, D129): the model instance whose header chunk is (null: a chunk); its
+  // indexes are its shared surface's
+  const ModelInstance* instance = nullptr;
   std::size_t space = 0;
   std::shared_ptr<const MaterialEntry> material;
   std::shared_ptr<const EvaluatedRegisters> registers;
@@ -212,6 +216,9 @@ struct FrontendInputs
 {
   LitView view;
   const std::map<ChunkKey, Chunk>* chunks = nullptr;
+  // LP7.2 (C52, D129): the scene's model instances (SceneGeometry::instances), listed
+  // after the chunks; null: none
+  const std::map<ChunkKey, ModelInstance>* instances = nullptr;
   // the entities whose chunks are not worldspawn's; a chunk of an entity without a state
   // is drawn as worldspawn (identity, engineWorldShaderParms)
   const std::unordered_map<PreviewId, ChunkEntityState>* entities = nullptr;
@@ -407,6 +414,9 @@ std::vector<const LitSurface*> stagePassOrder(
  * flow's copied functions are mirror.json M-FLOW-PURE-01's).
  */
 FrontendLists buildFrontendLists(const FrontendInputs& inputs);
+
+// LP7.2 (D129): a surface's index count: its chunk's, or its instance's shared surface's
+std::size_t surfaceIndexCount(const LitSurface& surface);
 
 /**
  * LPF.0b (C43, D106): what of the material table the frontend lists depend on beyond its

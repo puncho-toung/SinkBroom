@@ -81,6 +81,9 @@ struct LitFrameInputs
   // m_chunksVersion)
   const std::map<ChunkKey, Chunk>* chunks = nullptr;
   std::uint64_t chunksVersion = 0;
+  // LP7.2 (C52, D129): the scene's model instances, synced with the arenas with the
+  // chunks (chunksVersion covers them); null: none
+  const std::map<ChunkKey, ModelInstance>* instances = nullptr;
   const std::unordered_map<PreviewId, ChunkEntityState>* entities = nullptr;
   std::shared_ptr<const LightTable> lights;
   // LP4.1 (D79, D94): the scene's .proc tree and its AreaData (SceneGeometry::procTree,
@@ -380,6 +383,7 @@ private:
     int height = 0;
     const void* chunks = nullptr;
     std::uint64_t chunksVersion = 0;
+    const void* instances = nullptr;
     const void* entities = nullptr;
     const LightTable* lights = nullptr;
     std::uint64_t lightsVersion = 0;

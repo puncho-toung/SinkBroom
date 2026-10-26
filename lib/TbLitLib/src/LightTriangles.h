@@ -24,6 +24,7 @@
 #include "lit/ChunkBuilder.h"
 #include "lit/CpuPool.h"
 #include "lit/EngineLight.h"
+#include "lit/ModelInstance.h"
 #include "lit/Snapshot.h"
 
 #include <cstddef>
@@ -133,13 +134,16 @@ private:
     std::vector<std::uint16_t> indexes;
   };
 
+  // what a request reads: a chunk's copy, or (LP7.2, D129) an instance's shared surface
+  // (its positions and its record's indexes), by pointers that keep their owner alive
   struct Request
   {
     Key key;
     Stamp stamp;
     EngineMat4 baseLightProject = {};
     EngineBounds bounds = {};
-    std::shared_ptr<const ChunkGeometry> geometry;
+    std::shared_ptr<const std::vector<EngineVec3>> positions;
+    std::shared_ptr<const std::vector<std::uint16_t>> indexes;
   };
 
   struct Answer
@@ -185,6 +189,19 @@ public:
     std::uint64_t lightVersion,
     const EngineMat4& baseLightProject,
     const Chunk& chunk,
+    const EngineGlMatrix& modelMatrix);
+  /**
+   * LP7.2 (C52, D129, A27, SC624): the light triangles of a model instance, its geometry
+   * the shared surface's (by shared_ptr, never copied: every instance and light of the
+   * placement reads the same positions and indexes); keyed by the instance's chunk key
+   * and stamped as a chunk's (light version, the instance's caster version, its model
+   * matrix)
+   */
+  std::shared_ptr<const LightTriangles> triangles(
+    PreviewId light,
+    std::uint64_t lightVersion,
+    const EngineMat4& baseLightProject,
+    const ModelInstance& instance,
     const EngineGlMatrix& modelMatrix);
   // the build ended: beyond the bound the entries not asked for go; the misses go to pool
   // (none: they are answered at once)

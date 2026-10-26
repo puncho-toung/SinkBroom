@@ -24,6 +24,7 @@
 #include "lit/CpuPool.h"
 #include "lit/GridTable.h"
 #include "lit/LightRecord.h"
+#include "lit/ModelInstance.h"
 #include "lit/ProbeRecord.h"
 #include "lit/Snapshot.h"
 
@@ -165,6 +166,9 @@ private:
   // not in the table
   std::map<ChunkKey, Chunk> m_chunks;
   std::unordered_map<PreviewId, ChunkEntityState> m_entityStates;
+  // LP7.2 (C52, D129, P7.7): the model entities' instances, by chunk key, apart from the
+  // chunks
+  std::map<ChunkKey, ModelInstance> m_instances;
   std::map<std::string, std::set<CellRef>> m_pendingMaterials;
   std::map<std::string, SizedCells> m_sizedCells;
   // LP5.F: a sized cell's measured is false (updated with m_sizedCells)
@@ -297,6 +301,9 @@ public:
 
   const std::map<ChunkKey, Chunk>& chunks() const;
   const std::unordered_map<PreviewId, ChunkEntityState>& entityStates() const;
+  // LP7.2 (C52, D129): the model instances (their entities' states are in entityStates);
+  // the render thread
+  const std::map<ChunkKey, ModelInstance>& instances() const;
   // K14: the pieces of world faces in solid
   std::size_t solidPieces() const;
   std::uint64_t appliedSequence() const;

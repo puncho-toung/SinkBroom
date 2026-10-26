@@ -89,6 +89,51 @@ bool GeometryArenas::sync(
   return !m_queued.empty();
 }
 
+bool GeometryArenas::syncInstances(
+  const std::map<ChunkKey, ModelInstance>& instances, const std::uint64_t frame)
+{
+  // the instances naming each key now
+  auto counts = std::map<SharedGeometryKey, SharedPlacement>{};
+  m_instanceKeys.clear();
+  for (const auto& [key, instance] : instances)
+  {
+    if (!instance.geometry || instance.geometry->indexCount() == 0)
+    {
+      continue;
+    }
+    auto& count = counts[instance.geometry->key];
+    count.geometry = instance.geometry;
+    ++count.instances;
+    m_instanceKeys.emplace(key, instance.geometry->key);
+  }
+  // D35, D36: a key no instance names goes, its ranges after the frames in flight
+  for (auto it = m_shared.begin(); it != m_shared.end();)
+  {
+    if (counts.contains(it->first))
+    {
+      ++it;
+      continue;
+    }
+    if (it->second.placement)
+    {
+      freePlacement(*it->second.placement, frame);
+    }
+    m_sharedQueued.erase(it->first);
+    it = m_shared.erase(it);
+  }
+  for (auto& [key, count] : counts)
+  {
+    auto [it, added] = m_shared.try_emplace(key);
+    it->second.instances = count.instances;
+    if (added)
+    {
+      it->second.geometry = std::move(count.geometry);
+      m_sharedQueued.insert(key);
+    }
+  }
+  return pending();
+}
+
 void GeometryArenas::setAllocationRoom(std::function<bool()> room)
 {
   m_allocationRoom = std::move(room);
@@ -116,11 +161,90 @@ Result<std::uint64_t> GeometryArenas::recordUploads(
   const std::map<ChunkKey, Chunk>& chunks,
   const std::uint64_t budget)
 {
+  return upload(&commandList, chunks, budget);
+}
+
+void GeometryArenas::setCpuArenasForTesting(const std::uint64_t arenaBytes)
+{
+  m_cpuArenasForTesting = true;
+  m_arenaBytes = arenaBytes;
+}
+
+Result<std::uint64_t> GeometryArenas::placeForTesting(
+  const std::map<ChunkKey, Chunk>& chunks, const std::uint64_t budget)
+{
+  return upload(nullptr, chunks, budget);
+}
+
+std::optional<ChunkPlacement> GeometryArenas::place(
+  const std::uint64_t vertexBytes, const std::uint64_t indexBytes, std::string& error)
+{
+  m_refusedForHeadroom = false;
+  const auto vertices = allocate(m_vertexArenas, vertexBytes, true);
+  const auto indexes = vertices ? allocate(m_indexArenas, indexBytes, false)
+                                : std::optional<std::pair<std::size_t, ArenaRange>>{};
+  if (!vertices || !indexes)
+  {
+    if (vertices)
+    {
+      m_vertexArenas[vertices->first].ranges.free(vertices->second, 0);
+    }
+    // U2.3: refused for the headroom, the rest wait, queued, until allocations are free
+    if (!m_refusedForHeadroom)
+    {
+      error = fmt::format(
+        "Cannot create a geometry arena for {} bytes", std::max(vertexBytes, indexBytes));
+    }
+    return std::nullopt;
+  }
+  auto placement = ChunkPlacement{};
+  placement.vertexArena = vertices->first;
+  placement.vertices = vertices->second;
+  placement.indexArena = indexes->first;
+  placement.indexes = indexes->second;
+  return placement;
+}
+
+Result<std::uint64_t> GeometryArenas::upload(
+  nvrhi::ICommandList* commandList,
+  const std::map<ChunkKey, Chunk>& chunks,
+  const std::uint64_t budget)
+{
   auto written = std::uint64_t{0};
   if (budget == 0)
   {
     return written;
   }
+  // D43, D78: written through the list's upload chunks on the graphics queue; the index
+  // range is padded to whole words
+  const auto write = [&](
+                       const ChunkPlacement& placement,
+                       const std::vector<EngineDrawVert>& verts,
+                       const std::vector<std::uint16_t>& indexes,
+                       const std::uint64_t vertexBytes,
+                       const std::uint64_t indexBytes) {
+    if (!commandList)
+    {
+      return;
+    }
+    commandList->writeBuffer(
+      m_vertexArenas[placement.vertexArena].buffer,
+      verts.data(),
+      vertexBytes,
+      placement.vertices.offset);
+    m_indexScratch.assign(indexes.begin(), indexes.end());
+    m_indexScratch.resize(std::size_t(indexBytes / 2), 0);
+    commandList->writeBuffer(
+      m_indexArenas[placement.indexArena].buffer,
+      m_indexScratch.data(),
+      indexBytes,
+      placement.indexes.offset);
+  };
+  const auto indexBytesOf = [](const std::size_t count) {
+    return (std::uint64_t(count) * 2 + IndexAlignment - 1) / IndexAlignment
+           * IndexAlignment;
+  };
+
   for (auto it = m_queued.begin(); it != m_queued.end();)
   {
     const auto found = chunks.find(*it);
@@ -131,63 +255,70 @@ Result<std::uint64_t> GeometryArenas::recordUploads(
     }
     const auto& chunk = found->second;
     const auto vertexBytes = std::uint64_t(chunk.verts.size() * sizeof(EngineDrawVert));
-    const auto indexBytes = (std::uint64_t(chunk.indexes.size()) * 2 + IndexAlignment - 1)
-                            / IndexAlignment * IndexAlignment;
+    const auto indexBytes = indexBytesOf(chunk.indexes.size());
     // §3.10: the cap; a first chunk larger than it still goes
     if (written > 0 && written + vertexBytes + indexBytes > budget)
     {
       break;
     }
-
-    m_refusedForHeadroom = false;
-    const auto vertices = allocate(m_vertexArenas, vertexBytes, true);
-    const auto indexes = vertices ? allocate(m_indexArenas, indexBytes, false)
-                                  : std::optional<std::pair<std::size_t, ArenaRange>>{};
-    if (!vertices || !indexes)
+    auto error = std::string{};
+    auto placement = place(vertexBytes, indexBytes, error);
+    if (!placement)
     {
-      if (vertices)
+      if (!error.empty())
       {
-        m_vertexArenas[vertices->first].ranges.free(vertices->second, 0);
+        return Error{std::move(error)};
       }
-      if (m_refusedForHeadroom)
-      {
-        // U2.3: the rest wait, queued, until allocations are free again
-        break;
-      }
-      return Error{fmt::format(
-        "Cannot create a geometry arena for {} bytes",
-        std::max(vertexBytes, indexBytes))};
+      break;
     }
-
-    // D43, D78: written through the list's upload chunks on the graphics queue; the
-    // index range is padded to whole words
-    commandList.writeBuffer(
-      m_vertexArenas[vertices->first].buffer,
-      chunk.verts.data(),
-      vertexBytes,
-      vertices->second.offset);
-    m_indexScratch.assign(chunk.indexes.begin(), chunk.indexes.end());
-    m_indexScratch.resize(std::size_t(indexBytes / 2), 0);
-    commandList.writeBuffer(
-      m_indexArenas[indexes->first].buffer,
-      m_indexScratch.data(),
-      indexBytes,
-      indexes->second.offset);
-
-    auto placement = ChunkPlacement{};
-    placement.vertexArena = vertices->first;
-    placement.vertices = vertices->second;
-    placement.indexArena = indexes->first;
-    placement.indexes = indexes->second;
-    placement.vertexCount = std::uint32_t(chunk.verts.size());
-    placement.indexCount = std::uint32_t(chunk.indexes.size());
-    placement.casterVersion = chunk.casterVersion;
-    placement.appearanceVersion = chunk.appearanceVersion;
-    m_placed.insert_or_assign(*it, placement);
+    write(*placement, chunk.verts, chunk.indexes, vertexBytes, indexBytes);
+    placement->vertexCount = std::uint32_t(chunk.verts.size());
+    placement->indexCount = std::uint32_t(chunk.indexes.size());
+    placement->casterVersion = chunk.casterVersion;
+    placement->appearanceVersion = chunk.appearanceVersion;
+    m_placed.insert_or_assign(*it, *placement);
 
     written += vertexBytes + indexBytes;
     ++m_uploadedChunks;
     it = m_queued.erase(it);
+  }
+
+  // LP7.2 (D129): the shared model surfaces after the chunks, in key order, in the same
+  // budget; each written once for every instance that names it
+  for (auto it = m_sharedQueued.begin(); it != m_sharedQueued.end() && m_queued.empty();)
+  {
+    const auto found = m_shared.find(*it);
+    if (found == m_shared.end() || !found->second.geometry)
+    {
+      it = m_sharedQueued.erase(it);
+      continue;
+    }
+    const auto& surface = found->second.geometry->surface();
+    const auto vertexBytes = std::uint64_t(surface.verts.size() * sizeof(EngineDrawVert));
+    const auto indexBytes = indexBytesOf(surface.indexes.size());
+    if (written > 0 && written + vertexBytes + indexBytes > budget)
+    {
+      break;
+    }
+    auto error = std::string{};
+    auto placement = place(vertexBytes, indexBytes, error);
+    if (!placement)
+    {
+      if (!error.empty())
+      {
+        return Error{std::move(error)};
+      }
+      break;
+    }
+    write(*placement, surface.verts, surface.indexes, vertexBytes, indexBytes);
+    placement->vertexCount = std::uint32_t(surface.verts.size());
+    placement->indexCount = std::uint32_t(surface.indexes.size());
+    placement->shared = true;
+    found->second.placement = *placement;
+
+    written += vertexBytes + indexBytes;
+    ++m_uploadedShared;
+    it = m_sharedQueued.erase(it);
   }
   m_uploadedBytes += written;
   return written;
@@ -195,7 +326,7 @@ Result<std::uint64_t> GeometryArenas::recordUploads(
 
 bool GeometryArenas::pending() const
 {
-  return !m_queued.empty();
+  return !m_queued.empty() || !m_sharedQueued.empty();
 }
 
 std::size_t GeometryArenas::queuedChunks() const
@@ -210,8 +341,40 @@ std::size_t GeometryArenas::placedChunks() const
 
 std::optional<ChunkPlacement> GeometryArenas::placement(const ChunkKey& key) const
 {
-  const auto it = m_placed.find(key);
-  return it != m_placed.end() ? std::optional{it->second} : std::nullopt;
+  if (const auto it = m_placed.find(key); it != m_placed.end())
+  {
+    return it->second;
+  }
+  // LP7.2 (D129): an instance's shared surface
+  const auto instance = m_instanceKeys.find(key);
+  if (instance == m_instanceKeys.end())
+  {
+    return std::nullopt;
+  }
+  const auto shared = m_shared.find(instance->second);
+  return shared != m_shared.end() ? shared->second.placement : std::nullopt;
+}
+
+std::size_t GeometryArenas::queuedShared() const
+{
+  return m_sharedQueued.size();
+}
+
+std::size_t GeometryArenas::placedShared() const
+{
+  return std::size_t(std::ranges::count_if(
+    m_shared, [](const auto& entry) { return entry.second.placement.has_value(); }));
+}
+
+std::size_t GeometryArenas::sharedInstances(const SharedGeometryKey& key) const
+{
+  const auto it = m_shared.find(key);
+  return it != m_shared.end() ? it->second.instances : 0;
+}
+
+std::uint64_t GeometryArenas::uploadedShared() const
+{
+  return m_uploadedShared;
 }
 
 nvrhi::IBuffer* GeometryArenas::vertexBuffer(const std::size_t arena) const
@@ -287,6 +450,9 @@ void GeometryArenas::releaseAll()
 {
   m_placed.clear();
   m_queued.clear();
+  m_shared.clear();
+  m_sharedQueued.clear();
+  m_instanceKeys.clear();
   m_vertexArenas.clear();
   m_indexArenas.clear();
   m_indexScratch = {};
@@ -315,7 +481,7 @@ std::optional<std::pair<std::size_t, ArenaRange>> GeometryArenas::allocate(
       return std::pair{i, *range};
     }
   }
-  if (!m_device)
+  if (!m_device && !m_cpuArenasForTesting)
   {
     return std::nullopt;
   }
@@ -330,8 +496,9 @@ std::optional<std::pair<std::size_t, ArenaRange>> GeometryArenas::allocate(
   const auto alignment = vertices ? VertexAlignment : IndexAlignment;
   const auto size =
     std::max(m_arenaBytes, (bytes + alignment - 1) / alignment * alignment);
-  auto buffer = m_device->createBuffer(arenaDesc(size, vertices));
-  if (!buffer)
+  auto buffer =
+    m_device ? m_device->createBuffer(arenaDesc(size, vertices)) : nvrhi::BufferHandle{};
+  if (!buffer && !m_cpuArenasForTesting)
   {
     return std::nullopt;
   }

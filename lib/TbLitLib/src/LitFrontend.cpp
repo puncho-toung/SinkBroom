@@ -483,6 +483,21 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       {
         return std::nullopt;
       }
+      // LP7.2 (C52): an instance's model surface is its own (tri->bounds, deforms grown
+      // by FinishSurfaces), tr_frontend_addmodels.cpp:812-853
+      if (surface.instance)
+      {
+        if (state->areas.empty())
+        {
+          return std::nullopt;
+        }
+        return surfaceGridArea(
+          *inputs.tree,
+          modelRenderMatrix,
+          surface.instance->header.bounds,
+          state->areas,
+          inputs.gridValid);
+      }
       // LP7.2 (C53): the model surface of the faces' own material
       const auto it = state->materialBounds.find(chunkSourceMaterial(*surface.chunk));
       if (it == state->materialBounds.end() || state->areas.empty())
@@ -497,116 +512,135 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   };
 
   // R_AddModels: the surfaces directly visible, each with its material and registers;
-  // with a tree, those of the entities the flow saw (C33) and of the outside set (D81)
+  // with a tree, those of the entities the flow saw (C33) and of the outside set (D81).
+  // LP7.2 (C52, D129): the model instances after the chunks, each through its header
+  // (LitSurface::chunk) beside the instance; an instance's indexes are its shared
+  // surface's
   auto visible = std::vector<LitSurface>{};
   // per visible surface, what the pairing reads of it (C33)
   auto areaSurfaces = std::vector<AreaSurface>{};
-  for (const auto& [key, chunk] : *inputs.chunks)
-  {
-    if (chunk.indexes.empty())
-    {
-      continue;
-    }
-    auto areaSurface = AreaSurface{};
-    if (flow.flowed)
-    {
-      const auto* state = stateOf(key.entity);
-      if (!state)
+  const auto consider =
+    [&](const ChunkKey& key, const Chunk& chunk, const ModelInstance* instance) {
+      auto areaSurface = AreaSurface{};
+      if (flow.flowed)
       {
-        // a worldspawn chunk belongs to the world entity of its area, referenced in that
-        // area alone (RenderWorld_load.cpp:1029-1095), directly visible when its rect is
-        // not empty (tr_frontend_addmodels.cpp:340; P4.29); a piece in solid is the
-        // outside set (D47, K14, D81)
-        if (key.area >= 0 && std::size_t(key.area) < numAreas)
+        const auto* state = stateOf(key.entity);
+        if (!state)
         {
-          areaSurface.kind = AreaSurfaceKind::WorldArea;
-          areaSurface.area = key.area;
-          areaSurface.directlyVisible =
-            flow.worldRects[std::size_t(key.area)].has_value();
-          if (!areaSurface.directlyVisible)
+          // a worldspawn chunk belongs to the world entity of its area, referenced in
+          // that area alone (RenderWorld_load.cpp:1029-1095), directly visible when its
+          // rect is not empty (tr_frontend_addmodels.cpp:340; P4.29); a piece in solid is
+          // the outside set (D47, K14, D81)
+          if (key.area >= 0 && std::size_t(key.area) < numAreas)
           {
-            continue;
+            areaSurface.kind = AreaSurfaceKind::WorldArea;
+            areaSurface.area = key.area;
+            areaSurface.directlyVisible =
+              flow.worldRects[std::size_t(key.area)].has_value();
+            if (!areaSurface.directlyVisible)
+            {
+              return;
+            }
+          }
+          else
+          {
+            areaSurface.kind = AreaSurfaceKind::WorldOutside;
+            areaSurface.directlyVisible = true;
           }
         }
         else
         {
-          areaSurface.kind = AreaSurfaceKind::WorldOutside;
-          areaSurface.directlyVisible = true;
+          // a brush entity: its references (C31), seen when the flow gave it a rect; one
+          // without references is the outside set (D81)
+          areaSurface.kind = AreaSurfaceKind::Entity;
+          areaSurface.refs = state->areas;
+          areaSurface.directlyVisible =
+            state->areas.empty() || flow.entityRects.contains(key.entity);
+          if (!areaSurface.directlyVisible)
+          {
+            if (state->visible)
+            {
+              ++lists.entitiesCulled;
+            }
+            return;
+          }
         }
+      }
+      const auto index = space(key.entity);
+      if (!index)
+      {
+        return;
+      }
+      auto surface = LitSurface{};
+      surface.chunk = &chunk;
+      surface.instance = instance;
+      surface.space = *index;
+      // LP5.2a (P6.14): the surface's scissorRect, its view entity's
+      surface.scissor = viewRect;
+      if (flow.flowed && areaSurface.kind == AreaSurfaceKind::WorldArea)
+      {
+        surface.scissor = *flow.worldRects[std::size_t(areaSurface.area)];
+      }
+      else if (flow.flowed && areaSurface.kind == AreaSurfaceKind::Entity)
+      {
+        if (const auto rect = flow.entityRects.find(key.entity);
+            rect != flow.entityRects.end())
+        {
+          surface.scissor = rect->second;
+        }
+      }
+      const auto answer =
+        inputs.material ? inputs.material(key.material) : MaterialAnswer{nullptr, true};
+      if (!answer.entry && !answer.pending)
+      {
+        // the parse failed: the engine would not have gone on
+        return;
+      }
+      surface.material = answer.entry;
+      if (surface.material && inputs.registers)
+      {
+        const auto registers = inputs.registers(
+          key.entity, *surface.material, lists.spaces[*index].shaderParms);
+        surface.registers = registers.registers;
+        surface.provisional = !registers.registers || !registers.current;
       }
       else
       {
-        // a brush entity: its references (C31), seen when the flow gave it a rect; one
-        // without references is the outside set (D81)
-        areaSurface.kind = AreaSurfaceKind::Entity;
-        areaSurface.refs = state->areas;
-        areaSurface.directlyVisible =
-          state->areas.empty() || flow.entityRects.contains(key.entity);
-        if (!areaSurface.directlyVisible)
-        {
-          if (state->visible)
-          {
-            ++lists.entitiesCulled;
-          }
-          continue;
-        }
+        surface.provisional = true;
       }
-    }
-    const auto index = space(key.entity);
-    if (!index)
-    {
-      continue;
-    }
-    auto surface = LitSurface{};
-    surface.chunk = &chunk;
-    surface.space = *index;
-    // LP5.2a (P6.14): the surface's scissorRect, its view entity's
-    surface.scissor = viewRect;
-    if (flow.flowed && areaSurface.kind == AreaSurfaceKind::WorldArea)
-    {
-      surface.scissor = *flow.worldRects[std::size_t(areaSurface.area)];
-    }
-    else if (flow.flowed && areaSurface.kind == AreaSurfaceKind::Entity)
-    {
-      if (const auto rect = flow.entityRects.find(key.entity);
-          rect != flow.entityRects.end())
+      if (surface.provisional)
       {
-        surface.scissor = rect->second;
+        lists.pending = true;
+      }
+
+      // view frustum culling for the precise surface bounds
+      // (tr_frontend_addmodels.cpp:649)
+      if (engineCullBoundsToMvp(lists.spaces[*index].mvp, chunk.bounds, false))
+      {
+        return;
+      }
+      // LP4.3 (C36): R_AddSingleModel's grid area of the surface's model surface
+      surface.gridArea = gridAreaOf(key, surface, areaSurface);
+      visible.push_back(surface);
+      areaSurfaces.push_back(areaSurface);
+    };
+  for (const auto& [key, chunk] : *inputs.chunks)
+  {
+    if (!chunk.indexes.empty())
+    {
+      consider(key, chunk, nullptr);
+    }
+  }
+  if (inputs.instances)
+  {
+    for (const auto& [key, instance] : *inputs.instances)
+    {
+      // a chunk without indexes is skipped: an instance's are its shared surface's
+      if (instance.geometry && instance.geometry->indexCount() > 0)
+      {
+        consider(key, instance.header, &instance);
       }
     }
-    const auto answer =
-      inputs.material ? inputs.material(key.material) : MaterialAnswer{nullptr, true};
-    if (!answer.entry && !answer.pending)
-    {
-      // the parse failed: the engine would not have gone on
-      continue;
-    }
-    surface.material = answer.entry;
-    if (surface.material && inputs.registers)
-    {
-      const auto registers =
-        inputs.registers(key.entity, *surface.material, lists.spaces[*index].shaderParms);
-      surface.registers = registers.registers;
-      surface.provisional = !registers.registers || !registers.current;
-    }
-    else
-    {
-      surface.provisional = true;
-    }
-    if (surface.provisional)
-    {
-      lists.pending = true;
-    }
-
-    // view frustum culling for the precise surface bounds (tr_frontend_addmodels.cpp:649)
-    if (engineCullBoundsToMvp(lists.spaces[*index].mvp, chunk.bounds, false))
-    {
-      continue;
-    }
-    // LP4.3 (C36): R_AddSingleModel's grid area of the surface's model surface
-    surface.gridArea = gridAreaOf(key, surface, areaSurface);
-    visible.push_back(surface);
-    areaSurfaces.push_back(areaSurface);
   }
 
   // the prepass list: the drawn surfaces, the leading SS_SUBVIEW ones first
@@ -834,6 +868,15 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
 
   engineSortViewLights(lists.lights);
   return lists;
+}
+
+std::size_t surfaceIndexCount(const LitSurface& surface)
+{
+  if (surface.instance)
+  {
+    return surface.instance->geometry ? surface.instance->geometry->indexCount() : 0;
+  }
+  return surface.chunk ? surface.chunk->indexes.size() : 0;
 }
 
 ListsTableKey ListsTableKey::of(const MaterialTable* table)

@@ -1651,6 +1651,11 @@ const std::unordered_map<PreviewId, ChunkEntityState>& SceneGeometry::entityStat
   return m_entityStates;
 }
 
+const std::map<ChunkKey, ModelInstance>& SceneGeometry::instances() const
+{
+  return m_instances;
+}
+
 std::size_t SceneGeometry::solidPieces() const
 {
   auto total = std::size_t{0};

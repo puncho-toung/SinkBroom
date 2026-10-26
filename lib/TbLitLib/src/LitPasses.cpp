@@ -429,6 +429,7 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   key.height = view.height;
   key.chunks = inputs.chunks;
   key.chunksVersion = inputs.chunksVersion;
+  key.instances = inputs.instances;
   key.entities = inputs.entities;
   key.lights = inputs.lights.get();
   key.lightsVersion = inputs.lights ? inputs.lights->version : 0;
@@ -489,6 +490,7 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   auto frontend = FrontendInputs{};
   frontend.view = view;
   frontend.chunks = inputs.chunks;
+  frontend.instances = inputs.instances;
   frontend.entities = inputs.entities;
   frontend.lights = inputs.lights.get();
   frontend.tree = inputs.procTree.get();
@@ -533,12 +535,19 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   {
     frontend.lightTriangles =
       [&](const LightRecord& record, const LitSurface& surface, const LitSpace& space) {
-        return m_lightTriangles.triangles(
-          record.id,
-          record.version,
-          record.derived.projection.baseLightProject,
-          *surface.chunk,
-          space.modelMatrix);
+        // LP7.2 (D129, A27): an instance's from its shared surface
+        return surface.instance ? m_lightTriangles.triangles(
+                                    record.id,
+                                    record.version,
+                                    record.derived.projection.baseLightProject,
+                                    *surface.instance,
+                                    space.modelMatrix)
+                                : m_lightTriangles.triangles(
+                                    record.id,
+                                    record.version,
+                                    record.derived.projection.baseLightProject,
+                                    *surface.chunk,
+                                    space.modelMatrix);
       };
   }
   m_registers.beginBuild();
@@ -1686,8 +1695,9 @@ void LitPasses::recordStages(Frame& frame)
     {
       continue;
     }
-    // some deforms may disable themselves by setting numIndexes = 0
-    if (surface.chunk->indexes.empty())
+    // some deforms may disable themselves by setting numIndexes = 0 (LP7.2: an
+    // instance's are its shared surface's)
+    if (surfaceIndexCount(surface) == 0)
     {
       continue;
     }

@@ -23,6 +23,7 @@
 #include "base/Macros.h"
 #include "base/Result.h"
 #include "lit/ChunkBuilder.h"
+#include "lit/ModelInstance.h"
 
 #include <nvrhi/nvrhi.h>
 
@@ -32,6 +33,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -51,6 +53,8 @@ struct ChunkPlacement
   std::uint32_t indexCount = 0;
   std::uint64_t casterVersion = 0;
   std::uint64_t appearanceVersion = 0;
+  // LP7.2 (D129): a shared model surface's ranges, answered for an instance's key
+  bool shared = false;
 };
 
 /**
@@ -63,11 +67,20 @@ struct ChunkPlacement
  * sync compares the scene's chunks with what is placed: a chunk whose key went, or whose
  * caster or appearance version changed, frees its ranges, stamped with the frame, and
  * they are handed out again only once that frame has finished (reclaim); a new or changed
- * chunk is queued. recordUploads writes queued chunks into their ranges through the
- * frame's command list (writeBuffer into the arena at the range's offset, NVRHI's
- * staging, on the graphics queue, D43), before the frame's first pass (D78), within the
- * frame's byte budget: what does not fit waits for the next frame, and the frame is
- * unconverged (D77).
+ * chunk is queued.
+ *
+ * LP7.2 (C52, D129, P7.7): a second placement map holds the shared model surfaces, by
+ * (record, surface, record version), each one vertex and one index range with the count
+ * of the scene's instances that name it (syncInstances): a key no instance names any more
+ * (the last instance gone, or its record's version moved to a new key) frees its ranges
+ * stamped with the frame, as a chunk's (D35, D36); a new key is queued and written once
+ * from its record's EngineDrawVerts and 16-bit indexes, after the queued chunks, within
+ * the same budget. placement( an instance's chunk key ) answers its shared ranges, so a
+ * draw reads an instance as a chunk; the used bytes count each placement once.
+ * recordUploads writes queued chunks into their ranges through the frame's command list
+ * (writeBuffer into the arena at the range's offset, NVRHI's staging, on the graphics
+ * queue, D43), before the frame's first pass (D78), within the frame's byte budget: what
+ * does not fit waits for the next frame, and the frame is unconverged (D77).
  *
  * Threads: the render thread; releaseAll in teardown step 2 on the GUI thread.
  */
@@ -87,6 +100,20 @@ private:
   std::map<ChunkKey, ChunkPlacement> m_placed;
   // the chunks to upload, in key order
   std::set<ChunkKey> m_queued;
+  // LP7.2 (D129): the shared model surfaces, the instances that name each, and the
+  // placement key of every instance's chunk key
+  struct SharedPlacement
+  {
+    std::shared_ptr<const SharedSurface> geometry;
+    std::size_t instances = 0;
+    std::optional<ChunkPlacement> placement;
+  };
+  std::map<SharedGeometryKey, SharedPlacement> m_shared;
+  std::set<SharedGeometryKey> m_sharedQueued;
+  std::map<ChunkKey, SharedGeometryKey> m_instanceKeys;
+  std::uint64_t m_uploadedShared = 0;
+  // tests (placeForTesting): arenas without a device, ranges only
+  bool m_cpuArenasForTesting = false;
   // the frame's uploads so far, and the whole session's
   std::uint64_t m_uploadedBytes = 0;
   std::uint64_t m_uploadedChunks = 0;
@@ -117,6 +144,14 @@ public:
    */
   bool sync(const std::map<ChunkKey, Chunk>& chunks, std::uint64_t frame);
 
+  /**
+   * LP7.2 (C52, D129, P7.7), render thread: counts the instances that name each shared
+   * surface; a key none names any more frees its ranges in frame frame (reclaimed once it
+   * has finished), a new one is queued. Whether anything is queued.
+   */
+  bool syncInstances(
+    const std::map<ChunkKey, ModelInstance>& instances, std::uint64_t frame);
+
   // render thread: the ranges freed in frames that have finished (frames 0 to
   // completedFrames - 1) may be handed out again
   void reclaim(std::uint64_t completedFrames);
@@ -133,11 +168,26 @@ public:
     const std::map<ChunkKey, Chunk>& chunks,
     std::uint64_t budget);
 
+  /**
+   * Tests (CPU): arenas of arenaBytes made without a device (ranges only), and the
+   * placement recordUploads makes, its writes left out; what it places.
+   */
+  void setCpuArenasForTesting(std::uint64_t arenaBytes);
+  Result<std::uint64_t> placeForTesting(
+    const std::map<ChunkKey, Chunk>& chunks, std::uint64_t budget);
+
   // queued chunks wait for a later frame
   bool pending() const;
   std::size_t queuedChunks() const;
   std::size_t placedChunks() const;
+  // a chunk's placement, or (LP7.2) an instance's shared one (ChunkPlacement::shared)
   std::optional<ChunkPlacement> placement(const ChunkKey& key) const;
+  // LP7.2 (D129): the shared surfaces queued and placed, the instances that name a key,
+  // and the shared surfaces written so far
+  std::size_t queuedShared() const;
+  std::size_t placedShared() const;
+  std::size_t sharedInstances(const SharedGeometryKey& key) const;
+  std::uint64_t uploadedShared() const;
 
   // the arena buffers, for the passes' vertex and index buffer bindings
   nvrhi::IBuffer* vertexBuffer(std::size_t arena) const;
@@ -158,6 +208,15 @@ public:
 
 private:
   void freePlacement(const ChunkPlacement& placement, std::uint64_t frame);
+  // recordUploads' work; without a command list (placeForTesting) nothing is written
+  Result<std::uint64_t> upload(
+    nvrhi::ICommandList* commandList,
+    const std::map<ChunkKey, Chunk>& chunks,
+    std::uint64_t budget);
+  // one vertex and one index range for the bytes; nullopt when none was made: refused
+  // for the headroom (error empty: the rest wait), or an arena cannot be made (error)
+  std::optional<ChunkPlacement> place(
+    std::uint64_t vertexBytes, std::uint64_t indexBytes, std::string& error);
   // a range in one of arenas, made larger by a new arena when none holds it; nullopt
   // when the device cannot make the arena
   std::optional<std::pair<std::size_t, ArenaRange>> allocate(

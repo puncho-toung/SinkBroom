@@ -887,6 +887,12 @@ const std::map<ChunkKey, Chunk>& RenderThread::arenaChunks() const
   return m_geometry ? m_geometry->chunks() : m_noChunks;
 }
 
+const std::map<ChunkKey, ModelInstance>& RenderThread::arenaInstances() const
+{
+  // LP7.2 (D129): the scene's instances; a test's chunks replace the scene's whole
+  return m_geometry && !m_arenaTestChunks ? m_geometry->instances() : m_noInstances;
+}
+
 bool RenderThread::syncChunks()
 {
   {
@@ -904,6 +910,8 @@ bool RenderThread::syncChunks()
     m_syncedChunksVersion = m_chunksVersion;
     // D36: freed in the next frame to be recorded, reused once it has finished
     m_arenas.sync(arenaChunks(), m_frameIndex);
+    // LP7.2 (D129, D35): the shared model surfaces, freed so when no instance names them
+    m_arenas.syncInstances(arenaInstances(), m_frameIndex);
   }
   return m_arenas.pending();
 }
@@ -1245,6 +1253,7 @@ bool RenderThread::recordLitPasses(
   inputs.camera = camera;
   inputs.chunks = &arenaChunks();
   inputs.chunksVersion = m_chunksVersion;
+  inputs.instances = &arenaInstances();
   if (m_geometry && !m_arenaTestChunks)
   {
     inputs.entities = &m_geometry->entityStates();

@@ -88,15 +88,14 @@ Result<std::vector<LightTriangleCache::Answer>> LightTriangleCache::answer(
     {
       return Error{"The light triangles' job was abandoned"};
     }
-    const auto& geometry = *request.geometry;
     const auto kept = engineInteractionLightTris(
       request.baseLightProject,
       request.stamp.modelMatrix,
       request.bounds,
-      geometry.positions,
-      geometry.indexes);
+      *request.positions,
+      *request.indexes);
     answers.push_back(
-      Answer{request.key, request.stamp, lightTrianglesOf(geometry.indexes, kept)});
+      Answer{request.key, request.stamp, lightTrianglesOf(*request.indexes, kept)});
   }
   return answers;
 }
@@ -175,7 +174,52 @@ std::shared_ptr<const LightTriangles> LightTriangleCache::triangles(
   request.stamp = stamp;
   request.baseLightProject = baseLightProject;
   request.bounds = chunk.bounds;
-  request.geometry = geometry;
+  request.positions =
+    std::shared_ptr<const std::vector<EngineVec3>>{geometry, &geometry->positions};
+  request.indexes =
+    std::shared_ptr<const std::vector<std::uint16_t>>{geometry, &geometry->indexes};
+  m_requests.push_back(std::move(request));
+  return m_pending;
+}
+
+std::shared_ptr<const LightTriangles> LightTriangleCache::triangles(
+  const PreviewId light,
+  const std::uint64_t lightVersion,
+  const EngineMat4& baseLightProject,
+  const ModelInstance& instance,
+  const EngineGlMatrix& modelMatrix)
+{
+  if (!m_pending)
+  {
+    m_pending = std::make_shared<const LightTriangles>(
+      LightTriangles{LightTriangles::State::Pending, {}, 0});
+  }
+  if (!instance.geometry)
+  {
+    return m_pending;
+  }
+
+  const auto key = Key{light, instance.key()};
+  const auto stamp = Stamp{lightVersion, instance.header.casterVersion, modelMatrix};
+  auto& entry = m_entries[key];
+  entry.used = true;
+  if (entry.stamp == stamp && (entry.triangles || entry.asked))
+  {
+    return entry.triangles ? entry.triangles : m_pending;
+  }
+  entry.stamp = stamp;
+  entry.triangles = nullptr;
+  entry.asked = true;
+  const auto& geometry = instance.geometry;
+  auto request = Request{};
+  request.key = key;
+  request.stamp = stamp;
+  request.baseLightProject = baseLightProject;
+  request.bounds = instance.header.bounds;
+  request.positions =
+    std::shared_ptr<const std::vector<EngineVec3>>{geometry, &geometry->positions};
+  request.indexes = std::shared_ptr<const std::vector<std::uint16_t>>{
+    geometry, &geometry->surface().indexes};
   m_requests.push_back(std::move(request));
   return m_pending;
 }

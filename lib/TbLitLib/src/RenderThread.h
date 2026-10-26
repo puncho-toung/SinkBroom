@@ -488,6 +488,7 @@ private:
   // the render thread's copy of m_testChunks, and the chunks of a thread without a scene
   std::shared_ptr<const std::map<ChunkKey, Chunk>> m_arenaTestChunks;
   std::map<ChunkKey, Chunk> m_noChunks;
+  std::map<ChunkKey, ModelInstance> m_noInstances;
   // the number of the last generation whose replacement was requested; GUI thread reads
   std::atomic<std::uint64_t> m_recreateRequestedFor = 0;
   // the extent of the last generation replaced because it was SUBOPTIMAL
@@ -712,6 +713,8 @@ private:
   // end; under m_mutex
   void arrivalTrigger(FrameClock::time_point now);
   const std::map<ChunkKey, Chunk>& arenaChunks() const;
+  // LP7.2 (D129): the scene's model instances (none while a test's chunks stand)
+  const std::map<ChunkKey, ModelInstance>& arenaInstances() const;
   // D78: the frame's uploads, before its first pass; false: failed
   bool recordUploads(nvrhi::ICommandList& commandList);
   // U2.3: one more device allocation keeps AllocationHeadroom free below the limit

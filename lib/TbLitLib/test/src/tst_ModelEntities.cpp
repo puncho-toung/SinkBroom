@@ -20,12 +20,17 @@
 // LP7.2 (C52, C53, D127-D131, D139, D140): model entities in the scene, skins and
 // shaders, on the CPU
 
+#include "GeometryArenas.h"
+#include "LightTriangles.h"
+#include "LitFrontend.h"
 #include "LitMapFixture.h"
 #include "LitTestUtils.h"
+#include "LitView.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/CpuPool.h"
 #include "lit/EntityState.h"
 #include "lit/MaterialService.h"
+#include "lit/ModelInstance.h"
 #include "lit/SceneGeometry.h"
 
 #include "kd/result.h"
@@ -531,6 +536,248 @@ TEST_CASE("SceneGeometry: a brush entity's skin, pending and then published (LP7
     CHECK_FALSE(drawn().contains("textures/lp1b/crate"));
   }
   pool->stop();
+}
+
+namespace
+{
+
+// a hand record of one quad surface (four vertices, two triangles) at x 0, its version
+// given
+std::shared_ptr<const ModelRecord> quadRecord(
+  const std::string& name, const std::uint64_t version, const std::string& material)
+{
+  auto record = std::make_shared<ModelRecord>();
+  record->name = name;
+  record->state = ModelRecord::State::Ready;
+  record->source = ModelRecord::SourceKind::Source;
+  record->version = version;
+  auto surface = ModelSurface{};
+  surface.material = material;
+  for (const auto& [y, z] : std::vector<std::pair<float, float>>{
+         {-8.0f, -8.0f}, {8.0f, -8.0f}, {8.0f, 8.0f}, {-8.0f, 8.0f}})
+  {
+    auto vert = EngineDrawVert{};
+    vert.xyz = {0, y, z};
+    surface.verts.push_back(vert);
+  }
+  surface.indexes = {0, 1, 2, 0, 2, 3};
+  surface.bounds = {EngineVec3{0, -8, -8}, EngineVec3{0, 8, 8}};
+  record->surfaces.push_back(std::move(surface));
+  record->bounds = record->surfaces.front().bounds;
+  return record;
+}
+
+// an instance of a shared surface for an entity, keyed as the scene keys it
+ModelInstance testInstance(
+  const PreviewId entity,
+  std::shared_ptr<const SharedSurface> surface,
+  const std::string& drawMaterial)
+{
+  auto instance = ModelInstance{};
+  instance.entity = entity;
+  instance.surface = surface->key.surface;
+  instance.header.key =
+    ChunkKey{0, entity, drawMaterial, {0, 0, 0}, int(surface->key.surface)};
+  instance.header.bounds = surface->surface().bounds;
+  instance.header.sourceMaterial = surface->surface().material;
+  instance.header.casterVersion = surface->key.version;
+  instance.geometry = std::move(surface);
+  return instance;
+}
+
+} // namespace
+
+TEST_CASE("GeometryArenas: model instances share their placements (LP7.2, D129)")
+{
+  auto arenas = GeometryArenas{};
+  arenas.setCpuArenasForTesting(1024 * 1024);
+  const auto noChunks = std::map<ChunkKey, Chunk>{};
+  const auto record = quadRecord("models/test/quad.obj", 1, "textures/lp1b/floor");
+  const auto shared = makeSharedSurface(record, 0);
+  REQUIRE(shared);
+  CHECK(shared->key == SharedGeometryKey{"models/test/quad.obj", 0, 1});
+  CHECK(shared->positions.size() == 4);
+  CHECK_FALSE(makeSharedSurface(record, 1));
+  // four 32-byte vertices and six 16-bit indexes in whole words: once per placement
+  const auto placementBytes = std::uint64_t{4 * 32 + 12};
+
+  auto instances = std::map<ChunkKey, ModelInstance>{};
+  const auto a = testInstance(10, shared, "textures/lp1b/floor");
+  const auto b = testInstance(11, shared, "textures/lp1b/wall");
+  instances.emplace(a.key(), a);
+  instances.emplace(b.key(), b);
+
+  SECTION("two instances, one placement, its bytes once; 2, 1, 0 and the frame stamp")
+  {
+    CHECK(arenas.syncInstances(instances, 1));
+    CHECK(arenas.queuedShared() == 1);
+    CHECK(arenas.sharedInstances(shared->key) == 2);
+    REQUIRE(arenas.placeForTesting(noChunks, 1 << 20).is_success());
+    CHECK_FALSE(arenas.pending());
+    CHECK(arenas.placedShared() == 1);
+    CHECK(arenas.uploadedShared() == 1);
+    CHECK(arenas.usedBytes() == placementBytes);
+    const auto pa = arenas.placement(a.key());
+    const auto pb = arenas.placement(b.key());
+    REQUIRE(pa);
+    REQUIRE(pb);
+    CHECK(pa->shared);
+    CHECK(pa->vertices.offset == pb->vertices.offset);
+    CHECK(pa->indexes.offset == pb->indexes.offset);
+    CHECK(pa->indexCount == 6);
+    CHECK(pa->vertexCount == 4);
+
+    // one instance goes: the placement stays, counted once
+    instances.erase(b.key());
+    CHECK_FALSE(arenas.syncInstances(instances, 2));
+    CHECK(arenas.sharedInstances(shared->key) == 1);
+    CHECK(arenas.usedBytes() == placementBytes);
+    CHECK_FALSE(arenas.placement(b.key()));
+
+    // the last goes: freed in frame 3, handed out again once frame 3 has finished
+    instances.clear();
+    arenas.syncInstances(instances, 3);
+    CHECK(arenas.placedShared() == 0);
+    CHECK(arenas.sharedInstances(shared->key) == 0);
+    CHECK(arenas.usedBytes() == 0);
+    CHECK(arenas.pendingFreeBytes() == placementBytes);
+    arenas.reclaim(3);
+    CHECK(arenas.pendingFreeBytes() == placementBytes);
+    arenas.reclaim(4);
+    CHECK(arenas.pendingFreeBytes() == 0);
+  }
+
+  SECTION("a record's new version is a new placement; the old one retires by its frame")
+  {
+    arenas.syncInstances(instances, 1);
+    REQUIRE(arenas.placeForTesting(noChunks, 1 << 20).is_success());
+    const auto old = arenas.placement(a.key());
+    REQUIRE(old);
+
+    const auto newer =
+      makeSharedSurface(quadRecord("models/test/quad.obj", 2, "textures/lp1b/floor"), 0);
+    instances.clear();
+    instances.emplace(a.key(), testInstance(10, newer, "textures/lp1b/floor"));
+    instances.emplace(b.key(), testInstance(11, newer, "textures/lp1b/wall"));
+    CHECK(arenas.syncInstances(instances, 5));
+    CHECK(arenas.sharedInstances(shared->key) == 0);
+    CHECK(arenas.sharedInstances(newer->key) == 2);
+    // the old ranges wait for frame 5: the new placement takes others
+    CHECK(arenas.pendingFreeBytes() == placementBytes);
+    REQUIRE(arenas.placeForTesting(noChunks, 1 << 20).is_success());
+    const auto fresh = arenas.placement(a.key());
+    REQUIRE(fresh);
+    CHECK(fresh->vertices.offset != old->vertices.offset);
+    CHECK(arenas.usedBytes() == placementBytes);
+    arenas.reclaim(6);
+    CHECK(arenas.pendingFreeBytes() == 0);
+  }
+
+  SECTION("an instance without indexes places nothing")
+  {
+    auto empty = std::make_shared<ModelRecord>(*record);
+    empty->surfaces.front().indexes.clear();
+    instances.clear();
+    const auto none =
+      testInstance(12, makeSharedSurface(empty, 0), "textures/lp1b/floor");
+    instances.emplace(none.key(), none);
+    CHECK_FALSE(arenas.syncInstances(instances, 1));
+    CHECK_FALSE(arenas.placement(none.key()));
+  }
+}
+
+TEST_CASE("Frontend: model instances in the lists, with their shared indexes (LP7.2)")
+{
+  const auto& table = *skinTestTable();
+  const auto record = quadRecord("models/test/quad.obj", 1, "textures/lp1b/floor");
+  const auto shared = makeSharedSurface(record, 0);
+  auto instances = std::map<ChunkKey, ModelInstance>{};
+  const auto a = testInstance(10, shared, "textures/lp1b/floor");
+  const auto b = testInstance(11, shared, "textures/lp1b/wall");
+  instances.emplace(a.key(), a);
+  instances.emplace(b.key(), b);
+  // an instance of a surface without indexes is skipped, as a chunk without them
+  auto empty = std::make_shared<ModelRecord>(*record);
+  empty->name = "models/test/empty.obj";
+  empty->surfaces.front().indexes.clear();
+  const auto none = testInstance(12, makeSharedSurface(empty, 0), "textures/lp1b/floor");
+  instances.emplace(none.key(), none);
+
+  auto entities = std::unordered_map<PreviewId, ChunkEntityState>{};
+  for (const auto& [id, x] :
+       std::vector<std::pair<PreviewId, float>>{{10, 100.0f}, {11, 100.0f}, {12, 100.0f}})
+  {
+    auto state = ChunkEntityState{};
+    state.id = id;
+    state.modelOrigin = {x, 0, 0};
+    state.parms.origin = state.modelOrigin;
+    state.parms.shaderParms[3] = 1;
+    entities.emplace(id, state);
+  }
+  const auto chunks = std::map<ChunkKey, Chunk>{};
+  auto camera = CameraState{};
+  camera.viewportWidth = 160;
+  camera.viewportHeight = 120;
+  auto inputs = FrontendInputs{};
+  inputs.view = litViewOf(camera, 160, 120);
+  inputs.chunks = &chunks;
+  inputs.instances = &instances;
+  inputs.entities = &entities;
+  inputs.material = [&](const std::string& name) {
+    const auto slot = table.find(name);
+    return MaterialAnswer{slot ? slot->entry : nullptr, !slot};
+  };
+  const auto lists = buildFrontendLists(inputs);
+  REQUIRE(lists.drawSurfs.size() == 2);
+  for (const auto& surface : lists.drawSurfs)
+  {
+    REQUIRE(surface.instance);
+    CHECK(surface.chunk == &surface.instance->header);
+    CHECK(surfaceIndexCount(surface) == 6);
+    CHECK(surface.instance->geometry == shared);
+  }
+  CHECK(lists.drawSurfs[0].instance->entity == 10);
+  CHECK(lists.drawSurfs[1].instance->entity == 11);
+  CHECK(lists.drawSurfs[1].chunk->key.material == "textures/lp1b/wall");
+  // each entity its space, at its pivot
+  CHECK(lists.drawSurfs[0].space != lists.drawSurfs[1].space);
+}
+
+TEST_CASE("LightTriangleCache: an instance's triangles from its shared surface (LP7.2)")
+{
+  const auto shared =
+    makeSharedSurface(quadRecord("models/test/quad.obj", 1, "textures/lp1b/floor"), 0);
+  const auto a = testInstance(10, shared, "textures/lp1b/floor");
+  auto cache = LightTriangleCache{};
+  // a light whose volume holds the quad (an identity projection of the unit cube)
+  auto project = EngineMat4{};
+  for (auto i = 0; i < 4; ++i)
+  {
+    project[std::size_t(i * 4 + i)] = 1.0f / 64.0f;
+  }
+  project[3] = 0.5f;
+  project[7] = 0.5f;
+  project[11] = 0.5f;
+  project[15] = 1.0f;
+  const auto identity = EngineGlMatrix{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  cache.beginBuild();
+  const auto first = cache.triangles(1, 1, project, a, identity);
+  REQUIRE(first);
+  CHECK(first->state == LightTriangles::State::Pending);
+  cache.endBuild(nullptr);
+  cache.beginBuild();
+  const auto answered = cache.triangles(1, 1, project, a, identity);
+  REQUIRE(answered);
+  CHECK(answered->state != LightTriangles::State::Pending);
+  cache.endBuild(nullptr);
+  // the stamp is the instance's caster version: a new record version asks again
+  auto moved = a;
+  moved.header.casterVersion = 2;
+  cache.beginBuild();
+  CHECK(
+    cache.triangles(1, 1, project, moved, identity)->state
+    == LightTriangles::State::Pending);
+  cache.endBuild(nullptr);
 }
 
 } // namespace tb::lit
