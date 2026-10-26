@@ -68,3 +68,17 @@ textures/lp7/n10_flat
 	qer_editorimage	textures/lp7/model.tga
 	diffusemap	textures/lp7/model.tga
 }
+
+// LP7.2 fix round (N08, N11): the game's _default, transcribed verbatim below from the
+// game's materials/shaderdemo.mtr (lines 101-106, the comment included; the registry's
+// source of the decl), read only. R_InitMaterials (RenderSystem_init.cpp:1779-1783)
+// requires it and MakeDefaultModel's cube draws it (Model.cpp:273-277); the parity root
+// holds no game material file, so without this copy the preview's cube took the implicit
+// definition. The engine keeps the first definition it reads and warns on the other: both
+// are this text. Its one image is the intrinsic _default (nothing to stage)
+// required for renderer startup
+_default {
+	{
+		map	_default
+	}
+}
