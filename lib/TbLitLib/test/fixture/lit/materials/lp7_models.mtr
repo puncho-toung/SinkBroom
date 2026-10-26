@@ -76,6 +76,30 @@ textures/lp7/n10_flat
 // holds no game material file, so without this copy the preview's cube took the implicit
 // definition. The engine keeps the first definition it reads and warns on the other: both
 // are this text. Its one image is the intrinsic _default (nothing to stage)
+// LP7.3 J01, J02, J04, J05 (C54, C56): the dress decals' material. DECAL_MACRO
+// (Material.cpp:2926-2941: polygonOffset 1, discrete, sort decal, noShadows) and one blend
+// blend stage of a black image whose alpha is the decal, modulated by the vertex colour
+// (vertexColor): the alpha dmap's fade writes (dress_decal.cpp:461-474) shows, and the
+// lights-off control stays black. J01's hand-placed face has it too
+textures/lp7/decal
+{
+	qer_editorimage	textures/lp7/decal.tga
+	DECAL_MACRO
+	{
+		blend	blend
+		map	textures/lp7/decal.tga
+		vertexColor
+	}
+}
+
+// LP7.3 J03 (P7.23): the lit twin, opaque: DECAL_MACRO and a diffusemap stage
+textures/lp7/decal_lit
+{
+	qer_editorimage	textures/lp7/model.tga
+	DECAL_MACRO
+	diffusemap	textures/lp7/model.tga
+}
+
 // required for renderer startup
 _default {
 	{
