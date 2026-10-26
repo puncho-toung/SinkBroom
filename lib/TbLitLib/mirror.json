@@ -5259,6 +5259,10 @@
         {
           "file": "TOOLS/lit-preview/check_static_init.py",
           "symbol": "the check (outside the repository)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "the copied glTF ranges (LP7.5)"
         }
       ],
       "staticKind": "dynamic initialisers allowed",
@@ -5275,6 +5279,8 @@
           "Math.obj ?SIMD_SP_smallestNonDenorm@idMath",
           "Matrix.obj mat3_identity",
           "Matrix.obj mat3_zero",
+          "Matrix.obj mat4_identity",
+          "Matrix.obj mat4_zero",
           "Plane.obj plane_origin",
           "Pluecker.obj pluecker_origin",
           "RenderMatrix.obj renderMatrix_clipSpaceToWindowSpace",
@@ -5294,6 +5300,12 @@
           "RenderMatrix.obj vector_int_0123",
           "RenderMatrix.obj vector_int_1",
           "RenderMatrix.obj vector_int_4",
+          "ShimGltf.obj ?dataList@gltfData",
+          "ShimGltf.obj ?fileDataHash@gltfData",
+          "ShimGltf.obj blenderToDoomTransform",
+          "ShimGltf.obj blenderToDoomTransform@tbLitGltfMesh",
+          "ShimGltf.obj s_meshAttributeMap",
+          "ShimGltf.obj s_nativeComponentTypeMap",
           "ShimPipelineState.obj AllSubresources@nvrhi",
           "ShimPipelineState.obj EntireBuffer@nvrhi",
           "Str.obj g_color_table",
@@ -5312,6 +5324,8 @@
           "Dict.obj ?globalKeys@idDict",
           "Dict.obj ?globalValues@idDict",
           "Math.obj ?SIMD_SP_smallestNonDenorm@idMath",
+          "Matrix.obj mat4_identity",
+          "Matrix.obj mat4_zero",
           "RenderMatrix.obj vector_float_abs_mask",
           "RenderMatrix.obj vector_float_keep_last",
           "RenderMatrix.obj vector_float_mask0",
@@ -5324,10 +5338,16 @@
           "RenderMatrix.obj vector_int_0123",
           "RenderMatrix.obj vector_int_1",
           "RenderMatrix.obj vector_int_4",
+          "ShimGltf.obj ?dataList@gltfData",
+          "ShimGltf.obj ?fileDataHash@gltfData",
+          "ShimGltf.obj blenderToDoomTransform",
+          "ShimGltf.obj blenderToDoomTransform@tbLitGltfMesh",
+          "ShimGltf.obj s_meshAttributeMap",
+          "ShimGltf.obj s_nativeComponentTypeMap",
           "Vector.obj vec6_infinity"
         ]
       },
-      "reason": "R1.6, C9, C24 (5): the dynamic initialisers (MSVC ??__E symbols) that TbLitIdLib's objects may hold, per configuration, as \"<object> <global>\"; each initialises a read-only global from literals or from another of them that is zero until initialised (bounds_zero from vec3_zero), allocating, opening and starting nothing, except idDict's two idStrPool globals (M-ID-STATIC-*), which allocate nothing until used. The check lists the objects' ??__E symbols with dumpbin and fails on one not listed here, so a later copy with an idStr or idList global is caught; one listed but gone is reported LP2.0: ShimPipelineState.obj, which compiles the copied GetRenderState against nvrhi/nvrhi.h, holds that header's two namespace-scope constants nvrhi::AllSubresources (TextureSubresourceSet(0, AllMipLevels, 0, AllArraySlices)) and nvrhi::EntireBuffer (BufferRange(0, ~0ull)), which Debug initialises at load from those literals through their non-constexpr constructors and Release constant-initialises; they allocate nothing. ShaderMake's ShaderBlob.obj and SPIRV-Reflect's spirv_reflect.obj hold none (dumpbin, both configurations) LP7.1a (D135): the copied tr_trisurf.cpp's static idMikkTSpaceInterface mikkTSpaceInterface in EngineGeometry.obj, whose constructor stores eight function pointers (M-MODEL-STATIC-01)"
+      "reason": "R1.6, C9, C24 (5): the dynamic initialisers (MSVC ??__E symbols) that TbLitIdLib's objects may hold, per configuration, as \"<object> <global>\"; each initialises a read-only global from literals or from another of them that is zero until initialised (bounds_zero from vec3_zero), allocating, opening and starting nothing, except idDict's two idStrPool globals (M-ID-STATIC-*), which allocate nothing until used. The check lists the objects' ??__E symbols with dumpbin and fails on one not listed here, so a later copy with an idStr or idList global is caught; one listed but gone is reported LP2.0: ShimPipelineState.obj, which compiles the copied GetRenderState against nvrhi/nvrhi.h, holds that header's two namespace-scope constants nvrhi::AllSubresources (TextureSubresourceSet(0, AllMipLevels, 0, AllArraySlices)) and nvrhi::EntireBuffer (BufferRange(0, ~0ull)), which Debug initialises at load from those literals through their non-constexpr constructors and Release constant-initialises; they allocate nothing. ShaderMake's ShaderBlob.obj and SPIRV-Reflect's spirv_reflect.obj hold none (dumpbin, both configurations) LP7.1a (D135): the copied tr_trisurf.cpp's static idMikkTSpaceInterface mikkTSpaceInterface in EngineGeometry.obj, whose constructor stores eight function pointers (M-MODEL-STATIC-01) LP7.5 (S5, the director's decision): the copied glTF parser's s_meshAttributeMap and s_nativeComponentTypeMap (idStr rows of literals in the base buffer, M-MODEL-STATIC-12), gltfData's dataList and fileDataHash (constructors that allocate nothing, M-MODEL-STATIC-13), Model_gltf.cpp's blenderToDoomTransform and MapFile_gltf.cpp's in tbLitGltfMesh (literals and vec3_origin, M-MODEL-STATIC-16, -17), all in ShimGltf.obj; and Matrix.obj's mat4_zero and mat4_identity (idVec4 literals, M-MODEL-STATIC-18), the two the director's six did not name; the same eight in both configurations (Release keeps them dynamic: the idStr and idList constructors, idAngles::ToMat3 and the idVec4 constructors are not constexpr)"
     },
     {
       "id": "M-ID-NC-01",
@@ -23482,9 +23502,13 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
           "symbol": "MaterialDecls::modelMaterial, defaultModelMaterial, capture"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimModels.h",
+          "symbol": "idRenderModelStatic, shim::modelOf, shim::capture"
         }
       ],
-      "note": "LP7.1a (C51 (3), D137; the director's item 1): the copied Model.cpp ranges are idRenderModelStatic's members; Model_local.h (the renderer's whole idRenderModel interface) is not copied, so ShimModels.cpp declares a reduced, non-virtual idRenderModelStatic with the members they read and write, and at its class scope the stand-ins the member functions find before a global (no copied line changes, C7): idMaterial, holding the ten accessor values the parse thread captured from the registry's material through the copied accessors, by name: index (the decl's, for FindMaterial's one pointer per decl), name = GetName(), discrete = IsDiscrete(), renderBump = GetRenderBump(), createBackSides = ShouldCreateBackSides(), mikktspace = UseMikkTSpace(), unsmoothedTangents = UseUnsmoothedTangents(), castsShadow = SurfaceCastsShadow(), drawn = IsDrawn(), receivesLighting = ReceivesLighting(), deform = Deform(); modelSurface_t with that shader; declManager, whose FindMaterial( name ) returns the material the parse thread resolved for the name (the default one, never null, for a name it was not handed: materialMisses counts it); tr, whose defaultMaterial is the decl _default as MakeDefaultModel's DMAP branch finds it (:274), else the implicit material. So the conversion and FinishSurfaces read nothing of the registry: the CPU test runs the finish on a one-worker pool after its registry is destroyed and under another, with the same surfaces"
+      "note": "LP7.1a (C51 (3), D137; the director's item 1): the copied Model.cpp ranges are idRenderModelStatic's members; Model_local.h (the renderer's whole idRenderModel interface) is not copied, so ShimModels.cpp declares a reduced, non-virtual idRenderModelStatic with the members they read and write, and at its class scope the stand-ins the member functions find before a global (no copied line changes, C7): idMaterial, holding the ten accessor values the parse thread captured from the registry's material through the copied accessors, by name: index (the decl's, for FindMaterial's one pointer per decl), name = GetName(), discrete = IsDiscrete(), renderBump = GetRenderBump(), createBackSides = ShouldCreateBackSides(), mikktspace = UseMikkTSpace(), unsmoothedTangents = UseUnsmoothedTangents(), castsShadow = SurfaceCastsShadow(), drawn = IsDrawn(), receivesLighting = ReceivesLighting(), deform = Deform(); modelSurface_t with that shader; declManager, whose FindMaterial( name ) returns the material the parse thread resolved for the name (the default one, never null, for a name it was not handed: materialMisses counts it); tr, whose defaultMaterial is the decl _default as MakeDefaultModel's DMAP branch finds it (:274), else the implicit material. So the conversion and FinishSurfaces read nothing of the registry: the CPU test runs the finish on a one-worker pool after its registry is destroyed and under another, with the same surfaces. LP7.5: the reduced idRenderModelStatic moved verbatim into shim/private/shim/ShimModels.h, which ShimGltf.cpp's idRenderModelGLTF derives from (M-MODEL-16); the capture also takes GetContentFlags and Coverage (M-MODEL-15)"
     },
     {
       "id": "M-MODEL-POOL-01",
@@ -24091,9 +24115,17 @@
         {
           "file": "lib/TbLitLib/src/ModelLoading.cpp",
           "symbol": "readModelSource (LP7.1b)"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readModelSource, readGltfSource (LP7.5)"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "readModel (LP7.5: the identifier's file, an animated .bglb Skinned)"
         }
       ],
-      "note": "LP7.1a (C51 (1), D127, K40, K41, K46, K47): GetModel's order for a canonical name: an empty name no model; the built-ins found by the name hash (_default the engine's default model, the cube; _beam and _sprite the cube, K47); then the extension: obj the binary then the source; ase and lwo (LP7.1b) the binary then the source through their validators and the copied loaders (M-MODEL-GUARD-02, -03), ModelRecord::pendingLoader gone; ma the binary then the cube (K46; as an LWOB source draws the cube where the engine reads it, M-MODEL-DIFF-08); glb and gltf the binary only (K40); md5mesh the Skinned record, nothing drawn (K41, the fifth record state); md3, prt and liquid the cube (K47: the engine's own classes); flt the cube (dispatched to idRenderModelStatic, but InitFromFile has no flt loader, :350-361); an unknown extension or none the cube (:512-523). A .proc model's name is the scene's to tell apart before it asks (LP7.2)"
+      "note": "LP7.1a (C51 (1), D127, K40, K41, K46, K47): GetModel's order for a canonical name: an empty name no model; the built-ins found by the name hash (_default the engine's default model, the cube; _beam and _sprite the cube, K47); then the extension: obj the binary then the source; ase and lwo (LP7.1b) the binary then the source through their validators and the copied loaders (M-MODEL-GUARD-02, -03), ModelRecord::pendingLoader gone; ma the binary then the cube (K46; as an LWOB source draws the cube where the engine reads it, M-MODEL-DIFF-08); glb and gltf (LP7.5, K40 closed) the binary then the source through the validator and the copied parser (M-MODEL-GUARD-05, M-MODEL-17), a name <file>.<id|name>.glb by its file (M-MODEL-14), an animated one Skinned (K41) from its .bglb's model_state or the source's plan, an external-buffer one the cube with its notice (M-MODEL-DIFF-12); md5mesh the Skinned record, nothing drawn (K41, the fifth record state); md3, prt and liquid the cube (K47: the engine's own classes); flt the cube (dispatched to idRenderModelStatic, but InitFromFile has no flt loader, :350-361); an unknown extension or none the cube (:512-523). A .proc model's name is the scene's to tell apart before it asks (LP7.2)"
     },
     {
       "id": "M-MODEL-03",
@@ -24273,9 +24305,13 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
           "symbol": "MaterialDecls::parseAseModel, parseLwoModel"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel"
         }
       ],
-      "note": "LP7.1a (P7.4, P7.13): the copied OBJ_Load's ReadFile is served the bytes and the time the caller hands in (the file source's read and probe, A4) through a model-read scope of the shim's file system: the handed name reads as FileSystem.cpp's ReadFile returns a file (a Mem_Alloc'ed, NUL-terminated buffer of length + 1), any other as missing; never a read of the disk or the checkout's time. LP7.1b: the copied ASE_Load reads through the same scope (ReadFile), the copied lwGetObject through its OpenFileRead (M-MODEL-FS-03)"
+      "note": "LP7.1a (P7.4, P7.13): the copied OBJ_Load's ReadFile is served the bytes and the time the caller hands in (the file source's read and probe, A4) through a model-read scope of the shim's file system: the handed name reads as FileSystem.cpp's ReadFile returns a file (a Mem_Alloc'ed, NUL-terminated buffer of length + 1), any other as missing; never a read of the disk or the checkout's time. LP7.1b: the copied ASE_Load reads through the same scope (ReadFile), the copied lwGetObject through its OpenFileRead (M-MODEL-FS-03). LP7.5: the copied loadGLB reads through the same scope (GetFileLength, OpenFileRead, ReadUnsignedInt), a .gltf through ReadFile and OpenFileRead (M-MODEL-18)"
     },
     {
       "id": "M-MODEL-DIFF-02",
@@ -26561,7 +26597,7 @@
           "symbol": "Retail models: the loose sources through the source path"
         }
       ],
-      "note": "LP7.1b (C51), test only, [.][retail]: every loose models/** source of a model extension the C8 listing finds, an .obj, .ase or .lwo through readModelSource and finishModel, then against the engine's binary of it when the binary-first path accepts one; counted by extension with bytes, time, loads, refusals with their reasons (a refused retail file is a finding) and the binaries equal, different, stale or absent. The retail game at LP7.1b: .obj 5 (3 loaded, 1 equal to its binary, 2 without one; refused: material-orb.obj for more than 32,767 corners, sponza_original.obj for a 'vt' of 3 numbers), .glb 10 (binary only until LP7.5), .fbx 1 (the cube); no loose .ase or .lwo. LP7.2 (step 1, M-MODEL-GUARD-04): .obj 5, 4 loaded (1 equal to its binary, 3 without one; material-orb.obj loads, its surfaces within 65,536 vertices); refused: sponza_original.obj line 5989, a 'vt' of 3 numbers, which is OBJ_Parse's FatalError in the engine (M-MODEL-FATAL-02)"
+      "note": "LP7.1b (C51), test only, [.][retail]: every loose models/** source of a model extension the C8 listing finds, an .obj, .ase or .lwo through readModelSource and finishModel, then against the engine's binary of it when the binary-first path accepts one; counted by extension with bytes, time, loads, refusals with their reasons (a refused retail file is a finding) and the binaries equal, different, stale or absent. The retail game at LP7.1b: .obj 5 (3 loaded, 1 equal to its binary, 2 without one; refused: material-orb.obj for more than 32,767 corners, sponza_original.obj for a 'vt' of 3 numbers), .glb 10 (binary only until LP7.5), .fbx 1 (the cube); no loose .ase or .lwo. LP7.2 (step 1, M-MODEL-GUARD-04): .obj 5, 4 loaded (1 equal to its binary, 3 without one; material-orb.obj loads, its surfaces within 65,536 vertices); refused: sponza_original.obj line 5989, a 'vt' of 3 numbers, which is OBJ_Parse's FatalError in the engine (M-MODEL-FATAL-02); LP7.5: .glb and .gltf through the source path (K40 closed), each file on its own line with its nodes, primitives and vertices, its binary's match split by field and its parse-thread and pool times; the user's ten .glb files: 8 loaded, 2 Skinned (riggedsimple.glb 1 animation, palm1.glb 3), 0 refused; of the 5 with binaries every difference is in normal[3], color and color2 (E-LIT-7, M-GEO-DEFECT-03), none in xyz, st, normal x-z, tangents or indexes; 3 without binaries; the longest pool job sponza.glb's finish (4.45 s, Debug)"
     },
     {
       "id": "M-ENT-02",
@@ -28056,6 +28092,2418 @@
         }
       ],
       "note": "LP7.3 (C54, C56; P7.18, P7.23), test only: the models map's rooms J01-J05 from k 12 (the fifth map's rooms from k 17 are free), each with its noshadows light and func_decal projectors on textures/lp7/decal (DECAL_MACRO, blend blend, vertexColor, a black image: the lights-off controls black): J01 perspective fade 8 at yaw 210 from 4 in front of the east wall (the bake: one surface of 9 vertices, format 1, alphas 0 and 1 across the band) beside a hand-placed DECAL_MACRO face of the material inside its bounds (format 0, 4 vertices: adopted, not identified); J02 parallel aimed by a target_null inside the wall (11 vertices, alphas 0, 208/255, 1); J03 the lit twin (6 vertices; M-DRESS-04's derived picture: its footprint black); J04 fade 0 (6 vertices, format 0) beside a projector on lp7/wall (not discrete: the engine's warning, nothing baked, dress_unmatched 1); J05 a floor decal across a doorway's areaportal (two surfaces, 4 and 12 vertices, one per area). Each decal surface is its area's first surface (dmap prepends new groups). Every row exact with its control black; \"expect\": the dress surfaces the row's frame draws (J01-J04 1, J05 2) and J04's dress_unmatched 1, which the [.][parity] test asserts and writes into each row's .json beside the scene's identified surfaces and inlined copies. LP7.3's engine run of 2026-10-26 (11:26-11:46): 180 rows, every repeat 0, the proof listing 21,261 entries"
+    },
+    {
+      "id": "M-MODEL-COPY-08",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfProperties.h",
+          "lines": [
+            1,
+            1577
+          ],
+          "anchor": "whole file",
+          "sha256": "80c7b74fa0eb4d9fe79ce5ee78e8070ecfdc0494adf345c370f867520633d7b9",
+          "gitBlob": "aefad1060cbe24a5d4a37f7714c4b62d7f6841c9"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/gltfProperties.h"
+        }
+      ],
+      "note": "LP7.5 (C51 (3), D137, the director's decision 1): the glTF property classes (gltfNode, gltfMesh, gltfMesh_Primitive and its attributes, gltfAccessor, gltfBufferView, gltfBuffer, gltfMaterial, gltfSkin, gltfAnimation, gltfScene, the KHR extensions) and gltfData, the parsed asset with its process-global cache (dataList, fileDataHash: M-MODEL-STATIC-13, emptied after each parse: M-MODEL-DIFF-11), its lists, GetAllMeshes, GetAllSkinnedMeshes, GetAnimationIds and ResolveNodeMatrix; copied whole, compiled inside shim/src/ShimGltf.cpp (included before gltfParser.h, as the engine's precompiled header has it). Licence: GPL-3.0-or-later with the Doom 3 BFG Edition additional terms (its header; lib/TbLitLib/idtech/engine/LICENSE.md): RBDOOM-3-BFG's own code, Harrie van Ginneken 2022-2023, no third-party licence"
+    },
+    {
+      "id": "M-MODEL-COPY-09",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.h",
+          "lines": [
+            1,
+            350
+          ],
+          "anchor": "whole file",
+          "sha256": "56ca4119d3dd0b70d7fc085384ce592cddb16097153d02428fe27f1b3ac6893b",
+          "gitBlob": "685955c0819341710b01464b246bbaa8b94c6b58"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/gltfParser.h"
+        }
+      ],
+      "note": "LP7.5 (C51 (3)): GLTF_Parser, gltfPropertyArray, gltfItemArray, the gltfItem_* parsers and gltfManager; copied whole, compiled inside shim/src/ShimGltf.cpp; its one fatal site, the boolean item's parse error (:220), is M-MODEL-FATAL-60. Licence: GPL-3.0-or-later with the Doom 3 BFG Edition additional terms (its header; lib/TbLitLib/idtech/engine/LICENSE.md): RBDOOM-3-BFG's own code, Harrie van Ginneken 2022-2023, no third-party licence"
+    },
+    {
+      "id": "M-MODEL-PART-06",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1,
+            2376
+          ],
+          "anchor": "the whole parser before gltfManager::ExtractIdentifier",
+          "sha256": "748ddeda9486ed5e46d0220b62b281ae07d586f04698fa4d9ee6d89120a6e1e0"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/gltfParser.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "the include of the range (HEADER_FILE_ONLY in the build)"
+        }
+      ],
+      "note": "LP7.5 (C51 (3), the director's decision 1): the attribute and component maps, gltfPropertyArray, the item parsers, Parse_*, ParseProp, loadGLB, Parse, Load, the accessor views, ~gltfData and ClearData, and the LoadGLTF console command (the shim's constexpr CONSOLE_COMMAND: registered nowhere, run never, M-MODEL-STATIC-11); the rest of the file, ExtractIdentifier (:2378-2427), is transcribed (M-MODEL-14) because its idParser is not copied. Compiled inside shim/src/ShimGltf.cpp after the explicit specialization of idList<gltfPropertyItem*>::DeleteContents (M-MODEL-DIFF-10). Parse thread only (C20): its loads read the cache under the shim's s_gltfCache; its fatal sites M-MODEL-FATAL-37 ... -60. Licence: GPL-3.0-or-later with the Doom 3 BFG Edition additional terms (its header; lib/TbLitLib/idtech/engine/LICENSE.md): RBDOOM-3-BFG's own code, Harrie van Ginneken 2022-2023, no third-party licence"
+    },
+    {
+      "id": "M-MODEL-PART-07",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/idlib/MapFile.h",
+          "lines": [
+            1,
+            81
+          ],
+          "anchor": "licence, include guard, gltfProperties.h, idMapPrimitive",
+          "sha256": "1cbde34c4181d895db52c781d3388308697f98caa0d5cea33b018709785f9695"
+        },
+        {
+          "file": "neo/idlib/MapFile.h",
+          "lines": [
+            291,
+            430
+          ],
+          "anchor": "MapPolygon and MapPolygonMesh",
+          "sha256": "3545c75f4dd4e7f51c69cbc66af63c26c90bd3b85884db19ade1c8cb0cb6cb46"
+        },
+        {
+          "file": "neo/idlib/MapFile.h",
+          "lines": [
+            592,
+            592
+          ],
+          "anchor": "include guard end",
+          "sha256": "189cacff76f0a209bdff74395aa107dcfb82ac3b279488c0ab40ba829f3926fd"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/MapFile.h"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "namespace tbLitGltfMesh (the include)"
+        }
+      ],
+      "note": "LP7.5 (S3): the classes ConvertFromMeshGltf builds, compiled inside the namespace tbLitGltfMesh of shim/src/ShimGltf.cpp, which declares idMapBrush and idMapPatch (named by MapPolygonMesh's ConvertFromBrush and ConvertFromPatch declarations; MapFile.h:84-289, the brush and patch classes, not copied). Licence: GPL-3.0-or-later with the additional terms (id Software 1993-2012, Robert Beckebans 2015-2023)"
+    },
+    {
+      "id": "M-MODEL-PART-08",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            1,
+            30
+          ],
+          "anchor": "licence",
+          "sha256": "cff1df5ddec397bb7c23bb7bb8cbcf5b3e135b556d828b0c1a6738d23f4b4ccf"
+        },
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            2329,
+            2338
+          ],
+          "anchor": "MapPolygonMesh::MapPolygonMesh",
+          "sha256": "1618986e62b626753f6aa7b29a41000eed0b49df0b56759dd2ee32a3a1db9b81"
+        },
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            2966,
+            3007
+          ],
+          "anchor": "MapPolygonMesh::SetContents",
+          "sha256": "3bade52996a18283a4c9448c290932f3f6d87a2f1a299025b8f1461f74cd5e98"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/MapFile.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "namespace tbLitGltfMesh (the include; MeshDecls, MeshDeclsAccess, declManager)"
+        }
+      ],
+      "note": "LP7.5 (S3): the mesh's constructor and SetContents, which ConvertFromMeshGltf calls (MapFile_gltf.cpp:363); SetContents' unqualified declManager->FindMaterial (:2980, :2993) finds tbLitGltfMesh::declManager before the global one, so it reads the parse thread's captures (M-MODEL-15). Licence: GPL-3.0-or-later with the additional terms (id Software, Robert Beckebans, Admer, Harrie van Ginneken)"
+    },
+    {
+      "id": "M-MODEL-PART-09",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/idlib/MapFile_gltf.cpp",
+          "lines": [
+            1,
+            366
+          ],
+          "anchor": "licence, blenderToDoomTransform, MapPolygonMesh::ConvertFromMeshGltf",
+          "sha256": "545bca2eb9d2313b90c8b60aa94a4bcb4de39b5449a445e162732a33b16cc3aa"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/MapFile_gltf.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "namespace tbLitGltfMesh (the include)"
+        }
+      ],
+      "note": "LP7.5 (C51 (3), D20): a primitive's conversion, its facts mirrored as they are: the indices read into a cleared uint array (:53-63) and the corners of each triangle reversed (:84-86); the first attribute sizes the vertices (:107-111, uncleared: M-GEO-DEFECT-03); POSITION and NORMAL through the transform (glTF (x, y, z) to Doom (x, -z, y) by the node transform's blenderToDoomTransform, idAngles( 0, 0, 90 )), TEXCOORD_0 as stored (t not flipped, :181), COLOR_0 and JOINTS_0 into the colour, WEIGHTS_0 into color2 through PackColor (:228); then SetContents. Compiled inside the namespace tbLitGltfMesh; the rest of the file (the map's entity and light readers, :368-717) is not copied. Pool (the finish, M-MODEL-POOL-03). Licence: GPL-3.0-or-later with the Doom 3 BFG Edition additional terms (its header; lib/TbLitLib/idtech/engine/LICENSE.md): RBDOOM-3-BFG's own code, Harrie van Ginneken 2022-2023, no third-party licence"
+    },
+    {
+      "id": "M-MODEL-PART-10",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            1,
+            31
+          ],
+          "anchor": "licence, precompiled.h",
+          "sha256": "f808a51fe3990cec0e4c2acb3c2e702c494ceccb3501edf1543711e3215cb35a"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            44,
+            57
+          ],
+          "anchor": "the cvars, the GLMB constants, blenderToDoomTransform, lastMeshFromFile",
+          "sha256": "cfdffa891c24dcc7fb2ee9dbe7480c198dceababc0d1c591720764ddc58f5587"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            64,
+            136
+          ],
+          "anchor": "idRenderModelGLTF::ProcessNode_r",
+          "sha256": "3e72f12d88c2cc90baf01a663260766a72964bea035381a09b697ae19cedc724"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            317,
+            465
+          ],
+          "anchor": "FindModelRoot",
+          "sha256": "bbe02363ecdc0c73e0f0e39965963123c181e5cccea8460bb7d3657c6d2a299b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Model_gltf.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "idRenderModelGLTF, idImportOptions (the include)"
+        }
+      ],
+      "note": "LP7.5 (C51 (3), S7, D20): ProcessNode_r (each mesh node's primitives one surface each, never merged; the node's matrix resolved from its TRS, the children recursed with it) and FindModelRoot (the armature, rig or named mesh root and its skin), compiled inside shim/src/ShimGltf.cpp against the reduced idRenderModelGLTF (M-MODEL-16); its includes (:34-42) and the rest (InitFromFile transcribed, M-MODEL-17; the binary model, the animation and the export code) not copied. Licence: GPL-3.0-or-later with the Doom 3 BFG Edition additional terms (its header; lib/TbLitLib/idtech/engine/LICENSE.md): RBDOOM-3-BFG's own code, Harrie van Ginneken 2022-2023, no third-party licence"
+    },
+    {
+      "id": "M-MODEL-PART-11",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/idlib/Lib.cpp",
+          "lines": [
+            154,
+            166
+          ],
+          "anchor": "PackColor( const idVec4& )",
+          "sha256": "6dc2d232aae3c2f2301ccca2adb13db68fad896b820a9eb477c91484e92d377f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/Lib.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "the copied ranges compiled inside it"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimLib.h",
+          "symbol": "PackColor"
+        }
+      ],
+      "note": "LP7.5: the conversion packs a vertex's WEIGHTS_0 into its color2 (MapFile_gltf.cpp:228); added to the partial Lib.cpp before its 490-537 range (M-MODEL-PART-05). Pure; any thread"
+    },
+    {
+      "id": "M-MODEL-PART-12",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Matrix.cpp",
+          "lines": [
+            647,
+            648
+          ],
+          "anchor": "mat4_zero, mat4_identity",
+          "sha256": "f0315e7d8b2e09a052f9ac322365deebbad61bb4a13d64dbfcc85fecf3a25c55"
+        },
+        {
+          "file": "neo/idlib/math/Matrix.cpp",
+          "lines": [
+            650,
+            668
+          ],
+          "anchor": "idMat4::Transpose",
+          "sha256": "d7009e8a3ea65a485b3c7de1dc600790ddbc0c3e0e3fa6ce07f8d175f13c3604"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Matrix.cpp"
+        }
+      ],
+      "note": "LP7.5: the copied ResolveNodeMatrix calls idMat4::Transpose (gltfProperties.h:1333) and the finish starts each mesh node from mat4_identity (Model_gltf.cpp:686); not in the step-1 copy plan (found at the link: the reason for two more dynamic initialisers, M-MODEL-STATIC-18). Pure; any thread"
+    },
+    {
+      "id": "M-MODEL-13",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/File.h",
+          "lines": [
+            148,
+            235
+          ],
+          "anchor": "idFile_Memory",
+          "sha256": "85372ed81c3ad3078562fd3eea90df618d5e79db3afbadffcaff58760221f9c2"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            732,
+            743
+          ],
+          "anchor": "idFile_Memory( name, const data, length ): read only, the data not owned",
+          "sha256": "33dc947337c8772b6868fb40ffe301c819238ab56d61b7fe9be5a6bfec80dcf2"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            780,
+            796
+          ],
+          "anchor": "idFile_Memory::Read: what is left when asked for more",
+          "sha256": "befd906e645e1c2baad4c3a5c4fbaf8e851f0cded6bcb5c62ece8480d7cb1e42"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            911,
+            914
+          ],
+          "anchor": "idFile_Memory::Length",
+          "sha256": "320833450ad8b40603dac703c5f97df74a968d91bc045c917ed008d10ca118fe"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            960,
+            963
+          ],
+          "anchor": "idFile_Memory::Timestamp: 0",
+          "sha256": "49f168050e0eb7e641491d088e25f27daafc01a2c4beb83e0c4bfa7927deb500"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            970,
+            973
+          ],
+          "anchor": "idFile_Memory::Tell",
+          "sha256": "24f30a8c8577c2003ad49ee7dfcfffdb245d59c9bbe2c091ce46477d607e13fe"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            1000,
+            1037
+          ],
+          "anchor": "idFile_Memory::Seek: clamped, -1 when it had to be",
+          "sha256": "6577a017bbb04a44fb10c28c13ef2b84fe9c1b7c4796425fd418a05893370ecd"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2208,
+            2209
+          ],
+          "anchor": "GetAccessorView: an idFile_Memory by value over an accessor's bytes",
+          "sha256": "7a79593a87721c867fc2bc2da31020a2d534b6ff6ec171dbb398a540bc8cd3ed"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "idFile_Memory"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idFile"
+        }
+      ],
+      "note": "LP7.5 (S1, the director's decision): the copied parser and conversion construct idFile_Memory by value over memory they hand it (gltfParser.cpp:2208-2209 and the other views, MapFile_gltf.cpp:53-54, :104-105): a stand-in under that name in shim/src/ShimGltf.cpp, written, not copied (M-MODEL-NC-01's reasons): non-owning and read only, Read, Seek, Length, Tell and GetFullPath as idFile_Memory's, Timestamp 0; a non-positive Read length reads nothing (the engine's memcpy of a negative length is undefined; no copied caller asks for one). LP7.1b's MemoryFile (M-MODEL-FS-03) stays for the model read. The conversion's file is the view's byteLength long from the accessor's offset (a window the engine overstates by the accessor's byteOffset): the validator keeps every read inside the view (M-MODEL-GUARD-05). Any thread that made it"
+    },
+    {
+      "id": "M-MODEL-14",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2378,
+            2427
+          ],
+          "anchor": "gltfManager::ExtractIdentifier",
+          "sha256": "226a3d80c7ea562c4fc8f3e55051a9d93c9f98d63e7194f8cdc0675e1a453a6d"
+        },
+        {
+          "file": "neo/renderer/ModelManager.cpp",
+          "lines": [
+            455,
+            463
+          ],
+          "anchor": "GetModel: a glTF's source time from its name without the identifier",
+          "sha256": "0b44b50285642f1d93314fa714539805081673ec24022c9b5d2cc790cc829945"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            506,
+            508
+          ],
+          "anchor": "InitFromFile: ExtractIdentifier, then Load of the file",
+          "sha256": "f26702251b8c3b59f3a788af2939bb3e0f528f0af2e8d780c73cd845df2cf3c0"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "gltfManager::ExtractIdentifier, engineGltfIdentifier"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineModels.h",
+          "symbol": "EngineGltfIdentifier, engineGltfIdentifier"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "readModel (the probe and read of the identifier's fileName)"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readGltfSource"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ExtractIdentifier transcribed (gltfParser.cpp:2378-2427)"
+        }
+      ],
+      "note": "LP7.5 (S2, the director's decision: a function entry, never idParser): transcribed with the copied idLexer under the copy's flags (LEXFL_ALLOWPATHNAMES | LEXFL_NOSTRINGESCAPECHARS) where the engine reads the one token with an idParser, which reads the same token of a text without directives; its warnings the lexer's (\"malformed gltf mesh identifier\", \"no gltf identifier\"). A name <file>.<id|name>.glb names the file <file>.glb and a mesh id or root name; the service probes and reads the file (its time the source's, ModelManager.cpp:455-463) and the plan starts FindModelRoot from the name. Parse thread"
+    },
+    {
+      "id": "M-MODEL-15",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            2966,
+            3007
+          ],
+          "anchor": "SetContents: FindMaterial, GetContentFlags, Coverage",
+          "sha256": "3bade52996a18283a4c9448c290932f3f6d87a2f1a299025b8f1461f74cd5e98"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            649,
+            652
+          ],
+          "anchor": "idMaterial::Coverage",
+          "sha256": "b5ce35879bc784ff599e2420ec77b54392fbd0fa4adc883ab2bf661c2af1e819"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            776,
+            779
+          ],
+          "anchor": "idMaterial::GetContentFlags",
+          "sha256": "568caddf602236aff5c1524ef6e6dbaa5fbe89bb651360930e0910d0a79213c5"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            89,
+            96
+          ],
+          "anchor": "ProcessNode_r: the material by name, textures/base_wall/snpanel2rust without one",
+          "sha256": "edaf106b80f2aba4557f08368cd2a46b534b665db62ac4d1ff10d6e3f8c3eb8f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "namespace tbLitGltfMesh: idMaterial, MeshDecls, s_meshDecls, MeshDeclsAccess, declManager, MeshDeclsScope"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "capture (contentFlags, coverage)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineModels.h",
+          "symbol": "EngineModelMaterial::contentFlags, coverage"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading: a glTF's finish reads nothing of the registry (LP7.5, S3, D137)"
+        }
+      ],
+      "note": "LP7.5 (S3, the director's decision; the LP7.1a pattern of M-MODEL-SHIM-01): the MapFile ranges compile inside the namespace tbLitGltfMesh, whose stand-ins their unqualified names find before the global ones, no copied line changed: idMaterial with GetContentFlags and Coverage, captured by the parse thread with the material's other values (EngineModelMaterial gains contentFlags and coverage); declManager, a constexpr MeshDeclsAccess whose FindMaterial reads the running finish's MeshDecls (a name the parse thread resolved gives its material, another the default material's values, counted and warned) through a constant-initialised atomic pointer that MeshDeclsScope sets for the finish's duration (one finish at a time, M-MODEL-POOL-03). The parse thread resolves every material name the plan lists (ProcessNode_r's own rule: the glTF material's name, textures/base_wall/snpanel2rust without one or with gltf_forceBspMeshTexture) before the pool's job; the CPU test runs the finish with the registry reloaded between the parse and the finish, with the same surfaces. SetContents' contents and opaque are never read by the model path"
+    },
+    {
+      "id": "M-MODEL-16",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_gltf.h",
+          "lines": [
+            32,
+            96
+          ],
+          "anchor": "idRenderModelGLTF",
+          "sha256": "27521c99619c7e52692ee472f51600b840b453bdbe99b674dad1873d32e67240"
+        },
+        {
+          "file": "neo/renderer/ModelManager.h",
+          "lines": [
+            55,
+            99
+          ],
+          "anchor": "idImportOptions",
+          "sha256": "1ff2cb94e5d05b18206cd829e098725bc7034a29c49ec3c6c3148cfe986939d9"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            328,
+            330
+          ],
+          "anchor": "FindModelRoot: options->armature",
+          "sha256": "b4ea19f60aa298dcce643916ddb5a091e227995372ab61d93d32d5f596cbcb2e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "idRenderModelGLTF, idImportOptions"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimModels.h",
+          "symbol": "idRenderModelStatic (moved out of ShimModels.cpp verbatim), shim::modelOf, shim::capture"
+        }
+      ],
+      "note": "LP7.5 (S7): Model_gltf.h's idRenderModelGLTF reduced to ProcessNode_r over the reduced idRenderModelStatic of M-MODEL-SHIM-01 (moved verbatim into shim/private/shim/ShimModels.h so that ShimGltf.cpp derives from it; its class-scope declManager, tr and modelSurface_t are what ProcessNode_r's names find); ModelManager.h's idImportOptions reduced to its one member FindModelRoot reads (armature); the preview passes no options (InitFromFile's commandLine is empty for a fresh model, Model_gltf.cpp:497-504)"
+    },
+    {
+      "id": "M-MODEL-17",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            472,
+            531
+          ],
+          "anchor": "InitFromFile: the state, the identifier, Load, the time, the default scene",
+          "sha256": "31224033698778e10157e579e884f31d50bec3039df909cd2f5e1ac90bc8dc30"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            534,
+            572
+          ],
+          "anchor": "the root (FindModelRoot) and MeshNodeIds; Can't find meshes: MakeDefaultModel",
+          "sha256": "df446446e03ae4f558c1f48e6defefe6d5107c93f765d4a5d62411a5274b8f2b"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            576,
+            643
+          ],
+          "anchor": "the animations of the first skinned mesh node and its skin's first joint; model_state",
+          "sha256": "9c9a26b471787d749456820a415e385580beeddaa53e0ae3ce2499dbea93836c"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            645,
+            748
+          ],
+          "anchor": "useMikktspace = true, globalTransform, ProcessNode_r from mat4_identity, Couldn't load model, FinishSurfaces",
+          "sha256": "8905b09ddf1dfbb074336916aab1b7d9a20c76740303c136bd3d8158e972a475"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "engineGltfPlan, engineFinishGltfModel"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineModels.h",
+          "symbol": "EngineGltfPlan, engineGltfPlan, engineFinishGltfModel"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readGltfSource, finishModel"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/ModelLoading.h",
+          "symbol": "ModelFinishInput::gltf, gltfPlan; ModelSourceRead::skinned"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "readModel (an animated .bglb Skinned; read.skinned)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading, the glTF source path through the copies (LP7.5, C51 (3), D137)"
+        }
+      ],
+      "note": "LP7.5 (C51 (3), D137; the director's facts, D20): InitFromFile without options transcribed, split as LoadOBJ is (M-MODEL-07): the plan on the parse thread (FindModelRoot from the identifier's name, the mesh nodes by its three branches, Can't find meshes as the engine's default model with its reason, the animation count), the finish on the pool (the name, PurgeModel, the bounds cleared, ProcessNode_r over each mesh node from mat4_identity with globalTransform = blenderToDoomTransform, no surface: Couldn't load model and MakeDefaultModel, else FinishSurfaces( useMikktspace )). Mirrored as they are: every mesh node is processed from the identity, its parents' transforms ignored, and a mesh node under another mesh node is added twice (once from the list, once as a child); one surface per primitive, never merged; the corners reversed, t not flipped; useMikktspace always true (:645: the file's time decides nothing for a glTF, the stamp irrelevant); the animation count reads only mesh nodes with a skin (:583; the boneless branch at :631-636 is unreachable), so an animation of a skinned mesh node's subtree or of its skin's first joint makes it DM_CACHED, the Skinned record (K41: nothing drawn on a static entity), and an unskinned object-animated mesh is DM_STATIC and drawn (the director's 'object-animated: Skinned' does not hold in the engine: the preview follows the engine); a skinned mesh without animations is DM_STATIC with its JOINTS_0 in the vertex colours. A named root without a skin over a skinned mesh, where the engine dereferences a NULL skin (:595), is the default model with that reason. Not transcribed: the #if 0 branch from the root (:674-680), the options (:649-672, :718-736) and LoadModel (:740: a skinned model's joints and poses, model_state again, the time of the name; it changes no surface; for an unskinned model it makes empty joint lists, the .bglb's four zero counts). An animated binary (.bglb whose GLMB tail's model_state is not DM_STATIC, :780) is Skinned too, without the source"
+    },
+    {
+      "id": "M-MODEL-18",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2100,
+            2186
+          ],
+          "anchor": "GLTF_Parser::Load: the cache, loadGLB or the .gltf read, Parse, the parents, the skeletons by name",
+          "sha256": "0ab061f1238ce8cfd854f0b728ef2f8037f2004613b2e0fe6d7d4eb47df9df3a"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1929,
+            2011
+          ],
+          "anchor": "loadGLB: GetFileLength, OpenFileRead, the header and chunks by ReadUnsignedInt",
+          "sha256": "4861901c3680611dd75c95757a45b6310e5f4ac75123922d13505ff3a98be96d"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            351,
+            356
+          ],
+          "anchor": "idFile::ReadUnsignedInt",
+          "sha256": "a9f3a33b25d2ce3e1e1e64d898147ed4fc48c3e9604ae0b684a7b2a56c650cbe"
+        },
+        {
+          "file": "neo/framework/File.h",
+          "lines": [
+            86,
+            86
+          ],
+          "anchor": "idFile::ReadUnsignedInt",
+          "sha256": "039307cbbaa755c602da7b5040a8ab17ebb73cc7ae37b25b90d37dc609410cb9"
+        },
+        {
+          "file": "neo/idlib/Lib.cpp",
+          "lines": [
+            372,
+            375
+          ],
+          "anchor": "LittleLong",
+          "sha256": "1dd0db1c65bed40409c4b114f0d5581113a43378cfa88fd32d936a7add7ba683"
+        },
+        {
+          "file": "neo/idlib/Lib.h",
+          "lines": [
+            167,
+            167
+          ],
+          "anchor": "LittleLong's declaration",
+          "sha256": "edc921f5c67b8c6566bb4e00ccc36a7563f67835a35465b18899c7fdd9cfdc5c"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            445,
+            459
+          ],
+          "anchor": "idFileSystemLocal::GetFileLength: the empty name's warning",
+          "sha256": "0a9b4f2b41af82a52afd90f7b1994f4be4e3521d19b7aba2e8bb8b66474913df"
+        },
+        {
+          "file": "neo/framework/FileSystem.h",
+          "lines": [
+            228,
+            228
+          ],
+          "anchor": "idFileSystem::GetFileLength",
+          "sha256": "61ab3de33cf9efadb3462518731666fa1b31b8c3315252bbc5381efb80628943"
+        },
+        {
+          "file": "neo/framework/Common.h",
+          "lines": [
+            330,
+            330
+          ],
+          "anchor": "idCommon::SetRefreshOnPrint",
+          "sha256": "f0103ddfbd53adcf2d0bd87fde961320bc1883871590f6e7d133c847dc799859"
+        },
+        {
+          "file": "neo/framework/CmdSystem.h",
+          "lines": [
+            244,
+            247
+          ],
+          "anchor": "idCmdSystem::ArgCompletion_MapName (the LoadGLTF command's completion)",
+          "sha256": "a50cc8a192583f1d9f1e59569ad69f1240b541302c829c21aad7f7db98e38800"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel, EngineGltfModel"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/MaterialDecls.h",
+          "symbol": "MaterialDecls::parseGltfModel"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineModels.h",
+          "symbol": "EngineGltfModel, EngineGltfParse"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idFileSystemLocal::GetFileLength, idFile::ReadUnsignedInt"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idFile::ReadUnsignedInt, idFileSystem::GetFileLength, idCommon::SetRefreshOnPrint, idCmdSystem::ArgCompletion_MapName"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "LittleLong"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimLib.h",
+          "symbol": "LittleLong, PackColor"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/Lib.h",
+          "symbol": "the include of shim/ShimLib.h (gltfParser.cpp's #include \"Lib.h\")"
+        }
+      ],
+      "note": "LP7.5 (C51 (3), D137, P7.4, P7.13): the parse on the parse thread, inside the model read of M-MODEL-FS-01 and under s_gltfCache (M-MODEL-STATIC-19): a GLTF_Parser's Load of the name, whose loadGLB gets the handed bytes' length from GetFileLength (the model read's length, else -1; an empty name warns as FileSystem.cpp:455-459) and reads them through OpenFileRead's memory file and ReadUnsignedInt (four bytes, LittleLong: LongNoSwap on a little-endian host, the host test of LittleShort, M-MODEL-08); a .gltf through ReadFile and OpenFileRead (Load :2121-2148). The asset is taken from the parser (currentAsset set to NULL, so the parser's Shutdown deletes nothing) into an EngineGltfModel (a shared, read-only asset whose destructor frees it, M-MODEL-DIFF-10), the cache emptied (M-MODEL-DIFF-11); an Error or FatalError the parse reported is the engine's drop (M-MODEL-GUARD-06). SetRefreshOnPrint does nothing; ArgCompletion_MapName is the copied command's completion, never called"
+    },
+    {
+      "id": "M-MODEL-SHIM-04",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/File.h",
+          "lines": [
+            86,
+            86
+          ],
+          "anchor": "idFile::ReadUnsignedInt",
+          "sha256": "039307cbbaa755c602da7b5040a8ab17ebb73cc7ae37b25b90d37dc609410cb9"
+        },
+        {
+          "file": "neo/framework/FileSystem.h",
+          "lines": [
+            228,
+            228
+          ],
+          "anchor": "idFileSystem::GetFileLength",
+          "sha256": "61ab3de33cf9efadb3462518731666fa1b31b8c3315252bbc5381efb80628943"
+        },
+        {
+          "file": "neo/framework/Common.h",
+          "lines": [
+            330,
+            330
+          ],
+          "anchor": "idCommon::SetRefreshOnPrint",
+          "sha256": "f0103ddfbd53adcf2d0bd87fde961320bc1883871590f6e7d133c847dc799859"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idFile, idFileSystem, idCommon"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idFile::ReadUnsignedInt, idFileSystemLocal::GetFileLength, idCommon::SetRefreshOnPrint"
+        }
+      ],
+      "note": "LP7.5: the members the copied glTF parser calls on the shim's stand-ins: ReadUnsignedInt (non-virtual on the shim's idFile, through its virtual Read), GetFileLength (virtual, the model read's) and SetRefreshOnPrint (empty)"
+    },
+    {
+      "id": "M-MODEL-DIFF-10",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            230,
+            243
+          ],
+          "anchor": "gltfPropertyArray: 32 items allocated, Num() 0; DeleteContents of the Num() taken",
+          "sha256": "35adc2cd4ee680ecd2166e378070bac5a0f8e0e2a960331d8e56c0c74d111a71"
+        },
+        {
+          "file": "neo/idlib/containers/List.h",
+          "lines": [
+            689,
+            713
+          ],
+          "anchor": "AssureSizeAlloc: whole granules allocated, newSize counted",
+          "sha256": "77bb37e4aa6ead677cc64d1287faa68bfa39600af2c77f1df29227f6037dde14"
+        },
+        {
+          "file": "neo/idlib/containers/List.h",
+          "lines": [
+            386,
+            407
+          ],
+          "anchor": "DeleteContents: the counted elements only",
+          "sha256": "ea91d52b723c98a4ab0d611331e3beaf15dfd180ea8ddcbe067563a6da521993"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2197,
+            2318
+          ],
+          "anchor": "the accessor views, new'd onto the accessors",
+          "sha256": "527b500dc897ff2c5648b63e60297a1ad7dc7a132135872590ed5db62bf2c133"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2320,
+            2341
+          ],
+          "anchor": "~gltfData: the chunks and the JSON only",
+          "sha256": "fe65f017c0e9c520a52ba9b19d8c1841e9a0a515ca65d48f64c6f0f5a29b072e"
+        },
+        {
+          "file": "neo/idlib/gltfProperties.h",
+          "lines": [
+            794,
+            822
+          ],
+          "anchor": "gltfData::Data: AssureSizeAlloc onto dataList",
+          "sha256": "eca1c96a2734e61637dba71e1a6c0917a59926ffe9561101be54e2e1e8dabf16"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "idList<gltfPropertyItem*, TAG_IDLIB_LIST>::DeleteContents (explicit specialization), forAllocated, deleteAll, freeElements, EngineGltfModel::~EngineGltfModel"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "the heap test of the glTF source path (no block left after a load and its release)"
+        }
+      ],
+      "note": "LP7.5 (S4, the director's decision; E-LIT-8, verified by what the preview frees): the engine leaks on every glTF load every element the parser makes with new (the nodes, meshes, primitives and their attributes, accessors, views, buffers, materials and their KHR extensions, skins, animations with their channels and samplers, scenes, cameras, images, samplers, textures; ~gltfData frees only the chunks and the JSON), every accessor view with its elements, the elements AssureSizeAlloc allocated past Num() in whole granules of 16 (List.h:689-713), and the 32 items each gltfPropertyArray allocates and counts none of (only the Num() it took are deleted, :230-234); the preview frees all of them, a difference in memory only: the explicit specialization of DeleteContents for that one list type deletes every allocated item (the template deletes the counted ones; nothing else of the list changes), and the asset's destructor walks every list over NumAllocated() before deleting the asset (whose ClearData finds the emptied cache: its DWarning, developer-only). The heap test: no Mem_Alloc block left after a hand file's load and release (958 blocks before the walk)"
+    },
+    {
+      "id": "M-MODEL-DIFF-11",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2100,
+            2111
+          ],
+          "anchor": "Load: a name in the cache returns its asset without reading the file",
+          "sha256": "512642b00fa8f1aa67a5eac8c8a30e3083de854d58f4e6b137733950834a6d1b"
+        },
+        {
+          "file": "neo/idlib/gltfProperties.h",
+          "lines": [
+            794,
+            822
+          ],
+          "anchor": "gltfData::Data: the process-global cache by file name",
+          "sha256": "eca1c96a2734e61637dba71e1a6c0917a59926ffe9561101be54e2e1e8dabf16"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2343,
+            2359
+          ],
+          "anchor": "ClearData",
+          "sha256": "1e9beef4ead83a54879b97a9bd07cf5097e419c936af8645b6cf6a7194b6cb7e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (ClearData, fileDataHash.Free)"
+        }
+      ],
+      "note": "LP7.5 (S8, the director's decision): no file cache: after each parse the asset leaves the parser's list and hash and the hash's table is freed, so the next parse of any name reads its file again; the engine keeps every glTF it loaded for the process and returns the cached asset for a name it has (a file changed on disk is read again in the preview, never in the engine's run, which loads each name once)"
+    },
+    {
+      "id": "M-MODEL-DIFF-12",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            414,
+            455
+          ],
+          "anchor": "gltfItem_uri::Convert: ReadFile and OpenFileRead of the uri, no check of the file",
+          "sha256": "744ffbb299190d35d4bca606dd7f45ea2df93e6d4cea43313a88924e0d1d9bcd"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1560,
+            1590
+          ],
+          "anchor": "Parse_BUFFERS: a uri buffer through gltfItem_uri",
+          "sha256": "03c7af32070b8d4cee4ba092812e7927398c999d5161219537dad826e8644e7f"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1396,
+            1438
+          ],
+          "anchor": "Parse_IMAGES: an image's uri",
+          "sha256": "bc0a56b42c7d757117a33476fb1e3cad12bd83c42dd1e45bdcd0aa97a0d988f8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem (the buffers and images checks)"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readGltfSource (\"<name> cannot be read: ...\")"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "external buffers, data: URIs and image files are refused with the notice"
+        }
+      ],
+      "note": "LP7.5 (the director's decision 3): every buffer or image with a uri, a data: URI among them, is refused with the notice \"<name> cannot be read: glTF with external buffers is not read by the preview\" and drawn as the default cube, where the engine reads a uri through the file system from the game's root (not beside the .gltf) and dereferences NULL when it cannot open it (OpenFileRead of a data: URI or a missing file, :430). So a Blender \"glTF Separate\" export (.gltf + .bin + textures) is refused, a \"glTF Binary\" (.glb, its one buffer the BIN chunk) is read; a .gltf without a uri buffer has no BIN chunk and is refused too"
+    },
+    {
+      "id": "M-MODEL-DIFF-13",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1929,
+            2011
+          ],
+          "anchor": "loadGLB",
+          "sha256": "4861901c3680611dd75c95757a45b6310e5f4ac75123922d13505ff3a98be96d"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2013,
+            2069
+          ],
+          "anchor": "Parse",
+          "sha256": "772a44bcb8b1850de9255c8d7936993f9444c8a5dc1b9cf7c23948053a8401fc"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            627,
+            775
+          ],
+          "anchor": "the integer, number, vec, quat and mat4 items",
+          "sha256": "3014b7ddc504e2cfe5364b81687e3b1fd1f6d2c720cae51795bd54affbad0fa9"
+        },
+        {
+          "file": "neo/idlib/MapFile_gltf.cpp",
+          "lines": [
+            95,
+            361
+          ],
+          "anchor": "ConvertFromMeshGltf: the attributes by component type",
+          "sha256": "09985c9f3c496fb511f308284849e02698b748af78a00a4c771516e82424c0e9"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readGltfSource"
+        }
+      ],
+      "note": "LP7.5 (D136, P7.2): the glTF validator accepts a subset of what the copies read: JSON with an escape or a control character in a string, a number with an upper-case exponent or a leading zero, a duplicate key, a byte order mark or a NUL; a primitive whose mode is not triangles (4) or whose POSITION, NORMAL, TANGENT, TEXCOORD_0 or WEIGHTS_0 is not float (5126), COLOR_0 not float, unsigned short or unsigned byte, JOINTS_0 not unsigned short or byte; a node tree over 128 deep or with a cycle; no scene; more than 32 chunks are refused with the reason and drawn as the default cube, where the engine reads some of them (a strip as a triangle list, normalised integers as floats' bits, an escape kept in the name) and dereferences or loops on others. A refused file a user's export may hold is a finding of the retail sweep (M-TEST-MODEL-04)"
+    },
+    {
+      "id": "M-MODEL-DIFF-14",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/idlib/MapFile_gltf.cpp",
+          "lines": [
+            107,
+            111
+          ],
+          "anchor": "ConvertFromMeshGltf: the vertices sized from the first attribute",
+          "sha256": "1f894a9c6a587f46f79248c1fafee13357e0baade14e813f3d57306267ea33eb"
+        },
+        {
+          "file": "neo/idlib/containers/List.h",
+          "lines": [
+            52,
+            68
+          ],
+          "anchor": "idListArrayNew: Mem_Alloc, not cleared, without zeroBuffer",
+          "sha256": "9200f51621c3f06196f422e871676e2629a31efa3fe9091f310ce94c31fcb508"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "engineFinishGltfModel (shim::ClearedAllocations)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "Mem_Alloc16 under ClearedAllocations"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readGltfSource (the record's note)"
+        }
+      ],
+      "note": "LP7.5 (M-GEO-DEFECT-03, the director's decision 4): the finish runs inside shim::ClearedAllocations, so the vertices ConvertFromMeshGltf sizes are cleared: a field no attribute writes is 0 in the preview where the engine's is heap (normal[3] of every vertex; the colour without COLOR_0 or JOINTS_0; color2 without WEIGHTS_0); the record's note says so when a primitive lacks one (EngineGltfPlan::heapVertexFields)"
+    },
+    {
+      "id": "M-GEO-DEFECT-03",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/idlib/MapFile_gltf.cpp",
+          "lines": [
+            107,
+            111
+          ],
+          "anchor": "verts.AssureSize( count ): Mem_Alloc, not cleared",
+          "sha256": "1f894a9c6a587f46f79248c1fafee13357e0baade14e813f3d57306267ea33eb"
+        },
+        {
+          "file": "neo/idlib/containers/List.h",
+          "lines": [
+            52,
+            68
+          ],
+          "anchor": "idListArrayNew without zeroBuffer",
+          "sha256": "9200f51621c3f06196f422e871676e2629a31efa3fe9091f310ce94c31fcb508"
+        },
+        {
+          "file": "neo/idlib/MapFile_gltf.cpp",
+          "lines": [
+            95,
+            361
+          ],
+          "anchor": "the attributes: each writes only its own fields",
+          "sha256": "09985c9f3c496fb511f308284849e02698b748af78a00a4c771516e82424c0e9"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "engineFinishGltfModel"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readGltfSource (the note)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "E-LIT-7: the heap fields of a quad without colours"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_RetailModels.cpp",
+          "symbol": "the sweep's per-field counts"
+        }
+      ],
+      "note": "E-LIT-7 (the director's decision 4): MapPolygonMesh's vertices come from an uncleared Mem_Alloc (idList::AssureSize, List.h:52-68) and ConvertFromMeshGltf writes each attribute's fields only: normal[3] (SetNormal and VertexFloatToByte write three bytes), the colour without COLOR_0 or JOINTS_0 and color2 without WEIGHTS_0 are heap in the engine's model and its .bglb; the welds and MikkTSpace read the normal's three bytes only, so the geometry is deterministic and the heap fields reach only the stored bytes and a stage reading them. The copies are kept (C7); the preview clears (M-MODEL-DIFF-14). The retail sweep: every difference between the user's .glb files and their engine binaries is in normal, color and color2 alone (xyz, st, tangents and indexes equal); N13's golden (M-TEST-MODEL-08): the run's heap was zero there, normal[3] 0 on both sides; the user's five .glb binaries differ in it (37,001 of material-orb-parented.glb's 47,938 vertices)"
+    },
+    {
+      "id": "M-MODEL-GUARD-05",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1929,
+            2011
+          ],
+          "anchor": "loadGLB: the header, the chunk loop (length -= 12 underflows), AddData's 32 chunks",
+          "sha256": "4861901c3680611dd75c95757a45b6310e5f4ac75123922d13505ff3a98be96d"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            388,
+            412
+          ],
+          "anchor": "AddData: data[totalChunks++] into GLTF_MAX_CHUNKS (32)",
+          "sha256": "ed9b2f55b269d5c8d5922e9dfc6257612a20d878e85d153ab8c99ab57a5b2a10"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2013,
+            2069
+          ],
+          "anchor": "Parse: one root object, the key loop",
+          "sha256": "772a44bcb8b1850de9255c8d7936993f9444c8a5dc1b9cf7c23948053a8401fc"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1722,
+            1849
+          ],
+          "anchor": "ParseProp: an unknown key is fatal (:1846)",
+          "sha256": "0065fecc22b4ef8197b2414b0630dccef6998661634dfc2db0ef120bf20c86c5"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            236,
+            290
+          ],
+          "anchor": "gltfPropertyArray: [ or { expected",
+          "sha256": "33f44052400599521ad9107a74444dcd76383e2af1d2ad74161d9a21a368ebac"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            627,
+            775
+          ],
+          "anchor": "the number items and the vector arities",
+          "sha256": "3014b7ddc504e2cfe5364b81687e3b1fd1f6d2c720cae51795bd54affbad0fa9"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2158,
+            2175
+          ],
+          "anchor": "Load: SetNodeParent of the scenes' nodes; a skin's skeleton by its name",
+          "sha256": "ac4067ca3d26b66fb050a368b290a3907d38ea6ec83957bb4e984decd2962e91"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2188,
+            2195
+          ],
+          "anchor": "SetNodeParent: the children recursed, unchecked",
+          "sha256": "5ec143f49f2c00c7f3152357de0fd276298ffdf226a9abd4df15e24fb8614585"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            317,
+            465
+          ],
+          "anchor": "FindModelRoot: nodes[ skin->skeleton ] (:378, :425)",
+          "sha256": "bbe02363ecdc0c73e0f0e39965963123c181e5cccea8460bb7d3657c6d2a299b"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            64,
+            136
+          ],
+          "anchor": "ProcessNode_r: meshList[ mesh ], nodeList[ child ] unchecked",
+          "sha256": "3e72f12d88c2cc90baf01a663260766a72964bea035381a09b697ae19cedc724"
+        },
+        {
+          "file": "neo/idlib/MapFile_gltf.cpp",
+          "lines": [
+            36,
+            366
+          ],
+          "anchor": "ConvertFromMeshGltf: the accessors, views and buffers by index, the windows unchecked",
+          "sha256": "5576d13a8ce83dc95caa3b54f6da6c8719f22e5b7123ec289b858fa23d1e2ed3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem, JsonReader, GltfCheck"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.h",
+          "symbol": "GltfFileFacts, MaxGltfNodes, MaxGltfMeshes, MaxGltfMaterials, MaxGltfAccessors, MaxGltfPrimitives, MaxGltfPrimitiveVerts, MaxGltfMaterialName"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readGltfSource"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading: the glTF validator (LP7.5, D136, P7.2)"
+        }
+      ],
+      "note": "LP7.5 (D136, P7.2, the director's decision S6): every .glb and .gltf passes the preview's structural validator before the copies see it; a failing one is the default cube with \"<name> cannot be read: <reason>\". The container: a .glb of at least 20 bytes, the magic glTF (case-insensitive, as the engine's Icmp), version 2, the header's length equal to the file's (no underflow of length - 12), the JSON chunk first, at most one BIN chunk after it, every chunk inside the file, at most 32 chunks; the JSON read by its own reader in the lexer's terms (M-MODEL-DIFF-13), one root object, nesting under 64, only the keys ParseProp knows (:1846); every index resolved and present (a node's mesh, skin and children, a scene's nodes, a primitive's indices, material and attributes, an accessor's view, a view's buffer, a skin's joints and skeleton, an animation's targets), the default scene present (an absent scene refused), the children tree under 128 deep and without a cycle, a skin without a skeleton named like a node (:2170-2175, else FindModelRoot reads nodes[ -1 ]); each primitive mode 4, a POSITION, every attribute's count the first's, the index count a multiple of 3, its values below the vertex count, at most 65,535 vertices (the 16-bit triIndex_t), each accessor window (offset, stride, count, element size) inside its view and the view inside the BIN chunk, the component types the conversion reads (M-MODEL-DIFF-13); a mapped semantic in another case refused (the engine's Icmp would take it, the validator's own check would not), TEXCOORD_1 and the other unmapped ones ignored as the engine ignores them; the vector items' arities (:692-776), a material name under 256 characters; the external buffers (M-MODEL-DIFF-12); the counts under MaxGltf*. GltfFileFacts reports the nodes, meshes, primitives, vertices, materials, animations and skins it read"
+    },
+    {
+      "id": "M-MODEL-GUARD-06",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            253,
+            258
+          ],
+          "anchor": "Malformed gltf array",
+          "sha256": "cf975e7d77249bc0ab164e2077374aea7783e3987eaad54d29a3b37424360de9"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1941,
+            2004
+          ],
+          "anchor": "loadGLB's FatalErrors and Error",
+          "sha256": "8debefb3905bdb584066f06fa17c5dac8d147c3590277f34ec52005f9bccf819"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            524,
+            531
+          ],
+          "anchor": "InitFromFile: the default scene and its nodes asserted",
+          "sha256": "300d2f469c4ca6cb7c9e1125f529f0dec69dca8d1351753bc3ba5a5d8ea3bbb2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (errorsBefore, lastErrorOf), engineGltfPlan (the second check)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/Registry.h",
+          "symbol": "Registry::errorCount"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineModels.h",
+          "symbol": "EngineGltfPlan::problem, defaultReason"
+        }
+      ],
+      "note": "LP7.5 (S6, the director's decision: the validator AND an error-counting scope): the shim's Error and FatalError log and return (C17), so a fatal site the validator missed would let the copied parser go on; the parse compares the registry's error count before and after, and any Error or FatalError of the parse or its lexer drops the asset (no model, the last error as the reason: the engine's process would have stopped). Then the plan's second check, on what the copied parser made: every node's mesh, skin and children, a skinned node's skeleton, the skins' joints, the animations' targets, the primitives' materials, indices (a multiple of 3) and attributes in range, each accessor window inside its view and the BIN chunk as the conversion reads it (its stride step and the attribute's element size), the attributes' counts equal, the scenes' nodes and the default scene in range; a failure is the default cube with the reason. The fatal sites it backs: M-MODEL-FATAL-37 ... -60"
+    },
+    {
+      "id": "M-MODEL-FATAL-37",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            253,
+            253
+          ],
+          "anchor": "gltfPropertyArray::begin: \"Malformed gltf array\" (an array of structs without [ or {)",
+          "sha256": "ca17adf5ba2a4650c6b40d21ea6ec3f5d4b0e53fdc98154d6c18ec6c29cc3e85"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "begin goes on: AssureSizeAlloc, then ParseBracedSection or ExpectAnyToken reads what follows as the first item (memory-safe; a wrong asset, dropped by the error scope). Unreachable: every array the parser reads is a JSON array (gltfFileProblem)"
+    },
+    {
+      "id": "M-MODEL-FATAL-38",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            258,
+            258
+          ],
+          "anchor": "gltfPropertyArray::begin: \"Malformed gltf array\" (an array of values without [)",
+          "sha256": "efbe2f0165dc783ec0c7c20669d5b08de1b6edbf73e44890319e8003793af60f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "as :253. Unreachable likewise"
+    },
+    {
+      "id": "M-MODEL-FATAL-39",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            432,
+            432
+          ],
+          "anchor": "gltfItem_uri::Convert: \"Could not read %s\"",
+          "sha256": "b1c11ebfd717617a0778291fe01a080c8c5342f7e3eee0010aa55ac1f50610f2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "after file->Read of a NULL file (:430, UNSAFE before the site); then the buffer is used with whatever was read. Unreachable: every uri refused (M-MODEL-DIFF-12)"
+    },
+    {
+      "id": "M-MODEL-FATAL-40",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            649,
+            649
+          ],
+          "anchor": "gltfItem_integer_array::parse: \"parse error\"",
+          "sha256": "a580e3f59fce2765aca3100733dbe820625d1aa3b4d4d4e84b39fcd60318f708"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "the integer allocated stays uninitialised (Alloc) and the array goes on (memory-safe; a garbage index the second check refuses). Unreachable: only integers in those arrays (gltfFileProblem)"
+    },
+    {
+      "id": "M-MODEL-FATAL-41",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            681,
+            681
+          ],
+          "anchor": "gltfItem_number_array::parse: \"parse error\"",
+          "sha256": "a580e3f59fce2765aca3100733dbe820625d1aa3b4d4d4e84b39fcd60318f708"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "the number stays uninitialised (memory-safe). Unreachable: only numbers"
+    },
+    {
+      "id": "M-MODEL-FATAL-42",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            700,
+            700
+          ],
+          "anchor": "gltfItem_vec4::parse: \"missing arguments, expected 4\"",
+          "sha256": "9e1c7e781f27418f1dc72de2a75b2c295ddff144528ee5086703d2756369c2cc"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "then reads numbers[0..3] of a shorter list (UNSAFE, past the list). Unreachable: every vec4 of exactly 4 numbers"
+    },
+    {
+      "id": "M-MODEL-FATAL-43",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            716,
+            716
+          ],
+          "anchor": "gltfItem_vec3::parse: \"missing arguments, expected 3\"",
+          "sha256": "db5cd04aa7aa77a3bd5deedcfeaa805ded66bbbc09ebceed66e75c9c162c523d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "then reads past the list (UNSAFE). Unreachable: exactly 3"
+    },
+    {
+      "id": "M-MODEL-FATAL-44",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            732,
+            732
+          ],
+          "anchor": "gltfItem_vec2::parse: \"missing arguments, expected 2\"",
+          "sha256": "ba4936606548aa30580ed67fe378884083f924ba112a0be7145ff6fdf2dc1fa3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "then reads past the list (UNSAFE). Unreachable: exactly 2"
+    },
+    {
+      "id": "M-MODEL-FATAL-45",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            748,
+            748
+          ],
+          "anchor": "gltfItem_quat::parse: \"missing arguments, expectd 4\"",
+          "sha256": "81021875c275094e9315e918a89ff9e36253d0b5b1c4912550a935b25bb40ffc"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "then reads past the list (UNSAFE). Unreachable: exactly 4"
+    },
+    {
+      "id": "M-MODEL-FATAL-46",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            764,
+            764
+          ],
+          "anchor": "gltfItem_mat4::parse: \"missing arguments, expectd 16\"",
+          "sha256": "f24b922fd68e3b8428cc464c9207d6fb4d76d9960fb24d27cd2e705413eb3afb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "then reads past the list (UNSAFE). Unreachable: exactly 16"
+    },
+    {
+      "id": "M-MODEL-FATAL-47",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1705,
+            1705
+          ],
+          "anchor": "Parse_EXTENSIONS_REQUIRED: \"malformed extensions_used array\"",
+          "sha256": "cc8bc27ebf8ccb3bf1cd1d5b1deff8bc79f95f5609c998ec2c67bd0d837b9558"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "the token is appended as an extension name (memory-safe). Unreachable: only strings there"
+    },
+    {
+      "id": "M-MODEL-FATAL-48",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1818,
+            1818
+          ],
+          "anchor": "ParseProp: \"Bufferviews should already be parsed!\"",
+          "sha256": "863d103c8084186938ed961a58b640d4f949f67d6e70ecf903d300d0841c0fa6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "goes on (memory-safe). Unreachable for every input: the switch is reached with BUFFERVIEWS only after bufferViewsDone (:1735-1755 parse or skip it first)"
+    },
+    {
+      "id": "M-MODEL-FATAL-49",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1827,
+            1827
+          ],
+          "anchor": "ParseProp: \"Buffers should already be parsed!\"",
+          "sha256": "c676e672d049a28b5c6759df03ce55a9fe01b1c368b33304794390adeb4403d1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "likewise. Unreachable for every input (:1730-1755)"
+    },
+    {
+      "id": "M-MODEL-FATAL-50",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1846,
+            1846
+          ],
+          "anchor": "ParseProp: \"UnImplemented GLTF property : %s\"",
+          "sha256": "4e62c7cf8875a319b61a8c5ab0deed3145d7db964b130520c24433a6c05e6f8e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "returns INVALID with the key's value unread: the key loop reads it as the next key (the asset wrong or a later fatal site, dropped by the error scope). Unreachable: only the keys ResolveProp knows at the top level (gltfFileProblem)"
+    },
+    {
+      "id": "M-MODEL-FATAL-51",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1941,
+            1941
+          ],
+          "anchor": "loadGLB: \"Too short data size for glTF Binary.\"",
+          "sha256": "922b2843784d785071855147de7bcf9d3a17200d817d718b5a965c327d5bdc97"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "returns false (the file leaked; memory-safe). Unreachable: a .glb of at least 20 bytes"
+    },
+    {
+      "id": "M-MODEL-FATAL-52",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1955,
+            1955
+          ],
+          "anchor": "loadGLB: \"invalid magic\"",
+          "sha256": "cbcf601cec8a16cd1c395502758d7eccc34371670c169eae3b124a7c51c06ecc"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "returns false (memory-safe). Unreachable: the magic checked"
+    },
+    {
+      "id": "M-MODEL-FATAL-53",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1986,
+            1986
+          ],
+          "anchor": "loadGLB: \"Could not read full chunk\"",
+          "sha256": "d819992e5a7e22967abba337ec9e9390bc786e5422f15cace9510006ab2a40fa"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "the chunk's tail stays uninitialised and the loop's length goes on (memory-safe; the length may underflow: an endless loop). Unreachable: every chunk inside the file"
+    },
+    {
+      "id": "M-MODEL-FATAL-54",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1996,
+            1996
+          ],
+          "anchor": "loadGLB: \"first chunk was not a json chunk\"",
+          "sha256": "3b5a7911390704e958ec6742791dd6fe468ca17ec6a3694b66bf9662766198f1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "goes on with the parser unloaded (Parse reads nothing). Unreachable: the JSON chunk first"
+    },
+    {
+      "id": "M-MODEL-FATAL-55",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2004,
+            2004
+          ],
+          "anchor": "loadGLB: \"corrupt glb file.\"",
+          "sha256": "e07e51928e1037afe8f6888538cf431d010f279e44dd2778dc6ee63816758ad1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "the loop goes on into a third chunk (AddData past 32 chunks after enough of them: UNSAFE). Unreachable: at most two chunks, the header's length the file's"
+    },
+    {
+      "id": "M-MODEL-FATAL-56",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2021,
+            2021
+          ],
+          "anchor": "Parse: \"Expected an \\\"string\\\" \"",
+          "sha256": "7cd8d629ad6891b2f301d678b13505e2cc5267b7b97bf385860d85ffc0b651c2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "ParseProp reads the token as a key (memory-safe; INVALID). Unreachable: one root object of string keys (gltfFileProblem)"
+    },
+    {
+      "id": "M-MODEL-FATAL-57",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2089,
+            2089
+          ],
+          "anchor": "Parse: \"%s not fully loaded.\"",
+          "sha256": "48ef22644df894447bb99eeccc8b3dee5203b21cffe225c0fd375365ebe0c994"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "inside #if 0 (:2080-2090): not compiled in the engine or the preview"
+    },
+    {
+      "id": "M-MODEL-FATAL-58",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2126,
+            2126
+          ],
+          "anchor": "Load: \"Failed to read file\" (a .gltf of length 0)",
+          "sha256": "348b63a593f65f1ae013f82f2970031a78b1bdbdbba33c10a570416ae5af7651"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "goes on with an empty buffer (Parse reads nothing). Unreachable: the validator refuses an empty file"
+    },
+    {
+      "id": "M-MODEL-FATAL-59",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2136,
+            2136
+          ],
+          "anchor": "Load: \"Cannot read file, %s\"",
+          "sha256": "767639a1b41e199bda9076909f04ebbaa68ec09dc02231cea829f89f99fcaa77"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "goes on with what was read (memory-safe). Unreachable: the model read serves the whole file"
+    },
+    {
+      "id": "M-MODEL-FATAL-60",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.h",
+          "lines": [
+            220,
+            220
+          ],
+          "anchor": "gltfItem_boolean: \"parse error\" (neither true nor false)",
+          "sha256": "c535f90ef90361196f55242c5f241f846c1a275f67e3f15498cda15e049ad32b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idLib::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidatorsGltf.cpp",
+          "symbol": "gltfFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "MaterialDecls::parseGltfModel (the error-counting scope, M-MODEL-GUARD-06)"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "the boolean is left as it was (memory-safe). Unreachable: every boolean item a JSON true or false"
+    },
+    {
+      "id": "M-MODEL-STATIC-10",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            37,
+            38
+          ],
+          "anchor": "gltfChunk_Type_JSON, gltfChunk_Type_BIN",
+          "sha256": "da77c10848950e40f1757f634493400f8e7834f1d38f6ba0d636d367e20658d3"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "LP7.5: two static const unsigned ints of literals, constant-initialised, read only"
+    },
+    {
+      "id": "M-MODEL-STATIC-11",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            40,
+            41
+          ],
+          "anchor": "gltf_parseVerbose, gltfParser_PrefixNodeWithID",
+          "sha256": "f93ad957832949f5ee45485ce8afd09a07b2abe4027284cbd87d99d2f4295358"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            2365,
+            2365
+          ],
+          "anchor": "LoadGLTF (CONSOLE_COMMAND)",
+          "sha256": "e8fddff40dab8f7ae7ccf85cead7d52354766b3d27fd26f0a6ee5ef2c1ae6e64"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "LP7.5: constexpr idCVars at their engine defaults \"0\" (no verbose print, no id prefix on node names: Load :2177-2183 never runs), read only; the constexpr idCommandLink of LoadGLTF, constant-initialised, never registered or run (M-ID-STATIC-19)"
+    },
+    {
+      "id": "M-MODEL-STATIC-12",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            82,
+            101
+          ],
+          "anchor": "s_meshAttributeMap",
+          "sha256": "f5138210d904f59b57ef4e6597227195f1d153b860b49c5c7fa2e4acb8daae21"
+        },
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            132,
+            142
+          ],
+          "anchor": "s_nativeComponentTypeMap",
+          "sha256": "b1599378d7f397faeaaf30e27fe668298b3770358cc7866b63b406c2ac4b384f"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "LP7.5 (S5, the director's decision: allowed by name in M-ID-STATIC-39): two tables of { idStr, enum, size } rows, dynamically initialised at program load from string literals of at most 14 characters, which idStr keeps in its 20-byte base buffer (no allocation), read only by GetAttributeEnum and GetComponentTypeEnum (Icmp and compares) on the parse thread; their destructors at exit free nothing"
+    },
+    {
+      "id": "M-MODEL-STATIC-13",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            164,
+            165
+          ],
+          "anchor": "gltfData::dataList, gltfData::fileDataHash",
+          "sha256": "49f007c99aedd4c1ba88c5c47b7b07669e89091ce919485b202f7b9333299437"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "s_gltfCache, MaterialDecls::parseGltfModel"
+        }
+      ],
+      "staticKind": "per-call working state",
+      "reason": "LP7.5 (S5, S8): the parser's process-global file cache, an idList and an idHashIndex, dynamically initialised at program load by their constructors, which allocate nothing (the hash points at the shared INVALID_INDEX until its first Add); written by Load and ClearData under s_gltfCache only (the parse thread's parse, any thread's asset destructor); emptied after each parse (ClearData, then fileDataHash.Free(): its tables freed), so it holds nothing between parses and needs no reset"
+    },
+    {
+      "id": "M-MODEL-STATIC-14",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/gltfProperties.h",
+          "lines": [
+            799,
+            799
+          ],
+          "anchor": "gltfData::Data: static bool intialized",
+          "sha256": "9e08519171ea559b2d30f1c37ff33175dbad8f1c77d42ed4c2deb72c6a8badf6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "s_gltfCache"
+        }
+      ],
+      "staticKind": "binding",
+      "reason": "LP7.5: a function-local once flag, constant-initialised false, set by the first Data() (which sets dataList's granularity to 1) under s_gltfCache; idempotent afterwards"
+    },
+    {
+      "id": "M-MODEL-STATIC-15",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            44,
+            49
+          ],
+          "anchor": "r_useCachedDynamicModels, gltf_forceBspMeshTexture, gltf_modelSceneName, gltf_animSampleRate",
+          "sha256": "cc58b415ebab9faf4b1dd480dc458300b4473c1fe27264a2949fda66506a4076"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "static-init object",
+      "reason": "LP7.5: constexpr idCVars at their engine defaults, read only; gltf_forceBspMeshTexture \"0\" (ProcessNode_r and the plan take the glTF material's name)"
+    },
+    {
+      "id": "M-MODEL-STATIC-16",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            52,
+            57
+          ],
+          "anchor": "GLMB_VERSION, GLMB_MAGIC, GLTF_SnapshotName, blenderToDoomTransform, lastMeshFromFile",
+          "sha256": "ab39daf2dd91bda4689877e35f245e0341ecdfda0cb0def148fd93518af90ce8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "engineFinishGltfModel (globalTransform)"
+        }
+      ],
+      "staticKind": "idempotent table",
+      "reason": "LP7.5 (S5): the GLMB constants and the snapshot name are constant; lastMeshFromFile is a constant-initialised NULL that no copied line writes; blenderToDoomTransform (idAngles( 0, 0, 90 ).ToMat3() and vec3_origin) is dynamically initialised at program load from literals, allocating nothing, and reads vec3_origin, which is zero whether or not its own initialiser has run (M-ID-STATIC-39's rule); read only, by the finish on the pool"
+    },
+    {
+      "id": "M-MODEL-STATIC-17",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/MapFile_gltf.cpp",
+          "lines": [
+            34,
+            34
+          ],
+          "anchor": "blenderToDoomTransform (MapFile_gltf.cpp)",
+          "sha256": "f7487d7d90657e989da8cd561c4e5fd51db55c746f03cac573d388229cc4c66c"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "LP7.5 (S5): tbLitGltfMesh::blenderToDoomTransform, the same initialiser as Model_gltf.cpp's (M-MODEL-STATIC-16), in the namespace the MapFile ranges compile in; unused by the model path (ConvertFromMeshGltf takes the transform it is handed)"
+    },
+    {
+      "id": "M-MODEL-STATIC-18",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Matrix.cpp",
+          "lines": [
+            647,
+            648
+          ],
+          "anchor": "mat4_zero, mat4_identity",
+          "sha256": "f0315e7d8b2e09a052f9ac322365deebbad61bb4a13d64dbfcc85fecf3a25c55"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "LP7.5: two idMat4 globals dynamically initialised at program load from idVec4 literals (the copied constructors, no allocation), read only (the finish's mat4_identity); not in the director's six (the Matrix.cpp ranges were found at the link, M-MODEL-PART-12)"
+    },
+    {
+      "id": "M-MODEL-STATIC-19",
+      "kind": "static",
+      "engine": [],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "s_gltfCache, tbLitGltfMesh::s_meshDecls, s_noMaterial, declManager"
+        }
+      ],
+      "staticKind": "binding",
+      "reason": "LP7.5: the shim's own: s_gltfCache, a constant-initialised std::mutex over the parser's cache (M-MODEL-STATIC-13) between the parse thread's parse and an asset's destructor on any thread; s_meshDecls, a constant-initialised std::atomic pointer set by MeshDeclsScope for one finish's duration (one finish at a time on the one-worker pool); s_noMaterial and declManager constexpr. No thread_local: the Release app's TLS stays 0x273C"
+    },
+    {
+      "id": "M-MODEL-POOL-03",
+      "kind": "pool-safe",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            64,
+            136
+          ],
+          "anchor": "ProcessNode_r",
+          "sha256": "3e72f12d88c2cc90baf01a663260766a72964bea035381a09b697ae19cedc724"
+        },
+        {
+          "file": "neo/idlib/MapFile_gltf.cpp",
+          "lines": [
+            36,
+            366
+          ],
+          "anchor": "ConvertFromMeshGltf",
+          "sha256": "5576d13a8ce83dc95caa3b54f6da6c8719f22e5b7123ec289b858fa23d1e2ed3"
+        },
+        {
+          "file": "neo/idlib/MapFile.cpp",
+          "lines": [
+            2966,
+            3007
+          ],
+          "anchor": "SetContents",
+          "sha256": "3bade52996a18283a4c9448c290932f3f6d87a2f1a299025b8f1461f74cd5e98"
+        },
+        {
+          "file": "neo/idlib/gltfProperties.h",
+          "lines": [
+            1322,
+            1361
+          ],
+          "anchor": "ResolveNodeMatrix",
+          "sha256": "cdd2b254a4cac9795259d5b0682a4335311c8fd92fcc5ad31d68e89746b879e9"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "engineFinishGltfModel"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "finishModel"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "the model finish job"
+        }
+      ],
+      "commonCalls": [
+        "none in ProcessNode_r, ConvertFromMeshGltf or SetContents (their asserts compiled out in Release, true for a file the validator passed)",
+        "ShimGltf.cpp: common->Warning \"Couldn't load model\" and the material misses (the job's messages)"
+      ],
+      "note": "LP7.5 (D137, C24): as M-MODEL-POOL-01: the finish reads the parsed asset (shared, read-only to every other thread once the plan is made) and the parse thread's material captures through the stand-ins (M-MODEL-15, M-MODEL-SHIM-01), never the registry; it writes into the asset only ResolveNodeMatrix's node->matrix and dirty (from the node's own TRS, idempotent: a second finish of the same asset reads what the first wrote), one finish at a time; its allocations are the tagged new, Mem_ClearedAlloc, Mem_Alloc16 and R_StaticAlloc on the global allocator; no fatal site; its statics: M-MODEL-STATIC-15 ... -18"
+    },
+    {
+      "id": "M-TEST-MODEL-07",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/idlib/gltfParser.cpp",
+          "lines": [
+            1929,
+            2011
+          ],
+          "anchor": "loadGLB (the hand files)",
+          "sha256": "4861901c3680611dd75c95757a45b6310e5f4ac75123922d13505ff3a98be96d"
+        },
+        {
+          "file": "neo/idlib/MapFile_gltf.cpp",
+          "lines": [
+            36,
+            366
+          ],
+          "anchor": "ConvertFromMeshGltf (the hand quad)",
+          "sha256": "5576d13a8ce83dc95caa3b54f6da6c8719f22e5b7123ec289b858fa23d1e2ed3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading: the glTF validator (LP7.5, D136, P7.2); ModelLoading, the glTF source path through the copies (LP7.5, C51 (3), D137); ModelLoading: a glTF's finish reads nothing of the registry (LP7.5, S3, D137); ModelLoading, the glTF fixture before the engine run (LP7.5, C56, P7.10)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_MaterialService.cpp",
+          "symbol": "MaterialService loads glTF models (LP7.5, C51, K40 closes, K41)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/LitTestUtils.h",
+          "symbol": "HandGlb, handQuadGlb, handAnimatedGlb"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/LitTestUtils.cpp",
+          "symbol": "handQuadGlb, handAnimatedGlb"
+        }
+      ],
+      "note": "LP7.5 (C51, C56, D136, D137), CPU only, in the normal run: the validator's acceptances and each refusal with its reason (the container, the JSON, the external buffers, the indexes, the windows and types, TEXCOORD_1 ignored, a mapped semantic in another case refused); the source path through the copies on hand-built .glb files: a refused file the default cube with its reason, the quad Z up with its st as stored, its normals and colours, its corners reversed ({ 2, 1, 0, 3, 2, 0 }), no material's snpanel2rust, two primitives two surfaces, a child mesh added twice, animations Skinned and an object animation not, E-LIT-7's cleared fields and note, the heap test (no block left), ExtractIdentifier; the finish with the registry reloaded between the parse and the finish (S3); N13's fixture through the validator and its MikkTSpace tangents unlike the WithoutNormals path's; the service: a .glb Ready from its source, an animated one and an animated .bglb Skinned (K41), a binary first when it is current (K40 closed)"
+    },
+    {
+      "id": "M-TEST-MODEL-08",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            750,
+            794
+          ],
+          "anchor": "LoadBinaryModel: the GLMB tail (the goldens' reader)",
+          "sha256": "cc77cd6989131268b3e9efaa71e2f15e949e068b91fcd5060c725898846dc910"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            1643,
+            1700
+          ],
+          "anchor": "WriteBinaryModel: the GLMB tail, then four counts (md5joints, bones, defaultPose, invertedDefaultPose)",
+          "sha256": "fd2377a126b0fcc6775993a93f44d8ad349b0928e09acecf447393f3d925f33e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading, the glTF source path against the engine's binary (LP7.5, C56, the golden)"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/models/test",
+          "symbol": "n13.glb, n13.bglb, n14.glb, n14.bglb"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/stamps.json",
+          "symbol": "models/test/n13.glb, n14.glb (2017)"
+        }
+      ],
+      "note": "LP7.5 (C56, P7.10, LP7.5's exit): N13's .glb (stamped 2017: the stamp decides nothing for a glTF, MikkTSpace always, Model_gltf.cpp:645) through the preview's source path equals the engine's n13.bglb byte for byte, every field: 18 vertices (3 mirrored), 48 indexes, normal[3] 0 on both sides; its GLMB tail DM_STATIC without animations, then four zero counts. The WithoutNormals mutant (useMikktspace false) differs in tangents only (P7.10); n14.bglb, the same geometry under another name, equals it. The goldens are the .bglb of the engine run of 2026-10-26 (its run-b process; written at map load), copied into the fixture with their stamps and digests as record_run_goldens does, by hand: the run stopped before it (M-TEST-PARITY-10)"
+    },
+    {
+      "id": "M-TEST-PARITY-10",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/ModelManager.cpp",
+          "lines": [
+            444,
+            500
+          ],
+          "anchor": "GetModel: the binary, else InitFromFile and Writing the .bglb",
+          "sha256": "854ec750e2c9b1471d48e941f71dc7281f537a42694bf9fd8b72e8a027adaee8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "glb_dome, MODEL_SOURCES (n13.glb, n14.glb), MODEL_ROOMS_3, models_light_specs and build_models_map (the N13 and N14 rooms), the rows N13 and N14, RUN_GOLDENS and record_run_goldens"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/maps/test/litpreview_models.map",
+          "symbol": "the rooms N13 and N14 (parity.py fixtures)"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/models/test",
+          "symbol": "n13.glb, n14.glb, n13.bglb, n14.bglb (the run's goldens)"
+        }
+      ],
+      "note": "LP7.5 (C56; P7.10), test only: the models map's rooms N13 (k 17: the .glb through the preview's source path, its .bglb never copied to the preview) and N14 (k 18: the same bytes under a second name, its .bglb copied by the row's binary list and its source withheld: the binary-first path), each with its noshadows light, camera (40, 192) yaw 0, control black, exact. The engine run of 2026-10-26 (16:10-16:36) wrote both .bglb (the goldens, M-TEST-MODEL-08) and run-a's 184 shots, every one where it belongs, but run-b had every shot of every map at its spawn (setviewpos never took, as on a paused game) and parity.py stopped before rows.json: the rows wait on another run, the director's decision; the proof listing 21,261 before and after each process"
     }
   ],
   "retired": [
