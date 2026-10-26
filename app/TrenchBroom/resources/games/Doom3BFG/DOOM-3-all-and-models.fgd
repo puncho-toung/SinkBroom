@@ -7335,7 +7335,8 @@ Trigger it to turn it on and off"
 ]
 
 @SolidClass color(0 127 204) = func_static : "A brush model that just sits there, doing nothing.  Can be used for conditional walls and models.
-When triggered, toggles between visible and hidden (see hide).  Entity is non-solid when hidden."
+When triggered, toggles between visible and hidden (see hide).  Entity is non-solid when hidden.
+Prefer func_group for unreferenced brush detail. spawnSkipStatics may omit inlined collision-free, unnamed or auto-named unreferenced models; solid inlined models retain their entity for collision."
 [
 	spawnclass(string) readonly : "" : "idStaticEntity"
 	solid(choices) : "whether the object should be solid or not." : 1 =
@@ -17777,6 +17778,37 @@ When triggered, toggles between visible and hidden (see hide).  Entity is non-so
 	target(target_destination) : "Entity to trigger; target1..targetN also link"
 ]
 
+@PointClass color(0 255 0) = info_landing : "Explicit party landing slot, index 0 through 7"
+[
+	dmapOnly(string) readonly : "" : "1"
+	landmark(string) : "Arrival doorway id"
+	index(integer) : "Party player index"
+	name(target_source) : "Entity name; other entities target this"
+	target(target_destination) : "Entity to trigger; target1..targetN also link"
+]
+
+@PointClass color(0 255 255) = info_landmark : "Map graph doorway; landmark identity survives editor group renames"
+[
+	dmapOnly(string) readonly : "" : "1"
+	radius(float) : "Arrival placement radius" : 256
+	entry(string) : "" : "1"
+	exit(string) : "" : "1"
+	landmark(string) : "Stable doorway id"
+	kind(string) : "Doorway template kind"
+	link(string) : "map:landmark or @mapGraph"
+	name(target_source) : "Entity name; other entities target this"
+	target(target_destination) : "Entity to trigger; target1..targetN also link"
+]
+
+@PointClass color(255 255 0) size(-8 -8 -8, 8 8 8) = info_lightgrid_hint : "Light-grid cell size for this area (bakeLightGrids)"
+[
+	dmapOnly(string) readonly : "" : "1"
+	gridSize(string) : "Cell size in units: x y z"
+	limit(string) : "Optional maximum probes in this area"
+	name(target_source) : "Entity name; other entities target this"
+	target(target_destination) : "Entity to trigger; target1..targetN also link"
+]
+
 @PointClass color(255 255 0) size(-4 -4 -4, 4 4 4) model({ "path": "sprites/information.png", "scale": 0.03125 }) = info_location : "Place one of these in each door-separated area for naming the gameplay sections"
 [
 	spawnclass(string) readonly : "" : "idLocationEntity"
@@ -20397,6 +20429,16 @@ PDA's contain vidoes, audio, e-mail, and security clearances."
 	look_max(string) : "maximum angles for head looks" : "0 0 0"
 	def_attach(string) : "Name of entityDef to attach to model.  Set 'joint' in the attached entity def to the joint to attach to, and use 'origin' and 'angles' to offset it." : "prop_dufflebag"
 	cinematic(string) : "" : "1"
+	name(target_source) : "Entity name; other entities target this"
+	target(target_destination) : "Entity to trigger; target1..targetN also link"
+]
+
+@PointClass base(monster_zombie_maint) = mg_elite
+[
+	persist_lifetime(string) : "" : "-1"
+	persist_nocap(string) : "" : "1"
+	persist_noreset(string) : "" : "1"
+	burnaway(string) : "" : "0"
 	name(target_source) : "Entity name; other entities target this"
 	target(target_destination) : "Entity to trigger; target1..targetN also link"
 ]
@@ -27915,6 +27957,15 @@ Use keyval, keyval1, keyval2, etc.. for multiples."
 	target(target_destination) : "Entity to trigger; target1..targetN also link"
 ]
 
+@SolidClass base(trigger_multiple) color(51 204 255) = trigger_changelevel : "Whole party map graph exit"
+[
+	spawnclass(string) readonly : "" : "idTrigger_ChangeLevel"
+	wait_party(string) : "" : "1"
+	landmark(string) : "Departure doorway id"
+	name(target_source) : "Entity name; other entities target this"
+	target(target_destination) : "Entity to trigger; target1..targetN also link"
+]
+
 @PointClass color(76 127 204) size(-8 -8 -8, 8 8 8) = trigger_count : "Countable trigger."
 [
 	spawnclass(string) readonly : "" : "idTrigger_Count"
@@ -28143,6 +28194,16 @@ Use keyval, keyval1, keyval2, etc.. for multiples."
 		1 : "Yes"
 	]
 	call(string) : "script function to call when an entity touches the trigger.The script function should have a single entity as parameter."
+	name(target_source) : "Entity name; other entities target this"
+	target(target_destination) : "Entity to trigger; target1..targetN also link"
+]
+
+@SolidClass color(0 178 255) = trigger_transition : "Map-only carry volume paired with a landmark"
+[
+	dmapOnly(string) readonly : "" : "1"
+	cap(string) : "" : "64"
+	carry(string) : "" : "all"
+	landmark(string) : "Doorway id"
 	name(target_source) : "Entity name; other entities target this"
 	target(target_destination) : "Entity to trigger; target1..targetN also link"
 ]
