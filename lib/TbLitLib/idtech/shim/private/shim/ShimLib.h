@@ -149,6 +149,8 @@ extern const idSIMDProcessor* const SIMDProcessor;
 #include "idlib/geometry/JointTransform.h"
 #include "idlib/geometry/DrawVert.h"
 #include "idlib/geometry/Winding.h"
+// LP7.3 (C54): copied whole (the engine's Lib.h includes it after Winding.h)
+#include "idlib/geometry/DecalProjection.h"
 #include "idlib/geometry/Surface.h"
 #include "idlib/geometry/Surface_Patch.h"
 

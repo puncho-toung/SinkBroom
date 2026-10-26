@@ -51,6 +51,12 @@ bool spawnVector(
   std::string_view key,
   std::string_view fallback,
   EngineVec3& out);
+// LP7.3 (C54): GetVec2: zero, then sscanf "%f %f"; whether the key exists
+bool spawnVec2(
+  const EntityKeys& keys,
+  std::string_view key,
+  std::string_view fallback,
+  EngineVec2& out);
 // GetFloat( key, defaultString, out ): atof of the value or of fallback; whether the key
 // exists
 bool spawnFloat(

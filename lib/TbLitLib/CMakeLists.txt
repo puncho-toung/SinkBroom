@@ -16,6 +16,7 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/BprocModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ChunkBuilder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CpuPool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/DecalProjectors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DeviceChoice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EditorImageSize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EngineTables.cpp

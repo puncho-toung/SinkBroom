@@ -169,6 +169,20 @@ bool spawnVector(
   return value != nullptr;
 }
 
+bool spawnVec2(
+  const EntityKeys& keys,
+  const std::string_view key,
+  const std::string_view fallback,
+  EngineVec2& out)
+{
+  // Dict.cpp:381-395 GetVec2: found = GetString( key, defaultString, &s ); out.Zero();
+  // sscanf( s, "%f %f", &out.x, &out.y )
+  const auto* value = findKey(keys, key);
+  out = {0, 0};
+  scanFloats(value ? std::string_view{*value} : fallback, out.data(), 2);
+  return value != nullptr;
+}
+
 bool spawnFloat(
   const EntityKeys& keys,
   const std::string_view key,

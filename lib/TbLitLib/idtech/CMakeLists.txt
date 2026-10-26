@@ -20,6 +20,7 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_ENGINE_DIR}/idlib/Token.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/bv/Bounds.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/containers/HashIndex.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/DecalProjection.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/DrawVert.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/JointTransform.cpp
     # includes "../ParallelJobList_JobHeaders.h", which resolves to the shim's stand-in
@@ -89,6 +90,8 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_ENGINE_DIR}/libs/mikktspace/mikktspace.h
 
     ${TB_LIT_ID_SHIM_DIR}/src/DeclManagerShim.cpp
+    # LP7.3 (C54): the dress decals' facade over the copied DecalProjection.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/EngineDecal.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineGeometry.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineImageData.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineInteraction.cpp
@@ -122,6 +125,7 @@ target_sources(TbLitIdLib
     BASE_DIRS ${TB_LIT_ID_SHIM_DIR}/include
     FILES
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineBuiltins.h
+      ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineDecal.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineGeometry.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineImageData.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineImageEnums.h
