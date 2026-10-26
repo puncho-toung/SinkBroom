@@ -375,9 +375,7 @@ void SceneGeometry::buildModelEntity(const PreviewId id)
   auto model = ModelEntity{};
   model.kind = ModelEntity::Kind::Nothing;
   const auto who = fmt::format(
-    "Lit preview models: '{}' ({})",
-    name.empty() ? std::to_string(id) : name,
-    entity.classname);
+    "the model of '{}' ({})", name.empty() ? std::to_string(id) : name, entity.classname);
 
   // D128: hide 1 (Entity.cpp:651-656; a light's model too, Light.cpp Event_Hide), a
   // dmapOnly class (its plain def, C22: never spawned), worldspawn's removeEntities

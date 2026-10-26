@@ -156,7 +156,9 @@ TEST_CASE(
          // LP4.2a (D88): the slot's arrival is the trigger
          {&FrameConvergence::probeImagesPending, false},
          // LP4.2b step 0: the probe build's collection is the trigger
-         {&FrameConvergence::probesInFlight, false}})
+         {&FrameConvergence::probesInFlight, false},
+         // LP7.2 (D124): the table that answers is the trigger
+         {&FrameConvergence::modelsPending, false}})
   {
     auto convergence = FrameConvergence{};
     convergence.*term = true;
@@ -14328,6 +14330,637 @@ TEST_CASE("LitSession the .proc's triangles adopted on a GPU (LP7.4)", "[.][litg
     *before,
     *after);
   std::filesystem::remove(logPath);
+}
+
+namespace
+{
+
+// LP7.2 (C52, C53): the GPU case's materials: N01's usemtl made as LP4.2a's flat slab is
+// (a uniform diffuse of another colour, the implicit _flat bump: the CPU model's lit
+// path), a red one, and a
+// two-sided red one (ShouldCreateBackSides: a skin to it must not add back sides)
+const auto Lp72Materials = std::string{
+  "textures/lp7/model\n{\n\tdiffusemap textures/lp72/model.tga\n}\n"
+  "textures/lp72/red\n{\n\tdiffusemap textures/lp72/red.tga\n}\n"
+  "textures/lp72/redsided\n{\n\ttwoSided\n\tdiffusemap textures/lp72/red.tga\n}\n"};
+
+const auto Lp72Skins = std::string{
+  "skin skins/lp72/red\n{\n\ttextures/lp7/model\ttextures/lp72/red\n}\n"
+  "skin skins/lp72/crate\n{\n\ttextures/lp1b/crate\ttextures/lp72/redsided\n}\n"};
+
+// the LP4.2a slabs with the GPU case's light above the flat slab (and a second one in the
+// west room), and these entities
+std::string lp72MapText(const std::string& entities, const bool westLight = false)
+{
+  auto lights = std::vector<std::string>{
+    "\"name\" \"lp72_light\"\n\"origin\" \"60 0 120\"\n\"light_radius\" \"200 200 "
+    "200\"\n\"_color\" \"1 1 1\"\n\"texture\" \"lights/lp51/held\"\n"};
+  if (westLight)
+  {
+    lights.push_back(
+      "\"name\" \"lp72_west\"\n\"origin\" \"-120 80 64\"\n\"light_radius\" \"150 150 "
+      "150\"\n\"_color\" \"1 1 1\"\n\"texture\" \"lights/lp51/held\"\n");
+  }
+  return lp51MapText(lights) + entities;
+}
+
+std::string lp72Model(
+  const std::string& name,
+  const std::string& model,
+  const std::string& origin,
+  const std::string& keys = {},
+  const std::string& classname = "func_static")
+{
+  return fmt::format(
+    "{{\n\"classname\" \"{}\"\n\"name\" \"{}\"\n\"model\" \"{}\"\n\"origin\" "
+    "\"{}\"\n{}}}\n",
+    classname,
+    name,
+    model,
+    origin,
+    keys);
+}
+
+// a scenario's frames and what the frame log's last settled one in them must hold
+struct Lp72Expect
+{
+  std::string name;
+  std::uint64_t first = 0;
+  std::uint64_t last = 0;
+  std::uint64_t entities = 0;
+  std::uint64_t instances = 0;
+  std::uint64_t skinned = 0;
+};
+
+} // namespace
+
+// LP7.2 (C52, C53, D124, D129, D130): model entities on a GPU over the LP2.2a fixture's
+// bake: LP7.1a's N01 box from the engine's own binary (its tangents the golden's) lit by
+// one light against a CPU model of the lit path (LP5.1's: albedo x lambert x
+// r_lightScale, the HDR within 1 %, the LDR +-1); two entities of one model drawn from
+// one placement; a model through the wall seen from both rooms; skin and shader on the
+// model and on the brush func_static; hide; a Pending model (nothing drawn, unconverged)
+// then Ready; a Missing model's cube; a light with a model; an .md5mesh; 0 validation
+// messages. Hidden: it needs a GPU and the game's blobs.
+TEST_CASE("LitSession model entities on a GPU (LP7.2)", "[.][litgpu3]")
+{
+  const auto started = std::chrono::steady_clock::now();
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  const auto base = root / "base";
+  const auto fixture = litFixtureFolder();
+  writeTextFile(base / "materials" / "zz_lp51.mtr", Lp51Materials);
+  writeTextFile(base / "materials" / "zz_lp42a.mtr", Lp42aMaterials);
+  writeTextFile(base / "materials" / "zz_lp72.mtr", Lp72Materials);
+  writeTextFile(base / "skins" / "lp72.skin", Lp72Skins);
+  std::filesystem::create_directories(base / "textures" / "lp42a");
+  std::filesystem::create_directories(base / "textures" / "lp72");
+  std::filesystem::create_directories(base / "lights" / "lp51");
+  const auto writeTga = [](const std::filesystem::path& path, const test::Rgba& image) {
+    auto file = std::ofstream{path, std::ios::binary};
+    const auto bytes = test::tgaFile(image);
+    file.write(bytes.data(), std::streamsize(bytes.size()));
+  };
+  writeTga(base / "textures" / "lp42a" / "flat.tga", test::flat(4, 4, 200, 120, 60));
+  writeTga(base / "textures" / "lp72" / "red.tga", test::flat(4, 4, 220, 30, 30));
+  writeTga(base / "textures" / "lp72" / "model.tga", test::flat(4, 4, 60, 160, 200));
+  writeTga(base / "lights" / "lp51" / "held.tga", test::flat(4, 4, 255, 255, 255));
+  // N01's engine binary under three names (no source: its time test passes, -1): the
+  // golden's vertices and tangents (C51, D125)
+  const auto rendermodels = base / "generated" / "rendermodels" / "models" / "test";
+  std::filesystem::create_directories(rendermodels);
+  for (const auto* name : {"n01.bobj", "n01p.bobj", "n01w.bobj"})
+  {
+    std::filesystem::copy_file(
+      fixture / "models" / "test" / "n01.bobj",
+      rendermodels / name,
+      std::filesystem::copy_options::overwrite_existing);
+  }
+  const auto frameLog = root / "lp72.framelog.csv";
+  std::filesystem::remove(frameLog);
+  const auto down = litCamera({60, 0, 100}, {0, 0, -1}, {1, 0, 0});
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  auto expects = std::vector<Lp72Expect>{};
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto gate = std::make_shared<ParkingGate>();
+    auto serviceOptions = MaterialServiceOptions{};
+    serviceOptions.makeSource = [root](const std::atomic<bool>& cancel) {
+      return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(root, &cancel)};
+    };
+    serviceOptions.pollInterval = 0ms;
+    serviceOptions.imageBudgetBytes = 0;
+    serviceOptions.beforeTakeWorkForTesting = [gate] { gate->pass(); };
+    auto service = MaterialService::create(std::move(serviceOptions))
+                   | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    const auto atExit = OpenParkingAtExit{gate};
+    auto events = Events{};
+    auto options = SessionOptions{};
+    options.validation = true;
+    options.gamePath = root;
+    options.frameLogPath = frameLog;
+    auto session = LitSession::create(
+                     instance.handles(),
+                     VK_NULL_HANDLE,
+                     160,
+                     120,
+                     options,
+                     events.sink(),
+                     7,
+                     service.get())
+                   | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    session->skipShaderPassesForTesting(true);
+    auto tonemap = EngineTonemap;
+    tonemap.hdrMinLuminance = 0.1f;
+    tonemap.hdrMaxLuminance = 0.1001f;
+    session->setTonemapForTesting(tonemap);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+
+    auto sequence = std::uint64_t{0};
+    auto offered = std::shared_ptr<const Snapshot>{};
+    // B0.4: a scenario's snapshot removes the entities and the nodes the last one had
+    // and this one has not (snapshotOfMapText numbers entities, then nodes: a number may
+    // pass from an entity to a node, so each kind is compared apart)
+    auto previousEntities = std::set<PreviewId>{};
+    auto previousNodes = std::set<PreviewId>{};
+    const auto offer = [&](const std::string& text) {
+      REQUIRE(waitFor([&] { return session->snapshotSlotFree(); }, 10000ms, false));
+      auto snapshot = snapshotOfMapText(text);
+      snapshot.generation = 7;
+      snapshot.sequence = ++sequence;
+      snapshot.mapPath = (root / "base" / "maps" / "lp1b_geometry.map").string();
+      auto entities = std::set<PreviewId>{};
+      for (const auto& entity : snapshot.entities)
+      {
+        entities.insert(entity.id);
+      }
+      auto nodes = std::set<PreviewId>{};
+      for (const auto& node : snapshot.nodes)
+      {
+        nodes.insert(node.id);
+      }
+      auto removed = std::set<PreviewId>{};
+      std::ranges::set_difference(
+        previousEntities, entities, std::inserter(removed, removed.end()));
+      std::ranges::set_difference(
+        previousNodes, nodes, std::inserter(removed, removed.end()));
+      snapshot.removed.assign(removed.begin(), removed.end());
+      previousEntities = std::move(entities);
+      previousNodes = std::move(nodes);
+      offered = std::make_shared<const Snapshot>(std::move(snapshot));
+      REQUIRE(session->offerSnapshot(offered));
+    };
+    const auto shoot = [&](const CameraState& camera) {
+      auto readback = std::optional<AmbientReadback>{};
+      for (auto attempt = 0;
+           attempt < 20
+           && !(
+             readback && readback->frame.settled && readback->frame.lit.camera == camera);
+           ++attempt)
+      {
+        REQUIRE(settledHdr(*session, camera, 1));
+        readback = ambientReadback(*session);
+      }
+      REQUIRE(readback);
+      REQUIRE(readback->frame.settled);
+      return std::move(*readback);
+    };
+    // the frame log's frame number (RenderThread's m_frameIndex) of a frame now
+    const auto frameNow = [&] {
+      auto index = std::uint64_t{0};
+      REQUIRE(
+        inFrame(*session, [&](RenderFrameAccess& access) { index = access.frameIndex; }));
+      return index;
+    };
+    const auto scenario = [&](
+                            const std::string& name,
+                            const std::string& text,
+                            const CameraState& camera,
+                            const std::uint64_t entities,
+                            const std::uint64_t instances,
+                            const std::uint64_t skinned) {
+      auto expect = Lp72Expect{name, frameNow(), 0, entities, instances, skinned};
+      offer(text);
+      auto readback = shoot(camera);
+      expect.last = frameNow();
+      expects.push_back(expect);
+      return readback;
+    };
+    const auto pixel =
+      [](const AmbientReadback& readback, const std::uint32_t x, const std::uint32_t y) {
+        return readback.hdr.at(x, y);
+      };
+    const auto ldrAt =
+      [](const AmbientReadback& readback, const std::uint32_t x, const std::uint32_t y) {
+        const auto i = (std::size_t(y) * readback.hdr.width + x) * 4;
+        return std::array<int, 3>{
+          readback.ldr[i], readback.ldr[i + 1], readback.ldr[i + 2]};
+      };
+    struct Arenas
+    {
+      std::size_t placedShared = 0;
+      std::uint64_t usedBytes = 0;
+      std::size_t instances = 0;
+      std::size_t sharedInstances = 0;
+      // the brush func_static lp1b_rotator's chunks: their indexes and materials
+      std::size_t rotatorIndexes = 0;
+      std::set<std::string> rotatorMaterials;
+    };
+    const auto arenas = [&] {
+      auto rotator = NoPreviewId;
+      for (const auto& entity : offered->entities)
+      {
+        for (auto k = entity.keys.first; k < entity.keys.first + entity.keys.count; ++k)
+        {
+          if (
+            offered->string(offered->keyValues[k].key) == "name"
+            && offered->string(offered->keyValues[k].value) == "lp1b_rotator")
+          {
+            rotator = entity.id;
+          }
+        }
+      }
+      auto state = Arenas{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        state.placedShared = access.arenas.placedShared();
+        state.usedBytes = access.arenas.usedBytes();
+        state.instances = access.instances.size();
+        for (const auto& [key, instance] : access.instances)
+        {
+          state.sharedInstances = std::max(
+            state.sharedInstances, access.arenas.sharedInstances(instance.placement()));
+        }
+        for (const auto& [key, chunk] : access.chunks)
+        {
+          if (key.entity == rotator)
+          {
+            state.rotatorIndexes += chunk.indexes.size();
+            state.rotatorMaterials.insert(key.material);
+          }
+        }
+      }));
+      return state;
+    };
+
+    // 0. no model: the flat slab under the camera
+    const auto bare = scenario("bare", lp72MapText(""), down, 0, 0, 0);
+    const auto background = pixel(bare, 80, 60);
+
+    // 1. the N01 box over the slab, its top at z 50: the CPU model of its lit pixel (the
+    // golden's normal (0 0 1) and tangents, LP5.1's lit path)
+    const auto one = scenario(
+      "one",
+      lp72MapText(lp72Model("lp72_a", "models/test/n01.obj", "60 0 2")),
+      down,
+      1,
+      1,
+      0);
+    const auto flatKey = stageImage(*service, "textures/lp7/model", 2);
+    REQUIRE(flatKey);
+    const auto flatTexel = firstTexel(*service, *flatKey);
+    REQUIRE(flatTexel);
+    const auto albedo = modelDiffuseMap(*flatTexel);
+    // the one light's origin (lp72_light)
+    auto lightOrigin = EngineVec3{};
+    session->lightTable()->records.forEach([&](const PreviewId&, const auto& record) {
+      if (record)
+      {
+        lightOrigin = record->derived.projection.globalLightOrigin;
+      }
+    });
+    for (const auto& [x, y] : {std::pair{80u, 60u}, std::pair{85u, 65u}})
+    {
+      // the pixel's point on the box top (z 50, 50 below the eye; fov 90 over 160)
+      const auto unit = 50.0f / 80.0f;
+      const auto p = std::array<float, 3>{
+        60.0f - (float(y) + 0.5f - 60.0f) * unit,
+        -(float(x) + 0.5f - 80.0f) * unit,
+        50.0f};
+      const auto d = std::array<float, 3>{
+        lightOrigin[0] - p[0], lightOrigin[1] - p[1], lightOrigin[2] - p[2]};
+      const auto lambert =
+        std::clamp(d[2] / std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]), 0.0f, 1.0f);
+      const auto k = lambert * 3.0f;
+      const auto model =
+        std::array<float, 3>{albedo[0] * k, albedo[1] * k, albedo[2] * k};
+      const auto hdr = pixel(one, x, y);
+      const auto expected = modelLdr(model, one.exposure, one.frame);
+      const auto ldr = ldrAt(one, x, y);
+      CAPTURE(x, y);
+      for (std::size_t c = 0; c < 3; ++c)
+      {
+        CHECK(hdr[c] == Catch::Approx(model[c]).epsilon(0.01));
+        CHECK(std::abs(ldr[c] - expected[c]) <= 1);
+      }
+      std::cout << fmt::format(
+        "LP7.2 N01 lit pixel ({} {}): HDR model ({:.5f} {:.5f} {:.5f}) read-back ({:.5f} "
+        "{:.5f} {:.5f}); LDR model ({} {} {}) read-back ({} {} {})\n",
+        x,
+        y,
+        model[0],
+        model[1],
+        model[2],
+        hdr[0],
+        hdr[1],
+        hdr[2],
+        expected[0],
+        expected[1],
+        expected[2],
+        ldr[0],
+        ldr[1],
+        ldr[2]);
+    }
+    CHECK(one.frame.lit.modelDraws > 0u);
+    const auto oneArenas = arenas();
+    CHECK(oneArenas.placedShared == 1u);
+    CHECK(oneArenas.instances == 1u);
+
+    // 2. two entities of one model: one placement, its bytes once, both drawn
+    const auto two = scenario(
+      "two",
+      lp72MapText(
+        lp72Model("lp72_a", "models/test/n01.obj", "60 0 2")
+        + lp72Model("lp72_b", "models/test/n01.obj", "60 60 2")),
+      down,
+      2,
+      2,
+      0);
+    const auto twoArenas = arenas();
+    CHECK(twoArenas.placedShared == 1u);
+    CHECK(twoArenas.instances == 2u);
+    CHECK(twoArenas.sharedInstances == 2u);
+    CHECK(twoArenas.usedBytes == oneArenas.usedBytes);
+    CHECK(two.frame.lit.modelDraws == 2 * one.frame.lit.modelDraws);
+
+    // the model's colour is not the slab's
+    CHECK(pixel(one, 80, 60) != background);
+
+    // 3. a model through the wall beside the doorway (x -24..24 across the solid x
+    // -8..8), seen from both rooms: the model where the wall was
+    const auto east = litCamera({60, 80, 54}, {-1, 0, 0}, {0, 0, 1});
+    const auto west = litCamera({-60, 80, 54}, {1, 0, 0}, {0, 0, 1});
+    const auto wallEast =
+      scenario("wall-east-bare", lp72MapText("", true), east, 0, 0, 0);
+    const auto wallWest = shoot(west);
+    const auto through = lp72Model("lp72_w", "models/test/n01w.obj", "0 80 30");
+    const auto modelEast =
+      scenario("wall-east", lp72MapText(through, true), east, 1, 1, 0);
+    const auto modelWest = shoot(west);
+    for (const auto* readback : {&modelEast, &modelWest})
+    {
+      // the model's albedo's order (60 160 200): lit, blue above green above red
+      const auto rgb = pixel(*readback, 80, 60);
+      CHECK(rgb[2] > rgb[1]);
+      CHECK(rgb[1] > rgb[0]);
+      CHECK(rgb[2] > 0.01f);
+    }
+    CHECK(pixel(modelEast, 80, 60) != pixel(wallEast, 80, 60));
+    CHECK(pixel(modelWest, 80, 60) != pixel(wallWest, 80, 60));
+
+    // 4. skin and shader: the model's probe moves to red; the brush func_static's crate
+    // too, its vertices, back sides and st the crate's (the chunk's indexes unchanged)
+    const auto skinned = scenario(
+      "skin",
+      lp72MapText(lp72Model(
+        "lp72_a", "models/test/n01.obj", "60 0 2", "\"skin\" \"skins/lp72/red\"\n")),
+      down,
+      1,
+      1,
+      0);
+    const auto shaded = scenario(
+      "shader",
+      lp72MapText(lp72Model(
+        "lp72_a", "models/test/n01.obj", "60 0 2", "\"shader\" \"textures/lp72/red\"\n")),
+      down,
+      1,
+      1,
+      0);
+    for (const auto* readback : {&skinned, &shaded})
+    {
+      const auto rgb = pixel(*readback, 80, 60);
+      CHECK(rgb[0] > 4.0f * rgb[1]);
+      CHECK(rgb[0] > 4.0f * rgb[2]);
+    }
+    CHECK(pixel(skinned, 80, 60) == pixel(shaded, 80, 60));
+    const auto above = litCamera({152, 64, 100}, {0, 0, -1}, {1, 0, 0});
+    const auto crate = scenario("crate", lp72MapText(""), above, 0, 0, 0);
+    const auto crateArenas = arenas();
+    CHECK(crateArenas.rotatorMaterials.contains("textures/lp1b/crate"));
+    auto rotatorSkinned = lp72MapText("");
+    {
+      const auto at = rotatorSkinned.find("\"model\" \"lp1b_rotator\"\n");
+      REQUIRE(at != std::string::npos);
+      rotatorSkinned.insert(at, "\"skin\" \"skins/lp72/crate\"\n");
+    }
+    const auto crateRed = scenario("crate-skin", rotatorSkinned, above, 0, 0, 0);
+    const auto redArenas = arenas();
+    // the draw material the skin's; no back sides from the two-sided one (the crate's
+    // own role, Model.cpp:1252-1276): the same indexes
+    CHECK(redArenas.rotatorMaterials.contains("textures/lp72/redsided"));
+    CHECK_FALSE(redArenas.rotatorMaterials.contains("textures/lp1b/crate"));
+    CHECK(crateArenas.rotatorIndexes > 0u);
+    CHECK(redArenas.rotatorIndexes == crateArenas.rotatorIndexes);
+    CHECK(crateRed.frame.lit.interactionDraws == crate.frame.lit.interactionDraws);
+    CHECK(crateRed.frame.lit.prepassDraws == crate.frame.lit.prepassDraws);
+    {
+      const auto rgb = pixel(crateRed, 80, 60);
+      CHECK(rgb[0] > 4.0f * rgb[1]);
+    }
+    CHECK(pixel(crateRed, 80, 60) != pixel(crate, 80, 60));
+
+    // 5. hide 1: the slab behind shows, as without the model
+    const auto hidden = scenario(
+      "hide",
+      lp72MapText(
+        lp72Model("lp72_a", "models/test/n01.obj", "60 0 2", "\"hide\" \"1\"\n")),
+      down,
+      0,
+      0,
+      0);
+    CHECK(pixel(hidden, 80, 60) == background);
+
+    // 6. a Pending model: the parse thread held, its frames draw nothing at its place and
+    // are not settled; then Ready settles with the model
+    {
+      gate->close();
+      const auto slot = service->table()->find("textures/lp7/model");
+      REQUIRE(slot);
+      REQUIRE(slot->entry);
+      auto parms = ShaderParms{};
+      parms[11] = 72.0f;
+      REQUIRE(gate->park([&] {
+        static_cast<void>(service->evaluate(MaterialId::of(*slot->entry), parms, 0.0f));
+      }));
+      auto expect = Lp72Expect{"pending", frameNow(), 0, 1, 1, 0};
+      offer(lp72MapText(lp72Model("lp72_a", "models/test/n01p.obj", "60 0 2")));
+      // frames come with camera moves (a wait for a model is no re-trigger): off and back
+      const auto aside = litCamera({60, 1, 100}, {0, 0, -1}, {1, 0, 0});
+      auto unsettled = 0;
+      auto drawnNothing = 0;
+      for (auto i = 0; i < 40 && unsettled < 3; ++i)
+      {
+        session->setCamera(i % 2 == 0 ? aside : down);
+        const auto frame = nextFramePixel(*session, down, 80, 60);
+        REQUIRE(frame);
+        if (!frame->ofCamera)
+        {
+          continue;
+        }
+        CHECK_FALSE(frame->settled);
+        unsettled += frame->settled ? 0 : 1;
+        drawnNothing += frame->rgba[0] == background[0] && frame->rgba[1] == background[1]
+                            && frame->rgba[2] == background[2]
+                          ? 1
+                          : 0;
+      }
+      CHECK(unsettled >= 3);
+      CHECK(drawnNothing == unsettled);
+      gate->open();
+      const auto ready = shoot(down);
+      expect.last = frameNow();
+      expects.push_back(expect);
+      CHECK(pixel(ready, 80, 60) == pixel(one, 80, 60));
+    }
+
+    // 7. a Missing file: the default cube (its silhouette: _default is black at developer
+    // 0), converged; _default's blended stage draws in pass 8, which this case's frames
+    // take
+    session->skipShaderPassesForTesting(false);
+    const auto missing = scenario(
+      "missing",
+      lp72MapText(lp72Model("lp72_m", "models/test/none.obj", "60 0 2")),
+      down,
+      1,
+      1,
+      0);
+    session->skipShaderPassesForTesting(true);
+    CHECK(missing.frame.lit.modelDraws > 0u);
+    CHECK(pixel(missing, 80, 60) != background);
+    // the entity's once-notice, through the session's warnings (the panel's log)
+    CHECK(
+      events.countContaining(
+        SessionEvent::Warning,
+        "'lp72_m' (func_static): 'models/test/none.obj' draws the "
+        "default cube: no file models/test/none.obj")
+      == 1u);
+
+    // 8. a light with a model: drawn under the light's id
+    const auto lamp = scenario(
+      "lamp",
+      lp72MapText(lp72Model(
+        "lp72_lamp",
+        "models/test/n01.obj",
+        "60 -40 2",
+        "\"light_radius\" \"40 40 40\"\n\"texture\" \"lights/lp51/held\"\n",
+        "light")),
+      down,
+      1,
+      1,
+      0);
+    CHECK(lamp.frame.lit.modelDraws > 0u);
+
+    // 9. an .md5mesh on a func_static: nothing, models_skinned 1
+    const auto md5 = scenario(
+      "md5mesh",
+      lp72MapText(lp72Model("lp72_md5", "models/test/n11.md5mesh", "60 0 2")),
+      down,
+      1,
+      0,
+      1);
+    CHECK(pixel(md5, 80, 60) == background);
+    CHECK(md5.frame.lit.modelDraws == 0u);
+
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  messages.print("LP7.2 model entities, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+
+  // the frame log's model columns at each scenario's last settled frame
+  const auto rows = readCsv(frameLog);
+  REQUIRE_FALSE(rows.empty());
+  const auto column = [&](const std::string& name) {
+    const auto it = std::ranges::find(rows[0], name);
+    REQUIRE(it != rows[0].end());
+    return std::size_t(it - rows[0].begin());
+  };
+  const auto eventColumn = column("event");
+  const auto frameColumn = column("frame");
+  const auto settledColumn = column("settled");
+  const auto entitiesColumn = column("model_entities");
+  const auto instancesColumn = column("model_instances");
+  const auto drawsColumn = column("model_draws");
+  const auto pendingColumn = column("models_pending");
+  const auto skinnedColumn = column("models_skinned");
+  for (const auto& expect : expects)
+  {
+    CAPTURE(expect.name);
+    auto found = std::optional<std::vector<std::string>>{};
+    auto pendingSeen = false;
+    for (auto i = std::size_t{1}; i < rows.size(); ++i)
+    {
+      const auto& row = rows[i];
+      if (row.size() <= skinnedColumn || row[eventColumn] != "frame")
+      {
+        continue;
+      }
+      const auto frame = std::stoull(row[frameColumn]);
+      if (frame < expect.first || frame > expect.last)
+      {
+        continue;
+      }
+      pendingSeen = pendingSeen || row[pendingColumn] != "0";
+      if (row[settledColumn] == "1")
+      {
+        found = row;
+      }
+    }
+    REQUIRE(found);
+    CHECK(std::stoull((*found)[entitiesColumn]) == expect.entities);
+    CHECK(std::stoull((*found)[instancesColumn]) == expect.instances);
+    CHECK(std::stoull((*found)[pendingColumn]) == 0u);
+    CHECK(std::stoull((*found)[skinnedColumn]) == expect.skinned);
+    if (expect.instances == 0)
+    {
+      CHECK(std::stoull((*found)[drawsColumn]) == 0u);
+    }
+    if (expect.name == "pending")
+    {
+      CHECK(pendingSeen);
+    }
+    std::cout << fmt::format(
+      "LP7.2 frame log {}: model_entities {}, model_instances {}, model_draws {}, "
+      "models_pending {}, models_skinned {}\n",
+      expect.name,
+      (*found)[entitiesColumn],
+      (*found)[instancesColumn],
+      (*found)[drawsColumn],
+      (*found)[pendingColumn],
+      (*found)[skinnedColumn]);
+  }
+  std::filesystem::remove(frameLog);
+  std::cout << fmt::format(
+    "LP7.2 model entities on a GPU: {:.1f} s\n",
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
 }
 
 } // namespace tb::lit

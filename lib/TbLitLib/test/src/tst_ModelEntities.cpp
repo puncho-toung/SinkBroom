@@ -1298,4 +1298,31 @@ TEST_CASE("SceneGeometry, a model's references, never clipped (LP7.2, C52, D130,
   pool->stop();
 }
 
+TEST_CASE("SceneGeometry: an entity id taken by another kind (LP7.2, C52)")
+{
+  auto model = ModelScene{};
+  const auto lamp = model.take(
+    WorldBox
+    + pointEntity(
+      "light",
+      "\"name\" \"lamp\"\n\"model\" \"models/test/quad.obj\"\n\"origin\" \"60 0 2\"\n"));
+  const auto id = entityNamed(lamp, "lamp");
+  REQUIRE(model.instancesOf(id).size() == 1);
+  // the same id a func_static with an .md5mesh: its instance goes
+  const auto md5 = model.take(
+    WorldBox
+    + pointEntity(
+      "func_static",
+      "\"name\" \"md5\"\n\"model\" \"models/test/n11.md5mesh\"\n\"origin\" \"60 0 "
+      "2\"\n"));
+  REQUIRE(entityNamed(md5, "md5") == id);
+  CHECK(model.instancesOf(id).empty());
+  CHECK(model.scene->modelCounts().instances == 0);
+  CHECK(model.scene->modelCounts().skinned == 1);
+  // and back to a light without a model, then removed
+  model.take(
+    WorldBox + pointEntity("light", "\"name\" \"plain\"\n\"origin\" \"60 0 2\"\n"));
+  CHECK(model.scene->modelCounts().entities == 0);
+}
+
 } // namespace tb::lit

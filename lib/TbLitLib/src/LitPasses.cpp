@@ -2820,7 +2820,7 @@ LitPasses::DrawOutcome LitPasses::draw(
     m_stats.retrigger = true;
     return DrawOutcome::Skipped;
   }
-  return drawGeometry(
+  const auto outcome = drawGeometry(
     frame,
     program,
     DrawGeometry{
@@ -2833,6 +2833,12 @@ LitPasses::DrawOutcome LitPasses::draw(
     slopeBias,
     depthBias,
     lightTriangles);
+  // LP7.2 (D129): an instance's draw reads its shared placement
+  if (outcome == DrawOutcome::Drawn && placement->shared)
+  {
+    ++m_stats.modelDraws;
+  }
+  return outcome;
 }
 
 LitPasses::DrawOutcome LitPasses::drawGeometry(

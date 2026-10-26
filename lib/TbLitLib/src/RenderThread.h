@@ -120,7 +120,7 @@ GpuMemoryAccount accountGpuMemory(
 // DX.4 (LP4.2b step 0): the scene's applied batches, busy(), waitsForBake(),
 // waitsForEntityDefs(), waitsForMaterials(), probesInFlight() and the probe table's
 // version; LPF.1 (C43, C44): the materialsRevision it scanned last; LP5.F (D111): the
-// sizesRevision it scanned last
+// sizesRevision it scanned last; LP7.2 (C52): waitsForModels() and its instances
 using SceneWaitState = std::tuple<
   std::uint64_t,
   bool,
@@ -130,6 +130,8 @@ using SceneWaitState = std::tuple<
   bool,
   std::uint64_t,
   std::uint64_t,
+  std::uint64_t,
+  bool,
   std::uint64_t>;
 
 /**
@@ -164,6 +166,10 @@ struct FrameConvergence
   // (LightRecord::provisional, pendingEntityDef, pendingMaterials)
   bool entityDefsPending = false;
   bool lightsProvisional = false;
+  // LP7.2 (C52, D124): a model entity's record is Pending or its instances wait for a
+  // material or a skin (SceneGeometry::waitsForModels); the table that answers is the
+  // trigger (geometryTick)
+  bool modelsPending = false;
   // DX.4: a geometry batch or the light job runs, the map's bake has not been answered,
   // or a snapshot waits in the inbox; each brings its own trigger (geometryTick, the
   // offer)
@@ -254,6 +260,8 @@ struct RenderFrameAccess
   std::optional<std::array<float, 4>> hdrClear;
   // LP5.F: the chunks the frame's lists are made from (the scene's or a test's)
   const std::map<ChunkKey, Chunk>& chunks;
+  // LP7.2 (C52, D129): and the model instances (the scene's; none for a test's chunks)
+  const std::map<ChunkKey, ModelInstance>& instances;
 };
 
 /**

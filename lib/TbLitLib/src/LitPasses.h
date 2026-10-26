@@ -236,6 +236,9 @@ struct LitFrameStats
   // an image, a cube image on texture_color, an image not written yet, a pending
   // pipeline, the budget)
   std::size_t stageDraws = 0;
+  // LP7.2 (C52, D129): the draws of model instances (a shared placement), every pass's
+  // (the frame log's model_draws)
+  std::size_t modelDraws = 0;
   std::size_t stageSkipped = 0;
   // the surfaces skipped because their material or registers are pending (D124: the
   // frame is unconverged) and (LP5.2b, C48) the cube-program draws made with the zero

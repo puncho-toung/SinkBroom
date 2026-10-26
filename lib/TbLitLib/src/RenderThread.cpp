@@ -154,7 +154,7 @@ bool FrameConvergence::settled() const
 {
   return !pipelinesPending && !materialsPending && !drawsSkipped && !uploadsLeft
          && !imagesPending && !provisionalChunks && !lutPending && !entityDefsPending
-         && !lightsProvisional && !geometryInFlight && !drawsOverflowed
+         && !modelsPending && !lightsProvisional && !geometryInFlight && !drawsOverflowed
          && !lightTrianglesPending && !probeImagesPending && !gridImagesPending
          && !probesInFlight && !feedBehind;
 }
@@ -629,6 +629,9 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
   convergence.provisionalChunks = scene && m_geometry->waitsForMaterials();
   // DX.4: what the scene still waits for, and the snapshot not taken yet
   convergence.entityDefsPending = scene && m_geometry->waitsForEntityDefs();
+  // LP7.2 (C52, D124): a model entity's record is Pending, or its instances wait for a
+  // material or a skin
+  convergence.modelsPending = scene && m_geometry->waitsForModels();
   // LPF.1 (C43, C44): also while the scene has not scanned the materialsRevision of the
   // frame's table (a re-parse published after the idle pass's geometryTick and before
   // its feedTick): its cells are built from the table before it; the scan, at the next
@@ -1137,7 +1140,8 @@ RenderFrameAccess RenderThread::frameAccess(nvrhi::ICommandList& commandList)
     m_tonemap,
     m_convergence,
     m_frameHdrClear,
-    arenaChunks()};
+    arenaChunks(),
+    arenaInstances()};
 }
 
 void RenderThread::runAfterPassHooks(nvrhi::ICommandList& commandList)
@@ -1424,7 +1428,9 @@ void RenderThread::tableTick()
       std::get<3>(state),
       std::get<4>(state),
       std::get<5>(state),
-      std::get<6>(state)};
+      std::get<6>(state),
+      std::get<9>(state),
+      std::get<10>(state)};
   };
   if (work(sceneWaitState()) == work(*m_sceneWaitSeen))
   {
@@ -2020,12 +2026,18 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       // LP5.3 (C49): pass 9's fog and blend draws (its GPU time from the timers)
       row.fogDraws = litStats.fogDraws;
       row.blendDraws = litStats.blendDraws;
-      // LP7.0 (C52, C54): no model or dress decal is drawn yet
-      row.modelEntities = 0u;
-      row.modelInstances = 0u;
-      row.modelDraws = 0u;
-      row.modelsPending = 0u;
-      row.modelsSkinned = 0u;
+      // LP7.2 (C52): the scene's model totals when the frame was drawn, and its draws of
+      // instances; LP7.0 (C54): no dress decal is drawn yet
+      {
+        const auto models = m_geometry && !m_arenaTestChunks
+                              ? m_geometry->modelCounts()
+                              : SceneGeometry::ModelCounts{};
+        row.modelEntities = models.entities;
+        row.modelInstances = models.instances;
+        row.modelDraws = std::uint64_t(litStats.modelDraws);
+        row.modelsPending = models.pending;
+        row.modelsSkinned = models.skinned;
+      }
       row.dressSurfaces = 0u;
       row.dressUnmatched = 0u;
       // LP7.4 (C55): the scene's adoption totals when the frame was drawn
@@ -2523,7 +2535,9 @@ SceneWaitState RenderThread::sceneWaitState() const
     m_geometry->probesInFlight(),
     m_geometry->probeTable()->version,
     m_geometry->scannedMaterialsRevision(),
-    m_geometry->scannedSizesRevision()};
+    m_geometry->scannedSizesRevision(),
+    m_geometry->waitsForModels(),
+    m_geometry->modelCounts().instances};
 }
 
 bool RenderThread::geometryTick()
@@ -2539,7 +2553,7 @@ bool RenderThread::geometryTick()
   if (
     (m_convergence.geometryInFlight || m_convergence.entityDefsPending
      || m_convergence.lightsProvisional || m_convergence.provisionalChunks
-     || m_convergence.probesInFlight)
+     || m_convergence.probesInFlight || m_convergence.modelsPending)
     && m_sceneWaitSeen && *m_sceneWaitSeen != sceneWaitState())
   {
     m_sceneWaitSeen = sceneWaitState();
