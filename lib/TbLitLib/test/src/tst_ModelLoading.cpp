@@ -479,7 +479,7 @@ std::vector<std::array<float, 5>> cubeTranscription()
 } // namespace
 
 TEST_CASE(
-  "ModelLoading: the dispatch of a canonical name (LP7.1a, D127, K40, K41, K46, K47)")
+  "ModelLoading: the dispatch of a canonical name (LP7.1a, LP7.5, D127, K41, K46, K47)")
 {
   const auto pathOf = [](const std::string& name) { return modelDispatch(name).path; };
   CHECK(pathOf("") == ModelPath::None);
@@ -487,8 +487,10 @@ TEST_CASE(
   CHECK(pathOf("models/test/n04.ase") == ModelPath::Source);
   CHECK(pathOf("models/test/n05.lwo") == ModelPath::Source);
   CHECK(pathOf("models/test/a.ma") == ModelPath::MayaBinaryOnly);
-  CHECK(pathOf("models/test/a.glb") == ModelPath::GltfBinaryOnly);
-  CHECK(pathOf("models/test/a.gltf") == ModelPath::GltfBinaryOnly);
+  // LP7.5: K40 closes: the binary, then the source
+  CHECK(pathOf("models/test/a.glb") == ModelPath::Source);
+  CHECK(pathOf("models/test/a.gltf") == ModelPath::Source);
+  CHECK(modelDispatch("models/test/a.glb").reason.empty());
   CHECK(pathOf("models/test/a.md5mesh") == ModelPath::Skinned);
   CHECK(pathOf("_default") == ModelPath::DefaultModel);
   for (const auto* name :
@@ -2464,107 +2466,6 @@ namespace
 
 // ----- LP7.5 (C51 (3), D136): glTF -----
 
-/**
- * A hand .glb (the specification's layout, as gltfParser.cpp:1929-2011 reads it): the
- * 12-byte header, the JSON chunk padded with spaces, the BIN chunk padded with zeros.
- * The default is a quad of four vertices on glTF's ground plane (Y up), its normals +Y,
- * POSITION, NORMAL, TEXCOORD_0, COLOR_0 and WEIGHTS_0 floats in their own views, six
- * unsigned short indices (two triangles counter-clockwise seen from +Y), one material.
- */
-struct HandGlb
-{
-  std::string json;
-  std::string bin;
-
-  std::string bytes() const
-  {
-    auto jsonChunk = json;
-    while (jsonChunk.size() % 4 != 0)
-    {
-      jsonChunk.push_back(' ');
-    }
-    auto binChunk = bin;
-    while (binChunk.size() % 4 != 0)
-    {
-      binChunk.push_back('\0');
-    }
-    auto out = std::string{"glTF"};
-    const auto put = [&](const std::uint32_t value) {
-      out.append(reinterpret_cast<const char*>(&value), 4);
-    };
-    put(2);
-    put(std::uint32_t(
-      12 + 8 + jsonChunk.size() + (binChunk.empty() ? 0 : 8 + binChunk.size())));
-    put(std::uint32_t(jsonChunk.size()));
-    put(0x4E4F534A);
-    out += jsonChunk;
-    if (!binChunk.empty())
-    {
-      put(std::uint32_t(binChunk.size()));
-      put(0x004E4942);
-      out += binChunk;
-    }
-    return out;
-  }
-
-  // the JSON with one text replaced (it must be there once)
-  HandGlb with(const std::string& from, const std::string& to) const
-  {
-    auto copy = *this;
-    const auto at = copy.json.find(from);
-    REQUIRE(at != std::string::npos);
-    REQUIRE(copy.json.find(from, at + 1) == std::string::npos);
-    copy.json.replace(at, from.size(), to);
-    return copy;
-  }
-};
-
-void putFloats(std::string& bin, const std::initializer_list<float> values)
-{
-  for (const auto v : values)
-  {
-    bin.append(reinterpret_cast<const char*>(&v), 4);
-  }
-}
-
-HandGlb handQuadGlb(const std::string& material = "textures/lp7/model")
-{
-  auto glb = HandGlb{};
-  // POSITION 0..47, NORMAL 48..95, TEXCOORD_0 96..127, COLOR_0 128..191, WEIGHTS_0
-  // 192..255, the indices 256..267
-  putFloats(glb.bin, {0, 0, 0, 32, 0, 0, 32, 0, -32, 0, 0, -32});
-  putFloats(glb.bin, {0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0});
-  putFloats(glb.bin, {0, 0, 1, 0, 1, 1, 0, 1});
-  putFloats(glb.bin, {1, 0.5f, 0.25f, 1, 0.5f, 1, 0, 1, 0, 0.5f, 1, 1, 1, 1, 1, 1});
-  putFloats(glb.bin, {1, 0, 0, 0, 0.5f, 0.5f, 0, 0, 0.25f, 0.25f, 0.5f, 0, 0, 0, 0, 1});
-  for (const auto index : std::array<std::uint16_t, 6>{0, 1, 2, 0, 2, 3})
-  {
-    glb.bin.append(reinterpret_cast<const char*>(&index), 2);
-  }
-  glb.json =
-    R"({"asset":{"version":"2.0","generator":"tst_ModelLoading"},"scene":0,)"
-    R"("scenes":[{"nodes":[0]}],"nodes":[{"mesh":0,"name":"quad"}],)"
-    R"("meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2,)"
-    R"("COLOR_0":3,"WEIGHTS_0":4},"indices":5,"material":0}]}],)"
-    R"("materials":[{"name":")"
-    + material
-    + R"("}],"buffers":[{"byteLength":268}],"bufferViews":[)"
-      R"({"buffer":0,"byteOffset":0,"byteLength":48},)"
-      R"({"buffer":0,"byteOffset":48,"byteLength":48},)"
-      R"({"buffer":0,"byteOffset":96,"byteLength":32},)"
-      R"({"buffer":0,"byteOffset":128,"byteLength":64},)"
-      R"({"buffer":0,"byteOffset":192,"byteLength":64},)"
-      R"({"buffer":0,"byteOffset":256,"byteLength":12}],"accessors":[)"
-      R"({"bufferView":0,"componentType":5126,"count":4,"type":"VEC3",)"
-      R"("min":[0,0,-32],"max":[32,0,0]},)"
-      R"({"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"},)"
-      R"({"bufferView":2,"componentType":5126,"count":4,"type":"VEC2"},)"
-      R"({"bufferView":3,"componentType":5126,"count":4,"type":"VEC4"},)"
-      R"({"bufferView":4,"componentType":5126,"count":4,"type":"VEC4"},)"
-      R"({"bufferView":5,"componentType":5123,"count":6,"type":"SCALAR"}]})";
-  return glb;
-}
-
 std::string glbProblem(const HandGlb& glb)
 {
   return gltfFileProblem(glb.bytes(), true).value_or("");
@@ -2765,6 +2666,306 @@ TEST_CASE("ModelLoading: the glTF validator (LP7.5, D136, P7.2)")
         quad.with(R"("buffers":)", R"("skins":[{"joints":[0],"name":""}],"buffers":)")),
       ContainsSubstring("GetNode's assert"));
   }
+}
+
+
+namespace
+{
+
+// the hand glTF's read on the parse thread, its messages taken
+ModelSourceRead readGlb(
+  MaterialDecls& decls,
+  const HandGlb& glb,
+  const std::int64_t time = 1451520000,
+  const std::string& name = "models/test/quad.glb")
+{
+  auto read = readModelSource(decls, name, glb.bytes(), time);
+  static_cast<void>(decls.takeMessages());
+  return read;
+}
+
+// its read and finish, as the service's Model item and pool make them
+EngineModel loadGlb(
+  MaterialDecls& decls, const HandGlb& glb, const std::int64_t time = 1451520000)
+{
+  auto read = readGlb(decls, glb, time);
+  INFO(read.reason);
+  REQUIRE(read.reason.empty());
+  REQUIRE(read.input);
+  REQUIRE(read.input->gltf);
+  auto model = finishModel(*read.input);
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  return model;
+}
+
+float halfToFloat(const std::uint16_t half)
+{
+  // the engine's half floats (F16toF32): 1 sign, 5 exponent, 10 mantissa bits
+  const auto sign = (half & 0x8000) ? -1.0f : 1.0f;
+  const auto exponent = (half >> 10) & 0x1F;
+  const auto mantissa = half & 0x3FF;
+  if (exponent == 0)
+  {
+    return sign * std::ldexp(float(mantissa), -24);
+  }
+  return sign * std::ldexp(float(mantissa + 1024), exponent - 25);
+}
+
+} // namespace
+
+TEST_CASE("ModelLoading, the glTF source path through the copies (LP7.5, C51 (3), D137)")
+{
+  using Catch::Matchers::ContainsSubstring;
+  auto source = MemoryDeclSource{fixtureModelDecls()};
+  auto decls = MaterialDecls{source};
+
+  SECTION("a refused file: Default with the reason; the copies never read it")
+  {
+    const auto quad = handQuadGlb();
+    auto magic = quad.bytes();
+    magic[1] = 'x';
+    auto past = quad;
+    past.bin.resize(200);
+    const auto cases = std::vector<std::pair<std::string, std::string>>{
+      {magic, "magic"},
+      {quad.bytes().substr(0, quad.bytes().size() - 4), "the header's length"},
+      {quad
+         .with(
+           R"("bufferView":2,"componentType":5126,"count":4)",
+           R"("bufferView":2,"componentType":5126,"byteOffset":8,"count":4)")
+         .bytes(),
+       "past it"},
+      {quad
+         .with(
+           R"("mesh":0,"name":"quad"})",
+           R"("mesh":0,"name":"quad","children":[1]},{"children":[0]})")
+         .bytes(),
+       "cycle"},
+      {quad.with(R"("componentType":5123,"count":6)", R"("componentType":5122,"count":6)")
+         .bytes(),
+       "not an unsigned byte, short or int"},
+      {past.bytes(), "past its BIN chunk"},
+    };
+    for (const auto& [bytes, why] : cases)
+    {
+      INFO(why);
+      auto read = readModelSource(decls, "models/test/quad.glb", bytes, 1451520000);
+      static_cast<void>(decls.takeMessages());
+      CHECK_THAT(read.reason, ContainsSubstring("models/test/quad.glb cannot be read"));
+      CHECK_THAT(read.reason, ContainsSubstring(why));
+      // the cube's input
+      REQUIRE(read.input);
+      CHECK_FALSE(read.input->hasSource());
+      CHECK_FALSE(read.skinned);
+    }
+  }
+
+  SECTION("the hand quad: Z up, its st as stored, its material, its normals, the time")
+  {
+    auto read = readGlb(decls, handQuadGlb());
+    REQUIRE(read.input);
+    // Model_gltf.cpp:645: MikkTSpace whatever the time (a 2015 stamp here)
+    CHECK(read.input->useMikktspace);
+    CHECK(
+      read.input->gltfPlan.materialNames
+      == std::vector<std::string>{"textures/lp7/model"});
+    CHECK(read.input->gltfPlan.meshNodes == std::vector<int>{0});
+    CHECK_FALSE(read.input->gltfPlan.heapVertexFields);
+    CHECK(read.input->note.empty());
+    const auto model = finishModel(*read.input);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    REQUIRE(model.surfaces.size() == 1u);
+    const auto& surface = model.surfaces[0];
+    CHECK(surface.material == "textures/lp7/model");
+    CHECK_FALSE(surface.generateNormals);
+    CHECK(surface.tangentsCalculated);
+    REQUIRE(surface.verts.size() == 4u);
+    // blenderToDoomTransform: glTF (x, y, z) to (x, -z, y)
+    const auto expected = std::array<EngineVec3, 4>{
+      EngineVec3{0, 0, 0},
+      EngineVec3{32, 0, 0},
+      EngineVec3{32, 32, 0},
+      EngineVec3{0, 32, 0}};
+    const auto st = std::array<std::array<float, 2>, 4>{{{0, 0}, {1, 0}, {1, 1}, {0, 1}}};
+    for (std::size_t i = 0; i < 4; ++i)
+    {
+      INFO(i);
+      for (std::size_t k = 0; k < 3; ++k)
+      {
+        CHECK(std::abs(surface.verts[i].xyz[k] - expected[i][k]) < 0.001f);
+      }
+      // TEXCOORD_0 as stored (MapFile_gltf.cpp:158: no t flip)
+      CHECK(halfToFloat(surface.verts[i].st[0]) == st[i][0]);
+      CHECK(halfToFloat(surface.verts[i].st[1]) == st[i][1]);
+      // the normal +Y to +Z, as bytes (VertexFloatToByte)
+      CHECK(surface.verts[i].normal[2] == 255);
+      CHECK(std::abs(int(surface.verts[i].normal[0]) - 128) <= 1);
+      CHECK(std::abs(int(surface.verts[i].normal[1]) - 128) <= 1);
+      // COLOR_0 float x 255, alpha 255; WEIGHTS_0 packed into color2
+      CHECK(surface.verts[i].color[3] == 255);
+    }
+    CHECK(surface.verts[0].color[0] == 255);
+    CHECK(surface.verts[0].color2 == std::array<std::uint8_t, 4>{255, 0, 0, 0});
+    CHECK(surface.verts[3].color2 == std::array<std::uint8_t, 4>{0, 0, 0, 255});
+    // each triangle's corners reversed (MapFile_gltf.cpp:79-81)
+    CHECK(surface.indexes == std::vector<std::uint16_t>{2, 1, 0, 3, 2, 0});
+    CHECK(model.hasDrawingSurfaces);
+  }
+
+  SECTION("no material: textures/base_wall/snpanel2rust, the engine's rule")
+  {
+    const auto glb = handQuadGlb().with(R"(,"material":0)", "");
+    auto read = readGlb(decls, glb);
+    REQUIRE(read.input);
+    CHECK(
+      read.input->gltfPlan.materialNames
+      == std::vector<std::string>{"textures/base_wall/snpanel2rust"});
+    const auto model = finishModel(*read.input);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    REQUIRE(model.surfaces.size() == 1u);
+    CHECK(model.surfaces[0].material == "textures/base_wall/snpanel2rust");
+  }
+
+  SECTION("one surface per primitive, never merged (r_mergeModelSurfaces is not applied)")
+  {
+    const auto glb = handQuadGlb().with(
+      R"("indices":5,"material":0}])",
+      R"("indices":5,"material":0},{"attributes":{"POSITION":0,"NORMAL":1,)"
+      R"("TEXCOORD_0":2,"COLOR_0":3,"WEIGHTS_0":4},"indices":5,"material":0}])");
+    const auto model = loadGlb(decls, glb);
+    REQUIRE(model.surfaces.size() == 2u);
+    CHECK(model.surfaces[0].material == model.surfaces[1].material);
+  }
+
+  SECTION(
+    "a mesh node under a mesh node is added twice, its parent's transform ignored "
+    "the second time (Model_gltf.cpp:563-565, :702-709)")
+  {
+    const auto glb = handQuadGlb().with(
+      R"("nodes":[{"mesh":0,"name":"quad"}])",
+      R"("nodes":[{"mesh":0,"name":"quad","children":[1],"translation":[0,10,0]},)"
+      R"({"mesh":0,"name":"child"}])");
+    auto read = readGlb(decls, glb);
+    REQUIRE(read.input);
+    CHECK(read.input->gltfPlan.meshNodes == std::vector<int>{0, 1});
+    CHECK(read.input->gltfPlan.materialNames.size() == 3u);
+    const auto model = finishModel(*read.input);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    REQUIRE(model.surfaces.size() == 3u);
+    // glTF's +Y 10 is the engine's +Z 10: the parent's and its child under it; the
+    // child alone at 0
+    CHECK(std::abs(model.surfaces[0].verts[0].xyz[2] - 10.0f) < 0.001f);
+    CHECK(std::abs(model.surfaces[1].verts[0].xyz[2] - 10.0f) < 0.001f);
+    CHECK(std::abs(model.surfaces[2].verts[0].xyz[2]) < 0.001f);
+  }
+
+  SECTION(
+    "animations: a skinned mesh's joint animated is Skinned (K41); an object "
+    "animation and a skinned mesh at rest are drawn, as the engine's DM_STATIC")
+  {
+    for (const auto& glb :
+         {handAnimatedGlb(true), handAnimatedGlb(false), handAnimatedGlb(true, false)})
+    {
+      CHECK_FALSE(gltfFileProblem(glb.bytes(), true));
+    }
+    const auto skinned = readGlb(decls, handAnimatedGlb(true));
+    CHECK(skinned.skinned);
+    CHECK_FALSE(skinned.input);
+    CHECK_THAT(skinned.reason, ContainsSubstring("K41"));
+
+    // Model_gltf.cpp:571: an unskinned mesh node's animations are never counted
+    const auto object = readGlb(decls, handAnimatedGlb(false));
+    CHECK_FALSE(object.skinned);
+    REQUIRE(object.input);
+    CHECK_FALSE(object.input->gltfPlan.animated);
+
+    const auto rest = loadGlb(decls, handAnimatedGlb(true, false));
+    REQUIRE(rest.surfaces.size() == 1u);
+    // JOINTS_0 into the colour (MapFile_gltf.cpp:349-383)
+    CHECK(rest.surfaces[0].verts[0].color == std::array<std::uint8_t, 4>{1, 2, 3, 4});
+  }
+
+  SECTION(
+    "E-LIT-7: a primitive without COLOR_0 has colour 0 where the engine's is heap, "
+    "and the record notes it")
+  {
+    const auto glb = handQuadGlb().with(R"("COLOR_0":3,)", "");
+    auto read = readGlb(decls, glb);
+    REQUIRE(read.input);
+    CHECK(read.input->gltfPlan.heapVertexFields);
+    CHECK_THAT(read.input->note, ContainsSubstring("E-LIT-7"));
+    const auto model = finishModel(*read.input);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    REQUIRE(model.surfaces.size() == 1u);
+    for (const auto& v : model.surfaces[0].verts)
+    {
+      CHECK(v.color == std::array<std::uint8_t, 4>{0, 0, 0, 0});
+    }
+  }
+
+  SECTION(
+    "S4: the parse and the finish free what they made (E-LIT-8: the engine leaks "
+    "the parsed elements)")
+  {
+    // the first load makes the parser's statics' first state (gltfData::Data's
+    // granularity)
+    static_cast<void>(loadGlb(decls, handAnimatedGlb(true, false)));
+    CHECK_FALSE(heapGrows([&] {
+      static_cast<void>(loadGlb(decls, handAnimatedGlb(true, false)));
+      static_cast<void>(loadGlb(decls, handQuadGlb()));
+    }));
+  }
+
+  SECTION("ExtractIdentifier transcribed (gltfParser.cpp:2378-2427)")
+  {
+    const auto plain = engineGltfIdentifier("models/test/quad.glb");
+    CHECK(plain.fileName == "models/test/quad.glb");
+    CHECK(plain.id == -1);
+    CHECK(plain.name.empty());
+    const auto node = engineGltfIdentifier("models/test/quad.root.glb");
+    CHECK(node.fileName == "models/test/quad.glb");
+    CHECK(node.name == "root");
+    const auto id = engineGltfIdentifier("models/test/quad.3.glb");
+    CHECK(id.fileName == "models/test/quad.glb");
+    CHECK(id.id == 3);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  }
+}
+
+TEST_CASE("ModelLoading: a glTF's finish reads nothing of the registry (LP7.5, S3, D137)")
+{
+  auto source = MemoryDeclSource{fixtureModelDecls()};
+  auto input = std::optional<ModelFinishInput>{};
+  auto reference = EngineModel{};
+  {
+    auto own = MaterialDecls{source};
+    auto read = readGlb(own, handQuadGlb());
+    REQUIRE(read.input);
+    input = std::move(read.input);
+    reference = finishModel(*input);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  }
+  // the registry reloaded between the parse and the finish: another registry made and
+  // gone, then the finish on a pool thread
+  {
+    auto other = MaterialDecls{source};
+    static_cast<void>(other.takeMessages());
+  }
+  auto pool = CpuPool::create(1);
+  REQUIRE(pool.is_success());
+  auto future = pool.value()->run(
+    [input](const CpuJobContext&) -> Result<EngineModel> { return finishModel(*input); });
+  REQUIRE(future.wait_for(std::chrono::seconds{10}) == std::future_status::ready);
+  auto output = future.get();
+  REQUIRE(output.result.is_success());
+  // no message: SetContents' FindMaterial found every name in the captures
+  CHECK(output.messages.empty());
+  const auto& model = output.result.value();
+  CHECK(model.materialMisses == 0);
+  REQUIRE(model.surfaces.size() == reference.surfaces.size());
+  CHECK(model.surfaces[0].verts == reference.surfaces[0].verts);
+  CHECK(model.surfaces[0].indexes == reference.surfaces[0].indexes);
+  pool.value()->stop();
 }
 
 } // namespace tb::lit

@@ -58,3 +58,26 @@ idAngles idMat3::ToAngles() const
 	}
 	return angles;
 }
+// ==== engine neo/idlib/math/Matrix.cpp lines 647-648 (mat4_zero, mat4_identity) ====
+idMat4 mat4_zero( idVec4( 0, 0, 0, 0 ), idVec4( 0, 0, 0, 0 ), idVec4( 0, 0, 0, 0 ), idVec4( 0, 0, 0, 0 ) );
+idMat4 mat4_identity( idVec4( 1, 0, 0, 0 ), idVec4( 0, 1, 0, 0 ), idVec4( 0, 0, 1, 0 ), idVec4( 0, 0, 0, 1 ) );
+// ==== engine neo/idlib/math/Matrix.cpp lines 650-668 (idMat4::Transpose) ====
+/*
+============
+idMat4::Transpose
+============
+*/
+idMat4 idMat4::Transpose() const
+{
+	idMat4	transpose;
+	int		i, j;
+
+	for( i = 0; i < 4; i++ )
+	{
+		for( j = 0; j < 4; j++ )
+		{
+			transpose[ i ][ j ] = mat[ j ][ i ];
+		}
+	}
+	return transpose;
+}

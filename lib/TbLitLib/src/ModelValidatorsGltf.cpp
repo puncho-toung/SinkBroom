@@ -498,6 +498,18 @@ std::optional<AttributeRead> attributeRead(const std::string_view name)
   return std::nullopt;
 }
 
+// idStr::Icmp's comparison: equal ignoring the case of ASCII letters
+bool sameIgnoringCase(const std::string_view a, const std::string_view b)
+{
+  const auto lower = [](const char c) {
+    return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
+  };
+  return a.size() == b.size()
+         && std::equal(a.begin(), a.end(), b.begin(), [&](const char x, const char y) {
+              return lower(x) == lower(y);
+            });
+}
+
 // gltfParser.cpp:81-101: s_meshAttributeMap's names, compared with Icmp
 bool mappedSemantic(const std::string_view name)
 {
@@ -519,15 +531,8 @@ bool mappedSemantic(const std::string_view name)
     "COLOR_3",
     "WEIGHTS_0",
     "JOINTS_0"};
-  return std::ranges::any_of(names, [&](const std::string_view known) {
-    return known.size() == name.size()
-           && std::equal(known.begin(), known.end(), name.begin(), [](char a, char b) {
-                const auto lower = [](char c) {
-                  return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
-                };
-                return lower(a) == lower(b);
-              });
-  });
+  return std::ranges::any_of(
+    names, [&](const std::string_view known) { return sameIgnoringCase(known, name); });
 }
 
 class GltfCheck
@@ -1556,6 +1561,26 @@ private:
           return fmt::format(
             "{}: an empty or non-string name without a skeleton (GetNode's assert, "
             "gltfProperties.h:925)",
+            what);
+        }
+      }
+      if (!skeleton)
+      {
+        // gltfParser.cpp:2160-2167: a skin without a skeleton takes the node of its name
+        // (Icmp), else -1, which FindModelRoot indexes nodes[] with (Model_gltf.cpp:
+        // 409-411, :376-378)
+        const auto* name = skin.member("name");
+        const auto skinName =
+          name ? std::string_view{name->text} : std::string_view{"unnamedSkin"};
+        if (!std::ranges::any_of(list("nodes"), [&](const Json& node) {
+              const auto* nodeName = node.member("name");
+              return nodeName && nodeName->type == Json::Type::String
+                     && sameIgnoringCase(nodeName->text, skinName);
+            }))
+        {
+          return fmt::format(
+            "{}: no skeleton, and its name names no node (FindModelRoot reads nodes[ -1 "
+            "], Model_gltf.cpp:409-410)",
             what);
         }
       }

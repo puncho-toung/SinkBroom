@@ -37,6 +37,24 @@ and `Model_lwo.h` whole; `renderer/Model.cpp`'s two include lines and
 `../shim/src/ShimModels.cpp` as before; `framework/File.h`'s `fsOrigin_t` (the shim's
 `idFile` stand-in's `Seek`); and `idlib/Lib.cpp`'s `RevBytesSwap` and `RevBytesNoSwap`,
 compiled inside `../shim/src/ShimLib.cpp`, whose `BigRevBytes` picks between them.
+LP7.5 (C51, the director's decisions S1-S8 of 2026-10-26) adds the glTF source path:
+`idlib/gltfProperties.h` and `idlib/gltfParser.h` whole (the parser's data model and
+classes); `idlib/gltfParser.cpp`'s lines 1-2376 (the engine's own JSON parser on the copied
+`idLexer`, `loadGLB`, `Load`, the accessor views and `gltfData`'s statics; its
+`gltfManager::ExtractIdentifier`, which needs `idParser`, is transcribed in the shim);
+`idlib/MapFile.h`'s `idMapPrimitive`, `MapPolygon` and `MapPolygonMesh` with the include
+guard and constants, `idlib/MapFile.cpp`'s `MapPolygonMesh` constructor and `SetContents`,
+and `idlib/MapFile_gltf.cpp`'s lines 1-366 (`MapPolygonMesh::ConvertFromMeshGltf`),
+compiled inside the namespace `tbLitGltfMesh` of `../shim/src/ShimGltf.cpp`, whose stand-in
+`declManager` serves `SetContents` the parse thread's captures; `renderer/Model_gltf.cpp`'s
+licence, cvars and statics, `idRenderModelGLTF::ProcessNode_r` and `FindModelRoot`,
+compiled there against a reduced `idRenderModelGLTF` (`InitFromFile`'s path without
+import options is transcribed); `idlib/Lib.cpp`'s `PackColor`; and
+`idlib/math/Matrix.cpp`'s `mat4_zero`, `mat4_identity` and `idMat4::Transpose`, which the
+parser's node matrices need. Every one of these files is the Doom 3 BFG Edition GPL-3 code
+with id Software's additional terms (`LICENSE.md`), (C) 2022-2023 Harrie van Ginneken and
+(C) 2022-2025 Robert Beckebans among its authors; the parser embeds no third-party JSON
+code (the engine's `neo/libs/rapidjson` is not used by it, and is not copied).
 
 `renderer/DXT/` (`DXTCodec.h`, `DXTCodec_local.h`, `DXTEncoder_SSE2.cpp`) is **test only**
 (LP1c fix S3.2): the engine's fast DXT encoders, compiled into `TbLitIdDxtTestLib`, which

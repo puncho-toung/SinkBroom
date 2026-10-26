@@ -134,6 +134,9 @@ public:
   idFile* OpenExplicitFileRead(const char* OSPath) override;
   void CloseFile(idFile* f) override;
   const char* OSPathToRelativePath(const char* OSPath) override;
+  // LP7.5: FileSystem.cpp:445-489's GetFileLength: inside a model read, the read's one
+  // file's length; any other name, and any name outside one, -1 (never the disk)
+  int GetFileLength(const char* relativePath) override;
 
 private:
   int readImageFile(const std::string& path, void** buffer, ID_TIME_T* timestamp);

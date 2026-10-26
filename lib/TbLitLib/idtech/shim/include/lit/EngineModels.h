@@ -50,6 +50,7 @@ struct objModel_t;
 struct aseModel_s;
 struct st_lwObject;
 class idFile;
+class gltfData;
 
 namespace tb::lit
 {
@@ -84,6 +85,10 @@ struct EngineModelMaterial
   bool receivesLighting = false;
   // Deform(), a deform_t (0 is DFRM_NONE)
   int deform = 0;
+  // LP7.5 (the director's S3): GetContentFlags() and Coverage() (a materialCoverage_t),
+  // which the copied MapPolygonMesh::SetContents reads (MapFile.cpp:2966-3007)
+  int contentFlags = 0;
+  int coverage = 0;
 
   bool operator==(const EngineModelMaterial& other) const;
   bool operator!=(const EngineModelMaterial& other) const;
@@ -302,6 +307,126 @@ struct EngineLwoParse
  */
 EngineModel engineFinishLwoModel(
   const EngineLwoModel& lwo,
+  const EngineModelMaterials& materials,
+  std::string_view name,
+  bool useMikktspace);
+
+/**
+ * LP7.5 (C51 (3), D137; the director's S4, S8): a parsed glTF, the copied GLTF_Parser's
+ * gltfData (gltfParser.cpp:2100-2186 Load), owned. The parse leaves it out of the
+ * parser's file cache (gltfData::Data's list and hash, emptied after each parse: no
+ * cache in the preview, a difference) and hands it on; the finish's ProcessNode_r
+ * resolves its nodes' matrices into it (ResolveNodeMatrix, a write), so only the one
+ * finish that holds it reads it, one finish at a time. Its destructor frees every
+ * element the parser made with new (idListNewElement: the buffers, views, accessors and
+ * their views, meshes, primitives, attributes, nodes, scenes, materials, textures,
+ * images, samplers, skins, animations, channels and samplers, cameras, the extensions'
+ * objects), which the engine leaks on every load (~gltfData frees the chunks alone,
+ * gltfParser.cpp:2320-2341: E-LIT-8, a difference in memory only), then the asset, on
+ * any thread (the shim's lock around the parser's static cache).
+ */
+class EngineGltfModel
+{
+private:
+  gltfData* m_data = nullptr;
+
+public:
+  explicit EngineGltfModel(gltfData* data);
+  ~EngineGltfModel();
+
+  EngineGltfModel(const EngineGltfModel&) = delete;
+  EngineGltfModel& operator=(const EngineGltfModel&) = delete;
+
+  gltfData* data() const { return m_data; }
+};
+
+// what MaterialDecls::parseGltfModel read: the asset, or (null) the engine error the
+// parse reached (an Error or FatalError of the copied parser or its lexer: the engine's
+// map load would have stopped there, a drop), or why Load returned false
+struct EngineGltfParse
+{
+  std::shared_ptr<const EngineGltfModel> model;
+  std::string error;
+};
+
+/**
+ * LP7.5: gltfManager::ExtractIdentifier (gltfParser.cpp:2377-2427) transcribed with the
+ * copied idLexer in place of idParser (one token of a short text: the same token): a
+ * name of the form [file].[node name or mesh id].[glb or gltf] names its file and the
+ * node or id; any other name its file alone. Pure; any thread.
+ */
+struct EngineGltfIdentifier
+{
+  // the file the name reads (ExtractIdentifier's filename after the call)
+  std::string fileName;
+  // the integer identifier (-1 for none) and the node name ("" for none)
+  int id = -1;
+  std::string name;
+};
+
+EngineGltfIdentifier engineGltfIdentifier(std::string_view name);
+
+/**
+ * LP7.5 (C51 (3), D137): idRenderModelGLTF::InitFromFile's decisions without import
+ * options (Model_gltf.cpp:472-628, transcribed; a plain func_static's .glb has none,
+ * D139), made on the parse thread over the parsed asset: FindModelRoot (copied, its
+ * prints the parse thread's), the mesh nodes (MeshNodeIds), the animations that make the
+ * model DM_CACHED, and the names ProcessNode_r and MapPolygonMesh::SetContents will ask
+ * the decl manager for. Also the asset's second check: the validator's covers of the
+ * conversion's sites, on what the copied parser made (an index in range, a window inside
+ * the BIN chunk of binLength bytes), so that a parse that read the JSON otherwise than
+ * the validator never reaches the conversion.
+ */
+struct EngineGltfPlan
+{
+  // the second check's refusal ("" when it passes)
+  std::string problem;
+  // the engine's own default model: "Can't find meshes in static glTF2 model" (:551-562)
+  // or a NULL skin the engine would dereference; "" when it converts
+  std::string defaultReason;
+  // the nodes ProcessNode_r starts from (MeshNodeIds, :534-560)
+  std::vector<int> meshNodes;
+  // hasAnimations (:564-628): an animation of a skinned mesh node's subtree or of its
+  // skin's first joint's, which makes the model DM_CACHED (:628): nothing drawn on a
+  // static entity (K41); an unskinned mesh node's animations are never counted (:571)
+  bool animated = false;
+  int animations = 0;
+  // a mesh node with a skin among the meshNodes (its JOINTS_0 in the vertex colours)
+  bool skinned = false;
+  // per surface ProcessNode_r will make, in order: the material name it asks for (the
+  // glTF material's, or textures/base_wall/snpanel2rust without one, :85-96), and the
+  // primitive's vertices
+  std::vector<std::string> materialNames;
+  std::vector<std::size_t> surfaceVertices;
+  // a surface's primitive lacks NORMAL, TEXCOORD_0, COLOR_0 (or JOINTS_0) or WEIGHTS_0:
+  // the engine leaves those fields of its vertices uninitialised heap (E-LIT-7,
+  // MapFile_gltf.cpp:103-107)
+  bool heapVertexFields = false;
+};
+
+EngineGltfPlan engineGltfPlan(
+  const EngineGltfModel& model,
+  const EngineGltfIdentifier& identifier,
+  std::size_t binLength);
+
+/**
+ * LP7.5: InitFromFile's conversion and finish without import options (Model_gltf.cpp:
+ * 629-747, transcribed): globalTransform = blenderToDoomTransform (Y up to Z up,
+ * idAngles( 0, 0, 90 ), :55), useMikktspace as given (true for every glTF, :645), each
+ * of plan.meshNodes through the copied ProcessNode_r from the identity (one surface per
+ * primitive through the copied MapPolygonMesh::ConvertFromMeshGltf, the material
+ * FindMaterial of the glTF material's name, else textures/base_wall/snpanel2rust), then
+ * no surface: "Couldn't load model" and MakeDefaultModel (:713-722); then the copied
+ * FinishSurfaces( useMikktspace ). LoadModel (:1727-1801), which changes no surface of a
+ * static model, is not run. Its allocations cleared (E-LIT-7: the engine's vertices hold
+ * heap where no attribute writes, MapFile_gltf.cpp:103-107; the preview's 0). Pool-safe
+ * (D137): materials are the parse thread's captures (ProcessNode_r's through the reduced
+ * idRenderModelStatic's class-scope declManager, SetContents' through the stand-in of
+ * the namespace its MapFile ranges compile in); one call at a time.
+ */
+EngineModel engineFinishGltfModel(
+  const EngineGltfModel& model,
+  const EngineGltfPlan& plan,
   const EngineModelMaterials& materials,
   std::string_view name,
   bool useMikktspace);

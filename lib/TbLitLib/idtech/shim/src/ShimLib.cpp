@@ -206,7 +206,26 @@ short LittleShort(const short l)
   return short(std::uint16_t((bits << 8) | (bits >> 8)));
 }
 
-// LP7.1b: the copied byte swaps (engine/idlib/Lib.cpp is HEADER_FILE_ONLY in the build)
+// LP7.5: Lib.cpp:369-372 LittleLong, through the function Swap_Init picks: LongNoSwap on
+// a little-endian host, LongSwap on a big-endian one (the host test LittleShort's). Pure;
+// any thread.
+int LittleLong(const int l)
+{
+  const auto one = std::uint16_t{1};
+  auto first = std::uint8_t{0};
+  memcpy(&first, &one, 1);
+  if (first == 1)
+  {
+    return l;
+  }
+  const auto bits = std::uint32_t(l);
+  return int(
+    (bits << 24) | ((bits << 8) & 0x00FF0000u) | ((bits >> 8) & 0x0000FF00u)
+    | (bits >> 24));
+}
+
+// LP7.1b: the copied byte swaps (engine/idlib/Lib.cpp is HEADER_FILE_ONLY in the build);
+// LP7.5: and PackColor
 #include "idlib/Lib.cpp"
 
 // Lib.cpp:384-387 BigRevBytes, through the function Swap_Init picks (:662-694):

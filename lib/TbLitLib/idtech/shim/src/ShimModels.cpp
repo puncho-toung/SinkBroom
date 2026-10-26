@@ -61,189 +61,7 @@
 // OBJ_Load, copied whole in renderer/Model_obj.cpp, which declares it in Model_obj.h
 // already; OBJ_Free too
 
-class idRenderModelStatic
-{
-public:
-  /**
-   * The stand-in of idMaterial the copied ranges see (Material.h): the ten accessors
-   * they call, over the values the parse thread captured (tb::lit::EngineModelMaterial),
-   * and AddToSurfaceArea, which FinishSurfaces calls through a const_cast
-   * (Model.cpp:1301): it adds to this object, which the finish owns, and nothing reads
-   * it (the engine's only reader is the listSurfaceAreas console command).
-   */
-  class idMaterial
-  {
-  public:
-    explicit idMaterial(tb::lit::EngineModelMaterial values)
-      : m_values{std::move(values)}
-    {
-    }
-
-    // Material.h:148-151 (idDecl's GetName)
-    const char* GetName() const { return m_values.name.c_str(); }
-    // Material.h:671
-    bool IsDiscrete() const { return m_values.discrete; }
-    // Material.h:745-748
-    const char* GetRenderBump() const { return m_values.renderBump.c_str(); }
-    // Material.h:616-619
-    bool ShouldCreateBackSides() const { return m_values.createBackSides; }
-    // Material.h:632-635
-    bool UseMikkTSpace() const { return m_values.mikktspace; }
-    // Material.h:624-627
-    bool UseUnsmoothedTangents() const { return m_values.unsmoothedTangents; }
-    // Material.h:584
-    bool SurfaceCastsShadow() const { return m_values.castsShadow; }
-    // Material.h:548
-    bool IsDrawn() const { return m_values.drawn; }
-    // Material.h:599
-    bool ReceivesLighting() const { return m_values.receivesLighting; }
-    // Material.h:819
-    deform_t Deform() const { return deform_t(m_values.deform); }
-    // Material.h:882-885
-    void AddToSurfaceArea(float area) { m_surfaceArea += area; }
-
-    const tb::lit::EngineModelMaterial& values() const { return m_values; }
-
-  private:
-    tb::lit::EngineModelMaterial m_values;
-    float m_surfaceArea = 0.0f;
-  };
-
-  // Model.h:118-123's modelSurface_t, its shader the stand-in material
-  struct modelSurface_t
-  {
-    int id;
-    const idMaterial* shader;
-    srfTriangles_t* geometry;
-  };
-
-  /**
-   * The stand-in of declManager the copied conversion calls (Model.cpp:1458, :1484,
-   * :1502): FindMaterial of a name the parse thread resolved returns that name's
-   * material, the same object for two names of one decl, as the registry returns one
-   * pointer; a name it was not handed returns the default material (never null, so
-   * FinishSurfaces' NULL shader site stays unreachable) and is counted.
-   */
-  class ModelDecls
-  {
-  public:
-    explicit ModelDecls(const tb::lit::EngineModelMaterials& materials)
-      : m_default{materials.defaultMaterial}
-    {
-      m_materials.reserve(materials.materials.size());
-      for (const auto& material : materials.materials)
-      {
-        m_materials.emplace_back(material);
-      }
-      for (const auto& [name, index] : materials.names)
-      {
-        if (index < m_materials.size())
-        {
-          m_names.emplace_back(name, index);
-        }
-      }
-    }
-
-    const idMaterial* FindMaterial(const char* name, bool makeDefault = true) const
-    {
-      (void)makeDefault;
-      const auto text = std::string_view{name ? name : ""};
-      for (const auto& [known, index] : m_names)
-      {
-        if (known == text)
-        {
-          return &m_materials[index];
-        }
-      }
-      ++m_misses;
-      return &m_default;
-    }
-
-    const idMaterial* defaultMaterial() const { return &m_default; }
-
-    // the index of a material FindMaterial returned, -1 for the default material
-    int indexOf(const idMaterial* material) const
-    {
-      for (std::size_t i = 0; i < m_materials.size(); ++i)
-      {
-        if (&m_materials[i] == material)
-        {
-          return int(i);
-        }
-      }
-      return -1;
-    }
-
-    int misses() const { return m_misses; }
-
-  private:
-    // never resized after construction: the surfaces point into it
-    std::vector<idMaterial> m_materials;
-    std::vector<std::pair<std::string, std::size_t>> m_names;
-    idMaterial m_default;
-    mutable int m_misses = 0;
-  };
-
-  // the stand-in of tr, as far as MakeDefaultModel reads it (Model.cpp:276)
-  struct ModelRenderSystem
-  {
-    const idMaterial* defaultMaterial = nullptr;
-  };
-
-  // Model_local.h:52-53, 68, 77-79, 93-95, 127-130 (the members the ranges call, without
-  // virtual)
-  idRenderModelStatic();
-  ~idRenderModelStatic();
-
-  void PurgeModel();
-  void InitEmpty(const char* name);
-  void AddSurface(modelSurface_t surface);
-  void FinishSurfaces(bool useMikktspace);
-  int NumSurfaces() const;
-
-  void MakeDefaultModel();
-  bool ConvertOBJToModelSurfaces(const objModel_t* obj);
-  // LP7.1b: Model_local.h:127-128
-  bool ConvertASEToModelSurfaces(const struct aseModel_s* ase);
-  bool ConvertLWOToModelSurfaces(const struct st_lwObject* lwo);
-
-  idRenderModelStatic(const idRenderModelStatic&) = delete;
-  idRenderModelStatic& operator=(const idRenderModelStatic&) = delete;
-
-  // Model_local.h:137-174
-  idList<modelSurface_t, TAG_MODEL> surfaces;
-  idBounds bounds;
-  int overlaysAdded;
-
-  int numInvertedJoints;
-  idJointMat* jointsInverted;
-  vertCacheHandle_t jointsInvertedBuffer;
-
-  int lastModifiedFrame;
-  int lastArchivedFrame;
-
-  idStr name;
-  bool isStaticWorldModel;
-  bool defaulted;
-  bool purged;
-  bool fastLoad;
-  bool reloadable;
-  bool levelLoadReferenced;
-  bool hasDrawingSurfaces;
-  bool hasInteractingSurfaces;
-  bool hasShadowCastingSurfaces;
-  ID_TIME_T timeStamp;
-  ID_TIME_T declTimeStamp;
-
-  static idCVar r_mergeModelSurfaces;
-  static idCVar r_slopVertex;
-  static idCVar r_slopTexCoord;
-  static idCVar r_slopNormal;
-
-  // the stand-ins the copied member functions find at class scope
-  const ModelDecls* declManager = nullptr;
-  ModelRenderSystem tr;
-};
+#include "shim/ShimModels.h"
 
 // the copied ranges
 #include "renderer/Model.cpp"
@@ -266,7 +84,9 @@ EngineVec3 fromIdVec(const idVec3& v)
   return {v.x, v.y, v.z};
 }
 
-EngineModel modelOf(
+} // namespace
+
+EngineModel shim::modelOf(
   const idRenderModelStatic& model, const idRenderModelStatic::ModelDecls& decls)
 {
   auto result = EngineModel{};
@@ -316,7 +136,7 @@ EngineModel modelOf(
   return result;
 }
 
-EngineModelMaterial capture(const idMaterial& material)
+EngineModelMaterial shim::capture(const idMaterial& material)
 {
   auto values = EngineModelMaterial{};
   values.index = material.Index();
@@ -331,8 +151,14 @@ EngineModelMaterial capture(const idMaterial& material)
   values.drawn = material.IsDrawn();
   values.receivesLighting = material.ReceivesLighting();
   values.deform = int(material.Deform());
+  // LP7.5 (the director's S3): what MapPolygonMesh::SetContents reads
+  values.contentFlags = material.GetContentFlags();
+  values.coverage = int(material.Coverage());
   return values;
 }
+
+namespace
+{
 
 std::string lastErrorOf(const std::vector<DeclMessage>& messages)
 {
@@ -355,7 +181,8 @@ bool EngineModelMaterial::operator==(const EngineModelMaterial& other) const
          && mikktspace == other.mikktspace
          && unsmoothedTangents == other.unsmoothedTangents
          && castsShadow == other.castsShadow && drawn == other.drawn
-         && receivesLighting == other.receivesLighting && deform == other.deform;
+         && receivesLighting == other.receivesLighting && deform == other.deform
+         && contentFlags == other.contentFlags && coverage == other.coverage;
 }
 
 bool EngineModelMaterial::operator!=(const EngineModelMaterial& other) const
@@ -430,7 +257,7 @@ EngineModel engineFinishObjModel(
   static_cast<void>(model.ConvertOBJToModelSurfaces(obj.model()));
   model.purged = false;
   model.FinishSurfaces(useMikktspace);
-  return modelOf(model, decls);
+  return shim::modelOf(model, decls);
 }
 
 EngineAseModel::EngineAseModel(aseModel_s* model)
@@ -523,7 +350,7 @@ EngineModel engineFinishAseModel(
   static_cast<void>(model.ConvertASEToModelSurfaces(ase.model()));
   model.purged = false;
   model.FinishSurfaces(useMikktspace);
-  return modelOf(model, decls);
+  return shim::modelOf(model, decls);
 }
 
 EngineModel engineConvertAseModelForTesting(
@@ -538,7 +365,7 @@ EngineModel engineConvertAseModelForTesting(
   const auto fileName = std::string{name};
   model.InitEmpty(fileName.c_str());
   static_cast<void>(model.ConvertASEToModelSurfaces(ase.model()));
-  return modelOf(model, decls);
+  return shim::modelOf(model, decls);
 }
 
 EngineLwoModel::EngineLwoModel(st_lwObject* model)
@@ -629,7 +456,7 @@ EngineModel engineFinishLwoModel(
   static_cast<void>(model.ConvertLWOToModelSurfaces(lwo.model()));
   model.purged = false;
   model.FinishSurfaces(useMikktspace);
-  return modelOf(model, decls);
+  return shim::modelOf(model, decls);
 }
 
 EngineModel engineDefaultModel(
@@ -646,7 +473,7 @@ EngineModel engineDefaultModel(
   const auto fileName = std::string{name};
   model.InitEmpty(fileName.c_str());
   model.MakeDefaultModel();
-  return modelOf(model, decls);
+  return shim::modelOf(model, decls);
 }
 
 EngineModelCvars engineModelCvars()
@@ -882,7 +709,7 @@ DeclResult<EngineModelMaterial> MaterialDecls::modelMaterial(const std::string_v
   {
     return {std::nullopt, m_failures[index]};
   }
-  return {capture(*material), {}};
+  return {shim::capture(*material), {}};
 }
 
 DeclResult<EngineModelMaterial> MaterialDecls::defaultModelMaterial()
@@ -904,7 +731,7 @@ DeclResult<EngineModelMaterial> MaterialDecls::defaultModelMaterial()
   {
     return {std::nullopt, lastErrorOf(m_registry->messages())};
   }
-  return {capture(*material), {}};
+  return {shim::capture(*material), {}};
 }
 
 } // namespace tb::lit

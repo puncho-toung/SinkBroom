@@ -44,6 +44,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <initializer_list>
 #include <sstream>
 
 #if defined(_MSC_VER) && defined(_DEBUG)
@@ -726,6 +727,143 @@ std::string minimalBinaryModel(
     out.push_back(b ? 1 : 0);
   }
   return out;
+}
+
+
+std::string HandGlb::bytes() const
+{
+  auto jsonChunk = json;
+  while (jsonChunk.size() % 4 != 0)
+  {
+    jsonChunk.push_back(' ');
+  }
+  auto binChunk = bin;
+  while (binChunk.size() % 4 != 0)
+  {
+    binChunk.push_back('\0');
+  }
+  auto out = std::string{"glTF"};
+  const auto put = [&](const std::uint32_t value) {
+    out.append(reinterpret_cast<const char*>(&value), 4);
+  };
+  put(2);
+  put(std::uint32_t(
+    12 + 8 + jsonChunk.size() + (binChunk.empty() ? 0 : 8 + binChunk.size())));
+  put(std::uint32_t(jsonChunk.size()));
+  put(0x4E4F534A);
+  out += jsonChunk;
+  if (!binChunk.empty())
+  {
+    put(std::uint32_t(binChunk.size()));
+    put(0x004E4942);
+    out += binChunk;
+  }
+  return out;
+}
+
+HandGlb HandGlb::with(const std::string& from, const std::string& to) const
+{
+  auto copy = *this;
+  const auto at = copy.json.find(from);
+  REQUIRE(at != std::string::npos);
+  REQUIRE(copy.json.find(from, at + 1) == std::string::npos);
+  copy.json.replace(at, from.size(), to);
+  return copy;
+}
+
+namespace
+{
+
+void putFloats(std::string& bin, const std::initializer_list<float> values)
+{
+  for (const auto v : values)
+  {
+    bin.append(reinterpret_cast<const char*>(&v), 4);
+  }
+}
+
+} // namespace
+
+HandGlb handQuadGlb(const std::string& material)
+{
+  auto glb = HandGlb{};
+  // POSITION 0..47, NORMAL 48..95, TEXCOORD_0 96..127, COLOR_0 128..191, WEIGHTS_0
+  // 192..255, the indices 256..267
+  putFloats(glb.bin, {0, 0, 0, 32, 0, 0, 32, 0, -32, 0, 0, -32});
+  putFloats(glb.bin, {0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0});
+  putFloats(glb.bin, {0, 0, 1, 0, 1, 1, 0, 1});
+  putFloats(glb.bin, {1, 0.5f, 0.25f, 1, 0.5f, 1, 0, 1, 0, 0.5f, 1, 1, 1, 1, 1, 1});
+  putFloats(glb.bin, {1, 0, 0, 0, 0.5f, 0.5f, 0, 0, 0.25f, 0.25f, 0.5f, 0, 0, 0, 0, 1});
+  for (const auto index : std::array<std::uint16_t, 6>{0, 1, 2, 0, 2, 3})
+  {
+    glb.bin.append(reinterpret_cast<const char*>(&index), 2);
+  }
+  glb.json =
+    R"({"asset":{"version":"2.0","generator":"LitTestUtils"},"scene":0,)"
+    R"("scenes":[{"nodes":[0]}],"nodes":[{"mesh":0,"name":"quad"}],)"
+    R"("meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2,)"
+    R"("COLOR_0":3,"WEIGHTS_0":4},"indices":5,"material":0}]}],)"
+    R"("materials":[{"name":")"
+    + material
+    + R"("}],"buffers":[{"byteLength":268}],"bufferViews":[)"
+      R"({"buffer":0,"byteOffset":0,"byteLength":48},)"
+      R"({"buffer":0,"byteOffset":48,"byteLength":48},)"
+      R"({"buffer":0,"byteOffset":96,"byteLength":32},)"
+      R"({"buffer":0,"byteOffset":128,"byteLength":64},)"
+      R"({"buffer":0,"byteOffset":192,"byteLength":64},)"
+      R"({"buffer":0,"byteOffset":256,"byteLength":12}],"accessors":[)"
+      R"({"bufferView":0,"componentType":5126,"count":4,"type":"VEC3",)"
+      R"("min":[0,0,-32],"max":[32,0,0]},)"
+      R"({"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"},)"
+      R"({"bufferView":2,"componentType":5126,"count":4,"type":"VEC2"},)"
+      R"({"bufferView":3,"componentType":5126,"count":4,"type":"VEC4"},)"
+      R"({"bufferView":4,"componentType":5126,"count":4,"type":"VEC4"},)"
+      R"({"bufferView":5,"componentType":5123,"count":6,"type":"SCALAR"}]})";
+  return glb;
+}
+
+HandGlb handAnimatedGlb(const bool skinned, const bool animated)
+{
+  auto glb = handQuadGlb();
+  // the animation's time and rotation (268..271, 272..287), the joints (288..303)
+  putFloats(glb.bin, {0});
+  putFloats(glb.bin, {0, 0, 0, 1});
+  for (const auto joint :
+       std::array<std::uint8_t, 16>{1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4})
+  {
+    glb.bin.push_back(char(joint));
+  }
+  glb = glb.with(R"({"byteLength":268})", R"({"byteLength":304})")
+          .with(
+            R"({"buffer":0,"byteOffset":256,"byteLength":12}])",
+            R"({"buffer":0,"byteOffset":256,"byteLength":12},)"
+            R"({"buffer":0,"byteOffset":268,"byteLength":4},)"
+            R"({"buffer":0,"byteOffset":272,"byteLength":16},)"
+            R"({"buffer":0,"byteOffset":288,"byteLength":16}])")
+          .with(
+            R"({"bufferView":5,"componentType":5123,"count":6,"type":"SCALAR"}])",
+            R"({"bufferView":5,"componentType":5123,"count":6,"type":"SCALAR"},)"
+            R"({"bufferView":6,"componentType":5126,"count":1,"type":"SCALAR"},)"
+            R"({"bufferView":7,"componentType":5126,"count":1,"type":"VEC4"},)"
+            R"({"bufferView":8,"componentType":5121,"count":4,"type":"VEC4"}])");
+  const auto target = skinned ? "1" : "0";
+  if (skinned)
+  {
+    glb = glb.with(R"("COLOR_0":3,)", R"("JOINTS_0":8,)")
+            .with(
+              R"("nodes":[{"mesh":0,"name":"quad"}])",
+              R"("nodes":[{"mesh":0,"skin":0,"name":"quad"},{"name":"bone"}])")
+            .with(R"("nodes":[0]})", R"("nodes":[0,1]})")
+            .with(R"("buffers":)", R"("skins":[{"joints":[1],"skeleton":1}],"buffers":)");
+  }
+  if (animated)
+  {
+    glb = glb.with(
+      R"("buffers":)",
+      std::string{R"("animations":[{"channels":[{"sampler":0,"target":{"node":)"} + target
+        + R"(,"path":"rotation"}}],"samplers":[{"input":6,"output":7}]}],"buffers":)");
+  }
+  return glb;
 }
 
 } // namespace tb::lit

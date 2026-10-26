@@ -88,6 +88,17 @@ target_sources(TbLitIdLib
     # tr_trisurf.cpp's R_DeriveMikktspaceTangents calls it
     ${TB_LIT_ID_ENGINE_DIR}/libs/mikktspace/mikktspace.c
     ${TB_LIT_ID_ENGINE_DIR}/libs/mikktspace/mikktspace.h
+    # LP7.5 (C51 (3), the director's decisions S1-S8): the glTF parser (gltfProperties.h and
+    # gltfParser.h whole, gltfParser.cpp's range), MapPolygonMesh's ranges with its glTF
+    # conversion (MapFile.h, MapFile.cpp, MapFile_gltf.cpp) and Model_gltf.cpp's static
+    # path ranges, compiled inside shim/src/ShimGltf.cpp; Lib.cpp's PackColor (above)
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/gltfParser.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/gltfParser.h
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/gltfProperties.h
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/MapFile.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/MapFile.h
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/MapFile_gltf.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Model_gltf.cpp
 
     ${TB_LIT_ID_SHIM_DIR}/src/DeclManagerShim.cpp
     # LP7.3 (C54): the dress decals' facade over the copied DecalProjection.cpp
@@ -104,12 +115,14 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_SHIM_DIR}/src/MaterialDecls.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/Registry.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimFramework.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/ShimGltf.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimImages.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimLib.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimModels.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimPipelineState.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ShimRenderer.cpp
     ${TB_LIT_ID_SHIM_DIR}/ParallelJobList_JobHeaders.h
+    ${TB_LIT_ID_SHIM_DIR}/private/Lib.h
     ${TB_LIT_ID_SHIM_DIR}/private/precompiled.h
     ${TB_LIT_ID_SHIM_DIR}/private/RenderCommon.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/EngineMessages.h
@@ -118,6 +131,7 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimFramework.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimInteraction.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimLib.h
+    ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimModels.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/ShimSystem.h
     ${TB_LIT_ID_SHIM_DIR}/private/shim/TinyexrMinizNames.h
 
@@ -146,6 +160,10 @@ set_source_files_properties(
   ${TB_LIT_ID_ENGINE_DIR}/renderer/Model.cpp
   ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Simd_Generic.cpp
   ${TB_LIT_ID_ENGINE_DIR}/idlib/Lib.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/idlib/gltfParser.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/idlib/MapFile.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/idlib/MapFile_gltf.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/renderer/Model_gltf.cpp
   PROPERTIES HEADER_FILE_ONLY ON)
 
 # the shim headers named precompiled.h and RenderCommon.h come first, so the copied files'

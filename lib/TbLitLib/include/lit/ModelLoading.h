@@ -46,13 +46,11 @@ enum class ModelPath
 {
   // an empty name: no model (GetModel returns NULL, :313-316)
   None,
-  // obj, ase, lwo (LP7.1b): the binary, then the source through the validator and the
-  // copied loader
+  // obj, ase, lwo (LP7.1b), glb and gltf (LP7.5: K40 closes): the binary, then the
+  // source through the validator and the copied loader
   Source,
   // ma: the binary, then the default cube with a notice (K46)
   MayaBinaryOnly,
-  // glb, gltf: the binary (.bglb) only, else the default cube with a notice (K40)
-  GltfBinaryOnly,
   // md5mesh: nothing drawn (K41: an idEntity's md5 model has no joints, SC614)
   Skinned,
   // _default: the engine's own default model (:270-276), the cube
@@ -168,20 +166,24 @@ struct ModelFinishInput
   std::shared_ptr<const EngineObjModel> obj;
   std::shared_ptr<const EngineAseModel> ase;
   std::shared_ptr<const EngineLwoModel> lwo;
+  // LP7.5: a parsed glTF and InitFromFile's decisions on it (the parse thread's)
+  std::shared_ptr<const EngineGltfModel> gltf;
+  EngineGltfPlan gltfPlan;
   EngineModelMaterials materials;
   bool useMikktspace = false;
   std::int64_t sourceTime = -1;
   std::string note;
 
   // a source to convert (else the finish is the default cube)
-  bool hasSource() const { return obj || ase || lwo; }
+  bool hasSource() const { return obj || ase || lwo || gltf; }
 };
 
 /**
  * The finish (D137): engineFinishObjModel for an OBJ, engineFinishAseModel for an ASE,
- * engineFinishLwoModel for an LWO, else engineDefaultModel. It reads nothing but its
- * input, so it runs on the service's one-worker pool; one at a time (FinishSurfaces'
- * static, M-ID-STATIC-*).
+ * engineFinishLwoModel for an LWO, LP7.5 engineFinishGltfModel for a glTF, else
+ * engineDefaultModel. It reads nothing but its input (a glTF's asset it writes its node
+ * matrices into, which only it holds), so it runs on the service's one-worker pool; one
+ * at a time (FinishSurfaces' static, M-ID-STATIC-*).
  */
 EngineModel finishModel(const ModelFinishInput& input);
 
@@ -211,6 +213,9 @@ struct ModelSourceRead
   // a refusal: the record is Default with this reason (the cube's input is in input
   // when the default material could be found)
   std::string reason;
+  // LP7.5 (K41, D127): the source is an animated model (a glTF whose InitFromFile makes
+  // it DM_CACHED): nothing drawn, the record Skinned with the reason; no input
+  bool skinned = false;
 };
 
 ModelSourceRead readObjSource(
@@ -247,8 +252,29 @@ ModelSourceRead readLwoSource(
   const std::string& bytes,
   std::int64_t sourceTime);
 
-// LP7.1b: the reader of a Source path's extension (obj, ase, lwo); another gives the
-// default cube's input with its reason. Parse thread
+/**
+ * LP7.5 (C51 (3), D136, D137, K40 closes, K41): the parse thread's half of a glTF source,
+ * as readObjSource's: canonical's file is ExtractIdentifier's ([file].[node or id].glb
+ * reads [file].glb; the caller's bytes and time are that file's), the validator
+ * (gltfFileProblem, a .glb by its extension), the copied GLTF_Parser's Load of the bytes
+ * with the source's time in the error-counting scope (MaterialDecls::parseGltfModel),
+ * InitFromFile's decisions and the asset's second check (engineGltfPlan): an animated
+ * model (DM_CACHED) is Skinned (nothing drawn, K41), the engine's own default model
+ * ("Can't find meshes", "Couldn't load model") is the cube with the engine's reason;
+ * each surface's material name captured (the glTF material's, else
+ * textures/base_wall/snpanel2rust: the engine's rule, mirrored) and tr.defaultMaterial;
+ * useMikktspace true whatever the source's time (Model_gltf.cpp:645). A model whose
+ * primitives leave vertex fields unwritten gets the note of E-LIT-7 (the engine's heap,
+ * the preview's 0). Parse thread.
+ */
+ModelSourceRead readGltfSource(
+  MaterialDecls& decls,
+  std::string_view canonical,
+  const std::string& bytes,
+  std::int64_t sourceTime);
+
+// LP7.1b: the reader of a Source path's extension (obj, ase, lwo; LP7.5 glb, gltf);
+// another gives the default cube's input with its reason. Parse thread
 ModelSourceRead readModelSource(
   MaterialDecls& decls,
   std::string_view canonical,

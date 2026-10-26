@@ -2698,4 +2698,121 @@ TEST_CASE("MaterialService leak check's dump lists the injected leak's blocks")
 }
 #endif
 
+
+namespace
+{
+
+// LP7.5: Model_gltf.cpp's GLMB tail after a BRM stream (WriteBinaryModel :1643-1700, the
+// fields LoadBinaryModel reads first): the modelDef time, two strings, model_state, the
+// root, a name, the animations
+std::string glmbTail(const int modelState, const int animations)
+{
+  auto out = std::string{};
+  const auto big = [&](const std::uint64_t value, const int bytes) {
+    for (auto i = bytes - 1; i >= 0; --i)
+    {
+      out.push_back(char((value >> (8 * i)) & 0xFF));
+    }
+  };
+  const auto text = [&](const std::string& value) {
+    const auto length = std::int32_t(value.size());
+    out.append(reinterpret_cast<const char*>(&length), 4);
+    out += value;
+  };
+  big(
+    (std::uint64_t('M') << 24) | (std::uint64_t('L') << 16) | (std::uint64_t('G') << 8)
+      | 106,
+    4);
+  big(0, 8);
+  text("");
+  text("");
+  big(std::uint64_t(std::uint32_t(modelState)), 4);
+  big(0, 4);
+  text("models/test/anim.glb");
+  big(std::uint64_t(std::uint32_t(animations)), 4);
+  for (auto i = 0; i < animations; ++i)
+  {
+    big(std::uint64_t(i), 4);
+  }
+  big(0, 4);
+  return out;
+}
+
+std::unique_ptr<DeclSource> gltfSource(const std::atomic<bool>&)
+{
+  auto files = modelServiceFiles();
+  files.push_back(
+    DeclFile{"models/test/quad.glb", handQuadGlb("lp7/test").bytes(), Stamp2015});
+  files.push_back(
+    DeclFile{"models/test/skinned.glb", handAnimatedGlb(true).bytes(), Stamp2015});
+  files.push_back(DeclFile{
+    "generated/rendermodels/models/test/anim.bglb",
+    minimalBinaryModel(Stamp2015, "lp7/test", "models/test/anim.glb") + glmbTail(1, 2),
+    0});
+  files.push_back(DeclFile{
+    "generated/rendermodels/models/test/rest.bglb",
+    minimalBinaryModel(Stamp2015, "lp7/test", "models/test/rest.glb") + glmbTail(0, 0),
+    0});
+  return std::make_unique<MemoryDeclSource>(std::move(files));
+}
+
+} // namespace
+
+TEST_CASE("MaterialService loads glTF models (LP7.5, C51, K40 closes, K41)")
+{
+  auto service = start(options(gltfSource));
+
+  SECTION("a .glb source: Ready through the copies, its time the source's")
+  {
+    const auto record = waitForModel(*service, "models/test/quad.glb");
+    REQUIRE(record);
+    CHECK(record->state == ModelRecord::State::Ready);
+    CHECK(record->source == ModelRecord::SourceKind::Source);
+    CHECK(record->sourceTime == Stamp2015);
+    REQUIRE(record->surfaces.size() == 1u);
+    CHECK(record->surfaces[0].material == "lp7/test");
+    CHECK(record->surfaces[0].verts.size() == 4u);
+    CHECK(record->sourceMaterialNames == std::vector<std::string>{"lp7/test"});
+    CHECK(record->reason.empty());
+  }
+
+  SECTION("an animated .glb source is Skinned: nothing drawn (K41)")
+  {
+    const auto record = waitForModel(*service, "models/test/skinned.glb");
+    REQUIRE(record);
+    CHECK(record->state == ModelRecord::State::Skinned);
+    CHECK(record->surfaces.empty());
+    CHECK_THAT(record->reason, Catch::Matchers::ContainsSubstring("K41"));
+  }
+
+  SECTION("an animated .bglb (its GLMB tail's model_state) is Skinned; one at rest Ready")
+  {
+    const auto animated = waitForModel(*service, "models/test/anim.glb");
+    REQUIRE(animated);
+    CHECK(animated->state == ModelRecord::State::Skinned);
+    CHECK(animated->source == ModelRecord::SourceKind::Binary);
+    CHECK(animated->glbModelState == 1);
+    CHECK(animated->glbAnimations == 2);
+    CHECK(animated->surfaces.empty());
+    const auto rest = waitForModel(*service, "models/test/rest.glb");
+    REQUIRE(rest);
+    CHECK(rest->state == ModelRecord::State::Ready);
+    CHECK(rest->source == ModelRecord::SourceKind::Binary);
+    CHECK(rest->surfaces.size() == 1u);
+  }
+
+  SECTION(
+    "a [file].[node].glb name reads its file (ExtractIdentifier); a missing one is "
+    "Missing")
+  {
+    const auto named = waitForModel(*service, "models/test/quad.quad.glb");
+    REQUIRE(named);
+    CHECK(named->state == ModelRecord::State::Ready);
+    CHECK(named->sourceTime == Stamp2015);
+    const auto missing = waitForModel(*service, "models/test/none.glb");
+    REQUIRE(missing);
+    CHECK(missing->state == ModelRecord::State::Missing);
+  }
+}
+
 } // namespace tb::lit

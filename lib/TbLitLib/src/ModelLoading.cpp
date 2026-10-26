@@ -86,7 +86,8 @@ ModelDispatch modelDispatch(const std::string_view canonical)
 
   dispatch.extension = engineFileExtension(canonical);
   const auto& ext = dispatch.extension;
-  if (ext == "obj" || ext == "ase" || ext == "lwo")
+  // LP7.5: glb and gltf the source path too (K40 closes)
+  if (ext == "obj" || ext == "ase" || ext == "lwo" || ext == "glb" || ext == "gltf")
   {
     dispatch.path = ModelPath::Source;
   }
@@ -95,12 +96,6 @@ ModelDispatch modelDispatch(const std::string_view canonical)
     dispatch.path = ModelPath::MayaBinaryOnly;
     dispatch.reason =
       "a Maya .ma model is drawn from the engine's .bma only: the default cube (K46)";
-  }
-  else if (ext == "glb" || ext == "gltf")
-  {
-    dispatch.path = ModelPath::GltfBinaryOnly;
-    dispatch.reason =
-      "a glTF model is drawn from the engine's .bglb only: the default cube (K40)";
   }
   else if (ext == "md5mesh")
   {
@@ -299,6 +294,11 @@ EngineModel finishModel(const ModelFinishInput& input)
   {
     return engineFinishLwoModel(
       *input.lwo, input.materials, input.name, input.useMikktspace);
+  }
+  if (input.gltf)
+  {
+    return engineFinishGltfModel(
+      *input.gltf, input.gltfPlan, input.materials, input.name, input.useMikktspace);
   }
   return engineDefaultModel(input.name, input.materials.defaultMaterial);
 }
@@ -526,6 +526,94 @@ ModelSourceRead readLwoSource(
   return read;
 }
 
+ModelSourceRead readGltfSource(
+  MaterialDecls& decls,
+  const std::string_view canonical,
+  const std::string& bytes,
+  const std::int64_t sourceTime)
+{
+  auto read = ModelSourceRead{};
+  const auto refuse = [&](std::string reason) {
+    read.reason = std::move(reason);
+    read.input = defaultModelInput(decls, canonical, sourceTime);
+    return std::move(read);
+  };
+
+  // gltfParser.cpp:2378-2427: the file a [file].[node or id].glb name reads, and its node
+  const auto identifier = engineGltfIdentifier(canonical);
+  const auto binary = engineFileExtension(identifier.fileName) == "glb";
+
+  // D136: the copies never see a file the validator refuses
+  auto facts = GltfFileFacts{};
+  if (const auto problem = gltfFileProblem(bytes, binary, &facts))
+  {
+    return refuse(fmt::format("{} cannot be read: {}", canonical, *problem));
+  }
+
+  // the copied Load in its error-counting scope (S6): an engine error is a drop
+  auto parsed = decls.parseGltfModel(identifier.fileName, bytes, sourceTime);
+  if (!parsed.model)
+  {
+    return refuse(fmt::format("{}: {}", canonical, parsed.error));
+  }
+
+  // InitFromFile's decisions (Model_gltf.cpp:472-628) and the second check
+  auto plan = engineGltfPlan(*parsed.model, identifier, facts.binLength);
+  if (!plan.problem.empty())
+  {
+    return refuse(fmt::format(
+      "{} cannot be read: the parse disagrees with the validator: {}",
+      canonical,
+      plan.problem));
+  }
+  if (!plan.defaultReason.empty())
+  {
+    return refuse(fmt::format("{}: {}", canonical, plan.defaultReason));
+  }
+  if (plan.materialNames.empty())
+  {
+    // :713-722: no surface: "Couldn't load model", MakeDefaultModel
+    return refuse(fmt::format(
+      "{}: Couldn't load model (no primitive under its mesh nodes, Model_gltf.cpp:715)",
+      canonical));
+  }
+  if (plan.animated)
+  {
+    // :628: DM_CACHED; a static entity's NULL joints instantiate nothing (:2101-2106)
+    read.skinned = true;
+    read.reason = fmt::format(
+      "{}: an animated glTF ({} animations of its skinned mesh) draws nothing on a "
+      "static entity, as in the engine (K41)",
+      canonical,
+      plan.animations);
+    return read;
+  }
+
+  auto input = ModelFinishInput{};
+  input.name = std::string{canonical};
+  input.gltf = parsed.model;
+  input.sourceTime = sourceTime;
+  // Model_gltf.cpp:645: every glTF takes MikkTSpace, whatever its time
+  input.useMikktspace = true;
+  if (plan.heapVertexFields)
+  {
+    input.note = fmt::format(
+      "{}: a primitive without NORMAL, TEXCOORD_0, COLOR_0 or WEIGHTS_0 has those vertex "
+      "fields 0: the engine leaves them uninitialised heap (E-LIT-7, "
+      "MapFile_gltf.cpp:103-107)",
+      canonical);
+  }
+  if (
+    auto problem =
+      captureMaterials(decls, canonical, plan.materialNames, input.materials))
+  {
+    return refuse(std::move(*problem));
+  }
+  input.gltfPlan = std::move(plan);
+  read.input = std::move(input);
+  return read;
+}
+
 ModelSourceRead readModelSource(
   MaterialDecls& decls,
   const std::string_view canonical,
@@ -544,6 +632,10 @@ ModelSourceRead readModelSource(
   if (extension == "lwo")
   {
     return readLwoSource(decls, canonical, bytes, sourceTime);
+  }
+  if (extension == "glb" || extension == "gltf")
+  {
+    return readGltfSource(decls, canonical, bytes, sourceTime);
   }
   auto read = ModelSourceRead{};
   read.reason = fmt::format("{}: no source loader for .{}", canonical, extension);

@@ -72,6 +72,37 @@ std::string minimalBinaryModel(
   std::int64_t timeStamp, const std::string& material, const std::string& name);
 
 /**
+ * LP7.5: a hand .glb (the specification's layout, as gltfParser.cpp:1929-2011 reads it):
+ * the 12-byte header, the JSON chunk padded with spaces, the BIN chunk padded with zeros.
+ */
+struct HandGlb
+{
+  std::string json;
+  std::string bin;
+
+  std::string bytes() const;
+  // the JSON with one text replaced (it must be there once)
+  HandGlb with(const std::string& from, const std::string& to) const;
+};
+
+/**
+ * LP7.5: a quad of four vertices on glTF's ground plane (Y up: (0, 0, 0) to (32, 0,
+ * -32)), its normals +Y, its texture coordinates 0..1, POSITION, NORMAL, TEXCOORD_0,
+ * COLOR_0 and WEIGHTS_0 floats in views of their own, six unsigned short indices (two
+ * triangles counter-clockwise seen from +Y), one material of that name, one node, one
+ * scene.
+ */
+HandGlb handQuadGlb(const std::string& material = "textures/lp7/model");
+
+/**
+ * LP7.5: handQuadGlb with an animation: on its joint node "bone" (skin 0's one joint, the
+ * mesh node skinned, its COLOR_0 replaced by JOINTS_0 unsigned bytes 1, 2, 3, 4) when
+ * skinned, else on the mesh node itself (an object animation); no animation at all with
+ * animated false (a skinned mesh at rest)
+ */
+HandGlb handAnimatedGlb(bool skinned, bool animated = true);
+
+/**
  * Holds a material service's parse thread before it takes its next request while closed
  * (MaterialServiceOptions::beforeTakeWorkForTesting calls pass): lookups queued then stay
  * pending until it opens. A thread already inside its wait for a request takes one more.

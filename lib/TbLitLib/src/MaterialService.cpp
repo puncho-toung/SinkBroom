@@ -3052,23 +3052,49 @@ private:
         dispatch.reason));
       return;
     }
-    const auto fileBased = dispatch.path == ModelPath::Source
-                           || dispatch.path == ModelPath::MayaBinaryOnly
-                           || dispatch.path == ModelPath::GltfBinaryOnly;
+    const auto fileBased =
+      dispatch.path == ModelPath::Source || dispatch.path == ModelPath::MayaBinaryOnly;
     if (!m_source || !fileBased)
     {
       queueCube(name, -1, ModelRecord::State::Default, dispatch.reason);
       return;
     }
 
-    const auto sourceProbe = m_source->probe(name);
+    // LP7.5 (ModelManager.cpp:452-461): a glTF name's source is ExtractIdentifier's file
+    // ([file].[node or id].glb reads [file].glb), its time that file's; the binary keeps
+    // the whole name
+    const auto gltf = dispatch.extension == "glb" || dispatch.extension == "gltf";
+    const auto sourceName = gltf ? engineGltfIdentifier(name).fileName : name;
+    const auto sourceProbe = m_source->probe(sourceName);
     const auto binary = lookUpModelBinary(*m_source, name, sourceProbe.time);
     m_modelFiles.insert_or_assign(
       name,
       std::vector<FoundGameFile>{
-        FoundGameFile{name, sourceProbe}, FoundGameFile{binary.path, binary.probe}});
+        FoundGameFile{sourceName, sourceProbe},
+        FoundGameFile{binary.path, binary.probe}});
     if (binary.result == ModelBinaryLookup::Result::Accepted && binary.model)
     {
+      // LP7.5 (P7.19, K41): a .bglb of an animated glTF (model_state DM_CACHED, its GLMB
+      // tail) draws nothing on a static entity, as the engine draws nothing for it
+      if (binary.glmb && binary.glmb->modelState != 0)
+      {
+        auto record = bareRecord(
+          name,
+          ModelRecord::State::Skinned,
+          ModelRecord::SourceKind::Binary,
+          sourceProbe.time,
+          fmt::format(
+            "{}: an animated glTF (model_state {}, {} animations) draws nothing on a "
+            "static entity, as in the engine (K41)",
+            name,
+            binary.glmb->modelState,
+            binary.glmb->animationCount));
+        record.binaryTime = binary.model->timeStamp;
+        record.glbModelState = binary.glmb->modelState;
+        record.glbAnimations = binary.glmb->animationCount;
+        publishModel(std::move(record));
+        return;
+      }
       publishModel(
         modelRecordFromBinary(name, *binary.model, binary.glmb, sourceProbe.time));
       return;
@@ -3096,7 +3122,7 @@ private:
     }
 
     auto found = GameFileProbe{};
-    const auto bytes = m_source->readGameFile(name, &found);
+    const auto bytes = m_source->readGameFile(sourceName, &found);
     if (!bytes)
     {
       queueCube(
@@ -3107,7 +3133,7 @@ private:
       return;
     }
     // what the read found is what the poll compares
-    m_modelFiles[name].front() = FoundGameFile{name, found};
+    m_modelFiles[name].front() = FoundGameFile{sourceName, found};
     if (!m_decls)
     {
       publishModel(bareRecord(
@@ -3119,6 +3145,17 @@ private:
       return;
     }
     auto read = readModelSource(*m_decls, name, *bytes, found.time);
+    if (read.skinned)
+    {
+      // LP7.5 (K41): an animated glTF source, nothing drawn
+      publishModel(bareRecord(
+        name,
+        ModelRecord::State::Skinned,
+        ModelRecord::SourceKind::Source,
+        found.time,
+        std::move(read.reason)));
+      return;
+    }
     if (!read.input)
     {
       publishModel(bareRecord(

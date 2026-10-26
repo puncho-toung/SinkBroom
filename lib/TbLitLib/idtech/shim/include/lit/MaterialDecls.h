@@ -918,6 +918,18 @@ public:
     const std::string& name, const std::string& bytes, std::int64_t time);
 
   /**
+   * LP7.5 (C51, D137; the director's S6, S8): the copied GLTF_Parser::Load
+   * (gltfParser.cpp:2100-2186) of a glTF file's bytes (name its file, the name the parse
+   * opens), its GetFileLength, OpenFileRead and ReadFile served the bytes and the time
+   * handed in (the model read); inside a scope that counts the engine's Errors and
+   * FatalErrors: any one (the parser's own or its lexer's, an engine drop) answers the
+   * error and no model. The parser's file cache is emptied after the parse (no cache in
+   * the preview). Parse thread (the copied lexer, C20; the cache's statics).
+   */
+  EngineGltfParse parseGltfModel(
+    const std::string& name, const std::string& bytes, std::int64_t time);
+
+  /**
    * LP7.1b (P7.13): inside a model read of name over bytes and time, what the copied
    * code's fileSystem->OpenFileRead( opened ) opens: its length and timestamp, or nullopt
    * when nothing opens (another name). For the shim's tests. Parse thread.

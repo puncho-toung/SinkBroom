@@ -656,6 +656,31 @@ const char* idFileSystemLocal::OSPathToRelativePath(const char* OSPath)
   return tb::lit::shim::osPathToRelativePath(OSPath);
 }
 
+int idFileSystemLocal::GetFileLength(const char* relativePath)
+{
+  // FileSystem.cpp:455-459: an empty name warns and is -1
+  if (!relativePath || !relativePath[0])
+  {
+    idLib::Warning("idFileSystemLocal::GetFileLength with empty name");
+    return -1;
+  }
+  if (
+    m_modelRead && m_modelRead->path == relativePath
+    && m_modelRead->bytes.size() < std::size_t(INT_MAX))
+  {
+    return int(m_modelRead->bytes.size());
+  }
+  return -1;
+}
+
+int idFile::ReadUnsignedInt(unsigned int& value)
+{
+  // File.cpp:351-356
+  int result = Read(&value, sizeof(value));
+  value = static_cast<unsigned int>(LittleLong(static_cast<int>(value)));
+  return result;
+}
+
 namespace tb::lit::shim
 {
 

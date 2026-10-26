@@ -61,6 +61,10 @@ private:
 class idCmdSystem
 {
 public:
+  // LP7.5: CmdSystem.h:194, :244-247; named by the copied gltfParser.cpp's LoadGLTF
+  // command (registered nowhere: idCommandLink is constexpr), never called
+  static void ArgCompletion_MapName(const idCmdArgs&, void (*)(const char* s)) {}
+
   // CmdSystem.h:218-224; named by idDeclManagerLocal::decl_show, never called
   template <int min, int max>
   static void ArgCompletion_Integer(
@@ -160,6 +164,9 @@ public:
   void DWarning(const char* fmt, ...);
   void Error(const char* fmt, ...);
   void FatalError(const char* fmt, ...);
+  // LP7.5: the console's refresh on each print while GLTF_Parser::Load runs
+  // (gltfParser.cpp:2111, :2152): the shim has no console, so nothing
+  void SetRefreshOnPrint(bool) {}
 
   // LP1c fix (S3.2): the binarizer's progress, which the copied DXT encoders report;
   // declared only, and defined by the test-only TbLitIdDxtTestLib (the product copies no
@@ -189,6 +196,10 @@ public:
   virtual ID_TIME_T Timestamp() const = 0;
   virtual int Tell() const = 0;
   virtual int Seek(long offset, fsOrigin_t origin) = 0;
+
+  // LP7.5: File.cpp:351-356, transcribed: four bytes read, their value LittleLong's;
+  // the bytes read returned (the copied loadGLB subtracts it from its length)
+  int ReadUnsignedInt(unsigned int& value);
 };
 
 // the members of framework/FileSystem.h's idFileSystem that the copied code calls
@@ -211,6 +222,9 @@ public:
     const char* relativePath, bool allowCopyFiles = true, const char* gamedir = NULL) = 0;
   virtual idFile* OpenExplicitFileRead(const char* OSPath) = 0;
   virtual void CloseFile(idFile* f) = 0;
+  // LP7.5: FileSystem.h's GetFileLength, which the copied loadGLB calls first
+  // (gltfParser.cpp:1931)
+  virtual int GetFileLength(const char* relativePath) = 0;
   // LP7.1b: FileSystem.h:138, which the copied ASE reader calls on a *BITMAP path
   virtual const char* OSPathToRelativePath(const char* OSPath) = 0;
 };

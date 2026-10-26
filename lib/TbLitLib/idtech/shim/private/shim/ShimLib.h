@@ -180,6 +180,15 @@ short LittleShort(short l);
 // getI2 ... getF4, sgetI2 ... sgetF4, lwGetPoints); parse thread
 void BigRevBytes(void* bp, int elsize, int elcount);
 
+// LP7.5: idlib/Lib.h:166, the copied GLTF_Parser's 32-bit reads (idFile::ReadUnsignedInt,
+// File.cpp:351-356); parse thread
+int LittleLong(int l);
+
+// LP7.5: idlib/Lib.h:158, copied (idlib/Lib.cpp:154-166, compiled inside ShimLib.cpp):
+// ConvertFromMeshGltf packs a vertex's WEIGHTS_0 into its color2 (MapFile_gltf.cpp:250);
+// pure, any thread
+dword PackColor(const idVec4& color);
+
 // misc
 class idRandom;
 class idSerializer;

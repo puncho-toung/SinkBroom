@@ -26,6 +26,20 @@ If you have questions concerning this license or the applicable additional terms
 
 ===========================================================================
 */
+// ==== engine neo/idlib/Lib.cpp lines 154-166 (PackColor) ====
+/*
+================
+PackColor
+================
+*/
+dword PackColor( const idVec4& color )
+{
+	byte dx = idMath::Ftob( color.x * 255.0f );
+	byte dy = idMath::Ftob( color.y * 255.0f );
+	byte dz = idMath::Ftob( color.z * 255.0f );
+	byte dw = idMath::Ftob( color.w * 255.0f );
+	return ( dx << 0 ) | ( dy << 8 ) | ( dz << 16 ) | ( dw << 24 );
+}
 // ==== engine neo/idlib/Lib.cpp lines 490-537 (RevBytesSwap) ====
 /*
 =====================================================================
