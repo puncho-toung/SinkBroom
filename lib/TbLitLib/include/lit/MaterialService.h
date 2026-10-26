@@ -136,8 +136,8 @@ struct MaterialImageKeyHash
  *   published as deltas and kept across reloads (an image's cache does not depend on the
  *   decls);
  * - models (LP7.0, C51, D126): the model records by canonical name, kept across reloads
- *   as the images are, with modelChanges and changedModels for the poll; nothing requests
- *   a model in LP7.0, so the map is empty (LP7.1a's loader fills it);
+ *   as the images are, with modelChanges and changedModels for the poll; LP7.1a's
+ *   MaterialService::requestModel fills it;
  * - skins (LP7.0, C53): the skin decls by name, per registry as the entityDefs are;
  *   empty in LP7.0 (lit/ModelRecord.h, SkinRecord).
  *
@@ -214,7 +214,8 @@ struct MaterialTable
    * across reloads; modelChanges counts the records dropped because their files changed
    * and changedModels holds each name with the count at its last drop, as imageChanges
    * and changedImages do for the images (a consumer holding a model's geometry asks
-   * again when its name's count is newer than the one it took it at). Empty in LP7.0.
+   * again when its name's count is newer than the one it took it at). LP7.1a fills it
+   * (MaterialService::requestModel).
    */
   Models models;
   std::uint64_t modelChanges = 0;
@@ -282,7 +283,7 @@ struct MaterialTable
   std::shared_ptr<const MapBakeSlot> findMapBake(std::string_view path) const;
   std::shared_ptr<const ImageCacheSlot> findImage(const MaterialImageKey& key) const;
   // LP7.0 (C51): the record of a canonical model name (canonicalModelName), null when it
-  // was never requested (in LP7.0 always); it does not allocate
+  // was never requested or was dropped (a changed file, LP7.1a); it does not allocate
   std::shared_ptr<const ModelRecord> findModel(std::string_view canonicalName) const;
   // LP7.0 (C53): a skin's slot, null when it is not published (in LP7.0 always)
   std::shared_ptr<const SkinSlot> findSkin(std::string_view name) const;
@@ -425,7 +426,8 @@ struct MaterialServiceOptions
   // every image. LPF.0a (D99): an override's slots too, converted again from the store
   std::size_t imageBudgetBytes = std::size_t{512} * 1024 * 1024;
   // LPF.0a: runs on the parse thread before each work item with its kind ("evaluate",
-  // "feed", "reparse", "lookup", "bake", "poll", "measure", "image", "bulk", "reload")
+  // "feed", "reparse", "lookup", "bake", "poll", "measure", "image", "model" (LP7.1a),
+  // "bulk", "reload")
   std::function<void(std::string_view kind)> beforeWorkItemForTesting;
   // LP7.0: runs on the parse thread on every registry build, with the build's new working
   // table before anything is looked up in it, so a test can publish the model records and
@@ -475,6 +477,14 @@ struct MaterialServiceStats
   // LP7.0 (C54): the bytes of the area trees the latest table's bakes hold, each tree
   // once (MapBake::procBytes, their geometry included)
   std::size_t procBytes = 0;
+  // LP7.1a (C51, D126, D137, P7.14): the model records the latest table holds and their
+  // bytes (modelRecordBytes), the finishes the model pool ran, the longest model work
+  // item on the parse thread and the longest finish on the pool, in milliseconds
+  std::size_t models = 0;
+  std::size_t modelBytes = 0;
+  std::uint64_t modelFinishes = 0;
+  double longestModelItemMs = 0.0;
+  double longestModelFinishMs = 0.0;
   // LPF.0a (D96): override hand-overs replaced by a newer one of the name before their
   // work item ran (their bytes dropped), and the slots converted from the override store
   std::uint64_t droppedFeeds = 0;
@@ -496,13 +506,13 @@ struct MaterialServiceStats
  * queue in priority order: stop, reload, evaluations, the image overrides (LPF.0a, D96:
  * one item per name), the material re-parses (LPF.0b, D96: one item per name), lookups
  * (materials and entityDefs), a bake, the poll, the
- * editor-image measures, the images, then the bulk parse. LP1c fix (S2.3): every work
- * item is short, so that an evaluation (a light drag) waits for one step at most: a
- * lookup or measure item takes names until about 20 ms have passed (or 256 names) and
- * publishes what it did, leaving the rest queued; a bake is one item; an image item
- * (LP4.3) takes queued images for up to 100 ms (or 256), and ends after the image in
- * hand once more urgent work is queued, an override included; the bulk parse works in
- * 20 ms steps (D52).
+ * editor-image measures, the images, the models (LP7.1a, D126), then the bulk parse. LP1c
+ * fix (S2.3): every work item is short, so that an evaluation (a light drag) waits for
+ * one step at most: a lookup or measure item takes names until about 20 ms have passed
+ * (or 256 names) and publishes what it did, leaving the rest queued; a bake is one item;
+ * an image item (LP4.3) takes queued images for up to 100 ms (or 256), and ends after the
+ * image in hand once more urgent work is queued, an override included; the bulk parse
+ * works in 20 ms steps (D52).
  *
  * LP1c fix (S2.2): an entry is published at once with the last Ready editor-image size
  * of its material (D52) or the registry's Default, unmeasured; its measure (C21, by
@@ -677,6 +687,26 @@ public:
    * with no re-parse publishes once, nothing else changed.
    */
   void clearMaterialReparse(std::string name);
+
+  /**
+   * LP7.1a (C51, D125, D126, D137): the model record of a name (any spelling; the record
+   * is kept under canonicalModelName's), as the latest table has it, or null, and the
+   * name is queued; any thread; an empty name is no model (null, nothing queued). On the
+   * parse thread a Model work item (served after the images, ahead of the bulk parse)
+   * takes one name: the dispatch (lit/ModelLoading.h modelDispatch), the engine's binary
+   * through the C8 search with the time test (accepted: Ready at once, no
+   * FinishSurfaces), else for an .obj the source (its bytes and the probe's time) through
+   * the validator, the copied OBJ_Load and the materials' capture; what needs
+   * FinishSurfaces is published Pending and finished on the service's one-worker pool
+   * (made with the first model, stopped before the registry goes), one finish at a time,
+   * and published when it answers (a queued work item). A missing file is Missing, a
+   * refused one Default, an .md5mesh Skinned, every other kind the default cube as
+   * modelDispatch says. While pollInterval runs, the poll probes each record's source and
+   * binary within its slice and drops a changed one (modelChanges, changedModels),
+   * reading it again. A re-parse or a reload that changes a material a Source record was
+   * finished with drops and reads it again (P7.22). LP7.2's scene asks; tests ask today.
+   */
+  std::shared_ptr<const ModelRecord> requestModel(std::string_view name);
 
   // LPF.0a (D100): the override hand-overs and, LPF.0b, the re-parse hand-overs made so
   // far; any thread (LPF.1's render thread compares it with a table's feedApplied)

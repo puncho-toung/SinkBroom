@@ -63,6 +63,14 @@ void bumpModificationTime(const std::filesystem::path& path);
 bool setUnixModificationTime(const std::filesystem::path& path, std::int64_t seconds);
 
 /**
+ * LP7.1a: a BRM 110 render model stream as the engine's WriteBinaryModel writes one
+ * (Model.cpp:632-790): one surface of one triangle on material, stored time timeStamp,
+ * name, the three has-surfaces flags set.
+ */
+std::string minimalBinaryModel(
+  std::int64_t timeStamp, const std::string& material, const std::string& name);
+
+/**
  * Holds a material service's parse thread before it takes its next request while closed
  * (MaterialServiceOptions::beforeTakeWorkForTesting calls pass): lookups queued then stay
  * pending until it opens. A thread already inside its wait for a request takes one more.

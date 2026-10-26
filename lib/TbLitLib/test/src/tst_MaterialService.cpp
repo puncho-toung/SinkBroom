@@ -34,6 +34,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <filesystem>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -1791,6 +1793,272 @@ TEST_CASE("MaterialService re-parses a Failed material (LPF.0b, P5.8)")
 namespace
 {
 
+// LP7.1a: a quad of two triangles on lp7/test, and one triangle
+const auto ServiceQuadObj = std::string{
+  "v 0 0 0\nv 32 0 0\nv 32 32 0\nv 0 32 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 0 1\n"
+  "usemtl lp7/test\nf 1/1/1 2/2/1 3/3/1\nf 1/1/1 3/3/1 4/4/1\n"};
+const auto ServiceTriangleObj = std::string{
+  "v 0 0 0\nv 32 0 0\nv 32 32 0\nvt 0 0\nvt 1 0\nvt 1 1\nvn 0 0 1\n"
+  "usemtl lp7/test\nf 1/1/1 2/2/1 3/3/1\n"};
+constexpr auto Stamp2015 = std::int64_t{1451520000};
+
+std::vector<DeclFile> modelServiceFiles()
+{
+  return {
+    DeclFile{"materials/lp7.mtr", materialText("lp7/test", "textures/lp7/test"), 0},
+    DeclFile{"models/test/quad.obj", ServiceQuadObj, Stamp2015},
+  };
+}
+
+std::unique_ptr<DeclSource> modelSource(const std::atomic<bool>&)
+{
+  return std::make_unique<MemoryDeclSource>(modelServiceFiles());
+}
+
+// the fixture's decls with the quad: the leak test's model path
+std::unique_ptr<DeclSource> fixtureWithModelSource(const std::atomic<bool>&)
+{
+  auto files = materialDeclsFixture();
+  files.push_back(
+    DeclFile{"materials/lp7.mtr", materialText("lp7/test", "textures/lp7/test"), 0});
+  files.push_back(DeclFile{"models/test/quad.obj", ServiceQuadObj, Stamp2015});
+  return std::make_unique<MemoryDeclSource>(std::move(files));
+}
+
+// requests a model and waits until a table holds it in a final state
+std::shared_ptr<const ModelRecord> waitForModel(
+  MaterialService& service,
+  const std::string& name,
+  const std::function<bool(const ModelRecord&)>& done = {})
+{
+  static_cast<void>(service.requestModel(name));
+  const auto table = service.waitForTableForTesting(
+    [&](const MaterialTable& t) {
+      const auto record = t.findModel(name);
+      return record && record->state != ModelRecord::State::Pending
+             && (!done || done(*record));
+    },
+    Timeout);
+  return table->findModel(name);
+}
+
+// a game folder of the model fixture, its sources stamped through the file system
+class ModelServiceGame
+{
+private:
+  fs::TestEnvironment m_env;
+
+public:
+  ModelServiceGame()
+  {
+    writeTextFile(
+      base() / "materials" / "lp7.mtr", materialText("lp7/test", "textures/lp7/test"));
+    writeTextFile(sourcePath(), ServiceQuadObj);
+    REQUIRE(setUnixModificationTime(sourcePath(), Stamp2015));
+  }
+
+  std::filesystem::path base() const { return m_env.dir() / "base"; }
+  std::filesystem::path sourcePath() const
+  {
+    return base() / "models" / "test" / "quad.obj";
+  }
+  std::filesystem::path binaryPath() const
+  {
+    return base() / "generated" / "rendermodels" / "models" / "test" / "quad.bobj";
+  }
+
+  SourceFactory source() const
+  {
+    return [dir = m_env.dir()](const std::atomic<bool>& cancel) {
+      return std::unique_ptr<DeclSource>{std::make_unique<GameFileSource>(dir, &cancel)};
+    };
+  }
+};
+
+} // namespace
+
+TEST_CASE("MaterialService loads models (LP7.1a, C51, D125, D126, D137)")
+{
+  SECTION("a request publishes a Ready record from an OBJ, its time the source's")
+  {
+    auto service = start(options(modelSource));
+    CHECK_FALSE(service->requestModel(""));
+    const auto record = waitForModel(*service, "models/test/quad.obj");
+    REQUIRE(record);
+    CHECK(record->state == ModelRecord::State::Ready);
+    CHECK(record->source == ModelRecord::SourceKind::Source);
+    CHECK(record->sourceTime == Stamp2015);
+    REQUIRE(record->surfaces.size() == 1u);
+    CHECK(record->surfaces[0].verts.size() == 4u);
+    CHECK(record->surfaces[0].material == "lp7/test");
+    CHECK(record->sourceMaterialNames == std::vector<std::string>{"lp7/test"});
+    REQUIRE(record->sourceMaterials.size() == 1u);
+    CHECK(record->sourceMaterials[0].name == "lp7/test");
+    CHECK(record->hasDrawingSurfaces);
+    // any spelling finds the canonical record
+    CHECK(service->requestModel("Models/Test/Quad.OBJ") == record);
+    const auto stats = service->stats();
+    CHECK(stats.models == 1u);
+    CHECK(stats.modelFinishes == 1u);
+    CHECK(stats.modelBytes > 4 * sizeof(EngineDrawVert));
+    CHECK(stats.longestModelFinishMs > 0.0);
+  }
+
+  SECTION("a missing file: Missing, the default cube")
+  {
+    auto service = start(options(modelSource));
+    const auto record = waitForModel(*service, "models/test/none.obj");
+    REQUIRE(record);
+    CHECK(record->state == ModelRecord::State::Missing);
+    CHECK(record->source == ModelRecord::SourceKind::Default);
+    CHECK_THAT(record->reason, Catch::Matchers::ContainsSubstring("no file"));
+    REQUIRE(record->surfaces.size() == 1u);
+    CHECK(record->surfaces[0].verts.size() == 24u);
+  }
+
+  SECTION("the dispatch: an .md5mesh Skinned, an .fbx and an .ase the cube")
+  {
+    auto service = start(options(modelSource));
+    const auto skinned = waitForModel(*service, "models/test/a.md5mesh");
+    REQUIRE(skinned);
+    CHECK(skinned->state == ModelRecord::State::Skinned);
+    CHECK(skinned->surfaces.empty());
+    const auto fbx = waitForModel(*service, "models/test/a.fbx");
+    REQUIRE(fbx);
+    CHECK(fbx->state == ModelRecord::State::Default);
+    CHECK(fbx->surfaces.size() == 1u);
+    const auto ase = waitForModel(*service, "models/test/a.ase");
+    REQUIRE(ase);
+    CHECK(ase->state == ModelRecord::State::Missing);
+    CHECK(ase->pendingLoader);
+  }
+
+  SECTION("the engine's binary first, when it is there and its time test passes")
+  {
+    const auto game = ModelServiceGame{};
+    writeTextFile(
+      game.binaryPath(),
+      minimalBinaryModel(Stamp2015, "lp7/test", "models/test/quad.obj"));
+    auto service = start(options(game.source()));
+    const auto record = waitForModel(*service, "models/test/quad.obj");
+    REQUIRE(record);
+    CHECK(record->state == ModelRecord::State::Ready);
+    CHECK(record->source == ModelRecord::SourceKind::Binary);
+    CHECK(record->binaryTime == Stamp2015);
+    CHECK(record->sourceTime == Stamp2015);
+    REQUIRE(record->surfaces.size() == 1u);
+    CHECK(record->surfaces[0].verts.size() == 3u);
+    CHECK(service->stats().modelFinishes == 0u);
+  }
+
+  SECTION("a stale binary: the source is read")
+  {
+    const auto game = ModelServiceGame{};
+    writeTextFile(
+      game.binaryPath(),
+      minimalBinaryModel(Stamp2015 - 60, "lp7/test", "models/test/quad.obj"));
+    auto service = start(options(game.source()));
+    const auto record = waitForModel(*service, "models/test/quad.obj");
+    REQUIRE(record);
+    CHECK(record->source == ModelRecord::SourceKind::Source);
+    CHECK(record->surfaces[0].verts.size() == 4u);
+  }
+
+  SECTION("the poll reads a rewritten source again and counts the drop")
+  {
+    const auto game = ModelServiceGame{};
+    auto serviceOptions = options(game.source());
+    serviceOptions.pollInterval = 20ms;
+    auto service = start(std::move(serviceOptions));
+    const auto before = waitForModel(*service, "models/test/quad.obj");
+    REQUIRE(before);
+    REQUIRE(before->surfaces.size() == 1u);
+    CHECK(before->surfaces[0].verts.size() == 4u);
+    const auto changes = service->table()->modelChanges;
+
+    // the LP5.G addendum's way: the file rewritten, its time moved on by 2 s
+    writeTextFile(game.sourcePath(), ServiceTriangleObj);
+    REQUIRE(setUnixModificationTime(game.sourcePath(), Stamp2015 + 2));
+    const auto table = service->waitForTableForTesting(
+      [&](const MaterialTable& t) {
+        const auto record = t.findModel("models/test/quad.obj");
+        return t.modelChanges > changes && record
+               && record->state == ModelRecord::State::Ready
+               && record->surfaces.size() == 1u && record->surfaces[0].verts.size() == 3u;
+      },
+      Timeout);
+    const auto after = table->findModel("models/test/quad.obj");
+    REQUIRE(after);
+    CHECK(table->modelChanges == changes + 1);
+    const auto* changed = table->changedModels.find("models/test/quad.obj");
+    REQUIRE(changed);
+    CHECK(*changed == table->modelChanges);
+    CHECK(after->sourceTime == Stamp2015 + 2);
+    CHECK(after->version > before->version);
+  }
+
+  SECTION("a re-parse of its material finishes a Source record again (P7.22)")
+  {
+    auto service = start(options(modelSource));
+    const auto before = waitForModel(*service, "models/test/quad.obj");
+    REQUIRE(before);
+    REQUIRE(before->sourceMaterials.size() == 1u);
+    CHECK(before->sourceMaterials[0].deform == 0);
+    const auto changes = service->table()->modelChanges;
+    REQUIRE(
+      service
+        ->reparseMaterial(
+          "lp7/test",
+          "{\n\tdeform sprite\n\t{\n\t\tblend add\n\t\tmap textures/lp7/test\n\t}\n}")
+        .is_success());
+    const auto table = service->waitForTableForTesting(
+      [&](const MaterialTable& t) {
+        const auto record = t.findModel("models/test/quad.obj");
+        return t.modelChanges > changes && record
+               && record->state == ModelRecord::State::Ready
+               && record->sourceMaterials.size() == 1u
+               && record->sourceMaterials[0].deform == 1;
+      },
+      Timeout);
+    const auto after = table->findModel("models/test/quad.obj");
+    REQUIRE(after);
+    CHECK(after->sourceMaterials[0].discrete);
+    // the deform's bounds: centre +- (radius + 20)
+    CHECK(after->bounds[0][2] < -20.0f);
+  }
+}
+
+TEST_CASE("MaterialService serves Model items after Image items (LP7.1a, D126, D52)")
+{
+  auto hold = std::make_shared<ReparseHold>();
+  auto items = std::make_shared<ReparseItems>();
+  auto service = reparseService(hold, items, modelSource);
+  const auto material = waitForEntry(*service, "lp7/test");
+  REQUIRE(material);
+  REQUIRE(waitUntilServiceIdle(*service));
+  holdAfterEvaluation(*service, *hold, *material);
+  static_cast<void>(items->taken());
+
+  static_cast<void>(service->requestModel("models/test/quad.obj"));
+  auto key = MaterialImageKey{};
+  key.name = "textures/lp7/test";
+  key.usage = 1;
+  static_cast<void>(service->image(key));
+  hold->open();
+  const auto record = waitForModel(*service, "models/test/quad.obj");
+  REQUIRE(record);
+  REQUIRE(waitUntilServiceIdle(*service));
+  const auto kinds = items->taken().first;
+  const auto image = std::ranges::find(kinds, "image");
+  const auto model = std::ranges::find(kinds, "model");
+  REQUIRE(image != kinds.end());
+  REQUIRE(model != kinds.end());
+  CHECK(image < model);
+}
+
+namespace
+{
+
 // S2.6: holds a polling parse thread before it takes its next request (its last work item
 // done and freed), and tells when it is held there
 struct Parking
@@ -1912,8 +2180,12 @@ TEST_CASE("MaterialService start, stop and reload leak nothing")
       CHECK_FALSE(service->stats().parseAllDone);
       return;
     }
-    auto service = start(options(fixtureSource, counting, true));
+    auto service = start(options(fixtureWithModelSource, counting, true));
     useService(*service, LeakNames);
+    // LP7.1a: the model path, its one-worker pool made and stopped with the service
+    const auto model = waitForModel(*service, "models/test/quad.obj");
+    REQUIRE(model);
+    CHECK(model->state == ModelRecord::State::Ready);
     service->waitForTableForTesting(
       [](const MaterialTable& t) { return t.complete; }, Timeout);
   };

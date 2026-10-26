@@ -20,9 +20,11 @@
 #include "lit/MaterialService.h"
 
 #include "StackThread.h"
+#include "lit/CpuPool.h"
 #include "lit/EditorImageSize.h"
 #include "lit/ImageFallback.h"
 #include "lit/MapBake.h"
+#include "lit/ModelLoading.h"
 
 #include "kd/result.h"
 
@@ -33,6 +35,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <future>
 #include <iterator>
 #include <mutex>
 #include <optional>
@@ -309,6 +312,11 @@ struct MaterialService::Shared
   // first came, the newest text of a name winning; counted in feedRequested
   std::deque<std::string> reparses;
   std::unordered_map<std::string, ReparseRequest> queuedReparses;
+  // LP7.1a (C51, D126): the model names to read, canonical, one per work item, and
+  // whether the model pool's finish has answered (its mailbox is filled first)
+  std::deque<std::string> models;
+  std::unordered_set<std::string> queuedModels;
+  bool modelFinished = false;
 
   std::shared_ptr<const MaterialTable> table = std::make_shared<const MaterialTable>();
   MaterialServiceStats stats;
@@ -417,6 +425,7 @@ private:
     Poll,
     Measure,
     Image,
+    Model,
     Bulk,
   };
 
@@ -446,6 +455,8 @@ private:
       return "measure";
     case WorkKind::Image:
       return "image";
+    case WorkKind::Model:
+      return "model";
     case WorkKind::Bulk:
       return "bulk";
     }
@@ -561,6 +572,51 @@ private:
   std::uint64_t m_evictedImages = 0;
   // LP7.0 (C54): the bytes of the bakes' trees (stats().procBytes)
   std::size_t m_procBytes = 0;
+
+  /**
+   * LP7.1a (C51, D137): a model's finish, waiting for the pool or in it: the job's input
+   * (plain data), the record it gives, and the name's generation when it was queued (a
+   * drop moves it, so a finish of an older file is not published).
+   */
+  struct ModelFinish
+  {
+    ModelFinishInput input;
+    ModelRecord::State state = ModelRecord::State::Pending;
+    ModelRecord::SourceKind kind = ModelRecord::SourceKind::None;
+    std::string reason;
+    bool pendingLoader = false;
+    std::uint64_t generation = 0;
+  };
+
+  // where the running finish leaves its result before it wakes the parse thread
+  struct ModelMailbox
+  {
+    std::mutex mutex;
+    bool done = false;
+    std::optional<EngineModel> model;
+    std::vector<DeclMessage> messages;
+    std::string error;
+    double milliseconds = 0.0;
+  };
+
+  // the model pool (one worker: FinishSurfaces' static, Model.cpp:1323-1324), made with
+  // the first finish; the finishes in order, the running one and its mailbox
+  std::unique_ptr<CpuPool> m_modelPool;
+  std::deque<ModelFinish> m_modelFinishes;
+  std::optional<ModelFinish> m_runningFinish;
+  std::shared_ptr<ModelMailbox> m_modelMailbox;
+  std::future<CpuJobResult<bool>> m_modelJob;
+  // each record's source and binary as found (the poll's), the names' generations, the
+  // records' version counter, and the poll's place in the records
+  std::unordered_map<std::string, std::vector<FoundGameFile>> m_modelFiles;
+  std::unordered_map<std::string, std::uint64_t> m_modelGenerations;
+  std::uint64_t m_modelVersion = 0;
+  std::vector<std::string> m_pollModels;
+  std::size_t m_pollModelCursor = 0;
+  double m_longestModelItemMs = 0.0;
+  double m_longestModelFinishMs = 0.0;
+  std::uint64_t m_modelFinishCount = 0;
+  std::size_t m_modelBytes = 0;
   // S2 Low (S2.7): the poll's place in the files it re-probes, a slice per poll
   std::vector<MaterialImageKey> m_pollImageKeys;
   std::vector<std::string> m_pollMaterials;
@@ -682,6 +738,8 @@ private:
         m_shared.queuedFeeds.clear();
         m_shared.reparses.clear();
         m_shared.queuedReparses.clear();
+        m_shared.models.clear();
+        m_shared.queuedModels.clear();
       }
       m_shared.changed.notify_all();
     }
@@ -718,6 +776,7 @@ private:
   {
     try
     {
+      stopModelPool();
       m_decls.reset();
       m_source.reset();
     }
@@ -759,11 +818,13 @@ private:
         break;
       case WorkKind::Reload:
         guarded("reload", [&] { rebuild(); });
+        guarded("model materials", [&] { recheckModelMaterials(true); });
         break;
       case WorkKind::AutoReload:
         m_lastAutoReload = Clock::now();
         updateStats([](MaterialServiceStats& stats) { ++stats.pollReloads; });
         guarded("reload", [&] { rebuild(); });
+        guarded("model materials", [&] { recheckModelMaterials(true); });
         break;
       case WorkKind::Evaluate:
         guarded("evaluation", [&] { evaluate(work.evaluations); });
@@ -790,6 +851,9 @@ private:
       case WorkKind::Image:
         guarded("image", [&] { imageItem(work.image); });
         break;
+      case WorkKind::Model:
+        guarded("model", [&] { modelItem(); });
+        break;
       case WorkKind::Bulk:
         guarded("bulk parse", [&] { bulkStep(); });
         break;
@@ -806,8 +870,10 @@ private:
     }
 
     // teardown step 8: the registry is destroyed on its own thread, and what the thread
-    // reported to the sink of D63 after it is dropped
+    // reported to the sink of D63 after it is dropped; LP7.1a: the model pool first, on
+    // the thread that made it, so that no worker outlives the service
     guarded("teardown", [&] {
+      stopModelPool();
       m_decls.reset();
       m_source.reset();
       static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
@@ -952,6 +1018,12 @@ private:
       m_shared.queuedImages.erase(work.image);
       return work;
     }
+    // LP7.1a (D126, D52): the models after the lookups and the images, ahead of the bulk
+    // parse: a queued name, or a finish that answered
+    if (!m_shared.models.empty() || m_shared.modelFinished)
+    {
+      return workOf(WorkKind::Model);
+    }
     if (m_shared.parseAllRequested && bulkPending())
     {
       return workOf(WorkKind::Bulk);
@@ -1013,11 +1085,18 @@ private:
     const auto evicted = m_evictedImages;
     const auto conversions = m_overrideConversions;
     const auto procBytes = m_procBytes;
+    const auto modelBytes = m_modelBytes;
+    const auto models = m_working.models.size();
     {
       auto lock = std::scoped_lock{m_shared.mutex};
       m_shared.table = std::move(table);
       m_shared.stats.imageBytes = imageBytes;
       m_shared.stats.procBytes = procBytes;
+      m_shared.stats.models = models;
+      m_shared.stats.modelBytes = modelBytes;
+      m_shared.stats.modelFinishes = m_modelFinishCount;
+      m_shared.stats.longestModelItemMs = m_longestModelItemMs;
+      m_shared.stats.longestModelFinishMs = m_longestModelFinishMs;
       m_shared.stats.evictedImages = evicted;
       m_shared.stats.overrideConversions = conversions;
     }
@@ -2502,6 +2581,11 @@ private:
         clearReparse(name);
       }
     });
+    // LP7.1a (P7.22): a Source record finished with a material that changed is read again
+    if (m_working.materialsRevision != revision)
+    {
+      guarded("model materials", [&] { recheckModelMaterials(false); });
+    }
     m_working.feedApplied += request.requests;
     // LPF.1 (C44): the revision the item published, if it moved one
     recordFeed(
@@ -2724,6 +2808,593 @@ private:
     }
   }
 
+  // ----- LP7.1a: the model records (C51, D125, D126, D137) -----
+
+  /**
+   * The model pool's teardown, on the parse thread that made it (CpuPool::stop joins the
+   * one worker after its running finish), so that no worker outlives the service; the
+   * finishes waiting are dropped with it.
+   */
+  void stopModelPool()
+  {
+    if (m_modelPool)
+    {
+      m_modelPool->stop();
+      m_modelPool.reset();
+    }
+    m_modelJob = {};
+    m_runningFinish.reset();
+    m_modelMailbox.reset();
+    m_modelFinishes.clear();
+  }
+
+  // a record into the working table under its name, its version moved (C51)
+  void publishModel(ModelRecord record)
+  {
+    record.version = ++m_modelVersion;
+    if (const auto* held = m_working.models.find(record.name))
+    {
+      m_modelBytes -= std::min(m_modelBytes, modelRecordBytes(**held));
+    }
+    m_modelBytes += modelRecordBytes(record);
+    auto name = record.name;
+    m_working.models = m_working.models.set(
+      std::move(name), std::make_shared<const ModelRecord>(std::move(record)));
+  }
+
+  // a record without surfaces: Pending while it finishes, Skinned, or what is left when
+  // nothing can make the cube (no registry, no pool)
+  static ModelRecord bareRecord(
+    const std::string& name,
+    const ModelRecord::State state,
+    const ModelRecord::SourceKind kind,
+    const std::int64_t sourceTime,
+    std::string reason)
+  {
+    auto record = ModelRecord{};
+    record.name = name;
+    record.state = state;
+    record.source = kind;
+    record.sourceTime = sourceTime;
+    record.reason = std::move(reason);
+    return record;
+  }
+
+  /**
+   * The image rule (dropImage, P2.14b) for a model: its record leaves the table,
+   * modelChanges counts the drop and changedModels holds the name with it, its files and
+   * waiting finish go, and its generation moves, so that a finish of the old file that
+   * answers later is not published.
+   */
+  void dropModel(const std::string& name)
+  {
+    if (const auto* held = m_working.models.find(name))
+    {
+      m_modelBytes -= std::min(m_modelBytes, modelRecordBytes(**held));
+      m_working.models = m_working.models.erase(name);
+    }
+    ++m_working.modelChanges;
+    m_working.changedModels = m_working.changedModels.set(name, m_working.modelChanges);
+    m_modelFiles.erase(name);
+    ++m_modelGenerations[name];
+    m_modelFinishes.erase(
+      std::remove_if(
+        m_modelFinishes.begin(),
+        m_modelFinishes.end(),
+        [&](const auto& finish) { return finish.input.name == name; }),
+      m_modelFinishes.end());
+  }
+
+  // a name read again by a later Model item
+  void requeueModel(const std::string& name)
+  {
+    {
+      auto lock = std::scoped_lock{m_shared.mutex};
+      if (m_shared.queuedModels.insert(name).second)
+      {
+        m_shared.models.push_back(name);
+      }
+    }
+    m_shared.requested.notify_one();
+  }
+
+  // a finish for the pool, its record Pending meanwhile
+  void queueFinish(
+    ModelFinishInput input,
+    const ModelRecord::State state,
+    const ModelRecord::SourceKind kind,
+    std::string reason,
+    const bool pendingLoader)
+  {
+    publishModel(
+      bareRecord(input.name, ModelRecord::State::Pending, kind, input.sourceTime, {}));
+    auto finish = ModelFinish{};
+    finish.generation = m_modelGenerations[input.name];
+    finish.input = std::move(input);
+    finish.state = state;
+    finish.kind = kind;
+    finish.reason = std::move(reason);
+    finish.pendingLoader = pendingLoader;
+    m_modelFinishes.push_back(std::move(finish));
+  }
+
+  // the default cube's finish for a Missing or Default record (MakeDefaultModel with the
+  // registry's default material); without a registry, the record without surfaces
+  void queueCube(
+    const std::string& name,
+    const std::int64_t sourceTime,
+    const ModelRecord::State state,
+    std::string reason,
+    const bool pendingLoader)
+  {
+    auto input = m_decls ? defaultModelInput(*m_decls, name, sourceTime) : std::nullopt;
+    if (!input)
+    {
+      auto record = bareRecord(
+        name,
+        state,
+        ModelRecord::SourceKind::Default,
+        sourceTime,
+        reason + (m_decls ? "; no default material" : "; " + buildFailure()));
+      record.pendingLoader = pendingLoader;
+      publishModel(std::move(record));
+      return;
+    }
+    queueFinish(
+      std::move(*input),
+      state,
+      ModelRecord::SourceKind::Default,
+      std::move(reason),
+      pendingLoader);
+  }
+
+  /**
+   * One model name, in C51's order (parse thread): the dispatch (modelDispatch); for a
+   * file kind the source's probe (A4's time) and the engine's binary through the C8
+   * search with the time test (accepted: Ready at once, D125, SC602); else for an .obj
+   * its bytes through readObjSource (the validator, the copied OBJ_Load, the materials'
+   * capture), finished on the pool; a missing source the cube, Missing; every other kind
+   * the cube, Default, with modelDispatch's reason; an .md5mesh Skinned. The source's and
+   * the binary's finds are kept for the poll.
+   */
+  void readModel(const std::string& name)
+  {
+    const auto dispatch = modelDispatch(name);
+    if (dispatch.path == ModelPath::None)
+    {
+      return;
+    }
+    if (dispatch.path == ModelPath::Skinned)
+    {
+      publishModel(bareRecord(
+        name,
+        ModelRecord::State::Skinned,
+        ModelRecord::SourceKind::None,
+        -1,
+        dispatch.reason));
+      return;
+    }
+    const auto pendingLoader = dispatch.path == ModelPath::PendingLoader;
+    const auto fileBased = dispatch.path == ModelPath::Source || pendingLoader
+                           || dispatch.path == ModelPath::MayaBinaryOnly
+                           || dispatch.path == ModelPath::GltfBinaryOnly;
+    if (!m_source || !fileBased)
+    {
+      queueCube(name, -1, ModelRecord::State::Default, dispatch.reason, false);
+      return;
+    }
+
+    const auto sourceProbe = m_source->probe(name);
+    const auto binary = lookUpModelBinary(*m_source, name, sourceProbe.time);
+    m_modelFiles.insert_or_assign(
+      name,
+      std::vector<FoundGameFile>{
+        FoundGameFile{name, sourceProbe}, FoundGameFile{binary.path, binary.probe}});
+    if (binary.result == ModelBinaryLookup::Result::Accepted && binary.model)
+    {
+      publishModel(
+        modelRecordFromBinary(name, *binary.model, binary.glmb, sourceProbe.time));
+      return;
+    }
+    const auto binaryNote = binary.result == ModelBinaryLookup::Result::None
+                              ? std::string{}
+                              : "; " + binary.reason;
+    if (!sourceProbe.exists())
+    {
+      queueCube(
+        name,
+        -1,
+        ModelRecord::State::Missing,
+        fmt::format("no file {}{}", name, binaryNote),
+        pendingLoader);
+      return;
+    }
+    if (dispatch.path != ModelPath::Source)
+    {
+      queueCube(
+        name,
+        sourceProbe.time,
+        ModelRecord::State::Default,
+        dispatch.reason + binaryNote,
+        pendingLoader);
+      return;
+    }
+
+    auto found = GameFileProbe{};
+    const auto bytes = m_source->readGameFile(name, &found);
+    if (!bytes)
+    {
+      queueCube(
+        name,
+        -1,
+        ModelRecord::State::Missing,
+        fmt::format("{} cannot be read{}", name, binaryNote),
+        false);
+      return;
+    }
+    // what the read found is what the poll compares
+    m_modelFiles[name].front() = FoundGameFile{name, found};
+    if (!m_decls)
+    {
+      publishModel(bareRecord(
+        name,
+        ModelRecord::State::Default,
+        ModelRecord::SourceKind::Default,
+        found.time,
+        buildFailure()));
+      return;
+    }
+    auto read = readObjSource(*m_decls, name, *bytes, found.time);
+    if (!read.input)
+    {
+      publishModel(bareRecord(
+        name,
+        ModelRecord::State::Default,
+        ModelRecord::SourceKind::Default,
+        found.time,
+        read.reason + "; no default material"));
+      return;
+    }
+    if (!read.reason.empty())
+    {
+      queueFinish(
+        std::move(*read.input),
+        ModelRecord::State::Default,
+        ModelRecord::SourceKind::Default,
+        std::move(read.reason),
+        false);
+      return;
+    }
+    queueFinish(
+      std::move(*read.input),
+      ModelRecord::State::Ready,
+      ModelRecord::SourceKind::Source,
+      {},
+      false);
+  }
+
+  /**
+   * D137: the next finish to the model pool, when none runs. The job holds its input
+   * (plain data), its mailbox and the service's wake; it finishes, drains what the copied
+   * code reported on its thread, fills the mailbox, then sets modelFinished under the
+   * mutex and wakes the parse thread, whose Model item publishes the record (a queued
+   * work item). The pool is made here with the first finish, one worker (FinishSurfaces'
+   * static allows one at a time).
+   */
+  void startNextFinish()
+  {
+    if (m_runningFinish || m_modelFinishes.empty() || stopping())
+    {
+      return;
+    }
+    if (!m_modelPool)
+    {
+      CpuPool::create(1) | kdl::transform([&](std::unique_ptr<CpuPool> pool) {
+        m_modelPool = std::move(pool);
+      }) | kdl::transform_error([&](auto e) {
+        message(
+          DeclMessageKind::Warning, "The model pool could not be started: " + e.msg);
+      });
+      if (!m_modelPool)
+      {
+        for (const auto& finish : m_modelFinishes)
+        {
+          publishModel(bareRecord(
+            finish.input.name,
+            ModelRecord::State::Default,
+            ModelRecord::SourceKind::Default,
+            finish.input.sourceTime,
+            "the model pool could not be started"));
+        }
+        m_modelFinishes.clear();
+        publish();
+        return;
+      }
+    }
+
+    m_runningFinish = std::move(m_modelFinishes.front());
+    m_modelFinishes.pop_front();
+    auto mailbox = std::make_shared<ModelMailbox>();
+    m_modelMailbox = mailbox;
+    auto* shared = &m_shared;
+    m_modelJob = m_modelPool->run(
+      [mailbox, shared, input = m_runningFinish->input](
+        const CpuJobContext& context) -> Result<bool> {
+        const auto started = Clock::now();
+        auto model = std::optional<EngineModel>{};
+        auto error = std::string{};
+        if (context.stale())
+        {
+          error = "abandoned";
+        }
+        else
+        {
+          try
+          {
+            model = finishModel(input);
+          }
+          catch (const std::exception& e)
+          {
+            error = e.what();
+          }
+          catch (...)
+          {
+            error = "the finish failed";
+          }
+        }
+        auto messages = drainEngineMessagesForThread(std::this_thread::get_id());
+        {
+          auto lock = std::scoped_lock{mailbox->mutex};
+          mailbox->model = std::move(model);
+          mailbox->messages = std::move(messages);
+          mailbox->error = std::move(error);
+          mailbox->milliseconds =
+            std::chrono::duration<double, std::milli>(Clock::now() - started).count();
+          mailbox->done = true;
+        }
+        {
+          auto lock = std::scoped_lock{shared->mutex};
+          shared->modelFinished = true;
+        }
+        shared->requested.notify_one();
+        return true;
+      });
+  }
+
+  // the running finish's answer into the working table (parse thread); true when a
+  // record was published
+  bool takeFinishedModel()
+  {
+    if (!m_modelMailbox || !m_runningFinish)
+    {
+      return false;
+    }
+    auto model = std::optional<EngineModel>{};
+    auto messages = std::vector<DeclMessage>{};
+    auto error = std::string{};
+    auto milliseconds = 0.0;
+    {
+      auto lock = std::scoped_lock{m_modelMailbox->mutex};
+      if (!m_modelMailbox->done)
+      {
+        return false;
+      }
+      model = std::move(m_modelMailbox->model);
+      messages = std::move(m_modelMailbox->messages);
+      error = std::move(m_modelMailbox->error);
+      milliseconds = m_modelMailbox->milliseconds;
+    }
+    auto finish = std::move(*m_runningFinish);
+    m_runningFinish.reset();
+    m_modelMailbox.reset();
+    m_modelJob = {};
+    ++m_modelFinishCount;
+    m_longestModelFinishMs = std::max(m_longestModelFinishMs, milliseconds);
+
+    const auto& name = finish.input.name;
+    for (auto& entry : messages)
+    {
+      if (
+        entry.kind == DeclMessageKind::Error || entry.kind == DeclMessageKind::FatalError)
+      {
+        // the engine would have stopped there (CpuJobResult's rule)
+        error = entry.text;
+      }
+      message(entry.kind, fmt::format("{}: {}", name, entry.text));
+    }
+    if (finish.generation != m_modelGenerations[name])
+    {
+      // dropped while it finished: the name is read again
+      return false;
+    }
+    if (!error.empty() || !model)
+    {
+      if (finish.input.obj)
+      {
+        queueCube(
+          name,
+          finish.input.sourceTime,
+          ModelRecord::State::Default,
+          fmt::format("{} could not be finished: {}", name, error),
+          false);
+      }
+      else
+      {
+        publishModel(bareRecord(
+          name,
+          finish.state,
+          ModelRecord::SourceKind::Default,
+          finish.input.sourceTime,
+          finish.reason + "; " + error));
+      }
+      return true;
+    }
+    if (model->materialMisses > 0)
+    {
+      message(
+        DeclMessageKind::Warning,
+        fmt::format(
+          "{}: {} material names were not resolved; the default material stood in",
+          name,
+          model->materialMisses));
+    }
+    auto record = modelRecordFromEngine(
+      name, *model, finish.state, finish.kind, finish.input.sourceTime, finish.reason);
+    record.pendingLoader = finish.pendingLoader;
+    if (finish.kind == ModelRecord::SourceKind::Source)
+    {
+      // P7.22: the materials it was finished with, one per name
+      for (const auto& [materialName, index] : finish.input.materials.names)
+      {
+        record.sourceMaterialNames.push_back(materialName);
+        record.sourceMaterials.push_back(finish.input.materials.materials[index]);
+      }
+    }
+    publishModel(std::move(record));
+    return true;
+  }
+
+  /**
+   * LP7.1a (D126, D137): a finish that answered is published; then one queued name is
+   * read; then the next finish goes to the pool. One publication.
+   */
+  void modelItem()
+  {
+    const auto started = Clock::now();
+    auto finished = false;
+    {
+      auto lock = std::scoped_lock{m_shared.mutex};
+      finished = std::exchange(m_shared.modelFinished, false);
+    }
+    auto changed = finished && takeFinishedModel();
+    if (auto name = takeName(m_shared.models, m_shared.queuedModels))
+    {
+      readModel(*name);
+      changed = true;
+    }
+    startNextFinish();
+    m_longestModelItemMs = std::max(
+      m_longestModelItemMs,
+      std::chrono::duration<double, std::milli>(Clock::now() - started).count());
+    if (changed)
+    {
+      publish();
+    }
+  }
+
+  /**
+   * LP7.1a (C51, P7.20): each record's source and binary as found against the source's
+   * probe now (changedOnDisk: two probes a record), a slice of PollSliceTime per poll
+   * with a cursor, as pollImageFiles; a changed one is dropped (modelChanges) and read
+   * again. True when anything changed.
+   */
+  bool pollModelFiles()
+  {
+    if (!m_source)
+    {
+      return false;
+    }
+    if (m_pollModels.empty())
+    {
+      m_pollModelCursor = 0;
+      for (const auto& [name, files] : m_modelFiles)
+      {
+        m_pollModels.push_back(name);
+      }
+    }
+    const auto deadline = Clock::now() + PollSliceTime;
+    auto changed = false;
+    while (m_pollModelCursor < m_pollModels.size())
+    {
+      if (stopping() || Clock::now() >= deadline)
+      {
+        break;
+      }
+      const auto name = m_pollModels[m_pollModelCursor++];
+      const auto files = m_modelFiles.find(name);
+      if (files != m_modelFiles.end() && changedOnDisk(files->second))
+      {
+        dropModel(name);
+        requeueModel(name);
+        changed = true;
+      }
+    }
+    if (m_pollModelCursor >= m_pollModels.size())
+    {
+      m_pollModels = {};
+      m_pollModelCursor = 0;
+    }
+    return changed;
+  }
+
+  // the ten values of two captures, the registry's index aside (a rebuild renumbers it)
+  static bool sameMaterialValues(
+    const EngineModelMaterial& a, const EngineModelMaterial& b)
+  {
+    auto left = a;
+    left.index = b.index;
+    return left == b;
+  }
+
+  /**
+   * LP7.1a (P7.22): a Source record depends on its materials' values (renderbump,
+   * IsDiscrete, the back sides, the tangent flags, the deform bounds): after a re-parse
+   * (materialsRevision moved) or a rebuild, each Source record whose materials no longer
+   * give the values it was finished with is dropped and read again; after a rebuild the
+   * Source finishes still waiting or running are too. A binary record keeps its own, as
+   * the engine's binary does.
+   */
+  void recheckModelMaterials(const bool rebuilt)
+  {
+    if (!m_decls)
+    {
+      return;
+    }
+    auto stale = std::vector<std::string>{};
+    m_working.models.forEach([&](const std::string& name, const auto& record) {
+      if (
+        record->source != ModelRecord::SourceKind::Source
+        || record->state != ModelRecord::State::Ready)
+      {
+        return;
+      }
+      for (std::size_t i = 0;
+           i < record->sourceMaterialNames.size() && i < record->sourceMaterials.size();
+           ++i)
+      {
+        const auto now = m_decls->modelMaterial(record->sourceMaterialNames[i]);
+        if (!now || !sameMaterialValues(*now.value, record->sourceMaterials[i]))
+        {
+          stale.push_back(name);
+          return;
+        }
+      }
+    });
+    if (rebuilt)
+    {
+      for (const auto& finish : m_modelFinishes)
+      {
+        if (finish.kind == ModelRecord::SourceKind::Source)
+        {
+          stale.push_back(finish.input.name);
+        }
+      }
+      if (m_runningFinish && m_runningFinish->kind == ModelRecord::SourceKind::Source)
+      {
+        stale.push_back(m_runningFinish->input.name);
+      }
+    }
+    for (const auto& name : stale)
+    {
+      dropModel(name);
+      requeueModel(name);
+    }
+    if (!stale.empty())
+    {
+      publish();
+    }
+  }
+
   void poll()
   {
     m_nextPoll = Clock::now() + m_shared.options.pollInterval;
@@ -2742,6 +3413,11 @@ private:
     // changed, or (S2.5) whose missing file appeared
     pollMapBakes();
     if (pollImageFiles())
+    {
+      publish();
+    }
+    // LP7.1a (C51, P7.20): the models' source and binary files, a slice of their own
+    if (pollModelFiles())
     {
       publish();
     }
@@ -3055,6 +3731,47 @@ ImageLookup MaterialService::image(const MaterialImageKey& key)
     m_shared->requested.notify_one();
   }
   return ImageLookup{};
+}
+
+std::shared_ptr<const ModelRecord> MaterialService::requestModel(
+  const std::string_view name)
+{
+  // ModelManager.cpp:313-319: no name, no model
+  const auto canonical = canonicalModelName(name);
+  if (canonical.empty())
+  {
+    return nullptr;
+  }
+  if (auto record = table()->findModel(canonical))
+  {
+    return record;
+  }
+
+  auto queued = false;
+  {
+    auto lock = std::scoped_lock{m_shared->mutex};
+    // X.2, Y.1: no thread will read it: a record without surfaces says why
+    if (m_shared->stats.threadEnded)
+    {
+      auto record = std::make_shared<ModelRecord>();
+      record->name = canonical;
+      record->state = ModelRecord::State::Default;
+      record->source = ModelRecord::SourceKind::Default;
+      record->reason = m_shared->stats.threadError.empty() ? std::string{ThreadEndedText}
+                                                           : m_shared->stats.threadError;
+      return record;
+    }
+    if (!m_shared->stop && m_shared->queuedModels.insert(canonical).second)
+    {
+      m_shared->models.push_back(canonical);
+      queued = true;
+    }
+  }
+  if (queued)
+  {
+    m_shared->requested.notify_one();
+  }
+  return nullptr;
 }
 
 Result<void> MaterialService::setImageOverride(std::string imageName, ImageOverride image)

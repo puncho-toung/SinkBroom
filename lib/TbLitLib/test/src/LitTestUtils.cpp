@@ -365,4 +365,84 @@ HeapGrowth heapGrowth(const std::function<void()>& f)
 }
 #endif
 
+std::string minimalBinaryModel(
+  const std::int64_t timeStamp, const std::string& material, const std::string& name)
+{
+  auto out = std::string{};
+  const auto big = [&](const std::uint64_t value, const int bytes) {
+    for (auto i = bytes - 1; i >= 0; --i)
+    {
+      out.push_back(char((value >> (8 * i)) & 0xFF));
+    }
+  };
+  const auto little = [&](const void* data, const std::size_t size) {
+    out.append(static_cast<const char*>(data), size);
+  };
+  const auto text = [&](const std::string& value) {
+    const auto length = std::int32_t(value.size());
+    little(&length, 4);
+    out += value;
+  };
+  const auto vec3 = [&](const float x, const float y, const float z) {
+    const float v[3] = {x, y, z};
+    little(v, 12);
+  };
+  // 'B' 'R' 'M' 110, the time, one surface
+  big(
+    (std::uint64_t('B') << 24) | (std::uint64_t('R') << 16) | (std::uint64_t('M') << 8)
+      | 110,
+    4);
+  big(std::uint64_t(timeStamp), 8);
+  big(1, 4);
+  big(0, 4);
+  text(material);
+  out.push_back(1);
+  vec3(0, 0, 0);
+  vec3(8, 8, 0);
+  // generateNormals, tangentsCalculated, perfectHull, referencedIndexes
+  out.push_back(0);
+  out.push_back(1);
+  out.push_back(0);
+  out.push_back(0);
+  big(3, 4);
+  big(3, 4);
+  for (const auto& p : {std::array<float, 3>{0, 0, 0}, {8, 0, 0}, {8, 8, 0}})
+  {
+    vec3(p[0], p[1], p[2]);
+    big(0, 2);
+    big(0, 2);
+    const unsigned char normal[4] = {128, 128, 255, 0};
+    const unsigned char tangent[4] = {255, 128, 128, 255};
+    const unsigned char color[4] = {255, 255, 255, 255};
+    const unsigned char color2[4] = {0, 0, 0, 0};
+    little(normal, 4);
+    little(tangent, 4);
+    little(color, 4);
+    little(color2, 4);
+  }
+  big(3, 4);
+  big(0, 2);
+  big(1, 2);
+  big(2, 2);
+  // no sil indexes, mirrored or dup vertices, dominant tris, masked occlusion data
+  big(0, 4);
+  big(0, 4);
+  big(0, 4);
+  out.push_back(0);
+  big(0, 4);
+  big(0, 4);
+  // the model's bounds, the frame counters, the name, the nine bools
+  vec3(0, 0, 0);
+  vec3(8, 8, 0);
+  big(0, 4);
+  big(0, 4);
+  big(0, 4);
+  text(name);
+  for (const auto b : {false, false, false, false, true, false, true, true, true})
+  {
+    out.push_back(b ? 1 : 0);
+  }
+  return out;
+}
+
 } // namespace tb::lit
