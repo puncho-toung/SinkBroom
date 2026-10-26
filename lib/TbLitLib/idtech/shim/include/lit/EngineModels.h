@@ -188,7 +188,7 @@ EngineModel engineFinishObjModel(
   bool useMikktspace);
 
 /**
- * GetModel's default model (ModelManager.cpp:520-523, Model.cpp:338-344): InitEmpty, then
+ * GetModel's default model (ModelManager.cpp:520-523, Model.cpp:356-361): InitEmpty, then
  * MakeDefaultModel (Model.cpp:226-296): 24 vertices, 36 indexes, a cube of +-8 with st
  * 0..1 per face, generateNormals, then FinishSurfaces( false ), with defaultMaterial
  * standing in for tr.defaultMaterial. Pool-safe; one call at a time.
@@ -215,6 +215,19 @@ std::string engineFileExtension(std::string_view name);
  * SetFileExtension. Pure; any thread.
  */
 std::string engineGeneratedModelPath(std::string_view canonical);
+
+// the copied conversion's own cvars (Model.cpp:42-45), as it reads them
+struct EngineModelCvars
+{
+  bool mergeModelSurfaces = false;
+  float slopVertex = 0.0f;
+  float slopTexCoord = 0.0f;
+  float slopNormal = 0.0f;
+};
+
+// r_mergeModelSurfaces, r_slopVertex, r_slopTexCoord and r_slopNormal at their defaults
+// (the shim's constexpr idCVar, D21); pure
+EngineModelCvars engineModelCvars();
 
 // the triangles of R_CleanupTriangles, its derived data kept
 // (engineCleanupModelTriangles)

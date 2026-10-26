@@ -846,6 +846,17 @@ struct EngineFrameDefaults
   // r_showMathLights "0", 0..3 (:246): USER0.x of a math light is 1 + this
   // (RenderBackend.cpp:1941)
   int showMathLights = 0;
+  // LP7.1a (C51, SC607): the model conversion's merge and slop cvars (Model.cpp:42-45),
+  // which the copied conversions read through their own idCVars at these defaults
+  // (lit/EngineModels.h engineModelCvars; equal by a test)
+  // r_mergeModelSurfaces "1": the surfaces of one material merge unless IsDiscrete
+  bool mergeModelSurfaces = true;
+  // r_slopVertex "0.01": positions this far apart merge
+  float slopVertex = 0.01f;
+  // r_slopTexCoord "0.001": texture coordinates this far apart merge
+  float slopTexCoord = 0.001f;
+  // r_slopNormal "0.02": normals merge when their dot product is above 1 - this
+  float slopNormal = 0.02f;
 };
 inline constexpr auto EngineFrame = EngineFrameDefaults{};
 

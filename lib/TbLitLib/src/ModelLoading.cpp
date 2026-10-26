@@ -29,10 +29,13 @@
 
 #include "lit/ModelLoading.h"
 
+#include "ModelValidators.h"
+
 #include "kd/result.h"
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <span>
 #include <utility>
 
@@ -285,6 +288,104 @@ ModelRecord modelRecordFromEngine(
   record.sourceTime = sourceTime;
   record.reason = std::move(reason);
   return record;
+}
+
+EngineModel finishModel(const ModelFinishInput& input)
+{
+  if (input.obj)
+  {
+    return engineFinishObjModel(
+      *input.obj, input.materials, input.name, input.useMikktspace);
+  }
+  return engineDefaultModel(input.name, input.materials.defaultMaterial);
+}
+
+std::optional<ModelFinishInput> defaultModelInput(
+  MaterialDecls& decls, const std::string_view canonical, const std::int64_t sourceTime)
+{
+  auto fallback = decls.defaultModelMaterial();
+  if (!fallback)
+  {
+    return std::nullopt;
+  }
+  auto input = ModelFinishInput{};
+  input.name = std::string{canonical};
+  input.materials.defaultMaterial = std::move(*fallback.value);
+  input.sourceTime = sourceTime;
+  return input;
+}
+
+ObjSourceRead readObjSource(
+  MaterialDecls& decls,
+  const std::string_view canonical,
+  const std::string& bytes,
+  const std::int64_t sourceTime)
+{
+  auto read = ObjSourceRead{};
+  const auto refuse = [&](std::string reason) {
+    read.reason = std::move(reason);
+    read.input = defaultModelInput(decls, canonical, sourceTime);
+    return std::move(read);
+  };
+
+  // D136: the copies never see a file the validator refuses
+  if (const auto problem = objFileProblem(bytes))
+  {
+    return refuse(fmt::format("{} cannot be read: {}", canonical, *problem));
+  }
+
+  auto parsed = decls.parseObjModel(std::string{canonical}, bytes, sourceTime);
+  if (!parsed.error.empty())
+  {
+    return refuse(fmt::format("{}: {}", canonical, parsed.error));
+  }
+  if (!parsed.model)
+  {
+    // Model.cpp:356-361: "Couldn't load model", MakeDefaultModel
+    return refuse(fmt::format("{} could not be loaded", canonical));
+  }
+
+  auto input = ModelFinishInput{};
+  input.name = std::string{canonical};
+  input.obj = parsed.model;
+  input.sourceTime = sourceTime;
+  // Model.cpp:366-375 on the time the caller hands in (A4)
+  input.useMikktspace = engineUseMikktspace(sourceTime);
+  for (const auto& name : parsed.model->materialNames())
+  {
+    if (std::any_of(
+          input.materials.names.begin(),
+          input.materials.names.end(),
+          [&](const auto& known) { return known.first == name; }))
+    {
+      continue;
+    }
+    auto material = decls.modelMaterial(name);
+    if (!material)
+    {
+      return refuse(
+        fmt::format("{}: its material '{}': {}", canonical, name, material.error));
+    }
+    // one entry per decl, as FindMaterial returns one pointer per decl
+    const auto same = std::find_if(
+      input.materials.materials.begin(),
+      input.materials.materials.end(),
+      [&](const auto& known) { return known.index == material.value->index; });
+    const auto index = std::size_t(same - input.materials.materials.begin());
+    if (same == input.materials.materials.end())
+    {
+      input.materials.materials.push_back(std::move(*material.value));
+    }
+    input.materials.names.emplace_back(name, index);
+  }
+  auto fallback = decls.defaultModelMaterial();
+  if (!fallback)
+  {
+    return refuse(fmt::format("{}: no default material: {}", canonical, fallback.error));
+  }
+  input.materials.defaultMaterial = std::move(*fallback.value);
+  read.input = std::move(input);
+  return read;
 }
 
 std::size_t modelRecordBytes(const ModelRecord& record)

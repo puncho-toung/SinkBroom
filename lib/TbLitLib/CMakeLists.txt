@@ -61,6 +61,8 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MaterialService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ModelLoading.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ModelRecord.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ModelValidators.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ModelValidators.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NumberText.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NvrhiSupport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PipelineCompiler.cpp

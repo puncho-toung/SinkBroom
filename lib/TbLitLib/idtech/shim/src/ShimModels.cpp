@@ -447,6 +447,16 @@ EngineModel engineDefaultModel(
   return modelOf(model, decls);
 }
 
+EngineModelCvars engineModelCvars()
+{
+  auto cvars = EngineModelCvars{};
+  cvars.mergeModelSurfaces = idRenderModelStatic::r_mergeModelSurfaces.GetBool();
+  cvars.slopVertex = idRenderModelStatic::r_slopVertex.GetFloat();
+  cvars.slopTexCoord = idRenderModelStatic::r_slopTexCoord.GetFloat();
+  cvars.slopNormal = idRenderModelStatic::r_slopNormal.GetFloat();
+  return cvars;
+}
+
 bool engineUseMikktspace(const std::int64_t sourceTimeStamp)
 {
   // Model.cpp:366-375: "this is 1.1.2016 10:00 AM"

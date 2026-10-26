@@ -26,6 +26,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -154,6 +155,57 @@ ModelRecord modelRecordFromEngine(
   ModelRecord::SourceKind source,
   std::int64_t sourceTime,
   std::string reason);
+
+/**
+ * LP7.1a (C51 (3), D137): what a model's finish job takes, plain data only: the canonical
+ * name, the parsed OBJ (null: the default cube), the materials the parse thread resolved
+ * for it (each name's ten accessor values, and tr.defaultMaterial's), the 2016 rule's
+ * answer for the source's time, and that time.
+ */
+struct ModelFinishInput
+{
+  std::string name;
+  std::shared_ptr<const EngineObjModel> obj;
+  EngineModelMaterials materials;
+  bool useMikktspace = false;
+  std::int64_t sourceTime = -1;
+};
+
+/**
+ * The finish (D137): engineFinishObjModel for an OBJ, else engineDefaultModel. It reads
+ * nothing but its input, so it runs on the service's one-worker pool; one at a time
+ * (FinishSurfaces' static, M-ID-STATIC-*).
+ */
+EngineModel finishModel(const ModelFinishInput& input);
+
+/**
+ * The parse thread's half of an OBJ source (C51 (3), D136, D137): the validator
+ * (objFileProblem), the copied OBJ_Load of the bytes with the source's time
+ * (MaterialDecls::parseObjModel), each usemtl name resolved by the registry's
+ * FindMaterial and its values captured (MaterialDecls::modelMaterial), tr.defaultMaterial
+ * captured, and the 2016 rule on the source's time. A file the validator refuses, an
+ * engine error in the parse, or a material whose parse reached an engine error give the
+ * reason for a Default record; an empty parse (OBJ_Load's NULL) gives the default cube's
+ * input with its reason. Parse thread (the copied lexer and the registry, C20).
+ */
+struct ObjSourceRead
+{
+  std::optional<ModelFinishInput> input;
+  // a refusal: the record is Default with this reason (the cube's input is in input
+  // when the default material could be found)
+  std::string reason;
+};
+
+ObjSourceRead readObjSource(
+  MaterialDecls& decls,
+  std::string_view canonical,
+  const std::string& bytes,
+  std::int64_t sourceTime);
+
+// the cube's input for a Missing or Default record (MakeDefaultModel's material), or
+// nullopt when the registry has no default material to give
+std::optional<ModelFinishInput> defaultModelInput(
+  MaterialDecls& decls, std::string_view canonical, std::int64_t sourceTime);
 
 // the bytes a record holds (the stats' model bytes): its vertices, indexes and derived
 // arrays

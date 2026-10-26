@@ -31,10 +31,12 @@
 // (D125), the GLMB tail (P7.19).
 
 #include "LitTestUtils.h"
+#include "ModelValidators.h"
 #include "fs/TestEnvironment.h"
 #include "lit/BprocModel.h"
 #include "lit/CpuPool.h"
 #include "lit/EngineModels.h"
+#include "lit/EngineTables.h"
 #include "lit/GameFileSource.h"
 #include "lit/MaterialDecls.h"
 #include "lit/ModelLoading.h"
@@ -957,6 +959,210 @@ TEST_CASE("ModelLoading, FinishSurfaces on an OBJ through the copies (LP7.1a, D1
     REQUIRE(againOutput.result.is_success());
     CHECK(againOutput.result.value().surfaces[0].verts == reference.surfaces[0].verts);
     pool.value()->stop();
+  }
+}
+
+namespace
+{
+
+// the corners of a valid triangle after the lists of three positions, one texture
+// coordinate and one normal
+const auto ObjHead = std::string{"v 0 0 0\nv 16 0 0\nv 16 16 0\nvt 0 0\nvn 0 0 1\n"};
+
+std::vector<DeclFile> discreteDeclFiles()
+{
+  auto files = modelDeclFiles();
+  files.push_back(DeclFile{
+    "materials/lp7_discrete.mtr",
+    "lp7/discrete\n{\n\tdeform sprite\n\t{\n\t\tblend add\n\t\tmap "
+    "textures/lp7/discrete\n\t}\n}\n",
+    0});
+  return files;
+}
+
+} // namespace
+
+TEST_CASE("ModelLoading: the OBJ validator (LP7.1a, D136, P7.2)")
+{
+  SECTION("what the copies read without a fatal site passes")
+  {
+    CHECK_FALSE(objFileProblem(QuadObj));
+    CHECK_FALSE(objFileProblem(ObjHead + "usemtl a b\nf 1/1/1 2/1/1 3/1/1\n"));
+    // Blender's header, groups, smoothing, mtllib, CRLF line ends, exponents, signs
+    CHECK_FALSE(objFileProblem(
+      "# Blender 4.2\r\nmtllib x.mtl\r\no Cube\r\nv -1.000000 1e-05 .5\r\nv 1. 2.5e+3 "
+      "0\r\nv 0 -0.25 3\r\nvt 0.5 1\r\nvn 0 0 -1\r\ns off\r\ng x\r\nl 1 2\r\nf 1/1/1 "
+      "2/1/1 3/1/1\r\n"));
+    // no face at all: an empty model, as the engine reads it
+    CHECK_FALSE(objFileProblem("# nothing\n"));
+  }
+
+  const auto refused = [](const std::string& text, const std::string& reason) {
+    INFO(text);
+    const auto problem = objFileProblem(text);
+    REQUIRE(problem);
+    CHECK_THAT(*problem, Catch::Matchers::ContainsSubstring(reason));
+  };
+
+  SECTION("each refusal names its line and cause")
+  {
+    // :186's FatalError: a quad, two corners, v//vn corners
+    refused(ObjHead + "v 0 16 0\nf 1/1/1 2/1/1 3/1/1 4/1/1\n", "three corners");
+    refused(ObjHead + "f 1/1/1 2/1/1\n", "three corners");
+    refused(ObjHead + "f 1//1 2//1 3//1\n", "positive number");
+    // a negative index; an index past the count read so far
+    refused(ObjHead + "f -1/1/1 2/1/1 3/1/1\n", "positive number");
+    refused(ObjHead + "f 1/1/1 2/1/1 4/1/1\n", "past the 3");
+    refused(ObjHead + "f 1/2/1 2/1/1 3/1/1\n", "texture coordinate past the 1");
+    refused(
+      "f 1/1/1 2/1/1 3/1/1\nv 0 0 0\nv 1 0 0\nv 1 1 0\nvt 0 0\nvn 0 0 1\n", "past the 0");
+    // :211's FatalError: an unknown token, a stray number, "##", a C++ comment
+    refused(ObjHead + "vp 0 0 0\n", "unexpected token 'vp'");
+    refused("v 0 0 0 1\n", "takes 3 numbers, not 4");
+    refused("vt 0 0 0\n", "takes 2 numbers, not 3");
+    refused("## x\n", "'##'");
+    refused("// x\n", "unexpected token '//'");
+    // ParseFloat's Errors: an octal, a hex, two dots, an upper-case exponent, a plus
+    refused("v 01 0 0\n", "'01'");
+    refused("v 0x1 0 0\n", "'0x1'");
+    refused("v 1.2.3 0 0\n", "'1.2.3'");
+    refused("v 1E5 0 0\n", "'1E5'");
+    refused("v +1 0 0\n", "'+1'");
+    // a truncated file, an empty one, a NUL byte, a long usemtl
+    refused(ObjHead + "f 1/1/1 2/1/1 3/1", "is not v/vt/vn");
+    refused("v 0 0", "takes 3 numbers, not 2");
+    refused("", "empty");
+    refused(std::string{"v 0 0 0\n\0", 9}, "NUL");
+    refused("usemtl " + std::string(256, 'm') + "\n", "256");
+    CHECK_THAT(*objFileProblem(ObjHead + "vp\n"), Catch::Matchers::StartsWith("line 6:"));
+  }
+
+  SECTION("the corner bound")
+  {
+    auto text = ObjHead;
+    for (auto i = std::size_t{0}; i < MaxObjCorners / 3; ++i)
+    {
+      text += "f 1/1/1 2/1/1 3/1/1\n";
+    }
+    CHECK_FALSE(objFileProblem(text));
+    text += "f 1/1/1 2/1/1 3/1/1\n";
+    refused(text, "face corners");
+  }
+}
+
+TEST_CASE(
+  "ModelLoading, the OBJ source path through the validator and the copies (LP7.1a, C51 "
+  "(3))")
+{
+  CHECK(engineModelCvars().mergeModelSurfaces == EngineFrame.mergeModelSurfaces);
+  CHECK(engineModelCvars().slopVertex == EngineFrame.slopVertex);
+  CHECK(engineModelCvars().slopTexCoord == EngineFrame.slopTexCoord);
+  CHECK(engineModelCvars().slopNormal == EngineFrame.slopNormal);
+
+  auto source = MemoryDeclSource{discreteDeclFiles()};
+  auto decls = MaterialDecls{source};
+  const auto finished = [&](const std::string& text, const std::int64_t time) {
+    auto read = readObjSource(decls, "models/test/x.obj", text, time);
+    static_cast<void>(decls.takeMessages());
+    REQUIRE(read.reason.empty());
+    REQUIRE(read.input);
+    auto model = finishModel(*read.input);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    return std::pair{std::move(*read.input), std::move(model)};
+  };
+
+  SECTION("a refused file: Default with the reason; the copies never read it")
+  {
+    for (const auto& text :
+         {ObjHead + "v 0 16 0\nf 1/1/1 2/1/1 3/1/1 4/1/1\n",
+          ObjHead + "f -1/1/1 2/1/1 3/1/1\n",
+          ObjHead + "f 1/1/1 2/1/1 9/1/1\n",
+          ObjHead + "usemtl lp7/test\nbogus\n",
+          ObjHead + "f 1/1/1 2/",
+          std::string{}})
+    {
+      INFO(text);
+      const auto messagesBefore = decls.messages().size();
+      const auto read = readObjSource(decls, "models/test/x.obj", text, 1451520000);
+      CHECK_THAT(read.reason, Catch::Matchers::ContainsSubstring("models/test/x.obj"));
+      // the cube's input, and nothing the copied lexer reported
+      REQUIRE(read.input);
+      CHECK_FALSE(read.input->obj);
+      const auto& messages = decls.messages();
+      for (auto i = messagesBefore; i < messages.size(); ++i)
+      {
+        CHECK(messages[i].kind != DeclMessageKind::Error);
+        CHECK(messages[i].kind != DeclMessageKind::FatalError);
+      }
+      const auto cube = finishModel(*read.input);
+      CHECK(cube.defaulted);
+      CHECK(cube.surfaces.size() == 1u);
+      const auto record = modelRecordFromEngine(
+        "models/test/x.obj",
+        cube,
+        ModelRecord::State::Default,
+        ModelRecord::SourceKind::Default,
+        1451520000,
+        read.reason);
+      CHECK(record.state == ModelRecord::State::Default);
+      CHECK(record.reason == read.reason);
+    }
+  }
+
+  SECTION("a valid OBJ through the copies: the 2016 rule on the time handed in")
+  {
+    const auto [input2015, model2015] = finished(QuadObj, 1451520000);
+    CHECK_FALSE(input2015.useMikktspace);
+    const auto [input2017, model2017] = finished(QuadObj, 1483228800);
+    CHECK(input2017.useMikktspace);
+    REQUIRE(model2015.surfaces.size() == 1u);
+    CHECK(model2015.surfaces[0].verts.size() == 4u);
+    CHECK(model2015.timeStamp == 1451520000);
+    CHECK(model2017.timeStamp == 1483228800);
+    CHECK(input2015.materials.names.size() == 1u);
+    CHECK(input2015.materials.materials[0].name == "lp7/test");
+    CHECK(input2015.materials.defaultMaterial.name == "_default");
+  }
+
+  SECTION("the slop merge: positions 0.005 apart are one vertex, 0.02 apart two")
+  {
+    const auto obj = [](const std::string& x) {
+      return "v 0 0 0\nv 32 0 0\nv 32 32 0\nv 0 32 0\nv " + x
+             + " 32 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 0 1\nusemtl "
+               "lp7/test\nf 1/1/1 2/2/1 3/3/1\nf 1/1/1 5/3/1 4/4/1\n";
+    };
+    const auto [nearInput, nearModel] = finished(obj("32.005"), 1451520000);
+    const auto [farInput, farModel] = finished(obj("32.02"), 1451520000);
+    REQUIRE(nearModel.surfaces.size() == 1u);
+    REQUIRE(farModel.surfaces.size() == 1u);
+    CHECK(nearModel.surfaces[0].verts.size() == 4u);
+    CHECK(farModel.surfaces[0].verts.size() == 5u);
+  }
+
+  SECTION("objects of one material merge into one surface, unless it IsDiscrete")
+  {
+    const auto obj = [](const std::string& material) {
+      return ObjHead + "o first\nusemtl " + material
+             + "\nf 1/1/1 2/1/1 3/1/1\no second\nusemtl " + material
+             + "\nf 1/1/1 3/1/1 2/1/1\n";
+    };
+    const auto [plainInput, plain] = finished(obj("lp7/test"), 1451520000);
+    CHECK(plainInput.obj->objectCount() == 2u);
+    CHECK(plain.surfaces.size() == 1u);
+    const auto [discreteInput, discrete] = finished(obj("lp7/discrete"), 1451520000);
+    REQUIRE(discreteInput.materials.materials.size() == 1u);
+    CHECK(discreteInput.materials.materials[0].discrete);
+    CHECK(discreteInput.materials.materials[0].deform == 1);
+    CHECK(discrete.surfaces.size() == 2u);
+  }
+
+  SECTION("two spellings of one material are one material, as FindMaterial's pointer")
+  {
+    const auto text = ObjHead + "o a\nusemtl lp7/test\nf 1/1/1 2/1/1 3/1/1\no b\nusemtl LP7/Test\nf 1/1/1 3/1/1 2/1/1\n";
+    const auto [input, model] = finished(text, 1451520000);
+    CHECK(input.materials.names.size() == 2u);
+    CHECK(input.materials.materials.size() == 1u);
+    CHECK(model.surfaces.size() == 1u);
   }
 }
 
