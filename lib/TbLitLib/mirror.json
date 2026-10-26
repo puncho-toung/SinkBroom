@@ -27455,6 +27455,54 @@
         }
       ],
       "note": "LP7.2 (C56, P7.14), test only: the measurement's model columns: per Start the first lit frame with a model drawn and the model set loaded (no record pending), the session's ModelTotals and the material service's model stats at the first Start's settle, the settled frame's model counters with adopted_tris and dress_surfaces, the orbit's model draws. On admin (2026-10-26, Release, twice): 399 model entities, 606 instances, 178 shared surfaces of 95 records (0.6 MB placed, the table's 0.7 MB), 62 skinned, 226 model draws at the start view, 0 adopted triangles (D138: a .bproc), 0 dress surfaces"
+    },
+    {
+      "id": "M-DRESS-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            751,
+            755
+          ],
+          "anchor": "FillDepthBufferGeneric: GLS_POLYGON_OFFSET and GL_PolygonOffset( r_offsetFactor, r_offsetUnits * GetPolygonOffset() ) for MF_POLYGONOFFSET",
+          "sha256": "af5d66cd20521660bf221c164e4f719afaca4c84ee25543b641f27de2d0600da"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1703,
+            2247
+          ],
+          "anchor": "idRenderBackend::RenderInteractions",
+          "sha256": "6fe6a2f104f397abeedf47c0179c88bf9f11fc2a3b3378d46c0d35fdbecf846b"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            2926,
+            2943
+          ],
+          "anchor": "DECAL_MACRO: MF_POLYGONOFFSET, polygonOffset 1, SURF_DISCRETE, CONTENTS_SOLID cleared, sort SS_DECAL, MF_NOSHADOWS",
+          "sha256": "3c1be516f44a87a3d1fc54d0eb8419a71cc3db977cf2b371f4eb0609d2027a6b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineGenericDepthDraws (the prepass's surface offset, FillDepthBufferGeneric's)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordPrepass (the draw with prepassDraw's slope and depth bias), renderInteractions and the ambient pass (their draws with 0, 0 and no GLS_POLYGON_OFFSET)"
+        },
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "the row J03's label (the derived picture, recorded before LP7.3's engine run)"
+        }
+      ],
+      "note": "LP7.3 step 4 (C54, P7.23), a mirrored engine fact, derived before the run from the engine's two passes: a lit (diffusemap) DECAL_MACRO stage on a dress fragment is opaque (MC_OPAQUE), so the depth prepass draws it with GLS_POLYGON_OFFSET and GL_PolygonOffset( r_offsetFactor 0, r_offsetUnits -600 x polygonOffset 1 ) (RenderBackend.cpp:751-755, the preview's engineGenericDepthDraws), which pulls its depth in front of the wall it lies on and writes it; the interaction pass draws every surface with GLS_DEPTHFUNC_EQUAL and no polygon offset (RenderInteractions sets none; the preview's renderInteractions draws with 0, 0), and so does the ambient pass (its offset is commented out, RenderBackend.cpp:2504-2536, P4.19). The depth-equal test therefore passes no pixel of the decal's footprint: neither the fragment's own unoffset depth nor the wall's equals the offset depth in the buffer. The picture: none of the lit decal shows and its footprint is black on the lit wall (the prepass's black; the material has no ambient stage for pass 8). Both sides draw it so; the row J03 is exact whatever it shows, and its label records this derivation"
     }
   ],
   "retired": [
