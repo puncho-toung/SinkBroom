@@ -58,6 +58,7 @@
 #include <initializer_list>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <thread>
@@ -3060,6 +3061,37 @@ ModelRecord glbGoldenRecord(const std::string& golden, const std::int64_t source
   return modelRecordFromBinary(golden, read.value(), tail.value(), sourceTime);
 }
 
+/**
+ * E-LIT-7 (M-GEO-DEFECT-03): a glTF vertex's normal[3] is the engine's heap (SetNormal
+ * and VertexFloatToByte write three bytes of the uncleared Mem_Alloc vertices,
+ * MapFile_gltf.cpp: 107-111): 0 in the first two engine runs' n13.bglb, 0xFF in the
+ * third's. The golden masks it: the values the record holds, then the record with that
+ * byte 0.
+ */
+std::set<int> maskNormalW(ModelRecord& record)
+{
+  auto values = std::set<int>{};
+  for (auto& surface : record.surfaces)
+  {
+    for (auto& vert : surface.verts)
+    {
+      values.insert(vert.normal[3]);
+      vert.normal[3] = 0;
+    }
+  }
+  return values;
+}
+
+std::string listed(const std::set<int>& values)
+{
+  auto text = std::string{};
+  for (const auto value : values)
+  {
+    text += (text.empty() ? "" : ", ") + fmt::format("0x{:02X}", value);
+  }
+  return text;
+}
+
 } // namespace
 
 TEST_CASE(
@@ -3072,7 +3104,9 @@ TEST_CASE(
   // the 2017 stamp: the time the engine stored (Model.cpp:400, ModelManager.cpp:496); it
   // decides no tangent path for a glTF (Model_gltf.cpp:645)
   CHECK(stamp == 1483228800);
-  const auto engine = glbGoldenRecord("models/test/n13.bglb", stamp);
+  auto engine = glbGoldenRecord("models/test/n13.bglb", stamp);
+  // E-LIT-7: the fixture's normal[3] is the engine's heap, masked
+  const auto engineNormalW = maskNormalW(engine);
   CHECK(engine.binaryTime == stamp);
   CHECK(binaryModelTimeAccepted(stamp, engine.binaryTime));
   const auto bytes = readTextFile(litFixtureFolder() / "models/test/n13.glb");
@@ -3083,7 +3117,10 @@ TEST_CASE(
   REQUIRE(read.input);
   REQUIRE(read.input->gltf);
 
-  SECTION("N13: the source load equals n13.bglb byte for byte, every field")
+  SECTION(
+    "N13: the source load equals n13.bglb in every field but normal[3], the engine's "
+    "heap "
+    "(E-LIT-7), which the preview clears")
   {
     const auto model = finishModel(*read.input);
     static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
@@ -3094,6 +3131,15 @@ TEST_CASE(
       ModelRecord::SourceKind::Source,
       stamp,
       {});
+    auto previewNormalW = std::size_t{0};
+    for (const auto& surface : preview.surfaces)
+    {
+      for (const auto& vert : surface.verts)
+      {
+        previewNormalW += vert.normal[3] != 0 ? 1 : 0;
+      }
+    }
+    CHECK(previewNormalW == 0u);
     const auto differences = recordDifferences(preview, engine);
     for (const auto& difference : differences)
     {
@@ -3102,11 +3148,14 @@ TEST_CASE(
     CHECK(differences.empty());
     REQUIRE(engine.surfaces.size() == 1u);
     std::cout << fmt::format(
-      "N13 against n13.bglb: {} vertices ({} mirrored), {} indexes, {} differences\n",
+      "N13 against n13.bglb: {} vertices ({} mirrored), {} indexes, {} differences "
+      "beside normal[3]; the engine's normal[3] (heap, E-LIT-7): {}; the preview's 0 on "
+      "every vertex\n",
       engine.surfaces[0].verts.size(),
       engine.surfaces[0].mirroredVerts.size(),
       engine.surfaces[0].indexes.size(),
-      differences.size());
+      differences.size(),
+      listed(engineNormalW));
   }
 
   SECTION("the mutant: N13 through the WithoutNormals path fails its golden (P7.10)")
@@ -3130,11 +3179,17 @@ TEST_CASE(
 
   SECTION("N14's .bglb holds N13's geometry; the binary reader on it, the golden twice")
   {
-    const auto n14 =
+    auto n14 =
       glbGoldenRecord("models/test/n14.bglb", fixtureStamp("models/test/n14.glb"));
+    const auto n14NormalW = maskNormalW(n14);
     CHECK(recordDifferences(n14, engine).empty());
-    CHECK(
-      recordDifferences(glbGoldenRecord("models/test/n13.bglb", stamp), engine).empty());
+    auto again = glbGoldenRecord("models/test/n13.bglb", stamp);
+    CHECK(maskNormalW(again) == engineNormalW);
+    CHECK(recordDifferences(again, engine).empty());
+    std::cout << fmt::format(
+      "N14's n14.bglb: the engine's normal[3] {} (the same process as n13.bglb's {})\n",
+      listed(n14NormalW),
+      listed(engineNormalW));
   }
 }
 

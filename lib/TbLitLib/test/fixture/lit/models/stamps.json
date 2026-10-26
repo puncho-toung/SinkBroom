@@ -54,9 +54,9 @@
    "source": "models/test/n13.glb",
    "engine_path": "generated/rendermodels/models/test/n13.bglb",
    "bytes": 1551,
-   "sha256": "4592eee93d908ec5e63dd7f222a7a91f5ca60c8d46877701814091e650a33d15",
+   "sha256": "a6a59fb19769827e315a518a3fe84b618b3f6758e037cc29fb47cfb672206ceb",
    "run": "run-b",
-   "run_digest": null
+   "run_digest": "c98e96ee92c521f424ef36fd54f11184f7962f160d0c93f4cf3371a642804b79"
   },
   "models/test/n14.bglb": {
    "source": "models/test/n14.glb",
@@ -64,7 +64,7 @@
    "bytes": 1551,
    "sha256": "f1f58a03c30bb4750bdd66c8b85162293286e1161188fb15a2fb60a87e61aade",
    "run": "run-b",
-   "run_digest": null
+   "run_digest": "c98e96ee92c521f424ef36fd54f11184f7962f160d0c93f4cf3371a642804b79"
   }
  },
  "engine_printed": [
